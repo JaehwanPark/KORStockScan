@@ -1144,6 +1144,472 @@ def _ai_decision_action_outcome_calibration_status(
                 errors.append("selected_review_candidate_not_uniquely_ready")
     elif len(review_ready_candidates) == 1:
         errors.append("review_ready_candidate_not_selected")
+    mechanistic = report.get("mechanistic_entry_refinement")
+    if not isinstance(mechanistic, dict):
+        errors.append("mechanistic_entry_refinement_invalid")
+        mechanistic = {}
+    elif (
+        mechanistic.get("schema") != "mechanistic_entry_clean_baseline_refinement_v1"
+        or mechanistic.get("policy_version")
+        != "mechanistic_entry_common_feature_chronological_v1"
+        or mechanistic.get("target_date") != report.get("target_date")
+        or not isinstance(mechanistic.get("status"), str)
+        or not str(mechanistic.get("status") or "").strip()
+        or not isinstance(mechanistic.get("promotion_pass"), bool)
+        or mechanistic.get("runtime_effect") is not False
+        or mechanistic.get("allowed_runtime_apply") is not False
+        or mechanistic.get("actual_order_submitted") is not False
+        or mechanistic.get("broker_order_forbidden") is not True
+    ):
+        errors.append("mechanistic_entry_refinement_contract_invalid")
+    mechanistic_candidate = mechanistic.get("policy_candidate")
+    if mechanistic.get("promotion_pass") is True:
+        if not isinstance(mechanistic_candidate, dict):
+            errors.append("mechanistic_entry_candidate_missing")
+        else:
+            candidate_hash = mechanistic_candidate.get("candidate_content_sha256")
+            candidate_body = {
+                key: value
+                for key, value in mechanistic_candidate.items()
+                if key != "candidate_content_sha256"
+            }
+            expected_candidate_hash = hashlib.sha256(
+                json.dumps(
+                    candidate_body,
+                    ensure_ascii=True,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    default=str,
+                ).encode("utf-8")
+            ).hexdigest()
+            promotion_checks = mechanistic_candidate.get("promotion_checks")
+            if (
+                candidate_hash != expected_candidate_hash
+                or mechanistic_candidate.get("schema")
+                != "mechanistic_entry_common_feature_candidate_v1"
+                or mechanistic_candidate.get("policy_version")
+                != "mechanistic_entry_common_feature_chronological_v1"
+                or mechanistic_candidate.get("decision_role_contract")
+                != {
+                    "primary_decision_owner": "mechanistic_entry_adjudicator",
+                    "ai_role": "auxiliary_risk_screen_pass_veto_no_promotion",
+                    "hard_safety_owner": "existing_runtime_submit_and_order_guards",
+                }
+                or mechanistic_candidate.get("shared_decision_function")
+                != "entry_setup_evidence.mechanistic_entry_policy_decision"
+                or not isinstance(promotion_checks, dict)
+                or not promotion_checks
+                or not all(value is True for value in promotion_checks.values())
+                or mechanistic_candidate.get("runtime_effect") is not False
+                or mechanistic_candidate.get("allowed_runtime_apply") is not False
+                or mechanistic_candidate.get("actual_order_submitted") is not False
+                or mechanistic_candidate.get("broker_order_forbidden") is not True
+            ):
+                errors.append("mechanistic_entry_candidate_contract_invalid")
+    elif mechanistic_candidate is not None:
+        errors.append("mechanistic_entry_candidate_without_promotion_pass")
+    hierarchical = report.get("hierarchical_entry_quality")
+    if not isinstance(hierarchical, dict):
+        errors.append("hierarchical_entry_quality_invalid")
+        hierarchical = {}
+    else:
+        source_population = hierarchical.get("source_population")
+        source_population = (
+            source_population if isinstance(source_population, dict) else {}
+        )
+        label_counts = source_population.get("label_counts")
+        label_counts = label_counts if isinstance(label_counts, dict) else {}
+        walk_forward = hierarchical.get("walk_forward")
+        walk_forward = walk_forward if isinstance(walk_forward, dict) else {}
+        folds = walk_forward.get("folds")
+        folds = folds if isinstance(folds, list) else []
+        group_contract = hierarchical.get("group_contract")
+        group_contract = group_contract if isinstance(group_contract, dict) else {}
+        actual_lane = hierarchical.get("actual_entry_lane")
+        actual_lane = actual_lane if isinstance(actual_lane, dict) else {}
+        market_path = hierarchical.get("market_path_opportunity_anchors")
+        market_path = market_path if isinstance(market_path, dict) else {}
+        market_date_summaries = market_path.get("source_date_summaries")
+        market_date_summaries = (
+            market_date_summaries if isinstance(market_date_summaries, list) else []
+        )
+        market_anchors = market_path.get("anchors")
+        market_anchors = market_anchors if isinstance(market_anchors, list) else []
+        market_learning = market_path.get("learning_contract")
+        market_learning = market_learning if isinstance(market_learning, dict) else {}
+        market_dates = [
+            str(row.get("source_date") or "")
+            for row in market_date_summaries
+            if isinstance(row, dict)
+        ]
+        market_date_contract_valid = bool(
+            len(market_dates) == len(market_date_summaries)
+            and market_dates == sorted(set(market_dates))
+            and all(
+                all(
+                    isinstance(row.get(key), int)
+                    and not isinstance(row.get(key), bool)
+                    and row.get(key) >= 0
+                    for key in (
+                        "exact_trace_count",
+                        "target_first_anchor_count",
+                        "rebound_anchor_count",
+                        "direct_continuation_anchor_count",
+                        "path_detail_gap_anchor_count",
+                        "ai_non_entry_anchor_count",
+                    )
+                )
+                and row.get("target_first_anchor_count")
+                == row.get("rebound_anchor_count")
+                + row.get("direct_continuation_anchor_count")
+                + row.get("path_detail_gap_anchor_count")
+                for row in market_date_summaries
+                if isinstance(row, dict)
+            )
+        )
+        promotion_checks = hierarchical.get("promotion_checks")
+        promotion_checks = (
+            promotion_checks if isinstance(promotion_checks, dict) else {}
+        )
+        accepted_count = source_population.get("accepted_unique_trace_count")
+        evaluable_count = source_population.get("entry_quality_evaluable_count")
+        gap_count = source_population.get("entry_quality_censored_or_gap_count")
+        fold_contract_valid = all(
+            isinstance(fold, dict)
+            and fold.get("future_rows_used_for_training") is False
+            and isinstance(fold.get("training_dates"), list)
+            and bool(fold.get("training_dates"))
+            and str(fold.get("training_max_date") or "")
+            < str(fold.get("evaluation_date") or "")
+            for fold in folds
+        )
+        if (
+            hierarchical.get("schema") != "hierarchical_entry_quality_walk_forward_v1"
+            or hierarchical.get("target_date") != report.get("target_date")
+            or hierarchical.get("decision_authority")
+            != "offline_source_only_no_runtime_selection"
+            or not isinstance(hierarchical.get("status"), str)
+            or not str(hierarchical.get("status") or "").strip()
+            or not isinstance(hierarchical.get("promotion_pass"), bool)
+            or hierarchical.get("policy_candidate") is not None
+            or hierarchical.get("runtime_effect") is not False
+            or hierarchical.get("allowed_runtime_apply") is not False
+            or hierarchical.get("actual_order_submitted") is not False
+            or hierarchical.get("broker_order_forbidden") is not True
+            or not isinstance(accepted_count, int)
+            or not isinstance(evaluable_count, int)
+            or not isinstance(gap_count, int)
+            or accepted_count != evaluable_count + gap_count
+            or sum(
+                value
+                for value in label_counts.values()
+                if isinstance(value, int) and not isinstance(value, bool)
+            )
+            != accepted_count
+            or walk_forward.get("fold_count") != len(folds)
+            or walk_forward.get("fold_dates_strictly_ordered")
+            is not fold_contract_valid
+            or walk_forward.get("sealed_fold_reselection_allowed") is not False
+            or group_contract.get("symbol_residual_active") is not False
+            or group_contract.get("missing_micro_imputed") is not False
+            or group_contract.get("missing_group_dimensions_imputed") is not False
+            or not isinstance(group_contract.get("group_complete_evaluable_count"), int)
+            or not isinstance(
+                group_contract.get("group_incomplete_evaluable_count"), int
+            )
+            or group_contract.get("group_complete_evaluable_count")
+            + group_contract.get("group_incomplete_evaluable_count")
+            != evaluable_count
+            or actual_lane.get("actual_and_counterfactual_denominators_merged")
+            is not False
+            or actual_lane.get("holding_duration_used_as_time_to_target") is not False
+            or actual_lane.get("missing_cost_or_path_imputed") is not False
+            or not isinstance(actual_lane.get("path_evaluable_count"), int)
+            or not isinstance(
+                actual_lane.get("economic_acceptance_eligible_count"), int
+            )
+            or actual_lane.get("economic_acceptance_eligible_count")
+            > actual_lane.get("path_evaluable_count")
+            or market_path.get("schema") != "market_path_opportunity_anchor_study_v1"
+            or market_path.get("runtime_effect") is not False
+            or market_path.get("allowed_runtime_apply") is not False
+            or market_path.get("counterfactual_only_not_realized_pnl") is not True
+            or market_path.get("actual_and_counterfactual_denominators_merged")
+            is not False
+            or len(market_anchors) != market_path.get("anchor_count")
+            or any(
+                not isinstance(row, dict)
+                or row.get("actual_fill_claimed") is not False
+                or row.get("realized_pnl_claimed") is not False
+                or row.get("runtime_effect") is not False
+                or row.get("allowed_runtime_apply") is not False
+                for row in market_anchors
+            )
+            or not market_date_contract_valid
+            or market_path.get("anchor_count")
+            != market_path.get("rebound_anchor_count", 0)
+            + market_path.get("direct_continuation_anchor_count", 0)
+            + market_path.get("path_detail_gap_anchor_count", 0)
+            or sum(
+                row.get("exact_trace_count", 0)
+                for row in market_date_summaries
+                if isinstance(row, dict)
+            )
+            != accepted_count
+            or sum(
+                row.get("target_first_anchor_count", 0)
+                for row in market_date_summaries
+                if isinstance(row, dict)
+            )
+            != market_path.get("anchor_count")
+            or market_learning.get("all_accepted_source_dates_used") is not True
+            or market_learning.get("daily_append_without_historical_rescan") is not True
+            or actual_lane.get("realized_net_10bp_count", 0)
+            != actual_lane.get("realized_net_10bp_fast_count", 0)
+            + actual_lane.get("realized_net_10bp_late_count", 0)
+            or actual_lane.get("realized_lifecycle_count", 0)
+            > actual_lane.get("filled_lifecycle_count", 0)
+            or len(actual_lane.get("realized_anchor_ledger") or [])
+            != actual_lane.get("realized_lifecycle_count", 0)
+            or actual_lane.get("raw_decision_path_join_count", 0)
+            > actual_lane.get("filled_lifecycle_count", 0)
+            or not promotion_checks
+            or hierarchical.get("promotion_pass")
+            is not all(value is True for value in promotion_checks.values())
+        ):
+            errors.append("hierarchical_entry_quality_contract_invalid")
+    flow_groups = report.get("mechanistic_flow_groups")
+    if not isinstance(flow_groups, dict):
+        errors.append("mechanistic_flow_groups_invalid")
+        flow_groups = {}
+    else:
+        flow_source = flow_groups.get("source_population")
+        flow_source = flow_source if isinstance(flow_source, dict) else {}
+        flow_split = flow_groups.get("chronological_split")
+        flow_split = flow_split if isinstance(flow_split, dict) else {}
+        forward = flow_groups.get("forward_evaluation")
+        forward = forward if isinstance(forward, dict) else {}
+        forward_contract = flow_groups.get("forward_acceptance_contract")
+        forward_contract = (
+            forward_contract if isinstance(forward_contract, dict) else {}
+        )
+        micro_contract = flow_groups.get("micro_confirmation_upgrade_contract")
+        micro_contract = micro_contract if isinstance(micro_contract, dict) else {}
+        micro_source_audit = flow_groups.get("micro_confirmation_source_audit")
+        micro_source_audit = (
+            micro_source_audit if isinstance(micro_source_audit, dict) else {}
+        )
+        retrospective_families = flow_groups.get(
+            "retrospective_supported_recheck_families"
+        )
+        forward_families = flow_groups.get("forward_accepted_recheck_families")
+        family_results = flow_groups.get("family_results")
+        forward_family_results = forward.get("family_results")
+        research_candidate = flow_groups.get("research_candidate")
+        recheck_candidate = flow_groups.get("recheck_candidate")
+        flow_counts = [
+            flow_source.get("accepted_unique_trace_count"),
+            flow_source.get("valid_flow_observation_count"),
+            flow_source.get("terminal_flow_count"),
+            flow_source.get("censored_flow_count"),
+        ]
+        flow_count_contract_valid = bool(
+            all(
+                isinstance(value, int) and not isinstance(value, bool) and value >= 0
+                for value in flow_counts
+            )
+            and flow_counts[1] <= flow_counts[0]
+            and flow_counts[2] + flow_counts[3] == flow_counts[1]
+        )
+        micro_join_count = micro_source_audit.get("eligible_same_trace_join_count")
+        micro_count_contract_valid = bool(
+            isinstance(micro_join_count, int)
+            and not isinstance(micro_join_count, bool)
+            and micro_join_count >= 0
+            and flow_count_contract_valid
+            and micro_join_count <= flow_counts[1]
+        )
+        family_lists_valid = bool(
+            isinstance(retrospective_families, list)
+            and all(isinstance(value, str) for value in retrospective_families)
+            and retrospective_families == sorted(set(retrospective_families))
+            and isinstance(forward_families, list)
+            and all(isinstance(value, str) for value in forward_families)
+            and forward_families == sorted(set(forward_families))
+            and set(forward_families).issubset(retrospective_families)
+        )
+
+        def validated_passed_families(
+            results: Any,
+            *,
+            checks_key: str,
+            pass_key: str,
+            calibration_checks_required: bool = False,
+        ) -> list[str] | None:
+            if not isinstance(results, list):
+                return None
+            names: list[str] = []
+            passed_names: list[str] = []
+            for row in results:
+                if not isinstance(row, dict) or not isinstance(row.get("family"), str):
+                    return None
+                family = row["family"]
+                checks = row.get(checks_key)
+                passed = row.get(pass_key)
+                if (
+                    not isinstance(checks, dict)
+                    or not checks
+                    or not all(isinstance(value, bool) for value in checks.values())
+                    or not isinstance(passed, bool)
+                    or (
+                        not calibration_checks_required
+                        and passed != all(checks.values())
+                    )
+                ):
+                    return None
+                if calibration_checks_required:
+                    calibration_checks = row.get("calibration_checks")
+                    selected = row.get("selected_from_calibration")
+                    if (
+                        not isinstance(calibration_checks, dict)
+                        or not calibration_checks
+                        or not all(
+                            isinstance(value, bool)
+                            for value in calibration_checks.values()
+                        )
+                        or not isinstance(selected, bool)
+                        or selected is not all(calibration_checks.values())
+                        or passed != (selected and all(checks.values()))
+                    ):
+                        return None
+                names.append(family)
+                if passed:
+                    passed_names.append(family)
+            if names != sorted(set(names)):
+                return None
+            return passed_names
+
+        validated_retrospective_families = validated_passed_families(
+            family_results,
+            checks_key="retrospective_validation_checks",
+            pass_key="retrospective_validation_pass",
+            calibration_checks_required=True,
+        )
+        validated_forward_families = validated_passed_families(
+            forward_family_results,
+            checks_key="checks",
+            pass_key="forward_acceptance_pass",
+        )
+        expected_flow_gate = {
+            "minimum_cost_adjusted_mfe_pct": 0.10,
+            "minimum_calibration_terminal_count": 20,
+            "minimum_calibration_source_date_count": 5,
+            "minimum_calibration_positive_count": 3,
+            "minimum_calibration_positive_source_date_count": 3,
+            "minimum_calibration_positive_rate_lift": 1.15,
+            "minimum_holdout_terminal_count": 5,
+            "minimum_holdout_source_date_count": 2,
+            "minimum_holdout_positive_count": 1,
+            "minimum_holdout_positive_source_date_count": 2,
+            "minimum_holdout_positive_rate_lift": 1.05,
+            "sealed_holdout_source_date_count": 3,
+        }
+
+        def candidate_hash_valid(candidate: Any, schema: str) -> bool:
+            if not isinstance(candidate, dict):
+                return False
+            candidate_body = {
+                key: value
+                for key, value in candidate.items()
+                if key != "candidate_content_sha256"
+            }
+            expected_hash = hashlib.sha256(
+                json.dumps(
+                    candidate_body,
+                    ensure_ascii=True,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    default=str,
+                ).encode("utf-8")
+            ).hexdigest()
+            return bool(
+                candidate.get("schema") == schema
+                and candidate.get("candidate_content_sha256") == expected_hash
+                and candidate.get("action_ceiling") == "RECHECK"
+                and candidate.get("direct_enter_authority") is False
+                and candidate.get("micro_confirmation_required_for_enter") is True
+                and candidate.get("runtime_effect") is False
+                and candidate.get("allowed_runtime_apply") is False
+                and candidate.get("actual_order_submitted") is False
+                and candidate.get("broker_order_forbidden") is True
+            )
+
+        retrospective_candidate_valid = (
+            research_candidate is None
+            if not retrospective_families
+            else (
+                candidate_hash_valid(
+                    research_candidate,
+                    "mechanistic_entry_flow_recheck_research_candidate_v1",
+                )
+                and research_candidate.get("retrospective_only") is True
+                and research_candidate.get("forward_acceptance_required") is True
+                and research_candidate.get("accepted_families")
+                == retrospective_families
+            )
+        )
+        forward_candidate_valid = (
+            recheck_candidate is None
+            if not forward_families
+            else (
+                candidate_hash_valid(
+                    recheck_candidate, "mechanistic_entry_flow_recheck_candidate_v1"
+                )
+                and recheck_candidate.get("accepted_families") == forward_families
+            )
+        )
+        if (
+            flow_groups.get("schema") != "mechanistic_entry_flow_group_study_v1"
+            or flow_groups.get("target_date") != report.get("target_date")
+            or flow_groups.get("flow_observation_schema")
+            != "mechanistic_entry_flow_observation_v1"
+            or flow_groups.get("decision_authority")
+            != "offline_source_only_recheck_ranking_no_enter"
+            or flow_groups.get("enter_policy_candidate") is not None
+            or flow_groups.get("runtime_effect") is not False
+            or flow_groups.get("allowed_runtime_apply") is not False
+            or flow_groups.get("actual_order_submitted") is not False
+            or flow_groups.get("broker_order_forbidden") is not True
+            or not family_lists_valid
+            or flow_groups.get("gate") != expected_flow_gate
+            or validated_retrospective_families != retrospective_families
+            or validated_forward_families != forward_families
+            or flow_split.get("inaugural_boundary_design_observed_full_history")
+            is not True
+            or flow_split.get("retrospective_validation_is_not_forward_holdout")
+            is not True
+            or forward.get("boundary_freeze_date")
+            != forward_contract.get("first_eligible_source_date_is_after")
+            or not flow_count_contract_valid
+            or micro_contract.get("flow_family_alone_can_enter") is not False
+            or micro_contract.get("missing_micro_imputed") is not False
+            or micro_contract.get("minimum_cost_adjusted_enter_ev_pct") != 0.10
+            or micro_source_audit.get("schema")
+            != "mechanistic_flow_micro_confirmation_source_audit_v1"
+            or micro_source_audit.get("first_eligible_source_date_is_after")
+            != forward_contract.get("first_eligible_source_date_is_after")
+            or micro_source_audit.get("historical_sidecar_backfill_allowed")
+            is not False
+            or not micro_count_contract_valid
+            or micro_source_audit.get("missing_micro_imputed") is not False
+            or micro_source_audit.get("micro_threshold_fitted") is not False
+            or micro_source_audit.get("enter_candidate_issued") is not False
+            or micro_source_audit.get("runtime_effect") is not False
+            or micro_source_audit.get("allowed_runtime_apply") is not False
+            or not retrospective_candidate_valid
+            or not forward_candidate_valid
+        ):
+            errors.append("mechanistic_flow_groups_contract_invalid")
     handoff = report.get("optimizer_handoff")
     if not isinstance(handoff, dict):
         errors.append("optimizer_handoff_invalid")
@@ -1185,6 +1651,62 @@ def _ai_decision_action_outcome_calibration_status(
             )
         ):
             errors.append("optimizer_handoff_candidate_reference_mismatch")
+        expected_mechanistic_handoff = {
+            "schema": mechanistic.get("schema"),
+            "policy_version": mechanistic.get("policy_version"),
+            "status": mechanistic.get("status"),
+            "promotion_pass": mechanistic.get("promotion_pass"),
+            "policy_candidate": mechanistic.get("policy_candidate"),
+            "decision_authority": "offline_source_only_no_runtime_selection",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        }
+        if handoff.get("mechanistic_entry_refinement") != (
+            expected_mechanistic_handoff
+        ):
+            errors.append("optimizer_handoff_mechanistic_reference_mismatch")
+        expected_hierarchical_handoff = {
+            "schema": hierarchical.get("schema"),
+            "status": hierarchical.get("status"),
+            "promotion_pass": hierarchical.get("promotion_pass"),
+            "policy_candidate": hierarchical.get("policy_candidate"),
+            "source_rows_sha256": (
+                (hierarchical.get("source_population") or {}).get("source_rows_sha256")
+                if isinstance(hierarchical.get("source_population"), dict)
+                else None
+            ),
+            "decision_authority": "offline_source_only_no_runtime_selection",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        }
+        if handoff.get("hierarchical_entry_quality") != (expected_hierarchical_handoff):
+            errors.append("optimizer_handoff_hierarchical_reference_mismatch")
+        expected_flow_handoff = {
+            "schema": flow_groups.get("schema"),
+            "status": flow_groups.get("status"),
+            "retrospective_supported_recheck_families": flow_groups.get(
+                "retrospective_supported_recheck_families"
+            ),
+            "forward_accepted_recheck_families": flow_groups.get(
+                "forward_accepted_recheck_families"
+            ),
+            "research_candidate": flow_groups.get("research_candidate"),
+            "recheck_candidate": flow_groups.get("recheck_candidate"),
+            "enter_policy_candidate": None,
+            "micro_confirmation_source_audit": flow_groups.get(
+                "micro_confirmation_source_audit"
+            ),
+            "source_rows_sha256": (
+                (flow_groups.get("source_population") or {}).get("source_rows_sha256")
+                if isinstance(flow_groups.get("source_population"), dict)
+                else None
+            ),
+            "decision_authority": "offline_source_only_recheck_ranking_no_enter",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        }
+        if handoff.get("mechanistic_flow_groups") != expected_flow_handoff:
+            errors.append("optimizer_handoff_mechanistic_flow_reference_mismatch")
     return {
         "status": "fail" if errors else "pass",
         "contract_errors": errors,

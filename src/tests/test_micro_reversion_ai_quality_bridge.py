@@ -1825,6 +1825,45 @@ def test_future_outcome_is_separate_and_uses_executable_bid_after_cost() -> None
     assert "horizons" not in evidence
 
 
+@pytest.mark.parametrize("points,expected", [
+    ([(500, 12.0), (1500, -90.0)], "net_target_exit"),
+    ([(500, -75.0), (1500, 30.0)], "adverse_exit"),
+    ([(1000, -5.0), (2000, -3.0)], "time_exit"),
+    ([(500, 12.0), (500, -75.0)], None),
+    ([], None),
+])
+def test_terminal_net_exit_uses_executable_prefix_not_later_end(points, expected):
+    from dataclasses import replace
+    config = replace(_verified_config(), target_liquidation_sec=2)
+    evidence = {"snapshot_captured_at_ms": 1000, "economics": {"cost_profile_verified": True}}
+    receipt = bridge_module._entry_terminal_exit(
+        executable=[(1000 + offset, net, net, None) for offset, net in points],
+        market_rows=[], depth_rows=[], rejected_times_us=[], evidence=evidence, config=config,
+    )
+    assert receipt["terminal_reason"] == expected
+    assert bridge_module.validate_entry_terminal_exit(receipt) == (expected is not None)
+    if expected == "net_target_exit":
+        assert receipt["terminal_net_return_pct"] == .12
+        assert receipt["holding_ms"] == 500
+        assert receipt["actual_fill_proven"] is False
+        assert len(receipt["executable_net_path"]) == 1
+    if expected is not None:
+        tampered = {**receipt, "terminal_net_return_pct": 999}
+        tampered["receipt_sha256"] = bridge_module._sha256({k:v for k,v in tampered.items() if k != "receipt_sha256"})
+        assert bridge_module.validate_entry_terminal_exit(tampered) is False
+
+
+def test_terminal_net_exit_rejects_missing_cost_and_prefix_gap():
+    config = _verified_config()
+    for verified, offset in [(False, 500), (True, 5000)]:
+        receipt = bridge_module._entry_terminal_exit(
+            executable=[(1000 + offset, 12.0, 12.0, None)], market_rows=[], depth_rows=[], rejected_times_us=[],
+            evidence={"snapshot_captured_at_ms": 1000, "economics": {"cost_profile_verified": verified}}, config=config,
+        )
+        assert receipt["status"] == "source_gap"
+        assert receipt["terminal_net_return_pct"] is None
+
+
 def test_entry_outcome_joins_deduplicated_allocator_and_caps_at_5pct_depth() -> None:
     evidence = build_tactical_evidence(
         trace=_trace(),

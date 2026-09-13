@@ -1828,6 +1828,22 @@ def test_actual_duration_uses_fill_and_exit_not_label_horizon(tmp_path: Path) ->
     )
     assert row["label_horizon_used"] is False
     assert row["capital_time_krw_hours"] > 0
+    assert row["actual_entry_quality_path"]["status"] == "source_gap"
+    assert row["actual_entry_quality_path"]["entry_quality_label"] == (
+        "CENSORED_OR_SOURCE_GAP"
+    )
+    assert (
+        row["actual_entry_quality_path"][
+            "actual_holding_duration_is_not_time_to_net_target"
+        ]
+        is True
+    )
+    assert (
+        report["actual_entry_quality_path_contract"][
+            "actual_and_counterfactual_denominators_merged"
+        ]
+        is False
+    )
 
 
 def test_any_promotion_gate_failure_yields_no_promotion_ready(tmp_path: Path) -> None:

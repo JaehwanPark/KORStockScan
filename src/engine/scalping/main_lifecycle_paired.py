@@ -20,7 +20,7 @@ import os
 import re
 import stat
 import tempfile
-from collections import deque
+from collections import Counter, deque
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
@@ -99,6 +99,7 @@ HISTORICAL_FILL_BEFORE_SUBMIT_DIAGNOSTIC_NONPROMOTION_BLOCKER = (
     "historical_fill_before_submit_diagnostic_recovery_non_promotable"
 )
 SUBMISSION_CUSTODY_BINDING_SCHEMA = "broker_execution_inferred_submission_binding_v1"
+ACTUAL_ENTRY_QUALITY_PATH_SCHEMA = "actual_entry_quality_path_v1"
 SUBMISSION_CUSTODY_SOURCE_STAGES = frozenset(
     {
         "entry_execution_receipt_submission_custody",
@@ -3764,6 +3765,56 @@ class _LifecycleAccumulator:
             else:
                 actual_duration = duration
 
+        exact_entry_trace_ids = sorted(
+            {
+                str(trace_id)
+                for (
+                    trace_id,
+                    stage,
+                    _venue,
+                    _session_bucket,
+                    _venue_source,
+                    _session_source,
+                ) in self.decision_trace_context_counts
+                if str(stage).strip().lower() in {"entry", "entry_ai"}
+            }
+        )
+        if self.first_fill_execution_at is None:
+            actual_entry_quality_path = {
+                "schema": ACTUAL_ENTRY_QUALITY_PATH_SCHEMA,
+                "status": "not_applicable_no_fill",
+                "entry_quality_label": None,
+                "source_gap_reason": None,
+            }
+        else:
+            source_gap_reason = (
+                "exact_entry_decision_trace_join_required"
+                if len(exact_entry_trace_ids) != 1
+                else "exact_post_fill_price_path_not_available_in_lifecycle_source"
+            )
+            actual_entry_quality_path = {
+                "schema": ACTUAL_ENTRY_QUALITY_PATH_SCHEMA,
+                "status": "source_gap",
+                "entry_quality_label": "CENSORED_OR_SOURCE_GAP",
+                "source_gap_reason": source_gap_reason,
+                "decision_trace_id": (
+                    exact_entry_trace_ids[0]
+                    if len(exact_entry_trace_ids) == 1
+                    else None
+                ),
+                "first_fill_execution_at": self.first_fill_execution_at.isoformat(),
+                "final_exit_execution_at": (
+                    self.final_exit_execution_at.isoformat()
+                    if self.final_exit_execution_at is not None
+                    else None
+                ),
+                "actual_holding_duration_is_not_time_to_net_target": True,
+                "counterfactual_path_used": False,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "order_authority": False,
+            }
+
         bbo_coverage = (
             100.0 * self.bbo_observed_count / self.market_observation_expected_count
             if self.market_observation_expected_count
@@ -4090,6 +4141,7 @@ class _LifecycleAccumulator:
                 else None
             ),
             "actual_holding_duration_sec": actual_duration,
+            "actual_entry_quality_path": actual_entry_quality_path,
             "duration_source": (
                 "official_fid_908_first_fill_to_reconciled_final_exit"
                 if actual_duration is not None
@@ -6051,6 +6103,28 @@ def build_daily_report(
     rows = [
         accumulators[lifecycle_id].finalize() for lifecycle_id in sorted(accumulators)
     ]
+    actual_entry_quality_path_status_counts = Counter(
+        str(
+            (
+                row.get("actual_entry_quality_path")
+                if isinstance(row.get("actual_entry_quality_path"), dict)
+                else {}
+            ).get("status")
+            or "missing"
+        )
+        for row in rows
+    )
+    actual_entry_quality_label_counts = Counter(
+        str(
+            (
+                row.get("actual_entry_quality_path")
+                if isinstance(row.get("actual_entry_quality_path"), dict)
+                else {}
+            ).get("entry_quality_label")
+            or "NONE"
+        )
+        for row in rows
+    )
     pipeline_owner_excluded_lifecycle_count = 0
     for row in rows:
         owner = (str(row["record_id"]), str(row["stock_code"]))
@@ -6629,6 +6703,18 @@ def build_daily_report(
         "candidate_row_gate_failure_count": candidate_row_gate_failure_count,
         "lifecycle_window_exclusion_manifest": (lifecycle_window_exclusion_manifest),
         "lifecycle_count": len(rows),
+        "actual_entry_quality_path_contract": {
+            "schema": ACTUAL_ENTRY_QUALITY_PATH_SCHEMA,
+            "status_counts": dict(
+                sorted(actual_entry_quality_path_status_counts.items())
+            ),
+            "label_counts": dict(sorted(actual_entry_quality_label_counts.items())),
+            "actual_and_counterfactual_denominators_merged": False,
+            "holding_duration_used_as_target_time": False,
+            "missing_price_path_imputed": False,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        },
         "lifecycle_population_scope_counts": dict(
             sorted(population_scope_counts.items())
         ),

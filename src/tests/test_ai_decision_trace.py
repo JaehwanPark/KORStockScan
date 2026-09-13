@@ -151,6 +151,35 @@ def test_non_timeout_transport_failure_is_not_labeled_timeout(monkeypatch, tmp_p
     assert row["provider_called"] is True
 
 
+def test_entry_cost_is_preserved_in_trace_and_pending_outcome(monkeypatch, tmp_path):
+    _enable(monkeypatch, tmp_path)
+
+    trace.record_ai_decision_trace(
+        {
+            "action": "WAIT",
+            "score": 60,
+            "confidence": 60,
+            "reason": "bounded recheck",
+            "ai_parse_ok": True,
+            "entry_conservative_execution_cost_pct": 0.23,
+            "ai_trace_reference_price": 10000,
+            "ai_trace_adverse_price": 9900,
+            "ai_trace_effective_venue": "KRX",
+            "ai_trace_session_bucket": "KRX_REGULAR",
+        },
+        prompt_type="scalping_entry",
+        prompt_version="decision_quality_v2_15_4",
+        result_source="live",
+        stock_code="005930",
+        provider_called=True,
+    )
+
+    trace_row = _rows(trace._trace_path(trace._date_text()))[0]
+    outcome_row = _rows(trace._outcome_path(trace._date_text()))[0]
+    assert trace_row["entry_conservative_execution_cost_pct"] == 0.23
+    assert outcome_row["entry_conservative_execution_cost_pct"] == 0.23
+
+
 def test_trace_preserves_parent_entry_price_lineage(monkeypatch, tmp_path):
     _enable(monkeypatch, tmp_path)
 
@@ -1912,6 +1941,49 @@ def test_entry_probe_intent_is_preserved_in_trace_and_pending_label(
     assert pending_row["entry_recent_exit_price_vs_exit_pct"] == 0.273723
 
 
+@pytest.mark.parametrize(
+    "status,action", [("pass", "WAIT"), ("veto", "DROP"), ("response_invalid", "WAIT")]
+)
+def test_machine_screen_retained_in_trace_and_pending_outcome(
+    monkeypatch, tmp_path, status, action
+):
+    from src.engine.scalping import ai_decision_quality as quality
+
+    _enable(monkeypatch, tmp_path)
+    fields = {
+        "machine_bundle_sha256": "b" * 64,
+        "entry_ai_role": "auxiliary_risk_screen_pass_veto_no_promotion",
+        "entry_mechanistic_action": "ENTER_NOW",
+        "entry_ai_screen_status": status,
+        "entry_ai_screen_required": True,
+        "entry_ai_screen_pass": status == "pass",
+    }
+    trace.record_ai_decision_trace(
+        {
+            **fields,
+            "ai_decision_trace_id": "machine-screen",
+            "action": action,
+            "score": 70 if status == "pass" else 0,
+            "entry_probe_intent": status == "pass",
+            "decision_quality_live_adapter": "entry_setup_v2_15_2_krx_bounded_probe_v1",
+        },
+        prompt_type="scalping_entry",
+        prompt_version="decision_quality_v2_15_2",
+        result_source="live",
+        provider_called=True,
+    )
+    row = _rows(trace._trace_path(trace._date_text()))[0]
+    pending = _rows(trace._outcome_path(trace._date_text()))[0]
+    assert quality._final_decision_response_findings(row) == []
+    for key, value in fields.items():
+        assert (
+            row[key]
+            == pending[key]
+            == row["decision_quality_final_response"][key]
+            == value
+        )
+
+
 def test_decision_quality_non_buy_repair_provenance_is_preserved_in_trace(
     monkeypatch, tmp_path
 ):
@@ -2375,8 +2447,14 @@ def test_fallback_policy_nonapplication_survives_trace_and_pending_label(
         result_source="live",
         provider_called=True,
     )
-    for path in (trace._trace_path(trace._date_text()), trace._outcome_path(trace._date_text())):
+    for path in (
+        trace._trace_path(trace._date_text()),
+        trace._outcome_path(trace._date_text()),
+    ):
         row = _rows(path)[0]
-        assert row["entry_setup_live_policy_status"] == "fallback_position_owner_out_of_scope"
+        assert (
+            row["entry_setup_live_policy_status"]
+            == "fallback_position_owner_out_of_scope"
+        )
         assert row["entry_setup_live_policy_target_date"] == "2026-09-11"
         assert row["entry_setup_live_policy_runtime_effect"] is False

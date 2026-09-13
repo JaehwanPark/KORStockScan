@@ -106,6 +106,7 @@ from src.engine.scalping.entry_setup_live_policy import (
     read_exploration_probe_submit_count,
     record_exploration_probe_submission,
 )
+from src.engine.scalping.entry_setup_evidence import build_entry_timing_context
 from src.engine.scalping.entry_candle_context import (
     apply_entry_candle_hybrid_guard,
     build_entry_candle_context,
@@ -2839,6 +2840,7 @@ _ENTRY_CONTEXT_METADATA_KEYS = (
 
 _PRE_SUBMIT_WS_CONTEXT_PRESERVE_KEYS = (
     *_ENTRY_CONTEXT_METADATA_KEYS,
+    "entry_timing_context",
     "venue",
     "effective_venue",
     "session",
@@ -2876,6 +2878,33 @@ def _entry_context_ws_data(ws_data, stock):
             {},
         ):
             enriched[key] = stock_row.get(key)
+    decision_epoch = time.time()
+    code = str(stock_row.get("code") or stock_row.get("stock_code") or "").strip()[:6]
+    target_date = str(
+        stock_row.get("date") or datetime.now(_KST).date().isoformat()
+    ).strip()
+    promotion_events = (
+        _load_scanner_promotion_context_events(target_date).get(code, [])
+        if code
+        else []
+    )
+    enriched["entry_timing_context"] = build_entry_timing_context(
+        decision_epoch=decision_epoch,
+        promotion_events=promotion_events,
+        current_price=enriched.get("curr"),
+        effective_venue=(
+            enriched.get("effective_venue")
+            or enriched.get("venue")
+            or stock_row.get("effective_venue")
+            or stock_row.get("venue")
+        ),
+        session_bucket=(
+            enriched.get("session_bucket")
+            or enriched.get("session")
+            or stock_row.get("session_bucket")
+            or stock_row.get("session")
+        ),
+    )
     return enriched
 
 
@@ -22085,8 +22114,7 @@ def _shallow_avg_down_pending_lineage(
     """
     if (
         str((action or {}).get("add_type") or "").upper() != "AVG_DOWN"
-        or str((action or {}).get("reason") or "")
-        != "shallow_volatility_avg_down"
+        or str((action or {}).get("reason") or "") != "shallow_volatility_avg_down"
     ):
         return {}
     context = _AVG_DOWN_ROUTE_CONTEXT.get()
@@ -22122,12 +22150,8 @@ def _scale_in_pending_lineage(
         return shallow_avg_down
     if str((action or {}).get("add_type") or "").strip().upper() != "PYRAMID":
         return {}
-    position_episode_id = str(
-        (action or {}).get("position_episode_id") or ""
-    ).strip()
-    scale_in_decision_id = str(
-        (action or {}).get("scale_in_decision_id") or ""
-    ).strip()
+    position_episode_id = str((action or {}).get("position_episode_id") or "").strip()
+    scale_in_decision_id = str((action or {}).get("scale_in_decision_id") or "").strip()
     attempt_id = str(
         stock.get("scanner_promotion_id") or stock.get("scanner_generation_id") or ""
     ).strip()
@@ -22135,12 +22159,15 @@ def _scale_in_pending_lineage(
     if normalized_code.startswith("A"):
         normalized_code = normalized_code[1:]
     normalized_code = normalized_code[:6]
-    if not validate_main_lifecycle_id(
-        position_episode_id,
-        record_id=stock.get("id"),
-        stock_code=normalized_code,
-        attempt_id=attempt_id,
-    ) or re.fullmatch(r"pyr-decision-[0-9a-f]{32}", scale_in_decision_id) is None:
+    if (
+        not validate_main_lifecycle_id(
+            position_episode_id,
+            record_id=stock.get("id"),
+            stock_code=normalized_code,
+            attempt_id=attempt_id,
+        )
+        or re.fullmatch(r"pyr-decision-[0-9a-f]{32}", scale_in_decision_id) is None
+    ):
         return {}
     return {
         "pending_add_position_episode_id": position_episode_id,
@@ -26283,11 +26310,9 @@ def _active_sell_order_pending_fields(stock: dict | None) -> tuple[str, ...]:
     for key in ("sell_odno", "sell_ord_no", "pending_sell_msg"):
         if bool(str(stock.get(key, "") or "").strip()):
             active_fields.append(key)
-    reconciliation_reason = (
-        sniper_trade_utils.holding_sell_reconciliation_block_reason(
-            stock,
-            str(stock.get("code") or "").strip()[:6],
-        )
+    reconciliation_reason = sniper_trade_utils.holding_sell_reconciliation_block_reason(
+        stock,
+        str(stock.get("code") or "").strip()[:6],
     )
     if reconciliation_reason:
         active_fields.append(reconciliation_reason)
@@ -45311,18 +45336,14 @@ def _abort_entry_split_probe_residual(
     contract_integrity_abort = reason == "probe_fill_submit_contract_missing"
     residual_expand_forbidden = bool(
         preserve_position
-        and (
-            contract_integrity_abort
-            or (action_guard_active and not soft_abort)
-        )
+        and (contract_integrity_abort or (action_guard_active and not soft_abort))
     )
     set_fields = {
         "entry_split_probe_phase": "aborted",
         "entry_split_probe_abort_reason": reason,
         "entry_split_probe_abort_detail_reason": timeout_cause,
         "entry_split_probe_scale_in_forbidden": bool(
-            preserve_position
-            and not scale_in_recheck_allowed
+            preserve_position and not scale_in_recheck_allowed
         ),
         # This flag remains terminal for the original residual bundle. A later
         # scale-in is owned by the ordinary scale-in path and must pass all of
@@ -58865,12 +58886,10 @@ def _arm_ai_wait_rebound_recheck_anchor(
         return fields
     from src.engine.scalping.entry_setup_scalping_rollout import decision_authorized
 
-    if (
-        normalize_position_tag(
-            str(stock.get("strategy") or ""), stock.get("position_tag")
-        )
-        != "SCANNER"
-        and not decision_authorized(stock.get("strategy"), ai_decision, now=datetime.fromtimestamp(now_ts, _KST))
+    if normalize_position_tag(
+        str(stock.get("strategy") or ""), stock.get("position_tag")
+    ) != "SCANNER" and not decision_authorized(
+        stock.get("strategy"), ai_decision, now=datetime.fromtimestamp(now_ts, _KST)
     ):
         fields["ai_wait_rebound_anchor_reason"] = "non_scanner"
         return fields
@@ -78238,9 +78257,13 @@ def _resolve_holding_sell_dmst_stex_tp(
     observed_at: datetime | None = None,
 ) -> dict:
     stock = stock if isinstance(stock, dict) else {}
-    current_t = now_t or (observed_at.time() if observed_at is not None else datetime.now().time())
+    current_t = now_t or (
+        observed_at.time() if observed_at is not None else datetime.now().time()
+    )
     if observed_at is None:
-        observed_at = datetime.combine(datetime.now(_KST).date(), current_t, tzinfo=_KST)
+        observed_at = datetime.combine(
+            datetime.now(_KST).date(), current_t, tzinfo=_KST
+        )
     session = session_contract.resolve_market_session(observed_at)
     is_nxt_enabled, source = _holding_sell_nxt_enabled_status(stock, code)
     confirmed_nxt_position = bool(
@@ -78463,9 +78486,7 @@ def _scalping_terminal_exit_net_ev_fields(
         "terminal_exit_ev_threshold_pct": 0.0,
         "terminal_exit_ev_comparator": ">",
         "terminal_exit_ev_source_valid": source_valid,
-        "terminal_exit_ev_decision": (
-            "EXIT" if positive else "CONTINUE_HOLDING_LOGIC"
-        ),
+        "terminal_exit_ev_decision": ("EXIT" if positive else "CONTINUE_HOLDING_LOGIC"),
     }
 
 
@@ -78593,9 +78614,7 @@ def _scalping_same_session_terminal_exit_fields(
             == session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET_TERMINAL_EXIT
         )
         due = bool(terminal_window and not route_resolution.get("blocked"))
-        terminal_route = str(
-            route_resolution.get("dmst_stex_tp") or "UNKNOWN"
-        ).upper()
+        terminal_route = str(route_resolution.get("dmst_stex_tp") or "UNKNOWN").upper()
         return {
             **base,
             "should_exit": due,
@@ -78610,12 +78629,14 @@ def _scalping_same_session_terminal_exit_fields(
             "reason": (
                 "integrated_terminal_exit_window"
                 if due
-                else str(
-                    route_resolution.get("reason")
-                    or "before_integrated_terminal_exit_window"
+                else (
+                    str(
+                        route_resolution.get("reason")
+                        or "before_integrated_terminal_exit_window"
+                    )
+                    if route_resolution.get("blocked")
+                    else "before_integrated_terminal_exit_window"
                 )
-                if route_resolution.get("blocked")
-                else "before_integrated_terminal_exit_window"
             ),
         }
 
@@ -86282,9 +86303,8 @@ def handle_holding_state(
         observed_at=now_dt,
     )
     terminal_exit_ev_fields: dict[str, Any] = {}
-    if (
-        same_session_terminal_exit.get("should_exit")
-        and same_session_terminal_exit.get("terminal_exit_positive_net_ev_required")
+    if same_session_terminal_exit.get("should_exit") and same_session_terminal_exit.get(
+        "terminal_exit_positive_net_ev_required"
     ):
         terminal_exit_ev_fields = _scalping_terminal_exit_net_ev_fields(
             buy_price=buy_p,
@@ -90796,21 +90816,17 @@ def handle_holding_state(
             curr_p = int(sell_mark_price)
             profit_rate = calculate_net_profit_rate(buy_p, curr_p)
         sell_order_price = int(sell_order_price or curr_p or 0)
-        if (
-            str(exit_rule or stock.get("last_exit_rule") or "").strip()
-            == "scalp_same_session_terminal_exit"
-            and same_session_terminal_exit.get(
-                "terminal_exit_positive_net_ev_required"
-            )
+        if str(
+            exit_rule or stock.get("last_exit_rule") or ""
+        ).strip() == "scalp_same_session_terminal_exit" and same_session_terminal_exit.get(
+            "terminal_exit_positive_net_ev_required"
         ):
             terminal_pre_submit_ev_fields = _scalping_terminal_exit_net_ev_fields(
                 buy_price=buy_p,
                 executable_sell_price=sell_order_price,
             )
             sell_quote_fields.update(terminal_pre_submit_ev_fields)
-            if not terminal_pre_submit_ev_fields.get(
-                "terminal_exit_net_ev_positive"
-            ):
+            if not terminal_pre_submit_ev_fields.get("terminal_exit_net_ev_positive"):
                 _mutate_stock_state(
                     stock,
                     set_fields={
@@ -90827,9 +90843,7 @@ def handle_holding_state(
                             )
                         ),
                         "terminal_exit_hold_basis": (
-                            terminal_pre_submit_ev_fields.get(
-                                "terminal_exit_ev_basis"
-                            )
+                            terminal_pre_submit_ev_fields.get("terminal_exit_ev_basis")
                         ),
                     },
                     pop_fields=(
@@ -95565,11 +95579,19 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             "add_order_time": pending_registered_at,
         },
         pop_fields=(
-            (() if pending_scale_in_lineage else (
-                "pending_add_position_episode_id",
-                "pending_add_scale_in_decision_id",
-            ))
-            + (() if scale_in_ai_trace_fields else ("pending_add_ai_decision_trace_id",))
+            (
+                ()
+                if pending_scale_in_lineage
+                else (
+                    "pending_add_position_episode_id",
+                    "pending_add_scale_in_decision_id",
+                )
+            )
+            + (
+                ()
+                if scale_in_ai_trace_fields
+                else ("pending_add_ai_decision_trace_id",)
+            )
         ),
     )
     scale_in_route_plan = kiwoom_orders.describe_order_route_resolution()

@@ -1579,12 +1579,136 @@ def test_source_quality_hard_block_status_fails_runtime_candidate_without_handof
 
 
 def test_ai_decision_action_outcome_calibration_status_accepts_current_contract():
+    mechanistic = {
+        "schema": "mechanistic_entry_clean_baseline_refinement_v1",
+        "policy_version": "mechanistic_entry_common_feature_chronological_v1",
+        "target_date": "2026-09-07",
+        "status": "insufficient_clean_common_feature_evidence",
+        "promotion_pass": False,
+        "policy_candidate": None,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    hierarchical = {
+        "schema": "hierarchical_entry_quality_walk_forward_v1",
+        "target_date": "2026-09-07",
+        "status": "actual_path_source_gap",
+        "source_population": {
+            "accepted_unique_trace_count": 0,
+            "entry_quality_evaluable_count": 0,
+            "entry_quality_censored_or_gap_count": 0,
+            "label_counts": {},
+            "source_rows_sha256": "c" * 64,
+        },
+        "walk_forward": {
+            "folds": [],
+            "fold_count": 0,
+            "fold_dates_strictly_ordered": True,
+            "sealed_fold_reselection_allowed": False,
+        },
+        "group_contract": {
+            "symbol_residual_active": False,
+            "missing_micro_imputed": False,
+            "missing_group_dimensions_imputed": False,
+            "group_complete_evaluable_count": 0,
+            "group_incomplete_evaluable_count": 0,
+        },
+        "actual_entry_lane": {
+            "actual_and_counterfactual_denominators_merged": False,
+            "holding_duration_used_as_time_to_target": False,
+            "missing_cost_or_path_imputed": False,
+            "filled_lifecycle_count": 0,
+            "path_evaluable_count": 0,
+            "economic_acceptance_eligible_count": 0,
+            "realized_lifecycle_count": 0,
+            "realized_net_10bp_count": 0,
+            "realized_net_10bp_fast_count": 0,
+            "realized_net_10bp_late_count": 0,
+            "raw_decision_path_join_count": 0,
+            "realized_anchor_ledger": [],
+        },
+        "market_path_opportunity_anchors": {
+            "schema": "market_path_opportunity_anchor_study_v1",
+            "anchor_count": 0,
+            "rebound_anchor_count": 0,
+            "direct_continuation_anchor_count": 0,
+            "path_detail_gap_anchor_count": 0,
+            "source_date_summaries": [],
+            "learning_contract": {
+                "all_accepted_source_dates_used": True,
+                "daily_append_without_historical_rescan": True,
+            },
+            "counterfactual_only_not_realized_pnl": True,
+            "actual_and_counterfactual_denominators_merged": False,
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        },
+        "promotion_checks": {"minimum_walk_forward_fold_count": False},
+        "promotion_pass": False,
+        "policy_candidate": None,
+        "decision_authority": "offline_source_only_no_runtime_selection",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    flow_groups = calibration.build_mechanistic_flow_group_study(
+        target_date="2026-09-07",
+        source_rows=[],
+        source_contract={"accepted_rows_sha256": "c" * 64},
+    )
     handoff_body = {
         "schema": "ai_action_outcome_optimizer_handoff_v1",
         "target_date": "2026-09-07",
         "selected_review_candidate": None,
         "review_ready_candidates": [],
         "thin_positive_review_candidates": [],
+        "mechanistic_entry_refinement": {
+            "schema": mechanistic["schema"],
+            "policy_version": mechanistic["policy_version"],
+            "status": mechanistic["status"],
+            "promotion_pass": mechanistic["promotion_pass"],
+            "policy_candidate": mechanistic["policy_candidate"],
+            "decision_authority": "offline_source_only_no_runtime_selection",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        },
+        "hierarchical_entry_quality": {
+            "schema": hierarchical["schema"],
+            "status": hierarchical["status"],
+            "promotion_pass": hierarchical["promotion_pass"],
+            "policy_candidate": hierarchical["policy_candidate"],
+            "source_rows_sha256": hierarchical["source_population"][
+                "source_rows_sha256"
+            ],
+            "decision_authority": "offline_source_only_no_runtime_selection",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        },
+        "mechanistic_flow_groups": {
+            "schema": flow_groups["schema"],
+            "status": flow_groups["status"],
+            "retrospective_supported_recheck_families": flow_groups[
+                "retrospective_supported_recheck_families"
+            ],
+            "forward_accepted_recheck_families": flow_groups[
+                "forward_accepted_recheck_families"
+            ],
+            "research_candidate": flow_groups["research_candidate"],
+            "recheck_candidate": flow_groups["recheck_candidate"],
+            "enter_policy_candidate": None,
+            "micro_confirmation_source_audit": flow_groups[
+                "micro_confirmation_source_audit"
+            ],
+            "source_rows_sha256": flow_groups["source_population"][
+                "source_rows_sha256"
+            ],
+            "decision_authority": "offline_source_only_recheck_ranking_no_enter",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        },
         "source_contract_pass": True,
         "decision_authority": "optimizer_source_only_advisory_no_runtime_selection",
         "runtime_effect": False,
@@ -1627,6 +1751,9 @@ def test_ai_decision_action_outcome_calibration_status_accepts_current_contract(
             }
         ],
         "selected_review_candidate": None,
+        "mechanistic_entry_refinement": mechanistic,
+        "mechanistic_flow_groups": flow_groups,
+        "hierarchical_entry_quality": hierarchical,
         "source_contract_summary": {
             "cross_cohort_aggregation_forbidden": True,
             "invalid_sources_excluded_before_calibration": True,
@@ -1684,6 +1811,138 @@ def test_ai_decision_action_outcome_calibration_status_rejects_rehashed_handoff_
 
     assert status["status"] == "fail"
     assert "optimizer_handoff_candidate_reference_mismatch" in status["contract_errors"]
+
+
+def test_ai_decision_action_outcome_calibration_status_rejects_mechanistic_drift(
+    tmp_path: Path,
+):
+    report = calibration.build_report(target_date="2026-09-07", data_root=tmp_path)
+    report["mechanistic_entry_refinement"]["promotion_pass"] = True
+    report = calibration._with_artifact_content_sha256(report)
+
+    status = mod._ai_decision_action_outcome_calibration_status(report)
+
+    assert status["status"] == "fail"
+    assert "mechanistic_entry_candidate_missing" in status["contract_errors"]
+    assert (
+        "optimizer_handoff_mechanistic_reference_mismatch" in status["contract_errors"]
+    )
+
+
+def test_ai_decision_action_outcome_calibration_status_rejects_flow_count_drift(
+    tmp_path: Path,
+):
+    report = calibration.build_report(target_date="2026-09-07", data_root=tmp_path)
+    report["mechanistic_flow_groups"]["source_population"][
+        "valid_flow_observation_count"
+    ] = "invalid"
+    report = calibration._with_artifact_content_sha256(report)
+
+    status = mod._ai_decision_action_outcome_calibration_status(report)
+
+    assert status["status"] == "fail"
+    assert "mechanistic_flow_groups_contract_invalid" in status["contract_errors"]
+
+
+def test_ai_decision_action_outcome_calibration_status_rejects_micro_backfill(
+    tmp_path: Path,
+):
+    report = calibration.build_report(target_date="2026-09-07", data_root=tmp_path)
+    report["mechanistic_flow_groups"]["micro_confirmation_source_audit"][
+        "historical_sidecar_backfill_allowed"
+    ] = True
+    report = calibration._with_artifact_content_sha256(report)
+
+    status = mod._ai_decision_action_outcome_calibration_status(report)
+
+    assert status["status"] == "fail"
+    assert "mechanistic_flow_groups_contract_invalid" in status["contract_errors"]
+
+
+def test_ai_decision_action_outcome_calibration_status_rejects_forged_flow_pass(
+    tmp_path: Path,
+):
+    report = calibration.build_report(target_date="2026-09-07", data_root=tmp_path)
+    report["mechanistic_flow_groups"]["family_results"] = [
+        {
+            "family": "FORGED",
+            "selected_from_calibration": True,
+            "calibration_checks": {"minimum_terminal_count": True},
+            "retrospective_validation_checks": {"minimum_terminal_count": True},
+            "retrospective_validation_pass": False,
+        }
+    ]
+    report = calibration._with_artifact_content_sha256(report)
+
+    status = mod._ai_decision_action_outcome_calibration_status(report)
+
+    assert status["status"] == "fail"
+    assert "mechanistic_flow_groups_contract_invalid" in status["contract_errors"]
+
+
+def test_ai_decision_action_outcome_calibration_status_accepts_flow_calibration_veto(
+    tmp_path: Path,
+):
+    report = calibration.build_report(target_date="2026-09-07", data_root=tmp_path)
+    report["mechanistic_flow_groups"]["family_results"] = [
+        {
+            "family": "CALIBRATION_VETOED",
+            "selected_from_calibration": False,
+            "calibration_checks": {"minimum_terminal_count": False},
+            "retrospective_validation_checks": {"minimum_terminal_count": True},
+            "retrospective_validation_pass": False,
+        }
+    ]
+    report = calibration._with_artifact_content_sha256(report)
+
+    status = mod._ai_decision_action_outcome_calibration_status(report)
+
+    assert status["status"] == "pass"
+    assert status["contract_errors"] == []
+
+
+def test_ai_decision_action_outcome_calibration_status_rejects_market_anchor_drift(
+    tmp_path: Path,
+):
+    report = calibration.build_report(target_date="2026-09-07", data_root=tmp_path)
+    report["hierarchical_entry_quality"]["market_path_opportunity_anchors"][
+        "anchor_count"
+    ] = 1
+    report = calibration._with_artifact_content_sha256(report)
+
+    status = mod._ai_decision_action_outcome_calibration_status(report)
+
+    assert status["status"] == "fail"
+    assert "hierarchical_entry_quality_contract_invalid" in status["contract_errors"]
+
+
+def test_ai_decision_action_outcome_calibration_status_rejects_forged_mechanistic_candidate(
+    tmp_path: Path,
+):
+    report = calibration.build_report(target_date="2026-09-07", data_root=tmp_path)
+    candidate_body = {
+        "schema": "mechanistic_entry_common_feature_candidate_v1",
+        "policy_version": "mechanistic_entry_common_feature_chronological_v1",
+        "promotion_checks": {},
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    report["mechanistic_entry_refinement"]["promotion_pass"] = True
+    report["mechanistic_entry_refinement"]["policy_candidate"] = {
+        **candidate_body,
+        "candidate_content_sha256": calibration._canonical_sha256(candidate_body),
+    }
+    report = calibration._with_artifact_content_sha256(report)
+
+    status = mod._ai_decision_action_outcome_calibration_status(report)
+
+    assert status["status"] == "fail"
+    assert "mechanistic_entry_candidate_contract_invalid" in status["contract_errors"]
+    assert (
+        "optimizer_handoff_mechanistic_reference_mismatch" in status["contract_errors"]
+    )
 
 
 def test_source_quality_hard_block_status_detects_bridge_selected_alias_without_handoff():

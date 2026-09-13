@@ -32,6 +32,11 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 from zoneinfo import ZoneInfo
 
 from src.engine.ai_prompt_contracts import (
+    BALANCED_ENTRY_PROMPT_VERSIONS,
+    COMPARATIVE_ENTRY_PROMPT_VERSIONS,
+    COUNTERWEIGHT_BOUND_COMPARATIVE_ENTRY_PROMPT_VERSIONS,
+    decision_quality_balanced_entry_system_prompt,
+    decision_quality_comparative_entry_system_prompt,
     DECISION_QUALITY_DETAILED_PROMPT_VERSION,
     DECISION_QUALITY_HOLDING_V2_3_PROMPT_VERSION,
     DECISION_QUALITY_V2_8_CANDIDATE_PROMPT_VERSION,
@@ -43,6 +48,14 @@ from src.engine.ai_prompt_contracts import (
     DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
     DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
     DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
+    DECISION_QUALITY_V2_14_1_TIMING_AWARE_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+    DECISION_QUALITY_V2_14_2_BALANCED_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+    DECISION_QUALITY_V2_15_1_TIMING_AWARE_BOUNDED_RECOVERY_PROMPT_VERSION,
+    DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION,
+    DECISION_QUALITY_V2_14_3_COMPARATIVE_ENTRY_ADJUDICATOR_PROMPT_VERSION,
+    DECISION_QUALITY_V2_15_3_COMPARATIVE_BOUNDED_RECOVERY_PROMPT_VERSION,
+    DECISION_QUALITY_V2_14_4_COUNTERWEIGHT_BOUND_COMPARATIVE_PROMPT_VERSION,
+    DECISION_QUALITY_V2_15_4_COUNTERWEIGHT_BOUND_BOUNDED_RECOVERY_PROMPT_VERSION,
     DECISION_QUALITY_V2_16_SEQUENTIAL_RECOVERY_PROMPT_VERSION,
     DECISION_QUALITY_V2_PROMPT_VERSION,
     DECISION_QUALITY_V2_REASON_CODES,
@@ -57,6 +70,8 @@ from src.engine.ai_prompt_contracts import (
     decision_quality_v2_13_recovery_confirmation_system_prompt,
     decision_quality_v2_14_setup_risk_adjudicator_system_prompt,
     decision_quality_v2_15_bounded_recovery_system_prompt,
+    decision_quality_v2_14_1_timing_aware_setup_risk_system_prompt,
+    decision_quality_v2_15_1_timing_aware_bounded_recovery_system_prompt,
     decision_quality_v2_16_sequential_recovery_system_prompt,
     decision_quality_v2_system_prompt,
 )
@@ -76,21 +91,43 @@ from src.engine.scalping.entry_candidate_lifecycle_state import (
     report_path as candidate_lifecycle_report_path,
 )
 from src.engine.scalping.entry_setup_evidence import (
+    ENTRY_ACTION_COMPARISON_SCHEMA,
+    ENTRY_ACTION_COUNTERWEIGHT_BINDINGS_SCHEMA,
+    ENTRY_ACTION_COUNTERWEIGHT_COMPARISON_SCHEMA,
+    ENTRY_SETUP_BALANCED_EVIDENCE_VERSION,
+    ENTRY_DECISION_COMPOSER_V2_14_2_VERSION,
+    ENTRY_DECISION_COMPOSER_V2_15_2_VERSION,
+    ENTRY_DECISION_COMPOSER_V2_14_3_VERSION,
+    ENTRY_DECISION_COMPOSER_V2_15_3_VERSION,
+    ENTRY_DECISION_COMPOSER_V2_14_4_VERSION,
+    ENTRY_DECISION_COMPOSER_V2_15_4_VERSION,
     ENTRY_DECISION_COMPOSER_VERSION,
     ENTRY_DECISION_COMPOSER_V2_15_VERSION,
+    ENTRY_DECISION_COMPOSER_V2_14_1_VERSION,
+    ENTRY_DECISION_COMPOSER_V2_15_1_VERSION,
     ENTRY_DECISION_COMPOSER_V2_16_VERSION,
     ENTRY_RISK_ADJUDICATION_SCHEMA,
     ENTRY_RISK_ADJUDICATION_REPAIR_VERSION,
+    ENTRY_GROUP_OBSERVATION_SCHEMA,
     ENTRY_SETUP_EVIDENCE_SCHEMA,
     ENTRY_SETUP_EVIDENCE_VERSION,
+    ENTRY_SETUP_TIMING_EVIDENCE_VERSION,
     STRUCTURE_PHASE_POLICY_VERSION,
     TAIL_RISK_OBSERVATION_CONTRACT,
+    build_entry_predecision_group_observation,
     build_entry_setup_evidence,
+    build_entry_timing_context,
+    compose_entry_action_comparison,
     compose_entry_decision,
+    entry_action_counterweight_bindings,
+    entry_action_comparison_openai_schema,
     entry_risk_adjudication_openai_schema,
     repair_invalid_entry_risk_adjudication,
     validate_entry_risk_adjudication,
+    validate_entry_action_comparison,
+    validate_entry_action_counterweight_bindings,
 )
+from src.trading.order.tick_utils import get_tick_size
 from src.engine.scalping.micro_reversion.replay_ablation_contract import (
     CURRENT_DESIGN_ACTIVATION_DATE,
     CURRENT_DESIGN_VERSION,
@@ -210,6 +247,13 @@ ENTRY_PATH_TARGET_PCT = 0.30
 ENTRY_PATH_ADVERSE_PCT = -0.70
 ENTRY_PATH_PRIMARY_HORIZON = "10m"
 ENTRY_PATH_LABEL_VERSION = "tight_stop_entry_path_v1"
+ENTRY_QUALITY_PATH_SCHEMA = "entry_quality_path_v1"
+ENTRY_QUALITY_LABEL_SCHEMA = "entry_quality_label_v1"
+ENTRY_QUALITY_REQUIRED_NET_EDGE_PCT = 0.10
+ENTRY_QUALITY_CHECKPOINTS_SEC = (30, 60, 180, 300)
+ENTRY_QUALITY_PRIMARY_WINDOW_SEC = 180
+ENTRY_QUALITY_MAX_CADENCE_GAP_SEC = 90
+ENTRY_QUALITY_NEAR_STOP_RATIO = 0.80
 PROBE_RISK_CONTRACT_VERSION = "bounded_probe_recovery_risk_v1"
 OFFLINE_PROBE_SHARE_COUNT = 1
 OFFLINE_PROBE_MAX_BOUNDED_LOSS_PCT = 2.0
@@ -290,6 +334,15 @@ BOUNDED_OPPORTUNITY_SEMANTIC_VALIDATOR_VERSION = (
 )
 BOUNDED_OPPORTUNITY_SEMANTIC_REPAIR_VERSION = "bounded_opportunity_fail_safe_repair_v2"
 ENTRY_SETUP_RISK_SEMANTIC_VALIDATOR_VERSION = "entry_setup_risk_offline_semantic_v7"
+ENTRY_ACTION_COMPARISON_SEMANTIC_VALIDATOR_VERSION = (
+    "entry_action_comparison_offline_semantic_v1"
+)
+ENTRY_SETUP_COMPOSED_SEMANTIC_VALIDATORS = frozenset(
+    {
+        ENTRY_SETUP_RISK_SEMANTIC_VALIDATOR_VERSION,
+        ENTRY_ACTION_COMPARISON_SEMANTIC_VALIDATOR_VERSION,
+    }
+)
 ANTICIPATORY_SEMANTIC_REPAIR_VERSION = (
     "anticipatory_reversal_contract_closure_repair_v1"
 )
@@ -1855,6 +1908,285 @@ def _number(value: Any) -> float | None:
     return parsed if math.isfinite(parsed) else None
 
 
+def _entry_quality_path_metrics(
+    *,
+    window: list[dict[str, Any]],
+    decision_ts: datetime,
+    reference_price: float,
+    conservative_execution_cost_pct: float | None,
+    exact_stop_distance_pct: float | None,
+    entry_notional_krw: float | None = None,
+) -> dict[str, Any]:
+    """Build a cost-aware entry-path label without asserting an actual fill.
+
+    The source window contains completed-bar OHLC observations, so a high/low
+    touch is explicitly counterfactual.  Dwell time is emitted only when the
+    cadence from the decision anchor is complete enough to support seconds.
+    """
+
+    base = {
+        "schema": ENTRY_QUALITY_PATH_SCHEMA,
+        "label_schema": ENTRY_QUALITY_LABEL_SCHEMA,
+        "required_net_edge_pct": ENTRY_QUALITY_REQUIRED_NET_EDGE_PCT,
+        "primary_window_sec": ENTRY_QUALITY_PRIMARY_WINDOW_SEC,
+        "checkpoint_seconds": list(ENTRY_QUALITY_CHECKPOINTS_SEC),
+        "path_authority": "counterfactual_completed_bar_touch_not_actual_fill",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "capital_time_to_net_target_krw_sec": None,
+        "capital_time_status": "entry_notional_not_available",
+    }
+    if conservative_execution_cost_pct is None or conservative_execution_cost_pct < 0:
+        return {
+            **base,
+            "status": "source_gap",
+            "entry_quality_label": "CENSORED_OR_SOURCE_GAP",
+            "label_reason": "conservative_execution_cost_missing_or_invalid",
+        }
+    if exact_stop_distance_pct is None or exact_stop_distance_pct >= 0:
+        return {
+            **base,
+            "status": "source_gap",
+            "entry_quality_label": "CENSORED_OR_SOURCE_GAP",
+            "label_reason": "exact_stop_distance_missing_or_invalid",
+        }
+
+    gross_target_pct = round(
+        conservative_execution_cost_pct + ENTRY_QUALITY_REQUIRED_NET_EDGE_PCT, 10
+    )
+    target_price = reference_price * (1.0 + gross_target_pct / 100.0)
+    stop_price = reference_price * (1.0 + exact_stop_distance_pct / 100.0)
+    target_index = next(
+        (index for index, row in enumerate(window) if row["_high"] >= target_price),
+        None,
+    )
+    stop_index = next(
+        (index for index, row in enumerate(window) if row["_low"] <= stop_price),
+        None,
+    )
+    target_hit_at = (
+        window[target_index]["_timestamp"].isoformat()
+        if target_index is not None
+        else None
+    )
+    stop_hit_at = (
+        window[stop_index]["_timestamp"].isoformat() if stop_index is not None else None
+    )
+    stop_delay_sec = (
+        max(
+            0.0,
+            (window[stop_index]["_timestamp"] - decision_ts).total_seconds(),
+        )
+        if stop_index is not None
+        else None
+    )
+    same_bar_ambiguous = bool(
+        target_index is not None
+        and stop_index is not None
+        and target_index == stop_index
+    )
+    first_hit = (
+        "same_bar_ambiguous"
+        if same_bar_ambiguous
+        else (
+            "net_target_first"
+            if target_index is not None
+            and (stop_index is None or target_index < stop_index)
+            else "exact_stop_first" if stop_index is not None else "neither_hit"
+        )
+    )
+    target_delay_sec = (
+        max(
+            0.0,
+            (window[target_index]["_timestamp"] - decision_ts).total_seconds(),
+        )
+        if target_index is not None
+        else None
+    )
+    path_cutoff = decision_ts + timedelta(seconds=ENTRY_QUALITY_PRIMARY_WINDOW_SEC)
+    dwell_rows = [row for row in window if row["_timestamp"] <= path_cutoff]
+    if target_index is not None:
+        dwell_rows = [
+            row
+            for row in dwell_rows
+            if row["_timestamp"] <= window[target_index]["_timestamp"]
+        ]
+    pre_target_rows = (
+        window[: target_index + 1] if target_index is not None else dwell_rows
+    )
+    pre_target_mae_pct = (
+        min(
+            round(((row["_low"] / reference_price) - 1.0) * 100.0, 10)
+            for row in pre_target_rows
+        )
+        if pre_target_rows
+        else None
+    )
+    stop_proximity_ratio = (
+        abs(min(0.0, pre_target_mae_pct)) / abs(exact_stop_distance_pct)
+        if pre_target_mae_pct is not None
+        else None
+    )
+    tick_size = _number(get_tick_size(reference_price))
+    tick_pct = (
+        tick_size / reference_price * 100.0
+        if tick_size is not None and tick_size > 0
+        else None
+    )
+    neutral_band_pct = max(
+        2.0 * tick_pct if tick_pct is not None else 0.0,
+        0.5 * conservative_execution_cost_pct,
+        0.05,
+    )
+
+    cadence_complete = bool(dwell_rows)
+    previous_ts = decision_ts
+    underwater_duration_sec = 0.0
+    neutral_dwell_sec = 0.0
+    observed_duration_sec = 0.0
+    cadence_gap_count = 0
+    for row in dwell_rows:
+        gap_sec = (row["_timestamp"] - previous_ts).total_seconds()
+        if gap_sec <= 0 or gap_sec > ENTRY_QUALITY_MAX_CADENCE_GAP_SEC:
+            cadence_complete = False
+            cadence_gap_count += 1
+            previous_ts = row["_timestamp"]
+            continue
+        close_return_pct = ((row["_close"] / reference_price) - 1.0) * 100.0
+        observed_duration_sec += gap_sec
+        if close_return_pct < 0:
+            underwater_duration_sec += gap_sec
+        if abs(close_return_pct) <= neutral_band_pct:
+            neutral_dwell_sec += gap_sec
+        previous_ts = row["_timestamp"]
+    if observed_duration_sec <= 0:
+        cadence_complete = False
+
+    checkpoint_metrics: list[dict[str, Any]] = []
+    for checkpoint_sec in ENTRY_QUALITY_CHECKPOINTS_SEC:
+        checkpoint_end = decision_ts + timedelta(seconds=checkpoint_sec)
+        checkpoint_rows = [row for row in window if row["_timestamp"] <= checkpoint_end]
+        checkpoint_metrics.append(
+            {
+                "checkpoint_sec": checkpoint_sec,
+                "status": "observed" if checkpoint_rows else "source_gap",
+                "observation_count": len(checkpoint_rows),
+                "mfe_pct": (
+                    max(
+                        ((row["_high"] / reference_price) - 1.0) * 100.0
+                        for row in checkpoint_rows
+                    )
+                    if checkpoint_rows
+                    else None
+                ),
+                "mae_pct": (
+                    min(
+                        ((row["_low"] / reference_price) - 1.0) * 100.0
+                        for row in checkpoint_rows
+                    )
+                    if checkpoint_rows
+                    else None
+                ),
+            }
+        )
+
+    entry_quality_label = "CENSORED_OR_SOURCE_GAP"
+    label_reason = "primary_window_incomplete_or_neither_boundary_hit"
+    if same_bar_ambiguous:
+        label_reason = "net_target_and_exact_stop_same_completed_bar"
+    elif first_hit == "exact_stop_first":
+        if (
+            stop_delay_sec is not None
+            and stop_delay_sec <= ENTRY_QUALITY_PRIMARY_WINDOW_SEC
+        ):
+            entry_quality_label = "CLEAN_FAST_LOSS_OR_ADVERSE"
+            label_reason = "exact_stop_reached_before_net_target_in_primary_window"
+        else:
+            label_reason = "exact_stop_first_outside_primary_window"
+    elif first_hit == "net_target_first":
+        if (
+            stop_proximity_ratio is not None
+            and stop_proximity_ratio >= ENTRY_QUALITY_NEAR_STOP_RATIO
+        ):
+            entry_quality_label = "PROFIT_AFTER_DEEP_ADVERSE"
+            label_reason = "near_stop_before_net_target"
+        elif target_delay_sec is not None and target_delay_sec > (
+            ENTRY_QUALITY_PRIMARY_WINDOW_SEC
+        ):
+            entry_quality_label = "PROFITABLE_BUT_LATE"
+            label_reason = "net_target_reached_after_primary_window"
+        elif not cadence_complete:
+            label_reason = "dwell_cadence_incomplete"
+        elif (
+            observed_duration_sec > 0
+            and neutral_dwell_sec / observed_duration_sec >= 0.50
+        ):
+            entry_quality_label = "PROFIT_AFTER_SIDEWAYS"
+            label_reason = "neutral_dwell_dominated_before_net_target"
+        else:
+            entry_quality_label = "CLEAN_FAST_PROFIT"
+            label_reason = "net_target_fast_without_near_stop_or_long_neutral_dwell"
+
+    return {
+        **base,
+        "status": (
+            "evaluable"
+            if entry_quality_label != "CENSORED_OR_SOURCE_GAP"
+            else "censored_or_source_gap"
+        ),
+        "entry_quality_label": entry_quality_label,
+        "label_reason": label_reason,
+        "conservative_execution_cost_pct": conservative_execution_cost_pct,
+        "gross_net_target_pct": gross_target_pct,
+        "exact_stop_distance_pct": exact_stop_distance_pct,
+        "net_target_hit_at": target_hit_at,
+        "exact_stop_hit_at": stop_hit_at,
+        "first_hit": first_hit,
+        "time_to_net_target_sec": target_delay_sec,
+        "time_to_exact_stop_sec": stop_delay_sec,
+        "pre_target_mae_pct": pre_target_mae_pct,
+        "stop_proximity_ratio": stop_proximity_ratio,
+        "tick_size": tick_size,
+        "tick_pct": tick_pct,
+        "neutral_band_pct": neutral_band_pct,
+        "cadence_complete": cadence_complete,
+        "cadence_gap_count": cadence_gap_count,
+        "observed_dwell_duration_sec": (
+            observed_duration_sec if cadence_complete else None
+        ),
+        "underwater_duration_sec": (
+            underwater_duration_sec if cadence_complete else None
+        ),
+        "neutral_dwell_sec": neutral_dwell_sec if cadence_complete else None,
+        "pre_target_underwater_ratio": (
+            underwater_duration_sec / observed_duration_sec
+            if cadence_complete and observed_duration_sec > 0
+            else None
+        ),
+        "pre_target_neutral_dwell_ratio": (
+            neutral_dwell_sec / observed_duration_sec
+            if cadence_complete and observed_duration_sec > 0
+            else None
+        ),
+        "capital_time_to_net_target_krw_sec": (
+            entry_notional_krw * target_delay_sec
+            if entry_notional_krw is not None
+            and entry_notional_krw > 0
+            and target_delay_sec is not None
+            else None
+        ),
+        "capital_time_status": (
+            "diagnostic_fill_notional_times_target_delay"
+            if entry_notional_krw is not None
+            and entry_notional_krw > 0
+            and target_delay_sec is not None
+            else "entry_notional_or_target_delay_not_available"
+        ),
+        "checkpoints": checkpoint_metrics,
+    }
+
+
 def _probe_path_risk(
     *,
     request: dict[str, Any],
@@ -3309,6 +3641,24 @@ def load_pipeline_price_and_lifecycle_rows(
         stage_lower = stage.lower()
         actual_order_submitted = _bool(fields.get("actual_order_submitted"))
         filled = "fill" in stage_lower or _bool(fields.get("filled"))
+        fill_price = (
+            _number(
+                fields.get("fill_price")
+                if fields.get("fill_price") is not None
+                else fields.get("914")
+            )
+            if filled
+            else None
+        )
+        fill_qty = (
+            _number(
+                fields.get("fill_qty")
+                if fields.get("fill_qty") is not None
+                else fields.get("915")
+            )
+            if filled
+            else None
+        )
         realized_stage = any(
             token in stage_lower
             for token in (
@@ -3349,6 +3699,8 @@ def load_pipeline_price_and_lifecycle_rows(
                 *(lifecycle_identifiers.get(key) for key in lifecycle_identifiers),
                 actual_order_submitted,
                 filled,
+                fill_price,
+                fill_qty,
                 realized_profit_pct,
             )
             if lifecycle_key in lifecycle_seen:
@@ -3362,6 +3714,8 @@ def load_pipeline_price_and_lifecycle_rows(
                     **lifecycle_identifiers,
                     "actual_order_submitted": actual_order_submitted,
                     "filled": filled,
+                    "fill_price": fill_price,
+                    "fill_qty": fill_qty,
                     "realized_profit_pct": realized_profit_pct,
                 }
             )
@@ -4149,6 +4503,42 @@ def _correlation(
         "probe" in stage and "post_probe" not in stage and "post-probe" not in stage
         for stage in matched_stage_counts
     )
+    entry_fill_rows = [
+        row
+        for row in matched
+        if row.get("filled") is True
+        and _number(row.get("fill_price")) is not None
+        and not any(
+            token in str(row.get("stage") or "").lower()
+            for token in (
+                "sell",
+                "exit",
+                "trade_completed",
+                "position_completed",
+                "scale_in",
+                "scale-in",
+                "avg_down",
+                "pyramid",
+            )
+        )
+    ]
+    first_entry_fill = entry_fill_rows[0] if entry_fill_rows else {}
+    entry_fill_pairs = [
+        (_number(row.get("fill_price")), _number(row.get("fill_qty")))
+        for row in entry_fill_rows
+    ]
+    entry_fill_pairs = [
+        (price, quantity)
+        for price, quantity in entry_fill_pairs
+        if price is not None and price > 0 and quantity is not None and quantity > 0
+    ]
+    entry_fill_total_qty = sum(quantity for _, quantity in entry_fill_pairs)
+    entry_fill_vwap = (
+        sum(price * quantity for price, quantity in entry_fill_pairs)
+        / entry_fill_total_qty
+        if entry_fill_total_qty > 0
+        else None
+    )
 
     return {
         "status": "exact_matched" if matched else "open_unresolved",
@@ -4171,6 +4561,15 @@ def _correlation(
         ),
         "fill_observed": (
             any(row.get("filled") for row in matched) if matched else None
+        ),
+        "entry_fill_observed": bool(entry_fill_rows),
+        "first_entry_fill_at": first_entry_fill.get("timestamp"),
+        "first_entry_fill_price": _number(first_entry_fill.get("fill_price")),
+        "first_entry_fill_qty": _number(first_entry_fill.get("fill_qty")),
+        "entry_fill_total_qty": entry_fill_total_qty or None,
+        "entry_fill_vwap": entry_fill_vwap,
+        "first_entry_fill_anchor_exact_trace_join": bool(
+            entry_fill_rows and label_trace_id
         ),
         "realized_profit_pct": realized[-1] if realized else None,
         "realized_event_count": len(realized),
@@ -4354,6 +4753,24 @@ def mature_outcome_labels(
                         )
                     )
                 )
+                exact_stop_distance_pct = _number(pending.get("adverse_pct"))
+                if (
+                    exact_stop_distance_pct is None
+                    and adverse_price is not None
+                    and adverse_price > 0
+                ):
+                    exact_stop_distance_pct = (
+                        (adverse_price / reference) - 1.0
+                    ) * 100.0
+                entry_quality_path = _entry_quality_path_metrics(
+                    window=window,
+                    decision_ts=decision_ts,
+                    reference_price=reference,
+                    conservative_execution_cost_pct=_number(
+                        pending.get("entry_conservative_execution_cost_pct")
+                    ),
+                    exact_stop_distance_pct=exact_stop_distance_pct,
+                )
                 entry_path_metrics = {
                     "entry_path_label_version": ENTRY_PATH_LABEL_VERSION,
                     "entry_path_target_pct": ENTRY_PATH_TARGET_PCT,
@@ -4361,6 +4778,7 @@ def mature_outcome_labels(
                     "entry_path_target_hit_at": entry_path_target_hit,
                     "entry_path_adverse_hit_at": entry_path_adverse_hit,
                     "entry_path_first_hit": entry_path_first_hit,
+                    "entry_quality_path": entry_quality_path,
                 }
             profit_opportunity_price = reference * (
                 1.0 + (PROFIT_OPPORTUNITY_THRESHOLD_PCT / 100.0)
@@ -4472,6 +4890,97 @@ def mature_outcome_labels(
         )
         stage_outcome: dict[str, Any] = {}
         if stage == "entry":
+            actual_fill_entry_quality_path: dict[str, Any]
+            first_fill_at = _parse_ts(correlation.get("first_entry_fill_at"))
+            first_fill_price = _number(correlation.get("first_entry_fill_price"))
+            if correlation.get("actual_order_submitted") is not True:
+                actual_fill_entry_quality_path = {
+                    "schema": ENTRY_QUALITY_PATH_SCHEMA,
+                    "status": "not_applicable_no_actual_submit",
+                    "entry_quality_label": None,
+                    "actual_fill_observed": False,
+                    "actual_and_counterfactual_denominators_merged": False,
+                }
+            elif (
+                correlation.get("first_entry_fill_anchor_exact_trace_join") is not True
+                or first_fill_at is None
+                or first_fill_price is None
+                or first_fill_price <= 0
+            ):
+                actual_fill_entry_quality_path = {
+                    "schema": ENTRY_QUALITY_PATH_SCHEMA,
+                    "status": "source_gap",
+                    "entry_quality_label": "CENSORED_OR_SOURCE_GAP",
+                    "label_reason": "exact_trace_first_fill_anchor_missing",
+                    "actual_fill_observed": bool(
+                        correlation.get("entry_fill_observed")
+                    ),
+                    "actual_and_counterfactual_denominators_merged": False,
+                }
+            else:
+                actual_window_end = first_fill_at + timedelta(minutes=10)
+                actual_window = [
+                    row
+                    for row in prices_by_code.get(code, [])
+                    if first_fill_at < row["_timestamp"] <= actual_window_end
+                    and row.get("post_block_attribution_only") is not True
+                    and _same_route(pending, row)
+                ]
+                adverse_price = _number(pending.get("adverse_price"))
+                actual_stop_distance_pct = (
+                    ((adverse_price / first_fill_price) - 1.0) * 100.0
+                    if adverse_price is not None
+                    and adverse_price > 0
+                    and adverse_price < first_fill_price
+                    else None
+                )
+                if not actual_window:
+                    actual_fill_entry_quality_path = {
+                        "schema": ENTRY_QUALITY_PATH_SCHEMA,
+                        "status": "source_gap",
+                        "entry_quality_label": "CENSORED_OR_SOURCE_GAP",
+                        "label_reason": "post_fill_same_route_price_path_missing",
+                        "actual_fill_observed": True,
+                        "actual_and_counterfactual_denominators_merged": False,
+                    }
+                else:
+                    first_fill_qty = _number(correlation.get("first_entry_fill_qty"))
+                    actual_fill_entry_quality_path = {
+                        **_entry_quality_path_metrics(
+                            window=actual_window,
+                            decision_ts=first_fill_at,
+                            reference_price=first_fill_price,
+                            conservative_execution_cost_pct=_number(
+                                pending.get("entry_conservative_execution_cost_pct")
+                            ),
+                            exact_stop_distance_pct=actual_stop_distance_pct,
+                            entry_notional_krw=(
+                                first_fill_price * first_fill_qty
+                                if first_fill_qty is not None and first_fill_qty > 0
+                                else None
+                            ),
+                        ),
+                        "path_authority": (
+                            "actual_fill_anchor_completed_bar_touch_not_executable_bid"
+                        ),
+                        "actual_fill_observed": True,
+                        "first_fill_at": first_fill_at.isoformat(),
+                        "first_fill_price": first_fill_price,
+                        "first_fill_qty": first_fill_qty,
+                        "entry_fill_total_qty": correlation.get("entry_fill_total_qty"),
+                        "entry_fill_vwap": correlation.get("entry_fill_vwap"),
+                        "path_anchor_basis": "first_fill_time_and_first_fill_price",
+                        "fill_completion_status": (
+                            "exact_fill_rows_observed_completion_not_asserted"
+                        ),
+                        "cost_basis": (
+                            "decision_snapshot_conservative_execution_cost_not_"
+                            "realized_cost"
+                        ),
+                        "economic_acceptance_eligible": False,
+                        "realized_cost_contract_complete": False,
+                        "actual_and_counterfactual_denominators_merged": False,
+                    }
             primary_entry_path = horizon_metrics.get(ENTRY_PATH_PRIMARY_HORIZON) or {}
             stage_outcome = {
                 "entry_path_primary_horizon": ENTRY_PATH_PRIMARY_HORIZON,
@@ -4485,6 +4994,8 @@ def mature_outcome_labels(
                 "entry_path_adverse_hit_at": primary_entry_path.get(
                     "entry_path_adverse_hit_at"
                 ),
+                "entry_quality_path": primary_entry_path.get("entry_quality_path"),
+                "actual_fill_entry_quality_path": actual_fill_entry_quality_path,
                 "entry_path_label_status": (
                     "mature" if primary_entry_path else "pending_primary_horizon"
                 ),
@@ -7085,6 +7596,31 @@ def validate_replay_candidate_response(
             adjudication,
             setup_evidence=request.get("entry_setup_evidence"),
         )
+    if semantic_validator_version == ENTRY_ACTION_COMPARISON_SEMANTIC_VALIDATOR_VERSION:
+        if stage != "entry":
+            return ["entry_action_comparison_stage_unsupported"]
+        comparison = response.get("entry_action_comparison")
+        comparison = comparison if isinstance(comparison, dict) else response
+        errors = validate_entry_action_comparison(
+            comparison,
+            setup_evidence=request.get("entry_setup_evidence"),
+        )
+        if candidate.get("schema_name") == ENTRY_ACTION_COUNTERWEIGHT_COMPARISON_SCHEMA:
+            errors.extend(
+                validate_entry_action_counterweight_bindings(
+                    request.get("entry_action_counterweight_bindings"),
+                    setup_evidence=request.get("entry_setup_evidence"),
+                )
+            )
+            candidate_input = request.get("candidate_input")
+            candidate_input = (
+                candidate_input if isinstance(candidate_input, Mapping) else {}
+            )
+            if candidate_input.get(
+                ENTRY_ACTION_COUNTERWEIGHT_BINDINGS_SCHEMA
+            ) != request.get("entry_action_counterweight_bindings"):
+                errors.append("entry_action_counterweight_candidate_input_mismatch")
+        return list(dict.fromkeys(errors))
     replay_arm = str(request.get("micro_reversion_replay_arm") or "")
     control_arm = replay_arm in {
         *arm_set_for_design(LEGACY_DESIGN_VERSION)[:2],
@@ -8224,6 +8760,19 @@ def _candidate_openai_schema(
         if str(stage or "").strip().lower() != "entry":
             raise ValueError("entry setup-risk schema supports entry only")
         return entry_risk_adjudication_openai_schema(setup_evidence)
+    if (
+        str(candidate.get("semantic_validator_version") or "")
+        == ENTRY_ACTION_COMPARISON_SEMANTIC_VALIDATOR_VERSION
+    ):
+        if str(stage or "").strip().lower() != "entry":
+            raise ValueError("entry action-comparison schema supports entry only")
+        return entry_action_comparison_openai_schema(
+            setup_evidence,
+            counterweight_bound=(
+                candidate.get("schema_name")
+                == ENTRY_ACTION_COUNTERWEIGHT_COMPARISON_SCHEMA
+            ),
+        )
     return _prompt_v2_openai_schema(stage)
 
 
@@ -8276,6 +8825,13 @@ def _candidate_contract_sha256(candidate: dict[str, Any]) -> str:
         )
         contract["tail_risk_observation_contract_sha256"] = candidate.get(
             "tail_risk_observation_contract_sha256"
+        )
+    if candidate.get("entry_action_counterweight_bindings_schema") is not None:
+        contract["entry_action_counterweight_bindings_schema"] = candidate.get(
+            "entry_action_counterweight_bindings_schema"
+        )
+        contract["entry_action_counterweight_bindings_schema_sha256"] = candidate.get(
+            "entry_action_counterweight_bindings_schema_sha256"
         )
     if candidate.get("semantic_validator_version") is not None:
         contract["semantic_validator_version"] = candidate.get(
@@ -8531,10 +9087,17 @@ def execute_openai_prompt_v2_candidate(
     correction_errors = _candidate_schema_correction_errors(request)
     if correction_errors:
         correction_rules = []
-        setup_risk_candidate = bool(
-            candidate.get("semantic_validator_version")
-            == ENTRY_SETUP_RISK_SEMANTIC_VALIDATOR_VERSION
+        semantic_validator_version = str(
+            candidate.get("semantic_validator_version") or ""
         )
+        setup_risk_candidate = bool(
+            semantic_validator_version == ENTRY_SETUP_RISK_SEMANTIC_VALIDATOR_VERSION
+        )
+        comparison_candidate = bool(
+            semantic_validator_version
+            == ENTRY_ACTION_COMPARISON_SEMANTIC_VALIDATOR_VERSION
+        )
+        entry_setup_candidate = setup_risk_candidate or comparison_candidate
         bounded_opportunity_candidate = bool(
             candidate.get("semantic_validator_version")
             == BOUNDED_OPPORTUNITY_SEMANTIC_VALIDATOR_VERSION
@@ -8571,7 +9134,7 @@ def execute_openai_prompt_v2_candidate(
                 "INSUFFICIENT_DATA requires null upside and downside"
             )
         if any(error.startswith("entry_") for error in correction_errors) and not (
-            setup_risk_candidate
+            entry_setup_candidate
         ):
             if bounded_opportunity_candidate:
                 correction_rules.append(
@@ -8901,9 +9464,11 @@ def execute_openai_prompt_v2_candidate(
                 "CONFIRMATION_MISSING are bounded CAUTION risks, not structural "
                 "blocking risks"
             )
-            if candidate_prompt_version == (
-                f"{DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION}_entry"
-            ):
+            if candidate_prompt_version in {
+                f"{DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION}_entry",
+                f"{DECISION_QUALITY_V2_15_1_TIMING_AWARE_BOUNDED_RECOVERY_PROMPT_VERSION}_entry",
+                f"{DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION}_entry",
+            }:
                 correction_rules.append(
                     "For V2.15, never cite a contradiction or invalidation as a "
                     "supporting fact. A no_supported_setup-only distribution may "
@@ -8942,6 +9507,16 @@ def execute_openai_prompt_v2_candidate(
                     "no positive fact is needed. Keep adverse IDs only in "
                     "contradicting_fact_ids"
                 )
+        if comparison_candidate:
+            correction_rules.append(
+                "Return only the entry action-comparison schema. Compare ENTER_NOW "
+                "with RECHECK, cover every risk_fact_bindings code exactly once, "
+                "copy exact positive/adverse fact IDs, and keep blocking versus "
+                "bounded risk roles unchanged. RECHECK requires a RECHECKABLE risk, "
+                "an allowed non-NONE recheck_reason, and RECHECK_DOMINANT; ENTER_NOW "
+                "requires every bounded risk COMPENSATED, setup/trigger support, "
+                "NONE, and ENTER_NOW_DOMINANT; BLOCK requires a deterministic blocker"
+            )
         instructions += (
             "\nCorrection retry: the prior response violated these contract fields: "
             + ",".join(correction_errors)
@@ -8961,7 +9536,7 @@ def execute_openai_prompt_v2_candidate(
     declared_response_schema = candidate.get("response_schema")
     if isinstance(declared_response_schema, dict) and (
         str(candidate.get("semantic_validator_version") or "")
-        != ENTRY_SETUP_RISK_SEMANTIC_VALIDATOR_VERSION
+        not in ENTRY_SETUP_COMPOSED_SEMANTIC_VALIDATORS
     ):
         declared_response_schema_sha256 = str(
             candidate.get("response_schema_sha256") or ""
@@ -9363,7 +9938,7 @@ def _validate_current_openai_attempt_receipt(
     declared_response_schema = candidate.get("response_schema")
     if isinstance(declared_response_schema, dict) and (
         str(candidate.get("semantic_validator_version") or "")
-        != ENTRY_SETUP_RISK_SEMANTIC_VALIDATOR_VERSION
+        not in ENTRY_SETUP_COMPOSED_SEMANTIC_VALIDATORS
     ):
         if not candidate.get("response_schema_sha256") or candidate.get(
             "response_schema_sha256"
@@ -9737,18 +10312,41 @@ def _current_candidate_transform_record(
     candidate = request.get("candidate")
     candidate = candidate if isinstance(candidate, Mapping) else {}
     prompt_version = str(candidate.get("prompt_version") or "")
+    semantic_validator_version = str(candidate.get("semantic_validator_version") or "")
     content = {
         "schema": MICRO_REVERSION_CANDIDATE_TRANSFORM_SCHEMA,
         "transform_sequence": 1,
         "previous_transform_content_sha256": selected_attempt_hash,
-        "transform_kind": "entry_risk_adjudication_composition",
+        "transform_kind": (
+            "entry_action_comparison_composition"
+            if semantic_validator_version
+            == ENTRY_ACTION_COMPARISON_SEMANTIC_VALIDATOR_VERSION
+            else "entry_risk_adjudication_composition"
+        ),
         "transform_version": candidate.get("entry_decision_composer_version"),
         "source_payload_content_sha256": _sha256(selected_payload),
         "entry_setup_evidence_content_sha256": _sha256(
             request.get("entry_setup_evidence") or {}
         ),
         "bounded_recovery_policy": prompt_version
-        == f"{DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION}_entry",
+        in {
+            f"{DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION}_entry",
+            f"{DECISION_QUALITY_V2_15_1_TIMING_AWARE_BOUNDED_RECOVERY_PROMPT_VERSION}_entry",
+            f"{DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION}_entry",
+            f"{DECISION_QUALITY_V2_15_3_COMPARATIVE_BOUNDED_RECOVERY_PROMPT_VERSION}_entry",
+            f"{DECISION_QUALITY_V2_15_4_COUNTERWEIGHT_BOUND_BOUNDED_RECOVERY_PROMPT_VERSION}_entry",
+        },
+        "timing_aware_policy": prompt_version
+        in {
+            f"{DECISION_QUALITY_V2_14_1_TIMING_AWARE_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION}_entry",
+            f"{DECISION_QUALITY_V2_14_2_BALANCED_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION}_entry",
+            f"{DECISION_QUALITY_V2_15_1_TIMING_AWARE_BOUNDED_RECOVERY_PROMPT_VERSION}_entry",
+            f"{DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION}_entry",
+            f"{DECISION_QUALITY_V2_14_3_COMPARATIVE_ENTRY_ADJUDICATOR_PROMPT_VERSION}_entry",
+            f"{DECISION_QUALITY_V2_15_3_COMPARATIVE_BOUNDED_RECOVERY_PROMPT_VERSION}_entry",
+            f"{DECISION_QUALITY_V2_14_4_COUNTERWEIGHT_BOUND_COMPARATIVE_PROMPT_VERSION}_entry",
+            f"{DECISION_QUALITY_V2_15_4_COUNTERWEIGHT_BOUND_BOUNDED_RECOVERY_PROMPT_VERSION}_entry",
+        },
         "sequential_recovery_policy": prompt_version
         == f"{DECISION_QUALITY_V2_16_SEQUENTIAL_RECOVERY_PROMPT_VERSION}_entry",
         "output_payload_content_sha256": _sha256(final_response),
@@ -9907,9 +10505,20 @@ def validate_current_micro_reversion_candidate_response_chain(
                 setup_evidence=request.get("entry_setup_evidence"),
                 risk_adjudication=selected_payload,
                 bounded_recovery_policy=prompt_version
-                == f"{DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION}_entry",
+                in {
+                    f"{DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION}_entry",
+                    f"{DECISION_QUALITY_V2_15_1_TIMING_AWARE_BOUNDED_RECOVERY_PROMPT_VERSION}_entry",
+                    f"{DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION}_entry",
+                },
                 sequential_recovery_policy=prompt_version
                 == f"{DECISION_QUALITY_V2_16_SEQUENTIAL_RECOVERY_PROMPT_VERSION}_entry",
+                timing_aware_policy=prompt_version
+                in {
+                    f"{DECISION_QUALITY_V2_14_1_TIMING_AWARE_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION}_entry",
+                    f"{DECISION_QUALITY_V2_14_2_BALANCED_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION}_entry",
+                    f"{DECISION_QUALITY_V2_15_1_TIMING_AWARE_BOUNDED_RECOVERY_PROMPT_VERSION}_entry",
+                    f"{DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION}_entry",
+                },
             ),
             "entry_risk_adjudication": selected_payload,
         }
@@ -9927,9 +10536,38 @@ def validate_current_micro_reversion_candidate_response_chain(
         ):
             raise ValueError("micro_reversion_current_composition_rebuild_mismatch")
         transform_head = expected_transform["transform_content_sha256"]
+    elif (
+        semantic_validator_version == ENTRY_ACTION_COMPARISON_SEMANTIC_VALIDATOR_VERSION
+    ):
+        prompt_version = str(candidate.get("prompt_version") or "")
+        expected_final = compose_entry_action_comparison(
+            setup_evidence=request.get("entry_setup_evidence"),
+            action_comparison=selected_payload,
+            bounded_recovery_policy=prompt_version
+            in {
+                f"{DECISION_QUALITY_V2_15_3_COMPARATIVE_BOUNDED_RECOVERY_PROMPT_VERSION}_entry",
+                f"{DECISION_QUALITY_V2_15_4_COUNTERWEIGHT_BOUND_BOUNDED_RECOVERY_PROMPT_VERSION}_entry",
+            },
+        )
+        expected_transform = _current_candidate_transform_record(
+            request=request,
+            selected_attempt_hash=str(selected_attempt.get("attempt_content_sha256")),
+            selected_payload=selected_payload,
+            final_response=expected_final,
+        )
+        if (
+            replay_result.get("candidate_action_comparison_response")
+            != selected_payload
+            or replay_result.get("candidate_risk_adjudication_response") is not None
+            or dict(final_response) != expected_final
+            or transforms != [expected_transform]
+        ):
+            raise ValueError("micro_reversion_current_comparison_rebuild_mismatch")
+        transform_head = expected_transform["transform_content_sha256"]
     else:
         if (
             replay_result.get("candidate_risk_adjudication_response") is not None
+            or replay_result.get("candidate_action_comparison_response") is not None
             or dict(final_response) != selected_payload
             or transforms
         ):
@@ -10111,6 +10749,7 @@ def _validate_current_micro_reversion_partial_retry_chain(
         or replay_result.get("candidate_selected_attempt_content_sha256") is not None
         or replay_result.get("candidate_selected_payload_content_sha256") is not None
         or replay_result.get("candidate_risk_adjudication_response") is not None
+        or replay_result.get("candidate_action_comparison_response") is not None
         or replay_result.get("candidate_transform_chain") != []
         or replay_result.get("candidate_transform_chain_head_sha256") is not None
     ):
@@ -11167,7 +11806,17 @@ def _micro_reversion_label_ready_bridge_rows(
                     "ambiguous_same_timestamp",
                 }
             ):
-                raise ValueError("bridge_primary_horizon_not_mature")
+                from src.engine.scalping.micro_reversion.ai_quality_bridge import (
+                    validate_entry_terminal_exit,
+                )
+
+                terminal = outcome.get("entry_terminal_exit")
+                if not (
+                    stage == "entry"
+                    and validate_entry_terminal_exit(terminal)
+                    and terminal["primary_horizon_sec"] == primary_horizon_sec
+                ):
+                    raise ValueError("bridge_primary_horizon_not_mature")
         except (TypeError, ValueError) as exc:
             rejected[trace_id] = str(exc).split(":", 1)[0]
         else:
@@ -15392,6 +16041,29 @@ def _micro_reversion_action_neutral_metrics_from_outcome(
         if key in metrics:
             raise ValueError("micro_reversion_action_neutral_horizon_duplicate")
         metrics[key] = metric
+    terminal = outcome.get("entry_terminal_exit")
+    if stage == "entry" and terminal is not None:
+        from src.engine.scalping.micro_reversion.ai_quality_bridge import (
+            validate_entry_terminal_exit,
+        )
+
+        if validate_entry_terminal_exit(terminal):
+            key = f"{terminal['primary_horizon_sec']}s"
+            if key not in metrics:
+                metrics[key] = {
+                    "horizon_sec": terminal["primary_horizon_sec"],
+                    "horizon_time_mature": False,
+                    "end_return_pct": None,
+                    "cost_adjusted_end_return_pct": None,
+                    "source_quality_adjusted_ev_pct": None,
+                    "mfe_pct": None,
+                    "mae_pct": None,
+                    "first_hit": None,
+                    "counterfactual_only": True,
+                    "action_neutral_path_sha256": terminal["path_sha256"],
+                    "outcome_sha256": outcome.get("outcome_sha256"),
+                }
+            metrics[key]["entry_terminal_exit"] = terminal
     return metrics
 
 
@@ -15487,7 +16159,11 @@ def _validate_micro_reversion_action_neutral_label(
         or label.get("primary_horizon_key") not in expected_metrics
         or label.get("horizon_metrics") != expected_metrics
         or label.get("matured_horizons_sec")
-        != sorted(metric["horizon_sec"] for metric in expected_metrics.values())
+        != sorted(
+            metric["horizon_sec"]
+            for metric in expected_metrics.values()
+            if metric.get("horizon_time_mature") is not False
+        )
     ):
         raise ValueError("micro_reversion_action_neutral_metric_rebuild_mismatch")
     confirmation_axis = outcome.get("confirmation_window_axis")
@@ -16261,90 +16937,10 @@ def build_micro_reversion_action_neutral_outcome_labels(
                 raise ValueError(
                     "micro_reversion_bridge_primary_horizon_contract_missing"
                 )
-            horizon_metrics: dict[str, dict[str, Any]] = {}
-            for horizon in outcome.get("horizons") or []:
-                if not isinstance(horizon, dict) or horizon.get("mature") is not True:
-                    continue
-                horizon_sec = horizon.get("horizon_sec")
-                neutral_end_bps = _number(
-                    horizon.get("action_neutral_executable_end_return_bps")
-                )
-                neutral_mfe_bps = _number(horizon.get("action_neutral_mfe_bps"))
-                neutral_mae_bps = _number(horizon.get("action_neutral_mae_bps"))
-                neutral_path_hash = str(horizon.get("action_neutral_path_sha256") or "")
-                neutral_first_hit = str(horizon.get("action_neutral_first_hit") or "")
-                if (
-                    isinstance(horizon_sec, bool)
-                    or not isinstance(horizon_sec, int)
-                    or horizon_sec <= 0
-                    or neutral_end_bps is None
-                    or neutral_mfe_bps is None
-                    or neutral_mae_bps is None
-                    or len(neutral_path_hash) != 64
-                    or neutral_first_hit
-                    not in {
-                        "net_target_first",
-                        "adverse_first",
-                        "none",
-                        "none_or_unmatured",
-                        "ambiguous_same_timestamp",
-                    }
-                    or horizon.get("source_quality_blockers") not in (None, [])
-                ):
-                    continue
-                counterfactual_quantity = _number(
-                    outcome.get("counterfactual_quantity")
-                )
-                baseline_vwap = _number(outcome.get("snapshot_execution_basis_vwap"))
-                notional_eligible = bool(
-                    outcome.get("notional_net_profit_eligible") is True
-                    and counterfactual_quantity is not None
-                    and counterfactual_quantity > 0
-                    and baseline_vwap is not None
-                    and baseline_vwap > 0
-                )
-                notional_value = (
-                    baseline_vwap * counterfactual_quantity * neutral_end_bps / 10_000.0
-                    if notional_eligible
-                    else None
-                )
-                horizon_metric = {
-                    "horizon_sec": horizon_sec,
-                    "end_return_pct": neutral_end_bps / 100.0,
-                    "source_quality_adjusted_ev_pct": neutral_end_bps / 100.0,
-                    "mfe_pct": neutral_mfe_bps / 100.0,
-                    "mae_pct": neutral_mae_bps / 100.0,
-                    "first_hit": neutral_first_hit,
-                    "target_first_delay_sec": (
-                        None
-                        if _number(horizon.get("action_neutral_target_first_delay_ms"))
-                        is None
-                        else float(horizon["action_neutral_target_first_delay_ms"])
-                        / 1_000.0
-                    ),
-                    "adverse_first_delay_sec": (
-                        None
-                        if _number(horizon.get("action_neutral_adverse_first_delay_ms"))
-                        is None
-                        else float(horizon["action_neutral_adverse_first_delay_ms"])
-                        / 1_000.0
-                    ),
-                    "position_horizon_sec": horizon_sec,
-                    "action_neutral_path_sha256": neutral_path_hash,
-                    "counterfactual_notional_value_krw": notional_value,
-                    "notional_net_profit_eligible": notional_eligible,
-                    "outcome_sha256": outcome_hash,
-                    "counterfactual_only": True,
-                }
-                if stage == "entry":
-                    horizon_metric["cost_adjusted_end_return_pct"] = (
-                        neutral_end_bps / 100.0
-                    )
-                else:
-                    horizon_metric["liquidity_adjusted_incremental_exit_value_pct"] = (
-                        neutral_end_bps / 100.0
-                    )
-                horizon_metrics[f"{horizon_sec}s"] = horizon_metric
+            horizon_metrics = _micro_reversion_action_neutral_metrics_from_outcome(
+                stage=stage,
+                outcome=outcome,
+            )
             primary_key = f"{primary_horizon_sec}s"
             if primary_key not in horizon_metrics:
                 raise ValueError("micro_reversion_bridge_primary_horizon_not_mature")
@@ -16366,7 +16962,9 @@ def build_micro_reversion_action_neutral_outcome_labels(
                 "primary_horizon_key": primary_key,
                 "primary_horizon_sec": primary_horizon_sec,
                 "matured_horizons_sec": sorted(
-                    metric["horizon_sec"] for metric in horizon_metrics.values()
+                    metric["horizon_sec"]
+                    for metric in horizon_metrics.values()
+                    if metric.get("horizon_time_mature") is not False
                 ),
                 "horizon_metrics": horizon_metrics,
                 "confirmation_window_axis": deepcopy(
@@ -18453,6 +19051,7 @@ def _validate_current_rejected_provider_attempt_custody(
         or replay_result.get("candidate_selected_attempt_content_sha256") is not None
         or replay_result.get("candidate_selected_payload_content_sha256") is not None
         or replay_result.get("candidate_risk_adjudication_response") is not None
+        or replay_result.get("candidate_action_comparison_response") is not None
         or replay_result.get("candidate_transform_chain") != []
         or replay_result.get("candidate_transform_chain_head_sha256") is not None
         or replay_result.get("candidate_response") != {}
@@ -21033,11 +21632,139 @@ def recover_same_trace_outcome_labels_from_paired_reports(
     return merged, metadata
 
 
+TIMING_AWARE_ENTRY_PROMPT_VERSIONS = frozenset(
+    {
+        DECISION_QUALITY_V2_14_1_TIMING_AWARE_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+        DECISION_QUALITY_V2_14_2_BALANCED_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+        DECISION_QUALITY_V2_15_1_TIMING_AWARE_BOUNDED_RECOVERY_PROMPT_VERSION,
+        DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION,
+        DECISION_QUALITY_V2_14_3_COMPARATIVE_ENTRY_ADJUDICATOR_PROMPT_VERSION,
+        DECISION_QUALITY_V2_15_3_COMPARATIVE_BOUNDED_RECOVERY_PROMPT_VERSION,
+        DECISION_QUALITY_V2_14_4_COUNTERWEIGHT_BOUND_COMPARATIVE_PROMPT_VERSION,
+        DECISION_QUALITY_V2_15_4_COUNTERWEIGHT_BOUND_BOUNDED_RECOVERY_PROMPT_VERSION,
+    }
+)
+
+COST_ADJUSTED_TERMINAL_ENTRY_PROMPT_VERSIONS = frozenset(
+    {*BALANCED_ENTRY_PROMPT_VERSIONS, *COMPARATIVE_ENTRY_PROMPT_VERSIONS}
+)
+
+
+def build_entry_timing_contexts_for_requests(
+    requests: list[dict[str, Any]],
+    *,
+    pipeline_paths: list[Path] | None = None,
+    watch_report: Mapping[str, Any] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Join scanner promotions to AI decisions without reading future events."""
+
+    stock_codes = {
+        _normalize_stock_code(request.get("stock_code"))
+        for request in requests
+        if isinstance(request, dict)
+    }
+    stock_codes.discard("")
+    events_by_code: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    source_kind = "pipeline_scanner_promotion_events"
+    ledger = (
+        watch_report.get("watch_cycle_participation_ledger")
+        if isinstance(watch_report, Mapping)
+        else None
+    )
+    ledger_rows = ledger.get("rows") if isinstance(ledger, Mapping) else None
+    if isinstance(ledger_rows, list):
+        source_kind = "postclose_watch_cycle_promotion_ledger"
+        for row in ledger_rows:
+            if not isinstance(row, Mapping):
+                continue
+            code = _normalize_stock_code(row.get("stock_code"))
+            if code not in stock_codes:
+                continue
+            event_venue = _venue(row.get("effective_venue"))
+            event_session = _session(row.get("market_session_bucket"))
+            for promotion_id in row.get("scanner_promotion_ids") or []:
+                match = re.fullmatch(
+                    r"SCANPROM-[0-9]{6}-([0-9]{13})", str(promotion_id)
+                )
+                if match is None:
+                    continue
+                events_by_code[code].append(
+                    {
+                        "promotion_epoch": int(match.group(1)) / 1000.0,
+                        "fields": {
+                            "scanner_promotion_id": str(promotion_id),
+                            "effective_venue": event_venue,
+                            "market_session_bucket": event_session,
+                        },
+                    }
+                )
+    else:
+        for path in pipeline_paths or []:
+            for row in _iter_jsonl(path):
+                if row.get("stage") != "scalping_scanner_candidate_promoted":
+                    continue
+                code = _normalize_stock_code(row.get("stock_code"))
+                if code not in stock_codes:
+                    continue
+                fields = row.get("fields")
+                fields = fields if isinstance(fields, dict) else {}
+                emitted_at = _parse_ts(row.get("emitted_at"))
+                emitted_epoch = (
+                    emitted_at.timestamp() if emitted_at is not None else None
+                )
+                promotion_epoch = _number(fields.get("scanner_promotion_emitted_epoch"))
+                events_by_code[code].append(
+                    {
+                        "promotion_epoch": (
+                            promotion_epoch
+                            if promotion_epoch is not None
+                            else emitted_epoch
+                        ),
+                        "emitted_epoch": emitted_epoch,
+                        "fields": fields,
+                    }
+                )
+    contexts: dict[str, dict[str, Any]] = {}
+    for request in requests:
+        if not isinstance(request, dict):
+            continue
+        trace_id = str(request.get("decision_trace_id") or "").strip()
+        decision_at = _parse_ts(request.get("decision_ts"))
+        code = _normalize_stock_code(request.get("stock_code"))
+        exact_payload = request.get("exact_payload")
+        exact_payload = exact_payload if isinstance(exact_payload, dict) else {}
+        current = exact_payload.get("current")
+        current = current if isinstance(current, dict) else {}
+        if not trace_id or decision_at is None:
+            continue
+        contexts[trace_id] = build_entry_timing_context(
+            decision_epoch=decision_at.timestamp(),
+            promotion_events=events_by_code.get(code, []),
+            current_price=current.get("price"),
+            effective_venue=request.get("effective_venue"),
+            session_bucket=request.get("session_bucket"),
+            source_kind=source_kind,
+        )
+    return contexts
+
+
+def _entry_timing_watch_report(target_date: str) -> dict[str, Any]:
+    path = existing_or_gzip_path(
+        DATA_DIR
+        / "report"
+        / "monitor_snapshots"
+        / f"missed_entry_counterfactual_{target_date}.json"
+    )
+    report = _load_json(path)
+    return report if report.get("date") == target_date else {}
+
+
 def prepare_detailed_paired_replay_requests(
     requests: list[dict[str, Any]],
     *,
     candidate_prompt_version: str = DECISION_QUALITY_DETAILED_PROMPT_VERSION,
     candidate_model_override: str | None = None,
+    entry_timing_context_by_trace: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Attach a deterministic analysis ledger to the same exact payload."""
 
@@ -21052,6 +21779,14 @@ def prepare_detailed_paired_replay_requests(
         DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
         DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
         DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
+        DECISION_QUALITY_V2_14_1_TIMING_AWARE_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+        DECISION_QUALITY_V2_14_2_BALANCED_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+        DECISION_QUALITY_V2_15_1_TIMING_AWARE_BOUNDED_RECOVERY_PROMPT_VERSION,
+        DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION,
+        DECISION_QUALITY_V2_14_3_COMPARATIVE_ENTRY_ADJUDICATOR_PROMPT_VERSION,
+        DECISION_QUALITY_V2_15_3_COMPARATIVE_BOUNDED_RECOVERY_PROMPT_VERSION,
+        DECISION_QUALITY_V2_14_4_COUNTERWEIGHT_BOUND_COMPARATIVE_PROMPT_VERSION,
+        DECISION_QUALITY_V2_15_4_COUNTERWEIGHT_BOUND_BOUNDED_RECOVERY_PROMPT_VERSION,
         DECISION_QUALITY_V2_16_SEQUENTIAL_RECOVERY_PROMPT_VERSION,
     }
     if candidate_prompt_version not in supported_prompt_versions:
@@ -21062,7 +21797,9 @@ def prepare_detailed_paired_replay_requests(
     ):
         raise ValueError("invalid_offline_candidate_model_override")
     detailed_requests: list[dict[str, Any]] = []
+    timing_contexts = entry_timing_context_by_trace or {}
     for request in requests:
+        entry_timing_context: dict[str, Any] | None = None
         exact_payload = _replay_exact_payload(request.get("exact_payload"))
         if not isinstance(exact_payload, dict):
             continue
@@ -21099,12 +21836,28 @@ def prepare_detailed_paired_replay_requests(
             DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
             DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
             DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
+            DECISION_QUALITY_V2_14_1_TIMING_AWARE_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+            DECISION_QUALITY_V2_14_2_BALANCED_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+            DECISION_QUALITY_V2_15_1_TIMING_AWARE_BOUNDED_RECOVERY_PROMPT_VERSION,
+            DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION,
+            DECISION_QUALITY_V2_14_3_COMPARATIVE_ENTRY_ADJUDICATOR_PROMPT_VERSION,
+            DECISION_QUALITY_V2_15_3_COMPARATIVE_BOUNDED_RECOVERY_PROMPT_VERSION,
+            DECISION_QUALITY_V2_14_4_COUNTERWEIGHT_BOUND_COMPARATIVE_PROMPT_VERSION,
+            DECISION_QUALITY_V2_15_4_COUNTERWEIGHT_BOUND_BOUNDED_RECOVERY_PROMPT_VERSION,
             DECISION_QUALITY_V2_16_SEQUENTIAL_RECOVERY_PROMPT_VERSION,
         }:
             if candidate_prompt_version in {
                 DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
                 DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
                 DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
+                DECISION_QUALITY_V2_14_1_TIMING_AWARE_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+                DECISION_QUALITY_V2_14_2_BALANCED_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+                DECISION_QUALITY_V2_15_1_TIMING_AWARE_BOUNDED_RECOVERY_PROMPT_VERSION,
+                DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION,
+                DECISION_QUALITY_V2_14_3_COMPARATIVE_ENTRY_ADJUDICATOR_PROMPT_VERSION,
+                DECISION_QUALITY_V2_15_3_COMPARATIVE_BOUNDED_RECOVERY_PROMPT_VERSION,
+                DECISION_QUALITY_V2_14_4_COUNTERWEIGHT_BOUND_COMPARATIVE_PROMPT_VERSION,
+                DECISION_QUALITY_V2_15_4_COUNTERWEIGHT_BOUND_BOUNDED_RECOVERY_PROMPT_VERSION,
                 DECISION_QUALITY_V2_16_SEQUENTIAL_RECOVERY_PROMPT_VERSION,
             }:
                 anticipatory_analysis = build_v2_13_recovery_confirmation_analysis_v1(
@@ -21131,6 +21884,37 @@ def prepare_detailed_paired_replay_requests(
                 == DECISION_QUALITY_V2_16_SEQUENTIAL_RECOVERY_PROMPT_VERSION
             ):
                 prompt = decision_quality_v2_16_sequential_recovery_system_prompt(stage)
+            elif candidate_prompt_version in COMPARATIVE_ENTRY_PROMPT_VERSIONS:
+                prompt = decision_quality_comparative_entry_system_prompt(
+                    stage,
+                    bounded_recovery=candidate_prompt_version
+                    in {
+                        DECISION_QUALITY_V2_15_3_COMPARATIVE_BOUNDED_RECOVERY_PROMPT_VERSION,
+                        DECISION_QUALITY_V2_15_4_COUNTERWEIGHT_BOUND_BOUNDED_RECOVERY_PROMPT_VERSION,
+                    },
+                    counterweight_bound=candidate_prompt_version
+                    in COUNTERWEIGHT_BOUND_COMPARATIVE_ENTRY_PROMPT_VERSIONS,
+                )
+            elif candidate_prompt_version in BALANCED_ENTRY_PROMPT_VERSIONS:
+                prompt = decision_quality_balanced_entry_system_prompt(
+                    stage,
+                    bounded_recovery=candidate_prompt_version
+                    == DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION,
+                )
+            elif (
+                candidate_prompt_version
+                == DECISION_QUALITY_V2_15_1_TIMING_AWARE_BOUNDED_RECOVERY_PROMPT_VERSION
+            ):
+                prompt = decision_quality_v2_15_1_timing_aware_bounded_recovery_system_prompt(
+                    stage
+                )
+            elif (
+                candidate_prompt_version
+                == DECISION_QUALITY_V2_14_1_TIMING_AWARE_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
+            ):
+                prompt = decision_quality_v2_14_1_timing_aware_setup_risk_system_prompt(
+                    stage
+                )
             elif (
                 candidate_prompt_version
                 == DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION
@@ -21189,46 +21973,168 @@ def prepare_detailed_paired_replay_requests(
             "analysis_schema_sha256": _sha256(EXACT_PAYLOAD_ANALYSIS_SCHEMA),
         }
         entry_setup_evidence: dict[str, Any] | None = None
+        entry_group_observation: dict[str, Any] | None = None
+        action_counterweight_bindings: dict[str, Any] | None = None
         if candidate_prompt_version in {
             DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
             DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
+            DECISION_QUALITY_V2_14_1_TIMING_AWARE_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+            DECISION_QUALITY_V2_14_2_BALANCED_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+            DECISION_QUALITY_V2_15_1_TIMING_AWARE_BOUNDED_RECOVERY_PROMPT_VERSION,
+            DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION,
+            DECISION_QUALITY_V2_14_3_COMPARATIVE_ENTRY_ADJUDICATOR_PROMPT_VERSION,
+            DECISION_QUALITY_V2_15_3_COMPARATIVE_BOUNDED_RECOVERY_PROMPT_VERSION,
+            DECISION_QUALITY_V2_14_4_COUNTERWEIGHT_BOUND_COMPARATIVE_PROMPT_VERSION,
+            DECISION_QUALITY_V2_15_4_COUNTERWEIGHT_BOUND_BOUNDED_RECOVERY_PROMPT_VERSION,
             DECISION_QUALITY_V2_16_SEQUENTIAL_RECOVERY_PROMPT_VERSION,
         }:
+            timing_aware_policy = (
+                candidate_prompt_version in TIMING_AWARE_ENTRY_PROMPT_VERSIONS
+            )
+            entry_timing_context = timing_contexts.get(
+                str(request.get("decision_trace_id") or "")
+            )
             entry_setup_evidence = build_entry_setup_evidence(
+                balanced_policy=candidate_prompt_version
+                in COST_ADJUSTED_TERMINAL_ENTRY_PROMPT_VERSIONS,
                 exact_payload=exact_payload,
                 exact_analysis=analysis,
                 recovery_analysis=anticipatory_analysis,
+                entry_timing_context=entry_timing_context,
+                timing_aware_policy=timing_aware_policy,
+            )
+            entry_group_observation = build_entry_predecision_group_observation(
+                exact_payload={
+                    **exact_payload,
+                    "effective_venue": request.get("effective_venue"),
+                    "session_bucket": request.get("session_bucket"),
+                },
+                exact_analysis=analysis,
+                entry_timing_context=entry_timing_context,
+                balanced_policy=candidate_prompt_version
+                in COST_ADJUSTED_TERMINAL_ENTRY_PROMPT_VERSIONS,
             )
             candidate_input[ENTRY_SETUP_EVIDENCE_SCHEMA] = entry_setup_evidence
-            constrained_response_schema = entry_risk_adjudication_openai_schema(
-                entry_setup_evidence
+            comparative_candidate = (
+                candidate_prompt_version in COMPARATIVE_ENTRY_PROMPT_VERSIONS
             )
-            response_schema_template = entry_risk_adjudication_openai_schema()
+            counterweight_bound = (
+                candidate_prompt_version
+                in COUNTERWEIGHT_BOUND_COMPARATIVE_ENTRY_PROMPT_VERSIONS
+            )
+            if comparative_candidate:
+                constrained_response_schema = entry_action_comparison_openai_schema(
+                    entry_setup_evidence,
+                    counterweight_bound=counterweight_bound,
+                )
+                response_schema_template = entry_action_comparison_openai_schema(
+                    counterweight_bound=counterweight_bound,
+                )
+                if counterweight_bound:
+                    action_counterweight_bindings = entry_action_counterweight_bindings(
+                        entry_setup_evidence
+                    )
+                    candidate_input[ENTRY_ACTION_COUNTERWEIGHT_BINDINGS_SCHEMA] = (
+                        action_counterweight_bindings
+                    )
+            else:
+                constrained_response_schema = entry_risk_adjudication_openai_schema(
+                    entry_setup_evidence
+                )
+                response_schema_template = entry_risk_adjudication_openai_schema()
             candidate.update(
                 {
+                    "schema_name": (
+                        (
+                            ENTRY_ACTION_COUNTERWEIGHT_COMPARISON_SCHEMA
+                            if counterweight_bound
+                            else ENTRY_ACTION_COMPARISON_SCHEMA
+                        )
+                        if comparative_candidate
+                        else ENTRY_RISK_ADJUDICATION_SCHEMA
+                    ),
                     "response_schema": response_schema_template,
                     "response_schema_sha256": _sha256(response_schema_template),
-                    "response_schema_instance_policy": "exact_fact_role_enum_v1",
+                    "response_schema_instance_policy": (
+                        (
+                            "exact_action_counterweight_fact_role_enum_v2"
+                            if counterweight_bound
+                            else "exact_action_comparison_fact_role_enum_v1"
+                        )
+                        if comparative_candidate
+                        else "exact_fact_role_enum_v1"
+                    ),
                     "response_schema_instance_sha256": _sha256(
                         constrained_response_schema
                     ),
                     "semantic_validator_version": (
-                        ENTRY_SETUP_RISK_SEMANTIC_VALIDATOR_VERSION
+                        ENTRY_ACTION_COMPARISON_SEMANTIC_VALIDATOR_VERSION
+                        if comparative_candidate
+                        else ENTRY_SETUP_RISK_SEMANTIC_VALIDATOR_VERSION
                     ),
                     "entry_setup_evidence_schema": ENTRY_SETUP_EVIDENCE_SCHEMA,
                     "entry_setup_evidence_schema_sha256": _sha256(
                         ENTRY_SETUP_EVIDENCE_SCHEMA
                     ),
-                    "entry_setup_evidence_version": ENTRY_SETUP_EVIDENCE_VERSION,
-                    "entry_decision_composer_version": (
-                        ENTRY_DECISION_COMPOSER_V2_16_VERSION
+                    "entry_setup_evidence_version": (
+                        ENTRY_SETUP_BALANCED_EVIDENCE_VERSION
                         if candidate_prompt_version
-                        == DECISION_QUALITY_V2_16_SEQUENTIAL_RECOVERY_PROMPT_VERSION
+                        in COST_ADJUSTED_TERMINAL_ENTRY_PROMPT_VERSIONS
                         else (
-                            ENTRY_DECISION_COMPOSER_V2_15_VERSION
+                            ENTRY_SETUP_TIMING_EVIDENCE_VERSION
+                            if timing_aware_policy
+                            else ENTRY_SETUP_EVIDENCE_VERSION
+                        )
+                    ),
+                    "entry_decision_composer_version": (
+                        (
+                            (
+                                ENTRY_DECISION_COMPOSER_V2_15_4_VERSION
+                                if candidate_prompt_version
+                                == DECISION_QUALITY_V2_15_4_COUNTERWEIGHT_BOUND_BOUNDED_RECOVERY_PROMPT_VERSION
+                                else ENTRY_DECISION_COMPOSER_V2_14_4_VERSION
+                            )
+                            if counterweight_bound
+                            else (
+                                ENTRY_DECISION_COMPOSER_V2_15_3_VERSION
+                                if candidate_prompt_version
+                                == DECISION_QUALITY_V2_15_3_COMPARATIVE_BOUNDED_RECOVERY_PROMPT_VERSION
+                                else ENTRY_DECISION_COMPOSER_V2_14_3_VERSION
+                            )
+                        )
+                        if comparative_candidate
+                        else (
+                            (
+                                ENTRY_DECISION_COMPOSER_V2_15_2_VERSION
+                                if candidate_prompt_version
+                                == DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION
+                                else ENTRY_DECISION_COMPOSER_V2_14_2_VERSION
+                            )
                             if candidate_prompt_version
-                            == DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION
-                            else ENTRY_DECISION_COMPOSER_VERSION
+                            in BALANCED_ENTRY_PROMPT_VERSIONS
+                            else (
+                                ENTRY_DECISION_COMPOSER_V2_16_VERSION
+                                if candidate_prompt_version
+                                == DECISION_QUALITY_V2_16_SEQUENTIAL_RECOVERY_PROMPT_VERSION
+                                else (
+                                    (
+                                        ENTRY_DECISION_COMPOSER_V2_15_1_VERSION
+                                        if timing_aware_policy
+                                        else ENTRY_DECISION_COMPOSER_V2_15_VERSION
+                                    )
+                                    if candidate_prompt_version
+                                    in {
+                                        DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
+                                        DECISION_QUALITY_V2_15_1_TIMING_AWARE_BOUNDED_RECOVERY_PROMPT_VERSION,
+                                        DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION,
+                                    }
+                                    else (
+                                        ENTRY_DECISION_COMPOSER_V2_14_1_VERSION
+                                        if timing_aware_policy
+                                        else ENTRY_DECISION_COMPOSER_VERSION
+                                    )
+                                )
+                            )
                         )
                     ),
                     "entry_structure_phase_policy_version": (
@@ -21240,6 +22146,17 @@ def prepare_detailed_paired_replay_requests(
                     "exposure_semantics": ("offline_counterfactual_passive_probe_only"),
                 }
             )
+            if counterweight_bound:
+                candidate.update(
+                    {
+                        "entry_action_counterweight_bindings_schema": (
+                            ENTRY_ACTION_COUNTERWEIGHT_BINDINGS_SCHEMA
+                        ),
+                        "entry_action_counterweight_bindings_schema_sha256": _sha256(
+                            ENTRY_ACTION_COUNTERWEIGHT_BINDINGS_SCHEMA
+                        ),
+                    }
+                )
         if candidate_model_override:
             baseline_model = str(original_candidate.get("model") or "").strip()
             if not baseline_model:
@@ -21280,23 +22197,31 @@ def prepare_detailed_paired_replay_requests(
                         ANTICIPATORY_REVERSAL_ANALYSIS_SCHEMA
                     ),
                     "semantic_validator_version": (
-                        ENTRY_SETUP_RISK_SEMANTIC_VALIDATOR_VERSION
-                        if candidate_prompt_version
-                        in {
-                            DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
-                            DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
-                            DECISION_QUALITY_V2_16_SEQUENTIAL_RECOVERY_PROMPT_VERSION,
-                        }
+                        ENTRY_ACTION_COMPARISON_SEMANTIC_VALIDATOR_VERSION
+                        if candidate_prompt_version in COMPARATIVE_ENTRY_PROMPT_VERSIONS
                         else (
-                            BOUNDED_OPPORTUNITY_SEMANTIC_VALIDATOR_VERSION
+                            ENTRY_SETUP_RISK_SEMANTIC_VALIDATOR_VERSION
                             if candidate_prompt_version
                             in {
-                                DECISION_QUALITY_V2_10_BOUNDED_OPPORTUNITY_PROMPT_VERSION,
-                                DECISION_QUALITY_V2_11_CLEAN_CONTINUATION_PROMPT_VERSION,
-                                DECISION_QUALITY_V2_12_SELECTIVE_RECOVERY_PROMPT_VERSION,
-                                DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
+                                DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+                                DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
+                                DECISION_QUALITY_V2_14_1_TIMING_AWARE_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+                                DECISION_QUALITY_V2_14_2_BALANCED_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+                                DECISION_QUALITY_V2_15_1_TIMING_AWARE_BOUNDED_RECOVERY_PROMPT_VERSION,
+                                DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION,
+                                DECISION_QUALITY_V2_16_SEQUENTIAL_RECOVERY_PROMPT_VERSION,
                             }
-                            else ANTICIPATORY_SEMANTIC_VALIDATOR_VERSION
+                            else (
+                                BOUNDED_OPPORTUNITY_SEMANTIC_VALIDATOR_VERSION
+                                if candidate_prompt_version
+                                in {
+                                    DECISION_QUALITY_V2_10_BOUNDED_OPPORTUNITY_PROMPT_VERSION,
+                                    DECISION_QUALITY_V2_11_CLEAN_CONTINUATION_PROMPT_VERSION,
+                                    DECISION_QUALITY_V2_12_SELECTIVE_RECOVERY_PROMPT_VERSION,
+                                    DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
+                                }
+                                else ANTICIPATORY_SEMANTIC_VALIDATOR_VERSION
+                            )
                         )
                     ),
                     "exposure_semantics": ("offline_counterfactual_passive_probe_only"),
@@ -21315,9 +22240,17 @@ def prepare_detailed_paired_replay_requests(
                 candidate["semantic_repair_version"] = (
                     ANTICIPATORY_SEMANTIC_REPAIR_VERSION
                 )
+            elif candidate_prompt_version in COMPARATIVE_ENTRY_PROMPT_VERSIONS:
+                candidate["semantic_repair_version"] = None
             elif candidate_prompt_version in {
                 DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
                 DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
+                DECISION_QUALITY_V2_14_1_TIMING_AWARE_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+                DECISION_QUALITY_V2_14_2_BALANCED_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+                DECISION_QUALITY_V2_15_1_TIMING_AWARE_BOUNDED_RECOVERY_PROMPT_VERSION,
+                DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION,
+                DECISION_QUALITY_V2_14_3_COMPARATIVE_ENTRY_ADJUDICATOR_PROMPT_VERSION,
+                DECISION_QUALITY_V2_15_3_COMPARATIVE_BOUNDED_RECOVERY_PROMPT_VERSION,
                 DECISION_QUALITY_V2_16_SEQUENTIAL_RECOVERY_PROMPT_VERSION,
             }:
                 candidate["semantic_repair_version"] = (
@@ -21354,6 +22287,10 @@ def prepare_detailed_paired_replay_requests(
             if candidate_prompt_version in {
                 DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
                 DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
+                DECISION_QUALITY_V2_14_1_TIMING_AWARE_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+                DECISION_QUALITY_V2_14_2_BALANCED_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+                DECISION_QUALITY_V2_15_1_TIMING_AWARE_BOUNDED_RECOVERY_PROMPT_VERSION,
+                DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION,
                 DECISION_QUALITY_V2_16_SEQUENTIAL_RECOVERY_PROMPT_VERSION,
             }:
                 sample_floor["promotion_evidence_floor"] = {
@@ -21392,6 +22329,23 @@ def prepare_detailed_paired_replay_requests(
                 "entry_setup_evidence_sha256": (
                     entry_setup_evidence.get("evidence_sha256")
                     if entry_setup_evidence is not None
+                    else None
+                ),
+                ENTRY_GROUP_OBSERVATION_SCHEMA: entry_group_observation,
+                "entry_action_counterweight_bindings": action_counterweight_bindings,
+                "entry_action_counterweight_bindings_sha256": (
+                    action_counterweight_bindings.get("bindings_sha256")
+                    if action_counterweight_bindings is not None
+                    else None
+                ),
+                "entry_timing_context": (
+                    entry_timing_context
+                    if candidate_prompt_version in TIMING_AWARE_ENTRY_PROMPT_VERSIONS
+                    else None
+                ),
+                "entry_timing_context_sha256": (
+                    (entry_timing_context or {}).get("context_sha256")
+                    if candidate_prompt_version in TIMING_AWARE_ENTRY_PROMPT_VERSIONS
                     else None
                 ),
                 "source_exact_payload_sha256": _sha256(exact_payload),
@@ -21439,6 +22393,7 @@ def run_paired_replay(
         provider_receipt_rejected = False
         semantic_repairs: list[str] = []
         risk_adjudication_response: dict[str, Any] | None = None
+        action_comparison_response: dict[str, Any] | None = None
         previous_attempt_hash: str | None = None
         selected_attempt_number: int | None = None
         selected_attempt_hash: str | None = None
@@ -21702,7 +22657,7 @@ def run_paired_replay(
             and not provider_failed
             and not require_tamper_evident_candidate_chain
             and semantic_validator_version
-            != ENTRY_SETUP_RISK_SEMANTIC_VALIDATOR_VERSION
+            not in ENTRY_SETUP_COMPOSED_SEMANTIC_VALIDATORS
         ):
             repaired_response, semantic_repairs = (
                 repair_bounded_opportunity_candidate_response(
@@ -21756,13 +22711,28 @@ def run_paired_replay(
                         str(
                             (request.get("candidate") or {}).get("prompt_version") or ""
                         )
-                        == f"{DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION}_entry"
+                        in {
+                            f"{DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION}_entry",
+                            f"{DECISION_QUALITY_V2_15_1_TIMING_AWARE_BOUNDED_RECOVERY_PROMPT_VERSION}_entry",
+                            f"{DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION}_entry",
+                        }
                     ),
                     sequential_recovery_policy=(
                         str(
                             (request.get("candidate") or {}).get("prompt_version") or ""
                         )
                         == f"{DECISION_QUALITY_V2_16_SEQUENTIAL_RECOVERY_PROMPT_VERSION}_entry"
+                    ),
+                    timing_aware_policy=(
+                        str(
+                            (request.get("candidate") or {}).get("prompt_version") or ""
+                        )
+                        in {
+                            f"{DECISION_QUALITY_V2_14_1_TIMING_AWARE_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION}_entry",
+                            f"{DECISION_QUALITY_V2_14_2_BALANCED_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION}_entry",
+                            f"{DECISION_QUALITY_V2_15_1_TIMING_AWARE_BOUNDED_RECOVERY_PROMPT_VERSION}_entry",
+                            f"{DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION}_entry",
+                        }
                     ),
                 ),
                 "entry_risk_adjudication": risk_adjudication_response,
@@ -21777,6 +22747,37 @@ def run_paired_replay(
                         request=request,
                         selected_attempt_hash=selected_attempt_hash,
                         selected_payload=risk_adjudication_response,
+                        final_response=candidate_response,
+                    )
+                ]
+        if (
+            not candidate_errors
+            and not provider_failed
+            and semantic_validator_version
+            == ENTRY_ACTION_COMPARISON_SEMANTIC_VALIDATOR_VERSION
+        ):
+            action_comparison_response = dict(candidate_response)
+            candidate_response = compose_entry_action_comparison(
+                setup_evidence=request.get("entry_setup_evidence"),
+                action_comparison=action_comparison_response,
+                bounded_recovery_policy=(
+                    str((request.get("candidate") or {}).get("prompt_version") or "")
+                    in {
+                        f"{DECISION_QUALITY_V2_15_3_COMPARATIVE_BOUNDED_RECOVERY_PROMPT_VERSION}_entry",
+                        f"{DECISION_QUALITY_V2_15_4_COUNTERWEIGHT_BOUND_BOUNDED_RECOVERY_PROMPT_VERSION}_entry",
+                    }
+                ),
+            )
+            if require_tamper_evident_candidate_chain:
+                if selected_attempt_hash is None:
+                    raise ValueError(
+                        "micro_reversion_current_selected_attempt_hash_missing"
+                    )
+                candidate_transform_chain = [
+                    _current_candidate_transform_record(
+                        request=request,
+                        selected_attempt_hash=selected_attempt_hash,
+                        selected_payload=action_comparison_response,
                         final_response=candidate_response,
                     )
                 ]
@@ -21880,6 +22881,7 @@ def run_paired_replay(
                 "control_response": control_response,
                 "candidate_response": candidate_response,
                 "candidate_risk_adjudication_response": risk_adjudication_response,
+                "candidate_action_comparison_response": action_comparison_response,
                 "candidate_schema_errors": candidate_errors,
                 "candidate_semantic_repairs": semantic_repairs,
                 "candidate_attempts": candidate_attempts,
@@ -23563,7 +24565,9 @@ def _entry_lifecycle_replay_attribution(
     }
 
 
-def _paired_net_economic_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+def _paired_net_economic_summary(
+    rows: list[dict[str, Any]], *, terminal_required: bool = False
+) -> dict[str, Any]:
     """Aggregate only already-verified executable fee/tax/master-bound CF paths.
 
     Unknown costs are excluded, never zero-filled. Zero exposure is a decision
@@ -23571,11 +24575,44 @@ def _paired_net_economic_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     """
     eligible = []
     seen = set()
+    intervals = {}
+    if terminal_required:
+        rows = sorted(
+            rows,
+            key=lambda r: _number(
+                (
+                    (r.get("entry_cost_aware_opportunity") or {}).get(
+                        "entry_terminal_exit"
+                    )
+                    or {}
+                ).get("start_ms")
+            )
+            or 0,
+        )
     for row in rows:
         net = row.get("entry_cost_aware_opportunity")
         if not isinstance(net, dict):
             continue
         value = _number(net.get("cost_adjusted_end_return_pct"))
+        if terminal_required:
+            from src.engine.scalping.micro_reversion.ai_quality_bridge import (
+                validate_entry_terminal_exit,
+            )
+
+            terminal = net.get("entry_terminal_exit")
+            if (
+                not validate_entry_terminal_exit(terminal)
+                or net.get("economic_promotion_evidence_eligible") is not True
+            ):
+                continue
+            value = _number(terminal.get("terminal_net_return_pct"))
+            scope = (
+                row.get("stock_code"),
+                row.get("effective_venue"),
+                row.get("session_bucket"),
+            )
+            if not scope[0] or terminal["start_ms"] < intervals.get(scope, 0):
+                continue
         identity = str(row.get("decision_trace_id") or "")
         if (
             not identity
@@ -23598,6 +24635,8 @@ def _paired_net_economic_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
             continue
         seen.add(identity)
         eligible.append((row, value))
+        if terminal_required:
+            intervals[scope] = terminal["terminal_at_ms"]
     exposures = [
         (row, value) for row, value in eligible if row["candidate_exposure_selected"]
     ]
@@ -23616,7 +24655,7 @@ def _paired_net_economic_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         len(exposures) >= PAIRED_CANDIDATE_EXPOSURE_MIN_ROWS
         and len(symbols) >= PAIRED_CANDIDATE_EXPOSURE_MIN_SYMBOLS
     )
-    return {
+    result = {
         "schema": "entry_paired_full_cost_economics_v1",
         "verified_pair_count": len(eligible),
         "excluded_pair_count": len(rows) - len(eligible),
@@ -23650,6 +24689,37 @@ def _paired_net_economic_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "missing_cost_imputation",
         ],
     }
+    if terminal_required:
+        risk_rows = []
+        for row, _ in exposures:
+            loss = min(
+                0.0,
+                row["entry_cost_aware_opportunity"]["entry_terminal_exit"][
+                    "prefix_mae_pct"
+                ],
+            )
+            risk_rows.append(
+                {
+                    "candidate_probe_worst_loss_pct": loss,
+                    "candidate_probe_severe_tail_exposure": loss
+                    < OFFLINE_PROBE_SEVERE_TAIL_ADVERSE_PCT,
+                }
+            )
+        risk_budget = _bounded_probe_risk_budget(risk_rows)
+        risk_budget["risk_interpretation"] = (
+            "verified_net_executable_prefix_through_fixed_exit_not_later_unprotected_path"
+        )
+        result.update(
+            exit_contract="entry_terminal_exit_net10bps_v1",
+            entry_timing_basis="immediate_counterfactual_only_wait_arms_excluded",
+            risk_budget=risk_budget,
+            total_terminal_holding_ms=sum(
+                row["entry_cost_aware_opportunity"]["entry_terminal_exit"]["holding_ms"]
+                for row, _ in exposures
+            ),
+            independent_nonoverlapping_symbol_paths=True,
+        )
+    return result
 
 
 def _paired_probe_arm_net_diagnostic(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -23825,6 +24895,15 @@ def _anticipatory_cumulative_learning_summary(
         _number(row.get("candidate_probe_worst_loss_pct")) for row in exposure_rows
     ]
     cumulative_probe_risk_budget = _bounded_probe_risk_budget(exposure_rows)
+    balanced_economics = (
+        candidate_prompt_version.removesuffix("_entry")
+        in COST_ADJUSTED_TERMINAL_ENTRY_PROMPT_VERSIONS
+    )
+    full_cost_economics = _paired_net_economic_summary(
+        cumulative_rows, terminal_required=balanced_economics
+    )
+    if balanced_economics:
+        cumulative_probe_risk_budget = full_cost_economics["risk_budget"]
     cumulative_probe_arm_risk_budget = _bounded_probe_risk_budget(
         [
             {
@@ -23957,7 +25036,7 @@ def _anticipatory_cumulative_learning_summary(
         "candidate_primary_decision_ev_pct": cumulative_candidate_primary_ev,
         "candidate_primary_decision_ev_delta_pct": cumulative_primary_delta,
         "candidate_exposure_probe_cost_adjusted_ev_pct": cumulative_exposure_ev,
-        "full_cost_economics": _paired_net_economic_summary(cumulative_rows),
+        "full_cost_economics": full_cost_economics,
         "probe_arm_full_cost_diagnostic": _paired_probe_arm_net_diagnostic(
             cumulative_rows
         ),
@@ -24087,7 +25166,9 @@ def _small_entry_opportunity(
     }
 
 
-def _verified_net_entry_opportunity(label: Mapping[str, Any]) -> dict[str, Any]:
+def _verified_net_entry_opportunity(
+    label: Mapping[str, Any], *, terminal_required: bool = False
+) -> dict[str, Any]:
     """Use the existing executable cost/master/path verifier, never a gross proxy.
 
     The source owns costs and spread treatment. Subtracting them here again
@@ -24125,7 +25206,19 @@ def _verified_net_entry_opportunity(label: Mapping[str, Any]) -> dict[str, Any]:
         _validate_micro_reversion_action_neutral_label(dict(label))
         metric = _micro_reversion_primary_metric(dict(label)) or {}
         value = _number(metric.get("cost_adjusted_end_return_pct"))
-        if value is None or metric.get("counterfactual_only") is not True:
+        if terminal_required:
+            from src.engine.scalping.micro_reversion.ai_quality_bridge import (
+                validate_entry_terminal_exit,
+            )
+
+            terminal = metric.get("entry_terminal_exit")
+            if not validate_entry_terminal_exit(terminal):
+                raise ValueError("verified_terminal_exit_path_missing")
+            if label.get("economic_promotion_evidence_eligible") is not True:
+                raise ValueError("entry_quantity_economics_observation_only")
+        if (value is None and not terminal_required) or metric.get(
+            "counterfactual_only"
+        ) is not True:
             raise ValueError("verified_executable_cost_adjusted_path_missing")
     except (TypeError, ValueError, KeyError) as exc:
         result["source_gap_reason"] = str(exc)
@@ -24144,6 +25237,14 @@ def _verified_net_entry_opportunity(label: Mapping[str, Any]) -> dict[str, Any]:
             "additional_cost_subtracted_here": False,
         }
     )
+    if terminal_required:
+        result.update(
+            entry_terminal_exit=terminal,
+            economic_promotion_evidence_eligible=True,
+            primary_decision_metric="terminal_net_return_pct",
+            window_policy="fixed_net10bps_existing_adverse_or_primary_time_exit",
+            terminal_net_return_pct=terminal["terminal_net_return_pct"],
+        )
     return result
 
 
@@ -24337,7 +25438,13 @@ def _paired_cost_aware_outcomes(
                 == evidence.get("source_exact_payload_sha256")
             )
             if identity_matches:
-                diagnostic = _verified_net_entry_opportunity(label)
+                diagnostic = _verified_net_entry_opportunity(
+                    label,
+                    terminal_required=str(
+                        (request.get("candidate") or {}).get("prompt_version") or ""
+                    ).removesuffix("_entry")
+                    in COST_ADJUSTED_TERMINAL_ENTRY_PROMPT_VERSIONS,
+                )
                 reason = diagnostic.get("source_gap_reason")
             else:
                 reason = "exact_cost_aware_label_request_binding_mismatch"
@@ -24489,7 +25596,7 @@ def build_paired_replay_report(
             continue
         if candidate_contract.get(
             "semantic_validator_version"
-        ) == ENTRY_SETUP_RISK_SEMANTIC_VALIDATOR_VERSION and (
+        ) in ENTRY_SETUP_COMPOSED_SEMANTIC_VALIDATORS and (
             not request.get("entry_setup_evidence_sha256")
             or result.get("entry_setup_evidence_sha256")
             != request.get("entry_setup_evidence_sha256")
@@ -24629,6 +25736,10 @@ def build_paired_replay_report(
             preferred.get("profit_opportunity_sequence") or "not_recorded_legacy"
         )
         pre_profit_mae = _number(preferred.get("pre_profit_mae_pct"))
+        entry_quality_path = preferred.get("entry_quality_path")
+        entry_quality_path = (
+            entry_quality_path if isinstance(entry_quality_path, dict) else None
+        )
         conservative_execution_cost_pct = _number(
             execution_cost.get("conservative_execution_cost_pct")
         )
@@ -24759,6 +25870,9 @@ def build_paired_replay_report(
                 ),
                 "entry_path_target_pct": preferred.get("entry_path_target_pct"),
                 "entry_path_adverse_pct": preferred.get("entry_path_adverse_pct"),
+                "entry_path_target_hit_at": preferred.get("entry_path_target_hit_at"),
+                "entry_path_adverse_hit_at": preferred.get("entry_path_adverse_hit_at"),
+                "entry_quality_path": entry_quality_path,
                 "profit_opportunity_threshold_pct": (
                     _number(preferred.get("profit_opportunity_threshold_pct"))
                     or PROFIT_OPPORTUNITY_THRESHOLD_PCT
@@ -24819,6 +25933,7 @@ def build_paired_replay_report(
                 ),
                 "entry_setup_family": candidate_response.get("entry_setup_family"),
                 "entry_setup_state": candidate_response.get("entry_setup_state"),
+                "entry_timing_state": candidate_response.get("entry_timing_state"),
                 "entry_ai_risk_verdict": candidate_response.get(
                     "entry_ai_risk_verdict"
                 ),
@@ -24833,6 +25948,18 @@ def build_paired_replay_report(
                 ),
                 "entry_ai_veto_corroborated": candidate_response.get(
                     "entry_ai_veto_corroborated"
+                ),
+                "entry_action_comparison_preferred_action": candidate_response.get(
+                    "entry_action_comparison_preferred_action"
+                ),
+                "entry_action_comparison_tradeoff": candidate_response.get(
+                    "entry_action_comparison_tradeoff"
+                ),
+                "entry_action_comparison_risk_assessments": list(
+                    (candidate_response.get("entry_action_comparison") or {}).get(
+                        "risk_assessments"
+                    )
+                    or []
                 ),
                 "entry_recheck_intent": candidate_response.get("entry_recheck_intent"),
                 "entry_recheck_reasons": list(
@@ -26185,10 +27312,36 @@ def build_paired_replay_report(
                     for row in comparable_rows
                 )
             ),
+            "timing_state_counts": dict(
+                Counter(
+                    str(row.get("entry_timing_state") or "NOT_APPLICABLE")
+                    for row in comparable_rows
+                )
+            ),
             "risk_verdict_counts": dict(
                 Counter(
                     str(row.get("entry_ai_risk_verdict") or "NOT_APPLICABLE")
                     for row in comparable_rows
+                )
+            ),
+            "comparative_preferred_action_counts": dict(
+                Counter(
+                    str(
+                        row.get("entry_action_comparison_preferred_action")
+                        or "NOT_APPLICABLE"
+                    )
+                    for row in comparable_rows
+                )
+            ),
+            "comparative_risk_disposition_counts": dict(
+                Counter(
+                    str(assessment.get("disposition") or "UNKNOWN")
+                    for row in comparable_rows
+                    for assessment in row.get(
+                        "entry_action_comparison_risk_assessments"
+                    )
+                    or []
+                    if isinstance(assessment, dict)
                 )
             ),
             "corroborated_veto_count": sum(
@@ -29420,6 +30573,14 @@ def rematerialize_detailed_replay_attribution(
         prepared_requests = prepare_detailed_paired_replay_requests(
             prepared_requests,
             candidate_prompt_version=candidate_prompt_version,
+            entry_timing_context_by_trace=(
+                build_entry_timing_contexts_for_requests(
+                    prepared_requests,
+                    watch_report=_entry_timing_watch_report(target_date),
+                )
+                if candidate_prompt_version in TIMING_AWARE_ENTRY_PROMPT_VERSIONS
+                else None
+            ),
         )
     prepared_errors: list[str] = []
     if any(not isinstance(request, dict) for request in prepared_requests):
@@ -29743,6 +30904,14 @@ def main(argv: list[str] | None = None) -> int:
             DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
             DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
             DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
+            DECISION_QUALITY_V2_14_1_TIMING_AWARE_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+            DECISION_QUALITY_V2_14_2_BALANCED_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+            DECISION_QUALITY_V2_15_1_TIMING_AWARE_BOUNDED_RECOVERY_PROMPT_VERSION,
+            DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION,
+            DECISION_QUALITY_V2_14_3_COMPARATIVE_ENTRY_ADJUDICATOR_PROMPT_VERSION,
+            DECISION_QUALITY_V2_15_3_COMPARATIVE_BOUNDED_RECOVERY_PROMPT_VERSION,
+            DECISION_QUALITY_V2_14_4_COUNTERWEIGHT_BOUND_COMPARATIVE_PROMPT_VERSION,
+            DECISION_QUALITY_V2_15_4_COUNTERWEIGHT_BOUND_BOUNDED_RECOVERY_PROMPT_VERSION,
             DECISION_QUALITY_V2_16_SEQUENTIAL_RECOVERY_PROMPT_VERSION,
         ),
         default=DECISION_QUALITY_DETAILED_PROMPT_VERSION,
@@ -31571,10 +32740,20 @@ def main(argv: list[str] | None = None) -> int:
                     if str(request.get("stage") or "").strip().lower() == args.stage
                 ]
             if args.mode == "detailed":
+                timing_contexts = (
+                    build_entry_timing_contexts_for_requests(
+                        prepared_requests,
+                        watch_report=_entry_timing_watch_report(args.date),
+                    )
+                    if args.detailed_candidate_version
+                    in TIMING_AWARE_ENTRY_PROMPT_VERSIONS
+                    else None
+                )
                 prepared_requests = prepare_detailed_paired_replay_requests(
                     prepared_requests,
                     candidate_prompt_version=args.detailed_candidate_version,
                     candidate_model_override=args.candidate_model or None,
+                    entry_timing_context_by_trace=timing_contexts,
                 )
             requests = [
                 request
@@ -31873,6 +33052,14 @@ def main(argv: list[str] | None = None) -> int:
                     DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
                     DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
                     DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
+                    DECISION_QUALITY_V2_14_1_TIMING_AWARE_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+                    DECISION_QUALITY_V2_14_2_BALANCED_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+                    DECISION_QUALITY_V2_15_1_TIMING_AWARE_BOUNDED_RECOVERY_PROMPT_VERSION,
+                    DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION,
+                    DECISION_QUALITY_V2_14_3_COMPARATIVE_ENTRY_ADJUDICATOR_PROMPT_VERSION,
+                    DECISION_QUALITY_V2_15_3_COMPARATIVE_BOUNDED_RECOVERY_PROMPT_VERSION,
+                    DECISION_QUALITY_V2_14_4_COUNTERWEIGHT_BOUND_COMPARATIVE_PROMPT_VERSION,
+                    DECISION_QUALITY_V2_15_4_COUNTERWEIGHT_BOUND_BOUNDED_RECOVERY_PROMPT_VERSION,
                     DECISION_QUALITY_V2_16_SEQUENTIAL_RECOVERY_PROMPT_VERSION,
                 }:
                     report["supplemental_analysis_schema"] = (
@@ -31881,12 +33068,31 @@ def main(argv: list[str] | None = None) -> int:
                 if args.detailed_candidate_version in {
                     DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
                     DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
+                    DECISION_QUALITY_V2_14_1_TIMING_AWARE_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+                    DECISION_QUALITY_V2_14_2_BALANCED_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+                    DECISION_QUALITY_V2_15_1_TIMING_AWARE_BOUNDED_RECOVERY_PROMPT_VERSION,
+                    DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION,
+                    DECISION_QUALITY_V2_14_3_COMPARATIVE_ENTRY_ADJUDICATOR_PROMPT_VERSION,
+                    DECISION_QUALITY_V2_15_3_COMPARATIVE_BOUNDED_RECOVERY_PROMPT_VERSION,
+                    DECISION_QUALITY_V2_14_4_COUNTERWEIGHT_BOUND_COMPARATIVE_PROMPT_VERSION,
+                    DECISION_QUALITY_V2_15_4_COUNTERWEIGHT_BOUND_BOUNDED_RECOVERY_PROMPT_VERSION,
                     DECISION_QUALITY_V2_16_SEQUENTIAL_RECOVERY_PROMPT_VERSION,
                 }:
                     report["entry_setup_evidence_schema"] = ENTRY_SETUP_EVIDENCE_SCHEMA
-                    report["entry_risk_adjudication_schema"] = (
-                        ENTRY_RISK_ADJUDICATION_SCHEMA
-                    )
+                    if (
+                        args.detailed_candidate_version
+                        in COMPARATIVE_ENTRY_PROMPT_VERSIONS
+                    ):
+                        report["entry_action_comparison_schema"] = (
+                            ENTRY_ACTION_COUNTERWEIGHT_COMPARISON_SCHEMA
+                            if args.detailed_candidate_version
+                            in COUNTERWEIGHT_BOUND_COMPARATIVE_ENTRY_PROMPT_VERSIONS
+                            else ENTRY_ACTION_COMPARISON_SCHEMA
+                        )
+                    else:
+                        report["entry_risk_adjudication_schema"] = (
+                            ENTRY_RISK_ADJUDICATION_SCHEMA
+                        )
                 report["three_way_comparison"] = build_detailed_three_way_comparison(
                     one_pass_report=_load_json(
                         paired_path(

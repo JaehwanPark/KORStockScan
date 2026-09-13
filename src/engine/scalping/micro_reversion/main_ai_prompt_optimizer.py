@@ -40,16 +40,16 @@ ACTION_OUTCOME_CALIBRATION_SCHEMA = "ai_decision_action_outcome_calibration_v2"
 ACTION_OUTCOME_OPTIMIZER_HANDOFF_SCHEMA = "ai_action_outcome_optimizer_handoff_v1"
 
 ENTRY_CANDIDATE_ORDER = (
-    "decision_quality_v2_14_setup_risk_adjudicator",
-    "decision_quality_v2_15_bounded_recovery",
+    "decision_quality_v2_15_2_balanced_bounded_recovery",
+    "decision_quality_v2_14_2_balanced_setup_risk_adjudicator",
     "decision_quality_v2_16_sequential_recovery",
 )
 ENTRY_CANDIDATE_PROMPT_SHA256 = {
     ENTRY_CANDIDATE_ORDER[0]: (
-        "eeb6c079eb6cdc41f53cf073a92451778370c282fbfa9f2c10ded7c68e6b0e10"
+        "2b7999f04a26eb32f8a7d87b3d7bbb8aa52c3774ae937bfffdf34f9b0b6a5120"
     ),
     ENTRY_CANDIDATE_ORDER[1]: (
-        "203b6bfba260393a5901079967a026d65d06c89fd8bcf56f78950db252e3d8d7"
+        "36e240a56d3c32da984f872cd54d115a29359aff72975b817ec50b198c6faf6f"
     ),
     ENTRY_CANDIDATE_ORDER[2]: (
         "f062daa8d000aadc79085b67d5f88cf1d2340655b1a7a3eda6e61f5e24597113"
@@ -629,8 +629,10 @@ def _enriched_trace_ids_by_stage(bridge: Mapping[str, Any]) -> dict[str, set[str
 
 
 def _detailed_reports(target_date: str) -> list[dict[str, Any]]:
-    from src.engine.scalping.entry_setup_evidence import ENTRY_SETUP_EVIDENCE_VERSION
-    from src.engine.scalping.entry_setup_live_policy import _full_cost_economics_pass
+    from src.engine.scalping.entry_setup_live_policy import (
+        _expected_evidence_version,
+        _full_cost_economics_pass,
+    )
 
     latest: dict[tuple[str, str, str, str], dict[str, Any]] = {}
     requested_date = date.fromisoformat(target_date)
@@ -718,7 +720,7 @@ def _detailed_reports(target_date: str) -> list[dict[str, Any]]:
             and payload.get("actual_order_submitted") is False
             and payload.get("broker_order_forbidden") is True
             and payload.get("entry_setup_evidence_version")
-            == ENTRY_SETUP_EVIDENCE_VERSION
+            == _expected_evidence_version(candidate_prompt_version)
             and _full_cost_economics_pass(
                 cumulative.get("full_cost_economics"), require_runtime_floor=False
             )

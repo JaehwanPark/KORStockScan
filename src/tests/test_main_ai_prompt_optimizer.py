@@ -5,8 +5,6 @@ import json
 import pytest
 
 from src.engine.ai_prompt_contracts import (
-    decision_quality_v2_14_setup_risk_adjudicator_system_prompt,
-    decision_quality_v2_15_bounded_recovery_system_prompt,
     decision_quality_v2_16_sequential_recovery_system_prompt,
 )
 from src.engine.scalping.micro_reversion import main_ai_prompt_optimizer as optimizer
@@ -603,9 +601,10 @@ def _write(path, payload):
 
 
 def test_optimizer_candidate_prompt_hash_registry_matches_current_contracts():
+    from src.engine.ai_prompt_contracts import decision_quality_balanced_entry_system_prompt
     builders = (
-        decision_quality_v2_14_setup_risk_adjudicator_system_prompt,
-        decision_quality_v2_15_bounded_recovery_system_prompt,
+        lambda stage: decision_quality_balanced_entry_system_prompt(stage, bounded_recovery=True),
+        decision_quality_balanced_entry_system_prompt,
         decision_quality_v2_16_sequential_recovery_system_prompt,
     )
 
@@ -842,7 +841,7 @@ def test_optimizer_preserves_full_cost_positive_challenger_without_gross_veto(
             "candidate_contract_sha256": "d" * 64,
         },
         "candidate_contract_sha256": "d" * 64,
-        "entry_setup_evidence_version": policy.ENTRY_SETUP_EVIDENCE_VERSION,
+        "entry_setup_evidence_version": policy._expected_evidence_version(version),
         **optimizer.SOURCE_ONLY_AUTHORITY,
         "cumulative_learning": {
             "candidate_prompt_version": version,

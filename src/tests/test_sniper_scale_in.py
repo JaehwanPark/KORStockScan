@@ -96,7 +96,10 @@ def _exact_entry_context():
     }
 
 
-def test_entry_context_ws_data_preserves_explicit_market_metadata_only():
+def test_entry_context_ws_data_preserves_explicit_market_metadata_only(monkeypatch):
+    monkeypatch.setattr(
+        state_handlers, "_load_scanner_promotion_context_events", lambda _: {}
+    )
     enriched = state_handlers._entry_context_ws_data(
         {"curr": 70000, "market_code": "10"},
         {
@@ -114,7 +117,10 @@ def test_entry_context_ws_data_preserves_explicit_market_metadata_only():
     assert enriched["market_index_code"] == "001"
     assert enriched["sector_index_code"] == "123"
     assert enriched["external_market_context"]["risk_state"] == "RISK_OFF"
-    assert state_handlers._entry_context_ws_data({"curr": 70000}, {}) == {"curr": 70000}
+    assert enriched["entry_timing_context"]["source_status"] == "insufficient"
+    missing = state_handlers._entry_context_ws_data({"curr": 70000}, {})
+    assert missing["curr"] == 70000
+    assert missing["entry_timing_context"]["source_status"] == "insufficient"
 
 
 def test_entry_price_exact_context_handoff_rejects_missing_canonical_snapshot(

@@ -22,15 +22,31 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from src.engine.ai_prompt_contracts import (
+    BALANCED_ENTRY_PROMPT_VERSIONS,
     DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
     DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
     DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
+    DECISION_QUALITY_V2_14_1_TIMING_AWARE_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+    DECISION_QUALITY_V2_14_2_BALANCED_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+    DECISION_QUALITY_V2_15_1_TIMING_AWARE_BOUNDED_RECOVERY_PROMPT_VERSION,
+    DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION,
 )
 from src.engine.scalping.entry_setup_evidence import (
+    ENTRY_SETUP_BALANCED_EVIDENCE_VERSION,
+    ENTRY_DECISION_COMPOSER_V2_14_2_VERSION,
+    ENTRY_DECISION_COMPOSER_V2_15_2_VERSION,
     ENTRY_DECISION_COMPOSER_VERSION,
     ENTRY_DECISION_COMPOSER_V2_15_VERSION,
+    ENTRY_DECISION_COMPOSER_V2_14_1_VERSION,
+    ENTRY_DECISION_COMPOSER_V2_15_1_VERSION,
     ENTRY_SETUP_EVIDENCE_VERSION,
+    ENTRY_SETUP_TIMING_EVIDENCE_VERSION,
     STRUCTURE_PHASE_POLICY_VERSION,
+    MECHANISTIC_AI_ADVISORY_ROLE,
+    MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
+    MECHANISTIC_PRIMARY_DECISION_OWNER,
+    MECHANISTIC_PRIMARY_ROLE_CONTRACT,
+    validate_mechanistic_entry_threshold_policy,
 )
 from src.utils.constants import DATA_DIR
 from src.utils.market_day import is_krx_trading_day
@@ -181,9 +197,15 @@ EXPLORATION_CONTINUATION_MIN_SYMBOLS = 3
 SUPPORTED_BOUNDED_LIVE_PROMPT_VERSIONS = (
     DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
     DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
+    DECISION_QUALITY_V2_14_1_TIMING_AWARE_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+    DECISION_QUALITY_V2_14_2_BALANCED_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+    DECISION_QUALITY_V2_15_1_TIMING_AWARE_BOUNDED_RECOVERY_PROMPT_VERSION,
+    DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION,
 )
 EXPLORATION_ONLY_PROMPT_VERSIONS = frozenset(
-    {DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION}
+    {
+        DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
+    }
 )
 PREOPEN_CANDIDATE_CUTOFF_KST = dt_time(7, 35)
 EFFECTIVE_DATE_POLICY = "first_available_krx_preopen_v1"
@@ -223,12 +245,126 @@ LIVE_REQUIRED_CUMULATIVE_CHECK_KEYS = (
 )
 
 
+def _mechanistic_primary_activation_projection(
+    source_date: str,
+    *,
+    source_path: Path | None = None,
+) -> tuple[dict[str, Any] | None, list[str]]:
+    """Load a passed hash-bound mechanistic candidate for next PREOPEN.
+
+    Candidate absence preserves the incumbent path. A present but malformed
+    candidate blocks activation rather than silently falling back after a
+    claimed mechanistic promotion.
+    """
+
+    from src.engine.scalping import ai_action_outcome_calibration as calibration
+
+    path = source_path or (
+        DATA_DIR
+        / "report"
+        / "ai_decision_action_outcome_calibration"
+        / f"ai_decision_action_outcome_calibration_{source_date}.json"
+    )
+    if not path.is_file():
+        return None, []
+    report = _read_json(path)
+    refinement = report.get("mechanistic_entry_refinement")
+    if not isinstance(refinement, dict):
+        return None, []
+    candidate = refinement.get("policy_candidate")
+    if candidate is None:
+        return None, []
+    errors: list[str] = []
+    candidate_body = {
+        key: value
+        for key, value in candidate.items()
+        if key != "candidate_content_sha256"
+    }
+    role_contract = candidate.get("decision_role_contract")
+    expected_role = {
+        "primary_decision_owner": MECHANISTIC_PRIMARY_DECISION_OWNER,
+        "ai_role": MECHANISTIC_AI_ADVISORY_ROLE,
+        "hard_safety_owner": "existing_runtime_submit_and_order_guards",
+    }
+    if (
+        report.get("target_date") != source_date
+        or not calibration._artifact_content_sha256_valid(report)
+        or refinement.get("schema") != calibration.MECHANISTIC_REFINEMENT_SCHEMA
+        or refinement.get("policy_version")
+        != calibration.MECHANISTIC_REFINEMENT_POLICY_VERSION
+        or refinement.get("promotion_pass") is not True
+        or candidate.get("schema") != "mechanistic_entry_common_feature_candidate_v1"
+        or candidate.get("policy_version")
+        != calibration.MECHANISTIC_REFINEMENT_POLICY_VERSION
+        or candidate.get("candidate_content_sha256")
+        != calibration._canonical_sha256(candidate_body)
+        or role_contract != expected_role
+        or candidate.get("shared_decision_function")
+        != "entry_setup_evidence.mechanistic_entry_policy_decision"
+        or candidate.get("runtime_effect") is not False
+        or candidate.get("allowed_runtime_apply") is not False
+        or candidate.get("actual_order_submitted") is not False
+        or candidate.get("broker_order_forbidden") is not True
+    ):
+        errors.append("mechanistic_primary_candidate_contract_invalid")
+        return None, errors
+    threshold_policy = json.loads(json.dumps(MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1))
+    threshold_policy["version"] = str(candidate.get("policy_version") or "")
+    thresholds = candidate.get("thresholds")
+    if not isinstance(thresholds, dict):
+        errors.append("mechanistic_primary_candidate_thresholds_invalid")
+        return None, errors
+    threshold_policy["thresholds"].update(thresholds)
+    policy_errors = validate_mechanistic_entry_threshold_policy(threshold_policy)
+    if policy_errors:
+        errors.extend(f"mechanistic_primary_policy:{error}" for error in policy_errors)
+        return None, errors
+    projection = {
+        "primary_decision_owner": MECHANISTIC_PRIMARY_DECISION_OWNER,
+        "ai_role": MECHANISTIC_AI_ADVISORY_ROLE,
+        "decision_role_contract": dict(MECHANISTIC_PRIMARY_ROLE_CONTRACT),
+        "threshold_policy": threshold_policy,
+        "calibration_path": str(path),
+        "calibration_file_sha256": _safe_file_sha256(path),
+        "calibration_artifact_content_sha256": report.get("artifact_content_sha256"),
+        "candidate_content_sha256": candidate.get("candidate_content_sha256"),
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
+    projection["projection_sha256"] = _canonical_sha256(projection)
+    return projection, []
+
+
 def _expected_composer_version(prompt_version: Any) -> str:
+    selected = str(prompt_version or "").strip()
+    return {
+        DECISION_QUALITY_V2_14_2_BALANCED_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION: ENTRY_DECISION_COMPOSER_V2_14_2_VERSION,
+        DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION: ENTRY_DECISION_COMPOSER_V2_15_2_VERSION,
+        DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION: (
+            ENTRY_DECISION_COMPOSER_V2_15_VERSION
+        ),
+        DECISION_QUALITY_V2_14_1_TIMING_AWARE_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION: (
+            ENTRY_DECISION_COMPOSER_V2_14_1_VERSION
+        ),
+        DECISION_QUALITY_V2_15_1_TIMING_AWARE_BOUNDED_RECOVERY_PROMPT_VERSION: (
+            ENTRY_DECISION_COMPOSER_V2_15_1_VERSION
+        ),
+    }.get(selected, ENTRY_DECISION_COMPOSER_VERSION)
+
+
+def _expected_evidence_version(prompt_version: Any) -> str:
+    if str(prompt_version or "").strip() in BALANCED_ENTRY_PROMPT_VERSIONS:
+        return ENTRY_SETUP_BALANCED_EVIDENCE_VERSION
     return (
-        ENTRY_DECISION_COMPOSER_V2_15_VERSION
+        ENTRY_SETUP_TIMING_EVIDENCE_VERSION
         if str(prompt_version or "").strip()
-        == DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION
-        else ENTRY_DECISION_COMPOSER_VERSION
+        in {
+            DECISION_QUALITY_V2_14_1_TIMING_AWARE_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+            DECISION_QUALITY_V2_14_2_BALANCED_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+            DECISION_QUALITY_V2_15_1_TIMING_AWARE_BOUNDED_RECOVERY_PROMPT_VERSION,
+            DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION,
+        }
+        else ENTRY_SETUP_EVIDENCE_VERSION
     )
 
 
@@ -705,10 +841,11 @@ def _candidate_source_errors(
         DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
     ),
     cohort: tuple[str, str] = DEFAULT_COHORT,
+    authority_at: datetime | None = None,
 ) -> list[str]:
     errors: list[str] = []
     if cohort == DUAL_OBSERVE_ONLY_COHORT and not _auto_promotion_policy(
-        current=datetime.now(KST), cohort=cohort
+        current=authority_at or datetime.now(KST), cohort=cohort
     ):
         errors.append("dual_cohort_observe_only_no_live_approval")
     if cohort not in SUPPORTED_LIVE_COHORTS:
@@ -810,10 +947,11 @@ def _candidate_source_errors(
         for row in detailed_report.get("requests") or []
         if isinstance(row, dict) and isinstance(row.get("candidate"), dict)
     }
+    expected_evidence_version = _expected_evidence_version(candidate_prompt_version)
     if detailed_report.get(
         "entry_setup_evidence_version"
-    ) != ENTRY_SETUP_EVIDENCE_VERSION or request_evidence_versions != {
-        ENTRY_SETUP_EVIDENCE_VERSION
+    ) != expected_evidence_version or request_evidence_versions != {
+        expected_evidence_version
     }:
         errors.append("detailed_entry_setup_evidence_version_stale")
     expected_composer_version = _expected_composer_version(candidate_prompt_version)
@@ -918,6 +1056,13 @@ def _candidate_source_errors(
         errors.append("cumulative_probe_risk_budget_not_passed")
     if not _full_cost_economics_pass(cumulative.get("full_cost_economics")):
         errors.append("cumulative_full_cost_economics_not_passed")
+    if candidate_prompt_version in BALANCED_ENTRY_PROMPT_VERSIONS:
+        economics = cumulative.get("full_cost_economics") or {}
+        if (
+            economics.get("exit_contract") != "entry_terminal_exit_net10bps_v1"
+            or economics.get("risk_budget") != cumulative_risk_budget
+        ):
+            errors.append("balanced_terminal_economic_contract_missing_or_mismatched")
     if not str(detailed_report.get("candidate_contract_sha256") or ""):
         errors.append("candidate_contract_sha256_missing")
     return list(dict.fromkeys(errors))
@@ -926,11 +1071,10 @@ def _candidate_source_errors(
 def _full_cost_economics_pass(
     value: Any, *, require_runtime_floor: bool = True
 ) -> bool:
-    """Validate full-cost evidence for live promotion or source-only learning.
+    """Validate normal promotion or separately authorized exploration continuation.
 
-    A positive exact net result is enough to retain a source-only challenger
-    for further paired observation.  It is never enough to promote a policy:
-    the normal caller keeps the 0.1% post-cost runtime floor.
+    The relaxed caller is not source-only authority: its exploration policy
+    still owns live caps and guards. Normal promotion keeps the 0.1% net floor.
     """
     import math
 
@@ -1055,7 +1199,10 @@ def _exploration_continuation_gate(
     )
     blocking_reasons: list[str] = []
     if floor_reached:
-        if not _full_cost_economics_pass(cumulative.get("full_cost_economics")):
+        if not _full_cost_economics_pass(
+            cumulative.get("full_cost_economics"),
+            require_runtime_floor=False,
+        ):
             blocking_reasons.append(
                 "exploration_continuation_full_cost_economics_not_passed"
             )
@@ -1112,12 +1259,22 @@ def build_live_candidate(
         if current.tzinfo is None
         else current.astimezone(KST)
     )
+    effective_date = _candidate_effective_date(
+        source_date=source_date, generated_at=current
+    )
+    effective_preopen = datetime.combine(
+        date.fromisoformat(effective_date),
+        PREOPEN_CANDIDATE_CUTOFF_KST,
+        tzinfo=KST,
+    )
+    authority_at = max(current, effective_preopen)
     errors = _candidate_source_errors(
         cohort=cohort,
         source_date=source_date,
         batch_report=batch_report,
         detailed_report=detailed_report,
         candidate_prompt_version=candidate_prompt_version,
+        authority_at=authority_at,
     )
     detailed_sha256 = _safe_file_sha256(detailed_path)
     if not detailed_sha256:
@@ -1147,11 +1304,8 @@ def build_live_candidate(
         cumulative_opportunity if isinstance(cumulative_opportunity, dict) else {}
     )
     exploration_continuation = _exploration_continuation_gate(detailed_report)
-    effective_date = _candidate_effective_date(
-        source_date=source_date, generated_at=current
-    )
     exploration_limit = _new_exploration_limit(cohort, effective_date)
-    auto_promotion = _auto_promotion_policy(current=current, cohort=cohort)
+    auto_promotion = _auto_promotion_policy(current=authority_at, cohort=cohort)
     candidate = {
         "schema": LIVE_CANDIDATE_SCHEMA,
         "source_date": source_date,
@@ -1169,12 +1323,14 @@ def build_live_candidate(
         "performance_promotion_blocking_reasons": errors,
         "selected_prompt_version": (candidate_prompt_version),
         "rollback_prompt_version": _candidate_rollback_prompt_version(
-            current=current, cohort=cohort
+            current=authority_at, cohort=cohort
         ),
         "effective_venue": cohort[0],
         "session_bucket": cohort[1],
         "candidate_contract_sha256": detailed_report.get("candidate_contract_sha256"),
-        "entry_setup_evidence_version": ENTRY_SETUP_EVIDENCE_VERSION,
+        "entry_setup_evidence_version": _expected_evidence_version(
+            candidate_prompt_version
+        ),
         "entry_decision_composer_version": _expected_composer_version(
             candidate_prompt_version
         ),
@@ -1456,7 +1612,9 @@ def _validate_candidate_artifact(
         DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
     }:
         errors.append("candidate_rollback_prompt_invalid")
-    if candidate.get("entry_setup_evidence_version") != ENTRY_SETUP_EVIDENCE_VERSION:
+    if candidate.get("entry_setup_evidence_version") != _expected_evidence_version(
+        selected_prompt_version
+    ):
         errors.append("candidate_entry_setup_evidence_version_stale")
     if candidate.get("entry_decision_composer_version") != _expected_composer_version(
         selected_prompt_version
@@ -1580,7 +1738,8 @@ def _runtime_candidate_contract_errors(
             DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
             DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
         }
-        or candidate.get("entry_setup_evidence_version") != ENTRY_SETUP_EVIDENCE_VERSION
+        or candidate.get("entry_setup_evidence_version")
+        != _expected_evidence_version(selected_prompt_version)
         or candidate.get("entry_decision_composer_version")
         != _expected_composer_version(selected_prompt_version)
         or candidate.get("entry_structure_phase_policy_version")
@@ -1695,6 +1854,7 @@ def build_preopen_activation(
         errors.append("no_effective_date_candidate")
     candidate_path = selected[1] if selected else None
     candidate = selected[2] if selected else {}
+    mechanistic_primary = None
     if selected is not None:
         errors.extend(
             _validate_candidate_artifact(
@@ -1705,11 +1865,18 @@ def build_preopen_activation(
                 runtime_env=runtime_env,
             )
         )
-        if auto_policy and (
-            candidate.get("selected_prompt_version")
-            == DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
-        ):
+        if auto_policy and candidate.get("selected_prompt_version") in {
+            DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+            DECISION_QUALITY_V2_14_1_TIMING_AWARE_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+            DECISION_QUALITY_V2_14_2_BALANCED_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+        }:
             errors.append("auto_promotion_candidate_version_or_fallback_invalid")
+        mechanistic_primary, mechanistic_errors = (
+            _mechanistic_primary_activation_projection(
+                str(candidate.get("source_date") or "")
+            )
+        )
+        errors.extend(mechanistic_errors)
     source = os.environ if runtime_env is None else runtime_env
     if (source.get(AUTO_PROMOTION_PATH_ENV) or source.get(AUTO_PROMOTION_SHA_ENV)) and (
         not pinned_auto_policy or pinned_auto_policy.get("valid") is not True
@@ -1757,6 +1924,7 @@ def build_preopen_activation(
         "entry_structure_phase_policy_version": candidate.get(
             "entry_structure_phase_policy_version"
         ),
+        "mechanistic_primary": mechanistic_primary,
         "runtime_env_provenance": dict(runtime_env_provenance or {}),
         "auto_promotion_policy_sha256": (
             auto_policy.get("sha256") if auto_policy else None
@@ -1842,6 +2010,7 @@ def resolve_live_prompt_policy(
     position_tag: Any = None,
     strategy: Any = None,
     now: datetime | None = None,
+    _allow_initial_policy: bool = True,
 ) -> dict[str, Any]:
     current = (now or datetime.now(KST)).astimezone(KST)
     target_date = current.date().isoformat()
@@ -1913,7 +2082,7 @@ def resolve_live_prompt_policy(
     ):
         result["status"] = "fallback_auto_promotion_policy_invalid"
         return result
-    if rollout is not None and strategy_is_scalping:
+    if rollout is not None and strategy_is_scalping and not auto_scope:
         if not rollout.get("valid"):
             result["status"] = "fallback_operator_rollout_invalid"
             return result
@@ -1935,6 +2104,97 @@ def resolve_live_prompt_policy(
                 runtime_contract_errors=errors,
             )
             return result
+        # Explicit initial adoption does not require a performance-promotion
+        # candidate. Its exact-date policy still requires existing operator,
+        # owner, source and execution guards; it grants no additional orders.
+        if (
+            _allow_initial_policy
+            and auto_scope
+            and cohort == DEFAULT_COHORT
+            and result["position_tag"] in CANARY_POSITION_TAGS
+        ):
+            from src.engine.scalping.mechanistic_entry_runtime_policy import (
+                load_effective,
+            )
+
+            try:
+                initial = load_effective(data_root=DATA_DIR, target_date=target_date)
+            except (ValueError, OSError, TypeError, KeyError) as exc:
+                result.update(
+                    status="fallback_machine_policy_invalid",
+                    machine_policy_error=str(exc),
+                )
+                return result
+            if initial is not None:
+                authority = auto_promotion if auto_scope else rollout
+                # Keep the existing independently validated AI promotion path.
+                # Bootstrap must not permanently shadow tomorrow's optimizer.
+                optimized_ai = resolve_live_prompt_policy(
+                    configured_prompt_version=configured_prompt_version,
+                    effective_venue=effective_venue,
+                    session_bucket=session_bucket,
+                    position_tag=position_tag,
+                    strategy=strategy,
+                    now=current,
+                    _allow_initial_policy=False,
+                )
+                optimized_ai_selected = bool(
+                    optimized_ai.get("enabled") is True
+                    and optimized_ai.get("status") == "active_bounded_krx_canary"
+                )
+                selected_ai_version = (
+                    optimized_ai["selected_prompt_version"]
+                    if optimized_ai_selected
+                    else initial["ai_policy"]["prompt_version"]
+                )
+                result.update(
+                    enabled=True,
+                    status="active_bounded_krx_canary",
+                    source_date=initial["source_date"],
+                    selected_prompt_version=selected_ai_version,
+                    candidate_contract_sha256=initial["bundle_sha256"],
+                    activation_artifact_sha256=authority["sha256"],
+                    activation_path=authority["path"],
+                    entry_setup_evidence_version=_expected_evidence_version(
+                        selected_ai_version
+                    ),
+                    entry_decision_composer_version=_expected_composer_version(
+                        selected_ai_version
+                    ),
+                    entry_structure_phase_policy_version=STRUCTURE_PHASE_POLICY_VERSION,
+                    canary_mode=EXPLORATION_CANARY_MODE,
+                    maximum_daily_exploration_probes=100,
+                    scope_authority=(
+                        "operator_all_session_auto_promotion"
+                        if auto_scope
+                        else "operator_all_scalping_rollout"
+                    ),
+                    machine_adoption_basis=initial["adoption_basis"],
+                    runtime_effect=True,
+                    primary_decision_owner=MECHANISTIC_PRIMARY_DECISION_OWNER,
+                    ai_role=MECHANISTIC_AI_ADVISORY_ROLE,
+                    mechanistic_threshold_policy=initial["machine_policy"],
+                    machine_bundle_sha256=initial["bundle_sha256"],
+                    machine_policy_disposition=initial["machine_disposition"],
+                    machine_policy_effective_date=initial["target_date"],
+                    machine_policy_update_missing=initial["target_date"] != target_date,
+                    auxiliary_system_prompt=initial["ai_policy"]["system_prompt"],
+                    auxiliary_system_prompt_sha256=initial["ai_policy"][
+                        "system_prompt_sha256"
+                    ],
+                    auxiliary_historical_context=initial["historical_context"],
+                    ai_policy_disposition=(
+                        "validated_optimized_base_prompt"
+                        if optimized_ai_selected
+                        else "initial_auxiliary_prompt"
+                    ),
+                    ai_base_candidate_sha256=(
+                        optimized_ai.get("candidate_contract_sha256")
+                        if optimized_ai_selected
+                        else None
+                    ),
+                )
+                return result
         # The legacy rollout remains a durable V2.14 owner. Only the new,
         # separately pinned auto-promotion authority may consult an activation
         # to select V2.15+; stale historical activations cannot override it.
@@ -1999,6 +2259,10 @@ def resolve_live_prompt_policy(
         activation_contract if isinstance(activation_contract, dict) else {}
     )
     candidate_file_sha256 = str(activation.get("candidate_file_sha256") or "")
+    mechanistic_primary = activation.get("mechanistic_primary")
+    if mechanistic_primary is not None and not isinstance(mechanistic_primary, dict):
+        result["status"] = "fallback_mechanistic_primary_contract_invalid"
+        return result
     canary_mode = str(activation.get("canary_mode") or "")
     activation_mode_contract_valid = bool(
         (
@@ -2028,7 +2292,11 @@ def resolve_live_prompt_policy(
         or (
             auto_scope
             and activation.get("selected_prompt_version")
-            == DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
+            in {
+                DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+                DECISION_QUALITY_V2_14_1_TIMING_AWARE_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+                DECISION_QUALITY_V2_14_2_BALANCED_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+            }
         )
         or activation.get("rollback_prompt_version") != fallback
         or (
@@ -2037,7 +2305,7 @@ def resolve_live_prompt_policy(
             != auto_promotion["sha256"]
         )
         or activation.get("entry_setup_evidence_version")
-        != ENTRY_SETUP_EVIDENCE_VERSION
+        != _expected_evidence_version(activation.get("selected_prompt_version"))
         or activation.get("entry_decision_composer_version")
         != _expected_composer_version(activation.get("selected_prompt_version"))
         or activation.get("entry_structure_phase_policy_version")
@@ -2064,6 +2332,31 @@ def resolve_live_prompt_policy(
     ):
         result["status"] = "fallback_activation_contract_invalid"
         return result
+    if isinstance(mechanistic_primary, dict):
+        mechanistic_path = Path(str(mechanistic_primary.get("calibration_path") or ""))
+        mechanistic_body = {
+            key: value
+            for key, value in mechanistic_primary.items()
+            if key != "projection_sha256"
+        }
+        threshold_policy = mechanistic_primary.get("threshold_policy")
+        if (
+            mechanistic_primary.get("projection_sha256")
+            != _canonical_sha256(mechanistic_body)
+            or mechanistic_primary.get("primary_decision_owner")
+            != MECHANISTIC_PRIMARY_DECISION_OWNER
+            or mechanistic_primary.get("ai_role") != MECHANISTIC_AI_ADVISORY_ROLE
+            or mechanistic_primary.get("decision_role_contract")
+            != MECHANISTIC_PRIMARY_ROLE_CONTRACT
+            or mechanistic_primary.get("runtime_effect") is not False
+            or mechanistic_primary.get("allowed_runtime_apply") is not False
+            or validate_mechanistic_entry_threshold_policy(threshold_policy)
+            or not mechanistic_path.is_file()
+            or _safe_file_sha256(mechanistic_path)
+            != mechanistic_primary.get("calibration_file_sha256")
+        ):
+            result["status"] = "fallback_mechanistic_primary_contract_invalid"
+            return result
     candidate = _read_json(candidate_path)
     candidate_errors = _runtime_candidate_contract_errors(
         candidate,
@@ -2144,6 +2437,26 @@ def resolve_live_prompt_policy(
                 else None
             ),
             "runtime_effect": True,
+            "primary_decision_owner": (
+                mechanistic_primary.get("primary_decision_owner")
+                if isinstance(mechanistic_primary, dict)
+                else "ai_entry_risk_adjudicator"
+            ),
+            "ai_role": (
+                mechanistic_primary.get("ai_role")
+                if isinstance(mechanistic_primary, dict)
+                else "primary_entry_risk_adjudicator"
+            ),
+            "mechanistic_threshold_policy": (
+                mechanistic_primary.get("threshold_policy")
+                if isinstance(mechanistic_primary, dict)
+                else None
+            ),
+            "mechanistic_primary_projection_sha256": (
+                mechanistic_primary.get("projection_sha256")
+                if isinstance(mechanistic_primary, dict)
+                else None
+            ),
         }
     )
     return result

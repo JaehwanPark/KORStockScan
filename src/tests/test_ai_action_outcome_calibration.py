@@ -320,6 +320,804 @@ def _valid_prior_calibration_payload(payload: dict) -> dict:
     return calibration._with_artifact_content_sha256(value)
 
 
+def _mechanistic_evidence(
+    *,
+    spread_bp: float = 30.0,
+    fillability: float = 70.0,
+    ratio: float = 0.8,
+) -> dict:
+    body = {
+        "schema": "entry_setup_evidence_v1",
+        "version": "entry_setup_evidence_policy_test",
+        "setup_state": "READY",
+        "invalidation_facts": [],
+        "tail_risk_assessment": {
+            "inputs": {
+                "spread_bp": spread_bp,
+                "fillability_score": fillability,
+                "top3_ask_to_bid_ratio": ratio,
+            }
+        },
+        "source_quality": {"status": "fresh_consistent"},
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    return {**body, "evidence_sha256": calibration._canonical_sha256(body)}
+
+
+def _write_mechanistic_report(
+    folder: Path,
+    *,
+    source_date: str,
+    start: int,
+    count: int = 2,
+    first_hit: str = "target_first",
+    suffix: str = "base",
+    ratio: float = 0.8,
+    target_pct: float = 0.4,
+    include_complete_group: bool = True,
+    include_flow_analysis: bool = False,
+) -> None:
+    requests = []
+    comparisons = []
+    for index in range(start, start + count):
+        evidence = _mechanistic_evidence(ratio=ratio)
+        trace_id = f"mechanistic-{index}"
+        request = {
+            "decision_trace_id": trace_id,
+            "decision_ts": f"{source_date}T10:00:00+09:00",
+            "stage": "entry",
+            "effective_venue": "KRX",
+            "session_bucket": "KRX_REGULAR",
+            "stock_code": f"{index:06d}",
+            "reference_price": 10000,
+            "entry_setup_evidence": evidence,
+            "entry_setup_evidence_sha256": evidence["evidence_sha256"],
+        }
+        if include_flow_analysis:
+            analysis_body = {
+                "schema": "exact_payload_analysis_v1",
+                "source_quality": {
+                    "status": "fresh_consistent",
+                    "completed_bar_count": 20,
+                    "forming_bar_excluded": True,
+                },
+                "completed_structure": {
+                    "returns_pct": {
+                        "1m": 0.1,
+                        "3m": 0.5,
+                        "5m": 1.0,
+                        "10m": 1.5,
+                        "20m": 2.0,
+                        "60m": 3.0,
+                    },
+                    "slopes_pct_per_bar": {
+                        "1m": 0.1,
+                        "3m": 0.1,
+                        "5m": 0.1,
+                        "10m": 0.1,
+                        "20m": 0.1,
+                        "60m": 0.05,
+                    },
+                    "phase": "continuation",
+                    "regime": "intraday",
+                    "alignment": "positive",
+                    "bars_since_session_high": 1,
+                },
+                "executable_liquidity": {
+                    "spread_bp": 30.0,
+                    "fillability_score": 70.0,
+                    "top1_ask_to_bid_ratio": 0.4,
+                    "top3_ask_to_bid_ratio": 0.4,
+                },
+                "volume_confirmation": {"volume_ratio": 1.0},
+                "tape_sample": {
+                    "buy_pressure_pct": 60.0,
+                    "net_aggressive_delta_shares": 100.0,
+                },
+                "program_flow": {"net_qty": 100.0},
+            }
+            analysis_hash = calibration._canonical_sha256(analysis_body)
+            request["exact_payload_analysis"] = {
+                **analysis_body,
+                "analysis_sha256": analysis_hash,
+            }
+            request["exact_payload_analysis_sha256"] = analysis_hash
+        if include_complete_group:
+            group_body = {
+                "schema": calibration.ENTRY_GROUP_OBSERVATION_SCHEMA,
+                "group_key": (
+                    "GE_10BP|SUPPORTIVE|MEDIUM|continuation|LT_180S|LT_1PCT|"
+                    "KRX|KRX_REGULAR"
+                ),
+                "key_parts": {
+                    "price_tick_band": "GE_10BP",
+                    "liquidity_band": "SUPPORTIVE",
+                    "volatility_band": "MEDIUM",
+                    "structure_phase": "continuation",
+                    "watch_age_band": "LT_180S",
+                    "extension_band": "LT_1PCT",
+                    "venue": "KRX",
+                    "session_bucket": "KRX_REGULAR",
+                },
+                "missing_dimensions": [],
+                "provenance": "native_predecision_observation",
+                "future_outcome_fields_forbidden": True,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+            }
+            request[calibration.ENTRY_GROUP_OBSERVATION_SCHEMA] = {
+                **group_body,
+                "group_observation_sha256": calibration._canonical_sha256(group_body),
+            }
+        requests.append(request)
+        comparisons.append(
+            {
+                "decision_trace_id": trace_id,
+                "control_action": "WAIT",
+                "candidate_action": "WAIT",
+                "entry_path_first_hit": first_hit,
+                "entry_path_target_pct": target_pct,
+                "entry_path_adverse_pct": -0.7,
+                "conservative_execution_cost_pct": 0.2,
+                "probe_cost_adjusted_mfe_pct": 0.2,
+                "probe_cost_adjusted_mae_pct": -0.2,
+                "directional_pre_profit_mae_estimate_ex_initial_spread_pct": (
+                    -0.1 if index % 2 else 0.0
+                ),
+                "drawdown_recovery_observed": index % 2 == 1,
+                "path_basis": (
+                    "counterfactual_completed_1m_trade_path_with_conservative_cost"
+                ),
+                "entry_quality_path": {
+                    "schema": calibration.ENTRY_QUALITY_PATH_SCHEMA,
+                    "status": "evaluable",
+                    "entry_quality_label": (
+                        "CLEAN_FAST_PROFIT"
+                        if first_hit == "target_first"
+                        else "CLEAN_FAST_LOSS_OR_ADVERSE"
+                    ),
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                },
+            }
+        )
+    body = {
+        "schema": calibration.DETAILED_PAIRED_SCHEMA,
+        "target_date": source_date,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "cohort_filter": {
+            "effective_venue": "KRX",
+            "session_bucket": "KRX_REGULAR",
+        },
+        "requests": requests,
+        "paired_comparisons": comparisons,
+    }
+    payload = calibration._with_artifact_content_sha256(body)
+    path = folder / (
+        f"ai_prompt_detailed_paired_replay_{source_date}_{suffix}_"
+        "venue_krx_session_krx_regular.json"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_mechanistic_refinement_uses_clean_chronological_holdout(
+    tmp_path: Path,
+) -> None:
+    folder = tmp_path / "paired"
+    dates = [
+        "2026-07-01",
+        "2026-07-02",
+        "2026-07-03",
+        "2026-07-06",
+        "2026-07-07",
+        "2026-07-08",
+        "2026-07-09",
+        "2026-07-10",
+    ]
+    for day_index, source_date in enumerate(dates):
+        _write_mechanistic_report(
+            folder,
+            source_date=source_date,
+            start=day_index * 2,
+        )
+
+    result = calibration.build_clean_baseline_mechanistic_refinement(
+        folder, target_date=dates[-1]
+    )
+
+    assert result["chronological_split"]["calibration_source_dates"] == dates[:5]
+    assert result["chronological_split"]["holdout_source_dates"] == dates[-3:]
+    assert (
+        result["chronological_split"]["holdout_used_for_candidate_selection"] is False
+    )
+    assert result["promotion_pass"] is True
+    candidate = result["policy_candidate"]
+    assert candidate["calibration_metrics"]["exposure_count"] == 10
+    assert candidate["holdout_metrics"]["exposure_count"] == 6
+    assert candidate["calibration_metrics"][
+        "cost_adjusted_terminal_proxy_ev_pct"
+    ] == pytest.approx(0.2)
+    assert candidate["holdout_metrics"][
+        "cost_adjusted_terminal_proxy_ev_pct"
+    ] == pytest.approx(0.2)
+    assert candidate["runtime_effect"] is False
+    assert candidate["allowed_runtime_apply"] is False
+    body = {
+        key: value
+        for key, value in candidate.items()
+        if key != "candidate_content_sha256"
+    }
+    assert candidate["candidate_content_sha256"] == calibration._canonical_sha256(body)
+
+
+def test_mechanistic_source_rows_preserve_valid_multihorizon_flow_projection(
+    tmp_path: Path,
+) -> None:
+    folder = tmp_path / "paired"
+    _write_mechanistic_report(
+        folder,
+        source_date="2026-07-01",
+        start=0,
+        include_flow_analysis=True,
+    )
+
+    rows, source_contract = calibration._mechanistic_source_rows(
+        folder, target_date="2026-07-01"
+    )
+
+    assert len(rows) == 2
+    assert all(
+        row["mechanistic_flow_observation_contract_valid"] is True for row in rows
+    )
+    assert all(
+        row["mechanistic_flow_observation"]["matched_families"]
+        == [
+            "DEPTH_SUPPORTED",
+            "DEPTH_SUPPORTED_STAIRCASE",
+            "MID_HORIZON_STAIRCASE",
+        ]
+        for row in rows
+    )
+    assert source_contract["flow_observation_status_counts"] == {
+        "valid_predecision_projection": 2
+    }
+
+
+def test_mechanistic_flow_groups_select_on_past_and_only_nominate_recheck() -> None:
+    dates = [
+        "2026-07-01",
+        "2026-07-02",
+        "2026-07-03",
+        "2026-07-06",
+        "2026-07-07",
+        "2026-07-08",
+        "2026-07-09",
+        "2026-07-10",
+    ]
+    rows = []
+    for date_index, source_date in enumerate(dates):
+        family_count = 4 if date_index < 5 else 2
+        other_count = 4 if date_index < 5 else 2
+        for index in range(family_count + other_count):
+            in_family = index < family_count
+            positive = in_family and index % 2 == 0
+            rows.append(
+                {
+                    "decision_trace_id": f"{source_date}-{index}",
+                    "source_date": source_date,
+                    "stock_code": f"{date_index:02d}{index:04d}",
+                    "mechanistic_flow_observation_contract_valid": True,
+                    "mechanistic_flow_observation": {
+                        "family_memberships": {"DEPTH_SUPPORTED": in_family}
+                    },
+                    "comparison": {
+                        "entry_path_first_hit": (
+                            "target_first" if positive else "adverse_first"
+                        ),
+                        "entry_path_target_pct": 0.4,
+                        "entry_path_adverse_pct": -0.7,
+                        "conservative_execution_cost_pct": 0.2,
+                        "probe_cost_adjusted_mfe_pct": 0.2 if positive else -0.2,
+                    },
+                }
+            )
+    source_contract = {"accepted_rows_sha256": "source-rows-hash"}
+
+    result = calibration.build_mechanistic_flow_group_study(
+        target_date=dates[-1],
+        source_rows=rows,
+        source_contract=source_contract,
+    )
+
+    assert result["chronological_split"]["calibration_source_dates"] == dates[:5]
+    assert (
+        result["chronological_split"]["retrospective_validation_source_dates"]
+        == dates[-3:]
+    )
+    assert (
+        result["chronological_split"]["retrospective_validation_is_not_forward_holdout"]
+        is True
+    )
+    assert result["retrospective_supported_recheck_families"] == ["DEPTH_SUPPORTED"]
+    assert result["research_candidate"]["action_ceiling"] == "RECHECK"
+    assert result["research_candidate"]["direct_enter_authority"] is False
+    assert result["research_candidate"]["forward_acceptance_required"] is True
+    assert result["recheck_candidate"] is None
+    assert result["enter_policy_candidate"] is None
+    assert (
+        result["micro_confirmation_upgrade_contract"]["flow_family_alone_can_enter"]
+        is False
+    )
+    assert (
+        result["family_results"][0]["retrospective_validation_metrics"][
+            "direct_enter_fixed_boundary_terminal_proxy_ev_pct"
+        ]
+        < 0.0
+    )
+
+    for source_date in ("2026-09-14", "2026-09-15", "2026-09-16"):
+        for index in range(4):
+            in_family = index < 2
+            positive = in_family and index == 0
+            rows.append(
+                {
+                    "decision_trace_id": f"{source_date}-{index}",
+                    "source_date": source_date,
+                    "stock_code": f"forward-{source_date}-{index}",
+                    "mechanistic_flow_observation_contract_valid": True,
+                    "mechanistic_flow_observation": {
+                        "family_memberships": {"DEPTH_SUPPORTED": in_family}
+                    },
+                    "comparison": {
+                        "entry_path_first_hit": (
+                            "target_first" if positive else "adverse_first"
+                        ),
+                        "entry_path_target_pct": 0.4,
+                        "entry_path_adverse_pct": -0.7,
+                        "conservative_execution_cost_pct": 0.2,
+                        "probe_cost_adjusted_mfe_pct": 0.2 if positive else -0.2,
+                    },
+                }
+            )
+    forward_result = calibration.build_mechanistic_flow_group_study(
+        target_date="2026-09-16",
+        source_rows=rows,
+        source_contract=source_contract,
+    )
+    assert forward_result["forward_accepted_recheck_families"] == ["DEPTH_SUPPORTED"]
+    assert forward_result["recheck_candidate"]["action_ceiling"] == "RECHECK"
+    assert forward_result["recheck_candidate"]["direct_enter_authority"] is False
+    assert forward_result["enter_policy_candidate"] is None
+
+
+def test_flow_micro_audit_does_not_backfill_prefreeze_sidecars(
+    tmp_path: Path,
+) -> None:
+    folder = tmp_path / "micro_reversion_ai_quality_bridge"
+    folder.mkdir(parents=True)
+    (folder / "micro_reversion_ai_quality_bridge_2026-09-11.json").write_text(
+        "not-json",
+        encoding="utf-8",
+    )
+
+    audit = calibration._flow_micro_confirmation_source_audit(
+        tmp_path,
+        target_date="2026-09-14",
+        source_rows=[],
+    )
+
+    assert audit["first_eligible_source_date_is_after"] == "2026-09-11"
+    assert audit["historical_sidecar_backfill_allowed"] is False
+    assert audit["discovered_report_count"] == 0
+    assert audit["eligible_same_trace_join_count"] == 0
+    assert audit["micro_threshold_fitted"] is False
+    assert audit["enter_candidate_issued"] is False
+
+
+def test_hierarchical_entry_quality_uses_past_group_rows_only_and_blocks_without_actual_path(
+    tmp_path: Path,
+) -> None:
+    folder = tmp_path / "report" / calibration.PAIRED_SUBDIR
+    dates = [
+        "2026-07-01",
+        "2026-07-02",
+        "2026-07-03",
+        "2026-07-06",
+        "2026-07-07",
+        "2026-07-08",
+        "2026-07-09",
+        "2026-07-10",
+    ]
+    for day_index, source_date in enumerate(dates):
+        _write_mechanistic_report(
+            folder,
+            source_date=source_date,
+            start=day_index * 2,
+        )
+    rows, source_contract = calibration._mechanistic_source_rows(
+        folder, target_date=dates[-1]
+    )
+
+    result = calibration.build_hierarchical_entry_quality_walk_forward(
+        folder,
+        target_date=dates[-1],
+        source_rows=rows,
+        source_contract=source_contract,
+    )
+
+    assert result["walk_forward"]["fold_count"] == 5
+    assert result["walk_forward"]["fold_dates_strictly_ordered"] is True
+    assert all(
+        fold["training_max_date"] < fold["evaluation_date"]
+        and fold["future_rows_used_for_training"] is False
+        for fold in result["walk_forward"]["folds"]
+    )
+    assert (
+        result["walk_forward"]["aggregate_selected_evaluation"]["clean_fast_count"] > 0
+    )
+    assert result["group_contract"]["qualifying_symbol_count"] == 0
+    assert result["group_contract"]["symbol_residual_active"] is False
+    assert result["actual_entry_lane"]["status"] == "actual_path_source_gap"
+    assert result["actual_entry_lane"]["economic_acceptance_eligible_count"] == 0
+    assert result["promotion_checks"]["actual_path_evidence_available"] is False
+    assert result["promotion_pass"] is False
+    assert result["policy_candidate"] is None
+    raw_anchors = result["market_path_opportunity_anchors"]
+    assert raw_anchors["anchor_count"] == 16
+    assert raw_anchors["rebound_anchor_count"] == 8
+    assert raw_anchors["direct_continuation_anchor_count"] == 8
+    assert raw_anchors["path_detail_gap_anchor_count"] == 0
+    assert raw_anchors["ai_non_entry_anchor_count"] == 16
+    assert raw_anchors["counterfactual_only_not_realized_pnl"] is True
+    assert len(raw_anchors["source_date_summaries"]) == len(dates)
+    assert all(
+        row["exact_trace_count"] == 2 and row["target_first_anchor_count"] == 2
+        for row in raw_anchors["source_date_summaries"]
+    )
+    assert raw_anchors["learning_contract"]["all_accepted_source_dates_used"] is True
+
+
+def test_actual_lane_reads_lifecycles_and_preserves_realized_fast_vs_late(
+    tmp_path: Path,
+) -> None:
+    source_date = "2026-07-08"
+    folder = tmp_path / "report" / "main_scalping_lifecycle_paired"
+    folder.mkdir(parents=True)
+    trace_id = "actual-entry-1"
+    rows = [
+        {
+            "stock_code": "000001",
+            "first_fill_execution_at": f"{source_date}T10:00:00+09:00",
+            "final_exit_execution_at": f"{source_date}T10:01:00+09:00",
+            "actual_holding_duration_sec": 60,
+            "terminal_state": "FINAL_EXIT_RECONCILED",
+            "entry_notional_krw": 10_000,
+            "realized_net_pnl_krw": 20,
+            "decision_trace_context_path": [
+                {"stage": "entry_decision", "decision_trace_id": trace_id}
+            ],
+        },
+        {
+            "stock_code": "000002",
+            "first_fill_execution_at": f"{source_date}T10:00:00+09:00",
+            "final_exit_execution_at": f"{source_date}T10:10:00+09:00",
+            "actual_holding_duration_sec": 600,
+            "terminal_state": "FINAL_EXIT_RECONCILED",
+            "entry_notional_krw": 10_000,
+            "realized_net_pnl_krw": 15,
+            "decision_trace_context_path": [],
+        },
+    ]
+    (folder / f"main_scalping_lifecycle_paired_{source_date}.json").write_text(
+        json.dumps({"target_date": source_date, "lifecycles": rows}),
+        encoding="utf-8",
+    )
+
+    audit = calibration._actual_entry_quality_source_audit(
+        tmp_path / "report",
+        target_date=source_date,
+        counterfactual_rows=[{"decision_trace_id": trace_id}],
+    )
+
+    assert audit["filled_lifecycle_count"] == 2
+    assert audit["realized_lifecycle_count"] == 2
+    assert audit["realized_net_10bp_count"] == 2
+    assert audit["realized_net_10bp_fast_count"] == 1
+    assert audit["realized_net_10bp_late_count"] == 1
+    assert audit["raw_decision_path_join_count"] == 1
+    assert audit["fast_realized_outcome_is_clean_path_proof"] is False
+    assert audit["status"] == "realized_outcome_available_path_quality_gap"
+    assert audit["realized_anchor_ledger"][0]["entry_decision_trace_id"] == trace_id
+    assert audit["realized_anchor_ledger"][0]["market_path_projection_joined"] is True
+
+
+def test_hierarchical_entry_quality_excludes_incomplete_group_dimensions(
+    tmp_path: Path,
+) -> None:
+    folder = tmp_path / "report" / calibration.PAIRED_SUBDIR
+    dates = [
+        "2026-07-01",
+        "2026-07-02",
+        "2026-07-03",
+        "2026-07-06",
+        "2026-07-07",
+        "2026-07-08",
+    ]
+    for day_index, source_date in enumerate(dates):
+        _write_mechanistic_report(
+            folder,
+            source_date=source_date,
+            start=day_index * 2,
+            include_complete_group=False,
+        )
+    rows, source_contract = calibration._mechanistic_source_rows(
+        folder, target_date=dates[-1]
+    )
+
+    result = calibration.build_hierarchical_entry_quality_walk_forward(
+        folder,
+        target_date=dates[-1],
+        source_rows=rows,
+        source_contract=source_contract,
+    )
+
+    assert result["source_population"]["entry_quality_evaluable_count"] == 12
+    assert result["group_contract"]["group_complete_evaluable_count"] == 0
+    assert result["group_contract"]["group_incomplete_evaluable_count"] == 12
+    assert result["group_contract"]["missing_group_dimensions_imputed"] is False
+    assert result["walk_forward"]["fold_count"] == 0
+    assert result["promotion_pass"] is False
+
+
+def test_actual_completed_bar_path_is_diagnostic_not_economic_acceptance(
+    tmp_path: Path,
+) -> None:
+    source_date = "2026-07-08"
+    folder = tmp_path / "report" / "ai_decision_outcome_labels"
+    folder.mkdir(parents=True)
+    report = {
+        "schema": "ai_decision_outcome_labels_v1",
+        "target_date": source_date,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "labels": [
+            {
+                "stage_outcome": {
+                    "actual_fill_entry_quality_path": {
+                        "actual_fill_observed": True,
+                        "status": "evaluable",
+                        "entry_quality_label": "CLEAN_FAST_PROFIT",
+                        "path_authority": (
+                            "actual_fill_anchor_completed_bar_touch_not_executable_bid"
+                        ),
+                        "economic_acceptance_eligible": False,
+                        "realized_cost_contract_complete": False,
+                    }
+                }
+            }
+        ],
+    }
+    (folder / f"ai_decision_outcome_labels_{source_date}.json").write_text(
+        json.dumps(report), encoding="utf-8"
+    )
+
+    audit = calibration._actual_entry_quality_source_audit(
+        tmp_path / "report", target_date=source_date
+    )
+
+    assert audit["path_evaluable_count"] == 1
+    assert audit["economic_acceptance_eligible_count"] == 0
+    assert audit["status"] == "actual_path_diagnostic_available"
+
+
+def test_mechanistic_refinement_excludes_conflicting_trace_and_never_imputes_micro(
+    tmp_path: Path,
+) -> None:
+    folder = tmp_path / "paired"
+    dates = [
+        "2026-07-01",
+        "2026-07-02",
+        "2026-07-03",
+        "2026-07-06",
+        "2026-07-07",
+        "2026-07-08",
+        "2026-07-09",
+        "2026-07-10",
+    ]
+    for day_index, source_date in enumerate(dates):
+        _write_mechanistic_report(
+            folder,
+            source_date=source_date,
+            start=day_index * 2,
+        )
+    _write_mechanistic_report(
+        folder,
+        source_date=dates[-1],
+        start=(len(dates) - 1) * 2,
+        count=2,
+        suffix="conflict",
+        ratio=0.9,
+    )
+
+    result = calibration.build_clean_baseline_mechanistic_refinement(
+        folder, target_date=dates[-1]
+    )
+
+    source = result["source_contract"]
+    assert source["accepted_unique_trace_count"] == 14
+    assert source["conflicting_duplicate_trace_count"] == 2
+    assert source["conflicting_duplicate_traces_excluded"] is True
+    assert source["missing_micro_fields_imputed"] is False
+    assert result["common_feature_contract"]["micro_enhanced_trace_count"] == 0
+    assert result["chronological_split"]["holdout_source_dates"] == dates[-3:]
+    assert result["promotion_pass"] is False
+    assert result["policy_candidate"] is None
+
+
+def test_mechanistic_refinement_censors_same_bar_paths_instead_of_zero_filling(
+    tmp_path: Path,
+) -> None:
+    folder = tmp_path / "paired"
+    dates = [
+        "2026-07-01",
+        "2026-07-02",
+        "2026-07-03",
+        "2026-07-06",
+        "2026-07-07",
+        "2026-07-08",
+        "2026-07-09",
+        "2026-07-10",
+    ]
+    for day_index, source_date in enumerate(dates):
+        _write_mechanistic_report(
+            folder,
+            source_date=source_date,
+            start=day_index * 2,
+            first_hit="same_bar_ambiguous",
+        )
+
+    result = calibration.build_clean_baseline_mechanistic_refinement(
+        folder, target_date=dates[-1]
+    )
+
+    assert result["grid_candidate_count"] == 0
+    assert result["best_observed_candidate"] is None
+    assert result["status"] == "insufficient_clean_common_feature_evidence"
+
+
+def test_mechanistic_refinement_blocks_mixed_path_boundary_contracts(
+    tmp_path: Path,
+) -> None:
+    folder = tmp_path / "paired"
+    dates = [
+        "2026-07-01",
+        "2026-07-02",
+        "2026-07-03",
+        "2026-07-06",
+        "2026-07-07",
+        "2026-07-08",
+        "2026-07-09",
+        "2026-07-10",
+    ]
+    for day_index, source_date in enumerate(dates):
+        _write_mechanistic_report(
+            folder,
+            source_date=source_date,
+            start=day_index * 2,
+            target_pct=0.4 if day_index < 7 else 0.5,
+        )
+
+    result = calibration.build_clean_baseline_mechanistic_refinement(
+        folder, target_date=dates[-1]
+    )
+
+    assert result["objective"]["path_boundary_contract_isolated"] is False
+    assert result["promotion_checks"]["path_boundary_contract_isolated"] is False
+    assert result["promotion_pass"] is False
+    assert result["policy_candidate"] is None
+
+
+def test_mechanistic_paired_delta_counts_avoided_control_exposure() -> None:
+    adverse = {
+        "decision_trace_id": "adverse",
+        "comparison": {
+            "control_action": "BUY",
+            "entry_path_first_hit": "adverse_first",
+            "entry_path_target_pct": 0.4,
+            "entry_path_adverse_pct": -0.7,
+            "conservative_execution_cost_pct": 0.2,
+        },
+    }
+    target = {
+        "decision_trace_id": "target",
+        "comparison": {
+            "control_action": "WAIT",
+            "entry_path_first_hit": "target_first",
+            "entry_path_target_pct": 0.4,
+            "entry_path_adverse_pct": -0.7,
+            "conservative_execution_cost_pct": 0.2,
+        },
+    }
+
+    metrics = calibration._mechanistic_paired_population_metrics(
+        [adverse, target], [target]
+    )
+
+    assert metrics["paired_comparable_count"] == 2
+    assert metrics["paired_terminal_contract_complete"] is True
+    assert metrics["paired_terminal_proxy_delta_pct"] == pytest.approx(0.55)
+
+
+def test_mechanistic_legacy_hashless_rows_use_exact_file_and_row_hash_provenance(
+    tmp_path: Path,
+) -> None:
+    folder = tmp_path / "paired"
+    dates = [
+        "2026-07-01",
+        "2026-07-02",
+        "2026-07-03",
+        "2026-07-06",
+        "2026-07-07",
+        "2026-09-08",
+        "2026-09-09",
+        "2026-09-10",
+    ]
+    for day_index, source_date in enumerate(dates):
+        _write_mechanistic_report(
+            folder,
+            source_date=source_date,
+            start=day_index * 2,
+        )
+    legacy_path = next(folder.glob("*2026-07-01*.json"))
+    legacy = json.loads(legacy_path.read_text(encoding="utf-8"))
+    legacy.pop("artifact_content_sha256")
+    legacy_path.write_text(json.dumps(legacy), encoding="utf-8")
+
+    result = calibration.build_clean_baseline_mechanistic_refinement(
+        folder, target_date=dates[-1]
+    )
+
+    assert (
+        result["best_observed_candidate"]["calibration"][
+            "source_report_hash_contract_complete"
+        ]
+        is False
+    )
+    assert (
+        result["best_observed_candidate"]["calibration"][
+            "source_provenance_contract_complete"
+        ]
+        is True
+    )
+    assert result["source_contract"]["legacy_hashless_report_count"] == 1
+    assert (
+        result["source_contract"]["accepted_provenance_verified_unique_trace_count"]
+        == result["source_contract"]["accepted_unique_trace_count"]
+    )
+    legacy_sources = [
+        source
+        for source in result["source_contract"]["accepted_source_artifacts"]
+        if source["source_date"] == "2026-07-01"
+    ]
+    assert len(legacy_sources) == 1
+    assert legacy_sources[0]["provenance_tier"] == (
+        "legacy_row_self_hash_and_observed_file_hash"
+    )
+    assert len(legacy_sources[0]["observed_file_sha256"]) == 64
+    assert result["calibration_floor_passing_candidate_count"] > 0
+    assert result["promotion_pass"] is True
+    assert result["policy_candidate"] is not None
+
+
 def _write_pipeline(path: Path, rows: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -993,7 +1791,9 @@ def test_same_prompt_isolated_krx_and_nxt_are_separate_candidates(
     } == {("KRX", "KRX_REGULAR"), ("NXT", "NXT_AFTERMARKET")}
 
 
-def test_dual_aftermarket_uses_route_key_and_remains_observe_only(tmp_path: Path) -> None:
+def test_dual_aftermarket_uses_route_key_and_remains_observe_only(
+    tmp_path: Path,
+) -> None:
     assert calibration._cohort_route_scope("KRX", "KRX_REGULAR", "") == (
         "KRX:KRX_REGULAR"
     )

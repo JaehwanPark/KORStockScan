@@ -1,16 +1,35 @@
+from copy import deepcopy
+import hashlib
 import json
 
 import pytest
 
 from src.engine.scalping import ai_decision_quality as quality
 from src.engine.scalping.entry_setup_evidence import (
+    ENTRY_ACTION_COMPARISON_SCHEMA,
+    ENTRY_ACTION_COUNTERWEIGHT_BINDINGS_SCHEMA,
+    ENTRY_ACTION_COUNTERWEIGHT_COMPARISON_SCHEMA,
+    MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
     ENTRY_RISK_ADJUDICATION_SCHEMA,
     ENTRY_SETUP_EVIDENCE_SCHEMA,
+    ENTRY_GROUP_OBSERVATION_SCHEMA,
+    ENTRY_SETUP_TIMING_EVIDENCE_VERSION,
+    build_entry_predecision_group_observation,
+    build_mechanistic_entry_flow_observation,
     build_entry_setup_evidence,
+    build_entry_timing_context,
+    compose_entry_action_comparison,
+    compose_mechanistic_primary_decision,
     compose_entry_decision,
+    entry_action_counterweight_bindings,
+    entry_action_comparison_openai_schema,
     entry_risk_adjudication_openai_schema,
+    mechanistic_entry_action_comparison,
     repair_invalid_entry_risk_adjudication,
     validate_entry_risk_adjudication,
+    validate_entry_action_comparison,
+    validate_entry_setup_evidence,
+    validate_mechanistic_entry_threshold_policy,
 )
 
 
@@ -45,6 +64,267 @@ def _recovery_analysis(*, clean=False, recovery=False, source_mode="fresh_dual")
     }
 
 
+def test_mechanistic_flow_observation_groups_predecision_shape_without_outcome():
+    exact = {
+        "schema": "exact_payload_analysis_v1",
+        "analysis_sha256": "source-analysis-hash",
+        "source_quality": {
+            "status": "fresh_consistent",
+            "completed_bar_count": 20,
+            "forming_bar_excluded": True,
+        },
+        "completed_structure": {
+            "returns_pct": {
+                "1m": 0.2,
+                "3m": 0.8,
+                "5m": 2.0,
+                "10m": 1.5,
+                "20m": 2.4,
+                "60m": 4.0,
+            },
+            "slopes_pct_per_bar": {
+                "1m": 0.2,
+                "3m": 0.1,
+                "5m": 0.1,
+                "10m": 0.05,
+                "20m": -0.2,
+                "60m": 0.03,
+            },
+            "phase": "continuation",
+            "regime": "intraday",
+            "alignment": "positive",
+            "bars_since_session_high": 0,
+        },
+        "executable_liquidity": {
+            "spread_bp": 20.0,
+            "fillability_score": 70.0,
+            "top1_ask_to_bid_ratio": 0.7,
+            "top3_ask_to_bid_ratio": 0.4,
+        },
+        "volume_confirmation": {"volume_ratio": 1.7},
+        "tape_sample": {
+            "buy_pressure_pct": 65.0,
+            "net_aggressive_delta_shares": 500,
+        },
+        "program_flow": {"net_qty": 1000},
+    }
+
+    observed = build_mechanistic_entry_flow_observation(exact)
+
+    assert observed["matched_families"] == [
+        "DEPTH_SUPPORTED",
+        "DEPTH_SUPPORTED_STAIRCASE",
+        "MID_HORIZON_STAIRCASE",
+        "REBOUND_DECELERATION",
+        "RECENT_SESSION_HIGH",
+        "STAIRCASE_RECENT_HIGH",
+        "VOLUME_EXPANSION",
+    ]
+    assert observed["flow_match_authorizes_recheck_only"] is True
+    assert observed["micro_confirmation_required_for_enter"] is True
+    assert observed["future_outcome_fields_used"] is False
+    body = {
+        key: value
+        for key, value in observed.items()
+        if key != "flow_observation_sha256"
+    }
+    expected_hash = hashlib.sha256(
+        json.dumps(
+            body,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
+    assert observed["flow_observation_sha256"] == expected_hash
+
+
+def test_timing_context_filters_future_promotions_and_keeps_first_watch():
+    context = build_entry_timing_context(
+        decision_epoch=1_000.0,
+        promotion_events=[
+            {
+                "promotion_epoch": 100.0,
+                "fields": {
+                    "scanner_promotion_id": "first",
+                    "first_seen_price": 100.0,
+                    "effective_venue": "KRX",
+                    "market_session_bucket": "KRX_REGULAR",
+                },
+            },
+            {
+                "promotion_epoch": 900.0,
+                "fields": {
+                    "scanner_promotion_id": "current",
+                    "effective_venue": "KRX",
+                    "market_session_bucket": "KRX_REGULAR",
+                },
+            },
+            {
+                "promotion_epoch": 900.0,
+                "fields": {
+                    "scanner_promotion_id": "current",
+                    "effective_venue": "KRX",
+                    "market_session_bucket": "KRX_REGULAR",
+                },
+            },
+            {
+                "promotion_epoch": 950.0,
+                "fields": {
+                    "scanner_promotion_id": "cross-venue",
+                    "effective_venue": "NXT",
+                    "market_session_bucket": "NXT_REGULAR",
+                },
+            },
+            {
+                "promotion_epoch": 1_001.0,
+                "fields": {
+                    "scanner_promotion_id": "future",
+                    "effective_venue": "KRX",
+                    "market_session_bucket": "KRX_REGULAR",
+                },
+            },
+        ],
+        current_price=102.0,
+        effective_venue="KRX",
+        session_bucket="KRX_REGULAR",
+    )
+
+    assert context["source_status"] == "exact_scanner_promotion_asof"
+    assert context["first_watch_epoch"] == 100.0
+    assert context["current_promotion_epoch"] == 900.0
+    assert context["watch_age_sec"] == 900.0
+    assert context["promotion_count_as_of_decision"] == 2
+    assert context["price_delta_since_first_watch_pct"] == 2.0
+
+
+def test_timing_aware_evidence_corroborates_late_unreset_extension():
+    analysis = _exact_analysis()
+    analysis["completed_structure"] = {
+        "phase": "continuation",
+        "returns_pct": {"5m": 1.5},
+        "peak_drawdown_pct": -0.1,
+    }
+    context = build_entry_timing_context(
+        decision_epoch=1_000.0,
+        promotion_events=[
+            {
+                "promotion_epoch": 100.0,
+                "fields": {
+                    "scanner_promotion_id": "first",
+                    "first_seen_price": 100.0,
+                },
+            }
+        ],
+        current_price=102.0,
+    )
+
+    evidence = build_entry_setup_evidence(
+        exact_payload={"current": {"price": 102.0}},
+        exact_analysis=analysis,
+        recovery_analysis=_recovery_analysis(clean=True),
+        entry_timing_context=context,
+        timing_aware_policy=True,
+    )
+
+    timing = evidence["entry_timing_observation_v1"]
+    assert evidence["version"] == ENTRY_SETUP_TIMING_EVIDENCE_VERSION
+    assert timing["state"] == "late_unreset_extension"
+    assert "late_unreset_entry_timing" in evidence["contradicting_facts"]
+    assert "OVEREXTENSION_CHASE" in evidence["corroborated_risk_codes"]
+    assert "late_unreset_entry_timing" not in evidence["invalidation_facts"]
+    assert validate_entry_setup_evidence(evidence) == []
+
+
+def test_offline_group_observation_does_not_change_live_setup_evidence():
+    analysis = _exact_analysis()
+    analysis["executable_liquidity"].update(
+        {
+            "spread_bp": 20.0,
+            "fillability_score": 70.0,
+            "top3_ask_to_bid_ratio": 1.2,
+        }
+    )
+    analysis["completed_structure"] = {
+        "phase": "continuation",
+        "realized_volatility_pct": 0.8,
+        "returns_pct": {"5m": 0.4},
+    }
+    exact_payload = {
+        "current": {"price": 10000},
+        "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+    }
+    evidence = build_entry_setup_evidence(
+        exact_payload=exact_payload,
+        exact_analysis=analysis,
+        recovery_analysis=_recovery_analysis(clean=True),
+        balanced_policy=True,
+    )
+    group = build_entry_predecision_group_observation(
+        exact_payload=exact_payload,
+        exact_analysis=analysis,
+        balanced_policy=True,
+    )
+
+    assert ENTRY_GROUP_OBSERVATION_SCHEMA not in evidence
+    assert group["key_parts"] == {
+        "price_tick_band": "GE_10BP",
+        "liquidity_band": "SUPPORTIVE",
+        "volatility_band": "MEDIUM",
+        "structure_phase": "continuation",
+        "watch_age_band": "UNKNOWN",
+        "extension_band": "UNKNOWN",
+        "venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+    }
+    assert group["symbol_specific_threshold_active"] is False
+    assert group["future_outcome_fields_forbidden"] is True
+    assert validate_entry_setup_evidence(evidence) == []
+
+    tampered = {**deepcopy(evidence), ENTRY_GROUP_OBSERVATION_SCHEMA: group}
+    tampered[ENTRY_GROUP_OBSERVATION_SCHEMA]["key_parts"]["venue"] = "NXT"
+    assert "entry_setup_group_observation_contract_invalid" in (
+        validate_entry_setup_evidence(tampered)
+    )
+
+
+def test_timing_aware_evidence_does_not_block_a_completed_pullback_reset():
+    analysis = _exact_analysis(orderly_pullback_recovery=True)
+    analysis["completed_structure"] = {
+        "phase": "pullback",
+        "returns_pct": {"5m": 1.5},
+        "peak_drawdown_pct": -1.0,
+    }
+    context = build_entry_timing_context(
+        decision_epoch=1_000.0,
+        promotion_events=[
+            {
+                "promotion_epoch": 100.0,
+                "fields": {
+                    "scanner_promotion_id": "first",
+                    "first_seen_price": 100.0,
+                },
+            }
+        ],
+        current_price=102.0,
+    )
+
+    evidence = build_entry_setup_evidence(
+        exact_payload={"current": {"price": 102.0}},
+        exact_analysis=analysis,
+        recovery_analysis=_recovery_analysis(recovery=True),
+        entry_timing_context=context,
+        timing_aware_policy=True,
+    )
+
+    assert evidence["entry_timing_observation_v1"]["state"] == "late_but_reset_pullback"
+    assert "late_entry_reset_confirmed" in evidence["positive_facts"]
+    assert "OVEREXTENSION_CHASE" not in evidence["corroborated_risk_codes"]
+    assert validate_entry_setup_evidence(evidence) == []
+
+
 def _risk(verdict, codes, *, support=None, contradict=None, confidence=70):
     return {
         "schema": ENTRY_RISK_ADJUDICATION_SCHEMA,
@@ -54,6 +334,669 @@ def _risk(verdict, codes, *, support=None, contradict=None, confidence=70):
         "contradicting_fact_ids": contradict or [],
         "confidence": confidence,
     }
+
+
+def _balanced_ready(**facts):
+    return build_entry_setup_evidence(
+        exact_payload={"current": {"price": 10000}},
+        exact_analysis={**_exact_analysis(**facts), "volume_status": "unconfirmed"},
+        recovery_analysis=_recovery_analysis(clean=True),
+        balanced_policy=True,
+    )
+
+
+def _comparison(
+    action,
+    *,
+    opportunity=None,
+    risks=None,
+    recheck_reason="NONE",
+    confidence=70,
+    schema=ENTRY_ACTION_COMPARISON_SCHEMA,
+):
+    return {
+        "schema": schema,
+        "preferred_action": action,
+        "opportunity_fact_ids": opportunity or [],
+        "risk_assessments": risks or [],
+        "recheck_reason": recheck_reason,
+        "recheck_value_vs_opportunity_decay": {
+            "ENTER_NOW": "ENTER_NOW_DOMINANT",
+            "RECHECK": "RECHECK_DOMINANT",
+            "BLOCK": "NOT_APPLICABLE_BLOCKED",
+        }[action],
+        "confidence": confidence,
+    }
+
+
+def test_comparative_ready_can_enter_after_explicitly_compensating_bounded_risk():
+    evidence = _balanced_ready(ask_wall_wide_spread=True)
+    response = _comparison(
+        "ENTER_NOW",
+        opportunity=["structural_edge_floor", "trusted_supportive_trigger"],
+        risks=[
+            {
+                "risk_code": "LIQUIDITY_FRAGILE",
+                "fact_id": "ask_wall_wide_spread",
+                "disposition": "COMPENSATED",
+            }
+        ],
+    )
+
+    assert validate_entry_action_comparison(response, setup_evidence=evidence) == []
+    composed = compose_entry_action_comparison(
+        setup_evidence=evidence,
+        action_comparison=response,
+    )
+    assert composed["action"] == "BUY"
+    assert composed["entry_probe_intent"] is True
+    assert composed["composer_version"] == (
+        "entry_decision_composer_v2_14_3_comparative"
+    )
+    assert composed["entry_action_comparison"] == response
+    assert composed["runtime_effect"] is False
+
+
+def test_comparative_recheck_requires_exact_risk_and_existing_bounded_reason():
+    evidence = _balanced_ready(ask_wall_wide_spread=True)
+    response = _comparison(
+        "RECHECK",
+        opportunity=["structural_edge_floor", "trusted_supportive_trigger"],
+        risks=[
+            {
+                "risk_code": "LIQUIDITY_FRAGILE",
+                "fact_id": "ask_wall_wide_spread",
+                "disposition": "RECHECKABLE",
+            }
+        ],
+        recheck_reason="MICRO_PRICE_RESPONSE_RECHECK",
+    )
+
+    assert validate_entry_action_comparison(response, setup_evidence=evidence) == []
+    composed = compose_entry_action_comparison(
+        setup_evidence=evidence,
+        action_comparison=response,
+        bounded_recovery_policy=True,
+    )
+    assert composed["action"] == "WAIT"
+    assert composed["entry_recheck_reasons"] == ["MICRO_PRICE_RESPONSE_RECHECK"]
+    assert composed["composer_version"] == (
+        "entry_decision_composer_v2_15_3_comparative"
+    )
+
+
+def test_comparative_contract_rejects_unexplained_wait_and_risk_role_drift():
+    evidence = _balanced_ready(ask_wall_wide_spread=True)
+    response = _comparison(
+        "RECHECK",
+        opportunity=["structural_edge_floor", "trusted_supportive_trigger"],
+        risks=[
+            {
+                "risk_code": "LIQUIDITY_FRAGILE",
+                "fact_id": "ask_wall_wide_spread",
+                "disposition": "BLOCKING",
+            }
+        ],
+    )
+
+    errors = validate_entry_action_comparison(response, setup_evidence=evidence)
+    assert "entry_comparison_bounded_risk_escalated" in errors
+    assert "entry_comparison_recheck_reason_invalid" in errors
+    composed = compose_entry_action_comparison(
+        setup_evidence=evidence,
+        action_comparison=response,
+    )
+    assert composed["action"] == "WAIT"
+    assert composed["entry_probe_intent"] is False
+    assert composed["decision_quality_contract_status"] == "fail_closed"
+
+
+def test_comparative_schema_is_state_and_fact_constrained():
+    ready = _balanced_ready(ask_wall_wide_spread=True)
+    ready_schema = entry_action_comparison_openai_schema(ready)
+    assert ready_schema["properties"]["preferred_action"]["enum"] == [
+        "ENTER_NOW",
+        "RECHECK",
+    ]
+    risk_schema = ready_schema["properties"]["risk_assessments"]
+    assert risk_schema["minItems"] == risk_schema["maxItems"] == 1
+    assert risk_schema["items"]["properties"]["risk_code"]["enum"] == [
+        "LIQUIDITY_FRAGILE"
+    ]
+    assert (
+        "ask_wall_wide_spread" in risk_schema["items"]["properties"]["fact_id"]["enum"]
+    )
+
+    invalid = _balanced_ready(blocking_overextension=True)
+    invalid_schema = entry_action_comparison_openai_schema(invalid)
+    assert invalid_schema["properties"]["preferred_action"]["enum"] == ["BLOCK"]
+
+
+def test_counterweight_bound_comparison_rejects_negative_fact_as_compensation():
+    evidence = _balanced_ready(ask_wall_wide_spread=True)
+    response = _comparison(
+        "ENTER_NOW",
+        schema=ENTRY_ACTION_COUNTERWEIGHT_COMPARISON_SCHEMA,
+        opportunity=["structural_edge_floor", "trusted_supportive_trigger"],
+        risks=[
+            {
+                "risk_code": "LIQUIDITY_FRAGILE",
+                "fact_id": "ask_wall_wide_spread",
+                "disposition": "COMPENSATED",
+                "counterweight_fact_ids": ["ask_wall_wide_spread"],
+            }
+        ],
+    )
+
+    errors = validate_entry_action_comparison(response, setup_evidence=evidence)
+    assert "entry_comparison_compensation_unbound" in errors
+    assert (
+        compose_entry_action_comparison(
+            setup_evidence=evidence,
+            action_comparison=response,
+        )["action"]
+        == "WAIT"
+    )
+
+
+def test_counterweight_binding_allows_exact_micro_response_for_missing_volume():
+    evidence = build_entry_setup_evidence(
+        exact_payload={
+            "current": {"price": 10000},
+            "features": {
+                "net_aggressive_delta_10t": 25,
+                "price_change_10t_pct": 0.1,
+                "tick_aggressor_pressure_usable": True,
+                "tick_context_stale": False,
+                "quote_stale": False,
+                "large_sell_print_detected": False,
+                "tick_aggressor_trusted_count": 10,
+            },
+        },
+        exact_analysis={
+            **_exact_analysis(),
+            "trigger_state": "confirmed",
+            "volume_confirmation": {"state": "confirmation_absent"},
+        },
+        recovery_analysis=_recovery_analysis(clean=True),
+        balanced_policy=True,
+    )
+    bindings = entry_action_counterweight_bindings(evidence)
+    assert bindings["schema"] == ENTRY_ACTION_COUNTERWEIGHT_BINDINGS_SCHEMA
+    assert bindings["bindings"] == [
+        {
+            "risk_code": "CONFIRMATION_MISSING",
+            "risk_fact_ids": ["volume_confirmation_missing"],
+            "required_counterweight_fact_ids": [
+                "micro_trusted_buy_flow",
+                "micro_positive_price_response",
+                "trigger_confirmed",
+            ],
+        }
+    ]
+    response = _comparison(
+        "ENTER_NOW",
+        schema=ENTRY_ACTION_COUNTERWEIGHT_COMPARISON_SCHEMA,
+        opportunity=["structural_edge_floor", "trusted_supportive_trigger"],
+        risks=[
+            {
+                "risk_code": "CONFIRMATION_MISSING",
+                "fact_id": "volume_confirmation_missing",
+                "disposition": "COMPENSATED",
+                "counterweight_fact_ids": bindings["bindings"][0][
+                    "required_counterweight_fact_ids"
+                ],
+            }
+        ],
+    )
+
+    assert validate_entry_action_comparison(response, setup_evidence=evidence) == []
+    assert (
+        compose_entry_action_comparison(
+            setup_evidence=evidence,
+            action_comparison=response,
+        )["action"]
+        == "BUY"
+    )
+    schema = entry_action_comparison_openai_schema(
+        evidence,
+        counterweight_bound=True,
+    )
+    assert schema["properties"]["schema"]["enum"] == [
+        ENTRY_ACTION_COUNTERWEIGHT_COMPARISON_SCHEMA
+    ]
+
+
+def test_mechanistic_challenger_uses_same_evidence_and_rechecks_unreset_timing():
+    analysis = _exact_analysis()
+    analysis["completed_structure"] = {
+        "phase": "continuation",
+        "returns_pct": {"5m": 1.5},
+        "peak_drawdown_pct": -0.1,
+    }
+    context = build_entry_timing_context(
+        decision_epoch=1_000.0,
+        promotion_events=[
+            {
+                "promotion_epoch": 100.0,
+                "fields": {
+                    "scanner_promotion_id": "first",
+                    "first_seen_price": 100.0,
+                },
+            }
+        ],
+        current_price=102.0,
+    )
+    evidence = build_entry_setup_evidence(
+        exact_payload={"current": {"price": 102.0}},
+        exact_analysis=analysis,
+        recovery_analysis=_recovery_analysis(clean=True),
+        entry_timing_context=context,
+        balanced_policy=True,
+    )
+
+    response = mechanistic_entry_action_comparison(
+        evidence,
+        policy=MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
+    )
+
+    assert response["preferred_action"] == "RECHECK"
+    assert response["recheck_reason"] == "TIMING_RESET_RECHECK"
+    assert response["risk_assessments"] == [
+        {
+            "risk_code": "REWARD_RISK_WEAK",
+            "fact_id": "late_unreset_entry_timing",
+            "disposition": "RECHECKABLE",
+            "counterweight_fact_ids": [],
+        }
+    ]
+    assert validate_entry_action_comparison(response, setup_evidence=evidence) == []
+
+
+def test_mechanistic_challenger_threshold_is_tunable_but_policy_stays_offline():
+    evidence = build_entry_setup_evidence(
+        exact_payload={
+            "current": {"price": 10000},
+            "features": {
+                "net_aggressive_delta_10t": 25,
+                "price_change_10t_pct": 0.1,
+                "tick_aggressor_pressure_usable": True,
+                "tick_context_stale": False,
+                "quote_stale": False,
+                "large_sell_print_detected": False,
+                "tick_aggressor_trusted_count": 10,
+            },
+        },
+        exact_analysis={
+            **_exact_analysis(),
+            "trigger_state": "confirmed",
+            "volume_confirmation": {"state": "confirmation_absent"},
+        },
+        recovery_analysis=_recovery_analysis(clean=True),
+        balanced_policy=True,
+    )
+    assert (
+        validate_mechanistic_entry_threshold_policy(
+            MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1
+        )
+        == []
+    )
+    assert mechanistic_entry_action_comparison(evidence)["preferred_action"] == (
+        "ENTER_NOW"
+    )
+
+    stricter = deepcopy(MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1)
+    stricter["version"] = "mechanistic_entry_thresholds_test_stricter"
+    stricter["thresholds"]["minimum_micro_net_aggressive_delta_10t"] = 100.0
+    assert (
+        mechanistic_entry_action_comparison(
+            evidence,
+            policy=stricter,
+        )["preferred_action"]
+        == "RECHECK"
+    )
+
+    authority_leak = deepcopy(stricter)
+    authority_leak["runtime_effect"] = True
+    assert "mechanistic_entry_offline_authority_invalid" in (
+        validate_mechanistic_entry_threshold_policy(authority_leak)
+    )
+    with pytest.raises(ValueError, match="mechanistic_entry_offline_authority_invalid"):
+        mechanistic_entry_action_comparison(evidence, policy=authority_leak)
+    with pytest.raises(ValueError, match="mechanistic_entry_threshold_policy_invalid"):
+        mechanistic_entry_action_comparison(evidence, policy={})
+
+
+def test_mechanistic_challenger_does_not_compensate_exact_fragility_boundary():
+    analysis = _exact_analysis()
+    analysis["executable_liquidity"] = {
+        "state": "supportive",
+        "execution_cost_state": "wide_but_observable",
+        "spread_bp": 100.0,
+        "fillability_score": 15.0,
+        "top3_ask_to_bid_ratio": 5.0,
+    }
+    evidence = build_entry_setup_evidence(
+        exact_payload={"current": {"price": 10000}},
+        exact_analysis=analysis,
+        recovery_analysis=_recovery_analysis(clean=True),
+        balanced_policy=True,
+    )
+
+    response = mechanistic_entry_action_comparison(evidence)
+
+    assert "LIQUIDITY_FRAGILE" in evidence["corroborated_risk_codes"]
+    assert "liquidity_supportive" in evidence["positive_facts"]
+    assert response["preferred_action"] == "RECHECK"
+    assert response["risk_assessments"] == [
+        {
+            "risk_code": "LIQUIDITY_FRAGILE",
+            "fact_id": "tail_liquidity_fragility",
+            "disposition": "RECHECKABLE",
+            "counterweight_fact_ids": [],
+        }
+    ]
+
+
+def test_mechanistic_primary_rejects_unsubstantiated_ai_veto_without_exposure():
+    exact_analysis = _exact_analysis()
+    exact_analysis["executable_liquidity"].update(
+        spread_bp=20.0,
+        fillability_score=70.0,
+        top3_ask_to_bid_ratio=0.8,
+    )
+    evidence = build_entry_setup_evidence(
+        exact_payload={
+            "current": {"price": 10000},
+            "features": {
+                "net_aggressive_delta_10t": 25,
+                "price_change_10t_pct": 0.1,
+                "tick_aggressor_pressure_usable": True,
+                "tick_context_stale": False,
+                "quote_stale": False,
+                "large_sell_print_detected": False,
+                "tick_aggressor_trusted_count": 10,
+            },
+        },
+        exact_analysis={
+            **exact_analysis,
+            "trigger_state": "confirmed",
+            "volume_confirmation": {"state": "confirmation_absent"},
+        },
+        recovery_analysis=_recovery_analysis(clean=True),
+        balanced_policy=True,
+    )
+    ai_veto = _risk(
+        verdict="VETO",
+        codes=["CONFIRMATION_MISSING"],
+        support=["micro_trusted_buy_flow"],
+        contradict=["volume_confirmation_absent"],
+    )
+
+    result = compose_mechanistic_primary_decision(
+        setup_evidence=evidence,
+        ai_risk_adjudication=ai_veto,
+    )
+
+    assert result["action"] == "WAIT"
+    assert result["entry_mechanistic_action"] == "ENTER_NOW"
+    assert result["entry_ai_advisory_verdict"] == "VETO"
+    assert result["entry_ai_advisory_changed_action"] is True
+    assert result["entry_ai_screen_status"] == "response_invalid"
+    assert result["entry_probe_intent"] is False
+    assert result["entry_primary_decision_owner"] == "mechanistic_entry_adjudicator"
+    assert result["entry_ai_role"] == "auxiliary_risk_screen_pass_veto_no_promotion"
+
+
+def _machine_screen_case(verdict):
+    analysis = _exact_analysis(ask_wall_wide_spread=True)
+    analysis["trigger_state"] = "confirmed"
+    analysis["executable_liquidity"].update(
+        spread_bp=20.0,
+        fillability_score=70.0,
+        top3_ask_to_bid_ratio=0.8,
+        state="supportive",
+    )
+    evidence = build_entry_setup_evidence(
+        exact_payload={
+            "current": {"price": 10000},
+            "features": {
+                "net_aggressive_delta_10t": 25,
+                "price_change_10t_pct": 0.1,
+                "tick_aggressor_pressure_usable": True,
+                "tick_context_stale": False,
+                "quote_stale": False,
+                "large_sell_print_detected": False,
+                "tick_aggressor_trusted_count": 10,
+            },
+        },
+        exact_analysis=analysis,
+        recovery_analysis=_recovery_analysis(clean=True),
+        balanced_policy=True,
+    )
+    risk = _risk(
+        verdict,
+        ["NO_BLOCKING_RISK"] if verdict == "PASS" else ["LIQUIDITY_FRAGILE"],
+        support=["structural_edge_floor", "trusted_supportive_trigger"],
+        contradict=["ask_wall_wide_spread"],
+    )
+    if verdict == "ABSENT":
+        risk = None
+    return evidence, risk
+
+
+@pytest.mark.parametrize("verdict", ["PASS", "VETO", "CAUTION", "MALFORMED", "ABSENT"])
+def test_machine_point_has_binding_ai_screen(verdict):
+    evidence, risk = _machine_screen_case(verdict)
+    result = compose_mechanistic_primary_decision(
+        setup_evidence=evidence, ai_risk_adjudication=risk
+    )
+    assert result["entry_mechanistic_action"] == "ENTER_NOW"
+    assert result["action"] == ({"PASS": "BUY", "VETO": "DROP"}.get(verdict, "WAIT"))
+    assert result["entry_probe_intent"] is (verdict == "PASS")
+    assert result["entry_ai_screen_pass"] is (verdict == "PASS")
+    if verdict == "VETO":
+        assert result["entry_ai_advisory_contract_errors"] == []
+        # Other AI owners retain their original, stricter veto contract.
+        assert (
+            "entry_risk_veto_requires_blocking_risk"
+            in validate_entry_risk_adjudication(risk, setup_evidence=evidence)
+        )
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("risk_codes", 1),
+        ("supporting_fact_ids", None),
+        ("contradicting_fact_ids", ["invented_fact"]),
+    ],
+)
+def test_machine_screen_malformed_citations_never_authorize_probe(field, value):
+    evidence, risk = _machine_screen_case("VETO")
+    risk[field] = value
+    result = compose_mechanistic_primary_decision(
+        setup_evidence=evidence, ai_risk_adjudication=risk
+    )
+    assert result["action"] == "WAIT"
+    assert result["entry_probe_intent"] is False
+    assert result["entry_ai_screen_status"] == "response_invalid"
+
+
+def test_ai_pass_cannot_promote_machine_liquidity_recheck():
+    evidence, risk = _machine_screen_case("PASS")
+    policy = deepcopy(MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1)
+    policy["thresholds"]["maximum_spread_bp"] = 10.0
+    result = compose_mechanistic_primary_decision(
+        setup_evidence=evidence, ai_risk_adjudication=risk, policy=policy
+    )
+    assert result["entry_mechanistic_action"] == "RECHECK"
+    assert result["action"] == "WAIT"
+    assert result["entry_probe_intent"] is False
+
+
+def test_mechanistic_primary_blocks_even_when_ai_advises_pass():
+    evidence = build_entry_setup_evidence(
+        exact_payload={"current": {"price": 10000}},
+        exact_analysis=_exact_analysis(blocking_overextension=True),
+        recovery_analysis=_recovery_analysis(clean=True),
+        balanced_policy=True,
+    )
+    invalidation = evidence["invalidation_facts"][0]
+    ai_pass = _risk(
+        verdict="PASS",
+        codes=["NO_BLOCKING_RISK"],
+        support=list(evidence["positive_facts"][:1]),
+        contradict=[],
+    )
+
+    result = compose_mechanistic_primary_decision(
+        setup_evidence=evidence,
+        ai_risk_adjudication=ai_pass,
+    )
+
+    assert invalidation
+    assert result["action"] == "DROP"
+    assert result["entry_mechanistic_action"] == "BLOCK"
+    assert result["entry_ai_advisory_verdict"] == "PASS"
+    assert result["entry_ai_advisory_changed_action"] is False
+
+
+def test_balanced_ready_pass_can_consider_bounded_risk_without_erasing_it():
+    evidence = _balanced_ready(ask_wall_wide_spread=True)
+    assert validate_entry_setup_evidence(evidence) == []
+    risk = _risk(
+        "PASS",
+        ["NO_BLOCKING_RISK"],
+        support=["structural_edge_floor", "trusted_supportive_trigger"],
+        contradict=["ask_wall_wide_spread"],
+    )
+    assert validate_entry_risk_adjudication(risk, setup_evidence=evidence) == []
+    assert (
+        compose_entry_decision(setup_evidence=evidence, risk_adjudication=risk)[
+            "action"
+        ]
+        == "BUY"
+    )
+    assert "LIQUIDITY_FRAGILE" in evidence["corroborated_risk_codes"]
+    assert validate_entry_risk_adjudication(
+        {**risk, "contradicting_fact_ids": []}, setup_evidence=evidence
+    )
+    blocked = _balanced_ready(blocking_overextension=True)
+    assert "entry_risk_pass_ignores_blocking_risk" in validate_entry_risk_adjudication(
+        risk, setup_evidence=blocked
+    )
+
+
+def test_balanced_codes_require_their_own_facts_and_caution_has_existing_recheck():
+    evidence = _balanced_ready(ask_wall_wide_spread=True)
+    risk = _risk("CAUTION", ["LIQUIDITY_FRAGILE"], contradict=["ask_wall_wide_spread"])
+    assert validate_entry_risk_adjudication(risk, setup_evidence=evidence) == []
+    composed = compose_entry_decision(setup_evidence=evidence, risk_adjudication=risk)
+    assert composed["action"] == "WAIT"
+    assert composed["entry_recheck_reasons"] == ["MICRO_PRICE_RESPONSE_RECHECK"]
+    assert composed["entry_recheck_intent"] is True
+    assert "entry_risk_code_fact_binding_invalid" in validate_entry_risk_adjudication(
+        {**risk, "risk_codes": ["ADVERSE_TAPE"]}, setup_evidence=evidence
+    )
+    assert "entry_risk_veto_requires_blocking_risk" in validate_entry_risk_adjudication(
+        {**risk, "risk_verdict": "VETO"}, setup_evidence=evidence
+    )
+
+
+def test_balanced_unconfirmed_is_not_invalidated_or_missing_required_source():
+    # Regression for the bounded 9/11 replay's 007540 semantic rejection.
+    # Keep the invalid response rejected; do not rewrite it into CAUTION/BUY.
+    evidence = build_entry_setup_evidence(
+        exact_payload={"current": {"price": 10000}},
+        exact_analysis=_exact_analysis(
+            structural_edge_floor=False, trusted_supportive_trigger=False
+        ),
+        recovery_analysis=_recovery_analysis(),
+        balanced_policy=True,
+    )
+    assert evidence["setup_state"] == "UNCONFIRMED"
+    assert validate_entry_setup_evidence(evidence) == []
+    invalid = _risk(
+        "VETO", ["STRUCTURE_INVALIDATED"], contradict=["no_supported_setup"]
+    )
+    assert "entry_risk_code_fact_binding_invalid" in validate_entry_risk_adjudication(
+        invalid, setup_evidence=evidence
+    )
+    repaired, repairs = repair_invalid_entry_risk_adjudication(
+        invalid, setup_evidence=evidence
+    )
+    assert repaired == invalid and repairs == []
+    insufficient = {**invalid, "risk_verdict": "INSUFFICIENT"}
+    assert "entry_risk_unfounded_insufficient" in validate_entry_risk_adjudication(
+        insufficient, setup_evidence=evidence
+    )
+    caution = _risk(
+        "CAUTION", ["CONFIRMATION_MISSING"], contradict=["no_supported_setup"]
+    )
+    assert validate_entry_risk_adjudication(caution, setup_evidence=evidence) == []
+
+
+@pytest.mark.parametrize(
+    "value,quality_status,expected",
+    [
+        (100, "fresh", "buy"),
+        (-100, "fresh", "sell"),
+        (0, "fresh", None),
+        (100, "stale", None),
+    ],
+)
+def test_balanced_program_flow_is_symmetric_null_aware(value, quality_status, expected):
+    evidence = build_entry_setup_evidence(
+        exact_payload={
+            "current": {"price": 10000},
+            "ai_market_snapshot_v1": {
+                "sources": {
+                    "program": {
+                        "quality": quality_status,
+                        "source": "ws_0w",
+                        "observed_at": "2026-09-11T09:00:00+09:00",
+                        "value": {"net_qty": value, "delta_qty": value},
+                    }
+                }
+            },
+        },
+        exact_analysis=_exact_analysis(),
+        recovery_analysis=_recovery_analysis(clean=True),
+        balanced_policy=True,
+    )
+    assert ("program_flow_net_and_delta_buy" in evidence["positive_facts"]) == (
+        expected == "buy"
+    )
+    assert ("program_flow_net_and_delta_sell" in evidence["contradicting_facts"]) == (
+        expected == "sell"
+    )
+    assert validate_entry_setup_evidence(evidence) == []
+
+
+def test_balanced_timing_does_not_combine_different_return_horizons_or_invent_first_watch():
+    from src.engine.scalping.entry_setup_evidence import _entry_timing_observation
+
+    context = build_entry_timing_context(
+        decision_epoch=1000,
+        current_price=102,
+        promotion_events=[
+            {
+                "promotion_epoch": 100,
+                "fields": {"scanner_promotion_id": "p1", "first_seen_price": 100},
+            }
+        ],
+    )
+    timing = _entry_timing_observation(
+        context,
+        completed_structure={"returns_pct": {"1m": 1.1, "60m": 0.01}},
+        balanced_policy=True,
+    )
+    assert timing["state"] == "early_or_unextended"
+    assert timing["completed_uptrend_return_pct"] == 0.01
+    assert timing["first_watch_epoch"] is None
+    assert timing["first_observed_promotion_epoch"] == 100
+    assert timing["price_delta_since_first_watch_pct"] is None
 
 
 def _micro_features(**overrides):
@@ -1093,6 +2036,12 @@ def test_v2_14_detailed_replay_composes_risk_only_response(monkeypatch):
         request["candidate_input"][ENTRY_SETUP_EVIDENCE_SCHEMA]["setup_state"]
         == "READY"
     )
+    assert (
+        ENTRY_GROUP_OBSERVATION_SCHEMA
+        not in request["candidate_input"][ENTRY_SETUP_EVIDENCE_SCHEMA]
+    )
+    assert request[ENTRY_GROUP_OBSERVATION_SCHEMA]["runtime_effect"] is False
+    assert request[ENTRY_GROUP_OBSERVATION_SCHEMA]["allowed_runtime_apply"] is False
 
     response = _risk(
         "PASS",
@@ -1148,6 +2097,131 @@ def test_v2_14_detailed_replay_composes_risk_only_response(monkeypatch):
     )
     assert report["paired_comparisons"][0]["entry_composed_action"] == "BUY"
     assert report["runtime_effect"] is False
+
+
+def test_v2_14_3_detailed_replay_uses_comparative_schema_and_composer(monkeypatch):
+    exact_payload = {"current": {"price": 10000}}
+    base_request = {
+        "paired_replay_id": "pair-v2-14-3",
+        "decision_trace_id": "trace-v2-14-3",
+        "stage": "entry",
+        "stock_code": "000001",
+        "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "payload_sha256": quality._sha256(exact_payload),
+        "exact_payload": exact_payload,
+        "control": {
+            "provider": "openai",
+            "model": "gpt-5.4-nano",
+            "captured_action": "WAIT",
+        },
+        "candidate": {
+            "provider": "openai",
+            "model": "gpt-5.4-nano",
+            "response_schema_sha256": "old-schema",
+        },
+        "sample_floor": {"pass": True},
+        **quality.OFFLINE_CONTRACT,
+    }
+    monkeypatch.setattr(
+        quality,
+        "build_exact_payload_analysis_v1",
+        lambda *_args, **_kwargs: {
+            **_exact_analysis(ask_wall_wide_spread=True),
+            "analysis_sha256": "exact-analysis-hash",
+        },
+    )
+    monkeypatch.setattr(
+        quality,
+        "build_v2_13_recovery_confirmation_analysis_v1",
+        lambda *_args, **_kwargs: {
+            **_recovery_analysis(clean=True),
+            "analysis_sha256": "recovery-analysis-hash",
+        },
+    )
+
+    request = quality.prepare_detailed_paired_replay_requests(
+        [base_request],
+        candidate_prompt_version=(
+            quality.DECISION_QUALITY_V2_14_3_COMPARATIVE_ENTRY_ADJUDICATOR_PROMPT_VERSION
+        ),
+    )[0]
+    assert request["candidate"]["system_prompt"].isascii()
+    assert request["candidate"]["schema_name"] == ENTRY_ACTION_COMPARISON_SCHEMA
+    assert request["candidate"]["semantic_validator_version"] == (
+        quality.ENTRY_ACTION_COMPARISON_SEMANTIC_VALIDATOR_VERSION
+    )
+    assert request["candidate"]["semantic_repair_version"] is None
+    assert request["candidate"]["entry_decision_composer_version"] == (
+        "entry_decision_composer_v2_14_3_comparative"
+    )
+
+    response = _comparison(
+        "ENTER_NOW",
+        opportunity=["structural_edge_floor", "trusted_supportive_trigger"],
+        risks=[
+            {
+                "risk_code": "LIQUIDITY_FRAGILE",
+                "fact_id": "ask_wall_wide_spread",
+                "disposition": "COMPENSATED",
+            }
+        ],
+    )
+    results = quality.run_paired_replay(
+        [request],
+        control_runner=lambda _: {"action": "WAIT"},
+        candidate_runner=lambda _: response,
+    )
+    assert results[0]["status"] == "pass"
+    assert results[0]["candidate_response"]["action"] == "BUY"
+    assert results[0]["candidate_action_comparison_response"] == response
+    assert results[0]["candidate_risk_adjudication_response"] is None
+    assert (
+        quality.validate_replay_candidate_response(
+            request,
+            results[0]["candidate_response"],
+        )
+        == []
+    )
+
+    counterweight_request = quality.prepare_detailed_paired_replay_requests(
+        [base_request],
+        candidate_prompt_version=(
+            quality.DECISION_QUALITY_V2_14_4_COUNTERWEIGHT_BOUND_COMPARATIVE_PROMPT_VERSION
+        ),
+    )[0]
+    assert counterweight_request["candidate"]["schema_name"] == (
+        ENTRY_ACTION_COUNTERWEIGHT_COMPARISON_SCHEMA
+    )
+    assert counterweight_request["candidate"]["entry_decision_composer_version"] == (
+        "entry_decision_composer_v2_14_4_counterweight_bound"
+    )
+    assert counterweight_request["entry_action_counterweight_bindings"] == (
+        counterweight_request["candidate_input"][
+            ENTRY_ACTION_COUNTERWEIGHT_BINDINGS_SCHEMA
+        ]
+    )
+    counterweight_response = _comparison(
+        "RECHECK",
+        schema=ENTRY_ACTION_COUNTERWEIGHT_COMPARISON_SCHEMA,
+        opportunity=["structural_edge_floor", "trusted_supportive_trigger"],
+        risks=[
+            {
+                "risk_code": "LIQUIDITY_FRAGILE",
+                "fact_id": "ask_wall_wide_spread",
+                "disposition": "RECHECKABLE",
+                "counterweight_fact_ids": [],
+            }
+        ],
+        recheck_reason="MICRO_PRICE_RESPONSE_RECHECK",
+    )
+    counterweight_results = quality.run_paired_replay(
+        [counterweight_request],
+        control_runner=lambda _: {"action": "WAIT"},
+        candidate_runner=lambda _: counterweight_response,
+    )
+    assert counterweight_results[0]["status"] == "pass"
+    assert counterweight_results[0]["candidate_response"]["action"] == "WAIT"
 
 
 def test_v2_15_soft_distribution_keeps_only_bounded_recovery_probe():
@@ -1275,6 +2349,63 @@ def test_v2_15_preparation_uses_constrained_schema_and_offline_composer(monkeypa
     assert candidate["response_schema_instance_policy"] == "exact_fact_role_enum_v1"
     assert request["runtime_effect"] is False
     assert request["actual_order_submitted"] is False
+
+
+def test_v2_15_1_preserves_ready_performance_path_without_relaxing_v2_15():
+    evidence = build_entry_setup_evidence(
+        exact_payload={"current": {"price": 10000}},
+        exact_analysis=_exact_analysis(),
+        recovery_analysis=_recovery_analysis(clean=True),
+    )
+    passing_risk = _risk(
+        "PASS",
+        ["NO_BLOCKING_RISK"],
+        support=["structural_edge_floor"],
+    )
+
+    exploration_only = compose_entry_decision(
+        setup_evidence=evidence,
+        risk_adjudication=passing_risk,
+        bounded_recovery_policy=True,
+    )
+    performance_descendant = compose_entry_decision(
+        setup_evidence=evidence,
+        risk_adjudication=passing_risk,
+        bounded_recovery_policy=True,
+        timing_aware_policy=True,
+    )
+    adverse_tape_analysis = _exact_analysis()
+    adverse_tape_analysis["tape_sample"] = {
+        "state": "sufficient",
+        "raw_status": "adverse",
+    }
+    caution_evidence = build_entry_setup_evidence(
+        exact_payload={"current": {"price": 10000}},
+        exact_analysis=adverse_tape_analysis,
+        recovery_analysis=_recovery_analysis(clean=True),
+    )
+    bounded_caution = compose_entry_decision(
+        setup_evidence=caution_evidence,
+        risk_adjudication=_risk(
+            "CAUTION",
+            ["ADVERSE_TAPE"],
+            contradict=["tape_adverse"],
+        ),
+        bounded_recovery_policy=True,
+        timing_aware_policy=True,
+    )
+
+    assert exploration_only["action"] == "WAIT"
+    assert exploration_only["entry_probe_intent"] is False
+    assert performance_descendant["action"] == "BUY"
+    assert performance_descendant["entry_probe_intent"] is True
+    assert performance_descendant["composer_version"] == (
+        "entry_decision_composer_policy_v11_timing_aware"
+    )
+    assert bounded_caution["action"] == "WAIT"
+    assert bounded_caution["entry_probe_intent"] is True
+    assert bounded_caution["entry_ai_veto_corroborated"] is False
+    assert bounded_caution["downstream_guard_contract"]["guard_bypass_allowed"] is False
 
 
 def test_v2_15_hard_blocker_never_becomes_bounded_recovery_support():

@@ -1,9 +1,9 @@
 """Run a full-day cohort-isolated entry prompt replay as an offline batch.
 
-The optimizer may advance an offline cohort from V2.14 to a supported later
-candidate.  V2.14 and the bounded-recovery V2.15 candidate share the registered
-one-share KRX exploration bridge.  Sequential-recovery V2.16 remains offline
-until its later-snapshot runtime actuator is separately registered.
+The optimizer evaluates timing-aware V2.15.1 first because the reviewed
+2026-09-14 authority admits only V2.15+ candidates. Timing-aware V2.14.1 stays
+available as an offline comparison candidate. Sequential-recovery V2.16 remains
+offline until its later-snapshot runtime actuator is separately registered.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from src.engine.ai_prompt_contracts import (
-    DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+    DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION,
 )
 from src.engine.scalping import ai_decision_quality as quality
 from src.engine.scalping import entry_setup_live_policy as live_policy
@@ -35,7 +35,7 @@ DEFAULT_COHORTS = (
 DUAL_AFTERMARKET_SESSION = optimizer.ENTRY_DUAL_AFTERMARKET_SESSION
 DUAL_AFTERMARKET_VENUE = optimizer.ENTRY_DUAL_AFTERMARKET_VENUE
 DEFAULT_CANDIDATE_PROMPT_VERSION = (
-    DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
+    DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION
 )
 FULL_DAY_MATURITY_TIME_KST = dt_time(21, 0)
 

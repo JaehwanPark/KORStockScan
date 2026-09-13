@@ -23,6 +23,8 @@ from src.engine.ai_prompt_contracts import (
     DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
     DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
     DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
+    DECISION_QUALITY_V2_14_1_TIMING_AWARE_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+    DECISION_QUALITY_V2_15_1_TIMING_AWARE_BOUNDED_RECOVERY_PROMPT_VERSION,
     DECISION_QUALITY_V2_7_PROBE_PROMPT_VERSION,
     DECISION_QUALITY_V2_PROMPT_VERSION,
     SCALPING_HOLDING_FLOW_SYSTEM_PROMPT,
@@ -31,6 +33,8 @@ from src.engine.ai_prompt_contracts import (
     decision_quality_v2_13_recovery_confirmation_system_prompt,
     decision_quality_v2_14_setup_risk_adjudicator_system_prompt,
     decision_quality_v2_15_bounded_recovery_system_prompt,
+    decision_quality_v2_14_1_timing_aware_setup_risk_system_prompt,
+    decision_quality_v2_15_1_timing_aware_bounded_recovery_system_prompt,
     decision_quality_v2_7_probe_system_prompt,
     decision_quality_v2_system_prompt,
 )
@@ -3645,6 +3649,275 @@ def test_decision_quality_v2_6_runtime_override_uses_exact_entry_prompt() -> Non
     assert profile == "watching"
 
 
+@pytest.mark.parametrize(
+    "version,builder",
+    [
+        (
+            DECISION_QUALITY_V2_14_1_TIMING_AWARE_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+            decision_quality_v2_14_1_timing_aware_setup_risk_system_prompt,
+        ),
+        (
+            DECISION_QUALITY_V2_15_1_TIMING_AWARE_BOUNDED_RECOVERY_PROMPT_VERSION,
+            decision_quality_v2_15_1_timing_aware_bounded_recovery_system_prompt,
+        ),
+    ],
+)
+def test_timing_aware_runtime_override_resolves_registered_prompt(
+    version, builder
+) -> None:
+    engine = _build_engine()
+
+    prompt, prompt_type, prompt_version, profile = engine._resolve_scalping_prompt(
+        "watching", prompt_version_override=version
+    )
+
+    assert prompt == builder("entry")
+    assert "Age or repeated promotion alone is never adverse evidence" in prompt
+    assert prompt_type == "scalping_entry"
+    assert prompt_version == version
+    assert profile == "watching"
+
+
+@pytest.mark.parametrize("bounded", [False, True])
+def test_balanced_runtime_prompt_and_raw_pass_preserve_guarded_wait(bounded):
+    from src.engine.ai_prompt_contracts import (
+        DECISION_QUALITY_V2_14_2_BALANCED_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION as v14,
+        DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION as v15,
+        decision_quality_balanced_entry_system_prompt,
+    )
+    from src.tests.test_entry_setup_evidence import _balanced_ready, _risk
+
+    engine = _build_engine()
+    version = v15 if bounded else v14
+    prompt, _, selected, _ = engine._resolve_scalping_prompt(
+        "watching", prompt_version_override=version
+    )
+    assert prompt == decision_quality_balanced_entry_system_prompt(
+        "entry", bounded_recovery=bounded
+    )
+    assert prompt.isascii() and selected == version
+    result = engine._normalize_entry_setup_v2_14_result(
+        _risk(
+            "PASS",
+            ["NO_BLOCKING_RISK"],
+            support=["structural_edge_floor", "trusted_supportive_trigger"],
+            contradict=["ask_wall_wide_spread"],
+        ),
+        exact_payload={},
+        setup_evidence=_balanced_ready(ask_wall_wide_spread=True),
+        live_policy={
+            "enabled": True,
+            "status": "active_bounded_krx_canary",
+            "selected_prompt_version": version,
+        },
+        prompt_version=version,
+    )
+    assert result["action"] == "WAIT", result
+    assert result["entry_ai_risk_verdict"] == "PASS", result
+    assert result["entry_probe_intent"] is True, result
+
+
+def test_mechanistic_primary_runtime_adapter_rejects_invalid_screen():
+    from src.engine.ai_prompt_contracts import (
+        DECISION_QUALITY_V2_14_2_BALANCED_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION as version,
+    )
+    from src.engine.scalping.entry_setup_evidence import (
+        MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
+        build_entry_setup_evidence,
+    )
+    from src.tests.test_entry_setup_evidence import (
+        _exact_analysis,
+        _recovery_analysis,
+        _risk,
+    )
+
+    engine = _build_engine()
+    exact_analysis = _exact_analysis()
+    exact_analysis["executable_liquidity"].update(
+        spread_bp=20.0,
+        fillability_score=70.0,
+        top3_ask_to_bid_ratio=0.8,
+    )
+    evidence = build_entry_setup_evidence(
+        exact_payload={"current": {"price": 10000}},
+        exact_analysis={**exact_analysis, "volume_status": "unconfirmed"},
+        recovery_analysis=_recovery_analysis(clean=True),
+        balanced_policy=True,
+    )
+    result = engine._normalize_entry_setup_v2_14_result(
+        _risk(
+            "VETO",
+            ["CONFIRMATION_MISSING"],
+            support=[],
+            contradict=["volume_confirmation_absent"],
+        ),
+        exact_payload={},
+        setup_evidence=evidence,
+        live_policy={
+            "enabled": True,
+            "status": "active_bounded_krx_canary",
+            "selected_prompt_version": version,
+            "primary_decision_owner": "mechanistic_entry_adjudicator",
+            "ai_role": "auxiliary_risk_screen_pass_veto_no_promotion",
+            "mechanistic_threshold_policy": MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
+        },
+        prompt_version=version,
+    )
+
+    assert result["action"] == "WAIT"
+    assert result["entry_probe_intent"] is False
+    assert result["entry_mechanistic_action"] == "ENTER_NOW"
+    assert result["entry_ai_advisory_verdict"] == "VETO"
+    assert result["entry_ai_advisory_changed_action"] is True
+    assert result["decision_quality_contract_status"] == "semantic_rejected"
+    assert result["entry_primary_decision_owner"] == "mechanistic_entry_adjudicator"
+
+
+@pytest.mark.parametrize("verdict", ["PASS", "VETO", "CAUTION", "ABSENT"])
+def test_machine_screen_live_adapter_preserves_binding_verdict(verdict):
+    from src.engine.scalping import mechanistic_entry_runtime_policy as initial
+    from src.engine.scalping.entry_setup_evidence import (
+        MECHANISTIC_AI_ADVISORY_ROLE,
+        MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
+    )
+    from src.tests.test_entry_setup_evidence import _machine_screen_case
+
+    setup, risk = _machine_screen_case(verdict)
+    result = _build_engine()._normalize_entry_setup_v2_14_result(
+        risk or {},
+        exact_payload={},
+        setup_evidence=setup,
+        live_policy={
+            "enabled": True,
+            "status": "active_bounded_krx_canary",
+            "selected_prompt_version": initial.AI_VERSION,
+            "primary_decision_owner": "mechanistic_entry_adjudicator",
+            "ai_role": MECHANISTIC_AI_ADVISORY_ROLE,
+            "mechanistic_threshold_policy": MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
+        },
+        prompt_version=initial.AI_VERSION,
+    )
+    assert result["entry_mechanistic_action"] == "ENTER_NOW"
+    assert result["entry_probe_intent"] is (verdict == "PASS")
+    assert result["action"] == ("DROP" if verdict == "VETO" else "WAIT")
+    assert result["entry_ai_veto_corroborated"] is (verdict == "VETO")
+    assert result["decision_quality_contract_status"] == (
+        "semantic_rejected" if verdict == "ABSENT" else "pass"
+    )
+
+
+@pytest.mark.parametrize("ready", [False, True])
+def test_machine_initial_policy_assesses_before_provider_cache_and_lock(
+    monkeypatch, ready
+):
+    from src.engine.scalping import mechanistic_entry_runtime_policy as initial_policy
+    from src.engine.scalping.entry_setup_evidence import (
+        MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
+    )
+    from src.tests.test_entry_setup_evidence import _exact_analysis, _recovery_analysis
+
+    engine = _build_engine()
+    events = []
+    live = {
+        "enabled": True,
+        "status": "active_bounded_krx_canary",
+        "selected_prompt_version": initial_policy.AI_VERSION,
+        "primary_decision_owner": "mechanistic_entry_adjudicator",
+        "ai_role": "auxiliary_risk_screen_pass_veto_no_promotion",
+        "mechanistic_threshold_policy": MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
+        "machine_bundle_sha256": "b" * 64,
+        "auxiliary_system_prompt": initial_policy.auxiliary_prompt({}),
+        "auxiliary_system_prompt_sha256": initial_policy.digest(
+            initial_policy.auxiliary_prompt({})
+        ),
+    }
+    monkeypatch.setattr(
+        openai_module, "resolve_live_prompt_policy", lambda **kwargs: live
+    )
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(
+            openai_module.TRADING_RULES,
+            OPENAI_ANALYZE_TARGET_PROMPT_VERSION=DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
+        ),
+    )
+    analysis = _exact_analysis()
+    analysis["executable_liquidity"].update(
+        spread_bp=20.0, fillability_score=70.0, top3_ask_to_bid_ratio=0.8
+    )
+    monkeypatch.setattr(
+        openai_module,
+        "build_exact_payload_analysis_v1",
+        lambda *args, **kwargs: analysis,
+    )
+    monkeypatch.setattr(
+        openai_module,
+        "build_v2_13_recovery_confirmation_analysis_v1",
+        lambda *args, **kwargs: _recovery_analysis(clean=ready),
+    )
+    original = openai_module.mechanistic_entry_policy_decision
+
+    def assess(setup, **kwargs):
+        events.append("machine")
+        result = original(setup, **kwargs)
+        if not ready:
+            result["action"] = "RECHECK"
+        return result
+
+    monkeypatch.setattr(openai_module, "mechanistic_entry_policy_decision", assess)
+    monkeypatch.setattr(
+        engine,
+        "_cache_get",
+        lambda *args: pytest.fail("machine snapshots cannot reuse AI cache"),
+    )
+
+    def provider(prompt, data, **kwargs):
+        events.append("ai")
+        assert events[0] == "machine"
+        assert json.loads(data)["mechanistic_entry_assessment"]["action"] == "ENTER_NOW"
+        assert kwargs["replay_context"]["machine_bundle_sha256"] == "b" * 64
+        assert prompt == live["auxiliary_system_prompt"]
+        return {}
+
+    monkeypatch.setattr(engine, "_call_openai_safe", provider)
+    if not ready:
+
+        class NoProviderLock:
+            def acquire(self, **kwargs):
+                pytest.fail("non-entry must not wait for provider lock")
+
+        engine.lock = NoProviderLock()
+    result = engine.analyze_target(
+        "test",
+        _sample_ws_data(),
+        _sample_ticks(),
+        _sample_candles(),
+        strategy="SCALPING",
+        prompt_profile="watching",
+        candle_context=_allowed_entry_candle_context(),
+    )
+    assert events == (["machine", "ai"] if ready else ["machine"]), result
+    if not ready:
+        assert result["provider_called"] is False
+        assert result["action"] in {"WAIT", "DROP"}
+
+
+def test_hot_entry_payload_preserves_timing_context() -> None:
+    engine = _build_engine()
+    timing = {
+        "schema": "entry_timing_context_v1",
+        "source_status": "exact_scanner_promotion_asof",
+        "watch_age_sec": 720.0,
+    }
+
+    payload = engine._build_entry_screen_hot_payload(
+        {"curr": 10000, "entry_timing_context": timing}, [], []
+    )
+
+    assert payload["entry_timing_context"] == timing
+
+
 def test_decision_quality_v2_7_probe_prompt_emits_bounded_wait_intent(monkeypatch):
     engine = _build_engine()
     monkeypatch.setattr(
@@ -4526,8 +4799,11 @@ def test_analyze_target_probe_prompt_keeps_exact_schema_and_version(monkeypatch)
 
 @pytest.mark.parametrize(
     "fallback_status",
-    ["fallback_position_owner_out_of_scope", "fallback_operator_disabled",
-     "fallback_activation_hash_invalid"],
+    [
+        "fallback_position_owner_out_of_scope",
+        "fallback_operator_disabled",
+        "fallback_activation_hash_invalid",
+    ],
 )
 def test_analyze_target_v2_13_supplies_shared_recovery_analysis(
     monkeypatch, fallback_status
@@ -4535,7 +4811,8 @@ def test_analyze_target_v2_13_supplies_shared_recovery_analysis(
     engine = _build_engine()
     captured = {}
     monkeypatch.setattr(
-        openai_module, "resolve_live_prompt_policy",
+        openai_module,
+        "resolve_live_prompt_policy",
         lambda **_kwargs: {
             "enabled": False,
             "status": fallback_status,
@@ -4618,8 +4895,13 @@ def test_analyze_target_v2_13_supplies_shared_recovery_analysis(
         "decision_quality_v2_13_recovery_confirmation_entry_v1"
     )
 
-    assert captured["metadata_extra"]["entry_setup_live_policy_status"] == fallback_status
-    assert captured["metadata_extra"]["entry_setup_live_policy_target_date"] == "2026-09-11"
+    assert (
+        captured["metadata_extra"]["entry_setup_live_policy_status"] == fallback_status
+    )
+    assert (
+        captured["metadata_extra"]["entry_setup_live_policy_target_date"]
+        == "2026-09-11"
+    )
     assert captured["metadata_extra"]["entry_setup_live_policy_runtime_effect"] is False
     assert result["entry_setup_live_policy_runtime_effect"] is False
     assert result["entry_setup_live_policy_status"] == fallback_status
@@ -4630,12 +4912,17 @@ def test_analyze_target_v2_13_supplies_shared_recovery_analysis(
     cached["entry_setup_live_policy_runtime_effect"] = True
     monkeypatch.setattr(engine, "_cache_get", lambda *_args: cached)
     monkeypatch.setattr(
-        engine, "_call_openai_safe",
+        engine,
+        "_call_openai_safe",
         lambda *_args, **_kwargs: pytest.fail("cached decision must not call provider"),
     )
     cached_result = engine.analyze_target(
-        "테스트", _sample_ws_data(), _sample_ticks(), _sample_candles(),
-        strategy="SCALPING", prompt_profile="watching",
+        "테스트",
+        _sample_ws_data(),
+        _sample_ticks(),
+        _sample_candles(),
+        strategy="SCALPING",
+        prompt_profile="watching",
         candle_context=_allowed_entry_candle_context(),
     )
     assert cached_result["cache_hit"] is True
@@ -7487,7 +7774,10 @@ def test_openai_invalid_prompt_retries_with_minimal_numeric_prompt(monkeypatch):
     assert "원본 프롬프트" not in calls[1]["instructions"]
 
 
-def test_openai_v2_15_invalid_prompt_retry_preserves_selected_contract(monkeypatch):
+@pytest.mark.parametrize("machine_screen", [False, True])
+def test_openai_v2_15_invalid_prompt_retry_preserves_selected_contract(
+    monkeypatch, machine_screen
+):
     engine = _build_engine()
     calls = []
 
@@ -7509,6 +7799,8 @@ def test_openai_v2_15_invalid_prompt_retry_preserves_selected_contract(monkeypat
     metadata["entry_setup_live_policy_selected_prompt_version"] = (
         DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION
     )
+    if machine_screen:
+        metadata["entry_ai_role"] = "auxiliary_risk_screen_pass_veto_no_promotion"
 
     engine._call_openai_safe(
         "original V2.15 prompt",
@@ -7527,6 +7819,9 @@ def test_openai_v2_15_invalid_prompt_retry_preserves_selected_contract(monkeypat
         == DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION
     )
     assert "V2.15 bounded-recovery addendum" in calls[1]["instructions"]
+    if machine_screen:
+        assert calls[1]["metadata"]["entry_ai_role"] == metadata["entry_ai_role"]
+        assert "binding PASS/VETO authority" in calls[1]["instructions"]
 
 
 def test_openai_ws_request_id_mismatch_fails_closed_without_http_fallback(monkeypatch):

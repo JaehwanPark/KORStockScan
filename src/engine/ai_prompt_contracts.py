@@ -635,6 +635,50 @@ DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION = (
 DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION = (
     "decision_quality_v2_15_bounded_recovery"
 )
+DECISION_QUALITY_V2_14_1_TIMING_AWARE_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION = (
+    "decision_quality_v2_14_1_timing_aware_setup_risk_adjudicator"
+)
+DECISION_QUALITY_V2_15_1_TIMING_AWARE_BOUNDED_RECOVERY_PROMPT_VERSION = (
+    "decision_quality_v2_15_1_timing_aware_bounded_recovery"
+)
+DECISION_QUALITY_V2_14_2_BALANCED_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION = (
+    "decision_quality_v2_14_2_balanced_setup_risk_adjudicator"
+)
+DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION = (
+    "decision_quality_v2_15_2_balanced_bounded_recovery"
+)
+DECISION_QUALITY_V2_14_3_COMPARATIVE_ENTRY_ADJUDICATOR_PROMPT_VERSION = (
+    "decision_quality_v2_14_3_comparative_entry_adjudicator"
+)
+DECISION_QUALITY_V2_15_3_COMPARATIVE_BOUNDED_RECOVERY_PROMPT_VERSION = (
+    "decision_quality_v2_15_3_comparative_bounded_recovery"
+)
+DECISION_QUALITY_V2_14_4_COUNTERWEIGHT_BOUND_COMPARATIVE_PROMPT_VERSION = (
+    "decision_quality_v2_14_4_counterweight_bound_comparative"
+)
+DECISION_QUALITY_V2_15_4_COUNTERWEIGHT_BOUND_BOUNDED_RECOVERY_PROMPT_VERSION = (
+    "decision_quality_v2_15_4_counterweight_bound_bounded_recovery"
+)
+BALANCED_ENTRY_PROMPT_VERSIONS = frozenset(
+    {
+        DECISION_QUALITY_V2_14_2_BALANCED_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+        DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION,
+    }
+)
+COMPARATIVE_ENTRY_PROMPT_VERSIONS = frozenset(
+    {
+        DECISION_QUALITY_V2_14_3_COMPARATIVE_ENTRY_ADJUDICATOR_PROMPT_VERSION,
+        DECISION_QUALITY_V2_15_3_COMPARATIVE_BOUNDED_RECOVERY_PROMPT_VERSION,
+        DECISION_QUALITY_V2_14_4_COUNTERWEIGHT_BOUND_COMPARATIVE_PROMPT_VERSION,
+        DECISION_QUALITY_V2_15_4_COUNTERWEIGHT_BOUND_BOUNDED_RECOVERY_PROMPT_VERSION,
+    }
+)
+COUNTERWEIGHT_BOUND_COMPARATIVE_ENTRY_PROMPT_VERSIONS = frozenset(
+    {
+        DECISION_QUALITY_V2_14_4_COUNTERWEIGHT_BOUND_COMPARATIVE_PROMPT_VERSION,
+        DECISION_QUALITY_V2_15_4_COUNTERWEIGHT_BOUND_BOUNDED_RECOVERY_PROMPT_VERSION,
+    }
+)
 DECISION_QUALITY_V2_16_SEQUENTIAL_RECOVERY_PROMPT_VERSION = (
     "decision_quality_v2_16_sequential_recovery"
 )
@@ -1979,6 +2023,154 @@ Return JSON only:
 """.strip()
 
 
+_DECISION_QUALITY_BALANCED_ENTRY_RULES = """
+Balanced entry adjudication contract:
+1. Evaluate the present executable entry opportunity, not a perfect future
+   chart. Seek repeated small cost-adjusted profits, not a BUY quota, high win
+   rate alone, or permanent abstention. Do not invent expected returns or costs.
+   This response has no order, quantity, threshold, provider or safety authority.
+2. entry_setup_evidence_v1 is the authoritative setup and fact ledger. Weigh
+   positive support and concrete adverse evidence symmetrically. Correlated
+   program, investor, tape and relative-strength facts are corroboration, not
+   independent votes. Missing/stale/zero context is neither support nor adversity.
+3. PASS is valid for READY with supported structure and a current trigger,
+   no blocking risk and no invalidation. Bounded residual risks do not prohibit
+   PASS: decide whether the cited support adequately addresses those risks now.
+   Use risk_codes=["NO_BLOCKING_RISK"], cite setup/trigger support, and cite at
+   least one exact adverse fact for each residual code in risk_fact_bindings.
+   PASS does not promise profit or bypass fresh quote, cost or submit guards.
+4. CAUTION means a specific unresolved confirmation or executable-risk issue
+   makes a fresh recheck useful. Cite its exact code and bound adverse fact,
+   and material positive support where present. Do not demand every indicator
+   agree, a new pullback in every continuation, or an arbitrarily larger profit
+   target. READY alone never forces PASS; a bounded risk alone never forces CAUTION.
+5. VETO requires a current ledger-backed SOURCE_QUALITY_GAP,
+   STRUCTURE_INVALIDATED, DISTRIBUTION_RISK, OVEREXTENSION_CHASE or
+   LIQUIDITY_UNUSABLE. Cite the code's bound fact and, for INVALID, an invalidation
+   fact. LIQUIDITY_FRAGILE, ADVERSE_TAPE, REWARD_RISK_WEAK and
+   CONFIRMATION_MISSING alone are not a VETO. Never invent a canonical risk code
+   simply because it sounds plausible; every non-PASS code must have a cited
+   adverse fact in risk_fact_bindings for that code.
+6. INSUFFICIENT applies to unusable required source evidence, with
+   SOURCE_QUALITY_GAP and its bound fact. Optional missing flow is not a global
+   source gap. INVALID requires VETO; UNCONFIRMED uses CAUTION with
+   CONFIRMATION_MISSING and no_supported_setup; WAIT_CONFIRMATION cannot PASS.
+   Existing large-sell exhaustion and hard safety remain blocking/recheck-only.
+7. Timing separates earliest observed scanner promotion, actual first watch,
+   completed-bar return windows and the present trigger. A window's return is
+   not proof of uninterrupted trend duration. Missing first watch stays unknown.
+   Promotion age/repetition plus extension is a bounded timing proxy, never
+   a hard veto. Assess a current supported reset/continuation without inventing
+   a first-watch price or using future prices. Actual blocking_overextension
+   and invalidation facts retain their blocking role.
+8. Return only schema, risk_verdict, risk_codes, supporting_fact_ids,
+   contradicting_fact_ids, confidence. schema=entry_setup_risk_adjudication_v1.
+   Copy IDs exactly from their positive/adverse ledger arrays (at most 8 each),
+   at most 6 risk codes, and integer confidence 0..100. Confidence is not an
+   entry threshold. Never use outcomes or stock-specific rules. Do not infer
+   that a runtime WAIT is a permanent rejection: existing bounded rechecks,
+   final authority and broker receipts are distinct later stages.
+""".strip()
+
+
+def decision_quality_balanced_entry_system_prompt(
+    stage: str, *, bounded_recovery: bool = False
+) -> str:
+    """Shared immutable V2.14.2/V2.15.2 contract; no competing appended rules."""
+    if str(stage or "").strip().lower() != "entry":
+        raise ValueError("balanced entry adjudication supports entry only")
+    return _DECISION_QUALITY_BALANCED_ENTRY_RULES + (
+        "\n\nV2.15.2 retains the existing bounded recovery recheck paths for "
+        "non-ready setups. They are not immediate exposure; READY/PASS retains "
+        "ordinary guarded entry semantics. Do not change recovery limits."
+        if bounded_recovery
+        else "\n\nV2.14.2 retains the existing setup-risk guarded entry/recheck paths."
+    )
+
+
+_DECISION_QUALITY_COMPARATIVE_ENTRY_RULES = """
+Entry action comparison contract:
+1. Choose the better action for the present executable opportunity:
+   ENTER_NOW, RECHECK, or BLOCK. Compare ENTER_NOW with RECHECK before choosing.
+   Optimize repeated small cost-adjusted profits; do not optimize a BUY quota,
+   gross win rate, perfect certainty, or permanent abstention. Do not invent
+   returns, costs, prices, thresholds, quantities, or future observations.
+2. entry_setup_evidence_v1 is authoritative. Copy fact IDs exactly. Positive
+   facts support the current opportunity. risk_fact_bindings binds each current
+   risk code to exact adverse facts. Correlated observations are context, not
+   independent votes. Missing optional context is neutral.
+3. For every risk_fact_bindings code, return exactly one risk_assessments row.
+   A bounded risk is COMPENSATED when the current setup and trigger already
+   outweigh it, or RECHECKABLE when one existing bounded observation can
+   materially improve the decision before the opportunity decays. Only source,
+   structural invalidation, distribution, blocking overextension, or unusable
+   liquidity may be BLOCKING. Hard safety remains blocking.
+4. ENTER_NOW requires setup_state=READY, supported structure and current trigger,
+   no blocking risk, and every bounded risk marked COMPENSATED. A bounded risk
+   is not automatically a reason to wait. Set recheck_reason=NONE and
+   recheck_value_vs_opportunity_decay=ENTER_NOW_DOMINANT.
+5. RECHECK requires at least one exact risk marked RECHECKABLE and one allowed
+   existing recheck_reason. Choose it only when the expected information gain
+   from that observation exceeds the opportunity-decay cost. Do not demand all
+   indicators agree, a fresh pullback in every continuation, or a larger profit
+   target. Set recheck_value_vs_opportunity_decay=RECHECK_DOMINANT.
+6. BLOCK is allowed only for deterministic INVALID/INSUFFICIENT state or a
+   ledger-backed blocking risk. It means no current entry, not a permanent stock
+   ban. Set recheck_value_vs_opportunity_decay=NOT_APPLICABLE_BLOCKED.
+7. Timing uses exact first-watch/promotion facts when present. Completed-bar
+   returns do not prove uninterrupted trend duration. Age alone and missing
+   first-watch data are not adverse. Never use future outcomes or stock-specific
+   rules.
+8. This is an offline comparison only. It has no order, runtime, provider,
+   threshold, quantity, price, or safety authority. Final authority, fresh quote,
+   cost, account, broker and one-share guards remain downstream.
+9. Return JSON only with schema, preferred_action, opportunity_fact_ids,
+   risk_assessments, recheck_reason, recheck_value_vs_opportunity_decay, and
+   confidence. confidence is integer 0..100 and is not an entry threshold.
+""".strip()
+
+
+def decision_quality_comparative_entry_system_prompt(
+    stage: str,
+    *,
+    bounded_recovery: bool = False,
+    counterweight_bound: bool = False,
+) -> str:
+    """Return an isolated comparative offline entry contract."""
+
+    if str(stage or "").strip().lower() != "entry":
+        raise ValueError("comparative entry adjudication supports entry only")
+    counterweight_rules = (
+        "\n\nCounterweight-bound comparison addendum:\n"
+        "1. entry_action_counterweight_bindings_v1 is authoritative and has one "
+        "row per risk code. Return exactly one assessment per row and choose "
+        "fact_id from that row's risk_fact_ids. Copy "
+        "required_counterweight_fact_ids exactly into counterweight_fact_ids "
+        "when disposition=COMPENSATED. The required list must be non-empty. A "
+        "risk fact cannot compensate itself, and general "
+        "setup or trigger support cannot substitute for the bound risk-specific "
+        "counterweight.\n"
+        "2. If required_counterweight_fact_ids is empty, that bounded risk is "
+        "RECHECKABLE, not COMPENSATED. BLOCKING remains reserved for its existing "
+        "ledger role. For RECHECKABLE or BLOCKING, return an empty "
+        "counterweight_fact_ids list.\n"
+        "3. Return counterweight_fact_ids in every risk_assessments row. This "
+        "addendum changes evidence accountability only; it does not add a BUY "
+        "quota, outcome access, or runtime authority."
+        if counterweight_bound
+        else ""
+    )
+    version_rules = (
+        "\n\nThe bounded-recovery variant preserves the existing bounded recovery paths for "
+        "non-ready setups. It does not create a new timer, retry, or submit path."
+        if bounded_recovery
+        else "\n\nThe ordinary variant preserves the existing guarded entry and recheck paths."
+    )
+    return (
+        _DECISION_QUALITY_COMPARATIVE_ENTRY_RULES + counterweight_rules + version_rules
+    )
+
+
 def decision_quality_v2_14_setup_risk_adjudicator_system_prompt(stage: str) -> str:
     """Return the offline, risk-only V2.14 entry candidate prompt."""
 
@@ -1986,6 +2178,41 @@ def decision_quality_v2_14_setup_risk_adjudicator_system_prompt(stage: str) -> s
     if normalized != "entry":
         raise ValueError("decision-quality V2.14 currently supports entry only")
     return _DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_RULES
+
+
+_DECISION_QUALITY_TIMING_AWARE_ADDENDUM = """
+Timing-aware entry addendum:
+1. Read entry_timing_observation_v1 only from entry_setup_evidence_v1. It
+   separates first scanner watch, current scanner promotion, and AI decision
+   time from completed-bar trend history. Never equate scanner-to-AI latency
+   with the age of the market move.
+2. Age or repeated promotion alone is never adverse evidence. Treat timing as
+   blocking overextension only when the deterministic ledger supplies the
+   exact late_unreset_entry_timing or repeated_repromotion_without_reset fact
+   and OVEREXTENSION_CHASE risk code. Missing or partial timing provenance is
+   non-adverse INSUFFICIENT timing context; use the remaining setup ledger.
+3. A completed pullback/recovery reset can make a late observation eligible.
+   Do not reject late_but_reset_pullback merely because watch_age_sec is high.
+   Conversely, current tape strength cannot erase an exact unreset extension.
+4. Copy timing fact IDs exactly like every other ledger fact. Do not infer a
+   first-watch price, promotion count, trend duration, or reset from symbol
+   identity, future events, outcomes, or the current quote alone.
+""".strip()
+
+
+def decision_quality_v2_14_1_timing_aware_setup_risk_system_prompt(
+    stage: str,
+) -> str:
+    """Return the V2.14 risk prompt with exact entry-timing provenance."""
+
+    normalized = str(stage or "").strip().lower()
+    if normalized != "entry":
+        raise ValueError("decision-quality V2.14.1 currently supports entry only")
+    return (
+        _DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_RULES
+        + "\n\n"
+        + _DECISION_QUALITY_TIMING_AWARE_ADDENDUM
+    )
 
 
 _DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_RULES = """
@@ -2028,6 +2255,23 @@ def decision_quality_v2_15_bounded_recovery_system_prompt(stage: str) -> str:
         raise ValueError("decision-quality V2.15 currently supports entry only")
     return (
         _DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_RULES
+        + "\n\n"
+        + _DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_RULES
+    )
+
+
+def decision_quality_v2_15_1_timing_aware_bounded_recovery_system_prompt(
+    stage: str,
+) -> str:
+    """Return bounded recovery with the exact entry-timing addendum."""
+
+    normalized = str(stage or "").strip().lower()
+    if normalized != "entry":
+        raise ValueError("decision-quality V2.15.1 currently supports entry only")
+    return (
+        _DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_RULES
+        + "\n\n"
+        + _DECISION_QUALITY_TIMING_AWARE_ADDENDUM
         + "\n\n"
         + _DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_RULES
     )

@@ -2110,7 +2110,10 @@ def test_mature_entry_outcome_exposes_ten_minute_tight_stop_path_label():
     )[0]
 
     assert row["horizon_metrics"]["10m"]["entry_path_first_hit"] == "target_first"
-    assert row["stage_outcome"] == {
+    stage_outcome = dict(row["stage_outcome"])
+    entry_quality_path = stage_outcome.pop("entry_quality_path")
+    actual_fill_entry_quality_path = stage_outcome.pop("actual_fill_entry_quality_path")
+    assert stage_outcome == {
         "entry_path_primary_horizon": "10m",
         "entry_path_label_version": "tight_stop_entry_path_v1",
         "entry_path_first_hit": "target_first",
@@ -2121,6 +2124,172 @@ def test_mature_entry_outcome_exposes_ten_minute_tight_stop_path_label():
         "entry_path_label_status": "mature",
         "counterfactual_only": True,
     }
+    assert entry_quality_path["entry_quality_label"] == "CENSORED_OR_SOURCE_GAP"
+    assert entry_quality_path["label_reason"] == (
+        "conservative_execution_cost_missing_or_invalid"
+    )
+    assert actual_fill_entry_quality_path["status"] == (
+        "not_applicable_no_actual_submit"
+    )
+
+
+def _entry_quality_window(*bars):
+    return [
+        {
+            "_timestamp": datetime.fromisoformat(timestamp),
+            "_high": high,
+            "_low": low,
+            "_close": close,
+        }
+        for timestamp, high, low, close in bars
+    ]
+
+
+@pytest.mark.parametrize(
+    ("bars", "expected_label"),
+    [
+        (
+            [("2026-07-27T09:01:00+09:00", 10035, 9995, 10030)],
+            "CLEAN_FAST_PROFIT",
+        ),
+        (
+            [
+                ("2026-07-27T09:01:00+09:00", 10010, 9915, 9950),
+                ("2026-07-27T09:02:00+09:00", 10035, 9950, 10030),
+            ],
+            "PROFIT_AFTER_DEEP_ADVERSE",
+        ),
+        (
+            [
+                ("2026-07-27T09:01:00+09:00", 10010, 9995, 10001),
+                ("2026-07-27T09:02:00+09:00", 10010, 9995, 10001),
+                ("2026-07-27T09:03:00+09:00", 10035, 9995, 10001),
+            ],
+            "PROFIT_AFTER_SIDEWAYS",
+        ),
+        (
+            [
+                ("2026-07-27T09:01:00+09:00", 10020, 9995, 10020),
+                ("2026-07-27T09:02:00+09:00", 10020, 9995, 10020),
+                ("2026-07-27T09:03:00+09:00", 10020, 9995, 10020),
+                ("2026-07-27T09:04:00+09:00", 10035, 9995, 10030),
+            ],
+            "PROFITABLE_BUT_LATE",
+        ),
+        (
+            [("2026-07-27T09:01:00+09:00", 10010, 9890, 9900)],
+            "CLEAN_FAST_LOSS_OR_ADVERSE",
+        ),
+    ],
+)
+def test_entry_quality_path_separates_fast_and_dirty_profit_cases(bars, expected_label):
+    result = quality._entry_quality_path_metrics(
+        window=_entry_quality_window(*bars),
+        decision_ts=datetime.fromisoformat("2026-07-27T09:00:00+09:00"),
+        reference_price=10000,
+        conservative_execution_cost_pct=0.20,
+        exact_stop_distance_pct=-1.0,
+    )
+
+    assert result["entry_quality_label"] == expected_label
+    assert result["actual_order_submitted"] is False
+    assert result["path_authority"] == (
+        "counterfactual_completed_bar_touch_not_actual_fill"
+    )
+
+
+def test_entry_quality_path_censors_incomplete_cadence_instead_of_inventing_dwell():
+    result = quality._entry_quality_path_metrics(
+        window=_entry_quality_window(("2026-07-27T09:02:00+09:00", 10035, 9995, 10030)),
+        decision_ts=datetime.fromisoformat("2026-07-27T09:00:00+09:00"),
+        reference_price=10000,
+        conservative_execution_cost_pct=0.20,
+        exact_stop_distance_pct=-1.0,
+    )
+
+    assert result["entry_quality_label"] == "CENSORED_OR_SOURCE_GAP"
+    assert result["label_reason"] == "dwell_cadence_incomplete"
+    assert result["underwater_duration_sec"] is None
+    assert result["neutral_dwell_sec"] is None
+
+
+def test_entry_quality_path_does_not_call_late_bar_stop_a_short_window_loss():
+    result = quality._entry_quality_path_metrics(
+        window=_entry_quality_window(
+            ("2026-07-27T09:01:00+09:00", 10010, 9995, 10000),
+            ("2026-07-27T09:04:00+09:00", 10010, 9890, 9900),
+        ),
+        decision_ts=datetime.fromisoformat("2026-07-27T09:00:00+09:00"),
+        reference_price=10000,
+        conservative_execution_cost_pct=0.20,
+        exact_stop_distance_pct=-1.0,
+    )
+
+    assert result["entry_quality_label"] == "CENSORED_OR_SOURCE_GAP"
+    assert result["label_reason"] == "exact_stop_first_outside_primary_window"
+    assert result["time_to_exact_stop_sec"] == 240
+
+
+def test_actual_fill_anchor_path_is_separate_and_does_not_claim_realized_cost():
+    pending = {
+        **_pending("BUY"),
+        "entry_conservative_execution_cost_pct": 0.20,
+        "adverse_pct": -1.0,
+    }
+    row = quality.mature_outcome_labels(
+        pending_labels=[pending],
+        price_rows=[
+            {
+                "timestamp": "2026-07-27T09:01:00+09:00",
+                "stock_code": "005930",
+                "price": 10030,
+                "high": 10035,
+                "low": 9995,
+                "close": 10030,
+                "effective_venue": "KRX",
+                "session_bucket": "KRX_REGULAR",
+                "source_quality": "pass",
+            },
+            {
+                "timestamp": "2026-07-27T09:10:00+09:00",
+                "stock_code": "005930",
+                "price": 10030,
+                "high": 10035,
+                "low": 10020,
+                "close": 10030,
+                "effective_venue": "KRX",
+                "session_bucket": "KRX_REGULAR",
+                "source_quality": "pass",
+            },
+        ],
+        lifecycle_rows=[
+            {
+                "timestamp": "2026-07-27T09:00:00+09:00",
+                "stage": "position_rebased_after_fill",
+                "stock_code": "005930",
+                "decision_trace_id": "trace-1",
+                "record_id": "record-1",
+                "actual_order_submitted": True,
+                "filled": True,
+                "fill_price": 10000,
+                "fill_qty": 1,
+            }
+        ],
+        as_of=datetime(2026, 7, 27, 9, 11, tzinfo=KST),
+    )[0]
+
+    actual = row["stage_outcome"]["actual_fill_entry_quality_path"]
+    assert actual["entry_quality_label"] == "CLEAN_FAST_PROFIT"
+    assert actual["path_authority"] == (
+        "actual_fill_anchor_completed_bar_touch_not_executable_bid"
+    )
+    assert actual["economic_acceptance_eligible"] is False
+    assert actual["realized_cost_contract_complete"] is False
+    assert actual["capital_time_to_net_target_krw_sec"] == 600000
+    assert actual["entry_fill_vwap"] == 10000
+    assert actual["entry_fill_total_qty"] == 1
+    assert actual["path_anchor_basis"] == "first_fill_time_and_first_fill_price"
+    assert actual["actual_and_counterfactual_denominators_merged"] is False
 
 
 def test_mature_non_entry_outcome_does_not_emit_entry_path_label():
@@ -4082,6 +4251,56 @@ def test_detailed_replay_preserves_exact_payload_and_adds_analysis_ledger():
         "detailed_analysis_stage_not_implemented"
     )
     assert "candidate_input" not in unsupported
+
+
+def test_entry_timing_pipeline_join_is_trace_exact_and_no_lookahead(tmp_path):
+    pipeline_path = tmp_path / "pipeline_events_2026-09-11.jsonl"
+    rows = [
+        {
+            "stage": "scalping_scanner_candidate_promoted",
+            "stock_code": "005930",
+            "emitted_at": "2026-09-11T09:00:00+09:00",
+            "fields": {
+                "scanner_promotion_id": "first",
+                "scanner_promotion_emitted_epoch": 1_789_084_800.0,
+                "first_seen_price": 100.0,
+                "effective_venue": "KRX",
+                "market_session_bucket": "krx_regular",
+            },
+        },
+        {
+            "stage": "scalping_scanner_candidate_promoted",
+            "stock_code": "005930",
+            "emitted_at": "2026-09-11T09:20:00+09:00",
+            "fields": {
+                "scanner_promotion_id": "future",
+                "scanner_promotion_emitted_epoch": 1_789_086_000.0,
+                "effective_venue": "KRX",
+                "market_session_bucket": "krx_regular",
+            },
+        },
+    ]
+    pipeline_path.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8"
+    )
+    requests = [
+        {
+            "decision_trace_id": "trace-1",
+            "decision_ts": "2026-09-11T09:10:00+09:00",
+            "stock_code": "005930",
+            "effective_venue": "KRX",
+            "session_bucket": "krx_regular",
+            "exact_payload": {"current": {"price": 102.0}},
+        }
+    ]
+
+    contexts = quality.build_entry_timing_contexts_for_requests(
+        requests, pipeline_paths=[pipeline_path]
+    )
+
+    assert contexts["trace-1"]["promotion_count_as_of_decision"] == 1
+    assert contexts["trace-1"]["watch_age_sec"] == 600.0
+    assert contexts["trace-1"]["price_delta_since_first_watch_pct"] == 2.0
 
 
 @pytest.mark.parametrize(
@@ -11314,6 +11533,69 @@ def test_full_cost_economics_uses_verified_small_returns_and_avoided_losses():
     assert metric["pass"] is False
 
 
+def test_balanced_economics_terminal_target_then_fall_and_early_close():
+    from src.engine.scalping.micro_reversion import ai_quality_bridge as bridge
+
+    receipt = bridge._entry_terminal_exit(
+        executable=[(1500, 12.0, 12.0, None), (2000, -90.0, -90.0, None)],
+        market_rows=[],
+        depth_rows=[],
+        rejected_times_us=[],
+        evidence={
+            "snapshot_captured_at_ms": 1000,
+            "economics": {"cost_profile_verified": True},
+        },
+        config=bridge.BridgeConfig(),
+    )
+    rows = [
+        {
+            "decision_trace_id": f"t-{i}",
+            "stock_code": f"{i:06}",
+            "candidate_exposure_selected": True,
+            "control_exposure_selected": False,
+            "entry_cost_aware_opportunity": {
+                "status": "verified_counterfactual_after_cost",
+                "decision_trace_id": f"t-{i}",
+                "cost_adjusted_end_return_pct": -2.0,
+                "entry_terminal_exit": receipt,
+                "economic_promotion_evidence_eligible": True,
+                "label_content_sha256": "a" * 64,
+                "action_neutral_path_sha256": "b" * 64,
+                "cost_profile_artifact_sha256": "c" * 64,
+                "symbol_master_artifact_sha256": "d" * 64,
+            },
+        }
+        for i in range(10)
+    ]
+    metric = quality._paired_net_economic_summary(rows, terminal_required=True)
+    assert metric["candidate_net_ev_pct"] == pytest.approx(0.12)
+    assert metric["risk_budget"]["pass"] is True
+    assert metric["pass"] is True
+    assert quality._paired_net_economic_summary(rows)["candidate_net_ev_pct"] == -2.0
+    early = quality._micro_reversion_action_neutral_metrics_from_outcome(
+        stage="entry", outcome={"horizons": [], "entry_terminal_exit": receipt}
+    )
+    assert early["10s"]["horizon_time_mature"] is False
+    assert early["10s"]["cost_adjusted_end_return_pct"] is None
+    assert early["10s"]["entry_terminal_exit"]["terminal_net_return_pct"] == 0.12
+    rows[0]["entry_cost_aware_opportunity"][
+        "economic_promotion_evidence_eligible"
+    ] = False
+    assert (
+        quality._paired_net_economic_summary(rows, terminal_required=True)[
+            "candidate_exposure_count"
+        ]
+        == 9
+    )
+    rows[1]["stock_code"] = rows[2]["stock_code"]
+    assert (
+        quality._paired_net_economic_summary(rows, terminal_required=True)[
+            "candidate_exposure_count"
+        ]
+        == 8
+    )
+
+
 def test_wait_arm_net_diagnostic_does_not_forge_exposure_promotion():
     rows = [
         {
@@ -13518,6 +13800,7 @@ def test_probe_arm_continuity_finds_ready_followup_deferred_by_ai_budget():
                 "candidate_response": {
                     "action": "WAIT",
                     "entry_setup_state": "READY",
+                    "entry_timing_state": "late_but_reset_pullback",
                     "entry_ai_risk_verdict": "CAUTION",
                     "entry_probe_intent": True,
                     "entry_probe_intent_status": "eligible_wait_probe",
@@ -13541,6 +13824,10 @@ def test_probe_arm_continuity_finds_ready_followup_deferred_by_ai_budget():
         "CAUTION": {"ready_followup_candidate_budget_deferred": 1}
     }
     comparison = report["paired_comparisons"][0]
+    assert comparison["entry_timing_state"] == "late_but_reset_pullback"
+    assert report["entry_setup_adjudicator_summary"]["timing_state_counts"] == {
+        "late_but_reset_pullback": 1
+    }
     assert comparison["entry_probe_arm_continuity_followup_trace_id"] == (
         "ready-followup-trace"
     )

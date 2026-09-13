@@ -432,9 +432,7 @@ def test_batch_runs_krx_and_nxt_as_separate_outcome_blind_cohorts(
         quality._atomic_write_json(
             quality.detailed_paired_path(
                 "2026-08-06",
-                candidate_prompt_version=(
-                    batch.DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
-                ),
+                candidate_prompt_version=(batch.DEFAULT_CANDIDATE_PROMPT_VERSION),
                 effective_venue=venue,
                 session_bucket=session,
             ),
@@ -666,9 +664,7 @@ def test_cohort_rejects_stale_candidate_execution_selection_policy(
         quality._atomic_write_json(
             quality.detailed_paired_path(
                 "2026-08-06",
-                candidate_prompt_version=(
-                    batch.DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
-                ),
+                candidate_prompt_version=(batch.DEFAULT_CANDIDATE_PROMPT_VERSION),
                 effective_venue=venue,
                 session_bucket=session,
             ),

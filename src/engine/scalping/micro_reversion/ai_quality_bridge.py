@@ -6257,6 +6257,170 @@ def validate_ask_depletion_feature_view(
         raise ValueError("ask_depletion_feature_horizon_order_invalid")
 
 
+ENTRY_TERMINAL_EXIT_SCHEMA = "entry_terminal_exit_net10bps_v1"
+
+
+def _entry_terminal_exit(
+    *,
+    executable,
+    market_rows,
+    depth_rows,
+    rejected_times_us,
+    evidence,
+    config,
+) -> dict[str, Any]:
+    """Fixed +10bp net / existing adverse / primary-time exit on bid sweeps.
+
+    Only the prefix through exit is required. These are already quantity/depth/
+    cost-verified sweeps, never candle touches or actual broker fills.
+    """
+    start = int(evidence.get("snapshot_captured_at_ms") or 0)
+    horizon = config.target_liquidation_sec
+    deadline = start + horizon * 1000
+    path = []
+    reason = None
+    for timestamp, _, net, _ in executable:
+        if net is None or timestamp <= start:
+            continue
+        if timestamp > deadline + config.max_outcome_endpoint_lag_ms:
+            break
+        path.append({"observed_at_ms": timestamp, "return_bps": round(net, 6)})
+        if timestamp >= deadline:
+            reason = "time_exit"
+        elif net >= 10.0:
+            reason = "net_target_exit"
+        elif net <= config.adverse_label_bps:
+            reason = "adverse_exit"
+        if reason:
+            break
+    blockers = []
+    end = path[-1]["observed_at_ms"] if path else start
+    if path and any(
+        ts == end and net is not None and round(net, 6) != path[-1]["return_bps"]
+        for ts, _, net, _ in executable
+    ):
+        blockers.append("terminal_prefix_gap_or_ambiguous_timestamp")
+    if not reason:
+        blockers.append("terminal_or_horizon_missing")
+    if any(start * 1000 < t <= end * 1000 for t in rejected_times_us):
+        blockers.append("invalid_source_in_terminal_prefix")
+    for rows, prefix, watermark in (
+        (market_rows, "outcome_market", "decision_watermark"),
+        (depth_rows, "outcome_depth", "depth_watermark"),
+    ):
+        bounded = [
+            r
+            for r in rows
+            if start < _timestamp_ms(r.get("local_receive_timestamp")) <= end
+        ]
+        blockers.extend(_series_sequence_findings(bounded, prefix=prefix))
+        anchor = _nonnegative_int(
+            (evidence.get(watermark) or {}).get("source_sequence")
+        )
+        if (
+            anchor is not None
+            and bounded
+            and bounded[0].get("source_sequence") != anchor + 1
+        ):
+            blockers.append(prefix + "_anchor_sequence_gap")
+    times = [start, *(r["observed_at_ms"] for r in path)]
+    if any(
+        b <= a or b - a > config.max_outcome_internal_gap_ms
+        for a, b in zip(times, times[1:])
+    ):
+        blockers.append("terminal_prefix_gap_or_ambiguous_timestamp")
+    if (evidence.get("economics") or {}).get("cost_profile_verified") is not True:
+        blockers.append("verified_cost_missing")
+    receipt = {
+        "schema": ENTRY_TERMINAL_EXIT_SCHEMA,
+        "status": "source_gap" if blockers else "verified_counterfactual_terminal",
+        "source_quality_blockers": sorted(set(blockers)),
+        "primary_horizon_sec": horizon,
+        "net_target_bps": 10.0,
+        "adverse_bps": config.adverse_label_bps,
+        "start_ms": start,
+        "terminal_reason": reason if not blockers else None,
+        "terminal_at_ms": end if not blockers else None,
+        "terminal_net_return_pct": (
+            path[-1]["return_bps"] / 100 if path and not blockers else None
+        ),
+        "prefix_mae_pct": (
+            min(r["return_bps"] for r in path) / 100 if path and not blockers else None
+        ),
+        "holding_ms": end - start if not blockers else None,
+        "executable_net_path": path,
+        "path_sha256": _sha256(path),
+        "counterfactual_only": True,
+        "additional_cost_subtracted": False,
+        "actual_fill_proven": False,
+    }
+    return {**receipt, "receipt_sha256": _sha256(receipt)}
+
+
+def validate_entry_terminal_exit(receipt: Any) -> bool:
+    """Check the frozen exit arithmetic; source pooling owns raw reconstruction."""
+    if not isinstance(receipt, Mapping):
+        return False
+    body = {k: v for k, v in receipt.items() if k != "receipt_sha256"}
+    path = receipt.get("executable_net_path")
+    if (
+        receipt.get("schema") != ENTRY_TERMINAL_EXIT_SCHEMA
+        or receipt.get("receipt_sha256") != _sha256(body)
+        or not isinstance(path, list)
+        or not path
+    ):
+        return False
+    try:
+        start = receipt["start_ms"]
+        horizon = receipt["primary_horizon_sec"]
+        adverse = receipt["adverse_bps"]
+        if (
+            type(start) is not int
+            or type(horizon) is not int
+            or horizon <= 0
+            or _finite_float(adverse) is None
+            or adverse >= 0
+        ):
+            return False
+        deadline = start + horizon * 1000
+        reason = None
+        previous = start
+        for index, row in enumerate(path):
+            ts, net = row["observed_at_ms"], row["return_bps"]
+            if type(ts) is not int or ts <= previous or _finite_float(net) is None:
+                return False
+            previous = ts
+            reason = (
+                "time_exit"
+                if ts >= deadline
+                else (
+                    "net_target_exit"
+                    if net >= 10
+                    else "adverse_exit" if net <= adverse else None
+                )
+            )
+            if reason and index != len(path) - 1:
+                return False
+        return bool(
+            reason
+            and receipt.get("status") == "verified_counterfactual_terminal"
+            and receipt.get("source_quality_blockers") == []
+            and receipt.get("net_target_bps") == 10.0
+            and receipt.get("terminal_reason") == reason
+            and receipt.get("terminal_at_ms") == path[-1]["observed_at_ms"]
+            and receipt.get("holding_ms") == path[-1]["observed_at_ms"] - start
+            and receipt.get("terminal_net_return_pct") == path[-1]["return_bps"] / 100
+            and receipt.get("prefix_mae_pct")
+            == min(r["return_bps"] for r in path) / 100
+            and receipt.get("path_sha256") == _sha256(path)
+            and receipt.get("counterfactual_only") is True
+            and receipt.get("actual_fill_proven") is False
+            and receipt.get("additional_cost_subtracted") is False
+        )
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
 def build_future_outcome(
     *,
     evidence: Mapping[str, Any],
@@ -6265,6 +6429,7 @@ def build_future_outcome(
     entry_pipeline_rows: Iterable[Mapping[str, Any]] = (),
     control_action: str | None = None,
     config: BridgeConfig | None = None,
+    entry_terminal_exit_policy: bool = True,
 ) -> dict[str, Any]:
     """Label quantity-sweep paths after the snapshot, never prompt input."""
 
@@ -7161,6 +7326,15 @@ def build_future_outcome(
         **OUTCOME_METRIC_CONTRACT,
         **AUTHORITY_CONTRACT,
     }
+    if entry_terminal_exit_policy and stage in entry_like_stages:
+        outcome_without_hash["entry_terminal_exit"] = _entry_terminal_exit(
+            executable=executable,
+            market_rows=rows,
+            depth_rows=depths,
+            rejected_times_us=[*rejected_market_times_us, *rejected_depth_times_us],
+            evidence=evidence,
+            config=selected_config,
+        )
     return {
         **outcome_without_hash,
         "outcome_sha256": _sha256(outcome_without_hash),
@@ -7176,6 +7350,7 @@ def build_future_outcome_rebuild_source(
     control_action: str | None,
     config: BridgeConfig,
     source_pool_rows: dict[str, dict[str, dict[str, Any]]],
+    entry_terminal_exit_policy: bool = True,
 ) -> dict[str, Any]:
     """Intern one outcome's raw rows and persist only ordered hash references."""
 
@@ -7215,6 +7390,7 @@ def build_future_outcome_rebuild_source(
     )
     body = {
         "schema": OUTCOME_REBUILD_SOURCE_SCHEMA,
+        "entry_terminal_exit_policy": entry_terminal_exit_policy,
         "decision_trace_id": evidence.get("decision_trace_id"),
         "evidence_sha256": evidence.get("evidence_sha256"),
         "bridge_config": _bridge_config_contract(config),
@@ -7402,6 +7578,9 @@ def rebuild_future_outcome_from_source(
 ) -> dict[str, Any]:
     """Validate compact refs against the bound pool and rebuild one outcome."""
 
+    if "entry_terminal_exit_policy" in rebuild_source and type(rebuild_source["entry_terminal_exit_policy"]) is not bool:
+        raise ValueError("future_outcome_rebuild_source_terminal_policy_invalid")
+
     content = {
         key: value
         for key, value in rebuild_source.items()
@@ -7474,6 +7653,8 @@ def rebuild_future_outcome_from_source(
         entry_pipeline_rows=row_groups["entry_pipeline"],
         control_action=rebuild_source.get("control_action"),
         config=config,
+        entry_terminal_exit_policy=rebuild_source.get("entry_terminal_exit_policy")
+        is True,
     )
 
 
@@ -7785,6 +7966,14 @@ def build_three_arm_manifest(
         and primary_outcome.get("mature") is True
         and primary_outcome.get("source_quality_blockers") in (None, [])
     )
+    if (
+        str(evidence.get("decision_stage") or "").lower() == "entry"
+        and validate_entry_terminal_exit((outcome or {}).get("entry_terminal_exit"))
+        and (outcome or {})["entry_terminal_exit"]["primary_horizon_sec"]
+        == primary_horizon_sec
+    ):
+        # The entry exit is closed even when later, unused horizon data is absent.
+        primary_outcome_mature_eligible = True
     try:
         decision_date = (
             _parse_timestamp(evidence.get("trace_decision_ts")).astimezone(KST).date()
@@ -8289,9 +8478,9 @@ def _validate_tactical_evidence_shape(evidence: Mapping[str, Any]) -> None:
         raise ValueError("micro_context_bridge_contract_invalid")
     trace_market_data_route = _route(evidence.get("trace_market_data_route"))
     market_data_route = _route(evidence.get("market_data_route"))
-    actual_execution_venue = str(
-        evidence.get("actual_execution_venue") or ""
-    ).strip().upper()
+    actual_execution_venue = (
+        str(evidence.get("actual_execution_venue") or "").strip().upper()
+    )
     integrated_sor_route_proven = evidence.get("integrated_sor_route_proven")
     micro_venue = normalize_venue(evidence.get("micro_venue"))
     source_quality = evidence.get("source_quality")

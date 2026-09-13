@@ -2020,6 +2020,9 @@ def record_ai_decision_trace(
             ),
             "entry_setup_family": _optional(merged, "entry_setup_family"),
             "entry_setup_state": _optional(merged, "entry_setup_state"),
+            "entry_conservative_execution_cost_pct": _safe_number(
+                merged.get("entry_conservative_execution_cost_pct")
+            ),
             "entry_structure_phase": _optional(merged, "entry_structure_phase"),
             "entry_structure_phase_policy_version": _optional(
                 merged, "entry_structure_phase_policy_version"
@@ -2316,6 +2319,19 @@ def record_ai_decision_trace(
                     "entry_probe_intent_status",
                     "entry_probe_intent_eligibility_path",
                     "entry_probe_intent_after_cost_reward_risk",
+                    "machine_bundle_sha256",
+                    "entry_primary_decision_owner",
+                    "entry_ai_role",
+                    "entry_mechanistic_action",
+                    "entry_mechanistic_policy_decision",
+                    "entry_ai_screen_status",
+                    "entry_ai_screen_required",
+                    "entry_ai_screen_pass",
+                    "entry_ai_advisory_verdict",
+                    "entry_ai_advisory_contract_errors",
+                    "entry_ai_raw_risk_codes",
+                    "entry_ai_raw_supporting_fact_ids",
+                    "entry_ai_raw_contradicting_fact_ids",
                 )
             }
             final_response.update(
@@ -2356,7 +2372,21 @@ def record_ai_decision_trace(
         sanitized_trace_row, trace_redacted = _sanitize(trace_row)
         trace_row = dict(sanitized_trace_row)
         trace_row["trace_storage_redacted"] = bool(trace_redacted)
+        screen_fields = {
+            key: merged.get(key)
+            for key in (
+                "machine_bundle_sha256",
+                "entry_ai_role",
+                "entry_mechanistic_action",
+                "entry_ai_screen_status",
+                "entry_ai_screen_required",
+                "entry_ai_screen_pass",
+            )
+            if key in merged
+        }
+        trace_row.update(screen_fields)
         pending_row = {
+            **screen_fields,
             "schema": OUTCOME_SCHEMA,
             "label_id": f"{trace_id}:v1",
             "decision_trace_id": trace_id,
@@ -2403,6 +2433,9 @@ def record_ai_decision_trace(
             ],
             "entry_setup_family": trace_row["entry_setup_family"],
             "entry_setup_state": trace_row["entry_setup_state"],
+            "entry_conservative_execution_cost_pct": trace_row[
+                "entry_conservative_execution_cost_pct"
+            ],
             "entry_structure_phase": trace_row["entry_structure_phase"],
             "entry_structure_phase_policy_version": trace_row[
                 "entry_structure_phase_policy_version"

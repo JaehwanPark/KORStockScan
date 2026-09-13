@@ -1,3 +1,4 @@
+import hashlib
 from datetime import datetime
 
 import pytest
@@ -6,13 +7,17 @@ from src.engine.ai_prompt_contracts import (
     DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
     DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
     DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
+    DECISION_QUALITY_V2_15_1_TIMING_AWARE_BOUNDED_RECOVERY_PROMPT_VERSION,
 )
 from src.engine.scalping import entry_setup_live_policy as policy
+from src.engine.scalping import ai_action_outcome_calibration as calibration
 from src.engine.scalping import entry_setup_scalping_rollout as rollout
 from src.engine.scalping.entry_setup_evidence import (
     ENTRY_DECISION_COMPOSER_VERSION,
     ENTRY_DECISION_COMPOSER_V2_15_VERSION,
+    ENTRY_DECISION_COMPOSER_V2_15_1_VERSION,
     ENTRY_SETUP_EVIDENCE_VERSION,
+    ENTRY_SETUP_TIMING_EVIDENCE_VERSION,
     STRUCTURE_PHASE_POLICY_VERSION,
 )
 
@@ -22,6 +27,7 @@ POSTCLOSE_GENERATED_AT = datetime(2026, 8, 6, 21, 5, tzinfo=policy.KST)
 
 
 def _configure_paths(monkeypatch, tmp_path):
+    monkeypatch.setattr(policy, "DATA_DIR", tmp_path)
     monkeypatch.setattr(policy, "LIVE_CANDIDATE_DIR", tmp_path / "candidates")
     monkeypatch.setattr(policy, "ACTIVATION_DIR", tmp_path / "activations")
     monkeypatch.setattr(policy, "DETAILED_REPORT_DIR", tmp_path / "detailed")
@@ -53,6 +59,81 @@ def _enable_probe_contract(monkeypatch):
         "KORSTOCKSCAN_OPENAI_ANALYZE_TARGET_PROMPT_VERSION",
         DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
     )
+
+
+def _pin_auto_promotion(monkeypatch, tmp_path):
+    payload = {
+        **rollout.AUTO_PROMOTION_CONTRACT,
+        "effective_from": "2026-08-07T07:35:00+09:00",
+        "operator_authority": "all_sessions_v2_15_plus_auto_promotion_2026_09_14",
+        "reviewed_commit": "a" * 40,
+    }
+    path = tmp_path / "auto-promotion.json"
+    policy._atomic_write_json(path, payload)
+    monkeypatch.setenv(rollout.AUTO_PROMOTION_PATH_ENV, str(path))
+    monkeypatch.setenv(
+        rollout.AUTO_PROMOTION_SHA_ENV,
+        hashlib.sha256(path.read_bytes()).hexdigest(),
+    )
+
+
+def test_initial_machine_policy_resolves_without_performance_candidate(
+    monkeypatch, tmp_path
+):
+    from src.engine.scalping import mechanistic_entry_runtime_policy as initial
+    from src.tests.test_mechanistic_entry_runtime_policy import source
+
+    _configure_paths(monkeypatch, tmp_path)
+    _enable_probe_contract(monkeypatch)
+    _pin_auto_promotion(monkeypatch, tmp_path)
+    monkeypatch.setenv(policy.CANARY_ENV_KEY, "true")
+    for name in ("MAX_DAILY_RECHECK", "MAX_DAILY_BUY_RECOVERY"):
+        monkeypatch.setenv("KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_" + name, "100")
+    bundle = initial.publish(
+        source(tmp_path, SOURCE_DATE),
+        data_root=tmp_path,
+        bootstrap=True,
+        now=datetime(2026, 8, 6, 22, tzinfo=policy.KST),
+    )
+    args = dict(
+        configured_prompt_version=DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
+        effective_venue="KRX",
+        session_bucket="KRX_REGULAR",
+        position_tag="SCANNER",
+        strategy="SCALPING",
+        now=datetime(2026, 8, 7, 10, tzinfo=policy.KST),
+    )
+    resolved = policy.resolve_live_prompt_policy(**args)
+    assert resolved["enabled"] is True, resolved
+    assert resolved["machine_bundle_sha256"] == bundle["bundle_sha256"]
+    assert resolved["primary_decision_owner"] == "mechanistic_entry_adjudicator"
+    assert resolved["ai_policy_disposition"] == "initial_auxiliary_prompt"
+    assert resolved["scope_authority"] == "operator_all_session_auto_promotion"
+    monkeypatch.setattr(
+        rollout,
+        "load_rollout",
+        lambda **kwargs: {"valid": False, "reason": "rollout_contract_invalid"},
+    )
+    assert (
+        policy.resolve_live_prompt_policy(**args)["machine_bundle_sha256"]
+        == bundle["bundle_sha256"]
+    )
+    assert rollout.decision_authorized(
+        "SCALPING",
+        {
+            "entry_setup_live_policy_runtime_effect": True,
+            "entry_setup_live_policy_target_date": TARGET_DATE,
+            "entry_setup_live_policy_effective_venue": "KRX",
+            "entry_setup_live_policy_session_bucket": "KRX_REGULAR",
+            "entry_setup_live_policy_scope_authority": resolved["scope_authority"],
+            "entry_setup_live_policy_activation_sha256": resolved[
+                "activation_artifact_sha256"
+            ],
+        },
+        now=args["now"],
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_THRESHOLD_RUNTIME_APPLY_DATE", "2026-08-06")
+    assert policy.resolve_live_prompt_policy(**args)["enabled"] is False
 
 
 def test_nxt_exact_candidate_preopen_and_runtime_are_isolated(monkeypatch, tmp_path):
@@ -304,6 +385,31 @@ def _valid_batch_report():
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
     }
+
+
+def _timing_aware_v2_15_1_reports():
+    prompt_version = (
+        DECISION_QUALITY_V2_15_1_TIMING_AWARE_BOUNDED_RECOVERY_PROMPT_VERSION
+    )
+    detailed = _valid_detailed_report()
+    detailed["requests"][0]["candidate"].update(
+        {
+            "prompt_version": f"{prompt_version}_entry",
+            "entry_setup_evidence_version": ENTRY_SETUP_TIMING_EVIDENCE_VERSION,
+            "entry_decision_composer_version": (
+                ENTRY_DECISION_COMPOSER_V2_15_1_VERSION
+            ),
+        }
+    )
+    detailed["entry_setup_evidence_version"] = ENTRY_SETUP_TIMING_EVIDENCE_VERSION
+    detailed["entry_decision_composer_version"] = (
+        ENTRY_DECISION_COMPOSER_V2_15_1_VERSION
+    )
+    detailed["cumulative_learning"]["candidate_prompt_version"] = prompt_version
+    batch = _valid_batch_report()
+    batch["candidate_prompt_version"] = prompt_version
+    batch["cohorts"][0]["candidate_prompt_version"] = prompt_version
+    return detailed, batch
 
 
 def _valid_runtime_env():
@@ -970,6 +1076,195 @@ def test_performance_promotion_requires_minimum_cost_adjusted_ev(monkeypatch, tm
     assert candidate["promotion_metrics"]["minimum_cost_adjusted_ev_pct"] == 0.1
 
 
+@pytest.mark.parametrize(
+    ("net_ev_pct", "expected_status"),
+    [(0.10, "live_auto_apply_ready"), (0.09, "bounded_exploration_apply_ready")],
+)
+def test_timing_aware_v2_15_1_uses_exact_net_ev_floor_then_keeps_learning(
+    monkeypatch, tmp_path, net_ev_pct, expected_status
+):
+    _configure_paths(monkeypatch, tmp_path)
+    _enable_probe_contract(monkeypatch)
+    detailed, batch = _timing_aware_v2_15_1_reports()
+    detailed["cumulative_learning"]["full_cost_economics"][
+        "candidate_net_ev_pct"
+    ] = net_ev_pct
+    path = tmp_path / "timing-v2-15-1-detailed.json"
+    policy._atomic_write_json(path, detailed)
+
+    candidate = policy.build_live_candidate(
+        source_date=SOURCE_DATE,
+        batch_report=batch,
+        detailed_report=detailed,
+        detailed_path=path,
+        candidate_prompt_version=(
+            DECISION_QUALITY_V2_15_1_TIMING_AWARE_BOUNDED_RECOVERY_PROMPT_VERSION
+        ),
+        generated_at=POSTCLOSE_GENERATED_AT,
+    )
+
+    assert candidate["status"] == expected_status
+    assert candidate["promotion_metrics"]["minimum_cost_adjusted_ev_pct"] == 0.1
+    assert candidate["allowed_runtime_apply"] is True
+    assert candidate["canary_mode"] == (
+        policy.PERFORMANCE_CANARY_MODE
+        if net_ev_pct >= 0.10
+        else policy.EXPLORATION_CANARY_MODE
+    )
+    assert candidate["entry_setup_evidence_version"] == (
+        ENTRY_SETUP_TIMING_EVIDENCE_VERSION
+    )
+    assert candidate["entry_decision_composer_version"] == (
+        ENTRY_DECISION_COMPOSER_V2_15_1_VERSION
+    )
+    assert (
+        "cumulative_full_cost_economics_not_passed"
+        in candidate["performance_promotion_blocking_reasons"]
+    ) is (net_ev_pct < 0.10)
+
+
+def test_timing_aware_v2_15_1_auto_promotes_postclose_to_preopen_runtime(
+    monkeypatch, tmp_path
+):
+    _configure_paths(monkeypatch, tmp_path)
+    _enable_probe_contract(monkeypatch)
+    _pin_auto_promotion(monkeypatch, tmp_path)
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_DAILY_RECHECK", "100"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_DAILY_BUY_RECOVERY", "100"
+    )
+    prompt_version = (
+        DECISION_QUALITY_V2_15_1_TIMING_AWARE_BOUNDED_RECOVERY_PROMPT_VERSION
+    )
+    detailed, batch = _timing_aware_v2_15_1_reports()
+    detailed_path = policy.detailed_report_path(SOURCE_DATE, prompt_version)
+    policy._atomic_write_json(detailed_path, detailed)
+    policy._atomic_write_json(policy.batch_report_path(SOURCE_DATE), batch)
+
+    candidate = policy.publish_live_candidate(
+        source_date=SOURCE_DATE,
+        batch_report=batch,
+        write=True,
+        candidate_prompt_version=prompt_version,
+        generated_at=POSTCLOSE_GENERATED_AT,
+    )
+    activation = policy.write_preopen_activation(target_date=TARGET_DATE)
+    resolved = policy.resolve_live_prompt_policy(
+        configured_prompt_version=(
+            DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
+        ),
+        effective_venue="KRX",
+        session_bucket="KRX_REGULAR",
+        position_tag="SCANNER",
+        strategy="SCALPING",
+        now=datetime(2026, 8, 7, 9, 10, tzinfo=policy.KST),
+    )
+
+    assert candidate["status"] == "live_auto_apply_ready"
+    written_candidate = policy._read_json(policy.live_candidate_path(SOURCE_DATE))
+    assert written_candidate["rollback_prompt_version"] == (
+        DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION
+    )
+    assert activation["status"] == "active_bounded_canary"
+    assert activation["selected_prompt_version"] == prompt_version
+    assert resolved["enabled"] is True, resolved
+    assert resolved["canary_mode"] == policy.PERFORMANCE_CANARY_MODE
+    assert resolved["selected_prompt_version"] == prompt_version
+
+
+def _balanced_reports():
+    detailed, batch = _timing_aware_v2_15_1_reports()
+    version = policy.DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION
+    detailed["requests"][0]["candidate"].update(
+        prompt_version=f"{version}_entry",
+        entry_setup_evidence_version=policy.ENTRY_SETUP_BALANCED_EVIDENCE_VERSION,
+        entry_decision_composer_version=policy.ENTRY_DECISION_COMPOSER_V2_15_2_VERSION,
+    )
+    detailed.update(
+        entry_setup_evidence_version=policy.ENTRY_SETUP_BALANCED_EVIDENCE_VERSION,
+        entry_decision_composer_version=policy.ENTRY_DECISION_COMPOSER_V2_15_2_VERSION,
+    )
+    cumulative = detailed["cumulative_learning"]
+    cumulative["candidate_prompt_version"] = version
+    cumulative["full_cost_economics"].update(
+        exit_contract="entry_terminal_exit_net10bps_v1",
+        risk_budget=cumulative["candidate_probe_risk_budget"],
+    )
+    batch["candidate_prompt_version"] = version
+    batch["cohorts"][0]["candidate_prompt_version"] = version
+    return version, detailed, batch
+
+
+@pytest.mark.parametrize("net_ev", [0.099, 0.100, 0.101, None])
+@pytest.mark.parametrize("delta", [-0.01, 0, 0.01])
+def test_balanced_policy_net_floor_and_delta_are_not_gross_end_return_gates(
+    monkeypatch, tmp_path, net_ev, delta
+):
+    _configure_paths(monkeypatch, tmp_path)
+    _enable_probe_contract(monkeypatch)
+    version, detailed, batch = _balanced_reports()
+    cumulative = detailed["cumulative_learning"]
+    cumulative["full_cost_economics"].update(
+        candidate_net_ev_pct=net_ev, paired_net_decision_delta_pct=delta
+    )
+    cumulative["candidate_primary_decision_ev_pct"] = -2.0
+    path = tmp_path / "balanced.json"
+    policy._atomic_write_json(path, detailed)
+    candidate = policy.build_live_candidate(
+        source_date=SOURCE_DATE,
+        batch_report=batch,
+        detailed_report=detailed,
+        detailed_path=path,
+        candidate_prompt_version=version,
+        generated_at=POSTCLOSE_GENERATED_AT,
+    )
+    assert (candidate["status"] == "live_auto_apply_ready") == (
+        net_ev is not None and net_ev >= 0.1 and delta > 0
+    ), candidate
+
+
+def test_balanced_candidate_automatically_reaches_preopen_and_loader(
+    monkeypatch, tmp_path
+):
+    _configure_paths(monkeypatch, tmp_path)
+    _enable_probe_contract(monkeypatch)
+    _pin_auto_promotion(monkeypatch, tmp_path)
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_DAILY_RECHECK", "100"
+    )
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_DAILY_BUY_RECOVERY", "100"
+    )
+    version, detailed, batch = _balanced_reports()
+    policy._atomic_write_json(
+        policy.detailed_report_path(SOURCE_DATE, version), detailed
+    )
+    policy._atomic_write_json(policy.batch_report_path(SOURCE_DATE), batch)
+    candidate = policy.publish_live_candidate(
+        source_date=SOURCE_DATE,
+        batch_report=batch,
+        write=True,
+        candidate_prompt_version=version,
+        generated_at=POSTCLOSE_GENERATED_AT,
+    )
+    activation = policy.write_preopen_activation(target_date=TARGET_DATE)
+    resolved = policy.resolve_live_prompt_policy(
+        configured_prompt_version=DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
+        effective_venue="KRX",
+        session_bucket="KRX_REGULAR",
+        position_tag="SCANNER",
+        strategy="SCALPING",
+        now=datetime(2026, 8, 7, 9, 10, tzinfo=policy.KST),
+    )
+    assert candidate["status"] == "live_auto_apply_ready", candidate
+    assert activation["selected_prompt_version"] == version, activation
+    assert (
+        resolved["enabled"] is True and resolved["selected_prompt_version"] == version
+    ), resolved
+
+
 def test_malformed_candidate_source_paths_fail_closed_without_exception(
     monkeypatch, tmp_path
 ):
@@ -1113,3 +1408,58 @@ def test_running_process_with_previous_runtime_date_falls_back(monkeypatch, tmp_
     assert (
         "runtime_contract_target_date_mismatch" in resolved["runtime_contract_errors"]
     )
+
+
+def test_mechanistic_candidate_projects_to_preopen_primary_owner(monkeypatch, tmp_path):
+    monkeypatch.setattr(policy, "DATA_DIR", tmp_path)
+    report_dir = tmp_path / "report" / "ai_decision_action_outcome_calibration"
+    report_dir.mkdir(parents=True)
+    candidate_body = {
+        "schema": "mechanistic_entry_common_feature_candidate_v1",
+        "policy_version": calibration.MECHANISTIC_REFINEMENT_POLICY_VERSION,
+        "thresholds": {
+            "maximum_spread_bp": 40.0,
+            "minimum_fillability_score": 45.0,
+            "maximum_top3_ask_to_bid_ratio": 2.0,
+        },
+        "decision_role_contract": {
+            "primary_decision_owner": "mechanistic_entry_adjudicator",
+            "ai_role": "auxiliary_risk_screen_pass_veto_no_promotion",
+            "hard_safety_owner": "existing_runtime_submit_and_order_guards",
+        },
+        "shared_decision_function": (
+            "entry_setup_evidence.mechanistic_entry_policy_decision"
+        ),
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    candidate = {
+        **candidate_body,
+        "candidate_content_sha256": calibration._canonical_sha256(candidate_body),
+    }
+    report = calibration._with_artifact_content_sha256(
+        {
+            "schema": calibration.SCHEMA,
+            "policy_version": calibration.POLICY_VERSION,
+            "target_date": SOURCE_DATE,
+            "mechanistic_entry_refinement": {
+                "schema": calibration.MECHANISTIC_REFINEMENT_SCHEMA,
+                "policy_version": calibration.MECHANISTIC_REFINEMENT_POLICY_VERSION,
+                "promotion_pass": True,
+                "policy_candidate": candidate,
+            },
+        }
+    )
+    path = report_dir / f"ai_decision_action_outcome_calibration_{SOURCE_DATE}.json"
+    policy._atomic_write_json(path, report)
+
+    projection, errors = policy._mechanistic_primary_activation_projection(SOURCE_DATE)
+
+    assert errors == []
+    assert projection["primary_decision_owner"] == "mechanistic_entry_adjudicator"
+    assert projection["ai_role"] == "auxiliary_risk_screen_pass_veto_no_promotion"
+    assert projection["threshold_policy"]["thresholds"]["maximum_spread_bp"] == 40.0
+    assert projection["runtime_effect"] is False
+    assert projection["allowed_runtime_apply"] is False
