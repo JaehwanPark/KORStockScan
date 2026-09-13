@@ -804,6 +804,17 @@ AI prompt variant는 `machine_first_pass_veto_v2`다. 실제 English ASCII promp
 
 최종 변경/인접 10개 suite **694 passed**: 9 scope resolver·운영자 OFF, legacy KRX-only 격리, 변조 pin·recheck authority, NXT 독립 fitting/비용 scope 혼입 거절, 재해시한 cross-market handoff 거절, publisher/loader·기존 recheck와 release routing을 포함한다. scoped Ruff·compile·`git diff --check`와 print-only parser(30 task)를 통과했다. §18에 기록한 기존 OpenAI audit 표시 불일치는 별도 잔여 이력이며 전체 저장소 무결함으로 확대하지 않는다. 실주문/Provider 호출·고비용 과거 전체 재생성은 이 검증에 사용하지 않았다. 기존 bundle이 보존한 source9/11 snapshot으로 초기 범위 채택만 발행하고, 누적 신규 challenger 재평가는 다음 자연 장후 owner에 연결한다.
 
+### 19.5 실행 receipt — 2026-09-13 23:25 KST
+
+- 구현 commit `d3cb8d44d651f20f6c3dfcde97f4ec86e9706f9b`와 시각 대사 보완 commit `6207a60cf456d77bcccb14601c25cd7d03e3583a`를 main에 커밋·push했다. 최종 공통 선택 root는 `/home/ubuntu/KORStockScan-runtime-releases/machine-all-continuous-r2-20260914`, code HEAD는 `6207a60c`다. 후속 문서 receipt commit은 source 배포 세대와 구분한다.
+- 최초 별도 worktree에서도 694 tests를 재검증했다. 실제 future-env preview에서 resolver의 평가시각과 recheck 승인시각 불일치를 발견하여 `now` 전달을 보완했다. workspace 전체 694 tests 재통과, 최종 detached release의 영향/인접 228 tests 재통과이며 합산 고유 테스트 수로 표시하지 않는다. 운영자 OFF·미래 pin 활성화 경계를 유지한다.
+- 23:18 기존 publisher로 `--adopt-hierarchy --adopt-all-continuous`를 실행했다. target9/14, source9/11 frozen source file SHA `c345ad4e410199f1704d82c973f5b07e1dd1a1cbf1f97f73004c2099f22d267a`, bundle SHA `3f6d353fdf930cac4ab31f6a49187a53deb667d14ac6d8be28c0058ef834d983`. **9 scopes의 초기/유지 정책을 발행했으며 자식 rule은 모두0**이다. 종목별 최적값·새 micro 실전 임계치가 이미 선택된 것으로 표현하지 않는다. old bundle `b7d45817…`는 기존 generations와 별도 backup에 보존했다.
+- release 테스트가 만든 실제 `logs/tmp` 디렉터리 때문에 최초 공유 경로 검사가 실패한 것은 무시하지 않았다. 해당 테스트 출력을 backup으로 이동하고 정상 shared symlink로 수정한 뒤 router를 재검증했다. 최종 source clean, 6개 공유 경로, cron9개, PREOPEN/start/postclose print-plan 모두 PASS. 실행 중인 main/장후 worker가 없는 구간에서 전환했으며 cron·실주문·custody를 변경하지 않았다.
+- 최종 release의 `threshold_cycle_preopen_apply --verify --target-date 2026-09-14`는 PASS다. 23:25 실제 저장 env의 threshold→operator→dated 순서를 읽은 정책 선택 preview는 parse error0, 9/9 scope에서 기계 주판정과 `auxiliary_risk_screen_pass_veto_no_promotion`을 확인했다. 명시적 미래 평가시각을 넣은 **정책 선택 검사**이며 해당 시각의 시장 개장·현재 PID·실제 주문 성공은 아니다.
+- backup/검사 파일: `tmp/machine-all-continuous-deploy-20260913.LaNvTe/`의 `previous-selection.json`, `previous-policy.json`, `preopen-env-preview.json`, `final-policy-preview.json`. 원 release `machine-ai-pass-veto-20260914/f12a9373`와 중간 검토 release도 보존한다. rollback 시 현재 실행/정책 세대를 재대사하고 필요한 원 policy generation도 함께 선택하며 shared state를 초기화하지 않는다.
+- 독립 machine profit manifest SHA `caa1e8071daf226fe4c67e0e9654e84a4ae5a7b71c9e749bcde3b2c9f01ed893`, unified manifest SHA `44382bb658ef37cafc4476cf75b3a0b40979e2a81d0b4f75523f8922d12bf12a`는 전후 동일하다. 독립 service/drop-in을 재배포·재기동하지 않았다.
+- 기동 승인은 확인했으나 일요일9/13 main PID·당일 env가 없어 수동 기동은 하지 않았다. **9/14 07:35 PREOPEN→07:55 예약 기동을 유지**, 실제 PID/첫 정책 소비·장후 자동 새 generation·빠른 비용차감 순익의 자연 수용은 기존 9/14 Runtime/CodeImprovement owner에 남는다. 현재 상태는 코드·정책 발행·배포 완료 / 자연 기동·경제성 미확인이다.
+
 사용자 선택 문서 외부 동기화(정책 적용/봇 기동의 선행 조건 아님):
 
 ```bash

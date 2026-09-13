@@ -70,6 +70,7 @@
 ## 장중 체크리스트 (09:05~15:20)
 
 - [ ] `[RuntimeEnvIntradayObserve0914] 전일 selected runtime family 장중 provenance 및 rollback guard 확인` (`Due: 2026-09-14`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:20`, `Track: RuntimeStability`)
+  - 9/13 23:25 배포 receipt: main/common `machine-all-continuous-r2-20260914/6207a60c`, bundle `3f6d353f…`, 9 scope policy preview 및 env verify PASS. child rule0은 초기정책 부재가 아니다. 실제 PID는 미기동이며 9/14 07:35/07:55 예약 후 자연 소비를 확인한다. [실행 receipt](../proposals/entry-prompt-balanced-adjudication-design-review-plan-2026-09-13.md#195-실행-receipt--2026-09-13-2325-kst).
   - 9/13 지원 연속매매 전체 승인 후속: [정책·배포 §19](../proposals/entry-prompt-balanced-adjudication-design-review-plan-2026-09-13.md#19-지원-연속매매-전체-scope-확장과-정책-작동-계약)의 선택 release와 9개 내부 scope별 bundle→기계 ENTER_NOW→AI binding PASS/VETO→기존 최종 guard를 대사한다. 아래 과거 advisory/no-veto 설명은 당시 이력이지 현재 승인 역할이 아니다. 동시호가/시간외 단일가·독립 기계로 확대하지 않고 실제 PID·첫 scope 소비·익절 경로 품질/순비용을 각각 확인한다.
   - 초기 기계정책 자연 소비: [§15](../proposals/entry-prompt-balanced-adjudication-design-review-plan-2026-09-13.md#15-초기-기계ai-정책-발행과-지속-갱신--913-추가-사용자-지시)의 bundle과 실제 PID code root, `entry_primary_decision_owner`, 기계→AI 순서·실제 prompt hash를 대사한다. 기존 감시 평가 호출에서 RECHECK/BLOCK의 provider 미호출과 ENTER_NOW의 AI 보조를 구분한다. AI verdict 비중/단일 익절만으로 개선을 확정하지 않고 제출·체결·조기 순익/횡보/불리한 excursion은 원 분모로 관찰한다.
   - Source: [threshold_cycle_ev_2026-09-11.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-09-11.json)
