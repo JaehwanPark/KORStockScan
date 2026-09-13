@@ -75913,7 +75913,7 @@ def _maybe_retry_rising_missed_entry_ai_not_evaluated(
         fields["rising_missed_entry_ai_retry_cached_result_source"] = (
             cached_result_source
         )
-    if action != "not_evaluated" and not bool(force_async):
+    if action not in {"", "-", "not_evaluated"} and not bool(force_async):
         return fields
     ai_engine = (runtime or {}).get("ai_engine")
     if ai_engine is None:

@@ -718,7 +718,9 @@ def _entry_ai_action_for_rising_missed(stock: dict[str, Any]) -> tuple[str, str]
 
 def _entry_ai_action_not_evaluated(stock: dict[str, Any]) -> bool:
     action, _source = _entry_ai_action_for_rising_missed(stock)
-    return action.strip().lower() == "not_evaluated"
+    # Missing first observation is not entry authority. Route it through the
+    # same bounded machine-first adjudication as an explicit non-evaluation.
+    return action.strip().lower() in {"", "-", "not_evaluated"}
 
 
 def _positive_delta_pct(stock: dict[str, Any], explicit_delta_pct: Any = None) -> float:
@@ -961,20 +963,6 @@ def evaluate_rising_missed_one_share_entry(
             positive_delta_pct=delta_pct,
             log_fields=base_fields,
         )
-    if _entry_ai_action_not_evaluated(stock):
-        base_fields.update(
-            {
-                "rising_missed_class": RISING_MISSED_CLASS_SOURCE_QUALITY_EXCLUDED,
-                "rising_missed_class_reason": BLOCK_ENTRY_AI_NOT_EVALUATED,
-                "rising_missed_one_share_eligible": False,
-            }
-        )
-        return RisingMissedOneShareDecision(
-            allowed=False,
-            reason=BLOCK_ENTRY_AI_NOT_EVALUATED,
-            positive_delta_pct=delta_pct,
-            log_fields=base_fields,
-        )
     if (
         upper_limit_exclude_enabled
         and upper_limit_threshold > 0
@@ -1014,6 +1002,21 @@ def evaluate_rising_missed_one_share_entry(
             positive_delta_pct=delta_pct,
             log_fields=base_fields,
         )
+    # Reject ineligible inventory/price states before requesting adjudication.
+    if _entry_ai_action_not_evaluated(stock):
+        base_fields.update(
+            {
+                "rising_missed_class": RISING_MISSED_CLASS_SOURCE_QUALITY_EXCLUDED,
+                "rising_missed_class_reason": BLOCK_ENTRY_AI_NOT_EVALUATED,
+                "rising_missed_one_share_eligible": False,
+            }
+        )
+        return RisingMissedOneShareDecision(
+            allowed=False,
+            reason=BLOCK_ENTRY_AI_NOT_EVALUATED,
+            positive_delta_pct=delta_pct,
+            log_fields=base_fields,
+        )
     return RisingMissedOneShareDecision(
         allowed=True,
         reason=FORCED_ENTRY_REASON,
@@ -1042,6 +1045,14 @@ def evaluate_rising_missed_normal_buy_bridge(
     upper_limit_exclude_pct: float = DEFAULT_RISING_MISSED_UPPER_LIMIT_EXCLUDE_PCT,
 ) -> RisingMissedNormalBuyBridgeDecision:
     stock = stock if isinstance(stock, dict) else {}
+    # The normal-buy caller can supply its just-completed action separately
+    # before the cached stock projection exists. Never overwrite an explicit
+    # non-evaluation or untrusted cached result with this compatibility input.
+    if (
+        _entry_ai_action_for_rising_missed(stock)[1] == "missing"
+        and str(current_ai_action or "").strip().upper() in {"BUY", "WAIT", "DROP"}
+    ):
+        stock = {**stock, "entry_ai_action": current_ai_action}
     decision = evaluate_rising_missed_one_share_entry(
         stock,
         strategy=strategy,

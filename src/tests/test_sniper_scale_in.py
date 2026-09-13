@@ -1703,6 +1703,7 @@ def test_rising_missed_one_share_entry_allows_scanner_rising_candidate():
     decision = evaluate_rising_missed_one_share_entry(
         {
             "strategy": "SCALPING",
+            "last_watching_ai_action": "BUY",  # Already adjudicated; test downstream contract.
             "position_tag": "SCANNER",
             "scanner_promotion_id": "scan-1",
             "price_delta_since_first_seen_pct": 1.2,
@@ -1724,6 +1725,7 @@ def test_rising_missed_one_share_entry_allows_non_scanner_scalping_candidate():
     decision = evaluate_rising_missed_one_share_entry(
         {
             "strategy": "SCALPING",
+            "last_watching_ai_action": "BUY",  # Already adjudicated; test downstream contract.
             "position_tag": "VWAP_RECLAIM",
             "price_delta_since_first_seen_pct": 1.2,
             "rising_missed_buy": True,
@@ -1767,6 +1769,7 @@ def test_rising_missed_one_share_entry_uses_low_rebound_pct_as_positive_delta():
     decision = evaluate_rising_missed_one_share_entry(
         {
             "strategy": "SCALPING",
+            "last_watching_ai_action": "BUY",  # Already adjudicated; test downstream contract.
             "position_tag": "SCANNER",
             "source_signature": "LOW_REBOUND_RISING_MISSED",
             "rising_missed_lineage": "low_rebound_from_intraday_low",
@@ -1786,14 +1789,15 @@ def test_rising_missed_one_share_entry_uses_low_rebound_pct_as_positive_delta():
     assert decision.positive_delta_pct == 2.6
 
 
-def test_rising_missed_normal_buy_bridge_allows_buy_without_forced_scout_fields():
+@pytest.mark.parametrize("cached_action", ["BUY", None])
+def test_rising_missed_normal_buy_bridge_allows_buy_without_forced_scout_fields(cached_action):
     decision = evaluate_rising_missed_normal_buy_bridge(
         {
             "strategy": "SCALPING",
             "position_tag": "SCANNER",
             "scanner_promotion_id": "scan-1",
             "price_delta_since_first_seen_pct": 1.2,
-            "last_watching_ai_action": "BUY",
+            "last_watching_ai_action": cached_action,
         },
         strategy="SCALPING",
         position_tag="SCANNER",
@@ -2782,6 +2786,7 @@ def test_rising_missed_scout_defers_quantity_to_central_allocator():
     budget_capped = evaluate_rising_missed_one_share_entry(
         {
             "strategy": "SCALPING",
+            "last_watching_ai_action": "BUY",  # Already adjudicated; test downstream contract.
             "position_tag": "SCANNER",
             "scanner_promotion_id": "scan-cap",
             "price_delta_since_first_seen_pct": 1.2,
@@ -2798,6 +2803,7 @@ def test_rising_missed_scout_defers_quantity_to_central_allocator():
     min_one_share = evaluate_rising_missed_one_share_entry(
         {
             "strategy": "SCALPING",
+            "last_watching_ai_action": "BUY",  # Already adjudicated; test downstream contract.
             "position_tag": "SCANNER",
             "scanner_promotion_id": "scan-min-share",
             "price_delta_since_first_seen_pct": 1.2,
@@ -2836,6 +2842,7 @@ def test_rising_missed_one_share_entry_attaches_prior_log_without_decision_chang
     decision = evaluate_rising_missed_one_share_entry(
         {
             "strategy": "SCALPING",
+            "last_watching_ai_action": "BUY",  # Already adjudicated; test downstream contract.
             "position_tag": "SCANNER",
             "scanner_promotion_id": "scan-prior",
             "price_delta_since_first_seen_pct": 1.2,
@@ -2934,7 +2941,7 @@ def test_rising_missed_one_share_entry_does_not_reuse_preflight_drop_as_ai_veto(
     )
 
 
-def test_rising_missed_one_share_entry_does_not_block_missing_entry_ai_action():
+def test_rising_missed_one_share_entry_routes_missing_action_to_adjudication():
     decision = evaluate_rising_missed_one_share_entry(
         {
             "strategy": "SCALPING",
@@ -2950,11 +2957,11 @@ def test_rising_missed_one_share_entry_does_not_block_missing_entry_ai_action():
         min_delta_pct=0.5,
     )
 
-    assert decision.allowed is True
-    assert decision.reason == FORCED_ENTRY_REASON
+    assert decision.allowed is False
+    assert decision.reason == BLOCK_ENTRY_AI_NOT_EVALUATED
     assert decision.log_fields["rising_missed_entry_ai_action"] == "-"
     assert decision.log_fields["rising_missed_entry_ai_action_source"] == "missing"
-    assert decision.log_fields["rising_missed_entry_ai_not_evaluated_excluded"] is False
+    assert decision.log_fields["rising_missed_entry_ai_not_evaluated_excluded"] is True
 
 
 def test_rising_missed_one_share_entry_prefers_explicit_entry_ai_action_over_cached_watching_action():
@@ -3012,6 +3019,7 @@ def test_rising_missed_default_min_delta_is_one_pct(monkeypatch):
     below = evaluate_rising_missed_one_share_entry(
         {
             "strategy": "SCALPING",
+            "last_watching_ai_action": "BUY",  # Already adjudicated; test downstream contract.
             "position_tag": "SCANNER",
             "scanner_promotion_id": "scan-1",
             "price_delta_since_first_seen_pct": 0.99,
@@ -3025,6 +3033,7 @@ def test_rising_missed_default_min_delta_is_one_pct(monkeypatch):
     at_threshold = evaluate_rising_missed_one_share_entry(
         {
             "strategy": "SCALPING",
+            "last_watching_ai_action": "BUY",  # Already adjudicated; test downstream contract.
             "position_tag": "SCANNER",
             "scanner_promotion_id": "scan-2",
             "price_delta_since_first_seen_pct": 1.0,
@@ -3132,6 +3141,7 @@ def test_rising_missed_one_share_entry_excludes_upper_limit_proximity():
     below_exclude = evaluate_rising_missed_one_share_entry(
         {
             "strategy": "SCALPING",
+            "last_watching_ai_action": "BUY",  # Already adjudicated; test downstream contract.
             "position_tag": "SCANNER",
             "scanner_promotion_id": "scan-0",
             "price_delta_since_first_seen_pct": 2.0,
@@ -3148,6 +3158,7 @@ def test_rising_missed_one_share_entry_excludes_upper_limit_proximity():
     decision = evaluate_rising_missed_one_share_entry(
         {
             "strategy": "SCALPING",
+            "last_watching_ai_action": "BUY",  # Already adjudicated; test downstream contract.
             "position_tag": "SCANNER",
             "scanner_promotion_id": "scan-1",
             "price_delta_since_first_seen_pct": 2.0,
@@ -5840,6 +5851,7 @@ def test_rising_missed_one_share_hook_bypasses_watching_soft_branch(monkeypatch)
         "id": 1,
         "name": "RISING",
         "strategy": "SCALPING",
+        "last_watching_ai_action": "BUY",  # Already adjudicated; test downstream contract.
         "position_tag": "SCANNER",
         "scanner_promotion_id": "scan-1",
         "price_delta_since_first_seen_pct": 2.1,
@@ -5867,8 +5879,10 @@ def test_rising_missed_one_share_hook_bypasses_watching_soft_branch(monkeypatch)
     assert runtime["forced_entry_reason"] == FORCED_ENTRY_REASON
 
 
+@pytest.mark.parametrize("initial_action", [None, "", "-", "not_evaluated"])
+@pytest.mark.parametrize("retry_success", [True, False])
 def test_rising_missed_one_share_hook_retries_not_evaluated_ai_before_block(
-    monkeypatch,
+    monkeypatch, initial_action, retry_success,
 ):
     state_handlers.COOLDOWNS = {}
     state_handlers.ALERTED_STOCKS = set()
@@ -5882,14 +5896,15 @@ def test_rising_missed_one_share_hook_retries_not_evaluated_ai_before_block(
         pass
 
     def fake_retry(*, stock, code, ws_data, ai_engine, now_ts, current_ai_score):
-        stock["last_watching_ai_action"] = "BUY"
-        stock["last_watching_ai_score"] = 72.0
+        if retry_success:
+            stock["last_watching_ai_action"] = "BUY"
+            stock["last_watching_ai_score"] = 72.0
         return {
             "pre_submit_entry_ai_authority_retry_attempted": True,
-            "pre_submit_entry_ai_authority_retry_success": True,
-            "pre_submit_entry_ai_authority_retry_reason": "ok",
-            "pre_submit_entry_ai_authority_retry_action": "BUY",
-            "pre_submit_entry_ai_authority_retry_score": "72.0",
+            "pre_submit_entry_ai_authority_retry_success": retry_success,
+            "pre_submit_entry_ai_authority_retry_reason": "ok" if retry_success else "blocked",
+            "pre_submit_entry_ai_authority_retry_action": "BUY" if retry_success else "DROP",
+            "pre_submit_entry_ai_authority_retry_score": "72.0" if retry_success else "0.0",
         }
 
     monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_ONE_SHARE_ENTRY_ENABLED", "true")
@@ -5921,7 +5936,7 @@ def test_rising_missed_one_share_hook_retries_not_evaluated_ai_before_block(
         "position_tag": "OPEN_RECLAIM",
         "price_delta_since_first_seen_pct": 2.0,
         "rising_missed_buy": True,
-        "last_watching_ai_action": "not_evaluated",
+        "last_watching_ai_action": initial_action,
     }
     runtime = {
         "now_ts": 1000.0,
@@ -5942,6 +5957,11 @@ def test_rising_missed_one_share_hook_retries_not_evaluated_ai_before_block(
     )
 
     assert submitted is True
+    if not retry_success:
+        assert submit_calls == []
+        assert entry_logs[-1][0] == "rising_missed_one_share_entry_blocked"
+        assert not stock.get("rising_missed_one_share_entry_forced")
+        return
     assert len(submit_calls) == 1
     assert stock["rising_missed_one_share_entry_forced"] is True
     assert stock["forced_entry_reason"] == FORCED_ENTRY_REASON
@@ -5994,7 +6014,8 @@ def test_rising_missed_retry_rechecks_preflight_blocked_cached_drop(monkeypatch)
     )
 
 
-def test_rising_missed_retry_dispatches_async_without_sync_rest_or_ai(monkeypatch):
+@pytest.mark.parametrize("initial_action", [None, "", "-", "not_evaluated"])
+def test_rising_missed_retry_dispatches_async_without_sync_rest_or_ai(monkeypatch, initial_action):
     class AsyncCoordinator:
         pass
 
@@ -6016,7 +6037,7 @@ def test_rising_missed_retry_dispatches_async_without_sync_rest_or_ai(monkeypatc
         ),
     )
 
-    stock = {"strategy": "SCALPING", "last_watching_ai_action": "not_evaluated"}
+    stock = {"strategy": "SCALPING", "last_watching_ai_action": initial_action}
     fields = state_handlers._maybe_retry_rising_missed_entry_ai_not_evaluated(
         stock,
         "123456",
@@ -8609,6 +8630,7 @@ def test_rising_missed_scout_quality_guard_blocks_stale_recent_weak_ai_micro(
         "id": 1,
         "name": "STALE_WEAK_RISING",
         "strategy": "SCALPING",
+        "last_watching_ai_action": "BUY",  # Already adjudicated; test downstream contract.
         "position_tag": "SCANNER",
         "scanner_promotion_id": "scan-weak-stale",
         "price_delta_since_first_seen_pct": 2.1,
@@ -8928,60 +8950,12 @@ def test_rising_missed_scout_quality_guard_no_rest_estimator_after_block(monkeyp
     assert submitted is True
     assert submit_calls == []
     assert rest_calls == []
-    assert entry_logs[-1][0] == "rising_missed_scout_quality_guard_blocked"
-    assert entry_logs[-1][1]["rising_missed_quality_guard_recheck_policy"] == (
-        "removed_market_data_envelope_first"
-    )
-    assert entry_logs[-1][1]["rising_missed_quality_guard_recheck_attempted"] is False
-    assert entry_logs[-1][1]["block_reason"] == "stale_quote_with_missing_ai_provenance"
-    assert entry_logs[-1][1]["rising_missed_scout_quality_guard_weak_ai"] is False
-    assert (
-        entry_logs[-1][1]["rising_missed_scout_quality_guard_ai_provenance_missing"]
-        is True
-    )
-    assert entry_logs[-1][1]["runtime_effect"] is True
-    assert (
-        entry_logs[-1][1]["decision_authority"]
-        == "operator_runtime_override_rising_missed_scout_quality_guard"
-    )
-    assert entry_logs[-2][0] == "rising_missed_freshness_envelope_recheck_enqueued"
-    assert (
-        entry_logs[-2][1]["rising_missed_freshness_envelope_recheck_enqueued"] is True
-    )
-    assert entry_logs[-2][1]["runtime_effect"] is False
-    assert (
-        entry_logs[-2][1]["decision_authority"]
-        == "source_quality_freshness_envelope_recheck_no_submit_authority"
-    )
-    assert stock["rising_missed_freshness_envelope_recheck_armed"] is True
-    assert (
-        stock["_scanner_rising_entry_relief_reason"]
-        == "freshness_envelope_recheck_pending"
-    )
-    assert (
-        stock["_scanner_rising_recheck_reason"] == "freshness_envelope_recheck_pending"
-    )
-    assert stock["_scanner_full_eval_budget_source"] == "freshness_envelope_recheck"
-    assert (
-        state_handlers._scanner_active_rising_recheck_reason(
-            stock,
-            now_ts=now_ts + 1.0,
-        )
-        == "freshness_envelope_recheck_pending"
-    )
-    assert (
-        state_handlers._scanner_active_full_eval_budget_source(
-            stock,
-            now_ts=now_ts + 1.0,
-        )
-        == "freshness_envelope_recheck"
-    )
-    hydrated = state_handlers._RISING_MISSED_MICRO_ESTIMATOR_STORE.snapshot(
-        "123458", now_ts=now_ts
-    )
-    assert hydrated["tier"] == "cold"
-    assert hydrated["sample_count"] == 0
-
+    # With no initial adjudication and no engine, defer before the TP1/REST
+    # quality chain instead of fabricating a candidate or a freshness retry.
+    assert entry_logs[-1][0] == "rising_missed_one_share_entry_blocked"
+    assert entry_logs[-1][1]["block_reason"] == BLOCK_ENTRY_AI_NOT_EVALUATED
+    assert entry_logs[-1][1]["rising_missed_entry_ai_retry_reason"] == "ai_engine_unavailable"
+    assert not stock.get("rising_missed_freshness_envelope_recheck_armed")
 
 def test_rising_missed_submit_safety_consumes_cached_scanner_envelope(monkeypatch):
     state_handlers.COOLDOWNS = {}
@@ -12426,6 +12400,7 @@ def test_rising_missed_quality_guard_block_does_not_call_rest_estimator(monkeypa
             "id": 23,
             "name": "REST_ESTIMATOR_LOW_CONF",
             "strategy": "SCALPING",
+            "last_watching_ai_action": "BUY",  # Already adjudicated; test downstream contract.
             "position_tag": "SCANNER",
             "scanner_promotion_id": "scan-rest-estimator-low-conf",
             "price_delta_since_first_seen_pct": 3.2,
@@ -12666,6 +12641,7 @@ def test_rising_missed_scout_quality_guard_does_not_rest_ai_recheck_after_block(
         "id": 11,
         "name": "REST_RECHECK_RISING",
         "strategy": "SCALPING",
+        "last_watching_ai_action": "BUY",  # Already adjudicated; test downstream contract.
         "position_tag": "SCANNER",
         "scanner_promotion_id": "scan-rest-recheck",
         "price_delta_since_first_seen_pct": 3.2,
@@ -12752,6 +12728,7 @@ def test_rising_missed_one_share_hook_allows_initial_scout_before_first_touch_av
         "id": 1,
         "name": "WEAK_RISING",
         "strategy": "SCALPING",
+        "last_watching_ai_action": "BUY",  # Already adjudicated; test downstream contract.
         "position_tag": "SCANNER",
         "scanner_promotion_id": "scan-weak",
         "price_delta_since_first_seen_pct": 2.6,
