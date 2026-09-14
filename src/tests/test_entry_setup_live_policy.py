@@ -1,4 +1,5 @@
 import hashlib
+import os
 from datetime import datetime
 
 import pytest
@@ -134,6 +135,44 @@ def test_all_continuous_machine_primary_resolver(monkeypatch, tmp_path, scope):
         now=datetime(2026, 8, 7, 10, tzinfo=policy.KST),
     )
     assert disabled["status"] == "fallback_operator_disabled"
+
+
+def test_machine_primary_preopen_verification_checks_exact_loaded_env(
+    monkeypatch, tmp_path
+):
+    from src.engine.scalping import mechanistic_entry_runtime_policy as initial
+    from src.tests.test_mechanistic_entry_runtime_policy import source
+
+    _configure_paths(monkeypatch, tmp_path)
+    _enable_probe_contract(monkeypatch)
+    _pin_auto_promotion(monkeypatch, tmp_path)
+    monkeypatch.setenv(policy.CANARY_ENV_KEY, "true")
+    for name in ("MAX_DAILY_RECHECK", "MAX_DAILY_BUY_RECOVERY"):
+        monkeypatch.setenv("KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_" + name, "100")
+    initial.publish(
+        source(tmp_path, SOURCE_DATE),
+        data_root=tmp_path,
+        bootstrap=True,
+        adopt_all_continuous=True,
+        now=datetime(2026, 8, 6, 22, tzinfo=policy.KST),
+    )
+    loaded_env = dict(os.environ)
+    verified = policy.verify_machine_primary_runtime_contract(
+        TARGET_DATE,
+        runtime_env=loaded_env,
+    )
+    assert verified["passed"] is True, verified
+    assert len(verified["scope_results"]) == len(policy.SUPPORTED_LIVE_COHORTS)
+
+    # An inherited process pin must not mask a missing pin in PREOPEN's files.
+    loaded_env.pop(rollout.AUTO_PROMOTION_PATH_ENV)
+    loaded_env.pop(rollout.AUTO_PROMOTION_SHA_ENV)
+    rejected = policy.verify_machine_primary_runtime_contract(
+        TARGET_DATE,
+        runtime_env=loaded_env,
+    )
+    assert rejected["passed"] is False
+    assert all(row["primary_decision_owner"] is None for row in rejected["scope_results"])
 
 
 def test_initial_machine_policy_resolves_without_performance_candidate(

@@ -225,13 +225,22 @@ handle_preopen_apply_result \
 if [ "$preopen_apply_result_rc" -ne 0 ]; then
   mark_preopen_failed "$preopen_apply_result_rc"
 fi
-PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.entry_setup_live_policy \
-  --all-cohorts \
-  --target-date "$TARGET_DATE" \
-  --runtime-env-file "$PROJECT_DIR/data/threshold_cycle/runtime_env/threshold_runtime_env_${TARGET_DATE}.env" \
-  --operator-env-file "$PROJECT_DIR/data/threshold_cycle/runtime_env/operator_runtime_overrides.env" \
-  --dated-operator-env-file "$PROJECT_DIR/data/threshold_cycle/runtime_env/operator_runtime_overrides_${TARGET_DATE}.env" \
+entry_setup_args=(
+  --all-cohorts
+  --target-date "$TARGET_DATE"
+  --runtime-env-file "$PROJECT_DIR/data/threshold_cycle/runtime_env/threshold_runtime_env_${TARGET_DATE}.env"
+  --operator-env-file "$PROJECT_DIR/data/threshold_cycle/runtime_env/operator_runtime_overrides.env"
+  --dated-operator-env-file "$PROJECT_DIR/data/threshold_cycle/runtime_env/operator_runtime_overrides_${TARGET_DATE}.env"
   --write
+)
+if [[ "$TARGET_DATE" > "2026-09-14" ]]; then
+  entry_setup_args+=(--require-machine-primary)
+fi
+if ! PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.entry_setup_live_policy \
+  "${entry_setup_args[@]}"; then
+  echo "[FAIL] entry machine-primary PREOPEN resolver target_date=$TARGET_DATE"
+  mark_preopen_failed 1
+fi
 PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.holding_prompt_live_policy \
   --phase preopen \
   --target-date "$TARGET_DATE" \

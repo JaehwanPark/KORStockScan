@@ -2214,7 +2214,6 @@ def _scanner_runtime_target_venue_fields(payload, *, target=None):
         ),
         ("payload.effective_venue", payload.get("effective_venue")),
         ("payload.venue", payload.get("venue")),
-        ("payload.decision_market_scope", payload.get("decision_market_scope")),
         ("payload.market_data_route", payload.get("market_data_route")),
         (
             "payload.scanner_market_gainer_market_data_route",
@@ -2230,7 +2229,6 @@ def _scanner_runtime_target_venue_fields(payload, *, target=None):
         ),
         ("target.effective_venue", target.get("effective_venue")),
         ("target.venue", target.get("venue")),
-        ("target.decision_market_scope", target.get("decision_market_scope")),
         ("target.market_data_route", target.get("market_data_route")),
         (
             "target.scanner_market_gainer_market_data_route",

@@ -625,6 +625,10 @@ def load_preopen_runtime_env(
                         "KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ACTIVE_DATE",
                         "KORSTOCKSCAN_ENTRY_SPLIT_PROBE_QTY",
                         "KORSTOCKSCAN_DYNAMIC_ENTRY_PRICE_RESOLVER_POST_PROBE_ENABLED",
+                        "KORSTOCKSCAN_SCALPING_V2_14_ROLLOUT_PATH",
+                        "KORSTOCKSCAN_SCALPING_V2_14_ROLLOUT_SHA256",
+                        "KORSTOCKSCAN_SCALPING_PROMPT_AUTO_PROMOTION_PATH",
+                        "KORSTOCKSCAN_SCALPING_PROMPT_AUTO_PROMOTION_SHA256",
                     }
                 )
             }
@@ -2529,6 +2533,131 @@ def resolve_live_prompt_policy(
     return result
 
 
+def verify_machine_primary_runtime_contract(
+    target_date: str,
+    *,
+    runtime_env: dict[str, str],
+) -> dict[str, Any]:
+    """Exercise the live resolver for every supported continuous scope.
+
+    PREOPEN builds activations from explicit files, while the live process
+    resolves from its inherited environment.  Exercise that exact second path
+    before startup so an invalid or missing persistent operator pin cannot be
+    reported as a successful PREOPEN handoff.
+    """
+
+    target_day = date.fromisoformat(str(target_date))
+    current = datetime.combine(target_day, datetime.min.time(), tzinfo=KST).replace(
+        hour=12
+    )
+    normalized_env = {
+        str(key): str(value)
+        for key, value in (runtime_env or {}).items()
+        if str(key).strip()
+    }
+    from src.engine.scalping.entry_setup_scalping_rollout import (
+        AUTO_PROMOTION_PATH_ENV,
+        AUTO_PROMOTION_SHA_ENV,
+        PATH_ENV as SCALPING_ROLLOUT_PATH_ENV,
+        SHA_ENV as SCALPING_ROLLOUT_SHA_ENV,
+    )
+
+    controlled_keys = set(normalized_env) | {
+        SCALPING_ROLLOUT_PATH_ENV,
+        SCALPING_ROLLOUT_SHA_ENV,
+        AUTO_PROMOTION_PATH_ENV,
+        AUTO_PROMOTION_SHA_ENV,
+    }
+    prior = {key: os.environ.get(key) for key in controlled_keys}
+    try:
+        for key in controlled_keys:
+            os.environ.pop(key, None)
+        os.environ.update(normalized_env)
+        from src.engine.scalping.mechanistic_entry_runtime_policy import load_effective
+
+        expected = load_effective(data_root=DATA_DIR, target_date=str(target_date))
+        expected_bundle_sha256 = str(expected.get("bundle_sha256") or "")
+        scope_results: list[dict[str, Any]] = []
+        for cohort in SUPPORTED_LIVE_COHORTS:
+            resolved = resolve_live_prompt_policy(
+                configured_prompt_version=(
+                    DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
+                ),
+                effective_venue=cohort[0],
+                session_bucket=cohort[1],
+                position_tag="SCANNER",
+                strategy="SCALPING",
+                now=current,
+            )
+            errors: list[str] = []
+            if resolved.get("enabled") is not True:
+                errors.append("live_resolver_not_enabled")
+            if str(resolved.get("status") or "") not in {
+                "active_bounded_krx_canary",
+                "active_bounded_nxt_canary",
+            }:
+                errors.append("live_resolver_fallback_status")
+            if resolved.get("primary_decision_owner") != MECHANISTIC_PRIMARY_DECISION_OWNER:
+                errors.append("mechanistic_primary_owner_missing")
+            if resolved.get("ai_role") != MECHANISTIC_AI_ADVISORY_ROLE:
+                errors.append("compact_auxiliary_role_missing")
+            if str(resolved.get("selected_prompt_version") or "") not in (
+                MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS
+            ):
+                errors.append("compact_auxiliary_prompt_missing")
+            if (
+                not expected_bundle_sha256
+                or resolved.get("machine_bundle_sha256") != expected_bundle_sha256
+            ):
+                errors.append("machine_bundle_sha256_mismatch")
+            scope_results.append(
+                {
+                    "scope": f"{cohort[0]}|{cohort[1]}",
+                    "status": resolved.get("status"),
+                    "selected_prompt_version": resolved.get(
+                        "selected_prompt_version"
+                    ),
+                    "primary_decision_owner": resolved.get(
+                        "primary_decision_owner"
+                    ),
+                    "ai_role": resolved.get("ai_role"),
+                    "machine_bundle_sha256": resolved.get(
+                        "machine_bundle_sha256"
+                    ),
+                    "errors": errors,
+                }
+            )
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        return {
+            "schema": "entry_machine_primary_preopen_verification_v1",
+            "target_date": str(target_date),
+            "passed": False,
+            "expected_bundle_sha256": None,
+            "scope_results": [],
+            "errors": [f"live_resolver_verification_exception:{type(exc).__name__}:{exc}"],
+        }
+    finally:
+        for key, value in prior.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    errors = [
+        f"{row['scope']}:{error}"
+        for row in scope_results
+        for error in row["errors"]
+    ]
+    return {
+        "schema": "entry_machine_primary_preopen_verification_v1",
+        "target_date": str(target_date),
+        "passed": not errors,
+        "expected_bundle_sha256": expected_bundle_sha256,
+        "scope_results": scope_results,
+        "errors": errors,
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Materialize the date-scoped bounded KRX PREOPEN activation."
@@ -2539,6 +2668,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--runtime-env-file")
     parser.add_argument("--operator-env-file")
     parser.add_argument("--dated-operator-env-file")
+    parser.add_argument("--require-machine-primary", action="store_true")
     args = parser.parse_args(argv)
     date.fromisoformat(args.target_date)
     runtime_env = None
@@ -2580,12 +2710,21 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         activations.append(activation)
-    print(
-        json.dumps(
-            activations if args.all_cohorts else activations[0], ensure_ascii=False
+    output: Any = activations if args.all_cohorts else activations[0]
+    verification = None
+    if args.require_machine_primary:
+        if runtime_env is None:
+            parser.error("--require-machine-primary requires runtime env files")
+        verification = verify_machine_primary_runtime_contract(
+            args.target_date,
+            runtime_env=runtime_env,
         )
-    )
-    return 0
+        output = {
+            "activations": activations,
+            "machine_primary_runtime_verification": verification,
+        }
+    print(json.dumps(output, ensure_ascii=False))
+    return 0 if verification is None or verification.get("passed") is True else 1
 
 
 if __name__ == "__main__":

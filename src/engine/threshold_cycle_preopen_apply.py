@@ -6625,6 +6625,67 @@ def verify_runtime_env_handoff(
                     "source": source,
                 }
             )
+    from src.engine.scalping.entry_setup_scalping_rollout import (
+        AUTO_PROMOTION_PATH_ENV,
+        AUTO_PROMOTION_SHA_ENV,
+        PATH_ENV as SCALPING_ROLLOUT_PATH_ENV,
+        SHA_ENV as SCALPING_ROLLOUT_SHA_ENV,
+        load_auto_promotion,
+        load_rollout,
+    )
+
+    entry_setup_pin_required = target_date >= "2026-09-15"
+    entry_setup_required_keys = [
+        SCALPING_ROLLOUT_PATH_ENV,
+        SCALPING_ROLLOUT_SHA_ENV,
+        AUTO_PROMOTION_PATH_ENV,
+        AUTO_PROMOTION_SHA_ENV,
+    ]
+    missing_entry_setup_pin_keys = [
+        key
+        for key in entry_setup_required_keys
+        if not str(effective_env_overrides.get(key) or "").strip()
+    ]
+    rollout_pin = load_rollout(env=effective_env_overrides)
+    auto_promotion_pin = load_auto_promotion(env=effective_env_overrides)
+    entry_setup_pin_errors = []
+    if entry_setup_pin_required and missing_entry_setup_pin_keys:
+        entry_setup_pin_errors.append("persistent_operator_pin_missing")
+    if entry_setup_pin_required and (
+        not rollout_pin or rollout_pin.get("valid") is not True
+    ):
+        entry_setup_pin_errors.append(
+            str((rollout_pin or {}).get("reason") or "rollout_pin_missing")
+        )
+    if entry_setup_pin_required and (
+        not auto_promotion_pin or auto_promotion_pin.get("valid") is not True
+    ):
+        entry_setup_pin_errors.append(
+            str(
+                (auto_promotion_pin or {}).get("reason")
+                or "auto_promotion_pin_missing"
+            )
+        )
+    entry_setup_pin_audit = {
+        "family": "entry_machine_primary_operator_pins",
+        "enabled": entry_setup_pin_required,
+        "status": "fail" if entry_setup_pin_errors else "pass",
+        "reason": (
+            ",".join(dict.fromkeys(entry_setup_pin_errors))
+            if entry_setup_pin_errors
+            else "persistent_rollout_and_auto_promotion_pins_valid"
+        ),
+        "required_env_keys": entry_setup_required_keys,
+        "missing_env_keys": missing_entry_setup_pin_keys,
+        "policy_file": str(
+            effective_env_overrides.get(AUTO_PROMOTION_PATH_ENV) or ""
+        )
+        or None,
+        "rollout_valid": bool(rollout_pin and rollout_pin.get("valid") is True),
+        "auto_promotion_valid": bool(
+            auto_promotion_pin and auto_promotion_pin.get("valid") is True
+        ),
+    }
     runtime_policy_audits = [
         *_split_runtime_policy_audits(target_date, effective_env_overrides),
         _limit_down_watch_runtime_policy_audit(
@@ -6643,6 +6704,7 @@ def verify_runtime_env_handoff(
             effective_env_overrides,
             operator_overrides,
         ),
+        entry_setup_pin_audit,
     ]
     for audit in runtime_policy_audits:
         selected_policy_disabled = bool(
@@ -6660,7 +6722,7 @@ def verify_runtime_env_handoff(
         findings.append(
             {
                 "family": audit.get("family"),
-                "missing_env_keys": [],
+                "missing_env_keys": list(audit.get("missing_env_keys") or []),
                 "severity": "runtime_policy_unusable",
                 "detail": f"{audit.get('family')} runtime policy unusable: {policy_reason}",
                 "policy_file": audit.get("policy_file"),

@@ -3832,6 +3832,8 @@ def test_preopen_wrapper_treats_operator_lock_ready_manifest_as_succeeded():
     assert '"entry_setup_live_policy_status"' in script
     assert '"entry_setup_live_policy_blocking_reasons"' in script
     assert "--write" in script
+    assert "--require-machine-primary" in script
+    assert "[FAIL] entry machine-primary PREOPEN resolver" in script
 
 
 def test_preopen_wrapper_smoke_allows_operator_lock_runtime_env_without_source_report(

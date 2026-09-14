@@ -1010,6 +1010,21 @@ def test_scanner_runtime_target_venue_fields_preserve_canonical_session_by_venue
         assert fields["venue_unknown_reviewed_reason"] == "not_applicable"
 
 
+def test_scanner_runtime_target_venue_ignores_decision_scope_as_venue():
+    fields = kiwoom_sniper_v2._scanner_runtime_target_venue_fields(
+        {
+            "venue": "PREMARKET_KRX_LIKE",
+            "effective_venue": "PREMARKET_KRX_LIKE",
+            "decision_market_scope": "KRX",
+            "market_session_bucket": "krx_like_premarket",
+        }
+    )
+
+    assert fields["effective_venue"] == "PREMARKET_KRX_LIKE"
+    assert fields["market_session_bucket"] == "krx_like_premarket"
+    assert fields["venue_source_quality_status"] == "pass"
+
+
 def test_scanner_runtime_integrated_route_registers_without_actual_venue_inference(
     monkeypatch,
 ):
