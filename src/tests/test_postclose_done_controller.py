@@ -39,6 +39,13 @@ def test_summary_only_recovery_does_not_regenerate_ev_or_runtime(monkeypatch):
         "--require-summary-handoff"
         in mod._build_verify_action("2026-09-07", verification).command
     )
+    pending_action = mod._build_pending_verify_action("2026-09-07", verification)
+    assert "--allow-pending-done-marker" in pending_action.command
+    assert "--allow-pending-entry-replay" in pending_action.command
+    assert (
+        "--allow-pending-entry-replay"
+        not in mod._build_verify_action("2026-09-07", verification).command
+    )
 
 
 def test_checklist_only_recovery_does_not_rewrite_tower(monkeypatch):
@@ -171,7 +178,9 @@ def _write_json(path, payload):
 
 
 def _entry_setup_followup_state(project_dir, target_date):
-    script_path = Path(__file__).resolve().parents[2] / "deploy/run_postclose_done_controller.sh"
+    script_path = (
+        Path(__file__).resolve().parents[2] / "deploy/run_postclose_done_controller.sh"
+    )
     script = script_path.read_text(encoding="utf-8")
     function_start = script.index("entry_setup_replay_followup_state() {")
     python_start = script.index("import hashlib", function_start)
@@ -409,7 +418,9 @@ def test_entry_setup_followup_rejects_dual_aftermarket_live_authority(tmp_path):
     )
 
 
-def test_entry_setup_followup_rejects_nxt_candidate_hash_reused_for_dual_aftermarket(tmp_path):
+def test_entry_setup_followup_rejects_nxt_candidate_hash_reused_for_dual_aftermarket(
+    tmp_path,
+):
     target_date = "2026-09-12"
     _write_entry_setup_followup_consumer(tmp_path, target_date)
     dual = _entry_replay_cohort(

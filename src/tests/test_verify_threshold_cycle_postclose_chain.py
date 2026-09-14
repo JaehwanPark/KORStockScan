@@ -166,6 +166,41 @@ def test_entry_setup_replay_session_contract_accepts_versioned_observe_only_dual
     assert status["consumer_cohort_count"] == 3
 
 
+def test_entry_setup_replay_session_contract_allows_exact_running_placeholder_only():
+    batch = {
+        "schema": "ai_entry_setup_paired_replay_batch_v1",
+        "target_date": "2026-09-14",
+        "generated_at": "2026-09-14T21:05:01+09:00",
+        "status": "running",
+        "decision_authority": "offline_replay_and_attribution_only",
+        "cohort_contract": None,
+        "cohort_contract_sha256": None,
+        "cohorts": [],
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+
+    pending = mod._entry_setup_replay_session_contract_status(
+        batch, {}, target_date="2026-09-14", allow_pending=True
+    )
+    strict = mod._entry_setup_replay_session_contract_status(
+        batch, {}, target_date="2026-09-14"
+    )
+
+    assert pending["status"] == "pending_follower"
+    assert pending["issues"] == []
+    assert strict["status"] == "fail"
+    assert "consumer_missing" in strict["issues"]
+
+    batch["cohorts"] = [{"status": "partial"}]
+    partial = mod._entry_setup_replay_session_contract_status(
+        batch, {}, target_date="2026-09-14", allow_pending=True
+    )
+    assert partial["status"] == "fail"
+
+
 def test_entry_setup_replay_session_contract_accepts_producer_v1_legacy_routes():
     contract = optimizer._entry_cohort_contract({})
     contract_hash = contract["contract_content_sha256"]

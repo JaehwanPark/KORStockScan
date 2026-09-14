@@ -2074,7 +2074,10 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         < post_done_checklist_idx
         < script.rindex("src.engine.verify_threshold_cycle_postclose_chain")
     )
-    assert '--require-summary-handoff "${VERIFY_DISABLED_STAGE_ARGS[@]}"' in script
+    assert (
+        '--require-summary-handoff --allow-pending-entry-replay "${VERIFY_DISABLED_STAGE_ARGS[@]}"'
+        in script
+    )
     assert script.count("src.engine.pattern_lab_propagation_audit") == 2
     assert script.count("--review-current-generation") == 2
     assert (
@@ -2772,6 +2775,9 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
     )
     assert "src.engine.verify_threshold_cycle_postclose_chain" in script
     assert "--allow-pending-done-marker" in script
+    assert script.count("--allow-pending-entry-replay") == 3
+    strict_verify = script[script.index("--require-summary-handoff") - 180 :]
+    assert "--allow-pending-entry-replay" in strict_verify
     assert (
         'run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.verify_threshold_cycle_postclose_chain'
         in script

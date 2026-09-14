@@ -2591,6 +2591,7 @@ wait_for_postclose_resources "verify_threshold_cycle_postclose_chain"
 run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.verify_threshold_cycle_postclose_chain \
   --date "$TARGET_DATE" \
   --allow-pending-done-marker \
+  --allow-pending-entry-replay \
   "${VERIFY_DISABLED_STAGE_ARGS[@]}"
 wait_for_report_artifact \
   "$PROJECT_DIR/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_${TARGET_DATE}.json" \
@@ -2604,6 +2605,7 @@ emit_postclose_marker "[DONE] threshold-cycle postclose target_date=$TARGET_DATE
 wait_for_postclose_resources "verify_threshold_cycle_postclose_chain_final"
 run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.verify_threshold_cycle_postclose_chain \
   --date "$TARGET_DATE" \
+  --allow-pending-entry-replay \
   "${VERIFY_DISABLED_STAGE_ARGS[@]}"
 wait_for_report_artifact \
   "$PROJECT_DIR/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_${TARGET_DATE}.json" \
@@ -2622,5 +2624,5 @@ fi
 wait_for_postclose_resources "postclose_summary_handoff"
 run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.build_next_stage2_checklist --source-date "$TARGET_DATE"
 run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.verify_threshold_cycle_postclose_chain \
-  --date "$TARGET_DATE" --require-summary-handoff "${VERIFY_DISABLED_STAGE_ARGS[@]}"
+  --date "$TARGET_DATE" --require-summary-handoff --allow-pending-entry-replay "${VERIFY_DISABLED_STAGE_ARGS[@]}"
 restart_postclose_bot_if_requested

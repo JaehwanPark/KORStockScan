@@ -42,6 +42,7 @@ NON_RECOVERABLE_TERMS = {
     "package_missing",
 }
 DONE_ACCEPTABLE_WARNING_ISSUES = {
+    "entry_setup_replay_follower_pending",
     "active_sim_priority_stale_seed_alias_consumed",
     "active_sim_priority_preopen_handoff_pending",
     "active_sim_priority_runtime_observation_missing",
@@ -632,6 +633,7 @@ def _build_pending_verify_action(
             "--date",
             target_date,
             "--allow-pending-done-marker",
+            "--allow-pending-entry-replay",
             *_verification_disabled_stage_args(verification),
         ],
         "wrapper-tail repair verifier before DONE reconciliation",

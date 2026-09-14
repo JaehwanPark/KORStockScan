@@ -2286,6 +2286,7 @@ def _entry_setup_replay_session_contract_status(
     consumer: dict[str, Any],
     *,
     target_date: str,
+    allow_pending: bool = False,
 ) -> dict[str, Any]:
     """Reconcile the producer-owned replay cohort census through its consumer.
 
@@ -2298,6 +2299,32 @@ def _entry_setup_replay_session_contract_status(
         return {
             "status": "not_enabled",
             "issues": [],
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        }
+
+    pending_batch = (
+        allow_pending
+        and batch.get("schema") == "ai_entry_setup_paired_replay_batch_v1"
+        and batch.get("target_date") == target_date
+        and batch.get("status") == "running"
+        and isinstance(batch.get("generated_at"), str)
+        and str(batch.get("generated_at") or "").startswith(target_date)
+        and batch.get("cohort_contract") is None
+        and batch.get("cohort_contract_sha256") is None
+        and batch.get("cohorts") == []
+        and batch.get("runtime_effect") is False
+        and batch.get("allowed_runtime_apply") is False
+        and batch.get("actual_order_submitted") is False
+        and batch.get("broker_order_forbidden") is True
+        and batch.get("decision_authority") == "offline_replay_and_attribution_only"
+    )
+    if pending_batch:
+        return {
+            "status": "pending_follower",
+            "issues": [],
+            "target_date": target_date,
+            "generated_at": batch.get("generated_at"),
             "runtime_effect": False,
             "allowed_runtime_apply": False,
         }
@@ -7490,6 +7517,7 @@ def build_threshold_cycle_postclose_verification(
     require_done_marker: bool = True,
     disabled_stages: set[str] | None = None,
     require_summary_handoff: bool = False,
+    allow_pending_entry_replay: bool = False,
 ) -> dict[str, Any]:
     target_date = str(target_date).strip()
     requested_disabled_stages = {
@@ -7701,12 +7729,15 @@ def build_threshold_cycle_postclose_verification(
         entry_setup_replay_batch,
         main_ai_prompt_consumer,
         target_date=target_date,
+        allow_pending=allow_pending_entry_replay,
     )
     if entry_setup_replay_session_contract["status"] == "fail":
         log_issues.extend(
             f"entry_setup_replay_{issue}"
             for issue in entry_setup_replay_session_contract["issues"]
         )
+    elif entry_setup_replay_session_contract["status"] == "pending_follower":
+        handoff_warnings.append("entry_setup_replay_follower_pending")
     threshold_cycle_daily = _load_json(paths["threshold_cycle_daily"])
     threshold_cycle_calibration = _load_json(paths["threshold_cycle_calibration"])
     threshold_cycle_ai_review = _load_json(
@@ -10019,6 +10050,15 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--allow-pending-entry-replay",
+        action="store_true",
+        help=(
+            "Allow wrapper-internal verification to accept only the exact source-only "
+            "running replay placeholder. External controller/finalization verification "
+            "must omit this flag to require the terminal replay and consumer contract."
+        ),
+    )
+    parser.add_argument(
         "--disabled-stage",
         action="append",
         default=[],
@@ -10035,6 +10075,7 @@ def main() -> None:
         require_done_marker=not args.allow_pending_done_marker,
         disabled_stages=set(args.disabled_stage),
         require_summary_handoff=args.require_summary_handoff,
+        allow_pending_entry_replay=args.allow_pending_entry_replay,
     )
     VERIFY_DIR.mkdir(parents=True, exist_ok=True)
     json_path, md_path = verification_report_paths(args.date)
