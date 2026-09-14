@@ -3023,6 +3023,109 @@ def relabel_hierarchy_source_rows(
     return result, dict(counts)
 
 
+def _machine_ai_trace_index(data_root: Path, day: str) -> dict[str, list[dict]]:
+    """Index the existing AI trace by its exact input snapshot.
+
+    A machine observation is captured immediately before the composed AI
+    decision.  Snapshot identity is therefore the only safe attempt-level join;
+    symbol and a nearby timestamp alone are intentionally insufficient.
+    """
+
+    path = existing_or_gzip_path(
+        data_root / "ai_decision_trace" / f"ai_decision_trace_{day}.jsonl"
+    )
+    result: dict[str, list[dict]] = defaultdict(list)
+    if path is None or not path.is_file():
+        return result
+    for row in iter_jsonl(path):
+        snapshot_id = str(row.get("snapshot_id") or "").strip()
+        if (
+            row.get("schema") != "ai_decision_trace_v1"
+            or row.get("decision_stage") != "entry_screen"
+            or not snapshot_id
+        ):
+            continue
+        result[snapshot_id].append(row)
+    return result
+
+
+def _match_machine_ai_trace(
+    capture: dict, context: dict, trace_index: dict[str, list[dict]]
+) -> tuple[dict, str]:
+    snapshot_id = str(context.get("snapshot_id") or "").strip()
+    if not snapshot_id:
+        return {}, "machine_snapshot_id_missing"
+
+    def aware_timestamp(value: Any) -> datetime | None:
+        try:
+            parsed = datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return parsed if parsed.utcoffset() is not None else None
+
+    capture_ts = aware_timestamp(capture.get("captured_at"))
+    candidates = []
+    for row in trace_index.get(snapshot_id, []):
+        trace_ts = aware_timestamp(row.get("decision_ts"))
+        if (
+            str(row.get("stock_code") or "") != str(context.get("stock_code") or "")
+            or _normalized_venue(row.get("effective_venue"))
+            != _normalized_venue(context.get("effective_venue"))
+            or _normalized_session(row.get("session_bucket"))
+            != _normalized_session(context.get("session_bucket"))
+            or capture_ts is None
+            or trace_ts is None
+            or not -1.0 <= (trace_ts - capture_ts).total_seconds() <= 120.0
+        ):
+            continue
+        machine_bundle = str(capture.get("bundle_sha256") or "")
+        trace_bundle = str(row.get("machine_bundle_sha256") or "")
+        if trace_bundle and machine_bundle and trace_bundle != machine_bundle:
+            continue
+        candidates.append(row)
+    expected_action = str(
+        _as_dict(_as_dict(capture.get("source")).get("assessment")).get("action")
+        or ""
+    ).upper()
+    matching_action = [
+        row
+        for row in candidates
+        if str(row.get("entry_mechanistic_action") or "").upper() == expected_action
+    ]
+    if len(matching_action) == 1:
+        return matching_action[0], "exact_snapshot_machine_action_join"
+    if len(candidates) == 1:
+        return candidates[0], "exact_snapshot_join"
+    if not candidates:
+        return {}, "ai_trace_missing_for_exact_snapshot"
+    return {}, "ai_trace_ambiguous_for_exact_snapshot"
+
+
+def _compact_machine_horizon_metrics(metrics: Any) -> dict[str, dict]:
+    result = {}
+    for horizon in ("1m", "3m", "5m", "10m", "20m", "30m", "60m"):
+        metric = _as_dict(_as_dict(metrics).get(horizon))
+        if not metric:
+            continue
+        path = _as_dict(metric.get("entry_quality_path"))
+        result[horizon] = {
+            "sample_count": metric.get("sample_count"),
+            "mfe_pct": metric.get("mfe_pct"),
+            "mae_pct": metric.get("mae_pct"),
+            "end_return_pct": metric.get("end_return_pct"),
+            "entry_path_first_hit": metric.get("entry_path_first_hit"),
+            "entry_quality_status": path.get("status"),
+            "entry_quality_label": path.get("entry_quality_label"),
+            "cost_adjusted_target_pct": path.get("gross_net_target_pct"),
+            "time_to_net_target_sec": path.get("time_to_net_target_sec"),
+            "pre_target_mae_pct": path.get("pre_target_mae_pct"),
+            "pre_target_underwater_ratio": path.get(
+                "pre_target_underwater_ratio"
+            ),
+        }
+    return result
+
+
 def load_machine_observation_rows(
     data_root: Path, *, target_date: str
 ) -> tuple[list[dict], dict]:
@@ -3087,10 +3190,11 @@ def load_machine_observation_rows(
             by_day[day].append(capture)
         for day, observations in by_day.items():
             cost_profiles_by_venue = {}
+            ai_trace_index = _machine_ai_trace_index(data_root, day)
             pipeline = existing_or_gzip_path(
                 data_root / "pipeline_events" / f"pipeline_events_{day}.jsonl"
             )
-            prices, _ = quality.load_pipeline_price_and_lifecycle_rows(
+            prices, lifecycle = quality.load_pipeline_price_and_lifecycle_rows(
                 iter_jsonl(pipeline) if pipeline and pipeline.is_file() else [],
                 stock_codes={
                     str(c.get("label_context", {}).get("stock_code") or "")
@@ -3100,8 +3204,15 @@ def load_machine_observation_rows(
             prices_by_symbol = defaultdict(list)
             for price in prices:
                 prices_by_symbol[price.get("stock_code")].append(price)
+            lifecycle_by_symbol = defaultdict(list)
+            for event in lifecycle:
+                lifecycle_by_symbol[event.get("stock_code")].append(event)
             for capture in observations:
                 context = dict(capture.get("label_context") or {})
+                ai_trace, ai_trace_join_status = _match_machine_ai_trace(
+                    capture, context, ai_trace_index
+                )
+                counts[ai_trace_join_status] += 1
                 # Runtime capture stores the canonical label context exactly as
                 # observed.  Session labels are lower-case there while the
                 # mechanistic scope registry is upper-case.  Normalize only for
@@ -3159,17 +3270,23 @@ def load_machine_observation_rows(
                 pending = {
                     **context,
                     "decision_ts": capture["captured_at"],
-                    "decision_trace_id": capture["machine_observation_sha256"],
+                    # Use the exact composed-AI trace only for downstream
+                    # lifecycle correlation. The machine digest remains the
+                    # immutable case identity below.
+                    "decision_trace_id": ai_trace.get("decision_trace_id"),
+                    "record_id": context.get("record_id")
+                    or ai_trace.get("record_id"),
                     "decision_stage": "entry",
                     "invalid_reasons": [],
                 }
                 labeled = quality.mature_outcome_labels(
                     pending_labels=[pending],
                     price_rows=prices_by_symbol[context.get("stock_code")],
-                    lifecycle_rows=[],
+                    lifecycle_rows=lifecycle_by_symbol[context.get("stock_code")],
                     as_of=datetime.fromisoformat(target_date + "T23:59:59+09:00"),
                 )[0]
-                metric = labeled.get("horizon_metrics", {}).get("10m", {})
+                horizon_metrics = labeled.get("horizon_metrics", {})
+                metric = horizon_metrics.get("10m", {})
                 entry_path = metric.get("entry_quality_path")
                 if (
                     not isinstance(entry_path, dict)
@@ -3185,9 +3302,37 @@ def load_machine_observation_rows(
                     continue
                 mc = evidence.get("mechanistic_context") or {}
                 cost = context.get("entry_conservative_execution_cost_pct")
+                correlation = _as_dict(labeled.get("correlation"))
+                pipeline_joined = correlation.get("status") == "exact_matched"
+                counts[
+                    "pipeline_lifecycle_exact_join"
+                    if pipeline_joined
+                    else "pipeline_lifecycle_unresolved"
+                ] += 1
+                scanner_promotion_ids = list(
+                    correlation.get("scanner_promotion_ids") or []
+                )
+                if context.get("scanner_promotion_id") not in (None, "", "-"):
+                    scanner_promotion_ids.append(str(context["scanner_promotion_id"]))
+                scanner_promotion_ids = sorted(set(scanner_promotion_ids))
+                evaluation_attempt_id = str(
+                    context.get("evaluation_attempt_id")
+                    or context.get("snapshot_id")
+                    or capture["machine_observation_sha256"]
+                )
                 result.append(
                     {
                         "decision_trace_id": capture["machine_observation_sha256"],
+                        "ai_decision_trace_id": ai_trace.get("decision_trace_id"),
+                        "evaluation_attempt_id": evaluation_attempt_id,
+                        "evaluation_attempt_identity_source": (
+                            "exact_market_snapshot"
+                            if context.get("snapshot_id")
+                            else "machine_observation_digest_fallback"
+                        ),
+                        "record_id": context.get("record_id")
+                        or ai_trace.get("record_id"),
+                        "scanner_promotion_ids": scanner_promotion_ids,
                         "decision_ts": capture["captured_at"],
                         "source_date": day,
                         "stock_code": context.get("stock_code"),
@@ -3201,12 +3346,21 @@ def load_machine_observation_rows(
                             "hierarchy_selection"
                         ),
                         "machine_core_comparison": assessment.get("core_comparison"),
+                        "machine_applied_thresholds": assessment.get(
+                            "applied_thresholds"
+                        ),
+                        "machine_liquidity_inputs": assessment.get(
+                            "liquidity_inputs"
+                        ),
                         "setup_evidence": evidence,
                         "entry_group_observation": mc.get("group", {}),
                         "entry_group_contract_valid": True,
                         "mechanistic_flow_observation": mc.get("flow", {}),
                         "mechanistic_flow_observation_contract_valid": True,
                         "entry_quality_path": entry_path,
+                        "outcome_horizon_metrics": (
+                            _compact_machine_horizon_metrics(horizon_metrics)
+                        ),
                         "entry_quality_contract_valid": True,
                         "source_report_hash_verified": False,
                         "machine_observation_hash_verified": True,
@@ -3223,6 +3377,44 @@ def load_machine_observation_rows(
                             ),
                             "conservative_execution_cost_pct": cost,
                         },
+                        "watch_timing": {
+                            "first_watch_epoch": context.get("first_watch_epoch"),
+                            "watch_age_sec": context.get("watch_age_sec"),
+                            "first_watch_price": context.get("first_watch_price"),
+                            "price_delta_since_first_watch_pct": context.get(
+                                "price_delta_since_first_watch_pct"
+                            ),
+                        },
+                        "ai_and_final_guard": {
+                            "join_status": ai_trace_join_status,
+                            "ai_action": ai_trace.get("action"),
+                            "ai_result_source": ai_trace.get("result_source"),
+                            "provider_called": ai_trace.get("provider_called"),
+                            "ai_screen_status": ai_trace.get(
+                                "entry_ai_screen_status"
+                            ),
+                            "ai_screen_pass": ai_trace.get("entry_ai_screen_pass"),
+                            "ai_risk_verdict": ai_trace.get(
+                                "entry_ai_risk_verdict"
+                            ),
+                            "ai_veto_corroborated": ai_trace.get(
+                                "entry_ai_veto_corroborated"
+                            ),
+                            "followup_disposition": ai_trace.get(
+                                "entry_ai_followup_disposition"
+                            ),
+                            "pipeline_lifecycle_status": correlation.get("status"),
+                            "matched_stage_counts": correlation.get(
+                                "matched_stage_counts"
+                            ),
+                            "observed_actual_order_submitted": correlation.get(
+                                "actual_order_submitted"
+                            ),
+                            "fill_observed": correlation.get("fill_observed"),
+                            "realized_profit_pct": correlation.get(
+                                "realized_profit_pct"
+                            ),
+                        },
                         "source_lane": "machine_observation_counterfactual_no_provider",
                         "exit_cohort": "existing_fixed_boundary_counterfactual",
                     }
@@ -3237,8 +3429,9 @@ def build_machine_decision_case_table(
     """Classify machine timing outcomes without creating trading authority.
 
     Rows are exact runtime machine captures matured by the existing
-    action-neutral entry path labeler. This table deliberately stops before
-    AI/final-guard attribution; those stages retain their own trace ledgers.
+    action-neutral entry path labeler. Exact snapshot identity connects the
+    machine decision to the composed AI trace and downstream lifecycle without
+    merging their separate authorities.
     """
 
     classifications: Counter[str] = Counter()
@@ -3247,36 +3440,27 @@ def build_machine_decision_case_table(
     hierarchy_selection_counts: Counter[str] = Counter()
     selected_child_rule_ids: set[str] = set()
     cases: list[dict] = []
-    last_case_by_scope: dict[tuple[str, str, str, str, str], tuple[datetime, str]] = {}
+    seen_attempts: dict[tuple[str, str, str, str, str], tuple[str, str]] = {}
     duplicate_same_action_collapsed_count = 0
+    conflicting_attempt_identity_count = 0
     for row in sorted(rows, key=lambda item: str(item.get("decision_ts") or "")):
         action = str(row.get("machine_action") or "").upper()
-        try:
-            decision_time = datetime.fromisoformat(
-                str(row.get("decision_ts") or "").replace("Z", "+00:00")
-            )
-        except ValueError:
-            decision_time = None
-        if decision_time is not None and decision_time.tzinfo is None:
-            decision_time = None
-        episode_key = (
+        attempt_key = (
             str(row.get("source_date") or ""),
-            str(row.get("stock_code") or ""),
+            str(row.get("evaluation_attempt_id") or row.get("decision_trace_id") or ""),
             str(row.get("effective_venue") or ""),
             str(row.get("session_bucket") or ""),
             str(row.get("bundle_sha256") or ""),
         )
-        previous = last_case_by_scope.get(episode_key)
-        if (
-            decision_time is not None
-            and previous is not None
-            and action == previous[1]
-            and 0 <= (decision_time - previous[0]).total_seconds() < 60
-        ):
-            duplicate_same_action_collapsed_count += 1
-            continue
-        if decision_time is not None:
-            last_case_by_scope[episode_key] = (decision_time, action)
+        previous = seen_attempts.get(attempt_key)
+        current_identity = (action, str(row.get("decision_trace_id") or ""))
+        if previous is not None:
+            if previous == current_identity:
+                duplicate_same_action_collapsed_count += 1
+                continue
+            conflicting_attempt_identity_count += 1
+        else:
+            seen_attempts[attempt_key] = current_identity
         path = _as_dict(row.get("entry_quality_path"))
         label = str(path.get("entry_quality_label") or "CENSORED_OR_SOURCE_GAP")
         if path.get("status") != "evaluable" or label == "CENSORED_OR_SOURCE_GAP":
@@ -3311,6 +3495,13 @@ def build_machine_decision_case_table(
         cases.append(
             {
                 "decision_trace_id": row.get("decision_trace_id"),
+                "ai_decision_trace_id": row.get("ai_decision_trace_id"),
+                "evaluation_attempt_id": row.get("evaluation_attempt_id"),
+                "evaluation_attempt_identity_source": row.get(
+                    "evaluation_attempt_identity_source"
+                ),
+                "record_id": row.get("record_id"),
+                "scanner_promotion_ids": row.get("scanner_promotion_ids") or [],
                 "decision_snapshot_id": row.get("decision_snapshot_id"),
                 "decision_ts": row.get("decision_ts"),
                 "source_date": row.get("source_date"),
@@ -3320,6 +3511,11 @@ def build_machine_decision_case_table(
                 "bundle_sha256": row.get("bundle_sha256"),
                 "machine_action": action,
                 "machine_reason": row.get("machine_reason"),
+                "machine_core_comparison": row.get("machine_core_comparison"),
+                "machine_applied_thresholds": row.get(
+                    "machine_applied_thresholds"
+                ),
+                "machine_liquidity_inputs": row.get("machine_liquidity_inputs"),
                 "hierarchy_selection": row.get("machine_hierarchy_selection"),
                 "entry_quality_label": label,
                 "case_classification": classification,
@@ -3332,8 +3528,13 @@ def build_machine_decision_case_table(
                     "pre_target_neutral_dwell_ratio"
                 ),
                 "checkpoint_metrics": path.get("checkpoints"),
+                "outcome_horizon_metrics": row.get("outcome_horizon_metrics") or {},
+                "watch_timing": row.get("watch_timing") or {},
                 "path_authority": path.get("path_authority"),
-                "ai_and_final_guard_join_status": "not_joined_separate_owner",
+                "ai_and_final_guard_join_status": _as_dict(
+                    row.get("ai_and_final_guard")
+                ).get("join_status"),
+                "ai_and_final_guard": row.get("ai_and_final_guard") or {},
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
                 "actual_order_submitted": False,
@@ -3342,11 +3543,23 @@ def build_machine_decision_case_table(
         )
     return {
         "schema": MACHINE_DECISION_CASE_TABLE_SCHEMA,
-        "status": "evaluable" if cases else "source_gap_no_evaluable_cases",
+        "status": (
+            "evaluable"
+            if cases
+            else (
+                "source_gap_blocked_no_evaluable_cases"
+                if int(_as_dict(capture_census).get("captured") or 0) > 0
+                else "source_gap_no_machine_captures"
+            )
+        ),
         "input_evaluable_observation_count": len(rows),
         "case_count": len(cases),
         "duplicate_same_action_collapsed_count": (
             duplicate_same_action_collapsed_count
+        ),
+        "conflicting_attempt_identity_count": conflicting_attempt_identity_count,
+        "policy_learning_eligible_observation_count": (
+            len(rows) if conflicting_attempt_identity_count == 0 else 0
         ),
         "machine_capture_census": dict(capture_census or {}),
         "machine_action_counts": dict(sorted(action_counts.items())),
@@ -3355,15 +3568,14 @@ def build_machine_decision_case_table(
         "hierarchy_selection_counts": dict(sorted(hierarchy_selection_counts.items())),
         "observed_selected_child_rule_count": len(selected_child_rule_ids),
         "observed_selected_child_rule_ids": sorted(selected_child_rule_ids),
-        "case_unit": (
-            "symbol_scope_bundle_episode_with_same_action_collapsed_inside_60s_"
-            "and_action_transitions_preserved"
-        ),
+        "case_unit": "exact_market_snapshot_attempt_x_venue_x_session_x_bundle",
+        "legacy_60_second_same_action_collapse_disabled": True,
         "comparison_objective": (
             "cost_adjusted_net_edge_at_least_0.10pct_with_fast_target_"
             "deep_adverse_and_sideways_separated"
         ),
         "ai_and_final_guard_are_separate_consumers": True,
+        "ai_and_final_guard_exact_join_attempted": True,
         "rows": cases[-200:],
         "row_export_limit": 200,
         "runtime_effect": False,
@@ -5375,9 +5587,14 @@ def build_report(
     hierarchy_rows, hierarchy_cost_census = relabel_hierarchy_source_rows(
         mechanistic_source_rows, data_root
     )
+    machine_policy_rows = (
+        machine_observations
+        if machine_decision_case_table["conflicting_attempt_identity_count"] == 0
+        else []
+    )
     hierarchical_entry_quality["runtime_extension"] = (
         build_mechanistic_hierarchy_candidate(
-            hierarchy_rows + machine_observations,
+            hierarchy_rows + machine_policy_rows,
             target_date=target_date,
             parent_policy=hierarchy_parent,
         )
@@ -5589,11 +5806,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     report = build_report(target_date=args.target_date, data_root=args.data_root)
     path = report_path(args.target_date, args.data_root / "report")
+    published_policy = None
     if args.write:
         _atomic_write_json(path, report)
         from src.engine.scalping.mechanistic_entry_runtime_policy import publish
 
-        publish(path, data_root=args.data_root)
+        published_policy = publish(path, data_root=args.data_root)
     if args.print_summary:
         print(
             json.dumps(
@@ -5602,6 +5820,33 @@ def main(argv: list[str] | None = None) -> int:
                     "candidate_count": report["candidate_count"],
                     "selected_review_candidate": report["selected_review_candidate"],
                     "ofi_smoothing_audit": report["ofi_smoothing_audit"],
+                    "runtime_policy_publication": (
+                        {
+                            "status": "published_or_idempotent",
+                            "target_date": published_policy.get("target_date"),
+                            "bundle_sha256": published_policy.get("bundle_sha256"),
+                            "machine_disposition": published_policy.get(
+                                "machine_disposition"
+                            ),
+                            "hierarchy_disposition": published_policy.get(
+                                "hierarchy_disposition"
+                            ),
+                            "hierarchy_adopted": published_policy.get(
+                                "hierarchy_adopted"
+                            ),
+                            "all_continuous_adopted": published_policy.get(
+                                "all_continuous_adopted"
+                            ),
+                        }
+                        if published_policy is not None
+                        else {
+                            "status": (
+                                "not_enabled_no_bootstrapped_policy"
+                                if args.write
+                                else "not_requested_without_write"
+                            )
+                        }
+                    ),
                     "path": str(path),
                 },
                 ensure_ascii=False,

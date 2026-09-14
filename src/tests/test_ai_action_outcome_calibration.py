@@ -563,7 +563,10 @@ def test_machine_capture_matures_with_existing_cost_owner_without_ai(
     )
     assert capture["machine_capture_status"] == "captured"
     rows, census = calibration.load_machine_observation_rows(tmp_path, target_date=day)
-    assert census == {"captured": 1, "evaluable": 1}
+    assert census["captured"] == 1
+    assert census["evaluable"] == 1
+    assert census["machine_snapshot_id_missing"] == 1
+    assert census["pipeline_lifecycle_unresolved"] == 1
     assert len(rows) == 1
     assert rows[0]["comparison"]["conservative_execution_cost_pct"] == pytest.approx(
         0.20
@@ -642,7 +645,8 @@ def test_machine_capture_normalizes_runtime_session_for_scope_lookup(
 
     rows, census = calibration.load_machine_observation_rows(tmp_path, target_date=day)
 
-    assert census == {"captured": 1, "evaluable": 1}
+    assert census["captured"] == 1
+    assert census["evaluable"] == 1
     assert len(rows) == 1
     assert rows[0]["comparison"]["entry_cost_contract"]["session_bucket"] == (
         "KRX_REGULAR"
@@ -650,9 +654,19 @@ def test_machine_capture_normalizes_runtime_session_for_scope_lookup(
 
 
 def test_machine_decision_case_table_separates_missed_and_bad_entry_timing():
-    def row(action, label, trace_id, *, second=0, hierarchy=None):
+    def row(
+        action,
+        label,
+        trace_id,
+        *,
+        second=0,
+        hierarchy=None,
+        attempt_id=None,
+    ):
         return {
             "decision_trace_id": trace_id,
+            "evaluation_attempt_id": attempt_id or trace_id,
+            "evaluation_attempt_identity_source": "exact_market_snapshot",
             "decision_snapshot_id": f"snapshot-{trace_id}",
             "decision_ts": f"2026-09-14T12:00:{second:02d}+09:00",
             "source_date": "2026-09-14",
@@ -663,6 +677,15 @@ def test_machine_decision_case_table_separates_missed_and_bad_entry_timing():
             "machine_action": action,
             "machine_reason": "fixture",
             "machine_hierarchy_selection": hierarchy or {"level": "common"},
+            "outcome_horizon_metrics": {
+                "10m": {
+                    "entry_quality_status": "evaluable",
+                    "entry_quality_label": label,
+                }
+            },
+            "ai_and_final_guard": {
+                "join_status": "ai_trace_missing_for_exact_snapshot"
+            },
             "entry_quality_path": {
                 "status": "evaluable",
                 "entry_quality_label": label,
@@ -690,9 +713,10 @@ def test_machine_decision_case_table_separates_missed_and_bad_entry_timing():
             row(
                 "RECHECK",
                 "CLEAN_FAST_LOSS_OR_ADVERSE",
-                "duplicate-recheck",
+                "good-recheck",
                 second=30,
                 hierarchy={"level": "group", "rule_id": "flow-rule-1"},
+                attempt_id="good-recheck",
             ),
         ],
         capture_census={"captured": 4, "evaluable": 4},
@@ -717,10 +741,85 @@ def test_machine_decision_case_table_separates_missed_and_bad_entry_timing():
         "group": 1,
     }
     assert report["observed_selected_child_rule_ids"] == ["flow-rule-1"]
-    assert all(
-        item["ai_and_final_guard_join_status"] == "not_joined_separate_owner"
-        for item in report["rows"]
+    assert report["legacy_60_second_same_action_collapse_disabled"] is True
+    assert report["conflicting_attempt_identity_count"] == 0
+
+
+def test_machine_case_table_preserves_distinct_snapshots_inside_sixty_seconds():
+    base = {
+        "source_date": "2026-09-14",
+        "stock_code": "005930",
+        "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "bundle_sha256": "a" * 64,
+        "machine_action": "RECHECK",
+        "machine_reason": "fixture",
+        "machine_hierarchy_selection": {"level": "common"},
+        "entry_quality_path": {
+            "status": "evaluable",
+            "entry_quality_label": "CLEAN_FAST_PROFIT",
+        },
+        "outcome_horizon_metrics": {
+            "10m": {
+                "entry_quality_status": "evaluable",
+                "entry_quality_label": "CLEAN_FAST_PROFIT",
+            }
+        },
+        "ai_and_final_guard": {
+            "join_status": "exact_snapshot_machine_action_join"
+        },
+    }
+    report = calibration.build_machine_decision_case_table(
+        [
+            {
+                **base,
+                "decision_trace_id": "capture-a",
+                "evaluation_attempt_id": "snapshot-a",
+                "decision_ts": "2026-09-14T12:00:00+09:00",
+            },
+            {
+                **base,
+                "decision_trace_id": "capture-b",
+                "evaluation_attempt_id": "snapshot-b",
+                "decision_ts": "2026-09-14T12:00:30+09:00",
+            },
+        ]
     )
+
+    assert report["case_count"] == 2
+    assert report["duplicate_same_action_collapsed_count"] == 0
+
+
+def test_machine_ai_trace_match_uses_snapshot_route_bundle_and_machine_action():
+    capture = {
+        "captured_at": "2026-09-14T12:00:00+09:00",
+        "bundle_sha256": "b" * 64,
+        "source": {"assessment": {"action": "ENTER_NOW"}},
+    }
+    context = {
+        "snapshot_id": "aims-exact",
+        "stock_code": "005930",
+        "effective_venue": "KRX",
+        "session_bucket": "krx_regular",
+    }
+    good = {
+        "decision_ts": "2026-09-14T12:00:01+09:00",
+        "decision_trace_id": "aidt-good",
+        "snapshot_id": "aims-exact",
+        "stock_code": "005930",
+        "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "machine_bundle_sha256": "b" * 64,
+        "entry_mechanistic_action": "ENTER_NOW",
+    }
+    wrong_route = {**good, "decision_trace_id": "aidt-wrong", "effective_venue": "NXT"}
+
+    matched, status = calibration._match_machine_ai_trace(
+        capture, context, {"aims-exact": [wrong_route, good]}
+    )
+
+    assert status == "exact_snapshot_machine_action_join"
+    assert matched["decision_trace_id"] == "aidt-good"
 
 
 def test_hierarchy_cost_owner_rejects_changed_raw_source(tmp_path):

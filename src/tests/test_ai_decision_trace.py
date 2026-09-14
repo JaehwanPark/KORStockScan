@@ -37,12 +37,15 @@ def test_machine_observation_keeps_exact_input_without_provider_request(
         setup_evidence={"setup_state": "WAIT_CONFIRMATION"},
         assessment={"action": "RECHECK"},
         bundle_sha256="b" * 64,
+        metadata={"record_id": 123},
     )
     assert result["machine_capture_status"] == "captured"
     row = _rows(trace._payload_path(trace._date_text()))[0]
     assert row["schema"] == "mechanistic_entry_observation_v1"
     assert row["provider_called"] is False
     assert row["source"]["exact_payload"]["name"] == "삼성전자"
+    assert row["label_context"]["record_id"] == 123
+    assert row["label_context"]["evaluation_attempt_id"] is None
     assert not (tmp_path / "ai_decision_prompts").exists()
     assert not (tmp_path / "ai_decision_outcomes").exists()
 

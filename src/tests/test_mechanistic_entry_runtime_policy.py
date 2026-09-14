@@ -298,15 +298,32 @@ def test_existing_calibration_write_publishes_updated_bundle(
     report["mechanistic_flow_groups"]["source_population"][
         "accepted_unique_trace_count"
     ] = 30
+    report.update(
+        status="success",
+        candidate_count=0,
+        selected_review_candidate=None,
+        ofi_smoothing_audit={},
+    )
     report = calibration._with_artifact_content_sha256(report)
     monkeypatch.setattr(calibration, "build_report", lambda **kwargs: report)
     assert (
         calibration.main(
-            ["--target-date", "2026-09-11", "--data-root", str(tmp_path), "--write"]
+            [
+                "--target-date",
+                "2026-09-11",
+                "--data-root",
+                str(tmp_path),
+                "--write",
+                "--print-summary",
+            ]
         )
         == 0
     )
-    capsys.readouterr()
+    output = json.loads(capsys.readouterr().out)
+    assert output["runtime_policy_publication"]["status"] == (
+        "published_or_idempotent"
+    )
+    assert output["runtime_policy_publication"]["target_date"] == "2026-09-14"
     updated = policy.load(data_root=tmp_path, target_date="2026-09-14")
     assert (
         updated["historical_context"]["flow_source_population"][

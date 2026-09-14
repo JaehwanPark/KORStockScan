@@ -14599,3 +14599,42 @@ def test_micro_reversion_budgeted_runner_reserves_each_schema_attempt_and_settle
         "reservation-2"
     )
     assert ledger.summary_paths == [tmp_path / "budget.json"]
+
+
+def test_pipeline_lifecycle_keeps_promotion_on_trace_without_promotion_only_bloat():
+    rows = [
+        {
+            "stage": "scanner_observation",
+            "stock_code": "005930",
+            "emitted_at": "2026-09-14T12:00:00+09:00",
+            "fields": {
+                "scanner_promotion_id": "SCANPROM-005930-1",
+            },
+        },
+        {
+            "stage": "ai_confirmed",
+            "stock_code": "005930",
+            "record_id": 17,
+            "emitted_at": "2026-09-14T12:00:01+09:00",
+            "fields": {
+                "ai_decision_trace_id": "aidt-exact",
+                "scanner_promotion_id": "SCANPROM-005930-1",
+                "actual_order_submitted": False,
+            },
+        },
+    ]
+
+    _prices, lifecycle = quality.load_pipeline_price_and_lifecycle_rows(rows)
+    correlation = quality._correlation(
+        {
+            "stock_code": "005930",
+            "decision_ts": "2026-09-14T12:00:00+09:00",
+            "decision_stage": "entry",
+            "decision_trace_id": "aidt-exact",
+        },
+        lifecycle,
+    )
+
+    assert len(lifecycle) == 1
+    assert correlation["status"] == "exact_matched"
+    assert correlation["scanner_promotion_ids"] == ["SCANPROM-005930-1"]

@@ -2376,6 +2376,7 @@ def mechanistic_entry_policy_decision(
         "reason": reason,
         "core_comparison": comparison,
         "liquidity_inputs": observed,
+        "applied_thresholds": dict(thresholds),
         "liquidity_inputs_complete": liquidity_complete,
         "liquidity_threshold_pass": liquidity_pass,
         "policy_version": selected_policy.get("version"),

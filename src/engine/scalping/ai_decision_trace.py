@@ -1000,7 +1000,12 @@ def capture_canonical_context_candidate(
 
 
 def capture_machine_observation(
-    *, exact_payload: dict, setup_evidence: dict, assessment: dict, bundle_sha256: str
+    *,
+    exact_payload: dict,
+    setup_evidence: dict,
+    assessment: dict,
+    bundle_sha256: str,
+    metadata: dict[str, Any] | None = None,
 ) -> dict:
     """Capture every machine anchor without inventing an AI request/outcome.
 
@@ -1010,7 +1015,39 @@ def capture_machine_observation(
     if not trace_enabled():
         return {"machine_capture_status": "disabled"}
     now = _now()
-    context = _request_context(exact_payload, {}, endpoint_name="scalping_entry")
+    context = _request_context(
+        exact_payload, dict(metadata or {}), endpoint_name="scalping_entry"
+    )
+    # The exact market snapshot is the machine evaluation attempt.  Preserve
+    # the caller lifecycle identity as well so postclose can distinguish two
+    # evaluations of the same symbol without a time-window heuristic.
+    context["evaluation_attempt_id"] = (
+        _first_value(
+            exact_payload,
+            ("evaluation_attempt_id", "entry_evaluation_attempt_id"),
+        )
+        or (metadata or {}).get("evaluation_attempt_id")
+        or context.get("snapshot_id")
+    )
+    context["scanner_promotion_id"] = (
+        _first_value(exact_payload, ("scanner_promotion_id",))
+        or (metadata or {}).get("scanner_promotion_id")
+    )
+    context["first_watch_epoch"] = _safe_number(
+        _first_value(exact_payload, ("first_watch_epoch", "first_seen_epoch"))
+    )
+    context["watch_age_sec"] = _safe_number(
+        _first_value(exact_payload, ("watch_age_sec",))
+    )
+    context["first_watch_price"] = _safe_number(
+        _first_value(exact_payload, ("first_watch_price", "first_seen_price"))
+    )
+    context["price_delta_since_first_watch_pct"] = _safe_number(
+        _first_value(
+            exact_payload,
+            ("price_delta_since_first_watch_pct", "price_delta_since_first_seen_pct"),
+        )
+    )
     context["entry_conservative_execution_cost_pct"] = _safe_number(
         _first_value(
             exact_payload,

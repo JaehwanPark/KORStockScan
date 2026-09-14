@@ -3637,6 +3637,9 @@ def load_pipeline_price_and_lifecycle_rows(
             "probe_bundle_id": fields.get("probe_bundle_id"),
             "position_cycle_id": fields.get("position_cycle_id"),
             "broker_order_no": fields.get("broker_order_no") or fields.get("order_no"),
+            "scanner_promotion_id": fields.get("scanner_promotion_id"),
+            "evaluation_attempt_id": fields.get("evaluation_attempt_id")
+            or fields.get("entry_evaluation_attempt_id"),
         }
         stage_lower = stage.lower()
         actual_order_submitted = _bool(fields.get("actual_order_submitted"))
@@ -4422,6 +4425,8 @@ def _correlation(
             "probe_bundle_id",
             "position_cycle_id",
             "broker_order_no",
+            "scanner_promotion_id",
+            "evaluation_attempt_id",
         )
         if label.get(key) not in (None, "", "-")
     }
@@ -4451,6 +4456,8 @@ def _correlation(
                 "probe_bundle_id",
                 "position_cycle_id",
                 "broker_order_no",
+                "scanner_promotion_id",
+                "evaluation_attempt_id",
             )
             if row.get(key) not in (None, "", "-")
         }
@@ -4491,6 +4498,20 @@ def _correlation(
             str(row.get("broker_order_no"))
             for row in matched
             if row.get("broker_order_no") not in (None, "", "-")
+        }
+    )
+    scanner_promotion_ids = sorted(
+        {
+            str(row.get("scanner_promotion_id"))
+            for row in matched
+            if row.get("scanner_promotion_id") not in (None, "", "-")
+        }
+    )
+    evaluation_attempt_ids = sorted(
+        {
+            str(row.get("evaluation_attempt_id"))
+            for row in matched
+            if row.get("evaluation_attempt_id") not in (None, "", "-")
         }
     )
 
@@ -4547,6 +4568,8 @@ def _correlation(
         "position_cycle_ids": position_cycle_ids,
         "probe_bundle_ids": probe_bundle_ids,
         "broker_order_nos": broker_order_nos,
+        "scanner_promotion_ids": scanner_promotion_ids,
+        "evaluation_attempt_ids": evaluation_attempt_ids,
         "lifecycle_stage_presence": {
             "probe": initial_probe_seen,
             "post_probe": stage_seen("post_probe", "post-probe"),

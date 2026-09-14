@@ -1292,6 +1292,12 @@ def _ai_decision_action_outcome_calibration_status(
             collapsed_count = machine_case_table.get(
                 "duplicate_same_action_collapsed_count"
             )
+            conflicting_attempt_count = machine_case_table.get(
+                "conflicting_attempt_identity_count"
+            )
+            policy_learning_count = machine_case_table.get(
+                "policy_learning_eligible_observation_count"
+            )
 
             def valid_count_map(value: object) -> bool:
                 return isinstance(value, dict) and all(
@@ -1307,7 +1313,11 @@ def _ai_decision_action_outcome_calibration_status(
                 machine_case_table.get("schema")
                 != "mechanistic_entry_decision_case_table_v1"
                 or machine_case_table.get("status")
-                not in {"evaluable", "source_gap_no_evaluable_cases"}
+                not in {
+                    "evaluable",
+                    "source_gap_blocked_no_evaluable_cases",
+                    "source_gap_no_machine_captures",
+                }
                 or not isinstance(case_count, int)
                 or isinstance(case_count, bool)
                 or case_count < len(case_rows)
@@ -1317,6 +1327,12 @@ def _ai_decision_action_outcome_calibration_status(
                 or not isinstance(collapsed_count, int)
                 or isinstance(collapsed_count, bool)
                 or collapsed_count < 0
+                or not isinstance(conflicting_attempt_count, int)
+                or isinstance(conflicting_attempt_count, bool)
+                or conflicting_attempt_count != 0
+                or not isinstance(policy_learning_count, int)
+                or isinstance(policy_learning_count, bool)
+                or policy_learning_count != input_count
                 or input_count != case_count + collapsed_count
                 or (machine_case_table.get("status") == "evaluable") != (case_count > 0)
                 or not valid_count_map(action_counts)
@@ -1342,14 +1358,24 @@ def _ai_decision_action_outcome_calibration_status(
                 )
                 or machine_case_table.get("ai_and_final_guard_are_separate_consumers")
                 is not True
+                or machine_case_table.get("ai_and_final_guard_exact_join_attempted")
+                is not True
+                or machine_case_table.get(
+                    "legacy_60_second_same_action_collapse_disabled"
+                )
+                is not True
                 or machine_case_table.get("runtime_effect") is not False
                 or machine_case_table.get("allowed_runtime_apply") is not False
                 or machine_case_table.get("actual_order_submitted") is not False
                 or machine_case_table.get("broker_order_forbidden") is not True
                 or any(
                     not isinstance(row, dict)
-                    or row.get("ai_and_final_guard_join_status")
-                    != "not_joined_separate_owner"
+                    or not str(row.get("evaluation_attempt_id") or "").strip()
+                    or not str(
+                        row.get("ai_and_final_guard_join_status") or ""
+                    ).strip()
+                    or not isinstance(row.get("outcome_horizon_metrics"), dict)
+                    or "10m" not in row.get("outcome_horizon_metrics", {})
                     or row.get("runtime_effect") is not False
                     or row.get("allowed_runtime_apply") is not False
                     or row.get("actual_order_submitted") is not False

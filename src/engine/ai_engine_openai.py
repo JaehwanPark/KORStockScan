@@ -8975,6 +8975,11 @@ class GPTSniperEngine:
                     setup_evidence=machine_setup,
                     assessment=machine_assessment,
                     bundle_sha256=entry_setup_live_policy["machine_bundle_sha256"],
+                    metadata=(
+                        dict(metadata_extra or {})
+                        if isinstance(metadata_extra, dict)
+                        else {}
+                    ),
                 )
                 machine_first_context = {
                     "assessment": machine_assessment,
