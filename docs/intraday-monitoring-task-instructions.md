@@ -48,6 +48,14 @@
 - 현재 임계치는 bundle과 `mechanistic_entry_policy_decision`의 실제 사용 위치로 읽는다. micro delta/가격반응은 위험 상쇄·그룹 확인에도 쓰이며, 숫자 다섯 개만 AND로 묶은 BUY 공식이 아니다. setup READY·미해결 위험·유동성 및 최종 guard를 구분한다. spread 상한을 허용 총비용이나 목표수익으로 해석하지 않는다.
 - 선택된 micro 자식은 고정1초 창의 freshness·completeness·route/epoch, 초기 잔량 대비 감소속도·같은 가격 BUY 설명·refill·bid 지지를 함께 확인한다. 잔량 감소 자체는 BUY 근거가 아니며 필수 창 결손 뒤 더 느슨한 부모로 재시도하지 않는다. 자식 미선택 상태의 자료 수집을 실전 조건 활성화로 보고하지 않는다.
 
+판정기의 정상 가동과 판정의 경제적 적정성을 분리한다. 기계판정 receipt나 Provider 응답이 존재하는 것만으로 수익기회를 잘 선별했다고 판정하지 않는다.
+
+- exact `promotion_id × evaluation attempt × venue × session × policy/bundle hash`를 기계판정 분모로 고정하고 `ENTER_NOW|RECHECK|BLOCK|source_invalid`가 배타적으로 보존되는지 확인한다. 독립 rising benchmark에서 기계판정까지 도달하지 못한 기회는 기계판정 정확도 분모에 넣지 않고 scanner/post-promotion 결손으로 남긴다.
+- 각 기계 action에 당시 알 수 없었던 후행값을 입력으로 역류시키지 않는 action-neutral executable BBO label을 결속한다. 1·3·5·10·20·30·60분의 fill feasibility, 비용 차감 target/adverse first-hit, MFE/MAE와 terminal/censored를 이용해 `RECHECK|BLOCK`의 false-negative 기회손실과 `ENTER_NOW`의 false-positive·tail loss를 함께 계산한다. 단순 ENTER 비율, 사후 고가 또는 한 종목의 상승만으로 임계치를 변경하지 않는다.
+- `ENTER_NOW requiring AI screen = AI request = terminal response` 보존식을 scope별로 닫는다. request/response/trace/snapshot·prompt/payload/response hash와 provider/model/latency/parse를 연결하고, `PASS|VETO|semantic_rejected|transport_or_timeout|missing`을 배타적으로 기록한다. 비정상·결손 응답을 VETO로 정상화하거나 이유 없는 `WAIT`로 합치지 않는다.
+- AI PASS는 같은 attempt의 최종 guard·submit/미제출 사유로, AI VETO는 같은 입력의 후행 executable outcome으로 연결한다. PASS 뒤 submit0과 VETO 뒤 비용 차감 양수 기회를 각각 별도 opportunity-loss 후보로 남기며, 기계 RECHECK/BLOCK의 정상 Provider 미호출을 AI 장애로 세지 않는다.
+- 최종 판정은 `machine_and_ai_operating_normally`, `machine_false_negative_candidate`, `machine_false_positive_candidate`, `ai_screen_overveto_candidate`, `ai_screen_underfilter_candidate`, `decision_lineage_or_runtime_gap`, `blocked_missing_forward_evidence` 중 근거가 있는 상태로 남긴다. code/PID의 정상작동, 자연 판정 표본, 후행 경제성은 서로 다른 acceptance다.
+
 확인 항목:
 
 - 감시 슬롯·candidate/TP1·freshness·AI·latency·micro·tick-speed·가격·계좌·주문·수량·cooldown 중 최초 차단 owner와 직접 원인
@@ -60,6 +68,9 @@
 - `avg_down_route_arbitration_observed` v2의 CF route 관찰을 실제 ADD/NO_ADD·주문·체결로 오인하지 않았는지. exact identity/schema/source-only authority 검증 후에만 관찰로 분리하며, order authority가 true/unknown인 잘못된 행은 계속 결손으로 유지했는지
 - 부분익절·runner·trailing·hard/protect/emergency owner의 실행 순서와 실제 체결 지연
 - `entry_cancel_wait_runtime`이 퇴역한 ADM/LDM과 분리된 독립 주문취소 owner인지. 당일 PREOPEN 적용된 standard/breakout/pullback/reserve cancel wait만 주문취소 owner이고 entry-price AI `max_wait_sec`는 advisory라서 live cancel timeout을 직접 덮지 않는지
+- 제출된 BUY마다 entry-price 입력 snapshot·결정 trace·최종 submit 시점의 fresh executable BBO와 주문가를 같은 attempt/order 번호로 결속하고, bid/ask 대비 tick·bps 거리, spread, queue/depth, 체결 가능성과 cancel 시점까지의 시장 이동을 확인한다. `bid|bid+1tick|bounded ask` 반사실은 당시 이용 가능한 동일 route/epoch의 호가·체결 tape로만 비교하며 queue 우선순위나 체결 근거가 없으면 대안 체결을 확정하지 않는다.
+- 최초 주문가와 post-submit reprice를 별도 owner로 평가한다. 부모 기계/AI score·action과 재호가에 실제 전달된 score·action·micro/quote lineage가 같은 attempt인지 확인하고, PASS 점수 누락·0 대체·다른 평가의 점수 때문에 재호가가 막히면 `entry_price_or_reprice_authority_mismatch`로 분류한다. 미체결 취소는 `price_selection_too_passive_candidate|appropriate_non_chase_unfilled|reprice_guard_appropriate|reprice_guard_opportunity_loss_candidate|source_quality_blocked`로 직접 근거를 남긴다.
+- 작은 비용 차감 수익의 빈도를 평가할 때 참여율 개선과 추가 spread/slippage·adverse-first/tail loss를 함께 비교한다. 미체결 한 건만으로 ask crossing이나 cancel-wait 연장을 적용하지 않으며, 동일 가격/재호가 후보의 rolling executable outcome과 rollback 가능한 기존 bounded owner를 다음 PREOPEN 후보의 근거로 사용한다.
 - SCALP preset +1.5% TP가 더 이상 profit-taking owner가 아니며, 신규·복구 holding의 legacy preset TP ref가 취소/disabled된 뒤 `scalp_trailing_take_profit` 경로가 이익 실현을 소유하는지. `SCALP_PRESET_TP` 호환 필드는 stop-safety provenance 외 새 주문 권한을 만들지 않는지
 - 매도 후 1·3·5·10·20·30·60분 반사실을 실현손익과 분리했는지
 
@@ -441,6 +452,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project --print
 5. 운영: expected process→PID/lock/heartbeat→output/consumer, dead/hung/duplicate/no-op/orphan과 valid-empty, broker/venue/owner 충돌, 당일 runtime의 자연 무표본·미호출·미반영 및 퇴역/OFF 누출·자원 간섭.
 6. 수집 결손/수리: 최초 단절·영향 signal/입력창, 원천 미수집/파싱·전달/후행 자동화 구분, 즉시 수리·review/검증·반영 권한/PID, 새 저장/consumer receipt·rollback·과거 비가역 손실·잔여 자연/경제성 acceptance.
 7. 부족 ledger: `shortage_id`·floor denominator·required/current/deficit·first depleted stage·funnel counts·분류·finite ETA 또는 대기 불가 이유·다음 due/재분류 trigger/acceptance. 미해결 병목과 후속 owner.
-8. 기계·AI 정책: 선택 release와 현재 PID·exact scope/bundle/prompt hash, 부모/그룹/종목/micro의 실제 선택 상태, 기계 action→AI screen→intent→submit/fill 보존식, 빠른 순익·역행/횡보·손실/censored의 분리, 누적 장후 갱신·다음 consumer와 잔여 자연/경제성 acceptance. 정책 preview·발행·배포·실제 소비를 각각 판정.
+8. 기계·AI 정책: 선택 release와 현재 PID·exact scope/bundle/prompt hash, 부모/그룹/종목/micro의 실제 선택 상태, 기계 action의 배타적 분모와 false-negative/false-positive, ENTER_NOW→AI screen terminal→intent→submit/fill 보존식, PASS/VETO의 같은 입력 후행 경제성, 빠른 순익·역행/횡보·손실/censored의 분리, 누적 장후 갱신·다음 consumer와 잔여 자연/경제성 acceptance. 정책 preview·발행·배포·실제 소비를 각각 판정.
+9. 주문가/재호가: exact attempt/order 번호의 entry-price 입력·결정·submit BBO·주문가 거리, cancel까지 시장 이동·체결 가능성, 부모 판정 score/action의 재호가 전달 정합성, 최초 가격과 reprice guard의 독립 판정 및 비용 차감 참여율/tail 반사실.
 
 진단·코드 수리 완료와 실제 경제성 성공은 독립 판정이다. 신규 경제 표본이 없다는 이유만으로 닫힌 수리 검토를 취소하지 않으며, 수리 완료로 실현 EV 개선을 선언하지도 않는다. 보고서나 runtime 이름의 존재는 효과의 증거가 아니다. `identified → source quality → 해당 owner의 승인·실제 runtime 소비 receipt → executable 체결·terminal outcome → 비용 차감 rolling/cumulative EV → post-apply attribution`이 연결됐을 때만 경제성 효과를 판정한다. 소비 receipt는 해당 계약의 PREOPEN/PID 또는 별도 승인 승격 receipt를 사용하며 다른 owner의 추가 승격 gate를 요구하지 않는다. 장중 생성된 장후/다음-session source-only artifact는 authority에 맞는 intended last consumer와 handoff까지만 보고하고 다음 PREOPEN/PID 소비나 실주문 효과를 선행 주장하지 않는다.
