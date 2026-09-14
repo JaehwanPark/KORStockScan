@@ -10,18 +10,19 @@ def test_static_parser_detects_repeated_ev_verifier_and_lifecycle_windows():
     report = mod.build_report("2026-06-02")
 
     producers = Counter(item["producer"] for item in report["step_inventory"])
-    assert producers["src.engine.threshold_cycle_ev_report"] == 5
-    assert producers["src.engine.verify_threshold_cycle_postclose_chain"] == 2
+    # The wrapper keeps only the dependency-bearing pre-workorder,
+    # post-propagation, and final-consumer EV generations.
+    assert producers["src.engine.threshold_cycle_ev_report"] == 3
+    assert producers["src.engine.verify_threshold_cycle_postclose_chain"] == 3
     assert producers["src.engine.monitoring.quote_consistency_report"] == 0
     assert producers["src.engine.lifecycle_ai_context"] == 0
     assert producers["src.engine.lifecycle_decision_matrix"] == 0
     assert producers["src.engine.lifecycle_bucket_discovery"] == 0
 
     candidates = report["slimming_candidates"]
-    assert any(
+    assert not any(
         item["producer"] == "src.engine.threshold_cycle_ev_report"
         and item["classification"] == "duplicate_refresh_candidate"
-        and item["classification_group"] == "change_triggered"
         for item in candidates
     )
     assert any(
@@ -72,7 +73,7 @@ def test_slimming_candidates_and_workorders_are_report_only():
         report["summary"]["true_duplicate_refresh_candidates"]
         == report["summary"]["duplicate_refresh_candidates"]
     )
-    assert report["summary"]["dependent_refresh_steps"] == 0
+    assert report["summary"]["dependent_refresh_steps"] == 2
     assert report["summary"]["mutually_exclusive_static_duplicates"] >= 1
     assert "deprecated_candidate" in report["summary"]["classification_group_counts"]
     assert report["protected_refreshes"]
@@ -282,6 +283,8 @@ def test_postclose_wrapper_duplicate_refresh_skip_contract_is_static():
     )
     assert "threshold_cycle_ev_refresh_decision()" in script
     assert "automation_trigger_decision()" in script
+    assert "write_automation_trigger_decision_snapshot()" in script
+    assert "refresh_automation_trigger_decision_snapshot()" in script
     assert "src.engine.automation.automation_chain_trigger_decision" in script
     assert (
         'AUTOMATION_TRIGGER_DECISION_REPORT_JSON="$PROJECT_DIR/data/report/automation_chain_trigger_decision/automation_chain_trigger_decision_${TARGET_DATE}.json"'
@@ -293,7 +296,8 @@ def test_postclose_wrapper_duplicate_refresh_skip_contract_is_static():
     )
     assert 'rm -f "$AUTOMATION_TRIGGER_DECISION_CACHE_MARKER"' in script
     assert "--scope all \\" in script
-    assert "--write >/dev/null 2>&1; then" in script
+    assert "--write" in script
+    assert 'refresh_automation_trigger_decision_snapshot "final_consumer"' in script
     assert (
         'if [ -f "$AUTOMATION_TRIGGER_DECISION_CACHE_MARKER" ] && [ -f "$AUTOMATION_TRIGGER_DECISION_REPORT_JSON" ]; then'
         in script
@@ -317,6 +321,9 @@ def test_automation_trigger_decision_cache_reuses_production_state_contract(tmp_
     script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
     function_text = "\n".join(
         [
+            _extract_shell_function(
+                script, "write_automation_trigger_decision_snapshot"
+            ),
             _extract_shell_function(script, "automation_trigger_decision"),
             _extract_shell_function(script, "automation_trigger_reason"),
             _extract_shell_function(script, "automation_trigger_source"),

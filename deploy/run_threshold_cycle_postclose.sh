@@ -1287,30 +1287,52 @@ threshold_cycle_ev_refresh_decision() {
   printf 'skip\n'
 }
 
+write_automation_trigger_decision_snapshot() {
+  # This only refreshes the source-only trigger snapshot.  It never executes a
+  # suggested producer, so it is safe to run once more after final consumers
+  # have published and before the strict checklist/verifier handoff.
+  run_postclose_cmd env \
+    THRESHOLD_CYCLE_FORCE_LIFECYCLE_BUCKET_WINDOWS="$FORCE_LIFECYCLE_BUCKET_WINDOWS" \
+    THRESHOLD_CYCLE_FORCE_DEEP_AUDITS="$FORCE_DEEP_AUDITS" \
+    THRESHOLD_CYCLE_FORCE_WORKORDER_BRANCH="$FORCE_WORKORDER_BRANCH" \
+    THRESHOLD_CYCLE_RUN_LIFECYCLE_BUCKET_WINDOWS="${RUN_LIFECYCLE_BUCKET_WINDOWS:-true}" \
+    THRESHOLD_CYCLE_RUN_PATTERN_LAB_CURRENTNESS_AUDIT="${RUN_PATTERN_LAB_CURRENTNESS_AUDIT:-true}" \
+    THRESHOLD_CYCLE_RUN_PATTERN_LAB_AI_REVIEW="${RUN_PATTERN_LAB_AI_REVIEW:-true}" \
+    THRESHOLD_CYCLE_RUN_OBSERVATION_SOURCE_QUALITY_AUDIT="${RUN_OBSERVATION_SOURCE_QUALITY_AUDIT:-true}" \
+    THRESHOLD_CYCLE_RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT="${RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT:-false}" \
+    THRESHOLD_CYCLE_RUN_PRODUCER_GAP_DISCOVERY="${RUN_PRODUCER_GAP_DISCOVERY:-false}" \
+    THRESHOLD_CYCLE_RUN_STAGE_HOOK_WORKORDER_DISCOVERY="${RUN_STAGE_HOOK_WORKORDER_DISCOVERY:-false}" \
+    THRESHOLD_CYCLE_RUN_STAGE_HOOK_RUNTIME_SCAFFOLD="${RUN_STAGE_HOOK_RUNTIME_SCAFFOLD:-false}" \
+    THRESHOLD_CYCLE_RUN_PATTERN_LAB_PROPAGATION_AUDIT="${RUN_PATTERN_LAB_PROPAGATION_AUDIT:-true}" \
+    THRESHOLD_CYCLE_BUILD_CODE_IMPROVEMENT_WORKORDER="${BUILD_CODE_IMPROVEMENT_WORKORDER:-true}" \
+    PYTHONPATH=. "$VENV_PY" -m src.engine.automation.automation_chain_trigger_decision \
+      --date "$TARGET_DATE" \
+      --scope all \
+      --write
+}
+
+refresh_automation_trigger_decision_snapshot() {
+  local phase="$1"
+  if write_automation_trigger_decision_snapshot >/dev/null 2>&1; then
+    mkdir -p "$(dirname "$AUTOMATION_TRIGGER_DECISION_CACHE_MARKER")"
+    : > "$AUTOMATION_TRIGGER_DECISION_CACHE_MARKER"
+    emit_postclose_marker "[REFRESH] automation_trigger_decision target_date=$TARGET_DATE phase=$phase runtime_effect=false"
+    return 0
+  fi
+  # The early snapshot remains available to the verifier.  Do not turn a
+  # source-only observation refresh into a second producer execution or a
+  # runtime-policy mutation; the strict verifier will surface stale linkage.
+  echo "[threshold-cycle] automation trigger decision refresh failed phase=$phase (non-fatal); preserving prior snapshot" >&2
+  return 0
+}
+
 automation_trigger_decision() {
   local step_id="$1"
   local decision="run"
   local output_temp="${AUTOMATION_TRIGGER_DECISION_OUTPUT_TEMP:-${TMPDIR:-/tmp}/korstockscan_automation_trigger_${TARGET_DATE}_$$.out}"
   AUTOMATION_TRIGGER_DECISION_RESULT="run"
   if [ ! -f "$AUTOMATION_TRIGGER_DECISION_CACHE_MARKER" ]; then
-    if run_postclose_cmd env \
-      THRESHOLD_CYCLE_FORCE_LIFECYCLE_BUCKET_WINDOWS="$FORCE_LIFECYCLE_BUCKET_WINDOWS" \
-      THRESHOLD_CYCLE_FORCE_DEEP_AUDITS="$FORCE_DEEP_AUDITS" \
-      THRESHOLD_CYCLE_FORCE_WORKORDER_BRANCH="$FORCE_WORKORDER_BRANCH" \
-      THRESHOLD_CYCLE_RUN_LIFECYCLE_BUCKET_WINDOWS="${RUN_LIFECYCLE_BUCKET_WINDOWS:-true}" \
-      THRESHOLD_CYCLE_RUN_PATTERN_LAB_CURRENTNESS_AUDIT="${RUN_PATTERN_LAB_CURRENTNESS_AUDIT:-true}" \
-      THRESHOLD_CYCLE_RUN_PATTERN_LAB_AI_REVIEW="${RUN_PATTERN_LAB_AI_REVIEW:-true}" \
-      THRESHOLD_CYCLE_RUN_OBSERVATION_SOURCE_QUALITY_AUDIT="${RUN_OBSERVATION_SOURCE_QUALITY_AUDIT:-true}" \
-      THRESHOLD_CYCLE_RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT="${RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT:-false}" \
-      THRESHOLD_CYCLE_RUN_PRODUCER_GAP_DISCOVERY="${RUN_PRODUCER_GAP_DISCOVERY:-false}" \
-      THRESHOLD_CYCLE_RUN_STAGE_HOOK_WORKORDER_DISCOVERY="${RUN_STAGE_HOOK_WORKORDER_DISCOVERY:-false}" \
-      THRESHOLD_CYCLE_RUN_STAGE_HOOK_RUNTIME_SCAFFOLD="${RUN_STAGE_HOOK_RUNTIME_SCAFFOLD:-false}" \
-      THRESHOLD_CYCLE_RUN_PATTERN_LAB_PROPAGATION_AUDIT="${RUN_PATTERN_LAB_PROPAGATION_AUDIT:-true}" \
-      THRESHOLD_CYCLE_BUILD_CODE_IMPROVEMENT_WORKORDER="${BUILD_CODE_IMPROVEMENT_WORKORDER:-true}" \
-      PYTHONPATH=. "$VENV_PY" -m src.engine.automation.automation_chain_trigger_decision \
-        --date "$TARGET_DATE" \
-        --scope all \
-        --write >/dev/null 2>&1; then
+    if write_automation_trigger_decision_snapshot >/dev/null 2>&1; then
       mkdir -p "$(dirname "$AUTOMATION_TRIGGER_DECISION_CACHE_MARKER")"
       : > "$AUTOMATION_TRIGGER_DECISION_CACHE_MARKER"
     fi
@@ -2395,9 +2417,6 @@ if [ "$BUILD_CODE_IMPROVEMENT_WORKORDER" = "true" ] || [ "$BUILD_CODE_IMPROVEMEN
       "code_improvement_workorder"
   fi
 fi
-run_threshold_cycle_ev_and_wait "post_workorder_refresh" \
-  "$PROJECT_DIR/data/report/code_improvement_workorder/code_improvement_workorder_${TARGET_DATE}.json" \
-  "$PROJECT_DIR/docs/code-improvement-workorders/code_improvement_workorder_${TARGET_DATE}.md"
 if [ "$RUN_PATTERN_LAB_PROPAGATION_AUDIT" = "true" ] || [ "$RUN_PATTERN_LAB_PROPAGATION_AUDIT" = "1" ]; then
   automation_trigger_decision "pattern_lab_propagation_audit"
   if [ "$AUTOMATION_TRIGGER_DECISION_RESULT" = "skip" ]; then
@@ -2514,16 +2533,6 @@ if [ "$BUILD_CODE_IMPROVEMENT_WORKORDER" = "true" ] || [ "$BUILD_CODE_IMPROVEMEN
     "$PROJECT_DIR/data/report/code_improvement_workorder/code_improvement_workorder_${TARGET_DATE}.json" \
     "$PROJECT_DIR/docs/code-improvement-workorders/code_improvement_workorder_${TARGET_DATE}.md" \
     "code_improvement_workorder_post_conversion_lane"
-  run_threshold_cycle_ev_and_wait "post_conversion_lane_workorder_refresh" \
-    "$PROJECT_DIR/data/report/code_improvement_workorder/code_improvement_workorder_${TARGET_DATE}.json" \
-    "$PROJECT_DIR/docs/code-improvement-workorders/code_improvement_workorder_${TARGET_DATE}.md"
-  wait_for_postclose_resources "runtime_approval_summary_post_conversion_lane_workorder"
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.runtime_approval_summary \
-    --date "$TARGET_DATE" "${RUNTIME_APPROVAL_SCOPE_ARGS[@]}"
-  wait_for_report_artifact \
-    "$PROJECT_DIR/data/report/runtime_approval_summary/runtime_approval_summary_${TARGET_DATE}.json" \
-    "$PROJECT_DIR/data/report/runtime_approval_summary/runtime_approval_summary_${TARGET_DATE}.md" \
-    "runtime_approval_summary_post_conversion_lane_workorder"
 fi
 wait_for_postclose_resources "build_next_stage2_checklist"
 run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.build_next_stage2_checklist --source-date "$TARGET_DATE"
@@ -2568,7 +2577,6 @@ if [ "$RUN_PATTERN_LAB_PROPAGATION_AUDIT" = "true" ] || [ "$RUN_PATTERN_LAB_PROP
       "pattern_lab_ai_review_final_source_provenance_refresh"
   fi
 fi
-run_threshold_cycle_ev_and_wait "final_consumer_refresh"   "$PROJECT_DIR/data/report/code_improvement_workorder/code_improvement_workorder_${TARGET_DATE}.json"   "$PROJECT_DIR/docs/code-improvement-workorders/code_improvement_workorder_${TARGET_DATE}.md"   "$PROJECT_DIR/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_${TARGET_DATE}.json"   "$PROJECT_DIR/data/report/pattern_lab_ai_review/pattern_lab_ai_review_${TARGET_DATE}.json"   "$PROJECT_DIR/data/report/producer_gap_discovery/producer_gap_discovery_${TARGET_DATE}.json"   "$PROJECT_DIR/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_${TARGET_DATE}.json"
 if [ "$BUILD_CODE_IMPROVEMENT_WORKORDER" = "true" ] || [ "$BUILD_CODE_IMPROVEMENT_WORKORDER" = "1" ]; then
   wait_for_postclose_resources "code_improvement_workorder_final_source_refresh"
   run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.build_code_improvement_workorder \
@@ -2580,10 +2588,19 @@ if [ "$BUILD_CODE_IMPROVEMENT_WORKORDER" = "true" ] || [ "$BUILD_CODE_IMPROVEMEN
     "$PROJECT_DIR/docs/code-improvement-workorders/code_improvement_workorder_${TARGET_DATE}.md" \
     "code_improvement_workorder_final_source_refresh"
 fi
+run_threshold_cycle_ev_and_wait "final_consumer_refresh" \
+  "$PROJECT_DIR/data/report/code_improvement_workorder/code_improvement_workorder_${TARGET_DATE}.json" \
+  "$PROJECT_DIR/docs/code-improvement-workorders/code_improvement_workorder_${TARGET_DATE}.md" \
+  "$PROJECT_DIR/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_${TARGET_DATE}.json" \
+  "$PROJECT_DIR/data/report/pattern_lab_ai_review/pattern_lab_ai_review_${TARGET_DATE}.json" \
+  "$PROJECT_DIR/data/report/producer_gap_discovery/producer_gap_discovery_${TARGET_DATE}.json" \
+  "$PROJECT_DIR/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_${TARGET_DATE}.json"
 wait_for_postclose_resources "runtime_approval_summary_final_refresh"
 run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.runtime_approval_summary \
   --date "$TARGET_DATE" "${RUNTIME_APPROVAL_SCOPE_ARGS[@]}"
 wait_for_report_artifact   "$PROJECT_DIR/data/report/runtime_approval_summary/runtime_approval_summary_${TARGET_DATE}.json"   "$PROJECT_DIR/data/report/runtime_approval_summary/runtime_approval_summary_${TARGET_DATE}.md"   "runtime_approval_summary_final_refresh"
+wait_for_postclose_resources "automation_trigger_decision_final_refresh"
+refresh_automation_trigger_decision_snapshot "final_consumer"
 wait_for_postclose_resources "build_next_stage2_checklist_final_refresh"
 run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.build_next_stage2_checklist --source-date "$TARGET_DATE"
 wait_for_file_artifact "$(next_stage2_checklist_path)" "next_stage2_checklist_final_refresh"

@@ -1982,9 +1982,6 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     )
     pre_ev_idx = script.index('run_threshold_cycle_ev_and_wait "pre_workorder"')
     workorder_idx = script.index("src.engine.build_code_improvement_workorder")
-    post_ev_idx = script.index(
-        'run_threshold_cycle_ev_and_wait "post_workorder_refresh"'
-    )
     propagation_idx = script.index("src.engine.pattern_lab_propagation_audit")
     ai_review_source_refresh_idx = script.index("--review-current-generation")
     post_propagation_ev_idx = script.index(
@@ -2024,6 +2021,9 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     final_workorder_idx = script.index(
         "code_improvement_workorder_final_source_refresh"
     )
+    final_trigger_snapshot_idx = script.index(
+        'refresh_automation_trigger_decision_snapshot "final_consumer"'
+    )
     tuning_control_idx = script.index(
         "src.engine.automation.tuning_performance_control_tower"
     )
@@ -2049,7 +2049,6 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         < stage_hook_scaffold_idx
         < pre_ev_idx
         < workorder_idx
-        < post_ev_idx
         < propagation_idx
         < ai_review_source_refresh_idx
         < post_propagation_ev_idx
@@ -2062,8 +2061,9 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         < next_checklist_idx
         < final_propagation_idx
         < final_ai_source_refresh_idx
-        < final_ev_idx
         < final_workorder_idx
+        < final_ev_idx
+        < final_trigger_snapshot_idx
         < final_next_checklist_idx
         < pending_verify_idx
         < final_verify_idx
@@ -2782,21 +2782,26 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
         'run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.verify_threshold_cycle_postclose_chain'
         in script
     )
+    assert 'run_threshold_cycle_ev_and_wait "post_workorder_refresh"' not in script
     assert (
         'run_threshold_cycle_ev_and_wait "post_conversion_lane_workorder_refresh"'
-        in script
+        not in script
     )
     final_ev_index = script.index(
         'run_threshold_cycle_ev_and_wait "final_consumer_refresh"'
     )
     final_workorder_index = script.index(
-        '"code_improvement_workorder_final_source_refresh"', final_ev_index
+        '"code_improvement_workorder_final_source_refresh"'
     )
     final_runtime_index = script.index(
         '"runtime_approval_summary_final_refresh"', final_workorder_index
     )
+    final_trigger_index = script.index(
+        'refresh_automation_trigger_decision_snapshot "final_consumer"',
+        final_runtime_index,
+    )
     final_checklist_index = script.index(
-        '"next_stage2_checklist_final_refresh"', final_runtime_index
+        '"next_stage2_checklist_final_refresh"', final_trigger_index
     )
     pending_verify_index = script.index(
         'run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m '
@@ -2804,13 +2809,14 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
         final_checklist_index,
     )
     assert (
-        final_ev_index
-        < final_workorder_index
+        final_workorder_index
+        < final_ev_index
         < final_runtime_index
+        < final_trigger_index
         < final_checklist_index
         < pending_verify_index
     )
-    assert "runtime_approval_summary_post_conversion_lane_workorder" in script
+    assert "runtime_approval_summary_post_conversion_lane_workorder" not in script
     assert (
         '"$PROJECT_DIR/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_${TARGET_DATE}.json"'
         in script

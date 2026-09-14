@@ -390,6 +390,17 @@ def _classify_call(
                 "interim_verifier_duplicates_final_verifier",
             )
         return "core_daily", "core_daily", "final_fail_closed_postclose_verifier"
+    if module == "src.engine.threshold_cycle_ev_report":
+        pass_label = str(call.get("function_pass_label") or "")
+        if pass_label in {
+            "post_propagation_audit_refresh",
+            "final_consumer_refresh",
+        }:
+            return (
+                "dependent_refresh",
+                "no_change",
+                "required_generation_after_changed_consumers",
+            )
     if module_total_counts[module] > 1 and occurrence > 1:
         if _is_mutually_exclusive_static_duplicate(call):
             return (
