@@ -81,3 +81,25 @@
 - source date의 실제 정책을 평가 incumbent로 사용한다. 먼저 생성한 다음날 opportunity 후보 뒤 늦게 risk 근거가 도착하면 재발행하며 당일 정책은 보존한다. 다음날07:35 이후에는 기존 frozen bundle을 유지한다.
 - 과거 gzip의 EOFError는 날짜별 source gap으로 격리한다. 정상 압축본 수용과 truncated gzip 제외를 함께 검증했다.
 - 관련 calibration/publisher/strict322 PASS, Ruff·compile·diff PASS. 새 표본 floor나 사용자 승인 단계는 추가하지 않았다. 검토한 세 결함은 종결했으며 자연 정책/PID 소비와 비용후 실수익은 기존 acceptance로 남긴다.
+
+## 9. 지원 연속매매 장후 세션·판정 분모 수리 — 19:33 KST
+
+### 9.1 최초 결함
+
+- `entry_candle_context`가 16:00~20:00을 구 `nxt_aftermarket` 한 구간으로 자체 계산해 공통 session contract의 `KRX_NXT_AFTERMARKET`, 19:40 close-only, 19:45 terminal-exit 경계를 소비하지 않았다.
+- 통합 venue와 구 `nxt_aftermarket` label 조합은 날짜별 bundle의 `KRX_NXT_INTEGRATED|KRX_NXT_AFTERMARKET` scope로 정규화되지 않아, 지원 연속매매 정책이 있어도 fallback prompt로 이탈할 수 있었다.
+- input preflight가 기계 평가 전에 fail-closed한 시도는 정상 주문 차단이었지만, 기계 평가 기대·source-invalid 제외 receipt가 trace에 없어 장후 감사가 `기계 시도 0`과 `평가 전 원천 차단`을 구분하지 못했다.
+
+### 9.2 최소 보완
+
+- candle session은 공통 `session_contract.resolve_market_session`을 단일 owner로 사용한다. 통합 시간대라도 plain KRX와 `_NX` NXT exact source를 보존하고 `_AL`/integrated만 통합 venue로 분류한다. 모든 종목을 `_AL`로 강제하거나 주문 route·수량·threshold를 바꾸지 않는다.
+- live-policy resolver가 `INTEGRATED|SOR|KRX_NXT` venue와 main-window legacy label만 canonical integrated scope로 정규화한다. close-only와 terminal-exit는 진입 scope로 접지 않아 19:40 이후 BUY 경계를 유지한다.
+- 기계 평가가 예정된 exact attempt에 `assessment_pending|assessed|source_quality_blocked_before_assessment|assessment_contract_invalid`, capture hash와 attempt identity를 보존한다. source-invalid row는 튜닝에서 제외하되 시도 총수에 남기고, 미설명 시도 또는 input contract invalid가 하나라도 있으면 기계 threshold 튜닝을 차단한다. 누락 비용·손익은 0으로 대체하지 않는다.
+
+### 9.3 리뷰·판정
+
+- 1차 리뷰 finding: assessment contract invalid가 분모에는 설명되어도 다른 정상 capture가 있으면 threshold 튜닝이 허용될 수 있었다. `warning_machine_assessment_contract_invalid`와 전용 blocked reason을 추가해 보완했다.
+- 재리뷰 P0~P2 finding: 0. 기능·직접 consumer 1,026 PASS 후 보완 범위 514 PASS, Ruff(기존 E402/E722 제외), compile, `git diff --check` PASS.
+- Kiwoom official reference gate: upstream `234560d213acd8871ae344b5481aecd2f30287fa`, `kiwoom_docs/실시간시세.md`의 REG/REMOVE 및 plain/`_NX`/`_AL` suffix, `kiwoom_docs/주문.md`의 `dmst_stex_tp=KRX|NXT|SOR`를 19:33 KST에 대사했다. 프로토콜 parser나 주문 API는 변경하지 않았다.
+- 기대 효과는 지원 연속매매의 실제 정책 소비 회복과, 장후 임계치 학습에서 원천 차단 시도를 숨기지 않는 것이다. 비용후 +0.10% EV, 빈도, tail, 실주문 수익은 이 코드 검증으로 입증되지 않으며 다음 자연 generation의 policy publication→PREOPEN→PID→accepted submit/fill/terminal에서 별도 확인한다.
+- 자동화는 기존 20:10 calibration `--write`→next-date policy publisher→PREOPEN resolver를 그대로 사용한다. 초기/incumbent bundle은 표본 부족이면 carry되고, threshold challenger만 비용후 +0.10% EV·동일 scope/holdout/source-quality guard를 통과해야 하므로 초기 정책 부재를 만드는 과도한 gate는 아니다.

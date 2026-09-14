@@ -1994,6 +1994,13 @@ def test_machine_screen_retained_in_trace_and_pending_outcome(
     _enable(monkeypatch, tmp_path)
     fields = {
         "machine_bundle_sha256": "b" * 64,
+        "machine_evaluation_expected": True,
+        "machine_evaluation_status": "assessed",
+        "machine_source_invalid_receipt": False,
+        "machine_capture_status": "captured",
+        "machine_observation_sha256": "c" * 64,
+        "evaluation_attempt_id": "attempt-1",
+        "evaluation_attempt_identity_source": "caller_evaluation_attempt_id",
         "entry_ai_role": "auxiliary_risk_screen_pass_veto_no_promotion",
         "entry_mechanistic_action": "ENTER_NOW",
         "entry_ai_screen_status": status,

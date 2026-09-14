@@ -28,6 +28,7 @@ from src.engine.scalping.multi_timeframe_context import (
     build_multi_timeframe_context,
     promotion_activation_state,
 )
+from src.trading.market import session_contract
 
 SCHEMA = "entry_candle_context_v1"
 SOURCE_SCHEMA = "session_candle_source_v1"
@@ -144,14 +145,34 @@ def entry_candle_context_enabled(
 def resolve_entry_candle_session(now_ts: Any = None, session: str | None = None) -> str:
     if session:
         return str(session)
-    current = _now_kst(now_ts).time()
-    if dt_time(8, 0) <= current < dt_time(9, 0):
-        return "premarket_krx_like"
-    if dt_time(9, 0) <= current <= dt_time(15, 30):
-        return "krx_regular"
-    if dt_time(16, 0) <= current <= dt_time(20, 0):
-        return "nxt_aftermarket"
-    return "off_session"
+    context = session_contract.resolve_market_session(_now_kst(now_ts))
+    regime = str(context.session_regime or "").strip()
+    return {
+        session_contract.MARKET_SESSION_REGIME_LEGACY_PREMARKET: (
+            "premarket_krx_like"
+        ),
+        session_contract.MARKET_SESSION_REGIME_LEGACY_KRX_ONLY: "krx_regular",
+        session_contract.MARKET_SESSION_REGIME_KRX_REGULAR: "krx_regular",
+        session_contract.MARKET_SESSION_REGIME_LEGACY_NXT_ONLY: "nxt_aftermarket",
+        session_contract.MARKET_SESSION_REGIME_NXT_AFTERMARKET_SOLO: (
+            "nxt_aftermarket"
+        ),
+        session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET: (
+            "krx_nxt_aftermarket"
+        ),
+        session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET_CLOSE_ONLY: (
+            "krx_nxt_aftermarket_close_only"
+        ),
+        session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET_TERMINAL_EXIT: (
+            "krx_nxt_aftermarket_terminal_exit"
+        ),
+        session_contract.MARKET_SESSION_REGIME_LEGACY_TRANSITION: (
+            "session_transition"
+        ),
+        session_contract.MARKET_SESSION_REGIME_SESSION_TRANSITION: (
+            "session_transition"
+        ),
+    }.get(regime, "off_session")
 
 
 def _split_code(code: str) -> tuple[str, str]:
@@ -193,6 +214,13 @@ def resolve_entry_candle_venue(
         return "PREMARKET_KRX_LIKE"
     if suffix == "_AL" or route == "krx_nxt_integrated":
         return "KRX_NXT_INTEGRATED"
+    if session_value.startswith("krx_nxt_aftermarket"):
+        # The session is integrated, but a plain/_NX exact source still owns
+        # the effective venue for this symbol. Do not relabel a KRX-only symbol
+        # as NXT merely because both venues are open.
+        if suffix == "_NX" or route == "nxt_only":
+            return "NXT"
+        return "KRX"
     if session_value.startswith("nxt_"):
         return "NXT"
     exact_venues = {

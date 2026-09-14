@@ -1448,6 +1448,54 @@ def test_preopen_honors_explicit_process_level_operator_off(monkeypatch, tmp_pat
     assert "operator_disabled" in activation["blocking_reasons"]
 
 
+def test_integrated_legacy_aftermarket_label_resolves_to_canonical_policy_scope(
+    monkeypatch, tmp_path
+):
+    from src.engine.scalping import mechanistic_entry_runtime_policy as initial
+    from src.tests.test_mechanistic_entry_runtime_policy import source
+
+    _configure_paths(monkeypatch, tmp_path)
+    _enable_probe_contract(monkeypatch)
+    _pin_auto_promotion(monkeypatch, tmp_path)
+    monkeypatch.setenv(policy.CANARY_ENV_KEY, "true")
+    for name in ("MAX_DAILY_RECHECK", "MAX_DAILY_BUY_RECOVERY"):
+        monkeypatch.setenv(
+            "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_" + name, "100"
+        )
+    initial.publish(
+        source(tmp_path, SOURCE_DATE),
+        data_root=tmp_path,
+        bootstrap=True,
+        adopt_all_continuous=True,
+        now=datetime(2026, 8, 6, 22, tzinfo=policy.KST),
+    )
+
+    resolved = policy.resolve_live_prompt_policy(
+        configured_prompt_version=(
+            DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
+        ),
+        effective_venue="INTEGRATED",
+        session_bucket="nxt_aftermarket",
+        position_tag="SCANNER",
+        strategy="SCALPING",
+        now=datetime(2026, 8, 7, 16, 20, tzinfo=policy.KST),
+    )
+
+    assert resolved["enabled"] is True
+    assert resolved["effective_venue"] == "KRX_NXT_INTEGRATED"
+    assert resolved["session_bucket"] == "KRX_NXT_AFTERMARKET"
+    assert resolved["machine_policy_scope"] == [
+        "KRX_NXT_INTEGRATED",
+        "KRX_NXT_AFTERMARKET",
+    ]
+
+
+def test_integrated_close_only_bucket_is_not_collapsed_into_entry_scope():
+    assert policy._normalize_cohort(
+        "KRX_NXT_INTEGRATED", "KRX_NXT_AFTERMARKET_CLOSE_ONLY"
+    ) == ("KRX_NXT_INTEGRATED", "KRX_NXT_AFTERMARKET_CLOSE_ONLY")
+
+
 def test_running_process_with_previous_runtime_date_falls_back(monkeypatch, tmp_path):
     _write_ready_chain(monkeypatch, tmp_path)
     monkeypatch.setenv("KORSTOCKSCAN_THRESHOLD_RUNTIME_APPLY_DATE", SOURCE_DATE)

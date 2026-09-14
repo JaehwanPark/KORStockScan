@@ -21,11 +21,51 @@ from src.engine.scalping.entry_candle_context import (
     entry_candle_context_enabled,
     fetch_entry_candles_with_meta,
     resolve_entry_candle_request_code,
+    resolve_entry_candle_session,
+    resolve_entry_candle_venue,
 )
 from src.engine.scalping import ai_market_snapshot as snapshot_module
 from src.engine.scalping import multi_timeframe_context as multi_context_module
 
 KST = ZoneInfo("Asia/Seoul")
+
+
+def test_default_session_uses_shared_post_effective_market_contract():
+    observed_at = datetime(2026, 9, 14, 16, 20, tzinfo=KST)
+
+    session = resolve_entry_candle_session(observed_at)
+
+    assert session == "krx_nxt_aftermarket"
+    assert (
+        resolve_entry_candle_venue(
+            {"market_suffix": "", "market_route": "krx_only"},
+            session=session,
+        )
+        == "KRX"
+    )
+    assert (
+        resolve_entry_candle_venue(
+            {"market_suffix": "_NX", "market_route": "nxt_only"},
+            session=session,
+        )
+        == "NXT"
+    )
+    assert (
+        resolve_entry_candle_venue(
+            {"market_suffix": "_AL", "market_route": "krx_nxt_integrated"},
+            session=session,
+        )
+        == "KRX_NXT_INTEGRATED"
+    )
+
+
+def test_default_session_does_not_reopen_entry_after_integrated_buy_window():
+    assert resolve_entry_candle_session(
+        datetime(2026, 9, 14, 19, 41, tzinfo=KST)
+    ) == "krx_nxt_aftermarket_close_only"
+    assert resolve_entry_candle_session(
+        datetime(2026, 9, 14, 19, 46, tzinfo=KST)
+    ) == "krx_nxt_aftermarket_terminal_exit"
 
 
 def _enable(monkeypatch):

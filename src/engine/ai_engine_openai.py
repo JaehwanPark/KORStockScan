@@ -8888,6 +8888,32 @@ class GPTSniperEngine:
             if entry_setup_live_policy and not decision_quality_v2_14_selected
             else {}
         )
+        machine_policy_trace_fields = (
+            {
+                "machine_evaluation_expected": True,
+                "machine_evaluation_status": "assessment_pending",
+                "machine_source_invalid_receipt": False,
+                "machine_bundle_sha256": entry_setup_live_policy.get(
+                    "machine_bundle_sha256"
+                ),
+                "entry_primary_decision_owner": entry_setup_live_policy.get(
+                    "primary_decision_owner"
+                ),
+                "entry_ai_role": entry_setup_live_policy.get("ai_role"),
+                "entry_setup_live_policy_scope_authority": (
+                    entry_setup_live_policy.get("scope_authority")
+                ),
+                "entry_setup_live_policy_selected_prompt_version": (
+                    entry_setup_live_policy.get("selected_prompt_version")
+                ),
+            }
+            if (
+                is_scalping_entry_call
+                and decision_quality_v2_14_selected
+                and entry_setup_live_policy.get("machine_bundle_sha256")
+            )
+            else {}
+        )
 
         def _merge_runtime_fields(payload: dict[str, Any] | None) -> dict[str, Any]:
             merged = merge_holding_exit_matrix_result_fields(payload, matrix_runtime)
@@ -8896,6 +8922,8 @@ class GPTSniperEngine:
             merged = merge_lifecycle_ai_context_fields(merged, lifecycle_ai_runtime)
             # Refresh diagnostic policy status even when reusing a cached decision.
             merged.update(fallback_policy_trace_fields)
+            for key, value in machine_policy_trace_fields.items():
+                merged.setdefault(key, value)
             return merged
 
         candle_preflight = ai_input_preflight(candle_context)
@@ -8917,6 +8945,12 @@ class GPTSniperEngine:
                         "runtime_fail_closed_action": "DROP",
                         "ai_decision_outcome_eligible": False,
                         "provider_called": False,
+                        "machine_evaluation_status": (
+                            "source_quality_blocked_before_assessment"
+                        ),
+                        "machine_source_invalid_receipt": bool(
+                            machine_policy_trace_fields
+                        ),
                         **ai_market_snapshot_log_fields(candle_context),
                     }
                 ),
@@ -9051,6 +9085,7 @@ class GPTSniperEngine:
                         machine_bundle_sha256=machine_first_context["bundle_sha256"],
                         mechanistic_entry_assessment=machine_assessment,
                         machine_decision_before_provider=True,
+                        machine_evaluation_status="assessed",
                         **machine_capture,
                     )
                     if (
@@ -9082,6 +9117,7 @@ class GPTSniperEngine:
                             "reason": "mechanistic_input_contract_invalid",
                             "provider_called": False,
                             "machine_contract_error": str(exc),
+                            "machine_evaluation_status": "assessment_contract_invalid",
                         }
                     ),
                     prompt_type=prompt_type,
@@ -9743,6 +9779,7 @@ class GPTSniperEngine:
                 # only and cannot alter runtime or order authority.
                 if machine_first_context is not None:
                     result.update(machine_capture)
+                    result["machine_evaluation_status"] = "assessed"
                 if v2_14_transport_meta:
                     result.update(v2_14_transport_meta)
                 result = self._apply_remote_entry_guard(
@@ -9941,6 +9978,7 @@ class GPTSniperEngine:
                             ),
                             "machine_decision_before_provider": True,
                             "entry_mechanistic_action": "ENTER_NOW",
+                            "machine_evaluation_status": "assessed",
                             "entry_ai_role": entry_setup_live_policy.get("ai_role"),
                             "entry_ai_screen_required": True,
                             "entry_ai_screen_status": unavailable_status,

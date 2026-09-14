@@ -225,6 +225,46 @@ def _machine_ai_natural_source_consumption(
     screen_lanes = Counter(
         str(trace.get("result_source") or "UNKNOWN") for trace in traces
     )
+    machine_expected_traces = [
+        trace for trace in traces if trace.get("machine_evaluation_expected") is True
+    ]
+    machine_evaluation_statuses = Counter(
+        str(trace.get("machine_evaluation_status") or "missing")
+        for trace in machine_expected_traces
+    )
+    machine_source_invalid_traces = [
+        trace
+        for trace in machine_expected_traces
+        if trace.get("machine_source_invalid_receipt") is True
+        and trace.get("machine_evaluation_status")
+        == "source_quality_blocked_before_assessment"
+    ]
+    machine_assessed_traces = [
+        trace
+        for trace in machine_expected_traces
+        if trace.get("machine_evaluation_status") == "assessed"
+    ]
+    machine_assessed_capture_verified_traces = [
+        trace
+        for trace in machine_assessed_traces
+        if trace.get("machine_capture_status") in {"captured", "redacted_ineligible"}
+        and re.fullmatch(
+            r"[0-9a-f]{64}", str(trace.get("machine_observation_sha256") or "")
+        )
+    ]
+    machine_contract_invalid_traces = [
+        trace
+        for trace in machine_expected_traces
+        if trace.get("machine_evaluation_status") == "assessment_contract_invalid"
+    ]
+    machine_accounted_trace_count = (
+        len(machine_source_invalid_traces)
+        + len(machine_assessed_capture_verified_traces)
+        + len(machine_contract_invalid_traces)
+    )
+    machine_unaccounted_trace_count = max(
+        0, len(machine_expected_traces) - machine_accounted_trace_count
+    )
     provider_traces = [
         trace for trace in traces if trace.get("provider_called") is True
     ]
@@ -404,9 +444,21 @@ def _machine_ai_natural_source_consumption(
             "source_gap"
             if required_missing or invalid_json_sources
             else (
-                "warning_identity_or_provider_link_gap"
-                if identity_gaps or provider_link_gaps
-                else "pass"
+                "warning_machine_attempt_conservation_gap"
+                if machine_unaccounted_trace_count
+                else (
+                    "warning_machine_assessment_contract_invalid"
+                    if machine_contract_invalid_traces
+                    else (
+                        "warning_identity_or_provider_link_gap"
+                        if identity_gaps or provider_link_gaps
+                        else (
+                            "warning_machine_source_invalid_excluded"
+                            if machine_source_invalid_traces
+                            else "pass"
+                        )
+                    )
+                )
             )
         )
     )
@@ -436,6 +488,27 @@ def _machine_ai_natural_source_consumption(
                 sorted(machine_missing_fields.items())
             ),
             "trace_join_counts": dict(sorted(machine_trace_join.items())),
+        },
+        "machine_attempt_conservation": {
+            "expected_trace_count": len(machine_expected_traces),
+            "assessed_trace_count": len(machine_assessed_traces),
+            "assessed_capture_verified_trace_count": len(
+                machine_assessed_capture_verified_traces
+            ),
+            "source_invalid_excluded_trace_count": len(
+                machine_source_invalid_traces
+            ),
+            "assessment_contract_invalid_trace_count": len(
+                machine_contract_invalid_traces
+            ),
+            "accounted_trace_count": machine_accounted_trace_count,
+            "unaccounted_trace_count": machine_unaccounted_trace_count,
+            "status_counts": dict(sorted(machine_evaluation_statuses.items())),
+            "denominator_preserved": (
+                machine_accounted_trace_count == len(machine_expected_traces)
+            ),
+            "source_invalid_rows_are_tuning_excluded": True,
+            "missing_economics_imputed": False,
         },
         "ai_screen_population": {
             "count": len(traces),
@@ -488,6 +561,27 @@ def _machine_ai_natural_source_consumption(
         },
         "tuning_input_allowed": not bool(
             required_missing or invalid_json_sources or source_generation_changed
+        ),
+        "machine_threshold_tuning_input_allowed": bool(captures)
+        and not bool(
+            required_missing
+            or invalid_json_sources
+            or source_generation_changed
+            or machine_unaccounted_trace_count
+            or machine_contract_invalid_traces
+        ),
+        "machine_threshold_tuning_blocked_reason": (
+            "machine_attempt_conservation_gap"
+            if machine_unaccounted_trace_count
+            else (
+                "machine_assessment_contract_invalid"
+                if machine_contract_invalid_traces
+                else (
+                    "machine_source_quality_blocked_before_assessment"
+                    if machine_expected_traces and not captures
+                    else None
+                )
+            )
         ),
         "blocked_reason": (
             "machine_ai_archive_missing_or_invalid"

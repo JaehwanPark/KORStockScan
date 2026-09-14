@@ -641,6 +641,25 @@ def _normalize_session(value: Any) -> str:
     return str(value or "").strip().upper()
 
 
+def _normalize_cohort(venue: Any, session: Any) -> tuple[str, str]:
+    normalized_venue = _normalize_venue(venue)
+    normalized_session = _normalize_session(session)
+    if normalized_venue in {"INTEGRATED", "SOR", "KRX_NXT"}:
+        normalized_venue = "KRX_NXT_INTEGRATED"
+    if (
+        normalized_venue == "KRX_NXT_INTEGRATED"
+        and normalized_session
+        in {
+            "NXT_AFTERMARKET",
+            "KRX_NXT_AFTERMARKET",
+        }
+    ):
+        # Accept the legacy main-window label, but do not collapse close-only
+        # or terminal-exit buckets into an entry-enabled policy cohort.
+        normalized_session = "KRX_NXT_AFTERMARKET"
+    return normalized_venue, normalized_session
+
+
 def _next_krx_trading_date(source_date: str) -> str:
     current = date.fromisoformat(source_date) + timedelta(days=1)
     for _ in range(14):
@@ -2028,7 +2047,7 @@ def resolve_live_prompt_policy(
     current = (now or datetime.now(KST)).astimezone(KST)
     target_date = current.date().isoformat()
     configured_fallback = str(configured_prompt_version or "").strip()
-    cohort = (_normalize_venue(effective_venue), _normalize_session(session_bucket))
+    cohort = _normalize_cohort(effective_venue, session_bucket)
     from src.engine.scalping.entry_setup_scalping_rollout import (
         AUTO_PROMOTION_PATH_ENV,
         AUTO_PROMOTION_SHA_ENV,
@@ -2064,8 +2083,8 @@ def resolve_live_prompt_policy(
         "selected_prompt_version": fallback,
         "rollback_prompt_version": fallback,
         "target_date": target_date,
-        "effective_venue": _normalize_venue(effective_venue),
-        "session_bucket": _normalize_session(session_bucket),
+        "effective_venue": cohort[0],
+        "session_bucket": cohort[1],
         "position_tag": str(position_tag or "").strip().upper(),
         "activation_path": (
             str(activation_path(target_date, cohort=cohort))

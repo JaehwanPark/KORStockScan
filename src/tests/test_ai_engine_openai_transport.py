@@ -4036,6 +4036,63 @@ def test_machine_initial_policy_assesses_before_provider_cache_and_lock(
         assert result["action"] in {"WAIT", "DROP"}
 
 
+def test_machine_policy_preflight_block_preserves_source_invalid_receipt(monkeypatch):
+    from src.engine.scalping import mechanistic_entry_runtime_policy as initial_policy
+    from src.engine.scalping.entry_setup_evidence import (
+        MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
+    )
+
+    engine = _build_engine()
+    live = {
+        "enabled": True,
+        "status": "active_bounded_nxt_canary",
+        "selected_prompt_version": initial_policy.AI_VERSION,
+        "primary_decision_owner": "mechanistic_entry_adjudicator",
+        "ai_role": "auxiliary_risk_screen_pass_veto_no_promotion",
+        "scope_authority": "operator_all_session_auto_promotion",
+        "mechanistic_threshold_policy": MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
+        "machine_bundle_sha256": "b" * 64,
+    }
+    monkeypatch.setattr(
+        openai_module, "resolve_live_prompt_policy", lambda **kwargs: live
+    )
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(
+            openai_module.TRADING_RULES,
+            OPENAI_ANALYZE_TARGET_PROMPT_VERSION=(
+                DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_call_openai_safe",
+        lambda *args, **kwargs: pytest.fail("source-invalid input cannot call AI"),
+    )
+
+    result = engine.analyze_target(
+        "test",
+        _sample_ws_data(),
+        _sample_ticks(),
+        _sample_candles(),
+        strategy="SCALPING",
+        prompt_profile="watching",
+        candle_context=None,
+    )
+
+    assert result["action"] == "DROP"
+    assert result["machine_evaluation_expected"] is True
+    assert result["machine_evaluation_status"] == (
+        "source_quality_blocked_before_assessment"
+    )
+    assert result["machine_source_invalid_receipt"] is True
+    assert result["machine_bundle_sha256"] == "b" * 64
+    assert result["entry_ai_role"] == live["ai_role"]
+    assert result["provider_called"] is False
+
+
 def test_machine_enter_now_ai_timeout_preserves_bounded_recheck(monkeypatch):
     from src.engine.scalping import ai_decision_trace as trace_module
     from src.engine.scalping import mechanistic_entry_runtime_policy as initial_policy

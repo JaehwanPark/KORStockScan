@@ -323,6 +323,98 @@ def test_machine_ai_natural_source_audit_does_not_require_provider_archives_with
     )
 
 
+def test_machine_ai_natural_source_audit_excludes_source_invalid_attempts(
+    tmp_path: Path,
+):
+    day = "2026-09-14"
+    payload_path = (
+        tmp_path / "ai_decision_payloads" / f"ai_decision_payloads_{day}.jsonl"
+    )
+    trace_path = tmp_path / "ai_decision_trace" / f"ai_decision_trace_{day}.jsonl"
+    payload_path.parent.mkdir(parents=True)
+    trace_path.parent.mkdir(parents=True)
+    payload_path.write_text("", encoding="utf-8")
+    trace_path.write_text(
+        json.dumps(
+            {
+                "schema": "ai_decision_trace_v1",
+                "decision_stage": "entry_screen",
+                "machine_evaluation_expected": True,
+                "machine_evaluation_status": (
+                    "source_quality_blocked_before_assessment"
+                ),
+                "machine_source_invalid_receipt": True,
+                "provider_called": False,
+                "result_source": "input_preflight_blocked",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = audit._machine_ai_natural_source_consumption(day, data_root=tmp_path)
+
+    assert report["status"] == "warning_machine_source_invalid_excluded"
+    assert report["machine_attempt_conservation"] == {
+        "expected_trace_count": 1,
+        "assessed_trace_count": 0,
+        "assessed_capture_verified_trace_count": 0,
+        "source_invalid_excluded_trace_count": 1,
+        "assessment_contract_invalid_trace_count": 0,
+        "accounted_trace_count": 1,
+        "unaccounted_trace_count": 0,
+        "status_counts": {"source_quality_blocked_before_assessment": 1},
+        "denominator_preserved": True,
+        "source_invalid_rows_are_tuning_excluded": True,
+        "missing_economics_imputed": False,
+    }
+    assert report["tuning_input_allowed"] is True
+    assert report["machine_threshold_tuning_input_allowed"] is False
+    assert report["machine_threshold_tuning_blocked_reason"] == (
+        "machine_source_quality_blocked_before_assessment"
+    )
+
+
+def test_machine_ai_natural_source_audit_blocks_contract_invalid_attempts(
+    tmp_path: Path,
+):
+    day = "2026-09-14"
+    payload_path = (
+        tmp_path / "ai_decision_payloads" / f"ai_decision_payloads_{day}.jsonl"
+    )
+    trace_path = tmp_path / "ai_decision_trace" / f"ai_decision_trace_{day}.jsonl"
+    payload_path.parent.mkdir(parents=True)
+    trace_path.parent.mkdir(parents=True)
+    payload_path.write_text("", encoding="utf-8")
+    trace_path.write_text(
+        json.dumps(
+            {
+                "schema": "ai_decision_trace_v1",
+                "decision_stage": "entry_screen",
+                "machine_evaluation_expected": True,
+                "machine_evaluation_status": "assessment_contract_invalid",
+                "machine_source_invalid_receipt": False,
+                "provider_called": False,
+                "result_source": "mechanistic_contract_invalid",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = audit._machine_ai_natural_source_consumption(day, data_root=tmp_path)
+
+    assert report["status"] == "warning_machine_assessment_contract_invalid"
+    assert report["machine_attempt_conservation"]["denominator_preserved"] is True
+    assert report["machine_attempt_conservation"][
+        "assessment_contract_invalid_trace_count"
+    ] == 1
+    assert report["machine_threshold_tuning_input_allowed"] is False
+    assert report["machine_threshold_tuning_blocked_reason"] == (
+        "machine_assessment_contract_invalid"
+    )
+
+
 def test_machine_ai_natural_source_audit_isolates_compact_prompt_measurement(
     tmp_path: Path,
 ):
