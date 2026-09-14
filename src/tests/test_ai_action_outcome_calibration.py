@@ -1013,6 +1013,15 @@ def test_compact_history_requires_own_source_and_unchanged_machine_policy(
         tmp_path, "2026-09-14", rows, incumbent, receipt
     )
     assert archived["compact_history_receipts"][0]["allowed"] is True
+    compressed.write_bytes(compressed.read_bytes()[:-5])
+    truncated = calibration._compact_history_receipt(
+        tmp_path, "2026-09-14", rows, incumbent, receipt
+    )
+    assert truncated["compact_history_receipts"][0]["allowed"] is False
+    assert (
+        truncated["compact_history_receipts"][0]["reason"]
+        == "historical_source_or_policy_invalid"
+    )
     raw.write_text("changed\n")
     stale = calibration._compact_history_receipt(
         tmp_path, "2026-09-14", rows, incumbent, receipt

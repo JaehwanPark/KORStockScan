@@ -1538,8 +1538,13 @@ def _ai_decision_action_outcome_calibration_status(
                     "select_opportunity_preservation_variant": ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION,
                     "select_material_risk_specificity_variant": ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION,
                 }.get(expected_direction, incumbent_version)
+            from src.engine.scalping.mechanistic_entry_runtime_policy import (
+                compact_outcome_counts_valid,
+            )
+
             if (
                 economic.get("schema") != "compact_auxiliary_economic_selection_v2"
+                or not compact_outcome_counts_valid(economic)
                 or not isinstance(economic_count, int)
                 or isinstance(economic_count, bool)
                 or economic_count < 0

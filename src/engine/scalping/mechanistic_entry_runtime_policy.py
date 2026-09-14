@@ -267,6 +267,41 @@ def _validate_ai_policy(ai: object, context: object) -> bool:
     return False
 
 
+def compact_outcome_counts_valid(economic: dict) -> bool:
+    """Reconcile every published subtotal against the detailed outcome map."""
+    counts = economic.get("verdict_x_action_neutral_outcome_counts")
+    if not isinstance(counts, dict) or any(
+        not isinstance(key, str)
+        or key.partition("|")[0] not in {"PASS", "VETO"}
+        or "|" not in key
+        or type(value) is not int
+        or value < 0
+        for key, value in counts.items()
+    ):
+        return False
+    expected = {
+        "economic_eligible_count": sum(counts.values()),
+        "evaluable_pass_count": sum(
+            value for key, value in counts.items() if key.startswith("PASS|")
+        ),
+        "evaluable_veto_count": sum(
+            value for key, value in counts.items() if key.startswith("VETO|")
+        ),
+        "missed_profit_veto_count": counts.get("VETO|CLEAN_FAST_PROFIT", 0),
+        "dangerous_pass_count": sum(
+            counts.get(key, 0)
+            for key in (
+                "PASS|CLEAN_FAST_LOSS_OR_ADVERSE",
+                "PASS|PROFIT_AFTER_DEEP_ADVERSE",
+            )
+        ),
+    }
+    return all(
+        type(economic.get(key)) is int and economic[key] == value
+        for key, value in expected.items()
+    )
+
+
 def compact_economic_direction(economic: dict) -> str:
     """Bounded feedback direction; amounts are CF evidence, not candidate uplift."""
     import math
@@ -349,6 +384,8 @@ def _selected_compact_prompt_version(source: dict, previous: dict | None) -> str
     selected = str(selection.get("selected_prompt_version") or "")
     economic = outcomes.get("economic_contract") or {}
     source_receipt = case_table.get("machine_ai_natural_source_receipt") or {}
+    if not compact_outcome_counts_valid(economic):
+        return previous_version
     # Publication precedes the final strict verifier. Validate the evidence
     # here as well, before creating a future policy from malformed aggregates.
     count_fields = (
@@ -567,7 +604,12 @@ def publish(
                 {k: v for k, v in reviewed.items() if k != "bundle_sha256"}
             )
             validate(reviewed, target_date=target)
-        selected_ai_version = _selected_compact_prompt_version(source, existing)
+        evaluation_incumbent = (
+            load_effective(data_root=data_root, target_date=source_date) or existing
+        )
+        selected_ai_version = _selected_compact_prompt_version(
+            source, evaluation_incumbent
+        )
         if (
             existing is not None
             and existing.get("role_contract") == MECHANISTIC_PRIMARY_ROLE_CONTRACT
@@ -596,7 +638,9 @@ def publish(
             if prior_paths
             else None
         )
-        selected_ai_version = _selected_compact_prompt_version(source, previous)
+        selected_ai_version = _selected_compact_prompt_version(
+            source, evaluation_incumbent or previous
+        )
         if previous is None and not bootstrap:
             raise ValueError("machine_policy_bootstrap_authority_missing")
         # Freeze one parsed source generation in the existing writer's exact

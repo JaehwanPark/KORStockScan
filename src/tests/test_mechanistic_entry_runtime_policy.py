@@ -149,7 +149,16 @@ def test_frozen_compact_citations_migrate_only_next_date(
 
 
 @pytest.mark.parametrize(
-    "corruption", [None, "rate", "preservation", "source", "bool_count", "tail_count"]
+    "corruption",
+    [
+        None,
+        "rate",
+        "preservation",
+        "source",
+        "bool_count",
+        "tail_count",
+        "detailed_counts",
+    ],
 )
 def test_postclose_automatically_selects_bounded_compact_successor(
     tmp_path, corruption
@@ -231,6 +240,14 @@ def test_postclose_automatically_selects_bounded_compact_successor(
         economic["dangerous_pass_count"] = True
     elif corruption == "tail_count":
         economic["material_tail_pass_count"] = 16
+    elif corruption == "detailed_counts":
+        economic["verdict_x_action_neutral_outcome_counts"] = {
+            "PASS|CLEAN_FAST_PROFIT": 20
+        }
+        outcome_hash = policy.digest(
+            economic["verdict_x_action_neutral_outcome_counts"]
+        )
+        economic["verdict_x_action_neutral_outcome_counts_sha256"] = outcome_hash
     report["hierarchical_entry_quality"]["machine_decision_case_table"][
         "compact_auxiliary_screen_outcomes"
     ]["automatic_successor_selection"]["economic_outcome_counts_sha256"] = outcome_hash
@@ -259,6 +276,40 @@ def test_postclose_automatically_selects_bounded_compact_successor(
         successor["ai_policy"]["prompt_version"]
     )
     assert "Calibration emphasis" in successor["ai_policy"]["system_prompt"]
+    # A later source still evaluates the policy used today, not tomorrow's
+    # unlaunched opportunity candidate. It must be able to replace that draft.
+    economic["material_tail_pass_count"] = 1
+    selection = report["hierarchical_entry_quality"]["machine_decision_case_table"][
+        "compact_auxiliary_screen_outcomes"
+    ]["automatic_successor_selection"]
+    selection["selected_prompt_version"] = (
+        policy.ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION
+    )
+    calibration._atomic_write_json(
+        path, calibration._with_artifact_content_sha256(report)
+    )
+    revised = policy.publish(
+        path, data_root=tmp_path, now=datetime(2026, 9, 14, 22, tzinfo=policy.KST)
+    )
+    assert (
+        revised["ai_policy"]["prompt_version"]
+        == policy.ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION
+    )
+    assert (
+        policy.load(data_root=tmp_path, target_date="2026-09-14")["bundle_sha256"]
+        == previous["bundle_sha256"]
+    )
+    economic["material_tail_pass_count"] = 0
+    selection["selected_prompt_version"] = (
+        policy.ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION
+    )
+    calibration._atomic_write_json(
+        path, calibration._with_artifact_content_sha256(report)
+    )
+    frozen = policy.publish(
+        path, data_root=tmp_path, now=datetime(2026, 9, 15, 8, tzinfo=policy.KST)
+    )
+    assert frozen["bundle_sha256"] == revised["bundle_sha256"]
 
 
 @pytest.mark.parametrize(

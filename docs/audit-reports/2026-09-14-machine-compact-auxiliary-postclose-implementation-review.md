@@ -74,3 +74,10 @@
 검증: 6개 직접 owner suite 388 PASS, compact registry/자연 선정 보존 반례 추가 후 optimizer/replay 52 PASS. 날짜별 raw 변경·정책 변경 제외, 비용 크기에 따른 carry/선정, 한쪽 분모0, 발행 직전 rate/count/source 변조를 검증했다. Ruff·compile·diff 및 print-only parser26 PASS. commit/release 식별자는 runtime release selection receipt에 기록한다.
 
 배포 전 압축 보관 반례 추가: 원본 stat이 달라졌을 때 logical-content SHA256이 동일한 gzip만 수용하며 내용 변경은 계속 제외한다. 표적1 PASS. 운영 I/O 부하로 release 전체 중복 테스트는 중단했으며 전체 release suite PASS로 기록하지 않는다. 작업본 PASS와 최종 release 코드 hash 일치를 배포 검증으로 사용한다.
+
+## 8. P1 세 건 후속 종결 — 18:56 KST
+
+- 상세 outcome map에서 PASS/VETO·missed-profit VETO·dangerous PASS를 재계산하는 공통 검증을 publisher와 strict에 연결했다. 상세 PASS20/VETO0·집계 VETO5 반례는 발행되지 않고 incumbent carry다.
+- source date의 실제 정책을 평가 incumbent로 사용한다. 먼저 생성한 다음날 opportunity 후보 뒤 늦게 risk 근거가 도착하면 재발행하며 당일 정책은 보존한다. 다음날07:35 이후에는 기존 frozen bundle을 유지한다.
+- 과거 gzip의 EOFError는 날짜별 source gap으로 격리한다. 정상 압축본 수용과 truncated gzip 제외를 함께 검증했다.
+- 관련 calibration/publisher/strict322 PASS, Ruff·compile·diff PASS. 새 표본 floor나 사용자 승인 단계는 추가하지 않았다. 검토한 세 결함은 종결했으며 자연 정책/PID 소비와 비용후 실수익은 기존 acceptance로 남긴다.

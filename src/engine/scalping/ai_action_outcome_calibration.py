@@ -3571,7 +3571,7 @@ def _compact_history_receipt(
                         == prior["bundle_sha256"]
                     ):
                         partitions.append({**partition, "source_date": day})
-        except (OSError, ValueError, KeyError, TypeError):
+        except (OSError, EOFError, ValueError, KeyError, TypeError):
             entry["reason"] = "historical_source_or_policy_invalid"
         history.append(entry)
     result["compact_history_receipts"] = history
