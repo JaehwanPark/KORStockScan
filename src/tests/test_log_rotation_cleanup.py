@@ -1171,6 +1171,60 @@ def test_log_rotation_cleanup_escalates_only_after_repeated_writer_defer(tmp_pat
     )
 
 
+def test_log_rotation_cleanup_does_not_escalate_verified_current_owner_rollover(
+    tmp_path,
+):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    project_root = tmp_path / "project"
+    log_dir = project_root / "logs"
+    active = log_dir / "threshold_cycle_postclose_cron.log"
+    log_dir.mkdir(parents=True)
+    active.write_text("old-generation\n", encoding="utf-8")
+    target_date = datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat()
+    env = os.environ.copy()
+    env.update(
+        {
+            "PROJECT_DIR": str(project_root),
+            "TARGET_DATE": target_date,
+            "DATA_MAINTENANCE_ENABLED": "false",
+            "LOG_ROTATION_ACTIVE_MAX_BYTES": "10",
+            "LOG_ROTATION_WRITER_DEFER_FAILURE_THRESHOLD": "1",
+        }
+    )
+    rotation = subprocess.run(
+        [
+            "bash",
+            "deploy/run_owned_log_rotation.sh",
+            "threshold_cycle_postclose_cron",
+            str(active),
+        ],
+        cwd=Path(__file__).resolve().parents[2],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert rotation.returncode == 0
+    active.write_text("new-generation-is-also-oversize\n", encoding="utf-8")
+
+    result = subprocess.run(
+        ["bash", "deploy/run_logs_rotation_cleanup_cron.sh", "30"],
+        cwd=Path(__file__).resolve().parents[2],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout
+    assert "owner_status=verified_owner_rollover_current_target" in result.stdout
+    assert "writer_defer_escalated=0" in result.stdout
+    assert "writer_defer_tracked=0" in result.stdout
+    assert "[DONE] log_rotation_cleanup" in result.stdout
+
+
 def test_log_rotation_cleanup_resets_writer_defer_after_stable_pass(tmp_path):
     project_root = tmp_path / "project"
     log_dir = project_root / "logs"

@@ -49,6 +49,7 @@ ACTIVE_LOG_COMPRESS_MIN_INDEX="${LOG_ROTATION_COMPRESS_MIN_INDEX:-2}"
 ARCHIVE_COMPRESSION_QUIET_SECONDS="${LOG_ROTATION_ARCHIVE_QUIET_SECONDS:-300}"
 WRITER_DEFER_FAILURE_THRESHOLD="${LOG_ROTATION_WRITER_DEFER_FAILURE_THRESHOLD:-3}"
 WRITER_DEFER_STATE_FILE="${LOG_ROTATION_WRITER_DEFER_STATE_FILE:-$PROJECT_DIR/tmp/log_rotation_cleanup_writer_defer_state.json}"
+OWNED_LOG_ROTATION_RECEIPT_FILE="${OWNED_LOG_ROTATION_RECEIPT_FILE:-$PROJECT_DIR/data/report/log_writer_rollover_receipts/log_writer_rollover_${TARGET_DATE}.jsonl}"
 ACTIVE_LOG_RETENTION_DAYS="${LOG_ROTATION_ACTIVE_RETENTION_DAYS:-14}"
 SYSTEM_METRIC_RETENTION_DAYS="${SYSTEM_METRIC_RETENTION_DAYS:-3}"
 DATA_MAINTENANCE_ENABLED="${DATA_MAINTENANCE_ENABLED:-true}"
@@ -435,6 +436,7 @@ state_payload = {
     "observation_complete": observation_complete,
     "entries": entries,
 }
+
 state_path.parent.mkdir(parents=True, exist_ok=True)
 tmp_path = state_path.with_name(f".{state_path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
 try:
@@ -480,6 +482,86 @@ for item in payload.get("escalated", []):
         f"observed_slot={item['observed_slot']} reason={item['reason']} "
         f"consecutive_count={item['consecutive_count']}"
     )
+PY
+}
+
+has_verified_owner_rollover_receipt() {
+  local active_log="$1"
+  "$PYTHON_BIN" - "$OWNED_LOG_ROTATION_RECEIPT_FILE" "$TARGET_DATE" "$active_log" "$LOG_DIR" <<'PY'
+import gzip
+import hashlib
+import json
+import os
+import stat
+import sys
+from datetime import datetime
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+receipt_path = Path(sys.argv[1])
+target_date = sys.argv[2]
+active_log = Path(sys.argv[3]).absolute()
+log_dir = Path(sys.argv[4]).resolve(strict=True)
+if not receipt_path.is_file() or receipt_path.is_symlink():
+    raise SystemExit(1)
+try:
+    active_state = active_log.lstat()
+except OSError:
+    raise SystemExit(1)
+if not stat.S_ISREG(active_state.st_mode) or active_log.is_symlink():
+    raise SystemExit(1)
+
+matched = None
+try:
+    for raw in receipt_path.read_text(encoding="utf-8").splitlines():
+        if not raw.strip():
+            continue
+        row = json.loads(raw)
+        if not isinstance(row, dict):
+            raise ValueError("receipt row must be an object")
+        if os.path.abspath(str(row.get("active_log_path") or "")) == str(active_log):
+            matched = row
+except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
+    raise SystemExit(1)
+if matched is None:
+    raise SystemExit(1)
+
+try:
+    recorded = datetime.fromisoformat(str(matched.get("recorded_at_kst") or ""))
+except ValueError:
+    raise SystemExit(1)
+if (
+    matched.get("schema_version") != "log_writer_rollover_receipt_v1"
+    or matched.get("status") != "rotated_verified"
+    or not str(matched.get("writer_owner") or "").strip()
+    or recorded.tzinfo is None
+    or recorded.astimezone(ZoneInfo("Asia/Seoul")).date().isoformat() != target_date
+):
+    raise SystemExit(1)
+
+archive = Path(str(matched.get("archive_path") or "")).absolute()
+try:
+    archive_state = archive.lstat()
+    archive_parent = archive.parent.resolve(strict=True)
+except OSError:
+    raise SystemExit(1)
+if (
+    archive_parent != log_dir
+    or archive.is_symlink()
+    or not stat.S_ISREG(archive_state.st_mode)
+    or not archive.name.startswith(f"{active_log.name}.generation_")
+    or archive.suffix != ".gz"
+):
+    raise SystemExit(1)
+archive_bytes = archive.read_bytes()
+if hashlib.sha256(archive_bytes).hexdigest() != matched.get("archive_sha256"):
+    raise SystemExit(1)
+try:
+    restored = gzip.decompress(archive_bytes)
+except (OSError, EOFError):
+    raise SystemExit(1)
+if hashlib.sha256(restored).hexdigest() != matched.get("source_sha256"):
+    raise SystemExit(1)
 PY
 }
 
@@ -1783,10 +1865,15 @@ while IFS= read -r -d '' active_log; do
   active_size_bytes="$(stat -c%s "$active_log" 2>/dev/null || echo 0)"
   if [[ "$active_size_bytes" -ge "$ACTIVE_LOG_MAX_BYTES" ]]; then
     active_rotation_deferred_count=$((active_rotation_deferred_count + 1))
-    register_writer_defer "active_log" "$active_log" "writer_owned_oversize"
+    owner_status="$active_rotation_status"
+    if has_verified_owner_rollover_receipt "$active_log"; then
+      owner_status="verified_owner_rollover_current_target"
+    else
+      register_writer_defer "active_log" "$active_log" "writer_owned_oversize"
+    fi
     archive_retention_protected_paths["$active_log"]=1
     archive_retention_protection_reasons["$active_log"]="active_rotation_disabled_pending_writer_owner"
-    echo "[ACTIVE_LOG_ROTATION_DEFERRED] active_log=$(basename "$active_log") size_bytes=${active_size_bytes} status=deferred_writer_active owner_status=${active_rotation_status} active_preserved=true numeric_rename_shift_prune_disabled=true cleanup_will_continue=true"
+    echo "[ACTIVE_LOG_ROTATION_DEFERRED] active_log=$(basename "$active_log") size_bytes=${active_size_bytes} status=deferred_writer_active owner_status=${owner_status} active_preserved=true numeric_rename_shift_prune_disabled=true cleanup_will_continue=true"
   fi
 done <"$active_find_path"
 rm -f "$active_find_path"
