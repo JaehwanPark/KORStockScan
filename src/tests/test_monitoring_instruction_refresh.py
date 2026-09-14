@@ -111,6 +111,42 @@ def good_api(instructions, payload, schema, phase, config):
     return value, {"phase": phase, "response_id": "mock"}
 
 
+def test_missing_code_blocks_without_api_or_publication(workspace, monkeypatch):
+    original_context = m.context_bundle
+
+    def context(*args, **kwargs):
+        return {**original_context(*args, **kwargs), "missing_required_contract_paths": ["owner.py"]}
+
+    monkeypatch.setattr(m, "context_bundle", context)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Incomplete context must not call the API")
+
+    report = m.refresh(workspace, "postclose", DAY, {}, call=forbidden, validate=forbidden)
+    assert report["status"] == "blocked_missing_evidence"
+    assert report["api_calls"] == []
+    assert (workspace / m.TARGETS["postclose"]).read_text() == ORIGINAL
+    assert not (workspace / m.STATE / "last_success_postclose.json").exists()
+    assert m.refresh(workspace, "postclose", DAY, {}, call=forbidden, validate=forbidden) == report
+
+
+def test_compact_excerpt_is_exact_and_does_not_claim_unrelated_code():
+    source = 'def unrelated():\n    return 0\n\ndef compact_contract():\n    return "fact"\n'
+    excerpt = m.compact_contract_excerpt(source)
+    assert excerpt == 'def compact_contract():\n    return "fact"\n'
+
+
+def test_optional_omissions_do_not_impose_whole_repo_gate(workspace, monkeypatch):
+    original_context = m.context_bundle
+    monkeypatch.setattr(m, "context_bundle", lambda *a, **kw: {
+        **original_context(*a, **kw), "omitted_code_paths": ["unrelated.py"],
+        "missing_required_contract_paths": []})
+    report = m.refresh(workspace, "postclose", DAY, {}, call=good_api, validate=lambda root: None)
+    assert report["status"] == "updated"
+    assert report["review_scope"] == "supplied_contracts_only_not_full_code_coverage"
+    assert report["omitted_code_paths"] == ["unrelated.py"]
+
+
 def test_publish_once_and_preview_does_not_consume_schedule(workspace):
     preview = m.refresh(workspace, "postclose", DAY, {}, preview=True, call=good_api, validate=lambda root: None)
     assert preview["status"] == "preview_validated"
@@ -295,7 +331,7 @@ def test_source_bundle_omits_daily_history_and_keeps_source_budget(tmp_path, mon
                  f"docs/checklists/{DAY}-stage2-todo-checklist.md"]:
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("# Daily\n\n## 오늘 목적\nPurpose\n\n## 오늘 강제 규칙\nRules\n\n"
+        path.write_text("# Daily\n\n## 오늘 목적\nPurpose\n\n## Extra\nIgnore me\n\n## 오늘 강제 규칙\nRules\n\n"
                         "## History\nMonitoringInstructionRefreshNaturalAcceptance0911\n")
     monkeypatch.setattr(m, "now_kst", lambda: datetime(2026, 9, 11, 12, tzinfo=m.KST))
     monkeypatch.setattr(m, "git", lambda root, *a: "a" * 40 if a[0] == "rev-parse" else "")

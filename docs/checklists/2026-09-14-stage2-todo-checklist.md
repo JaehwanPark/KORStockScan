@@ -6,6 +6,13 @@
 - 실주문, threshold, provider, sim/probe 관련 변경은 approval artifact와 checklist 기준 없이 열지 않는다.
 - code-improvement workorder는 자동 repo 수정이 아니라 사용자가 Codex에 구현을 지시한 경우에만 실행한다.
 
+## 문서 자동갱신 후속 확인
+
+- [ ] `[MonitoringInstructionRefreshEvidence0914] 필수 compact 입력과 범위 제한의 다음 자연 writer 소비 확인` (`Due: 2026-09-14`, `Slot: POSTCLOSE`, `TimeWindow: 21:55~23:40`, `Track: RuntimeStability`)
+  - Source: [자동갱신 계약](../monitoring-instruction-refresh.md), `data/report/monitoring_instruction_refresh/2026-09-14/postclose/status.json`.
+  - 19:36 코드 검증: 필수 compact 함수 발췌 3개 모두 입력, 전체 입력 140,000자 이내, 관련 테스트36개 PASS. 19:30 자연 실행은 수정 전 `unchanged`이며 새 코드 소비 receipt가 아니다. 문서 writer는 설치 workspace를 매번 읽으므로 매매 재기동 없이 다음 실행에 반영된다.
+  - Acceptance: 장후 완료 후 intraday writer 또는 다음 날19:30 writer의 manifest에서 필수 발췌·review_scope·선택적 누락을 대사한다. 필수 원천 결손이면 `blocked_missing_evidence`와 API0·원문 유지 확인. 정상 완료 시 실제 원문/후보 hash·리뷰·parser 결과를 확인한다. 선행 장후 미완료는 waiting이며 기존 완료 상태나 횟수를 초기화해 재호출하지 않는다. 이 항목은 문서 자동화 확인이며 매매/정책/외부 sync 실행 권한이 아니다.
+
 ## 오늘 강제 규칙
 
 - 장중 runtime 변경은 사용자 명시 지시가 있을 때만 기존 `bounded_tunable` 단일 축에 한해 허용한다. fresh/conflict-free source, 유효 effective price, 단일 blocker 인과, same-stage owner 비충돌, before/after·PID/env provenance·rollback·즉시 attribution을 모두 남긴다. hard safety, stale/conflict, price freshness, broker/account/order/quantity/cooldown, provider, bot, cap, 요청수량은 변경하거나 우회하지 않는다.

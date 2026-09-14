@@ -41,6 +41,8 @@
 2. **후행 label과 비용 결속**: 1/3/5/10/20/30/60분 target/adverse first-hit·MFE/MAE·fill feasibility와 terminal/censored를 action-neutral하게 결속한다. 아직 maturity 전인 행은 pending으로 남기고 0수익·오판으로 만들지 않는다. 특히 종료 직전 NXT/SOR 사례의 미성숙 60분 horizon 때문에 20:10 producer를 늦추거나 동일 날짜로 반복 실행하지 않는다. 20:10에는 계약상 성숙한 eligible 행만 후보 판정에 사용하고 나머지는 identity를 보존해 이후 누적 generation에서 성숙 후 소비한다. 실제 비용이 결속된 COMPLETED만 실현 경제성으로 사용하며 미체결·취소·결측 비용은 0으로 보간하지 않는다. `빠른 비용후 수익`, `늦은 진입`, `횡보/깊은 역행 후 익절`, `놓친 실행가능 기회`, `적정 차단`, `근거 미성숙/결손`을 구분한다.
 3. **후보·승인조건 검증**: 공통 부모, 유사 흐름 group, 종목 residual, 선택된 micro child를 각각 incumbent와 같은 scope/비용/exit 계약으로 비교한다. 비용 차감 primary EV `>= +0.10%`와 positive paired delta를 확인하되, 해당 family가 선언한 source-quality·최소 종목/독립일·chronological holdout·tail guard도 함께 적용한다. 이 조건을 진단 수리나 기존 부모 사용의 추가 gate로 붙이지 않는다. 그룹/종목 분할 때문에 모든 후보가 반복 0이 되면 단순 `hold_sample`로 끝내지 말고 실제 상위 모집단, shrinkage/fallback과 최초 고갈 단계를 확인하며 floor를 임의로 낮추지 않는다.
 4. **정책 발행 또는 carry**: publisher가 거래 calendar로 계산한 `NEXT_TARGET_DATE`의 dated bundle을 원자적으로 발행했는지 확인한다. challenger 채택 시 selected parent/child/rule·source hash·effective date·rollback을, 미채택 시 `incumbent_carried`와 직접 탈락 사유를 보존한다. 후보0·미성숙만으로 유효 부모 정책을 제거하거나 “정책 없음”으로 만들지 않는다. 발행 실패, 잘못된 날짜/hash, silent stale carry는 운영 결함이다.
+   - 기계 hierarchy 후보의 위 `+0.10%`/paired 조건을 compact AI 변형 선정에 복사하지 않는다. compact는 기존 publisher의 등록 version/hash·동일 machine/venue/session partition·경제적 유효 분모·비용/손실 크기/tail 및 source binding 계약으로 자동 선정한다. 상세 PASS/VETO outcome map과 eligible/pass/veto/missed-profit/dangerous subtotal을 직접 대사한다. 단순 PASS 비율·주문 빈도가 아니라 비용 차감 작은 순익과 놓친 기회·큰 손실을 함께 확인한다.
+   - source-date의 유효 incumbent를 평가 기준으로 사용한다. 늦은 새 source는 다음 날짜 후보를 갱신할 수 있지만 PREOPEN cutoff 뒤 동결된 bundle은 교체하지 않는다. compact 자연 표본이 없으면 legacy 성과로 compact를 튜닝하지 않고 유효 carry/근거 결손을 구분한다. 새 수동 승인이나 후보 적용 전 실체결을 추가 요구하지 않는다.
 5. **직접 consumer와 handoff**: 새 calibration/policy generation이 runtime summary/gap/lineage→tower→checklist→strict verifier에 같은 source hash로 반영됐는지 확인하고, 다음 07:35 PREOPEN의 intended loader와 07:55 이후 PID 확인 owner를 남긴다. 장후 발행은 다음날 선택이나 PID 소비가 아니므로 미래 기동 성공으로 보고하지 않는다. 반대로 기존 자동 계약의 guard 통과 policy에 매번 새 수동 승인 gate를 추가하지 않는다.
 
 장후 최종 판정은 **검증 challenger 발행**, **유효 incumbent carry**, **source/contract 차단**, **publisher/handoff 실패** 중 하나로 설명하고, 경제성은 **수용·거절·maturity 대기·근거 부족**을 별도로 기록한다. 이 문구를 producer의 새 canonical label로 합성하지 않고 실제 artifact 원값과 reason을 함께 인용한다. 운영 terminal이어도 사례 경제성이나 다음날 자연 소비가 남으면 YELLOW이며, 필수 publisher/handoff가 실패하면 RED다.
@@ -464,6 +466,7 @@ Pass 1 검증 후 수정한 최초 producer부터 intended last consumer까지 �
 
 ### 8.2 DONE controller와 AI replay
 
+- compact AI는 기계 ENTER의 보조 심사이며 legacy 독립 선정·holding cohort와 분리한다. #76/#82의 AI 미호출 기계 평가와 실제 호출 분모, prompt/machine hash 및 후행 outcome을 대사한다. #77/#78/#80은 등록 compact system prompt·실제 입력·schema parity와 자연 평가 projection을 확인하며 과거 optimizer base prompt를 compact에 덧붙이지 않는다. legacy replay/Provider0 metadata 성공을 compact 평가·적용으로 바꾸지 않는다. 손상된 historical gzip은 날짜별 source gap으로 격리하고 전일 원천을 합성하지 않는다.
 - controller JSON `done`만으로 끝내지 않고 controller cron log의 최신 DONE을 확인한다.
 - fixed 21:05 runner와 controller follower가 날짜별 replay lock으로 중복되지 않았는지 확인한다.
 - active fixed runner의 lock이 해제된 직후에는 최신 batch/consumer terminal을 다시 검증한다. 대기 중 읽은 `retry_required`를 그대로 재사용해 이미 끝난 follower를 다시 실행하지 않으며, 재검증에서도 미완료인 경우에만 기존 bounded runner/lock 계약을 따른다.

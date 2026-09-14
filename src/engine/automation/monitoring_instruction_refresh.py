@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import difflib
 import fcntl
 import hashlib
@@ -26,7 +27,7 @@ STATE = "data/report/monitoring_instruction_refresh"
 CONFIG = "data/config/monitoring_instruction_refresh.json"
 MODEL = "gpt-5.6-sol"
 MAX_SOURCE_CHARS = 140_000
-TERMINAL_STATUSES = {"updated", "unchanged", "blocked_publication"}
+TERMINAL_STATUSES = {"updated", "unchanged", "blocked_publication", "blocked_missing_evidence"}
 PROTECTED = re.compile(
     r"권한|금지|승인|안전|우회|보존|손절|수량|퇴역|OFF|rollback|guard|safety|"
     r"authority|forbidden|retired|baseline|PREOPEN|PID|source.only|runtime_effect",
@@ -48,6 +49,9 @@ snapshots, recommendations, TODOs or new execution/approval authority to the doc
 Every edit must cite an exact quote from a supplied source. Each old string must
 occur once in the original document. Propose at most eight small, disjoint edits.
 Return no edits if evidence is insufficient or the document is already current.
+Review only supplied code/excerpts. Omitted modules are NOT reviewed. Do not
+infer complete implementation coverage from an unchanged document. Explicitly
+check compact versus legacy isolation and machine versus AI selection contracts.
 Use no shell, network, trading, provider configuration, Git or external messaging tools.
 """
 
@@ -205,6 +209,18 @@ def document_candidate(original: str, draft: dict, sources: dict[str, str], root
     return candidate
 
 
+def compact_contract_excerpt(text: str) -> str:
+    """Exact top-level contract excerpts, not a summary or full-module coverage."""
+    lines = text.splitlines(keepends=True)
+    nodes = ast.parse(text).body
+    return "\n".join(
+        "".join(lines[node.lineno - 1:node.end_lineno])
+        for node in nodes
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and "compact" in node.name
+    )
+
+
 def context_bundle(root: Path, mode: str, day: str, previous_commit: str | None = None) -> dict:
     head = git(root, "rev-parse", "HEAD")
     sources: dict[str, str] = {}
@@ -223,10 +239,17 @@ def context_bundle(root: Path, mode: str, day: str, previous_commit: str | None 
         hashes[name] = sha(text)
         if "rebase.md" in name:
             text = text.split("## 9.")[0]
+        if name == "docs/runtime-release-routing.md":
+            # Exact introductory excerpt; full-file hash still guards concurrent edits.
+            text = text[:3000].rsplit("\n", 1)[0]
         if "docs/checklists/" in name:
             # Only daily objectives/rules; dated histories are not prompt context.
             sections = re.split(r"(?m)(?=^## )", text)
-            text = "".join(sections[:3])
+            required = [section for section in sections
+                        if section.startswith(("## 오늘 목적\n", "## 오늘 강제 규칙\n"))]
+            if len(required) != 2:
+                raise ValueError("missing_checklist_objective_or_rules:" + name)
+            text = sections[0] + "".join(required)
         sources[name] = text
     names = git(root, "log", "-12", "--format=", "--name-only", "--", "src/", "deploy/").splitlines()
     if previous_commit and re.fullmatch(r"[0-9a-f]{40}", previous_commit):
@@ -234,6 +257,22 @@ def context_bundle(root: Path, mode: str, day: str, previous_commit: str | None 
     fixed = ["deploy/run_postclose_finalization.sh", "deploy/run_machine_microstructure_final_refresh.sh",
              "deploy/run_runtime_release.sh"]
     omitted = []
+    # Reserve current compact contracts before large general wrappers consume the budget.
+    excerpts = []
+    missing_required = []
+    for name in ["src/engine/scalping/mechanistic_entry_runtime_policy.py",
+                 "src/engine/scalping/ai_action_outcome_calibration.py",
+                 "src/engine/scalping/micro_reversion/main_ai_prompt_optimizer.py"]:
+        try:
+            text = compact_contract_excerpt(git(root, "show", f"{head}:{name}"))
+        except (subprocess.CalledProcessError, SyntaxError):
+            text = ""
+        if text and sum(map(len, sources.values())) + len(text) <= MAX_SOURCE_CHARS - 2000:
+            sources[f"committed_excerpt:{name}"] = sanitize_source(text)
+            excerpts.append(name)
+        else:
+            omitted.append(name)
+            missing_required.append(name)
     for name in dict.fromkeys(fixed + names):
         if not name.endswith((".py", ".sh")) or not name.startswith(("src/", "deploy/")) or name.startswith("src/tests/"):
             continue
@@ -256,7 +295,10 @@ def context_bundle(root: Path, mode: str, day: str, previous_commit: str | None 
         raise ValueError("mandatory_context_too_large")
     return {"target_date": day, "mode": mode, "workspace_commit": head,
             "workspace_dirty_paths": git(root, "diff", "--name-only").splitlines(),
-            "sources": sources, "file_hashes": hashes, "omitted_code_paths": omitted,
+            "sources": sources, "file_hashes": hashes, "omitted_code_paths": list(dict.fromkeys(omitted)),
+            "excerpt_code_paths": excerpts,
+            "excerpt_document_paths": ["docs/runtime-release-routing.md"],
+            "missing_required_contract_paths": missing_required,
             "scope": "committed code plus current documents; NOT a PID/live verification"}
 
 
@@ -386,6 +428,17 @@ def refresh(root: Path, mode: str, day: str, config: dict, *, preview: bool = Fa
         original = bundle["sources"][TARGETS[mode]]
         atomic_write(output / "before.md", original)
         save_json(output / "context_manifest.json", {k: v for k, v in bundle.items() if k != "sources"})
+        # Required compact evidence must be present. Optional module omissions
+        # limit review coverage, but do not impose a whole-repository approval gate.
+        report["review_scope"] = "supplied_contracts_only_not_full_code_coverage"
+        report["omitted_code_paths"] = bundle.get("omitted_code_paths", [])
+        if bundle.get("missing_required_contract_paths"):
+            report.update(status="blocked_missing_evidence",
+                          error="incomplete_code_context",
+                          missing_required_contract_paths=bundle["missing_required_contract_paths"])
+            report["finished_at"] = now_kst().isoformat()
+            save_json(status_path, report)
+            return report
         payload = {**bundle, "document": TARGETS[mode], "protected_paragraph_indexes": [
             i for i, paragraph in enumerate(original.split("\n\n")) if PROTECTED.search(paragraph)]}
         feedback = []

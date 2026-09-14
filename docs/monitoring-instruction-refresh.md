@@ -20,6 +20,8 @@
 
 ## 설치·상태·복구
 
+입력 예산은 compact publisher·calibration·optimizer의 이름에 compact가 포함된 정확한 함수 발췌를 먼저 배정하며 manifest의 `excerpt_code_paths`로 전체 모듈과 구분한다. release-routing 문서는 첫 3,000자 이내 완결된 줄까지만 제공하고 `excerpt_document_paths`에 기록하며 전체 파일 hash는 유지한다. 나머지 코드 누락은 `omitted_code_paths`로 기록한다. 필수 compact 발췌가 없으면 작성 API 전에 `blocked_missing_evidence`로 종결하고 원문·성공 이력을 유지한다. 선택적 코드 누락 때문에 전체 repo 검증을 요구하지 않으며 결과의 `review_scope`는 제공된 계약에 한정한다. 이는 문서 현행화 근거 차단이지 거래/정책 발행 차단이 아니다. 입력 구성을 보완한 별도 검토 없이 호출 횟수를 초기화하지 않는다. 자동 `unchanged`를 전체 구현 검증으로 대신하지 않는다.
+
 ```bash
 bash deploy/install_monitoring_instruction_refresh_cron.sh --print-plan
 bash deploy/install_monitoring_instruction_refresh_cron.sh --install
