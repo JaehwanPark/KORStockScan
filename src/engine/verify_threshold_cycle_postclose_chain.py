@@ -1315,8 +1315,19 @@ def _ai_decision_action_outcome_calibration_status(
                 if isinstance(machine_source_receipt, dict)
                 else {}
             )
-            machine_source_tuning_allowed = machine_source_receipt.get(
+            generic_source_tuning_allowed = machine_source_receipt.get(
                 "tuning_input_allowed"
+            )
+            machine_source_tuning_allowed = machine_source_receipt.get(
+                "machine_threshold_tuning_input_allowed"
+            )
+            machine_attempt_conservation = machine_source_receipt.get(
+                "machine_attempt_conservation"
+            )
+            machine_attempt_conservation = (
+                machine_attempt_conservation
+                if isinstance(machine_attempt_conservation, dict)
+                else {}
             )
 
             def valid_count_map(value: object) -> bool:
@@ -1396,6 +1407,16 @@ def _ai_decision_action_outcome_calibration_status(
                             "source_gap",
                         }
                         or machine_source_tuning_allowed not in {True, False}
+                        or generic_source_tuning_allowed not in {True, False}
+                        or not machine_attempt_conservation
+                        or machine_attempt_conservation.get("denominator_preserved")
+                        is not True
+                        or machine_attempt_conservation.get("unaccounted_trace_count")
+                        != 0
+                        or (
+                            machine_source_tuning_allowed is True
+                            and generic_source_tuning_allowed is not True
+                        )
                         or not isinstance(
                             machine_source_receipt.get("source_manifest_sha256"), str
                         )
@@ -1418,7 +1439,14 @@ def _ai_decision_action_outcome_calibration_status(
                     or not str(row.get("evaluation_attempt_id") or "").strip()
                     or not str(row.get("ai_and_final_guard_join_status") or "").strip()
                     or not isinstance(row.get("outcome_horizon_metrics"), dict)
-                    or "10m" not in row.get("outcome_horizon_metrics", {})
+                    or set(row.get("outcome_horizon_metrics", {}))
+                    != {"1m", "3m", "5m", "10m", "20m", "30m", "60m"}
+                    or any(
+                        not isinstance(metric, dict)
+                        or metric.get("status")
+                        not in {"observed", "pending_or_source_gap"}
+                        for metric in row.get("outcome_horizon_metrics", {}).values()
+                    )
                     or row.get("runtime_effect") is not False
                     or row.get("allowed_runtime_apply") is not False
                     or row.get("actual_order_submitted") is not False
@@ -1458,6 +1486,32 @@ def _ai_decision_action_outcome_calibration_status(
             economic = economic if isinstance(economic, dict) else {}
             selection = compact_outcomes.get("automatic_successor_selection")
             selection = selection if isinstance(selection, dict) else {}
+            screen_conservation = compact_outcomes.get("screen_attempt_conservation")
+            screen_conservation = (
+                screen_conservation if isinstance(screen_conservation, dict) else {}
+            )
+            terminal_verdict_counts = compact_outcomes.get("terminal_verdict_counts")
+            terminal_verdict_counts = (
+                terminal_verdict_counts
+                if isinstance(terminal_verdict_counts, dict)
+                else {}
+            )
+            screen_outcome_counts = compact_outcomes.get(
+                "verdict_x_action_neutral_outcome_counts"
+            )
+            screen_outcome_counts = (
+                screen_outcome_counts if isinstance(screen_outcome_counts, dict) else {}
+            )
+            ai_screen_routing = compact_outcomes.get("all_machine_enter_ai_routing")
+            ai_screen_routing = (
+                ai_screen_routing if isinstance(ai_screen_routing, dict) else {}
+            )
+            ai_screen_routing_counts = ai_screen_routing.get("routing_counts")
+            ai_screen_routing_counts = (
+                ai_screen_routing_counts
+                if isinstance(ai_screen_routing_counts, dict)
+                else {}
+            )
             economic_count = economic.get("economic_eligible_count")
             screened_count = economic.get("screened_total")
             veto_count = economic.get("evaluable_veto_count")
@@ -1484,7 +1538,7 @@ def _ai_decision_action_outcome_calibration_status(
                 ).encode()
             ).hexdigest()
             eligible_expected = bool(
-                machine_source_tuning_allowed is True
+                generic_source_tuning_allowed is True
                 and compact_measurement.get("measurement_allowed") is True
                 and isinstance(economic_count, int)
                 and not isinstance(economic_count, bool)
@@ -1514,7 +1568,7 @@ def _ai_decision_action_outcome_calibration_status(
             incumbent_version = str(selection.get("incumbent_prompt_version") or "")
             expected_selected_version = incumbent_version
             expected_direction = "carry_balanced_compact_contract"
-            if not machine_source_tuning_allowed:
+            if not generic_source_tuning_allowed:
                 expected_direction = "repair_source_quality_before_automatic_selection"
             elif compact_measurement.get("measurement_status") == (
                 "not_observed_on_source_date"
@@ -1544,6 +1598,41 @@ def _ai_decision_action_outcome_calibration_status(
 
             if (
                 economic.get("schema") != "compact_auxiliary_economic_selection_v2"
+                or not valid_count_map(screen_outcome_counts)
+                or not valid_count_map(terminal_verdict_counts)
+                or not valid_count_map(ai_screen_routing_counts)
+                or type(ai_screen_routing.get("machine_enter_now_count")) is not int
+                or ai_screen_routing.get("machine_enter_now_count") < 0
+                or ai_screen_routing.get("machine_enter_now_count")
+                != sum(ai_screen_routing_counts.values())
+                or ai_screen_routing.get("denominator_preserved") is not True
+                or ai_screen_routing.get("mixed_prompt_generations_are_not_merged")
+                is not True
+                or set(terminal_verdict_counts)
+                - {"PASS", "VETO", "CAUTION", "INSUFFICIENT"}
+                or compact_outcomes.get("screened_enter_now_count")
+                != screen_conservation.get("expected_enter_now_count")
+                or sum(screen_outcome_counts.values())
+                != screen_conservation.get("terminal_classified_count")
+                or any(
+                    type(screen_conservation.get(key)) is not int
+                    or screen_conservation.get(key) < 0
+                    for key in (
+                        "expected_enter_now_count",
+                        "terminal_classified_count",
+                        "provider_called_count",
+                        "provider_not_called_count",
+                    )
+                )
+                or screen_conservation.get("expected_enter_now_count")
+                != screen_conservation.get("terminal_classified_count")
+                or screen_conservation.get("expected_enter_now_count")
+                != screen_conservation.get("provider_called_count")
+                + screen_conservation.get("provider_not_called_count")
+                or screen_conservation.get("denominator_preserved") is not True
+                or screen_conservation.get("not_evaluated_is_not_veto") is not True
+                or economic.get("semantic_valid_count")
+                != sum(terminal_verdict_counts.values())
                 or not compact_outcome_counts_valid(economic)
                 or not isinstance(economic_count, int)
                 or isinstance(economic_count, bool)
@@ -2136,6 +2225,59 @@ def _ai_decision_action_outcome_calibration_status(
         ),
         "runtime_effect": False,
         "allowed_runtime_apply": False,
+    }
+
+
+def _mechanistic_entry_policy_publication_status(
+    calibration_report: dict[str, Any], *, data_root: Path
+) -> dict[str, Any]:
+    """Validate the actual next-date policy receipt, not only its producer JSON."""
+
+    source_date = str(calibration_report.get("target_date") or "")
+    if source_date < "2026-09-14":
+        return {"status": "not_applicable_before_compact_runtime_succession"}
+    try:
+        from src.engine.scalping.mechanistic_entry_runtime_policy import (
+            load,
+            next_target,
+        )
+
+        target_date = next_target(source_date)
+        bundle = load(data_root=data_root, target_date=target_date)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return {
+            "status": "fail",
+            "source_date": source_date,
+            "issues": [f"policy_load_invalid:{type(exc).__name__}:{exc}"],
+        }
+    issues = []
+    if bundle is None:
+        issues.append("next_date_policy_missing")
+    elif bundle.get("source_date") != source_date:
+        issues.append("policy_source_date_mismatch")
+    elif bundle.get("source_artifact_sha256") != calibration_report.get(
+        "artifact_content_sha256"
+    ):
+        issues.append("policy_source_artifact_sha256_mismatch")
+    elif bundle.get("all_continuous_adopted") is not True:
+        issues.append("policy_continuous_scope_coverage_missing")
+    return {
+        "status": "fail" if issues else "pass",
+        "source_date": source_date,
+        "target_date": target_date,
+        "path": str(
+            data_root
+            / "runtime"
+            / "mechanistic_entry_policy"
+            / f"policy_{target_date}.json"
+        ),
+        "bundle_sha256": bundle.get("bundle_sha256") if bundle else None,
+        "source_artifact_sha256": (
+            bundle.get("source_artifact_sha256") if bundle else None
+        ),
+        "issues": issues,
+        "runtime_effect": True,
+        "actual_order_submitted": False,
     }
 
 
@@ -3537,7 +3679,9 @@ def _smoothing_source_only_path_journal_contract_status(
             "pass"
             if isinstance(rolling_decision, dict)
             and not any("rolling_decision" in issue for issue in issues)
-            else "fail" if rolling_decision_required else "not_applicable"
+            else "fail"
+            if rolling_decision_required
+            else "not_applicable"
         ),
     }
 
@@ -7248,7 +7392,9 @@ def _code_improvement_workorder_contract_status(
         "contract_state": (
             "declared_and_verified"
             if contract_declared
-            else "required_but_missing" if contract_required else "legacy_not_declared"
+            else "required_but_missing"
+            if contract_required
+            else "legacy_not_declared"
         ),
         "issues": sorted(set(issues)),
         "duplicate_order_warnings": duplicate_warnings,
@@ -7719,8 +7865,14 @@ def build_threshold_cycle_postclose_verification(
             source_quality_audit=observation_source_quality_audit,
         )
     )
+    mechanistic_entry_policy_publication = _mechanistic_entry_policy_publication_status(
+        ai_decision_action_outcome_calibration,
+        data_root=PROJECT_ROOT / "data",
+    )
     if ai_decision_action_outcome_calibration_status.get("status") == "fail":
         log_issues.append("ai_decision_action_outcome_calibration_contract_invalid")
+    if mechanistic_entry_policy_publication.get("status") == "fail":
+        log_issues.append("mechanistic_entry_policy_publication_invalid")
     if raw_row_exclusion_handoff.get("status") == "fail":
         log_issues.append("raw_row_exclusion_workorder_handoff_missing")
     entry_bucket_handoff = _entry_bucket_handoff_status(
@@ -9318,7 +9470,9 @@ def build_threshold_cycle_postclose_verification(
                     else (
                         "fail"
                         if predecessor_timeouts or strict_log_issues
-                        else "warning" if predecessor_waits else "pass"
+                        else "warning"
+                        if predecessor_waits
+                        else "pass"
                     )
                 )
             ),
@@ -9397,6 +9551,7 @@ def build_threshold_cycle_postclose_verification(
         "ai_decision_action_outcome_calibration": (
             ai_decision_action_outcome_calibration_status
         ),
+        "mechanistic_entry_policy_publication": (mechanistic_entry_policy_publication),
         "ai_correction": ai_correction,
         "avg_down_calibration_contract": avg_down_calibration_contract,
         "scalp_sim_overnight_source_quality": scalp_sim_overnight_quality,

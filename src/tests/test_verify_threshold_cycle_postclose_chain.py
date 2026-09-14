@@ -288,9 +288,9 @@ def test_entry_setup_replay_session_contract_rejects_dual_authority_leak():
     batch["cohort_contract_sha256"] = contract_hash
     batch["candidate_prompt_selection_source"]["cohort_contract_sha256"] = contract_hash
     consumer["source_bindings"]["entry_cohort_contract_sha256"] = contract_hash
-    consumer["request_paths"]["entry_base"]["cohorts"][2][
-        "authority_state"
-    ] = "LIVE_APPROVED"
+    consumer["request_paths"]["entry_base"]["cohorts"][2]["authority_state"] = (
+        "LIVE_APPROVED"
+    )
 
     status = mod._entry_setup_replay_session_contract_status(
         batch, consumer, target_date="2026-09-12"
@@ -1791,6 +1791,51 @@ def test_ai_decision_action_outcome_calibration_status_rejects_tampered_candidat
     assert status["status"] == "fail"
     assert "artifact_content_sha256_invalid" in status["contract_errors"]
     assert "candidate_count_mismatch" in status["contract_errors"]
+
+
+def test_mechanistic_policy_publication_status_rejects_missing_next_date_policy(
+    tmp_path: Path,
+):
+    status = mod._mechanistic_entry_policy_publication_status(
+        {
+            "target_date": "2026-09-14",
+            "artifact_content_sha256": "a" * 64,
+        },
+        data_root=tmp_path,
+    )
+
+    assert status["status"] == "fail"
+    assert status["issues"] == ["next_date_policy_missing"]
+
+
+def test_mechanistic_policy_publication_status_accepts_exact_source_binding(
+    tmp_path: Path,
+    monkeypatch,
+):
+    from src.engine.scalping import mechanistic_entry_runtime_policy as policy
+
+    monkeypatch.setattr(policy, "next_target", lambda source_date: "2026-09-15")
+    monkeypatch.setattr(
+        policy,
+        "load",
+        lambda **kwargs: {
+            "source_date": "2026-09-14",
+            "source_artifact_sha256": "a" * 64,
+            "bundle_sha256": "b" * 64,
+            "all_continuous_adopted": True,
+        },
+    )
+
+    status = mod._mechanistic_entry_policy_publication_status(
+        {
+            "target_date": "2026-09-14",
+            "artifact_content_sha256": "a" * 64,
+        },
+        data_root=tmp_path,
+    )
+
+    assert status["status"] == "pass"
+    assert status["target_date"] == "2026-09-15"
 
 
 def test_ai_decision_action_outcome_calibration_status_rejects_case_count_drift(

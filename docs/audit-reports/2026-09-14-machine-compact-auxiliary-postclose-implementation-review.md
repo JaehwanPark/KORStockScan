@@ -103,3 +103,29 @@
 - Kiwoom official reference gate: upstream `234560d213acd8871ae344b5481aecd2f30287fa`, `kiwoom_docs/실시간시세.md`의 REG/REMOVE 및 plain/`_NX`/`_AL` suffix, `kiwoom_docs/주문.md`의 `dmst_stex_tp=KRX|NXT|SOR`를 19:33 KST에 대사했다. 프로토콜 parser나 주문 API는 변경하지 않았다.
 - 기대 효과는 지원 연속매매의 실제 정책 소비 회복과, 장후 임계치 학습에서 원천 차단 시도를 숨기지 않는 것이다. 비용후 +0.10% EV, 빈도, tail, 실주문 수익은 이 코드 검증으로 입증되지 않으며 다음 자연 generation의 policy publication→PREOPEN→PID→accepted submit/fill/terminal에서 별도 확인한다.
 - 자동화는 기존 20:10 calibration `--write`→next-date policy publisher→PREOPEN resolver를 그대로 사용한다. 초기/incumbent bundle은 표본 부족이면 carry되고, threshold challenger만 비용후 +0.10% EV·동일 scope/holdout/source-quality guard를 통과해야 하므로 초기 정책 부재를 만드는 과도한 gate는 아니다.
+
+## 10. 기계·compact AI 장후 consumer와 정책 발행 검증 수리
+
+### 10.1 최초 결함과 영향
+
+- #74가 `machine_attempt_conservation` 및 machine-specific threshold tuning gate를 발행했지만 #82 case table은 generic `tuning_input_allowed`만 복사했다. 따라서 machine assessment 미설명/contract-invalid 시도가 있어도 일반 원천이 유효하면 기계 threshold/hierarchy 학습에 들어갈 수 있었다.
+- compact prompt 계약은 `PASS|VETO|CAUTION|INSUFFICIENT`를 허용하지만 case table은 PASS/VETO만 semantic-valid로 셌다. provider 미호출 ENTER도 screen 분모 밖으로 빠져 CAUTION/INSUFFICIENT/미평가와 VETO를 정확히 분리할 수 없었다.
+- 1/3/5/10/20/30/60분 중 생성된 horizon만 projection하고 strict는 10분 하나만 확인했다. 장기 horizon 결손이 pending/source-gap인지 자체적으로 드러나지 않았다.
+- calibration CLI가 publisher `None`을 정상 `not_enabled`로 출력하고 exit 0으로 끝날 수 있었고 wrapper와 strict verifier는 실제 next-date dated policy의 target/source/artifact hash를 직접 검증하지 않았다. report 성공이 자동 policy 발행 성공을 대신할 수 있었다.
+
+### 10.2 최소 보완과 재리뷰
+
+- machine source receipt에 전용 conservation/gate/reason을 전달하고 `policy_learning_eligible_observation_count`는 machine-specific gate만 사용한다. compact AI partition은 generic source/prompt measurement gate를 계속 사용해 서로의 결손을 전역 차단하지 않는다.
+- 모든 기계 ENTER를 current compact/other compact/legacy-or-unknown/missing prompt로 보존한다. current compact는 provider called/not-called와 `PASS|VETO|CAUTION|INSUFFICIENT|NOT_EVALUATED|SEMANTIC_INVALID|SOURCE_PARTITION_NOT_ALLOWED`를 배타적으로 분류한다. CAUTION/INSUFFICIENT는 semantic-valid bounded 비진입이지만 PASS/VETO 경제 selector에는 넣지 않고, 미평가를 VETO로 합성하지 않는다.
+- 모든 horizon key를 발행하고 원천이 없는 값은 수치 보간 없이 `pending_or_source_gap`과 null로 남긴다. strict verifier는 일곱 horizon과 상태를 모두 확인한다.
+- canonical 20:10/21:05 calibration 호출에 `--require-policy-publication`을 추가했다. publisher 반환 policy의 next trading date, source date, calibration artifact hash, 기계-primary/AI-보조 role, 지원 연속 scope 유지와 주문 무권한을 즉시 검증한다. strict verifier도 실제 dated policy를 loader로 재검증한다.
+- 1차 보완 뒤 추가 재리뷰에서 prompt version이 없는 기계 ENTER가 current compact 경제 분모뿐 아니라 전체 AI routing에서도 보이지 않는 결함을 확인해 `all_machine_enter_ai_routing` 보존식을 추가했다. 이 보완 뒤 P0~P2 finding은 0이다.
+
+### 10.3 목표·gate·자동 적용 판정
+
+- 기계 challenger는 같은 scope의 source-valid chronological holdout, 비용후 EV `>= +0.10%`, positive paired delta와 tail guard를 통과할 때만 바뀐다. 이는 작은 순익 목표의 최소 경제 경계이며 초기/incumbent 정책의 존재나 carry에 다시 붙지 않으므로 정책을 무기한 null로 만드는 과도한 gate가 아니다.
+- compact successor의 유효20건·방향분모5·오류3·오류율25% 조건은 등록 prompt 간 성과 전환에만 적용된다. 미달은 현행 compact carry이고 AI 정책 부재가 아니다. CAUTION/INSUFFICIENT/미평가는 호출 성공이나 VETO로 부풀리지 않는다.
+- 자동 경로는 `final #74 -> #82 calibration/case table -> bounded publisher -> next-date policy -> PREOPEN resolver -> actual PID`이다. 이번 수리는 앞 네 단계의 실패를 fail-closed하고 hash로 드러내지만 PREOPEN 선택·PID 소비·accepted submit/fill/terminal·실제 비용후 순익은 미래 자연 receipt로 별도 확인한다.
+- 기대 효과는 손상된 기계 시도로 잘못된 임계치를 만드는 위험 제거, AI 비진입 유형의 정확한 귀속, 늦은/놓친 타점 horizon 결손 가시화, silent no-policy 성공 제거다. 코드 검증은 실제 수익 증가 증명이 아니다.
+
+검증: source audit, calibration, publisher, PREOPEN policy, prompt consumer, wrapper와 strict verifier 7개 직접 suite `705 passed`; Python compile, Ruff check/format, shell syntax, `git diff --check`, 문서 print-only parser 27건 PASS. Provider 호출·실주문·현재 실행 중인 장후 wrapper 수정 또는 중복 실행은 하지 않았다.

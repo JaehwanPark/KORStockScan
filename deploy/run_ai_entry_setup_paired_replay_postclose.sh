@@ -42,7 +42,7 @@ refresh_main_ai_consumer() {
   # live-candidate republication; new choices belong to the next daily plan.
   nice -n 10 ionice -c 2 -n 7 -t \
     "$VENV_PY" -m src.engine.scalping.ai_action_outcome_calibration \
-    --target-date "$TARGET_DATE" --write --print-summary && \
+    --target-date "$TARGET_DATE" --write --require-policy-publication --print-summary && \
   nice -n 10 ionice -c 2 -n 7 -t \
     "$VENV_PY" -m src.engine.scalping.micro_reversion.main_ai_prompt_optimizer \
     --target-date "$TARGET_DATE" \
@@ -103,7 +103,7 @@ done
 if [ "$failure_stage" = "entry_batch" ]; then
   if ! nice -n 10 ionice -c 2 -n 7 -t \
     "$VENV_PY" -m src.engine.scalping.ai_action_outcome_calibration \
-    --target-date "$TARGET_DATE" --write --print-summary; then
+    --target-date "$TARGET_DATE" --write --require-policy-publication --print-summary; then
     echo "[WARN] partial-batch calibration refresh failed target_date=$TARGET_DATE"
   fi
 fi

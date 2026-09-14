@@ -838,7 +838,9 @@ def _legacy_entry_group_projection(
         else (
             "5_TO_10BP"
             if tick_pct is not None and tick_pct < 0.10
-            else "GE_10BP" if tick_pct is not None else "UNKNOWN"
+            else "GE_10BP"
+            if tick_pct is not None
+            else "UNKNOWN"
         )
     )
     spread = inputs.get("spread_bp")
@@ -860,7 +862,9 @@ def _legacy_entry_group_projection(
         else (
             "180_TO_600S"
             if watch_age is not None and watch_age < 600.0
-            else "GE_600S" if watch_age is not None else "UNKNOWN"
+            else "GE_600S"
+            if watch_age is not None
+            else "UNKNOWN"
         )
     )
     extension = _number(timing.get("price_delta_since_first_watch_pct"))
@@ -870,7 +874,9 @@ def _legacy_entry_group_projection(
         else (
             "LT_1PCT"
             if extension is not None and extension < 1.0
-            else "GE_1PCT" if extension is not None else "UNKNOWN"
+            else "GE_1PCT"
+            if extension is not None
+            else "UNKNOWN"
         )
     )
     key_parts = {
@@ -3109,9 +3115,24 @@ def _compact_machine_horizon_metrics(metrics: Any) -> dict[str, dict]:
     for horizon in ("1m", "3m", "5m", "10m", "20m", "30m", "60m"):
         metric = _as_dict(_as_dict(metrics).get(horizon))
         if not metric:
+            result[horizon] = {
+                "status": "pending_or_source_gap",
+                "sample_count": 0,
+                "mfe_pct": None,
+                "mae_pct": None,
+                "end_return_pct": None,
+                "entry_path_first_hit": None,
+                "entry_quality_status": None,
+                "entry_quality_label": None,
+                "cost_adjusted_target_pct": None,
+                "time_to_net_target_sec": None,
+                "pre_target_mae_pct": None,
+                "pre_target_underwater_ratio": None,
+            }
             continue
         path = _as_dict(metric.get("entry_quality_path"))
         result[horizon] = {
+            "status": "observed",
             "sample_count": metric.get("sample_count"),
             "mfe_pct": metric.get("mfe_pct"),
             "mae_pct": metric.get("mae_pct"),
@@ -3463,6 +3484,13 @@ def _machine_ai_natural_source_receipt(data_root: Path, target_date: str) -> dic
         "status": consumption.get("status", "missing"),
         "source_manifest_sha256": manifest.get("source_manifest_sha256"),
         "tuning_input_allowed": consumption.get("tuning_input_allowed"),
+        "machine_attempt_conservation": consumption.get("machine_attempt_conservation"),
+        "machine_threshold_tuning_input_allowed": consumption.get(
+            "machine_threshold_tuning_input_allowed"
+        ),
+        "machine_threshold_tuning_blocked_reason": consumption.get(
+            "machine_threshold_tuning_blocked_reason"
+        ),
         "compact_auxiliary_policy_measurement": compact_measurement,
         "authority": "source_quality_receipt_only_no_runtime_apply",
     }
@@ -3639,6 +3667,12 @@ def build_machine_decision_case_table(
     compact_screen_outcomes: Counter[str] = Counter()
     compact_exclusions: Counter[str] = Counter()
     compact_current_version_screened_count = 0
+    compact_provider_called_count = 0
+    compact_provider_not_called_count = 0
+    compact_semantic_valid_count = 0
+    compact_verdict_counts: Counter[str] = Counter()
+    machine_enter_now_count = 0
+    ai_screen_routing_counts: Counter[str] = Counter()
     compact_outcome_evaluable_count = 0
     compact_prompt_version_counts: Counter[str] = Counter()
     selected_child_rule_ids: set[str] = set()
@@ -3696,8 +3730,20 @@ def build_machine_decision_case_table(
         if rule_id and hierarchy_level != "common":
             selected_child_rule_ids.add(rule_id)
         ai_guard = _as_dict(row.get("ai_and_final_guard"))
-        if action == "ENTER_NOW" and ai_guard.get("provider_called") is True:
+        if action == "ENTER_NOW":
+            machine_enter_now_count += 1
             observed_prompt_version = str(ai_guard.get("prompt_version") or "")
+            if observed_prompt_version == incumbent_compact_version:
+                ai_screen_routing_counts["current_compact_prompt"] += 1
+            elif (
+                observed_prompt_version
+                in MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS
+            ):
+                ai_screen_routing_counts["other_registered_compact_prompt"] += 1
+            elif observed_prompt_version:
+                ai_screen_routing_counts["legacy_or_unknown_prompt"] += 1
+            else:
+                ai_screen_routing_counts["prompt_version_missing"] += 1
             if (
                 observed_prompt_version
                 in MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS
@@ -3708,6 +3754,10 @@ def build_machine_decision_case_table(
                 # fresh exact-version denominator.
                 if observed_prompt_version == incumbent_compact_version:
                     compact_current_version_screened_count += 1
+                    if ai_guard.get("provider_called") is True:
+                        compact_provider_called_count += 1
+                    else:
+                        compact_provider_not_called_count += 1
                     partition_key = (
                         (
                             str(row.get("source_date") or "")
@@ -3724,7 +3774,13 @@ def build_machine_decision_case_table(
                         or partition_key in allowed_compact_partition_keys
                     )
                     if not partition_allowed:
+                        compact_screen_outcomes[
+                            "|".join(("SOURCE_PARTITION_NOT_ALLOWED", label))
+                        ] += 1
                         compact_exclusions["source_partition_not_allowed"] += 1
+                    elif ai_guard.get("provider_called") is not True:
+                        compact_screen_outcomes["|".join(("NOT_EVALUATED", label))] += 1
+                        compact_exclusions["provider_not_called"] += 1
                     else:
                         semantic_valid = bool(
                             ai_guard.get("decision_quality_contract_status") == "pass"
@@ -3735,8 +3791,13 @@ def build_machine_decision_case_table(
                             ai_guard.get("ai_risk_verdict") or ""
                         ).upper()
                         semantic_valid = bool(
-                            semantic_valid and compact_verdict in {"PASS", "VETO"}
+                            semantic_valid
+                            and compact_verdict
+                            in {"PASS", "VETO", "CAUTION", "INSUFFICIENT"}
                         )
+                        if semantic_valid:
+                            compact_semantic_valid_count += 1
+                            compact_verdict_counts[compact_verdict] += 1
                         compact_screen_outcomes[
                             "|".join(
                                 (
@@ -3752,6 +3813,11 @@ def build_machine_decision_case_table(
                         ] += 1
                         if not semantic_valid:
                             compact_exclusions["semantic_invalid"] += 1
+                        elif compact_verdict in {"CAUTION", "INSUFFICIENT"}:
+                            # These are valid bounded non-entry outcomes. They
+                            # remain in the exact ENTER screen denominator but
+                            # cannot tune the PASS/VETO economic selector.
+                            compact_exclusions["non_economic_terminal_verdict"] += 1
                         elif path.get("status") != "evaluable":
                             compact_exclusions["outcome_not_evaluable"] += 1
                         elif label == "CENSORED_OR_SOURCE_GAP":
@@ -3832,6 +3898,9 @@ def build_machine_decision_case_table(
             }
         )
     source_tuning_allowed = source_receipt.get("tuning_input_allowed") is True
+    machine_tuning_allowed = (
+        source_receipt.get("machine_threshold_tuning_input_allowed") is True
+    )
     compact_tuning_input_allowed = bool(
         source_tuning_allowed and compact_measurement.get("measurement_allowed") is True
     )
@@ -3839,7 +3908,7 @@ def build_machine_decision_case_table(
     compact_unclassified_count = sum(
         count
         for key, count in compact_screen_outcomes.items()
-        if key.startswith(("UNCLASSIFIED|", "SEMANTIC_INVALID|"))
+        if key.startswith(("UNCLASSIFIED|", "SEMANTIC_INVALID|", "NOT_EVALUATED|"))
     )
     missed_veto_count = compact_screen_outcomes.get("VETO|CLEAN_FAST_PROFIT", 0)
     dangerous_pass_count = sum(
@@ -4007,7 +4076,7 @@ def build_machine_decision_case_table(
         "conflicting_attempt_identity_count": conflicting_attempt_identity_count,
         "policy_learning_eligible_observation_count": (
             len(rows)
-            if conflicting_attempt_identity_count == 0 and source_tuning_allowed
+            if conflicting_attempt_identity_count == 0 and machine_tuning_allowed
             else 0
         ),
         "machine_capture_census": dict(capture_census or {}),
@@ -4016,6 +4085,30 @@ def build_machine_decision_case_table(
         "compact_auxiliary_screen_outcomes": {
             "current_prompt_version": incumbent_compact_version,
             "screened_enter_now_count": compact_screened_count,
+            "enter_now_requiring_ai_screen_count": (
+                compact_current_version_screened_count
+            ),
+            "provider_called_count": compact_provider_called_count,
+            "provider_not_called_count": compact_provider_not_called_count,
+            "terminal_verdict_counts": dict(sorted(compact_verdict_counts.items())),
+            "screen_attempt_conservation": {
+                "expected_enter_now_count": compact_current_version_screened_count,
+                "terminal_classified_count": compact_screened_count,
+                "provider_called_count": compact_provider_called_count,
+                "provider_not_called_count": compact_provider_not_called_count,
+                "denominator_preserved": (
+                    compact_current_version_screened_count == compact_screened_count
+                ),
+                "not_evaluated_is_not_veto": True,
+            },
+            "all_machine_enter_ai_routing": {
+                "machine_enter_now_count": machine_enter_now_count,
+                "routing_counts": dict(sorted(ai_screen_routing_counts.items())),
+                "denominator_preserved": (
+                    machine_enter_now_count == sum(ai_screen_routing_counts.values())
+                ),
+                "mixed_prompt_generations_are_not_merged": True,
+            },
             "observed_compact_prompt_version_counts": dict(
                 sorted(compact_prompt_version_counts.items())
             ),
@@ -4036,8 +4129,7 @@ def build_machine_decision_case_table(
                     compact_current_version_screened_count
                     == economic_eligible_count + sum(compact_exclusions.values())
                 ),
-                "semantic_valid_count": compact_screened_count
-                - compact_unclassified_count,
+                "semantic_valid_count": compact_semantic_valid_count,
                 "outcome_evaluable_count": compact_outcome_evaluable_count,
                 "economic_eligible_count": economic_eligible_count,
                 "verdict_x_action_neutral_outcome_counts": economic_outcome_counts,
@@ -6161,12 +6253,12 @@ def build_report(
             parent_policy=hierarchy_parent,
         )
     )
-    hierarchical_entry_quality["runtime_extension"][
-        "machine_capture_census"
-    ] = machine_capture_census
-    hierarchical_entry_quality["runtime_extension"][
-        "full_cost_relabel_census"
-    ] = hierarchy_cost_census
+    hierarchical_entry_quality["runtime_extension"]["machine_capture_census"] = (
+        machine_capture_census
+    )
+    hierarchical_entry_quality["runtime_extension"]["full_cost_relabel_census"] = (
+        hierarchy_cost_census
+    )
     from src.engine.scalping.entry_setup_scalping_rollout import AUTO_PROMOTION_SCOPES
 
     all_scope_rows, _ = _mechanistic_source_rows(
@@ -6362,6 +6454,37 @@ def build_report(
     return _with_artifact_content_sha256(report)
 
 
+def _runtime_policy_publication_errors(
+    published_policy: dict | None, source_report: dict
+) -> list[str]:
+    """Verify the canonical next-date receipt emitted by the bounded publisher."""
+
+    from src.engine.scalping.mechanistic_entry_runtime_policy import next_target
+    from src.engine.scalping.entry_setup_evidence import (
+        MECHANISTIC_PRIMARY_ROLE_CONTRACT,
+    )
+
+    if not isinstance(published_policy, dict):
+        return ["mechanistic_entry_runtime_policy_not_published"]
+    errors = []
+    expected_target = next_target(str(source_report.get("target_date") or ""))
+    if published_policy.get("target_date") != expected_target:
+        errors.append("mechanistic_entry_runtime_policy_target_date_mismatch")
+    if published_policy.get("source_date") != source_report.get("target_date"):
+        errors.append("mechanistic_entry_runtime_policy_source_date_mismatch")
+    if published_policy.get("source_artifact_sha256") != source_report.get(
+        "artifact_content_sha256"
+    ):
+        errors.append("mechanistic_entry_runtime_policy_source_hash_mismatch")
+    if published_policy.get("role_contract") != MECHANISTIC_PRIMARY_ROLE_CONTRACT:
+        errors.append("mechanistic_entry_runtime_policy_role_contract_mismatch")
+    if published_policy.get("actual_order_submitted") is not False:
+        errors.append("mechanistic_entry_runtime_policy_order_authority_leak")
+    if published_policy.get("all_continuous_adopted") is not True:
+        errors.append("mechanistic_entry_runtime_policy_scope_coverage_missing")
+    return errors
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Build cumulative exact-trace action/outcome calibration."
@@ -6369,6 +6492,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--target-date", required=True)
     parser.add_argument("--data-root", type=Path, default=Path("data"))
     parser.add_argument("--write", action="store_true")
+    parser.add_argument(
+        "--require-policy-publication",
+        action="store_true",
+        help="Fail unless the canonical next-trading-date policy is hash-bound",
+    )
     parser.add_argument("--print-summary", action="store_true")
     args = parser.parse_args(argv)
     report = build_report(target_date=args.target_date, data_root=args.data_root)
@@ -6379,6 +6507,14 @@ def main(argv: list[str] | None = None) -> int:
         from src.engine.scalping.mechanistic_entry_runtime_policy import publish
 
         published_policy = publish(path, data_root=args.data_root)
+    if args.require_policy_publication:
+        if not args.write:
+            parser.error("--require-policy-publication requires --write")
+        publication_errors = _runtime_policy_publication_errors(
+            published_policy, report
+        )
+        if publication_errors:
+            raise RuntimeError(",".join(publication_errors))
     if args.print_summary:
         print(
             json.dumps(

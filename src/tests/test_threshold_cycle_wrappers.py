@@ -121,7 +121,9 @@ def test_panic_wrapper_requires_fresh_valid_report_before_done(tmp_path, mode):
     seed.write_text(json.dumps(_weakness_report("SINGLE_MARKET_WEAKNESS", 0)))
     fake_python = tmp_path / ".venv/bin/python"
     fake_python.parent.mkdir(parents=True)
-    fake_python.write_text(f"#!{sys.executable}\n" + textwrap.dedent("""
+    fake_python.write_text(
+        f"#!{sys.executable}\n"
+        + textwrap.dedent("""
         import json, os, sys
         from datetime import datetime, timedelta
         from pathlib import Path
@@ -151,7 +153,8 @@ def test_panic_wrapper_requires_fresh_valid_report_before_done(tmp_path, mode):
         if '-m' in sys.argv and 'src.engine.notify_panic_state_transition' not in sys.argv:
             raise SystemExit(97)
         os.execv(sys.executable, [sys.executable, *sys.argv[1:]])
-    """))
+    """)
+    )
     fake_python.chmod(0o700)
     env = {
         **os.environ,
@@ -2203,6 +2206,7 @@ def test_postclose_wrapper_materializes_daily_exact_quality_chain_before_calibra
     materialization_block = script[materialization_idx:calibration_idx]
 
     assert materialization_idx < calibration_idx
+    assert "--require-policy-publication" in script[calibration_idx:]
     assert "--mode postclose" in materialization_block
     assert "--write" in materialization_block
     assert "--execute-candidate" not in materialization_block
@@ -2424,6 +2428,7 @@ def test_entry_setup_paired_replay_has_separate_late_offline_cron():
         "-m src.engine.scalping.ai_action_outcome_calibration"
     )
     assert calibration_index < optimizer_refresh_index < rebound_batch_index
+    assert "--require-policy-publication" in runner
     assert "--preserve-entry-batch-selection" in runner
     holding_manifest_index = runner.index(
         "-m src.engine.scalping.main_ai_holding_base_replay_batch"
@@ -3513,7 +3518,8 @@ def test_run_bot_auto_renews_allowlisted_override_without_renewing_removed_famil
         [
             "bash",
             "-c",
-            function_block + """
+            function_block
+            + """
 export KORSTOCKSCAN_DATED_RUNTIME_AUTO_RENEW_ENABLED=true
 export KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED=true
 export KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE=2026-07-30
@@ -3646,7 +3652,8 @@ def test_run_bot_does_not_auto_renew_without_explicit_operator_authority():
         [
             "bash",
             "-c",
-            function_block + """
+            function_block
+            + """
 export KORSTOCKSCAN_DATED_RUNTIME_AUTO_RENEW_ENABLED=false
 export KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED=true
 export KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE=2026-07-30
@@ -3673,7 +3680,8 @@ def test_run_bot_expiry_uses_tp1_source_gap_relief_own_active_date():
         [
             "bash",
             "-c",
-            function_block + """
+            function_block
+            + """
 export KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED=true
 export KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE=2026-08-03
 export KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ENABLED=true
@@ -3707,7 +3715,8 @@ def test_run_bot_preserves_existing_daily_entry_split_contract_and_disables_expi
         [
             "bash",
             "-c",
-            function_block + f"""
+            function_block
+            + f"""
 export KORSTOCKSCAN_ENTRY_SPLIT_DAILY_OPERATOR_CONTRACT_ENABLED=true
 export KORSTOCKSCAN_ENTRY_SPLIT_DAILY_BASELINE_ACTIVE_DATE=DAILY
 export KORSTOCKSCAN_ENTRY_SPLIT_DAILY_BASELINE_POLICY_FILE={policy_path}
@@ -3747,7 +3756,8 @@ def test_run_bot_daily_entry_split_contract_satisfies_probe_policy_dependency(
         [
             "bash",
             "-c",
-            function_block + f"""
+            function_block
+            + f"""
 export KORSTOCKSCAN_ENTRY_SPLIT_DAILY_OPERATOR_CONTRACT_ENABLED=true
 export KORSTOCKSCAN_ENTRY_SPLIT_DAILY_BASELINE_ACTIVE_DATE=DAILY
 export KORSTOCKSCAN_ENTRY_SPLIT_DAILY_BASELINE_POLICY_FILE={policy_path}
@@ -3781,7 +3791,8 @@ def test_run_bot_disables_daily_entry_split_when_baseline_policy_is_missing(tmp_
         [
             "bash",
             "-c",
-            function_block + f"""
+            function_block
+            + f"""
 export KORSTOCKSCAN_ENTRY_SPLIT_DAILY_OPERATOR_CONTRACT_ENABLED=true
 export KORSTOCKSCAN_ENTRY_SPLIT_DAILY_BASELINE_ACTIVE_DATE=DAILY
 export KORSTOCKSCAN_ENTRY_SPLIT_DAILY_BASELINE_POLICY_FILE={missing_policy_path}

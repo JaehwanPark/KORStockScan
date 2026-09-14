@@ -363,7 +363,7 @@ def _hierarchy_training_rows():
             rows.append(
                 {
                     "decision_trace_id": f"{day}-{i}",
-                    "decision_ts": f"{day}T10:{i*10:02d}:00+09:00",
+                    "decision_ts": f"{day}T10:{i * 10:02d}:00+09:00",
                     "source_date": day,
                     "stock_code": "005930",
                     "setup_evidence": setup,
@@ -725,6 +725,7 @@ def test_machine_decision_case_table_separates_missed_and_bad_entry_timing():
             "status": "pass",
             "source_manifest_sha256": "d" * 64,
             "tuning_input_allowed": True,
+            "machine_threshold_tuning_input_allowed": True,
         },
     )
 
@@ -762,6 +763,161 @@ def test_machine_decision_case_table_separates_missed_and_bad_entry_timing():
     assert report["conflicting_attempt_identity_count"] == 0
     assert report["policy_learning_eligible_observation_count"] == 4
     assert report["machine_ai_populations_are_separate"] is True
+
+
+def test_machine_case_table_uses_machine_specific_source_gate_for_learning():
+    row = {
+        "decision_trace_id": "trace-1",
+        "evaluation_attempt_id": "attempt-1",
+        "decision_snapshot_id": "snapshot-1",
+        "decision_ts": "2026-09-14T12:00:00+09:00",
+        "source_date": "2026-09-14",
+        "stock_code": "005930",
+        "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "bundle_sha256": "a" * 64,
+        "machine_action": "RECHECK",
+        "machine_hierarchy_selection": {"level": "common"},
+        "entry_quality_path": {
+            "status": "evaluable",
+            "entry_quality_label": "CLEAN_FAST_PROFIT",
+        },
+        "outcome_horizon_metrics": {},
+        "ai_and_final_guard": {"join_status": "exact_snapshot_machine_action_join"},
+    }
+    report = calibration.build_machine_decision_case_table(
+        [row],
+        source_receipt={
+            "tuning_input_allowed": True,
+            "machine_threshold_tuning_input_allowed": False,
+            "machine_threshold_tuning_blocked_reason": (
+                "machine_attempt_conservation_gap"
+            ),
+        },
+    )
+
+    assert report["case_count"] == 1
+    assert report["policy_learning_eligible_observation_count"] == 0
+
+
+def test_machine_source_receipt_propagates_machine_conservation_gate(tmp_path):
+    day = "2026-09-14"
+    path = (
+        tmp_path
+        / "report"
+        / "observation_source_quality_audit"
+        / f"observation_source_quality_audit_{day}.json"
+    )
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps(
+            {
+                "machine_ai_natural_source_consumption": {
+                    "schema": "machine_ai_natural_source_consumption_v1",
+                    "status": "warning_machine_assessment_contract_invalid",
+                    "source_manifest": {"source_manifest_sha256": "a" * 64},
+                    "tuning_input_allowed": True,
+                    "machine_attempt_conservation": {
+                        "unaccounted_trace_count": 1,
+                        "denominator_preserved": False,
+                    },
+                    "machine_threshold_tuning_input_allowed": False,
+                    "machine_threshold_tuning_blocked_reason": (
+                        "machine_attempt_conservation_gap"
+                    ),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    receipt = calibration._machine_ai_natural_source_receipt(tmp_path, day)
+
+    assert receipt["tuning_input_allowed"] is True
+    assert receipt["machine_threshold_tuning_input_allowed"] is False
+    assert receipt["machine_attempt_conservation"]["denominator_preserved"] is False
+
+
+def test_compact_screen_conserves_caution_and_not_evaluated_without_veto():
+    from src.engine.ai_prompt_contracts import (
+        ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
+    )
+
+    def row(trace_id: str, *, provider_called: bool, verdict: str):
+        return {
+            "decision_trace_id": trace_id,
+            "evaluation_attempt_id": trace_id,
+            "decision_snapshot_id": trace_id,
+            "decision_ts": "2026-09-14T12:00:00+09:00",
+            "source_date": "2026-09-14",
+            "stock_code": "005930",
+            "effective_venue": "KRX",
+            "session_bucket": "KRX_REGULAR",
+            "bundle_sha256": "a" * 64,
+            "machine_action": "ENTER_NOW",
+            "machine_hierarchy_selection": {"level": "common"},
+            "entry_quality_path": {
+                "status": "evaluable",
+                "entry_quality_label": "CLEAN_FAST_PROFIT",
+                "conservative_execution_cost_pct": 0.23,
+                "first_hit": "net_target_first",
+                "gross_net_target_pct": 0.4,
+            },
+            "outcome_horizon_metrics": {},
+            "ai_and_final_guard": {
+                "provider_called": provider_called,
+                "prompt_version": ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
+                "ai_risk_verdict": verdict,
+                "decision_quality_contract_status": "pass",
+                "semantic_validation_status": "pass",
+            },
+        }
+
+    report = calibration.build_machine_decision_case_table(
+        [
+            row("caution", provider_called=True, verdict="CAUTION"),
+            row("not-evaluated", provider_called=False, verdict=""),
+        ],
+        source_receipt={
+            "tuning_input_allowed": True,
+            "machine_threshold_tuning_input_allowed": True,
+            "compact_auxiliary_policy_measurement": {
+                "prompt_version": ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
+                "measurement_allowed": True,
+            },
+        },
+    )["compact_auxiliary_screen_outcomes"]
+
+    assert report["terminal_verdict_counts"] == {"CAUTION": 1}
+    assert report["screen_attempt_conservation"] == {
+        "expected_enter_now_count": 2,
+        "terminal_classified_count": 2,
+        "provider_called_count": 1,
+        "provider_not_called_count": 1,
+        "denominator_preserved": True,
+        "not_evaluated_is_not_veto": True,
+    }
+    assert report["all_machine_enter_ai_routing"] == {
+        "machine_enter_now_count": 2,
+        "routing_counts": {"current_compact_prompt": 2},
+        "denominator_preserved": True,
+        "mixed_prompt_generations_are_not_merged": True,
+    }
+    assert report["economic_contract"]["economic_eligible_count"] == 0
+    assert report["economic_contract"]["exclusion_counts"] == {
+        "non_economic_terminal_verdict": 1,
+        "provider_not_called": 1,
+    }
+
+
+def test_compact_machine_horizons_preserve_pending_or_source_gap():
+    horizons = calibration._compact_machine_horizon_metrics(
+        {"10m": {"sample_count": 2, "mfe_pct": 0.3}}
+    )
+
+    assert set(horizons) == {"1m", "3m", "5m", "10m", "20m", "30m", "60m"}
+    assert horizons["10m"]["status"] == "observed"
+    assert horizons["1m"]["status"] == "pending_or_source_gap"
 
 
 def test_machine_case_table_automatically_selects_bounded_compact_variant():
@@ -849,9 +1005,9 @@ def test_machine_case_table_automatically_selects_bounded_compact_variant():
     rows[5]["entry_quality_path"]["exact_stop_distance_pct"] = -0.70
     assert selection["allowed_runtime_apply"] is True
 
-    rows[0]["ai_and_final_guard"][
-        "decision_quality_contract_status"
-    ] = "semantic_rejected"
+    rows[0]["ai_and_final_guard"]["decision_quality_contract_status"] = (
+        "semantic_rejected"
+    )
     blocked = calibration.build_machine_decision_case_table(
         rows,
         capture_census={"captured": 20, "evaluable": 20},
@@ -1195,9 +1351,9 @@ def test_hierarchy_fits_a_real_symbol_delta_instead_of_only_counting_symbols():
                 80 if i < 5 else (90 if i < 8 else 20)
             )
             if 5 <= i < 8:
-                row["entry_quality_path"][
-                    "entry_quality_label"
-                ] = "PROFIT_AFTER_SIDEWAYS"
+                row["entry_quality_path"]["entry_quality_label"] = (
+                    "PROFIT_AFTER_SIDEWAYS"
+                )
             rows.append(row)
     result = calibration.build_mechanistic_hierarchy_candidate(
         rows, target_date="2026-09-15"
@@ -1256,9 +1412,9 @@ def test_hierarchy_learns_micro_child_and_reports_same_population_four_arms():
             {k: v for k, v in context.items() if k != "context_sha256"}
         )
         if not good:
-            row["entry_quality_path"][
-                "entry_quality_label"
-            ] = "CLEAN_FAST_LOSS_OR_ADVERSE"
+            row["entry_quality_path"]["entry_quality_label"] = (
+                "CLEAN_FAST_LOSS_OR_ADVERSE"
+            )
             row["comparison"]["entry_path_first_hit"] = "adverse_first"
     result = calibration.build_mechanistic_hierarchy_candidate(
         rows, target_date="2026-09-15"
@@ -3284,3 +3440,30 @@ def test_naive_decision_timestamp_is_excluded_from_exact_date_calibration(
     assert report["source_reports"][0]["row_exclusion_reason_counts"] == {
         "decision_timestamp_invalid_or_naive": 1
     }
+
+
+def test_runtime_policy_publication_receipt_requires_exact_source_binding():
+    from src.engine.scalping.entry_setup_evidence import (
+        MECHANISTIC_PRIMARY_ROLE_CONTRACT,
+    )
+
+    source = {
+        "target_date": "2026-09-14",
+        "artifact_content_sha256": "a" * 64,
+    }
+    published = {
+        "target_date": "2026-09-15",
+        "source_date": "2026-09-14",
+        "source_artifact_sha256": "a" * 64,
+        "role_contract": MECHANISTIC_PRIMARY_ROLE_CONTRACT,
+        "actual_order_submitted": False,
+        "all_continuous_adopted": True,
+    }
+
+    assert calibration._runtime_policy_publication_errors(published, source) == []
+    assert calibration._runtime_policy_publication_errors(
+        {**published, "source_artifact_sha256": "b" * 64}, source
+    ) == ["mechanistic_entry_runtime_policy_source_hash_mismatch"]
+    assert calibration._runtime_policy_publication_errors(None, source) == [
+        "mechanistic_entry_runtime_policy_not_published"
+    ]
