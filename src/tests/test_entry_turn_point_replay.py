@@ -720,6 +720,77 @@ def test_runtime_bbo_ring_uses_tp1_nxt_session_scope():
     assert sample["market_route"] == "nxt_only"
 
 
+def test_tp1_counterfactual_log_captures_resolved_ws_before_flushing_path(
+    monkeypatch,
+):
+    """The blocked TP1 boundary must not depend on an earlier scanner capture."""
+
+    observed_at = datetime(2026, 9, 2, 9, 10, tzinfo=KST).timestamp()
+    stock = {
+        "code": "000001",
+        "status": "WATCHING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "scanner_promotion_id": "PROM-1",
+        "effective_venue": "KRX",
+        "venue": "KRX",
+    }
+    ws_data = {
+        "last_realtime_type_market_route": {"0D": "krx_regular"},
+        "realtime_type_snapshots_by_route": {
+            "000001|krx_regular": {
+                "0D": {
+                    "observed_epoch": observed_at,
+                    "item": "000001",
+                    "market_route": "krx_regular",
+                    "effective_venue": "KRX",
+                    "orderbook": {
+                        "asks": [{"price": 1001, "volume": 10}],
+                        "bids": [{"price": 1000, "volume": 12}],
+                    },
+                }
+            }
+        },
+    }
+    emitted = []
+    monkeypatch.setattr(
+        handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: emitted.append(
+            {"stage": stage, "fields": fields}
+        ),
+    )
+    decision = SimpleNamespace(
+        allowed=False,
+        reason="rising_missed_tp1_insufficient_positive_support",
+        deferred=True,
+        log_fields={
+            "rising_missed_tp1_evaluation_id": "eval-1",
+            "scanner_promotion_id": "PROM-1",
+            "rising_missed_effective_venue": "KRX",
+            "rising_missed_market_session_bucket": "krx_regular",
+        },
+    )
+
+    handlers._log_rising_missed_tp1_counterfactual_submit_safety(
+        stock,
+        "000001",
+        decision,
+        source_stage="fixture",
+        ws_data=ws_data,
+        now_ts=observed_at + 0.2,
+    )
+
+    path = next(
+        item
+        for item in emitted
+        if item["stage"] == "rising_missed_entry_turn_pre_anchor_bbo_path"
+    )
+    assert path["fields"]["rising_missed_entry_turn_bbo_sample_count"] == 1
+    samples = json.loads(path["fields"]["rising_missed_entry_turn_bbo_samples"])
+    assert samples[0]["best_ask"] == 1001
+
+
 def test_runtime_bbo_ring_rejects_missing_displayed_quantity():
     observed_at = datetime(2026, 9, 2, 9, 1, tzinfo=KST).timestamp()
     stock = {

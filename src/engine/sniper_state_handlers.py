@@ -13903,9 +13903,24 @@ def _log_rising_missed_tp1_counterfactual_submit_safety(
     tp1_decision,
     *,
     source_stage: str,
+    ws_data: dict[str, Any] | None = None,
+    now_ts: float | None = None,
 ) -> None:
     if tp1_decision is None or bool(getattr(tp1_decision, "allowed", False)):
         return
+    # The scanner fast-precheck capture is intentionally best-effort, but it
+    # may have run before the candidate has the route-scoped snapshot used by
+    # TP1 (or on a transient copy of the WATCHING record).  Capture again at
+    # the exact blocked/deferred decision boundary when that resolver snapshot
+    # is available.  This remains a bounded, source-only read of the existing
+    # 0D subscription and never changes the decision, subscription, or order.
+    if isinstance(ws_data, dict):
+        _capture_rising_missed_entry_turn_bbo(
+            stock,
+            code,
+            ws_data,
+            now_ts=(time.time() if now_ts is None else float(now_ts)),
+        )
     decision_fields = dict(getattr(tp1_decision, "log_fields", None) or {})
     projection_fields = {
         **decision_fields,
@@ -13939,6 +13954,7 @@ def _log_rising_missed_tp1_counterfactual_submit_safety(
         stock if isinstance(stock, dict) else {},
         str(code or ""),
         projection_fields,
+        candidate_epoch=(time.time() if now_ts is None else float(now_ts)),
     )
     _register_rising_missed_nxt_post_block_sampler(
         stock if isinstance(stock, dict) else {},
@@ -19255,6 +19271,8 @@ def _emit_rising_missed_entry_turn_pre_anchor_bbo_path(
     stock: dict | None,
     code: str | None,
     decision_fields: dict[str, Any] | None,
+    *,
+    candidate_epoch: float | None = None,
 ) -> bool:
     """Flush one evaluation-scoped source-only path from the bounded ring."""
 
@@ -19266,7 +19284,7 @@ def _emit_rising_missed_entry_turn_pre_anchor_bbo_path(
     ).strip()
     if not evaluation_id or not promotion_id:
         return False
-    candidate_epoch = time.time()
+    candidate_epoch = time.time() if candidate_epoch is None else float(candidate_epoch)
     event_venue = (
         str(
             fields.get("rising_missed_effective_venue")
@@ -75537,6 +75555,8 @@ def _evaluate_rising_missed_normal_buy_bridge(
             code,
             tp1_decision,
             source_stage="rising_missed_normal_buy_bridge_candidate_gate",
+            ws_data=_resolved_ws,
+            now_ts=_runtime_action_now_ts(runtime),
         )
         if tp1_decision.deferred:
             tp1_recheck_fields = _apply_rising_missed_freshness_envelope_recheck(
@@ -77934,6 +77954,8 @@ def _maybe_submit_rising_missed_one_share_entry(
         code,
         tp1_decision,
         source_stage="rising_missed_one_share_candidate_gate",
+        ws_data=ws_data,
+        now_ts=_runtime_action_now_ts(runtime),
     )
     decision_log_fields.update(tp1_decision.log_fields or {})
     if not tp1_decision.allowed:
