@@ -973,11 +973,17 @@ def _mechanistic_source_rows(
         ):
             continue
         cohort_filter = report.get("cohort_filter")
+        report_cohort = (
+            _normalized_venue(_as_dict(cohort_filter).get("effective_venue")),
+            _normalized_session(_as_dict(cohort_filter).get("session_bucket")),
+        )
         if not (
             isinstance(cohort_filter, dict)
-            and _normalized_venue(cohort_filter.get("effective_venue")) == "KRX"
-            and _normalized_session(cohort_filter.get("session_bucket"))
-            == "KRX_REGULAR"
+            and (
+                mechanistic_scope_supported(*report_cohort)
+                if all_supported_cohorts
+                else report_cohort == ("KRX", "KRX_REGULAR")
+            )
         ):
             continue
         discovered_report_count += 1
@@ -3027,6 +3033,9 @@ def load_machine_observation_rows(
     result, counts = [], Counter()
     for path in sorted((data_root / "ai_decision_payloads").glob("*.jsonl*")):
         match = re.search(r"(\d{4}-\d{2}-\d{2})\.jsonl", path.name)
+        # Machine-only capture started on 9/13. The clean-baseline paired
+        # replay loader supplies older evidence; opening every prior payload
+        # archive here would add postclose I/O without creating a valid capture.
         if not match or not "2026-09-13" <= match[1] <= target_date:
             continue
         if path.suffix == ".gz" and path.with_suffix("").is_file():

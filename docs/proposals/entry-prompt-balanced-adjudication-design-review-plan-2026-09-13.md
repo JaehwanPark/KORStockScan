@@ -815,6 +815,93 @@ AI prompt variant는 `machine_first_pass_veto_v2`다. 실제 English ASCII promp
 - 독립 machine profit manifest SHA `caa1e8071daf226fe4c67e0e9654e84a4ae5a7b71c9e749bcde3b2c9f01ed893`, unified manifest SHA `44382bb658ef37cafc4476cf75b3a0b40979e2a81d0b4f75523f8922d12bf12a`는 전후 동일하다. 독립 service/drop-in을 재배포·재기동하지 않았다.
 - 기동 승인은 확인했으나 일요일9/13 main PID·당일 env가 없어 수동 기동은 하지 않았다. **9/14 07:35 PREOPEN→07:55 예약 기동을 유지**, 실제 PID/첫 정책 소비·장후 자동 새 generation·빠른 비용차감 순익의 자연 수용은 기존 9/14 Runtime/CodeImprovement owner에 남는다. 현재 상태는 코드·정책 발행·배포 완료 / 자연 기동·경제성 미확인이다.
 
+## 20. 판정 시점·후속 경로 기반 장후 학습과 다음 장전 정책 — 9/14 구현계획
+
+상태: 계획 수립. 이번 절은 코드 구현·장후 실행·정책 발행·배포 완료 기록이 아니다. 사용자의 최신 요청으로 앞선 ‘장전 후보 생성 제외’ 범위를 변경하여 **장후 자동 정책 생성→다음 거래일 장전 소비**를 완료 목표에 포함한다. 기존 §17~§18 구현을 재작성하지 않는다.
+
+### 20.1 목적과 완료 산출물
+
+기계가 당시 알 수 있던 정보로 빠른 수익 타점을 선택하고, AI가 PASS/VETO로 보조하며, 누적 결과가 다음 정책을 갱신하도록 한다. 비용 후 +0.10% 최초 도달은 개별 기회 라벨이고, EV는 실패를 포함한 정책별 결과 평균이다. 최종 익절만으로 좋은 타점이라고 판정하지 않는다.
+
+필수 산출물은 기존 report 안의 판정별 사례·결손/병목 집계, 누적 incumbent/challenger 비교, 다음 거래일 정책 bundle, 장전 loader 검증과 기동 후 PID 소비 receipt다. 새 정책 파일이 발행돼도 임계치 변경 여부는 별도 필드로 설명한다. 검증 실패를 숨겨 개선 정책을 강제 발행하지 않으며, 유효 incumbent가 있으면 기존 carry 계약으로 다음날 사용할 정책을 발행한다. 유효 정책 자체가 없거나 손상됐으면 발행/적용 실패를 명시한다.
+
+### 20.2 확인한 기존 owner와 최소 변경 위치
+
+| 기존 파일/경로 | 재사용 범위 | 필요한 보완과 종료조건 |
+| --- | --- | --- |
+| `src/engine/monitoring/entry_turn_point_replay.py` | 결정시각 BBO join, pre-anchor 경로, 이후 경로와 단계별 시간차 | TP1 원천과 main 기계판정 원천의 identity 차이를 유지한 adapter. 일반 기계판정까지 이미 지원하는지 fixture로 먼저 확인하고 결손만 추가 |
+| `src/engine/monitoring/rising_missed_intraday_feedback.py` | 위 replay의 기존 report owner | 사례/원천 hash를 직접 consumer로 전달. TP1 진단을 모든 기계판정의 학습 원천으로 오인하지 않음 |
+| `src/engine/scalping/ai_decision_quality.py` | 기존 경로 라벨과 시간구간 평가 | 같은 anchor·비용·경로에서 목표 도달 전 역행/횡보와 검증 가능한 종료 결과를 재사용. 중복 labeler 생성 금지 |
+| `src/engine/scalping/ai_action_outcome_calibration.py` | `load_machine_observation_rows`, 누적 source loader, 비용 재라벨링, `build_mechanistic_hierarchy_candidate` | AI 미호출 ENTER/RECHECK/BLOCK와 replay의 유효 행을 같은 기존 입력 계약에 연결. 종목/그룹·scope별 비교 및 최초 blocker 전달 |
+| `src/engine/scalping/entry_setup_evidence.py` | live와 replay 공통 판정·계층 resolver | 정책별 재생에 같은 함수 사용. 기존 입력/판정이 충분하면 수정하지 않음 |
+| `src/engine/scalping/mechanistic_entry_runtime_policy.py` | 누적 calibration의 `--write`가 호출하는 `publish`, 거래일 calendar, generation 보존, 장전 동결 | 신규 검증 정책/유효 incumbent carry 각각 발행 결과·source hash·실제 변경 내역을 downstream까지 전달 |
+| `src/engine/scalping/entry_setup_live_policy.py` | `load_effective`와 scope별 소비, AI 보조 role | 다음 날짜 bundle 선택·fallback·거절의 직접 사유 검증. 자동 소비를 위해 새 수동 env 경로를 만들지 않음 |
+| 기존 main postclose / paired replay follower / PREOPEN wrapper | calibration 정기 호출 및 장전 검증 | producer 순서·늦은 결과 갱신·최종 source hash·정책 검증을 연결. 새 cron/독립 학습기/보고서 producer 추가 금지 |
+
+### 20.3 작업 순서와 수용조건
+
+| 순서 | 구현 작업 | 수용조건 |
+| --- | --- | --- |
+| P1 원천 대사 | clean baseline 이후 이용 가능한 날짜를 manifest로 고정. 기존 machine archive와 TP1 replay의 실제 중복/결손 확인 | 날짜별 판정 총수=유효+제외+결손. AI 미호출 행 보존. 이미 연결된 경로는 재구현하지 않음 |
+| P2 사례 연결 | source hash·evaluation/attempt·promotion·symbol·venue/session·policy hash로 당시 입력과 이후 경로 결속 | 같은 종목의 다른 시점·route·정책 join 금지. 저장되지 않은 과거 입력을 현재값으로 보충하지 않음 |
+| P3 경로 평가 | 기존 라벨에 빠른 목표 도달/긴 횡보/깊은 역행/실패/미확인을 매핑하고 최초 병목 기록 | 실제 체결과 가상 ask→bid 결과 분리. 동일 bar의 선후 불명·부분체결·오래된 호가를 확정 성공으로 세지 않음 |
+| P4 누적 비교 | 영향 큰 기존 조정 가능 조건 1~3개를 사전 고정하고 공통 판정기로 재생 | 과거 날짜에서 선정, 분리된 후행 날짜에서 비교. 공통→그룹→종목 기존 상속 재사용. 새 전수 grid 없음 |
+| P5 정책 발행 | 선택 결과를 기존 candidate validator→publisher로 전달 | 적격 challenger는 bounded 변경, 미달은 사유 있는 incumbent carry. 지원 연속매매 scope 전체를 각자의 근거/정책으로 대사 |
+| P6 자동화 closure | 최초 영향 producer부터 calibration→bundle→장후 summary/strict→장전 loader→PID 검증 | 다음 거래일 정책 파일·hash·effective date·intended consumer 확인. 파일 존재만으로 적용 완료 처리 금지 |
+
+P1에서 누적 loader가 이미 받는 자료와 빠진 자료를 분명히 구분한다. 기존 보고서 요약 숫자를 학습 행으로 재생성하지 않으며, 추가 adapter는 가능한 기존 파일 내부에 둔다. runtime trace 수정은 해당 정보가 실제로 누락됐다는 증거가 있을 때만 수행한다.
+
+clean baseline의 과거 학습은 detailed paired replay가 소유한다. `mechanistic_entry_observation_v1` capture는 9/13부터의 신규 원천이므로, 이전 281MB payload archive를 매일 전수 해제해 가짜 과거 capture를 찾지 않는다. capture 이전 기간의 기계 당시 입력은 확인 불가로 census에 남기고, 그 이전의 유효 paired 행과 혼합하지 않는다.
+
+### 20.4 평가 계약
+
+- 입력은 판정시각까지의 frozen 자료만 사용한다. 종목 유동성·변동성·흐름 그룹과 정규화 기준도 과거 구간에서 산출한다. 이후 상승은 label에만 사용한다.
+- 180초를 빠른 타점의 primary 평가창으로 유지한다. 기존 30/60/180/300초 진단을 우선 재사용하고 10초는 원천이 지원할 때만 추가한다. 모든 구간 완비를 공통 승인 gate로 추가하지 않는다.
+- 사례별 비용 후 +0.10% 첫 도달시간, 그 전 최대 역행, 수익 가능한 호가 지속시간, 구간 종료 결과와 관측 gap을 남긴다. 깊은 역행의 기준은 당시 유효 stop/위험 계약 또는 train에서 고정한 유형별 기준을 인용한다. 사후 stop 변경을 과거 label에 적용하지 않는다.
+- 가상 결과는 검증된 fee/tax/slippage와 진입 ask·청산 bid·수량을 사용한다. 비용 중복 차감과 비용 결손의 0 대체를 금지한다. 목표 미도달 행도 사전 정의한 평가 종료 규칙으로 포함하며, 목표 성공행만의 평균을 EV로 보고하지 않는다. 실제 PnL은 기존 COMPLETED·유효 비용 계약으로 별도 집계한다.
+- 모든 판정은 사례표에 남기되, 통계는 기존 promotion/attempt identity와 사전 고정한 비중첩 기회 단위로 중복을 통제한다. 실제 별개의 재진입은 보존한다. 날짜 경계에 걸친 outcome은 학습/검증 양쪽으로 새지 않게 제외하거나 경계를 분리한다.
+- 감시 이전 상승→최초 감시, 감시→기계, 기계→AI, AI→제출/체결의 지연을 분리한다. 감시 밖 모집단을 확보하지 못하면 scanner 전체 recall은 미확인이다.
+- 새 depletion 속도·trade backing·refill은 유효한 해당 원천 구간에서만 기존 micro variant로 평가한다. 과거 미수집 자료 때문에 공통/그룹 전체 학습을 막지 않으며, 미수집 micro를 통과값으로 채우지 않는다.
+
+### 20.5 임계치 승인과 과도한 gate 제거 점검
+
+적격 challenger는 **검증 집합 비용 후 EV ≥0.10%, incumbent 대비 개선, 기존 해당 family의 sample/source/tail/bounded-change 조건**을 만족해야 한다. 0.10%의 단위는 10bp이며 코드의 percent 값과 fraction을 구분한다. 기존 gate와 이 목표가 다르면 실제 validator·producer 요약·loader가 같은 계약을 쓰도록 변경 항목으로 명시한다.
+
+기회 포착률·빠른 목표 도달률·목표 전 역행·순익/일·자본점유는 incumbent와 같은 모집단·exit 가정으로 비교한다. threshold 하나의 차이로 새로 ENTER된 사례에는 별도 증분 결과를 남겨 기존 성공 사례에 가려지는 손실을 확인한다. 실제 수량 확대·청산 정책 변경을 entry 개선에 혼합하지 않는다.
+
+sample floor는 실제 해당 validator의 값/관측값/통과 여부를 출력한다. 그룹 연구·종목 보정·공통 정책의 서로 다른 표본 조건을 중첩하지 않는다. 종목 보정 표본 부족은 유효 부모 사용을 막지 않는다. CF 근거로 실주문 체결품질 검증 완료를 주장하지 않는다. 기존 live family가 허용하는 CF 기반 조정 범위를 넘는 후보는 명시적으로 차단한다.
+
+AI는 기존 PASS/VETO 역할을 유지한다. 기계 ENTER 뒤 VETO로 놓친 기회는 별도 attribution하며 기계 threshold 문제로 돌리지 않는다. 기존 AI optimizer가 발급하고 승인한 prompt는 기존 경로로 갱신한다. historical context 갱신만을 prompt 최적화나 판단 향상으로 보고하지 않는다. 기계 평가를 위해 Provider를 일괄 재호출하지 않는다.
+
+### 20.6 장후→다음 장전의 실행 계약
+
+1. 실행 때 선택 release·실제 wrapper snapshot·calendar·source generation을 고정한다. target은 `next_target(source_date)`의 거래일로 계산한다.
+2. 기존 replay/report의 필수 원천이 준비된 뒤 calibration을 실행한다. 현재 main wrapper와 follower의 호출 순서를 대사해 새 입력 producer가 늦다면 기존 owner 순서를 최소 보완한다. 원천 준비 전 성공한 빈 학습으로 닫지 않는다.
+3. `ai_action_outcome_calibration --write`의 기존 publisher 호출에서 다음 날짜 bundle을 발행하고, 반환된 생성/유지/동결/오류를 report·최종 검증까지 연결한다. source가 같으면 멱등 유지한다.
+4. 늦은 follower가 source를 변경하면 기존 장전 07:35 동결 이전에 필요한 bundle만 재발행하고 최종 요약 hash를 재대사한다. 실행 중 writer·발행된 pin 충돌 없이 수행하며 원 generation을 보존한다.
+5. 다음날 장전 검증은 기존 loader로 날짜·scope·bundle/source hash·role·operator override·부모/종목 pin을 검증한다. 후보 없음, incumbent carry, missing update, invalid policy를 서로 다르게 표시한다.
+6. 기존 예약 기동 뒤 실제 PID의 release/정책 hash 및 첫 기계→AI 소비를 확인한다. 장후 완료 시점에는 다음날 PID 성공을 미리 선언하지 않는다.
+
+미배포 코드로만 성공하는 격리 발행은 정기 자동화 완료가 아니다. 구현 후 검토 commit을 선택 release에 반영하고 다음 예약이 동일 코드를 소비하는 것까지 배포 범위에 포함해야 한다. 장후 chain 진행 중에는 선택 코드를 교체하지 않는다.
+
+### 20.7 검증·재작업 제한·인계
+
+기존 `test_entry_turn_point_replay.py`, `test_ai_decision_quality.py`, `test_ai_action_outcome_calibration.py`, `test_mechanistic_entry_runtime_policy.py`, `test_entry_setup_evidence.py`와 직접 loader/wrapper 테스트 중 변경 경로만 실행한다. 필수 반례는 빠른 성공·긴 횡보 후 성공·깊은 역행 후 성공·실패·중복 판정·잘못된 route/time join·비용 결손·시간 누출·부분 관측·AI 미호출·scope 상속·publisher 재실행·장전 동결이다.
+
+동일 fixture로 `replay→calibration→candidate→publish→다음날 loader`까지 한 번 검증하고, 실데이터는 영향 source만 재생성한다. 전체 장후 wrapper·대량 Provider 호출·새 서비스·별도 DB·거대 신규 모듈은 기본 작업에 포함하지 않는다. 기존 성공 테스트는 변경이나 새 finding이 없는 한 반복하지 않는다. 코드 리뷰 finding 수정→재리뷰→targeted validation 뒤 실제 자동화 단계로 진행한다.
+
+실행 owner는 [9/14 체크리스트](../checklists/2026-09-14-stage2-todo-checklist.md)의 OPEN `CodeImprovementWorkorderReview0914`와 연결한다. 완료된 `RuntimeEnvIntradayObserve0914`는 이번 새 검증 owner로 재개하지 않는다. 구현 실행 시 기존 다음 거래일 장전/기동 owner를 확인해 인계하고, 없으면 그때 실제 Due/Slot/TimeWindow/Track을 가진 owner를 한 번만 생성한다. 이 계획에서는 예정 실행이나 미래 성공 receipt를 만들지 않는다.
+
+최종 보고: 원천 유효/결손 수, 독립 기회 수, 최초 병목 상위 1~3개, 변경 전후 임계치·검증 성과, 정책 disposition·bundle hash·effective date, 자동 발행/장전 검증/PID 소비의 각각의 상태를 남긴다. **검증된 개선 정책 또는 명시적으로 유지된 유효 정책이 다음 장전 소비 가능해야 운영 인계가 완료**이며, 실제 수익 개선은 적용 후 별도 확인한다.
+
+### 20.8 구현·리뷰 결과 — 9/14
+
+`_mechanistic_source_rows(..., all_supported_cohorts=True)`가 report header를 KRX 정규장으로 선필터해 NXT `NXT_AFTERMARKET` 행을 scope별 extension에 전달하지 않는 결함을 수리했다. 기본 KRX 경로는 그대로 유지하며, all-scope 호출에서만 `mechanistic_scope_supported`의 지원 연속매매 scope를 통과시킨다. 9/11 원천 대사에서 기존 KRX 936행에 NXT 634행이 추가로 연결됐다. 이 수치는 source coverage이며 edge 또는 실주문 성과가 아니다.
+
+과거 machine capture 범위를 clean baseline으로 넓히려던 초안은 철회했다. capture가 9/13부터 존재하고 과거 archive 전수 해제는 장후 I/O·메모리만 늘리기 때문이다. 180초 primary·30/60/180/300초 진단, 비용 후 0.10% 라벨, 깊은 역행/횡보 분리, group/symbol holdout과 기존 candidate→publisher→PREOPEN loader 경로는 이미 구현돼 있어 중복 구현하지 않았다.
+
+검증은 all-scope NXT regression, calibration/policy/evidence/live-policy/decision-quality 직접 회귀 493건, compile, `git diff --check`, 문서 print-only parser로 닫는다. 정책 bundle은 current all-continuous 9 scope 정책을 유지하며, 이번 수리는 다음 장후 calibration이 NXT 자료로 별도 candidate/holdout을 평가할 수 있게 한다. 실제 새 bundle generation·다음 장전 PID 소비·비용 후 경제성은 자연 장후/장전 receipt로 확인한다.
+
 사용자 선택 문서 외부 동기화(정책 적용/봇 기동의 선행 조건 아님):
 
 ```bash

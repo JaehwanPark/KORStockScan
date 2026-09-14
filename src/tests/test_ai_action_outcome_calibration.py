@@ -757,6 +757,8 @@ def _write_mechanistic_report(
     target_pct: float = 0.4,
     include_complete_group: bool = True,
     include_flow_analysis: bool = False,
+    venue: str = "KRX",
+    session_bucket: str = "KRX_REGULAR",
 ) -> None:
     requests = []
     comparisons = []
@@ -767,8 +769,8 @@ def _write_mechanistic_report(
             "decision_trace_id": trace_id,
             "decision_ts": f"{source_date}T10:00:00+09:00",
             "stage": "entry",
-            "effective_venue": "KRX",
-            "session_bucket": "KRX_REGULAR",
+            "effective_venue": venue,
+            "session_bucket": session_bucket,
             "stock_code": f"{index:06d}",
             "reference_price": 10000,
             "entry_setup_evidence": evidence,
@@ -828,7 +830,7 @@ def _write_mechanistic_report(
                 "schema": calibration.ENTRY_GROUP_OBSERVATION_SCHEMA,
                 "group_key": (
                     "GE_10BP|SUPPORTIVE|MEDIUM|continuation|LT_180S|LT_1PCT|"
-                    "KRX|KRX_REGULAR"
+                    f"{venue}|{session_bucket}"
                 ),
                 "key_parts": {
                     "price_tick_band": "GE_10BP",
@@ -837,8 +839,8 @@ def _write_mechanistic_report(
                     "structure_phase": "continuation",
                     "watch_age_band": "LT_180S",
                     "extension_band": "LT_1PCT",
-                    "venue": "KRX",
-                    "session_bucket": "KRX_REGULAR",
+                    "venue": venue,
+                    "session_bucket": session_bucket,
                 },
                 "missing_dimensions": [],
                 "provenance": "native_predecision_observation",
@@ -890,8 +892,8 @@ def _write_mechanistic_report(
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
         "cohort_filter": {
-            "effective_venue": "KRX",
-            "session_bucket": "KRX_REGULAR",
+            "effective_venue": venue,
+            "session_bucket": session_bucket,
         },
         "requests": requests,
         "paired_comparisons": comparisons,
@@ -899,7 +901,7 @@ def _write_mechanistic_report(
     payload = calibration._with_artifact_content_sha256(body)
     path = folder / (
         f"ai_prompt_detailed_paired_replay_{source_date}_{suffix}_"
-        "venue_krx_session_krx_regular.json"
+        f"venue_{venue.lower()}_session_{session_bucket.lower()}.json"
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload), encoding="utf-8")
@@ -953,6 +955,37 @@ def test_mechanistic_refinement_uses_clean_chronological_holdout(
         if key != "candidate_content_sha256"
     }
     assert candidate["candidate_content_sha256"] == calibration._canonical_sha256(body)
+
+
+def test_mechanistic_source_loader_includes_supported_nxt_only_for_all_scope_mode(
+    tmp_path: Path,
+) -> None:
+    folder = tmp_path / "paired"
+    _write_mechanistic_report(
+        folder,
+        source_date="2026-09-07",
+        start=1,
+        venue="NXT",
+        session_bucket="NXT_AFTERMARKET",
+        include_flow_analysis=True,
+    )
+
+    default_rows, _ = calibration._mechanistic_source_rows(
+        folder, target_date="2026-09-07"
+    )
+    all_scope_rows, _ = calibration._mechanistic_source_rows(
+        folder, target_date="2026-09-07", all_supported_cohorts=True
+    )
+
+    assert default_rows == []
+    assert len(all_scope_rows) == 2
+    assert {
+        (
+            row["entry_group_observation"]["key_parts"]["venue"],
+            row["entry_group_observation"]["key_parts"]["session_bucket"],
+        )
+        for row in all_scope_rows
+    } == {("NXT", "NXT_AFTERMARKET")}
 
 
 def test_mechanistic_source_rows_preserve_valid_multihorizon_flow_projection(
