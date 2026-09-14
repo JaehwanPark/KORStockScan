@@ -253,6 +253,36 @@ def _entry_replay_cohort(key, version, venue, session, route, authority, **extra
     }
 
 
+def _producer_cohort_contract_fields(expected, version="v2"):
+    contract = {
+        "schema": "entry_replay_cohort_contract_v1",
+        "version": version,
+        "expected_cohorts": [
+            {key: value for key, value in row.items() if key != "cohort_key"}
+            for row in expected
+        ],
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "dual_aftermarket_provider_forbidden": True,
+    }
+    contract_hash = hashlib.sha256(
+        json.dumps(
+            contract,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+    return {
+        "cohort_contract": {
+            **contract,
+            "contract_content_sha256": contract_hash,
+        },
+        "cohort_contract_sha256": contract_hash,
+    }
+
+
 def _write_entry_setup_followup_batch(project_dir, target_date, payload):
     _write_json(
         project_dir
@@ -262,7 +292,10 @@ def _write_entry_setup_followup_batch(project_dir, target_date, payload):
     )
 
 
-def test_entry_setup_followup_accepts_legacy_batch_without_versioned_contract(tmp_path):
+@pytest.mark.parametrize("with_producer_contract", [False, True])
+def test_entry_setup_followup_accepts_legacy_batch_and_current_producer_contract(
+    tmp_path, with_producer_contract
+):
     target_date = "2026-09-12"
     _write_entry_setup_followup_consumer(tmp_path, target_date)
     nxt_path = (
@@ -293,27 +326,54 @@ def test_entry_setup_followup_accepts_legacy_batch_without_versioned_contract(tm
         ).encode("utf-8")
     ).hexdigest()
     _write_json(nxt_path, nxt)
-    _write_entry_setup_followup_batch(
-        tmp_path,
-        target_date,
-        {
-            "target_date": target_date,
-            "status": "completed_offline_only",
-            "cohorts": [],
-            "bounded_live_cohort_contract": "exact_cohort_candidates_v1",
-            "bounded_live_candidates_by_cohort": {
-                "KRX/KRX_REGULAR": None,
-                "NXT/NXT_AFTERMARKET": {
-                    "path": str(nxt_path.relative_to(tmp_path)),
-                    "artifact_sha256": nxt["artifact_sha256"],
-                    "artifact_status": "blocked",
-                    "effective_date": nxt["effective_date"],
-                    "allowed_runtime_apply": False,
-                },
+    payload = {
+        "target_date": target_date,
+        "status": "completed_offline_only",
+        "cohorts": [],
+        "bounded_live_cohort_contract": "exact_cohort_candidates_v1",
+        "bounded_live_candidates_by_cohort": {
+            "KRX/KRX_REGULAR": None,
+            "NXT/NXT_AFTERMARKET": {
+                "path": str(nxt_path.relative_to(tmp_path)),
+                "artifact_sha256": nxt["artifact_sha256"],
+                "artifact_status": "blocked",
+                "effective_date": nxt["effective_date"],
+                "allowed_runtime_apply": False,
             },
-            "krx_bounded_live_candidate": None,
         },
-    )
+        "krx_bounded_live_candidate": None,
+    }
+    if with_producer_contract:
+        expected = [
+            {
+                "authority_state": "LEGACY",
+                "cohort_key_version": "v1",
+                "effective_venue": "KRX",
+                "market_data_route": None,
+                "session_bucket": "KRX_REGULAR",
+            },
+            {
+                "authority_state": "LEGACY",
+                "cohort_key_version": "v1",
+                "effective_venue": "NXT",
+                "market_data_route": None,
+                "session_bucket": "NXT_AFTERMARKET",
+            },
+        ]
+        payload.update(_producer_cohort_contract_fields(expected, version="v1"))
+        payload["cohorts"] = [
+            {
+                "effective_venue": "KRX",
+                "session_bucket": "KRX_REGULAR",
+                "status": "completed_offline_only",
+            },
+            {
+                "effective_venue": "NXT",
+                "session_bucket": "NXT_AFTERMARKET",
+                "status": "hold_no_exact_entry_control",
+            },
+        ]
+    _write_entry_setup_followup_batch(tmp_path, target_date, payload)
 
     assert _entry_setup_followup_state(tmp_path, target_date) == (
         "terminal_ready:validated_batch_and_main_ai_consumer_no_krx_candidate"
@@ -362,11 +422,7 @@ def test_entry_setup_followup_accepts_versioned_dual_aftermarket_observe_only(tm
         {
             "target_date": target_date,
             "status": "completed_offline_only",
-            "cohort_contract": {
-                "schema": "entry_replay_cohort_contract_v1",
-                "contract_version": "v2",
-                "expected_cohorts_by_contract_version": {"v2": expected},
-            },
+            **_producer_cohort_contract_fields(expected),
             "cohorts": cohorts,
             "krx_bounded_live_candidate": None,
         },
@@ -394,11 +450,7 @@ def test_entry_setup_followup_rejects_dual_aftermarket_live_authority(tmp_path):
         {
             "target_date": target_date,
             "status": "completed_offline_only",
-            "cohort_contract": {
-                "schema": "entry_replay_cohort_contract_v1",
-                "contract_version": "v2",
-                "expected_cohorts_by_contract_version": {"v2": [dual]},
-            },
+            **_producer_cohort_contract_fields([dual]),
             "cohorts": [
                 {
                     **dual,
@@ -437,11 +489,7 @@ def test_entry_setup_followup_rejects_nxt_candidate_hash_reused_for_dual_afterma
         {
             "target_date": target_date,
             "status": "completed_offline_only",
-            "cohort_contract": {
-                "schema": "entry_replay_cohort_contract_v1",
-                "contract_version": "v2",
-                "expected_cohorts_by_contract_version": {"v2": [dual]},
-            },
+            **_producer_cohort_contract_fields([dual]),
             "cohorts": [
                 {
                     **dual,

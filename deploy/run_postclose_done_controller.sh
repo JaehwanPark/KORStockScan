@@ -199,56 +199,76 @@ if any(
     raise SystemExit(0)
 
 cohort_contract = batch.get("cohort_contract")
-if cohort_contract is not None:
-    if not isinstance(cohort_contract, dict):
-        print("retry_required:cohort_contract_invalid")
-        raise SystemExit(0)
+producer_contract_shape = isinstance(cohort_contract, dict) and (
+    "version" in cohort_contract or "expected_cohorts" in cohort_contract
+)
+if producer_contract_shape:
     if cohort_contract.get("schema") != "entry_replay_cohort_contract_v1":
         print("retry_required:cohort_contract_schema_invalid")
         raise SystemExit(0)
-    contract_version = cohort_contract.get("contract_version")
-    expected_by_version = cohort_contract.get("expected_cohorts_by_contract_version")
+    expected_cohorts = cohort_contract.get("expected_cohorts")
+    contract_body = {
+        key: value
+        for key, value in cohort_contract.items()
+        if key != "contract_content_sha256"
+    }
+    computed_contract_hash = hashlib.sha256(
+        json.dumps(
+            contract_body,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
     if (
-        not isinstance(contract_version, str)
-        or not contract_version
-        or not isinstance(expected_by_version, dict)
-        or not isinstance(expected_by_version.get(contract_version), list)
+        cohort_contract.get("version") not in {"v1", "v2"}
+        or not isinstance(expected_cohorts, list)
+        or not expected_cohorts
+        or cohort_contract.get("runtime_effect") is not False
+        or cohort_contract.get("allowed_runtime_apply") is not False
+        or cohort_contract.get("dual_aftermarket_provider_forbidden") is not True
+        or cohort_contract.get("contract_content_sha256") != computed_contract_hash
+        or batch.get("cohort_contract_sha256") != computed_contract_hash
     ):
-        print("retry_required:cohort_contract_expected_census_invalid")
+        print("retry_required:cohort_contract_producer_contract_invalid")
         raise SystemExit(0)
-
-    expected_cohorts = expected_by_version[contract_version]
     cohort_rows = batch.get("cohorts")
-    if not isinstance(cohort_rows, list):
+    if not isinstance(cohort_rows, list) or any(
+        not isinstance(row, dict) for row in cohort_rows
+    ):
         print("retry_required:cohort_contract_batch_cohorts_invalid")
         raise SystemExit(0)
 
-    identity_fields = ("cohort_key", "cohort_key_version")
-    required_fields = (
-        "cohort_key",
-        "cohort_key_version",
-        "effective_venue",
-        "session_bucket",
-        "market_data_route",
-        "authority_state",
-    )
+    def cohort_identity(row):
+        route = row.get("market_data_route")
+        return (
+            row.get("effective_venue"),
+            row.get("session_bucket"),
+            route if isinstance(route, str) else "",
+        )
+
     if any(
         not isinstance(row, dict)
-        or any(not isinstance(row.get(field), str) or not row.get(field) for field in required_fields)
+        or not isinstance(row.get("effective_venue"), str)
+        or not row.get("effective_venue")
+        or not isinstance(row.get("session_bucket"), str)
+        or not row.get("session_bucket")
+        or row.get("cohort_key_version") not in {"v1", "v2"}
+        or not isinstance(row.get("authority_state"), str)
+        or not row.get("authority_state")
+        or (
+            row.get("market_data_route") is not None
+            and not isinstance(row.get("market_data_route"), str)
+        )
         for row in expected_cohorts
     ):
         print("retry_required:cohort_contract_expected_row_invalid")
         raise SystemExit(0)
-    if any(not isinstance(row, dict) for row in cohort_rows):
-        print("retry_required:cohort_contract_batch_row_invalid")
-        raise SystemExit(0)
-
     expected_by_identity = {
-        tuple(row[field] for field in identity_fields): row for row in expected_cohorts
+        cohort_identity(row): row for row in expected_cohorts
     }
-    actual_by_identity = {
-        tuple(row.get(field) for field in identity_fields): row for row in cohort_rows
-    }
+    actual_by_identity = {cohort_identity(row): row for row in cohort_rows}
     if (
         len(expected_by_identity) != len(expected_cohorts)
         or len(actual_by_identity) != len(cohort_rows)
@@ -256,18 +276,26 @@ if cohort_contract is not None:
     ):
         print("retry_required:cohort_contract_identity_census_invalid")
         raise SystemExit(0)
-
     for identity, expected in expected_by_identity.items():
         actual = actual_by_identity[identity]
-        if any(actual.get(field) != expected[field] for field in required_fields):
-            print("retry_required:cohort_contract_row_mismatch")
-            raise SystemExit(0)
         is_dual_aftermarket = (
-            actual.get("effective_venue") == "INTEGRATED"
-            and actual.get("session_bucket") == "KRX_NXT_AFTERMARKET"
+            expected.get("effective_venue") == "INTEGRATED"
+            and expected.get("session_bucket") == "KRX_NXT_AFTERMARKET"
         )
         if not is_dual_aftermarket:
             continue
+        if any(
+            actual.get(field) != expected.get(field)
+            for field in (
+                "effective_venue",
+                "session_bucket",
+                "market_data_route",
+                "cohort_key_version",
+                "authority_state",
+            )
+        ):
+            print("retry_required:cohort_contract_row_mismatch")
+            raise SystemExit(0)
         if actual.get("authority_state") not in {
             "OBSERVE_ONLY",
             "BLOCKED_MISSING_APPROVAL",
@@ -286,10 +314,14 @@ if cohort_contract is not None:
         ) or actual.get("candidate_contract_sha256") is not None:
             print("retry_required:dual_aftermarket_live_candidate_forbidden")
             raise SystemExit(0)
+elif cohort_contract is not None:
+    print("retry_required:cohort_contract_invalid")
+    raise SystemExit(0)
 
-# Legacy batches have no versioned cohort contract. Preserve their exact
-# two-cohort candidate validation until their producer publishes one.
-elif batch.get("bounded_live_cohort_contract") == "exact_cohort_candidates_v1":
+# The producer-owned cohort contract and older batches both retain this exact
+# two-cohort live-candidate validation. The integrated v2 rows above are
+# observation-only and must never be reused as an NXT live candidate.
+if batch.get("bounded_live_cohort_contract") == "exact_cohort_candidates_v1":
     refs = batch.get("bounded_live_candidates_by_cohort")
     if not isinstance(refs, dict) or set(refs) != {"KRX/KRX_REGULAR", "NXT/NXT_AFTERMARKET"}:
         print("retry_required:exact_cohort_candidate_census_invalid")

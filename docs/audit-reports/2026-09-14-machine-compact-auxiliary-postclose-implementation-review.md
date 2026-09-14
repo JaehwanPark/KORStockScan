@@ -129,3 +129,33 @@
 - 기대 효과는 손상된 기계 시도로 잘못된 임계치를 만드는 위험 제거, AI 비진입 유형의 정확한 귀속, 늦은/놓친 타점 horizon 결손 가시화, silent no-policy 성공 제거다. 코드 검증은 실제 수익 증가 증명이 아니다.
 
 검증: source audit, calibration, publisher, PREOPEN policy, prompt consumer, wrapper와 strict verifier 7개 직접 suite `705 passed`; Python compile, Ruff check/format, shell syntax, `git diff --check`, 문서 print-only parser 27건 PASS. Provider 호출·실주문·현재 실행 중인 장후 wrapper 수정 또는 중복 실행은 하지 않았다.
+
+## 11. 자연 장후 실행 결함 복구·최종 배포 세대
+
+### 11.1 자연 실행에서 확인한 추가 결함
+
+- 20:10 선택 release의 자연 실행은 22:18:33 verifier에서 실패했다. 최초 원인은 Pattern Lab 후속 추천 두 행이 같은 native ID를 발급한 충돌이었고, 기존 검증 수리를 재사용해 ID 유일성을 복원했다.
+- 기계 timing loader는 다른 owner가 같은 stage를 발행했다는 이유만으로 `scopes={}`인 무변경 baseline carry까지 veto했다. 실제 timing scope가 있을 때만 same-stage owner veto를 적용하도록 줄였다. 정책 변경이 없는 carry를 차단하던 과도한 조건만 제거했으며 scoped challenger 충돌은 계속 fail-closed다.
+- #82 calibration은 6GB대 일별 pipeline을 hierarchy scope마다 반복 읽었다. 하루 파일을 한 번 읽어 지원 scope별 price series cache를 구성하도록 바꿔 동일 계산·분모·정책 결과를 유지하면서 반복 I/O를 제거했다. 최적화 recovery는 658.53초에 끝났고 2026-09-15 dated policy를 발행했다.
+- 가장 늦게 드러난 결함은 main verifier와 21:05 replay follower의 순환 대기였다. follower는 main DONE을 기다리지만 main 내부 verifier가 follower terminal을 먼저 요구했다. wrapper 내부 verifier만 exact-date `running` source-only placeholder를 허용하고, controller/finalization의 외부 strict는 terminal batch·consumer를 계속 요구하도록 분리했다. 부분 cohort, 잘못된 schema/date, 주문 권한 누수는 pending으로 인정하지 않는다.
+
+### 11.2 정책 발행·gate 판정
+
+- 22:54:59 recovery 발행본은 `policy_2026-09-15.json`, bundle `0325e48b2818311673bf4af0d8127ffd83c296f62476901fb3506118d78ca709`, `machine_disposition=incumbent_carried`, `hierarchy_adopted=true`, `all_continuous_adopted=true`다.
+- 기계 challenger의 비용후 EV `>= +0.10%`, 같은 scope chronological holdout, positive paired delta와 tail guard는 유지했다. 이 gate는 challenger 교체에만 적용되고 initial/incumbent policy carry를 막지 않으므로 정책 부재를 만드는 과도한 조건이 아니다.
+- compact AI successor의 경제 유효20건·방향분모5·오류3·오류율25%는 등록 prompt 교체에만 적용된다. 당일 자연 compact 경제 분모가 없으면 v3 carry이며, 이를 AI 정책 부재나 Provider 실패로 바꾸지 않는다.
+- 23:12:57 controller의 검증된 `tail_repair_done_reconciliation`으로 main status/DONE을 복원했다. 그 뒤 기존 follower는 23:14:17 KRX 6건 평가와 NXT exact-source 결손을 분리한 terminal batch를 만들었고, tuning monitoring은 23:16:20 성공 terminal이 됐다. 최종 replay metadata/consumer·strict·controller·finalization은 아래 최신 receipt로 다시 닫는다.
+
+### 11.3 코드·리뷰·배포 경계
+
+- commits: `c88d8127` 정책 handoff, `ee9f4765` Pattern Lab ID 충돌, `ff214fc6` timing carry/I/O 최적화, `5b78931b` replay 순환 대기 해소. 모두 `origin/main`에 push했다.
+- 최종 검토 release는 `/home/ubuntu/KORStockScan-runtime-releases/machine-entry-postclose-handoff-r5-20260914` / `5b78931b622f66aec24bf9c66e35f8a154d057b2`다. shared `data/docs/logs/tmp/.venv/restart.flag`와 source/deploy cleanliness를 확인했다.
+- 최종 보완 범위는 직접 verifier/wrapper/controller suite `427 passed`; 앞선 calibration/timing 누적 검증은 기능·consumer 확대 suite `977 passed`다. Ruff, formatter, compile, `bash -n`, `git diff --check` PASS이고 P0~P2 unresolved finding은 0이다.
+- release selector 전환은 실행 중인 scheduled follower가 모두 terminal인 뒤에만 수행한다. selector 전환은 다음 예약 코드 경로 승인이고, 2026-09-15 PREOPEN 선택·실제 PID 소비·accepted submit/fill/terminal·비용후 순익 증명은 아니다. main bot은 20:10 이후 중지 상태이므로 이 source-only 복구를 위해 재기동하지 않는다.
+
+### 11.4 Replay follower terminal 판정 계약 수리
+
+- r5 selector 전환 뒤 controller module은 23:46:45 `done`이었지만 wrapper follower는 산출물 재생성을 모두 끝낸 뒤에도 `retry_required:cohort_contract_expected_census_invalid`로 실패했다. 최초 원인은 producer가 발행하는 안정 schema가 `version`·`expected_cohorts`·`contract_content_sha256`인데 controller inline validator만 존재하지 않는 `contract_version`·`expected_cohorts_by_contract_version` 형태를 요구한 계약 drift였다.
+- validator를 producer 소유 schema에 맞췄다. contract self-hash·batch hash, v1/v2, expected/actual cohort identity census, runtime/order 무권한을 검증하고, integrated dual-aftermarket row는 계속 `OBSERVE_ONLY|BLOCKED_MISSING_APPROVAL` terminal만 허용한다. live authority나 candidate hash가 들어오면 fail-closed한다. KRX/NXT exact live-candidate hash·effective-date 검증도 별도로 유지한다.
+- 실제 9/14 batch·consumer를 새 validator에 입력한 결과는 `terminal_ready:validated_batch_candidate_and_main_ai_consumer`다. 직접·wrapper·producer/consumer 확대 회귀 `234 passed`, `bash -n`, Ruff, formatter, `git diff --check`가 통과했고 재리뷰 P0~P2 finding은 0이다.
+- 이 수리는 retry loop만 제거하며 prompt, threshold, provider, order, quantity, custody 또는 hard-safety를 바꾸지 않는다. 새 release 배포 뒤 controller/finalization의 exact-date terminal을 다시 확인한다.
