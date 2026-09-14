@@ -76261,6 +76261,29 @@ def _maybe_retry_rising_missed_entry_ai_not_evaluated(
                 "pre_submit_entry_ai_authority_retry_score"
             )
             or "0.0",
+            "rising_missed_entry_ai_retry_result_source": retry_fields.get(
+                "pre_submit_entry_ai_authority_retry_result_source"
+            )
+            or "-",
+            "rising_missed_entry_ai_retry_evaluation_status": retry_fields.get(
+                "pre_submit_entry_ai_authority_retry_evaluation_status"
+            )
+            or "not_reported",
+            "rising_missed_entry_ai_retry_decision_trace_id": retry_fields.get(
+                "pre_submit_entry_ai_authority_retry_decision_trace_id"
+            )
+            or "-",
+            "rising_missed_entry_ai_retry_error_disposition": (
+                "entry_context_revalidation_route_changed"
+                if retry_fields.get("pre_submit_entry_ai_authority_retry_error")
+                == "entry_context_revalidation_route_changed"
+                else (
+                    "retry_exception_observed"
+                    if retry_fields.get("pre_submit_entry_ai_authority_retry_reason")
+                    == "exception"
+                    else "none"
+                )
+            ),
             "rising_missed_entry_ai_retry_current_price": _safe_int(curr_price, 0),
         }
     )

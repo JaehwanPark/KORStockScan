@@ -36,6 +36,52 @@ def test_release_shares_operator_flag_and_docs(release):
     assert not (workspace / "restart.flag").exists()
 
 
+def test_pid_receipt_requires_selected_release_child_cwd(release, monkeypatch):
+    workspace, root, manifest, _ = release
+    (root / "src").mkdir()
+    real_readlink = router.os.readlink
+    monkeypatch.setattr(
+        router.os,
+        "readlink",
+        lambda path: str(root / "src")
+        if str(path).startswith("/proc/")
+        else real_readlink(path),
+    )
+
+    receipt = router.record_runtime_pid_consumption(
+        workspace,
+        pid=1234,
+        release_root=root,
+        git_commit="a" * 40,
+    )
+
+    selection = json.loads(manifest.read_text())
+    assert receipt["pid"] == 1234
+    assert selection["actual_pid_consumed"] is True
+    assert selection["actual_pid_receipt"]["process_cwd"] == str(root / "src")
+
+
+def test_pid_receipt_rejects_non_release_child_cwd(release, monkeypatch):
+    workspace, root, _, _ = release
+    (root / "src").mkdir()
+    real_readlink = router.os.readlink
+    monkeypatch.setattr(
+        router.os,
+        "readlink",
+        lambda path: str(workspace)
+        if str(path).startswith("/proc/")
+        else real_readlink(path),
+    )
+
+    with pytest.raises(ValueError, match="cwd_mismatch"):
+        router.record_runtime_pid_consumption(
+            workspace,
+            pid=1234,
+            release_root=root,
+            git_commit="a" * 40,
+        )
+
+
 @pytest.mark.parametrize(
     "key,value",
     [

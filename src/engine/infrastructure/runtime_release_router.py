@@ -89,6 +89,70 @@ def selected_release(workspace: Path) -> tuple[Path, str]:
     return root, commit
 
 
+def record_runtime_pid_consumption(
+    workspace: Path,
+    *,
+    pid: int,
+    release_root: Path,
+    git_commit: str,
+) -> dict:
+    """Atomically attest the bot child that consumed the selected release.
+
+    This records deployment provenance only.  It neither selects a release nor
+    changes a dated policy, and it deliberately fails closed when the child has
+    not inherited the selected release's ``src`` working directory.
+    """
+    if pid <= 0:
+        raise ValueError("runtime_pid_invalid")
+    workspace = workspace.resolve(strict=True)
+    release_root = release_root.resolve(strict=True)
+    lock_path = workspace / "data/runtime/runtime_release_selection.lock"
+    with lock_path.open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        selected_root, selected_commit = selected_release(workspace)
+        if release_root != selected_root:
+            raise ValueError("runtime_pid_release_root_mismatch")
+        if git_commit != selected_commit:
+            raise ValueError("runtime_pid_commit_mismatch")
+        try:
+            process_cwd = Path(os.readlink(f"/proc/{pid}/cwd")).resolve(strict=True)
+        except OSError as exc:
+            raise ValueError("runtime_pid_not_running") from exc
+        expected_cwd = (selected_root / "src").resolve(strict=True)
+        if process_cwd != expected_cwd:
+            raise ValueError("runtime_pid_cwd_mismatch")
+        manifest_path = workspace / "data/runtime/runtime_release_selection.json"
+        selection = json.loads(manifest_path.read_text())
+        # Re-check the current manifest while holding the receipt lock.  A
+        # selection made after selected_release() must never receive this PID.
+        if (
+            selection.get("release_root") != str(selected_root)
+            or selection.get("git_commit") != selected_commit
+        ):
+            raise ValueError("runtime_selection_changed_before_pid_receipt")
+        recorded_at = datetime.now(ZoneInfo("Asia/Seoul")).isoformat()
+        receipt = {
+            "schema": "runtime_release_pid_receipt_v1",
+            "pid": pid,
+            "recorded_at_kst": recorded_at,
+            "release_root": str(selected_root),
+            "git_commit": selected_commit,
+            "process_cwd": str(process_cwd),
+            "attestation": "launcher_child_cwd_matches_selected_release",
+        }
+        selection["actual_pid_consumed"] = True
+        selection["actual_pid_receipt"] = receipt
+        with tempfile.NamedTemporaryFile(
+            "w", encoding="utf-8", dir=manifest_path.parent, delete=False
+        ) as temporary:
+            json.dump(selection, temporary, ensure_ascii=False, indent=2)
+            temporary.write("\n")
+            temporary_path = Path(temporary.name)
+        os.chmod(temporary_path, manifest_path.stat().st_mode & 0o777)
+        os.replace(temporary_path, manifest_path)
+    return receipt
+
+
 def make_plan(
     workspace: Path, root: Path, commit: str, operation: str, target_date: str
 ) -> dict:
@@ -286,6 +350,9 @@ def main() -> int:
         default=datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat(),
     )
     parser.add_argument("--print-plan", action="store_true")
+    parser.add_argument("--record-pid", type=int)
+    parser.add_argument("--record-release-root")
+    parser.add_argument("--record-git-commit")
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--check-cron", action="store_true")
     group.add_argument("--install-cron", action="store_true")
@@ -293,6 +360,24 @@ def main() -> int:
     workspace = Path(__file__).resolve().parents[3]
     try:
         root, commit = selected_release(workspace)
+        if args.record_pid is not None:
+            if (
+                args.operation
+                or args.print_plan
+                or args.check_cron
+                or args.install_cron
+                or not args.record_release_root
+                or not args.record_git_commit
+            ):
+                raise ValueError("runtime_pid_receipt_arguments_invalid")
+            receipt = record_runtime_pid_consumption(
+                workspace,
+                pid=args.record_pid,
+                release_root=Path(args.record_release_root),
+                git_commit=args.record_git_commit,
+            )
+            print(json.dumps(receipt), flush=True)
+            return 0
         if args.check_cron or args.install_cron:
             if args.operation or args.print_plan:
                 raise ValueError("cron_mode_cannot_execute_operation")

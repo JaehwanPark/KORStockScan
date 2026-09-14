@@ -546,7 +546,20 @@ while true; do
     if command -v taskset >/dev/null 2>&1 && [ -n "$BOT_CPU_AFFINITY" ] && [ "$(korstockscan_nproc)" -gt 1 ]; then
         cmd=(taskset -c "$BOT_CPU_AFFINITY" "${cmd[@]}")
     fi
-    "${cmd[@]}"
+    "${cmd[@]}" &
+    BOT_PID=$!
+    # The tmux supervisor is not the trading process.  Attest the actual bot
+    # child only after it has inherited this selected release's src cwd.  A
+    # receipt failure is observable but must not turn a provenance write into
+    # a bot/process or policy-control authority.
+    RUNTIME_WORKSPACE="$(dirname "$(readlink -f "$PROJECT_DIR/data")")"
+    if ! "$RUNTIME_WORKSPACE/deploy/run_runtime_release.sh" \
+        --record-pid "$BOT_PID" \
+        --record-release-root "$PROJECT_DIR" \
+        --record-git-commit "$KORSTOCKSCAN_RUNTIME_GIT_COMMIT"; then
+        echo "⚠️ runtime PID 소비 receipt 기록 실패: pid=$BOT_PID release=$PROJECT_DIR"
+    fi
+    wait "$BOT_PID"
 
     echo "🛑 봇 프로세스가 종료되었습니다."
     echo "⏳ 5초 후 엔진을 재가동합니다. (완전 종료를 원하면 지금 Ctrl+C를 누르세요)"

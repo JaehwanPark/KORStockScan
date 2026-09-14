@@ -938,6 +938,13 @@ def test_machine_point_has_binding_ai_screen(verdict):
     assert result["action"] == ({"PASS": "BUY", "VETO": "DROP"}.get(verdict, "WAIT"))
     assert result["entry_probe_intent"] is (verdict == "PASS")
     assert result["entry_ai_screen_pass"] is (verdict == "PASS")
+    assert result["entry_ai_followup_disposition"] == {
+        "PASS": "ai_pass_existing_submit_guard",
+        "VETO": "ai_veto_point_drop",
+        "CAUTION": "ai_caution_bounded_recheck",
+        "MALFORMED": "ai_screen_invalid_fail_closed_wait",
+        "ABSENT": "ai_screen_invalid_fail_closed_wait",
+    }[verdict]
     if verdict == "VETO":
         assert result["entry_ai_advisory_contract_errors"] == []
         # Other AI owners retain their original, stricter veto contract.
@@ -976,6 +983,11 @@ def test_ai_pass_cannot_promote_machine_liquidity_recheck():
     assert result["entry_mechanistic_action"] == "RECHECK"
     assert result["action"] == "WAIT"
     assert result["entry_probe_intent"] is False
+    assert result["entry_ai_followup_disposition"] == "machine_recheck_next_scanner_loop"
+    assert (
+        result["entry_ai_followup_authority"]
+        == "existing_scanner_loop_observation_only"
+    )
 
 
 def test_mechanistic_primary_blocks_even_when_ai_advises_pass():

@@ -6017,6 +6017,34 @@ def test_rising_missed_retry_rechecks_preflight_blocked_cached_drop(monkeypatch)
     )
 
 
+def test_rising_missed_sync_retry_preserves_safe_exception_provenance(monkeypatch):
+    monkeypatch.setattr(
+        state_handlers,
+        "_retry_entry_ai_submit_authority_before_block",
+        lambda **_: {
+            "pre_submit_entry_ai_authority_retry_attempted": True,
+            "pre_submit_entry_ai_authority_retry_success": False,
+            "pre_submit_entry_ai_authority_retry_reason": "exception",
+            "pre_submit_entry_ai_authority_retry_error": "provider detail omitted",
+            "pre_submit_entry_ai_authority_retry_result_source": "-",
+            "pre_submit_entry_ai_authority_retry_evaluation_status": "not_evaluated",
+            "pre_submit_entry_ai_authority_retry_decision_trace_id": "trace-1",
+        },
+    )
+
+    fields = state_handlers._maybe_retry_rising_missed_entry_ai_not_evaluated(
+        {"last_watching_ai_action": "not_evaluated"},
+        "049720",
+        {"curr": 10950},
+        {"ai_engine": object(), "now_ts": 1000.0},
+        curr_price=10950,
+    )
+
+    assert fields["rising_missed_entry_ai_retry_reason"] == "exception"
+    assert fields["rising_missed_entry_ai_retry_error_disposition"] == "retry_exception_observed"
+    assert fields["rising_missed_entry_ai_retry_decision_trace_id"] == "trace-1"
+
+
 @pytest.mark.parametrize("initial_action", [None, "", "-", "not_evaluated"])
 def test_rising_missed_retry_dispatches_async_without_sync_rest_or_ai(monkeypatch, initial_action):
     class AsyncCoordinator:

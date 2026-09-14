@@ -2532,6 +2532,22 @@ def compose_mechanistic_primary_decision(
                     "not_eligible" if veto else "eligible_next_scanner_loop_recheck"
                 ),
             )
+    if not screen_required:
+        followup_disposition = (
+            "machine_recheck_next_scanner_loop"
+            if mechanistic_action == "RECHECK"
+            else "machine_block_point_drop"
+        )
+    elif screen_status == "pass":
+        followup_disposition = "ai_pass_existing_submit_guard"
+    elif screen_status == "veto":
+        followup_disposition = "ai_veto_point_drop"
+    elif screen_status == "caution":
+        followup_disposition = "ai_caution_bounded_recheck"
+    elif screen_status == "insufficient":
+        followup_disposition = "ai_insufficient_bounded_recheck"
+    else:
+        followup_disposition = "ai_screen_invalid_fail_closed_wait"
     role_contract = dict(MECHANISTIC_PRIMARY_ROLE_CONTRACT)
     result.update(
         {
@@ -2557,6 +2573,14 @@ def compose_mechanistic_primary_decision(
                 screen_required and screen_status != "pass"
             ),
             "entry_ai_screen_status": screen_status,
+            "entry_ai_followup_disposition": followup_disposition,
+            "entry_ai_followup_authority": (
+                "existing_scanner_loop_observation_only"
+                if "recheck" in followup_disposition
+                else "existing_runtime_submit_and_order_guards"
+                if followup_disposition == "ai_pass_existing_submit_guard"
+                else "no_entry_authority"
+            ),
             "entry_ai_screen_required": screen_required,
             "entry_ai_screen_pass": screen_required and screen_status == "pass",
             "entry_ai_risk_verdict": advisory_verdict,
