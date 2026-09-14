@@ -20,6 +20,9 @@ from zoneinfo import ZoneInfo
 from src.engine.ai_prompt_contracts import (
     DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION,
     decision_quality_balanced_entry_system_prompt,
+    ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION,
+    ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION,
+    ENTRY_MACHINE_AUXILIARY_COMPACT_V1_PROMPT_VERSION,
     ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
     machine_auxiliary_compact_entry_system_prompt,
 )
@@ -37,9 +40,20 @@ COHORT = ["KRX", "KRX_REGULAR"]
 # remain readable so a running PID never loses its frozen policy merely because
 # the publisher is upgraded.
 LEGACY_AI_VERSION = DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION
+LEGACY_COMPACT_AI_VERSION = ENTRY_MACHINE_AUXILIARY_COMPACT_V1_PROMPT_VERSION
 AI_VERSION = ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION
 LEGACY_AI_VARIANT = "machine_first_pass_veto_v2"
-AI_VARIANT = "machine_first_compact_pass_veto_v1"
+LEGACY_COMPACT_AI_VARIANT = "machine_first_compact_pass_veto_v1"
+AI_VARIANT = "machine_first_compact_pass_veto_v2"
+COMPACT_AI_VARIANTS = {
+    AI_VERSION: AI_VARIANT,
+    ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION: (
+        "machine_first_compact_opportunity_pass_veto_v1"
+    ),
+    ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION: (
+        "machine_first_compact_risk_pass_veto_v1"
+    ),
+}
 AI_ADDENDUM = """
 Machine-first binding risk screen (this role supersedes legacy veto wording):
 The deterministic machine has already assessed this exact current setup.
@@ -210,11 +224,24 @@ def auxiliary_prompt(context: object) -> str:
     )
 
 
-def compact_auxiliary_prompt(context: object | None = None) -> str:
+def compact_auxiliary_prompt(
+    context: object | None = None, *, prompt_version: str = AI_VERSION
+) -> str:
     """Single runtime/offline prompt; context stays in the user fact payload."""
 
     del context
-    return machine_auxiliary_compact_entry_system_prompt("entry")
+    return machine_auxiliary_compact_entry_system_prompt(
+        "entry", prompt_version=prompt_version
+    )
+
+
+def compact_prompt_variant(prompt_version: str) -> str:
+    if prompt_version == LEGACY_COMPACT_AI_VERSION:
+        return LEGACY_COMPACT_AI_VARIANT
+    try:
+        return COMPACT_AI_VARIANTS[prompt_version]
+    except KeyError as exc:
+        raise ValueError("unsupported_compact_prompt_version") from exc
 
 
 def _validate_ai_policy(ai: object, context: object) -> bool:
@@ -223,17 +250,67 @@ def _validate_ai_policy(ai: object, context: object) -> bool:
     ):
         return False
     version = ai.get("prompt_version")
-    if version == AI_VERSION:
-        return (
-            ai.get("variant") == AI_VARIANT
-            and ai.get("system_prompt") == compact_auxiliary_prompt(context)
-        )
+    if version in COMPACT_AI_VARIANTS:
+        return ai.get("variant") == compact_prompt_variant(version) and ai.get(
+            "system_prompt"
+        ) == compact_auxiliary_prompt(context, prompt_version=version)
+    if version == LEGACY_COMPACT_AI_VERSION:
+        return ai.get("variant") == LEGACY_COMPACT_AI_VARIANT and ai.get(
+            "system_prompt"
+        ) == compact_auxiliary_prompt(context, prompt_version=version)
     if version == LEGACY_AI_VERSION:
-        return (
-            ai.get("variant") == LEGACY_AI_VARIANT
-            and ai.get("system_prompt") == auxiliary_prompt(context)
-        )
+        return ai.get("variant") == LEGACY_AI_VARIANT and ai.get(
+            "system_prompt"
+        ) == auxiliary_prompt(context)
     return False
+
+
+def _selected_compact_prompt_version(source: dict, previous: dict | None) -> str:
+    """Consume only #82's exact-incumbent bounded automatic selection."""
+
+    previous_version = str(
+        ((previous or {}).get("ai_policy") or {}).get("prompt_version") or ""
+    )
+    # The reviewed v1->v2 semantic correction is an explicit code migration,
+    # not a performance claim. Later changes require #82's exact-version gate.
+    if previous_version in {"", LEGACY_AI_VERSION, LEGACY_COMPACT_AI_VERSION}:
+        return AI_VERSION
+    case_table = (source.get("hierarchical_entry_quality") or {}).get(
+        "machine_decision_case_table"
+    ) or {}
+    outcomes = case_table.get("compact_auxiliary_screen_outcomes") or {}
+    selection = outcomes.get("automatic_successor_selection") or {}
+    selected = str(selection.get("selected_prompt_version") or "")
+    try:
+        screened = int(outcomes.get("screened_enter_now_count") or 0)
+        missed_veto = int(outcomes.get("missed_veto_count") or 0)
+        dangerous_pass = int(outcomes.get("dangerous_pass_count") or 0)
+        unclassified = int(outcomes.get("semantic_unclassified_count") or 0)
+    except (TypeError, ValueError):
+        return previous_version
+    required_delta = max(2, (screened + 9) // 10)
+    expected = previous_version
+    if missed_veto - dangerous_pass >= required_delta:
+        expected = ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION
+    elif dangerous_pass - missed_veto >= required_delta:
+        expected = ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION
+    if (
+        selection.get("eligible") is True
+        and selection.get("recommendation_id")
+        == "compact_auxiliary_prompt_automatic_successor_v1"
+        and selection.get("runtime_effect") is True
+        and selection.get("allowed_runtime_apply") is True
+        and selection.get("selection_contract")
+        == "bounded_registered_variant_exact_incumbent_only_no_freeform_edit"
+        and screened >= 20
+        and unclassified == 0
+        and selection.get("minimum_directional_count_delta") == required_delta
+        and selection.get("incumbent_prompt_version") == previous_version
+        and selected == expected
+        and selected in COMPACT_AI_VARIANTS
+    ):
+        return selected
+    return previous_version if previous_version in COMPACT_AI_VARIANTS else AI_VERSION
 
 
 def load(*, data_root: Path, target_date: str) -> dict | None:
@@ -355,11 +432,13 @@ def publish(
                 {k: v for k, v in reviewed.items() if k != "bundle_sha256"}
             )
             validate(reviewed, target_date=target)
+        selected_ai_version = _selected_compact_prompt_version(source, existing)
         if (
             existing is not None
             and existing.get("role_contract") == MECHANISTIC_PRIMARY_ROLE_CONTRACT
             and existing["source_artifact_sha256"] == source["artifact_content_sha256"]
-            and existing.get("ai_policy", {}).get("prompt_version") == AI_VERSION
+            and existing.get("ai_policy", {}).get("prompt_version")
+            == selected_ai_version
             and (not adopt_hierarchy or existing.get("hierarchy_adopted") is True)
             and (
                 not adopt_all_continuous
@@ -382,6 +461,7 @@ def publish(
             if prior_paths
             else None
         )
+        selected_ai_version = _selected_compact_prompt_version(source, previous)
         if previous is None and not bootstrap:
             raise ValueError("machine_policy_bootstrap_authority_missing")
         # Freeze one parsed source generation in the existing writer's exact
@@ -432,9 +512,11 @@ def publish(
         hierarchy_disposition = (
             "not_adopted"
             if not hierarchy_adopted
-            else "incumbent_child_carried"
-            if previous_hierarchy_active
-            else "adopted_no_qualified_child"
+            else (
+                "incumbent_child_carried"
+                if previous_hierarchy_active
+                else "adopted_no_qualified_child"
+            )
         )
         if hierarchy_adopted and child is not None:
             errors = calibration.validate_hierarchy_candidate(
@@ -485,7 +567,7 @@ def publish(
                 for e in hierarchy.get("evaluations", [])[:8]
                 if isinstance(e, dict) and "id" in e
             ]
-        prompt = compact_auxiliary_prompt(context)
+        prompt = compact_auxiliary_prompt(context, prompt_version=selected_ai_version)
         all_continuous = adopt_all_continuous or bool(
             previous and previous.get("all_continuous_adopted") is True
         )
@@ -559,18 +641,32 @@ def publish(
                         if isinstance(e, dict) and "id" in e
                     ],
                 }
-                scoped_prompt = compact_auxiliary_prompt(scoped_context)
+                scoped_prompt = compact_auxiliary_prompt(
+                    scoped_context, prompt_version=selected_ai_version
+                )
                 scope_policies[scope] = {
                     "machine_policy": scoped_machine,
                     "machine_disposition": scoped_disposition,
                     "historical_context": scoped_context,
                     "ai_policy": {
-                        "prompt_version": AI_VERSION,
-                        "variant": AI_VARIANT,
+                        "prompt_version": selected_ai_version,
+                        "variant": compact_prompt_variant(selected_ai_version),
                         "system_prompt": scoped_prompt,
                         "system_prompt_sha256": digest(scoped_prompt),
                     },
                 }
+        previous_ai_version = str(
+            ((previous or {}).get("ai_policy") or {}).get("prompt_version") or ""
+        )
+        compact_prompt_disposition = (
+            "compact_contract_migration"
+            if previous_ai_version in {"", LEGACY_AI_VERSION, LEGACY_COMPACT_AI_VERSION}
+            else (
+                "compact_registered_successor_auto_selected"
+                if selected_ai_version != previous_ai_version
+                else "compact_incumbent_carry"
+            )
+        )
         bundle = {
             "schema": SCHEMA,
             "target_date": target,
@@ -585,9 +681,10 @@ def publish(
             "hierarchy_adopted": hierarchy_adopted,
             "previous_bundle_sha256": previous["bundle_sha256"] if previous else None,
             "historical_context": context,
+            "compact_prompt_disposition": compact_prompt_disposition,
             "ai_policy": {
-                "prompt_version": AI_VERSION,
-                "variant": AI_VARIANT,
+                "prompt_version": selected_ai_version,
+                "variant": compact_prompt_variant(selected_ai_version),
                 "system_prompt": prompt,
                 "system_prompt_sha256": digest(prompt),
             },

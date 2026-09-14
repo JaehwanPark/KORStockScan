@@ -31,7 +31,7 @@ from src.engine.ai_prompt_contracts import (
     DECISION_QUALITY_V2_14_2_BALANCED_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
     DECISION_QUALITY_V2_15_1_TIMING_AWARE_BOUNDED_RECOVERY_PROMPT_VERSION,
     DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION,
-    ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
+    MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS,
 )
 from src.engine.scalping.entry_setup_evidence import (
     ENTRY_SETUP_BALANCED_EVIDENCE_VERSION,
@@ -203,6 +203,7 @@ SUPPORTED_BOUNDED_LIVE_PROMPT_VERSIONS = (
     DECISION_QUALITY_V2_14_2_BALANCED_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
     DECISION_QUALITY_V2_15_1_TIMING_AWARE_BOUNDED_RECOVERY_PROMPT_VERSION,
     DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION,
+    *MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS,
 )
 EXPLORATION_ONLY_PROMPT_VERSIONS = frozenset(
     {
@@ -342,7 +343,10 @@ def _expected_composer_version(prompt_version: Any) -> str:
     return {
         DECISION_QUALITY_V2_14_2_BALANCED_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION: ENTRY_DECISION_COMPOSER_V2_14_2_VERSION,
         DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION: ENTRY_DECISION_COMPOSER_V2_15_2_VERSION,
-        ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION: ENTRY_DECISION_COMPOSER_V2_15_2_VERSION,
+        **{
+            version: ENTRY_DECISION_COMPOSER_V2_15_2_VERSION
+            for version in MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS
+        },
         DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION: (
             ENTRY_DECISION_COMPOSER_V2_15_VERSION
         ),
@@ -2142,15 +2146,19 @@ def resolve_live_prompt_policy(
                 authority = auto_promotion if auto_scope else rollout
                 compact_auxiliary = (
                     initial["ai_policy"].get("prompt_version")
-                    == ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION
+                    in MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS
                 )
-                # A compact machine-first policy is already the complete final
-                # prompt.  Do not splice an independently optimized base
-                # prompt into it: that would make the issued bundle and the
-                # executed prompt differ. Legacy frozen bundles retain their
-                # established optimizer path.
+                # A compact machine-first policy is a versioned complete final
+                # prompt. Isolate its incumbent from the legacy independent-
+                # selector optimizer; #82 still measures each compact version
+                # and emits a source-only successor-review direction. A later
+                # reviewed compact version is published through the same dated
+                # bundle path, never by splicing a legacy base prompt here.
                 optimized_ai = (
-                    {"enabled": False, "status": "compact_auxiliary_pinned"}
+                    {
+                        "enabled": False,
+                        "status": "compact_incumbent_isolated_from_legacy_optimizer",
+                    }
                     if compact_auxiliary
                     else resolve_live_prompt_policy(
                         configured_prompt_version=configured_prompt_version,
@@ -2229,6 +2237,9 @@ def resolve_live_prompt_policy(
                         optimized_ai.get("candidate_contract_sha256")
                         if optimized_ai_selected
                         else None
+                    ),
+                    compact_prompt_disposition=initial.get(
+                        "compact_prompt_disposition"
                     ),
                 )
                 return result

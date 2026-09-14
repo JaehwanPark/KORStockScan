@@ -3717,7 +3717,7 @@ def test_balanced_runtime_prompt_and_raw_pass_preserve_guarded_wait(bounded):
     assert result["entry_probe_intent"] is True, result
 
 
-def test_machine_auxiliary_compact_prompt_is_single_static_contract():
+def test_machine_auxiliary_compact_prompt_is_exact_versioned_contract():
     from src.engine.ai_prompt_contracts import (
         ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
         machine_auxiliary_compact_entry_system_prompt,
@@ -3731,8 +3731,19 @@ def test_machine_auxiliary_compact_prompt_is_single_static_contract():
 
     assert prompt == machine_auxiliary_compact_entry_system_prompt("entry")
     assert prompt.isascii()
-    assert 250 <= len(prompt.split()) <= 400
+    assert 180 <= len(prompt.split()) <= 280
+    assert 'risk_codes=["NO_BLOCKING_RISK"]' in prompt
+    assert "forwards the point to existing final guards" in prompt
+    assert "diagnostic until" not in prompt
     assert "Historical policy context" not in prompt
+    wrapped = engine._wrap_openai_prompt_contract(
+        prompt,
+        require_json=True,
+        schema_name=ENTRY_RISK_ADJUDICATION_SCHEMA,
+        endpoint_name="analyze_target",
+    )
+    assert len(wrapped.split()) <= 300
+    assert "Domain glossary for interpretation" not in wrapped
     assert prompt_type == "scalping_entry"
     assert version == ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION
     assert profile == "watching"
@@ -3985,7 +3996,13 @@ def test_machine_initial_policy_assesses_before_provider_cache_and_lock(
     def provider(prompt, data, **kwargs):
         events.append("ai")
         assert events[0] == "machine"
-        assert json.loads(data)["mechanistic_entry_assessment"]["action"] == "ENTER_NOW"
+        provider_input = json.loads(data)
+        assert provider_input["mechanistic_entry_assessment"]["action"] == "ENTER_NOW"
+        assert "mechanistic_flow_observation" not in provider_input
+        assert "mechanistic_context" in provider_input["entry_setup_evidence_v1"]
+        assert provider_input["input_schema"] == (
+            f"{initial_policy.AI_VERSION}_live_input"
+        )
         assert kwargs["replay_context"]["machine_bundle_sha256"] == "b" * 64
         assert prompt == live["auxiliary_system_prompt"]
         return {}
@@ -4093,9 +4110,7 @@ def test_machine_enter_now_ai_timeout_preserves_bounded_recheck(monkeypatch):
     assert result["entry_recheck_intent_status"] == (
         "eligible_next_scanner_loop_recheck"
     )
-    assert result["entry_ai_followup_disposition"] == (
-        "ai_unavailable_bounded_recheck"
-    )
+    assert result["entry_ai_followup_disposition"] == ("ai_unavailable_bounded_recheck")
     assert result["entry_ai_full_entry_forbidden"] is True
     assert result["openai_transport_fail_closed"] is True
     assert result["machine_observation_sha256"] == "c" * 64
@@ -8066,6 +8081,7 @@ def test_openai_compact_auxiliary_invalid_prompt_retry_keeps_compact_contract():
     assert machine_auxiliary_compact_entry_system_prompt("entry") in instructions
     assert "Historical policy context" not in instructions
     assert "binding PASS/VETO authority" not in instructions
+    assert "Domain glossary for interpretation" not in instructions
 
 
 def test_openai_ws_request_id_mismatch_fails_closed_without_http_fallback(monkeypatch):

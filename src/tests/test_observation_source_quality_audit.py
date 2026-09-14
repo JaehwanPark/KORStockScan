@@ -375,8 +375,14 @@ def test_machine_ai_natural_source_audit_isolates_compact_prompt_measurement(
     write(
         "ai_decision_requests",
         [
-            {"schema": "ai_decision_request_provenance_v1", "request_id": "compact-request"},
-            {"schema": "ai_decision_request_provenance_v1", "request_id": "legacy-request"},
+            {
+                "schema": "ai_decision_request_provenance_v1",
+                "request_id": "compact-request",
+            },
+            {
+                "schema": "ai_decision_request_provenance_v1",
+                "request_id": "legacy-request",
+            },
         ],
     )
     write(
@@ -389,8 +395,14 @@ def test_machine_ai_natural_source_audit_isolates_compact_prompt_measurement(
     write(
         "ai_decision_outcomes",
         [
-            {"schema": "ai_decision_outcome_label_v1", "decision_trace_id": "compact-trace"},
-            {"schema": "ai_decision_outcome_label_v1", "decision_trace_id": "legacy-trace"},
+            {
+                "schema": "ai_decision_outcome_label_v1",
+                "decision_trace_id": "compact-trace",
+            },
+            {
+                "schema": "ai_decision_outcome_label_v1",
+                "decision_trace_id": "legacy-trace",
+            },
         ],
     )
 
@@ -399,10 +411,12 @@ def test_machine_ai_natural_source_audit_isolates_compact_prompt_measurement(
 
     assert compact["natural_trace_count"] == 1
     assert compact["provider_called_count"] == 1
-    assert compact["provider_prompt_receipt_counts"] == {"verified_static_prompt": 1}
+    assert compact["provider_prompt_receipt_counts"] == {"verified_versioned_prompt": 1}
     assert compact["measurement_status"] == "measurable_natural_compact_population"
     assert compact["measurement_allowed"] is True
-    assert compact["prompt_body_tuning"] == "forbidden_static_contract"
+    assert compact["prompt_body_tuning"] == (
+        "bounded_automatic_versioned_successor_enabled"
+    )
 
 
 @pytest.mark.parametrize(

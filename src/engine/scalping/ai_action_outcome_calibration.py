@@ -3396,6 +3396,12 @@ def load_machine_observation_rows(
                             "ai_screen_status": ai_trace.get("entry_ai_screen_status"),
                             "ai_screen_pass": ai_trace.get("entry_ai_screen_pass"),
                             "ai_risk_verdict": ai_trace.get("entry_ai_risk_verdict"),
+                            "decision_quality_contract_status": ai_trace.get(
+                                "decision_quality_contract_status"
+                            ),
+                            "semantic_validation_status": ai_trace.get(
+                                "semantic_validation_status"
+                            ),
                             "ai_veto_corroborated": ai_trace.get(
                                 "entry_ai_veto_corroborated"
                             ),
@@ -3475,13 +3481,30 @@ def build_machine_decision_case_table(
     merging their separate authorities.
     """
 
-    from src.engine.scalping.mechanistic_entry_runtime_policy import AI_VERSION
+    from src.engine.ai_prompt_contracts import (
+        ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION,
+        ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
+        ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION,
+        MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS,
+    )
+
+    source_receipt = dict(source_receipt or {})
+    compact_measurement = _as_dict(
+        source_receipt.get("compact_auxiliary_policy_measurement")
+    )
+    measured_compact_version = str(compact_measurement.get("prompt_version") or "")
+    incumbent_compact_version = (
+        measured_compact_version
+        if measured_compact_version in MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS
+        else ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION
+    )
 
     classifications: Counter[str] = Counter()
     action_counts: Counter[str] = Counter()
     source_date_counts: Counter[str] = Counter()
     hierarchy_selection_counts: Counter[str] = Counter()
     compact_screen_outcomes: Counter[str] = Counter()
+    compact_prompt_version_counts: Counter[str] = Counter()
     selected_child_rule_ids: set[str] = set()
     cases: list[dict] = []
     seen_attempts: dict[tuple[str, str, str, str, str], tuple[str, str]] = {}
@@ -3537,19 +3560,34 @@ def build_machine_decision_case_table(
         if rule_id and hierarchy_level != "common":
             selected_child_rule_ids.add(rule_id)
         ai_guard = _as_dict(row.get("ai_and_final_guard"))
-        if (
-            action == "ENTER_NOW"
-            and ai_guard.get("prompt_version") == AI_VERSION
-            and ai_guard.get("provider_called") is True
-        ):
-            compact_screen_outcomes[
-                "|".join(
-                    (
-                        str(ai_guard.get("ai_risk_verdict") or "UNCLASSIFIED"),
-                        label,
+        if action == "ENTER_NOW" and ai_guard.get("provider_called") is True:
+            observed_prompt_version = str(ai_guard.get("prompt_version") or "")
+            if (
+                observed_prompt_version
+                in MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS
+            ):
+                compact_prompt_version_counts[observed_prompt_version] += 1
+                # Never let an older compact or legacy prompt generation tune
+                # the current compact contract. Each successor starts with a
+                # fresh exact-version denominator.
+                if observed_prompt_version == incumbent_compact_version:
+                    semantic_valid = bool(
+                        ai_guard.get("decision_quality_contract_status") == "pass"
+                        and ai_guard.get("semantic_validation_status") in {None, "pass"}
                     )
-                )
-            ] += 1
+                    compact_screen_outcomes[
+                        "|".join(
+                            (
+                                (
+                                    str(ai_guard.get("ai_risk_verdict") or "")
+                                    if semantic_valid
+                                    else "SEMANTIC_INVALID"
+                                )
+                                or "UNCLASSIFIED",
+                                label,
+                            )
+                        )
+                    ] += 1
         cases.append(
             {
                 "decision_trace_id": row.get("decision_trace_id"),
@@ -3597,11 +3635,57 @@ def build_machine_decision_case_table(
                 "broker_order_forbidden": True,
             }
         )
-    source_receipt = dict(source_receipt or {})
     source_tuning_allowed = source_receipt.get("tuning_input_allowed") is True
-    compact_measurement = _as_dict(
-        source_receipt.get("compact_auxiliary_policy_measurement")
+    compact_tuning_input_allowed = bool(
+        source_tuning_allowed and compact_measurement.get("measurement_allowed") is True
     )
+    compact_screened_count = sum(compact_screen_outcomes.values())
+    compact_unclassified_count = sum(
+        count
+        for key, count in compact_screen_outcomes.items()
+        if key.startswith(("UNCLASSIFIED|", "SEMANTIC_INVALID|"))
+    )
+    missed_veto_count = compact_screen_outcomes.get("VETO|CLEAN_FAST_PROFIT", 0)
+    dangerous_pass_count = sum(
+        compact_screen_outcomes.get(key, 0)
+        for key in (
+            "PASS|CLEAN_FAST_LOSS_OR_ADVERSE",
+            "PASS|PROFIT_AFTER_DEEP_ADVERSE",
+        )
+    )
+    minimum_directional_delta = max(2, math.ceil(compact_screened_count * 0.10))
+    selected_compact_version = incumbent_compact_version
+    if not compact_tuning_input_allowed:
+        compact_tuning_direction = "repair_source_quality_before_automatic_selection"
+    elif compact_screened_count < 20:
+        compact_tuning_direction = "collect_current_version_natural_evidence"
+    elif compact_unclassified_count:
+        compact_tuning_direction = "repair_semantic_contract_before_wording_change"
+    elif missed_veto_count - dangerous_pass_count >= minimum_directional_delta:
+        compact_tuning_direction = "select_opportunity_preservation_variant"
+        selected_compact_version = (
+            ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION
+            if incumbent_compact_version
+            != ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION
+            else incumbent_compact_version
+        )
+    elif dangerous_pass_count - missed_veto_count >= minimum_directional_delta:
+        compact_tuning_direction = "select_material_risk_specificity_variant"
+        selected_compact_version = (
+            ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION
+            if incumbent_compact_version
+            != ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION
+            else incumbent_compact_version
+        )
+    else:
+        compact_tuning_direction = "carry_balanced_compact_contract"
+    compact_selection_eligible = bool(
+        compact_tuning_input_allowed
+        and compact_screened_count >= 20
+        and compact_unclassified_count == 0
+    )
+    if not compact_selection_eligible:
+        selected_compact_version = incumbent_compact_version
     return {
         "schema": MACHINE_DECISION_CASE_TABLE_SCHEMA,
         "status": (
@@ -3628,15 +3712,43 @@ def build_machine_decision_case_table(
         "machine_ai_natural_source_receipt": source_receipt,
         "compact_auxiliary_policy_measurement": compact_measurement,
         "compact_auxiliary_screen_outcomes": {
-            "screened_enter_now_count": sum(compact_screen_outcomes.values()),
+            "current_prompt_version": incumbent_compact_version,
+            "screened_enter_now_count": compact_screened_count,
+            "observed_compact_prompt_version_counts": dict(
+                sorted(compact_prompt_version_counts.items())
+            ),
             "verdict_x_action_neutral_outcome_counts": dict(
                 sorted(compact_screen_outcomes.items())
             ),
+            "missed_veto_count": missed_veto_count,
+            "dangerous_pass_count": dangerous_pass_count,
+            "semantic_unclassified_count": compact_unclassified_count,
             "tuning_interpretation": (
-                "measure_static_auxiliary_pass_veto_quality; machine_threshold_"
-                "challenger_remains_under_existing_cost_holdout_gate"
+                "measure_exact_compact_version_auxiliary_pass_veto_quality; "
+                "machine_threshold_challenger_remains_under_existing_cost_"
+                "holdout_gate"
             ),
-            "prompt_body_tuning": "forbidden_static_contract",
+            "automatic_successor_selection": {
+                "recommendation_id": (
+                    "compact_auxiliary_prompt_automatic_successor_v1"
+                ),
+                "incumbent_prompt_version": incumbent_compact_version,
+                "selected_prompt_version": selected_compact_version,
+                "minimum_current_version_screened_count": 20,
+                "minimum_directional_count_delta": minimum_directional_delta,
+                "eligible": compact_selection_eligible,
+                "direction": compact_tuning_direction,
+                "runtime_effect": True,
+                "allowed_runtime_apply": True,
+                "effective_date_owner": (
+                    "mechanistic_entry_runtime_policy_next_trading_date_publisher"
+                ),
+                "selection_contract": (
+                    "bounded_registered_variant_exact_incumbent_only_no_freeform_edit"
+                ),
+            },
+            "prompt_body_tuning": "bounded_automatic_versioned_successor_enabled",
+            "legacy_or_prior_compact_rows_affect_current_direction": False,
         },
         "machine_action_counts": dict(sorted(action_counts.items())),
         "case_classification_counts": dict(sorted(classifications.items())),

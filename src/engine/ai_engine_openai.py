@@ -127,7 +127,7 @@ from src.engine.ai_prompt_contracts import (
     AUXILIARY_ENTRY_RISK_PROMPT_VERSIONS,
     BALANCED_ENTRY_PROMPT_VERSIONS,
     decision_quality_balanced_entry_system_prompt,
-    ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
+    MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS,
     machine_auxiliary_compact_entry_system_prompt,
     SCALPING_SYSTEM_PROMPT,
     SCALPING_WATCHING_SYSTEM_PROMPT,
@@ -493,6 +493,11 @@ Domain glossary for interpretation:
 - averaging_down = averaging down / REVERSAL_ADD
 - pyramiding = pyramiding / PYRAMID
 Use the glossary to interpret domain terms, but keep the original field names, enum labels, ticker names, and quoted evidence unchanged.
+"""
+OPENAI_COMPACT_ENTRY_RISK_CONTRACT_HEADER = f"""
+[{OPENAI_PROMPT_CONTRACT_MARKER}]
+Control language: English. Preserve supplied field names, fact IDs, risk codes
+and enum labels exactly. Use only the supplied current evidence.
 """
 
 
@@ -1360,6 +1365,10 @@ class GPTSniperEngine:
         base_prompt = str(prompt or "").strip()
         if OPENAI_PROMPT_CONTRACT_MARKER in base_prompt:
             return base_prompt
+        compact_entry_risk = bool(
+            schema_name == ENTRY_RISK_ADJUDICATION_SCHEMA
+            and base_prompt.startswith("Machine auxiliary entry risk-screen contract:")
+        )
         output_rule = (
             "Output rule: return only JSON that conforms to the provided schema. "
             "Do not add markdown, commentary, or schema-external fields. "
@@ -1371,8 +1380,13 @@ class GPTSniperEngine:
             f"Endpoint: {endpoint_name or 'generic'}; schema: {schema_name or '-'}.\n"
             f"{output_rule}\n"
         )
+        contract_header = (
+            OPENAI_COMPACT_ENTRY_RISK_CONTRACT_HEADER
+            if compact_entry_risk
+            else OPENAI_PROMPT_CONTRACT_HEADER
+        )
         if base_prompt:
-            return f"{OPENAI_PROMPT_CONTRACT_HEADER.strip()}\n{context_rule}\n[Task prompt]\n{base_prompt}"
+            return f"{contract_header.strip()}\n{context_rule}\n[Task prompt]\n{base_prompt}"
         return f"{OPENAI_PROMPT_CONTRACT_HEADER.strip()}\n{context_rule}".strip()
 
     def _resolve_openai_transport_mode(self, transport_mode_override=None):
@@ -2037,11 +2051,13 @@ class GPTSniperEngine:
                 )
                 or "hot_v1"
             ).strip()
-            if selected_version == ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION:
+            if selected_version in MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS:
                 return (
-                    machine_auxiliary_compact_entry_system_prompt("entry"),
+                    machine_auxiliary_compact_entry_system_prompt(
+                        "entry", prompt_version=selected_version
+                    ),
                     "scalping_entry",
-                    ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
+                    selected_version,
                     "watching",
                 )
             if selected_version == DECISION_QUALITY_V2_PROMPT_VERSION:
@@ -2179,7 +2195,7 @@ class GPTSniperEngine:
                 DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION,
                 DECISION_QUALITY_V2_15_1_TIMING_AWARE_BOUNDED_RECOVERY_PROMPT_VERSION,
                 DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION,
-                ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
+                *MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS,
             }
         )
         timing_aware_policy = selected_prompt_version in {
@@ -2187,12 +2203,12 @@ class GPTSniperEngine:
             DECISION_QUALITY_V2_14_2_BALANCED_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
             DECISION_QUALITY_V2_15_1_TIMING_AWARE_BOUNDED_RECOVERY_PROMPT_VERSION,
             DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION,
-            ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
+            *MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS,
         }
         version_token = (
             "machine_auxiliary_compact"
             if selected_prompt_version
-            == ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION
+            in MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS
             else (
                 ("v2_15_2" if bounded_recovery_policy else "v2_14_2")
                 if selected_prompt_version in BALANCED_ENTRY_PROMPT_VERSIONS
@@ -2212,8 +2228,7 @@ class GPTSniperEngine:
             "krx"
             if policy_venue == "KRX"
             or (
-                not policy_venue
-                and policy.get("status") == "active_bounded_krx_canary"
+                not policy_venue and policy.get("status") == "active_bounded_krx_canary"
             )
             else "nxt"
         )
@@ -2470,9 +2485,8 @@ class GPTSniperEngine:
         recent_exit_probe_blocked = False
         recent_exit_price_vs_exit_pct = None
         if (
-            (probe_intent or machine_pass_submit_candidate)
-            and recent_exit_policy == "fresh_post_exit_confirmation_required"
-        ):
+            probe_intent or machine_pass_submit_candidate
+        ) and recent_exit_policy == "fresh_post_exit_confirmation_required":
             try:
                 exit_price = float(recent_exit_context.get("exit_price") or 0.0)
                 current_price = float(
@@ -2675,7 +2689,7 @@ class GPTSniperEngine:
             DECISION_QUALITY_V2_14_2_BALANCED_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
             DECISION_QUALITY_V2_15_1_TIMING_AWARE_BOUNDED_RECOVERY_PROMPT_VERSION,
             DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION,
-            ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
+            *MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS,
         }:
             return self._normalize_entry_setup_v2_14_result(
                 result,
@@ -4467,9 +4481,11 @@ class GPTSniperEngine:
                     or ""
                 ).strip()
                 safe_prompt = (
-                    machine_auxiliary_compact_entry_system_prompt("entry")
+                    machine_auxiliary_compact_entry_system_prompt(
+                        "entry", prompt_version=selected_setup_prompt
+                    )
                     if selected_setup_prompt
-                    == ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION
+                    in MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS
                     else (
                         decision_quality_v2_15_bounded_recovery_system_prompt("entry")
                         if selected_setup_prompt
@@ -4495,7 +4511,7 @@ class GPTSniperEngine:
             metadata.get("entry_ai_role")
             == "auxiliary_risk_screen_pass_veto_no_promotion"
             and metadata.get("entry_setup_live_policy_selected_prompt_version")
-            != ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION
+            not in MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS
         ):
             from src.engine.scalping.mechanistic_entry_runtime_policy import AI_ADDENDUM
 
@@ -8577,7 +8593,7 @@ class GPTSniperEngine:
                     DECISION_QUALITY_V2_14_2_BALANCED_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
                     DECISION_QUALITY_V2_15_1_TIMING_AWARE_BOUNDED_RECOVERY_PROMPT_VERSION,
                     DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION,
-                    ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
+                    *MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS,
                 }
                 and prompt_type == "scalping_entry"
                 and normalized_profile == "watching"
@@ -8596,22 +8612,23 @@ class GPTSniperEngine:
                     DECISION_QUALITY_V2_14_2_BALANCED_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
                     DECISION_QUALITY_V2_15_1_TIMING_AWARE_BOUNDED_RECOVERY_PROMPT_VERSION,
                     DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION,
-                    ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
+                    *MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS,
                 }
                 and decision_quality_v2_7_selected
                 and entry_setup_live_policy.get("enabled") is True
             )
             entry_setup_live_input_schema = (
                 (
-                    "entry_machine_auxiliary_compact_v1_live_input"
-                    if prompt_version
-                    == ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION
-                    else "entry_setup_v2_15_2_live_input"
-                    if prompt_version
-                    == DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION
-                    else "entry_setup_v2_14_2_live_input"
+                    f"{prompt_version}_live_input"
+                    if prompt_version in MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS
+                    else (
+                        "entry_setup_v2_15_2_live_input"
+                        if prompt_version
+                        == DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION
+                        else "entry_setup_v2_14_2_live_input"
+                    )
                 )
-                if prompt_version in BALANCED_ENTRY_PROMPT_VERSIONS
+                if prompt_version in AUXILIARY_ENTRY_RISK_PROMPT_VERSIONS
                 else (
                     "entry_setup_v2_15_1_live_input"
                     if prompt_version
@@ -9300,7 +9317,7 @@ class GPTSniperEngine:
                                         DECISION_QUALITY_V2_14_2_BALANCED_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
                                         DECISION_QUALITY_V2_15_1_TIMING_AWARE_BOUNDED_RECOVERY_PROMPT_VERSION,
                                         DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION,
-                                        ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
+                                        *MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS,
                                     },
                                 )
                             )
@@ -9311,9 +9328,13 @@ class GPTSniperEngine:
                                 decision_quality_input[
                                     "mechanistic_entry_assessment"
                                 ] = machine_first_context["assessment"]
-                                decision_quality_input[
-                                    "mechanistic_flow_observation"
-                                ] = machine_first_context["flow_observation"]
+                                if (
+                                    prompt_version
+                                    not in MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS
+                                ):
+                                    decision_quality_input[
+                                        "mechanistic_flow_observation"
+                                    ] = machine_first_context["flow_observation"]
                                 decision_quality_input["machine_bundle_sha256"] = (
                                     machine_first_context["bundle_sha256"]
                                 )
@@ -9339,9 +9360,13 @@ class GPTSniperEngine:
                                 decision_quality_input[
                                     "mechanistic_entry_assessment"
                                 ] = machine_first_context["assessment"]
-                                decision_quality_input[
-                                    "mechanistic_flow_observation"
-                                ] = machine_first_context["flow_observation"]
+                                if (
+                                    prompt_version
+                                    not in MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS
+                                ):
+                                    decision_quality_input[
+                                        "mechanistic_flow_observation"
+                                    ] = machine_first_context["flow_observation"]
                                 decision_quality_input["machine_bundle_sha256"] = (
                                     machine_first_context["bundle_sha256"]
                                 )
@@ -9928,9 +9953,7 @@ class GPTSniperEngine:
                                 "existing_scanner_loop_observation_only"
                             ),
                             "entry_recheck_intent": True,
-                            "entry_recheck_reasons": [
-                                "AI_SCREEN_UNAVAILABLE_RECHECK"
-                            ],
+                            "entry_recheck_reasons": ["AI_SCREEN_UNAVAILABLE_RECHECK"],
                             "entry_recheck_intent_status": (
                                 "eligible_next_scanner_loop_recheck"
                             ),

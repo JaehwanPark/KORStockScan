@@ -659,7 +659,14 @@ DECISION_QUALITY_V2_14_4_COUNTERWEIGHT_BOUND_COMPARATIVE_PROMPT_VERSION = (
 DECISION_QUALITY_V2_15_4_COUNTERWEIGHT_BOUND_BOUNDED_RECOVERY_PROMPT_VERSION = (
     "decision_quality_v2_15_4_counterweight_bound_bounded_recovery"
 )
-ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION = "entry_machine_auxiliary_compact_v1"
+ENTRY_MACHINE_AUXILIARY_COMPACT_V1_PROMPT_VERSION = "entry_machine_auxiliary_compact_v1"
+ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION = "entry_machine_auxiliary_compact_v2"
+ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION = (
+    "entry_machine_auxiliary_compact_opportunity_v1"
+)
+ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION = (
+    "entry_machine_auxiliary_compact_risk_v1"
+)
 BALANCED_ENTRY_PROMPT_VERSIONS = frozenset(
     {
         DECISION_QUALITY_V2_14_2_BALANCED_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
@@ -667,11 +674,15 @@ BALANCED_ENTRY_PROMPT_VERSIONS = frozenset(
     }
 )
 MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS = frozenset(
-    {ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION}
+    {
+        ENTRY_MACHINE_AUXILIARY_COMPACT_V1_PROMPT_VERSION,
+        ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
+        ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION,
+        ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION,
+    }
 )
 AUXILIARY_ENTRY_RISK_PROMPT_VERSIONS = (
-    BALANCED_ENTRY_PROMPT_VERSIONS
-    | MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS
+    BALANCED_ENTRY_PROMPT_VERSIONS | MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS
 )
 COMPARATIVE_ENTRY_PROMPT_VERSIONS = frozenset(
     {
@@ -2096,7 +2107,7 @@ def decision_quality_balanced_entry_system_prompt(
     )
 
 
-_MACHINE_AUXILIARY_COMPACT_ENTRY_RULES = """
+_MACHINE_AUXILIARY_COMPACT_V1_ENTRY_RULES = """
 Machine auxiliary entry risk-screen contract:
 1. The deterministic machine owns symbol selection, timing, thresholds and its
    ENTER_NOW decision. You are a binding PASS/VETO risk screen only for that
@@ -2130,12 +2141,72 @@ Machine auxiliary entry risk-screen contract:
 """.strip()
 
 
-def machine_auxiliary_compact_entry_system_prompt(stage: str) -> str:
-    """Return the immutable machine-first auxiliary risk-screen prompt."""
+_MACHINE_AUXILIARY_COMPACT_ENTRY_RULES = """
+Machine auxiliary entry risk-screen contract:
+1. The deterministic machine already selected this exact ENTER_NOW point and
+   owns symbol, timing, thresholds, price and quantity. You only PASS or VETO
+   its current risk. Never create an entry, promote machine RECHECK/BLOCK, or
+   alter provider, route, safety, account, broker or order rules.
+2. Preserve frequent small cost-adjusted profits while rejecting a material
+   risk proven by current facts. Do not optimize a PASS quota, gross return,
+   perfect certainty or permanent abstention. A bounded risk alone is not VETO.
+3. Use only mechanistic_entry_assessment and entry_setup_evidence_v1. Copy fact
+   IDs and risk codes exactly. Missing optional context is neutral. Missing or
+   invalid required source is INSUFFICIENT with SOURCE_QUALITY_GAP. Never invent
+   facts, costs, prices, confirmation requirements or future outcomes.
+4. PASS requires risk_codes=["NO_BLOCKING_RISK"], at least one setup-support
+   fact and one trigger-support fact. Cite current support that compensates
+   every bound adverse fact. A validated hierarchy trigger may resolve legacy
+   WAIT_CONFIRMATION only when its supplied trigger and micro facts are valid.
+5. VETO requires a matching current adverse fact and risk code. Use
+   LIQUIDITY_FRAGILE, ADVERSE_TAPE or REWARD_RISK_WEAK only when that current
+   evidence still materially outweighs cited support. CAUTION means the
+   existing bounded recheck; it does not authorize exposure.
+6. Return JSON only with schema=entry_setup_risk_adjudication_v1,
+   risk_verdict=PASS|VETO|CAUTION|INSUFFICIENT, risk_codes,
+   supporting_fact_ids, contradicting_fact_ids and confidence 0..100. PASS only
+   forwards the point to existing final guards; VETO blocks only this point.
+""".strip()
+
+
+_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_SUFFIX = """
+Calibration emphasis: when current setup and trigger facts compensate every
+bounded adverse fact, PASS. Do not turn a residual warning, optional-source
+absence or desire for one more confirmation into VETO.
+""".strip()
+
+
+_MACHINE_AUXILIARY_COMPACT_RISK_SUFFIX = """
+Calibration emphasis: PASS only when current setup and trigger facts directly
+compensate every bound adverse fact. If a matched material risk still outweighs
+that support, VETO this point and cite the exact adverse binding.
+""".strip()
+
+
+def machine_auxiliary_compact_entry_system_prompt(
+    stage: str, *, prompt_version: str = ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION
+) -> str:
+    """Return a versioned machine-first auxiliary risk-screen prompt."""
 
     if str(stage or "").strip().lower() != "entry":
         raise ValueError("machine auxiliary compact prompt supports entry only")
-    return _MACHINE_AUXILIARY_COMPACT_ENTRY_RULES
+    if prompt_version == ENTRY_MACHINE_AUXILIARY_COMPACT_V1_PROMPT_VERSION:
+        return _MACHINE_AUXILIARY_COMPACT_V1_ENTRY_RULES
+    if prompt_version == ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION:
+        return _MACHINE_AUXILIARY_COMPACT_ENTRY_RULES
+    if prompt_version == ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION:
+        return (
+            _MACHINE_AUXILIARY_COMPACT_ENTRY_RULES
+            + "\n\n"
+            + _MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_SUFFIX
+        )
+    if prompt_version == ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION:
+        return (
+            _MACHINE_AUXILIARY_COMPACT_ENTRY_RULES
+            + "\n\n"
+            + _MACHINE_AUXILIARY_COMPACT_RISK_SUFFIX
+        )
+    raise ValueError("unsupported machine auxiliary compact prompt version")
 
 
 _DECISION_QUALITY_COMPARATIVE_ENTRY_RULES = """

@@ -79,6 +79,81 @@ def test_frozen_legacy_prompt_bundle_remains_readable(tmp_path):
     assert "Historical policy context" in loaded["ai_policy"]["system_prompt"]
 
 
+def test_frozen_compact_v1_bundle_remains_readable(tmp_path):
+    bundle = initial(tmp_path)
+    bundle["ai_policy"].update(
+        prompt_version=policy.LEGACY_COMPACT_AI_VERSION,
+        variant=policy.LEGACY_COMPACT_AI_VARIANT,
+        system_prompt=policy.compact_auxiliary_prompt(
+            prompt_version=policy.LEGACY_COMPACT_AI_VERSION
+        ),
+    )
+    bundle["ai_policy"]["system_prompt_sha256"] = policy.digest(
+        bundle["ai_policy"]["system_prompt"]
+    )
+    bundle["bundle_sha256"] = policy.digest(
+        {key: value for key, value in bundle.items() if key != "bundle_sha256"}
+    )
+    calibration._atomic_write_json(
+        policy.root(tmp_path) / "policy_2026-09-14.json", bundle
+    )
+
+    loaded = policy.load(data_root=tmp_path, target_date="2026-09-14")
+
+    assert loaded["ai_policy"]["prompt_version"] == policy.LEGACY_COMPACT_AI_VERSION
+
+
+def test_postclose_automatically_selects_bounded_compact_successor(tmp_path):
+    previous = initial(tmp_path)
+    path = source(tmp_path, "2026-09-14")
+    report = json.loads(path.read_text())
+    report["hierarchical_entry_quality"] = {
+        "machine_decision_case_table": {
+            "compact_auxiliary_screen_outcomes": {
+                "screened_enter_now_count": 20,
+                "missed_veto_count": 4,
+                "dangerous_pass_count": 1,
+                "semantic_unclassified_count": 0,
+                "automatic_successor_selection": {
+                    "recommendation_id": (
+                        "compact_auxiliary_prompt_automatic_successor_v1"
+                    ),
+                    "eligible": True,
+                    "runtime_effect": True,
+                    "allowed_runtime_apply": True,
+                    "selection_contract": (
+                        "bounded_registered_variant_exact_incumbent_only_no_freeform_edit"
+                    ),
+                    "incumbent_prompt_version": policy.AI_VERSION,
+                    "selected_prompt_version": (
+                        policy.ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION
+                    ),
+                    "minimum_directional_count_delta": 2,
+                },
+            }
+        }
+    }
+    report.pop("artifact_content_sha256")
+    calibration._atomic_write_json(
+        path, calibration._with_artifact_content_sha256(report)
+    )
+
+    successor = policy.publish(
+        path,
+        data_root=tmp_path,
+        now=datetime(2026, 9, 14, 21, tzinfo=policy.KST),
+    )
+
+    assert successor["previous_bundle_sha256"] == previous["bundle_sha256"]
+    assert successor["ai_policy"]["prompt_version"] == (
+        policy.ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION
+    )
+    assert successor["ai_policy"]["variant"] == policy.compact_prompt_variant(
+        successor["ai_policy"]["prompt_version"]
+    )
+    assert "Calibration emphasis" in successor["ai_policy"]["system_prompt"]
+
+
 def test_next_preopen_publish_replaces_legacy_prompt_without_threshold_change(tmp_path):
     legacy = initial(tmp_path)
     legacy["ai_policy"].update(
@@ -378,9 +453,7 @@ def test_existing_calibration_write_publishes_updated_bundle(
         == 0
     )
     output = json.loads(capsys.readouterr().out)
-    assert output["runtime_policy_publication"]["status"] == (
-        "published_or_idempotent"
-    )
+    assert output["runtime_policy_publication"]["status"] == ("published_or_idempotent")
     assert output["runtime_policy_publication"]["target_date"] == "2026-09-14"
     updated = policy.load(data_root=tmp_path, target_date="2026-09-14")
     assert (

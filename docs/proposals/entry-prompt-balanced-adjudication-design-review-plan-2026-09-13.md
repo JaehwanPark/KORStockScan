@@ -1300,7 +1300,7 @@ valid_screen = economic_eligible + pending_maturity + excluded_outcome_or_cost
 
 후속 구현이 지시되면 검증된 compact를 기존 승인 scope에 직접 전환하는 release를 준비한다. 실제 배포·기동은 그 실행의 명시 권한과 운영계약을 확인한 뒤 수행한다. 이번 계획 요청만으로 실행하지 않는다. 검증/권한이 닫힌 뒤에도 대조군 수집을 이유로 추가 canary·다음 PREOPEN 대기를 발명하지 않는다. 다만 실제 loader가 기동 시에만 정책을 읽는다면 파일 수정/타이머 start를 적용으로 주장하지 않고 승인된 전환·기동 경계를 따른다.
 
-전환 이후 일별 승계는 **기존 publisher→exact-date PREOPEN/dated loader**를 재사용한다. 기계 threshold/hierarchy의 기존 경제성·승격 gate는 이번 prompt 전환과 별개로 유지한다. #78에 compact-compatible 신규 후보가 없어도 유효 compact incumbent가 계속 전달되어야 하며, 미지원 candidate로 nightly rollback하거나 무표본 때문에 전체형을 재활성화하지 않는다. 새 compact 문구의 추가 변경은 기존 review/권한 계약을 따르며 R3 report 자체가 자동 live 편집 권한이 되지 않는다.
+전환 이후 일별 승계는 **기존 publisher→exact-date PREOPEN/dated loader**를 재사용한다. 기계 threshold/hierarchy의 기존 경제성·승격 gate는 이번 prompt 전환과 별개로 유지한다. #78에 compact-compatible 신규 후보가 없어도 유효 compact incumbent가 계속 전달되어야 하며, 미지원 candidate로 nightly rollback하거나 무표본 때문에 전체형을 재활성화하지 않는다. 9/14 후속 사용자 권한에 따라 #82는 exact compact version의 source-quality 유효 ENTER 20건, semantic 미분류 0건과 missed-VETO/dangerous-PASS 차이 `max(2, 분모의 10%)`를 충족할 때만 사전 등록된 opportunity-preserving/risk-specific variant를 자동 선정한다. publisher는 incumbent/version/count 보존식을 재검증해 다음 거래일 bundle에 적용한다. 자유형 prompt 생성과 registry 밖 변경은 자동권한이 아니다.
 
 rollback은 배포/정책/validator 불일치·출력계약 장애·기존 safety 사고 대응 계약에 따라 **검증된 이전 release+policy 묶음**으로 수행한다. old generation을 compact로 표기하거나 reader 내부 silent fallback으로 우회하지 않는다. 무표본·하루 낮은 수익만으로 자동 전체형 복귀를 만들지 않는다. 경제성은 미관측으로 남길 수 있지만 필수 입력/권한 오류는 미관측으로 숨길 수 없다.
 
@@ -1476,12 +1476,12 @@ terminal detailed compact evaluation
 | #11/#74 | pipeline과 기존 AI raw archives의 generation/hash, exclusion, compact role/schema를 감사 | active writer는 waiting, final stable generation과 #76 digest 일치; 식별 결손 row만 격리 |
 | #76 | machine evaluation·AI screen·provider attempt를 별도 manifest/digest로 materialize | action/reason/policy/micro/prompt parent 결속, non-entry no-provider 정상, ENTER screen gap 명시 |
 | #77 | `evaluation_mode=single_contract_auxiliary`; compact 단일계약 R0–R3 | A0/A1 호출·가짜 pair 없음, valid/empty/gap/error terminal, old AI-only generation 격리 |
-| #82 | exact cost/outcome를 join하고 AI 품질과 machine challenger를 별도 section으로 산출 | semantic/error/경제성 null 분리, case full digest와 scope 보존식, 기계/AI 분모 불혼합 |
-| #78 | compact를 prompt incumbent로 직접 carry하고 machine challenger만 기존 경제 gate로 선택 | prompt migration을 `paired_improvement_pass`로 표시하지 않음; legacy prompt 자동 선택 차단 |
+| #82 | exact cost/outcome를 join하고 AI 품질과 machine challenger를 별도 section으로 산출; exact compact version의 missed-VETO/dangerous-PASS 차이로 bounded registry successor를 자동 선정 | semantic/error/경제성 null 분리, case full digest와 scope 보존식, 기계/AI·legacy/current-version 분모 불혼합, 20건·미분류0·`max(2,10%)` gate |
+| #78 | compact incumbent 또는 #82가 선정한 registered successor를 frozen binding하고 machine challenger는 기존 경제 gate로 선택 | prompt migration을 `paired_improvement_pass`로 표시하지 않음; legacy prompt 자동 선택·자유형 live 편집 차단 |
 | 21:05/#80 | single-contract terminal·same-generation hash·provider0 metadata rebind 확인 | nonexistent control 요구 없음, old terminal 재라벨링 없음, holding/#79 독립 closure |
 | verifier/tower/checklist | compact generation과 machine candidate/carry disposition을 전달 | source/hash/보존식·필수 terminal 오류는 차단, 대조군 미실시 자체는 PASS 가능한 N/A |
 
-machine policy 발행 disposition은 `bounded_challenger`, `incumbent_carry_sample_or_no_edge`, `scope_partial_replace_with_other_scope_carry`, `incumbent_carry_source_or_cost_gap`, `fail_closed_invalid_incumbent`로 명시한다. valid incumbent인데 challenger/child가 없다는 이유로 파일을 누락하지 않는다. prompt disposition은 별도로 `compact_contract_migration|compact_incumbent_carry|fail_closed_compact_contract_invalid`만 사용한다.
+machine policy 발행 disposition은 `bounded_challenger`, `incumbent_carry_sample_or_no_edge`, `scope_partial_replace_with_other_scope_carry`, `incumbent_carry_source_or_cost_gap`, `fail_closed_invalid_incumbent`로 명시한다. valid incumbent인데 challenger/child가 없다는 이유로 파일을 누락하지 않는다. prompt disposition은 별도로 `compact_contract_migration|compact_incumbent_carry|compact_registered_successor_auto_selected|fail_closed_compact_contract_invalid`를 사용한다.
 
 ### 22.19 P9 — 다음 PREOPEN·PID 수용
 

@@ -268,22 +268,38 @@ def _machine_ai_natural_source_consumption(
         provider_linkage[key]
         for key in ("request_missing", "prompt_missing", "outcome_missing")
     )
-    # A compact policy is immutable by design.  Do not let a legacy source-day
-    # silently tune or rewrite it: only a naturally consumed compact trace
-    # with the issued system-prompt digest is eligible for compact-performance
-    # measurement.  Machine threshold learning keeps its independent existing
-    # cost/holdout contract.
+    # Compact variants are immutable registry entries. Only one naturally
+    # consumed exact version with its issued prompt receipt may feed the
+    # bounded automatic successor selector; legacy or mixed generations never
+    # tune the active compact denominator.
+    from src.engine.ai_prompt_contracts import (
+        MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS,
+    )
     from src.engine.scalping.mechanistic_entry_runtime_policy import (
-        AI_VARIANT,
         AI_VERSION,
         compact_auxiliary_prompt,
+        compact_prompt_variant,
         digest as policy_digest,
     )
 
-    compact_system_prompt_sha256 = policy_digest(compact_auxiliary_prompt())
     compact_traces = [
-        trace for trace in traces if trace.get("prompt_version") == AI_VERSION
+        trace
+        for trace in traces
+        if trace.get("prompt_version")
+        in MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS
     ]
+    observed_compact_versions = sorted(
+        {str(trace.get("prompt_version")) for trace in compact_traces}
+    )
+    measured_compact_version = (
+        observed_compact_versions[0]
+        if len(observed_compact_versions) == 1
+        else AI_VERSION
+    )
+    compact_system_prompt_sha256 = policy_digest(
+        compact_auxiliary_prompt(prompt_version=measured_compact_version)
+    )
+    expected_compact_variant = compact_prompt_variant(measured_compact_version)
     compact_provider_traces = [
         trace for trace in compact_traces if trace.get("provider_called") is True
     ]
@@ -293,8 +309,9 @@ def _machine_ai_natural_source_consumption(
         variant = str(trace.get("entry_ai_prompt_variant") or "")
         compact_prompt_receipts[
             (
-                "verified_static_prompt"
-                if prompt_hash == compact_system_prompt_sha256 and variant == AI_VARIANT
+                "verified_versioned_prompt"
+                if prompt_hash == compact_system_prompt_sha256
+                and variant == expected_compact_variant
                 else (
                     "missing_prompt_receipt"
                     if not prompt_hash or not variant
@@ -305,9 +322,13 @@ def _machine_ai_natural_source_consumption(
     # A legacy-only source date is not evidence about the compact policy.
     # Do not let its otherwise clean receipt authorize a compact-performance
     # interpretation before a compact trace has actually been observed.
-    compact_measurement_allowed = bool(compact_traces) and not bool(
-        compact_prompt_receipts["missing_prompt_receipt"]
-        or compact_prompt_receipts["prompt_or_variant_mismatch"]
+    compact_measurement_allowed = (
+        len(observed_compact_versions) == 1
+        and bool(compact_traces)
+        and not bool(
+            compact_prompt_receipts["missing_prompt_receipt"]
+            or compact_prompt_receipts["prompt_or_variant_mismatch"]
+        )
     )
     status = (
         "source_generation_changed"
@@ -365,8 +386,9 @@ def _machine_ai_natural_source_consumption(
             "denominator_note": "entry_screen_traces_with_provider_called_true_only",
         },
         "compact_auxiliary_policy_measurement": {
-            "prompt_version": AI_VERSION,
-            "variant": AI_VARIANT,
+            "prompt_version": measured_compact_version,
+            "variant": expected_compact_variant,
+            "observed_prompt_versions": observed_compact_versions,
             "issued_system_prompt_sha256": compact_system_prompt_sha256,
             "natural_trace_count": len(compact_traces),
             "provider_called_count": len(compact_provider_traces),
@@ -379,13 +401,17 @@ def _machine_ai_natural_source_consumption(
                 "not_observed_on_source_date"
                 if not compact_traces
                 else (
-                    "prompt_receipt_gap"
-                    if not compact_measurement_allowed
-                    else "measurable_natural_compact_population"
+                    "mixed_compact_generations"
+                    if len(observed_compact_versions) > 1
+                    else (
+                        "prompt_receipt_gap"
+                        if not compact_measurement_allowed
+                        else "measurable_natural_compact_population"
+                    )
                 )
             ),
             "measurement_allowed": compact_measurement_allowed,
-            "prompt_body_tuning": "forbidden_static_contract",
+            "prompt_body_tuning": ("bounded_automatic_versioned_successor_enabled"),
             "threshold_tuning_owner": "existing_mechanistic_threshold_cost_holdout_gate",
             "runtime_effect": False,
             "allowed_runtime_apply": False,

@@ -749,13 +749,100 @@ def test_machine_decision_case_table_separates_missed_and_bad_entry_timing():
     assert report["compact_auxiliary_screen_outcomes"]["screened_enter_now_count"] == 0
     assert (
         report["compact_auxiliary_screen_outcomes"]["prompt_body_tuning"]
-        == "forbidden_static_contract"
+        == "bounded_automatic_versioned_successor_enabled"
+    )
+    assert (
+        report["compact_auxiliary_screen_outcomes"]["automatic_successor_selection"][
+            "eligible"
+        ]
+        is False
     )
     assert report["observed_selected_child_rule_ids"] == ["flow-rule-1"]
     assert report["legacy_60_second_same_action_collapse_disabled"] is True
     assert report["conflicting_attempt_identity_count"] == 0
     assert report["policy_learning_eligible_observation_count"] == 4
     assert report["machine_ai_populations_are_separate"] is True
+
+
+def test_machine_case_table_automatically_selects_bounded_compact_variant():
+    from src.engine.ai_prompt_contracts import (
+        ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION,
+    )
+    from src.engine.scalping.mechanistic_entry_runtime_policy import AI_VERSION
+
+    rows = []
+    for index in range(20):
+        verdict = "VETO" if index < 4 else "PASS"
+        label = "CLEAN_FAST_PROFIT" if index != 4 else "CLEAN_FAST_LOSS_OR_ADVERSE"
+        rows.append(
+            {
+                "decision_trace_id": f"trace-{index}",
+                "evaluation_attempt_id": f"attempt-{index}",
+                "decision_snapshot_id": f"snapshot-{index}",
+                "decision_ts": f"2026-09-14T12:00:{index:02d}+09:00",
+                "source_date": "2026-09-14",
+                "stock_code": f"{index:06d}",
+                "effective_venue": "KRX",
+                "session_bucket": "KRX_REGULAR",
+                "bundle_sha256": "a" * 64,
+                "machine_action": "ENTER_NOW",
+                "machine_reason": "fixture",
+                "machine_hierarchy_selection": {"level": "common"},
+                "entry_quality_path": {
+                    "status": "evaluable",
+                    "entry_quality_label": label,
+                },
+                "ai_and_final_guard": {
+                    "provider_called": True,
+                    "prompt_version": AI_VERSION,
+                    "ai_risk_verdict": verdict,
+                    "decision_quality_contract_status": "pass",
+                    "semantic_validation_status": "pass",
+                },
+            }
+        )
+
+    report = calibration.build_machine_decision_case_table(
+        rows,
+        capture_census={"captured": 20, "evaluable": 20},
+        source_receipt={
+            "tuning_input_allowed": True,
+            "compact_auxiliary_policy_measurement": {
+                "prompt_version": AI_VERSION,
+                "measurement_allowed": True,
+            },
+        },
+    )
+
+    selection = report["compact_auxiliary_screen_outcomes"][
+        "automatic_successor_selection"
+    ]
+    assert selection["eligible"] is True
+    assert selection["minimum_directional_count_delta"] == 2
+    assert selection["selected_prompt_version"] == (
+        ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION
+    )
+    assert selection["allowed_runtime_apply"] is True
+
+    rows[0]["ai_and_final_guard"][
+        "decision_quality_contract_status"
+    ] = "semantic_rejected"
+    blocked = calibration.build_machine_decision_case_table(
+        rows,
+        capture_census={"captured": 20, "evaluable": 20},
+        source_receipt={
+            "tuning_input_allowed": True,
+            "compact_auxiliary_policy_measurement": {
+                "prompt_version": AI_VERSION,
+                "measurement_allowed": True,
+            },
+        },
+    )["compact_auxiliary_screen_outcomes"]
+    assert blocked["semantic_unclassified_count"] == 1
+    assert blocked["automatic_successor_selection"]["eligible"] is False
+    assert blocked["automatic_successor_selection"]["selected_prompt_version"] == (
+        AI_VERSION
+    )
 
 
 def test_machine_case_table_preserves_distinct_snapshots_inside_sixty_seconds():
