@@ -3769,6 +3769,31 @@ def test_build_ai_ops_log_fields_preserves_machine_primary_provenance():
     assert fields["evaluation_attempt_identity_source"] == "exact_snapshot_id"
 
 
+def test_pre_submit_lineage_preserves_machine_primary_identity_without_authority():
+    fields = handlers._pre_submit_parent_ai_lineage_fields(
+        {
+            "last_watching_ai_confirmed_at": 100.0,
+            "last_watching_ai_decision_trace_id": "trace-1",
+            "last_watching_ai_attempt_decision_trace_id": "trace-1",
+            "last_watching_ai_attempt_trusted": True,
+            "last_watching_ai_result_source": "live",
+            "last_watching_ai_machine_primary_fields": {
+                "entry_primary_decision_owner": "mechanistic_entry_adjudicator",
+                "entry_mechanistic_action": "ENTER_NOW",
+                "entry_ai_screen_status": "pass",
+                "evaluation_attempt_id": "eval-1",
+            },
+        },
+        now_ts=101.0,
+    )
+
+    assert fields["entry_primary_decision_owner"] == "mechanistic_entry_adjudicator"
+    assert fields["entry_mechanistic_action"] == "ENTER_NOW"
+    assert fields["entry_ai_screen_status"] == "pass"
+    assert fields["evaluation_attempt_id"] == "eval-1"
+    assert fields["pre_submit_parent_ai_lineage_runtime_effect"] is False
+
+
 def test_holding_score_preflight_blocks_stale_tick_context():
     preflight = handlers._holding_score_source_quality_from_feature_packet(
         {

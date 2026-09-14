@@ -230,7 +230,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 
 - `buy_funnel_sentinel.py`에 `machine_primary_entry_funnel_v1`을 추가했다. producer-issued evaluation ID 기준으로 machine action → AI screen → pipeline submit → 성공 broker-response의 order identity를 분리한다. 이 receipt는 fill·terminal·비용 차감 손익으로 승격하지 않는다.
 - `ai_decision_trace.py`가 이미 정의한 exact snapshot/caller evaluation identity를 capture 결과에도 투영했고, `ai_engine_openai.py`는 그 source-only provenance를 최종 AI result에 보존한다.
-- `sniper_state_handlers.py`의 기존 AI event projection allowlist에 기계 owner/action/screen, evaluation identity와 capture receipt를 추가했다. 따라서 `ai_confirmed`가 #119 입력까지 필요한 scalar provenance를 전달한다. 주문·수량·threshold·provider·broker/safety guard는 변경하지 않았다.
+- `sniper_state_handlers.py`의 기존 AI event projection allowlist에 기계 owner/action/screen, evaluation identity와 capture receipt를 추가했다. 같은 제한된 provenance를 최신 AI state와 pre-submit lineage를 거쳐 `order_bundle_submitted`에도 투영하므로 #119가 exact evaluation 기준으로 submit 연결을 확인할 수 있다. 주문·수량·threshold·provider·broker/safety guard는 변경하지 않았다.
 - `entry_recheck_policy.py`는 machine-primary event만으로 legacy #23 WAIT-probe가 열리지 않게 한다. 별도로 입증된 legacy terminal candidate가 없는 machine-only scope는 `machine_primary_only_no_legacy_recheck_authority`이며 auto candidate를 발급하지 않는다.
 
 ### 검토 결과와 기대효과 경계
@@ -238,4 +238,4 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 - source-bound identity, machine owner 누락/충돌, RECHECK/BLOCK, AI VETO, transport/local non-evaluation, pipeline submit과 broker acceptance response·fill/손익의 분리를 반례로 고정했다. source/role 결손은 정상 분모가 아니라 `identity_or_contract_gap`으로 남는다.
 - 기대효과는 **기계 ENTER+AI PASS 이후 어느 guard/receipt에서 소실되는지 정확히 보이게 하는 것**이다. 이는 비용 차감 작은 수익의 빈도를 늘릴 후보를 찾는 전제이며, guard 완화나 재진입 증가 자체를 효과로 주장하지 않는다.
 - 기존 #23 3일 exact attribution·bounded cap·probe-first·PREOPEN validation은 그대로다. 이 신규 funnel에는 activation floor를 복사하지 않았고 `allowed_runtime_apply=false`다. 따라서 현행 자동화는 legacy 조건이 검증된 후보만 PREOPEN으로 전달하며 machine 진단은 자동 매매 정책 변경으로 오인되지 않는다.
-- targeted pytest 744개, Python compile, `git diff --check`를 통과했다. 코드 review/fix/re-review 범위의 unresolved finding은 0이다. 자연 이벤트가 새 PID/release에서 발생해 #119→#23→PREOPEN handoff를 닫는지와 동일 scope의 accepted submit·비용 차감 경제성은 별도 acceptance다.
+- targeted pytest 745개, Python compile, `git diff --check`를 통과했다. 코드 review/fix/re-review 범위의 unresolved finding은 0이다. 자연 이벤트가 새 PID/release에서 발생해 #119→#23→PREOPEN handoff를 닫는지와 동일 scope의 accepted submit·비용 차감 경제성은 별도 acceptance다.

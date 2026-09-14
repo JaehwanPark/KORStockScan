@@ -33139,6 +33139,9 @@ def _pre_submit_parent_ai_lineage_fields(
     lineage_result_source = source.get("last_watching_ai_result_source") or (
         "attempt_untrusted_or_not_available" if attempt_trace_id else "not_available"
     )
+    machine_primary_fields = _machine_primary_entry_provenance_fields(
+        source.get("last_watching_ai_machine_primary_fields")
+    )
     return {
         "pre_submit_parent_ai_decision_trace_id": trace_id or "-",
         "pre_submit_parent_ai_attempt_trace_id": attempt_trace_id or "-",
@@ -33159,7 +33162,40 @@ def _pre_submit_parent_ai_lineage_fields(
             "latest_watching_ai_to_budget_precheck_to_final_authority_revalidation"
         ),
         "pre_submit_parent_ai_lineage_runtime_effect": False,
+        **machine_primary_fields,
     }
+
+
+def _machine_primary_entry_provenance_fields(source: dict | None) -> dict:
+    """Keep an exact machine-primary decision attached to its AI result.
+
+    The fields are provenance only. They neither authorize an order nor alter
+    the pre-submit decision; preserving an incomplete role contract lets #119
+    exclude it explicitly instead of joining by symbol/time.
+    """
+    source = source if isinstance(source, dict) else {}
+    if not (
+        str(source.get("entry_primary_decision_owner") or "").strip()
+        or str(source.get("entry_mechanistic_action") or "").strip()
+    ):
+        return {}
+    keys = (
+        "entry_primary_decision_owner",
+        "entry_mechanistic_action",
+        "entry_mechanistic_policy_decision",
+        "entry_mechanistic_policy_version",
+        "entry_ai_role",
+        "entry_ai_screen_status",
+        "entry_ai_followup_disposition",
+        "entry_ai_followup_authority",
+        "entry_ai_screen_required",
+        "entry_ai_screen_pass",
+        "evaluation_attempt_id",
+        "evaluation_attempt_identity_source",
+        "machine_capture_status",
+        "machine_observation_sha256",
+    )
+    return {key: source[key] for key in keys if key in source}
 
 
 REAL_ENTRY_PANIC_GAP_WEIGHT_FAMILY = "real_entry_panic_gap_weight"
@@ -64091,6 +64127,11 @@ def _handle_watching_strategy_branch(
                                     "last_watching_ai_source_quality_fields": (
                                         ai_source_quality_fields
                                     ),
+                                    "last_watching_ai_machine_primary_fields": (
+                                        _machine_primary_entry_provenance_fields(
+                                            ai_decision
+                                        )
+                                    ),
                                     "last_watching_ai_probe_intent": probe_intent,
                                     "last_watching_ai_probe_intent_status": str(
                                         ai_decision.get("entry_probe_intent_status")
@@ -73297,6 +73338,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         **_without_entry_pipeline_fields(
             _merge_entry_pipeline_field_groups(
                 pre_ai_gate_submit_log_fields,
+                _pre_submit_parent_ai_lineage_fields(stock),
                 microstructure_submit_log_fields,
                 real_pre_submit_guard_fields,
                 submit_revalidation_fields,
@@ -75906,6 +75948,9 @@ def _record_scanner_entry_ai_attempt(
             "last_watching_ai_snapshot_id": snapshot_id,
             "last_watching_ai_decision_trace_id": decision_trace_id,
             "last_watching_ai_source_quality_fields": dict(source_quality_fields or {}),
+            "last_watching_ai_machine_primary_fields": (
+                _machine_primary_entry_provenance_fields(ai_decision)
+            ),
             "last_watching_ai_call_trigger_reason": trigger_reason,
             "last_watching_ai_probe_intent": probe_intent,
             "last_watching_ai_probe_intent_status": str(
