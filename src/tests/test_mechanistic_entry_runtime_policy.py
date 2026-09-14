@@ -140,7 +140,11 @@ def test_frozen_compact_citations_migrate_only_next_date(
     calibration._atomic_write_json(frozen_path, bundle)
     before = frozen_path.read_bytes()
     assert policy.load(data_root=tmp_path, target_date="2026-09-14") == bundle
-    successor = policy.publish(source(tmp_path, "2026-09-14"), data_root=tmp_path)
+    successor = policy.publish(
+        source(tmp_path, "2026-09-14"),
+        data_root=tmp_path,
+        now=datetime(2026, 9, 14, 22, tzinfo=policy.KST),
+    )
     assert successor["target_date"] == "2026-09-15"
     assert successor["ai_policy"]["prompt_version"] == policy.AI_VERSION
     assert successor["compact_prompt_disposition"] == "compact_contract_migration"

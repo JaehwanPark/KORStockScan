@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -73,6 +74,58 @@ def _policy() -> SignalPolicy:
         near_low_pct=0.5,
         reclaim_ticks=1,
         target_bps=50,
+    )
+
+
+def test_research_input_fingerprint_changes_only_with_material_input() -> None:
+    bars = list(_bars([(100, 101, 99, 100, 10)]))
+    sources = {
+        symbol: (
+            bars,
+            {"source_quality_status": "PASS", "source_content_sha256": "a" * 64},
+        )
+        for symbol in research.SYMBOLS
+    }
+    baseline = {"006800": {"policy_id": "incumbent", "policy_hash": "b" * 64}}
+
+    first = research.research_input_fingerprint(
+        sources=sources, end_date=date(2026, 8, 18), applied_baselines=baseline
+    )
+    second = research.research_input_fingerprint(
+        sources=sources, end_date=date(2026, 8, 18), applied_baselines=baseline
+    )
+    changed = research.research_input_fingerprint(
+        sources=sources,
+        end_date=date(2026, 8, 18),
+        applied_baselines={
+            "006800": {"policy_id": "successor", "policy_hash": "c" * 64}
+        },
+    )
+
+    assert first == second
+    assert first != changed
+
+
+def test_exact_date_report_reuse_requires_matching_fingerprint(tmp_path) -> None:
+    path = tmp_path / "report.json"
+    report = {
+        "schema": research.REPORT_SCHEMA,
+        "status": "complete",
+        "end_date": "2026-08-18",
+        "source_input_fingerprint": "a" * 64,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
+    path.write_text(json.dumps(report), encoding="utf-8")
+
+    assert research.reusable_report(
+        path, end_date=date(2026, 8, 18), fingerprint="a" * 64
+    ) == report
+    assert (
+        research.reusable_report(
+            path, end_date=date(2026, 8, 18), fingerprint="b" * 64
+        )
+        is None
     )
 
 

@@ -1005,9 +1005,9 @@ def test_machine_case_table_automatically_selects_bounded_compact_variant():
     rows[5]["entry_quality_path"]["exact_stop_distance_pct"] = -0.70
     assert selection["allowed_runtime_apply"] is True
 
-    rows[0]["ai_and_final_guard"]["decision_quality_contract_status"] = (
-        "semantic_rejected"
-    )
+    rows[0]["ai_and_final_guard"][
+        "decision_quality_contract_status"
+    ] = "semantic_rejected"
     blocked = calibration.build_machine_decision_case_table(
         rows,
         capture_census={"captured": 20, "evaluable": 20},
@@ -1425,9 +1425,9 @@ def test_hierarchy_fits_a_real_symbol_delta_instead_of_only_counting_symbols():
                 80 if i < 5 else (90 if i < 8 else 20)
             )
             if 5 <= i < 8:
-                row["entry_quality_path"]["entry_quality_label"] = (
-                    "PROFIT_AFTER_SIDEWAYS"
-                )
+                row["entry_quality_path"][
+                    "entry_quality_label"
+                ] = "PROFIT_AFTER_SIDEWAYS"
             rows.append(row)
     result = calibration.build_mechanistic_hierarchy_candidate(
         rows, target_date="2026-09-15"
@@ -1486,9 +1486,9 @@ def test_hierarchy_learns_micro_child_and_reports_same_population_four_arms():
             {k: v for k, v in context.items() if k != "context_sha256"}
         )
         if not good:
-            row["entry_quality_path"]["entry_quality_label"] = (
-                "CLEAN_FAST_LOSS_OR_ADVERSE"
-            )
+            row["entry_quality_path"][
+                "entry_quality_label"
+            ] = "CLEAN_FAST_LOSS_OR_ADVERSE"
             row["comparison"]["entry_path_first_hit"] = "adverse_first"
     result = calibration.build_mechanistic_hierarchy_candidate(
         rows, target_date="2026-09-15"
@@ -1939,6 +1939,60 @@ def test_flow_micro_audit_does_not_backfill_prefreeze_sidecars(
     assert audit["eligible_same_trace_join_count"] == 0
     assert audit["micro_threshold_fitted"] is False
     assert audit["enter_candidate_issued"] is False
+
+
+def test_flow_micro_identity_rejects_same_trace_cross_scope_collision() -> None:
+    flow = {
+        "stock_code": "005930",
+        "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "mechanistic_flow_observation": {"sequence_epoch": 101},
+    }
+    bridge = {
+        "tactical_micro_reversion_evidence_v1": {
+            "stock_code": "005930",
+            "trace_effective_venue": "KRX",
+            "trace_session_bucket": "krx_regular",
+            "sequence_epoch": 102,
+        },
+        "ask_depletion_sidecar": {
+            "context": {},
+            "horizons": [{"horizon_ms": 1000, "eligible_for_feature_ablation": True}],
+        },
+    }
+
+    assert calibration._flow_micro_identity_mismatch_reason(flow, bridge) == (
+        "same_trace_sequence_epoch_mismatch"
+    )
+    bridge["tactical_micro_reversion_evidence_v1"]["sequence_epoch"] = 101
+    assert calibration._flow_micro_identity_mismatch_reason(flow, bridge) is None
+
+
+def test_entry_cost_evidence_keeps_comparison_and_executable_layers_separate() -> None:
+    contract = {
+        "schema": "entry_round_trip_cost_v1",
+        "source_date": "2026-09-14",
+        "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "basis": "source_bound_estimate",
+        "source_sha256": "a" * 64,
+        "components_pct": {
+            "buy_fee": 0.015,
+            "sell_fee": 0.015,
+            "sell_tax": 0.2,
+            "slippage": 0.495,
+        },
+    }
+
+    evidence = calibration._entry_cost_evidence(contract, source_date="2026-09-14")
+
+    assert evidence["comparison_cost_pct"] == pytest.approx(0.23)
+    assert evidence["executable_estimated_cost_pct"] == pytest.approx(0.725)
+    assert evidence["broker_reconciled_cost_pct"] is None
+    assert evidence["cost_basis"] == "executable_estimated_cost_pct"
+    assert evidence["selected_cost_basis"] == "executable_estimated_cost_pct"
+    assert evidence["cost_components"] == contract["components_pct"]
+    assert evidence["missing_cost_imputed"] is False
 
 
 def test_hierarchical_entry_quality_uses_past_group_rows_only_and_blocks_without_actual_path(

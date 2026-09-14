@@ -101,11 +101,36 @@ def comparison_cost_contract(value: date | datetime | str) -> dict[str, Any]:
     if len(matches) != 1:
         raise ValueError("widget_comparison_cost_window_not_unique")
     selected = dict(matches[0])
+    components_pct = {
+        "buy_fee": (
+            None
+            if selected.get("buy_fee_bps") is None
+            else float(selected["buy_fee_bps"]) / 100.0
+        ),
+        "sell_fee": (
+            None
+            if selected.get("sell_fee_bps") is None
+            else float(selected["sell_fee_bps"]) / 100.0
+        ),
+        "sell_tax": (
+            None
+            if selected.get("statutory_sell_tax_bps") is None
+            else float(selected["statutory_sell_tax_bps"]) / 100.0
+        ),
+    }
     payload = {
         "schema": SCHEMA,
         "trade_date": target.isoformat(),
         **selected,
         "round_trip_cost_pct": round(float(selected["round_trip_cost_bps"]) / 100.0, 8),
+        "comparison_cost_pct": round(float(selected["round_trip_cost_bps"]) / 100.0, 8),
+        "executable_estimated_cost_pct": None,
+        "broker_reconciled_cost_pct": None,
+        "cost_basis": "comparison_cost_pct_only_not_economic",
+        "selected_cost_basis": "comparison_cost_pct_only_not_economic",
+        "cost_components": components_pct,
+        "cost_components_pct": components_pct,
+        "cost_source_sha256": _canonical_sha256(selected),
         "metric_contract": METRIC_CONTRACT,
         "runtime_effect": False,
         "trading_runtime_effect": False,
@@ -175,6 +200,16 @@ def modeled_execution_economics(
             else None
         ),
         "cost_basis": cost_basis,
+        "comparison_cost_pct": contract["comparison_cost_pct"],
+        "executable_estimated_cost_pct": None,
+        "broker_reconciled_cost_pct": None,
+        "selected_cost_basis": "comparison_cost_pct_only_not_economic",
+        "cost_components": {
+            "buy_fee_krw": None if buy_fee is None else round(buy_fee, 6),
+            "sell_fee_krw": None if sell_fee is None else round(sell_fee, 6),
+            "sell_tax_krw": None if sell_tax is None else round(sell_tax, 6),
+        },
+        "cost_source_sha256": contract["contract_sha256"],
         "broker_receipt_exact": False,
         "cost_contract": contract,
     }

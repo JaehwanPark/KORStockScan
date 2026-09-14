@@ -10,10 +10,10 @@ def test_static_parser_detects_repeated_ev_verifier_and_lifecycle_windows():
     report = mod.build_report("2026-06-02")
 
     producers = Counter(item["producer"] for item in report["step_inventory"])
-    # The wrapper keeps only the dependency-bearing pre-workorder,
-    # post-propagation, and final-consumer EV generations.
-    assert producers["src.engine.threshold_cycle_ev_report"] == 3
-    assert producers["src.engine.verify_threshold_cycle_postclose_chain"] == 3
+    # The wrapper keeps only the dependency-bearing core and post-propagation
+    # EV generations; final summary ownership belongs to finalization.
+    assert producers["src.engine.threshold_cycle_ev_report"] == 2
+    assert producers["src.engine.verify_threshold_cycle_postclose_chain"] == 2
     assert producers["src.engine.monitoring.quote_consistency_report"] == 0
     assert producers["src.engine.lifecycle_ai_context"] == 0
     assert producers["src.engine.lifecycle_decision_matrix"] == 0
@@ -73,7 +73,7 @@ def test_slimming_candidates_and_workorders_are_report_only():
         report["summary"]["true_duplicate_refresh_candidates"]
         == report["summary"]["duplicate_refresh_candidates"]
     )
-    assert report["summary"]["dependent_refresh_steps"] == 2
+    assert report["summary"]["dependent_refresh_steps"] == 1
     assert report["summary"]["mutually_exclusive_static_duplicates"] >= 1
     assert "deprecated_candidate" in report["summary"]["classification_group_counts"]
     assert report["protected_refreshes"]

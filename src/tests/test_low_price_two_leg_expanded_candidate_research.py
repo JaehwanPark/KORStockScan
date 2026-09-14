@@ -36,6 +36,61 @@ class FakeResponse:
         return {"return_code": 0, "stk_min_pole_chart_qry": self._rows}
 
 
+def test_expanded_research_fingerprint_is_stable_and_policy_sensitive() -> None:
+    profile_id, profile = next(iter(expanded.RESEARCH_PROFILES.items()))
+    bar = Bar(
+        datetime(2026, 9, 14, 9, 10, tzinfo=ZoneInfo("Asia/Seoul")),
+        1000,
+        1010,
+        990,
+        1005,
+    )
+    kwargs = {
+        "sources": {
+            profile.symbol: (
+                [bar],
+                {
+                    "source_quality_status": "PASS",
+                    "source_content_sha256": "a" * 64,
+                },
+            )
+        },
+        "target_date": date(2026, 9, 14),
+        "candidate_symbols": {profile.symbol: profile.name},
+        "research_profiles": {profile_id: profile},
+        "dynamic_universe_source_date": date(2026, 9, 14),
+        "applied_policy_snapshots": {profile_id: {"policy_hash": "b" * 64}},
+    }
+
+    first = expanded.research_input_fingerprint(**kwargs)
+    assert first == expanded.research_input_fingerprint(**kwargs)
+    kwargs["applied_policy_snapshots"] = {profile_id: {"policy_hash": "c" * 64}}
+    assert first != expanded.research_input_fingerprint(**kwargs)
+
+
+def test_exact_date_report_reuse_requires_matching_fingerprint(tmp_path) -> None:
+    path = tmp_path / "report.json"
+    report = {
+        "schema": expanded.REPORT_SCHEMA,
+        "target_date": "2026-09-14",
+        "status": "complete",
+        "source_input_fingerprint": "a" * 64,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
+    path.write_text(json.dumps(report), encoding="utf-8")
+
+    assert expanded.reusable_report(
+        path, target_date=date(2026, 9, 14), fingerprint="a" * 64
+    ) == report
+    assert (
+        expanded.reusable_report(
+            path, target_date=date(2026, 9, 14), fingerprint="b" * 64
+        )
+        is None
+    )
+
+
 def test_expanded_profiles_separate_new_symbols_and_inactive_existing_sessions():
     assert len(expanded.NEW_SYMBOL_PROFILES) == (
         len(expanded.CANDIDATE_SYMBOLS) * len(expanded.SESSION_WINDOWS)

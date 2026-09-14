@@ -19,6 +19,12 @@ def test_cost_policy_changes_on_effective_date_and_is_hash_bound() -> None:
     assert current["buy_fee_bps"] == 1.5
     assert current["sell_fee_bps"] == 1.5
     assert current["statutory_sell_tax_bps"] == 20.0
+    assert current["comparison_cost_pct"] == 0.23
+    assert current["cost_basis"] == "comparison_cost_pct_only_not_economic"
+    assert current["cost_components"] == current["cost_components_pct"]
+    assert current["executable_estimated_cost_pct"] is None
+    assert current["broker_reconciled_cost_pct"] is None
+    assert len(current["cost_source_sha256"]) == 64
     assert len(current["contract_sha256"]) == 64
     assert current["runtime_effect"] is False
 
@@ -39,6 +45,12 @@ def test_modeled_execution_cost_uses_buy_and_sell_notionals() -> None:
     assert economics["modeled_total_cost_krw"] == pytest.approx(1754.25)
     assert economics["modeled_net_profit_krw"] == pytest.approx(-12754.25)
     assert economics["broker_receipt_exact"] is False
+    assert economics["comparison_cost_pct"] == 0.23
+    assert economics["executable_estimated_cost_pct"] is None
+    assert economics["broker_reconciled_cost_pct"] is None
+    assert economics["selected_cost_basis"] == ("comparison_cost_pct_only_not_economic")
+    assert economics["cost_basis"] == "effective_dated_notional_component_model"
+    assert economics["cost_components"]
 
 
 def test_aware_datetime_is_resolved_to_kst_trade_date() -> None:

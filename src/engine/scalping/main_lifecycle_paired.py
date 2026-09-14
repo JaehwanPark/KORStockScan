@@ -3765,20 +3765,39 @@ class _LifecycleAccumulator:
             else:
                 actual_duration = duration
 
-        exact_entry_trace_ids = sorted(
-            {
-                str(trace_id)
-                for (
-                    trace_id,
-                    stage,
-                    _venue,
-                    _session_bucket,
-                    _venue_source,
-                    _session_source,
-                ) in self.decision_trace_context_counts
-                if str(stage).strip().lower() in {"entry", "entry_ai"}
-            }
+        trace_ids_by_stage: dict[str, set[str]] = {}
+        for (
+            trace_id,
+            stage,
+            _venue,
+            _session_bucket,
+            _venue_source,
+            _session_source,
+        ) in self.decision_trace_context_counts:
+            normalized_stage = str(stage).strip().lower()
+            trace_ids_by_stage.setdefault(normalized_stage, set()).add(str(trace_id))
+        entry_trace_ids = set().union(
+            *(
+                trace_ids_by_stage.get(stage, set())
+                for stage in ("entry", "entry_ai", "entry_decision")
+            )
         )
+        execution_bound_trace_ids = set().union(
+            *(trace_ids_by_stage.get(stage, set()) for stage in ("submit", "fill"))
+        )
+        execution_bound_entry_trace_ids = entry_trace_ids.intersection(
+            execution_bound_trace_ids
+        )
+        if len(execution_bound_entry_trace_ids) == 1:
+            exact_entry_trace_ids = sorted(execution_bound_entry_trace_ids)
+            entry_trace_selection_basis = "unique_entry_submit_fill_intersection"
+        else:
+            exact_entry_trace_ids = sorted(entry_trace_ids)
+            entry_trace_selection_basis = (
+                "unique_entry_decision_trace"
+                if len(exact_entry_trace_ids) == 1
+                else "entry_trace_ambiguous_or_missing"
+            )
         if self.first_fill_execution_at is None:
             actual_entry_quality_path = {
                 "schema": ACTUAL_ENTRY_QUALITY_PATH_SCHEMA,
@@ -3802,6 +3821,7 @@ class _LifecycleAccumulator:
                     if len(exact_entry_trace_ids) == 1
                     else None
                 ),
+                "decision_trace_selection_basis": entry_trace_selection_basis,
                 "first_fill_execution_at": self.first_fill_execution_at.isoformat(),
                 "final_exit_execution_at": (
                     self.final_exit_execution_at.isoformat()

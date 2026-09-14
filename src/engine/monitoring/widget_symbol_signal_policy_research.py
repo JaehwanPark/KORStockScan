@@ -11,6 +11,7 @@ or submits orders.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import tempfile
@@ -1402,6 +1403,12 @@ def build_report(
         "owner_contract": OWNER_CONTRACT,
         "official_reference": OFFICIAL_REFERENCE,
         "comparison_cost_contract": comparison_cost_contract(end_date),
+        "source_input_fingerprint": research_input_fingerprint(
+            sources=sources,
+            end_date=end_date,
+            applied_baselines=applied_baselines,
+        ),
+        "execution_mode": "full_recompute",
         "runtime_effect": False,
         "allowed_runtime_apply": False,
         "collector_created": False,
@@ -1410,6 +1417,61 @@ def build_report(
         "broker_order_forbidden": True,
     }
     return attach_recommendation_contract(report)
+
+
+def research_input_fingerprint(
+    *,
+    sources: dict[str, tuple[list[Bar], dict[str, Any]]],
+    end_date: date,
+    applied_baselines: dict[str, dict] | None,
+) -> str:
+    payload = {
+        "schema": "widget_symbol_signal_policy_research_input_v1",
+        "producer_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        "end_date": end_date.isoformat(),
+        "cost_contract": comparison_cost_contract(end_date),
+        "applied_baselines": applied_baselines or {},
+        "sources": {
+            symbol: {
+                "bars": [
+                    (
+                        bar.timestamp.isoformat(),
+                        bar.open_price,
+                        bar.high_price,
+                        bar.low_price,
+                        bar.close_price,
+                        bar.volume,
+                    )
+                    for bar in bars
+                ],
+                "source_quality_status": meta.get("source_quality_status"),
+                "source_content_sha256": meta.get("source_content_sha256"),
+                "excluded_dates": meta.get("excluded_dates") or [],
+            }
+            for symbol, (bars, meta) in sorted(sources.items())
+        },
+    }
+    encoded = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def reusable_report(path: Path, *, end_date: date, fingerprint: str) -> dict | None:
+    try:
+        report = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return None
+    if (
+        report.get("schema") != REPORT_SCHEMA
+        or report.get("status") != "complete"
+        or report.get("end_date") != end_date.isoformat()
+        or report.get("source_input_fingerprint") != fingerprint
+        or report.get("runtime_effect") is not False
+        or report.get("allowed_runtime_apply") is not False
+    ):
+        return None
+    return report
 
 
 def attach_recommendation_contract(report: dict[str, Any]) -> dict[str, Any]:
@@ -1543,7 +1605,47 @@ def main(argv: list[str] | None = None) -> int:
         )
         for symbol in SYMBOLS
     }
-    report = build_report(sources=sources, end_date=end_date)
+    from src.engine.monitoring.widget_symbol_runtime_policy import (
+        WidgetSymbolRuntimePolicyLoader,
+    )
+
+    applied_baselines = WidgetSymbolRuntimePolicyLoader().resolve_all(
+        observed_date=end_date
+    )
+    fingerprint = research_input_fingerprint(
+        sources=sources,
+        end_date=end_date,
+        applied_baselines=applied_baselines,
+    )
+    existing_path = (
+        args.output_dir
+        / f"widget_symbol_signal_policy_research_{end_date.isoformat()}.json"
+    )
+    reusable = reusable_report(
+        existing_path, end_date=end_date, fingerprint=fingerprint
+    )
+    if reusable is not None:
+        print(
+            json.dumps(
+                {
+                    "decision": reusable["decision"],
+                    "passed_symbols": reusable["passed_symbols"],
+                    "json_path": str(existing_path),
+                    "markdown_path": str(existing_path.with_suffix(".md")),
+                    "execution_mode": "exact_date_fingerprint_reuse",
+                    "source_input_fingerprint": fingerprint,
+                    "runtime_effect": False,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )
+        return 0
+    report = build_report(
+        sources=sources,
+        end_date=end_date,
+        applied_baselines=applied_baselines,
+    )
     paths = (
         write_report(report, output_dir=args.output_dir) if args.write else (None, None)
     )

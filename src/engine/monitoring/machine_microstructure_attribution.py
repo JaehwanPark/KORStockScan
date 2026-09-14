@@ -4723,17 +4723,25 @@ def _market_axis_context(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Preserve market-data scope without inferring a physical fill venue."""
 
     venue = str(payload.get("venue") or "").strip().upper()
-    session = str(
-        payload.get("market_session_regime")
-        or payload.get("session_bucket")
-        or "UNKNOWN"
-    ).strip().upper()
-    decision_scope = str(
-        payload.get("decision_market_scope")
-        or payload.get("effective_venue")
-        or venue
-        or "UNKNOWN"
-    ).strip().upper()
+    session = (
+        str(
+            payload.get("market_session_regime")
+            or payload.get("session_bucket")
+            or "UNKNOWN"
+        )
+        .strip()
+        .upper()
+    )
+    decision_scope = (
+        str(
+            payload.get("decision_market_scope")
+            or payload.get("effective_venue")
+            or venue
+            or "UNKNOWN"
+        )
+        .strip()
+        .upper()
+    )
     route = str(payload.get("market_data_route") or "").strip().lower()
     if route not in {"krx_only", "nxt_only", "krx_nxt_integrated"}:
         route = {
@@ -4742,9 +4750,9 @@ def _market_axis_context(payload: Mapping[str, Any]) -> dict[str, Any]:
             "SOR": "krx_nxt_integrated",
             "KRX_NXT_INTEGRATED": "krx_nxt_integrated",
         }.get(decision_scope, "unknown")
-    actual_venue = str(
-        payload.get("actual_execution_venue") or "UNKNOWN"
-    ).strip().upper()
+    actual_venue = (
+        str(payload.get("actual_execution_venue") or "UNKNOWN").strip().upper()
+    )
     if actual_venue not in {"KRX", "NXT"}:
         actual_venue = "UNKNOWN"
     dual_source_only = bool(
@@ -5323,9 +5331,7 @@ def _micro_context(
         item["actual_execution_venue_counts"][
             market_axes["actual_execution_venue"]
         ] += 1
-        item["dual_source_only_row_count"] += int(
-            market_axes["dual_source_only"]
-        )
+        item["dual_source_only_row_count"] += int(market_axes["dual_source_only"])
         if market_axes["dual_source_only"]:
             item["dual_actual_execution_venue_counts"][
                 market_axes["actual_execution_venue"]
@@ -9243,6 +9249,7 @@ def build_report(
             "trading_runtime_effect": False,
         }
     from src.engine.monitoring.entry_adverse_flow_summary import build_summary
+
     report["entry_adverse_flow"] = build_summary(
         target_date=target_date, report_root=report_root
     )
@@ -9279,14 +9286,16 @@ def render_markdown(report: dict[str, Any]) -> str:
     ]
     adverse = report.get("entry_adverse_flow")
     if isinstance(adverse, dict):
-        lines.extend([
-            "## Entry Adverse Flow Receipts",
-            "",
-            f"- Status: `{adverse.get('status')}`; counts: `{adverse.get('counts', {})}`.",
-            f"- Source SHA256: `{adverse.get('source_sha256')}`.",
-            "- Transport start is not broker acceptance or full fill. Economics remain null until exact lifecycle/cost reconciliation; no automatic live approval.",
-            "",
-        ])
+        lines.extend(
+            [
+                "## Entry Adverse Flow Receipts",
+                "",
+                f"- Status: `{adverse.get('status')}`; counts: `{adverse.get('counts', {})}`.",
+                f"- Source SHA256: `{adverse.get('source_sha256')}`.",
+                "- Transport start is not broker acceptance or full fill. Economics remain null until exact lifecycle/cost reconciliation; no automatic live approval.",
+                "",
+            ]
+        )
     objective = report.get("fast_lifecycle_objective_alignment")
     if isinstance(objective, dict):
         lifecycle = objective.get("lifecycle_coverage") or {}
@@ -9567,6 +9576,126 @@ def write_report(
     return json_path, markdown_path
 
 
+def _collect_generation_source_paths(value: Any) -> set[Path]:
+    """Return only producer-declared source paths from an attribution report."""
+
+    paths: set[Path] = set()
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            if key in {
+                "path",
+                "partition",
+                "source_exclusion_manifest_path",
+            } and isinstance(item, str):
+                paths.add(Path(item))
+            elif (
+                key == "paths"
+                and isinstance(item, Sequence)
+                and not isinstance(item, (str, bytes))
+            ):
+                paths.update(Path(path) for path in item if isinstance(path, str))
+            else:
+                paths.update(_collect_generation_source_paths(item))
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        for item in value:
+            paths.update(_collect_generation_source_paths(item))
+    return paths
+
+
+def _path_generation_rows(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return [{"path": str(path), "state": "missing"}]
+    if path.is_file():
+        stat = path.stat()
+        return [
+            {
+                "path": str(path),
+                "state": "file",
+                "size": stat.st_size,
+                "mtime_ns": stat.st_mtime_ns,
+            }
+        ]
+    rows: list[dict[str, Any]] = []
+    for child in sorted(
+        candidate for candidate in path.rglob("*") if candidate.is_file()
+    ):
+        stat = child.stat()
+        rows.append(
+            {
+                "path": str(child),
+                "state": "file",
+                "size": stat.st_size,
+                "mtime_ns": stat.st_mtime_ns,
+            }
+        )
+    if not rows:
+        rows.append({"path": str(path), "state": "empty_directory"})
+    return rows
+
+
+def _source_generation_contract(
+    sources: Mapping[str, Any], *, extra_paths: Iterable[Path] = ()
+) -> dict[str, Any]:
+    paths = _collect_generation_source_paths(sources)
+    paths.update(extra_paths)
+    rows = [
+        row
+        for path in sorted(paths, key=lambda value: str(value))
+        for row in _path_generation_rows(path)
+    ]
+    encoded = json.dumps(rows, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    producer_sha256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+    return {
+        "schema": "machine_microstructure_source_generation_v1",
+        "source_date": None,
+        "fingerprint_basis": "declared_source_path_size_mtime_ns",
+        "source_roots": [
+            str(path) for path in sorted(paths, key=lambda value: str(value))
+        ],
+        "source_rows": rows,
+        "source_fingerprint": hashlib.sha256(encoded.encode()).hexdigest(),
+        "producer_sha256": producer_sha256,
+    }
+
+
+def _reusable_exact_date_report(
+    path: Path, *, target_date: str
+) -> dict[str, Any] | None:
+    try:
+        report = read_json_object_strict(path)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+    generation = report.get("source_generation") or {}
+    if (
+        report.get("schema") != REPORT_SCHEMA
+        or report.get("target_date") != target_date
+        or report.get("authority", {}).get("runtime_effect") is not False
+        or generation.get("schema") != "machine_microstructure_source_generation_v1"
+        or generation.get("source_date") != target_date
+        or generation.get("producer_sha256")
+        != hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+    ):
+        return None
+    roots = generation.get("source_roots")
+    rows = generation.get("source_rows")
+    if not isinstance(roots, list) or not isinstance(rows, list):
+        return None
+    current_paths = [Path(root) for root in roots if isinstance(root, str)]
+    if len(current_paths) != len(roots):
+        return None
+    current_rows = [
+        row for source in current_paths for row in _path_generation_rows(source)
+    ]
+    encoded = json.dumps(
+        current_rows, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+    )
+    if hashlib.sha256(encoded.encode()).hexdigest() != generation.get(
+        "source_fingerprint"
+    ):
+        return None
+    return report
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target-date")
@@ -9619,6 +9748,26 @@ def main() -> int:
         )
         if archived_canary is not None:
             canary_snapshot = archived_canary
+    output_path = args.output_dir / f"{REPORT_TYPE}_{target_date.isoformat()}.json"
+    reusable = _reusable_exact_date_report(
+        output_path, target_date=target_date.isoformat()
+    )
+    if args.write and reusable is not None:
+        if args.print_summary:
+            print(
+                json.dumps(
+                    {
+                        "status": reusable["status"],
+                        **reusable["summary"],
+                        "execution_mode": "exact_date_source_generation_reuse",
+                        "source_fingerprint": reusable["source_generation"][
+                            "source_fingerprint"
+                        ],
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        return 0
     report = build_report(
         target_date.isoformat(),
         report_root=args.report_root,
@@ -9628,6 +9777,31 @@ def main() -> int:
         canary_snapshot_dir=args.canary_snapshot_dir,
         widget_state_path=args.widget_state,
     )
+    report["execution_mode"] = "full_recompute"
+    history_paths = tuple(
+        path
+        for path in sorted(
+            (args.report_root / REPORT_TYPE).glob(f"{REPORT_TYPE}_*.json")
+        )
+        if path.name != output_path.name
+    )
+    report["source_generation"] = _source_generation_contract(
+        report.get("sources") or {},
+        extra_paths=(
+            args.source_exclusion_manifest,
+            canary_snapshot,
+            args.widget_state
+            or (
+                DEFAULT_WIDGET_AUTO_TRADE_STATE_PATH
+                if args.report_root == DATA_DIR / "report"
+                else args.report_root.parent
+                / "runtime"
+                / "widget_signal_auto_trade_state.json"
+            ),
+            *history_paths,
+        ),
+    )
+    report["source_generation"]["source_date"] = target_date.isoformat()
     if args.write:
         write_report(report, args.output_dir)
         if is_krx_trading_day(target_date):

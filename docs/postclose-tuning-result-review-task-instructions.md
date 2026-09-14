@@ -457,13 +457,14 @@ Pass 1 검증 후 수정한 최초 producer부터 intended last consumer까지 �
 - 현재 stage와 마지막으로 완성된 artifact를 식별한다.
 - OFF·retired stage를 실패로 세지 않는다.
 - AI 필수 단계는 parsed/receipt 계약을, disabled 단계는 disabled provenance를 확인한다.
-- 최종 순서는 `EV/workorder → runtime summary/gap/lineage → checklist → verifier → DONE → final verifier → tower → checklist → strict final verifier`가 유지돼야 한다. 요약만 복구할 때에는 tower 직전 일반 verifier로 자기 자신의 이전 handoff 오류를 제거하되, controller 완료는 마지막 strict verifier 명령 성공과 같은 세대 artifact로만 판정한다.
-- DONE 이후 control tower를 생성한 뒤 `checklist 최종 refresh → verifier --require-summary-handoff`까지 닫는다. `source_generation_contract`와 checklist `POSTCLOSE_SUMMARY_SOURCES`의 대상일·source SHA256을 실제 파일과 대조한다. 이 마지막 검사를 생략한 verifier PASS는 요약 최신성 완료가 아니다. controller의 일반 복구도 이 검사를 통과해야 DONE이다. verifier/controller 자체 hash는 순환 방지를 위해 요약 source 계약에서 제외한다.
+- main wrapper의 종결 순서는 `pre-workorder EV → workorder → pattern propagation/AI review → post-propagation EV → runtime summary/gap/lineage → checklist → core verifier → DONE → final verifier`다. 늦은 widget/machine source가 아직 terminal이 아니므로 main에서 tower·최종 checklist·strict summary를 만들지 않는다. 모든 predecessor가 terminal인 뒤 finalization의 summary-handoff owner가 `일반 verifier → tower → checklist → strict verifier`를 한 번 생성한다.
+- finalization이 만든 `source_generation_contract`와 checklist `POSTCLOSE_SUMMARY_SOURCES`의 대상일·source SHA256을 실제 파일과 대조한다. main final verifier를 최종 요약 최신성으로 오인하지 않고, strict 실패 시 과거 PASS를 재사용하지 않는다. verifier/controller 자체 hash는 순환 방지를 위해 요약 source 계약에서 제외한다.
 - strict verifier 또는 recovery 명령이 실패하면 이전 성공 artifact를 근거로 DONE 처리하지 않는다. 마지막 bounded attempt에도 최종 strict 명령 성공이 필요하다. EV headline의 `realized_pnl_status`가 미대사이면 PnL null을 유지하며, 건수 일치만으로 exact 비용 검증 완료를 주장하지 않는다. source-only CF route 관찰은 identity/schema/권한 검증 후 actual ADD/NO_ADD와 분리하고 malformed authority는 계속 차단한다.
 - §1.1.1의 기계·AI 사례표는 별도 수기 표가 아니라 기존 `ai_action_outcome_calibration`의 exact snapshot/lifecycle join과 그 직접 report projection으로 확인한다. 당일 `ENTER_NOW/RECHECK/BLOCK/source_invalid` 보존식, 모든 기계 ENTER의 current/other/missing prompt routing, 최초 감시→기계→AI→submit/fill gap, 1/3/5/10/20/30/60분 observed/pending-or-source-gap 상태와 비용을 대사한다. machine attempt 보존식이 깨지면 기계 threshold 학습만 차단되고, 유효한 compact AI partition은 독립 판정되는지 확인한다. `CAUTION|INSUFFICIENT`는 유효 bounded 비진입 terminal, transport/local unavailable은 미평가로 유지되어 명시적 VETO/DROP으로 흡수되지 않아야 한다.
+- actual lifecycle의 entry trace는 `entry|entry_ai|entry_decision`과 submit/fill trace의 유일한 교집합을 우선한다. 종목·venue/session·route/epoch·decision timestamp·source bundle이 같은 fixed-price 1초 micro만 결속하고, 비용은 `broker reconciled > source-bound executable estimate > comparison-only`로 분리한다. comparison-only 비용은 실현 경제성 승인에 사용하지 않으며 결손 비용·feature는 null로 유지한다.
 - 같은 main wrapper generation에서 policy publisher의 target date가 거래 calendar의 다음 거래일인지, challenger 채택 또는 `incumbent_carried`가 명시됐는지, bundle/source hash가 calibration과 일치하는지 확인한다. 비용 차감 `+0.10%`만 충족했다고 source/holdout/tail guard를 생략하지 않고, 반대로 child 후보0·미성숙 때문에 유효 부모 정책을 제거하거나 부모 소비에 challenger floor를 중첩하지 않는다.
 - publisher 결과를 runtime summary/gap/lineage→tower→checklist→strict verifier와 다음 PREOPEN intended loader까지 대사한다. report exit 0인데 dated policy가 없거나 stale/잘못된 target/hash이고 정상 carry 사유도 없으면 `no_op_success|policy_publish_or_handoff_failed`로 실패 처리한다.
-- 중간 EV 재생성은 `pre_workorder`·pattern propagation 뒤·최종 consumer 뒤의 세 generation만 유지한다. workorder만 새로 나온 직후 또는 conversion 뒤에 EV/runtime summary를 다시 돌려 시간을 소모하지 않는다. 최종 pattern refresh 뒤에는 final workorder → final EV → final runtime summary 순서를 지키며, 그 뒤 trigger-decision snapshot을 **실행 지시 없이** 새로 발행한 다음 checklist/strict verifier가 같은 최종 generation을 읽는지 확인한다. 초기 snapshot의 `source_missing`을 최종 결손으로 재사용하지 않되, final snapshot 실패도 임의 producer 재실행·runtime apply·정책 변경으로 보상하지 않는다.
+- EV는 workorder 전과 pattern propagation 뒤의 두 generation만 허용하고 workorder는 한 번만 생성한다. conversion 뒤 EV/runtime summary 재실행과 main의 tower/strict summary를 반복하지 않는다. 마지막 producer 뒤 trigger-decision snapshot은 **실행 지시 없이** 갱신하고 core checklist/verifier가 같은 main generation을 읽는지 확인한다. 늦은 source를 포함한 최종 tower/checklist/strict는 finalization만 소유한다.
 
 ### 8.2 DONE controller와 AI replay
 
@@ -492,6 +493,7 @@ Pass 1 검증 후 수정한 최초 producer부터 intended last consumer까지 �
 - 종목 확대·signal policy 추천은 exact source, sample floor, source-quality와 기존 owner guard를 확인한다.
 - §1.2의 확인2/3 paired 선정, 검증 incumbent 대비 signal-only/exit-only, source/incident 및 exact manual-flat projection을 네 producer의 직접 consumer까지 대사한다. recipe carry·source-gap·sample floor·holdout/경제성 미달·실행품질 veto를 분리하고, 신호 변경일에 target이나21:15 entry timing이 같은 stage를 중복 변경하지 않는지 확인한다.
 - 추천의 source-only 구현은 Pass 1/2에 포함한다. 실전 종목 확대 또는 매매조건 변경은 정식 policy candidate와 PREOPEN guard 없이는 `user_authority`다.
+- symbol 연구는 completed lifecycle/holdout·incumbent/policy·비용·source exclusion을 묶은 입력 fingerprint가 동일하면 heavy grid를 재계산하지 않는다. 재사용은 기존 exact-date 원본과 hash를 보존한 source-only 실행 최적화이며 신규 EV·승격·당일 자연 결과가 아니다. fingerprint 또는 producer code hash가 바뀌면 full recompute해야 한다.
 - 수정 또는 source 회복 뒤 evaluation service만 1회 재실행하고 unit `Result=success`와 네 단계 산출물을 확인한다.
 
 ### 8.5 Episode machine과 추천
@@ -510,6 +512,7 @@ Pass 1 검증 후 수정한 최초 producer부터 intended last consumer까지 �
 - 각 단계의 return code와 최종 unit `Result`를 함께 본다.
 - wrapper의 최종 exit 우선순위는 `checklist builder → policy → weakness hysteresis → entry timing → attribution → expansion`이므로 최종 exit code만으로 최초 실패를 추정하지 않는다.
 - source missing, timeout 또는 memory cap이 반복되면 동일 재시도를 반복하지 말고 최초 source/contract/resource 원인을 보완한다.
+- low-price expanded research와 machine attribution은 입력/source-generation fingerprint와 producer code hash가 동일한 exact-date 재호출만 재사용한다. source 디렉터리의 파일 추가·삭제·size/mtime 변경 또는 코드 hash 변경 시 full recompute하며, 재사용 marker를 새 경제성 표본이나 정책 후보로 세지 않는다.
 - attribution/timing/approval의 source-only 구현 추천을 Pass 1/2에 포함한다.
 - §1.2 공통 kernel/version·window completeness·actual signal census·4군 교집합/holdout·모드별 실제 floor·frozen evidence와 최신 owner veto를 같은 generation으로 대사한다. 과거 baseline carry·scopes0은 오늘 source나 다음 정책의 기대 건수가 아니다.
 - adaptive-exit child의 source/replay/study/native 후보는 기존 attribution 안의 별도 출구 연구다. timing study와 entry delay 정책 소비를 혼합하지 않으며, 연구 child 생성 성공을 최초 exit family 승인/실주문 활성화로 세지 않는다.

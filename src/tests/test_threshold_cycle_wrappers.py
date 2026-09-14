@@ -1997,9 +1997,6 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     scalp_sim_prior_refresh_idx = script.index(
         '"scalp_sim_auto_approval_control_tower_prior_refresh"'
     )
-    post_conversion_workorder_idx = script.index(
-        "code_improvement_workorder_post_conversion_lane"
-    )
     checklist_command = (
         'src.engine.build_next_stage2_checklist --source-date "$TARGET_DATE"'
     )
@@ -2011,21 +2008,9 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         "src.engine.verify_threshold_cycle_postclose_chain",
         pending_verify_idx + 1,
     )
-    final_next_checklist_idx = script.rindex(checklist_command, 0, pending_verify_idx)
     post_done_checklist_idx = script.rindex(checklist_command)
-    final_propagation_idx = script.rindex("src.engine.pattern_lab_propagation_audit")
-    final_ai_source_refresh_idx = script.rindex("--review-current-generation")
-    final_ev_idx = script.index(
-        'run_threshold_cycle_ev_and_wait "final_consumer_refresh"'
-    )
-    final_workorder_idx = script.index(
-        "code_improvement_workorder_final_source_refresh"
-    )
     final_trigger_snapshot_idx = script.index(
         'refresh_automation_trigger_decision_snapshot "final_consumer"'
-    )
-    tuning_control_idx = script.index(
-        "src.engine.automation.tuning_performance_control_tower"
     )
 
     assert (
@@ -2057,29 +2042,18 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         < conversion_lane_idx
         < rising_missed_prior_idx
         < scalp_sim_prior_refresh_idx
-        < post_conversion_workorder_idx
-        < next_checklist_idx
-        < final_propagation_idx
-        < final_ai_source_refresh_idx
-        < final_workorder_idx
-        < final_ev_idx
         < final_trigger_snapshot_idx
-        < final_next_checklist_idx
+        < next_checklist_idx
         < pending_verify_idx
         < final_verify_idx
-        < tuning_control_idx
     )
-    assert (
-        tuning_control_idx
-        < post_done_checklist_idx
-        < script.rindex("src.engine.verify_threshold_cycle_postclose_chain")
-    )
-    assert (
-        '--require-summary-handoff --allow-pending-entry-replay "${VERIFY_DISABLED_STAGE_ARGS[@]}"'
-        in script
-    )
-    assert script.count("src.engine.pattern_lab_propagation_audit") == 2
-    assert script.count("--review-current-generation") == 2
+    assert "src.engine.automation.tuning_performance_control_tower" not in script
+    assert post_done_checklist_idx == next_checklist_idx
+    assert "--require-summary-handoff" not in script
+    assert script.count("src.engine.pattern_lab_propagation_audit") == 1
+    assert script.count("--review-current-generation") == 1
+    assert script.count("src.engine.build_code_improvement_workorder") == 1
+    assert script.count("run_threshold_cycle_ev_and_wait \"") == 2
     assert (
         'RUN_PATTERN_LAB_PROPAGATION_AUDIT="${THRESHOLD_CYCLE_RUN_PATTERN_LAB_PROPAGATION_AUDIT:-true}"'
         in script
@@ -2763,21 +2737,16 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
     )
     assert (
         '"$PROJECT_DIR/data/report/tuning_performance_control_tower/tuning_performance_control_tower_${TARGET_DATE}.json"'
-        in script
+        not in script
     )
     assert (
         '"$PROJECT_DIR/data/report/runtime_apply_gap_audit/runtime_apply_gap_audit_${TARGET_DATE}.json"'
         in script
     )
-    assert (
-        'wait_for_file_artifact "$(next_stage2_checklist_path)" "next_stage2_checklist"'
-        in script
-    )
+    assert '"next_stage2_checklist_final_refresh"' in script
     assert "src.engine.verify_threshold_cycle_postclose_chain" in script
     assert "--allow-pending-done-marker" in script
-    assert script.count("--allow-pending-entry-replay") == 3
-    strict_verify = script[script.index("--require-summary-handoff") - 180 :]
-    assert "--allow-pending-entry-replay" in strict_verify
+    assert script.count("--allow-pending-entry-replay") == 2
     assert (
         'run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.verify_threshold_cycle_postclose_chain'
         in script
@@ -2787,15 +2756,8 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
         'run_threshold_cycle_ev_and_wait "post_conversion_lane_workorder_refresh"'
         not in script
     )
-    final_ev_index = script.index(
-        'run_threshold_cycle_ev_and_wait "final_consumer_refresh"'
-    )
-    final_workorder_index = script.index(
-        '"code_improvement_workorder_final_source_refresh"'
-    )
-    final_runtime_index = script.index(
-        '"runtime_approval_summary_final_refresh"', final_workorder_index
-    )
+    workorder_index = script.index("src.engine.build_code_improvement_workorder")
+    final_runtime_index = script.index("src.engine.runtime_approval_summary")
     final_trigger_index = script.index(
         'refresh_automation_trigger_decision_snapshot "final_consumer"',
         final_runtime_index,
@@ -2809,8 +2771,7 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
         final_checklist_index,
     )
     assert (
-        final_workorder_index
-        < final_ev_index
+        workorder_index
         < final_runtime_index
         < final_trigger_index
         < final_checklist_index

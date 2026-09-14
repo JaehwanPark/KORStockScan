@@ -2284,6 +2284,69 @@ def _load_source_cache(
     return bars, dict(meta)
 
 
+def research_input_fingerprint(
+    *,
+    sources: dict[str, tuple[list[Bar], dict[str, Any]]],
+    target_date: date,
+    candidate_symbols: dict[str, str],
+    research_profiles: dict[str, ResearchProfile],
+    dynamic_universe_source_date: date | None,
+    applied_policy_snapshots: dict[str, dict[str, Any]],
+) -> str:
+    payload = {
+        "schema": "low_price_two_leg_expanded_research_input_v1",
+        "producer_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        "target_date": target_date.isoformat(),
+        "candidate_symbols": candidate_symbols,
+        "research_profiles": {
+            profile_id: {
+                "symbol": profile.symbol,
+                "session": profile.session,
+                "discovery_lane": profile.discovery_lane,
+                "fixed_observation": profile.fixed_observation,
+                "policy": {
+                    key: (value.isoformat() if isinstance(value, time) else value)
+                    for key, value in vars(profile.policy).items()
+                },
+            }
+            for profile_id, profile in sorted(research_profiles.items())
+        },
+        "dynamic_universe_source_date": (
+            dynamic_universe_source_date.isoformat()
+            if dynamic_universe_source_date is not None
+            else None
+        ),
+        "applied_policy_snapshots": applied_policy_snapshots,
+        "sources": {
+            symbol: {
+                "content_sha256": meta.get("source_content_sha256")
+                or _canonical_digest(_bar_rows(bars)),
+                "source_quality_status": meta.get("source_quality_status"),
+                "bar_count": len(bars),
+            }
+            for symbol, (bars, meta) in sorted(sources.items())
+        },
+    }
+    return _canonical_digest(payload)
+
+
+def reusable_report(path: Path, *, target_date: date, fingerprint: str) -> dict | None:
+    try:
+        report = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return None
+    if (
+        report.get("schema") != REPORT_SCHEMA
+        or report.get("target_date") != target_date.isoformat()
+        or report.get("source_input_fingerprint") != fingerprint
+        or report.get("runtime_effect") is not False
+        or report.get("allowed_runtime_apply") is not False
+        or str(report.get("status") or "").lower() in {"failed", "error"}
+    ):
+        return None
+    return report
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target-date")
@@ -2419,6 +2482,36 @@ def main(argv: list[str] | None = None) -> int:
                 "all_research_symbols_source_quality_blocked:"
                 + "|".join(distinct_reasons)
             )
+        fingerprint = research_input_fingerprint(
+            sources=sources,
+            target_date=target_date,
+            candidate_symbols=candidate_symbols,
+            research_profiles=research_profiles,
+            dynamic_universe_source_date=dynamic_source_date,
+            applied_policy_snapshots=applied_policy_snapshots,
+        )
+        existing_path = (
+            args.output_dir / f"{REPORT_TYPE}_{target_date.isoformat()}.json"
+        )
+        reusable = reusable_report(
+            existing_path, target_date=target_date, fingerprint=fingerprint
+        )
+        if reusable is not None:
+            if args.print_summary:
+                print(
+                    json.dumps(
+                        {
+                            "decision": reusable.get("decision"),
+                            "execution_mode": "exact_date_fingerprint_reuse",
+                            "source_input_fingerprint": fingerprint,
+                            "json_path": str(existing_path),
+                            "runtime_effect": False,
+                        },
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    )
+                )
+            return 0
         report = build_report(
             sources=sources,
             start_date=start_date,
@@ -2428,6 +2521,8 @@ def main(argv: list[str] | None = None) -> int:
             dynamic_universe_source_date=dynamic_source_date,
             applied_policy_snapshots=applied_policy_snapshots,
         )
+        report["source_input_fingerprint"] = fingerprint
+        report["execution_mode"] = "full_recompute"
         if fetch_failures:
             report["source_quarantine"].update(fetch_failures)
             for item in report["profiles"].values():

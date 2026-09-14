@@ -1846,6 +1846,41 @@ def test_actual_duration_uses_fill_and_exit_not_label_horizon(tmp_path: Path) ->
     )
 
 
+def test_actual_entry_trace_accepts_entry_decision_stage_bound_to_submit_and_fill(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "journal.jsonl"
+    rows = _complete_lifecycle("entry-trace-intersection")
+    exact_trace_id = "trace-exact-entry-submit-fill"
+    rebound_rows = []
+    for event in rows:
+        data = dict(event["data"])
+        if event["stage"] in {"entry_decision", "submit", "fill"}:
+            data["decision_trace_id"] = exact_trace_id
+        rebound_rows.append(
+            build_transition(
+                main_lifecycle_id=event["main_lifecycle_id"],
+                record_id=event["record_id"],
+                stock_code=event["stock_code"],
+                attempt_id=event["attempt_id"],
+                trade_date=event["trade_date"],
+                stage=event["stage"],
+                observed_at=datetime.fromisoformat(event["observed_at"]),
+                venue=event["venue"],
+                session_bucket=event["session_bucket"],
+                data=data,
+            )
+        )
+    _write_jsonl(source, rebound_rows)
+
+    row = build_daily_report(TARGET_DATE, source_path=source, write=False)["rows"][0]
+
+    assert row["actual_entry_quality_path"]["decision_trace_id"] == exact_trace_id
+    assert row["actual_entry_quality_path"]["decision_trace_selection_basis"] == (
+        "unique_entry_submit_fill_intersection"
+    )
+
+
 def test_any_promotion_gate_failure_yields_no_promotion_ready(tmp_path: Path) -> None:
     source = tmp_path / "journal.jsonl"
     _write_jsonl(

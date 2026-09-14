@@ -2398,24 +2398,15 @@ if [ "$RUN_INTRADAY_WS_FRESHNESS_FINALIZE" = "true" ] || [ "$RUN_INTRADAY_WS_FRE
 fi
 run_threshold_cycle_ev_and_wait "pre_workorder"
 if [ "$BUILD_CODE_IMPROVEMENT_WORKORDER" = "true" ] || [ "$BUILD_CODE_IMPROVEMENT_WORKORDER" = "1" ]; then
-  automation_trigger_decision "workorder_branch"
-  if [ "$AUTOMATION_TRIGGER_DECISION_RESULT" = "skip" ]; then
-    skip_triggered_step "code_improvement_workorder_branch" "fresh_outputs_no_trigger"
-    wait_for_report_artifact \
-      "$PROJECT_DIR/data/report/code_improvement_workorder/code_improvement_workorder_${TARGET_DATE}.json" \
-      "$PROJECT_DIR/docs/code-improvement-workorders/code_improvement_workorder_${TARGET_DATE}.md" \
-      "code_improvement_workorder"
-  else
-    wait_for_postclose_resources "code_improvement_workorder"
-    run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.build_code_improvement_workorder \
-      --date "$TARGET_DATE" \
-      --max-orders "$CODE_IMPROVEMENT_WORKORDER_MAX_ORDERS" \
-      "${WORKORDER_SWING_ARGS[@]}"
-    wait_for_report_artifact \
-      "$PROJECT_DIR/data/report/code_improvement_workorder/code_improvement_workorder_${TARGET_DATE}.json" \
-      "$PROJECT_DIR/docs/code-improvement-workorders/code_improvement_workorder_${TARGET_DATE}.md" \
-      "code_improvement_workorder"
-  fi
+  wait_for_postclose_resources "code_improvement_workorder"
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.build_code_improvement_workorder \
+    --date "$TARGET_DATE" \
+    --max-orders "$CODE_IMPROVEMENT_WORKORDER_MAX_ORDERS" \
+    "${WORKORDER_SWING_ARGS[@]}"
+  wait_for_report_artifact \
+    "$PROJECT_DIR/data/report/code_improvement_workorder/code_improvement_workorder_${TARGET_DATE}.json" \
+    "$PROJECT_DIR/docs/code-improvement-workorders/code_improvement_workorder_${TARGET_DATE}.md" \
+    "code_improvement_workorder"
 fi
 if [ "$RUN_PATTERN_LAB_PROPAGATION_AUDIT" = "true" ] || [ "$RUN_PATTERN_LAB_PROPAGATION_AUDIT" = "1" ]; then
   automation_trigger_decision "pattern_lab_propagation_audit"
@@ -2523,20 +2514,6 @@ if [ "$RUN_RISING_MISSED_CLASSIFIER_PRIOR" = "true" ] || [ "$RUN_RISING_MISSED_C
       "scalp_sim_auto_approval_control_tower_prior_refresh"
   fi
 fi
-if [ "$BUILD_CODE_IMPROVEMENT_WORKORDER" = "true" ] || [ "$BUILD_CODE_IMPROVEMENT_WORKORDER" = "1" ]; then
-  wait_for_postclose_resources "code_improvement_workorder_post_conversion_lane"
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.build_code_improvement_workorder \
-    --date "$TARGET_DATE" \
-    --max-orders "$CODE_IMPROVEMENT_WORKORDER_MAX_ORDERS" \
-    "${WORKORDER_SWING_ARGS[@]}"
-  wait_for_report_artifact \
-    "$PROJECT_DIR/data/report/code_improvement_workorder/code_improvement_workorder_${TARGET_DATE}.json" \
-    "$PROJECT_DIR/docs/code-improvement-workorders/code_improvement_workorder_${TARGET_DATE}.md" \
-    "code_improvement_workorder_post_conversion_lane"
-fi
-wait_for_postclose_resources "build_next_stage2_checklist"
-run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.build_next_stage2_checklist --source-date "$TARGET_DATE"
-wait_for_file_artifact "$(next_stage2_checklist_path)" "next_stage2_checklist"
 VERIFY_DISABLED_STAGE_ARGS=()
 if [[ "$RUN_SWING_LIFECYCLE_AUDIT" != "true" && "$RUN_SWING_LIFECYCLE_AUDIT" != "1" ]]; then
   VERIFY_DISABLED_STAGE_ARGS+=(--disabled-stage swing_lifecycle)
@@ -2553,52 +2530,6 @@ fi
 if [[ "$RUN_DEEPSEEK_SWING_LAB" != "true" && "$RUN_DEEPSEEK_SWING_LAB" != "1" ]]; then
   VERIFY_DISABLED_STAGE_ARGS+=(--disabled-stage deepseek_swing_lab)
 fi
-if [ "$RUN_PATTERN_LAB_PROPAGATION_AUDIT" = "true" ] || [ "$RUN_PATTERN_LAB_PROPAGATION_AUDIT" = "1" ]; then
-  # Re-evaluate the propagation contract after the conversion-lane workorder,
-  # EV, and runtime-summary refreshes.  The first audit intentionally exposes
-  # the bootstrap links; this pass prevents those transient pending states from
-  # leaking into the final EV/workorder generation.
-  wait_for_postclose_resources "pattern_lab_propagation_audit_final_refresh"
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.pattern_lab_propagation_audit \
-    --date "$TARGET_DATE" "${PATTERN_LAB_SWING_ARGS[@]}"
-  wait_for_report_artifact \
-    "$PROJECT_DIR/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_${TARGET_DATE}.json" \
-    "$PROJECT_DIR/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_${TARGET_DATE}.md" \
-    "pattern_lab_propagation_audit_final_refresh"
-  if [ "$RUN_PATTERN_LAB_AI_REVIEW" = "true" ] || [ "$RUN_PATTERN_LAB_AI_REVIEW" = "1" ]; then
-    wait_for_postclose_resources "pattern_lab_ai_review_final_source_provenance_refresh"
-    run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.pattern_lab_ai_review \
-      --date "$TARGET_DATE" \
-      --review-current-generation \
-      "${PATTERN_LAB_SWING_ARGS[@]}"
-    wait_for_report_artifact \
-      "$PROJECT_DIR/data/report/pattern_lab_ai_review/pattern_lab_ai_review_${TARGET_DATE}.json" \
-      "$PROJECT_DIR/data/report/pattern_lab_ai_review/pattern_lab_ai_review_${TARGET_DATE}.md" \
-      "pattern_lab_ai_review_final_source_provenance_refresh"
-  fi
-fi
-if [ "$BUILD_CODE_IMPROVEMENT_WORKORDER" = "true" ] || [ "$BUILD_CODE_IMPROVEMENT_WORKORDER" = "1" ]; then
-  wait_for_postclose_resources "code_improvement_workorder_final_source_refresh"
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.build_code_improvement_workorder \
-    --date "$TARGET_DATE" \
-    --max-orders "$CODE_IMPROVEMENT_WORKORDER_MAX_ORDERS" \
-    "${WORKORDER_SWING_ARGS[@]}"
-  wait_for_report_artifact \
-    "$PROJECT_DIR/data/report/code_improvement_workorder/code_improvement_workorder_${TARGET_DATE}.json" \
-    "$PROJECT_DIR/docs/code-improvement-workorders/code_improvement_workorder_${TARGET_DATE}.md" \
-    "code_improvement_workorder_final_source_refresh"
-fi
-run_threshold_cycle_ev_and_wait "final_consumer_refresh" \
-  "$PROJECT_DIR/data/report/code_improvement_workorder/code_improvement_workorder_${TARGET_DATE}.json" \
-  "$PROJECT_DIR/docs/code-improvement-workorders/code_improvement_workorder_${TARGET_DATE}.md" \
-  "$PROJECT_DIR/data/report/pattern_lab_currentness_audit/pattern_lab_currentness_audit_${TARGET_DATE}.json" \
-  "$PROJECT_DIR/data/report/pattern_lab_ai_review/pattern_lab_ai_review_${TARGET_DATE}.json" \
-  "$PROJECT_DIR/data/report/producer_gap_discovery/producer_gap_discovery_${TARGET_DATE}.json" \
-  "$PROJECT_DIR/data/report/pattern_lab_propagation_audit/pattern_lab_propagation_audit_${TARGET_DATE}.json"
-wait_for_postclose_resources "runtime_approval_summary_final_refresh"
-run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.runtime_approval_summary \
-  --date "$TARGET_DATE" "${RUNTIME_APPROVAL_SCOPE_ARGS[@]}"
-wait_for_report_artifact   "$PROJECT_DIR/data/report/runtime_approval_summary/runtime_approval_summary_${TARGET_DATE}.json"   "$PROJECT_DIR/data/report/runtime_approval_summary/runtime_approval_summary_${TARGET_DATE}.md"   "runtime_approval_summary_final_refresh"
 wait_for_postclose_resources "automation_trigger_decision_final_refresh"
 refresh_automation_trigger_decision_snapshot "final_consumer"
 wait_for_postclose_resources "build_next_stage2_checklist_final_refresh"
@@ -2628,18 +2559,7 @@ wait_for_report_artifact \
   "$PROJECT_DIR/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_${TARGET_DATE}.json" \
   "$PROJECT_DIR/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_${TARGET_DATE}.md" \
   "threshold_cycle_postclose_verification_final"
-if [ "$RUN_TUNING_PERFORMANCE_CONTROL_TOWER" = "true" ] || [ "$RUN_TUNING_PERFORMANCE_CONTROL_TOWER" = "1" ]; then
-  wait_for_postclose_resources "tuning_performance_control_tower"
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.tuning_performance_control_tower --date "$TARGET_DATE"
-  wait_for_report_artifact \
-    "$PROJECT_DIR/data/report/tuning_performance_control_tower/tuning_performance_control_tower_${TARGET_DATE}.json" \
-    "$PROJECT_DIR/data/report/tuning_performance_control_tower/tuning_performance_control_tower_${TARGET_DATE}.md" \
-    "tuning_performance_control_tower"
-fi
-# The tower is published after DONE and is itself a checklist input. Close this
-# final generation without feeding the verifier hash back into its own sources.
-wait_for_postclose_resources "postclose_summary_handoff"
-run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.build_next_stage2_checklist --source-date "$TARGET_DATE"
-run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.verify_threshold_cycle_postclose_chain \
-  --date "$TARGET_DATE" --require-summary-handoff --allow-pending-entry-replay "${VERIFY_DISABLED_STAGE_ARGS[@]}"
+# Late widget/machine sources are not terminal here.  Finalization owns the
+# single tower -> checklist -> strict summary-handoff generation after all
+# predecessors complete.
 restart_postclose_bot_if_requested

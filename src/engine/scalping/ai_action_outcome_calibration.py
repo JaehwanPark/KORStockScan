@@ -838,9 +838,7 @@ def _legacy_entry_group_projection(
         else (
             "5_TO_10BP"
             if tick_pct is not None and tick_pct < 0.10
-            else "GE_10BP"
-            if tick_pct is not None
-            else "UNKNOWN"
+            else "GE_10BP" if tick_pct is not None else "UNKNOWN"
         )
     )
     spread = inputs.get("spread_bp")
@@ -862,9 +860,7 @@ def _legacy_entry_group_projection(
         else (
             "180_TO_600S"
             if watch_age is not None and watch_age < 600.0
-            else "GE_600S"
-            if watch_age is not None
-            else "UNKNOWN"
+            else "GE_600S" if watch_age is not None else "UNKNOWN"
         )
     )
     extension = _number(timing.get("price_delta_since_first_watch_pct"))
@@ -874,9 +870,7 @@ def _legacy_entry_group_projection(
         else (
             "LT_1PCT"
             if extension is not None and extension < 1.0
-            else "GE_1PCT"
-            if extension is not None
-            else "UNKNOWN"
+            else "GE_1PCT" if extension is not None else "UNKNOWN"
         )
     )
     key_parts = {
@@ -1576,6 +1570,85 @@ def _flow_population_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _flow_micro_identity_mismatch_reason(
+    flow_row: dict[str, Any], bridge_row: dict[str, Any]
+) -> str | None:
+    """Reject a trace collision across declared market-data dimensions."""
+
+    evidence = _as_dict(bridge_row.get("tactical_micro_reversion_evidence_v1"))
+    sidecar_context = _as_dict(
+        _as_dict(bridge_row.get("ask_depletion_sidecar")).get("context")
+    )
+    flow_context = _as_dict(flow_row.get("label_context"))
+    expected = {
+        "symbol": str(flow_row.get("stock_code") or ""),
+        "venue": _normalized_venue(
+            flow_context.get("effective_venue") or flow_row.get("effective_venue")
+        ),
+        "session": _normalized_session(
+            flow_context.get("session_bucket") or flow_row.get("session_bucket")
+        ),
+        "sequence_epoch": _as_dict(flow_row.get("mechanistic_flow_observation")).get(
+            "sequence_epoch"
+        ),
+        "decision_ts": str(flow_row.get("decision_ts") or ""),
+        "market_data_route": str(
+            flow_context.get("market_data_route")
+            or flow_row.get("market_data_route")
+            or ""
+        ).lower(),
+        "source_bundle_sha256": str(flow_row.get("source_bundle_sha256") or ""),
+    }
+    observed = {
+        "symbol": str(
+            evidence.get("stock_code") or sidecar_context.get("symbol") or ""
+        ),
+        "venue": _normalized_venue(
+            evidence.get("trace_effective_venue") or sidecar_context.get("venue")
+        ),
+        "session": _normalized_session(
+            evidence.get("trace_session_bucket")
+            or sidecar_context.get("session_bucket")
+        ),
+        "sequence_epoch": evidence.get("sequence_epoch")
+        or sidecar_context.get("sequence_epoch"),
+        "decision_ts": str(evidence.get("trace_decision_ts") or ""),
+        "market_data_route": str(evidence.get("market_data_route") or "").lower(),
+        "source_bundle_sha256": str(evidence.get("source_bundle_sha256") or ""),
+    }
+    for dimension in (
+        "symbol",
+        "venue",
+        "session",
+        "sequence_epoch",
+        "decision_ts",
+        "market_data_route",
+        "source_bundle_sha256",
+    ):
+        if (
+            expected[dimension] not in (None, "")
+            and observed[dimension] != expected[dimension]
+        ):
+            return f"same_trace_{dimension}_mismatch"
+    one_second = next(
+        (
+            item
+            for item in _as_dict(bridge_row.get("ask_depletion_sidecar")).get(
+                "horizons"
+            )
+            or []
+            if isinstance(item, dict) and item.get("horizon_ms") == 1000
+        ),
+        None,
+    )
+    if (
+        not isinstance(one_second, dict)
+        or one_second.get("eligible_for_feature_ablation") is not True
+    ):
+        return "same_trace_fixed_price_1s_window_missing"
+    return None
+
+
 def _flow_micro_confirmation_source_audit(
     report_root: Path,
     *,
@@ -1641,6 +1714,12 @@ def _flow_micro_confirmation_source_audit(
             if trace_id not in flow_by_trace or trace_id in conflicted_traces:
                 continue
             sidecar = _as_dict(row.get("ask_depletion_sidecar"))
+            mismatch = _flow_micro_identity_mismatch_reason(
+                flow_by_trace[trace_id], row
+            )
+            if mismatch:
+                rejection_counts[mismatch] += 1
+                continue
             sidecar_hash = _canonical_sha256(sidecar)
             existing = joined_by_trace.get(trace_id)
             if existing is not None and existing["sidecar_sha256"] != sidecar_hash:
@@ -1656,6 +1735,7 @@ def _flow_micro_confirmation_source_audit(
 
     horizon_counts: dict[str, Counter[str]] = defaultdict(Counter)
     family_join_counts: Counter[str] = Counter()
+    joined_horizon_features: list[dict[str, Any]] = []
     for trace_id, joined in joined_by_trace.items():
         flow = _as_dict(flow_by_trace[trace_id].get("mechanistic_flow_observation"))
         for family in flow.get("matched_families") or []:
@@ -1676,6 +1756,27 @@ def _flow_micro_confirmation_source_audit(
                 horizon_counts[horizon_key]["trade_backing_observed"] += 1
             if _number(horizon.get("refill_ratio")) is not None:
                 horizon_counts[horizon_key]["refill_observed"] += 1
+            joined_horizon_features.append(
+                {
+                    "decision_trace_id": trace_id,
+                    "source_date": joined["source_date"],
+                    "horizon_ms": horizon.get("horizon_ms"),
+                    "best_ask_depletion_velocity_qty_per_sec": _number(
+                        horizon.get("best_ask_depletion_velocity_qty_per_sec")
+                    ),
+                    "aggressive_buy_trade_backed_ratio": _number(
+                        horizon.get("aggressive_buy_trade_backed_ratio")
+                    ),
+                    "unexplained_or_cancel_like_depletion_ratio": _number(
+                        horizon.get("unexplained_or_cancel_like_depletion_ratio")
+                    ),
+                    "refill_ratio": _number(horizon.get("refill_ratio")),
+                    "bid_support": flow.get("bid_support"),
+                    "rebound": flow.get("rebound"),
+                    "missing_feature_imputed": False,
+                    "runtime_candidate": False,
+                }
+            )
 
     return {
         "schema": "mechanistic_flow_micro_confirmation_source_audit_v1",
@@ -1696,8 +1797,13 @@ def _flow_micro_confirmation_source_audit(
                 horizon_counts.items(), key=lambda item: int(item[0])
             )
         },
+        "joined_horizon_features": joined_horizon_features,
+        "diagnostic_candidate_count": len(joined_horizon_features),
+        "economic_eligible_count": 0,
+        "runtime_candidate_count": 0,
         "rejection_reason_counts": dict(sorted(rejection_counts.items())),
         "same_trace_join_required": True,
+        "same_symbol_venue_session_epoch_required_when_declared": True,
         "parent_report_contract_required": True,
         "row_level_candidate_without_parent_contract_is_ineligible": True,
         "missing_micro_imputed": False,
@@ -2591,6 +2697,31 @@ def _entry_quality_population_metrics(rows: list[dict[str, Any]]) -> dict[str, A
     }
 
 
+def _select_lifecycle_entry_trace(row: dict[str, Any]) -> tuple[str | None, str]:
+    by_stage: dict[str, set[str]] = defaultdict(set)
+    for item in row.get("decision_trace_context_path") or []:
+        if not isinstance(item, dict) or not item.get("decision_trace_id"):
+            continue
+        by_stage[str(item.get("stage") or "").strip().lower()].add(
+            str(item["decision_trace_id"])
+        )
+    entry_ids = set().union(
+        *(
+            by_stage.get(stage, set())
+            for stage in ("entry", "entry_ai", "entry_decision")
+        )
+    )
+    execution_ids = set().union(
+        *(by_stage.get(stage, set()) for stage in ("submit", "fill"))
+    )
+    intersection = entry_ids.intersection(execution_ids)
+    if len(intersection) == 1:
+        return next(iter(intersection)), "unique_entry_submit_fill_intersection"
+    if len(entry_ids) == 1:
+        return next(iter(entry_ids)), "unique_entry_decision_trace"
+    return None, "entry_trace_ambiguous_or_missing"
+
+
 def _actual_entry_quality_source_audit(
     report_root: Path,
     *,
@@ -2613,6 +2744,7 @@ def _actual_entry_quality_source_audit(
     realized_net_10bp_late_count = 0
     realized_loss_count = 0
     raw_decision_path_join_count = 0
+    entry_trace_selection_counts: Counter[str] = Counter()
     realized_anchor_ledger: list[dict[str, Any]] = []
     counterfactual_by_trace = {
         str(row.get("decision_trace_id") or ""): row
@@ -2642,14 +2774,8 @@ def _actual_entry_quality_source_audit(
             realized_pnl = _number(row.get("realized_net_pnl_krw"))
             entry_notional = _number(row.get("entry_notional_krw"))
             duration_sec = _number(row.get("actual_holding_duration_sec"))
-            trace_ids = {
-                str(item.get("decision_trace_id") or "")
-                for item in row.get("decision_trace_context_path") or []
-                if isinstance(item, dict)
-                and item.get("stage") == "entry_decision"
-                and item.get("decision_trace_id")
-            }
-            entry_trace_id = next(iter(trace_ids)) if len(trace_ids) == 1 else None
+            entry_trace_id, entry_trace_selection = _select_lifecycle_entry_trace(row)
+            entry_trace_selection_counts[entry_trace_selection] += 1
             if (
                 terminal_state == "FINAL_EXIT_RECONCILED"
                 and realized_pnl is not None
@@ -2688,6 +2814,7 @@ def _actual_entry_quality_source_audit(
                             row.get("row_source_quality_gate_pass") is True
                         ),
                         "entry_decision_trace_id": entry_trace_id,
+                        "entry_trace_selection_basis": entry_trace_selection,
                         "market_path_projection_joined": (
                             entry_trace_id in counterfactual_by_trace
                             if entry_trace_id is not None
@@ -2780,6 +2907,9 @@ def _actual_entry_quality_source_audit(
         "realized_net_10bp_late_count": realized_net_10bp_late_count,
         "realized_loss_count": realized_loss_count,
         "raw_decision_path_join_count": raw_decision_path_join_count,
+        "entry_trace_selection_counts": dict(
+            sorted(entry_trace_selection_counts.items())
+        ),
         "fast_realized_outcome_is_clean_path_proof": False,
         "realized_anchor_ledger": realized_anchor_ledger,
         "accepted_label_report_count": accepted_label_report_count,
@@ -2825,6 +2955,50 @@ def _full_entry_cost_pct(contract: Any, *, source_date: str) -> float | None:
     ):
         return None
     return sum(float(v) for v in components.values())
+
+
+def _entry_cost_evidence(contract: Any, *, source_date: str) -> dict[str, Any]:
+    """Expose comparison, executable estimate, and broker cost without conflation."""
+
+    c = _as_dict(contract)
+    components = _as_dict(c.get("components_pct"))
+    full_cost = _full_entry_cost_pct(c, source_date=source_date)
+    comparison_cost = None
+    if full_cost is not None:
+        comparison_cost = sum(
+            float(components[name]) for name in ("buy_fee", "sell_fee", "sell_tax")
+        )
+    basis = str(c.get("basis") or "missing")
+    broker_cost = full_cost if basis == "reconciled_execution_cost" else None
+    executable_cost = full_cost if basis == "source_bound_estimate" else None
+    selected_cost = broker_cost if broker_cost is not None else executable_cost
+    selected_basis = (
+        "broker_reconciled_cost_pct"
+        if broker_cost is not None
+        else (
+            "executable_estimated_cost_pct"
+            if executable_cost is not None
+            else (
+                "comparison_cost_pct_only_not_economic"
+                if comparison_cost is not None
+                else "missing"
+            )
+        )
+    )
+    return {
+        "schema": "entry_cost_evidence_layers_v1",
+        "comparison_cost_pct": comparison_cost,
+        "executable_estimated_cost_pct": executable_cost,
+        "broker_reconciled_cost_pct": broker_cost,
+        "selected_economic_cost_pct": selected_cost,
+        "cost_basis": selected_basis,
+        "selected_cost_basis": selected_basis,
+        "cost_components": components if full_cost is not None else {},
+        "cost_components_pct": components if full_cost is not None else {},
+        "cost_source_sha256": c.get("source_sha256") if full_cost is not None else None,
+        "missing_cost_imputed": False,
+        "comparison_cost_is_not_live_economic_acceptance": True,
+    }
 
 
 def _hierarchy_cost_profiles(
@@ -3423,6 +3597,9 @@ def load_machine_observation_rows(
                         "source_provenance_verified": True,
                         "comparison": {
                             "entry_cost_contract": cost_contract,
+                            "cost_evidence": _entry_cost_evidence(
+                                cost_contract, source_date=day
+                            ),
                             "control_action": "WAIT",
                             "entry_path_first_hit": metric.get("entry_path_first_hit"),
                             "entry_path_target_pct": metric.get(
@@ -3892,6 +4069,7 @@ def build_machine_decision_case_table(
                 "entry_quality_label": label,
                 "entry_quality_path": path,
                 "case_classification": classification,
+                "cost_evidence": _as_dict(row.get("comparison")).get("cost_evidence"),
                 "cost_adjusted_target_pct": path.get("gross_net_target_pct"),
                 "time_to_net_target_sec": path.get("time_to_net_target_sec"),
                 "time_to_exact_stop_sec": path.get("time_to_exact_stop_sec"),
@@ -6293,12 +6471,12 @@ def build_report(
             parent_policy=hierarchy_parent,
         )
     )
-    hierarchical_entry_quality["runtime_extension"]["machine_capture_census"] = (
-        machine_capture_census
-    )
-    hierarchical_entry_quality["runtime_extension"]["full_cost_relabel_census"] = (
-        hierarchy_cost_census
-    )
+    hierarchical_entry_quality["runtime_extension"][
+        "machine_capture_census"
+    ] = machine_capture_census
+    hierarchical_entry_quality["runtime_extension"][
+        "full_cost_relabel_census"
+    ] = hierarchy_cost_census
     from src.engine.scalping.entry_setup_scalping_rollout import AUTO_PROMOTION_SCOPES
 
     extensions = {"KRX|KRX_REGULAR": hierarchical_entry_quality["runtime_extension"]}

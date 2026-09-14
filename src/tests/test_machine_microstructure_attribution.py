@@ -6028,3 +6028,39 @@ def test_closed_ingress_loss_followup_does_not_retry_immutable_date():
         )["rerun_same_source_date_allowed"]
         is True
     )
+
+
+def test_exact_date_attribution_reuse_invalidates_when_source_directory_changes(
+    tmp_path,
+):
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    (source_root / "one.json").write_text("{}\n", encoding="utf-8")
+    generation = attribution_module._source_generation_contract(
+        {"micro": {"partition": str(source_root)}}
+    )
+    generation["source_date"] = "2026-09-14"
+    report = {
+        "schema": attribution_module.REPORT_SCHEMA,
+        "target_date": "2026-09-14",
+        "status": "warning",
+        "summary": {},
+        "authority": {"runtime_effect": False},
+        "source_generation": generation,
+    }
+    report_path = tmp_path / "report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    assert (
+        attribution_module._reusable_exact_date_report(
+            report_path, target_date="2026-09-14"
+        )
+        == report
+    )
+    (source_root / "two.json").write_text("{}\n", encoding="utf-8")
+    assert (
+        attribution_module._reusable_exact_date_report(
+            report_path, target_date="2026-09-14"
+        )
+        is None
+    )
