@@ -1448,6 +1448,194 @@ def _ai_decision_action_outcome_calibration_status(
                     errors.append(
                         "mechanistic_machine_case_table_final_source_manifest_mismatch"
                     )
+            compact_outcomes = machine_case_table.get(
+                "compact_auxiliary_screen_outcomes"
+            )
+            compact_outcomes = (
+                compact_outcomes if isinstance(compact_outcomes, dict) else {}
+            )
+            economic = compact_outcomes.get("economic_contract")
+            economic = economic if isinstance(economic, dict) else {}
+            selection = compact_outcomes.get("automatic_successor_selection")
+            selection = selection if isinstance(selection, dict) else {}
+            economic_count = economic.get("economic_eligible_count")
+            screened_count = economic.get("screened_total")
+            veto_count = economic.get("evaluable_veto_count")
+            pass_count = economic.get("evaluable_pass_count")
+            excluded = economic.get("exclusion_counts")
+            excluded = excluded if isinstance(excluded, dict) else {}
+            compact_measurement = machine_case_table.get(
+                "compact_auxiliary_policy_measurement"
+            )
+            compact_measurement = (
+                compact_measurement if isinstance(compact_measurement, dict) else {}
+            )
+            economic_counts = economic.get("verdict_x_action_neutral_outcome_counts")
+            economic_counts = (
+                economic_counts if isinstance(economic_counts, dict) else {}
+            )
+            expected_economic_hash = hashlib.sha256(
+                json.dumps(
+                    economic_counts,
+                    ensure_ascii=True,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    default=str,
+                ).encode()
+            ).hexdigest()
+            eligible_expected = bool(
+                machine_source_tuning_allowed is True
+                and compact_measurement.get("measurement_allowed") is True
+                and isinstance(economic_count, int)
+                and not isinstance(economic_count, bool)
+                and economic_count >= 20
+                and conflicting_attempt_count == 0
+            )
+            missed_count = economic.get("missed_profit_veto_count")
+            dangerous_count = economic.get("dangerous_pass_count")
+            missed_rate = economic.get("missed_veto_rate")
+            dangerous_rate = economic.get("dangerous_pass_rate")
+            expected_missed_rate = (
+                missed_count / veto_count
+                if isinstance(missed_count, int)
+                and not isinstance(missed_count, bool)
+                and isinstance(veto_count, int)
+                and veto_count > 0
+                else None
+            )
+            expected_dangerous_rate = (
+                dangerous_count / pass_count
+                if isinstance(dangerous_count, int)
+                and not isinstance(dangerous_count, bool)
+                and isinstance(pass_count, int)
+                and pass_count > 0
+                else None
+            )
+            incumbent_version = str(selection.get("incumbent_prompt_version") or "")
+            expected_selected_version = incumbent_version
+            expected_direction = "carry_balanced_compact_contract"
+            if not machine_source_tuning_allowed:
+                expected_direction = "repair_source_quality_before_automatic_selection"
+            elif compact_measurement.get("measurement_status") == (
+                "not_observed_on_source_date"
+            ):
+                expected_direction = "carry_incumbent_compact_not_observed"
+            elif compact_measurement.get("measurement_allowed") is not True:
+                expected_direction = "isolate_invalid_compact_partition_and_carry"
+            elif not isinstance(economic_count, int) or economic_count < 20:
+                expected_direction = "collect_current_version_natural_evidence"
+            else:
+                from src.engine.ai_prompt_contracts import (
+                    ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION,
+                    ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION,
+                )
+
+                if (
+                    isinstance(pass_count, int)
+                    and pass_count >= 5
+                    and economic.get("material_tail_pass_count", 0) > 0
+                ):
+                    expected_direction = "select_material_risk_specificity_variant"
+                    expected_selected_version = (
+                        ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION
+                    )
+                elif (
+                    isinstance(veto_count, int)
+                    and veto_count >= 5
+                    and isinstance(missed_count, int)
+                    and missed_count >= 3
+                    and isinstance(missed_rate, (int, float))
+                    and missed_rate >= 0.25
+                    and missed_rate - (dangerous_rate or 0.0) >= 0.10
+                ):
+                    expected_direction = "select_opportunity_preservation_variant"
+                    expected_selected_version = (
+                        ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION
+                    )
+                elif (
+                    isinstance(pass_count, int)
+                    and pass_count >= 5
+                    and isinstance(dangerous_count, int)
+                    and dangerous_count >= 3
+                    and isinstance(dangerous_rate, (int, float))
+                    and dangerous_rate >= 0.25
+                    and dangerous_rate - (missed_rate or 0.0) >= 0.10
+                ):
+                    expected_direction = "select_material_risk_specificity_variant"
+                    expected_selected_version = (
+                        ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION
+                    )
+            if (
+                economic.get("schema") != "compact_auxiliary_economic_selection_v2"
+                or not isinstance(economic_count, int)
+                or isinstance(economic_count, bool)
+                or economic_count < 0
+                or not isinstance(screened_count, int)
+                or isinstance(screened_count, bool)
+                or screened_count < economic_count
+                or not isinstance(veto_count, int)
+                or isinstance(veto_count, bool)
+                or veto_count < 0
+                or not isinstance(pass_count, int)
+                or isinstance(pass_count, bool)
+                or pass_count < 0
+                or veto_count + pass_count != economic_count
+                or not isinstance(missed_count, int)
+                or isinstance(missed_count, bool)
+                or missed_count < 0
+                or missed_count > veto_count
+                or not isinstance(dangerous_count, int)
+                or isinstance(dangerous_count, bool)
+                or dangerous_count < 0
+                or dangerous_count > pass_count
+                or not valid_count_map(economic_counts)
+                or sum(economic_counts.values()) != economic_count
+                or economic.get("verdict_x_action_neutral_outcome_counts_sha256")
+                != expected_economic_hash
+                or not valid_count_map(excluded)
+                or sum(excluded.values()) + economic_count != screened_count
+                or economic.get("denominator_preserved") is not True
+                or economic.get("counterfactual_not_realized_pnl") is not True
+                or economic.get("missing_economics_imputed") is not False
+                or economic.get("material_tail_loss_pct") != -1.0
+                or not isinstance(economic.get("material_tail_pass_count"), int)
+                or isinstance(economic.get("material_tail_pass_count"), bool)
+                or economic.get("material_tail_pass_count") < 0
+                or missed_rate != expected_missed_rate
+                or dangerous_rate != expected_dangerous_rate
+                or selection.get("recommendation_id")
+                != "compact_auxiliary_prompt_automatic_successor_v2"
+                or selection.get("contract_version")
+                != "compact_auxiliary_economic_selection_v2"
+                or selection.get("minimum_economic_eligible_count") != 20
+                or selection.get("minimum_error_count") != 3
+                or selection.get("minimum_relevant_denominator") != 5
+                or selection.get("minimum_error_rate") != 0.25
+                or selection.get("minimum_rate_margin") != 0.10
+                or selection.get("economic_outcome_counts_sha256")
+                != expected_economic_hash
+                or selection.get("source_manifest_sha256")
+                != machine_source_receipt.get("source_manifest_sha256")
+                or selection.get("eligible") is not eligible_expected
+                or selection.get("runtime_effect") is not True
+                or selection.get("allowed_runtime_apply") is not True
+                or selection.get("selection_contract")
+                != "bounded_registered_variant_exact_incumbent_only_no_freeform_edit"
+                or not str(selection.get("incumbent_prompt_version") or "")
+                or not str(selection.get("selected_prompt_version") or "")
+                or selection.get("direction") != expected_direction
+                or (
+                    eligible_expected
+                    and selection.get("selected_prompt_version")
+                    != expected_selected_version
+                )
+                or (
+                    not eligible_expected
+                    and selection.get("selected_prompt_version")
+                    != selection.get("incumbent_prompt_version")
+                )
+            ):
+                errors.append("compact_auxiliary_economic_selection_contract_invalid")
     if not isinstance(hierarchical, dict):
         errors.append("hierarchical_entry_quality_invalid")
         hierarchical = {}
@@ -2212,6 +2400,57 @@ def _entry_setup_replay_session_contract_status(
             or observed.get("terminality") != "terminal_source_observation"
         ):
             issues.append("consumer_dual_aftermarket_nonterminal")
+
+    if target_date >= "2026-09-14":
+        roles = consumer.get("entry_evaluation_roles")
+        roles = roles if isinstance(roles, dict) else {}
+        legacy_role = roles.get("legacy_r0_r3")
+        legacy_role = legacy_role if isinstance(legacy_role, dict) else {}
+        compact_role = roles.get("compact_auxiliary")
+        compact_role = compact_role if isinstance(compact_role, dict) else {}
+        compact_status = compact_role.get("status")
+        if (
+            legacy_role.get("role")
+            != "offline_independent_selector_prompt_research_only"
+            or legacy_role.get("may_tune_compact_auxiliary") is not False
+            or compact_role.get("schema") != "compact_auxiliary_consumer_handoff_v1"
+            or compact_role.get("role")
+            != "machine_enter_post_selection_risk_adjudication"
+            or compact_status
+            not in {
+                "connected_exact_natural_evaluation",
+                "not_observed_or_source_contract_blocked",
+            }
+            or compact_role.get("provider_replay_synthesized") is not False
+            or compact_role.get("manual_user_approval_required") is not False
+            or compact_role.get("current_pid_consumption_claimed") is not False
+        ):
+            issues.append("consumer_compact_auxiliary_role_contract_invalid")
+        elif compact_status == "connected_exact_natural_evaluation" and (
+            not isinstance(
+                source_bindings.get(
+                    "compact_auxiliary_calibration_artifact_content_sha256"
+                ),
+                str,
+            )
+            or len(
+                source_bindings.get(
+                    "compact_auxiliary_calibration_artifact_content_sha256"
+                )
+                or ""
+            )
+            != 64
+            or not isinstance(
+                source_bindings.get("compact_auxiliary_natural_source_manifest_sha256"),
+                str,
+            )
+            or len(
+                source_bindings.get("compact_auxiliary_natural_source_manifest_sha256")
+                or ""
+            )
+            != 64
+        ):
+            issues.append("consumer_compact_auxiliary_hash_binding_invalid")
 
     return {
         "status": "fail" if issues else "pass",

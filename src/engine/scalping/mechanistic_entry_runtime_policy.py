@@ -288,30 +288,75 @@ def _selected_compact_prompt_version(source: dict, previous: dict | None) -> str
     outcomes = case_table.get("compact_auxiliary_screen_outcomes") or {}
     selection = outcomes.get("automatic_successor_selection") or {}
     selected = str(selection.get("selected_prompt_version") or "")
+    economic = outcomes.get("economic_contract") or {}
+    source_receipt = case_table.get("machine_ai_natural_source_receipt") or {}
     try:
-        screened = int(outcomes.get("screened_enter_now_count") or 0)
-        missed_veto = int(outcomes.get("missed_veto_count") or 0)
-        dangerous_pass = int(outcomes.get("dangerous_pass_count") or 0)
-        unclassified = int(outcomes.get("semantic_unclassified_count") or 0)
+        eligible_count = int(economic.get("economic_eligible_count") or 0)
+        veto_count = int(economic.get("evaluable_veto_count") or 0)
+        pass_count = int(economic.get("evaluable_pass_count") or 0)
+        missed_veto = int(economic.get("missed_profit_veto_count") or 0)
+        dangerous_pass = int(economic.get("dangerous_pass_count") or 0)
+        missed_rate = economic.get("missed_veto_rate")
+        dangerous_rate = economic.get("dangerous_pass_rate")
+        material_tail_count = int(economic.get("material_tail_pass_count") or 0)
+        material_tail_loss_pct = float(economic.get("material_tail_loss_pct"))
+        minimum_count = int(selection.get("minimum_economic_eligible_count") or 0)
+        minimum_error_count = int(selection.get("minimum_error_count") or 0)
+        minimum_denominator = int(selection.get("minimum_relevant_denominator") or 0)
+        minimum_error_rate = float(selection.get("minimum_error_rate"))
+        minimum_rate_margin = float(selection.get("minimum_rate_margin"))
     except (TypeError, ValueError):
         return previous_version
-    required_delta = max(2, (screened + 9) // 10)
     expected = previous_version
-    if missed_veto - dangerous_pass >= required_delta:
+    opportunity_selected = bool(
+        veto_count >= minimum_denominator
+        and missed_veto >= minimum_error_count
+        and isinstance(missed_rate, (int, float))
+        and missed_rate >= minimum_error_rate
+        and missed_rate - (dangerous_rate or 0.0) >= minimum_rate_margin
+    )
+    risk_selected = bool(
+        pass_count >= minimum_denominator
+        and dangerous_pass >= minimum_error_count
+        and isinstance(dangerous_rate, (int, float))
+        and dangerous_rate >= minimum_error_rate
+        and dangerous_rate - (missed_rate or 0.0) >= minimum_rate_margin
+    )
+    if pass_count >= minimum_denominator and material_tail_count > 0:
+        expected = ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION
+    elif opportunity_selected:
         expected = ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION
-    elif dangerous_pass - missed_veto >= required_delta:
+    elif risk_selected:
         expected = ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION
     if (
         selection.get("eligible") is True
         and selection.get("recommendation_id")
-        == "compact_auxiliary_prompt_automatic_successor_v1"
+        == "compact_auxiliary_prompt_automatic_successor_v2"
+        and selection.get("contract_version")
+        == "compact_auxiliary_economic_selection_v2"
         and selection.get("runtime_effect") is True
         and selection.get("allowed_runtime_apply") is True
         and selection.get("selection_contract")
         == "bounded_registered_variant_exact_incumbent_only_no_freeform_edit"
-        and screened >= 20
-        and unclassified == 0
-        and selection.get("minimum_directional_count_delta") == required_delta
+        and economic.get("schema") == "compact_auxiliary_economic_selection_v2"
+        and economic.get("counterfactual_not_realized_pnl") is True
+        and economic.get("missing_economics_imputed") is False
+        and material_tail_loss_pct == -1.0
+        and selection.get("source_manifest_sha256")
+        == source_receipt.get("source_manifest_sha256")
+        and isinstance(selection.get("source_manifest_sha256"), str)
+        and len(selection.get("source_manifest_sha256") or "") == 64
+        and selection.get("economic_outcome_counts_sha256")
+        == digest(economic.get("verdict_x_action_neutral_outcome_counts") or {})
+        and selection.get("economic_outcome_counts_sha256")
+        == economic.get("verdict_x_action_neutral_outcome_counts_sha256")
+        and eligible_count >= minimum_count
+        and minimum_count == 20
+        and minimum_error_count == 3
+        and minimum_denominator == 5
+        and minimum_error_rate == 0.25
+        and minimum_rate_margin == 0.10
+        and veto_count + pass_count == eligible_count
         and selection.get("incumbent_prompt_version") == previous_version
         and selected == expected
         and selected in COMPACT_AI_VARIANTS

@@ -1249,6 +1249,56 @@ def build_report(target_date: str, *, write: bool = False) -> dict[str, Any]:
             blockers.append(
                 "optimizer_action_outcome_calibration_hash_binding_mismatch"
             )
+    compact_table = (
+        (
+            (calibration.get("hierarchical_entry_quality") or {}).get(
+                "machine_decision_case_table"
+            )
+            or {}
+        )
+        if isinstance(calibration, Mapping)
+        else {}
+    )
+    compact_outcomes = (
+        compact_table.get("compact_auxiliary_screen_outcomes") or {}
+        if isinstance(compact_table, Mapping)
+        else {}
+    )
+    compact_economic = (
+        compact_outcomes.get("economic_contract") or {}
+        if isinstance(compact_outcomes, Mapping)
+        else {}
+    )
+    compact_selection = (
+        compact_outcomes.get("automatic_successor_selection") or {}
+        if isinstance(compact_outcomes, Mapping)
+        else {}
+    )
+    compact_source = (
+        compact_table.get("machine_ai_natural_source_receipt") or {}
+        if isinstance(compact_table, Mapping)
+        else {}
+    )
+    compact_economic_counts = (
+        compact_economic.get("verdict_x_action_neutral_outcome_counts") or {}
+        if isinstance(compact_economic, Mapping)
+        else {}
+    )
+    compact_contract_connected = bool(
+        compact_economic.get("schema") == "compact_auxiliary_economic_selection_v2"
+        and compact_selection.get("recommendation_id")
+        == "compact_auxiliary_prompt_automatic_successor_v2"
+        and compact_selection.get("contract_version")
+        == "compact_auxiliary_economic_selection_v2"
+        and isinstance(compact_source.get("source_manifest_sha256"), str)
+        and len(compact_source.get("source_manifest_sha256") or "") == 64
+        and compact_selection.get("source_manifest_sha256")
+        == compact_source.get("source_manifest_sha256")
+        and compact_selection.get("economic_outcome_counts_sha256")
+        == optimizer._canonical_sha256(compact_economic_counts)
+        and compact_economic.get("verdict_x_action_neutral_outcome_counts_sha256")
+        == optimizer._canonical_sha256(compact_economic_counts)
+    )
     if prepared and optimizer_sources.get("prepared_request_sha256") != (
         optimizer._canonical_sha256(prepared)
     ):
@@ -1432,6 +1482,40 @@ def build_report(target_date: str, *, write: bool = False) -> dict[str, Any]:
             "r0_r3_execution_canonical_sha256": (
                 optimizer._canonical_sha256(execution) if execution else None
             ),
+            "compact_auxiliary_calibration_artifact_content_sha256": (
+                calibration.get("artifact_content_sha256")
+                if compact_contract_connected
+                else None
+            ),
+            "compact_auxiliary_natural_source_manifest_sha256": (
+                compact_source.get("source_manifest_sha256")
+                if compact_contract_connected
+                else None
+            ),
+        },
+        "entry_evaluation_roles": {
+            "legacy_r0_r3": {
+                "role": "offline_independent_selector_prompt_research_only",
+                "may_tune_compact_auxiliary": False,
+                "runtime_effect": False,
+            },
+            "compact_auxiliary": {
+                "schema": "compact_auxiliary_consumer_handoff_v1",
+                "role": "machine_enter_post_selection_risk_adjudication",
+                "status": (
+                    "connected_exact_natural_evaluation"
+                    if compact_contract_connected
+                    else "not_observed_or_source_contract_blocked"
+                ),
+                "economic_contract": compact_economic,
+                "automatic_successor_selection": compact_selection,
+                "provider_replay_synthesized": False,
+                "automatic_next_date_publisher": (
+                    "mechanistic_entry_runtime_policy_next_trading_date_publisher"
+                ),
+                "manual_user_approval_required": False,
+                "current_pid_consumption_claimed": False,
+            },
         },
         "request_paths": {
             "entry_base": _path_summary(entry_paths),

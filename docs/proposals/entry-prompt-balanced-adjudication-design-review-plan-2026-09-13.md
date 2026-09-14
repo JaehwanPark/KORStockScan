@@ -1571,3 +1571,7 @@ v2/opportunity v1/risk v1은 frozen reader와 이전 SHA256을 보존한다. 새
 검증은 누락 인용의 차단/정상 인용 수용, frozen 세 버전 SHA256과 로딩, 다음 거래일 자동 이행·당일 bytes 불변, 기계 정책 불변, live adapter·source audit·calibration·optimizer/consumer 회귀를 포함한다. 미래 자연 확인은 기존 `CodeImprovementWorkorderReview0914`에서 prompt version/hash·semantic error·PASS/VETO·submit/실제 비용 후 outcome을 대사한다. 자동 선정의 20건/오류 차이는 경제적 개선의 증명이 아니며 후행 비용 후 EV·순익 빈도·tail 관찰이 필요하다.
 
 검증 receipt: 관련 회귀 661 PASS, 최종 suffix의 code별 표현 보완 후 compact/machine-screen 회귀 21 PASS, compile·diff 검사 PASS, print-only parser 26항목. 기본 본문은 248 words/1951 chars다. 검토 범위의 필수 인용·버전 보존·자동 이행에서 미해결 finding 0이며, 실제 provider의 인용 오류율 감소와 자연 경제성은 미관측이다.
+
+## 24. 장후 전환 통합 작업지시서 연결
+
+[장후 전환 통합 작업지시서](machine-compact-auxiliary-postclose-implementation-workorder-2026-09-14.md)는 #11/#74·#76, #82, #77/#78/21:05, #80/verifier, #119/#23, 최종 요약의 추가 보완을 WP0~WP7로 분할한다. 한 번의 구현 실행 지시로 전체 작업을 진행하고 각 WP의 코드리뷰·수리·재검증 뒤 통합한다. §23의 완료된 인용 수리는 보존한다. 작업지시서 작성 자체는 운영 실행이나 새 구현 완료를 뜻하지 않는다.

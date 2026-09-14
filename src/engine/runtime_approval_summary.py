@@ -2200,10 +2200,15 @@ def build_runtime_approval_summary(
         / "main_ai_prompt_consumer"
         / f"main_ai_prompt_consumer_{target_date}.json"
     )
+    entry_replay_consumer = _load_json(entry_replay_consumer_path)
     entry_replay_observe_only = entry_replay_observe_only_status(
         _load_json(entry_replay_batch_path),
-        _load_json(entry_replay_consumer_path),
+        entry_replay_consumer,
         target_date=target_date,
+    )
+    entry_evaluation_roles = entry_replay_consumer.get("entry_evaluation_roles")
+    entry_evaluation_roles = (
+        entry_evaluation_roles if isinstance(entry_evaluation_roles, dict) else {}
     )
     clean_policy = (
         ev_report.get("clean_tuning_baseline")
@@ -2346,12 +2351,16 @@ def build_runtime_approval_summary(
         "source_quality_preflight_gate": source_quality_preflight_gate,
         "sources": {
             "threshold_cycle_ev": str(ev_json) if ev_json.exists() else None,
-            "ai_entry_setup_paired_replay_batch": str(entry_replay_batch_path)
-            if entry_replay_batch_path.exists()
-            else None,
-            "main_ai_prompt_consumer": str(entry_replay_consumer_path)
-            if entry_replay_consumer_path.exists()
-            else None,
+            "ai_entry_setup_paired_replay_batch": (
+                str(entry_replay_batch_path)
+                if entry_replay_batch_path.exists()
+                else None
+            ),
+            "main_ai_prompt_consumer": (
+                str(entry_replay_consumer_path)
+                if entry_replay_consumer_path.exists()
+                else None
+            ),
             "threshold_cycle_ai_review": (
                 str(threshold_ai_review_path)
                 if threshold_ai_review_path.exists()
@@ -2626,6 +2635,7 @@ def build_runtime_approval_summary(
         },
         "application_timing": _application_timing(target_date, ev_report),
         "entry_replay_observe_only": entry_replay_observe_only,
+        "entry_evaluation_roles": entry_evaluation_roles,
         "strategy_owner_components": [
             item
             for item in _runtime_selection_by_family(ev_report).values()

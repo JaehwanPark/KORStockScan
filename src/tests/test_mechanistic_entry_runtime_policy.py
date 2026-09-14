@@ -154,15 +154,34 @@ def test_postclose_automatically_selects_bounded_compact_successor(tmp_path):
     report = json.loads(path.read_text())
     report["hierarchical_entry_quality"] = {
         "machine_decision_case_table": {
+            "machine_ai_natural_source_receipt": {
+                "source_manifest_sha256": "d" * 64,
+            },
             "compact_auxiliary_screen_outcomes": {
-                "screened_enter_now_count": 20,
-                "missed_veto_count": 4,
-                "dangerous_pass_count": 1,
-                "semantic_unclassified_count": 0,
+                "economic_contract": {
+                    "schema": "compact_auxiliary_economic_selection_v2",
+                    "economic_eligible_count": 20,
+                    "evaluable_veto_count": 5,
+                    "evaluable_pass_count": 15,
+                    "missed_profit_veto_count": 5,
+                    "dangerous_pass_count": 1,
+                    "missed_veto_rate": 1.0,
+                    "dangerous_pass_rate": 0.06666666666666667,
+                    "counterfactual_not_realized_pnl": True,
+                    "missing_economics_imputed": False,
+                    "material_tail_loss_pct": -1.0,
+                    "material_tail_pass_count": 0,
+                    "verdict_x_action_neutral_outcome_counts": {
+                        "PASS|CLEAN_FAST_LOSS_OR_ADVERSE": 1,
+                        "PASS|CLEAN_FAST_PROFIT": 14,
+                        "VETO|CLEAN_FAST_PROFIT": 5,
+                    },
+                },
                 "automatic_successor_selection": {
                     "recommendation_id": (
-                        "compact_auxiliary_prompt_automatic_successor_v1"
+                        "compact_auxiliary_prompt_automatic_successor_v2"
                     ),
+                    "contract_version": "compact_auxiliary_economic_selection_v2",
                     "eligible": True,
                     "runtime_effect": True,
                     "allowed_runtime_apply": True,
@@ -173,11 +192,24 @@ def test_postclose_automatically_selects_bounded_compact_successor(tmp_path):
                     "selected_prompt_version": (
                         policy.ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION
                     ),
-                    "minimum_directional_count_delta": 2,
+                    "minimum_economic_eligible_count": 20,
+                    "minimum_error_count": 3,
+                    "minimum_relevant_denominator": 5,
+                    "minimum_error_rate": 0.25,
+                    "minimum_rate_margin": 0.10,
+                    "source_manifest_sha256": "d" * 64,
                 },
-            }
+            },
         }
     }
+    economic = report["hierarchical_entry_quality"]["machine_decision_case_table"][
+        "compact_auxiliary_screen_outcomes"
+    ]["economic_contract"]
+    outcome_hash = policy.digest(economic["verdict_x_action_neutral_outcome_counts"])
+    economic["verdict_x_action_neutral_outcome_counts_sha256"] = outcome_hash
+    report["hierarchical_entry_quality"]["machine_decision_case_table"][
+        "compact_auxiliary_screen_outcomes"
+    ]["automatic_successor_selection"]["economic_outcome_counts_sha256"] = outcome_hash
     report.pop("artifact_content_sha256")
     calibration._atomic_write_json(
         path, calibration._with_artifact_content_sha256(report)

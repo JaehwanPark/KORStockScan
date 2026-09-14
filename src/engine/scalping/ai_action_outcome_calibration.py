@@ -3498,12 +3498,30 @@ def build_machine_decision_case_table(
         if measured_compact_version in MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS
         else ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION
     )
+    declared_compact_partitions = [
+        partition
+        for partition in compact_measurement.get("partitions") or []
+        if isinstance(partition, dict)
+    ]
+    allowed_compact_partition_keys = {
+        (
+            str(partition.get("prompt_version") or ""),
+            str(partition.get("effective_venue") or "UNKNOWN").upper(),
+            str(partition.get("session_bucket") or "UNKNOWN").upper(),
+            str(partition.get("machine_bundle_sha256") or "UNKNOWN"),
+        )
+        for partition in declared_compact_partitions
+        if partition.get("measurement_allowed") is True
+    }
 
     classifications: Counter[str] = Counter()
     action_counts: Counter[str] = Counter()
     source_date_counts: Counter[str] = Counter()
     hierarchy_selection_counts: Counter[str] = Counter()
     compact_screen_outcomes: Counter[str] = Counter()
+    compact_exclusions: Counter[str] = Counter()
+    compact_current_version_screened_count = 0
+    compact_outcome_evaluable_count = 0
     compact_prompt_version_counts: Counter[str] = Counter()
     selected_child_rule_ids: set[str] = set()
     cases: list[dict] = []
@@ -3571,23 +3589,62 @@ def build_machine_decision_case_table(
                 # the current compact contract. Each successor starts with a
                 # fresh exact-version denominator.
                 if observed_prompt_version == incumbent_compact_version:
-                    semantic_valid = bool(
-                        ai_guard.get("decision_quality_contract_status") == "pass"
-                        and ai_guard.get("semantic_validation_status") in {None, "pass"}
+                    compact_current_version_screened_count += 1
+                    partition_key = (
+                        observed_prompt_version,
+                        str(row.get("effective_venue") or "UNKNOWN").upper(),
+                        str(row.get("session_bucket") or "UNKNOWN").upper(),
+                        str(row.get("bundle_sha256") or "UNKNOWN"),
                     )
-                    compact_screen_outcomes[
-                        "|".join(
-                            (
-                                (
-                                    str(ai_guard.get("ai_risk_verdict") or "")
-                                    if semantic_valid
-                                    else "SEMANTIC_INVALID"
-                                )
-                                or "UNCLASSIFIED",
-                                label,
-                            )
+                    partition_allowed = bool(
+                        not declared_compact_partitions
+                        or partition_key in allowed_compact_partition_keys
+                    )
+                    if not partition_allowed:
+                        compact_exclusions["source_partition_not_allowed"] += 1
+                    else:
+                        semantic_valid = bool(
+                            ai_guard.get("decision_quality_contract_status") == "pass"
+                            and ai_guard.get("semantic_validation_status")
+                            in {None, "pass"}
                         )
-                    ] += 1
+                        compact_verdict = str(
+                            ai_guard.get("ai_risk_verdict") or ""
+                        ).upper()
+                        semantic_valid = bool(
+                            semantic_valid and compact_verdict in {"PASS", "VETO"}
+                        )
+                        compact_screen_outcomes[
+                            "|".join(
+                                (
+                                    (
+                                        compact_verdict
+                                        if semantic_valid
+                                        else "SEMANTIC_INVALID"
+                                    )
+                                    or "UNCLASSIFIED",
+                                    label,
+                                )
+                            )
+                        ] += 1
+                        if not semantic_valid:
+                            compact_exclusions["semantic_invalid"] += 1
+                        elif path.get("status") != "evaluable":
+                            compact_exclusions["outcome_not_evaluable"] += 1
+                        elif label == "CENSORED_OR_SOURCE_GAP":
+                            compact_exclusions["outcome_censored_or_source_gap"] += 1
+                        else:
+                            compact_outcome_evaluable_count += 1
+                            if (
+                                _number(path.get("conservative_execution_cost_pct"))
+                                is None
+                            ):
+                                compact_exclusions["cost_contract_missing"] += 1
+                            elif path.get("first_hit") not in {
+                                "net_target_first",
+                                "exact_stop_first",
+                            }:
+                                compact_exclusions["terminal_path_not_evaluable"] += 1
         cases.append(
             {
                 "decision_trace_id": row.get("decision_trace_id"),
@@ -3612,6 +3669,7 @@ def build_machine_decision_case_table(
                 "machine_liquidity_inputs": row.get("machine_liquidity_inputs"),
                 "hierarchy_selection": row.get("machine_hierarchy_selection"),
                 "entry_quality_label": label,
+                "entry_quality_path": path,
                 "case_classification": classification,
                 "cost_adjusted_target_pct": path.get("gross_net_target_pct"),
                 "time_to_net_target_sec": path.get("time_to_net_target_sec"),
@@ -3629,6 +3687,16 @@ def build_machine_decision_case_table(
                     row.get("ai_and_final_guard")
                 ).get("join_status"),
                 "ai_and_final_guard": row.get("ai_and_final_guard") or {},
+                "compact_partition_eligible": (
+                    not declared_compact_partitions
+                    or (
+                        str(ai_guard.get("prompt_version") or ""),
+                        str(row.get("effective_venue") or "UNKNOWN").upper(),
+                        str(row.get("session_bucket") or "UNKNOWN").upper(),
+                        str(row.get("bundle_sha256") or "UNKNOWN"),
+                    )
+                    in allowed_compact_partition_keys
+                ),
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
                 "actual_order_submitted": False,
@@ -3653,15 +3721,125 @@ def build_machine_decision_case_table(
             "PASS|PROFIT_AFTER_DEEP_ADVERSE",
         )
     )
-    minimum_directional_delta = max(2, math.ceil(compact_screened_count * 0.10))
+    economic_outcomes = Counter()
+    economic_values: list[float] = []
+    opportunity_values: list[float] = []
+    outcome_times_sec: list[float] = []
+    pass_loss_values: list[float] = []
+    for row in cases:
+        ai_guard = _as_dict(row.get("ai_and_final_guard"))
+        path = _as_dict(row.get("entry_quality_path"))
+        version = str(ai_guard.get("prompt_version") or "")
+        verdict = str(ai_guard.get("ai_risk_verdict") or "")
+        semantic_valid = bool(
+            ai_guard.get("decision_quality_contract_status") == "pass"
+            and ai_guard.get("semantic_validation_status") in {None, "pass"}
+        )
+        if (
+            row.get("machine_action") != "ENTER_NOW"
+            or ai_guard.get("provider_called") is not True
+            or version != incumbent_compact_version
+            or row.get("compact_partition_eligible") is not True
+            or not semantic_valid
+            or verdict not in {"PASS", "VETO"}
+            or path.get("status") != "evaluable"
+            or _number(path.get("conservative_execution_cost_pct")) is None
+            or path.get("first_hit") not in {"net_target_first", "exact_stop_first"}
+        ):
+            continue
+        execution_cost = _number(path.get("conservative_execution_cost_pct"))
+        boundary_value = (
+            _number(path.get("gross_net_target_pct"))
+            if path.get("first_hit") == "net_target_first"
+            else _number(path.get("exact_stop_distance_pct"))
+        )
+        if boundary_value is None or execution_cost is None:
+            compact_exclusions["economic_value_missing"] += 1
+            continue
+        value = boundary_value - execution_cost
+        economic_outcomes[f"{verdict}|{row.get('entry_quality_label')}"] += 1
+        opportunity_values.append(value)
+        economic_values.append(value if verdict == "PASS" else 0.0)
+        outcome_time = _number(
+            path.get("time_to_net_target_sec")
+            if path.get("first_hit") == "net_target_first"
+            else path.get("time_to_exact_stop_sec")
+        )
+        if outcome_time is not None:
+            outcome_times_sec.append(outcome_time)
+        if verdict == "PASS" and value < 0:
+            pass_loss_values.append(value)
+    economic_eligible_count = sum(economic_outcomes.values())
+    evaluable_veto_count = sum(
+        count for key, count in economic_outcomes.items() if key.startswith("VETO|")
+    )
+    evaluable_pass_count = sum(
+        count for key, count in economic_outcomes.items() if key.startswith("PASS|")
+    )
+    economic_missed_veto_count = economic_outcomes.get("VETO|CLEAN_FAST_PROFIT", 0)
+    economic_dangerous_pass_count = sum(
+        economic_outcomes.get(key, 0)
+        for key in (
+            "PASS|CLEAN_FAST_LOSS_OR_ADVERSE",
+            "PASS|PROFIT_AFTER_DEEP_ADVERSE",
+        )
+    )
+    missed_veto_rate = (
+        economic_missed_veto_count / evaluable_veto_count
+        if evaluable_veto_count
+        else None
+    )
+    dangerous_pass_rate = (
+        economic_dangerous_pass_count / evaluable_pass_count
+        if evaluable_pass_count
+        else None
+    )
+    minimum_economic_count = 20
+    minimum_error_count = 3
+    minimum_relevant_denominator = 5
+    minimum_error_rate = 0.25
+    minimum_rate_margin = 0.10
+    material_tail_loss_pct = -1.0
+    material_tail_pass_count = sum(
+        value <= material_tail_loss_pct for value in pass_loss_values
+    )
+    incumbent_partition_ids = sorted(
+        str(partition.get("partition_id") or "")
+        for partition in compact_measurement.get("partitions") or []
+        if isinstance(partition, dict)
+        and partition.get("prompt_version") == incumbent_compact_version
+        and partition.get("measurement_allowed") is True
+        and partition.get("partition_id")
+    )
+    economic_outcome_counts = dict(sorted(economic_outcomes.items()))
+    economic_outcome_counts_sha256 = _canonical_sha256(economic_outcome_counts)
     selected_compact_version = incumbent_compact_version
-    if not compact_tuning_input_allowed:
+    if not source_tuning_allowed:
         compact_tuning_direction = "repair_source_quality_before_automatic_selection"
-    elif compact_screened_count < 20:
+    elif compact_measurement.get("measurement_status") == "not_observed_on_source_date":
+        compact_tuning_direction = "carry_incumbent_compact_not_observed"
+    elif not compact_tuning_input_allowed:
+        compact_tuning_direction = "isolate_invalid_compact_partition_and_carry"
+    elif economic_eligible_count < minimum_economic_count:
         compact_tuning_direction = "collect_current_version_natural_evidence"
-    elif compact_unclassified_count:
-        compact_tuning_direction = "repair_semantic_contract_before_wording_change"
-    elif missed_veto_count - dangerous_pass_count >= minimum_directional_delta:
+    elif (
+        evaluable_pass_count >= minimum_relevant_denominator
+        and material_tail_pass_count > 0
+    ):
+        compact_tuning_direction = "select_material_risk_specificity_variant"
+        selected_compact_version = (
+            ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION
+            if incumbent_compact_version
+            != ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION
+            else incumbent_compact_version
+        )
+    elif (
+        evaluable_veto_count >= minimum_relevant_denominator
+        and economic_missed_veto_count >= minimum_error_count
+        and missed_veto_rate is not None
+        and missed_veto_rate >= minimum_error_rate
+        and missed_veto_rate - (dangerous_pass_rate or 0.0) >= minimum_rate_margin
+    ):
         compact_tuning_direction = "select_opportunity_preservation_variant"
         selected_compact_version = (
             ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION
@@ -3669,7 +3847,13 @@ def build_machine_decision_case_table(
             != ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION
             else incumbent_compact_version
         )
-    elif dangerous_pass_count - missed_veto_count >= minimum_directional_delta:
+    elif (
+        evaluable_pass_count >= minimum_relevant_denominator
+        and economic_dangerous_pass_count >= minimum_error_count
+        and dangerous_pass_rate is not None
+        and dangerous_pass_rate >= minimum_error_rate
+        and dangerous_pass_rate - (missed_veto_rate or 0.0) >= minimum_rate_margin
+    ):
         compact_tuning_direction = "select_material_risk_specificity_variant"
         selected_compact_version = (
             ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION
@@ -3681,8 +3865,8 @@ def build_machine_decision_case_table(
         compact_tuning_direction = "carry_balanced_compact_contract"
     compact_selection_eligible = bool(
         compact_tuning_input_allowed
-        and compact_screened_count >= 20
-        and compact_unclassified_count == 0
+        and economic_eligible_count >= minimum_economic_count
+        and conflicting_attempt_identity_count == 0
     )
     if not compact_selection_eligible:
         selected_compact_version = incumbent_compact_version
@@ -3723,19 +3907,69 @@ def build_machine_decision_case_table(
             "missed_veto_count": missed_veto_count,
             "dangerous_pass_count": dangerous_pass_count,
             "semantic_unclassified_count": compact_unclassified_count,
+            "economic_contract": {
+                "schema": "compact_auxiliary_economic_selection_v2",
+                "screened_total": compact_current_version_screened_count,
+                "denominator_preserved": (
+                    compact_current_version_screened_count
+                    == economic_eligible_count + sum(compact_exclusions.values())
+                ),
+                "semantic_valid_count": compact_screened_count
+                - compact_unclassified_count,
+                "outcome_evaluable_count": compact_outcome_evaluable_count,
+                "economic_eligible_count": economic_eligible_count,
+                "verdict_x_action_neutral_outcome_counts": economic_outcome_counts,
+                "verdict_x_action_neutral_outcome_counts_sha256": (
+                    economic_outcome_counts_sha256
+                ),
+                "exclusion_counts": dict(sorted(compact_exclusions.items())),
+                "evaluable_veto_count": evaluable_veto_count,
+                "evaluable_pass_count": evaluable_pass_count,
+                "missed_profit_veto_count": economic_missed_veto_count,
+                "dangerous_pass_count": economic_dangerous_pass_count,
+                "missed_veto_rate": missed_veto_rate,
+                "dangerous_pass_rate": dangerous_pass_rate,
+                "material_tail_loss_pct": material_tail_loss_pct,
+                "material_tail_pass_count": material_tail_pass_count,
+                "worst_pass_counterfactual_net_pct": (
+                    min(pass_loss_values) if pass_loss_values else None
+                ),
+                "mean_time_to_boundary_sec": (
+                    sum(outcome_times_sec) / len(outcome_times_sec)
+                    if outcome_times_sec
+                    else None
+                ),
+                "screened_policy_counterfactual_net_ev_pct": (
+                    sum(economic_values) / len(economic_values)
+                    if economic_values
+                    else None
+                ),
+                "available_opportunity_counterfactual_net_ev_pct": (
+                    sum(opportunity_values) / len(opportunity_values)
+                    if opportunity_values
+                    else None
+                ),
+                "counterfactual_not_realized_pnl": True,
+                "missing_economics_imputed": False,
+            },
             "tuning_interpretation": (
                 "measure_exact_compact_version_auxiliary_pass_veto_quality; "
                 "machine_threshold_challenger_remains_under_existing_cost_"
                 "holdout_gate"
             ),
             "automatic_successor_selection": {
-                "recommendation_id": (
-                    "compact_auxiliary_prompt_automatic_successor_v1"
-                ),
+                "recommendation_id": "compact_auxiliary_prompt_automatic_successor_v2",
+                "contract_version": "compact_auxiliary_economic_selection_v2",
                 "incumbent_prompt_version": incumbent_compact_version,
                 "selected_prompt_version": selected_compact_version,
-                "minimum_current_version_screened_count": 20,
-                "minimum_directional_count_delta": minimum_directional_delta,
+                "source_manifest_sha256": source_receipt.get("source_manifest_sha256"),
+                "incumbent_partition_ids": incumbent_partition_ids,
+                "economic_outcome_counts_sha256": economic_outcome_counts_sha256,
+                "minimum_economic_eligible_count": minimum_economic_count,
+                "minimum_error_count": minimum_error_count,
+                "minimum_relevant_denominator": minimum_relevant_denominator,
+                "minimum_error_rate": minimum_error_rate,
+                "minimum_rate_margin": minimum_rate_margin,
                 "eligible": compact_selection_eligible,
                 "direction": compact_tuning_direction,
                 "runtime_effect": True,

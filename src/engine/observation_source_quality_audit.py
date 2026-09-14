@@ -268,10 +268,9 @@ def _machine_ai_natural_source_consumption(
         provider_linkage[key]
         for key in ("request_missing", "prompt_missing", "outcome_missing")
     )
-    # Compact variants are immutable registry entries. Only one naturally
-    # consumed exact version with its issued prompt receipt may feed the
-    # bounded automatic successor selector; legacy or mixed generations never
-    # tune the active compact denominator.
+    # Compact variants are immutable registry entries.  Audit each natural
+    # policy/scope/bundle partition independently: an old generation or one
+    # damaged scope must not poison a clean incumbent partition.
     from src.engine.ai_prompt_contracts import (
         MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS,
     )
@@ -292,9 +291,13 @@ def _machine_ai_natural_source_consumption(
         {str(trace.get("prompt_version")) for trace in compact_traces}
     )
     measured_compact_version = (
-        observed_compact_versions[0]
-        if len(observed_compact_versions) == 1
-        else AI_VERSION
+        AI_VERSION
+        if AI_VERSION in observed_compact_versions
+        else (
+            observed_compact_versions[0]
+            if len(observed_compact_versions) == 1
+            else AI_VERSION
+        )
     )
     compact_system_prompt_sha256 = policy_digest(
         compact_auxiliary_prompt(prompt_version=measured_compact_version)
@@ -304,14 +307,29 @@ def _machine_ai_natural_source_consumption(
         trace for trace in compact_traces if trace.get("provider_called") is True
     ]
     compact_prompt_receipts = Counter()
+    compact_partition_rows: dict[tuple[str, str, str, str], list[dict[str, Any]]] = (
+        defaultdict(list)
+    )
     for trace in compact_provider_traces:
+        partition_key = (
+            str(trace.get("prompt_version") or ""),
+            str(trace.get("effective_venue") or "UNKNOWN").upper(),
+            str(trace.get("session_bucket") or "UNKNOWN").upper(),
+            str(trace.get("machine_bundle_sha256") or "UNKNOWN"),
+        )
+        compact_partition_rows[partition_key].append(trace)
+        trace_version = partition_key[0]
+        trace_expected_hash = policy_digest(
+            compact_auxiliary_prompt(prompt_version=trace_version)
+        )
+        trace_expected_variant = compact_prompt_variant(trace_version)
         prompt_hash = str(trace.get("auxiliary_system_prompt_sha256") or "")
         variant = str(trace.get("entry_ai_prompt_variant") or "")
         compact_prompt_receipts[
             (
                 "verified_versioned_prompt"
-                if prompt_hash == compact_system_prompt_sha256
-                and variant == expected_compact_variant
+                if prompt_hash == trace_expected_hash
+                and variant == trace_expected_variant
                 else (
                     "missing_prompt_receipt"
                     if not prompt_hash or not variant
@@ -319,16 +337,65 @@ def _machine_ai_natural_source_consumption(
                 )
             )
         ] += 1
+    compact_partitions: list[dict[str, Any]] = []
+    for partition_key, partition_traces in sorted(compact_partition_rows.items()):
+        version, venue, session_bucket, machine_bundle_sha256 = partition_key
+        expected_hash = policy_digest(compact_auxiliary_prompt(prompt_version=version))
+        expected_variant = compact_prompt_variant(version)
+        partition_receipts = Counter()
+        for trace in partition_traces:
+            prompt_hash = str(trace.get("auxiliary_system_prompt_sha256") or "")
+            variant = str(trace.get("entry_ai_prompt_variant") or "")
+            partition_receipts[
+                (
+                    "verified_versioned_prompt"
+                    if prompt_hash == expected_hash and variant == expected_variant
+                    else (
+                        "missing_prompt_receipt"
+                        if not prompt_hash or not variant
+                        else "prompt_or_variant_mismatch"
+                    )
+                )
+            ] += 1
+        allowed = not bool(
+            partition_receipts["missing_prompt_receipt"]
+            or partition_receipts["prompt_or_variant_mismatch"]
+        )
+        identity = {
+            "prompt_version": version,
+            "variant": expected_variant,
+            "effective_venue": venue,
+            "session_bucket": session_bucket,
+            "machine_bundle_sha256": machine_bundle_sha256,
+        }
+        compact_partitions.append(
+            {
+                **identity,
+                "partition_id": _canonical_digest(identity),
+                "issued_system_prompt_sha256": expected_hash,
+                "provider_called_count": len(partition_traces),
+                "provider_prompt_receipt_counts": dict(
+                    sorted(partition_receipts.items())
+                ),
+                "measurement_allowed": allowed,
+                "measurement_status": (
+                    "measurable_natural_compact_partition"
+                    if allowed
+                    else "prompt_receipt_gap"
+                ),
+            }
+        )
     # A legacy-only source date is not evidence about the compact policy.
     # Do not let its otherwise clean receipt authorize a compact-performance
     # interpretation before a compact trace has actually been observed.
-    compact_measurement_allowed = (
-        len(observed_compact_versions) == 1
-        and bool(compact_traces)
-        and not bool(
-            compact_prompt_receipts["missing_prompt_receipt"]
-            or compact_prompt_receipts["prompt_or_variant_mismatch"]
-        )
+    incumbent_partitions = [
+        row
+        for row in compact_partitions
+        if row["prompt_version"] == measured_compact_version
+    ]
+    compact_measurement_allowed = bool(
+        incumbent_partitions
+        and any(row["measurement_allowed"] is True for row in incumbent_partitions)
     )
     status = (
         "source_generation_changed"
@@ -397,17 +464,20 @@ def _machine_ai_natural_source_consumption(
             "provider_prompt_receipt_counts": dict(
                 sorted(compact_prompt_receipts.items())
             ),
+            "partition_schema": "compact_auxiliary_policy_partition_v1",
+            "partitions": compact_partitions,
+            "partition_count": len(compact_partitions),
+            "measurement_eligible_partition_count": sum(
+                row["measurement_allowed"] is True for row in compact_partitions
+            ),
+            "partition_isolation_enabled": True,
             "measurement_status": (
                 "not_observed_on_source_date"
                 if not compact_traces
                 else (
-                    "mixed_compact_generations"
-                    if len(observed_compact_versions) > 1
-                    else (
-                        "prompt_receipt_gap"
-                        if not compact_measurement_allowed
-                        else "measurable_natural_compact_population"
-                    )
+                    "prompt_receipt_gap"
+                    if not compact_measurement_allowed
+                    else "measurable_natural_compact_population"
                 )
             ),
             "measurement_allowed": compact_measurement_allowed,

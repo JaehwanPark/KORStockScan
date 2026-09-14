@@ -332,6 +332,9 @@ def test_machine_ai_natural_source_audit_isolates_compact_prompt_measurement(
         compact_auxiliary_prompt,
         digest,
     )
+    from src.engine.ai_prompt_contracts import (
+        ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION,
+    )
 
     day = "2026-09-14"
 
@@ -362,6 +365,21 @@ def test_machine_ai_natural_source_audit_isolates_compact_prompt_measurement(
             {
                 "schema": "ai_decision_trace_v1",
                 "decision_stage": "entry_screen",
+                "snapshot_id": "damaged-old-compact-snap",
+                "prompt_version": (
+                    ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION
+                ),
+                "provider_called": True,
+                "request_id": "damaged-old-compact-request",
+                "prompt_sha256": "r" * 64,
+                "decision_trace_id": "damaged-old-compact-trace",
+                "entry_ai_prompt_variant": "wrong-variant",
+                "auxiliary_system_prompt_sha256": "0" * 64,
+                "result_source": "live",
+            },
+            {
+                "schema": "ai_decision_trace_v1",
+                "decision_stage": "entry_screen",
                 "snapshot_id": "legacy-snap",
                 "prompt_version": "decision_quality_v2_15_2_balanced_bounded_recovery",
                 "provider_called": True,
@@ -383,6 +401,10 @@ def test_machine_ai_natural_source_audit_isolates_compact_prompt_measurement(
                 "schema": "ai_decision_request_provenance_v1",
                 "request_id": "legacy-request",
             },
+            {
+                "schema": "ai_decision_request_provenance_v1",
+                "request_id": "damaged-old-compact-request",
+            },
         ],
     )
     write(
@@ -390,6 +412,7 @@ def test_machine_ai_natural_source_audit_isolates_compact_prompt_measurement(
         [
             {"schema": "ai_decision_prompt_v1", "prompt_sha256": "p" * 64},
             {"schema": "ai_decision_prompt_v1", "prompt_sha256": "q" * 64},
+            {"schema": "ai_decision_prompt_v1", "prompt_sha256": "r" * 64},
         ],
     )
     write(
@@ -403,15 +426,25 @@ def test_machine_ai_natural_source_audit_isolates_compact_prompt_measurement(
                 "schema": "ai_decision_outcome_label_v1",
                 "decision_trace_id": "legacy-trace",
             },
+            {
+                "schema": "ai_decision_outcome_label_v1",
+                "decision_trace_id": "damaged-old-compact-trace",
+            },
         ],
     )
 
     report = audit._machine_ai_natural_source_consumption(day, data_root=tmp_path)
     compact = report["compact_auxiliary_policy_measurement"]
 
-    assert compact["natural_trace_count"] == 1
-    assert compact["provider_called_count"] == 1
-    assert compact["provider_prompt_receipt_counts"] == {"verified_versioned_prompt": 1}
+    assert compact["natural_trace_count"] == 2
+    assert compact["provider_called_count"] == 2
+    assert compact["provider_prompt_receipt_counts"] == {
+        "prompt_or_variant_mismatch": 1,
+        "verified_versioned_prompt": 1,
+    }
+    assert compact["partition_count"] == 2
+    assert compact["measurement_eligible_partition_count"] == 1
+    assert compact["partition_isolation_enabled"] is True
     assert compact["measurement_status"] == "measurable_natural_compact_population"
     assert compact["measurement_allowed"] is True
     assert compact["prompt_body_tuning"] == (

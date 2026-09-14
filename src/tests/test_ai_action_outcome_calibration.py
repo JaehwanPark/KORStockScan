@@ -772,8 +772,8 @@ def test_machine_case_table_automatically_selects_bounded_compact_variant():
 
     rows = []
     for index in range(20):
-        verdict = "VETO" if index < 4 else "PASS"
-        label = "CLEAN_FAST_PROFIT" if index != 4 else "CLEAN_FAST_LOSS_OR_ADVERSE"
+        verdict = "VETO" if index < 5 else "PASS"
+        label = "CLEAN_FAST_PROFIT" if index != 5 else "CLEAN_FAST_LOSS_OR_ADVERSE"
         rows.append(
             {
                 "decision_trace_id": f"trace-{index}",
@@ -791,6 +791,14 @@ def test_machine_case_table_automatically_selects_bounded_compact_variant():
                 "entry_quality_path": {
                     "status": "evaluable",
                     "entry_quality_label": label,
+                    "conservative_execution_cost_pct": 0.23,
+                    "first_hit": (
+                        "exact_stop_first"
+                        if label == "CLEAN_FAST_LOSS_OR_ADVERSE"
+                        else "net_target_first"
+                    ),
+                    "gross_net_target_pct": 0.30,
+                    "exact_stop_distance_pct": -0.70,
                 },
                 "ai_and_final_guard": {
                     "provider_called": True,
@@ -818,7 +826,8 @@ def test_machine_case_table_automatically_selects_bounded_compact_variant():
         "automatic_successor_selection"
     ]
     assert selection["eligible"] is True
-    assert selection["minimum_directional_count_delta"] == 2
+    assert selection["minimum_economic_eligible_count"] == 20
+    assert selection["contract_version"] == ("compact_auxiliary_economic_selection_v2")
     assert selection["selected_prompt_version"] == (
         ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION
     )
@@ -842,6 +851,75 @@ def test_machine_case_table_automatically_selects_bounded_compact_variant():
     assert blocked["automatic_successor_selection"]["eligible"] is False
     assert blocked["automatic_successor_selection"]["selected_prompt_version"] == (
         AI_VERSION
+    )
+
+    rows[0]["ai_and_final_guard"]["decision_quality_contract_status"] = "pass"
+    sparse_economics_rows = [dict(item) for item in rows]
+    for item in sparse_economics_rows[2:]:
+        item["entry_quality_path"] = {
+            **item["entry_quality_path"],
+            "conservative_execution_cost_pct": None,
+        }
+    sparse = calibration.build_machine_decision_case_table(
+        sparse_economics_rows,
+        capture_census={"captured": 20, "evaluable": 20},
+        source_receipt={
+            "tuning_input_allowed": True,
+            "compact_auxiliary_policy_measurement": {
+                "prompt_version": AI_VERSION,
+                "measurement_allowed": True,
+            },
+        },
+    )["compact_auxiliary_screen_outcomes"]
+    assert sparse["screened_enter_now_count"] == 20
+    assert sparse["economic_contract"]["economic_eligible_count"] == 2
+    assert sparse["economic_contract"]["screened_total"] == 20
+    assert sparse["economic_contract"]["denominator_preserved"] is True
+    assert sparse["economic_contract"]["exclusion_counts"] == {
+        "cost_contract_missing": 18
+    }
+    assert sparse["automatic_successor_selection"]["eligible"] is False
+
+    all_pass_rows = [dict(item) for item in rows]
+    for item in all_pass_rows:
+        item["ai_and_final_guard"] = {
+            **item["ai_and_final_guard"],
+            "ai_risk_verdict": "PASS",
+            "decision_quality_contract_status": "pass",
+        }
+    all_pass = calibration.build_machine_decision_case_table(
+        all_pass_rows,
+        capture_census={"captured": 20, "evaluable": 20},
+        source_receipt={
+            "tuning_input_allowed": True,
+            "compact_auxiliary_policy_measurement": {
+                "prompt_version": AI_VERSION,
+                "measurement_allowed": True,
+            },
+        },
+    )["compact_auxiliary_screen_outcomes"]
+    assert all_pass["economic_contract"]["evaluable_veto_count"] == 0
+    assert all_pass["economic_contract"]["missed_veto_rate"] is None
+    assert all_pass["automatic_successor_selection"]["direction"] == (
+        "carry_balanced_compact_contract"
+    )
+
+    tail_rows = json.loads(json.dumps(rows))
+    tail_rows[5]["entry_quality_path"]["exact_stop_distance_pct"] = -1.25
+    tail = calibration.build_machine_decision_case_table(
+        tail_rows,
+        capture_census={"captured": 20, "evaluable": 20},
+        source_receipt={
+            "tuning_input_allowed": True,
+            "compact_auxiliary_policy_measurement": {
+                "prompt_version": AI_VERSION,
+                "measurement_allowed": True,
+            },
+        },
+    )["compact_auxiliary_screen_outcomes"]
+    assert tail["economic_contract"]["material_tail_pass_count"] == 1
+    assert tail["automatic_successor_selection"]["direction"] == (
+        "select_material_risk_specificity_variant"
     )
 
 
