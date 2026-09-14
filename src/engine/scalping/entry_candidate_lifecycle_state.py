@@ -1,6 +1,6 @@
 """Candidate-owned entry lifecycle instrumentation and materialization.
 
-This module observes the already-selected V2.14 live candidate path.  It has no
+This module observes the already-selected V2.14+ live candidate path.  It has no
 order, account, provider, pricing, sizing, threshold, or bot-state authority.
 Failures are isolated from the trading path and a missing component is never
 inferred from a natural (control) position lifecycle.
@@ -53,22 +53,30 @@ OBSERVATION_CONTRACT = {
 
 _WRITE_LOCK = threading.RLock()
 _ACTIVE_POLICY_STATUSES = {"active_bounded_krx_canary", "active_bounded_nxt_canary"}
+_ACTIVE_ADAPTER_VERSIONS = (
+    "v2_14",
+    "v2_14_1",
+    "v2_14_2",
+    "v2_15",
+    "v2_15_1",
+    "v2_15_2",
+)
 _ACTIVE_ADAPTERS = {
     f"entry_setup_{version}_{venue}_bounded_probe_v1"
-    for version in ("v2_14", "v2_15")
+    for version in _ACTIVE_ADAPTER_VERSIONS
     for venue in ("krx", "nxt")
 }
 _ACTIVE_ADAPTER_SCOPES = {
     f"entry_setup_{version}_krx_bounded_probe_v1": ("KRX", "krx_regular")
-    for version in ("v2_14", "v2_15")
+    for version in _ACTIVE_ADAPTER_VERSIONS
 }
 _ACTIVE_ADAPTER_SCOPES.update(
     {
         f"entry_setup_{version}_nxt_bounded_probe_v1": ("NXT", "nxt_aftermarket")
-        for version in ("v2_14", "v2_15")
+        for version in _ACTIVE_ADAPTER_VERSIONS
     }
 )
-_VALID_VENUES = {"KRX", "NXT", "PREMARKET_KRX_LIKE"}
+_VALID_VENUES = {"KRX", "NXT", "PREMARKET_KRX_LIKE", "KRX_NXT_INTEGRATED"}
 
 _COMPONENT_COMPLETE_STATUSES = {
     "probe": {"filled"},
@@ -355,13 +363,20 @@ def _candidate_context_from_fields(
         return None
     expected_venue, expected_session = _ACTIVE_ADAPTER_SCOPES[adapter]
     from src.engine.scalping.entry_setup_scalping_rollout import (
+        AUTO_PROMOTION_SCOPES,
         SCOPES as ROLLOUT_SCOPES,
     )
 
+    scope_authority = fields.get("entry_setup_live_policy_scope_authority")
+    authority_scopes = (
+        AUTO_PROMOTION_SCOPES
+        if scope_authority == "operator_all_session_auto_promotion"
+        else ROLLOUT_SCOPES
+        if scope_authority == "operator_all_scalping_rollout"
+        else ()
+    )
     approved_rollout_scope = (
-        fields.get("entry_setup_live_policy_scope_authority")
-        == "operator_all_scalping_rollout"
-        and f"{venue}|{session.upper()}" in ROLLOUT_SCOPES
+        f"{venue}|{session.upper()}" in authority_scopes
         and len(_text(fields.get("entry_setup_live_policy_activation_sha256"))) == 64
         and expected_venue == ("KRX" if venue == "KRX" else "NXT")
     )
@@ -402,7 +417,7 @@ def bind_candidate_context(
     observed_at: datetime | None = None,
     output_path: Path | None = None,
 ) -> dict[str, Any] | None:
-    """Bind an exact V2.14 candidate decision without affecting its decision."""
+    """Bind an exact active entry candidate without affecting its decision."""
 
     if not isinstance(stock, dict) or not isinstance(fields, dict):
         return None

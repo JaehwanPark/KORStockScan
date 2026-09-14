@@ -101,6 +101,9 @@ def test_hierarchy_adoption_is_explicit_and_preserves_existing_daily_freeze(tmp_
         now=datetime(2026, 9, 13, 21, tzinfo=policy.KST),
     )
     assert after["hierarchy_adopted"] is True
+    assert after["historical_context"]["hierarchy_disposition"] == (
+        "adopted_no_qualified_child"
+    )
     assert after["machine_policy"] == before["machine_policy"]
     assert after["bundle_sha256"] != before["bundle_sha256"]
     assert (

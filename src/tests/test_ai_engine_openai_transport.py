@@ -3773,6 +3773,50 @@ def test_mechanistic_primary_runtime_adapter_rejects_invalid_screen():
     assert result["entry_primary_decision_owner"] == "mechanistic_entry_adjudicator"
 
 
+@pytest.mark.parametrize(
+    "effective_venue,status,expected_venue_token",
+    [
+        ("KRX", "active_bounded_krx_canary", "krx"),
+        ("NXT", "active_bounded_nxt_canary", "nxt"),
+        ("PREMARKET_KRX_LIKE", "active_bounded_nxt_canary", "nxt"),
+        ("KRX_NXT_INTEGRATED", "active_bounded_nxt_canary", "nxt"),
+        (None, "active_bounded_krx_canary", "krx"),
+    ],
+)
+def test_balanced_live_adapter_tracks_effective_scope_family(
+    effective_venue, status, expected_venue_token
+):
+    from src.engine.ai_prompt_contracts import (
+        DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION as version,
+    )
+    from src.engine.scalping.entry_setup_evidence import (
+        MECHANISTIC_AI_ADVISORY_ROLE,
+        MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
+    )
+    from src.tests.test_entry_setup_evidence import _machine_screen_case
+
+    setup, risk = _machine_screen_case("PASS")
+    result = _build_engine()._normalize_entry_setup_v2_14_result(
+        risk,
+        exact_payload={},
+        setup_evidence=setup,
+        live_policy={
+            "enabled": True,
+            "status": status,
+            "effective_venue": effective_venue,
+            "selected_prompt_version": version,
+            "primary_decision_owner": "mechanistic_entry_adjudicator",
+            "ai_role": MECHANISTIC_AI_ADVISORY_ROLE,
+            "mechanistic_threshold_policy": MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
+        },
+        prompt_version=version,
+    )
+
+    assert result["decision_quality_live_adapter"] == (
+        f"entry_setup_v2_15_2_{expected_venue_token}_bounded_probe_v1"
+    )
+
+
 @pytest.mark.parametrize("verdict", ["PASS", "VETO", "CAUTION", "ABSENT"])
 def test_machine_screen_live_adapter_preserves_binding_verdict(verdict):
     from src.engine.scalping import mechanistic_entry_runtime_policy as initial

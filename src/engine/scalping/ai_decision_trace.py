@@ -2387,6 +2387,9 @@ def record_ai_decision_trace(
                     "entry_ai_screen_status",
                     "entry_ai_screen_required",
                     "entry_ai_screen_pass",
+                    "entry_ai_followup_disposition",
+                    "entry_ai_followup_authority",
+                    "entry_setup_live_policy_scope_authority",
                     "entry_ai_advisory_verdict",
                     "entry_ai_advisory_contract_errors",
                     "entry_ai_raw_risk_codes",
@@ -2441,6 +2444,9 @@ def record_ai_decision_trace(
                 "entry_ai_screen_status",
                 "entry_ai_screen_required",
                 "entry_ai_screen_pass",
+                "entry_ai_followup_disposition",
+                "entry_ai_followup_authority",
+                "entry_setup_live_policy_scope_authority",
             )
             if key in merged
         }

@@ -119,6 +119,11 @@ def test_all_continuous_machine_primary_resolver(monkeypatch, tmp_path, scope):
     assert resolved["machine_bundle_sha256"] == bundle["bundle_sha256"]
     assert resolved["machine_policy_scope"] == [venue, session]
     assert resolved["auxiliary_historical_context"]["scope"] == scope
+    assert resolved["status"] == (
+        "active_bounded_krx_canary"
+        if venue == "KRX"
+        else "active_bounded_nxt_canary"
+    )
     monkeypatch.setenv(policy._cohort_env_key((venue, session)), "false")
     disabled = policy.resolve_live_prompt_policy(
         configured_prompt_version=DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,

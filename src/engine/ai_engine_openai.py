@@ -2190,8 +2190,15 @@ class GPTSniperEngine:
                 )
             )
         )
+        policy_venue = str(policy.get("effective_venue") or "").strip().upper()
         venue_token = (
-            "nxt" if policy.get("status") == "active_bounded_nxt_canary" else "krx"
+            "krx"
+            if policy_venue == "KRX"
+            or (
+                not policy_venue
+                and policy.get("status") == "active_bounded_krx_canary"
+            )
+            else "nxt"
         )
         contract_errors = validate_entry_risk_adjudication(
             risk,

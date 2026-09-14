@@ -1976,6 +1976,21 @@ def test_machine_screen_retained_in_trace_and_pending_outcome(
         "entry_ai_screen_status": status,
         "entry_ai_screen_required": True,
         "entry_ai_screen_pass": status == "pass",
+        "entry_ai_followup_disposition": (
+            "ai_pass_existing_submit_guard"
+            if status == "pass"
+            else "ai_veto_point_drop"
+            if status == "veto"
+            else "ai_screen_invalid_fail_closed_wait"
+        ),
+        "entry_ai_followup_authority": (
+            "existing_runtime_submit_and_order_guards"
+            if status == "pass"
+            else "no_entry_authority"
+        ),
+        "entry_setup_live_policy_scope_authority": (
+            "operator_all_session_auto_promotion"
+        ),
     }
     trace.record_ai_decision_trace(
         {

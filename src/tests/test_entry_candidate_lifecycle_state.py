@@ -2,7 +2,10 @@ import json
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from src.engine.scalping import entry_candidate_lifecycle_state as lifecycle
+from src.engine.scalping.entry_setup_scalping_rollout import AUTO_PROMOTION_SCOPES
 
 KST = ZoneInfo("Asia/Seoul")
 
@@ -50,6 +53,56 @@ def test_nxt_v2_15_adapter_is_recorded_and_not_relabelled_as_krx(tmp_path):
     stock.pop(lifecycle.CONTEXT_KEY)
     fields["entry_setup_live_policy_effective_venue"] = "KRX"
     assert lifecycle.bind_candidate_context(stock, fields, output_path=path) is None
+
+
+def test_balanced_v2_15_2_adapter_is_bound_for_current_krx_policy(tmp_path):
+    fields = {
+        **_candidate_fields(),
+        "decision_quality_live_adapter": "entry_setup_v2_15_2_krx_bounded_probe_v1",
+        "ai_prompt_version": "decision_quality_v2_15_2_balanced_bounded_recovery",
+        "entry_setup_live_policy_scope_authority": (
+            "operator_all_session_auto_promotion"
+        ),
+        "entry_setup_live_policy_activation_sha256": "a" * 64,
+    }
+    context = lifecycle.bind_candidate_context(
+        {"id": 17, "code": "005930"},
+        fields,
+        output_path=tmp_path / "current.jsonl",
+    )
+    assert context is not None
+    assert context["live_adapter"] == fields["decision_quality_live_adapter"]
+
+
+@pytest.mark.parametrize("scope", AUTO_PROMOTION_SCOPES)
+def test_all_session_auto_promotion_scope_binds_lifecycle(tmp_path, scope):
+    venue, session = scope.split("|")
+    adapter_venue = "krx" if venue == "KRX" else "nxt"
+    fields = {
+        **_candidate_fields(),
+        "decision_quality_live_adapter": (
+            f"entry_setup_v2_15_2_{adapter_venue}_bounded_probe_v1"
+        ),
+        "entry_setup_live_policy_status": (
+            "active_bounded_krx_canary"
+            if venue == "KRX"
+            else "active_bounded_nxt_canary"
+        ),
+        "entry_setup_live_policy_effective_venue": venue,
+        "entry_setup_live_policy_session_bucket": session.lower(),
+        "entry_setup_live_policy_activation_sha256": "a" * 64,
+        "entry_setup_live_policy_scope_authority": (
+            "operator_all_session_auto_promotion"
+        ),
+    }
+    context = lifecycle.bind_candidate_context(
+        {"id": 17, "code": "005930"},
+        fields,
+        output_path=tmp_path / f"{venue}-{session}.jsonl",
+    )
+    assert context is not None
+    assert context["effective_venue"] == venue
+    assert context["session_bucket"] == session.lower()
 
 
 def test_post_effective_dual_does_not_inherit_legacy_nxt_live_adapter(tmp_path):

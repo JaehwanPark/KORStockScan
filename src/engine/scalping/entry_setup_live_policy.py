@@ -2150,7 +2150,8 @@ def resolve_live_prompt_policy(
                 )
                 optimized_ai_selected = bool(
                     optimized_ai.get("enabled") is True
-                    and optimized_ai.get("status") == "active_bounded_krx_canary"
+                    and optimized_ai.get("status")
+                    in {"active_bounded_krx_canary", "active_bounded_nxt_canary"}
                 )
                 selected_ai_version = (
                     optimized_ai["selected_prompt_version"]
@@ -2159,7 +2160,11 @@ def resolve_live_prompt_policy(
                 )
                 result.update(
                     enabled=True,
-                    status="active_bounded_krx_canary",
+                    status=(
+                        "active_bounded_krx_canary"
+                        if cohort[0] == "KRX"
+                        else "active_bounded_nxt_canary"
+                    ),
                     source_date=initial["source_date"],
                     selected_prompt_version=selected_ai_version,
                     candidate_contract_sha256=initial["bundle_sha256"],

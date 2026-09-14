@@ -396,8 +396,17 @@ def publish(
             "runtime_extension"
         ) or {}
         child = hierarchy.get("policy_candidate")
+        previous_hierarchy_active = bool(
+            previous
+            and isinstance(previous.get("machine_policy"), dict)
+            and "hierarchy" in previous["machine_policy"]
+        )
         hierarchy_disposition = (
-            "not_adopted" if not hierarchy_adopted else "incumbent_child_carried"
+            "not_adopted"
+            if not hierarchy_adopted
+            else "incumbent_child_carried"
+            if previous_hierarchy_active
+            else "adopted_no_qualified_child"
         )
         if hierarchy_adopted and child is not None:
             errors = calibration.validate_hierarchy_candidate(
