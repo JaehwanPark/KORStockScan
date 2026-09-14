@@ -1559,3 +1559,15 @@ Python 변경은 관련 pytest와 compile, shell은 `bash -n`과 wrapper contrac
 | 경제성 | 같은 scope에서 실제/CF 분리, 비용 후 EV·순익 빈도·tail·자본점유 확인 |
 
 compact migration은 코드/정책 gate가 닫히면 대조군 없이 직접 전환할 수 있다. 경제성 미관측은 그 전환을 취소하지 않지만 경제성 완료도 아니다. 예상 효과는 상충 지시 제거, system prompt 축소, semantic binding 명료화, legacy 독립 선정 역할의 재유입 방지와 장후 책임분모 정정이다. 실제 입력 토큰·AI 지연·submit 지연·VETO/PASS 품질·비용 후 작은 순익 빈도는 PID first-use와 후행 natural receipt로 확인한다. 호출량·retry/model·threshold·수량·hard guard 변경으로 효과를 가장하지 않는다.
+
+## 23. 축약형 인용 계약 수리
+
+2026-09-14 재점검에서 PASS의 adverse 배열 누락은 `entry_risk_pass_residual_risk_not_considered`, bounded VETO의 positive 배열 누락은 `entry_risk_veto_requires_blocking_risk`를 재현했다. JSON schema와 의미 검증을 모두 만족하도록 compact v3는 각 risk-code당 최소 한 adverse ID를 `contradicting_fact_ids`에, bounded VETO의 positive ID를 `supporting_fact_ids`에 명시적으로 요구한다. 각 code의 모든 중복 fact 인용을 요구하지 않는다. 기존 검증기·주문 guard는 그대로 유지한다.
+
+v2/opportunity v1/risk v1은 frozen reader와 이전 SHA256을 보존한다. 새 writer는 compact v3/opportunity v2/risk v2를 발행한다. 기존 publisher가 다음 거래일에 semantic 수리로 자동 이행하며 당일 frozen 정책을 교체하지 않는다. 형식 수리에 20건·양수 EV를 요구하지 않고, 이후 #82의 자동 성과 변형 선정은 exact incumbent 분모와 기존 gate를 사용한다. 개별 사용자 승인은 필요 없다.
+
+프롬프트에는 기계 ENTER 보조 역할, 비용 차감 작은 수익 목표, 선택적 결측의 중립 처리, 위험/긍정 근거와 출력 규칙을 유지한다. 원장 metadata 축소는 별도 최적화 여지이며 이번 필수 인용 수리에 payload/hash 재설계를 추가하지 않는다. 기대 효과는 모델이 정상 근거를 갖고도 인용 형식 때문에 재확인으로 이탈하는 비율의 감소다. 실제 순익 증가·AI latency 감소는 이번 코드 검증으로 확정하지 않는다.
+
+검증은 누락 인용의 차단/정상 인용 수용, frozen 세 버전 SHA256과 로딩, 다음 거래일 자동 이행·당일 bytes 불변, 기계 정책 불변, live adapter·source audit·calibration·optimizer/consumer 회귀를 포함한다. 미래 자연 확인은 기존 `CodeImprovementWorkorderReview0914`에서 prompt version/hash·semantic error·PASS/VETO·submit/실제 비용 후 outcome을 대사한다. 자동 선정의 20건/오류 차이는 경제적 개선의 증명이 아니며 후행 비용 후 EV·순익 빈도·tail 관찰이 필요하다.
+
+검증 receipt: 관련 회귀 661 PASS, 최종 suffix의 code별 표현 보완 후 compact/machine-screen 회귀 21 PASS, compile·diff 검사 PASS, print-only parser 26항목. 기본 본문은 248 words/1951 chars다. 검토 범위의 필수 인용·버전 보존·자동 이행에서 미해결 finding 0이며, 실제 provider의 인용 오류율 감소와 자연 경제성은 미관측이다.

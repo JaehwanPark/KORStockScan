@@ -1070,6 +1070,10 @@ Verifier의 micro diagnostic warning은 required workorder ID와 issues0·runtim
 
 미래 effective-date bundle은07:35 이전 새 source에 갱신 가능하고 immutable generation/source를 보존한다. 이후 frozen 당일 세대를 유지한다. 다음날 갱신 결손은 이전 정책 원 날짜를 보존한 carry/경고, 손상된 당일 정책은 fail-closed다. 운영 권한은 기존 유효 operator pin·당일 runtime/owner/주문 guard이며 초기 bundle은 추가 주문 권한이 아니다. 기존 표의 `candidate absence leaves incumbent`는 이 명시 초기 adoption 뒤 새 incumbent 유지로 읽는다. 9/13 발행/미래 consumer preview는 선택 release 배포·현재 PID 소비/순익 receipt가 아니다. 후속은9/14 기존 checklist owner에 귀속한다.
 
+### Compact 인용 계약 자동 이행
+
+[설계 §23](proposals/entry-prompt-balanced-adjudication-design-review-plan-2026-09-13.md#23-축약형-인용-계약-수리): compact v3/opportunity v2/risk v2는 PASS의 risk-code별 adverse 인용과 bounded VETO의 positive 인용을 명시한다. 기존 v2/opportunity1/risk1의 frozen bytes/hash와 당일 정책은 유지한다. 같은 #82→publisher가 다음 거래일에 인용 수리를 자동 발행하며 이 코드 수리에 성과 표본 floor나 사용자 선택을 추가하지 않는다. 이후 자동 성과 변형 선정은 exact incumbent의 기존 gate를 따른다. PREOPEN/PID 자연 소비와 비용 후 경제성은 기존 `CodeImprovementWorkorderReview0914`에서 확인한다.
+
 ### 9/11 명시 승인 low-price 후속
 
 [승인 구현·배포](audit-reports/2026-09-11-widget-episode-approved-deployment.md): source9/10 native 추천5개 중 기존 gate를 통과한3개를9/11 profile revision으로 연결한다. `profiles → dated baseline/bounds → candidate carry → policy apply → exact preflight → live wrapper`와 `PROFILE_FIRST_OPERATIONAL_DATES → 장후 report`가 같은61개/과거59개 날짜 경계를 소비한다.07:32 standing authority는9/11 successor로LX세미콘 episode scope를 포함하고, broker/custody skip은 유지한다. 기존 저가주 template에90 drop-in과 신규4개/변경2개 timer만 설치하며 widget·Samsung80 release와 지속 추가기능 pin은 유지한다. 향후 자연 기동은9/11 체크리스트 기존 owner에 남긴다.

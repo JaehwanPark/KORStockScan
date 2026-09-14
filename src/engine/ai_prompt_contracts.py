@@ -660,12 +660,17 @@ DECISION_QUALITY_V2_15_4_COUNTERWEIGHT_BOUND_BOUNDED_RECOVERY_PROMPT_VERSION = (
     "decision_quality_v2_15_4_counterweight_bound_bounded_recovery"
 )
 ENTRY_MACHINE_AUXILIARY_COMPACT_V1_PROMPT_VERSION = "entry_machine_auxiliary_compact_v1"
-ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION = "entry_machine_auxiliary_compact_v2"
+FROZEN_COMPACT_V2_VARIANTS = {
+    "entry_machine_auxiliary_compact_v2": "machine_first_compact_pass_veto_v2",
+    "entry_machine_auxiliary_compact_opportunity_v1": "machine_first_compact_opportunity_pass_veto_v1",
+    "entry_machine_auxiliary_compact_risk_v1": "machine_first_compact_risk_pass_veto_v1",
+}
+ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION = "entry_machine_auxiliary_compact_v3"
 ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION = (
-    "entry_machine_auxiliary_compact_opportunity_v1"
+    "entry_machine_auxiliary_compact_opportunity_v2"
 )
 ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION = (
-    "entry_machine_auxiliary_compact_risk_v1"
+    "entry_machine_auxiliary_compact_risk_v2"
 )
 BALANCED_ENTRY_PROMPT_VERSIONS = frozenset(
     {
@@ -676,6 +681,7 @@ BALANCED_ENTRY_PROMPT_VERSIONS = frozenset(
 MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS = frozenset(
     {
         ENTRY_MACHINE_AUXILIARY_COMPACT_V1_PROMPT_VERSION,
+        *FROZEN_COMPACT_V2_VARIANTS,
         ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
         ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION,
         ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION,
@@ -2141,7 +2147,7 @@ Machine auxiliary entry risk-screen contract:
 """.strip()
 
 
-_MACHINE_AUXILIARY_COMPACT_ENTRY_RULES = """
+_MACHINE_AUXILIARY_COMPACT_V2_ENTRY_RULES = """
 Machine auxiliary entry risk-screen contract:
 1. The deterministic machine already selected this exact ENTER_NOW point and
    owns symbol, timing, thresholds, price and quantity. You only PASS or VETO
@@ -2183,6 +2189,21 @@ that support, VETO this point and cite the exact adverse binding.
 """.strip()
 
 
+_MACHINE_AUXILIARY_COMPACT_ENTRY_RULES = (
+    _MACHINE_AUXILIARY_COMPACT_V2_ENTRY_RULES.replace(
+        "fact and one trigger-support fact. Cite current support that compensates\n"
+        "   every bound adverse fact.",
+        "fact and one trigger-support fact in supporting_fact_ids. For each\n"
+        "   risk_fact_bindings code, cite at least one bound adverse ID in\n"
+        "   contradicting_fact_ids, even when current support compensates it.",
+    ).replace(
+        "evidence still materially outweighs cited support.",
+        "evidence still materially outweighs support; also cite at least one\n"
+        "   positive_facts ID in supporting_fact_ids for these bounded-risk VETOs.",
+    )
+)
+
+
 def machine_auxiliary_compact_entry_system_prompt(
     stage: str, *, prompt_version: str = ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION
 ) -> str:
@@ -2192,19 +2213,32 @@ def machine_auxiliary_compact_entry_system_prompt(
         raise ValueError("machine auxiliary compact prompt supports entry only")
     if prompt_version == ENTRY_MACHINE_AUXILIARY_COMPACT_V1_PROMPT_VERSION:
         return _MACHINE_AUXILIARY_COMPACT_V1_ENTRY_RULES
+    if prompt_version in FROZEN_COMPACT_V2_VARIANTS:
+        suffix = {
+            "entry_machine_auxiliary_compact_v2": "",
+            "entry_machine_auxiliary_compact_opportunity_v1": _MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_SUFFIX,
+            "entry_machine_auxiliary_compact_risk_v1": _MACHINE_AUXILIARY_COMPACT_RISK_SUFFIX,
+        }[prompt_version]
+        return _MACHINE_AUXILIARY_COMPACT_V2_ENTRY_RULES + (
+            "\n\n" + suffix if suffix else ""
+        )
     if prompt_version == ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION:
         return _MACHINE_AUXILIARY_COMPACT_ENTRY_RULES
     if prompt_version == ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION:
         return (
             _MACHINE_AUXILIARY_COMPACT_ENTRY_RULES
             + "\n\n"
-            + _MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_SUFFIX
+            + _MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_SUFFIX.replace(
+                "every\nbounded adverse fact", "each\nbounded risk"
+            )
         )
     if prompt_version == ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION:
         return (
             _MACHINE_AUXILIARY_COMPACT_ENTRY_RULES
             + "\n\n"
-            + _MACHINE_AUXILIARY_COMPACT_RISK_SUFFIX
+            + _MACHINE_AUXILIARY_COMPACT_RISK_SUFFIX.replace(
+                "every bound adverse fact", "each bound risk"
+            )
         )
     raise ValueError("unsupported machine auxiliary compact prompt version")
 

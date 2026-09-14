@@ -785,6 +785,35 @@ def _machine_screen_case(verdict):
     return evidence, risk
 
 
+@pytest.mark.parametrize(
+    "verdict,field,error",
+    [
+        (
+            "PASS",
+            "contradicting_fact_ids",
+            "entry_risk_pass_residual_risk_not_considered",
+        ),
+        ("VETO", "supporting_fact_ids", "entry_risk_veto_requires_blocking_risk"),
+    ],
+)
+def test_compact_citation_contract_preserves_binding_guard(verdict, field, error):
+    from src.engine.scalping.entry_setup_evidence import (
+        validate_mechanistic_risk_screen,
+    )
+
+    setup, response = _machine_screen_case(verdict)
+    assert validate_mechanistic_risk_screen(response, setup_evidence=setup) == []
+    missing = {**response, field: []}
+    assert error in validate_mechanistic_risk_screen(missing, setup_evidence=setup)
+    assert (
+        compose_mechanistic_primary_decision(
+            setup_evidence=setup,
+            ai_risk_adjudication=missing,
+        )["action"]
+        != "BUY"
+    )
+
+
 def _hierarchy_case(*, micro=None):
     from src.engine.scalping import entry_setup_evidence as module
 
@@ -938,13 +967,16 @@ def test_machine_point_has_binding_ai_screen(verdict):
     assert result["action"] == ({"PASS": "BUY", "VETO": "DROP"}.get(verdict, "WAIT"))
     assert result["entry_probe_intent"] is (verdict == "PASS")
     assert result["entry_ai_screen_pass"] is (verdict == "PASS")
-    assert result["entry_ai_followup_disposition"] == {
-        "PASS": "ai_pass_existing_submit_guard",
-        "VETO": "ai_veto_point_drop",
-        "CAUTION": "ai_caution_bounded_recheck",
-        "MALFORMED": "ai_screen_invalid_fail_closed_wait",
-        "ABSENT": "ai_screen_invalid_fail_closed_wait",
-    }[verdict]
+    assert (
+        result["entry_ai_followup_disposition"]
+        == {
+            "PASS": "ai_pass_existing_submit_guard",
+            "VETO": "ai_veto_point_drop",
+            "CAUTION": "ai_caution_bounded_recheck",
+            "MALFORMED": "ai_screen_invalid_fail_closed_wait",
+            "ABSENT": "ai_screen_invalid_fail_closed_wait",
+        }[verdict]
+    )
     if verdict == "VETO":
         assert result["entry_ai_advisory_contract_errors"] == []
         # Other AI owners retain their original, stricter veto contract.
@@ -983,7 +1015,9 @@ def test_ai_pass_cannot_promote_machine_liquidity_recheck():
     assert result["entry_mechanistic_action"] == "RECHECK"
     assert result["action"] == "WAIT"
     assert result["entry_probe_intent"] is False
-    assert result["entry_ai_followup_disposition"] == "machine_recheck_next_scanner_loop"
+    assert (
+        result["entry_ai_followup_disposition"] == "machine_recheck_next_scanner_loop"
+    )
     assert (
         result["entry_ai_followup_authority"]
         == "existing_scanner_loop_observation_only"

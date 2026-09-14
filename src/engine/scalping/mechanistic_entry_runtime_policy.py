@@ -24,6 +24,7 @@ from src.engine.ai_prompt_contracts import (
     ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION,
     ENTRY_MACHINE_AUXILIARY_COMPACT_V1_PROMPT_VERSION,
     ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
+    FROZEN_COMPACT_V2_VARIANTS,
     machine_auxiliary_compact_entry_system_prompt,
 )
 from src.engine.scalping.entry_setup_evidence import (
@@ -44,14 +45,15 @@ LEGACY_COMPACT_AI_VERSION = ENTRY_MACHINE_AUXILIARY_COMPACT_V1_PROMPT_VERSION
 AI_VERSION = ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION
 LEGACY_AI_VARIANT = "machine_first_pass_veto_v2"
 LEGACY_COMPACT_AI_VARIANT = "machine_first_compact_pass_veto_v1"
-AI_VARIANT = "machine_first_compact_pass_veto_v2"
+AI_VARIANT = "machine_first_compact_pass_veto_v3"
 COMPACT_AI_VARIANTS = {
+    **FROZEN_COMPACT_V2_VARIANTS,
     AI_VERSION: AI_VARIANT,
     ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION: (
-        "machine_first_compact_opportunity_pass_veto_v1"
+        "machine_first_compact_opportunity_pass_veto_v2"
     ),
     ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION: (
-        "machine_first_compact_risk_pass_veto_v1"
+        "machine_first_compact_risk_pass_veto_v2"
     ),
 }
 AI_ADDENDUM = """
@@ -271,9 +273,14 @@ def _selected_compact_prompt_version(source: dict, previous: dict | None) -> str
     previous_version = str(
         ((previous or {}).get("ai_policy") or {}).get("prompt_version") or ""
     )
-    # The reviewed v1->v2 semantic correction is an explicit code migration,
+    # The reviewed citation correction is an explicit code migration,
     # not a performance claim. Later changes require #82's exact-version gate.
-    if previous_version in {"", LEGACY_AI_VERSION, LEGACY_COMPACT_AI_VERSION}:
+    if previous_version in {
+        "",
+        LEGACY_AI_VERSION,
+        LEGACY_COMPACT_AI_VERSION,
+        *FROZEN_COMPACT_V2_VARIANTS,
+    }:
         return AI_VERSION
     case_table = (source.get("hierarchical_entry_quality") or {}).get(
         "machine_decision_case_table"
@@ -660,7 +667,13 @@ def publish(
         )
         compact_prompt_disposition = (
             "compact_contract_migration"
-            if previous_ai_version in {"", LEGACY_AI_VERSION, LEGACY_COMPACT_AI_VERSION}
+            if previous_ai_version
+            in {
+                "",
+                LEGACY_AI_VERSION,
+                LEGACY_COMPACT_AI_VERSION,
+                *FROZEN_COMPACT_V2_VARIANTS,
+            }
             else (
                 "compact_registered_successor_auto_selected"
                 if selected_ai_version != previous_ai_version

@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import json
 from datetime import datetime
 from types import SimpleNamespace
@@ -101,6 +102,50 @@ def test_frozen_compact_v1_bundle_remains_readable(tmp_path):
     loaded = policy.load(data_root=tmp_path, target_date="2026-09-14")
 
     assert loaded["ai_policy"]["prompt_version"] == policy.LEGACY_COMPACT_AI_VERSION
+
+
+@pytest.mark.parametrize(
+    "version,expected_hash",
+    [
+        (
+            "entry_machine_auxiliary_compact_v2",
+            "61db6c6864ac1c9f77f785cb6b18f64dc8aba25e20f8e51567c8cf6b8ac82491",
+        ),
+        (
+            "entry_machine_auxiliary_compact_opportunity_v1",
+            "d6f774047e7d4d1a4c41b0d40740a4dd713a0fbcdb7497cde6a501e2fd9f95fe",
+        ),
+        (
+            "entry_machine_auxiliary_compact_risk_v1",
+            "7416560b3722e3d1ab06d0d9d9564ce7d27a1bd8cb6711062fe23773ccfb95a9",
+        ),
+    ],
+)
+def test_frozen_compact_citations_migrate_only_next_date(
+    tmp_path, version, expected_hash
+):
+    bundle = initial(tmp_path)
+    prompt = policy.compact_auxiliary_prompt(prompt_version=version)
+    assert hashlib.sha256(prompt.encode()).hexdigest() == expected_hash
+    bundle["ai_policy"].update(
+        prompt_version=version,
+        variant=policy.compact_prompt_variant(version),
+        system_prompt=prompt,
+        system_prompt_sha256=policy.digest(prompt),
+    )
+    bundle["bundle_sha256"] = policy.digest(
+        {key: value for key, value in bundle.items() if key != "bundle_sha256"}
+    )
+    frozen_path = policy.root(tmp_path) / "policy_2026-09-14.json"
+    calibration._atomic_write_json(frozen_path, bundle)
+    before = frozen_path.read_bytes()
+    assert policy.load(data_root=tmp_path, target_date="2026-09-14") == bundle
+    successor = policy.publish(source(tmp_path, "2026-09-14"), data_root=tmp_path)
+    assert successor["target_date"] == "2026-09-15"
+    assert successor["ai_policy"]["prompt_version"] == policy.AI_VERSION
+    assert successor["compact_prompt_disposition"] == "compact_contract_migration"
+    assert successor["machine_policy"] == bundle["machine_policy"]
+    assert frozen_path.read_bytes() == before
 
 
 def test_postclose_automatically_selects_bounded_compact_successor(tmp_path):

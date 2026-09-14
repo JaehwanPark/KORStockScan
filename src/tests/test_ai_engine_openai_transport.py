@@ -3733,6 +3733,12 @@ def test_machine_auxiliary_compact_prompt_is_exact_versioned_contract():
     assert prompt.isascii()
     assert 180 <= len(prompt.split()) <= 280
     assert 'risk_codes=["NO_BLOCKING_RISK"]' in prompt
+    assert "For each\n   risk_fact_bindings code" in prompt
+    assert "contradicting_fact_ids, even when current support compensates it" in prompt
+    assert (
+        "positive_facts ID in supporting_fact_ids for these bounded-risk VETOs"
+        in prompt
+    )
     assert "forwards the point to existing final guards" in prompt
     assert "diagnostic until" not in prompt
     assert "Historical policy context" not in prompt
@@ -3742,7 +3748,7 @@ def test_machine_auxiliary_compact_prompt_is_exact_versioned_contract():
         schema_name=ENTRY_RISK_ADJUDICATION_SCHEMA,
         endpoint_name="analyze_target",
     )
-    assert len(wrapped.split()) <= 300
+    assert len(wrapped.split()) <= 340
     assert "Domain glossary for interpretation" not in wrapped
     assert prompt_type == "scalping_entry"
     assert version == ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION
