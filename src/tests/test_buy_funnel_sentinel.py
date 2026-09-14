@@ -866,6 +866,68 @@ def test_submit_drought_without_latency_block_does_not_claim_latency_drought(
     assert latency_axis["observed_count"] == 0
 
 
+def test_submit_drought_reason_reports_only_breached_conversion_floor():
+    classification = sentinel._classify(
+        {
+            "stage_unique": {
+                "ai_confirmed": 20,
+                "budget_pass": 13,
+                "latency_pass": 0,
+                "order_bundle_submitted": 2,
+            },
+            "ratios": {
+                "submitted_to_ai_unique_pct": 10.0,
+                "submitted_to_budget_unique_pct": 15.38,
+                "budget_to_ai_unique_pct": 65.0,
+                "latency_to_budget_unique_pct": 0.0,
+            },
+            "event_count": 35,
+            "latest_event_at": "2026-05-06T10:00:00",
+        },
+        None,
+        as_of=sentinel._parse_as_of("2026-05-06", "10:01:00"),
+    )
+
+    reason = next(
+        item
+        for item in classification["reasons"]
+        if item.startswith("submitted conversion breached critical floor:")
+    )
+    assert "submitted/ai=10.00% < 20.00%" in reason
+    assert "submitted/budget" not in reason
+
+
+def test_submit_drought_reason_reports_budget_floor_when_it_is_the_only_breach():
+    classification = sentinel._classify(
+        {
+            "stage_unique": {
+                "ai_confirmed": 20,
+                "budget_pass": 10,
+                "latency_pass": 0,
+                "order_bundle_submitted": 1,
+            },
+            "ratios": {
+                "submitted_to_ai_unique_pct": 25.0,
+                "submitted_to_budget_unique_pct": 10.0,
+                "budget_to_ai_unique_pct": 50.0,
+                "latency_to_budget_unique_pct": 0.0,
+            },
+            "event_count": 31,
+            "latest_event_at": "2026-05-06T10:00:00",
+        },
+        None,
+        as_of=sentinel._parse_as_of("2026-05-06", "10:01:00"),
+    )
+
+    reason = next(
+        item
+        for item in classification["reasons"]
+        if item.startswith("submitted conversion breached critical floor:")
+    )
+    assert "submitted/ai" not in reason
+    assert "submitted/budget=10.00% <= 10.00%" in reason
+
+
 def test_unrelated_latency_block_does_not_claim_budget_pass_latency_drought(
     monkeypatch, tmp_path
 ):

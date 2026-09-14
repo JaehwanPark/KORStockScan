@@ -3355,19 +3355,29 @@ def _classify(
     submitted_to_budget = float(
         ratios.get("submitted_to_budget_unique_pct", 0.0) or 0.0
     )
-    submit_drought_critical = (
+    ai_conversion_breached = (
         ai_unique >= SUBMIT_DROUGHT_MIN_AI_UNIQUE
         and submitted_to_ai < SUBMIT_TO_AI_CRITICAL_PCT
-    ) or (
+    )
+    budget_conversion_breached = (
         budget_unique >= SUBMIT_DROUGHT_MIN_BUDGET_UNIQUE
         and submitted_to_budget <= SUBMIT_TO_BUDGET_CRITICAL_PCT
     )
+    submit_drought_critical = ai_conversion_breached or budget_conversion_breached
     if submit_drought_critical:
+        breached_floors: list[str] = []
+        if ai_conversion_breached:
+            breached_floors.append(
+                f"submitted/ai={submitted_to_ai:.2f}% < {SUBMIT_TO_AI_CRITICAL_PCT:.2f}%"
+            )
+        if budget_conversion_breached:
+            breached_floors.append(
+                "submitted/budget="
+                f"{submitted_to_budget:.2f}% <= {SUBMIT_TO_BUDGET_CRITICAL_PCT:.2f}%"
+            )
         matches.append("SUBMIT_DROUGHT_CRITICAL")
         reasons.append(
-            "submitted conversion breached critical floor: "
-            f"submitted/ai={submitted_to_ai:.2f}% < {SUBMIT_TO_AI_CRITICAL_PCT:.2f}% "
-            f"or submitted/budget={submitted_to_budget:.2f}% <= {SUBMIT_TO_BUDGET_CRITICAL_PCT:.2f}%"
+            "submitted conversion breached critical floor: " + " or ".join(breached_floors)
         )
     submit_drought_root_cause = _latency_drought_root_cause_summary(current)
 
