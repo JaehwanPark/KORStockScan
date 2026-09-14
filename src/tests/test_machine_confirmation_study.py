@@ -157,7 +157,9 @@ def test_policy_consumes_frozen_source_after_canonical_report_refresh(tmp_path):
     canonical.write_text(
         json.dumps({**changed, "same_stage_owner_guard": {"mutation_present": True}})
     )
-    assert load()[1] == "entry_timing_current_same_stage_owner_veto"
+    loaded, reason = load()
+    assert reason == "ready"
+    assert loaded["scopes"] == {}
     canonical.write_text(json.dumps(changed))
     from pathlib import Path
 

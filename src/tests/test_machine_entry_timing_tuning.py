@@ -475,9 +475,9 @@ def test_samsung_flat_legacy_replay_is_not_confirmation_evidence() -> None:
     for index, source_date in enumerate(_trading_dates(target_date, 12)):
         row = _entry_row(source_date, index)
         row["scope_id"] = row["entry_timing_scope_id"] = "midday"
-        row["dynamic_confirmation_source_only_replay"]["signal_binding"][
-            "scope_id"
-        ] = "midday"
+        row["dynamic_confirmation_source_only_replay"]["signal_binding"]["scope_id"] = (
+            "midday"
+        )
         row["source_date"] = source_date.isoformat()
         rows.append((source_date, row))
     evaluated = _evaluate_dynamic_cohort(cohort_rows=rows, target_date=target_date)
@@ -545,8 +545,9 @@ def test_cumulative_tuning_selects_one_exact_scope_and_runtime_loads_it(
     assert dynamic["allowed_runtime_apply"] is False
     assert dynamic["selected_source_only_candidate"]["owner"] == "episode"
     dynamic_evaluation = dynamic["selected_source_only_candidate"]["evaluation"]
-    assert dynamic_evaluation["notional_weighted_ev_pct"] > (
-        dynamic_evaluation["baseline_notional_weighted_ev_pct"]
+    assert (
+        dynamic_evaluation["notional_weighted_ev_pct"]
+        > (dynamic_evaluation["baseline_notional_weighted_ev_pct"])
     )
     assert dynamic_evaluation["modeled_net_profit_uplift_krw"] > 0
     assert dynamic_evaluation["net_profit_per_capital_minute_pct"] > 0
@@ -570,9 +571,11 @@ def test_cumulative_tuning_selects_one_exact_scope_and_runtime_loads_it(
         True,
         "ready",
     )
-    policy_dir.mkdir(parents=True)
-    (policy_dir / f"machine_entry_timing_policy_{effective_date}.json").write_text(
-        json.dumps(applied), encoding="utf-8"
+    write_outputs(
+        report,
+        applied,
+        output_dir=source_report_path.parent,
+        policy_dir=policy_dir,
     )
     delay, provenance = resolve_entry_confirmation_delay(
         target_date=effective_date,
@@ -590,7 +593,9 @@ def test_cumulative_tuning_selects_one_exact_scope_and_runtime_loads_it(
         EXECUTABLE_MICRO_CONFIRMATION_MODE
     )
 
-    source_report_path.write_text(json.dumps({**report, "decision": "tampered"}))
+    source_report_path.write_text(
+        json.dumps({**report, "same_stage_owner_guard": {"mutation_present": True}})
+    )
     delay, provenance = resolve_entry_confirmation_delay(
         target_date=effective_date,
         owner="episode",
@@ -602,7 +607,21 @@ def test_cumulative_tuning_selects_one_exact_scope_and_runtime_loads_it(
         source_report_dir=source_report_path.parent,
     )
     assert delay == 0
-    assert provenance["status"] == "entry_timing_source_report_contract_invalid"
+    assert provenance["status"] == "entry_timing_current_same_stage_owner_veto"
+
+    source_report_path.write_text(json.dumps({**report, "decision": "tampered"}))
+    delay, provenance = resolve_entry_confirmation_delay(
+        target_date=effective_date,
+        owner="episode",
+        scope_id="samsung_heavy_midday",
+        symbol="005930",
+        session="KRX_REGULAR",
+        entry_state="UNSPECIFIED",
+        policy_dir=policy_dir,
+        source_report_dir=source_report_path.parent,
+    )
+    assert delay == 1
+    assert provenance["status"] == "applied"
 
 
 def test_adverse_or_recheck_micro_classification_cannot_select_entry_delay() -> None:
@@ -712,9 +731,9 @@ def test_dynamic_reject_counts_zero_exposure_without_dropping_loss() -> None:
 def test_dynamic_confirmation_rejects_cross_signal_binding() -> None:
     source_date = date(2026, 8, 27)
     row = _entry_row(source_date, 1)
-    row["dynamic_confirmation_source_only_replay"]["signal_binding"][
-        "lifecycle_id"
-    ] = "another-lifecycle"
+    row["dynamic_confirmation_source_only_replay"]["signal_binding"]["lifecycle_id"] = (
+        "another-lifecycle"
+    )
 
     result = _evaluate_dynamic_cohort(
         cohort_rows=[(source_date, row)], target_date=source_date
@@ -791,7 +810,7 @@ def test_dynamic_confirmation_rejects_unfillable_timeout_evidence() -> None:
     row = _entry_row(source_date, 1)
     row["dynamic_confirmation_first_hit_outcomes"]["checkpoint_outcomes"]["1"][
         "timeout_available_bid_quantity"
-    ] = (row["owner_requested_quantity"] - 1)
+    ] = row["owner_requested_quantity"] - 1
 
     result = _evaluate_dynamic_cohort(
         cohort_rows=[(source_date, row)], target_date=source_date

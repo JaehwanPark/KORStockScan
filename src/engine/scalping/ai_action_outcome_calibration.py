@@ -2928,6 +2928,7 @@ def relabel_hierarchy_source_rows(
     data_root: Path,
     *,
     cohort: tuple[str, str] = ("KRX", "KRX_REGULAR"),
+    pipeline_prices_by_day: dict[str, dict[str, list[dict]]] | None = None,
 ) -> tuple[list[dict], dict]:
     """Reprice existing CF paths with full costs, preserving original reports."""
     from src.engine.scalping import ai_decision_quality as quality
@@ -2950,16 +2951,19 @@ def relabel_hierarchy_source_rows(
             counts["executable_reference_missing"] += len(rows)
             result.extend(rows)
             continue
-        pipeline = existing_or_gzip_path(
-            data_root / "pipeline_events" / f"pipeline_events_{day}.jsonl"
-        )
-        prices, _ = quality.load_pipeline_price_and_lifecycle_rows(
-            iter_jsonl(pipeline) if pipeline and pipeline.is_file() else [],
-            stock_codes={r["stock_code"] for r in rows},
-        )
-        prices_by_symbol = defaultdict(list)
-        for price in prices:
-            prices_by_symbol[price.get("stock_code")].append(price)
+        if pipeline_prices_by_day is None:
+            pipeline = existing_or_gzip_path(
+                data_root / "pipeline_events" / f"pipeline_events_{day}.jsonl"
+            )
+            prices, _ = quality.load_pipeline_price_and_lifecycle_rows(
+                iter_jsonl(pipeline) if pipeline and pipeline.is_file() else [],
+                stock_codes={r["stock_code"] for r in rows},
+            )
+            prices_by_symbol = defaultdict(list)
+            for price in prices:
+                prices_by_symbol[price.get("stock_code")].append(price)
+        else:
+            prices_by_symbol = pipeline_prices_by_day.get(day, {})
         for row in rows:
             comparison = row["comparison"]
             if (
@@ -2994,7 +2998,7 @@ def relabel_hierarchy_source_rows(
             }
             labeled = quality.mature_outcome_labels(
                 pending_labels=[pending],
-                price_rows=prices_by_symbol[row["stock_code"]],
+                price_rows=prices_by_symbol.get(row["stock_code"], []),
                 lifecycle_rows=[],
                 as_of=datetime.fromisoformat(day + "T23:59:59+09:00"),
             )[0]
@@ -3027,6 +3031,34 @@ def relabel_hierarchy_source_rows(
             )
             counts["full_cost_path_relabeled"] += 1
     return result, dict(counts)
+
+
+def _hierarchy_pipeline_price_cache(
+    source_rows: list[dict], data_root: Path
+) -> dict[str, dict[str, list[dict]]]:
+    """Read each daily pipeline once for all supported hierarchy scopes."""
+    from src.engine.scalping import ai_decision_quality as quality
+
+    symbols_by_day: dict[str, set[str]] = defaultdict(set)
+    for row in source_rows:
+        day = str(row.get("source_date") or "")
+        stock_code = str(row.get("stock_code") or "")
+        if day and stock_code:
+            symbols_by_day[day].add(stock_code)
+    result: dict[str, dict[str, list[dict]]] = {}
+    for day, stock_codes in sorted(symbols_by_day.items()):
+        pipeline = existing_or_gzip_path(
+            data_root / "pipeline_events" / f"pipeline_events_{day}.jsonl"
+        )
+        prices, _ = quality.load_pipeline_price_and_lifecycle_rows(
+            iter_jsonl(pipeline) if pipeline and pipeline.is_file() else [],
+            stock_codes=stock_codes,
+        )
+        prices_by_symbol: dict[str, list[dict]] = defaultdict(list)
+        for price in prices:
+            prices_by_symbol[str(price.get("stock_code") or "")].append(price)
+        result[day] = dict(prices_by_symbol)
+    return result
 
 
 def _machine_ai_trace_index(data_root: Path, day: str) -> dict[str, list[dict]]:
@@ -6231,8 +6263,16 @@ def build_report(
         capture_census=machine_capture_census,
         source_receipt=machine_source_receipt,
     )
+    all_scope_rows, _ = _mechanistic_source_rows(
+        report_root / PAIRED_SUBDIR, target_date=target_date, all_supported_cohorts=True
+    )
+    pipeline_prices_by_day = _hierarchy_pipeline_price_cache(
+        all_scope_rows + mechanistic_source_rows, data_root
+    )
     hierarchy_rows, hierarchy_cost_census = relabel_hierarchy_source_rows(
-        mechanistic_source_rows, data_root
+        mechanistic_source_rows,
+        data_root,
+        pipeline_prices_by_day=pipeline_prices_by_day,
     )
     machine_policy_rows = (
         machine_observations
@@ -6261,9 +6301,6 @@ def build_report(
     )
     from src.engine.scalping.entry_setup_scalping_rollout import AUTO_PROMOTION_SCOPES
 
-    all_scope_rows, _ = _mechanistic_source_rows(
-        report_root / PAIRED_SUBDIR, target_date=target_date, all_supported_cohorts=True
-    )
     extensions = {"KRX|KRX_REGULAR": hierarchical_entry_quality["runtime_extension"]}
     for scope in AUTO_PROMOTION_SCOPES:
         if scope == "KRX|KRX_REGULAR":
@@ -6281,7 +6318,10 @@ def build_report(
             == cohort
         ]
         repriced, census = relabel_hierarchy_source_rows(
-            scoped_rows, data_root, cohort=cohort
+            scoped_rows,
+            data_root,
+            cohort=cohort,
+            pipeline_prices_by_day=pipeline_prices_by_day,
         )
         scoped_incumbent = _as_dict(
             _as_dict((incumbent or {}).get("scope_policies")).get(scope)

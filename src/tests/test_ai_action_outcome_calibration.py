@@ -1335,6 +1335,80 @@ def test_hierarchy_cost_owner_rejects_changed_raw_source(tmp_path):
     assert calibration._hierarchy_cost_profiles(tmp_path, "2026-09-14") == {}
 
 
+def test_hierarchy_pipeline_price_cache_reads_each_day_once(monkeypatch, tmp_path):
+    from src.engine.scalping import ai_decision_quality as quality
+
+    pipeline_dir = tmp_path / "pipeline_events"
+    pipeline_dir.mkdir()
+    for day in ("2026-09-13", "2026-09-14"):
+        (pipeline_dir / f"pipeline_events_{day}.jsonl").write_text("{}\n")
+    calls = []
+
+    def load(rows, *, stock_codes):
+        list(rows)
+        calls.append(frozenset(stock_codes))
+        return ([{"stock_code": code} for code in stock_codes], [])
+
+    monkeypatch.setattr(quality, "load_pipeline_price_and_lifecycle_rows", load)
+    cache = calibration._hierarchy_pipeline_price_cache(
+        [
+            {"source_date": "2026-09-13", "stock_code": "005930"},
+            {"source_date": "2026-09-13", "stock_code": "000660"},
+            {"source_date": "2026-09-14", "stock_code": "005930"},
+        ],
+        tmp_path,
+    )
+
+    assert calls == [frozenset({"005930", "000660"}), frozenset({"005930"})]
+    assert set(cache["2026-09-13"]) == {"005930", "000660"}
+
+
+def test_hierarchy_relabel_cached_missing_symbol_remains_source_gap(
+    monkeypatch, tmp_path
+):
+    from src.engine.scalping import ai_decision_quality as quality
+
+    monkeypatch.setattr(
+        calibration,
+        "_hierarchy_cost_profiles",
+        lambda *args, **kwargs: {
+            "005930": {
+                "profile_id": "reviewed",
+                "economic_source_sha256": "a" * 64,
+                "buy_fee_bps": 1,
+                "sell_fee_bps": 1,
+                "statutory_sell_tax_bps": 15,
+                "uncertainty_buffer_bps": 1,
+            }
+        },
+    )
+    observed = []
+
+    def mature(*, pending_labels, price_rows, lifecycle_rows, as_of):
+        observed.append(list(price_rows))
+        return [{"horizon_metrics": {}}]
+
+    monkeypatch.setattr(quality, "mature_outcome_labels", mature)
+    rows, census = calibration.relabel_hierarchy_source_rows(
+        [
+            {
+                "source_date": "2026-09-14",
+                "stock_code": "005930",
+                "decision_ts": "2026-09-14T10:00:00+09:00",
+                "decision_trace_id": "trace",
+                "comparison": {"conservative_execution_cost_pct": 0.01},
+                "label_context": {"reference_price_type": "executable_ask"},
+            }
+        ],
+        tmp_path,
+        pipeline_prices_by_day={"2026-09-14": {}},
+    )
+
+    assert observed == [[]]
+    assert len(rows) == 1
+    assert census["raw_path_missing"] == 1
+
+
 def test_hierarchy_fits_a_real_symbol_delta_instead_of_only_counting_symbols():
     import copy
 

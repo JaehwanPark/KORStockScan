@@ -584,6 +584,10 @@ def load_applied_policy(
             and latest_report.get("effective_date") == payload.get("target_date")
             and isinstance(latest_report.get("same_stage_owner_guard"), dict)
             and latest_report["same_stage_owner_guard"].get("mutation_present") is True
+            # An empty scope map is the explicit immediate-entry carry and
+            # performs no timing mutation. Another owner's same-stage change
+            # must veto only a competing timing winner, not this no-op carry.
+            and bool(payload.get("scopes"))
         ):
             return None, "entry_timing_current_same_stage_owner_veto"
         source_report = expected_snapshot
