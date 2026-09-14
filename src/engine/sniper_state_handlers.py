@@ -72768,6 +72768,11 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 ),
                 **_entry_price_ai_trace_fields(submit_revalidation_fields),
                 **(
+                    freeze_scout_ai_parent_fields(stock)
+                    if forced_rising_missed_one_share
+                    else {}
+                ),
+                **(
                     {
                         "ai_score": 0.0,
                         "mechanical_signal_strength": latency_signal_strength,
@@ -81881,6 +81886,11 @@ def _maybe_reprice_pending_entry_order(stock, code, strategy, *, timeout_sec=Non
         "nxt_partial_fill_reprice_applied": nxt_partial_holding_reprice,
         "probe_residual_reprice_applied": probe_residual_reprice,
         "ai_score": order.get("ai_score"),
+        **{
+            key: value
+            for key, value in order.items()
+            if key.startswith("rising_missed_scout_parent_ai_")
+        },
         "entry_reprice_action": order.get("entry_reprice_action"),
         "entry_adm_recommended_action": order.get("entry_adm_recommended_action"),
         "entry_adm_ev_pct": order.get("entry_adm_ev_pct"),

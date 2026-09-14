@@ -100,6 +100,74 @@ def test_helper_allows_tight_spread_continuation_without_negative_adm():
     assert decision.fields["reprice_price_mode"] == "tight_spread_best_ask_minus_1tick"
 
 
+def test_helper_uses_frozen_scout_parent_not_latency_feature_score():
+    decision = evaluate_entry_reprice_after_submit(
+        order=_base_order(
+            ai_score=0.0,
+            rising_missed_scout_parent_ai_action="BUY",
+            rising_missed_scout_parent_ai_contract_status="pass",
+            rising_missed_scout_parent_ai_decision_trace_id="trace-010170",
+            rising_missed_scout_parent_ai_snapshot_id="snapshot-010170",
+            rising_missed_scout_parent_ai_score=78.0,
+        ),
+        strategy="SCALPING",
+        elapsed_sec=16.0,
+        best_bid=39855,
+        best_ask=39915,
+        current_price=39900,
+        quote_age_ms=120.0,
+        orderbook_micro_state="neutral",
+    )
+
+    assert decision.allowed is True
+    assert decision.fields["reprice_parent_authority_scope"] == "rising_missed_scout"
+    assert decision.fields["reprice_parent_authority_status"] == "authorized"
+    assert decision.fields["reprice_parent_decision_trace_id"] == "trace-010170"
+    assert decision.fields["reprice_parent_snapshot_id"] == "snapshot-010170"
+
+
+def test_helper_blocks_incomplete_frozen_scout_parent_as_source_quality_gap():
+    decision = evaluate_entry_reprice_after_submit(
+        order=_base_order(
+            ai_score=99.0,
+            rising_missed_scout_parent_ai_action="BUY",
+            rising_missed_scout_parent_ai_contract_status="pass",
+            rising_missed_scout_parent_ai_decision_trace_id="trace-incomplete",
+        ),
+        strategy="SCALPING",
+        elapsed_sec=16.0,
+        best_bid=39855,
+        best_ask=39915,
+        current_price=39900,
+        quote_age_ms=120.0,
+        orderbook_micro_state="neutral",
+    )
+
+    assert decision.allowed is False
+    assert decision.reason == "source_quality_blocked"
+    assert decision.fields["reprice_parent_authority_status"] == "source_quality_blocked"
+
+
+def test_helper_keeps_explicit_scout_parent_veto_blocked():
+    decision = evaluate_entry_reprice_after_submit(
+        order=_base_order(
+            rising_missed_scout_parent_ai_action="VETO",
+            rising_missed_scout_parent_ai_contract_status="pass",
+            rising_missed_scout_parent_ai_decision_trace_id="trace-veto",
+        ),
+        strategy="SCALPING",
+        elapsed_sec=16.0,
+        best_bid=39855,
+        best_ask=39915,
+        current_price=39900,
+        quote_age_ms=120.0,
+        orderbook_micro_state="neutral",
+    )
+
+    assert decision.allowed is False
+    assert decision.reason == "parent_ai_veto"
+
+
 def test_helper_blocks_negative_adm_even_when_continuation_report_candidate():
     decision = evaluate_entry_reprice_after_submit(
         order=_base_order(

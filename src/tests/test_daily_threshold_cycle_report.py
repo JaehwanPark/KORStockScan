@@ -1893,6 +1893,77 @@ def test_dynamic_entry_price_resolver_selects_profile_bps_from_exact_outcomes(
     assert selected["exact_outcome_joined_sample"] == 20
     assert selected["metrics"]["source_quality_adjusted_ev_pct"] == 0.2
     assert selected["metrics"]["cancel_rate"] == 5.0
+    assert selected["metrics"]["missed_upside"] is None
+    assert selected["metrics"]["missed_upside_status"] == "counterfactual_not_joined"
+
+
+def test_entry_price_cancel_receipt_joins_original_order_without_zeroing_outcome():
+    grid = report_mod._entry_price_profile_candidate_grid(
+        [
+            {
+                "stage": "order_bundle_submitted",
+                "fields": {
+                    "actual_order_submitted": True,
+                    "broker_order_no": "0031943",
+                    "entry_price_gap_profile": "normal",
+                    "entry_price_gap_profile_bps": 25,
+                },
+            }
+        ],
+        [
+            {
+                "stage": "entry_order_cancel_confirmed",
+                "fields": {
+                    "actual_order_submitted": False,
+                    "orig_ord_no": "0031943",
+                },
+            }
+        ],
+        [],
+        {"normal_defensive_bps": 25},
+    )
+
+    candidate = grid["candidate_grid"][0]
+    metrics = candidate["metrics"]
+    assert metrics["cancel_rate"] == 100.0
+    assert metrics["missed_upside"] is None
+    assert metrics["missed_upside_status"] == "counterfactual_not_joined"
+    assert metrics["terminal_counts"] == {
+        "completed_exact_outcome": 0,
+        "confirmed_cancel_without_completed_economics": 1,
+        "pending_or_right_censored": 0,
+    }
+    assert metrics["terminal_conservation_holds"] is True
+    assert grid["related_identity_unmatched_event_count"] == 0
+    assert grid["related_identity_ambiguous_event_count"] == 0
+
+
+def test_entry_price_real_completed_outcome_does_not_become_zero_missed_upside():
+    family = report_mod._build_dynamic_entry_price_resolver_family(
+        [
+            {
+                "stage": "order_bundle_submitted",
+                "record_id": "entry-price-completed",
+                "fields": {
+                    "actual_order_submitted": True,
+                    "entry_price_gap_profile": "normal",
+                    "entry_price_gap_profile_bps": 25,
+                },
+            }
+        ],
+        [
+            {
+                "record_id": "entry-price-completed",
+                "profit_rate": 0.2,
+                "completed_economics_source": "trade_performance_fact_exact_receipt",
+            }
+        ],
+        target_date="2026-09-14",
+    )
+
+    real_metrics = family["sample"]["candidate_metrics"]["real"]
+    assert real_metrics["missed_upside"] is None
+    assert real_metrics["missed_upside_status"] == "counterfactual_not_joined"
 
 
 def test_dynamic_entry_price_resolver_partial_sim_recommendation_keeps_unspecified_keys_current():

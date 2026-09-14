@@ -229,3 +229,15 @@ Provider 호출, 광범위 trading suite, 같은 날짜의 반복 full postclose
 - 장후 재생성은 검토 release가 실제 선택됐고 동일 target-date worker·lock이 없을 때 한 번 수행한다. 정상 generation을 더 큰 표본으로 만들 목적으로 반복하지 않는다.
 - `selected_change`가 없더라도 exact `verified_carry`가 다음 PREOPEN까지 전달되면 자동화는 정상이다. 반대로 정책 파일을 만들기 위해 경제성 gate를 낮추거나 candidate를 합성하지 않는다.
 - 이번 구현은 가격과 재호가의 기존 owner만 수리한다. BUY 진입 threshold, 수량, 제출 한도, cancel wait, provider/model, broker·hard safety는 변경하지 않는다.
+
+## 구현·재검토 receipt
+
+구현은 기존 owner 안에서만 완료했다.
+
+- `entry_reprice_after_submit`은 rising-missed scout의 frozen parent `BUY`·contract `pass`·trace·snapshot을 재호가 권한 provenance로 사용한다. latency feature score가 0이더라도 이 네 값이 닫히면 재호가의 score gate가 이를 다시 veto하지 않는다. 명시 VETO는 계속 차단하고, parent field가 불완전하면 `source_quality_blocked`로 fail-closed한다. stale quote, spread, partial fill, attempt cap, cancel terminal 대사, broker/account/order·수량 guard와 upward cap은 바꾸지 않았다.
+- profile ledger는 `order_no` 계열과 `orig_ord_no`/`ori_ord_no`/reprice parent·child order number를 exact lineage로만 연결한다. 보고서에는 completed exact outcome, confirmed cancel without completed economics, pending/right-censored를 별도 count로 기록하고 합계가 submit 수와 일치하는지 확인한다. fill detail이 없는 broker-fact row를 full fill로 추정하지 않는다.
+- `missed_upside`는 complete PnL 또는 cancel receipt만으로 0으로 만들지 않는다. 같은 attempt의 executable counterfactual companion이 아직 없으면 `null`과 `counterfactual_not_joined`를 남긴다. 실제 PnL과 source-only counterfactual은 서로 다른 분모를 유지한다.
+
+자동 적용 경로는 기존 예약 체인이다. 20:10 postclose가 `threshold_cycle`과 calibration/AI-review artifact를 생성하고, 다음 거래일 PREOPEN의 `threshold_cycle_preopen_apply --auto-apply`가 bounded 선택값 또는 이전 검증값을 runtime env/verify artifact에 기록한다. 새 코드가 이 경로를 추가하거나 장중 가격 값을 바꾸지 않는다. 이번 수리의 선택 release가 이 예약 producer에서 소비되고, 다음 PREOPEN의 exact-date env/verify와 새 PID receipt가 생긴 뒤에만 runtime applied로 판정한다.
+
+예상 효과는 이미 승인된 scout attempt의 fresh, low-spread 재호가가 `ai_score=0`이라는 lineage 결손 때문에 사라지지 않는 것이다. 이는 14,370원 ask 추격이나 BUY·수량 확대가 아니며, fresh best-bid 또는 best-ask-minus-one-tick의 기존 bounded path만 다시 평가한다. 비용 차감 순이익·fill participation·tail·자본점유의 실제 개선은 9/14 장후 generation과 다음 자연 lifecycle acceptance에서 별도로 판정한다.

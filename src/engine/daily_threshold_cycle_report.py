@@ -8131,23 +8131,58 @@ def _entry_price_real_outcome_metrics(
     }
 
 
-def _entry_price_event_record_key(event: dict) -> str | None:
-    """Return only durable submit identity; never use stock/time fuzzy matching."""
+_ENTRY_PRICE_DURABLE_IDENTITY_KEYS = (
+    "order_no",
+    "broker_order_no",
+    "broker_receipt_no",
+    "trade_id",
+    "record_id",
+    "entry_record_id",
+    "candidate_id",
+    # Cancel/replace receipts commonly preserve the original order number
+    # instead of repeating the submit receipt.  These are still exact order
+    # lineage keys; do not fall back to stock or timestamp proximity.
+    "orig_ord_no",
+    "ori_ord_no",
+    "parent_order_no",
+    "entry_reprice_parent_ord_no",
+    "entry_reprice_child_ord_no",
+)
+_ENTRY_PRICE_ORDER_LINEAGE_KEYS = frozenset(
+    {
+        "order_no",
+        "broker_order_no",
+        "orig_ord_no",
+        "ori_ord_no",
+        "parent_order_no",
+        "entry_reprice_parent_ord_no",
+        "entry_reprice_child_ord_no",
+    }
+)
 
+
+def _entry_price_event_identity_keys(event: dict) -> tuple[str, ...]:
+    """Return durable order lineage identities without stock/time fallback."""
+
+    identities: list[str] = []
     for source in (event, _event_fields(event)):
-        for key in (
-            "order_no",
-            "broker_order_no",
-            "broker_receipt_no",
-            "trade_id",
-            "record_id",
-            "entry_record_id",
-            "candidate_id",
-        ):
+        for key in _ENTRY_PRICE_DURABLE_IDENTITY_KEYS:
             value = str(source.get(key) or "").strip()
-            if value and value != "-":
-                return f"{key}:{value}"
-    return None
+            identity = f"{key}:{value}"
+            if value and value != "-" and identity not in identities:
+                identities.append(identity)
+            if key in _ENTRY_PRICE_ORDER_LINEAGE_KEYS and value and value != "-":
+                lineage_identity = f"order_lineage:{value}"
+                if lineage_identity not in identities:
+                    identities.append(lineage_identity)
+    return tuple(identities)
+
+
+def _entry_price_event_record_key(event: dict) -> str | None:
+    """Return a canonical durable submit identity; never use fuzzy matching."""
+
+    identities = _entry_price_event_identity_keys(event)
+    return identities[0] if identities else None
 
 
 def _entry_price_exact_outcome_rows_by_record(
@@ -8163,18 +8198,8 @@ def _entry_price_exact_outcome_rows_by_record(
             "trade_performance_fact_exact_receipt"
         ):
             continue
-        for key in (
-            "order_no",
-            "broker_order_no",
-            "broker_receipt_no",
-            "trade_id",
-            "record_id",
-            "entry_record_id",
-            "candidate_id",
-        ):
-            value = str(row.get(key) or "").strip()
-            if value and value != "-":
-                indexed[f"{key}:{value}"] = row
+        for identity in _entry_price_event_identity_keys(row):
+            indexed[identity] = row
     return indexed
 
 
@@ -8192,6 +8217,7 @@ def _entry_price_profile_candidate_grid(
     """
 
     records: dict[str, dict] = {}
+    record_keys_by_identity: dict[str, set[str]] = defaultdict(set)
     identity_missing = 0
     for event in real_events:
         record_key = _entry_price_event_record_key(event)
@@ -8199,7 +8225,12 @@ def _entry_price_profile_candidate_grid(
             identity_missing += 1
             continue
         fields = _event_fields(event)
-        record = records.setdefault(record_key, {"events": [], "fields": {}})
+        record = records.setdefault(
+            record_key, {"events": [], "fields": {}, "identity_keys": set()}
+        )
+        for identity in _entry_price_event_identity_keys(event):
+            record["identity_keys"].add(identity)
+            record_keys_by_identity[identity].add(record_key)
         record["events"].append(event)
         for key in (
             "entry_price_gap_profile",
@@ -8213,14 +8244,26 @@ def _entry_price_profile_candidate_grid(
 
     # Cancel/late events may not repeat actual_order_submitted.  Attach them
     # only through the same durable submit identity; never broaden by symbol.
+    related_identity_unmatched = 0
+    related_identity_ambiguous = 0
     for event in related_events:
-        record_key = _entry_price_event_record_key(event)
-        if record_key in records:
+        matched_record_keys = {
+            record_key
+            for identity in _entry_price_event_identity_keys(event)
+            for record_key in record_keys_by_identity.get(identity, set())
+        }
+        if len(matched_record_keys) == 1:
+            record_key = next(iter(matched_record_keys))
             # ``related_events`` includes the original submit stream as well as
             # cancellation/late-follow-up stages.  Keep a submit event once so
             # record-level quality rates cannot be inflated by the merge.
             if event not in records[record_key]["events"]:
                 records[record_key]["events"].append(event)
+        elif _entry_price_event_identity_keys(event):
+            if matched_record_keys:
+                related_identity_ambiguous += 1
+            else:
+                related_identity_unmatched += 1
 
     exact_rows = _entry_price_exact_outcome_rows_by_record(completed_rows)
     groups: dict[tuple[str, int, str], list[dict]] = defaultdict(list)
@@ -8244,10 +8287,18 @@ def _entry_price_profile_candidate_grid(
     grid: list[dict] = []
     eligible: list[dict] = []
     for (profile, bps, value_key), records_for_candidate in sorted(groups.items()):
-        joined_rows = [
-            exact_rows[item["record_key"]]
+        exact_rows_by_record = {
+            item["record_key"]: {
+                id(exact_rows[identity]): exact_rows[identity]
+                for identity in item["identity_keys"]
+                if identity in exact_rows
+            }
             for item in records_for_candidate
-            if item["record_key"] in exact_rows
+        }
+        joined_rows = [
+            row
+            for rows in exact_rows_by_record.values()
+            for row in rows.values()
         ]
         profit_values = [
             value
@@ -8276,6 +8327,23 @@ def _entry_price_profile_candidate_grid(
                 for event in item["events"]
             )
         )
+        terminal_counts = {
+            "completed_exact_outcome": 0,
+            "confirmed_cancel_without_completed_economics": 0,
+            "pending_or_right_censored": 0,
+        }
+        for item in records_for_candidate:
+            has_exact_outcome = bool(exact_rows_by_record[item["record_key"]])
+            has_cancel = any(
+                str(event.get("stage") or "") == "entry_order_cancel_confirmed"
+                for event in item["events"]
+            )
+            if has_exact_outcome:
+                terminal_counts["completed_exact_outcome"] += 1
+            elif has_cancel:
+                terminal_counts["confirmed_cancel_without_completed_economics"] += 1
+            else:
+                terminal_counts["pending_or_right_censored"] += 1
         metrics = {
             "cancel_rate": (
                 round(cancel_count * 100.0 / submitted_count, 4)
@@ -8287,7 +8355,15 @@ def _entry_price_profile_candidate_grid(
                 if submitted_count
                 else None
             ),
-            "missed_upside": 0.0 if joined_count else None,
+            # A cancellation receipt proves neither zero opportunity nor zero
+            # economics.  Keep the counterfactual null until its separately
+            # sourced executable-outcome companion is joined.
+            "missed_upside": None,
+            "missed_upside_status": (
+                "counterfactual_not_joined"
+                if cancel_count
+                else "not_applicable_no_confirmed_cancel"
+            ),
             "source_quality_adjusted_ev_pct": (
                 round(sum(profit_values) / joined_count, 4) if joined_count else None
             ),
@@ -8297,6 +8373,9 @@ def _entry_price_profile_candidate_grid(
                 round(joined_count / submitted_count, 4) if submitted_count else 0.0
             ),
             "ev_source": "trade_performance_fact_exact_receipt",
+            "terminal_counts": terminal_counts,
+            "terminal_conservation_holds": sum(terminal_counts.values())
+            == submitted_count,
         }
         row = {
             "candidate_id": f"{profile}:{bps}",
@@ -8345,6 +8424,8 @@ def _entry_price_profile_candidate_grid(
         "identity_missing_event_count": identity_missing,
         "unclassified_record_count": unclassified_record_count,
         "aggressive_override_record_count": aggressive_override_record_count,
+        "related_identity_unmatched_event_count": related_identity_unmatched,
+        "related_identity_ambiguous_event_count": related_identity_ambiguous,
     }
 
 
@@ -8905,9 +8986,11 @@ def _build_dynamic_entry_price_resolver_family(
         selected_profile_metrics
         if isinstance(selected_profile_metrics, dict) and selected_profile_metrics
         else {
-            "missed_upside": (
-                0.0 if real_outcome.get("real_outcome_joined_sample") else None
-            ),
+            # Completed broker PnL alone is not an entry-price missed-opportunity
+            # label.  Preserve a null until the independent executable
+            # counterfactual is joined to the same durable attempt lineage.
+            "missed_upside": None,
+            "missed_upside_status": "counterfactual_not_joined",
             "source_quality_adjusted_ev_pct": real_outcome.get(
                 "real_source_quality_adjusted_ev_pct"
             ),

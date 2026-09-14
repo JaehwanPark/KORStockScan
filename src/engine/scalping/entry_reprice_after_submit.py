@@ -88,6 +88,66 @@ def _block(reason: str, fields: dict[str, Any]) -> EntryRepriceDecision:
     return EntryRepriceDecision(False, reason, 0, fields)
 
 
+def _scout_parent_reprice_authority(order: dict[str, Any]) -> dict[str, Any]:
+    """Resolve the frozen Entry-AI parent for a rising-missed scout reprice.
+
+    A scout order is submitted only after the normal runtime guard has already
+    accepted its frozen parent.  Its latency feature score is diagnostic and
+    must not replace that parent when a later reprice evaluates fresh quotes.
+    Non-scout orders retain the legacy score gate until they have their own
+    canonical parent contract.
+    """
+
+    prefixes = (
+        "rising_missed_scout_parent_ai_",
+        "scout_ai_parent_",
+    )
+    scoped = any(
+        key.startswith(prefix)
+        for key in order
+        for prefix in prefixes
+    )
+    if not scoped:
+        return {
+            "scoped": False,
+            "status": "legacy_score_fallback",
+            "reason": "",
+            "action": "",
+            "contract_status": "",
+            "trace_id": "",
+            "snapshot_id": "",
+            "score": None,
+        }
+
+    def field(name: str) -> Any:
+        return order.get(f"rising_missed_scout_parent_ai_{name}") or order.get(
+            f"scout_ai_parent_{name}"
+        )
+
+    action = str(field("action") or "").strip().upper()
+    contract_status = str(field("contract_status") or "").strip().lower()
+    trace_id = str(field("decision_trace_id") or "").strip()
+    snapshot_id = str(field("snapshot_id") or "").strip()
+    score = _safe_float(field("score"), 0.0)
+    base = {
+        "scoped": True,
+        "action": action or "NOT_EVALUATED",
+        "contract_status": contract_status or "unreported",
+        "trace_id": trace_id or "-",
+        "snapshot_id": snapshot_id or "-",
+        "score": score,
+    }
+    if action in {"VETO", "DROP", "NO_BUY_AI", "WAIT", "REJECT"}:
+        return {**base, "status": "explicit_veto", "reason": "parent_ai_veto"}
+    if action == "BUY" and contract_status == "pass" and trace_id and snapshot_id:
+        return {**base, "status": "authorized", "reason": ""}
+    return {
+        **base,
+        "status": "source_quality_blocked",
+        "reason": "source_quality_blocked",
+    }
+
+
 def evaluate_entry_reprice_after_submit(
     *,
     order: dict[str, Any],
@@ -247,6 +307,24 @@ def evaluate_entry_reprice_after_submit(
         "latency_state": latency or "-",
         "mark_price_at_submit": mark_price,
     }
+    parent_authority = _scout_parent_reprice_authority(order)
+    fields.update(
+        {
+            "reprice_parent_authority_scope": (
+                "rising_missed_scout"
+                if parent_authority["scoped"]
+                else "legacy_score_fallback"
+            ),
+            "reprice_parent_authority_status": parent_authority["status"],
+            "reprice_parent_action": parent_authority["action"] or "-",
+            "reprice_parent_contract_status": (
+                parent_authority["contract_status"] or "-"
+            ),
+            "reprice_parent_decision_trace_id": parent_authority["trace_id"] or "-",
+            "reprice_parent_snapshot_id": parent_authority["snapshot_id"] or "-",
+            "reprice_parent_score": parent_authority["score"],
+        }
+    )
 
     if not enabled:
         return _block("disabled", fields)
@@ -276,7 +354,14 @@ def evaluate_entry_reprice_after_submit(
         return _block("latency_state_not_safe", fields)
     if spread_bps > float(max_spread_bps):
         return _block("spread_too_wide", fields)
-    if score < float(strong_score_floor):
+    if parent_authority["status"] == "explicit_veto":
+        return _block("parent_ai_veto", fields)
+    if parent_authority["status"] == "source_quality_blocked":
+        return _block("source_quality_blocked", fields)
+    if (
+        parent_authority["status"] == "legacy_score_fallback"
+        and score < float(strong_score_floor)
+    ):
         return _block("low_ai_score", fields)
     if action not in {"BUY_DEFENSIVE", "BUY_NOW"}:
         return _block("action_not_buy", fields)
