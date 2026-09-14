@@ -3541,6 +3541,67 @@ def test_exact_ai_storage_compresses_all_six_closed_roots_and_protects_current(
         assert not current_path.with_suffix(f"{current_path.suffix}.gz").exists()
 
 
+def test_exact_ai_payload_storage_accepts_machine_observation_rows(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "ai_decision_payloads"
+    logical, raw = _write_exact_ai_storage_fixture(
+        root,
+        root_name="ai_decision_payloads",
+        target_date="2026-08-23",
+    )
+    machine_row = {
+        "schema": "mechanistic_entry_observation_v1",
+        "captured_at": "2026-08-23T20:01:00+09:00",
+        "machine_observation_sha256": "a" * 64,
+    }
+    raw += (json.dumps(machine_row, sort_keys=True) + "\n").encode("utf-8")
+    logical.write_bytes(raw)
+
+    result = maintain_report_artifact_storage(
+        [],
+        as_of_date=date(2026, 8, 25),
+        apply=True,
+        exact_ai_artifact_roots=[root],
+        low_disk_watermark_bytes=0,
+        critical_disk_watermark_bytes=0,
+    )
+
+    assert result["status"] == "pass"
+    assert result["exact_ai_artifact_maintenance"]["artifact_count"] == 1
+    with gzip.open(logical.with_suffix(".jsonl.gz"), "rb") as handle:
+        assert handle.read() == raw
+
+
+def test_exact_ai_payload_storage_rejects_unknown_mixed_schema(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "ai_decision_payloads"
+    logical, raw = _write_exact_ai_storage_fixture(
+        root,
+        root_name="ai_decision_payloads",
+        target_date="2026-08-23",
+    )
+    logical.write_bytes(
+        raw + b'{"schema":"unexpected_observation_v1",'
+        b'"captured_at":"2026-08-23T20:01:00+09:00"}\n'
+    )
+
+    result = maintain_report_artifact_storage(
+        [],
+        as_of_date=date(2026, 8, 25),
+        apply=True,
+        exact_ai_artifact_roots=[root],
+        low_disk_watermark_bytes=0,
+        critical_disk_watermark_bytes=0,
+    )
+
+    assert result["status"] == "partial_failure"
+    assert "exact_ai_artifact_schema_invalid" in result["failures"][0]["reason"]
+    assert logical.exists()
+    assert not logical.with_suffix(".jsonl.gz").exists()
+
+
 def test_exact_ai_storage_rejects_dual_mismatch_and_busy_writer_lock(
     tmp_path: Path,
 ) -> None:

@@ -120,7 +120,12 @@ EXACT_AI_ARTIFACT_ROOT_CONTRACTS = {
     "ai_decision_payloads": (
         re.compile(r"ai_decision_payloads_(\d{4}-\d{2}-\d{2})\.jsonl"),
         "jsonl",
-        "ai_decision_payload_v1",
+        frozenset(
+            {
+                "ai_decision_payload_v1",
+                "mechanistic_entry_observation_v1",
+            }
+        ),
         "captured_at",
     ),
     "ai_decision_trace": (
@@ -1848,19 +1853,24 @@ def _validate_exact_ai_jsonl(
     logical: Path,
     *,
     trade_date: date,
-    expected_schema: str,
+    expected_schema: str | frozenset[str],
     timestamp_field: str,
     generation: ArtifactGenerationLease | None = None,
 ) -> dict[str, object]:
     provenance: dict[str, object] = {}
     row_count = 0
+    expected_schemas = (
+        expected_schema
+        if isinstance(expected_schema, frozenset)
+        else frozenset({expected_schema})
+    )
     for row in iter_jsonl_objects_strict(
         logical,
         provenance=provenance,
         generation=generation,
     ):
         row_count += 1
-        if row.get("schema") != expected_schema:
+        if row.get("schema") not in expected_schemas:
             raise ValueError(f"exact_ai_artifact_schema_invalid:{logical}:{row_count}")
         if (
             _kst_date_from_timestamp(
