@@ -6,7 +6,7 @@ import os
 import subprocess
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from src.utils.constants import PROJECT_ROOT, TRADING_RULES
 from src.utils.market_day import is_krx_trading_day
@@ -37,6 +37,8 @@ _SAMSUNG_MORNING_PREFLIGHT_UNIT = "korstockscan-samsung-one-share-preflight.serv
 _SAMSUNG_MORNING_TIMER_UNIT = "korstockscan-samsung-morning-one-share.timer"
 _SAMSUNG_MORNING_AUTHORITY_SCHEMA = "samsung_morning_two_episode_authority_v7"
 _SAMSUNG_MORNING_HANDOFF_SCHEMA = "samsung_morning_main_bot_pid_handoff_v1"
+_SYSTEMD_QUERY_ATTEMPTS = 2
+_SYSTEMD_QUERY_TIMEOUT_SEC = 3
 
 
 def reset_heartbeat():
@@ -780,10 +782,28 @@ def _samsung_morning_runtime_contract(now: datetime) -> dict:
         }
     )
     authority, authority_error = _load_samsung_morning_authority()
+    preflight_journal = None
+    if not _unit_started_on_target_date(preflight_state, target_date):
+        preflight_journal = _systemd_unit_journal_receipt(
+            _SAMSUNG_MORNING_PREFLIGHT_UNIT,
+            target_date=target_date,
+        )
+        details["preflight_journal_receipt"] = preflight_journal
+    live_journal = None
+    if not _unit_started_on_target_date(live_state, target_date):
+        live_journal = _systemd_unit_journal_receipt(
+            _SAMSUNG_MORNING_LIVE_UNIT,
+            target_date=target_date,
+        )
+        details["live_journal_receipt"] = live_journal
+    preflight_completed_for_target_date = _unit_completed_successfully(
+        preflight_state,
+        target_date=target_date,
+    ) or bool(preflight_journal and preflight_journal.get("status") == "success")
     live_completed_for_target_date = _unit_completed_successfully(
         live_state,
         target_date=target_date,
-    )
+    ) or bool(live_journal and live_journal.get("status") == "success")
     authority_ready, authority_contract_reason = _samsung_authority_contract_ready(
         authority,
         authority_error=authority_error,
@@ -805,7 +825,12 @@ def _samsung_morning_runtime_contract(now: datetime) -> dict:
         for state in (timer_state, preflight_state, live_state)
         if state.get("query_error")
     ]
-    if unit_query_errors:
+    journal_query_errors = [
+        receipt.get("query_error") or receipt.get("status")
+        for receipt in (preflight_journal, live_journal)
+        if receipt and receipt.get("status") == "unreadable"
+    ]
+    if unit_query_errors or journal_query_errors:
         reason = "systemd_expected_set_unreadable"
     elif timer_state.get("LoadState") != "loaded":
         reason = "morning_timer_not_installed"
@@ -829,16 +854,21 @@ def _samsung_morning_runtime_contract(now: datetime) -> dict:
     elif (
         live_state.get("ActiveState") == "failed"
         or live_state.get("Result") == "failed"
+        or bool(live_journal and live_journal.get("status") == "failed")
     ):
         reason = "morning_live_service_failed"
     elif (
         preflight_state.get("ActiveState") == "failed"
         or preflight_state.get("Result") == "failed"
+        or bool(preflight_journal and preflight_journal.get("status") == "failed")
     ):
         reason = "morning_preflight_failed"
     elif not authority_ready:
         reason = authority_contract_reason
-    elif not _unit_started_on_target_date(preflight_state, target_date):
+    elif not (
+        _unit_started_on_target_date(preflight_state, target_date)
+        or preflight_completed_for_target_date
+    ):
         reason = "morning_preflight_not_started_for_target_date"
     elif _unit_active_running(live_state, target_date=target_date):
         return {
@@ -887,22 +917,32 @@ def _systemd_unit_state(unit: str) -> dict[str, str | int | None]:
         "ExecMainStatus,ExecMainStartTimestamp,Job,JobType,JobState,"
         "Triggers,User,Group"
     )
-    try:
-        completed = subprocess.run(
-            [
-                "/bin/systemctl",
-                "show",
-                unit,
-                f"--property={properties}",
-                "--no-pager",
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=3,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return {"unit": unit, "query_error": type(exc).__name__}
+    completed = None
+    last_error = None
+    for attempt in range(1, _SYSTEMD_QUERY_ATTEMPTS + 1):
+        try:
+            completed = subprocess.run(
+                [
+                    "/bin/systemctl",
+                    "show",
+                    unit,
+                    f"--property={properties}",
+                    "--no-pager",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=_SYSTEMD_QUERY_TIMEOUT_SEC,
+            )
+            break
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            last_error = type(exc).__name__
+    if completed is None:
+        return {
+            "unit": unit,
+            "query_error": last_error or "systemctl_show_unavailable",
+            "query_attempts": _SYSTEMD_QUERY_ATTEMPTS,
+        }
     if completed.returncode != 0:
         return {
             "unit": unit,
@@ -922,6 +962,128 @@ def _systemd_unit_state(unit: str) -> dict[str, str | int | None]:
         else:
             state[key] = value
     return state
+
+
+def _systemd_unit_journal_receipt(unit: str, *, target_date: str) -> dict:
+    """Recover a same-date oneshot terminal receipt after a host reboot.
+
+    ``systemctl show`` loses the last invocation timestamps for inactive oneshot
+    units across reboot.  Persistent journal manager records retain the exact
+    unit, start and terminal result without re-running the trading service.
+    """
+
+    try:
+        start = datetime.fromisoformat(target_date)
+    except ValueError:
+        return {"unit": unit, "target_date": target_date, "status": "invalid_date"}
+    end = start + timedelta(days=1)
+    try:
+        completed = subprocess.run(
+            [
+                "/bin/journalctl",
+                "--since",
+                start.strftime("%Y-%m-%d 00:00:00"),
+                "--until",
+                end.strftime("%Y-%m-%d 00:00:00"),
+                "--unit",
+                unit,
+                "_COMM=systemd",
+                "--lines=2000",
+                "--output=json",
+                "--no-pager",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=_SYSTEMD_QUERY_TIMEOUT_SEC,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {
+            "unit": unit,
+            "target_date": target_date,
+            "status": "unreadable",
+            "query_error": type(exc).__name__,
+        }
+    if completed.returncode != 0:
+        return {
+            "unit": unit,
+            "target_date": target_date,
+            "status": "unreadable",
+            "returncode": completed.returncode,
+        }
+
+    started_at_us = None
+    terminal_at_us = None
+    terminal_status = None
+    terminal_source = None
+    malformed_rows = 0
+    for line in completed.stdout.splitlines():
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            malformed_rows += 1
+            continue
+        if row.get("UNIT") != unit:
+            continue
+        try:
+            observed_at_us = int(row.get("__REALTIME_TIMESTAMP"))
+        except (TypeError, ValueError):
+            continue
+        code_func = row.get("CODE_FUNC")
+        message = str(row.get("MESSAGE") or "")
+        if (
+            code_func == "job_emit_done_message"
+            and row.get("JOB_RESULT") == "done"
+            and message.startswith(f"Started {unit} ")
+        ):
+            started_at_us = max(started_at_us or 0, observed_at_us)
+        elif (
+            code_func == "job_emit_done_message"
+            and row.get("JOB_RESULT") == "done"
+            and message.startswith(f"Finished {unit} ")
+        ):
+            if terminal_at_us is None or observed_at_us >= terminal_at_us:
+                terminal_at_us = observed_at_us
+                terminal_status = "success"
+                terminal_source = "finished_job"
+        elif code_func == "unit_log_success":
+            if terminal_at_us is None or observed_at_us >= terminal_at_us:
+                terminal_at_us = observed_at_us
+                terminal_status = "success"
+                terminal_source = "unit_log_success"
+        elif code_func == "unit_log_failure":
+            if terminal_at_us is None or observed_at_us >= terminal_at_us:
+                terminal_at_us = observed_at_us
+                terminal_status = "failed"
+                terminal_source = "unit_log_failure"
+
+    status = "not_started"
+    if terminal_at_us is not None:
+        status = terminal_status or "unknown_terminal"
+    elif started_at_us is not None:
+        status = "started_without_terminal"
+    if (
+        status == "success"
+        and started_at_us is None
+        and terminal_source != "finished_job"
+    ):
+        status = "terminal_without_start"
+    elif (
+        terminal_at_us is not None
+        and started_at_us is not None
+        and started_at_us > terminal_at_us
+    ):
+        status = "started_without_terminal"
+    return {
+        "unit": unit,
+        "target_date": target_date,
+        "status": status,
+        "started_at_epoch_us": started_at_us,
+        "terminal_at_epoch_us": terminal_at_us,
+        "terminal_source": terminal_source,
+        "malformed_rows": malformed_rows,
+        "runtime_effect": False,
+    }
 
 
 def _load_samsung_morning_authority() -> tuple[dict, str | None]:

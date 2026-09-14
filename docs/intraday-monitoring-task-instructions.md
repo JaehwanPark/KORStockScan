@@ -340,6 +340,7 @@ Holding/Exit ADM이 퇴역했어도 `holding_flow_ofi_smoothing`은 기존 holdi
 - main/widget/episode별 order ID, trace/snapshot/episode/profile/leg lineage의 연결 가능 여부
 - micro observer freshness·latency·queue/drop/error·writer·disk 상태와 당일 source-only collection target의 실제 WS 반영. `microstructure_reaction_context`는 diagnostic/source-quality이고 퇴역 institutional/LDM consumer를 요구하지 않는다.
 - 디스크는 사용률과 free bytes·증가 시각을 함께 확인하고 당일 pipeline/micro 원천, 파생 요약, 테스트/리뷰 임시 산출물, 복구 증거를 분리. #73 raw suppression OFF와 원본 보존 유지. `tmp` 이름만으로 삭제하지 않으며 당일 원천·미검증 checkpoint·감사 문서가 참조하는 복구 증거는 보존. 공간 회복은 source 품질·Provider hold 해제나 전략 효과의 증거가 아님
+- 장중에 원천 파일 내용을 조회하기 전에 `stat`으로 크기와 증가 여부를 확인한다. 64MiB를 넘거나 실행 중인 writer가 계속 키우는 파일은 전체 `jq`·`rg`·Python 전수 scan을 금지하고, 기존 요약/인덱스 또는 최대16MiB의 `tail -c` 범위에서만 읽는다. 조회 전후 system metric sampler의 I/O wait를 확인하고 상승 중이면 즉시 조회를 중단해 `diagnostic_io_pressure`로 기록한다. 진단 때문에 원천 writer나 매매 process를 중단하거나 resource guard를 완화하지 않는다.
 - limit-down natural target/REG receipt, required·requested realtime type 0B+0D, type별 first-data·sequence와 ordered-path downstream lineage
 - R0→R3 단계별 최신 artifact, current Provider 실행 여부·budget, lifecycle exact terminal join과 각 단계 blocker
 - 구현됐지만 현재 PID/process/policy에 미반영된 변경과 rollback 값

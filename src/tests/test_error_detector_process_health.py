@@ -4,6 +4,7 @@ import ast
 import inspect
 import json
 import os
+import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -919,6 +920,18 @@ def _mock_samsung_systemd_states(
         "_systemd_unit_state",
         lambda unit: {"unit": unit, **states[unit]},
     )
+    monkeypatch.setattr(
+        process_health_module,
+        "_systemd_unit_journal_receipt",
+        lambda unit, *, target_date: {
+            "unit": unit,
+            "target_date": target_date,
+            "status": "not_started",
+            "started_at_epoch_us": None,
+            "terminal_at_epoch_us": None,
+            "runtime_effect": False,
+        },
+    )
 
 
 def _write_samsung_authority(path, *, target_date: str, ready: bool):
@@ -1063,6 +1076,247 @@ def test_samsung_runtime_passes_with_exact_authority_and_live_pid(
 
     assert result["severity"] == "pass"
     assert result["status"] == "healthy_active"
+
+
+def test_systemd_unit_state_retries_transient_timeout(monkeypatch):
+    calls = []
+
+    def run(*args, **kwargs):
+        calls.append((args, kwargs))
+        if len(calls) == 1:
+            raise subprocess.TimeoutExpired(args[0], kwargs["timeout"])
+        return subprocess.CompletedProcess(
+            args[0],
+            0,
+            stdout="LoadState=loaded\nActiveState=inactive\nMainPID=0\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(process_health_module.subprocess, "run", run)
+
+    state = process_health_module._systemd_unit_state("example.service")
+
+    assert len(calls) == 2
+    assert state["LoadState"] == "loaded"
+    assert state["ActiveState"] == "inactive"
+    assert state["MainPID"] == 0
+    assert "query_error" not in state
+
+
+def test_systemd_journal_receipt_uses_exact_started_message_and_latest_terminal(
+    monkeypatch,
+):
+    rows = [
+        {
+            "__REALTIME_TIMESTAMP": "100",
+            "UNIT": "example.service",
+            "CODE_FUNC": "job_emit_done_message",
+            "JOB_RESULT": "done",
+            "MESSAGE": "Started example.service - Example.",
+        },
+        {
+            "__REALTIME_TIMESTAMP": "200",
+            "UNIT": "example.service",
+            "CODE_FUNC": "unit_log_success",
+            "MESSAGE": "example.service: Deactivated successfully.",
+        },
+        {
+            "__REALTIME_TIMESTAMP": "201",
+            "UNIT": "example.service",
+            "CODE_FUNC": "job_emit_done_message",
+            "JOB_RESULT": "done",
+            "MESSAGE": "Stopped example.service - Example.",
+        },
+    ]
+    monkeypatch.setattr(
+        process_health_module.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args[0], 0, stdout="\n".join(json.dumps(row) for row in rows), stderr=""
+        ),
+    )
+
+    success_receipt = process_health_module._systemd_unit_journal_receipt(
+        "example.service", target_date="2026-09-14"
+    )
+
+    assert success_receipt["status"] == "success"
+    assert success_receipt["started_at_epoch_us"] == 100
+    assert success_receipt["terminal_at_epoch_us"] == 200
+    assert success_receipt["runtime_effect"] is False
+
+    rows.extend(
+        [
+            {
+                "__REALTIME_TIMESTAMP": "300",
+                "UNIT": "example.service",
+                "CODE_FUNC": "job_emit_done_message",
+                "JOB_RESULT": "done",
+                "MESSAGE": "Started example.service - Example.",
+            },
+            {
+                "__REALTIME_TIMESTAMP": "400",
+                "UNIT": "example.service",
+                "CODE_FUNC": "unit_log_failure",
+                "MESSAGE": "example.service: Failed with result 'exit-code'.",
+            },
+        ]
+    )
+    failed_receipt = process_health_module._systemd_unit_journal_receipt(
+        "example.service", target_date="2026-09-14"
+    )
+
+    assert failed_receipt["status"] == "failed"
+    assert failed_receipt["started_at_epoch_us"] == 300
+    assert failed_receipt["terminal_at_epoch_us"] == 400
+
+
+def test_systemd_journal_receipt_accepts_finished_oneshot(monkeypatch):
+    rows = [
+        {
+            "__REALTIME_TIMESTAMP": "100",
+            "UNIT": "example-preflight.service",
+            "CODE_FUNC": "unit_log_success",
+            "MESSAGE": "example-preflight.service: Deactivated successfully.",
+        },
+        {
+            "__REALTIME_TIMESTAMP": "101",
+            "UNIT": "example-preflight.service",
+            "CODE_FUNC": "job_emit_done_message",
+            "JOB_RESULT": "done",
+            "MESSAGE": "Finished example-preflight.service - Example preflight.",
+        },
+    ]
+    monkeypatch.setattr(
+        process_health_module.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args[0], 0, stdout="\n".join(json.dumps(row) for row in rows), stderr=""
+        ),
+    )
+
+    receipt = process_health_module._systemd_unit_journal_receipt(
+        "example-preflight.service", target_date="2026-09-14"
+    )
+
+    assert receipt["status"] == "success"
+    assert receipt["started_at_epoch_us"] is None
+    assert receipt["terminal_at_epoch_us"] == 101
+    assert receipt["terminal_source"] == "finished_job"
+
+
+def test_samsung_runtime_accepts_durable_success_after_host_reboot(
+    monkeypatch, tmp_path
+):
+    authority_path = tmp_path / "authority.json"
+    monkeypatch.setattr(
+        process_health_module, "SAMSUNG_MORNING_AUTHORITY_PATH", authority_path
+    )
+    _write_samsung_authority(authority_path, target_date="2026-09-02", ready=True)
+    _mock_samsung_systemd_states(
+        monkeypatch,
+        preflight={
+            "LoadState": "loaded",
+            "ActiveState": "inactive",
+            "SubState": "dead",
+            "Result": "success",
+            "MainPID": 0,
+            "ExecMainStatus": 0,
+            "ExecMainStartTimestamp": "",
+        },
+        live={
+            "LoadState": "loaded",
+            "ActiveState": "inactive",
+            "SubState": "dead",
+            "Result": "success",
+            "MainPID": 0,
+            "ExecMainStatus": 0,
+            "ExecMainStartTimestamp": "",
+        },
+    )
+    monkeypatch.setattr(
+        process_health_module,
+        "_systemd_unit_journal_receipt",
+        lambda unit, *, target_date: {
+            "unit": unit,
+            "target_date": target_date,
+            "status": "success",
+            "started_at_epoch_us": 100,
+            "terminal_at_epoch_us": 200,
+            "runtime_effect": False,
+        },
+    )
+    monkeypatch.setattr(
+        process_health_module, "_pid_cmdline_contains_bot_main", lambda pid: False
+    )
+
+    result = _ORIGINAL_SAMSUNG_MORNING_RUNTIME_CONTRACT(
+        datetime.fromisoformat("2026-09-02T18:40:00+09:00")
+    )
+
+    assert result["severity"] == "pass"
+    assert result["status"] == "one_shot_completed"
+    assert result["reason"] == "exact_date_authority_and_terminal_service_success"
+    assert result["live_journal_receipt"]["status"] == "success"
+
+
+def test_samsung_runtime_reports_latest_journal_failure_before_stale_bound_pid(
+    monkeypatch, tmp_path
+):
+    authority_path = tmp_path / "authority.json"
+    monkeypatch.setattr(
+        process_health_module, "SAMSUNG_MORNING_AUTHORITY_PATH", authority_path
+    )
+    _write_samsung_authority(authority_path, target_date="2026-09-02", ready=True)
+    _mock_samsung_systemd_states(
+        monkeypatch,
+        preflight={
+            "LoadState": "loaded",
+            "ActiveState": "inactive",
+            "SubState": "dead",
+            "Result": "success",
+            "MainPID": 0,
+            "ExecMainStatus": 0,
+            "ExecMainStartTimestamp": "",
+        },
+        live={
+            "LoadState": "loaded",
+            "ActiveState": "inactive",
+            "SubState": "dead",
+            "Result": "success",
+            "MainPID": 0,
+            "ExecMainStatus": 0,
+            "ExecMainStartTimestamp": "",
+        },
+    )
+
+    def journal_receipt(unit, *, target_date):
+        return {
+            "unit": unit,
+            "target_date": target_date,
+            "status": (
+                "failed"
+                if unit == process_health_module._SAMSUNG_MORNING_LIVE_UNIT
+                else "success"
+            ),
+            "started_at_epoch_us": 100,
+            "terminal_at_epoch_us": 200,
+            "runtime_effect": False,
+        }
+
+    monkeypatch.setattr(
+        process_health_module, "_systemd_unit_journal_receipt", journal_receipt
+    )
+    monkeypatch.setattr(
+        process_health_module, "_pid_cmdline_contains_bot_main", lambda pid: False
+    )
+
+    result = _ORIGINAL_SAMSUNG_MORNING_RUNTIME_CONTRACT(
+        datetime.fromisoformat("2026-09-02T18:40:00+09:00")
+    )
+
+    assert result["severity"] == "fail"
+    assert result["reason"] == "morning_live_service_failed"
 
 
 def test_samsung_authority_accepts_contiguous_same_date_pid_handoff():
