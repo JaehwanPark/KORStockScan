@@ -35,6 +35,16 @@ REPORT_DIRNAME = "observation_source_quality_audit"
 BACKFILL_REPORT_STEM = "observation_source_quality_backfill_audit"
 DEFAULT_HEAVY_ANALYSIS_LOCK_PATH = PROJECT_ROOT / "tmp" / "intraday_heavy_analysis.lock"
 AUDIT_SCHEMA_VERSION = "observation_source_quality_audit_v2"
+MACHINE_AI_NATURAL_SOURCE_SCHEMA = "machine_ai_natural_source_consumption_v1"
+
+
+def _canonical_digest(value: Any) -> str:
+    """Digest compact audit identities without retaining raw AI content."""
+    return hashlib.sha256(
+        json.dumps(
+            value, ensure_ascii=True, sort_keys=True, separators=(",", ":"), default=str
+        ).encode("utf-8")
+    ).hexdigest()
 
 
 def _raw_generation(path: Path) -> dict[str, Any]:
@@ -72,6 +82,264 @@ def _audited_jsonl(path: Path, receipt: dict[str, Any]):
                 continue
             yield payload
     receipt["logical_content_sha256"] = digest.hexdigest()
+
+
+def _machine_ai_natural_source_consumption(
+    target_date: str, *, data_root: Path = DATA_DIR
+) -> dict[str, Any]:
+    """Audit natural machine/AI archives with deliberately separate populations.
+
+    Machine observations are captured before an AI provider is considered.  A
+    non-call can therefore be a valid mechanistic BLOCK/RECHECK or an input
+    preflight decision; it must never be silently counted as a provider error.
+    This compact audit keeps only identities, counts, and source digests.
+    """
+    archive_names = (
+        "ai_decision_payloads",
+        "ai_decision_trace",
+        "ai_decision_requests",
+        "ai_decision_prompts",
+        "ai_decision_outcomes",
+    )
+    receipts: dict[str, dict[str, Any]] = {}
+    rows: dict[str, list[dict[str, Any]]] = {}
+    source_generation_changed = False
+    for name in archive_names:
+        path = existing_or_gzip_path(data_root / name / f"{name}_{target_date}.jsonl")
+        receipt: dict[str, Any] = {"path": str(path), "exists": path.is_file()}
+        before = _raw_generation(path)
+        parsed = list(_audited_jsonl(path, receipt)) if path.is_file() else []
+        after = _raw_generation(path)
+        receipt["generation"] = after
+        receipt["generation_stable"] = bool(before and before == after)
+        if before and before != after:
+            source_generation_changed = True
+        receipts[name] = receipt
+        rows[name] = parsed
+
+    captures = [
+        row
+        for row in rows["ai_decision_payloads"]
+        if row.get("schema") == "mechanistic_entry_observation_v1"
+    ]
+    traces = [
+        row
+        for row in rows["ai_decision_trace"]
+        if row.get("schema") == "ai_decision_trace_v1"
+        and row.get("decision_stage") == "entry_screen"
+    ]
+    requests = [
+        row
+        for row in rows["ai_decision_requests"]
+        if row.get("schema") == "ai_decision_request_provenance_v1"
+    ]
+    prompts = [
+        row
+        for row in rows["ai_decision_prompts"]
+        if row.get("schema") == "ai_decision_prompt_v1"
+    ]
+    outcomes = [
+        row
+        for row in rows["ai_decision_outcomes"]
+        if row.get("schema") == "ai_decision_outcome_label_v1"
+    ]
+
+    trace_by_snapshot: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for trace in traces:
+        snapshot_id = str(trace.get("snapshot_id") or "").strip()
+        if snapshot_id:
+            trace_by_snapshot[snapshot_id].append(trace)
+    request_ids = {str(row.get("request_id") or "") for row in requests}
+    prompt_hashes = {str(row.get("prompt_sha256") or "") for row in prompts}
+    outcome_trace_ids = {str(row.get("decision_trace_id") or "") for row in outcomes}
+
+    machine_actions: Counter[str] = Counter()
+    machine_scopes: Counter[str] = Counter()
+    machine_missing_fields: Counter[str] = Counter()
+    machine_trace_join: Counter[str] = Counter()
+    for capture in captures:
+        source = (
+            capture.get("source") if isinstance(capture.get("source"), dict) else {}
+        )
+        context = (
+            capture.get("label_context")
+            if isinstance(capture.get("label_context"), dict)
+            else {}
+        )
+        assessment = (
+            source.get("assessment")
+            if isinstance(source.get("assessment"), dict)
+            else {}
+        )
+        exact_payload = (
+            source.get("exact_payload")
+            if isinstance(source.get("exact_payload"), dict)
+            else {}
+        )
+        action = str(assessment.get("action") or "UNKNOWN").upper()
+        machine_actions[action] += 1
+        machine_scopes[
+            f"{str(context.get('effective_venue') or 'UNKNOWN').upper()}|"
+            f"{str(context.get('session_bucket') or 'UNKNOWN').upper()}"
+        ] += 1
+        for field, value in (
+            ("snapshot_id", context.get("snapshot_id")),
+            ("bundle_sha256", capture.get("bundle_sha256")),
+            ("machine_action", assessment.get("action")),
+            ("machine_reason", assessment.get("reason")),
+            ("machine_policy_version", assessment.get("policy_version")),
+            ("machine_micro_window", exact_payload.get("mechanistic_micro_window")),
+        ):
+            if value in (None, "", {}, []):
+                machine_missing_fields[field] += 1
+        snapshot_id = str(context.get("snapshot_id") or "").strip()
+        candidates = [
+            trace
+            for trace in trace_by_snapshot.get(snapshot_id, [])
+            if str(
+                trace.get("machine_bundle_sha256") or capture.get("bundle_sha256") or ""
+            )
+            == str(capture.get("bundle_sha256") or "")
+        ]
+        exact_action = [
+            trace
+            for trace in candidates
+            if str(trace.get("entry_mechanistic_action") or "").upper() == action
+        ]
+        machine_trace_join[
+            (
+                "exact_snapshot_bundle_action"
+                if len(exact_action) == 1
+                else (
+                    "exact_snapshot_bundle_action_ambiguous"
+                    if len(exact_action) > 1
+                    else (
+                        "snapshot_or_bundle_trace_missing"
+                        if not candidates
+                        else "machine_action_mismatch"
+                    )
+                )
+            )
+        ] += 1
+
+    screen_lanes = Counter(
+        str(trace.get("result_source") or "UNKNOWN") for trace in traces
+    )
+    provider_traces = [
+        trace for trace in traces if trace.get("provider_called") is True
+    ]
+    provider_linkage: Counter[str] = Counter()
+    for trace in provider_traces:
+        request_id = str(trace.get("request_id") or "")
+        trace_id = str(trace.get("decision_trace_id") or "")
+        prompt_hash = str(trace.get("prompt_sha256") or "")
+        provider_linkage[
+            "request_present" if request_id in request_ids else "request_missing"
+        ] += 1
+        provider_linkage[
+            "prompt_present" if prompt_hash in prompt_hashes else "prompt_missing"
+        ] += 1
+        provider_linkage[
+            "outcome_present" if trace_id in outcome_trace_ids else "outcome_missing"
+        ] += 1
+
+    required_archive_names = {"ai_decision_payloads", "ai_decision_trace"}
+    if provider_traces:
+        required_archive_names.update(
+            {"ai_decision_requests", "ai_decision_prompts", "ai_decision_outcomes"}
+        )
+    required_missing = [
+        name for name in sorted(required_archive_names) if not receipts[name]["exists"]
+    ]
+    invalid_json_sources = [
+        name
+        for name, receipt in receipts.items()
+        if receipt.get("invalid_json_line_count")
+    ]
+    identity_gaps = sum(machine_missing_fields.values()) + sum(
+        machine_trace_join[key]
+        for key in (
+            "exact_snapshot_bundle_action_ambiguous",
+            "snapshot_or_bundle_trace_missing",
+            "machine_action_mismatch",
+        )
+    )
+    provider_link_gaps = sum(
+        provider_linkage[key]
+        for key in ("request_missing", "prompt_missing", "outcome_missing")
+    )
+    status = (
+        "source_generation_changed"
+        if source_generation_changed
+        else (
+            "source_gap"
+            if required_missing or invalid_json_sources
+            else (
+                "warning_identity_or_provider_link_gap"
+                if identity_gaps or provider_link_gaps
+                else "pass"
+            )
+        )
+    )
+    manifest = {
+        name: {
+            "logical_content_sha256": receipt.get("logical_content_sha256"),
+            "nonempty_line_count": receipt.get("nonempty_line_count", 0),
+            "invalid_json_line_count": receipt.get("invalid_json_line_count", 0),
+        }
+        for name, receipt in receipts.items()
+    }
+    return {
+        "schema": MACHINE_AI_NATURAL_SOURCE_SCHEMA,
+        "target_date": target_date,
+        "status": status,
+        "source_manifest": {
+            "sources": manifest,
+            "source_manifest_sha256": _canonical_digest(manifest),
+            "generation_stable": not source_generation_changed,
+        },
+        "sources": receipts,
+        "machine_evaluation_population": {
+            "count": len(captures),
+            "action_counts": dict(sorted(machine_actions.items())),
+            "scope_counts": dict(sorted(machine_scopes.items())),
+            "missing_required_context_counts": dict(
+                sorted(machine_missing_fields.items())
+            ),
+            "trace_join_counts": dict(sorted(machine_trace_join.items())),
+        },
+        "ai_screen_population": {
+            "count": len(traces),
+            "provider_called_count": len(provider_traces),
+            "provider_not_called_count": len(traces) - len(provider_traces),
+            "result_source_counts": dict(sorted(screen_lanes.items())),
+            "denominator_note": "all_entry_screen_traces_including_machine_nonentry_and_input_preflight",
+        },
+        "provider_attempt_population": {
+            "count": len(provider_traces),
+            "request_archive_count": len(requests),
+            "prompt_archive_count": len(prompts),
+            "outcome_archive_count": len(outcomes),
+            "linkage_counts": dict(sorted(provider_linkage.items())),
+            "denominator_note": "entry_screen_traces_with_provider_called_true_only",
+        },
+        "tuning_input_allowed": not bool(
+            required_missing or invalid_json_sources or source_generation_changed
+        ),
+        "blocked_reason": (
+            "machine_ai_archive_missing_or_invalid"
+            if required_missing or invalid_json_sources
+            else (
+                "machine_ai_source_generation_changed"
+                if source_generation_changed
+                else None
+            )
+        ),
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
 
 
 SOURCE_LIKE_TOKENS = (
@@ -2941,9 +3209,9 @@ def _reviewed_unknown_reason_for_stage_field(
         and _field_text("decision_market_scope").upper() == "KRX_NXT_INTEGRATED"
         and _field_text("market_data_route").lower()
         in {"krx_only", "nxt_only", "krx_nxt_integrated"}
-        and _field_text("market_session_regime").upper().startswith(
-            "KRX_NXT_AFTERMARKET"
-        )
+        and _field_text("market_session_regime")
+        .upper()
+        .startswith("KRX_NXT_AFTERMARKET")
     ):
         return "reviewed_integrated_route_actual_execution_venue_unobserved"
 
@@ -5340,9 +5608,14 @@ def _row_contract_violations(
         and data_route == "unknown"
         and actual_venue == "UNKNOWN"
     )
+    premarket_axes = bool(
+        session_regime == "KRX_LIKE_PREMARKET"
+        and decision_scope in {"KRX", "PREMARKET_KRX_LIKE"}
+        and data_route == "unknown"
+        and actual_venue == "UNKNOWN"
+    )
     normal_axes = bool(
-        decision_scope
-        in {"KRX", "NXT", "KRX_NXT_INTEGRATED", "PREMARKET_KRX_LIKE"}
+        decision_scope in {"KRX", "NXT", "KRX_NXT_INTEGRATED", "PREMARKET_KRX_LIKE"}
         and data_route in {"krx_only", "nxt_only", "krx_nxt_integrated"}
         and session_regime
         and actual_venue in {"KRX", "NXT", "UNKNOWN"}
@@ -5352,7 +5625,7 @@ def _row_contract_violations(
             or decision_scope == "KRX_NXT_INTEGRATED"
         )
     )
-    if has_market_axes and not (transition_axes or normal_axes):
+    if has_market_axes and not (transition_axes or premarket_axes or normal_axes):
         invalid.append("aftermarket_market_axes_contract")
     if stage == "entry_submit_attempt_finished" and (
         fields.get("entry_submit_attempt_schema") != "call_local_submit_attempt_v1"
@@ -7039,7 +7312,9 @@ def _streaming_contract_audit(
     return event_count, stage_counts, contract_result, exclusions
 
 
-def build_observation_source_quality_audit(target_date: str) -> dict[str, Any]:
+def build_observation_source_quality_audit(
+    target_date: str, *, audit_phase: str = "manual"
+) -> dict[str, Any]:
     raw_path = existing_or_gzip_path(_pipeline_events_path(target_date))
     generation_before = _raw_generation(raw_path)
     source_receipt: dict[str, Any] = {}
@@ -7083,10 +7358,12 @@ def build_observation_source_quality_audit(target_date: str) -> dict[str, Any]:
         status = "fail"
         hard_gate["tuning_input_allowed"] = False
         hard_gate["blocked_reason"] = source_block
+    machine_ai_consumption = _machine_ai_natural_source_consumption(target_date)
     return {
         "schema_version": AUDIT_SCHEMA_VERSION,
         "report_type": REPORT_DIRNAME,
         "target_date": target_date,
+        "audit_phase": audit_phase,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "status": status,
         "policy": {
@@ -7132,6 +7409,12 @@ def build_observation_source_quality_audit(target_date: str) -> dict[str, Any]:
             "reviewed_unknown_token_stage_count": len(
                 contract_result.get("reviewed_unknown_token_findings") or []
             ),
+            "machine_ai_natural_source_consumption_status": machine_ai_consumption[
+                "status"
+            ],
+            "machine_ai_natural_source_consumption_tuning_input_allowed": (
+                machine_ai_consumption["tuning_input_allowed"]
+            ),
             "hard_blocking_excluded_row_count": len(row_exclusions),
             "tuning_input_policy": "exclude_defective_rows_not_full_day_raw",
             **{
@@ -7142,6 +7425,7 @@ def build_observation_source_quality_audit(target_date: str) -> dict[str, Any]:
         },
         "hard_blocking_contract_gaps": hard_gate["hard_blocking_contract_gaps"],
         "hard_blocking_row_exclusions": row_exclusions,
+        "machine_ai_natural_source_consumption": machine_ai_consumption,
         **contract_result,
     }
 
@@ -7916,9 +8200,11 @@ def _attach_raw_row_exclusion(
     summary["raw_row_exclusion_manifest"] = manifest.get("manifest_path")
 
 
-def write_report(target_date: str) -> dict[str, Any]:
+def write_report(target_date: str, *, audit_phase: str = "manual") -> dict[str, Any]:
     previous_applied_exclusion = _existing_applied_raw_row_exclusion(target_date)
-    report = build_observation_source_quality_audit(target_date)
+    report = build_observation_source_quality_audit(
+        target_date, audit_phase=audit_phase
+    )
     raw_path = existing_or_gzip_path(_pipeline_events_path(target_date))
     writer_active = bool(
         report.get("hard_blocking_row_exclusions")
@@ -7941,7 +8227,9 @@ def write_report(target_date: str) -> dict[str, Any]:
             )
     if exclusion_manifest:
         if not writer_active:
-            report = build_observation_source_quality_audit(target_date)
+            report = build_observation_source_quality_audit(
+                target_date, audit_phase=audit_phase
+            )
         _attach_raw_row_exclusion(
             report,
             exclusion_manifest,
@@ -7997,6 +8285,12 @@ def main() -> int:
         description="Audit observation source-quality field coverage."
     )
     parser.add_argument("--target-date", required=True)
+    parser.add_argument(
+        "--audit-phase",
+        choices=("preflight", "final", "manual"),
+        default="manual",
+        help="Record whether this is the preflight or final postclose audit.",
+    )
     parser.add_argument("--start-date", default=DEFAULT_BACKFILL_START_DATE)
     parser.add_argument("--backfill", action="store_true")
     parser.add_argument("--write", action="store_true")
@@ -8039,9 +8333,11 @@ def main() -> int:
             )
         else:
             report = (
-                write_report(args.target_date)
+                write_report(args.target_date, audit_phase=args.audit_phase)
                 if args.write
-                else build_observation_source_quality_audit(args.target_date)
+                else build_observation_source_quality_audit(
+                    args.target_date, audit_phase=args.audit_phase
+                )
             )
         stdout_payload = _stdout_report_payload(
             report,

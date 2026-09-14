@@ -688,6 +688,7 @@ def test_receipt_submission_custody_fails_closed_on_raw_binding_mismatch(
         lambda *args, **kwargs: emitted.append(kwargs),
     )
 
+    contract_validation: dict[str, Any] = {}
     assert not execution_receipts._emit_execution_receipt_submission_custody(
         target_stock=stock,
         target_id=701,
@@ -696,8 +697,42 @@ def test_receipt_submission_custody_fails_closed_on_raw_binding_mismatch(
         order_no="0000123",
         execution_no="0000001",
         requested_qty=2,
+        contract_validation=contract_validation,
     )
     assert emitted == []
+    assert contract_validation["valid"] is False
+    assert contract_validation["reason_codes"]
+
+
+def test_exit_receipt_submission_custody_reports_pending_context_failure_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    emitted: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        execution_receipts,
+        "_log_holding_pipeline",
+        lambda *args, **kwargs: emitted.append(kwargs),
+    )
+    stock = _exact_sell_execution_stock()
+    stock["sell_submit_context_sha256"] = "0" * 64
+    contract_validation: dict[str, Any] = {}
+
+    assert not execution_receipts._emit_execution_receipt_submission_custody(
+        target_stock=stock,
+        target_id=701,
+        code="005930",
+        stage="exit_execution_receipt_submission_custody",
+        order_no="0000456",
+        execution_no="0000002",
+        requested_qty=2,
+        contract_validation=contract_validation,
+    )
+
+    assert emitted == []
+    assert contract_validation == {
+        "valid": False,
+        "reason_codes": ("exit_context_hash_matches",),
+    }
 
 
 def test_exit_receipt_submission_custody_accepts_exact_integrated_sor_envelope(
@@ -716,6 +751,7 @@ def test_exit_receipt_submission_custody_accepts_exact_integrated_sor_envelope(
         ),
     )
     stock = _exact_sell_execution_stock()
+    contract_validation: dict[str, Any] = {}
 
     assert execution_receipts._emit_execution_receipt_submission_custody(
         target_stock=stock,
@@ -725,7 +761,9 @@ def test_exit_receipt_submission_custody_accepts_exact_integrated_sor_envelope(
         order_no="0000456",
         execution_no="0000002",
         requested_qty=2,
+        contract_validation=contract_validation,
     )
+    assert contract_validation == {"valid": True, "reason_codes": ()}
     assert emitted[0]["submission_custody_broker_order_qty"] == 2
     assert emitted[0]["submission_custody_broker_cumulative_qty"] == 1
     assert emitted[0]["submission_custody_broker_remaining_qty"] == 1
@@ -2179,6 +2217,34 @@ def test_invalid_exit_receipt_never_binds_or_clears_pending_submit(
     assert stock["sell_submit_started_at"] == started_at
     assert "sell_odno" not in stock
     assert "_sell_submit_receipt_proof" not in stock
+
+
+def test_invalid_exit_receipt_logs_exact_validation_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stock = _exact_sell_execution_stock()
+    stock["900"] = "3"
+    errors: list[str] = []
+    monkeypatch.setattr(execution_receipts, "log_error", errors.append)
+    monkeypatch.setattr(
+        execution_receipts,
+        "_log_holding_pipeline",
+        lambda *args, **kwargs: pytest.fail("invalid custody must not emit"),
+    )
+
+    assert not execution_receipts._bind_pending_sell_execution_receipt(
+        target_stock=stock,
+        target_id=stock["id"],
+        code=stock["code"],
+        order_no="0000456",
+        execution_no="0000002",
+    )
+
+    assert errors == [
+        "[EXIT_RECEIPT_SUBMISSION_CUSTODY_CONTRACT_BLOCKED] "
+        "SAMSUNG(005930) ord_no=0000456 "
+        "reason_codes=raw_order_qty_matches"
+    ]
 
 
 def test_broker_receipt_pipeline_preserves_exact_lifecycle_identity(

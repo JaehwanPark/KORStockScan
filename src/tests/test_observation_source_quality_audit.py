@@ -101,7 +101,9 @@ def test_aftermarket_axes_exclude_only_identifiable_misclassified_row(monkeypatc
     assert actual_only["invalid_fields"] == []
 
 
-def test_aftermarket_axes_accept_exact_transition_and_reject_removed_nxt_solo(monkeypatch):
+def test_aftermarket_axes_accept_exact_transition_and_reject_removed_nxt_solo(
+    monkeypatch,
+):
     stage = "test_aftermarket_transition_axes"
     contract = audit.StageContract(required_fields=())
     monkeypatch.setitem(audit.STAGE_CONTRACTS, stage, contract)
@@ -133,6 +135,182 @@ def test_aftermarket_axes_accept_exact_transition_and_reject_removed_nxt_solo(mo
 
     assert transition["invalid_fields"] == []
     assert removed_solo["invalid_fields"] == ["aftermarket_market_axes_contract"]
+
+
+def test_aftermarket_axes_accept_krx_like_premarket_unknown_route(monkeypatch):
+    stage = "test_premarket_axes"
+    contract = audit.StageContract(required_fields=())
+    monkeypatch.setitem(audit.STAGE_CONTRACTS, stage, contract)
+
+    valid = audit._row_contract_violations(
+        stage,
+        {
+            "fields": {
+                "decision_market_scope": "KRX",
+                "market_data_route": "unknown",
+                "market_session_regime": "krx_like_premarket",
+                "actual_execution_venue": "UNKNOWN",
+            }
+        },
+        contract,
+    )
+    invalid = audit._row_contract_violations(
+        stage,
+        {
+            "fields": {
+                "decision_market_scope": "NXT",
+                "market_data_route": "unknown",
+                "market_session_regime": "krx_like_premarket",
+                "actual_execution_venue": "UNKNOWN",
+            }
+        },
+        contract,
+    )
+
+    assert valid["invalid_fields"] == []
+    assert invalid["invalid_fields"] == ["aftermarket_market_axes_contract"]
+
+
+def test_machine_ai_natural_source_audit_keeps_noncall_and_provider_denominators_separate(
+    tmp_path: Path,
+):
+    day = "2026-09-14"
+
+    def write(name: str, rows: list[dict]) -> None:
+        path = tmp_path / name / f"{name}_{day}.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8"
+        )
+
+    capture = {
+        "schema": "mechanistic_entry_observation_v1",
+        "bundle_sha256": "b" * 64,
+        "label_context": {
+            "snapshot_id": "snap-1",
+            "effective_venue": "KRX",
+            "session_bucket": "krx_regular",
+        },
+        "source": {
+            "assessment": {
+                "action": "RECHECK",
+                "reason": "fixture",
+                "policy_version": "machine-v1",
+            },
+            "exact_payload": {"mechanistic_micro_window": {"window_sec": 1}},
+        },
+    }
+    noncall_trace = {
+        "schema": "ai_decision_trace_v1",
+        "decision_stage": "entry_screen",
+        "snapshot_id": "snap-1",
+        "machine_bundle_sha256": "b" * 64,
+        "entry_mechanistic_action": "RECHECK",
+        "provider_called": False,
+        "result_source": "mechanistic_pre_adjudication",
+    }
+    provider_trace = {
+        "schema": "ai_decision_trace_v1",
+        "decision_stage": "entry_screen",
+        "snapshot_id": "snap-2",
+        "provider_called": True,
+        "request_id": "request-2",
+        "prompt_sha256": "p" * 64,
+        "decision_trace_id": "trace-2",
+        "result_source": "live",
+    }
+    write("ai_decision_payloads", [capture])
+    write("ai_decision_trace", [noncall_trace, provider_trace])
+    write(
+        "ai_decision_requests",
+        [{"schema": "ai_decision_request_provenance_v1", "request_id": "request-2"}],
+    )
+    write(
+        "ai_decision_prompts",
+        [{"schema": "ai_decision_prompt_v1", "prompt_sha256": "p" * 64}],
+    )
+    write(
+        "ai_decision_outcomes",
+        [{"schema": "ai_decision_outcome_label_v1", "decision_trace_id": "trace-2"}],
+    )
+
+    report = audit._machine_ai_natural_source_consumption(day, data_root=tmp_path)
+
+    assert report["status"] == "pass"
+    assert report["machine_evaluation_population"]["count"] == 1
+    assert report["machine_evaluation_population"]["action_counts"] == {"RECHECK": 1}
+    assert report["ai_screen_population"] == {
+        "count": 2,
+        "provider_called_count": 1,
+        "provider_not_called_count": 1,
+        "result_source_counts": {
+            "live": 1,
+            "mechanistic_pre_adjudication": 1,
+        },
+        "denominator_note": "all_entry_screen_traces_including_machine_nonentry_and_input_preflight",
+    }
+    assert report["provider_attempt_population"]["linkage_counts"] == {
+        "outcome_present": 1,
+        "prompt_present": 1,
+        "request_present": 1,
+    }
+    assert report["tuning_input_allowed"] is True
+
+
+def test_machine_ai_natural_source_audit_does_not_require_provider_archives_without_calls(
+    tmp_path: Path,
+):
+    day = "2026-09-14"
+    capture_path = (
+        tmp_path / "ai_decision_payloads" / f"ai_decision_payloads_{day}.jsonl"
+    )
+    trace_path = tmp_path / "ai_decision_trace" / f"ai_decision_trace_{day}.jsonl"
+    capture_path.parent.mkdir(parents=True)
+    trace_path.parent.mkdir(parents=True)
+    capture_path.write_text(
+        json.dumps(
+            {
+                "schema": "mechanistic_entry_observation_v1",
+                "bundle_sha256": "b" * 64,
+                "label_context": {
+                    "snapshot_id": "snap-1",
+                    "effective_venue": "KRX",
+                    "session_bucket": "krx_regular",
+                },
+                "source": {
+                    "assessment": {
+                        "action": "BLOCK",
+                        "reason": "fixture",
+                        "policy_version": "machine-v1",
+                    },
+                    "exact_payload": {"mechanistic_micro_window": {"window_sec": 1}},
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    trace_path.write_text(
+        json.dumps(
+            {
+                "schema": "ai_decision_trace_v1",
+                "decision_stage": "entry_screen",
+                "snapshot_id": "snap-1",
+                "machine_bundle_sha256": "b" * 64,
+                "entry_mechanistic_action": "BLOCK",
+                "provider_called": False,
+                "result_source": "mechanistic_pre_adjudication",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = audit._machine_ai_natural_source_consumption(day, data_root=tmp_path)
+
+    assert report["status"] == "pass"
+    assert report["provider_attempt_population"]["count"] == 0
+    assert report["tuning_input_allowed"] is True
 
 
 @pytest.mark.parametrize(

@@ -3084,8 +3084,7 @@ def _match_machine_ai_trace(
             continue
         candidates.append(row)
     expected_action = str(
-        _as_dict(_as_dict(capture.get("source")).get("assessment")).get("action")
-        or ""
+        _as_dict(_as_dict(capture.get("source")).get("assessment")).get("action") or ""
     ).upper()
     matching_action = [
         row
@@ -3094,8 +3093,12 @@ def _match_machine_ai_trace(
     ]
     if len(matching_action) == 1:
         return matching_action[0], "exact_snapshot_machine_action_join"
-    if len(candidates) == 1:
-        return candidates[0], "exact_snapshot_join"
+    if candidates:
+        # A snapshot is not a sufficient substitute when the composed trace
+        # reports a different mechanistic action.  Keep that mismatch visible
+        # in the capture census but exclude it from learning rather than
+        # silently using the nearby trace as a policy row.
+        return {}, "machine_action_mismatch_for_exact_snapshot"
     if not candidates:
         return {}, "ai_trace_missing_for_exact_snapshot"
     return {}, "ai_trace_ambiguous_for_exact_snapshot"
@@ -3119,9 +3122,7 @@ def _compact_machine_horizon_metrics(metrics: Any) -> dict[str, dict]:
             "cost_adjusted_target_pct": path.get("gross_net_target_pct"),
             "time_to_net_target_sec": path.get("time_to_net_target_sec"),
             "pre_target_mae_pct": path.get("pre_target_mae_pct"),
-            "pre_target_underwater_ratio": path.get(
-                "pre_target_underwater_ratio"
-            ),
+            "pre_target_underwater_ratio": path.get("pre_target_underwater_ratio"),
         }
     return result
 
@@ -3213,6 +3214,9 @@ def load_machine_observation_rows(
                     capture, context, ai_trace_index
                 )
                 counts[ai_trace_join_status] += 1
+                if ai_trace_join_status == "machine_action_mismatch_for_exact_snapshot":
+                    counts["machine_action_mismatch_excluded"] += 1
+                    continue
                 # Runtime capture stores the canonical label context exactly as
                 # observed.  Session labels are lower-case there while the
                 # mechanistic scope registry is upper-case.  Normalize only for
@@ -3274,8 +3278,7 @@ def load_machine_observation_rows(
                     # lifecycle correlation. The machine digest remains the
                     # immutable case identity below.
                     "decision_trace_id": ai_trace.get("decision_trace_id"),
-                    "record_id": context.get("record_id")
-                    or ai_trace.get("record_id"),
+                    "record_id": context.get("record_id") or ai_trace.get("record_id"),
                     "decision_stage": "entry",
                     "invalid_reasons": [],
                 }
@@ -3305,9 +3308,11 @@ def load_machine_observation_rows(
                 correlation = _as_dict(labeled.get("correlation"))
                 pipeline_joined = correlation.get("status") == "exact_matched"
                 counts[
-                    "pipeline_lifecycle_exact_join"
-                    if pipeline_joined
-                    else "pipeline_lifecycle_unresolved"
+                    (
+                        "pipeline_lifecycle_exact_join"
+                        if pipeline_joined
+                        else "pipeline_lifecycle_unresolved"
+                    )
                 ] += 1
                 scanner_promotion_ids = list(
                     correlation.get("scanner_promotion_ids") or []
@@ -3349,9 +3354,7 @@ def load_machine_observation_rows(
                         "machine_applied_thresholds": assessment.get(
                             "applied_thresholds"
                         ),
-                        "machine_liquidity_inputs": assessment.get(
-                            "liquidity_inputs"
-                        ),
+                        "machine_liquidity_inputs": assessment.get("liquidity_inputs"),
                         "setup_evidence": evidence,
                         "entry_group_observation": mc.get("group", {}),
                         "entry_group_contract_valid": True,
@@ -3390,13 +3393,9 @@ def load_machine_observation_rows(
                             "ai_action": ai_trace.get("action"),
                             "ai_result_source": ai_trace.get("result_source"),
                             "provider_called": ai_trace.get("provider_called"),
-                            "ai_screen_status": ai_trace.get(
-                                "entry_ai_screen_status"
-                            ),
+                            "ai_screen_status": ai_trace.get("entry_ai_screen_status"),
                             "ai_screen_pass": ai_trace.get("entry_ai_screen_pass"),
-                            "ai_risk_verdict": ai_trace.get(
-                                "entry_ai_risk_verdict"
-                            ),
+                            "ai_risk_verdict": ai_trace.get("entry_ai_risk_verdict"),
                             "ai_veto_corroborated": ai_trace.get(
                                 "entry_ai_veto_corroborated"
                             ),
@@ -3423,8 +3422,37 @@ def load_machine_observation_rows(
     return result, dict(counts)
 
 
+def _machine_ai_natural_source_receipt(data_root: Path, target_date: str) -> dict:
+    """Load #74's compact archive manifest without treating it as policy authority."""
+    path = (
+        data_root
+        / "report"
+        / "observation_source_quality_audit"
+        / f"observation_source_quality_audit_{target_date}.json"
+    )
+    try:
+        report = _load_json(path)
+    except (OSError, ValueError, json.JSONDecodeError):
+        report = {}
+    consumption = report.get("machine_ai_natural_source_consumption")
+    consumption = consumption if isinstance(consumption, dict) else {}
+    manifest = consumption.get("source_manifest")
+    manifest = manifest if isinstance(manifest, dict) else {}
+    return {
+        "path": str(path),
+        "schema": consumption.get("schema"),
+        "status": consumption.get("status", "missing"),
+        "source_manifest_sha256": manifest.get("source_manifest_sha256"),
+        "tuning_input_allowed": consumption.get("tuning_input_allowed"),
+        "authority": "source_quality_receipt_only_no_runtime_apply",
+    }
+
+
 def build_machine_decision_case_table(
-    rows: list[dict], *, capture_census: dict | None = None
+    rows: list[dict],
+    *,
+    capture_census: dict | None = None,
+    source_receipt: dict | None = None,
 ) -> dict:
     """Classify machine timing outcomes without creating trading authority.
 
@@ -3512,9 +3540,7 @@ def build_machine_decision_case_table(
                 "machine_action": action,
                 "machine_reason": row.get("machine_reason"),
                 "machine_core_comparison": row.get("machine_core_comparison"),
-                "machine_applied_thresholds": row.get(
-                    "machine_applied_thresholds"
-                ),
+                "machine_applied_thresholds": row.get("machine_applied_thresholds"),
                 "machine_liquidity_inputs": row.get("machine_liquidity_inputs"),
                 "hierarchy_selection": row.get("machine_hierarchy_selection"),
                 "entry_quality_label": label,
@@ -3541,6 +3567,8 @@ def build_machine_decision_case_table(
                 "broker_order_forbidden": True,
             }
         )
+    source_receipt = dict(source_receipt or {})
+    source_tuning_allowed = source_receipt.get("tuning_input_allowed") is True
     return {
         "schema": MACHINE_DECISION_CASE_TABLE_SCHEMA,
         "status": (
@@ -3559,9 +3587,12 @@ def build_machine_decision_case_table(
         ),
         "conflicting_attempt_identity_count": conflicting_attempt_identity_count,
         "policy_learning_eligible_observation_count": (
-            len(rows) if conflicting_attempt_identity_count == 0 else 0
+            len(rows)
+            if conflicting_attempt_identity_count == 0 and source_tuning_allowed
+            else 0
         ),
         "machine_capture_census": dict(capture_census or {}),
+        "machine_ai_natural_source_receipt": source_receipt,
         "machine_action_counts": dict(sorted(action_counts.items())),
         "case_classification_counts": dict(sorted(classifications.items())),
         "source_date_counts": dict(sorted(source_date_counts.items())),
@@ -3576,6 +3607,7 @@ def build_machine_decision_case_table(
         ),
         "ai_and_final_guard_are_separate_consumers": True,
         "ai_and_final_guard_exact_join_attempted": True,
+        "machine_ai_populations_are_separate": True,
         "rows": cases[-200:],
         "row_export_limit": 200,
         "runtime_effect": False,
@@ -5581,20 +5613,30 @@ def build_report(
     machine_observations, machine_capture_census = load_machine_observation_rows(
         data_root, target_date=target_date
     )
+    machine_source_receipt = _machine_ai_natural_source_receipt(data_root, target_date)
     machine_decision_case_table = build_machine_decision_case_table(
-        machine_observations, capture_census=machine_capture_census
+        machine_observations,
+        capture_census=machine_capture_census,
+        source_receipt=machine_source_receipt,
     )
     hierarchy_rows, hierarchy_cost_census = relabel_hierarchy_source_rows(
         mechanistic_source_rows, data_root
     )
     machine_policy_rows = (
         machine_observations
-        if machine_decision_case_table["conflicting_attempt_identity_count"] == 0
+        if machine_decision_case_table["policy_learning_eligible_observation_count"]
+        == len(machine_observations)
         else []
     )
+    krx_machine_policy_rows = [
+        row
+        for row in machine_policy_rows
+        if (row.get("effective_venue"), row.get("session_bucket"))
+        == ("KRX", "KRX_REGULAR")
+    ]
     hierarchical_entry_quality["runtime_extension"] = (
         build_mechanistic_hierarchy_candidate(
-            hierarchy_rows + machine_policy_rows,
+            hierarchy_rows + krx_machine_policy_rows,
             target_date=target_date,
             parent_policy=hierarchy_parent,
         )
@@ -5633,7 +5675,12 @@ def build_report(
             _as_dict((incumbent or {}).get("scope_policies")).get(scope)
         )
         extension = build_mechanistic_hierarchy_candidate(
-            repriced + machine_observations,
+            repriced
+            + [
+                row
+                for row in machine_policy_rows
+                if (row.get("effective_venue"), row.get("session_bucket")) == cohort
+            ],
             target_date=target_date,
             parent_policy=scoped_incumbent.get("machine_policy"),
             cohort=cohort,

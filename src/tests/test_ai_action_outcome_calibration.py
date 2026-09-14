@@ -720,6 +720,12 @@ def test_machine_decision_case_table_separates_missed_and_bad_entry_timing():
             ),
         ],
         capture_census={"captured": 4, "evaluable": 4},
+        source_receipt={
+            "schema": "machine_ai_natural_source_consumption_v1",
+            "status": "pass",
+            "source_manifest_sha256": "d" * 64,
+            "tuning_input_allowed": True,
+        },
     )
 
     assert report["status"] == "evaluable"
@@ -743,6 +749,8 @@ def test_machine_decision_case_table_separates_missed_and_bad_entry_timing():
     assert report["observed_selected_child_rule_ids"] == ["flow-rule-1"]
     assert report["legacy_60_second_same_action_collapse_disabled"] is True
     assert report["conflicting_attempt_identity_count"] == 0
+    assert report["policy_learning_eligible_observation_count"] == 4
+    assert report["machine_ai_populations_are_separate"] is True
 
 
 def test_machine_case_table_preserves_distinct_snapshots_inside_sixty_seconds():
@@ -765,9 +773,7 @@ def test_machine_case_table_preserves_distinct_snapshots_inside_sixty_seconds():
                 "entry_quality_label": "CLEAN_FAST_PROFIT",
             }
         },
-        "ai_and_final_guard": {
-            "join_status": "exact_snapshot_machine_action_join"
-        },
+        "ai_and_final_guard": {"join_status": "exact_snapshot_machine_action_join"},
     }
     report = calibration.build_machine_decision_case_table(
         [
@@ -820,6 +826,36 @@ def test_machine_ai_trace_match_uses_snapshot_route_bundle_and_machine_action():
 
     assert status == "exact_snapshot_machine_action_join"
     assert matched["decision_trace_id"] == "aidt-good"
+
+
+def test_machine_ai_trace_match_excludes_snapshot_action_mismatch():
+    capture = {
+        "captured_at": "2026-09-14T12:00:00+09:00",
+        "bundle_sha256": "b" * 64,
+        "source": {"assessment": {"action": "ENTER_NOW"}},
+    }
+    context = {
+        "snapshot_id": "aims-exact",
+        "stock_code": "005930",
+        "effective_venue": "KRX",
+        "session_bucket": "krx_regular",
+    }
+    mismatched = {
+        "decision_ts": "2026-09-14T12:00:01+09:00",
+        "snapshot_id": "aims-exact",
+        "stock_code": "005930",
+        "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "machine_bundle_sha256": "b" * 64,
+        "entry_mechanistic_action": "RECHECK",
+    }
+
+    matched, status = calibration._match_machine_ai_trace(
+        capture, context, {"aims-exact": [mismatched]}
+    )
+
+    assert matched == {}
+    assert status == "machine_action_mismatch_for_exact_snapshot"
 
 
 def test_hierarchy_cost_owner_rejects_changed_raw_source(tmp_path):

@@ -312,6 +312,7 @@ class FakeGateway:
         self.buy_calls: list[int] = []
         self.sell_calls: list[int] = []
         self.cancel_calls: list[str] = []
+        self.execution_calls: list[tuple[str, str, int]] = []
         self.snapshots: dict[str, ExecutionSnapshot] = {}
         self.sequence = 0
         self.best_bid_qty = 1_000
@@ -377,6 +378,7 @@ class FakeGateway:
         return self._accepted("C")
 
     def execution_snapshot(self, *, order_no, order_date, expected_order_qty):
+        self.execution_calls.append((order_no, order_date, expected_order_qty))
         snapshot = self.snapshots.get(
             order_no,
             ExecutionSnapshot(True, True, 0, expected_order_qty, expected_order_qty),
@@ -2501,9 +2503,10 @@ def test_prior_held_inventory_keeps_its_original_target_policy(tmp_path):
         ),
         encoding="utf-8",
     )
+    gateway = FakeGateway(current_profile.profile_id)
     machine = LowPriceTwoLegMachine(
         profile=current_profile,
-        gateway=FakeGateway(current_profile.profile_id),
+        gateway=gateway,
         state_path=state_path,
         live_enabled=True,
         ownership_source=lambda code: "manual_operator",
@@ -2515,6 +2518,34 @@ def test_prior_held_inventory_keeps_its_original_target_policy(tmp_path):
     assert state["blocked_reason"] == ""
     assert [leg["target_price"] for leg in state["legs"]] == [38_950, 38_900]
     assert current_profile.policy.target_ticks == 4
+    assert gateway.execution_calls[-2:] == [
+        ("T1", "2026-08-18", 10),
+        ("T2", "2026-08-18", 10),
+    ]
+
+    for leg in state["legs"]:
+        gateway.snapshots[leg["target_order_no"]] = ExecutionSnapshot(
+            True,
+            True,
+            int(leg["target_quantity"]),
+            0,
+            int(leg["target_quantity"]),
+            int(leg["target_price"]),
+        )
+
+    rolled = machine.run_once(_at(20, 10, 4))
+
+    assert rolled["trade_date"] == "2026-08-20"
+    assert rolled["status"] == "READY"
+    assert rolled["position_qty"] == 0
+    assert any(
+        event.get("action") == "daily_state_initialized_from_prior_terminal_policy"
+        and event.get("prior_trade_date") == "2026-08-18"
+        for event in rolled["audit"]
+    )
+    assert gateway.buy_calls == []
+    assert gateway.sell_calls == []
+    assert gateway.cancel_calls == []
 
 
 def test_mirae_machine_uses_user_approved_close_minus_one_split(tmp_path):

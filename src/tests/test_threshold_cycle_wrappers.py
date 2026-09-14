@@ -1952,7 +1952,11 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         "src.engine.observation_source_quality_audit", verbosity_idx
     )
     assert (
-        'src.engine.observation_source_quality_audit --target-date "$TARGET_DATE" --write --print-summary'
+        'src.engine.observation_source_quality_audit --target-date "$TARGET_DATE" --audit-phase final --write --print-summary'
+        in script
+    )
+    assert (
+        'src.engine.observation_source_quality_audit --target-date "$TARGET_DATE" --audit-phase preflight --write'
         in script
     )
     perf_source_idx = script.index("src.engine.codebase_performance_workorder_report")

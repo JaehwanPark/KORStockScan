@@ -418,9 +418,7 @@ def _receipt_market_axes(
 
     context = resolve_market_session(receipt_at) if receipt_at is not None else None
     session_regime = str(stock.get("market_session_regime") or "").strip()
-    session_contract_version = str(
-        stock.get("session_contract_version") or ""
-    ).strip()
+    session_contract_version = str(stock.get("session_contract_version") or "").strip()
     if context is not None:
         session_regime = context.session_regime
         session_contract_version = context.contract_version
@@ -447,9 +445,7 @@ def _receipt_market_axes(
         if candidate in _MARKET_DATA_ROUTES:
             market_data_route = candidate
 
-    actual_venue = str(
-        stock.get("broker_actual_execution_venue") or ""
-    ).strip().upper()
+    actual_venue = str(stock.get("broker_actual_execution_venue") or "").strip().upper()
     if actual_venue not in {"KRX", "NXT"}:
         actual_venue = "UNKNOWN"
     actual_venue_source = (
@@ -566,15 +562,11 @@ def _sell_execution_provenance_fields(
     target_stock["last_sell_execution_broker_route_requested"] = axes[
         "broker_route_requested"
     ]
-    target_stock["last_sell_execution_market_data_route"] = axes[
-        "market_data_route"
-    ]
+    target_stock["last_sell_execution_market_data_route"] = axes["market_data_route"]
     target_stock["last_sell_execution_market_session_regime"] = axes[
         "market_session_regime"
     ]
-    target_stock["last_sell_execution_actual_venue"] = axes[
-        "actual_execution_venue"
-    ]
+    target_stock["last_sell_execution_actual_venue"] = axes["actual_execution_venue"]
     if packet_received_at is not None:
         fields["exit_execution_received_at"] = packet_received_at.isoformat(
             timespec="microseconds"
@@ -1456,7 +1448,7 @@ def _emit_execution_receipt_submission_custody(
     execution_no: str,
     requested_qty: int,
     trace_fields: dict[str, Any] | None = None,
-    contract_validation: dict[str, bool] | None = None,
+    contract_validation: dict[str, Any] | None = None,
 ) -> bool:
     """Emit an exact submit predecessor when WS execution wins the bind race.
 
@@ -1468,7 +1460,10 @@ def _emit_execution_receipt_submission_custody(
     """
 
     if isinstance(contract_validation, dict):
-        contract_validation["valid"] = False
+        # This object is diagnostic-only.  The caller uses ``valid`` to retain
+        # the fail-closed custody boundary; reason codes make a rejected WS
+        # receipt inspectable without retaining or reusing the raw packet.
+        contract_validation.update({"valid": False, "reason_codes": ()})
     custody_side = {
         "entry_execution_receipt_submission_custody": "BUY",
         "scale_in_execution_receipt_submission_custody": "BUY",
@@ -1504,6 +1499,10 @@ def _emit_execution_receipt_submission_custody(
         receive_at = receive_at.astimezone(_KST)
         occurrence_at = occurrence_at.astimezone(_KST)
     except (TypeError, ValueError):
+        if isinstance(contract_validation, dict):
+            contract_validation["reason_codes"] = (
+                "broker_execution_timestamp_invalid",
+            )
         return False
 
     submit_generation = str(target_stock.get("sell_submit_generation") or "").strip()
@@ -1613,31 +1612,44 @@ def _emit_execution_receipt_submission_custody(
         and actual_venue == submit_route
     )
 
-    exit_pending_contract_valid = bool(
-        custody_side == "SELL"
-        and (
+    exit_pending_checks = {
+        "exit_pending_or_retry": (
             target_stock.get("sell_submit_pending") is True
             or target_stock.get("exit_receipt_submission_custody_retry_required")
             is True
-        )
-        and _safe_int(target_stock.get("sell_submit_requested_qty"), 0)
-        == normalized_qty
-        and submit_generation
-        and _safe_int(target_stock.get("sell_submit_target_id"), 0)
-        == _safe_int(target_id, 0)
-        and str(target_stock.get("sell_submit_code") or "").strip()[:6]
-        == normalized_code
-        and str(target_stock.get("sell_submit_context_sha256") or "").strip()
-        == submit_context_sha256
-        and submit_floor_at is not None
-        and receive_at.timestamp() >= submit_started_at
-        and occurrence_at >= submit_floor_at
-        and -BROKER_EXECUTION_MAX_NEGATIVE_LAG_SEC
-        <= receive_lag_sec
-        <= BROKER_EXECUTION_MAX_RECEIVE_LAG_SEC
-        and route_matches
-        and (receipt_session == submit_session or boundary_session_matches)
-    )
+        ),
+        "exit_requested_qty_matches": (
+            _safe_int(target_stock.get("sell_submit_requested_qty"), 0)
+            == normalized_qty
+        ),
+        "exit_generation_present": bool(submit_generation),
+        "exit_target_id_matches": (
+            _safe_int(target_stock.get("sell_submit_target_id"), 0)
+            == _safe_int(target_id, 0)
+        ),
+        "exit_code_matches": (
+            str(target_stock.get("sell_submit_code") or "").strip()[:6]
+            == normalized_code
+        ),
+        "exit_context_hash_matches": (
+            str(target_stock.get("sell_submit_context_sha256") or "").strip()
+            == submit_context_sha256
+        ),
+        "exit_submit_started_at_present": submit_floor_at is not None,
+        "exit_receipt_after_submit": receive_at.timestamp() >= submit_started_at,
+        "exit_occurrence_after_submit_second": (
+            submit_floor_at is not None and occurrence_at >= submit_floor_at
+        ),
+        "exit_receive_lag_in_bound": (
+            -BROKER_EXECUTION_MAX_NEGATIVE_LAG_SEC
+            <= receive_lag_sec
+            <= BROKER_EXECUTION_MAX_RECEIVE_LAG_SEC
+        ),
+        "exit_route_matches": route_matches,
+        "exit_session_matches": (
+            receipt_session == submit_session or boundary_session_matches
+        ),
+    }
     raw_side_valid = bool(
         (
             custody_side == "BUY"
@@ -1653,44 +1665,72 @@ def _emit_execution_receipt_submission_custody(
         )
     )
 
-    if (
-        custody_side is None
-        or re.fullmatch(r"[0-9]{7}", normalized_order_no) is None
-        or int(normalized_order_no) == 0
-        or re.fullmatch(r"[0-9]{6}", normalized_code) is None
-        or re.fullmatch(r"[0-9]{1,20}", normalized_execution_no) is None
-        or int(normalized_execution_no) == 0
-        or normalized_qty <= 0
-        or target_stock.get("main_lifecycle_broker_raw_envelope_schema")
-        != BROKER_EXECUTION_RAW_ENVELOPE_SCHEMA
-        or str(target_stock.get("main_lifecycle_broker_raw_source_type") or "")
-        != BROKER_EXECUTION_SOURCE_TYPE
-        or target_stock.get("broker_execution_receive_time_source")
-        != BROKER_EXECUTION_RECEIVE_TIME_SOURCE
-        or target_stock.get("broker_execution_time_source") != "official_fid_908"
-        or occurrence_at.microsecond != 0
-        or re.fullmatch(r"[0-9]{6}", raw_time) is None
-        or occurrence_at.strftime("%H%M%S") != raw_time
-        or raw_order_no != normalized_order_no
-        or raw_execution_no != normalized_execution_no
-        or raw_code != normalized_code
-        or raw_status != "체결"
-        or not raw_side_valid
-        or "취소" in raw_order_side
-        or raw_order_qty != normalized_qty
-        or raw_cumulative_qty is None
-        or raw_cumulative_qty <= 0
-        or raw_remaining_qty is None
-        or raw_remaining_qty < 0
-        or raw_cumulative_qty + raw_remaining_qty != normalized_qty
-        or raw_unit_qty is None
-        or raw_unit_qty <= 0
-        or raw_unit_qty > raw_cumulative_qty
-        or (custody_side == "SELL" and not exit_pending_contract_valid)
-    ):
+    validation_checks = {
+        "custody_stage_recognized": custody_side is not None,
+        "order_no_format_valid": re.fullmatch(r"[0-9]{7}", normalized_order_no)
+        is not None,
+        "order_no_nonzero": normalized_order_no != "0000000",
+        "code_format_valid": re.fullmatch(r"[0-9]{6}", normalized_code) is not None,
+        "execution_no_format_valid": re.fullmatch(
+            r"[0-9]{1,20}", normalized_execution_no
+        )
+        is not None,
+        "execution_no_nonzero": normalized_execution_no.strip("0") != "",
+        "requested_qty_positive": normalized_qty > 0,
+        "raw_envelope_schema_matches": (
+            target_stock.get("main_lifecycle_broker_raw_envelope_schema")
+            == BROKER_EXECUTION_RAW_ENVELOPE_SCHEMA
+        ),
+        "raw_source_type_matches": (
+            str(target_stock.get("main_lifecycle_broker_raw_source_type") or "")
+            == BROKER_EXECUTION_SOURCE_TYPE
+        ),
+        "receive_time_source_matches": (
+            target_stock.get("broker_execution_receive_time_source")
+            == BROKER_EXECUTION_RECEIVE_TIME_SOURCE
+        ),
+        "occurrence_time_source_matches": (
+            target_stock.get("broker_execution_time_source") == "official_fid_908"
+        ),
+        "occurrence_second_precision": occurrence_at.microsecond == 0,
+        "raw_occurrence_time_format_valid": re.fullmatch(r"[0-9]{6}", raw_time)
+        is not None,
+        "raw_occurrence_time_matches": occurrence_at.strftime("%H%M%S") == raw_time,
+        "raw_order_no_matches": raw_order_no == normalized_order_no,
+        "raw_execution_no_matches": raw_execution_no == normalized_execution_no,
+        "raw_code_matches": raw_code == normalized_code,
+        "raw_status_is_filled": raw_status == "체결",
+        "raw_side_matches": raw_side_valid,
+        "raw_order_not_cancelled": "취소" not in raw_order_side,
+        "raw_order_qty_matches": raw_order_qty == normalized_qty,
+        "raw_cumulative_qty_positive": (
+            raw_cumulative_qty is not None and raw_cumulative_qty > 0
+        ),
+        "raw_remaining_qty_nonnegative": (
+            raw_remaining_qty is not None and raw_remaining_qty >= 0
+        ),
+        "raw_cumulative_plus_remaining_matches": (
+            raw_cumulative_qty is not None
+            and raw_remaining_qty is not None
+            and raw_cumulative_qty + raw_remaining_qty == normalized_qty
+        ),
+        "raw_unit_qty_in_cumulative_range": (
+            raw_unit_qty is not None
+            and raw_cumulative_qty is not None
+            and 0 < raw_unit_qty <= raw_cumulative_qty
+        ),
+    }
+    if custody_side == "SELL":
+        validation_checks.update(exit_pending_checks)
+    failure_codes = tuple(
+        reason for reason, passed in validation_checks.items() if not passed
+    )
+    if failure_codes:
+        if isinstance(contract_validation, dict):
+            contract_validation["reason_codes"] = failure_codes
         return False
     if isinstance(contract_validation, dict):
-        contract_validation["valid"] = True
+        contract_validation.update({"valid": True, "reason_codes": ()})
     venue_fields = (
         _sell_execution_provenance_fields(target_stock)
         if custody_side == "SELL"
@@ -1805,7 +1845,7 @@ def _bind_pending_sell_execution_receipt(
     ):
         return False
 
-    contract_validation: dict[str, bool] = {}
+    contract_validation: dict[str, Any] = {}
     custody_emitted = _emit_execution_receipt_submission_custody(
         target_stock=target_stock,
         target_id=target_id,
@@ -1817,9 +1857,16 @@ def _bind_pending_sell_execution_receipt(
         contract_validation=contract_validation,
     )
     if contract_validation.get("valid") is not True:
+        reason_codes = contract_validation.get("reason_codes")
+        reason_text = (
+            ",".join(str(code) for code in reason_codes)
+            if isinstance(reason_codes, (list, tuple))
+            else "unspecified_validation_failure"
+        )
         log_error(
             f"[EXIT_RECEIPT_SUBMISSION_CUSTODY_CONTRACT_BLOCKED] "
-            f"{target_stock.get('name')}({code}) ord_no={normalized_order_no}"
+            f"{target_stock.get('name')}({code}) ord_no={normalized_order_no} "
+            f"reason_codes={reason_text}"
         )
         return False
     if not custody_emitted:

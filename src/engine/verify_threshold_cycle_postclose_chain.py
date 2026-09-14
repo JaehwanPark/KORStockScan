@@ -867,6 +867,8 @@ def _source_quality_hard_block_status(
 
 def _ai_decision_action_outcome_calibration_status(
     report: dict[str, Any],
+    *,
+    source_quality_audit: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not isinstance(report, dict) or not report:
         return {
@@ -1298,6 +1300,24 @@ def _ai_decision_action_outcome_calibration_status(
             policy_learning_count = machine_case_table.get(
                 "policy_learning_eligible_observation_count"
             )
+            machine_capture_census = machine_case_table.get("machine_capture_census")
+            machine_capture_census = (
+                machine_capture_census
+                if isinstance(machine_capture_census, dict)
+                else {}
+            )
+            machine_capture_count = int(machine_capture_census.get("captured") or 0)
+            machine_source_receipt = machine_case_table.get(
+                "machine_ai_natural_source_receipt"
+            )
+            machine_source_receipt = (
+                machine_source_receipt
+                if isinstance(machine_source_receipt, dict)
+                else {}
+            )
+            machine_source_tuning_allowed = machine_source_receipt.get(
+                "tuning_input_allowed"
+            )
 
             def valid_count_map(value: object) -> bool:
                 return isinstance(value, dict) and all(
@@ -1332,7 +1352,8 @@ def _ai_decision_action_outcome_calibration_status(
                 or conflicting_attempt_count != 0
                 or not isinstance(policy_learning_count, int)
                 or isinstance(policy_learning_count, bool)
-                or policy_learning_count != input_count
+                or policy_learning_count
+                != (input_count if machine_source_tuning_allowed is True else 0)
                 or input_count != case_count + collapsed_count
                 or (machine_case_table.get("status") == "evaluable") != (case_count > 0)
                 or not valid_count_map(action_counts)
@@ -1360,6 +1381,30 @@ def _ai_decision_action_outcome_calibration_status(
                 is not True
                 or machine_case_table.get("ai_and_final_guard_exact_join_attempted")
                 is not True
+                or (
+                    machine_capture_count > 0
+                    and (
+                        machine_case_table.get("machine_ai_populations_are_separate")
+                        is not True
+                        or machine_source_receipt.get("schema")
+                        != "machine_ai_natural_source_consumption_v1"
+                        or machine_source_receipt.get("status")
+                        not in {
+                            "pass",
+                            "warning_identity_or_provider_link_gap",
+                            "source_generation_changed",
+                            "source_gap",
+                        }
+                        or machine_source_tuning_allowed not in {True, False}
+                        or not isinstance(
+                            machine_source_receipt.get("source_manifest_sha256"), str
+                        )
+                        or len(
+                            machine_source_receipt.get("source_manifest_sha256") or ""
+                        )
+                        != 64
+                    )
+                )
                 or machine_case_table.get(
                     "legacy_60_second_same_action_collapse_disabled"
                 )
@@ -1371,9 +1416,7 @@ def _ai_decision_action_outcome_calibration_status(
                 or any(
                     not isinstance(row, dict)
                     or not str(row.get("evaluation_attempt_id") or "").strip()
-                    or not str(
-                        row.get("ai_and_final_guard_join_status") or ""
-                    ).strip()
+                    or not str(row.get("ai_and_final_guard_join_status") or "").strip()
                     or not isinstance(row.get("outcome_horizon_metrics"), dict)
                     or "10m" not in row.get("outcome_horizon_metrics", {})
                     or row.get("runtime_effect") is not False
@@ -1384,6 +1427,27 @@ def _ai_decision_action_outcome_calibration_status(
                 )
             ):
                 errors.append("mechanistic_machine_case_table_contract_invalid")
+            elif machine_capture_count > 0 and source_quality_audit is not None:
+                audited_consumption = source_quality_audit.get(
+                    "machine_ai_natural_source_consumption"
+                )
+                audited_consumption = (
+                    audited_consumption if isinstance(audited_consumption, dict) else {}
+                )
+                audited_manifest = audited_consumption.get("source_manifest")
+                audited_manifest = (
+                    audited_manifest if isinstance(audited_manifest, dict) else {}
+                )
+                if (
+                    source_quality_audit.get("audit_phase") != "final"
+                    or audited_consumption.get("schema")
+                    != "machine_ai_natural_source_consumption_v1"
+                    or audited_manifest.get("source_manifest_sha256")
+                    != machine_source_receipt.get("source_manifest_sha256")
+                ):
+                    errors.append(
+                        "mechanistic_machine_case_table_final_source_manifest_mismatch"
+                    )
     if not isinstance(hierarchical, dict):
         errors.append("hierarchical_entry_quality_invalid")
         hierarchical = {}
@@ -7435,7 +7499,8 @@ def build_threshold_cycle_postclose_verification(
     )
     ai_decision_action_outcome_calibration_status = (
         _ai_decision_action_outcome_calibration_status(
-            ai_decision_action_outcome_calibration
+            ai_decision_action_outcome_calibration,
+            source_quality_audit=observation_source_quality_audit,
         )
     )
     if ai_decision_action_outcome_calibration_status.get("status") == "fail":

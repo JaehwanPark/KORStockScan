@@ -27591,6 +27591,36 @@ def build_daily_materialization_reports(
 ) -> dict[str, Any]:
     """Build the daily Exact V2 quality chain without candidate API execution."""
 
+    source_consumption_path = (
+        DATA_DIR
+        / "report"
+        / "observation_source_quality_audit"
+        / f"observation_source_quality_audit_{target_date}.json"
+    )
+    try:
+        source_consumption_parent = _load_json(source_consumption_path)
+    except (OSError, ValueError, json.JSONDecodeError):
+        source_consumption_parent = {}
+    source_consumption = source_consumption_parent.get(
+        "machine_ai_natural_source_consumption"
+    )
+    source_consumption = (
+        source_consumption if isinstance(source_consumption, dict) else {}
+    )
+    source_consumption_receipt = {
+        "path": str(source_consumption_path),
+        "schema": source_consumption.get("schema"),
+        "status": source_consumption.get("status", "missing"),
+        "source_manifest_sha256": (
+            (source_consumption.get("source_manifest") or {}).get(
+                "source_manifest_sha256"
+            )
+            if isinstance(source_consumption.get("source_manifest"), dict)
+            else None
+        ),
+        "tuning_input_allowed": source_consumption.get("tuning_input_allowed"),
+        "authority": "source_quality_receipt_only_no_runtime_apply",
+    }
     control_prompt_versions = _latest_exact_control_prompt_versions(
         promotion=promotion,
         traces=traces,
@@ -27680,6 +27710,7 @@ def build_daily_materialization_reports(
         ],
         "candidate_execution_performed": False,
         "decision_quality_objective": dict(DECISION_QUALITY_OBJECTIVE),
+        "machine_ai_natural_source_consumption_receipt": source_consumption_receipt,
         "reports": reports,
         "contract_validation": "pass",
         "summary": {
@@ -27696,6 +27727,9 @@ def build_daily_materialization_reports(
             ),
             "candidate_lifecycle_source_quality_pass_count": (
                 candidate_lifecycle_state.get("source_quality_pass_count")
+            ),
+            "machine_ai_natural_source_consumption_status": (
+                source_consumption_receipt["status"]
             ),
         },
         **OFFLINE_CONTRACT,

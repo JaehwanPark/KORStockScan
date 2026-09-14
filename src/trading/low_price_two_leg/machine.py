@@ -19,6 +19,9 @@ DEFAULT_STATE_DIR = DATA_DIR / "runtime" / "low_price_two_leg"
 _SAFE_PRIOR_TERMINAL_POLICY_BLOCK_REASONS = frozenset(
     {"state_leg_target_policy_mismatch"}
 )
+_SEPARATE_EXIT_OWNER_KEYS = frozenset(
+    {"adaptive_exit_session", "profit_stagnation_exit", "holding_target_amendment"}
+)
 
 
 def _episode_ownership_source(code: object) -> str:
@@ -145,6 +148,51 @@ class LowPriceTwoLegMachine(SamsungRegularTwoLegMachine):
             prior_blocked_reason=prior_reason,
         )
 
+    def _has_separate_exit_owner(self) -> bool:
+        return any(
+            _SEPARATE_EXIT_OWNER_KEYS.intersection(leg)
+            for leg in self._state.get("legs", [])
+            if isinstance(leg, dict)
+        )
+
+    def _reconcile_prior_held_targets_before_rollover(self, now: datetime) -> None:
+        """Refresh an old HELD target before treating it as terminal.
+
+        A target can disappear from the open-order query immediately before
+        its final execution receipt arrives.  The old state then becomes HELD
+        and the bounded service exits.  On the next scheduled start, reusing
+        the existing exact dated execution reconciliation closes that narrow
+        race without adopting another owner's order or changing live policy.
+        """
+
+        if (
+            not self._state
+            or self._state.get("trade_date") == now.date().isoformat()
+            or self._state.get("status") != "HELD"
+            or self._has_separate_exit_owner()
+        ):
+            return
+        try:
+            if int(self._state.get("position_qty", 0) or 0) <= 0:
+                return
+        except (TypeError, ValueError):
+            return
+        if not self._validate_state_contract(now):
+            return
+        for leg in self._state.get("legs", []):
+            if (
+                not isinstance(leg, dict)
+                or leg.get("status") != "HELD"
+                or int(leg.get("position_qty", 0) or 0) <= 0
+                or not str(leg.get("target_order_no") or "").strip()
+                or not str(leg.get("target_order_date") or "").strip()
+                or int(leg.get("target_quantity", 0) or 0) <= 0
+            ):
+                continue
+            self._reconcile_target(now, leg)
+            if self._state.get("status") == "BLOCKED":
+                return
+
     def _loaded_state_policy(self, now: datetime):
         """Keep prior-date owned orders on the policy that created them."""
 
@@ -207,6 +255,7 @@ class LowPriceTwoLegMachine(SamsungRegularTwoLegMachine):
             return self._block(now, "prior_state_policy_snapshot_invalid")
         self._bind_policy(custody_policy)
         try:
+            self._reconcile_prior_held_targets_before_rollover(now)
             self._roll_prior_terminal_state_before_current_policy_validation(now)
             if self._state.get("trade_date") == now.date().isoformat():
                 self._bind_policy(current_policy)
