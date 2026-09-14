@@ -573,6 +573,154 @@ def test_machine_capture_matures_with_existing_cost_owner_without_ai(
     assert rows[0]["entry_quality_path"][
         "conservative_execution_cost_pct"
     ] == pytest.approx(0.20)
+    assert rows[0]["machine_action"] == "RECHECK"
+
+
+def test_machine_capture_normalizes_runtime_session_for_scope_lookup(
+    monkeypatch, tmp_path
+):
+    from datetime import datetime, timedelta
+    from src.engine.scalping import (
+        ai_decision_quality as quality,
+        ai_decision_trace as trace,
+    )
+    from src.tests.test_ai_decision_trace import _enable
+    from src.tests.test_entry_setup_evidence import _hierarchy_case
+
+    _enable(monkeypatch, tmp_path)
+    day = "2026-09-14"
+    now = datetime.fromisoformat(day + "T10:00:00+09:00")
+    monkeypatch.setattr(trace, "_now", lambda: now)
+    profile = {
+        "profile_id": "reviewed",
+        "economic_source_sha256": "a" * 64,
+        "buy_fee_bps": 1,
+        "sell_fee_bps": 1,
+        "statutory_sell_tax_bps": 15,
+        "uncertainty_buffer_bps": 1,
+    }
+    monkeypatch.setattr(
+        calibration,
+        "_hierarchy_cost_profiles",
+        lambda root, d, venue="KRX": {"005930": profile},
+    )
+    prices = [
+        {
+            "stock_code": "005930",
+            "timestamp": (now + timedelta(seconds=i * 30)).isoformat(),
+            "price": 10050,
+            "high": 10055,
+            "low": 10000,
+            "close": 10050,
+            "effective_venue": "KRX",
+            "session_bucket": "KRX_REGULAR",
+            "source_quality": "pass",
+        }
+        for i in range(1, 21)
+    ]
+    monkeypatch.setattr(
+        quality,
+        "load_pipeline_price_and_lifecycle_rows",
+        lambda *args, **kwargs: (prices, []),
+    )
+    setup = _hierarchy_case()[0]
+    capture = trace.capture_machine_observation(
+        exact_payload={
+            "stock_code": "005930",
+            "name": "Samsung Electronics",
+            "best_ask": 10000,
+            "effective_venue": "KRX",
+            # This is the actual casing persisted by _request_context.
+            "session_bucket": "krx_regular",
+            "conservative_execution_cost_pct": 0.02,
+        },
+        setup_evidence=setup,
+        assessment={"action": "RECHECK"},
+        bundle_sha256="b" * 64,
+    )
+    assert capture["machine_capture_status"] == "captured"
+
+    rows, census = calibration.load_machine_observation_rows(tmp_path, target_date=day)
+
+    assert census == {"captured": 1, "evaluable": 1}
+    assert len(rows) == 1
+    assert rows[0]["comparison"]["entry_cost_contract"]["session_bucket"] == (
+        "KRX_REGULAR"
+    )
+
+
+def test_machine_decision_case_table_separates_missed_and_bad_entry_timing():
+    def row(action, label, trace_id, *, second=0, hierarchy=None):
+        return {
+            "decision_trace_id": trace_id,
+            "decision_snapshot_id": f"snapshot-{trace_id}",
+            "decision_ts": f"2026-09-14T12:00:{second:02d}+09:00",
+            "source_date": "2026-09-14",
+            "stock_code": "005930",
+            "effective_venue": "KRX",
+            "session_bucket": "KRX_REGULAR",
+            "bundle_sha256": "a" * 64,
+            "machine_action": action,
+            "machine_reason": "fixture",
+            "machine_hierarchy_selection": hierarchy or {"level": "common"},
+            "entry_quality_path": {
+                "status": "evaluable",
+                "entry_quality_label": label,
+                "gross_net_target_pct": 0.33,
+                "time_to_net_target_sec": 30,
+                "time_to_exact_stop_sec": None,
+                "pre_target_mae_pct": -0.1,
+                "pre_target_underwater_ratio": 0.2,
+                "pre_target_neutral_dwell_ratio": 0.1,
+                "checkpoints": [],
+                "path_authority": "counterfactual_completed_bar_touch_not_actual_fill",
+            },
+        }
+
+    report = calibration.build_machine_decision_case_table(
+        [
+            row("BLOCK", "CLEAN_FAST_PROFIT", "missed"),
+            row("ENTER_NOW", "CLEAN_FAST_LOSS_OR_ADVERSE", "bad-enter"),
+            row(
+                "RECHECK",
+                "CLEAN_FAST_LOSS_OR_ADVERSE",
+                "good-recheck",
+                hierarchy={"level": "group", "rule_id": "flow-rule-1"},
+            ),
+            row(
+                "RECHECK",
+                "CLEAN_FAST_LOSS_OR_ADVERSE",
+                "duplicate-recheck",
+                second=30,
+                hierarchy={"level": "group", "rule_id": "flow-rule-1"},
+            ),
+        ],
+        capture_census={"captured": 4, "evaluable": 4},
+    )
+
+    assert report["status"] == "evaluable"
+    assert report["input_evaluable_observation_count"] == 4
+    assert report["case_count"] == 3
+    assert report["duplicate_same_action_collapsed_count"] == 1
+    assert report["machine_action_counts"] == {
+        "BLOCK": 1,
+        "ENTER_NOW": 1,
+        "RECHECK": 1,
+    }
+    assert report["case_classification_counts"] == {
+        "correct_avoidance_candidate": 1,
+        "false_positive_entry_candidate": 1,
+        "missed_opportunity_candidate": 1,
+    }
+    assert report["hierarchy_selection_counts"] == {
+        "common": 2,
+        "group": 1,
+    }
+    assert report["observed_selected_child_rule_ids"] == ["flow-rule-1"]
+    assert all(
+        item["ai_and_final_guard_join_status"] == "not_joined_separate_owner"
+        for item in report["rows"]
+    )
 
 
 def test_hierarchy_cost_owner_rejects_changed_raw_source(tmp_path):

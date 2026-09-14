@@ -1262,6 +1262,102 @@ def _ai_decision_action_outcome_calibration_status(
                 "runtime_extension"
             ):
                 errors.append("mechanistic_hierarchy_krx_projection_mismatch")
+    machine_case_table = (
+        hierarchical.get("machine_decision_case_table")
+        if isinstance(hierarchical, dict)
+        else None
+    )
+    if (
+        str(report.get("target_date") or "") >= "2026-09-14"
+        and machine_case_table is None
+    ):
+        errors.append("mechanistic_machine_case_table_missing")
+    elif machine_case_table is not None:
+        if not isinstance(machine_case_table, dict):
+            errors.append("mechanistic_machine_case_table_invalid")
+        else:
+            case_rows = machine_case_table.get("rows")
+            case_rows = case_rows if isinstance(case_rows, list) else []
+            action_counts = machine_case_table.get("machine_action_counts")
+            class_counts = machine_case_table.get("case_classification_counts")
+            hierarchy_counts = machine_case_table.get("hierarchy_selection_counts")
+            selected_child_ids = machine_case_table.get(
+                "observed_selected_child_rule_ids"
+            )
+            selected_child_ids = (
+                selected_child_ids if isinstance(selected_child_ids, list) else []
+            )
+            case_count = machine_case_table.get("case_count")
+            input_count = machine_case_table.get("input_evaluable_observation_count")
+            collapsed_count = machine_case_table.get(
+                "duplicate_same_action_collapsed_count"
+            )
+
+            def valid_count_map(value: object) -> bool:
+                return isinstance(value, dict) and all(
+                    isinstance(key, str)
+                    and bool(key)
+                    and isinstance(count, int)
+                    and not isinstance(count, bool)
+                    and count >= 0
+                    for key, count in value.items()
+                )
+
+            if (
+                machine_case_table.get("schema")
+                != "mechanistic_entry_decision_case_table_v1"
+                or machine_case_table.get("status")
+                not in {"evaluable", "source_gap_no_evaluable_cases"}
+                or not isinstance(case_count, int)
+                or isinstance(case_count, bool)
+                or case_count < len(case_rows)
+                or not isinstance(input_count, int)
+                or isinstance(input_count, bool)
+                or input_count < 0
+                or not isinstance(collapsed_count, int)
+                or isinstance(collapsed_count, bool)
+                or collapsed_count < 0
+                or input_count != case_count + collapsed_count
+                or (machine_case_table.get("status") == "evaluable") != (case_count > 0)
+                or not valid_count_map(action_counts)
+                or not valid_count_map(class_counts)
+                or not valid_count_map(hierarchy_counts)
+                or sum(action_counts.values()) != case_count
+                or sum(class_counts.values()) != case_count
+                or sum(hierarchy_counts.values()) != case_count
+                or not isinstance(
+                    machine_case_table.get("observed_selected_child_rule_count"),
+                    int,
+                )
+                or isinstance(
+                    machine_case_table.get("observed_selected_child_rule_count"),
+                    bool,
+                )
+                or machine_case_table.get("observed_selected_child_rule_count")
+                != len(selected_child_ids)
+                or len(selected_child_ids) != len(set(selected_child_ids))
+                or any(
+                    not isinstance(rule_id, str) or not rule_id
+                    for rule_id in selected_child_ids
+                )
+                or machine_case_table.get("ai_and_final_guard_are_separate_consumers")
+                is not True
+                or machine_case_table.get("runtime_effect") is not False
+                or machine_case_table.get("allowed_runtime_apply") is not False
+                or machine_case_table.get("actual_order_submitted") is not False
+                or machine_case_table.get("broker_order_forbidden") is not True
+                or any(
+                    not isinstance(row, dict)
+                    or row.get("ai_and_final_guard_join_status")
+                    != "not_joined_separate_owner"
+                    or row.get("runtime_effect") is not False
+                    or row.get("allowed_runtime_apply") is not False
+                    or row.get("actual_order_submitted") is not False
+                    or row.get("broker_order_forbidden") is not True
+                    for row in case_rows
+                )
+            ):
+                errors.append("mechanistic_machine_case_table_contract_invalid")
     if not isinstance(hierarchical, dict):
         errors.append("hierarchical_entry_quality_invalid")
         hierarchical = {}
@@ -1739,6 +1835,10 @@ def _ai_decision_action_outcome_calibration_status(
         if "runtime_extensions_by_scope" in hierarchical:
             expected_hierarchical_handoff["runtime_extensions_by_scope"] = hierarchical[
                 "runtime_extensions_by_scope"
+            ]
+        if "machine_decision_case_table" in hierarchical:
+            expected_hierarchical_handoff["machine_decision_case_table"] = hierarchical[
+                "machine_decision_case_table"
             ]
         if handoff.get("hierarchical_entry_quality") != (expected_hierarchical_handoff):
             errors.append("optimizer_handoff_hierarchical_reference_mismatch")

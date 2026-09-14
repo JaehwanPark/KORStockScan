@@ -1793,6 +1793,46 @@ def test_ai_decision_action_outcome_calibration_status_rejects_tampered_candidat
     assert "candidate_count_mismatch" in status["contract_errors"]
 
 
+def test_ai_decision_action_outcome_calibration_status_rejects_case_count_drift(
+    tmp_path: Path,
+):
+    report = calibration.build_report(target_date="2026-09-07", data_root=tmp_path)
+    case_table = report["hierarchical_entry_quality"]["machine_decision_case_table"]
+    case_table["input_evaluable_observation_count"] = 1
+    report = calibration._with_artifact_content_sha256(report)
+
+    status = mod._ai_decision_action_outcome_calibration_status(report)
+
+    assert status["status"] == "fail"
+    assert (
+        "mechanistic_machine_case_table_contract_invalid" in status["contract_errors"]
+    )
+
+
+def test_ai_decision_action_outcome_calibration_status_requires_case_table_at_cutover(
+    tmp_path: Path,
+):
+    report = calibration.build_report(target_date="2026-09-14", data_root=tmp_path)
+    del report["hierarchical_entry_quality"]["machine_decision_case_table"]
+    del report["optimizer_handoff"]["hierarchical_entry_quality"][
+        "machine_decision_case_table"
+    ]
+    handoff = report["optimizer_handoff"]
+    handoff["handoff_content_sha256"] = calibration._canonical_sha256(
+        {
+            key: value
+            for key, value in handoff.items()
+            if key != "handoff_content_sha256"
+        }
+    )
+    report = calibration._with_artifact_content_sha256(report)
+
+    status = mod._ai_decision_action_outcome_calibration_status(report)
+
+    assert status["status"] == "fail"
+    assert "mechanistic_machine_case_table_missing" in status["contract_errors"]
+
+
 def test_hierarchy_scope_handoff_rejects_rehashed_cross_market_projection(tmp_path):
     report = calibration.build_report(target_date="2026-09-11", data_root=tmp_path)
     assert (

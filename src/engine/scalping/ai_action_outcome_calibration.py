@@ -61,6 +61,7 @@ MECHANISTIC_REFINEMENT_POLICY_VERSION = (
 HIERARCHICAL_ENTRY_QUALITY_SCHEMA = "hierarchical_entry_quality_walk_forward_v1"
 ENTRY_GROUP_OBSERVATION_SCHEMA = "entry_predecision_group_observation_v1"
 ENTRY_QUALITY_PATH_SCHEMA = "entry_quality_path_v1"
+MACHINE_DECISION_CASE_TABLE_SCHEMA = "mechanistic_entry_decision_case_table_v1"
 MARKET_PATH_OPPORTUNITY_ANCHOR_SCHEMA = "market_path_opportunity_anchor_study_v1"
 MECHANISTIC_FLOW_GROUP_STUDY_SCHEMA = "mechanistic_entry_flow_group_study_v1"
 MECHANISTIC_FLOW_BOUNDARY_FREEZE_DATE = "2026-09-11"
@@ -3101,7 +3102,15 @@ def load_machine_observation_rows(
                 prices_by_symbol[price.get("stock_code")].append(price)
             for capture in observations:
                 context = dict(capture.get("label_context") or {})
-                cohort = (context.get("effective_venue"), context.get("session_bucket"))
+                # Runtime capture stores the canonical label context exactly as
+                # observed.  Session labels are lower-case there while the
+                # mechanistic scope registry is upper-case.  Normalize only for
+                # scope/cost-owner lookup; keep the captured context unchanged
+                # for provenance and hash verification.
+                cohort = (
+                    _normalized_venue(context.get("effective_venue")),
+                    _normalized_session(context.get("session_bucket")),
+                )
                 if not mechanistic_scope_supported(*cohort):
                     counts["unsupported_cohort"] += 1
                     continue
@@ -3169,6 +3178,11 @@ def load_machine_observation_rows(
                     counts["path_or_cost_missing"] += 1
                     continue
                 evidence = capture["source"]["setup_evidence"]
+                assessment = _as_dict(capture["source"].get("assessment"))
+                machine_action = str(assessment.get("action") or "").upper()
+                if machine_action not in {"BLOCK", "RECHECK", "ENTER_NOW"}:
+                    counts["machine_action_invalid"] += 1
+                    continue
                 mc = evidence.get("mechanistic_context") or {}
                 cost = context.get("entry_conservative_execution_cost_pct")
                 result.append(
@@ -3177,6 +3191,16 @@ def load_machine_observation_rows(
                         "decision_ts": capture["captured_at"],
                         "source_date": day,
                         "stock_code": context.get("stock_code"),
+                        "decision_snapshot_id": context.get("snapshot_id"),
+                        "effective_venue": cohort[0],
+                        "session_bucket": cohort[1],
+                        "bundle_sha256": capture.get("bundle_sha256"),
+                        "machine_action": machine_action,
+                        "machine_reason": assessment.get("reason"),
+                        "machine_hierarchy_selection": assessment.get(
+                            "hierarchy_selection"
+                        ),
+                        "machine_core_comparison": assessment.get("core_comparison"),
                         "setup_evidence": evidence,
                         "entry_group_observation": mc.get("group", {}),
                         "entry_group_contract_valid": True,
@@ -3205,6 +3229,148 @@ def load_machine_observation_rows(
                 )
                 counts["evaluable"] += 1
     return result, dict(counts)
+
+
+def build_machine_decision_case_table(
+    rows: list[dict], *, capture_census: dict | None = None
+) -> dict:
+    """Classify machine timing outcomes without creating trading authority.
+
+    Rows are exact runtime machine captures matured by the existing
+    action-neutral entry path labeler. This table deliberately stops before
+    AI/final-guard attribution; those stages retain their own trace ledgers.
+    """
+
+    classifications: Counter[str] = Counter()
+    action_counts: Counter[str] = Counter()
+    source_date_counts: Counter[str] = Counter()
+    hierarchy_selection_counts: Counter[str] = Counter()
+    selected_child_rule_ids: set[str] = set()
+    cases: list[dict] = []
+    last_case_by_scope: dict[tuple[str, str, str, str, str], tuple[datetime, str]] = {}
+    duplicate_same_action_collapsed_count = 0
+    for row in sorted(rows, key=lambda item: str(item.get("decision_ts") or "")):
+        action = str(row.get("machine_action") or "").upper()
+        try:
+            decision_time = datetime.fromisoformat(
+                str(row.get("decision_ts") or "").replace("Z", "+00:00")
+            )
+        except ValueError:
+            decision_time = None
+        if decision_time is not None and decision_time.tzinfo is None:
+            decision_time = None
+        episode_key = (
+            str(row.get("source_date") or ""),
+            str(row.get("stock_code") or ""),
+            str(row.get("effective_venue") or ""),
+            str(row.get("session_bucket") or ""),
+            str(row.get("bundle_sha256") or ""),
+        )
+        previous = last_case_by_scope.get(episode_key)
+        if (
+            decision_time is not None
+            and previous is not None
+            and action == previous[1]
+            and 0 <= (decision_time - previous[0]).total_seconds() < 60
+        ):
+            duplicate_same_action_collapsed_count += 1
+            continue
+        if decision_time is not None:
+            last_case_by_scope[episode_key] = (decision_time, action)
+        path = _as_dict(row.get("entry_quality_path"))
+        label = str(path.get("entry_quality_label") or "CENSORED_OR_SOURCE_GAP")
+        if path.get("status") != "evaluable" or label == "CENSORED_OR_SOURCE_GAP":
+            classification = "source_gap"
+        elif action == "ENTER_NOW":
+            classification = {
+                "CLEAN_FAST_PROFIT": "good_entry_candidate",
+                "PROFITABLE_BUT_LATE": "late_entry_candidate",
+                "PROFIT_AFTER_DEEP_ADVERSE": "deep_adverse_entry_candidate",
+                "PROFIT_AFTER_SIDEWAYS": "sideways_entry_candidate",
+                "CLEAN_FAST_LOSS_OR_ADVERSE": "false_positive_entry_candidate",
+            }.get(label, "source_gap")
+        elif action in {"BLOCK", "RECHECK"}:
+            classification = {
+                "CLEAN_FAST_PROFIT": "missed_opportunity_candidate",
+                "PROFITABLE_BUT_LATE": "delayed_opportunity_candidate",
+                "PROFIT_AFTER_DEEP_ADVERSE": "poor_timing_avoidance_candidate",
+                "PROFIT_AFTER_SIDEWAYS": "sideways_avoidance_candidate",
+                "CLEAN_FAST_LOSS_OR_ADVERSE": "correct_avoidance_candidate",
+            }.get(label, "source_gap")
+        else:
+            classification = "source_gap"
+        action_counts[action or "UNKNOWN"] += 1
+        source_date_counts[str(row.get("source_date") or "UNKNOWN")] += 1
+        classifications[classification] += 1
+        hierarchy = _as_dict(row.get("machine_hierarchy_selection"))
+        hierarchy_level = str(hierarchy.get("level") or "unknown")
+        hierarchy_selection_counts[hierarchy_level] += 1
+        rule_id = str(hierarchy.get("rule_id") or "").strip()
+        if rule_id and hierarchy_level != "common":
+            selected_child_rule_ids.add(rule_id)
+        cases.append(
+            {
+                "decision_trace_id": row.get("decision_trace_id"),
+                "decision_snapshot_id": row.get("decision_snapshot_id"),
+                "decision_ts": row.get("decision_ts"),
+                "source_date": row.get("source_date"),
+                "stock_code": row.get("stock_code"),
+                "effective_venue": row.get("effective_venue"),
+                "session_bucket": row.get("session_bucket"),
+                "bundle_sha256": row.get("bundle_sha256"),
+                "machine_action": action,
+                "machine_reason": row.get("machine_reason"),
+                "hierarchy_selection": row.get("machine_hierarchy_selection"),
+                "entry_quality_label": label,
+                "case_classification": classification,
+                "cost_adjusted_target_pct": path.get("gross_net_target_pct"),
+                "time_to_net_target_sec": path.get("time_to_net_target_sec"),
+                "time_to_exact_stop_sec": path.get("time_to_exact_stop_sec"),
+                "pre_target_mae_pct": path.get("pre_target_mae_pct"),
+                "pre_target_underwater_ratio": path.get("pre_target_underwater_ratio"),
+                "pre_target_neutral_dwell_ratio": path.get(
+                    "pre_target_neutral_dwell_ratio"
+                ),
+                "checkpoint_metrics": path.get("checkpoints"),
+                "path_authority": path.get("path_authority"),
+                "ai_and_final_guard_join_status": "not_joined_separate_owner",
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            }
+        )
+    return {
+        "schema": MACHINE_DECISION_CASE_TABLE_SCHEMA,
+        "status": "evaluable" if cases else "source_gap_no_evaluable_cases",
+        "input_evaluable_observation_count": len(rows),
+        "case_count": len(cases),
+        "duplicate_same_action_collapsed_count": (
+            duplicate_same_action_collapsed_count
+        ),
+        "machine_capture_census": dict(capture_census or {}),
+        "machine_action_counts": dict(sorted(action_counts.items())),
+        "case_classification_counts": dict(sorted(classifications.items())),
+        "source_date_counts": dict(sorted(source_date_counts.items())),
+        "hierarchy_selection_counts": dict(sorted(hierarchy_selection_counts.items())),
+        "observed_selected_child_rule_count": len(selected_child_rule_ids),
+        "observed_selected_child_rule_ids": sorted(selected_child_rule_ids),
+        "case_unit": (
+            "symbol_scope_bundle_episode_with_same_action_collapsed_inside_60s_"
+            "and_action_transitions_preserved"
+        ),
+        "comparison_objective": (
+            "cost_adjusted_net_edge_at_least_0.10pct_with_fast_target_"
+            "deep_adverse_and_sideways_separated"
+        ),
+        "ai_and_final_guard_are_separate_consumers": True,
+        "rows": cases[-200:],
+        "row_export_limit": 200,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
 
 
 def validate_hierarchy_candidate(
@@ -5203,6 +5369,9 @@ def build_report(
     machine_observations, machine_capture_census = load_machine_observation_rows(
         data_root, target_date=target_date
     )
+    machine_decision_case_table = build_machine_decision_case_table(
+        machine_observations, capture_census=machine_capture_census
+    )
     hierarchy_rows, hierarchy_cost_census = relabel_hierarchy_source_rows(
         mechanistic_source_rows, data_root
     )
@@ -5255,6 +5424,9 @@ def build_report(
         extension["full_cost_relabel_census"] = census
         extensions[scope] = extension
     hierarchical_entry_quality["runtime_extensions_by_scope"] = extensions
+    hierarchical_entry_quality["machine_decision_case_table"] = (
+        machine_decision_case_table
+    )
     current_result_count = int(
         source_contract_summary.get("current_date_accepted_row_count") or 0
     )
@@ -5309,6 +5481,7 @@ def build_report(
             "runtime_extensions_by_scope": hierarchical_entry_quality[
                 "runtime_extensions_by_scope"
             ],
+            "machine_decision_case_table": machine_decision_case_table,
             "source_rows_sha256": hierarchical_entry_quality["source_population"][
                 "source_rows_sha256"
             ],
