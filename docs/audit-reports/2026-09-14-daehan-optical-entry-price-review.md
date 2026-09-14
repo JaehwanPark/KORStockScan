@@ -94,3 +94,138 @@ Entry price의 최종 결정은 기계판정기가 소유하는 편이 수익극
 후속 구현·장후 handoff owner는 당일 체크리스트의 기존 `CodeImprovementWorkorderReview0914`를 사용한다. 이 리뷰만으로 닫힌 `RuntimeEnvIntradayObserve0914`의 과거 수용 범위를 다시 OPEN하거나 새 실주문 권한을 만들지 않는다.
 
 이번 검토는 읽기 전용 주문 분석과 장중 지시문 보완이다. 주문가·threshold·provider·bot/env를 변경하거나 재기동하지 않았다.
+
+## 다음 액션 최소 구현계획
+
+### 구현 결정과 범위 상한
+
+새 가격 엔진·새 AI prompt·새 정기 producer를 만들지 않는다. 기존 `dynamic_entry_price_resolver`, post-submit reprice와 PREOPEN apply consumer를 그대로 사용하고, 이 경로가 정확한 부모 판정과 미체결 기회비용을 읽도록 수리한다. 구현은 아래 기존 파일을 우선 대상으로 하며, exact key를 기존 producer에서 발행할 수 없는 것이 코드로 입증될 때만 같은 owner 파일을 추가 검토한다.
+
+| 작업 묶음 | 우선 수정 owner | 수정 상한 |
+| --- | --- | --- |
+| 재호가 부모 판정 lineage | `src/engine/sniper_state_handlers.py`, `src/engine/scalping/entry_reprice_after_submit.py` | 새 AI 호출·새 주문 owner 없이 기존 pending-order schema와 판정만 보완 |
+| 실거래·미체결 경제성 분모 | `src/engine/daily_threshold_cycle_report.py` | 기존 profile grid·counterfactual join·보존식 수리 |
+| exact counterfactual key | `src/engine/sniper_missed_entry_counterfactual.py` | 기존 산출물에 canonical key가 실제로 없을 때만 수정 |
+| 다음 PREOPEN 소비 | `src/engine/threshold_cycle_preopen_apply.py` | 기존 selected/carry 계약 검증이 먼저이며, 명시적 carry receipt가 빠질 때만 최소 보완 |
+| 자동화 계약 | `docs/report-based-automation-traceability.md`, 당일 checklist의 기존 `CodeImprovementWorkorderReview0914` 근거 | 새 stable ID·새 cron·새 family 생성 금지 |
+
+테스트도 기존 `test_entry_reprice_after_submit.py`, `test_sniper_entry_latency.py`, `test_daily_threshold_cycle_report.py`, `test_threshold_cycle_preopen_apply.py`에만 추가한다. 새 모듈이나 중복 test file을 만들지 않는다.
+
+### WP1 — 재호가의 canonical 부모 판정 복구
+
+pending order에 최초 승인 attempt의 다음 정보를 immutable provenance로 보존한다.
+
+- machine adjudicator의 최종 `PASS`와 정책/trace hash
+- auxiliary AI의 action·contract·trace와 존재하는 경우 score
+- entry-price trace, submit attempt ID, promotion ID와 broker 원주문번호
+- 이 값을 생성한 stage와 source-quality 상태
+
+현행 기계 주판정·AI 보조 계약의 재호가는 숫자형 `latency_signal_score`를 단독 권한으로 사용하지 않는다. 최초 attempt가 기계 `PASS`로 제출됐고 명시적 AI veto가 없으면 그 승인 상태를 재사용하며, score는 진단 provenance로만 남긴다. canonical 부모 판정이 없거나 서로 충돌하면 0점으로 보간하지 않고 `source_quality_blocked`로 종결한다. 과거 AI-score 주판정 계약을 아직 소비하는 legacy 경로가 있으면 계약을 명시적으로 분기해 기존 안전 동작을 보존한다.
+
+직접 회귀 수용조건은 다음과 같다.
+
+1. 대한광통신 형태의 `machine PASS + auxiliary AI BUY/78 + latency score 0` 입력이 `low_ai_score`로 차단되지 않는다.
+2. 부모 action/hash 결손 또는 불일치는 `source_quality_blocked`가 된다.
+3. 명시적 veto, stale BBO, 과도한 spread, partial fill, cancel/replace 중복, broker·수량·cap·hard-safety 차단은 그대로 유지된다.
+4. reprice event가 실제로 사용한 부모 field와 원 trace ID를 기록해 이후 report가 추정 join을 하지 않는다.
+
+### WP2 — 미체결 기회비용과 exact join 복구
+
+`dynamic_entry_price_resolver`의 profile ledger를 `submit attempt × 가격후보 × venue/session`으로 고정한다. broker 응답 순서가 바뀌어도 submit attempt ID, 원주문번호, 정정·취소의 `ori_ord`, entry-price candidate ID와 promotion ID로 연결한다. symbol·근접시각만으로 연결하는 fuzzy join은 허용하지 않는다.
+
+각 submitted attempt는 다음 배타적 상태 중 하나만 가진다.
+
+`full_fill | partial_fill | confirmed_unfilled_cancel | pending | right_censored | source_quality_excluded`
+
+그리고 다음 보존식을 report named field와 테스트로 닫는다.
+
+`submitted = full_fill + partial_fill + confirmed_unfilled_cancel + pending + right_censored + source_quality_excluded`
+
+현재 상수 `0.0`인 `missed_upside`는 제거한다. 미체결·취소 뒤 fresh executable BBO가 있고 exact horizon이 성숙한 행만 target/adverse first-hit, 예상 fill, 비용 차감 opportunity loss를 계산한다. BBO·master·비용·terminal이 없으면 `null`과 직접 gap reason을 남긴다. 실제 체결 손익과 source-only counterfactual은 별도 denominator와 field로 유지하고 합산하지 않는다.
+
+counterfactual join은 기존 candidate/attempt ID namespace를 하나의 canonical field로 정규화한다. 기존 producer가 이 key를 이미 기록하면 report parser만 고치고, 원천에 key가 없을 때만 `sniper_missed_entry_counterfactual.py`를 수정한다. 전체 25,218행을 억지로 연결하는 것이 목표가 아니라, 연결 가능한 exact-key 행과 구조적으로 연결 불가능한 행을 전수 보존하는 것이 목표다.
+
+### WP3 — 기존 기계 가격 resolver의 목적함수 보완
+
+가격 후보와 bounds는 현행 `normal/strong/favorable/weak`, best-bid 계열, reference, timeout 후보를 재사용한다. 첫 구현에서 learned utility model, 새 threshold family 또는 ask-cross 확대를 추가하지 않는다.
+
+후보 선정 우선순위는 다음과 같이 고정한다.
+
+1. exact real attempt의 비용 차감 순이익과 fill/terminal 결과
+2. 같은 attempt·같은 horizon의 미체결 opportunity loss와 참여율
+3. adverse-first·tail, late fill, 취소/재호가 비용과 자본점유
+4. source-only counterfactual은 방향과 기회비용 진단에만 사용하고 단독 live 승인에는 사용하지 않음
+
+현재 20건 real sample floor, profile bounds와 일일 최대 step은 유지한다. floor를 낮추거나 sim/CF로 채우지 않는다. 대한광통신 한 건만으로 normal 25bp를 축소하거나 ask를 추격하지 않는다. 기존 aggressive-override 진단은 `reference_target_not_below_bid`와 `original_bps_below_min`을 함께 남겨 어느 조건이 실제 후보를 제외했는지 보이게 한다.
+
+장후 candidate의 결과는 두 가지 중 하나여야 한다.
+
+- `selected_change`: exact real/paired 경제성과 기존 bounds·max-step·source-quality gate를 모두 통과한 challenger의 env 값을 발행한다.
+- `verified_carry`: 통과한 challenger가 없으면 현재 검증 정책 값을 그대로 발행하고, 미변경 사유·source hash·남은 blocker를 기록한다.
+
+두 이름은 구현계획의 판정 라벨이며 새 runtime family나 필수 새 schema가 아니다. `selected_change`는 기존 candidate의 `runtime_apply_eligible_now=true`와 PREOPEN `policy_refreshed|newly_enabled`, `verified_carry`는 기존 carry receipt와 `carried_forward_unchanged`에 대응시킨다.
+
+`verified_carry`도 다음 장전용 정책 산출물이다. 다만 경제적 개선을 입증한 변경으로 표시하지 않는다. source/hash/기존 정책 값을 결속하지 못해 단순 `hold_sample`만 남는 경우는 정책 생성 성공이 아니라 handoff 결함으로 처리한다.
+
+### WP4 — 장후 단회 재생성과 다음 장전 자동 적용
+
+구현·리뷰가 닫힌 검토 commit을 immutable release로 만든 뒤, 20:10 장후 chain 시작 전 안전한 공백에 선택 release를 교체한다. 실행 중인 장후 wrapper나 다른 consumer가 있으면 세대를 중간 교체하지 않는다. 정상 예약 전에 배포가 끝나면 설치된 장후 wrapper를 한 번만 실행되게 두며 수동 중복 실행하지 않는다.
+
+장후 source date `2026-09-14`의 필수 산출물은 다음과 같다.
+
+1. `data/report/threshold_cycle_2026-09-14.json`
+2. `data/report/threshold_cycle_calibration/threshold_cycle_calibration_2026-09-14_postclose.json`
+3. `data/report/threshold_cycle_ai_review/threshold_cycle_ai_review_2026-09-14_postclose.json`
+4. 같은 generation을 읽은 verifier·controller·finalization terminal receipt
+
+이 generation의 `dynamic_entry_price_resolver`에는 exact real/missed-opportunity denominator, join coverage, source-quality exclusion, 현재값, 추천값, `selected_change|verified_carry`에 대응하는 decision 근거가 있어야 한다. AI review는 기존 예약 계약만 수행하며 이 수리를 이유로 별도 Provider replay나 prompt 생성을 추가하지 않는다.
+
+다음 거래일은 달력 owner로 계산한다. 다음 PREOPEN의 기존 apply consumer가 위 장후 generation을 읽어 다음 파일을 생성·검증해야 한다.
+
+1. `data/threshold_cycle/apply_plans/threshold_apply_NEXT_TRADING_DATE.json`
+2. `data/threshold_cycle/runtime_env/threshold_runtime_env_NEXT_TRADING_DATE.env`
+3. 같은 날짜 runtime env JSON과 verify artifact
+
+apply plan에서 `dynamic_entry_price_resolver` decision, source path/SHA256, `selection_change_class`, env overrides와 rollback을 확인한다. `selected_change`이면 변경값을, `verified_carry`이면 이전 검증값과 `carried_forward_unchanged`를 정확히 포함해야 한다. 다음 main PID가 이 env/hash를 읽은 receipt가 생겨야 배포·적용을 완료로 판정한다. 자연 submit/fill과 비용 차감 EV 개선은 그 다음 별도 acceptance다.
+
+예약 chain이 이미 구 release로 시작했다면 해당 run을 중단하거나 산출물을 섞지 않는다. 구 run이 terminal인 뒤 검토 release로 최초 영향 producer와 필수 downstream만 한 번 재생성하고, 선택 release commit과 output generation을 함께 기록한다. 봇이 살아 있는 동안 stop 부작용이 있는 전체 postclose wrapper를 임의 재실행하지 않는다.
+
+### 구현·리뷰·실행 순서
+
+1. 현 원천과 대한광통신 exact IDs/hash를 회귀 fixture로 고정한다.
+2. WP1을 구현하고 재호가 safety 회귀를 통과시킨다.
+3. WP2를 구현해 보존식과 null/gap reason, actual/CF 분리를 검증한다.
+4. WP3의 기존 candidate 선정과 명시적 carry 소비를 검증하고, 실제 누락이 있을 때만 PREOPEN consumer를 수정한다.
+5. affected producer/consumer와 authority leak을 self-review하고 finding을 수정한 뒤 같은 범위를 재리뷰한다.
+6. 관련 pytest·compile·`git diff --check`와 문서 print-only parser를 통과한다.
+7. 검토 commit/release를 고정하고 안전한 시점에 배포한다.
+8. 9/14 장후 producer를 한 generation만 생성하고 verifier→controller→finalization까지 확인한다.
+9. 다음 PREOPEN apply plan/runtime env/verify와 새 PID 소비를 확인한다.
+
+targeted validation은 다음 범위로 제한한다.
+
+```bash
+PYTHONPATH=. .venv/bin/pytest -q \
+  src/tests/test_entry_reprice_after_submit.py \
+  src/tests/test_sniper_entry_latency.py \
+  src/tests/test_daily_threshold_cycle_report.py \
+  src/tests/test_threshold_cycle_preopen_apply.py
+PYTHONPATH=. .venv/bin/python -m compileall -q \
+  src/engine/sniper_state_handlers.py \
+  src/engine/sniper_entry_latency.py \
+  src/engine/scalping/entry_reprice_after_submit.py \
+  src/engine/daily_threshold_cycle_report.py \
+  src/engine/threshold_cycle_preopen_apply.py
+git diff --check
+PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project --print-backlog-only --limit 500
+```
+
+Provider 호출, 광범위 trading suite, 같은 날짜의 반복 full postclose와 새 연구 grid는 이 변경의 기본 검증에 포함하지 않는다.
+
+### 중단·재작업 방지 조건
+
+- 구현 중 새 파일이 필요해 보이면 먼저 기존 producer가 같은 field를 발행할 수 없는지 입증한다. 입증되지 않으면 기존 파일을 보완한다.
+- review 재반복은 failing test, 새 P0~P2 finding 또는 실제 producer/consumer contract 불일치가 있을 때만 한다. BUY가 나오지 않았다는 이유만으로 코드를 반복 변경하지 않는다.
+- 장후 재생성은 검토 release가 실제 선택됐고 동일 target-date worker·lock이 없을 때 한 번 수행한다. 정상 generation을 더 큰 표본으로 만들 목적으로 반복하지 않는다.
+- `selected_change`가 없더라도 exact `verified_carry`가 다음 PREOPEN까지 전달되면 자동화는 정상이다. 반대로 정책 파일을 만들기 위해 경제성 gate를 낮추거나 candidate를 합성하지 않는다.
+- 이번 구현은 가격과 재호가의 기존 owner만 수리한다. BUY 진입 threshold, 수량, 제출 한도, cancel wait, provider/model, broker·hard safety는 변경하지 않는다.
