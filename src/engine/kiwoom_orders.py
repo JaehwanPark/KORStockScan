@@ -402,11 +402,17 @@ def _reserve_owner_registry_intent(
     owner_context,
     action="NEW",
     original_order_no="",
+    order_date=None,
 ):
+    effective_order_date = order_date or datetime.now(KST).date()
     context = _owner_registry_context(owner_context)
     is_new_entry = str(side).upper() == "BUY" and str(action).upper() == "NEW"
     if context is None or context.owner_type == "main_scalping":
-        exclusion = evaluate_main_bot_control_exclusion(code, new_entry=is_new_entry)
+        exclusion = evaluate_main_bot_control_exclusion(
+            code,
+            target_date=effective_order_date,
+            new_entry=is_new_entry,
+        )
         if exclusion.excluded:
             response = _owner_registry_block_response(
                 f"main_control_veto:{exclusion.reason}"
@@ -416,7 +422,7 @@ def _reserve_owner_registry_intent(
                 response["_local_sell_no_call_token"] = _LOCAL_SELL_NO_CALL_TOKEN
             return None, None, response
     try:
-        policy = resolve_symbol_owner_policy(code)
+        policy = resolve_symbol_owner_policy(code, target_date=effective_order_date)
     except (SymbolOwnerPolicyError, OSError, ValueError) as exc:
         return (
             None,
@@ -480,7 +486,7 @@ def _reserve_owner_registry_intent(
             side=side,
             quantity=int(qty),
             route=str(route or "SOR").upper(),
-            order_date=datetime.now(KST).date(),
+            order_date=effective_order_date,
             action=action,
             original_order_no=original_order_no,
             authority_policy_id=policy.policy_id,
@@ -2128,6 +2134,7 @@ def send_buy_order_market(
         qty=qty,
         route=resolved_dmst_stex_tp,
         owner_context=owner_context,
+        order_date=order_now.date(),
     )
     if owner_block is not None:
         return owner_block
@@ -2347,6 +2354,7 @@ def send_sell_order_market(
         qty=qty,
         route=resolved_dmst_stex_tp,
         owner_context=owner_context,
+        order_date=order_now.date(),
     )
     if owner_block is not None:
         return owner_block
