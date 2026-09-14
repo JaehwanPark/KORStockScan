@@ -267,6 +267,65 @@ def _validate_ai_policy(ai: object, context: object) -> bool:
     return False
 
 
+def compact_economic_direction(economic: dict) -> str:
+    """Bounded feedback direction; amounts are CF evidence, not candidate uplift."""
+    import math
+
+    carry = "carry_balanced_compact_contract"
+    for key in (
+        "economic_eligible_count",
+        "evaluable_pass_count",
+        "evaluable_veto_count",
+        "material_tail_pass_count",
+        "missed_profit_veto_count",
+        "dangerous_pass_count",
+    ):
+        if type(economic.get(key)) is not int or economic[key] < 0:
+            return carry
+    for key in ("missed_veto_rate", "dangerous_pass_rate"):
+        value = economic.get(key)
+        if value is not None and (
+            type(value) not in (int, float)
+            or not math.isfinite(value)
+            or not 0 <= value <= 1
+        ):
+            return carry
+    amounts = [
+        economic.get("missed_profit_veto_net_sum_pct"),
+        economic.get("dangerous_pass_loss_sum_pct"),
+    ]
+    if any(
+        type(value) not in (int, float) or not math.isfinite(value) or value < 0
+        for value in amounts
+    ):
+        return carry
+    if economic.get("economic_eligible_count", 0) < 20:
+        return carry
+    if (
+        economic.get("evaluable_pass_count", 0) >= 5
+        and economic.get("material_tail_pass_count", 0) > 0
+    ):
+        return "select_material_risk_specificity_variant"
+    missed, loss = amounts
+    if (
+        missed > loss
+        and economic.get("evaluable_veto_count", 0) >= 5
+        and economic.get("missed_profit_veto_count", 0) >= 3
+        and economic.get("missed_veto_rate") is not None
+        and economic["missed_veto_rate"] >= 0.25
+    ):
+        return "select_opportunity_preservation_variant"
+    if (
+        loss > missed
+        and economic.get("evaluable_pass_count", 0) >= 5
+        and economic.get("dangerous_pass_count", 0) >= 3
+        and economic.get("dangerous_pass_rate") is not None
+        and economic["dangerous_pass_rate"] >= 0.25
+    ):
+        return "select_material_risk_specificity_variant"
+    return carry
+
+
 def _selected_compact_prompt_version(source: dict, previous: dict | None) -> str:
     """Consume only #82's exact-incumbent bounded automatic selection."""
 
@@ -290,44 +349,67 @@ def _selected_compact_prompt_version(source: dict, previous: dict | None) -> str
     selected = str(selection.get("selected_prompt_version") or "")
     economic = outcomes.get("economic_contract") or {}
     source_receipt = case_table.get("machine_ai_natural_source_receipt") or {}
+    # Publication precedes the final strict verifier. Validate the evidence
+    # here as well, before creating a future policy from malformed aggregates.
+    count_fields = (
+        "screened_total",
+        "economic_eligible_count",
+        "evaluable_veto_count",
+        "evaluable_pass_count",
+        "missed_profit_veto_count",
+        "dangerous_pass_count",
+        "material_tail_pass_count",
+    )
+    if any(
+        type(economic.get(key)) is not int or economic[key] < 0 for key in count_fields
+    ):
+        return previous_version
+    excluded = economic.get("exclusion_counts")
+    counts = economic.get("verdict_x_action_neutral_outcome_counts")
+    if any(
+        not isinstance(mapping, dict)
+        or any(type(value) is not int or value < 0 for value in mapping.values())
+        for mapping in (excluded, counts)
+    ):
+        return previous_version
+    veto = economic["evaluable_veto_count"]
+    passed = economic["evaluable_pass_count"]
+    if (
+        source_receipt.get("tuning_input_allowed") is not True
+        or (case_table.get("compact_auxiliary_policy_measurement") or {}).get(
+            "measurement_allowed"
+        )
+        is not True
+        or economic.get("denominator_preserved") is not True
+        or economic["screened_total"]
+        != economic["economic_eligible_count"] + sum(excluded.values())
+        or sum(counts.values()) != economic["economic_eligible_count"]
+        or economic["missed_profit_veto_count"] > veto
+        or economic["dangerous_pass_count"] > passed
+        or economic["material_tail_pass_count"] > passed
+        or economic.get("missed_veto_rate")
+        != (economic["missed_profit_veto_count"] / veto if veto else None)
+        or economic.get("dangerous_pass_rate")
+        != (economic["dangerous_pass_count"] / passed if passed else None)
+    ):
+        return previous_version
     try:
         eligible_count = int(economic.get("economic_eligible_count") or 0)
         veto_count = int(economic.get("evaluable_veto_count") or 0)
         pass_count = int(economic.get("evaluable_pass_count") or 0)
-        missed_veto = int(economic.get("missed_profit_veto_count") or 0)
-        dangerous_pass = int(economic.get("dangerous_pass_count") or 0)
-        missed_rate = economic.get("missed_veto_rate")
-        dangerous_rate = economic.get("dangerous_pass_rate")
-        material_tail_count = int(economic.get("material_tail_pass_count") or 0)
         material_tail_loss_pct = float(economic.get("material_tail_loss_pct"))
         minimum_count = int(selection.get("minimum_economic_eligible_count") or 0)
         minimum_error_count = int(selection.get("minimum_error_count") or 0)
         minimum_denominator = int(selection.get("minimum_relevant_denominator") or 0)
         minimum_error_rate = float(selection.get("minimum_error_rate"))
-        minimum_rate_margin = float(selection.get("minimum_rate_margin"))
     except (TypeError, ValueError):
         return previous_version
     expected = previous_version
-    opportunity_selected = bool(
-        veto_count >= minimum_denominator
-        and missed_veto >= minimum_error_count
-        and isinstance(missed_rate, (int, float))
-        and missed_rate >= minimum_error_rate
-        and missed_rate - (dangerous_rate or 0.0) >= minimum_rate_margin
-    )
-    risk_selected = bool(
-        pass_count >= minimum_denominator
-        and dangerous_pass >= minimum_error_count
-        and isinstance(dangerous_rate, (int, float))
-        and dangerous_rate >= minimum_error_rate
-        and dangerous_rate - (missed_rate or 0.0) >= minimum_rate_margin
-    )
-    if pass_count >= minimum_denominator and material_tail_count > 0:
+    economic_direction = compact_economic_direction(economic)
+    if economic_direction == "select_material_risk_specificity_variant":
         expected = ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION
-    elif opportunity_selected:
+    elif economic_direction == "select_opportunity_preservation_variant":
         expected = ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION
-    elif risk_selected:
-        expected = ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION
     if (
         selection.get("eligible") is True
         and selection.get("recommendation_id")
@@ -344,6 +426,8 @@ def _selected_compact_prompt_version(source: dict, previous: dict | None) -> str
         and material_tail_loss_pct == -1.0
         and selection.get("source_manifest_sha256")
         == source_receipt.get("source_manifest_sha256")
+        and selection.get("history_receipts_sha256")
+        == source_receipt.get("compact_history_receipts_sha256")
         and isinstance(selection.get("source_manifest_sha256"), str)
         and len(selection.get("source_manifest_sha256") or "") == 64
         and selection.get("economic_outcome_counts_sha256")
@@ -355,7 +439,6 @@ def _selected_compact_prompt_version(source: dict, previous: dict | None) -> str
         and minimum_error_count == 3
         and minimum_denominator == 5
         and minimum_error_rate == 0.25
-        and minimum_rate_margin == 0.10
         and veto_count + pass_count == eligible_count
         and selection.get("incumbent_prompt_version") == previous_version
         and selected == expected

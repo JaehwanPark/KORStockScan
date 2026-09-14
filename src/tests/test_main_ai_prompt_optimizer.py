@@ -11,6 +11,36 @@ from src.engine.scalping.micro_reversion import main_ai_prompt_optimizer as opti
 from src.engine.scalping import ai_action_outcome_calibration as calibration
 
 
+def test_compact_plan_preserves_natural_selection_and_runtime_prompt_registry():
+    from src.engine.scalping import mechanistic_entry_runtime_policy as policy
+
+    economic = {"economic_eligible_count": 0}
+    selection = {"selected_prompt_version": policy.AI_VERSION, "eligible": False}
+    report = {
+        "artifact_content_sha256": "a" * 64,
+        "hierarchical_entry_quality": {
+            "machine_decision_case_table": {
+                "compact_auxiliary_screen_outcomes": {
+                    "economic_contract": economic,
+                    "automatic_successor_selection": selection,
+                }
+            }
+        },
+    }
+    plan = optimizer.compact_evaluation_plan(report)
+    assert plan["economic_contract"] == economic
+    assert plan["automatic_successor_selection"] == selection
+    assert plan["candidate_improvement_proven"] is False
+    assert plan["provider_calls"] == 0
+    assert {row["prompt_version"] for row in plan["registered_candidates"]} == set(
+        policy.COMPACT_AI_VARIANTS
+    )
+    for row in plan["registered_candidates"]:
+        assert row["system_prompt_sha256"] == policy.digest(
+            policy.compact_auxiliary_prompt(prompt_version=row["prompt_version"])
+        )
+
+
 def _zero_participation_evidence():
     version = optimizer.ENTRY_CANDIDATE_ORDER[0]
     rows = [
@@ -601,9 +631,14 @@ def _write(path, payload):
 
 
 def test_optimizer_candidate_prompt_hash_registry_matches_current_contracts():
-    from src.engine.ai_prompt_contracts import decision_quality_balanced_entry_system_prompt
+    from src.engine.ai_prompt_contracts import (
+        decision_quality_balanced_entry_system_prompt,
+    )
+
     builders = (
-        lambda stage: decision_quality_balanced_entry_system_prompt(stage, bounded_recovery=True),
+        lambda stage: decision_quality_balanced_entry_system_prompt(
+            stage, bounded_recovery=True
+        ),
         decision_quality_balanced_entry_system_prompt,
         decision_quality_v2_16_sequential_recovery_system_prompt,
     )

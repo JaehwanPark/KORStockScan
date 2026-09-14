@@ -549,6 +549,9 @@ def run_batch(
     candidate_plan, candidate_plan_source = _optimizer_candidate_plan(target_date)
     report: dict[str, Any] = {
         "schema": BATCH_SCHEMA,
+        "compact_auxiliary_evaluation": optimizer.compact_evaluation_plan(
+            optimizer._latest_action_outcome_calibration(target_date)[0] or {}
+        ),
         "bounded_live_cohort_contract": "exact_cohort_candidates_v1",
         "target_date": target_date,
         "generated_at": started_at.isoformat(),
@@ -803,6 +806,9 @@ def refresh_optimizer_binding(*, target_date: str, write: bool) -> dict[str, Any
         "candidate_prompt_selection_source": source,
         "optimizer_binding_refreshed_at": datetime.now(quality.KST).isoformat(),
         "optimizer_binding_refresh_provider_calls": 0,
+        "compact_auxiliary_evaluation": optimizer.compact_evaluation_plan(
+            optimizer._latest_action_outcome_calibration(target_date)[0] or {}
+        ),
     }
     if live_policy._batch_evidence(report) != original_evidence:
         raise ValueError("optimizer_refresh_changed_runtime_owner_evidence")

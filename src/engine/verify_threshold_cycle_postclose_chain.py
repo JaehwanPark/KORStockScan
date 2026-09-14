@@ -1524,47 +1524,20 @@ def _ai_decision_action_outcome_calibration_status(
                 expected_direction = "isolate_invalid_compact_partition_and_carry"
             elif not isinstance(economic_count, int) or economic_count < 20:
                 expected_direction = "collect_current_version_natural_evidence"
-            else:
+            if eligible_expected:
                 from src.engine.ai_prompt_contracts import (
                     ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION,
                     ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION,
                 )
+                from src.engine.scalping.mechanistic_entry_runtime_policy import (
+                    compact_economic_direction,
+                )
 
-                if (
-                    isinstance(pass_count, int)
-                    and pass_count >= 5
-                    and economic.get("material_tail_pass_count", 0) > 0
-                ):
-                    expected_direction = "select_material_risk_specificity_variant"
-                    expected_selected_version = (
-                        ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION
-                    )
-                elif (
-                    isinstance(veto_count, int)
-                    and veto_count >= 5
-                    and isinstance(missed_count, int)
-                    and missed_count >= 3
-                    and isinstance(missed_rate, (int, float))
-                    and missed_rate >= 0.25
-                    and missed_rate - (dangerous_rate or 0.0) >= 0.10
-                ):
-                    expected_direction = "select_opportunity_preservation_variant"
-                    expected_selected_version = (
-                        ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION
-                    )
-                elif (
-                    isinstance(pass_count, int)
-                    and pass_count >= 5
-                    and isinstance(dangerous_count, int)
-                    and dangerous_count >= 3
-                    and isinstance(dangerous_rate, (int, float))
-                    and dangerous_rate >= 0.25
-                    and dangerous_rate - (missed_rate or 0.0) >= 0.10
-                ):
-                    expected_direction = "select_material_risk_specificity_variant"
-                    expected_selected_version = (
-                        ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION
-                    )
+                expected_direction = compact_economic_direction(economic)
+                expected_selected_version = {
+                    "select_opportunity_preservation_variant": ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION,
+                    "select_material_risk_specificity_variant": ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION,
+                }.get(expected_direction, incumbent_version)
             if (
                 economic.get("schema") != "compact_auxiliary_economic_selection_v2"
                 or not isinstance(economic_count, int)
@@ -1611,7 +1584,6 @@ def _ai_decision_action_outcome_calibration_status(
                 or selection.get("minimum_error_count") != 3
                 or selection.get("minimum_relevant_denominator") != 5
                 or selection.get("minimum_error_rate") != 0.25
-                or selection.get("minimum_rate_margin") != 0.10
                 or selection.get("economic_outcome_counts_sha256")
                 != expected_economic_hash
                 or selection.get("source_manifest_sha256")

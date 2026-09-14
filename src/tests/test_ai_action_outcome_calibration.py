@@ -828,9 +828,25 @@ def test_machine_case_table_automatically_selects_bounded_compact_variant():
     assert selection["eligible"] is True
     assert selection["minimum_economic_eligible_count"] == 20
     assert selection["contract_version"] == ("compact_auxiliary_economic_selection_v2")
-    assert selection["selected_prompt_version"] == (
-        ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION
+    # Five missed 0.07% opportunities do not outweigh one 0.93% loss.
+    assert selection["selected_prompt_version"] == AI_VERSION
+    rows[5]["entry_quality_path"]["exact_stop_distance_pct"] = -0.01
+    profitable = calibration.build_machine_decision_case_table(
+        rows,
+        capture_census={"captured": 20, "evaluable": 20},
+        source_receipt={
+            "tuning_input_allowed": True,
+            "compact_auxiliary_policy_measurement": {
+                "prompt_version": AI_VERSION,
+                "measurement_allowed": True,
+            },
+        },
+    )["compact_auxiliary_screen_outcomes"]
+    assert (
+        profitable["automatic_successor_selection"]["selected_prompt_version"]
+        == ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION
     )
+    rows[5]["entry_quality_path"]["exact_stop_distance_pct"] = -0.70
     assert selection["allowed_runtime_apply"] is True
 
     rows[0]["ai_and_final_guard"][
@@ -921,6 +937,75 @@ def test_machine_case_table_automatically_selects_bounded_compact_variant():
     assert tail["automatic_successor_selection"]["direction"] == (
         "select_material_risk_specificity_variant"
     )
+
+
+def test_compact_history_requires_own_source_and_unchanged_machine_policy(
+    tmp_path, monkeypatch
+):
+    from src.engine.scalping import mechanistic_entry_runtime_policy as policy
+    from src.engine.observation_source_quality_audit import _raw_generation
+
+    day = "2026-09-13"
+    raw = tmp_path / "raw.jsonl"
+    raw.write_text("{}\n")
+    incumbent = {
+        "machine_policy": {"threshold": 1},
+        "ai_policy": {"prompt_version": policy.AI_VERSION},
+        "bundle_sha256": "b" * 64,
+    }
+    monkeypatch.setattr(policy, "load_effective", lambda **kwargs: incumbent)
+    audit_path = (
+        tmp_path
+        / "report"
+        / "observation_source_quality_audit"
+        / f"observation_source_quality_audit_{day}.json"
+    )
+    audit_path.parent.mkdir(parents=True)
+    manifest = {"raw": "verified"}
+    audit = {
+        "audit_phase": "final",
+        "machine_ai_natural_source_consumption": {
+            "target_date": day,
+            "tuning_input_allowed": True,
+            "source_manifest": {
+                "sources": manifest,
+                "source_manifest_sha256": calibration._canonical_sha256(manifest),
+            },
+            "sources": {
+                "raw": {
+                    "path": str(raw),
+                    "exists": True,
+                    "generation": _raw_generation(raw),
+                }
+            },
+            "compact_auxiliary_policy_measurement": {
+                "partitions": [
+                    {"measurement_allowed": True, "machine_bundle_sha256": "b" * 64}
+                ]
+            },
+        },
+    }
+    audit_path.write_text(json.dumps(audit))
+    rows = [{"source_date": day}]
+    receipt = {"compact_auxiliary_policy_measurement": {"partitions": []}}
+    result = calibration._compact_history_receipt(
+        tmp_path, "2026-09-14", rows, incumbent, receipt
+    )
+    assert result["compact_history_receipts"][0]["allowed"] is True
+    assert (
+        result["compact_auxiliary_policy_measurement"]["partitions"][0]["source_date"]
+        == day
+    )
+    different = {**incumbent, "machine_policy": {"threshold": 2}}
+    blocked = calibration._compact_history_receipt(
+        tmp_path, "2026-09-14", rows, different, receipt
+    )
+    assert blocked["compact_history_receipts"][0]["allowed"] is False
+    raw.write_text("changed\n")
+    stale = calibration._compact_history_receipt(
+        tmp_path, "2026-09-14", rows, incumbent, receipt
+    )
+    assert stale["compact_history_receipts"][0]["allowed"] is False
 
 
 def test_machine_case_table_preserves_distinct_snapshots_inside_sixty_seconds():

@@ -1299,6 +1299,11 @@ def build_report(target_date: str, *, write: bool = False) -> dict[str, Any]:
         and compact_economic.get("verdict_x_action_neutral_outcome_counts_sha256")
         == optimizer._canonical_sha256(compact_economic_counts)
     )
+    if compact_contract_connected and optimizer_report.get(
+        "compact_auxiliary_evaluation"
+    ) != optimizer.compact_evaluation_plan(calibration):
+        blockers.append("compact_auxiliary_optimizer_evaluation_binding_mismatch")
+        compact_contract_connected = False
     if prepared and optimizer_sources.get("prepared_request_sha256") != (
         optimizer._canonical_sha256(prepared)
     ):
@@ -1508,6 +1513,9 @@ def build_report(target_date: str, *, write: bool = False) -> dict[str, Any]:
                     else "not_observed_or_source_contract_blocked"
                 ),
                 "economic_contract": compact_economic,
+                "optimizer_evaluation": optimizer_report.get(
+                    "compact_auxiliary_evaluation"
+                ),
                 "automatic_successor_selection": compact_selection,
                 "provider_replay_synthesized": False,
                 "automatic_next_date_publisher": (

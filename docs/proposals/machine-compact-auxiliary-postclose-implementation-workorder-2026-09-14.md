@@ -7,6 +7,8 @@
 
 ## 1. 일괄 실행 지시
 
+후속 구현 계약: [최종 결함 보완 §7](../audit-reports/2026-09-14-machine-compact-auxiliary-postclose-implementation-review.md#7-최종-결함-재리뷰-후-보완)을 따른다. 날짜별 검증된20관측일 창, 비용 크기 기반 bounded feedback, #78/21:05/#80의 자연 compact 평가 연결을 사용한다. compact 후보 Provider 비교를 수행하지 않은 상태는 `candidate_improvement_proven=false`로 유지하며 자연 평가 전달과 구분한다.
+
 다음 문장으로 본 지시서 전체를 실행하도록 요청할 수 있다.
 
 > 이 통합 작업지시서의 WP0~WP7 및 통합 종결을 일괄 실행하라. 작업은 의존 순서에 따라 분할하고, 각 작업에서 구현→코드리뷰→finding 보완→재리뷰→targeted validation을 반복하라. 독립 작업의 구현은 분리할 수 있지만 source generation과 파일 소유권을 고정하고 공유 consumer의 변경은 통합 검증하라. 검증된 부분과 잔여를 기록하고 단순 목록 제시로 종료하지 마라. 사용자별 승인 단계를 새로 추가하지 말고 기존 장후 자동 선정→다음 거래일 정책 발행→PREOPEN→PID 소비로 연결하라. 완료 후 승인된 범위의 커밋·푸시·배포를 수행하고, 재기동이 필요한 경우에만 현재 실행·정책·주문/custody 보존 계약을 확인해 수행하라. 구현 완료, 자연 소비, 경제성은 각각 보고하라.

@@ -148,7 +148,12 @@ def test_frozen_compact_citations_migrate_only_next_date(
     assert frozen_path.read_bytes() == before
 
 
-def test_postclose_automatically_selects_bounded_compact_successor(tmp_path):
+@pytest.mark.parametrize(
+    "corruption", [None, "rate", "preservation", "source", "bool_count", "tail_count"]
+)
+def test_postclose_automatically_selects_bounded_compact_successor(
+    tmp_path, corruption
+):
     previous = initial(tmp_path)
     path = source(tmp_path, "2026-09-14")
     report = json.loads(path.read_text())
@@ -156,11 +161,16 @@ def test_postclose_automatically_selects_bounded_compact_successor(tmp_path):
         "machine_decision_case_table": {
             "machine_ai_natural_source_receipt": {
                 "source_manifest_sha256": "d" * 64,
+                "tuning_input_allowed": True,
             },
+            "compact_auxiliary_policy_measurement": {"measurement_allowed": True},
             "compact_auxiliary_screen_outcomes": {
                 "economic_contract": {
                     "schema": "compact_auxiliary_economic_selection_v2",
                     "economic_eligible_count": 20,
+                    "screened_total": 20,
+                    "denominator_preserved": True,
+                    "exclusion_counts": {},
                     "evaluable_veto_count": 5,
                     "evaluable_pass_count": 15,
                     "missed_profit_veto_count": 5,
@@ -171,6 +181,8 @@ def test_postclose_automatically_selects_bounded_compact_successor(tmp_path):
                     "missing_economics_imputed": False,
                     "material_tail_loss_pct": -1.0,
                     "material_tail_pass_count": 0,
+                    "missed_profit_veto_net_sum_pct": 1.0,
+                    "dangerous_pass_loss_sum_pct": 0.5,
                     "verdict_x_action_neutral_outcome_counts": {
                         "PASS|CLEAN_FAST_LOSS_OR_ADVERSE": 1,
                         "PASS|CLEAN_FAST_PROFIT": 14,
@@ -207,6 +219,18 @@ def test_postclose_automatically_selects_bounded_compact_successor(tmp_path):
     ]["economic_contract"]
     outcome_hash = policy.digest(economic["verdict_x_action_neutral_outcome_counts"])
     economic["verdict_x_action_neutral_outcome_counts_sha256"] = outcome_hash
+    if corruption == "rate":
+        economic["missed_veto_rate"] = 0.9
+    elif corruption == "preservation":
+        economic["screened_total"] = 21
+    elif corruption == "source":
+        report["hierarchical_entry_quality"]["machine_decision_case_table"][
+            "machine_ai_natural_source_receipt"
+        ]["tuning_input_allowed"] = False
+    elif corruption == "bool_count":
+        economic["dangerous_pass_count"] = True
+    elif corruption == "tail_count":
+        economic["material_tail_pass_count"] = 16
     report["hierarchical_entry_quality"]["machine_decision_case_table"][
         "compact_auxiliary_screen_outcomes"
     ]["automatic_successor_selection"]["economic_outcome_counts_sha256"] = outcome_hash
@@ -222,6 +246,12 @@ def test_postclose_automatically_selects_bounded_compact_successor(tmp_path):
     )
 
     assert successor["previous_bundle_sha256"] == previous["bundle_sha256"]
+    if corruption is not None:
+        assert (
+            successor["ai_policy"]["prompt_version"]
+            == previous["ai_policy"]["prompt_version"]
+        )
+        return
     assert successor["ai_policy"]["prompt_version"] == (
         policy.ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION
     )
@@ -229,6 +259,33 @@ def test_postclose_automatically_selects_bounded_compact_successor(tmp_path):
         successor["ai_policy"]["prompt_version"]
     )
     assert "Calibration emphasis" in successor["ai_policy"]["system_prompt"]
+
+
+@pytest.mark.parametrize(
+    "veto_count,pass_count,missed,loss,expected",
+    [
+        (20, 0, 1.4, 0.0, "select_opportunity_preservation_variant"),
+        (0, 20, 0.0, 2.0, "select_material_risk_specificity_variant"),
+        (5, 15, 0.35, 0.93, "carry_balanced_compact_contract"),
+    ],
+)
+def test_compact_direction_uses_cost_magnitudes_and_defined_single_sided_rates(
+    veto_count, pass_count, missed, loss, expected
+):
+    dangerous = min(pass_count, 5) if not veto_count else min(pass_count, 1)
+    economic = {
+        "economic_eligible_count": 20,
+        "evaluable_veto_count": veto_count,
+        "evaluable_pass_count": pass_count,
+        "missed_profit_veto_count": min(veto_count, 5),
+        "dangerous_pass_count": dangerous,
+        "material_tail_pass_count": 0,
+        "missed_veto_rate": min(veto_count, 5) / veto_count if veto_count else None,
+        "dangerous_pass_rate": dangerous / pass_count if pass_count else None,
+        "missed_profit_veto_net_sum_pct": missed,
+        "dangerous_pass_loss_sum_pct": loss,
+    }
+    assert policy.compact_economic_direction(economic) == expected
 
 
 def test_next_preopen_publish_replaces_legacy_prompt_without_threshold_change(tmp_path):

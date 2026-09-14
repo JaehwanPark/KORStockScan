@@ -3458,6 +3458,7 @@ def _machine_ai_natural_source_receipt(data_root: Path, target_date: str) -> dic
     )
     return {
         "path": str(path),
+        "target_date": target_date,
         "schema": consumption.get("schema"),
         "status": consumption.get("status", "missing"),
         "source_manifest_sha256": manifest.get("source_manifest_sha256"),
@@ -3465,6 +3466,103 @@ def _machine_ai_natural_source_receipt(data_root: Path, target_date: str) -> dic
         "compact_auxiliary_policy_measurement": compact_measurement,
         "authority": "source_quality_receipt_only_no_runtime_apply",
     }
+
+
+def _compact_history_receipt(
+    data_root: Path,
+    target_date: str,
+    rows: list[dict],
+    incumbent: dict | None,
+    receipt: dict,
+) -> dict:
+    """Admit historical partitions only with their own final source receipt.
+
+    A new dated bundle is compatible only when its machine policy and issued
+    AI policy are identical to the incumbent. No historical source is relabelled.
+    """
+    from src.engine.scalping.mechanistic_entry_runtime_policy import (
+        load_effective,
+        digest,
+    )
+    from src.engine.observation_source_quality_audit import _raw_generation
+
+    result = json.loads(json.dumps(receipt))
+    measurement = result.setdefault("compact_auxiliary_policy_measurement", {})
+    partitions = measurement.setdefault("partitions", [])
+    for partition in partitions:
+        partition["source_date"] = target_date
+    history = []
+    if not incumbent:
+        result["compact_history_receipts"] = history
+        return result
+    measurement["prompt_version"] = incumbent["ai_policy"].get("prompt_version")
+    measurement["measurement_allowed"] = any(
+        partition.get("prompt_version") == measurement["prompt_version"]
+        and partition.get("measurement_allowed") is True
+        for partition in partitions
+    )
+    dates = sorted(
+        {
+            str(row.get("source_date") or "")
+            for row in rows
+            if CLEAN_BASELINE_DATE <= str(row.get("source_date") or "") < target_date
+        }
+    )[-19:]
+    for day in dates:
+        path = (
+            data_root
+            / "report"
+            / "observation_source_quality_audit"
+            / f"observation_source_quality_audit_{day}.json"
+        )
+        entry = {"source_date": day, "path": str(path), "allowed": False}
+        try:
+            audit = _load_json(path)
+            consumption = audit.get("machine_ai_natural_source_consumption") or {}
+            manifest = consumption.get("source_manifest") or {}
+            sources = consumption.get("sources") or {}
+            prior = load_effective(data_root=data_root, target_date=day)
+            valid = bool(
+                audit.get("audit_phase") == "final"
+                and consumption.get("target_date") == day
+                and consumption.get("tuning_input_allowed") is True
+                and manifest.get("source_manifest_sha256")
+                == _canonical_sha256(manifest.get("sources") or {})
+                and sources
+                and all(
+                    _raw_generation(Path(source["path"])) == source.get("generation")
+                    for source in sources.values()
+                    if source.get("exists")
+                )
+                and prior
+                and digest(prior["machine_policy"])
+                == digest(incumbent["machine_policy"])
+                and prior["ai_policy"] == incumbent["ai_policy"]
+            )
+            entry.update(
+                allowed=valid,
+                source_manifest_sha256=manifest.get("source_manifest_sha256"),
+                audit_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+            )
+            if valid:
+                for partition in (
+                    consumption.get("compact_auxiliary_policy_measurement") or {}
+                ).get("partitions") or []:
+                    if (
+                        partition.get("measurement_allowed") is True
+                        and partition.get("machine_bundle_sha256")
+                        == prior["bundle_sha256"]
+                    ):
+                        partitions.append({**partition, "source_date": day})
+        except (OSError, ValueError, KeyError, TypeError):
+            entry["reason"] = "historical_source_or_policy_invalid"
+        history.append(entry)
+    result["compact_history_receipts"] = history
+    result["compact_history_receipts_sha256"] = _canonical_sha256(history)
+    result["compact_window_policy"] = (
+        "current_date_plus_latest_19_observed_dates_same_machine_and_ai_policy"
+    )
+    return result
 
 
 def build_machine_decision_case_table(
@@ -3505,6 +3603,9 @@ def build_machine_decision_case_table(
     ]
     allowed_compact_partition_keys = {
         (
+            str(
+                partition.get("source_date") or source_receipt.get("target_date") or ""
+            ),
             str(partition.get("prompt_version") or ""),
             str(partition.get("effective_venue") or "UNKNOWN").upper(),
             str(partition.get("session_bucket") or "UNKNOWN").upper(),
@@ -3591,6 +3692,11 @@ def build_machine_decision_case_table(
                 if observed_prompt_version == incumbent_compact_version:
                     compact_current_version_screened_count += 1
                     partition_key = (
+                        (
+                            str(row.get("source_date") or "")
+                            if source_receipt.get("target_date")
+                            else ""
+                        ),
                         observed_prompt_version,
                         str(row.get("effective_venue") or "UNKNOWN").upper(),
                         str(row.get("session_bucket") or "UNKNOWN").upper(),
@@ -3690,6 +3796,11 @@ def build_machine_decision_case_table(
                 "compact_partition_eligible": (
                     not declared_compact_partitions
                     or (
+                        (
+                            str(row.get("source_date") or "")
+                            if source_receipt.get("target_date")
+                            else ""
+                        ),
                         str(ai_guard.get("prompt_version") or ""),
                         str(row.get("effective_venue") or "UNKNOWN").upper(),
                         str(row.get("session_bucket") or "UNKNOWN").upper(),
@@ -3726,6 +3837,7 @@ def build_machine_decision_case_table(
     opportunity_values: list[float] = []
     outcome_times_sec: list[float] = []
     pass_loss_values: list[float] = []
+    missed_profit_values: list[float] = []
     for row in cases:
         ai_guard = _as_dict(row.get("ai_and_final_guard"))
         path = _as_dict(row.get("entry_quality_path"))
@@ -3769,6 +3881,12 @@ def build_machine_decision_case_table(
             outcome_times_sec.append(outcome_time)
         if verdict == "PASS" and value < 0:
             pass_loss_values.append(value)
+        if (
+            verdict == "VETO"
+            and value > 0
+            and row.get("entry_quality_label") == "CLEAN_FAST_PROFIT"
+        ):
+            missed_profit_values.append(value)
     economic_eligible_count = sum(economic_outcomes.values())
     evaluable_veto_count = sum(
         count for key, count in economic_outcomes.items() if key.startswith("VETO|")
@@ -3822,45 +3940,6 @@ def build_machine_decision_case_table(
         compact_tuning_direction = "isolate_invalid_compact_partition_and_carry"
     elif economic_eligible_count < minimum_economic_count:
         compact_tuning_direction = "collect_current_version_natural_evidence"
-    elif (
-        evaluable_pass_count >= minimum_relevant_denominator
-        and material_tail_pass_count > 0
-    ):
-        compact_tuning_direction = "select_material_risk_specificity_variant"
-        selected_compact_version = (
-            ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION
-            if incumbent_compact_version
-            != ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION
-            else incumbent_compact_version
-        )
-    elif (
-        evaluable_veto_count >= minimum_relevant_denominator
-        and economic_missed_veto_count >= minimum_error_count
-        and missed_veto_rate is not None
-        and missed_veto_rate >= minimum_error_rate
-        and missed_veto_rate - (dangerous_pass_rate or 0.0) >= minimum_rate_margin
-    ):
-        compact_tuning_direction = "select_opportunity_preservation_variant"
-        selected_compact_version = (
-            ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION
-            if incumbent_compact_version
-            != ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION
-            else incumbent_compact_version
-        )
-    elif (
-        evaluable_pass_count >= minimum_relevant_denominator
-        and economic_dangerous_pass_count >= minimum_error_count
-        and dangerous_pass_rate is not None
-        and dangerous_pass_rate >= minimum_error_rate
-        and dangerous_pass_rate - (missed_veto_rate or 0.0) >= minimum_rate_margin
-    ):
-        compact_tuning_direction = "select_material_risk_specificity_variant"
-        selected_compact_version = (
-            ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION
-            if incumbent_compact_version
-            != ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION
-            else incumbent_compact_version
-        )
     else:
         compact_tuning_direction = "carry_balanced_compact_contract"
     compact_selection_eligible = bool(
@@ -3870,6 +3949,28 @@ def build_machine_decision_case_table(
     )
     if not compact_selection_eligible:
         selected_compact_version = incumbent_compact_version
+    from src.engine.scalping.mechanistic_entry_runtime_policy import (
+        compact_economic_direction,
+    )
+
+    economic_direction_inputs = {
+        "economic_eligible_count": economic_eligible_count,
+        "evaluable_veto_count": evaluable_veto_count,
+        "evaluable_pass_count": evaluable_pass_count,
+        "missed_profit_veto_count": economic_missed_veto_count,
+        "dangerous_pass_count": economic_dangerous_pass_count,
+        "missed_veto_rate": missed_veto_rate,
+        "dangerous_pass_rate": dangerous_pass_rate,
+        "material_tail_pass_count": material_tail_pass_count,
+        "missed_profit_veto_net_sum_pct": sum(missed_profit_values),
+        "dangerous_pass_loss_sum_pct": -sum(pass_loss_values),
+    }
+    if compact_selection_eligible:
+        compact_tuning_direction = compact_economic_direction(economic_direction_inputs)
+        selected_compact_version = {
+            "select_opportunity_preservation_variant": ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION,
+            "select_material_risk_specificity_variant": ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION,
+        }.get(compact_tuning_direction, incumbent_compact_version)
     return {
         "schema": MACHINE_DECISION_CASE_TABLE_SCHEMA,
         "status": (
@@ -3908,6 +4009,10 @@ def build_machine_decision_case_table(
             "dangerous_pass_count": dangerous_pass_count,
             "semantic_unclassified_count": compact_unclassified_count,
             "economic_contract": {
+                **economic_direction_inputs,
+                "primary_decision_metric": "missed_profit_veto_net_sum_pct_vs_dangerous_pass_loss_sum_pct",
+                "rate_margin_used_for_selection": False,
+                "material_tail_alert": material_tail_pass_count > 0,
                 "schema": "compact_auxiliary_economic_selection_v2",
                 "screened_total": compact_current_version_screened_count,
                 "denominator_preserved": (
@@ -3958,6 +4063,10 @@ def build_machine_decision_case_table(
                 "holdout_gate"
             ),
             "automatic_successor_selection": {
+                "economic_direction_rule": "cost_weighted_bounded_feedback_v1",
+                "history_receipts_sha256": source_receipt.get(
+                    "compact_history_receipts_sha256"
+                ),
                 "recommendation_id": "compact_auxiliary_prompt_automatic_successor_v2",
                 "contract_version": "compact_auxiliary_economic_selection_v2",
                 "incumbent_prompt_version": incumbent_compact_version,
@@ -6005,6 +6114,9 @@ def build_report(
         data_root, target_date=target_date
     )
     machine_source_receipt = _machine_ai_natural_source_receipt(data_root, target_date)
+    machine_source_receipt = _compact_history_receipt(
+        data_root, target_date, machine_observations, incumbent, machine_source_receipt
+    )
     machine_decision_case_table = build_machine_decision_case_table(
         machine_observations,
         capture_census=machine_capture_census,

@@ -57,3 +57,18 @@
 - targeted pytest: 관련 source audit/calibration/publisher/consumer/verifier/live-policy/funnel/recheck/runtime summary 724건과 runtime/replay prompt parity 69건 PASS.
 - Python compile, formatter, `git diff --check`, 문서 링크/print-only parser를 최종 commit 전에 재검증한다.
 - Provider 호출, 실주문, 현재 PID 재기동, 20:10 producer 조기 실행은 수행하지 않았다.
+
+## 7. 최종 결함 재리뷰 후 보완
+
+앞선 §1~§6과 WP0~WP7 전체 완료 표현은 당시 검토 범위의 기록이다. 후속 리뷰에서 누적 partition, 비용 크기 반영, optimizer 직접 소비, publisher 선행 검증 결손을 확인해 재개했다. 아래 계약이 §3의 오류율 차이 선정 계약을 대체한다.
+
+- 누적 창: 당일과 최근19개 관측일. 날짜별 final #74 receipt·manifest hash·현재 raw generation과 당시 정책을 검증한다. 날짜별 bundle hash가 달라도 machine policy와 AI policy가 동일한 경우 그 날짜의 partition으로 수용한다. 변경된 정책·손상 원천은 합치지 않는다. 현재 compact 미관측은 기존 carry다.
+- 목표: missed-profit VETO의 비용후 기회 합계와 PASS 손실의 절댓값 합계를 비교한다. 이 값은 동일 비중 반사실 합계이며 EV·실현손익·후보 개선량으로 부르지 않는다. +0.07% 기회5건과 -0.93% 손실1건 사례는 기회보존 변형을 선택하지 않는다. 기존20건·방향분모5·오류3·오류율25%는 유지하며, 다른 분모의 오류율10%p 차이 조건은 제거했다. 구 `minimum_rate_margin`은 호환 metadata이고 판정에 사용하지 않는다. 분모0은 null을 보존하고 관측된 방향 자체의 오류율과 손익 근거로 판단한다.
+- tail: `material_tail_alert`는 표본20건 이전에도 표시한다. 등록 변형의 자동 전환은 기존 근거 floor를 유지한다. 경보 자체에 주문 변경 권한은 없다.
+- WP3: #78에 등록 compact prompt/variant/system hash와 #82 경제성·선정·원천 receipt를 담는 `compact_auxiliary_optimizer_evaluation_v1`을 추가했다. 21:05 batch와 metadata refresh도 이를 보존하며 #80은 실제 optimizer 투영을 재계산해 대조한다. 기존 legacy replay는 별도 연구로 유지한다. 이 연결은 자연 결과 기반 bounded feedback이며 새로운 compact 후보의 Provider 비교를 수행했다는 뜻이 아니다. `candidate_improvement_proven=false`를 명시한다.
+- 발행: strict 이전 publisher에서 정수 분모·제외 보존식·오류율 재계산·tail 상한·원천 measurement 허용과 source/history hash를 확인한다. producer/publisher/strict의 경제적 방향 함수는 공통 owner로 단일화했다.
+- 달성 가능성: 원천이 정상이고 같은 정책에서 일4건의 경제적 유효 사례가 유입되면5개 관측일로20건이 된다. 이는 산술 예시이며 오늘 compact0건에서 산출한 ETA가 아니다. 정책 변경·원천 차단이 지속되면 동일 floor가 달성된다고 주장하지 않는다.
+
+새 collector, Provider 호출, 수동 정책값, 현재 PID 재기동은 이 보완에 필요하지 않다. 다음 자동 생성과 정책/PID 소비 및 실수익은 기존 체크리스트 owner의 자연 acceptance다. 새 후보의 개선량이나 전체 WP의 운영 종결을 테스트 성공으로 대신하지 않는다.
+
+검증: 6개 직접 owner suite 388 PASS, compact registry/자연 선정 보존 반례 추가 후 optimizer/replay 52 PASS. 날짜별 raw 변경·정책 변경 제외, 비용 크기에 따른 carry/선정, 한쪽 분모0, 발행 직전 rate/count/source 변조를 검증했다. Ruff·compile·diff 및 print-only parser26 PASS. commit/release 식별자는 runtime release selection receipt에 기록한다.

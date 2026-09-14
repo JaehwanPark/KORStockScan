@@ -87,6 +87,49 @@ SOURCE_ONLY_AUTHORITY = {
 }
 
 
+def compact_evaluation_plan(calibration: Mapping[str, Any]) -> dict[str, Any]:
+    """Consume natural compact adjudications without substituting legacy replay."""
+    from src.engine.scalping.mechanistic_entry_runtime_policy import (
+        COMPACT_AI_VARIANTS,
+        compact_auxiliary_prompt,
+        compact_prompt_variant,
+        digest,
+    )
+
+    table = (calibration.get("hierarchical_entry_quality") or {}).get(
+        "machine_decision_case_table"
+    ) or {}
+    outcomes = table.get("compact_auxiliary_screen_outcomes") or {}
+    source = table.get("machine_ai_natural_source_receipt") or {}
+    return {
+        "schema": "compact_auxiliary_optimizer_evaluation_v1",
+        "role": "machine_enter_post_selection_risk_adjudication",
+        "evaluation_mode": "recorded_natural_outcomes_no_synthetic_provider_replay",
+        "calibration_artifact_content_sha256": calibration.get(
+            "artifact_content_sha256"
+        ),
+        "source_manifest_sha256": source.get("source_manifest_sha256"),
+        "history_receipts_sha256": source.get("compact_history_receipts_sha256"),
+        "economic_contract": outcomes.get("economic_contract") or {},
+        "automatic_successor_selection": outcomes.get("automatic_successor_selection")
+        or {},
+        "registered_candidates": [
+            {
+                "prompt_version": version,
+                "variant": compact_prompt_variant(version),
+                "system_prompt_sha256": digest(
+                    compact_auxiliary_prompt(prompt_version=version)
+                ),
+            }
+            for version in sorted(COMPACT_AI_VARIANTS)
+        ],
+        "candidate_improvement_proven": False,
+        "legacy_replay_may_tune_compact": False,
+        "provider_calls": 0,
+        "runtime_effect": False,
+    }
+
+
 def _canonical_sha256(value: Any) -> str:
     return hashlib.sha256(
         json.dumps(
@@ -1604,6 +1647,9 @@ def build_report(
         evidence_assessment = "candidate_generation_blocked"
     body: dict[str, Any] = {
         "schema": SCHEMA,
+        "compact_auxiliary_evaluation": compact_evaluation_plan(
+            action_outcome_calibration or {}
+        ),
         "target_date": target_date,
         "generated_at": datetime.now(KST).isoformat(timespec="seconds"),
         "status": "blocked" if blockers else "ready_source_only_continuous_search",
