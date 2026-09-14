@@ -3798,12 +3798,57 @@ def test_machine_screen_live_adapter_preserves_binding_verdict(verdict):
         prompt_version=initial.AI_VERSION,
     )
     assert result["entry_mechanistic_action"] == "ENTER_NOW"
-    assert result["entry_probe_intent"] is (verdict == "PASS")
-    assert result["action"] == ("DROP" if verdict == "VETO" else "WAIT")
+    assert result["entry_probe_intent"] is False
+    assert result["action"] == (
+        "BUY" if verdict == "PASS" else "DROP" if verdict == "VETO" else "WAIT"
+    )
+    assert result["entry_machine_pass_submit_candidate"] is (verdict == "PASS")
+    if verdict == "PASS":
+        assert result["entry_probe_intent_status"] == (
+            "eligible_machine_pass_submit_candidate"
+        )
+        assert result["decision_quality_runtime_action_mapping"].endswith(
+            "machine_pass_to_existing_submit_guard"
+        )
     assert result["entry_ai_veto_corroborated"] is (verdict == "VETO")
     assert result["decision_quality_contract_status"] == (
         "semantic_rejected" if verdict == "ABSENT" else "pass"
     )
+
+
+def test_machine_pass_keeps_recent_exit_reentry_guard():
+    from src.engine.scalping import mechanistic_entry_runtime_policy as initial
+    from src.engine.scalping.entry_setup_evidence import (
+        MECHANISTIC_AI_ADVISORY_ROLE,
+        MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
+    )
+    from src.tests.test_entry_setup_evidence import _machine_screen_case
+
+    setup, risk = _machine_screen_case("PASS")
+    result = _build_engine()._normalize_entry_setup_v2_14_result(
+        risk,
+        exact_payload={
+            "current": {"price": 10100},
+            "recent_exit_context": {
+                "exit_price": 10000,
+                "reentry_policy": "fresh_post_exit_confirmation_required",
+            },
+        },
+        setup_evidence=setup,
+        live_policy={
+            "enabled": True,
+            "status": "active_bounded_krx_canary",
+            "selected_prompt_version": initial.AI_VERSION,
+            "primary_decision_owner": "mechanistic_entry_adjudicator",
+            "ai_role": MECHANISTIC_AI_ADVISORY_ROLE,
+            "mechanistic_threshold_policy": MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
+        },
+        prompt_version=initial.AI_VERSION,
+    )
+
+    assert result["action"] == "WAIT"
+    assert result["entry_machine_pass_submit_candidate"] is False
+    assert result["entry_recent_exit_probe_blocked"] is True
 
 
 @pytest.mark.parametrize("ready", [False, True])

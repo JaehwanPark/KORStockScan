@@ -41671,9 +41671,22 @@ def _retry_entry_ai_submit_authority_before_block(
         )
         return fields
     except Exception as exc:
-        log_error(f"⚠️ [PRE_SUBMIT_ENTRY_AI_AUTHORITY_RETRY_FAIL] {code}: {exc}")
-        fields["pre_submit_entry_ai_authority_retry_reason"] = "exception"
-        fields["pre_submit_entry_ai_authority_retry_error"] = str(exc)[:180]
+        error = str(exc)[:180]
+        if error == "entry_context_revalidation_route_changed":
+            # A 0B/0D route switch while the bounded retry gathers its slow
+            # inputs invalidates that one prepared snapshot.  This is an
+            # expected fail-closed market-data race: preserve the exact reason
+            # for attribution and let the next fresh loop retry, without
+            # reporting a process error burst.  No AI or submit authority is
+            # recovered here.
+            log_info(
+                f"[PRE_SUBMIT_ENTRY_AI_AUTHORITY_RETRY_BLOCK] {code}: {error}"
+            )
+            fields["pre_submit_entry_ai_authority_retry_reason"] = error
+        else:
+            log_error(f"⚠️ [PRE_SUBMIT_ENTRY_AI_AUTHORITY_RETRY_FAIL] {code}: {exc}")
+            fields["pre_submit_entry_ai_authority_retry_reason"] = "exception"
+        fields["pre_submit_entry_ai_authority_retry_error"] = error
         return fields
 
 
@@ -43061,6 +43074,15 @@ def _consume_entry_price_exact_context_handoff(
     )
     stored_session = str(handoff.get("session_bucket") or "").strip()
     stored_venue = str(handoff.get("effective_venue") or "").strip()
+    # `_AL` is an integrated market-data route rather than a standalone
+    # execution venue.  Preserve the frozen route check below, while comparing
+    # the handoff in the clock-scoped execution/session namespace used when the
+    # snapshot was built.
+    if current_venue == "KRX_NXT_INTEGRATED":
+        if current_session == "krx_regular":
+            current_venue = "KRX"
+        elif current_session == "nxt_aftermarket":
+            current_session = "krx_nxt_aftermarket"
     if (stored_session and current_session and stored_session != current_session) or (
         stored_venue and current_venue and stored_venue != current_venue
     ):

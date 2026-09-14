@@ -1284,8 +1284,9 @@ def test_registry_owner_check_includes_owner_type(tmp_path):
 def test_main_order_transport_rechecks_veto_for_every_action(
     tmp_path, monkeypatch, action, veto
 ):
+    market_open = datetime(2026, 9, 14, 10, 0, tzinfo=kiwoom_orders.KST)
     policy_path = tmp_path / "policy.json"
-    _write_policy(policy_path, active_date=datetime.now(kiwoom_orders.KST).date())
+    _write_policy(policy_path, active_date=market_open.date())
     monkeypatch.setenv("KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE", str(policy_path))
     exclusion_path = tmp_path / "excluded.txt"
     exclusion_path.write_text(
@@ -1293,8 +1294,16 @@ def test_main_order_transport_rechecks_veto_for_every_action(
     )
     before_registry = (tmp_path / "registry.jsonl").read_bytes()
     monkeypatch.setattr(kiwoom_orders, "is_buy_side_paused", lambda: False)
-    monkeypatch.setattr(kiwoom_orders, "is_scalping_buy_window_blocked", lambda: False)
-    monkeypatch.setattr(kiwoom_orders, "is_buy_side_time_blocked", lambda: False)
+    monkeypatch.setattr(
+        kiwoom_orders,
+        "is_scalping_buy_window_blocked",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        kiwoom_orders,
+        "is_buy_side_time_blocked",
+        lambda *_args, **_kwargs: False,
+    )
     monkeypatch.setattr(
         kiwoom_orders, "is_sell_side_open_time_blocked", lambda **kw: False
     )
@@ -1308,11 +1317,11 @@ def test_main_order_transport_rechecks_veto_for_every_action(
     context = _context("main_scalping", "veto")
     if action == "buy":
         result = kiwoom_orders.send_buy_order_market(
-            SYMBOL, 10, "test", owner_context=context
+            SYMBOL, 10, "test", owner_context=context, now=market_open
         )
     elif action == "sell":
         result = kiwoom_orders.send_sell_order_market(
-            SYMBOL, 10, "test", owner_context=context
+            SYMBOL, 10, "test", owner_context=context, now=market_open
         )
         assert (
             result["_local_sell_no_call_token"]
@@ -1352,15 +1361,24 @@ def test_manual_main_veto_preserves_machine_order_authority(
 def test_kiwoom_order_surface_requires_context_only_for_selected_coexistence_symbol(
     tmp_path, monkeypatch
 ):
-    runtime_date = datetime.now(kiwoom_orders.KST).date()
+    market_open = datetime(2026, 9, 14, 10, 0, tzinfo=kiwoom_orders.KST)
+    runtime_date = market_open.date()
     policy_path = tmp_path / "policy.json"
     registry_path = tmp_path / "registry.jsonl"
     _write_policy(policy_path, active_date=runtime_date)
     monkeypatch.setenv("KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE", str(policy_path))
     monkeypatch.setenv("KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH", str(registry_path))
     monkeypatch.setattr(kiwoom_orders, "is_buy_side_paused", lambda: False)
-    monkeypatch.setattr(kiwoom_orders, "is_scalping_buy_window_blocked", lambda: False)
-    monkeypatch.setattr(kiwoom_orders, "is_buy_side_time_blocked", lambda: False)
+    monkeypatch.setattr(
+        kiwoom_orders,
+        "is_scalping_buy_window_blocked",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        kiwoom_orders,
+        "is_buy_side_time_blocked",
+        lambda *_args, **_kwargs: False,
+    )
     broker_calls = []
 
     class Response:
@@ -1375,7 +1393,9 @@ def test_kiwoom_order_surface_requires_context_only_for_selected_coexistence_sym
         }
 
     monkeypatch.setattr(kiwoom_orders, "_post_kiwoom_with_auth_retry", fake_post)
-    blocked = kiwoom_orders.send_buy_order_market(SYMBOL, 1, "token")
+    blocked = kiwoom_orders.send_buy_order_market(
+        SYMBOL, 1, "token", now=market_open
+    )
     assert blocked["return_code"] == "OWNER_REGISTRY_BLOCKED"
     assert broker_calls == []
 
@@ -1384,6 +1404,7 @@ def test_kiwoom_order_surface_requires_context_only_for_selected_coexistence_sym
         1,
         "token",
         owner_context=_context("main_scalping", "401"),
+        now=market_open,
     )
     assert accepted["return_code"] == "0"
     assert accepted["owner_registry_intent_id"]
@@ -1393,6 +1414,7 @@ def test_kiwoom_order_surface_requires_context_only_for_selected_coexistence_sym
 def test_registered_symbol_stays_fail_closed_when_next_exact_policy_is_missing(
     tmp_path, monkeypatch
 ):
+    market_open = datetime(2026, 9, 14, 10, 0, tzinfo=kiwoom_orders.KST)
     missing_policy = tmp_path / "missing-policy.json"
     registry_path = tmp_path / "registry.jsonl"
     registry = OrderOwnerRegistry(registry_path)
@@ -1409,8 +1431,16 @@ def test_registered_symbol_stays_fail_closed_when_next_exact_policy_is_missing(
     monkeypatch.setenv("KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE", str(missing_policy))
     monkeypatch.setenv("KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH", str(registry_path))
     monkeypatch.setattr(kiwoom_orders, "is_buy_side_paused", lambda: False)
-    monkeypatch.setattr(kiwoom_orders, "is_scalping_buy_window_blocked", lambda: False)
-    monkeypatch.setattr(kiwoom_orders, "is_buy_side_time_blocked", lambda: False)
+    monkeypatch.setattr(
+        kiwoom_orders,
+        "is_scalping_buy_window_blocked",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        kiwoom_orders,
+        "is_buy_side_time_blocked",
+        lambda *_args, **_kwargs: False,
+    )
     broker_calls = []
     monkeypatch.setattr(
         kiwoom_orders,
@@ -1423,6 +1453,7 @@ def test_registered_symbol_stays_fail_closed_when_next_exact_policy_is_missing(
         1,
         "token",
         owner_context=_context("main_scalping", "sticky-main"),
+        now=market_open,
     )
 
     assert blocked["return_code"] == "OWNER_REGISTRY_BLOCKED"
@@ -1450,15 +1481,24 @@ def test_registry_finalize_failure_preserves_broker_attempt_and_order_number():
 
 
 def test_receipt_before_sor_retry_blocks_second_broker_order(tmp_path, monkeypatch):
-    runtime_date = datetime.now(kiwoom_orders.KST).date()
+    market_open = datetime(2026, 9, 14, 10, 0, tzinfo=kiwoom_orders.KST)
+    runtime_date = market_open.date()
     policy_path = tmp_path / "policy.json"
     registry_path = tmp_path / "registry.jsonl"
     _write_policy(policy_path, active_date=runtime_date)
     monkeypatch.setenv("KORSTOCKSCAN_SYMBOL_OWNER_POLICY_FILE", str(policy_path))
     monkeypatch.setenv("KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH", str(registry_path))
     monkeypatch.setattr(kiwoom_orders, "is_buy_side_paused", lambda: False)
-    monkeypatch.setattr(kiwoom_orders, "is_scalping_buy_window_blocked", lambda: False)
-    monkeypatch.setattr(kiwoom_orders, "is_buy_side_time_blocked", lambda: False)
+    monkeypatch.setattr(
+        kiwoom_orders,
+        "is_scalping_buy_window_blocked",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        kiwoom_orders,
+        "is_buy_side_time_blocked",
+        lambda *_args, **_kwargs: False,
+    )
     broker_calls = []
 
     class Response:
@@ -1512,6 +1552,7 @@ def test_receipt_before_sor_retry_blocks_second_broker_order(tmp_path, monkeypat
         "token",
         order_type="3",
         owner_context=_context("main_scalping", "sor-race"),
+        now=market_open,
     )
 
     assert result["return_code"] == "OWNER_REGISTRY_BLOCKED"

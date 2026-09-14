@@ -2,7 +2,7 @@
 
 from copy import deepcopy
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
@@ -154,6 +154,66 @@ def test_revalidation_rejects_changed_route_and_reversed_clock():
         revalidate_entry_candle_snapshot(_context(), ws, now_ts=NOW + 5)
     with pytest.raises(ValueError, match="clock_invalid"):
         revalidate_entry_candle_snapshot(_context(), _ws(NOW), now_ts=NOW - 1)
+
+
+def test_route_change_retry_block_is_not_reported_as_process_error(monkeypatch):
+    info_logs = []
+    error_logs = []
+    monkeypatch.setattr(handlers, "log_info", info_logs.append)
+    monkeypatch.setattr(handlers, "log_error", error_logs.append)
+    monkeypatch.setattr(
+        handlers,
+        "_consume_entry_price_exact_context_handoff",
+        lambda *a, **k: (_ for _ in ()).throw(
+            ValueError("entry_context_revalidation_route_changed")
+        ),
+    )
+
+    result = handlers._retry_entry_ai_submit_authority_before_block(
+        stock={"id": 1, "name": "route-race", "strategy": "SCALPING"},
+        code="123456",
+        ws_data=_ws(NOW),
+        ai_engine=SimpleNamespace(analyze_target=lambda *a, **k: {}),
+        now_ts=NOW,
+        current_ai_score=0,
+    )
+
+    assert result["pre_submit_entry_ai_authority_retry_success"] is False
+    assert result["pre_submit_entry_ai_authority_retry_reason"] == (
+        "entry_context_revalidation_route_changed"
+    )
+    assert result["pre_submit_entry_ai_authority_retry_error"] == (
+        "entry_context_revalidation_route_changed"
+    )
+    assert "PRE_SUBMIT_ENTRY_AI_AUTHORITY_RETRY_BLOCK" in info_logs[-1]
+    assert error_logs == []
+
+
+def test_unexpected_retry_exception_remains_a_process_error(monkeypatch):
+    info_logs = []
+    error_logs = []
+    monkeypatch.setattr(handlers, "log_info", info_logs.append)
+    monkeypatch.setattr(handlers, "log_error", error_logs.append)
+    monkeypatch.setattr(
+        handlers,
+        "_consume_entry_price_exact_context_handoff",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("unexpected_failure")),
+    )
+
+    result = handlers._retry_entry_ai_submit_authority_before_block(
+        stock={"id": 1, "name": "broken-retry", "strategy": "SCALPING"},
+        code="123456",
+        ws_data=_ws(NOW),
+        ai_engine=SimpleNamespace(analyze_target=lambda *a, **k: {}),
+        now_ts=NOW,
+        current_ai_score=0,
+    )
+
+    assert result["pre_submit_entry_ai_authority_retry_success"] is False
+    assert result["pre_submit_entry_ai_authority_retry_reason"] == "exception"
+    assert result["pre_submit_entry_ai_authority_retry_error"] == "unexpected_failure"
+    assert "PRE_SUBMIT_ENTRY_AI_AUTHORITY_RETRY_FAIL" in error_logs[-1]
+    assert info_logs == []
 
 
 @pytest.mark.parametrize("age", [-1, float("nan"), float("inf")])
@@ -372,13 +432,49 @@ def test_handoff_rejects_wrong_canonical_parent_identity(field, value):
 
 
 @pytest.mark.parametrize(
-    "suffix,route", [("_NX", "nxt_only"), ("_AL", "krx_nxt_integrated")]
+    "suffix,route,venue,session,broker_route,expected_venue,observed_at",
+    [
+        (
+            "_NX",
+            "nxt_only",
+            "NXT",
+            "nxt_aftermarket",
+            "NXT",
+            "NXT",
+            datetime(2026, 9, 10, 17, 0, 25, tzinfo=ZoneInfo("Asia/Seoul")),
+        ),
+        (
+            "_AL",
+            "krx_nxt_integrated",
+            "KRX_NXT_INTEGRATED",
+            "krx_nxt_aftermarket",
+            "SOR",
+            "KRX_NXT_INTEGRATED",
+            datetime(2026, 9, 10, 17, 0, 25, tzinfo=ZoneInfo("Asia/Seoul")),
+        ),
+        (
+            "_AL",
+            "krx_nxt_integrated",
+            "KRX",
+            "krx_regular",
+            "SOR",
+            "KRX",
+            datetime(2026, 9, 10, 14, 0, 25, tzinfo=ZoneInfo("Asia/Seoul")),
+        ),
+    ],
 )
-def test_nxt_aftermarket_handoff_preserves_exact_route_and_source_clocks(
-    monkeypatch, suffix, route
+def test_routed_handoff_preserves_exact_venue_session_and_source_clocks(
+    monkeypatch,
+    suffix,
+    route,
+    venue,
+    session,
+    broker_route,
+    expected_venue,
+    observed_at,
 ):
     monkeypatch.setenv("KORSTOCKSCAN_ENTRY_PRICE_EXACT_CONTEXT_HANDOFF_TTL_SEC", "2")
-    now = datetime(2026, 9, 10, 17, 0, 25, tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
+    now = observed_at.timestamp()
     ws = _ws(now - 0.1)
     ws.update(market_suffix=suffix, market_route=route)
     for kind in ("0B", "0D"):
@@ -389,12 +485,14 @@ def test_nxt_aftermarket_handoff_preserves_exact_route_and_source_clocks(
         None,
         "123456",
         ws,
-        "NXT",
-        "nxt_aftermarket",
+        venue,
+        session,
         now_ts=now,
         recent_candles=[
             {
-                "source_timestamp": "20260910165900",
+                "source_timestamp": (observed_at - timedelta(minutes=1))
+                .replace(second=0)
+                .strftime("%Y%m%d%H%M%S"),
                 "시가": 10000,
                 "고가": 10010,
                 "저가": 9990,
@@ -402,7 +500,7 @@ def test_nxt_aftermarket_handoff_preserves_exact_route_and_source_clocks(
                 "거래량": 100,
             }
         ],
-        broker_route="NXT",
+        broker_route=broker_route,
     )
     stock = {}
     handlers._record_entry_price_exact_context_handoff(
@@ -429,7 +527,7 @@ def test_nxt_aftermarket_handoff_preserves_exact_route_and_source_clocks(
     )
     assert handoff is not None, (context["source_quality"], fields)
     snapshot = handoff["candle_context"]["ai_market_snapshot_v1"]
-    assert snapshot["effective_venue"] == "NXT"
+    assert snapshot["effective_venue"] == expected_venue
     assert snapshot["market_data_route"] == route
     assert snapshot["sources"]["tape"]["age_ms"] == pytest.approx(2200, abs=1)
     assert snapshot["sources"]["tape"]["observed_at"] == (

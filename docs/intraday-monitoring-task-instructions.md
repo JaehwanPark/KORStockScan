@@ -8,15 +8,16 @@
 
 공통 원칙·active/observe/OFF·rollback은 [Plan Rebase §1–§8](./plan-korStockScanPerformanceOptimization.rebase.md), 실행 ID·Due·Acceptance는 현재 KST 체크리스트, 실행·복구 권한은 [runbook](./time-based-operations-runbook.md), producer/consumer는 [traceability](./report-based-automation-traceability.md)의 해당 계약을 따른다. 이 문서의 예시나 과거 완료 ID는 현재 ON 목록·재기동 권한이 아니다.
 
-분석 우선순위는 메인 실거래의 탐색→AI→submit→holding/exit·순익, 독립 위젯/에피소드의 signal→leg/target→custody·자본점유, 공통 broker/WS/원천 품질이다. main/widget/episode/manual 주문번호·수량·청산 owner를 합치지 않는다. 퇴역·OFF·비우선 sim은 §3.6의 누출·자원 간섭만 점검한다.
+분석 우선순위는 메인 실거래의 탐색→기계 타점판정→AI PASS/VETO→submit→holding/exit·순익, 독립 위젯/에피소드의 signal→leg/target→custody·자본점유, 공통 broker/WS/원천 품질이다. 기계정책이 실제 선택된 scope와 기존 fallback 경로를 먼저 구분한다. main/widget/episode/manual 주문번호·수량·청산 owner를 합치지 않는다. 퇴역·OFF·비우선 sim은 §3.6의 누출·자원 간섭만 점검한다.
 
 매 실행에서 현재 PID/code/env, 당일 PREOPEN apply/verify, exact-date policy와 기존 승인 override/만료, broker 잔고·미체결, 설치 trigger와 source-quality를 확인한다. 전일 candidate·코드 구현·timer 설치는 현재 소비 증거가 아니다. runbook/traceability/설치 trigger/실행 snapshot이 충돌하면 `contract_drift`로 fail-closed하고 mtime으로 선택하지 않는다. 해당 OPEN owner는 당일 checklist에서 찾고 완료된 수리는 새 결함·계약 변경·필수 handoff 실패가 있을 때만 재개한다.
 
 ## 1. 목표
 
-최종 목적은 유효한 기회의 참여·체결·보유·청산을 개선해 비용 차감 EV와 누적 순이익을 높이는 것이다. 다음을 분리해 확인한다.
+최종 목적은 유효한 기회의 참여·체결·보유·청산을 개선해 **비용을 차감하고 작은 수익을 빈번하게** 얻되 역행·손실·자본점유까지 고려한 EV와 누적 순이익을 높이는 것이다. 주문 수·익절 승률 자체를 늘리는 것이 목표는 아니다. 다음을 분리해 확인한다.
 
 - 시장의 독립 상승/회귀 모집단에서 scanner 미발견·상위 고갈과 발견 후 최초 차단·미체결을 구분한다.
+- 진입 직후 빠른 수익과 깊은 역행·장시간 횡보 뒤 익절을 구분한다. 사용자 승인 손절/청산 override의 결과를 타점 로직의 효과와 분리하고, 단일 집계 EV나 승률만으로 진입판정의 우열을 확정하지 않는다. 실제 손실·비용은 제외하지 않는다.
 - 주문 가격/수량, probe/residual·AVG_DOWN/PYRAMID, 부분익절/trailing과 보호청산의 실행 가능성·지연·손익을 확인한다.
 - ON 정책의 실제 호출·입력·AI 판단·효과와 source-only handoff, 자연 무표본·구조적 고갈·미배포를 구분한다.
 - 독립 owner의 custody, 정상 process/consumer, source freshness와 smoothing의 지연/whipsaw 영향을 확인한다.
@@ -33,7 +34,19 @@
 
 다음 흐름을 후보·주문·체결·보유변화·매도마다 재구성한다.
 
-`시장·universe source → scanner source fetch/normalize → candidate pool/rank/limit → (A) pruned first-blocker → bounded BBO schedule/observation → source-only terminal 또는 (B) eligibility/source guard → watch budget/slot reservation → scanner promotion/WATCHING → runtime attach → fast precheck → heavy evaluation → entry AI trace/provider/trusted decision → authority gate → entry-price AI → submit guard → 선택된 bounded mode의 probe 또는 normal sizing → residual multi-leg → holding/scale_in → partial TP/trailing/exit → broker reconciliation`
+`시장·universe source → scanner source fetch/normalize → candidate pool/rank/limit → (A) pruned first-blocker → bounded BBO schedule/observation → source-only terminal 또는 (B) eligibility/source guard → watch budget/slot reservation → scanner promotion/WATCHING → runtime attach → fast precheck → heavy evaluation → exact-scope 정책 선택 → 기계 ENTER_NOW/RECHECK/BLOCK → ENTER_NOW만 entry AI trace/provider/PASS·VETO 심사 → authority gate → entry-price AI → submit guard → 선택된 bounded mode의 probe 또는 normal sizing → residual multi-leg → holding/scale_in → partial TP/trailing/exit → broker reconciliation`
+
+기계 주판정이 선택된 경우의 흐름이며 fallback에서는 실제 선택 owner의 원 경로를 기록한다. 기존 감시 평가 호출 안의 판정이지 모든 WS tick마다 독립 실행하는 새 주문 loop가 아니다. 적용 계약은 [기계·AI 정책 및 연속매매 범위](./proposals/entry-prompt-balanced-adjudication-design-review-plan-2026-09-13.md#19-지원-연속매매-전체-scope-확장과-정책-작동-계약)와 현재 `data/runtime/mechanistic_entry_policy/` bundle을 대사한다. 과거 배포 receipt를 현재 PID 성공으로 재사용하지 않는다.
+
+#### 메인 기계 주판정·AI 보조 및 scope 소비
+
+- 지원 연속매매의 exact venue/session별로 기존 `AUTO_PROMOTION_SCOPES`, all-session 승인 pin, `scope_policies`와 loader 선택을 확인한다. KRX 정규장으로 한정하지 않되 NXT 장전·정규·장후 및 통합 SOR의 서로 다른 source/비용/route를 합치지 않는다. 내부 alias를 별도 시장 수로 세지 않고 동시호가·시간외 단일가나 독립 widget/episode에 이 권한을 확대하지 않는다. 통합 경로도 기존 종목 적격성·broker/수량/canary guard를 유지한다.
+- `entry_primary_decision_owner=mechanistic_entry_adjudicator`, `entry_ai_role=auxiliary_risk_screen_pass_veto_no_promotion`, bundle/source/prompt hash와 실제 선택 scope를 확인한다. 호환 status `active_bounded_krx_canary` 문자열만으로 KRX 전용 또는 현재 정책 소비를 판정하지 않는다. 유효하지 않은 pin, 운영자 OFF, 미반영 코드, exact-date env 결손과 정상 fallback을 구분한다.
+- 기계 ENTER_NOW만 AI 심사 대상이다. RECHECK/BLOCK의 Provider 미호출은 정상 분기이며 기계 관측 receipt가 있어야 한다. ENTER_NOW 뒤 trace/request/response가 끊긴 경우와 구분한다. AI PASS만 기존 최종 guard로 진행하고, VETO는 해당 타점 거절, CAUTION/INSUFFICIENT/오류는 무노출 재확인이다. AI가 기계 RECHECK/BLOCK을 승격하거나 hard safety를 덮지 않는지 확인한다.
+- raw AI verdict, `entry_mechanistic_action`, composed action, `entry_probe_intent`, recheck, accepted submit을 따로 집계한다. `WAIT + eligible probe intent`를 관찰 전용 WAIT나 AI 거절로 합치지 않고, PASS/intent를 실제 주문·체결로 세지 않는다. AI 편향/과차단 평가는 기계 ENTER_NOW 중 실제 AI 심사 분모와 같은 입력의 후행 경로로 확인하며 BUY/PASS 비율을 맞추기 위해 강제 출력하지 않는다.
+- 초기/유지 정책과 그룹·종목 residual·micro 자식 정책을 분리한다. `hierarchy_adopted=true`는 개별 rule 선택 증거가 아니다. 자식0이어도 유효 부모 정책은 작동할 수 있으며 challenger 표본 gate를 부모의 추가 진입조건으로 붙이지 않는다. 실제 selected rule/parent hash·유효 임계치·종목 보정·micro receipt가 있을 때만 해당 축의 live 소비를 인정한다.
+- 현재 임계치는 bundle과 `mechanistic_entry_policy_decision`의 실제 사용 위치로 읽는다. micro delta/가격반응은 위험 상쇄·그룹 확인에도 쓰이며, 숫자 다섯 개만 AND로 묶은 BUY 공식이 아니다. setup READY·미해결 위험·유동성 및 최종 guard를 구분한다. spread 상한을 허용 총비용이나 목표수익으로 해석하지 않는다.
+- 선택된 micro 자식은 고정1초 창의 freshness·completeness·route/epoch, 초기 잔량 대비 감소속도·같은 가격 BUY 설명·refill·bid 지지를 함께 확인한다. 잔량 감소 자체는 BUY 근거가 아니며 필수 창 결손 뒤 더 느슨한 부모로 재시도하지 않는다. 자식 미선택 상태의 자료 수집을 실전 조건 활성화로 보고하지 않는다.
 
 확인 항목:
 
@@ -67,7 +80,10 @@ submit drought의 AI·latency·spread·stale·broker 차단 근거가 적정하�
 
 `external market opportunity denominator → scanner source fetch/normalized → candidate pool/rank/limit → universe/source eligible and guarded → watch budget/slot reservation → scanner promotion/WATCHING → runtime attach → fast precheck → heavy evaluation → entry AI trace → provider called → trusted evaluated result → candidate/authority gate → submit safety → submit`
 
+위 AI-first 원천 funnel은 기존 분모로 보존한다. 기계 주판정 cohort에서는 heavy evaluation 뒤 `기계 정책 선택 → ENTER_NOW/RECHECK/BLOCK → ENTER_NOW의 AI screen` 분기를 삽입해 별도로 대사한다. 아래 기존 AI 미도달 taxonomy에 정상 기계 무노출 분기를 강제 매핑하지 말고 실제 machine action/reason과 동일 attempt의 최초 차단을 기록한다. 기계 관측 누락과 정상 Provider 미호출을 분리하며 새 native event/완료 marker를 문서 해석만으로 발명하지 않는다.
+
 - 종목별 최초 benchmark 충족 시각, scanner 최초 fetch·promotion·fast/heavy evaluation·AI·candidate 시각과 각 지연의 p50·p95를 남긴다. benchmark capture 후 동일 code·venue·session·episode의 `forward_exact`만 인과 coverage로 인정한다.
+- 차트상 추세 시작→최초 source 발견/감시, 해당 promotion wave→기계판정, 기계 ENTER_NOW→AI 응답, 응답→submit/실체결을 분리한다. “감시→AI”를 추세 시작→진입 전체 지연으로 해석하지 않는다. 최초 감시 원천이 없으면 가장 최근 trace를 당일 최초로 대체하지 않고, 사후 상승 시작점은 hindsight 진단으로만 사용한다.
 - 포착 성공은 선언된 `scanner_detection_sla`와 opportunity validity 안에 있는 다음 scanner loop에서 판정한다. 이전 promotion, same-day retrospective·symbol-only 근접 join, cross-venue/session, 다른 promotion wave를 성공으로 세지 않고, SLA 밖 늦은 발견은 `late_discovery_after_opportunity_window`로 분리한다.
 - 사건 반복 count가 아닌 unique opportunity-episode 기준의 `source_seen_recall_pct`, `watch_admission_recall_pct`, `promotion_recall_pct`, `fast_precheck_recall_pct`, `heavy_eval_recall_pct`, `candidate_recall_pct`와 분모·분자를 보고한다. primary decision metric이라고 선언한 비율은 실제 named output field, formula·window·sample floor와 일치해야 한다.
 - `benchmark top-N → scanner promotion`의 discovery recall, `promotion → runtime attach/fast precheck/heavy evaluation/provider`의 post-promotion consumption, `trusted AI result → budget/latency/submit`의 downstream conversion은 서로 다른 분모로 보존한다. promotion ID, unique symbol, opportunity episode count를 함께 보고하고 반복 promotion ID를 discovery recall 성공으로 중복 집계하지 않는다.
@@ -170,7 +186,7 @@ promotion 이전에 `reentry_cooldown_no_material_upgrade|market_gainer_reserved
 
 급등·반전·soft-block 이후의 짧은 회귀 기회를 비용 차감 실행 가능성으로 평가한다.
 
-`microstructure_reaction_context`는 context schema v2와 delivery telemetry v3(`computed`, `payload_included`, `confirmed_sent`, `internal_consumed`, cache identity)를 가진 diagnostic/source-quality 입력이며 직접 runtime-apply 권한이 없다. sole ADM/LDM consumer가 사라진 `institutional_flow_context`는 퇴역 상태라 생성·복구 대상으로 삼지 않는다. micro 결과는 현재 Entry AI 입력 품질, risky micro source-only 관측, 위젯·에피소드 exact signal attribution과 source-quality 개선에만 사용하고 LDM/bucket/prompt-bias 경로를 복원하지 않는다.
+`microstructure_reaction_context`는 context schema v2와 delivery telemetry v3(`computed`, `payload_included`, `confirmed_sent`, `internal_consumed`, cache identity)를 가진 diagnostic/source-quality 입력이며 직접 runtime-apply 권한이 없다. sole ADM/LDM consumer가 사라진 `institutional_flow_context`는 퇴역 상태라 생성·복구 대상으로 삼지 않는다. 이 context의 진단 권한과 §2.1의 승인된 기계정책이 소비하는 micro feature/선택된 자식 조건은 별개다. Entry AI 입력 품질, risky micro source-only 관측, 위젯·에피소드 exact signal attribution과 source-quality 경계를 유지하고 LDM/bucket/prompt-bias 경로를 복원하지 않는다.
 
 context의 finite exact outcome 20은 진단 해석 기준이지 별도 양수 EV·PREOPEN 승격 대기열이 아니다. 아래 경제성 비교는 해당 risky micro/timing 정책 owner의 평가에만 적용하며 context 전달·계측 수리의 완료조건으로 전용하지 않는다.
 
@@ -186,6 +202,14 @@ context의 finite exact outcome 20은 진단 해석 기준이지 별도 양수 E
 
 ### 3.2 AI 판단 품질 개선
 
+메인 진입은 §2.1의 기계 분모와 AI screen 분모를 먼저 고정하고, AI가 실제 사용되는 다른 endpoint의 역할은 그대로 보존한다. 메인 PASS/VETO 역할을 holding/exit·entry-price AI 또는 독립 기계에 복사하지 않는다.
+
+기존 payload archive의 `mechanistic_entry_observation_v1`에서 ENTER_NOW/RECHECK/BLOCK 관측·원 입력/hash·scope·micro 저장을 확인한다. 이 schema는 AI request나 Provider 평가 완료가 아니다. 실제 체결 anchor와 미진입 반사실 anchor, 전체 감시 기회와 AI 호출 subset을 분리하여 clean baseline 이후 누적 calibration에 전달한다. 미래 first-hit·익절 결과를 당시 feature에 넣지 않는다.
+
+진입 품질은 동일 exit/cost 계약에서 빠른 수익·횡보 후 수익·깊은 역행 후 회복·손실·censored/결측을 분리한다. 기존 entry-quality label의 시간창/역행 경계를 사용하고, 고가만으로 체결·익절을 합성하지 않는다. 비용 후 +0.10%는 자격 있는 challenger 평가의 EV 기준이지 매 거래 보장수익·고정 익절선·진단 수리 gate가 아니다. 기존 고정 CF target과 총비용 때문에 달성 불가능한 경우는 평가 계약의 상한으로 별도 보고하며 손실행 삭제·비용 축소·실제 손절 변경으로 해결하지 않는다. R0–R3 비교비용을 모든 기계 scope의 비용으로 복사하지 않고 해당 exact-date economic owner와 실제 비용 결손을 확인한다.
+
+장후 연결은 기존 calibration의 `hierarchical_entry_quality.runtime_extension`(KRX 호환) 및 `runtime_extensions_by_scope`→optimizer handoff/verifier→dated machine+AI bundle→기존 장전/loader다. 종목·그룹·micro는 exact scope의 원천·전체 비용·날짜분리 holdout·parent binding을 확인하고 KRX 학습값을 NXT 최적값으로 복사하지 않는다. 장중에는 source/consumer 계약과 기존 OPEN handoff를 확인하며 무거운 장후 학습을 조기 실행하지 않는다. 최초 승인 뒤 일별 정상 승계에 재승인을 요구하지 않고, 새 후보 미달이면 incumbent를 유지한다. 07:35 freeze 뒤 당일 bundle 수동 교체나 자동 파라미터 변경은 하지 않는다.
+
 AI가 사용되는 endpoint마다 세 층을 분리해 점검한다.
 
 1. 호출 품질: provider, model, transport, timeout, failback, parse, cache, response ID
@@ -196,7 +220,7 @@ AI가 사용되는 endpoint마다 세 층을 분리해 점검한다.
 
 Main AI R0→R3의 목적은 현재 프롬프트를 고정 보존하는 것이 아니라, 새로 성숙한 동일 payload/outcome 근거가 들어올 때마다 stage별 Control 대비 더 나은 Candidate 프롬프트를 탐색하고 다음 검토 가능한 manifest를 갱신하는 것이다. 따라서 “사용자가 프롬프트 변경을 원할 때만 실행”하지 않는다. R0 exact source 수집, R1 daily 해석, R2 cumulative/paired 경제성 비교는 자연 표본과 maturity가 생길 때 계속 누적한다. R3의 `research_candidates`와 full-gate `candidates`를 분리한다. 연구/정상 무표본·부분 정상행 학습을 full-gate 미달이라는 이유로 실패 처리하지 않되, 적용 검토용 후보는 source-quality, 동일 payload, complete terminal, 비용 차감 EV와 해당 표본 floor를 통과해야 한다. 두 출력 모두 자체 `runtime_effect=false`다. 프롬프트 변경·provider/model 변경·실주문 반영은 별도 review와 target-date PREOPEN/PID 계약 전에는 수행하지 않는다.
 
-현행 #76→#82→#78은 self-hash·격리 cohort·부분 정상행 학습을 이용한 offline 평가 환류다. #81 legacy runtime은 `LEGACY_RUNTIME_AUTHORITY_ENABLED=False`이므로 R3/#82 증가를 실적용 대기로 보고하지 않는다. 지원 KRX V2.14/V2.15의 별도 `entry_setup_live_policy` 승격·PREOPEN·PID receipt와 분리한다. 코드 보완과 자연 late-follower generation/경제성은 현재 checklist의 해당 acceptance에서 분리한다.
+현행 #76→#82→#78은 self-hash·격리 cohort·부분 정상행 학습을 이용한 offline 평가 환류다. #81 legacy runtime은 `LEGACY_RUNTIME_AUTHORITY_ENABLED=False`이므로 R3/#82 증가를 그 legacy의 실적용 대기로 보고하지 않는다. 별도 `entry_setup_live_policy`의 지원 연속매매 exact-scope V2.14 fallback/V2.15 계열 선택·PREOPEN·PID receipt와 분리한다. 초기 machine+AI bundle이 존재해도 검증된 같은 scope의 AI base prompt 자동승계를 막지 않으며 기계 주판정·AI PASS/VETO 역할 부록을 유지하는지 확인한다. 코드 보완과 자연 late-follower generation/경제성은 현재 checklist의 해당 acceptance에서 분리한다.
 
 Provider 미실행 source-only 모드의 `exit=2/source_only_blocked_or_deferred`는 producer가 명시한 계약과 필수 artifact를 확인한 경우에만 source warning으로 구분한다. 일반 실행·strict verifier 실패의 예외가 아니다. 정상 checkpoint와 bounded resumable 상태만 재사용하며 terminal schema/provider/receipt rejection을 무제한 새 retry로 열지 않는다.
 
@@ -269,16 +293,17 @@ Holding/Exit ADM이 퇴역했어도 `holding_flow_ofi_smoothing`은 기존 holdi
 
 - Plan Rebase current-owner override와 이 문서의 현행 우선순위를 먼저 확인하고, ADM/LDM·bucket·greenfield·Swing·retired sim-scale-in을 현재 owner 목록에서 제거했는지
 - 메인 봇 PID, 시작 시각, commit, source-dirty, runtime env와 당일 ON/OFF runtime 목록
+- `data/runtime/runtime_release_selection.json`의 선택 root/commit, 공통 cron launcher, 실제 PID root/코드·공유 경로와 machine+AI bundle/source hash를 분리 대사한다. 문서 receipt나 미래 시각을 넣은 정책 preview는 실제 기동·시장 개장·주문 성공이 아니다. 필요 시 router `--check-cron`/`--print-plan`만 조회하며 선택 release 직접 수정·selector 교체·미래 env 복사·수동 기동은 일반 모니터링 권한이 아니다. 독립 서비스의 manifest/drop-in은 메인 selector로 대체하지 않는다.
 - launcher와 bot source commit/hash, exact-date verifier의 PID mismatch/missing, 설치 계약의 퇴역 canonical env 전수 explicit OFF. 이후 문서-only commit과 실행 코드 commit 차이는 실제 runtime source diff와 분리한다.
 - 전일 postclose candidate와 당일 PREOPEN apply plan/runtime env/verify의 generation·hash·selection diff, launcher load 시각과 현재 PID의 exact env/policy receipt
 - 전일 요약의 `source_generation_contract`와 checklist `POSTCLOSE_SUMMARY_SOURCES`, 마지막 `--require-summary-handoff` 성공을 실제 source date/hash로 대사. 자정 이후에도 원 source date와 현재 runtime을 혼합하지 않고, 이전 PASS artifact로 최신 명령 실패를 가리지 않음. 결손 발견은 영향 owner에 handoff하며 장중 전체 postclose/provider 재실행을 자동 시작하지 않음
 - 위젯·에피소드 systemd service/timer, exact-date policy/profile hash와 실제 process 상태
 - 당일 PREOPEN apply plan/runtime env, active date, policy version, dependency와 operator override
 - operator policy lock과 실행 mutex를 분리. 오래됐거나 새 EV 재검증이 없다는 이유로 운영 override를 해제하지 않음. 실행 lock 파일 존재만으로 stale을 선언하거나 삭제하지 않고 실제 점유 PID/시작시각·owner를 확인
-- 실제 AI provider/failback/timeout/parse 상태와 `provider=none` 발생 여부
+- 실제 AI provider/failback/timeout/parse 상태와 `provider=none` 발생 이유. 기계 RECHECK/BLOCK의 정상 미호출은 ENTER_NOW 뒤 필수 screen 결손과 분리
 - Kiwoom REST/WS 연결, 가격·호가·체결·분봉 freshness와 venue provenance
 - 공식 보통주 master에 결속된 독립 시장 전체 `as_of rising benchmark`의 source path·hash·수집 시각·선정 정의·전체 census와 scanner 외부 미관측 종목 재현 가능성
-- scanner source fetch/normalize → candidate pool/rank/limit → universe/source guard → watch budget/slot → promotion/WATCHING → runtime attach → fast/heavy evaluation → AI/authority gate의 unique-key count·dedup·unmatched·지연과 최초 미도달 원인 보존식
+- scanner source fetch/normalize → candidate pool/rank/limit → universe/source guard → watch budget/slot → promotion/WATCHING → runtime attach → fast/heavy evaluation → 기계/AI screen/authority gate의 unique-key count·dedup·unmatched·지연과 최초 미도달 원인 보존식
 - scanner-pruned 전수 census와 bounded BBO schedule/observation의 분리, collector active/pending/daily bound, worker/receipt failure, exact route와 full-population 외삽 금지
 - Kiwoom 국내주식 token-wide 조회 5회/초, source-only 4/5 reservation, 주문 버킷 분리, HTTP/body-limit shared cooldown과 owner/PID/request-code별 admission/gap provenance
 - 현재 계좌 보유, owner별 ledger/custody, 미체결 주문, 주문가능금액과 broker reconciliation
@@ -344,6 +369,8 @@ Holding/Exit ADM이 퇴역했어도 `holding_flow_ofi_smoothing`은 기존 holdi
 
 blocked 상태는 `source_quality`, `sample_floor`, `external_opportunity_denominator`, `scanner_recall_instrumentation`, `scanner_discovery`, `watch_budget_or_slot`, `post_promotion_handoff`, `submit_drought`, `env_mapping`, `runtime_hook`, `post_apply_attribution`, `AI_review`, `safety_or_broker_guard`, `user_authority`로 분류하고, owner artifact·관측 근거·다음 보완·acceptance test를 각각 기록한다. 단순히 “계약 미완료” 또는 “데이터 부족”으로 종결하지 않는다.
 
+기계 경로에서는 유효 부모 사용·검증된 자식 선택·부모 유지/자식 미달·정책 fallback·AI screen 차단을 해당 native reason과 함께 구분한다. 기계 ENTER_NOW 비율, 그중 AI PASS/VETO/CAUTION·오류, accepted submit/fill 전환을 따로 보고한다. 초기정책 존재를 양수 EV 입증으로, 자식 후보0을 정책 전체 부재나 기동 장애로 바꾸지 않는다.
+
 자동연장 runtime은 active key, `enabled=true`, 당일 active date, dependency, policy file/version, launcher/PID 반영과 실제 pass/block/recheck/submit/exit 수를 확인한다. 자동연장은 효용성 승인이나 live 승격 근거가 아니다.
 
 process 이름이나 PID 존재만으로 정상이라고 하지 않는다. `declared owner → installed/enabled trigger → expected window → PID/exit/heartbeat → artifact 또는 valid terminal skip → registered consumer → consumed field → decision/report role`을 연결한다. 예정 시각 전 one-shot 종료, reviewed disabled/retired, eligible input 0이 입증된 valid-empty는 dead/no-op에서 제외한다. 반대로 성공 exit인데 artifact가 없거나 stale하고 consumer receipt도 없으면 `no_op_success`, source를 계속 만들지만 현재 consumer가 없으면 `orphan_producer|unconsumed_artifact`다. 이 판정만으로 process를 kill·disable·restart하지 않는다.
@@ -366,6 +393,8 @@ WebSocket error burst는 오류 건수만으로 bot 재기동이나 전략 변�
 - 표본을 맞추기 위한 row 복제, owner·venue·session 병합, right-censored/HELD의 completed 변환, pre-baseline 재사용, child provenance 삭제, sample floor 하향, hard-safety·broker guard·threshold 완화는 금지한다.
 
 장중 shortage 판정은 source-only 계측·parser/schema·report·test·instrumentation 보완과 당일/장후 workorder handoff까지만 권한을 가진다. live threshold, provider, bot, cap, 수량, 주문 또는 safety 변경이 필요하면 `user_authority`로 분리한다.
+
+계층 challenger 부족은 실제 calibration/holdout·종목 residual·micro complete-window 분모로 기록한다. 공통 refinement의 종목/일수 조건을 모든 그룹·종목에 중첩하거나, 부모 사용에 자식 승격 floor를 붙이지 않는다. AI 호출 표본만으로 기계 학습 모집단 전체를 대표하지 않고 Provider 미호출 관측의 저장·label 연결부터 확인한다. 형식상 많은 raw 행을 독립 기회/경제성 pair로 세지 않는다.
 
 최초 고갈 원인이 수집·저장·전달의 구현 결함이면 §4.3을 같은 실행에서 수행한다. 구조적 결손이 확인됐는데도 `hold_sample`이나 유한 근거 없는 ETA로 돌려 장후까지 수리를 미루지 않는다. 반영 승인 또는 외부 원천이 필요한 부분은 코드 수리와 별도 차단 상태로 남긴다.
 
@@ -406,11 +435,12 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project --print
 보고에는 다음을 포함한다. 세부 field/분모는 앞 절의 계약을 사용하며 같은 내용을 반복하지 않는다.
 
 1. 체크리스트: ID·Due/window·이번 실행/점검·최신 receipt·완료/대기/미래/기한 경과/권한·외부 차단/범위 밖, OPEN 미분류 0과 다음 조건.
-2. 메인 탐색/submit: 독립 rising benchmark source/hash·discovery/post-promotion/downstream 분모·recall/지연/최초 결손, executable 놓친 기회·적정 차단, probe/residual/scale-in/매도. Prune observer의 전수/표본·호출 bound·shared budget·route/coverage/censor gap과 외삽 금지.
+2. 메인 탐색/submit: 독립 rising benchmark source/hash·discovery/post-promotion/downstream 분모·recall/지연/최초 결손, 추세 시작/최초 감시/기계판정/AI/실체결 시각의 구분, executable 놓친 기회·적정 차단, probe/residual/scale-in/매도. Prune observer의 전수/표본·호출 bound·shared budget·route/coverage/censor gap과 외삽 금지.
 3. 위젯/에피소드: policy/override·signal/profile/leg·fill/target/terminal·custody·실현비용·EV/자본점유, 원본/projection/승인 ledger의 중복 없는 소비 대사.
 4. Micro/AI/smoothing: passive feasibility·first-hit/tail·depletion/refill/trade backing, limit-down ordered 0B+0D, observer/disk, AI 호출/입력/판단·R0–R3 exact replay/handoff, raw/smoothed 지연/손익. 실제 runtime 효과와 source-only를 분리.
 5. 운영: expected process→PID/lock/heartbeat→output/consumer, dead/hung/duplicate/no-op/orphan과 valid-empty, broker/venue/owner 충돌, 당일 runtime의 자연 무표본·미호출·미반영 및 퇴역/OFF 누출·자원 간섭.
 6. 수집 결손/수리: 최초 단절·영향 signal/입력창, 원천 미수집/파싱·전달/후행 자동화 구분, 즉시 수리·review/검증·반영 권한/PID, 새 저장/consumer receipt·rollback·과거 비가역 손실·잔여 자연/경제성 acceptance.
 7. 부족 ledger: `shortage_id`·floor denominator·required/current/deficit·first depleted stage·funnel counts·분류·finite ETA 또는 대기 불가 이유·다음 due/재분류 trigger/acceptance. 미해결 병목과 후속 owner.
+8. 기계·AI 정책: 선택 release와 현재 PID·exact scope/bundle/prompt hash, 부모/그룹/종목/micro의 실제 선택 상태, 기계 action→AI screen→intent→submit/fill 보존식, 빠른 순익·역행/횡보·손실/censored의 분리, 누적 장후 갱신·다음 consumer와 잔여 자연/경제성 acceptance. 정책 preview·발행·배포·실제 소비를 각각 판정.
 
 진단·코드 수리 완료와 실제 경제성 성공은 독립 판정이다. 신규 경제 표본이 없다는 이유만으로 닫힌 수리 검토를 취소하지 않으며, 수리 완료로 실현 EV 개선을 선언하지도 않는다. 보고서나 runtime 이름의 존재는 효과의 증거가 아니다. `identified → source quality → 해당 owner의 승인·실제 runtime 소비 receipt → executable 체결·terminal outcome → 비용 차감 rolling/cumulative EV → post-apply attribution`이 연결됐을 때만 경제성 효과를 판정한다. 소비 receipt는 해당 계약의 PREOPEN/PID 또는 별도 승인 승격 receipt를 사용하며 다른 owner의 추가 승격 gate를 요구하지 않는다. 장중 생성된 장후/다음-session source-only artifact는 authority에 맞는 intended last consumer와 handoff까지만 보고하고 다음 PREOPEN/PID 소비나 실주문 효과를 선행 주장하지 않는다.

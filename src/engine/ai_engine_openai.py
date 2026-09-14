@@ -2416,7 +2416,23 @@ class GPTSniperEngine:
             }
 
         probe_intent = composed.get("entry_probe_intent") is True
-        action = "WAIT" if probe_intent else str(composed.get("action") or "DROP")
+        composed_action = str(composed.get("action") or "DROP").strip().upper()
+        # A machine-selected entry needs a binding AI PASS to reach the
+        # existing submit guards.  Do not turn that exact ENTER_NOW + PASS
+        # combination into a WAIT merely because the composer also emits the
+        # historical probe marker: that marker is for recheck ownership, not a
+        # veto of a current confirmed entry.  Quantity, freshness, price,
+        # custody, cooldown and broker gates remain downstream owners.
+        machine_pass_submit_candidate = bool(
+            mechanistic_primary
+            and composed_action == "BUY"
+            and str(composed.get("entry_mechanistic_action") or "").upper()
+            == "ENTER_NOW"
+            and str(risk.get("risk_verdict") or "").upper() == "PASS"
+        )
+        # Keep the pre-existing recent-exit reentry check below in force before
+        # promoting this candidate to the normal submit path.
+        action = "WAIT" if probe_intent else composed_action
         action = action.strip().upper()
         recent_exit_context = (
             exact_payload.get("recent_exit_context")
@@ -2430,7 +2446,7 @@ class GPTSniperEngine:
         recent_exit_probe_blocked = False
         recent_exit_price_vs_exit_pct = None
         if (
-            probe_intent
+            (probe_intent or machine_pass_submit_candidate)
             and recent_exit_policy == "fresh_post_exit_confirmation_required"
         ):
             try:
@@ -2451,12 +2467,38 @@ class GPTSniperEngine:
             if recent_exit_probe_blocked:
                 probe_intent = False
 
+        machine_pass_submit_candidate = bool(
+            machine_pass_submit_candidate and not recent_exit_probe_blocked
+        )
+        if machine_pass_submit_candidate:
+            action = "BUY"
+            probe_intent = False
+        elif (
+            mechanistic_primary
+            and composed_action == "BUY"
+            and str(composed.get("entry_mechanistic_action") or "").upper()
+            == "ENTER_NOW"
+            and str(risk.get("risk_verdict") or "").upper() == "PASS"
+            and recent_exit_probe_blocked
+        ):
+            # A PASS never overrides the existing fresh-post-exit reentry
+            # contract; keep it as a bounded observation/recheck instead.
+            action = "WAIT"
+
         verdict = str(risk.get("risk_verdict") or "INSUFFICIENT").upper()
         setup_family = str(composed.get("entry_setup_family") or "NO_VALID_SETUP")
         evidence = {
             "setup": (composed.get("evidence") or {}).get("setup", "no_setup"),
-            "trigger": "recovery_required" if probe_intent else "failed",
-            "positive_edge": "moderate" if probe_intent else "none",
+            "trigger": (
+                "confirmed"
+                if machine_pass_submit_candidate
+                else "recovery_required" if probe_intent else "failed"
+            ),
+            "positive_edge": (
+                "supported"
+                if machine_pass_submit_candidate
+                else "moderate" if probe_intent else "none"
+            ),
             "adverse_risk": {
                 "PASS": "low",
                 "CAUTION": "moderate",
@@ -2483,12 +2525,16 @@ class GPTSniperEngine:
         # here would create an accidental AI score gate.  Keep one neutral
         # compatibility prior for every deterministically eligible probe.
         score = (
-            70
-            if probe_intent
+            max(75, confidence)
+            if machine_pass_submit_candidate
             else (
-                50
-                if action == "WAIT"
-                else min(49, max(0, round(49 * (1.0 - confidence / 100.0))))
+                70
+                if probe_intent
+                else (
+                    50
+                    if action == "WAIT"
+                    else min(49, max(0, round(49 * (1.0 - confidence / 100.0))))
+                )
             )
         )
         return {
@@ -2520,23 +2566,36 @@ class GPTSniperEngine:
             ),
             "decision_quality_response_schema": ENTRY_RISK_ADJUDICATION_SCHEMA,
             "decision_quality_score_semantics": (
-                "fixed_compatibility_prior_not_ai_quality_gate"
-                if probe_intent
-                else "deterministic_setup_veto_or_insufficient"
+                "machine_pass_existing_submit_guard_candidate"
+                if machine_pass_submit_candidate
+                else (
+                    "fixed_compatibility_prior_not_ai_quality_gate"
+                    if probe_intent
+                    else "deterministic_setup_veto_or_insufficient"
+                )
             ),
             "decision_quality_runtime_action_mapping": (
-                f"{version_token}_probe_candidate_to_bounded_wait_probe"
-                if probe_intent
-                else f"{version_token}_composed_non_exposure_preserved"
+                f"{version_token}_machine_pass_to_existing_submit_guard"
+                if machine_pass_submit_candidate
+                else (
+                    f"{version_token}_probe_candidate_to_bounded_wait_probe"
+                    if probe_intent
+                    else f"{version_token}_composed_non_exposure_preserved"
+                )
             ),
+            "entry_machine_pass_submit_candidate": machine_pass_submit_candidate,
             "entry_probe_intent": probe_intent,
             "entry_probe_intent_status": (
-                "eligible_wait_probe"
-                if probe_intent
+                "eligible_machine_pass_submit_candidate"
+                if machine_pass_submit_candidate
                 else (
-                    "recent_clean_profit_reentry_not_confirmed"
-                    if recent_exit_probe_blocked
-                    else "not_eligible"
+                    "eligible_wait_probe"
+                    if probe_intent
+                    else (
+                        "recent_clean_profit_reentry_not_confirmed"
+                        if recent_exit_probe_blocked
+                        else "not_eligible"
+                    )
                 )
             ),
             "entry_probe_intent_prompt_version": (selected_prompt_version),

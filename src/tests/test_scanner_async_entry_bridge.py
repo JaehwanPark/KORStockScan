@@ -597,9 +597,12 @@ def test_scanner_entry_ai_attempt_promotes_trusted_terminal_result():
     assert stock["entry_setup_live_policy_mode"] == "one_share_exploration"
     assert stock["entry_opportunity_recheck_exploration_probe_only"] is True
     assert stock["entry_setup_bounded_exploration_probe_only"] is True
-    assert stock["entry_split_probe_residual_expand_forbidden"] is True
-    assert stock["entry_split_probe_scale_in_forbidden"] is True
-    assert stock["probe_expand_forbidden"] is True
+    assert stock["entry_setup_prompt_quantity_owner"] == "position_sizing_dynamic_formula"
+    assert stock["entry_setup_prompt_residual_owner"] == "entry_split_order_plan"
+    assert stock["entry_setup_prompt_scale_in_owner"] == "scale_in_split_order_plan"
+    assert "entry_split_probe_residual_expand_forbidden" not in stock
+    assert "entry_split_probe_scale_in_forbidden" not in stock
+    assert "probe_expand_forbidden" not in stock
     assert stock["entry_setup_live_policy_max_daily_exploration_probes"] == 3
     assert "_scanner_entry_ai_transport_retry_after_epoch" not in stock
     assert "_scanner_entry_ai_transport_retry_until_epoch" not in stock

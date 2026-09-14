@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from src.engine.risk.manual_control_exclusion import machine_owner_scope_source
 from src.trading.config.symbol_owner_standing_authority import (
     STANDING_APPLY_BINDING_SCHEMA,
     SymbolOwnerStandingAuthorityError,
@@ -190,6 +191,16 @@ def test_expected_scope_covers_all_current_widget_and_episode_symbols():
     assert set(LEGACY_MACHINE_OWNER_SCOPE_LABELS) == set(
         expected_machine_symbol_owners(date(2026, 9, 11))
     )
+
+
+def test_tracked_machine_scope_markers_cover_current_runtime_scope():
+    missing = [
+        symbol
+        for symbol in sorted(LEGACY_MACHINE_OWNER_SCOPE_LABELS)
+        if not machine_owner_scope_source(symbol)
+    ]
+
+    assert missing == []
 
 
 def test_auto_apply_skips_stale_registry_symbol_and_applies_safe_subset(

@@ -5573,9 +5573,12 @@ def test_pre_submit_entry_ai_authority_retry_refreshes_missing_ai(monkeypatch):
     assert stock["entry_setup_live_policy_mode"] == "one_share_exploration"
     assert stock["entry_opportunity_recheck_exploration_probe_only"] is True
     assert stock["entry_setup_bounded_exploration_probe_only"] is True
-    assert stock["entry_split_probe_residual_expand_forbidden"] is True
-    assert stock["entry_split_probe_scale_in_forbidden"] is True
-    assert stock["probe_expand_forbidden"] is True
+    assert stock["entry_setup_prompt_quantity_owner"] == "position_sizing_dynamic_formula"
+    assert stock["entry_setup_prompt_residual_owner"] == "entry_split_order_plan"
+    assert stock["entry_setup_prompt_scale_in_owner"] == "scale_in_split_order_plan"
+    assert "entry_split_probe_residual_expand_forbidden" not in stock
+    assert "entry_split_probe_scale_in_forbidden" not in stock
+    assert "probe_expand_forbidden" not in stock
     assert stock["entry_setup_live_policy_max_daily_exploration_probes"] == 3
     assert retry["pre_submit_entry_ai_authority_retry_contract_status"] == "pass"
     assert (
@@ -43106,7 +43109,7 @@ def test_post_probe_nxt_requires_speed_and_distinguishes_wait_from_drop_authorit
     assert ai_drop["post_probe_hard_veto"] is True
 
 
-def test_entry_setup_exploration_probe_never_submits_residual(monkeypatch):
+def test_entry_setup_exploration_defers_residual_decision_to_split_owner(monkeypatch):
     aborts = []
     monkeypatch.setattr(
         state_handlers,
@@ -43132,7 +43135,7 @@ def test_entry_setup_exploration_probe_never_submits_residual(monkeypatch):
     )
 
     assert submitted is False
-    assert aborts == [("123456", "entry_setup_bounded_exploration_probe_only", True)]
+    assert aborts == [("123456", "probe_fill_submit_contract_missing", True)]
 
 
 def test_entry_setup_exploration_micro_relief_is_bounded_and_source_qualified():
@@ -43430,7 +43433,7 @@ def test_non_exploration_scale_in_block_is_not_cleared_as_stale_arm():
     assert stock["probe_expand_forbidden"] is True
 
 
-def test_one_share_exploration_scale_in_block_reports_terminal_owner(monkeypatch):
+def test_probe_lifecycle_scale_in_block_reports_split_owner(monkeypatch):
     stock = {
         "entry_opportunity_recheck_exploration_probe_only": True,
         "entry_split_probe_scale_in_forbidden": True,
@@ -43448,16 +43451,12 @@ def test_one_share_exploration_scale_in_block_reports_terminal_owner(monkeypatch
 
     assert decision["allowed"] is False
     assert decision["reason"] == "probe_expand_forbidden"
-    assert decision["scale_in_block_owner"] == (
-        "entry_setup_v2_14_one_share_exploration"
-    )
+    assert decision["scale_in_block_owner"] == "entry_split_probe_lifecycle"
     assert decision["scale_in_block_authority"] == (
-        "terminal_one_share_exploration_residual_and_scale_in_forbidden"
+        "probe_lifecycle_scale_in_forbidden"
     )
-    assert decision["rising_missed_scout_pyramid_bridge_applicable"] is False
-    assert decision["rising_missed_scout_pyramid_bridge_non_applicable_reason"] == (
-        "owner_priority_entry_setup_one_share_exploration"
-    )
+    assert decision["rising_missed_scout_pyramid_bridge_applicable"] is True
+    assert decision["rising_missed_scout_pyramid_bridge_non_applicable_reason"] is None
 
     logged = []
     monkeypatch.setattr(
@@ -43477,13 +43476,11 @@ def test_one_share_exploration_scale_in_block_reports_terminal_owner(monkeypatch
         gate=decision,
     )
 
-    assert logged[0]["scale_in_block_owner"] == (
-        "entry_setup_v2_14_one_share_exploration"
-    )
-    assert logged[0]["rising_missed_scout_pyramid_bridge_applicable"] is False
+    assert logged[0]["scale_in_block_owner"] == "entry_split_probe_lifecycle"
+    assert logged[0]["rising_missed_scout_pyramid_bridge_applicable"] is True
 
 
-def test_exploration_submit_cap_guard_rechecks_qty_and_durable_count(monkeypatch):
+def test_exploration_submit_cap_guard_rechecks_durable_count_not_quantity(monkeypatch):
     stock = {
         "entry_opportunity_recheck_exploration_probe_only": True,
         "entry_setup_live_policy_max_daily_exploration_probes": 3,
@@ -43499,7 +43496,7 @@ def test_exploration_submit_cap_guard_rechecks_qty_and_durable_count(monkeypatch
         qty=1,
         now_ts=datetime(2026, 8, 7, 9, 10, tzinfo=state_handlers._KST).timestamp(),
     )
-    wrong_qty = state_handlers._entry_setup_exploration_submit_cap_guard(
+    dynamic_qty = state_handlers._entry_setup_exploration_submit_cap_guard(
         stock,
         qty=2,
         now_ts=datetime(2026, 8, 7, 9, 10, tzinfo=state_handlers._KST).timestamp(),
@@ -43523,8 +43520,8 @@ def test_exploration_submit_cap_guard_rechecks_qty_and_durable_count(monkeypatch
 
     assert available["allowed"] is True
     assert available["entry_setup_exploration_daily_probe_count"] == 2
-    assert wrong_qty["allowed"] is False
-    assert wrong_qty["reason"] == "exploration_probe_qty_not_one"
+    assert dynamic_qty["allowed"] is True
+    assert dynamic_qty["reason"] == "exploration_probe_submit_cap_available"
     assert exhausted["allowed"] is False
     assert exhausted["reason"] == "exploration_probe_daily_cap_exhausted"
     assert duplicate_bundle_leg["allowed"] is False
@@ -53420,12 +53417,13 @@ def test_terminal_exploration_restrictions_survive_new_ai_decision(evidence):
     ("entry_setup_live_policy_mode", "one_share_exploration"),
     ("entry_split_probe_terminal_abort_reason", "entry_setup_bounded_exploration_probe_only"),
 ])
-def test_exploration_identity_blocks_add_even_when_generic_flags_lost(marker, value):
+def test_exploration_identity_does_not_claim_scale_in_authority(marker, value):
     stock = {marker: value, "entry_split_probe_phase": "aborted",
              "entry_split_probe_scale_in_recheck_allowed": True}
     result = state_handlers.can_consider_scale_in(
         stock, "123456", {}, "SCALPING", "NORMAL",
         skip_add_judgment_lock=True, bypass_scalping_buy_window=True,
     )
-    assert not result["allowed"]
-    assert result["scale_in_block_owner"] == "entry_setup_v2_14_one_share_exploration"
+    assert result.get("scale_in_block_owner") != (
+        "entry_setup_v2_14_one_share_exploration"
+    )
