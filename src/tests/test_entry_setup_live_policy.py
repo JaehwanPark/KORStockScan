@@ -166,7 +166,7 @@ def test_initial_machine_policy_resolves_without_performance_candidate(
     assert resolved["enabled"] is True, resolved
     assert resolved["machine_bundle_sha256"] == bundle["bundle_sha256"]
     assert resolved["primary_decision_owner"] == "mechanistic_entry_adjudicator"
-    assert resolved["ai_policy_disposition"] == "initial_auxiliary_prompt"
+    assert resolved["ai_policy_disposition"] == "compact_auxiliary_prompt"
     assert resolved["scope_authority"] == "operator_all_session_auto_promotion"
     monkeypatch.setattr(
         rollout,

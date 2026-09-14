@@ -56,6 +56,59 @@ def test_initial_policy_does_not_require_promotion_candidate(tmp_path):
     assert policy.load(data_root=tmp_path, target_date="2026-09-14") == bundle
 
 
+def test_frozen_legacy_prompt_bundle_remains_readable(tmp_path):
+    bundle = initial(tmp_path)
+    bundle["ai_policy"].update(
+        prompt_version=policy.LEGACY_AI_VERSION,
+        variant=policy.LEGACY_AI_VARIANT,
+        system_prompt=policy.auxiliary_prompt(bundle["historical_context"]),
+    )
+    bundle["ai_policy"]["system_prompt_sha256"] = policy.digest(
+        bundle["ai_policy"]["system_prompt"]
+    )
+    bundle["bundle_sha256"] = policy.digest(
+        {key: value for key, value in bundle.items() if key != "bundle_sha256"}
+    )
+    calibration._atomic_write_json(
+        policy.root(tmp_path) / "policy_2026-09-14.json", bundle
+    )
+
+    loaded = policy.load(data_root=tmp_path, target_date="2026-09-14")
+
+    assert loaded["ai_policy"]["prompt_version"] == policy.LEGACY_AI_VERSION
+    assert "Historical policy context" in loaded["ai_policy"]["system_prompt"]
+
+
+def test_next_preopen_publish_replaces_legacy_prompt_without_threshold_change(tmp_path):
+    legacy = initial(tmp_path)
+    legacy["ai_policy"].update(
+        prompt_version=policy.LEGACY_AI_VERSION,
+        variant=policy.LEGACY_AI_VARIANT,
+        system_prompt=policy.auxiliary_prompt(legacy["historical_context"]),
+    )
+    legacy["ai_policy"]["system_prompt_sha256"] = policy.digest(
+        legacy["ai_policy"]["system_prompt"]
+    )
+    legacy["bundle_sha256"] = policy.digest(
+        {key: value for key, value in legacy.items() if key != "bundle_sha256"}
+    )
+    calibration._atomic_write_json(
+        policy.root(tmp_path) / "policy_2026-09-14.json", legacy
+    )
+
+    successor = policy.publish(
+        source(tmp_path, "2026-09-14"),
+        data_root=tmp_path,
+        now=datetime(2026, 9, 14, 21, tzinfo=policy.KST),
+    )
+
+    assert successor["target_date"] == "2026-09-15"
+    assert successor["machine_policy"] == legacy["machine_policy"]
+    assert successor["previous_bundle_sha256"] == legacy["bundle_sha256"]
+    assert successor["ai_policy"]["prompt_version"] == policy.AI_VERSION
+    assert successor["ai_policy"]["system_prompt"] == policy.compact_auxiliary_prompt()
+
+
 def test_all_continuous_adoption_carry_and_exact_scope_projection(tmp_path):
     from src.engine.scalping.entry_setup_scalping_rollout import AUTO_PROMOTION_SCOPES
 
@@ -236,10 +289,15 @@ def test_daily_no_candidate_carries_machine_and_refreshes_ai_context(tmp_path):
     assert successor["target_date"] == "2026-09-15"
     assert successor["machine_policy"] == previous["machine_policy"]
     assert successor["previous_bundle_sha256"] == previous["bundle_sha256"]
+    # The compact role is intentionally immutable; daily historical metadata
+    # must not be spliced into the executed prompt.
     assert (
         successor["ai_policy"]["system_prompt_sha256"]
-        != previous["ai_policy"]["system_prompt_sha256"]
+        == previous["ai_policy"]["system_prompt_sha256"]
     )
+    assert successor["historical_context"] != previous["historical_context"]
+    assert successor["ai_policy"]["prompt_version"] == policy.AI_VERSION
+    assert successor["ai_policy"]["variant"] == policy.AI_VARIANT
     assert successor["machine_disposition"] == "incumbent_carried"
 
 

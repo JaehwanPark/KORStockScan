@@ -2502,6 +2502,9 @@ def record_ai_decision_trace(
                 "entry_ai_followup_disposition",
                 "entry_ai_followup_authority",
                 "entry_setup_live_policy_scope_authority",
+                "entry_setup_live_policy_selected_prompt_version",
+                "auxiliary_system_prompt_sha256",
+                "entry_ai_prompt_variant",
             )
             if key in merged
         }

@@ -2,6 +2,8 @@
 
 작성: `2026-09-13 KST`. 범위: main SCALPING entry의 설계점검과 후속 구현계획. 최초 작성은 문서-only였다. 이후 사용자의 구현·review/fix 지시에 따른 코드·격리 replay 결과는 §9에 추가한다. 정책 발행·배포·기동 완료를 뜻하지 않는다.
 
+최신 설계 변경: **9/14 사용자 요청에 따른 축약형 직접 전환·장후 변경 계획은 [§22](#22-보조심사-전용-축약형-직접-전환과-장후작업-변경계획)를 따른다.** 최초 전환에 기존 전체형 대조군·paired 우위·경제성 표본 대기를 요구하는 §21의 제안은 대체됐다. 과거 구현·배포 receipt는 그 당시 범위로 보존한다. §22는 계획이며 실행 receipt가 아니다.
+
 ## 1. 결론과 목표
 
 권장안은 **기존 단일 AI 호출과 setup ledger를 유지하면서, ‘위험 하나라도 찾으면 대기’ 계약을 ‘기회와 위험을 함께 판정’하는 계약으로 교정**하는 것이다. BUY 비율을 목표로 지정하거나 CAUTION을 일괄 BUY로 바꾸지 않는다. 새 매매 family, 별도 실시간 AI 심판, 신규 scheduler, 대형 학습모델은 만들지 않는다.
@@ -907,3 +909,653 @@ AI는 기존 PASS/VETO 역할을 유지한다. 기계 ENTER 뒤 VETO로 놓친 �
 ```bash
 PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTHONPATH=. .venv/bin/python -m src.engine.sync_github_project_calendar
 ```
+
+## 21. #77 R0–R3·21:05 paired replay·#78·#80의 AI 보조심사 전환 상세 구현안
+
+후속 정정: 아래는 최초 제안 이력이다. 현재 구현 기준은 §22이며, 특히 base+addendum 구성, A0/A1 필수 비교, §21.7의 최초 선택 gate와 §21.9의 적용 대기 조건을 그대로 구현하지 않는다. source lineage·owner 분리 원칙은 §22와 충돌하지 않는 범위에서 유지한다.
+
+상태: 계획 수립. 이번 절은 코드·정기 wrapper·Provider 실행·정책 bundle·PID를 변경한 receipt가 아니다. 현행 런타임의 `기계 ENTER_NOW → AI PASS/VETO → final guard` 역할은 유지하고, 장후 평가와 prompt 선택 기준만 그 역할에 맞게 정정한다. 기계 threshold, 주문가격·수량·cap, provider/model/route, 최종 submit 및 hard/broker guard는 변경 대상이 아니다.
+
+### 21.1 판정과 확인된 현재 결손
+
+현행 코드에는 전환의 재사용 기반이 이미 있다.
+
+- `entry_setup_evidence.compose_mechanistic_primary_decision`은 기계 `ENTER_NOW`에만 AI 심사를 요구한다. 유효 `PASS`만 기존 final guard로 전달하고, `VETO`는 해당 타점을 거절하며, `CAUTION|INSUFFICIENT|transport/schema/local 오류`는 비노출 재확인으로 닫는다. 기계 `RECHECK|BLOCK`은 AI가 승격할 수 없다.
+- `ai_action_outcome_calibration.load_machine_observation_rows`와 `machine_decision_case_table_v1`은 기계 action·reason·threshold·bundle·snapshot과 AI/final-guard trace 및 후행 경로를 exact identity로 결속한다. #11/#74도 기계평가, AI 평가, 실제 provider 호출을 별도 분모로 감사한다.
+- `entry_setup_live_policy`와 `ai_engine_openai`는 유효한 optimizer base prompt를 선택한 경우에도 같은 `AI_ADDENDUM`과 historical context를 붙여 기계 보조심사 prompt를 구성한다.
+
+그러나 #77~#80의 장후 평가계약은 아직 독립 AI 진입선정의 흔적을 보존한다.
+
+| 위치 | 현재 동작 | 보완이 필요한 이유 |
+| --- | --- | --- |
+| `ai_decision_quality.prepare_detailed_paired_replay_requests` | exact payload에서 entry evidence를 재구성하고 base prompt별 BUY/WAIT/DROP 또는 risk verdict를 비교 | 당시 기계 action·bundle·selected child/micro와 현행 PASS/VETO 부가 지시문을 replay 입력·prompt hash의 필수 구성요소로 요구하지 않는다 |
+| `entry_setup_paired_replay_batch._cohort_result` | 과거 Entry AI control 전체를 분모로 candidate Provider replay | 실제 보조심사 대상인 기계 `ENTER_NOW`와 기계 `RECHECK|BLOCK`·기계 전환 이전 trace를 분리하지 않는다 |
+| `ai_action_outcome_calibration._transition_summary` | candidate exposure, false-drop, candidate EV와 probe risk로 prompt review 여부 판정 | 보조심사는 새 BUY를 고르는 owner가 아니므로 exposure 수와 BUY/WAIT/DROP 전이를 primary metric으로 쓰면 역할이 어긋난다 |
+| `main_ai_prompt_optimizer` | base prompt 후보와 micro 입력 factorial을 선택 | candidate가 **base prompt + 동일 PASS/VETO addendum + 동일 기계 context**로 평가됐음을 강제하지 않는다 |
+| `main_ai_prompt_consumer` | optimizer·paired artifact·R3 source-only handoff의 hash/terminal 검증 | auxiliary role/addendum/machine-context generation과 실제 replay 결과의 결속을 검증하지 않는다 |
+| `mechanistic_entry_runtime_policy` | 초기/carry bundle의 base prompt가 V2.15.2로 고정되고, runtime resolver가 별도 optimizer base를 선택하면 호출 시 addendum을 조합 | 장후 candidate가 런타임과 같은 최종 prompt를 사용했다는 공통 composer/hash receipt가 없다 |
+| `entry_setup_paired_replay_batch.DEFAULT_COHORTS` / `entry_replay_cohort_contract_v1|v2` | KRX 정규장·NXT 애프터마켓과 통합 애프터마켓 observe 경로 중심 | 실제 all-continuous runtime의 9개 scope와 전수 대사가 닫히지 않아 다른 연속매매 scope의 AI 보조심사 품질이 미평가될 수 있다 |
+
+따라서 이번 구현의 핵심은 새 AI나 collector를 만드는 것이 아니라, **기존 exact machine source를 #77 replay의 부모로 고정하고 Entry 평가·#78 선택·#80 검증을 보조심사 지표로 바꾸는 것**이다.
+
+### 21.2 목표 체인과 owner
+
+목표 체인은 다음 하나다.
+
+`#11 preflight → #76 exact materialization → 기계 ENTER_NOW screenable manifest → #77 R0–R3 auxiliary paired replay → #82 action/outcome calibration → #78 base-prompt optimizer → 21:05 terminal replay/frozen rebind → #80 consumer → 기존 PREOPEN prompt candidate/loader → PID first-use → 다음 장후 귀속`
+
+| 단계 | 기존 owner | 보완 후 책임 |
+| --- | --- | --- |
+| R0 | `ai_decision_quality` + `ai_action_outcome_calibration`의 machine source loader | 기계 평가 전수 보존, 그중 `ENTER_NOW`만 AI screenable 부모로 발행. `RECHECK|BLOCK`은 provider 미호출 정상 분모로 남김 |
+| R1 | 당일 detailed paired report | 동일 부모에 incumbent/candidate 보조심사를 실행하고 당일 오류·판정·후행 label을 분류 |
+| R2 | `ai_action_outcome_calibration` | scope별 누적 correct VETO, missed VETO, dangerous PASS, correct PASS 및 오류율·비용 후 기회손실 계산 |
+| R3 | 기존 source-only candidate manifest | 등록된 base prompt 후보만 다음 검토 대상으로 투영. live 적용 권한은 계속 없음 |
+| #78 | `main_ai_prompt_optimizer` | 보조심사 손실함수로 base prompt만 선택. addendum·machine context·output schema는 고정 |
+| 21:05 | `entry_setup_paired_replay_batch`와 기존 wrapper | terminal detailed 생성 후 #82→#78→metadata-only rebind→#80 순서를 유지하고 동일 generation을 검증 |
+| #80 | `main_ai_prompt_consumer` | 모든 Entry cohort의 terminal과 auxiliary 계약/hash/분모 보존식을 검증하여 PREOPEN owner에 전달 |
+| runtime | 기존 `entry_setup_live_policy`·`ai_engine_openai` | 검증된 base prompt에 동일 addendum/context를 조합. 기계가 선택하지 않은 타점을 AI가 생성하지 못하게 유지 |
+
+새 cron, 별도 report producer, 별도 AI endpoint, 별도 DB는 추가하지 않는다. holding/exit R0–R3 계약은 이번 Entry 역할 변경으로 재해석하지 않는다.
+
+### 21.3 R0의 screenable manifest와 보존식
+
+기존 machine case table 안에 `entry_auxiliary_screen_population_v1`을 추가한다. 행 key는 다음을 모두 포함한다.
+
+`source_date + evaluation_attempt_id + stock_code + effective_venue + session_bucket + decision_snapshot_id + machine_bundle_sha256`
+
+`evaluation_attempt_id`나 snapshot/bundle이 없으면 symbol·근접시각으로 보충하지 않고 source gap으로 남긴다. 같은 key에 action 또는 bundle이 충돌하면 해당 key만 격리한다.
+
+필수 분모 보존식은 다음과 같다.
+
+```text
+machine_evaluation_total
+  = machine_nonentry_total
+  + machine_enter_screen_required_total
+
+machine_nonentry_total
+  = machine_block_total
+  + machine_recheck_total
+
+machine_enter_screen_required_total
+  = ai_screen_valid_terminal_total
+  + ai_screen_transport_error_total
+  + ai_screen_schema_semantic_error_total
+  + ai_screen_local_unavailable_total
+  + ai_screen_source_gap_or_pending_total
+
+ai_screen_valid_terminal_total
+  = ai_pass_total
+  + ai_veto_total
+  + ai_caution_total
+  + ai_insufficient_total
+```
+
+- `machine_nonentry_total`에는 replay Provider를 호출하지 않는다. 이 분모의 AI 미호출은 정상이며 `provider_failed`가 아니다.
+- `machine_enter_screen_required_total`만 paired replay 부모가 될 수 있다. 전환 이전 AI-only trace나 기계 observation 없이 사후 재구성한 action은 별도 legacy diagnostic으로만 보존한다.
+- `provider_called=true` 실제 호출과 cache/local/transport 미호출을 분리한다. provider0 metadata rebind를 AI 평가로 세지 않는다.
+- #11 preflight와 #74 final receipt의 source manifest/hash, `tuning_input_allowed`, gap count를 R0 artifact에 결속한다. source gap은 식별 가능한 행만 제외하고 나머지 scope를 계속 평가한다.
+- action-neutral outcome은 replay 입력에서 제거하고 응답 terminal 뒤에만 join한다. 기계 context 자체에도 미래 first-hit·MFE/MAE·실현손익을 넣지 않는다.
+
+scope 계약은 `entry_replay_cohort_contract_v3`로 올린다. `entry_setup_scalping_rollout.AUTO_PROMOTION_SCOPES`의 9개 exact scope를 단일 registry로 읽고, target-date machine bundle에 실제 존재하는 scope·role/hash를 함께 고정한다. 각 scope는 `LIVE_AUXILIARY|OBSERVE_ONLY|INACTIVE_EXPLICIT` 중 하나를 가져야 한다. `LIVE_AUXILIARY`라도 screenable ENTER가 0이면 Provider를 호출하지 않고 valid-empty terminal로 닫는다. 통합 애프터마켓의 기존 observe-only 권한은 이 census 보완으로 live가 되지 않는다. v1/v2 artifact는 historical read만 허용하고 v3 평가에 표본을 합치지 않는다.
+
+### 21.4 런타임과 동일한 paired replay 입력·prompt 계약
+
+`prepare_detailed_paired_replay_requests`에 Entry 전용 `entry_auxiliary_screen_replay_contract_v1`을 추가한다. 각 request는 다음을 hash로 고정한다.
+
+1. 당시 exact payload와 `entry_setup_evidence_v1`.
+2. 당시 기계 `assessment`: action=`ENTER_NOW`, reason, applied thresholds, hierarchy selection, selected child rule, flow/micro observation, policy version과 bundle SHA256.
+3. base prompt의 version과 SHA256.
+4. `machine_first_pass_veto_v2` addendum의 version과 SHA256.
+5. scope별 historical context의 SHA256.
+6. strict risk-verdict response schema와 semantic validator version.
+7. 최종 합성 prompt의 SHA256과 `candidate_input_sha256`.
+
+공통 composer를 `mechanistic_entry_runtime_policy`에 두고 runtime과 offline replay가 함께 사용한다. 형태는 `compose_auxiliary_prompt(base_prompt, historical_context, hierarchy_role)`이며, 현재 `auxiliary_prompt`는 호환 wrapper로 유지한다. runtime과 replay의 최종 prompt bytes가 다르면 해당 pair를 경제성 비교에서 제외하고 `auxiliary_prompt_composition_mismatch`로 차단한다.
+
+paired arm은 다음처럼 제한한다.
+
+| arm | 구성 | 용도 |
+| --- | --- | --- |
+| `A0_incumbent_auxiliary` | 해당 parent의 실제 런타임 trace/bundle에 기록된 base prompt + 고정 addendum + 동일 machine context/schema | Control |
+| `A1_candidate_auxiliary` | #78이 제안한 등록된 base prompt + **같은** addendum + 동일 machine context/schema | Candidate |
+| `L0_legacy_independent_selector` | 기존 AI-only prompt/action | 이력 진단만; A0/A1 paired 분모와 승격 gate에 합치지 않음 |
+
+A0/A1은 parent, provider/model, reasoning, timeout, token cap, 입력, response schema를 같게 하고 base prompt만 바꾼다. retry는 같은 contract 위반을 고치는 bounded schema retry만 허용하며, 한 arm의 transport 실패를 다른 arm의 경제성 0으로 보간하지 않는다. 두 arm 모두 유효 terminal인 pair만 비교 지표에 쓰되, 실패한 arm은 오류율 분모에는 반드시 남긴다.
+
+### 21.5 보조심사 결과 taxonomy
+
+Entry 결과는 AI action이 아니라 `risk_verdict`와 런타임 합성 결과로 판정한다. `PASS|VETO|CAUTION|INSUFFICIENT` 외 값은 schema/semantic 오류다.
+
+| 분류 | 필요 조건 | 경제성 처리 |
+| --- | --- | --- |
+| `correct_profitable_pass` | 유효 PASS, fresh executable 진입 가능, 비용 후 목표가 adverse보다 먼저 도달 | 기회 보존으로 집계 |
+| `dangerous_pass` | 유효 PASS, adverse-first·비용 후 손실·catastrophic/tail 계약 위반 중 하나 | 위험 통과 손실로 집계 |
+| `correct_risk_veto` | 유효 VETO, 비경제적/실행불가 또는 adverse-first·비양수 비용 후 outcome | 회피 손실로 집계 |
+| `missed_profitable_veto` | 유효 VETO, fill-feasible이며 비용 후 목표-first인 clean-fast 기회 | 놓친 기회손실로 집계 |
+| `risk_justified_but_eventually_profitable_veto` | VETO 뒤 최종 수익 가능성이 있으나 목표 전 깊은 역행·긴 횡보 또는 기존 위험 budget 위반 | correct/missed로 강제 합치지 않고 별도 진단 |
+| `pass_with_slow_or_ambiguous_outcome` | PASS 뒤 늦은 수익·횡보·동일 bar 선후 불명·right-censored | primary precision에서 제외, 자본점유/불확실 분모 보존 |
+| `valid_nonbinary_no_exposure` | CAUTION 또는 INSUFFICIENT | VETO로 세지 않으며 후속 재확인 결과와 별도 결속 |
+| `transport_not_evaluated` | timeout/network/provider receipt 실패 | 판정품질이 아닌 호출품질 결손; 경제성 null |
+| `schema_semantic_not_evaluated` | parse/schema/fact binding/role 오류 | 판단과 분리; 경제성 null |
+| `source_or_lineage_gap` | 비용·BBO·bundle·snapshot·후행 path 결손 | 해당 행 제외와 직접 사유, 0원/0EV 금지 |
+
+`missed_profitable_veto`는 단순 사후 고가가 아니라 동일 route/session의 executable ask→bid, 비용, target/adverse 선후, fill feasibility가 모두 유효해야 한다. `dangerous_pass`도 실제 최종 submit 여부와 무관하게 screen 판단 품질을 평가할 수 있지만, counterfactual과 실제 실현손익을 합산하지 않는다. final guard가 PASS를 차단한 경우 `ai_dangerous_pass_final_guard_saved`를 별도로 세어 AI와 최종 guard의 공을 바꾸지 않는다.
+
+### 21.6 R1·R2 지표와 작은 순익 목적함수
+
+Entry의 기존 `candidate_exposure_count`, `false_drop_rate`, BUY/WAIT/DROP transition을 primary prompt gate에서 제거하고 호환 diagnostic으로만 남긴다. 새 primary 지표는 다음이다.
+
+- `correct_profitable_pass_rate`: 유효·성숙한 수익기회 중 PASS 비율.
+- `missed_profitable_veto_rate`: 유효·성숙한 수익기회 중 VETO 비율.
+- `dangerous_pass_rate`: 유효 PASS 중 adverse-first/비용 후 손실 비율.
+- `correct_risk_veto_rate`: 유효 위험기회 중 VETO 비율.
+- `screen_transport_error_rate`와 `screen_schema_semantic_error_rate`: 별도 운영 지표.
+- `net_opportunity_preservation_pct`: PASS로 보존한 비용 후 양수 기회값 − VETO/오류로 놓친 비용 후 양수 기회값.
+- `net_risk_avoidance_pct`: VETO로 피한 비용 후 손실값 − PASS로 통과시킨 비용 후 손실값.
+- `auxiliary_screen_utility_pct`: 위 두 값을 같은 비중첩 opportunity parent에서 합산한 paired A1−A0 차이.
+- `fast_net_profit_frequency_per_100_screens`, `median_time_to_net_target_sec`, `capital_occupancy_sec`, p10/worst loss를 별도 보존한다.
+
+작은 수익 목표는 PASS 건수나 veto 정확도 하나를 키우는 것이 아니다. **비용 후 양수인 빠른 기회를 보존하면서 위험한 PASS와 긴 자본점유를 늘리지 않는 것**이다. 수수료·세금·spread/slippage 결손은 null이며 gross 상승률로 대체하지 않는다. `+0.10%`는 사례 label/목표일 뿐 모든 PASS의 보장수익이나 prompt 승격을 위한 단일 절대조건이 아니다.
+
+R2는 scope별·prompt contract별로 누적하고, 날짜·symbol·parent가 겹치지 않는 chronological holdout을 사용한다. KRX/NXT/PREMARKET/통합 route를 합치지 않는다. 결과 수가 0인 scope도 유효 empty 또는 source gap으로 명시하며 다른 scope 표본으로 채우지 않는다.
+
+### 21.7 #78 선택조건과 과도한 gate 정정
+
+#78은 **base prompt만** 고른다. PASS/VETO addendum, machine role, output schema, threshold, provider/model 및 final guard는 최적화 축이 아니다. entry cohort의 `selected_challenger`는 다음을 모두 만족할 때만 바뀐다.
+
+1. A0/A1 exact parent와 prompt-composition hash가 완전히 paired.
+2. source-quality-valid·cost-bound·mature outcome만 경제성 분모에 사용.
+3. candidate의 `auxiliary_screen_utility_pct > incumbent`.
+4. `missed_profitable_veto_rate`가 악화되지 않고 `dangerous_pass_rate`·p10/worst loss가 악화되지 않음.
+5. transport/schema 오류율이 incumbent보다 악화되지 않으며 선언 ceiling 이내.
+6. 해당 scope의 최소 유효 screen 수·unique symbol·독립 source date와 chronological holdout 충족.
+
+현행 30 trace/10 symbol/2일, candidate exposure5, positive candidate EV·probe EV·EV delta의 동시 gate는 독립 선정자용이다. 구현 시 실제 screenable `ENTER_NOW` 분모의 유입률을 먼저 출력하고 다음처럼 정정한다.
+
+- source/schema 수리와 일일 learning update에는 유효 1행을 허용하되 승격 권한은 주지 않는다.
+- bounded candidate의 최소분모는 기존 R3 계약을 역할에 맞게 재사용한 `10 paired screens / 3 symbols / 3 source dates`로 시작한다. 세 날짜 중 마지막 날짜를 holdout으로 분리하고 holdout에 유효 binary screen이 없으면 교체하지 않는다. `20 screens / 5 symbols / 5 source dates`는 강한 근거 상태를 표시하는 진단 floor이지 bounded 적용의 중복 선행 gate가 아니다.
+- 단, 자연 유입률상 위 floor의 최대 관측 가능 수가 선언 horizon 안에서 충족 불가능하면 숫자를 자동 하향하지 않고 `structural_population_exhaustion|blocked_missing_evidence`로 재판정한다.
+- 모든 scope 동시 통과, 모든 1/3/5/10/20/30/60분 horizon 완비, `candidate EV>0`와 `probe EV>0`의 중복 gate는 요구하지 않는다. primary 180초와 tail/cost 계약을 만족하는 해당 scope만 평가한다.
+- 실제 비용, source integrity, exact pairing, no-future-leak, tail 비열화, 오류율 ceiling은 유지한다. 이들은 과도한 조건이 아니라 역할상 필수 안전조건이다.
+
+초기 floor는 코드 상수와 report `policy/observed/pass`에 모두 노출한다. 자연 3거래일 후 유입·censoring을 보고 합리성을 재검토하되, 결과를 좋게 만들기 위한 사후 floor 변경은 금지한다.
+
+### 21.8 21:05 follower와 #80 closure
+
+기존 순서는 유지한다.
+
+`terminal detailed → #82 calibration → #78 optimizer(그날 실행 선택 동결) → provider0 metadata-only rebind → #79 holding manifest → #80 consumer`
+
+wrapper와 batch에는 다음 assertion만 추가한다. 기존 controller가 소비하는 `status=completed_offline_only|hold_*|failed`는 호환 유지하고, Entry 역할은 별도 `entry_evaluation_role=auxiliary_screen`과 `entry_evaluation_status`로 표현한다.
+
+- Entry batch의 각 cohort가 role별로 `completed_auxiliary_screen|hold_no_screenable_machine_enter|blocked_source_contract` 중 하나이며 상위 기존 terminal status와 모순이 없음.
+- `machine_enter_screen_required_total = evaluated + terminal error/gap` 보존식 통과.
+- 실행 당시 A0/A1 base/addendum/context/input hash와 최종 prompt hash가 detailed report에 존재하고 동일 generation의 #82/#78/#80에 결속.
+- `--preserve-entry-batch-selection`은 그날 실제 Provider 실행 candidate를 바꾸지 않음. 새 #78 선택은 다음 source date batch용이다.
+- `--refresh-optimizer-binding-only`는 provider 호출0, 판정 row/경제성/오류 taxonomy 불변, optimizer hash만 재결속.
+- 이미 terminal인 exact parent·prompt pair는 checkpoint를 재사용하고, 새 source나 candidate hash가 없으면 Provider를 반복 호출하지 않음.
+- provider/schema terminal rejection은 성공으로 바꾸지 않고 retry exhaustion 뒤 wrapper가 non-zero로 닫힘.
+
+#80은 `entry_auxiliary_screen_consumer_contract_v1`을 발행하고 다음을 검증한다.
+
+- auxiliary role=`auxiliary_risk_screen_pass_veto_no_promotion`, variant=`machine_first_pass_veto_v2`.
+- machine ENTER-only replay, non-entry no-provider census, scope 격리와 분모 보존식.
+- optimizer base prompt version/hash와 addendum/context/final prompt hash.
+- R1/R2 taxonomy 전수 합계, transport/schema/source gap의 비경제성 분리.
+- R3 candidate의 source-only authority와 기존 PREOPEN owner 경로.
+
+한 항목이라도 불일치하면 Entry handoff는 `blocked_auxiliary_screen_contract`; holding/exit의 독립 정상 closure는 보존한다. #80이 prompt registry·env·PID를 직접 변경하지 않는 현재 권한도 유지한다.
+
+### 21.9 실제 런타임 자동적용과 판정 경계
+
+자동화는 새로 만들지 않고 기존 경로를 검증·보완한다.
+
+1. 장후 #78이 검증된 base prompt candidate를 source-only로 고른다.
+2. 21:05 follower가 terminal 결과에 #78 hash를 재결속하고 #80이 handoff를 닫는다.
+3. 기존 `entry_setup_live_policy` candidate/activation validator가 exact-date PREOPEN 후보를 검증한다.
+4. 기존 PREOPEN wrapper가 env/activation을 생성하고, 봇 기동 시 이를 읽는다.
+5. `ai_engine_openai`는 기계 `ENTER_NOW`에서만 선택 base + 동일 addendum/context로 호출하고 prompt hash를 trace에 기록한다.
+
+구현 완료 판정은 다음 층을 분리한다.
+
+| 층 | 완료조건 |
+| --- | --- |
+| 코드/계약 | review finding 0, 회귀 테스트·compile·wrapper syntax·diff check 통과 |
+| 장후 자동화 | exact-date #77/#82/#78/#80 동일 generation terminal, provider0 rebind 검증 |
+| 다음 장전 | candidate 또는 유효 incumbent carry의 날짜/hash/role 검증과 PREOPEN activation 성공 |
+| PID 소비 | 새 PID trace에서 machine-before-provider, ENTER-only 호출, 최종 prompt hash 일치 |
+| 자연 품질 | correct/missed VETO, dangerous/correct PASS와 오류 taxonomy에 미분류 0 |
+| 경제성 | 비용 후 기회보존·위험회피·빠른 순익 빈도·tail·자본점유가 incumbent 대비 수용 가능 |
+
+코드와 장후 terminal만으로 실제 적용이나 순익 개선을 완료 처리하지 않는다. 반대로 자연 표본 부족을 source/schema 수리 실패로 바꾸지 않는다. 정책 교체가 없더라도 유효 incumbent carry와 직접 사유가 다음 장전에 전달되면 자동화 closure는 가능하다.
+
+### 21.10 구현 순서·변경 파일·검증
+
+| Pass | 변경 위치 | 구현 내용 |
+| --- | --- | --- |
+| P1 source/schema | `ai_action_outcome_calibration.py`, `ai_decision_quality.py` | ENTER-only screenable manifest, exact machine context, 보존식과 taxonomy 추가 |
+| P2 shared composition | `mechanistic_entry_runtime_policy.py`, `ai_engine_openai.py` | runtime/offline 공통 auxiliary prompt composer와 최종 hash 검증. 기존 public wrapper 유지 |
+| P3 replay | `entry_setup_paired_replay_batch.py`, `ai_decision_quality.py` | A0/A1 동일 부모 replay, legacy selector 격리, 오류 terminal 분리 |
+| P4 selection/consumer | `main_ai_prompt_optimizer.py`, `main_ai_prompt_consumer.py` | screen utility·missed VETO·dangerous PASS gate, auxiliary handoff 검증 |
+| P5 automation/verifier | `run_ai_entry_setup_paired_replay_postclose.sh`, `verify_threshold_cycle_postclose_chain.py` | 기존 순서에 terminal/hash/보존식 assertion 추가 |
+| P6 docs | `report-based-automation-traceability.md`, `time-based-operations-runbook.md`, 장후 지시문, 실제 실행일 checklist | 새 Entry 평가계약·terminal/owner·receipt를 현행화. 운영 절차가 바뀐 문서만 수정하고 같은 stable owner 중복 생성 금지 |
+
+최소 테스트 범위는 다음이다.
+
+- `test_ai_decision_quality.py`: machine context/future label 분리, A0/A1 prompt bytes/hash, ENTER-only materialization, transport/schema terminal.
+- `test_ai_action_outcome_calibration.py`: 네 핵심 분류와 ambiguity/source gap, exact attempt dedup, scope별 보존식, final-guard saved case.
+- `test_entry_setup_paired_replay_batch.py`: non-entry provider0, terminal empty, frozen selection, metadata-only rebind와 checkpoint 멱등성.
+- `test_main_ai_prompt_optimizer.py`: base-only change, auxiliary gate, missed VETO/dangerous PASS/tail/오류율, 9-scope v3 census와 다른 scope 표본 차용 금지.
+- `test_main_ai_prompt_consumer.py`: role/addendum/context/prompt hash·generation 불일치 fail-closed, holding 독립 closure.
+- `test_mechanistic_entry_runtime_policy.py`, `test_entry_setup_live_policy.py`, `test_ai_engine_openai_transport.py`: runtime/offline composer parity, ENTER-only provider, PASS/VETO/CAUTION/error 동작 불변.
+- wrapper `bash -n`과 follower/controller/verifier contract test, 변경 Python compile, scoped lint/format 및 `git diff --check`.
+
+필수 synthetic 반례는 correct PASS, missed VETO, correct VETO, dangerous PASS, 깊은 역행 뒤 수익, 긴 횡보 뒤 수익, final guard saved, CAUTION/INSUFFICIENT, timeout, schema/semantic 오류, 기계 BLOCK/RECHECK 미호출, bundle/snapshot/route 충돌, 비용 결손, 동일 parent 중복, 다음날 candidate 교체·incumbent carry다. Provider unit test는 fake runner만 사용한다.
+
+구현 뒤 영향 재생성은 최초 변경 producer부터 #77→#82→#78→batch metadata rebind→#80→verifier까지만 수행한다. 장후 wrapper가 이미 진행 중이면 그 snapshot을 교체하지 않는다. 실 Provider replay는 새 exact ENTER parent와 검증된 candidate hash가 있고 기존 budget/checkpoint가 허용할 때만 21:05 owner로 실행한다. bot 재기동, 수동 env/lock, threshold/order/수량 변경은 이 계획의 권한이 아니다.
+
+현재 source-lineage 선행은 [9/14 체크리스트](../checklists/2026-09-14-stage2-todo-checklist.md)의 `MainAIQualitySourceGapMainAIAllocatorSubmittedTraceCustodyRepair0914`, 구현 판정·지시는 `CodeImprovementWorkorderReview0914`와 대사한다. 전자는 제출 trace/custody 원천 수리 owner이지 이번 prompt 평가 구현 전체의 대체 owner가 아니다. 구현 지시 시 실제 OPEN owner가 달라졌으면 현행 체크리스트를 다시 읽고 같은 owner를 이관하며, 이 계획만으로 미래 작업이나 성공 receipt를 생성하지 않는다.
+
+예상 효과는 AI가 이미 기계가 고른 타점을 다시 독립 선정하는 것처럼 평가되어 생기는 잘못된 최적화를 제거하고, **위험한 ENTER를 막는 능력과 비용 후 작은 수익기회를 과도하게 VETO하지 않는 능력**을 같은 모집단에서 직접 비교하는 것이다. 효과 크기, 실제 제출 증가, 비용 후 순익 개선은 자연 적용 후 별도 acceptance이며 이 계획에서 추정하지 않는다.
+
+## 22. 보조심사 전용 축약형 직접 전환과 장후작업 변경계획
+
+작성 기준: `2026-09-14 KST`. 사용자 결정은 **대조군 없이 축약형으로 직접 전환하는 구현계획**이며 장후작업 변경도 포함한다. 이번 실행은 이 문서의 계획·리뷰·print-only 검증만 수행한다. 코드 구현, Provider 호출, 정책 발행, 커밋/푸시, 배포·기동은 수행하지 않는다. 과거 다른 실행의 재기동 승인을 이번 계획 수립에 포괄 승계하지 않는다.
+
+### 22.1 확정 방향과 기존 계획 대체 범위
+
+목표 계약은 `기계 ENTER_NOW → 축약형 AI 보조심사 → 기존 합성기 → 최종 실행 guard`다. 기계 타점을 다시 독립 선정시키거나 AI를 무조건 동의하는 장치로 만들지 않는다. **현재 타점의 지지·반대 증거를 함께 읽어 작은 비용 후 수익기회를 보존하면서 실질적인 위험을 거부**하는 역할로 한정한다.
+
+| 기존 제안/동작 | 이번 구현 기준 |
+| --- | --- |
+| balanced base + PASS/VETO addendum + hierarchy 예외 누적 | 단일 English ASCII 보조심사 prompt와 명시적 역할 계약 |
+| 전체형 A0와 축약형 A1의 Provider paired 비교 | 최초 전환에서 실행하지 않음. 단일 축약형 계약의 구조·의미·경로 검증으로 전환 |
+| A1>A0, paired 10건/3종목/3일 등 §21.7 gate | 최초 전환에서 제거. 없는 Control을 만들거나 비교 통과로 표시하지 않음 |
+| 기존 base optimizer가 과거 V2.14/15를 다시 선택 | compact 역할/version allowlist 안에서만 소비. legacy base 재유입 차단 |
+| 경제성 미관측이면 전체형 유지 | 검증된 compact 정책으로 전환·carry하고 자연 경제성은 별도 OPEN |
+| 문서의 9-scope 예시를 새 실전 승인으로 사용 | 실제 적용 시 기존 target-date 승인 registry와 bundle scope를 대사. 현재 승인 scope만 전환 |
+
+대조군을 사용하지 않는 것은 테스트·리뷰를 생략하는 뜻이 아니다. **새 prompt를 기존 출력·권한 계약에 결속하는 검증은 필수**, 과거 prompt 대비 우수성 증명은 선행조건이 아니다. 동일 응답의 validator/composer 회귀검사는 A/B 모델 비교가 아니며 계속 수행한다. 미래 별도 prompt 실험의 대조군 운영은 이번 전환의 필수 후속으로 생성하지 않는다.
+
+### 22.2 코드에서 확인한 변경 지점
+
+- `ai_prompt_contracts.py`의 balanced 본문은 legacy READY/WAIT_CONFIRMATION와 bounded-risk VETO 제한을 갖고, `mechanistic_entry_runtime_policy.auxiliary_prompt`는 이를 뒤의 AI_ADDENDUM/hierarchy 지시로 정정한다. 단일 계약으로 통합할 이유는 문자 수뿐 아니라 상충하는 규칙 우선순위를 제거하는 데 있다.
+- 현재 9/14 저장 bundle의 scope별 시스템 문자열은 약 5,900~6,800자다. 이는 당시 파일 측정치이며 토큰 수·현재 PID 실제 전송량·전체 user payload 크기의 증거는 아니다. 시스템 지시문 길이, user payload 길이, response schema 길이를 각각 측정한다.
+- `ai_engine_openai._resolve_scalping_prompt`, risk-response adapter의 version별 evidence/composer 분기, schema 선택, 최종 machine-first 조합을 함께 바꿔야 한다. 새 문자열만 교체하면 `entry_setup_prompt_evidence_generation_mismatch` 또는 legacy fallback이 발생할 수 있다.
+- `mechanistic_entry_runtime_policy.validate`는 AI_VERSION·variant·scope별 prompt 재계산 결과를 엄격히 확인한다. 상수만 바꾸면 기존 정상 bundle까지 invalid가 되므로 버전별 reader와 명시적 successor 발행이 필요하다.
+- `entry_setup_live_policy`의 `validated_optimized_base_prompt` 경로와 `ai_engine_openai`의 addendum 재조합도 함께 전환해야 한다. 초기 bundle만 축약해도 optimizer 경로가 전체형을 복원하면 완료가 아니다.
+- `ai_decision_quality`의 schema-correction 지시도 legacy bounded-risk VETO 제한을 갖는다. 첫 호출과 correction/retry가 서로 다른 역할을 지시하지 않도록 같은 compact 계약을 사용한다.
+
+### 22.3 새 prompt·입력·응답 계약
+
+제안 version은 `entry_machine_auxiliary_compact_v1`, role은 기존 `auxiliary_risk_screen_pass_veto_no_promotion` 유지, variant는 `machine_first_compact_pass_veto_v1`이다. 이 이름은 **계획상 새 등록값**이지 이미 지원되는 runtime 값이 아니다. prompt/evidence/schema/composer/validator 조합을 하나의 명시적 registry entry로 관리한다. 기존 V2.15.2 이름에 새 bytes를 덮어씌우지 않는다.
+
+아래를 단일 시스템 prompt 초안으로 삼고, 구현 시 실제 validator와 반례 테스트로 문구를 확정한다. 약 250~400 English words는 설계 예산일 뿐 통과 숫자·품질 보증이 아니다. 안전·근거 의미를 삭제해 글자 수를 맞추지 않는다.
+
+```text
+You are the binding risk reviewer of a machine-selected entry point.
+The validated machine assessment owns setup selection and entry timing.
+Review its current supporting and adverse evidence; do not reselect stocks,
+invent another setup, or promote machine RECHECK/BLOCK to entry.
+
+Seek repeated small cost-adjusted profits, not a PASS quota, perfect certainty,
+or permanent abstention. Do not invent returns, costs, facts, or future data.
+Use the exact supplied fact ledger and machine assessment. Treat correlated
+facts as related evidence, not independent votes. Missing optional context is
+neither support nor adverse evidence.
+
+PASS preserves the selected point for final guards when current support
+adequately addresses its bound risks. Cite valid setup/trigger support and
+the required adverse facts. A validated hierarchy trigger can resolve legacy
+WAIT_CONFIRMATION; do not demand READY again or another pullback by default.
+
+VETO rejects this point, not the symbol permanently. Cite exact adverse facts
+and matching risk codes. Bound liquidity, tape, or reward-risk weakness may
+justify VETO after weighing available support, but a bounded risk alone is
+not automatically a veto. Missing confirmation alone does not justify VETO.
+Hard invalidation and unusable required source retain their blocking roles.
+
+CAUTION means a specific unresolved issue merits the existing bounded recheck.
+INSUFFICIENT means required source evidence is unusable. Neither permits entry.
+Never infer exposure permission from missing, invalid, or failed responses.
+
+Return only the supplied risk-adjudication JSON schema. Copy fact IDs and risk
+codes exactly from their allowed bindings. Confidence is an integer 0..100,
+not a trading threshold. You cannot change price, quantity, policy thresholds,
+provider, or safety. Fresh quote, cost, account, order, cooldown, broker, and
+hard-safety guards remain authoritative after PASS.
+```
+
+입력은 다음처럼 분리한다.
+
+| 입력 | 설계 |
+| --- | --- |
+| 현재 기계평가 | exact action/reason, group/child, 실효 threshold, policy hash, scope와 평가시각을 유지 |
+| 근거 ledger | setup/trigger, 지지·반대 fact와 risk binding, micro window/route/epoch/completeness 및 필요한 가격·비용·시각을 유지 |
+| 현행 시장 context | 현재 live payload를 원칙적으로 유지하고 중복 지시와 구 role 문장만 제거. 시계열·숫자 축약은 별도 축으로 두고 이번에 동시에 최적화하지 않음 |
+| 과거 정책·연구 context | 성과, holdout 결과와 연구 이력은 감사 metadata에 유지하고 전송 prompt에서는 제외. 현재 판정에 필요한 유효 정책값·scope는 기계평가에 한 번만 투영 |
+| 후행 outcome | 당시 모델 입력에는 절대 넣지 않고 응답 terminal 뒤 평가 join에만 사용 |
+
+출력은 기존 `entry_setup_risk_adjudication_v1`의 `risk_verdict`, `risk_codes`, `supporting_fact_ids`, `contradicting_fact_ids`, `confidence`와 `schema`를 유지한다. enum·fact ID별 허용 위치·개수 상한은 기존 schema/semantic validator가 소유한다. 단순 `PASS/VETO` 문자열이나 자유 설명으로 바꾸지 않는다. 공통 composer는 시스템 bytes와 input projection/version을 반환하고 live·offline·correction이 같은 계약 registry를 읽는다.
+
+### 22.4 런타임·validator·정책 전환
+
+1. 기존 `src/engine/ai_prompt_contracts.py`에 compact prompt/version을 등록하고, machine 보조심사 owner에만 배정한다. holding/exit·entry_price·legacy 독립 AI 평가에는 적용하지 않는다. 새 engine-root Python 모듈이나 collector를 만들지 않는다.
+2. `validate_mechanistic_risk_screen`과 `compose_mechanistic_primary_decision`을 의미상 단일 owner로 사용한다. legacy 규칙을 전체적으로 완화하지 않는다. ENTER+유효 PASS만 기존 노출 가능 경로를 보존하고, VETO는 해당 타점 DROP, CAUTION/INSUFFICIENT/오류는 현재 비노출 재확인을 유지한다. machine RECHECK/BLOCK은 Provider 미호출이다.
+3. 현재 합성 결과의 `WAIT + entry_probe_intent=true`가 유효 진입 전달인 호환 경로를 보존한다. 문자열 WAIT만 보고 실패/미참여로 집계하거나 실제 주문수량을 바꾸지 않는다.
+4. 새 version을 prompt resolver, response-schema selector, evidence builder, semantic adapter, retry/correction, cache/checkpoint identity에 끝까지 등록한다. machine assessment와 setup ledger의 같은 parent/scope/policy 결속을 검증한다. hierarchy PASS는 검증된 group trigger와 필요한 micro fact가 있을 때만 기존 예외를 사용한다.
+5. bundle의 새 AI 계약은 version-dispatch reader로 지원한다. migration 준비 중 old bundle은 old 의미로 읽되 compact로 재라벨링하지 않는다. successor는 원본 path/hash를 보존하고 같은 machine threshold/hierarchy/scope/cost·order guard를 carry한 채 AI 계약만 바꾼다. bundle 전체 hash 변경과 기계정책 자체 불변 hash를 따로 기록한다.
+6. 전환 manifest에 실제 effective 시각·target date·source parent·scope·새 prompt/schema/input-projection/validator hash와 rollback predecessor를 기록한다. 오늘 날짜를 문서 날짜로 고정하거나 과거 source를 새 날짜로 가장하지 않는다. 날짜 규칙과 기존 publisher 검증을 우회하지 않는다.
+7. resolver는 compact 전환 scope에서 compact-compatible 정책만 선택한다. 구형 optimizer candidate는 명시적 `incompatible_legacy_prompt_role`로 제외하고 **유효 compact incumbent carry**로 닫는다. 구형 base+addendum 또는 독립 selector로 조용히 fallback하지 않는다. 유효 compact 정책 자체가 없으면 기존 비노출/error 계약으로 닫고 owner에 명시한다.
+8. hash는 기존 필드별 canonical serializer/`digest` 계약을 유지한다. raw UTF-8 bytes SHA256을 새로 추가할 경우 별도 이름·algorithm을 사용하며 기존 JSON-string digest와 섞지 않는다. 선택 정책→실제 전송 prompt→저장 request/response가 같은 hash인지 확인한다.
+
+### 22.5 장후작업별 필수 변경
+
+설치된 producer 실행 순서와 단일 owner를 유지한다. 다음 표는 **변경 영향 지도이지 새로운 실행 순서가 아니다**. 정확한 source date와 실행 snapshot은 실제 구현·재생성 때 다시 고정한다.
+
+| 작업 | 수정 내용 | 직접 수용조건 |
+| --- | --- | --- |
+| #11 preflight / #74 final audit | compact role/version·prompt/schema/input hash 허용 계약 추가. 기계평가 전수, ENTER 심사대상, 실제 AI 호출을 별도 분모로 감사 | 미호출 RECHECK/BLOCK은 정상, ENTER 뒤 호출/응답 결손은 직접 사유. unknown compact를 통째 정상/legacy로 정규화하지 않음 |
+| #76 materialization | 기존 machine case/trace를 전수 소비하고 compact 요청과 원 응답의 exact parent/hash를 유지 | machine action·선정 이유·정책·micro 창 결속, old/new generation 분리, 새 collector 없음 |
+| #77 R0 | ENTER-only 단일계약 평가 manifest 발행 | required/valid/error/pending/gap 보존식. AI-only 과거 자료나 사후 machine 추정은 별도 diagnostic |
+| #77 R1/R2 | 실제 compact 응답과 성숙 outcome을 join해 scope별 품질·운영·경제성을 집계 | correct/missed VETO, correct/dangerous PASS, CAUTION/INSUFFICIENT, 오류/미성숙/비용 결손을 상호배타적으로 대사 |
+| #77 R3 | compact 계약·source·품질 finding과 개선 필요사항을 source-only manifest에 전달 | 최초 전환을 paired 승격 후보로 만들지 않음. 정상 부분행 학습은 유지하고 live 권한은 만들지 않음 |
+| #82 calibration | 단일 compact screen 품질과 실제 submit/fill/terminal을 별도 평가 | 기계 전체·AI 심사·실호출·경제성 eligible 분모 불혼합. 품질 미관측과 수집 결함 분리 |
+| #78 optimizer | compact를 직접 전환 incumbent로 인식; legacy prompt 후보 및 old BUY/WAIT/DROP gate의 재유입 차단 | 최초 채택 사유는 검증된 contract migration, `paired_improvement_pass` 아님. 후보 없으면 compact carry; holding 최적화는 기존 계약 유지 |
+| 21:05 runner | 기존 batch에 `evaluation_mode=single_contract_auxiliary`를 명시해 compact 단일 평가로 실행 | old/new A0/A1 호출 없음. 동일 exact request terminal 재사용, mode별 완료 검증, empty/gap/error 분리 |
+| #79 holding manifest | Entry 관련 변경 hash를 필요한 metadata에서만 참조 | holding Provider/정책/경제성의 기존 독립 의미 유지 |
+| #80 consumer | compact role·generation·단일평가 mode·source/input/output hash·분모를 검증 | nonexistent pair를 요구하지 않으며 구형 terminal을 compact terminal로 인정하지 않음 |
+| PREOPEN publisher/loader | 전환 이후 compact 정책 승계와 소비를 기존 자동경로에 연결 | exact date/scope/hash·권한 유효, legacy 자동복귀 없음, 적용/현재 PID 증거 분리 |
+| verifier→tower→checklist→strict/controller | 변경된 평가 mode와 fresh summary source를 대사 | 비교 미실시를 FAIL로 만들지 않고, 실제 필수 source/hash 오류는 차단. 원 wrapper terminal과 갱신 시각 분리 |
+
+새 cron·timer·AI endpoint·정기 collector는 추가하지 않는다. `deploy/run_ai_entry_setup_paired_replay_postclose.sh`의 파일명은 호환상 유지할 수 있으나 JSON/report에는 단일평가 mode를 명시한다. A0/A1을 동일 응답으로 복제하거나 `paired_count=1`을 합성해서 구 consumer를 통과시키지 않는다. 동작 변경 시 traceability·장후 지시문·실제 checklist를 함께 갱신하고, 운영 runbook 수정은 그 구현 요청의 명시 범위를 확인한다.
+
+### 22.6 단일평가·오류·경제성의 정확한 분모
+
+기존 §21.3의 의미를 보존하되 malformed/unknown machine 행도 누락하지 않도록 다음을 출력한다.
+
+```text
+raw_machine_rows = unique_machine_cases + duplicate_rows + quarantined_rows
+unique_machine_cases = machine_nonentry + machine_enter_screen_required
+machine_nonentry = machine_recheck + machine_block
+machine_enter_screen_required = valid_screen + transport_terminal_error
+  + schema_semantic_terminal_error + local_unavailable + pending + source_gap
+valid_screen = pass + veto + caution + insufficient
+valid_screen = economic_eligible + pending_maturity + excluded_outcome_or_cost
+```
+
+각 행의 terminal 분류는 서로 배타적이며 retries는 attempt provenance로 별도 센다. transport 오류 후 정상 응답으로 복구된 요청은 valid_screen 1건과 recovered-warning으로 기록하며 최종 실패에 중복하지 않는다. unresolved pending은 deadline과 owner를 가진다. source gap/unknown action은 quarantine 원천 위치·사유로 추적하고 분모 밖으로 소거하지 않는다.
+
+- 실제 compact 자연 응답은 이미 호출한 증거를 재사용한다. 같은 prompt/input/schema의 유효 terminal을 얻기 위해 밤에 다시 Provider를 부르지 않는다. live cache receipt도 원 response/hash가 검증될 때만 valid_screen이며 `provider_called=false`는 별도 유지한다.
+- 단일 offline replay가 필요한 미평가 exact ENTER는 기존 source-quality·budget·bounded resume 계약에서만 실행한다. old prompt response를 compact response로 바꾸지 않으며, old source 재평가가 허용돼 실행된 경우에도 `offline_compact_replay`이지 당일 실제 compact 호출/적용은 아니다. 무변경 과거 원천의 반복 호출은 금지한다.
+- 21:05 순서 `terminal detailed → #82 → #78 frozen binding → provider0 metadata rebind → #79 → #80`를 유지한다. mode별 consumer가 실제 결과를 확인한 뒤 terminal을 발행한다. 비교 불필요는 valid-empty이며 mandatory source invalid·실제 terminal 실행 오류를 성공으로 바꾸는 예외가 아니다.
+- #78의 frozen selection은 그 run이 사용한 compact version/hash를 고정한다. metadata-only rebind는 판정 row·경제성·원 응답·mode를 변경하지 않으며 Provider 0이다.
+- outcome 분류는 먼저 source/maturity/cost·선후 불명을 제외한 뒤 기존 owner의 executable/target/adverse 계약으로 수행한다. 위험이 먼저였고 나중에 수익이 난 사례를 동시에 correct와 missed VETO로 세지 않는다. 원래 VETO 근거의 당시 타당성과 사후 outcome label도 별도로 남긴다.
+- primary는 source-quality-valid·성숙한 단일 contract cohort의 비용 후 opportunity 보존/손실, dangerous PASS·missed VETO, 빠른 순익 빈도·tail·자본점유다. 분자/분모·비용·exit·관찰창을 명시하고 CF와 실제 순익을 합산하지 않는다. 실패/비용 결손은 null, CAUTION/INSUFFICIENT는 VETO가 아니다.
+- 비교 arm이 없으므로 §21.6의 `A1−A0 utility`, superiority, non-inferiority는 **not_applicable_no_control**이다. 전환 전후 관측 변화는 날짜/시장/기계정책 차이를 명시한 기술통계일 뿐 인과적 개선량이 아니다. 작은 순익 목표를 이유로 PASS quota·양수 결과만의 집계·고정 수익 보장을 추가하지 않는다.
+
+### 22.7 직접 전환 gate와 자동화 경계
+
+**최초 전환의 필수 gate**는 (a) prompt/registry/schema/validator 정합성, (b) fake 응답 기반 결정론적 회귀검사, (c) source/hash/날짜/scope와 권한 확인, (d) 배포본 코드와 정책 호환·rollback 준비다. 기존 전체형 replay, 비교 우위, 추가 3/5/10/20일 관측, 양수 EV·실체결·새 표본 floor는 최초 전환의 선행조건이 아니다.
+
+후속 구현이 지시되면 검증된 compact를 기존 승인 scope에 직접 전환하는 release를 준비한다. 실제 배포·기동은 그 실행의 명시 권한과 운영계약을 확인한 뒤 수행한다. 이번 계획 요청만으로 실행하지 않는다. 검증/권한이 닫힌 뒤에도 대조군 수집을 이유로 추가 canary·다음 PREOPEN 대기를 발명하지 않는다. 다만 실제 loader가 기동 시에만 정책을 읽는다면 파일 수정/타이머 start를 적용으로 주장하지 않고 승인된 전환·기동 경계를 따른다.
+
+전환 이후 일별 승계는 **기존 publisher→exact-date PREOPEN/dated loader**를 재사용한다. 기계 threshold/hierarchy의 기존 경제성·승격 gate는 이번 prompt 전환과 별개로 유지한다. #78에 compact-compatible 신규 후보가 없어도 유효 compact incumbent가 계속 전달되어야 하며, 미지원 candidate로 nightly rollback하거나 무표본 때문에 전체형을 재활성화하지 않는다. 새 compact 문구의 추가 변경은 기존 review/권한 계약을 따르며 R3 report 자체가 자동 live 편집 권한이 되지 않는다.
+
+rollback은 배포/정책/validator 불일치·출력계약 장애·기존 safety 사고 대응 계약에 따라 **검증된 이전 release+policy 묶음**으로 수행한다. old generation을 compact로 표기하거나 reader 내부 silent fallback으로 우회하지 않는다. 무표본·하루 낮은 수익만으로 자동 전체형 복귀를 만들지 않는다. 경제성은 미관측으로 남길 수 있지만 필수 입력/권한 오류는 미관측으로 숨길 수 없다.
+
+### 22.8 첨부 자연 관측의 사용 경계
+
+첨부 계획은 `2,960`개 기계 관측, `ENTER_NOW 30`, AI 호출 `27` 중 semantic invalid `12`, micro complete/gap `10/20`, `common/no_matching_valid_child 2,960`, AI 중앙 지연 약 `2.9초`, AI 뒤 제출까지 `40~49초`, 구 release와 PID/commit 경계를 제시한다. 이 값은 **첨부 작성 시점의 비종결 자연 관측과 문제 재현 후보**다. 이 문서가 현재 runtime receipt로 재인증하지 않는다.
+
+구현 시작 시 다음처럼 취급한다.
+
+- source timestamp, release commit, bundle SHA256, PID start time으로 원 관측 generation을 고정한다. 이후 append·재기동·release 전환 표본과 합치지 않는다.
+- 숫자는 P0 fixture 선정과 재현 대상이며 새 코드의 결함 수나 현재 PID 상태로 고정하지 않는다. 현행 release에서 이미 해소됐으면 생산코드를 다시 고치지 않고 회귀 테스트와 원 generation disposition만 추가한다.
+- 자연 표본이 없으면 exact synthetic fixture로 contract만 검증한다. 이를 자연 source 회복, semantic 오류율 개선, 정책 선택 또는 순익 개선으로 보고하지 않는다.
+- 기존 [#76·#82 / #11·#74 자연 원천 전수 소비 계획](./main-ai-natural-source-consumption-verification-plan-2026-09-14.md)은 raw source와 분모 보존의 직접 설계 근거로 재사용한다. 이번 §22는 그 원천을 compact AI 전환·비용·타점·장후 정책까지 연결하는 상위 실행계획이며 새 collector를 만들지 않는다.
+
+### 22.9 통합 목표 체인과 두 개의 독립 변경축
+
+```text
+exact 기계판정
+→ compact AI PASS/VETO/CAUTION/INSUFFICIENT
+→ 기존 최종 제출 guard
+→ submit/broker/fill terminal
+→ 30/60/180/300초 primary·1/3/5/10/20/30/60분 diagnostic outcome
+→ exact round-trip 비용 결속
+→ (A) compact AI 자연 품질 귀속
+→ (B) 공통/그룹/종목/micro 기계 challenger 평가
+→ 다음 거래일 compact incumbent + machine challenger 또는 carry bundle
+→ 07:35 PREOPEN 검증
+→ 07:55 이후 PID load/first-use 확인
+```
+
+두 변경축의 승인조건을 합치지 않는다.
+
+| 축 | 최초 변경 | 필요한 gate |
+| --- | --- | --- |
+| A. AI prompt contract migration | 전체형+부록을 compact 단일계약으로 직접 교체 | schema/semantic/composer/source/hash/scope/권한, 결정론적 반례, release-policy 호환과 rollback. 구 prompt 대조군·EV 우위·새 자연 표본은 선행조건 아님 |
+| B. 기계 판정 threshold/hierarchy | 기존 bounded 공통·그룹·종목·micro challenger만 선택적으로 갱신 | exact 비용, no-future-leak, 같은 scope, chronological holdout, incumbent 대비 비용 후 EV 개선과 해당 family의 `>=+0.10%`, tail/깊은 역행 비열화 금지 |
+
+다음 장전 bundle에는 항상 `compact incumbent + 검증된 machine challenger` 또는 `compact incumbent + machine incumbent carry와 직접 사유` 중 하나가 있어야 한다. challenger·child·자연 AI 호출이 0이라는 이유로 정책 파일이나 compact AI 계약이 사라지면 자동화 결함이다. 유효 incumbent 자체가 손상되거나 권한·hash가 맞지 않을 때만 fail-closed로 정책 발행/적용 실패를 명시한다.
+
+### 22.10 P0 — 실행 generation·release 재현
+
+1. 첨부 관측의 15:28 전후를 실제 artifact의 release commit, bundle SHA256, PID/start time, capture/trace timestamp로 다시 분리한다. `d89b4749`, PID `611623`은 첨부 provenance 주장으로만 시작하며 현재 상태를 다시 읽는다.
+2. action mismatch 3건, semantic invalid 사례, 비용 미결속, micro gap과 제출 지연 사례를 각각 immutable fixture manifest로 고정한다. 원본 파일은 수정하지 않는다.
+3. 현행 selected release에서 같은 defect가 재현되는지 먼저 검사한다. 이미 수정된 항목은 regression test만 추가하고 생산코드 변경 목록에서 제거한다.
+4. active main/postclose/21:05 wrapper가 있으면 그 run의 immutable snapshot을 바꾸지 않는다. 해당 generation terminal 뒤 검증된 새 release를 적용 대상으로 삼는다.
+
+수용조건은 `old_generation + current_generation + unresolved_or_unattributed = captured_scope_total`, generation 미분류 0, 현재 코드에서 재현되지 않는 구 결함의 중복 구현 0이다.
+
+### 22.11 P1 — exact attempt·자연 원천·사례표
+
+기존 `ai_decision_trace.py`, `ai_decision_quality.py`, `ai_action_outcome_calibration.py`, #11/#74 `observation_source_quality_audit` 안에서 보완한다. identity는 다음 결합을 우선한다.
+
+```text
+source_date + evaluation_attempt_id + snapshot_id
++ machine_observation_sha256 + stock_code
++ effective_venue + session_bucket + machine_bundle_sha256
+```
+
+- `evaluation_attempt_id`가 없는 이전 generation은 `snapshot_id` fallback을 `diagnostic_fallback_only`로 표시하며 원 attempt로 재라벨링하거나 policy learning에 사용하지 않는다.
+- scanner promotion ID가 실제 frozen input에 있으면 보존한다. promotion 집합 hash나 symbol/근접시각으로 현재 promotion ID를 발명하지 않는다.
+- machine/AI join은 exact attempt→snapshot→action→bundle→scope 순서로 검증한다. 허용 120초 창은 보조 무결성 검사일 뿐 identity가 아니다.
+- 실패 사유는 `trace_action_missing`, `action_mismatch`, `duplicate_snapshot_conflict`, `bundle_mismatch`, `join_window_exceeded`, `screen_trace_missing`, `unsupported_scope`, `other_explicit_exclusion`으로 나눈다.
+- `diagnostic_case_table`은 모든 gross 경로와 source gap을, `economic_case_table`은 exact 비용과 executable ask→bid path가 유효한 행만 가진다. 최근 200행 sample과 full population count/content digest를 별도 저장한다.
+
+보존식은 §22.6과 자연 원천 계획의 machine/AI/provider 3분모를 사용한다. `captured_total = exact_joined + action_mismatch + identity_gap + unsupported_scope + other_explicit_exclusion`, `unclassified=0`을 전체·scope별로 닫는다. 분석 artifact의 `actual_order_submitted=false`와 원 lifecycle의 `observed_actual_order_submitted`도 다른 필드로 유지한다.
+
+### 22.12 P2 — exact 비용 계약 결속
+
+장중 observation에는 당시 알 수 있었던 executable ask/bid, spread, venue/session, 상품구분, 실제 주문가격·수량, 기록된 friction/slippage 입력과 source timestamp/hash만 보존한다. 미래 장후 비용이나 사후 outcome을 prompt·machine input으로 역류시키지 않는다.
+
+장후에는 기존 `micro_reversion_economic_reference`와 `_hierarchy_cost_profiles()`→`_hierarchy_cost_contract()` owner를 사용하여 매수·매도 수수료, 세금, 검증된 slippage/uncertainty, venue/product/date/hash를 결속한다. 유효 행은 `entry_round_trip_cost_v1`과 `cost_contract_sha256`을 사례표에 가진다.
+
+`full_round_trip_cost_missing`은 최소 다음으로 분해한다.
+
+- `cost_producer_not_terminal`
+- `venue_or_product_coverage_missing`
+- `cost_source_hash_mismatch`
+- `cost_date_not_mature`
+- `actual_cost_unavailable`
+- `friction_only_full_cost_missing`
+- `cost_contract_invalid_or_duplicate_application`
+
+half-spread·gross MFE·다른 venue profile을 전체 비용으로 승격하거나 결손을 0으로 채우지 않는다. 같은 비용을 path label과 aggregation에서 두 번 차감하지 않는다. 비용 결손 행은 diagnostic table과 결손 분모에는 남고 machine challenger/AI 경제성 분모에서는 제외된다. 자연 source loader 0행이 비용 때문이라는 첨부 가설은 이 reason별 census와 source hash로 재현돼야 확정한다.
+
+### 22.13 P3 — outcome·진입 타점 분류
+
+새 labeler를 만들지 않고 `ai_decision_quality.mature_outcome_labels()`와 기존 entry path 계약을 재사용한다. 사례표에는 first-watch/기계/AI/submit-revalidation/order/broker/fill 시각과 가격, 30/60/180/300초 primary-compatible path, 1/3/5/10/20/30/60분 diagnostic MFE/MAE/end, 비용 후 `+0.10%` 최초 도달, 목표 전 MAE·underwater/횡보, target/adverse first-hit, route/source completeness를 결속한다.
+
+| 타점 분류 | 계약 |
+| --- | --- |
+| `GOOD_ENTRY` | 180초 primary에서 executable 비용 후 target-first이고 목표 전 역행·자본점유가 frozen 유형 한도 이내 |
+| `LATE_ENTRY` | 최종 수익 가능성과 별개로 target 전 깊은 역행·긴 횡보·unreset extension 또는 과도한 first-watch 경과가 있음 |
+| `MISSED_ENTRY` | machine BLOCK/RECHECK 또는 AI VETO 뒤 동일 scope의 fill-feasible 비용 후 target-first 기회 |
+| `CORRECT_BLOCK` | 같은 고정 exit에서 비용 후 비경제적·adverse-first 또는 유효 hard/structural block |
+| `CENSORED_OR_SOURCE_GAP` | maturity, endpoint, 비용, route 또는 BBO가 불완전 |
+| `AMBIGUOUS_SAME_BAR` | target/adverse 선후 확정 불가 |
+
+AI 평가에서는 이를 §22.6의 correct/missed VETO, correct/dangerous PASS, CAUTION/INSUFFICIENT/error taxonomy로 투영한다. 위험이 먼저였고 나중에 수익이 난 행은 `risk_justified_but_eventually_profitable`로 분리한다. 모든 horizon 완비를 요구하지 않고 180초 primary가 유효하면 평가하며, 나머지는 tail·자본점유 진단이다. 실제 fill/PnL과 CF ask→bid는 절대 합산하지 않는다.
+
+### 22.14 P4 — compact prompt·semantic invalid 직접 전환
+
+§22.3 초안을 기존 prompt/schema registry에 `entry_machine_auxiliary_compact_v1`으로 등록하고 다음 순서로 전환한다.
+
+1. 허용 supporting/adverse fact ID와 `risk_fact_bindings`를 입력 projection에 명시하고, 기계 action/reason/group/child/effective threshold/policy/micro receipt를 정확히 한 번 포함한다.
+2. 과거 연구성과·holdout 설명·중복 safety 문구는 runtime metadata에 보존하되 모델 입력에서 제거한다. 현재 판정에 필요한 effective policy 값만 machine assessment에 투영한다.
+3. first call, correction/retry, offline materialization, live runtime이 같은 compact composer와 output schema를 사용하게 한다. 구 balanced base나 AI_ADDENDUM을 뒤에 다시 붙이지 않는다.
+4. 모델이 입력에 없는 fact를 만들거나 risk code만 반환하면 계속 fail-closed한다. deterministic normalization은 frozen input에 실제 존재하는 ID의 공백/대소문자 등 의미 불변 정규화에만 허용하고 원 response와 repair code를 모두 보존한다.
+5. `response_invalid` 원문의 PASS를 authoritative PASS에 넣지 않는다. invalid·CAUTION·INSUFFICIENT는 해당 타점 무노출 RECHECK, 유효 VETO는 해당 타점 DROP, 유효 PASS만 기존 final guard로 전달한다. machine BLOCK/RECHECK는 AI가 승격하지 못한다.
+6. hierarchy의 validated group trigger가 legacy WAIT_CONFIRMATION을 해소하는 경우는 exact selected rule과 필수 micro/support fact가 있을 때만 PASS 가능하다. optional missing 하나를 blanket VETO로 만들지 않는다.
+
+첨부의 semantic invalid `12/27`은 old-generation 재현 fixture다. 완료조건은 fixture expected semantic result 전수 일치, 새 compact contract 자체가 만든 schema/semantic invalid 0, invented fact acceptance 0, legacy correction/addendum 재유입 0이다. **구 prompt 대비 자연 invalid-rate 비열화나 dangerous/missed 지표 우위는 최초 직접 전환 gate가 아니다.** 전환 후 자연 결과는 운영/경제성 acceptance로 별도 관찰한다.
+
+### 22.15 P5 — micro source·계층 선택
+
+micro source gap을 `exact_route_missing`, `duplicate_route`, `fixed_1s_window_incomplete`, `stale_start_quote`, `epoch_or_sequence_mismatch`, `buy_trade_backing_missing`, `collector_restart_boundary`로 분해한다. 기존 `machine_confirmation_fixed_price_window_v1`과 네 요소 `bid support/rebound + ask depletion velocity + actual BUY trade backing + refill`을 재사용한다.
+
+- selected child는 micro contract가 필수이면 결손 시 RECHECK한다. adverse/invalid micro 뒤 common 부모로 fallback해 ENTER시키지 않는다.
+- 아직 child가 없는 유효 common incumbent는 중단하지 않고 `selected_level=common`, `micro_policy_selected=false`, `micro_observed`, `micro_not_used_reason=no_qualified_child|source_gap`을 출력한다.
+- 비용/outcome이 유효해진 뒤 기존 calibration이 bounded group/symbol/micro machine challenger를 만든다. `child=0` 또는 첨부의 `common/no_matching_valid_child`는 그 자체로 code defect나 강제 child 생성 근거가 아니다.
+- micro raw depth를 사례표에 복제하지 않고 version/status/hash/route/epoch/completeness와 네 derived feature만 투영한다. 결손은 0이나 neutral PASS로 보간하지 않는다.
+
+### 22.16 P6 — 기계 타점 bounded 재평가
+
+AI compact migration과 분리하여 기존 조정 가능축 중 영향이 큰 1~3개만 사전 고정한다. 후보는 first-watch 경과, first-watch 이후 누적상승, trigger/structure confirmation, micro combined condition, spread/fillability, 그룹·종목 bounded residual이다.
+
+첨부의 종목 `256840` 사례쌍 `11:17 BLOCK → 1분 내 낮은 MAE 상승`, `11:52 ENTER_NOW → 이미 +11.55%, 직후 adverse-first`를 generation-bound regression fixture로 둔다. 목표는 이른 기회를 BLOCK 대신 보존/RECHECK하고 소진된 후행 타점을 ENTER로 재선택하지 않는 것이며, 단순 threshold 완화가 아니다.
+
+종목 residual은 기존 `clip(parent + n/(n+20) × fitted_delta, approved_bounds)`를 재사용한다. 공통·그룹·종목 floor를 한 후보에 누적 적용하지 않고, child 표본 부족은 유효 parent를 막지 않는다. challenger 승인에는 §22.9 B축의 exact-cost/holdout/incumbent/EV/tail 계약을 적용한다. 모든 9개 scope가 동시에 통과할 필요는 없으며 통과 scope만 바꾸고 나머지는 incumbent carry한다.
+
+### 22.17 P7 — AI 이후 제출지연 attribution
+
+기존 pipeline event를 같은 attempt에 결속해 다음 구간을 분리한다.
+
+```text
+machine decision → AI request → AI response → budget
+→ orderbook stability → price AI/resolver → freshness revalidation
+→ order send → broker receipt → fill
+```
+
+각 accepted machine+AI decision에 최초 병목 하나를 `UPSTREAM_GATE|AI_TRANSPORT|BUDGET|ORDERBOOK_STABILITY|ENTRY_PRICE|FRESHNESS_REVALIDATION|ORDER_SEND|BROKER_RECEIPT|FILL` 중 하나로 부여하고 secondary reason을 별도 보존한다. 반복 attempt/retry를 신규 기회로 세지 않는다. phase별 p50/p95는 같은 scope와 valid timestamps에서만 계산한다.
+
+보완 범위는 timestamp/lineage와 입증된 중복 계산 제거다. stale/DANGER, broker/account/order, quantity/cap/cooldown, price freshness를 완화하지 않는다. 첨부의 AI 약 2.9초·submit 40~49초는 재현할 가설이며 exact phase가 닫힌 뒤에만 원인을 확정한다. prompt 축약으로 줄어든 system/input token과 AI latency는 별도 측정하고 전체 submit 지연 감소를 자동 귀속하지 않는다.
+
+### 22.18 P8 — 장후 source·평가·정책 발행 변경
+
+설치된 실행 순서는 유지하고 변경 producer의 실제 위치만 보완한다.
+
+```text
+20:10 main snapshot:
+#11 source-quality preflight
+→ #76 machine/AI/provider 분모·compact request materialization
+→ #77 single-contract compact R0–R3
+→ 기존 cost/economic source terminal과 #74 final raw generation audit
+→ #82 outcome/semantic/machine calibration과 mechanistic policy publisher
+→ main verifier/tower/checklist/strict
+
+21:05 late follower:
+terminal detailed compact evaluation
+→ #82 refresh
+→ #78 compact incumbent frozen binding + machine policy selection
+→ provider0 metadata-only rebind
+→ #79 holding manifest
+→ #80 consumer
+→ 늦은 source summary handoff와 strict/controller/finalization 재확인
+```
+
+실제 wrapper가 위 논리 의존과 다른 순서를 갖고 있으면 설치 상태·runbook·traceability를 먼저 대사해 최소 수정한다. 문서의 순서만으로 producer를 중복 실행하거나 비용 producer를 앞당기지 않는다.
+
+장후 owner별 변경과 수용조건은 다음과 같다.
+
+| Owner | 변경 | terminal 수용조건 |
+| --- | --- | --- |
+| #11/#74 | pipeline과 기존 AI raw archives의 generation/hash, exclusion, compact role/schema를 감사 | active writer는 waiting, final stable generation과 #76 digest 일치; 식별 결손 row만 격리 |
+| #76 | machine evaluation·AI screen·provider attempt를 별도 manifest/digest로 materialize | action/reason/policy/micro/prompt parent 결속, non-entry no-provider 정상, ENTER screen gap 명시 |
+| #77 | `evaluation_mode=single_contract_auxiliary`; compact 단일계약 R0–R3 | A0/A1 호출·가짜 pair 없음, valid/empty/gap/error terminal, old AI-only generation 격리 |
+| #82 | exact cost/outcome를 join하고 AI 품질과 machine challenger를 별도 section으로 산출 | semantic/error/경제성 null 분리, case full digest와 scope 보존식, 기계/AI 분모 불혼합 |
+| #78 | compact를 prompt incumbent로 직접 carry하고 machine challenger만 기존 경제 gate로 선택 | prompt migration을 `paired_improvement_pass`로 표시하지 않음; legacy prompt 자동 선택 차단 |
+| 21:05/#80 | single-contract terminal·same-generation hash·provider0 metadata rebind 확인 | nonexistent control 요구 없음, old terminal 재라벨링 없음, holding/#79 독립 closure |
+| verifier/tower/checklist | compact generation과 machine candidate/carry disposition을 전달 | source/hash/보존식·필수 terminal 오류는 차단, 대조군 미실시 자체는 PASS 가능한 N/A |
+
+machine policy 발행 disposition은 `bounded_challenger`, `incumbent_carry_sample_or_no_edge`, `scope_partial_replace_with_other_scope_carry`, `incumbent_carry_source_or_cost_gap`, `fail_closed_invalid_incumbent`로 명시한다. valid incumbent인데 challenger/child가 없다는 이유로 파일을 누락하지 않는다. prompt disposition은 별도로 `compact_contract_migration|compact_incumbent_carry|fail_closed_compact_contract_invalid`만 사용한다.
+
+### 22.19 P9 — 다음 PREOPEN·PID 수용
+
+07:35 PREOPEN은 실제 next KRX trading date, bundle/source/cost/calibration hash, 승인된 지원 scope 전수, selected level/child count, compact prompt/input/schema/validator hash, machine candidate/carry disposition, operator override·expiry와 rollback predecessor를 검증한다. 이전의 `base prompt + addendum hash`는 old-generation audit field일 뿐 compact generation의 필수 두 조각으로 요구하지 않는다.
+
+07:55 이후 실제 기동이 승인·수행된 경우에만 PID root/release commit, loaded bundle/hash, 최초 기계판정 이전 policy-load receipt, ENTER_NOW에서만 AI 호출, PASS/VETO/CAUTION/INSUFFICIENT/error mapping, KRX/NXT/SOR exact venue/session first use를 확인한다. policy 파일 생성·timer start·unit start 성공만으로 PID 소비나 자연 판단을 완료 처리하지 않는다.
+
+compact 전환이 restart 없이 날짜 경계 loader로 반영되는지, 새 release가 필요한지 실제 consumer를 먼저 확인한다. 재기동이 필요하면 그 구현 실행의 승인 범위에서 main/widget/episode/manual 미체결·custody를 사전 대사한 뒤 기존 절차를 따른다. 이 계획 작성은 재기동·배포 승인이 아니다.
+
+### 22.20 과도한 gate 제거와 유지 경계
+
+제거하거나 최초 compact 전환에 적용하지 않는다.
+
+- 구 전체형과 축약형의 A/B Provider 비교, A1>A0, paired 10/3/3 또는 30 trace/10 symbol/2일
+- 모든 1/3/5/10/20/30/60분 outcome 완비와 9개 scope 전체 동시 통과
+- 공통·그룹·종목 sample floor 누적 적용, child 부족에 따른 유효 parent 차단
+- 실제 fill 부족에 따른 source-only CF 진단 차단
+- challenger 부재에 따른 다음날 policy 미발행
+- AI PASS/BUY 수 증가, 짧아진 문자열 또는 schema 성공만을 품질 승인으로 사용
+- prompt contract migration에 기계 challenger의 EV `>=+0.10%`를 중복 선행조건으로 사용
+
+유지한다.
+
+- exact identity/source hash/generation, no-future-leak, 동일 venue/session/scope
+- prompt/input/schema/validator/composer와 실제 request/response hash 결속
+- full round-trip cost; 결손 null·원인 분류와 이중차감 방지
+- AI semantic 오류 fail-closed, 기계 non-entry 승격 금지, final hard/order guard
+- 기계 threshold challenger에만 chronological holdout, incumbent 대비 비용 후 EV 개선, 해당 family 최소 EV `+0.10%`, tail·깊은 역행 비열화 금지
+- valid incumbent carry와 invalid incumbent fail-closed의 구분
+
+### 22.21 구현 위치와 review/fix 검증
+
+새 서비스·DB·cron·판정기·Provider endpoint·무제한 grid를 만들지 않는다. 신규 Python 모듈도 기본 불필요하며 기존 owner 안에서 보완한다.
+
+| 범위 | 기존 파일 |
+| --- | --- |
+| prompt/response | `src/engine/ai_prompt_contracts.py`, `src/engine/ai_engine_openai.py` |
+| trace/identity | `src/engine/scalping/ai_decision_trace.py` |
+| machine composer/validator | `src/engine/scalping/entry_setup_evidence.py` |
+| bundle/policy | `src/engine/scalping/mechanistic_entry_runtime_policy.py`, `src/engine/scalping/entry_setup_live_policy.py` |
+| #76/#77/#82 | `src/engine/scalping/ai_decision_quality.py`, `src/engine/scalping/ai_action_outcome_calibration.py`, `src/engine/scalping/entry_setup_paired_replay_batch.py` |
+| #78/#80 | `src/engine/scalping/micro_reversion/main_ai_prompt_optimizer.py`, `src/engine/scalping/main_ai_prompt_consumer.py` |
+| #11/#74/verifier | `src/engine/observation_source_quality_audit.py`, `src/engine/verify_threshold_cycle_postclose_chain.py` |
+| wrapper | `deploy/run_ai_entry_setup_paired_replay_postclose.sh`와 실제 호출하는 기존 main/postclose wrapper |
+
+구현 순서는 `P0 재현 → P1 identity/전수원천 → P2 비용 → P3 outcome → P4 compact prompt/semantic → P5 micro → P6 machine challenger → P7 submit attribution → P8 장후 소비/발행 → P9 PREOPEN/PID`다. 각 P단계는 구현→self review→finding 수정→재리뷰→targeted validation을 통과한 뒤 다음 단계로 간다. 이미 정상인 owner는 테스트 근거만 남기고 불필요하게 수정하지 않는다.
+
+필수 테스트는 기존 인접 파일에 추가한다.
+
+1. `test_ai_engine_openai_transport.py`, `test_mechanistic_entry_runtime_policy.py`, `test_entry_setup_live_policy.py`: compact bytes/hash, old/new version reader, resolver/correction/cache parity, ENTER-only Provider, mapping과 fail-closed.
+2. `test_ai_decision_quality.py`, `test_ai_action_outcome_calibration.py`: exact attempt/action/bundle, semantic fixtures, gross/economic table, 비용 원인·이중차감, mature taxonomy, micro states, 256840 pair와 submit phase.
+3. `test_entry_setup_paired_replay_batch.py`, `test_main_ai_prompt_optimizer.py`, `test_main_ai_prompt_consumer.py`: single-contract mode, control N/A, legacy 격리, compact carry, machine challenger gate, provider0 rebind, holding 독립 closure.
+4. `test_observation_source_quality_audit.py`, `test_verify_threshold_cycle_postclose_chain.py`, wrapper contract tests: preflight/final generation drift, row exclusion/whole block, full digest/scope 보존, fresh summary handoff와 가짜 pair 금지.
+
+Python 변경은 관련 pytest와 compile, shell은 `bash -n`과 wrapper contract test, 모든 변경은 `git diff --check`를 수행한다. 문서/체크리스트 변경은 print-only parser로 검증하고 외부 Project/Calendar sync는 실행하지 않는다. Provider unit test는 fake runner만 쓴다.
+
+### 22.22 최소 재생성·배포·완료 판정
+
+- 원본 canonical report/checkpoint/policy와 old generation을 보존한다. source/evidence가 변하지 않았으면 #76 원천이나 과거 Provider replay를 전량 다시 실행하지 않는다.
+- 변경된 최초 producer부터 직접 last consumer까지만 재생성한다. raw generation drift면 Provider 없이 #11→#76→#74→#82를 최신 generation으로 닫고, compact single-contract의 새 Provider 요청은 기존 owner·budget·checkpoint가 허용하는 필요한 exact ENTER에만 한정한다.
+- 이미 terminal인 동일 prompt/input/schema request는 재사용하고, metadata-only rebind는 Provider 0·판정/경제성 불변을 검증한다. 실패한 producer와 영향 consumer만 재실행한다.
+- 장후 closure는 fresh verifier→tower→checklist→strict/controller까지 확인한다. finalization/cleanup/detector는 실제 영향 계약만 해당 runbook으로 재확인하며 무관한 성공 단계를 새 실행으로 표시하지 않는다.
+- 배포가 별도 승인돼 수행되면 worktree와 selected release diff, commit, policy/version registry, activation, rollback bundle을 대사한다. runtime code와 정책이 서로 다른 generation인 부분 배포는 금지한다.
+
+완료 상태는 다음처럼 별도 보고한다.
+
+| 층 | 완료조건 |
+| --- | --- |
+| 계획 | §22 통합안, owner·권한·수용조건과 충돌 0 |
+| 코드/계약 | review P0~P2 finding 0, targeted test/compile/syntax/diff 통과 |
+| 장후 handoff | #11→#76→#74→#77/#82→#78→21:05/#80→strict 같은 generation terminal |
+| policy/deployment | compact successor와 machine challenger/carry bundle, release·rollback 검증 |
+| PID 소비 | 실제 current PID의 load/first-use와 ENTER-only AI receipt |
+| 자연 품질 | semantic invalid, correct/missed VETO, dangerous/correct PASS, micro·submit 최초 결손 미분류 0 |
+| 경제성 | 같은 scope에서 실제/CF 분리, 비용 후 EV·순익 빈도·tail·자본점유 확인 |
+
+compact migration은 코드/정책 gate가 닫히면 대조군 없이 직접 전환할 수 있다. 경제성 미관측은 그 전환을 취소하지 않지만 경제성 완료도 아니다. 예상 효과는 상충 지시 제거, system prompt 축소, semantic binding 명료화, legacy 독립 선정 역할의 재유입 방지와 장후 책임분모 정정이다. 실제 입력 토큰·AI 지연·submit 지연·VETO/PASS 품질·비용 후 작은 순익 빈도는 PID first-use와 후행 natural receipt로 확인한다. 호출량·retry/model·threshold·수량·hard guard 변경으로 효과를 가장하지 않는다.

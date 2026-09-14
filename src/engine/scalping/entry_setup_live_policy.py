@@ -22,6 +22,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from src.engine.ai_prompt_contracts import (
+    AUXILIARY_ENTRY_RISK_PROMPT_VERSIONS,
     BALANCED_ENTRY_PROMPT_VERSIONS,
     DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
     DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
@@ -30,6 +31,7 @@ from src.engine.ai_prompt_contracts import (
     DECISION_QUALITY_V2_14_2_BALANCED_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
     DECISION_QUALITY_V2_15_1_TIMING_AWARE_BOUNDED_RECOVERY_PROMPT_VERSION,
     DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION,
+    ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
 )
 from src.engine.scalping.entry_setup_evidence import (
     ENTRY_SETUP_BALANCED_EVIDENCE_VERSION,
@@ -340,6 +342,7 @@ def _expected_composer_version(prompt_version: Any) -> str:
     return {
         DECISION_QUALITY_V2_14_2_BALANCED_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION: ENTRY_DECISION_COMPOSER_V2_14_2_VERSION,
         DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION: ENTRY_DECISION_COMPOSER_V2_15_2_VERSION,
+        ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION: ENTRY_DECISION_COMPOSER_V2_15_2_VERSION,
         DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION: (
             ENTRY_DECISION_COMPOSER_V2_15_VERSION
         ),
@@ -353,7 +356,7 @@ def _expected_composer_version(prompt_version: Any) -> str:
 
 
 def _expected_evidence_version(prompt_version: Any) -> str:
-    if str(prompt_version or "").strip() in BALANCED_ENTRY_PROMPT_VERSIONS:
+    if str(prompt_version or "").strip() in AUXILIARY_ENTRY_RISK_PROMPT_VERSIONS:
         return ENTRY_SETUP_BALANCED_EVIDENCE_VERSION
     return (
         ENTRY_SETUP_TIMING_EVIDENCE_VERSION
@@ -2137,16 +2140,27 @@ def resolve_live_prompt_policy(
                 return result
             if initial is not None:
                 authority = auto_promotion if auto_scope else rollout
-                # Keep the existing independently validated AI promotion path.
-                # Bootstrap must not permanently shadow tomorrow's optimizer.
-                optimized_ai = resolve_live_prompt_policy(
-                    configured_prompt_version=configured_prompt_version,
-                    effective_venue=effective_venue,
-                    session_bucket=session_bucket,
-                    position_tag=position_tag,
-                    strategy=strategy,
-                    now=current,
-                    _allow_initial_policy=False,
+                compact_auxiliary = (
+                    initial["ai_policy"].get("prompt_version")
+                    == ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION
+                )
+                # A compact machine-first policy is already the complete final
+                # prompt.  Do not splice an independently optimized base
+                # prompt into it: that would make the issued bundle and the
+                # executed prompt differ. Legacy frozen bundles retain their
+                # established optimizer path.
+                optimized_ai = (
+                    {"enabled": False, "status": "compact_auxiliary_pinned"}
+                    if compact_auxiliary
+                    else resolve_live_prompt_policy(
+                        configured_prompt_version=configured_prompt_version,
+                        effective_venue=effective_venue,
+                        session_bucket=session_bucket,
+                        position_tag=position_tag,
+                        strategy=strategy,
+                        now=current,
+                        _allow_initial_policy=False,
+                    )
                 )
                 optimized_ai_selected = bool(
                     optimized_ai.get("enabled") is True
@@ -2200,11 +2214,16 @@ def resolve_live_prompt_policy(
                     auxiliary_system_prompt_sha256=initial["ai_policy"][
                         "system_prompt_sha256"
                     ],
+                    auxiliary_prompt_variant=initial["ai_policy"]["variant"],
                     auxiliary_historical_context=initial["historical_context"],
                     ai_policy_disposition=(
-                        "validated_optimized_base_prompt"
-                        if optimized_ai_selected
-                        else "initial_auxiliary_prompt"
+                        "compact_auxiliary_prompt"
+                        if compact_auxiliary
+                        else (
+                            "validated_optimized_base_prompt"
+                            if optimized_ai_selected
+                            else "initial_auxiliary_prompt"
+                        )
                     ),
                     ai_base_candidate_sha256=(
                         optimized_ai.get("candidate_contract_sha256")

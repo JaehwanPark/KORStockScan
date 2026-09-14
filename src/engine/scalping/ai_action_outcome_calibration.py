@@ -3399,6 +3399,14 @@ def load_machine_observation_rows(
                             "ai_veto_corroborated": ai_trace.get(
                                 "entry_ai_veto_corroborated"
                             ),
+                            "prompt_version": ai_trace.get("prompt_version"),
+                            "prompt_sha256": ai_trace.get("prompt_sha256"),
+                            "auxiliary_system_prompt_sha256": ai_trace.get(
+                                "auxiliary_system_prompt_sha256"
+                            ),
+                            "entry_ai_prompt_variant": ai_trace.get(
+                                "entry_ai_prompt_variant"
+                            ),
                             "followup_disposition": ai_trace.get(
                                 "entry_ai_followup_disposition"
                             ),
@@ -3438,12 +3446,17 @@ def _machine_ai_natural_source_receipt(data_root: Path, target_date: str) -> dic
     consumption = consumption if isinstance(consumption, dict) else {}
     manifest = consumption.get("source_manifest")
     manifest = manifest if isinstance(manifest, dict) else {}
+    compact_measurement = consumption.get("compact_auxiliary_policy_measurement")
+    compact_measurement = (
+        compact_measurement if isinstance(compact_measurement, dict) else {}
+    )
     return {
         "path": str(path),
         "schema": consumption.get("schema"),
         "status": consumption.get("status", "missing"),
         "source_manifest_sha256": manifest.get("source_manifest_sha256"),
         "tuning_input_allowed": consumption.get("tuning_input_allowed"),
+        "compact_auxiliary_policy_measurement": compact_measurement,
         "authority": "source_quality_receipt_only_no_runtime_apply",
     }
 
@@ -3462,10 +3475,13 @@ def build_machine_decision_case_table(
     merging their separate authorities.
     """
 
+    from src.engine.scalping.mechanistic_entry_runtime_policy import AI_VERSION
+
     classifications: Counter[str] = Counter()
     action_counts: Counter[str] = Counter()
     source_date_counts: Counter[str] = Counter()
     hierarchy_selection_counts: Counter[str] = Counter()
+    compact_screen_outcomes: Counter[str] = Counter()
     selected_child_rule_ids: set[str] = set()
     cases: list[dict] = []
     seen_attempts: dict[tuple[str, str, str, str, str], tuple[str, str]] = {}
@@ -3520,6 +3536,20 @@ def build_machine_decision_case_table(
         rule_id = str(hierarchy.get("rule_id") or "").strip()
         if rule_id and hierarchy_level != "common":
             selected_child_rule_ids.add(rule_id)
+        ai_guard = _as_dict(row.get("ai_and_final_guard"))
+        if (
+            action == "ENTER_NOW"
+            and ai_guard.get("prompt_version") == AI_VERSION
+            and ai_guard.get("provider_called") is True
+        ):
+            compact_screen_outcomes[
+                "|".join(
+                    (
+                        str(ai_guard.get("ai_risk_verdict") or "UNCLASSIFIED"),
+                        label,
+                    )
+                )
+            ] += 1
         cases.append(
             {
                 "decision_trace_id": row.get("decision_trace_id"),
@@ -3569,6 +3599,9 @@ def build_machine_decision_case_table(
         )
     source_receipt = dict(source_receipt or {})
     source_tuning_allowed = source_receipt.get("tuning_input_allowed") is True
+    compact_measurement = _as_dict(
+        source_receipt.get("compact_auxiliary_policy_measurement")
+    )
     return {
         "schema": MACHINE_DECISION_CASE_TABLE_SCHEMA,
         "status": (
@@ -3593,6 +3626,18 @@ def build_machine_decision_case_table(
         ),
         "machine_capture_census": dict(capture_census or {}),
         "machine_ai_natural_source_receipt": source_receipt,
+        "compact_auxiliary_policy_measurement": compact_measurement,
+        "compact_auxiliary_screen_outcomes": {
+            "screened_enter_now_count": sum(compact_screen_outcomes.values()),
+            "verdict_x_action_neutral_outcome_counts": dict(
+                sorted(compact_screen_outcomes.items())
+            ),
+            "tuning_interpretation": (
+                "measure_static_auxiliary_pass_veto_quality; machine_threshold_"
+                "challenger_remains_under_existing_cost_holdout_gate"
+            ),
+            "prompt_body_tuning": "forbidden_static_contract",
+        },
         "machine_action_counts": dict(sorted(action_counts.items())),
         "case_classification_counts": dict(sorted(classifications.items())),
         "source_date_counts": dict(sorted(source_date_counts.items())),

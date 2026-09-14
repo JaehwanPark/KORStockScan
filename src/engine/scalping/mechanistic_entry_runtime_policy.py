@@ -20,6 +20,8 @@ from zoneinfo import ZoneInfo
 from src.engine.ai_prompt_contracts import (
     DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION,
     decision_quality_balanced_entry_system_prompt,
+    ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
+    machine_auxiliary_compact_entry_system_prompt,
 )
 from src.engine.scalping.entry_setup_evidence import (
     MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
@@ -31,7 +33,13 @@ from src.utils.market_day import is_krx_trading_day
 SCHEMA = "main_mechanistic_entry_runtime_policy_v1"
 KST = ZoneInfo("Asia/Seoul")
 COHORT = ["KRX", "KRX_REGULAR"]
-AI_VERSION = DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION
+# New dated bundles are compact and self-contained.  Existing V2.15.2 bundles
+# remain readable so a running PID never loses its frozen policy merely because
+# the publisher is upgraded.
+LEGACY_AI_VERSION = DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION
+AI_VERSION = ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION
+LEGACY_AI_VARIANT = "machine_first_pass_veto_v2"
+AI_VARIANT = "machine_first_compact_pass_veto_v1"
 AI_ADDENDUM = """
 Machine-first binding risk screen (this role supersedes legacy veto wording):
 The deterministic machine has already assessed this exact current setup.
@@ -128,12 +136,7 @@ def validate(bundle: dict, *, target_date: str) -> None:
     ai = bundle.get("ai_policy") or {}
     if not isinstance(ai, dict):
         raise ValueError("machine_bundle_ai_policy_invalid")
-    if (
-        ai.get("prompt_version") != AI_VERSION
-        or ai.get("variant") != "machine_first_pass_veto_v2"
-        or ai.get("system_prompt_sha256") != digest(ai.get("system_prompt"))
-        or ai.get("system_prompt") != auxiliary_prompt(bundle.get("historical_context"))
-    ):
+    if not _validate_ai_policy(ai, bundle.get("historical_context")):
         raise ValueError("machine_bundle_ai_policy_invalid")
     scopes = bundle.get("scope_policies")
     if bundle.get("all_continuous_adopted") is True:
@@ -157,13 +160,7 @@ def validate(bundle: dict, *, target_date: str) -> None:
                 or not isinstance(context, dict)
             ):
                 raise ValueError("machine_scope_policy_invalid")
-            if (
-                context.get("scope") != scope
-                or sai.get("prompt_version") != AI_VERSION
-                or sai.get("variant") != "machine_first_pass_veto_v2"
-                or sai.get("system_prompt") != auxiliary_prompt(context)
-                or sai.get("system_prompt_sha256") != digest(sai.get("system_prompt"))
-            ):
+            if context.get("scope") != scope or not _validate_ai_policy(sai, context):
                 raise ValueError("machine_scope_ai_binding_invalid")
             if policy.get("hierarchy") and (
                 bundle.get("hierarchy_adopted") is not True
@@ -190,6 +187,7 @@ def for_cohort(bundle: dict | None, cohort: tuple[str, str]) -> dict | None:
 
 
 def auxiliary_prompt(context: object) -> str:
+    """Legacy V2.15.2 composer retained for frozen policy readers only."""
     hierarchy_role = (
         "\nA validated hierarchical machine trigger can resolve a legacy setup "
         "WAIT_CONFIRMATION. Do not require the common READY label again. "
@@ -210,6 +208,32 @@ def auxiliary_prompt(context: object) -> str:
         + "\n\nHistorical policy context (not current facts):\n"
         + json.dumps(context, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
     )
+
+
+def compact_auxiliary_prompt(context: object | None = None) -> str:
+    """Single runtime/offline prompt; context stays in the user fact payload."""
+
+    del context
+    return machine_auxiliary_compact_entry_system_prompt("entry")
+
+
+def _validate_ai_policy(ai: object, context: object) -> bool:
+    if not isinstance(ai, dict) or ai.get("system_prompt_sha256") != digest(
+        ai.get("system_prompt")
+    ):
+        return False
+    version = ai.get("prompt_version")
+    if version == AI_VERSION:
+        return (
+            ai.get("variant") == AI_VARIANT
+            and ai.get("system_prompt") == compact_auxiliary_prompt(context)
+        )
+    if version == LEGACY_AI_VERSION:
+        return (
+            ai.get("variant") == LEGACY_AI_VARIANT
+            and ai.get("system_prompt") == auxiliary_prompt(context)
+        )
+    return False
 
 
 def load(*, data_root: Path, target_date: str) -> dict | None:
@@ -318,8 +342,11 @@ def publish(
             reviewed = copy.deepcopy(existing)
             reviewed["role_contract"] = copy.deepcopy(MECHANISTIC_PRIMARY_ROLE_CONTRACT)
             reviewed["ai_policy"].update(
-                variant="machine_first_pass_veto_v2",
-                system_prompt=auxiliary_prompt(reviewed.get("historical_context")),
+                prompt_version=AI_VERSION,
+                variant=AI_VARIANT,
+                system_prompt=compact_auxiliary_prompt(
+                    reviewed.get("historical_context")
+                ),
             )
             reviewed["ai_policy"]["system_prompt_sha256"] = digest(
                 reviewed["ai_policy"]["system_prompt"]
@@ -332,6 +359,7 @@ def publish(
             existing is not None
             and existing.get("role_contract") == MECHANISTIC_PRIMARY_ROLE_CONTRACT
             and existing["source_artifact_sha256"] == source["artifact_content_sha256"]
+            and existing.get("ai_policy", {}).get("prompt_version") == AI_VERSION
             and (not adopt_hierarchy or existing.get("hierarchy_adopted") is True)
             and (
                 not adopt_all_continuous
@@ -457,7 +485,7 @@ def publish(
                 for e in hierarchy.get("evaluations", [])[:8]
                 if isinstance(e, dict) and "id" in e
             ]
-        prompt = auxiliary_prompt(context)
+        prompt = compact_auxiliary_prompt(context)
         all_continuous = adopt_all_continuous or bool(
             previous and previous.get("all_continuous_adopted") is True
         )
@@ -531,14 +559,14 @@ def publish(
                         if isinstance(e, dict) and "id" in e
                     ],
                 }
-                scoped_prompt = auxiliary_prompt(scoped_context)
+                scoped_prompt = compact_auxiliary_prompt(scoped_context)
                 scope_policies[scope] = {
                     "machine_policy": scoped_machine,
                     "machine_disposition": scoped_disposition,
                     "historical_context": scoped_context,
                     "ai_policy": {
                         "prompt_version": AI_VERSION,
-                        "variant": "machine_first_pass_veto_v2",
+                        "variant": AI_VARIANT,
                         "system_prompt": scoped_prompt,
                         "system_prompt_sha256": digest(scoped_prompt),
                     },
@@ -559,7 +587,7 @@ def publish(
             "historical_context": context,
             "ai_policy": {
                 "prompt_version": AI_VERSION,
-                "variant": "machine_first_pass_veto_v2",
+                "variant": AI_VARIANT,
                 "system_prompt": prompt,
                 "system_prompt_sha256": digest(prompt),
             },

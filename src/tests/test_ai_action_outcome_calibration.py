@@ -746,6 +746,11 @@ def test_machine_decision_case_table_separates_missed_and_bad_entry_timing():
         "common": 2,
         "group": 1,
     }
+    assert report["compact_auxiliary_screen_outcomes"]["screened_enter_now_count"] == 0
+    assert (
+        report["compact_auxiliary_screen_outcomes"]["prompt_body_tuning"]
+        == "forbidden_static_contract"
+    )
     assert report["observed_selected_child_rule_ids"] == ["flow-rule-1"]
     assert report["legacy_60_second_same_action_collapse_disabled"] is True
     assert report["conflicting_attempt_identity_count"] == 0

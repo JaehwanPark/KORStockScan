@@ -659,11 +659,19 @@ DECISION_QUALITY_V2_14_4_COUNTERWEIGHT_BOUND_COMPARATIVE_PROMPT_VERSION = (
 DECISION_QUALITY_V2_15_4_COUNTERWEIGHT_BOUND_BOUNDED_RECOVERY_PROMPT_VERSION = (
     "decision_quality_v2_15_4_counterweight_bound_bounded_recovery"
 )
+ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION = "entry_machine_auxiliary_compact_v1"
 BALANCED_ENTRY_PROMPT_VERSIONS = frozenset(
     {
         DECISION_QUALITY_V2_14_2_BALANCED_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
         DECISION_QUALITY_V2_15_2_BALANCED_BOUNDED_RECOVERY_PROMPT_VERSION,
     }
+)
+MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS = frozenset(
+    {ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION}
+)
+AUXILIARY_ENTRY_RISK_PROMPT_VERSIONS = (
+    BALANCED_ENTRY_PROMPT_VERSIONS
+    | MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS
 )
 COMPARATIVE_ENTRY_PROMPT_VERSIONS = frozenset(
     {
@@ -2086,6 +2094,48 @@ def decision_quality_balanced_entry_system_prompt(
         if bounded_recovery
         else "\n\nV2.14.2 retains the existing setup-risk guarded entry/recheck paths."
     )
+
+
+_MACHINE_AUXILIARY_COMPACT_ENTRY_RULES = """
+Machine auxiliary entry risk-screen contract:
+1. The deterministic machine owns symbol selection, timing, thresholds and its
+   ENTER_NOW decision. You are a binding PASS/VETO risk screen only for that
+   exact machine-selected point. Never create an entry, promote RECHECK/BLOCK,
+   change a price, quantity, provider, route, threshold, safety rule or order.
+2. Aim to preserve repeated small cost-adjusted profits while rejecting a
+   current, evidenced material risk. Do not seek a PASS quota, perfect
+   certainty, gross-return maximization or permanent abstention.
+3. mechanistic_entry_assessment and entry_setup_evidence_v1 are the complete
+   current fact ledger. Copy fact IDs exactly. Weigh supporting and adverse
+   facts together. Missing optional context is neutral; do not invent facts,
+   costs, prices, future outcomes or a new confirmation requirement.
+4. PASS means the machine-selected point may continue only to existing final
+   execution guards. PASS must acknowledge every bound adverse fact and its
+   current supporting facts. A hierarchy-selected machine trigger may resolve
+   WAIT_CONFIRMATION when its supplied facts are valid; it does not bypass any
+   later guard.
+5. VETO needs an exact current adverse fact and matching risk code. A bounded
+   risk alone is not automatically a VETO. CAUTION means the existing bounded
+   recheck path; INSUFFICIENT means an unusable required source. Neither
+   authorizes exposure. Hard source, freshness, account, broker and order
+   guards remain authoritative.
+6. Return JSON only: schema=entry_setup_risk_adjudication_v1, risk_verdict
+   PASS|VETO|CAUTION|INSUFFICIENT, risk_codes, supporting_fact_ids,
+   contradicting_fact_ids and confidence integer 0..100. Confidence is not an
+   entry threshold. Use no historical policy context or post-decision outcome.
+7. Keep venue, session, snapshot and source identity exactly as supplied. A
+   source gap stays INSUFFICIENT; never turn it into a favorable or adverse
+   market fact. Your result is diagnostic until existing downstream guards
+   accept it, and never substitutes for their execution receipt.
+""".strip()
+
+
+def machine_auxiliary_compact_entry_system_prompt(stage: str) -> str:
+    """Return the immutable machine-first auxiliary risk-screen prompt."""
+
+    if str(stage or "").strip().lower() != "entry":
+        raise ValueError("machine auxiliary compact prompt supports entry only")
+    return _MACHINE_AUXILIARY_COMPACT_ENTRY_RULES
 
 
 _DECISION_QUALITY_COMPARATIVE_ENTRY_RULES = """

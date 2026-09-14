@@ -3717,6 +3717,27 @@ def test_balanced_runtime_prompt_and_raw_pass_preserve_guarded_wait(bounded):
     assert result["entry_probe_intent"] is True, result
 
 
+def test_machine_auxiliary_compact_prompt_is_single_static_contract():
+    from src.engine.ai_prompt_contracts import (
+        ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
+        machine_auxiliary_compact_entry_system_prompt,
+    )
+
+    engine = _build_engine()
+    prompt, prompt_type, version, profile = engine._resolve_scalping_prompt(
+        "watching",
+        prompt_version_override=ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
+    )
+
+    assert prompt == machine_auxiliary_compact_entry_system_prompt("entry")
+    assert prompt.isascii()
+    assert 250 <= len(prompt.split()) <= 400
+    assert "Historical policy context" not in prompt
+    assert prompt_type == "scalping_entry"
+    assert version == ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION
+    assert profile == "watching"
+
+
 def test_mechanistic_primary_runtime_adapter_rejects_invalid_screen():
     from src.engine.ai_prompt_contracts import (
         DECISION_QUALITY_V2_14_2_BALANCED_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION as version,
@@ -3915,9 +3936,9 @@ def test_machine_initial_policy_assesses_before_provider_cache_and_lock(
         "ai_role": "auxiliary_risk_screen_pass_veto_no_promotion",
         "mechanistic_threshold_policy": MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
         "machine_bundle_sha256": "b" * 64,
-        "auxiliary_system_prompt": initial_policy.auxiliary_prompt({}),
+        "auxiliary_system_prompt": initial_policy.compact_auxiliary_prompt({}),
         "auxiliary_system_prompt_sha256": initial_policy.digest(
-            initial_policy.auxiliary_prompt({})
+            initial_policy.compact_auxiliary_prompt({})
         ),
     }
     monkeypatch.setattr(
@@ -4008,9 +4029,9 @@ def test_machine_enter_now_ai_timeout_preserves_bounded_recheck(monkeypatch):
         "ai_role": "auxiliary_risk_screen_pass_veto_no_promotion",
         "mechanistic_threshold_policy": MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
         "machine_bundle_sha256": "b" * 64,
-        "auxiliary_system_prompt": initial_policy.auxiliary_prompt({}),
+        "auxiliary_system_prompt": initial_policy.compact_auxiliary_prompt({}),
         "auxiliary_system_prompt_sha256": initial_policy.digest(
-            initial_policy.auxiliary_prompt({})
+            initial_policy.compact_auxiliary_prompt({})
         ),
     }
     monkeypatch.setattr(
@@ -7999,6 +8020,52 @@ def test_openai_v2_15_invalid_prompt_retry_preserves_selected_contract(
     if machine_screen:
         assert calls[1]["metadata"]["entry_ai_role"] == metadata["entry_ai_role"]
         assert "binding PASS/VETO authority" in calls[1]["instructions"]
+
+
+def test_openai_compact_auxiliary_invalid_prompt_retry_keeps_compact_contract():
+    from src.engine.ai_prompt_contracts import (
+        ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
+        machine_auxiliary_compact_entry_system_prompt,
+    )
+
+    engine = _build_engine()
+    calls = []
+
+    def _create(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise Exception("invalid_prompt")
+        return SimpleNamespace(
+            output_text=(
+                '{"schema":"entry_setup_risk_adjudication_v1",'
+                '"risk_verdict":"INSUFFICIENT","risk_codes":[],'
+                '"supporting_fact_ids":[],"contradicting_fact_ids":[],'
+                '"confidence":0}'
+            )
+        )
+
+    engine.client = SimpleNamespace(responses=SimpleNamespace(create=_create))
+    engine._call_openai_safe(
+        "original compact prompt",
+        "{}",
+        require_json=True,
+        context_name="compact_retry",
+        schema_name=ENTRY_RISK_ADJUDICATION_SCHEMA,
+        endpoint_name="analyze_target",
+        symbol="005930",
+        metadata_extra={
+            "entry_ai_role": "auxiliary_risk_screen_pass_veto_no_promotion",
+            "entry_setup_live_policy_selected_prompt_version": (
+                ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION
+            ),
+        },
+    )
+
+    assert len(calls) == 2
+    instructions = calls[1]["instructions"]
+    assert machine_auxiliary_compact_entry_system_prompt("entry") in instructions
+    assert "Historical policy context" not in instructions
+    assert "binding PASS/VETO authority" not in instructions
 
 
 def test_openai_ws_request_id_mismatch_fails_closed_without_http_fallback(monkeypatch):

@@ -255,6 +255,13 @@ def test_machine_ai_natural_source_audit_keeps_noncall_and_provider_denominators
         "request_present": 1,
     }
     assert report["tuning_input_allowed"] is True
+    assert (
+        report["compact_auxiliary_policy_measurement"]["measurement_status"]
+        == "not_observed_on_source_date"
+    )
+    assert (
+        report["compact_auxiliary_policy_measurement"]["measurement_allowed"] is False
+    )
 
 
 def test_machine_ai_natural_source_audit_does_not_require_provider_archives_without_calls(
@@ -311,6 +318,91 @@ def test_machine_ai_natural_source_audit_does_not_require_provider_archives_with
     assert report["status"] == "pass"
     assert report["provider_attempt_population"]["count"] == 0
     assert report["tuning_input_allowed"] is True
+    assert (
+        report["compact_auxiliary_policy_measurement"]["measurement_allowed"] is False
+    )
+
+
+def test_machine_ai_natural_source_audit_isolates_compact_prompt_measurement(
+    tmp_path: Path,
+):
+    from src.engine.scalping.mechanistic_entry_runtime_policy import (
+        AI_VARIANT,
+        AI_VERSION,
+        compact_auxiliary_prompt,
+        digest,
+    )
+
+    day = "2026-09-14"
+
+    def write(name: str, rows: list[dict]) -> None:
+        path = tmp_path / name / f"{name}_{day}.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8"
+        )
+
+    write("ai_decision_payloads", [])
+    write(
+        "ai_decision_trace",
+        [
+            {
+                "schema": "ai_decision_trace_v1",
+                "decision_stage": "entry_screen",
+                "snapshot_id": "compact-snap",
+                "prompt_version": AI_VERSION,
+                "provider_called": True,
+                "request_id": "compact-request",
+                "prompt_sha256": "p" * 64,
+                "decision_trace_id": "compact-trace",
+                "entry_ai_prompt_variant": AI_VARIANT,
+                "auxiliary_system_prompt_sha256": digest(compact_auxiliary_prompt()),
+                "result_source": "live",
+            },
+            {
+                "schema": "ai_decision_trace_v1",
+                "decision_stage": "entry_screen",
+                "snapshot_id": "legacy-snap",
+                "prompt_version": "decision_quality_v2_15_2_balanced_bounded_recovery",
+                "provider_called": True,
+                "request_id": "legacy-request",
+                "prompt_sha256": "q" * 64,
+                "decision_trace_id": "legacy-trace",
+                "result_source": "live",
+            },
+        ],
+    )
+    write(
+        "ai_decision_requests",
+        [
+            {"schema": "ai_decision_request_provenance_v1", "request_id": "compact-request"},
+            {"schema": "ai_decision_request_provenance_v1", "request_id": "legacy-request"},
+        ],
+    )
+    write(
+        "ai_decision_prompts",
+        [
+            {"schema": "ai_decision_prompt_v1", "prompt_sha256": "p" * 64},
+            {"schema": "ai_decision_prompt_v1", "prompt_sha256": "q" * 64},
+        ],
+    )
+    write(
+        "ai_decision_outcomes",
+        [
+            {"schema": "ai_decision_outcome_label_v1", "decision_trace_id": "compact-trace"},
+            {"schema": "ai_decision_outcome_label_v1", "decision_trace_id": "legacy-trace"},
+        ],
+    )
+
+    report = audit._machine_ai_natural_source_consumption(day, data_root=tmp_path)
+    compact = report["compact_auxiliary_policy_measurement"]
+
+    assert compact["natural_trace_count"] == 1
+    assert compact["provider_called_count"] == 1
+    assert compact["provider_prompt_receipt_counts"] == {"verified_static_prompt": 1}
+    assert compact["measurement_status"] == "measurable_natural_compact_population"
+    assert compact["measurement_allowed"] is True
+    assert compact["prompt_body_tuning"] == "forbidden_static_contract"
 
 
 @pytest.mark.parametrize(

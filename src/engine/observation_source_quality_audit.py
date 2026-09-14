@@ -268,6 +268,47 @@ def _machine_ai_natural_source_consumption(
         provider_linkage[key]
         for key in ("request_missing", "prompt_missing", "outcome_missing")
     )
+    # A compact policy is immutable by design.  Do not let a legacy source-day
+    # silently tune or rewrite it: only a naturally consumed compact trace
+    # with the issued system-prompt digest is eligible for compact-performance
+    # measurement.  Machine threshold learning keeps its independent existing
+    # cost/holdout contract.
+    from src.engine.scalping.mechanistic_entry_runtime_policy import (
+        AI_VARIANT,
+        AI_VERSION,
+        compact_auxiliary_prompt,
+        digest as policy_digest,
+    )
+
+    compact_system_prompt_sha256 = policy_digest(compact_auxiliary_prompt())
+    compact_traces = [
+        trace for trace in traces if trace.get("prompt_version") == AI_VERSION
+    ]
+    compact_provider_traces = [
+        trace for trace in compact_traces if trace.get("provider_called") is True
+    ]
+    compact_prompt_receipts = Counter()
+    for trace in compact_provider_traces:
+        prompt_hash = str(trace.get("auxiliary_system_prompt_sha256") or "")
+        variant = str(trace.get("entry_ai_prompt_variant") or "")
+        compact_prompt_receipts[
+            (
+                "verified_static_prompt"
+                if prompt_hash == compact_system_prompt_sha256 and variant == AI_VARIANT
+                else (
+                    "missing_prompt_receipt"
+                    if not prompt_hash or not variant
+                    else "prompt_or_variant_mismatch"
+                )
+            )
+        ] += 1
+    # A legacy-only source date is not evidence about the compact policy.
+    # Do not let its otherwise clean receipt authorize a compact-performance
+    # interpretation before a compact trace has actually been observed.
+    compact_measurement_allowed = bool(compact_traces) and not bool(
+        compact_prompt_receipts["missing_prompt_receipt"]
+        or compact_prompt_receipts["prompt_or_variant_mismatch"]
+    )
     status = (
         "source_generation_changed"
         if source_generation_changed
@@ -322,6 +363,32 @@ def _machine_ai_natural_source_consumption(
             "outcome_archive_count": len(outcomes),
             "linkage_counts": dict(sorted(provider_linkage.items())),
             "denominator_note": "entry_screen_traces_with_provider_called_true_only",
+        },
+        "compact_auxiliary_policy_measurement": {
+            "prompt_version": AI_VERSION,
+            "variant": AI_VARIANT,
+            "issued_system_prompt_sha256": compact_system_prompt_sha256,
+            "natural_trace_count": len(compact_traces),
+            "provider_called_count": len(compact_provider_traces),
+            "provider_not_called_count": len(compact_traces)
+            - len(compact_provider_traces),
+            "provider_prompt_receipt_counts": dict(
+                sorted(compact_prompt_receipts.items())
+            ),
+            "measurement_status": (
+                "not_observed_on_source_date"
+                if not compact_traces
+                else (
+                    "prompt_receipt_gap"
+                    if not compact_measurement_allowed
+                    else "measurable_natural_compact_population"
+                )
+            ),
+            "measurement_allowed": compact_measurement_allowed,
+            "prompt_body_tuning": "forbidden_static_contract",
+            "threshold_tuning_owner": "existing_mechanistic_threshold_cost_holdout_gate",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
         },
         "tuning_input_allowed": not bool(
             required_missing or invalid_json_sources or source_generation_changed
