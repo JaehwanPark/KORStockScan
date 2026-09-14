@@ -400,6 +400,25 @@ def test_cancelled_residual_leg_is_explicit_terminal_state(tmp_path):
     )
 
 
+def test_machine_only_decision_binds_without_provider_payload(tmp_path):
+    path = tmp_path / "events.jsonl"
+    stock = {"id": 29, "code": "005930"}
+    fields = _candidate_fields()
+    fields.pop("ai_input_payload_sha256")
+    fields["ai_decision_result_sha256"] = "e" * 64
+
+    assert _observe(path, stock, "ai_confirmed", fields, 0)
+    report = lifecycle.materialize_candidate_states(
+        "2026-08-07", source_path=path, write=False
+    )
+    state = report["states"][0]
+    assert state["payload_sha256"] is None
+    assert state["decision_result_sha256"] == "e" * 64
+    assert state["decision_evidence_sha256"] == "e" * 64
+    assert state["decision_evidence_kind"] == "mechanistic_decision_result"
+    assert "paired_replay_identity_mismatch" not in state["source_quality_blockers"]
+
+
 def test_route_conflict_blocks_source_quality_and_raw_fields_are_bounded(tmp_path):
     path = tmp_path / "events.jsonl"
     stock = {"id": 19, "code": "005930"}

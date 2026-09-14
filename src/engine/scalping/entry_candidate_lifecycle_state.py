@@ -111,6 +111,7 @@ _ALLOWED_EXACT_FIELDS = {
     "actual_execution_venue",
     "actual_order_submitted",
     "ai_decision_trace_id",
+    "ai_decision_result_sha256",
     "ai_input_payload_sha256",
     "avg_buy_price",
     "best_ask_at_submit",
@@ -345,6 +346,8 @@ def _candidate_context_from_fields(
     payload_sha = _text(
         fields.get("ai_input_payload_sha256") or fields.get("payload_sha256")
     )
+    decision_result_sha = _text(fields.get("ai_decision_result_sha256"))
+    decision_evidence_sha = payload_sha or decision_result_sha
     venue = _upper(
         fields.get("entry_setup_live_policy_effective_venue")
         or fields.get("effective_venue")
@@ -356,7 +359,7 @@ def _candidate_context_from_fields(
     ).lower()
     if (
         not trace_id
-        or len(payload_sha) != 64
+        or len(decision_evidence_sha) != 64
         or venue not in _VALID_VENUES
         or not session
     ):
@@ -388,8 +391,13 @@ def _candidate_context_from_fields(
     context = {
         "schema": CONTEXT_SCHEMA,
         "decision_trace_id": trace_id,
-        "payload_sha256": payload_sha,
-        "paired_replay_id": paired_replay_id(trace_id, payload_sha),
+        "payload_sha256": payload_sha or None,
+        "decision_result_sha256": decision_result_sha or None,
+        "decision_evidence_sha256": decision_evidence_sha,
+        "decision_evidence_kind": (
+            "provider_input_payload" if payload_sha else "mechanistic_decision_result"
+        ),
+        "paired_replay_id": paired_replay_id(trace_id, decision_evidence_sha),
         "effective_venue": venue,
         "session_bucket": session,
         "policy_status": status,
@@ -550,6 +558,11 @@ def _recover_candidate_context(
         "schema": CONTEXT_SCHEMA,
         "decision_trace_id": latest.get("decision_trace_id"),
         "payload_sha256": latest.get("payload_sha256"),
+        "decision_result_sha256": latest.get("decision_result_sha256"),
+        "decision_evidence_sha256": latest.get("decision_evidence_sha256")
+        or latest.get("payload_sha256"),
+        "decision_evidence_kind": latest.get("decision_evidence_kind")
+        or "provider_input_payload",
         "paired_replay_id": latest.get("paired_replay_id"),
         "effective_venue": latest.get("effective_venue"),
         "session_bucket": latest.get("session_bucket"),
@@ -659,6 +672,11 @@ def _event_row(
         "components": list(components),
         "decision_trace_id": context.get("decision_trace_id"),
         "payload_sha256": context.get("payload_sha256"),
+        "decision_result_sha256": context.get("decision_result_sha256"),
+        "decision_evidence_sha256": context.get("decision_evidence_sha256")
+        or context.get("payload_sha256"),
+        "decision_evidence_kind": context.get("decision_evidence_kind")
+        or "provider_input_payload",
         "paired_replay_id": context.get("paired_replay_id"),
         "effective_venue": context.get("effective_venue"),
         "session_bucket": context.get("session_bucket"),
@@ -850,6 +868,9 @@ def _materialize_one(events: list[dict[str, Any]]) -> dict[str, Any]:
     identity_fields = (
         "decision_trace_id",
         "payload_sha256",
+        "decision_result_sha256",
+        "decision_evidence_sha256",
+        "decision_evidence_kind",
         "paired_replay_id",
         "lifecycle_basis",
     )
@@ -865,13 +886,16 @@ def _materialize_one(events: list[dict[str, Any]]) -> dict[str, Any]:
             for row in events[1:]
         )
     )
+    decision_evidence_sha = _text(
+        first.get("decision_evidence_sha256") or first.get("payload_sha256")
+    )
     expected_pair_id = paired_replay_id(
         _text(first.get("decision_trace_id")),
-        _text(first.get("payload_sha256")),
+        decision_evidence_sha,
     )
     pair_identity_valid = bool(
         _text(first.get("decision_trace_id"))
-        and len(_text(first.get("payload_sha256"))) == 64
+        and len(decision_evidence_sha) == 64
         and first.get("paired_replay_id") == expected_pair_id
     )
     event_contract_valid = all(
@@ -1173,6 +1197,10 @@ def _materialize_one(events: list[dict[str, Any]]) -> dict[str, Any]:
         "schema": STATE_SCHEMA,
         "decision_trace_id": first.get("decision_trace_id"),
         "payload_sha256": first.get("payload_sha256"),
+        "decision_result_sha256": first.get("decision_result_sha256"),
+        "decision_evidence_sha256": decision_evidence_sha,
+        "decision_evidence_kind": first.get("decision_evidence_kind")
+        or "provider_input_payload",
         "paired_replay_id": first.get("paired_replay_id"),
         "effective_venue": first.get("effective_venue"),
         "session_bucket": first.get("session_bucket"),

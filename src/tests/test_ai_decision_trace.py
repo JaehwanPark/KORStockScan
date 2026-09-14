@@ -2008,6 +2008,21 @@ def test_machine_screen_retained_in_trace_and_pending_outcome(
     )
     row = _rows(trace._trace_path(trace._date_text()))[0]
     pending = _rows(trace._outcome_path(trace._date_text()))[0]
+    assert len(
+        trace.record_ai_decision_trace(
+            {
+                "ai_decision_trace_id": "machine-screen-hash",
+                "action": "WAIT",
+                "decision_quality_live_adapter": (
+                    "entry_setup_v2_15_2_krx_bounded_probe_v1"
+                ),
+            },
+            prompt_type="scalping_entry",
+            prompt_version="decision_quality_v2_15_2",
+            result_source="mechanistic_pre_adjudication",
+            provider_called=False,
+        )["ai_decision_result_sha256"]
+    ) == 64
     assert quality._final_decision_response_findings(row) == []
     for key, value in fields.items():
         assert (

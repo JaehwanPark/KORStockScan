@@ -50685,6 +50685,7 @@ def _build_ai_ops_log_fields(
     for field_name in (
         "ai_decision_trace_schema",
         "ai_decision_trace_id",
+        "ai_decision_result_sha256",
         "ai_decision_outcome_label_status",
         "ai_input_snapshot_id",
         "ai_market_snapshot_id",

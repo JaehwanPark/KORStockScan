@@ -2635,6 +2635,7 @@ def record_ai_decision_trace(
         return {
             "ai_decision_trace_schema": TRACE_SCHEMA,
             "ai_decision_trace_id": trace_id,
+            "ai_decision_result_sha256": decision_result_sha256,
             "ai_decision_outcome_label_status": (
                 "pending"
                 if trace_row["outcome_label_eligible"]
