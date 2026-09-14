@@ -142,6 +142,7 @@ def record_runtime_pid_consumption(
         }
         selection["actual_pid_consumed"] = True
         selection["actual_pid_receipt"] = receipt
+        selection["actual_pid_consumption_status"] = "pid_receipt_attested"
         with tempfile.NamedTemporaryFile(
             "w", encoding="utf-8", dir=manifest_path.parent, delete=False
         ) as temporary:

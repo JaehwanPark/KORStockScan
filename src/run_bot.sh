@@ -553,7 +553,7 @@ while true; do
     # receipt failure is observable but must not turn a provenance write into
     # a bot/process or policy-control authority.
     RUNTIME_WORKSPACE="$(dirname "$(readlink -f "$PROJECT_DIR/data")")"
-    if ! "$RUNTIME_WORKSPACE/deploy/run_runtime_release.sh" \
+    if ! /bin/bash "$RUNTIME_WORKSPACE/deploy/run_runtime_release.sh" \
         --record-pid "$BOT_PID" \
         --record-release-root "$PROJECT_DIR" \
         --record-git-commit "$KORSTOCKSCAN_RUNTIME_GIT_COMMIT"; then

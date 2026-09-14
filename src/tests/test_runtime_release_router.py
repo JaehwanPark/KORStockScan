@@ -58,6 +58,7 @@ def test_pid_receipt_requires_selected_release_child_cwd(release, monkeypatch):
     selection = json.loads(manifest.read_text())
     assert receipt["pid"] == 1234
     assert selection["actual_pid_consumed"] is True
+    assert selection["actual_pid_consumption_status"] == "pid_receipt_attested"
     assert selection["actual_pid_receipt"]["process_cwd"] == str(root / "src")
 
 
