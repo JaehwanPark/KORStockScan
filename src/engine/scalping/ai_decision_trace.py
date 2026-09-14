@@ -1012,9 +1012,6 @@ def capture_machine_observation(
     The existing payload store owns retention. A separate schema ensures that
     provider replay cannot accidentally send these machine-only observations.
     """
-    if not trace_enabled():
-        return {"machine_capture_status": "disabled"}
-    now = _now()
     context = _request_context(
         exact_payload, dict(metadata or {}), endpoint_name="scalping_entry"
     )
@@ -1029,6 +1026,25 @@ def capture_machine_observation(
         or (metadata or {}).get("evaluation_attempt_id")
         or context.get("snapshot_id")
     )
+    capture_identity = {
+        "evaluation_attempt_id": context.get("evaluation_attempt_id"),
+        "evaluation_attempt_identity_source": (
+            "caller_evaluation_attempt_id"
+            if _first_value(
+                exact_payload, ("evaluation_attempt_id", "entry_evaluation_attempt_id")
+            )
+            else (
+                "metadata_evaluation_attempt_id"
+                if (metadata or {}).get("evaluation_attempt_id")
+                else "exact_snapshot_id"
+                if context.get("snapshot_id")
+                else "missing"
+            )
+        ),
+    }
+    if not trace_enabled():
+        return {"machine_capture_status": "disabled", **capture_identity}
+    now = _now()
     context["scanner_promotion_id"] = (
         _first_value(exact_payload, ("scanner_promotion_id",))
         or (metadata or {}).get("scanner_promotion_id")
@@ -1089,10 +1105,12 @@ def capture_machine_observation(
         return {
             "machine_capture_status": "write_failed",
             "machine_capture_error": type(exc).__name__,
+            **capture_identity,
         }
     return {
         "machine_capture_status": "redacted_ineligible" if redacted else "captured",
         "machine_observation_sha256": digest,
+        **capture_identity,
     }
 
 

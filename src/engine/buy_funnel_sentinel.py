@@ -141,6 +141,20 @@ SUBMIT_DROUGHT_OBSERVATION_AXIS_ORDER = (
     *SUBMIT_DROUGHT_CORE_AXIS_ORDER,
     *SUBMIT_DROUGHT_SUPPORTING_AXIS_ORDER,
 )
+MACHINE_PRIMARY_DECISION_OWNER = "mechanistic_entry_adjudicator"
+MACHINE_PRIMARY_ENTRY_ACTIONS = frozenset({"ENTER_NOW", "RECHECK", "BLOCK"})
+MACHINE_PRIMARY_AI_SCREEN_STATUSES = frozenset(
+    {
+        "pass",
+        "veto",
+        "caution",
+        "insufficient",
+        "response_invalid",
+        "not_evaluated_transport",
+        "not_evaluated_local",
+        "not_requested_machine_nonentry",
+    }
+)
 EXACT_SUBMIT_FUNNEL_STAGES = {
     "ai_confirmed",
     "budget_pass",
@@ -2263,6 +2277,212 @@ def _summarize_events(events, *, start_at, end_at, summary_rows=None):
     return result
 
 
+def _machine_primary_evaluation_key(event: PipelineEvent) -> str:
+    """Return only producer-issued evaluation identity; never time/symbol join."""
+    for field in (
+        "evaluation_attempt_id",
+        "entry_evaluation_attempt_id",
+        "entry_mechanistic_evaluation_id",
+    ):
+        value = _safe_str(event.fields.get(field)).strip()
+        if value and value.lower() not in {"none", "null", "unknown", "-", "0"}:
+            return f"evaluation:{value}"
+    return ""
+
+
+def _is_machine_primary_event(event: PipelineEvent) -> bool:
+    fields = event.fields
+    return bool(
+        _safe_str(fields.get("entry_primary_decision_owner"))
+        == MACHINE_PRIMARY_DECISION_OWNER
+        or _safe_str(fields.get("entry_mechanistic_action")).upper()
+        in MACHINE_PRIMARY_ENTRY_ACTIONS
+    )
+
+
+def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]:
+    """Diagnostic machine -> AI screen -> submit funnel with explicit identity.
+
+    This is deliberately independent of the legacy submit denominator.  It must
+    never convert a machine RECHECK, a VETO, or a missing screen into a legacy
+    recheck probe or infer a fill, terminal state, or PnL from a broker
+    submission receipt.
+    """
+    grouped: dict[str, list[PipelineEvent]] = defaultdict(list)
+    identity_missing_event_count = 0
+    identified_source_event_count = 0
+    source_event_count = 0
+    for event in events:
+        if event.pipeline != "ENTRY_PIPELINE" or not _is_machine_primary_event(event):
+            continue
+        source_event_count += 1
+        key = _machine_primary_evaluation_key(event)
+        if not key:
+            identity_missing_event_count += 1
+            continue
+        grouped[key].append(event)
+        identified_source_event_count += 1
+
+    ledger: list[dict[str, Any]] = []
+    action_counts: Counter[str] = Counter()
+    screen_counts: Counter[str] = Counter()
+    final_counts: Counter[str] = Counter()
+    for key, rows in sorted(grouped.items()):
+        rows = sorted(rows, key=lambda row: row.emitted_at)
+        actions = {
+            _safe_str(row.fields.get("entry_mechanistic_action")).upper()
+            for row in rows
+            if _safe_str(row.fields.get("entry_mechanistic_action"))
+        }
+        screens = {
+            _safe_str(row.fields.get("entry_ai_screen_status")).lower()
+            for row in rows
+            if _safe_str(row.fields.get("entry_ai_screen_status"))
+        }
+        owners = {
+            _safe_str(row.fields.get("entry_primary_decision_owner"))
+            for row in rows
+            if _safe_str(row.fields.get("entry_primary_decision_owner"))
+        }
+        policy_versions = {
+            _safe_str(row.fields.get("entry_mechanistic_policy_version"))
+            for row in rows
+            if _safe_str(row.fields.get("entry_mechanistic_policy_version"))
+        }
+        conflict_reasons = []
+        if len(actions) != 1 or not actions <= MACHINE_PRIMARY_ENTRY_ACTIONS:
+            conflict_reasons.append("mechanistic_action_missing_or_conflicting")
+        if owners != {MACHINE_PRIMARY_DECISION_OWNER}:
+            conflict_reasons.append("mechanistic_owner_missing_or_conflicting")
+        if len(screens) > 1 or any(
+            screen not in MACHINE_PRIMARY_AI_SCREEN_STATUSES for screen in screens
+        ):
+            conflict_reasons.append("ai_screen_status_missing_or_conflicting")
+        action = next(iter(actions), "UNKNOWN") if len(actions) == 1 else "UNKNOWN"
+        screen = next(iter(screens), "") if len(screens) == 1 else ""
+        if action in {"RECHECK", "BLOCK"} and screen not in {
+            "",
+            "not_requested_machine_nonentry",
+        }:
+            conflict_reasons.append("machine_nonentry_ai_screen_contract_invalid")
+        if action == "ENTER_NOW" and not screen:
+            conflict_reasons.append("machine_enter_ai_screen_missing")
+        if action == "ENTER_NOW" and screen == "not_requested_machine_nonentry":
+            conflict_reasons.append("machine_enter_ai_screen_not_requested")
+        submitted_rows = [row for row in rows if row.stage == "order_bundle_submitted"]
+        broker_acceptance_rows = [
+            row
+            for row in submitted_rows
+            if _safe_str(
+                _field_first(
+                    row.fields,
+                    (
+                        "broker_order_no",
+                        "entry_submit_broker_order_no",
+                        "order_no",
+                    ),
+                )
+            )
+        ]
+        if conflict_reasons:
+            final_state = "identity_or_contract_gap"
+        elif action == "BLOCK":
+            final_state = "machine_block_point_drop"
+        elif action == "RECHECK":
+            final_state = "machine_recheck_observation"
+        elif screen == "veto":
+            final_state = "ai_veto_point_drop"
+        elif screen in {
+            "caution",
+            "insufficient",
+            "response_invalid",
+            "not_evaluated_transport",
+            "not_evaluated_local",
+        }:
+            final_state = "ai_nonpass_no_exposure"
+        elif submitted_rows:
+            final_state = "submit_pipeline_reached"
+        elif screen == "pass":
+            final_state = "ai_pass_no_submit_observed"
+        else:
+            final_state = "unknown"
+        row = {
+            "evaluation_key": key,
+            "first_evaluated_at": rows[0].emitted_at.isoformat(),
+            "last_event_at": rows[-1].emitted_at.isoformat(),
+            "mechanistic_action": action,
+            "ai_screen_status": screen or "not_reported",
+            "policy_versions": sorted(policy_versions),
+            "submit_pipeline_reached": bool(submitted_rows),
+            # `order_bundle_submitted` is emitted only after its successful
+            # broker response.  This is a submission/identity receipt, not a
+            # fill, terminal, or economic outcome.
+            "broker_acceptance_observed": bool(broker_acceptance_rows),
+            "final_state": final_state,
+            "conflict_reasons": conflict_reasons,
+            "legacy_recheck_runtime_eligible": False,
+        }
+        ledger.append(row)
+        action_counts[action] += 1
+        screen_counts[row["ai_screen_status"]] += 1
+        final_counts[final_state] += 1
+
+    valid_rows = [row for row in ledger if not row["conflict_reasons"]]
+    machine_enter = sum(row["mechanistic_action"] == "ENTER_NOW" for row in valid_rows)
+    ai_pass = sum(row["ai_screen_status"] == "pass" for row in valid_rows)
+    return {
+        "schema": "machine_primary_entry_funnel_v1",
+        "metric_role": "funnel_count",
+        "decision_authority": "source_only_attribution",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "source_event_count": source_event_count,
+        "identified_source_event_count": identified_source_event_count,
+        "evaluation_identity_missing_event_count": identity_missing_event_count,
+        "evaluation_count": len(ledger),
+        "valid_evaluation_count": len(valid_rows),
+        "excluded_evaluation_count": len(ledger) - len(valid_rows),
+        "mechanistic_action_counts": dict(sorted(action_counts.items())),
+        "ai_screen_status_counts": dict(sorted(screen_counts.items())),
+        "final_state_counts": dict(sorted(final_counts.items())),
+        "machine_enter_count": machine_enter,
+        "ai_pass_count": ai_pass,
+        "submit_pipeline_reached_count": sum(
+            row["submit_pipeline_reached"] for row in valid_rows
+        ),
+        "broker_acceptance_observed_count": sum(
+            row["broker_acceptance_observed"] for row in valid_rows
+        ),
+        "broker_acceptance_semantics": (
+            "successful_submission_response_with_order_identity_not_fill_or_pnl"
+        ),
+        "legacy_recheck_runtime_eligible_count": 0,
+        "legacy_recheck_runtime_eligibility": "always_false_machine_primary_lane",
+        "count_conservation": {
+            "raw_source_events": source_event_count,
+            "identified_source_events": identified_source_event_count,
+            "identity_missing_events": identity_missing_event_count,
+            "identified_plus_identity_missing_equals_raw": (
+                identified_source_event_count + identity_missing_event_count
+                == source_event_count
+            ),
+            "valid_plus_excluded_equals_evaluations": (
+                len(valid_rows) + (len(ledger) - len(valid_rows)) == len(ledger)
+            ),
+        },
+        "evaluation_ledger": ledger,
+        "forbidden_uses": [
+            "legacy_recheck_probe_activation",
+            "runtime_apply_candidate",
+            "intraday_threshold_mutation",
+            "broker_order_submit",
+            "bot_restart_trigger",
+        ],
+    }
+
+
 def _summarize_events_included(
     events: list[PipelineEvent],
     *,
@@ -2566,6 +2786,7 @@ def _summarize_events_included(
     economic_participation = _economic_submit_participation(lossless_scoped)
     market_gainer_handoff = _market_gainer_handoff_summary(lossless_scoped)
     budget_ai_lineage = _budget_ai_lineage_summary(lossless_scoped)
+    machine_primary_entry_funnel = _machine_primary_entry_funnel(lossless_scoped)
     terminal_axis_counts = exact_attempt_contract["axis_terminal_causal_attempt_counts"]
 
     return {
@@ -2623,6 +2844,7 @@ def _summarize_events_included(
             action: len(keys) for action, keys in sorted(ai_action_unique.items())
         },
         "budget_ai_lineage": budget_ai_lineage,
+        "machine_primary_entry_funnel": machine_primary_entry_funnel,
         "exact_attempt_contract": exact_attempt_contract,
         **terminal_diagnostics,
         "stage_missing_exact_attempt_key_events": {
@@ -2872,6 +3094,11 @@ def _terminal_attempt_diagnostics(exact, events_by_key):
                 }
             )
         if event.stage in addressable_stages:
+            machine_primary = _is_machine_primary_event(event)
+            machine_action = _safe_str(
+                fields.get("entry_mechanistic_action")
+            ).upper()
+            machine_screen = _safe_str(fields.get("entry_ai_screen_status")).lower()
             # Only one coherent input namespace; never mix retry and selected AI.
             prefix = "entry_opportunity_recheck_ai_"
             if prefix + "contract_status" not in fields:
@@ -2905,29 +3132,41 @@ def _terminal_attempt_diagnostics(exact, events_by_key):
             if ai_category in {"fresh_wait_veto", "fresh_drop_veto"}:
                 # These are explicit final vetoes, not missing eligibility data.
                 candidate = False
-            category = (
-                "canonical_probe_candidate"
-                if candidate
-                else (
-                    "normal_veto"
-                    if ai_category in {"fresh_wait_veto", "fresh_drop_veto"}
-                    else (
-                        "input_gap"
-                        if ai_category or source_gap or contract == "semantic_rejected"
-                        else (
-                            "normal_veto"
-                            if contract == "pass"
-                            and str(action).upper() in {"DROP", "WAIT", "WAIT_REQUOTE"}
-                            else "not_evaluated"
-                        )
-                    )
-                )
-            )
+            if machine_primary:
+                # Machine RECHECK is scanner-loop observation, and a machine
+                # ENTER screened by AI is not the legacy score/WAIT probe.  A
+                # shared terminal stage must never let either one widen #23.
+                candidate = False
+            if candidate:
+                category = "canonical_probe_candidate"
+            elif machine_primary and machine_action == "RECHECK":
+                category = "machine_recheck_observation"
+            elif machine_primary and machine_action == "BLOCK":
+                category = "machine_block_point_drop"
+            elif machine_primary and machine_screen == "veto":
+                category = "machine_ai_veto_point_drop"
+            elif machine_primary:
+                category = "machine_ai_nonpass_no_exposure"
+            elif ai_category in {"fresh_wait_veto", "fresh_drop_veto"}:
+                category = "normal_veto"
+            elif ai_category or source_gap or contract == "semantic_rejected":
+                category = "input_gap"
+            elif contract == "pass" and str(action).upper() in {
+                "DROP",
+                "WAIT",
+                "WAIT_REQUOTE",
+            }:
+                category = "normal_veto"
+            else:
+                category = "not_evaluated"
             probe_rows.append(
                 {
                     **identity,
                     "category": category,
                     "canonical_probe_candidate": candidate,
+                    "machine_primary": machine_primary,
+                    "machine_action": machine_action or "not_reported",
+                    "machine_ai_screen_status": machine_screen or "not_reported",
                     "runtime_eligibility": "not_evaluated",
                     "runtime_policy_state": (
                         "off"
@@ -2969,6 +3208,14 @@ def _terminal_attempt_diagnostics(exact, events_by_key):
             ),
             "canonical_probe_candidate_unknown_count": sum(
                 r["canonical_probe_candidate"] is None for r in probe_rows
+            ),
+            "legacy_runtime_addressable_attempt_count": sum(
+                r["canonical_probe_candidate"] is True
+                and r["machine_primary"] is False
+                for r in probe_rows
+            ),
+            "machine_primary_excluded_attempt_count": sum(
+                r["machine_primary"] is True for r in probe_rows
             ),
             "candidate_count_basis": "confirmed_inputs_only_unknown_is_not_zero_opportunity",
             "activation_gate_changed": False,
@@ -3655,6 +3902,7 @@ def _entry_submit_drought_contract(
                 "entry_ai_authority_diagnostics",
                 "zero_qty_diagnostics",
                 "recheck_input_diagnostics",
+                "machine_primary_entry_funnel",
             )
         },
         "causal_bottleneck_axes": observation_breakdown["causal_bottleneck_axes"],

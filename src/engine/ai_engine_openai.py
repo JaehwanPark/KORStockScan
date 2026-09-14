@@ -9674,6 +9674,11 @@ class GPTSniperEngine:
                         entry_setup_evidence=entry_setup_evidence,
                         live_policy=entry_setup_live_policy,
                     )
+                # Preserve the machine-owned evaluation identity for the
+                # ENTRY_PIPELINE provenance projection.  This is diagnostic
+                # only and cannot alter runtime or order authority.
+                if machine_first_context is not None:
+                    result.update(machine_capture)
                 if v2_14_transport_meta:
                     result.update(v2_14_transport_meta)
                 result = self._apply_remote_entry_guard(

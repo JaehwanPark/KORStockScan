@@ -46,8 +46,28 @@ def test_machine_observation_keeps_exact_input_without_provider_request(
     assert row["source"]["exact_payload"]["name"] == "삼성전자"
     assert row["label_context"]["record_id"] == 123
     assert row["label_context"]["evaluation_attempt_id"] is None
+    assert result["evaluation_attempt_id"] is None
+    assert result["evaluation_attempt_identity_source"] == "missing"
     assert not (tmp_path / "ai_decision_prompts").exists()
     assert not (tmp_path / "ai_decision_outcomes").exists()
+
+
+def test_machine_observation_returns_exact_snapshot_evaluation_identity(
+    monkeypatch, tmp_path
+):
+    _enable(monkeypatch, tmp_path)
+    result = trace.capture_machine_observation(
+        exact_payload={
+            "stock_code": "005930",
+            "snapshot_id": "aims-v27-test",
+        },
+        setup_evidence={"setup_state": "READY"},
+        assessment={"action": "ENTER_NOW"},
+        bundle_sha256="b" * 64,
+    )
+
+    assert result["evaluation_attempt_id"] == "aims-v27-test"
+    assert result["evaluation_attempt_identity_source"] == "exact_snapshot_id"
 
 
 def test_append_jsonl_fails_closed_on_parent_directory_replacement(

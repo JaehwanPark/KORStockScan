@@ -3740,6 +3740,35 @@ def test_build_ai_ops_log_fields_preserves_v214_candidate_lifecycle_binding():
     assert fields["entry_probe_intent"] is True
 
 
+def test_build_ai_ops_log_fields_preserves_machine_primary_provenance():
+    fields = _build_ai_ops_log_fields(
+        {
+            "entry_primary_decision_owner": "mechanistic_entry_adjudicator",
+            "entry_mechanistic_action": "ENTER_NOW",
+            "entry_mechanistic_policy_version": "machine-test-v1",
+            "entry_ai_role": "auxiliary_risk_screen_pass_veto_no_promotion",
+            "entry_ai_screen_status": "pass",
+            "entry_ai_screen_required": True,
+            "entry_ai_screen_pass": True,
+            "entry_ai_followup_disposition": "ai_pass_existing_submit_guard",
+            "entry_ai_followup_authority": (
+                "existing_runtime_submit_and_order_guards"
+            ),
+            "evaluation_attempt_id": "aims-v27-test",
+            "evaluation_attempt_identity_source": "exact_snapshot_id",
+            "machine_capture_status": "captured",
+            "machine_observation_sha256": "a" * 64,
+        }
+    )
+
+    assert fields["entry_primary_decision_owner"] == "mechanistic_entry_adjudicator"
+    assert fields["entry_mechanistic_action"] == "ENTER_NOW"
+    assert fields["entry_ai_screen_status"] == "pass"
+    assert fields["entry_ai_screen_pass"] is True
+    assert fields["evaluation_attempt_id"] == "aims-v27-test"
+    assert fields["evaluation_attempt_identity_source"] == "exact_snapshot_id"
+
+
 def test_holding_score_preflight_blocks_stale_tick_context():
     preflight = handlers._holding_score_source_quality_from_feature_packet(
         {

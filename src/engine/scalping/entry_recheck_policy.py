@@ -207,6 +207,24 @@ def scope_summary(scope: str, raw: dict[str, Any]) -> dict[str, Any]:
                 if isinstance(row, dict)
             )
         ]
+    machine_funnel = raw.get("machine_primary_entry_funnel")
+    machine_primary_evaluations = (
+        count(machine_funnel.get("evaluation_count"))
+        if isinstance(machine_funnel, dict)
+        else count(raw.get("machine_primary_evaluation_count", 0))
+    )
+    recheck_diagnostics = raw.get("recheck_input_diagnostics")
+    legacy_runtime_addressable = (
+        count(recheck_diagnostics.get("legacy_runtime_addressable_attempt_count"))
+        if isinstance(recheck_diagnostics, dict)
+        else count(raw.get("legacy_runtime_addressable_attempt_count", 0))
+    )
+    # A machine-primary record can share legacy terminal stage names.  It is
+    # not a score/WAIT probe.  Keep legacy report compatibility when no
+    # machine record exists, but require a separately proved legacy candidate
+    # once the new role contract is observed in this source generation.
+    if machine_primary_evaluations > 0 and legacy_runtime_addressable <= 0:
+        axes = []
     critical = bool(
         branches
         and raw.get("critical") is True
@@ -235,6 +253,15 @@ def scope_summary(scope: str, raw: dict[str, Any]) -> dict[str, Any]:
         ),
         "trigger_branches": branches,
         "causal_bottleneck_axes": axes,
+        "machine_primary_evaluation_count": max(machine_primary_evaluations, 0),
+        "legacy_runtime_addressable_attempt_count": legacy_runtime_addressable,
+        "machine_primary_role_guard": (
+            "legacy_compatibility_no_machine_primary_observation"
+            if machine_primary_evaluations == 0
+            else "legacy_candidate_proved"
+            if legacy_runtime_addressable > 0
+            else "machine_primary_only_no_legacy_recheck_authority"
+        ),
     }
 
 

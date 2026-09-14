@@ -323,6 +323,154 @@ def test_unknown_probe_evidence_is_not_measured_zero_and_stale_is_not_semantic_f
     assert sentinel._ai_authority_diagnostic(event)["category"] == "fresh_drop_veto"
 
 
+def test_machine_primary_funnel_keeps_ai_screen_and_broker_receipt_separate():
+    from datetime import datetime, timedelta
+
+    start = datetime(2026, 9, 14, 10)
+    common = {
+        "entry_primary_decision_owner": "mechanistic_entry_adjudicator",
+        "evaluation_attempt_id": "eval-1",
+        "entry_mechanistic_action": "ENTER_NOW",
+        "entry_ai_screen_status": "pass",
+        "entry_mechanistic_policy_version": "machine-v1",
+    }
+    events = [
+        sentinel.PipelineEvent(
+            start,
+            "ENTRY_PIPELINE",
+            "ai_confirmed",
+            "fixture",
+            "005930",
+            "1",
+            common,
+        ),
+        sentinel.PipelineEvent(
+            start + timedelta(seconds=1),
+            "ENTRY_PIPELINE",
+            "order_bundle_submitted",
+            "fixture",
+            "005930",
+            "1",
+            {**common, "broker_order_no": "broker-1"},
+        ),
+    ]
+    result = sentinel._machine_primary_entry_funnel(events)
+    assert result["evaluation_count"] == 1
+    assert result["machine_enter_count"] == 1
+    assert result["ai_pass_count"] == 1
+    assert result["submit_pipeline_reached_count"] == 1
+    assert result["broker_acceptance_observed_count"] == 1
+    assert result["broker_acceptance_semantics"] == (
+        "successful_submission_response_with_order_identity_not_fill_or_pnl"
+    )
+    assert result["legacy_recheck_runtime_eligible_count"] == 0
+    assert result["evaluation_ledger"][0]["final_state"] == "submit_pipeline_reached"
+    assert result["count_conservation"]["identified_plus_identity_missing_equals_raw"]
+
+
+def test_machine_primary_recheck_cannot_become_legacy_recheck_probe():
+    from datetime import datetime
+    from src.engine.scalping.entry_recheck_policy import scope_summary
+
+    fields = {
+        "entry_primary_decision_owner": "mechanistic_entry_adjudicator",
+        "evaluation_attempt_id": "eval-machine-recheck",
+        "entry_mechanistic_action": "RECHECK",
+        "entry_ai_screen_status": "not_requested_machine_nonentry",
+        "ai_decision_model_action": "WAIT",
+        "entry_recheck_contract_status": "pass",
+        "entry_recheck_edge_state": "EDGE",
+        "entry_recheck_probe_intent": True,
+        "entry_recheck_probe_intent_status": "eligible_wait_probe",
+        "entry_recheck_recovery_trigger": "recovery_required",
+    }
+    event = sentinel.PipelineEvent(
+        datetime(2026, 9, 14, 10),
+        "ENTRY_PIPELINE",
+        "blocked_ai_score",
+        "fixture",
+        "005930",
+        "1",
+        fields,
+    )
+    exact = sentinel._exact_submit_drought_axis_summary([event])
+    diagnostics = sentinel._terminal_attempt_diagnostics(
+        exact, {exact["attempt_ledger"][0]["attempt_key"]: [event]}
+    )["recheck_input_diagnostics"]
+    assert diagnostics["canonical_probe_candidate_count"] == 0
+    assert diagnostics["machine_primary_excluded_attempt_count"] == 1
+    assert diagnostics["attempts"][0]["category"] == "machine_recheck_observation"
+    row = scope_summary(
+        "KRX|KRX_REGULAR",
+        {
+            "stage_unique": {
+                "ai_confirmed": 20,
+                "budget_pass": 3,
+                "order_bundle_submitted": 0,
+            },
+            "critical": True,
+            "primary": "SUBMIT_DROUGHT_CRITICAL",
+            "causal_bottleneck_axes": ["UPSTREAM_GATE"],
+            "exact_attempt_contract": exact,
+            "recheck_input_diagnostics": diagnostics,
+            "machine_primary_entry_funnel": sentinel._machine_primary_entry_funnel(
+                [event]
+            ),
+        },
+    )
+    assert row["machine_primary_role_guard"] == (
+        "machine_primary_only_no_legacy_recheck_authority"
+    )
+    assert row["addressable"] is False
+
+
+def test_machine_primary_transport_screen_is_nonexposure_not_contract_gap():
+    from datetime import datetime
+
+    event = sentinel.PipelineEvent(
+        datetime(2026, 9, 14, 10),
+        "ENTRY_PIPELINE",
+        "ai_confirmed",
+        "fixture",
+        "005930",
+        "1",
+        {
+            "entry_primary_decision_owner": "mechanistic_entry_adjudicator",
+            "evaluation_attempt_id": "eval-machine-transport",
+            "entry_mechanistic_action": "ENTER_NOW",
+            "entry_ai_screen_status": "not_evaluated_transport",
+        },
+    )
+
+    result = sentinel._machine_primary_entry_funnel([event])
+    row = result["evaluation_ledger"][0]
+    assert row["conflict_reasons"] == []
+    assert row["final_state"] == "ai_nonpass_no_exposure"
+    assert result["legacy_recheck_runtime_eligible_count"] == 0
+
+
+def test_machine_primary_action_without_owner_is_source_quality_gap():
+    from datetime import datetime
+
+    event = sentinel.PipelineEvent(
+        datetime(2026, 9, 14, 10),
+        "ENTRY_PIPELINE",
+        "ai_confirmed",
+        "fixture",
+        "005930",
+        "1",
+        {
+            "evaluation_attempt_id": "eval-owner-missing",
+            "entry_mechanistic_action": "ENTER_NOW",
+            "entry_ai_screen_status": "pass",
+        },
+    )
+
+    row = sentinel._machine_primary_entry_funnel([event])["evaluation_ledger"][0]
+    assert row["final_state"] == "identity_or_contract_gap"
+    assert "mechanistic_owner_missing_or_conflicting" in row["conflict_reasons"]
+
+
 def test_submit_drought_is_classified_without_cross_venue_denominator(
     monkeypatch, tmp_path
 ):
