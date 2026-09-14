@@ -8888,6 +8888,7 @@ class GPTSniperEngine:
         machine_first_context = None
         machine_hot_payload = None
         machine_feature_packet = None
+        machine_capture = {}
         if (
             is_scalping_entry_call
             and decision_quality_v2_14_selected
@@ -9841,6 +9842,60 @@ class GPTSniperEngine:
                         "entry_ai_full_entry_forbidden": True,
                     }
                 )
+                if (
+                    machine_first_context is not None
+                    and str(
+                        (machine_first_context.get("assessment") or {}).get("action")
+                        or ""
+                    ).upper()
+                    == "ENTER_NOW"
+                ):
+                    # AI is a binding PASS/VETO screen for a machine-selected
+                    # point. A transport/local failure is neither verdict, so
+                    # fail closed for exposure while preserving the point for
+                    # the next bounded scanner-loop recheck.
+                    unavailable_status = (
+                        "not_evaluated_transport"
+                        if provider_attempted
+                        else "not_evaluated_local"
+                    )
+                    fallback_payload.update(
+                        {
+                            "action": "WAIT",
+                            "score": 50,
+                            "reason": "entry_ai_screen_unavailable_bounded_recheck",
+                            "machine_bundle_sha256": machine_first_context.get(
+                                "bundle_sha256"
+                            ),
+                            "mechanistic_entry_assessment": (
+                                machine_first_context.get("assessment")
+                            ),
+                            "machine_decision_before_provider": True,
+                            "entry_mechanistic_action": "ENTER_NOW",
+                            "entry_ai_role": entry_setup_live_policy.get("ai_role"),
+                            "entry_ai_screen_required": True,
+                            "entry_ai_screen_status": unavailable_status,
+                            "entry_ai_screen_pass": False,
+                            "entry_ai_veto_corroborated": False,
+                            "entry_ai_followup_disposition": (
+                                "ai_unavailable_bounded_recheck"
+                            ),
+                            "entry_ai_followup_authority": (
+                                "existing_scanner_loop_observation_only"
+                            ),
+                            "entry_recheck_intent": True,
+                            "entry_recheck_reasons": [
+                                "AI_SCREEN_UNAVAILABLE_RECHECK"
+                            ],
+                            "entry_recheck_intent_status": (
+                                "eligible_next_scanner_loop_recheck"
+                            ),
+                            "decision_quality_runtime_action_mapping": (
+                                "mechanistic_enter_now_ai_unavailable_to_bounded_recheck"
+                            ),
+                            **machine_capture,
+                        }
+                    )
             if provider_attempted:
                 fallback_payload["openai_transport_fail_closed_reason"] = str(e)[:240]
             else:

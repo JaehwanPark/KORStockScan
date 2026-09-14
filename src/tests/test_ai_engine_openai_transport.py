@@ -3992,6 +3992,94 @@ def test_machine_initial_policy_assesses_before_provider_cache_and_lock(
         assert result["action"] in {"WAIT", "DROP"}
 
 
+def test_machine_enter_now_ai_timeout_preserves_bounded_recheck(monkeypatch):
+    from src.engine.scalping import ai_decision_trace as trace_module
+    from src.engine.scalping import mechanistic_entry_runtime_policy as initial_policy
+    from src.engine.scalping.entry_setup_evidence import (
+        MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
+    )
+
+    engine = _build_engine()
+    live = {
+        "enabled": True,
+        "status": "active_bounded_krx_canary",
+        "selected_prompt_version": initial_policy.AI_VERSION,
+        "primary_decision_owner": "mechanistic_entry_adjudicator",
+        "ai_role": "auxiliary_risk_screen_pass_veto_no_promotion",
+        "mechanistic_threshold_policy": MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
+        "machine_bundle_sha256": "b" * 64,
+        "auxiliary_system_prompt": initial_policy.auxiliary_prompt({}),
+        "auxiliary_system_prompt_sha256": initial_policy.digest(
+            initial_policy.auxiliary_prompt({})
+        ),
+    }
+    monkeypatch.setattr(
+        openai_module, "resolve_live_prompt_policy", lambda **kwargs: live
+    )
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(
+            openai_module.TRADING_RULES,
+            OPENAI_ANALYZE_TARGET_PROMPT_VERSION=(
+                DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        openai_module,
+        "mechanistic_entry_policy_decision",
+        lambda *args, **kwargs: {
+            "schema": "mechanistic_entry_policy_decision_v1",
+            "action": "ENTER_NOW",
+            "reason": "MECHANISTIC_SETUP_AND_THRESHOLD_PASS",
+            "group_trigger_pass": False,
+        },
+    )
+    monkeypatch.setattr(
+        trace_module,
+        "capture_machine_observation",
+        lambda **kwargs: {
+            "machine_observation_sha256": "c" * 64,
+            "machine_observation_status": "captured",
+        },
+    )
+    monkeypatch.setattr(
+        engine,
+        "_call_openai_safe",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            TimeoutError("provider deadline exhausted")
+        ),
+    )
+
+    result = engine.analyze_target(
+        "test",
+        _sample_ws_data(),
+        _sample_ticks(),
+        _sample_candles(),
+        strategy="SCALPING",
+        prompt_profile="watching",
+        candle_context=_allowed_entry_candle_context(),
+    )
+
+    assert result["action"] == "WAIT"
+    assert result["score"] == 50
+    assert result["entry_mechanistic_action"] == "ENTER_NOW"
+    assert result["entry_ai_screen_status"] == "not_evaluated_transport"
+    assert result["entry_ai_screen_pass"] is False
+    assert result["entry_ai_veto_corroborated"] is False
+    assert result["entry_recheck_intent"] is True
+    assert result["entry_recheck_intent_status"] == (
+        "eligible_next_scanner_loop_recheck"
+    )
+    assert result["entry_ai_followup_disposition"] == (
+        "ai_unavailable_bounded_recheck"
+    )
+    assert result["entry_ai_full_entry_forbidden"] is True
+    assert result["openai_transport_fail_closed"] is True
+    assert result["machine_observation_sha256"] == "c" * 64
+
+
 def test_hot_entry_payload_preserves_timing_context() -> None:
     engine = _build_engine()
     timing = {
