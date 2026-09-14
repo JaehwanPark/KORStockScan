@@ -3486,6 +3486,23 @@ def _compact_history_receipt(
     )
     from src.engine.observation_source_quality_audit import _raw_generation
 
+    def same_source(source: dict) -> bool:
+        path = existing_or_gzip_path(Path(source["path"]))
+        before = _raw_generation(path)
+        if before and before == source.get("generation"):
+            return True
+        expected = source.get("logical_content_sha256")
+        if not before or not expected:
+            return False
+        # Verified compression is not a new source generation. Compare logical
+        # bytes only when the original filesystem generation no longer exists.
+        content_hash = hashlib.sha256()
+        opener = gzip.open if path.suffix == ".gz" else open
+        with opener(path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                content_hash.update(chunk)
+        return before == _raw_generation(path) and content_hash.hexdigest() == expected
+
     result = json.loads(json.dumps(receipt))
     measurement = result.setdefault("compact_auxiliary_policy_measurement", {})
     partitions = measurement.setdefault("partitions", [])
@@ -3530,7 +3547,7 @@ def _compact_history_receipt(
                 == _canonical_sha256(manifest.get("sources") or {})
                 and sources
                 and all(
-                    _raw_generation(Path(source["path"])) == source.get("generation")
+                    same_source(source)
                     for source in sources.values()
                     if source.get("exists")
                 )

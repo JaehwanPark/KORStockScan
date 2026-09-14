@@ -976,6 +976,9 @@ def test_compact_history_requires_own_source_and_unchanged_machine_policy(
                     "path": str(raw),
                     "exists": True,
                     "generation": _raw_generation(raw),
+                    "logical_content_sha256": calibration.hashlib.sha256(
+                        raw.read_bytes()
+                    ).hexdigest(),
                 }
             },
             "compact_auxiliary_policy_measurement": {
@@ -1001,6 +1004,15 @@ def test_compact_history_requires_own_source_and_unchanged_machine_policy(
         tmp_path, "2026-09-14", rows, different, receipt
     )
     assert blocked["compact_history_receipts"][0]["allowed"] is False
+    import gzip
+
+    compressed = raw.with_suffix(raw.suffix + ".gz")
+    compressed.write_bytes(gzip.compress(raw.read_bytes()))
+    raw.unlink()
+    archived = calibration._compact_history_receipt(
+        tmp_path, "2026-09-14", rows, incumbent, receipt
+    )
+    assert archived["compact_history_receipts"][0]["allowed"] is True
     raw.write_text("changed\n")
     stale = calibration._compact_history_receipt(
         tmp_path, "2026-09-14", rows, incumbent, receipt

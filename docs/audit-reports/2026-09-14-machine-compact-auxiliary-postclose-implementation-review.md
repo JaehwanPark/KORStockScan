@@ -72,3 +72,5 @@
 새 collector, Provider 호출, 수동 정책값, 현재 PID 재기동은 이 보완에 필요하지 않다. 다음 자동 생성과 정책/PID 소비 및 실수익은 기존 체크리스트 owner의 자연 acceptance다. 새 후보의 개선량이나 전체 WP의 운영 종결을 테스트 성공으로 대신하지 않는다.
 
 검증: 6개 직접 owner suite 388 PASS, compact registry/자연 선정 보존 반례 추가 후 optimizer/replay 52 PASS. 날짜별 raw 변경·정책 변경 제외, 비용 크기에 따른 carry/선정, 한쪽 분모0, 발행 직전 rate/count/source 변조를 검증했다. Ruff·compile·diff 및 print-only parser26 PASS. commit/release 식별자는 runtime release selection receipt에 기록한다.
+
+배포 전 압축 보관 반례 추가: 원본 stat이 달라졌을 때 logical-content SHA256이 동일한 gzip만 수용하며 내용 변경은 계속 제외한다. 표적1 PASS. 운영 I/O 부하로 release 전체 중복 테스트는 중단했으며 전체 release suite PASS로 기록하지 않는다. 작업본 PASS와 최종 release 코드 hash 일치를 배포 검증으로 사용한다.
