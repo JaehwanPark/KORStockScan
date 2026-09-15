@@ -1329,12 +1329,13 @@ def test_sell_execution_message_relabels_pending_stop_loss_when_realized_profit(
     assert "🎊 [익절 완료]" in payload["message"]
     assert "📉 [익절 완료]" not in payload["message"]
     assert "[손절 완료]" not in payload["message"]
-    assert "청산 신호: `🛑 하드스탑 도달 (-5.0%) [AI: 50]`" in payload["message"]
-    assert "실현 결과: `익절 확정`" in payload["message"]
-    assert "사유: `🛑 하드스탑 도달" not in payload["message"]
-    assert "신호 당시 평가손익: `-5.75%`" in payload["message"]
+    assert "청산 신호: 🛑 하드스탑 도달 (-5.0%) [AI: 50]" in payload["message"]
+    assert "실현 결과: 익절 확정" in payload["message"]
+    assert "사유: 🛑 하드스탑 도달" not in payload["message"]
+    assert "신호 당시 평가손익: -5.75%" in payload["message"]
     assert "현재가 기준 수익" not in payload["message"]
-    assert "확정 수익률: `+1.35%`" in payload["message"]
+    assert "확정 수익률: +1.35%" in payload["message"]
+    assert payload["parse_mode"] is None
 
 
 def test_sell_execution_notification_failure_never_reopens_committed_custody(
@@ -3742,7 +3743,7 @@ def test_periodic_account_sync_recovers_unique_exact_sell_execution(
     assert "132,250원" in notification["message"]
     assert f"{record.profit_rate:+.2f}%" in notification["message"]
     assert notification["audience"] == "ADMIN_ONLY"
-    assert notification["parse_mode"] == "Markdown"
+    assert notification["parse_mode"] is None
 
 
 def test_periodic_account_sync_preserves_concurrent_fast_fill_completion(

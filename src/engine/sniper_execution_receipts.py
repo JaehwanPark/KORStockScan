@@ -7347,12 +7347,17 @@ def _publish_sell_execution_message(
                 profit_rate=profit_rate,
             )
             final_msg += f"\n✅ **실제 체결가:** `{exec_price:,}원` (확정 수익률: `{profit_rate:+.2f}%`)"
+            # Completion delivery is more important than presentation.  The
+            # legacy payload contains Markdown-v2-style double asterisks while
+            # the bot uses Telegram's legacy Markdown parser, so publish a
+            # deterministic plain-text form and avoid another entity error.
+            final_msg = final_msg.replace("**", "").replace("`", "")
             target_bus.publish(
                 "TELEGRAM_BROADCAST",
                 {
                     "message": final_msg,
                     "audience": audience,
-                    "parse_mode": "Markdown",
+                    "parse_mode": None,
                 },
             )
             return
@@ -7361,9 +7366,9 @@ def _publish_sell_execution_message(
         target_bus.publish(
             "TELEGRAM_BROADCAST",
             {
-                "message": f"{sign} **[{name}]** 매도 체결!\n체결가: `{exec_price:,}원`\n수익률: `{profit_rate:+.2f}%`",
+                "message": f"{sign} [{name}] 매도 체결!\n체결가: {exec_price:,}원\n수익률: {profit_rate:+.2f}%",
                 "audience": audience,
-                "parse_mode": "Markdown",
+                "parse_mode": None,
             },
         )
     except Exception as exc:
