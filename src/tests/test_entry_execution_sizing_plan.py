@@ -36,6 +36,22 @@ def test_atomic_plan_preserves_existing_multi_leg_shape_and_quantity():
     assert fields["entry_execution_sizing_quantity_conservation_holds"] is True
     assert fields["entry_execution_sizing_policy"] == POLICY_VERSION
     assert all(item["entry_execution_sizing_plan_id"] for item in orders)
+    assert fields["entry_execution_sizing_plan"]["legs"] == [
+        {
+            "leg_index": 1,
+            "qty": 2,
+            "price_candidate_id": "resolver_limit:leg1",
+            "numeric_price": 1000,
+            "execution_phase": "immediate",
+        },
+        {
+            "leg_index": 2,
+            "qty": 1,
+            "price_candidate_id": "resolver_limit:leg2",
+            "numeric_price": 995,
+            "execution_phase": "immediate",
+        },
+    ]
 
 
 def test_probe_and_frozen_residual_share_one_conserved_plan():
@@ -64,6 +80,11 @@ def test_probe_and_frozen_residual_share_one_conserved_plan():
     assert fields["entry_execution_sizing_valid"] is True
     assert fields["entry_execution_sizing_immediate_qty"] == 1
     assert fields["entry_execution_sizing_deferred_qty"] == 3
+    assert [leg["qty"] for leg in fields["entry_execution_sizing_plan"]["legs"]] == [
+        1,
+        2,
+        1,
+    ]
     assert (
         orders[0]["entry_split_order_probe_continuation"]["common_fields"][
             "entry_execution_sizing_plan_id"

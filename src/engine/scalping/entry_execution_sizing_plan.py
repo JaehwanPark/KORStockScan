@@ -115,6 +115,7 @@ def compose_entry_execution_sizing_plan(
         blockers.append("quantity_conservation_failed")
 
     price_plan: list[dict[str, Any]] = []
+    legs: list[dict[str, Any]] = []
     decorated_orders: list[dict[str, Any]] = []
     for index, order in enumerate(orders, start=1):
         price = _positive_int(order.get("price"))
@@ -132,7 +133,37 @@ def compose_entry_execution_sizing_plan(
                 "source": PRICE_OWNER,
             }
         )
+        legs.append(
+            {
+                "leg_index": index,
+                "qty": _positive_int(order.get("qty")),
+                "price_candidate_id": candidate_id,
+                "numeric_price": price,
+                "execution_phase": "immediate",
+            }
+        )
         decorated_orders.append({**order, "price_candidate_id": candidate_id})
+    for residual_index, residual_qty in enumerate(residual_quantities, start=1):
+        candidate_id = f"probe_residual_resolver:leg{residual_index + 1}"
+        legs.append(
+            {
+                "leg_index": len(orders) + residual_index,
+                "qty": residual_qty,
+                "price_candidate_id": candidate_id,
+                "numeric_price": None,
+                "execution_phase": "after_verified_probe_fill",
+            }
+        )
+        price_plan.append(
+            {
+                "price_candidate_id": candidate_id,
+                "numeric_price": None,
+                "order_type_code": "00",
+                "source": "probe_fill_price_resolver",
+            }
+        )
+    if len(legs) > expected_total_qty:
+        blockers.append("leg_count_exceeds_total_qty")
 
     plan_core = {
         "schema_version": SCHEMA_VERSION,
@@ -149,7 +180,8 @@ def compose_entry_execution_sizing_plan(
         "total_qty": expected_total_qty,
         "immediate_qty": immediate_qty,
         "deferred_probe_residual_qty": deferred_qty,
-        "leg_count": len(decorated_orders) + len(residual_quantities),
+        "leg_count": len(legs),
+        "legs": legs,
         "price_candidates": price_plan,
         "quantity_conservation_holds": conserved_total == expected_total_qty,
         "quantity_increase_forbidden": True,
