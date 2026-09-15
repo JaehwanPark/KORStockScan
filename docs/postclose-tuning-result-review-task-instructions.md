@@ -1,5 +1,7 @@
 # 장후작업 실행 모니터링·장애복구·추천구현 지시문
 
+현행 코드 기준: `2026-09-16 KST`. 공통 main/장후/PREOPEN의 권위 세대는 `data/runtime/runtime_release_selection.json`, 독립 widget/episode systemd의 구성 세대는 `data/runtime/unified_runtime_deployment.json`과 unit별 유효 drop-in에서 확인한다. 문서에 적힌 과거 release 이름·commit은 배포 이력일 뿐 현재 선택값이 아니다. selector·manifest 변경, 실제 PID 소비, 당일 자연 장후/PREOPEN 성공과 경제성은 각각 별도 receipt로 대사한다.
+
 문서 자동 현행화: [서버 스케줄·API·게시 검증](./monitoring-instruction-refresh.md). 이 자동화는 작업지시문만 정비하며 모니터링 자체를 실행하지 않는다.
 
 역할: 반복 운영 절차. 날짜별 완료·배포 기록과 OPEN ID는 현재 체크리스트 및 해당 감사 보고서에서 확인한다.
@@ -44,6 +46,7 @@
    - 기계 hierarchy 후보의 위 `+0.10%`/paired 조건을 compact AI 변형 선정에 복사하지 않는다. compact는 기존 publisher의 등록 version/hash·동일 machine/venue/session partition·경제적 유효 분모·비용/손실 크기/tail 및 source binding 계약으로 자동 선정한다. 상세 PASS/VETO outcome map과 eligible/pass/veto/missed-profit/dangerous subtotal을 직접 대사한다. 단순 PASS 비율·주문 빈도가 아니라 비용 차감 작은 순익과 놓친 기회·큰 손실을 함께 확인한다.
    - source-date의 유효 incumbent를 평가 기준으로 사용한다. 늦은 새 source는 다음 날짜 후보를 갱신할 수 있지만 PREOPEN cutoff 뒤 동결된 bundle은 교체하지 않는다. compact 자연 표본이 없으면 legacy 성과로 compact를 튜닝하지 않고 유효 carry/근거 결손을 구분한다. 새 수동 승인이나 후보 적용 전 실체결을 추가 요구하지 않는다.
 5. **직접 consumer와 handoff**: 새 calibration/policy generation이 runtime summary/gap/lineage→tower→checklist→strict verifier에 같은 source hash로 반영됐는지 확인하고, 다음 07:35 PREOPEN의 intended loader와 07:55 이후 PID 확인 owner를 남긴다. 장후 발행은 다음날 선택이나 PID 소비가 아니므로 미래 기동 성공으로 보고하지 않는다. 반대로 기존 자동 계약의 guard 통과 policy에 매번 새 수동 승인 gate를 추가하지 않는다.
+6. **진입가·초기 수량·leg 원자성 분리**: `mechanistic_entry_price_resolver`만 numeric entry price를 소유하고 compact AI·Bedrock/OpenAI 비교는 가격 권한을 갖지 않는다. `position_sizing_dynamic_formula`가 허용한 최초 진입 총수량과 `entry_execution_sizing_plan`의 exact leg 수량·합계를 같은 attempt/policy hash로 결속해 `requested_total_qty = sum(leg_qty)`와 quantity conservation을 확인한다. 장후에는 기계 가격 후보와 초기진입 전용 수량·multi-leg 4-arm의 완성된 terminal/비용/source만 평가해 다음 거래일 `mechanistic_entry_price_policy`와 `entry_execution_sizing_policy`를 원자 발행하거나 유효 baseline을 carry한다. AVG_DOWN/PYRAMID의 action·price·execution sizing과 기존 position의 진입시점 policy snapshot은 별도 owner로 유지한다.
 
 장후 최종 판정은 **검증 challenger 발행**, **유효 incumbent carry**, **source/contract 차단**, **publisher/handoff 실패** 중 하나로 설명하고, 경제성은 **수용·거절·maturity 대기·근거 부족**을 별도로 기록한다. 이 문구를 producer의 새 canonical label로 합성하지 않고 실제 artifact 원값과 reason을 함께 인용한다. 운영 terminal이어도 사례 경제성이나 다음날 자연 소비가 남으면 YELLOW이며, 필수 publisher/handoff가 실패하면 RED다.
 
@@ -108,7 +111,7 @@
 | 시각 | 필수 owner | 정상 terminal 근거 |
 | --- | --- | --- |
 | `20:05` | KOSPI EOD update | `update_kospi` status와 log의 대상일 최신 DONE |
-| `20:10` | main threshold-cycle postclose | postclose status `succeeded`, 기계·AI calibration 및 다음 거래일 policy 발행/carry receipt, 최신 wrapper DONE, final verifier terminal |
+| `20:10` | main threshold-cycle postclose | postclose status `succeeded`, 기계·AI calibration, mechanistic entry price와 atomic entry execution sizing의 다음 거래일 policy 발행/carry receipt, 최신 wrapper DONE, final verifier terminal |
 | `20:10` | postclose DONE controller | controller JSON `done`과 controller cron log 최신 DONE |
 | `20:10` | tuning monitoring | status `success`, 단계별 exit code 0, 최신 DONE |
 | `20:10` | widget evaluation systemd service | unit `Result=success`; 네 producer가 같은 completed target date 사용 |
@@ -120,13 +123,13 @@
 
 NXT 구간의 opportunity census, BUY/HOLD sentinels, rising-missed, pyramid, websocket freshness와 system metric sampler는 main postclose의 입력 owner다. 이 작업의 오류가 main source-quality 또는 verifier 실패로 이어질 때 장애복구 범위에 포함한다.
 
-Swing은 설치된 main postclose cron의 `THRESHOLD_CYCLE_RUN_SWING_POSTCLOSE=false`이면 정상 OFF다. 20:10 main wrapper 안의 machine microstructure/timing/approval 사본은 21:15 systemd가 단일 owner이면 정상 OFF다. OFF·retired 단계를 누락 또는 실패로 세지 않는다. ADM/LDM·bucket·greenfield·전용 institutional aggregate는 복구하지 않는다. 남아 있는 scalp-sim control tower 전체를 폐기된 것으로 오인하지 않고 설치된 flag와 비-LDM consumer만 확인한다. sim/Swing은 현재 우선 상세튜닝 대상이 아니다.
+Swing은 설치된 main postclose cron의 `THRESHOLD_CYCLE_RUN_SWING_POSTCLOSE=false`이면 정상 OFF다. 20:10 main wrapper 안의 machine microstructure/timing/approval 사본은 21:15 systemd가 단일 owner이면 정상 OFF다. OFF·retired 단계를 누락 또는 실패로 세지 않는다. ADM/LDM·bucket·greenfield·전용 institutional aggregate와 scalp-sim policy control-tower/prior refresh/overnight wrapper/scale-in window approval은 퇴역했으며, missing artifact나 미실행을 장애·복구 workorder로 만들지 않는다. 현행 base scalp simulator, candidate-window, AI budget, entry-price 관찰과 post-sell feedback은 별도 source-only owner로 유지하고 실주문·실현손익 근거로 사용하지 않는다. sim/Swing은 현재 우선 상세튜닝 대상이 아니다.
 
 진행표 #17~#20의 퇴역 표시는 20:10 중복 사본에 관한 것으로, 21:15 attribution/timing/approval 기능 전체의 퇴역이 아니다. 새 4군 timing 연구와 adaptive-exit 연구 child는 기존 producer 내부 소비이며 별도 병렬 정기 producer를 추가한 것으로 세지 않는다.
 
 ### 3.1 공통 배포 경로와 독립 서비스 경계
 
-배포 경로 계약은 [runtime release routing](runtime-release-routing.md)을 따른다. 매 실행 시 선택 원장과 실제 process를 확인하며 이전 세대의 정상 가동·전환 대기 기록을 현재 PID 보증으로 쓰지 않는다.
+배포 경로 계약은 [runtime release routing](runtime-release-routing.md)을 따른다. 매 실행에서 공통 selector와 독립 기계 manifest의 root/commit, 최종 systemd 설정, 실제 `/proc/<PID>/cwd`를 다시 읽는다. selector나 manifest의 `actual_pid_consumed` receipt는 그 PID의 release 소비 근거일 뿐 장후 terminal·다음 PREOPEN·경제성 수용 증거가 아니다. 이전 세대의 정상 가동·전환 대기 기록을 현재 PID 보증으로 쓰지 않는다.
 
 | 실행 경로 | 코드 선택 owner | 주의사항 |
 | --- | --- | --- |
@@ -212,7 +215,7 @@ Source가 전일 보고서를 지정한 오후 점검은 당일 20:10 producer �
 다음은 workspace에서 실행하는 **조회 명령**이다. `TARGET_DATE`는 앞에서 확정한 source date를 사용한다. `--print-plan`을 제거하면 실제 실행이므로 복사 실수로 작업을 기동하지 않는다.
 
 ```bash
-jq '{schema, workspace, release_root, git_commit, review_evidence}' data/runtime/runtime_release_selection.json
+jq '{schema, workspace, release_root, git_commit, selected_at_kst, actual_pid_consumed, actual_pid_consumption_status, deployment_repair, review_evidence}' data/runtime/runtime_release_selection.json
 jq '{release_root, git_commit}' data/runtime/unified_runtime_deployment.json
 jq '{release_root, git_commit, policy_path, policy_sha256, effective_from, persistence, units}' data/runtime/machine_profit_stagnation_deployment.json
 bash deploy/run_runtime_release.sh --check-cron
@@ -462,6 +465,8 @@ Pass 1 검증 후 수정한 최초 producer부터 intended last consumer까지 �
 - strict verifier 또는 recovery 명령이 실패하면 이전 성공 artifact를 근거로 DONE 처리하지 않는다. 마지막 bounded attempt에도 최종 strict 명령 성공이 필요하다. EV headline의 `realized_pnl_status`가 미대사이면 PnL null을 유지하며, 건수 일치만으로 exact 비용 검증 완료를 주장하지 않는다. source-only CF route 관찰은 identity/schema/권한 검증 후 actual ADD/NO_ADD와 분리하고 malformed authority는 계속 차단한다.
 - §1.1.1의 기계·AI 사례표는 별도 수기 표가 아니라 기존 `ai_action_outcome_calibration`의 exact snapshot/lifecycle join과 그 직접 report projection으로 확인한다. 당일 `ENTER_NOW/RECHECK/BLOCK/source_invalid` 보존식, 모든 기계 ENTER의 current/other/missing prompt routing, 최초 감시→기계→AI→submit/fill gap, 1/3/5/10/20/30/60분 observed/pending-or-source-gap 상태와 비용을 대사한다. machine attempt 보존식이 깨지면 기계 threshold 학습만 차단되고, 유효한 compact AI partition은 독립 판정되는지 확인한다. `CAUTION|INSUFFICIENT`는 유효 bounded 비진입 terminal, transport/local unavailable은 미평가로 유지되어 명시적 VETO/DROP으로 흡수되지 않아야 한다.
 - actual lifecycle의 entry trace는 `entry|entry_ai|entry_decision`과 submit/fill trace의 유일한 교집합을 우선한다. 종목·venue/session·route/epoch·decision timestamp·source bundle이 같은 fixed-price 1초 micro만 결속하고, 비용은 `broker reconciled > source-bound executable estimate > comparison-only`로 분리한다. comparison-only 비용은 실현 경제성 승인에 사용하지 않으며 결손 비용·feature는 null로 유지한다.
+- `daily_threshold_cycle_report`가 `mechanistic_entry_price_policy`와 `entry_execution_sizing_policy`를 같은 source date에서 만들었는지, policy schema/version/file/hash와 다음 거래일 target이 PREOPEN manifest에 결속됐는지 확인한다. 초기 수량의 exact requested total·각 leg quantity·합계와 quantity policy hash가 모두 맞아야 하며, arm·terminal·비용 결손은 0으로 보간하지 않는다. 정책 후보가 없으면 valid baseline carry와 직접 blocker를 남기되 main 기동을 임의 차단하거나 수동 env를 합성하지 않는다.
+- numeric price는 mechanistic owner, 최초 총수량은 `position_sizing_dynamic_formula`, leg shape/원자성은 `entry_execution_sizing_plan`으로 분리한다. compact AI와 provider/model 비교에는 action·price·quantity·leg authority가 없고, 최초 진입 결과를 AVG_DOWN/PYRAMID 정책 승격 분모로 합치지 않는다. 현재 PID의 policy file/hash/date와 실제 order plan receipt가 일치하기 전에는 장후 발행을 runtime 소비로 보고하지 않는다.
 - 같은 main wrapper generation에서 policy publisher의 target date가 거래 calendar의 다음 거래일인지, challenger 채택 또는 `incumbent_carried`가 명시됐는지, bundle/source hash가 calibration과 일치하는지 확인한다. 비용 차감 `+0.10%`만 충족했다고 source/holdout/tail guard를 생략하지 않고, 반대로 child 후보0·미성숙 때문에 유효 부모 정책을 제거하거나 부모 소비에 challenger floor를 중첩하지 않는다.
 - publisher 결과를 runtime summary/gap/lineage→tower→checklist→strict verifier와 다음 PREOPEN intended loader까지 대사한다. report exit 0인데 dated policy가 없거나 stale/잘못된 target/hash이고 정상 carry 사유도 없으면 `no_op_success|policy_publish_or_handoff_failed`로 실패 처리한다.
 - EV는 workorder 전과 pattern propagation 뒤의 두 generation만 허용하고 workorder는 한 번만 생성한다. conversion 뒤 EV/runtime summary 재실행과 main의 tower/strict summary를 반복하지 않는다. 마지막 producer 뒤 trigger-decision snapshot은 **실행 지시 없이** 갱신하고 core checklist/verifier가 같은 main generation을 읽는지 확인한다. 늦은 source를 포함한 최종 tower/checklist/strict는 finalization만 소유한다.
@@ -576,7 +581,7 @@ workspace에서 `bash deploy/run_runtime_release.sh preopen "$NEXT_TARGET_DATE" 
 2. 수리 파일/범위·review finding/targeted validation·최소 재실행 generation·이전 FAIL보다 최신인 성공 근거와 남은 warning/권한/외부 차단.
 3. 추천 Pass 1/2: native ID와 원문 decision·현재 disposition·전수 보존식·fixed-point. 구현/증거 차단/별도 승인 ledger를 구분.
 4. Submit drought: scope/source hash·raw/causal 분모·최초 병목·후속 owner/native ID·canonical handoff/PREOPEN/PID, 실제 제출 회복과 비용 후 경제성을 분리.
-5. 메인 기계·AI 정책: exact scope/bundle과 action/AI terminal 보존식, 좋은/늦은/횡보·역행 후 익절/놓친/적정 차단/미성숙 사례, 비용 후 EV·paired delta·holdout/tail 판정, 다음 거래일 challenger 발행 또는 incumbent carry와 직접 탈락 사유, canonical handoff·PREOPEN intended consumer. 장후 발행·다음날 PID 소비·자연 효과를 분리.
+5. 메인 기계·AI·진입실행 정책: exact scope/bundle과 action/AI terminal 보존식, 좋은/늦은/횡보·역행 후 익절/놓친/적정 차단/미성숙 사례, 비용 후 EV·paired delta·holdout/tail 판정, 다음 거래일 challenger 발행 또는 incumbent carry와 직접 탈락 사유를 보고한다. mechanistic numeric price와 초기 총수량·exact leg 원자성, 두 dated policy의 file/hash/date·PREOPEN intended consumer를 분리하고, 장후 발행·다음날 PID 소비·자연 효과를 각각 판정한다.
 6. 위젯/에피소드: signal/확인 횟수와 micro checkpoint의 별도 분모·공통 계산/PID·4군 교집합/holdout/비용·선정/handoff·실체결 EV/순익/빈도/tail/자본점유. 최소 보조청산은 별도 manifest/pin·신규 진입·실제 successor/복구/정산·지속/rollback 경계로 보고.
 7. 체크리스트: ID·Due/window·이번 점검/실행·최신 receipt·완료/잔여/다음 조건, due 미실행·기한 경과·정상 대기·권한/외부·미래·범위 밖을 분류해 미분류 0 확인.
 8. 배포/다음 거래일: 선택 원장/hash·root/full commit·실제 worker/PID 세대·cron/독립 service·공유 source 호환성, 코드 수리/재생성/미배포·rollback·다음 candidate/env/activation blocker·기동 acceptance owner. 다음날 자연 소비/경제성은 별도.

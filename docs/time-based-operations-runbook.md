@@ -44,7 +44,7 @@ Raw lifecycle lineage and dedicated Entry AI gate/Samsung/AVG_DOWN/PYRAMID remai
 - #8/#9/#11 및 #119/#23/#49/#76/#78/#82의 완료 보완을 자연 산출물·PREOPEN/PID·실수익 확인과 분리한다. 새 결함/계약 변경/필수 handoff 실패 없이는 상세검토를 다시 열지 않는다. #77/#79/#80 전체 검토 완료를 연결부 시험으로 대체하지 않는다.
 - #11 preflight는 예정 전 `not_yet_due`이며 수동 진단을 자연 실행으로 기록하지 않는다. row/window/cohort 결손은 안정적으로 격리하고, 전역 계약 결손·격리 불가는 전체 차단한다. #74 final audit와 consumer별 실제 tuning 허용을 대사한다.
 - #81 legacy Main AI runtime은 DISABLED다. R0–R3/#82 표본 누적만으로 자동 live가 되지 않는다. 지속적 offline prompt/input 연구와 별도 KRX `entry_setup_live_policy` 승격·PREOPEN·receipt는 독립 계약이다.
-- ADM/LDM·bucket·greenfield·전용 institutional aggregate는 퇴역, Swing은 OFF다. 남아 있는 scalp-sim control tower와 prior는 source-only이며 LDM 입력만 폐기된 것을 전체 producer OFF로 오인하지 않는다. 비우선 sim의 빈 표본을 신규 상세튜닝 과제로 만들지 않는다.
+- ADM/LDM·bucket·greenfield·전용 institutional aggregate와 scalp-sim policy control-tower/prior refresh/overnight wrapper/scale-in window approval은 퇴역했고 Swing은 OFF다. 현행 base scalp simulator, candidate-window, AI-budget, entry-price 관찰과 post-sell feedback만 source-only로 유지한다. 퇴역 artifact 부재나 비우선 sim의 빈 표본을 복구·신규 상세튜닝 과제로 만들지 않는다.
 - 오래된 operator lock은 실행 mutex와 다르다. 유효 운영 override를 단지 나이·성과 미재검증 때문에 해제하지 않는다. 이번 기준 현행화는 lock/env/threshold/provider/bot/order/safety 변경 권한이 아니다.
 
 ## 운영 원칙
