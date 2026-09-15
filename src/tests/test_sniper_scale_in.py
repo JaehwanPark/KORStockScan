@@ -15047,7 +15047,7 @@ def test_rising_missed_one_share_submit_respects_runtime_cooldown_before_deposit
     )
 
 
-def test_rising_missed_one_share_submit_blocks_entry_price_canary_skip_before_forced_rebuild(
+def test_rising_missed_one_share_submit_blocks_mechanistic_price_contract_before_forced_rebuild(
     monkeypatch,
 ):
     state_handlers.TRADING_RULES = replace(
@@ -15155,22 +15155,22 @@ def test_rising_missed_one_share_submit_blocks_entry_price_canary_skip_before_fo
         latency_gate.update(
             {
                 "orders": [],
-                "ai_entry_price_canary_action": "SKIP",
-                "ai_entry_price_canary_final_action": "SKIP",
-                "ai_entry_price_canary_confidence": 95,
-                "ai_entry_price_canary_reason": "bearish micro",
-                "ai_entry_price_canary_submit_blocked": True,
-                "ai_entry_price_canary_submit_block_reason": (
-                    "entry_price_canary_skip_confirmed_bearish_micro"
+                "entry_price_owner": "mechanistic_entry_price_resolver",
+                "entry_price_provider_calls": 0,
+                "entry_price_mechanistic_submit_blocked": True,
+                "entry_price_mechanistic_submit_block_reason": (
+                    "mechanistic_entry_price_contract_invalid"
                 ),
-                "ai_entry_price_canary_submit_block_confirmation_state": "confirmed_bearish_micro",
-                "ai_entry_price_canary_submit_block_policy_warning": "",
-                "ai_entry_price_canary_submit_block_policy_basis": "ofi_bearish_supported",
+                "entry_price_mechanistic_blockers": [
+                    "leg_1_numeric_price_missing"
+                ],
             }
         )
         return [], True
 
-    monkeypatch.setattr(state_handlers, "_apply_entry_ai_price_canary", fake_canary)
+    monkeypatch.setattr(
+        state_handlers, "_apply_mechanistic_entry_price_owner", fake_canary
+    )
 
     stock = {
         "id": 1,
@@ -15216,15 +15216,15 @@ def test_rising_missed_one_share_submit_blocks_entry_price_canary_skip_before_fo
     assert sent_orders == []
     by_stage = {stage: fields for stage, fields in logs}
     assert "rising_missed_one_share_entry_order_plan_forced" not in by_stage
-    blocked = by_stage["entry_price_canary_submit_block"]
-    assert blocked["block_reason"] == "entry_price_canary_skip_confirmed_bearish_micro"
+    blocked = by_stage["entry_mechanistic_price_contract_block"]
+    assert blocked["block_reason"] == "mechanistic_entry_price_contract_invalid"
     assert blocked["forced_entry_reason"] == FORCED_ENTRY_REASON
     assert blocked["actual_order_submitted"] is False
     assert blocked["broker_order_forbidden"] is True
     assert stock.get("rising_missed_one_share_entry_forced") is None
 
 
-def test_normal_scalping_buy_blocks_entry_price_canary_skip_before_broker_submit(
+def test_normal_scalping_buy_blocks_mechanistic_price_contract_before_broker_submit(
     monkeypatch,
 ):
     state_handlers.TRADING_RULES = replace(
@@ -15331,22 +15331,22 @@ def test_normal_scalping_buy_blocks_entry_price_canary_skip_before_broker_submit
         latency_gate.update(
             {
                 "orders": [],
-                "ai_entry_price_canary_action": "SKIP",
-                "ai_entry_price_canary_final_action": "SKIP",
-                "ai_entry_price_canary_confidence": 92,
-                "ai_entry_price_canary_reason": "bearish micro",
-                "ai_entry_price_canary_submit_blocked": True,
-                "ai_entry_price_canary_submit_block_reason": (
-                    "entry_price_canary_skip_confirmed_bearish_micro"
+                "entry_price_owner": "mechanistic_entry_price_resolver",
+                "entry_price_provider_calls": 0,
+                "entry_price_mechanistic_submit_blocked": True,
+                "entry_price_mechanistic_submit_block_reason": (
+                    "mechanistic_entry_price_contract_invalid"
                 ),
-                "ai_entry_price_canary_submit_block_confirmation_state": "confirmed_bearish_micro",
-                "ai_entry_price_canary_submit_block_policy_warning": "",
-                "ai_entry_price_canary_submit_block_policy_basis": "ofi_bearish_supported",
+                "entry_price_mechanistic_blockers": [
+                    "leg_1_numeric_price_missing"
+                ],
             }
         )
         return [], True
 
-    monkeypatch.setattr(state_handlers, "_apply_entry_ai_price_canary", fake_canary)
+    monkeypatch.setattr(
+        state_handlers, "_apply_mechanistic_entry_price_owner", fake_canary
+    )
 
     stock = {
         "id": 2,
@@ -15384,11 +15384,11 @@ def test_normal_scalping_buy_blocks_entry_price_canary_skip_before_broker_submit
     assert result is False
     assert sent_orders == []
     by_stage = {stage: fields for stage, fields in logs}
-    assert "entry_price_canary_submit_block" in by_stage
+    assert "entry_mechanistic_price_contract_block" in by_stage
     assert "order_bundle_sent" not in by_stage
-    blocked = by_stage["entry_price_canary_submit_block"]
+    blocked = by_stage["entry_mechanistic_price_contract_block"]
     assert blocked["forced_entry_reason"] == "-"
-    assert blocked["block_reason"] == "entry_price_canary_skip_confirmed_bearish_micro"
+    assert blocked["block_reason"] == "mechanistic_entry_price_contract_invalid"
     assert blocked["actual_order_submitted"] is False
     assert blocked["broker_order_forbidden"] is True
 
@@ -21061,6 +21061,12 @@ def test_execute_scalping_pyramid_sends_resolved_best_bid_with_dynamic_budget_qt
     ][0]
     assert submitted_leg["position_episode_id"] == action["position_episode_id"]
     assert submitted_leg["scale_in_decision_id"] == action["scale_in_decision_id"]
+    assert submitted_leg["scale_in_execution_sizing_plan_schema"] == (
+        "scale_in_execution_sizing_plan_v1"
+    )
+    assert submitted_leg["scale_in_price_plan_schema"] == "scale_in_price_plan_v1"
+    assert submitted_leg["scale_in_execution_sizing_plan_id"]
+    assert submitted_leg["scale_in_price_plan_id"]
 
 
 def test_execute_scalping_pyramid_uses_dynamic_budget_for_one_share_position(
@@ -38661,6 +38667,17 @@ def test_shallow_avg_down_pending_lineage_requires_exact_observation_context():
             "pending_add_position_episode_id": "main-life:avg-down-1",
             "pending_add_scale_in_decision_id": "avgdn-decision-1",
         }
+        receipt = state_handlers._ensure_scale_in_action_receipt(
+            stock,
+            "123456",
+            {"add_type": "AVG_DOWN", "reason": "shallow_volatility_avg_down"},
+            now_ts=1_778_000_000.125,
+        )
+        assert receipt["scale_in_action_receipt_schema"] == (
+            "scale_in_action_receipt_v1"
+        )
+        assert receipt["position_episode_id"] == "main-life:avg-down-1"
+        assert receipt["scale_in_decision_id"] == "avgdn-decision-1"
         assert not state_handlers._shallow_avg_down_pending_lineage(
             stock,
             "123456",
@@ -53476,3 +53493,48 @@ def test_exploration_identity_does_not_claim_scale_in_authority(marker, value):
     assert result.get("scale_in_block_owner") != (
         "entry_setup_v2_14_one_share_exploration"
     )
+
+
+def test_mechanistic_entry_price_owner_preserves_numeric_price_without_provider(
+    monkeypatch,
+):
+    logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+
+    class ForbiddenProvider:
+        def evaluate_scalping_entry_price(self, *args, **kwargs):
+            raise AssertionError("entry price provider must not be called")
+
+    gate = {"price_resolution_reason": "p1_existing_defensive"}
+    original = [{"qty": 2, "price": 10_000, "order_type_code": "00"}]
+    adjusted, touched = state_handlers._apply_mechanistic_entry_price_owner(
+        stock={"name": "fixture"},
+        code="005930",
+        strategy="SCALPING",
+        ws_data={"effective_route": "KRX", "source_epoch": "epoch-1"},
+        ai_engine=ForbiddenProvider(),
+        latency_gate=gate,
+        planned_orders=original,
+        curr_price=10_010,
+        best_bid=10_000,
+        best_ask=10_010,
+        real_order_subject=True,
+    )
+
+    assert touched is True
+    assert [row["qty"] for row in adjusted] == [2]
+    assert [row["price"] for row in adjusted] == [10_000]
+    assert adjusted[0]["entry_price_owner"] == "mechanistic_entry_price_resolver"
+    assert adjusted[0]["price_candidate_id"].startswith("mechanistic:")
+    assert adjusted[0]["entry_price_leg_id"].endswith(":leg1")
+    assert len(adjusted[0]["entry_price_receipt_sha256"]) == 64
+    assert adjusted[0]["entry_price_current_price"] == 10_010
+    assert adjusted[0]["entry_price_best_bid"] == 10_000
+    assert adjusted[0]["entry_price_best_ask"] == 10_010
+    assert gate["entry_price_provider_calls"] == 0
+    assert gate["entry_price_numeric_price_changed"] is False
+    assert logs[0][0] == "entry_mechanistic_price_owner_applied"

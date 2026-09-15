@@ -766,6 +766,54 @@ def test_machine_decision_case_table_separates_missed_and_bad_entry_timing():
     assert report["machine_ai_populations_are_separate"] is True
 
 
+def test_machine_case_table_preserves_but_excludes_unresolved_terminal_lineage():
+    row = {
+        "decision_trace_id": "trace-1",
+        "evaluation_attempt_id": "attempt-1",
+        "scanner_promotion_id": "promotion-1",
+        "decision_ts": "2026-09-15T10:00:00+09:00",
+        "source_date": "2026-09-15",
+        "stock_code": "005930",
+        "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "bundle_sha256": "a" * 64,
+        "machine_action": "ENTER_NOW",
+        "machine_reason": "fixture",
+        "machine_hierarchy_selection": {"level": "common"},
+        "entry_quality_path": {
+            "status": "evaluable",
+            "entry_quality_label": "CLEAN_FAST_PROFIT",
+            "conservative_execution_cost_pct": 0.23,
+            "gross_net_target_pct": 0.5,
+            "first_hit": "net_target_first",
+        },
+        "ai_and_final_guard": {},
+    }
+    key = calibration._machine_evaluation_key(row)
+
+    report = calibration.build_machine_decision_case_table(
+        [row],
+        capture_census={"captured": 1, "evaluable": 1},
+        source_receipt={
+            "tuning_input_allowed": True,
+            "machine_threshold_tuning_input_allowed": True,
+            "machine_terminal_tuning_gate": {
+                "excluded_evaluation_keys": [key],
+                "denominator_preserved": True,
+                "economic_tuning_input_allowed": True,
+            },
+        },
+    )
+
+    assert report["case_count"] == 1
+    assert report["policy_learning_eligible_observation_count"] == 0
+    assert report["terminal_lineage_exclusion"]["excluded_case_count"] == 1
+    assert report["rows"][0]["policy_learning_excluded"] is True
+    assert report["rows"][0]["policy_learning_exclusion_reason"] == (
+        "terminal_lineage_unresolved"
+    )
+
+
 def test_machine_case_table_uses_machine_specific_source_gate_for_learning():
     row = {
         "decision_trace_id": "trace-1",

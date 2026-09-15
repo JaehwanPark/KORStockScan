@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import hashlib
 
 import pytest
 from datetime import date, datetime, timezone, timedelta
@@ -10,6 +11,230 @@ from src.engine.scalping import entry_split_order_plan as split_plan
 from src.engine import sniper_post_sell_feedback as post_sell_feedback
 from src.engine import daily_threshold_cycle_report as daily_report
 from src.engine import threshold_cycle_preopen_apply as preopen_apply
+
+
+def test_quantity_leg_four_arm_requires_same_attempt_and_cost_adjusted_edge():
+    events = []
+    for index in range(30):
+
+        def arm(net_return, pnl, capital, fill):
+            return {
+                "net_return_pct": net_return,
+                "net_pnl_krw": pnl,
+                "capital_krw_minutes": capital,
+                "fill_participation_rate": fill,
+                "terminal_conservation_holds": True,
+                "cost_complete": True,
+                "counterfactual_executable": True,
+                "entry_price_receipt_sha256": "d" * 64,
+                "exit_policy_sha256": "e" * 64,
+                "cost_contract_sha256": "f" * 64,
+                "terminal_contract_version": "same-terminal-v1",
+                "terminal_observed_at": "2026-09-15T10:30:00+09:00",
+            }
+
+        receipt = {
+            "schema": split_plan.QUANTITY_LEG_FOUR_ARM_SCHEMA,
+            "scanner_promotion_id": f"promotion-{index}",
+            "evaluation_attempt_id": f"attempt-{index}",
+            "stock_code": "005930",
+            "effective_venue": "KRX",
+            "session_bucket": "KRX_REGULAR",
+            "policy_bundle_sha256": "a" * 64,
+            "eligible_attempt_count": 30,
+            "incumbent_quantity_policy_version": "qty-current",
+            "candidate_quantity_policy_version": "qty-candidate",
+            "incumbent_leg_policy_version": "leg-current",
+            "candidate_leg_policy_version": "leg-candidate",
+            "entry_price_policy_sha256": "c" * 64,
+            "arms": {
+                "incumbent_qty_x_incumbent_leg": arm(0.08, 80, 10, 0.90),
+                "candidate_qty_x_incumbent_leg": arm(0.11, 110, 9, 0.92),
+                "incumbent_qty_x_candidate_leg": arm(0.12, 120, 8, 0.93),
+                "candidate_qty_x_candidate_leg": arm(0.15, 150, 7, 0.95),
+            },
+        }
+        receipt["receipt_sha256"] = hashlib.sha256(
+            json.dumps(
+                receipt, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+            ).encode("ascii")
+        ).hexdigest()
+        events.append({"entry_quantity_leg_four_arm_evaluation": receipt})
+
+    result = split_plan.build_quantity_leg_four_arm_evaluation(events)
+
+    assert result["complete_exact_attempt_count"] == 30
+    assert result["exact_attempt_join_coverage"] == 1.0
+    assert result["promotion_gate"]["passed"] is True
+    assert result["arms"]["candidate_qty_x_candidate_leg"][
+        "cost_adjusted_net_ev_pct"
+    ] == pytest.approx(0.15)
+    assert result["incremental_effects"]["combined_net_ev_delta_pct"] == (
+        pytest.approx(0.07)
+    )
+    assert result["promotion_gate"]["applies_to"] == (
+        "challenger_automatic_promotion_only"
+    )
+    assert (
+        result["promotion_gate"]["initial_baseline_activation_blocked_by_this_gate"]
+        is False
+    )
+
+
+def test_quantity_leg_four_arm_sums_daily_eligible_denominators_for_cumulative_gate():
+    events = []
+    for index in range(30):
+        source_date = "2026-09-14" if index < 2 else "2026-09-15"
+        eligible_count = 2 if index < 2 else 28
+
+        def arm(net_return, pnl):
+            return {
+                "net_return_pct": net_return,
+                "net_pnl_krw": pnl,
+                "capital_krw_minutes": 10,
+                "fill_participation_rate": 0.9,
+                "terminal_conservation_holds": True,
+                "cost_complete": True,
+                "counterfactual_executable": True,
+                "entry_price_receipt_sha256": "d" * 64,
+                "exit_policy_sha256": "e" * 64,
+                "cost_contract_sha256": "f" * 64,
+                "terminal_contract_version": "same-terminal-v1",
+                "terminal_observed_at": "2026-09-15T10:30:00+09:00",
+            }
+
+        receipt = {
+            "schema": split_plan.QUANTITY_LEG_FOUR_ARM_SCHEMA,
+            "scanner_promotion_id": f"promotion-{index}",
+            "evaluation_attempt_id": f"attempt-{index}",
+            "stock_code": "005930",
+            "effective_venue": "KRX",
+            "session_bucket": "KRX_REGULAR",
+            "policy_bundle_sha256": "a" * 64,
+            "eligible_attempt_count": eligible_count,
+            "incumbent_quantity_policy_version": "qty-current",
+            "candidate_quantity_policy_version": "qty-candidate",
+            "incumbent_leg_policy_version": "leg-current",
+            "candidate_leg_policy_version": "leg-candidate",
+            "entry_price_policy_sha256": "c" * 64,
+            "arms": {
+                "incumbent_qty_x_incumbent_leg": arm(0.08, 80),
+                "candidate_qty_x_incumbent_leg": arm(0.11, 110),
+                "incumbent_qty_x_candidate_leg": arm(0.12, 120),
+                "candidate_qty_x_candidate_leg": arm(0.15, 150),
+            },
+        }
+        receipt["receipt_sha256"] = hashlib.sha256(
+            json.dumps(
+                receipt, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+            ).encode("ascii")
+        ).hexdigest()
+        events.append(
+            {
+                "source_date": source_date,
+                "entry_quantity_leg_four_arm_evaluation": receipt,
+            }
+        )
+
+    result = split_plan.build_quantity_leg_four_arm_evaluation(events)
+
+    assert result["eligible_attempt_count"] == 30
+    assert result["eligible_source_date_count"] == 2
+    assert result["complete_exact_attempt_count"] == 30
+    assert result["exact_attempt_join_coverage"] == 1.0
+    assert result["promotion_gate"]["passed"] is True
+    assert result["floor_attainability"]["bounded_observation_window"] is False
+
+
+def test_quantity_leg_four_arm_keeps_incomplete_counterfactual_null():
+    receipt = {
+        "schema": split_plan.QUANTITY_LEG_FOUR_ARM_SCHEMA,
+        "scanner_promotion_id": "promotion-1",
+        "evaluation_attempt_id": "attempt-1",
+        "stock_code": "005930",
+        "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "policy_bundle_sha256": "a" * 64,
+        "eligible_attempt_count": 1,
+        "incumbent_quantity_policy_version": "qty-current",
+        "candidate_quantity_policy_version": "qty-candidate",
+        "incumbent_leg_policy_version": "leg-current",
+        "candidate_leg_policy_version": "leg-candidate",
+        "entry_price_policy_sha256": "c" * 64,
+        "arms": {},
+    }
+    receipt["receipt_sha256"] = hashlib.sha256(
+        json.dumps(
+            receipt, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+        ).encode("ascii")
+    ).hexdigest()
+    result = split_plan.build_quantity_leg_four_arm_evaluation(
+        [{"entry_quantity_leg_four_arm_evaluation": receipt}]
+    )
+
+    assert result["complete_exact_attempt_count"] == 0
+    assert result["excluded_counts"] == {"four_arm_incomplete": 1}
+    assert result["incremental_effects"]["combined_net_ev_delta_pct"] is None
+    assert result["promotion_gate"]["passed"] is False
+
+
+def test_quantity_leg_four_arm_rejects_mixed_price_exit_cost_or_terminal_contract():
+    def arm(*, terminal_contract_version="same-terminal-v1"):
+        return {
+            "net_return_pct": 0.15,
+            "net_pnl_krw": 150,
+            "capital_krw_minutes": 10,
+            "fill_participation_rate": 0.9,
+            "terminal_conservation_holds": True,
+            "cost_complete": True,
+            "counterfactual_executable": True,
+            "entry_price_receipt_sha256": "d" * 64,
+            "exit_policy_sha256": "e" * 64,
+            "cost_contract_sha256": "f" * 64,
+            "terminal_contract_version": terminal_contract_version,
+            "terminal_observed_at": "2026-09-15T10:30:00+09:00",
+        }
+
+    receipt = {
+        "schema": split_plan.QUANTITY_LEG_FOUR_ARM_SCHEMA,
+        "scanner_promotion_id": "promotion-1",
+        "evaluation_attempt_id": "attempt-1",
+        "stock_code": "005930",
+        "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "policy_bundle_sha256": "a" * 64,
+        "eligible_attempt_count": 1,
+        "incumbent_quantity_policy_version": "qty-current",
+        "candidate_quantity_policy_version": "qty-candidate",
+        "incumbent_leg_policy_version": "leg-current",
+        "candidate_leg_policy_version": "leg-candidate",
+        "entry_price_policy_sha256": "c" * 64,
+        "arms": {
+            arm_id: arm(
+                terminal_contract_version=(
+                    "different-terminal-v1"
+                    if arm_id == "candidate_qty_x_candidate_leg"
+                    else "same-terminal-v1"
+                )
+            )
+            for arm_id in split_plan.QUANTITY_LEG_FOUR_ARM_IDS
+        },
+    }
+    receipt["receipt_sha256"] = hashlib.sha256(
+        json.dumps(
+            receipt, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+        ).encode("ascii")
+    ).hexdigest()
+
+    result = split_plan.build_quantity_leg_four_arm_evaluation(
+        [{"entry_quantity_leg_four_arm_evaluation": receipt}]
+    )
+
+    assert result["complete_exact_attempt_count"] == 0
+    assert result["excluded_counts"][
+        "arm_economics_or_executability_invalid"
+    ] == 1
+    assert result["promotion_gate"]["passed"] is False
 
 
 def test_runtime_apply_authority_contract_rejects_unknown_semantics():
@@ -163,6 +388,82 @@ def test_report_policy_generation_binding_uses_and_validates_immutable_report(
     )
 
 
+def test_current_generation_requires_atomic_execution_sizing_handoff():
+    policy = {
+        "schema_version": split_plan.POLICY_SCHEMA_VERSION,
+        "source_date": "2026-09-16",
+        "source_report": "/not/read-by-direct-validator.json",
+        "policy_version": "entry_split_order_plan:2026-09-16:test",
+        "buckets": {},
+    }
+    report = {
+        "schema_version": split_plan.SCHEMA_VERSION,
+        "date": "2026-09-16",
+        "recommended_policy": {"policy_version": policy["policy_version"]},
+    }
+    report, policy = split_plan.bind_report_policy_generation(report, policy)
+
+    assert split_plan.validate_report_policy_generation(report, policy) == (
+        False,
+        "generation_atomic_execution_sizing_policy_invalid",
+    )
+
+    policy.update(
+        entry_price_plan_schema=split_plan.ATOMIC_PRICE_PLAN_SCHEMA,
+        entry_execution_sizing_plan_schema=(split_plan.ATOMIC_EXECUTION_SIZING_SCHEMA),
+        entry_execution_sizing_policy=(
+            split_plan.ATOMIC_EXECUTION_SIZING_BASELINE_POLICY
+        ),
+    )
+    report["recommended_policy"].update(
+        entry_price_plan_schema=split_plan.ATOMIC_PRICE_PLAN_SCHEMA,
+        entry_execution_sizing_plan_schema=(split_plan.ATOMIC_EXECUTION_SIZING_SCHEMA),
+        entry_execution_sizing_policy=(
+            split_plan.ATOMIC_EXECUTION_SIZING_BASELINE_POLICY
+        ),
+    )
+    report, policy = split_plan.bind_report_policy_generation(report, policy)
+    assert split_plan.validate_report_policy_generation(report, policy) == (
+        True,
+        "generation_binding_valid",
+    )
+
+
+def test_price_receipt_handoff_does_not_retroactively_reject_20260915_policy():
+    policy = {
+        "schema_version": split_plan.POLICY_SCHEMA_VERSION,
+        "source_date": "2026-09-15",
+        "source_report": "/not/read-by-direct-validator.json",
+        "policy_version": "entry_split_order_plan:2026-09-15:test",
+        "entry_execution_sizing_plan_schema": (
+            split_plan.ATOMIC_EXECUTION_SIZING_SCHEMA
+        ),
+        "entry_execution_sizing_policy": (
+            split_plan.ATOMIC_EXECUTION_SIZING_BASELINE_POLICY
+        ),
+        "buckets": {},
+    }
+    report = {
+        "schema_version": split_plan.SCHEMA_VERSION,
+        "date": "2026-09-15",
+        "recommended_policy": {
+            "policy_version": policy["policy_version"],
+            "entry_execution_sizing_plan_schema": (
+                split_plan.ATOMIC_EXECUTION_SIZING_SCHEMA
+            ),
+            "entry_execution_sizing_policy": (
+                split_plan.ATOMIC_EXECUTION_SIZING_BASELINE_POLICY
+            ),
+        },
+    }
+    report, policy = split_plan.bind_report_policy_generation(report, policy)
+
+    assert split_plan.validate_report_policy_generation(report, policy) == (
+        True,
+        "generation_binding_valid",
+    )
+
+
 def test_generation_binding_required_from_activation_date():
     valid, reason = split_plan.policy_report_generation_contract_status(
         {
@@ -273,6 +574,106 @@ def _patch_dirs(monkeypatch, tmp_path):
         split_plan, "GENERATION_BINDING_REQUIRED_FROM_DATE", date(2099, 1, 1)
     )
     return data_dir
+
+
+def test_postclose_report_consumes_atomic_entry_sizing_receipt(monkeypatch, tmp_path):
+    data_dir = _patch_dirs(monkeypatch, tmp_path)
+    target_date = "2026-09-15"
+    _write_jsonl(
+        data_dir / "pipeline_events" / f"pipeline_events_{target_date}.jsonl",
+        [
+            {
+                "date": target_date,
+                "emitted_at": f"{target_date}T10:00:00+09:00",
+                "stage": "entry_execution_sizing_plan",
+                "entry_execution_sizing_plan_id": "entry-sizing-test",
+                "entry_execution_sizing_plan_schema": (
+                    "entry_execution_sizing_plan_v1"
+                ),
+                "entry_execution_sizing_valid": True,
+                "entry_execution_sizing_quantity_conservation_holds": True,
+                "entry_execution_sizing_total_qty": 2,
+                "entry_execution_sizing_leg_count": 2,
+            },
+            {
+                "date": target_date,
+                "emitted_at": f"{target_date}T10:00:01+09:00",
+                "stage": "order_bundle_submitted",
+                "actual_order_submitted": True,
+                "requested_qty": 2,
+                "entry_execution_sizing_plan_id": "entry-sizing-test",
+                "entry_execution_sizing_valid": True,
+            },
+        ],
+    )
+    source_quality = (
+        data_dir
+        / "report"
+        / "observation_source_quality_audit"
+        / f"observation_source_quality_audit_{target_date}.json"
+    )
+    source_quality.parent.mkdir(parents=True, exist_ok=True)
+    source_quality.write_text(
+        json.dumps({"status": "pass", "summary": {"tuning_input_allowed": True}}),
+        encoding="utf-8",
+    )
+
+    report = split_plan.build_report(target_date, write=False)
+
+    atomic = report["input_summary"]["atomic_execution_sizing"]
+    assert atomic["status"] == "pass"
+    assert atomic["daily_plan_valid_count"] == 1
+    assert atomic["daily_real_submit_with_plan_count"] == 1
+    assert atomic["daily_real_submit_missing_plan_count"] == 0
+
+
+def test_postclose_report_blocks_selection_on_atomic_entry_contract_failure(
+    monkeypatch, tmp_path
+):
+    data_dir = _patch_dirs(monkeypatch, tmp_path)
+    target_date = "2026-09-15"
+    _write_jsonl(
+        data_dir / "pipeline_events" / f"pipeline_events_{target_date}.jsonl",
+        [
+            {
+                "date": target_date,
+                "emitted_at": f"{target_date}T10:00:00+09:00",
+                "stage": "entry_execution_sizing_plan_block",
+                "entry_execution_sizing_plan_id": "entry-sizing-invalid",
+                "entry_execution_sizing_plan_schema": (
+                    "entry_execution_sizing_plan_v1"
+                ),
+                "entry_execution_sizing_valid": False,
+                "entry_execution_sizing_blockers": ["quantity_conservation_failed"],
+            },
+            {
+                "date": target_date,
+                "emitted_at": f"{target_date}T10:00:01+09:00",
+                "stage": "order_bundle_submitted",
+                "actual_order_submitted": True,
+                "requested_qty": 2,
+            },
+        ],
+    )
+    source_quality = (
+        data_dir
+        / "report"
+        / "observation_source_quality_audit"
+        / f"observation_source_quality_audit_{target_date}.json"
+    )
+    source_quality.parent.mkdir(parents=True, exist_ok=True)
+    source_quality.write_text(
+        json.dumps({"status": "pass", "summary": {"tuning_input_allowed": True}}),
+        encoding="utf-8",
+    )
+
+    report = split_plan.build_report(target_date, write=False)
+
+    atomic = report["input_summary"]["atomic_execution_sizing"]
+    assert atomic["status"] == "fail"
+    assert atomic["daily_plan_invalid_count"] == 1
+    assert atomic["daily_real_submit_missing_plan_count"] == 1
+    assert report["recommended_policy"]["candidate_count"] == 0
 
 
 def test_build_report_excludes_source_quality_hard_block_and_keeps_real_sim_split(
@@ -1078,6 +1479,7 @@ def test_build_report_updates_cumulative_judgment_from_one_mature_outcome(
         "runtime_promotion_sample_floor": {
             "real_submit": 20,
             "real_split_variant_outcome": 20,
+            "minimum_cost_adjusted_ev_pct": 0.1,
         },
         "split_variant_quality": [
             {
@@ -1569,7 +1971,13 @@ def test_build_report_creates_bounded_equal_baseline_without_real_outcome(
     assert fields["entry_split_order_runtime_weight_adjustment_applied"] is True
 
 
-def test_build_report_uses_split_variant_outcome_as_primary_ev(monkeypatch, tmp_path):
+@pytest.mark.parametrize(
+    ("profit_rate", "expected_promoted"),
+    [(1.4, True), (0.05, False)],
+)
+def test_build_report_uses_split_variant_outcome_as_primary_ev(
+    monkeypatch, tmp_path, profit_rate, expected_promoted
+):
     data_dir = _patch_dirs(monkeypatch, tmp_path)
     target_date = "2026-07-07"
     _write_jsonl(
@@ -1603,7 +2011,7 @@ def test_build_report_uses_split_variant_outcome_as_primary_ev(monkeypatch, tmp_
             {
                 "date": target_date,
                 "actual_order_submitted": True,
-                "profit_rate": 1.4,
+                "profit_rate": profit_rate,
                 "spread_bps": 18,
                 "buy_pressure_10t": 55,
                 "entry_split_order_policy_applied": True,
@@ -1626,13 +2034,22 @@ def test_build_report_uses_split_variant_outcome_as_primary_ev(monkeypatch, tmp_
     )
     assert balanced["primary_sample_book"] == "real_split_variant"
     assert balanced["real_split_variant_outcome_joined_sample"] == 20
-    assert balanced["source_quality_adjusted_ev_pct"] == 1.4
-    assert balanced["policy_mode"] == "real_primary_ev_optimized"
-    assert balanced["candidate_passed"] is True
+    assert balanced["source_quality_adjusted_ev_pct"] == profit_rate
+    assert balanced["candidate_passed"] is expected_promoted
     assert balanced["exploration_seed_allowed"] is False
-    assert balanced["ev_validated_runtime_apply_allowed"] is True
-    assert balanced["runtime_apply_authority_class"] == "ev_validated_variant"
-    assert report["recommended_policy"]["ev_validated_runtime_apply_allowed"] is True
+    assert balanced["ev_validated_runtime_apply_allowed"] is expected_promoted
+    if expected_promoted:
+        assert balanced["policy_mode"] == "real_primary_ev_optimized"
+        assert balanced["runtime_apply_authority_class"] == "ev_validated_variant"
+        assert (
+            report["recommended_policy"]["ev_validated_runtime_apply_allowed"] is True
+        )
+    else:
+        assert balanced["policy_mode"] == ""
+        assert balanced["runtime_apply_authority_class"] == "none"
+        assert (
+            report["recommended_policy"]["ev_validated_runtime_apply_allowed"] is False
+        )
 
 
 def test_build_report_uses_post_submit_low_tick_band_for_price_offsets(

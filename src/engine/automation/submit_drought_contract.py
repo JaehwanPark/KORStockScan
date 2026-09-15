@@ -54,6 +54,7 @@ TERMINAL_STAGES_BY_AXIS = {
     "ENTRY_AI_AUTHORITY_REVALIDATION": {"pre_submit_entry_ai_authority_guard_block"},
     "PRICE_REVALIDATION": {
         "entry_submit_revalidation_block",
+        "entry_mechanistic_price_contract_block",
         "entry_price_canary_submit_block",
         "pre_submit_price_guard_block",
         "entry_ai_price_canary_skip_order",

@@ -1,9 +1,10 @@
-"""Atomic, behavior-equivalent execution sizing receipt for scalping entries.
+"""Atomic, behavior-equivalent execution sizing receipts for scalping BUYs.
 
-The existing position-sizing allocator still owns total quantity and the
-existing entry split/price resolvers still own leg shape and numeric prices.
-This module only validates and binds those already-authorized results into one
-immutable plan.  It cannot authorize an entry or increase quantity.
+The position-sizing allocator owns total quantity, the split resolver owns leg
+shape, and the mechanistic entry-price resolver owns numeric prices.  This
+module only validates and binds those already-authorized results into one
+immutable plan.  It cannot authorize an entry, recalculate price, or increase
+quantity.
 """
 
 from __future__ import annotations
@@ -13,10 +14,29 @@ import json
 from typing import Any
 
 SCHEMA_VERSION = "entry_execution_sizing_plan_v1"
+SCALE_IN_SCHEMA_VERSION = "scale_in_execution_sizing_plan_v1"
 PRICE_SCHEMA_VERSION = "entry_price_plan_v1"
+SCALE_IN_PRICE_SCHEMA_VERSION = "scale_in_price_plan_v1"
 POLICY_VERSION = "execution_sizing_baseline_v1"
+SCALE_IN_POLICY_VERSIONS = {
+    "AVG_DOWN": "avg_down_execution_sizing_baseline_v1",
+    "PYRAMID": "pyramid_execution_sizing_baseline_v1",
+}
 OWNER = "entry_execution_sizing_owner"
-PRICE_OWNER = "existing_entry_price_and_split_resolvers"
+SCALE_IN_OWNERS = {
+    "AVG_DOWN": "avg_down_execution_sizing_owner",
+    "PYRAMID": "pyramid_execution_sizing_owner",
+}
+SCALE_IN_ACTION_OWNERS = {
+    "AVG_DOWN": "avg_down_action_owner",
+    "PYRAMID": "pyramid_action_owner",
+}
+PRICE_OWNER = "mechanistic_entry_price_resolver"
+ENTRY_PRICE_POLICY_VERSION = "mechanistic_entry_price_p1_baseline_v1"
+ENTRY_PRICE_POLICY_SHA256 = hashlib.sha256(
+    ENTRY_PRICE_POLICY_VERSION.encode("ascii")
+).hexdigest()
+SCALE_IN_PRICE_OWNER = "existing_scale_in_price_resolver"
 QUANTITY_OWNER = "position_sizing_dynamic_formula"
 
 
@@ -36,6 +56,7 @@ def _content_sha256(payload: dict[str, Any]) -> str:
 
 
 def _price_candidate_id(order: dict[str, Any], index: int) -> str:
+    del index
     existing = str(order.get("price_candidate_id") or "").strip()
     if existing:
         return existing
@@ -44,7 +65,34 @@ def _price_candidate_id(order: dict[str, Any], index: int) -> str:
         or order.get("price_source")
         or "current_resolver"
     ).strip()
-    return f"{mode}:leg{index}"
+    return mode
+
+
+def _price_plan_receipt(
+    *,
+    schema_version: str,
+    stage: str,
+    action_receipt_id: str,
+    owner: str,
+    policy_version: str,
+    candidates: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Freeze resolver output so sizing can reference, but not rewrite, prices."""
+
+    core = {
+        "schema_version": schema_version,
+        "stage": stage,
+        "action_receipt_id": action_receipt_id,
+        "price_owner": owner,
+        "price_policy_version": policy_version,
+        "price_candidates": candidates,
+    }
+    receipt_sha256 = _content_sha256(core)
+    return {
+        **core,
+        "price_plan_id": f"{stage}-price-{receipt_sha256[:24]}",
+        "price_plan_sha256": receipt_sha256,
+    }
 
 
 def compose_entry_execution_sizing_plan(
@@ -117,6 +165,34 @@ def compose_entry_execution_sizing_plan(
     price_plan: list[dict[str, Any]] = []
     legs: list[dict[str, Any]] = []
     decorated_orders: list[dict[str, Any]] = []
+    price_policy_versions = {
+        str(order.get("entry_price_policy_version") or "").strip() for order in orders
+    }
+    price_policy_versions.discard("")
+    price_policy_sha256s = {
+        str(order.get("entry_price_policy_sha256") or "").strip() for order in orders
+    }
+    price_policy_sha256s.discard("")
+    price_source_receipt_sha256s = {
+        str(order.get("entry_price_receipt_sha256") or "").strip()
+        for order in orders
+    }
+    price_source_receipt_sha256s.discard("")
+    price_owners = {
+        str(order.get("entry_price_owner") or "").strip() for order in orders
+    }
+    price_owners.discard("")
+    if price_owners != {PRICE_OWNER}:
+        blockers.append("entry_price_owner_invalid")
+    if price_policy_versions != {ENTRY_PRICE_POLICY_VERSION}:
+        blockers.append("entry_price_policy_version_missing_or_conflicting")
+    if price_policy_sha256s != {ENTRY_PRICE_POLICY_SHA256}:
+        blockers.append("entry_price_policy_sha256_missing_or_invalid")
+    if len(price_source_receipt_sha256s) != 1 or not all(
+        len(value) == 64 and all(character in "0123456789abcdef" for character in value)
+        for value in price_source_receipt_sha256s
+    ):
+        blockers.append("entry_price_source_receipt_sha256_missing_or_conflicting")
     for index, order in enumerate(orders, start=1):
         price = _positive_int(order.get("price"))
         order_type = str(
@@ -125,12 +201,20 @@ def compose_entry_execution_sizing_plan(
         if price <= 0 and order_type not in {"3", "03"}:
             blockers.append(f"leg_{index}_numeric_price_missing")
         candidate_id = _price_candidate_id(order, index)
+        price_leg_id = str(order.get("entry_price_leg_id") or "").strip()
+        if not price_leg_id:
+            price_leg_id = f"{candidate_id}:leg{index}"
         price_plan.append(
             {
                 "price_candidate_id": candidate_id,
+                "price_leg_id": price_leg_id,
                 "numeric_price": price,
                 "order_type_code": order_type,
                 "source": PRICE_OWNER,
+                "captured_at": order.get("entry_price_captured_at"),
+                "route": order.get("entry_price_route"),
+                "epoch": order.get("entry_price_epoch"),
+                "source_receipt_sha256": order.get("entry_price_receipt_sha256"),
             }
         )
         legs.append(
@@ -138,11 +222,18 @@ def compose_entry_execution_sizing_plan(
                 "leg_index": index,
                 "qty": _positive_int(order.get("qty")),
                 "price_candidate_id": candidate_id,
+                "price_leg_id": price_leg_id,
                 "numeric_price": price,
                 "execution_phase": "immediate",
             }
         )
-        decorated_orders.append({**order, "price_candidate_id": candidate_id})
+        decorated_orders.append(
+            {
+                **order,
+                "price_candidate_id": candidate_id,
+                "entry_price_leg_id": price_leg_id,
+            }
+        )
     for residual_index, residual_qty in enumerate(residual_quantities, start=1):
         candidate_id = f"probe_residual_resolver:leg{residual_index + 1}"
         legs.append(
@@ -150,6 +241,7 @@ def compose_entry_execution_sizing_plan(
                 "leg_index": len(orders) + residual_index,
                 "qty": residual_qty,
                 "price_candidate_id": candidate_id,
+                "price_leg_id": candidate_id,
                 "numeric_price": None,
                 "execution_phase": "after_verified_probe_fill",
             }
@@ -157,13 +249,44 @@ def compose_entry_execution_sizing_plan(
         price_plan.append(
             {
                 "price_candidate_id": candidate_id,
+                "price_leg_id": candidate_id,
                 "numeric_price": None,
                 "order_type_code": "00",
                 "source": "probe_fill_price_resolver",
             }
         )
+    immediate_price_candidate_ids = {
+        str(item.get("price_candidate_id") or "") for item in price_plan[: len(orders)]
+    }
+    if len(immediate_price_candidate_ids) != 1:
+        blockers.append("entry_price_candidate_conflict")
+    price_leg_ids = [str(item.get("price_leg_id") or "") for item in price_plan]
+    if len(price_leg_ids) != len(set(price_leg_ids)):
+        blockers.append("duplicate_price_leg_id")
     if len(legs) > expected_total_qty:
         blockers.append("leg_count_exceeds_total_qty")
+
+    price_receipt = _price_plan_receipt(
+        schema_version=PRICE_SCHEMA_VERSION,
+        stage="entry",
+        action_receipt_id=action_receipt_id,
+        owner=PRICE_OWNER,
+        policy_version=(
+            next(iter(price_policy_versions))
+            if len(price_policy_versions) == 1
+            else "invalid"
+        ),
+        candidates=price_plan,
+    )
+    valid_price_candidate_ids = {
+        str(item.get("price_candidate_id") or "")
+        for item in price_receipt["price_candidates"]
+    }
+    if any(
+        str(leg.get("price_candidate_id") or "") not in valid_price_candidate_ids
+        for leg in legs
+    ):
+        blockers.append("price_candidate_not_issued_by_price_owner")
 
     plan_core = {
         "schema_version": SCHEMA_VERSION,
@@ -171,10 +294,28 @@ def compose_entry_execution_sizing_plan(
         "stage": "entry",
         "action_receipt_id": action_receipt_id,
         "action_owner": action_owner,
+        "scanner_promotion_id": str(receipt.get("scanner_promotion_id") or ""),
+        "policy_bundle_hash": str(
+            receipt.get("policy_bundle_hash")
+            or receipt.get("machine_bundle_sha256")
+            or ""
+        ),
+        "effective_venue": str(receipt.get("effective_venue") or ""),
+        "market_session_bucket": str(receipt.get("market_session_bucket") or ""),
         "quantity_policy_owner": QUANTITY_OWNER,
         "quantity_policy_version": str(quantity_policy_version or "baseline_current"),
         "split_policy_version": str(split_policy_version or "baseline_current"),
         "price_policy_owner": PRICE_OWNER,
+        "price_policy_sha256": (
+            next(iter(price_policy_sha256s)) if len(price_policy_sha256s) == 1 else None
+        ),
+        "price_source_receipt_sha256": (
+            next(iter(price_source_receipt_sha256s))
+            if len(price_source_receipt_sha256s) == 1
+            else None
+        ),
+        "price_plan_id": price_receipt["price_plan_id"],
+        "price_plan_sha256": price_receipt["price_plan_sha256"],
         "execution_sizing_policy": POLICY_VERSION,
         "migration_baseline": True,
         "total_qty": expected_total_qty,
@@ -214,10 +355,219 @@ def compose_entry_execution_sizing_plan(
         "entry_execution_sizing_valid": not blockers,
         "entry_execution_sizing_blockers": blockers,
         "entry_execution_sizing_plan_sha256": _content_sha256(plan_core),
+        "entry_price_plan_schema": PRICE_SCHEMA_VERSION,
+        "entry_price_plan_id": price_receipt["price_plan_id"],
+        "entry_price_plan_owner": PRICE_OWNER,
+        "entry_price_plan_sha256": price_receipt["price_plan_sha256"],
+        "entry_price_source_receipt_sha256": plan_core[
+            "price_source_receipt_sha256"
+        ],
     }
     decorated_orders = [{**item, **common_fields} for item in decorated_orders]
     if continuation is not None and decorated_orders:
         continuation_common = dict(continuation.get("common_fields") or {})
         continuation["common_fields"] = {**continuation_common, **common_fields}
         decorated_orders[0]["entry_split_order_probe_continuation"] = continuation
-    return decorated_orders, {**common_fields, "entry_execution_sizing_plan": plan_core}
+    return decorated_orders, {
+        **common_fields,
+        "entry_price_plan": price_receipt,
+        "entry_execution_sizing_plan": plan_core,
+    }
+
+
+def compose_scale_in_execution_sizing_plan(
+    planned_orders: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None,
+    *,
+    authorized_total_qty: int,
+    action_receipt: dict[str, Any] | None,
+    quantity_policy_version: str | None,
+    split_policy_version: str | None,
+    price_policy_version: str | None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Bind an already-authorized AVG_DOWN/PYRAMID plan without changing it.
+
+    The existing action, price, quantity, and hard-safety owners remain
+    authoritative.  This receipt only proves that the final multi-leg order
+    conserves the quantity those owners allowed and keeps AVG_DOWN/PYRAMID in
+    separate namespaces.
+    """
+
+    orders = [dict(item) for item in (planned_orders or []) if isinstance(item, dict)]
+    receipt = action_receipt if isinstance(action_receipt, dict) else {}
+    add_type = (
+        str(
+            receipt.get("add_type")
+            or (orders[0].get("add_type") if orders else "")
+            or ""
+        )
+        .strip()
+        .upper()
+    )
+    action_receipt_id = str(receipt.get("scale_in_decision_id") or "").strip()
+    position_episode_id = str(receipt.get("position_episode_id") or "").strip()
+    action_owner = str(receipt.get("scale_in_action_owner") or "").strip()
+    authorized_total_qty = _positive_int(authorized_total_qty)
+    total_qty = sum(_positive_int(item.get("qty")) for item in orders)
+    expected_action_owner = SCALE_IN_ACTION_OWNERS.get(add_type, "")
+    policy_version = SCALE_IN_POLICY_VERSIONS.get(add_type, "")
+    blockers: list[str] = []
+    if add_type not in SCALE_IN_POLICY_VERSIONS:
+        blockers.append("scale_in_stage_invalid")
+    if not action_receipt_id:
+        blockers.append("scale_in_action_receipt_id_missing")
+    if not position_episode_id:
+        blockers.append("scale_in_position_episode_id_missing")
+    if not expected_action_owner or action_owner != expected_action_owner:
+        blockers.append("scale_in_action_owner_invalid")
+    if receipt.get("scale_in_action_receipt_schema") != ("scale_in_action_receipt_v1"):
+        blockers.append("scale_in_action_receipt_schema_invalid")
+    if receipt.get("should_add") is not True:
+        blockers.append("scale_in_action_not_add")
+    if authorized_total_qty <= 0:
+        blockers.append("authorized_total_qty_invalid")
+    if not orders:
+        blockers.append("planned_orders_missing")
+    if total_qty <= 0 or any(_positive_int(item.get("qty")) <= 0 for item in orders):
+        blockers.append("nonpositive_leg_qty")
+    if total_qty > authorized_total_qty:
+        blockers.append("quantity_increase_detected")
+    if total_qty != authorized_total_qty:
+        blockers.append("quantity_conservation_failed")
+    if len(orders) > total_qty:
+        blockers.append("leg_count_exceeds_total_qty")
+
+    legs: list[dict[str, Any]] = []
+    price_candidates: list[dict[str, Any]] = []
+    decorated_orders: list[dict[str, Any]] = []
+    for index, order in enumerate(orders, start=1):
+        qty = _positive_int(order.get("qty"))
+        numeric_price = _positive_int(order.get("price"))
+        order_type_code = str(
+            order.get("order_type_code") or order.get("order_type") or "00"
+        ).strip()
+        is_market = order_type_code in {"3", "03", "6", "06", "16"}
+        if numeric_price <= 0 and not is_market:
+            blockers.append(f"leg_{index}_numeric_price_missing")
+        candidate_id = str(order.get("price_candidate_id") or "").strip()
+        if not candidate_id:
+            price_source = str(
+                order.get("price_source")
+                or price_policy_version
+                or "current_scale_in_resolver"
+            ).strip()
+            candidate_id = f"{price_source}:leg{index}"
+        leg = {
+            "leg_index": index,
+            "qty": qty,
+            "price_candidate_id": candidate_id,
+            "numeric_price": numeric_price,
+            "order_type_code": order_type_code,
+        }
+        legs.append(leg)
+        price_candidates.append(
+            {
+                "price_candidate_id": candidate_id,
+                "numeric_price": numeric_price,
+                "order_type_code": order_type_code,
+                "source": str(price_policy_version or "current_scale_in_resolver"),
+            }
+        )
+        decorated_orders.append({**order, "price_candidate_id": candidate_id})
+
+    price_candidate_ids = [
+        str(item.get("price_candidate_id") or "") for item in price_candidates
+    ]
+    if len(price_candidate_ids) != len(set(price_candidate_ids)):
+        blockers.append("duplicate_price_candidate_id")
+
+    price_receipt = _price_plan_receipt(
+        schema_version=SCALE_IN_PRICE_SCHEMA_VERSION,
+        stage=add_type.lower() if add_type else "scale_in",
+        action_receipt_id=action_receipt_id,
+        owner=SCALE_IN_PRICE_OWNER,
+        policy_version=str(price_policy_version or "current_scale_in_resolver"),
+        candidates=price_candidates,
+    )
+    valid_price_candidate_ids = {
+        str(item.get("price_candidate_id") or "")
+        for item in price_receipt["price_candidates"]
+    }
+    if any(
+        str(leg.get("price_candidate_id") or "") not in valid_price_candidate_ids
+        for leg in legs
+    ):
+        blockers.append("price_candidate_not_issued_by_price_owner")
+
+    quantity_conservation_holds = bool(
+        total_qty > 0
+        and total_qty == authorized_total_qty
+        and total_qty == sum(leg["qty"] for leg in legs)
+    )
+    plan_core = {
+        "schema_version": SCALE_IN_SCHEMA_VERSION,
+        "stage": add_type.lower(),
+        "add_type": add_type,
+        "action_receipt_id": action_receipt_id,
+        "position_episode_id": position_episode_id,
+        "action_owner": action_owner,
+        "execution_sizing_owner": SCALE_IN_OWNERS.get(add_type, ""),
+        "execution_sizing_policy": policy_version,
+        "quantity_policy_owner": QUANTITY_OWNER,
+        "quantity_policy_version": str(quantity_policy_version or "baseline_current"),
+        "split_policy_version": str(
+            split_policy_version or f"{add_type.lower()}_unsplit"
+        ),
+        "price_policy_version": str(
+            price_policy_version or "current_scale_in_resolver"
+        ),
+        "price_plan_schema": SCALE_IN_PRICE_SCHEMA_VERSION,
+        "price_plan_id": price_receipt["price_plan_id"],
+        "price_plan_sha256": price_receipt["price_plan_sha256"],
+        "migration_baseline": True,
+        "authorized_total_qty": authorized_total_qty,
+        "total_qty": total_qty,
+        "leg_count": len(legs),
+        "legs": legs,
+        "price_candidates": price_candidates,
+        "quantity_conservation_holds": quantity_conservation_holds,
+        "quantity_increase_forbidden": True,
+        "action_authority_forbidden": True,
+        "valid": not blockers,
+        "blockers": blockers,
+    }
+    plan_sha256 = _content_sha256(plan_core)
+    plan_id = f"{add_type.lower()}-sizing-{plan_sha256[:24]}"
+    prefix = "scale_in_execution_sizing_"
+    common_fields = {
+        f"{prefix}plan_schema": SCALE_IN_SCHEMA_VERSION,
+        f"{prefix}plan_id": plan_id,
+        f"{prefix}policy": policy_version,
+        f"{prefix}stage": add_type,
+        f"{prefix}action_receipt_id": action_receipt_id or "-",
+        f"{prefix}action_owner": action_owner or "-",
+        f"{prefix}quantity_policy_version": plan_core["quantity_policy_version"],
+        f"{prefix}split_policy_version": plan_core["split_policy_version"],
+        f"{prefix}price_policy_version": plan_core["price_policy_version"],
+        f"{prefix}authorized_total_qty": authorized_total_qty,
+        f"{prefix}total_qty": total_qty,
+        f"{prefix}leg_count": len(legs),
+        f"{prefix}quantity_conservation_holds": plan_core[
+            "quantity_conservation_holds"
+        ],
+        f"{prefix}quantity_increase_forbidden": True,
+        f"{prefix}migration_baseline": True,
+        f"{prefix}plan_emitted": True,
+        f"{prefix}valid": not blockers,
+        f"{prefix}blockers": blockers,
+        f"{prefix}plan_sha256": plan_sha256,
+        "scale_in_price_plan_schema": SCALE_IN_PRICE_SCHEMA_VERSION,
+        "scale_in_price_plan_id": price_receipt["price_plan_id"],
+        "scale_in_price_plan_owner": SCALE_IN_PRICE_OWNER,
+        "scale_in_price_plan_sha256": price_receipt["price_plan_sha256"],
+    }
+    decorated_orders = [{**item, **common_fields} for item in decorated_orders]
+    return decorated_orders, {
+        **common_fields,
+        "scale_in_price_plan": price_receipt,
+        "scale_in_execution_sizing_plan": plan_core,
+    }

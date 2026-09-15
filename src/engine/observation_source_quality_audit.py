@@ -36,6 +36,7 @@ BACKFILL_REPORT_STEM = "observation_source_quality_backfill_audit"
 DEFAULT_HEAVY_ANALYSIS_LOCK_PATH = PROJECT_ROOT / "tmp" / "intraday_heavy_analysis.lock"
 AUDIT_SCHEMA_VERSION = "observation_source_quality_audit_v2"
 MACHINE_AI_NATURAL_SOURCE_SCHEMA = "machine_ai_natural_source_consumption_v1"
+MACHINE_TERMINAL_TUNING_GATE_SCHEMA = "machine_terminal_tuning_gate_v1"
 
 
 def _canonical_digest(value: Any) -> str:
@@ -58,6 +59,119 @@ def _raw_generation(path: Path) -> dict[str, Any]:
         }
     except OSError:
         return {}
+
+
+def _machine_terminal_tuning_gate(
+    target_date: str, *, data_root: Path = DATA_DIR
+) -> dict[str, Any]:
+    """Exclude unresolved terminal lineage by exact key, never by inference."""
+    path = (
+        data_root
+        / "report"
+        / "buy_funnel_sentinel"
+        / f"buy_funnel_sentinel_{target_date}.json"
+    )
+    base: dict[str, Any] = {
+        "schema": MACHINE_TERMINAL_TUNING_GATE_SCHEMA,
+        "source_path": str(path),
+        "source_sha256": None,
+        "ai_pass_terminal_conservation": {},
+        "excluded_evaluation_keys": [],
+        "lineage_gap_excluded_count": 0,
+        "terminal_admitted_count": 0,
+        "pending_maturity_count": 0,
+        "denominator_preserved": False,
+        "exclusion_applied": False,
+        "economic_tuning_input_allowed": False,
+        "reason": "buy_funnel_sentinel_missing_or_invalid",
+        "missing_economics_imputed": False,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
+    try:
+        raw = path.read_bytes()
+        payload = json.loads(raw)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return base
+    funnel = (
+        payload.get("entry_submit_drought_contract", {}).get(
+            "machine_primary_entry_funnel", {}
+        )
+        if isinstance(payload, dict)
+        else {}
+    )
+    if not isinstance(funnel, dict):
+        return base
+    conservation = funnel.get("ai_pass_terminal_conservation")
+    ledger = funnel.get("evaluation_ledger")
+    if not isinstance(conservation, dict) or not isinstance(ledger, list):
+        return base
+    gap_keys = sorted(
+        {
+            str(row.get("evaluation_key") or "")
+            for row in ledger
+            if isinstance(row, dict)
+            and row.get("final_state") == "lineage_gap_superseded_without_terminal"
+            and str(row.get("evaluation_key") or "")
+        }
+    )
+    exact_key_pattern = re.compile(
+        r"^machine:[^|]+\|[^|]+\|[^|]+\|[^|]+\|[^|]+\|[0-9a-f]{64}$"
+    )
+    exact_keys_complete = bool(
+        len(gap_keys) == int(conservation.get("lineage_gap") or 0)
+        and all(exact_key_pattern.fullmatch(key) for key in gap_keys)
+    )
+    values = {
+        name: int(conservation.get(name) or 0)
+        for name in (
+            "ai_pass",
+            "submitted",
+            "final_guard_blocked",
+            "broker_rejected",
+            "lineage_gap",
+            "pending",
+            "difference",
+        )
+    }
+    denominator_preserved = bool(
+        values["difference"] == 0
+        and values["ai_pass"]
+        == values["submitted"]
+        + values["final_guard_blocked"]
+        + values["broker_rejected"]
+        + values["lineage_gap"]
+        + values["pending"]
+    )
+    terminal_admitted = (
+        values["submitted"] + values["final_guard_blocked"] + values["broker_rejected"]
+    )
+    allowed = bool(denominator_preserved and exact_keys_complete and terminal_admitted)
+    base.update(
+        source_sha256=hashlib.sha256(raw).hexdigest(),
+        ai_pass_terminal_conservation=values,
+        excluded_evaluation_keys=gap_keys,
+        lineage_gap_excluded_count=len(gap_keys),
+        terminal_admitted_count=terminal_admitted,
+        pending_maturity_count=values["pending"],
+        denominator_preserved=denominator_preserved,
+        exclusion_applied=exact_keys_complete,
+        economic_tuning_input_allowed=allowed,
+        reason=(
+            "exact_lineage_gap_excluded_terminal_rows_admitted"
+            if allowed
+            else (
+                "ai_pass_terminal_conservation_invalid"
+                if not denominator_preserved
+                else (
+                    "lineage_gap_exact_key_contract_invalid"
+                    if not exact_keys_complete
+                    else "no_terminal_rows_admitted"
+                )
+            )
+        ),
+    )
+    return base
 
 
 def _audited_jsonl(path: Path, receipt: dict[str, Any]):
@@ -470,6 +584,9 @@ def _machine_ai_natural_source_consumption(
         }
         for name, receipt in receipts.items()
     }
+    terminal_tuning_gate = _machine_terminal_tuning_gate(
+        target_date, data_root=data_root
+    )
     return {
         "schema": MACHINE_AI_NATURAL_SOURCE_SCHEMA,
         "target_date": target_date,
@@ -559,6 +676,7 @@ def _machine_ai_natural_source_consumption(
             "runtime_effect": False,
             "allowed_runtime_apply": False,
         },
+        "machine_terminal_tuning_gate": terminal_tuning_gate,
         "tuning_input_allowed": not bool(
             required_missing or invalid_json_sources or source_generation_changed
         ),

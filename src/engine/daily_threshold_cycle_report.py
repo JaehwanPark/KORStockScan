@@ -9212,6 +9212,16 @@ def _build_entry_split_order_plan_family(*, target_date: str | None = None) -> d
         if isinstance(payload.get("input_summary"), dict)
         else {}
     )
+    entry_atomic_sizing = (
+        input_summary.get("atomic_execution_sizing")
+        if isinstance(input_summary.get("atomic_execution_sizing"), dict)
+        else {}
+    )
+    quantity_leg_four_arm = (
+        payload.get("quantity_leg_four_arm_evaluation")
+        if isinstance(payload.get("quantity_leg_four_arm_evaluation"), dict)
+        else {}
+    )
     candidates = (
         recommended_policy.get("candidates")
         if isinstance(recommended_policy.get("candidates"), list)
@@ -9355,7 +9365,8 @@ def _build_entry_split_order_plan_family(*, target_date: str | None = None) -> d
         "enabled": bool(candidates)
         and bool(policy_file)
         and not source_quality_blocked
-        and runtime_apply_allowed,
+        and runtime_apply_allowed
+        and entry_atomic_sizing.get("status") != "fail",
         "policy_file": policy_file,
         "policy_version": policy_version,
         "runtime_apply_authority": runtime_apply_authority,
@@ -9401,6 +9412,7 @@ def _build_entry_split_order_plan_family(*, target_date: str | None = None) -> d
                 if real_outcome_sample > 0
                 else "real_outcome_pending" if real_sample >= 20 else "none"
             ),
+            "quantity_leg_four_arm_evaluation": quantity_leg_four_arm,
             "source_quality_blocked": bool(source_quality_blocked),
             "source_quality_status": source_quality.get("status"),
             "excluded_source_quality_event_count": input_summary.get(
@@ -9409,6 +9421,7 @@ def _build_entry_split_order_plan_family(*, target_date: str | None = None) -> d
             "policy_file": policy_file or None,
             "policy_version": policy_version or None,
             "runtime_apply_allowed": runtime_apply_allowed,
+            "atomic_execution_sizing": entry_atomic_sizing,
             "runtime_disable_recommended": runtime_disable_recommended,
             "runtime_apply_compatibility_allowed": (
                 runtime_apply_compatibility_allowed
@@ -9477,6 +9490,16 @@ def _build_entry_split_order_plan_family(*, target_date: str | None = None) -> d
         },
         "current": current,
         "recommended": recommended,
+        "integrated_quantity_leg_candidate": {
+            "promotion_evidence_passed": bool(
+                (quantity_leg_four_arm.get("promotion_gate") or {}).get("passed")
+            ),
+            "source_schema": quantity_leg_four_arm.get("schema"),
+            "same_exact_attempt_four_arm_required": True,
+            "selection_owner": "existing_position_sizing_and_entry_split_policy_producers",
+            "runtime_apply_selected": False,
+            "integrated_entry_axis_bundle_role": "identity_and_hash_verification_only",
+        },
         "candidate_grid": candidate_grid,
         "apply_ready": bool(recommended["enabled"]),
         "apply_mode": (
@@ -9523,6 +9546,11 @@ def _build_scale_in_split_order_plan_family(*, target_date: str | None = None) -
     input_summary = (
         payload.get("input_summary")
         if isinstance(payload.get("input_summary"), dict)
+        else {}
+    )
+    scale_in_atomic_sizing = (
+        input_summary.get("atomic_execution_sizing")
+        if isinstance(input_summary.get("atomic_execution_sizing"), dict)
         else {}
     )
     rolling_summary = (
@@ -9572,9 +9600,11 @@ def _build_scale_in_split_order_plan_family(*, target_date: str | None = None) -
         if isinstance(recommended_policy.get("runtime_refresh_evidence"), dict)
         else {}
     )
-    runtime_policy_refresh_allowed = payload.get(
-        "schema_version"
-    ) == SCHEMA_VERSION and not runtime_refresh_contract_error(runtime_refresh_evidence)
+    runtime_policy_refresh_allowed = (
+        payload.get("schema_version") == SCHEMA_VERSION
+        and not runtime_refresh_contract_error(runtime_refresh_evidence)
+        and scale_in_atomic_sizing.get("status") != "fail"
+    )
     runtime_apply_allowed = bool(
         recommended_policy.get("runtime_apply_allowed") is True
         and runtime_policy_refresh_allowed
@@ -9685,6 +9715,7 @@ def _build_scale_in_split_order_plan_family(*, target_date: str | None = None) -
             "policy_file": policy_file or None,
             "policy_version": policy_version or None,
             "runtime_apply_allowed": runtime_apply_allowed,
+            "atomic_execution_sizing": scale_in_atomic_sizing,
             "runtime_policy_refresh_allowed": runtime_policy_refresh_allowed,
             "runtime_refresh_evidence": runtime_refresh_evidence,
             "source_quality_adjusted_ev_pct": runtime_refresh_evidence.get(

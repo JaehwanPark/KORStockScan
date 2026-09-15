@@ -20,7 +20,7 @@ from collections import Counter, defaultdict
 from datetime import date, datetime
 from pathlib import Path
 from statistics import fmean
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 from zoneinfo import ZoneInfo
 
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
@@ -3715,6 +3715,10 @@ def _machine_ai_natural_source_receipt(data_root: Path, target_date: str) -> dic
     compact_measurement = (
         compact_measurement if isinstance(compact_measurement, dict) else {}
     )
+    terminal_tuning_gate = consumption.get("machine_terminal_tuning_gate")
+    terminal_tuning_gate = (
+        terminal_tuning_gate if isinstance(terminal_tuning_gate, dict) else {}
+    )
     return {
         "path": str(path),
         "target_date": target_date,
@@ -3730,8 +3734,23 @@ def _machine_ai_natural_source_receipt(data_root: Path, target_date: str) -> dic
             "machine_threshold_tuning_blocked_reason"
         ),
         "compact_auxiliary_policy_measurement": compact_measurement,
+        "machine_terminal_tuning_gate": terminal_tuning_gate,
         "authority": "source_quality_receipt_only_no_runtime_apply",
     }
+
+
+def _machine_evaluation_key(row: Mapping[str, Any]) -> str:
+    values = (
+        row.get("scanner_promotion_id"),
+        row.get("evaluation_attempt_id") or row.get("decision_trace_id"),
+        row.get("stock_code"),
+        row.get("effective_venue"),
+        row.get("session_bucket"),
+        row.get("bundle_sha256"),
+    )
+    if not all(str(value or "").strip() for value in values):
+        return ""
+    return "machine:" + "|".join(str(value).strip() for value in values)
 
 
 def _compact_history_receipt(
@@ -3870,6 +3889,12 @@ def build_machine_decision_case_table(
     )
 
     source_receipt = dict(source_receipt or {})
+    terminal_tuning_gate = _as_dict(source_receipt.get("machine_terminal_tuning_gate"))
+    terminal_lineage_excluded_keys = {
+        str(key)
+        for key in terminal_tuning_gate.get("excluded_evaluation_keys") or []
+        if str(key)
+    }
     compact_measurement = _as_dict(
         source_receipt.get("compact_auxiliary_policy_measurement")
     )
@@ -3944,6 +3969,8 @@ def build_machine_decision_case_table(
         )
         previous = seen_attempts.get(attempt_key)
         current_identity = (action, str(row.get("decision_trace_id") or ""))
+        evaluation_key = _machine_evaluation_key(row)
+        policy_learning_excluded = evaluation_key in terminal_lineage_excluded_keys
         if previous is not None:
             if previous == current_identity:
                 duplicate_same_action_collapsed_count += 1
@@ -4026,7 +4053,12 @@ def build_machine_decision_case_table(
                         not declared_compact_partitions
                         or partition_key in allowed_compact_partition_keys
                     )
-                    if not partition_allowed:
+                    if policy_learning_excluded:
+                        compact_screen_outcomes[
+                            "|".join(("TERMINAL_LINEAGE_EXCLUDED", label))
+                        ] += 1
+                        compact_exclusions["terminal_lineage_unresolved"] += 1
+                    elif not partition_allowed:
                         compact_screen_outcomes[
                             "|".join(("SOURCE_PARTITION_NOT_ALLOWED", label))
                         ] += 1
@@ -4089,6 +4121,7 @@ def build_machine_decision_case_table(
                                 compact_exclusions["terminal_path_not_evaluable"] += 1
         cases.append(
             {
+                "evaluation_key": evaluation_key or None,
                 "decision_trace_id": row.get("decision_trace_id"),
                 "ai_decision_trace_id": row.get("ai_decision_trace_id"),
                 "evaluation_attempt_id": row.get("evaluation_attempt_id"),
@@ -4150,6 +4183,10 @@ def build_machine_decision_case_table(
                     )
                     in allowed_compact_partition_keys
                 ),
+                "policy_learning_excluded": policy_learning_excluded,
+                "policy_learning_exclusion_reason": (
+                    "terminal_lineage_unresolved" if policy_learning_excluded else None
+                ),
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
                 "actual_order_submitted": False,
@@ -4160,8 +4197,16 @@ def build_machine_decision_case_table(
     machine_tuning_allowed = (
         source_receipt.get("machine_threshold_tuning_input_allowed") is True
     )
+    receipt_target_date = str(source_receipt.get("target_date") or "")
+    terminal_gate_required = receipt_target_date >= "2026-09-15"
+    terminal_gate_allowed = bool(
+        not terminal_gate_required
+        or terminal_tuning_gate.get("economic_tuning_input_allowed") is True
+    )
     compact_tuning_input_allowed = bool(
-        source_tuning_allowed and compact_measurement.get("measurement_allowed") is True
+        source_tuning_allowed
+        and terminal_gate_allowed
+        and compact_measurement.get("measurement_allowed") is True
     )
     compact_screened_count = sum(compact_screen_outcomes.values())
     compact_unclassified_count = sum(
@@ -4193,7 +4238,8 @@ def build_machine_decision_case_table(
             and ai_guard.get("semantic_validation_status") in {None, "pass"}
         )
         if (
-            row.get("machine_action") != "ENTER_NOW"
+            row.get("policy_learning_excluded") is True
+            or row.get("machine_action") != "ENTER_NOW"
             or ai_guard.get("provider_called") is not True
             or version != incumbent_compact_version
             or row.get("compact_partition_eligible") is not True
@@ -4335,10 +4381,22 @@ def build_machine_decision_case_table(
         "conflicting_attempt_identity_count": conflicting_attempt_identity_count,
         "incomplete_attempt_identity_count": incomplete_attempt_identity_count,
         "policy_learning_eligible_observation_count": (
-            len(rows) - incomplete_attempt_identity_count
+            len(rows)
+            - incomplete_attempt_identity_count
+            - sum(case.get("policy_learning_excluded") is True for case in cases)
             if conflicting_attempt_identity_count == 0 and machine_tuning_allowed
             else 0
         ),
+        "terminal_lineage_exclusion": {
+            "source_gate": terminal_tuning_gate,
+            "excluded_case_count": sum(
+                case.get("policy_learning_excluded") is True for case in cases
+            ),
+            "denominator_preserved": len(cases)
+            == sum(case.get("policy_learning_excluded") is True for case in cases)
+            + sum(case.get("policy_learning_excluded") is not True for case in cases),
+            "unresolved_terminal_is_not_imputed": True,
+        },
         "machine_capture_census": dict(capture_census or {}),
         "machine_ai_natural_source_receipt": source_receipt,
         "compact_auxiliary_policy_measurement": compact_measurement,
@@ -4468,6 +4526,20 @@ def build_machine_decision_case_table(
         "hierarchy_selection_counts": dict(sorted(hierarchy_selection_counts.items())),
         "observed_selected_child_rule_count": len(selected_child_rule_ids),
         "observed_selected_child_rule_ids": sorted(selected_child_rule_ids),
+        "policy_learning_exact_enter_keys": (
+            sorted(
+                {
+                    str(case.get("evaluation_key"))
+                    for case in cases
+                    if case.get("machine_action") == "ENTER_NOW"
+                    and case.get("policy_learning_excluded") is not True
+                    and case.get("exact_attempt_identity_complete") is True
+                    and case.get("evaluation_key")
+                }
+            )
+            if terminal_gate_allowed
+            else []
+        ),
         "case_unit": "exact_market_snapshot_attempt_x_venue_x_session_x_bundle",
         "legacy_60_second_same_action_collapse_disabled": True,
         "comparison_objective": (
@@ -6491,6 +6563,14 @@ def build_report(
         capture_census=machine_capture_census,
         source_receipt=machine_source_receipt,
     )
+    terminal_lineage_excluded_keys = {
+        str(key)
+        for key in _as_dict(
+            machine_source_receipt.get("machine_terminal_tuning_gate")
+        ).get("excluded_evaluation_keys")
+        or []
+        if str(key)
+    }
     all_scope_rows, _ = _mechanistic_source_rows(
         report_root / PAIRED_SUBDIR, target_date=target_date, all_supported_cohorts=True
     )
@@ -6518,6 +6598,7 @@ def build_report(
                     row.get("bundle_sha256"),
                 )
             )
+            and _machine_evaluation_key(row) not in terminal_lineage_excluded_keys
         ]
         if machine_decision_case_table["conflicting_attempt_identity_count"] == 0
         and machine_source_receipt.get("machine_threshold_tuning_input_allowed")

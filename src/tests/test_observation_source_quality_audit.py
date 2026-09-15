@@ -375,6 +375,52 @@ def test_machine_ai_natural_source_audit_excludes_source_invalid_attempts(
     )
 
 
+def test_machine_terminal_tuning_gate_excludes_exact_unresolved_lineage(tmp_path: Path):
+    day = "2026-09-15"
+    key = "machine:promotion-1|attempt-1|005930|KRX|KRX_REGULAR|" + "a" * 64
+    path = (
+        tmp_path / "report" / "buy_funnel_sentinel" / f"buy_funnel_sentinel_{day}.json"
+    )
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps(
+            {
+                "entry_submit_drought_contract": {
+                    "machine_primary_entry_funnel": {
+                        "ai_pass_terminal_conservation": {
+                            "ai_pass": 3,
+                            "submitted": 1,
+                            "final_guard_blocked": 1,
+                            "broker_rejected": 0,
+                            "lineage_gap": 1,
+                            "pending": 0,
+                            "difference": 0,
+                        },
+                        "evaluation_ledger": [
+                            {
+                                "evaluation_key": key,
+                                "final_state": (
+                                    "lineage_gap_superseded_without_terminal"
+                                ),
+                            }
+                        ],
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    gate = audit._machine_terminal_tuning_gate(day, data_root=tmp_path)
+
+    assert gate["denominator_preserved"] is True
+    assert gate["excluded_evaluation_keys"] == [key]
+    assert gate["lineage_gap_excluded_count"] == 1
+    assert gate["terminal_admitted_count"] == 2
+    assert gate["economic_tuning_input_allowed"] is True
+    assert gate["missing_economics_imputed"] is False
+
+
 def test_machine_ai_natural_source_audit_blocks_contract_invalid_attempts(
     tmp_path: Path,
 ):

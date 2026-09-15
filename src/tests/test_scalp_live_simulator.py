@@ -1475,7 +1475,7 @@ def test_scalp_simulator_marks_overbought_not_evaluated_when_context_missing(
     assert filled["sim_overbought_source_quality"] == "missing_intraday_range"
 
 
-def test_scalp_simulator_applies_entry_ai_price_canary_without_real_order(monkeypatch):
+def test_scalp_simulator_binds_mechanistic_entry_price_without_provider(monkeypatch):
     logs = []
     monkeypatch.setattr(
         state_handlers,
@@ -1508,23 +1508,9 @@ def test_scalp_simulator_applies_entry_ai_price_canary_without_real_order(monkey
         lambda *args, **kwargs: pytest.fail("real buy order must not be called"),
     )
 
-    captured_metadata = {}
-
     class FakeAiEngine:
         def evaluate_scalping_entry_price(self, *args, **kwargs):
-            captured_metadata.update(kwargs.get("metadata_extra") or {})
-            return {
-                "action": "IMPROVE_LIMIT",
-                "order_price": 10_000,
-                "confidence": 90,
-                "reason": "sim entry price test",
-                "max_wait_sec": 30,
-                "ai_parse_ok": True,
-                "openai_endpoint_name": "entry_price",
-                "openai_transport_mode": "responses_ws",
-                "openai_ws_used": True,
-                "openai_request_id": "sim-entry-price-1",
-            }
+            pytest.fail("entry-price provider must not be called")
 
     stock = {
         "id": 101,
@@ -1559,28 +1545,32 @@ def test_scalp_simulator_applies_entry_ai_price_canary_without_real_order(monkey
 
     sim_target = state_handlers.ACTIVE_TARGETS[0]
     assert sim_target["actual_order_submitted"] is False
-    assert sim_target["entry_ai_price_canary_applied"] is True
-    assert sim_target["scalp_sim_entry_limit_price"] == 10_000
+    assert sim_target["entry_price_owner"] == "mechanistic_entry_price_resolver"
+    assert sim_target["entry_price_provider_calls"] == 0
+    assert sim_target["scalp_sim_entry_limit_price"] == 10_020
     assert sim_target["buy_price"] == 10_030
-    assert captured_metadata["sim_record_id"] == sim_target["sim_record_id"]
-    assert captured_metadata["sim_parent_record_id"] == 101
     applied = next(
-        fields for stage, fields in logs if stage == "entry_ai_price_canary_applied"
+        fields
+        for stage, fields in logs
+        if stage == "entry_mechanistic_price_owner_applied"
     )
-    assert applied["openai_endpoint_name"] == "entry_price"
-    assert applied["openai_transport_mode"] == "responses_ws"
+    assert applied["entry_price_provider_calls"] == 0
+    assert applied["entry_price_numeric_price_changed"] is False
     sim_applied = next(
-        fields for stage, fields in logs if stage == "scalp_sim_entry_ai_price_applied"
+        fields
+        for stage, fields in logs
+        if stage == "scalp_sim_entry_ai_price_applied"
     )
     assert sim_applied["runtime_effect"] == "simulated_entry_price_only"
     assert sim_applied["ai_score"] == 82.0
     assert sim_applied["current_ai_score"] == 82.0
+    assert sim_applied["entry_price_provider_calls"] == 0
     pending = next(
         fields
         for stage, fields in logs
         if stage == "scalp_sim_buy_order_virtual_pending"
     )
-    assert pending["limit_price"] == 10_000
+    assert pending["limit_price"] == 10_020
 
 
 def test_scalp_simulator_blocks_stale_passive_probe_before_virtual_submit(monkeypatch):

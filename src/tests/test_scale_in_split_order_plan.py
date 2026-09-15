@@ -71,6 +71,85 @@ def _write_pipeline_events(data_dir, target_date, events):
     )
 
 
+def test_postclose_report_consumes_atomic_avg_down_sizing_receipt(
+    monkeypatch, tmp_path
+):
+    data_dir = _patch_dirs(monkeypatch, tmp_path)
+    target_date = "2026-09-15"
+    _write_source_quality_pass(data_dir, target_date)
+    _write_pipeline_events(
+        data_dir,
+        target_date,
+        [
+            {
+                "stage": "scale_in_execution_sizing_plan",
+                "emitted_at": f"{target_date}T10:00:00+09:00",
+                "stock_code": "005930",
+                "record_id": 1,
+                "strategy": "SCALPING",
+                "add_type": "AVG_DOWN",
+                "scale_in_execution_sizing_plan_id": "avg-down-sizing-test",
+                "scale_in_execution_sizing_valid": True,
+                "scale_in_execution_sizing_quantity_conservation_holds": True,
+                "actual_order_submitted": False,
+            },
+            {
+                "stage": "scale_in_order_submitted",
+                "emitted_at": f"{target_date}T10:00:01+09:00",
+                "stock_code": "005930",
+                "record_id": 1,
+                "strategy": "SCALPING",
+                "add_type": "AVG_DOWN",
+                "actual_order_submitted": True,
+                "submitted_qty": 2,
+                "scale_in_execution_sizing_plan_id": "avg-down-sizing-test",
+                "scale_in_execution_sizing_valid": True,
+            },
+        ],
+    )
+
+    report = split_plan.build_report(target_date)
+
+    atomic = report["input_summary"]["atomic_execution_sizing"]
+    assert atomic["status"] == "pass"
+    assert atomic["daily_plan_valid_count"] == 1
+    assert atomic["post_contract_real_submit_with_plan_count"] == 1
+    assert atomic["post_contract_real_submit_missing_plan_count"] == 0
+
+
+def test_postclose_report_does_not_skip_atomic_avg_down_block_without_submit(
+    monkeypatch, tmp_path
+):
+    data_dir = _patch_dirs(monkeypatch, tmp_path)
+    target_date = "2026-09-15"
+    _write_source_quality_pass(data_dir, target_date)
+    _write_pipeline_events(
+        data_dir,
+        target_date,
+        [
+            {
+                "stage": "scale_in_execution_sizing_plan_block",
+                "emitted_at": f"{target_date}T10:00:00+09:00",
+                "stock_code": "005930",
+                "record_id": 1,
+                "strategy": "SCALPING",
+                "add_type": "AVG_DOWN",
+                "scale_in_execution_sizing_plan_id": "avg-down-sizing-invalid",
+                "scale_in_execution_sizing_valid": False,
+                "scale_in_execution_sizing_blockers": ["quantity_increase_detected"],
+                "actual_order_submitted": False,
+            }
+        ],
+    )
+
+    report = split_plan.build_report(target_date)
+
+    atomic = report["input_summary"]["atomic_execution_sizing"]
+    assert atomic["status"] == "fail"
+    assert atomic["daily_plan_invalid_count"] == 1
+    assert atomic["selection_blocked"] is True
+
+
 def _valid_runtime_refresh_evidence():
     return {
         "economic_gate_version": "ttl_paired_fixed_control_v3",
@@ -1499,12 +1578,55 @@ def test_generated_policy_contract_detects_content_change():
     )
 
     assert split_plan.policy_runtime_contract_error(policy) == ""
-    policy["buckets"]["scalping:late_loss_retry:normal"][
-        "selection_reason"
-    ] = "tampered"
+    policy["buckets"]["scalping:late_loss_retry:normal"]["selection_reason"] = (
+        "tampered"
+    )
     assert split_plan.policy_runtime_contract_error(policy) == (
         "policy_content_hash_mismatch"
     )
+
+
+def test_current_scale_in_policy_requires_atomic_execution_sizing_contract():
+    candidate = {
+        "context_bucket": "scalping:late_loss_retry:normal",
+        "runtime_apply_allowed": True,
+        "policy_mode": split_plan.POLICY_MODE_COUNTERFACTUAL_TICK_BAND,
+        "split_variant_id": split_plan.COUNTERFACTUAL_50_50_VARIANT_ID,
+        "leg_count": 2,
+        "qty_weights": [0.5, 0.5],
+        "qty_weight_min": 0.5,
+        "qty_weight_max": 0.5,
+        "price_offsets_pct": [0.0, 0.3],
+        "price_offsets_ticks": [0, 1],
+    }
+    policy = split_plan._build_policy(
+        "2026-09-16",
+        [candidate],
+        refresh_evidence=_valid_runtime_refresh_evidence(),
+    )
+    policy.pop("scale_in_execution_sizing_plan_schema")
+
+    assert split_plan.policy_runtime_contract_error(policy) == (
+        "scale_in_atomic_execution_sizing_schema_invalid"
+    )
+
+    policy = split_plan._build_policy(
+        "2026-09-16",
+        [candidate],
+        refresh_evidence=_valid_runtime_refresh_evidence(),
+    )
+    policy.pop("scale_in_price_plan_schema")
+    assert split_plan.policy_runtime_contract_error(policy) == (
+        "scale_in_atomic_price_plan_schema_invalid"
+    )
+
+    policy = split_plan._build_policy(
+        "2026-09-15",
+        [candidate],
+        refresh_evidence=_valid_runtime_refresh_evidence(),
+    )
+    policy.pop("scale_in_price_plan_schema")
+    assert split_plan.policy_runtime_contract_error(policy) == ""
 
 
 def _anchor_from_events(events):

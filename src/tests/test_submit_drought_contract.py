@@ -170,6 +170,7 @@ def test_price_and_async_rows_survive_cache_and_producer_compaction(exclude_summ
 
     for stage in (
         "entry_submit_revalidation_block",
+        "entry_mechanistic_price_contract_block",
         "entry_price_canary_submit_block",
         "pre_submit_entry_ai_authority_async_pending",
         "entry_submit_attempt_finished",
@@ -319,6 +320,7 @@ def test_unclosed_retry_is_lineage_gap_not_normal_pending():
 @pytest.mark.parametrize(
     "stage,axis",
     [
+        ("entry_mechanistic_price_contract_block", "PRICE_REVALIDATION"),
         ("entry_price_canary_submit_block", "PRICE_REVALIDATION"),
         ("rising_missed_tick_speed_entry_block", "UPSTREAM_GATE"),
         ("real_weak_ai_micro_entry_block", "UPSTREAM_GATE"),

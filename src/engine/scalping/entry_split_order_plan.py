@@ -34,6 +34,27 @@ POLICY_SCHEMA_VERSION = "entry_split_order_policy_v1"
 CUMULATIVE_STATE_SCHEMA_VERSION = "entry_split_cumulative_state_v2"
 GENERATION_BINDING_SCHEMA_VERSION = "entry_split_report_policy_generation_v1"
 GENERATION_BINDING_REQUIRED_FROM_DATE = date(2026, 9, 4)
+ATOMIC_EXECUTION_SIZING_REQUIRED_FROM_DATE = date(2026, 9, 15)
+ATOMIC_PRICE_PLAN_REQUIRED_FROM_DATE = date(2026, 9, 16)
+ATOMIC_EXECUTION_SIZING_SCHEMA = "entry_execution_sizing_plan_v1"
+ATOMIC_EXECUTION_SIZING_BASELINE_POLICY = "execution_sizing_baseline_v1"
+ATOMIC_PRICE_PLAN_SCHEMA = "entry_price_plan_v1"
+QUANTITY_LEG_FOUR_ARM_SCHEMA = "entry_quantity_leg_four_arm_evaluation_v1"
+QUANTITY_LEG_FOUR_ARM_IDS = (
+    "incumbent_qty_x_incumbent_leg",
+    "candidate_qty_x_incumbent_leg",
+    "incumbent_qty_x_candidate_leg",
+    "candidate_qty_x_candidate_leg",
+)
+QUANTITY_LEG_FOUR_ARM_MIN_COMPLETE_ATTEMPTS = 30
+QUANTITY_LEG_FOUR_ARM_MIN_JOIN_COVERAGE = 0.80
+QUANTITY_LEG_FOUR_ARM_SHARED_CONTRACT_FIELDS = (
+    "entry_price_receipt_sha256",
+    "exit_policy_sha256",
+    "cost_contract_sha256",
+    "terminal_contract_version",
+    "terminal_observed_at",
+)
 REPORT_TYPE = "entry_split_order_plan"
 RUNTIME_FAMILY = "entry_split_order_plan"
 REPORT_DIR = DATA_DIR / "report" / REPORT_TYPE
@@ -45,6 +66,7 @@ SPLIT_VARIANT_OUTCOME_FLOOR_REAL = 20
 SPLIT_VARIANT_CONTINUATION_FLOOR_REAL = 10
 CHILD_SHAPE_SEED_OUTCOME_FLOOR_REAL = 3
 CHILD_SHAPE_SEED_MIN_EV_PCT = 0.1
+RUNTIME_PROMOTION_MIN_COST_ADJUSTED_EV_PCT = 0.1
 CHILD_SHAPE_SEED_MAX_DOWNSIDE_P10_PCT = -2.0
 POST_SUBMIT_TICK_BAND_FLOOR_REAL = 20
 POST_SUBMIT_LOW_WINDOW_MINUTES = 10
@@ -157,6 +179,28 @@ CALIBRATION_EVENT_KEYS = frozenset(
         "entry_split_order_qty_weight_max",
         "entry_split_order_runtime_default_policy_applied",
         "entry_split_order_operator_fallback_authorized",
+        "entry_execution_sizing_plan_schema",
+        "entry_execution_sizing_plan_id",
+        "entry_execution_sizing_policy",
+        "entry_execution_sizing_action_receipt_id",
+        "entry_execution_sizing_quantity_policy_version",
+        "entry_execution_sizing_split_policy_version",
+        "entry_execution_sizing_total_qty",
+        "entry_execution_sizing_immediate_qty",
+        "entry_execution_sizing_deferred_qty",
+        "entry_execution_sizing_leg_count",
+        "entry_execution_sizing_quantity_conservation_holds",
+        "entry_execution_sizing_quantity_increase_forbidden",
+        "entry_execution_sizing_migration_baseline",
+        "entry_execution_sizing_plan_emitted",
+        "entry_execution_sizing_valid",
+        "entry_execution_sizing_blockers",
+        "entry_execution_sizing_plan_sha256",
+        "entry_price_plan_schema",
+        "entry_price_plan_id",
+        "entry_price_plan_owner",
+        "entry_price_plan_sha256",
+        "entry_quantity_leg_four_arm_evaluation",
     }
 )
 # An aborted probe can still be restored on restart to preserve its
@@ -1362,6 +1406,25 @@ def validate_report_policy_generation(
         return False, "generation_recommended_policy_missing"
     if recommended.get("policy_version") != policy.get("policy_version"):
         return False, "generation_recommended_policy_version_mismatch"
+    try:
+        source_date = date.fromisoformat(str(policy.get("source_date") or ""))
+    except ValueError:
+        return False, "generation_source_date_invalid"
+    atomic_contract_required = source_date >= ATOMIC_EXECUTION_SIZING_REQUIRED_FROM_DATE
+    if atomic_contract_required:
+        expected_atomic = {
+            "entry_execution_sizing_plan_schema": (ATOMIC_EXECUTION_SIZING_SCHEMA),
+            "entry_execution_sizing_policy": (ATOMIC_EXECUTION_SIZING_BASELINE_POLICY),
+        }
+        if any(policy.get(key) != value for key, value in expected_atomic.items()):
+            return False, "generation_atomic_execution_sizing_policy_invalid"
+        if any(recommended.get(key) != value for key, value in expected_atomic.items()):
+            return False, "generation_atomic_execution_sizing_handoff_invalid"
+    if source_date >= ATOMIC_PRICE_PLAN_REQUIRED_FROM_DATE:
+        if policy.get("entry_price_plan_schema") != ATOMIC_PRICE_PLAN_SCHEMA:
+            return False, "generation_atomic_price_plan_policy_invalid"
+        if recommended.get("entry_price_plan_schema") != ATOMIC_PRICE_PLAN_SCHEMA:
+            return False, "generation_atomic_price_plan_handoff_invalid"
     return True, "generation_binding_valid"
 
 
@@ -1671,6 +1734,9 @@ def _iter_input_events(target_date: str) -> tuple[list[dict[str, Any]], dict[str
                 or stage in hard_blocking_stages
                 or stage
                 in {
+                    "entry_execution_sizing_plan",
+                    "entry_execution_sizing_plan_block",
+                    "entry_quantity_leg_four_arm_evaluation",
                     "order_bundle_submitted",
                     "order_leg_sent",
                     "order_leg_fail",
@@ -1701,6 +1767,9 @@ def _iter_entry_split_input_rows(path: Path, *, hard_blocking_stages: set[str]):
     if not actual_path.exists():
         return
     stage_tokens = {
+        "entry_execution_sizing_plan",
+        "entry_execution_sizing_plan_block",
+        "entry_quantity_leg_four_arm_evaluation",
         "order_bundle_submitted",
         "order_leg_sent",
         "order_leg_fail",
@@ -2840,8 +2909,27 @@ def _quality_counts(
             else f"{source_date}:{stage}:row:{event_index}"
         )
         row = sample_keys[bucket]
+        atomic_plan_id = _identifier(fields.get("entry_execution_sizing_plan_id"))
+        if stage in {
+            "entry_execution_sizing_plan",
+            "entry_execution_sizing_plan_block",
+        }:
+            atomic_key = (
+                f"{source_date}:{atomic_plan_id}"
+                if atomic_plan_id
+                else f"{source_date}:{stage}:row:{event_index}"
+            )
+            row["atomic_plan_observed_count"].add(atomic_key)
+            if _safe_bool(fields.get("entry_execution_sizing_valid")):
+                row["atomic_plan_valid_count"].add(atomic_key)
+            else:
+                row["atomic_plan_invalid_count"].add(atomic_key)
         if _is_real_submit_event(fields):
             row["real_observed_entry_count"].add(execution_key)
+            if atomic_plan_id:
+                row["atomic_plan_submit_count"].add(execution_key)
+            else:
+                row["atomic_plan_missing_submit_count"].add(execution_key)
             if _is_split_eligible_real_event(fields):
                 row["real_sample_count"].add(execution_key)
                 if stage == "order_leg_sent" or _safe_bool(
@@ -2992,7 +3080,7 @@ def _build_candidate_grid(
                         bucket != "guarded_or_stale"
                         and variant_sample_count >= SPLIT_VARIANT_OUTCOME_FLOOR_REAL
                         and variant_ev is not None
-                        and variant_ev > 0
+                        and variant_ev >= RUNTIME_PROMOTION_MIN_COST_ADJUSTED_EV_PCT
                         and variant_downside_p10 is not None
                         and variant_downside_p10 > -2.0
                     ),
@@ -3036,7 +3124,7 @@ def _build_candidate_grid(
             and real_count >= SAMPLE_FLOOR_REAL
             and split_variant_outcome_ready
             and split_variant_ev is not None
-            and split_variant_ev > 0
+            and split_variant_ev >= RUNTIME_PROMOTION_MIN_COST_ADJUSTED_EV_PCT
             and downside > -2.0
         )
         mature_variant_quality = [
@@ -3283,6 +3371,9 @@ def _build_candidate_grid(
                     "runtime_promotion_sample_floor": {
                         "real_submit": SAMPLE_FLOOR_REAL,
                         "real_split_variant_outcome": SPLIT_VARIANT_OUTCOME_FLOOR_REAL,
+                        "minimum_cost_adjusted_ev_pct": (
+                            RUNTIME_PROMOTION_MIN_COST_ADJUSTED_EV_PCT
+                        ),
                     },
                     "split_variant_quality": split_variant_judgment_quality,
                     "learning_floor_grants_runtime_promotion": False,
@@ -3502,6 +3593,9 @@ def _policy_payload(
     return {
         "schema_version": POLICY_SCHEMA_VERSION,
         "policy_version": policy_version,
+        "entry_price_plan_schema": ATOMIC_PRICE_PLAN_SCHEMA,
+        "entry_execution_sizing_plan_schema": ATOMIC_EXECUTION_SIZING_SCHEMA,
+        "entry_execution_sizing_policy": ATOMIC_EXECUTION_SIZING_BASELINE_POLICY,
         "source_date": target_date,
         "source_report": str(report_json),
         "runtime_apply_allowed": bool(passed),
@@ -3595,6 +3689,314 @@ def _policy_payload(
     }
 
 
+def build_quantity_leg_four_arm_evaluation(
+    events: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Evaluate quantity and leg changes only on complete exact-attempt quartets."""
+
+    def quantile(values: list[float], fraction: float) -> float | None:
+        if not values:
+            return None
+        ordered = sorted(values)
+        index = max(0, min(len(ordered) - 1, math.ceil(len(ordered) * fraction) - 1))
+        return ordered[index]
+
+    receipt_rows = [
+        (
+            event.get("entry_quantity_leg_four_arm_evaluation"),
+            str(event.get("source_date") or "undated").strip() or "undated",
+        )
+        for event in events
+        if isinstance(event.get("entry_quantity_leg_four_arm_evaluation"), dict)
+    ]
+    receipts = [receipt for receipt, _ in receipt_rows]
+    complete: list[dict[str, Any]] = []
+    excluded: defaultdict[str, int] = defaultdict(int)
+    seen: set[tuple[str, ...]] = set()
+    policy_identities: set[tuple[str, ...]] = set()
+    declared_eligible_by_source: defaultdict[str, set[int]] = defaultdict(set)
+    for receipt, source_date in receipt_rows:
+        declared_eligible = _safe_int(receipt.get("eligible_attempt_count"), 0)
+        if declared_eligible > 0:
+            declared_eligible_by_source[source_date].add(declared_eligible)
+        identity = tuple(
+            str(receipt.get(field) or "").strip()
+            for field in (
+                "scanner_promotion_id",
+                "evaluation_attempt_id",
+                "stock_code",
+                "effective_venue",
+                "session_bucket",
+                "policy_bundle_sha256",
+            )
+        )
+        if not all(identity):
+            excluded["exact_attempt_identity_missing"] += 1
+            continue
+        if identity in seen:
+            excluded["duplicate_exact_attempt"] += 1
+            continue
+        seen.add(identity)
+        arms = receipt.get("arms")
+        if receipt.get("schema") != QUANTITY_LEG_FOUR_ARM_SCHEMA or not isinstance(
+            arms, dict
+        ):
+            excluded["schema_invalid"] += 1
+            continue
+        receipt_body = {
+            key: value for key, value in receipt.items() if key != "receipt_sha256"
+        }
+        expected_receipt_sha256 = hashlib.sha256(
+            json.dumps(
+                receipt_body,
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("ascii")
+        ).hexdigest()
+        if receipt.get("receipt_sha256") != expected_receipt_sha256:
+            excluded["immutable_receipt_hash_invalid"] += 1
+            continue
+        if set(arms) != set(QUANTITY_LEG_FOUR_ARM_IDS):
+            excluded["four_arm_incomplete"] += 1
+            continue
+        policy_identity = tuple(
+            str(receipt.get(field) or "").strip()
+            for field in (
+                "incumbent_quantity_policy_version",
+                "candidate_quantity_policy_version",
+                "incumbent_leg_policy_version",
+                "candidate_leg_policy_version",
+                "entry_price_policy_sha256",
+            )
+        )
+        if not all(policy_identity) or not re.fullmatch(
+            r"[0-9a-f]{64}", policy_identity[-1]
+        ):
+            excluded["policy_identity_missing_or_invalid"] += 1
+            continue
+        arm_contract_valid = True
+        shared_contract: tuple[str, ...] | None = None
+        for arm_id in QUANTITY_LEG_FOUR_ARM_IDS:
+            arm = arms[arm_id]
+            if not isinstance(arm, dict) or any(
+                _safe_float(arm.get(field), None) is None
+                for field in (
+                    "net_return_pct",
+                    "net_pnl_krw",
+                    "capital_krw_minutes",
+                    "fill_participation_rate",
+                )
+            ):
+                arm_contract_valid = False
+                break
+            arm_shared_contract = tuple(
+                str(arm.get(field) or "").strip()
+                for field in QUANTITY_LEG_FOUR_ARM_SHARED_CONTRACT_FIELDS
+            )
+            if not all(arm_shared_contract) or not all(
+                re.fullmatch(r"[0-9a-f]{64}", value)
+                for value in arm_shared_contract[:3]
+            ):
+                arm_contract_valid = False
+                break
+            if shared_contract is None:
+                shared_contract = arm_shared_contract
+            elif arm_shared_contract != shared_contract:
+                arm_contract_valid = False
+                break
+            if (
+                arm.get("terminal_conservation_holds") is not True
+                or arm.get("cost_complete") is not True
+                or arm.get("counterfactual_executable") is not True
+            ):
+                arm_contract_valid = False
+                break
+        if not arm_contract_valid:
+            excluded["arm_economics_or_executability_invalid"] += 1
+            continue
+        policy_identities.add(policy_identity)
+        complete.append(
+            {"identity": identity, "source_date": source_date, "arms": arms}
+        )
+
+    if len(policy_identities) != 1:
+        if complete:
+            excluded["paired_policy_identity_conflict"] += len(complete)
+        complete = []
+
+    metrics: dict[str, dict[str, Any]] = {}
+    for arm_id in QUANTITY_LEG_FOUR_ARM_IDS:
+        rows = [item["arms"][arm_id] for item in complete]
+        net_returns = [float(row["net_return_pct"]) for row in rows]
+        net_pnls = [float(row["net_pnl_krw"]) for row in rows]
+        capital_krw_minutes = [float(row["capital_krw_minutes"]) for row in rows]
+        fill = [float(row["fill_participation_rate"]) for row in rows]
+        p10 = quantile(net_returns, 0.10)
+        worst_count = max(1, math.ceil(len(net_returns) * 0.10)) if net_returns else 0
+        expected_shortfall = (
+            mean(sorted(net_returns)[:worst_count]) if worst_count else None
+        )
+        metrics[arm_id] = {
+            "paired_sample_count": len(rows),
+            "cost_adjusted_net_ev_pct": mean(net_returns) if net_returns else None,
+            "net_pnl_krw": sum(net_pnls) if net_pnls else None,
+            "positive_terminal_frequency": (
+                sum(value > 0 for value in net_returns) / len(net_returns)
+                if net_returns
+                else None
+            ),
+            "net_profit_per_capital_minute_pct": (
+                sum(net_pnls) / sum(capital_krw_minutes) * 100.0
+                if capital_krw_minutes and sum(capital_krw_minutes) > 0
+                else None
+            ),
+            "downside_p10_net_pct": p10,
+            "expected_shortfall_10pct": expected_shortfall,
+            "fill_participation_rate": mean(fill) if fill else None,
+        }
+    incumbent = metrics[QUANTITY_LEG_FOUR_ARM_IDS[0]]
+    candidate = metrics[QUANTITY_LEG_FOUR_ARM_IDS[-1]]
+    conflicting_eligible_sources = sorted(
+        source_date
+        for source_date, values in declared_eligible_by_source.items()
+        if len(values) != 1
+    )
+    eligible_attempt_count = (
+        sum(next(iter(values)) for values in declared_eligible_by_source.values())
+        if declared_eligible_by_source and not conflicting_eligible_sources
+        else 0
+    )
+    if conflicting_eligible_sources:
+        excluded["eligible_population_contract_conflicting_source_date"] += len(
+            conflicting_eligible_sources
+        )
+    if eligible_attempt_count and eligible_attempt_count < len(seen):
+        excluded["eligible_population_count_underflow"] += 1
+        eligible_attempt_count = 0
+    if receipts and not eligible_attempt_count:
+        excluded["eligible_population_contract_missing_or_conflicting"] += len(receipts)
+    coverage = (
+        len(complete) / eligible_attempt_count if eligible_attempt_count > 0 else None
+    )
+    blockers: list[str] = []
+    if len(complete) < QUANTITY_LEG_FOUR_ARM_MIN_COMPLETE_ATTEMPTS:
+        blockers.append("paired_sample_floor")
+    if coverage is None or coverage < QUANTITY_LEG_FOUR_ARM_MIN_JOIN_COVERAGE:
+        blockers.append("exact_attempt_join_coverage")
+    comparisons = (
+        ("cost_adjusted_net_ev_pct", lambda c, i: c >= 0.10 and c > i),
+        ("net_pnl_krw", lambda c, i: c > i),
+        ("positive_terminal_frequency", lambda c, i: c >= i),
+        ("net_profit_per_capital_minute_pct", lambda c, i: c >= i and c > 0),
+        ("downside_p10_net_pct", lambda c, i: c >= i),
+        ("expected_shortfall_10pct", lambda c, i: c >= i),
+        ("fill_participation_rate", lambda c, i: c >= i - 0.05),
+    )
+    if complete:
+        for field, predicate in comparisons:
+            c_value = candidate.get(field)
+            i_value = incumbent.get(field)
+            if c_value is None or i_value is None or not predicate(c_value, i_value):
+                blockers.append(field)
+    promotion_pass = not blockers
+    return {
+        "schema": QUANTITY_LEG_FOUR_ARM_SCHEMA,
+        "status": "promotion_pass" if promotion_pass else "evidence_pending_or_blocked",
+        "source_receipt_count": len(receipts),
+        "eligible_attempt_count": eligible_attempt_count,
+        "eligible_source_date_count": len(declared_eligible_by_source),
+        "complete_exact_attempt_count": len(complete),
+        "exact_attempt_join_coverage": coverage,
+        "excluded_counts": dict(sorted(excluded.items())),
+        "paired_policy_identity": (
+            dict(
+                zip(
+                    (
+                        "incumbent_quantity_policy_version",
+                        "candidate_quantity_policy_version",
+                        "incumbent_leg_policy_version",
+                        "candidate_leg_policy_version",
+                        "entry_price_policy_sha256",
+                    ),
+                    next(iter(policy_identities)),
+                )
+            )
+            if len(policy_identities) == 1
+            else None
+        ),
+        "arms": metrics,
+        "incremental_effects": {
+            "quantity_only_net_ev_delta_pct": (
+                metrics[QUANTITY_LEG_FOUR_ARM_IDS[1]]["cost_adjusted_net_ev_pct"]
+                - incumbent["cost_adjusted_net_ev_pct"]
+                if complete
+                else None
+            ),
+            "leg_only_net_ev_delta_pct": (
+                metrics[QUANTITY_LEG_FOUR_ARM_IDS[2]]["cost_adjusted_net_ev_pct"]
+                - incumbent["cost_adjusted_net_ev_pct"]
+                if complete
+                else None
+            ),
+            "combined_net_ev_delta_pct": (
+                candidate["cost_adjusted_net_ev_pct"]
+                - incumbent["cost_adjusted_net_ev_pct"]
+                if complete
+                else None
+            ),
+        },
+        "promotion_gate": {
+            "applies_to": "challenger_automatic_promotion_only",
+            "initial_baseline_activation_blocked_by_this_gate": False,
+            "window_policy": "clean_baseline_cumulative_open_ended",
+            "minimum_complete_exact_attempts": (
+                QUANTITY_LEG_FOUR_ARM_MIN_COMPLETE_ATTEMPTS
+            ),
+            "minimum_exact_attempt_join_coverage": (
+                QUANTITY_LEG_FOUR_ARM_MIN_JOIN_COVERAGE
+            ),
+            "minimum_candidate_cost_adjusted_net_ev_pct": 0.10,
+            "maximum_fill_participation_decline": 0.05,
+            "same_paired_population_required": True,
+            "same_entry_price_exit_cost_terminal_contract_required": True,
+            "cost_complete_required": True,
+            "terminal_conservation_required": True,
+            "non_degradation_metrics": [
+                "positive_terminal_frequency",
+                "net_profit_per_capital_minute_pct",
+                "downside_p10_net_pct",
+                "expected_shortfall_10pct",
+                "fill_participation_rate",
+            ],
+            "blockers": sorted(set(blockers)),
+            "passed": promotion_pass,
+        },
+        "floor_attainability": {
+            "bounded_observation_window": False,
+            "observed_eligible_attempt_count": eligible_attempt_count,
+            "remaining_complete_attempts_to_floor": max(
+                0, QUANTITY_LEG_FOUR_ARM_MIN_COMPLETE_ATTEMPTS - len(complete)
+            ),
+            "status": (
+                "source_receipt_missing"
+                if not receipts
+                else "floor_reached"
+                if len(complete) >= QUANTITY_LEG_FOUR_ARM_MIN_COMPLETE_ATTEMPTS
+                else "rolling_accumulation"
+            ),
+            "reason": (
+                "No natural four-arm receipt is available; sample-floor tuning is not the first blocker."
+                if not receipts
+                else "The challenger gate accumulates exact terminal attempts across clean-baseline dates and has no fixed daily deadline."
+            ),
+        },
+        "counterfactual_missing_is_null": True,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
+
+
 def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
     target_date = str(target_date).strip()
     source_quality = _source_quality_summary(target_date)
@@ -3605,8 +4007,70 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
     daily_counts, _ = _quality_counts(
         daily_allowed_events, {"tuning_input_allowed": True}
     )
+    daily_four_arm_events = [
+        event
+        for event in daily_allowed_events
+        if isinstance(event.get("entry_quantity_leg_four_arm_evaluation"), dict)
+    ]
+    daily_quantity_leg_four_arm_evaluation = build_quantity_leg_four_arm_evaluation(
+        daily_four_arm_events
+    )
+    daily_atomic_plan_events = [
+        event
+        for event in daily_allowed_events
+        if str(event.get("stage") or event.get("event") or "")
+        in {
+            "entry_execution_sizing_plan",
+            "entry_execution_sizing_plan_block",
+        }
+    ]
+    first_atomic_plan_at = min(
+        (
+            value
+            for value in (_event_dt(event) for event in daily_atomic_plan_events)
+            if value is not None
+        ),
+        default=None,
+    )
+    post_contract_submit_events = [
+        event
+        for event in daily_allowed_events
+        if _is_real_submit_event(event)
+        and first_atomic_plan_at is not None
+        and _event_dt(event) is not None
+        and _event_dt(event) >= first_atomic_plan_at
+    ]
+    daily_atomic_plan_observed_count = len(daily_atomic_plan_events)
+    daily_atomic_plan_valid_count = sum(
+        1
+        for event in daily_atomic_plan_events
+        if _safe_bool(event.get("entry_execution_sizing_valid"))
+    )
+    daily_atomic_plan_invalid_count = (
+        daily_atomic_plan_observed_count - daily_atomic_plan_valid_count
+    )
+    daily_atomic_plan_submit_count = sum(
+        1
+        for event in post_contract_submit_events
+        if str(event.get("entry_execution_sizing_plan_id") or "").strip()
+    )
+    daily_atomic_plan_missing_submit_count = (
+        len(post_contract_submit_events) - daily_atomic_plan_submit_count
+    )
+    if daily_atomic_plan_invalid_count or daily_atomic_plan_missing_submit_count:
+        atomic_contract_status = "fail"
+    elif daily_atomic_plan_observed_count:
+        atomic_contract_status = "pass"
+    else:
+        atomic_contract_status = "natural_first_use_pending"
     prior_state, prior_state_path = _latest_prior_cumulative_state(target_date)
     if prior_state:
+        cumulative_four_arm_events = [
+            event
+            for event in (prior_state.get("quantity_leg_four_arm_events") or [])
+            if isinstance(event, dict)
+            and isinstance(event.get("entry_quantity_leg_four_arm_evaluation"), dict)
+        ]
         loaded_event_count = 0
         included_calibration_event_count = 0
         excluded_source_quality = 0
@@ -3648,6 +4112,11 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
                 )
             replay_counts, _ = _quality_counts(
                 allowed_events, {"tuning_input_allowed": True}
+            )
+            cumulative_four_arm_events.extend(
+                event
+                for event in allowed_events
+                if isinstance(event.get("entry_quantity_leg_four_arm_evaluation"), dict)
             )
             counts = _merge_count_maps(counts, replay_counts)
             loaded_event_count += len(replay_events)
@@ -3693,6 +4162,7 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
             "clean_tuning_baseline": clean_baseline_policy(),
         }
     else:
+        cumulative_four_arm_events: list[dict[str, Any]] = []
         loaded_event_count = 0
         included_calibration_event_count = 0
         excluded_source_quality = 0
@@ -3738,6 +4208,11 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
                 continue
             included_source_dates.append(source_date)
             included_calibration_event_count += len(allowed_events)
+            cumulative_four_arm_events.extend(
+                event
+                for event in allowed_events
+                if isinstance(event.get("entry_quantity_leg_four_arm_evaluation"), dict)
+            )
             source_counts, _ = _quality_counts(
                 allowed_events, {"tuning_input_allowed": True}
             )
@@ -3775,6 +4250,24 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
             "excluded_pre_baseline_count": excluded_pre_baseline_count,
             "clean_tuning_baseline": clean_baseline_policy(),
         }
+    quantity_leg_four_arm_evaluation = build_quantity_leg_four_arm_evaluation(
+        cumulative_four_arm_events
+    )
+    quantity_leg_four_arm_evaluation["daily_diagnostic"] = {
+        "source_receipt_count": daily_quantity_leg_four_arm_evaluation.get(
+            "source_receipt_count", 0
+        ),
+        "eligible_attempt_count": daily_quantity_leg_four_arm_evaluation.get(
+            "eligible_attempt_count", 0
+        ),
+        "complete_exact_attempt_count": daily_quantity_leg_four_arm_evaluation.get(
+            "complete_exact_attempt_count", 0
+        ),
+        "exact_attempt_join_coverage": daily_quantity_leg_four_arm_evaluation.get(
+            "exact_attempt_join_coverage"
+        ),
+        "target_date": target_date,
+    }
     (
         post_submit_low_tick_bands,
         post_submit_low_tick_band_scan,
@@ -3805,13 +4298,16 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
     json_path, md_path = report_paths(target_date)
     policy_json = policy_path(target_date)
     source_quality_allowed = source_quality.get("tuning_input_allowed") is True
+    selection_input_allowed = bool(
+        source_quality_allowed and atomic_contract_status != "fail"
+    )
     policy = _policy_payload(
-        target_date, json_path, candidate_grid if source_quality_allowed else []
+        target_date, json_path, candidate_grid if selection_input_allowed else []
     )
     recommended_candidates = [
         item
         for item in candidate_grid
-        if source_quality_allowed and item.get("candidate_passed")
+        if selection_input_allowed and item.get("candidate_passed")
     ]
     runtime_apply_allowed = bool(recommended_candidates)
     report = {
@@ -3835,6 +4331,7 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
             "scale_in_evidence_or_policy_accepted": False,
             "independent_machine_evidence_or_policy_accepted": False,
         },
+        "quantity_leg_four_arm_evaluation": quantity_leg_four_arm_evaluation,
         "metric_contract": {
             "metric_role": "authority_split_primary_ev_and_execution_shape_seed",
             "decision_authority": "next_preopen_bounded_entry_split_policy",
@@ -3856,6 +4353,9 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
                 "split-policy execution quality."
             ),
             "primary_decision_metric": "source_quality_adjusted_ev_pct",
+            "minimum_runtime_promotion_cost_adjusted_ev_pct": (
+                RUNTIME_PROMOTION_MIN_COST_ADJUSTED_EV_PCT
+            ),
             "primary_decision_metric_scope": (
                 "ev_validated_variant_or_exact_child_shape_bounded_seed"
             ),
@@ -3887,6 +4387,14 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
                 ],
             },
             "source_quality_gate": "observation_source_quality_audit_hard_block_rows_excluded",
+            "atomic_execution_sizing_contract": {
+                "schema_version": ATOMIC_EXECUTION_SIZING_SCHEMA,
+                "policy_version": ATOMIC_EXECUTION_SIZING_BASELINE_POLICY,
+                "same_attempt_quantity_and_leg_binding_required": True,
+                "quantity_conservation_required": True,
+                "quantity_increase_forbidden": True,
+                "natural_first_use_status": atomic_contract_status,
+            },
             "policy_modes": {
                 POLICY_MODE_REAL_PRIMARY_EV: "real split-variant outcome EV-positive optimized split",
                 POLICY_MODE_CHILD_SHAPE_EV_SEED: (
@@ -3951,6 +4459,7 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
             "real_split_child_variant_ev_values": _serialize_variant_value_map(
                 real_split_child_variant_ev_values
             ),
+            "quantity_leg_four_arm_events": cumulative_four_arm_events,
             "source_quality_contract_bindings": _source_quality_contract_bindings(
                 list(load_summary.get("source_dates") or [])
             ),
@@ -3994,6 +4503,20 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
             ),
             "post_submit_low_tick_band_bucket_count": len(post_submit_low_tick_bands),
             "post_submit_low_tick_band_scan": post_submit_low_tick_band_scan,
+            "atomic_execution_sizing": {
+                "status": atomic_contract_status,
+                "daily_plan_observed_count": daily_atomic_plan_observed_count,
+                "daily_plan_valid_count": daily_atomic_plan_valid_count,
+                "daily_plan_invalid_count": daily_atomic_plan_invalid_count,
+                "daily_real_submit_with_plan_count": daily_atomic_plan_submit_count,
+                "daily_real_submit_missing_plan_count": (
+                    daily_atomic_plan_missing_submit_count
+                ),
+                "selection_blocked": atomic_contract_status == "fail",
+                "natural_first_use_pending": (
+                    atomic_contract_status == "natural_first_use_pending"
+                ),
+            },
         },
         "candidate_grid": candidate_grid,
         "recommended_policy": {
@@ -4028,6 +4551,10 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
             "missing_bucket_action": policy.get("missing_bucket_action"),
             "explicit_bucket_count": _safe_int(policy.get("explicit_bucket_count"), 0),
             "preopen_guard_required": True,
+            "entry_execution_sizing_policy": (ATOMIC_EXECUTION_SIZING_BASELINE_POLICY),
+            "entry_price_plan_schema": ATOMIC_PRICE_PLAN_SCHEMA,
+            "entry_execution_sizing_plan_schema": (ATOMIC_EXECUTION_SIZING_SCHEMA),
+            "atomic_execution_sizing_contract_status": atomic_contract_status,
             "policy_file": str(policy_json),
             "policy_version": policy["policy_version"],
             "candidate_count": len(recommended_candidates),
@@ -4633,9 +5160,7 @@ def build_probe_residual_orders(
                     if resolved_leg_prices is not None
                     else "legacy_probe_offset"
                 ),
-                "price_candidate_id": (
-                    f"probe_residual_resolver:leg{idx + 2}"
-                ),
+                "price_candidate_id": (f"probe_residual_resolver:leg{idx + 2}"),
                 "split_leg_role": "primary" if idx == 0 else "passive",
                 "split_price_offset_ticks": offset_ticks,
                 "split_price_offset_pct": offset_pct if offset_pct is not None else "",
@@ -4704,6 +5229,17 @@ def apply_entry_split_order_policy(
     if not policy:
         fields["entry_split_order_skip_reason"] = load_status
         return orders, fields
+    fields["entry_execution_sizing_plan_schema"] = str(
+        policy.get("entry_execution_sizing_plan_schema")
+        or ATOMIC_EXECUTION_SIZING_SCHEMA
+    )
+    fields["entry_execution_sizing_policy"] = str(
+        policy.get("entry_execution_sizing_policy")
+        or ATOMIC_EXECUTION_SIZING_BASELINE_POLICY
+    )
+    fields["entry_price_plan_schema"] = str(
+        policy.get("entry_price_plan_schema") or ATOMIC_PRICE_PLAN_SCHEMA
+    )
     policy_stale = _policy_is_stale(policy, now=now)
     daily_operator_contract = _daily_operator_contract_enabled()
     stale_policy_authorized = _stale_baseline_policy_operator_authorized(policy)

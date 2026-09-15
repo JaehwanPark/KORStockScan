@@ -8,6 +8,7 @@ import hashlib
 import json
 import math
 import os
+import re
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -32,6 +33,11 @@ from src.utils.market_day import count_krx_trading_days
 
 SCHEMA_VERSION = "scale_in_split_order_plan_v3"
 POLICY_SCHEMA_VERSION = "scale_in_split_order_policy_v3"
+ATOMIC_EXECUTION_SIZING_REQUIRED_FROM = "2026-09-15"
+ATOMIC_PRICE_PLAN_REQUIRED_FROM = "2026-09-16"
+ATOMIC_EXECUTION_SIZING_SCHEMA = "scale_in_execution_sizing_plan_v1"
+ATOMIC_EXECUTION_SIZING_BASELINE_POLICY = "avg_down_execution_sizing_baseline_v1"
+ATOMIC_PRICE_PLAN_SCHEMA = "scale_in_price_plan_v1"
 ECONOMIC_GATE_VERSION = "ttl_paired_fixed_control_v3"
 REPORT_TYPE = "scale_in_split_order_plan"
 RUNTIME_FAMILY = "scale_in_split_order_plan"
@@ -132,6 +138,29 @@ _INPUT_PROJECTION_KEYS = (
     "scale_in_split_order_variant_id",
     "scale_in_split_order_policy_applied",
     "scale_in_split_order_original_qty",
+    "scale_in_execution_sizing_plan_schema",
+    "scale_in_execution_sizing_plan_id",
+    "scale_in_execution_sizing_policy",
+    "scale_in_execution_sizing_stage",
+    "scale_in_execution_sizing_action_receipt_id",
+    "scale_in_execution_sizing_action_owner",
+    "scale_in_execution_sizing_quantity_policy_version",
+    "scale_in_execution_sizing_split_policy_version",
+    "scale_in_execution_sizing_price_policy_version",
+    "scale_in_execution_sizing_authorized_total_qty",
+    "scale_in_execution_sizing_total_qty",
+    "scale_in_execution_sizing_leg_count",
+    "scale_in_execution_sizing_quantity_conservation_holds",
+    "scale_in_execution_sizing_quantity_increase_forbidden",
+    "scale_in_execution_sizing_migration_baseline",
+    "scale_in_execution_sizing_plan_emitted",
+    "scale_in_execution_sizing_valid",
+    "scale_in_execution_sizing_blockers",
+    "scale_in_execution_sizing_plan_sha256",
+    "scale_in_price_plan_schema",
+    "scale_in_price_plan_id",
+    "scale_in_price_plan_owner",
+    "scale_in_price_plan_sha256",
     "rising_missed_scout",
     "emitted_at",
     "timestamp",
@@ -140,6 +169,8 @@ _INPUT_PROJECTION_KEYS = (
 )
 
 _AVG_DOWN_ATTEMPT_STAGE_TOKENS = (
+    "scale_in_execution_sizing_plan",
+    "scale_in_execution_sizing_plan_block",
     "scale_in_order_submitted",
     "stop_line_touch_mandatory_avg_down_submitted",
     "late_loss_avg_down_retry_submitted",
@@ -359,6 +390,11 @@ def _source_has_avg_down_attempt(path: Path) -> bool:
                         .strip()
                         .upper()
                     )
+                    if add_type == "AVG_DOWN" and stage in {
+                        "scale_in_execution_sizing_plan",
+                        "scale_in_execution_sizing_plan_block",
+                    }:
+                        return True
                     if (
                         add_type == "AVG_DOWN"
                         and _safe_bool(fields.get("actual_order_submitted"))
@@ -456,7 +492,9 @@ def _context_bucket(fields: dict[str, Any]) -> str:
     strategy_bucket = (
         "scalping"
         if strategy in {"SCALPING", "SCALP"}
-        else "swing" if strategy else "unknown_strategy"
+        else "swing"
+        if strategy
+        else "unknown_strategy"
     )
     stage = str(fields.get("stage") or "").strip()
     add_reason = str(
@@ -718,8 +756,9 @@ def _build_post_submit_observations(
         by_code.setdefault(code, []).append(event)
     for rows in by_code.values():
         rows.sort(
-            key=lambda item: _event_time(item)
-            or datetime.min.replace(tzinfo=timezone.utc)
+            key=lambda item: (
+                _event_time(item) or datetime.min.replace(tzinfo=timezone.utc)
+            )
         )
     return by_code
 
@@ -911,8 +950,9 @@ def _unique_attempt_anchors(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         item[1]
         for item in sorted(
             selected,
-            key=lambda item: _event_time(item[1])
-            or datetime.min.replace(tzinfo=timezone.utc),
+            key=lambda item: (
+                _event_time(item[1]) or datetime.min.replace(tzinfo=timezone.utc)
+            ),
         )
     ]
 
@@ -2282,6 +2322,9 @@ def _build_policy(
     return {
         "schema_version": POLICY_SCHEMA_VERSION,
         "policy_version": policy_version,
+        "scale_in_execution_sizing_plan_schema": (ATOMIC_EXECUTION_SIZING_SCHEMA),
+        "scale_in_execution_sizing_policy": (ATOMIC_EXECUTION_SIZING_BASELINE_POLICY),
+        "scale_in_price_plan_schema": ATOMIC_PRICE_PLAN_SCHEMA,
         "source_report": str(report_paths(target_date)[0]),
         "generated_at": datetime.now(timezone(timedelta(hours=9))).isoformat(),
         "runtime_apply_allowed": runtime_allowed,
@@ -2319,6 +2362,60 @@ def build_report(target_date: str) -> dict[str, Any]:
     avg_down_rows: list[dict[str, Any]] = []
     skipped = Counter()
     enriched_events = _enrich_avg_down_context(events)
+    atomic_plan_events = [
+        event
+        for event in enriched_events
+        if str(event.get("stage") or "")
+        in {
+            "scale_in_execution_sizing_plan",
+            "scale_in_execution_sizing_plan_block",
+        }
+        and str(event.get("add_type") or event.get("scale_in_type") or "")
+        .strip()
+        .upper()
+        == "AVG_DOWN"
+    ]
+    first_atomic_plan_at = min(
+        (
+            value
+            for value in (_event_time(event) for event in atomic_plan_events)
+            if value
+        ),
+        default=None,
+    )
+    post_contract_submit_events = [
+        event
+        for event in enriched_events
+        if _safe_bool(event.get("actual_order_submitted"))
+        and str(event.get("add_type") or event.get("scale_in_type") or "")
+        .strip()
+        .upper()
+        == "AVG_DOWN"
+        and str(event.get("stage") or "").endswith("_submitted")
+        and first_atomic_plan_at is not None
+        and _event_time(event) is not None
+        and _event_time(event) >= first_atomic_plan_at
+    ]
+    atomic_plan_valid_count = sum(
+        1
+        for event in atomic_plan_events
+        if _safe_bool(event.get("scale_in_execution_sizing_valid"))
+    )
+    atomic_plan_invalid_count = len(atomic_plan_events) - atomic_plan_valid_count
+    atomic_submit_with_plan_count = sum(
+        1
+        for event in post_contract_submit_events
+        if str(event.get("scale_in_execution_sizing_plan_id") or "").strip()
+    )
+    atomic_submit_missing_plan_count = (
+        len(post_contract_submit_events) - atomic_submit_with_plan_count
+    )
+    if atomic_plan_invalid_count or atomic_submit_missing_plan_count:
+        atomic_contract_status = "fail"
+    elif atomic_plan_events:
+        atomic_contract_status = "pass"
+    else:
+        atomic_contract_status = "natural_first_use_pending"
     for event in enriched_events:
         stage = str(event.get("stage") or "")
         add_type = (
@@ -2401,6 +2498,12 @@ def build_report(target_date: str) -> dict[str, Any]:
             blockers = list(candidate.get("runtime_apply_blockers") or [])
             if "source_quality_blocked" not in blockers:
                 blockers.insert(0, "source_quality_blocked")
+            candidate["runtime_apply_blockers"] = blockers
+        if atomic_contract_status == "fail":
+            candidate["runtime_apply_allowed"] = False
+            blockers = list(candidate.get("runtime_apply_blockers") or [])
+            if "atomic_execution_sizing_contract_failed" not in blockers:
+                blockers.insert(0, "atomic_execution_sizing_contract_failed")
             candidate["runtime_apply_blockers"] = blockers
         candidates.append(candidate)
     for item in candidate_grid:
@@ -2496,6 +2599,25 @@ def build_report(target_date: str) -> dict[str, Any]:
             ),
             "counterfactual_window_sec": COUNTERFACTUAL_WINDOW_SEC,
             "anchor_reconstruct_window_sec": ANCHOR_RECONSTRUCT_WINDOW_SEC,
+            "atomic_execution_sizing": {
+                "status": atomic_contract_status,
+                "schema_version": ATOMIC_EXECUTION_SIZING_SCHEMA,
+                "policy_version": ATOMIC_EXECUTION_SIZING_BASELINE_POLICY,
+                "daily_plan_observed_count": len(atomic_plan_events),
+                "daily_plan_valid_count": atomic_plan_valid_count,
+                "daily_plan_invalid_count": atomic_plan_invalid_count,
+                "post_contract_real_submit_count": len(post_contract_submit_events),
+                "post_contract_real_submit_with_plan_count": (
+                    atomic_submit_with_plan_count
+                ),
+                "post_contract_real_submit_missing_plan_count": (
+                    atomic_submit_missing_plan_count
+                ),
+                "selection_blocked": atomic_contract_status == "fail",
+                "natural_first_use_pending": (
+                    atomic_contract_status == "natural_first_use_pending"
+                ),
+            },
         }
     )
     return {
@@ -2542,6 +2664,14 @@ def build_report(target_date: str) -> dict[str, Any]:
             "market_split_decision_authority": "not_applicable",
             "primary_decision_metric": "source_quality_adjusted_ev_pct",
             "source_quality_gate": "observation_source_quality_audit_tuning_input_allowed",
+            "atomic_execution_sizing_contract": {
+                "schema_version": ATOMIC_EXECUTION_SIZING_SCHEMA,
+                "stage": "AVG_DOWN",
+                "policy_version": ATOMIC_EXECUTION_SIZING_BASELINE_POLICY,
+                "same_decision_quantity_and_leg_binding_required": True,
+                "quantity_increase_forbidden": True,
+                "natural_first_use_status": atomic_contract_status,
+            },
             "entry_probe_exclusion_contract": (
                 "One-share entry probes and residual entry legs are not scale-in samples. Only AVG_DOWN "
                 "additional-buy observations owned by scale_in_split_order_plan may update this plan."
@@ -2567,6 +2697,12 @@ def build_report(target_date: str) -> dict[str, Any]:
         "recommended_policy": {
             "runtime_apply_allowed": runtime_policy_refresh_allowed,
             "runtime_apply_scope": "qty_preserving_execution_shape_refresh",
+            "scale_in_execution_sizing_plan_schema": (ATOMIC_EXECUTION_SIZING_SCHEMA),
+            "scale_in_execution_sizing_policy": (
+                ATOMIC_EXECUTION_SIZING_BASELINE_POLICY
+            ),
+            "scale_in_price_plan_schema": ATOMIC_PRICE_PLAN_SCHEMA,
+            "atomic_execution_sizing_contract_status": atomic_contract_status,
             "runtime_refresh_evidence": refresh_evidence,
             "post_apply_attribution": {
                 "required": True,
@@ -2801,6 +2937,24 @@ def policy_runtime_contract_error(policy: Any) -> str:
     )
     if refresh_error:
         return refresh_error
+    policy_version = str(policy.get("policy_version") or "")
+    source_match = re.match(
+        rf"^{re.escape(RUNTIME_FAMILY)}:(\d{{4}}-\d{{2}}-\d{{2}}):",
+        policy_version,
+    )
+    source_date = source_match.group(1) if source_match else ""
+    if source_date >= ATOMIC_EXECUTION_SIZING_REQUIRED_FROM:
+        if policy.get("scale_in_execution_sizing_plan_schema") != (
+            ATOMIC_EXECUTION_SIZING_SCHEMA
+        ):
+            return "scale_in_atomic_execution_sizing_schema_invalid"
+        if policy.get("scale_in_execution_sizing_policy") != (
+            ATOMIC_EXECUTION_SIZING_BASELINE_POLICY
+        ):
+            return "scale_in_atomic_execution_sizing_policy_invalid"
+    if source_date >= ATOMIC_PRICE_PLAN_REQUIRED_FROM:
+        if policy.get("scale_in_price_plan_schema") != ATOMIC_PRICE_PLAN_SCHEMA:
+            return "scale_in_atomic_price_plan_schema_invalid"
     default_bucket = policy.get("default_bucket")
     if isinstance(default_bucket, dict) and _safe_bool(
         default_bucket.get("runtime_apply_allowed")
@@ -2817,7 +2971,6 @@ def policy_runtime_contract_error(policy: Any) -> str:
             context_bucket
         ):
             return "context_bucket_identity_mismatch"
-    policy_version = str(policy.get("policy_version") or "")
     if policy_version.startswith(f"{RUNTIME_FAMILY}:"):
         version_parts = policy_version.rsplit(":", 1)
         expected_hash = _policy_hash(

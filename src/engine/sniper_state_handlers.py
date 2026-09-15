@@ -351,7 +351,10 @@ from src.engine.scalping.entry_split_order_plan import (
     update_probe_runtime_bundle,
 )
 from src.engine.scalping.entry_execution_sizing_plan import (
+    ENTRY_PRICE_POLICY_SHA256,
+    ENTRY_PRICE_POLICY_VERSION,
     compose_entry_execution_sizing_plan,
+    compose_scale_in_execution_sizing_plan,
 )
 from src.engine.scalping.scale_in_split_order_plan import (
     apply_scale_in_split_order_policy,
@@ -9729,7 +9732,9 @@ def _resolve_scalp_sim_panic_sell_price(
     quote_quality = (
         "BAD"
         if sell_price <= 0
-        else "DEGRADED" if liquidity_state != "NORMAL" or spread_bps >= 80 else "OK"
+        else "DEGRADED"
+        if liquidity_state != "NORMAL" or spread_bps >= 80
+        else "OK"
     )
     fill_quality = (
         "DEGRADED"
@@ -10727,25 +10732,27 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(
         "spread_ratio": _spread_bps_from_ws(ws_data or {}, curr_price) or 0.0,
         "quote_stale": False,
     }
-    ai_price_canary_touched = False
-    if ai_engine is not None and hasattr(ai_engine, "evaluate_scalping_entry_price"):
-        planned_orders, ai_price_canary_touched = _apply_entry_ai_price_canary(
-            stock=sim_target,
-            code=code,
-            strategy="SCALPING",
-            ws_data=ws_data or {},
-            ai_engine=ai_engine,
-            latency_gate=latency_gate,
-            planned_orders=planned_orders,
-            curr_price=curr_price,
-            best_bid=best_bid,
-            best_ask=best_ask,
-        )
-    if ai_price_canary_touched:
+    entry_price_owner_touched = False
+    planned_orders, entry_price_owner_touched = _apply_mechanistic_entry_price_owner(
+        stock=sim_target,
+        code=code,
+        strategy="SCALPING",
+        ws_data=ws_data or {},
+        ai_engine=ai_engine,
+        latency_gate=latency_gate,
+        planned_orders=planned_orders,
+        curr_price=curr_price,
+        best_bid=best_bid,
+        best_ask=best_ask,
+    )
+    if entry_price_owner_touched:
         if not planned_orders:
             _log_entry_pipeline(
                 sim_target,
                 code,
+                # Keep the established source-only sim stage name so existing
+                # report consumers do not lose continuity.  The fields below
+                # make the retired AI price authority explicit.
                 "scalp_sim_entry_ai_price_skip_order",
                 **_scalp_sim_event_fields(
                     threshold_family="pre_submit_price_guard",
@@ -10754,15 +10761,11 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(
                     sim_parent_record_id=stock.get("id"),
                     ai_score=current_ai_score,
                     current_ai_score=current_ai_score,
-                    ai_entry_price_canary_action=latency_gate.get(
-                        "ai_entry_price_canary_action"
+                    entry_price_owner=latency_gate.get("entry_price_owner"),
+                    entry_price_mechanistic_blockers=latency_gate.get(
+                        "entry_price_mechanistic_blockers"
                     ),
-                    ai_entry_price_canary_confidence=latency_gate.get(
-                        "ai_entry_price_canary_confidence"
-                    ),
-                    ai_entry_price_canary_reason=latency_gate.get(
-                        "ai_entry_price_canary_reason"
-                    ),
+                    entry_price_provider_calls=0,
                     runtime_effect="simulated_order_skipped",
                     **_scalp_sim_candidate_window_context_fields(sim_target),
                 ),
@@ -10778,16 +10781,11 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(
                 {
                     "scalp_sim_entry_limit_price": limit_price,
                     "order_price": limit_price,
-                    "entry_ai_price_canary_applied": True,
-                    "entry_ai_price_canary_action": latency_gate.get(
-                        "ai_entry_price_canary_action"
+                    "entry_price_owner": latency_gate.get("entry_price_owner"),
+                    "entry_price_policy_version": latency_gate.get(
+                        "entry_price_policy_version"
                     ),
-                    "entry_ai_price_canary_confidence": latency_gate.get(
-                        "ai_entry_price_canary_confidence"
-                    ),
-                    "entry_ai_price_canary_reason": latency_gate.get(
-                        "ai_entry_price_canary_reason"
-                    ),
+                    "entry_price_provider_calls": 0,
                     "entry_price_resolution_reason": latency_gate.get(
                         "price_resolution_reason"
                     ),
@@ -10807,15 +10805,11 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(
                     original_limit_price=stock.get("target_buy_price")
                     or stock.get("entry_armed_target_buy_price"),
                     adjusted_limit_price=limit_price,
-                    ai_entry_price_canary_action=latency_gate.get(
-                        "ai_entry_price_canary_action"
+                    entry_price_owner=latency_gate.get("entry_price_owner"),
+                    entry_price_policy_version=latency_gate.get(
+                        "entry_price_policy_version"
                     ),
-                    ai_entry_price_canary_confidence=latency_gate.get(
-                        "ai_entry_price_canary_confidence"
-                    ),
-                    ai_entry_price_canary_reason=latency_gate.get(
-                        "ai_entry_price_canary_reason"
-                    ),
+                    entry_price_provider_calls=0,
                     runtime_effect="simulated_entry_price_only",
                     **_scalp_sim_candidate_window_context_fields(sim_target),
                 ),
@@ -11905,9 +11899,19 @@ def bind_state_dependencies(
     scanner_generation_submit_guard=None,
     broker_snapshot_refresh_callback=None,
 ):
-    global KIWOOM_TOKEN, DB, EVENT_BUS, ACTIVE_TARGETS, COOLDOWNS, ALERTED_STOCKS, HIGHEST_PRICES
+    global \
+        KIWOOM_TOKEN, \
+        DB, \
+        EVENT_BUS, \
+        ACTIVE_TARGETS, \
+        COOLDOWNS, \
+        ALERTED_STOCKS, \
+        HIGHEST_PRICES
     global LAST_AI_CALL_TIMES, LAST_LOG_TIMES, TRADING_RULES, PUBLISH_GATEKEEPER_REPORT
-    global SHOULD_BLOCK_SWING_ENTRY, CONFIRM_CANCEL_OR_RELOAD_REMAINING, SEND_EXIT_BEST_IOC
+    global \
+        SHOULD_BLOCK_SWING_ENTRY, \
+        CONFIRM_CANCEL_OR_RELOAD_REMAINING, \
+        SEND_EXIT_BEST_IOC
     global DUAL_PERSONA_ENGINE, WS_MANAGER, SCANNER_GENERATION_SUBMIT_GUARD
     global BROKER_SNAPSHOT_REFRESH_CALLBACK
 
@@ -12194,9 +12198,7 @@ def _publish_buy_signal_submission_notice(
             (latency_gate or {}).get("latency_true_ofi_direct_canary_true_ofi_ewma"),
             0.0,
         )
-        direct_canary_line = (
-            "\nDANGER 예외: `direct canary` | " f"OFI: `{true_ofi:+.4f}`"
-        )
+        direct_canary_line = f"\nDANGER 예외: `direct canary` | OFI: `{true_ofi:+.4f}`"
     msg = (
         f"🛒 **[BUY 주문 제출] {stock.get('name')} ({code})**\n"
         f"전략: `{strategy}` | 진입모드: `{entry_mode}`\n"
@@ -13199,6 +13201,7 @@ _MACHINE_PRIMARY_LINEAGE_PIPELINE_STAGES = frozenset(
         "latency_block",
         "latency_pass",
         "entry_submit_revalidation_block",
+        "entry_mechanistic_price_contract_block",
         "entry_price_canary_submit_block",
         "pre_submit_price_guard_block",
         "pre_submit_entry_ai_authority_async_pending",
@@ -17919,7 +17922,9 @@ def _scanner_runtime_queue_lag_fields(
         "queue_lag_anchor_field": (
             "entry_armed_at_epoch"
             if armed_time > 0
-            else "added_time" if added_time > 0 else "not_available"
+            else "added_time"
+            if added_time > 0
+            else "not_available"
         ),
         "loop_started_epoch": f"{loop_epoch:.3f}",
         "queue_emit_epoch": f"{emit_epoch:.3f}",
@@ -21495,6 +21500,110 @@ def _pyramid_scale_in_decision_lineage(
     }
 
 
+def _ensure_scale_in_action_receipt(
+    stock: dict, code: str, action: dict | None, *, now_ts: float
+) -> dict:
+    """Bind an immutable receipt after an existing scale-in owner selects ADD.
+
+    This helper has no selection authority.  It runs only after an AVG_DOWN or
+    PYRAMID action already exists and gives the later price/sizing/broker chain
+    one exact decision identity.
+    """
+
+    if not isinstance(action, dict):
+        return {}
+    result = dict(action)
+    add_type = str(result.get("add_type") or "").strip().upper()
+    if add_type not in {"AVG_DOWN", "PYRAMID"}:
+        return result
+    result.setdefault(
+        "scale_in_action_owner",
+        "avg_down_action_owner" if add_type == "AVG_DOWN" else "pyramid_action_owner",
+    )
+    # Reaching this helper already means the existing action owner returned an
+    # executable AVG_DOWN/PYRAMID action.  Normalize that legacy affirmative
+    # receipt without creating a new action path.
+    result.setdefault("should_add", True)
+    result["scale_in_action_receipt_schema"] = "scale_in_action_receipt_v1"
+    shallow_lineage = _shallow_avg_down_pending_lineage(stock, code, result)
+    if shallow_lineage:
+        result.setdefault(
+            "position_episode_id",
+            shallow_lineage.get("pending_add_position_episode_id"),
+        )
+        result.setdefault(
+            "scale_in_decision_id",
+            shallow_lineage.get("pending_add_scale_in_decision_id"),
+        )
+    if result.get("position_episode_id") and result.get("scale_in_decision_id"):
+        return result
+    normalized_code = str(code or "").strip().upper()
+    if normalized_code.startswith("A"):
+        normalized_code = normalized_code[1:]
+    normalized_code = normalized_code[:6]
+    attempt_id = _scale_in_lineage_attempt_id(stock, normalized_code)
+    try:
+        position_episode_id = str(result.get("position_episode_id") or "").strip()
+        if not position_episode_id:
+            position_episode_id = mint_main_lifecycle_id(
+                record_id=stock.get("id"),
+                stock_code=normalized_code,
+                attempt_id=attempt_id,
+            )
+    except (TypeError, ValueError):
+        return result
+    decision_material = {
+        "schema": "scale_in_action_receipt_v1",
+        "position_episode_id": position_episode_id,
+        "record_id": stock.get("id"),
+        "stock_code": normalized_code,
+        "attempt_id": attempt_id,
+        "observed_at_epoch": round(float(now_ts), 6),
+        "position_basis": {
+            "buy_price": stock.get("buy_price"),
+            "buy_qty": stock.get("buy_qty"),
+        },
+        "action": {
+            "add_type": add_type,
+            "reason": result.get("reason"),
+            "source": result.get("source"),
+            "runtime_family": result.get("runtime_family"),
+        },
+    }
+    digest = hashlib.sha256(
+        json.dumps(
+            decision_material,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
+    prefix = "avgdn" if add_type == "AVG_DOWN" else "pyr"
+    result.setdefault("position_episode_id", position_episode_id)
+    result.setdefault("scale_in_decision_id", f"{prefix}-decision-{digest[:32]}")
+    result["scale_in_action_identity_source"] = (
+        "scanner_attempt"
+        if stock.get("scanner_promotion_id") or stock.get("scanner_generation_id")
+        else "owned_holding_record_fallback"
+    )
+    return result
+
+
+def _scale_in_lineage_attempt_id(stock: dict, normalized_code: str) -> str:
+    """Return a stable owner identity without pretending it is a scanner ID."""
+
+    scanner_attempt = str(
+        stock.get("scanner_promotion_id") or stock.get("scanner_generation_id") or ""
+    ).strip()
+    if scanner_attempt:
+        return scanner_attempt
+    record_id = str(stock.get("id") or "").strip()
+    if record_id and normalized_code:
+        return f"owned-holding:{record_id}:{normalized_code}"
+    return ""
+
+
 def _scale_in_namespace_for_arm(arm, reason=None):
     arm_text = str(arm or "").strip().upper()
     reason_text = str(reason or "")
@@ -22210,17 +22319,16 @@ def _scale_in_pending_lineage(
     shallow_avg_down = _shallow_avg_down_pending_lineage(stock, code, action)
     if shallow_avg_down:
         return shallow_avg_down
-    if str((action or {}).get("add_type") or "").strip().upper() != "PYRAMID":
+    add_type = str((action or {}).get("add_type") or "").strip().upper()
+    if add_type not in {"AVG_DOWN", "PYRAMID"}:
         return {}
     position_episode_id = str((action or {}).get("position_episode_id") or "").strip()
     scale_in_decision_id = str((action or {}).get("scale_in_decision_id") or "").strip()
-    attempt_id = str(
-        stock.get("scanner_promotion_id") or stock.get("scanner_generation_id") or ""
-    ).strip()
     normalized_code = str(code or "").strip().upper()
     if normalized_code.startswith("A"):
         normalized_code = normalized_code[1:]
     normalized_code = normalized_code[:6]
+    attempt_id = _scale_in_lineage_attempt_id(stock, normalized_code)
     if (
         not validate_main_lifecycle_id(
             position_episode_id,
@@ -22228,7 +22336,15 @@ def _scale_in_pending_lineage(
             stock_code=normalized_code,
             attempt_id=attempt_id,
         )
-        or re.fullmatch(r"pyr-decision-[0-9a-f]{32}", scale_in_decision_id) is None
+        or re.fullmatch(
+            (
+                r"avgdn-decision-[0-9a-f]{32}"
+                if add_type == "AVG_DOWN"
+                else r"pyr-decision-[0-9a-f]{32}"
+            ),
+            scale_in_decision_id,
+        )
+        is None
     ):
         return {}
     return {
@@ -26806,15 +26922,13 @@ def _post_probe_winner_recovery_runtime_config(
         venue = "NXT"
         cohort_key = "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_NXT_ENABLED"
         central_sizing_key = (
-            "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_"
-            "CENTRAL_SIZING_NXT_ENABLED"
+            "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_CENTRAL_SIZING_NXT_ENABLED"
         )
     elif raw_venue == "KRX" or raw_venue.startswith("KRX_"):
         venue = "KRX"
         cohort_key = "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_KRX_ENABLED"
         central_sizing_key = (
-            "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_"
-            "CENTRAL_SIZING_KRX_ENABLED"
+            "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_CENTRAL_SIZING_KRX_ENABLED"
         )
     else:
         venue = "UNKNOWN"
@@ -26844,7 +26958,9 @@ def _post_probe_winner_recovery_runtime_config(
                 else (
                     "active_date_missing_or_mismatch"
                     if not date_active
-                    else "venue_unproven" if venue == "UNKNOWN" else "cohort_disabled"
+                    else "venue_unproven"
+                    if venue == "UNKNOWN"
+                    else "cohort_disabled"
                 )
             )
         )
@@ -27096,7 +27212,9 @@ def _post_probe_ai_thesis_context(
         "state": (
             "hard_negative"
             if negative
-            else "supportive" if supportive else "neutral_or_unproven"
+            else "supportive"
+            if supportive
+            else "neutral_or_unproven"
         ),
         "parent_action": parent_action or "NOT_EVALUATED",
         "parent_source": parent_source or "-",
@@ -27164,7 +27282,9 @@ def _observe_post_probe_hard_abort_recovery(
     recovery_abort_class = (
         "hard"
         if scale_in_forbidden and not scale_in_recheck_allowed
-        else "soft" if soft_abort and scale_in_recheck_allowed else "ineligible"
+        else "soft"
+        if soft_abort and scale_in_recheck_allowed
+        else "ineligible"
     )
     if terminal_outcome != "residual_not_submitted" or recovery_abort_class == (
         "ineligible"
@@ -32099,7 +32219,9 @@ def _refresh_scale_in_reversal_features_if_needed(
     fields["scale_in_feature_refresh_reason"] = (
         "post_probe_confirmation_refresh"
         if force_refresh
-        else "feature_context_stale" if existing else "feature_context_missing"
+        else "feature_context_stale"
+        if existing
+        else "feature_context_missing"
     )
     _mutate_stock_state(
         stock, set_fields={"last_scale_in_feature_refresh_attempt_ts": now_ts}
@@ -36461,7 +36583,9 @@ def _rising_missed_price_anchor(
     state = (
         "recovered_fallback"
         if selected_price > 0 and rejected
-        else "valid" if selected_price > 0 else "unavailable"
+        else "valid"
+        if selected_price > 0
+        else "unavailable"
     )
     if state == "recovered_fallback":
         stock["first_seen_price"] = selected_price
@@ -37517,7 +37641,9 @@ def _risky_micro_route_scoped_0d_bbo(
     required_route = (
         "krx_regular"
         if venue == "KRX"
-        else "krx_nxt_integrated" if premarket_cohort else "nxt_only"
+        else "krx_nxt_integrated"
+        if premarket_cohort
+        else "nxt_only"
     )
     candidate_route = str(expected_market_route or required_route).strip().lower()
     matches: list[tuple[dict[str, Any], str, str, str, dict[str, Any]]] = []
@@ -38653,7 +38779,9 @@ def _evaluate_rising_missed_tick_speed_entry_guard(
     relief_path = (
         "fresh_tp1_micro"
         if fresh_tp1_micro_path
-        else "absolute_tick_throughput" if absolute_throughput_path else "none"
+        else "absolute_tick_throughput"
+        if absolute_throughput_path
+        else "none"
     )
     reasons = []
     if missing_window:
@@ -38668,7 +38796,9 @@ def _evaluate_rising_missed_tick_speed_entry_guard(
     block_reason = (
         "tick_speed_absolute_throughput_relief"
         if relief_applied
-        else "+".join(reasons) if reasons else "tick_speed_guard_pass"
+        else "+".join(reasons)
+        if reasons
+        else "tick_speed_guard_pass"
     )
     return {
         **_rising_missed_submit_safety_filter_fields(blocked=blocked),
@@ -38731,7 +38861,9 @@ def _evaluate_rising_missed_tick_speed_entry_guard(
         "metric_role": (
             "bounded_tunable"
             if relief_applied
-            else "safety_veto" if blocked else "diagnostic"
+            else "safety_veto"
+            if blocked
+            else "diagnostic"
         ),
         "decision_authority": (
             "operator_runtime_override_tick_absolute_throughput_relief"
@@ -39174,7 +39306,9 @@ def _merge_scanner_market_data_enrichment_into_ws_data(
             else (
                 "missing_stored_at"
                 if age_sec is None
-                else "expired" if age_sec > ttl_sec else "missing_or_unusable_state"
+                else "expired"
+                if age_sec > ttl_sec
+                else "missing_or_unusable_state"
             )
         ),
     }
@@ -41802,9 +41936,7 @@ def _retry_entry_ai_submit_authority_before_block(
             # for attribution and let the next fresh loop retry, without
             # reporting a process error burst.  No AI or submit authority is
             # recovered here.
-            log_info(
-                f"[PRE_SUBMIT_ENTRY_AI_AUTHORITY_RETRY_BLOCK] {code}: {error}"
-            )
+            log_info(f"[PRE_SUBMIT_ENTRY_AI_AUTHORITY_RETRY_BLOCK] {code}: {error}")
             fields["pre_submit_entry_ai_authority_retry_reason"] = error
         else:
             log_error(f"⚠️ [PRE_SUBMIT_ENTRY_AI_AUTHORITY_RETRY_FAIL] {code}: {exc}")
@@ -43867,8 +43999,11 @@ def _split_order_meta_fields(order: dict | None) -> dict:
         **{
             key: value
             for key, value in src.items()
-            if key.startswith("entry_execution_sizing_")
-            and key != "entry_execution_sizing_plan"
+            if (
+                key.startswith("entry_execution_sizing_")
+                or key.startswith("entry_price_plan_")
+            )
+            and key not in {"entry_execution_sizing_plan", "entry_price_plan"}
         },
         "price_candidate_id": src.get("price_candidate_id"),
         **_entry_price_ai_trace_fields(src),
@@ -45242,7 +45377,9 @@ def _post_probe_direction_fields(
             else (
                 "negative"
                 if orderbook_negative
-                else "mixed" if orderbook_mixed else "neutral"
+                else "mixed"
+                if orderbook_mixed
+                else "neutral"
             )
         ),
         "post_probe_direction_qi_state": (
@@ -45251,7 +45388,9 @@ def _post_probe_direction_fields(
         "post_probe_direction_ofi_state": (
             "positive"
             if ofi_positive
-            else "negative" if ofi_negative else "unavailable"
+            else "negative"
+            if ofi_negative
+            else "unavailable"
         ),
         "post_probe_direction_buy_pressure_10t": (
             f"{buy_pressure:.4f}" if pressure_available else "-"
@@ -45508,7 +45647,9 @@ def _abort_entry_split_probe_residual(
         "entry_split_probe_scale_in_recheck_origin": (
             "normal_winner_recovery"
             if rising_missed_normal_winner_recheck
-            else "source_quality_or_non_nxt_direction_recovery" if soft_abort else "-"
+            else "source_quality_or_non_nxt_direction_recovery"
+            if soft_abort
+            else "-"
         ),
         "entry_split_probe_scale_in_recheck_reason": (
             (f"{reason}:source_quality_recovery" if source_quality_timeout else reason)
@@ -46366,6 +46507,177 @@ def _entry_ai_price_input_audit_fields(
         or ("feature_packet_present" if packet else "feature_packet_missing")
     )
     return out
+
+
+def _apply_mechanistic_entry_price_owner(
+    *,
+    stock,
+    code,
+    strategy,
+    ws_data,
+    ai_engine,
+    latency_gate,
+    planned_orders,
+    curr_price,
+    best_bid,
+    best_ask,
+    requested_qty=0,
+    real_order_subject=False,
+    refresh_attempt=False,
+):
+    """Freeze the existing P1 price without provider or sizing authority."""
+    del ai_engine, requested_qty, refresh_attempt
+    if strategy not in ("SCALPING", "SCALP"):
+        return planned_orders, False
+    source_orders = [
+        dict(order) for order in (planned_orders or []) if isinstance(order, dict)
+    ]
+    if not source_orders:
+        return planned_orders, False
+    route = str(
+        (ws_data or {}).get("effective_route")
+        or (ws_data or {}).get("route")
+        or (ws_data or {}).get("source_route")
+        or ""
+    ).strip()
+    epoch = str(
+        (ws_data or {}).get("source_epoch")
+        or (ws_data or {}).get("registration_epoch")
+        or (ws_data or {}).get("epoch")
+        or ""
+    ).strip()
+    observed_at = time.time()
+    candidates: list[dict[str, Any]] = []
+    adjusted: list[dict[str, Any]] = []
+    blockers: list[str] = []
+    observed_candidate_ids: set[str] = set()
+    for index, order in enumerate(source_orders, start=1):
+        numeric_price = _coerce_int_value(order.get("price"))
+        order_type_code = str(
+            order.get("order_type_code") or order.get("order_type") or "00"
+        ).strip()
+        if numeric_price <= 0 and order_type_code not in {"3", "03", "6", "06", "16"}:
+            blockers.append(f"leg_{index}_numeric_price_missing")
+        candidate_id = str(order.get("price_candidate_id") or "").strip()
+        if not candidate_id:
+            source = str(
+                order.get("price_source")
+                or (latency_gate or {}).get("price_resolution_reason")
+                or "p1_current_resolver"
+            ).strip()
+            candidate_id = f"mechanistic:{source}"
+        observed_candidate_ids.add(candidate_id)
+        candidates.append(
+            {
+                "price_candidate_id": candidate_id,
+                "price_leg_id": f"{candidate_id}:leg{index}",
+                "numeric_price": numeric_price,
+                "order_type_code": order_type_code,
+            }
+        )
+        adjusted.append(
+            {
+                **order,
+                "price_candidate_id": candidate_id,
+                "entry_price_owner": "mechanistic_entry_price_resolver",
+                "entry_price_policy_version": ENTRY_PRICE_POLICY_VERSION,
+                "entry_price_policy_sha256": ENTRY_PRICE_POLICY_SHA256,
+                "entry_price_captured_at": observed_at,
+                "entry_price_route": route or None,
+                "entry_price_epoch": epoch or None,
+            }
+        )
+    if len(observed_candidate_ids) != 1:
+        blockers.append("entry_price_candidate_conflict")
+    receipt_body = {
+        "schema": "mechanistic_entry_price_receipt_v1",
+        "stock_code": str(code or "").strip(),
+        "price_owner": "mechanistic_entry_price_resolver",
+        "price_policy_version": ENTRY_PRICE_POLICY_VERSION,
+        "price_policy_sha256": ENTRY_PRICE_POLICY_SHA256,
+        "captured_at": observed_at,
+        "current_price": _coerce_int_value(curr_price),
+        "best_bid": _coerce_int_value(best_bid),
+        "best_ask": _coerce_int_value(best_ask),
+        "route": route or None,
+        "epoch": epoch or None,
+        "candidates": candidates,
+        "numeric_price_changed": False,
+        "provider_calls": 0,
+        "action_quantity_leg_scale_in_authority": False,
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    receipt_sha256 = hashlib.sha256(
+        json.dumps(
+            receipt_body,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("ascii")
+    ).hexdigest()
+    adjusted = [
+        {
+            **order,
+            "entry_price_leg_id": candidates[index]["price_leg_id"],
+            "entry_price_receipt_sha256": receipt_sha256,
+            "entry_price_current_price": receipt_body["current_price"],
+            "entry_price_best_bid": receipt_body["best_bid"],
+            "entry_price_best_ask": receipt_body["best_ask"],
+        }
+        for index, order in enumerate(adjusted)
+    ]
+    fields = {
+        "entry_price_owner": "mechanistic_entry_price_resolver",
+        "entry_price_policy_version": ENTRY_PRICE_POLICY_VERSION,
+        "entry_price_policy_sha256": ENTRY_PRICE_POLICY_SHA256,
+        "entry_price_receipt_sha256": receipt_sha256,
+        "entry_price_candidate_count": len(observed_candidate_ids),
+        "entry_price_leg_count": len(candidates),
+        "entry_price_numeric_price_changed": False,
+        "entry_price_provider_calls": 0,
+        "entry_price_route": route or None,
+        "entry_price_epoch": epoch or None,
+        "entry_price_captured_at": observed_at,
+        "entry_price_mechanistic_applied": not blockers,
+        "entry_price_mechanistic_blockers": blockers,
+        "ai_entry_price_canary_applied": False,
+        "ai_entry_price_provider_skipped": True,
+        "ai_entry_price_provider_skip_reason": "entry_price_ai_authority_retired",
+        "ai_entry_price_provider_call_count": 0,
+    }
+    latency_gate.update(fields)
+    if blockers:
+        latency_gate.update(
+            entry_price_mechanistic_submit_blocked=True,
+            entry_price_mechanistic_submit_block_reason=(
+                "mechanistic_entry_price_contract_invalid"
+            ),
+        )
+        _log_entry_pipeline(
+            stock,
+            code,
+            "entry_mechanistic_price_owner_block",
+            reason="mechanistic_entry_price_contract_invalid",
+            decision_authority="mechanistic_entry_price_contract_fail_closed",
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            **fields,
+        )
+        return [], True
+    _log_entry_pipeline(
+        stock,
+        code,
+        "entry_mechanistic_price_owner_applied",
+        reason="existing_p1_numeric_price_bound_without_provider",
+        decision_authority="price_selection_only_no_action_quantity_leg_scale_in_authority",
+        actual_order_submitted=False,
+        broker_order_forbidden=bool(real_order_subject),
+        entry_price_receipt=receipt_body,
+        **fields,
+    )
+    return adjusted, True
 
 
 def _apply_entry_ai_price_canary(
@@ -50040,12 +50352,16 @@ def _resolve_early_accel_strong_bundle_recheck(
             "score_prior_band": (
                 "supportive"
                 if float(min_score) <= numeric_score <= float(max_score)
-                else "low" if numeric_score < float(min_score) else "high"
+                else "low"
+                if numeric_score < float(min_score)
+                else "high"
             ),
             "ai_score_prior_weight": (
                 0.3
                 if float(min_score) <= numeric_score <= float(max_score)
-                else -0.2 if numeric_score < float(min_score) else 0.0
+                else -0.2
+                if numeric_score < float(min_score)
+                else 0.0
             ),
         }
     )
@@ -50621,12 +50937,16 @@ def _resolve_ai_numeric_consistency_recheck(
             "score_prior_band": (
                 "supportive"
                 if float(score_floor) <= numeric_score <= 74.0
-                else "low" if numeric_score < float(score_floor) else "high"
+                else "low"
+                if numeric_score < float(score_floor)
+                else "high"
             ),
             "ai_score_prior_weight": (
                 0.3
                 if float(score_floor) <= numeric_score <= 74.0
-                else -0.2 if numeric_score < float(score_floor) else 0.0
+                else -0.2
+                if numeric_score < float(score_floor)
+                else 0.0
             ),
         }
     )
@@ -54639,7 +54959,9 @@ def _evaluate_scalp_trailing_continuation_recheck(
     large_sell_state = (
         "confirmed_sell"
         if large_sell_print
-        else "confirmed_clear" if feature_context_usable else "unknown"
+        else "confirmed_clear"
+        if feature_context_usable
+        else "unknown"
     )
     micro_supported, micro_support_fields = _holding_flow_max_defer_micro_support(
         ws_data,
@@ -58306,7 +58628,9 @@ def _score65_74_recovery_probe_decision(
         "score_prior_band": (
             "supportive"
             if min_score <= score <= max_score
-            else "low" if score < min_score else "high"
+            else "low"
+            if score < min_score
+            else "high"
         ),
         "ai_score_prior_weight": 0.3 if min_score <= score <= max_score else 0.0,
     }
@@ -62481,9 +62805,7 @@ def _resolve_scanner_async_entry_ai(
     ) -> dict:
         stock_snapshot = thaw_scanner_async_value(async_context.stock_snapshot)
         prepared_ws = thaw_scanner_async_value(async_context.ws_snapshot)
-        for key, value in _scanner_promotion_correlation_fields(
-            stock_snapshot
-        ).items():
+        for key, value in _scanner_promotion_correlation_fields(stock_snapshot).items():
             prepared_ws.setdefault(key, value)
         prepared_reentry = stock_snapshot.get(
             "_rising_missed_async_reentry_guard_context"
@@ -64503,9 +64825,7 @@ def _handle_watching_strategy_branch(
                                         "ai_numeric_consistency_recheck_original_score": f"{float(ai_score or 0.0):.1f}",
                                         "ai_numeric_consistency_recheck_original_reason_excerpt": str(
                                             reason or ""
-                                        )[
-                                            :120
-                                        ],
+                                        )[:120],
                                         "ai_numeric_consistency_recheck_inconsistency_field": str(
                                             ai_decision.get(
                                                 "ai_reason_numeric_inconsistency_field"
@@ -64524,9 +64844,7 @@ def _handle_watching_strategy_branch(
                                             ),
                                             ensure_ascii=False,
                                             default=str,
-                                        )[
-                                            :240
-                                        ],
+                                        )[:240],
                                     },
                                     candle_context=candle_context,
                                 )
@@ -64750,9 +65068,7 @@ def _handle_watching_strategy_branch(
                                         "early_accel_strong_bundle_recheck_original_score": f"{float(ai_score or 0.0):.1f}",
                                         "early_accel_strong_bundle_recheck_original_reason_excerpt": str(
                                             reason or ""
-                                        )[
-                                            :120
-                                        ],
+                                        )[:120],
                                         "early_accel_strong_bundle_recheck_scanner_promotion_reason": str(
                                             stock.get("scanner_promotion_reason") or "-"
                                         ),
@@ -65883,9 +66199,7 @@ def _handle_watching_strategy_branch(
                         _ENTRY_OPPORTUNITY_RECHECK_STATE.sync_exploration_probe_submit_count(
                             bounded_exploration_persisted_probe_count
                         )
-                        bounded_exploration_observed_probe_count = (
-                            _ENTRY_OPPORTUNITY_RECHECK_STATE.daily_exploration_probe_submit_count
-                        )
+                        bounded_exploration_observed_probe_count = _ENTRY_OPPORTUNITY_RECHECK_STATE.daily_exploration_probe_submit_count
                     bounded_exploration_micro_relief = (
                         _entry_setup_exploration_micro_relief(
                             recheck_feature_probe,
@@ -69059,16 +69373,16 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         pre_price_tick_speed_guard,
         opening_rotation_active=opening_rotation_active,
     )
-    ai_price_canary_touched = False
+    entry_price_owner_touched = False
     if skip_ai_price_for_slow_tick_window:
         _log_entry_pipeline(
             stock,
             code,
-            "entry_ai_price_canary_skipped_by_tick_speed_hard_block",
+            "entry_mechanistic_price_skipped_by_tick_speed_hard_block",
             **pre_price_tick_speed_guard,
         )
     elif not opening_rotation_active:
-        planned_orders, ai_price_canary_touched = _apply_entry_ai_price_canary(
+        planned_orders, entry_price_owner_touched = _apply_mechanistic_entry_price_owner(
             stock=stock,
             code=code,
             strategy=strategy,
@@ -69082,7 +69396,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             requested_qty=requested_qty,
             real_order_subject=real_entry_panic_gap_subject,
         )
-    if ai_price_canary_touched:
+    if entry_price_owner_touched:
         latency_gate["orders"] = planned_orders
         latency_price_snapshot = _build_entry_price_snapshot_fields(
             latency_gate,
@@ -69092,15 +69406,15 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             best_ask=best_ask_at_submit,
         )
         if real_entry_panic_gap_subject and bool(
-            latency_gate.get("ai_entry_price_canary_submit_blocked")
+            latency_gate.get("entry_price_mechanistic_submit_blocked")
         ):
             block_reason = (
-                latency_gate.get("ai_entry_price_canary_submit_block_reason")
-                or "entry_price_canary_skip_order"
+                latency_gate.get("entry_price_mechanistic_submit_block_reason")
+                or "mechanistic_entry_price_contract_invalid"
             )
             log_info(
-                f"[ENTRY_PRICE_CANARY_SUBMIT_BLOCK] {stock.get('name')}({code}) "
-                f"reason={block_reason} confidence={latency_gate.get('ai_entry_price_canary_confidence')}"
+                f"[ENTRY_MECHANISTIC_PRICE_CONTRACT_BLOCK] {stock.get('name')}({code}) "
+                f"reason={block_reason}"
             )
             _mutate_stock_state(
                 stock,
@@ -69120,13 +69434,12 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             block_fields = {
                 key: value
                 for key, value in latency_gate.items()
-                if str(key).startswith("ai_entry_price_canary_")
-                or str(key).startswith("entry_ai_price_skip_")
+                if str(key).startswith("entry_price_")
             }
             _log_entry_pipeline(
                 stock,
                 code,
-                "entry_price_canary_submit_block",
+                "entry_mechanistic_price_contract_block",
                 forced_entry_reason=(
                     RISING_MISSED_FORCED_ENTRY_REASON
                     if forced_rising_missed_one_share
@@ -69134,9 +69447,9 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 ),
                 forced_entry_qty=forced_rising_missed_scout_qty,
                 block_reason=block_reason,
-                decision_authority="entry_price_canary_submit_safety_guard",
-                source_quality_gate="entry_price_canary_skip_contract",
-                threshold_family="entry_price_canary_submit_guard",
+                decision_authority="mechanistic_entry_price_contract_fail_closed",
+                source_quality_gate="mechanistic_entry_price_receipt_contract",
+                threshold_family="mechanistic_entry_price_contract",
                 runtime_effect=True,
                 actual_order_submitted=False,
                 broker_order_forbidden=True,
@@ -69146,8 +69459,8 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                         entry_orderbook_micro_fields,
                         block_fields,
                         _build_pre_submit_gate_contract_fields(
-                            "entry_price_canary_submit_guard",
-                            gate_action="entry_price_canary_skip_block",
+                            "mechanistic_entry_price_contract",
+                            gate_action="mechanistic_entry_price_contract_block",
                         ),
                     ),
                     "actual_order_submitted",
@@ -69161,7 +69474,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             _emit_scalp_entry_adm_snapshot(
                 stock,
                 code,
-                "entry_price_canary_submit_block",
+                "entry_mechanistic_price_contract_block",
                 ai_score=latency_signal_score,
                 chosen_action="SKIP_PRE_SUBMIT_SAFETY",
                 latency_gate=latency_gate,
@@ -69181,7 +69494,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             stock,
             code,
             "entry_price_order_contract_gap",
-            reason="entry_ai_price_canary_no_order_plan",
+            reason="mechanistic_entry_price_no_order_plan",
             requested_qty=requested_qty,
             actual_order_submitted=False,
             broker_order_forbidden=True,
@@ -69190,7 +69503,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             source_quality_gate="entry_price_order_contract_gap",
             metric_role="source_quality_gate",
             **_entry_price_zero_context_base_fields(
-                "entry_ai_price_canary_no_order_plan"
+                "mechanistic_entry_price_no_order_plan"
             ),
         )
         return False
@@ -71731,7 +72044,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             or stock.get("last_watching_ai_machine_primary_fields")
             or {}
         )
-        if planned_orders:
+        if planned_orders and machine_action_receipt:
             planned_orders, entry_execution_sizing_fields = (
                 compose_entry_execution_sizing_plan(
                     planned_orders,
@@ -71747,6 +72060,20 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     ),
                 )
             )
+        elif planned_orders:
+            entry_execution_sizing_fields = {
+                "entry_execution_sizing_plan_schema": (
+                    "entry_execution_sizing_plan_v1"
+                ),
+                "entry_execution_sizing_plan_emitted": False,
+                "entry_execution_sizing_valid": True,
+                "entry_execution_sizing_blockers": [],
+                "entry_execution_sizing_status": (
+                    "not_applicable_machine_action_receipt_absent"
+                ),
+                "entry_execution_sizing_runtime_effect": False,
+                "entry_execution_sizing_allowed_runtime_apply": False,
+            }
         else:
             entry_execution_sizing_fields = {
                 "entry_execution_sizing_plan_schema": (
@@ -71754,9 +72081,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 ),
                 "entry_execution_sizing_plan_emitted": False,
                 "entry_execution_sizing_valid": bool(
-                    entry_split_fields.get(
-                        "entry_split_order_probe_capacity_deferred"
-                    )
+                    entry_split_fields.get("entry_split_order_probe_capacity_deferred")
                 ),
                 "entry_execution_sizing_blockers": (
                     []
@@ -71786,6 +72111,21 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 **entry_execution_sizing_fields,
             )
             return False
+        _log_entry_pipeline(
+            stock,
+            code,
+            "entry_execution_sizing_plan",
+            requested_qty=requested_qty,
+            actual_order_submitted=False,
+            broker_order_forbidden=False,
+            runtime_effect=False,
+            decision_authority="entry_execution_sizing_receipt_only",
+            forbidden_uses=(
+                "entry_authority|quantity_increase|price_override|"
+                "broker_guard_bypass|safety_guard_relaxation"
+            ),
+            **entry_execution_sizing_fields,
+        )
         planned_orders = _decorate_entry_split_leg_ttls(planned_orders, stock, strategy)
         submit_revalidation_fields.update(entry_split_fields)
         wait_probe_required = bool(
@@ -72142,8 +72482,11 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         **{
             key: value
             for key, value in submit_revalidation_fields.items()
-            if key.startswith("entry_execution_sizing_")
-            and key != "entry_execution_sizing_plan"
+            if (
+                key.startswith("entry_execution_sizing_")
+                or key.startswith("entry_price_plan_")
+            )
+            and key not in {"entry_execution_sizing_plan", "entry_price_plan"}
         },
     }
     swing_order_dry_run = _is_swing_live_order_dry_run(strategy)
@@ -83208,8 +83551,7 @@ def _retire_unowned_scale_in_qty_manual_control_handoff(
     )
     auto_source = manual_control_auto_exclusion_source(code)
     retirement_check_signature = (
-        f"{int(bool(raw_decision.excluded))}:{raw_decision.source}:"
-        f"{auto_source or '-'}"
+        f"{int(bool(raw_decision.excluded))}:{raw_decision.source}:{auto_source or '-'}"
     )
     checked_signature = str(
         (stock or {}).get("_legacy_scale_in_qty_handoff_retirement_check_signature")
@@ -91127,10 +91469,10 @@ def handle_holding_state(
             curr_p = int(sell_mark_price)
             profit_rate = calculate_net_profit_rate(buy_p, curr_p)
         sell_order_price = int(sell_order_price or curr_p or 0)
-        if str(
-            exit_rule or stock.get("last_exit_rule") or ""
-        ).strip() == "scalp_same_session_terminal_exit" and same_session_terminal_exit.get(
-            "terminal_exit_positive_net_ev_required"
+        if (
+            str(exit_rule or stock.get("last_exit_rule") or "").strip()
+            == "scalp_same_session_terminal_exit"
+            and same_session_terminal_exit.get("terminal_exit_positive_net_ev_required")
         ):
             terminal_pre_submit_ev_fields = _scalping_terminal_exit_net_ev_fields(
                 buy_price=buy_p,
@@ -94178,6 +94520,12 @@ def _process_scale_in_action(stock, code, ws_data, action, admin_id):
     """추가매수 주문 처리 (STEP4 이후 구현 예정)."""
     if not action:
         return None
+    action = _ensure_scale_in_action_receipt(
+        stock,
+        code,
+        action,
+        now_ts=time.time(),
+    )
     is_sim_window_action = (
         str(action.get("reason") or "") == "scalp_sim_scale_in_window_expansion"
     )
@@ -94284,6 +94632,12 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
     - 성공 시 HOLDING 유지 + pending add 메타 저장
     - 실패 시 pending 메타 저장하지 않음
     """
+    action = _ensure_scale_in_action_receipt(
+        stock,
+        code,
+        action,
+        now_ts=time.time(),
+    )
     exit_authority_reason = _scale_in_exit_authority_block_reason(stock)
     if exit_authority_reason:
         _log_scale_in_exit_authority_block(
@@ -95818,6 +96172,59 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         total_leg_count = len(scale_in_split_orders)
         if planned_submit_qty <= 0:
             return None
+    scale_in_split_orders, scale_in_execution_sizing_fields = (
+        compose_scale_in_execution_sizing_plan(
+            scale_in_split_orders,
+            authorized_total_qty=planned_submit_qty,
+            action_receipt=action,
+            quantity_policy_version=(
+                qty_details.get("position_sizing_policy_version")
+                or qty_details.get("formula_version")
+                or SCALPING_SIZING_FORMULA_VERSION
+            ),
+            split_policy_version=scale_in_split_fields.get(
+                "scale_in_split_order_policy_version"
+            ),
+            price_policy_version=(
+                price_resolution.get("price_source")
+                or price_resolution.get("reason")
+                or "current_scale_in_resolver"
+            ),
+        )
+    )
+    scale_in_split_fields.update(scale_in_execution_sizing_fields)
+    if not scale_in_execution_sizing_fields.get("scale_in_execution_sizing_valid"):
+        _log_holding_pipeline(
+            stock,
+            code,
+            "scale_in_execution_sizing_plan_block",
+            add_type=add_type,
+            scale_in_type=add_type,
+            requested_qty=planned_submit_qty,
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            runtime_effect=True,
+            decision_authority="scale_in_execution_sizing_contract_fail_closed",
+            forbidden_uses=(
+                "scale_in_action_authority|quantity_increase|price_override|"
+                "broker_guard_bypass|safety_guard_relaxation"
+            ),
+            **scale_in_execution_sizing_fields,
+        )
+        return None
+    _log_holding_pipeline(
+        stock,
+        code,
+        "scale_in_execution_sizing_plan",
+        add_type=add_type,
+        scale_in_type=add_type,
+        requested_qty=planned_submit_qty,
+        actual_order_submitted=False,
+        broker_order_forbidden=False,
+        runtime_effect=False,
+        decision_authority="scale_in_execution_sizing_receipt_only",
+        **scale_in_execution_sizing_fields,
+    )
     exit_authority_reason = _scale_in_exit_authority_block_reason(stock)
     if exit_authority_reason:
         _log_scale_in_exit_authority_block(
@@ -96131,6 +96538,19 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                         actual_order_submitted=True,
                         broker_order_forbidden=False,
                         runtime_effect=False,
+                        **{
+                            key: value
+                            for key, value in leg_order.items()
+                            if (
+                                key.startswith("scale_in_execution_sizing_")
+                                or key.startswith("scale_in_price_plan_")
+                            )
+                            and key
+                            not in {
+                                "scale_in_execution_sizing_plan",
+                                "scale_in_price_plan",
+                            }
+                        },
                         **(
                             {
                                 "position_episode_id": pending_scale_in_lineage.get(
@@ -96541,9 +96961,7 @@ def handle_buy_ordered_state(stock, code):
             return
 
     if time_elapsed > timeout_sec:
-        log_info(
-            f"⚠️ [{stock['name']}] 매수 대기 {timeout_sec}초 초과. 취소 절차 진입."
-        )
+        log_info(f"⚠️ [{stock['name']}] 매수 대기 {timeout_sec}초 초과. 취소 절차 진입.")
         orig_ord_no = stock.get("odno")
 
         if not orig_ord_no:
