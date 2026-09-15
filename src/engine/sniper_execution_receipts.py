@@ -3894,9 +3894,15 @@ def _validated_sell_pending_submit_context(
         "KRX",
         "NXT",
         "PREMARKET_KRX_LIKE",
+        "KRX_NXT_INTEGRATED",
         "UNKNOWN",
     }:
         return None, "pending_submit_effective_venue_invalid"
+    if effective_venue == "KRX_NXT_INTEGRATED" and (
+        route not in {"KRX", "NXT", "SOR"}
+        or not session_bucket.startswith("krx_nxt_aftermarket")
+    ):
+        return None, "pending_submit_integrated_venue_context_invalid"
     if not session_bucket or len(session_bucket) > 128:
         return None, "pending_submit_session_invalid"
     if re.fullmatch(r"[0-9a-f]{64}", supplied_hash) is None:

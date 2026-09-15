@@ -40457,6 +40457,86 @@ def test_fast_exit_receipt_first_response_is_corroboration_only(
         )
 
 
+def test_fast_exit_pre_call_custody_failure_rearms_after_safe_db_rollback(
+    monkeypatch,
+):
+    state_handlers.DB = _DummyDB()
+    pipeline_logs = []
+    sell_calls = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: pipeline_logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_sell_side_open_time_block_fields",
+        lambda **kwargs: {"sell_time_block_applied": False},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_confirm_cancel_or_reload_remaining",
+        lambda *args, **kwargs: 7,
+    )
+
+    def fail_before_broker_call(stock, code, *, target_id):
+        stock["status"] = "HOLDING"
+        stock["sell_cancel_reconciliation_required"] = False
+        for key in state_handlers._SELL_SUBMIT_CONTEXT_KEYS:
+            stock.pop(key, None)
+        return False
+
+    monkeypatch.setattr(
+        state_handlers,
+        "_persist_sell_submit_pre_call_boundary",
+        fail_before_broker_call,
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_send_exit_best_ioc",
+        lambda *args, **kwargs: sell_calls.append((args, kwargs)),
+    )
+    stock = {
+        "id": 44179,
+        "code": "417200",
+        "name": "LS Materials",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 12480,
+        "buy_qty": 7,
+        "rt_ai_prob": 0.50,
+        "exit_requested": True,
+        "exit_token": "exit-integrated",
+        "fast_exit_broker_route": "SOR",
+    }
+
+    state_handlers._dispatch_scalp_preset_exit(
+        stock=stock,
+        code="417200",
+        now_ts=1_000,
+        curr_p=12510,
+        buy_p=12480,
+        profit_rate=0.25,
+        peak_profit=0.73,
+        strategy="SCALPING",
+        sell_reason_type="TRAILING",
+        reason="integrated trailing exit",
+        exit_rule="scalp_profit_stagnation_exit",
+        fast_exit=True,
+    )
+
+    assert sell_calls == []
+    assert stock["status"] == "HOLDING"
+    assert stock["exit_requested"] is False
+    assert stock["exit_token"] == "exit-integrated"
+    assert stock["fast_exit_retry_pending"] is True
+    assert stock["fast_exit_retry_reason"] == "sell_submit_pre_call_custody_blocked"
+    assert any(
+        stage == "scalp_fast_exit_deferred_for_reconciliation"
+        for stage, _ in pipeline_logs
+    )
+
+
 def test_late_loss_avg_down_quote_recovery_defer_blocks_sell_fallthrough(monkeypatch):
     state_handlers.TRADING_RULES = replace(
         CONFIG,

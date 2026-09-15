@@ -29899,6 +29899,16 @@ def _dispatch_scalp_preset_exit(
                 runtime_effect=True,
                 decision_authority="durability_guard_only",
             )
+            if (
+                fast_exit
+                and str(stock.get("status") or "").strip().upper() == "HOLDING"
+                and not stock.get("sell_cancel_reconciliation_required")
+                and not _has_active_sell_order_pending(stock)
+            ):
+                _defer_fast_exit_retry(
+                    "sell_submit_pre_call_custody_blocked",
+                    retry_delay_sec=0.25,
+                )
             return
         try:
             if fast_exit:

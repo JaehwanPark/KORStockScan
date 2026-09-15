@@ -2295,6 +2295,62 @@ def _persist_exact_sell_cancel_generation(
     assert receipts.persist_pending_sell_submit_custody(stock)
 
 
+def test_integrated_aftermarket_sell_pending_context_is_valid_for_sor():
+    from src.engine import sniper_execution_receipts as receipts
+
+    stock = {
+        "id": 1,
+        "code": "417200",
+        "status": "SELL_ORDERED",
+        "buy_qty": 7,
+    }
+    stock.update(
+        handlers._new_sell_submit_context_fields(
+            stock,
+            "417200",
+            requested_qty=7,
+            started_at=handlers.time.time(),
+            intended_route="SOR",
+            intended_effective_venue="KRX_NXT_INTEGRATED",
+            intended_session_bucket="krx_nxt_aftermarket_close_only",
+        )
+    )
+
+    context, reason = receipts._validated_sell_pending_submit_context(stock)
+
+    assert context is not None
+    assert reason == "pending_submit_context_exact"
+    assert receipts.persist_pending_sell_submit_custody(stock) is True
+    assert receipts._sell_pending_submit_path(stock["id"]).exists()
+
+
+def test_integrated_aftermarket_sell_pending_context_rejects_wrong_session():
+    from src.engine import sniper_execution_receipts as receipts
+
+    stock = {
+        "id": 1,
+        "code": "417200",
+        "status": "SELL_ORDERED",
+        "buy_qty": 7,
+    }
+    stock.update(
+        handlers._new_sell_submit_context_fields(
+            stock,
+            "417200",
+            requested_qty=7,
+            started_at=handlers.time.time(),
+            intended_route="SOR",
+            intended_effective_venue="KRX_NXT_INTEGRATED",
+            intended_session_bucket="krx_regular",
+        )
+    )
+
+    context, reason = receipts._validated_sell_pending_submit_context(stock)
+
+    assert context is None
+    assert reason == "pending_submit_integrated_venue_context_invalid"
+
+
 def test_sell_cancel_exact_success_releases_generation_after_db_commit(monkeypatch):
     from src.engine import sniper_execution_receipts as receipts
 
