@@ -16,8 +16,6 @@ SCHEMA_VERSION = 1
 REPORT_ROOT_DIR = DATA_DIR / "report"
 REPORT_DIR = REPORT_ROOT_DIR / REPORT_TYPE
 APPLY_PLAN_DIR = DATA_DIR / "threshold_cycle" / "apply_plans"
-SCALP_SIM_AUTO_APPROVAL_DIR = DATA_DIR / "threshold_cycle" / "sim_auto_approvals"
-SCALP_SIM_POLICY_DIR = DATA_DIR / "threshold_cycle" / "scalp_sim_policies"
 
 SOURCE_SPECS: dict[str, tuple[Path, str]] = {
     "observation_source_quality_audit": (
@@ -161,14 +159,6 @@ def _source_path(label: str, target_date: str) -> Path:
 
 def _apply_plan_path(target_date: str) -> Path:
     return APPLY_PLAN_DIR / f"threshold_apply_{target_date}.json"
-
-
-def _scalp_sim_auto_approval_path(target_date: str) -> Path:
-    return SCALP_SIM_AUTO_APPROVAL_DIR / f"scalp_sim_auto_approval_{target_date}.json"
-
-
-def _scalp_sim_policy_catalog_path(target_date: str) -> Path:
-    return SCALP_SIM_POLICY_DIR / f"scalp_sim_policy_catalog_{target_date}.json"
 
 
 def _postclose_verifier_path(target_date: str) -> Path:
@@ -1178,43 +1168,6 @@ def _postclose_verifier_summary(
     }
 
 
-def _scalp_sim_control_tower_summary(
-    approval: dict[str, Any], catalog_path: Path
-) -> dict[str, Any]:
-    source_status = (
-        approval.get("source_status")
-        if isinstance(approval.get("source_status"), dict)
-        else {}
-    )
-    runtime_bridge = (
-        source_status.get("runtime_apply_bridge")
-        if isinstance(source_status.get("runtime_apply_bridge"), dict)
-        else {}
-    )
-    return {
-        "approved": _safe_bool(approval.get("approved")),
-        "approved_policy_count": _safe_int(approval.get("approved_policy_count")),
-        "approved_source_ids": (
-            approval.get("approved_source_ids")
-            if isinstance(approval.get("approved_source_ids"), list)
-            else []
-        ),
-        "catalog": str(catalog_path),
-        "catalog_exists": catalog_path.exists(),
-        "runtime_bridge_live_auto_apply_ready_count": _safe_int(
-            runtime_bridge.get("live_auto_apply_ready_count")
-        ),
-        "blocked_reasons": (
-            approval.get("blocked_reasons")
-            if isinstance(approval.get("blocked_reasons"), list)
-            else []
-        ),
-        "decision_authority": approval.get("decision_authority"),
-        "runtime_effect": _safe_bool(approval.get("runtime_effect")),
-        "allowed_runtime_apply": _safe_bool(approval.get("allowed_runtime_apply")),
-    }
-
-
 def _top_lifecycle_candidates(
     threshold_ev: dict[str, Any], lifecycle_bucket: dict[str, Any]
 ) -> list[dict[str, Any]]:
@@ -1331,11 +1284,6 @@ def _markdown(report: dict[str, Any]) -> str:
     ev = report["ev_authority"]
     workorder = report["workorder"]
     runtime = report["runtime_approval"]
-    scalp_sim_auto = (
-        report.get("scalp_sim_auto_approval")
-        if isinstance(report.get("scalp_sim_auto_approval"), dict)
-        else {}
-    )
     bucket_windows = (
         report.get("lifecycle_bucket_window_summary")
         if isinstance(report.get("lifecycle_bucket_window_summary"), dict)
@@ -1537,10 +1485,6 @@ def _markdown(report: dict[str, Any]) -> str:
         f"(`{delta(swing_bucket, 'sim_auto_approved_count')}`), code-patch "
         f"`{current(swing_bucket, 'code_patch_required_count')}` "
         f"(`{delta(swing_bucket, 'code_patch_required_count')}`).",
-        f"- Scalp sim control tower: approved `{str(scalp_sim_auto.get('approved')).lower()}`, "
-        f"policies `{scalp_sim_auto.get('approved_policy_count')}`, "
-        f"sources `{inline_json(scalp_sim_auto.get('approved_source_ids') or [])}`, "
-        f"bridge live-ready summary `{scalp_sim_auto.get('runtime_bridge_live_auto_apply_ready_count')}`.",
         "",
         "## EV 해석",
         "",
@@ -1652,15 +1596,6 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
     if verifier_path.exists() and not verifier_payload:
         warnings.append("threshold_cycle_postclose_verification_parse_failed")
 
-    scalp_sim_auto_path = _scalp_sim_auto_approval_path(target_date)
-    scalp_sim_auto = _load_json(scalp_sim_auto_path)
-    sources["scalp_sim_auto_approval"] = _artifact_status(
-        scalp_sim_auto_path, scalp_sim_auto
-    )
-    scalp_sim_catalog_path = _scalp_sim_policy_catalog_path(target_date)
-    sources["scalp_sim_policy_catalog"] = _artifact_status(
-        scalp_sim_catalog_path, _load_json(scalp_sim_catalog_path)
-    )
 
     threshold_ev = payloads["threshold_cycle_ev"]
     strategy_scope = str(
@@ -2011,9 +1946,6 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
         "bridge_summary": bridge,
         "postclose_verifier_summary": verifier,
         "source_freshness": source_freshness,
-        "scalp_sim_auto_approval": _scalp_sim_control_tower_summary(
-            scalp_sim_auto, scalp_sim_catalog_path
-        ),
         "workorder": workorder,
         "sources": sources,
         "warnings": warnings,

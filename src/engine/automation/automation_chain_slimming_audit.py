@@ -42,7 +42,6 @@ CORE_MODULES = {
     "src.engine.lifecycle_decision_matrix",
     "src.engine.lifecycle_bucket_discovery",
     "src.engine.runtime_apply_bridge",
-    "src.engine.scalping.scalp_sim_auto_approval_control_tower",
     "src.engine.runtime_approval_summary",
     "src.engine.verify_threshold_cycle_postclose_chain",
 }

@@ -783,6 +783,14 @@ def test_real_post_sell_registers_bounded_exact_route_bbo_observer(
     feedback_mod._POST_SELL_EXECUTABLE_BBO_OBSERVERS.clear()
     sell_dt = datetime.fromisoformat("2026-09-14T16:30:00+09:00")
 
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return sell_dt.astimezone(tz) if tz is not None else sell_dt.replace(tzinfo=None)
+
+    monkeypatch.setattr(feedback_mod, "datetime", FrozenDateTime)
+    monkeypatch.setattr(feedback_mod.time, "time", lambda: sell_dt.timestamp())
+
     candidate = feedback_mod.record_post_sell_candidate(
         recommendation_id=92,
         stock={

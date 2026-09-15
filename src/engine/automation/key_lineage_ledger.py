@@ -22,7 +22,6 @@ REPORT_TYPE = "key_lineage_ledger"
 SCHEMA_VERSION = 1
 REPORT_DIR = DATA_DIR / "report" / REPORT_TYPE
 APPLY_PLAN_DIR = DATA_DIR / "threshold_cycle" / "apply_plans"
-SCALP_POLICY_DIR = DATA_DIR / "threshold_cycle" / "scalp_sim_policies"
 SWING_POLICY_DIR = DATA_DIR / "threshold_cycle" / "swing_sim_policies"
 HYPOTHESIS_PLAN_DIR = DATA_DIR / "threshold_cycle" / "ldm_hypothesis_observation_plans"
 DEFAULT_EVENT_UNTRACKED_VALUE_LIMIT = 200_000
@@ -1366,137 +1365,6 @@ def _row(
     }
 
 
-def _scalp_rows(
-    *,
-    discovery: dict[str, Any],
-    catalog: dict[str, Any],
-    apply_plan: dict[str, Any],
-    events: dict[str, set[str]],
-) -> list[dict[str, Any]]:
-    catalog_seeds = [
-        item
-        for item in catalog.get("active_sim_priority_seeds") or []
-        if isinstance(item, dict)
-    ]
-    catalog_by_id = {_seed_id(item): item for item in catalog_seeds if _seed_id(item)}
-    preopen_ids = _collect_values(
-        apply_plan, {"active_sim_priority_seed_ids", "active_seed_id"}
-    )
-    observed_ids = set().union(
-        events.get("active_seed_id", set()),
-        events.get("active_seed_matched_ids", set()),
-        events.get("active_sim_priority_seed_id", set()),
-        events.get("scalp_sim_active_priority_seed_id", set()),
-    )
-    policy_observation = (
-        events.get("active_policy_observation")
-        if isinstance(events.get("active_policy_observation"), dict)
-        else {}
-    )
-    policy_loaded_for_effect = bool(
-        policy_observation.get("policy_loaded_for_active_priority_effect")
-    )
-    policy_zero_only_window = bool(
-        policy_observation.get("active_seed_count_zero_event_count")
-        and not policy_observation.get("active_seed_count_positive_event_count")
-    )
-    rows: list[dict[str, Any]] = []
-    source_ids = sorted(catalog_by_id)
-    for seed_id in source_ids:
-        seed = catalog_by_id.get(seed_id) or {}
-        status = str(seed.get("status") or "").strip().lower()
-        catalog_present = seed_id in catalog_by_id
-        preopen_selected = seed_id in preopen_ids
-        observed = seed_id in observed_ids
-        if not catalog_present:
-            state, blocker = "catalog_missing", "key_lineage_catalog_missing"
-        elif observed:
-            state, blocker = "matched", ""
-        elif status == "cooldown":
-            state = (
-                "cooldown_intentional"
-                if not preopen_selected
-                else "cooldown_blocks_conversion"
-            )
-            blocker = (
-                ""
-                if state == "cooldown_intentional"
-                else "key_lineage_cooldown_blocks_conversion"
-            )
-        elif status == "retired":
-            state, blocker = "retired_intentional", ""
-        elif not preopen_selected:
-            state, blocker = "preopen_missing", "key_lineage_preopen_missing"
-        elif policy_zero_only_window:
-            state, blocker = (
-                "policy_not_loaded_window",
-                "active_policy_not_loaded_window",
-            )
-        else:
-            state, blocker = "natural_match_0", "runtime_natural_match_0"
-        rows.append(
-            _row(
-                source_key_id=seed_id,
-                source_key_type="active_seed",
-                source_artifact="scalp_sim_policy_catalog",
-                catalog_key_present=catalog_present,
-                preopen_policy_selected=preopen_selected,
-                runtime_match_key=seed_id if observed else None,
-                postclose_observed_key=seed_id if observed else None,
-                conversion_state=state,
-                next_blocker=blocker,
-                evidence={
-                    "producer_present": True,
-                    "seed_status": status or None,
-                    "entry_source_taxonomy_contract": (
-                        seed.get("entry_source_taxonomy_contract")
-                        if isinstance(seed.get("entry_source_taxonomy_contract"), dict)
-                        else {}
-                    ),
-                    "taxonomy_contract_data_consumed": seed.get(
-                        "taxonomy_contract_data_consumed"
-                    ),
-                    "taxonomy_contract_runtime_effect_allowed": seed.get(
-                        "taxonomy_contract_runtime_effect_allowed"
-                    ),
-                    "runtime_policy_observation_state": (
-                        "policy_loaded_active_seed_window"
-                        if policy_loaded_for_effect
-                        else (
-                            "policy_not_loaded_window"
-                            if policy_zero_only_window
-                            else "policy_observation_absent"
-                        )
-                    ),
-                    "excluded_from_active_priority_effect": bool(
-                        policy_zero_only_window and not observed
-                    ),
-                    "excluded_from_active_priority_effect_reason": (
-                        "policy_not_loaded_window"
-                        if policy_zero_only_window and not observed
-                        else None
-                    ),
-                },
-            )
-        )
-    for observed_id in sorted(observed_ids - set(catalog_by_id)):
-        rows.append(
-            _row(
-                source_key_id=observed_id,
-                source_key_type="active_seed",
-                source_artifact="runtime_event",
-                catalog_key_present=False,
-                preopen_policy_selected=observed_id in preopen_ids,
-                runtime_match_key=observed_id,
-                postclose_observed_key=observed_id,
-                conversion_state="key_mismatch",
-                next_blocker="runtime_observed_seed_not_in_catalog",
-                evidence={"catalog_seed_count": len(catalog_by_id)},
-            )
-        )
-    return rows
-
-
 def _swing_rows(
     *, catalog: dict[str, Any], apply_plan: dict[str, Any], events: dict[str, set[str]]
 ) -> list[dict[str, Any]]:
@@ -1579,7 +1447,6 @@ def _swing_rows(
 def _hypothesis_rows(
     *,
     plan: dict[str, Any],
-    scalp_catalog: dict[str, Any],
     swing_catalog: dict[str, Any],
     refinement: dict[str, Any],
     events: dict[str, set[str]],
@@ -1591,7 +1458,6 @@ def _hypothesis_rows(
     catalog_ids = {
         _hypothesis_id(item)
         for item in [
-            *_catalog_hypotheses(scalp_catalog),
             *_catalog_hypotheses(swing_catalog),
         ]
         if _hypothesis_id(item)
@@ -1690,19 +1556,10 @@ def _iter_bucket_items(payload: Any) -> list[dict[str, Any]]:
 def _tracked_event_values(
     *,
     apply_plan: dict[str, Any],
-    scalp_catalog: dict[str, Any],
     swing_catalog: dict[str, Any],
     hypothesis_plan: dict[str, Any],
     refinement: dict[str, Any],
 ) -> dict[str, set[str]]:
-    scalp_ids = {
-        _seed_id(item)
-        for item in scalp_catalog.get("active_sim_priority_seeds") or []
-        if isinstance(item, dict) and _seed_id(item)
-    }
-    scalp_ids.update(
-        _collect_values(apply_plan, {"active_sim_priority_seed_ids", "active_seed_id"})
-    )
     swing_ids = {
         _policy_id(item)
         for item in swing_catalog.get("active_arm_priority_policies") or []
@@ -1717,7 +1574,6 @@ def _tracked_event_values(
         _hypothesis_id(item)
         for item in [
             *_hypotheses_from_plan(hypothesis_plan),
-            *_catalog_hypotheses(scalp_catalog),
             *_catalog_hypotheses(swing_catalog),
         ]
         if _hypothesis_id(item)
@@ -1727,139 +1583,13 @@ def _tracked_event_values(
             refinement, {"hypothesis_id", "ldm_hypothesis_id", "soft_hypothesis_id"}
         )
     )
-    bucket_source_ids = set()
-    bucket_ids = set()
-    for item in _iter_bucket_items(scalp_catalog):
-        source_id = _bucket_identity(item)
-        bucket_id = (
-            str(item.get("bucket_id") or "").strip() if isinstance(item, dict) else ""
-        )
-        if source_id:
-            bucket_source_ids.add(source_id)
-        if bucket_id:
-            bucket_ids.add(bucket_id)
     return {
-        "active_seed_id": scalp_ids,
-        "active_seed_matched_ids": scalp_ids,
-        "active_sim_priority_seed_id": scalp_ids,
-        "scalp_sim_active_priority_seed_id": scalp_ids,
         "priority_policy_id": swing_ids,
         "active_arm_priority_policy_id": swing_ids,
         "swing_priority_policy_id": swing_ids,
         "ldm_hypothesis_id": hypothesis_ids,
         "hypothesis_id": hypothesis_ids,
-        "lifecycle_bucket_bucket_id": bucket_ids,
-        "lifecycle_bucket_matched_bucket_id": bucket_ids,
-        "lifecycle_bucket_source_bucket_id": bucket_source_ids,
-        "lifecycle_bucket_matched_source_bucket_id": bucket_source_ids,
     }
-
-
-def _bucket_rows(
-    discovery: dict[str, Any],
-    *,
-    scalp_catalog: dict[str, Any],
-    events: dict[str, set[str]],
-) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    matched_source_ids = events.get("lifecycle_bucket_matched_source_bucket_id", set())
-    matched_bucket_ids = events.get("lifecycle_bucket_matched_bucket_id", set())
-    runtime_source_ids = events.get("lifecycle_bucket_source_bucket_id", set())
-    runtime_bucket_ids = events.get("lifecycle_bucket_bucket_id", set())
-    candidates: list[tuple[dict[str, Any], str, bool]] = []
-    seen: set[str] = set()
-    for item in _iter_bucket_items(scalp_catalog):
-        source_id = _bucket_identity(item)
-        if not source_id or source_id in seen:
-            continue
-        seen.add(source_id)
-        candidates.append((item, "scalp_sim_policy_catalog", True))
-    for section in (
-        "live_auto_apply_candidates",
-        "sim_auto_approved_candidates",
-        "surfaced_candidates",
-    ):
-        for item in discovery.get(section) or []:
-            if not isinstance(item, dict):
-                continue
-            source_id = _bucket_identity(item)
-            if not source_id or source_id in seen:
-                continue
-            seen.add(source_id)
-            candidates.append((item, "lifecycle_bucket_discovery", False))
-    for item, source_artifact, preopen_from_catalog in candidates:
-        if not isinstance(item, dict):
-            continue
-        candidate_id = _bucket_identity(item)
-        if not candidate_id:
-            continue
-        state = _bucket_state(item)
-        bucket_id = str(item.get("bucket_id") or "").strip()
-        observed = preopen_from_catalog and (
-            candidate_id in matched_source_ids or bucket_id in matched_bucket_ids
-        )
-        runtime_seen = preopen_from_catalog and (
-            candidate_id in runtime_source_ids or bucket_id in runtime_bucket_ids
-        )
-        if observed:
-            conversion_state, blocker = "matched", ""
-        elif preopen_from_catalog and runtime_seen:
-            conversion_state, blocker = (
-                "natural_match_0",
-                "lifecycle_bucket_runtime_no_match",
-            )
-        elif preopen_from_catalog:
-            conversion_state, blocker = (
-                "natural_match_0",
-                "lifecycle_bucket_natural_match_0",
-            )
-        elif state == "live_auto_apply_ready":
-            conversion_state, blocker = "bridge_blocked", "bridge_contract"
-        elif state in {
-            "sim_auto_approved",
-            "entry_only_sim_auto_approved",
-            "lifecycle_flow_sim_probe_candidate",
-        }:
-            conversion_state, blocker = "collecting", "sample_floor"
-        elif str(item.get("source_dimension_gap") or ""):
-            conversion_state, blocker = "source_quality_blocked", "source_quality"
-        else:
-            conversion_state, blocker = "collecting", "sample_floor"
-        rows.append(
-            _row(
-                source_key_id=candidate_id,
-                source_key_type="bucket",
-                source_artifact=source_artifact,
-                catalog_key_present=True,
-                preopen_policy_selected=preopen_from_catalog
-                or state
-                in {
-                    "sim_auto_approved",
-                    "entry_only_sim_auto_approved",
-                    "lifecycle_flow_sim_probe_candidate",
-                },
-                runtime_match_key=candidate_id if observed else None,
-                postclose_observed_key=candidate_id if observed else None,
-                conversion_state=conversion_state,
-                next_blocker=blocker,
-                evidence={
-                    "classification_state": state,
-                    "primary_ev": item.get("primary_ev"),
-                    "source_quality_adjusted_ev_pct": item.get(
-                        "source_quality_adjusted_ev_pct"
-                    ),
-                    "sample": item.get("sample"),
-                    "sample_floor": item.get("sample_floor"),
-                    "parent_sample_floor": item.get("parent_sample_floor"),
-                    "sample_floor_window_policy": item.get("sample_floor_window_policy")
-                    or item.get("window_policy"),
-                    "bucket_id": bucket_id or None,
-                    "source_bucket_kind": item.get("source_bucket_kind"),
-                    "runtime_seen": runtime_seen,
-                },
-            )
-        )
-    return rows
 
 
 def build_key_lineage_ledger(
@@ -1880,14 +1610,6 @@ def build_key_lineage_ledger(
     apply_path = _runtime_apply_path(target_date)
     apply_plan = _load_json(apply_path)
     apply_source_date = _apply_source_date(apply_plan, target_date)
-    scalp_catalog_path = _catalog_path_from_apply(
-        apply_plan,
-        section_key="scalp_sim_auto_approval",
-        env_key="KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_FILE",
-        default_dir=SCALP_POLICY_DIR,
-        default_prefix="scalp_sim_policy_catalog",
-        target_date=target_date,
-    )
     swing_catalog_path = _catalog_path_from_apply(
         apply_plan,
         section_key="swing_sim_auto_approval",
@@ -1920,18 +1642,16 @@ def build_key_lineage_ledger(
         _load_json(entry_replay_consumer_path),
         target_date=target_date,
     )
-    scalp_catalog = _load_json(scalp_catalog_path)
     swing_catalog = _load_json(swing_catalog_path) if include_swing else {}
     events = _event_field_values(
         target_date,
         _tracked_event_values(
             apply_plan=apply_plan,
-            scalp_catalog=scalp_catalog,
             swing_catalog=swing_catalog,
             hypothesis_plan=hypothesis_plan,
             refinement=refinement,
         ),
-        active_seed_prefix_index=_active_seed_prefix_index(scalp_catalog),
+        active_seed_prefix_index={},
     )
     active_policy_observation = (
         events.get("active_policy_observation")
@@ -1943,14 +1663,6 @@ def build_key_lineage_ledger(
     )
 
     rows: list[dict[str, Any]] = []
-    rows.extend(
-        _scalp_rows(
-            discovery=discovery,
-            catalog=scalp_catalog,
-            apply_plan=apply_plan,
-            events=events,
-        )
-    )
     if include_swing:
         rows.extend(
             _swing_rows(catalog=swing_catalog, apply_plan=apply_plan, events=events)
@@ -1958,13 +1670,11 @@ def build_key_lineage_ledger(
     rows.extend(
         _hypothesis_rows(
             plan=hypothesis_plan,
-            scalp_catalog=scalp_catalog,
             swing_catalog=swing_catalog,
             refinement=refinement,
             events=events,
         )
     )
-    rows.extend(_bucket_rows(discovery, scalp_catalog=scalp_catalog, events=events))
     state_counts = Counter(
         str(row.get("conversion_state") or "unknown") for row in rows
     )
@@ -2054,7 +1764,6 @@ def build_key_lineage_ledger(
         "swing_sources_enabled": include_swing,
         "sources": {
             "lifecycle_bucket_discovery": str(discovery_path),
-            "scalp_sim_policy_catalog": str(scalp_catalog_path),
             "swing_sim_policy_catalog": (
                 str(swing_catalog_path) if include_swing else None
             ),

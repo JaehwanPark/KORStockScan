@@ -26,7 +26,6 @@ PIPELINE_EVENTS_DIR = PROJECT_ROOT / "data" / "pipeline_events"
 PLAN_DIR = (
     PROJECT_ROOT / "data" / "threshold_cycle" / "ldm_hypothesis_observation_plans"
 )
-SCALP_POLICY_DIR = PROJECT_ROOT / "data" / "threshold_cycle" / "scalp_sim_policies"
 SWING_POLICY_DIR = PROJECT_ROOT / "data" / "threshold_cycle" / "swing_sim_policies"
 
 MAX_JSONL_ROWS_PER_FILE = 20000
@@ -831,7 +830,6 @@ def _merge_catalog(path: Path, plan: dict[str, Any], *, domain: str) -> bool:
 
 def merge_sim_policy_catalogs(source_date: str, plan: dict[str, Any]) -> dict[str, Any]:
     paths = {
-        "scalp": SCALP_POLICY_DIR / f"scalp_sim_policy_catalog_{source_date}.json",
         "swing": SWING_POLICY_DIR / f"swing_sim_policy_catalog_{source_date}.json",
     }
     result: dict[str, Any] = {}

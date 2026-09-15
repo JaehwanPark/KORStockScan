@@ -78,6 +78,8 @@ RETIRED_FAMILIES = (
             "lifecycle_bucket_catalog",
             "scalp_sim_scale_in_window_expansion",
             "scalp_sim_scale_in_window_approval",
+            "scalp_sim_auto_approval",
+            "scalp_sim_auto_approval_control_tower",
         }
     )
     | SCALP_OVERNIGHT_RETIRED_FAMILIES
@@ -91,6 +93,8 @@ RETIRED_ENV_PREFIXES = (
     "KORSTOCKSCAN_LDM_SCALE_IN_",
     "KORSTOCKSCAN_GREENFIELD_REAL_ENV_AUTHORITY_",
     "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_",
+    "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_",
+    "KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_",
     "KORSTOCKSCAN_SCALPING_OVERNIGHT_GATEKEEPER_",
     "KORSTOCKSCAN_OVERNIGHT_CONTEXT_",
 )
@@ -169,7 +173,6 @@ def retirement_env() -> dict[str, str]:
                 "false",
             ),
             ("KORSTOCKSCAN_GREENFIELD_REAL_ENV_AUTHORITY_", "ENABLED", "false"),
-            ("KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_", "ENABLED", "false"),
             ("KORSTOCKSCAN_SCALPING_OVERNIGHT_GATEKEEPER_", "ENABLED", "false"),
             ("KORSTOCKSCAN_OVERNIGHT_CONTEXT_", "ENABLED", "false"),
         )

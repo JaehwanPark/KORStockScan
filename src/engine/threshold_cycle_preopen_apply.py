@@ -44,10 +44,6 @@ from src.engine.runtime_apply_bridge import (
     runtime_apply_bridge_report_path,
     validate_greenfield_policy_file,
 )
-from src.engine.scalping.scalp_sim_auto_approval_control_tower import (
-    scalp_sim_auto_approval_path,
-    scalp_sim_policy_catalog_path,
-)
 from src.engine.scalping.entry_split_order_plan import (
     policy_report_generation_contract_status,
     runtime_apply_authority_contract_status,
@@ -85,17 +81,11 @@ from src.engine.scalping.limit_down_watch import (
     validate_limit_down_live_policy_payload,
     validate_limit_down_sim_policy_payload,
 )
-from src.engine.monitoring import rising_missed_classifier_prior
-from src.engine.scalping import scalp_sim_auto_approval_control_tower
-from src.engine import lifecycle_bucket_discovery
 from src.engine.automation.source_quality_hard_gate import (
     load_source_quality_preflight,
     source_quality_preflight_blocked,
 )
 
-from src.engine.automation.source_quality_clean_baseline import (
-    embedded_source_date_gate,
-)
 from src.engine.automation import operator_policy_succession as policy_succession
 from src.engine.automation.ai_multi_timeframe_context_promotion import (
     authoritative_runtime_env as authoritative_ai_context_runtime_env,
@@ -250,16 +240,6 @@ REMOVED_CALIBRATION_FAMILIES = {
     "position_sizing_cap_release",
     "preset_tp_soft_stop_runtime",
 } | RETIRED_CALIBRATION_FAMILIES
-ACTIVE_SIM_PRIORITY_OBSERVABLE_PREFIX_KEYS = {
-    "entry_score_parent",
-    "entry_source_parent",
-    "submit_quality_parent",
-}
-SCALP_SIM_POLICY_STALENESS_CHECK_FILES = (
-    Path(lifecycle_bucket_discovery.__file__),
-    Path(rising_missed_classifier_prior.__file__),
-    Path(scalp_sim_auto_approval_control_tower.__file__),
-)
 LOCK_ALLOWED_CLOSE_KEYWORDS = {
     "safety_revert",
     "severe_loss",
@@ -513,18 +493,6 @@ TARGET_ENV_VALUE_KEYS = {
     "HOLDING_EXIT_MATRIX_ADVISORY_ENABLED": "holding_exit_matrix_advisory_enabled",
     "HOLDING_EXIT_MATRIX_RUNTIME_BIAS_ENABLED": "holding_exit_matrix_runtime_bias_enabled",
     "HOLDING_EXIT_MATRIX_SCALE_IN_BIAS_ENABLED": "holding_exit_matrix_scale_in_bias_enabled",
-    "SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED": "enabled",
-    "SCALP_SIM_SCALE_IN_WINDOW_ALLOWED_ARMS": "allowed_arms",
-    "SCALP_SIM_SCALE_IN_WINDOW_MIN_PROFIT_PCT": "min_profit_pct",
-    "SCALP_SIM_SCALE_IN_WINDOW_MAX_PROFIT_PCT": "max_profit_pct",
-    "SCALP_SIM_SCALE_IN_WINDOW_MAX_ORDERS_PER_POSITION": "max_orders_per_position",
-    "SCALP_SIM_SCALE_IN_WINDOW_MAX_ORDERS_PER_DAY": "max_orders_per_day",
-    "SCALP_SIM_SCALE_IN_EXECUTION_OBSERVATION_ENABLED": "execution_observation_enabled",
-    "SCALP_SIM_SCALE_IN_EXECUTION_ARMS": "execution_arms",
-    "SCALP_SIM_SCALE_IN_PYRAMID_MAX_ORDERS_PER_POSITION": "pyramid_max_orders_per_position",
-    "SCALP_SIM_SCALE_IN_PYRAMID_MAX_ORDERS_PER_DAY": "pyramid_max_orders_per_day",
-    "SCALP_SIM_SCALE_IN_AVG_DOWN_MAX_ORDERS_PER_POSITION": "avg_down_max_orders_per_position",
-    "SCALP_SIM_SCALE_IN_AVG_DOWN_MAX_ORDERS_PER_DAY": "avg_down_max_orders_per_day",
     "SCALP_SIM_CANDIDATE_WINDOW_MAX_DAILY": "max_daily",
     "SCALP_SIM_CANDIDATE_WINDOW_BLOCKED_AI_SCORE_MAX_SHARE_PCT": "blocked_ai_score_max_share_pct",
     "SCALP_SIM_CANDIDATE_WINDOW_FIRST_AI_WAIT_MIN_SHARE_PCT": "first_ai_wait_min_share_pct",
@@ -539,10 +507,6 @@ TARGET_ENV_VALUE_KEYS = {
     "SCALE_IN_SPLIT_ORDER_POLICY_ENABLED": "enabled",
     "SCALE_IN_SPLIT_ORDER_POLICY_FILE": "policy_file",
     "SCALE_IN_SPLIT_ORDER_POLICY_VERSION": "policy_version",
-    "SCALP_SIM_AUTO_POLICY_ENABLED": "enabled",
-    "SCALP_SIM_AUTO_POLICY_FILE": "policy_file",
-    "SCALP_SIM_AUTO_POLICY_VERSION": "policy_version",
-    "SCALP_SIM_AUTO_POLICY_SOURCE_DATE": "policy_source_date",
     "SWING_SIM_AUTO_POLICY_ENABLED": "enabled",
     "SWING_SIM_AUTO_POLICY_FILE": "policy_file",
     "SWING_SIM_AUTO_POLICY_VERSION": "policy_version",
@@ -811,13 +775,6 @@ def swing_runtime_approval_artifact_path(source_date: str) -> Path:
     return (
         SWING_RUNTIME_APPROVAL_ARTIFACT_DIR
         / f"swing_runtime_approvals_{source_date}.json"
-    )
-
-
-def scalp_sim_scale_in_window_artifact_path(source_date: str) -> Path:
-    return (
-        SWING_RUNTIME_APPROVAL_ARTIFACT_DIR
-        / f"scalp_sim_scale_in_window_expansion_{source_date}.json"
     )
 
 
@@ -2543,9 +2500,7 @@ _FAMILY_ENV_KEY_PREFIXES: dict[str, str] = {
     "scalp_sim_candidate_window_expansion": "KORSTOCKSCAN_SCALP_SIM_CANDIDATE_WINDOW_",
     "scalp_sim_ai_budget_manager": "KORSTOCKSCAN_SCALP_SIM_AI_",
     "lifecycle_decision_matrix_runtime": "KORSTOCKSCAN_LIFECYCLE_DECISION_MATRIX_",
-    "scalp_sim_auto_approval": "KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_",
     "swing_sim_auto_approval": "KORSTOCKSCAN_SWING_SIM_AUTO_POLICY_",
-    "scalp_sim_scale_in_window_expansion": "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_",
     "lifecycle_bucket_discovery_sim_auto_approval": "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_",
     "entry_split_order_plan": "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_",
     "dynamic_entry_price_resolver": "KORSTOCKSCAN_MECHANISTIC_ENTRY_PRICE_POLICY_",
@@ -2776,7 +2731,6 @@ def _env_overrides_for_candidate(candidate: dict[str, Any]) -> dict[str, str]:
         SCALE_IN_BRIDGE_FAMILY,
         *DETERMINISTIC_POLICY_HANDOFF_FAMILIES,
         "lifecycle_bucket_discovery_sim_auto_approval",
-        "scalp_sim_auto_approval",
         "swing_sim_auto_approval",
     }
     overrides: dict[str, str] = {}
@@ -3062,21 +3016,6 @@ def _select_swing_approved_candidates(
     return selected, decisions, env_overrides
 
 
-def _load_scalp_sim_scale_in_window_approval(source_date: str | None) -> dict[str, Any]:
-    return {
-        **retired_status("scalp_sim_scale_in_window_approval"),
-        "artifact": None,
-        "approved_request": None,
-        "blocked": [],
-    }
-
-
-def _select_scalp_sim_scale_in_window_approval(
-    bundle: dict[str, Any],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str]]:
-    return [], [], {}
-
-
 def _artifact_matches_bridge_candidate(
     artifact: dict[str, Any], candidate: dict[str, Any]
 ) -> bool:
@@ -3254,267 +3193,6 @@ def _select_lifecycle_bucket_sim_auto_approval(
     bundle: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str]]:
     return [], [], {}
-
-
-def _load_scalp_sim_auto_approval(source_date: str | None) -> dict[str, Any]:
-    if not source_date:
-        return {
-            "artifact": None,
-            "catalog": None,
-            "approved_request": None,
-            "blocked": ["missing_source_date"],
-        }
-    artifact_path = scalp_sim_auto_approval_path(source_date)
-    catalog_path = scalp_sim_policy_catalog_path(source_date)
-    payload = _load_json(artifact_path)
-    raw_catalog_payload = _load_json(catalog_path, sanitize=False)
-    catalog_payload = current_report_view(raw_catalog_payload)
-    policies = (
-        payload.get("approved_policies")
-        if isinstance(payload.get("approved_policies"), list)
-        else []
-    )
-    approved_source_ids = [
-        str(item)
-        for item in (payload.get("approved_source_ids") or [])
-        if str(item or "").strip()
-    ]
-    approved_policy_count = (
-        _int_or_default(payload.get("approved_policy_count"), 0) or 0
-    )
-    blocked: list[str] = []
-    if not payload:
-        blocked.append("scalp_sim_auto_approval_missing")
-    elif payload.get("report_type") != "scalp_sim_auto_approval":
-        blocked.append("scalp_sim_auto_approval_report_type_invalid")
-    elif not bool(payload.get("approved")):
-        blocked.append("scalp_sim_auto_approval_not_approved")
-    elif bool(payload.get("actual_order_submitted")):
-        blocked.append("actual_order_submitted_not_allowed")
-    elif payload.get("runtime_effect") is not False:
-        blocked.append("runtime_effect_not_allowed")
-    elif payload.get("allowed_runtime_apply") is not False:
-        blocked.append("artifact_allowed_runtime_apply_must_be_false")
-    elif payload.get("broker_order_forbidden") is not True:
-        blocked.append("broker_order_forbidden_contract_missing")
-    elif bool(payload.get("human_approval_required")):
-        blocked.append("human_approval_required_not_allowed_for_sim_auto")
-    elif payload.get("decision_authority") not in {
-        None,
-        "scalp_sim_auto_approval_control_tower",
-    }:
-        blocked.append("decision_authority_invalid")
-    elif not policies or approved_policy_count <= 0 or not approved_source_ids:
-        blocked.append("scalp_sim_auto_approval_empty")
-    if not catalog_path.exists():
-        blocked.append("scalp_sim_policy_catalog_missing")
-    elif not catalog_payload:
-        blocked.append("scalp_sim_policy_catalog_invalid")
-    elif catalog_payload.get("schema_version") != "scalp_sim_policy_catalog_v1":
-        blocked.append("scalp_sim_policy_catalog_schema_invalid")
-    else:
-        hypothesis_plan = (
-            catalog_payload.get("hypothesis_observation_plan")
-            if isinstance(catalog_payload.get("hypothesis_observation_plan"), dict)
-            else {}
-        )
-        hypothesis_plan_gate = embedded_source_date_gate(hypothesis_plan)
-        if hypothesis_plan and not hypothesis_plan_gate["allowed"]:
-            blocked.append(
-                "scalp_sim_policy_catalog_hypothesis_plan_clean_baseline_invalid"
-            )
-        generated_at = _parse_dt(catalog_payload.get("generated_at"))
-        generator_provenance = (
-            raw_catalog_payload.get("generator_provenance")
-            if isinstance(raw_catalog_payload.get("generator_provenance"), dict)
-            else {}
-        )
-        # File hashes are integrity metadata, not archived policy authority.
-        # Retirement filtering must still apply to policies and seeds above,
-        # but removing a retired module's hash would make fresh catalogs stale.
-        catalog_generator_hashes = (
-            generator_provenance.get("files")
-            if isinstance(generator_provenance.get("files"), dict)
-            else {}
-        )
-        current_generator_hashes = _generator_hashes(
-            SCALP_SIM_POLICY_STALENESS_CHECK_FILES
-        )
-        if generated_at is None:
-            blocked.append("scalp_sim_policy_catalog_generated_at_missing")
-        if not catalog_generator_hashes:
-            blocked.append("scalp_sim_policy_catalog_generator_provenance_missing")
-        elif (
-            current_generator_hashes
-            and catalog_generator_hashes != current_generator_hashes
-        ):
-            blocked.append("scalp_sim_policy_catalog_stale_after_generator_change")
-        for seed in catalog_payload.get("active_sim_priority_seeds") or []:
-            if not isinstance(seed, dict):
-                blocked.append("active_sim_priority_seed_invalid")
-                break
-            prefix = (
-                seed.get("observable_prefix")
-                if isinstance(seed.get("observable_prefix"), dict)
-                else {}
-            )
-            if (
-                not str(seed.get("active_seed_id") or "").strip()
-                or not str(seed.get("source_parent_bucket_id") or "").strip()
-            ):
-                blocked.append("active_sim_priority_seed_key_missing")
-                break
-            if str(seed.get("status") or "").strip() not in {
-                "active",
-                "cooldown",
-                "retired",
-            }:
-                blocked.append("active_sim_priority_seed_status_invalid")
-                break
-            if str(seed.get("status") or "") == "active" and (
-                not str(prefix.get("entry_score_parent") or "").strip()
-                or not str(prefix.get("entry_source_parent") or "").strip()
-            ):
-                blocked.append("active_sim_priority_seed_observable_prefix_missing")
-                break
-            if any(
-                str(key) not in ACTIVE_SIM_PRIORITY_OBSERVABLE_PREFIX_KEYS
-                for key in prefix
-            ):
-                blocked.append(
-                    "active_sim_priority_seed_observable_prefix_forbidden_dimension"
-                )
-                break
-    approved_request = None
-    if not blocked:
-        active_seed_ids = [
-            str(seed.get("active_seed_id") or "").strip()
-            for seed in (catalog_payload.get("active_sim_priority_seeds") or [])
-            if isinstance(seed, dict)
-            and str(seed.get("status") or "") == "active"
-            and str(seed.get("active_seed_id") or "").strip()
-        ]
-        recommended_values = {
-            "enabled": True,
-            "policy_file": str(catalog_path),
-            "policy_version": f"scalp_sim_auto_approval:{source_date}",
-            "policy_source_date": str(source_date),
-        }
-        target_env_keys = [
-            "SCALP_SIM_AUTO_POLICY_ENABLED",
-            "SCALP_SIM_AUTO_POLICY_FILE",
-            "SCALP_SIM_AUTO_POLICY_VERSION",
-            "SCALP_SIM_AUTO_POLICY_SOURCE_DATE",
-            "LIFECYCLE_BUCKET_DISCOVERY_ENABLED",
-        ]
-        current_values = {
-            "enabled": False,
-            "policy_file": "",
-            "policy_version": "",
-            "policy_source_date": "",
-        }
-        for policy in policies:
-            if (
-                not isinstance(policy, dict)
-                or policy.get("policy_id") != "scalp_sim_scale_in_window_expansion"
-            ):
-                continue
-            scale_values = (
-                policy.get("recommended_values")
-                if isinstance(policy.get("recommended_values"), dict)
-                else {}
-            )
-            recommended_values.update(scale_values)
-            target_env_keys.extend(
-                str(item)
-                for item in (policy.get("target_env_keys") or [])
-                if str(item or "").startswith("SCALP_SIM_SCALE_IN_")
-            )
-            current_values.update(
-                {
-                    "allowed_arms": "",
-                    "min_profit_pct": None,
-                    "max_profit_pct": None,
-                    "max_orders_per_position": None,
-                    "max_orders_per_day": None,
-                }
-            )
-        approved_request = {
-            "family": "scalp_sim_auto_approval",
-            "policy_id": "scalp_sim_auto_approval",
-            "stage": "scalp_sim_lifecycle",
-            "priority": 87,
-            "approval_id": f"scalp_sim_auto_approval:{source_date}",
-            "approval_state": "auto_sim",
-            "allowed_runtime_apply": True,
-            "safety_revert_required": False,
-            "calibration_state": "sim_auto_approved",
-            "target_env_keys": list(dict.fromkeys(target_env_keys)),
-            "recommended_values": recommended_values,
-            "current_values": current_values,
-            "approved_source_ids": approved_source_ids,
-            "approved_policy_count": approved_policy_count,
-            "active_sim_priority_seed_ids": active_seed_ids,
-            "actual_order_submitted": False,
-            "broker_order_forbidden": True,
-            "decision_authority": "scalp_sim_auto_approval_control_tower",
-        }
-    return {
-        "artifact": str(artifact_path) if artifact_path.exists() else None,
-        "catalog": str(catalog_path) if catalog_path.exists() else None,
-        "approved_request": approved_request,
-        "blocked": blocked,
-        "approved_source_ids": payload.get("approved_source_ids") or [],
-        "approved_policy_count": payload.get("approved_policy_count"),
-    }
-
-
-def _select_scalp_sim_auto_approval(
-    bundle: dict[str, Any],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str]]:
-    item = bundle.get("approved_request")
-    decisions: list[dict[str, Any]] = []
-    selected: list[dict[str, Any]] = []
-    env_overrides: dict[str, str] = {}
-    if not isinstance(item, dict):
-        decisions.append(
-            {
-                "family": "scalp_sim_auto_approval",
-                "selected": False,
-                "decision_reason": ",".join(
-                    str(reason) for reason in bundle.get("blocked") or []
-                )
-                or "scalp_sim_auto_approval_missing",
-                "env_overrides": {},
-                "actual_order_submitted": False,
-            }
-        )
-        return selected, decisions, env_overrides
-    overrides = _env_overrides_for_candidate(item)
-    reject_reason = ""
-    if not bool(item.get("allowed_runtime_apply")):
-        reject_reason = "runtime_apply_not_allowed"
-    elif bool(item.get("actual_order_submitted")):
-        reject_reason = "actual_order_submitted_not_allowed"
-    elif not overrides:
-        reject_reason = "no_runtime_env_override"
-    decision = {
-        "approval_id": item.get("approval_id"),
-        "family": item.get("family"),
-        "stage": item.get("stage"),
-        "approved_source_ids": item.get("approved_source_ids") or [],
-        "selected": not bool(reject_reason),
-        "decision_reason": reject_reason or "scalp_sim_auto_approval_apply",
-        "env_overrides": overrides if not reject_reason else {},
-        "actual_order_submitted": False,
-        "broker_order_forbidden": True,
-    }
-    decisions.append(decision)
-    if reject_reason:
-        return selected, decisions, env_overrides
-    selected.append(item)
-    env_overrides.update(overrides)
-    return selected, decisions, env_overrides
 
 
 def _load_swing_sim_auto_approval(source_date: str | None) -> dict[str, Any]:
@@ -5332,21 +5010,10 @@ SELECTED_FAMILY_REQUIRED_ENV_KEYS: dict[str, list[str]] = {
         "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_POLICY_VERSION",
         "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_LIVE_AUTO_APPLY_ENABLED",
     ],
-    "scalp_sim_auto_approval": [
-        "KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_ENABLED",
-        "KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_FILE",
-        "KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_VERSION",
-        "KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_SOURCE_DATE",
-    ],
     "swing_sim_auto_approval": [
         "KORSTOCKSCAN_SWING_SIM_AUTO_POLICY_ENABLED",
         "KORSTOCKSCAN_SWING_SIM_AUTO_POLICY_FILE",
         "KORSTOCKSCAN_SWING_SIM_AUTO_POLICY_VERSION",
-    ],
-    "scalp_sim_scale_in_window_expansion": [
-        "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED",
-        "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_EXECUTION_OBSERVATION_ENABLED",
-        "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_EXECUTION_ARMS",
     ],
 }
 
@@ -5880,118 +5547,6 @@ def _limit_down_watch_runtime_policy_audit(
         "required_env_keys": sorted(set(required_env_keys)),
         "mode_audits": mode_audits,
     }
-
-
-def _scalp_sim_auto_runtime_policy_audit(
-    effective_env: dict[str, str],
-    *,
-    operator_overrides: dict[str, str] | None = None,
-) -> dict[str, Any]:
-    operator_overrides = operator_overrides or {}
-    direct_enabled_key = "KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_ENABLED"
-    direct_enabled = _runtime_env_enabled(effective_env.get(direct_enabled_key))
-    direct_policy_file = str(
-        effective_env.get("KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_FILE") or ""
-    ).strip()
-    lifecycle_enabled = _runtime_env_enabled(
-        effective_env.get("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_ENABLED")
-    )
-    lifecycle_policy_file = str(
-        effective_env.get("KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_POLICY_FILE") or ""
-    ).strip()
-    direct_contract_complete = direct_enabled and bool(direct_policy_file)
-    lifecycle_contract_complete = lifecycle_enabled and bool(lifecycle_policy_file)
-    use_lifecycle_handoff = not direct_contract_complete and lifecycle_contract_complete
-    direct_operator_lock_disabled = bool(
-        direct_enabled_key in operator_overrides
-        and not _runtime_env_enabled(operator_overrides.get(direct_enabled_key))
-    )
-    # Match the runtime loader's effective-owner contract.  The lifecycle
-    # discovery flag alone is not a request to load its catalog: the handoff
-    # becomes effective only when the lifecycle policy file is present.  This
-    # matters when a persistent operator override explicitly disables the
-    # direct scalp-sim policy while the shared discovery instrumentation flag
-    # remains enabled.
-    enabled = direct_enabled or use_lifecycle_handoff
-    policy_file = (
-        direct_policy_file if direct_contract_complete else lifecycle_policy_file
-    )
-    policy_source = (
-        "scalp_sim_auto_policy"
-        if direct_contract_complete
-        else "lifecycle_bucket_discovery_catalog_handoff"
-    )
-    audit: dict[str, Any] = {
-        "family": "scalp_sim_auto_approval",
-        "enabled": enabled,
-        "direct_requested": direct_enabled,
-        "direct_contract_complete": direct_contract_complete,
-        "lifecycle_requested": lifecycle_enabled,
-        "lifecycle_contract_complete": lifecycle_contract_complete,
-        "lifecycle_handoff_enabled": use_lifecycle_handoff,
-        "direct_operator_lock_disabled": direct_operator_lock_disabled,
-        "policy_source": policy_source,
-        "policy_file": policy_file or None,
-        "status": "disabled",
-        "reason": "policy_disabled",
-        "required_env_keys": [],
-    }
-    if not enabled:
-        if direct_operator_lock_disabled:
-            audit["reason"] = "operator_lock_disabled"
-        return audit
-    if not direct_contract_complete and not lifecycle_contract_complete:
-        required_env_keys = []
-        if direct_enabled:
-            required_env_keys.append("KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_FILE")
-        if lifecycle_enabled:
-            required_env_keys.append(
-                "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_POLICY_FILE"
-            )
-        audit.update(
-            {
-                "status": "fail",
-                "reason": "enabled_policy_file_missing",
-                "required_env_keys": required_env_keys,
-            }
-        )
-        return audit
-    path = Path(policy_file)
-    if not path.is_file():
-        audit.update({"status": "fail", "reason": "policy_file_missing"})
-        return audit
-    payload = _load_json(path)
-    expected_schema = (
-        "scalp_sim_policy_catalog_v1"
-        if direct_contract_complete
-        else "lifecycle_bucket_catalog_v1"
-    )
-    if payload.get("schema_version") != expected_schema:
-        audit.update(
-            {
-                "status": "fail",
-                "reason": "policy_schema_invalid",
-                "expected_schema_version": expected_schema,
-                "observed_schema_version": payload.get("schema_version"),
-            }
-        )
-        return audit
-    audit.update(
-        {
-            "status": "pass",
-            "reason": (
-                "direct_policy_complete"
-                if direct_contract_complete
-                else (
-                    "direct_policy_file_missing_lifecycle_handoff"
-                    if direct_enabled
-                    else "lifecycle_catalog_handoff"
-                )
-            ),
-            "policy_schema_version": expected_schema,
-        }
-    )
-    return audit
 
 
 def _position_sizing_policy_authority_valid(policy: Mapping[str, Any]) -> bool:
@@ -6713,42 +6268,6 @@ def verify_runtime_env_handoff(
                     "detail": error,
                 }
             )
-    scalp_sim_policy_file = str(
-        effective_env_overrides.get("KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_FILE") or ""
-    ).strip()
-    if (
-        _runtime_env_enabled(
-            effective_env_overrides.get("KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_ENABLED")
-        )
-        and scalp_sim_policy_file
-    ):
-        scalp_sim_policy_payload = _load_json(Path(scalp_sim_policy_file))
-        embedded_plan = (
-            scalp_sim_policy_payload.get("hypothesis_observation_plan")
-            if isinstance(
-                scalp_sim_policy_payload.get("hypothesis_observation_plan"), dict
-            )
-            else {}
-        )
-        embedded_plan_gate = embedded_source_date_gate(embedded_plan)
-        if embedded_plan and not embedded_plan_gate["allowed"]:
-            findings.append(
-                {
-                    "family": "scalp_sim_auto_approval",
-                    "missing_env_keys": [],
-                    "severity": "runtime_policy_unusable",
-                    "detail": (
-                        "scalp sim policy embeds hypothesis evidence before the "
-                        "clean tuning baseline"
-                    ),
-                    "policy_file": scalp_sim_policy_file,
-                    "policy_reason": f"hypothesis_plan_{embedded_plan_gate['status']}",
-                    "source_report_date": embedded_plan_gate.get("source_report_date"),
-                    "clean_tuning_baseline_date": embedded_plan_gate.get(
-                        "clean_tuning_baseline_date"
-                    ),
-                }
-            )
     for family in retired_selected_families:
         findings.append(
             {
@@ -6840,10 +6359,6 @@ def verify_runtime_env_handoff(
         _limit_down_watch_runtime_policy_audit(
             target_date,
             effective_env_overrides,
-        ),
-        _scalp_sim_auto_runtime_policy_audit(
-            effective_env_overrides,
-            operator_overrides={**operator_overrides, **dated_operator_overrides},
         ),
         _holding_decision_context_runtime_audit(
             target_date,
@@ -8002,11 +7517,6 @@ def _write_runtime_env(
     selected_items = [
         *(manifest.get("auto_apply_selected") or []),
         *((manifest.get("swing_runtime_approval") or {}).get("selected") or []),
-        *((manifest.get("scalp_sim_auto_approval") or {}).get("selected") or []),
-        *(
-            (manifest.get("scalp_sim_scale_in_window_approval") or {}).get("selected")
-            or []
-        ),
         *((manifest.get("runtime_apply_bridge") or {}).get("selected") or []),
         *((manifest.get("lifecycle_bucket_discovery") or {}).get("selected") or []),
         *((manifest.get("swing_sim_auto_approval") or {}).get("selected") or []),
@@ -8666,20 +8176,6 @@ def build_preopen_apply_manifest(
         lifecycle_context_overlay, lifecycle_context_env_overrides = ({}, {})
         swing_bundle = _load_swing_runtime_approval_bundle(report_source_date)
         swing_selected, swing_decisions, swing_env_overrides = ([], [], {})
-        scalp_sim_auto_bundle = _load_scalp_sim_auto_approval(report_source_date)
-        (
-            scalp_sim_auto_selected,
-            scalp_sim_auto_decisions,
-            scalp_sim_auto_env_overrides,
-        ) = ([], [], {})
-        scalp_scale_bundle = _load_scalp_sim_scale_in_window_approval(
-            report_source_date
-        )
-        scalp_scale_selected, scalp_scale_decisions, scalp_scale_env_overrides = (
-            [],
-            [],
-            {},
-        )
         runtime_bridge_bundle = _load_runtime_apply_bridge_approval(report_source_date)
         (
             runtime_bridge_selected,
@@ -8721,27 +8217,6 @@ def build_preopen_apply_manifest(
             swing_selected, swing_decisions, swing_env_overrides = (
                 _select_swing_approved_candidates(swing_bundle)
             )
-            (
-                scalp_sim_auto_selected,
-                scalp_sim_auto_decisions,
-                scalp_sim_auto_env_overrides,
-            ) = _select_scalp_sim_auto_approval(scalp_sim_auto_bundle)
-            if scalp_sim_auto_selected:
-                scalp_scale_decisions = [
-                    {
-                        "family": "scalp_sim_scale_in_window_expansion",
-                        "selected": False,
-                        "decision_reason": "covered_by_scalp_sim_auto_approval_control_tower",
-                        "env_overrides": {},
-                        "actual_order_submitted": False,
-                    }
-                ]
-            else:
-                (
-                    scalp_scale_selected,
-                    scalp_scale_decisions,
-                    scalp_scale_env_overrides,
-                ) = _select_scalp_sim_scale_in_window_approval(scalp_scale_bundle)
             (
                 runtime_bridge_selected,
                 runtime_bridge_decisions,
@@ -8889,8 +8364,6 @@ def build_preopen_apply_manifest(
                 **limit_down_watch_env_overrides,
                 **lifecycle_context_env_overrides,
                 **swing_env_overrides,
-                **scalp_sim_auto_env_overrides,
-                **scalp_scale_env_overrides,
                 **runtime_bridge_env_overrides,
                 **lifecycle_bucket_env_overrides,
                 **swing_sim_auto_env_overrides,
@@ -9042,28 +8515,6 @@ def build_preopen_apply_manifest(
                 "selected": swing_selected,
                 "decisions": swing_decisions,
                 "dry_run_forced": bool(swing_env_overrides),
-            },
-            "scalp_sim_auto_approval": {
-                "artifact": scalp_sim_auto_bundle.get("artifact"),
-                "catalog": scalp_sim_auto_bundle.get("catalog"),
-                "approved": 1 if scalp_sim_auto_bundle.get("approved_request") else 0,
-                "approved_policy_count": scalp_sim_auto_bundle.get(
-                    "approved_policy_count"
-                ),
-                "approved_source_ids": scalp_sim_auto_bundle.get("approved_source_ids")
-                or [],
-                "blocked": scalp_sim_auto_bundle.get("blocked") or [],
-                "approved_request": scalp_sim_auto_bundle.get("approved_request"),
-                "selected": scalp_sim_auto_selected,
-                "decisions": scalp_sim_auto_decisions,
-            },
-            "scalp_sim_scale_in_window_approval": {
-                "artifact": scalp_scale_bundle.get("artifact"),
-                "approved": 1 if scalp_scale_bundle.get("approved_request") else 0,
-                "blocked": scalp_scale_bundle.get("blocked") or [],
-                "approved_request": scalp_scale_bundle.get("approved_request"),
-                "selected": scalp_scale_selected,
-                "decisions": scalp_scale_decisions,
             },
             "runtime_apply_bridge": {
                 "request_report": runtime_bridge_bundle.get("request_report"),

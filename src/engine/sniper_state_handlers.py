@@ -204,9 +204,6 @@ from src.engine.scalping.position_sizing_allocator import (
     max_position_qty_cap_from_budget,
     resolve_scalping_allocation,
 )
-from src.engine.scalping.rising_missed_selection_prior import (
-    rising_missed_selection_prior_fields,
-)
 from src.engine.scalping.sim_source_quality import (
     is_synthetic_scalp_sim,
     synthetic_scalp_sim_reason,
@@ -13823,7 +13820,6 @@ def _scanner_rising_relief_observation_fields(
         or active_budget_source
         or "not_applicable_full_eval_budget_source",
     }
-    fields.update(rising_missed_selection_prior_fields(stock))
     return fields
 
 

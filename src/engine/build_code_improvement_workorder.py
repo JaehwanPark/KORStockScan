@@ -5094,7 +5094,6 @@ def _observation_source_quality_followup_orders(
                     "src/engine/build_code_improvement_workorder.py",
                     "src/engine/sniper_state_handlers.py",
                     "src/engine/lifecycle_decision_matrix.py",
-                    "src/engine/scalp_sim_overnight.py",
                     "docs/report-based-automation-traceability.md",
                 ],
                 "acceptance_tests": [

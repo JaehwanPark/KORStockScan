@@ -1250,15 +1250,8 @@ def test_machine_microstructure_final_refresh_surfaces_weakness_hysteresis_failu
     assert "weakness_hysteresis_rc=9" in result.stderr
 
 
-def test_scalp_sim_overnight_preclose_wrapper_is_retired_noop():
-    script = Path("deploy/run_scalp_sim_overnight_preclose.sh").read_text(
-        encoding="utf-8"
-    )
-
-    assert "RETIRED" in script
-    assert "scalping_overnight_retirement_20260906" in script
-    assert "src.engine.scalp_sim_overnight" not in script
-    assert "OPENAI" not in script
+def test_scalp_sim_overnight_preclose_wrapper_is_removed():
+    assert not Path("deploy/run_scalp_sim_overnight_preclose.sh").exists()
 
 
 def test_threshold_cycle_postclose_has_no_overnight_report_or_openai_recovery():
@@ -1994,9 +1987,6 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     rising_missed_prior_idx = script.index(
         "src.engine.monitoring.rising_missed_classifier_prior"
     )
-    scalp_sim_prior_refresh_idx = script.index(
-        '"scalp_sim_auto_approval_control_tower_prior_refresh"'
-    )
     checklist_command = (
         'src.engine.build_next_stage2_checklist --source-date "$TARGET_DATE"'
     )
@@ -2041,13 +2031,13 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         < runtime_gap_idx
         < conversion_lane_idx
         < rising_missed_prior_idx
-        < scalp_sim_prior_refresh_idx
         < final_trigger_snapshot_idx
         < next_checklist_idx
         < pending_verify_idx
         < final_verify_idx
     )
     assert "src.engine.automation.tuning_performance_control_tower" not in script
+    assert "scalp_sim_auto_approval_control_tower" not in script
     assert post_done_checklist_idx == next_checklist_idx
     assert "--require-summary-handoff" not in script
     assert script.count("src.engine.pattern_lab_propagation_audit") == 1

@@ -217,24 +217,9 @@ def test_missing_rate_cap_excludes_sparse_feature():
 
 
 def test_catalog_merge_preserves_existing_policy_sections(tmp_path, monkeypatch):
-    catalog_dir = tmp_path / "scalp"
     swing_dir = tmp_path / "swing"
-    catalog_dir.mkdir()
     swing_dir.mkdir()
-    monkeypatch.setattr(mod, "SCALP_POLICY_DIR", catalog_dir)
     monkeypatch.setattr(mod, "SWING_POLICY_DIR", swing_dir)
-    (catalog_dir / "scalp_sim_policy_catalog_2026-06-01.json").write_text(
-        json.dumps(
-            {
-                "schema_version": "scalp_sim_policy_catalog_v1",
-                "policies": [{"policy_id": "keep"}],
-                "active_sim_priority_seeds": [{"active_seed_id": "seed"}],
-                "runtime_effect": False,
-                "allowed_runtime_apply": False,
-            }
-        ),
-        encoding="utf-8",
-    )
     (swing_dir / "swing_sim_policy_catalog_2026-06-01.json").write_text(
         json.dumps(
             {
@@ -267,40 +252,21 @@ def test_catalog_merge_preserves_existing_policy_sections(tmp_path, monkeypatch)
 
     result = mod.merge_sim_policy_catalogs("2026-06-01", plan)
 
-    assert result["scalp"]["merged"] is True
     assert result["swing"]["merged"] is True
-    scalp = json.loads(
-        (catalog_dir / "scalp_sim_policy_catalog_2026-06-01.json").read_text()
-    )
     swing = json.loads(
         (swing_dir / "swing_sim_policy_catalog_2026-06-01.json").read_text()
     )
-    assert scalp["policies"] == [{"policy_id": "keep"}]
-    assert scalp["active_sim_priority_seeds"] == [{"active_seed_id": "seed"}]
     assert (
-        scalp["hypothesis_observation_plan"]["schema_version"]
+        swing["hypothesis_observation_plan"]["schema_version"]
         == mod.OBSERVATION_PLAN_SCHEMA_VERSION
     )
     assert swing["active_arm_priority_policies"] == [{"priority_policy_id": "arm"}]
 
 
 def test_catalog_merge_rejects_invalid_plan_without_writing(tmp_path, monkeypatch):
-    catalog_dir = tmp_path / "scalp"
     swing_dir = tmp_path / "swing"
-    catalog_dir.mkdir()
     swing_dir.mkdir()
-    monkeypatch.setattr(mod, "SCALP_POLICY_DIR", catalog_dir)
     monkeypatch.setattr(mod, "SWING_POLICY_DIR", swing_dir)
-    original = {
-        "schema_version": "scalp_sim_policy_catalog_v1",
-        "policies": [{"policy_id": "keep"}],
-        "runtime_effect": False,
-        "allowed_runtime_apply": False,
-    }
-    (catalog_dir / "scalp_sim_policy_catalog_2026-06-01.json").write_text(
-        json.dumps(original),
-        encoding="utf-8",
-    )
     (swing_dir / "swing_sim_policy_catalog_2026-06-01.json").write_text(
         json.dumps({"schema_version": "swing_sim_policy_catalog_v1", "policies": []}),
         encoding="utf-8",
@@ -332,9 +298,4 @@ def test_catalog_merge_rejects_invalid_plan_without_writing(tmp_path, monkeypatc
 
     result = mod.merge_sim_policy_catalogs("2026-06-01", invalid_plan)
 
-    assert result["scalp"]["merged"] is False
     assert result["swing"]["merged"] is False
-    scalp = json.loads(
-        (catalog_dir / "scalp_sim_policy_catalog_2026-06-01.json").read_text()
-    )
-    assert scalp == original

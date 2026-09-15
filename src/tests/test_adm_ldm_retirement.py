@@ -79,10 +79,6 @@ def test_calibration_only_retirement_filters_mixed_collections_not_raw_telemetry
         ("lifecycle_ai_context", "build_lifecycle_ai_context_report"),
         ("lifecycle_ai_context", "build_lifecycle_ai_context_attribution_report"),
         ("runtime_apply_bridge", "build_runtime_apply_bridge_report"),
-        (
-            "scalp_sim_scale_in_window_approval",
-            "build_scalp_sim_scale_in_window_approval",
-        ),
     ],
 )
 def test_retired_builders_do_not_read_or_write_files(module, function, monkeypatch):
@@ -127,9 +123,10 @@ def test_retirement_shell_commands_clear_namespace_and_assert_explicit_off():
         "unset -- KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_POLICY_FILE"
         in commands
     )
-    assert (
-        "export KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED=false"
-        in commands
+    assert not any(
+        item.startswith("export KORSTOCKSCAN_SCALP_SIM_SCALE_IN_")
+        or item.startswith("export KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_")
+        for item in commands
     )
     assert not any("KORSTOCKSCAN_UNRELATED_ENABLED" in item for item in commands)
 
@@ -169,6 +166,11 @@ def test_startup_runtime_normalization_matches_retirement_contract():
     for key, value in policy.retirement_env().items():
         assert inherited[key] == value
     assert "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED" in changed
+    assert not any(
+        key.startswith("KORSTOCKSCAN_SCALP_SIM_SCALE_IN_")
+        or key.startswith("KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_")
+        for key in inherited
+    )
 
 
 def test_live_adapters_are_noops_even_with_advisory_true(monkeypatch):
@@ -217,7 +219,6 @@ def test_live_adapters_are_noops_even_with_advisory_true(monkeypatch):
     [
         "_select_runtime_apply_bridge_approval",
         "_select_lifecycle_bucket_sim_auto_approval",
-        "_select_scalp_sim_scale_in_window_approval",
     ],
 )
 def test_preopen_retired_selectors_ignore_approved_archive(selector):
@@ -263,27 +264,6 @@ def test_source_adapter_uses_raw_normalization_without_matrix_or_sim_outcomes(
     assert result["rows"][0]["ai_score"] == 67
     assert not result["rows"][0].get("profit_rate")
     assert result["decision_authority"] == "source_only"
-
-
-def test_mixed_catalog_cannot_reintroduce_ldm_seed():
-    from src.engine.scalping import scalp_sim_auto_approval_control_tower as tower
-
-    report = tower.build_policy_catalog(
-        {
-            "date": "2026-09-04",
-            "approved_policies": [
-                {
-                    "source_id": "lifecycle_bucket_discovery",
-                    "active_sim_priority_seeds": [
-                        {"active_seed_id": "old", "status": "active"}
-                    ],
-                }
-            ],
-        }
-    )
-    assert report["policies"] == []
-    assert report["active_sim_priority_seeds"] == []
-    assert report["hypothesis_observation_plan"] == {}
 
 
 def test_wrapper_has_no_retired_producer_commands():
