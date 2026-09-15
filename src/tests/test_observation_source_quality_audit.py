@@ -2044,6 +2044,7 @@ def test_explicit_fail_closed_rows_keep_provenance_but_allow_unevaluated_values(
             "minute_candle_window_fresh": False,
             "minute_candle_latest_age_ms": -1.0,
             "minute_candle_evaluation_state": "unavailable_fail_closed",
+            "runtime_effect": False,
             "actual_order_submitted": False,
             "broker_order_forbidden": True,
             "allowed_runtime_apply": False,
@@ -2072,6 +2073,65 @@ def test_explicit_fail_closed_rows_keep_provenance_but_allow_unevaluated_values(
         pyramid_contract,
     )
     assert "curr_vs_micro_vwap_bp" in submitted_pyramid_violations["missing_fields"]
+
+    entry_contract = audit.STAGE_CONTRACTS["scalp_entry_action_decision_snapshot"]
+    entry_fields = {field: "observed" for field in entry_contract.required_fields}
+    entry_fields.update(
+        {
+            "source_stage": "ai_confirmed",
+            "ai_result_source": "mechanistic_pre_adjudication",
+            "ai_decision_evaluation_status": "not_evaluated_provider_or_preflight",
+            "provider_called": False,
+            "curr_vs_micro_vwap_bp": "not_evaluated",
+            "micro_vwap_available": False,
+            "minute_candle_context_quality": "unavailable_fail_closed",
+            "minute_candle_window_fresh": False,
+            "minute_candle_latest_age_ms": -1.0,
+            "minute_candle_evaluation_state": "unavailable_fail_closed",
+            "runtime_effect": False,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "allowed_runtime_apply": False,
+        }
+    )
+    entry_violations = audit._row_contract_violations(
+        "scalp_entry_action_decision_snapshot",
+        {"fields": entry_fields},
+        entry_contract,
+    )
+    assert "curr_vs_micro_vwap_bp" not in entry_violations["missing_fields"]
+    assert (
+        "minute_candle_window_fresh_contract"
+        not in entry_violations["invalid_fields"]
+    )
+    submitted_entry_fields = {
+        **entry_fields,
+        "actual_order_submitted": True,
+        "broker_order_forbidden": False,
+    }
+    submitted_entry_violations = audit._row_contract_violations(
+        "scalp_entry_action_decision_snapshot",
+        {"fields": submitted_entry_fields},
+        entry_contract,
+    )
+    assert (
+        "minute_candle_window_fresh_contract"
+        in submitted_entry_violations["invalid_fields"]
+    )
+    authoritative_entry_fields = {
+        **entry_fields,
+        "runtime_effect": True,
+        "allowed_runtime_apply": True,
+    }
+    authoritative_entry_violations = audit._row_contract_violations(
+        "scalp_entry_action_decision_snapshot",
+        {"fields": authoritative_entry_fields},
+        entry_contract,
+    )
+    assert (
+        "minute_candle_window_fresh_contract"
+        in authoritative_entry_violations["invalid_fields"]
+    )
 
     adverse_contract = audit.STAGE_CONTRACTS["adverse_fill_observed"]
     adverse_fields = {field: "observed" for field in adverse_contract.required_fields}

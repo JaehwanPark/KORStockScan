@@ -2421,6 +2421,61 @@ def test_entry_adm_snapshot_preserves_minute_candle_provenance(monkeypatch):
     assert fields["minute_candle_latest_age_ms"] == 12000
 
 
+def test_entry_adm_snapshot_does_not_impute_unobserved_micro_metrics(monkeypatch):
+    logs = []
+
+    monkeypatch.setattr(
+        handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    stock = {
+        "id": 9,
+        "name": "TEST",
+        "strategy": "SCALPING",
+        "scalp_pre_ai_gate_context": {},
+        "last_watching_ai_source_quality_fields": {
+            "buy_pressure_10t": "73.000",
+            "curr_vs_micro_vwap_bp": "12.500",
+            "curr_vs_ma5_bp": "9.500",
+            "micro_vwap_available": True,
+            "minute_candle_context_quality": "fresh_bar_window",
+            "minute_candle_window_fresh": True,
+            "minute_candle_latest_age_ms": 8000,
+        },
+    }
+
+    handlers._emit_scalp_entry_adm_snapshot(
+        stock,
+        "123456",
+        "ai_confirmed",
+        ai_decision={
+            "action": "WAIT",
+            "score": 50,
+            "ai_result_source": "mechanistic_pre_adjudication",
+            "ai_decision_evaluation_status": "not_evaluated_provider_or_preflight",
+            "provider_called": False,
+            "ai_market_snapshot_id": "aims-current",
+            "ai_input_preflight_status": "partial",
+            "ai_input_preflight_allowed": True,
+        },
+        chosen_action="NO_BUY_AI",
+        actual_order_submitted=False,
+        broker_order_forbidden=True,
+    )
+
+    stage, fields = logs[0]
+    assert stage == "scalp_entry_action_decision_snapshot"
+    assert fields["buy_pressure_10t"] == "not_evaluated"
+    assert fields["curr_vs_micro_vwap_bp"] == "not_evaluated"
+    assert fields["curr_vs_ma5_bp"] == "not_evaluated"
+    assert fields["micro_vwap_available"] is False
+    assert fields["minute_candle_context_quality"] == "unavailable_fail_closed"
+    assert fields["minute_candle_window_fresh"] is False
+    assert fields["minute_candle_latest_age_ms"] == -1.0
+    assert fields["minute_candle_evaluation_state"] == "unavailable_fail_closed"
+
+
 def test_ai_ops_log_fields_preserve_tick_acceleration_ratio_raw_precision():
     fields = handlers._build_ai_ops_log_fields(
         {

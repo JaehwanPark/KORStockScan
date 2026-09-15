@@ -20236,12 +20236,26 @@ def _emit_scalp_entry_adm_snapshot(
     source_quality_fields = (
         source_quality_fields if isinstance(source_quality_fields, dict) else {}
     )
-    for key in parity_keys:
-        value = fields.get(key)
-        if value in (None, "", "-", "None", "none"):
-            fallback = source_quality_fields.get(key)
-            if fallback not in (None, "", "-", "None", "none"):
-                fields[key] = fallback
+    current_exact_input_provenance = any(
+        fields.get(key) not in (None, "", "-", "None", "none", "null")
+        for key in (
+            "ai_decision_trace_id",
+            "ai_market_snapshot_id",
+            "ai_input_snapshot_id",
+            "ai_input_preflight_status",
+        )
+    )
+    if not current_exact_input_provenance:
+        # Legacy callers may still need the last WATCHING feature projection.
+        # A current exact snapshot must never inherit numeric microstructure
+        # values from an older decision, because that changes an unavailable
+        # current observation into an apparently measured neutral value.
+        for key in parity_keys:
+            value = fields.get(key)
+            if value in (None, "", "-", "None", "none"):
+                fallback = source_quality_fields.get(key)
+                if fallback not in (None, "", "-", "None", "none"):
+                    fields[key] = fallback
     entry_snapshot_defaults = {
         "tick_acceleration_ratio": "not_evaluated",
         "tick_acceleration_ratio_raw": "not_evaluated",
@@ -20250,10 +20264,12 @@ def _emit_scalp_entry_adm_snapshot(
         "prev_5tick_seconds": "not_evaluated",
         "tick_accel_effective_recent_5tick_seconds": "not_evaluated",
         "buy_pressure_10t": (
-            "not_evaluated_runtime_block" if runtime_effective_block else 50.0
+            "not_evaluated_runtime_block"
+            if runtime_effective_block
+            else "not_evaluated"
         ),
-        "curr_vs_micro_vwap_bp": 0.0,
-        "curr_vs_ma5_bp": 0.0,
+        "curr_vs_micro_vwap_bp": "not_evaluated",
+        "curr_vs_ma5_bp": "not_evaluated",
         "micro_vwap_available": False,
         "minute_candle_context_quality": "unavailable_fail_closed",
         "minute_candle_window_fresh": False,

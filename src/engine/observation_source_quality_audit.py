@@ -5728,12 +5728,31 @@ def _blocked_observation_records_fail_closed_source_gap(
             .strip()
             .lower()
         )
+        explicit_provider_not_evaluated = bool(
+            str(fields.get("ai_decision_evaluation_status") or "")
+            .strip()
+            .lower()
+            in {
+                "not_evaluated_provider_or_preflight",
+                "not_evaluated_transport_timeout",
+            }
+            and not _contract_bool(fields.get("provider_called"), True)
+            and str(fields.get("ai_result_source") or "").strip().lower()
+            in {
+                "input_preflight_blocked",
+                "mechanistic_pre_adjudication",
+                "timeout",
+            }
+            and _contract_bool(fields.get("runtime_effect"), False)
+            and _contract_bool(fields.get("allowed_runtime_apply"), False)
+        )
         return (
             (
                 source_stage == "latency_block"
                 or preflight_blocked
                 or provider_transport_failed_closed
                 or final_source_quality_blocked
+                or explicit_provider_not_evaluated
             )
             and str(fields.get("minute_candle_evaluation_state") or "").strip().lower()
             == "unavailable_fail_closed"
