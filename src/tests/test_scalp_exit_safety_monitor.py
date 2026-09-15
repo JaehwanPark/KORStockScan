@@ -1340,6 +1340,27 @@ def test_post_effective_integrated_holding_exit_preserves_recorded_route(route):
     assert resolution["reason"] == "holding_sell_recorded_route_preserved"
 
 
+def test_post_effective_holding_exit_normalizes_internal_naive_kst_clock():
+    observed_at = datetime(2026, 9, 15, 19, 45)
+    resolution = handlers._resolve_holding_sell_dmst_stex_tp(
+        {
+            "status": "HOLDING",
+            "buy_qty": 7,
+            "entry_execution_broker_route": "SOR",
+        },
+        "417200",
+        now_t=observed_at.time(),
+        observed_at=observed_at,
+    )
+
+    assert resolution["blocked"] is False
+    assert resolution["dmst_stex_tp"] == "SOR"
+    assert resolution["market_session_regime"] == (
+        handlers.session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET_TERMINAL_EXIT
+    )
+    assert resolution["reason"] == "holding_sell_recorded_route_preserved"
+
+
 def test_post_effective_transition_blocks_holding_sell_submission():
     observed_at = datetime(2026, 9, 14, 15, 30, tzinfo=handlers._KST)
     resolution = handlers._resolve_holding_sell_dmst_stex_tp(

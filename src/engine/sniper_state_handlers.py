@@ -78946,6 +78946,12 @@ def _resolve_holding_sell_dmst_stex_tp(
         observed_at = datetime.combine(
             datetime.now(_KST).date(), current_t, tzinfo=_KST
         )
+    elif observed_at.tzinfo is None:
+        # Holding evaluation clocks are KST wall-clock values.  Some runtime
+        # callers provide both ``now_ts`` and a naive ``now_dt``; keep the
+        # market-session contract explicit instead of forwarding a timezone-
+        # missing datetime that fail-closes every aftermarket SELL.
+        observed_at = observed_at.replace(tzinfo=_KST)
     session = session_contract.resolve_market_session(observed_at)
     is_nxt_enabled, source = _holding_sell_nxt_enabled_status(stock, code)
     confirmed_nxt_position = bool(
