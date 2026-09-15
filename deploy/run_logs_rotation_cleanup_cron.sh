@@ -1669,8 +1669,50 @@ compress_file_verified() {
         compression_failure_reason="generation_identity_content_mismatch"
         return 1
       else
-        compression_failure_reason="existing_gzip_content_conflict_source_authoritative"
-        return 1
+        # A dated cache can be regenerated after an earlier cleanup attempt.
+        # Keep the existing gzip as immutable evidence and publish the current
+        # authoritative source under a content-addressed generation name.
+        compression_preserved_existing_gzip_path="$standard_gzip_path"
+        collision_generation_hash="${source_sha256:0:16}"
+        gzip_path="${source_path}.generation_${collision_generation_hash}.gz"
+        compression_output_path="$gzip_path"
+        if [[ -e "$gzip_path" || -L "$gzip_path" ]]; then
+          if [[ ! -f "$gzip_path" || -L "$gzip_path" ]]; then
+            compression_failure_reason="collision_generation_gzip_unsafe_type"
+            return 1
+          fi
+          if path_has_open_fd "$gzip_path"; then
+            compression_failure_reason="collision_generation_gzip_in_use"
+            return 1
+          fi
+          if ! target_metadata="$(stat -c '%d:%i:%s:%Y:%y' "$gzip_path")" || \
+             ! target_file_sha256="$(sha256sum -- "$gzip_path" | awk '{print $1}')" || \
+             ! gzip -t -- "$gzip_path" || \
+             ! target_sha256="$(gzip -cd -- "$gzip_path" | sha256sum | awk '{print $1}')"; then
+            compression_failure_reason="collision_generation_gzip_verify_failed"
+            return 1
+          fi
+          if [[ "$target_sha256" != "$source_sha256" ]]; then
+            compression_failure_reason="collision_generation_gzip_content_mismatch"
+            return 1
+          fi
+          if ! target_verified_metadata="$(stat -c '%d:%i:%s:%Y:%y' "$gzip_path")" || \
+             ! target_verified_sha256="$(sha256sum -- "$gzip_path" | awk '{print $1}')" || \
+             ! verified_metadata="$(stat -c '%d:%i:%s:%Y:%y' "$source_path")" || \
+             ! verified_sha256="$(sha256sum -- "$source_path" | awk '{print $1}')"; then
+            compression_failure_reason="collision_generation_gzip_recheck_failed"
+            return 1
+          fi
+          if [[ "$target_verified_metadata" != "$target_metadata" || "$target_verified_sha256" != "$target_file_sha256" ]] || \
+             [[ "$verified_metadata" != "$source_metadata" || "$verified_sha256" != "$source_sha256" ]] || \
+             path_has_open_fd "$gzip_path" || path_has_open_fd "$source_path"; then
+            compression_failure_reason="collision_generation_or_source_changed_during_verify"
+            return 1
+          fi
+          compression_failure_reason="none"
+          compression_action="verified_collision_generation_source_preserved"
+          return 0
+        fi
       fi
     else
       if ! verified_metadata="$(stat -c '%d:%i:%s:%Y:%y' "$source_path")" || \
@@ -2145,10 +2187,10 @@ run_data_maintenance() {
         continue
       fi
       case "$compression_action" in
-        compressed_copy_source_preserved)
+        compressed_copy_source_preserved|compressed_collision_generation_source_preserved)
           sentinel_compressed_count=$((sentinel_compressed_count + 1))
           ;;
-        verified_existing_gzip_source_preserved)
+        verified_existing_gzip_source_preserved|verified_collision_generation_source_preserved)
           sentinel_verified_existing_source_preserved_count=$((sentinel_verified_existing_source_preserved_count + 1))
           ;;
         *)
@@ -2181,10 +2223,10 @@ run_data_maintenance() {
         continue
       fi
       case "$compression_action" in
-        compressed_copy_source_preserved)
+        compressed_copy_source_preserved|compressed_collision_generation_source_preserved)
           snapshot_compressed_count=$((snapshot_compressed_count + 1))
           ;;
-        verified_existing_gzip_source_preserved)
+        verified_existing_gzip_source_preserved|verified_collision_generation_source_preserved)
           snapshot_verified_existing_source_preserved_count=$((snapshot_verified_existing_source_preserved_count + 1))
           ;;
         *)

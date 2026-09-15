@@ -841,6 +841,60 @@ def test_log_rotation_cleanup_verifies_sentinel_and_snapshot_gzip(tmp_path):
     assert "snapshot_verified_existing_source_preserved=1" in repeated.stdout
 
 
+def test_log_rotation_cleanup_preserves_conflicting_gzip_as_prior_generation(tmp_path):
+    project_root = tmp_path / "project"
+    log_dir = project_root / "logs"
+    sentinel_dir = project_root / "data" / "runtime" / "sentinel_event_cache"
+    log_dir.mkdir(parents=True)
+    sentinel_dir.mkdir(parents=True)
+    sentinel = sentinel_dir / "buy_funnel_events_2026-05-21.jsonl"
+    current_payload = b'{"event":"current"}\n'
+    prior_payload = b'{"event":"prior"}\n'
+    sentinel.write_bytes(current_payload)
+    standard_gzip = Path(f"{sentinel}.gz")
+    with gzip.open(standard_gzip, "wb") as handle:
+        handle.write(prior_payload)
+    standard_gzip_before = standard_gzip.read_bytes()
+    env = os.environ.copy()
+    env.update({"PROJECT_DIR": str(project_root), "TARGET_DATE": "2026-05-22"})
+
+    result = subprocess.run(
+        ["bash", "deploy/run_logs_rotation_cleanup_cron.sh", "7"],
+        cwd=Path(__file__).resolve().parents[2],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    generation_hash = hashlib.sha256(current_payload).hexdigest()[:16]
+    generation_gzip = Path(f"{sentinel}.generation_{generation_hash}.gz")
+    assert sentinel.read_bytes() == current_payload
+    assert standard_gzip.read_bytes() == standard_gzip_before
+    with gzip.open(standard_gzip, "rb") as handle:
+        assert handle.read() == prior_payload
+    with gzip.open(generation_gzip, "rb") as handle:
+        assert handle.read() == current_payload
+    generation_gzip_before = generation_gzip.read_bytes()
+    assert "sentinel_compressed=1" in result.stdout
+    assert "compression_verify_failures=0" in result.stdout
+
+    repeated = subprocess.run(
+        ["bash", "deploy/run_logs_rotation_cleanup_cron.sh", "7"],
+        cwd=Path(__file__).resolve().parents[2],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert standard_gzip.read_bytes() == standard_gzip_before
+    assert generation_gzip.read_bytes() == generation_gzip_before
+    assert "sentinel_compressed=0" in repeated.stdout
+    assert "sentinel_verified_existing_source_preserved=1" in repeated.stdout
+    assert "compression_verify_failures=0" in repeated.stdout
+
+
 def test_log_rotation_cleanup_maintains_bounded_micro_reversion_storage(tmp_path):
     project_root = tmp_path / "project"
     log_dir = project_root / "logs"
