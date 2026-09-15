@@ -2508,6 +2508,7 @@ def record_ai_decision_trace(
                 "machine_observation_sha256",
                 "evaluation_attempt_id",
                 "evaluation_attempt_identity_source",
+                "entry_primary_decision_owner",
                 "entry_ai_role",
                 "entry_mechanistic_action",
                 "entry_ai_screen_status",

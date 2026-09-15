@@ -2001,6 +2001,7 @@ def test_machine_screen_retained_in_trace_and_pending_outcome(
         "machine_observation_sha256": "c" * 64,
         "evaluation_attempt_id": "attempt-1",
         "evaluation_attempt_identity_source": "caller_evaluation_attempt_id",
+        "entry_primary_decision_owner": "mechanistic_entry_adjudicator",
         "entry_ai_role": "auxiliary_risk_screen_pass_veto_no_promotion",
         "entry_mechanistic_action": "ENTER_NOW",
         "entry_ai_screen_status": status,
