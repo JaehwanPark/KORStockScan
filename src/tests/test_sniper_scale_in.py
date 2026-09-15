@@ -122,6 +122,21 @@ def test_entry_context_ws_data_preserves_explicit_market_metadata_only(monkeypat
     assert enriched["entry_timing_context"]["source_status"] == "insufficient"
     missing = state_handlers._entry_context_ws_data({"curr": 70000}, {})
     assert missing["curr"] == 70000
+
+    fast_precheck_only = state_handlers._entry_context_ws_data(
+        {"curr": 70000},
+        {
+            "_scanner_fast_precheck_fields": {
+                "scanner_promotion_id": "SCANPROM-005930-precheck",
+                "scanner_promotion_emitted_epoch": "1789435252.540",
+                "scanner_promotion_reason": "price_jump_start_acceleration",
+                "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
+            }
+        },
+    )
+    assert fast_precheck_only["scanner_promotion_id"] == (
+        "SCANPROM-005930-precheck"
+    )
     assert missing["entry_timing_context"]["source_status"] == "insufficient"
 
 

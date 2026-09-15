@@ -9015,7 +9015,7 @@ class GPTSniperEngine:
                     "session_bucket",
                     "scanner_promotion_id",
                 ):
-                    if key not in machine_exact:
+                    if machine_exact.get(key) in (None, ""):
                         machine_exact[key] = pre_prompt_snapshot.get(
                             key
                         ) or ws_data.get(key) or (metadata_extra or {}).get(key)

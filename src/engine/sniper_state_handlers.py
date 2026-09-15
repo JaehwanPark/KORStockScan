@@ -19729,6 +19729,8 @@ def _scanner_promotion_correlation_fields(
         and str(stock.get("position_tag") or "").upper() == "SCANNER"
     ):
         _hydrate_scanner_promotion_runtime_context(stock)
+    fast_precheck = stock.get("_scanner_fast_precheck_fields")
+    fast_precheck = fast_precheck if isinstance(fast_precheck, dict) else {}
     fields: dict[str, Any] = {}
     for key in (
         "scanner_promotion_id",
@@ -19741,6 +19743,8 @@ def _scanner_promotion_correlation_fields(
         "price_delta_since_first_seen_pct",
     ):
         value = stock.get(key)
+        if value in (None, ""):
+            value = fast_precheck.get(key)
         if value not in (None, ""):
             fields[key] = value
     if _has_rising_missed_entry_lineage(stock):
