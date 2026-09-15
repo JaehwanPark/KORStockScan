@@ -4140,11 +4140,17 @@ def test_machine_policy_preflight_block_preserves_source_invalid_receipt(monkeyp
 
     result = engine.analyze_target(
         "test",
-        _sample_ws_data(),
+        {
+            **_sample_ws_data(),
+            "stock_code": "005930",
+            "effective_venue": "KRX",
+            "session_bucket": "krx_regular",
+        },
         _sample_ticks(),
         _sample_candles(),
         strategy="SCALPING",
         prompt_profile="watching",
+        metadata_extra={"scanner_promotion_id": "SCANPROM-source-invalid"},
         candle_context=None,
     )
 
@@ -4156,6 +4162,13 @@ def test_machine_policy_preflight_block_preserves_source_invalid_receipt(monkeyp
     assert result["machine_source_invalid_receipt"] is True
     assert result["machine_bundle_sha256"] == "b" * 64
     assert result["entry_ai_role"] == live["ai_role"]
+    assert result["entry_mechanistic_action"] == "source_invalid"
+    assert result["entry_ai_screen_status"] == (
+        "not_requested_machine_source_invalid"
+    )
+    assert result["scanner_promotion_id"] == "SCANPROM-source-invalid"
+    assert result["evaluation_attempt_id"].startswith("machine-source-invalid-")
+    assert result["policy_bundle_hash"] == "b" * 64
     assert result["provider_called"] is False
 
 

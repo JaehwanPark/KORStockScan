@@ -1028,6 +1028,10 @@ def capture_machine_observation(
         or (metadata or {}).get("evaluation_attempt_id")
         or context.get("snapshot_id")
     )
+    context["scanner_promotion_id"] = (
+        _first_value(exact_payload, ("scanner_promotion_id",))
+        or (metadata or {}).get("scanner_promotion_id")
+    )
     capture_identity = {
         "evaluation_attempt_id": context.get("evaluation_attempt_id"),
         "evaluation_attempt_identity_source": (
@@ -1048,10 +1052,6 @@ def capture_machine_observation(
     if not trace_enabled():
         return {"machine_capture_status": "disabled", **capture_identity}
     now = _now()
-    context["scanner_promotion_id"] = (
-        _first_value(exact_payload, ("scanner_promotion_id",))
-        or (metadata or {}).get("scanner_promotion_id")
-    )
     context["first_watch_epoch"] = _safe_number(
         _first_value(exact_payload, ("first_watch_epoch", "first_seen_epoch"))
     )

@@ -330,6 +330,10 @@ def test_machine_primary_funnel_keeps_ai_screen_and_broker_receipt_separate():
     common = {
         "entry_primary_decision_owner": "mechanistic_entry_adjudicator",
         "evaluation_attempt_id": "eval-1",
+        "scanner_promotion_id": "promotion-1",
+        "effective_venue": "KRX",
+        "market_session_bucket": "krx_regular",
+        "policy_bundle_hash": "b" * 64,
         "entry_mechanistic_action": "ENTER_NOW",
         "entry_ai_screen_status": "pass",
         "entry_mechanistic_policy_version": "machine-v1",
@@ -363,6 +367,14 @@ def test_machine_primary_funnel_keeps_ai_screen_and_broker_receipt_separate():
     assert result["broker_acceptance_semantics"] == (
         "successful_submission_response_with_order_identity_not_fill_or_pnl"
     )
+    assert result["ai_pass_terminal_conservation"] == {
+        "ai_pass": 1,
+        "submitted": 1,
+        "final_guard_blocked": 0,
+        "broker_rejected": 0,
+        "pending": 0,
+        "difference": 0,
+    }
     assert result["legacy_recheck_runtime_eligible_count"] == 0
     assert result["evaluation_ledger"][0]["final_state"] == "submit_pipeline_reached"
     assert result["count_conservation"]["identified_plus_identity_missing_equals_raw"]
@@ -375,6 +387,10 @@ def test_machine_primary_recheck_cannot_become_legacy_recheck_probe():
     fields = {
         "entry_primary_decision_owner": "mechanistic_entry_adjudicator",
         "evaluation_attempt_id": "eval-machine-recheck",
+        "scanner_promotion_id": "promotion-machine-recheck",
+        "effective_venue": "KRX",
+        "market_session_bucket": "krx_regular",
+        "policy_bundle_hash": "b" * 64,
         "entry_mechanistic_action": "RECHECK",
         "entry_ai_screen_status": "not_requested_machine_nonentry",
         "ai_decision_model_action": "WAIT",
@@ -437,6 +453,10 @@ def test_machine_primary_transport_screen_is_nonexposure_not_contract_gap():
         {
             "entry_primary_decision_owner": "mechanistic_entry_adjudicator",
             "evaluation_attempt_id": "eval-machine-transport",
+            "scanner_promotion_id": "promotion-machine-transport",
+            "effective_venue": "KRX",
+            "market_session_bucket": "krx_regular",
+            "policy_bundle_hash": "b" * 64,
             "entry_mechanistic_action": "ENTER_NOW",
             "entry_ai_screen_status": "not_evaluated_transport",
         },
@@ -461,6 +481,10 @@ def test_machine_primary_action_without_owner_is_source_quality_gap():
         "1",
         {
             "evaluation_attempt_id": "eval-owner-missing",
+            "scanner_promotion_id": "promotion-owner-missing",
+            "effective_venue": "KRX",
+            "market_session_bucket": "krx_regular",
+            "policy_bundle_hash": "b" * 64,
             "entry_mechanistic_action": "ENTER_NOW",
             "entry_ai_screen_status": "pass",
         },
@@ -469,6 +493,76 @@ def test_machine_primary_action_without_owner_is_source_quality_gap():
     row = sentinel._machine_primary_entry_funnel([event])["evaluation_ledger"][0]
     assert row["final_state"] == "identity_or_contract_gap"
     assert "mechanistic_owner_missing_or_conflicting" in row["conflict_reasons"]
+
+
+def test_machine_primary_ai_pass_latency_block_closes_exact_conservation():
+    from datetime import datetime, timedelta
+
+    start = datetime(2026, 9, 15, 10)
+    common = {
+        "entry_primary_decision_owner": "mechanistic_entry_adjudicator",
+        "evaluation_attempt_id": "eval-latency",
+        "scanner_promotion_id": "promotion-latency",
+        "effective_venue": "KRX",
+        "market_session_bucket": "krx_regular",
+        "policy_bundle_hash": "b" * 64,
+        "entry_mechanistic_action": "ENTER_NOW",
+        "entry_ai_screen_status": "pass",
+    }
+    events = [
+        sentinel.PipelineEvent(
+            start,
+            "ENTRY_PIPELINE",
+            "ai_confirmed",
+            "fixture",
+            "036540",
+            "1",
+            common,
+        ),
+        sentinel.PipelineEvent(
+            start + timedelta(seconds=1),
+            "ENTRY_PIPELINE",
+            "latency_block",
+            "fixture",
+            "036540",
+            "1",
+            common,
+        ),
+    ]
+
+    result = sentinel._machine_primary_entry_funnel(events)
+    assert result["evaluation_ledger"][0]["final_state"] == "final_guard_blocked"
+    assert result["ai_pass_terminal_conservation"]["difference"] == 0
+    assert result["ai_pass_terminal_conservation"]["final_guard_blocked"] == 1
+
+
+def test_machine_source_invalid_is_explicit_exact_non_ai_evaluation():
+    from datetime import datetime
+
+    event = sentinel.PipelineEvent(
+        datetime(2026, 9, 15, 10),
+        "ENTRY_PIPELINE",
+        "ai_confirmed",
+        "fixture",
+        "005930",
+        "1",
+        {
+            "entry_primary_decision_owner": "mechanistic_entry_adjudicator",
+            "evaluation_attempt_id": "eval-source-invalid",
+            "scanner_promotion_id": "promotion-source-invalid",
+            "effective_venue": "KRX",
+            "market_session_bucket": "krx_regular",
+            "policy_bundle_hash": "b" * 64,
+            "entry_mechanistic_action": "source_invalid",
+            "entry_ai_screen_status": "not_requested_machine_source_invalid",
+        },
+    )
+
+    result = sentinel._machine_primary_entry_funnel([event])
+    assert result["evaluation_count"] == 1
+    assert result["evaluation_identity_missing_event_count"] == 0
+    assert result["evaluation_ledger"][0]["mechanistic_action"] == "SOURCE_INVALID"
+    assert result["evaluation_ledger"][0]["final_state"] == "machine_source_invalid"
 
 
 def test_submit_drought_is_classified_without_cross_venue_denominator(

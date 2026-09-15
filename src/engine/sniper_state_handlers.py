@@ -13187,7 +13187,41 @@ def _canonicalize_rising_missed_venue_fields(
     return normalized
 
 
+_MACHINE_PRIMARY_LINEAGE_PIPELINE_STAGES = frozenset(
+    {
+        "auth_zero_qty",
+        "blocked_zero_qty",
+        "budget_pass",
+        "latency_block",
+        "latency_pass",
+        "entry_submit_revalidation_block",
+        "entry_price_canary_submit_block",
+        "pre_submit_price_guard_block",
+        "pre_submit_entry_ai_authority_async_pending",
+        "pre_submit_entry_ai_authority_guard_block",
+        "order_leg_no_response",
+        "order_leg_fail",
+        "order_leg_sent",
+        "order_bundle_failed",
+        "order_bundle_submitted",
+        "broker_submit_failed",
+        "buy_order_failed",
+        "submit_order_failed",
+    }
+)
+
+
 def _log_entry_pipeline(stock, code, stage, **fields):
+    if stage in _MACHINE_PRIMARY_LINEAGE_PIPELINE_STAGES and isinstance(stock, dict):
+        # Downstream submit stages belong to the exact trusted AI attempt kept
+        # on the watched stock.  Add provenance only; this does not authorize a
+        # submit and explicit call-local fields retain precedence.
+        fields = {
+            **_machine_primary_entry_provenance_fields(
+                stock.get("last_watching_ai_machine_primary_fields")
+            ),
+            **fields,
+        }
     if stage in {
         "ai_confirmed",
         "order_leg_sent",
@@ -33200,8 +33234,20 @@ def _machine_primary_entry_provenance_fields(source: dict | None) -> dict:
         "evaluation_attempt_identity_source",
         "machine_capture_status",
         "machine_observation_sha256",
+        "scanner_promotion_id",
+        "machine_bundle_sha256",
+        "policy_bundle_hash",
+        "entry_setup_live_policy_effective_venue",
+        "entry_setup_live_policy_session_bucket",
     )
-    return {key: source[key] for key in keys if key in source}
+    fields = {key: source[key] for key in keys if key in source}
+    bundle_hash = source.get("policy_bundle_hash") or source.get(
+        "machine_bundle_sha256"
+    )
+    if bundle_hash not in (None, ""):
+        fields["machine_bundle_sha256"] = bundle_hash
+        fields["policy_bundle_hash"] = bundle_hash
+    return fields
 
 
 REAL_ENTRY_PANIC_GAP_WEIGHT_FAMILY = "real_entry_panic_gap_weight"
@@ -50764,6 +50810,8 @@ def _build_ai_ops_log_fields(
         "entry_setup_live_policy_candidate_contract_sha256",
         "entry_setup_live_policy_effective_venue",
         "entry_setup_live_policy_session_bucket",
+        "machine_bundle_sha256",
+        "policy_bundle_hash",
         "entry_primary_decision_owner",
         "entry_mechanistic_action",
         "entry_mechanistic_policy_decision",
@@ -50772,6 +50820,7 @@ def _build_ai_ops_log_fields(
         "entry_ai_screen_status",
         "entry_ai_followup_disposition",
         "entry_ai_followup_authority",
+        "scanner_promotion_id",
         "evaluation_attempt_id",
         "evaluation_attempt_identity_source",
         "machine_capture_status",

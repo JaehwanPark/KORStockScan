@@ -3756,6 +3756,9 @@ def test_build_ai_ops_log_fields_preserves_machine_primary_provenance():
             ),
             "evaluation_attempt_id": "aims-v27-test",
             "evaluation_attempt_identity_source": "exact_snapshot_id",
+            "scanner_promotion_id": "SCANPROM-005930-test",
+            "machine_bundle_sha256": "b" * 64,
+            "policy_bundle_hash": "b" * 64,
             "machine_capture_status": "captured",
             "machine_observation_sha256": "a" * 64,
         }
@@ -3767,6 +3770,9 @@ def test_build_ai_ops_log_fields_preserves_machine_primary_provenance():
     assert fields["entry_ai_screen_pass"] is True
     assert fields["evaluation_attempt_id"] == "aims-v27-test"
     assert fields["evaluation_attempt_identity_source"] == "exact_snapshot_id"
+    assert fields["scanner_promotion_id"] == "SCANPROM-005930-test"
+    assert fields["machine_bundle_sha256"] == "b" * 64
+    assert fields["policy_bundle_hash"] == "b" * 64
 
 
 def test_pre_submit_lineage_preserves_machine_primary_identity_without_authority():
@@ -3782,6 +3788,8 @@ def test_pre_submit_lineage_preserves_machine_primary_identity_without_authority
                 "entry_mechanistic_action": "ENTER_NOW",
                 "entry_ai_screen_status": "pass",
                 "evaluation_attempt_id": "eval-1",
+                "scanner_promotion_id": "promotion-1",
+                "machine_bundle_sha256": "b" * 64,
             },
         },
         now_ts=101.0,
@@ -3791,6 +3799,9 @@ def test_pre_submit_lineage_preserves_machine_primary_identity_without_authority
     assert fields["entry_mechanistic_action"] == "ENTER_NOW"
     assert fields["entry_ai_screen_status"] == "pass"
     assert fields["evaluation_attempt_id"] == "eval-1"
+    assert fields["scanner_promotion_id"] == "promotion-1"
+    assert fields["machine_bundle_sha256"] == "b" * 64
+    assert fields["policy_bundle_hash"] == "b" * 64
     assert fields["pre_submit_parent_ai_lineage_runtime_effect"] is False
 
 
@@ -4083,6 +4094,50 @@ def test_log_entry_pipeline_carries_scanner_promotion_correlation(monkeypatch):
     assert fields["scanner_promotion_reason"] == "rank_jump_acceleration"
     assert fields["source_signature"] == "REALTIME_RANK_START"
     assert fields["original_reason"] == "below_strength_base"
+
+
+def test_log_entry_pipeline_binds_machine_ai_attempt_to_latency_stage(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(
+        handlers,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {"stage": stage, "fields": fields or {}}
+        ),
+    )
+    stock = {
+        "id": 43,
+        "name": "MACHINE PASS",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "effective_venue": "KRX",
+        "venue": "KRX",
+        "market_session_bucket": "krx_regular",
+        "scanner_promotion_id": "promotion-machine-pass",
+        "last_watching_ai_machine_primary_fields": {
+            "entry_primary_decision_owner": "mechanistic_entry_adjudicator",
+            "entry_mechanistic_action": "ENTER_NOW",
+            "entry_ai_screen_status": "pass",
+            "evaluation_attempt_id": "eval-machine-pass",
+            "scanner_promotion_id": "promotion-machine-pass",
+            "machine_bundle_sha256": "b" * 64,
+        },
+    }
+
+    _log_entry_pipeline(
+        stock,
+        "000043",
+        "latency_block",
+        reason="latency_state_danger",
+    )
+
+    fields = emitted[-1]["fields"]
+    assert fields["entry_primary_decision_owner"] == "mechanistic_entry_adjudicator"
+    assert fields["entry_mechanistic_action"] == "ENTER_NOW"
+    assert fields["entry_ai_screen_status"] == "pass"
+    assert fields["evaluation_attempt_id"] == "eval-machine-pass"
+    assert fields["scanner_promotion_id"] == "promotion-machine-pass"
+    assert fields["policy_bundle_hash"] == "b" * 64
 
 
 def test_log_entry_pipeline_carries_explicit_condition_venue(monkeypatch):

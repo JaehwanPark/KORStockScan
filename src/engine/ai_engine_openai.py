@@ -8942,6 +8942,104 @@ class GPTSniperEngine:
             and (runtime_preflight_required() or decision_quality_v2_7_selected)
             and not bool(candle_preflight.get("allowed", False))
         ):
+            machine_source_invalid_fields: dict[str, Any] = {}
+            if machine_policy_trace_fields:
+                # Source quality owns the fail-closed decision, but this is still
+                # one machine evaluation attempt.  Preserve the identity that
+                # already arrived with the scanner handoff before returning so
+                # postclose can exclude this exact row without a symbol/time
+                # heuristic.  When the market snapshot itself could not be
+                # created, mint a producer-owned attempt id for this receipt.
+                invalid_exact = dict(pre_prompt_snapshot or {})
+                identity_sources = (
+                    candle_context if isinstance(candle_context, dict) else {},
+                    ws_data if isinstance(ws_data, dict) else {},
+                    metadata_extra if isinstance(metadata_extra, dict) else {},
+                )
+                identity_keys = {
+                    "stock_code": ("stock_code", "code"),
+                    "effective_venue": ("effective_venue", "venue"),
+                    "session_bucket": (
+                        "session_bucket",
+                        "market_session_bucket",
+                        "session",
+                    ),
+                    "scanner_promotion_id": ("scanner_promotion_id",),
+                    "evaluation_attempt_id": (
+                        "evaluation_attempt_id",
+                        "entry_evaluation_attempt_id",
+                        "snapshot_id",
+                    ),
+                }
+                for target_key, source_keys in identity_keys.items():
+                    if invalid_exact.get(target_key) not in (None, ""):
+                        continue
+                    for source in identity_sources:
+                        value = next(
+                            (
+                                source.get(source_key)
+                                for source_key in source_keys
+                                if source.get(source_key) not in (None, "")
+                            ),
+                            None,
+                        )
+                        if value not in (None, ""):
+                            invalid_exact[target_key] = value
+                            break
+                if invalid_exact.get("evaluation_attempt_id") in (None, ""):
+                    invalid_exact["evaluation_attempt_id"] = (
+                        f"machine-source-invalid-{uuid.uuid4().hex}"
+                    )
+                from src.engine.scalping.ai_decision_trace import (
+                    capture_machine_observation,
+                )
+
+                machine_source_invalid_fields = capture_machine_observation(
+                    exact_payload=invalid_exact,
+                    setup_evidence={
+                        "source_quality_status": candle_preflight.get("status"),
+                        "source_quality_blockers": candle_preflight.get("blockers")
+                        or [],
+                    },
+                    assessment={
+                        "schema": "mechanistic_entry_source_invalid_v1",
+                        "action": "source_invalid",
+                        "reason": "ai_input_preflight_blocked",
+                    },
+                    bundle_sha256=str(
+                        entry_setup_live_policy.get("machine_bundle_sha256") or ""
+                    ),
+                    metadata=(
+                        dict(metadata_extra)
+                        if isinstance(metadata_extra, dict)
+                        else {}
+                    ),
+                )
+                machine_source_invalid_fields.update(
+                    {
+                        "entry_primary_decision_owner": (
+                            entry_setup_live_policy.get("primary_decision_owner")
+                        ),
+                        "entry_mechanistic_action": "source_invalid",
+                        "entry_mechanistic_policy_decision": "source_invalid",
+                        "entry_mechanistic_policy_version": (
+                            (
+                                entry_setup_live_policy.get(
+                                    "mechanistic_threshold_policy"
+                                )
+                                or {}
+                            ).get("version")
+                        ),
+                        "entry_ai_screen_status": (
+                            "not_requested_machine_source_invalid"
+                        ),
+                        "entry_ai_screen_required": False,
+                        "entry_ai_screen_pass": False,
+                        "policy_bundle_hash": entry_setup_live_policy.get(
+                            "machine_bundle_sha256"
+                        ),
+                    }
+                )
             return self._annotate_analysis_result(
                 _merge_runtime_fields(
                     {
@@ -8961,6 +9059,7 @@ class GPTSniperEngine:
                         "machine_source_invalid_receipt": bool(
                             machine_policy_trace_fields
                         ),
+                        **machine_source_invalid_fields,
                         **ai_market_snapshot_log_fields(candle_context),
                     }
                 ),

@@ -142,7 +142,9 @@ SUBMIT_DROUGHT_OBSERVATION_AXIS_ORDER = (
     *SUBMIT_DROUGHT_SUPPORTING_AXIS_ORDER,
 )
 MACHINE_PRIMARY_DECISION_OWNER = "mechanistic_entry_adjudicator"
-MACHINE_PRIMARY_ENTRY_ACTIONS = frozenset({"ENTER_NOW", "RECHECK", "BLOCK"})
+MACHINE_PRIMARY_ENTRY_ACTIONS = frozenset(
+    {"ENTER_NOW", "RECHECK", "BLOCK", "SOURCE_INVALID"}
+)
 MACHINE_PRIMARY_AI_SCREEN_STATUSES = frozenset(
     {
         "pass",
@@ -153,6 +155,7 @@ MACHINE_PRIMARY_AI_SCREEN_STATUSES = frozenset(
         "not_evaluated_transport",
         "not_evaluated_local",
         "not_requested_machine_nonentry",
+        "not_requested_machine_source_invalid",
     }
 )
 EXACT_SUBMIT_FUNNEL_STAGES = {
@@ -2278,7 +2281,8 @@ def _summarize_events(events, *, start_at, end_at, summary_rows=None):
 
 
 def _machine_primary_evaluation_key(event: PipelineEvent) -> str:
-    """Return only producer-issued evaluation identity; never time/symbol join."""
+    """Return the exact six-field machine attempt identity, never a fuzzy join."""
+    evaluation_attempt_id = ""
     for field in (
         "evaluation_attempt_id",
         "entry_evaluation_attempt_id",
@@ -2286,8 +2290,46 @@ def _machine_primary_evaluation_key(event: PipelineEvent) -> str:
     ):
         value = _safe_str(event.fields.get(field)).strip()
         if value and value.lower() not in {"none", "null", "unknown", "-", "0"}:
-            return f"evaluation:{value}"
-    return ""
+            evaluation_attempt_id = value
+            break
+    scanner_promotion_id = _safe_str(
+        event.fields.get("scanner_promotion_id")
+    ).strip()
+    venue = _safe_str(
+        _field_first(event.fields, ("effective_venue", "venue"))
+    ).strip().upper()
+    session = _safe_str(
+        _field_first(
+            event.fields,
+            ("market_session_bucket", "session_bucket", "session"),
+        )
+    ).strip().upper()
+    bundle_hash = _safe_str(
+        _field_first(
+            event.fields,
+            (
+                "policy_bundle_hash",
+                "machine_bundle_sha256",
+                "entry_setup_live_policy_candidate_contract_sha256",
+            ),
+        )
+    ).strip()
+    symbol = _safe_str(event.stock_code).strip()
+    components = (
+        scanner_promotion_id,
+        evaluation_attempt_id,
+        symbol,
+        venue,
+        session,
+        bundle_hash,
+    )
+    if any(
+        not component
+        or component.lower() in {"none", "null", "unknown", "-", "0"}
+        for component in components
+    ):
+        return ""
+    return "machine:" + "|".join(components)
 
 
 def _is_machine_primary_event(event: PipelineEvent) -> bool:
@@ -2365,6 +2407,11 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
             "not_requested_machine_nonentry",
         }:
             conflict_reasons.append("machine_nonentry_ai_screen_contract_invalid")
+        if action == "SOURCE_INVALID" and screen not in {
+            "",
+            "not_requested_machine_source_invalid",
+        }:
+            conflict_reasons.append("machine_source_invalid_ai_screen_contract_invalid")
         if action == "ENTER_NOW" and not screen:
             conflict_reasons.append("machine_enter_ai_screen_missing")
         if action == "ENTER_NOW" and screen == "not_requested_machine_nonentry":
@@ -2384,10 +2431,24 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
                 )
             )
         ]
+        final_guard_block_rows = [
+            row
+            for row in rows
+            if row.stage in (
+                BLOCKER_STAGES
+                - BROKER_SUBMIT_FAILURE_STAGES
+                - {"blocked_ai_score"}
+            )
+        ]
+        broker_rejected_rows = [
+            row for row in rows if row.stage in BROKER_SUBMIT_FAILURE_STAGES
+        ]
         if conflict_reasons:
             final_state = "identity_or_contract_gap"
         elif action == "BLOCK":
             final_state = "machine_block_point_drop"
+        elif action == "SOURCE_INVALID":
+            final_state = "machine_source_invalid"
         elif action == "RECHECK":
             final_state = "machine_recheck_observation"
         elif screen == "veto":
@@ -2402,8 +2463,12 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
             final_state = "ai_nonpass_no_exposure"
         elif submitted_rows:
             final_state = "submit_pipeline_reached"
+        elif broker_rejected_rows:
+            final_state = "broker_rejected"
+        elif final_guard_block_rows:
+            final_state = "final_guard_blocked"
         elif screen == "pass":
-            final_state = "ai_pass_no_submit_observed"
+            final_state = "pending"
         else:
             final_state = "unknown"
         row = {
@@ -2418,6 +2483,8 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
             # broker response.  This is a submission/identity receipt, not a
             # fill, terminal, or economic outcome.
             "broker_acceptance_observed": bool(broker_acceptance_rows),
+            "final_guard_blocked": bool(final_guard_block_rows),
+            "broker_rejected": bool(broker_rejected_rows),
             "final_state": final_state,
             "conflict_reasons": conflict_reasons,
             "legacy_recheck_runtime_eligible": False,
@@ -2430,6 +2497,13 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
     valid_rows = [row for row in ledger if not row["conflict_reasons"]]
     machine_enter = sum(row["mechanistic_action"] == "ENTER_NOW" for row in valid_rows)
     ai_pass = sum(row["ai_screen_status"] == "pass" for row in valid_rows)
+    ai_pass_rows = [row for row in valid_rows if row["ai_screen_status"] == "pass"]
+    ai_pass_submitted = sum(row["submit_pipeline_reached"] for row in ai_pass_rows)
+    ai_pass_final_guard_blocked = sum(
+        row["final_guard_blocked"] for row in ai_pass_rows
+    )
+    ai_pass_broker_rejected = sum(row["broker_rejected"] for row in ai_pass_rows)
+    ai_pass_pending = sum(row["final_state"] == "pending" for row in ai_pass_rows)
     return {
         "schema": "machine_primary_entry_funnel_v1",
         "metric_role": "funnel_count",
@@ -2449,6 +2523,18 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
         "final_state_counts": dict(sorted(final_counts.items())),
         "machine_enter_count": machine_enter,
         "ai_pass_count": ai_pass,
+        "ai_pass_terminal_conservation": {
+            "ai_pass": ai_pass,
+            "submitted": ai_pass_submitted,
+            "final_guard_blocked": ai_pass_final_guard_blocked,
+            "broker_rejected": ai_pass_broker_rejected,
+            "pending": ai_pass_pending,
+            "difference": ai_pass
+            - ai_pass_submitted
+            - ai_pass_final_guard_blocked
+            - ai_pass_broker_rejected
+            - ai_pass_pending,
+        },
         "submit_pipeline_reached_count": sum(
             row["submit_pipeline_reached"] for row in valid_rows
         ),
