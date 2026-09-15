@@ -361,11 +361,24 @@ def widget_symbol(trader, state, now, *, allow_new_target_ratchet=False):
     orders = state.get("orders", [])
     signal = state.get("entry_signal_id")
     buys = widget_position_buys(state)
-    entered = min((o.get("intent_created_at", "") for o in buys), default="")
-    selected = policy_for(now, "widget_auto_trade", entered, diagnostic=trader._state)
     sessions = state.get(KEY, {})
     if KEY in state and (not isinstance(sessions, dict) or not sessions):
         raise ValueError("profit_exit_widget_claim_invalid")
+    if buys:
+        entered = min(o.get("intent_created_at", "") for o in buys)
+        selected = policy_for(
+            now, "widget_auto_trade", entered, diagnostic=trader._state
+        )
+    elif not sessions:
+        # Policy selection is position-scoped.  An empty owner journal is an
+        # inactive state, not malformed policy evidence with an empty date.
+        trader._state["profit_exit_policy_status"] = "inactive_no_owned_position"
+        selected = None
+    else:
+        # Preserve a durable recovery session while fail-closing new policy
+        # authority when its original BUY evidence is missing.
+        trader._state["profit_exit_policy_status"] = "position_source_missing"
+        selected = None
     if getattr(trader, "profit_exit_lock_held", lambda: False)() is not True:
         return bool(sessions)
 
