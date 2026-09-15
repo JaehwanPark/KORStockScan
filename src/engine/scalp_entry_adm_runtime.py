@@ -33,6 +33,7 @@ PRE_SUBMIT_CONTEXT_OPTIONAL_STAGES = {
     "pre_submit_overbought_pullback_guard_block",
     "scalp_sim_entry_armed",
     "scalp_sim_entry_ai_price_skip_order",
+    "scalp_sim_entry_mechanistic_price_skip_order",
     "scalp_sim_pre_submit_liquidity_guard_would_block",
     "scalp_sim_pre_submit_liquidity_guard_unknown",
     "scalp_sim_pre_submit_overbought_guard_would_block",

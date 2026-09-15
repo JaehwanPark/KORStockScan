@@ -150,6 +150,7 @@ def test_scalp_simulator_arms_and_fills_without_real_buy_order(monkeypatch):
     assert sim_target["buy_price"] == 9_990
     sim_stages = [stage for stage, _ in logs if stage.startswith("scalp_sim_")]
     assert sim_stages == [
+        "scalp_sim_entry_mechanistic_price_applied",
         "scalp_sim_pre_submit_liquidity_guard_would_pass",
         "scalp_sim_pre_submit_overbought_guard_would_pass",
         "scalp_sim_entry_armed",
@@ -1559,7 +1560,7 @@ def test_scalp_simulator_binds_mechanistic_entry_price_without_provider(monkeypa
     sim_applied = next(
         fields
         for stage, fields in logs
-        if stage == "scalp_sim_entry_ai_price_applied"
+        if stage == "scalp_sim_entry_mechanistic_price_applied"
     )
     assert sim_applied["runtime_effect"] == "simulated_entry_price_only"
     assert sim_applied["ai_score"] == 82.0
@@ -4356,6 +4357,14 @@ def test_scalp_simulator_threshold_stages_are_included():
     )
     assert (
         threshold_family_for_stage("scalp_sim_entry_ai_price_skip_order")
+        == "dynamic_entry_price_resolver"
+    )
+    assert (
+        threshold_family_for_stage("scalp_sim_entry_mechanistic_price_applied")
+        == "dynamic_entry_price_resolver"
+    )
+    assert (
+        threshold_family_for_stage("scalp_sim_entry_mechanistic_price_skip_order")
         == "dynamic_entry_price_resolver"
     )
     assert (

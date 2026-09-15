@@ -2614,6 +2614,9 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
     "scalp_sim_entry_ai_price_skip_order": StageContract(
         required_fields=SCALP_SIM_PROVENANCE_FIELDS
     ),
+    "scalp_sim_entry_mechanistic_price_skip_order": StageContract(
+        required_fields=SCALP_SIM_PROVENANCE_FIELDS
+    ),
     "entry_ai_price_canary_skip_followup": StageContract(
         required_fields=(
             "metric_role",

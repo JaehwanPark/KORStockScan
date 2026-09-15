@@ -1032,6 +1032,17 @@ def capture_machine_observation(
         _first_value(exact_payload, ("scanner_promotion_id",))
         or (metadata or {}).get("scanner_promotion_id")
     )
+    captured_venue = str(context.get("effective_venue") or "").strip().upper()
+    captured_session = str(context.get("session_bucket") or "").strip().upper()
+    integrated_scope_verified = bool(
+        captured_venue == "KRX_NXT_INTEGRATED"
+        and captured_session
+        in {
+            "KRX_NXT_AFTERMARKET",
+            "KRX_NXT_AFTERMARKET_CLOSE_ONLY",
+            "KRX_NXT_AFTERMARKET_TERMINAL_EXIT",
+        }
+    )
     capture_identity = {
         "evaluation_attempt_id": context.get("evaluation_attempt_id"),
         "evaluation_attempt_identity_source": (
@@ -1048,7 +1059,26 @@ def capture_machine_observation(
             )
         ),
         "scanner_promotion_id": context.get("scanner_promotion_id"),
+        **(
+            {
+                "venue": "KRX_NXT_INTEGRATED",
+                "venue_resolution": (
+                    "machine_capture_exact_snapshot:integrated_aftermarket_scope"
+                ),
+                "venue_source_quality_status": "pass",
+                "venue_unknown_reviewed_reason": "not_applicable",
+            }
+            if integrated_scope_verified
+            else {}
+        ),
     }
+    # These are already part of the immutable machine snapshot. Return only
+    # present values with the attempt identity so ENTRY_PIPELINE neither falls
+    # back to mutable stock state nor erases an existing resolver value.
+    if context.get("effective_venue") not in (None, ""):
+        capture_identity["effective_venue"] = context.get("effective_venue")
+    if context.get("session_bucket") not in (None, ""):
+        capture_identity["market_session_bucket"] = context.get("session_bucket")
     if not trace_enabled():
         return {"machine_capture_status": "disabled", **capture_identity}
     now = _now()

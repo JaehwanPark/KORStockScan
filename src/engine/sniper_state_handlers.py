@@ -351,10 +351,9 @@ from src.engine.scalping.entry_split_order_plan import (
     update_probe_runtime_bundle,
 )
 from src.engine.scalping.entry_execution_sizing_plan import (
-    ENTRY_PRICE_POLICY_SHA256,
-    ENTRY_PRICE_POLICY_VERSION,
     compose_entry_execution_sizing_plan,
     compose_scale_in_execution_sizing_plan,
+    runtime_mechanistic_entry_price_policy,
 )
 from src.engine.scalping.scale_in_split_order_plan import (
     apply_scale_in_split_order_policy,
@@ -10750,10 +10749,7 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(
             _log_entry_pipeline(
                 sim_target,
                 code,
-                # Keep the established source-only sim stage name so existing
-                # report consumers do not lose continuity.  The fields below
-                # make the retired AI price authority explicit.
-                "scalp_sim_entry_ai_price_skip_order",
+                "scalp_sim_entry_mechanistic_price_skip_order",
                 **_scalp_sim_event_fields(
                     threshold_family="pre_submit_price_guard",
                     entry_adm_candidate_id=entry_adm_candidate_id,
@@ -10794,7 +10790,7 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(
             _log_entry_pipeline(
                 sim_target,
                 code,
-                "scalp_sim_entry_ai_price_applied",
+                "scalp_sim_entry_mechanistic_price_applied",
                 **_scalp_sim_event_fields(
                     threshold_family="pre_submit_price_guard",
                     entry_adm_candidate_id=entry_adm_candidate_id,
@@ -13445,7 +13441,12 @@ def _has_explicit_runtime_venue_provenance(stock) -> bool:
 
     if not isinstance(stock, dict):
         return False
-    supported = {"KRX", "NXT", "PREMARKET_KRX_LIKE"}
+    supported = {
+        "KRX",
+        "NXT",
+        "PREMARKET_KRX_LIKE",
+        "KRX_NXT_INTEGRATED",
+    }
     return any(
         str(stock.get(key) or "").strip().upper() in supported
         for key in ("effective_venue", "venue")
@@ -13461,7 +13462,12 @@ def _scanner_runtime_event_venue_fields(stock) -> dict[str, str]:
     """
 
     stock = stock if isinstance(stock, dict) else {}
-    supported_venues = {"KRX", "NXT", "PREMARKET_KRX_LIKE"}
+    supported_venues = {
+        "KRX",
+        "NXT",
+        "PREMARKET_KRX_LIKE",
+        "KRX_NXT_INTEGRATED",
+    }
     explicit_values = []
     venue_source = "runtime_target"
     for key in ("effective_venue", "venue"):
@@ -13506,16 +13512,21 @@ def _scanner_runtime_event_venue_fields(stock) -> dict[str, str]:
         market_session_bucket = str(
             fast_precheck_fields.get("market_session_bucket") or ""
         ).strip()
-    expected_bucket_by_venue = {
-        "KRX": "krx_regular",
-        "PREMARKET_KRX_LIKE": "krx_like_premarket",
-        "NXT": "nxt",
+    expected_buckets_by_venue = {
+        "KRX": {"krx_regular"},
+        "PREMARKET_KRX_LIKE": {"krx_like_premarket"},
+        "NXT": {"nxt"},
+        "KRX_NXT_INTEGRATED": {
+            "KRX_NXT_AFTERMARKET",
+            "KRX_NXT_AFTERMARKET_CLOSE_ONLY",
+            "KRX_NXT_AFTERMARKET_TERMINAL_EXIT",
+        },
     }
-    expected_bucket = expected_bucket_by_venue.get(canonical_venue)
+    expected_buckets = expected_buckets_by_venue.get(canonical_venue)
     if (
-        expected_bucket
+        expected_buckets
         and market_session_bucket
-        and market_session_bucket != expected_bucket
+        and market_session_bucket not in expected_buckets
     ):
         observed_venue = canonical_venue
         canonical_venue = "UNKNOWN"
@@ -46534,6 +46545,16 @@ def _apply_mechanistic_entry_price_owner(
     ]
     if not source_orders:
         return planned_orders, False
+    price_policy, price_policy_status = runtime_mechanistic_entry_price_policy()
+    if not price_policy:
+        latency_gate.update(
+            entry_price_mechanistic_submit_blocked=True,
+            entry_price_mechanistic_submit_block_reason=price_policy_status,
+            entry_price_mechanistic_policy_status=price_policy_status,
+        )
+        return [], True
+    price_policy_version = str(price_policy["policy_version"])
+    price_policy_sha256 = str(price_policy["policy_sha256"])
     route = str(
         (ws_data or {}).get("effective_route")
         or (ws_data or {}).get("route")
@@ -46580,8 +46601,8 @@ def _apply_mechanistic_entry_price_owner(
                 **order,
                 "price_candidate_id": candidate_id,
                 "entry_price_owner": "mechanistic_entry_price_resolver",
-                "entry_price_policy_version": ENTRY_PRICE_POLICY_VERSION,
-                "entry_price_policy_sha256": ENTRY_PRICE_POLICY_SHA256,
+                "entry_price_policy_version": price_policy_version,
+                "entry_price_policy_sha256": price_policy_sha256,
                 "entry_price_captured_at": observed_at,
                 "entry_price_route": route or None,
                 "entry_price_epoch": epoch or None,
@@ -46593,8 +46614,10 @@ def _apply_mechanistic_entry_price_owner(
         "schema": "mechanistic_entry_price_receipt_v1",
         "stock_code": str(code or "").strip(),
         "price_owner": "mechanistic_entry_price_resolver",
-        "price_policy_version": ENTRY_PRICE_POLICY_VERSION,
-        "price_policy_sha256": ENTRY_PRICE_POLICY_SHA256,
+        "price_policy_version": price_policy_version,
+        "price_policy_sha256": price_policy_sha256,
+        "price_policy_status": price_policy_status,
+        "policy_candidate_id": price_policy.get("candidate_id"),
         "captured_at": observed_at,
         "current_price": _coerce_int_value(curr_price),
         "best_bid": _coerce_int_value(best_bid),
@@ -46630,8 +46653,12 @@ def _apply_mechanistic_entry_price_owner(
     ]
     fields = {
         "entry_price_owner": "mechanistic_entry_price_resolver",
-        "entry_price_policy_version": ENTRY_PRICE_POLICY_VERSION,
-        "entry_price_policy_sha256": ENTRY_PRICE_POLICY_SHA256,
+        "entry_price_policy_version": price_policy_version,
+        "entry_price_policy_sha256": price_policy_sha256,
+        "entry_price_mechanistic_policy_status": price_policy_status,
+        "entry_price_mechanistic_policy_candidate_id": price_policy.get(
+            "candidate_id"
+        ),
         "entry_price_receipt_sha256": receipt_sha256,
         "entry_price_candidate_count": len(observed_candidate_ids),
         "entry_price_leg_count": len(candidates),

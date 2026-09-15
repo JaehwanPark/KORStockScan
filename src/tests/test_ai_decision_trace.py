@@ -61,6 +61,8 @@ def test_machine_observation_returns_exact_snapshot_evaluation_identity(
             "stock_code": "005930",
             "snapshot_id": "aims-v27-test",
             "scanner_promotion_id": "SCANPROM-005930-test",
+            "effective_venue": "KRX_NXT_INTEGRATED",
+            "session_bucket": "KRX_NXT_AFTERMARKET",
         },
         setup_evidence={"setup_state": "READY"},
         assessment={"action": "ENTER_NOW"},
@@ -70,6 +72,13 @@ def test_machine_observation_returns_exact_snapshot_evaluation_identity(
     assert result["evaluation_attempt_id"] == "aims-v27-test"
     assert result["evaluation_attempt_identity_source"] == "exact_snapshot_id"
     assert result["scanner_promotion_id"] == "SCANPROM-005930-test"
+    assert result["effective_venue"] == "KRX_NXT_INTEGRATED"
+    assert result["market_session_bucket"] == "KRX_NXT_AFTERMARKET"
+    assert result["venue"] == "KRX_NXT_INTEGRATED"
+    assert result["venue_source_quality_status"] == "pass"
+    assert result["venue_resolution"] == (
+        "machine_capture_exact_snapshot:integrated_aftermarket_scope"
+    )
     row = _rows(trace._payload_path(trace._date_text()))[0]
     assert row["scanner_promotion_id"] == "SCANPROM-005930-test"
     assert row["label_context"]["scanner_promotion_id"] == (

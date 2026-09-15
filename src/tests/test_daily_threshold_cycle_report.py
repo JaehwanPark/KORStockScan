@@ -98,6 +98,148 @@ def test_position_sizing_materialization_preserves_selected_flat10_policy(
     assert policy["runtime_promotion_sample_floor"] == 30
 
 
+def test_postclose_publishes_mechanistic_price_policy_without_ai_authority(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(report_mod, "MECHANISTIC_ENTRY_PRICE_POLICY_DIR", tmp_path)
+    candidate = {
+        "family": "dynamic_entry_price_resolver",
+        "runtime_apply_eligible_now": True,
+        "calibration_state": "adjust_up",
+        "recommended_values": {"normal_defensive_bps": 25},
+        "source_metrics": {
+            "entry_price_profile_selected_candidate": {
+                "candidate_id": "normal:25",
+                "target_value_key": "normal_defensive_bps",
+                "profile_bps": 25,
+                "exact_outcome_joined_sample": 20,
+                "metrics": {"source_quality_adjusted_ev_pct": 0.11},
+            }
+        },
+    }
+    report = {"calibration_candidates": [candidate]}
+
+    report_mod._materialize_mechanistic_entry_price_policy(report, "2026-09-15")
+
+    policy_path = tmp_path / "mechanistic_entry_price_policy_2026-09-15.json"
+    policy = json.loads(policy_path.read_text(encoding="utf-8"))
+    assert policy["candidate_id"] == "normal:25"
+    assert policy["provider_calls"] == 0
+    assert policy["ai_price_authority"] is False
+    assert policy["runtime_env"] == {
+        "KORSTOCKSCAN_SCALPING_NORMAL_DEFENSIVE_BPS": "25"
+    }
+    assert candidate["recommended_values"]["mechanistic_policy_enabled"] is True
+
+
+def test_four_arm_pass_publishes_atomic_quantity_leg_policy_only(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(report_mod, "POSITION_SIZING_POLICY_DIR", tmp_path)
+    monkeypatch.setattr(report_mod, "ENTRY_EXECUTION_SIZING_POLICY_DIR", tmp_path)
+    split_path = tmp_path / "split.json"
+    split_path.write_text(
+        json.dumps({"policy_version": "split:candidate"}), encoding="utf-8"
+    )
+    quantity = {
+        "family": "position_sizing_dynamic_formula",
+        "runtime_apply_eligible_now": True,
+        "calibration_state": "retain_current",
+        "sample_floor": 30,
+        "recommended_values": {
+            "formula_version": report_mod.SCALPING_SIZING_FORMULA_VERSION,
+            "decision": "retain_current",
+            "cost_adjusted_ev_pct": 0.12,
+            "exact_terminal_sample_count": 30,
+        },
+    }
+    split = {
+        "family": "entry_split_order_plan",
+        "runtime_apply_eligible_now": True,
+        "recommended_values": {
+            "policy_file": str(split_path),
+            "policy_version": "split:candidate",
+        },
+        "source_metrics": {
+            "quantity_leg_four_arm_evaluation": {
+                "paired_policy_identity": {
+                    "candidate_quantity_policy_version": (
+                        report_mod.SCALPING_SIZING_FORMULA_VERSION
+                    ),
+                    "candidate_leg_policy_version": "split:candidate",
+                },
+                "promotion_gate": {
+                    "passed": True,
+                    "applies_to": "challenger_automatic_promotion_only",
+                    "minimum_candidate_cost_adjusted_net_ev_pct": 0.10,
+                },
+            }
+        },
+    }
+    report = {"calibration_candidates": [quantity, split]}
+    report_mod._materialize_position_sizing_policy(report, "2026-09-15")
+
+    report_mod._materialize_integrated_entry_execution_sizing_policy(
+        report, "2026-09-15"
+    )
+
+    policy_path = tmp_path / "entry_execution_sizing_policy_2026-09-15.json"
+    policy = json.loads(policy_path.read_text(encoding="utf-8"))
+    assert policy["selected_arm"] == "candidate_qty_x_candidate_leg"
+    assert policy["action_authority"] is False
+    assert policy["price_authority"] is False
+    assert policy["scale_in_authority"] is False
+    assert policy["quantity_conservation_required"] is True
+    assert split["recommended_values"]["integrated_policy_enabled"] is True
+
+
+def test_initial_position_sizing_excludes_avg_down_and_pyramid_denominators():
+    family = report_mod._build_position_sizing_dynamic_formula_family(
+        [
+            {
+                "stage": "budget_pass",
+                "emitted_at": "2026-09-15T10:00:00+09:00",
+                "fields": {
+                    "strategy": "SCALPING",
+                    "formula_version": report_mod.SCALPING_SIZING_FORMULA_VERSION,
+                    "reference_time": "2026-09-15T10:00:00+09:00",
+                    "effective_venue": "KRX",
+                    "source_signature": "scanner",
+                },
+            },
+            {
+                "stage": "scale_in_order_submitted",
+                "fields": {"strategy": "SCALPING", "add_type": "AVG_DOWN"},
+            },
+            {
+                "stage": "scale_in_price_resolved",
+                "fields": {"strategy": "SCALPING", "add_type": "PYRAMID"},
+            },
+        ],
+        [
+            {"profit_rate": 0.2, "stock_code": "000001"},
+            {
+                "profit_rate": 0.3,
+                "stock_code": "000002",
+                "avg_down_count": 1,
+            },
+            {
+                "profit_rate": 0.4,
+                "stock_code": "000003",
+                "pyramid_count": 1,
+            },
+        ],
+    )
+
+    assert family["sample"]["sizing_event_count"] == 1
+    assert family["sample"]["real_completed_valid"] == 1
+    assert family["sample"]["owner_partition_counts"] == {
+        "initial_entry": 1,
+        "avg_down": 1,
+        "pyramid": 1,
+    }
+
+
 def test_position_sizing_runtime_selection_requires_minimum_cost_adjusted_ev():
     candidate = {
         "source_metrics": {
@@ -802,7 +944,6 @@ def test_build_daily_threshold_cycle_report_generates_candidates_from_samples():
         "bid-2",
         "bid-3",
         "best_bid",
-        "AI_candidate",
         "reference_target",
         "timeout_15s",
         "timeout_30s",
@@ -1600,6 +1741,8 @@ def test_dynamic_entry_price_resolver_separates_sim_unpriced_stale_and_ai_candid
         "classification": "sim_unpriced_stale_warning",
     }
     ai_quality = dynamic["candidate_quality"]["AI_candidate"]
+    assert ai_quality["active_candidate"] is False
+    assert ai_quality["runtime_apply_forbidden"] is True
     assert ai_quality["candidate_event_count"] == 2
     assert ai_quality["candidate_failure_count"] == 1
     assert ai_quality["candidate_failure_rate"] == 50.0

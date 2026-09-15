@@ -53,8 +53,10 @@ from src.engine.scalping.entry_split_order_plan import (
     runtime_apply_authority_contract_status,
 )
 from src.engine.scalping.entry_execution_sizing_plan import (
+    ENTRY_EXECUTION_SIZING_POLICY_SCHEMA,
     ENTRY_PRICE_POLICY_SHA256,
     ENTRY_PRICE_POLICY_VERSION,
+    MECHANISTIC_ENTRY_PRICE_POLICY_SCHEMA,
     OWNER as ENTRY_EXECUTION_SIZING_OWNER,
     POLICY_VERSION as ENTRY_EXECUTION_SIZING_POLICY_VERSION,
     PRICE_OWNER as ENTRY_PRICE_OWNER,
@@ -308,6 +310,18 @@ TARGET_ENV_VALUE_KEYS = {
     "POSITION_SIZING_POLICY_SOURCE_DATE": "policy_source_date",
     "POSITION_SIZING_POLICY_SHA256": "policy_sha256",
     "POSITION_SIZING_POLICY_ACTIVE_DATE": "active_date",
+    "MECHANISTIC_ENTRY_PRICE_POLICY_ENABLED": "mechanistic_policy_enabled",
+    "MECHANISTIC_ENTRY_PRICE_POLICY_FILE": "mechanistic_policy_file",
+    "MECHANISTIC_ENTRY_PRICE_POLICY_VERSION": "mechanistic_policy_version",
+    "MECHANISTIC_ENTRY_PRICE_POLICY_SOURCE_DATE": "mechanistic_policy_source_date",
+    "MECHANISTIC_ENTRY_PRICE_POLICY_SHA256": "mechanistic_policy_sha256",
+    "MECHANISTIC_ENTRY_PRICE_POLICY_ACTIVE_DATE": "mechanistic_policy_active_date",
+    "ENTRY_EXECUTION_SIZING_POLICY_ENABLED": "integrated_policy_enabled",
+    "ENTRY_EXECUTION_SIZING_POLICY_FILE": "integrated_policy_file",
+    "ENTRY_EXECUTION_SIZING_POLICY_VERSION": "integrated_policy_version",
+    "ENTRY_EXECUTION_SIZING_POLICY_SOURCE_DATE": "integrated_policy_source_date",
+    "ENTRY_EXECUTION_SIZING_POLICY_SHA256": "integrated_policy_sha256",
+    "ENTRY_EXECUTION_SIZING_POLICY_ACTIVE_DATE": "integrated_policy_active_date",
     "SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED": "enabled",
     "SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_SEC": "confirm_sec",
     "SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_BUFFER_PCT": "buffer_pct",
@@ -2534,6 +2548,7 @@ _FAMILY_ENV_KEY_PREFIXES: dict[str, str] = {
     "scalp_sim_scale_in_window_expansion": "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_",
     "lifecycle_bucket_discovery_sim_auto_approval": "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_",
     "entry_split_order_plan": "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_",
+    "dynamic_entry_price_resolver": "KORSTOCKSCAN_MECHANISTIC_ENTRY_PRICE_POLICY_",
     "scale_in_split_order_plan": "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_",
     PROFIT_STAGNATION_EXIT_FAMILY: "KORSTOCKSCAN_SCALP_PROFIT_STAGNATION_",
 }
@@ -5206,6 +5221,12 @@ SELECTED_FAMILY_REQUIRED_ENV_KEYS: dict[str, list[str]] = {
         "KORSTOCKSCAN_SCALPING_NORMAL_FAVORABLE_DEFENSIVE_BPS",
         "KORSTOCKSCAN_SCALPING_NORMAL_WEAK_DEFENSIVE_BPS",
         "KORSTOCKSCAN_SCALPING_CONDITIONAL_1TICK_REAL_ENABLED",
+        "KORSTOCKSCAN_MECHANISTIC_ENTRY_PRICE_POLICY_ENABLED",
+        "KORSTOCKSCAN_MECHANISTIC_ENTRY_PRICE_POLICY_FILE",
+        "KORSTOCKSCAN_MECHANISTIC_ENTRY_PRICE_POLICY_VERSION",
+        "KORSTOCKSCAN_MECHANISTIC_ENTRY_PRICE_POLICY_SOURCE_DATE",
+        "KORSTOCKSCAN_MECHANISTIC_ENTRY_PRICE_POLICY_SHA256",
+        "KORSTOCKSCAN_MECHANISTIC_ENTRY_PRICE_POLICY_ACTIVE_DATE",
     ],
     "entry_cancel_wait_runtime": [
         "KORSTOCKSCAN_ENTRY_CANCEL_WAIT_ATTRIBUTION_ENABLED",
@@ -5221,6 +5242,12 @@ SELECTED_FAMILY_REQUIRED_ENV_KEYS: dict[str, list[str]] = {
         "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED",
         "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE",
         "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_VERSION",
+        "KORSTOCKSCAN_ENTRY_EXECUTION_SIZING_POLICY_ENABLED",
+        "KORSTOCKSCAN_ENTRY_EXECUTION_SIZING_POLICY_FILE",
+        "KORSTOCKSCAN_ENTRY_EXECUTION_SIZING_POLICY_VERSION",
+        "KORSTOCKSCAN_ENTRY_EXECUTION_SIZING_POLICY_SOURCE_DATE",
+        "KORSTOCKSCAN_ENTRY_EXECUTION_SIZING_POLICY_SHA256",
+        "KORSTOCKSCAN_ENTRY_EXECUTION_SIZING_POLICY_ACTIVE_DATE",
     ],
     "scale_in_split_order_plan": [
         "KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_ENABLED",
@@ -6001,6 +6028,30 @@ def _split_runtime_policy_audits(
             "require_sha256": True,
         },
         {
+            "family": "dynamic_entry_price_resolver",
+            "prefix": "KORSTOCKSCAN_MECHANISTIC_ENTRY_PRICE_POLICY_",
+            "schema": MECHANISTIC_ENTRY_PRICE_POLICY_SCHEMA,
+            "freshness_field": "source_date",
+            "max_age_days": 5,
+            "require_runtime_apply_allowed": True,
+            "allow_missing_runtime_apply_allowed": False,
+            "active_date_key": "KORSTOCKSCAN_MECHANISTIC_ENTRY_PRICE_POLICY_ACTIVE_DATE",
+            "require_sha256": True,
+            "optional_when_absent": True,
+        },
+        {
+            "family": "entry_execution_sizing_policy",
+            "prefix": "KORSTOCKSCAN_ENTRY_EXECUTION_SIZING_POLICY_",
+            "schema": ENTRY_EXECUTION_SIZING_POLICY_SCHEMA,
+            "freshness_field": "source_date",
+            "max_age_days": 5,
+            "require_runtime_apply_allowed": True,
+            "allow_missing_runtime_apply_allowed": False,
+            "active_date_key": "KORSTOCKSCAN_ENTRY_EXECUTION_SIZING_POLICY_ACTIVE_DATE",
+            "require_sha256": True,
+            "optional_when_absent": True,
+        },
+        {
             "family": "entry_split_order_plan",
             "prefix": "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_",
             "schema": "entry_split_order_policy_v1",
@@ -6032,6 +6083,10 @@ def _split_runtime_policy_audits(
     )
     for spec in specs:
         prefix = str(spec["prefix"])
+        if spec.get("optional_when_absent") and not any(
+            key.startswith(prefix) for key in effective_env
+        ):
+            continue
         if spec["family"] in {
             "position_sizing_dynamic_formula",
             AFTERMARKET_SOR_RUNTIME_POLICY_FAMILY,
@@ -6135,6 +6190,60 @@ def _split_runtime_policy_audits(
                 )
                 audits.append(audit)
                 continue
+            if spec["family"] == "dynamic_entry_price_resolver" and (
+                policy.get("policy_owner") != ENTRY_PRICE_OWNER
+                or policy.get("provider_calls") != 0
+                or policy.get("ai_price_authority") is not False
+                or "ai" in str(policy.get("candidate_id") or "").lower()
+                or not isinstance(policy.get("runtime_env"), dict)
+                or any(
+                    str(effective_env.get(str(key)) or "") != str(value)
+                    for key, value in (policy.get("runtime_env") or {}).items()
+                )
+            ):
+                audit.update(
+                    status="fail", reason="mechanistic_entry_price_authority_invalid"
+                )
+                audits.append(audit)
+                continue
+            if spec["family"] == "entry_execution_sizing_policy" and (
+                policy.get("policy_owner") != ENTRY_EXECUTION_SIZING_OWNER
+                or policy.get("action_authority") is not False
+                or policy.get("price_authority") is not False
+                or policy.get("scale_in_authority") is not False
+                or policy.get("quantity_conservation_required") is not True
+            ):
+                audit.update(
+                    status="fail", reason="entry_execution_sizing_authority_invalid"
+                )
+                audits.append(audit)
+                continue
+            if spec["family"] == "entry_execution_sizing_policy":
+                referenced = (
+                    (
+                        policy.get("quantity_policy_file"),
+                        policy.get("quantity_policy_sha256"),
+                    ),
+                    (
+                        policy.get("split_policy_file"),
+                        policy.get("split_policy_sha256"),
+                    ),
+                )
+                referenced_hashes_valid = True
+                for referenced_path, referenced_sha in referenced:
+                    path = Path(str(referenced_path or ""))
+                    if not path.is_file() or hashlib.sha256(
+                        path.read_bytes()
+                    ).hexdigest() != str(referenced_sha or ""):
+                        referenced_hashes_valid = False
+                        break
+                if not referenced_hashes_valid:
+                    audit.update(
+                        status="fail",
+                        reason="entry_execution_sizing_referenced_policy_hash_invalid",
+                    )
+                    audits.append(audit)
+                    continue
         if spec["family"] == "entry_split_order_plan" and {
             "exploration_seed_allowed",
             "ev_validated_runtime_apply_allowed",
@@ -6301,12 +6410,16 @@ def _drop_unusable_selected_split_policies(
     selected_families = {
         str(item.get("family") or "") for item in selected if isinstance(item, dict)
     }
-    unusable = {
-        str(audit.get("family") or ""): audit
-        for audit in _split_runtime_policy_audits(target_date, env_overrides)
-        if audit.get("status") != "pass"
-        and str(audit.get("family") or "") in selected_families
-    }
+    unusable: dict[str, dict[str, Any]] = {}
+    for audit in _split_runtime_policy_audits(target_date, env_overrides):
+        family = str(audit.get("family") or "")
+        selected_family = (
+            "entry_split_order_plan"
+            if family == "entry_execution_sizing_policy"
+            else family
+        )
+        if audit.get("status") != "pass" and selected_family in selected_families:
+            unusable[selected_family] = audit
     if not unusable:
         return selected, decisions, env_overrides
 
@@ -6318,10 +6431,18 @@ def _drop_unusable_selected_split_policies(
         for family in unusable
         if family in _FAMILY_ENV_KEY_PREFIXES
     }
+    if "entry_split_order_plan" in unusable:
+        blocked_prefixes.add("KORSTOCKSCAN_ENTRY_EXECUTION_SIZING_POLICY_")
+    blocked_exact_keys: set[str] = set()
+    if "dynamic_entry_price_resolver" in unusable:
+        blocked_exact_keys.update(
+            SELECTED_FAMILY_REQUIRED_ENV_KEYS["dynamic_entry_price_resolver"]
+        )
     filtered_env = {
         key: value
         for key, value in env_overrides.items()
-        if not any(str(key).startswith(prefix) for prefix in blocked_prefixes)
+        if key not in blocked_exact_keys
+        and not any(str(key).startswith(prefix) for prefix in blocked_prefixes)
     }
     updated_decisions: list[dict[str, Any]] = []
     for decision in decisions:
@@ -7412,6 +7533,7 @@ def _integrated_entry_axis_bundle(
         "entry_action": (),
         "entry_ai_auxiliary": (),
         "entry_price": (
+            "KORSTOCKSCAN_MECHANISTIC_ENTRY_PRICE_POLICY_",
             "KORSTOCKSCAN_DYNAMIC_ENTRY_PRICE_RESOLVER_",
             "KORSTOCKSCAN_SCALPING_ENTRY_PRICE_RESOLVER_",
             "KORSTOCKSCAN_SCALPING_ENTRY_PRICE_DEFENSE_",
@@ -7422,6 +7544,7 @@ def _integrated_entry_axis_bundle(
             "KORSTOCKSCAN_SCALPING_CONDITIONAL_STRONG_DEFENSIVE_",
         ),
         "entry_execution_sizing": (
+            "KORSTOCKSCAN_ENTRY_EXECUTION_SIZING_POLICY_",
             "KORSTOCKSCAN_POSITION_SIZING_POLICY_",
             "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_",
         ),
@@ -7547,21 +7670,61 @@ def _integrated_entry_axis_bundle(
         },
         "entry_price": {
             "owner": ENTRY_PRICE_OWNER,
-            "source_kind": "code_contract",
+            "source_kind": (
+                "dated_policy_projection"
+                if _runtime_env_enabled(
+                    env_overrides.get(
+                        "KORSTOCKSCAN_MECHANISTIC_ENTRY_PRICE_POLICY_ENABLED"
+                    )
+                )
+                else "code_contract_baseline"
+            ),
             "source_module": "src.engine.scalping.entry_execution_sizing_plan",
             "projection": {
-                "policy_version": ENTRY_PRICE_POLICY_VERSION,
-                "policy_sha256": ENTRY_PRICE_POLICY_SHA256,
+                "policy_version": env_overrides.get(
+                    "KORSTOCKSCAN_MECHANISTIC_ENTRY_PRICE_POLICY_VERSION",
+                    ENTRY_PRICE_POLICY_VERSION,
+                ),
+                "policy_sha256": env_overrides.get(
+                    "KORSTOCKSCAN_MECHANISTIC_ENTRY_PRICE_POLICY_SHA256",
+                    ENTRY_PRICE_POLICY_SHA256,
+                ),
+                "source_date": env_overrides.get(
+                    "KORSTOCKSCAN_MECHANISTIC_ENTRY_PRICE_POLICY_SOURCE_DATE"
+                ),
+                "active_date": env_overrides.get(
+                    "KORSTOCKSCAN_MECHANISTIC_ENTRY_PRICE_POLICY_ACTIVE_DATE"
+                ),
                 "provider_calls": 0,
                 "numeric_price_owner_only": True,
             },
         },
         "entry_execution_sizing": {
             "owner": ENTRY_EXECUTION_SIZING_OWNER,
-            "source_kind": "code_contract",
+            "source_kind": (
+                "dated_policy_projection"
+                if _runtime_env_enabled(
+                    env_overrides.get(
+                        "KORSTOCKSCAN_ENTRY_EXECUTION_SIZING_POLICY_ENABLED"
+                    )
+                )
+                else "code_contract_baseline"
+            ),
             "source_module": "src.engine.scalping.entry_execution_sizing_plan",
             "projection": {
-                "policy_version": ENTRY_EXECUTION_SIZING_POLICY_VERSION,
+                "policy_version": env_overrides.get(
+                    "KORSTOCKSCAN_ENTRY_EXECUTION_SIZING_POLICY_VERSION",
+                    ENTRY_EXECUTION_SIZING_POLICY_VERSION,
+                ),
+                "policy_sha256": env_overrides.get(
+                    "KORSTOCKSCAN_ENTRY_EXECUTION_SIZING_POLICY_SHA256"
+                ),
+                "source_date": env_overrides.get(
+                    "KORSTOCKSCAN_ENTRY_EXECUTION_SIZING_POLICY_SOURCE_DATE"
+                ),
+                "active_date": env_overrides.get(
+                    "KORSTOCKSCAN_ENTRY_EXECUTION_SIZING_POLICY_ACTIVE_DATE"
+                ),
                 "quantity_and_multi_leg_atomic": True,
                 "action_or_price_authority": False,
             },

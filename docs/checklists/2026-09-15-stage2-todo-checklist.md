@@ -92,6 +92,17 @@
   - 금지: sim/combined EV만으로 broker execution 품질이나 live 전환을 확정하지 않는다.
   - 다음 액션: 다음 장전 apply 입력으로 쓸 수 있는 항목과 hold_sample/freeze 항목을 분리한다.
 
+- [ ] `[EntryAxesClosedLoopPostclose0915] 최초 진입 가격·수량+multi-leg 장후 폐루프 및 다음 장전 정책 발행 확인` (`Due: 2026-09-15`, `Slot: POSTCLOSE`, `TimeWindow: 20:10~21:55`, `Track: ScalpingLogic`)
+  - Source: [daily_threshold_cycle_report.py](/home/ubuntu/KORStockScan/src/engine/daily_threshold_cycle_report.py), [entry_split_order_plan.py](/home/ubuntu/KORStockScan/src/engine/scalping/entry_split_order_plan.py), [threshold_cycle_ev_2026-09-15.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-09-15.json)
+  - 판정 기준: 기계 가격 후보와 초기진입 전용 수량·multi-leg 동일-attempt 4-arm을 비용 차감 terminal 기준으로 평가한다. 조건 통과 시 `mechanistic_entry_price_policy`와 `entry_execution_sizing_policy`가 다음 KRX 거래일 날짜로 원자 발행되고, 미달이면 기존 기본 정책을 유지한 채 직접 blocker와 남은 표본을 기록해야 한다.
+  - owner 경계: AI 가격 후보와 provider/model 선택을 금지하고, AVG_DOWN/PYRAMID action·price·execution-sizing 표본을 최초 진입 정책 승격 분모에 합치지 않는다. 결측 arm·비용·terminal은 0으로 보간하지 않는다.
+  - 완료 조건: 장후 producer terminal, 정책 생성 또는 정당한 hold, artifact file/hash/source date/active date, `runtime_effect=false`인 PREOPEN handoff가 모두 설명된다. 장후 정책 발행을 다음날 PID 소비나 비용 후 실효성 완료로 표시하지 않는다.
+
+- [ ] `[EntryAxesClosedLoopPreopen0916] 최초 진입 axis bundle·dated 정책 PREOPEN 및 PID 소비 확인` (`Due: 2026-09-16`, `Slot: PREOPEN`, `TimeWindow: 07:35~08:00`, `Track: RuntimeStability`)
+  - Source: [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), [entry_execution_sizing_plan.py](/home/ubuntu/KORStockScan/src/engine/scalping/entry_execution_sizing_plan.py), [run_runtime_release.sh](/home/ubuntu/KORStockScan/deploy/run_runtime_release.sh)
+  - 판정 기준: 7개 axis의 env key owner 중복이 0이고, B6은 policy 선택 없이 file/hash/date/consumer identity만 결속해야 한다. 생성된 dated 가격·통합 sizing 정책이 있으면 PREOPEN audit와 PID env가 동일해야 하며, 후보 미생성은 baseline 기동을 막지 않는다.
+  - 완료 조건: 선택 release/commit, PREOPEN manifest·env·verify, 실제 main PID root/commit/env, 기계 가격 receipt와 atomic quantity+leg plan을 분리 확인한다. 필수 hash/date 불일치는 fail-closed하되 사용자 env 복사나 수동 정책 합성으로 우회하지 않는다.
+
 - [ ] `[HumanInterventionSummary0915] 자동화체인 사용자 개입 요구사항 분류 및 누락 확인` (`Due: 2026-09-15`, `Slot: POSTCLOSE`, `TimeWindow: 17:00~17:15`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-09-14.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-09-14.json), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
   - 판정 기준: 개입사항을 `approval_artifact_required|created|missing|blocked_by_policy|observe_only`, `Codex 구현 필요`, `수동 동기화 필요`, `관찰만`으로 분류한다.

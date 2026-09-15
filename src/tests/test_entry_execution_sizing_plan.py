@@ -1,9 +1,16 @@
+import hashlib
+import json
+
 from src.engine.scalping.entry_execution_sizing_plan import (
+    ENTRY_EXECUTION_SIZING_POLICY_SCHEMA,
     ENTRY_PRICE_POLICY_SHA256,
+    MECHANISTIC_ENTRY_PRICE_POLICY_SCHEMA,
+    OWNER,
     PRICE_OWNER,
     POLICY_VERSION,
     compose_entry_execution_sizing_plan,
     compose_scale_in_execution_sizing_plan,
+    runtime_mechanistic_entry_price_policy,
 )
 from src.engine.scalping.entry_split_order_plan import build_probe_residual_orders
 
@@ -30,6 +37,218 @@ def _priced(order):
         "entry_price_route": "KRX",
         "entry_price_epoch": "epoch-1",
     }
+
+
+def _write_policy(tmp_path, name, payload):
+    path = tmp_path / name
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path, hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_dated_price_and_integrated_sizing_policies_bind_without_new_authority(
+    tmp_path, monkeypatch
+):
+    active_date = "2026-09-16"
+    price_payload = {
+        "schema_version": MECHANISTIC_ENTRY_PRICE_POLICY_SCHEMA,
+        "policy_owner": PRICE_OWNER,
+        "policy_version": "mechanistic:test",
+        "source_date": "2026-09-15",
+        "active_date": active_date,
+        "candidate_id": "normal:25",
+        "runtime_env": {"KORSTOCKSCAN_SCALPING_NORMAL_DEFENSIVE_BPS": "25"},
+        "provider_calls": 0,
+        "ai_price_authority": False,
+        "runtime_apply_allowed": True,
+    }
+    price_path, price_sha = _write_policy(tmp_path, "price.json", price_payload)
+    for suffix, value in {
+        "ENABLED": "true",
+        "FILE": str(price_path),
+        "VERSION": "mechanistic:test",
+        "SOURCE_DATE": "2026-09-15",
+        "ACTIVE_DATE": active_date,
+        "SHA256": price_sha,
+    }.items():
+        monkeypatch.setenv(f"KORSTOCKSCAN_MECHANISTIC_ENTRY_PRICE_POLICY_{suffix}", value)
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_NORMAL_DEFENSIVE_BPS", "25")
+
+    policy, status = runtime_mechanistic_entry_price_policy(active_date=active_date)
+
+    assert status == "loaded"
+    assert policy["candidate_id"] == "normal:25"
+    assert policy["provider_calls"] == 0
+
+    quantity_path, quantity_sha = _write_policy(
+        tmp_path, "quantity.json", {"policy_version": "qty:test"}
+    )
+    split_path, split_sha = _write_policy(
+        tmp_path, "split.json", {"policy_version": "split:test"}
+    )
+    sizing_payload = {
+        "schema_version": ENTRY_EXECUTION_SIZING_POLICY_SCHEMA,
+        "policy_owner": OWNER,
+        "policy_version": "sizing:test",
+        "source_date": "2026-09-15",
+        "active_date": active_date,
+        "quantity_policy_version": "qty:test",
+        "quantity_policy_file": str(quantity_path),
+        "quantity_policy_sha256": quantity_sha,
+        "split_policy_version": "split:test",
+        "split_policy_file": str(split_path),
+        "split_policy_sha256": split_sha,
+        "action_authority": False,
+        "price_authority": False,
+        "scale_in_authority": False,
+        "quantity_conservation_required": True,
+        "runtime_apply_allowed": True,
+    }
+    sizing_path, sizing_sha = _write_policy(tmp_path, "sizing.json", sizing_payload)
+    for suffix, value in {
+        "ENABLED": "true",
+        "FILE": str(sizing_path),
+        "VERSION": "sizing:test",
+        "SOURCE_DATE": "2026-09-15",
+        "ACTIVE_DATE": active_date,
+        "SHA256": sizing_sha,
+    }.items():
+        monkeypatch.setenv(f"KORSTOCKSCAN_ENTRY_EXECUTION_SIZING_POLICY_{suffix}", value)
+    monkeypatch.setattr(
+        "src.engine.scalping.entry_execution_sizing_plan.date",
+        type("FixedDate", (), {"today": staticmethod(lambda: __import__("datetime").date(2026, 9, 16))}),
+    )
+    priced = _priced({"qty": 1, "price": 1000})
+    priced["entry_price_policy_version"] = "mechanistic:test"
+    priced["entry_price_policy_sha256"] = price_sha
+
+    _, fields = compose_entry_execution_sizing_plan(
+        [priced],
+        expected_total_qty=1,
+        action_receipt=_receipt(),
+        quantity_policy_version="qty:test",
+        split_policy_version="split:test",
+    )
+
+    assert fields["entry_execution_sizing_valid"] is True
+    assert fields["entry_execution_sizing_policy"] == "sizing:test"
+    assert fields["entry_execution_sizing_migration_baseline"] is False
+
+
+def test_dated_sizing_policy_rejects_cross_owner_version_mismatch(
+    tmp_path, monkeypatch
+):
+    quantity_path, quantity_sha = _write_policy(
+        tmp_path, "quantity.json", {"policy_version": "qty:candidate"}
+    )
+    split_path, split_sha = _write_policy(
+        tmp_path, "split.json", {"policy_version": "split:candidate"}
+    )
+    payload = {
+        "schema_version": ENTRY_EXECUTION_SIZING_POLICY_SCHEMA,
+        "policy_owner": OWNER,
+        "policy_version": "sizing:test",
+        "source_date": "2026-09-15",
+        "active_date": "2026-09-16",
+        "quantity_policy_version": "qty:candidate",
+        "quantity_policy_file": str(quantity_path),
+        "quantity_policy_sha256": quantity_sha,
+        "split_policy_version": "split:candidate",
+        "split_policy_file": str(split_path),
+        "split_policy_sha256": split_sha,
+        "action_authority": False,
+        "price_authority": False,
+        "scale_in_authority": False,
+        "quantity_conservation_required": True,
+        "runtime_apply_allowed": True,
+    }
+    path, sha = _write_policy(tmp_path, "sizing.json", payload)
+    for suffix, value in {
+        "ENABLED": "true",
+        "FILE": str(path),
+        "VERSION": "sizing:test",
+        "SOURCE_DATE": "2026-09-15",
+        "ACTIVE_DATE": "2026-09-16",
+        "SHA256": sha,
+    }.items():
+        monkeypatch.setenv(f"KORSTOCKSCAN_ENTRY_EXECUTION_SIZING_POLICY_{suffix}", value)
+    monkeypatch.setattr(
+        "src.engine.scalping.entry_execution_sizing_plan.date",
+        type("FixedDate", (), {"today": staticmethod(lambda: __import__("datetime").date(2026, 9, 16))}),
+    )
+
+    _, fields = compose_entry_execution_sizing_plan(
+        [_priced({"qty": 1, "price": 1000})],
+        expected_total_qty=1,
+        action_receipt=_receipt(),
+        quantity_policy_version="qty:incumbent",
+        split_policy_version="split:incumbent",
+    )
+
+    assert fields["entry_execution_sizing_valid"] is False
+    assert "integrated_quantity_policy_version_mismatch" in fields[
+        "entry_execution_sizing_blockers"
+    ]
+
+
+def test_dated_sizing_policy_rejects_referenced_policy_hash_drift(
+    tmp_path, monkeypatch
+):
+    quantity_path, quantity_sha = _write_policy(
+        tmp_path, "quantity.json", {"policy_version": "qty:candidate"}
+    )
+    split_path, split_sha = _write_policy(
+        tmp_path, "split.json", {"policy_version": "split:candidate"}
+    )
+    payload = {
+        "schema_version": ENTRY_EXECUTION_SIZING_POLICY_SCHEMA,
+        "policy_owner": OWNER,
+        "policy_version": "sizing:test",
+        "source_date": "2026-09-15",
+        "active_date": "2026-09-16",
+        "quantity_policy_version": "qty:candidate",
+        "quantity_policy_file": str(quantity_path),
+        "quantity_policy_sha256": quantity_sha,
+        "split_policy_version": "split:candidate",
+        "split_policy_file": str(split_path),
+        "split_policy_sha256": split_sha,
+        "action_authority": False,
+        "price_authority": False,
+        "scale_in_authority": False,
+        "quantity_conservation_required": True,
+        "runtime_apply_allowed": True,
+    }
+    path, sha = _write_policy(tmp_path, "sizing.json", payload)
+    for suffix, value in {
+        "ENABLED": "true",
+        "FILE": str(path),
+        "VERSION": "sizing:test",
+        "SOURCE_DATE": "2026-09-15",
+        "ACTIVE_DATE": "2026-09-16",
+        "SHA256": sha,
+    }.items():
+        monkeypatch.setenv(f"KORSTOCKSCAN_ENTRY_EXECUTION_SIZING_POLICY_{suffix}", value)
+    monkeypatch.setattr(
+        "src.engine.scalping.entry_execution_sizing_plan.date",
+        type(
+            "FixedDate",
+            (),
+            {"today": staticmethod(lambda: __import__("datetime").date(2026, 9, 16))},
+        ),
+    )
+    quantity_path.write_text('{"policy_version":"drifted"}', encoding="utf-8")
+
+    _, fields = compose_entry_execution_sizing_plan(
+        [_priced({"qty": 1, "price": 1000})],
+        expected_total_qty=1,
+        action_receipt=_receipt(),
+        quantity_policy_version="qty:candidate",
+        split_policy_version="split:candidate",
+    )
+
+    assert fields["entry_execution_sizing_valid"] is False
+    assert "entry_execution_sizing_referenced_policy_hash_invalid" in fields[
+        "entry_execution_sizing_blockers"
+    ]
 
 
 def test_atomic_plan_preserves_existing_multi_leg_shape_and_quantity():

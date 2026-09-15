@@ -3133,7 +3133,9 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
         f"- authority: `{scalp_sim.get('calibration_authority') or '-'}` / fill_policy: `{scalp_sim.get('fill_policy') or '-'}`",
         f"- armed/filled/sold: `{scalp_sim.get('entry_armed')}` / `{scalp_sim.get('buy_filled')}` / `{scalp_sim.get('sell_completed')}`",
         f"- expired/unpriced/duplicate: `{scalp_sim.get('entry_expired')}` / `{scalp_sim.get('entry_unpriced')}` / `{scalp_sim.get('duplicate_buy_signal')}`",
-        f"- entry_ai_price applied/skip: `{scalp_sim.get('entry_ai_price_applied')}` / `{scalp_sim.get('entry_ai_price_skip_order')}`",
+        "- entry mechanistic price applied/skip: "
+        f"`{int(scalp_sim.get('entry_mechanistic_price_applied') or 0) + int(scalp_sim.get('entry_ai_price_applied') or 0)}` / "
+        f"`{int(scalp_sim.get('entry_mechanistic_price_skip_order') or 0) + int(scalp_sim.get('entry_ai_price_skip_order') or 0)}`",
         f"- submit_revalidation warning/block: `{scalp_sim.get('entry_submit_revalidation_warning')}` / `{scalp_sim.get('entry_submit_revalidation_block')}`",
         f"- scale_in filled/unfilled: `{scalp_sim.get('scale_in_filled')}` / `{scalp_sim.get('scale_in_unfilled')}`",
         f"- overnight decision/sell/hold/carry_restored: `{scalp_sim.get('overnight_decision')}` / `{scalp_sim.get('overnight_sell_today')}` / `{scalp_sim.get('overnight_hold')}` / `{scalp_sim.get('overnight_carry_restored')}`",

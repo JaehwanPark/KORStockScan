@@ -11026,6 +11026,77 @@ def test_split_runtime_policy_audit_accepts_current_entry_and_scale_in_policies(
     assert audits[0]["operator_fallback_authorized"] is True
 
 
+def test_preopen_audits_mechanistic_price_and_atomic_sizing_policy_hashes(tmp_path):
+    quantity_path = tmp_path / "quantity.json"
+    quantity_path.write_text("{}", encoding="utf-8")
+    split_path = tmp_path / "split.json"
+    split_path.write_text("{}", encoding="utf-8")
+    quantity_sha = hashlib.sha256(quantity_path.read_bytes()).hexdigest()
+    split_sha = hashlib.sha256(split_path.read_bytes()).hexdigest()
+    price_policy = {
+        "schema_version": mod.MECHANISTIC_ENTRY_PRICE_POLICY_SCHEMA,
+        "policy_owner": mod.ENTRY_PRICE_OWNER,
+        "policy_version": "price:test",
+        "source_date": "2026-09-15",
+        "active_date": "2026-09-16",
+        "candidate_id": "normal:25",
+        "runtime_env": {"KORSTOCKSCAN_SCALPING_NORMAL_DEFENSIVE_BPS": "25"},
+        "provider_calls": 0,
+        "ai_price_authority": False,
+        "runtime_apply_allowed": True,
+    }
+    price_path = tmp_path / "price.json"
+    price_path.write_text(json.dumps(price_policy), encoding="utf-8")
+    price_sha = hashlib.sha256(price_path.read_bytes()).hexdigest()
+    sizing_policy = {
+        "schema_version": mod.ENTRY_EXECUTION_SIZING_POLICY_SCHEMA,
+        "policy_owner": mod.ENTRY_EXECUTION_SIZING_OWNER,
+        "policy_version": "sizing:test",
+        "source_date": "2026-09-15",
+        "active_date": "2026-09-16",
+        "quantity_policy_file": str(quantity_path),
+        "quantity_policy_sha256": quantity_sha,
+        "split_policy_file": str(split_path),
+        "split_policy_sha256": split_sha,
+        "action_authority": False,
+        "price_authority": False,
+        "scale_in_authority": False,
+        "quantity_conservation_required": True,
+        "runtime_apply_allowed": True,
+    }
+    sizing_path = tmp_path / "sizing.json"
+    sizing_path.write_text(json.dumps(sizing_policy), encoding="utf-8")
+    sizing_sha = hashlib.sha256(sizing_path.read_bytes()).hexdigest()
+    env = {
+        "KORSTOCKSCAN_SCALPING_NORMAL_DEFENSIVE_BPS": "25",
+        "KORSTOCKSCAN_MECHANISTIC_ENTRY_PRICE_POLICY_ENABLED": "true",
+        "KORSTOCKSCAN_MECHANISTIC_ENTRY_PRICE_POLICY_FILE": str(price_path),
+        "KORSTOCKSCAN_MECHANISTIC_ENTRY_PRICE_POLICY_VERSION": "price:test",
+        "KORSTOCKSCAN_MECHANISTIC_ENTRY_PRICE_POLICY_SOURCE_DATE": "2026-09-15",
+        "KORSTOCKSCAN_MECHANISTIC_ENTRY_PRICE_POLICY_ACTIVE_DATE": "2026-09-16",
+        "KORSTOCKSCAN_MECHANISTIC_ENTRY_PRICE_POLICY_SHA256": price_sha,
+        "KORSTOCKSCAN_ENTRY_EXECUTION_SIZING_POLICY_ENABLED": "true",
+        "KORSTOCKSCAN_ENTRY_EXECUTION_SIZING_POLICY_FILE": str(sizing_path),
+        "KORSTOCKSCAN_ENTRY_EXECUTION_SIZING_POLICY_VERSION": "sizing:test",
+        "KORSTOCKSCAN_ENTRY_EXECUTION_SIZING_POLICY_SOURCE_DATE": "2026-09-15",
+        "KORSTOCKSCAN_ENTRY_EXECUTION_SIZING_POLICY_ACTIVE_DATE": "2026-09-16",
+        "KORSTOCKSCAN_ENTRY_EXECUTION_SIZING_POLICY_SHA256": sizing_sha,
+    }
+
+    audits = mod._split_runtime_policy_audits("2026-09-16", env)
+
+    assert [
+        (audit["family"], audit["status"])
+        for audit in audits
+        if audit["status"] != "disabled"
+    ] == [
+        ("dynamic_entry_price_resolver", "pass"),
+        ("entry_execution_sizing_policy", "pass"),
+    ]
+    bundle = mod._integrated_entry_axis_bundle("2026-09-16", env)
+    assert bundle["duplicate_env_key_owners"] == {}
+
+
 def test_split_runtime_policy_audit_accepts_exact_flat10_sizing_policy(tmp_path):
     policy_path = tmp_path / "position_sizing.json"
     policy = {

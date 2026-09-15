@@ -62,6 +62,8 @@ RELEVANT_STAGES = {
     "scalp_sim_entry_armed",
     "scalp_sim_entry_ai_price_applied",
     "scalp_sim_entry_ai_price_skip_order",
+    "scalp_sim_entry_mechanistic_price_applied",
+    "scalp_sim_entry_mechanistic_price_skip_order",
     "scalp_sim_pre_submit_liquidity_guard_would_block",
     "scalp_sim_pre_submit_liquidity_guard_would_pass",
     "scalp_sim_pre_submit_liquidity_guard_unknown",
@@ -86,6 +88,7 @@ PRE_SUBMIT_CONTEXT_OPTIONAL_STAGES = {
     "pre_submit_overbought_pullback_guard_block",
     "scalp_sim_entry_armed",
     "scalp_sim_entry_ai_price_skip_order",
+    "scalp_sim_entry_mechanistic_price_skip_order",
     "scalp_sim_pre_submit_liquidity_guard_would_block",
     "scalp_sim_pre_submit_liquidity_guard_unknown",
     "scalp_sim_pre_submit_overbought_guard_would_block",
@@ -119,6 +122,7 @@ SCORE_CONTEXT_BACKFILL_ELIGIBLE_STAGES = {
     "pre_submit_entry_ai_authority_guard_block",
     "pre_submit_overbought_pullback_guard_block",
     "scalp_sim_entry_ai_price_skip_order",
+    "scalp_sim_entry_mechanistic_price_skip_order",
     "scalp_sim_pre_submit_liquidity_guard_would_block",
     "scalp_sim_pre_submit_liquidity_guard_unknown",
     "scalp_sim_pre_submit_overbought_guard_would_block",
@@ -662,6 +666,7 @@ def _chosen_action(stage: str, fields: dict[str, Any]) -> str:
         "pre_submit_liquidity_guard_block",
         "pre_submit_overbought_pullback_guard_block",
         "scalp_sim_entry_ai_price_skip_order",
+        "scalp_sim_entry_mechanistic_price_skip_order",
         "scalp_sim_pre_submit_liquidity_guard_would_block",
         "scalp_sim_pre_submit_overbought_guard_would_block",
     }:
@@ -702,6 +707,7 @@ def _chosen_action(stage: str, fields: dict[str, Any]) -> str:
     if stage in {
         "order_bundle_submitted",
         "scalp_sim_entry_ai_price_applied",
+        "scalp_sim_entry_mechanistic_price_applied",
         "scalp_sim_buy_order_assumed_filled",
         "scalp_sim_pre_submit_liquidity_guard_would_pass",
         "scalp_sim_pre_submit_overbought_guard_would_pass",
@@ -1329,6 +1335,7 @@ def _apply_outcome(
 def _dedupe_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     priority = {
         "scalp_sim_entry_ai_price_skip_order": -1,
+        "scalp_sim_entry_mechanistic_price_skip_order": -1,
         "scalp_sim_pre_submit_liquidity_guard_would_block": -1,
         "scalp_sim_pre_submit_overbought_guard_would_block": -1,
         "scalp_sim_pre_submit_liquidity_guard_unknown": -1,
@@ -1732,7 +1739,10 @@ def _backfill_score_context(
             key_candidates, event_ts=event_ts
         )
         match_type = "exact_key" if best_row is not None else "prior_same_stock_time"
-        if best_row is None and stage != "scalp_sim_entry_ai_price_skip_order":
+        if best_row is None and stage not in {
+            "scalp_sim_entry_ai_price_skip_order",
+            "scalp_sim_entry_mechanistic_price_skip_order",
+        }:
             best_row, best_seconds = _prior_score_candidate(
                 scored_by_stock.get(stock_code, []),
                 event_ts=event_ts,
@@ -1772,7 +1782,11 @@ def _attach_entry_price_skip_followups(
     skip_rows = [
         row
         for row in rows
-        if str(row.get("stage") or "") == "scalp_sim_entry_ai_price_skip_order"
+        if str(row.get("stage") or "")
+        in {
+            "scalp_sim_entry_ai_price_skip_order",
+            "scalp_sim_entry_mechanistic_price_skip_order",
+        }
     ]
     attached_by_interval: Counter[str] = Counter()
     for row in skip_rows:
@@ -1890,7 +1904,10 @@ def _load_prior_entry_price_skip_rows(
         for row in report_rows:
             if not isinstance(row, dict):
                 continue
-            if str(row.get("stage") or "") != "scalp_sim_entry_ai_price_skip_order":
+            if str(row.get("stage") or "") not in {
+                "scalp_sim_entry_ai_price_skip_order",
+                "scalp_sim_entry_mechanistic_price_skip_order",
+            }:
                 continue
             copied = dict(row)
             copied["_cumulative_source_date"] = source_date
@@ -1929,7 +1946,10 @@ def _entry_price_skip_followup_cumulative_summary(
         target_allowed = False
     cumulative_rows = list(prior_rows)
     for row in current_rows if target_allowed else []:
-        if str(row.get("stage") or "") != "scalp_sim_entry_ai_price_skip_order":
+        if str(row.get("stage") or "") not in {
+            "scalp_sim_entry_ai_price_skip_order",
+            "scalp_sim_entry_mechanistic_price_skip_order",
+        }:
             continue
         copied = dict(row)
         copied["_cumulative_source_date"] = target_date
@@ -2051,7 +2071,11 @@ def _entry_price_skip_followup_cumulative_summary(
                 1
                 for row in current_rows
                 if target_allowed
-                if str(row.get("stage") or "") == "scalp_sim_entry_ai_price_skip_order"
+                if str(row.get("stage") or "")
+                in {
+                    "scalp_sim_entry_ai_price_skip_order",
+                    "scalp_sim_entry_mechanistic_price_skip_order",
+                }
             ),
         },
     }

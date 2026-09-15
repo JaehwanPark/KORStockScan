@@ -1,8 +1,10 @@
-"""Single sizing authority for every scalping buy allocation.
+"""Initial-entry sizing authority for scalping buy allocation.
 
-The allocator owns the entry-type tier, budget ratio, budget capacity, and
-quantity-cap composition.  Broker, quote, order, and stop guards remain
-downstream hard-safety vetoes and may only reduce or reject this quantity.
+The dated position-sizing policy owns only the initial-entry tier and budget
+ratio.  AVG_DOWN/PYRAMID keep their position's initial formula pin while their
+separate action, price, and execution-sizing owners apply downstream.  Broker,
+quote, order, and stop guards remain hard-safety vetoes and may only reduce or
+reject quantity.
 """
 
 from __future__ import annotations
@@ -30,6 +32,7 @@ POSITION_SIZING_POLICY_SCHEMA_VERSION = "position_sizing_dynamic_formula_policy_
 _FLAT_10_TIER_RATIOS = (0.10, 0.10, 0.10, 0.10, 0.10)
 MIN_COST_ADJUSTED_EV_PCT = 0.1
 RUNTIME_PROMOTION_SAMPLE_FLOOR = 30
+_SCALE_IN_ALLOCATION_STAGES = frozenset({"avg_down", "pyramid", "scale_in"})
 
 _INVALID_SOURCE_TOKENS = frozenset(
     {
@@ -307,6 +310,41 @@ def _runtime_position_sizing_policy(
     return formula, ratios, "policy_loaded", expected_version, expected_sha
 
 
+def _position_sizing_policy_for_context(
+    context: "ScalpingSizingContext",
+) -> tuple[str, tuple[float, ...], str, str | None, str | None]:
+    """Keep the dated initial-entry policy out of scale-in authority.
+
+    A scale-in reuses the formula recorded on its original entry.  Missing or
+    invalid historical identity falls back to the static initial-entry default;
+    it must not consume whichever dated policy happens to be active today.
+    """
+
+    stage = str(context.allocation_stage or "").strip().lower()
+    if stage not in _SCALE_IN_ALLOCATION_STAGES:
+        return _runtime_position_sizing_policy(context.reference_time)
+    initial_formula = str(context.initial_formula_version or "").strip()
+    if initial_formula == ROLLBACK_FORMULA_VERSION:
+        return (
+            ROLLBACK_FORMULA_VERSION,
+            _FLAT_10_TIER_RATIOS,
+            "scale_in_initial_formula_pin",
+            None,
+            None,
+        )
+    return (
+        FORMULA_VERSION,
+        DEFAULT_TIER_RATIOS,
+        (
+            "scale_in_initial_formula_pin"
+            if initial_formula == FORMULA_VERSION
+            else "scale_in_missing_initial_formula_default"
+        ),
+        None,
+        None,
+    )
+
+
 def _time_bucket(reference_time: Any) -> str:
     resolved = _coerce_reference_time(reference_time)
     if resolved is None:
@@ -506,7 +544,7 @@ def resolve_scalping_allocation(
     """Resolve the only supported scalping sizing decision."""
 
     formula_version, policy_ratios, policy_status, policy_version, policy_sha256 = (
-        _runtime_position_sizing_policy(context.reference_time)
+        _position_sizing_policy_for_context(context)
     )
     ratios, config_valid = _validated_tier_ratios(policy_ratios)
     tier, reason, source_count, tokens, time_bucket, reference_text = _select_tier(

@@ -80,6 +80,8 @@ THRESHOLD_STAGE_FAMILY_MAP = {
     "scalp_sim_entry_armed": "entry_mechanical_momentum",
     "scalp_sim_entry_ai_price_applied": "dynamic_entry_price_resolver",
     "scalp_sim_entry_ai_price_skip_order": "dynamic_entry_price_resolver",
+    "scalp_sim_entry_mechanistic_price_applied": "dynamic_entry_price_resolver",
+    "scalp_sim_entry_mechanistic_price_skip_order": "dynamic_entry_price_resolver",
     "scalp_sim_entry_submit_revalidation_warning": "dynamic_entry_price_resolver",
     "scalp_sim_entry_submit_revalidation_block": "dynamic_entry_price_resolver",
     "scalp_sim_pre_submit_liquidity_guard_would_block": "liquidity_pre_submit_guard_p1",

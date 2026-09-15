@@ -952,6 +952,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - Prompt V2는 stage별로 분리하고 `edge_state=EDGE|NO_EDGE|INSUFFICIENT_DATA`, 예상 상승·하락폭, `trend/liquidity/tape/risk/uncertainty` 구조화 근거와 canonical reason codes를 반환한다. Candidate replay는 `runtime_effect=false`, `actual_order_submitted=false`, `broker_order_forbidden=true`를 유지한다. 입력 bundle 전면 적용과 Prompt V2 runtime 승격은 별도 판단이며, Prompt V2는 한 stage/version 변경으로 귀속한 뒤 적용한다.
 
 - 장후 자동 정책화의 성과 임계값은 비용 차감 후 EV `>= +0.10%`로 통일한다. 이 기준은 entry prompt의 성과 승격, `position_sizing_dynamic_formula`, AVG_DOWN의 ADD 완화 후보, `scale_in_split_order_plan` runtime refresh에 적용하며 PREOPEN과 실제 allocator가 같은 값을 재검증한다. Prompt의 기존 bounded exploration과 AVG_DOWN의 `NO_ADD` 위험축소는 성과 승격이 아니므로 이 임계값으로 BUY·수량 확대 권한을 만들지 않는다. 정확한 표본·source quality·tail/fill·cap 및 hard-safety 조건은 각 기존 owner 계약을 계속 적용한다.
+- 최초 진입의 장후 폐루프는 `entry_action / entry_ai_auxiliary / entry_price / entry_execution_sizing`을 분리한다. 가격 후보는 기계식 resolver만 생성하고, 수량과 multi-leg는 동일 attempt 4-arm의 완전한 terminal·비용·수량보존 근거가 challenger gate를 통과한 경우에만 하나의 dated execution-sizing policy로 발행한다. 이 경제성 gate는 기존 기본 정책 기동을 막지 않는다. PREOPEN은 각 정책의 file/hash/source date/active date와 integrated axis bundle만 검증하며 정책값을 새로 선택하지 않는다. AVG_DOWN/PYRAMID는 별도 action/price/execution-sizing owner를 유지하고 현재 초기진입 dated 수량 정책을 상속하지 않으며, 해당 포지션의 최초 formula pin만 재사용한다.
 
 ## 장애 대응 기준
 

@@ -11,6 +11,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+from datetime import date
+from pathlib import Path
 from typing import Any
 
 SCHEMA_VERSION = "entry_execution_sizing_plan_v1"
@@ -18,6 +21,8 @@ SCALE_IN_SCHEMA_VERSION = "scale_in_execution_sizing_plan_v1"
 PRICE_SCHEMA_VERSION = "entry_price_plan_v1"
 SCALE_IN_PRICE_SCHEMA_VERSION = "scale_in_price_plan_v1"
 POLICY_VERSION = "execution_sizing_baseline_v1"
+ENTRY_EXECUTION_SIZING_POLICY_SCHEMA = "entry_execution_sizing_policy_v1"
+MECHANISTIC_ENTRY_PRICE_POLICY_SCHEMA = "mechanistic_entry_price_policy_v1"
 SCALE_IN_POLICY_VERSIONS = {
     "AVG_DOWN": "avg_down_execution_sizing_baseline_v1",
     "PYRAMID": "pyramid_execution_sizing_baseline_v1",
@@ -38,6 +43,125 @@ ENTRY_PRICE_POLICY_SHA256 = hashlib.sha256(
 ).hexdigest()
 SCALE_IN_PRICE_OWNER = "existing_scale_in_price_resolver"
 QUANTITY_OWNER = "position_sizing_dynamic_formula"
+
+_ENTRY_EXECUTION_POLICY_PREFIX = "KORSTOCKSCAN_ENTRY_EXECUTION_SIZING_POLICY_"
+_ENTRY_PRICE_POLICY_PREFIX = "KORSTOCKSCAN_MECHANISTIC_ENTRY_PRICE_POLICY_"
+
+
+def _enabled(value: Any) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _runtime_policy(
+    *,
+    prefix: str,
+    schema: str,
+    owner: str,
+    active_date: str | None = None,
+) -> tuple[dict[str, Any] | None, str]:
+    """Load one immutable dated policy without granting additional authority."""
+
+    if not _enabled(os.getenv(f"{prefix}ENABLED")):
+        return None, "disabled_baseline"
+    policy_path = Path(str(os.getenv(f"{prefix}FILE") or "").strip())
+    expected_version = str(os.getenv(f"{prefix}VERSION") or "").strip()
+    expected_source_date = str(os.getenv(f"{prefix}SOURCE_DATE") or "").strip()
+    expected_active_date = str(os.getenv(f"{prefix}ACTIVE_DATE") or "").strip()
+    expected_sha256 = str(os.getenv(f"{prefix}SHA256") or "").strip().lower()
+    if not all(
+        (str(policy_path), expected_version, expected_source_date, expected_active_date, expected_sha256)
+    ) or not policy_path.is_file():
+        return None, "policy_identity_missing"
+    try:
+        encoded = policy_path.read_bytes()
+        payload = json.loads(encoded.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None, "policy_unreadable"
+    if not isinstance(payload, dict):
+        return None, "policy_payload_invalid"
+    checks = (
+        payload.get("schema_version") == schema,
+        payload.get("policy_owner") == owner,
+        payload.get("policy_version") == expected_version,
+        payload.get("source_date") == expected_source_date,
+        payload.get("active_date") == expected_active_date,
+        hashlib.sha256(encoded).hexdigest() == expected_sha256,
+        payload.get("runtime_apply_allowed") is True,
+    )
+    if not all(checks):
+        return None, "policy_contract_invalid"
+    runtime_date = str(active_date or date.today().isoformat())
+    if expected_active_date != runtime_date:
+        return None, "policy_inactive_date"
+    return payload, "loaded"
+
+
+def runtime_mechanistic_entry_price_policy(
+    *, active_date: str | None = None
+) -> tuple[dict[str, Any], str]:
+    policy, status = _runtime_policy(
+        prefix=_ENTRY_PRICE_POLICY_PREFIX,
+        schema=MECHANISTIC_ENTRY_PRICE_POLICY_SCHEMA,
+        owner=PRICE_OWNER,
+        active_date=active_date,
+    )
+    if policy is None:
+        if status == "disabled_baseline":
+            return {
+                "policy_version": ENTRY_PRICE_POLICY_VERSION,
+                "policy_sha256": ENTRY_PRICE_POLICY_SHA256,
+                "candidate_id": "p1_current_resolver",
+                "runtime_env": {},
+            }, status
+        return {}, status
+    if policy.get("provider_calls") != 0 or policy.get("ai_price_authority") is not False:
+        return {}, "policy_authority_invalid"
+    candidate_id = str(policy.get("candidate_id") or "").strip()
+    if not candidate_id or "ai" in candidate_id.lower():
+        return {}, "policy_candidate_invalid"
+    runtime_env = policy.get("runtime_env")
+    if not isinstance(runtime_env, dict) or any(
+        str(os.getenv(str(key)) or "") != str(value)
+        for key, value in runtime_env.items()
+    ):
+        return {}, "policy_runtime_env_mismatch"
+    return {
+        **policy,
+        "policy_sha256": str(os.getenv(f"{_ENTRY_PRICE_POLICY_PREFIX}SHA256")),
+    }, status
+
+
+def runtime_entry_execution_sizing_policy(
+    *, active_date: str | None = None
+) -> tuple[dict[str, Any] | None, str]:
+    policy, status = _runtime_policy(
+        prefix=_ENTRY_EXECUTION_POLICY_PREFIX,
+        schema=ENTRY_EXECUTION_SIZING_POLICY_SCHEMA,
+        owner=OWNER,
+        active_date=active_date,
+    )
+    if policy is None:
+        return None, status
+    if (
+        policy.get("action_authority") is not False
+        or policy.get("price_authority") is not False
+        or policy.get("scale_in_authority") is not False
+        or policy.get("quantity_conservation_required") is not True
+    ):
+        return None, "policy_authority_invalid"
+    for path_key, sha_key in (
+        ("quantity_policy_file", "quantity_policy_sha256"),
+        ("split_policy_file", "split_policy_sha256"),
+    ):
+        referenced_path = Path(str(policy.get(path_key) or "").strip())
+        expected_sha256 = str(policy.get(sha_key) or "").strip().lower()
+        try:
+            observed_sha256 = hashlib.sha256(referenced_path.read_bytes()).hexdigest()
+        except OSError:
+            return None, "referenced_policy_missing"
+        if not expected_sha256 or observed_sha256 != expected_sha256:
+            return None, "referenced_policy_hash_invalid"
+    return policy, status
 
 
 def _positive_int(value: Any) -> int:
@@ -117,6 +241,10 @@ def compose_entry_execution_sizing_plan(
     action_owner = str(receipt.get("entry_primary_decision_owner") or "").strip()
     machine_action = str(receipt.get("entry_mechanistic_action") or "").strip().upper()
     ai_screen_pass = receipt.get("entry_ai_screen_pass") is True
+    execution_policy, execution_policy_status = (
+        runtime_entry_execution_sizing_policy()
+    )
+    price_policy, price_policy_status = runtime_mechanistic_entry_price_policy()
 
     blockers: list[str] = []
     if not action_receipt_id:
@@ -131,6 +259,19 @@ def compose_entry_execution_sizing_plan(
         blockers.append("expected_total_qty_invalid")
     if not orders:
         blockers.append("planned_orders_missing")
+    if execution_policy_status not in {"disabled_baseline", "loaded"}:
+        blockers.append(f"entry_execution_sizing_{execution_policy_status}")
+    if price_policy_status not in {"disabled_baseline", "loaded"}:
+        blockers.append(f"entry_price_{price_policy_status}")
+    if execution_policy is not None:
+        if str(quantity_policy_version or "") != str(
+            execution_policy.get("quantity_policy_version") or ""
+        ):
+            blockers.append("integrated_quantity_policy_version_mismatch")
+        if str(split_policy_version or "") != str(
+            execution_policy.get("split_policy_version") or ""
+        ):
+            blockers.append("integrated_split_policy_version_mismatch")
 
     immediate_qty = sum(_positive_int(item.get("qty")) for item in orders)
     continuation: dict[str, Any] | None = None
@@ -184,9 +325,15 @@ def compose_entry_execution_sizing_plan(
     price_owners.discard("")
     if price_owners != {PRICE_OWNER}:
         blockers.append("entry_price_owner_invalid")
-    if price_policy_versions != {ENTRY_PRICE_POLICY_VERSION}:
+    expected_price_policy_version = str(
+        price_policy.get("policy_version") or ENTRY_PRICE_POLICY_VERSION
+    )
+    expected_price_policy_sha256 = str(
+        price_policy.get("policy_sha256") or ENTRY_PRICE_POLICY_SHA256
+    )
+    if price_policy_versions != {expected_price_policy_version}:
         blockers.append("entry_price_policy_version_missing_or_conflicting")
-    if price_policy_sha256s != {ENTRY_PRICE_POLICY_SHA256}:
+    if price_policy_sha256s != {expected_price_policy_sha256}:
         blockers.append("entry_price_policy_sha256_missing_or_invalid")
     if len(price_source_receipt_sha256s) != 1 or not all(
         len(value) == 64 and all(character in "0123456789abcdef" for character in value)
@@ -316,8 +463,16 @@ def compose_entry_execution_sizing_plan(
         ),
         "price_plan_id": price_receipt["price_plan_id"],
         "price_plan_sha256": price_receipt["price_plan_sha256"],
-        "execution_sizing_policy": POLICY_VERSION,
-        "migration_baseline": True,
+        "execution_sizing_policy": str(
+            (execution_policy or {}).get("policy_version") or POLICY_VERSION
+        ),
+        "execution_sizing_policy_status": execution_policy_status,
+        "execution_sizing_policy_sha256": (
+            str(os.getenv(f"{_ENTRY_EXECUTION_POLICY_PREFIX}SHA256") or "")
+            if execution_policy is not None
+            else hashlib.sha256(POLICY_VERSION.encode("ascii")).hexdigest()
+        ),
+        "migration_baseline": execution_policy is None,
         "total_qty": expected_total_qty,
         "immediate_qty": immediate_qty,
         "deferred_probe_residual_qty": deferred_qty,
@@ -334,7 +489,11 @@ def compose_entry_execution_sizing_plan(
     common_fields = {
         "entry_execution_sizing_plan_schema": SCHEMA_VERSION,
         "entry_execution_sizing_plan_id": plan_id,
-        "entry_execution_sizing_policy": POLICY_VERSION,
+        "entry_execution_sizing_policy": plan_core["execution_sizing_policy"],
+        "entry_execution_sizing_policy_status": execution_policy_status,
+        "entry_execution_sizing_policy_sha256": plan_core[
+            "execution_sizing_policy_sha256"
+        ],
         "entry_execution_sizing_action_receipt_id": action_receipt_id or "-",
         "entry_execution_sizing_quantity_policy_version": plan_core[
             "quantity_policy_version"
@@ -350,7 +509,7 @@ def compose_entry_execution_sizing_plan(
             "quantity_conservation_holds"
         ],
         "entry_execution_sizing_quantity_increase_forbidden": True,
-        "entry_execution_sizing_migration_baseline": True,
+        "entry_execution_sizing_migration_baseline": plan_core["migration_baseline"],
         "entry_execution_sizing_plan_emitted": True,
         "entry_execution_sizing_valid": not blockers,
         "entry_execution_sizing_blockers": blockers,

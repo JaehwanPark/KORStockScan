@@ -442,6 +442,67 @@ def test_dated_flat10_policy_is_loaded_only_with_exact_ratio_contract(
     assert decision.policy_status == "policy_loaded"
 
 
+def test_dated_initial_entry_policy_does_not_change_scale_in_formula(
+    monkeypatch, tmp_path
+):
+    policy_path = tmp_path / "flat10.json"
+    policy = {
+        "schema_version": allocator.POSITION_SIZING_POLICY_SCHEMA_VERSION,
+        "policy_version": "position_sizing_dynamic_formula:2026-09-11",
+        "source_date": "2026-09-11",
+        "active_date": "2026-09-14",
+        "formula_version": allocator.ROLLBACK_FORMULA_VERSION,
+        "tier_ratios": [0.10, 0.10, 0.10, 0.10, 0.10],
+        "decision": "adjust_down_flat10",
+        "runtime_apply_allowed": True,
+        "canary_quantity_cap_precedence": True,
+        "source_quality_passed": True,
+        "minimum_cost_adjusted_ev_pct": 0.1,
+        "cost_adjusted_ev_pct": 0.1,
+        "exact_terminal_sample_count": 30,
+        "runtime_promotion_sample_floor": 30,
+    }
+    policy["policy_content_sha256"] = allocator._policy_content_sha256(policy)
+    policy_path.write_text(json.dumps(policy), encoding="utf-8")
+    for key, value in {
+        "KORSTOCKSCAN_POSITION_SIZING_POLICY_ENABLED": "true",
+        "KORSTOCKSCAN_POSITION_SIZING_POLICY_FILE": str(policy_path),
+        "KORSTOCKSCAN_POSITION_SIZING_POLICY_VERSION": policy["policy_version"],
+        "KORSTOCKSCAN_POSITION_SIZING_POLICY_SOURCE_DATE": policy["source_date"],
+        "KORSTOCKSCAN_POSITION_SIZING_POLICY_SHA256": hashlib.sha256(
+            policy_path.read_bytes()
+        ).hexdigest(),
+        "KORSTOCKSCAN_POSITION_SIZING_POLICY_ACTIVE_DATE": "2026-09-14",
+    }.items():
+        monkeypatch.setenv(key, value)
+
+    initial = allocator.resolve_scalping_allocation(
+        _context("2026-09-14T14:00:00")
+    )
+    scale_in = allocator.resolve_scalping_allocation(
+        _context(
+            "2026-09-14T14:00:00",
+            allocation_stage="avg_down",
+            initial_tier=5,
+            initial_formula_version=allocator.FORMULA_VERSION,
+        )
+    )
+
+    assert (initial.formula_version, initial.ratio, initial.policy_status) == (
+        allocator.ROLLBACK_FORMULA_VERSION,
+        pytest.approx(0.10),
+        "policy_loaded",
+    )
+    assert (scale_in.formula_version, scale_in.tier, scale_in.ratio) == (
+        allocator.FORMULA_VERSION,
+        5,
+        pytest.approx(0.25),
+    )
+    assert scale_in.policy_status == "scale_in_initial_formula_pin"
+    assert scale_in.policy_version is None
+    assert scale_in.policy_sha256 is None
+
+
 def test_position_sizing_policy_authority_rejects_underfloor_net_ev():
     policy = {
         "schema_version": allocator.POSITION_SIZING_POLICY_SCHEMA_VERSION,

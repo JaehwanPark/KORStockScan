@@ -29,6 +29,12 @@ from src.engine.scalping.entry_split_order_plan import (
     generation_policy_snapshot_path,
     runtime_apply_authority_contract_status,
 )
+from src.engine.scalping.entry_execution_sizing_plan import (
+    ENTRY_EXECUTION_SIZING_POLICY_SCHEMA,
+    MECHANISTIC_ENTRY_PRICE_POLICY_SCHEMA,
+    OWNER as ENTRY_EXECUTION_SIZING_OWNER,
+    PRICE_OWNER as MECHANISTIC_ENTRY_PRICE_OWNER,
+)
 from src.engine.scalping.position_sizing_allocator import (
     FORMULA_VERSION as SCALPING_SIZING_FORMULA_VERSION,
     MIN_COST_ADJUSTED_EV_PCT as POSITION_SIZING_MIN_COST_ADJUSTED_EV_PCT,
@@ -88,6 +94,12 @@ THRESHOLD_CYCLE_DIR = DATA_DIR / "threshold_cycle"
 THRESHOLD_APPLY_PLAN_DIR = THRESHOLD_CYCLE_DIR / "apply_plans"
 ENTRY_SPLIT_ORDER_POLICY_DIR = THRESHOLD_CYCLE_DIR / "entry_split_order_policy"
 SCALE_IN_SPLIT_ORDER_POLICY_DIR = THRESHOLD_CYCLE_DIR / "scale_in_split_order_policy"
+ENTRY_EXECUTION_SIZING_POLICY_DIR = (
+    THRESHOLD_CYCLE_DIR / "entry_execution_sizing_policy"
+)
+MECHANISTIC_ENTRY_PRICE_POLICY_DIR = (
+    THRESHOLD_CYCLE_DIR / "mechanistic_entry_price_policy"
+)
 POSITION_SIZING_POLICY_DIR = THRESHOLD_CYCLE_DIR / "approvals"
 AFTERMARKET_SOR_RUNTIME_POLICY_SCHEMA = "krx_aftermarket_sor_runtime_policy_v1"
 AFTERMARKET_SOR_RUNTIME_POLICY_DIR = POSITION_SIZING_POLICY_DIR
@@ -619,6 +631,12 @@ CALIBRATION_FAMILY_METADATA = {
             "SCALPING_NORMAL_FAVORABLE_DEFENSIVE_BPS",
             "SCALPING_NORMAL_WEAK_DEFENSIVE_BPS",
             "SCALPING_CONDITIONAL_1TICK_REAL_ENABLED",
+            "MECHANISTIC_ENTRY_PRICE_POLICY_ENABLED",
+            "MECHANISTIC_ENTRY_PRICE_POLICY_FILE",
+            "MECHANISTIC_ENTRY_PRICE_POLICY_VERSION",
+            "MECHANISTIC_ENTRY_PRICE_POLICY_SOURCE_DATE",
+            "MECHANISTIC_ENTRY_PRICE_POLICY_SHA256",
+            "MECHANISTIC_ENTRY_PRICE_POLICY_ACTIVE_DATE",
         ],
         "primary_key": "normal_defensive_ticks",
         "bounds": {
@@ -649,7 +667,7 @@ CALIBRATION_FAMILY_METADATA = {
         "window_policy": {
             "primary": "daily_intraday",
             "secondary": ["rolling_5d", "cumulative_since_2026-04-21"],
-            "use": "bid-1/bid-2/bid-3/best_bid/AI/reference/timeout 후보별 fill, cancel, late-fill, EV를 비교해 다음 PREOPEN bounded 후보만 만든다.",
+            "use": "기계식 bid/tick/reference/timeout 후보별 fill, cancel, late-fill, 비용 차감 EV를 비교해 다음 PREOPEN bounded 후보만 만든다. AI 가격 후보는 audit-only다.",
             "daily_only_allowed": True,
         },
         "sample_denominator_keys": [
@@ -667,6 +685,12 @@ CALIBRATION_FAMILY_METADATA = {
             "ENTRY_SPLIT_ORDER_POLICY_ENABLED",
             "ENTRY_SPLIT_ORDER_POLICY_FILE",
             "ENTRY_SPLIT_ORDER_POLICY_VERSION",
+            "ENTRY_EXECUTION_SIZING_POLICY_ENABLED",
+            "ENTRY_EXECUTION_SIZING_POLICY_FILE",
+            "ENTRY_EXECUTION_SIZING_POLICY_VERSION",
+            "ENTRY_EXECUTION_SIZING_POLICY_SOURCE_DATE",
+            "ENTRY_EXECUTION_SIZING_POLICY_SHA256",
+            "ENTRY_EXECUTION_SIZING_POLICY_ACTIVE_DATE",
         ],
         "primary_key": "enabled",
         "bounds": {},
@@ -675,7 +699,7 @@ CALIBRATION_FAMILY_METADATA = {
         "window_policy": {
             "primary": "rolling_10d",
             "secondary": ["daily_intraday", "cumulative_since_2026-04-21"],
-            "use": "기존 requested_qty는 position_sizing_dynamic_formula에 맡기고, 총 수량을 보존한 planned_orders leg 분해 policy만 다음 PREOPEN bounded env로 연결한다.",
+            "use": "기존 requested_qty는 initial-entry position sizing에 맡긴다. 동일 attempt 4-arm 승격 시 quantity+leg policy hash를 하나의 원자 정책으로 다음 PREOPEN에 결속한다.",
             "daily_only_allowed": False,
         },
         "sample_denominator_keys": ["real_sample_count"],
@@ -1023,7 +1047,7 @@ CALIBRATION_FAMILY_METADATA = {
                 "cumulative_since_2026-04-21",
                 "sim_probe_counterfactual_diagnostic",
             ],
-            "use": "position_sizing_dynamic_formula는 모든 SCALPING/SCALP 신규·추가매수와 sim/counterfactual에 entry_type_5stage_cap25_v1을 적용하는 단일 owner다. report grid는 선택 공식과 flat_10_fallback의 postclose 비교만 수행한다.",
+            "use": "position_sizing_dynamic_formula는 최초 SCALPING/SCALP 진입 총수량만 소유한다. AVG_DOWN/PYRAMID action, price, sizing은 별도 owner이며 이 family의 승격 분모에 포함하지 않는다.",
             "daily_only_allowed": False,
         },
         "sample_denominator_keys": ["real_completed_valid"],
@@ -1249,6 +1273,8 @@ def save_threshold_calibration_report(
         or "postclose"
     )
     _materialize_position_sizing_policy(report, target_date)
+    _materialize_mechanistic_entry_price_policy(report, target_date)
+    _materialize_integrated_entry_execution_sizing_policy(report, target_date)
     path = calibration_report_path_for_date(target_date, phase)
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -1344,6 +1370,7 @@ def _materialize_position_sizing_policy(report: dict, source_date: str) -> None:
         ],
         "tier_ratios": tier_ratios,
         "decision": decision,
+        "sizing_scope": "initial_entry_only",
         "runtime_apply_allowed": True,
         "source_quality_passed": True,
         "canary_quantity_cap_precedence": True,
@@ -1392,6 +1419,225 @@ def _materialize_position_sizing_policy(report: dict, source_date: str) -> None:
         "path": str(path),
         "sha256": recommended["policy_sha256"],
         "active_date": effective_date,
+    }
+
+
+def _write_dated_policy(path: Path, policy: dict[str, Any]) -> str:
+    policy["policy_content_sha256"] = hashlib.sha256(
+        json.dumps(
+            policy, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+    ).hexdigest()
+    encoded = json.dumps(policy, ensure_ascii=False, indent=2).encode("utf-8")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".tmp")
+    temporary.write_bytes(encoded)
+    temporary.replace(path)
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _materialize_mechanistic_entry_price_policy(
+    report: dict, source_date: str
+) -> None:
+    """Publish only a reviewed mechanistic price candidate for next PREOPEN."""
+
+    candidate = next(
+        (
+            item
+            for item in (report.get("calibration_candidates") or [])
+            if isinstance(item, dict)
+            and item.get("family") == "dynamic_entry_price_resolver"
+            and item.get("runtime_apply_eligible_now") is True
+            and item.get("calibration_state") == "adjust_up"
+        ),
+        None,
+    )
+    if not isinstance(candidate, dict):
+        return
+    metrics = candidate.get("source_metrics") or {}
+    selected = metrics.get("entry_price_profile_selected_candidate") or {}
+    selected_metrics = selected.get("metrics") or {}
+    candidate_id = str(selected.get("candidate_id") or "").strip()
+    value_key = str(selected.get("target_value_key") or "").strip()
+    value = _safe_int(selected.get("profile_bps"), 0) or 0
+    joined = _safe_int(selected.get("exact_outcome_joined_sample"), 0) or 0
+    ev = _safe_float(selected_metrics.get("source_quality_adjusted_ev_pct"), None)
+    env_key = next(
+        (
+            f"KORSTOCKSCAN_{target_key}"
+            for target_key, mapped_value_key in ENTRY_PRICE_TARGET_ENV_VALUE_KEYS.items()
+            if mapped_value_key == value_key
+        ),
+        "",
+    )
+    if (
+        not candidate_id
+        or "ai" in candidate_id.lower()
+        or not env_key
+        or value <= 0
+        or joined < 20
+        or ev is None
+        or ev < 0.10
+    ):
+        return
+    active_date = _next_krx_trading_date(source_date)
+    policy_version = f"mechanistic_entry_price:{source_date}:{candidate_id}"
+    policy = {
+        "schema_version": MECHANISTIC_ENTRY_PRICE_POLICY_SCHEMA,
+        "policy_owner": MECHANISTIC_ENTRY_PRICE_OWNER,
+        "policy_version": policy_version,
+        "source_date": source_date,
+        "active_date": active_date,
+        "candidate_id": candidate_id,
+        "runtime_env": {env_key: str(value)},
+        "cost_adjusted_ev_pct": ev,
+        "minimum_cost_adjusted_ev_pct": 0.10,
+        "exact_terminal_sample_count": joined,
+        "provider_calls": 0,
+        "ai_price_authority": False,
+        "action_quantity_leg_scale_in_authority": False,
+        "runtime_apply_allowed": True,
+        "generated_at": datetime.now().astimezone().isoformat(),
+    }
+    path = (
+        MECHANISTIC_ENTRY_PRICE_POLICY_DIR
+        / f"mechanistic_entry_price_policy_{source_date}.json"
+    )
+    policy_sha256 = _write_dated_policy(path, policy)
+    recommended = dict(candidate.get("recommended_values") or {})
+    recommended.update(
+        {
+            "mechanistic_policy_enabled": True,
+            "mechanistic_policy_file": str(path),
+            "mechanistic_policy_version": policy_version,
+            "mechanistic_policy_source_date": source_date,
+            "mechanistic_policy_sha256": policy_sha256,
+            "mechanistic_policy_active_date": active_date,
+        }
+    )
+    candidate["recommended_values"] = recommended
+    candidate["mechanistic_price_policy_artifact"] = {
+        "path": str(path),
+        "sha256": policy_sha256,
+        "active_date": active_date,
+    }
+
+
+def _materialize_integrated_entry_execution_sizing_policy(
+    report: dict, source_date: str
+) -> None:
+    """Atomically bind existing quantity and leg policies after the 4-arm gate."""
+
+    candidates = [
+        item
+        for item in (report.get("calibration_candidates") or [])
+        if isinstance(item, dict)
+    ]
+    quantity = next(
+        (
+            item
+            for item in candidates
+            if item.get("family") == "position_sizing_dynamic_formula"
+            and (item.get("recommended_values") or {}).get("enabled") is True
+        ),
+        None,
+    )
+    split = next(
+        (
+            item
+            for item in candidates
+            if item.get("family") == "entry_split_order_plan"
+            and item.get("runtime_apply_eligible_now") is True
+        ),
+        None,
+    )
+    if not isinstance(quantity, dict) or not isinstance(split, dict):
+        return
+    evaluation = (split.get("source_metrics") or {}).get(
+        "quantity_leg_four_arm_evaluation"
+    ) or {}
+    gate = evaluation.get("promotion_gate") or {}
+    if gate.get("passed") is not True:
+        return
+    quantity_values = quantity.get("recommended_values") or {}
+    split_values = split.get("recommended_values") or {}
+    required = {
+        "quantity_policy_file": str(quantity_values.get("policy_file") or ""),
+        "quantity_policy_version": str(quantity_values.get("policy_version") or ""),
+        "quantity_policy_sha256": str(quantity_values.get("policy_sha256") or ""),
+        "split_policy_file": str(split_values.get("policy_file") or ""),
+        "split_policy_version": str(split_values.get("policy_version") or ""),
+    }
+    if not all(required.values()) or not all(
+        Path(required[key]).is_file()
+        for key in ("quantity_policy_file", "split_policy_file")
+    ):
+        return
+    try:
+        quantity_policy = json.loads(
+            Path(required["quantity_policy_file"]).read_text(encoding="utf-8")
+        )
+        split_policy = json.loads(
+            Path(required["split_policy_file"]).read_text(encoding="utf-8")
+        )
+    except (OSError, json.JSONDecodeError):
+        return
+    paired_identity = evaluation.get("paired_policy_identity") or {}
+    if (
+        not isinstance(quantity_policy, dict)
+        or not isinstance(split_policy, dict)
+        or quantity_policy.get("formula_version")
+        != paired_identity.get("candidate_quantity_policy_version")
+        or split_policy.get("policy_version")
+        != paired_identity.get("candidate_leg_policy_version")
+    ):
+        return
+    split_sha256 = hashlib.sha256(
+        Path(required["split_policy_file"]).read_bytes()
+    ).hexdigest()
+    active_date = _next_krx_trading_date(source_date)
+    policy_version = f"entry_execution_sizing:{source_date}"
+    policy = {
+        "schema_version": ENTRY_EXECUTION_SIZING_POLICY_SCHEMA,
+        "policy_owner": ENTRY_EXECUTION_SIZING_OWNER,
+        "policy_version": policy_version,
+        "source_date": source_date,
+        "active_date": active_date,
+        **required,
+        "split_policy_sha256": split_sha256,
+        "selected_arm": "candidate_qty_x_candidate_leg",
+        "paired_policy_identity": paired_identity,
+        "promotion_gate": gate,
+        "action_authority": False,
+        "price_authority": False,
+        "scale_in_authority": False,
+        "quantity_conservation_required": True,
+        "runtime_apply_allowed": True,
+        "generated_at": datetime.now().astimezone().isoformat(),
+    }
+    path = (
+        ENTRY_EXECUTION_SIZING_POLICY_DIR
+        / f"entry_execution_sizing_policy_{source_date}.json"
+    )
+    policy_sha256 = _write_dated_policy(path, policy)
+    updated = dict(split_values)
+    updated.update(
+        {
+            "integrated_policy_enabled": True,
+            "integrated_policy_file": str(path),
+            "integrated_policy_version": policy_version,
+            "integrated_policy_source_date": source_date,
+            "integrated_policy_sha256": policy_sha256,
+            "integrated_policy_active_date": active_date,
+        }
+    )
+    split["recommended_values"] = updated
+    split["integrated_quantity_leg_candidate"] = {
+        "promotion_evidence_passed": True,
+        "runtime_apply_selected": True,
+        "policy_file": str(path),
+        "policy_sha256": policy_sha256,
+        "active_date": active_date,
     }
 
 
@@ -2115,6 +2361,8 @@ def _dynamic_entry_price_counterfactual_join_diagnostics(
         "order_bundle_submitted",
         "scalp_sim_entry_ai_price_applied",
         "scalp_sim_entry_ai_price_skip_order",
+        "scalp_sim_entry_mechanistic_price_applied",
+        "scalp_sim_entry_mechanistic_price_skip_order",
         "scalp_sim_entry_submit_revalidation_warning",
         "scalp_sim_entry_submit_revalidation_block",
         "scalp_sim_buy_order_virtual_pending",
@@ -6033,6 +6281,12 @@ def _scalp_simulator_event_summary(
         "entry_ai_price_skip_order": int(
             stage_counts.get("scalp_sim_entry_ai_price_skip_order", 0)
         ),
+        "entry_mechanistic_price_applied": int(
+            stage_counts.get("scalp_sim_entry_mechanistic_price_applied", 0)
+        ),
+        "entry_mechanistic_price_skip_order": int(
+            stage_counts.get("scalp_sim_entry_mechanistic_price_skip_order", 0)
+        ),
         "entry_submit_revalidation_warning": int(
             stage_counts.get("scalp_sim_entry_submit_revalidation_warning", 0)
         ),
@@ -6539,6 +6793,8 @@ _LIFECYCLE_MATCH_ELIGIBLE_STAGES: set[str] = {
     "scalp_sim_entry_unpriced",
     "scalp_sim_entry_ai_price_applied",
     "scalp_sim_entry_ai_price_skip_order",
+    "scalp_sim_entry_mechanistic_price_applied",
+    "scalp_sim_entry_mechanistic_price_skip_order",
 }
 
 
@@ -7161,8 +7417,6 @@ def _build_position_sizing_dynamic_formula_family(
         "budget_pass",
         "blocked_zero_qty",
         "auth_zero_qty",
-        "scale_in_price_resolved",
-        "scale_in_order_submitted",
         "order_bundle_submitted",
         "scalp_sim_entry_armed",
         "scalp_sim_buy_order_assumed_filled",
@@ -7183,9 +7437,12 @@ def _build_position_sizing_dynamic_formula_family(
             or stage.startswith("scalp_sim_")
         ):
             sizing_events.append(event)
-    real_rows = [
-        row for row in _valid_profit_rows(completed_rows) if _is_normal_only_row(row)
+    initial_completed_rows = [
+        row
+        for row in completed_rows
+        if _is_normal_only_row(row) and _is_initial_only_row(row)
     ]
+    real_rows = _valid_profit_rows(initial_completed_rows)
     real_summary = _completed_profit_summary(real_rows)
     real_sample = int(real_summary.get("sample") or 0)
     notional_ev = _notional_weighted_ev_pct(real_rows)
@@ -7280,7 +7537,7 @@ def _build_position_sizing_dynamic_formula_family(
         metrics = _build_candidate_metrics(
             candidate_def,
             sizing_events,
-            completed_rows,
+            initial_completed_rows,
             real_order_rows,
             sim_probe_rows,
         )
@@ -7348,6 +7605,25 @@ def _build_position_sizing_dynamic_formula_family(
         "sample": {
             "real_completed_valid": real_sample,
             "sizing_event_count": len(sizing_events),
+            "owner_partition_counts": {
+                "initial_entry": len(sizing_events),
+                "avg_down": sum(
+                    1
+                    for event in events
+                    if str(event.get("stage") or "")
+                    in {"scale_in_price_resolved", "scale_in_order_submitted"}
+                    and str(_event_fields(event).get("add_type") or "").upper()
+                    == "AVG_DOWN"
+                ),
+                "pyramid": sum(
+                    1
+                    for event in events
+                    if str(event.get("stage") or "")
+                    in {"scale_in_price_resolved", "scale_in_order_submitted"}
+                    and str(_event_fields(event).get("add_type") or "").upper()
+                    == "PYRAMID"
+                ),
+            },
             "runtime_reflected_event_count": runtime_reflected_event_count,
             "sim_probe_sizing_event_count": len(sim_probe_rows),
             "real_order_sizing_event_count": len(real_order_rows),
@@ -7663,7 +7939,6 @@ ENTRY_PRICE_CANDIDATE_LABELS = [
     "bid-2",
     "bid-3",
     "best_bid",
-    "AI_candidate",
     "reference_target",
     "timeout_15s",
     "timeout_30s",
@@ -8918,6 +9193,8 @@ def _build_dynamic_entry_price_resolver_family(
     sim_stages = {
         "scalp_sim_entry_ai_price_applied",
         "scalp_sim_entry_ai_price_skip_order",
+        "scalp_sim_entry_mechanistic_price_applied",
+        "scalp_sim_entry_mechanistic_price_skip_order",
         "scalp_sim_entry_submit_revalidation_warning",
         "scalp_sim_entry_submit_revalidation_block",
         "scalp_sim_buy_order_virtual_pending",
@@ -9018,9 +9295,11 @@ def _build_dynamic_entry_price_resolver_family(
         )
     )
     candidate_quality = {
-        "AI_candidate": _entry_price_ai_candidate_quality(
-            real_stage_events + sim_events
-        ),
+        "AI_candidate": {
+            **_entry_price_ai_candidate_quality(real_stage_events + sim_events),
+            "active_candidate": False,
+            "runtime_apply_forbidden": True,
+        },
     }
     sim_submit_path_quality = _entry_price_sim_submit_path_quality(events)
     sim_unpriced_or_stale_warning_count = int(
@@ -9091,6 +9370,12 @@ def _build_dynamic_entry_price_resolver_family(
             ),
             "sim_entry_ai_price_skip_order": _stage_count(
                 events, "scalp_sim_entry_ai_price_skip_order"
+            ),
+            "sim_entry_mechanistic_price_applied": _stage_count(
+                events, "scalp_sim_entry_mechanistic_price_applied"
+            ),
+            "sim_entry_mechanistic_price_skip_order": _stage_count(
+                events, "scalp_sim_entry_mechanistic_price_skip_order"
             ),
             "sim_submit_revalidation_block": _stage_count(
                 events, "scalp_sim_entry_submit_revalidation_block"
@@ -14310,7 +14595,7 @@ def _calibration_state_for_family(
         if sample_count < sample_floor:
             return (
                 "hold_sample",
-                f"dynamic entry price resolver 후보 표본 미달({sample_count}/{sample_floor}, primary={primary_book or 'none'}); bid-1/bid-2/bid-3/best_bid/AI/reference/timeout 비교 유지",
+                f"dynamic entry price resolver 후보 표본 미달({sample_count}/{sample_floor}, primary={primary_book or 'none'}); mechanistic bid/tick/reference/timeout 비교 유지",
             )
         if missing_by_book:
             return (
@@ -14328,14 +14613,14 @@ def _calibration_state_for_family(
             ),
             None,
         )
-        if ev is not None and ev > 0:
+        if ev is not None and ev >= 0.10:
             return (
                 "adjust_up",
-                f"dynamic entry price {primary_book} 후보 EV가 source-quality adjusted 기준 양수라 다음 PREOPEN bounded resolver 후보로 둔다.",
+                f"dynamic entry price {primary_book} 후보 비용 차감 EV가 +0.10pct 이상이라 다음 PREOPEN bounded mechanistic resolver 후보로 둔다.",
             )
         return (
             "hold",
-            "가격 후보별 체결품질/EV 우위가 확인되지 않아 현행 resolver 값을 유지한다.",
+            "기계 가격 후보의 비용 차감 EV +0.10pct 및 체결품질 우위가 확인되지 않아 현행 resolver 값을 유지한다.",
         )
     if output_family in {
         "liquidity_gate_refined_candidate",

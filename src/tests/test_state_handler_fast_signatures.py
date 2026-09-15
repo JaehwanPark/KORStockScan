@@ -4173,6 +4173,51 @@ def test_log_entry_pipeline_carries_explicit_condition_venue(monkeypatch):
     assert fields["market_session_bucket"] == "krx_regular"
 
 
+def test_log_entry_pipeline_preserves_integrated_aftermarket_venue(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(
+        handlers,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, *, record_id=None, fields=None: emitted.append(
+            {"stage": stage, "fields": fields or {}}
+        ),
+    )
+    stock = {
+        "id": 78,
+        "name": "INTEGRATED",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "effective_venue": "UNKNOWN",
+        "venue": "UNKNOWN",
+        "market_session_bucket": "KRX_NXT_AFTERMARKET",
+        "scanner_promotion_id": "SCANPROM-001451-1000000",
+        "scanner_promotion_emitted_epoch": "1000.000",
+        "scanner_promotion_reason": "integrated_market_rank",
+    }
+
+    _log_entry_pipeline(
+        stock,
+        "001451",
+        "scalp_entry_action_decision_snapshot",
+        entry_primary_decision_owner="mechanistic_entry_adjudicator",
+        entry_mechanistic_action="BLOCK",
+        evaluation_attempt_id="eval-integrated",
+        policy_bundle_hash="b" * 64,
+        effective_venue="KRX_NXT_INTEGRATED",
+        market_session_bucket="KRX_NXT_AFTERMARKET",
+        venue="KRX_NXT_INTEGRATED",
+        venue_resolution="machine_capture_exact_snapshot:integrated_aftermarket_scope",
+        venue_source_quality_status="pass",
+        venue_unknown_reviewed_reason="not_applicable",
+    )
+
+    fields = emitted[-1]["fields"]
+    assert fields["venue"] == "KRX_NXT_INTEGRATED"
+    assert fields["effective_venue"] == "KRX_NXT_INTEGRATED"
+    assert fields["market_session_bucket"] == "KRX_NXT_AFTERMARKET"
+    assert fields["venue_source_quality_status"] == "pass"
+
+
 def test_log_entry_pipeline_hydrates_missing_scanner_promotion_id(monkeypatch):
     emitted = []
     monkeypatch.setattr(
@@ -5066,6 +5111,22 @@ def test_scanner_runtime_event_venue_fields_fail_closed_without_inference():
             "market_session_bucket": "nxt",
         }
     )
+    integrated = handlers._scanner_runtime_event_venue_fields(
+        {
+            "effective_venue": "KRX_NXT_INTEGRATED",
+            "venue": "KRX_NXT_INTEGRATED",
+            "venue_resolution": "scanner_scheduler_generation:integrated_aftermarket",
+            "market_session_bucket": "KRX_NXT_AFTERMARKET",
+        }
+    )
+    integrated_session_mismatch = handlers._scanner_runtime_event_venue_fields(
+        {
+            "effective_venue": "KRX_NXT_INTEGRATED",
+            "venue": "KRX_NXT_INTEGRATED",
+            "venue_resolution": "scanner_scheduler_generation:integrated_aftermarket",
+            "market_session_bucket": "krx_regular",
+        }
+    )
 
     assert conflict["effective_venue"] == "UNKNOWN"
     assert conflict["venue"] == "UNKNOWN"
@@ -5108,6 +5169,28 @@ def test_scanner_runtime_event_venue_fields_fail_closed_without_inference():
             "effective_venue=KRX,market_session_bucket=nxt"
         ),
         "market_session_bucket": "nxt",
+    }
+    assert integrated == {
+        "venue": "KRX_NXT_INTEGRATED",
+        "effective_venue": "KRX_NXT_INTEGRATED",
+        "venue_resolution": "scanner_scheduler_generation:integrated_aftermarket",
+        "venue_source_quality_status": "pass",
+        "venue_unknown_reviewed_reason": "not_applicable",
+        "market_session_bucket": "KRX_NXT_AFTERMARKET",
+    }
+    assert integrated_session_mismatch == {
+        "venue": "UNKNOWN",
+        "effective_venue": "UNKNOWN",
+        "venue_resolution": (
+            "scanner_runtime_event:market_session_bucket_venue_mismatch:"
+            "effective_venue=KRX_NXT_INTEGRATED,market_session_bucket=krx_regular"
+        ),
+        "venue_source_quality_status": "reviewed_fail_closed",
+        "venue_unknown_reviewed_reason": (
+            "scanner_runtime_event:market_session_bucket_venue_mismatch:"
+            "effective_venue=KRX_NXT_INTEGRATED,market_session_bucket=krx_regular"
+        ),
+        "market_session_bucket": "krx_regular",
     }
 
 

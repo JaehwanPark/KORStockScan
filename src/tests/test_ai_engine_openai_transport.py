@@ -4143,8 +4143,8 @@ def test_machine_policy_preflight_block_preserves_source_invalid_receipt(monkeyp
         {
             **_sample_ws_data(),
             "stock_code": "005930",
-            "effective_venue": "KRX",
-            "session_bucket": "krx_regular",
+            "effective_venue": "KRX_NXT_INTEGRATED",
+            "session_bucket": "KRX_NXT_AFTERMARKET",
         },
         _sample_ticks(),
         _sample_candles(),
@@ -4169,6 +4169,10 @@ def test_machine_policy_preflight_block_preserves_source_invalid_receipt(monkeyp
     assert result["scanner_promotion_id"] == "SCANPROM-source-invalid"
     assert result["evaluation_attempt_id"].startswith("machine-source-invalid-")
     assert result["policy_bundle_hash"] == "b" * 64
+    assert result["venue"] == "KRX_NXT_INTEGRATED"
+    assert result["effective_venue"] == "KRX_NXT_INTEGRATED"
+    assert result["market_session_bucket"] == "KRX_NXT_AFTERMARKET"
+    assert result["venue_source_quality_status"] == "pass"
     assert result["provider_called"] is False
 
 

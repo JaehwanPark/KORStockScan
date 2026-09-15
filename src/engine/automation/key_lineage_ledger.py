@@ -55,6 +55,8 @@ ALLOWED_STATES = {
 ACTIVE_SEED_MATCH_ELIGIBLE_FOLLOWUP_STAGES = {
     "scalp_sim_entry_ai_price_applied",
     "scalp_sim_entry_ai_price_skip_order",
+    "scalp_sim_entry_mechanistic_price_applied",
+    "scalp_sim_entry_mechanistic_price_skip_order",
     "scalp_sim_entry_submit_revalidation_warning",
     "scalp_sim_entry_submit_revalidation_block",
     "scalp_sim_pre_submit_liquidity_guard_would_block",
@@ -1233,6 +1235,8 @@ _LINEAGE_LIFECYCLE_MATCH_ELIGIBLE_STAGES: set[str] = {
     "scalp_sim_entry_unpriced",
     "scalp_sim_entry_ai_price_applied",
     "scalp_sim_entry_ai_price_skip_order",
+    "scalp_sim_entry_mechanistic_price_applied",
+    "scalp_sim_entry_mechanistic_price_skip_order",
 }
 
 
