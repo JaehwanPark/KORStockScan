@@ -476,6 +476,27 @@ def test_policy_unpinned_clears_selected_diagnostic(monkeypatch):
     assert diagnostic["profit_exit_policy_status"] == "off_no_policy_pin"
 
 
+def test_widget_without_owned_position_does_not_parse_empty_entry_time(monkeypatch):
+    from src.trading.order import target_ratchet
+
+    monkeypatch.setattr(target_ratchet, "widget", lambda *args, **kwargs: False)
+    monkeypatch.setenv(PATH_ENV, "/missing/policy.json")
+    monkeypatch.setenv(HASH_ENV, "a" * 64)
+    trader = SimpleNamespace(
+        _state={},
+        _profit_exit_reload_required=False,
+        profit_exit_lock_held=lambda: True,
+        _save=lambda: None,
+    )
+
+    assert not bridge.widget_symbol(
+        trader,
+        {"orders": [], "entry_signal_id": None},
+        datetime.fromisoformat(DATE + "T13:00:00+09:00"),
+    )
+    assert trader._state["profit_exit_policy_status"] == "inactive_no_owned_position"
+
+
 @pytest.mark.parametrize("filled", [0, 3])
 def test_source_loss_or_partial_fill_restores_exact_original_target(running, filled):
     submitted(running, filled=filled, restore=True)
