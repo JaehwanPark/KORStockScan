@@ -228,8 +228,29 @@ def _entry_base_paths(
         for row in entry_optimizer.get("cohort_optimizers") or []
         if isinstance(row, Mapping)
     ]
+    expected_contract_rows = (
+        optimizer_contract.get("expected_cohorts")
+        if isinstance(optimizer_contract, Mapping)
+        else None
+    )
+    expected_contract_keys = {
+        _entry_cohort_contract_key(row)
+        for row in expected_contract_rows or []
+        if isinstance(row, Mapping)
+    }
+    if expected_contract_keys:
+        # The signed cohort contract owns the consumer census.  Optimizer
+        # diagnostics may retain a newer research cohort while the frozen
+        # replay batch intentionally remains on the legacy contract.
+        cohort_census = [
+            row
+            for row in cohort_census
+            if _entry_cohort_contract_key(row) in expected_contract_keys
+        ]
     optimizer_keys = {_entry_cohort_contract_key(row) for row in cohort_census}
     for key, batch_cohort in batch_cohorts.items():
+        if expected_contract_keys and key not in expected_contract_keys:
+            continue
         if key in optimizer_keys:
             continue
         version = str(declared_plan.get(f"{key[0]}/{key[1]}") or "")
@@ -248,7 +269,15 @@ def _entry_base_paths(
                 "cohort_key_version": batch_cohort.get("cohort_key_version"),
                 "authority_state": batch_cohort.get("authority_state"),
                 "selected_challenger": {
-                    "prompt_version": version if terminal_no_source else ""
+                    "prompt_version": (
+                        version
+                        if terminal_no_source
+                        or (
+                            batch_cohort.get("status") == "failed_offline_cohort"
+                            and version in optimizer.ENTRY_CANDIDATE_ORDER
+                        )
+                        else ""
+                    )
                 },
                 "cohort_census_source": "frozen_entry_batch",
             }
@@ -338,6 +367,26 @@ def _entry_base_paths(
             paths.append(row)
             continue
         declared_version = str(declared_plan.get(f"{venue}/{session}") or "")
+        if (
+            isinstance(batch_cohort, Mapping)
+            and batch_cohort.get("status") == "failed_offline_cohort"
+            and declared_version == version
+        ):
+            row.update(
+                _blocked(
+                    reason=str(
+                        batch_cohort.get("error_code")
+                        or "entry_batch_cohort_failed"
+                    ),
+                    owner="AIEntrySetupPairedReplayBatch",
+                    acceptance_test=(
+                        "repair or naturally regenerate the exact failed cohort "
+                        "source, then rerun the bounded replay follower"
+                    ),
+                )
+            )
+            paths.append(row)
+            continue
         if (
             isinstance(batch_cohort, Mapping)
             and batch_cohort.get("status")
@@ -1348,7 +1397,17 @@ def build_report(target_date: str, *, write: bool = False) -> dict[str, Any]:
     entry_index: dict[tuple[str, str, str], dict[str, Any]] = {}
     holding_index: dict[tuple[str, str, str], dict[str, Any]] = {}
     cells: list[dict[str, Any]] = []
-    if not blockers:
+    routing_blockers = {
+        "optimizer_artifact_missing_or_invalid",
+        "prepared_request_artifact_missing_or_invalid",
+        "optimizer_prepared_request_hash_binding_mismatch",
+    }
+    if not routing_blockers.intersection(blockers):
+        # A late calibration generation can invalidate optimizer economics
+        # without invalidating the frozen batch's cohort census.  Preserve the
+        # explicit per-cohort blocked/connected routes while the report stays
+        # globally blocked; otherwise the verifier loses the failed cohort's
+        # owner and acceptance condition behind a synthetic coverage gap.
         entry_paths, entry_index = _entry_base_paths(
             target_date, optimizer_report=optimizer_report
         )

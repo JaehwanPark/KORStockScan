@@ -337,6 +337,25 @@ def _verified_empty_control(
     """A complete exclusion census is terminal source evidence, never replay input."""
     exclusions = control.get("excluded_counts")
     cohort = control.get("cohort_filter")
+    excluded_input_is_complete = bool(
+        isinstance(exclusions, dict)
+        and bool(exclusions)
+        and all(
+            isinstance(key, str) and type(value) is int and value >= 0
+            for key, value in exclusions.items()
+        )
+        and any(value > 0 for value in exclusions.values())
+    )
+    trace_source = control.get("input_trace_source")
+    empty_input_is_complete = bool(
+        exclusions == {}
+        and control.get("input_trace_count") == 0
+        and control.get("input_trace_census_status") == "empty"
+        and isinstance(trace_source, dict)
+        and trace_source.get("exists") is True
+        and type(trace_source.get("size_bytes")) is int
+        and trace_source["size_bytes"] > 0
+    )
     return bool(
         control.get("schema") == quality.CONTROL_SCHEMA
         and control.get("target_date") == target_date
@@ -346,13 +365,7 @@ def _verified_empty_control(
         and control.get("supplemental_conflicts") == []
         and control.get("missing_natural_stages")
         == ["entry", "entry_price", "holding", "overnight"]
-        and isinstance(exclusions, dict)
-        and bool(exclusions)
-        and all(
-            isinstance(key, str) and type(value) is int and value >= 0
-            for key, value in exclusions.items()
-        )
-        and any(value > 0 for value in exclusions.values())
+        and (excluded_input_is_complete or empty_input_is_complete)
         and isinstance(cohort, dict)
         and cohort.get("effective_venue") == venue
         and cohort.get("session_bucket") == session_bucket
@@ -413,6 +426,9 @@ def _cohort_result(
             "control_manifest_sha256": control["control_manifest_sha256"],
             "control_source_quality_status": control["status"],
             "source_excluded_counts": control["excluded_counts"],
+            "source_trace_count": control.get("input_trace_count"),
+            "source_trace_census_status": control.get("input_trace_census_status"),
+            "source_trace_artifact": control.get("input_trace_source"),
             "source_gap_resolution": "requires_future_exact_source_no_same_payload_retry",
             "entry_control_sample_count": 0,
             "provider_call_count": 0,

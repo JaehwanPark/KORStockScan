@@ -4340,6 +4340,50 @@ def test_pre_enqueue_consumer_fences_market_depth_and_reference_epochs(tmp_path)
     assert inventory["999999"]["source_excluded_row_count"] == 6
 
 
+def test_overlapping_windows_share_raw_source_rows_without_value_drift(tmp_path):
+    day = "2026-09-15"
+    root = tmp_path / "observations"
+    partition = root / f"trade_date={day}" / "venue=KRX" / "session=KRX_REGULAR"
+    stamp = f"{day}T10:00:00+09:00"
+    market_row = _micro_row("999999", stamp, 10_000, venue="KRX")
+    depth_row = _depth_row("999999", stamp)
+    _write_jsonl(partition / "market_stream.jsonl", [market_row])
+    _write_jsonl(partition / "market_depth_stream.jsonl", [depth_row])
+
+    common_anchor = {
+        "symbol": "999999",
+        "anchor_at": stamp,
+        "anchor_role": "episode_signal_decision_leg",
+        "expected_venues": ["KRX"],
+        "expected_session_buckets": ["KRX_REGULAR"],
+    }
+    _, _, windows = _micro_context(
+        day,
+        root,
+        {"999999"},
+        [
+            {**common_anchor, "anchor_id": "overlap-a"},
+            {**common_anchor, "anchor_id": "overlap-b"},
+        ],
+        tmp_path / "missing-exclusion-manifest.json",
+        None,
+        datetime(2026, 9, 15, 20, 20, tzinfo=KST),
+    )
+
+    first = windows["overlap-a"]
+    second = windows["overlap-b"]
+    assert first["raw_market_rows"] == second["raw_market_rows"]
+    assert first["raw_depth_rows"] == second["raw_depth_rows"]
+    assert first["raw_market_rows"][0]["symbol"] == market_row["symbol"]
+    assert first["raw_market_rows"][0]["trade_price"] == market_row["trade_price"]
+    assert first["raw_depth_rows"][0]["symbol"] == depth_row["symbol"]
+    assert first["raw_depth_rows"][0]["bid_levels"] == depth_row["bid_levels"]
+    assert first["raw_market_rows"][0] is second["raw_market_rows"][0]
+    assert first["raw_depth_rows"][0] is second["raw_depth_rows"][0]
+    assert first["rows"][0] is second["rows"][0]
+    assert first["depth_points"][0] is second["depth_points"][0]
+
+
 def test_timestamp_regression_only_row_quarantine_preserves_remaining_date_source(
     tmp_path,
 ):

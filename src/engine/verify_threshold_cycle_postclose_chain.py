@@ -1292,6 +1292,20 @@ def _ai_decision_action_outcome_calibration_status(
             policy_learning_count = machine_case_table.get(
                 "policy_learning_eligible_observation_count"
             )
+            incomplete_attempt_count = machine_case_table.get(
+                "incomplete_attempt_identity_count"
+            )
+            terminal_lineage_exclusion = machine_case_table.get(
+                "terminal_lineage_exclusion"
+            )
+            terminal_lineage_exclusion = (
+                terminal_lineage_exclusion
+                if isinstance(terminal_lineage_exclusion, dict)
+                else {}
+            )
+            terminal_lineage_excluded_count = terminal_lineage_exclusion.get(
+                "excluded_case_count"
+            )
             machine_capture_census = machine_case_table.get("machine_capture_census")
             machine_capture_census = (
                 machine_capture_census
@@ -1355,8 +1369,22 @@ def _ai_decision_action_outcome_calibration_status(
                 or conflicting_attempt_count != 0
                 or not isinstance(policy_learning_count, int)
                 or isinstance(policy_learning_count, bool)
+                or not isinstance(incomplete_attempt_count, int)
+                or isinstance(incomplete_attempt_count, bool)
+                or incomplete_attempt_count < 0
+                or incomplete_attempt_count > input_count
+                or not isinstance(terminal_lineage_excluded_count, int)
+                or isinstance(terminal_lineage_excluded_count, bool)
+                or terminal_lineage_excluded_count < 0
+                or terminal_lineage_excluded_count > case_count
                 or policy_learning_count
-                != (input_count if machine_source_tuning_allowed is True else 0)
+                != (
+                    input_count
+                    - incomplete_attempt_count
+                    - terminal_lineage_excluded_count
+                    if machine_source_tuning_allowed is True
+                    else 0
+                )
                 or input_count != case_count + collapsed_count
                 or (machine_case_table.get("status") == "evaluable") != (case_count > 0)
                 or not valid_count_map(action_counts)

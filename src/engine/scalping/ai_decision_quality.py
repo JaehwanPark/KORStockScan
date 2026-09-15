@@ -3266,6 +3266,8 @@ def build_control_manifest(
         "target_date": target_date,
         "generated_at": datetime.now(KST).isoformat(),
         "status": status,
+        "input_trace_count": len(traces),
+        "input_trace_census_status": "present" if traces else "empty",
         "input_preflight_mode": "exact_v2",
         "entry_context_schema": ENTRY_CONTEXT_SCHEMA,
         "holding_context_schema": HOLDING_CONTEXT_SCHEMA,
@@ -32503,6 +32505,23 @@ def main(argv: list[str] | None = None) -> int:
             control_signatures=selected_control_signatures,
             promotion_artifact_path=promotion_artifact_path,
             promotion_source_date=promotion_source_date,
+        )
+        trace_source_path = TRACE_DIR / f"ai_decision_trace_{args.date}.jsonl"
+        try:
+            trace_source_size = trace_source_path.stat().st_size
+        except OSError:
+            trace_source_size = 0
+        report["input_trace_source"] = {
+            "path": str(trace_source_path),
+            "exists": trace_source_path.is_file(),
+            "size_bytes": trace_source_size,
+        }
+        report["control_manifest_sha256"] = _sha256(
+            {
+                key: value
+                for key, value in report.items()
+                if key != "control_manifest_sha256"
+            }
         )
         path = control_path(
             args.date,

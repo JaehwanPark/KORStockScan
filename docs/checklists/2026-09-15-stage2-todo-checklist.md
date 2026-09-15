@@ -135,6 +135,7 @@
   - 상태별 다음 액션: `IMPLEMENTATION_REQUIRED`는 source-only rolling paired policy 연구를 구현하고, `EVIDENCE_ACCUMULATING`은 exact-date floor 충족까지 수집·재검증한다. `CANDIDATE_QUEUE_HANDOFF|COMPLETE`는 closed 상태이므로 report에서 제외되고 다음 refresh에서 builder-owned 항목이 제거된다.
   - 권한 경계: 이 POSTCLOSE 후속 항목은 source-only 구현·검증 작업이며 runtime env, 실주문, target/timeout/cooldown/cap, threshold, provider/bot, hard safety 또는 broker guard 변경 권한이 없다.
   - 구현 receipt (08:10 KST): widget signal 연구·low-price expanded 연구는 source/policy/cost fingerprint, machine attribution은 선언 source path의 size/mtime 세대와 producer code hash가 동일할 때만 exact-date heavy 계산을 재사용한다. source 변경 시 full recompute fixture를 통과했으며 오늘 21:15 자연 unit 시간·valid-empty/carry는 별도 확인한다.
+  - 복구 receipt (23:26 KST): 겹치는 attribution window의 raw/normalized source object 공유 수리 뒤에도 512MiB 설치 상한에서 swap pressure가 재현되어, repository unit의 분석 전용 `MemoryMax`를 2GiB로 조정했다. host available memory·단일 service PID를 확인한 후 설치하고 동일 target-date terminal·peak를 재검증한다. 매매 process·정책·threshold·provider·broker 권한은 변경하지 않는다.
 
 - [ ] `[AutomationTriggerDecisionSummary0915] 자동화체인 trigger decision run/skip 요약 및 wrapper marker 대조 확인` (`Due: 2026-09-15`, `Slot: POSTCLOSE`, `TimeWindow: 21:40~21:55`, `Track: RuntimeStability`)
   - Source: [automation_chain_trigger_decision_2026-09-14.json](/home/ubuntu/KORStockScan/data/report/automation_chain_trigger_decision/automation_chain_trigger_decision_2026-09-14.json), [run_threshold_cycle_postclose.sh](/home/ubuntu/KORStockScan/deploy/run_threshold_cycle_postclose.sh)

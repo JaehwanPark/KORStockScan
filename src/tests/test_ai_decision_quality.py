@@ -1358,7 +1358,28 @@ def test_control_manifest_rejects_non_exact_preflight_mode():
         payloads=[_payload()],
     )
     assert report["status"] == "control_manifest_gap_fix_required"
+    assert report["input_trace_count"] == 1
+    assert report["input_trace_census_status"] == "present"
     assert report["excluded_counts"]["input_preflight_not_exact_v2"] == 1
+
+
+def test_control_manifest_records_empty_input_trace_census():
+    report = quality.build_control_manifest(
+        target_date="2026-07-27",
+        promotion={
+            "decision": "promoted_all_market_sessions_full",
+            "runtime_activation": True,
+            "transaction_status": "committed",
+            "promoted_at": "2026-07-27T08:30:00+09:00",
+        },
+        traces=[],
+        payloads=[],
+    )
+
+    assert report["status"] == "control_manifest_gap_fix_required"
+    assert report["input_trace_count"] == 0
+    assert report["input_trace_census_status"] == "empty"
+    assert report["excluded_counts"] == {}
 
 
 def test_control_manifest_excludes_simulation_observation_from_natural_cohort():

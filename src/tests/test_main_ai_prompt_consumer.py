@@ -217,6 +217,76 @@ def test_consumer_rejects_replaced_calibration_generation(monkeypatch, tmp_path)
     assert report["runtime_effect"] is False
 
 
+def test_replaced_calibration_preserves_frozen_entry_route_census(
+    monkeypatch, tmp_path
+):
+    day = "2026-09-15"
+    optimizer_path = tmp_path / "optimizer.json"
+    prepared_path = tmp_path / "prepared.json"
+    prepared = _prepared_report(day)
+    payload = _optimizer_report(
+        day,
+        source_bindings={
+            "action_outcome_calibration_artifact_content_sha256": "a" * 64,
+            "prepared_request_sha256": optimizer._canonical_sha256(prepared),
+        },
+    )
+    optimizer_path.write_text(json.dumps(payload))
+    prepared_path.write_text(json.dumps(prepared))
+    monkeypatch.setattr(
+        optimizer, "report_paths", lambda _: (optimizer_path, tmp_path / "optimizer.md")
+    )
+    monkeypatch.setattr(
+        consumer.quality,
+        "micro_reversion_prepared_request_path",
+        lambda _: prepared_path,
+    )
+    monkeypatch.setattr(
+        consumer.quality,
+        "micro_reversion_bridge_report_path",
+        lambda _: tmp_path / "bridge.json",
+    )
+    monkeypatch.setattr(
+        consumer.quality,
+        "micro_reversion_materialized_request_path",
+        lambda _: tmp_path / "materialized.json",
+    )
+    monkeypatch.setattr(
+        consumer.quality,
+        "micro_reversion_execution_result_path",
+        lambda _: tmp_path / "execution.json",
+    )
+    monkeypatch.setattr(
+        optimizer,
+        "_latest_action_outcome_calibration",
+        lambda _: ({}, None, ["source_generation_changed"]),
+    )
+    blocked = {
+        "path_status": consumer.BLOCKED,
+        "blocking_reason": "control_manifest_not_ready:NXT:NXT_AFTERMARKET",
+        "terminality": "requires_retry_or_owner_closure",
+        "effective_venue": "NXT",
+        "session_bucket": "NXT_AFTERMARKET",
+        "owner": "EntrySetupPairedReplayBatch",
+        "acceptance_test": "collect a future exact control manifest",
+    }
+    monkeypatch.setattr(
+        consumer, "_entry_base_paths", lambda *_args, **_kwargs: ([blocked], {})
+    )
+    monkeypatch.setattr(
+        consumer, "_holding_base_paths", lambda *_args, **_kwargs: ([], {})
+    )
+
+    report = consumer.build_report(day)
+
+    assert report["status"] == "blocked_source_contract"
+    assert "optimizer_action_outcome_calibration_hash_binding_mismatch" in report[
+        "blockers"
+    ]
+    assert report["request_paths"]["entry_base"]["cohorts"] == [blocked]
+    assert report["runtime_effect"] is False
+
+
 def _optimizer_report(target_date: str, *, source_bindings: dict | None = None) -> dict:
     body = {
         "schema": optimizer.SCHEMA,
@@ -793,6 +863,77 @@ def test_entry_terminal_census_keeps_batch_no_source_cohorts_absent_from_optimiz
         assert all(
             row["terminality"] == "requires_retry_or_owner_closure" for row in rows
         )
+
+
+def test_entry_consumer_census_follows_frozen_contract_not_optimizer_research_rows(
+    monkeypatch,
+):
+    version = optimizer.ENTRY_CANDIDATE_ORDER[0]
+    contract = optimizer._entry_cohort_contract({})
+    batch = {
+        "schema": consumer.entry_batch.BATCH_SCHEMA,
+        "target_date": "2026-09-15",
+        **_source_only(),
+        "cohort_contract": contract,
+        "candidate_prompt_selection_source": {
+            "status": "optimizer_candidate_plan_applied_offline_only",
+            "artifact_content_sha256": "a" * 64,
+            "cohort_contract_sha256": contract["contract_content_sha256"],
+        },
+        "candidate_prompt_versions_by_cohort": {
+            "KRX/KRX_REGULAR": version,
+            "NXT/NXT_AFTERMARKET": version,
+        },
+        "cohorts": [
+            {
+                "effective_venue": "KRX",
+                "session_bucket": "KRX_REGULAR",
+                "candidate_prompt_version": version,
+                "status": "hold_no_exact_entry_control",
+            },
+            {
+                "effective_venue": "NXT",
+                "session_bucket": "NXT_AFTERMARKET",
+                "status": "failed_offline_cohort",
+                "error_code": "control_manifest_not_ready:NXT:NXT_AFTERMARKET",
+            },
+        ],
+    }
+    optimizer_report = {
+        "artifact_content_sha256": "a" * 64,
+        "entry_cohort_contract": contract,
+        "stage_optimizers": {
+            "entry": {
+                "cohort_optimizers": [
+                    {
+                        "effective_venue": "KRX",
+                        "session_bucket": "KRX_REGULAR",
+                        "selected_challenger": {"prompt_version": version},
+                    },
+                    {
+                        "effective_venue": "KRX_NXT_INTEGRATED",
+                        "session_bucket": "KRX_NXT_AFTERMARKET",
+                        "selected_challenger": {"prompt_version": version},
+                    },
+                ]
+            }
+        },
+    }
+    monkeypatch.setattr(consumer, "_read_json", lambda _: batch)
+
+    rows, _ = consumer._entry_base_paths(
+        "2026-09-15", optimizer_report=optimizer_report
+    )
+
+    assert [(row["effective_venue"], row["session_bucket"]) for row in rows] == [
+        ("KRX", "KRX_REGULAR"),
+        ("NXT", "NXT_AFTERMARKET"),
+    ]
+    assert rows[1]["path_status"] == consumer.BLOCKED
+    assert rows[1]["blocking_reason"] == (
+        "control_manifest_not_ready:NXT:NXT_AFTERMARKET"
+    )
+    assert rows[1]["terminality"] == "requires_retry_or_owner_closure"
 
 
 def test_completed_batch_without_optimizer_cohort_does_not_gain_connection(monkeypatch):

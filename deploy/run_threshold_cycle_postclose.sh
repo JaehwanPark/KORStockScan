@@ -2494,6 +2494,20 @@ if [ "$RUN_RISING_MISSED_CLASSIFIER_PRIOR" = "true" ] || [ "$RUN_RISING_MISSED_C
     "$PROJECT_DIR/data/report/rising_missed_scout_workorder/rising_missed_scout_workorder_${TARGET_DATE}.md" \
     "rising_missed_scout_workorder_prior_refresh"
 fi
+if [ "$BUILD_CODE_IMPROVEMENT_WORKORDER" = "true" ] || [ "$BUILD_CODE_IMPROVEMENT_WORKORDER" = "1" ]; then
+  # Final tail producers can create or refresh sources that the earlier
+  # workorder fingerprints. Rebuild it once after those producers so the
+  # canonical workorder is immutable when the verifier reads it.
+  wait_for_postclose_resources "code_improvement_workorder_final_refresh"
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.build_code_improvement_workorder \
+    --date "$TARGET_DATE" \
+    --max-orders "$CODE_IMPROVEMENT_WORKORDER_MAX_ORDERS" \
+    "${WORKORDER_SWING_ARGS[@]}"
+  wait_for_report_artifact \
+    "$PROJECT_DIR/data/report/code_improvement_workorder/code_improvement_workorder_${TARGET_DATE}.json" \
+    "$PROJECT_DIR/docs/code-improvement-workorders/code_improvement_workorder_${TARGET_DATE}.md" \
+    "code_improvement_workorder_final_refresh"
+fi
 VERIFY_DISABLED_STAGE_ARGS=()
 if [[ "$RUN_SWING_LIFECYCLE_AUDIT" != "true" && "$RUN_SWING_LIFECYCLE_AUDIT" != "1" ]]; then
   VERIFY_DISABLED_STAGE_ARGS+=(--disabled-stage swing_lifecycle)

@@ -753,6 +753,80 @@ def test_empty_source_quality_control_is_terminal_without_provider_replay(
     assert result["source_excluded_counts"] == {"payload_hash_missing": 2}
 
 
+def test_zero_trace_control_is_terminal_without_repeating_same_source(
+    monkeypatch, tmp_path
+):
+    control = _empty_control_manifest()
+    control["excluded_counts"] = {}
+    control["input_trace_count"] = 0
+    control["input_trace_census_status"] = "empty"
+    control["input_trace_source"] = {
+        "path": "/tmp/ai_decision_trace_2026-09-07.jsonl",
+        "exists": True,
+        "size_bytes": 1024,
+    }
+    control["control_manifest_sha256"] = quality._sha256(
+        {
+            key: value
+            for key, value in control.items()
+            if key not in {"control_manifest_sha256", "cohort_filter"}
+        }
+    )
+    path = tmp_path / "control.json"
+    path.write_text(json.dumps(control))
+    calls = []
+    monkeypatch.setattr(batch, "_run_quality_cli", lambda args: calls.append(args))
+    monkeypatch.setattr(quality, "control_path", lambda *a, **kw: path)
+
+    result = batch._cohort_result(
+        target_date="2026-09-07",
+        as_of=datetime(2026, 9, 7, 22, 0, tzinfo=quality.KST),
+        venue="KRX",
+        session_bucket="KRX_REGULAR",
+        max_new_requests=30,
+        workers=2,
+        timeout_sec=60,
+    )
+
+    assert len(calls) == 1 and calls[0][-1] == "control"
+    assert result["status"] == "hold_no_exact_entry_control"
+    assert result["source_trace_count"] == 0
+    assert result["source_trace_census_status"] == "empty"
+    assert result["source_trace_artifact"]["exists"] is True
+    assert result["provider_call_count"] == 0
+
+
+@pytest.mark.parametrize(
+    "source_proof",
+    [
+        None,
+        {"path": "/tmp/missing.jsonl", "exists": False, "size_bytes": 0},
+        {"path": "/tmp/empty.jsonl", "exists": True, "size_bytes": 0},
+    ],
+)
+def test_zero_trace_control_rejects_missing_or_empty_source_artifact(source_proof):
+    control = _empty_control_manifest()
+    control["excluded_counts"] = {}
+    control["input_trace_count"] = 0
+    control["input_trace_census_status"] = "empty"
+    if source_proof is not None:
+        control["input_trace_source"] = source_proof
+    control["control_manifest_sha256"] = quality._sha256(
+        {
+            key: value
+            for key, value in control.items()
+            if key not in {"control_manifest_sha256", "cohort_filter"}
+        }
+    )
+
+    assert not batch._verified_empty_control(
+        control,
+        target_date="2026-09-07",
+        venue="KRX",
+        session_bucket="KRX_REGULAR",
+    )
+
+
 @pytest.mark.parametrize(
     "field,value",
     [

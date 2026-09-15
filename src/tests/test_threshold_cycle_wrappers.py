@@ -911,6 +911,7 @@ def test_postclose_wrapper_excludes_machine_microstructure_duplicate_path():
     )
     assert "TimeoutStartSec=3600" in final_refresh_service
     assert "RestartPreventExitStatus=42" in final_refresh_service
+    assert "MemoryMax=2G" in final_refresh_service
 
     final_refresh_timer = Path(
         "deploy/systemd/korstockscan-machine-microstructure-final-refresh.timer"
@@ -2042,7 +2043,12 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     assert "--require-summary-handoff" not in script
     assert script.count("src.engine.pattern_lab_propagation_audit") == 1
     assert script.count("--review-current-generation") == 1
-    assert script.count("src.engine.build_code_improvement_workorder") == 1
+    assert script.count("src.engine.build_code_improvement_workorder") == 2
+    assert (
+        rising_missed_prior_idx
+        < script.rindex("src.engine.build_code_improvement_workorder")
+        < final_trigger_snapshot_idx
+    )
     assert script.count("run_threshold_cycle_ev_and_wait \"") == 2
     assert (
         'RUN_PATTERN_LAB_PROPAGATION_AUDIT="${THRESHOLD_CYCLE_RUN_PATTERN_LAB_PROPAGATION_AUDIT:-true}"'
@@ -2746,8 +2752,13 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
         'run_threshold_cycle_ev_and_wait "post_conversion_lane_workorder_refresh"'
         not in script
     )
-    workorder_index = script.index("src.engine.build_code_improvement_workorder")
+    first_workorder_index = script.index("src.engine.build_code_improvement_workorder")
+    final_workorder_index = script.rindex("src.engine.build_code_improvement_workorder")
     final_runtime_index = script.index("src.engine.runtime_approval_summary")
+    conversion_lane_index = script.index("src.engine.automation.conversion_lane")
+    rising_prior_refresh_index = script.index(
+        '"rising_missed_scout_workorder_prior_refresh"'
+    )
     final_trigger_index = script.index(
         'refresh_automation_trigger_decision_snapshot "final_consumer"',
         final_runtime_index,
@@ -2761,12 +2772,17 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
         final_checklist_index,
     )
     assert (
-        workorder_index
+        first_workorder_index
         < final_runtime_index
+        < conversion_lane_index
+        < rising_prior_refresh_index
+        < final_workorder_index
         < final_trigger_index
         < final_checklist_index
         < pending_verify_index
     )
+    assert script.count("src.engine.build_code_improvement_workorder") == 2
+    assert '"code_improvement_workorder_final_refresh"' in script
     assert "runtime_approval_summary_post_conversion_lane_workorder" not in script
     assert (
         '"$PROJECT_DIR/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_${TARGET_DATE}.json"'
