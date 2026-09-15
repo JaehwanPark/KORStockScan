@@ -1397,7 +1397,17 @@ def build_report(target_date: str, *, write: bool = False) -> dict[str, Any]:
     entry_index: dict[tuple[str, str, str], dict[str, Any]] = {}
     holding_index: dict[tuple[str, str, str], dict[str, Any]] = {}
     cells: list[dict[str, Any]] = []
-    if not blockers:
+    routing_blockers = {
+        "optimizer_artifact_missing_or_invalid",
+        "prepared_request_artifact_missing_or_invalid",
+        "optimizer_prepared_request_hash_binding_mismatch",
+    }
+    if not routing_blockers.intersection(blockers):
+        # A late calibration generation can invalidate optimizer economics
+        # without invalidating the frozen batch's cohort census.  Preserve the
+        # explicit per-cohort blocked/connected routes while the report stays
+        # globally blocked; otherwise the verifier loses the failed cohort's
+        # owner and acceptance condition behind a synthetic coverage gap.
         entry_paths, entry_index = _entry_base_paths(
             target_date, optimizer_report=optimizer_report
         )

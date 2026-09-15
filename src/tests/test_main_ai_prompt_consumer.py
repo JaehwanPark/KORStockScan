@@ -217,6 +217,76 @@ def test_consumer_rejects_replaced_calibration_generation(monkeypatch, tmp_path)
     assert report["runtime_effect"] is False
 
 
+def test_replaced_calibration_preserves_frozen_entry_route_census(
+    monkeypatch, tmp_path
+):
+    day = "2026-09-15"
+    optimizer_path = tmp_path / "optimizer.json"
+    prepared_path = tmp_path / "prepared.json"
+    prepared = _prepared_report(day)
+    payload = _optimizer_report(
+        day,
+        source_bindings={
+            "action_outcome_calibration_artifact_content_sha256": "a" * 64,
+            "prepared_request_sha256": optimizer._canonical_sha256(prepared),
+        },
+    )
+    optimizer_path.write_text(json.dumps(payload))
+    prepared_path.write_text(json.dumps(prepared))
+    monkeypatch.setattr(
+        optimizer, "report_paths", lambda _: (optimizer_path, tmp_path / "optimizer.md")
+    )
+    monkeypatch.setattr(
+        consumer.quality,
+        "micro_reversion_prepared_request_path",
+        lambda _: prepared_path,
+    )
+    monkeypatch.setattr(
+        consumer.quality,
+        "micro_reversion_bridge_report_path",
+        lambda _: tmp_path / "bridge.json",
+    )
+    monkeypatch.setattr(
+        consumer.quality,
+        "micro_reversion_materialized_request_path",
+        lambda _: tmp_path / "materialized.json",
+    )
+    monkeypatch.setattr(
+        consumer.quality,
+        "micro_reversion_execution_result_path",
+        lambda _: tmp_path / "execution.json",
+    )
+    monkeypatch.setattr(
+        optimizer,
+        "_latest_action_outcome_calibration",
+        lambda _: ({}, None, ["source_generation_changed"]),
+    )
+    blocked = {
+        "path_status": consumer.BLOCKED,
+        "blocking_reason": "control_manifest_not_ready:NXT:NXT_AFTERMARKET",
+        "terminality": "requires_retry_or_owner_closure",
+        "effective_venue": "NXT",
+        "session_bucket": "NXT_AFTERMARKET",
+        "owner": "EntrySetupPairedReplayBatch",
+        "acceptance_test": "collect a future exact control manifest",
+    }
+    monkeypatch.setattr(
+        consumer, "_entry_base_paths", lambda *_args, **_kwargs: ([blocked], {})
+    )
+    monkeypatch.setattr(
+        consumer, "_holding_base_paths", lambda *_args, **_kwargs: ([], {})
+    )
+
+    report = consumer.build_report(day)
+
+    assert report["status"] == "blocked_source_contract"
+    assert "optimizer_action_outcome_calibration_hash_binding_mismatch" in report[
+        "blockers"
+    ]
+    assert report["request_paths"]["entry_base"]["cohorts"] == [blocked]
+    assert report["runtime_effect"] is False
+
+
 def _optimizer_report(target_date: str, *, source_bindings: dict | None = None) -> dict:
     body = {
         "schema": optimizer.SCHEMA,
