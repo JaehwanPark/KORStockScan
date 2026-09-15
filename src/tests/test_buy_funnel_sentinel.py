@@ -587,6 +587,124 @@ def test_machine_primary_superseded_pass_is_explicit_lineage_gap():
     assert result["ai_pass_terminal_conservation"]["difference"] == 0
 
 
+def test_machine_primary_recovers_unique_call_parent_downstream_terminal():
+    from datetime import datetime, timedelta
+
+    start = datetime(2026, 9, 15, 13)
+    common = {
+        "entry_primary_decision_owner": "mechanistic_entry_adjudicator",
+        "evaluation_attempt_id": "eval-submit",
+        "scanner_promotion_id": "promotion-submit",
+        "effective_venue": "KRX",
+        "market_session_bucket": "krx_regular",
+        "policy_bundle_hash": "b" * 64,
+        "entry_mechanistic_action": "ENTER_NOW",
+        "entry_ai_screen_status": "pass",
+    }
+    events = [
+        sentinel.PipelineEvent(
+            start,
+            "ENTRY_PIPELINE",
+            "ai_confirmed",
+            "fixture",
+            "417200",
+            "44",
+            common,
+        ),
+        sentinel.PipelineEvent(
+            start + timedelta(milliseconds=500),
+            "ENTRY_PIPELINE",
+            "latency_block",
+            "fixture",
+            "417200",
+            "44",
+            {
+                "entry_submit_attempt_parent_promotion_id": "promotion-submit",
+                "entry_submit_attempt_id": "call-blocked",
+                "entry_submit_attempt_schema": "call_local_submit_attempt_v1",
+                "entry_submit_attempt_authority": "observation_only",
+            },
+        ),
+        sentinel.PipelineEvent(
+            start + timedelta(seconds=1),
+            "ENTRY_PIPELINE",
+            "order_bundle_submitted",
+            "fixture",
+            "417200",
+            "44",
+            {
+                "entry_submit_attempt_parent_promotion_id": "promotion-submit",
+                "entry_submit_attempt_id": "call-submit",
+                "entry_submit_attempt_schema": "call_local_submit_attempt_v1",
+                "entry_submit_attempt_authority": "observation_only",
+                "broker_order_no": "broker-submit",
+            },
+        ),
+    ]
+
+    result = sentinel._machine_primary_entry_funnel(events)
+    row = result["evaluation_ledger"][0]
+    assert row["final_state"] == "submit_pipeline_reached"
+    assert row["downstream_lineage_binding"] == (
+        "exact_call_parent_unique_machine_evaluation"
+    )
+    assert row["recovered_downstream_lineage_stages"] == [
+        "latency_block",
+        "order_bundle_submitted",
+    ]
+    assert result["recovered_downstream_event_count"] == 2
+    assert result["ai_pass_terminal_conservation"]["submitted"] == 1
+    assert result["ai_pass_terminal_conservation"]["difference"] == 0
+
+
+def test_machine_primary_does_not_recover_ambiguous_call_parent_terminal():
+    from datetime import datetime, timedelta
+
+    start = datetime(2026, 9, 15, 13)
+    common = {
+        "entry_primary_decision_owner": "mechanistic_entry_adjudicator",
+        "scanner_promotion_id": "promotion-ambiguous",
+        "effective_venue": "KRX",
+        "market_session_bucket": "krx_regular",
+        "policy_bundle_hash": "b" * 64,
+        "entry_mechanistic_action": "ENTER_NOW",
+        "entry_ai_screen_status": "pass",
+    }
+    events = [
+        sentinel.PipelineEvent(
+            start + timedelta(seconds=index),
+            "ENTRY_PIPELINE",
+            "ai_confirmed",
+            "fixture",
+            "417200",
+            "44",
+            {**common, "evaluation_attempt_id": f"eval-{index}"},
+        )
+        for index in (0, 1)
+    ]
+    events.append(
+        sentinel.PipelineEvent(
+            start + timedelta(seconds=2),
+            "ENTRY_PIPELINE",
+            "order_bundle_submitted",
+            "fixture",
+            "417200",
+            "44",
+            {
+                "entry_submit_attempt_parent_promotion_id": "promotion-ambiguous",
+                "entry_submit_attempt_id": "call-ambiguous",
+                "entry_submit_attempt_schema": "call_local_submit_attempt_v1",
+                "entry_submit_attempt_authority": "observation_only",
+            },
+        )
+    )
+
+    result = sentinel._machine_primary_entry_funnel(events)
+    assert result["recovered_downstream_event_count"] == 0
+    assert result["submit_pipeline_reached_count"] == 0
+    assert result["ai_pass_terminal_conservation"]["difference"] == 0
+
+
 def test_machine_source_invalid_is_explicit_exact_non_ai_evaluation():
     from datetime import datetime
 

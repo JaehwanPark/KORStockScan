@@ -2365,6 +2365,61 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
         grouped[key].append(event)
         identified_source_event_count += 1
 
+    candidate_keys_by_submit_parent: dict[tuple[str, str, str], list[str]] = defaultdict(
+        list
+    )
+    for key, rows in grouped.items():
+        if not any(
+            _safe_str(row.fields.get("entry_mechanistic_action")).upper()
+            == "ENTER_NOW"
+            and _safe_str(row.fields.get("entry_ai_screen_status")).lower() == "pass"
+            for row in rows
+        ):
+            continue
+        parts = key.removeprefix("machine:").split("|")
+        first = min(rows, key=lambda row: row.emitted_at)
+        candidate_keys_by_submit_parent[
+            (parts[0], parts[2], _safe_str(first.record_id))
+        ].append(key)
+    recovered_downstream_by_key: dict[str, list[str]] = defaultdict(list)
+    recoverable_downstream_stages = (
+        {"order_bundle_submitted", "latency_block"}
+        | BLOCKER_STAGES
+        | BROKER_SUBMIT_FAILURE_STAGES
+    )
+    for event in events:
+        if event.pipeline != "ENTRY_PIPELINE" or event.stage not in (
+            recoverable_downstream_stages
+        ):
+            continue
+        fields = event.fields
+        parent = _safe_str(
+            fields.get("entry_submit_attempt_parent_promotion_id")
+        ).strip()
+        call_id = _safe_str(fields.get("entry_submit_attempt_id")).strip()
+        if (
+            not parent
+            or not call_id
+            or fields.get("entry_submit_attempt_schema")
+            != "call_local_submit_attempt_v1"
+            or fields.get("entry_submit_attempt_authority") != "observation_only"
+        ):
+            continue
+        candidates = candidate_keys_by_submit_parent.get(
+            (parent, _safe_str(event.stock_code), _safe_str(event.record_id)), []
+        )
+        eligible = [
+            key
+            for key in candidates
+            if min(grouped[key], key=lambda row: row.emitted_at).emitted_at
+            <= event.emitted_at
+        ]
+        if len(eligible) != 1:
+            continue
+        key = eligible[0]
+        grouped[key].append(event)
+        recovered_downstream_by_key[key].append(event.stage)
+
     ledger: list[dict[str, Any]] = []
     action_counts: Counter[str] = Counter()
     screen_counts: Counter[str] = Counter()
@@ -2373,7 +2428,7 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
     for key, rows in grouped.items():
         first = min(rows, key=lambda row: row.emitted_at)
         parts = key.removeprefix("machine:").split("|")
-        parent = tuple(parts[index] for index in (0, 2, 3, 4, 5))
+        parent = tuple(parts[index] for index in (2, 3, 4, 5))
         candidate = (key, first.emitted_at)
         if parent not in latest_evaluation_by_parent or candidate[1] > (
             latest_evaluation_by_parent[parent][1]
@@ -2479,7 +2534,7 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
             final_state = "final_guard_blocked"
         elif screen == "pass":
             parts = key.removeprefix("machine:").split("|")
-            parent = tuple(parts[index] for index in (0, 2, 3, 4, 5))
+            parent = tuple(parts[index] for index in (2, 3, 4, 5))
             if latest_evaluation_by_parent.get(parent, (key,))[0] != key:
                 final_state = "lineage_gap_superseded_without_terminal"
             else:
@@ -2502,6 +2557,14 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
             "broker_rejected": bool(broker_rejected_rows),
             "final_state": final_state,
             "conflict_reasons": conflict_reasons,
+            "recovered_downstream_lineage_stages": sorted(
+                recovered_downstream_by_key.get(key, [])
+            ),
+            "downstream_lineage_binding": (
+                "exact_call_parent_unique_machine_evaluation"
+                if recovered_downstream_by_key.get(key)
+                else "native_six_field_identity"
+            ),
             "legacy_recheck_runtime_eligible": False,
         }
         ledger.append(row)
@@ -2513,11 +2576,15 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
     machine_enter = sum(row["mechanistic_action"] == "ENTER_NOW" for row in valid_rows)
     ai_pass = sum(row["ai_screen_status"] == "pass" for row in valid_rows)
     ai_pass_rows = [row for row in valid_rows if row["ai_screen_status"] == "pass"]
-    ai_pass_submitted = sum(row["submit_pipeline_reached"] for row in ai_pass_rows)
-    ai_pass_final_guard_blocked = sum(
-        row["final_guard_blocked"] for row in ai_pass_rows
+    ai_pass_submitted = sum(
+        row["final_state"] == "submit_pipeline_reached" for row in ai_pass_rows
     )
-    ai_pass_broker_rejected = sum(row["broker_rejected"] for row in ai_pass_rows)
+    ai_pass_final_guard_blocked = sum(
+        row["final_state"] == "final_guard_blocked" for row in ai_pass_rows
+    )
+    ai_pass_broker_rejected = sum(
+        row["final_state"] == "broker_rejected" for row in ai_pass_rows
+    )
     ai_pass_pending = sum(row["final_state"] == "pending" for row in ai_pass_rows)
     ai_pass_lineage_gap = sum(
         row["final_state"] == "lineage_gap_superseded_without_terminal"
@@ -2534,6 +2601,9 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
         "source_event_count": source_event_count,
         "identified_source_event_count": identified_source_event_count,
         "evaluation_identity_missing_event_count": identity_missing_event_count,
+        "recovered_downstream_event_count": sum(
+            len(stages) for stages in recovered_downstream_by_key.values()
+        ),
         "evaluation_count": len(ledger),
         "valid_evaluation_count": len(valid_rows),
         "excluded_evaluation_count": len(ledger) - len(valid_rows),
