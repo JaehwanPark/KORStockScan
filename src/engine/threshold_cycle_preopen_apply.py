@@ -17,6 +17,7 @@ from src.engine.lifecycle.retirement import (
 )
 
 import argparse
+from collections import defaultdict
 from copy import deepcopy
 import hashlib
 import json
@@ -51,6 +52,17 @@ from src.engine.scalping.entry_split_order_plan import (
     policy_report_generation_contract_status,
     runtime_apply_authority_contract_status,
 )
+from src.engine.scalping.entry_execution_sizing_plan import (
+    ENTRY_PRICE_POLICY_SHA256,
+    ENTRY_PRICE_POLICY_VERSION,
+    OWNER as ENTRY_EXECUTION_SIZING_OWNER,
+    POLICY_VERSION as ENTRY_EXECUTION_SIZING_POLICY_VERSION,
+    PRICE_OWNER as ENTRY_PRICE_OWNER,
+    SCALE_IN_ACTION_OWNERS,
+    SCALE_IN_OWNERS,
+    SCALE_IN_POLICY_VERSIONS,
+    SCALE_IN_PRICE_OWNER,
+)
 from src.engine.scalping.scale_in_split_order_plan import (
     MAX_POLICY_AGE_KRX_TRADING_DAYS,
     POLICY_SCHEMA_VERSION as SCALE_IN_SPLIT_POLICY_SCHEMA_VERSION,
@@ -78,6 +90,7 @@ from src.engine.automation.source_quality_hard_gate import (
     load_source_quality_preflight,
     source_quality_preflight_blocked,
 )
+
 from src.engine.automation.source_quality_clean_baseline import (
     embedded_source_date_gate,
 )
@@ -93,6 +106,9 @@ from src.utils.constants import DATA_DIR
 from src.utils.market_day import count_krx_trading_days
 from src.utils.runtime_flags import STARTUP_RETIRED_RUNTIME_ENV_KEYS
 
+ENTRY_AXIS_BUNDLE_SCHEMA = "integrated_entry_axis_bundle_v1"
+ENTRY_AXIS_BUNDLE_ENV = "KORSTOCKSCAN_ENTRY_AXIS_BUNDLE_SHA256"
+ENTRY_AXIS_BUNDLE_REQUIRED_FROM_DATE = "2026-09-16"
 APPLY_PLAN_DIR = DATA_DIR / "threshold_cycle" / "apply_plans"
 RUNTIME_ENV_DIR = DATA_DIR / "threshold_cycle" / "runtime_env"
 OPERATOR_RUNTIME_ENV_LOCK_DIR = (
@@ -6564,6 +6580,18 @@ def verify_runtime_env_handoff(
         **without_retired_env(effective_env_overrides),
         **retirement_env(),
     }
+    if target_date >= ENTRY_AXIS_BUNDLE_REQUIRED_FROM_DATE:
+        for error in _integrated_entry_axis_bundle_errors(
+            target_date, manifest, effective_env_overrides
+        ):
+            findings.append(
+                {
+                    "family": "integrated_entry_axis_bundle",
+                    "missing_env_keys": [],
+                    "severity": "runtime_policy_unusable",
+                    "detail": error,
+                }
+            )
     scalp_sim_policy_file = str(
         effective_env_overrides.get("KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_FILE") or ""
     ).strip()
@@ -7029,6 +7057,8 @@ def verify_runtime_env_handoff(
             family: list(SELECTED_FAMILY_REQUIRED_ENV_KEYS.get(family, []))
             for family in selected_families
         }
+        if target_date >= ENTRY_AXIS_BUNDLE_REQUIRED_FROM_DATE:
+            pid_required_keys["integrated_entry_axis_bundle"] = [ENTRY_AXIS_BUNDLE_ENV]
         for audit in runtime_policy_audits:
             if not audit.get("enabled"):
                 continue
@@ -7374,6 +7404,358 @@ def _write_gap_provenance(target_date: str) -> None:
     )
 
 
+def _integrated_entry_axis_bundle(
+    target_date: str, env_overrides: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Bind independent entry axes without selecting or mutating any policy."""
+    axis_prefixes = {
+        "entry_action": (),
+        "entry_ai_auxiliary": (),
+        "entry_price": (
+            "KORSTOCKSCAN_DYNAMIC_ENTRY_PRICE_RESOLVER_",
+            "KORSTOCKSCAN_SCALPING_ENTRY_PRICE_RESOLVER_",
+            "KORSTOCKSCAN_SCALPING_ENTRY_PRICE_DEFENSE_",
+            "KORSTOCKSCAN_SCALPING_ENTRY_PRICE_ORDERBOOK_MICRO_",
+            "KORSTOCKSCAN_SCALP_AGGRESSIVE_ENTRY_PRICE_OVERRIDE_",
+            "KORSTOCKSCAN_SCALP_LATE_ENTRY_PRICE_DRIFT_",
+            "KORSTOCKSCAN_SCALPING_NORMAL_DEFENSIVE_",
+            "KORSTOCKSCAN_SCALPING_CONDITIONAL_STRONG_DEFENSIVE_",
+        ),
+        "entry_execution_sizing": (
+            "KORSTOCKSCAN_POSITION_SIZING_POLICY_",
+            "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_",
+        ),
+        "scale_in_action": (
+            "KORSTOCKSCAN_SCALPING_PYRAMID_",
+            "KORSTOCKSCAN_SCALP_FIRST_TOUCH_AVGDOWN_",
+            "KORSTOCKSCAN_PENDING_SCALE_IN_REVALIDATION_",
+        ),
+        "scale_in_price": (
+            "KORSTOCKSCAN_SCALE_IN_PRICE_",
+            "KORSTOCKSCAN_SCALPING_SCALE_IN_PRICE_",
+        ),
+        "scale_in_execution_sizing": ("KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_",),
+    }
+    # The dated mechanistic policy owns both projections. It is read once and
+    # exposed through distinct projection hashes; no env key is assigned to two
+    # owners and legacy V2.14/V2.15 rollout pins are audit provenance only.
+    policy_path = (
+        DATA_DIR / "runtime" / "mechanistic_entry_policy" / f"policy_{target_date}.json"
+    )
+    policy_payload: dict[str, Any] = {}
+    if policy_path.is_file():
+        try:
+            loaded = json.loads(policy_path.read_text(encoding="utf-8"))
+            policy_payload = loaded if isinstance(loaded, dict) else {}
+        except (OSError, json.JSONDecodeError):
+            policy_payload = {}
+    policy_file_sha256 = (
+        hashlib.sha256(policy_path.read_bytes()).hexdigest()
+        if policy_path.is_file() and policy_payload
+        else None
+    )
+    machine_policy_receipt = {
+        "receipt_id": "mechanistic_entry_policy",
+        "path": str(policy_path),
+        "exists": bool(policy_payload),
+        "file_sha256": policy_file_sha256,
+        "schema": policy_payload.get("schema"),
+        "target_date": policy_payload.get("target_date"),
+        "target_date_matches": policy_payload.get("target_date") == target_date,
+        "bundle_sha256": policy_payload.get("bundle_sha256"),
+        "bundle_sha256_matches": (
+            hashlib.sha256(
+                json.dumps(
+                    {
+                        key: value
+                        for key, value in policy_payload.items()
+                        if key != "bundle_sha256"
+                    },
+                    ensure_ascii=True,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("ascii")
+            ).hexdigest()
+            == policy_payload.get("bundle_sha256")
+            if policy_payload
+            else False
+        ),
+        "read_only": True,
+        "env_owner": None,
+    }
+    auto_promotion_env = {
+        str(key): str(value)
+        for key, value in env_overrides.items()
+        if str(key).startswith("KORSTOCKSCAN_SCALPING_PROMPT_AUTO_PROMOTION_")
+    }
+    auto_promotion_path = Path(
+        auto_promotion_env.get(
+            "KORSTOCKSCAN_SCALPING_PROMPT_AUTO_PROMOTION_PATH", ""
+        )
+    )
+    auto_promotion_sha256 = auto_promotion_env.get(
+        "KORSTOCKSCAN_SCALPING_PROMPT_AUTO_PROMOTION_SHA256", ""
+    )
+    auto_promotion_file_sha256 = (
+        hashlib.sha256(auto_promotion_path.read_bytes()).hexdigest()
+        if auto_promotion_path.is_file()
+        else None
+    )
+    auto_promotion_receipt = {
+        "receipt_id": "compact_entry_auto_promotion_pin",
+        "env": dict(sorted(auto_promotion_env.items())),
+        "path": str(auto_promotion_path) if str(auto_promotion_path) != "." else None,
+        "exists": auto_promotion_path.is_file(),
+        "declared_sha256": auto_promotion_sha256 or None,
+        "file_sha256": auto_promotion_file_sha256,
+        "declared_sha256_matches": bool(
+            auto_promotion_sha256
+            and auto_promotion_file_sha256 == auto_promotion_sha256
+        ),
+        "shared_by": ["entry_action", "entry_ai_auxiliary"],
+        "read_only": True,
+        "env_owner": None,
+        "active_policy_selection_authority": False,
+    }
+    compatibility_provenance = [
+        {
+            "env_key": str(key),
+            "value_sha256": hashlib.sha256(str(value).encode("utf-8")).hexdigest(),
+            "active_axis": False,
+            "role": "legacy_audit_compatibility_provenance",
+        }
+        for key, value in sorted(env_overrides.items())
+        if str(key).startswith("KORSTOCKSCAN_SCALPING_V2_14_ROLLOUT_")
+    ]
+    projections = {
+        "entry_action": {
+            "shared_receipt_id": machine_policy_receipt["receipt_id"],
+            "shared_authority_receipt_id": auto_promotion_receipt["receipt_id"],
+            "owner": "mechanistic_entry_adjudicator",
+            "source_kind": "dated_policy_projection",
+            "projection": policy_payload.get("machine_policy"),
+        },
+        "entry_ai_auxiliary": {
+            "shared_receipt_id": machine_policy_receipt["receipt_id"],
+            "shared_authority_receipt_id": auto_promotion_receipt["receipt_id"],
+            "owner": "compact_auxiliary_risk_screen",
+            "source_kind": "dated_policy_projection",
+            "provider": "openai",
+            "model": "gpt-5.4-nano",
+            "provider_model_selection_forbidden": True,
+            "projection": policy_payload.get("ai_policy"),
+        },
+        "entry_price": {
+            "owner": ENTRY_PRICE_OWNER,
+            "source_kind": "code_contract",
+            "source_module": "src.engine.scalping.entry_execution_sizing_plan",
+            "projection": {
+                "policy_version": ENTRY_PRICE_POLICY_VERSION,
+                "policy_sha256": ENTRY_PRICE_POLICY_SHA256,
+                "provider_calls": 0,
+                "numeric_price_owner_only": True,
+            },
+        },
+        "entry_execution_sizing": {
+            "owner": ENTRY_EXECUTION_SIZING_OWNER,
+            "source_kind": "code_contract",
+            "source_module": "src.engine.scalping.entry_execution_sizing_plan",
+            "projection": {
+                "policy_version": ENTRY_EXECUTION_SIZING_POLICY_VERSION,
+                "quantity_and_multi_leg_atomic": True,
+                "action_or_price_authority": False,
+            },
+        },
+        "scale_in_action": {
+            "owner": "scale_in_action_owners",
+            "source_kind": "code_contract",
+            "source_module": "src.engine.scalping.entry_execution_sizing_plan",
+            "projection": {"owners": dict(sorted(SCALE_IN_ACTION_OWNERS.items()))},
+        },
+        "scale_in_price": {
+            "owner": SCALE_IN_PRICE_OWNER,
+            "source_kind": "code_contract",
+            "source_module": "src.engine.scalping.entry_execution_sizing_plan",
+            "projection": {
+                "numeric_price_owner_only": True,
+                "entry_price_authority": False,
+            },
+        },
+        "scale_in_execution_sizing": {
+            "owner": "scale_in_execution_sizing_owners",
+            "source_kind": "code_contract",
+            "source_module": "src.engine.scalping.entry_execution_sizing_plan",
+            "projection": {
+                "owners": dict(sorted(SCALE_IN_OWNERS.items())),
+                "policy_versions": dict(sorted(SCALE_IN_POLICY_VERSIONS.items())),
+                "action_or_price_authority": False,
+            },
+        },
+    }
+    env_owners: dict[str, list[str]] = defaultdict(list)
+    axes: dict[str, dict[str, Any]] = {}
+    for axis, prefixes in axis_prefixes.items():
+        values = {
+            str(key): str(value)
+            for key, value in env_overrides.items()
+            if key != ENTRY_AXIS_BUNDLE_ENV
+            and any(str(key).startswith(prefix) for prefix in prefixes)
+        }
+        for key in values:
+            env_owners[key].append(axis)
+        file_receipts: list[dict[str, Any]] = []
+        for key, value in sorted(values.items()):
+            if not key.endswith(("_FILE", "_PATH", "_EVIDENCE_PATH")) or not value:
+                continue
+            policy_path = Path(value)
+            receipt = {"env_key": key, "path": value, "exists": policy_path.is_file()}
+            stem = key
+            for suffix in ("_EVIDENCE_PATH", "_FILE", "_PATH"):
+                if stem.endswith(suffix):
+                    stem = stem[: -len(suffix)]
+                    break
+            enabled_key = stem + "_ENABLED"
+            explicitly_disabled = (
+                enabled_key in env_overrides
+                and not _runtime_env_enabled(env_overrides.get(enabled_key))
+            )
+            receipt["required"] = not explicitly_disabled
+            receipt["enabled_env_key"] = enabled_key
+            if policy_path.is_file():
+                receipt["sha256"] = hashlib.sha256(policy_path.read_bytes()).hexdigest()
+            sha_key = (
+                key[: -len("_EVIDENCE_PATH")] + "_EVIDENCE_SHA256"
+                if key.endswith("_EVIDENCE_PATH")
+                else key.rsplit("_", 1)[0] + "_SHA256"
+            )
+            declared_sha = str(env_overrides.get(sha_key) or "").strip()
+            receipt["declared_sha256_env_key"] = sha_key
+            receipt["declared_sha256"] = declared_sha or None
+            receipt["declared_sha256_matches"] = (
+                receipt.get("sha256") == declared_sha if declared_sha else None
+            )
+            file_receipts.append(receipt)
+        body: dict[str, Any] = {
+            "axis": axis,
+            "env": dict(sorted(values.items())),
+            "file_receipts": file_receipts,
+        }
+        if axis in projections:
+            projection = projections[axis]
+            body.update(
+                {key: value for key, value in projection.items() if key != "projection"}
+            )
+            body["projection_sha256"] = (
+                hashlib.sha256(
+                    json.dumps(
+                        projection.get("projection"),
+                        ensure_ascii=True,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode("ascii")
+                ).hexdigest()
+                if isinstance(projection.get("projection"), dict)
+                else None
+            )
+        axes[axis] = {
+            **body,
+            "configured": bool(values or body.get("projection_sha256")),
+            "axis_sha256": hashlib.sha256(
+                json.dumps(
+                    body, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+                ).encode("ascii")
+            ).hexdigest(),
+        }
+    digest_body = {
+        "schema": ENTRY_AXIS_BUNDLE_SCHEMA,
+        "target_date": target_date,
+        "axes": axes,
+        "shared_read_only_receipts": [
+            machine_policy_receipt,
+            auto_promotion_receipt,
+        ],
+        "compatibility_provenance": compatibility_provenance,
+    }
+    bundle_sha256 = hashlib.sha256(
+        json.dumps(
+            digest_body, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+        ).encode("ascii")
+    ).hexdigest()
+    return {
+        **digest_body,
+        "bundle_sha256": bundle_sha256,
+        "axis_count": len(axes),
+        "configured_axis_count": sum(axis["configured"] for axis in axes.values()),
+        "duplicate_env_key_owners": {
+            key: owners for key, owners in env_owners.items() if len(owners) != 1
+        },
+        "env_key_owner_count": len(env_owners),
+        "policy_values_generated": False,
+        "provider_model_selection_forbidden": True,
+        "all_axes_configured": all(axis["configured"] for axis in axes.values()),
+        "shared_policy_date_valid": (
+            machine_policy_receipt["target_date_matches"] is True
+        ),
+        "shared_policy_hash_valid": (
+            machine_policy_receipt["bundle_sha256_matches"] is True
+        ),
+        "shared_auto_promotion_pin_valid": (
+            auto_promotion_receipt["exists"] is True
+            and auto_promotion_receipt["declared_sha256_matches"] is True
+        ),
+        "all_policy_files_present": all(
+            not receipt["required"] or receipt["exists"]
+            for axis in axes.values()
+            for receipt in axis["file_receipts"]
+        ),
+        "all_declared_policy_hashes_match": all(
+            not receipt["required"] or receipt["declared_sha256_matches"] is not False
+            for axis in axes.values()
+            for receipt in axis["file_receipts"]
+        ),
+        "runtime_effect": False,
+        "decision_authority": "preopen_identity_and_consumer_verification_only",
+    }
+
+
+def _integrated_entry_axis_bundle_errors(
+    target_date: str,
+    manifest: Mapping[str, Any],
+    effective_env: Mapping[str, Any],
+) -> list[str]:
+    stored = manifest.get("integrated_entry_axis_bundle")
+    expected = _integrated_entry_axis_bundle(target_date, effective_env)
+    stored_sha = (
+        str(stored.get("bundle_sha256") or "") if isinstance(stored, dict) else ""
+    )
+    errors: list[str] = []
+    if not stored_sha:
+        errors.append("integrated_axis_bundle_missing")
+    elif stored_sha != expected["bundle_sha256"]:
+        errors.append("integrated_axis_bundle_hash_mismatch")
+    if str(effective_env.get(ENTRY_AXIS_BUNDLE_ENV) or "") != stored_sha:
+        errors.append("integrated_axis_bundle_env_pin_mismatch")
+    if isinstance(stored, dict) and set(stored.get("axes") or {}) != set(
+        expected["axes"]
+    ):
+        errors.append("integrated_axis_set_mismatch")
+    if expected["duplicate_env_key_owners"]:
+        errors.append("integrated_axis_env_owner_conflict")
+    if expected["all_axes_configured"] is not True:
+        errors.append("integrated_axis_unconfigured")
+    if expected["shared_policy_date_valid"] is not True:
+        errors.append("integrated_axis_policy_date_mismatch")
+    if expected["shared_policy_hash_valid"] is not True:
+        errors.append("integrated_axis_shared_policy_hash_mismatch")
+    if expected["shared_auto_promotion_pin_valid"] is not True:
+        errors.append("integrated_axis_shared_auto_promotion_pin_invalid")
+    if expected["all_policy_files_present"] is not True:
+        errors.append("integrated_axis_policy_file_missing")
+    if expected["all_declared_policy_hashes_match"] is not True:
+        errors.append("integrated_axis_policy_hash_mismatch")
+    return errors
+
+
 def _write_runtime_env(
     target_date: str, manifest: dict[str, Any], env_overrides: dict[str, str]
 ) -> None:
@@ -7423,6 +7805,27 @@ def _write_runtime_env(
         for key, value in env_overrides.items()
         if str(key) not in REMOVED_RUNTIME_ENV_KEYS
     }
+    if target_date >= ENTRY_AXIS_BUNDLE_REQUIRED_FROM_DATE:
+        effective_axis_env = dict(env_overrides)
+        effective_axis_env.update(
+            _read_shell_export_env(RUNTIME_ENV_DIR / "operator_runtime_overrides.env")
+        )
+        effective_axis_env.update(
+            _read_shell_export_env(
+                RUNTIME_ENV_DIR / f"operator_runtime_overrides_{target_date}.env"
+            )
+        )
+        if succession_receipt:
+            for policy in succession_receipt.get("policies") or []:
+                if isinstance(policy, dict):
+                    effective_axis_env.update(policy.get("env_overrides") or {})
+        effective_axis_env = {
+            **without_retired_env(effective_axis_env),
+            **retirement_env(),
+        }
+        axis_bundle = _integrated_entry_axis_bundle(target_date, effective_axis_env)
+        env_overrides[ENTRY_AXIS_BUNDLE_ENV] = axis_bundle["bundle_sha256"]
+        manifest["integrated_entry_axis_bundle"] = axis_bundle
     lines = [
         "# Generated by threshold_cycle_preopen_apply.py",
         f"# target_date={target_date}",
@@ -7600,6 +8003,15 @@ def _write_runtime_env(
                 "selected_families": selected_families,
                 "removed_selected_families_ignored": removed_selected_families,
                 "selection_change_summary": selection_change_summary,
+                **(
+                    {
+                        "integrated_entry_axis_bundle": manifest[
+                            "integrated_entry_axis_bundle"
+                        ]
+                    }
+                    if manifest.get("integrated_entry_axis_bundle")
+                    else {}
+                ),
                 **(
                     {"operator_policy_succession_required": True}
                     if succession_receipt

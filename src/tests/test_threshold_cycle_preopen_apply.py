@@ -16,6 +16,119 @@ from src.engine.scalping import (
 from src.engine.swing import sim_auto_approval_control_tower as swing_sim_mod
 
 
+def test_integrated_entry_axis_bundle_detects_single_axis_change(monkeypatch, tmp_path):
+    monkeypatch.setattr(mod, "DATA_DIR", tmp_path)
+    machine_dir = tmp_path / "runtime" / "mechanistic_entry_policy"
+    machine_dir.mkdir(parents=True)
+    machine_policy = {
+        "schema": "main_mechanistic_entry_runtime_policy_v1",
+        "target_date": "2026-09-16",
+        "machine_policy": {"action_owner": "mechanistic_entry_adjudicator"},
+        "ai_policy": {"prompt_version": "entry_machine_auxiliary_compact_v3"},
+    }
+    machine_policy["bundle_sha256"] = hashlib.sha256(
+        json.dumps(
+            machine_policy,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("ascii")
+    ).hexdigest()
+    (machine_dir / "policy_2026-09-16.json").write_text(
+        json.dumps(machine_policy), encoding="utf-8"
+    )
+    policy_file = tmp_path / "entry-split.json"
+    policy_file.write_text('{"schema":"fixture"}', encoding="utf-8")
+    auto_promotion_file = tmp_path / "auto-promotion.json"
+    auto_promotion_file.write_text('{"schema":"fixture"}', encoding="utf-8")
+    auto_promotion_sha256 = hashlib.sha256(
+        auto_promotion_file.read_bytes()
+    ).hexdigest()
+    env = {
+        "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED": "true",
+        "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE": str(policy_file),
+        "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_VERSION": "entry-split-v1",
+        "KORSTOCKSCAN_PENDING_SCALE_IN_REVALIDATION_MIN_AI_SCORE": "66",
+        "KORSTOCKSCAN_SCALPING_PROMPT_AUTO_PROMOTION_PATH": str(
+            auto_promotion_file
+        ),
+        "KORSTOCKSCAN_SCALPING_PROMPT_AUTO_PROMOTION_SHA256": (
+            auto_promotion_sha256
+        ),
+        "KORSTOCKSCAN_SCALPING_V2_14_ROLLOUT_PATH": "/audit/legacy-v2-14.json",
+    }
+
+    first = mod._integrated_entry_axis_bundle("2026-09-16", env)
+    changed = mod._integrated_entry_axis_bundle(
+        "2026-09-16",
+        {**env, "KORSTOCKSCAN_PENDING_SCALE_IN_REVALIDATION_MIN_AI_SCORE": "67"},
+    )
+
+    assert first["axis_count"] == 7
+    assert set(first["axes"]) == {
+        "entry_action",
+        "entry_ai_auxiliary",
+        "entry_price",
+        "entry_execution_sizing",
+        "scale_in_action",
+        "scale_in_price",
+        "scale_in_execution_sizing",
+    }
+    assert first["duplicate_env_key_owners"] == {}
+    assert first["all_axes_configured"] is True
+    assert first["policy_values_generated"] is False
+    assert first["provider_model_selection_forbidden"] is True
+    assert first["shared_auto_promotion_pin_valid"] is True
+    assert first["axes"]["entry_ai_auxiliary"]["provider"] == "openai"
+    assert first["axes"]["entry_ai_auxiliary"]["model"] == "gpt-5.4-nano"
+    assert first["axes"]["entry_price"]["owner"] == ("mechanistic_entry_price_resolver")
+    assert first["axes"]["entry_execution_sizing"]["owner"] == (
+        "entry_execution_sizing_owner"
+    )
+    assert first["axes"]["scale_in_price"]["owner"] == (
+        "existing_scale_in_price_resolver"
+    )
+    assert all(
+        "PROMPT_AUTO_PROMOTION" not in key and "V2_14_ROLLOUT" not in key
+        for axis in first["axes"].values()
+        for key in axis["env"]
+    )
+    assert first["shared_read_only_receipts"][1]["env"] == {
+        "KORSTOCKSCAN_SCALPING_PROMPT_AUTO_PROMOTION_PATH": str(
+            auto_promotion_file
+        ),
+        "KORSTOCKSCAN_SCALPING_PROMPT_AUTO_PROMOTION_SHA256": (
+            auto_promotion_sha256
+        ),
+    }
+    assert first["compatibility_provenance"][0]["active_axis"] is False
+    assert first["all_policy_files_present"] is True
+    assert first["bundle_sha256"] != changed["bundle_sha256"]
+    assert (
+        first["axes"]["entry_execution_sizing"]["axis_sha256"]
+        == changed["axes"]["entry_execution_sizing"]["axis_sha256"]
+    )
+    assert (
+        first["axes"]["scale_in_action"]["axis_sha256"]
+        != changed["axes"]["scale_in_action"]["axis_sha256"]
+    )
+    pinned_env = {**env, mod.ENTRY_AXIS_BUNDLE_ENV: first["bundle_sha256"]}
+    manifest = {"integrated_entry_axis_bundle": first}
+    assert (
+        mod._integrated_entry_axis_bundle_errors("2026-09-16", manifest, pinned_env)
+        == []
+    )
+    errors = mod._integrated_entry_axis_bundle_errors(
+        "2026-09-16",
+        manifest,
+        {
+            **pinned_env,
+            "KORSTOCKSCAN_PENDING_SCALE_IN_REVALIDATION_MIN_AI_SCORE": "67",
+        },
+    )
+    assert "integrated_axis_bundle_hash_mismatch" in errors
+
+
 def test_aftermarket_sor_successor_policy_selects_exact_preopen_date(
     monkeypatch, tmp_path
 ):
