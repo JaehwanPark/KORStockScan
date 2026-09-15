@@ -123,10 +123,17 @@ def compact_evaluation_plan(calibration: Mapping[str, Any]) -> dict[str, Any]:
             }
             for version in sorted(COMPACT_AI_VARIANTS)
         ],
+        "provider_contract": {
+            "provider": "openai",
+            "model": "gpt-5.4-nano",
+            "fixed_provider_and_model": True,
+            "provider_model_auto_selection_forbidden": True,
+        },
         "candidate_improvement_proven": False,
         "legacy_replay_may_tune_compact": False,
         "provider_calls": 0,
         "runtime_effect": False,
+        "allowed_runtime_apply": False,
     }
 
 

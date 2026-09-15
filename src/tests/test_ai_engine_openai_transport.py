@@ -8179,14 +8179,35 @@ def test_openai_v2_15_invalid_prompt_retry_preserves_selected_contract(
         assert "binding PASS/VETO authority" in calls[1]["instructions"]
 
 
-def test_openai_compact_auxiliary_invalid_prompt_retry_keeps_compact_contract():
+def test_openai_compact_auxiliary_invalid_prompt_retry_keeps_compact_contract(
+    monkeypatch,
+):
     from src.engine.ai_prompt_contracts import (
         ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
         machine_auxiliary_compact_entry_system_prompt,
     )
 
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(
+            openai_module.TRADING_RULES,
+            OPENAI_SCALPING_ENTRY_MODEL="different-configured-model",
+            OPENAI_PRIMARY_BEDROCK_FALLBACK_ENDPOINTS=("analyze_target",),
+        ),
+    )
     engine = _build_engine()
     calls = []
+    monkeypatch.setattr(
+        engine,
+        "_try_bedrock_primary_provider",
+        lambda **kwargs: pytest.fail("compact primary provider must remain OpenAI"),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_try_openai_primary_bedrock_fallback",
+        lambda **kwargs: pytest.fail("compact provider fallback must be disabled"),
+    )
 
     def _create(**kwargs):
         calls.append(kwargs)
@@ -8219,6 +8240,7 @@ def test_openai_compact_auxiliary_invalid_prompt_retry_keeps_compact_contract():
     )
 
     assert len(calls) == 2
+    assert {call["model"] for call in calls} == {"gpt-5.4-nano"}
     instructions = calls[1]["instructions"]
     assert machine_auxiliary_compact_entry_system_prompt("entry") in instructions
     assert "Historical policy context" not in instructions

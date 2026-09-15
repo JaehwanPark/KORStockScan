@@ -2072,16 +2072,37 @@ def _run_endpoint_provider_compare(
 ) -> dict[str, Any]:
     from src.engine import ai_engine_openai as openai_module
 
+    retired_entry_price = {
+        "entry_price": {
+            "results": [],
+            "summary": {
+                **_endpoint_summary([]),
+                "status": "retired_mechanistic_entry_price_owner",
+                "provider_calls": 0,
+            },
+        }
+        if "entry_price" in points
+        else {}
+    }
+    points = tuple(point for point in points if point != "entry_price")
+    if not points:
+        return retired_entry_price
     keys = _api_keys()
     if not keys:
         return {
-            point: {
-                "results": [
-                    {"status": "skipped", "reason": "OPENAI_API_KEY not configured"}
-                ],
-                "summary": _endpoint_summary([{"status": "skipped"}]),
+            **retired_entry_price,
+            **{
+                point: {
+                    "results": [
+                        {
+                            "status": "skipped",
+                            "reason": "OPENAI_API_KEY not configured",
+                        }
+                    ],
+                    "summary": _endpoint_summary([{"status": "skipped"}]),
+                }
+                for point in points
             }
-            for point in points
         }
 
     point_results: dict[str, list[dict[str, Any]]] = {point: [] for point in points}
@@ -2213,11 +2234,14 @@ def _run_endpoint_provider_compare(
                 break
     if not any(valid_rows_by_point.values()):
         return {
-            point: {
-                "results": point_results[point],
-                "summary": _endpoint_summary(point_results[point]),
+            **retired_entry_price,
+            **{
+                point: {
+                    "results": point_results[point],
+                    "summary": _endpoint_summary(point_results[point]),
+                }
+                for point in points
             }
-            for point in points
         }
 
     original_rules = openai_module.TRADING_RULES
@@ -2520,11 +2544,14 @@ def _run_endpoint_provider_compare(
                         }
                     )
         return {
-            point: {
-                "results": point_results[point],
-                "summary": _endpoint_summary(point_results[point]),
+            **retired_entry_price,
+            **{
+                point: {
+                    "results": point_results[point],
+                    "summary": _endpoint_summary(point_results[point]),
+                }
+                for point in points
             }
-            for point in points
         }
     finally:
         openai_module.TRADING_RULES = original_rules
@@ -2688,6 +2715,9 @@ def run_prepromotion_exact_context_capture(
     selected = []
     for key in sorted(latest):
         endpoint = key[0]
+        if endpoint == "entry_price":
+            exclusions["entry_price_ai_authority_retired"] += 1
+            continue
         if per_endpoint[endpoint] >= max(1, int(sample_limit)):
             continue
         selected.append(latest[key])

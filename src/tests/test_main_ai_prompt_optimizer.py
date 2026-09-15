@@ -39,6 +39,19 @@ def test_compact_plan_preserves_natural_selection_and_runtime_prompt_registry():
         assert row["system_prompt_sha256"] == policy.digest(
             policy.compact_auxiliary_prompt(prompt_version=row["prompt_version"])
         )
+    assert plan["provider_contract"] == {
+        "provider": "openai",
+        "model": "gpt-5.4-nano",
+        "fixed_provider_and_model": True,
+        "provider_model_auto_selection_forbidden": True,
+    }
+    assert plan["provider_calls"] == 0
+    assert plan["allowed_runtime_apply"] is False
+    serialized = json.dumps(plan, ensure_ascii=True, sort_keys=True).lower()
+    assert "bedrock" not in serialized
+    assert "rich_auxiliary" not in serialized
+    assert "v2_14" not in serialized
+    assert "v2_15" not in serialized
 
 
 def _zero_participation_evidence():

@@ -4856,7 +4856,21 @@ class GPTSniperEngine:
         replay_context=None,
     ):
         """Responses API HTTP/WS transport와 예외 처리를 전담하는 중앙 호출기."""
-        target_model = model_override if model_override else self.current_model_name
+        metadata = dict(metadata_extra or {})
+        selected_prompt_version = str(
+            metadata.get("entry_setup_live_policy_selected_prompt_version")
+            or metadata.get("selected_prompt_version")
+            or metadata.get("prompt_version")
+            or ""
+        ).strip()
+        compact_auxiliary_call = (
+            selected_prompt_version in MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS
+        )
+        target_model = (
+            "gpt-5.4-nano"
+            if compact_auxiliary_call
+            else (model_override if model_override else self.current_model_name)
+        )
         target_temp = self._resolve_openai_temperature(
             require_json=bool(require_json),
             temperature_override=temperature_override,
@@ -4884,7 +4898,9 @@ class GPTSniperEngine:
             metadata_extra=metadata_extra,
             timeout_ms_override=timeout_ms_override,
         )
-        if self._uses_openai_primary_bedrock_fallback(request):
+        if not compact_auxiliary_call and self._uses_openai_primary_bedrock_fallback(
+            request
+        ):
             transport_mode_override = "http"
         requested_transport_mode = self._resolve_openai_transport_mode(
             transport_mode_override
@@ -4938,48 +4954,60 @@ class GPTSniperEngine:
             ),
         }
         baseline_request = request
-        request, current_axis_receipt = main_ai_current_axis_runtime.select_request(
-            request,
-            metadata=dict(metadata_extra or {}),
-            execution={
-                "provider": (
-                    "unapproved_route"
-                    if self._uses_openai_primary_bedrock_fallback(request)
-                    or (
-                        request.model_name == "gpt-5.4-mini"
-                        and os.getenv(
-                            "KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE", "off"
-                        ).lower()
-                        != "off"
-                    )
-                    else "openai"
-                ),
-                "model": request.model_name,
-                "temperature": request.temperature,
-                "reasoning_effort": request.reasoning_effort,
-                "transport": (
-                    "responses_ws"
-                    if self._should_use_responses_ws(
-                        request, transport_mode_override=transport_mode_override
-                    )
-                    else "responses_http"
-                ),
-                "schema_name": request.schema_name,
-                "require_json": request.require_json,
-                "max_output_tokens": request.max_output_tokens,
-                "response_schema_mode": transport_meta["openai_response_schema_mode"],
-                "response_schema_application": (
-                    "provider_enforced_openai"
-                    if response_schema_registry_used
-                    else "provider_json_object_openai"
-                ),
-                "response_schema_registry_used": response_schema_registry_used,
-                "response_schema_sha256": response_schema_sha256,
-                "semantic_validator_version": _expected_semantic_contract_version(
-                    request.schema_name
-                ),
-            },
-        )
+        current_axis_receipt: dict[str, Any] = {}
+        if compact_auxiliary_call:
+            current_axis_receipt = {
+                "runtime_effect": False,
+                "selection_skipped": True,
+                "reason": "compact_auxiliary_fixed_openai_nano_contract",
+                "provider": "openai",
+                "model": "gpt-5.4-nano",
+            }
+        else:
+            request, current_axis_receipt = main_ai_current_axis_runtime.select_request(
+                request,
+                metadata=metadata,
+                execution={
+                    "provider": (
+                        "unapproved_route"
+                        if self._uses_openai_primary_bedrock_fallback(request)
+                        or (
+                            request.model_name == "gpt-5.4-mini"
+                            and os.getenv(
+                                "KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE", "off"
+                            ).lower()
+                            != "off"
+                        )
+                        else "openai"
+                    ),
+                    "model": request.model_name,
+                    "temperature": request.temperature,
+                    "reasoning_effort": request.reasoning_effort,
+                    "transport": (
+                        "responses_ws"
+                        if self._should_use_responses_ws(
+                            request, transport_mode_override=transport_mode_override
+                        )
+                        else "responses_http"
+                    ),
+                    "schema_name": request.schema_name,
+                    "require_json": request.require_json,
+                    "max_output_tokens": request.max_output_tokens,
+                    "response_schema_mode": transport_meta[
+                        "openai_response_schema_mode"
+                    ],
+                    "response_schema_application": (
+                        "provider_enforced_openai"
+                        if response_schema_registry_used
+                        else "provider_json_object_openai"
+                    ),
+                    "response_schema_registry_used": response_schema_registry_used,
+                    "response_schema_sha256": response_schema_sha256,
+                    "semantic_validator_version": _expected_semantic_contract_version(
+                        request.schema_name
+                    ),
+                },
+            )
         transport_meta["main_ai_current_axis_receipt"] = (
             json.dumps(current_axis_receipt, sort_keys=True)
             if current_axis_receipt
@@ -5031,13 +5059,21 @@ class GPTSniperEngine:
             )
             capture_meta = capture_request(request)
         transport_meta.update(capture_meta)
-        bedrock_primary_payload = self._try_bedrock_primary_provider(
-            request=request, transport_meta=transport_meta
+        bedrock_primary_payload = (
+            None
+            if compact_auxiliary_call
+            else self._try_bedrock_primary_provider(
+                request=request, transport_meta=transport_meta
+            )
         )
         if isinstance(bedrock_primary_payload, dict):
             return bedrock_primary_payload
         total_deadline_request = request
-        request = self._build_openai_primary_attempt_request(request)
+        request = (
+            request
+            if compact_auxiliary_call
+            else self._build_openai_primary_attempt_request(request)
+        )
         if request is not total_deadline_request:
             transport_meta.update(
                 {
@@ -5174,10 +5210,14 @@ class GPTSniperEngine:
             except Exception as primary_error:
                 if getattr(primary_error, "timing_meta", None):
                     transport_meta.update(primary_error.timing_meta)
-                fallback_payload = self._try_openai_primary_bedrock_fallback(
-                    request=total_deadline_request,
-                    primary_error=primary_error,
-                    transport_meta=transport_meta,
+                fallback_payload = (
+                    None
+                    if compact_auxiliary_call
+                    else self._try_openai_primary_bedrock_fallback(
+                        request=total_deadline_request,
+                        primary_error=primary_error,
+                        transport_meta=transport_meta,
+                    )
                 )
                 if isinstance(fallback_payload, dict):
                     return fallback_payload
@@ -9601,16 +9641,20 @@ class GPTSniperEngine:
                         )
                     )
                 target_model = (
-                    str(
-                        getattr(
-                            TRADING_RULES,
-                            "OPENAI_SCALPING_ENTRY_MODEL",
-                            self._get_tier1_model(),
-                        )
-                        or self._get_tier1_model()
-                    ).strip()
-                    if is_scalping_entry_call
-                    else self._get_tier1_model()
+                    "gpt-5.4-nano"
+                    if prompt_version in MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS
+                    else (
+                        str(
+                            getattr(
+                                TRADING_RULES,
+                                "OPENAI_SCALPING_ENTRY_MODEL",
+                                self._get_tier1_model(),
+                            )
+                            or self._get_tier1_model()
+                        ).strip()
+                        if is_scalping_entry_call
+                        else self._get_tier1_model()
+                    )
                 )
                 feature_audit_fields = build_scalping_feature_audit_fields(
                     feature_packet

@@ -945,21 +945,23 @@ def test_provider_endpoint_compare_runs_bedrock_primary_and_openai_then_restores
     assert mod.os.environ["KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE"] == "primary"
     bedrock_entry = result["bedrock_primary"]["decision_points"]["entry_price"]
     openai_entry = result["openai_gpt54_mini"]["decision_points"]["entry_price"]
-    assert bedrock_entry["summary"]["bedrock_primary_used_count"] == 1
-    assert openai_entry["summary"]["bedrock_primary_used_count"] == 0
-    assert result["pairwise"]["entry_price"]["summary"]["pair_count"] == 1
-    assert result["pairwise"]["entry_price"]["summary"]["order_price_diff_count"] == 1
+    assert bedrock_entry["summary"]["status"] == (
+        "retired_mechanistic_entry_price_owner"
+    )
+    assert openai_entry["summary"]["status"] == (
+        "retired_mechanistic_entry_price_owner"
+    )
+    assert bedrock_entry["summary"]["provider_calls"] == 0
+    assert openai_entry["summary"]["provider_calls"] == 0
+    assert result["pairwise"]["entry_price"]["summary"]["pair_count"] == 0
     assert result["pairwise"]["holding_flow"]["summary"]["action_diff_count"] == 1
     assert result["pairwise"]["holding_flow"]["summary"]["flow_state_diff_count"] == 1
     candidate = result["entry_price_candidate_route"]
-    assert candidate["provider_env"]["KORSTOCKSCAN_OPENAI_ENTRY_PRICE_TIMEOUT_MS"] == (
-        "15000"
-    )
-    assert candidate["decision_points"]["entry_price"]["summary"]["row_count"] == 1
-    assert result["candidate_pairwise"]["entry_price"]["summary"]["pair_count"] == 1
+    assert candidate["decision_points"]["entry_price"]["summary"]["provider_calls"] == 0
+    assert result["candidate_pairwise"]["entry_price"]["summary"]["pair_count"] == 0
 
 
-def test_provider_endpoint_compare_skips_source_quality_contract_gaps(monkeypatch):
+def test_provider_endpoint_compare_retires_entry_price_before_provider_init(monkeypatch):
     from src.engine import ai_engine_openai as openai_module
 
     class FailIfConstructed:
@@ -988,13 +990,14 @@ def test_provider_endpoint_compare_skips_source_quality_contract_gaps(monkeypatc
     )
 
     assert result["entry_price"]["summary"]["row_count"] == 0
-    assert result["entry_price"]["summary"]["skipped_count"] == 1
-    assert result["entry_price"]["results"][0]["reason"] == (
-        "source_quality_contract_missing"
+    assert result["entry_price"]["summary"]["status"] == (
+        "retired_mechanistic_entry_price_owner"
     )
+    assert result["entry_price"]["summary"]["provider_calls"] == 0
+    assert result["entry_price"]["results"] == []
 
 
-def test_provider_endpoint_compare_scans_past_invalid_row_for_valid_sample(monkeypatch):
+def test_provider_endpoint_compare_does_not_scan_entry_price_rows(monkeypatch):
     from src.engine import ai_engine_openai as openai_module
 
     class FakeEngine:
@@ -1046,14 +1049,14 @@ def test_provider_endpoint_compare_scans_past_invalid_row_for_valid_sample(monke
         points=("entry_price",),
     )
 
-    assert result["entry_price"]["summary"]["row_count"] == 1
-    assert any(
-        row.get("stock_code") == "valid" and row["status"] == "ok"
-        for row in result["entry_price"]["results"]
+    assert result["entry_price"]["summary"]["row_count"] == 0
+    assert result["entry_price"]["summary"]["status"] == (
+        "retired_mechanistic_entry_price_owner"
     )
+    assert result["entry_price"]["summary"]["provider_calls"] == 0
 
 
-def test_provider_endpoint_compare_fails_provider_none(monkeypatch):
+def test_provider_endpoint_compare_never_calls_entry_price_provider(monkeypatch):
     from src.engine import ai_engine_openai as openai_module
 
     class FakeEngine:
@@ -1095,15 +1098,12 @@ def test_provider_endpoint_compare_fails_provider_none(monkeypatch):
         points=("entry_price",),
     )
 
-    row = result["entry_price"]["results"][0]
-    assert row["status"] == "error"
-    assert row["error_type"] == "provider_none"
+    assert result["entry_price"]["results"] == []
     assert result["entry_price"]["summary"]["row_count"] == 0
-    assert result["entry_price"]["summary"]["error_count"] == 1
-    assert result["entry_price"]["summary"]["provider_none_count"] == 1
+    assert result["entry_price"]["summary"]["provider_calls"] == 0
 
 
-def test_provider_endpoint_compare_does_not_treat_transport_only_as_success(
+def test_provider_endpoint_compare_ignores_entry_price_transport_metadata(
     monkeypatch,
 ):
     from src.engine import ai_engine_openai as openai_module
@@ -1150,10 +1150,11 @@ def test_provider_endpoint_compare_does_not_treat_transport_only_as_success(
         points=("entry_price",),
     )
 
-    row = result["entry_price"]["results"][0]
-    assert row["status"] == "error"
-    assert row["error_type"] == "provider_none"
-    assert row["provider"] == "none"
+    assert result["entry_price"]["results"] == []
+    assert result["entry_price"]["summary"]["status"] == (
+        "retired_mechanistic_entry_price_owner"
+    )
+    assert result["entry_price"]["summary"]["provider_calls"] == 0
 
 
 def test_holding_score_forensic_endpoint_records_provider_provenance(monkeypatch):
