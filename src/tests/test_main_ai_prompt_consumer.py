@@ -795,6 +795,77 @@ def test_entry_terminal_census_keeps_batch_no_source_cohorts_absent_from_optimiz
         )
 
 
+def test_entry_consumer_census_follows_frozen_contract_not_optimizer_research_rows(
+    monkeypatch,
+):
+    version = optimizer.ENTRY_CANDIDATE_ORDER[0]
+    contract = optimizer._entry_cohort_contract({})
+    batch = {
+        "schema": consumer.entry_batch.BATCH_SCHEMA,
+        "target_date": "2026-09-15",
+        **_source_only(),
+        "cohort_contract": contract,
+        "candidate_prompt_selection_source": {
+            "status": "optimizer_candidate_plan_applied_offline_only",
+            "artifact_content_sha256": "a" * 64,
+            "cohort_contract_sha256": contract["contract_content_sha256"],
+        },
+        "candidate_prompt_versions_by_cohort": {
+            "KRX/KRX_REGULAR": version,
+            "NXT/NXT_AFTERMARKET": version,
+        },
+        "cohorts": [
+            {
+                "effective_venue": "KRX",
+                "session_bucket": "KRX_REGULAR",
+                "candidate_prompt_version": version,
+                "status": "hold_no_exact_entry_control",
+            },
+            {
+                "effective_venue": "NXT",
+                "session_bucket": "NXT_AFTERMARKET",
+                "status": "failed_offline_cohort",
+                "error_code": "control_manifest_not_ready:NXT:NXT_AFTERMARKET",
+            },
+        ],
+    }
+    optimizer_report = {
+        "artifact_content_sha256": "a" * 64,
+        "entry_cohort_contract": contract,
+        "stage_optimizers": {
+            "entry": {
+                "cohort_optimizers": [
+                    {
+                        "effective_venue": "KRX",
+                        "session_bucket": "KRX_REGULAR",
+                        "selected_challenger": {"prompt_version": version},
+                    },
+                    {
+                        "effective_venue": "KRX_NXT_INTEGRATED",
+                        "session_bucket": "KRX_NXT_AFTERMARKET",
+                        "selected_challenger": {"prompt_version": version},
+                    },
+                ]
+            }
+        },
+    }
+    monkeypatch.setattr(consumer, "_read_json", lambda _: batch)
+
+    rows, _ = consumer._entry_base_paths(
+        "2026-09-15", optimizer_report=optimizer_report
+    )
+
+    assert [(row["effective_venue"], row["session_bucket"]) for row in rows] == [
+        ("KRX", "KRX_REGULAR"),
+        ("NXT", "NXT_AFTERMARKET"),
+    ]
+    assert rows[1]["path_status"] == consumer.BLOCKED
+    assert rows[1]["blocking_reason"] == (
+        "control_manifest_not_ready:NXT:NXT_AFTERMARKET"
+    )
+    assert rows[1]["terminality"] == "requires_retry_or_owner_closure"
+
+
 def test_completed_batch_without_optimizer_cohort_does_not_gain_connection(monkeypatch):
     version = optimizer.ENTRY_CANDIDATE_ORDER[0]
     batch = {
