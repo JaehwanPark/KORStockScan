@@ -9970,6 +9970,17 @@ def test_write_runtime_env_strips_all_retired_runtime_keys(tmp_path, monkeypatch
     assert not any(key in rendered for key in mod.RETIRED_RUNTIME_ENV_KEYS)
 
 
+def test_entry_split_selection_does_not_require_challenger_sizing_policy():
+    required = mod.SELECTED_FAMILY_REQUIRED_ENV_KEYS["entry_split_order_plan"]
+
+    assert required == [
+        "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED",
+        "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_FILE",
+        "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_VERSION",
+    ]
+    assert not any("ENTRY_EXECUTION_SIZING_POLICY" in key for key in required)
+
+
 def test_verify_runtime_env_handoff_missing_key(tmp_path, monkeypatch):
     report_dir = tmp_path / "report"
     apply_dir = tmp_path / "apply_plans"
