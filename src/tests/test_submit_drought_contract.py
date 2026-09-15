@@ -384,6 +384,51 @@ def test_submit_observation_id_is_call_local_nested_and_exception_safe():
     assert stock == {"id": 41181, "scanner_promotion_id": "parent"}
 
 
+def test_submit_machine_lineage_is_call_local_complete_and_non_authoritative():
+    from src.engine.monitoring.entry_attempt_identity import (
+        bind_submit_attempt_machine_lineage,
+        observe_submit_attempt,
+        submit_attempt_fields,
+    )
+
+    stock = {"id": 7, "scanner_promotion_id": "promotion-7"}
+    lineage = {
+        "entry_primary_decision_owner": "mechanistic_entry_adjudicator",
+        "evaluation_attempt_id": "eval-7",
+        "scanner_promotion_id": "promotion-7",
+        "effective_venue": "KRX",
+        "market_session_bucket": "KRX_REGULAR",
+        "policy_bundle_hash": "b" * 64,
+        "entry_mechanistic_action": "ENTER_NOW",
+        "entry_ai_screen_status": "pass",
+        "unexpected_order_authority": True,
+    }
+
+    @observe_submit_attempt
+    def run(stock, code):
+        assert bind_submit_attempt_machine_lineage(stock, code, lineage) is True
+        fields = submit_attempt_fields(stock, code)
+        assert fields["evaluation_attempt_id"] == "eval-7"
+        assert fields["entry_submit_attempt_authority"] == "observation_only"
+        assert "unexpected_order_authority" not in fields
+        return fields
+
+    fields = run(stock, "005930")
+    assert fields["scanner_promotion_id"] == "promotion-7"
+    assert submit_attempt_fields(stock, "005930") == {}
+
+    incomplete = {
+        key: value for key, value in lineage.items() if key != "policy_bundle_hash"
+    }
+
+    @observe_submit_attempt
+    def reject(stock, code):
+        assert bind_submit_attempt_machine_lineage(stock, code, incomplete) is False
+        return submit_attempt_fields(stock, code)
+
+    assert "evaluation_attempt_id" not in reject(stock, "005930")
+
+
 @pytest.mark.parametrize(
     "reason",
     [
@@ -781,6 +826,16 @@ def test_live_submit_guard_and_logger_share_call_id_without_order_io(monkeypatch
         "now_ts": 1,
         "cooldowns": {},
         "alerted_stocks": set(),
+        "machine_primary_entry_provenance": {
+            "entry_primary_decision_owner": "mechanistic_entry_adjudicator",
+            "evaluation_attempt_id": "eval-P",
+            "scanner_promotion_id": "SCANPROM-P",
+            "effective_venue": "KRX",
+            "market_session_bucket": "KRX_REGULAR",
+            "policy_bundle_hash": "b" * 64,
+            "entry_mechanistic_action": "ENTER_NOW",
+            "entry_ai_screen_status": "pass",
+        },
     }
     assert (
         sh._submit_watching_triggered_entry(stock, "010170", {}, None, runtime) is False
@@ -796,6 +851,7 @@ def test_live_submit_guard_and_logger_share_call_id_without_order_io(monkeypatch
         for _, fields in emitted
     )
     assert emitted[1][1]["submit_call_outcome"] == "returned_false"
+    assert all(fields["evaluation_attempt_id"] == "eval-P" for _, fields in emitted)
     from src.engine import observation_source_quality_audit as audit
 
     contract = audit.STAGE_CONTRACTS["entry_submit_attempt_finished"]

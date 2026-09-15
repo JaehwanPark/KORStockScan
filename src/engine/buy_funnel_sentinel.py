@@ -2369,6 +2369,16 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
     action_counts: Counter[str] = Counter()
     screen_counts: Counter[str] = Counter()
     final_counts: Counter[str] = Counter()
+    latest_evaluation_by_parent: dict[tuple[str, ...], tuple[str, datetime]] = {}
+    for key, rows in grouped.items():
+        first = min(rows, key=lambda row: row.emitted_at)
+        parts = key.removeprefix("machine:").split("|")
+        parent = tuple(parts[index] for index in (0, 2, 3, 4, 5))
+        candidate = (key, first.emitted_at)
+        if parent not in latest_evaluation_by_parent or candidate[1] > (
+            latest_evaluation_by_parent[parent][1]
+        ):
+            latest_evaluation_by_parent[parent] = candidate
     for key, rows in sorted(grouped.items()):
         rows = sorted(rows, key=lambda row: row.emitted_at)
         actions = {
@@ -2468,7 +2478,12 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
         elif final_guard_block_rows:
             final_state = "final_guard_blocked"
         elif screen == "pass":
-            final_state = "pending"
+            parts = key.removeprefix("machine:").split("|")
+            parent = tuple(parts[index] for index in (0, 2, 3, 4, 5))
+            if latest_evaluation_by_parent.get(parent, (key,))[0] != key:
+                final_state = "lineage_gap_superseded_without_terminal"
+            else:
+                final_state = "pending"
         else:
             final_state = "unknown"
         row = {
@@ -2504,6 +2519,10 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
     )
     ai_pass_broker_rejected = sum(row["broker_rejected"] for row in ai_pass_rows)
     ai_pass_pending = sum(row["final_state"] == "pending" for row in ai_pass_rows)
+    ai_pass_lineage_gap = sum(
+        row["final_state"] == "lineage_gap_superseded_without_terminal"
+        for row in ai_pass_rows
+    )
     return {
         "schema": "machine_primary_entry_funnel_v1",
         "metric_role": "funnel_count",
@@ -2528,11 +2547,13 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
             "submitted": ai_pass_submitted,
             "final_guard_blocked": ai_pass_final_guard_blocked,
             "broker_rejected": ai_pass_broker_rejected,
+            "lineage_gap": ai_pass_lineage_gap,
             "pending": ai_pass_pending,
             "difference": ai_pass
             - ai_pass_submitted
             - ai_pass_final_guard_blocked
             - ai_pass_broker_rejected
+            - ai_pass_lineage_gap
             - ai_pass_pending,
         },
         "submit_pipeline_reached_count": sum(

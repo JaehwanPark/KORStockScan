@@ -47,6 +47,7 @@ from src.utils.jsonl_io import existing_or_gzip_path
 from src.utils.logger import log_error, log_info
 from src.utils.pipeline_event_logger import emit_pipeline_event
 from src.engine.monitoring.entry_attempt_identity import (
+    bind_submit_attempt_machine_lineage,
     observe_submit_attempt,
     submit_attempt_fields,
 )
@@ -33239,6 +33240,8 @@ def _machine_primary_entry_provenance_fields(source: dict | None) -> dict:
         "policy_bundle_hash",
         "entry_setup_live_policy_effective_venue",
         "entry_setup_live_policy_session_bucket",
+        "effective_venue",
+        "market_session_bucket",
     )
     fields = {key: source[key] for key in keys if key in source}
     bundle_hash = source.get("policy_bundle_hash") or source.get(
@@ -33247,6 +33250,16 @@ def _machine_primary_entry_provenance_fields(source: dict | None) -> dict:
     if bundle_hash not in (None, ""):
         fields["machine_bundle_sha256"] = bundle_hash
         fields["policy_bundle_hash"] = bundle_hash
+    effective_venue = source.get("effective_venue") or source.get(
+        "entry_setup_live_policy_effective_venue"
+    )
+    session_bucket = source.get("market_session_bucket") or source.get(
+        "entry_setup_live_policy_session_bucket"
+    )
+    if effective_venue not in (None, ""):
+        fields["effective_venue"] = effective_venue
+    if session_bucket not in (None, ""):
+        fields["market_session_bucket"] = session_bucket
     return fields
 
 
@@ -64221,6 +64234,15 @@ def _handle_watching_strategy_branch(
                                 if trusted_result
                                 else {}
                             )
+                            machine_primary_entry_provenance = (
+                                _machine_primary_entry_provenance_fields(ai_decision)
+                                if trusted_result
+                                else {}
+                            )
+                            if machine_primary_entry_provenance:
+                                runtime["machine_primary_entry_provenance"] = (
+                                    machine_primary_entry_provenance
+                                )
                             _mutate_stock_state(
                                 stock,
                                 set_fields={
@@ -67455,6 +67477,18 @@ def _observe_entry_submit_finished(stock, code, outcome):
 
 @observe_submit_attempt(on_finish=_observe_entry_submit_finished)
 def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
+    bind_submit_attempt_machine_lineage(
+        stock,
+        code,
+        {
+            **_scanner_runtime_event_venue_fields(stock),
+            **(
+                runtime.get("machine_primary_entry_provenance")
+                or stock.get("last_watching_ai_machine_primary_fields")
+                or {}
+            ),
+        },
+    )
     strategy = runtime["strategy"]
     ratio = runtime["ratio"]
     curr_price = runtime["curr_price"]

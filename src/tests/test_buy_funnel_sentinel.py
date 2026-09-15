@@ -372,6 +372,7 @@ def test_machine_primary_funnel_keeps_ai_screen_and_broker_receipt_separate():
         "submitted": 1,
         "final_guard_blocked": 0,
         "broker_rejected": 0,
+        "lineage_gap": 0,
         "pending": 0,
         "difference": 0,
     }
@@ -534,6 +535,56 @@ def test_machine_primary_ai_pass_latency_block_closes_exact_conservation():
     assert result["evaluation_ledger"][0]["final_state"] == "final_guard_blocked"
     assert result["ai_pass_terminal_conservation"]["difference"] == 0
     assert result["ai_pass_terminal_conservation"]["final_guard_blocked"] == 1
+
+
+def test_machine_primary_superseded_pass_is_explicit_lineage_gap():
+    from datetime import datetime, timedelta
+
+    start = datetime(2026, 9, 15, 10)
+    common = {
+        "entry_primary_decision_owner": "mechanistic_entry_adjudicator",
+        "scanner_promotion_id": "promotion-superseded",
+        "effective_venue": "KRX",
+        "market_session_bucket": "krx_regular",
+        "policy_bundle_hash": "b" * 64,
+        "entry_mechanistic_action": "ENTER_NOW",
+        "entry_ai_screen_status": "pass",
+    }
+    events = [
+        sentinel.PipelineEvent(
+            start,
+            "ENTRY_PIPELINE",
+            "ai_confirmed",
+            "fixture",
+            "036540",
+            "1",
+            {**common, "evaluation_attempt_id": "eval-old"},
+        ),
+        sentinel.PipelineEvent(
+            start + timedelta(seconds=30),
+            "ENTRY_PIPELINE",
+            "ai_confirmed",
+            "fixture",
+            "036540",
+            "1",
+            {**common, "evaluation_attempt_id": "eval-new"},
+        ),
+    ]
+
+    result = sentinel._machine_primary_entry_funnel(events)
+    states = {
+        row["evaluation_key"]: row["final_state"]
+        for row in result["evaluation_ledger"]
+    }
+    assert states[
+        "machine:promotion-superseded|eval-old|036540|KRX|KRX_REGULAR|" + "b" * 64
+    ] == "lineage_gap_superseded_without_terminal"
+    assert states[
+        "machine:promotion-superseded|eval-new|036540|KRX|KRX_REGULAR|" + "b" * 64
+    ] == "pending"
+    assert result["ai_pass_terminal_conservation"]["lineage_gap"] == 1
+    assert result["ai_pass_terminal_conservation"]["pending"] == 1
+    assert result["ai_pass_terminal_conservation"]["difference"] == 0
 
 
 def test_machine_source_invalid_is_explicit_exact_non_ai_evaluation():

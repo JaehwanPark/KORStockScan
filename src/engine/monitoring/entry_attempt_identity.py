@@ -11,6 +11,20 @@ from uuid import uuid4
 
 _ATTEMPT = ContextVar("entry_submit_observation_attempt", default=None)
 
+_MACHINE_LINEAGE_FIELDS = frozenset(
+    {
+        "entry_primary_decision_owner",
+        "evaluation_attempt_id",
+        "scanner_promotion_id",
+        "effective_venue",
+        "market_session_bucket",
+        "policy_bundle_hash",
+        "entry_mechanistic_action",
+        "entry_ai_screen_status",
+        "entry_mechanistic_policy_version",
+    }
+)
+
 
 def observe_submit_attempt(function=None, *, on_finish=None):
     if function is None:
@@ -19,12 +33,13 @@ def observe_submit_attempt(function=None, *, on_finish=None):
     @wraps(function)
     def wrapped(stock, code, *args, **kwargs):
         try:
-            identity = (
-                str(stock.get("id") or ""),
-                str(code),
-                uuid4().hex,
-                _promotion_id(stock),
-            )
+            identity = {
+                "record_id": str(stock.get("id") or ""),
+                "code": str(code),
+                "attempt_id": uuid4().hex,
+                "promotion_id": _promotion_id(stock),
+                "machine_lineage": {},
+            }
         except Exception as exc:
             identity = None
             logging.getLogger(__name__).warning(
@@ -60,23 +75,82 @@ def _promotion_id(stock):
     return "" if value.lower() in {"none", "null", "unknown", "-", "0"} else value
 
 
+def bind_submit_attempt_machine_lineage(stock, code, source):
+    """Bind trusted diagnostic lineage to the current submit invocation only.
+
+    The binding is telemetry-only and cannot grant submit authority.  A caller
+    may supply only the existing machine provenance allowlist; incomplete
+    identity is rejected rather than partially projected downstream.
+    """
+
+    value = _ATTEMPT.get()
+    if (
+        not isinstance(value, dict)
+        or value.get("record_id") != str(stock.get("id") or "")
+        or value.get("code") != str(code)
+        or not isinstance(source, dict)
+    ):
+        return False
+    lineage = {
+        key: source[key]
+        for key in _MACHINE_LINEAGE_FIELDS
+        if source.get(key) not in (None, "", "-", "unknown", "UNKNOWN")
+    }
+    required = {
+        "entry_primary_decision_owner",
+        "evaluation_attempt_id",
+        "scanner_promotion_id",
+        "effective_venue",
+        "market_session_bucket",
+        "policy_bundle_hash",
+        "entry_mechanistic_action",
+        "entry_ai_screen_status",
+    }
+    if not required <= lineage.keys():
+        return False
+    if (
+        str(lineage["entry_primary_decision_owner"])
+        != "mechanistic_entry_adjudicator"
+        or str(lineage["effective_venue"]).upper()
+        not in {"KRX", "NXT", "PREMARKET_KRX_LIKE"}
+        or ":" in str(lineage["market_session_bucket"])
+        or str(lineage["entry_mechanistic_action"]).upper()
+        not in {"ENTER_NOW", "RECHECK", "BLOCK", "SOURCE_INVALID"}
+    ):
+        return False
+    if value.get("promotion_id") and str(lineage["scanner_promotion_id"]) != str(
+        value["promotion_id"]
+    ):
+        return False
+    updated = {**value, "machine_lineage": lineage}
+    if not updated.get("promotion_id"):
+        updated["promotion_id"] = str(lineage["scanner_promotion_id"])
+    _ATTEMPT.set(updated)
+    return True
+
+
 def submit_attempt_fields(stock, code):
     value = _ATTEMPT.get()
-    if value is None or value[:2] != (str(stock.get("id") or ""), str(code)):
+    if (
+        not isinstance(value, dict)
+        or value.get("record_id") != str(stock.get("id") or "")
+        or value.get("code") != str(code)
+    ):
         return {}
     # The scanner may refresh the stock's promotion while this call waits.
     # Preserve that live metadata, but bind submit telemetry to one parent.
     # Late hydration may supply the first known parent before the first event.
-    if not value[3]:
+    if not value.get("promotion_id"):
         parent = _promotion_id(stock)
         if parent:
-            value = (*value[:3], parent)
+            value = {**value, "promotion_id": parent}
             _ATTEMPT.set(value)
     fields = {
         "entry_submit_attempt_schema": "call_local_submit_attempt_v1",
-        "entry_submit_attempt_id": value[2],
+        "entry_submit_attempt_id": value["attempt_id"],
         "entry_submit_attempt_authority": "observation_only",
+        **value.get("machine_lineage", {}),
     }
-    if value[3]:
-        fields["entry_submit_attempt_parent_promotion_id"] = value[3]
+    if value.get("promotion_id"):
+        fields["entry_submit_attempt_parent_promotion_id"] = value["promotion_id"]
     return fields
