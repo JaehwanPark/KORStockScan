@@ -5398,7 +5398,13 @@ def _micro_context(
                         **market_axes,
                     }
                 )
-                windows[anchor["anchor_id"]]["raw_market_rows"].append(dict(payload))
+                # A source row can fall inside many overlapping owner windows.
+                # The iterator yields a fresh immutable-by-contract mapping for
+                # each line, so retain one shared reference instead of copying
+                # the full raw row once per anchor.  Consumers copy before any
+                # normalization, preserving report values while bounding the
+                # in-memory working set.
+                windows[anchor["anchor_id"]]["raw_market_rows"].append(payload)
 
     for payload in _iter_relevant_rows(
         depth_paths, symbols, diagnostics=read_diagnostics
@@ -5472,7 +5478,7 @@ def _micro_context(
                         "ask_depth": ask_depth,
                     }
                 )
-                windows[anchor["anchor_id"]]["raw_depth_rows"].append(dict(payload))
+                windows[anchor["anchor_id"]]["raw_depth_rows"].append(payload)
 
     for payload in _iter_relevant_rows(
         ref_paths, symbols, diagnostics=read_diagnostics
