@@ -996,7 +996,8 @@ def test_deployment_orders_auto_apply_before_all_order_services():
     assert "trap on_exit EXIT" in wrapper
     assert "runuser --user ubuntu" in wrapper
     assert "systemctl stop" in wrapper
-    assert "systemctl start" in wrapper
+    assert 'systemctl start --no-block "$unit"' in wrapper
+    assert 'systemctl start "$unit"' not in wrapper
 
 
 def _recovery_file(path, authority, **changes):

@@ -19,7 +19,11 @@ restore_order_services() {
     if systemctl is-active --quiet "$unit"; then
       continue
     fi
-    if ! systemctl start "$unit"; then
+    # Every order service is ordered After=this oneshot.  A synchronous start
+    # here waits for this service to exit and deadlocks the restore path.
+    # Queue the start job; systemd begins it immediately after this oneshot
+    # reaches terminal state.
+    if ! systemctl start --no-block "$unit"; then
       echo "[symbol-owner-auto-apply] failed to restore unit: $unit" >&2
       restore_rc=1
     fi
