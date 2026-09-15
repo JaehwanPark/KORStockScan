@@ -11484,8 +11484,15 @@ def test_verify_runtime_env_handoff_validates_holding_and_persistent_overlays(
     persistent_env = {
         "KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE": "22",
         "KORSTOCKSCAN_SCALP_SIM_AI_MAX_CALLS_PER_MIN": "4",
+        "KORSTOCKSCAN_SCALP_SIM_AUTO_POLICY_ENABLED": "true",
+        "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_EXECUTION_OBSERVATION_ENABLED": "true",
+        "KORSTOCKSCAN_SCALP_SIM_SCALE_IN_WINDOW_EXPANSION_ENABLED": "true",
     }
-    manifest_env = {**holding_env, **persistent_env}
+    manifest_env = {
+        **holding_env,
+        "KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE": "22",
+        "KORSTOCKSCAN_SCALP_SIM_AI_MAX_CALLS_PER_MIN": "4",
+    }
     (runtime_dir / "threshold_runtime_env_2026-07-28.json").write_text(
         json.dumps(
             {
@@ -11525,6 +11532,12 @@ def test_verify_runtime_env_handoff_validates_holding_and_persistent_overlays(
         == 2
     )
     assert audits["persistent_operator_overrides_2026_06_26"]["status"] == "pass"
+    assert not any(
+        key.startswith(mod.RETIRED_ENV_PREFIXES)
+        for key in audits["persistent_operator_overrides_2026_06_26"][
+            "required_env_keys"
+        ]
+    )
 
 
 def test_verify_runtime_env_handoff_rolls_probe_first_into_target_date_overlay(

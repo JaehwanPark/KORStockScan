@@ -6167,12 +6167,16 @@ def verify_runtime_env_handoff(
     operator_overrides = {
         key: value
         for key, value in raw_operator_overrides.items()
-        if key not in RETIRED_RUNTIME_ENV_KEYS and key not in REMOVED_RUNTIME_ENV_KEYS
+        if not key.startswith(RETIRED_ENV_PREFIXES)
+        and key not in RETIRED_RUNTIME_ENV_KEYS
+        and key not in REMOVED_RUNTIME_ENV_KEYS
     }
     dated_operator_overrides = {
         key: value
         for key, value in raw_dated_operator_overrides.items()
-        if key not in RETIRED_RUNTIME_ENV_KEYS and key not in REMOVED_RUNTIME_ENV_KEYS
+        if not key.startswith(RETIRED_ENV_PREFIXES)
+        and key not in RETIRED_RUNTIME_ENV_KEYS
+        and key not in REMOVED_RUNTIME_ENV_KEYS
     }
     effective_env_overrides = dict(env_overrides)
     effective_env_overrides.update(operator_overrides)
