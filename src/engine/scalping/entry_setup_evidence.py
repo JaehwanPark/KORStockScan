@@ -1234,8 +1234,12 @@ def build_entry_setup_evidence(
     liquidity_state = str(liquidity.get("state") or "").lower()
     if liquidity_state == "supportive":
         positive_facts.append("liquidity_supportive")
-    elif liquidity_state in {"adverse", "blocking"}:
+    elif liquidity_state == "adverse":
         contradicting_facts.append("liquidity_adverse")
+        corroborated_risk_codes.append("LIQUIDITY_FRAGILE")
+    elif liquidity_state == "blocking":
+        contradicting_facts.append("liquidity_adverse")
+        corroborated_risk_codes.append("LIQUIDITY_UNUSABLE")
     if str(volume.get("state") or "").lower() == "confirmed":
         positive_facts.append("volume_confirmed")
     elif str(volume.get("state") or "").lower() in {
@@ -1682,6 +1686,19 @@ def entry_risk_adjudication_openai_schema(
     invalidation_facts = list(setup.get("invalidation_facts") or [])
     contradicting_facts = list(setup.get("contradicting_facts") or [])
     setup_state = str(setup.get("setup_state") or "").strip().upper()
+    bindings = _risk_fact_bindings(setup)
+    allowed_risk_codes = list(bindings)
+    if setup_state == "READY":
+        allowed_risk_codes.insert(0, "NO_BLOCKING_RISK")
+    schema["properties"]["risk_codes"]["items"]["enum"] = list(
+        dict.fromkeys(allowed_risk_codes or ["SOURCE_QUALITY_GAP"])
+    )
+    if setup_state == "READY" and not bindings:
+        schema["properties"]["risk_verdict"]["enum"] = ["PASS"]
+    elif setup_state == "INSUFFICIENT":
+        schema["properties"]["risk_verdict"]["enum"] = ["INSUFFICIENT"]
+    elif setup_state == "INVALID":
+        schema["properties"]["risk_verdict"]["enum"] = ["VETO"]
     fact_fields = {
         "supporting_fact_ids": list(setup.get("positive_facts") or []),
         "contradicting_fact_ids": (
@@ -3508,6 +3525,56 @@ def repair_invalid_entry_risk_adjudication(
         dict.fromkeys([invalidations[0], *cited_ids])
     )[:8]
     return result, ["invalid_setup_invalidation_fact_copied_from_ledger"]
+
+
+def repair_mechanistic_pass_citations(
+    response: Any,
+    *,
+    setup_evidence: Any,
+) -> tuple[dict[str, Any], list[str]]:
+    """Complete only omitted PASS citations already proven by the machine ledger.
+
+    The provider verdict, risk codes and confidence remain unchanged. This repair
+    is limited to a READY setup without any bound adverse risk, so it cannot erase
+    a veto fact or promote a non-PASS response.
+    """
+
+    result = json.loads(json.dumps(_as_dict(response)))
+    setup = _as_dict(setup_evidence)
+    if (
+        str(result.get("risk_verdict") or "").upper() != "PASS"
+        or result.get("risk_codes") != ["NO_BLOCKING_RISK"]
+        or str(setup.get("setup_state") or "").upper() != "READY"
+        or _risk_fact_bindings(setup)
+    ):
+        return result, []
+    errors = validate_mechanistic_risk_screen(result, setup_evidence=setup)
+    if errors != ["entry_risk_pass_setup_and_trigger_support_required"]:
+        return result, []
+    positive = [str(value) for value in setup.get("positive_facts") or []]
+    setup_ids = {
+        "structural_edge_floor",
+        "early_session_structural_edge_floor",
+        "orderly_pullback_recovery",
+        "clean_continuation_probe_eligible",
+        "recovery_confirmation_probe_eligible",
+    }
+    trigger_ids = {
+        "trusted_supportive_trigger",
+        "trigger_confirmed",
+        "clean_continuation_probe_eligible",
+        "recovery_confirmation_probe_eligible",
+    }
+    cited = [str(value) for value in result.get("supporting_fact_ids") or []]
+    for allowed in (setup_ids, trigger_ids):
+        if not set(cited).intersection(allowed):
+            selected = next((value for value in positive if value in allowed), None)
+            if selected:
+                cited.append(selected)
+    result["supporting_fact_ids"] = list(dict.fromkeys(cited))[:8]
+    if validate_mechanistic_risk_screen(result, setup_evidence=setup):
+        return _as_dict(response), []
+    return result, ["machine_pass_citations_completed_from_ledger"]
 
 
 def compose_entry_decision(

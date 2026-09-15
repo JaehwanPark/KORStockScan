@@ -26,6 +26,7 @@ from src.engine.scalping.entry_setup_evidence import (
     entry_risk_adjudication_openai_schema,
     mechanistic_entry_action_comparison,
     repair_invalid_entry_risk_adjudication,
+    repair_mechanistic_pass_citations,
     validate_entry_risk_adjudication,
     validate_entry_action_comparison,
     validate_entry_setup_evidence,
@@ -1322,6 +1323,86 @@ def test_risk_schema_constrains_fact_ids_to_the_exact_setup_ledger():
         *evidence["contradicting_facts"],
         *evidence["invalidation_facts"],
     ]
+
+
+def test_ready_risk_schema_excludes_unbound_risk_codes_and_requires_pass():
+    analysis = _exact_analysis()
+    analysis["trigger_state"] = "confirmed"
+    analysis["volume_status"] = "confirmed"
+    analysis["executable_liquidity"]["state"] = "supportive"
+    evidence = build_entry_setup_evidence(
+        exact_payload={"current": {"price": 10000}},
+        exact_analysis=analysis,
+        recovery_analysis=_recovery_analysis(clean=True),
+        balanced_policy=True,
+    )
+    schema = entry_risk_adjudication_openai_schema(evidence)
+
+    assert evidence["risk_fact_bindings"] == {}
+    assert schema["properties"]["risk_verdict"]["enum"] == ["PASS"]
+    assert schema["properties"]["risk_codes"]["items"]["enum"] == [
+        "NO_BLOCKING_RISK"
+    ]
+
+
+def test_adverse_liquidity_has_an_exact_bounded_risk_binding():
+    analysis = _exact_analysis()
+    analysis["trigger_state"] = "confirmed"
+    analysis["volume_status"] = "confirmed"
+    analysis["executable_liquidity"].update(
+        state="adverse",
+        spread_bp=40.0,
+        fillability_score=40.0,
+        top3_ask_to_bid_ratio=2.0,
+    )
+    evidence = build_entry_setup_evidence(
+        exact_payload={"current": {"price": 10000}},
+        exact_analysis=analysis,
+        recovery_analysis=_recovery_analysis(clean=True),
+        balanced_policy=True,
+    )
+    schema = entry_risk_adjudication_openai_schema(evidence)
+
+    assert evidence["risk_fact_bindings"] == {
+        "LIQUIDITY_FRAGILE": ["liquidity_adverse"]
+    }
+    assert schema["properties"]["risk_codes"]["items"]["enum"] == [
+        "NO_BLOCKING_RISK",
+        "LIQUIDITY_FRAGILE",
+    ]
+
+
+def test_mechanistic_pass_repairs_only_missing_ledger_citation_roles():
+    analysis = _exact_analysis()
+    analysis["trigger_state"] = "confirmed"
+    analysis["volume_status"] = "confirmed"
+    analysis["executable_liquidity"]["state"] = "supportive"
+    evidence = build_entry_setup_evidence(
+        exact_payload={"current": {"price": 10000}},
+        exact_analysis=analysis,
+        recovery_analysis=_recovery_analysis(clean=True),
+        balanced_policy=True,
+    )
+    response = _risk(
+        "PASS",
+        ["NO_BLOCKING_RISK"],
+        support=["trigger_confirmed"],
+    )
+
+    repaired, codes = repair_mechanistic_pass_citations(
+        response,
+        setup_evidence=evidence,
+    )
+
+    assert codes == ["machine_pass_citations_completed_from_ledger"]
+    assert "trigger_confirmed" in repaired["supporting_fact_ids"]
+    assert "structural_edge_floor" in repaired["supporting_fact_ids"]
+    assert validate_entry_risk_adjudication(repaired, setup_evidence=evidence) == []
+    caution = {**response, "risk_verdict": "CAUTION"}
+    assert repair_mechanistic_pass_citations(
+        caution,
+        setup_evidence=evidence,
+    ) == (caution, [])
 
 
 def test_risk_schema_forces_empty_fact_arrays_when_ledger_has_no_matching_facts():

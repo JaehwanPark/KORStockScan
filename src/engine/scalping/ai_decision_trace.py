@@ -693,6 +693,8 @@ def _request_context(
         ),
         "snapshot_id": _first_value(parsed, ("snapshot_id",))
         or metadata.get("snapshot_id"),
+        "scanner_promotion_id": _first_value(parsed, ("scanner_promotion_id",))
+        or metadata.get("scanner_promotion_id"),
         "effective_venue": _first_value(parsed, ("effective_venue",))
         or metadata.get("effective_venue"),
         "session_bucket": _first_value(
@@ -1041,6 +1043,7 @@ def capture_machine_observation(
                 else "missing"
             )
         ),
+        "scanner_promotion_id": context.get("scanner_promotion_id"),
     }
     if not trace_enabled():
         return {"machine_capture_status": "disabled", **capture_identity}
@@ -1085,6 +1088,7 @@ def capture_machine_observation(
     body = {
         "schema": "mechanistic_entry_observation_v1",
         "captured_at": now.isoformat(),
+        "scanner_promotion_id": context.get("scanner_promotion_id"),
         "label_context": context,
         "bundle_sha256": bundle_sha256,
         "source": source,
@@ -1249,6 +1253,7 @@ def capture_ai_request(
             "request_id": trace_id,
             "symbol": context.get("stock_code") or str(symbol or "") or None,
             "snapshot_id": context.get("snapshot_id"),
+            "scanner_promotion_id": context.get("scanner_promotion_id"),
             "effective_venue": context.get("effective_venue"),
             "session_bucket": context.get("session_bucket"),
             "broker_route": context.get("broker_route"),
@@ -1308,6 +1313,7 @@ def capture_ai_request(
             "model": str(model or "-"),
             "schema_name": str(schema_name or "-"),
             "snapshot_id": context.get("snapshot_id"),
+            "scanner_promotion_id": context.get("scanner_promotion_id"),
             "effective_venue": context.get("effective_venue"),
             "session_bucket": context.get("session_bucket"),
             "broker_route": context.get("broker_route"),
@@ -1388,6 +1394,7 @@ def capture_ai_request(
             "ai_trace_position_cycle_id": context.get("position_cycle_id"),
             "ai_trace_broker_order_no": context.get("broker_order_no"),
             "ai_trace_snapshot_id": context.get("snapshot_id"),
+            "ai_trace_scanner_promotion_id": context.get("scanner_promotion_id"),
             "ai_trace_effective_venue": context.get("effective_venue"),
             "ai_trace_session_bucket": context.get("session_bucket"),
             "ai_trace_broker_route": context.get("broker_route"),
@@ -1802,6 +1809,11 @@ def record_ai_decision_trace(
                 "ai_trace_snapshot_id",
                 "ai_input_snapshot_id",
                 "ai_market_snapshot_id",
+            ),
+            "scanner_promotion_id": _optional(
+                merged,
+                "ai_trace_scanner_promotion_id",
+                "scanner_promotion_id",
             ),
             "endpoint": _optional(
                 merged,
@@ -2442,6 +2454,7 @@ def record_ai_decision_trace(
                     "machine_observation_sha256",
                     "evaluation_attempt_id",
                     "evaluation_attempt_identity_source",
+                    "scanner_promotion_id",
                     "entry_primary_decision_owner",
                     "entry_ai_role",
                     "entry_mechanistic_action",
@@ -2508,6 +2521,7 @@ def record_ai_decision_trace(
                 "machine_observation_sha256",
                 "evaluation_attempt_id",
                 "evaluation_attempt_identity_source",
+                "scanner_promotion_id",
                 "entry_primary_decision_owner",
                 "entry_ai_role",
                 "entry_mechanistic_action",
@@ -2546,6 +2560,7 @@ def record_ai_decision_trace(
             "position_cycle_id": trace_row["position_cycle_id"],
             "broker_order_no": trace_row["broker_order_no"],
             "snapshot_id": trace_row["snapshot_id"],
+            "scanner_promotion_id": trace_row["scanner_promotion_id"],
             "action": trace_row["action"],
             "score": trace_row["score"],
             "confidence": trace_row["confidence"],

@@ -3276,9 +3276,11 @@ def _match_machine_ai_trace(
         return parsed if parsed.utcoffset() is not None else None
 
     capture_ts = aware_timestamp(capture.get("captured_at"))
+    capture_promotion_id = str(context.get("scanner_promotion_id") or "").strip()
     candidates = []
     for row in trace_index.get(snapshot_id, []):
         trace_ts = aware_timestamp(row.get("decision_ts"))
+        trace_promotion_id = str(row.get("scanner_promotion_id") or "").strip()
         if (
             str(row.get("stock_code") or "") != str(context.get("stock_code") or "")
             or _normalized_venue(row.get("effective_venue"))
@@ -3288,6 +3290,11 @@ def _match_machine_ai_trace(
             or capture_ts is None
             or trace_ts is None
             or not -1.0 <= (trace_ts - capture_ts).total_seconds() <= 120.0
+            or (
+                capture_promotion_id
+                and trace_promotion_id
+                and trace_promotion_id != capture_promotion_id
+            )
         ):
             continue
         machine_bundle = str(capture.get("bundle_sha256") or "")
@@ -3547,6 +3554,24 @@ def load_machine_observation_rows(
                 if context.get("scanner_promotion_id") not in (None, "", "-"):
                     scanner_promotion_ids.append(str(context["scanner_promotion_id"]))
                 scanner_promotion_ids = sorted(set(scanner_promotion_ids))
+                scanner_promotion_id = str(
+                    context.get("scanner_promotion_id") or ""
+                ).strip()
+                scanner_promotion_identity_source = (
+                    "machine_capture"
+                    if scanner_promotion_id
+                    else (
+                        "pipeline_exact_match"
+                        if pipeline_joined and len(scanner_promotion_ids) == 1
+                        else "missing_or_ambiguous"
+                    )
+                )
+                if (
+                    not scanner_promotion_id
+                    and pipeline_joined
+                    and len(scanner_promotion_ids) == 1
+                ):
+                    scanner_promotion_id = scanner_promotion_ids[0]
                 evaluation_attempt_id = str(
                     context.get("evaluation_attempt_id")
                     or context.get("snapshot_id")
@@ -3564,6 +3589,10 @@ def load_machine_observation_rows(
                         ),
                         "record_id": context.get("record_id")
                         or ai_trace.get("record_id"),
+                        "scanner_promotion_id": scanner_promotion_id or None,
+                        "scanner_promotion_identity_source": (
+                            scanner_promotion_identity_source
+                        ),
                         "scanner_promotion_ids": scanner_promotion_ids,
                         "decision_ts": capture["captured_at"],
                         "source_date": day,
@@ -3886,14 +3915,29 @@ def build_machine_decision_case_table(
     compact_prompt_version_counts: Counter[str] = Counter()
     selected_child_rule_ids: set[str] = set()
     cases: list[dict] = []
-    seen_attempts: dict[tuple[str, str, str, str, str], tuple[str, str]] = {}
+    seen_attempts: dict[tuple[str, str, str, str, str, str], tuple[str, str]] = {}
     duplicate_same_action_collapsed_count = 0
     conflicting_attempt_identity_count = 0
+    incomplete_attempt_identity_count = 0
     for row in sorted(rows, key=lambda item: str(item.get("decision_ts") or "")):
         action = str(row.get("machine_action") or "").upper()
+        exact_attempt_identity_complete = all(
+            str(value or "").strip()
+            for value in (
+                row.get("scanner_promotion_id"),
+                row.get("evaluation_attempt_id") or row.get("decision_trace_id"),
+                row.get("stock_code"),
+                row.get("effective_venue"),
+                row.get("session_bucket"),
+                row.get("bundle_sha256"),
+            )
+        )
+        if not exact_attempt_identity_complete:
+            incomplete_attempt_identity_count += 1
         attempt_key = (
-            str(row.get("source_date") or ""),
+            str(row.get("scanner_promotion_id") or ""),
             str(row.get("evaluation_attempt_id") or row.get("decision_trace_id") or ""),
+            str(row.get("stock_code") or ""),
             str(row.get("effective_venue") or ""),
             str(row.get("session_bucket") or ""),
             str(row.get("bundle_sha256") or ""),
@@ -4052,6 +4096,11 @@ def build_machine_decision_case_table(
                     "evaluation_attempt_identity_source"
                 ),
                 "record_id": row.get("record_id"),
+                "scanner_promotion_id": row.get("scanner_promotion_id"),
+                "scanner_promotion_identity_source": row.get(
+                    "scanner_promotion_identity_source"
+                ),
+                "exact_attempt_identity_complete": exact_attempt_identity_complete,
                 "scanner_promotion_ids": row.get("scanner_promotion_ids") or [],
                 "decision_snapshot_id": row.get("decision_snapshot_id"),
                 "decision_ts": row.get("decision_ts"),
@@ -4284,8 +4333,9 @@ def build_machine_decision_case_table(
             duplicate_same_action_collapsed_count
         ),
         "conflicting_attempt_identity_count": conflicting_attempt_identity_count,
+        "incomplete_attempt_identity_count": incomplete_attempt_identity_count,
         "policy_learning_eligible_observation_count": (
-            len(rows)
+            len(rows) - incomplete_attempt_identity_count
             if conflicting_attempt_identity_count == 0 and machine_tuning_allowed
             else 0
         ),
@@ -6453,9 +6503,25 @@ def build_report(
         pipeline_prices_by_day=pipeline_prices_by_day,
     )
     machine_policy_rows = (
-        machine_observations
-        if machine_decision_case_table["policy_learning_eligible_observation_count"]
-        == len(machine_observations)
+        [
+            row
+            for row in machine_observations
+            if all(
+                str(value or "").strip()
+                for value in (
+                    row.get("scanner_promotion_id"),
+                    row.get("evaluation_attempt_id")
+                    or row.get("decision_trace_id"),
+                    row.get("stock_code"),
+                    row.get("effective_venue"),
+                    row.get("session_bucket"),
+                    row.get("bundle_sha256"),
+                )
+            )
+        ]
+        if machine_decision_case_table["conflicting_attempt_identity_count"] == 0
+        and machine_source_receipt.get("machine_threshold_tuning_input_allowed")
+        is True
         else []
     )
     krx_machine_policy_rows = [

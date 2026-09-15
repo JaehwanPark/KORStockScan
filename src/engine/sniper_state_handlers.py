@@ -2871,6 +2871,8 @@ def _entry_context_ws_data(ws_data, stock):
 
     enriched = dict(ws_data or {})
     stock_row = stock if isinstance(stock, dict) else {}
+    for key, value in _scanner_promotion_correlation_fields(stock_row).items():
+        enriched.setdefault(key, value)
     for key in _ENTRY_CONTEXT_METADATA_KEYS:
         if enriched.get(key) in (None, "", {}) and stock_row.get(key) not in (
             None,
@@ -41414,6 +41416,7 @@ def _retry_entry_ai_submit_authority_before_block(
             recent_candles,
             prompt_profile="watching",
             metadata_extra={
+                **_scanner_promotion_correlation_fields(stock or {}),
                 "record_id": (stock or {}).get("id"),
                 "position_tag": normalize_position_tag(
                     "SCALPING", (stock or {}).get("position_tag")
@@ -62402,6 +62405,10 @@ def _resolve_scanner_async_entry_ai(
     ) -> dict:
         stock_snapshot = thaw_scanner_async_value(async_context.stock_snapshot)
         prepared_ws = thaw_scanner_async_value(async_context.ws_snapshot)
+        for key, value in _scanner_promotion_correlation_fields(
+            stock_snapshot
+        ).items():
+            prepared_ws.setdefault(key, value)
         prepared_reentry = stock_snapshot.get(
             "_rising_missed_async_reentry_guard_context"
         )
@@ -62508,6 +62515,7 @@ def _resolve_scanner_async_entry_ai(
                 thaw_scanner_async_value(prepared.get("recent_candles") or []),
                 prompt_profile="watching",
                 metadata_extra={
+                    **_scanner_promotion_correlation_fields(stock_snapshot),
                     "record_id": stock_snapshot.get("id"),
                     "position_tag": normalize_position_tag(
                         "SCALPING", stock_snapshot.get("position_tag")
@@ -63925,6 +63933,7 @@ def _handle_watching_strategy_branch(
                                     recent_candles,
                                     prompt_profile="watching",
                                     metadata_extra={
+                                        **_scanner_promotion_correlation_fields(stock),
                                         "record_id": stock.get("id"),
                                         "position_tag": pos_tag,
                                         "sim_record_id": stock.get("sim_record_id"),
@@ -64392,6 +64401,7 @@ def _handle_watching_strategy_branch(
                                     prompt_profile="watching",
                                     cache_profile="numeric_consistency_recheck",
                                     metadata_extra={
+                                        **_scanner_promotion_correlation_fields(stock),
                                         "record_id": stock.get("id"),
                                         "position_tag": pos_tag,
                                         "sim_record_id": stock.get("sim_record_id"),
@@ -64638,6 +64648,7 @@ def _handle_watching_strategy_branch(
                                     prompt_profile="watching",
                                     cache_profile="early_accel_strong_bundle_recheck",
                                     metadata_extra={
+                                        **_scanner_promotion_correlation_fields(stock),
                                         "record_id": stock.get("id"),
                                         "position_tag": pos_tag,
                                         "sim_record_id": stock.get("sim_record_id"),

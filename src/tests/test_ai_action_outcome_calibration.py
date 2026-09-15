@@ -666,6 +666,7 @@ def test_machine_decision_case_table_separates_missed_and_bad_entry_timing():
         return {
             "decision_trace_id": trace_id,
             "evaluation_attempt_id": attempt_id or trace_id,
+            "scanner_promotion_id": f"SCANPROM-{attempt_id or trace_id}",
             "evaluation_attempt_identity_source": "exact_market_snapshot",
             "decision_snapshot_id": f"snapshot-{trace_id}",
             "decision_ts": f"2026-09-14T12:00:{second:02d}+09:00",
@@ -773,6 +774,7 @@ def test_machine_case_table_uses_machine_specific_source_gate_for_learning():
         "decision_ts": "2026-09-14T12:00:00+09:00",
         "source_date": "2026-09-14",
         "stock_code": "005930",
+        "scanner_promotion_id": "SCANPROM-snapshot-series",
         "effective_venue": "KRX",
         "session_bucket": "KRX_REGULAR",
         "bundle_sha256": "a" * 64,
@@ -1189,6 +1191,7 @@ def test_machine_case_table_preserves_distinct_snapshots_inside_sixty_seconds():
     base = {
         "source_date": "2026-09-14",
         "stock_code": "005930",
+        "scanner_promotion_id": "SCANPROM-snapshot-series",
         "effective_venue": "KRX",
         "session_bucket": "KRX_REGULAR",
         "bundle_sha256": "a" * 64,
@@ -1226,6 +1229,75 @@ def test_machine_case_table_preserves_distinct_snapshots_inside_sixty_seconds():
 
     assert report["case_count"] == 2
     assert report["duplicate_same_action_collapsed_count"] == 0
+    assert report["incomplete_attempt_identity_count"] == 0
+
+
+def test_machine_case_table_excludes_incomplete_exact_identity_from_policy_learning():
+    row = {
+        "decision_trace_id": "capture-missing-promotion",
+        "evaluation_attempt_id": "attempt-missing-promotion",
+        "decision_ts": "2026-09-14T12:00:00+09:00",
+        "source_date": "2026-09-14",
+        "stock_code": "005930",
+        "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "bundle_sha256": "a" * 64,
+        "machine_action": "RECHECK",
+        "machine_hierarchy_selection": {"level": "common"},
+        "entry_quality_path": {
+            "status": "evaluable",
+            "entry_quality_label": "CLEAN_FAST_PROFIT",
+        },
+        "outcome_horizon_metrics": {},
+        "ai_and_final_guard": {"join_status": "exact_snapshot_machine_action_join"},
+    }
+
+    report = calibration.build_machine_decision_case_table(
+        [row],
+        source_receipt={"machine_threshold_tuning_input_allowed": True},
+    )
+
+    assert report["case_count"] == 1
+    assert report["rows"][0]["exact_attempt_identity_complete"] is False
+    assert report["incomplete_attempt_identity_count"] == 1
+    assert report["policy_learning_eligible_observation_count"] == 0
+
+
+def test_machine_case_table_preserves_distinct_promotions_for_same_attempt_token():
+    base = {
+        "evaluation_attempt_id": "attempt-reused",
+        "decision_ts": "2026-09-14T12:00:00+09:00",
+        "source_date": "2026-09-14",
+        "stock_code": "005930",
+        "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "bundle_sha256": "a" * 64,
+        "machine_action": "RECHECK",
+        "machine_hierarchy_selection": {"level": "common"},
+        "entry_quality_path": {
+            "status": "evaluable",
+            "entry_quality_label": "CLEAN_FAST_PROFIT",
+        },
+        "outcome_horizon_metrics": {},
+        "ai_and_final_guard": {"join_status": "exact_snapshot_machine_action_join"},
+    }
+    report = calibration.build_machine_decision_case_table(
+        [
+            {
+                **base,
+                "decision_trace_id": "capture-a",
+                "scanner_promotion_id": "SCANPROM-a",
+            },
+            {
+                **base,
+                "decision_trace_id": "capture-b",
+                "scanner_promotion_id": "SCANPROM-b",
+            },
+        ]
+    )
+
+    assert report["case_count"] == 2
+    assert report["duplicate_same_action_collapsed_count"] == 0
 
 
 def test_machine_ai_trace_match_uses_snapshot_route_bundle_and_machine_action():
@@ -1236,6 +1308,7 @@ def test_machine_ai_trace_match_uses_snapshot_route_bundle_and_machine_action():
     }
     context = {
         "snapshot_id": "aims-exact",
+        "scanner_promotion_id": "SCANPROM-exact",
         "stock_code": "005930",
         "effective_venue": "KRX",
         "session_bucket": "krx_regular",
@@ -1244,6 +1317,7 @@ def test_machine_ai_trace_match_uses_snapshot_route_bundle_and_machine_action():
         "decision_ts": "2026-09-14T12:00:01+09:00",
         "decision_trace_id": "aidt-good",
         "snapshot_id": "aims-exact",
+        "scanner_promotion_id": "SCANPROM-exact",
         "stock_code": "005930",
         "effective_venue": "KRX",
         "session_bucket": "KRX_REGULAR",
@@ -1258,6 +1332,41 @@ def test_machine_ai_trace_match_uses_snapshot_route_bundle_and_machine_action():
 
     assert status == "exact_snapshot_machine_action_join"
     assert matched["decision_trace_id"] == "aidt-good"
+
+
+def test_machine_ai_trace_match_rejects_conflicting_promotion_identity():
+    capture = {
+        "captured_at": "2026-09-14T12:00:00+09:00",
+        "bundle_sha256": "b" * 64,
+        "source": {"assessment": {"action": "ENTER_NOW"}},
+    }
+    context = {
+        "snapshot_id": "aims-exact",
+        "scanner_promotion_id": "SCANPROM-a",
+        "stock_code": "005930",
+        "effective_venue": "KRX",
+        "session_bucket": "krx_regular",
+    }
+    wrong = {
+        "decision_ts": "2026-09-14T12:00:01+09:00",
+        "decision_trace_id": "aidt-wrong-promotion",
+        "snapshot_id": "aims-exact",
+        "scanner_promotion_id": "SCANPROM-b",
+        "stock_code": "005930",
+        "effective_venue": "KRX",
+        "session_bucket": "KRX_REGULAR",
+        "machine_bundle_sha256": "b" * 64,
+        "entry_mechanistic_action": "ENTER_NOW",
+    }
+
+    matched, status = calibration._match_machine_ai_trace(
+        capture,
+        context,
+        {"aims-exact": [wrong]},
+    )
+
+    assert matched == {}
+    assert status == "ai_trace_missing_for_exact_snapshot"
 
 
 def test_machine_ai_trace_match_excludes_snapshot_action_mismatch():

@@ -3811,6 +3811,63 @@ def test_mechanistic_primary_runtime_adapter_rejects_invalid_screen():
     assert result["entry_primary_decision_owner"] == "mechanistic_entry_adjudicator"
 
 
+def test_mechanistic_primary_repairs_omitted_pass_citation_without_changing_verdict():
+    from src.engine.scalping import mechanistic_entry_runtime_policy as initial
+    from src.engine.scalping.entry_setup_evidence import (
+        MECHANISTIC_AI_ADVISORY_ROLE,
+        MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
+        build_entry_setup_evidence,
+    )
+    from src.tests.test_entry_setup_evidence import (
+        _exact_analysis,
+        _recovery_analysis,
+        _risk,
+    )
+
+    analysis = _exact_analysis()
+    analysis["trigger_state"] = "confirmed"
+    analysis["volume_status"] = "confirmed"
+    analysis["executable_liquidity"].update(
+        state="supportive",
+        spread_bp=20.0,
+        fillability_score=70.0,
+        top3_ask_to_bid_ratio=0.8,
+    )
+    setup = build_entry_setup_evidence(
+        exact_payload={"current": {"price": 10000}},
+        exact_analysis=analysis,
+        recovery_analysis=_recovery_analysis(clean=True),
+        balanced_policy=True,
+    )
+    raw = _risk(
+        "PASS",
+        ["NO_BLOCKING_RISK"],
+        support=["trigger_confirmed"],
+    )
+    result = _build_engine()._normalize_entry_setup_v2_14_result(
+        raw,
+        exact_payload={},
+        setup_evidence=setup,
+        live_policy={
+            "enabled": True,
+            "status": "active_bounded_krx_canary",
+            "selected_prompt_version": initial.AI_VERSION,
+            "primary_decision_owner": "mechanistic_entry_adjudicator",
+            "ai_role": MECHANISTIC_AI_ADVISORY_ROLE,
+            "mechanistic_threshold_policy": MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
+        },
+        prompt_version=initial.AI_VERSION,
+    )
+
+    assert result["action"] == "BUY"
+    assert result["entry_ai_advisory_verdict"] == "PASS"
+    assert result["entry_ai_raw_supporting_fact_ids"] == ["trigger_confirmed"]
+    assert result["decision_quality_contract_repair_applied"] is True
+    assert result["decision_quality_contract_repair_codes"] == [
+        "machine_pass_citations_completed_from_ledger"
+    ]
+
+
 @pytest.mark.parametrize(
     "effective_venue,status,expected_venue_token",
     [
@@ -4010,6 +4067,12 @@ def test_machine_initial_policy_assesses_before_provider_cache_and_lock(
             f"{initial_policy.AI_VERSION}_live_input"
         )
         assert kwargs["replay_context"]["machine_bundle_sha256"] == "b" * 64
+        assert kwargs["replay_context"]["exact_payload"]["scanner_promotion_id"] == (
+            "SCANPROM-005930-machine"
+        )
+        assert kwargs["metadata_extra"]["scanner_promotion_id"] == (
+            "SCANPROM-005930-machine"
+        )
         assert prompt == live["auxiliary_system_prompt"]
         return {}
 
@@ -4021,9 +4084,11 @@ def test_machine_initial_policy_assesses_before_provider_cache_and_lock(
                 pytest.fail("non-entry must not wait for provider lock")
 
         engine.lock = NoProviderLock()
+    ws_data = _sample_ws_data()
+    ws_data["scanner_promotion_id"] = "SCANPROM-005930-machine"
     result = engine.analyze_target(
         "test",
-        _sample_ws_data(),
+        ws_data,
         _sample_ticks(),
         _sample_candles(),
         strategy="SCALPING",
@@ -4031,6 +4096,7 @@ def test_machine_initial_policy_assesses_before_provider_cache_and_lock(
         candle_context=_allowed_entry_candle_context(),
     )
     assert events == (["machine", "ai"] if ready else ["machine"]), result
+    assert result["scanner_promotion_id"] == "SCANPROM-005930-machine"
     if not ready:
         assert result["provider_called"] is False
         assert result["action"] in {"WAIT", "DROP"}

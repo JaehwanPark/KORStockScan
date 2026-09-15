@@ -103,6 +103,7 @@ def test_entry_context_ws_data_preserves_explicit_market_metadata_only(monkeypat
     enriched = state_handlers._entry_context_ws_data(
         {"curr": 70000, "market_code": "10"},
         {
+            "scanner_promotion_id": "SCANPROM-005930-test",
             "market_code": "0",
             "market_index_code": "001",
             "sector_index_code": "123",
@@ -117,6 +118,7 @@ def test_entry_context_ws_data_preserves_explicit_market_metadata_only(monkeypat
     assert enriched["market_index_code"] == "001"
     assert enriched["sector_index_code"] == "123"
     assert enriched["external_market_context"]["risk_state"] == "RISK_OFF"
+    assert enriched["scanner_promotion_id"] == "SCANPROM-005930-test"
     assert enriched["entry_timing_context"]["source_status"] == "insufficient"
     missing = state_handlers._entry_context_ws_data({"curr": 70000}, {})
     assert missing["curr"] == 70000
@@ -5505,6 +5507,7 @@ def test_pre_submit_entry_ai_authority_retry_refreshes_missing_ai(monkeypatch):
         "name": "retry",
         "strategy": "SCALPING",
         "position_tag": "SCANNER",
+        "scanner_promotion_id": "SCANPROM-123456-retry",
         "rising_missed_one_share_entry_forced": True,
     }
     before = state_handlers._entry_ai_submit_authority_fields(
@@ -5594,6 +5597,9 @@ def test_pre_submit_entry_ai_authority_retry_refreshes_missing_ai(monkeypatch):
         logs[-1][1]["ai_call_trigger_reason"] == "pre_submit_entry_ai_authority_retry"
     )
     assert ai_calls[-1][1]["metadata_extra"]["position_tag"] == "SCANNER"
+    assert ai_calls[-1][1]["metadata_extra"]["scanner_promotion_id"] == (
+        "SCANPROM-123456-retry"
+    )
     assert snapshots
 
 

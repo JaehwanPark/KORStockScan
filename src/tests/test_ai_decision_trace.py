@@ -60,6 +60,7 @@ def test_machine_observation_returns_exact_snapshot_evaluation_identity(
         exact_payload={
             "stock_code": "005930",
             "snapshot_id": "aims-v27-test",
+            "scanner_promotion_id": "SCANPROM-005930-test",
         },
         setup_evidence={"setup_state": "READY"},
         assessment={"action": "ENTER_NOW"},
@@ -68,6 +69,54 @@ def test_machine_observation_returns_exact_snapshot_evaluation_identity(
 
     assert result["evaluation_attempt_id"] == "aims-v27-test"
     assert result["evaluation_attempt_identity_source"] == "exact_snapshot_id"
+    assert result["scanner_promotion_id"] == "SCANPROM-005930-test"
+    row = _rows(trace._payload_path(trace._date_text()))[0]
+    assert row["scanner_promotion_id"] == "SCANPROM-005930-test"
+    assert row["label_context"]["scanner_promotion_id"] == (
+        "SCANPROM-005930-test"
+    )
+
+
+def test_scanner_promotion_identity_reaches_request_trace_and_pending_outcome(
+    monkeypatch, tmp_path
+):
+    _enable(monkeypatch, tmp_path)
+    request_fields = trace.capture_ai_request(
+        prompt="risk screen",
+        user_input={
+            "stock_code": "005930",
+            "scanner_promotion_id": "SCANPROM-005930-exact",
+        },
+        endpoint_name="analyze_target",
+        symbol="005930",
+        request_id="promotion-bound-request",
+        model="gpt-test",
+        schema_name="entry_setup_risk_adjudication_v1",
+        require_json=True,
+    )
+    trace.record_ai_decision_trace(
+        {
+            **request_fields,
+            "action": "WAIT",
+            "score": 50,
+            "confidence": 50,
+            "provider_called": True,
+        },
+        prompt_type="scalping_entry",
+        prompt_version="entry_machine_auxiliary_compact_v3",
+        result_source="live",
+        stock_code="005930",
+        provider_called=True,
+    )
+
+    payload = _rows(trace._payload_path(trace._date_text()))[0]
+    request = _rows(trace._request_path(trace._date_text()))[0]
+    trace_row = _rows(trace._trace_path(trace._date_text()))[0]
+    pending = _rows(trace._outcome_path(trace._date_text()))[0]
+    assert payload["scanner_promotion_id"] == "SCANPROM-005930-exact"
+    assert request["scanner_promotion_id"] == "SCANPROM-005930-exact"
+    assert trace_row["scanner_promotion_id"] == "SCANPROM-005930-exact"
+    assert pending["scanner_promotion_id"] == "SCANPROM-005930-exact"
 
 
 def test_append_jsonl_fails_closed_on_parent_directory_replacement(

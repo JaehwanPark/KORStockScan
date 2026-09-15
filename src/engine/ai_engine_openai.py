@@ -95,6 +95,7 @@ from src.engine.scalping.entry_setup_evidence import (  # noqa: E402
     compose_mechanistic_primary_decision,
     compose_entry_decision,
     entry_risk_adjudication_openai_schema,
+    repair_mechanistic_pass_citations,
     validate_entry_risk_adjudication,
     validate_entry_setup_evidence,
 )
@@ -2232,15 +2233,22 @@ class GPTSniperEngine:
             )
             else "nxt"
         )
+        mechanistic_primary = bool(
+            policy.get("primary_decision_owner") == "mechanistic_entry_adjudicator"
+            and policy.get("ai_role") == "auxiliary_risk_screen_pass_veto_no_promotion"
+        )
+        provider_risk = dict(risk)
+        repair_codes: list[str] = []
+        if mechanistic_primary:
+            risk, repair_codes = repair_mechanistic_pass_citations(
+                risk,
+                setup_evidence=setup,
+            )
         contract_errors = validate_entry_risk_adjudication(
             risk,
             setup_evidence=setup,
         )
         setup_contract_errors = validate_entry_setup_evidence(setup)
-        mechanistic_primary = bool(
-            policy.get("primary_decision_owner") == "mechanistic_entry_adjudicator"
-            and policy.get("ai_role") == "auxiliary_risk_screen_pass_veto_no_promotion"
-        )
         if mechanistic_primary:
             # The machine composer validates its binding AI screen separately;
             # preserve its no-exposure result and diagnostic errors below.
@@ -2312,7 +2320,7 @@ class GPTSniperEngine:
         }
 
         def _bounded_raw_strings(field: str, limit: int) -> list[str]:
-            values = risk.get(field)
+            values = provider_risk.get(field)
             if not isinstance(values, list):
                 return []
             return [str(value)[:160] for value in values[:limit]]
@@ -2324,9 +2332,11 @@ class GPTSniperEngine:
             *map(str, setup.get("contradicting_facts") or []),
             *map(str, setup.get("invalidation_facts") or []),
         }
-        raw_confidence = risk.get("confidence")
+        raw_confidence = provider_risk.get("confidence")
         raw_risk_fields = {
-            "entry_ai_raw_risk_verdict": str(risk.get("risk_verdict") or "")[:80],
+            "entry_ai_raw_risk_verdict": str(
+                provider_risk.get("risk_verdict") or ""
+            )[:80],
             "entry_ai_raw_risk_codes": _bounded_raw_strings("risk_codes", 6),
             "entry_ai_raw_confidence": (
                 raw_confidence
@@ -2348,7 +2358,7 @@ class GPTSniperEngine:
             ],
             "entry_ai_rejected_unexpected_fields": sorted(
                 str(key)[:120]
-                for key in set(risk)
+                for key in set(provider_risk)
                 - {
                     "schema",
                     "risk_verdict",
@@ -2436,8 +2446,8 @@ class GPTSniperEngine:
                 "entry_ai_contract_errors": contract_errors,
                 "decision_quality_contract_status": "semantic_rejected",
                 "decision_quality_contract_errors": contract_errors,
-                "decision_quality_contract_repair_applied": False,
-                "decision_quality_contract_repair_codes": [],
+                "decision_quality_contract_repair_applied": bool(repair_codes),
+                "decision_quality_contract_repair_codes": repair_codes,
                 "decision_quality_live_adapter": (
                     f"entry_setup_{version_token}_{venue_token}_bounded_probe_v1"
                 ),
@@ -2597,8 +2607,8 @@ class GPTSniperEngine:
                 if mechanistic_primary and composed.get("entry_ai_screen_required")
                 else []
             ),
-            "decision_quality_contract_repair_applied": False,
-            "decision_quality_contract_repair_codes": [],
+            "decision_quality_contract_repair_applied": bool(repair_codes),
+            "decision_quality_contract_repair_codes": repair_codes,
             "decision_quality_live_adapter": (
                 f"entry_setup_{version_token}_{venue_token}_bounded_probe_v1"
             ),
@@ -8999,11 +9009,16 @@ class GPTSniperEngine:
                 machine_exact = json.loads(machine_hot_payload)
                 # Preserve explicit identity for both common and child policy
                 # observations; no venue/session is inferred from the symbol.
-                for key in ("stock_code", "effective_venue", "session_bucket"):
+                for key in (
+                    "stock_code",
+                    "effective_venue",
+                    "session_bucket",
+                    "scanner_promotion_id",
+                ):
                     if key not in machine_exact:
                         machine_exact[key] = pre_prompt_snapshot.get(
                             key
-                        ) or ws_data.get(key)
+                        ) or ws_data.get(key) or (metadata_extra or {}).get(key)
                 from src.trading.market.micro_confirmation import (
                     load_live_dynamic_confirmation_source,
                 )
@@ -9570,6 +9585,10 @@ class GPTSniperEngine:
                     )
 
             trace_metadata_extra = dict(metadata_extra or {})
+            if machine_capture.get("scanner_promotion_id"):
+                trace_metadata_extra["scanner_promotion_id"] = machine_capture[
+                    "scanner_promotion_id"
+                ]
             trace_metadata_extra.update(
                 {
                     "ai_trace_strategy": strategy,
