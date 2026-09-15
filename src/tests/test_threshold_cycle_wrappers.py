@@ -911,6 +911,7 @@ def test_postclose_wrapper_excludes_machine_microstructure_duplicate_path():
     )
     assert "TimeoutStartSec=3600" in final_refresh_service
     assert "RestartPreventExitStatus=42" in final_refresh_service
+    assert "MemoryMax=2G" in final_refresh_service
 
     final_refresh_timer = Path(
         "deploy/systemd/korstockscan-machine-microstructure-final-refresh.timer"
