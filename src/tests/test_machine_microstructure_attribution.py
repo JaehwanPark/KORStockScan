@@ -4380,6 +4380,8 @@ def test_overlapping_windows_share_raw_source_rows_without_value_drift(tmp_path)
     assert first["raw_depth_rows"][0]["bid_levels"] == depth_row["bid_levels"]
     assert first["raw_market_rows"][0] is second["raw_market_rows"][0]
     assert first["raw_depth_rows"][0] is second["raw_depth_rows"][0]
+    assert first["rows"][0] is second["rows"][0]
+    assert first["depth_points"][0] is second["depth_points"][0]
 
 
 def test_timestamp_regression_only_row_quarantine_preserves_remaining_date_source(

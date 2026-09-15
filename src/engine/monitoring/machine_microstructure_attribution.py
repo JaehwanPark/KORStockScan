@@ -5362,6 +5362,16 @@ def _micro_context(
         item["eligible_row_count" if eligible else "ineligible_row_count"] += 1
         if not eligible:
             continue
+        normalized_market_row = {
+            "timestamp": timestamp,
+            "price": price,
+            "best_bid": best_bid,
+            "best_ask": best_ask,
+            "venue": payload.get("venue"),
+            "session": payload.get("session_bucket"),
+            "sequence_epoch": payload.get("sequence_epoch"),
+            **market_axes,
+        }
         for anchor, anchor_at in anchors_by_symbol.get(symbol, []):
             if payload.get("venue") not in anchor["expected_venues"]:
                 continue
@@ -5386,18 +5396,7 @@ def _micro_context(
                         window["raw_market_rows"].append(payload)
                         adaptive_source_rows["market"] += 1
                     continue
-                windows[anchor["anchor_id"]]["rows"].append(
-                    {
-                        "timestamp": timestamp,
-                        "price": price,
-                        "best_bid": best_bid,
-                        "best_ask": best_ask,
-                        "venue": payload.get("venue"),
-                        "session": payload.get("session_bucket"),
-                        "sequence_epoch": payload.get("sequence_epoch"),
-                        **market_axes,
-                    }
-                )
+                windows[anchor["anchor_id"]]["rows"].append(normalized_market_row)
                 # A source row can fall inside many overlapping owner windows.
                 # The iterator yields a fresh immutable-by-contract mapping for
                 # each line, so retain one shared reference instead of copying
@@ -5441,6 +5440,16 @@ def _micro_context(
             ] += 1
             continue
         inventory[symbol]["depth_row_count"] += 1
+        normalized_depth_point = {
+            "sequence_epoch": int(payload["sequence_epoch"]),
+            "timestamp": timestamp,
+            "best_bid": depth_best_bid,
+            "best_bid_qty": int(payload["best_bid_qty"]),
+            "best_ask": depth_best_ask,
+            "best_ask_qty": int(payload["best_ask_qty"]),
+            "bid_depth": bid_depth,
+            "ask_depth": ask_depth,
+        }
         for anchor, anchor_at in anchors_by_symbol.get(symbol, []):
             if payload.get("venue") not in anchor["expected_venues"]:
                 continue
@@ -5467,16 +5476,7 @@ def _micro_context(
                     continue
                 windows[anchor["anchor_id"]]["depth_rows"] += 1
                 windows[anchor["anchor_id"]]["depth_points"].append(
-                    {
-                        "sequence_epoch": int(payload["sequence_epoch"]),
-                        "timestamp": timestamp,
-                        "best_bid": depth_best_bid,
-                        "best_bid_qty": int(payload["best_bid_qty"]),
-                        "best_ask": depth_best_ask,
-                        "best_ask_qty": int(payload["best_ask_qty"]),
-                        "bid_depth": bid_depth,
-                        "ask_depth": ask_depth,
-                    }
+                    normalized_depth_point
                 )
                 windows[anchor["anchor_id"]]["raw_depth_rows"].append(payload)
 
