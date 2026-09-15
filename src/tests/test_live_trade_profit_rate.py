@@ -3633,9 +3633,11 @@ def test_periodic_account_sync_recovers_unique_exact_sell_execution(
     target = {
         "id": 22758,
         "code": "096770",
+        "name": "SK이노베이션",
         "status": prior_status,
         "sell_odno": owned_sell_order_no,
         "sell_target_price": 132000,
+        "pending_sell_msg": "🎊 [익절 주문] SK이노베이션",
     }
     sniper_sync.KIWOOM_TOKEN = "token"
     sniper_sync.DB = _SyncDB([record], [])
@@ -3688,6 +3690,12 @@ def test_periodic_account_sync_recovers_unique_exact_sell_execution(
         "emit_pipeline_event",
         lambda *args, **kwargs: emitted.append((args, kwargs)),
     )
+    telegram_events = []
+    sniper_sync.EVENT_BUS = type(
+        "EventBus",
+        (),
+        {"publish": lambda self, topic, payload: telegram_events.append((topic, payload))},
+    )()
 
     sniper_sync.periodic_account_sync()
 
@@ -3727,6 +3735,14 @@ def test_periodic_account_sync_recovers_unique_exact_sell_execution(
         132100, 132250, 1
     )
     assert "EV" not in exact_fields["forbidden_uses"]
+    assert len(telegram_events) == 1
+    assert telegram_events[0][0] == "TELEGRAM_BROADCAST"
+    notification = telegram_events[0][1]
+    assert "SK이노베이션" in notification["message"]
+    assert "132,250원" in notification["message"]
+    assert f"{record.profit_rate:+.2f}%" in notification["message"]
+    assert notification["audience"] == "ADMIN_ONLY"
+    assert notification["parse_mode"] == "Markdown"
 
 
 def test_periodic_account_sync_preserves_concurrent_fast_fill_completion(

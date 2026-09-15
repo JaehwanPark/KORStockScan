@@ -39,7 +39,11 @@ def context(tmp_path, monkeypatch):
     monkeypatch.setattr(
         verification,
         "_systemd_identity",
-        lambda: {"pid": 42, "cgroup": "/system.slice/widget.service"},
+        lambda: {
+            "pid": 42,
+            "cgroup": "/system.slice/widget.service",
+            "working_directory": str(tmp_path.resolve()),
+        },
     )
     trader = SimpleNamespace(
         state_path=tmp_path / "state.json",
@@ -52,6 +56,7 @@ def context(tmp_path, monkeypatch):
             "005930": {"KRX_REGULAR": {"policy_id": "test-policy", "target": 2}}
         },
     )
+    monkeypatch.setattr(verification, "PROJECT_ROOT", tmp_path)
     assert verification.publish_startup_receipt(trader, interval_sec=1, once=False)
     return SimpleNamespace(
         trader=trader,
@@ -87,6 +92,7 @@ def test_round_trip_with_different_observer_gid_and_no_secrets(context):
     assert result["status"] == "verified_requested_startup_fields"
     assert result["runtime_effect"] is False
     assert result["current_policy_consumption_verified"] is False
+    assert result["release_root"] == str(context.path.parent.resolve())
     assert result["verified_environment_keys"] == list(context.expected)
     contents = context.path.read_text()
     assert "never-disclose" not in contents
@@ -166,7 +172,11 @@ def test_review_rejects_replacement_during_verification(context, monkeypatch):
             replacement.write_text(context.path.read_text())
             replacement.chmod(0o600)
             os.replace(replacement, context.path)
-        return {"pid": 42, "cgroup": "/system.slice/widget.service"}
+        return {
+            "pid": 42,
+            "cgroup": "/system.slice/widget.service",
+            "working_directory": str(context.path.parent.resolve()),
+        }
 
     monkeypatch.setattr(verification, "_systemd_identity", read_unit)
     assert verify(context)["findings"] == ["receipt_changed_during_verification"]
@@ -184,7 +194,11 @@ def test_review_rejects_in_place_edit_or_removal(context, monkeypatch, removed):
                 context.path.unlink()
             else:
                 context.path.write_text(context.path.read_text() + "\n")
-        return {"pid": 42, "cgroup": "/system.slice/widget.service"}
+        return {
+            "pid": 42,
+            "cgroup": "/system.slice/widget.service",
+            "working_directory": str(context.path.parent.resolve()),
+        }
 
     monkeypatch.setattr(verification, "_systemd_identity", read_unit)
     assert verify(context)["findings"] == ["receipt_changed_during_verification"]
@@ -263,9 +277,45 @@ def test_wrong_or_reused_process_is_rejected(context, key, value):
 
 
 def test_process_change_during_check_is_rejected(context, monkeypatch):
-    calls = iter([{"pid": 42, "cgroup": "unit"}, {"pid": 43, "cgroup": "unit"}])
+    root = str(context.path.parent.resolve())
+    calls = iter(
+        [
+            {"pid": 42, "cgroup": "unit", "working_directory": root},
+            {"pid": 43, "cgroup": "unit", "working_directory": root},
+        ]
+    )
     monkeypatch.setattr(verification, "_systemd_identity", lambda: next(calls))
     assert verify(context)["findings"] == ["process_changed_during_verification"]
+
+
+def test_running_process_release_must_match_installed_unit(context, monkeypatch):
+    monkeypatch.setattr(
+        verification,
+        "_systemd_identity",
+        lambda: {
+            "pid": 42,
+            "cgroup": "/system.slice/widget.service",
+            "working_directory": str((context.path.parent / "new-release").resolve()),
+        },
+    )
+
+    result = verify(context)
+
+    assert result["passed"] is False
+    assert result["findings"] == ["unit_process_release_mismatch"]
+
+
+def test_receipt_without_release_root_is_rejected_as_deployment_drift(context):
+    def make_legacy(payload):
+        payload["schema_version"] = "widget_startup_runtime_receipt_v1"
+        payload.pop("release_root")
+
+    change_receipt(context, make_legacy)
+
+    result = verify(context)
+
+    assert result["passed"] is False
+    assert result["findings"] == ["unit_process_release_mismatch"]
 
 
 @pytest.mark.parametrize(
@@ -436,11 +486,19 @@ def test_systemd_reader_is_fixed_unit_and_bounded(monkeypatch):
         assert kwargs["timeout"] == 5 and kwargs["check"] is True
         assert "shell" not in kwargs
         return SimpleNamespace(
-            stdout="MainPID=42\nActiveState=active\nSubState=running\nControlGroup=/system.slice/widget.service\n"
+            stdout=(
+                "MainPID=42\nActiveState=active\nSubState=running\n"
+                "ControlGroup=/system.slice/widget.service\n"
+                f"WorkingDirectory={verification.PROJECT_ROOT}\n"
+            )
         )
 
     monkeypatch.setattr(verification.subprocess, "run", run)
-    assert verification._systemd_identity()["pid"] == 42
+    assert verification._systemd_identity() == {
+        "pid": 42,
+        "cgroup": "/system.slice/widget.service",
+        "working_directory": str(verification.PROJECT_ROOT.resolve()),
+    }
 
 
 def test_actual_trader_constructor_can_publish_without_broker_calls(tmp_path):

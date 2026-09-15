@@ -3038,6 +3038,31 @@ def periodic_account_sync():
                                 "🚨 [정기 동기화] 매도 영수증 누락 "
                                 f"source-quality 이벤트 기록 실패: {exc}"
                             )
+                        if exact_execution and EVENT_BUS is not None:
+                            try:
+                                from src.engine import (
+                                    sniper_execution_receipts as _receipt_handlers,
+                                )
+
+                                _receipt_handlers._publish_sell_execution_message(
+                                    name=record.stock_name or code,
+                                    pending_msg=str(
+                                        target_snapshot.get("pending_sell_msg") or ""
+                                    ),
+                                    audience=_receipt_handlers._receipt_audience(
+                                        target_snapshot
+                                    ),
+                                    exec_price=int(reconciled_sell_price or 0),
+                                    profit_rate=float(reconciled_profit_rate),
+                                    publisher=EVENT_BUS,
+                                )
+                            except Exception as exc:
+                                # 상태·손익 DB commit은 이미 완료됐으므로 알림 실패로
+                                # 매도 영수증을 재처리하지 않는다.
+                                log_error(
+                                    "[정기 동기화 매도 완료 알림 실패] "
+                                    f"{record.stock_name}({code}): {exc}"
+                                )
                         if target_stock is not None:
                             pending_runtime_target_removals.append(target_stock)
                         synced_count += 1

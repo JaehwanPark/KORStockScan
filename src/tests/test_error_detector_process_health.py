@@ -22,6 +22,9 @@ from src.engine.error_detectors.process_health import (
 _ORIGINAL_SAMSUNG_MORNING_RUNTIME_CONTRACT = (
     process_health_module._samsung_morning_runtime_contract
 )
+_ORIGINAL_WIDGET_RUNTIME_RELEASE_CONTRACT = (
+    process_health_module._widget_runtime_release_contract
+)
 
 
 @pytest.fixture(autouse=True)
@@ -47,6 +50,15 @@ def _force_trading_day(monkeypatch, tmp_path):
         lambda now: {
             "severity": "pass",
             "status": "not_applicable_test_default",
+            "target_date": now.date().isoformat(),
+        },
+    )
+    monkeypatch.setattr(
+        process_health_module,
+        "_widget_runtime_release_contract",
+        lambda now: {
+            "severity": "pass",
+            "status": "release_binding_verified_test_default",
             "target_date": now.date().isoformat(),
         },
     )
@@ -108,6 +120,25 @@ class TestProcessHealthDetector:
         detector = ProcessHealthDetector()
         result = detector.check()
         assert result.severity == "pass"
+
+    def test_detector_fails_for_widget_release_binding_drift(self, monkeypatch):
+        monkeypatch.setattr(
+            process_health_module,
+            "_widget_runtime_release_contract",
+            lambda now: {
+                "severity": "fail",
+                "status": "release_binding_unverified",
+                "reason": "unit_process_release_mismatch",
+            },
+        )
+        write_heartbeat("main_loop")
+        write_heartbeat("telegram")
+
+        result = ProcessHealthDetector().check()
+
+        assert result.severity == "fail"
+        assert "unit_process_release_mismatch" in result.summary
+        assert "do not treat unit configuration" in result.recommended_action
 
     def test_detector_fails_for_recent_unowned_manual_control_holding_block(
         self, monkeypatch
@@ -932,6 +963,49 @@ def _mock_samsung_systemd_states(
             "runtime_effect": False,
         },
     )
+
+
+@pytest.mark.parametrize(
+    "at,release_binding_passed,expected_severity,expected_status",
+    [
+        ("2026-09-02T07:57:59+09:00", False, "pass", "not_yet_due"),
+        ("2026-09-02T08:00:00+09:00", False, "warning", "bounded_wait"),
+        (
+            "2026-09-02T08:05:00+09:00",
+            False,
+            "fail",
+            "release_binding_unverified",
+        ),
+        (
+            "2026-09-02T08:05:00+09:00",
+            True,
+            "pass",
+            "release_binding_verified",
+        ),
+    ],
+)
+def test_widget_runtime_release_contract_has_bounded_startup_gate(
+    monkeypatch,
+    at,
+    release_binding_passed,
+    expected_severity,
+    expected_status,
+):
+    monkeypatch.setattr(
+        process_health_module,
+        "verify_widget_startup_receipt",
+        lambda path, *, target_date: {
+            "release_binding_passed": release_binding_passed,
+            "findings": (
+                [] if release_binding_passed else ["unit_process_release_mismatch"]
+            ),
+        },
+    )
+
+    result = _ORIGINAL_WIDGET_RUNTIME_RELEASE_CONTRACT(datetime.fromisoformat(at))
+
+    assert result["severity"] == expected_severity
+    assert result["status"] == expected_status
 
 
 def _write_samsung_authority(path, *, target_date: str, ready: bool):

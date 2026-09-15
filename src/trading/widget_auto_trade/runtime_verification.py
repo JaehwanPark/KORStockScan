@@ -21,7 +21,8 @@ from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-SCHEMA = "widget_startup_runtime_receipt_v1"
+SCHEMA = "widget_startup_runtime_receipt_v2"
+LEGACY_SCHEMAS = frozenset({"widget_startup_runtime_receipt_v1"})
 UNIT = "korstockscan-widget-signal-auto-trader.service"
 # Keep the diagnostic CLI stdlib-only; importing live constants transitively
 # initializes broker configuration in the trading package.
@@ -132,6 +133,7 @@ def publish_startup_receipt(trader, *, interval_sec: float, once: bool) -> bool:
             "snapshot_phase": "startup_before_first_cycle",
             "captured_at_kst": datetime.now(KST).isoformat(),
             "startup_policy_date": trader._policy_date.isoformat(),
+            "release_root": str(PROJECT_ROOT.resolve()),
             "process": process_identity(os.getpid()),
             "environment_hashes": environment_hashes(os.environ),
             "effective_config_sha256": content_hash(
@@ -182,7 +184,7 @@ def _systemd_identity() -> dict:
             "systemctl",
             "show",
             UNIT,
-            "--property=MainPID,ActiveState,SubState,ControlGroup",
+            "--property=MainPID,ActiveState,SubState,ControlGroup,WorkingDirectory",
         ],
         capture_output=True,
         text=True,
@@ -196,7 +198,14 @@ def _systemd_identity() -> dict:
         raise ValueError("unit_not_running")
     if not fields.get("ControlGroup"):
         raise ValueError("unit_cgroup_missing")
-    return {"pid": int(fields["MainPID"]), "cgroup": fields["ControlGroup"]}
+    working_directory = fields.get("WorkingDirectory")
+    if not working_directory or not os.path.isabs(working_directory):
+        raise ValueError("unit_working_directory_missing")
+    return {
+        "pid": int(fields["MainPID"]),
+        "cgroup": fields["ControlGroup"],
+        "working_directory": os.path.realpath(working_directory),
+    }
 
 
 def _file_identity(info: os.stat_result) -> dict:
@@ -252,7 +261,13 @@ def verify_startup_receipt(
     expected_policy_sha256: str | None = None,
 ) -> dict:
     """Return bounded diagnostic output; never echo file contents or exceptions."""
-    result = {"status": "blocked", "passed": False, **AUTHORITY, "findings": []}
+    result = {
+        "status": "blocked",
+        "passed": False,
+        "release_binding_passed": False,
+        **AUTHORITY,
+        "findings": [],
+    }
     stage = "receipt_missing_or_invalid"
     try:
         try:
@@ -264,7 +279,10 @@ def verify_startup_receipt(
             stage = "receipt_unreadable"
             raise
         digest = payload.pop("receipt_sha256", None)
-        if digest != content_hash(payload) or payload.get("schema_version") != SCHEMA:
+        if digest != content_hash(payload) or payload.get("schema_version") not in {
+            SCHEMA,
+            *LEGACY_SCHEMAS,
+        }:
             raise ValueError("invalid_receipt")
         for key, value in AUTHORITY.items():
             if type(payload.get(key)) is not type(value) or payload[key] != value:
@@ -296,6 +314,15 @@ def verify_startup_receipt(
         # Canonical encoding also rejects bool/int credential substitutions.
         if content_hash(payload.get("process")) != content_hash(identity):
             raise ValueError("old_or_wrong_process")
+        stage = "unit_process_release_mismatch"
+        release_root = payload.get("release_root")
+        if (
+            not isinstance(release_root, str)
+            or not os.path.isabs(release_root)
+            or os.path.realpath(release_root) != unit["working_directory"]
+        ):
+            raise ValueError("release_root_mismatch")
+        result["release_binding_passed"] = True
         stage = "receipt_owner_or_permissions_invalid"
         if (
             file_identity["uid"] != identity["uids"][3]
@@ -347,6 +374,7 @@ def verify_startup_receipt(
             {
                 "receipt_sha256": digest,
                 "pid": unit["pid"],
+                "release_root": os.path.realpath(release_root),
                 "target_date": target_date.isoformat(),
                 "verified_environment_keys": sorted(expected),
                 "effective_config_sha256": payload["effective_config_sha256"],

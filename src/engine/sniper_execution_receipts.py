@@ -7329,8 +7329,15 @@ def _normalize_sell_pending_message_for_realized_result(
 
 
 def _publish_sell_execution_message(
-    *, name: str, pending_msg: str, audience: str, exec_price: int, profit_rate: float
+    *,
+    name: str,
+    pending_msg: str,
+    audience: str,
+    exec_price: int,
+    profit_rate: float,
+    publisher=None,
 ) -> None:
+    target_bus = publisher or event_bus
     try:
         result_label = "[익절 완료]" if profit_rate > 0 else "[손절 완료]"
         if pending_msg:
@@ -7340,19 +7347,23 @@ def _publish_sell_execution_message(
                 profit_rate=profit_rate,
             )
             final_msg += f"\n✅ **실제 체결가:** `{exec_price:,}원` (확정 수익률: `{profit_rate:+.2f}%`)"
-            event_bus.publish(
+            target_bus.publish(
                 "TELEGRAM_BROADCAST",
-                {"message": final_msg, "audience": audience, "parse_mode": "HTML"},
+                {
+                    "message": final_msg,
+                    "audience": audience,
+                    "parse_mode": "Markdown",
+                },
             )
             return
 
         sign = f"🎊 {result_label}" if profit_rate > 0 else f"📉 {result_label}"
-        event_bus.publish(
+        target_bus.publish(
             "TELEGRAM_BROADCAST",
             {
                 "message": f"{sign} **[{name}]** 매도 체결!\n체결가: `{exec_price:,}원`\n수익률: `{profit_rate:+.2f}%`",
                 "audience": audience,
-                "parse_mode": "HTML",
+                "parse_mode": "Markdown",
             },
         )
     except Exception as exc:

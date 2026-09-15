@@ -402,7 +402,7 @@ def get_main_keyboard(chat_id=None):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     markup.add("🏆 오늘의 추천종목", "🔍 실시간 종목분석")
     markup.add("📜 감시/보유 리스트", "➕ 수동 종목 추가")
-    markup.add("☕ 서버 운영 후원하기", "🤖 AI 확신지수란?")
+    markup.add("🤖 AI 확신지수란?")
     if chat_id is not None and _is_admin_chat_id(chat_id):
         markup.add(_get_admin_pause_status_label(), "📛 현재 매매 상태")
         markup.add("🛑 긴급 매매 중단", "▶️ 매매 재개")
@@ -492,27 +492,31 @@ def process_analyze_step(message):
 
 @bot.message_handler(commands=["start", "help"])
 def handle_start(message):
-    db_manager.add_new_user(message.chat.id)
-    # 관리자는 VIP 승격 패스 (관리자 권한 유지)
-    if str(message.chat.id) != str(ADMIN_ID):
-        db_manager.upgrade_user_level(
-            message.chat.id, level="V"
-        )  # 가입 즉시 VIP로 승격 (테스트용)
-    # 💡 [교정 1] 마크다운 문법 오류 수정 (닫히지 않은 백틱 제거 및 이탤릭/볼드체로 깔끔하게 정돈)
+    try:
+        db_manager.add_new_user(message.chat.id)
+        # 관리자는 VIP 승격 패스 (관리자 권한 유지)
+        if str(message.chat.id) != str(ADMIN_ID):
+            db_manager.upgrade_user_level(message.chat.id, level="V")
+    except Exception as exc:
+        # 소개 화면은 사용자 DB의 일시 장애와 분리한다. 권한은 승격하지 않고
+        # 최소 메뉴만 표시하며, 원인은 서버 로그에 보존한다.
+        log_error(
+            f"[TELEGRAM_START_DB_DEGRADED] chat_id={message.chat.id}: {exc}"
+        )
     welcome_msg = (
-        "🎯 *[KORStockScan V13.0] 스나이퍼 엔진 온라인*\n\n"
-        "감정을 배제한 기계의 심장. 백테스트 승률 *63.3%*의 AI 앙상블 타격망이 전개되었습니다.\n\n"
-        "⚡ *Sniper Protocol Activating...*\n"
-        "✓ `[Targeting]` 다중 AI 합의체 교차 검증 기반 정예 타점 스캐닝\n"
-        "✓ `[Radar]` FDR ✖️ Kiwoom 2중 지수 판독 및 실시간 수급 추적\n"
-        "✓ `[Action]` 찰나를 파고드는 가변 익절/손절 스마트 트레일링 스탑\n\n"
-        "💡 _시장의 노이즈를 뚫고, 가장 완벽한 타점만 저격합니다._"
+        "🎯 <b>[KORStockScan] 스나이퍼 엔진 온라인</b>\n\n"
+        "기계 진입 판정과 AI 리스크 보조 판정이 현재 운영 정책에 따라 작동합니다.\n\n"
+        "⚡ <b>Entry Adjudication</b>\n"
+        "✓ <code>[Targeting]</code> 스캐너 승격 후 기계 판정\n"
+        "✓ <code>[Risk screen]</code> 진입 후보에 대한 축약형 AI PASS/VETO 보조\n"
+        "✓ <code>[Action]</code> 신선도·유동성·계좌·주문 안전 가드 통과 후 제출\n\n"
+        "💡 <i>판정과 주문 제출은 별개의 안전 단계입니다.</i>"
     )
     bot.send_message(
         message.chat.id,
         welcome_msg,
         reply_markup=get_main_keyboard(chat_id=message.chat.id),
-        parse_mode="Markdown",
+        parse_mode="HTML",
     )
 
 
@@ -794,19 +798,17 @@ def handle_watch_list(message):
 @bot.message_handler(func=lambda message: message.text == "🤖 AI 확신지수란?")
 def handle_ai_confidence_info(message):
     info_msg = (
-        "🤖 *[KORStockScan AI 확신지수 안내]*\n\n"
-        "**AI 확신지수(Probability)**는 4개의 머신러닝 앙상블 모델(XGBoost, LightGBM 등)이 "
-        "과거 3년 치의 차트 패턴, 외국인/기관 수급, 호가창 체결 데이터를 입체적으로 학습하여 도출한 **'이 종목이 당일 단기 상승할 확률'**을 의미합니다.\n\n"
-        "📊 *확신지수 구간별 의미*\n"
-        "• `90% 이상` : 🌟 **[초고확신]** 알고리즘이 찾아낸 완벽한 조건의 S급 타점\n"
-        "• `80% ~ 89%` : 🔥 **[고확신]** 강력한 매집 수급이 포착된 주도주 (기본 스나이핑 대상)\n"
-        "• `70% ~ 79%` : 🎯 **[유망]** 폭락장/조정장에서 기술적 반등이 예상되는 낙폭과대주\n"
-        "• `70% 미만` : 🛑 **[관망]** 하락 리스크가 높아 시스템이 매수를 보류하는 구간\n\n"
-        "💡 *스나이퍼 매매 작동 원리*\n"
-        "현재 봇은 **AI 확신지수 80% 이상**(폭락장 세팅 시 70% 이상)인 종목 중에서도, "
-        "단순히 차트만 보지 않고 **실시간 체결강도가 100을 돌파**하며 세력의 진짜 돈이 들어오는 순간에만 정밀하게 방아쇠를 당깁니다 🔫"
+        "🤖 <b>[KORStockScan AI 보조판정 안내]</b>\n\n"
+        "현재 AI는 실전 BUY를 독자적으로 발급하지 않습니다. "
+        "기계 판정기가 선별한 진입 후보에 대해 입력 충분성과 불리한 시장·수급 리스크를 재확인합니다.\n\n"
+        "📊 <b>판정 의미</b>\n"
+        "• <code>PASS</code>: 보조 리스크 검사 통과\n"
+        "• <code>CAUTION</code>: 불리한 조건이 있어 진입 보류\n"
+        "• <code>VETO</code>: 명시적 리스크로 진입 차단\n"
+        "• <code>INSUFFICIENT</code>: 필수 근거 부족으로 안전 보류\n\n"
+        "💡 <i>PASS여도 시세 신선도, 슬리피지, 유동성, 예산과 주문 가드를 모두 통과해야 실제 주문이 제출됩니다.</i>"
     )
-    bot.reply_to(message, info_msg, parse_mode="Markdown")
+    bot.reply_to(message, info_msg, parse_mode="HTML")
 
 
 @bot.message_handler(func=lambda message: message.text == "🏆 오늘의 추천종목")

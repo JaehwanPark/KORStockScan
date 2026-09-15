@@ -66,6 +66,78 @@ def _install_telebot_stub(monkeypatch):
     monkeypatch.setitem(sys.modules, "src.utils.kiwoom_utils", kiwoom_utils_module)
 
 
+def test_main_keyboard_omits_donation_button(monkeypatch):
+    _install_telebot_stub(monkeypatch)
+    import src.notify.telegram_manager as telegram_manager
+
+    rows = []
+    monkeypatch.setattr(
+        telegram_manager.types,
+        "ReplyKeyboardMarkup",
+        lambda *args, **kwargs: types.SimpleNamespace(
+            add=lambda *buttons, **ignored: rows.append(buttons)
+        ),
+    )
+
+    telegram_manager.get_main_keyboard(chat_id="not-admin")
+
+    buttons = [button for row in rows for button in row]
+    assert "☕ 서버 운영 후원하기" not in buttons
+    assert "🤖 AI 확신지수란?" in buttons
+
+
+def test_start_intro_uses_html_and_survives_database_error(monkeypatch):
+    _install_telebot_stub(monkeypatch)
+    import src.notify.telegram_manager as telegram_manager
+
+    sent = []
+    monkeypatch.setattr(
+        telegram_manager.db_manager,
+        "add_new_user",
+        lambda chat_id: (_ for _ in ()).throw(RuntimeError("database unavailable")),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        telegram_manager.bot,
+        "send_message",
+        lambda *args, **kwargs: sent.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        telegram_manager, "get_main_keyboard", lambda chat_id=None: "keyboard"
+    )
+    monkeypatch.setattr(telegram_manager, "log_error", lambda *args, **kwargs: None)
+
+    class Chat:
+        id = "not-admin"
+
+    class Message:
+        chat = Chat()
+
+    telegram_manager.handle_start(Message())
+
+    assert len(sent) == 1
+    assert sent[0][1]["parse_mode"] == "HTML"
+    assert sent[0][1]["reply_markup"] == "keyboard"
+
+
+def test_ai_info_uses_current_auxiliary_role_and_html(monkeypatch):
+    _install_telebot_stub(monkeypatch)
+    import src.notify.telegram_manager as telegram_manager
+
+    replies = []
+    monkeypatch.setattr(
+        telegram_manager.bot,
+        "reply_to",
+        lambda *args, **kwargs: replies.append((args, kwargs)),
+    )
+
+    telegram_manager.handle_ai_confidence_info(object())
+
+    assert len(replies) == 1
+    assert replies[0][1]["parse_mode"] == "HTML"
+    assert "독자적으로 발급하지 않습니다" in replies[0][0][1]
+
+
 def test_admin_buy_pause_confirm_invokes_guard(monkeypatch):
     _install_telebot_stub(monkeypatch)
     import src.notify.telegram_manager as telegram_manager

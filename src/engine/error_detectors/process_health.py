@@ -21,6 +21,10 @@ from src.engine.risk.manual_control_exclusion import (
     manual_control_auto_exclusion_source,
     manual_control_operator_exclusion_source,
 )
+from src.trading.widget_auto_trade.runtime_verification import (
+    DEFAULT_RECEIPT_PATH as WIDGET_RUNTIME_RECEIPT_PATH,
+    verify_startup_receipt as verify_widget_startup_receipt,
+)
 
 HEARTBEAT_PATH = PROJECT_ROOT / "tmp" / "error_detector_heartbeat.json"
 POSTCLOSE_BOT_ISOLATION_PATH = PROJECT_ROOT / "tmp" / "postclose_bot_isolation.json"
@@ -32,6 +36,8 @@ _HEARTBEAT_LOCK = threading.Lock()
 _SNIPER_NORMAL_MARKET_CLOSE_MINUTE = 20 * 60
 _SAMSUNG_MORNING_START_MINUTE = 7 * 60 + 57
 _SAMSUNG_MORNING_ACCEPTANCE_DEADLINE_MINUTE = 8 * 60 + 5
+_WIDGET_START_MINUTE = 7 * 60 + 58
+_WIDGET_ACCEPTANCE_DEADLINE_MINUTE = 8 * 60 + 5
 _SAMSUNG_MORNING_LIVE_UNIT = "korstockscan-samsung-morning-one-share.service"
 _SAMSUNG_MORNING_PREFLIGHT_UNIT = "korstockscan-samsung-one-share-preflight.service"
 _SAMSUNG_MORNING_TIMER_UNIT = "korstockscan-samsung-morning-one-share.timer"
@@ -136,14 +142,15 @@ class ProcessHealthDetector(BaseDetector):
 
     def check(self) -> DetectionResult:
         now_ts = time.time()
-        samsung_morning = _samsung_morning_runtime_contract(
-            datetime.fromtimestamp(now_ts).astimezone()
-        )
+        now = datetime.fromtimestamp(now_ts).astimezone()
+        samsung_morning = _samsung_morning_runtime_contract(now)
+        widget_runtime = _widget_runtime_release_contract(now)
         result = self._check_main_runtime(
             now_ts=now_ts,
             samsung_morning=samsung_morning,
         )
         result.details["samsung_morning_runtime"] = samsung_morning
+        result.details["widget_runtime_release"] = widget_runtime
         samsung_severity = samsung_morning.get("severity")
         if samsung_severity == "fail":
             samsung_summary = (
@@ -170,6 +177,29 @@ class ProcessHealthDetector(BaseDetector):
                 f"{result.recommended_action} Recheck the same systemd transaction "
                 "at the 08:05 KST acceptance deadline; do not start a duplicate owner."
             ).strip()
+        widget_severity = widget_runtime.get("severity")
+        if widget_severity == "fail":
+            widget_summary = (
+                "Widget runtime release does not match the installed systemd route: "
+                f"{widget_runtime.get('reason') or 'unknown'}."
+            )
+            result.summary = (
+                f"{result.summary} {widget_summary}"
+                if result.summary
+                else widget_summary
+            )
+            result.severity = "fail"
+            result.recommended_action = (
+                f"{result.recommended_action} Verify the reviewed widget release, "
+                "custody, open orders, and startup receipt before an authorized "
+                "restart; do not treat unit configuration as current PID consumption."
+            ).strip()
+        elif widget_severity == "warning" and result.severity != "fail":
+            result.severity = "warning"
+            result.summary = (
+                f"{result.summary} Widget runtime release evidence is within its "
+                "bounded startup acceptance window."
+            )
         manual_control_holding = _recent_unowned_manual_control_holding_blocks(
             now_ts=now_ts
         )
@@ -907,6 +937,51 @@ def _samsung_morning_runtime_contract(now: datetime) -> dict:
         **details,
         "severity": "fail",
         "status": "expected_process_not_healthy",
+        "reason": reason,
+    }
+
+
+def _widget_runtime_release_contract(now: datetime) -> dict:
+    """Verify that the active widget PID consumed the installed release root."""
+
+    target_date = now.date().isoformat()
+    current_minute = now.hour * 60 + now.minute
+    details = {
+        "target_date": target_date,
+        "expected_start": "07:58",
+        "acceptance_deadline": "08:05",
+        "receipt_path": str(WIDGET_RUNTIME_RECEIPT_PATH),
+        "runtime_effect": False,
+        "runtime_mutation": "none",
+    }
+    if not is_krx_trading_day(now.date()):
+        return {**details, "severity": "pass", "status": "not_applicable"}
+    if current_minute < _WIDGET_START_MINUTE:
+        return {**details, "severity": "pass", "status": "not_yet_due"}
+    result = verify_widget_startup_receipt(
+        WIDGET_RUNTIME_RECEIPT_PATH,
+        target_date=now.date(),
+    )
+    details["verification"] = result
+    if result.get("release_binding_passed") is True:
+        return {
+            **details,
+            "severity": "pass",
+            "status": "release_binding_verified",
+            "reason": "startup_receipt_pid_and_systemd_working_directory_match",
+        }
+    reason = str((result.get("findings") or ["release_binding_unverified"])[0])
+    if current_minute < _WIDGET_ACCEPTANCE_DEADLINE_MINUTE:
+        return {
+            **details,
+            "severity": "warning",
+            "status": "bounded_wait",
+            "reason": reason,
+        }
+    return {
+        **details,
+        "severity": "fail",
+        "status": "release_binding_unverified",
         "reason": reason,
     }
 
