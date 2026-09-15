@@ -1,3 +1,4 @@
+import copy
 import gzip
 import json
 import os
@@ -1887,6 +1888,59 @@ def test_ai_decision_action_outcome_calibration_status_rejects_case_count_drift(
     assert (
         "mechanistic_machine_case_table_contract_invalid" in status["contract_errors"]
     )
+
+
+def test_ai_decision_action_outcome_calibration_status_accepts_incomplete_attempt_exclusion(
+    tmp_path: Path,
+):
+    report = calibration.build_report(target_date="2026-09-14", data_root=tmp_path)
+    case_table = report["hierarchical_entry_quality"]["machine_decision_case_table"]
+    case_table.update(
+        {
+            "status": "evaluable",
+            "input_evaluable_observation_count": 1,
+            "case_count": 1,
+            "duplicate_same_action_collapsed_count": 0,
+            "conflicting_attempt_identity_count": 0,
+            "incomplete_attempt_identity_count": 1,
+            "policy_learning_eligible_observation_count": 0,
+            "machine_action_counts": {"BLOCK": 1},
+            "case_classification_counts": {"source_gap": 1},
+            "hierarchy_selection_counts": {"common": 1},
+            "terminal_lineage_exclusion": {
+                "excluded_case_count": 0,
+                "denominator_preserved": True,
+                "unresolved_terminal_is_not_imputed": True,
+            },
+            "rows": [
+                {
+                    "evaluation_attempt_id": "incomplete-attempt",
+                    "ai_and_final_guard_join_status": "source_gap",
+                    "outcome_horizon_metrics": {
+                        horizon: {"status": "pending_or_source_gap"}
+                        for horizon in ("1m", "3m", "5m", "10m", "20m", "30m", "60m")
+                    },
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                }
+            ],
+        }
+    )
+    handoff = report["optimizer_handoff"]
+    handoff["hierarchical_entry_quality"]["machine_decision_case_table"] = (
+        copy.deepcopy(case_table)
+    )
+    handoff["handoff_content_sha256"] = calibration._canonical_sha256(
+        {key: value for key, value in handoff.items() if key != "handoff_content_sha256"}
+    )
+    report = calibration._with_artifact_content_sha256(report)
+
+    status = mod._ai_decision_action_outcome_calibration_status(report)
+
+    assert status["status"] == "pass"
+    assert status["contract_errors"] == []
 
 
 def test_ai_decision_action_outcome_calibration_status_requires_case_table_at_cutover(
