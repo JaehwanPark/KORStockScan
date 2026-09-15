@@ -350,6 +350,9 @@ from src.engine.scalping.entry_split_order_plan import (
     trip_probe_runtime_circuit,
     update_probe_runtime_bundle,
 )
+from src.engine.scalping.entry_execution_sizing_plan import (
+    compose_entry_execution_sizing_plan,
+)
 from src.engine.scalping.scale_in_split_order_plan import (
     apply_scale_in_split_order_policy,
 )
@@ -43861,6 +43864,13 @@ def _split_order_meta_fields(order: dict | None) -> dict:
         "entry_split_order_probe_continuation": src.get(
             "entry_split_order_probe_continuation"
         ),
+        **{
+            key: value
+            for key, value in src.items()
+            if key.startswith("entry_execution_sizing_")
+            and key != "entry_execution_sizing_plan"
+        },
+        "price_candidate_id": src.get("price_candidate_id"),
         **_entry_price_ai_trace_fields(src),
     }
 
@@ -71716,6 +71726,66 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 **entry_ai_submit_authority,
             },
         )
+        machine_action_receipt = (
+            runtime.get("machine_primary_entry_provenance")
+            or stock.get("last_watching_ai_machine_primary_fields")
+            or {}
+        )
+        if planned_orders:
+            planned_orders, entry_execution_sizing_fields = (
+                compose_entry_execution_sizing_plan(
+                    planned_orders,
+                    expected_total_qty=requested_qty,
+                    action_receipt=machine_action_receipt,
+                    quantity_policy_version=(
+                        stock.get("position_sizing_policy_version")
+                        or latency_gate.get("position_sizing_policy_version")
+                        or "entry_type_5stage_cap25_v1"
+                    ),
+                    split_policy_version=entry_split_fields.get(
+                        "entry_split_order_policy_version"
+                    ),
+                )
+            )
+        else:
+            entry_execution_sizing_fields = {
+                "entry_execution_sizing_plan_schema": (
+                    "entry_execution_sizing_plan_v1"
+                ),
+                "entry_execution_sizing_plan_emitted": False,
+                "entry_execution_sizing_valid": bool(
+                    entry_split_fields.get(
+                        "entry_split_order_probe_capacity_deferred"
+                    )
+                ),
+                "entry_execution_sizing_blockers": (
+                    []
+                    if entry_split_fields.get(
+                        "entry_split_order_probe_capacity_deferred"
+                    )
+                    else ["planned_orders_missing"]
+                ),
+            }
+        entry_split_fields.update(entry_execution_sizing_fields)
+        if not entry_execution_sizing_fields.get("entry_execution_sizing_valid"):
+            clear_signal_reference(stock)
+            _log_entry_pipeline(
+                stock,
+                code,
+                "entry_execution_sizing_plan_block",
+                reason="atomic_entry_execution_sizing_contract_invalid",
+                requested_qty=requested_qty,
+                actual_order_submitted=False,
+                broker_order_forbidden=True,
+                runtime_effect=True,
+                decision_authority="entry_execution_sizing_contract_fail_closed",
+                forbidden_uses=(
+                    "entry_authority|quantity_increase|price_override|"
+                    "broker_guard_bypass|safety_guard_relaxation"
+                ),
+                **entry_execution_sizing_fields,
+            )
+            return False
         planned_orders = _decorate_entry_split_leg_ttls(planned_orders, stock, strategy)
         submit_revalidation_fields.update(entry_split_fields)
         wait_probe_required = bool(
@@ -72069,6 +72139,12 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         "entry_split_order_market_reference_price": submit_revalidation_fields.get(
             "entry_split_order_market_reference_price"
         ),
+        **{
+            key: value
+            for key, value in submit_revalidation_fields.items()
+            if key.startswith("entry_execution_sizing_")
+            and key != "entry_execution_sizing_plan"
+        },
     }
     swing_order_dry_run = _is_swing_live_order_dry_run(strategy)
     broker_order_forbidden_for_request = bool(swing_order_dry_run)

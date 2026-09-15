@@ -4633,6 +4633,9 @@ def build_probe_residual_orders(
                     if resolved_leg_prices is not None
                     else "legacy_probe_offset"
                 ),
+                "price_candidate_id": (
+                    f"probe_residual_resolver:leg{idx + 2}"
+                ),
                 "split_leg_role": "primary" if idx == 0 else "passive",
                 "split_price_offset_ticks": offset_ticks,
                 "split_price_offset_pct": offset_pct if offset_pct is not None else "",
