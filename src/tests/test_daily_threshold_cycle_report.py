@@ -2111,6 +2111,69 @@ def test_entry_price_cancel_receipt_joins_original_order_without_zeroing_outcome
     assert grid["related_identity_ambiguous_event_count"] == 0
 
 
+@pytest.mark.parametrize("reverse", [False, True])
+def test_entry_price_conflicting_fact_quarantines_alternative_aliases(reverse):
+    events = [{"record_id": "R1", "fields": {
+        "order_no": "O1", "entry_price_gap_profile": "normal",
+        "entry_price_gap_profile_bps": 30,
+    }}]
+    rows = [
+        {"record_id": "R1", "order_no": "O1", "profit_rate": 0.2,
+         "completed_economics_source": "trade_performance_fact_exact_receipt"},
+        {"record_id": "R2", "order_no": "O1", "profit_rate": -0.3,
+         "completed_economics_source": "trade_performance_fact_exact_receipt"},
+    ]
+    if reverse:
+        rows.reverse()
+    assert report_mod._entry_price_exact_outcome_rows_by_record(rows) == {}
+    grid = report_mod._entry_price_profile_candidate_grid(events, [], rows, {})
+    metrics = grid["candidate_grid"][0]["metrics"]
+    assert metrics["real_outcome_joined_sample"] == 0
+    assert metrics["source_quality_adjusted_ev_pct"] is None
+    assert metrics["real_outcome_ambiguous_count"] == 1
+    assert metrics["terminal_counts"]["ambiguous_exact_outcome_source_quality"] == 1
+    assert metrics["terminal_conservation_holds"] is True
+
+
+@pytest.mark.parametrize("scenario", ["equal_copies", "two_facts", "shared_fact"])
+def test_entry_price_grid_preserves_unique_outcome_denominator(scenario):
+    events = [{"record_id": "R1", "fields": {
+        "order_no": "O1", "entry_price_gap_profile": "normal",
+        "entry_price_gap_profile_bps": 30,
+    }}]
+    rows = [{"record_id": "R1", "order_no": "O1", "profit_rate": 0.07,
+             "completed_economics_source": "trade_performance_fact_exact_receipt"}]
+    if scenario == "equal_copies":
+        rows.append(dict(rows[0]))
+    elif scenario == "two_facts":
+        # Distinct aliases on one submit cannot introduce two economic samples.
+        rows[0].pop("order_no")
+        rows.append({**rows[0], "record_id": "R2", "order_no": "O1"})
+    else:
+        # Distinct submit keys/profile groups must not reuse one economic fact.
+        events.append({"order_no": "O1", "fields": {
+            "entry_price_gap_profile": "normal", "entry_price_gap_profile_bps": 40,
+        }})
+    grid = report_mod._entry_price_profile_candidate_grid(events, [], rows, {})
+    joined = sum(row["metrics"]["real_outcome_joined_sample"]
+                 for row in grid["candidate_grid"])
+    assert joined == (1 if scenario == "equal_copies" else 0)
+    for row in grid["candidate_grid"]:
+        metrics = row["metrics"]
+        assert 0 <= metrics["real_outcome_join_rate"] <= 1
+        assert metrics["real_outcome_pending_count"] >= 0
+        assert metrics["terminal_conservation_holds"] is True
+        assert metrics["missed_upside"] is None
+    assert grid["selected_candidate"] is None
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf"), True])
+def test_entry_price_fact_index_rejects_nonfinite_or_bool_profit(value):
+    rows = [{"record_id": "R1", "profit_rate": value,
+             "completed_economics_source": "trade_performance_fact_exact_receipt"}]
+    assert report_mod._entry_price_exact_outcome_rows_by_record(rows) == {}
+
+
 def test_entry_price_real_completed_outcome_does_not_become_zero_missed_upside():
     family = report_mod._build_dynamic_entry_price_resolver_family(
         [
@@ -8414,6 +8477,53 @@ def test_dynamic_entry_price_counterfactual_join_diagnostics_breaks_down_reasons
     assert diagnostics["reason_counts"]["candidate_id_mismatch"] == 1
     assert diagnostics["reason_counts"]["not_join_eligible"] == 1
     assert diagnostics["runtime_effect"] is False
+
+
+def test_entry_price_cf_diagnostics_consumes_presubmit_top_level_identity(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(report_mod, "REPORT_DIR", tmp_path)
+    snapshots = tmp_path / "monitor_snapshots"
+    snapshots.mkdir()
+    (snapshots / "missed_entry_counterfactual_2026-09-17.json").write_text(
+        json.dumps({"rows": [{"record_id": "R1"}]}), encoding="utf-8"
+    )
+    diagnostics = report_mod._dynamic_entry_price_counterfactual_join_diagnostics(
+        [
+            {"stage": "entry_execution_sizing_plan", "record_id": "R1",
+             "fields": {"actual_order_submitted": False}},
+            {"stage": "latency_block", "fields": {"candidate_id": "R1"}},
+        ], target_date="2026-09-17",
+    )
+    assert diagnostics["join_eligible_event_count"] == 2
+    assert diagnostics["matched_event_count"] == 1
+    assert diagnostics["events_without_counterfactual"] == 1
+    assert diagnostics["reason_counts"]["candidate_id_mismatch"] == 1
+    assert diagnostics["join_semantics"] == "identity_lineage_diagnostic_only_not_economic_pair"
+    assert diagnostics["runtime_effect"] is False
+    family = report_mod._build_dynamic_entry_price_resolver_family(
+        [{"stage": "latency_block", "fields": {"candidate_id": "R1"}},
+         {"stage": "entry_execution_sizing_plan", "record_id": "R1",
+          "fields": {"actual_order_submitted": False}}],
+        [], target_date="2026-09-17",
+    )
+    forwarded = family["sample"]["counterfactual_join_diagnostics"]
+    assert forwarded["join_eligible_event_count"] == 2
+    assert forwarded["matched_event_count"] == 1
+    assert family["sample"]["entry_price_profile_selected_candidate"] is None
+
+
+def test_entry_price_quality_counts_equal_fact_once_across_submit_aliases():
+    fields = {"actual_order_submitted": True}
+    events = [
+        {"stage": "order_bundle_submitted", "record_id": "R1", "fields": fields},
+        {"stage": "order_leg_request", "order_no": "O1", "fields": fields},
+    ]
+    rows = [{"record_id": "R1", "order_no": "O1", "profit_rate": 0.07,
+             "completed_economics_source": "trade_performance_fact_exact_receipt"}]
+    family = report_mod._build_entry_price_execution_quality_family(events, rows)
+    assert family["sample"]["fill_join_events"] == 1
+    assert family["apply_ready"] is False
 
 
 def test_entry_price_real_outcome_uses_top_level_record_id_before_projected_fields():
