@@ -13196,6 +13196,8 @@ _MACHINE_PRIMARY_LINEAGE_PIPELINE_STAGES = frozenset(
         "entry_submit_revalidation_block",
         "entry_mechanistic_price_contract_block",
         "entry_price_canary_submit_block",
+        "entry_execution_sizing_plan",
+        "entry_execution_sizing_plan_block",
         "pre_submit_price_guard_block",
         "pre_submit_entry_ai_authority_async_pending",
         "pre_submit_entry_ai_authority_guard_block",
@@ -73652,6 +73654,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             **_merge_entry_pipeline_field_groups(
                 real_pre_submit_guard_fields,
                 microstructure_submit_log_fields,
+                entry_split_order_submit_fields,
             ),
             **_order_bundle_failure_provenance(
                 broker_submit_attempt_count,

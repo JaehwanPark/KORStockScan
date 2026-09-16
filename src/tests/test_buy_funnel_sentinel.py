@@ -537,6 +537,215 @@ def test_machine_primary_ai_pass_latency_block_closes_exact_conservation():
     assert result["ai_pass_terminal_conservation"]["final_guard_blocked"] == 1
 
 
+def test_machine_primary_pre_broker_bundle_failure_is_final_guard_not_rejection():
+    from datetime import datetime, timedelta
+
+    start = datetime(2026, 9, 16, 10)
+    common = {
+        "entry_primary_decision_owner": "mechanistic_entry_adjudicator",
+        "evaluation_attempt_id": "eval-pre-broker",
+        "scanner_promotion_id": "promotion-pre-broker",
+        "effective_venue": "KRX",
+        "market_session_bucket": "krx_regular",
+        "policy_bundle_hash": "b" * 64,
+        "entry_mechanistic_action": "ENTER_NOW",
+        "entry_ai_screen_status": "pass",
+    }
+    events = [
+        sentinel.PipelineEvent(
+            start,
+            "ENTRY_PIPELINE",
+            "ai_confirmed",
+            "fixture",
+            "365590",
+            "1",
+            common,
+        ),
+        sentinel.PipelineEvent(
+            start + timedelta(seconds=1),
+            "ENTRY_PIPELINE",
+            "order_bundle_failed",
+            "fixture",
+            "365590",
+            "1",
+            {
+                **common,
+                "broker_submit_attempt_count": "0",
+                "broker_submit_success_response_count": "0",
+                "order_bundle_failure_mode": "pre_broker_blocked",
+            },
+        ),
+    ]
+
+    result = sentinel._machine_primary_entry_funnel(events)
+    row = result["evaluation_ledger"][0]
+    assert row["final_state"] == "final_guard_blocked"
+    assert row["final_guard_blocked"] is True
+    assert row["broker_rejected"] is False
+    assert row["sizing_chain_state"] == "sizing_plan_lineage_gap"
+    assert result["ai_pass_terminal_conservation"]["difference"] == 0
+    assert result["ai_pass_terminal_conservation"]["broker_rejected"] == 0
+
+
+def test_machine_primary_real_broker_attempt_failure_is_broker_rejected():
+    from datetime import datetime, timedelta
+
+    start = datetime(2026, 9, 16, 10)
+    common = {
+        "entry_primary_decision_owner": "mechanistic_entry_adjudicator",
+        "evaluation_attempt_id": "eval-broker-failure",
+        "scanner_promotion_id": "promotion-broker-failure",
+        "effective_venue": "KRX",
+        "market_session_bucket": "krx_regular",
+        "policy_bundle_hash": "b" * 64,
+        "entry_mechanistic_action": "ENTER_NOW",
+        "entry_ai_screen_status": "pass",
+    }
+    events = [
+        sentinel.PipelineEvent(
+            start,
+            "ENTRY_PIPELINE",
+            "ai_confirmed",
+            "fixture",
+            "005930",
+            "1",
+            common,
+        ),
+        sentinel.PipelineEvent(
+            start + timedelta(seconds=1),
+            "ENTRY_PIPELINE",
+            "order_bundle_failed",
+            "fixture",
+            "005930",
+            "1",
+            {
+                **common,
+                "broker_submit_attempt_count": "1",
+                "broker_submit_success_response_count": "0",
+                "order_bundle_failure_mode": ("broker_submit_failed_or_unacknowledged"),
+            },
+        ),
+    ]
+
+    result = sentinel._machine_primary_entry_funnel(events)
+    row = result["evaluation_ledger"][0]
+    assert row["final_state"] == "broker_rejected"
+    assert row["broker_rejected"] is True
+    assert row["final_guard_blocked"] is False
+    assert result["ai_pass_terminal_conservation"]["difference"] == 0
+
+
+def test_machine_primary_projects_atomic_price_quantity_plan_and_conserves():
+    from datetime import datetime, timedelta
+
+    start = datetime(2026, 9, 16, 10)
+    common = {
+        "entry_primary_decision_owner": "mechanistic_entry_adjudicator",
+        "evaluation_attempt_id": "eval-plan",
+        "scanner_promotion_id": "promotion-plan",
+        "effective_venue": "KRX",
+        "market_session_bucket": "krx_regular",
+        "policy_bundle_hash": "b" * 64,
+        "entry_mechanistic_action": "ENTER_NOW",
+        "entry_ai_screen_status": "pass",
+    }
+    plan = {
+        "schema_version": "entry_execution_sizing_plan_v1",
+        "quantity_policy_owner": "position_sizing_dynamic_formula",
+        "quantity_policy_version": "entry_type_5stage_cap25_v1",
+        "split_policy_version": "entry_split_order_plan:2026-09-15:test",
+        "price_policy_owner": "mechanistic_entry_price_resolver",
+        "price_plan_id": "entry-price-test",
+        "price_plan_sha256": "c" * 64,
+        "price_source_receipt_sha256": "d" * 64,
+        "execution_sizing_policy": "execution_sizing_baseline_v1",
+        "execution_sizing_policy_status": "disabled_baseline",
+        "migration_baseline": True,
+        "total_qty": 56,
+        "immediate_qty": 56,
+        "deferred_probe_residual_qty": 0,
+        "leg_count": 1,
+        "legs": [{"leg_index": 1, "qty": 56, "numeric_price": 1964}],
+        "price_candidates": [{"numeric_price": 1964, "order_type_code": "00"}],
+        "quantity_conservation_holds": True,
+        "valid": True,
+        "blockers": [],
+    }
+    events = [
+        sentinel.PipelineEvent(
+            start,
+            "ENTRY_PIPELINE",
+            "ai_confirmed",
+            "fixture",
+            "365590",
+            "1",
+            common,
+        ),
+        sentinel.PipelineEvent(
+            start + timedelta(seconds=1),
+            "ENTRY_PIPELINE",
+            "entry_execution_sizing_plan",
+            "fixture",
+            "365590",
+            "1",
+            {
+                **common,
+                "entry_execution_sizing_plan_id": "entry-sizing-test",
+                "entry_execution_sizing_plan_sha256": "e" * 64,
+                "entry_execution_sizing_valid": "True",
+                "entry_execution_sizing_blockers": "[]",
+                "entry_execution_sizing_plan": repr(plan),
+            },
+        ),
+        sentinel.PipelineEvent(
+            start + timedelta(seconds=2),
+            "ENTRY_PIPELINE",
+            "order_bundle_failed",
+            "fixture",
+            "365590",
+            "1",
+            {
+                **common,
+                "entry_execution_sizing_plan_id": "entry-sizing-test",
+                "entry_execution_sizing_plan_sha256": "e" * 64,
+                "entry_execution_sizing_valid": "True",
+                "broker_submit_attempt_count": "0",
+                "broker_submit_success_response_count": "0",
+                "order_bundle_failure_mode": "pre_broker_blocked",
+            },
+        ),
+    ]
+
+    result = sentinel._machine_primary_entry_funnel(events)
+    row = result["evaluation_ledger"][0]
+    projection = row["entry_execution_sizing_plan"]
+    assert projection["status"] == "valid"
+    assert projection["plan_id"] == "entry-sizing-test"
+    assert projection["price"]["owner"] == "mechanistic_entry_price_resolver"
+    assert projection["price"]["numeric_prices"] == [1964]
+    assert projection["event_stage"] == "entry_execution_sizing_plan"
+    assert projection["quantity"]["total_qty"] == 56
+    assert projection["quantity"]["leg_qty_sum"] == 56
+    assert projection["quantity"]["conservation_holds"] is True
+    assert row["sizing_chain_state"] == "sizing_plan_valid"
+    assert row["sizing_plan_terminal_state"] == ("post_sizing_final_guard_blocked")
+    assert result["ai_pass_sizing_conservation"]["difference"] == 0
+    assert result["sizing_plan_terminal_conservation"]["difference"] == 0
+
+
+def test_atomic_price_quantity_plan_stage_is_kept_in_sentinel_cache():
+    payload = _event(
+        "2026-09-16",
+        "10:00:00",
+        "entry_execution_sizing_plan",
+        fields={"entry_execution_sizing_plan_id": "entry-sizing-test"},
+    )
+
+    row = sentinel._payload_to_cache_row(payload)
+    assert row is not None
+    assert row["stage"] == "entry_execution_sizing_plan"
+
+
 def test_machine_primary_superseded_pass_is_explicit_lineage_gap():
     from datetime import datetime, timedelta
 

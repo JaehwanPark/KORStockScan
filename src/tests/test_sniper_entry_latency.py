@@ -1706,6 +1706,66 @@ def test_risky_micro_registration_exception_does_not_drop_candidate_event(monkey
     assert event_fields["runtime_effect"] is False
 
 
+def test_atomic_entry_sizing_stage_preserves_machine_primary_identity(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(
+        state_handlers,
+        "emit_pipeline_event",
+        lambda _pipeline, _name, _code, stage, **kwargs: emitted.append(
+            (stage, kwargs["fields"])
+        ),
+    )
+    monkeypatch.setattr(
+        state_handlers, "_remember_scanner_terminal_block", lambda *_args: None
+    )
+    monkeypatch.setattr(
+        state_handlers, "observe_candidate_transition_safe", lambda *_args: None
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_maybe_register_rising_missed_nxt_downstream_block_sampler",
+        lambda *_args: None,
+    )
+    monkeypatch.setattr(
+        state_handlers, "pipeline_lifecycle_fields_safe", lambda *_a, **_k: {}
+    )
+    primary = {
+        "entry_primary_decision_owner": "mechanistic_entry_adjudicator",
+        "entry_mechanistic_action": "ENTER_NOW",
+        "entry_ai_screen_status": "pass",
+        "evaluation_attempt_id": "eval-sizing",
+        "scanner_promotion_id": "promotion-sizing",
+        "policy_bundle_hash": "b" * 64,
+        "effective_venue": "KRX",
+        "market_session_bucket": "krx_regular",
+    }
+    stock = {
+        "id": 17,
+        "name": "TEST",
+        "code": "005930",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "last_watching_ai_machine_primary_fields": primary,
+    }
+
+    state_handlers._log_entry_pipeline(
+        stock,
+        "005930",
+        "entry_execution_sizing_plan",
+        entry_execution_sizing_plan_id="entry-sizing-test",
+        entry_execution_sizing_valid=True,
+    )
+
+    assert len(emitted) == 1
+    stage, fields = emitted[0]
+    assert stage == "entry_execution_sizing_plan"
+    assert fields["entry_primary_decision_owner"] == ("mechanistic_entry_adjudicator")
+    assert fields["evaluation_attempt_id"] == "eval-sizing"
+    assert fields["scanner_promotion_id"] == "promotion-sizing"
+    assert fields["policy_bundle_hash"] == "b" * 64
+    assert fields["entry_execution_sizing_plan_id"] == "entry-sizing-test"
+
+
 def test_scanner_fast_precheck_never_hydrates_promotion_runtime_context(monkeypatch):
     hydrated = []
     stock = {

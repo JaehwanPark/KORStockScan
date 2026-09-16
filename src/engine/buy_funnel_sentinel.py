@@ -8,6 +8,7 @@ strategy thresholds.
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 from collections import Counter, defaultdict
 from dataclasses import dataclass
@@ -42,6 +43,8 @@ ENTRY_STAGES = {
     "entry_armed",
     "budget_pass",
     "latency_pass",
+    "entry_execution_sizing_plan",
+    "entry_execution_sizing_plan_block",
     "order_bundle_submitted",
 }
 HOLDING_STAGES = {"holding_started"}
@@ -158,6 +161,9 @@ MACHINE_PRIMARY_AI_SCREEN_STATUSES = frozenset(
         "not_requested_machine_nonentry",
         "not_requested_machine_source_invalid",
     }
+)
+ENTRY_EXECUTION_SIZING_STAGES = frozenset(
+    {"entry_execution_sizing_plan", "entry_execution_sizing_plan_block"}
 )
 EXACT_SUBMIT_FUNNEL_STAGES = {
     "ai_confirmed",
@@ -2343,6 +2349,191 @@ def _is_machine_primary_event(event: PipelineEvent) -> bool:
     )
 
 
+def _safe_structured_value(value: Any) -> dict[str, Any] | list[Any] | None:
+    """Decode a serialized receipt without evaluating executable content."""
+
+    if isinstance(value, (dict, list)):
+        return value
+    text = _safe_str(value)
+    if not text:
+        return None
+    for decoder in (json.loads, ast.literal_eval):
+        try:
+            decoded = decoder(text)
+        except (ValueError, SyntaxError, TypeError, json.JSONDecodeError):
+            continue
+        if isinstance(decoded, (dict, list)):
+            return decoded
+    return None
+
+
+def _safe_int_or_none(value: Any) -> int | None:
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _entry_execution_sizing_projection(
+    rows: list[PipelineEvent],
+) -> dict[str, Any]:
+    plan_rows = [
+        row
+        for row in rows
+        if row.stage in ENTRY_EXECUTION_SIZING_STAGES
+        or _safe_str(row.fields.get("entry_execution_sizing_plan_id"))
+    ]
+    if not plan_rows:
+        return {
+            "status": "missing",
+            "plan_present": False,
+            "valid": None,
+            "blockers": [],
+        }
+
+    explicit_plan_rows = [
+        row for row in plan_rows if row.stage in ENTRY_EXECUTION_SIZING_STAGES
+    ]
+    source = max(explicit_plan_rows or plan_rows, key=lambda row: row.emitted_at)
+    fields = source.fields
+    plan_value = _safe_structured_value(fields.get("entry_execution_sizing_plan"))
+    plan = plan_value if isinstance(plan_value, dict) else {}
+    price_value = _safe_structured_value(fields.get("entry_price_plan"))
+    price_plan = price_value if isinstance(price_value, dict) else {}
+    blocker_value = _safe_structured_value(
+        fields.get("entry_execution_sizing_blockers")
+    )
+    blockers = (
+        [str(item) for item in blocker_value]
+        if isinstance(blocker_value, list)
+        else [str(item) for item in plan.get("blockers") or []]
+    )
+    valid_text = _safe_str(fields.get("entry_execution_sizing_valid")).lower()
+    valid = (
+        valid_text in {"1", "true", "yes", "on"}
+        if valid_text
+        else plan.get("valid") is True
+    )
+    legs_value = plan.get("legs")
+    legs = legs_value if isinstance(legs_value, list) else []
+    leg_quantities = [
+        qty
+        for item in legs
+        if isinstance(item, dict)
+        and (qty := _safe_int_or_none(item.get("qty"))) is not None
+    ]
+    candidates_value = price_plan.get("price_candidates") or plan.get(
+        "price_candidates"
+    )
+    candidates = candidates_value if isinstance(candidates_value, list) else []
+    numeric_prices = [
+        price
+        for item in candidates
+        if isinstance(item, dict)
+        and (price := _safe_int_or_none(item.get("numeric_price"))) is not None
+    ]
+    order_type_codes = sorted(
+        {
+            _safe_str(item.get("order_type_code"))
+            for item in candidates
+            if isinstance(item, dict) and _safe_str(item.get("order_type_code"))
+        }
+    )
+    total_qty = _safe_int_or_none(
+        fields.get("entry_execution_sizing_total_qty", plan.get("total_qty"))
+    )
+    immediate_qty = _safe_int_or_none(
+        fields.get("entry_execution_sizing_immediate_qty", plan.get("immediate_qty"))
+    )
+    deferred_qty = _safe_int_or_none(
+        fields.get(
+            "entry_execution_sizing_deferred_qty",
+            plan.get("deferred_probe_residual_qty"),
+        )
+    )
+    leg_count = _safe_int_or_none(
+        fields.get("entry_execution_sizing_leg_count", plan.get("leg_count"))
+    )
+    conservation_text = _safe_str(
+        fields.get("entry_execution_sizing_quantity_conservation_holds")
+    ).lower()
+    quantity_conservation_holds = (
+        conservation_text in {"1", "true", "yes", "on"}
+        if conservation_text
+        else plan.get("quantity_conservation_holds")
+    )
+    return {
+        "status": "valid" if valid else "invalid",
+        "plan_present": True,
+        "event_stage": source.stage,
+        "emitted_at": source.emitted_at.isoformat(),
+        "schema": _safe_str(
+            fields.get("entry_execution_sizing_plan_schema", plan.get("schema_version"))
+        ),
+        "plan_id": _safe_str(fields.get("entry_execution_sizing_plan_id")),
+        "plan_sha256": _safe_str(fields.get("entry_execution_sizing_plan_sha256")),
+        "execution_policy": _safe_str(
+            fields.get(
+                "entry_execution_sizing_policy",
+                plan.get("execution_sizing_policy"),
+            )
+        ),
+        "execution_policy_status": _safe_str(
+            fields.get(
+                "entry_execution_sizing_policy_status",
+                plan.get("execution_sizing_policy_status"),
+            )
+        ),
+        "migration_baseline": (
+            _is_truthy_text(fields.get("entry_execution_sizing_migration_baseline"))
+            if _safe_str(fields.get("entry_execution_sizing_migration_baseline"))
+            else plan.get("migration_baseline")
+        ),
+        "valid": valid,
+        "blockers": blockers,
+        "price": {
+            "owner": _safe_str(
+                fields.get("entry_price_plan_owner", plan.get("price_policy_owner"))
+            ),
+            "plan_id": _safe_str(
+                fields.get("entry_price_plan_id", plan.get("price_plan_id"))
+            ),
+            "plan_sha256": _safe_str(
+                fields.get("entry_price_plan_sha256", plan.get("price_plan_sha256"))
+            ),
+            "source_receipt_sha256": _safe_str(
+                fields.get(
+                    "entry_price_source_receipt_sha256",
+                    plan.get("price_source_receipt_sha256"),
+                )
+            ),
+            "numeric_prices": numeric_prices,
+            "order_type_codes": order_type_codes,
+        },
+        "quantity": {
+            "owner": _safe_str(plan.get("quantity_policy_owner")),
+            "policy_version": _safe_str(
+                fields.get(
+                    "entry_execution_sizing_quantity_policy_version",
+                    plan.get("quantity_policy_version"),
+                )
+            ),
+            "split_policy_version": _safe_str(
+                fields.get(
+                    "entry_execution_sizing_split_policy_version",
+                    plan.get("split_policy_version"),
+                )
+            ),
+            "total_qty": total_qty,
+            "immediate_qty": immediate_qty,
+            "deferred_qty": deferred_qty,
+            "leg_count": leg_count,
+            "leg_qty_sum": sum(leg_quantities) if leg_quantities else None,
+            "conservation_holds": quantity_conservation_holds,
+        },
+    }
+
+
 def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]:
     """Diagnostic machine -> AI screen -> submit funnel with explicit identity.
 
@@ -2385,6 +2576,7 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
     recovered_downstream_by_key: dict[str, list[str]] = defaultdict(list)
     recoverable_downstream_stages = (
         {"order_bundle_submitted", "latency_block"}
+        | ENTRY_EXECUTION_SIZING_STAGES
         | BLOCKER_STAGES
         | BROKER_SUBMIT_FAILURE_STAGES
     )
@@ -2497,18 +2689,32 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
                 )
             )
         ]
+        broker_failure_rows = [
+            row for row in rows if row.stage in BROKER_SUBMIT_FAILURE_STAGES
+        ]
+        invalid_broker_failure_rows = [
+            row
+            for row in broker_failure_rows
+            if _submit_drought_axis_for_event(row) is None
+        ]
+        if invalid_broker_failure_rows:
+            conflict_reasons.append("broker_failure_contract_invalid")
         final_guard_block_rows = [
             row
             for row in rows
-            if row.stage in (
-                BLOCKER_STAGES
-                - BROKER_SUBMIT_FAILURE_STAGES
-                - {"blocked_ai_score"}
-            )
+            if row.stage
+            in (BLOCKER_STAGES - BROKER_SUBMIT_FAILURE_STAGES - {"blocked_ai_score"})
+        ] + [
+            row
+            for row in broker_failure_rows
+            if _submit_drought_axis_for_event(row) == "UPSTREAM_GATE"
         ]
         broker_rejected_rows = [
-            row for row in rows if row.stage in BROKER_SUBMIT_FAILURE_STAGES
+            row
+            for row in broker_failure_rows
+            if _submit_drought_axis_for_event(row) == "BROKER_RECEIPT"
         ]
+        sizing_projection = _entry_execution_sizing_projection(rows)
         if conflict_reasons:
             final_state = "identity_or_contract_gap"
         elif action == "BLOCK":
@@ -2542,6 +2748,32 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
                 final_state = "pending"
         else:
             final_state = "unknown"
+        if screen != "pass":
+            sizing_chain_state = "not_applicable_ai_nonpass"
+        elif sizing_projection["status"] == "invalid":
+            sizing_chain_state = "sizing_plan_invalid"
+        elif sizing_projection["status"] == "valid":
+            sizing_chain_state = "sizing_plan_valid"
+        elif final_state == "final_guard_blocked" and not broker_failure_rows:
+            sizing_chain_state = "pre_sizing_guard_blocked"
+        elif final_state in {
+            "submit_pipeline_reached",
+            "broker_rejected",
+            "final_guard_blocked",
+        }:
+            sizing_chain_state = "sizing_plan_lineage_gap"
+        else:
+            sizing_chain_state = "lineage_pending_before_sizing"
+        if sizing_chain_state != "sizing_plan_valid":
+            sizing_plan_terminal_state = "not_applicable"
+        elif final_state == "submit_pipeline_reached":
+            sizing_plan_terminal_state = "submitted"
+        elif final_state == "final_guard_blocked":
+            sizing_plan_terminal_state = "post_sizing_final_guard_blocked"
+        elif final_state == "broker_rejected":
+            sizing_plan_terminal_state = "broker_rejected"
+        else:
+            sizing_plan_terminal_state = "lineage_pending_after_sizing"
         row = {
             "evaluation_key": key,
             "first_evaluated_at": rows[0].emitted_at.isoformat(),
@@ -2557,6 +2789,9 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
             "final_guard_blocked": bool(final_guard_block_rows),
             "broker_rejected": bool(broker_rejected_rows),
             "final_state": final_state,
+            "entry_execution_sizing_plan": sizing_projection,
+            "sizing_chain_state": sizing_chain_state,
+            "sizing_plan_terminal_state": sizing_plan_terminal_state,
             "conflict_reasons": conflict_reasons,
             "recovered_downstream_lineage_stages": sorted(
                 recovered_downstream_by_key.get(key, [])
@@ -2591,6 +2826,13 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
         row["final_state"] == "lineage_gap_superseded_without_terminal"
         for row in ai_pass_rows
     )
+    sizing_chain_counts = Counter(row["sizing_chain_state"] for row in ai_pass_rows)
+    sizing_terminal_counts = Counter(
+        row["sizing_plan_terminal_state"]
+        for row in ai_pass_rows
+        if row["sizing_chain_state"] == "sizing_plan_valid"
+    )
+    sizing_valid = sizing_chain_counts["sizing_plan_valid"]
     return {
         "schema": "machine_primary_entry_funnel_v1",
         "metric_role": "funnel_count",
@@ -2626,6 +2868,38 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
             - ai_pass_broker_rejected
             - ai_pass_lineage_gap
             - ai_pass_pending,
+        },
+        "ai_pass_sizing_conservation": {
+            "ai_pass": ai_pass,
+            "pre_sizing_guard_blocked": sizing_chain_counts["pre_sizing_guard_blocked"],
+            "sizing_plan_invalid": sizing_chain_counts["sizing_plan_invalid"],
+            "sizing_plan_valid": sizing_valid,
+            "sizing_plan_lineage_gap": sizing_chain_counts["sizing_plan_lineage_gap"],
+            "lineage_pending_before_sizing": sizing_chain_counts[
+                "lineage_pending_before_sizing"
+            ],
+            "difference": ai_pass
+            - sizing_chain_counts["pre_sizing_guard_blocked"]
+            - sizing_chain_counts["sizing_plan_invalid"]
+            - sizing_valid
+            - sizing_chain_counts["sizing_plan_lineage_gap"]
+            - sizing_chain_counts["lineage_pending_before_sizing"],
+        },
+        "sizing_plan_terminal_conservation": {
+            "sizing_plan_valid": sizing_valid,
+            "submitted": sizing_terminal_counts["submitted"],
+            "post_sizing_final_guard_blocked": sizing_terminal_counts[
+                "post_sizing_final_guard_blocked"
+            ],
+            "broker_rejected": sizing_terminal_counts["broker_rejected"],
+            "lineage_pending_after_sizing": sizing_terminal_counts[
+                "lineage_pending_after_sizing"
+            ],
+            "difference": sizing_valid
+            - sizing_terminal_counts["submitted"]
+            - sizing_terminal_counts["post_sizing_final_guard_blocked"]
+            - sizing_terminal_counts["broker_rejected"]
+            - sizing_terminal_counts["lineage_pending_after_sizing"],
         },
         "submit_pipeline_reached_count": sum(
             row["submit_pipeline_reached"] for row in valid_rows
