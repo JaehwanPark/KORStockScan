@@ -40,6 +40,7 @@ ATOMIC_EXECUTION_SIZING_SCHEMA = "entry_execution_sizing_plan_v1"
 ATOMIC_EXECUTION_SIZING_BASELINE_POLICY = "execution_sizing_baseline_v1"
 ATOMIC_PRICE_PLAN_SCHEMA = "entry_price_plan_v1"
 QUANTITY_LEG_FOUR_ARM_SCHEMA = "entry_quantity_leg_four_arm_evaluation_v1"
+QUANTITY_LEG_SELECTION_CONTRACT = "quantity_leg_chronological_paired_v2"
 QUANTITY_LEG_FOUR_ARM_IDS = (
     "incumbent_qty_x_incumbent_leg",
     "candidate_qty_x_incumbent_leg",
@@ -3689,6 +3690,119 @@ def _policy_payload(
     }
 
 
+def quantity_leg_promotion_evidence_valid(evaluation: object) -> bool:
+    """Recheck new four-arm selection evidence, not its claimed passed flag."""
+    if not isinstance(evaluation, dict):
+        return False
+    try:
+        if evaluation.get("selection_contract") != QUANTITY_LEG_SELECTION_CONTRACT:
+            return False
+        if evaluation.get("schema") != QUANTITY_LEG_FOUR_ARM_SCHEMA:
+            return False
+        count = evaluation["complete_exact_attempt_count"]
+        denominator = evaluation["eligible_attempt_count"]
+        hashes = evaluation["validated_source_receipt_sha256s"]
+        if (
+            type(count) is not int or count < QUANTITY_LEG_FOUR_ARM_MIN_COMPLETE_ATTEMPTS
+            or type(denominator) is not int or denominator < count
+            or not isinstance(hashes, list) or len(hashes) != count
+            or len(set(hashes)) != count
+            or not all(re.fullmatch(r"[0-9a-f]{64}", value) for value in hashes)
+            or isinstance(evaluation["exact_attempt_join_coverage"], bool)
+            or not math.isclose(evaluation["exact_attempt_join_coverage"], count / denominator)
+            or count / denominator < QUANTITY_LEG_FOUR_ARM_MIN_JOIN_COVERAGE
+        ):
+            return False
+        partitions = evaluation["chronological_partitions"]
+        calibration, holdout = partitions["calibration"], partitions["holdout"]
+        partition_hashes = (calibration["validated_source_receipt_sha256s"]
+                            + holdout["validated_source_receipt_sha256s"])
+        if sorted(partition_hashes) != sorted(hashes) or len(set(partition_hashes)) != count:
+            return False
+        cal_dates, hold_dates = calibration["source_dates"], holdout["source_dates"]
+        if (
+            not cal_dates or len(hold_dates) != 1
+            or cal_dates != sorted(set(cal_dates))
+            or max(cal_dates) >= hold_dates[0]
+            or any(date.fromisoformat(day).isoformat() != day or day < "2026-06-05"
+                   or day > date.today().isoformat()
+                   for day in cal_dates + hold_dates)
+            or any(type(p["complete_exact_attempt_count"]) is not int
+                   or p["complete_exact_attempt_count"] <= 0
+                   for p in (calibration, holdout))
+            or calibration["complete_exact_attempt_count"]
+            + holdout["complete_exact_attempt_count"] != count
+        ):
+            return False
+        comparisons = {
+            "cost_adjusted_net_ev_pct": lambda c, i: c > 0 and c > i,
+            "net_pnl_krw": lambda c, i: c > i,
+            "positive_terminal_frequency": lambda c, i: 0 <= i <= c <= 1,
+            "net_profit_per_capital_minute_pct": lambda c, i: c >= i and c > 0,
+            "downside_p10_net_pct": lambda c, i: c >= i,
+            "expected_shortfall_10pct": lambda c, i: c >= i,
+            "fill_participation_rate": lambda c, i: 0 <= c <= 1 and 0 <= i <= 1 and c >= i - 0.05,
+        }
+        for sample in (evaluation, calibration, holdout):
+            arms = sample["arms"]
+            if set(arms) != set(QUANTITY_LEG_FOUR_ARM_IDS):
+                return False
+            for arm in arms.values():
+                if (type(arm["paired_sample_count"]) is not int
+                    or arm["paired_sample_count"] != sample["complete_exact_attempt_count"]):
+                    return False
+                for field in comparisons:
+                    value = arm[field]
+                    if isinstance(value, bool) or not math.isfinite(float(value)):
+                        return False
+                if any(not 0 <= arm[field] <= 1 for field in
+                       ("positive_terminal_frequency", "fill_participation_rate")):
+                    return False
+            if len(sample.get("validated_source_receipt_sha256s", [])) != sample["complete_exact_attempt_count"]:
+                return False
+            control, challenger = arms[QUANTITY_LEG_FOUR_ARM_IDS[0]], arms[QUANTITY_LEG_FOUR_ARM_IDS[-1]]
+            if any(not predicate(challenger[field], control[field])
+                   for field, predicate in comparisons.items()):
+                return False
+        if evaluation["arms"][QUANTITY_LEG_FOUR_ARM_IDS[-1]]["cost_adjusted_net_ev_pct"] < 0.10:
+            return False
+        for arm_id in QUANTITY_LEG_FOUR_ARM_IDS:
+            whole = evaluation["arms"][arm_id]
+            cal, held = calibration["arms"][arm_id], holdout["arms"][arm_id]
+            for field in ("cost_adjusted_net_ev_pct", "positive_terminal_frequency", "fill_participation_rate"):
+                weighted = (cal[field] * calibration["complete_exact_attempt_count"]
+                            + held[field] * holdout["complete_exact_attempt_count"]) / count
+                if not math.isclose(whole[field], weighted, abs_tol=1e-9):
+                    return False
+            if not math.isclose(whole["net_pnl_krw"], cal["net_pnl_krw"] + held["net_pnl_krw"], abs_tol=1e-9):
+                return False
+        gate = evaluation["promotion_gate"]
+        return bool(gate.get("passed") is True and not gate.get("blockers")
+                    and gate.get("chronological_holdout_required") is True
+                    and gate.get("minimum_candidate_cost_adjusted_net_ev_pct") == 0.10)
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return False
+
+
+def quantity_leg_policy_selection_evidence_valid(policy: dict[str, Any]) -> bool:
+    """Preserve frozen legacy policies; validate newly published selection proof."""
+    evidence = policy.get("quantity_leg_selection_evidence")
+    if str(policy.get("source_date") or "") < "2026-09-17" and not evidence:
+        return True
+    if not quantity_leg_promotion_evidence_valid(evidence):
+        return False
+    identity = evidence.get("paired_policy_identity")
+    return bool(
+        isinstance(identity, dict)
+        and identity == policy.get("paired_policy_identity")
+        and identity.get("candidate_leg_policy_version") == policy.get("split_policy_version")
+        and policy.get("selected_arm") == QUANTITY_LEG_FOUR_ARM_IDS[-1]
+        and policy.get("promotion_gate") == evidence.get("promotion_gate")
+        and evidence["chronological_partitions"]["holdout"]["source_dates"][-1]
+        <= str(policy.get("source_date") or "")
+    )
+
+
 def build_quantity_leg_four_arm_evaluation(
     events: list[dict[str, Any]],
 ) -> dict[str, Any]:
@@ -3764,6 +3878,22 @@ def build_quantity_leg_four_arm_evaluation(
         if receipt.get("receipt_sha256") != expected_receipt_sha256:
             excluded["immutable_receipt_hash_invalid"] += 1
             continue
+        signed_date = str(receipt.get("source_date") or "").strip()
+        if signed_date:
+            try:
+                parsed_date = date.fromisoformat(signed_date)
+                valid_date = (
+                    parsed_date.isoformat() == signed_date
+                    and signed_date >= "2026-06-05"
+                    and parsed_date <= date.today()
+                    and source_date in {"undated", signed_date}
+                )
+            except ValueError:
+                valid_date = False
+            if not valid_date:
+                excluded["source_date_contract_invalid"] += 1
+                continue
+            source_date = signed_date
         if declared_eligible > 0:
             declared_eligible_by_source[source_date].add(declared_eligible)
         previous_hash = receipt_hashes.get(identity)
@@ -3833,6 +3963,19 @@ def build_quantity_leg_four_arm_evaluation(
             ):
                 arm_contract_valid = False
                 break
+            try:
+                terminal_at = datetime.fromisoformat(arm_shared_contract[-1])
+                terminal_time_valid = (
+                    terminal_at.utcoffset() is not None
+                    and terminal_at <= datetime.now(timezone.utc)
+                    and (not signed_date or terminal_at.astimezone(
+                        timezone(timedelta(hours=9))).date().isoformat() >= signed_date)
+                )
+            except (TypeError, ValueError, OverflowError):
+                terminal_time_valid = False
+            if not terminal_time_valid:
+                arm_contract_valid = False
+                break
             if shared_contract is None:
                 shared_contract = arm_shared_contract
             elif arm_shared_contract != shared_contract:
@@ -3855,6 +3998,8 @@ def build_quantity_leg_four_arm_evaluation(
                 "source_date": source_date,
                 "arms": arms,
                 "policy_identity": policy_identity,
+                "signed_source_date": signed_date or None,
+                "receipt_sha256": expected_receipt_sha256,
             }
         )
 
@@ -3872,9 +4017,8 @@ def build_quantity_leg_four_arm_evaluation(
             excluded["paired_policy_identity_conflict"] += len(complete)
         complete = []
 
-    metrics: dict[str, dict[str, Any]] = {}
-    for arm_id in QUANTITY_LEG_FOUR_ARM_IDS:
-        rows = [item["arms"][arm_id] for item in complete]
+    def arm_metrics(items: list[dict[str, Any]], arm_id: str) -> dict[str, Any]:
+        rows = [item["arms"][arm_id] for item in items]
         net_returns = [float(row["net_return_pct"]) for row in rows]
         net_pnls = [float(row["net_pnl_krw"]) for row in rows]
         capital_krw_minutes = [float(row["capital_krw_minutes"]) for row in rows]
@@ -3884,7 +4028,7 @@ def build_quantity_leg_four_arm_evaluation(
         expected_shortfall = (
             mean(sorted(net_returns)[:worst_count]) if worst_count else None
         )
-        metrics[arm_id] = {
+        return {
             "paired_sample_count": len(rows),
             "cost_adjusted_net_ev_pct": mean(net_returns) if net_returns else None,
             "net_pnl_krw": sum(net_pnls) if net_pnls else None,
@@ -3901,6 +4045,27 @@ def build_quantity_leg_four_arm_evaluation(
             "downside_p10_net_pct": p10,
             "expected_shortfall_10pct": expected_shortfall,
             "fill_participation_rate": mean(fill) if fill else None,
+        }
+    metrics = {arm: arm_metrics(complete, arm) for arm in QUANTITY_LEG_FOUR_ARM_IDS}
+    source_dates = sorted({item["signed_source_date"] for item in complete
+                           if item["signed_source_date"]})
+    chronology_proven = bool(
+        len(source_dates) >= 2
+        and all(item["signed_source_date"] for item in complete)
+    )
+    latest_date = source_dates[-1] if chronology_proven else None
+    partitions = {}
+    for name, items in (
+        ("calibration", [item for item in complete
+                         if chronology_proven and item["signed_source_date"] < latest_date]),
+        ("holdout", [item for item in complete
+                     if chronology_proven and item["signed_source_date"] == latest_date]),
+    ):
+        partitions[name] = {
+            "source_dates": sorted({item["signed_source_date"] for item in items}),
+            "complete_exact_attempt_count": len(items),
+            "validated_source_receipt_sha256s": sorted(item["receipt_sha256"] for item in items),
+            "arms": {arm: arm_metrics(items, arm) for arm in QUANTITY_LEG_FOUR_ARM_IDS},
         }
     incumbent = metrics[QUANTITY_LEG_FOUR_ARM_IDS[0]]
     candidate = metrics[QUANTITY_LEG_FOUR_ARM_IDS[-1]]
@@ -3931,6 +4096,8 @@ def build_quantity_leg_four_arm_evaluation(
         blockers.append("paired_sample_floor")
     if coverage is None or coverage < QUANTITY_LEG_FOUR_ARM_MIN_JOIN_COVERAGE:
         blockers.append("exact_attempt_join_coverage")
+    if not chronology_proven:
+        blockers.append("independent_chronological_source_dates_unproven")
     comparisons = (
         ("cost_adjusted_net_ev_pct", lambda c, i: c >= 0.10 and c > i),
         ("net_pnl_krw", lambda c, i: c > i),
@@ -3946,9 +4113,26 @@ def build_quantity_leg_four_arm_evaluation(
             i_value = incumbent.get(field)
             if c_value is None or i_value is None or not predicate(c_value, i_value):
                 blockers.append(field)
+    if chronology_proven:
+        for name, partition in partitions.items():
+            control = partition["arms"][QUANTITY_LEG_FOUR_ARM_IDS[0]]
+            challenger = partition["arms"][QUANTITY_LEG_FOUR_ARM_IDS[-1]]
+            for field, predicate in comparisons:
+                c_value, i_value = challenger.get(field), control.get(field)
+                passed = (
+                    c_value is not None and i_value is not None
+                    and (c_value > 0 and c_value > i_value
+                         if field == "cost_adjusted_net_ev_pct"
+                         else predicate(c_value, i_value))
+                )
+                if not passed:
+                    blockers.append(f"{name}:{field}")
     promotion_pass = not blockers
     return {
         "schema": QUANTITY_LEG_FOUR_ARM_SCHEMA,
+        "selection_contract": QUANTITY_LEG_SELECTION_CONTRACT,
+        "validated_source_receipt_sha256s": sorted(item["receipt_sha256"] for item in complete),
+        "chronological_partitions": partitions,
         "status": "promotion_pass" if promotion_pass else "evidence_pending_or_blocked",
         "source_receipt_count": len(receipts),
         "eligible_attempt_count": eligible_attempt_count,
@@ -4006,6 +4190,7 @@ def build_quantity_leg_four_arm_evaluation(
             "minimum_candidate_cost_adjusted_net_ev_pct": 0.10,
             "maximum_fill_participation_decline": 0.05,
             "same_paired_population_required": True,
+            "chronological_holdout_required": True,
             "same_entry_price_exit_cost_terminal_contract_required": True,
             "cost_complete_required": True,
             "terminal_conservation_required": True,

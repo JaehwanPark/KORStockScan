@@ -149,6 +149,10 @@ def runtime_entry_execution_sizing_policy(
         or policy.get("quantity_conservation_required") is not True
     ):
         return None, "policy_authority_invalid"
+    from src.engine.scalping.entry_split_order_plan import quantity_leg_policy_selection_evidence_valid
+
+    if not quantity_leg_policy_selection_evidence_valid(policy):
+        return None, "selection_evidence_invalid"
     for path_key, sha_key in (
         ("quantity_policy_file", "quantity_policy_sha256"),
         ("split_policy_file", "split_policy_sha256"),

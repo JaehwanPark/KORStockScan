@@ -16,6 +16,7 @@ from src.engine import threshold_cycle_preopen_apply as preopen_apply
 def _quantity_leg_four_arm_events():
     events = []
     for index in range(30):
+        source_date = "2026-09-14" if index < 20 else "2026-09-15"
 
         def arm(net_return, pnl, capital, fill):
             return {
@@ -35,13 +36,14 @@ def _quantity_leg_four_arm_events():
 
         receipt = {
             "schema": split_plan.QUANTITY_LEG_FOUR_ARM_SCHEMA,
+            "source_date": source_date,
             "scanner_promotion_id": f"promotion-{index}",
             "evaluation_attempt_id": f"attempt-{index}",
             "stock_code": "005930",
             "effective_venue": "KRX",
             "session_bucket": "KRX_REGULAR",
             "policy_bundle_sha256": "a" * 64,
-            "eligible_attempt_count": 30,
+            "eligible_attempt_count": 20 if index < 20 else 10,
             "incumbent_quantity_policy_version": "qty-current",
             "candidate_quantity_policy_version": "qty-candidate",
             "incumbent_leg_policy_version": "leg-current",
@@ -90,6 +92,120 @@ def _resign_four_arm_receipt(receipt):
     receipt["receipt_sha256"] = hashlib.sha256(
         json.dumps(body, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("ascii")
     ).hexdigest()
+
+
+def test_four_arm_chronology_and_independent_selection_validation():
+    evaluation = split_plan.build_quantity_leg_four_arm_evaluation(_quantity_leg_four_arm_events())
+    assert split_plan.quantity_leg_promotion_evidence_valid(evaluation)
+    assert evaluation["chronological_partitions"]["calibration"]["complete_exact_attempt_count"] == 20
+    assert evaluation["chronological_partitions"]["holdout"]["complete_exact_attempt_count"] == 10
+    for field, value in (("exact_attempt_join_coverage", True),
+                         ("complete_exact_attempt_count", True),
+                         ("selection_contract", "legacy")):
+        assert not split_plan.quantity_leg_promotion_evidence_valid({**evaluation, field: value})
+
+
+@pytest.mark.parametrize("forged_pass", [False, True])
+def test_four_arm_v2_publisher_preopen_and_runtime_recheck_selection(monkeypatch, tmp_path, forged_pass):
+    from src.engine.scalping.entry_execution_sizing_plan import runtime_entry_execution_sizing_policy
+
+    monkeypatch.setattr(daily_report, "POSITION_SIZING_POLICY_DIR", tmp_path)
+    monkeypatch.setattr(daily_report, "ENTRY_EXECUTION_SIZING_POLICY_DIR", tmp_path)
+    events = _quantity_leg_four_arm_events()
+    for index, event in enumerate(events):
+        receipt = event["entry_quantity_leg_four_arm_evaluation"]
+        receipt["source_date"] = "2026-09-16" if index < 20 else "2026-09-17"
+        receipt["candidate_quantity_policy_version"] = daily_report.SCALPING_SIZING_FORMULA_VERSION
+        for arm in receipt["arms"].values():
+            arm["terminal_observed_at"] = receipt["source_date"] + "T07:30:00+09:00"
+        _resign_four_arm_receipt(receipt)
+    evaluation = split_plan.build_quantity_leg_four_arm_evaluation(events)
+    if forged_pass:
+        evaluation["chronological_partitions"]["holdout"]["arms"][split_plan.QUANTITY_LEG_FOUR_ARM_IDS[-1]]["net_pnl_krw"] = -1
+    split_path = tmp_path / "split.json"
+    split_path.write_text(json.dumps({"schema_version": "entry_split_order_policy_v1",
+        "policy_version": "leg-candidate", "source_date": "2026-09-17", "runtime_apply_allowed": True}))
+    quantity = {"family": "position_sizing_dynamic_formula", "runtime_apply_eligible_now": True,
+        "calibration_state": "retain_current", "sample_floor": 30, "recommended_values": {
+            "formula_version": daily_report.SCALPING_SIZING_FORMULA_VERSION,
+            "decision": "retain_current", "cost_adjusted_ev_pct": 0.12,
+            "exact_terminal_sample_count": 30}}
+    split = {"family": "entry_split_order_plan", "runtime_apply_eligible_now": True,
+        "recommended_values": {"policy_file": str(split_path), "policy_version": "leg-candidate",
+            "policy_sha256": hashlib.sha256(split_path.read_bytes()).hexdigest()},
+        "source_metrics": {"quantity_leg_four_arm_evaluation": evaluation}}
+    report = {"calibration_candidates": [quantity, split]}
+    daily_report._materialize_position_sizing_policy(report, "2026-09-17")
+    daily_report._materialize_integrated_entry_execution_sizing_policy(report, "2026-09-17")
+    path = tmp_path / "entry_execution_sizing_policy_2026-09-17.json"
+    assert path.exists() is (not forged_pass)
+    if forged_pass:
+        return
+    policy = json.loads(path.read_text())
+    assert policy["quantity_leg_selection_evidence"] == evaluation
+    prefix = "KORSTOCKSCAN_ENTRY_EXECUTION_SIZING_POLICY_"
+    effective_env = {prefix + key: value for key, value in {
+        "ENABLED": "true", "FILE": str(path), "VERSION": policy["policy_version"],
+        "SOURCE_DATE": "2026-09-17", "ACTIVE_DATE": policy["active_date"],
+        "SHA256": hashlib.sha256(path.read_bytes()).hexdigest()}.items()}
+    for key, value in effective_env.items():
+        monkeypatch.setenv(key, value)
+    assert runtime_entry_execution_sizing_policy(active_date=policy["active_date"])[1] == "loaded"
+    audit = next(a for a in preopen_apply._split_runtime_policy_audits(policy["active_date"], effective_env)
+                 if a["family"] == "entry_execution_sizing_policy")
+    assert audit["status"] == "pass"
+    # Even a newly hashed artifact cannot bypass the economic selection contract.
+    policy["quantity_leg_selection_evidence"]["chronological_partitions"]["holdout"]["arms"][split_plan.QUANTITY_LEG_FOUR_ARM_IDS[-1]]["net_pnl_krw"] = -1
+    path.write_text(json.dumps(policy))
+    effective_env[prefix + "SHA256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    monkeypatch.setenv(prefix + "SHA256", effective_env[prefix + "SHA256"])
+    assert runtime_entry_execution_sizing_policy(active_date=policy["active_date"])[1] == "selection_evidence_invalid"
+    audit = next(a for a in preopen_apply._split_runtime_policy_audits(policy["active_date"], effective_env)
+                 if a["family"] == "entry_execution_sizing_policy")
+    assert audit["reason"] == "entry_execution_sizing_selection_evidence_invalid"
+
+
+@pytest.mark.parametrize("mode", ["unsigned", "one_date", "losing_holdout", "small_positive_holdout"])
+def test_four_arm_holdout_not_replaced_by_aggregate_or_extra_absolute_floor(mode):
+    events = _quantity_leg_four_arm_events()
+    for index, event in enumerate(events):
+        receipt = event["entry_quantity_leg_four_arm_evaluation"]
+        if mode == "unsigned":
+            receipt.pop("source_date")
+            receipt["eligible_attempt_count"] = 30
+        elif mode == "one_date":
+            receipt["source_date"] = "2026-09-15"
+            receipt["eligible_attempt_count"] = 30
+        elif index >= 20:
+            receipt["arms"][split_plan.QUANTITY_LEG_FOUR_ARM_IDS[-1]].update(
+                net_return_pct=-0.01 if mode == "losing_holdout" else 0.09,
+                net_pnl_krw=-10 if mode == "losing_holdout" else 90)
+        _resign_four_arm_receipt(receipt)
+    evaluation = split_plan.build_quantity_leg_four_arm_evaluation(events)
+    assert evaluation["complete_exact_attempt_count"] == 30
+    assert evaluation["promotion_gate"]["passed"] is (mode == "small_positive_holdout")
+    evaluation["promotion_gate"]["passed"] = True
+    evaluation["promotion_gate"]["blockers"] = []
+    assert split_plan.quantity_leg_promotion_evidence_valid(evaluation) is (mode == "small_positive_holdout")
+
+
+@pytest.mark.parametrize("tamper", ["count", "future_date", "aggregate", "hash", "arm_count", "nonfinite"])
+def test_four_arm_independent_validator_rejects_tampered_evidence(tamper):
+    evaluation = split_plan.build_quantity_leg_four_arm_evaluation(_quantity_leg_four_arm_events())
+    holdout = evaluation["chronological_partitions"]["holdout"]
+    if tamper == "count":
+        holdout["complete_exact_attempt_count"] += 1
+    elif tamper == "future_date":
+        holdout["source_dates"] = ["2099-01-01"]
+    elif tamper == "aggregate":
+        evaluation["arms"][split_plan.QUANTITY_LEG_FOUR_ARM_IDS[-1]]["net_pnl_krw"] += 1
+    elif tamper == "hash":
+        evaluation["validated_source_receipt_sha256s"][1] = evaluation["validated_source_receipt_sha256s"][0]
+    elif tamper == "arm_count":
+        holdout["arms"][split_plan.QUANTITY_LEG_FOUR_ARM_IDS[-1]]["paired_sample_count"] = True
+    else:
+        holdout["arms"][split_plan.QUANTITY_LEG_FOUR_ARM_IDS[-1]]["net_pnl_krw"] = float("nan")
+    assert not split_plan.quantity_leg_promotion_evidence_valid(evaluation)
 
 
 @pytest.mark.parametrize("field,value", [
@@ -186,6 +302,7 @@ def test_quantity_leg_four_arm_sums_daily_eligible_denominators_for_cumulative_g
 
         receipt = {
             "schema": split_plan.QUANTITY_LEG_FOUR_ARM_SCHEMA,
+            "source_date": source_date,
             "scanner_promotion_id": f"promotion-{index}",
             "evaluation_attempt_id": f"attempt-{index}",
             "stock_code": "005930",

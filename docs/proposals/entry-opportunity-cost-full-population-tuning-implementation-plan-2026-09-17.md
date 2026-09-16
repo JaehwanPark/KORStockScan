@@ -638,6 +638,8 @@ scanner/recheck/ADD-NOADD/exit family에서도 raw/미노출 CF가 existing cand
 - 의존: U6 + 해당 가격/집행 scope의 검증된 원천. 초기 action은 검증된 현재 incumbent로 고정하며 U7/U8 새 정책의 선승격을 요구하지 않는다.
 - 대상: daily_threshold_cycle_report grid/materializers, entry_split_order_plan four-arm, strategy_owner_replay, position_sizing_allocator, entry_execution_sizing_plan, main_lifecycle_paired.
 - 작업: incumbent-passed price-ready 분모/가격 replay/no-fill CF join; absolute EV gate 타당성 및 중복 검사 통일; atomic four-arm receipt source 누락 수리; actual/CF 지표 분리.
+- 4군 선정 증거 보완: 새 평가 계약 `quantity_leg_chronological_paired_v2`는 immutable receipt 안의 source-date로 calibration/최신일 holdout을 분리하고 동일 4군·비용/exit/terminal을 대사한다. 전체 기존30건/coverage80%를 유지하되 partition마다30건이나0.10%를 추가 요구하지 않는다. 각 partition은 비용 후 양수·incumbent 대비 개선·빈도/자본효율/tail 비훼손·fill 하락5%p 이내를 검증한다. Daily publisher→PREOPEN→runtime이 같은 evidence의 분모·partition digest 보존식·유한 metric·현재 정책 결속을 독립 검사한다. source9/17부터 proof 없는 신규 원자 정책의 legacy downgrade를 금지하며 기존 frozen 정책은 보존한다.
+- 위 새 선정 계약의 배포를 natural quartet 생성·미진입 price CF adapter 완료로 대체하지 않는다. 기존 raw consumer의 4군 receipt 실제 생성/서명 date·직접 전달 결손과 가격의 절대0.10% 재설계는 잔여다. event 외피 날짜나 terminal 날짜로 signed source date를 합성하지 않는다.
 - acceptance: completed 성과가 좋아도 참여/전체순익이 나쁜 가격 후보 탈락. 비용 후 작은 개선 후보가 절대0.1% 또는 사전candidate실체결 때문에 영구 대기하지 않음. leg·qty·price 후보가 action owner/scale-in/cap 변경 못 함.
 - 테스트: 기존 Daily/position sizing/entry split/execution sizing/strategy owner/lifecycle paired tests. complete4arm hash·partial/no-fill/late-fill·cancel overlap fixture.
 

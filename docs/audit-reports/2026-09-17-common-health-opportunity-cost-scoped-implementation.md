@@ -59,7 +59,7 @@ Official reference receipt (`2026-09-17T01:15:02+09:00` 재확인 기록): upstr
 | U6 | partial | operational/decision-CF gate와 중복 case 분모 수정. 전체 row disposition/census 전수 잔여 |
 | U7 | scoped common/all-supported hierarchy implemented | §8–§10 전수 원천·현재 incumbent 비교·양수 순 EV/전체 paired 개선·exact-parent 자동 발행. 자연 generation·전체 원장 대사는 잔여 |
 | U8 | scoped router implemented / natural pending | §11 CAUTION checkpoint 기회비용·차단으로 피한 손실의 대칭 비교, INSUFFICIENT 원천 복구 분리, 현재 compact partition과 next-date 자동 발행. 자연 generation·전수 전달 acceptance 잔여 |
-| U9 | scoped receipt/publisher closure implemented | §12 four-arm finite/분모·상충 receipt 격리·Daily 원자 발행의 정책 hash/date/authority. 전체 price-ready no-submit/no-fill adapter·양수 small-net versioned 평가 계약은 잔여 |
+| U9 | scoped receipt/publisher/chronological proof closure implemented | §12–§14 four-arm finite/분모·상충 격리·정책 hash/date/authority·calibration/holdout 증거의 publisher/PREOPEN/runtime 독립 검증. 전체 price-ready no-submit/no-fill adapter·양수 small-net versioned 평가 계약은 잔여 |
 | U10 | pending | 독립 owner CF admission 및 active family fill-bias 실제 결손 수리 |
 | U11 | pending | family별 auto handoff·floor 달성 가능성·최종 요약 closure |
 | U12 | scoped validation complete | 부분 H managed release 통합 검증·오늘 기존 PREOPEN/start route. 전체 fixed-point 미완료 |
@@ -155,6 +155,17 @@ Official reference receipt (`2026-09-17T01:15:02+09:00` 재확인 기록): upstr
 - 잔여 P1은 **실제 제출·완료 거래 평균을 price 후보의 주근거로 쓰는 기존 선정 계약**, price-ready 전수 미진입/no-fill의 executable·비용·정책별 exit paired 연결, 조건부 기회비용과 holdout/capacity 비교, 절대 순 EV0.10%다. 이 축을 unbiased paired 계약으로 연결하기 전에 floor만 낮춰 체결 편향 선정을 확대하지 않는다. U9 및 U0–U12 fixed-point·자연 정책 소비·실수익 완료를 선언하지 않는다.
 - 검증 코드 `f0c8fc89`를 원격 main 이력에 일반 merge하여 **`33c4ee4b`** 배포본을 만들고 관련9개 suite **1066 passed**·compile/shell/diff 검증 후 main으로 fast-forward push했다. 타 세션 dirty 코드는 포함하지 않았으며 기존 release를 덮어쓰지 않았다. selected release 교체 후 기존 graceful 경로1회로 old PID37714 종료→new **PID56789**,08:26:50 기동·source_dirty=false·strict 당일 env/PID verify PASS/mismatch·missing0/미검증 family0를 확인했다. 삼성 morning handoff는 not_required, singleton1개다.
 - 배포 사전08:25:35/사후08:27:03의 읽기 전용 strict KRX/NXT 잔고·미체결 정상화 계약은 모두 complete, 삼성25주/매수가269471·미체결0으로 동일하다. custody registry·오늘 env·dated machine policy hash도 동일하다.08:27:00 main loop,08:27:01 broker sync,08:27:03 WS connect/LOGIN ACK와08:27:09 새 quote0D(005930)/trade0B(007660) 수신을 확인했다. 서로 다른 symbol의 첫 receipt를 ordered same-scope micro acceptance나 새 수익으로 표시하지 않는다. [배포·가동 검증 receipt](../../data/runtime/runtime_release_validation/u9-price-join-20260917-33c4ee4b.json)를 보존하며 오늘 정책 수동 재발행/주문 취소·owner 변경은 없다.
+
+## 14. 수량/leg 4군 chronological 증거와 최종 소비자 검증 보완
+
+2026-09-17 08시대 후속. 가격 전체 CF 연결 전에 확인된 선정 계약 결손부터 닫았다. 기존 evaluator·Daily publisher·PREOPEN audit·runtime loader와 기존 테스트만 수정했으며 새 collector/모듈/producer/장후 단계는 없다.
+
+- 최초 결손은 4군 집계에 독립 최신일 holdout이 없고 `passed=true`만으로 원자 정책이 발급·소비되는 경로다. 새 `quantity_leg_chronological_paired_v2`는 서명된 receipt source date의 이전일 calibration/최신일 holdout을 분리한다. partition/전체 sample·고유 receipt hash 보존식, finite metric·EV/순이익/양수 terminal 빈도·자본효율·p10/ES·fill을 independently 대사한다. malformed/naive/future·source-date 이전 terminal 시각을 정상 경제성 quartet으로 세지 않는다.
+- 기존 전체30건/coverage80%와 전체 순 EV0.10%는 유지한다. partition별30건·5/10/20일·0.10%를 복사하지 않으며 양수 순 EV·incumbent 대비 EV/순익 개선·기존 빈도/자본효율/tail 비훼손·fill 하락5%p 이내를 요구한다. 전체0.10%를 넘고 최신 holdout0.09%가 incumbent0.08%보다 개선되는 fixture는 통과한다. 기본 정책 활성화에는 이 challenger gate를 붙이지 않는다.
+- Daily는 숫자/partition 증거를 재검증하고 원자 정책에 이를 보존한다. PREOPEN과 runtime도 공동 validator로 재검증하여 artifact hash가 새로 맞아도 위조된 passed/holdout·정책 identity/선택 arm·generation date 불일치를 차단한다. source9/17 신규 발급이 proof를 빼고 legacy로 후퇴할 수 없으며 과거 frozen 정책은 원래 계약을 유지한다. 오늘 env/dated 정책은 수동 재발행하지 않는다.
+- 기대효과는 누적 평균이 가린 최신일 성능 악화와 근거 없는 자동 승격 방지다. 기계 ENTER·compact AI·가격·초기 수량 baseline/leg·scale-in·cap·broker/source/hard safety owner는 변경하지 않는다. 기존 정기 장후→Daily 원자 publisher→다음 PREOPEN/loader 경로에서 challenger를 자동 선정/검증하며 별도 사용자 승인을 추가하지 않는다.
+- 수정→self review→보완→re-review와 작업본 관련9개 suite **1079 passed**, compile/diff 검증을 수행한다. 서명 date 미상·단일일·손실 holdout·가짜 passed·count/hash/metric 위조·NaN·future date·bool count·유효0.09% holdout과 publisher→PREOPEN→runtime 직접 소비 회귀 포함. 배포본/PID receipt는 아래 후속으로 별도 기록한다.
+- 잔여: production 자연 quartet 생성·signed date 전달의 실제 실행 증거, 전체 price-ready 미제출/no-fill CF adapter·stress/capacity 선정과 절대0.10% owning 계약 개선, U0–U6 전수 parity/budget 및 U10/U11. 검색에서 quartet field의 기존 reader들은 확인됐지만 자연 생성자를 입증하지 못했으므로 collector 정상·유한 ETA·U9 전체 완료로 표시하지 않는다. 코드 검증과 자연 정책 소비/미진입 기회비용 개선·실수익은 별도다.
 
 Project/Calendar 동기화는 실행하지 않는다. 사용자 표준 명령:
 

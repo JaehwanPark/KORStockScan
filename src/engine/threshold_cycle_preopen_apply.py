@@ -5768,6 +5768,12 @@ def _split_runtime_policy_audits(
                 audits.append(audit)
                 continue
             if spec["family"] == "entry_execution_sizing_policy":
+                from src.engine.scalping.entry_split_order_plan import quantity_leg_policy_selection_evidence_valid
+
+                if not quantity_leg_policy_selection_evidence_valid(policy):
+                    audit.update(status="fail", reason="entry_execution_sizing_selection_evidence_invalid")
+                    audits.append(audit)
+                    continue
                 referenced = (
                     (
                         policy.get("quantity_policy_file"),
