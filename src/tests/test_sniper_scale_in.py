@@ -5631,11 +5631,13 @@ def test_machine_nonentry_closes_exact_attempt_without_changing_action(monkeypat
         "action": "DROP",
         "score": 0,
         "provider_called": False,
-        "machine_decision_before_provider": True,
+        "machine_source_invalid_receipt": True,
         "entry_mechanistic_action": "SOURCE_INVALID",
         "machine_evaluation_status": "source_quality_blocked_before_assessment",
         "evaluation_attempt_id": "machine-source-invalid-1",
         "policy_bundle_hash": "b" * 64,
+        "entry_source_invalid_primary_blocker": "current_price_stale",
+        "entry_source_invalid_primary_category": "freshness_or_timing",
     }
 
     stock = {"id": 1}
@@ -5649,6 +5651,9 @@ def test_machine_nonentry_closes_exact_attempt_without_changing_action(monkeypat
     assert calls[0][1]["source_stage"] == "ai_confirmed"
     assert calls[0][1]["extra_fields"]["evaluation_attempt_id"] == (
         "machine-source-invalid-1"
+    )
+    assert calls[0][1]["extra_fields"]["entry_source_invalid_primary_blocker"] == (
+        "current_price_stale"
     )
     assert not state_handlers._log_machine_nonentry_terminal_if_needed(
         stock, "005930", ai_decision=decision, ai_score=0

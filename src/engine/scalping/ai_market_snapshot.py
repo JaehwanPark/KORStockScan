@@ -70,6 +70,41 @@ _BROKER_ACCOUNT_SNAPSHOT_LOCK = threading.RLock()
 _BROKER_ACCOUNT_SNAPSHOT: dict[str, Any] = {}
 
 
+def classify_ai_input_blocker(blocker: Any) -> str:
+    """Map one exact preflight blocker to an observation-only cause family."""
+
+    value = str(blocker or "").strip().lower()
+    if not value or value == "unclassified":
+        return "unclassified"
+    if value == "ai_market_snapshot_missing" or value.endswith("_missing"):
+        return "missing_source"
+    if value.endswith(("_stale", "_future", "_unknown_age")) or value in {
+        "source_time_skew",
+    }:
+        return "freshness_or_timing"
+    if any(
+        token in value
+        for token in (
+            "venue",
+            "route",
+            "item_suffix",
+            "request_code",
+            "underlying_event",
+        )
+    ):
+        return "venue_or_route_provenance"
+    if value.startswith("candle_"):
+        return "candle_source_quality"
+    if any(
+        token in value
+        for token in ("broker_position", "open_orders", "position_reconcil")
+    ):
+        return "position_or_open_order_reconciliation"
+    if value.startswith("runtime_preflight_"):
+        return "runtime_preflight_artifact"
+    return "other_source_contract"
+
+
 def _safe_float(value: Any, default: float | None = None) -> float | None:
     try:
         if value in (None, "", "-"):
@@ -1639,6 +1674,7 @@ def build_ai_market_snapshot(
     )
     if max_skew_ms is not None and max_skew_ms > _FRESH_MS:
         blockers.append("source_time_skew")
+    source_blocker_evaluation_order = list(dict.fromkeys(blockers))
     source_blockers = sorted(set(blockers))
     preflight_required = runtime_preflight_required()
     preflight_mode = runtime_preflight_mode()
@@ -1655,6 +1691,7 @@ def build_ai_market_snapshot(
     )
     if preflight_required and not artifact_status["ready"]:
         blockers.append("runtime_preflight_artifact_not_ready")
+    blocker_evaluation_order = list(dict.fromkeys(blockers))
     blockers = sorted(set(blockers))
     missing_sources = [
         name for name, row in sources.items() if row.get("value") is None
@@ -1671,6 +1708,16 @@ def build_ai_market_snapshot(
         "status": status,
         "blockers": blockers,
         "source_blockers": source_blockers,
+        "blocker_evaluation_order": blocker_evaluation_order,
+        "source_blocker_evaluation_order": source_blocker_evaluation_order,
+        "primary_blocker": (
+            blocker_evaluation_order[0] if blocker_evaluation_order else None
+        ),
+        "primary_blocker_category": (
+            classify_ai_input_blocker(blocker_evaluation_order[0])
+            if blocker_evaluation_order
+            else None
+        ),
         "quality_warnings": quality_warnings,
         "missing_sources": missing_sources,
         "venue_consistent": venue_consistent,
@@ -1809,6 +1856,11 @@ def ai_input_preflight(
         "source_allowed": False,
         "status": "blocked",
         "blockers": ["ai_market_snapshot_missing"],
+        "source_blockers": ["ai_market_snapshot_missing"],
+        "blocker_evaluation_order": ["ai_market_snapshot_missing"],
+        "source_blocker_evaluation_order": ["ai_market_snapshot_missing"],
+        "primary_blocker": "ai_market_snapshot_missing",
+        "primary_blocker_category": "missing_source",
         "missing_sources": ["ai_market_snapshot_v1"],
         "venue_consistent": False,
         "position_reconciled": False,
@@ -1942,6 +1994,17 @@ def ai_market_snapshot_log_fields(
         ),
         "ai_input_preflight_status": preflight.get("status"),
         "ai_input_preflight_blockers": preflight.get("blockers", []),
+        "ai_input_preflight_source_blockers": preflight.get("source_blockers", []),
+        "ai_input_preflight_blocker_evaluation_order": preflight.get(
+            "blocker_evaluation_order", []
+        ),
+        "ai_input_preflight_source_blocker_evaluation_order": preflight.get(
+            "source_blocker_evaluation_order", []
+        ),
+        "ai_input_preflight_primary_blocker": preflight.get("primary_blocker"),
+        "ai_input_preflight_primary_blocker_category": preflight.get(
+            "primary_blocker_category"
+        ),
         "ai_input_preflight_quality_warnings": preflight.get("quality_warnings", []),
         "ai_input_preflight_missing_sources": preflight.get("missing_sources", []),
         "ai_input_preflight_venue_consistent": bool(

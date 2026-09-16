@@ -28,6 +28,7 @@ from src.engine.sentinel_event_cache import update_and_load_cached_event_rows
 from src.engine.automation.submit_drought_contract import (
     UPSTREAM_TERMINAL_STAGES as UPSTREAM_BLOCK_STAGES,
 )
+from src.engine.scalping.ai_market_snapshot import classify_ai_input_blocker
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 from src.engine.scalping.entry_recheck_policy import (
     canonical_wait_probe_contract,
@@ -2299,18 +2300,22 @@ def _machine_primary_evaluation_key(event: PipelineEvent) -> str:
         if value and value.lower() not in {"none", "null", "unknown", "-", "0"}:
             evaluation_attempt_id = value
             break
-    scanner_promotion_id = _safe_str(
-        event.fields.get("scanner_promotion_id")
-    ).strip()
-    venue = _safe_str(
-        _field_first(event.fields, ("effective_venue", "venue"))
-    ).strip().upper()
-    session = _safe_str(
-        _field_first(
-            event.fields,
-            ("market_session_bucket", "session_bucket", "session"),
+    scanner_promotion_id = _safe_str(event.fields.get("scanner_promotion_id")).strip()
+    venue = (
+        _safe_str(_field_first(event.fields, ("effective_venue", "venue")))
+        .strip()
+        .upper()
+    )
+    session = (
+        _safe_str(
+            _field_first(
+                event.fields,
+                ("market_session_bucket", "session_bucket", "session"),
+            )
         )
-    ).strip().upper()
+        .strip()
+        .upper()
+    )
     bundle_hash = _safe_str(
         _field_first(
             event.fields,
@@ -2331,8 +2336,7 @@ def _machine_primary_evaluation_key(event: PipelineEvent) -> str:
         bundle_hash,
     )
     if any(
-        not component
-        or component.lower() in {"none", "null", "unknown", "-", "0"}
+        not component or component.lower() in {"none", "null", "unknown", "-", "0"}
         for component in components
     ):
         return ""
@@ -2534,6 +2538,128 @@ def _entry_execution_sizing_projection(
     }
 
 
+def _structured_string_list(value: Any) -> list[str]:
+    decoded = _safe_structured_value(value)
+    if isinstance(decoded, list):
+        return [
+            text
+            for item in decoded
+            if (text := _safe_str(item).strip())
+            and text.lower() not in {"none", "null", "unknown", "-"}
+        ]
+    text = _safe_str(value).strip()
+    if not text or text.lower() in {"none", "null", "unknown", "-", "[]"}:
+        return []
+    return [item.strip() for item in text.split(",") if item.strip()]
+
+
+def _machine_source_invalid_decomposition(
+    rows: list[PipelineEvent],
+) -> dict[str, Any]:
+    """Project one SOURCE_INVALID attempt without inventing a root cause."""
+
+    blockers: list[str] = []
+    source_blockers: list[str] = []
+    missing_sources: list[str] = []
+    candle_blockers: list[str] = []
+    evaluation_order: list[str] = []
+    evidence_stages: list[str] = []
+    producer_primary = ""
+    producer_category = ""
+    producer_basis = ""
+
+    def extend_unique(target: list[str], values: list[str]) -> None:
+        for value in values:
+            if value not in target:
+                target.append(value)
+
+    for event in sorted(rows, key=lambda row: row.emitted_at):
+        fields = event.fields
+        row_has_evidence = False
+        for key, target in (
+            ("entry_source_invalid_blockers", blockers),
+            ("ai_input_preflight_blockers", blockers),
+            ("entry_source_invalid_source_blockers", source_blockers),
+            ("ai_input_preflight_source_blockers", source_blockers),
+            ("entry_source_invalid_missing_sources", missing_sources),
+            ("ai_input_preflight_missing_sources", missing_sources),
+            ("entry_candle_source_quality_blockers", candle_blockers),
+        ):
+            values = _structured_string_list(fields.get(key))
+            if values:
+                row_has_evidence = True
+                extend_unique(target, values)
+        for key in (
+            "ai_input_preflight_blocker_evaluation_order",
+            "ai_input_preflight_source_blocker_evaluation_order",
+        ):
+            values = _structured_string_list(fields.get(key))
+            if values:
+                row_has_evidence = True
+                extend_unique(evaluation_order, values)
+        if not producer_primary:
+            producer_primary = _safe_str(
+                _field_first(
+                    fields,
+                    (
+                        "entry_source_invalid_primary_blocker",
+                        "ai_input_preflight_primary_blocker",
+                    ),
+                )
+            ).strip()
+        if not producer_category:
+            producer_category = _safe_str(
+                _field_first(
+                    fields,
+                    (
+                        "entry_source_invalid_primary_category",
+                        "ai_input_preflight_primary_blocker_category",
+                    ),
+                )
+            ).strip()
+        if not producer_basis:
+            producer_basis = _safe_str(
+                fields.get("entry_source_invalid_primary_basis")
+            ).strip()
+        if row_has_evidence and event.stage not in evidence_stages:
+            evidence_stages.append(event.stage)
+
+    if producer_primary:
+        primary_blocker = producer_primary
+        primary_basis = producer_basis or "producer_primary_blocker"
+    elif evaluation_order:
+        primary_blocker = evaluation_order[0]
+        primary_basis = "producer_preflight_evaluation_order"
+    elif blockers:
+        # Historical rows preserve a sorted blocker set but not evaluation
+        # order. Keep them classifiable while naming the weaker basis.
+        primary_blocker = blockers[0]
+        primary_basis = "legacy_sorted_blocker_fallback"
+    else:
+        primary_blocker = "unclassified"
+        primary_basis = "source_invalid_reason_missing"
+    primary_category = (
+        producer_category
+        if producer_category and producer_category != "unclassified"
+        else classify_ai_input_blocker(primary_blocker)
+    )
+    classified = primary_blocker != "unclassified"
+    return {
+        "schema": "machine_source_invalid_decomposition_v1",
+        "status": "classified" if classified else "unclassified_reason_missing",
+        "primary_blocker": primary_blocker,
+        "primary_category": primary_category,
+        "primary_basis": primary_basis,
+        "blockers": blockers,
+        "source_blockers": source_blockers,
+        "missing_sources": missing_sources,
+        "candle_source_quality_blockers": candle_blockers,
+        "evidence_stages": evidence_stages,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
+
+
 def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]:
     """Diagnostic machine -> AI screen -> submit funnel with explicit identity.
 
@@ -2557,13 +2683,12 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
         grouped[key].append(event)
         identified_source_event_count += 1
 
-    candidate_keys_by_submit_parent: dict[tuple[str, str, str], list[str]] = defaultdict(
-        list
+    candidate_keys_by_submit_parent: dict[tuple[str, str, str], list[str]] = (
+        defaultdict(list)
     )
     for key, rows in grouped.items():
         if not any(
-            _safe_str(row.fields.get("entry_mechanistic_action")).upper()
-            == "ENTER_NOW"
+            _safe_str(row.fields.get("entry_mechanistic_action")).upper() == "ENTER_NOW"
             and _safe_str(row.fields.get("entry_ai_screen_status")).lower() == "pass"
             for row in rows
         ):
@@ -2629,6 +2754,7 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
             latest_evaluation_by_parent[parent] = candidate
     for key, rows in sorted(grouped.items()):
         rows = sorted(rows, key=lambda row: row.emitted_at)
+        identity_parts = key.removeprefix("machine:").split("|")
         actions = {
             _safe_str(row.fields.get("entry_mechanistic_action")).upper()
             for row in rows
@@ -2774,8 +2900,19 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
             sizing_plan_terminal_state = "broker_rejected"
         else:
             sizing_plan_terminal_state = "lineage_pending_after_sizing"
+        source_invalid_decomposition = (
+            _machine_source_invalid_decomposition(rows)
+            if action == "SOURCE_INVALID"
+            else None
+        )
         row = {
             "evaluation_key": key,
+            "scanner_promotion_id": identity_parts[0],
+            "evaluation_attempt_id": identity_parts[1],
+            "stock_code": identity_parts[2],
+            "effective_venue": identity_parts[3],
+            "session_bucket": identity_parts[4],
+            "policy_bundle_hash": identity_parts[5],
             "first_evaluated_at": rows[0].emitted_at.isoformat(),
             "last_event_at": rows[-1].emitted_at.isoformat(),
             "mechanistic_action": action,
@@ -2792,6 +2929,7 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
             "entry_execution_sizing_plan": sizing_projection,
             "sizing_chain_state": sizing_chain_state,
             "sizing_plan_terminal_state": sizing_plan_terminal_state,
+            "source_invalid_decomposition": source_invalid_decomposition,
             "conflict_reasons": conflict_reasons,
             "recovered_downstream_lineage_stages": sorted(
                 recovered_downstream_by_key.get(key, [])
@@ -2809,6 +2947,56 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
         final_counts[final_state] += 1
 
     valid_rows = [row for row in ledger if not row["conflict_reasons"]]
+    source_invalid_rows = [
+        row for row in valid_rows if row["mechanistic_action"] == "SOURCE_INVALID"
+    ]
+    source_invalid_primary_blocker_counts = Counter(
+        row["source_invalid_decomposition"]["primary_blocker"]
+        for row in source_invalid_rows
+    )
+    source_invalid_category_counts = Counter(
+        row["source_invalid_decomposition"]["primary_category"]
+        for row in source_invalid_rows
+    )
+    source_invalid_missing_source_counts: Counter[str] = Counter()
+    source_invalid_candle_blocker_counts: Counter[str] = Counter()
+    for row in source_invalid_rows:
+        decomposition = row["source_invalid_decomposition"]
+        source_invalid_missing_source_counts.update(decomposition["missing_sources"])
+        source_invalid_candle_blocker_counts.update(
+            decomposition["candle_source_quality_blockers"]
+        )
+    source_invalid_classified_count = sum(
+        row["source_invalid_decomposition"]["status"] == "classified"
+        for row in source_invalid_rows
+    )
+    source_invalid_unclassified_count = (
+        len(source_invalid_rows) - source_invalid_classified_count
+    )
+    promotion_rows: dict[tuple[str, str, str, str], list[dict[str, Any]]] = defaultdict(
+        list
+    )
+    for row in valid_rows:
+        promotion_rows[
+            (
+                row["scanner_promotion_id"],
+                row["stock_code"],
+                row["effective_venue"],
+                row["session_bucket"],
+            )
+        ].append(row)
+    promotion_first_action_counts: Counter[str] = Counter()
+    promotion_latest_action_counts: Counter[str] = Counter()
+    promotion_ever_source_invalid_count = 0
+    promotion_latest_source_invalid_count = 0
+    for rows in promotion_rows.values():
+        ordered = sorted(rows, key=lambda row: row["first_evaluated_at"])
+        promotion_first_action_counts[ordered[0]["mechanistic_action"]] += 1
+        promotion_latest_action_counts[ordered[-1]["mechanistic_action"]] += 1
+        if any(row["mechanistic_action"] == "SOURCE_INVALID" for row in ordered):
+            promotion_ever_source_invalid_count += 1
+        if ordered[-1]["mechanistic_action"] == "SOURCE_INVALID":
+            promotion_latest_source_invalid_count += 1
     machine_enter = sum(row["mechanistic_action"] == "ENTER_NOW" for row in valid_rows)
     ai_pass = sum(row["ai_screen_status"] == "pass" for row in valid_rows)
     ai_pass_rows = [row for row in valid_rows if row["ai_screen_status"] == "pass"]
@@ -2834,7 +3022,7 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
     )
     sizing_valid = sizing_chain_counts["sizing_plan_valid"]
     return {
-        "schema": "machine_primary_entry_funnel_v1",
+        "schema": "machine_primary_entry_funnel_v2",
         "metric_role": "funnel_count",
         "decision_authority": "source_only_attribution",
         "runtime_effect": False,
@@ -2851,6 +3039,56 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
         "valid_evaluation_count": len(valid_rows),
         "excluded_evaluation_count": len(ledger) - len(valid_rows),
         "mechanistic_action_counts": dict(sorted(action_counts.items())),
+        "promotion_lifecycle": {
+            "schema": "machine_primary_promotion_lifecycle_v1",
+            "unique_promotion_count": len(promotion_rows),
+            "first_action_counts": dict(sorted(promotion_first_action_counts.items())),
+            "latest_action_counts": dict(
+                sorted(promotion_latest_action_counts.items())
+            ),
+            "ever_source_invalid_count": promotion_ever_source_invalid_count,
+            "latest_source_invalid_count": promotion_latest_source_invalid_count,
+            "identity": "promotion_id_symbol_venue_session",
+        },
+        "source_invalid_decomposition": {
+            "schema": "machine_source_invalid_funnel_summary_v1",
+            "evaluation_count": len(source_invalid_rows),
+            "classified_count": source_invalid_classified_count,
+            "unclassified_count": source_invalid_unclassified_count,
+            "coverage_pct": (
+                round(
+                    100.0 * source_invalid_classified_count / len(source_invalid_rows),
+                    2,
+                )
+                if source_invalid_rows
+                else None
+            ),
+            "primary_blocker_counts": dict(
+                sorted(source_invalid_primary_blocker_counts.items())
+            ),
+            "primary_category_counts": dict(
+                sorted(source_invalid_category_counts.items())
+            ),
+            "missing_source_counts": dict(
+                sorted(source_invalid_missing_source_counts.items())
+            ),
+            "candle_source_quality_blocker_counts": dict(
+                sorted(source_invalid_candle_blocker_counts.items())
+            ),
+            "primary_count_conservation": {
+                "source_invalid_evaluations": len(source_invalid_rows),
+                "classified_plus_unclassified": (
+                    source_invalid_classified_count + source_invalid_unclassified_count
+                ),
+                "holds": (
+                    source_invalid_classified_count + source_invalid_unclassified_count
+                    == len(source_invalid_rows)
+                ),
+            },
+            "decision_authority": "source_only_attribution",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        },
         "ai_screen_status_counts": dict(sorted(screen_counts.items())),
         "final_state_counts": dict(sorted(final_counts.items())),
         "machine_enter_count": machine_enter,
@@ -3551,9 +3789,7 @@ def _terminal_attempt_diagnostics(exact, events_by_key):
             )
         if event.stage in addressable_stages:
             machine_primary = _is_machine_primary_event(event)
-            machine_action = _safe_str(
-                fields.get("entry_mechanistic_action")
-            ).upper()
+            machine_action = _safe_str(fields.get("entry_mechanistic_action")).upper()
             machine_screen = _safe_str(fields.get("entry_ai_screen_status")).lower()
             # Only one coherent input namespace; never mix retry and selected AI.
             prefix = "entry_opportunity_recheck_ai_"
@@ -3666,8 +3902,7 @@ def _terminal_attempt_diagnostics(exact, events_by_key):
                 r["canonical_probe_candidate"] is None for r in probe_rows
             ),
             "legacy_runtime_addressable_attempt_count": sum(
-                r["canonical_probe_candidate"] is True
-                and r["machine_primary"] is False
+                r["canonical_probe_candidate"] is True and r["machine_primary"] is False
                 for r in probe_rows
             ),
             "machine_primary_excluded_attempt_count": sum(
@@ -4080,7 +4315,8 @@ def _classify(
             )
         matches.append("SUBMIT_DROUGHT_CRITICAL")
         reasons.append(
-            "submitted conversion breached critical floor: " + " or ".join(breached_floors)
+            "submitted conversion breached critical floor: "
+            + " or ".join(breached_floors)
         )
     submit_drought_root_cause = _latency_drought_root_cause_summary(current)
 
@@ -5019,6 +5255,21 @@ def build_markdown(report: dict[str, Any]) -> str:
     exact_attempt_contract = (
         exact_attempt_contract if isinstance(exact_attempt_contract, dict) else {}
     )
+    machine_funnel = (
+        session.get("machine_primary_entry_funnel")
+        if isinstance(session.get("machine_primary_entry_funnel"), dict)
+        else {}
+    )
+    source_invalid = (
+        machine_funnel.get("source_invalid_decomposition")
+        if isinstance(machine_funnel.get("source_invalid_decomposition"), dict)
+        else {}
+    )
+    promotion_lifecycle = (
+        machine_funnel.get("promotion_lifecycle")
+        if isinstance(machine_funnel.get("promotion_lifecycle"), dict)
+        else {}
+    )
     lines = [
         f"# BUY Funnel Sentinel {report['target_date']}",
         "",
@@ -5078,6 +5329,15 @@ def build_markdown(report: dict[str, Any]) -> str:
         f"- AI actions: `events={session.get('ai_action_event_counts') or {}}, "
         f"unique={session.get('ai_action_unique_counts') or {}}`",
         f"- budget/AI lineage: `{session.get('budget_ai_lineage') or {}}`",
+        f"- machine SOURCE_INVALID: `evaluations={source_invalid.get('evaluation_count', 0)}, "
+        f"classified={source_invalid.get('classified_count', 0)}, "
+        f"unclassified={source_invalid.get('unclassified_count', 0)}, "
+        f"coverage={source_invalid.get('coverage_pct')}`",
+        f"- machine SOURCE_INVALID primary categories: `{source_invalid.get('primary_category_counts') or {}}`",
+        f"- machine SOURCE_INVALID primary blockers: `{source_invalid.get('primary_blocker_counts') or {}}`",
+        f"- machine promotion lifecycle: `unique={promotion_lifecycle.get('unique_promotion_count', 0)}, "
+        f"ever_source_invalid={promotion_lifecycle.get('ever_source_invalid_count', 0)}, "
+        f"latest_source_invalid={promotion_lifecycle.get('latest_source_invalid_count', 0)}`",
         f"- latency blockers: `{_format_top_blockers(session['latency_blocker_top'])}`",
         f"- latency causal join: `raw_danger_events={session.get('latency_state_danger_events', 0)}, "
         f"raw_unique={session.get('latency_state_danger_unique', 0)}, "

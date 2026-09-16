@@ -1424,9 +1424,7 @@ def test_integrated_aftermarket_keeps_scope_without_actual_venue_attribution():
     assert snapshot["nxt_integrated_execution_view_only"] is False
     assert snapshot["underlying_event_venue"] is None
     assert snapshot["venue_attribution_allowed"] is False
-    assert (
-        snapshot["venue_attribution_reason"] == "not_provided"
-    )
+    assert snapshot["venue_attribution_reason"] == "not_provided"
     fields = mod.ai_market_snapshot_log_fields(snapshot)
     assert fields["ai_market_snapshot_nxt_integrated_execution_view_proven"] is False
     assert fields["ai_market_snapshot_actual_execution_venue"] == "UNKNOWN"
@@ -1538,6 +1536,14 @@ def test_nxt_integrated_execution_view_does_not_bypass_stale_realtime_sources():
     assert "bbo_stale" in snapshot["ai_input_preflight_v1"]["source_blockers"]
     assert "current_price_stale" in snapshot["ai_input_preflight_v1"]["source_blockers"]
     assert "tape_stale" in snapshot["ai_input_preflight_v1"]["source_blockers"]
+    preflight = snapshot["ai_input_preflight_v1"]
+    assert preflight["primary_blocker"] == preflight["blocker_evaluation_order"][0]
+    assert preflight["primary_blocker_category"] == mod.classify_ai_input_blocker(
+        preflight["primary_blocker"]
+    )
+    assert set(preflight["source_blocker_evaluation_order"]) == set(
+        preflight["source_blockers"]
+    )
 
 
 def test_nxt_aftermarket_rejects_suffix_route_mismatch():

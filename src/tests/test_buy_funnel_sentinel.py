@@ -782,15 +782,20 @@ def test_machine_primary_superseded_pass_is_explicit_lineage_gap():
 
     result = sentinel._machine_primary_entry_funnel(events)
     states = {
-        row["evaluation_key"]: row["final_state"]
-        for row in result["evaluation_ledger"]
+        row["evaluation_key"]: row["final_state"] for row in result["evaluation_ledger"]
     }
-    assert states[
-        "machine:promotion-superseded|eval-old|036540|KRX|KRX_REGULAR|" + "b" * 64
-    ] == "lineage_gap_superseded_without_terminal"
-    assert states[
-        "machine:promotion-superseded|eval-new|036540|KRX|KRX_REGULAR|" + "b" * 64
-    ] == "pending"
+    assert (
+        states[
+            "machine:promotion-superseded|eval-old|036540|KRX|KRX_REGULAR|" + "b" * 64
+        ]
+        == "lineage_gap_superseded_without_terminal"
+    )
+    assert (
+        states[
+            "machine:promotion-superseded|eval-new|036540|KRX|KRX_REGULAR|" + "b" * 64
+        ]
+        == "pending"
+    )
     assert result["ai_pass_terminal_conservation"]["lineage_gap"] == 1
     assert result["ai_pass_terminal_conservation"]["pending"] == 1
     assert result["ai_pass_terminal_conservation"]["difference"] == 0
@@ -933,6 +938,9 @@ def test_machine_source_invalid_is_explicit_exact_non_ai_evaluation():
             "policy_bundle_hash": "b" * 64,
             "entry_mechanistic_action": "source_invalid",
             "entry_ai_screen_status": "not_requested_machine_source_invalid",
+            "ai_input_preflight_blockers": ("['current_price_stale', 'tape_stale']"),
+            "ai_input_preflight_missing_sources": "['program']",
+            "entry_candle_source_quality_blockers": "['venue_conflict']",
         },
     )
 
@@ -941,6 +949,101 @@ def test_machine_source_invalid_is_explicit_exact_non_ai_evaluation():
     assert result["evaluation_identity_missing_event_count"] == 0
     assert result["evaluation_ledger"][0]["mechanistic_action"] == "SOURCE_INVALID"
     assert result["evaluation_ledger"][0]["final_state"] == "machine_source_invalid"
+    decomposition = result["evaluation_ledger"][0]["source_invalid_decomposition"]
+    assert decomposition["primary_blocker"] == "current_price_stale"
+    assert decomposition["primary_category"] == "freshness_or_timing"
+    assert decomposition["primary_basis"] == "legacy_sorted_blocker_fallback"
+    assert decomposition["missing_sources"] == ["program"]
+    assert decomposition["candle_source_quality_blockers"] == ["venue_conflict"]
+    assert result["source_invalid_decomposition"] == {
+        "schema": "machine_source_invalid_funnel_summary_v1",
+        "evaluation_count": 1,
+        "classified_count": 1,
+        "unclassified_count": 0,
+        "coverage_pct": 100.0,
+        "primary_blocker_counts": {"current_price_stale": 1},
+        "primary_category_counts": {"freshness_or_timing": 1},
+        "missing_source_counts": {"program": 1},
+        "candle_source_quality_blocker_counts": {"venue_conflict": 1},
+        "primary_count_conservation": {
+            "source_invalid_evaluations": 1,
+            "classified_plus_unclassified": 1,
+            "holds": True,
+        },
+        "decision_authority": "source_only_attribution",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
+    assert result["promotion_lifecycle"]["unique_promotion_count"] == 1
+    assert result["promotion_lifecycle"]["ever_source_invalid_count"] == 1
+    assert result["promotion_lifecycle"]["latest_source_invalid_count"] == 1
+
+
+def test_machine_source_invalid_uses_producer_primary_and_promotion_latest_action():
+    from datetime import datetime, timedelta
+
+    start = datetime(2026, 9, 16, 14)
+    common = {
+        "entry_primary_decision_owner": "mechanistic_entry_adjudicator",
+        "scanner_promotion_id": "promotion-source-recovery",
+        "effective_venue": "KRX",
+        "market_session_bucket": "krx_regular",
+        "policy_bundle_hash": "b" * 64,
+    }
+    events = [
+        sentinel.PipelineEvent(
+            start,
+            "ENTRY_PIPELINE",
+            "ai_confirmed",
+            "fixture",
+            "005930",
+            "1",
+            {
+                **common,
+                "evaluation_attempt_id": "eval-source-invalid",
+                "entry_mechanistic_action": "source_invalid",
+                "entry_ai_screen_status": "not_requested_machine_source_invalid",
+                "entry_source_invalid_primary_blocker": "candle_source_quality",
+                "entry_source_invalid_primary_category": "candle_source_quality",
+                "entry_source_invalid_primary_basis": (
+                    "producer_preflight_evaluation_order"
+                ),
+                "entry_source_invalid_blockers": (
+                    "candle_source_quality,current_price_stale"
+                ),
+            },
+        ),
+        sentinel.PipelineEvent(
+            start + timedelta(seconds=30),
+            "ENTRY_PIPELINE",
+            "ai_confirmed",
+            "fixture",
+            "005930",
+            "1",
+            {
+                **common,
+                "evaluation_attempt_id": "eval-recovered-source",
+                "entry_mechanistic_action": "block",
+                "entry_ai_screen_status": "not_requested_machine_nonentry",
+            },
+        ),
+    ]
+
+    result = sentinel._machine_primary_entry_funnel(events)
+    source_row = next(
+        row
+        for row in result["evaluation_ledger"]
+        if row["mechanistic_action"] == "SOURCE_INVALID"
+    )
+    decomposition = source_row["source_invalid_decomposition"]
+    assert decomposition["primary_blocker"] == "candle_source_quality"
+    assert decomposition["primary_category"] == "candle_source_quality"
+    assert decomposition["primary_basis"] == "producer_preflight_evaluation_order"
+    assert result["promotion_lifecycle"]["unique_promotion_count"] == 1
+    assert result["promotion_lifecycle"]["first_action_counts"] == {"SOURCE_INVALID": 1}
+    assert result["promotion_lifecycle"]["latest_action_counts"] == {"BLOCK": 1}
+    assert result["promotion_lifecycle"]["ever_source_invalid_count"] == 1
+    assert result["promotion_lifecycle"]["latest_source_invalid_count"] == 0
 
 
 def test_submit_drought_is_classified_without_cross_venue_denominator(

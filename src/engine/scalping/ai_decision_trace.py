@@ -1028,10 +1028,9 @@ def capture_machine_observation(
         or (metadata or {}).get("evaluation_attempt_id")
         or context.get("snapshot_id")
     )
-    context["scanner_promotion_id"] = (
-        _first_value(exact_payload, ("scanner_promotion_id",))
-        or (metadata or {}).get("scanner_promotion_id")
-    )
+    context["scanner_promotion_id"] = _first_value(
+        exact_payload, ("scanner_promotion_id",)
+    ) or (metadata or {}).get("scanner_promotion_id")
     captured_venue = str(context.get("effective_venue") or "").strip().upper()
     captured_session = str(context.get("session_bucket") or "").strip().upper()
     integrated_scope_verified = bool(
@@ -1053,9 +1052,7 @@ def capture_machine_observation(
             else (
                 "metadata_evaluation_attempt_id"
                 if (metadata or {}).get("evaluation_attempt_id")
-                else "exact_snapshot_id"
-                if context.get("snapshot_id")
-                else "missing"
+                else "exact_snapshot_id" if context.get("snapshot_id") else "missing"
             )
         ),
         "scanner_promotion_id": context.get("scanner_promotion_id"),
@@ -2489,6 +2486,14 @@ def record_ai_decision_trace(
                     "entry_ai_role",
                     "entry_mechanistic_action",
                     "entry_mechanistic_policy_decision",
+                    "entry_source_invalid_schema",
+                    "entry_source_invalid_stage",
+                    "entry_source_invalid_primary_blocker",
+                    "entry_source_invalid_primary_category",
+                    "entry_source_invalid_primary_basis",
+                    "entry_source_invalid_blockers",
+                    "entry_source_invalid_source_blockers",
+                    "entry_source_invalid_missing_sources",
                     "entry_ai_screen_status",
                     "entry_ai_screen_required",
                     "entry_ai_screen_pass",
@@ -2555,6 +2560,14 @@ def record_ai_decision_trace(
                 "entry_primary_decision_owner",
                 "entry_ai_role",
                 "entry_mechanistic_action",
+                "entry_source_invalid_schema",
+                "entry_source_invalid_stage",
+                "entry_source_invalid_primary_blocker",
+                "entry_source_invalid_primary_category",
+                "entry_source_invalid_primary_basis",
+                "entry_source_invalid_blockers",
+                "entry_source_invalid_source_blockers",
+                "entry_source_invalid_missing_sources",
                 "entry_ai_screen_status",
                 "entry_ai_screen_required",
                 "entry_ai_screen_pass",

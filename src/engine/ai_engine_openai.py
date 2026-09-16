@@ -2334,9 +2334,9 @@ class GPTSniperEngine:
         }
         raw_confidence = provider_risk.get("confidence")
         raw_risk_fields = {
-            "entry_ai_raw_risk_verdict": str(
-                provider_risk.get("risk_verdict") or ""
-            )[:80],
+            "entry_ai_raw_risk_verdict": str(provider_risk.get("risk_verdict") or "")[
+                :80
+            ],
             "entry_ai_raw_risk_codes": _bounded_raw_strings("risk_codes", 6),
             "entry_ai_raw_confidence": (
                 raw_confidence
@@ -2395,9 +2395,7 @@ class GPTSniperEngine:
                 "execution_cost", {}
             )
             if isinstance(exact_payload, dict)
-            and isinstance(
-                exact_payload.get("anticipatory_reversal_analysis_v1"), dict
-            )
+            and isinstance(exact_payload.get("anticipatory_reversal_analysis_v1"), dict)
             and isinstance(
                 exact_payload.get("anticipatory_reversal_analysis_v1", {}).get(
                     "execution_cost"
@@ -9085,9 +9083,7 @@ class GPTSniperEngine:
                         entry_setup_live_policy.get("machine_bundle_sha256") or ""
                     ),
                     metadata=(
-                        dict(metadata_extra)
-                        if isinstance(metadata_extra, dict)
-                        else {}
+                        dict(metadata_extra) if isinstance(metadata_extra, dict) else {}
                     ),
                 )
                 machine_source_invalid_fields.update(
@@ -9104,6 +9100,36 @@ class GPTSniperEngine:
                                 )
                                 or {}
                             ).get("version")
+                        ),
+                        "machine_decision_before_provider": True,
+                        "entry_source_invalid_schema": (
+                            "machine_source_invalid_decomposition_v1"
+                        ),
+                        "entry_source_invalid_stage": "ai_input_preflight",
+                        "entry_source_invalid_primary_blocker": (
+                            candle_preflight.get("primary_blocker")
+                            or next(
+                                iter(candle_preflight.get("blockers") or []),
+                                "unclassified",
+                            )
+                        ),
+                        "entry_source_invalid_primary_category": (
+                            candle_preflight.get("primary_blocker_category")
+                            or "unclassified"
+                        ),
+                        "entry_source_invalid_blockers": (
+                            candle_preflight.get("blockers") or []
+                        ),
+                        "entry_source_invalid_source_blockers": (
+                            candle_preflight.get("source_blockers") or []
+                        ),
+                        "entry_source_invalid_missing_sources": (
+                            candle_preflight.get("missing_sources") or []
+                        ),
+                        "entry_source_invalid_primary_basis": (
+                            "producer_preflight_evaluation_order"
+                            if candle_preflight.get("primary_blocker")
+                            else "legacy_sorted_blocker_fallback"
                         ),
                         "entry_ai_screen_status": (
                             "not_requested_machine_source_invalid"
@@ -9190,9 +9216,11 @@ class GPTSniperEngine:
                     "scanner_promotion_id",
                 ):
                     if machine_exact.get(key) in (None, ""):
-                        machine_exact[key] = pre_prompt_snapshot.get(
-                            key
-                        ) or ws_data.get(key) or (metadata_extra or {}).get(key)
+                        machine_exact[key] = (
+                            pre_prompt_snapshot.get(key)
+                            or ws_data.get(key)
+                            or (metadata_extra or {}).get(key)
+                        )
                 from src.trading.market.micro_confirmation import (
                     load_live_dynamic_confirmation_source,
                 )

@@ -4163,9 +4163,17 @@ def test_machine_policy_preflight_block_preserves_source_invalid_receipt(monkeyp
     assert result["machine_bundle_sha256"] == "b" * 64
     assert result["entry_ai_role"] == live["ai_role"]
     assert result["entry_mechanistic_action"] == "source_invalid"
-    assert result["entry_ai_screen_status"] == (
-        "not_requested_machine_source_invalid"
+    assert result["machine_decision_before_provider"] is True
+    assert result["entry_source_invalid_schema"] == (
+        "machine_source_invalid_decomposition_v1"
     )
+    assert result["entry_source_invalid_primary_blocker"] == (
+        "ai_market_snapshot_missing"
+    )
+    assert result["entry_source_invalid_primary_category"] == "missing_source"
+    assert result["entry_source_invalid_blockers"] == ["ai_market_snapshot_missing"]
+    assert result["entry_source_invalid_missing_sources"] == ["ai_market_snapshot_v1"]
+    assert result["entry_ai_screen_status"] == ("not_requested_machine_source_invalid")
     assert result["scanner_promotion_id"] == "SCANPROM-source-invalid"
     assert result["evaluation_attempt_id"].startswith("machine-source-invalid-")
     assert result["policy_bundle_hash"] == "b" * 64

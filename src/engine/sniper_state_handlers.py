@@ -19876,8 +19876,15 @@ def _log_machine_nonentry_terminal_if_needed(
     decision = ai_decision if isinstance(ai_decision, dict) else {}
     machine_action = str(decision.get("entry_mechanistic_action") or "").upper()
     final_action = str(decision.get("action") or "").upper()
+    machine_predecision = bool(
+        decision.get("machine_decision_before_provider") is True
+        or (
+            machine_action == "SOURCE_INVALID"
+            and decision.get("machine_source_invalid_receipt") is True
+        )
+    )
     if (
-        decision.get("machine_decision_before_provider") is not True
+        not machine_predecision
         or decision.get("provider_called") is not False
         or machine_action not in {"BLOCK", "RECHECK", "SOURCE_INVALID"}
         or final_action == "BUY"
@@ -19894,6 +19901,32 @@ def _log_machine_nonentry_terminal_if_needed(
         and stock_fields.get("_machine_nonentry_terminal_attempt_id") == attempt_id
     ):
         return False
+    source_invalid_fields = (
+        {
+            "entry_source_invalid_schema": decision.get("entry_source_invalid_schema"),
+            "entry_source_invalid_stage": decision.get("entry_source_invalid_stage"),
+            "entry_source_invalid_primary_blocker": decision.get(
+                "entry_source_invalid_primary_blocker"
+            ),
+            "entry_source_invalid_primary_category": decision.get(
+                "entry_source_invalid_primary_category"
+            ),
+            "entry_source_invalid_primary_basis": decision.get(
+                "entry_source_invalid_primary_basis"
+            ),
+            "entry_source_invalid_blockers": decision.get(
+                "entry_source_invalid_blockers"
+            ),
+            "entry_source_invalid_source_blockers": decision.get(
+                "entry_source_invalid_source_blockers"
+            ),
+            "entry_source_invalid_missing_sources": decision.get(
+                "entry_source_invalid_missing_sources"
+            ),
+        }
+        if machine_action == "SOURCE_INVALID"
+        else {}
+    )
     _log_ai_confirmed_terminal_no_budget(
         stock,
         code,
@@ -19906,6 +19939,7 @@ def _log_machine_nonentry_terminal_if_needed(
             "machine_evaluation_status": decision.get("machine_evaluation_status"),
             "evaluation_attempt_id": decision.get("evaluation_attempt_id"),
             "policy_bundle_hash": decision.get("policy_bundle_hash"),
+            **source_invalid_fields,
         },
     )
     if attempt_id:
@@ -33433,6 +33467,11 @@ def _machine_primary_entry_provenance_fields(source: dict | None) -> dict:
         "evaluation_attempt_identity_source",
         "machine_capture_status",
         "machine_observation_sha256",
+        "entry_source_invalid_schema",
+        "entry_source_invalid_stage",
+        "entry_source_invalid_primary_blocker",
+        "entry_source_invalid_primary_category",
+        "entry_source_invalid_primary_basis",
         "scanner_promotion_id",
         "machine_bundle_sha256",
         "policy_bundle_hash",
@@ -51229,6 +51268,11 @@ def _build_ai_ops_log_fields(
         "evaluation_attempt_identity_source",
         "machine_capture_status",
         "machine_observation_sha256",
+        "entry_source_invalid_schema",
+        "entry_source_invalid_stage",
+        "entry_source_invalid_primary_blocker",
+        "entry_source_invalid_primary_category",
+        "entry_source_invalid_primary_basis",
         "entry_probe_intent_status",
         "entry_probe_intent_prompt_version",
         "entry_probe_intent_eligibility_path",
@@ -51976,6 +52020,13 @@ def _copy_ai_preflight_log_fields(payload: dict, out: dict) -> None:
         "ai_market_snapshot_market_data_route",
         "ai_market_snapshot_underlying_event_venue",
         "ai_input_preflight_status",
+        "ai_input_preflight_primary_blocker",
+        "ai_input_preflight_primary_blocker_category",
+        "entry_source_invalid_schema",
+        "entry_source_invalid_stage",
+        "entry_source_invalid_primary_blocker",
+        "entry_source_invalid_primary_category",
+        "entry_source_invalid_primary_basis",
     ):
         if field_name in payload:
             value = payload.get(field_name)
@@ -51999,8 +52050,14 @@ def _copy_ai_preflight_log_fields(payload: dict, out: dict) -> None:
             )
     for field_name in (
         "ai_input_preflight_blockers",
+        "ai_input_preflight_source_blockers",
+        "ai_input_preflight_blocker_evaluation_order",
+        "ai_input_preflight_source_blocker_evaluation_order",
         "ai_input_preflight_quality_warnings",
         "ai_input_preflight_missing_sources",
+        "entry_source_invalid_blockers",
+        "entry_source_invalid_source_blockers",
+        "entry_source_invalid_missing_sources",
     ):
         if field_name not in payload:
             continue
