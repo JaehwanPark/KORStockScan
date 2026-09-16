@@ -9937,6 +9937,21 @@ class GPTSniperEngine:
                         "ai_base_candidate_sha256"
                     ),
                 )
+                # The transport metadata is useful for request routing, but the
+                # immutable decision trace is built from input_contract_fields
+                # and the normalized result.  Preserve the exact issued prompt
+                # receipt in that trace input as well so postclose measurement
+                # can bind each provider call to the reviewed compact variant.
+                input_contract_fields.update(
+                    {
+                        key: trace_metadata_extra[key]
+                        for key in (
+                            "auxiliary_system_prompt_sha256",
+                            "entry_ai_prompt_variant",
+                        )
+                        if trace_metadata_extra.get(key) not in (None, "")
+                    }
+                )
             provider_attempted = True
             result = self._call_openai_safe(
                 prompt,

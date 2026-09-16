@@ -27475,6 +27475,15 @@ def test_watching_state_logs_latency_entry_price_guard(monkeypatch):
                 "reason": "confirmed",
                 "ai_result_source": "live",
                 "ai_parse_ok": True,
+                "entry_primary_decision_owner": "mechanistic_entry_adjudicator",
+                "entry_mechanistic_action": "ENTER_NOW",
+                "entry_ai_screen_status": "pass",
+                "entry_ai_screen_pass": True,
+                "evaluation_attempt_id": "eval-latency-price",
+                "scanner_promotion_id": "SCANPROM-LATENCY-PRICE",
+                "policy_bundle_hash": "b" * 64,
+                "effective_venue": "KRX",
+                "market_session_bucket": "KRX_REGULAR",
                 **_fresh_submit_micro_fields(),
             }
 
@@ -27594,6 +27603,7 @@ def test_watching_state_logs_latency_entry_price_guard(monkeypatch):
         "position_tag": "SCANNER",
         "prob": 0.9,
         "rt_ai_prob": 0.9,
+        "scanner_promotion_id": "SCANPROM-LATENCY-PRICE",
     }
     state_handlers.handle_watching_state(
         stock=stock,
@@ -28935,7 +28945,9 @@ def test_ai_numeric_consistency_recheck_does_not_count_untrusted_supply_axis(
     assert decision["skip_reason"] == "strong_micro_override_candidate_only"
 
 
-def test_score65_74_recovery_probe_bypasses_first_ai_big_bite_wait(monkeypatch):
+def test_score65_74_recovery_probe_cannot_submit_without_machine_action_receipt(
+    monkeypatch,
+):
     from src.utils.constants import TRADING_RULES as CONFIG
 
     class FixedDateTime(datetime):
@@ -29144,7 +29156,21 @@ def test_score65_74_recovery_probe_bypasses_first_ai_big_bite_wait(monkeypatch):
     assert probe_fields["broker_order_forbidden"] is True
     assert "broker_guard_bypass" in probe_fields["forbidden_uses"]
     assert "stale_submit_bypass" in probe_fields["forbidden_uses"]
-    assert sent_orders
+    assert sent_orders == []
+    assert "order_bundle_submitted" not in stages
+    assert "entry_execution_sizing_plan_block" in stages
+    sizing_block = next(
+        fields for stage, fields in logs if stage == "entry_execution_sizing_plan_block"
+    )
+    assert sizing_block["entry_execution_sizing_valid"] is False
+    assert sizing_block["entry_execution_sizing_plan_emitted"] is False
+    assert (
+        sizing_block["entry_execution_sizing_status"]
+        == "blocked_machine_action_receipt_absent"
+    )
+    assert sizing_block["entry_execution_sizing_blockers"] == [
+        "machine_action_receipt_absent"
+    ]
 
 
 def test_score65_74_recovery_probe_blocks_observation_only_blocking_wait(
@@ -29218,6 +29244,15 @@ def test_watching_state_blocks_deep_below_bid_pre_submit_price(monkeypatch):
                 "reason": "confirmed",
                 "ai_result_source": "live",
                 "ai_parse_ok": True,
+                "entry_primary_decision_owner": "mechanistic_entry_adjudicator",
+                "entry_mechanistic_action": "ENTER_NOW",
+                "entry_ai_screen_status": "pass",
+                "entry_ai_screen_pass": True,
+                "evaluation_attempt_id": "eval-deep-below-bid",
+                "scanner_promotion_id": "SCANPROM-DEEP-BELOW-BID",
+                "policy_bundle_hash": "b" * 64,
+                "effective_venue": "KRX",
+                "market_session_bucket": "KRX_REGULAR",
                 **_fresh_submit_micro_fields(),
             }
 
@@ -29322,6 +29357,7 @@ def test_watching_state_blocks_deep_below_bid_pre_submit_price(monkeypatch):
         "position_tag": "SCANNER",
         "prob": 0.9,
         "rt_ai_prob": 0.9,
+        "scanner_promotion_id": "SCANPROM-DEEP-BELOW-BID",
     }
     state_handlers.handle_watching_state(
         stock=stock,
@@ -30582,6 +30618,16 @@ def test_pre_submit_liquidity_relief_allows_strong_bundle_submit(
                 "reason": "strong bundle confirmed",
                 "ai_result_source": "live",
                 "ai_parse_ok": True,
+                "entry_primary_decision_owner": ("mechanistic_entry_adjudicator"),
+                "entry_mechanistic_action": "ENTER_NOW",
+                "entry_mechanistic_policy_version": "test-machine-v1",
+                "entry_ai_screen_status": "pass",
+                "entry_ai_screen_pass": True,
+                "evaluation_attempt_id": "eval-relief",
+                "scanner_promotion_id": "SCANPROM-RELIEF",
+                "policy_bundle_hash": "b" * 64,
+                "effective_venue": "KRX",
+                "market_session_bucket": "KRX_REGULAR",
                 **_fresh_submit_micro_fields(),
             }
 
@@ -30697,20 +30743,6 @@ def test_pre_submit_liquidity_relief_allows_strong_bundle_submit(
             "order_price": kwargs.get("signal_price"),
         },
     )
-    if not broker_order_identity_present:
-        monkeypatch.setattr(
-            state_handlers,
-            "apply_entry_split_order_policy",
-            lambda orders, **kwargs: (
-                [dict(orders[0]), {**orders[0], "tag": "residual"}],
-                {
-                    "entry_split_order_policy_applied": True,
-                    "entry_split_order_policy_mode": "test_two_leg_bundle",
-                    "entry_split_order_leg_count": 2,
-                },
-            ),
-        )
-
     stock = {
         "id": 11,
         "name": "RELIEF",
@@ -30718,6 +30750,7 @@ def test_pre_submit_liquidity_relief_allows_strong_bundle_submit(
         "position_tag": "SCANNER",
         "prob": 0.9,
         "rt_ai_prob": 0.9,
+        "scanner_promotion_id": "SCANPROM-RELIEF",
         "scanner_promotion_reason": "new_price_jump_start_source",
         "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
     }
@@ -30753,11 +30786,41 @@ def test_pre_submit_liquidity_relief_allows_strong_bundle_submit(
     assert "pre_submit_liquidity_relief_evaluated" in by_stage
     assert "pre_submit_liquidity_relief_allowed" in by_stage
     assert "pre_submit_liquidity_guard_block" not in by_stage
-    # A broker success response without an order identity must stop the bundle;
-    # the residual leg is never sent while the first leg is unreconciled.
+    # A broker success response without an order identity must stop the bundle
+    # and prevent any later retry while the first leg is unreconciled.
     assert len(sent_orders) == 1
     if broker_order_identity_present:
         assert "order_bundle_submitted" in by_stage
+        assert (
+            by_stage["entry_execution_sizing_plan"][
+                "entry_execution_sizing_plan_emitted"
+            ]
+            is True
+        )
+        assert (
+            by_stage["entry_execution_sizing_plan"]["entry_execution_sizing_valid"]
+            is True
+        )
+        assert by_stage["entry_execution_sizing_plan"]["entry_execution_sizing_plan_id"]
+        assert by_stage["entry_execution_sizing_plan"][
+            "entry_execution_sizing_plan_sha256"
+        ]
+        assert (
+            by_stage["order_bundle_submitted"]["entry_execution_sizing_plan_id"]
+            == by_stage["entry_execution_sizing_plan"]["entry_execution_sizing_plan_id"]
+        )
+        assert (
+            by_stage["entry_submit_attempt_finished"]["submit_call_outcome"]
+            == "broker_accepted"
+        )
+        assert (
+            by_stage["entry_submit_attempt_finished"]["submit_call_return_outcome"]
+            == "returned_false"
+        )
+        assert (
+            by_stage["entry_submit_attempt_finished"]["submit_call_broker_accepted"]
+            is True
+        )
         assert by_stage["order_bundle_submitted"]["requested_qty"] == 1
         assert by_stage["order_bundle_submitted"]["submitted_qty"] == 1
         assert by_stage["order_bundle_submitted"]["submitted_leg_count"] == 1

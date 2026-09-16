@@ -612,9 +612,7 @@ def _machine_ai_natural_source_consumption(
             "assessed_capture_verified_trace_count": len(
                 machine_assessed_capture_verified_traces
             ),
-            "source_invalid_excluded_trace_count": len(
-                machine_source_invalid_traces
-            ),
+            "source_invalid_excluded_trace_count": len(machine_source_invalid_traces),
             "assessment_contract_invalid_trace_count": len(
                 machine_contract_invalid_traces
             ),
@@ -5729,9 +5727,7 @@ def _blocked_observation_records_fail_closed_source_gap(
             .lower()
         )
         explicit_provider_not_evaluated = bool(
-            str(fields.get("ai_decision_evaluation_status") or "")
-            .strip()
-            .lower()
+            str(fields.get("ai_decision_evaluation_status") or "").strip().lower()
             in {
                 "not_evaluated_provider_or_preflight",
                 "not_evaluated_transport_timeout",
@@ -6029,7 +6025,21 @@ def _row_contract_violations(
         or fields.get("entry_submit_attempt_authority") != "observation_only"
         or fields.get("decision_authority") != "submit_call_completion_observation_only"
         or fields.get("submit_call_outcome")
-        not in {"returned_true", "returned_false", "returned_other", "raised"}
+        not in {
+            "returned_true",
+            "returned_false",
+            "returned_other",
+            "raised",
+            "broker_accepted",
+        }
+        or (
+            fields.get("submit_call_outcome") == "broker_accepted"
+            and (
+                not _contract_bool(fields.get("submit_call_broker_accepted"), True)
+                or fields.get("submit_call_return_outcome")
+                not in {"returned_true", "returned_false", "returned_other", "raised"}
+            )
+        )
         or not _contract_bool(fields.get("runtime_effect"), False)
         or not _contract_bool(fields.get("allowed_runtime_apply"), False)
     ):

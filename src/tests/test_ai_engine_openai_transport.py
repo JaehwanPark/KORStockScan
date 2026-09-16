@@ -4014,6 +4014,9 @@ def test_machine_initial_policy_assesses_before_provider_cache_and_lock(
         "auxiliary_system_prompt_sha256": initial_policy.digest(
             initial_policy.compact_auxiliary_prompt({})
         ),
+        "auxiliary_prompt_variant": initial_policy.compact_prompt_variant(
+            initial_policy.AI_VERSION
+        ),
     }
     monkeypatch.setattr(
         openai_module, "resolve_live_prompt_policy", lambda **kwargs: live
@@ -4097,6 +4100,11 @@ def test_machine_initial_policy_assesses_before_provider_cache_and_lock(
     )
     assert events == (["machine", "ai"] if ready else ["machine"]), result
     assert result["scanner_promotion_id"] == "SCANPROM-005930-machine"
+    if ready:
+        assert result["auxiliary_system_prompt_sha256"] == initial_policy.digest(
+            live["auxiliary_system_prompt"]
+        )
+        assert result["entry_ai_prompt_variant"] == live["auxiliary_prompt_variant"]
     if not ready:
         assert result["provider_called"] is False
         assert result["action"] in {"WAIT", "DROP"}

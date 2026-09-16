@@ -48,8 +48,10 @@ from src.utils.logger import log_error, log_info
 from src.utils.pipeline_event_logger import emit_pipeline_event
 from src.engine.monitoring.entry_attempt_identity import (
     bind_submit_attempt_machine_lineage,
+    mark_submit_attempt_broker_accepted,
     observe_submit_attempt,
     submit_attempt_fields,
+    submit_attempt_machine_lineage,
 )
 from src.engine.sniper_time import (
     SCALPING_BUY_WINDOWS,
@@ -67920,11 +67922,18 @@ def _handle_watching_strategy_branch(
 
 
 def _observe_entry_submit_finished(stock, code, outcome):
+    attempt_fields = submit_attempt_fields(stock, code)
     _log_entry_pipeline(
         stock,
         code,
         "entry_submit_attempt_finished",
         submit_call_outcome=outcome,
+        submit_call_return_outcome=attempt_fields.get(
+            "entry_submit_attempt_return_outcome", "not_returned"
+        ),
+        submit_call_broker_accepted=bool(
+            attempt_fields.get("entry_submit_attempt_broker_accepted")
+        ),
         metric_role="funnel_count",
         decision_authority="submit_call_completion_observation_only",
         window_policy="single_submit_function_invocation",
@@ -72179,11 +72188,11 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 **entry_ai_submit_authority,
             },
         )
-        machine_action_receipt = (
-            runtime.get("machine_primary_entry_provenance")
-            or stock.get("last_watching_ai_machine_primary_fields")
-            or {}
-        )
+        # Only the receipt validated and frozen at this submit invocation may
+        # parent a sizing plan. Runtime/stock snapshots are provenance inputs
+        # to the binder, not fallback authority: accepting either here would
+        # let an incomplete or stale receipt become a valid execution plan.
+        machine_action_receipt = submit_attempt_machine_lineage(stock, code)
         if planned_orders and machine_action_receipt:
             planned_orders, entry_execution_sizing_fields = (
                 compose_entry_execution_sizing_plan(
@@ -72206,12 +72215,12 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     "entry_execution_sizing_plan_v1"
                 ),
                 "entry_execution_sizing_plan_emitted": False,
-                "entry_execution_sizing_valid": True,
-                "entry_execution_sizing_blockers": [],
+                "entry_execution_sizing_valid": False,
+                "entry_execution_sizing_blockers": ["machine_action_receipt_absent"],
                 "entry_execution_sizing_status": (
-                    "not_applicable_machine_action_receipt_absent"
+                    "blocked_machine_action_receipt_absent"
                 ),
-                "entry_execution_sizing_runtime_effect": False,
+                "entry_execution_sizing_runtime_effect": True,
                 "entry_execution_sizing_allowed_runtime_apply": False,
             }
         else:
@@ -73772,6 +73781,11 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         clear_signal_reference(stock)
         return False
 
+    # The submit function intentionally returns False after handing control
+    # back to the WATCHING loop.  Preserve the broker acknowledgement as the
+    # call-local terminal meaning instead of treating that control-flow value
+    # as a failed submit.
+    mark_submit_attempt_broker_accepted(stock, code)
     _mutate_stock_state(stock, set_fields={"entry_mode": entry_mode})
     if scout_upgrade_entry:
         _mutate_stock_state(

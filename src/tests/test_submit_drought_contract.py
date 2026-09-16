@@ -409,6 +409,7 @@ def test_submit_machine_lineage_is_call_local_complete_and_non_authoritative():
         bind_submit_attempt_machine_lineage,
         observe_submit_attempt,
         submit_attempt_fields,
+        submit_attempt_machine_lineage,
     )
 
     stock = {"id": 7, "scanner_promotion_id": "promotion-7"}
@@ -421,6 +422,7 @@ def test_submit_machine_lineage_is_call_local_complete_and_non_authoritative():
         "policy_bundle_hash": "b" * 64,
         "entry_mechanistic_action": "ENTER_NOW",
         "entry_ai_screen_status": "pass",
+        "entry_ai_screen_pass": True,
         "unexpected_order_authority": True,
     }
 
@@ -428,7 +430,10 @@ def test_submit_machine_lineage_is_call_local_complete_and_non_authoritative():
     def run(stock, code):
         assert bind_submit_attempt_machine_lineage(stock, code, lineage) is True
         fields = submit_attempt_fields(stock, code)
+        receipt = submit_attempt_machine_lineage(stock, code)
         assert fields["evaluation_attempt_id"] == "eval-7"
+        assert receipt["evaluation_attempt_id"] == "eval-7"
+        assert receipt["entry_ai_screen_pass"] is True
         assert fields["entry_submit_attempt_authority"] == "observation_only"
         assert "unexpected_order_authority" not in fields
         return fields
@@ -817,6 +822,57 @@ def test_completion_observer_cannot_change_return_or_mask_original_exception(cap
     assert submit_attempt_fields({"id": 1}, "000001") == {}
 
 
+def test_broker_acknowledgement_owns_submit_terminal_over_control_flow_return():
+    from src.engine.monitoring.entry_attempt_identity import (
+        mark_submit_attempt_broker_accepted,
+        observe_submit_attempt,
+        submit_attempt_fields,
+    )
+
+    recorded = []
+    stock = {"id": 1, "scanner_promotion_id": "SCANPROM-A"}
+
+    def finish(stock, code, outcome):
+        recorded.append((outcome, submit_attempt_fields(stock, code)))
+
+    @observe_submit_attempt(on_finish=finish)
+    def run(stock, code):
+        assert mark_submit_attempt_broker_accepted(stock, code) is True
+        return False
+
+    assert run(stock, "000001") is False
+    assert recorded[0][0] == "broker_accepted"
+    assert recorded[0][1]["entry_submit_attempt_broker_accepted"] is True
+    assert recorded[0][1]["entry_submit_attempt_return_outcome"] == "returned_false"
+    assert submit_attempt_fields(stock, "000001") == {}
+
+
+def test_broker_acknowledgement_survives_local_post_submit_exception():
+    from src.engine.monitoring.entry_attempt_identity import (
+        mark_submit_attempt_broker_accepted,
+        observe_submit_attempt,
+        submit_attempt_fields,
+    )
+
+    recorded = []
+    stock = {"id": 1, "scanner_promotion_id": "SCANPROM-A"}
+
+    def finish(stock, code, outcome):
+        recorded.append((outcome, submit_attempt_fields(stock, code)))
+
+    @observe_submit_attempt(on_finish=finish)
+    def run(stock, code):
+        assert mark_submit_attempt_broker_accepted(stock, code) is True
+        raise RuntimeError("post-submit failure")
+
+    with pytest.raises(RuntimeError, match="post-submit failure"):
+        run(stock, "000001")
+    assert recorded[0][0] == "broker_accepted"
+    assert recorded[0][1]["entry_submit_attempt_broker_accepted"] is True
+    assert recorded[0][1]["entry_submit_attempt_return_outcome"] == "raised"
+    assert submit_attempt_fields(stock, "000001") == {}
+
+
 def test_live_submit_guard_and_logger_share_call_id_without_order_io(monkeypatch):
     from src.engine import sniper_state_handlers as sh
 
@@ -855,6 +911,7 @@ def test_live_submit_guard_and_logger_share_call_id_without_order_io(monkeypatch
             "policy_bundle_hash": "b" * 64,
             "entry_mechanistic_action": "ENTER_NOW",
             "entry_ai_screen_status": "pass",
+            "entry_ai_screen_pass": True,
         },
     }
     assert (
@@ -882,6 +939,17 @@ def test_live_submit_guard_and_logger_share_call_id_without_order_io(monkeypatch
         )
 
     assert not any(violations(emitted[1][1]).values())
+    accepted = {
+        **emitted[1][1],
+        "submit_call_outcome": "broker_accepted",
+        "submit_call_return_outcome": "returned_false",
+        "submit_call_broker_accepted": True,
+    }
+    assert not any(violations(accepted).values())
+    assert any(violations({**accepted, "submit_call_broker_accepted": False}).values())
+    assert not any(
+        violations({**accepted, "submit_call_return_outcome": "raised"}).values()
+    )
     assert any(violations({**emitted[1][1], "allowed_runtime_apply": True}).values())
     assert (
         sh._submit_watching_triggered_entry(stock, "010170", {}, None, runtime) is False

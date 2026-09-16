@@ -21,6 +21,7 @@ _MACHINE_LINEAGE_FIELDS = frozenset(
         "policy_bundle_hash",
         "entry_mechanistic_action",
         "entry_ai_screen_status",
+        "entry_ai_screen_pass",
         "entry_mechanistic_policy_version",
     }
 )
@@ -39,6 +40,8 @@ def observe_submit_attempt(function=None, *, on_finish=None):
                 "attempt_id": uuid4().hex,
                 "promotion_id": _promotion_id(stock),
                 "machine_lineage": {},
+                "broker_submit_accepted": False,
+                "return_outcome": "not_returned",
             }
         except Exception as exc:
             identity = None
@@ -49,12 +52,31 @@ def observe_submit_attempt(function=None, *, on_finish=None):
         outcome = "raised"
         try:
             result = function(stock, code, *args, **kwargs)
-            outcome = (
+            return_outcome = (
                 "returned_true"
                 if result is True
                 else "returned_false" if result is False else "returned_other"
             )
+            current = _ATTEMPT.get()
+            if isinstance(current, dict):
+                current = {**current, "return_outcome": return_outcome}
+                _ATTEMPT.set(current)
+                outcome = (
+                    "broker_accepted"
+                    if current.get("broker_submit_accepted") is True
+                    else return_outcome
+                )
+            else:
+                outcome = return_outcome
             return result
+        except Exception:
+            current = _ATTEMPT.get()
+            if isinstance(current, dict):
+                current = {**current, "return_outcome": "raised"}
+                _ATTEMPT.set(current)
+                if current.get("broker_submit_accepted") is True:
+                    outcome = "broker_accepted"
+            raise
         finally:
             try:
                 if on_finish is not None:
@@ -105,17 +127,21 @@ def bind_submit_attempt_machine_lineage(stock, code, source):
         "policy_bundle_hash",
         "entry_mechanistic_action",
         "entry_ai_screen_status",
+        "entry_ai_screen_pass",
     }
     if not required <= lineage.keys():
         return False
     if (
-        str(lineage["entry_primary_decision_owner"])
-        != "mechanistic_entry_adjudicator"
+        str(lineage["entry_primary_decision_owner"]) != "mechanistic_entry_adjudicator"
         or str(lineage["effective_venue"]).upper()
         not in {"KRX", "NXT", "PREMARKET_KRX_LIKE"}
         or ":" in str(lineage["market_session_bucket"])
         or str(lineage["entry_mechanistic_action"]).upper()
         not in {"ENTER_NOW", "RECHECK", "BLOCK", "SOURCE_INVALID"}
+        or (
+            str(lineage["entry_mechanistic_action"]).upper() == "ENTER_NOW"
+            and lineage.get("entry_ai_screen_pass") is not True
+        )
     ):
         return False
     if value.get("promotion_id") and str(lineage["scanner_promotion_id"]) != str(
@@ -126,6 +152,34 @@ def bind_submit_attempt_machine_lineage(stock, code, source):
     if not updated.get("promotion_id"):
         updated["promotion_id"] = str(lineage["scanner_promotion_id"])
     _ATTEMPT.set(updated)
+    return True
+
+
+def submit_attempt_machine_lineage(stock, code):
+    """Return the validated machine receipt bound to this submit call."""
+
+    value = _ATTEMPT.get()
+    if (
+        not isinstance(value, dict)
+        or value.get("record_id") != str(stock.get("id") or "")
+        or value.get("code") != str(code)
+        or not isinstance(value.get("machine_lineage"), dict)
+    ):
+        return {}
+    return dict(value["machine_lineage"])
+
+
+def mark_submit_attempt_broker_accepted(stock, code):
+    """Mark a broker-acknowledged submit without changing function control flow."""
+
+    value = _ATTEMPT.get()
+    if (
+        not isinstance(value, dict)
+        or value.get("record_id") != str(stock.get("id") or "")
+        or value.get("code") != str(code)
+    ):
+        return False
+    _ATTEMPT.set({**value, "broker_submit_accepted": True})
     return True
 
 
@@ -149,6 +203,12 @@ def submit_attempt_fields(stock, code):
         "entry_submit_attempt_schema": "call_local_submit_attempt_v1",
         "entry_submit_attempt_id": value["attempt_id"],
         "entry_submit_attempt_authority": "observation_only",
+        "entry_submit_attempt_broker_accepted": bool(
+            value.get("broker_submit_accepted")
+        ),
+        "entry_submit_attempt_return_outcome": str(
+            value.get("return_outcome") or "not_returned"
+        ),
         **value.get("machine_lineage", {}),
     }
     if value.get("promotion_id"):
