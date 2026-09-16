@@ -2359,7 +2359,7 @@ def _entry_counterfactual_join_keys_from_fields(fields: dict) -> set[str]:
     ):
         value = str(fields.get(key) or "").strip()
         if value and value != "-":
-            keys.add(value)
+            keys.add(f"{key}:{value}")
     return keys
 
 
@@ -2369,6 +2369,7 @@ def _dynamic_entry_price_counterfactual_join_diagnostics(
     target_date: str | None,
 ) -> dict:
     relevant_stages = {
+        "entry_execution_sizing_plan",
         "latency_block",
         "latency_pass",
         "order_leg_request",
@@ -2402,7 +2403,8 @@ def _dynamic_entry_price_counterfactual_join_diagnostics(
             continue
         eligible_events.append(event)
         event_key_sets.append(
-            _entry_counterfactual_join_keys_from_fields(_event_fields(event))
+            _entry_counterfactual_join_keys_from_fields(event)
+            | _entry_counterfactual_join_keys_from_fields(_event_fields(event))
         )
 
     source_path = (
@@ -2431,6 +2433,7 @@ def _dynamic_entry_price_counterfactual_join_diagnostics(
             "counterfactual_unmatched_row_count": 0,
             "reason_counts": dict(reason_counts),
             "runtime_effect": False,
+            "join_semantics": "identity_lineage_diagnostic_only_not_economic_pair",
             "decision_authority": "dynamic_entry_price_counterfactual_join_diagnostics_only",
         }
 
@@ -2480,6 +2483,7 @@ def _dynamic_entry_price_counterfactual_join_diagnostics(
         "counterfactual_unmatched_row_count": unmatched_rows,
         "reason_counts": dict(reason_counts),
         "runtime_effect": False,
+        "join_semantics": "identity_lineage_diagnostic_only_not_economic_pair",
         "decision_authority": "dynamic_entry_price_counterfactual_join_diagnostics_only",
     }
 
@@ -8476,18 +8480,46 @@ def _entry_price_event_record_key(event: dict) -> str | None:
 
 def _entry_price_exact_outcome_rows_by_record(
     completed_rows: list[dict],
+    *,
+    conflicting_keys: set[str] | None = None,
 ) -> dict[str, dict]:
-    """Index only broker-fact completed outcomes used for runtime promotion."""
+    """Index unique finite broker facts; quarantine every conflicting alias.
 
-    indexed: dict[str, dict] = {}
-    for row in _valid_profit_rows(completed_rows or []):
+    An alternative alias must not rescue a row whose other durable identity is
+    disputed. Equal copies of the same fact are one observation, not samples.
+    """
+
+    rows_by_hash: dict[str, dict] = {}
+    hashes_by_identity: dict[str, set[str]] = defaultdict(set)
+    for row in completed_rows or []:
+        value = row.get("profit_rate")
+        profit = _safe_float(value, None)
+        if isinstance(value, bool) or profit is None or not math.isfinite(profit):
+            continue
         if _is_synthetic_test_row(row):
             continue
         if str(row.get("completed_economics_source") or "").strip() != (
             "trade_performance_fact_exact_receipt"
         ):
             continue
+        digest = _json_sha256(row)
+        rows_by_hash.setdefault(digest, row)
         for identity in _entry_price_event_identity_keys(row):
+            hashes_by_identity[identity].add(digest)
+    disputed = {
+        identity for identity, hashes in hashes_by_identity.items() if len(hashes) > 1
+    }
+    rejected_hashes = {
+        digest for identity in disputed for digest in hashes_by_identity[identity]
+    }
+    indexed: dict[str, dict] = {}
+    for digest, row in rows_by_hash.items():
+        identities = _entry_price_event_identity_keys(row)
+        if digest in rejected_hashes:
+            if conflicting_keys is not None:
+                conflicting_keys.update(identities)
+            continue
+        for identity in identities:
             indexed[identity] = row
     return indexed
 
@@ -8554,7 +8586,37 @@ def _entry_price_profile_candidate_grid(
             else:
                 related_identity_unmatched += 1
 
-    exact_rows = _entry_price_exact_outcome_rows_by_record(completed_rows)
+    conflicting_outcome_keys: set[str] = set()
+    exact_rows = _entry_price_exact_outcome_rows_by_record(
+        completed_rows, conflicting_keys=conflicting_outcome_keys
+    )
+    # Resolve across the entire submit population before grouping by policy.
+    # Neither multiple facts per submit nor one fact reused by several submits
+    # can satisfy a promotion sample floor.
+    exact_rows_by_record = {
+        key: {
+            _json_sha256(exact_rows[identity]): exact_rows[identity]
+            for identity in record["identity_keys"]
+            if identity in exact_rows
+        }
+        for key, record in records.items()
+    }
+    record_keys_by_outcome: dict[str, set[str]] = defaultdict(set)
+    for key, rows in exact_rows_by_record.items():
+        for digest in rows:
+            record_keys_by_outcome[digest].add(key)
+    ambiguous_outcome_records = {
+        key
+        for key, record in records.items()
+        if record["identity_keys"] & conflicting_outcome_keys
+        or len(exact_rows_by_record[key]) > 1
+        or any(
+            len(record_keys_by_outcome[digest]) > 1
+            for digest in exact_rows_by_record[key]
+        )
+    }
+    for key in ambiguous_outcome_records:
+        exact_rows_by_record[key] = {}
     groups: dict[tuple[str, int, str], list[dict]] = defaultdict(list)
     unclassified_record_count = 0
     aggressive_override_record_count = 0
@@ -8576,18 +8638,10 @@ def _entry_price_profile_candidate_grid(
     grid: list[dict] = []
     eligible: list[dict] = []
     for (profile, bps, value_key), records_for_candidate in sorted(groups.items()):
-        exact_rows_by_record = {
-            item["record_key"]: {
-                id(exact_rows[identity]): exact_rows[identity]
-                for identity in item["identity_keys"]
-                if identity in exact_rows
-            }
-            for item in records_for_candidate
-        }
         joined_rows = [
             row
-            for rows in exact_rows_by_record.values()
-            for row in rows.values()
+            for item in records_for_candidate
+            for row in exact_rows_by_record[item["record_key"]].values()
         ]
         profit_values = [
             value
@@ -8627,7 +8681,10 @@ def _entry_price_profile_candidate_grid(
                 str(event.get("stage") or "") == "entry_order_cancel_confirmed"
                 for event in item["events"]
             )
-            if has_exact_outcome:
+            if item["record_key"] in ambiguous_outcome_records:
+                state = "ambiguous_exact_outcome_source_quality"
+                terminal_counts[state] = terminal_counts.get(state, 0) + 1
+            elif has_exact_outcome:
                 terminal_counts["completed_exact_outcome"] += 1
             elif has_cancel:
                 terminal_counts["confirmed_cancel_without_completed_economics"] += 1
@@ -8657,6 +8714,10 @@ def _entry_price_profile_candidate_grid(
                 round(sum(profit_values) / joined_count, 4) if joined_count else None
             ),
             "real_outcome_joined_sample": joined_count,
+            "real_outcome_ambiguous_count": sum(
+                item["record_key"] in ambiguous_outcome_records
+                for item in records_for_candidate
+            ),
             "real_outcome_pending_count": submitted_count - joined_count,
             "real_outcome_join_rate": (
                 round(joined_count / submitted_count, 4) if submitted_count else 0.0
@@ -8715,6 +8776,8 @@ def _entry_price_profile_candidate_grid(
         "aggressive_override_record_count": aggressive_override_record_count,
         "related_identity_unmatched_event_count": related_identity_unmatched,
         "related_identity_ambiguous_event_count": related_identity_ambiguous,
+        "exact_outcome_conflicting_identity_count": len(conflicting_outcome_keys),
+        "exact_outcome_ambiguous_record_count": len(ambiguous_outcome_records),
     }
 
 
@@ -9304,7 +9367,7 @@ def _build_dynamic_entry_price_resolver_family(
     }
     counterfactual_join_diagnostics = (
         _dynamic_entry_price_counterfactual_join_diagnostics(
-            real_stage_events + sim_events,
+            events,
             target_date=target_date,
         )
     )
@@ -9447,6 +9510,12 @@ def _build_dynamic_entry_price_resolver_family(
             ],
             "entry_price_profile_identity_missing_event_count": profile_selection[
                 "identity_missing_event_count"
+            ],
+            "entry_price_profile_exact_outcome_ambiguous_record_count": profile_selection[
+                "exact_outcome_ambiguous_record_count"
+            ],
+            "entry_price_profile_exact_outcome_conflicting_identity_count": profile_selection[
+                "exact_outcome_conflicting_identity_count"
             ],
             "entry_price_profile_unclassified_record_count": profile_selection[
                 "unclassified_record_count"
@@ -10093,7 +10162,10 @@ def _build_entry_price_execution_quality_family(
         for key in (_entry_price_event_record_key(event) for event in submitted_real)
         if key is not None
     }
-    terminal_receipt_join_count = len(submitted_record_keys & set(exact_outcome))
+    terminal_receipt_join_count = len({
+        _json_sha256(exact_outcome[key])
+        for key in submitted_record_keys & set(exact_outcome)
+    })
     return {
         "family": "entry_price_execution_quality",
         "stage": "entry",

@@ -143,6 +143,17 @@ Official reference receipt (`2026-09-17T01:15:02+09:00` 재확인 기록): upstr
 - 배포 사전08:06:41/사후08:08:25의 기존 strict adapter 읽기 전용 조회에서 KRX/NXT 계약 모두 정상, 삼성전자25주와 매수가269471·미체결0건이 일치한다. custody registry SHA256, 오늘 env와 dated machine policy SHA256도 동일했다. 원 owner를 main에 이관하거나 target를 취소하지 않았다. 자연 WS quote0D 수신08:08:29와 trade0B 수신08:08:36을 확인했으나 서로 다른 symbol의 receipt이므로 same-scope ordered-window acceptance로 확대하지 않는다. REG item budget skip 경고는 U5의 scheduler/budget 잔여로 남긴다.
 - 재기동/배포는 새 장후 평가/정책/수익의 완료가 아니다. 오늘 dated 정책/env는 그대로이며, 새 선정은 기존 정기 장후→next-date publisher→PREOPEN/loader 경로가 소유한다. 자연 generation·새 정책 소비·실체결 경제성은 별도 OPEN이다. [배포·가동 검증 receipt](../../data/runtime/runtime_release_validation/u9-contract-closure-20260917-de8792b7.json)를 보존한다.
 
+## 13. 가격 평가의 상충·중복 경제성 join과 미제출 진단 전달 보완
+
+2026-09-17 08시대 후속. 기존 Daily producer와 직접 execution-quality consumer, 해당 회귀만 수정했다. 새 collector·모듈·장후 단계·Provider/주문 호출을 만들지 않았다. U9 전체 구현 완료가 아니다.
+
+- 최초 결함은 exact completed fact를 alias별 마지막 행으로 덮어쓰던 index와 한 submit의 여러 outcome/여러 submit의 같은 outcome을 중복 표본으로 세던 grid다. 상충 fact는 모든 별칭에서 격리하고, 동일 내용 복사본은 한 경제성 관측으로 다룬다. candidate/profile 그룹 분리 전에 전 모집단에서 one-submit/one-fact와 one-fact/one-submit을 확인한다. 읽기 순서나 다른 별칭으로 격리를 우회할 수 없다. execution-quality 감사도 같은 fact를 한 번만 계수한다.
+- NaN/무한대/bool 손익은 exact index에서 제외한다. 상충/복수/공유 outcome은 명시적인 source-quality 상태로 제출 분모에 보존하며 결측 EV·미체결 기회비용은 null이다. coverage 상한1·음수가 아닌 미join 수·terminal 보존식을 검증했다. 정상 행 전체를 일괄 차단하거나 형식 수리에 추가 실체결·양수 EV를 요구하지 않는다.
+- 기존 미진입 CF **진단**에 원 raw event stream을 전달하여 `latency_block`과 이미 구현된 미제출 `entry_execution_sizing_plan` receipt가 제출 전 필터에서 사라지지 않게 했다. top-level identity도 소비하며 candidate/record 등 다른 종류의 ID가 우연히 같다고 연결하지 않는다. 이 join은 identity-lineage 진단일 뿐, price-ready 권한·same-scope executable/cost/exit·chronological paired 경제성을 증명하거나 가격을 발급하지 않는다. `join_semantics`에 이를 명시하고 runtime effect=false를 유지한다.
+- 기대효과는 표본 부풀림/상충 손익의 잘못된 자동 승격 방지와 미제출 진단 누락 노출이다. 기존 기계 ENTER·compact AI·가격/수량 계산·leg·scale-in·broker/source/hard safety와 오늘 정책/env는 그대로다. 새 후보의 운용은 기존 정기 장후→publisher→다음 PREOPEN/loader 자동 경로가 소유하며 수동 정책 적용은 하지 않는다.
+- 구현→self review→보완→re-review 결과 이번 join/진단 전달 범위 finding0. 동일 fact 복사, 상충 fact의 순서 반전/다른 별칭, 한 submit의 복수 fact, 다른 profile의 공유 fact, finite 손익, top-level 미제출 identity·ID namespace·Daily 직접 전달·execution-quality unique count 회귀 포함. 최종 작업본 관련5개 suite **622 passed**, compile·`git diff --check` 통과. 배포본 검증/현재 PID 소비는 아래 후속 receipt로 별도 기록한다.
+- 잔여 P1은 **실제 제출·완료 거래 평균을 price 후보의 주근거로 쓰는 기존 선정 계약**, price-ready 전수 미진입/no-fill의 executable·비용·정책별 exit paired 연결, 조건부 기회비용과 holdout/capacity 비교, 절대 순 EV0.10%다. 이 축을 unbiased paired 계약으로 연결하기 전에 floor만 낮춰 체결 편향 선정을 확대하지 않는다. U9 및 U0–U12 fixed-point·자연 정책 소비·실수익 완료를 선언하지 않는다.
+
 Project/Calendar 동기화는 실행하지 않는다. 사용자 표준 명령:
 
 ```bash
