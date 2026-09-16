@@ -36,6 +36,7 @@ from src.engine.scalping.micro_reversion.contracts import (
     registration_item_market_data_identity,
 )
 from src.trading.entry.orderbook_stability_observer import ORDERBOOK_STABILITY_OBSERVER
+from src.trading.market import session_contract
 
 
 class _LoginAckFailure(RuntimeError):
@@ -397,6 +398,11 @@ class KiwoomWSManager:
         self._persistent_repair_overflow_codes = OrderedDict()
         self._last_persistent_repair_rebuild_ts = 0.0
         self._registered_items_by_code = {}
+        self._implicit_runtime_route_codes = set()
+        self._runtime_primary_items_by_code = {}
+        self._last_runtime_route_reconcile_ts = float("-inf")
+        self._runtime_integrated_route_active = False
+        self._runtime_route_reconcile_task = None
         self._pinned_unreg_notice_codes = set()
         self._micro_reversion_observation_items_by_code = {}
         self._micro_reversion_observation_only_items = set()
@@ -436,9 +442,7 @@ class KiwoomWSManager:
         self.condition_dict = {}  # 💡 [추가] 일련번호(seq)와 검색식 이름을 매핑할 사전
         self.market_session_state = ""
         self.market_session_remaining = ""
-        self.market_session_state_contract_version = (
-            _KIWOOM_0S_STATE_CONTRACT_VERSION
-        )
+        self.market_session_state_contract_version = _KIWOOM_0S_STATE_CONTRACT_VERSION
         self.market_session_state_event = _KIWOOM_0S_UNKNOWN_STATE
         self.market_session_state_normalized = _KIWOOM_0S_UNKNOWN_STATE
         self.market_session_state_known = False
@@ -488,9 +492,7 @@ class KiwoomWSManager:
             "entry_state_usable": normalized_state == "OPEN"
             and state_market_scope in {"KRX", "NXT", "ALL"},
             "blocker": (
-                None
-                if actionable_state
-                else "kiwoom_0s_state_semantics_not_actionable"
+                None if actionable_state else "kiwoom_0s_state_semantics_not_actionable"
             ),
         }
 
@@ -1049,10 +1051,18 @@ class KiwoomWSManager:
         return normalized
 
     def _resolve_ws_register_items(
-        self, codes, *, include_alternate_route=False, alternate_route_codes=None
+        self,
+        codes,
+        *,
+        include_alternate_route=False,
+        alternate_route_codes=None,
+        preserve_plain_route=False,
     ):
         """Return canonical subscription codes and Kiwoom exchange-aware REG items."""
         normalized_codes = self._normalize_subscribe_codes(codes)
+        integrated_required = (
+            not preserve_plain_route and self._integrated_aftermarket_route_required()
+        )
         if not normalized_codes:
             return [], []
         alternate_route_code_set = (
@@ -1086,7 +1096,15 @@ class KiwoomWSManager:
                     register_items.extend(explicit_items)
                     continue
 
-                effective = kiwoom_utils.get_effective_kiwoom_code(code)
+                effective = (
+                    f"{code}_AL"
+                    if integrated_required
+                    else (
+                        code
+                        if preserve_plain_route
+                        else kiwoom_utils.get_effective_kiwoom_code(code)
+                    )
+                )
                 items = [effective]
                 if (
                     include_alternate_route
@@ -1107,11 +1125,88 @@ class KiwoomWSManager:
                         register_items.append(code)
                     register_items.extend(explicit_items)
                 else:
-                    register_items.append(code)
-                    if include_alternate_route and code in alternate_route_code_set:
+                    register_items.append(f"{code}_AL" if integrated_required else code)
+                    if (
+                        include_alternate_route
+                        and code in alternate_route_code_set
+                        and not integrated_required
+                    ):
                         register_items.append(f"{code}_AL")
 
         return normalized_codes, register_items
+
+    @staticmethod
+    def _integrated_aftermarket_route_required():
+        context = session_contract.resolve_market_session(datetime.now(KST))
+        return context.session_regime in {
+            session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET,
+            session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET_CLOSE_ONLY,
+            session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET_TERMINAL_EXIT,
+        }
+
+    async def _reconcile_integrated_runtime_routes(self):
+        """Add the session-owned route without relabeling old market receipts.
+
+        Explicit suffixes and observation-only owners are not migrated. This
+        runs in the existing receive loop, never in a market-data getter.
+        """
+        now_ts = time.monotonic()
+        if now_ts - self._last_runtime_route_reconcile_ts < 30.0:
+            return
+        self._last_runtime_route_reconcile_ts = now_ts
+        self._runtime_integrated_route_active = (
+            self._integrated_aftermarket_route_required()
+        )
+        if not self._runtime_integrated_route_active:
+            return
+        with self.lock:
+            codes = sorted(
+                self._implicit_runtime_route_codes.intersection(
+                    self.subscribed_codes
+                ).difference(self._micro_reversion_observation_only_codes)
+            )
+            missing = [
+                code
+                for code in codes
+                if f"{code}_AL" not in self._registered_items_by_code.get(code, ())
+                or f"{code}_AL" in self._micro_reversion_observation_only_items
+                or self._runtime_primary_items_by_code.get(code) != f"{code}_AL"
+            ]
+        if missing:
+            connection = self.websocket
+            epoch = self._market_data_transport_epoch
+            await self._send_reg(
+                [f"{code}_AL" for code in missing],
+                replace_existing=False,
+                enforce_item_budget=True,
+                source="integrated_aftermarket_runtime_route_reconcile",
+                trading_promotion_codes=missing,
+                realtime_types=("0B", "0D"),
+                dispatch_guard=lambda: (
+                    self.websocket is connection
+                    and self._market_data_transport_epoch == epoch
+                    and not self._stop_event.is_set()
+                ),
+            )
+
+    def _schedule_integrated_runtime_route_reconcile(self):
+        # REG batches yield/sleep; do not await them in the receive hot path.
+        task = self._runtime_route_reconcile_task
+        if task is not None and not task.done():
+            return
+        if time.monotonic() - self._last_runtime_route_reconcile_ts < 30.0:
+            return
+        self._runtime_route_reconcile_task = asyncio.create_task(
+            self._reconcile_integrated_runtime_routes()
+        )
+
+        def completed(task):
+            if not task.cancelled() and task.exception() is not None:
+                log_error(
+                    f"[WS] runtime route reconciliation failed: {task.exception()}"
+                )
+
+        self._runtime_route_reconcile_task.add_done_callback(completed)
 
     @staticmethod
     def _max_registered_item_count():
@@ -2969,13 +3064,16 @@ class KiwoomWSManager:
                     if item not in observation_item_set
                 ]
             if trading_items:
-                await self._send_reg(trading_items)
+                await self._send_reg(
+                    trading_items, source="runtime_subscription_reconnect"
+                )
             if observation_items:
                 await self._send_reg(
                     observation_items,
                     replace_existing=not bool(trading_items),
                     realtime_types=("0B", "0D"),
                     source="micro_reversion_collection_feedback_reconnect",
+                    observation_only=True,
                 )
 
     def _cancel_pending_futures(self):
@@ -3021,8 +3119,10 @@ class KiwoomWSManager:
                     await self._await_login_ack(ws)
                     self._commit_ws_token_handoff()
                     await self._send_post_login_bootstrap()
+                    self._last_runtime_route_reconcile_ts = float("-inf")
 
                     while True:
+                        self._schedule_integrated_runtime_route_reconcile()
                         message = await ws.recv()
                         packet_received_at = datetime.now(KST)
                         await self._handle_message(
@@ -3501,6 +3601,17 @@ class KiwoomWSManager:
                                 normalized_raw_item
                                 in self._micro_reversion_observation_only_items
                             )
+                            primary_item = self._runtime_primary_items_by_code.get(
+                                item_code
+                            )
+                            # Keep concurrent exact KRX/NXT observations intact,
+                            # but do not let them overwrite the integrated
+                            # runtime's executable quote/tape frame.
+                            observation_only_item = observation_only_item or bool(
+                                primary_item
+                                and self._runtime_integrated_route_active
+                                and normalized_raw_item != primary_item
+                            )
                             # 1. 초기 데이터 구조 생성
                             target = self._ensure_target_defaults(
                                 (
@@ -3513,6 +3624,9 @@ class KiwoomWSManager:
                                     if observation_only_item
                                     else None
                                 ),
+                            )
+                            target["top_of_book_cache"] = self._get_tob_cache(
+                                normalized_raw_item
                             )
 
                             # 💡 안전한 파싱 헬퍼 (ValueError 방어막)
@@ -4585,6 +4699,7 @@ class KiwoomWSManager:
         replacement_codes=(),
         trading_promotion_codes=(),
         dispatch_guard=None,
+        observation_only=False,
     ):
         try:
             if dispatch_guard is not None and not dispatch_guard():
@@ -4599,10 +4714,39 @@ class KiwoomWSManager:
             trading_promotion_code_set = set(
                 self._normalize_subscribe_codes(trading_promotion_codes)
             )
+            implicit_runtime_codes = {
+                self._normalize_code(code)
+                for code in codes
+                if not self._explicit_ws_item(code, self._normalize_code(code))
+                and (
+                    "0w" in requested_realtime_types or "0F" in requested_realtime_types
+                )
+                and not str(source).startswith("micro_reversion")
+                and not observation_only
+            }
+            explicit_runtime_codes = {
+                self._normalize_code(code)
+                for code in codes
+                if self._explicit_ws_item(code, self._normalize_code(code))
+                and (
+                    "0w" in requested_realtime_types or "0F" in requested_realtime_types
+                )
+                and not str(source).startswith("micro_reversion")
+                and not observation_only
+                and source
+                not in {
+                    "integrated_aftermarket_runtime_route_reconcile",
+                    "runtime_subscription_reconnect",
+                }
+            }
+            integrated_required = self._integrated_aftermarket_route_required()
             normalized_codes, register_items = self._resolve_ws_register_items(
                 codes,
                 include_alternate_route=include_alternate_route,
                 alternate_route_codes=alternate_route_codes,
+                preserve_plain_route=(
+                    observation_only or str(source).startswith("micro_reversion")
+                ),
             )
             if not normalized_codes:
                 print("⚠️ [WS] 등록 가능한 유효 종목코드가 없어 REG 전송을 생략합니다.")
@@ -4733,6 +4877,22 @@ class KiwoomWSManager:
                             incoming_items = tuple(
                                 register_items_by_code.get(code) or ()
                             )
+                            self._implicit_runtime_route_codes.update(
+                                batch_code_set.intersection(implicit_runtime_codes)
+                            )
+                            if code in explicit_runtime_codes:
+                                self._implicit_runtime_route_codes.discard(code)
+                                self._runtime_primary_items_by_code.pop(code, None)
+                            if (
+                                code in self._implicit_runtime_route_codes
+                                and f"{code}_AL" in incoming_items
+                                and integrated_required
+                            ):
+                                self._runtime_integrated_route_active = True
+                                self._runtime_primary_items_by_code[code] = f"{code}_AL"
+                                self._micro_reversion_observation_only_items.discard(
+                                    f"{code}_AL"
+                                )
                             if code in replacement_code_set or remove_before_reg:
                                 registered_items = incoming_items
                             else:
@@ -5106,6 +5266,7 @@ class KiwoomWSManager:
             future = asyncio.run_coroutine_threadsafe(
                 self._send_reg(
                     send_targets,
+                    observation_only=observation_only,
                     replace_existing=replace_existing,
                     enforce_item_budget=enforce_item_budget,
                     include_alternate_route=include_alternate_route,

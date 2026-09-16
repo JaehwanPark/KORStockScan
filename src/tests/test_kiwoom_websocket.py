@@ -10,6 +10,8 @@ import pytest
 import src.engine.kiwoom_websocket as kiwoom_websocket
 from src.engine.kiwoom_websocket import KiwoomWSManager
 
+_SESSION_ROUTE_REQUIRED = KiwoomWSManager._integrated_aftermarket_route_required
+
 
 class _FakeWS:
     def __init__(self, messages):
@@ -55,6 +57,12 @@ def _reset_ws_hot_override_cache():
 
 @pytest.fixture(autouse=True)
 def _isolate_ws_hot_runtime_override(tmp_path, monkeypatch):
+    # Legacy tests model regular-session registration, independent of host time.
+    monkeypatch.setattr(
+        KiwoomWSManager,
+        "_integrated_aftermarket_route_required",
+        staticmethod(lambda: False),
+    )
     monkeypatch.setattr(
         kiwoom_websocket,
         "_WS_OPERATOR_RUNTIME_OVERRIDE_PATH",
@@ -63,6 +71,225 @@ def _isolate_ws_hot_runtime_override(tmp_path, monkeypatch):
     _reset_ws_hot_override_cache()
     yield
     _reset_ws_hot_override_cache()
+
+
+@pytest.mark.parametrize(
+    "clock,required",
+    [("14:00", False), ("16:00", True), ("19:45", True), ("20:00", False)],
+)
+def test_integrated_runtime_route_uses_session_owner(monkeypatch, clock, required):
+    at = datetime.fromisoformat(f"2026-09-16T{clock}:00+09:00")
+    monkeypatch.setattr(
+        kiwoom_websocket, "datetime", SimpleNamespace(now=lambda _tz: at)
+    )
+    assert _SESSION_ROUTE_REQUIRED() is required
+
+
+def test_aftermarket_default_registers_al_without_nxt_flag(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    manager.websocket = _FakeWS([])
+    manager._session_ready.set()
+    monkeypatch.setattr(manager, "_integrated_aftermarket_route_required", lambda: True)
+    monkeypatch.setattr(
+        "src.utils.kiwoom_utils.get_effective_kiwoom_code",
+        lambda _code: pytest.fail("NXT flag is not the integrated session route owner"),
+    )
+    asyncio.run(manager._send_reg(["425040"], enforce_item_budget=True))
+    packet = json.loads(manager.websocket.sent[0])
+    assert packet["refresh"] == "1"
+    assert packet["data"][0]["item"] == ["425040_AL"]
+    assert manager._runtime_primary_items_by_code == {"425040": "425040_AL"}
+
+
+def test_runtime_route_transition_adds_al_once_and_preserves_custody(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    manager.websocket = _FakeWS([])
+    manager._session_ready.set()
+    monkeypatch.setattr(
+        "src.utils.kiwoom_utils.get_effective_kiwoom_code", lambda code: code
+    )
+    asyncio.run(manager._send_reg(["425040"]))
+    manager.realtime_data["425040"]["curr"] = 9830
+    before = manager.get_latest_data("425040")
+    manager._micro_reversion_observation_only_codes.add("000001")
+    manager._implicit_runtime_route_codes.add("000001")
+    manager.subscribed_codes.add("000001")
+    monkeypatch.setattr(manager, "_integrated_aftermarket_route_required", lambda: True)
+    asyncio.run(manager._reconcile_integrated_runtime_routes())
+    asyncio.run(manager._reconcile_integrated_runtime_routes())
+    assert len(manager.websocket.sent) == 2
+    packet = json.loads(manager.websocket.sent[-1])
+    assert packet["refresh"] == "1" and packet["trnm"] == "REG"
+    assert packet["data"][0]["item"] == ["425040_AL"]
+    assert manager._registered_items_by_code["425040"] == ("425040", "425040_AL")
+    assert manager.get_latest_data("425040") == before
+    assert manager._micro_reversion_observation_only_codes == {"000001"}
+
+
+def test_runtime_route_transition_respects_item_budget(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    manager.websocket = _FakeWS([])
+    manager._session_ready.set()
+    manager.subscribed_codes.add("425040")
+    manager._implicit_runtime_route_codes.add("425040")
+    manager._registered_items_by_code["425040"] = ("425040",)
+    monkeypatch.setattr(manager, "_integrated_aftermarket_route_required", lambda: True)
+    monkeypatch.setattr(manager, "_max_registered_item_count", lambda: 1)
+    asyncio.run(manager._reconcile_integrated_runtime_routes())
+    assert manager.websocket.sent == []
+    assert manager._runtime_primary_items_by_code == {}
+
+
+def test_integrated_runtime_isolates_plain_receipts_without_fabricating_venue(
+    monkeypatch,
+):
+    manager = KiwoomWSManager("test-token")
+    manager.subscribed_codes.add("425040")
+    manager._runtime_primary_items_by_code["425040"] = "425040_AL"
+    manager._runtime_integrated_route_active = True
+    monkeypatch.setattr(manager, "_maybe_write_dashboard_snapshot", lambda: None)
+    monkeypatch.setattr(
+        manager, "_observe_micro_reversion_forward", lambda *_args, **_kwargs: None
+    )
+
+    def receive(item, realtime_type, values):
+        asyncio.run(
+            manager._handle_message(
+                json.dumps(
+                    {
+                        "trnm": "REAL",
+                        "data": [
+                            {"type": realtime_type, "item": item, "values": values}
+                        ],
+                    }
+                )
+            )
+        )
+
+    receive("425040_AL", "0B", {"10": "9830", "15": "+1"})
+    receive("425040_AL", "0D", {"41": "9840", "61": "100", "51": "9830", "71": "100"})
+    before = manager.get_latest_data("425040")
+    receive("425040", "0B", {"10": "9900", "15": "+1"})
+    receive("425040", "0D", {"41": "9910", "61": "100", "51": "9900", "71": "100"})
+    assert manager.get_latest_data("425040") == before
+    assert before["last_realtime_type_item"]["0B"] == "425040_AL"
+    assert before["last_realtime_type_item"]["0D"] == "425040_AL"
+    assert before["last_realtime_type_actual_execution_venue"]["0B"] == "UNKNOWN"
+    assert manager._micro_reversion_observation_route_data["425040"]["curr"] == 9900
+    from src.engine.scalping.ai_market_snapshot import (
+        _venue_consistency,
+        realtime_type_provenance,
+    )
+
+    now = max(before["last_realtime_type_ts"].values())
+    valid, blockers = _venue_consistency(
+        stock_code="425040",
+        venue="KRX_NXT_INTEGRATED",
+        session="krx_nxt_aftermarket",
+        provenance=realtime_type_provenance(before, now_ts=now),
+        now_epoch=now,
+    )
+    assert valid and blockers == []
+    isolated = manager._micro_reversion_observation_route_data["425040"]
+    now = max(isolated["last_realtime_type_ts"].values())
+    valid, blockers = _venue_consistency(
+        stock_code="425040",
+        venue="KRX_NXT_INTEGRATED",
+        session="krx_nxt_aftermarket",
+        provenance=realtime_type_provenance(isolated, now_ts=now),
+        now_epoch=now,
+    )
+    assert not valid and "integrated_market_data_route_required" in blockers
+
+
+def test_runtime_route_reconcile_promotes_existing_observation_al(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    manager.websocket = _FakeWS([])
+    manager._session_ready.set()
+    manager.subscribed_codes.add("425040")
+    manager._implicit_runtime_route_codes.add("425040")
+    manager._registered_items_by_code["425040"] = ("425040", "425040_AL")
+    manager._micro_reversion_observation_only_items.add("425040_AL")
+    monkeypatch.setattr(manager, "_integrated_aftermarket_route_required", lambda: True)
+    asyncio.run(manager._reconcile_integrated_runtime_routes())
+    assert "425040_AL" not in manager._micro_reversion_observation_only_items
+    assert manager._runtime_primary_items_by_code["425040"] == "425040_AL"
+    rows = json.loads(manager.websocket.sent[0])["data"]
+    assert {typ for row in rows for typ in row["type"]} == {"0B", "0D"}
+    assert all(row["item"] == ["425040_AL"] for row in rows)
+
+
+def test_explicit_nxt_subscription_is_not_auto_migrated(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    manager.websocket = _FakeWS([])
+    manager._session_ready.set()
+    monkeypatch.setattr(manager, "_integrated_aftermarket_route_required", lambda: True)
+    asyncio.run(manager._send_reg(["425040_NX"]))
+    asyncio.run(manager._reconcile_integrated_runtime_routes())
+    assert len(manager.websocket.sent) == 1
+    assert manager._implicit_runtime_route_codes == set()
+    assert manager._registered_items_by_code["425040"] == ("425040_NX",)
+
+
+def test_runtime_route_reconcile_does_not_block_receive_loop(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+
+    async def blocked_reconcile():
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(
+        manager, "_reconcile_integrated_runtime_routes", blocked_reconcile
+    )
+
+    async def exercise():
+        manager._schedule_integrated_runtime_route_reconcile()
+        task = manager._runtime_route_reconcile_task
+        await asyncio.sleep(0)
+        manager._schedule_integrated_runtime_route_reconcile()
+        assert manager._runtime_route_reconcile_task is task
+        assert not task.done()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(exercise())
+
+
+def test_plain_observation_only_registration_keeps_exact_route(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    manager.websocket = _FakeWS([])
+    manager._session_ready.set()
+    monkeypatch.setattr(manager, "_integrated_aftermarket_route_required", lambda: True)
+    monkeypatch.setattr(
+        "src.utils.kiwoom_utils.get_effective_kiwoom_code", lambda _code: "425040_AL"
+    )
+    asyncio.run(
+        manager._send_reg(
+            ["425040"], realtime_types=("0B", "0D"), observation_only=True
+        )
+    )
+    assert json.loads(manager.websocket.sent[0])["data"][0]["item"] == ["425040"]
+    assert manager._implicit_runtime_route_codes == set()
+    assert manager._runtime_primary_items_by_code == {}
+
+
+def test_runtime_route_reconcile_rejects_changed_connection_receipt(monkeypatch):
+    manager = KiwoomWSManager("test-token")
+    manager._session_ready.set()
+    manager.subscribed_codes.add("425040")
+    manager._implicit_runtime_route_codes.add("425040")
+    manager._registered_items_by_code["425040"] = ("425040",)
+    monkeypatch.setattr(manager, "_integrated_aftermarket_route_required", lambda: True)
+
+    class ChangingWS(_FakeWS):
+        async def send(self, payload):
+            await super().send(payload)
+            manager.websocket = _FakeWS([])
+
+    manager.websocket = ChangingWS([])
+    asyncio.run(manager._reconcile_integrated_runtime_routes())
+    assert manager._runtime_primary_items_by_code == {}
+    assert manager._registered_items_by_code["425040"] == ("425040",)
 
 
 def test_login_success_message_helpers():
@@ -96,7 +323,13 @@ def test_login_success_message_helpers():
         ("d", "KRX_AFTER_HOURS_CALL_AUCTION_CLOSE", "KRX", "CLOSED", False),
         ("e", "DERIVATIVES_CLOSING_CALL_AUCTION_CLOSE", "DERIVATIVES", "CLOSED", False),
         ("o", "DERIVATIVES_MARKET_OPEN", "DERIVATIVES", "OPEN", False),
-        ("s", "DERIVATIVES_CLOSING_CALL_AUCTION_OPEN", "DERIVATIVES", "CALL_AUCTION", False),
+        (
+            "s",
+            "DERIVATIVES_CLOSING_CALL_AUCTION_OPEN",
+            "DERIVATIVES",
+            "CALL_AUCTION",
+            False,
+        ),
         ("P", "NXT_PREMARKET_OPEN", "NXT", "OPEN", True),
         ("Q", "NXT_PREMARKET_CLOSE", "NXT", "CLOSED", False),
         ("R", "NXT_MAIN_MARKET_OPEN", "NXT", "OPEN", True),
@@ -1331,9 +1564,7 @@ def test_post_login_bootstrap_restores_symbols_after_readiness_boundary(monkeypa
     assert len(symbol_regs) == 1
     assert symbol_regs[0]["refresh"] == "1"
     restored_items = {
-        item
-        for row in symbol_regs[0]["data"]
-        for item in row.get("item", [])
+        item for row in symbol_regs[0]["data"] for item in row.get("item", [])
     }
     assert restored_items == {"005930", "005930_NX", "005930_AL"}
     assert KiwoomWSManager._ws_item_route("005930") == "krx_only"
@@ -3308,13 +3539,12 @@ def test_real_payload_with_exchange_suffix_updates_canonical_snapshot():
         == ""
     )
     assert (
-        manager.realtime_data["039490"]["last_ws_actual_execution_venue"]
-        == "UNKNOWN"
+        manager.realtime_data["039490"]["last_ws_actual_execution_venue"] == "UNKNOWN"
     )
     assert (
-        manager.realtime_data["039490"][
-            "last_realtime_type_actual_execution_venue"
-        ]["0B"]
+        manager.realtime_data["039490"]["last_realtime_type_actual_execution_venue"][
+            "0B"
+        ]
         == "UNKNOWN"
     )
     route_snapshot = manager.realtime_data["039490"][

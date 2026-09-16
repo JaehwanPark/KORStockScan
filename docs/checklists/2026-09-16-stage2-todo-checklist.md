@@ -164,6 +164,12 @@
   - 권한 경계: 이번 사용자 보완 지시는 위젯 평가 oneshot pin과 systemd reload만 허용한다. 메인·매매·collector·episode·machine 서비스 재기동, 수동 report/provider/order 호출, timer·threshold·quantity·owner·hard-safety 변경은 하지 않는다. 설치 검증은 자연 완료·자동승격·경제성으로 대체하지 않는다.
   - 배포 증거 (17:00 KST): 위젯 평가 unit의 effective WorkingDirectory/PYTHONPATH/ExecStart가 `0b712b54`로 일치하며 inactive, timer는 20:10 active다. workspace/release 각 `252 passed`, compile/bash/parser/diff PASS, scoped review finding 0. 기존 drop-in backup·SHA를 receipt에 보존했고 메인 PID `3779784`, widget collector/trader PID `3654913`/`3654984` 및 machine-final-refresh route는 유지했다. 자연 실행은 `not_yet_due`다.
 
+- [ ] `[IntegratedAftermarketRouteRepair0916] 통합 애프터마켓 runtime AL 원천 등록·정상 source 자연 확인` (`Due: 2026-09-16`, `Slot: INTRADAY`, `TimeWindow: 18:40~20:10`, `Track: RuntimeStability`)
+  - Source: [원인·공식 API 검증·수리·rollback 계약](../audit-reports/2026-09-16-integrated-aftermarket-runtime-route-repair.md), `data/runtime/integrated_aftermarket_runtime_route_repair_2026-09-16.json`, `data/runtime/kiwoom_ws_snapshot/latest.json`.
+  - 판정 기준: scoped review/validation 후 commit/push·clean managed release·사용자 승인 graceful main restart를 확인한다. 새 PID에서 actual AL REG 및 fresh exact AL 0B/0D → source-valid consumer 연결을 확인하며, 과거 196행과 새 generation을 분리한다.
+  - 권한 경계: 이번 사용자 지시는 기존 WS source owner의 수리·배포·main 기동만 허용한다. plain KRX receipt 재분류, actual venue 추정, guard/quantity/provider/threshold/owner 변경, 수동 주문·report 재생성, 별도 service/timer/cron/정책 family 추가는 하지 않는다. 독립 unit pin은 유지한다.
+  - 현재 증거: workspace 최종 `1480 passed` (route/source 403 + full sniper 1077), compile/Black/bash/parser/diff PASS, scoped review finding 0. release·PID·자연 표본은 별도 진행 중이다. AL 미수신·노후·충돌은 계속 fail-closed이며 매매·경제성은 별도 판정한다.
+
 ## Project/Calendar 동기화
 
 문서/checklist를 수정했으면 parser 검증은 실행하고, Project/Calendar 동기화는 사용자가 아래 명령으로 수동 실행한다.
