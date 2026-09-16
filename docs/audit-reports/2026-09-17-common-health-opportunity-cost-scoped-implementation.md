@@ -57,7 +57,7 @@ Official reference receipt (`2026-09-17T01:15:02+09:00` 재확인 기록): upstr
 | U4 | pending | Widget/episode/micro/exit/web direct/pass-through parity |
 | U5 | partial | observer 원 나이·prior-frame freshness 결손 수정. single-flight/scheduler budget 잔여 |
 | U6 | partial | operational/decision-CF gate와 중복 case 분모 수정. 전체 row disposition/census 전수 잔여 |
-| U7 | partial / common validated | §8 common 전수 원천·현재 incumbent 비교·자동 발행 보완. hierarchy 전수 paired 경제성·선정 계약 잔여 |
+| U7 | scoped KRX regular common/hierarchy implemented | §8–§9 전수 원천·현재 incumbent 비교·양수 순 EV/전체 paired 개선·exact-parent 자동 발행. 다른 scope의 hierarchy 전수 계약 잔여 |
 | U8 | partial | all-VETO CF intake와 legacy/current guard. CAUTION/INSUFFICIENT router 경제성 추가 대사 |
 | U9 | pending | price-ready no-submit/no-fill·quantity/leg four-arm Daily contract |
 | U10 | pending | 독립 owner CF admission 및 active family fill-bias 실제 결손 수리 |
@@ -89,6 +89,20 @@ Official reference receipt (`2026-09-17T01:15:02+09:00` 재확인 기록): upstr
 - publisher가 경제성·표본 floor·시간순 holdout·행 보존식을 재검증한다. 두 번째 v2 generation도 같은 함수로 다시 튜닝 가능하다. central verifier가 v1/v2를 분리하여 소비한다.
 - 작업본 후속 targeted 8-suite: **736 passed**. 결함보완 후 공통 후보 → 실제 projection → 실제 publisher 회귀 포함. zero/loss EV, source hash 변조, 잘못된 checks, 표본 floor0, 시간순 위반, 행 보존식 실패, incumbent 변경은 차단된다. 실제 Provider/Kiwoom/주문·운영 replay 호출 없음.
 - 이 범위의 code closure는 U0–U12 전체 완료가 아니다. hierarchy, CAUTION/INSUFFICIENT router, price/quantity four-arm, 독립 owner, 모든 direct API 소비자 parity 및 single-flight/scheduler는 미완료다. 다음 PREOPEN/start의 release/PID·자연 정책·경제성은 별도 receipt로 확인한다.
+
+## 9. KRX regular hierarchy 전수 선정·자동 발행 후속
+
+2026-09-17 07시대 구현. §8 이후 regular hierarchy 결손을 보완했으며 다른 scope·U0–U12 전체 완료로 확대하지 않는다.
+
+- 기존 hierarchy 함수가 §8에서 정규화한 같은 natural+paired 모집단과 source digest/행 보존식을 소비한다. 실제 AI 호출·submit·fill은 CF 학습의 전제조건이 아니다. quality·비용·후행 label 결손은 계속 제외하며 actual PnL을 만들지 않는다.
+- incumbent에서 기존 hierarchy·postclose metadata를 제거하던 동작을 새 전수 계약에서는 없앴다. **현재 정책 전체**가 control/parent다. control과 challenger는 동일 past-only group/flow/symbol context를 받는다. source evidence와 incoming row는 변경하지 않는다.
+- group 후보·symbol residual·전체 결합 정책을 calibration과 chronological holdout에서 평가한다. 새 계약의 순 EV > 0, 전체 모집단 paired delta > 0, 완전 후행/비용과 catastrophic-tail 차단을 모두 확인한다. 단순 clean/adverse 건수 개선만으로 승격하지 않는다. training에서만 후보를 고르고 holdout 실패 뒤 다른 후보를 재선정하지 않는다.
+- group train 5건/3일·holdout 3건/2일, symbol residual 15건/5일과 shrinkage 및 기존 bounded grid·runtime micro confirmation은 보존한다. missing micro·SOURCE_INVALID·broker safety를 threshold로 우회하지 않는다. 기존 v1/frozen 및 다른 scope의 경제성 floor는 조용히 변경하지 않는다.
+- 현재 common 후보가 선정됐으면 그 직접 successor를 hierarchy parent로 고정하고, 없으면 현재 complete incumbent을 유지한다. candidate는 `hierarchy_full_population_positive_net_paired_v2`와 full parent hash·원천 digest·각 arm의 paired 증거를 담는다. 소비자는 같은 계약·시간순 분리·표본/terminal·순 EV·delta·tail을 다시 검증한다.
+- 기존 자동 publisher는 child의 full parent hash가 현재 적용 예정 정책과 같을 때만 발행한다. common 숫자가 같더라도 micro 등 다른 parent 값이 달라졌으면 carry한다. 수동 승인/env·모델/가격/수량/scale-in/주문 owner 변경 없음.
+- 회귀: 순 EV 0.07% 미진입 회복 선정, 0원/손실/현재 정책 대비 무개선 carry, source digest 불일치 거절, paired delta0 거절, 실제 publisher 자동 발행과 exact-parent 변경 carry, 승격된 incumbent 재학습 시 가짜 증분효과 차단.
+- natural PID·오늘 정책 변경·수익 개선은 미관측이다. 기존 날짜 정책을 수동으로 다시 발행하거나 전일 원천을 재생성하지 않았다. 신규 collector/서비스/장후 producer 없음. U8–U11 및 공통 소비자·예산 전수 구현은 계속 OPEN이다.
+- 작업본 후속 8-suite **742 passed**、compile/diff/print-only parser 통과。오늘 기존 dated policy의 `hierarchy_adopted=true`·`all_continuous_adopted=true`를 읽기 전용 확인했다. 정기 #82 `--write`의 existing `publish(...)`는 이 상태를 승계하므로 매번 별도 승인/수동 adopt가 필요 없다. 테스트도 기존 adopted 상태에서 flag 없는 실제 publisher 호출을 검증한다. 다른 scope 정책은 기존 분리 계약으로 carry한다.
 
 Project/Calendar 동기화는 실행하지 않는다. 사용자 표준 명령:
 

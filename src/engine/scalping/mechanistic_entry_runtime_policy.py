@@ -710,7 +710,10 @@ def publish(
                     "machine_hierarchy_candidate_invalid:" + ",".join(errors)
                 )
             child_policy = child["threshold_policy"]
-            if child_policy["thresholds"] == machine["thresholds"]:
+            child_parent_hash = child.get("incumbent_machine_policy_sha256")
+            if child_policy["thresholds"] == machine["thresholds"] and (
+                child_parent_hash is None or child_parent_hash == digest(machine)
+            ):
                 machine = copy.deepcopy(child_policy)
                 hierarchy_disposition = "evidence_qualified_hierarchy_update"
             else:

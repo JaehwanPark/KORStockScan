@@ -2085,6 +2085,68 @@ def test_common_refinement_trace_cannot_inflate_cross_lane_population(conflict):
     assert contract["row_exclusion_reason_counts"]["conflicting_duplicate" if conflict else "identical_duplicate"] == (2 if conflict else 1)
 
 
+@pytest.mark.parametrize("net_ev", [0.07, 0.0, -0.01])
+def test_hierarchy_full_population_recovers_small_net_non_entries(net_ev):
+    rows, receipt = _natural_refinement_fixture()
+    for row in rows:
+        row["comparison"]["entry_path_target_pct"] = 0.2 + net_ev
+        evidence = row["setup_evidence"]
+        evidence["micro_recovery_observation"] = {
+            "source_usable": True, "net_aggressive_delta_10t": 20, "price_change_10t_pct": 0.1,
+        }
+        evidence["evidence_sha256"] = calibration._canonical_sha256({
+            k: v for k, v in evidence.items() if k != "evidence_sha256"
+        })
+    normalized, contract = calibration._common_refinement_population(
+        [], rows, target_date="2026-09-15", source_receipt=receipt, paired_contract={},
+    )
+    parent = json.loads(json.dumps(calibration.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1))
+    parent["thresholds"]["maximum_spread_bp"] = 20
+    result = calibration.build_mechanistic_hierarchy_candidate(
+        normalized, target_date="2026-09-15", parent_policy=parent,
+        population_source_contract=contract,
+    )
+    assert result["promotion_pass"] is (net_ev > 0)
+    if net_ev > 0:
+        assert calibration.validate_hierarchy_candidate(result, source_date="2026-09-15") == []
+        candidate = result["policy_candidate"]
+        assert candidate["incumbent_machine_policy_sha256"] == calibration._canonical_sha256(parent)
+        assert candidate["holdout"]["paired_population"]["paired_terminal_proxy_delta_pct"] > 0
+        assert candidate["threshold_policy"]["version"] == calibration.MECHANISTIC_FULL_POPULATION_POLICY_VERSION
+        again = calibration.build_mechanistic_hierarchy_candidate(
+            normalized, target_date="2026-09-15", parent_policy=candidate["threshold_policy"],
+            population_source_contract=contract,
+        )
+        assert again["promotion_pass"] is False
+        candidate["holdout"]["paired_population"]["paired_terminal_proxy_delta_pct"] = 0.0
+        candidate["candidate_content_sha256"] = calibration._canonical_sha256({
+            k: v for k, v in candidate.items() if k != "candidate_content_sha256"
+        })
+        assert "candidate_full_population_economic_proof_invalid" in calibration.validate_hierarchy_candidate(
+            result, source_date="2026-09-15"
+        )
+
+
+def test_hierarchy_full_population_no_gain_over_current_incumbent_carries():
+    rows, receipt = _natural_refinement_fixture()
+    normalized, contract = calibration._common_refinement_population(
+        [], rows, target_date="2026-09-15", source_receipt=receipt, paired_contract={},
+    )
+    parent = json.loads(json.dumps(calibration.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1))
+    parent["thresholds"]["maximum_spread_bp"] = 35
+    result = calibration.build_mechanistic_hierarchy_candidate(
+        normalized, target_date="2026-09-15", parent_policy=parent,
+        population_source_contract=contract,
+    )
+    assert result["promotion_pass"] is False
+    contract["accepted_rows_sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="hierarchy_full_population_source_contract_invalid"):
+        calibration.build_mechanistic_hierarchy_candidate(
+            normalized, target_date="2026-09-15", parent_policy=parent,
+            population_source_contract=contract,
+        )
+
+
 def test_report_common_refinement_uses_natural_population_and_current_parent(monkeypatch, tmp_path):
     from src.engine.scalping import mechanistic_entry_runtime_policy as runtime_policy
     rows, receipt = _natural_refinement_fixture()
