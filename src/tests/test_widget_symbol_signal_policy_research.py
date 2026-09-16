@@ -78,32 +78,64 @@ def _policy() -> SignalPolicy:
 
 
 def test_research_input_fingerprint_changes_only_with_material_input() -> None:
+    symbol_universe = dict(research.SYMBOLS)
+    symbols = tuple(symbol_universe)
     bars = list(_bars([(100, 101, 99, 100, 10)]))
     sources = {
         symbol: (
             bars,
             {"source_quality_status": "PASS", "source_content_sha256": "a" * 64},
         )
-        for symbol in research.SYMBOLS
+        for symbol in symbols
     }
     baseline = {"006800": {"policy_id": "incumbent", "policy_hash": "b" * 64}}
 
-    first = research.research_input_fingerprint(
-        sources=sources, end_date=date(2026, 8, 18), applied_baselines=baseline
-    )
-    second = research.research_input_fingerprint(
-        sources=sources, end_date=date(2026, 8, 18), applied_baselines=baseline
-    )
+    kwargs = {
+        "sources": sources,
+        "end_date": date(2026, 8, 18),
+        "applied_baselines": baseline,
+        "symbol_universe": symbol_universe,
+        "symbol_origins": {
+            symbol: "established_widget_symbol" for symbol in symbols
+        },
+    }
+    first = research.research_input_fingerprint(**kwargs)
+    second = research.research_input_fingerprint(**kwargs)
     changed = research.research_input_fingerprint(
         sources=sources,
         end_date=date(2026, 8, 18),
         applied_baselines={
             "006800": {"policy_id": "successor", "policy_hash": "c" * 64}
         },
+        symbol_universe=symbol_universe,
+        symbol_origins={
+            symbol: "established_widget_symbol" for symbol in symbols
+        },
+    )
+    changed_universe = research.research_input_fingerprint(
+        **{
+            **kwargs,
+            "symbol_universe": {
+                symbol: name
+                for symbol, name in symbol_universe.items()
+                if symbol != symbols[-1]
+            },
+        }
+    )
+    changed_origin = research.research_input_fingerprint(
+        **{
+            **kwargs,
+            "symbol_origins": {
+                **kwargs["symbol_origins"],
+                symbols[0]: "newly_expanded_widget_symbol",
+            },
+        }
     )
 
     assert first == second
     assert first != changed
+    assert first != changed_universe
+    assert first != changed_origin
 
 
 def test_exact_date_report_reuse_requires_matching_fingerprint(tmp_path) -> None:
@@ -729,4 +761,55 @@ def test_report_requires_exact_sources_and_declares_cross_owner_prohibition():
     )
     assert "mutate_low_price_two_leg_profile_policy_or_service" in (
         research.OWNER_CONTRACT["forbidden_cross_owner_actions"]
+    )
+
+
+def test_build_report_binds_the_loaded_symbol_universe_to_its_fingerprint(
+    monkeypatch,
+):
+    end_date = date(2026, 8, 11)
+    universe = {"999999": "test research symbol"}
+    origins = {"999999": "operator_enrolled_research_watch"}
+    bars = list(_bars([(100, 101, 99, 100, 10)]))
+    sources = {
+        "999999": (
+            bars,
+            {"source_quality_status": "PASS", "source_content_sha256": "a" * 64},
+        )
+    }
+
+    monkeypatch.setattr(research, "_clean_trading_dates", lambda _: [end_date])
+    monkeypatch.setattr(
+        research,
+        "_daily_source_coverage",
+        lambda *_: {"status": "PASS", "qualified_dates": [end_date.isoformat()]},
+    )
+    monkeypatch.setattr(
+        research,
+        "discover_symbol_policy",
+        lambda *_args, **_kwargs: {
+            "decision": "holdout_failed_no_widget_runtime_promotion",
+            "selected_policy": None,
+        },
+    )
+    monkeypatch.setattr(research, "objective_comparison", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(research, "load_execution_incidents", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(research, "attach_recommendation_contract", lambda report: report)
+
+    report = research.build_report(
+        sources=sources,
+        end_date=end_date,
+        applied_baselines={},
+        symbol_universe=universe,
+        symbol_origins=origins,
+    )
+
+    assert report["symbol_universe"] == universe
+    assert report["symbol_origins"] == origins
+    assert report["source_input_fingerprint"] == research.research_input_fingerprint(
+        sources=sources,
+        end_date=end_date,
+        applied_baselines={},
+        symbol_universe=universe,
+        symbol_origins=origins,
     )

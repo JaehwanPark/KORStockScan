@@ -1506,6 +1506,8 @@ def build_report(
             sources=sources,
             end_date=end_date,
             applied_baselines=applied_baselines,
+            symbol_universe=universe,
+            symbol_origins=origins,
         ),
         "execution_mode": "full_recompute",
         "runtime_effect": False,
@@ -1523,6 +1525,8 @@ def research_input_fingerprint(
     sources: dict[str, tuple[list[Bar], dict[str, Any]]],
     end_date: date,
     applied_baselines: dict[str, dict] | None,
+    symbol_universe: Collection[str],
+    symbol_origins: dict[str, str],
 ) -> str:
     payload = {
         "schema": "widget_symbol_signal_policy_research_input_v1",
@@ -1530,6 +1534,11 @@ def research_input_fingerprint(
         "end_date": end_date.isoformat(),
         "cost_contract": comparison_cost_contract(end_date),
         "applied_baselines": applied_baselines or {},
+        "symbol_universe": sorted(symbol_universe),
+        "symbol_origins": {
+            symbol: symbol_origins.get(symbol)
+            for symbol in sorted(symbol_universe)
+        },
         "sources": {
             symbol: {
                 "bars": [
@@ -1751,6 +1760,8 @@ def main(argv: list[str] | None = None) -> int:
         sources=sources,
         end_date=end_date,
         applied_baselines=applied_baselines,
+        symbol_universe=symbol_universe,
+        symbol_origins=symbol_origins,
     )
     paths = (
         write_report(report, output_dir=args.output_dir) if args.write else (None, None)
