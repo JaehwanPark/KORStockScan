@@ -129,7 +129,7 @@ Official reference receipt (`2026-09-17T01:15:02+09:00` 재확인 기록): upstr
 
 ## 12. 가격·수량/leg 4군 receipt·원자 발행 계약 보완
 
-2026-09-17 08시대 후속. 기존 `entry_split_order_plan`과 Daily materializer/reader만 보완했다. 신규 collector·producer·서비스·장후 단계·Kiwoom/Provider/주문 호출 없음. U9 전체 또는 U0–U12 fixed-point 완료가 아니다.
+2026-09-17 08시대 후속. 기존 `entry_split_order_plan`과 Daily materializer/reader만 보완했다. 신규 collector·producer·서비스·장후 단계·Provider/주문 호출 없음. 구현/테스트의 실제 Kiwoom 호출과 배포 시 기존 adapter의 읽기 전용 잔고·미체결 검증은 구분한다. U9 전체 또는 U0–U12 fixed-point 완료가 아니다.
 
 - 최초 결함: 수량 policy의 평가 시점 SHA256와 발행 시점 bytes 대사가 없었고, split policy의 관측 hash 전달이 없어 교체된 파일을 새 hash로 봉인할 수 있었다. 버전·대상일·초기진입 scope·허용 계약도 직접 재검증하지 않았다. 기존 Daily reader가 선택한 split 파일의 SHA256를 전달하고, materializer는 양쪽 파일을 한 번씩 읽은 같은 bytes에서 hash·버전·source date·수량 active date와 기존 수량 authority validator/leg runtime authority를 확인한다. PREOPEN/runtime의 후속 hash 검증은 유지한다. OFF envelope는 기존 형태를 그대로 유지한다.
 - 4군 receipt의 NaN/무한대·bool 수치·음수 자본시간·범위 밖 참여율, 무자본인데 비영(非零) 손익인 행을 격리한다. eligible count는 finite 양의 정수만 인정하며, unsigned/잘못된 hash의 count가 유효 source 분모를 오염시키지 못한다. 결측 CF를 0으로 만들지 않는다.
@@ -137,8 +137,11 @@ Official reference receipt (`2026-09-17T01:15:02+09:00` 재확인 기록): upstr
 - mechanistic price publisher의 NaN/무한대 EV 통과를 차단했다. 기계 action·compact AI·numeric price 계산·수량 tier/cap·leg 집행·AVG_DOWN/PYRAMID·hard safety는 변경하지 않았다. 새 후보별 사용자 재승인이나 실제 candidate 체결 요구를 추가하지 않았다.
 - 기대효과는 잘못된 4군 경제성/파일 교체가 자동 정책으로 승격되는 것을 막고, 정상 무노출이 평가 분모에서 지워지지 않게 하는 계약 수리다. 참여·회전·순이익 증가의 인과 효과는 아직 입증되지 않았다. 기존 quartet을 소비하는 경로의 보완이지 전체 raw population→no-submit/no-fill quartet 생성 연결의 완료가 아니다.
 - 잔여 P1: 가격·수량 관련 기존 절대 순 EV 0.10%는 유지되어 있다. 작은 목표 경로에서는 비용 차감 상한보다 높을 수 있으므로 U9/U11의 새 full-population·chronological paired 평가 계약에서 개선해야 한다. 기존 frozen 정책 계약을 임의로 재해석하거나 원천 연결이 미완료인 상태에서 floor만 낮추지 않았다. 전체 price-ready 미진입/no-fill join, 정책별 후행 exit/cost, capacity·holdout 및 기존 선정 consumer의 전수 연결은 OPEN이다.
-- 수정→self review→보완→re-review 결과, 이번 receipt/원자 발행 수정 범위의 미해결 finding 0. 기존 Daily·entry split·atomic sizing·allocator·PREOPEN targeted suite **610 passed**; compile과 `git diff --check` 통과. 문서 parser와 managed release 검증·commit/push/배포 receipt는 별도로 기록한다.
-- 현재 PID27161은 `b6cb93b0` 릴리스의 07:55 자동 기동 receipt다. 이번 장후 코드 배포는 그 PID 소비로 표시하지 않는다. 장중 주문 경로 변경이 없어 불필요한 재기동을 만들지 않으며, 오늘 dated 정책/env를 수동 재발행하지 않는다. 새 선정은 기존 정기 장후→next-date publisher→PREOPEN/loader 경로가 소유한다. 자연 generation·새 정책 소비·실체결 경제성은 별도 OPEN이다.
+- 수정→self review→보완→re-review 결과, 이번 receipt/원자 발행 수정 범위의 미해결 finding 0. 기존 Daily·entry split·atomic sizing·allocator·PREOPEN 첫 targeted suite **610 passed** 후 bool 가격 EV도 제외하는 보완/회귀를 추가했다. 최종 작업본 관련5개 suite **611 passed**, 최종 managed release 관련9개 suite **1055 passed**; compile·shell syntax·`git diff --check`·print-only parser 통과, 기존 acceptance owner1개. 전체 U9의 미진입 adapter와 EV floor 결손에는 finding0을 선언하지 않는다.
+- 소스 `3133dec9`/`96390701`을 기존 selected `b6cb93b0` 이력에 일반 merge하여 `de8792b7` 릴리스를 main으로 fast-forward push했다. 기존 작업본의 다른 세션 dirty 변경은 포함하지 않았다. 공유 symlink 때문에 추가 병합이 실패하여 **새 비가동 worktree의** mount만 일시 분리/복원한 뒤 병합했다. 기존 가동 release와 원 운영 데이터는 유지했다.
+- 코드 자체는 장중 주문 경로 변경이 없지만, 봇/장후 작업을 한 selected release로 pin하는 운영 계약과 사용자 릴리스 기동 지시를 위해 기존 router→`restart.sh`의 graceful 재기동을1회 수행했다. old PID27161 종료 후 new PID37714가 `de8792b7`, `source_dirty=false`로08:08:05 기동했다. strict dated env/PID verify PASS, mismatch/missing0, 미검증 selected family0, singleton1개, Samsung morning handoff `not_required`다. 직접 kill·중복 bot 기동·수동 env/정책/주문 변경 없음.
+- 배포 사전08:06:41/사후08:08:25의 기존 strict adapter 읽기 전용 조회에서 KRX/NXT 계약 모두 정상, 삼성전자25주와 매수가269471·미체결0건이 일치한다. custody registry SHA256, 오늘 env와 dated machine policy SHA256도 동일했다. 원 owner를 main에 이관하거나 target를 취소하지 않았다. 자연 WS quote0D 수신08:08:29와 trade0B 수신08:08:36을 확인했으나 서로 다른 symbol의 receipt이므로 same-scope ordered-window acceptance로 확대하지 않는다. REG item budget skip 경고는 U5의 scheduler/budget 잔여로 남긴다.
+- 재기동/배포는 새 장후 평가/정책/수익의 완료가 아니다. 오늘 dated 정책/env는 그대로이며, 새 선정은 기존 정기 장후→next-date publisher→PREOPEN/loader 경로가 소유한다. 자연 generation·새 정책 소비·실체결 경제성은 별도 OPEN이다. [배포·가동 검증 receipt](../../data/runtime/runtime_release_validation/u9-contract-closure-20260917-de8792b7.json)를 보존한다.
 
 Project/Calendar 동기화는 실행하지 않는다. 사용자 표준 명령:
 
