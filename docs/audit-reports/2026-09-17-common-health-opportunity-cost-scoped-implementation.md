@@ -57,7 +57,7 @@ Official reference receipt (`2026-09-17T01:15:02+09:00` 재확인 기록): upstr
 | U4 | pending | Widget/episode/micro/exit/web direct/pass-through parity |
 | U5 | partial | observer 원 나이·prior-frame freshness 결손 수정. single-flight/scheduler budget 잔여 |
 | U6 | partial | operational/decision-CF gate와 중복 case 분모 수정. 전체 row disposition/census 전수 잔여 |
-| U7 | scoped KRX regular common/hierarchy implemented | §8–§9 전수 원천·현재 incumbent 비교·양수 순 EV/전체 paired 개선·exact-parent 자동 발행. 다른 scope의 hierarchy 전수 계약 잔여 |
+| U7 | scoped common/all-supported hierarchy implemented | §8–§10 전수 원천·현재 incumbent 비교·양수 순 EV/전체 paired 개선·exact-parent 자동 발행. 자연 generation·전체 원장 대사는 잔여 |
 | U8 | partial | all-VETO CF intake와 legacy/current guard. CAUTION/INSUFFICIENT router 경제성 추가 대사 |
 | U9 | pending | price-ready no-submit/no-fill·quantity/leg four-arm Daily contract |
 | U10 | pending | 독립 owner CF admission 및 active family fill-bias 실제 결손 수리 |
@@ -103,6 +103,16 @@ Official reference receipt (`2026-09-17T01:15:02+09:00` 재확인 기록): upstr
 - 회귀: 순 EV 0.07% 미진입 회복 선정, 0원/손실/현재 정책 대비 무개선 carry, source digest 불일치 거절, paired delta0 거절, 실제 publisher 자동 발행과 exact-parent 변경 carry, 승격된 incumbent 재학습 시 가짜 증분효과 차단.
 - natural PID·오늘 정책 변경·수익 개선은 미관측이다. 기존 날짜 정책을 수동으로 다시 발행하거나 전일 원천을 재생성하지 않았다. 신규 collector/서비스/장후 producer 없음. U8–U11 및 공통 소비자·예산 전수 구현은 계속 OPEN이다.
 - 작업본 후속 8-suite **742 passed**、compile/diff/print-only parser 통과。오늘 기존 dated policy의 `hierarchy_adopted=true`·`all_continuous_adopted=true`를 읽기 전용 확인했다. 정기 #82 `--write`의 existing `publish(...)`는 이 상태를 승계하므로 매번 별도 승인/수동 adopt가 필요 없다. 테스트도 기존 adopted 상태에서 flag 없는 실제 publisher 호출을 검증한다. 다른 scope 정책은 기존 분리 계약으로 carry한다.
+
+## 10. 등록된 모든 scope의 hierarchy 전수 소비 보완
+
+2026-09-17 07시대 후속. 기존 등록된 9개 scope를 각각의 natural/paired 원천, 비용 계약과 complete incumbent에 결속했다. 새 scope·collector·장후 producer·주문 권한을 생성하지 않는다.
+
+- 기존 공통 정규화 함수에 명시적 cohort 계약을 추가했다. 각 scope의 raw→valid→후행/비용→평가 분모와 행 disposition을 보존하며 cross-venue/session 원천은 제외한다. KRX common threshold 선정은 KRX regular에만 허용한다.
+- 기존 hierarchy 전수 positive-net paired v2를 모든 등록 scope에서 같은 기준으로 검증한다. 작은 양수 순 EV는 허용하지만 0원/손실·무개선·시간순 holdout 실패·source/hash 결손은 승격하지 않는다. independent owner·scale-in·가격/수량·micro·hard safety는 변경하지 않는다.
+- scoped 자동 publisher도 full incumbent hash를 비교한다. threshold 숫자가 같아도 다른 parent 값이 달라지면 carry한다. exact scope 후보 발행은 KRX 또는 다른 scope를 변경하지 않는다. 기존 adopted 상태의 flag 없는 publisher 경로를 테스트했다.
+- 9개 scope의 양수/0원/손실 및 재학습 무개선 회귀, KRX/NXT 실제 publisher와 parent 변경 carry를 검증한다. 테스트의 CF 순 EV는 자연 수익이 아니다. 오늘 운영 날짜 정책 재발행, Provider/API 호출, 조기 bot 기동은 하지 않는다.
+- 부분 H release이며 U0–U6의 전수 소비자/예산/모집단, U8–U11의 router·가격/수량·독립 owner·handoff 구현과 전체 U12 fixed-point는 미완료다. 최신 selected release/검증 건수/기동 receipt는 `data/runtime/runtime_release_validation/`이 소유한다.
 
 Project/Calendar 동기화는 실행하지 않는다. 사용자 표준 명령:
 

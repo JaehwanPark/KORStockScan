@@ -331,6 +331,7 @@ def _mechanistic_primary_activation_projection(
             parent is not None
             and candidate.get("evaluation_contract") == "full_population_positive_net_paired_delta_v2"
             and source_contract.get("schema") == "machine_common_refinement_population_v1"
+            and source_contract.get("cohort", ["KRX", "KRX_REGULAR"]) == ["KRX", "KRX_REGULAR"]
             and candidate.get("source_contract_sha256") == calibration._canonical_sha256(source_contract)
             and candidate.get("promotion_checks") == refinement.get("promotion_checks")
             and bool(checks)
