@@ -84,14 +84,24 @@ def test_common_successor_is_automatic_only_against_exact_current_parent(monkeyp
 
 
 @pytest.mark.parametrize("parent_changed", [False, True])
-def test_full_population_hierarchy_automatic_publisher_requires_exact_parent(tmp_path, parent_changed):
+@pytest.mark.parametrize("scope", ["KRX|KRX_REGULAR", "NXT|NXT_AFTERMARKET"])
+def test_full_population_hierarchy_automatic_publisher_requires_exact_parent(tmp_path, parent_changed, scope):
     from src.tests.test_ai_action_outcome_calibration import _natural_refinement_fixture
     previous = initial(tmp_path)
+    if scope != "KRX|KRX_REGULAR":
+        previous = policy.publish(source(tmp_path), data_root=tmp_path,
+                                  adopt_hierarchy=True, adopt_all_continuous=True,
+                                  now=datetime(2026, 9, 13, 22, tzinfo=policy.KST))
     previous["hierarchy_adopted"] = True
-    previous["machine_policy"]["thresholds"]["maximum_spread_bp"] = 20
-    original_parent = json.loads(json.dumps(previous["machine_policy"]))
+    incumbent = previous["machine_policy"] if scope == "KRX|KRX_REGULAR" else previous["scope_policies"][scope]["machine_policy"]
+    incumbent["thresholds"]["maximum_spread_bp"] = 20
+    original_parent = json.loads(json.dumps(incumbent))
+    cohort = tuple(scope.split("|"))
     rows, receipt = _natural_refinement_fixture()
     for row in rows:
+        row["entry_group_observation"]["key_parts"].update(venue=cohort[0], session_bucket=cohort[1])
+        row.update(effective_venue=cohort[0], session_bucket=cohort[1])
+        row["comparison"]["entry_cost_contract"].update(effective_venue=cohort[0], session_bucket=cohort[1])
         row["comparison"]["entry_path_target_pct"] = 0.27
         evidence = row["setup_evidence"]
         evidence["micro_recovery_observation"] = {
@@ -99,30 +109,35 @@ def test_full_population_hierarchy_automatic_publisher_requires_exact_parent(tmp
         }
         evidence["evidence_sha256"] = policy.digest({k: v for k, v in evidence.items() if k != "evidence_sha256"})
     normalized, contract = calibration._common_refinement_population(
-        [], rows, target_date="2026-09-15", source_receipt=receipt, paired_contract={},
+        [], rows, target_date="2026-09-15", source_receipt=receipt, paired_contract={}, cohort=cohort,
     )
     extension = calibration.build_mechanistic_hierarchy_candidate(
         normalized, target_date="2026-09-15", parent_policy=original_parent,
         population_source_contract=contract,
+        cohort=cohort,
     )
     assert extension["promotion_pass"] is True
     if parent_changed:
-        previous["machine_policy"]["thresholds"]["minimum_micro_net_aggressive_delta_10t"] = 2.0
+        incumbent["thresholds"]["minimum_micro_net_aggressive_delta_10t"] = 2.0
     previous["bundle_sha256"] = policy.digest({k: v for k, v in previous.items() if k != "bundle_sha256"})
     calibration._atomic_write_json(policy.root(tmp_path) / "policy_2026-09-14.json", previous)
     path = source(tmp_path, "2026-09-15")
     report = json.loads(path.read_text())
-    report["hierarchical_entry_quality"] = {"runtime_extension": extension}
+    report["hierarchical_entry_quality"] = {"runtime_extension": extension} if scope == "KRX|KRX_REGULAR" else {"runtime_extensions_by_scope": {scope: extension}}
     report.pop("artifact_content_sha256")
     calibration._atomic_write_json(path, calibration._with_artifact_content_sha256(report))
     successor = policy.publish(path, data_root=tmp_path,
                                now=datetime(2026, 9, 15, 21, tzinfo=policy.KST))
+    selected = successor if scope == "KRX|KRX_REGULAR" else successor["scope_policies"][scope]
+    selected_disposition = selected["historical_context"]["hierarchy_disposition"] if scope == "KRX|KRX_REGULAR" else selected["machine_disposition"]
     if parent_changed:
-        assert successor["machine_policy"] == previous["machine_policy"]
-        assert successor["historical_context"]["hierarchy_disposition"] == "candidate_parent_changed_revalidation_required"
+        assert selected["machine_policy"] == incumbent
+        assert selected_disposition == "candidate_parent_changed_revalidation_required"
     else:
-        assert successor["machine_policy"] == extension["policy_candidate"]["threshold_policy"]
-        assert successor["historical_context"]["hierarchy_disposition"] == "evidence_qualified_hierarchy_update"
+        assert selected["machine_policy"] == extension["policy_candidate"]["threshold_policy"]
+        assert selected_disposition == ("evidence_qualified_hierarchy_update" if scope == "KRX|KRX_REGULAR" else "evidence_qualified_exact_scope_update")
+    if scope != "KRX|KRX_REGULAR":
+        assert successor["machine_policy"] == previous["machine_policy"]
     assert successor["ai_policy"]["prompt_version"] == previous["ai_policy"]["prompt_version"]
 
 

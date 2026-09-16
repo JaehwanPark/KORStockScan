@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from src.engine.scalping import ai_action_outcome_calibration as calibration
+from src.engine.scalping.entry_setup_scalping_rollout import AUTO_PROMOTION_SCOPES
 
 build_report = calibration.build_report
 
@@ -2086,9 +2087,14 @@ def test_common_refinement_trace_cannot_inflate_cross_lane_population(conflict):
 
 
 @pytest.mark.parametrize("net_ev", [0.07, 0.0, -0.01])
-def test_hierarchy_full_population_recovers_small_net_non_entries(net_ev):
+@pytest.mark.parametrize("scope", AUTO_PROMOTION_SCOPES)
+def test_hierarchy_full_population_recovers_small_net_non_entries(net_ev, scope):
     rows, receipt = _natural_refinement_fixture()
+    cohort = tuple(scope.split("|"))
     for row in rows:
+        row["entry_group_observation"]["key_parts"].update(venue=cohort[0], session_bucket=cohort[1])
+        row.update(effective_venue=cohort[0], session_bucket=cohort[1])
+        row["comparison"]["entry_cost_contract"].update(effective_venue=cohort[0], session_bucket=cohort[1])
         row["comparison"]["entry_path_target_pct"] = 0.2 + net_ev
         evidence = row["setup_evidence"]
         evidence["micro_recovery_observation"] = {
@@ -2098,17 +2104,27 @@ def test_hierarchy_full_population_recovers_small_net_non_entries(net_ev):
             k: v for k, v in evidence.items() if k != "evidence_sha256"
         })
     normalized, contract = calibration._common_refinement_population(
-        [], rows, target_date="2026-09-15", source_receipt=receipt, paired_contract={},
+        [], rows, target_date="2026-09-15", source_receipt=receipt, paired_contract={}, cohort=cohort,
     )
+    if cohort != ("KRX", "KRX_REGULAR"):
+        with pytest.raises(ValueError, match="common_refinement_krx_cohort_required"):
+            calibration.build_clean_baseline_mechanistic_refinement(
+                Path("unused"), target_date="2026-09-15",
+                source_rows=normalized, source_contract=contract,
+                parent_policy=calibration.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
+            )
     parent = json.loads(json.dumps(calibration.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1))
     parent["thresholds"]["maximum_spread_bp"] = 20
     result = calibration.build_mechanistic_hierarchy_candidate(
         normalized, target_date="2026-09-15", parent_policy=parent,
         population_source_contract=contract,
+        cohort=cohort,
     )
     assert result["promotion_pass"] is (net_ev > 0)
     if net_ev > 0:
-        assert calibration.validate_hierarchy_candidate(result, source_date="2026-09-15") == []
+        assert calibration.validate_hierarchy_candidate(result, source_date="2026-09-15", cohort=cohort) == []
+        if cohort != ("KRX", "KRX_REGULAR"):
+            assert calibration.validate_hierarchy_candidate(result, source_date="2026-09-15", cohort=("KRX", "KRX_REGULAR"))
         candidate = result["policy_candidate"]
         assert candidate["incumbent_machine_policy_sha256"] == calibration._canonical_sha256(parent)
         assert candidate["holdout"]["paired_population"]["paired_terminal_proxy_delta_pct"] > 0
@@ -2116,6 +2132,7 @@ def test_hierarchy_full_population_recovers_small_net_non_entries(net_ev):
         again = calibration.build_mechanistic_hierarchy_candidate(
             normalized, target_date="2026-09-15", parent_policy=candidate["threshold_policy"],
             population_source_contract=contract,
+            cohort=cohort,
         )
         assert again["promotion_pass"] is False
         candidate["holdout"]["paired_population"]["paired_terminal_proxy_delta_pct"] = 0.0
@@ -2123,7 +2140,7 @@ def test_hierarchy_full_population_recovers_small_net_non_entries(net_ev):
             k: v for k, v in candidate.items() if k != "candidate_content_sha256"
         })
         assert "candidate_full_population_economic_proof_invalid" in calibration.validate_hierarchy_candidate(
-            result, source_date="2026-09-15"
+            result, source_date="2026-09-15", cohort=cohort
         )
 
 

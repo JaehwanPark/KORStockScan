@@ -2214,6 +2214,7 @@ def _common_refinement_population(
     paired_rows: list[dict], natural_rows: list[dict], *,
     target_date: str, source_receipt: dict, paired_contract: dict,
     natural_conflicting_attempt_identity_count: int = 0,
+    cohort: tuple[str, str] = ("KRX", "KRX_REGULAR"),
 ) -> tuple[list[dict], dict]:
     """Union existing exact CF lanes before selection; no fills/AI required.
 
@@ -2223,6 +2224,8 @@ def _common_refinement_population(
     """
     excluded, accepted, seen, conflicted = Counter(), {}, {}, set()
     trace_keys = {}
+    if not mechanistic_scope_supported(*cohort):
+        raise ValueError("refinement_population_cohort_unsupported")
     gate = _as_dict(source_receipt.get("machine_terminal_tuning_gate"))
     excluded_keys = set(gate.get("excluded_evaluation_keys") or []) | set(
         gate.get("pending_evaluation_keys") or []
@@ -2238,7 +2241,7 @@ def _common_refinement_population(
             day = str(row.get("source_date") or "")
             evidence = _as_dict(row.get("setup_evidence"))
             parts = _as_dict(_as_dict(row.get("entry_group_observation")).get("key_parts"))
-            if (parts.get("venue"), parts.get("session_bucket")) != ("KRX", "KRX_REGULAR"):
+            if (parts.get("venue"), parts.get("session_bucket")) != cohort:
                 excluded["different_cohort"] += 1
                 continue
             if not CLEAN_BASELINE_DATE <= day <= target_date or (
@@ -2264,7 +2267,7 @@ def _common_refinement_population(
                 continue
             if lane == "natural" and (
                 not natural_allowed
-                or (row.get("effective_venue"), row.get("session_bucket")) != ("KRX", "KRX_REGULAR")
+                or (row.get("effective_venue"), row.get("session_bucket")) != cohort
                 or not _is_sha256(row.get("bundle_sha256"))
                 or _machine_evaluation_key(row) in excluded_keys
                 or not all(str(row.get(key) or "").strip() for key in (
@@ -2282,7 +2285,7 @@ def _common_refinement_population(
             full_cost = _full_entry_cost_pct(cost, source_date=day)
             if (
                 full_cost is None
-                or (cost.get("effective_venue"), cost.get("session_bucket")) != ("KRX", "KRX_REGULAR")
+                or (cost.get("effective_venue"), cost.get("session_bucket")) != cohort
                 or _number(comparison.get("conservative_execution_cost_pct")) is None
                 or not math.isclose(float(comparison["conservative_execution_cost_pct"]), full_cost,
                                     rel_tol=0, abs_tol=1e-9)
@@ -2323,6 +2326,7 @@ def _common_refinement_population(
     result = sorted(accepted.values(), key=lambda r: (r["source_date"], r["decision_trace_id"]))
     return result, {
         "schema": "machine_common_refinement_population_v1",
+        "cohort": list(cohort),
         "paired_source_contract": paired_contract,
         "natural_machine_source_receipt": source_receipt,
         "natural_conflicting_attempt_identity_count": natural_conflicting_attempt_identity_count,
@@ -2481,6 +2485,8 @@ def build_clean_baseline_mechanistic_refinement(
     else:
         rows = source_rows
     full_population = source_contract.get("schema") == "machine_common_refinement_population_v1"
+    if full_population and source_contract.get("cohort", ["KRX", "KRX_REGULAR"]) != ["KRX", "KRX_REGULAR"]:
+        raise ValueError("common_refinement_krx_cohort_required")
     if full_population and parent_policy is None:
         raise ValueError("full_population_refinement_incumbent_missing")
     policy_version = MECHANISTIC_FULL_POPULATION_POLICY_VERSION if full_population else MECHANISTIC_REFINEMENT_POLICY_VERSION
@@ -4781,7 +4787,8 @@ def validate_hierarchy_candidate(
         parent = _as_dict(candidate.get("incumbent_machine_policy"))
         contract = _as_dict(candidate.get("population_source_contract"))
         if (
-            cohort != ("KRX", "KRX_REGULAR")
+            not mechanistic_scope_supported(*cohort)
+            or contract.get("cohort", ["KRX", "KRX_REGULAR"]) != list(cohort)
             or validate_mechanistic_entry_threshold_policy(parent)
             or candidate.get("incumbent_machine_policy_sha256") != _canonical_sha256(parent)
             or contract.get("schema") != "machine_common_refinement_population_v1"
@@ -4940,7 +4947,8 @@ def build_mechanistic_hierarchy_candidate(
     if validate_mechanistic_entry_threshold_policy(parent):
         raise ValueError("hierarchy_parent_invalid")
     if full_population and (
-        cohort != ("KRX", "KRX_REGULAR")
+        not mechanistic_scope_supported(*cohort)
+        or population_source_contract.get("cohort", ["KRX", "KRX_REGULAR"]) != list(cohort)
         or population_source_contract.get("schema") != "machine_common_refinement_population_v1"
         or population_source_contract.get("input_row_disposition_complete") is not True
         or population_source_contract.get("accepted_rows_sha256") != _canonical_sha256([
@@ -6874,15 +6882,7 @@ def build_report(
         capture_census=machine_capture_census,
         source_receipt=machine_source_receipt,
     )
-    terminal_lineage_excluded_keys = {
-        str(key)
-        for key in (
-            list(_as_dict(machine_source_receipt.get("machine_terminal_tuning_gate")).get("excluded_evaluation_keys") or [])
-            + list(_as_dict(machine_source_receipt.get("machine_terminal_tuning_gate")).get("pending_evaluation_keys") or [])
-        )
-        if str(key)
-    }
-    all_scope_rows, _ = _mechanistic_source_rows(
+    all_scope_rows, all_scope_contract = _mechanistic_source_rows(
         report_root / PAIRED_SUBDIR, target_date=target_date, all_supported_cohorts=True
     )
     pipeline_prices_by_day = _hierarchy_pipeline_price_cache(
@@ -6892,27 +6892,6 @@ def build_report(
         mechanistic_source_rows,
         data_root,
         pipeline_prices_by_day=pipeline_prices_by_day,
-    )
-    machine_policy_rows = (
-        [
-            row
-            for row in machine_observations
-            if all(
-                str(value or "").strip()
-                for value in (
-                    row.get("scanner_promotion_id"),
-                    row.get("evaluation_attempt_id") or row.get("decision_trace_id"),
-                    row.get("stock_code"),
-                    row.get("effective_venue"),
-                    row.get("session_bucket"),
-                    row.get("bundle_sha256"),
-                )
-            )
-            and _machine_evaluation_key(row) not in terminal_lineage_excluded_keys
-        ]
-        if machine_decision_case_table["conflicting_attempt_identity_count"] == 0
-        and machine_source_receipt.get("machine_threshold_tuning_input_allowed") is True
-        else []
     )
     refinement_rows, refinement_contract = _common_refinement_population(
         hierarchy_rows, machine_observations,
@@ -6971,16 +6950,18 @@ def build_report(
         scoped_incumbent = _as_dict(
             _as_dict((incumbent or {}).get("scope_policies")).get(scope)
         )
+        scoped_population, scoped_contract = _common_refinement_population(
+            repriced, machine_observations, target_date=target_date,
+            source_receipt=machine_source_receipt, paired_contract=all_scope_contract,
+            natural_conflicting_attempt_identity_count=machine_decision_case_table["conflicting_attempt_identity_count"],
+            cohort=cohort,
+        )
         extension = build_mechanistic_hierarchy_candidate(
-            repriced
-            + [
-                row
-                for row in machine_policy_rows
-                if (row.get("effective_venue"), row.get("session_bucket")) == cohort
-            ],
+            scoped_population,
             target_date=target_date,
             parent_policy=scoped_incumbent.get("machine_policy"),
             cohort=cohort,
+            population_source_contract=scoped_contract,
         )
         extension["full_cost_relabel_census"] = census
         extensions[scope] = extension

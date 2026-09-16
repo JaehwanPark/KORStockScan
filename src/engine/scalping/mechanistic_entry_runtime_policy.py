@@ -800,7 +800,10 @@ def publish(
                             + ",".join(errors)
                         )
                     scoped_child = extension["policy_candidate"]["threshold_policy"]
-                    if scoped_child["thresholds"] == scoped_machine["thresholds"]:
+                    scoped_parent_hash = extension["policy_candidate"].get("incumbent_machine_policy_sha256")
+                    if scoped_child["thresholds"] == scoped_machine["thresholds"] and (
+                        scoped_parent_hash is None or scoped_parent_hash == digest(scoped_machine)
+                    ):
                         scoped_machine = copy.deepcopy(scoped_child)
                         scoped_disposition = "evidence_qualified_exact_scope_update"
                     else:
