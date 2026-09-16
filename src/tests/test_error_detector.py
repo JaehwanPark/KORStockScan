@@ -318,6 +318,22 @@ def test_error_detection_wrapper_validates_invocation_before_done():
     )
 
 
+def test_error_detection_wrapper_publishes_valid_failed_recovery_receipt():
+    project_root = Path(__file__).resolve().parents[2]
+    script = (project_root / "deploy" / "run_error_detection.sh").read_text(
+        encoding="utf-8"
+    )
+
+    # A recovery's failure severity is operational evidence, not a malformed
+    # report. The canonical report must be replaced before the wrapper returns
+    # non-zero to the finalization owner.
+    assert 'errors.append("postclose_recovery_unresolved_failure")' not in script
+    assert "postclose_recovery_unresolved_failure report_published=true" in script
+    assert script.index("os.replace(tmp_path, canonical_path)") < script.index(
+        "postclose_recovery_unresolved_failure report_published=true"
+    )
+
+
 def test_recovery_detector_active_lock_is_not_terminal_success(tmp_path):
     import fcntl
     import os
