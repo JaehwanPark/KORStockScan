@@ -152,6 +152,12 @@
   - 정책 증거: `2026-09-15` hash-bound 자연 연구 결과에서 `auto_034020_midday`, `auto_111770_late_morning` 두 profile이 cardinality cap 없이 `2026-09-16` exact-date 정책으로 승격됐다. 두 symbol의 기존 exact-date owner policy에는 이미 `episode` 권한과 broker/registry zero-conflict 검증이 있어 서비스가 정책을 로드했고, 13:20 현재 각각 `READY`/`NO_TRADE`, signal·order 0이다. 장중 owner auto-apply 재실행은 standing window 및 main-process quiescence guard로 두 차례 fail-closed 되었고 기존 정책/env는 변경되지 않았다.
   - 자연 증거 경계: 현재 widget exact-date 자동승격은 0종목이다. 오늘 장후 새 분석 universe는 established 4 + research-watch 13 + completed-daily 자동발견 2 = 19종목이며, 이 중 기준을 통과한 전 종목이 다음 거래일 정책으로 승격된다. 자연 signal/order/fill과 비용차감 경제성은 아직 `waiting`이다.
 
+- [ ] `[SellNoCallNaturalAcceptance0916] 통합 애프터마켓 FAST_EXIT 주문형·미호출 복구 자연 확인` (`Due: 2026-09-16`, `Slot: INTRADAY`, `TimeWindow: 16:40~20:10`, `Track: ScalpingLogic`)
+  - Source: [수리·복구 계약](../audit-reports/2026-09-16-sell-no-call-aftermarket-repair.md), `data/runtime/runtime_release_selection.json`, exact record `45050` 및 원 pending generation `3b66289a035c4c39966e34882f08947c`.
+  - 판정 기준: 정규장 최유리 IOC `16` 유지, 애프터마켓 청산 최유리 `6` 적용; 실제 미호출 차단만 process-local proof와 영속 terminal/CAS 계약으로 HOLDING 복구한다. 실제 접수 불확실 주문의 reconciliation은 유지한다.
+  - 완료 조건: scoped commit/push·immutable release/PID 소비, 해당 orphan journal 종료·DB 상태 일치 및 새 missing-original-order 반복 0. 후속 자연 주문/체결/terminal·비용차감 경제성은 별도 판정한다.
+  - 권한 경계: 사용자 구현·배포·기동 승인 범위의 한 generation 복구만 수행한다. 수량/threshold/provider/owner/독립 unit pin/quote·broker·account·cooldown·hard-safety 변경, 수동 주문 및 일괄 DB/journal 해제는 금지한다.
+
 ## Project/Calendar 동기화
 
 문서/checklist를 수정했으면 parser 검증은 실행하고, Project/Calendar 동기화는 사용자가 아래 명령으로 수동 실행한다.

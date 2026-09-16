@@ -554,8 +554,14 @@ def is_verified_local_sell_no_call_response(response):
     return bool(
         isinstance(response, dict)
         and response.get("_local_sell_no_call_token") is _LOCAL_SELL_NO_CALL_TOKEN
-        and response.get("return_code") == "SELL_TIME_BLOCKED"
+        and response.get("return_code")
+        in {
+            "SELL_TIME_BLOCKED",
+            "ORDER_TYPE_PREFLIGHT_BLOCKED",
+            "OWNER_REGISTRY_BLOCKED",
+        }
         and response.get("broker_order_attempted") is False
+        and not str(response.get("ord_no") or response.get("odno") or "").strip()
     )
 
 
@@ -2357,6 +2363,9 @@ def send_sell_order_market(
         order_date=order_now.date(),
     )
     if owner_block is not None:
+        # This branch is strictly before the first transport instruction.
+        if owner_block.get("broker_order_attempted") is False:
+            owner_block["_local_sell_no_call_token"] = _LOCAL_SELL_NO_CALL_TOKEN
         return owner_block
 
     try:

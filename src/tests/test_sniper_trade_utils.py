@@ -1,6 +1,92 @@
 from datetime import datetime
 
+import pytest
+
 from src.engine import sniper_trade_utils
+from src.trading.market import session_contract
+
+
+@pytest.mark.parametrize("route", ["KRX", "NXT", "SOR"])
+@pytest.mark.parametrize(
+    "clock,expected_type,allowed",
+    [
+        ("14:00", "16", True),
+        ("15:45", "16", False),
+        ("16:01", "6", True),
+        ("19:40", "6", True),
+        ("19:45", "6", True),
+        ("20:01", "16", False),
+    ],
+)
+def test_holding_exit_order_type_matches_session_without_relaxing_preflight(
+    monkeypatch, route, clock, expected_type, allowed
+):
+    hour, minute = map(int, clock.split(":"))
+    observed = datetime(2026, 9, 16, hour, minute, tzinfo=session_contract.KST)
+    calls = []
+    monkeypatch.setattr(
+        sniper_trade_utils.kiwoom_orders,
+        "send_sell_order_market",
+        lambda **kwargs: calls.append(kwargs) or kwargs,
+    )
+    result = sniper_trade_utils.send_exit_best_ioc(
+        "425040",
+        10,
+        "TEST_TOKEN",
+        dmst_stex_tp=route,
+        reason_type="LOSS",
+        strategy="SCALPING",
+        now=observed,
+    )
+    assert len(calls) == 1
+    assert result["qty"] == 10
+    assert result["dmst_stex_tp"] == route
+    assert result["order_type"] == expected_type
+    assert result["existing_holding"] is True
+    decision = session_contract.resolve_order_type_preflight(
+        session_contract.resolve_market_session(observed),
+        route,
+        "sell",
+        result["order_type"],
+        existing_holding=result["existing_holding"],
+    )
+    assert decision.allowed is allowed
+
+
+def test_aftermarket_fast_exit_reaches_normal_sell_transport_once(monkeypatch):
+    from types import SimpleNamespace
+
+    orders = sniper_trade_utils.kiwoom_orders
+    calls = []
+    monkeypatch.setattr(
+        orders, "is_sell_side_open_time_blocked", lambda **kwargs: False
+    )
+    monkeypatch.setattr(
+        orders, "_reserve_owner_registry_intent", lambda **kwargs: (None, None, None)
+    )
+    monkeypatch.setattr(
+        orders,
+        "_post_kiwoom_with_auth_retry",
+        lambda url, headers, payload, api_id, **kwargs: (
+            calls.append((api_id, dict(payload))) or SimpleNamespace(status_code=200),
+            {"return_code": "0", "ord_no": "0000123"},
+        ),
+    )
+    result = sniper_trade_utils.send_exit_best_ioc(
+        "425040",
+        10,
+        "TEST_TOKEN",
+        dmst_stex_tp="SOR",
+        reason_type="LOSS",
+        strategy="SCALPING",
+        now=datetime(2026, 9, 16, 16, 1, 12, tzinfo=session_contract.KST),
+    )
+    assert len(calls) == 1
+    assert calls[0][0] == "kt10001"
+    assert calls[0][1]["trde_tp"] == "6"
+    assert calls[0][1]["ord_qty"] == "10"
+    assert calls[0][1]["dmst_stex_tp"] == "SOR"
+    assert result["ord_no"] == "0000123"
 
 
 def _exact_cancel_ack(*, route="SOR", code="399720", orig="0000001", qty="5"):

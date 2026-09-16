@@ -21177,7 +21177,12 @@ def _finish_definitive_sell_reject_boundary(
         _mutate_stock_state(
             stock,
             set_fields={"status": "HOLDING"},
-            pop_fields=_SELL_SUBMIT_CONTEXT_KEYS,
+            pop_fields=(
+                *_SELL_SUBMIT_CONTEXT_KEYS,
+                "sell_cancel_reconciliation_required",
+                "sell_cancel_reconciliation_source",
+                "sell_cancel_reconciliation_retry_at",
+            ),
         )
         return True
     try:
@@ -21333,7 +21338,7 @@ def _classify_sell_submit_response(response: Any) -> dict[str, Any]:
     if kiwoom_orders.is_verified_local_sell_no_call_response(response):
         return {
             "state": "local_no_call",
-            "return_code": "SELL_TIME_BLOCKED",
+            "return_code": str(response.get("return_code") or ""),
             "order_no": "",
             "message": str(response.get("return_msg") or "sell_time_blocked"),
             "broker_order_attempted": False,
@@ -92456,9 +92461,15 @@ def handle_holding_state(
                 generation=sell_submit_generation,
             ):
                 return
-            log_error(
-                f"🚨 [{stock['name']}] 증권사 명시적 매도 거절. HOLDING으로 원상복구."
-            )
+            if sell_submit_response_contract["state"] == "local_no_call":
+                log_info(
+                    f"[SELL_LOCAL_NO_CALL] {code}: {err_msg}; HOLDING restored, "
+                    "broker transport was not attempted."
+                )
+            else:
+                log_error(
+                    f"🚨 [{stock['name']}] 증권사 명시적 매도 거절. HOLDING으로 원상복구."
+                )
             new_status = "HOLDING"
             retry_backoff_fields = _mark_sell_order_failure_retry_backoff(
                 stock,

@@ -501,16 +501,32 @@ def send_exit_best_ioc(
     strategy=None,
     bypass_open_time_block=False,
     owner_context=None,
+    now=None,
 ):
-    """[공통 긴급 청산 래퍼] 최유리(IOC, 16) 조건으로 즉각 청산 시도"""
+    """Holding exit: regular best-IOC; after-market ordinary best-limit.
+
+    After-market does not permit the regular-session IOC exit contract.  Do
+    not globally relax the order preflight or turn an IOC request into a
+    market order.  The normal SELL adapter still owns all submission guards.
+    """
+    order_now = now if now is not None else datetime.now(_KST)
+    market_session = session_contract.resolve_market_session(order_now)
+    aftermarket = market_session.session_regime in {
+        session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET,
+        session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET_CLOSE_ONLY,
+        session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET_TERMINAL_EXIT,
+        session_contract.MARKET_SESSION_REGIME_LEGACY_NXT_ONLY,
+    }
     kwargs = {
         "code": code,
         "qty": qty,
         "token": token,
-        "order_type": "16",
+        "order_type": "6" if aftermarket else "16",
         "dmst_stex_tp": dmst_stex_tp,
         "reason_type": reason_type,
         "strategy": strategy,
+        "now": order_now,
+        "existing_holding": True,
     }
     if owner_context is not None:
         kwargs["owner_context"] = owner_context

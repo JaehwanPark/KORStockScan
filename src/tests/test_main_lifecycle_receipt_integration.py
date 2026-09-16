@@ -774,9 +774,11 @@ def test_exit_receipt_submission_custody_accepts_exact_integrated_sor_envelope(
 
 
 @pytest.mark.parametrize("actual_venue", ["KRX", "NXT", "UNKNOWN"])
+@pytest.mark.parametrize("observed_route", [None, "krx_only", "krx_nxt_integrated"])
 def test_exit_receipt_submission_custody_separates_sor_from_dual_actual_venue(
     monkeypatch: pytest.MonkeyPatch,
     actual_venue: str,
+    observed_route: str | None,
 ) -> None:
     emitted: list[dict[str, Any]] = []
     monkeypatch.setattr(
@@ -796,6 +798,8 @@ def test_exit_receipt_submission_custody_separates_sor_from_dual_actual_venue(
         actual_venue=actual_venue,
         intended_session_bucket="KRX_NXT_AFTERMARKET",
     )
+    if observed_route is not None:
+        stock["market_data_route"] = observed_route
 
     assert execution_receipts._emit_execution_receipt_submission_custody(
         target_stock=stock,
@@ -807,7 +811,8 @@ def test_exit_receipt_submission_custody_separates_sor_from_dual_actual_venue(
         requested_qty=2,
     )
     assert emitted[0]["market_session_regime"] == "KRX_NXT_AFTERMARKET"
-    assert emitted[0]["market_data_route"] == "krx_nxt_integrated"
+    assert emitted[0]["market_data_route"] == (observed_route or "unknown")
+    assert emitted[0]["preferred_market_data_route"] == "krx_nxt_integrated"
     assert emitted[0]["broker_route_requested"] == "SOR"
     assert emitted[0]["actual_execution_venue"] == actual_venue
     assert emitted[0]["actual_execution_venue_source"] == (
@@ -1514,6 +1519,34 @@ def test_sell_submit_response_classifier_requires_explicit_numeric_ack(
     assert result["order_no"] == expected_order_no
 
 
+@pytest.mark.parametrize(
+    "code",
+    ["SELL_TIME_BLOCKED", "ORDER_TYPE_PREFLIGHT_BLOCKED", "OWNER_REGISTRY_BLOCKED"],
+)
+@pytest.mark.parametrize("tamper", [None, "token", "attempted", "order_no", "code"])
+def test_sell_local_no_call_requires_exact_process_attestation(code, tamper):
+    from src.engine import kiwoom_orders
+
+    response = {
+        "return_code": code,
+        "return_msg": "local_guard_blocked",
+        "broker_order_attempted": False,
+        "ord_no": "",
+        "_local_sell_no_call_token": kiwoom_orders._LOCAL_SELL_NO_CALL_TOKEN,
+    }
+    if tamper == "token":
+        response["_local_sell_no_call_token"] = object()
+    elif tamper == "attempted":
+        response["broker_order_attempted"] = True
+    elif tamper == "order_no":
+        response["ord_no"] = "0000001"
+    elif tamper == "code":
+        response["return_code"] = "UNATTESTED_GUARD"
+    result = state_handlers._classify_sell_submit_response(response)
+    assert result["state"] == ("local_no_call" if tamper is None else "ambiguous")
+    assert result["return_code"] == response["return_code"]
+
+
 def test_sell_submit_custody_append_gap_retries_from_durable_receipt_snapshot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1815,7 +1848,12 @@ def test_sell_submit_pre_call_boundary_requires_exact_db_owner() -> None:
     assert stock["sell_cancel_reconciliation_required"] is True
 
 
-def test_definitive_reject_terminal_outcome_recovers_crash_after_db_rollback() -> None:
+@pytest.mark.parametrize("local_preflight", [False, True])
+@pytest.mark.parametrize("recovered_db_status", ["HOLDING", "SELL_ORDERED"])
+def test_definitive_reject_terminal_outcome_recovers_crash_after_db_rollback(
+    local_preflight: bool,
+    recovered_db_status: str,
+) -> None:
     record = SimpleNamespace(
         id=702,
         stock_code="005930",
@@ -1886,6 +1924,26 @@ def test_definitive_reject_terminal_outcome_recovers_crash_after_db_rollback() -
     )
     generation = stock["sell_submit_generation"]
     assert execution_receipts.persist_pending_sell_submit_custody(stock)
+    if local_preflight:
+        from src.engine import kiwoom_orders
+        from src.trading.market import session_contract
+
+        market = session_contract.resolve_market_session(
+            datetime(2026, 9, 16, 16, 1, tzinfo=session_contract.KST)
+        )
+        preflight = session_contract.resolve_order_type_preflight(
+            market, "SOR", "sell", "16", existing_holding=True
+        )
+        response = kiwoom_orders._order_type_preflight_block_response(
+            market_session=market,
+            preflight=preflight,
+            route_resolution={},
+            side="sell",
+        )
+        assert (
+            state_handlers._classify_sell_submit_response(response)["state"]
+            == "local_no_call"
+        )
     assert execution_receipts.persist_pending_sell_definitive_reject_outcome(
         stock,
         generation=generation,
@@ -1893,7 +1951,7 @@ def test_definitive_reject_terminal_outcome_recovers_crash_after_db_rollback() -
 
     # Crash point: DB rollback committed, but the common journal was not yet
     # unlinked. A fresh runtime target must finish this exact generation.
-    record.status = "HOLDING"
+    record.status = recovered_db_status
     restored_fields, reason = execution_receipts.load_pending_sell_submit_custody(
         target_id=record.id,
         code=record.stock_code,
@@ -1906,6 +1964,9 @@ def test_definitive_reject_terminal_outcome_recovers_crash_after_db_rollback() -
         "name": "SAMSUNG",
         "status": "HOLDING",
         "buy_qty": record.buy_qty,
+        "sell_cancel_reconciliation_required": True,
+        "sell_cancel_reconciliation_source": "old_local_no_call_misclassification",
+        "sell_cancel_reconciliation_retry_at": 99999999999.0,
         **restored_fields,
     }
 
@@ -1919,6 +1980,9 @@ def test_definitive_reject_terminal_outcome_recovers_crash_after_db_rollback() -
     assert record.status == "HOLDING"
     assert restarted["status"] == "HOLDING"
     assert "sell_submit_generation" not in restarted
+    assert "sell_cancel_reconciliation_required" not in restarted
+    assert "sell_cancel_reconciliation_source" not in restarted
+    assert "sell_cancel_reconciliation_retry_at" not in restarted
     assert not execution_receipts._sell_pending_submit_path(record.id).exists()
 
 

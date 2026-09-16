@@ -822,8 +822,32 @@ def test_aftermarket_unsupported_type_is_blocked_before_broker(monkeypatch, side
 
     assert calls == []
     assert result["return_code"] == "ORDER_TYPE_PREFLIGHT_BLOCKED"
-    assert result["return_msg"] == session_contract.ORDER_TYPE_PREFLIGHT_TYPE_UNSUPPORTED
+    assert (
+        result["return_msg"] == session_contract.ORDER_TYPE_PREFLIGHT_TYPE_UNSUPPORTED
+    )
     assert result["broker_order_attempted"] is False
+    if side == "sell":
+        assert kiwoom_orders.is_verified_local_sell_no_call_response(result)
+
+
+def test_owner_registry_sell_block_attests_no_transport(monkeypatch):
+    calls = []
+    monkeypatch.setattr(kiwoom_orders, "is_sell_side_open_time_blocked", lambda **kwargs: False)
+    monkeypatch.setattr(
+        kiwoom_orders, "_reserve_owner_registry_intent",
+        lambda **kwargs: (None, None, kiwoom_orders._owner_registry_block_response("owner_veto")),
+    )
+    monkeypatch.setattr(
+        kiwoom_orders, "_post_kiwoom_with_auth_retry",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+    response = kiwoom_orders.send_sell_order_market(
+        "425040", 10, "TEST_TOKEN", order_type="6", dmst_stex_tp="SOR",
+        now=datetime(2026, 9, 16, 16, 1, 12, tzinfo=session_contract.KST),
+    )
+    assert calls == []
+    assert response["return_code"] == "OWNER_REGISTRY_BLOCKED"
+    assert kiwoom_orders.is_verified_local_sell_no_call_response(response)
 
 
 def test_aftermarket_buy_requires_explicit_route_before_broker(monkeypatch):
