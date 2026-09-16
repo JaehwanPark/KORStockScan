@@ -956,9 +956,112 @@ def test_compact_screen_conserves_caution_and_not_evaluated_without_veto():
     }
     assert report["economic_contract"]["economic_eligible_count"] == 0
     assert report["economic_contract"]["exclusion_counts"] == {
-        "non_economic_terminal_verdict": 1,
+        "bounded_recheck_nonexposure_unproven": 1,
         "provider_not_called": 1,
     }
+
+
+def _compact_router_case_table(*, verdict="CAUTION", submitted=False, disposition="ai_caution_bounded_recheck", adverse_count=0, decision_gate=True):
+    from src.engine.scalping.mechanistic_entry_runtime_policy import AI_VERSION
+    rows = [{
+        "decision_trace_id": f"router-trace-{index}",
+        "evaluation_attempt_id": f"router-attempt-{index}",
+        "scanner_promotion_id": f"promotion-{index}",
+        "decision_snapshot_id": f"snapshot-{index}",
+        "decision_ts": f"2026-09-15T12:00:{index:02d}+09:00",
+        "source_date": "2026-09-15", "stock_code": "005930",
+        "effective_venue": "KRX", "session_bucket": "KRX_REGULAR",
+        "bundle_sha256": "a" * 64, "machine_action": "ENTER_NOW",
+        "entry_quality_path": {
+            "status": "evaluable", "entry_quality_label": "CLEAN_FAST_PROFIT",
+            "conservative_execution_cost_pct": 0.23,
+            "first_hit": "net_target_first", "gross_net_target_pct": 0.30,
+        },
+        "ai_and_final_guard": {
+            "provider_called": True, "prompt_version": AI_VERSION,
+            "ai_risk_verdict": verdict, "decision_quality_contract_status": "pass",
+            "semantic_validation_status": "pass", "followup_disposition": disposition,
+            "observed_actual_order_submitted": submitted,
+        },
+    } for index in range(20)]
+    for row in rows[:adverse_count]:
+        row["entry_quality_path"].update(
+            entry_quality_label="CLEAN_FAST_LOSS_OR_ADVERSE", first_hit="exact_stop_first",
+            exact_stop_distance_pct=-0.70,
+        )
+    receipt = {
+        "target_date": "2026-09-15", "source_manifest_sha256": "d" * 64,
+        "tuning_input_allowed": True,
+        "machine_terminal_tuning_gate": {"decision_counterfactual_tuning_input_allowed": decision_gate},
+        "compact_auxiliary_policy_measurement": {"prompt_version": AI_VERSION, "measurement_allowed": True},
+    }
+    return calibration.build_machine_decision_case_table(rows, source_receipt=receipt)
+
+
+@pytest.mark.parametrize("submitted,disposition", [
+    (False, "ai_caution_bounded_recheck"),
+    (True, "ai_caution_bounded_recheck"),
+    (None, "ai_caution_bounded_recheck"),
+    (False, "ai_pass_existing_submit_guard"),
+])
+def test_compact_caution_opportunity_cost_preserves_router_nonexposure(submitted, disposition):
+    from src.engine.scalping import mechanistic_entry_runtime_policy as policy
+    table = _compact_router_case_table(submitted=submitted, disposition=disposition)
+    outcomes = table["compact_auxiliary_screen_outcomes"]
+    economic, selection = outcomes["economic_contract"], outcomes["automatic_successor_selection"]
+    allowed = submitted is False and disposition == "ai_caution_bounded_recheck"
+    assert economic["denominator_preserved"] is True
+    assert outcomes["terminal_verdict_counts"] == {"CAUTION": 20}
+    assert economic["evaluable_veto_count"] == 0
+    assert economic["economic_eligible_count"] == (20 if allowed else 0)
+    assert economic["evaluable_caution_count"] == (20 if allowed else 0)
+    assert economic["missed_profit_caution_count"] == (20 if allowed else 0)
+    assert economic["missed_profit_caution_net_sum_pct"] == pytest.approx(1.4 if allowed else 0)
+    assert economic["caution_is_not_veto"] is True
+    assert economic["screened_policy_counterfactual_net_ev_pct"] == (0 if allowed else None)
+    assert policy.compact_outcome_counts_valid(economic)
+    assert selection["eligible"] is allowed
+    assert selection["selected_prompt_version"] == (policy.ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION if allowed else policy.AI_VERSION)
+    if allowed:
+        corrupted = json.loads(json.dumps(economic))
+        corrupted["missed_profit_caution_count"] -= 1
+        assert not policy.compact_outcome_counts_valid(corrupted)
+        assert policy.compact_economic_direction(corrupted) == "carry_balanced_compact_contract"
+
+
+def test_compact_insufficient_is_source_repair_not_opportunity_policy_training():
+    table = _compact_router_case_table(verdict="INSUFFICIENT", disposition="ai_insufficient_bounded_recheck")
+    outcomes = table["compact_auxiliary_screen_outcomes"]
+    assert outcomes["economic_contract"]["economic_eligible_count"] == 0
+    assert outcomes["economic_contract"]["exclusion_counts"] == {"source_gap_router_verdict": 20}
+    assert outcomes["automatic_successor_selection"]["eligible"] is False
+
+
+def test_compact_caution_avoided_losses_prevent_one_sided_relaxation():
+    from src.engine.scalping import mechanistic_entry_runtime_policy as policy
+    outcomes = _compact_router_case_table(adverse_count=15)["compact_auxiliary_screen_outcomes"]
+    economic = outcomes["economic_contract"]
+    assert economic["missed_profit_caution_count"] == 5
+    assert economic["missed_profit_caution_net_sum_pct"] == pytest.approx(0.35)
+    assert economic["avoided_nonentry_loss_sum_pct"] == pytest.approx(13.95)
+    assert outcomes["automatic_successor_selection"]["eligible"] is True
+    assert outcomes["automatic_successor_selection"]["selected_prompt_version"] == policy.AI_VERSION
+
+
+@pytest.mark.parametrize("corruption", [None, "count", "nan_amount", "terminal_gate"])
+def test_router_economic_contract_is_rechecked_by_central_verifier(tmp_path, corruption):
+    from src.engine import verify_threshold_cycle_postclose_chain as verifier
+    report = calibration.build_report(target_date="2026-09-15", data_root=tmp_path)
+    table = _compact_router_case_table(decision_gate=corruption != "terminal_gate")
+    economic = table["compact_auxiliary_screen_outcomes"]["economic_contract"]
+    if corruption == "count":
+        economic["evaluable_caution_count"] -= 1
+    elif corruption == "nan_amount":
+        economic["missed_profit_caution_net_sum_pct"] = float("nan")
+    report["hierarchical_entry_quality"]["machine_decision_case_table"] = table
+    report = calibration._with_artifact_content_sha256(report)
+    status = verifier._ai_decision_action_outcome_calibration_status(report)
+    assert ("compact_auxiliary_economic_selection_contract_invalid" in status["contract_errors"]) is (corruption in {"count", "nan_amount"})
 
 
 def test_compact_machine_horizons_preserve_pending_or_source_gap():
@@ -1034,7 +1137,7 @@ def test_machine_case_table_automatically_selects_bounded_compact_variant():
     ]
     assert selection["eligible"] is True
     assert selection["minimum_economic_eligible_count"] == 20
-    assert selection["contract_version"] == ("compact_auxiliary_economic_selection_v2")
+    assert selection["contract_version"] == "compact_auxiliary_router_economic_selection_v3"
     # The same exact source is evaluable on an all-VETO day, with no actual
     # submit/fill prerequisites. Do not relax partition or cost/path gates.
     all_veto = json.loads(json.dumps(rows))

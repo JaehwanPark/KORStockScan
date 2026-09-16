@@ -1743,8 +1743,12 @@ def _ai_decision_action_outcome_calibration_status(
                     default=str,
                 ).encode()
             ).hexdigest()
+            from src.engine.scalping.mechanistic_entry_runtime_policy import compact_terminal_gate_allowed
+
+            compact_terminal_allowed = compact_terminal_gate_allowed(machine_source_receipt)
             eligible_expected = bool(
                 generic_source_tuning_allowed is True
+                and compact_terminal_allowed
                 and compact_measurement.get("measurement_allowed") is True
                 and isinstance(economic_count, int)
                 and not isinstance(economic_count, bool)
@@ -1780,7 +1784,7 @@ def _ai_decision_action_outcome_calibration_status(
                 "not_observed_on_source_date"
             ):
                 expected_direction = "carry_incumbent_compact_not_observed"
-            elif compact_measurement.get("measurement_allowed") is not True:
+            elif compact_measurement.get("measurement_allowed") is not True or not compact_terminal_allowed:
                 expected_direction = "isolate_invalid_compact_partition_and_carry"
             elif not isinstance(economic_count, int) or economic_count < 20:
                 expected_direction = "collect_current_version_natural_evidence"
@@ -1803,7 +1807,7 @@ def _ai_decision_action_outcome_calibration_status(
             )
 
             if (
-                economic.get("schema") != "compact_auxiliary_economic_selection_v2"
+                economic.get("schema") not in {"compact_auxiliary_economic_selection_v2", "compact_auxiliary_router_economic_selection_v3"}
                 or not valid_count_map(screen_outcome_counts)
                 or not valid_count_map(terminal_verdict_counts)
                 or not valid_count_map(ai_screen_routing_counts)
@@ -1852,7 +1856,7 @@ def _ai_decision_action_outcome_calibration_status(
                 or not isinstance(pass_count, int)
                 or isinstance(pass_count, bool)
                 or pass_count < 0
-                or veto_count + pass_count != economic_count
+                or veto_count + pass_count + (economic.get("evaluable_caution_count", 0) if economic.get("schema") == "compact_auxiliary_router_economic_selection_v3" else 0) != economic_count
                 or not isinstance(missed_count, int)
                 or isinstance(missed_count, bool)
                 or missed_count < 0
@@ -1879,7 +1883,9 @@ def _ai_decision_action_outcome_calibration_status(
                 or selection.get("recommendation_id")
                 != "compact_auxiliary_prompt_automatic_successor_v2"
                 or selection.get("contract_version")
-                != "compact_auxiliary_economic_selection_v2"
+                != economic.get("schema")
+                or (economic.get("schema") == "compact_auxiliary_router_economic_selection_v3"
+                    and selection.get("economic_direction_rule") != "cost_weighted_nonentry_router_feedback_v2")
                 or selection.get("minimum_economic_eligible_count") != 20
                 or selection.get("minimum_error_count") != 3
                 or selection.get("minimum_relevant_denominator") != 5

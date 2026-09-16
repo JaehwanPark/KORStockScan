@@ -1334,11 +1334,11 @@ def build_report(target_date: str, *, write: bool = False) -> dict[str, Any]:
         else {}
     )
     compact_contract_connected = bool(
-        compact_economic.get("schema") == "compact_auxiliary_economic_selection_v2"
+        compact_economic.get("schema") in {"compact_auxiliary_economic_selection_v2", "compact_auxiliary_router_economic_selection_v3"}
         and compact_selection.get("recommendation_id")
         == "compact_auxiliary_prompt_automatic_successor_v2"
         and compact_selection.get("contract_version")
-        == "compact_auxiliary_economic_selection_v2"
+        == compact_economic.get("schema")
         and isinstance(compact_source.get("source_manifest_sha256"), str)
         and len(compact_source.get("source_manifest_sha256") or "") == 64
         and compact_selection.get("source_manifest_sha256")
@@ -1348,6 +1348,13 @@ def build_report(target_date: str, *, write: bool = False) -> dict[str, Any]:
         and compact_economic.get("verdict_x_action_neutral_outcome_counts_sha256")
         == optimizer._canonical_sha256(compact_economic_counts)
     )
+    if compact_contract_connected and compact_economic.get("schema") == "compact_auxiliary_router_economic_selection_v3":
+        from src.engine.scalping.mechanistic_entry_runtime_policy import compact_outcome_counts_valid
+
+        compact_contract_connected = bool(
+            compact_outcome_counts_valid(compact_economic)
+            and compact_selection.get("economic_direction_rule") == "cost_weighted_nonentry_router_feedback_v2"
+        )
     if compact_contract_connected and optimizer_report.get(
         "compact_auxiliary_evaluation"
     ) != optimizer.compact_evaluation_plan(calibration):

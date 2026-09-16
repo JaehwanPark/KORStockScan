@@ -54,6 +54,19 @@ def test_compact_plan_preserves_natural_selection_and_runtime_prompt_registry():
     assert "v2_15" not in serialized
 
 
+def test_compact_router_economics_reaches_optimizer_without_provider_replay():
+    from src.tests.test_ai_action_outcome_calibration import _compact_router_case_table
+    table = _compact_router_case_table()
+    report = {"hierarchical_entry_quality": {"machine_decision_case_table": table}}
+    plan = optimizer.compact_evaluation_plan(report)
+    assert plan["economic_contract"] == table["compact_auxiliary_screen_outcomes"]["economic_contract"]
+    assert plan["economic_contract"]["evaluable_caution_count"] == 20
+    assert plan["automatic_successor_selection"]["eligible"] is True
+    assert plan["provider_calls"] == 0
+    assert plan["candidate_improvement_proven"] is False
+    assert plan["allowed_runtime_apply"] is False
+
+
 def _zero_participation_evidence():
     version = optimizer.ENTRY_CANDIDATE_ORDER[0]
     rows = [
