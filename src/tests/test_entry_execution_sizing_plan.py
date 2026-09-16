@@ -11,6 +11,7 @@ from src.engine.scalping.entry_execution_sizing_plan import (
     compose_entry_execution_sizing_plan,
     compose_scale_in_execution_sizing_plan,
     runtime_mechanistic_entry_price_policy,
+    runtime_entry_execution_sizing_policy,
 )
 from src.engine.scalping.entry_split_order_plan import build_probe_residual_orders
 
@@ -132,6 +133,15 @@ def test_dated_price_and_integrated_sizing_policies_bind_without_new_authority(
     assert fields["entry_execution_sizing_valid"] is True
     assert fields["entry_execution_sizing_policy"] == "sizing:test"
     assert fields["entry_execution_sizing_migration_baseline"] is False
+
+    # A freshly dated policy cannot downgrade to an old proof-less contract.
+    sizing_payload.update(source_date="2026-09-17", active_date="2026-09-18")
+    _, sizing_sha = _write_policy(tmp_path, "sizing.json", sizing_payload)
+    for suffix, value in {"SOURCE_DATE": "2026-09-17", "ACTIVE_DATE": "2026-09-18", "SHA256": sizing_sha}.items():
+        monkeypatch.setenv(f"KORSTOCKSCAN_ENTRY_EXECUTION_SIZING_POLICY_{suffix}", value)
+    policy, status = runtime_entry_execution_sizing_policy(active_date="2026-09-18")
+    assert policy is None
+    assert status == "selection_evidence_invalid"
 
 
 def test_dated_sizing_policy_rejects_cross_owner_version_mismatch(

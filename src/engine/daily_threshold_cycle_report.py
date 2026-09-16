@@ -28,6 +28,7 @@ from src.engine.lifecycle.retirement import (
 from src.engine.scalping.entry_split_order_plan import (
     generation_policy_snapshot_path,
     runtime_apply_authority_contract_status,
+    quantity_leg_promotion_evidence_valid,
 )
 from src.engine.scalping.entry_execution_sizing_plan import (
     ENTRY_EXECUTION_SIZING_POLICY_SCHEMA,
@@ -1561,6 +1562,15 @@ def _materialize_integrated_entry_execution_sizing_policy(
     gate = evaluation.get("promotion_gate") or {}
     if gate.get("passed") is not True:
         return
+    if (
+        (source_date >= "2026-09-17" or evaluation.get("selection_contract"))
+        and not quantity_leg_promotion_evidence_valid(evaluation)
+    ):
+        return
+    if evaluation.get("selection_contract"):
+        partitions = evaluation["chronological_partitions"]
+        if partitions["holdout"]["source_dates"][-1] > source_date:
+            return
     quantity_values = quantity.get("recommended_values") or {}
     split_values = split.get("recommended_values") or {}
     required = {
@@ -1622,6 +1632,7 @@ def _materialize_integrated_entry_execution_sizing_policy(
         "selected_arm": "candidate_qty_x_candidate_leg",
         "paired_policy_identity": paired_identity,
         "promotion_gate": gate,
+        "quantity_leg_selection_evidence": evaluation,
         "action_authority": False,
         "price_authority": False,
         "scale_in_authority": False,
