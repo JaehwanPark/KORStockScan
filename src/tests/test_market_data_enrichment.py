@@ -26,6 +26,19 @@ def _rest_orderbook(price=10000):
     }
 
 
+def test_enrichment_uses_depth_clock_not_program_clock():
+    ws = {
+        "curr": 10000,
+        "best_bid": 9990,
+        "best_ask": 10010,
+        "last_ws_update_ts": 1000.0,
+        "last_realtime_type_ts": {"0D": 990.0, "0w": 1000.0},
+    }
+    _, fields = build_market_data_enrichment(ws_data=ws, now_ts=1000.0)
+    assert fields["market_data_ws_quote_age_ms"] == 10000.0
+    assert fields["market_data_freshness_state"] != FRESH_WS
+
+
 def test_market_data_enrichment_uses_fresh_ws_without_rest():
     ws_data = {
         "curr": 10000,

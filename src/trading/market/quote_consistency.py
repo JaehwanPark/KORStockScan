@@ -3,11 +3,198 @@
 from __future__ import annotations
 
 import os
+import math
 import time
 from dataclasses import dataclass
 from typing import Any, Mapping
 
 RUNTIME_FAMILY = "quote_consistency_normalization"
+MARKET_DATA_HEALTH_SCHEMA = "kiwoom_market_data_health_v1"
+
+
+def ws_quote_receive_age_ms(data: Mapping[str, Any], *, now_ts: float) -> float | None:
+    """Shared source clock; transport never renews a type-specific book.
+
+    Legacy transport-only envelopes retain their old adapter. This function
+    does not attest venue or trade provenance and makes no network request.
+    """
+    times = data.get("last_realtime_type_ts")
+    stamp = (
+        times.get("0D") if isinstance(times, Mapping) else data.get("last_ws_update_ts")
+    )
+    try:
+        stamp = float(stamp or 0.0)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(stamp):
+        return None
+    if "market_data_transport_epoch" in data:
+        if type(data.get("market_data_transport_epoch")) is not int:
+            return None
+        routes = data.get("realtime_type_snapshots_by_route")
+        routes = routes if isinstance(routes, Mapping) else {}
+        items = data.get("last_realtime_type_item")
+        item = items.get("0D") if isinstance(items, Mapping) else None
+        candidates = [
+            records.get("0D")
+            for records in routes.values()
+            if isinstance(records, Mapping)
+            and isinstance(records.get("0D"), Mapping)
+            and (not item or records["0D"].get("item") == item)
+        ]
+        stamp = 0.0
+        if len(candidates) == 1 and candidates[0].get("transport_epoch") == data.get(
+            "market_data_transport_epoch"
+        ):
+            stamp = _to_float(candidates[0].get("observed_epoch"))
+        # Documented 0B FIDs 27/28 are a fresh best quote in their own right.
+        # Never borrow cached/depth-derived levels or another exact item.
+        trade_item = items.get("0B") if isinstance(items, Mapping) else None
+        visible_bid, visible_ask = _best_levels(data)
+        inline = [
+            records.get("0B")
+            for records in routes.values()
+            if isinstance(records, Mapping)
+            and isinstance(records.get("0B"), Mapping)
+            and trade_item
+            and records["0B"].get("item") == trade_item
+        ]
+        if len(inline) == 1:
+            row = inline[0]
+            bid, ask = _to_int(row.get("inline_best_bid")), _to_int(
+                row.get("inline_best_ask")
+            )
+            if (
+                row.get("transport_epoch") == data.get("market_data_transport_epoch")
+                and bid > 0
+                and ask >= bid
+                and (bid, ask) == (visible_bid, visible_ask)
+            ):
+                stamp = max(stamp, _to_float(row.get("observed_epoch")))
+    if not math.isfinite(stamp) or stamp <= 0:
+        return None
+    return (now_ts - stamp) * 1000.0
+
+
+def build_market_data_health(
+    data: Mapping[str, Any], *, now_ts: float, quote_max_age_ms: int = 3000
+) -> dict[str, Any]:
+    """Pure type-specific facts; transport activity is never quote/trade proof.
+
+    Route provenance comes from the existing exact-item WS snapshots, not the
+    session clock. Missing or cross-epoch records remain unproven. Ten seconds
+    describes observed tape inactivity only, never executable quote validity.
+    """
+
+    def age(value: Any) -> float | None:
+        try:
+            stamp = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if not math.isfinite(stamp) or stamp <= 0:
+            return None
+        return (now_ts - stamp) * 1000.0
+
+    routes = data.get("realtime_type_snapshots_by_route")
+    routes = routes if isinstance(routes, Mapping) else {}
+    current_epoch = data.get("market_data_transport_epoch")
+    facts: dict[str, Any] = {}
+    for key, records in routes.items():
+        if not isinstance(records, Mapping):
+            continue
+        quote = records.get("0D")
+        trade = records.get("0B")
+        quote = quote if isinstance(quote, Mapping) else {}
+        trade = trade if isinstance(trade, Mapping) else {}
+        quote_age = age(quote.get("observed_epoch"))
+        trade_age = age(trade.get("observed_epoch"))
+        bid, ask = _best_levels(quote)
+        same_scope = bool(
+            quote.get("item")
+            and quote.get("item") == trade.get("item")
+            and current_epoch is not None
+            and quote.get("transport_epoch")
+            == trade.get("transport_epoch")
+            == current_epoch
+            and quote.get("effective_venue") == trade.get("effective_venue")
+            and quote.get("effective_venue") not in (None, "", "UNKNOWN")
+            and quote.get("market_route") == trade.get("market_route")
+        )
+        quote_state = (
+            "missing"
+            if quote_age is None
+            else (
+                "future"
+                if quote_age < 0
+                else (
+                    "unproven"
+                    if quote.get("transport_epoch") != current_epoch
+                    else (
+                        "invalid"
+                        if bid <= 0 or ask <= 0 or bid > ask
+                        else "stale" if quote_age > quote_max_age_ms else "fresh"
+                    )
+                )
+            )
+        )
+        quiet_facts = {
+            "trade_activity_state": "OBSERVATION_UNPROVEN",
+            "quiet_episode_count": None,
+            "observation_continuity_proven": False,
+        }
+        state = records.get("_quiet_tape_state")
+        if same_scope and quote_state == "fresh" and hasattr(state, "facts"):
+            quiet_facts.update(state.facts(now=now_ts))
+        elif same_scope and quote_state == "fresh":
+            observation = records.get("quiet_tape_observation")
+            if isinstance(observation, Mapping):
+                last_quote_age = age(observation.get("last_quote"))
+                last_trade_age = age(observation.get("last_trade"))
+                proven = bool(
+                    last_quote_age is not None
+                    and 0 <= last_quote_age <= 3000
+                    and last_trade_age is not None
+                    and last_trade_age >= 0
+                )
+                if proven:
+                    quiet = last_trade_age >= 10_000
+                    count = min(
+                        3,
+                        max(0, _to_int(observation.get("closed_episodes")))
+                        + int(quiet),
+                    )
+                    quiet_facts.update(
+                        observation_continuity_proven=True,
+                        quiet_episode_count=count,
+                        trade_activity_state=(
+                            "REPEATED_QUIET_TAPE_OBSERVED"
+                            if quiet and count >= 3
+                            else "QUIET_TAPE_OBSERVED" if quiet else "RECENT_TRADE"
+                        ),
+                    )
+        facts[str(key)] = {
+            "item": quote.get("item") or trade.get("item"),
+            "effective_venue": quote.get("effective_venue") or "UNKNOWN",
+            "market_route": quote.get("market_route"),
+            "transport_epoch": current_epoch,
+            "quote_receive_age_ms": quote_age,
+            "trade_receive_age_ms": trade_age,
+            "trade_event_age_ms": age(trade.get("provider_trade_epoch")),
+            "quote_state": quote_state,
+            **quiet_facts,
+            "market_no_print_proven": False,
+        }
+    return {
+        "schema": MARKET_DATA_HEALTH_SCHEMA,
+        "as_of_epoch": now_ts,
+        "transport_receive_age_ms": age(data.get("last_ws_update_ts")),
+        "executable_quote_receive_age_ms": ws_quote_receive_age_ms(data, now_ts=now_ts),
+        "quote_max_age_ms": quote_max_age_ms,
+        "quiet_tape_after_ms": 10_000,
+        "routes": facts,
+        "decision_authority": False,
+        "missing_values_imputed": False,
+    }
 
 
 def _to_int(value: Any, default: int = 0) -> int:
@@ -200,13 +387,20 @@ def quote_input_from_ws(
     data = data or {}
     best_bid, best_ask = _best_levels(data)
     mark = _to_int(data.get("curr")) or _to_int(data.get("last_trade_price"))
-    age_ms = data.get("quote_consistency_ws_age_ms")
-    if age_ms is None:
+    type_specific = isinstance(data.get("last_realtime_type_ts"), Mapping)
+    age_ms = (
+        ws_quote_receive_age_ms(data, now_ts=now_ts)
+        if type_specific
+        else data.get("quote_consistency_ws_age_ms")
+    )
+    if age_ms is None and not type_specific:
         age_ms = data.get("pre_submit_ws_snapshot_refresh_age_ms")
-    if age_ms is None:
-        ts = _to_float(data.get("last_ws_update_ts"))
-        age_ms = None if ts <= 0 else max(0.0, (now_ts - ts) * 1000.0)
-    age_ms = None if age_ms is None else max(0.0, _to_float(age_ms))
+    if age_ms is None and not type_specific:
+        # New producer frames carry per-type facts. 0w/0F/transport packets
+        # cannot refresh an old 0D executable book. Legacy frames keep their
+        # existing fallback until their adapter is migrated.
+        age_ms = ws_quote_receive_age_ms(data, now_ts=now_ts)
+    age_ms = None if age_ms is None else _to_float(age_ms)
     buy_price = best_ask or mark or best_bid
     sell_price = best_bid or mark or best_ask
     passive_buy_price = best_bid or mark or best_ask
@@ -280,7 +474,7 @@ def quote_input_from_rest_orderbook(
 def _fresh(source: QuoteInput | None, max_age_ms: int) -> bool:
     if source is None or not source.has_price:
         return False
-    return source.age_ms is not None and float(source.age_ms) <= float(max_age_ms)
+    return source.age_ms is not None and 0 <= float(source.age_ms) <= float(max_age_ms)
 
 
 def _fallback_price(*prices: int) -> int:

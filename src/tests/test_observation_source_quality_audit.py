@@ -421,6 +421,64 @@ def test_machine_terminal_tuning_gate_excludes_exact_unresolved_lineage(tmp_path
     assert gate["missing_economics_imputed"] is False
 
 
+def test_machine_terminal_gate_all_veto_allows_decision_research_not_operational_terminal(
+    tmp_path,
+):
+    day = "2026-09-17"
+    path = (
+        tmp_path / "report" / "buy_funnel_sentinel" / f"buy_funnel_sentinel_{day}.json"
+    )
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps(
+            {
+                "target_date": day,
+                "entry_submit_drought_contract": {
+                    "machine_primary_entry_funnel": {
+                        "ai_pass_terminal_conservation": {
+                            "ai_pass": 0,
+                            "submitted": 0,
+                            "final_guard_blocked": 0,
+                            "broker_rejected": 0,
+                            "lineage_gap": 0,
+                            "pending": 0,
+                            "difference": 0,
+                        },
+                        "evaluation_ledger": [],
+                    }
+                },
+            }
+        )
+    )
+    gate = audit._machine_terminal_tuning_gate(day, data_root=tmp_path)
+    assert gate["decision_counterfactual_tuning_input_allowed"] is True
+    assert gate["economic_tuning_input_allowed"] is False
+    assert gate["terminal_admitted_count"] == 0
+
+
+def test_machine_terminal_gate_invalid_conservation_fails_closed(tmp_path):
+    day = "2026-09-17"
+    path = (
+        tmp_path / "report" / "buy_funnel_sentinel" / f"buy_funnel_sentinel_{day}.json"
+    )
+    path.parent.mkdir(parents=True)
+    for value in ("not-a-count", -1, True, 1.5):
+        path.write_text(
+            json.dumps(
+                {
+                    "entry_submit_drought_contract": {
+                        "machine_primary_entry_funnel": {
+                            "ai_pass_terminal_conservation": {"ai_pass": value},
+                            "evaluation_ledger": [],
+                        }
+                    }
+                }
+            )
+        )
+        gate = audit._machine_terminal_tuning_gate(day, data_root=tmp_path)
+        assert gate["decision_counterfactual_tuning_input_allowed"] is False
+
+
 def test_machine_ai_natural_source_audit_blocks_contract_invalid_attempts(
     tmp_path: Path,
 ):
@@ -452,9 +510,12 @@ def test_machine_ai_natural_source_audit_blocks_contract_invalid_attempts(
 
     assert report["status"] == "warning_machine_assessment_contract_invalid"
     assert report["machine_attempt_conservation"]["denominator_preserved"] is True
-    assert report["machine_attempt_conservation"][
-        "assessment_contract_invalid_trace_count"
-    ] == 1
+    assert (
+        report["machine_attempt_conservation"][
+            "assessment_contract_invalid_trace_count"
+        ]
+        == 1
+    )
     assert report["machine_threshold_tuning_input_allowed"] is False
     assert report["machine_threshold_tuning_blocked_reason"] == (
         "machine_assessment_contract_invalid"

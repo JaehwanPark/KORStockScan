@@ -20,6 +20,7 @@ from src.trading.entry.normal_entry_builder import NormalEntryBuilder
 from src.trading.entry.orderbook_stability_observer import ORDERBOOK_STABILITY_OBSERVER
 from src.trading.entry.signal_snapshot import build_signal_snapshot
 from src.trading.market.market_data_cache import MarketDataCache
+from src.trading.market.quote_consistency import ws_quote_receive_age_ms
 from src.trading.order.tick_utils import clamp_price_to_tick
 from src.trading.order.tick_utils import get_tick_size
 from src.trading.order.tick_utils import move_price_by_ticks
@@ -4879,8 +4880,11 @@ def evaluate_live_buy_entry(
         signal_time=signal_time,
     )
     best_ask, best_bid = _best_ask_bid_from_ws(ws_data)
-    raw_received_at = (ws_data or {}).get("last_ws_update_ts")
-    received_at = None if raw_received_at is None else float(raw_received_at)
+    quote_clock = time.time()
+    source_quote_age = ws_quote_receive_age_ms(ws_data or {}, now_ts=quote_clock)
+    received_at = (
+        0.0 if source_quote_age is None else quote_clock - source_quote_age / 1000.0
+    )
 
     with _CACHE_LOCK:
         _CACHE.update(
@@ -4891,6 +4895,18 @@ def evaluate_live_buy_entry(
             received_at=received_at,
         )
         quote_health = _CACHE.get_quote_health(code)
+        if received_at <= 0 or received_at > time.time():
+            # A missing/future source stamp is not a fresh consume-time packet.
+            # Preserve the cache, but do not borrow a prior caller's freshness.
+            quote_health.ws_age_ms = 10**9
+            quote_health.quote_stale = True
+        else:
+            source_age_ms = int((time.time() - received_at) * 1000.0)
+            quote_health.ws_age_ms = max(quote_health.ws_age_ms, source_age_ms)
+            quote_health.quote_stale = (
+                quote_health.quote_stale
+                or source_age_ms > _CONFIG.max_ws_age_ms_for_caution
+            )
 
     latency = _LATENCY_MONITOR.evaluate(
         ws_age_ms=quote_health.ws_age_ms,
@@ -4927,7 +4943,15 @@ def evaluate_live_buy_entry(
                     last_price=latest_price,
                     best_ask=best_ask,
                     best_bid=best_bid,
-                    received_at=None,
+                    received_at=(
+                        time.time()
+                        - float(
+                            pre_submit_quote_refresh[
+                                "pre_submit_quote_refresh_quote_age_ms"
+                            ]
+                        )
+                        / 1000.0
+                    ),
                 )
     snapshot = build_signal_snapshot(
         symbol=code,

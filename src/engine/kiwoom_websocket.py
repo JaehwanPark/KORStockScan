@@ -37,6 +37,8 @@ from src.engine.scalping.micro_reversion.contracts import (
 )
 from src.trading.entry.orderbook_stability_observer import ORDERBOOK_STABILITY_OBSERVER
 from src.trading.market import session_contract
+from src.trading.market.quote_consistency import build_market_data_health
+from src.trading.market.market_data_cache import QuietTapeState
 
 
 class _LoginAckFailure(RuntimeError):
@@ -2228,6 +2230,21 @@ class KiwoomWSManager:
         )
         snapshot["market_session_state"] = self.market_session_state
         snapshot["market_session_remaining"] = self.market_session_remaining
+        snapshot["market_data_transport_epoch"] = getattr(
+            self, "_market_data_transport_epoch", None
+        )
+        snapshot["market_data_health"] = build_market_data_health(
+            snapshot, now_ts=time.time()
+        )
+        for records in snapshot.get("realtime_type_snapshots_by_route", {}).values():
+            if isinstance(records, dict):
+                quiet_state = records.pop("_quiet_tape_state", None)
+                if isinstance(quiet_state, QuietTapeState):
+                    records["quiet_tape_observation"] = {
+                        "last_quote": quiet_state.last_quote,
+                        "last_trade": quiet_state.last_trade,
+                        "closed_episodes": quiet_state.closed_episodes,
+                    }
         for key in (
             "price_history",
             "v_pw_history",
@@ -4383,6 +4400,20 @@ class KiwoomWSManager:
                                     route_key, {}
                                 )
                                 if isinstance(route_snapshot, dict):
+                                    health_scope = (
+                                        int(self._market_data_transport_epoch),
+                                        str(raw_item_code or ""),
+                                        datetime.now(KST).date().isoformat(),
+                                        str(self.market_session_state or ""),
+                                    )
+                                    if (
+                                        route_snapshot.get("health_scope")
+                                        != health_scope
+                                    ):
+                                        route_snapshot["health_scope"] = health_scope
+                                        route_snapshot["_quiet_tape_state"] = (
+                                            QuietTapeState()
+                                        )
                                     sequence_key = (normalized_raw_item, real_type)
                                     route_sequence = (
                                         int(
@@ -4432,6 +4463,19 @@ class KiwoomWSManager:
                                                 ),
                                                 "trade_qty": safe_int(
                                                     last_trade.get("volume")
+                                                ),
+                                                "inline_best_ask": self._safe_abs_int(
+                                                    values.get("27"), 0
+                                                ),
+                                                "inline_best_bid": self._safe_abs_int(
+                                                    values.get("28"), 0
+                                                ),
+                                                "provider_trade_epoch": (
+                                                    self._tick_time_to_epoch_ms(
+                                                        values.get("20"),
+                                                        now_ts=now_update_ts,
+                                                    )
+                                                    / 1000.0
                                                 ),
                                                 "aggressor_side": str(
                                                     last_trade.get("aggressor_side")
@@ -4486,6 +4530,43 @@ class KiwoomWSManager:
                                                 )
                                             )
                                     route_snapshot[real_type] = realtime_snapshot
+                                    quiet_state = route_snapshot["_quiet_tape_state"]
+                                    if real_type in {"0B", "0D"}:
+                                        if real_type == "0D":
+                                            bids = realtime_snapshot.get(
+                                                "orderbook", {}
+                                            ).get("bids", [])
+                                            asks = realtime_snapshot.get(
+                                                "orderbook", {}
+                                            ).get("asks", [])
+                                            bid = (
+                                                safe_int(bids[0].get("price"), 0)
+                                                if bids
+                                                else 0
+                                            )
+                                            ask = (
+                                                safe_int(asks[0].get("price"), 0)
+                                                if asks
+                                                else 0
+                                            )
+                                            if bid <= 0 or ask <= 0 or bid > ask:
+                                                quiet_state = QuietTapeState()
+                                                route_snapshot["_quiet_tape_state"] = (
+                                                    quiet_state
+                                                )
+                                        quiet_state.observe(
+                                            kind=real_type,
+                                            now=now_update_ts,
+                                            sequence=route_sequence,
+                                            volume=safe_int(values.get("13"), 0),
+                                            provider_event_at=(
+                                                realtime_snapshot.get(
+                                                    "provider_trade_epoch", 0.0
+                                                )
+                                                if real_type == "0B"
+                                                else None
+                                            ),
+                                        )
                             target["time"] = datetime.now().strftime("%H:%M:%S")
 
                             if not target.get(

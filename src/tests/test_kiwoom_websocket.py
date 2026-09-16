@@ -122,7 +122,12 @@ def test_runtime_route_transition_adds_al_once_and_preserves_custody(monkeypatch
     assert packet["refresh"] == "1" and packet["trnm"] == "REG"
     assert packet["data"][0]["item"] == ["425040_AL"]
     assert manager._registered_items_by_code["425040"] == ("425040", "425040_AL")
-    assert manager.get_latest_data("425040") == before
+    after = manager.get_latest_data("425040")
+    # Consume-time health ages may advance; routing must not change custody or
+    # any producer timestamp/value in the underlying market frame.
+    after.pop("market_data_health", None)
+    before.pop("market_data_health", None)
+    assert after == before
     assert manager._micro_reversion_observation_only_codes == {"000001"}
 
 
@@ -171,7 +176,10 @@ def test_integrated_runtime_isolates_plain_receipts_without_fabricating_venue(
     before = manager.get_latest_data("425040")
     receive("425040", "0B", {"10": "9900", "15": "+1"})
     receive("425040", "0D", {"41": "9910", "61": "100", "51": "9900", "71": "100"})
-    assert manager.get_latest_data("425040") == before
+    after = manager.get_latest_data("425040")
+    after.pop("market_data_health", None)
+    before.pop("market_data_health", None)
+    assert after == before
     assert before["last_realtime_type_item"]["0B"] == "425040_AL"
     assert before["last_realtime_type_item"]["0D"] == "425040_AL"
     assert before["last_realtime_type_actual_execution_venue"]["0B"] == "UNKNOWN"

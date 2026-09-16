@@ -10,6 +10,10 @@ from __future__ import annotations
 import time
 from datetime import datetime
 from typing import Any
+from src.trading.market.quote_consistency import (
+    build_market_data_health,
+    ws_quote_receive_age_ms,
+)
 
 FRESH_WS = "fresh_ws"
 REST_ENRICHED = "rest_enriched"
@@ -115,6 +119,14 @@ def _age_details(
 
 
 def _ws_age_details(ws_data: dict[str, Any], now_ts: float) -> tuple[float | None, str]:
+    type_times = ws_data.get("last_realtime_type_ts")
+    if isinstance(type_times, dict):
+        age = ws_quote_receive_age_ms(ws_data, now_ts=now_ts)
+        return age, (
+            "last_realtime_type_ts.0D"
+            if age is not None
+            else "last_realtime_type_ts.0D_missing_or_unproven"
+        )
     return _age_details(
         ws_data,
         now_ts,
@@ -528,6 +540,10 @@ def build_market_data_enrichment(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     now_value = time.time() if now_ts is None else float(now_ts)
     base = dict(ws_data or {})
+    if "realtime_type_snapshots_by_route" in base:
+        base["market_data_health"] = build_market_data_health(
+            base, now_ts=now_value, quote_max_age_ms=int(max_ws_age_ms)
+        )
     rest_orderbook = rest_orderbook if isinstance(rest_orderbook, dict) else {}
     metadata = candidate_metadata if isinstance(candidate_metadata, dict) else {}
     ws_levels = _quote_levels(base)
@@ -569,7 +585,7 @@ def build_market_data_enrichment(
         ws_usable
         and not ws_explicit_stale
         and ws_age is not None
-        and ws_age <= max_ws_age_ms
+        and 0 <= ws_age <= max_ws_age_ms
     )
     rest_fresh = bool(
         rest_usable and rest_age is not None and rest_age <= max_rest_age_ms

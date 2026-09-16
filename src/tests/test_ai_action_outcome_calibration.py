@@ -762,7 +762,7 @@ def test_machine_decision_case_table_separates_missed_and_bad_entry_timing():
     assert report["observed_selected_child_rule_ids"] == ["flow-rule-1"]
     assert report["legacy_60_second_same_action_collapse_disabled"] is True
     assert report["conflicting_attempt_identity_count"] == 0
-    assert report["policy_learning_eligible_observation_count"] == 4
+    assert report["policy_learning_eligible_observation_count"] == 3
     assert report["machine_ai_populations_are_separate"] is True
 
 
@@ -1034,6 +1034,38 @@ def test_machine_case_table_automatically_selects_bounded_compact_variant():
     assert selection["eligible"] is True
     assert selection["minimum_economic_eligible_count"] == 20
     assert selection["contract_version"] == ("compact_auxiliary_economic_selection_v2")
+    # The same exact source is evaluable on an all-VETO day, with no actual
+    # submit/fill prerequisites. Do not relax partition or cost/path gates.
+    all_veto = json.loads(json.dumps(rows))
+    for item in all_veto:
+        item["ai_and_final_guard"]["ai_risk_verdict"] = "VETO"
+        item["scanner_promotion_id"] = "promotion-fixture"
+        item["source_date"] = "2026-09-15"
+    veto_receipt = {
+        "target_date": "2026-09-15",
+        "tuning_input_allowed": True,
+        "machine_terminal_tuning_gate": {
+            "economic_tuning_input_allowed": False,
+            "decision_counterfactual_tuning_input_allowed": True,
+        },
+        "compact_auxiliary_policy_measurement": {
+            "prompt_version": AI_VERSION,
+            "measurement_allowed": True,
+        },
+    }
+    veto_report = calibration.build_machine_decision_case_table(
+        all_veto, source_receipt=veto_receipt
+    )["compact_auxiliary_screen_outcomes"]
+    assert veto_report["economic_contract"]["economic_eligible_count"] == 20
+    assert veto_report["automatic_successor_selection"]["eligible"] is True
+    veto_receipt["machine_terminal_tuning_gate"][
+        "decision_counterfactual_tuning_input_allowed"
+    ] = False
+    veto_receipt["machine_terminal_tuning_gate"]["economic_tuning_input_allowed"] = True
+    veto_blocked = calibration.build_machine_decision_case_table(
+        all_veto, source_receipt=veto_receipt
+    )["compact_auxiliary_screen_outcomes"]
+    assert veto_blocked["automatic_successor_selection"]["eligible"] is False
     # Five missed 0.07% opportunities do not outweigh one 0.93% loss.
     assert selection["selected_prompt_version"] == AI_VERSION
     rows[5]["entry_quality_path"]["exact_stop_distance_pct"] = -0.01

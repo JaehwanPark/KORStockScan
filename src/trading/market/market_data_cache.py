@@ -8,6 +8,95 @@ from src.trading.market.quote_health import QuoteHealth
 
 
 @dataclass(slots=True)
+class QuietTapeState:
+    """Bounded receive-side state. Getters cannot manufacture quiet episodes.
+
+    Scope/epoch is owned by the enclosing exact-route WS record. A missing
+    cumulative-volume advance or broken quote continuity is not no-trade proof.
+    """
+
+    last_quote: float = 0.0
+    last_trade: float = 0.0
+    last_volume: int = 0
+    last_sequence: int = 0
+    closed_episodes: int = 0
+    active_since: float = 0.0
+    last_provider_event: float = 0.0
+
+    def observe(
+        self,
+        *,
+        kind: str,
+        now: float,
+        sequence: int,
+        volume: int = 0,
+        provider_event_at: float | None = None,
+    ) -> None:
+        if kind == "0D":
+            if now <= self.last_quote:
+                return
+            if (
+                self.last_quote
+                and now - self.last_quote > 3.0
+                or not self.last_quote
+                and self.last_trade
+                and now - self.last_trade > 3.0
+            ):
+                self.last_trade = 0.0
+                self.closed_episodes = 0
+                self.active_since = 0.0
+            self.last_quote = now
+            return
+        if kind != "0B" or sequence <= self.last_sequence or volume <= self.last_volume:
+            return
+        event_at = now if provider_event_at is None else provider_event_at
+        if not 0 <= now - event_at <= 10.0 or event_at < self.last_provider_event:
+            self.last_trade = 0.0
+            self.closed_episodes = 0
+            self.active_since = 0.0
+            return
+        self.last_provider_event = event_at
+        self.last_sequence = sequence
+        self.last_volume = volume
+        if now <= self.last_trade:
+            return
+        if not self.last_quote or not 0 <= now - self.last_quote <= 3.0:
+            self.closed_episodes = 0
+            self.active_since = 0.0
+        elif self.last_trade and now - self.last_trade >= 10.0:
+            self.closed_episodes = min(3, self.closed_episodes + 1)
+            self.active_since = now
+        elif not self.active_since:
+            self.active_since = now
+        elif now - self.active_since >= 10.0:
+            self.closed_episodes = 0
+        self.last_trade = now
+
+    def facts(self, *, now: float) -> dict:
+        proven = bool(
+            self.last_quote
+            and self.last_trade
+            and 0 <= now - self.last_quote <= 3.0
+            and now >= self.last_trade
+        )
+        quiet = proven and now - self.last_trade >= 10.0
+        count = min(3, self.closed_episodes + int(quiet)) if proven else None
+        return {
+            "observation_continuity_proven": proven,
+            "quiet_episode_count": count,
+            "trade_activity_state": (
+                "OBSERVATION_UNPROVEN"
+                if not proven
+                else (
+                    "REPEATED_QUIET_TAPE_OBSERVED"
+                    if quiet and count >= 3
+                    else "QUIET_TAPE_OBSERVED" if quiet else "RECENT_TRADE"
+                )
+            ),
+        }
+
+
+@dataclass(slots=True)
 class _SymbolQuote:
     last_price: int = 0
     best_ask: int = 0
