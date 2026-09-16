@@ -98,7 +98,7 @@ def test_position_sizing_materialization_preserves_selected_flat10_policy(
     assert policy["runtime_promotion_sample_floor"] == 30
 
 
-@pytest.mark.parametrize("ev", [0.11, float("nan"), float("inf"), float("-inf")])
+@pytest.mark.parametrize("ev", [0.11, float("nan"), float("inf"), float("-inf"), True])
 def test_postclose_publishes_mechanistic_price_policy_without_ai_authority(
     monkeypatch, tmp_path, ev
 ):
@@ -123,7 +123,7 @@ def test_postclose_publishes_mechanistic_price_policy_without_ai_authority(
     report_mod._materialize_mechanistic_entry_price_policy(report, "2026-09-15")
 
     policy_path = tmp_path / "mechanistic_entry_price_policy_2026-09-15.json"
-    if not report_mod.math.isfinite(ev):
+    if isinstance(ev, bool) or not report_mod.math.isfinite(ev):
         assert not policy_path.exists()
         assert "mechanistic_policy_enabled" not in candidate["recommended_values"]
         return
