@@ -35,7 +35,7 @@ Official reference receipt (`2026-09-17T01:15:02+09:00` 재확인 기록): upstr
 - #82는 source quality, exact identity, 현재 compact prompt/partition, Provider 실제 호출·semantic pass, executable 후행 path·비용을 계속 확인한다. legacy/mixed prompt를 current compact 효과로 재라벨링하지 않는다.
 - 실제 경제성 표본은 기존 bounded registered compact selector → `mechanistic_entry_runtime_policy` next-date publisher → PREOPEN/dated loader로 환류한다. 이번 수리는 이 경로의 표본 진입 결함을 닫으며 free-form prompt/model 교체나 수동 env 적용을 만들지 않는다.
 - 기존 compact20 표본·관련 denominator5/error3 조건은 actual fill을 요구하지 않아 all-VETO CF로도 달성 가능하다. 이것을 오늘 실수익 개선이나 전체 자동 선정의 완료로 확대하지 않는다.
-- common machine·price grid의 절대0.10% gate, 전수 기회/capacity·stress/holdout·four-arm 계약은 아직 U7–U11 검토/보완 대상이다. 원천 수리에 그 경제성 floor를 추가하지 않았다.
+- common machine grid는 §8의 새 전수 평가 계약에서 양수 비용 차감 EV·동일 모집단 대비 개선으로 보완했다. 기존 frozen v1과 hierarchy·price의 절대0.10% gate, 전수 기회/capacity·stress/holdout·four-arm 계약은 여전히 별도 검토/보완 대상이다. 원천 수리에 경제성 floor를 추가하지 않았다.
 
 ## 4. 리뷰·테스트
 
@@ -57,7 +57,7 @@ Official reference receipt (`2026-09-17T01:15:02+09:00` 재확인 기록): upstr
 | U4 | pending | Widget/episode/micro/exit/web direct/pass-through parity |
 | U5 | partial | observer 원 나이·prior-frame freshness 결손 수정. single-flight/scheduler budget 잔여 |
 | U6 | partial | operational/decision-CF gate와 중복 case 분모 수정. 전체 row disposition/census 전수 잔여 |
-| U7 | pending | current-incumbent common/hierarchy 전체 population replay·선정 계약 |
+| U7 | partial / common validated | §8 common 전수 원천·현재 incumbent 비교·자동 발행 보완. hierarchy 전수 paired 경제성·선정 계약 잔여 |
 | U8 | partial | all-VETO CF intake와 legacy/current guard. CAUTION/INSUFFICIENT router 경제성 추가 대사 |
 | U9 | pending | price-ready no-submit/no-fill·quantity/leg four-arm Daily contract |
 | U10 | pending | 독립 owner CF admission 및 active family fill-bias 실제 결손 수리 |
@@ -74,7 +74,21 @@ Official reference receipt (`2026-09-17T01:15:02+09:00` 재확인 기록): upstr
 
 ## 7. 기대효과와 잔여
 
-확인된 효과는 false freshness 제거, 공백 반복 분모 보존, all-VETO의 valid 기회비용 평가 경로 복구다. 이들이 놓친 작은 수익의 튜닝 표본을 보존할 수 있지만, 전체 기계 진입 병목 해결·후행 CF 선정 수익·실현 순익 증가는 아직 입증되지 않았다. U7–U11 미완료를 자연 표본 대기로 숨기지 않는다.
+확인된 효과는 false freshness 제거, 공백 반복 분모 보존, all-VETO의 valid 기회비용 평가 경로 복구와 §8의 미진입 common 후보 자동 선정 연결이다. 전체 기계 진입 병목 해결·실현 순익 증가는 아직 입증되지 않았다. U7–U11 미완료를 자연 표본 대기로 숨기지 않는다.
+
+## 8. 후속 common 전체 모집단 구현·재리뷰
+
+2026-09-17 06시대 후속 구현이며 위 01시대 부분 H receipt를 오늘 새 PID·정책 소비로 바꾸지 않는다.
+
+- 기존 #82 안에서 paired 원천과 자연 기계 평가 원천을 합친다. AI 미호출·BLOCK도 exact identity, fresh evidence hash, #74 machine-specific receipt, executable outcome·full 비용을 통과하면 평가한다. pending/lineage gap·censored/비용 결손은 제외하며 0원으로 보간하지 않는다.
+- 공통 threshold 후보의 control은 당시 AI BUY/WAIT가 아니라 **현재 incumbent의 동일 결정 함수**다. 새 collector·producer·cron·Provider 호출 없음. 변경 가능 좌표는 기존 spread/fillability/ask-to-bid 3개뿐이며 micro·가격·수량·scale-in·AI prompt/model·custody·주문 및 hard safety owner를 변경하지 않는다.
+- 같은 trace가 paired/natural 양쪽에 있으면 한 번만 소비한다. exact receipt 충돌은 양쪽을 격리하고 `input_row_disposition_complete` 보존식을 검증한다. caller의 frozen row는 수정하지 않는다.
+- 새 `mechanistic_entry_full_population_positive_net_v2` 계약만 순 EV > 0과 동일 전체 모집단 paired delta > 0으로 판정한다. calibration 10건/5종목/5일, holdout 3건/2일, 시간순 분리·완전 terminal·source provenance·catastrophic tail 차단은 유지한다. 기존 frozen v1의 숫자를 조용히 다시 해석하지 않는다.
+- 절대 순 EV 0.10%는 gross target 0.30%·비용 0.23%의 고정 경로에서 순 상한 0.07%보다 높아 달성 불가능했다. 새 계약은 **양수 비용 후 작은 수익과 incumbent 대비 개선**을 허용하지만 빈도 증가만으로 손실 후보를 승격하지 않는다. CF 성과는 실제 손익이 아니다.
+- 후보에 full incumbent hash·원천 계약 digest·calibration/holdout 증거를 결속한다. 기존 next-date publisher가 guard 통과 후보를 자동 발행한다. 현재 incumbent hash가 다르면 `candidate_parent_changed_revalidation_required`로 carry하며 수동 승인/env를 만들지 않는다.
+- publisher가 경제성·표본 floor·시간순 holdout·행 보존식을 재검증한다. 두 번째 v2 generation도 같은 함수로 다시 튜닝 가능하다. central verifier가 v1/v2를 분리하여 소비한다.
+- 작업본 후속 targeted 8-suite: **736 passed**. 결함보완 후 공통 후보 → 실제 projection → 실제 publisher 회귀 포함. zero/loss EV, source hash 변조, 잘못된 checks, 표본 floor0, 시간순 위반, 행 보존식 실패, incumbent 변경은 차단된다. 실제 Provider/Kiwoom/주문·운영 replay 호출 없음.
+- 이 범위의 code closure는 U0–U12 전체 완료가 아니다. hierarchy, CAUTION/INSUFFICIENT router, price/quantity four-arm, 독립 owner, 모든 direct API 소비자 parity 및 single-flight/scheduler는 미완료다. 다음 PREOPEN/start의 release/PID·자연 정책·경제성은 별도 receipt로 확인한다.
 
 Project/Calendar 동기화는 실행하지 않는다. 사용자 표준 명령:
 

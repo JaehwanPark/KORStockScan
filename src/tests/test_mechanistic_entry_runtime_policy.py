@@ -57,6 +57,88 @@ def test_initial_policy_does_not_require_promotion_candidate(tmp_path):
     assert policy.load(data_root=tmp_path, target_date="2026-09-14") == bundle
 
 
+@pytest.mark.parametrize("changed_parent", [False, True])
+def test_common_successor_is_automatic_only_against_exact_current_parent(monkeypatch, tmp_path, changed_parent):
+    from src.engine.scalping import entry_setup_live_policy as activation
+    previous = initial(tmp_path)
+    parent = copy.deepcopy(previous["machine_policy"])
+    if changed_parent:
+        parent["thresholds"]["minimum_micro_net_aggressive_delta_10t"] = 7.0
+    successor_machine = copy.deepcopy(parent)
+    successor_machine["thresholds"]["maximum_spread_bp"] = 40.0
+    monkeypatch.setattr(activation, "_mechanistic_primary_activation_projection", lambda *a, **kw: ({
+        "threshold_policy": successor_machine,
+        "incumbent_machine_policy_sha256": policy.digest(parent),
+    }, []))
+    successor = policy.publish(
+        source(tmp_path, "2026-09-14"), data_root=tmp_path,
+        now=datetime(2026, 9, 14, 21, tzinfo=policy.KST),
+    )
+    if changed_parent:
+        assert successor["machine_policy"] == previous["machine_policy"]
+        assert successor["machine_disposition"] == "candidate_parent_changed_revalidation_required"
+    else:
+        assert successor["machine_policy"] == successor_machine
+        assert successor["machine_disposition"] == "evidence_qualified_threshold_update"
+    assert successor["ai_policy"]["prompt_version"] == previous["ai_policy"]["prompt_version"]
+
+
+@pytest.mark.parametrize("corruption", [None, "economic", "source_hash", "checks", "sample_floor", "chronology", "row_disposition"])
+def test_small_net_full_population_candidate_publishes_automatically_with_proof(tmp_path, corruption):
+    from src.tests.test_ai_action_outcome_calibration import (
+        _natural_refinement_fixture, _mechanistic_evidence,
+    )
+    previous = initial(tmp_path)
+    # Model an already selected tighter incumbent, not a second live owner.
+    previous["machine_policy"]["thresholds"]["maximum_spread_bp"] = 40.0
+    previous["bundle_sha256"] = policy.digest({k: v for k, v in previous.items() if k != "bundle_sha256"})
+    calibration._atomic_write_json(policy.root(tmp_path) / "policy_2026-09-14.json", previous)
+    rows, receipt = _natural_refinement_fixture()
+    for row in rows:
+        row["setup_evidence"] = _mechanistic_evidence(spread_bp=50)
+        row["comparison"]["entry_path_target_pct"] = 0.27
+    normalized, contract = calibration._common_refinement_population(
+        [], rows, target_date="2026-09-15", source_receipt=receipt, paired_contract={},
+    )
+    refinement = calibration.build_clean_baseline_mechanistic_refinement(
+        tmp_path / "unused", target_date="2026-09-15", source_rows=normalized,
+        source_contract=contract, parent_policy=previous["machine_policy"],
+    )
+    assert refinement["promotion_pass"] is True
+    candidate = refinement["policy_candidate"]
+    if corruption == "economic":
+        candidate["holdout_metrics"]["cost_adjusted_terminal_proxy_ev_pct"] = 0.0
+    elif corruption == "source_hash":
+        candidate["source_contract_sha256"] = "0" * 64
+    elif corruption == "checks":
+        candidate["promotion_checks"] = []
+    elif corruption == "sample_floor":
+        candidate["holdout_metrics"]["exposure_count"] = 0
+        candidate["holdout_metrics"]["terminal_evaluable_count"] = 0
+    elif corruption == "chronology":
+        candidate["holdout_source_dates"] = candidate["calibration_source_dates"]
+    elif corruption == "row_disposition":
+        refinement["source_contract"]["input_row_disposition_complete"] = False
+        candidate["source_contract_sha256"] = policy.digest(refinement["source_contract"])
+    candidate["candidate_content_sha256"] = policy.digest({
+        k: v for k, v in candidate.items() if k != "candidate_content_sha256"
+    })
+    path = source(tmp_path, "2026-09-15")
+    report = json.loads(path.read_text())
+    report["mechanistic_entry_refinement"] = refinement
+    report.pop("artifact_content_sha256")
+    calibration._atomic_write_json(path, calibration._with_artifact_content_sha256(report))
+    if corruption:
+        with pytest.raises(ValueError, match="economic_proof_invalid"):
+            policy.publish(path, data_root=tmp_path, now=datetime(2026, 9, 15, 21, tzinfo=policy.KST))
+        return
+    successor = policy.publish(path, data_root=tmp_path, now=datetime(2026, 9, 15, 21, tzinfo=policy.KST))
+    assert successor["machine_disposition"] == "evidence_qualified_threshold_update"
+    assert successor["machine_policy"]["version"] == calibration.MECHANISTIC_FULL_POPULATION_POLICY_VERSION
+    assert successor["machine_policy"]["postclose_selection"]["minimum_cost_adjusted_ev_pct"] == 0.0
+    assert successor["ai_policy"]["prompt_version"] == previous["ai_policy"]["prompt_version"]
+
+
 def test_frozen_legacy_prompt_bundle_remains_readable(tmp_path):
     bundle = initial(tmp_path)
     bundle["ai_policy"].update(

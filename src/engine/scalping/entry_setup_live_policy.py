@@ -277,6 +277,8 @@ def _mechanistic_primary_activation_projection(
     candidate = refinement.get("policy_candidate")
     if candidate is None:
         return None, []
+    if not isinstance(candidate, dict):
+        return None, ["mechanistic_primary_candidate_contract_invalid"]
     errors: list[str] = []
     candidate_body = {
         key: value
@@ -293,12 +295,13 @@ def _mechanistic_primary_activation_projection(
         report.get("target_date") != source_date
         or not calibration._artifact_content_sha256_valid(report)
         or refinement.get("schema") != calibration.MECHANISTIC_REFINEMENT_SCHEMA
-        or refinement.get("policy_version")
-        != calibration.MECHANISTIC_REFINEMENT_POLICY_VERSION
+        or refinement.get("policy_version") not in {
+            calibration.MECHANISTIC_REFINEMENT_POLICY_VERSION,
+            calibration.MECHANISTIC_FULL_POPULATION_POLICY_VERSION,
+        }
         or refinement.get("promotion_pass") is not True
         or candidate.get("schema") != "mechanistic_entry_common_feature_candidate_v1"
-        or candidate.get("policy_version")
-        != calibration.MECHANISTIC_REFINEMENT_POLICY_VERSION
+        or candidate.get("policy_version") != refinement.get("policy_version")
         or candidate.get("candidate_content_sha256")
         != calibration._canonical_sha256(candidate_body)
         or role_contract != expected_role
@@ -311,10 +314,70 @@ def _mechanistic_primary_activation_projection(
     ):
         errors.append("mechanistic_primary_candidate_contract_invalid")
         return None, errors
-    threshold_policy = json.loads(json.dumps(MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1))
+    parent = candidate.get("incumbent_machine_policy")
+    parent_hash = candidate.get("incumbent_machine_policy_sha256")
+    if parent is not None or parent_hash is not None:
+        if (
+            not isinstance(parent, dict)
+            or parent_hash != calibration._canonical_sha256(parent)
+            or validate_mechanistic_entry_threshold_policy(parent)
+        ):
+            return None, ["mechanistic_primary_candidate_parent_invalid"]
+    full_population = candidate.get("policy_version") == calibration.MECHANISTIC_FULL_POPULATION_POLICY_VERSION
+    if full_population:
+        source_contract = calibration._as_dict(refinement.get("source_contract"))
+        checks = calibration._as_dict(candidate.get("promotion_checks"))
+        proof_valid = (
+            parent is not None
+            and candidate.get("evaluation_contract") == "full_population_positive_net_paired_delta_v2"
+            and source_contract.get("schema") == "machine_common_refinement_population_v1"
+            and candidate.get("source_contract_sha256") == calibration._canonical_sha256(source_contract)
+            and candidate.get("promotion_checks") == refinement.get("promotion_checks")
+            and bool(checks)
+            and all(v is True for v in checks.values())
+        )
+        for phase in ("calibration", "holdout"):
+            metrics = calibration._as_dict(candidate.get(f"{phase}_metrics"))
+            paired = calibration._as_dict(candidate.get(f"{phase}_paired_population"))
+            dates = candidate.get("calibration_source_dates" if phase == "calibration" else "holdout_source_dates")
+            floor = calibration.MECHANISTIC_REFINEMENT_GATE
+            exposures = calibration._number(metrics.get("exposure_count"))
+            source_dates = calibration._number(metrics.get("independent_source_date_count"))
+            ev = calibration._number(metrics.get("cost_adjusted_terminal_proxy_ev_pct"))
+            delta = calibration._number(paired.get("paired_terminal_proxy_delta_pct"))
+            proof_valid = bool(proof_valid
+                               and isinstance(dates, list) and bool(dates)
+                               and all(isinstance(d, str) and calibration.CLEAN_BASELINE_DATE <= d <= source_date for d in dates)
+                               and dates == sorted(set(dates))
+                               and exposures is not None and exposures.is_integer()
+                               and exposures >= floor[f"minimum_{phase}_exposure_count"]
+                               and source_dates is not None and source_dates.is_integer()
+                               and source_dates >= floor[f"minimum_{phase}_source_date_count"])
+            if phase == "calibration":
+                symbols = calibration._number(metrics.get("unique_symbol_count"))
+                proof_valid = bool(proof_valid and symbols is not None and symbols.is_integer()
+                                   and symbols >= floor["minimum_calibration_symbol_count"])
+            proof_valid = bool(proof_valid and ev is not None and ev > 0
+                               and delta is not None and delta > 0
+                               and paired.get("paired_terminal_contract_complete") is True
+                               and metrics.get("source_provenance_contract_complete") is True
+                               and metrics.get("catastrophic_terminal_proxy_count") == 0
+                               and metrics.get("terminal_evaluable_count") == metrics.get("exposure_count"))
+        train_dates, test_dates = candidate.get("calibration_source_dates"), candidate.get("holdout_source_dates")
+        proof_valid = bool(proof_valid and isinstance(train_dates, list) and bool(train_dates)
+                           and isinstance(test_dates, list) and bool(test_dates)
+                           and all(isinstance(d, str) for d in train_dates + test_dates)
+                           and max(train_dates) < min(test_dates)
+                           and source_contract.get("input_row_disposition_complete") is True)
+        if not proof_valid:
+            return None, ["mechanistic_primary_full_population_economic_proof_invalid"]
+    threshold_policy = json.loads(json.dumps(parent or MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1))
+    threshold_policy.pop("hierarchy", None)
     threshold_policy["version"] = str(candidate.get("policy_version") or "")
+    if full_population:
+        threshold_policy["postclose_selection"]["minimum_cost_adjusted_ev_pct"] = 0.0
     thresholds = candidate.get("thresholds")
-    if not isinstance(thresholds, dict):
+    if not isinstance(thresholds, dict) or set(thresholds) != set(calibration.MECHANISTIC_COMMON_FEATURE_GRID):
         errors.append("mechanistic_primary_candidate_thresholds_invalid")
         return None, errors
     threshold_policy["thresholds"].update(thresholds)
@@ -327,6 +390,7 @@ def _mechanistic_primary_activation_projection(
         "ai_role": MECHANISTIC_AI_ADVISORY_ROLE,
         "decision_role_contract": dict(MECHANISTIC_PRIMARY_ROLE_CONTRACT),
         "threshold_policy": threshold_policy,
+        "incumbent_machine_policy_sha256": parent_hash,
         "calibration_path": str(path),
         "calibration_file_sha256": _safe_file_sha256(path),
         "calibration_artifact_content_sha256": report.get("artifact_content_sha256"),

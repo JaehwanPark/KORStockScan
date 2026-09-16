@@ -1333,8 +1333,10 @@ def _ai_decision_action_outcome_calibration_status(
         mechanistic = {}
     elif (
         mechanistic.get("schema") != "mechanistic_entry_clean_baseline_refinement_v1"
-        or mechanistic.get("policy_version")
-        != "mechanistic_entry_common_feature_chronological_v1"
+        or mechanistic.get("policy_version") not in {
+            "mechanistic_entry_common_feature_chronological_v1",
+            "mechanistic_entry_full_population_positive_net_v2",
+        }
         or mechanistic.get("target_date") != report.get("target_date")
         or not isinstance(mechanistic.get("status"), str)
         or not str(mechanistic.get("status") or "").strip()
@@ -1370,8 +1372,7 @@ def _ai_decision_action_outcome_calibration_status(
                 candidate_hash != expected_candidate_hash
                 or mechanistic_candidate.get("schema")
                 != "mechanistic_entry_common_feature_candidate_v1"
-                or mechanistic_candidate.get("policy_version")
-                != "mechanistic_entry_common_feature_chronological_v1"
+                or mechanistic_candidate.get("policy_version") != mechanistic.get("policy_version")
                 or mechanistic_candidate.get("decision_role_contract")
                 != {
                     "primary_decision_owner": "mechanistic_entry_adjudicator",
