@@ -168,7 +168,7 @@
   - Source: [원인·공식 API 검증·수리·rollback 계약](../audit-reports/2026-09-16-integrated-aftermarket-runtime-route-repair.md), `data/runtime/integrated_aftermarket_runtime_route_repair_2026-09-16.json`, `data/runtime/kiwoom_ws_snapshot/latest.json`.
   - 판정 기준: scoped review/validation 후 commit/push·clean managed release·사용자 승인 graceful main restart를 확인한다. 새 PID에서 actual AL REG 및 fresh exact AL 0B/0D → source-valid consumer 연결을 확인하며, 과거 196행과 새 generation을 분리한다.
   - 권한 경계: 이번 사용자 지시는 기존 WS source owner의 수리·배포·main 기동만 허용한다. plain KRX receipt 재분류, actual venue 추정, guard/quantity/provider/threshold/owner 변경, 수동 주문·report 재생성, 별도 service/timer/cron/정책 family 추가는 하지 않는다. 독립 unit pin은 유지한다.
-  - 현재 증거: workspace 최종 `1480 passed` (route/source 403 + full sniper 1077), compile/Black/bash/parser/diff PASS, scoped review finding 0. release·PID·자연 표본은 별도 진행 중이다. AL 미수신·노후·충돌은 계속 fail-closed이며 매매·경제성은 별도 판정한다.
+  - 배포·자연 증거 (18:56 KST): code `98d1b75e` push, workspace/release 각 `1480 passed`, compile/Black/bash/parser/diff PASS, scoped review finding 0. 새 main PID `3940280`의 release/cwd/env/source-dirty=false·runtime verify PASS 확인; 원 selector/이전 release 보존, 독립 unit/PID 및 20:10 위젯 평가 유지. 과거 plain `086670`/`482630`이 실제 AL REG로 전환됐으며 새 AL 0B/0D의 unchanged route/provenance consumer parity가 4종목 통과했다. 전체 setup/기계판정·funnel 자연 receipt는 `waiting`; AL 미수신·노후·충돌 및 executable quote TTL은 계속 fail-closed, 매매·경제성은 별도다.
 
 ## Project/Calendar 동기화
 
