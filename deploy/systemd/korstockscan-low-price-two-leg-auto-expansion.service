@@ -1,0 +1,31 @@
+[Unit]
+Description=KORStockScan exact-date auto-expanded episode machines
+After=network-online.target korstockscan-symbol-owner-policy-auto-apply.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=www-data
+WorkingDirectory=/home/ubuntu/KORStockScan
+EnvironmentFile=-/home/ubuntu/KORStockScan/data/runtime/symbol_owner_policy/owner_custody.env
+Environment="PYTHONPATH=/home/ubuntu/KORStockScan"
+Environment="KORSTOCKSCAN_LOW_PRICE_TWO_LEG_AUTO_EXPANSION_ENABLED=true"
+Environment="KORSTOCKSCAN_WIDGET_EPISODE_MARKET_WEAKNESS_ENTRY_GUARD_ENABLED=1"
+ExecCondition=/usr/bin/tmux has-session -t bot
+ExecCondition=/home/ubuntu/KORStockScan/.venv/bin/python -m src.trading.low_price_two_leg.auto_expansion_service --check-active
+ExecStart=/home/ubuntu/KORStockScan/.venv/bin/python -m src.trading.low_price_two_leg.auto_expansion_service --interval-sec 6
+Restart=on-failure
+RestartSec=5
+UMask=0077
+Nice=5
+CPUQuota=25%
+MemoryMax=512M
+TasksMax=48
+IOSchedulingClass=best-effort
+IOSchedulingPriority=6
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

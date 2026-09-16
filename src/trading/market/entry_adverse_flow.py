@@ -16,7 +16,15 @@ DEADLINE_MS = 6500
 MAXIMUM_SOURCE_AGE_MS = 1500
 
 
-def evaluate_snapshot(*, snapshot, symbol, route, cutoff_ms, require_latest=False):
+def evaluate_snapshot(
+    *,
+    snapshot,
+    symbol,
+    route,
+    cutoff_ms,
+    require_latest=False,
+    market_session="",
+):
     """Use the existing window validator without changing its feature contract.
 
     Fixed ask depletion/refill are diagnostics here, not extra entry gates.
@@ -61,6 +69,28 @@ def evaluate_snapshot(*, snapshot, symbol, route, cutoff_ms, require_latest=Fals
         if not item or len(matches) != 1:
             raise ValueError("exact_route_missing_or_duplicate")
         source = matches[0]
+        realtime_types = source.get("realtime_types") or {}
+        venues = {
+            str((realtime_types.get(kind) or {}).get("effective_venue") or "")
+            .strip()
+            .upper()
+            for kind in ("0B", "0D")
+        } - {""}
+        market_routes = {
+            str((realtime_types.get(kind) or {}).get("market_route") or "")
+            .strip()
+            .lower()
+            for kind in ("0B", "0D")
+        } - {""}
+        effective_venue = (
+            next(iter(venues))
+            if len(venues) == 1
+            else (
+                "KRX_NXT_INTEGRATED"
+                if not venues and market_routes == {"krx_nxt_integrated"}
+                else "UNKNOWN"
+            )
+        )
         epoch = source["realtime_types"]["0D"]["transport_epoch"]
         trade_epoch = source["realtime_types"]["0B"]["transport_epoch"]
         if (
@@ -145,6 +175,17 @@ def evaluate_snapshot(*, snapshot, symbol, route, cutoff_ms, require_latest=Fals
             source_sha256=feature["window_source_sha256"],
             feature=feature,
             source_quality_status="eligible",
+            effective_venue=effective_venue,
+            market_session=str(market_session or "UNKNOWN"),
+            route_identity_source=(
+                "exact_realtime_type_effective_venue"
+                if len(venues) == 1
+                else (
+                    "exact_integrated_market_route"
+                    if effective_venue == "KRX_NXT_INTEGRATED"
+                    else "unresolved"
+                )
+            ),
         )
     except (
         KeyError,

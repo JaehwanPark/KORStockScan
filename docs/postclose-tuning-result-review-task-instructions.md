@@ -356,6 +356,10 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project --print
 
 timing의 `feature_ablation_study`와 attribution의 adaptive-exit child도 원 producer·source hash·native 추천까지 연결해 누락 없이 점검한다. 비교 arm 이름, 설계 WP 번호, 리뷰 finding 번호는 native 구현 ID가 아니다. 연구 child와 상위 report에 같은 native ID가 투영됐으면 한 항목으로 대사하며, 별도 승인 구현 이력은 그 승인 범위의 successor disposition으로만 연결한다.
 
+위젯과 lower-price episode의 종목 수에는 인위적인 cardinality cap을 두지 않는다. 완료 marker와 행 수가 일치하는 `daily_recommendations_v2` 신규 종목은 research-watch 설정 바깥이어도 위젯 연구 universe에 자동 등록하고, source/execution-quality·양 calibration half·독립 holdout·비용차감 EV 기준을 모두 통과한 전 종목을 다음 거래일 exact-date 정책으로 자동 승격한다. Episode의 `new_symbol` 및 `existing_symbol_time_extension` 통과 추천도 별도 사용자 승인 없이 다음 거래일 exact-date auto-expansion 정책으로 누적 승격한다. 이는 수량, 소유권, 보유/미체결 custody, global BUY pause, liquidity, market-weakness, broker/hard-safety guard를 완화하지 않는다.
+
+장기 미성과 제거는 신규 진입·장후 연구 universe에만 적용한다. 최소 40개 유효 거래일 뒤 full/calibration과 holdout의 필수 episode/leg 표본이 모두 성숙하고 비용차감 EV가 모두 `<= 0`인 후보만 제거한다. 보유 또는 미체결 주문의 청산 custody는 제거하지 않으며, source 결손·미성숙·holdout 부재를 미성과로 간주하지 않는다. 제거·재등록과 다음날 exact-date 정책 결과를 source hash 및 profile/symbol ID로 남긴다.
+
 각 항목에 authoritative producer가 발급한 stable `order_id` 또는 `recommendation_id`가 있으면 그대로 사용한다. stable native ID가 없으면 자체 ID를 만들거나 추정 구현하지 않고 `invalid_or_missing_authority`로 차단한다. 다음 필드를 ledger에 기록한다.
 
 | 필드 | 내용 |

@@ -28,6 +28,7 @@ from src.engine.risk.manual_control_exclusion import (
 )
 from src.trading.config.symbol_owner_policy import (
     BROKER_ACCOUNT_KEY_ENV,
+    COEXIST_ENTRY_ENABLED,
     POLICY_FILE_ENV,
     resolve_symbol_owner_policy,
 )
@@ -164,6 +165,31 @@ def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
             pass
 
 
+def _exact_date_auto_promoted_symbol_owners(target_date) -> dict[str, set[str]]:
+    promoted: dict[str, set[str]] = {}
+    try:
+        from src.engine.automation.low_price_two_leg_auto_expansion_policy import (
+            load_policy as load_episode_expansion_policy,
+        )
+
+        for row in load_episode_expansion_policy(target_date)["profiles"].values():
+            promoted.setdefault(str(row["symbol"]), set()).add("episode")
+    except (OSError, ValueError, TypeError, KeyError):
+        pass
+    try:
+        from src.engine.monitoring.widget_symbol_runtime_policy import (
+            WidgetSymbolRuntimePolicyLoader,
+        )
+
+        for symbol in WidgetSymbolRuntimePolicyLoader().resolve_all(
+            observed_date=target_date
+        ):
+            promoted.setdefault(str(symbol), set()).add("widget_auto_trade")
+    except (OSError, ValueError, TypeError, KeyError):
+        pass
+    return promoted
+
+
 def expected_machine_symbol_owners(target_date) -> dict[str, list[str]]:
     episode_symbols = {
         profile.policy.symbol
@@ -173,6 +199,13 @@ def expected_machine_symbol_owners(target_date) -> dict[str, list[str]]:
     # they do not live in the lower-price profile catalog.
     episode_symbols.add("005930")
     widget_symbols = set(STATIC_WIDGET_AUTO_TRADE_SYMBOLS)
+    promoted = _exact_date_auto_promoted_symbol_owners(target_date)
+    episode_symbols.update(
+        symbol for symbol, owners in promoted.items() if "episode" in owners
+    )
+    widget_symbols.update(
+        symbol for symbol, owners in promoted.items() if "widget_auto_trade" in owners
+    )
     owners: dict[str, list[str]] = {}
     for symbol in sorted(episode_symbols | widget_symbols):
         values = {"main_scalping", "manual_operator"}
@@ -189,12 +222,19 @@ def _validate_runtime_scope(
 ) -> dict[str, list[str]]:
     expected = expected_machine_symbol_owners(target_date)
     configured = authority.get("symbols")
-    if not isinstance(configured, dict) or set(configured) != set(expected):
+    promoted = set(_exact_date_auto_promoted_symbol_owners(target_date))
+    if (
+        not isinstance(configured, dict)
+        or not set(configured).issubset(expected)
+        or not (set(expected) - set(configured)).issubset(promoted)
+    ):
         raise SymbolOwnerPolicyAutoApplyError(
             "symbol_owner_auto_apply_machine_scope_drift"
         )
     for symbol, owners in expected.items():
         entry = configured.get(symbol)
+        if symbol in promoted and entry is None:
+            continue
         if (
             not isinstance(entry, dict)
             or sorted(entry.get("allowed_owners") or []) != owners
@@ -211,18 +251,22 @@ def _validate_runtime_scope(
 
 def _machine_scope_transition_gaps(
     expected_scope: dict[str, list[str]],
+    *,
+    marker_exempt_symbols: set[str] | frozenset[str] = frozenset(),
 ) -> tuple[list[str], list[str]]:
     """Return missing current markers and legacy markers left after migration."""
 
     missing_current = [
         symbol
         for symbol in sorted(expected_scope)
-        if not machine_owner_scope_source(symbol)
+        if symbol not in marker_exempt_symbols
+        and not machine_owner_scope_source(symbol)
     ]
     remaining_legacy = [
         symbol
         for symbol in sorted(expected_scope)
-        if legacy_machine_owner_scope_source(symbol)
+        if symbol not in marker_exempt_symbols
+        and legacy_machine_owner_scope_source(symbol)
     ]
     return missing_current, remaining_legacy
 
@@ -475,6 +519,9 @@ def run_auto_apply(
             "symbol_owner_auto_apply_outside_standing_window"
         )
     expected_scope = _validate_runtime_scope(authority, target_date=target_date)
+    marker_exempt_symbols = set(
+        _exact_date_auto_promoted_symbol_owners(target_date)
+    ).intersection(expected_scope) - set(authority["symbols"])
     os.environ[BROKER_ACCOUNT_KEY_ENV] = str(authority["broker_account_key"])
     os.environ.setdefault(REGISTRY_PATH_ENV, str(DEFAULT_REGISTRY_PATH))
     target_registry = registry or OrderOwnerRegistry()
@@ -530,7 +577,7 @@ def run_auto_apply(
             else:
                 completed["machine_owner_scope_marker_recheck"] = marker_recheck
         missing_current, remaining_legacy = _machine_scope_transition_gaps(
-            expected_scope
+            expected_scope, marker_exempt_symbols=marker_exempt_symbols
         )
         if missing_current or remaining_legacy:
             pending = _marker_migration_pending_result(
@@ -680,7 +727,10 @@ def run_auto_apply(
             }
             continue
         eligible[symbol] = {
-            "mode": authority["symbols"][symbol]["mode"],
+            "mode": (
+                (authority.get("symbols") or {}).get(symbol, {}).get("mode")
+                or COEXIST_ENTRY_ENABLED
+            ),
             "allowed_owners": owners,
             "expected_broker_quantity": broker_quantity,
             "expected_external_manual_remainder": 0,
@@ -727,7 +777,11 @@ def run_auto_apply(
         token_loader=lambda: token,
         registry=target_registry,
         standing_authority_path=Path(authority_path).resolve(),
-        **({"recovery_authority_path": recovery_authority_path} if recovery_authority_path is not None else {}),
+        **(
+            {"recovery_authority_path": recovery_authority_path}
+            if recovery_authority_path is not None
+            else {}
+        ),
     )
     if (
         not isinstance(apply_result, dict)

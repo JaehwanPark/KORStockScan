@@ -134,9 +134,7 @@ def test_entry_context_ws_data_preserves_explicit_market_metadata_only(monkeypat
             }
         },
     )
-    assert fast_precheck_only["scanner_promotion_id"] == (
-        "SCANPROM-005930-precheck"
-    )
+    assert fast_precheck_only["scanner_promotion_id"] == ("SCANPROM-005930-precheck")
     assert missing["entry_timing_context"]["source_status"] == "insufficient"
 
 
@@ -1807,7 +1805,9 @@ def test_rising_missed_one_share_entry_uses_low_rebound_pct_as_positive_delta():
 
 
 @pytest.mark.parametrize("cached_action", ["BUY", None])
-def test_rising_missed_normal_buy_bridge_allows_buy_without_forced_scout_fields(cached_action):
+def test_rising_missed_normal_buy_bridge_allows_buy_without_forced_scout_fields(
+    cached_action,
+):
     decision = evaluate_rising_missed_normal_buy_bridge(
         {
             "strategy": "SCALPING",
@@ -5591,7 +5591,9 @@ def test_pre_submit_entry_ai_authority_retry_refreshes_missing_ai(monkeypatch):
     assert stock["entry_setup_live_policy_mode"] == "one_share_exploration"
     assert stock["entry_opportunity_recheck_exploration_probe_only"] is True
     assert stock["entry_setup_bounded_exploration_probe_only"] is True
-    assert stock["entry_setup_prompt_quantity_owner"] == "position_sizing_dynamic_formula"
+    assert (
+        stock["entry_setup_prompt_quantity_owner"] == "position_sizing_dynamic_formula"
+    )
     assert stock["entry_setup_prompt_residual_owner"] == "entry_split_order_plan"
     assert stock["entry_setup_prompt_scale_in_owner"] == "scale_in_split_order_plan"
     assert "entry_split_probe_residual_expand_forbidden" not in stock
@@ -5636,8 +5638,9 @@ def test_machine_nonentry_closes_exact_attempt_without_changing_action(monkeypat
         "policy_bundle_hash": "b" * 64,
     }
 
+    stock = {"id": 1}
     assert state_handlers._log_machine_nonentry_terminal_if_needed(
-        {"id": 1}, "005930", ai_decision=decision, ai_score=0
+        stock, "005930", ai_decision=decision, ai_score=0
     )
     assert decision["action"] == "DROP"
     assert calls[0][1]["terminal_reason"] == (
@@ -5647,6 +5650,10 @@ def test_machine_nonentry_closes_exact_attempt_without_changing_action(monkeypat
     assert calls[0][1]["extra_fields"]["evaluation_attempt_id"] == (
         "machine-source-invalid-1"
     )
+    assert not state_handlers._log_machine_nonentry_terminal_if_needed(
+        stock, "005930", ai_decision=decision, ai_score=0
+    )
+    assert len(calls) == 1
 
     calls.clear()
     assert not state_handlers._log_machine_nonentry_terminal_if_needed(
@@ -5946,7 +5953,9 @@ def test_rising_missed_one_share_hook_bypasses_watching_soft_branch(monkeypatch)
 @pytest.mark.parametrize("initial_action", [None, "", "-", "not_evaluated"])
 @pytest.mark.parametrize("retry_success", [True, False])
 def test_rising_missed_one_share_hook_retries_not_evaluated_ai_before_block(
-    monkeypatch, initial_action, retry_success,
+    monkeypatch,
+    initial_action,
+    retry_success,
 ):
     state_handlers.COOLDOWNS = {}
     state_handlers.ALERTED_STOCKS = set()
@@ -5966,9 +5975,15 @@ def test_rising_missed_one_share_hook_retries_not_evaluated_ai_before_block(
         return {
             "pre_submit_entry_ai_authority_retry_attempted": True,
             "pre_submit_entry_ai_authority_retry_success": retry_success,
-            "pre_submit_entry_ai_authority_retry_reason": "ok" if retry_success else "blocked",
-            "pre_submit_entry_ai_authority_retry_action": "BUY" if retry_success else "DROP",
-            "pre_submit_entry_ai_authority_retry_score": "72.0" if retry_success else "0.0",
+            "pre_submit_entry_ai_authority_retry_reason": (
+                "ok" if retry_success else "blocked"
+            ),
+            "pre_submit_entry_ai_authority_retry_action": (
+                "BUY" if retry_success else "DROP"
+            ),
+            "pre_submit_entry_ai_authority_retry_score": (
+                "72.0" if retry_success else "0.0"
+            ),
         }
 
     monkeypatch.setenv("KORSTOCKSCAN_RISING_MISSED_ONE_SHARE_ENTRY_ENABLED", "true")
@@ -6102,12 +6117,17 @@ def test_rising_missed_sync_retry_preserves_safe_exception_provenance(monkeypatc
     )
 
     assert fields["rising_missed_entry_ai_retry_reason"] == "exception"
-    assert fields["rising_missed_entry_ai_retry_error_disposition"] == "retry_exception_observed"
+    assert (
+        fields["rising_missed_entry_ai_retry_error_disposition"]
+        == "retry_exception_observed"
+    )
     assert fields["rising_missed_entry_ai_retry_decision_trace_id"] == "trace-1"
 
 
 @pytest.mark.parametrize("initial_action", [None, "", "-", "not_evaluated"])
-def test_rising_missed_retry_dispatches_async_without_sync_rest_or_ai(monkeypatch, initial_action):
+def test_rising_missed_retry_dispatches_async_without_sync_rest_or_ai(
+    monkeypatch, initial_action
+):
     class AsyncCoordinator:
         pass
 
@@ -9046,8 +9066,12 @@ def test_rising_missed_scout_quality_guard_no_rest_estimator_after_block(monkeyp
     # quality chain instead of fabricating a candidate or a freshness retry.
     assert entry_logs[-1][0] == "rising_missed_one_share_entry_blocked"
     assert entry_logs[-1][1]["block_reason"] == BLOCK_ENTRY_AI_NOT_EVALUATED
-    assert entry_logs[-1][1]["rising_missed_entry_ai_retry_reason"] == "ai_engine_unavailable"
+    assert (
+        entry_logs[-1][1]["rising_missed_entry_ai_retry_reason"]
+        == "ai_engine_unavailable"
+    )
     assert not stock.get("rising_missed_freshness_envelope_recheck_armed")
+
 
 def test_rising_missed_submit_safety_consumes_cached_scanner_envelope(monkeypatch):
     state_handlers.COOLDOWNS = {}
@@ -15201,9 +15225,7 @@ def test_rising_missed_one_share_submit_blocks_mechanistic_price_contract_before
                 "entry_price_mechanistic_submit_block_reason": (
                     "mechanistic_entry_price_contract_invalid"
                 ),
-                "entry_price_mechanistic_blockers": [
-                    "leg_1_numeric_price_missing"
-                ],
+                "entry_price_mechanistic_blockers": ["leg_1_numeric_price_missing"],
             }
         )
         return [], True
@@ -15377,9 +15399,7 @@ def test_normal_scalping_buy_blocks_mechanistic_price_contract_before_broker_sub
                 "entry_price_mechanistic_submit_block_reason": (
                     "mechanistic_entry_price_contract_invalid"
                 ),
-                "entry_price_mechanistic_blockers": [
-                    "leg_1_numeric_price_missing"
-                ],
+                "entry_price_mechanistic_blockers": ["leg_1_numeric_price_missing"],
             }
         )
         return [], True
@@ -53572,12 +53592,17 @@ def test_real_weak_ai_micro_entry_block_uses_live_clock_for_refreshed_tp1_contex
     assert decision["rising_missed_tp1_source_gap_relief_applied"] is True
 
 
-@pytest.mark.parametrize("evidence", [
-    {"status": "HOLDING"}, {"status": "SELLING"}, {"buy_qty": 1},
-    {"entry_split_probe_order_no": "123"},
-    {"entry_split_probe_bundle_id": "sample-probe"},
-    {"entry_split_probe_phase": "residual_submitting"},
-])
+@pytest.mark.parametrize(
+    "evidence",
+    [
+        {"status": "HOLDING"},
+        {"status": "SELLING"},
+        {"buy_qty": 1},
+        {"entry_split_probe_order_no": "123"},
+        {"entry_split_probe_bundle_id": "sample-probe"},
+        {"entry_split_probe_phase": "residual_submitting"},
+    ],
+)
 def test_terminal_exploration_restrictions_survive_new_ai_decision(evidence):
     stock = {
         "entry_split_probe_phase": "aborted",
@@ -53591,24 +53616,43 @@ def test_terminal_exploration_restrictions_survive_new_ai_decision(evidence):
     )
     assert stock == before
     assert not state_handlers.can_consider_scale_in(
-        stock, "123456", {}, "SCALPING", "NORMAL",
-        skip_add_judgment_lock=True, bypass_scalping_buy_window=True,
+        stock,
+        "123456",
+        {},
+        "SCALPING",
+        "NORMAL",
+        skip_add_judgment_lock=True,
+        bypass_scalping_buy_window=True,
         bypass_scale_in_cooldown=True,
     )["allowed"]
 
 
-@pytest.mark.parametrize("marker,value", [
-    ("entry_opportunity_recheck_exploration_probe_only", True),
-    ("entry_setup_bounded_exploration_probe_only", True),
-    ("entry_setup_live_policy_mode", "one_share_exploration"),
-    ("entry_split_probe_terminal_abort_reason", "entry_setup_bounded_exploration_probe_only"),
-])
+@pytest.mark.parametrize(
+    "marker,value",
+    [
+        ("entry_opportunity_recheck_exploration_probe_only", True),
+        ("entry_setup_bounded_exploration_probe_only", True),
+        ("entry_setup_live_policy_mode", "one_share_exploration"),
+        (
+            "entry_split_probe_terminal_abort_reason",
+            "entry_setup_bounded_exploration_probe_only",
+        ),
+    ],
+)
 def test_exploration_identity_does_not_claim_scale_in_authority(marker, value):
-    stock = {marker: value, "entry_split_probe_phase": "aborted",
-             "entry_split_probe_scale_in_recheck_allowed": True}
+    stock = {
+        marker: value,
+        "entry_split_probe_phase": "aborted",
+        "entry_split_probe_scale_in_recheck_allowed": True,
+    }
     result = state_handlers.can_consider_scale_in(
-        stock, "123456", {}, "SCALPING", "NORMAL",
-        skip_add_judgment_lock=True, bypass_scalping_buy_window=True,
+        stock,
+        "123456",
+        {},
+        "SCALPING",
+        "NORMAL",
+        skip_add_judgment_lock=True,
+        bypass_scalping_buy_window=True,
     )
     assert result.get("scale_in_block_owner") != (
         "entry_setup_v2_14_one_share_exploration"

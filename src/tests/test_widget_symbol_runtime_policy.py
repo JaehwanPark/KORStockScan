@@ -7,6 +7,9 @@ from datetime import date
 import pytest
 
 from src.engine.monitoring import widget_symbol_runtime_policy as runtime
+from src.engine.monitoring import (
+    widget_symbol_signal_policy_research as research_module,
+)
 from src.engine.monitoring.widget_symbol_signal_policy_research import (
     METRIC_CONTRACT as RESEARCH_METRIC_CONTRACT,
     OWNER_CONTRACT,
@@ -134,6 +137,84 @@ def test_build_policy_promotes_integrity_bound_research_watch_symbol():
     assert set(policy["symbols"]) == {"006800", watch}
     assert watch in policy["observation_symbols"]
     assert policy["symbols"][watch]["name"] == "오이솔루션"
+
+
+def test_build_policy_promotes_every_passing_research_watch_symbol_without_cap():
+    research = _research()
+    watches = {
+        "138080": "오이솔루션",
+        "214450": "파마리서치",
+        "298040": "효성중공업",
+        "347860": "알체라",
+    }
+    research["symbol_universe"] = {**SYMBOLS, **watches}
+    research["symbol_origins"] = {
+        **{symbol: "established_widget_symbol" for symbol in SYMBOLS},
+        **{symbol: "operator_enrolled_research_watch" for symbol in watches},
+    }
+    for symbol in watches:
+        research["symbols"][symbol] = deepcopy(research["symbols"]["006800"])
+        research["source_meta"][symbol] = {
+            "symbol": symbol,
+            "request_code": symbol,
+            "market": "KRX_regular",
+            "source_quality_status": "PASS",
+        }
+
+    policy = runtime.build_policy(research)
+
+    assert set(watches).issubset(policy["symbols"])
+    assert set(watches).issubset(policy["observation_symbols"])
+    assert (
+        "runtime_collector_capacity_cap"
+        not in policy.get("execution_quality_blocks", {}).values()
+    )
+
+
+def test_symbol_universe_excludes_mature_nonperformer_from_watch_and_discovery(
+    monkeypatch,
+):
+    from src.engine.monitoring import widget_research_watch_collector as collector
+
+    monkeypatch.setattr(
+        collector,
+        "load_config",
+        lambda **_: {
+            "symbols": [
+                {
+                    "stock_code": "138080",
+                    "stock_name": "오이솔루션",
+                    "recommendation_tier": "research_watch",
+                },
+                {
+                    "stock_code": "214450",
+                    "stock_name": "파마리서치",
+                    "recommendation_tier": "research_watch",
+                },
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        research_module,
+        "widget_long_term_pruned_symbols",
+        lambda *_: {"138080": "mature_calibration_and_holdout_ev_nonpositive"},
+    )
+    monkeypatch.setattr(
+        research_module,
+        "completed_daily_recommendation_symbols",
+        lambda *_, **__: (
+            date(2026, 9, 15),
+            {"138080": "오이솔루션", "298040": "효성중공업"},
+        ),
+    )
+
+    universe, origins = research_module.load_symbol_universe(
+        observed_date=date(2026, 9, 16)
+    )
+
+    assert "138080" not in universe
+    assert origins["214450"] == "operator_enrolled_research_watch"
+    assert origins["298040"] == "completed_daily_recommendation_auto_discovery"
 
 
 def test_execution_quality_handoff_is_consumed_without_disabling_observation(tmp_path):

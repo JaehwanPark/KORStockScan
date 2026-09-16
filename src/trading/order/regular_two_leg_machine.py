@@ -101,7 +101,9 @@ from src.trading.market.micro_confirmation import advance_live_dynamic_confirmat
 from src.trading.order.profit_stagnation_exit import KEY as PROFIT_EXIT_KEY
 from src.trading.order.target_ratchet import KEY as RATCHET_KEY
 from src.trading.order.target_ratchet import wait_for_pressure
-from src.trading.order.profit_stagnation_owners import episode_leg as run_profit_exit_leg
+from src.trading.order.profit_stagnation_owners import (
+    episode_leg as run_profit_exit_leg,
+)
 
 KST = ZoneInfo("Asia/Seoul")
 
@@ -1139,9 +1141,12 @@ class SamsungRegularTwoLegMachine:
                     return False
                 exit_filled = leg.get("adaptive_exit_filled_qty", 0)
                 profit_filled = leg.get("profit_stagnation_filled_qty", 0)
-                if (type(profit_filled) is not int or profit_filled < 0
+                if (
+                    type(profit_filled) is not int
+                    or profit_filled < 0
                     or (profit_filled and PROFIT_EXIT_KEY not in leg)
-                    or (PROFIT_EXIT_KEY in leg and SESSION_KEY in leg)):
+                    or (PROFIT_EXIT_KEY in leg and SESSION_KEY in leg)
+                ):
                     self._block(now, "state_profit_exit_quantity_invalid")
                     return False
                 if (
@@ -1151,7 +1156,10 @@ class SamsungRegularTwoLegMachine:
                 ):
                     self._block(now, "state_adaptive_exit_quantity_invalid")
                     return False
-                if leg_position != buy_filled_qty - target_filled_qty - exit_filled - profit_filled:
+                if (
+                    leg_position
+                    != buy_filled_qty - target_filled_qty - exit_filled - profit_filled
+                ):
                     self._block(now, "state_leg_fill_position_mismatch")
                     return False
                 if target_quantity and target_quantity != buy_filled_qty:
@@ -1343,6 +1351,10 @@ class SamsungRegularTwoLegMachine:
             policy = json.loads(
                 json.dumps(asdict(self.policy), default=lambda value: value.isoformat())
             )
+            # Keep the established static-policy observation contract stable.
+            # Dynamic authority is relevant only to exact-date auto-expansion.
+            if not policy.get("dynamic_authority_hash"):
+                policy.pop("dynamic_authority_hash", None)
             record_target_observation(
                 leg,
                 owner="episode",
@@ -2065,7 +2077,8 @@ class SamsungRegularTwoLegMachine:
 
     def _submit_planned_buys(self, now: datetime) -> None:
         adverse_ready = {
-            leg["leg_id"] for leg in self._state.get("legs", [])
+            leg["leg_id"]
+            for leg in self._state.get("legs", [])
             if leg.get("status") == "PLANNED"
             and entry_adverse_owners.episode_prepare(self, leg, now)
         }
@@ -2092,7 +2105,11 @@ class SamsungRegularTwoLegMachine:
             ):
                 return
         for leg in self._state.get("legs", []):
-            if leg.get("status") != "PLANNED" or self._state.get("status") == "BLOCKED" or leg["leg_id"] not in adverse_ready:
+            if (
+                leg.get("status") != "PLANNED"
+                or self._state.get("status") == "BLOCKED"
+                or leg["leg_id"] not in adverse_ready
+            ):
                 continue
             leg["status"] = "BUY_SUBMITTING"
             self._record(
@@ -2131,12 +2148,21 @@ class SamsungRegularTwoLegMachine:
                         price=int(leg["entry_price"]), quantity=int(leg["quantity"])
                     )
             except entry_adverse_guard.EntryNotSent as exc:
-                if not self._bind_episode_submit(intent_id=intent_id, result=exc.result):
+                if not self._bind_episode_submit(
+                    intent_id=intent_id, result=exc.result
+                ):
                     self._block(now, "entry_adverse_unsent_registry_release_failed")
                     return
                 state = leg.get(entry_adverse_guard.KEY) or {}
-                leg["status"] = "NO_FILL" if entry_adverse_guard.terminal(state) else "PLANNED"
-                self._record(now, "entry_adverse_not_sent", leg_id=leg["leg_id"], entry_adverse_flow=dict(state))
+                leg["status"] = (
+                    "NO_FILL" if entry_adverse_guard.terminal(state) else "PLANNED"
+                )
+                self._record(
+                    now,
+                    "entry_adverse_not_sent",
+                    leg_id=leg["leg_id"],
+                    entry_adverse_flow=dict(state),
+                )
                 self._save()
                 continue
             except Exception as exc:
@@ -2180,8 +2206,10 @@ class SamsungRegularTwoLegMachine:
                 if adverse.get("action") == "CONTINUE" and result.accepted is False:
                     entry_adverse_guard._skip(adverse, "SKIP_ORIGINAL_OWNER_REJECTED")
                 adverse["order_receipt"] = dict(
-                    order_no=result.order_no, broker_accepted=result.accepted,
-                    ambiguous=result.ambiguous, return_code=result.return_code,
+                    order_no=result.order_no,
+                    broker_accepted=result.accepted,
+                    ambiguous=result.ambiguous,
+                    return_code=result.return_code,
                     owner_registry_intent_id=intent_id,
                 )
                 entry_adverse_owners.record(leg)
@@ -2724,8 +2752,10 @@ class SamsungRegularTwoLegMachine:
     def adaptive_exit_manager_required(self) -> bool:
         if any(RATCHET_KEY in leg for leg in self._state.get("legs", [])):
             return True
-        if any(PROFIT_EXIT_KEY in leg and leg[PROFIT_EXIT_KEY].get("phase") != "FLAT"
-               for leg in self._state.get("legs", [])):
+        if any(
+            PROFIT_EXIT_KEY in leg and leg[PROFIT_EXIT_KEY].get("phase") != "FLAT"
+            for leg in self._state.get("legs", [])
+        ):
             return True
         legs = [
             leg
@@ -3393,8 +3423,14 @@ class SamsungRegularTwoLegMachine:
         now = (now or datetime.now(tz=KST)).astimezone(KST)
         if getattr(self, "_profit_exit_reload_required", False):
             raise OSError("profit_exit_owner_reload_required")
-        profit_claimed = any(PROFIT_EXIT_KEY in leg or RATCHET_KEY in leg for leg in self._state.get("legs", []))
-        if profit_claimed and getattr(self, "profit_exit_lock_held", lambda: False)() is not True:
+        profit_claimed = any(
+            PROFIT_EXIT_KEY in leg or RATCHET_KEY in leg
+            for leg in self._state.get("legs", [])
+        )
+        if (
+            profit_claimed
+            and getattr(self, "profit_exit_lock_held", lambda: False)() is not True
+        ):
             return self.snapshot()
         if getattr(self, "_adaptive_enrollment_reload_required", False):
             raise EnrollmentReloadRequired("adaptive_enrollment_reload_required")
@@ -3465,8 +3501,10 @@ class SamsungRegularTwoLegMachine:
         while True:
             self.run_once()
             wait_for_pressure(
-                self, self._next_loop_delay_sec(interval_sec=interval_sec),
-                owner_type="episode", now_fn=lambda: datetime.now(tz=KST),
+                self,
+                self._next_loop_delay_sec(interval_sec=interval_sec),
+                owner_type="episode",
+                now_fn=lambda: datetime.now(tz=KST),
             )
 
     def run_until_terminal(self, *, interval_sec: float = 2.0) -> dict:
@@ -3479,8 +3517,10 @@ class SamsungRegularTwoLegMachine:
             ):
                 return state
             wait_for_pressure(
-                self, self._next_loop_delay_sec(interval_sec=interval_sec),
-                owner_type="episode", now_fn=lambda: datetime.now(tz=KST),
+                self,
+                self._next_loop_delay_sec(interval_sec=interval_sec),
+                owner_type="episode",
+                now_fn=lambda: datetime.now(tz=KST),
             )
 
     def _next_loop_delay_sec(
@@ -3499,8 +3539,14 @@ class SamsungRegularTwoLegMachine:
         current_ms = int((now or datetime.now(tz=KST)).timestamp() * 1000)
         for leg in self._state.get("legs", []):
             adverse = leg.get(entry_adverse_guard.KEY)
-            if isinstance(adverse, dict) and adverse.get("action") == "WAIT" and adverse.get("next_checkpoint_ms") is not None:
-                remaining = (adverse["t0_ms"] + adverse["next_checkpoint_ms"] - current_ms) / 1000
+            if (
+                isinstance(adverse, dict)
+                and adverse.get("action") == "WAIT"
+                and adverse.get("next_checkpoint_ms") is not None
+            ):
+                remaining = (
+                    adverse["t0_ms"] + adverse["next_checkpoint_ms"] - current_ms
+                ) / 1000
                 base_delay = min(base_delay, max(0.02, remaining))
         pending = self._state.get("pending_entry_confirmation")
         if not isinstance(pending, dict):

@@ -237,14 +237,30 @@ class RegularTwoLegPolicy:
     max_source_lag_minutes: int = 2
     runtime_policy_source: str = "clean_baseline_replay_selected_default"
     runtime_policy_hash: str = ""
+    dynamic_authority_hash: str = ""
 
     def __post_init__(self) -> None:
-        if self.symbol not in ALLOWED_SYMBOLS:
+        dynamic_authorized = bool(
+            self.runtime_policy_source == "exact_date_auto_expansion_policy"
+            and len(self.dynamic_authority_hash) == 64
+            and all(
+                character in "0123456789abcdef"
+                for character in self.dynamic_authority_hash.lower()
+            )
+        )
+        if self.symbol not in ALLOWED_SYMBOLS and not dynamic_authorized:
             raise ValueError("symbol_not_in_low_price_machine_allowlist")
         if self.route != "SOR" or self.quantity != EPISODE_TOTAL_QUANTITY:
             raise ValueError("policy_requires_episode_quantity_integrated_sor")
-        if (self.scan_start, self.scan_last_bar) not in SUPPORTED_REGULAR_SCAN_WINDOWS:
+        if (
+            self.scan_start,
+            self.scan_last_bar,
+        ) not in SUPPORTED_REGULAR_SCAN_WINDOWS and not dynamic_authorized:
             raise ValueError("unsupported_regular_scan_window")
+        if dynamic_authorized and not (
+            time(9, 0) <= self.scan_start <= self.scan_last_bar <= time(15, 19)
+        ):
+            raise ValueError("dynamic_regular_scan_window_outside_krx_session")
         if self.lookback_bars < 2:
             raise ValueError("invalid_lookback")
         if (

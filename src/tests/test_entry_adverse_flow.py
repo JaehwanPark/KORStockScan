@@ -150,6 +150,26 @@ def test_relational_rule(adverse):
     assert result["action"] == ("DEFER_ADVERSE_FLOW" if adverse else "CONTINUE")
 
 
+def test_integrated_route_identity_is_preserved_without_krx_inference():
+    data = tape(adverse=False)
+    for receipt in source(data)["realtime_types"].values():
+        receipt["effective_venue"] = ""
+        receipt["market_route"] = "krx_nxt_integrated"
+
+    result = evaluate_snapshot(
+        snapshot=data,
+        symbol="005930",
+        route="SOR",
+        cutoff_ms=int(NOW.timestamp() * 1000),
+        market_session="KRX_REGULAR",
+    )
+
+    assert result["source_quality_status"] == "eligible"
+    assert result["effective_venue"] == "KRX_NXT_INTEGRATED"
+    assert result["market_session"] == "KRX_REGULAR"
+    assert result["route_identity_source"] == "exact_integrated_market_route"
+
+
 @pytest.mark.parametrize(
     "mutation", ["bid_recovery", "buy_dominance", "sell_easing", "bid_support"]
 )

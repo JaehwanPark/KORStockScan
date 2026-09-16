@@ -32,6 +32,10 @@ from src.trading.order.tick_utils import (
     move_price_up_by_bps,
 )
 from src.engine.monitoring.machine_recommendation_identity import bind_recommendation
+from src.engine.monitoring.machine_candidate_lifecycle import (
+    completed_daily_recommendation_symbols,
+    widget_long_term_pruned_symbols,
+)
 from src.engine.monitoring.widget_execution_quality import load_execution_incidents
 from src.engine.monitoring.widget_signal_quality import (
     component_arms,
@@ -138,22 +142,37 @@ def load_symbol_universe(
     observed_date: date,
     config_path: Path = DEFAULT_RESEARCH_WATCH_CONFIG_PATH,
 ) -> tuple[dict[str, str], dict[str, str]]:
-    """Return fixed symbols plus the integrity-checked research-watch catalog."""
+    """Return fixed, research-watch, and completed auto-discovery symbols."""
 
     # Import lazily: the collector shares the runtime policy reference and the
     # runtime policy imports this module's research contract.
     from src.engine.monitoring.widget_research_watch_collector import load_config
 
     config = load_config(observed_date=observed_date, config_path=config_path)
+    pruned = widget_long_term_pruned_symbols(observed_date)
     universe = dict(SYMBOLS)
     origins = {symbol: "established_widget_symbol" for symbol in SYMBOLS}
     for row in config["symbols"]:
         symbol = str(row["stock_code"])
         name = str(row["stock_name"])
+        if symbol in pruned:
+            continue
         if symbol in universe and universe[symbol] != name:
             raise ResearchError("widget_research_watch_symbol_name_conflict")
         universe[symbol] = name
         origins[symbol] = "operator_enrolled_research_watch"
+    _, discovered = completed_daily_recommendation_symbols(
+        observed_date,
+        excluded_symbols=set(pruned),
+    )
+    for symbol, name in discovered.items():
+        if symbol in pruned:
+            continue
+        if symbol in universe and universe[symbol] != name:
+            raise ResearchError("widget_auto_discovery_symbol_name_conflict")
+        if symbol not in universe:
+            universe[symbol] = name
+            origins[symbol] = "completed_daily_recommendation_auto_discovery"
     return universe, origins
 
 
@@ -1248,7 +1267,11 @@ def build_report(
         )
         or any(
             origin
-            not in {"established_widget_symbol", "operator_enrolled_research_watch"}
+            not in {
+                "established_widget_symbol",
+                "operator_enrolled_research_watch",
+                "completed_daily_recommendation_auto_discovery",
+            }
             for origin in origins.values()
         )
     ):
@@ -1681,7 +1704,7 @@ def main(argv: list[str] | None = None) -> int:
             expected_trading_day_count=len(expected_dates),
             allowed_symbols=symbol_universe,
             allow_short_listing_history=(
-                symbol_origins[symbol] == "operator_enrolled_research_watch"
+                symbol_origins[symbol] != "established_widget_symbol"
             ),
         )
         for symbol in symbol_universe

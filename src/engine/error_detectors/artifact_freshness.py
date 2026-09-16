@@ -6,7 +6,7 @@ import glob
 import json
 import os
 import time
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +28,127 @@ from src.engine.error_detectors.cron_completion import CronCompletionDetector
 
 def _today_kst_str(now_kst: datetime | None = None) -> str:
     return (now_kst or datetime.now()).strftime("%Y-%m-%d")
+
+
+def _reconcile_update_kospi_master_difference(
+    payload: dict[str, Any],
+    details: dict[str, Any],
+) -> bool:
+    """Accept only a fully verified, non-active eligibility difference.
+
+    ``update_kospi`` deliberately preserves FDR rows even when the official
+    ka10099 listing response does not return them.  That is a useful warning
+    until the same-date canonical common-stock master proves every omitted
+    code is outside the active trading universe.  Keep the reconciliation in
+    the detector so the producer's raw warning and missing-code evidence stay
+    intact.
+    """
+
+    if payload.get("status") != "completed_with_warnings":
+        return False
+    if payload.get("failed_steps") != []:
+        return False
+    if payload.get("warning_steps") != ["update_kospi_data"]:
+        return False
+
+    target_date_text = str(payload.get("target_date") or "").strip()
+    try:
+        target_date = date.fromisoformat(target_date_text)
+    except ValueError:
+        return False
+
+    steps = payload.get("steps")
+    if not isinstance(steps, list):
+        return False
+    update_steps = [
+        step
+        for step in steps
+        if isinstance(step, dict) and step.get("name") == "update_kospi_data"
+    ]
+    if len(update_steps) != 1:
+        return False
+    update_step = update_steps[0]
+    step_details = update_step.get("details")
+    if not isinstance(step_details, dict):
+        return False
+    eligibility = step_details.get("eligibility")
+    if (
+        update_step.get("status") != "completed_with_warnings"
+        or step_details.get("reason") != "market_eligibility_partial"
+        or not isinstance(eligibility, dict)
+        or eligibility.get("complete") is not True
+        or eligibility.get("status") != "partial"
+    ):
+        return False
+
+    market_meta = eligibility.get("market_source_meta")
+    missing_codes = eligibility.get("missing_codes")
+    requested_count = eligibility.get("requested_code_count")
+    received_count = eligibility.get("received_code_count")
+    if (
+        not isinstance(market_meta, list)
+        or {str(row.get("market")) for row in market_meta if isinstance(row, dict)}
+        != {"0", "10"}
+        or any(
+            not isinstance(row, dict)
+            or row.get("complete") is not True
+            or row.get("continuous_next_key_missing") is True
+            or row.get("continuous_page_limit_reached") is True
+            for row in market_meta
+        )
+        or not isinstance(missing_codes, list)
+        or not missing_codes
+        or len({str(code) for code in missing_codes}) != len(missing_codes)
+        or any(len(str(code)) != 6 or not str(code).isdigit() for code in missing_codes)
+        or not isinstance(requested_count, int)
+        or isinstance(requested_count, bool)
+        or not isinstance(received_count, int)
+        or isinstance(received_count, bool)
+        or received_count + len(missing_codes) != requested_count
+    ):
+        return False
+
+    master_path = existing_or_gzip_path(
+        PROJECT_ROOT
+        / "data/report/micro_reversion_economic_reference"
+        / f"micro_reversion_symbol_master_{target_date_text}.json"
+    )
+    if not master_path.exists():
+        return False
+
+    try:
+        from src.engine.scalping.micro_reversion.symbol_master import (
+            SymbolLookupStatus,
+            VerifiedSymbolMaster,
+        )
+
+        master = VerifiedSymbolMaster.from_json_path(
+            master_path,
+            require_canonical_owner=True,
+        )
+        allowed_statuses = {
+            SymbolLookupStatus.MISSING,
+            SymbolLookupStatus.OUTSIDE_EFFECTIVE_WINDOW,
+        }
+        lookup_statuses = {
+            str(code): master.lookup(code, as_of=target_date).status
+            for code in missing_codes
+        }
+    except (OSError, TypeError, ValueError):
+        return False
+
+    unresolved = {
+        code: status.value
+        for code, status in lookup_statuses.items()
+        if status not in allowed_statuses
+    }
+    details["update_kospi_status_master_path"] = str(master_path)
+    details["update_kospi_status_master_difference_count"] = len(missing_codes)
+    details["update_kospi_status_master_difference_unresolved"] = unresolved
+    if unresolved:
+        return False
+    details["update_kospi_status_warning_reconciliation"] = "benign_master_difference"
+    return True
 
 
 ARTIFACT_SCHEDULE_CONTRACTS: dict[str, dict[str, Any]] = {
@@ -1033,6 +1154,12 @@ class ArtifactFreshnessDetector(BaseDetector):
 
         status_value = str(current)
         details[f"{aid}_content_status"] = status_value
+        if (
+            aid == "update_kospi_status"
+            and status_value == "completed_with_warnings"
+            and _reconcile_update_kospi_master_difference(payload, details)
+        ):
+            return ""
         if ok_values and status_value not in ok_values:
             return f"{aid}: JSON status is {status_value}"
         return ""

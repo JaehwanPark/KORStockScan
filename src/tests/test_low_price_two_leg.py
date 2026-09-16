@@ -674,7 +674,14 @@ def test_all_profiles_are_routed_by_preflight_live_and_systemd_timers():
             "korstockscan-low-price-two-leg-*.timer"
         )
     )
-    assert len(timer_files) == len(PROFILES) * 2
+    auto_expansion_timer = (
+        project_root
+        / "deploy"
+        / "systemd"
+        / "korstockscan-low-price-two-leg-auto-expansion.timer"
+    )
+    assert auto_expansion_timer in timer_files
+    assert len(timer_files - {auto_expansion_timer}) == len(PROFILES) * 2
 
 
 def test_live_systemd_unit_requires_fresh_preflight_and_does_not_restart_on_guard_block():

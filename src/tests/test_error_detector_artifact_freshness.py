@@ -5,6 +5,7 @@ import pytest
 import os
 import time
 import json
+from types import SimpleNamespace
 from pathlib import Path
 from datetime import datetime, timedelta
 from unittest.mock import patch
@@ -12,9 +13,129 @@ from unittest.mock import patch
 from src.engine.error_detectors.artifact_freshness import (
     ArtifactFreshnessDetector,
     ARTIFACT_REGISTRY,
+    _reconcile_update_kospi_master_difference,
 )
+from src.engine.scalping.micro_reversion.symbol_master import SymbolLookupStatus
 
 _TRADING_MOCK = "src.engine.error_detectors.artifact_freshness.is_krx_trading_day"
+
+
+def _update_kospi_partial_payload() -> dict:
+    return {
+        "target_date": "2026-09-15",
+        "status": "completed_with_warnings",
+        "failed_steps": [],
+        "warning_steps": ["update_kospi_data"],
+        "steps": [
+            {
+                "name": "update_kospi_data",
+                "status": "completed_with_warnings",
+                "details": {
+                    "reason": "market_eligibility_partial",
+                    "eligibility": {
+                        "complete": True,
+                        "status": "partial",
+                        "requested_code_count": 4,
+                        "received_code_count": 2,
+                        "missing_codes": ["000010", "000090"],
+                        "market_source_meta": [
+                            {"market": "0", "complete": True},
+                            {"market": "10", "complete": True},
+                        ],
+                    },
+                },
+            }
+        ],
+    }
+
+
+def test_update_kospi_warning_reconciles_verified_non_active_master_difference(
+    tmp_path: Path,
+) -> None:
+    master_path = (
+        tmp_path
+        / "data/report/micro_reversion_economic_reference"
+        / "micro_reversion_symbol_master_2026-09-15.json"
+    )
+    master_path.parent.mkdir(parents=True)
+    master_path.write_text("{}\n", encoding="utf-8")
+    status_path = tmp_path / "update_kospi_status.json"
+    status_path.write_text(
+        json.dumps(_update_kospi_partial_payload()), encoding="utf-8"
+    )
+    fake_master = SimpleNamespace(
+        lookup=lambda code, *, as_of: SimpleNamespace(status=SymbolLookupStatus.MISSING)
+    )
+    details: dict = {}
+    module = "src.engine.error_detectors.artifact_freshness"
+
+    with (
+        patch(f"{module}.PROJECT_ROOT", tmp_path),
+        patch(
+            "src.engine.scalping.micro_reversion.symbol_master."
+            "VerifiedSymbolMaster.from_json_path",
+            return_value=fake_master,
+        ) as loader,
+    ):
+        assert (
+            ArtifactFreshnessDetector._validate_json_status(
+                {
+                    "id": "update_kospi_status",
+                    "json_status_field": "status",
+                    "json_ok_values": ["completed", "skipped_non_trading_day"],
+                },
+                status_path,
+                details,
+            )
+            == ""
+        )
+
+    loader.assert_called_once_with(master_path, require_canonical_owner=True)
+    assert (
+        details["update_kospi_status_warning_reconciliation"]
+        == "benign_master_difference"
+    )
+    assert details["update_kospi_status_master_difference_count"] == 2
+    assert details["update_kospi_status_master_difference_unresolved"] == {}
+
+
+def test_update_kospi_warning_keeps_active_or_conflicting_code_visible(
+    tmp_path: Path,
+) -> None:
+    master_path = (
+        tmp_path
+        / "data/report/micro_reversion_economic_reference"
+        / "micro_reversion_symbol_master_2026-09-15.json"
+    )
+    master_path.parent.mkdir(parents=True)
+    master_path.write_text("{}\n", encoding="utf-8")
+    fake_master = SimpleNamespace(
+        lookup=lambda code, *, as_of: SimpleNamespace(
+            status=(
+                SymbolLookupStatus.VERIFIED
+                if code == "000010"
+                else SymbolLookupStatus.MISSING
+            )
+        )
+    )
+    details: dict = {}
+    module = "src.engine.error_detectors.artifact_freshness"
+
+    with (
+        patch(f"{module}.PROJECT_ROOT", tmp_path),
+        patch(
+            "src.engine.scalping.micro_reversion.symbol_master."
+            "VerifiedSymbolMaster.from_json_path",
+            return_value=fake_master,
+        ),
+    ):
+        assert not _reconcile_update_kospi_master_difference(
+            _update_kospi_partial_payload(), details
+        )
+
+    assert details["update_kospi_status_master_difference_unresolved"] == {
+        "000010": "verified"
+    }
 
 
 @pytest.mark.parametrize(

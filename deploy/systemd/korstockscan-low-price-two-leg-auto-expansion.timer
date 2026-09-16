@@ -1,0 +1,11 @@
+[Unit]
+Description=Start exact-date auto-expanded episode machines after PREOPEN owner apply
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 08:56:00 Asia/Seoul
+Unit=korstockscan-low-price-two-leg-auto-expansion.service
+AccuracySec=1s
+Persistent=false
+
+[Install]
+WantedBy=timers.target

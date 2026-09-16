@@ -1698,6 +1698,10 @@ if [ "$RUN_LOW_PRICE_TWO_LEG_CANDIDATE_RECOMMENDATION" = "true" ] || [ "$RUN_LOW
     "$candidate_recommendation_json" \
     "$candidate_recommendation_md" \
     "low_price_two_leg_candidate_recommendation"
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" \
+    -m src.engine.automation.low_price_two_leg_auto_expansion_policy \
+    --source-date "$TARGET_DATE" \
+    --write
 fi
 if [ "$RUN_ONE_SHARE_THRESHOLD_OPPORTUNITY" = "true" ] || [ "$RUN_ONE_SHARE_THRESHOLD_OPPORTUNITY" = "1" ]; then
   one_share_report_json="$PROJECT_DIR/data/report/one_share_threshold_opportunity/one_share_threshold_opportunity_${TARGET_DATE}.json"

@@ -168,9 +168,17 @@ class KiwoomLowPriceTwoLegGateway:
         read_pacing_enabled: bool | None = None,
         read_pacer: KiwoomEpisodeReadPacer | None = None,
         read_retry_sleep: Callable[[float], None] | None = None,
+        dynamic_authority_hash: str = "",
     ) -> None:
         normalized_symbol = kiwoom_utils.normalize_stock_code(symbol)
-        if normalized_symbol not in ALLOWED_SYMBOLS:
+        dynamic_authorized = bool(
+            len(dynamic_authority_hash) == 64
+            and all(
+                character in "0123456789abcdef"
+                for character in dynamic_authority_hash.lower()
+            )
+        )
+        if normalized_symbol not in ALLOWED_SYMBOLS and not dynamic_authorized:
             raise ValueError("symbol_not_in_low_price_machine_allowlist")
         self.symbol = normalized_symbol
         self.session = request_session or requests.Session()
@@ -262,7 +270,12 @@ class KiwoomLowPriceTwoLegGateway:
         )
 
     def adaptive_exit_adapter(
-        self, *, registry, context, policy_hash, write_guard=None,
+        self,
+        *,
+        registry,
+        context,
+        policy_hash,
+        write_guard=None,
         authority_policy_id="machine_adaptive_exit_v1",
     ):
         """Build a disabled-by-default adapter; does not attach an exit loop."""

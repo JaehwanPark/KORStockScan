@@ -9,7 +9,6 @@ machine, or mutate runtime policy.
 from __future__ import annotations
 
 import argparse
-import csv
 import hashlib
 import json
 import os
@@ -23,6 +22,10 @@ from urllib import parse, request
 import requests
 
 from src.engine.monitoring.machine_recommendation_identity import bind_recommendation
+from src.engine.monitoring.machine_candidate_lifecycle import (
+    completed_daily_recommendation_symbols,
+    episode_long_term_pruned_symbols,
+)
 from src.engine.monitoring.low_price_two_leg_entry_spot_research import (
     CLEAN_BASELINE_DATE,
     COST_PCT,
@@ -74,7 +77,6 @@ DEFAULT_DYNAMIC_UNIVERSE_PATH = DATA_DIR / "daily_recommendations_v2.csv"
 DEFAULT_DYNAMIC_UNIVERSE_DIAGNOSTIC_PATH = (
     DATA_DIR / "daily_recommendations_v2_diagnostics.json"
 )
-MAX_DYNAMIC_SYMBOLS_PER_DAY = 5
 MIN_RESEARCH_DAYS = CALIBRATION_DAYS + HOLDOUT_DAYS
 MAX_RECOMMENDATIONS_PER_LANE = 3
 MAX_LATEST_CLOSE_PRICE = 100_000
@@ -308,73 +310,21 @@ def _dynamic_candidate_snapshot(
     completion_marker = diagnostic_path or path.with_name(
         DEFAULT_DYNAMIC_UNIVERSE_DIAGNOSTIC_PATH.name
     )
-    try:
-        diagnostic = json.loads(completion_marker.read_text(encoding="utf-8"))
-        completed_source_date = date.fromisoformat(
-            str(diagnostic.get("latest_date") or "")
-        )
-        completed_selected_count = int(diagnostic.get("selected_count", -1))
-    except (OSError, ValueError, TypeError, AttributeError):
-        return None, {}
-    if (
-        not (CLEAN_BASELINE_DATE <= completed_source_date <= target_date)
-        or completed_selected_count < 0
-    ):
-        return None, {}
-    try:
-        handle = path.open(encoding="utf-8-sig", newline="")
-    except OSError:
-        return None, {}
-    with handle:
-        rows_by_date: dict[date, list[dict[str, str]]] = {}
-        observed_row_count = 0
-        date_contract_mismatch = False
-        for raw_row in csv.DictReader(handle):
-            observed_row_count += 1
-            try:
-                row_date = date.fromisoformat(str(raw_row.get("date") or ""))
-            except ValueError:
-                date_contract_mismatch = True
-                continue
-            if row_date == completed_source_date:
-                rows_by_date.setdefault(row_date, []).append(raw_row)
-            else:
-                date_contract_mismatch = True
-        if date_contract_mismatch or observed_row_count != completed_selected_count:
-            return None, {}
-        if not rows_by_date:
-            return completed_source_date, {}
-        source_date = completed_source_date
-        ranked_by_symbol: dict[str, tuple[int, str, str]] = {}
-        for row in rows_by_date[source_date]:
-            raw_symbol = str(row.get("code") or "").strip()
-            symbol = raw_symbol.zfill(6)
-            name = str(row.get("name") or "").strip()
-            try:
-                close = int(float(row.get("close") or 0))
-                rank = int(float(row.get("score_rank") or 999_999))
-            except (TypeError, ValueError):
-                continue
-            if (
-                not raw_symbol
-                or len(symbol) != 6
-                or not symbol.isdigit()
-                or not name
-                or not 0 < close <= MAX_LATEST_CLOSE_PRICE
-                or symbol in REVIEWED_SYMBOLS
-                or symbol in selected_implemented_symbols
-            ):
-                continue
-            candidate = (rank, symbol, name)
-            current = ranked_by_symbol.get(symbol)
-            if current is None or candidate < current:
-                ranked_by_symbol[symbol] = candidate
-    return source_date, {
-        symbol: name
-        for _, symbol, name in sorted(ranked_by_symbol.values())[
-            :MAX_DYNAMIC_SYMBOLS_PER_DAY
-        ]
+    excluded = {
+        *REVIEWED_SYMBOLS,
+        *selected_implemented_symbols,
+        *episode_long_term_pruned_symbols(target_date),
     }
+    source_date, symbols = completed_daily_recommendation_symbols(
+        target_date,
+        csv_path=path,
+        diagnostics_path=completion_marker,
+        maximum_close=MAX_LATEST_CLOSE_PRICE,
+        excluded_symbols=excluded,
+    )
+    if source_date is not None and source_date < CLEAN_BASELINE_DATE:
+        return None, {}
+    return source_date, symbols
 
 
 def _dynamic_candidate_symbols(
@@ -527,6 +477,25 @@ def _target_date_research_inventory(
     """Reconstruct the profile catalog that was effective on ``target_date``."""
 
     live_profiles = profiles_for_target_date(target_date)
+    try:
+        from src.engine.automation.low_price_two_leg_auto_expansion_policy import (
+            load_policy as load_auto_expansion_policy,
+        )
+        from src.trading.low_price_two_leg.auto_expansion_service import (
+            _profile as auto_expansion_profile,
+        )
+
+        expansion = load_auto_expansion_policy(target_date)
+        live_profiles.update(
+            {
+                profile_id: auto_expansion_profile(
+                    row, authority_hash=expansion["policy_hash"]
+                )
+                for profile_id, row in expansion["profiles"].items()
+            }
+        )
+    except (OSError, ValueError, TypeError, KeyError):
+        pass
     implemented_symbols = {
         profile.symbol: profile.name for profile in live_profiles.values()
     }
@@ -739,7 +708,7 @@ def _recommendation_rows(
                     if baseline_ev is not None
                     else None
                 ),
-                "implementation_status": "source_only_requires_review_and_user_approval",
+                "implementation_status": "source_only_eligible_for_automatic_promotion",
                 "runtime_effect": False,
             }
         )
@@ -1134,7 +1103,7 @@ def build_report(
                 else "no_qualified_candidate"
             )
         ),
-        "decision": "expanded_candidates_source_only_no_runtime_promotion",
+        "decision": "expanded_candidates_source_only_downstream_auto_promotion_eligible",
         "authority": AUTHORITY,
         "recommendation_only": True,
         "machine_created": False,
@@ -1149,12 +1118,18 @@ def build_report(
 
 def attach_recommendation_contract(report: dict[str, Any]) -> dict[str, Any]:
     producer = "low_price_two_leg_expanded_candidate_research"
-    for key, axis, proposal_key in (
-        ("recommendations", "profile_policy", "recommended_spot"),
+    for key, axis, proposal_key, acceptance in (
+        (
+            "recommendations",
+            "profile_policy",
+            "recommended_spot",
+            "Automatic exact-date promotion requires the policy bridge to validate source identity, holdout economics, owner authority, custody, quantity and hard safety contracts.",
+        ),
         (
             "postclose_logic_recommendations",
             "target_date_logic_review",
             "candidate_parameters",
+            "Explicit profile review and exact-date policy validation are required; preserve existing custody, quantity, target and safety contracts.",
         ),
     ):
         for row in report[key]:
@@ -1165,7 +1140,7 @@ def attach_recommendation_contract(report: dict[str, Any]) -> dict[str, Any]:
                 axis=axis,
                 proposal=row.get(proposal_key) or {},
                 consumer="low_price_two_leg_policy_apply",
-                acceptance="Explicit profile review and exact-date policy validation are required; preserve existing custody, quantity, target and safety contracts.",
+                acceptance=acceptance,
             )
     # These lists mirror the authoritative recommendations, not new orders.
     for key, lane in (
@@ -1724,10 +1699,6 @@ class CandidateRecommendationNotifier:
             )
             and report.get("candidate_universe_size") == len(candidate_symbols)
             and set(base_target_inventory.candidate_symbols).issubset(candidate_symbols)
-            and len(
-                set(candidate_symbols) - set(base_target_inventory.candidate_symbols)
-            )
-            <= MAX_DYNAMIC_SYMBOLS_PER_DAY
             and set(candidate_symbols).isdisjoint(target_inventory.implemented_symbols)
             and report.get("existing_symbol_universe_size")
             == len(target_inventory.implemented_symbols)
@@ -2011,7 +1982,7 @@ class CandidateRecommendationNotifier:
             )
             and float(row.get("notional_weighted_ev_pct", 0.0) or 0.0) > 0.0
             and row.get("implementation_status")
-            == "source_only_requires_review_and_user_approval"
+            == "source_only_eligible_for_automatic_promotion"
             and row.get("runtime_effect") is False
             and (
                 report.get("schema") == LEGACY_REPORT_SCHEMA

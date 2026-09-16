@@ -203,7 +203,14 @@ class LowPriceTwoLegMachine(SamsungRegularTwoLegMachine):
             return self.profile.policy
         try:
             source_date = date.fromisoformat(str(self._state.get("trade_date") or ""))
-            prior = get_profile(self.profile.profile_id, target_date=source_date).policy
+            try:
+                prior = get_profile(
+                    self.profile.profile_id, target_date=source_date
+                ).policy
+            except ValueError:
+                if not self.profile.policy.dynamic_authority_hash:
+                    raise
+                prior = self.profile.policy
             features = self._state.get("signal_features") or {}
             if not isinstance(features, dict):
                 return None

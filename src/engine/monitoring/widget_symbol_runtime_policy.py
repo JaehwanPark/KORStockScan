@@ -41,7 +41,6 @@ SUPPORTED_RESEARCH_SCHEMAS = {
     "widget_symbol_signal_policy_research_v3",
     REPORT_SCHEMA,
 }
-MAX_RESEARCH_WATCH_RUNTIME_SYMBOLS = 2
 
 OFFICIAL_REFERENCE = {
     "repository": "Kiwoom-Securities/Kiwoom-REST-API",
@@ -182,7 +181,11 @@ def _research_universe(
         )
         or any(
             origin
-            not in {"established_widget_symbol", "operator_enrolled_research_watch"}
+            not in {
+                "established_widget_symbol",
+                "operator_enrolled_research_watch",
+                "completed_daily_recommendation_auto_discovery",
+            }
             for origin in origins.values()
         )
         or any(universe.get(symbol) != name for symbol, name in SYMBOLS.items())
@@ -449,10 +452,10 @@ def build_policy(
         selected = _validated_selected_policy(result)
         if selected is None:
             continue
-        if (
-            observation is None
-            and origins[symbol] == "operator_enrolled_research_watch"
-        ):
+        if observation is None and origins[symbol] in {
+            "operator_enrolled_research_watch",
+            "completed_daily_recommendation_auto_discovery",
+        }:
             observation = _validated_observation_policy(result)
             if observation is not None:
                 observation_symbols[symbol] = {"name": name, **observation}
@@ -512,28 +515,6 @@ def build_policy(
                 "entry_cap_comparison": result.get("entry_cap_comparison"),
             },
         }
-    watch_symbols = [
-        symbol
-        for symbol in symbols
-        if origins[symbol] == "operator_enrolled_research_watch"
-    ]
-    watch_symbols.sort(
-        key=lambda symbol: (
-            float((research["symbols"][symbol]).get("robust_calibration_score") or 0.0),
-            float(
-                ((research["symbols"][symbol]).get("holdout") or {}).get(
-                    "notional_weighted_ev_pct"
-                )
-                or 0.0
-            ),
-            symbol,
-        ),
-        reverse=True,
-    )
-    for symbol in watch_symbols[MAX_RESEARCH_WATCH_RUNTIME_SYMBOLS:]:
-        symbols.pop(symbol, None)
-        observation_symbols.pop(symbol, None)
-        quality_blocks[symbol] = "runtime_collector_capacity_cap"
     return {
         "schema": POLICY_SCHEMA,
         "status": (

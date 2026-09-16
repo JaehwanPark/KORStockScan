@@ -80,6 +80,17 @@ def prepare(*, holder, identity, signal_at, now, scope, timing_mode, policy_hash
         identity=identity,
         scope=dict(scope),
         signal_at=signal_at.isoformat(),
+        effective_venue=(
+            str(scope.get("route") or "").upper()
+            if str(scope.get("route") or "").upper() in {"KRX", "NXT"}
+            else (
+                "KRX_NXT_INTEGRATED"
+                if str(scope.get("route") or "").upper() == "SOR"
+                else "UNKNOWN"
+            )
+        ),
+        market_session=str(scope.get("session") or "UNKNOWN"),
+        route_identity_source="owner_exact_route_and_session_scope",
     )
     history = holder.get(KEY + "_history") or {}
     if not isinstance(identity, str) or not isinstance(history, dict):
@@ -181,6 +192,7 @@ def prepare(*, holder, identity, signal_at, now, scope, timing_mode, policy_hash
             symbol=scope["symbol"],
             route=scope["route"],
             cutoff_ms=previous["t0_ms"] + cp,
+            market_session=scope["session"],
         )
         if snapshot is None:
             decision["reason"] = reason
@@ -244,6 +256,7 @@ def final_check(*, holder, clock, validate_owner, save):
             route=state["scope"]["route"],
             cutoff_ms=_ms(now),
             require_latest=True,
+            market_session=state["scope"]["session"],
         )
         state["pre_transport"] = decision
         if decision.get("epoch") is not None and list(
