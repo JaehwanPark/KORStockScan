@@ -2101,11 +2101,27 @@ def test_explicit_fail_closed_rows_keep_provenance_but_allow_unevaluated_values(
     )
     assert "curr_vs_micro_vwap_bp" not in entry_violations["missing_fields"]
     assert (
+        "minute_candle_window_fresh_contract" not in entry_violations["invalid_fields"]
+    )
+    advisory_entry_fields = {
+        **entry_fields,
+        "source_stage": "blocked_ai_score",
+        "chosen_action": "NO_BUY_AI",
+        "ai_result_source": "live",
+        "ai_decision_evaluation_status": "evaluated",
+        "provider_called": True,
+    }
+    advisory_entry_violations = audit._row_contract_violations(
+        "scalp_entry_action_decision_snapshot",
+        {"fields": advisory_entry_fields},
+        entry_contract,
+    )
+    assert (
         "minute_candle_window_fresh_contract"
-        not in entry_violations["invalid_fields"]
+        not in advisory_entry_violations["invalid_fields"]
     )
     submitted_entry_fields = {
-        **entry_fields,
+        **advisory_entry_fields,
         "actual_order_submitted": True,
         "broker_order_forbidden": False,
     }

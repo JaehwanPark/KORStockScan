@@ -62,6 +62,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 LOG_PATH = PROJECT_ROOT / "logs" / "threshold_cycle_postclose_cron.log"
 ANALYTICS_DIR = PROJECT_ROOT / "data" / "analytics"
 VERIFY_DIR = REPORT_DIR / "threshold_cycle_postclose_verification"
+VERIFY_ATTEMPT_SUBDIR = "attempts"
 EXPLICIT_DISABLED_STAGE_ALLOWLIST = {
     "swing_lifecycle",
     "swing_strategy_discovery",
@@ -230,6 +231,128 @@ ENTRY_SUBMIT_DROUGHT_SUPPORTING_AXES = (
 def verification_report_paths(target_date: str) -> tuple[Path, Path]:
     base = VERIFY_DIR / f"threshold_cycle_postclose_verification_{target_date}"
     return base.with_suffix(".json"), base.with_suffix(".md")
+
+
+def _verification_failure_summary(report: dict[str, Any]) -> dict[str, Any]:
+    """Return bounded machine-readable reasons for wrapper/status custody."""
+
+    issues: list[str] = []
+    predecessor = report.get("predecessor_integrity")
+    if isinstance(predecessor, dict):
+        issues.extend(str(item) for item in predecessor.get("log_issues") or [])
+        issues.extend(str(item) for item in predecessor.get("timeouts") or [])
+    for key in (
+        "missing_required_artifacts",
+        "missing_downstream_links",
+        "stale_downstream_links",
+        "runtime_apply_gap_issues",
+        "source_generation_warnings",
+        "handoff_warnings",
+    ):
+        issues.extend(str(item) for item in report.get(key) or [])
+    for section_name, section in report.items():
+        if not isinstance(section, dict) or section.get("status") != "fail":
+            continue
+        section_issues: list[str] = []
+        for key in (
+            "issues",
+            "invalid_contract_reasons",
+            "missing",
+            "missing_fields",
+            "blocking_reasons",
+        ):
+            values = section.get(key)
+            if isinstance(values, list):
+                section_issues.extend(str(item) for item in values if str(item))
+        if section_issues:
+            issues.extend(f"{section_name}:{item}" for item in section_issues)
+        else:
+            issues.append(f"{section_name}:status_fail")
+    unique = sorted({item for item in issues if item and item != "None"})
+    return {
+        "status": str(report.get("status") or "unknown"),
+        "issue_count": len(unique),
+        "issues": unique[:200],
+        "truncated": len(unique) > 200,
+    }
+
+
+def _write_verification_receipts(
+    target_date: str,
+    report: dict[str, Any],
+    *,
+    invocation: dict[str, Any],
+) -> tuple[dict[str, Any], Path, Path, Path]:
+    """Write one immutable attempt and refresh the canonical latest view.
+
+    Recovery may replace the canonical report, but it cannot replace the
+    generation-scoped attempt.  The canonical view keeps the first failure
+    receipt so controller reconciliation cannot erase the original contract.
+    """
+
+    VERIFY_DIR.mkdir(parents=True, exist_ok=True)
+    attempt_dir = VERIFY_DIR / VERIFY_ATTEMPT_SUBDIR
+    attempt_dir.mkdir(parents=True, exist_ok=True)
+    json_path, md_path = verification_report_paths(target_date)
+    previous = _load_json(json_path) if json_path.exists() else {}
+    prior_first_failure = (
+        previous.get("first_failure_receipt")
+        if isinstance(previous.get("first_failure_receipt"), dict)
+        else None
+    )
+    generated = datetime.now().astimezone()
+    attempt_id = generated.strftime("%Y%m%dT%H%M%S%f%z")
+    attempt_base = attempt_dir / (
+        f"threshold_cycle_postclose_verification_{target_date}_{attempt_id}"
+    )
+    attempt_json = attempt_base.with_suffix(".json")
+    attempt_md = attempt_base.with_suffix(".md")
+    attempt_report = {
+        **report,
+        "verification_invocation": invocation,
+        "failure_summary": _verification_failure_summary(report),
+        "verification_attempt": {
+            "schema_version": 1,
+            "attempt_id": attempt_id,
+            "json_path": str(attempt_json),
+            "md_path": str(attempt_md),
+            "immutable": True,
+        },
+    }
+    attempt_payload = json.dumps(attempt_report, ensure_ascii=False, indent=2).encode(
+        "utf-8"
+    )
+    attempt_sha256 = hashlib.sha256(attempt_payload).hexdigest()
+    attempt_json_tmp = attempt_json.with_suffix(".json.tmp")
+    attempt_md_tmp = attempt_md.with_suffix(".md.tmp")
+    attempt_json_tmp.write_bytes(attempt_payload)
+    attempt_md_tmp.write_text(_render_markdown(attempt_report), encoding="utf-8")
+    attempt_json_tmp.replace(attempt_json)
+    attempt_md_tmp.replace(attempt_md)
+    receipt = {
+        **attempt_report["verification_attempt"],
+        "status": str(report.get("status") or "unknown"),
+        "generated_at": str(report.get("generated_at") or generated.isoformat()),
+        "json_sha256": attempt_sha256,
+        "failure_summary": attempt_report["failure_summary"],
+    }
+    first_failure = prior_first_failure
+    if report.get("status") == "fail" and first_failure is None:
+        first_failure = receipt
+    canonical_report = {
+        **attempt_report,
+        "verification_attempt": receipt,
+        "first_failure_receipt": first_failure,
+    }
+    canonical_json_tmp = json_path.with_name(f".{json_path.name}.{attempt_id}.tmp")
+    canonical_md_tmp = md_path.with_name(f".{md_path.name}.{attempt_id}.tmp")
+    canonical_json_tmp.write_text(
+        json.dumps(canonical_report, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    canonical_md_tmp.write_text(_render_markdown(canonical_report), encoding="utf-8")
+    canonical_json_tmp.replace(json_path)
+    canonical_md_tmp.replace(md_path)
+    return canonical_report, json_path, md_path, attempt_json
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -2636,36 +2759,12 @@ def _raw_row_exclusion_handoff_status(
     *,
     workorder: dict[str, Any],
 ) -> dict[str, Any]:
-    preflight_summary = (
-        preflight.get("summary") if isinstance(preflight.get("summary"), dict) else {}
-    )
     raw_exclusion = (
         preflight.get("raw_row_exclusion")
         if isinstance(preflight.get("raw_row_exclusion"), dict)
         else {}
     )
     excluded_row_count = int(raw_exclusion.get("excluded_row_count") or 0)
-    revalidation_count_fields = {
-        "hard_blocking_contract_gap_count",
-        "current_scan_hard_blocking_excluded_row_count",
-        "post_exclusion_hard_blocking_excluded_row_count",
-    }
-    revalidation_closed = (
-        preflight.get("status") in {"pass", "warning"}
-        and preflight_summary.get("tuning_input_allowed") is True
-        and revalidation_count_fields.issubset(preflight_summary)
-        and int(preflight_summary.get("hard_blocking_contract_gap_count") or 0) == 0
-        and int(
-            preflight_summary.get("current_scan_hard_blocking_excluded_row_count") or 0
-        )
-        == 0
-        and int(
-            preflight_summary.get("post_exclusion_hard_blocking_excluded_row_count")
-            or 0
-        )
-        == 0
-        and preflight_summary.get("raw_row_exclusion_revalidation_required") is False
-    )
     if excluded_row_count <= 0:
         return {
             "status": "pass",
@@ -2696,10 +2795,6 @@ def _raw_row_exclusion_handoff_status(
             or item.get("route") == "source_quality_raw_row_exclusion_producer_fix"
             or item.get("route") == "review_required_limit_up_locked_context"
             or item.get("route") == "review_required_market_halt_context"
-            or item.get("improvement_type")
-            == "source_quality_raw_row_exclusion_revalidated_closed"
-            or item.get("route")
-            == "source_quality_raw_row_exclusion_revalidated_closed"
         )
     ]
     review_only_matching_orders = [
@@ -2717,12 +2812,6 @@ def _raw_row_exclusion_handoff_status(
             == "source_quality_raw_row_exclusion_market_halt_context"
             or item.get("route") == "review_required_limit_up_locked_context"
             or item.get("route") == "review_required_market_halt_context"
-            or item.get("raw_row_exclusion_context_classification")
-            == "post_exclusion_revalidation_closed"
-            or item.get("improvement_type")
-            == "source_quality_raw_row_exclusion_revalidated_closed"
-            or item.get("route")
-            == "source_quality_raw_row_exclusion_revalidated_closed"
         )
     ]
     matching_orders: list[dict[str, Any]] = []
@@ -2739,33 +2828,6 @@ def _raw_row_exclusion_handoff_status(
         matching_orders.append(item)
     invalid_contract_reasons: list[str] = []
     for item in matching_orders:
-        is_revalidation_closed_order = (
-            item.get("raw_row_exclusion_context_classification")
-            == "post_exclusion_revalidation_closed"
-            or item.get("improvement_type")
-            == "source_quality_raw_row_exclusion_revalidated_closed"
-            or item.get("route")
-            == "source_quality_raw_row_exclusion_revalidated_closed"
-        )
-        if is_revalidation_closed_order:
-            if not revalidation_closed:
-                invalid_contract_reasons.append(
-                    "raw_row_exclusion_revalidation_not_closed"
-                )
-                continue
-            if str(item.get("decision") or "") != "attach_existing_family":
-                invalid_contract_reasons.append(
-                    "revalidation_closed_decision_not_existing_family"
-                )
-                continue
-            if item.get("runtime_effect") is not False:
-                invalid_contract_reasons.append("runtime_effect_not_false")
-                continue
-            if item.get("allowed_runtime_apply") is not False:
-                invalid_contract_reasons.append("allowed_runtime_apply_not_false")
-                continue
-            invalid_contract_reasons = []
-            break
         if (
             item.get("raw_row_exclusion_context_classification")
             == "limit_up_locked_context"
@@ -2837,18 +2899,9 @@ def _raw_row_exclusion_handoff_status(
                 or item.get("route") == "review_required_market_halt_context"
             )
         ),
-        "revalidation_closed_count": sum(
-            1
-            for item in matching_orders
-            if isinstance(item, dict)
-            and (
-                item.get("raw_row_exclusion_context_classification")
-                == "post_exclusion_revalidation_closed"
-                or item.get("improvement_type")
-                == "source_quality_raw_row_exclusion_revalidated_closed"
-                or item.get("route")
-                == "source_quality_raw_row_exclusion_revalidated_closed"
-            )
+        "revalidation_closed_count": 0,
+        "producer_gap_closure_contract": (
+            "row_exclusion_revalidation_closes_data_sanitation_only; producer repair remains implement_now"
         ),
         "runtime_effect": False,
         "allowed_runtime_apply": False,
@@ -9703,18 +9756,25 @@ def main() -> None:
         require_summary_handoff=args.require_summary_handoff,
         allow_pending_entry_replay=args.allow_pending_entry_replay,
     )
-    VERIFY_DIR.mkdir(parents=True, exist_ok=True)
-    json_path, md_path = verification_report_paths(args.date)
-    json_path.write_text(
-        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+    report, json_path, md_path, attempt_json_path = _write_verification_receipts(
+        args.date,
+        report,
+        invocation={
+            "require_done_marker": not args.allow_pending_done_marker,
+            "allow_pending_done_marker": args.allow_pending_done_marker,
+            "allow_pending_entry_replay": args.allow_pending_entry_replay,
+            "require_summary_handoff": args.require_summary_handoff,
+            "disabled_stages": sorted(set(args.disabled_stage)),
+        },
     )
-    md_path.write_text(_render_markdown(report), encoding="utf-8")
     print(
         json.dumps(
             {
                 "status": report.get("status"),
                 "json": str(json_path),
                 "md": str(md_path),
+                "attempt_json": str(attempt_json_path),
+                "failure_summary": report.get("failure_summary"),
             },
             ensure_ascii=False,
         )

@@ -5742,6 +5742,18 @@ def _blocked_observation_records_fail_closed_source_gap(
             and _contract_bool(fields.get("runtime_effect"), False)
             and _contract_bool(fields.get("allowed_runtime_apply"), False)
         )
+        advisory_non_submit_source_gap = bool(
+            str(fields.get("chosen_action") or "").strip().upper()
+            in {
+                "NO_BUY_AI",
+                "SKIP_SOURCE_QUALITY",
+                "SKIP_STALE",
+                "SKIP_PRE_SUBMIT_SAFETY",
+                "WAIT_REQUOTE",
+            }
+            and not _contract_bool(fields.get("runtime_effect"), True)
+            and not _contract_bool(fields.get("allowed_runtime_apply"), True)
+        )
         return (
             (
                 source_stage == "latency_block"
@@ -5749,6 +5761,7 @@ def _blocked_observation_records_fail_closed_source_gap(
                 or provider_transport_failed_closed
                 or final_source_quality_blocked
                 or explicit_provider_not_evaluated
+                or advisory_non_submit_source_gap
             )
             and str(fields.get("minute_candle_evaluation_state") or "").strip().lower()
             == "unavailable_fail_closed"

@@ -304,6 +304,8 @@ AUTOMATION_TRIGGER_DECISION_REPORT_JSON="$PROJECT_DIR/data/report/automation_cha
 AUTOMATION_TRIGGER_DECISION_CACHE_MARKER="$PROJECT_DIR/tmp/automation_trigger_decision_${TARGET_DATE}_$$.cached"
 AUTOMATION_TRIGGER_DECISION_OUTPUT_TEMP="$PROJECT_DIR/tmp/automation_trigger_decision_${TARGET_DATE}_$$.out"
 BACKFILL_OUTPUT_TEMP="$PROJECT_DIR/tmp/threshold_cycle_backfill_${TARGET_DATE}_$$.out"
+POSTCLOSE_FAILURE_REASON=""
+POSTCLOSE_FAILURE_ARTIFACT=""
 
 mkdir -p "$PROJECT_DIR/logs" "$STATUS_DIR" "$PROJECT_DIR/tmp"
 rm -f "$AUTOMATION_TRIGGER_DECISION_CACHE_MARKER"
@@ -314,15 +316,16 @@ write_postclose_status() {
   local reason="${2:-}"
   local exit_code="${3:-0}"
   local finished="${4:-0}"
-  "$VENV_PY" - "$STATUS_FILE" "$TARGET_DATE" "$status" "$reason" "$exit_code" "$finished" "$AI_CORRECTION_PROVIDER" "$AI_CORRECTION_FINAL_STATUS" <<'PY'
+  local failure_artifact="${POSTCLOSE_FAILURE_ARTIFACT:-}"
+  "$VENV_PY" - "$STATUS_FILE" "$TARGET_DATE" "$status" "$reason" "$exit_code" "$finished" "$AI_CORRECTION_PROVIDER" "$AI_CORRECTION_FINAL_STATUS" "$failure_artifact" <<'PY'
 import json
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 path = Path(sys.argv[1])
-target_date, status, reason, exit_code, finished, ai_provider, ai_status = sys.argv[2:9]
+target_date, status, reason, exit_code, finished, ai_provider, ai_status, failure_artifact = sys.argv[2:10]
 payload = {}
 if path.exists():
     try:
@@ -353,6 +356,36 @@ payload.update(
     }
 )
 payload.setdefault("started_at", payload["updated_at"])
+if status == "failed" and failure_artifact:
+    artifact_path = Path(failure_artifact)
+    try:
+        verifier = json.loads(artifact_path.read_text(encoding="utf-8"))
+    except Exception:
+        verifier = {}
+    payload["failure_artifact"] = str(artifact_path)
+    artifact_fresh = False
+    try:
+        artifact_fresh = (
+            verifier.get("date") == target_date
+            and verifier.get("status") == "fail"
+            and isinstance(verifier.get("verification_attempt"), dict)
+            and verifier["verification_attempt"].get("immutable") is True
+            and 0 <= datetime.now(timezone.utc).timestamp() - artifact_path.stat().st_mtime <= 300
+        )
+    except Exception:
+        artifact_fresh = False
+    if isinstance(verifier, dict) and artifact_fresh:
+        payload["verifier_failure_receipt"] = {
+            "canonical_artifact": str(artifact_path),
+            "verification_attempt": verifier.get("verification_attempt"),
+            "first_failure_receipt": verifier.get("first_failure_receipt"),
+            "failure_summary": verifier.get("failure_summary"),
+        }
+    else:
+        payload["verifier_failure_receipt"] = {
+            "canonical_artifact": str(artifact_path),
+            "artifact_status": "missing_stale_or_not_fail",
+        }
 if finished == "1":
     payload["finished_at"] = payload["updated_at"]
 else:
@@ -505,7 +538,11 @@ mark_postclose_failed() {
   local failed_at
   failed_at="$(TZ=Asia/Seoul date +%FT%T%z)"
   write_postclose_status failed "$reason" "$rc" 1 || true
-  emit_postclose_marker "[FAIL] threshold-cycle postclose target_date=$TARGET_DATE reason=$reason failed_at=$failed_at"
+  local artifact_text=""
+  if [ -n "${POSTCLOSE_FAILURE_ARTIFACT:-}" ]; then
+    artifact_text=" artifact=$POSTCLOSE_FAILURE_ARTIFACT"
+  fi
+  emit_postclose_marker "[FAIL] threshold-cycle postclose target_date=$TARGET_DATE reason=$reason${artifact_text} failed_at=$failed_at"
 }
 
 cleanup_threshold_cycle_snapshot_temp() {
@@ -526,7 +563,7 @@ cleanup_threshold_cycle_snapshot_temp() {
   cleanup_wrapper_snapshot
 }
 
-trap 'rc=$?; mark_postclose_failed command_failed "$rc"; restart_postclose_bot_if_requested; exit "$rc"' ERR
+trap 'rc=$?; mark_postclose_failed "${POSTCLOSE_FAILURE_REASON:-command_failed}" "$rc"; restart_postclose_bot_if_requested; exit "$rc"' ERR
 trap 'cleanup_threshold_cycle_snapshot_temp' EXIT
 POSTCLOSE_OPERATING=true
 
@@ -2534,11 +2571,15 @@ wait_for_postclose_resources "build_next_stage2_checklist_final_refresh"
 run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.build_next_stage2_checklist --source-date "$TARGET_DATE"
 wait_for_file_artifact "$(next_stage2_checklist_path)" "next_stage2_checklist_final_refresh"
 wait_for_postclose_resources "verify_threshold_cycle_postclose_chain"
+POSTCLOSE_FAILURE_REASON="verify_threshold_cycle_postclose_chain_failed"
+POSTCLOSE_FAILURE_ARTIFACT="$PROJECT_DIR/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_${TARGET_DATE}.json"
 run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.verify_threshold_cycle_postclose_chain \
   --date "$TARGET_DATE" \
   --allow-pending-done-marker \
   --allow-pending-entry-replay \
   "${VERIFY_DISABLED_STAGE_ARGS[@]}"
+POSTCLOSE_FAILURE_REASON=""
+POSTCLOSE_FAILURE_ARTIFACT=""
 wait_for_report_artifact \
   "$PROJECT_DIR/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_${TARGET_DATE}.json" \
   "$PROJECT_DIR/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_${TARGET_DATE}.md" \
@@ -2549,10 +2590,14 @@ write_postclose_status succeeded completed 0 1
 emit_postclose_marker "[STATUS] intraday_ws_freshness_finalize target_date=$TARGET_DATE enabled=$RUN_INTRADAY_WS_FRESHNESS_FINALIZE runtime_effect=false"
 emit_postclose_marker "[DONE] threshold-cycle postclose target_date=$TARGET_DATE ai_correction_provider=$AI_CORRECTION_PROVIDER panic_sell_defense=$RUN_PANIC_SELL_DEFENSE_REPORT market_panic_breadth=$RUN_MARKET_PANIC_BREADTH_REPORT pipeline_event_verbosity=$RUN_PIPELINE_EVENT_VERBOSITY_REPORT limit_down_watch_report=$RUN_LIMIT_DOWN_WATCH_REPORT observation_source_quality_audit=$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT scanner_lookup_attention_tuning=$SCANNER_LOOKUP_ATTENTION_TUNING_EXECUTED opening_rotation_profile_tuning=$RUN_OPENING_ROTATION_PROFILE_TUNING ai_decision_quality_daily_materialization=$RUN_AI_DECISION_QUALITY_DAILY_MATERIALIZATION main_ai_quality_r0_r3=$RUN_MAIN_AI_QUALITY_R0_R3 main_ai_prompt_optimizer=$RUN_MAIN_AI_PROMPT_OPTIMIZER main_ai_prompt_consumer=$RUN_MAIN_AI_PROMPT_CONSUMER main_ai_quality_provider_replay=$MAIN_AI_QUALITY_EXECUTE_PROVIDER_REPLAY ai_decision_action_outcome_calibration=$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION codebase_performance_workorder=$RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT pattern_lab_currentness_audit=$RUN_PATTERN_LAB_CURRENTNESS_AUDIT pattern_lab_ai_review=$RUN_PATTERN_LAB_AI_REVIEW time_window_regime_counterfactual=$RUN_TIME_WINDOW_REGIME_COUNTERFACTUAL producer_gap_discovery=$RUN_PRODUCER_GAP_DISCOVERY stage_hook_workorder_discovery=$RUN_STAGE_HOOK_WORKORDER_DISCOVERY stage_hook_runtime_scaffold=$RUN_STAGE_HOOK_RUNTIME_SCAFFOLD pattern_lab_propagation_audit=$RUN_PATTERN_LAB_PROPAGATION_AUDIT scalp_entry_adm=$RUN_SCALP_ENTRY_ADM entry_split_order_plan=$RUN_ENTRY_SPLIT_ORDER_PLAN scale_in_split_order_plan=$RUN_SCALE_IN_SPLIT_ORDER_PLAN entry_recheck_drought_controller=$RUN_ENTRY_RECHECK_DROUGHT_CONTROLLER entry_ai_gate_backtest=$RUN_ENTRY_AI_GATE_BACKTEST entry_ai_gate_backtest_schedule=$ENTRY_AI_GATE_BACKTEST_SCHEDULE rising_missed_intraday_feedback_postclose=$RUN_RISING_MISSED_INTRADAY_FEEDBACK_POSTCLOSE rising_missed_scout_workorder=$RUN_RISING_MISSED_SCOUT_WORKORDER scalping_pyramid_intraday_feedback_postclose=$RUN_SCALPING_PYRAMID_INTRADAY_FEEDBACK_POSTCLOSE scalping_pyramid_quality_calibration=$RUN_SCALPING_PYRAMID_QUALITY_CALIBRATION scalping_avg_down_recovery_calibration=$RUN_SCALPING_AVG_DOWN_RECOVERY_CALIBRATION rising_missed_classifier_prior=$RUN_RISING_MISSED_CLASSIFIER_PRIOR samsung_machine_entry_tuning=$RUN_SAMSUNG_MACHINE_ENTRY_TUNING low_price_two_leg_tuning=$RUN_LOW_PRICE_TWO_LEG_TUNING low_price_two_leg_candidate_recommendation=$RUN_LOW_PRICE_TWO_LEG_CANDIDATE_RECOMMENDATION one_share_threshold_opportunity=$RUN_ONE_SHARE_THRESHOLD_OPPORTUNITY one_share_threshold_opportunity_ai_provider=$ONE_SHARE_THRESHOLD_OPPORTUNITY_AI_PROVIDER institutional_flow_context=$RUN_INSTITUTIONAL_FLOW_CONTEXT microstructure_reaction_context=$RUN_MICROSTRUCTURE_REACTION_CONTEXT lifecycle_decision_matrix=$RUN_LIFECYCLE_DECISION_MATRIX lifecycle_ai_context=$RUN_LIFECYCLE_AI_CONTEXT ldm_hypothesis_parent_refinement=$RUN_LDM_HYPOTHESIS_PARENT_REFINEMENT lifecycle_bucket_discovery=$RUN_LIFECYCLE_BUCKET_DISCOVERY lifecycle_bucket_windows=$RUN_LIFECYCLE_BUCKET_WINDOWS lifecycle_bucket_window_list=$LIFECYCLE_BUCKET_WINDOWS lifecycle_bucket_promotion_window=$LIFECYCLE_BUCKET_PROMOTION_WINDOW force_lifecycle_bucket_windows=$FORCE_LIFECYCLE_BUCKET_WINDOWS force_deep_audits=$FORCE_DEEP_AUDITS force_workorder_branch=$FORCE_WORKORDER_BRANCH runtime_apply_bridge=$RUN_RUNTIME_APPLY_BRIDGE latency_classifier_recommendation=$RUN_LATENCY_CLASSIFIER_RECOMMENDATION tuning_performance_control_tower=$RUN_TUNING_PERFORMANCE_CONTROL_TOWER swing_lifecycle=$RUN_SWING_LIFECYCLE_AUDIT swing_strategy_discovery=$RUN_SWING_STRATEGY_DISCOVERY swing_lifecycle_matrix=$RUN_SWING_LIFECYCLE_MATRIX swing_lifecycle_bucket_discovery=$RUN_SWING_LIFECYCLE_BUCKET_DISCOVERY swing_ai_review_provider=$SWING_THRESHOLD_AI_REVIEW_PROVIDER swing_lifecycle_bucket_discovery_ai_provider=$SWING_LIFECYCLE_BUCKET_DISCOVERY_AI_PROVIDER pattern_lab_ai_review_provider=$PATTERN_LAB_AI_REVIEW_PROVIDER producer_gap_discovery_ai_provider=$PRODUCER_GAP_DISCOVERY_AI_PROVIDER stage_hook_workorder_discovery_ai_provider=$STAGE_HOOK_WORKORDER_DISCOVERY_AI_PROVIDER pattern_labs=$RUN_PATTERN_LABS deepseek_swing_lab=$RUN_DEEPSEEK_SWING_LAB code_improvement_workorder=$BUILD_CODE_IMPROVEMENT_WORKORDER daily_ev=true runtime_approval_summary=true runtime_apply_gap_audit=true key_lineage_ledger=true conversion_lane=true next_stage2_checklist=true finished_at=$finished_at"
 wait_for_postclose_resources "verify_threshold_cycle_postclose_chain_final"
+POSTCLOSE_FAILURE_REASON="verify_threshold_cycle_postclose_chain_final_failed"
+POSTCLOSE_FAILURE_ARTIFACT="$PROJECT_DIR/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_${TARGET_DATE}.json"
 run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.verify_threshold_cycle_postclose_chain \
   --date "$TARGET_DATE" \
   --allow-pending-entry-replay \
   "${VERIFY_DISABLED_STAGE_ARGS[@]}"
+POSTCLOSE_FAILURE_REASON=""
+POSTCLOSE_FAILURE_ARTIFACT=""
 wait_for_report_artifact \
   "$PROJECT_DIR/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_${TARGET_DATE}.json" \
   "$PROJECT_DIR/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_${TARGET_DATE}.md" \

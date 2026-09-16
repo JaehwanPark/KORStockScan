@@ -3503,7 +3503,7 @@ def test_observation_source_quality_raw_row_exclusion_routes_even_when_audit_sta
     )
 
 
-def test_observation_source_quality_closed_revalidation_attaches_existing_family():
+def test_observation_source_quality_closed_data_revalidation_keeps_producer_gap_open():
     report = {
         "status": "pass",
         "summary": {
@@ -3537,15 +3537,15 @@ def test_observation_source_quality_closed_revalidation_attaches_existing_family
         )
     )
 
-    assert classified["decision"] == "attach_existing_family"
-    assert classified["route"] == (
-        "source_quality_raw_row_exclusion_revalidated_closed"
+    assert classified["decision"] == "implement_now"
+    assert classified["route"] == "source_quality_raw_row_exclusion_producer_fix"
+    assert classified["implementation_status"] is None
+    assert classified["terminal_disposition"] is None
+    assert classified["raw_row_exclusion_context_classification"] is None
+    assert classified["raw_row_exclusion_data_sanitation_revalidated"] is True
+    assert classified["producer_gap_closure_contract"] == (
+        "producer_fix_receipt_plus_post_fix_natural_zero_recurrence_required"
     )
-    assert classified["implementation_status"] == "terminal_existing_family_evidence"
-    assert classified["raw_row_exclusion_context_classification"] == (
-        "post_exclusion_revalidation_closed"
-    )
-    assert classified["terminal_disposition"] == "implemented_revalidation_closed"
     assert classified["runtime_effect"] is False
     assert classified["allowed_runtime_apply"] is False
     from src.engine.verify_threshold_cycle_postclose_chain import (
@@ -3553,14 +3553,15 @@ def test_observation_source_quality_closed_revalidation_attaches_existing_family
     )
 
     handoff = _raw_row_exclusion_handoff_status(
-        report, workorder={"orders": [], "non_selected_orders": [classified]}
+        report, workorder={"orders": [classified], "non_selected_orders": []}
     )
     assert handoff["status"] == "pass"
     assert handoff["invalid_contract_reasons"] == []
-    assert not codex_workorder_runner.is_safe_implement_now(classified)
+    assert handoff["revalidation_closed_count"] == 0
+    assert codex_workorder_runner.is_safe_implement_now(classified)
 
 
-def test_observation_source_quality_closed_revalidation_ignores_unrelated_warning():
+def test_observation_source_quality_closed_data_revalidation_with_warning_keeps_gap_open():
     report = {
         "status": "warning",
         "summary": {
@@ -3596,15 +3597,13 @@ def test_observation_source_quality_closed_revalidation_ignores_unrelated_warnin
         )
     )
 
-    assert classified["decision"] == "attach_existing_family"
-    assert classified["route"] == (
-        "source_quality_raw_row_exclusion_revalidated_closed"
-    )
-    assert classified["implementation_status"] == "terminal_existing_family_evidence"
-    assert classified["raw_row_exclusion_context_classification"] == (
-        "post_exclusion_revalidation_closed"
-    )
-    assert not codex_workorder_runner.is_safe_implement_now(classified)
+    assert classified["decision"] == "implement_now"
+    assert classified["route"] == "source_quality_raw_row_exclusion_producer_fix"
+    assert classified["implementation_status"] is None
+    assert classified["terminal_disposition"] is None
+    assert classified["raw_row_exclusion_context_classification"] is None
+    assert classified["raw_row_exclusion_data_sanitation_revalidated"] is True
+    assert codex_workorder_runner.is_safe_implement_now(classified)
 
 
 def test_observation_source_quality_warning_missing_revalidation_counts_stays_open():
@@ -3640,6 +3639,35 @@ def test_observation_source_quality_warning_missing_revalidation_counts_stays_op
     assert classified["decision"] == "implement_now"
     assert classified["route"] == "source_quality_raw_row_exclusion_producer_fix"
     assert classified["implementation_status"] is None
+
+
+def test_legacy_raw_row_exclusion_revalidation_closure_is_reopened_for_producer_fix():
+    order = {
+        "order_id": "order_observation_source_quality_raw_row_exclusion_producer_gap",
+        "source_report_type": "observation_source_quality_audit",
+        "mapped_family": "observation_source_quality_audit",
+        "improvement_type": "source_quality_raw_row_exclusion_revalidated_closed",
+        "route": "source_quality_raw_row_exclusion_revalidated_closed",
+        "confidence": "audit",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "forbidden_uses": ["runtime_threshold_apply"],
+    }
+
+    classified = mod._serialize_classified_order(
+        mod._classify_order(
+            order,
+            finding_by_order_id={},
+            finding_by_title_slug={},
+            auto_family_order_ids=set(),
+            closed_instrumentation_order_families={},
+        )
+    )
+
+    assert classified["decision"] == "implement_now"
+    assert classified["route"] == "source_quality_raw_row_exclusion_producer_fix"
+    assert classified["implementation_status"] is None
+    assert classified["terminal_disposition"] is None
 
 
 def test_observation_source_quality_known_fixed_unknown_tokens_attach_existing_family():

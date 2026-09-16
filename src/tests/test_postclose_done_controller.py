@@ -1053,7 +1053,17 @@ def test_postclose_done_controller_reconciles_repaired_failed_status_without_ful
         report_dir
         / "threshold_cycle_postclose_status"
         / "threshold_cycle_postclose_2026-06-03.status.json",
-        {"status": "failed", "reason": "command_failed"},
+        {
+            "status": "failed",
+            "reason": "verify_threshold_cycle_postclose_chain_failed",
+            "verifier_failure_receipt": {
+                "first_failure_receipt": {
+                    "attempt_id": "20260603T181000000000+0900",
+                    "json_sha256": "a" * 64,
+                },
+                "failure_summary": {"issues": ["runtime_apply_gap_audit:status_fail"]},
+            },
+        },
     )
     log_path.parent.mkdir(parents=True)
     log_path.write_text(
@@ -1164,6 +1174,19 @@ def test_postclose_done_controller_reconciles_repaired_failed_status_without_ful
         cmd[:2] == ["bash", "deploy/run_threshold_cycle_postclose.sh"] for cmd in calls
     )
     assert report["full_wrapper_rerun_used"] is False
+    reconciled_status = json.loads(
+        (
+            report_dir
+            / "threshold_cycle_postclose_status"
+            / "threshold_cycle_postclose_2026-06-03.status.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert (
+        reconciled_status["verifier_failure_receipt"]["first_failure_receipt"][
+            "attempt_id"
+        ]
+        == "20260603T181000000000+0900"
+    )
 
 
 def test_postclose_done_controller_repairs_failed_tail_stage_without_full_wrapper_rerun(

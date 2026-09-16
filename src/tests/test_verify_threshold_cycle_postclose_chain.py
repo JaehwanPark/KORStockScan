@@ -12,6 +12,49 @@ from src.engine.scalping import ai_action_outcome_calibration as calibration
 from src.engine.scalping.micro_reversion import main_ai_prompt_optimizer as optimizer
 
 
+def test_verifier_attempt_receipt_preserves_first_failure_across_recovery(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(mod, "VERIFY_DIR", tmp_path / "verification")
+    target_date = "2026-09-15"
+    failed = {
+        "date": target_date,
+        "generated_at": "2026-09-15T22:14:15+09:00",
+        "status": "fail",
+        "missing_required_artifacts": ["runtime_summary"],
+        "predecessor_integrity": {"status": "pass", "log_issues": []},
+    }
+
+    first, _, _, first_attempt_path = mod._write_verification_receipts(
+        target_date,
+        failed,
+        invocation={"allow_pending_done_marker": True},
+    )
+    first_bytes = first_attempt_path.read_bytes()
+    recovered, _, _, second_attempt_path = mod._write_verification_receipts(
+        target_date,
+        {
+            "date": target_date,
+            "generated_at": "2026-09-15T23:11:21+09:00",
+            "status": "warning",
+            "predecessor_integrity": {"status": "pass", "log_issues": []},
+        },
+        invocation={"allow_pending_done_marker": False},
+    )
+
+    assert first_attempt_path != second_attempt_path
+    assert first_attempt_path.read_bytes() == first_bytes
+    assert first["first_failure_receipt"]["json_path"] == str(first_attempt_path)
+    assert recovered["first_failure_receipt"] == first["first_failure_receipt"]
+    assert recovered["verification_attempt"]["status"] == "warning"
+    assert recovered["first_failure_receipt"]["failure_summary"]["issues"] == [
+        "runtime_summary"
+    ]
+    assert recovered["first_failure_receipt"]["json_sha256"] == (
+        mod.hashlib.sha256(first_bytes).hexdigest()
+    )
+
+
 def test_retired_latency_is_not_an_ai_candidate_or_an_exemption():
     stale = {
         "family": "latency_classifier_runtime_profile",
@@ -2341,7 +2384,7 @@ def test_raw_row_exclusion_handoff_passes_with_market_halt_review_only_context()
     assert status["review_only_context_count"] == 1
 
 
-def test_raw_row_exclusion_handoff_passes_after_final_revalidation_closed():
+def test_raw_row_exclusion_handoff_keeps_producer_gap_after_data_revalidation():
     status = mod._raw_row_exclusion_handoff_status(
         {
             "status": "pass",
@@ -2360,16 +2403,12 @@ def test_raw_row_exclusion_handoff_passes_after_final_revalidation_closed():
                     "order_id": (
                         "order_observation_source_quality_raw_row_exclusion_producer_gap"
                     ),
-                    "improvement_type": (
-                        "source_quality_raw_row_exclusion_revalidated_closed"
-                    ),
-                    "route": "source_quality_raw_row_exclusion_revalidated_closed",
-                    "raw_row_exclusion_context_classification": (
-                        "post_exclusion_revalidation_closed"
-                    ),
-                    "decision": "attach_existing_family",
+                    "improvement_type": "source_quality_raw_row_exclusion_producer_gap",
+                    "route": "source_quality_raw_row_exclusion_producer_fix",
+                    "decision": "implement_now",
                     "runtime_effect": False,
                     "allowed_runtime_apply": False,
+                    "forbidden_uses": ["runtime_threshold_apply"],
                 }
             ]
         },
@@ -2377,10 +2416,10 @@ def test_raw_row_exclusion_handoff_passes_after_final_revalidation_closed():
 
     assert status["status"] == "pass"
     assert status["workorder_handoff_present"] is True
-    assert status["revalidation_closed_count"] == 1
+    assert status["revalidation_closed_count"] == 0
 
 
-def test_raw_row_exclusion_handoff_ignores_unrelated_preflight_warning():
+def test_raw_row_exclusion_handoff_keeps_producer_gap_with_unrelated_warning():
     status = mod._raw_row_exclusion_handoff_status(
         {
             "status": "warning",
@@ -2399,13 +2438,12 @@ def test_raw_row_exclusion_handoff_ignores_unrelated_preflight_warning():
                     "order_id": (
                         "order_observation_source_quality_raw_row_exclusion_producer_gap"
                     ),
-                    "improvement_type": (
-                        "source_quality_raw_row_exclusion_revalidated_closed"
-                    ),
-                    "route": "source_quality_raw_row_exclusion_revalidated_closed",
-                    "decision": "attach_existing_family",
+                    "improvement_type": "source_quality_raw_row_exclusion_producer_gap",
+                    "route": "source_quality_raw_row_exclusion_producer_fix",
+                    "decision": "implement_now",
                     "runtime_effect": False,
                     "allowed_runtime_apply": False,
+                    "forbidden_uses": ["runtime_threshold_apply"],
                 }
             ]
         },
@@ -2441,10 +2479,7 @@ def test_raw_row_exclusion_handoff_warning_missing_counts_stays_open():
     )
 
     assert status["status"] == "fail"
-    assert (
-        "raw_row_exclusion_revalidation_not_closed"
-        in status["invalid_contract_reasons"]
-    )
+    assert "decision_not_implement_now" in status["invalid_contract_reasons"]
 
 
 def test_raw_row_exclusion_handoff_rejects_stale_revalidation_closed_order():
@@ -2475,10 +2510,7 @@ def test_raw_row_exclusion_handoff_rejects_stale_revalidation_closed_order():
     )
 
     assert status["status"] == "fail"
-    assert (
-        "raw_row_exclusion_revalidation_not_closed"
-        in status["invalid_contract_reasons"]
-    )
+    assert "decision_not_implement_now" in status["invalid_contract_reasons"]
 
 
 def test_raw_row_exclusion_handoff_fails_when_order_is_non_selected_only():

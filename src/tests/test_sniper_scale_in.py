@@ -15683,6 +15683,71 @@ def test_entry_adm_submitted_stage_uses_buy_action_despite_warning_dimension():
     )
 
 
+def test_entry_adm_snapshot_drops_numeric_micro_vwap_when_provenance_is_unusable(
+    monkeypatch,
+):
+    emitted = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: emitted.append((stage, fields)),
+    )
+
+    state_handlers._emit_scalp_entry_adm_snapshot(
+        {"id": 1, "strategy": "SCALPING"},
+        "123456",
+        "blocked_ai_score",
+        extra_fields={
+            "curr_vs_micro_vwap_bp": 0.0,
+            "micro_vwap_available": False,
+            "minute_candle_window_fresh": False,
+            "minute_candle_latest_age_ms": -1.0,
+        },
+    )
+
+    assert emitted[-1][0] == "scalp_entry_action_decision_snapshot"
+    fields = emitted[-1][1]
+    assert fields["curr_vs_micro_vwap_bp"] == "not_evaluated"
+    assert fields["minute_candle_evaluation_state"] == "unavailable_fail_closed"
+    assert fields["entry_action_final_decision"] == "OBSERVE_ONLY"
+    assert fields["chosen_action"] == "NO_BUY_AI"
+    from src.engine import observation_source_quality_audit as source_audit
+
+    assert not source_audit._micro_vwap_provenance_unusable(
+        fields, stage="scalp_entry_action_decision_snapshot"
+    )
+
+
+def test_entry_receipt_market_axes_use_exact_receive_session_over_stale_stock_axes():
+    received_at = datetime(
+        2026, 9, 16, 14, 33, tzinfo=state_handlers._KST
+    ).isoformat()
+
+    fields = receipts._probe_venue_provenance_fields(
+        {
+            "broker_execution_received_at": received_at,
+            "decision_market_scope": "NXT",
+            "market_session_regime": "NXT_AFTERMARKET_SOLO",
+            "market_data_route": "nxt_only",
+            "entry_execution_broker_route": "SOR",
+        }
+    )
+
+    assert fields["decision_market_scope"] == "KRX"
+    assert fields["market_session_regime"] == "KRX_REGULAR"
+    assert fields["market_data_route"] == "krx_only"
+    assert fields["session_contract_version"] == "market_session_contract_v2"
+    from src.engine import observation_source_quality_audit as source_audit
+
+    contract = source_audit.STAGE_CONTRACTS["holding_started"]
+    contract_fields = {field: "observed" for field in contract.required_fields}
+    contract_fields.update(fields)
+    violations = source_audit._row_contract_violations(
+        "holding_started", {"fields": contract_fields}, contract
+    )
+    assert "aftermarket_market_axes_contract" not in violations["invalid_fields"]
+
+
 def test_extract_broker_order_no_accepts_flat_and_nested_response_keys():
     assert state_handlers._extract_broker_order_no({"ord_no": "O1"}) == "O1"
     assert state_handlers._extract_broker_order_no({"order_no": "O2"}) == "O2"
@@ -20358,7 +20423,19 @@ def test_reversal_add_post_eval_starts_on_execution_receipt(
     receipts.ACTIVE_TARGETS.append(target_stock)
 
     receipts.handle_real_execution(
-        {"code": "123456", "type": "BUY", "order_no": "123", "price": 9500, "qty": 1}
+        {
+            "code": "123456",
+            "type": "BUY",
+            "order_no": "123",
+            "price": 9500,
+            "qty": 1,
+            "broker_execution_received_at": datetime(
+                2026, 9, 16, 10, 0, tzinfo=receipts._KST
+            ).isoformat(),
+            "broker_execution_receive_time_source": (
+                receipts.BROKER_EXECUTION_RECEIVE_TIME_SOURCE
+            ),
+        }
     )
 
     assert target_stock["reversal_add_state"] == "POST_ADD_EVAL"
@@ -26980,6 +27057,12 @@ def test_send_sell_order_market_blocks_discretionary_before_sell_time_cutoff(
 
 
 def test_send_sell_order_market_safety_reason_passes_sell_time_block(monkeypatch):
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 9, 16, 10, 0, 0, tzinfo=tz)
+
+    monkeypatch.setattr(kiwoom_orders, "datetime", FixedDateTime)
     monkeypatch.setattr(
         kiwoom_orders,
         "TRADING_RULES",
@@ -27300,12 +27383,18 @@ def test_send_buy_order_market_does_not_retry_unsupported_market_type(monkeypatc
 
 
 def test_send_buy_order_market_allows_order_after_resume(monkeypatch):
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 9, 16, 10, 0, 0, tzinfo=tz)
+
     class DummyResponse:
         status_code = 200
 
         def json(self):
             return {"rt_cd": "0", "ord_no": "B123"}
 
+    monkeypatch.setattr(kiwoom_orders, "datetime", FixedDateTime)
     monkeypatch.setattr(kiwoom_orders, "is_buy_side_paused", lambda: False)
     monkeypatch.setattr(
         kiwoom_orders, "is_buy_side_time_blocked", lambda *_args, **_kwargs: False
@@ -27326,6 +27415,11 @@ def test_send_buy_order_market_allows_order_after_resume(monkeypatch):
 
 
 def test_send_buy_order_market_maps_ioc_limit_to_best_ioc(monkeypatch):
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 9, 16, 10, 0, 0, tzinfo=tz)
+
     captured = {}
 
     class DummyResponse:
@@ -27338,6 +27432,7 @@ def test_send_buy_order_market_maps_ioc_limit_to_best_ioc(monkeypatch):
         captured["payload"] = json
         return DummyResponse()
 
+    monkeypatch.setattr(kiwoom_orders, "datetime", FixedDateTime)
     monkeypatch.setattr(kiwoom_orders, "is_buy_side_paused", lambda: False)
     monkeypatch.setattr(
         kiwoom_orders, "is_buy_side_time_blocked", lambda *_args, **_kwargs: False

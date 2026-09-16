@@ -2744,6 +2744,17 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
     assert "--allow-pending-done-marker" in script
     assert script.count("--allow-pending-entry-replay") == 2
     assert (
+        'POSTCLOSE_FAILURE_REASON="verify_threshold_cycle_postclose_chain_failed"'
+        in script
+    )
+    assert (
+        'POSTCLOSE_FAILURE_REASON="verify_threshold_cycle_postclose_chain_final_failed"'
+        in script
+    )
+    assert '"verifier_failure_receipt"' in script
+    assert '"first_failure_receipt"' in script
+    assert "artifact=$POSTCLOSE_FAILURE_ARTIFACT" in script
+    assert (
         'run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.verify_threshold_cycle_postclose_chain'
         in script
     )

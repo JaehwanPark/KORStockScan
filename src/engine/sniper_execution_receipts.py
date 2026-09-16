@@ -419,9 +419,13 @@ def _receipt_market_axes(
     context = resolve_market_session(receipt_at) if receipt_at is not None else None
     session_regime = str(stock.get("market_session_regime") or "").strip()
     session_contract_version = str(stock.get("session_contract_version") or "").strip()
+    decision_market_scope = str(stock.get("decision_market_scope") or "").strip()
     if context is not None:
         session_regime = context.session_regime
         session_contract_version = context.contract_version
+        decision_market_scope = context.decision_market_scope
+        if decision_market_scope == "KRX_NXT":
+            decision_market_scope = "KRX_NXT_INTEGRATED"
 
     requested_route = ""
     for key in requested_route_keys:
@@ -440,7 +444,7 @@ def _receipt_market_axes(
         if candidate in _MARKET_DATA_ROUTES:
             market_data_route = candidate
             break
-    if not market_data_route and context is not None:
+    if context is not None:
         candidate = str(context.preferred_market_data_route or "").strip().lower()
         if candidate in _MARKET_DATA_ROUTES:
             market_data_route = candidate
@@ -458,6 +462,7 @@ def _receipt_market_axes(
 
     return {
         "session_contract_version": session_contract_version or "unknown",
+        "decision_market_scope": decision_market_scope or "UNKNOWN",
         "market_session_regime": session_regime or "unknown",
         "market_data_route": market_data_route or "unknown",
         "broker_route_requested": requested_route or "UNKNOWN",

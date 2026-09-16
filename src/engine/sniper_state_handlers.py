@@ -20363,6 +20363,16 @@ def _emit_scalp_entry_adm_snapshot(
     for key, value in entry_snapshot_defaults.items():
         if fields.get(key) in (None, "", "-", "None", "none", "null"):
             fields[key] = value
+    if not (
+        _truthy_field(fields.get("micro_vwap_available"))
+        and _truthy_field(fields.get("minute_candle_window_fresh"))
+    ):
+        # A numeric value is a measured feature claim.  Do not carry one into
+        # the immutable action snapshot when the exact minute-candle source is
+        # unavailable or stale; postclose must see an explicit fail-closed
+        # non-evaluation instead of a value/provenance contradiction.
+        fields["curr_vs_micro_vwap_bp"] = "not_evaluated"
+        fields["minute_candle_evaluation_state"] = "unavailable_fail_closed"
     if (
         not _truthy_field(fields.get("micro_vwap_available"))
         and not _truthy_field(fields.get("minute_candle_window_fresh"))
