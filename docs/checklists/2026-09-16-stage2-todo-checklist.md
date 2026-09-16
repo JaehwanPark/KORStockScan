@@ -132,11 +132,14 @@
 
 ## 사용자 지시 구현
 
-- [ ] `[WidgetResearchWatchAutoPromotionRepair0916] exact-date 정책 release 경로 및 research-watch 자동 승격 연결 보완` (`Due: 2026-09-16`, `Slot: INTRADAY`, `TimeWindow: 12:00~15:30`, `Track: ScalpingLogic`)
+- [x] `[WidgetResearchWatchAutoPromotionRepair0916] exact-date 정책 release 경로 및 research-watch 자동 승격 연결 보완` (`Due: 2026-09-16`, `Slot: INTRADAY`, `TimeWindow: 12:00~15:30`, `Track: ScalpingLogic`)
   - Source: [widget_auto_trade policy loader](/home/ubuntu/KORStockScan/src/trading/widget_auto_trade/policy.py), [widget symbol signal-policy research](/home/ubuntu/KORStockScan/src/engine/monitoring/widget_symbol_signal_policy_research.py), [widget symbol runtime policy](/home/ubuntu/KORStockScan/src/engine/monitoring/widget_symbol_runtime_policy.py), [widget research-watch config](/home/ubuntu/KORStockScan/data/config/widget_research_watch_symbols.json)
   - 판정 기준: immutable release의 shared-data symlink에서 exact-date standard policy가 canonical path identity로 로드되고, hash-validated 13-symbol research-watch catalog가 completed KRX 1-minute calibration/holdout 분석에 포함되며, 통과 symbol이 exact-date policy, dynamic advisory contract, trader catalog까지 연결된다.
   - 완료 조건: targeted tests와 compile/diff/parser 검증 통과, scoped commit/push, immutable release 배포, widget runtime collector와 signal auto trader의 새 PID/selected-release 확인. 후보 생성과 runtime 적용, 자연 signal/order, 비용차감 경제성은 별도 상태로 기록한다.
   - 권한 경계: 10주 수량, source/execution-quality, 양 calibration half, independent holdout, 비용차감 EV/downside, 최대 2개 watch runtime capacity, own-filled custody, manual exclusion, global BUY pause, broker/hard-safety guard를 유지한다. 테스트 주문은 제출하지 않는다.
+  - 완료 증거 (12:24 KST): commit `2968584e0aa13b4376de62779f353e1c825a95a5`를 `origin/main`에 push하고 immutable release `/home/ubuntu/KORStockScan-runtime-releases/widget-watch-promotion-20260916-2968584e`를 공통 선택 및 영향 서비스에 배포했다. `korstockscan-widget-symbol-runtime-collector.service` PID `3462863`, `korstockscan-widget-signal-auto-trader.service` PID `3462877`이 해당 release에서 `active/running`이며 재시작 횟수는 0이다. 배포 receipt는 `data/runtime/widget_research_watch_promotion_deployment.json`이다.
+  - 검증 증거: workspace widget targeted `180 passed`, immutable release widget targeted `180 passed`, machine passing-candidate 구조 판별 `4 passed`, Black/Ruff/compile/diff/parser PASS. trader state의 실행 세션은 `005930/NXT_PREMARKET`으로 복구되었고 08:35 cutoff 이후라 신규 주문은 없으며 KRX 3-symbol safety veto는 유지된다.
+  - 자연 증거 경계: 기존 2026-09-15 research report는 연결 전 v3/고정 4-symbol 산출물이므로 현재 research-watch 실행정책은 0개다. 오늘 장후 자연 v4 17-symbol 분석·통과 후보 생성, 이후 자연 signal/order와 비용차감 경제성은 아직 `waiting`이며 이 구현·배포 완료와 동일시하지 않는다.
 
 ## Project/Calendar 동기화
 
