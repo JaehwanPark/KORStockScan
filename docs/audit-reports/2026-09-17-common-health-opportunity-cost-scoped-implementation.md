@@ -59,7 +59,7 @@ Official reference receipt (`2026-09-17T01:15:02+09:00` 재확인 기록): upstr
 | U6 | partial | operational/decision-CF gate와 중복 case 분모 수정. 전체 row disposition/census 전수 잔여 |
 | U7 | scoped common/all-supported hierarchy implemented | §8–§10 전수 원천·현재 incumbent 비교·양수 순 EV/전체 paired 개선·exact-parent 자동 발행. 자연 generation·전체 원장 대사는 잔여 |
 | U8 | scoped router implemented / natural pending | §11 CAUTION checkpoint 기회비용·차단으로 피한 손실의 대칭 비교, INSUFFICIENT 원천 복구 분리, 현재 compact partition과 next-date 자동 발행. 자연 generation·전수 전달 acceptance 잔여 |
-| U9 | pending | price-ready no-submit/no-fill·quantity/leg four-arm Daily contract |
+| U9 | scoped receipt/publisher closure implemented | §12 four-arm finite/분모·상충 receipt 격리·Daily 원자 발행의 정책 hash/date/authority. 전체 price-ready no-submit/no-fill adapter·양수 small-net versioned 평가 계약은 잔여 |
 | U10 | pending | 독립 owner CF admission 및 active family fill-bias 실제 결손 수리 |
 | U11 | pending | family별 auto handoff·floor 달성 가능성·최종 요약 closure |
 | U12 | scoped validation complete | 부분 H managed release 통합 검증·오늘 기존 PREOPEN/start route. 전체 fixed-point 미완료 |
@@ -126,6 +126,19 @@ Official reference receipt (`2026-09-17T01:15:02+09:00` 재확인 기록): upstr
 - 새 v3 detailed verdict count·subtotal·보존식·finite 비용 합·source/partition hash를 publisher와 strict verifier가 다시 검증한다. 과거 frozen v2는 기존 의미로 소비한다. CF authority의 명시적 false를 legacy gate로 우회하지 못하도록 #82/publisher/verifier가 기존 owner 안의 동일 helper를 사용한다. #78은 같은 v3 경제성/선정 receipt를 Provider0으로 전달하고 #80은 새 계약과 optimizer binding을 확인한다.
 - 회귀는 작은 순수익 0.07%의 all-CAUTION 자동 successor 발행, 비노출/role 미입증 제외, INSUFFICIENT 분리, 회피 손실이 더 큰 경우 carry, count/schema/partition/NaN/CF authority 변조 차단, central verifier와 optimizer 전달을 포함한다. 검증 건수·최종 release/기동은 기존 `data/runtime/runtime_release_validation/` receipt로 별도 기록한다.
 - 오늘 dated policy를 수동으로 다시 발행하지 않는다. 새 동작은 다음 정기 장후 평가→기존 next-date publisher→PREOPEN/loader 경로로 자동 환류하며, 실제 자연 정책 소비·수익성은 OPEN이다. 전수 reader parity·single-flight/scheduler·capacity census·U9/U10/U11 및 전체 fixed-point 구현은 미완료다.
+
+## 12. 가격·수량/leg 4군 receipt·원자 발행 계약 보완
+
+2026-09-17 08시대 후속. 기존 `entry_split_order_plan`과 Daily materializer/reader만 보완했다. 신규 collector·producer·서비스·장후 단계·Kiwoom/Provider/주문 호출 없음. U9 전체 또는 U0–U12 fixed-point 완료가 아니다.
+
+- 최초 결함: 수량 policy의 평가 시점 SHA256와 발행 시점 bytes 대사가 없었고, split policy의 관측 hash 전달이 없어 교체된 파일을 새 hash로 봉인할 수 있었다. 버전·대상일·초기진입 scope·허용 계약도 직접 재검증하지 않았다. 기존 Daily reader가 선택한 split 파일의 SHA256를 전달하고, materializer는 양쪽 파일을 한 번씩 읽은 같은 bytes에서 hash·버전·source date·수량 active date와 기존 수량 authority validator/leg runtime authority를 확인한다. PREOPEN/runtime의 후속 hash 검증은 유지한다. OFF envelope는 기존 형태를 그대로 유지한다.
+- 4군 receipt의 NaN/무한대·bool 수치·음수 자본시간·범위 밖 참여율, 무자본인데 비영(非零) 손익인 행을 격리한다. eligible count는 finite 양의 정수만 인정하며, unsigned/잘못된 hash의 count가 유효 source 분모를 오염시키지 못한다. 결측 CF를 0으로 만들지 않는다.
+- 같은 exact attempt의 서로 다른 유효 immutable receipt는 양쪽을 격리하고 보존식의 원 분모에 남긴다. 읽기 순서에 따라 유리한 첫 행만 선택하지 않는다. hash가 잘못된 선행 중복행은 후속 유효 attempt를 숨기지 못한다. terminal·cost·executable 계약이 완전한 정상 비노출(0 CF exposure/0 자본/0 fill)은 paired 분모에 남기는 회귀를 검증했다. 실제 체결/실현손익 증거를 합성하지 않는다.
+- mechanistic price publisher의 NaN/무한대 EV 통과를 차단했다. 기계 action·compact AI·numeric price 계산·수량 tier/cap·leg 집행·AVG_DOWN/PYRAMID·hard safety는 변경하지 않았다. 새 후보별 사용자 재승인이나 실제 candidate 체결 요구를 추가하지 않았다.
+- 기대효과는 잘못된 4군 경제성/파일 교체가 자동 정책으로 승격되는 것을 막고, 정상 무노출이 평가 분모에서 지워지지 않게 하는 계약 수리다. 참여·회전·순이익 증가의 인과 효과는 아직 입증되지 않았다. 기존 quartet을 소비하는 경로의 보완이지 전체 raw population→no-submit/no-fill quartet 생성 연결의 완료가 아니다.
+- 잔여 P1: 가격·수량 관련 기존 절대 순 EV 0.10%는 유지되어 있다. 작은 목표 경로에서는 비용 차감 상한보다 높을 수 있으므로 U9/U11의 새 full-population·chronological paired 평가 계약에서 개선해야 한다. 기존 frozen 정책 계약을 임의로 재해석하거나 원천 연결이 미완료인 상태에서 floor만 낮추지 않았다. 전체 price-ready 미진입/no-fill join, 정책별 후행 exit/cost, capacity·holdout 및 기존 선정 consumer의 전수 연결은 OPEN이다.
+- 수정→self review→보완→re-review 결과, 이번 receipt/원자 발행 수정 범위의 미해결 finding 0. 기존 Daily·entry split·atomic sizing·allocator·PREOPEN targeted suite **610 passed**; compile과 `git diff --check` 통과. 문서 parser와 managed release 검증·commit/push/배포 receipt는 별도로 기록한다.
+- 현재 PID27161은 `b6cb93b0` 릴리스의 07:55 자동 기동 receipt다. 이번 장후 코드 배포는 그 PID 소비로 표시하지 않는다. 장중 주문 경로 변경이 없어 불필요한 재기동을 만들지 않으며, 오늘 dated 정책/env를 수동 재발행하지 않는다. 새 선정은 기존 정기 장후→next-date publisher→PREOPEN/loader 경로가 소유한다. 자연 generation·새 정책 소비·실체결 경제성은 별도 OPEN이다.
 
 Project/Calendar 동기화는 실행하지 않는다. 사용자 표준 명령:
 

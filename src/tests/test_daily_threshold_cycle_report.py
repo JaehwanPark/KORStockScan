@@ -98,8 +98,9 @@ def test_position_sizing_materialization_preserves_selected_flat10_policy(
     assert policy["runtime_promotion_sample_floor"] == 30
 
 
+@pytest.mark.parametrize("ev", [0.11, float("nan"), float("inf"), float("-inf")])
 def test_postclose_publishes_mechanistic_price_policy_without_ai_authority(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, ev
 ):
     monkeypatch.setattr(report_mod, "MECHANISTIC_ENTRY_PRICE_POLICY_DIR", tmp_path)
     candidate = {
@@ -113,7 +114,7 @@ def test_postclose_publishes_mechanistic_price_policy_without_ai_authority(
                 "target_value_key": "normal_defensive_bps",
                 "profile_bps": 25,
                 "exact_outcome_joined_sample": 20,
-                "metrics": {"source_quality_adjusted_ev_pct": 0.11},
+                "metrics": {"source_quality_adjusted_ev_pct": ev},
             }
         },
     }
@@ -122,6 +123,10 @@ def test_postclose_publishes_mechanistic_price_policy_without_ai_authority(
     report_mod._materialize_mechanistic_entry_price_policy(report, "2026-09-15")
 
     policy_path = tmp_path / "mechanistic_entry_price_policy_2026-09-15.json"
+    if not report_mod.math.isfinite(ev):
+        assert not policy_path.exists()
+        assert "mechanistic_policy_enabled" not in candidate["recommended_values"]
+        return
     policy = json.loads(policy_path.read_text(encoding="utf-8"))
     assert policy["candidate_id"] == "normal:25"
     assert policy["provider_calls"] == 0
@@ -132,14 +137,15 @@ def test_postclose_publishes_mechanistic_price_policy_without_ai_authority(
     assert candidate["recommended_values"]["mechanistic_policy_enabled"] is True
 
 
+@pytest.mark.parametrize("corruption", [None, "quantity_hash", "quantity_version", "quantity_date", "quantity_scope", "quantity_authority", "split_hash", "split_version", "split_date", "split_authority"])
 def test_four_arm_pass_publishes_atomic_quantity_leg_policy_only(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, corruption
 ):
     monkeypatch.setattr(report_mod, "POSITION_SIZING_POLICY_DIR", tmp_path)
     monkeypatch.setattr(report_mod, "ENTRY_EXECUTION_SIZING_POLICY_DIR", tmp_path)
     split_path = tmp_path / "split.json"
     split_path.write_text(
-        json.dumps({"policy_version": "split:candidate"}), encoding="utf-8"
+        json.dumps({"schema_version": "entry_split_order_policy_v1", "policy_version": "split:candidate", "source_date": "2026-09-15", "runtime_apply_allowed": True}), encoding="utf-8"
     )
     quantity = {
         "family": "position_sizing_dynamic_formula",
@@ -159,6 +165,7 @@ def test_four_arm_pass_publishes_atomic_quantity_leg_policy_only(
         "recommended_values": {
             "policy_file": str(split_path),
             "policy_version": "split:candidate",
+            "policy_sha256": hashlib.sha256(split_path.read_bytes()).hexdigest(),
         },
         "source_metrics": {
             "quantity_leg_four_arm_evaluation": {
@@ -178,12 +185,35 @@ def test_four_arm_pass_publishes_atomic_quantity_leg_policy_only(
     }
     report = {"calibration_candidates": [quantity, split]}
     report_mod._materialize_position_sizing_policy(report, "2026-09-15")
+    quantity_values = quantity["recommended_values"]
+    quantity_path = Path(quantity_values["policy_file"])
+    quantity_policy = json.loads(quantity_path.read_text())
+    split_policy = json.loads(split_path.read_text())
+    if corruption == "quantity_hash":
+        quantity_values["policy_sha256"] = "0" * 64
+    elif corruption in {"quantity_version", "quantity_date", "quantity_scope", "quantity_authority"}:
+        field = {"quantity_version": "policy_version", "quantity_date": "source_date", "quantity_scope": "sizing_scope", "quantity_authority": "source_quality_passed"}[corruption]
+        quantity_policy[field] = False if corruption == "quantity_authority" else "wrong"
+        encoded = json.dumps(quantity_policy).encode()
+        quantity_path.write_bytes(encoded)
+        quantity_values["policy_sha256"] = hashlib.sha256(encoded).hexdigest()
+    elif corruption == "split_hash":
+        split["recommended_values"]["policy_sha256"] = "0" * 64
+    elif corruption in {"split_version", "split_date", "split_authority"}:
+        field = {"split_version": "policy_version", "split_date": "source_date", "split_authority": "runtime_apply_allowed"}[corruption]
+        split_policy[field] = False if corruption == "split_authority" else "wrong"
+        split_path.write_text(json.dumps(split_policy))
+        split["recommended_values"]["policy_sha256"] = hashlib.sha256(split_path.read_bytes()).hexdigest()
 
     report_mod._materialize_integrated_entry_execution_sizing_policy(
         report, "2026-09-15"
     )
 
     policy_path = tmp_path / "entry_execution_sizing_policy_2026-09-15.json"
+    if corruption:
+        assert not policy_path.exists()
+        assert "integrated_policy_enabled" not in split["recommended_values"]
+        return
     policy = json.loads(policy_path.read_text(encoding="utf-8"))
     assert policy["selected_arm"] == "candidate_qty_x_candidate_leg"
     assert policy["action_authority"] is False

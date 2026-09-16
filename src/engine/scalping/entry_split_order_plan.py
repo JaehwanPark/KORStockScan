@@ -3713,12 +3713,22 @@ def build_quantity_leg_four_arm_evaluation(
     complete: list[dict[str, Any]] = []
     excluded: defaultdict[str, int] = defaultdict(int)
     seen: set[tuple[str, ...]] = set()
+    receipt_hashes: dict[tuple[str, ...], str] = {}
+    conflicting_attempts: set[tuple[str, ...]] = set()
     policy_identities: set[tuple[str, ...]] = set()
     declared_eligible_by_source: defaultdict[str, set[int]] = defaultdict(set)
     for receipt, source_date in receipt_rows:
-        declared_eligible = _safe_int(receipt.get("eligible_attempt_count"), 0)
-        if declared_eligible > 0:
-            declared_eligible_by_source[source_date].add(declared_eligible)
+        declared_value = receipt.get("eligible_attempt_count")
+        declared_number = _safe_float(declared_value, None)
+        declared_eligible = (
+            int(declared_number)
+            if not isinstance(declared_value, bool)
+            and declared_number is not None
+            and math.isfinite(declared_number)
+            and declared_number.is_integer()
+            and declared_number > 0
+            else 0
+        )
         identity = tuple(
             str(receipt.get(field) or "").strip()
             for field in (
@@ -3732,9 +3742,6 @@ def build_quantity_leg_four_arm_evaluation(
         )
         if not all(identity):
             excluded["exact_attempt_identity_missing"] += 1
-            continue
-        if identity in seen:
-            excluded["duplicate_exact_attempt"] += 1
             continue
         seen.add(identity)
         arms = receipt.get("arms")
@@ -3757,6 +3764,17 @@ def build_quantity_leg_four_arm_evaluation(
         if receipt.get("receipt_sha256") != expected_receipt_sha256:
             excluded["immutable_receipt_hash_invalid"] += 1
             continue
+        if declared_eligible > 0:
+            declared_eligible_by_source[source_date].add(declared_eligible)
+        previous_hash = receipt_hashes.get(identity)
+        if previous_hash is not None:
+            if previous_hash == expected_receipt_sha256:
+                excluded["duplicate_exact_attempt"] += 1
+            else:
+                conflicting_attempts.add(identity)
+                excluded["conflicting_exact_attempt_receipt"] += 1
+            continue
+        receipt_hashes[identity] = expected_receipt_sha256
         if set(arms) != set(QUANTITY_LEG_FOUR_ARM_IDS):
             excluded["four_arm_incomplete"] += 1
             continue
@@ -3780,12 +3798,27 @@ def build_quantity_leg_four_arm_evaluation(
         for arm_id in QUANTITY_LEG_FOUR_ARM_IDS:
             arm = arms[arm_id]
             if not isinstance(arm, dict) or any(
-                _safe_float(arm.get(field), None) is None
+                isinstance(arm.get(field), bool)
+                or _safe_float(arm.get(field), None) is None
+                or not math.isfinite(float(arm[field]))
                 for field in (
                     "net_return_pct",
                     "net_pnl_krw",
                     "capital_krw_minutes",
                     "fill_participation_rate",
+                )
+            ):
+                arm_contract_valid = False
+                break
+            if (
+                float(arm["capital_krw_minutes"]) < 0
+                or not 0 <= float(arm["fill_participation_rate"]) <= 1
+                or (
+                    float(arm["capital_krw_minutes"]) == 0
+                    and (
+                        float(arm["net_pnl_krw"]) != 0
+                        or float(arm["net_return_pct"]) != 0
+                    )
                 )
             ):
                 arm_contract_valid = False
@@ -3817,9 +3850,23 @@ def build_quantity_leg_four_arm_evaluation(
             continue
         policy_identities.add(policy_identity)
         complete.append(
-            {"identity": identity, "source_date": source_date, "arms": arms}
+            {
+                "identity": identity,
+                "source_date": source_date,
+                "arms": arms,
+                "policy_identity": policy_identity,
+            }
         )
 
+    if conflicting_attempts:
+        quarantined = [
+            item for item in complete if item["identity"] in conflicting_attempts
+        ]
+        excluded["conflicting_exact_attempt_quarantined"] += len(quarantined)
+        complete = [
+            item for item in complete if item["identity"] not in conflicting_attempts
+        ]
+        policy_identities = {item["policy_identity"] for item in complete}
     if len(policy_identities) != 1:
         if complete:
             excluded["paired_policy_identity_conflict"] += len(complete)
