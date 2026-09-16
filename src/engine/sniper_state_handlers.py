@@ -19868,6 +19868,49 @@ def _log_ai_confirmed_terminal_no_budget(
     )
 
 
+def _log_machine_nonentry_terminal_if_needed(
+    stock,
+    code,
+    *,
+    ai_decision=None,
+    ai_score=None,
+) -> bool:
+    """Close an exact attempt when the machine stops before auxiliary AI.
+
+    The machine-primary adapter can return a valid BLOCK, RECHECK, or
+    SOURCE_INVALID result without calling the provider.  Those results cannot
+    reach budget in the current evaluation, so leaving only ``ai_confirmed``
+    makes the next scanner promotion look like an unterminated retry.  This
+    emits observation-only terminal provenance and does not change the action.
+    """
+
+    decision = ai_decision if isinstance(ai_decision, dict) else {}
+    machine_action = str(decision.get("entry_mechanistic_action") or "").upper()
+    final_action = str(decision.get("action") or "").upper()
+    if (
+        decision.get("machine_decision_before_provider") is not True
+        or decision.get("provider_called") is not False
+        or machine_action not in {"BLOCK", "RECHECK", "SOURCE_INVALID"}
+        or final_action == "BUY"
+    ):
+        return False
+    _log_ai_confirmed_terminal_no_budget(
+        stock,
+        code,
+        terminal_reason=f"machine_{machine_action.lower()}_before_auxiliary_ai",
+        source_stage="ai_confirmed",
+        ai_decision=decision,
+        ai_score=ai_score,
+        extra_fields={
+            "entry_mechanistic_action": machine_action,
+            "machine_evaluation_status": decision.get("machine_evaluation_status"),
+            "evaluation_attempt_id": decision.get("evaluation_attempt_id"),
+            "policy_bundle_hash": decision.get("policy_bundle_hash"),
+        },
+    )
+    return True
+
+
 def _should_first_ai_wait_for_big_bite(
     ai_decision=None,
     ai_score=None,
@@ -66733,6 +66776,16 @@ def _handle_watching_strategy_branch(
                     # Preserve the watch candidate for a later micro recovery
                     # evaluation.  Do not convert pending observation into BUY
                     # authority and do not apply the ordinary 180s WAIT cooldown.
+                    # The later scanner evaluation is a new exact attempt.  End
+                    # this machine-owned evaluation here, after all immediate
+                    # terminal owners had a chance to run, so the diagnostic
+                    # receipt cannot duplicate blocked_ai_score/first_ai_wait.
+                    _log_machine_nonentry_terminal_if_needed(
+                        stock,
+                        code,
+                        ai_decision=ai_decision,
+                        ai_score=current_ai_score,
+                    )
                     return False
                 if blocked_ai_score_candidate and not entry_opportunity_recheck_allowed:
                     if _truthy_field(stock.get("entry_opportunity_recheck_pending")):

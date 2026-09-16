@@ -4581,7 +4581,12 @@ def test_decision_quality_v2_14_live_adapter_uses_fixed_probe_prior_not_ai_score
     }
     result = engine._normalize_decision_quality_entry_result(
         risk_response,
-        exact_payload={"current": {"price": 10000}},
+        exact_payload={
+            "current": {"price": 10000},
+            "anticipatory_reversal_analysis_v1": {
+                "execution_cost": {"conservative_execution_cost_pct": 0.2536}
+            },
+        },
         prompt_version=(DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION),
         entry_setup_evidence=setup_evidence,
         live_policy=live_policy,
@@ -4597,6 +4602,7 @@ def test_decision_quality_v2_14_live_adapter_uses_fixed_probe_prior_not_ai_score
     assert result["entry_ai_full_entry_forbidden"] is True
     assert result["entry_setup_live_policy_mode"] == "one_share_exploration"
     assert result["entry_setup_live_policy_max_daily_exploration_probes"] == 3
+    assert result["entry_conservative_execution_cost_pct"] == 0.2536
     assert "broker_order_forbidden" not in result
     role_gate = evaluate_entry_score_role_gate(
         {**result, "ai_result_source": "live", "ai_parse_ok": True},
@@ -4686,7 +4692,12 @@ def test_decision_quality_v2_14_live_adapter_uses_fixed_probe_prior_not_ai_score
             "contradicting_fact_ids": ["trigger_confirmation_missing"],
             "confidence": 0.74,
         },
-        exact_payload={"current": {"price": 10000}},
+        exact_payload={
+            "current": {"price": 10000},
+            "anticipatory_reversal_analysis_v1": {
+                "execution_cost": {"conservative_execution_cost_pct": 0.2536}
+            },
+        },
         prompt_version=(DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION),
         entry_setup_evidence=waiting_setup,
         live_policy=live_policy,
@@ -4704,6 +4715,7 @@ def test_decision_quality_v2_14_live_adapter_uses_fixed_probe_prior_not_ai_score
     assert waiting_rejected["entry_ai_invalid_supporting_fact_ids"] == [
         "invented_positive_fact"
     ]
+    assert waiting_rejected["entry_conservative_execution_cost_pct"] == 0.2536
 
     malformed_rejected = engine._normalize_decision_quality_entry_result(
         {

@@ -804,6 +804,9 @@ class SamsungRegularTwoLegMachine:
             for leg in self._state.get("legs", []):
                 leg_route = str(leg.get("route") or normalized_route).upper()
                 if leg.get("status") == "PLANNED" and leg_route == normalized_route:
+                    entry_adverse_owners.terminalize_original_owner_guard(
+                        leg, decision.reason
+                    )
                     leg["status"] = "NO_FILL"
             self._state["blocked_reason"] = decision.reason
             self._record(
@@ -869,6 +872,9 @@ class SamsungRegularTwoLegMachine:
                 for leg in self._state.get("legs", []):
                     leg_route = str(leg.get("route") or normalized_route).upper()
                     if leg.get("status") == "PLANNED" and leg_route == normalized_route:
+                        entry_adverse_owners.terminalize_original_owner_guard(
+                            leg, micro_decision.reason
+                        )
                         leg["status"] = "NO_FILL"
                 self._state["blocked_reason"] = micro_decision.reason
                 self._record(
@@ -895,6 +901,9 @@ class SamsungRegularTwoLegMachine:
             for leg in self._state.get("legs", []):
                 leg_route = str(leg.get("route") or normalized_route).upper()
                 if leg.get("status") == "PLANNED" and leg_route == normalized_route:
+                    entry_adverse_owners.terminalize_original_owner_guard(
+                        leg, velocity_decision.reason
+                    )
                     leg["status"] = "NO_FILL"
             self._state["blocked_reason"] = velocity_decision.reason
             self._record(

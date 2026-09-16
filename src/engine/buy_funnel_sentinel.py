@@ -2748,6 +2748,7 @@ def _summarize_events_included(
         _blocker_label(event)
         for event in lossless_scoped
         if _is_blocker_stage(event.stage)
+        and event.stage not in AI_TERMINAL_ATTRIBUTION_STAGES
     ]
     blocker_counter = Counter(
         label for label in raw_blocker_labels if not _is_swing_blocker_label(label)
@@ -2760,8 +2761,11 @@ def _summarize_events_included(
     upstream_events = [
         event
         for event in lossless_scoped
-        if event.stage in UPSTREAM_BLOCK_STAGES
-        or _contains_text_token(event.fields, "ai_score_50_buy_hold_override")
+        if event.stage not in AI_TERMINAL_ATTRIBUTION_STAGES
+        and (
+            event.stage in UPSTREAM_BLOCK_STAGES
+            or _contains_text_token(event.fields, "ai_score_50_buy_hold_override")
+        )
     ]
     price_guard_events = [
         event for event in lossless_scoped if event.stage in ENTRY_PRICE_GUARD_STAGES

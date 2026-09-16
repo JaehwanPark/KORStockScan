@@ -46,6 +46,11 @@ UPSTREAM_TERMINAL_STAGES = frozenset(
         "entry_armed_expired",
         "entry_armed_expired_after_wait",
         "entry_arm_expired",
+        # Explicit runtime terminal after a trusted AI result cannot reach
+        # budget.  Keeping this out of the exact-attempt terminal set leaves
+        # the prior cycle pending and mislabels the next promotion as a
+        # lineage gap.
+        "ai_confirmed_terminal_no_budget",
     }
 )
 TERMINAL_STAGES_BY_AXIS = {

@@ -28,6 +28,23 @@ def record(holder):
         holder[guard.KEY + "_receipt_error"] = type(exc).__name__
 
 
+def terminalize_original_owner_guard(holder, reason):
+    """Close diagnostic state after the original owner has already blocked BUY.
+
+    This does not make or change an entry decision.  It only prevents a
+    lifecycle that is already ``NO_FILL`` from leaving the optional adverse
+    flow receipt in ``WAIT`` or ``CONTINUE``.
+    """
+
+    state = holder.get(guard.KEY)
+    if not isinstance(state, dict) or guard.terminal(state):
+        return False
+    guard._skip(state, "SKIP_ORIGINAL_OWNER_GUARD")
+    state["original_owner_guard_reason"] = str(reason or "unspecified")
+    record(holder)
+    return True
+
+
 def _record_receipt(holder):
     import fcntl
 

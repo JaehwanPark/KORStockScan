@@ -5618,6 +5618,46 @@ def test_pre_submit_entry_ai_authority_retry_refreshes_missing_ai(monkeypatch):
     assert snapshots
 
 
+def test_machine_nonentry_closes_exact_attempt_without_changing_action(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_ai_confirmed_terminal_no_budget",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+    decision = {
+        "action": "DROP",
+        "score": 0,
+        "provider_called": False,
+        "machine_decision_before_provider": True,
+        "entry_mechanistic_action": "SOURCE_INVALID",
+        "machine_evaluation_status": "source_quality_blocked_before_assessment",
+        "evaluation_attempt_id": "machine-source-invalid-1",
+        "policy_bundle_hash": "b" * 64,
+    }
+
+    assert state_handlers._log_machine_nonentry_terminal_if_needed(
+        {"id": 1}, "005930", ai_decision=decision, ai_score=0
+    )
+    assert decision["action"] == "DROP"
+    assert calls[0][1]["terminal_reason"] == (
+        "machine_source_invalid_before_auxiliary_ai"
+    )
+    assert calls[0][1]["source_stage"] == "ai_confirmed"
+    assert calls[0][1]["extra_fields"]["evaluation_attempt_id"] == (
+        "machine-source-invalid-1"
+    )
+
+    calls.clear()
+    assert not state_handlers._log_machine_nonentry_terminal_if_needed(
+        {"id": 1},
+        "005930",
+        ai_decision={**decision, "provider_called": True},
+        ai_score=0,
+    )
+    assert calls == []
+
+
 def test_pre_submit_entry_ai_authority_retry_rebases_stale_quote_before_ai(
     monkeypatch,
 ):

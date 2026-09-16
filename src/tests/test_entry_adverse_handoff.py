@@ -147,6 +147,22 @@ def test_diagnostic_write_failure_does_not_interrupt_order_result(monkeypatch):
     assert h[guard.KEY + "_receipt_error"] == "OSError"
 
 
+def test_original_owner_terminal_guard_closes_optional_receipt(monkeypatch):
+    receipts = []
+    monkeypatch.setattr(owners, "_record_receipt", lambda h: receipts.append(h))
+    h = holder("CONTINUE")
+
+    assert owners.terminalize_original_owner_guard(
+        h, "entry_liquidity_touch_depth_insufficient"
+    )
+    assert h[guard.KEY]["action"] == "SKIP_ORIGINAL_OWNER_GUARD"
+    assert h[guard.KEY]["original_owner_guard_reason"] == (
+        "entry_liquidity_touch_depth_insufficient"
+    )
+    assert receipts == [h]
+    assert not owners.terminalize_original_owner_guard(h, "later_guard")
+
+
 def test_corrupt_persisted_clock_cannot_restart_wait(monkeypatch):
     h = holder()
     h[guard.KEY]["signal_at"] = "invalid"

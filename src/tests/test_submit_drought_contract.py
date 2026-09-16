@@ -51,11 +51,29 @@ def inspect(rows):
         "blocked_gap",
         "blocked_zero_qty",
         "entry_armed_expired",
+        "ai_confirmed_terminal_no_budget",
     ],
 )
 def test_actual_upstream_terminals_are_not_no_signal(stage):
     exact = inspect(events("ai_confirmed", stage))
     assert exact["axis_terminal_causal_attempt_counts"]["UPSTREAM_GATE"] == 1
+
+
+def test_ai_terminal_closes_cycle_before_next_promotion():
+    first = {"scanner_promotion_id": "SCANPROM-first"}
+    second = {"scanner_promotion_id": "SCANPROM-second"}
+    exact = inspect(
+        events(
+            ("ai_confirmed", first),
+            ("ai_confirmed_terminal_no_budget", first),
+            ("ai_confirmed", second),
+        )
+    )
+
+    assert exact["attempt_count"] == 2
+    assert exact["terminal_causal_attempt_count"] == 1
+    assert exact["pending_attempt_count"] == 1
+    assert exact["unclassified_terminal_attempt_count"] == 0
 
 
 @pytest.mark.parametrize(

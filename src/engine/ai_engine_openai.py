@@ -2390,6 +2390,39 @@ class GPTSniperEngine:
                 policy.get("runtime_effect") is True
             ),
         }
+        execution_cost = (
+            exact_payload.get("anticipatory_reversal_analysis_v1", {}).get(
+                "execution_cost", {}
+            )
+            if isinstance(exact_payload, dict)
+            and isinstance(
+                exact_payload.get("anticipatory_reversal_analysis_v1"), dict
+            )
+            and isinstance(
+                exact_payload.get("anticipatory_reversal_analysis_v1", {}).get(
+                    "execution_cost"
+                ),
+                dict,
+            )
+            else {}
+        )
+        try:
+            conservative_cost_pct = float(
+                execution_cost.get("conservative_execution_cost_pct")
+            )
+        except (TypeError, ValueError):
+            conservative_cost_pct = None
+        observation_cost_fields = {
+            # Observation-only projection from the immutable replay context.
+            # It cannot alter the composed action or any submit guard.
+            "entry_conservative_execution_cost_pct": (
+                round(conservative_cost_pct, 10)
+                if conservative_cost_pct is not None
+                and math.isfinite(conservative_cost_pct)
+                and conservative_cost_pct >= 0
+                else None
+            )
+        }
         if policy.get("machine_bundle_sha256"):
             policy_fields.update(
                 machine_bundle_sha256=policy["machine_bundle_sha256"],
@@ -2423,6 +2456,7 @@ class GPTSniperEngine:
                 **setup_provenance_fields,
                 **raw_risk_fields,
                 **policy_fields,
+                **observation_cost_fields,
                 "schema": composed.get("schema"),
                 "composer_version": composed.get("composer_version"),
                 "entry_setup_family": (
@@ -2590,6 +2624,7 @@ class GPTSniperEngine:
             **composed_for_live,
             **raw_risk_fields,
             **policy_fields,
+            **observation_cost_fields,
             "action": action,
             "score": score,
             "reason": str(composed.get("entry_composed_reason") or "")[:120],
@@ -9929,9 +9964,25 @@ class GPTSniperEngine:
 
             if strategy not in ["KOSPI_ML", "KOSDAQ_ML"]:
                 if decision_quality_v2_7_selected:
+                    normalization_exact_payload = exact_payload
+                    if (
+                        decision_quality_v2_14_selected
+                        and isinstance(exact_payload, dict)
+                        and isinstance(replay_context, dict)
+                        and isinstance(
+                            replay_context.get("anticipatory_reversal_analysis_v1"),
+                            dict,
+                        )
+                    ):
+                        normalization_exact_payload = {
+                            **exact_payload,
+                            "anticipatory_reversal_analysis_v1": replay_context[
+                                "anticipatory_reversal_analysis_v1"
+                            ],
+                        }
                     result = self._normalize_decision_quality_entry_result(
                         result,
-                        exact_payload=exact_payload,
+                        exact_payload=normalization_exact_payload,
                         prompt_version=prompt_version,
                         entry_setup_evidence=entry_setup_evidence,
                         live_policy=entry_setup_live_policy,
