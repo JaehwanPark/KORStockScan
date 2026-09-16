@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import json
 from datetime import date
+from pathlib import Path
 
 from src.engine.automation import low_price_two_leg_auto_expansion_policy as expansion
 from src.engine.monitoring.machine_candidate_lifecycle import (
@@ -128,3 +129,13 @@ def test_episode_recommendation_promotes_without_user_approval_and_round_trips(
     assert loaded["newly_promoted_profile_ids"] == ["auto_111770_late_morning"]
     assert profile.policy.dynamic_authority_hash == loaded["policy_hash"]
     assert profile.policy.scan_last_bar.isoformat() == "10:59:00"
+
+
+def test_auto_expansion_systemd_preflight_does_not_depend_on_private_tmux_socket():
+    unit = Path(
+        "deploy/systemd/korstockscan-low-price-two-leg-auto-expansion.service"
+    ).read_text(encoding="utf-8")
+
+    assert "PrivateTmp=true" in unit
+    assert "ExecCondition=/usr/bin/tmux" not in unit
+    assert "auto_expansion_service --check-active" in unit
