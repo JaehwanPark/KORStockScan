@@ -1506,8 +1506,8 @@ def test_holding_sell_exchange_resolution_blocks_krx_only_during_nxt_time(monkey
     )
 
     assert decision["blocked"] is True
-    assert decision["dmst_stex_tp"] == "KRX"
-    assert decision["reason"] == "krx_only_outside_krx_regular_session"
+    assert decision["dmst_stex_tp"] == "UNKNOWN"
+    assert decision["reason"] == "holding_sell_route_authority_missing"
 
 
 def test_holding_sell_exchange_resolution_preserves_missing_nxt_provenance(
@@ -1526,11 +1526,11 @@ def test_holding_sell_exchange_resolution_preserves_missing_nxt_provenance(
         now_t=dt_time(17, 0),
     )
 
-    assert decision["blocked"] is False
-    assert decision["dmst_stex_tp"] == "NXT"
+    assert decision["blocked"] is True
+    assert decision["dmst_stex_tp"] == "UNKNOWN"
     assert decision["nxt_enabled"] is None
     assert decision["nxt_flag_source"] == "daily_stock_quotes.is_nxt_missing"
-    assert decision["reason"] == "nxt_session_nxt_capability_unconfirmed"
+    assert decision["reason"] == "holding_sell_route_authority_missing"
 
 
 def test_entry_opportunity_recheck_outcome_mark_updates_runtime_state(monkeypatch):
@@ -1631,7 +1631,7 @@ def test_holding_sell_exchange_resolution_uses_nxt_after_krx_regular_session(
 
     assert decision["blocked"] is False
     assert decision["dmst_stex_tp"] == "NXT"
-    assert decision["reason"] == "nxt_session_nxt_enabled"
+    assert decision["reason"] == "holding_sell_exact_eligibility_route"
 
 
 def test_holding_sell_exchange_resolution_labels_unconfirmed_nxt_capability(
@@ -1645,10 +1645,10 @@ def test_holding_sell_exchange_resolution_labels_unconfirmed_nxt_capability(
         now_t=dt_time(16, 39),
     )
 
-    assert decision["blocked"] is False
-    assert decision["dmst_stex_tp"] == "NXT"
+    assert decision["blocked"] is True
+    assert decision["dmst_stex_tp"] == "UNKNOWN"
     assert decision["nxt_enabled"] is None
-    assert decision["reason"] == "nxt_session_nxt_capability_unconfirmed"
+    assert decision["reason"] == "holding_sell_route_authority_missing"
 
 
 def test_reversal_add_state_provenance_uses_explicit_not_armed_label():
@@ -10377,7 +10377,10 @@ def test_entry_receipt_provenance_keeps_cohort_and_broker_route_separate():
         }
     )
 
-    assert fields["effective_venue"] == "KRX"
+    assert fields["effective_venue"] == "UNKNOWN"
+    assert fields["actual_execution_venue_source"] == (
+        "official_exchange_fields_ambiguous_or_missing"
+    )
     assert fields["broker_route"] == "SOR"
     assert fields["entry_execution_broker_route"] == "SOR"
     assert fields["broker_route_resolution"] == ("krx_regular_session_default_sor")
@@ -20368,8 +20371,8 @@ def test_reversal_add_post_eval_starts_on_execution_receipt(
         == "trace-scale-in-receipt-1"
     )
     assert "pending_add_ai_decision_trace_id" not in target_stock
-    assert holding_events[-1][1]["effective_venue"] == "KRX"
-    assert holding_events[-1][1]["market_session_bucket"] == "krx_regular"
+    assert holding_events[-1][1]["effective_venue"] == "UNKNOWN"
+    assert holding_events[-1][1]["market_session_bucket"] == "KRX_REGULAR"
     assert (
         holding_events[-1][1]["prior_probe_residual_abort_reason"]
         == "residual_revalidation_timeout"
@@ -26394,7 +26397,9 @@ def test_send_buy_order_market_blocked_when_paused(tmp_path, monkeypatch):
 
 def test_send_buy_order_market_blocked_before_buy_time_cutoff(monkeypatch):
     monkeypatch.setattr(kiwoom_orders, "is_buy_side_paused", lambda: False)
-    monkeypatch.setattr(kiwoom_orders, "is_buy_side_time_blocked", lambda: True)
+    monkeypatch.setattr(
+        kiwoom_orders, "is_buy_side_time_blocked", lambda *_args, **_kwargs: True
+    )
     published = []
 
     class FakeEventBus:
@@ -26428,8 +26433,14 @@ def test_send_buy_order_market_allows_time_block_override_for_defensive_scale_in
 
     monkeypatch.setattr(kiwoom_orders, "datetime", FixedDateTime)
     monkeypatch.setattr(kiwoom_orders, "is_buy_side_paused", lambda: False)
-    monkeypatch.setattr(kiwoom_orders, "is_buy_side_time_blocked", lambda: True)
-    monkeypatch.setattr(kiwoom_orders, "is_scalping_buy_window_blocked", lambda: False)
+    monkeypatch.setattr(
+        kiwoom_orders, "is_buy_side_time_blocked", lambda *_args, **_kwargs: True
+    )
+    monkeypatch.setattr(
+        kiwoom_orders,
+        "is_scalping_buy_window_blocked",
+        lambda *_args, **_kwargs: False,
+    )
     captured = {}
 
     class DummyResponse:
@@ -26477,7 +26488,9 @@ def test_send_buy_order_market_uses_sor_during_krx_regular_session(monkeypatch):
 
     monkeypatch.setattr(kiwoom_orders, "datetime", FixedDateTime)
     monkeypatch.setattr(kiwoom_orders, "is_buy_side_paused", lambda: False)
-    monkeypatch.setattr(kiwoom_orders, "is_buy_side_time_blocked", lambda: False)
+    monkeypatch.setattr(
+        kiwoom_orders, "is_buy_side_time_blocked", lambda *_args, **_kwargs: False
+    )
     monkeypatch.setattr(
         kiwoom_orders.kiwoom_utils,
         "get_api_url",
@@ -26513,7 +26526,9 @@ def test_send_buy_order_market_uses_nxt_after_krx_regular_session(monkeypatch):
 
     monkeypatch.setattr(kiwoom_orders, "datetime", FixedDateTime)
     monkeypatch.setattr(kiwoom_orders, "is_buy_side_paused", lambda: False)
-    monkeypatch.setattr(kiwoom_orders, "is_buy_side_time_blocked", lambda: False)
+    monkeypatch.setattr(
+        kiwoom_orders, "is_buy_side_time_blocked", lambda *_args, **_kwargs: False
+    )
     monkeypatch.setattr(
         kiwoom_orders.kiwoom_utils,
         "get_api_url",
@@ -26548,7 +26563,9 @@ def test_send_buy_order_market_remaps_nxt_aftermarket_market_buy(monkeypatch):
 
     monkeypatch.setattr(kiwoom_orders, "datetime", FixedDateTime)
     monkeypatch.setattr(kiwoom_orders, "is_buy_side_paused", lambda: False)
-    monkeypatch.setattr(kiwoom_orders, "is_buy_side_time_blocked", lambda: False)
+    monkeypatch.setattr(
+        kiwoom_orders, "is_buy_side_time_blocked", lambda *_args, **_kwargs: False
+    )
     monkeypatch.setattr(
         kiwoom_orders.kiwoom_utils,
         "get_api_url",
@@ -26583,7 +26600,9 @@ def test_send_buy_order_market_remaps_explicit_nxt_market_buy_during_regular_ses
 
     monkeypatch.setattr(kiwoom_orders, "datetime", FixedDateTime)
     monkeypatch.setattr(kiwoom_orders, "is_buy_side_paused", lambda: False)
-    monkeypatch.setattr(kiwoom_orders, "is_buy_side_time_blocked", lambda: False)
+    monkeypatch.setattr(
+        kiwoom_orders, "is_buy_side_time_blocked", lambda *_args, **_kwargs: False
+    )
     monkeypatch.setattr(
         kiwoom_orders.kiwoom_utils,
         "get_api_url",
@@ -26607,8 +26626,14 @@ def test_send_buy_order_market_remaps_explicit_nxt_market_buy_during_regular_ses
 
 def test_send_buy_order_market_rejects_unknown_time_block_override_reason(monkeypatch):
     monkeypatch.setattr(kiwoom_orders, "is_buy_side_paused", lambda: False)
-    monkeypatch.setattr(kiwoom_orders, "is_buy_side_time_blocked", lambda: True)
-    monkeypatch.setattr(kiwoom_orders, "is_scalping_buy_window_blocked", lambda: False)
+    monkeypatch.setattr(
+        kiwoom_orders, "is_buy_side_time_blocked", lambda *_args, **_kwargs: True
+    )
+    monkeypatch.setattr(
+        kiwoom_orders,
+        "is_scalping_buy_window_blocked",
+        lambda *_args, **_kwargs: False,
+    )
 
     result = kiwoom_orders.send_buy_order_market(
         "123456",
@@ -26731,8 +26756,14 @@ def test_send_buy_order_market_blocks_outside_buy_window_even_with_defensive_ove
     monkeypatch,
 ):
     monkeypatch.setattr(kiwoom_orders, "is_buy_side_paused", lambda: False)
-    monkeypatch.setattr(kiwoom_orders, "is_scalping_buy_window_blocked", lambda: True)
-    monkeypatch.setattr(kiwoom_orders, "is_buy_side_time_blocked", lambda: True)
+    monkeypatch.setattr(
+        kiwoom_orders,
+        "is_scalping_buy_window_blocked",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        kiwoom_orders, "is_buy_side_time_blocked", lambda *_args, **_kwargs: True
+    )
 
     def _should_not_call_api(*args, **kwargs):
         raise AssertionError("buy window hard block must stop broker submission")
@@ -27054,7 +27085,7 @@ def test_send_sell_order_market_remaps_pre0830_sor_market_sell(monkeypatch):
     assert captured["payload"]["ord_uv"] == ""
 
 
-def test_send_sell_order_market_retries_sor_market_time_reject_as_best(monkeypatch):
+def test_send_sell_order_market_does_not_retry_sor_market_time_reject(monkeypatch):
     class FixedDateTime(datetime):
         @classmethod
         def now(cls, tz=None):
@@ -27092,12 +27123,11 @@ def test_send_sell_order_market_retries_sor_market_time_reject_as_best(monkeypat
         strategy="SCALPING",
     )
 
-    assert result["ord_no"] == "SRETRY"
-    assert [payload["trde_tp"] for payload in calls] == ["3", "6"]
-    assert calls[1]["ord_uv"] == ""
+    assert result["return_code"] == "20"
+    assert [payload["trde_tp"] for payload in calls] == ["3"]
 
 
-def test_send_sell_order_market_retries_unsupported_market_type_as_best(monkeypatch):
+def test_send_sell_order_market_does_not_retry_unsupported_market_type(monkeypatch):
     class FixedDateTime(datetime):
         @classmethod
         def now(cls, tz=None):
@@ -27136,9 +27166,8 @@ def test_send_sell_order_market_retries_unsupported_market_type_as_best(monkeypa
         dmst_stex_tp="SOR",
     )
 
-    assert result["ord_no"] == "S407022"
-    assert [payload["trde_tp"] for payload in calls] == ["3", "6"]
-    assert calls[1]["ord_uv"] == ""
+    assert result["return_code"] == "20"
+    assert [payload["trde_tp"] for payload in calls] == ["3"]
 
 
 def test_send_buy_order_market_remaps_pre0830_sor_market_buy(monkeypatch):
@@ -27158,7 +27187,9 @@ def test_send_buy_order_market_remaps_pre0830_sor_market_buy(monkeypatch):
 
     monkeypatch.setattr(kiwoom_orders, "datetime", FixedDateTime)
     monkeypatch.setattr(kiwoom_orders, "is_buy_side_paused", lambda: False)
-    monkeypatch.setattr(kiwoom_orders, "is_buy_side_time_blocked", lambda: False)
+    monkeypatch.setattr(
+        kiwoom_orders, "is_buy_side_time_blocked", lambda *_args, **_kwargs: False
+    )
     monkeypatch.setattr(
         kiwoom_orders.kiwoom_utils,
         "get_api_url",
@@ -27179,7 +27210,7 @@ def test_send_buy_order_market_remaps_pre0830_sor_market_buy(monkeypatch):
     assert captured["payload"]["ord_uv"] == ""
 
 
-def test_send_buy_order_market_retries_sor_market_time_reject_as_best(monkeypatch):
+def test_send_buy_order_market_does_not_retry_sor_market_time_reject(monkeypatch):
     class FixedDateTime(datetime):
         @classmethod
         def now(cls, tz=None):
@@ -27202,7 +27233,9 @@ def test_send_buy_order_market_retries_sor_market_time_reject_as_best(monkeypatc
 
     monkeypatch.setattr(kiwoom_orders, "datetime", FixedDateTime)
     monkeypatch.setattr(kiwoom_orders, "is_buy_side_paused", lambda: False)
-    monkeypatch.setattr(kiwoom_orders, "is_buy_side_time_blocked", lambda: False)
+    monkeypatch.setattr(
+        kiwoom_orders, "is_buy_side_time_blocked", lambda *_args, **_kwargs: False
+    )
     monkeypatch.setattr(
         kiwoom_orders.kiwoom_utils,
         "get_api_url",
@@ -27217,12 +27250,11 @@ def test_send_buy_order_market_retries_sor_market_time_reject_as_best(monkeypatc
         order_type="3",
     )
 
-    assert result["ord_no"] == "BRETRY"
-    assert [payload["trde_tp"] for payload in calls] == ["3", "6"]
-    assert calls[1]["ord_uv"] == ""
+    assert result["return_code"] == "20"
+    assert [payload["trde_tp"] for payload in calls] == ["3"]
 
 
-def test_send_buy_order_market_retries_unsupported_market_type_as_best(monkeypatch):
+def test_send_buy_order_market_does_not_retry_unsupported_market_type(monkeypatch):
     class FixedDateTime(datetime):
         @classmethod
         def now(cls, tz=None):
@@ -27245,7 +27277,9 @@ def test_send_buy_order_market_retries_unsupported_market_type_as_best(monkeypat
 
     monkeypatch.setattr(kiwoom_orders, "datetime", FixedDateTime)
     monkeypatch.setattr(kiwoom_orders, "is_buy_side_paused", lambda: False)
-    monkeypatch.setattr(kiwoom_orders, "is_buy_side_time_blocked", lambda: False)
+    monkeypatch.setattr(
+        kiwoom_orders, "is_buy_side_time_blocked", lambda *_args, **_kwargs: False
+    )
     monkeypatch.setattr(
         kiwoom_orders.kiwoom_utils,
         "get_api_url",
@@ -27261,9 +27295,8 @@ def test_send_buy_order_market_retries_unsupported_market_type_as_best(monkeypat
         dmst_stex_tp="SOR",
     )
 
-    assert result["ord_no"] == "B407022"
-    assert [payload["trde_tp"] for payload in calls] == ["3", "6"]
-    assert calls[1]["ord_uv"] == ""
+    assert result["return_code"] == "20"
+    assert [payload["trde_tp"] for payload in calls] == ["3"]
 
 
 def test_send_buy_order_market_allows_order_after_resume(monkeypatch):
@@ -27274,7 +27307,9 @@ def test_send_buy_order_market_allows_order_after_resume(monkeypatch):
             return {"rt_cd": "0", "ord_no": "B123"}
 
     monkeypatch.setattr(kiwoom_orders, "is_buy_side_paused", lambda: False)
-    monkeypatch.setattr(kiwoom_orders, "is_buy_side_time_blocked", lambda: False)
+    monkeypatch.setattr(
+        kiwoom_orders, "is_buy_side_time_blocked", lambda *_args, **_kwargs: False
+    )
     monkeypatch.setattr(
         kiwoom_orders.requests, "post", lambda *args, **kwargs: DummyResponse()
     )
@@ -27304,7 +27339,9 @@ def test_send_buy_order_market_maps_ioc_limit_to_best_ioc(monkeypatch):
         return DummyResponse()
 
     monkeypatch.setattr(kiwoom_orders, "is_buy_side_paused", lambda: False)
-    monkeypatch.setattr(kiwoom_orders, "is_buy_side_time_blocked", lambda: False)
+    monkeypatch.setattr(
+        kiwoom_orders, "is_buy_side_time_blocked", lambda *_args, **_kwargs: False
+    )
     monkeypatch.setattr(kiwoom_orders.requests, "post", fake_post)
     monkeypatch.setattr(
         kiwoom_orders.kiwoom_utils,
@@ -46419,7 +46456,9 @@ def test_avg_down_runtime_config_snapshot_retries_failed_append_and_deduplicates
         state_handlers,
         "TRADING_RULES",
         SimpleNamespace(
-            SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE=85.0, SCALP_STOP=-1.5
+            SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE=85.0,
+            SCALP_STOP=-1.5,
+            AVG_DOWN_POLICY_ENABLED=True,
         ),
     )
     monkeypatch.delenv(

@@ -21,6 +21,7 @@ from src.engine.monitoring.widget_symbol_runtime_policy import (
     POLICY_AUTHORITY,
     SYMBOLS,
 )
+from src.trading.market import session_contract
 from src.utils.constants import DATA_DIR
 from src.utils.market_day import is_krx_trading_day
 
@@ -90,6 +91,7 @@ class WidgetSymbolRuntimeContract:
             )
         clock = now.time().replace(tzinfo=None)
         if KRX_START <= clock < KRX_END:
+            market = session_contract.resolve_market_session(now)
             return SessionContext(
                 "KRX_REGULAR",
                 "KRX",
@@ -99,6 +101,32 @@ class WidgetSymbolRuntimeContract:
                 KRX_END,
                 3,
                 True,
+                market.contract_version,
+                market.session_regime,
+                market.decision_market_scope,
+                "krx_only",
+                "UNKNOWN",
+            )
+        market = session_contract.resolve_market_session(now)
+        if market.session_regime in {
+            session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET,
+            session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET_CLOSE_ONLY,
+            session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET_TERMINAL_EXIT,
+        }:
+            return SessionContext(
+                market.session_regime,
+                "UNKNOWN",
+                "KRX_NXT",
+                f"{self.code}_AL",
+                datetime.strptime("16:00:00", "%H:%M:%S").time(),
+                datetime.strptime("20:00:00", "%H:%M:%S").time(),
+                5,
+                True,
+                market.contract_version,
+                market.session_regime,
+                market.decision_market_scope,
+                "krx_nxt_integrated",
+                "UNKNOWN",
             )
         return SessionContext("CLOSED", "KRX", "KRX", self.code, None, None, 0, False)
 

@@ -36,6 +36,7 @@ from src.trading.low_price_two_leg.gateway import (
     MinuteBarsSnapshot,
     SubmitResult,
 )
+from src.trading.market import session_contract
 from src.trading.order.symbol_owner_policy_auto_apply import (
     expected_machine_symbol_owners,
 )
@@ -2658,6 +2659,45 @@ def test_gateway_uses_bound_symbol_sor_and_one_share_for_every_write():
     assert session.calls[0][1]["json"]["ord_qty"] == "10"
     assert session.calls[1][1]["json"]["ord_qty"] == "10"
     assert session.calls[2][1]["json"]["cncl_qty"] == "0"
+
+
+def test_gateway_integrated_aftermarket_buy_requires_exact_date_eligibility(
+    monkeypatch,
+):
+    session = FakeSession([FakeResponse({"return_code": 0, "ord_no": "B-AM"})])
+    gateway = KiwoomLowPriceTwoLegGateway(
+        symbol="475150",
+        request_session=session,
+        token_loader=lambda: "TOKEN",
+        order_authority=True,
+        base_url="https://api.kiwoom.com",
+    )
+    gateway.set_order_context(observed_at=datetime(2026, 9, 16, 16, 30, tzinfo=KST))
+
+    blocked = gateway.submit_limit_buy(price=17_000, quantity=10)
+    assert blocked.return_code == "SESSION_PREFLIGHT_BLOCKED"
+    assert session.calls == []
+
+    eligibility = session_contract.resolve_symbol_venue_eligibility(
+        "475150",
+        date(2026, 9, 16),
+        {
+            "trade_date": "2026-09-16",
+            "stock_code": "475150",
+            "krx_regular_eligible": True,
+            "nxt_eligible": True,
+            "krx_aftermarket_eligible": True,
+            "quality_state": "VALID",
+            "eligible_venues_json": ["KRX", "NXT"],
+        },
+    )
+    monkeypatch.setattr(
+        gateway, "_exact_date_venue_eligibility", lambda _trade_date: eligibility
+    )
+
+    accepted = gateway.submit_limit_buy(price=17_000, quantity=10)
+    assert accepted.accepted is True
+    assert session.calls[0][1]["json"]["dmst_stex_tp"] == "SOR"
 
 
 def test_gateway_minute_request_uses_integrated_sor_code_and_completed_bar_only():

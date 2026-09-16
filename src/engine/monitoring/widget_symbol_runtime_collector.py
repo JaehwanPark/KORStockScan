@@ -40,7 +40,6 @@ from src.engine.monitoring.widget_auxiliary_context import (
     attach_auxiliary_summary,
 )
 from src.engine.monitoring.widget_symbol_runtime_policy import (
-    OFFICIAL_REFERENCE,
     POLICY_AUTHORITY,
     WidgetSymbolRuntimePolicyLoader,
 )
@@ -56,9 +55,25 @@ from src.trading.order.tick_utils import (
 from src.utils import kiwoom_utils
 
 COLLECTION_START = clock_time(8, 57)
-COLLECTION_END = clock_time(15, 31)
+COLLECTION_END = clock_time(20, 1)
 CACHE_BOUNDARY_REQUEST_CAPACITY = 52
 REQUESTS_PER_MINUTE = 64
+COLLECTOR_OFFICIAL_REFERENCE = {
+    "repository": "Kiwoom-Securities/Kiwoom-REST-API",
+    "commit_sha": "953e5dbff123f437ab4d11a78a95191a685eb51f",
+    "retrieved_at_kst": "2026-09-16T14:22:43+09:00",
+    "inspected_paths": [
+        "kiwoom/_data/kiwoom_api_spec.json:ka10001,ka10004,ka10080",
+        "kiwoom/specs.py",
+        "kiwoom/core",
+        "postman/kiwoom-openapi.postman_collection.json",
+    ],
+    "request_contracts": [
+        "POST /api/dostk/stkinfo; api-id=ka10001",
+        "POST /api/dostk/mrkcond; api-id=ka10004",
+        "POST /api/dostk/chart; api-id=ka10080",
+    ],
+}
 
 ENTRY_DIAGNOSTIC_METRIC_CONTRACT = {
     "metric_role": "widget_symbol_entry_first_blocker_instrumentation",
@@ -319,6 +334,7 @@ class WidgetSymbolRuntimeCollector:
             for symbol, profile in WIDGET_SYMBOL_AUXILIARY_PROFILES.items()
         }
         self._episodes: dict[str, EpisodeState] = {}
+        self._episode_sessions: dict[str, str] = {}
         self._last_record_key: dict[str, str] = {}
         self._symbol_cursor = 0
 
@@ -344,6 +360,7 @@ class WidgetSymbolRuntimeCollector:
         for collector in self._auxiliary_collectors.values():
             collector.reset()
         self._episodes = {}
+        self._episode_sessions = {}
         for symbol, policy in self._policies.items():
             snapshot = self._contracts[symbol].load_snapshot()
             if snapshot.get("policy_id") == policy["policy_id"]:
@@ -352,6 +369,10 @@ class WidgetSymbolRuntimeCollector:
                 )
             else:
                 self._episodes[symbol] = EpisodeState(trade_date=day)
+            advisory = snapshot.get("advisory")
+            self._episode_sessions[symbol] = (
+                str(advisory.get("session") or "") if isinstance(advisory, dict) else ""
+            )
         self._last_record_key.clear()
         self._symbol_cursor = 0
 
@@ -389,16 +410,18 @@ class WidgetSymbolRuntimeCollector:
         context: Any,
     ) -> list[MinuteBar]:
         minute_key = observed_at.strftime("%Y%m%d%H%M")
-        cached = self._minute_cache.get(symbol)
+        request_code = str(context.request_code)
+        cache_key = f"{symbol}:{request_code}"
+        cached = self._minute_cache.get(cache_key)
         if cached is None or cached[0] != minute_key:
             payload = client.post(
                 "/api/dostk/chart",
                 "ka10080",
-                {"stk_cd": symbol, "tic_scope": "1", "upd_stkpc_tp": "1"},
+                {"stk_cd": request_code, "tic_scope": "1", "upd_stkpc_tp": "1"},
             )
-            self._minute_cache[symbol] = (minute_key, payload)
+            self._minute_cache[cache_key] = (minute_key, payload)
         return completed_session_bars(
-            self._minute_cache[symbol][1].get("stk_min_pole_chart_qry"),
+            self._minute_cache[cache_key][1].get("stk_min_pole_chart_qry"),
             observed_at=observed_at,
             session_start=context.start,
             session_end=context.end,
@@ -410,14 +433,18 @@ class WidgetSymbolRuntimeCollector:
         *,
         client: KiwoomReadOnlyClient,
         symbol: str,
+        request_code: str,
         observed_at: datetime,
     ) -> tuple[dict[str, Any], float]:
         bucket = observed_at.strftime("%Y%m%d%H%M") + str(observed_at.second // 30)
-        cached = self._quote_cache.get(symbol)
+        cache_key = f"{symbol}:{request_code}"
+        cached = self._quote_cache.get(cache_key)
         if cached is None or cached[0] != bucket:
-            payload = client.post("/api/dostk/stkinfo", "ka10001", {"stk_cd": symbol})
-            self._quote_cache[symbol] = (bucket, payload, observed_at)
-        cached = self._quote_cache[symbol]
+            payload = client.post(
+                "/api/dostk/stkinfo", "ka10001", {"stk_cd": request_code}
+            )
+            self._quote_cache[cache_key] = (bucket, payload, observed_at)
+        cached = self._quote_cache[cache_key]
         return dict(cached[1]), max(0.0, (observed_at - cached[2]).total_seconds())
 
     def _shared_market_payload(
@@ -466,17 +493,23 @@ class WidgetSymbolRuntimeCollector:
         *,
         client: KiwoomReadOnlyClient,
         symbol: str,
+        request_code: str,
         observed_at: datetime,
     ) -> dict[str, Any]:
         bucket = observed_at.strftime("%Y%m%d%H%M") + str(observed_at.second // 30)
-        cached = self._bbo_cache.get(symbol)
+        cache_key = f"{symbol}:{request_code}"
+        cached = self._bbo_cache.get(cache_key)
         if cached is None or cached[0] != bucket:
-            raw = client.post("/api/dostk/mrkcond", "ka10004", {"stk_cd": symbol})
+            raw = client.post("/api/dostk/mrkcond", "ka10004", {"stk_cd": request_code})
             received = observed_at
-            self._bbo_cache[symbol] = (bucket, _parse_bbo(raw, received), received)
-        bbo = dict(self._bbo_cache[symbol][1])
+            self._bbo_cache[cache_key] = (
+                bucket,
+                _parse_bbo(raw, received),
+                received,
+            )
+        bbo = dict(self._bbo_cache[cache_key][1])
         bbo["age_sec"] = max(
-            0.0, (observed_at - self._bbo_cache[symbol][2]).total_seconds()
+            0.0, (observed_at - self._bbo_cache[cache_key][2]).total_seconds()
         )
         return bbo
 
@@ -691,6 +724,18 @@ class WidgetSymbolRuntimeCollector:
     ) -> dict[str, Any]:
         """Publish a fail-closed snapshot without terminating other symbols."""
         contract = self._contract(symbol)
+        context_resolver = getattr(contract, "session_context", None)
+        context = (
+            context_resolver(observed_at)
+            if callable(context_resolver)
+            else WidgetSymbolRuntimeContract(
+                symbol, str(contract.name)
+            ).session_context(observed_at)
+        )
+        integrated_aftermarket = context.market_data_route == "krx_nxt_integrated"
+        advisory_session = (
+            "KRX_NXT_AFTERMARKET" if integrated_aftermarket else "KRX_REGULAR"
+        )
         episode = self._episodes[symbol]
         episode.activate_date(observed_at)
         payload = {
@@ -700,16 +745,21 @@ class WidgetSymbolRuntimeCollector:
             "name": contract.name,
             "observed_at_kst": observed_at.isoformat(),
             "current_price": None,
-            "market_venue": "KRX",
-            "market_cohort": "KRX",
-            "market_session": "krx_regular",
+            "market_venue": "UNKNOWN" if integrated_aftermarket else "KRX",
+            "market_cohort": "KRX_NXT" if integrated_aftermarket else "KRX",
+            "market_session": (
+                "krx_nxt_aftermarket" if integrated_aftermarket else "krx_regular"
+            ),
+            "market_data_route": context.market_data_route,
+            "market_data_request_code": context.request_code,
+            "actual_execution_venue": "UNKNOWN",
             "strategy_profile": contract.STRATEGY_PROFILE,
             "policy_id": policy["policy_id"],
             "policy_effective_date": policy.get("effective_date"),
-            "official_reference": OFFICIAL_REFERENCE,
+            "official_reference": COLLECTOR_OFFICIAL_REFERENCE,
             "advisory": {
                 "state": "DATA_WAIT",
-                "session": "KRX_REGULAR",
+                "session": advisory_session,
                 "observed_at": observed_at.isoformat(),
                 "source_quality": {
                     "status": "BLOCKED",
@@ -779,6 +829,26 @@ class WidgetSymbolRuntimeCollector:
     ) -> dict[str, Any]:
         contract = self._contract(symbol)
         context = contract.session_context(observed_at)
+        integrated_aftermarket = context.market_data_route == "krx_nxt_integrated"
+        advisory_session = (
+            "KRX_NXT_AFTERMARKET" if integrated_aftermarket else "KRX_REGULAR"
+        )
+        market_venue = "UNKNOWN" if integrated_aftermarket else "KRX"
+        market_cohort = "KRX_NXT" if integrated_aftermarket else "KRX"
+        market_session = (
+            "krx_nxt_aftermarket" if integrated_aftermarket else "krx_regular"
+        )
+        effective_policy = dict(policy)
+        if integrated_aftermarket:
+            seeded = policy.get("integrated_aftermarket_observation_policy")
+            if not isinstance(seeded, dict):
+                raise RuntimeError(f"{symbol}_integrated_aftermarket_policy_missing")
+            effective_policy["signal_policy"] = seeded
+        if self._episode_sessions.get(symbol) != advisory_session:
+            self._episodes[symbol] = EpisodeState(
+                trade_date=observed_at.date().isoformat()
+            )
+            self._episode_sessions[symbol] = advisory_session
         episode = self._episodes[symbol]
         episode.activate_date(observed_at)
         if not context.active:
@@ -792,7 +862,7 @@ class WidgetSymbolRuntimeCollector:
                 "market_cohort": "KRX",
                 "strategy_profile": contract.STRATEGY_PROFILE,
                 "policy_id": policy["policy_id"],
-                "official_reference": OFFICIAL_REFERENCE,
+                "official_reference": COLLECTOR_OFFICIAL_REFERENCE,
                 "entry_event": None,
                 "exit_event": None,
                 "episode": episode.as_dict(),
@@ -801,12 +871,20 @@ class WidgetSymbolRuntimeCollector:
             _atomic_write(contract.DEFAULT_SNAPSHOT_PATH, payload)
             return payload
         quote, quote_age_sec = self._quote(
-            client=client, symbol=symbol, observed_at=observed_at
+            client=client,
+            symbol=symbol,
+            request_code=context.request_code,
+            observed_at=observed_at,
         )
         current_price = _positive_int(quote.get("cur_prc"))
         if current_price is None:
             raise RuntimeError(f"{symbol}_quote_price_missing")
-        bbo = self._bbo(client=client, symbol=symbol, observed_at=observed_at)
+        bbo = self._bbo(
+            client=client,
+            symbol=symbol,
+            request_code=context.request_code,
+            observed_at=observed_at,
+        )
         bars = self._bars(
             client=client,
             symbol=symbol,
@@ -885,7 +963,12 @@ class WidgetSymbolRuntimeCollector:
             auxiliary["summary"],
         )
         previous_snapshot = contract.load_snapshot()
-        same_policy_snapshot = previous_snapshot.get("policy_id") == policy["policy_id"]
+        previous_advisory = previous_snapshot.get("advisory")
+        same_policy_snapshot = bool(
+            previous_snapshot.get("policy_id") == policy["policy_id"]
+            and isinstance(previous_advisory, dict)
+            and previous_advisory.get("session") == advisory_session
+        )
         entry_event = (
             self._carry_event(
                 previous_snapshot.get("entry_event"),
@@ -909,7 +992,7 @@ class WidgetSymbolRuntimeCollector:
                 bars=bars,
                 current_price=current_price,
                 bbo=bbo,
-                policy=policy,
+                policy=effective_policy,
                 episode=episode,
                 observed_at=observed_at,
             )
@@ -973,7 +1056,9 @@ class WidgetSymbolRuntimeCollector:
                 episode.active = False
                 episode.exit_bar = latest.source_time
                 episode.cooldown_until = observed_at + timedelta(
-                    minutes=int(policy["signal_policy"]["reentry_cooldown_bars"])
+                    minutes=int(
+                        effective_policy["signal_policy"]["reentry_cooldown_bars"]
+                    )
                 )
                 entry_event = None
                 exit_event = {
@@ -1000,16 +1085,19 @@ class WidgetSymbolRuntimeCollector:
             "name": contract.name,
             "observed_at_kst": observed_at.isoformat(),
             "current_price": current_price,
-            "market_venue": "KRX",
-            "market_cohort": "KRX",
-            "market_session": "krx_regular",
+            "market_venue": market_venue,
+            "market_cohort": market_cohort,
+            "market_session": market_session,
+            "market_data_route": context.market_data_route,
+            "market_data_request_code": context.request_code,
+            "actual_execution_venue": "UNKNOWN",
             "strategy_profile": contract.STRATEGY_PROFILE,
             "policy_id": policy["policy_id"],
             "policy_effective_date": policy["effective_date"],
-            "official_reference": OFFICIAL_REFERENCE,
+            "official_reference": COLLECTOR_OFFICIAL_REFERENCE,
             "advisory": {
                 "state": candidate["state"] if candidate else "WATCH",
-                "session": "KRX_REGULAR",
+                "session": advisory_session,
                 "observed_at": observed_at.isoformat(),
                 "source_quality": {
                     "status": source_quality,

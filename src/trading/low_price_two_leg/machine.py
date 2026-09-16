@@ -256,6 +256,9 @@ class LowPriceTwoLegMachine(SamsungRegularTwoLegMachine):
 
     def run_once(self, now: datetime | None = None) -> dict:
         now = (now or datetime.now(tz=KST)).astimezone(KST)
+        set_order_context = getattr(self.gateway, "set_order_context", None)
+        if callable(set_order_context):
+            set_order_context(observed_at=now)
         current_policy = self.profile.policy
         custody_policy = self._loaded_state_policy(now)
         if custody_policy is None:

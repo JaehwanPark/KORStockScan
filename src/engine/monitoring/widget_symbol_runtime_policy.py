@@ -766,6 +766,16 @@ class WidgetSymbolRuntimePolicyLoader:
                 "effective_date": observed_date.isoformat(),
                 "policy_path": str(path),
                 "signal_policy": normalized["signal_policy"],
+                "integrated_aftermarket_observation_policy": {
+                    **normalized["signal_policy"],
+                    "segment": "integrated_aftermarket_prospective",
+                    "segment_start_time": "16:03:00",
+                    "segment_end_time": "19:20:00",
+                    "force_flat_time": "19:44:00",
+                },
+                "integrated_aftermarket_observation_authority": (
+                    "prospective_frozen_seed_requires_session_specific_outcomes"
+                ),
                 "authority": "prospective_exact_observation_only",
                 "runtime_effect": False,
                 "actual_order_submitted": False,

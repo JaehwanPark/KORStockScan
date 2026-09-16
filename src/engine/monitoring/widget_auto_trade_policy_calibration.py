@@ -41,6 +41,9 @@ from src.engine.monitoring.widget_execution_quality import (
     EXECUTION_OWNER,
     load_execution_incidents,
 )
+from src.engine.monitoring.widget_symbol_runtime_contract import (
+    DEFAULT_OBSERVATION_DIR as WIDGET_SYMBOL_OBSERVATION_DIR,
+)
 from src.engine.monitoring.widget_signal_quality import (
     component_arms,
     objective_comparison,
@@ -76,6 +79,10 @@ MARKET_SESSION_CONTRACT_V2_EFFECTIVE_DATE = date(2026, 9, 14)
 DUAL_AFTERMARKET_SESSION = "KRX_NXT_AFTERMARKET"
 DUAL_AFTERMARKET_SESSION_PREFIX = f"{DUAL_AFTERMARKET_SESSION}_"
 DUAL_AFTERMARKET_EXPECTED_MINUTES = 240
+INTEGRATED_AFTERMARKET_QUALIFICATION_CONTRACT = (
+    "KRX_trading_date;KRX_NXT_AFTERMARKET/KRX_NXT;source_quality_PASS_rows>=240;"
+    "first_PASS_observation<=16:05;last_PASS_observation>=19:59"
+)
 DEFAULT_OUTPUT_DIR = Path("data/report/widget_auto_trade_policy_calibration")
 DEFAULT_EXECUTION_EVENT_DIR = Path("data/report/widget_signal_auto_trade_events")
 ACTIONABLE_STATES = frozenset({"ENTRY_CAUTION", "ENTRY_READY"})
@@ -293,6 +300,77 @@ SPECS = (
         minimum_qualified_observation_dates=CUMULATIVE_RESEARCH_MIN_QUALIFIED_DATES,
     ),
 )
+
+
+def _specs_for_target_date(target_date: date) -> tuple[SymbolSpec, ...]:
+    """Include every current research-watch symbol in the AM evidence lane.
+
+    The derived signal is prospective observation only.  Promotion still
+    requires session-specific natural outcomes and the same cumulative gates;
+    regular-session economics are never copied into the AM execution policy.
+    """
+
+    from src.engine.monitoring.widget_symbol_signal_policy_research import (
+        load_symbol_universe,
+    )
+
+    try:
+        universe, _origins = load_symbol_universe(observed_date=target_date)
+    except (OSError, ValueError):
+        return SPECS
+    static_symbols = {spec.symbol for spec in SPECS}
+    dynamic = tuple(
+        SymbolSpec(
+            symbol=symbol,
+            name=name,
+            observation_dir=WIDGET_SYMBOL_OBSERVATION_DIR,
+            prefix=f"widget_symbol_advisory_{symbol}",
+            sessions=(DUAL_AFTERMARKET_SESSION_SPEC,),
+            add_trigger_arms=((), (-40,), (-60,), (-50, -100), (-80, -160)),
+            target_bps_values=tuple(range(30, 151, 10)),
+            max_entries_values=ENTRY_CAP_VALUES,
+            minimum_signal_dates=10,
+            minimum_trades=10,
+            analysis_start_date=MARKET_SESSION_CONTRACT_V2_EFFECTIVE_DATE,
+            minimum_qualified_observation_dates=40,
+        )
+        for symbol, name in sorted(universe.items())
+        if symbol not in static_symbols
+    )
+    return (*SPECS, *dynamic)
+
+
+def _specs_for_report(report: dict[str, Any]) -> tuple[SymbolSpec, ...]:
+    """Reconstruct dynamic specs only from the immutable evidence report."""
+
+    raw_symbols = report.get("symbols")
+    if not isinstance(raw_symbols, dict):
+        raise ValueError("widget_policy_report_symbols_invalid")
+    static_symbols = {spec.symbol for spec in SPECS}
+    dynamic: list[SymbolSpec] = []
+    for symbol, payload in sorted(raw_symbols.items()):
+        name = str(payload.get("name") or "") if isinstance(payload, dict) else ""
+        if symbol in static_symbols:
+            continue
+        if len(symbol) != 6 or not symbol.isdigit() or not name:
+            raise ValueError("widget_policy_report_dynamic_symbol_invalid")
+        dynamic.append(
+            SymbolSpec(
+                symbol=symbol,
+                name=name,
+                observation_dir=WIDGET_SYMBOL_OBSERVATION_DIR,
+                prefix=f"widget_symbol_advisory_{symbol}",
+                sessions=(DUAL_AFTERMARKET_SESSION_SPEC,),
+                add_trigger_arms=((), (-40,), (-60,), (-50, -100), (-80, -160)),
+                target_bps_values=tuple(range(30, 151, 10)),
+                max_entries_values=ENTRY_CAP_VALUES,
+                minimum_signal_dates=10,
+                minimum_trades=10,
+                analysis_start_date=MARKET_SESSION_CONTRACT_V2_EFFECTIVE_DATE,
+                minimum_qualified_observation_dates=40,
+            )
+        )
+    return (*SPECS, *dynamic)
 
 
 def _atomic_write(path: Path, payload: dict[str, Any]) -> None:
@@ -1306,7 +1384,7 @@ def _research_accumulation(
     *,
     target_date: date | None = None,
 ) -> dict[str, Any]:
-    if spec.symbol not in CUMULATIVE_RESEARCH_GATE_SYMBOLS:
+    if spec.minimum_qualified_observation_dates <= 0:
         return {
             "status": "not_required",
             "start_date": spec.analysis_start_date.isoformat(),
@@ -1341,17 +1419,33 @@ def _research_accumulation(
         pass_rows = [row for row in day_rows if row["source_quality_status"] == "PASS"]
         reasons: list[str] = []
         if not day_rows:
-            reasons.append("no_valid_krx_regular_rows")
-        if len(pass_rows) < 300:
-            reasons.append("pass_row_count_below_300")
-        if not pass_rows or min(row["observed_at"].time() for row in pass_rows) > time(
-            9, 30
-        ):
-            reasons.append("opening_coverage_missing_after_0930")
-        if not pass_rows or max(row["observed_at"].time() for row in pass_rows) < time(
-            15, 20
-        ):
-            reasons.append("closing_coverage_missing_before_1520")
+            reasons.append(
+                "no_valid_integrated_aftermarket_rows"
+                if session.session == DUAL_AFTERMARKET_SESSION
+                else "no_valid_krx_regular_rows"
+            )
+        if session.session == DUAL_AFTERMARKET_SESSION:
+            if len(pass_rows) < DUAL_AFTERMARKET_EXPECTED_MINUTES:
+                reasons.append("pass_row_count_below_240")
+            if not pass_rows or min(
+                row["observed_at"].time() for row in pass_rows
+            ) > time(16, 5):
+                reasons.append("integrated_aftermarket_opening_coverage_missing")
+            if not pass_rows or max(
+                row["observed_at"].time() for row in pass_rows
+            ) < time(19, 59):
+                reasons.append("integrated_aftermarket_closing_coverage_missing")
+        else:
+            if len(pass_rows) < 300:
+                reasons.append("pass_row_count_below_300")
+            if not pass_rows or min(
+                row["observed_at"].time() for row in pass_rows
+            ) > time(9, 30):
+                reasons.append("opening_coverage_missing_after_0930")
+            if not pass_rows or max(
+                row["observed_at"].time() for row in pass_rows
+            ) < time(15, 20):
+                reasons.append("closing_coverage_missing_before_1520")
         if reasons:
             excluded_dates[source_date.isoformat()] = reasons
         else:
@@ -1365,7 +1459,11 @@ def _research_accumulation(
         "qualified_observation_date_count": len(qualified_dates),
         "qualified_observation_dates": qualified_dates,
         "excluded_observation_dates": excluded_dates,
-        "qualification_contract": CUMULATIVE_RESEARCH_QUALIFICATION_CONTRACT,
+        "qualification_contract": (
+            INTEGRATED_AFTERMARKET_QUALIFICATION_CONTRACT
+            if session.session == DUAL_AFTERMARKET_SESSION
+            else CUMULATIVE_RESEARCH_QUALIFICATION_CONTRACT
+        ),
         "runtime_eligible": ready,
         "remaining_qualified_dates_minimum": max(0, minimum - len(qualified_dates)),
         "observed_qualification_ratio": (
@@ -1923,7 +2021,7 @@ def build_report(
         feedback_symbols = {}
     symbol_reports: dict[str, Any] = {}
     source_paths: list[str] = []
-    for spec in SPECS:
+    for spec in _specs_for_target_date(target_date):
         rows, paths, source_load_audit = _load_rows(spec, target_date=target_date)
         source_paths.extend(paths)
         source_dates = sorted({row["trade_date"].isoformat() for row in rows})
@@ -2215,7 +2313,7 @@ def build_policy(report: dict[str, Any]) -> dict[str, Any]:
     policy_symbols: dict[str, Any] = {}
     blocked_sessions: dict[str, dict[str, str]] = {}
     observe_only_sessions: dict[str, dict[str, dict[str, Any]]] = {}
-    for spec in SPECS:
+    for spec in _specs_for_report(report):
         source = report["symbols"][spec.symbol]
         session_specs = {
             value.session: value
@@ -2284,9 +2382,9 @@ def build_policy(report: dict[str, Any]) -> dict[str, Any]:
                 "force_flat_at_session_end": session_spec.force_flat,
                 "force_exit_time": selected["force_exit_time"],
                 "overnight_forbidden": session_spec.overnight_forbidden,
-                "source_final_exit_action": SOURCE_FINAL_EXIT_ACTION_BY_SYMBOL[
-                    spec.symbol
-                ],
+                "source_final_exit_action": SOURCE_FINAL_EXIT_ACTION_BY_SYMBOL.get(
+                    spec.symbol, "sell_own_filled_quantity"
+                ),
                 "research_arm": (
                     f"equal_share_{selected['add_trigger_bps_from_initial_fill']}_"
                     f"tp{selected['target_bps']}_multi"

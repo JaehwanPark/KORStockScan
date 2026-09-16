@@ -251,7 +251,13 @@ def validate_policy(payload: Any, *, effective_date: date) -> None:
             or not str(row.get("symbol") or "").isdigit()
             or not row.get("name")
             or row.get("session")
-            not in {"morning", "late_morning", "midday", "afternoon"}
+            not in {
+                "morning",
+                "late_morning",
+                "midday",
+                "afternoon",
+                "integrated_aftermarket",
+            }
             or not isinstance(policy, dict)
             or set(policy)
             != {

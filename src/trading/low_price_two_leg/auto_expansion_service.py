@@ -137,7 +137,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.once:
             print(json.dumps(states, ensure_ascii=False, indent=2))
             return 0
-        if observed.time().replace(tzinfo=None) > time(15, 31):
+        if observed.time().replace(tzinfo=None) > time(20, 1):
             return 0
         time_module.sleep(max(1.0, float(args.interval_sec)))
 

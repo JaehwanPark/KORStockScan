@@ -66,14 +66,13 @@ MAX_MANAGEABLE_HELD_LEG_RATE = 0.25
 MAX_MANAGEABLE_HELD_MARK_TO_MARKET_LOSS_PCT = 3.0
 OFFICIAL_REFERENCE = {
     "repository": "Kiwoom-Securities/Kiwoom-REST-API",
-    "commit_sha": "234560d213acd8871ae344b5481aecd2f30287fa",
-    "retrieved_at_kst": "2026-09-05T21:30:56+09:00",
+    "commit_sha": "953e5dbff123f437ab4d11a78a95191a685eb51f",
+    "retrieved_at_kst": "2026-09-16T14:22:43+09:00",
     "inspected_paths": [
         "kiwoom/_data/kiwoom_api_spec.json",
         "kiwoom/specs.py",
         "kiwoom/core/errors.py",
         "postman/kiwoom-openapi.postman_collection.json",
-        "examples/국내주식/차트/get_domestic_stock_minute_chart.py",
     ],
     "request_contract": "POST /api/dostk/chart; api-id=ka10080",
 }
@@ -218,8 +217,9 @@ def fetch_sor_history(
     shared_defer_max_attempts: int = 12,
     shared_defer_delay_sec: float = 2.0,
     sleeper: Callable[[float], None] = time_module.sleep,
+    include_integrated_aftermarket: bool = False,
 ) -> tuple[list[Bar], dict[str, Any]]:
-    """Fetch fully bracketed integrated-SOR regular bars without auth mutation."""
+    """Fetch fully bracketed integrated-SOR bars without auth mutation."""
     symbol_allowlist = allowed_symbols or frozenset(
         profile.symbol for profile in PROFILES.values()
     )
@@ -339,7 +339,12 @@ def fetch_sor_history(
                 if oldest_seen is None
                 else min(oldest_seen, timestamp.date())
             )
-            if not time(9, 0) <= timestamp.time() < time(15, 30):
+            in_regular = time(9, 0) <= timestamp.time() < time(15, 30)
+            in_integrated_aftermarket = bool(
+                include_integrated_aftermarket
+                and time(16, 0) <= timestamp.time() < time(20, 0)
+            )
+            if not (in_regular or in_integrated_aftermarket):
                 out_of_session_row_count += 1
                 continue
             prices = (
@@ -392,7 +397,16 @@ def fetch_sor_history(
         "symbol": symbol,
         "request_code": request_code,
         "api_id": "ka10080",
-        "market": "KRX_NXT_integrated_SOR_regular",
+        "market": (
+            "KRX_NXT_integrated_SOR_regular_and_aftermarket"
+            if include_integrated_aftermarket
+            else "KRX_NXT_integrated_SOR_regular"
+        ),
+        "included_sessions": (
+            ["KRX_REGULAR", "KRX_NXT_AFTERMARKET"]
+            if include_integrated_aftermarket
+            else ["KRX_REGULAR"]
+        ),
         "api_url": url,
         "page_count": page_count,
         "bar_count": len(bars),
@@ -595,10 +609,19 @@ def _episode(
             "observed_near_low_pct": round(signal.near_low_pct, 6),
         }
     close = clamp_price_to_tick(signal.close_price)
-    fill_bars = context.bars[
-        signal.index + 1 : signal.index + 1 + candidate.entry_valid_completed_bars
-    ]
-    target_bars = context.bars[signal.index + 1 :]
+    # A regular-session signal must never borrow an integrated-aftermarket bar
+    # (or the following day) as a synthetic fill/target.  Stop at the first
+    # discontinuity so each research episode stays inside its own venue/session
+    # cohort even when the source contains both daily sessions.
+    contiguous_after_signal: list[Bar] = []
+    previous = context.bars[signal.index]
+    for bar in context.bars[signal.index + 1 :]:
+        if bar.timestamp - previous.timestamp != timedelta(minutes=1):
+            break
+        contiguous_after_signal.append(bar)
+        previous = bar
+    target_bars = tuple(contiguous_after_signal)
+    fill_bars = target_bars[: candidate.entry_valid_completed_bars]
     legs = [
         _leg_outcome(
             entry_price=entry_price,

@@ -80,9 +80,12 @@ def test_exact_date_report_reuse_requires_matching_fingerprint(tmp_path) -> None
     }
     path.write_text(json.dumps(report), encoding="utf-8")
 
-    assert expanded.reusable_report(
-        path, target_date=date(2026, 9, 14), fingerprint="a" * 64
-    ) == report
+    assert (
+        expanded.reusable_report(
+            path, target_date=date(2026, 9, 14), fingerprint="a" * 64
+        )
+        == report
+    )
     assert (
         expanded.reusable_report(
             path, target_date=date(2026, 9, 14), fingerprint="b" * 64
@@ -109,7 +112,7 @@ def test_expanded_profiles_separate_new_symbols_and_inactive_existing_sessions()
     } == {
         (symbol, session)
         for symbol in expanded.CANDIDATE_SYMBOLS
-        for session in ("morning", "late_morning", "midday", "afternoon")
+        for session in expanded.SESSION_WINDOWS
     }
     assert len(expanded.EXISTING_SYMBOL_TIME_EXTENSION_PROFILES) == (
         len(expanded.IMPLEMENTED_SYMBOLS) * len(expanded.SESSION_WINDOWS)
@@ -559,7 +562,9 @@ def test_dynamic_universe_report_pins_inventory_for_notifier_validation(monkeypa
 
     assert report["candidate_symbols"]["000990"] == "DB하이텍"
     assert report["dynamic_universe_source_date"] == "2026-08-21"
-    assert report["new_symbol_profile_count"] == len(candidate_symbols) * 4
+    assert report["new_symbol_profile_count"] == len(candidate_symbols) * len(
+        expanded.SESSION_WINDOWS
+    )
     assert report["existing_symbol_universe_size"] == 13
     assert report["existing_symbol_logic_improvement_profile_count"] == 27
     assert (

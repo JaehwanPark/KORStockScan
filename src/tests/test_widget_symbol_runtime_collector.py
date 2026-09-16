@@ -32,6 +32,18 @@ def _bar(minute: int, open_: int, high: int, low: int, close: int, volume: int):
     )
 
 
+def test_dynamic_widget_contract_uses_integrated_aftermarket_market_data_route():
+    contract = runtime_contract.WidgetSymbolRuntimeContract("006800", "미래에셋증권")
+
+    context = contract.session_context(datetime(2026, 9, 16, 16, 10, tzinfo=KST))
+
+    assert context.name == "KRX_NXT_AFTERMARKET"
+    assert context.market_venue == "UNKNOWN"
+    assert context.market_cohort == "KRX_NXT"
+    assert context.request_code == "006800_AL"
+    assert context.market_data_route == "krx_nxt_integrated"
+
+
 def test_entry_candidate_uses_symbol_policy_reclaim_completed_bar_and_fresh_bbo():
     bars = [_bar(index, 10_000, 10_010, 9_990, 10_000, 100) for index in range(30)]
     bars[-5] = _bar(25, 9_920, 9_930, 9_900, 9_910, 100)

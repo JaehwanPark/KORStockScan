@@ -84,11 +84,13 @@ MORNING_WINDOW = (time(9, 10), time(9, 59))
 LATE_MORNING_WINDOW = (time(10, 0), time(10, 59))
 MIDDAY_WINDOW = (time(13, 15), time(13, 54))
 AFTERNOON_WINDOW = (time(14, 0), time(14, 40))
+INTEGRATED_AFTERMARKET_WINDOW = (time(16, 30), time(19, 20))
 SESSION_WINDOWS = {
     "morning": MORNING_WINDOW,
     "late_morning": LATE_MORNING_WINDOW,
     "midday": MIDDAY_WINDOW,
     "afternoon": AFTERNOON_WINDOW,
+    "integrated_aftermarket": INTEGRATED_AFTERMARKET_WINDOW,
 }
 REVIEWED_SYMBOLS = {
     "006800": "미래에셋증권",
@@ -922,6 +924,18 @@ def build_report(
             continue
         contexts_by_symbol[symbol] = contexts
         meta = dict(raw_meta)
+        aftermarket_counts: dict[str, int] = {}
+        for bar in bars:
+            timestamp = getattr(bar, "timestamp", None)
+            if isinstance(timestamp, datetime) and time(
+                16, 0
+            ) <= timestamp.time() < time(20, 0):
+                key = timestamp.date().isoformat()
+                aftermarket_counts[key] = aftermarket_counts.get(key, 0) + 1
+        meta["integrated_aftermarket_minute_count_by_date"] = aftermarket_counts
+        meta["integrated_aftermarket_complete_dates"] = sorted(
+            key for key, count in aftermarket_counts.items() if count == 240
+        )
         meta["latest_close_price"] = int(bars[-1].close_price)
         meta["latest_price_band"] = _price_band(int(bars[-1].close_price))
         source_meta[symbol] = meta
@@ -941,6 +955,24 @@ def build_report(
                 "recommended_spot": None,
                 "source_quality_reason": source_quarantine.get(
                     profile.symbol, "source_unavailable"
+                ),
+                "observation_candidate": observation_contract,
+                "runtime_effect": False,
+            }
+            continue
+        if profile.session == "integrated_aftermarket" and set(
+            source_meta[profile.symbol].get("integrated_aftermarket_complete_dates", [])
+        ) != {value.isoformat() for value in expected_dates}:
+            profiles[profile_id] = {
+                "profile_id": profile.profile_id,
+                "symbol": profile.symbol,
+                "name": profile.name,
+                "session": profile.session,
+                "discovery_lane": profile.discovery_lane,
+                "decision": "source_quality_quarantined_no_evaluation",
+                "recommended_spot": None,
+                "source_quality_reason": (
+                    "integrated_aftermarket_full_session_coverage_incomplete"
                 ),
                 "observation_candidate": observation_contract,
                 "runtime_effect": False,
@@ -2105,6 +2137,7 @@ def _source_cache_contract(
         "start_date": start_date.isoformat(),
         "end_date": end_date.isoformat(),
         "expected_trading_day_count": int(expected_trading_day_count),
+        "included_sessions": ["KRX_REGULAR", "KRX_NXT_AFTERMARKET"],
         "official_reference_commit": OFFICIAL_REFERENCE["commit_sha"],
     }
 
@@ -2412,6 +2445,7 @@ def main(argv: list[str] | None = None) -> int:
                     expected_trading_day_count=expected_trading_day_count,
                     shared_defer_max_attempts=args.shared_defer_max_attempts,
                     shared_defer_delay_sec=args.shared_defer_delay_sec,
+                    include_integrated_aftermarket=True,
                 )
                 fetched_bars, fetched_meta = sources[symbol]
                 fetched_meta = dict(fetched_meta)

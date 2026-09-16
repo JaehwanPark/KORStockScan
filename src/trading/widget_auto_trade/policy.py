@@ -38,6 +38,12 @@ CUMULATIVE_RESEARCH_QUALIFICATION_CONTRACT = (
     "KRX_trading_date;KRX_REGULAR/KRX;source_quality_PASS_rows>=300;"
     "first_PASS_observation<=09:30;last_PASS_observation>=15:20"
 )
+INTEGRATED_AFTERMARKET_RESEARCH_START_DATE = date(2026, 9, 14)
+INTEGRATED_AFTERMARKET_MIN_QUALIFIED_DATES = 40
+INTEGRATED_AFTERMARKET_QUALIFICATION_CONTRACT = (
+    "KRX_trading_date;KRX_NXT_AFTERMARKET/KRX_NXT;source_quality_PASS_rows>=240;"
+    "first_PASS_observation<=16:05;last_PASS_observation>=19:59"
+)
 INTEGRATED_AFTERMARKET_SESSION = "KRX_NXT_AFTERMARKET"
 SUPPORTED_SESSIONS = frozenset(
     {"NXT_PREMARKET", "KRX_REGULAR", "NXT_AFTERMARKET", INTEGRATED_AFTERMARKET_SESSION}
@@ -144,7 +150,9 @@ def _validated_session_policy(
     entry_cutoff = _valid_clock(payload.get("new_entry_cutoff_time"))
     force_flat = payload.get("force_flat_at_session_end") is True
     force_exit_time = _valid_clock(payload.get("force_exit_time"))
-    expected_source_exit_action = SOURCE_FINAL_EXIT_ACTION_BY_SYMBOL.get(symbol)
+    expected_source_exit_action = SOURCE_FINAL_EXIT_ACTION_BY_SYMBOL.get(
+        symbol, "sell_own_filled_quantity"
+    )
     integrated_aftermarket = session == INTEGRATED_AFTERMARKET_SESSION
     if (
         session not in SUPPORTED_SESSIONS
@@ -187,7 +195,7 @@ def _validated_session_policy(
     ):
         return None
     research_fields_match = True
-    if symbol in CUMULATIVE_RESEARCH_GATE_SYMBOLS:
+    if research_gate.get("status") != "not_required":
         research_fields_match = all(
             (
                 str(payload.get("research_accumulation_start_date") or "")
@@ -202,8 +210,9 @@ def _validated_session_policy(
                 == str(research_gate.get("status") or ""),
             )
         )
-    new_entry_runtime_eligible = symbol not in CUMULATIVE_RESEARCH_GATE_SYMBOLS or (
-        research_fields_match and research_gate.get("runtime_eligible") is True
+    new_entry_runtime_eligible = bool(
+        research_gate.get("status") == "not_required"
+        or (research_fields_match and research_gate.get("runtime_eligible") is True)
     )
     return {
         "policy_id": policy_id,
@@ -274,8 +283,6 @@ def _research_gate_from_evidence(
     session: str,
     source_target_date: date,
 ) -> dict[str, Any]:
-    if symbol not in CUMULATIVE_RESEARCH_GATE_SYMBOLS:
-        return {"status": "not_required", "runtime_eligible": True}
     try:
         accumulation = evidence["symbols"][symbol]["sessions"][session][
             "research_accumulation"
@@ -283,6 +290,8 @@ def _research_gate_from_evidence(
     except (KeyError, TypeError):
         accumulation = None
     if not isinstance(accumulation, dict):
+        if symbol not in CUMULATIVE_RESEARCH_GATE_SYMBOLS:
+            return {"status": "not_required", "runtime_eligible": True}
         return {
             "status": "missing",
             "start_date": CUMULATIVE_RESEARCH_START_DATE.isoformat(),
@@ -305,21 +314,40 @@ def _research_gate_from_evidence(
     start_date = str(accumulation.get("start_date") or "")
     status = str(accumulation.get("status") or "")
     qualification_contract = str(accumulation.get("qualification_contract") or "")
+    dynamic_integrated = bool(
+        session == INTEGRATED_AFTERMARKET_SESSION
+        and symbol not in STATIC_WIDGET_AUTO_TRADE_SYMBOLS
+    )
+    expected_start = (
+        INTEGRATED_AFTERMARKET_RESEARCH_START_DATE
+        if dynamic_integrated
+        else CUMULATIVE_RESEARCH_START_DATE
+    )
+    expected_minimum = (
+        INTEGRATED_AFTERMARKET_MIN_QUALIFIED_DATES
+        if dynamic_integrated
+        else CUMULATIVE_RESEARCH_MIN_QUALIFIED_DATES
+    )
+    expected_contract = (
+        INTEGRATED_AFTERMARKET_QUALIFICATION_CONTRACT
+        if dynamic_integrated
+        else CUMULATIVE_RESEARCH_QUALIFICATION_CONTRACT
+    )
     runtime_eligible = bool(
-        start_date == CUMULATIVE_RESEARCH_START_DATE.isoformat()
-        and minimum == CUMULATIVE_RESEARCH_MIN_QUALIFIED_DATES
+        start_date == expected_start.isoformat()
+        and minimum == expected_minimum
         and count == len(set(parsed_dates))
         and count >= minimum
-        and all(value >= CUMULATIVE_RESEARCH_START_DATE for value in parsed_dates)
+        and all(value >= expected_start for value in parsed_dates)
         and all(value <= source_target_date for value in parsed_dates)
         and all(is_krx_trading_day(value) for value in parsed_dates)
         and status == "ready"
         and accumulation.get("runtime_eligible") is True
-        and qualification_contract == CUMULATIVE_RESEARCH_QUALIFICATION_CONTRACT
+        and qualification_contract == expected_contract
     )
     return {
         "status": status or "invalid",
-        "start_date": start_date or CUMULATIVE_RESEARCH_START_DATE.isoformat(),
+        "start_date": start_date or expected_start.isoformat(),
         "qualified_observation_date_count": count,
         "minimum_qualified_observation_dates": minimum,
         "runtime_eligible": runtime_eligible,

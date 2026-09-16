@@ -139,3 +139,28 @@ def test_auto_expansion_systemd_preflight_does_not_depend_on_private_tmux_socket
     assert "PrivateTmp=true" in unit
     assert "ExecCondition=/usr/bin/tmux" not in unit
     assert "auto_expansion_service --check-active" in unit
+
+
+def test_integrated_aftermarket_episode_profile_is_runtime_compilable():
+    row = {
+        "profile_id": "auto_111770_integrated_aftermarket",
+        "symbol": "111770",
+        "name": "영원무역",
+        "session": "integrated_aftermarket",
+        "policy": {
+            "scan_start": "16:30",
+            "scan_end": "19:20",
+            "lookback_bars": 20,
+            "rolling_high_drawdown_pct": 0.5,
+            "rolling_low_proximity_pct": 0.2,
+            "entry_offsets_ticks": [0, -1],
+            "entry_valid_completed_bars": 5,
+            "target_ticks": 2,
+        },
+    }
+
+    profile = _profile(row, authority_hash="a" * 64)
+
+    assert profile.session == "integrated_aftermarket"
+    assert profile.policy.scan_start.isoformat() == "16:30:00"
+    assert profile.policy.scan_last_bar.isoformat() == "19:20:00"

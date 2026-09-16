@@ -259,8 +259,9 @@ class RegularTwoLegPolicy:
             raise ValueError("unsupported_regular_scan_window")
         if dynamic_authorized and not (
             time(9, 0) <= self.scan_start <= self.scan_last_bar <= time(15, 19)
+            or time(16, 0) <= self.scan_start <= self.scan_last_bar <= time(19, 34)
         ):
-            raise ValueError("dynamic_regular_scan_window_outside_krx_session")
+            raise ValueError("dynamic_scan_window_outside_supported_session")
         if self.lookback_bars < 2:
             raise ValueError("invalid_lookback")
         if (

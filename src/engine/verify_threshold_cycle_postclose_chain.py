@@ -258,6 +258,7 @@ def _low_price_two_leg_postclose_contract_status(
 ) -> dict[str, Any]:
     from src.engine.monitoring.low_price_two_leg_expanded_candidate_research import (
         CandidateRecommendationNotifier,
+        SESSION_WINDOWS,
         _target_date_research_inventory,
     )
     from src.engine.monitoring.low_price_two_leg_tuning import REPORT_SCHEMA
@@ -351,7 +352,7 @@ def _low_price_two_leg_postclose_contract_status(
         ) != len(profile_inventory):
             issues.append("expanded_candidate_profile_inventory_mismatch")
         if expanded.get("new_symbol_profile_count") != (
-            int(expanded.get("candidate_universe_size", 0) or 0) * 4
+            int(expanded.get("candidate_universe_size", 0) or 0) * len(SESSION_WINDOWS)
         ):
             issues.append("expanded_candidate_new_symbol_lane_count_mismatch")
         if target_research_inventory is None:
@@ -3726,9 +3727,7 @@ def _smoothing_source_only_path_journal_contract_status(
             "pass"
             if isinstance(rolling_decision, dict)
             and not any("rolling_decision" in issue for issue in issues)
-            else "fail"
-            if rolling_decision_required
-            else "not_applicable"
+            else "fail" if rolling_decision_required else "not_applicable"
         ),
     }
 
@@ -6396,11 +6395,7 @@ def _active_sim_priority_handoff_status(
     status = (
         "fail"
         if missing
-        else "warning"
-        if warnings
-        else "pass"
-        if active_ids
-        else "not_applicable"
+        else "warning" if warnings else "pass" if active_ids else "not_applicable"
     )
     return {
         "status": status,
@@ -7058,9 +7053,7 @@ def _code_improvement_workorder_contract_status(
         "contract_state": (
             "declared_and_verified"
             if contract_declared
-            else "required_but_missing"
-            if contract_required
-            else "legacy_not_declared"
+            else "required_but_missing" if contract_required else "legacy_not_declared"
         ),
         "issues": sorted(set(issues)),
         "duplicate_order_warnings": duplicate_warnings,
@@ -9136,9 +9129,7 @@ def build_threshold_cycle_postclose_verification(
                     else (
                         "fail"
                         if predecessor_timeouts or strict_log_issues
-                        else "warning"
-                        if predecessor_waits
-                        else "pass"
+                        else "warning" if predecessor_waits else "pass"
                     )
                 )
             ),

@@ -14,6 +14,7 @@ from src.trading.order.entry_adverse_guard import before_transport
 from src.engine.sniper_config import CONF
 from src.engine.trade_pause_control import is_buy_side_paused
 from src.trading.low_price_two_leg.profiles import ALLOWED_SYMBOLS, MinuteBar
+from src.trading.market import session_contract
 from src.trading.order.episode_quantity import (
     EPISODE_LEG_QUANTITY,
     validate_owned_leg_quantity,
@@ -45,8 +46,8 @@ from src.utils import kiwoom_utils
 KST = ZoneInfo("Asia/Seoul")
 OFFICIAL_REFERENCE = {
     "repository": "Kiwoom-Securities/Kiwoom-REST-API",
-    "commit_sha": "69642586f7d84ba9fd8a6faf1f1537c7fda6568b",
-    "retrieved_at_kst": "2026-08-20T15:34:48+09:00",
+    "commit_sha": "953e5dbff123f437ab4d11a78a95191a685eb51f",
+    "retrieved_at_kst": "2026-09-16T14:22:43+09:00",
     "inspected_paths": [
         "kiwoom_docs/차트.md",
         "kiwoom_docs/주문.md",
@@ -198,6 +199,52 @@ class KiwoomLowPriceTwoLegGateway:
         self._minute_bars_cache = SameMinuteSnapshotCache()
         self._account_read_cache = ShortTtlSnapshotCache(ttl_sec=1.0)
         self._current_open_read_cache = ShortTtlSnapshotCache(ttl_sec=1.0)
+        self._order_observed_at: datetime | None = None
+
+    def set_order_context(self, *, observed_at: datetime) -> None:
+        """Bind the machine evaluation clock used by central order preflight."""
+
+        if observed_at.tzinfo is None:
+            raise ValueError("low_price_two_leg_order_context_timezone_missing")
+        self._order_observed_at = observed_at.astimezone(KST)
+
+    def _exact_date_venue_eligibility(
+        self, trade_date: date
+    ) -> session_contract.SymbolVenueEligibility | None:
+        try:
+            from src.database.db_manager import DBManager
+
+            snapshot = DBManager().get_security_market_eligibility(
+                self.symbol, trade_date
+            )
+            if not isinstance(snapshot, dict):
+                return None
+            return session_contract.resolve_symbol_venue_eligibility(
+                self.symbol, trade_date, snapshot
+            )
+        except Exception:
+            return None
+
+    def _order_preflight(
+        self, *, side: str, order_type: str, existing_holding: bool = False
+    ) -> session_contract.OrderTypePreflight:
+        observed_at = self._order_observed_at or datetime.now(KST)
+        market = session_contract.resolve_market_session(observed_at)
+        eligibility = (
+            self._exact_date_venue_eligibility(observed_at.date())
+            if market.session_regime
+            == session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET
+            and side == "buy"
+            else None
+        )
+        return session_contract.resolve_order_type_preflight(
+            market,
+            "SOR",
+            side,
+            order_type,
+            eligibility=eligibility,
+            existing_holding=existing_holding,
+        )
 
     def _token(self) -> str:
         token = str(self.token_loader() or "").replace("Bearer ", "").strip()
@@ -376,7 +423,10 @@ class KiwoomLowPriceTwoLegGateway:
                 return MinuteBarsSnapshot(False, error="minute_bar_timestamp_invalid")
             if (
                 timestamp.date() != trade_date
-                or not time(9, 0) <= timestamp.time() < time(15, 30)
+                or not (
+                    time(9, 0) <= timestamp.time() < time(15, 30)
+                    or time(16, 0) <= timestamp.time() < time(20, 0)
+                )
                 or timestamp >= minute_floor
             ):
                 continue
@@ -447,6 +497,13 @@ class KiwoomLowPriceTwoLegGateway:
         quantity = validate_owned_leg_quantity(quantity)
         if is_buy_side_paused():
             return SubmitResult(False, return_code="TRADING_PAUSED")
+        preflight = self._order_preflight(side="buy", order_type="0")
+        if not preflight.allowed:
+            return SubmitResult(
+                False,
+                return_code="SESSION_PREFLIGHT_BLOCKED",
+                return_msg=preflight.reason,
+            )
         response, body = self._post(
             endpoint="/api/dostk/ordr",
             api_id="kt10000",
@@ -467,6 +524,15 @@ class KiwoomLowPriceTwoLegGateway:
         quantity = validate_position_quantity(quantity, maximum=EPISODE_LEG_QUANTITY)
         if quantity == 0:
             raise ValueError("zero_episode_sell_quantity")
+        preflight = self._order_preflight(
+            side="sell", order_type="0", existing_holding=True
+        )
+        if not preflight.allowed:
+            return SubmitResult(
+                False,
+                return_code="SESSION_PREFLIGHT_BLOCKED",
+                return_msg=preflight.reason,
+            )
         response, body = self._post(
             endpoint="/api/dostk/ordr",
             api_id="kt10001",
