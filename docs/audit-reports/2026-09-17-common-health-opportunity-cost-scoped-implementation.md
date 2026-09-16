@@ -58,7 +58,7 @@ Official reference receipt (`2026-09-17T01:15:02+09:00` 재확인 기록): upstr
 | U5 | partial | observer 원 나이·prior-frame freshness 결손 수정. single-flight/scheduler budget 잔여 |
 | U6 | partial | operational/decision-CF gate와 중복 case 분모 수정. 전체 row disposition/census 전수 잔여 |
 | U7 | scoped common/all-supported hierarchy implemented | §8–§10 전수 원천·현재 incumbent 비교·양수 순 EV/전체 paired 개선·exact-parent 자동 발행. 자연 generation·전체 원장 대사는 잔여 |
-| U8 | partial | all-VETO CF intake와 legacy/current guard. CAUTION/INSUFFICIENT router 경제성 추가 대사 |
+| U8 | scoped router implemented / natural pending | §11 CAUTION checkpoint 기회비용·차단으로 피한 손실의 대칭 비교, INSUFFICIENT 원천 복구 분리, 현재 compact partition과 next-date 자동 발행. 자연 generation·전수 전달 acceptance 잔여 |
 | U9 | pending | price-ready no-submit/no-fill·quantity/leg four-arm Daily contract |
 | U10 | pending | 독립 owner CF admission 및 active family fill-bias 실제 결손 수리 |
 | U11 | pending | family별 auto handoff·floor 달성 가능성·최종 요약 closure |
@@ -113,6 +113,19 @@ Official reference receipt (`2026-09-17T01:15:02+09:00` 재확인 기록): upstr
 - scoped 자동 publisher도 full incumbent hash를 비교한다. threshold 숫자가 같아도 다른 parent 값이 달라지면 carry한다. exact scope 후보 발행은 KRX 또는 다른 scope를 변경하지 않는다. 기존 adopted 상태의 flag 없는 publisher 경로를 테스트했다.
 - 9개 scope의 양수/0원/손실 및 재학습 무개선 회귀, KRX/NXT 실제 publisher와 parent 변경 carry를 검증한다. 테스트의 CF 순 EV는 자연 수익이 아니다. 오늘 운영 날짜 정책 재발행, Provider/API 호출, 조기 bot 기동은 하지 않는다.
 - 부분 H release이며 U0–U6의 전수 소비자/예산/모집단, U8–U11의 router·가격/수량·독립 owner·handoff 구현과 전체 U12 fixed-point는 미완료다. 최신 selected release/검증 건수/기동 receipt는 `data/runtime/runtime_release_validation/`이 소유한다.
+
+## 11. Compact 보조심사 router 경제성·자동 환류 보완
+
+2026-09-17 07시대 후속. 기존 #82/#78/#80/정책 publisher/strict verifier를 보완했다. 신규 collector·서비스·장후 단계·Provider 호출·모델 변경 없음. U0–U12 전체 완료가 아니다.
+
+- 최초 결손은 CAUTION/INSUFFICIENT를 함께 `non_economic_terminal_verdict`로 제외하던 분모다. 새 `compact_auxiliary_router_economic_selection_v3`에서는 exact machine ENTER의 유효 CAUTION을 별도 verdict로 평가한다. 실제 `ai_caution_bounded_recheck`와 `observed_actual_order_submitted=false` 근거가 모두 있어야 하며 unknown/실제 제출·다른 router는 제외한다. PASS/VETO로 의미를 바꾸지 않는다.
+- 같은 attempt의 executable target/stop-first와 비용이 완전할 때만 checkpoint의 비용 후 양수 기회·회피한 손실을 계산한다. 이는 재검사를 보류한 **해당 시점의 CF 기회비용**이지 episode 전체의 영구 기회 손실, 새 실현손익 또는 재검사 실패 확정이 아니다. 후속 회복과 실제 수익 귀속은 별도 원천으로 확인해야 한다.
+- INSUFFICIENT는 `source_gap_router_verdict`로 분리하여 원천 복구에 전달한다. 전송/semantic 오류·미호출·다른 compact/legacy partition·pending/lineage 결손·비용 결손을 모델 false VETO로 학습하지 않는다. 결측 손익은 null이며 정상 비노출의 0 CF exposure와 구분한다.
+- 기존 비용 가중 registered variant selector를 재사용한다. 기회보존 방향은 VETO/CAUTION의 작은 양수 missed CF 합이 dangerous PASS 손실과 차단으로 회피한 손실의 합보다 클 때만 검토한다. 현재 손실 방어가 유리하면 carry하며, material tail의 risk 우선순위는 유지한다. 순 EV 0.10%를 새로 요구하지 않는다. 실제 후보 개선량을 증명한 것으로 표시하지 않는다.
+- 유효 economic 20건·관련 분모5·오류3·관련 오류율25%의 기존 bounded feedback 조건은 유지한다. CAUTION도 자신의 유효 모집단에 들어가므로 all-CAUTION 날에 PASS/VETO가 없어 영구적으로 튜닝 불가한 조건을 제거했다. candidate별 사용자 승인·모델/provider 선정·기계/가격/수량/scale-in/주문/hard-safety 변경은 추가하지 않는다.
+- 새 v3 detailed verdict count·subtotal·보존식·finite 비용 합·source/partition hash를 publisher와 strict verifier가 다시 검증한다. 과거 frozen v2는 기존 의미로 소비한다. CF authority의 명시적 false를 legacy gate로 우회하지 못하도록 #82/publisher/verifier가 기존 owner 안의 동일 helper를 사용한다. #78은 같은 v3 경제성/선정 receipt를 Provider0으로 전달하고 #80은 새 계약과 optimizer binding을 확인한다.
+- 회귀는 작은 순수익 0.07%의 all-CAUTION 자동 successor 발행, 비노출/role 미입증 제외, INSUFFICIENT 분리, 회피 손실이 더 큰 경우 carry, count/schema/partition/NaN/CF authority 변조 차단, central verifier와 optimizer 전달을 포함한다. 검증 건수·최종 release/기동은 기존 `data/runtime/runtime_release_validation/` receipt로 별도 기록한다.
+- 오늘 dated policy를 수동으로 다시 발행하지 않는다. 새 동작은 다음 정기 장후 평가→기존 next-date publisher→PREOPEN/loader 경로로 자동 환류하며, 실제 자연 정책 소비·수익성은 OPEN이다. 전수 reader parity·single-flight/scheduler·capacity census·U9/U10/U11 및 전체 fixed-point 구현은 미완료다.
 
 Project/Calendar 동기화는 실행하지 않는다. 사용자 표준 명령:
 

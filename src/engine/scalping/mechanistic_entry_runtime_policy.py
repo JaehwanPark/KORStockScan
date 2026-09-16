@@ -267,12 +267,27 @@ def _validate_ai_policy(ai: object, context: object) -> bool:
     return False
 
 
+def compact_terminal_gate_allowed(source_receipt: dict) -> bool:
+    """One CF authority rule for #82, publication and the final verifier."""
+    gate = source_receipt.get("machine_terminal_tuning_gate") or {}
+    if not isinstance(gate, dict):
+        return False
+    return bool(
+        str(source_receipt.get("target_date") or "") < "2026-09-15"
+        or gate.get("decision_counterfactual_tuning_input_allowed") is True
+        or ("decision_counterfactual_tuning_input_allowed" not in gate
+            and gate.get("economic_tuning_input_allowed") is True)
+    )
+
+
 def compact_outcome_counts_valid(economic: dict) -> bool:
     """Reconcile every published subtotal against the detailed outcome map."""
     counts = economic.get("verdict_x_action_neutral_outcome_counts")
+    router_contract = economic.get("schema") == "compact_auxiliary_router_economic_selection_v3"
+    allowed_verdicts = {"PASS", "VETO", "CAUTION"} if router_contract else {"PASS", "VETO"}
     if not isinstance(counts, dict) or any(
         not isinstance(key, str)
-        or key.partition("|")[0] not in {"PASS", "VETO"}
+        or key.partition("|")[0] not in allowed_verdicts
         or "|" not in key
         or type(value) is not int
         or value < 0
@@ -296,6 +311,21 @@ def compact_outcome_counts_valid(economic: dict) -> bool:
             )
         ),
     }
+    if router_contract:
+        import math
+
+        if any(type(economic.get(key)) not in (int, float)
+               or not math.isfinite(economic[key]) or economic[key] < 0
+               for key in ("missed_profit_caution_net_sum_pct", "missed_profit_veto_net_sum_pct", "dangerous_pass_loss_sum_pct", "avoided_nonentry_loss_sum_pct")):
+            return False
+        expected.update(
+            evaluable_caution_count=sum(value for key, value in counts.items() if key.startswith("CAUTION|")),
+            missed_profit_caution_count=counts.get("CAUTION|CLEAN_FAST_PROFIT", 0),
+        )
+        if (economic.get("caution_is_not_veto") is not True
+            or economic.get("insufficient_is_source_repair_only") is not True
+            or economic.get("caution_opportunity_cost_role") != "exact_enter_checkpoint_foregone_opportunity_not_terminal_episode_loss"):
+            return False
     return all(
         type(economic.get(key)) is int and economic[key] == value
         for key, value in expected.items()
@@ -342,12 +372,27 @@ def compact_economic_direction(economic: dict) -> str:
     ):
         return "select_material_risk_specificity_variant"
     missed, loss = amounts
+    nonentry_count = economic.get("evaluable_veto_count", 0)
+    missed_count = economic.get("missed_profit_veto_count", 0)
+    missed_rate = economic.get("missed_veto_rate")
+    avoided_nonentry_loss = 0.0
+    if economic.get("schema") == "compact_auxiliary_router_economic_selection_v3":
+        if not compact_outcome_counts_valid(economic):
+            return carry
+        caution_amount = economic.get("missed_profit_caution_net_sum_pct")
+        if type(caution_amount) not in (int, float) or not math.isfinite(caution_amount) or caution_amount < 0:
+            return carry
+        missed += caution_amount
+        avoided_nonentry_loss = economic["avoided_nonentry_loss_sum_pct"]
+        nonentry_count += economic["evaluable_caution_count"]
+        missed_count += economic["missed_profit_caution_count"]
+        missed_rate = missed_count / nonentry_count if nonentry_count else None
     if (
-        missed > loss
-        and economic.get("evaluable_veto_count", 0) >= 5
-        and economic.get("missed_profit_veto_count", 0) >= 3
-        and economic.get("missed_veto_rate") is not None
-        and economic["missed_veto_rate"] >= 0.25
+        missed > loss + avoided_nonentry_loss
+        and nonentry_count >= 5
+        and missed_count >= 3
+        and missed_rate is not None
+        and missed_rate >= 0.25
     ):
         return "select_opportunity_preservation_variant"
     if (
@@ -383,6 +428,7 @@ def _selected_compact_prompt_version(source: dict, previous: dict | None) -> str
     selection = outcomes.get("automatic_successor_selection") or {}
     selected = str(selection.get("selected_prompt_version") or "")
     economic = outcomes.get("economic_contract") or {}
+    router_contract = economic.get("schema") == "compact_auxiliary_router_economic_selection_v3"
     source_receipt = case_table.get("machine_ai_natural_source_receipt") or {}
     if not compact_outcome_counts_valid(economic):
         return previous_version
@@ -413,6 +459,7 @@ def _selected_compact_prompt_version(source: dict, previous: dict | None) -> str
     passed = economic["evaluable_pass_count"]
     if (
         source_receipt.get("tuning_input_allowed") is not True
+        or not compact_terminal_gate_allowed(source_receipt)
         or (case_table.get("compact_auxiliary_policy_measurement") or {}).get(
             "measurement_allowed"
         )
@@ -451,13 +498,13 @@ def _selected_compact_prompt_version(source: dict, previous: dict | None) -> str
         selection.get("eligible") is True
         and selection.get("recommendation_id")
         == "compact_auxiliary_prompt_automatic_successor_v2"
-        and selection.get("contract_version")
-        == "compact_auxiliary_economic_selection_v2"
+        and selection.get("contract_version") == economic.get("schema")
+        and (not router_contract or selection.get("economic_direction_rule") == "cost_weighted_nonentry_router_feedback_v2")
         and selection.get("runtime_effect") is True
         and selection.get("allowed_runtime_apply") is True
         and selection.get("selection_contract")
         == "bounded_registered_variant_exact_incumbent_only_no_freeform_edit"
-        and economic.get("schema") == "compact_auxiliary_economic_selection_v2"
+        and economic.get("schema") in {"compact_auxiliary_economic_selection_v2", "compact_auxiliary_router_economic_selection_v3"}
         and economic.get("counterfactual_not_realized_pnl") is True
         and economic.get("missing_economics_imputed") is False
         and material_tail_loss_pct == -1.0
@@ -476,7 +523,7 @@ def _selected_compact_prompt_version(source: dict, previous: dict | None) -> str
         and minimum_error_count == 3
         and minimum_denominator == 5
         and minimum_error_rate == 0.25
-        and veto_count + pass_count == eligible_count
+        and veto_count + pass_count + (economic.get("evaluable_caution_count", 0) if router_contract else 0) == eligible_count
         and selection.get("incumbent_prompt_version") == previous_version
         and selected == expected
         and selected in COMPACT_AI_VARIANTS

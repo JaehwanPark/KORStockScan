@@ -141,7 +141,8 @@
   - Acceptance: exact-date PREOPEN→07:55 selected release/PID·원 WS0B/0D/inline BBO receipt를 검증하고 U0–U12 ledger의 미완료 구현을 별도로 닫는다. 부분 H 배포를 전체 opportunity-cost 자동 선정·수익 완료로 표시하지 않는다.
   - 후속 구현: 07시대 KRX regular hierarchy가 같은 전수 source contract·현재 complete incumbent·동일 past-only context를 소비하도록 보완. 양수 순 EV/전체 paired 개선 v2, 각 group/symbol/결합 정책 holdout과 full-parent 자동 발행 guard 추가. [부분 구현 리뷰 §9](../audit-reports/2026-09-17-common-health-opportunity-cost-scoped-implementation.md#9-krx-regular-hierarchy-전수-선정자동-발행-후속) 참조. 자연/PID/경제성은 별도 OPEN.
   - 후속 scope 보완: 등록된 9개 scope hierarchy가 각각의 natural/paired 원천·비용·현재 incumbent와 전수 positive-net paired v2 계약을 소비한다. scoped publisher의 full-parent 변경 carry와 KRX common의 cross-scope 유입 금지를 검증. [부분 구현 리뷰 §10](../audit-reports/2026-09-17-common-health-opportunity-cost-scoped-implementation.md#10-등록된-모든-scope의-hierarchy-전수-소비-보완) 참조. 오늘 정책 수동 재발행·새 API/Provider 호출 없음.
-  - 잔여: direct REST/widget/episode 전수 parity, single-flight/scheduler budget, 전체 opportunity/capacity census·자연 scope generation, U8 CAUTION/INSUFFICIENT router, U9 price/quantity four-arm, U10 독립 owner, U11 family auto handoff. 신규 producer/수동 env/주문/owner·cap·hard-safety 변경 금지. 실제 기동 시 broker/custody·중복 PID·WS first-data와 dated policy receipt를 보존한다.
+  - 후속 AI router 보완: §11 v3 계약으로 exact ENTER의 실제 CAUTION bounded recheck·비노출 CF를 PASS/VETO와 별도 평가한다. INSUFFICIENT는 원천 복구로 분리. 놓친 양수 CF와 실제 PASS 손실·차단 회피 손실을 대칭 비교하며 CF authority의 명시적 false 우회 금지. #82→#78/#80·기존 자동 next-date publisher·strict 계약을 검증하고 오늘 날짜 정책은 수동 재발행하지 않는다. 07:35 기존 selected release PREOPEN 성공은 이번 후속 코드의 자연 정책 소비가 아니다.
+  - 잔여: direct REST/widget/episode 전수 parity, single-flight/scheduler budget, 전체 opportunity/capacity census·자연 scope/AI router generation, U9 price/quantity four-arm, U10 독립 owner, U11 family auto handoff. 신규 producer/수동 env/주문/owner·cap·hard-safety 변경 금지. 실제 기동 시 broker/custody·중복 PID·WS first-data와 dated policy receipt를 보존한다.
 
 ## Project/Calendar 동기화
 

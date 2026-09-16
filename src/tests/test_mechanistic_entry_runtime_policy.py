@@ -513,6 +513,34 @@ def test_next_preopen_publish_replaces_legacy_prompt_without_threshold_change(tm
     assert successor["ai_policy"]["system_prompt"] == policy.compact_auxiliary_prompt()
 
 
+@pytest.mark.parametrize("corruption", [None, "count", "contract_version", "partition", "nan_amount", "terminal_gate"])
+def test_router_caution_successor_publishes_flag_free_with_exact_contract(tmp_path, corruption):
+    from src.tests.test_ai_action_outcome_calibration import _compact_router_case_table
+    previous = initial(tmp_path)
+    path = source(tmp_path, "2026-09-15")
+    report = json.loads(path.read_text())
+    table = _compact_router_case_table()
+    outcome = table["compact_auxiliary_screen_outcomes"]
+    if corruption == "count":
+        outcome["economic_contract"]["evaluable_caution_count"] -= 1
+    elif corruption == "contract_version":
+        outcome["automatic_successor_selection"]["contract_version"] = "compact_auxiliary_economic_selection_v2"
+    elif corruption == "partition":
+        table["compact_auxiliary_policy_measurement"]["measurement_allowed"] = False
+    elif corruption == "nan_amount":
+        outcome["economic_contract"]["missed_profit_caution_net_sum_pct"] = float("nan")
+    elif corruption == "terminal_gate":
+        table["machine_ai_natural_source_receipt"]["machine_terminal_tuning_gate"]["decision_counterfactual_tuning_input_allowed"] = False
+    report["hierarchical_entry_quality"] = {"machine_decision_case_table": table}
+    report.pop("artifact_content_sha256")
+    calibration._atomic_write_json(path, calibration._with_artifact_content_sha256(report))
+    successor = policy.publish(path, data_root=tmp_path, now=datetime(2026, 9, 15, 21, tzinfo=policy.KST))
+    assert successor["machine_policy"] == previous["machine_policy"]
+    assert successor["ai_policy"]["prompt_version"] == (policy.ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION if corruption is None else policy.AI_VERSION)
+    assert "model" not in successor["ai_policy"]
+    assert "provider" not in successor["ai_policy"]
+
+
 def test_all_continuous_adoption_carry_and_exact_scope_projection(tmp_path):
     from src.engine.scalping.entry_setup_scalping_rollout import AUTO_PROMOTION_SCOPES
 

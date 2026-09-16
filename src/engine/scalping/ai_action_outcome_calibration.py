@@ -4292,11 +4292,13 @@ def build_machine_decision_case_table(
                         ] += 1
                         if not semantic_valid:
                             compact_exclusions["semantic_invalid"] += 1
-                        elif compact_verdict in {"CAUTION", "INSUFFICIENT"}:
-                            # These are valid bounded non-entry outcomes. They
-                            # remain in the exact ENTER screen denominator but
-                            # cannot tune the PASS/VETO economic selector.
-                            compact_exclusions["non_economic_terminal_verdict"] += 1
+                        elif compact_verdict == "INSUFFICIENT":
+                            compact_exclusions["source_gap_router_verdict"] += 1
+                        elif compact_verdict == "CAUTION" and (
+                            ai_guard.get("followup_disposition") != "ai_caution_bounded_recheck"
+                            or ai_guard.get("observed_actual_order_submitted") is not False
+                        ):
+                            compact_exclusions["bounded_recheck_nonexposure_unproven"] += 1
                         elif path.get("status") != "evaluable":
                             compact_exclusions["outcome_not_evaluable"] += 1
                         elif label == "CENSORED_OR_SOURCE_GAP":
@@ -4393,17 +4395,9 @@ def build_machine_decision_case_table(
     )
     receipt_target_date = str(source_receipt.get("target_date") or "")
     terminal_gate_required = receipt_target_date >= "2026-09-15"
-    terminal_gate_allowed = bool(
-        not terminal_gate_required
-        or terminal_tuning_gate.get("decision_counterfactual_tuning_input_allowed")
-        is True
-        # Frozen earlier receipts remain usable only under their original,
-        # stricter gate. A missing new field never grants new permission.
-        or (
-            "decision_counterfactual_tuning_input_allowed" not in terminal_tuning_gate
-            and terminal_tuning_gate.get("economic_tuning_input_allowed") is True
-        )
-    )
+    from src.engine.scalping.mechanistic_entry_runtime_policy import compact_terminal_gate_allowed
+
+    terminal_gate_allowed = compact_terminal_gate_allowed(source_receipt)
     compact_tuning_input_allowed = bool(
         source_tuning_allowed
         and terminal_gate_allowed
@@ -4429,11 +4423,13 @@ def build_machine_decision_case_table(
     outcome_times_sec: list[float] = []
     pass_loss_values: list[float] = []
     missed_profit_values: list[float] = []
+    missed_caution_values: list[float] = []
+    avoided_nonentry_loss_values: list[float] = []
     for row in cases:
         ai_guard = _as_dict(row.get("ai_and_final_guard"))
         path = _as_dict(row.get("entry_quality_path"))
         version = str(ai_guard.get("prompt_version") or "")
-        verdict = str(ai_guard.get("ai_risk_verdict") or "")
+        verdict = str(ai_guard.get("ai_risk_verdict") or "").upper()
         semantic_valid = bool(
             ai_guard.get("decision_quality_contract_status") == "pass"
             and ai_guard.get("semantic_validation_status") in {None, "pass"}
@@ -4449,7 +4445,11 @@ def build_machine_decision_case_table(
             or version != incumbent_compact_version
             or row.get("compact_partition_eligible") is not True
             or not semantic_valid
-            or verdict not in {"PASS", "VETO"}
+            or verdict not in {"PASS", "VETO", "CAUTION"}
+            or (verdict == "CAUTION" and (
+                ai_guard.get("followup_disposition") != "ai_caution_bounded_recheck"
+                or ai_guard.get("observed_actual_order_submitted") is not False
+            ))
             or path.get("status") != "evaluable"
             or _number(path.get("conservative_execution_cost_pct")) is None
             or path.get("first_hit") not in {"net_target_first", "exact_stop_first"}
@@ -4468,6 +4468,8 @@ def build_machine_decision_case_table(
         economic_outcomes[f"{verdict}|{row.get('entry_quality_label')}"] += 1
         opportunity_values.append(value)
         economic_values.append(value if verdict == "PASS" else 0.0)
+        if verdict in {"VETO", "CAUTION"} and value < 0:
+            avoided_nonentry_loss_values.append(-value)
         outcome_time = _number(
             path.get("time_to_net_target_sec")
             if path.get("first_hit") == "net_target_first"
@@ -4483,12 +4485,17 @@ def build_machine_decision_case_table(
             and row.get("entry_quality_label") == "CLEAN_FAST_PROFIT"
         ):
             missed_profit_values.append(value)
+        if verdict == "CAUTION" and value > 0 and row.get("entry_quality_label") == "CLEAN_FAST_PROFIT":
+            missed_caution_values.append(value)
     economic_eligible_count = sum(economic_outcomes.values())
     evaluable_veto_count = sum(
         count for key, count in economic_outcomes.items() if key.startswith("VETO|")
     )
     evaluable_pass_count = sum(
         count for key, count in economic_outcomes.items() if key.startswith("PASS|")
+    )
+    evaluable_caution_count = sum(
+        count for key, count in economic_outcomes.items() if key.startswith("CAUTION|")
     )
     economic_missed_veto_count = economic_outcomes.get("VETO|CLEAN_FAST_PROFIT", 0)
     economic_dangerous_pass_count = sum(
@@ -4550,6 +4557,8 @@ def build_machine_decision_case_table(
     )
 
     economic_direction_inputs = {
+        "schema": "compact_auxiliary_router_economic_selection_v3",
+        "verdict_x_action_neutral_outcome_counts": economic_outcome_counts,
         "economic_eligible_count": economic_eligible_count,
         "evaluable_veto_count": evaluable_veto_count,
         "evaluable_pass_count": evaluable_pass_count,
@@ -4560,6 +4569,13 @@ def build_machine_decision_case_table(
         "material_tail_pass_count": material_tail_pass_count,
         "missed_profit_veto_net_sum_pct": sum(missed_profit_values),
         "dangerous_pass_loss_sum_pct": -sum(pass_loss_values),
+        "evaluable_caution_count": evaluable_caution_count,
+        "missed_profit_caution_count": len(missed_caution_values),
+        "missed_profit_caution_net_sum_pct": sum(missed_caution_values),
+        "avoided_nonentry_loss_sum_pct": sum(avoided_nonentry_loss_values),
+        "caution_opportunity_cost_role": "exact_enter_checkpoint_foregone_opportunity_not_terminal_episode_loss",
+        "caution_is_not_veto": True,
+        "insufficient_is_source_repair_only": True,
     }
     if compact_selection_eligible:
         compact_tuning_direction = compact_economic_direction(economic_direction_inputs)
@@ -4645,10 +4661,10 @@ def build_machine_decision_case_table(
             "semantic_unclassified_count": compact_unclassified_count,
             "economic_contract": {
                 **economic_direction_inputs,
-                "primary_decision_metric": "missed_profit_veto_net_sum_pct_vs_dangerous_pass_loss_sum_pct",
+                "primary_decision_metric": "foregone_nonentry_net_sum_pct_vs_dangerous_pass_and_avoided_nonentry_loss_sum_pct",
                 "rate_margin_used_for_selection": False,
                 "material_tail_alert": material_tail_pass_count > 0,
-                "schema": "compact_auxiliary_economic_selection_v2",
+                "schema": "compact_auxiliary_router_economic_selection_v3",
                 "screened_total": compact_current_version_screened_count,
                 "denominator_preserved": (
                     compact_current_version_screened_count
@@ -4697,12 +4713,12 @@ def build_machine_decision_case_table(
                 "holdout_gate"
             ),
             "automatic_successor_selection": {
-                "economic_direction_rule": "cost_weighted_bounded_feedback_v1",
+                "economic_direction_rule": "cost_weighted_nonentry_router_feedback_v2",
                 "history_receipts_sha256": source_receipt.get(
                     "compact_history_receipts_sha256"
                 ),
                 "recommendation_id": "compact_auxiliary_prompt_automatic_successor_v2",
-                "contract_version": "compact_auxiliary_economic_selection_v2",
+                "contract_version": "compact_auxiliary_router_economic_selection_v3",
                 "incumbent_prompt_version": incumbent_compact_version,
                 "selected_prompt_version": selected_compact_version,
                 "source_manifest_sha256": source_receipt.get("source_manifest_sha256"),
