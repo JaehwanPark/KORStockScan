@@ -83,6 +83,7 @@ def _machine_terminal_tuning_gate(
         "denominator_preserved": False,
         "exclusion_applied": False,
         "economic_tuning_input_allowed": False,
+        "decision_counterfactual_tuning_input_allowed": False,
         "reason": "buy_funnel_sentinel_missing_or_invalid",
         "missing_economics_imputed": False,
         "runtime_effect": False,
@@ -118,24 +119,47 @@ def _machine_terminal_tuning_gate(
     exact_key_pattern = re.compile(
         r"^machine:[^|]+\|[^|]+\|[^|]+\|[^|]+\|[^|]+\|[0-9a-f]{64}$"
     )
+    try:
+        if any(
+            type(value) not in (int, str)
+            or isinstance(value, str)
+            and not re.fullmatch(r"[0-9]+", value)
+            for value in conservation.values()
+        ):
+            raise ValueError("invalid_conservation_count")
+        values = {
+            name: int(conservation.get(name) or 0)
+            for name in (
+                "ai_pass",
+                "submitted",
+                "final_guard_blocked",
+                "broker_rejected",
+                "lineage_gap",
+                "pending",
+                "difference",
+            )
+        }
+    except (TypeError, ValueError, OverflowError):
+        base["reason"] = "ai_pass_terminal_conservation_invalid"
+        return base
     exact_keys_complete = bool(
-        len(gap_keys) == int(conservation.get("lineage_gap") or 0)
+        len(gap_keys) == values["lineage_gap"]
         and all(exact_key_pattern.fullmatch(key) for key in gap_keys)
     )
-    values = {
-        name: int(conservation.get(name) or 0)
-        for name in (
-            "ai_pass",
-            "submitted",
-            "final_guard_blocked",
-            "broker_rejected",
-            "lineage_gap",
-            "pending",
-            "difference",
-        )
-    }
+    pending_keys = sorted(
+        {
+            str(row.get("evaluation_key") or "")
+            for row in ledger
+            if isinstance(row, dict) and row.get("final_state") == "pending"
+        }
+    )
+    pending_keys_complete = bool(
+        len(pending_keys) == values["pending"]
+        and all(exact_key_pattern.fullmatch(key) for key in pending_keys)
+    )
     denominator_preserved = bool(
-        values["difference"] == 0
+        all(value >= 0 for value in values.values())
+        and values["difference"] == 0
         and values["ai_pass"]
         == values["submitted"]
         + values["final_guard_blocked"]
@@ -151,12 +175,25 @@ def _machine_terminal_tuning_gate(
         source_sha256=hashlib.sha256(raw).hexdigest(),
         ai_pass_terminal_conservation=values,
         excluded_evaluation_keys=gap_keys,
+        pending_evaluation_keys=pending_keys,
         lineage_gap_excluded_count=len(gap_keys),
         terminal_admitted_count=terminal_admitted,
         pending_maturity_count=values["pending"],
         denominator_preserved=denominator_preserved,
         exclusion_applied=exact_keys_complete,
         economic_tuning_input_allowed=allowed,
+        # PASS downstream closure and action-neutral decision research have
+        # different denominators. All-VETO (or all-BLOCK) is a valid empty
+        # operational denominator, not a reason to suppress missed-opportunity
+        # research. The consumer still enforces source/partition/path/cost gates
+        # and excludes exact unresolved PASS lineage; no terminal is invented.
+        decision_counterfactual_tuning_input_allowed=bool(
+            payload.get("target_date") == target_date
+            and all(name in conservation for name in values)
+            and denominator_preserved
+            and exact_keys_complete
+            and pending_keys_complete
+        ),
         reason=(
             "exact_lineage_gap_excluded_terminal_rows_admitted"
             if allowed

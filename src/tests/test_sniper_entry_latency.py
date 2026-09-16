@@ -2718,6 +2718,30 @@ def test_latency_entry_blocks_stale_quote_as_danger():
     assert result["latency_danger_reasons"] == "quote_stale,ws_age_too_high"
 
 
+def test_latency_program_update_cannot_refresh_stale_depth(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_ENABLED", "false")
+    now = time.time()
+    result = evaluate_live_buy_entry(
+        stock={"name": "TEST"},
+        code="type_clock_regression",
+        ws_data={
+            "curr": 10000,
+            "last_ws_update_ts": now,
+            "last_realtime_type_ts": {"0D": now - 10.0, "0w": now},
+            "orderbook": {
+                "asks": [{"price": 10010, "volume": 100}],
+                "bids": [{"price": 10000, "volume": 100}],
+            },
+        },
+        strategy_id="SCALPING",
+        planned_qty=3,
+        signal_price=10000,
+        signal_strength=0.9,
+    )
+    assert result["allowed"] is False
+    assert result["latency_state"] == "DANGER"
+
+
 def test_pre_submit_quote_refresh_uses_fresh_observer_quote_for_stale_ws(monkeypatch):
     runtime_rules = replace(
         CONFIG,

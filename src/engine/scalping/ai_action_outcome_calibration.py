@@ -3892,7 +3892,10 @@ def build_machine_decision_case_table(
     terminal_tuning_gate = _as_dict(source_receipt.get("machine_terminal_tuning_gate"))
     terminal_lineage_excluded_keys = {
         str(key)
-        for key in terminal_tuning_gate.get("excluded_evaluation_keys") or []
+        for key in (
+            list(terminal_tuning_gate.get("excluded_evaluation_keys") or [])
+            + list(terminal_tuning_gate.get("pending_evaluation_keys") or [])
+        )
         if str(key)
     }
     compact_measurement = _as_dict(
@@ -4201,7 +4204,14 @@ def build_machine_decision_case_table(
     terminal_gate_required = receipt_target_date >= "2026-09-15"
     terminal_gate_allowed = bool(
         not terminal_gate_required
-        or terminal_tuning_gate.get("economic_tuning_input_allowed") is True
+        or terminal_tuning_gate.get("decision_counterfactual_tuning_input_allowed")
+        is True
+        # Frozen earlier receipts remain usable only under their original,
+        # stricter gate. A missing new field never grants new permission.
+        or (
+            "decision_counterfactual_tuning_input_allowed" not in terminal_tuning_gate
+            and terminal_tuning_gate.get("economic_tuning_input_allowed") is True
+        )
     )
     compact_tuning_input_allowed = bool(
         source_tuning_allowed
@@ -4239,6 +4249,10 @@ def build_machine_decision_case_table(
         )
         if (
             row.get("policy_learning_excluded") is True
+            or (
+                terminal_gate_required
+                and row.get("exact_attempt_identity_complete") is not True
+            )
             or row.get("machine_action") != "ENTER_NOW"
             or ai_guard.get("provider_called") is not True
             or version != incumbent_compact_version
@@ -4381,9 +4395,11 @@ def build_machine_decision_case_table(
         "conflicting_attempt_identity_count": conflicting_attempt_identity_count,
         "incomplete_attempt_identity_count": incomplete_attempt_identity_count,
         "policy_learning_eligible_observation_count": (
-            len(rows)
-            - incomplete_attempt_identity_count
-            - sum(case.get("policy_learning_excluded") is True for case in cases)
+            sum(
+                case.get("exact_attempt_identity_complete") is True
+                and case.get("policy_learning_excluded") is not True
+                for case in cases
+            )
             if conflicting_attempt_identity_count == 0 and machine_tuning_allowed
             else 0
         ),
@@ -6590,8 +6606,7 @@ def build_report(
                 str(value or "").strip()
                 for value in (
                     row.get("scanner_promotion_id"),
-                    row.get("evaluation_attempt_id")
-                    or row.get("decision_trace_id"),
+                    row.get("evaluation_attempt_id") or row.get("decision_trace_id"),
                     row.get("stock_code"),
                     row.get("effective_venue"),
                     row.get("session_bucket"),
@@ -6601,8 +6616,7 @@ def build_report(
             and _machine_evaluation_key(row) not in terminal_lineage_excluded_keys
         ]
         if machine_decision_case_table["conflicting_attempt_identity_count"] == 0
-        and machine_source_receipt.get("machine_threshold_tuning_input_allowed")
-        is True
+        and machine_source_receipt.get("machine_threshold_tuning_input_allowed") is True
         else []
     )
     krx_machine_policy_rows = [
