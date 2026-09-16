@@ -473,7 +473,11 @@ def _low_price_two_leg_postclose_contract_status(
         issues.append("tuning_target_date_mismatch")
     try:
         parsed_target_date = date.fromisoformat(target_date)
-        target_date_profiles = profiles_for_target_date(parsed_target_date)
+        # ``_target_date_research_inventory`` loads the optional expansion
+        # catalog. That loader can register future profiles in the shared
+        # catalog, so snapshot the exact target-date set before discovery.
+        # The daily tuning report is bound to that original set.
+        target_date_profiles = dict(profiles_for_target_date(parsed_target_date))
         expanded_candidate_symbols = expanded.get("candidate_symbols")
         target_research_inventory = _target_date_research_inventory(
             parsed_target_date,
