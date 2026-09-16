@@ -1476,6 +1476,7 @@ def _materialize_mechanistic_entry_price_policy(
         or not env_key
         or value <= 0
         or joined < 20
+        or isinstance(selected_metrics.get("source_quality_adjusted_ev_pct"), bool)
         or ev is None
         or not math.isfinite(ev)
         or ev < 0.10
