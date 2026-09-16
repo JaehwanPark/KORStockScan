@@ -15735,7 +15735,8 @@ def test_entry_receipt_market_axes_use_exact_receive_session_over_stale_stock_ax
 
     assert fields["decision_market_scope"] == "KRX"
     assert fields["market_session_regime"] == "KRX_REGULAR"
-    assert fields["market_data_route"] == "krx_only"
+    assert fields["market_data_route"] == "nxt_only"
+    assert fields["preferred_market_data_route"] == "krx_only"
     assert fields["session_contract_version"] == "market_session_contract_v2"
     from src.engine import observation_source_quality_audit as source_audit
 
@@ -15746,6 +15747,21 @@ def test_entry_receipt_market_axes_use_exact_receive_session_over_stale_stock_ax
         "holding_started", {"fields": contract_fields}, contract
     )
     assert "aftermarket_market_axes_contract" not in violations["invalid_fields"]
+
+
+def test_receipt_session_preference_does_not_fabricate_missing_data_route():
+    fields = receipts._probe_venue_provenance_fields(
+        {
+            "broker_execution_received_at": datetime(
+                2026, 9, 16, 14, 33, tzinfo=state_handlers._KST
+            ).isoformat(),
+            "entry_execution_broker_route": "SOR",
+            "post_sell_expected_market_route": "krx_only",
+        }
+    )
+    assert fields["market_data_route"] == "unknown"
+    assert fields["preferred_market_data_route"] == "krx_only"
+    assert fields["actual_execution_venue"] == "UNKNOWN"
 
 
 def test_extract_broker_order_no_accepts_flat_and_nested_response_keys():

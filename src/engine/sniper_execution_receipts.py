@@ -437,17 +437,20 @@ def _receipt_market_axes(
     market_data_route = ""
     for key in (
         "market_data_route",
-        "post_sell_expected_market_route",
         "rising_missed_ws_0d_route",
     ):
         candidate = str(stock.get(key) or "").strip().lower()
         if candidate in _MARKET_DATA_ROUTES:
             market_data_route = candidate
             break
-    if context is not None:
-        candidate = str(context.preferred_market_data_route or "").strip().lower()
-        if candidate in _MARKET_DATA_ROUTES:
-            market_data_route = candidate
+    # The clock owns session/scope, not the route that produced the quote.
+    # A session preference must not overwrite an observed data route or
+    # manufacture one when the source projection is missing.
+    preferred_market_data_route = (
+        str(context.preferred_market_data_route or "").strip().lower()
+        if context is not None
+        else "unknown"
+    )
 
     actual_venue = str(stock.get("broker_actual_execution_venue") or "").strip().upper()
     if actual_venue not in {"KRX", "NXT"}:
@@ -465,6 +468,7 @@ def _receipt_market_axes(
         "decision_market_scope": decision_market_scope or "UNKNOWN",
         "market_session_regime": session_regime or "unknown",
         "market_data_route": market_data_route or "unknown",
+        "preferred_market_data_route": preferred_market_data_route or "unknown",
         "broker_route_requested": requested_route or "UNKNOWN",
         "actual_execution_venue": actual_venue,
         "actual_execution_venue_source": actual_venue_source,

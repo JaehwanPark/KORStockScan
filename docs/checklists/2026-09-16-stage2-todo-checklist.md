@@ -78,6 +78,7 @@
   - 판정 기준: 장중 `PYTHONPATH=. .venv/bin/python -m src.engine.observation_source_quality_audit --target-date 2026-09-16 --write` 재감사를 실행하거나 최신 산출물을 확인해 `hard_blocking_contract_gap_count`, `hard_blocking_excluded_row_count`, `tuning_input_allowed`, `raw_row_exclusion_applied`, `unknown_token_stage_count`, `review_warning_count`를 기록한다.
   - 금지: hard contract gap 또는 unknown-token warning을 답변에만 남기지 않는다. 결손 row/window는 튜닝 입력 제외 또는 workorder handoff 대상으로 고정하고, broker/order/provider/cap/bot/threshold 변경 근거로 사용하지 않는다.
   - 다음 액션: `source_quality_clean_intraday`, `defective_rows_excluded`, `hard_block_requires_producer_fix`, `unknown_warning_workorder_required`, `audit_missing_or_stale` 중 하나로 닫는다. hard gap/unknown warning이 있으면 장후 `PostcloseSourceQualityGateReview`와 `CodeImprovementWorkorderReview`에서 누락 없이 재확인한다.
+  - 16:12 추가 review owner: [postclose release review](../audit-reports/2026-09-16-postclose-release-review.md)는 verifier 동시 발행의 최초 실패 포인터 경합·attempt 충돌과 receipt의 관측 data route를 session preference로 덮어쓰는 결함을 보완한다. 사용자 승인 범위는 review/fix·커밋/푸시·common release 배포·graceful main 재기동이며 독립 machine pin·주문·env/threshold/provider/quantity/custody/hard safety 변경은 아니다. 구현/테스트·selector·새 PID·오늘 장후 strict chain·다음 자연 audit 재발 0은 각각 별도 acceptance로 유지한다. 어제 최초 22:14 fail contract는 덮어써져 복원 불가이므로 release 전환 자체를 직접 원인으로 단정하지 않는다.
 
 ## 장후 체크리스트 (16:25~21:55)
 

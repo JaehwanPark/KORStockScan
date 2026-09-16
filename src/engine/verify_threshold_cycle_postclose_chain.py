@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import gzip
 import hashlib
 import json
 import math
+import os
 import re
+import subprocess
+import uuid
 from collections import Counter
 from datetime import date, datetime, time as dtime
 from pathlib import Path
@@ -283,6 +287,44 @@ def _write_verification_receipts(
     *,
     invocation: dict[str, Any],
 ) -> tuple[dict[str, Any], Path, Path, Path]:
+    # All releases share VERIFY_DIR. Serialize the read -> first-failure
+    # selection -> canonical publication transaction across controllers and
+    # finalization, not just individual file replacements.
+    VERIFY_DIR.mkdir(parents=True, exist_ok=True)
+    with (VERIFY_DIR / f".verification_{target_date}.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return _write_verification_receipts_locked(
+            target_date, report, invocation=invocation
+        )
+
+
+def _verification_code_provenance() -> dict[str, Any]:
+    path = Path(__file__).resolve()
+    try:
+        commit = subprocess.check_output(
+            ["git", "-C", str(PROJECT_ROOT), "rev-parse", "HEAD"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        ).strip()
+    except (OSError, subprocess.SubprocessError):
+        commit = None
+    return {
+        "project_root": str(PROJECT_ROOT.resolve()),
+        "git_commit": commit,
+        "verifier_path": str(path),
+        "verifier_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "shared_verification_dir": str(VERIFY_DIR.resolve()),
+        "authority": "execution_provenance_only_not_release_selection",
+    }
+
+
+def _write_verification_receipts_locked(
+    target_date: str,
+    report: dict[str, Any],
+    *,
+    invocation: dict[str, Any],
+) -> tuple[dict[str, Any], Path, Path, Path]:
     """Write one immutable attempt and refresh the canonical latest view.
 
     Recovery may replace the canonical report, but it cannot replace the
@@ -301,7 +343,7 @@ def _write_verification_receipts(
         else None
     )
     generated = datetime.now().astimezone()
-    attempt_id = generated.strftime("%Y%m%dT%H%M%S%f%z")
+    attempt_id = generated.strftime("%Y%m%dT%H%M%S%f%z") + "_" + uuid.uuid4().hex
     attempt_base = attempt_dir / (
         f"threshold_cycle_postclose_verification_{target_date}_{attempt_id}"
     )
@@ -309,6 +351,7 @@ def _write_verification_receipts(
     attempt_md = attempt_base.with_suffix(".md")
     attempt_report = {
         **report,
+        "verification_code_provenance": _verification_code_provenance(),
         "verification_invocation": invocation,
         "failure_summary": _verification_failure_summary(report),
         "verification_attempt": {
@@ -325,16 +368,21 @@ def _write_verification_receipts(
     attempt_sha256 = hashlib.sha256(attempt_payload).hexdigest()
     attempt_json_tmp = attempt_json.with_suffix(".json.tmp")
     attempt_md_tmp = attempt_md.with_suffix(".md.tmp")
-    attempt_json_tmp.write_bytes(attempt_payload)
-    attempt_md_tmp.write_text(_render_markdown(attempt_report), encoding="utf-8")
-    attempt_json_tmp.replace(attempt_json)
-    attempt_md_tmp.replace(attempt_md)
+    _publish_immutable_verification_file(
+        attempt_json_tmp, attempt_json, attempt_payload
+    )
+    _publish_immutable_verification_file(
+        attempt_md_tmp,
+        attempt_md,
+        _render_markdown(attempt_report).encode("utf-8"),
+    )
     receipt = {
         **attempt_report["verification_attempt"],
         "status": str(report.get("status") or "unknown"),
         "generated_at": str(report.get("generated_at") or generated.isoformat()),
         "json_sha256": attempt_sha256,
         "failure_summary": attempt_report["failure_summary"],
+        "code_provenance": attempt_report["verification_code_provenance"],
     }
     first_failure = prior_first_failure
     if report.get("status") == "fail" and first_failure is None:
@@ -353,6 +401,19 @@ def _write_verification_receipts(
     canonical_json_tmp.replace(json_path)
     canonical_md_tmp.replace(md_path)
     return canonical_report, json_path, md_path, attempt_json
+
+
+def _publish_immutable_verification_file(
+    temporary: Path, destination: Path, payload: bytes
+) -> None:
+    # link() publishes complete bytes atomically and refuses an existing
+    # destination. Even a forced ID collision must never replace evidence.
+    with temporary.open("xb") as stream:
+        stream.write(payload)
+    try:
+        os.link(temporary, destination)
+    finally:
+        temporary.unlink()
 
 
 def _load_json(path: Path) -> dict[str, Any]:

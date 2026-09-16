@@ -4,6 +4,8 @@ import json
 import os
 from datetime import datetime
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 
 import pytest
 
@@ -53,6 +55,63 @@ def test_verifier_attempt_receipt_preserves_first_failure_across_recovery(
     assert recovered["first_failure_receipt"]["json_sha256"] == (
         mod.hashlib.sha256(first_bytes).hexdigest()
     )
+    provenance = json.loads(first_bytes)["verification_code_provenance"]
+    assert provenance["project_root"] == str(mod.PROJECT_ROOT.resolve())
+    assert (
+        provenance["verifier_sha256"]
+        == mod.hashlib.sha256(Path(mod.__file__).read_bytes()).hexdigest()
+    )
+    assert provenance["authority"] == (
+        "execution_provenance_only_not_release_selection"
+    )
+
+
+def test_concurrent_verifiers_preserve_one_first_failure_and_unique_attempts(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(mod, "VERIFY_DIR", tmp_path / "verification")
+    monkeypatch.setattr(mod, "_verification_code_provenance", lambda: {})
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls):
+            return cls.fromisoformat("2026-09-16T22:14:15+09:00")
+
+    monkeypatch.setattr(mod, "datetime", FrozenDateTime)
+    barrier = Barrier(8)
+
+    def write(index):
+        barrier.wait(timeout=10)
+        return mod._write_verification_receipts(
+            "2026-09-16",
+            {"date": "2026-09-16", "status": "fail"},
+            invocation={"concurrent_writer": index},
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(write, range(8)))
+    assert len({str(result[3]) for result in results}) == 8
+    first_paths = {
+        result[0]["first_failure_receipt"]["json_path"] for result in results
+    }
+    assert len(first_paths) == 1
+    canonical = json.loads(results[0][1].read_text())
+    assert canonical["first_failure_receipt"]["json_path"] in first_paths
+    for report, _, _, attempt_path in results:
+        assert report["verification_attempt"]["json_sha256"] == (
+            mod.hashlib.sha256(attempt_path.read_bytes()).hexdigest()
+        )
+    assert len(list((mod.VERIFY_DIR / "attempts").glob("*.json"))) == 8
+
+
+def test_immutable_attempt_collision_cannot_replace_original(tmp_path):
+    original = tmp_path / "attempt.json"
+    temporary = tmp_path / "attempt.json.tmp"
+    original.write_bytes(b"original failure")
+    with pytest.raises(FileExistsError):
+        mod._publish_immutable_verification_file(temporary, original, b"later recovery")
+    assert original.read_bytes() == b"original failure"
+    assert not temporary.exists()
 
 
 def test_retired_latency_is_not_an_ai_candidate_or_an_exemption():
@@ -367,9 +426,9 @@ def test_entry_setup_replay_session_contract_rejects_dual_authority_leak():
     batch["cohort_contract_sha256"] = contract_hash
     batch["candidate_prompt_selection_source"]["cohort_contract_sha256"] = contract_hash
     consumer["source_bindings"]["entry_cohort_contract_sha256"] = contract_hash
-    consumer["request_paths"]["entry_base"]["cohorts"][2]["authority_state"] = (
-        "LIVE_APPROVED"
-    )
+    consumer["request_paths"]["entry_base"]["cohorts"][2][
+        "authority_state"
+    ] = "LIVE_APPROVED"
 
     status = mod._entry_setup_replay_session_contract_status(
         batch, consumer, target_date="2026-09-12"
@@ -1976,7 +2035,11 @@ def test_ai_decision_action_outcome_calibration_status_accepts_incomplete_attemp
         copy.deepcopy(case_table)
     )
     handoff["handoff_content_sha256"] = calibration._canonical_sha256(
-        {key: value for key, value in handoff.items() if key != "handoff_content_sha256"}
+        {
+            key: value
+            for key, value in handoff.items()
+            if key != "handoff_content_sha256"
+        }
     )
     report = calibration._with_artifact_content_sha256(report)
 
