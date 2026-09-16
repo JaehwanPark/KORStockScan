@@ -2,7 +2,7 @@
 
 import hashlib
 import json
-from datetime import date
+from datetime import date, timedelta
 
 import pandas as pd
 import pytest
@@ -388,20 +388,27 @@ def test_isolated_generation_profit_handoff_and_second_pass_fixed_point(
     root = tmp_path / "lab"
     out = root / "outputs"
     out.mkdir(parents=True)
-    day = "2026-09-08"
+    # The automation accepts only a same-day or immediately-next-day lab run.
+    # Keep this fixed-point regression independent from the wall-clock date on
+    # which the test suite happens to run.
+    end_day = date.today()
+    start_day = end_day - timedelta(days=1)
+    day = end_day.isoformat()
     monkeypatch.setattr(analysis.config, "PROJECT_ROOT", tmp_path)
-    monkeypatch.setattr(analysis.config, "ANALYSIS_START", date(2026, 9, 7))
-    monkeypatch.setattr(analysis.config, "ANALYSIS_END", date(2026, 9, 8))
+    monkeypatch.setattr(analysis.config, "ANALYSIS_START", start_day)
+    monkeypatch.setattr(analysis.config, "ANALYSIS_END", end_day)
     monkeypatch.setattr(analysis, "OUTPUT_DIR", out)
     monkeypatch.setattr(payload, "OUTPUT_DIR", out)
-    monkeypatch.setattr(payload, "ANALYSIS_START", date(2026, 9, 7))
-    monkeypatch.setattr(payload, "ANALYSIS_END", date(2026, 9, 8))
+    monkeypatch.setattr(payload, "ANALYSIS_START", start_day)
+    monkeypatch.setattr(payload, "ANALYSIS_END", end_day)
     monkeypatch.setattr(payload, "_load_feedback_sources", lambda: {})
     monkeypatch.setattr(automation, "CLAUDE_LAB_DIR", root)
     monkeypatch.setattr(
         automation, "PATTERN_LAB_AUTOMATION_DIR", tmp_path / "automation"
     )
-    write_report(tmp_path / "data/report/main_scalping_lifecycle_paired", "2026-09-07")
+    write_report(
+        tmp_path / "data/report/main_scalping_lifecycle_paired", start_day.isoformat()
+    )
     write_report(tmp_path / "data/report/main_scalping_lifecycle_paired", day)
     pd.DataFrame(columns=prepare.TRADE_FACT_COLUMNS).to_csv(
         out / "trade_fact.csv", index=False
