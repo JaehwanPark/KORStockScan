@@ -34,6 +34,7 @@ from src.engine.monitoring import hanwha_ocean_widget_contract as hanwha_contrac
 from src.engine.monitoring import samsung_widget_contract as samsung_contract
 from src.engine.monitoring.widget_symbol_runtime_contract import (
     CONTRACTS as WIDGET_SYMBOL_RUNTIME_CONTRACTS,
+    WidgetSymbolRuntimeContract,
 )
 from src.engine.monitoring.samsung_widget_contract import KST
 from src.engine.risk.manual_control_exclusion import (
@@ -601,6 +602,7 @@ class WidgetSignalAutoTrader:
         self._dated_execution_policies = self.policy_loader.resolve_all(
             observed_date=self._policy_date
         )
+        self._extend_dynamic_spec_catalog(self._dated_execution_policies)
         self._refresh_dynamic_specs()
         self._configured_execution_policies = self._policy_manifest()
         self._last_policy_catalog_refresh_at: datetime | None = None
@@ -612,6 +614,36 @@ class WidgetSignalAutoTrader:
         self.specs = self._static_specs + tuple(
             spec for spec in self._dynamic_spec_catalog if spec.code in promoted
         )
+
+    def _extend_dynamic_spec_catalog(self, policies: dict[str, dict[str, Any]]) -> None:
+        known = {spec.code for spec in self._static_specs} | {
+            spec.code for spec in self._dynamic_spec_catalog
+        }
+        additions: list[WidgetSpec] = []
+        for symbol, sessions in policies.items():
+            if symbol in known or not isinstance(sessions, dict) or not sessions:
+                continue
+            sample = next(
+                (value for value in sessions.values() if isinstance(value, dict)),
+                None,
+            )
+            name = str((sample or {}).get("name") or "").strip()
+            if len(symbol) != 6 or not symbol.isdigit() or not name:
+                continue
+            contract = WidgetSymbolRuntimeContract(symbol, name)
+            additions.append(
+                WidgetSpec(
+                    symbol,
+                    name,
+                    contract.DEFAULT_SNAPSHOT_PATH,
+                    contract,
+                    True,
+                    dated_policy_required=True,
+                )
+            )
+            known.add(symbol)
+        if additions:
+            self._dynamic_spec_catalog = (*self._dynamic_spec_catalog, *additions)
 
     def _validate_policy_quantities(self) -> None:
         for spec in self.specs:
@@ -778,6 +810,7 @@ class WidgetSignalAutoTrader:
         candidate = self.policy_loader.resolve_all(observed_date=self._policy_date)
         if not isinstance(candidate, dict) or not candidate:
             return
+        self._extend_dynamic_spec_catalog(candidate)
 
         catalog_codes = {spec.code for spec in self._dynamic_spec_catalog}
         spec_codes = {spec.code for spec in self._static_specs} | catalog_codes
@@ -970,6 +1003,7 @@ class WidgetSignalAutoTrader:
         self._dated_execution_policies = self.policy_loader.resolve_all(
             observed_date=self._policy_date
         )
+        self._extend_dynamic_spec_catalog(self._dated_execution_policies)
         self._refresh_dynamic_specs()
         self._validate_policy_quantities()
         self._configured_execution_policies = self._policy_manifest()

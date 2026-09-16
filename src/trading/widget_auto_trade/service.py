@@ -13,6 +13,9 @@ from src.engine.monitoring.samsung_widget_contract import KST
 from src.engine.monitoring.widget_symbol_runtime_policy import (
     WidgetSymbolRuntimePolicyLoader,
 )
+from src.engine.monitoring.widget_symbol_runtime_contract import (
+    WidgetSymbolRuntimeContract,
+)
 from src.trading.widget_auto_trade.engine import (
     ALL_WIDGET_SPECS,
     CALIBRATED_WIDGET_SPECS,
@@ -66,13 +69,27 @@ def _env_specs() -> tuple[WidgetSpec, ...]:
             if token.strip()
         }
     )
-    promoted = set(
-        WidgetSymbolRuntimePolicyLoader()
-        .resolve_all(observed_date=datetime.now(KST).date())
-        .keys()
+    promoted_policies = WidgetSymbolRuntimePolicyLoader().resolve_all(
+        observed_date=datetime.now(KST).date()
     )
+    promoted = set(promoted_policies)
     requested.update(promoted)
     by_code = {spec.code: spec for spec in ALL_WIDGET_SPECS}
+    for code, payload in promoted_policies.items():
+        if code in by_code:
+            continue
+        name = str(payload.get("name") or "").strip()
+        if len(code) != 6 or not code.isdigit() or not name:
+            raise ValueError(f"widget_auto_trader_promoted_symbol_invalid:{code}")
+        contract = WidgetSymbolRuntimeContract(code, name)
+        by_code[code] = WidgetSpec(
+            code,
+            name,
+            contract.DEFAULT_SNAPSHOT_PATH,
+            contract,
+            True,
+            dated_policy_required=True,
+        )
     if not requested:
         raise ValueError("widget_auto_trader_symbols_empty")
     unknown = sorted(requested - by_code.keys())
@@ -89,7 +106,7 @@ def _env_specs() -> tuple[WidgetSpec, ...]:
             if spec.code == "005930" and samsung_policy
             else spec
         )
-        for spec in ALL_WIDGET_SPECS
+        for spec in by_code.values()
         if spec.code in requested
     )
 
@@ -124,12 +141,17 @@ def main(argv: list[str] | None = None) -> int:
     lock_handle = _acquire_single_instance_lock(lock_path)
     if lock_handle is None:
         return 3
+    specs = _env_specs()
+    dynamic_by_code = {spec.code: spec for spec in CALIBRATED_WIDGET_SPECS}
+    for spec in specs:
+        if spec.code not in LEGACY_DEFAULT_SYMBOLS:
+            dynamic_by_code[spec.code] = spec
     trader = WidgetSignalAutoTrader(
         state_path=args.state_path,
         entry_qty=_env_qty(),
         enabled=_env_enabled(),
-        specs=_env_specs(),
-        dynamic_spec_catalog=CALIBRATED_WIDGET_SPECS,
+        specs=specs,
+        dynamic_spec_catalog=tuple(dynamic_by_code.values()),
         entry_action_notifier=WidgetAutoTradeEntryTelegramNotifier(),
     )
     trader.profit_exit_lock_held = lambda: not lock_handle.closed

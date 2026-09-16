@@ -118,13 +118,12 @@ def test_exact_date_report_reuse_requires_matching_fingerprint(tmp_path) -> None
     }
     path.write_text(json.dumps(report), encoding="utf-8")
 
-    assert research.reusable_report(
-        path, end_date=date(2026, 8, 18), fingerprint="a" * 64
-    ) == report
     assert (
-        research.reusable_report(
-            path, end_date=date(2026, 8, 18), fingerprint="b" * 64
-        )
+        research.reusable_report(path, end_date=date(2026, 8, 18), fingerprint="a" * 64)
+        == report
+    )
+    assert (
+        research.reusable_report(path, end_date=date(2026, 8, 18), fingerprint="b" * 64)
         is None
     )
 
@@ -272,6 +271,43 @@ def test_widget_source_uses_shared_source_only_read_capacity(monkeypatch):
     assert admissions[0]["request_owner"] == "widget_symbol_signal_policy_research"
     assert admissions[0]["request_class"] == "source_only"
     assert admissions[0]["api_id"] == "ka10080"
+
+
+def test_research_watch_accepts_complete_post_listing_history() -> None:
+    requested_start = date(2026, 6, 5)
+    source_dates = []
+    candidate = date(2026, 8, 3)
+    while len(source_dates) < 25:
+        if research.is_krx_trading_day(candidate):
+            source_dates.append(candidate)
+        candidate += timedelta(days=1)
+    rows = [
+        {
+            "cntr_tm": f"{item.strftime('%Y%m%d')}131500",
+            "open_pric": "20000",
+            "high_pric": "20100",
+            "low_pric": "19900",
+            "cur_prc": "20000",
+            "trde_qty": "100",
+        }
+        for item in source_dates
+    ]
+
+    bars, meta = research.fetch_krx_history(
+        symbol="138080",
+        token="CACHED",
+        start_date=requested_start,
+        end_date=source_dates[-1],
+        expected_trading_day_count=70,
+        page_delay_sec=0,
+        post=lambda *args, **kwargs: FakeResponse(rows),
+        allowed_symbols={"138080"},
+        allow_short_listing_history=True,
+    )
+
+    assert len(bars) == 25
+    assert meta["listing_history_accepted"] is True
+    assert meta["source_quality_status"] == "PASS"
 
 
 def test_widget_source_retries_body_level_rate_limit(monkeypatch):

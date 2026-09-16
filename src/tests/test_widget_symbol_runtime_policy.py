@@ -110,6 +110,32 @@ def test_build_policy_promotes_only_holdout_passed_symbol():
     )
 
 
+def test_build_policy_promotes_integrity_bound_research_watch_symbol():
+    research = _research()
+    watch = "138080"
+    research["symbols"][watch] = {
+        **deepcopy(research["symbols"]["006800"]),
+        "robust_calibration_score": 0.2,
+    }
+    research["source_meta"][watch] = {
+        "symbol": watch,
+        "request_code": watch,
+        "market": "KRX_regular",
+        "source_quality_status": "PASS",
+    }
+    research["symbol_universe"] = {**SYMBOLS, watch: "오이솔루션"}
+    research["symbol_origins"] = {
+        **{symbol: "established_widget_symbol" for symbol in SYMBOLS},
+        watch: "operator_enrolled_research_watch",
+    }
+
+    policy = runtime.build_policy(research)
+
+    assert set(policy["symbols"]) == {"006800", watch}
+    assert watch in policy["observation_symbols"]
+    assert policy["symbols"][watch]["name"] == "오이솔루션"
+
+
 def test_execution_quality_handoff_is_consumed_without_disabling_observation(tmp_path):
     from src.engine.monitoring.widget_execution_quality import load_execution_incidents
 

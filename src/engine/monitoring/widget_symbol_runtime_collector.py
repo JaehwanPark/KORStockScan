@@ -44,6 +44,9 @@ from src.engine.monitoring.widget_symbol_runtime_policy import (
     POLICY_AUTHORITY,
     WidgetSymbolRuntimePolicyLoader,
 )
+from src.engine.monitoring.widget_symbol_runtime_contract import (
+    WidgetSymbolRuntimeContract,
+)
 from src.engine.sniper_config import CONF
 from src.trading.order.tick_utils import (
     get_tick_size,
@@ -296,6 +299,7 @@ class WidgetSymbolRuntimeCollector:
         )
         self._active_date = ""
         self._policies: dict[str, dict[str, Any]] = {}
+        self._contracts: dict[str, WidgetSymbolRuntimeContract] = {}
         self._minute_cache: dict[str, tuple[str, dict[str, Any]]] = {}
         self._bbo_cache: dict[str, tuple[str, dict[str, Any], datetime]] = {}
         self._quote_cache: dict[str, tuple[str, dict[str, Any], datetime]] = {}
@@ -326,6 +330,11 @@ class WidgetSymbolRuntimeCollector:
         self._policies = self.policy_loader.resolve_observation_all(
             observed_date=observed_at.date()
         )
+        self._contracts = {
+            symbol: CONTRACTS.get(symbol)
+            or WidgetSymbolRuntimeContract(symbol, str(policy["name"]))
+            for symbol, policy in self._policies.items()
+        }
         self._minute_cache.clear()
         self._bbo_cache.clear()
         self._quote_cache.clear()
@@ -336,7 +345,7 @@ class WidgetSymbolRuntimeCollector:
             collector.reset()
         self._episodes = {}
         for symbol, policy in self._policies.items():
-            snapshot = CONTRACTS[symbol].load_snapshot()
+            snapshot = self._contracts[symbol].load_snapshot()
             if snapshot.get("policy_id") == policy["policy_id"]:
                 self._episodes[symbol] = EpisodeState.from_dict(
                     snapshot.get("episode"), trade_date=day
@@ -364,6 +373,12 @@ class WidgetSymbolRuntimeCollector:
             session=self.request_session,
             budget=self.request_budget,
         )
+
+    def _contract(self, symbol: str) -> Any:
+        contract = self._contracts.get(symbol) or CONTRACTS.get(symbol)
+        if contract is None:
+            raise RuntimeError(f"{symbol}_runtime_contract_missing")
+        return contract
 
     def _bars(
         self,
@@ -675,7 +690,7 @@ class WidgetSymbolRuntimeCollector:
         reason: str,
     ) -> dict[str, Any]:
         """Publish a fail-closed snapshot without terminating other symbols."""
-        contract = CONTRACTS[symbol]
+        contract = self._contract(symbol)
         episode = self._episodes[symbol]
         episode.activate_date(observed_at)
         payload = {
@@ -762,7 +777,7 @@ class WidgetSymbolRuntimeCollector:
         client: KiwoomReadOnlyClient,
         observed_at: datetime,
     ) -> dict[str, Any]:
-        contract = CONTRACTS[symbol]
+        contract = self._contract(symbol)
         context = contract.session_context(observed_at)
         episode = self._episodes[symbol]
         episode.activate_date(observed_at)
@@ -802,23 +817,54 @@ class WidgetSymbolRuntimeCollector:
         source_quality, source_quality_reasons = _source_quality(
             latest=latest, bbo=bbo, observed_at=observed_at
         )
-        auxiliary_collector = self._auxiliary_collectors[symbol]
-        profile = WIDGET_SYMBOL_AUXILIARY_PROFILES[symbol]
-        market_payload, market_gaps = self._shared_market_payload(
-            client=client,
-            index_code=profile.market_index_code,
-            observed_at=observed_at,
-        )
-        external_points, external_gaps = self._shared_external_points(observed_at)
-        auxiliary = auxiliary_collector.collect(
-            client=client,
-            observed_at=observed_at,
-            context=context,
-            primary_bars=bars,
-            market_payload=market_payload,
-            external_points=external_points,
-            inherited_gaps=[*market_gaps, *external_gaps],
-        )
+        auxiliary_collector = self._auxiliary_collectors.get(symbol)
+        profile = WIDGET_SYMBOL_AUXILIARY_PROFILES.get(symbol)
+        if auxiliary_collector is not None and profile is not None:
+            market_payload, market_gaps = self._shared_market_payload(
+                client=client,
+                index_code=profile.market_index_code,
+                observed_at=observed_at,
+            )
+            external_points, external_gaps = self._shared_external_points(observed_at)
+            auxiliary = auxiliary_collector.collect(
+                client=client,
+                observed_at=observed_at,
+                context=context,
+                primary_bars=bars,
+                market_payload=market_payload,
+                external_points=external_points,
+                inherited_gaps=[*market_gaps, *external_gaps],
+            )
+        else:
+            auxiliary = {
+                "relative": {"status": "UNAVAILABLE", "primary_symbol": symbol},
+                "flow": {"status": "UNAVAILABLE"},
+                "external_points": {},
+                "external_thresholds": {"USDKRW": 0.25},
+                "summary": {
+                    "status": "LIMITED",
+                    "relative_status": "UNAVAILABLE",
+                    "flow_status": "UNAVAILABLE",
+                    "raw_flow_status": "UNAVAILABLE",
+                    "foreign_flow_status": "UNAVAILABLE",
+                    "program_flow_status": "UNAVAILABLE",
+                    "positive_promotion_ready": False,
+                    "negative_veto_ready": False,
+                    "external_status": "LIMITED",
+                    "primary_symbol": symbol,
+                    "peer_symbol": None,
+                    "peer_name": None,
+                    "market_index": None,
+                    "market_index_code": None,
+                    "external_keys": ["USDKRW"],
+                    "context_version": "generic_promoted_symbol_auxiliary_unavailable_v1",
+                    "optional_gaps": [
+                        {"source": "auxiliary_profile", "error": "not_configured"}
+                    ],
+                    "authority": "widget_advisory_auxiliary_context_only",
+                    "runtime_effect": False,
+                },
+            }
         _relative_ok, _relative_issues, relative_assessment = (
             _relative_quality_assessment(auxiliary["relative"], context)
         )

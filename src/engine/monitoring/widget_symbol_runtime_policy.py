@@ -38,8 +38,10 @@ DEFAULT_APPLY_REPORT_DIR = DATA_DIR / "report" / "widget_symbol_runtime_policy_a
 POLICY_PREFIX = "widget_symbol_runtime_policy"
 SUPPORTED_RESEARCH_SCHEMAS = {
     "widget_symbol_signal_policy_research_v2",
+    "widget_symbol_signal_policy_research_v3",
     REPORT_SCHEMA,
 }
+MAX_RESEARCH_WATCH_RUNTIME_SYMBOLS = 2
 
 OFFICIAL_REFERENCE = {
     "repository": "Kiwoom-Securities/Kiwoom-REST-API",
@@ -150,6 +152,44 @@ def _payload_sha256(payload: dict[str, Any]) -> str:
         payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
     return hashlib.sha256(canonical).hexdigest()
+
+
+def _research_universe(
+    research: dict[str, Any],
+) -> tuple[dict[str, str], dict[str, str]]:
+    raw_universe = research.get("symbol_universe")
+    raw_origins = research.get("symbol_origins")
+    if raw_universe is None and raw_origins is None:
+        if set(research.get("symbols") or {}) != set(SYMBOLS):
+            raise ValueError("widget_symbol_research_universe_missing")
+        return (
+            dict(SYMBOLS),
+            {symbol: "established_widget_symbol" for symbol in SYMBOLS},
+        )
+    if not isinstance(raw_universe, dict) or not isinstance(raw_origins, dict):
+        raise ValueError("widget_symbol_research_universe_invalid")
+    universe = {str(symbol): str(name).strip() for symbol, name in raw_universe.items()}
+    origins = {
+        str(symbol): str(origin).strip() for symbol, origin in raw_origins.items()
+    }
+    if (
+        not universe
+        or set(universe) != set(origins)
+        or set(research.get("symbols") or {}) != set(universe)
+        or any(
+            len(symbol) != 6 or not symbol.isdigit() or not name
+            for symbol, name in universe.items()
+        )
+        or any(
+            origin
+            not in {"established_widget_symbol", "operator_enrolled_research_watch"}
+            for origin in origins.values()
+        )
+        or any(universe.get(symbol) != name for symbol, name in SYMBOLS.items())
+        or any(origins.get(symbol) != "established_widget_symbol" for symbol in SYMBOLS)
+    ):
+        raise ValueError("widget_symbol_research_universe_invalid")
+    return universe, origins
 
 
 def _normalized_selected_parameters(selected: object) -> dict[str, Any] | None:
@@ -355,6 +395,7 @@ def build_policy(
         or research.get("metric_contract") != RESEARCH_METRIC_CONTRACT
     ):
         raise ValueError("widget_symbol_research_contract_invalid")
+    universe, origins = _research_universe(research)
     source_meta = research.get("source_meta")
     if not isinstance(source_meta, dict) or any(
         not isinstance(source_meta.get(symbol), dict)
@@ -362,7 +403,7 @@ def build_policy(
         or source_meta[symbol].get("request_code") != symbol
         or source_meta[symbol].get("market") != "KRX_regular"
         or source_meta[symbol].get("source_quality_status") != "PASS"
-        for symbol in SYMBOLS
+        for symbol in universe
     ):
         raise ValueError("widget_symbol_research_krx_source_provenance_invalid")
     source_date = date.fromisoformat(str(research.get("end_date") or ""))
@@ -378,9 +419,12 @@ def build_policy(
         source_date >= date(2026, 9, 9) or quality_by_symbol is not None
     )
     quality_blocks: dict[str, str] = {}
-    for symbol, name in SYMBOLS.items():
+    for symbol, name in universe.items():
         result = (research.get("symbols") or {}).get(symbol)
-        if research.get("schema") == REPORT_SCHEMA and isinstance(result, dict):
+        if research.get("schema") in {
+            "widget_symbol_signal_policy_research_v3",
+            REPORT_SCHEMA,
+        } and isinstance(result, dict):
             selected_contract = result.get("selected_policy")
             if not isinstance(selected_contract, dict):
                 diagnostic = result.get("best_diagnostic_candidate")
@@ -395,12 +439,23 @@ def build_policy(
                 "max_reclaim_chase_ticks",
             }.issubset(selected_contract):
                 raise ValueError("widget_symbol_research_v3_parameters_missing")
-        observation = _validated_observation_policy(result)
+        observation = (
+            _validated_observation_policy(result)
+            if origins[symbol] == "established_widget_symbol"
+            else None
+        )
         if observation is not None:
             observation_symbols[symbol] = {"name": name, **observation}
         selected = _validated_selected_policy(result)
         if selected is None:
             continue
+        if (
+            observation is None
+            and origins[symbol] == "operator_enrolled_research_watch"
+        ):
+            observation = _validated_observation_policy(result)
+            if observation is not None:
+                observation_symbols[symbol] = {"name": name, **observation}
         if (
             source_date >= date(2026, 9, 9)
             and isinstance(result.get("component_comparison"), dict)
@@ -457,6 +512,28 @@ def build_policy(
                 "entry_cap_comparison": result.get("entry_cap_comparison"),
             },
         }
+    watch_symbols = [
+        symbol
+        for symbol in symbols
+        if origins[symbol] == "operator_enrolled_research_watch"
+    ]
+    watch_symbols.sort(
+        key=lambda symbol: (
+            float((research["symbols"][symbol]).get("robust_calibration_score") or 0.0),
+            float(
+                ((research["symbols"][symbol]).get("holdout") or {}).get(
+                    "notional_weighted_ev_pct"
+                )
+                or 0.0
+            ),
+            symbol,
+        ),
+        reverse=True,
+    )
+    for symbol in watch_symbols[MAX_RESEARCH_WATCH_RUNTIME_SYMBOLS:]:
+        symbols.pop(symbol, None)
+        observation_symbols.pop(symbol, None)
+        quality_blocks[symbol] = "runtime_collector_capacity_cap"
     return {
         "schema": POLICY_SCHEMA,
         "status": (
@@ -477,10 +554,15 @@ def build_policy(
         "official_reference": OFFICIAL_REFERENCE,
         "authority": POLICY_AUTHORITY,
         "owner": OWNER,
+        **(
+            {"symbol_universe": universe, "symbol_origins": origins}
+            if research.get("symbol_universe") is not None
+            else {}
+        ),
         "symbols": symbols,
         **(
             {"execution_quality_blocks": quality_blocks}
-            if require_execution_quality
+            if require_execution_quality or quality_blocks
             else {}
         ),
         "observation_symbols": observation_symbols,
@@ -548,6 +630,7 @@ class WidgetSymbolRuntimePolicyLoader:
             return {}
         try:
             reconstructed = build_policy(evidence, evidence_report_path=evidence_path)
+            universe, _origins = _research_universe(evidence)
         except (TypeError, ValueError):
             return {}
         if reconstructed != payload:
@@ -557,7 +640,7 @@ class WidgetSymbolRuntimePolicyLoader:
             return {}
         resolved: dict[str, dict[str, Any]] = {}
         for symbol, value in symbols.items():
-            if symbol not in SYMBOLS or not isinstance(value, dict):
+            if symbol not in universe or not isinstance(value, dict):
                 continue
             raw_signal_policy = value.get("signal_policy")
             raw_signal_policy = (
@@ -613,7 +696,7 @@ class WidgetSymbolRuntimePolicyLoader:
                 continue
             resolved[symbol] = {
                 "symbol": symbol,
-                "name": SYMBOLS[symbol],
+                "name": universe[symbol],
                 "policy_id": str(payload["policy_version"]),
                 "source_target_date": source_date.isoformat(),
                 "effective_date": observed_date.isoformat(),
@@ -676,6 +759,7 @@ class WidgetSymbolRuntimePolicyLoader:
             return {}
         try:
             reconstructed = build_policy(evidence, evidence_report_path=evidence_path)
+            universe, _origins = _research_universe(evidence)
         except (TypeError, ValueError):
             return {}
         if reconstructed != payload:
@@ -685,7 +769,7 @@ class WidgetSymbolRuntimePolicyLoader:
         if not isinstance(observation_symbols, dict):
             return {}
         for symbol, value in observation_symbols.items():
-            if symbol not in SYMBOLS or not isinstance(value, dict):
+            if symbol not in universe or not isinstance(value, dict):
                 continue
             result = (evidence.get("symbols") or {}).get(symbol)
             normalized = _validated_observation_policy(result)
@@ -695,7 +779,7 @@ class WidgetSymbolRuntimePolicyLoader:
                 continue
             resolved[symbol] = {
                 "symbol": symbol,
-                "name": SYMBOLS[symbol],
+                "name": universe[symbol],
                 "policy_id": str(payload["policy_version"]),
                 "source_target_date": source_date.isoformat(),
                 "effective_date": observed_date.isoformat(),
@@ -746,7 +830,7 @@ def write_outputs(
         "source_target_date": policy["source_target_date"],
         "effective_date": policy["effective_date"],
         "selected_symbols": sorted(expected),
-        "withheld_symbols": sorted(set(SYMBOLS) - expected),
+        "withheld_symbols": sorted(set(_research_universe(research)[0]) - expected),
         "policy_status": policy["status"],
         "policy_verification": verification,
         "metric_contract": METRIC_CONTRACT,

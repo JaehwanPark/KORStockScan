@@ -107,6 +107,30 @@ def test_loader_selects_newest_effective_verified_policy(tmp_path: Path) -> None
     )
 
 
+def test_loader_accepts_same_policy_through_release_data_symlink(
+    tmp_path: Path,
+) -> None:
+    workspace_data = tmp_path / "workspace-data"
+    policy_dir = workspace_data / "runtime" / "widget_auto_trade_policy"
+    policy_dir.mkdir(parents=True)
+    payload = _policy()
+    _write_policy(
+        policy_dir,
+        "widget_auto_trade_policy_2026-08-12.json",
+        payload,
+    )
+    release = tmp_path / "release"
+    release.mkdir()
+    (release / "data").symlink_to(workspace_data, target_is_directory=True)
+
+    loaded = WidgetAutoTradePolicyLoader(
+        release / "data" / "runtime" / "widget_auto_trade_policy",
+        include_symbol_expansion=False,
+    ).resolve_all(observed_date=date(2026, 8, 12))
+
+    assert "KRX_REGULAR" in loaded["034020"]
+
+
 def test_blocked_policy_receipt_hash_is_independent_of_set_iteration(
     tmp_path: Path, monkeypatch
 ) -> None:

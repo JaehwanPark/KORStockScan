@@ -130,6 +130,14 @@
 
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
 
+## 사용자 지시 구현
+
+- [ ] `[WidgetResearchWatchAutoPromotionRepair0916] exact-date 정책 release 경로 및 research-watch 자동 승격 연결 보완` (`Due: 2026-09-16`, `Slot: INTRADAY`, `TimeWindow: 12:00~15:30`, `Track: ScalpingLogic`)
+  - Source: [widget_auto_trade policy loader](/home/ubuntu/KORStockScan/src/trading/widget_auto_trade/policy.py), [widget symbol signal-policy research](/home/ubuntu/KORStockScan/src/engine/monitoring/widget_symbol_signal_policy_research.py), [widget symbol runtime policy](/home/ubuntu/KORStockScan/src/engine/monitoring/widget_symbol_runtime_policy.py), [widget research-watch config](/home/ubuntu/KORStockScan/data/config/widget_research_watch_symbols.json)
+  - 판정 기준: immutable release의 shared-data symlink에서 exact-date standard policy가 canonical path identity로 로드되고, hash-validated 13-symbol research-watch catalog가 completed KRX 1-minute calibration/holdout 분석에 포함되며, 통과 symbol이 exact-date policy, dynamic advisory contract, trader catalog까지 연결된다.
+  - 완료 조건: targeted tests와 compile/diff/parser 검증 통과, scoped commit/push, immutable release 배포, widget runtime collector와 signal auto trader의 새 PID/selected-release 확인. 후보 생성과 runtime 적용, 자연 signal/order, 비용차감 경제성은 별도 상태로 기록한다.
+  - 권한 경계: 10주 수량, source/execution-quality, 양 calibration half, independent holdout, 비용차감 EV/downside, 최대 2개 watch runtime capacity, own-filled custody, manual exclusion, global BUY pause, broker/hard-safety guard를 유지한다. 테스트 주문은 제출하지 않는다.
+
 ## Project/Calendar 동기화
 
 문서/checklist를 수정했으면 parser 검증은 실행하고, Project/Calendar 동기화는 사용자가 아래 명령으로 수동 실행한다.

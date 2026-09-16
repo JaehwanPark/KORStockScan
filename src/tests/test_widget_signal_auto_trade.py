@@ -3779,6 +3779,23 @@ def test_service_adds_only_exact_date_postclose_promoted_widget_symbols(monkeypa
     assert [spec.code for spec in specs] == ["005930", "006800"]
 
 
+def test_service_builds_contract_for_newly_promoted_research_watch(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_WIDGET_AUTO_TRADER_SYMBOLS", "005930")
+    monkeypatch.setattr(
+        service_module.WidgetSymbolRuntimePolicyLoader,
+        "resolve_all",
+        lambda self, observed_date: {
+            "138080": {"name": "오이솔루션", "policy_id": "verified"}
+        },
+    )
+
+    specs = service_module._env_specs()
+
+    assert [spec.code for spec in specs] == ["005930", "138080"]
+    assert specs[-1].dated_policy_required is True
+    assert specs[-1].contract.code == "138080"
+
+
 def test_long_running_trader_refreshes_dynamic_specs_at_trade_date_boundary(tmp_path):
     dynamic_spec = WidgetSpec(
         code="888888",
@@ -3841,6 +3858,50 @@ def test_long_running_trader_refreshes_dynamic_specs_at_trade_date_boundary(tmp_
     assert trader._state["observation_only_symbols"] == ["888888", "999999"]
     trader.run_once(datetime(2026, 8, 14, 10, 0, tzinfo=KST))
     assert [spec.code for spec in trader.specs] == ["999999"]
+
+
+def test_long_running_trader_builds_new_promoted_symbol_contract_at_date_boundary(
+    tmp_path, monkeypatch
+):
+    started = datetime(2026, 8, 12, 10, 0, tzinfo=KST)
+    monkeypatch.setattr(engine, "_now_kst", lambda: started)
+    base_spec = WidgetSpec(
+        code="999999",
+        name="base",
+        snapshot_path=Path("unused-base.json"),
+        contract=FakeContract,
+        event_based=True,
+    )
+
+    class NewSymbolPolicyLoader:
+        @staticmethod
+        def resolve_all(*, observed_date):
+            if observed_date != datetime(2026, 8, 13, tzinfo=KST).date():
+                return {}
+            policy = _dated_policy()
+            policy.update(
+                symbol="138080",
+                name="오이솔루션",
+                policy_id="watch-2026-08-13",
+            )
+            return {"138080": {"KRX_REGULAR": policy}}
+
+    trader = WidgetSignalAutoTrader(
+        gateway=FakeGateway(),
+        specs=(base_spec,),
+        dynamic_spec_catalog=(),
+        state_path=tmp_path / "state.json",
+        event_recorder=FakeRecorder([]),
+        snapshot_loader=lambda path: {},
+        policy_loader=NewSymbolPolicyLoader(),
+        entry_qty=1,
+        enabled=True,
+    )
+
+    trader.run_once(started.replace(day=13))
+
+    assert [spec.code for spec in trader.specs] == ["999999", "138080"]
+    assert trader.specs[-1].contract.code == "138080"
 
 
 def test_long_running_trader_admits_late_same_day_additive_policy(

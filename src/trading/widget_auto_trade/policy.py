@@ -390,6 +390,14 @@ def _validated_payload(
     if not isinstance(evidence, dict):
         return None
     verification = evidence.get("policy_verification")
+    try:
+        verified_policy_path = Path(
+            str((verification or {}).get("policy_path") or "")
+        ).resolve(strict=True)
+        loaded_policy_path = policy_path.resolve(strict=True)
+    except (OSError, RuntimeError):
+        verified_policy_path = None
+        loaded_policy_path = None
     if (
         evidence.get("status") != "complete"
         or evidence.get("source_quality_status") != source_quality_status
@@ -397,7 +405,8 @@ def _validated_payload(
         or evidence.get("effective_date") != effective_date.isoformat()
         or not isinstance(verification, dict)
         or verification.get("status") != "pass"
-        or Path(str(verification.get("policy_path") or "")) != policy_path
+        or verified_policy_path is None
+        or verified_policy_path != loaded_policy_path
     ):
         return None
     policy_id = str(payload.get("policy_version") or "").strip()
@@ -631,6 +640,7 @@ class WidgetAutoTradePolicyLoader:
                 **execution,
                 "policy_id": payload["policy_id"],
                 "symbol": symbol,
+                "name": payload["name"],
                 "research_arm": (
                     "symbol_specific_"
                     f"{payload['signal_policy']['segment']}_"

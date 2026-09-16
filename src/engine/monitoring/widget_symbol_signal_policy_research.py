@@ -20,7 +20,7 @@ from dataclasses import asdict, dataclass
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from statistics import median
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Collection, Iterable
 from zoneinfo import ZoneInfo
 
 import requests
@@ -46,7 +46,7 @@ from src.utils import kiwoom_utils
 from src.utils.constants import DATA_DIR
 from src.utils.market_day import is_krx_trading_day
 
-REPORT_SCHEMA = "widget_symbol_signal_policy_research_v3"
+REPORT_SCHEMA = "widget_symbol_signal_policy_research_v4"
 KST = ZoneInfo("Asia/Seoul")
 AUTHORITY = "widget_symbol_signal_policy_discovery_only"
 OWNER = "widget_symbol_auto_trade"
@@ -59,6 +59,9 @@ SYMBOLS = {
     "080220": "제주반도체",
     "475150": "SK이터닉스",
 }
+DEFAULT_RESEARCH_WATCH_CONFIG_PATH = (
+    DATA_DIR / "config" / "widget_research_watch_symbols.json"
+)
 SEGMENTS = {
     "morning": (time(9, 3), time(10, 30)),
     "midday": (time(10, 30), time(13, 30)),
@@ -118,8 +121,8 @@ METRIC_CONTRACT = {
 
 OFFICIAL_REFERENCE = {
     "repository": "Kiwoom-Securities/Kiwoom-REST-API",
-    "commit_sha": "234560d213acd8871ae344b5481aecd2f30287fa",
-    "retrieved_at_kst": "2026-09-03T12:04:23+09:00",
+    "commit_sha": "953e5dbff123f437ab4d11a78a95191a685eb51f",
+    "retrieved_at_kst": "2026-09-16T12:10:00+09:00",
     "inspected_paths": [
         "kiwoom/_data/kiwoom_api_spec.json",
         "kiwoom/specs.py",
@@ -128,6 +131,31 @@ OFFICIAL_REFERENCE = {
     ],
     "request_contract": "POST /api/dostk/chart; api-id=ka10080",
 }
+
+
+def load_symbol_universe(
+    *,
+    observed_date: date,
+    config_path: Path = DEFAULT_RESEARCH_WATCH_CONFIG_PATH,
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Return fixed symbols plus the integrity-checked research-watch catalog."""
+
+    # Import lazily: the collector shares the runtime policy reference and the
+    # runtime policy imports this module's research contract.
+    from src.engine.monitoring.widget_research_watch_collector import load_config
+
+    config = load_config(observed_date=observed_date, config_path=config_path)
+    universe = dict(SYMBOLS)
+    origins = {symbol: "established_widget_symbol" for symbol in SYMBOLS}
+    for row in config["symbols"]:
+        symbol = str(row["stock_code"])
+        name = str(row["stock_name"])
+        if symbol in universe and universe[symbol] != name:
+            raise ResearchError("widget_research_watch_symbol_name_conflict")
+        universe[symbol] = name
+        origins[symbol] = "operator_enrolled_research_watch"
+    return universe, origins
+
 
 OWNER_CONTRACT = {
     "owner": OWNER,
@@ -211,9 +239,11 @@ def fetch_krx_history(
     page_delay_sec: float = 0.2,
     post: Callable[..., requests.Response] = requests.post,
     shared_read_control_enabled: bool | None = None,
+    allowed_symbols: Collection[str] | None = None,
+    allow_short_listing_history: bool = False,
 ) -> tuple[list[Bar], dict[str, Any]]:
     """Fetch widget-owned research OHLCV without auth/account/order mutation."""
-    if symbol not in SYMBOLS:
+    if symbol not in (allowed_symbols if allowed_symbols is not None else SYMBOLS):
         raise ValueError("symbol_not_in_widget_research_allowlist")
     if start_date < CLEAN_BASELINE_DATE or start_date > end_date:
         raise ValueError("invalid_clean_baseline_date_range")
@@ -386,12 +416,31 @@ def fetch_krx_history(
         if start_date <= timestamp.date() <= end_date
     ]
     trading_dates = sorted({bar.timestamp.date().isoformat() for bar in bars})
+    listing_history_accepted = False
+    if allow_short_listing_history and trading_dates:
+        expected_suffix: list[str] = []
+        candidate = date.fromisoformat(trading_dates[0])
+        while candidate <= end_date:
+            if is_krx_trading_day(candidate):
+                expected_suffix.append(candidate.isoformat())
+            candidate += timedelta(days=1)
+        listing_history_accepted = bool(
+            continuation_exhausted
+            and date.fromisoformat(trading_dates[0]) > start_date
+            and len(trading_dates) > HOLDOUT_DAYS + 8
+            and trading_dates == expected_suffix
+        )
     source_quality_status = (
         "PASS"
-        if start_date_fully_bracketed
+        if (start_date_fully_bracketed or listing_history_accepted)
         and invalid_row_count == 0
-        and len(trading_dates) == int(expected_trading_day_count)
-        and trading_dates[0] == start_date.isoformat()
+        and (
+            listing_history_accepted
+            or (
+                len(trading_dates) == int(expected_trading_day_count)
+                and trading_dates[0] == start_date.isoformat()
+            )
+        )
         and trading_dates[-1] == end_date.isoformat()
         else "FAIL"
     )
@@ -410,6 +459,7 @@ def fetch_krx_history(
         "oldest_source_date": trading_dates[0] if trading_dates else None,
         "latest_source_date": trading_dates[-1] if trading_dates else None,
         "start_date_fully_bracketed": start_date_fully_bracketed,
+        "listing_history_accepted": listing_history_accepted,
         "continuation_exhausted": continuation_exhausted,
         "invalid_row_count": invalid_row_count,
         "duplicate_row_count": duplicate_row_count,
@@ -1182,8 +1232,26 @@ def build_report(
     sources: dict[str, tuple[list[Bar], dict[str, Any]]],
     end_date: date,
     applied_baselines: dict[str, dict] | None = None,
+    symbol_universe: dict[str, str] | None = None,
+    symbol_origins: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    if set(sources) != set(SYMBOLS):
+    universe = dict(symbol_universe or SYMBOLS)
+    origins = dict(
+        symbol_origins or {symbol: "established_widget_symbol" for symbol in universe}
+    )
+    if (
+        set(sources) != set(universe)
+        or set(origins) != set(universe)
+        or any(
+            len(symbol) != 6 or not symbol.isdigit() or not name
+            for symbol, name in universe.items()
+        )
+        or any(
+            origin
+            not in {"established_widget_symbol", "operator_enrolled_research_watch"}
+            for origin in origins.values()
+        )
+    ):
         raise ResearchError("widget_symbol_source_set_mismatch")
     expected_dates = _clean_trading_dates(end_date)
     if applied_baselines is None:
@@ -1196,11 +1264,17 @@ def build_report(
         )
     results: dict[str, Any] = {}
     source_meta: dict[str, Any] = {}
-    for symbol, name in SYMBOLS.items():
+    for symbol, name in universe.items():
         bars, meta = sources[symbol]
         if meta.get("source_quality_status") != "PASS":
             raise ResearchError(f"{symbol}_source_quality_not_pass")
-        coverage = _daily_source_coverage(_group_bars(bars), expected_dates)
+        symbol_expected_dates = expected_dates
+        if meta.get("listing_history_accepted") is True and bars:
+            first_date = min(bar.timestamp.date() for bar in bars)
+            symbol_expected_dates = [
+                trade_date for trade_date in expected_dates if trade_date >= first_date
+            ]
+        coverage = _daily_source_coverage(_group_bars(bars), symbol_expected_dates)
         if coverage["status"] == "FAIL":
             raise ResearchError(f"{symbol}_daily_source_coverage_fail")
         qualified_dates = [
@@ -1391,13 +1465,15 @@ def build_report(
         "holdout_trading_date_count": HOLDOUT_DAYS,
         "generated_at_kst": datetime.now(KST).isoformat(timespec="seconds"),
         "symbols": results,
+        "symbol_universe": universe,
+        "symbol_origins": origins,
         "passed_symbols": pass_symbols,
         "source_meta": source_meta,
         "execution_quality_by_symbol": {
             symbol: load_execution_incidents(
                 symbol, target_date=end_date, session="KRX_REGULAR"
             )
-            for symbol in SYMBOLS
+            for symbol in universe
         },
         "metric_contract": METRIC_CONTRACT,
         "owner_contract": OWNER_CONTRACT,
@@ -1590,6 +1666,7 @@ def main(argv: list[str] | None = None) -> int:
         else resolve_completed_research_end_date()
     )
     expected_dates = _clean_trading_dates(end_date)
+    symbol_universe, symbol_origins = load_symbol_universe(observed_date=end_date)
     token = kiwoom_utils.get_cached_kiwoom_token()
     if not token:
         raise ResearchError("cached_token_missing_no_issue_or_refresh_allowed")
@@ -1602,8 +1679,12 @@ def main(argv: list[str] | None = None) -> int:
             max_pages=args.max_pages,
             page_delay_sec=args.page_delay_sec,
             expected_trading_day_count=len(expected_dates),
+            allowed_symbols=symbol_universe,
+            allow_short_listing_history=(
+                symbol_origins[symbol] == "operator_enrolled_research_watch"
+            ),
         )
-        for symbol in SYMBOLS
+        for symbol in symbol_universe
     }
     from src.engine.monitoring.widget_symbol_runtime_policy import (
         WidgetSymbolRuntimePolicyLoader,
@@ -1616,6 +1697,8 @@ def main(argv: list[str] | None = None) -> int:
         sources=sources,
         end_date=end_date,
         applied_baselines=applied_baselines,
+        symbol_universe=symbol_universe,
+        symbol_origins=symbol_origins,
     )
     existing_path = (
         args.output_dir
