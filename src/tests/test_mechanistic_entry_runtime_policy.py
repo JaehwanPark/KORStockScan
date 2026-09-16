@@ -83,6 +83,49 @@ def test_common_successor_is_automatic_only_against_exact_current_parent(monkeyp
     assert successor["ai_policy"]["prompt_version"] == previous["ai_policy"]["prompt_version"]
 
 
+@pytest.mark.parametrize("parent_changed", [False, True])
+def test_full_population_hierarchy_automatic_publisher_requires_exact_parent(tmp_path, parent_changed):
+    from src.tests.test_ai_action_outcome_calibration import _natural_refinement_fixture
+    previous = initial(tmp_path)
+    previous["hierarchy_adopted"] = True
+    previous["machine_policy"]["thresholds"]["maximum_spread_bp"] = 20
+    original_parent = json.loads(json.dumps(previous["machine_policy"]))
+    rows, receipt = _natural_refinement_fixture()
+    for row in rows:
+        row["comparison"]["entry_path_target_pct"] = 0.27
+        evidence = row["setup_evidence"]
+        evidence["micro_recovery_observation"] = {
+            "source_usable": True, "net_aggressive_delta_10t": 20, "price_change_10t_pct": 0.1,
+        }
+        evidence["evidence_sha256"] = policy.digest({k: v for k, v in evidence.items() if k != "evidence_sha256"})
+    normalized, contract = calibration._common_refinement_population(
+        [], rows, target_date="2026-09-15", source_receipt=receipt, paired_contract={},
+    )
+    extension = calibration.build_mechanistic_hierarchy_candidate(
+        normalized, target_date="2026-09-15", parent_policy=original_parent,
+        population_source_contract=contract,
+    )
+    assert extension["promotion_pass"] is True
+    if parent_changed:
+        previous["machine_policy"]["thresholds"]["minimum_micro_net_aggressive_delta_10t"] = 2.0
+    previous["bundle_sha256"] = policy.digest({k: v for k, v in previous.items() if k != "bundle_sha256"})
+    calibration._atomic_write_json(policy.root(tmp_path) / "policy_2026-09-14.json", previous)
+    path = source(tmp_path, "2026-09-15")
+    report = json.loads(path.read_text())
+    report["hierarchical_entry_quality"] = {"runtime_extension": extension}
+    report.pop("artifact_content_sha256")
+    calibration._atomic_write_json(path, calibration._with_artifact_content_sha256(report))
+    successor = policy.publish(path, data_root=tmp_path,
+                               now=datetime(2026, 9, 15, 21, tzinfo=policy.KST))
+    if parent_changed:
+        assert successor["machine_policy"] == previous["machine_policy"]
+        assert successor["historical_context"]["hierarchy_disposition"] == "candidate_parent_changed_revalidation_required"
+    else:
+        assert successor["machine_policy"] == extension["policy_candidate"]["threshold_policy"]
+        assert successor["historical_context"]["hierarchy_disposition"] == "evidence_qualified_hierarchy_update"
+    assert successor["ai_policy"]["prompt_version"] == previous["ai_policy"]["prompt_version"]
+
+
 @pytest.mark.parametrize("corruption", [None, "economic", "source_hash", "checks", "sample_floor", "chronology", "row_disposition"])
 def test_small_net_full_population_candidate_publishes_automatically_with_proof(tmp_path, corruption):
     from src.tests.test_ai_action_outcome_calibration import (

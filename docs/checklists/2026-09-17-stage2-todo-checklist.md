@@ -139,7 +139,8 @@
   - Source: [통합 계획](../proposals/entry-opportunity-cost-full-population-tuning-implementation-plan-2026-09-17.md), [부분 구현 리뷰](../audit-reports/2026-09-17-common-health-opportunity-cost-scoped-implementation.md).
   - 이번 실행: 01시대 WS/common quote clock·quiet observation·observer 원 나이·#74→#82 all-VETO gate·중복 learning count targeted845건 검증. 06시대 common natural/paired 전수 소비·현재 incumbent 비교·양수 순 EV/paired 개선 v2·exact-parent 자동 발행과 verifier 보완, targeted736건 통과. existing selected release를 보존한 managed release integration을 사용한다. PID/자연 policy/실체결 경제성 미관측.
   - Acceptance: exact-date PREOPEN→07:55 selected release/PID·원 WS0B/0D/inline BBO receipt를 검증하고 U0–U12 ledger의 미완료 구현을 별도로 닫는다. 부분 H 배포를 전체 opportunity-cost 자동 선정·수익 완료로 표시하지 않는다.
-  - 잔여: direct REST/widget/episode 전수 parity, single-flight/scheduler budget, U7 hierarchy 전체 population paired 선정, U8 CAUTION/INSUFFICIENT router, U9 price/quantity four-arm, U10 독립 owner, U11 family auto handoff. 신규 producer/수동 env/주문/owner·cap·hard-safety 변경 금지. 실제 기동 시 broker/custody·중복 PID·WS first-data와 dated policy receipt를 보존한다.
+  - 후속 구현: 07시대 KRX regular hierarchy가 같은 전수 source contract·현재 complete incumbent·동일 past-only context를 소비하도록 보완. 양수 순 EV/전체 paired 개선 v2, 각 group/symbol/결합 정책 holdout과 full-parent 자동 발행 guard 추가. [부분 구현 리뷰 §9](../audit-reports/2026-09-17-common-health-opportunity-cost-scoped-implementation.md#9-krx-regular-hierarchy-전수-선정자동-발행-후속) 참조. 자연/PID/경제성은 별도 OPEN.
+  - 잔여: direct REST/widget/episode 전수 parity, single-flight/scheduler budget, U7 다른 scope hierarchy 전수 paired 선정, U8 CAUTION/INSUFFICIENT router, U9 price/quantity four-arm, U10 독립 owner, U11 family auto handoff. 신규 producer/수동 env/주문/owner·cap·hard-safety 변경 금지. 실제 기동 시 broker/custody·중복 PID·WS first-data와 dated policy receipt를 보존한다.
 
 ## Project/Calendar 동기화
 

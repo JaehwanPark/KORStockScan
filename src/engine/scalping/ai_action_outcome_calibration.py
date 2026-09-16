@@ -4771,6 +4771,26 @@ def validate_hierarchy_candidate(
     if not isinstance(candidate, dict):
         return ["candidate_missing"]
     body = {k: v for k, v in candidate.items() if k != "candidate_content_sha256"}
+    full_population = candidate.get("evaluation_contract") == "hierarchy_full_population_positive_net_paired_v2"
+    if (
+        _as_dict(candidate.get("threshold_policy")).get("version") == MECHANISTIC_FULL_POPULATION_POLICY_VERSION
+        and not full_population
+    ):
+        return ["candidate_full_population_evaluation_contract_missing"]
+    if full_population:
+        parent = _as_dict(candidate.get("incumbent_machine_policy"))
+        contract = _as_dict(candidate.get("population_source_contract"))
+        if (
+            cohort != ("KRX", "KRX_REGULAR")
+            or validate_mechanistic_entry_threshold_policy(parent)
+            or candidate.get("incumbent_machine_policy_sha256") != _canonical_sha256(parent)
+            or contract.get("schema") != "machine_common_refinement_population_v1"
+            or contract.get("input_row_disposition_complete") is not True
+            or candidate.get("population_source_contract_sha256") != _canonical_sha256(contract)
+            or _as_dict(candidate.get("threshold_policy")).get("version") != MECHANISTIC_FULL_POPULATION_POLICY_VERSION
+            or _as_dict(candidate.get("threshold_policy")).get("thresholds") != parent.get("thresholds")
+        ):
+            return ["candidate_full_population_source_or_parent_invalid"]
     errors = validate_mechanistic_entry_threshold_policy(
         candidate.get("threshold_policy")
     )
@@ -4836,17 +4856,18 @@ def validate_hierarchy_candidate(
         if isinstance(e, dict) and e.get("status") == "qualified"
     ):
         errors.append("candidate_symbol_holdout_invalid")
-    for metrics in [candidate.get("holdout")] + [
+    reviewed_metrics = [candidate.get("holdout")] + [
         e.get("holdout")
         for e in extension.get("evaluations", [])
         if isinstance(e, dict) and e.get("status") == "qualified"
-    ]:
+    ]
+    for metrics in reviewed_metrics:
         m = _as_dict(metrics)
         ev = _number(m.get("cost_adjusted_terminal_proxy_ev_pct"))
         if (
             ev is None
-            or ev
-            < HIERARCHICAL_ENTRY_QUALITY_GATE["minimum_cost_adjusted_ev_pct"] - 1e-9
+            or (ev <= 0 if full_population else ev
+                < HIERARCHICAL_ENTRY_QUALITY_GATE["minimum_cost_adjusted_ev_pct"] - 1e-9)
             or (_number(m.get("row_count")) or 0) < 3
             or (_number(m.get("independent_source_date_count")) or 0) < 2
             or m.get("terminal_proxy_evaluable_count") != m.get("row_count")
@@ -4856,6 +4877,33 @@ def validate_hierarchy_candidate(
             + (_number(m.get("adverse_count")) or 0)
         ):
             errors.append("candidate_holdout_invalid")
+    if full_population:
+        for phase, metrics_list in (
+            ("holdout", reviewed_metrics),
+            ("calibration", [candidate.get("calibration")] + [
+                e.get("calibration") for e in extension["evaluations"]
+                if isinstance(e, dict) and e.get("status") == "qualified"
+            ]),
+        ):
+            for raw in metrics_list:
+                m = _as_dict(raw)
+                paired = _as_dict(m.get("paired_population"))
+                delta = _number(paired.get("paired_terminal_proxy_delta_pct"))
+                ev = _number(m.get("cost_adjusted_terminal_proxy_ev_pct"))
+                minimum_rows, minimum_dates = (5, 3) if phase == "calibration" else (3, 2)
+                if (
+                    ev is None or ev <= 0 or delta is None or delta <= 0
+                    or (_number(m.get("row_count")) or 0) < minimum_rows
+                    or (_number(m.get("independent_source_date_count")) or 0) < minimum_dates
+                    or m.get("terminal_proxy_evaluable_count") != m.get("row_count")
+                    or m.get("unusable_label_count") != 0
+                    or type(m.get("catastrophic_terminal_proxy_count")) is not int
+                    or m.get("catastrophic_terminal_proxy_count") != 0
+                    or paired.get("paired_terminal_contract_complete") is not True
+                    or paired.get("terminal_evaluable_count") != paired.get("population_count")
+                    or paired.get("paired_comparable_count") != paired.get("population_count")
+                ):
+                    errors.append("candidate_full_population_economic_proof_invalid")
     return sorted(set(errors))
 
 
@@ -4865,6 +4913,7 @@ def build_mechanistic_hierarchy_candidate(
     target_date: str,
     parent_policy: dict | None = None,
     cohort: tuple[str, str] = ("KRX", "KRX_REGULAR"),
+    population_source_contract: dict | None = None,
 ) -> dict:
     """Bounded group/symbol fitting using the same runtime decision function.
 
@@ -4877,17 +4926,29 @@ def build_mechanistic_hierarchy_candidate(
     parent = json.loads(
         json.dumps(parent_policy or MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1)
     )
-    parent.pop("hierarchy", None)
-    parent["postclose_selection"].update(
-        minimum_unique_symbol_count=MECHANISTIC_REFINEMENT_GATE[
-            "minimum_calibration_symbol_count"
-        ],
-        minimum_independent_source_date_count=MECHANISTIC_REFINEMENT_GATE[
-            "minimum_calibration_source_date_count"
-        ],
-    )
+    full_population = population_source_contract is not None
+    if not full_population:
+        parent.pop("hierarchy", None)
+        parent["postclose_selection"].update(
+            minimum_unique_symbol_count=MECHANISTIC_REFINEMENT_GATE[
+                "minimum_calibration_symbol_count"
+            ],
+            minimum_independent_source_date_count=MECHANISTIC_REFINEMENT_GATE[
+                "minimum_calibration_source_date_count"
+            ],
+        )
     if validate_mechanistic_entry_threshold_policy(parent):
         raise ValueError("hierarchy_parent_invalid")
+    if full_population and (
+        cohort != ("KRX", "KRX_REGULAR")
+        or population_source_contract.get("schema") != "machine_common_refinement_population_v1"
+        or population_source_contract.get("input_row_disposition_complete") is not True
+        or population_source_contract.get("accepted_rows_sha256") != _canonical_sha256([
+            {"decision_trace_id": r["decision_trace_id"], "fingerprint": r["fingerprint"]}
+            for r in source_rows
+        ])
+    ):
+        raise ValueError("hierarchy_full_population_source_contract_invalid")
     rows, excluded, seen, last_anchor = [], Counter(), set(), {}
     for original in sorted(source_rows, key=lambda r: str(r.get("decision_ts") or "")):
         parts = _as_dict(
@@ -4974,6 +5035,17 @@ def build_mechanistic_hierarchy_candidate(
         row["setup_evidence"]["evidence_sha256"] = _canonical_sha256(
             {k: v for k, v in row["setup_evidence"].items() if k != "evidence_sha256"}
         )
+        if full_population:
+            # Both arms see the same past-only group/flow projection. An
+            # incumbent child must not lose its context while challengers
+            # receive it, creating a synthetic opportunity recovery.
+            row["comparison"] = {
+                **original["comparison"],
+                "control_action": "BUY" if mechanistic_entry_policy_decision(
+                    row["setup_evidence"], policy=parent
+                )["action"] == "ENTER_NOW" else "WAIT",
+                "control_role": "same_population_current_machine_incumbent",
+            }
         rows.append(row)
     dates = sorted({r["source_date"] for r in rows})
     # Existing family boundaries were examined through 9/11. Do not reuse
@@ -4987,7 +5059,7 @@ def build_mechanistic_hierarchy_candidate(
     parent_hash = _canonical_sha256(parent["thresholds"])
 
     def policy_for(rules):
-        return {
+        policy = {
             **parent,
             "hierarchy": {
                 "schema": MECHANISTIC_HIERARCHY_SCHEMA,
@@ -4995,6 +5067,12 @@ def build_mechanistic_hierarchy_candidate(
                 "rules": rules,
             },
         }
+        if full_population:
+            policy["version"] = MECHANISTIC_FULL_POPULATION_POLICY_VERSION
+            policy["postclose_selection"] = {
+                **parent["postclose_selection"], "minimum_cost_adjusted_ev_pct": 0.0,
+            }
+        return policy
 
     def selected(population, rules):
         policy = policy_for(rules)
@@ -5007,11 +5085,14 @@ def build_mechanistic_hierarchy_candidate(
             == "ENTER_NOW"
         ]
 
-    def metrics(population):
-        result = _entry_quality_population_metrics(population)
+    def metrics(selected_rows, *, population=None):
+        result = _entry_quality_population_metrics(selected_rows)
         result["unusable_label_count"] = sum(
-            r["entry_quality_path"].get("status") != "evaluable" for r in population
+            r["entry_quality_path"].get("status") != "evaluable" for r in selected_rows
         )
+        if full_population and population is not None:
+            result["paired_population"] = _mechanistic_paired_population_metrics(population, selected_rows)
+            result["catastrophic_terminal_proxy_count"] = _mechanistic_policy_metrics(selected_rows)["catastrophic_terminal_proxy_count"]
         return result
 
     def qualifies(m, *, validation=False):
@@ -5032,13 +5113,24 @@ def build_mechanistic_hierarchy_candidate(
             and m["unusable_label_count"] == 0
             and m["terminal_proxy_evaluable_count"] == m["row_count"]
             and ev is not None
-            and ev
-            >= HIERARCHICAL_ENTRY_QUALITY_GATE["minimum_cost_adjusted_ev_pct"] - 1e-9
+            and (ev > 0 if full_population else ev
+                 >= HIERARCHICAL_ENTRY_QUALITY_GATE["minimum_cost_adjusted_ev_pct"] - 1e-9)
             and m["clean_fast_count"] > m["dirty_profit_count"] + m["adverse_count"]
+            and (not full_population or (
+                (_number(_as_dict(m.get("paired_population")).get("paired_terminal_proxy_delta_pct")) or 0) > 0
+                and _as_dict(m.get("paired_population")).get("paired_terminal_contract_complete") is True
+                and _as_dict(m.get("paired_population")).get("terminal_evaluable_count") == _as_dict(m.get("paired_population")).get("population_count")
+                and m.get("catastrophic_terminal_proxy_count") == 0
+            ))
         )
 
     def rank(m):
         # Predeclared ranking; holdout is never used for parameter selection.
+        if full_population:
+            return (
+                _number(_as_dict(m.get("paired_population")).get("paired_terminal_proxy_delta_pct")) or -float("inf"),
+                m["cost_adjusted_terminal_proxy_ev_pct"] or -float("inf"), m["row_count"],
+            )
         return (
             m["clean_fast_count"] - m["dirty_profit_count"] - m["adverse_count"],
             m["cost_adjusted_terminal_proxy_ev_pct"] or -float("inf"),
@@ -5110,7 +5202,7 @@ def build_mechanistic_hierarchy_candidate(
         # Such inherited coordinates are not permission to publish an invalid
         # residual, and must not crash evaluation of the valid alternatives.
         fits = [
-            (rule, metrics(selected(scoped, [rule])))
+            (rule, metrics(selected(scoped, [rule]), population=scoped))
             for rule in variants
             if not validate_mechanistic_entry_threshold_policy(policy_for([rule]))
         ]
@@ -5135,7 +5227,7 @@ def build_mechanistic_hierarchy_candidate(
                 ]
             ):
                 continue
-            best_metric = metrics(selected(symbol_rows, [best]))
+            best_metric = metrics(selected(symbol_rows, [best]), population=symbol_rows)
             fitted = None
             for key, values in MECHANISTIC_COMMON_FEATURE_GRID.items():
                 for v in values:
@@ -5145,7 +5237,7 @@ def build_mechanistic_hierarchy_candidate(
                     rule = {**best, "symbols": {**best["symbols"], symbol: residual}}
                     if validate_mechanistic_entry_threshold_policy(policy_for([rule])):
                         continue
-                    m = metrics(selected(symbol_rows, [rule]))
+                    m = metrics(selected(symbol_rows, [rule]), population=symbol_rows)
                     if qualifies(m) and rank(m) > rank(best_metric):
                         fitted, best_metric = residual, m
             if fitted is not None:
@@ -5159,7 +5251,7 @@ def build_mechanistic_hierarchy_candidate(
             )
             and family in r["mechanistic_flow_observation"].get("matched_families", [])
         ]
-        validation = metrics(selected(validation_rows, [best]))
+        validation = metrics(selected(validation_rows, [best]), population=validation_rows)
         baseline = metrics(
             [
                 r
@@ -5172,28 +5264,29 @@ def build_mechanistic_hierarchy_candidate(
         )
         # No per-group fallback after a failed holdout. Rejected rule remains
         # evidence only; the existing live parent is retained by the publisher.
-        passed = qualifies(validation, validation=True) and (
+        passed = qualifies(validation, validation=True) and (full_population or (
             validation["clean_fast_count"]
             - validation["dirty_profit_count"]
             - validation["adverse_count"]
             > baseline["clean_fast_count"]
             - baseline["dirty_profit_count"]
             - baseline["adverse_count"]
-        )
+        ))
         residual_checks = {}
         for symbol in best["symbols"]:
             symbol_holdout = [r for r in validation_rows if r["stock_code"] == symbol]
-            m = metrics(selected(symbol_holdout, [best]))
+            m = metrics(selected(symbol_holdout, [best]), population=symbol_holdout)
             without = {
                 **best,
                 "symbols": {k: v for k, v in best["symbols"].items() if k != symbol},
             }
-            baseline_symbol = metrics(selected(symbol_holdout, [without]))
+            baseline_symbol = metrics(selected(symbol_holdout, [without]), population=symbol_holdout)
             residual_checks[symbol] = qualifies(m, validation=True) and rank(m) > rank(
                 baseline_symbol
             )
         passed = passed and all(residual_checks.values())
-        train_metrics = metrics(selected(scoped, [best]))
+        train_metrics = metrics(selected(scoped, [best]), population=scoped)
+        passed = passed and (not full_population or qualifies(train_metrics))
         # Same complete-window population and exit/cost contract in all arms.
         # This is a diagnostic, never a holdout-driven alternative selector.
         ablation = {}
@@ -5247,8 +5340,11 @@ def build_mechanistic_hierarchy_candidate(
         )
         if passed:
             accepted.append(best)
-    combined = metrics(selected(holdout, accepted)) if accepted else metrics([])
-    passes = bool(accepted) and qualifies(combined, validation=True)
+    combined = metrics(selected(holdout, accepted), population=holdout) if accepted else metrics([])
+    combined_train = metrics(selected(train, accepted), population=train) if accepted else metrics([])
+    passes = bool(accepted) and qualifies(combined, validation=True) and (
+        not full_population or qualifies(combined_train)
+    )
     candidate = (
         {
             "threshold_policy": policy_for(accepted),
@@ -5259,6 +5355,14 @@ def build_mechanistic_hierarchy_candidate(
             "source_rows_sha256": _canonical_sha256(rows),
             "evaluations_sha256": _canonical_sha256(evaluations),
             "holdout": combined,
+            "calibration": combined_train,
+            **({
+                "evaluation_contract": "hierarchy_full_population_positive_net_paired_v2",
+                "population_source_contract": population_source_contract,
+                "population_source_contract_sha256": _canonical_sha256(population_source_contract),
+                "incumbent_machine_policy": parent,
+                "incumbent_machine_policy_sha256": _canonical_sha256(parent),
+            } if full_population else {}),
             "runtime_effect": False,
             "allowed_runtime_apply": False,
             "actual_order_submitted": False,
@@ -5280,10 +5384,18 @@ def build_mechanistic_hierarchy_candidate(
         "excluded": dict(excluded),
         "economic_contract_diagnostics": {
             "lane": "fixed_boundary_counterfactual_not_realized_pnl",
+            "evaluation_contract": "hierarchy_full_population_positive_net_paired_v2" if full_population else "legacy_absolute_net_10bp_v1",
+            "minimum_cost_adjusted_ev_pct": 0.0 if full_population else HIERARCHICAL_ENTRY_QUALITY_GATE["minimum_cost_adjusted_ev_pct"],
             "rows_whose_gross_target_cannot_clear_net_ev_floor": sum(
-                (_number(r["comparison"].get("entry_path_target_pct")) or 0)
-                - (_number(r["comparison"].get("conservative_execution_cost_pct")) or 0)
-                < HIERARCHICAL_ENTRY_QUALITY_GATE["minimum_cost_adjusted_ev_pct"] - 1e-9
+                (
+                    (_number(r["comparison"].get("entry_path_target_pct")) or 0)
+                    - (_number(r["comparison"].get("conservative_execution_cost_pct")) or 0)
+                    <= 0.0
+                ) if full_population else (
+                    (_number(r["comparison"].get("entry_path_target_pct")) or 0)
+                    - (_number(r["comparison"].get("conservative_execution_cost_pct")) or 0)
+                    < HIERARCHICAL_ENTRY_QUALITY_GATE["minimum_cost_adjusted_ev_pct"] - 1e-9
+                )
                 for r in rows
             ),
             "ceiling_is_reported_not_used_to_remove_losing_rows": True,
@@ -6750,7 +6862,6 @@ def build_report(
     incumbent = load_effective(data_root=data_root, target_date=target_date)
     if incumbent is not None:
         hierarchy_parent = json.loads(json.dumps(incumbent["machine_policy"]))
-        hierarchy_parent.pop("hierarchy", None)
     machine_observations, machine_capture_census = load_machine_observation_rows(
         data_root, target_date=target_date
     )
@@ -6803,12 +6914,6 @@ def build_report(
         and machine_source_receipt.get("machine_threshold_tuning_input_allowed") is True
         else []
     )
-    krx_machine_policy_rows = [
-        row
-        for row in machine_policy_rows
-        if (row.get("effective_venue"), row.get("session_bucket"))
-        == ("KRX", "KRX_REGULAR")
-    ]
     refinement_rows, refinement_contract = _common_refinement_population(
         hierarchy_rows, machine_observations,
         target_date=target_date, source_receipt=machine_source_receipt,
@@ -6821,12 +6926,16 @@ def build_report(
         parent_policy=(incumbent or {}).get("machine_policy") or MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
     )
     if mechanistic_refinement.get("policy_candidate"):
+        hierarchy_parent.pop("hierarchy", None)
         hierarchy_parent["thresholds"].update(mechanistic_refinement["policy_candidate"]["thresholds"])
+        hierarchy_parent["version"] = MECHANISTIC_FULL_POPULATION_POLICY_VERSION
+        hierarchy_parent["postclose_selection"]["minimum_cost_adjusted_ev_pct"] = 0.0
     hierarchical_entry_quality["runtime_extension"] = (
         build_mechanistic_hierarchy_candidate(
-            hierarchy_rows + krx_machine_policy_rows,
+            refinement_rows,
             target_date=target_date,
             parent_policy=hierarchy_parent,
+            population_source_contract=refinement_contract,
         )
     )
     hierarchical_entry_quality["runtime_extension"][
