@@ -674,8 +674,12 @@ def publish(
         ):
             disposition = "initial_role_corrected_not_performance_promotion"
         if projection is not None:
-            machine = projection["threshold_policy"]
-            disposition = "evidence_qualified_threshold_update"
+            parent_hash = projection.get("incumbent_machine_policy_sha256")
+            if parent_hash is not None and parent_hash != digest(machine):
+                disposition = "candidate_parent_changed_revalidation_required"
+            else:
+                machine = projection["threshold_policy"]
+                disposition = "evidence_qualified_threshold_update"
         hierarchy_adopted = adopt_hierarchy or bool(
             previous and previous.get("hierarchy_adopted") is True
         )

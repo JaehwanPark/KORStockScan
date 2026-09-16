@@ -1935,6 +1935,172 @@ def test_mechanistic_refinement_uses_clean_chronological_holdout(
     assert candidate["candidate_content_sha256"] == calibration._canonical_sha256(body)
 
 
+def _natural_refinement_fixture():
+    import copy
+    rows = copy.deepcopy(_hierarchy_training_rows())
+    earlier = copy.deepcopy(rows[:4])
+    for row in earlier:
+        row["source_date"] = "2026-09-04"
+        row["decision_ts"] = row["decision_ts"].replace("2026-09-07", "2026-09-04")
+        row["decision_trace_id"] = row["decision_trace_id"].replace("2026-09-07", "2026-09-04")
+        row["comparison"]["entry_cost_contract"]["source_date"] = "2026-09-04"
+    rows = earlier + rows
+    for i, row in enumerate(rows):
+        row.update(
+            stock_code=("005930", "000660", "035420", "051910", "005380")[i % 5],
+            scanner_promotion_id=f"promotion-{i}",
+            evaluation_attempt_id=f"attempt-{i}",
+            effective_venue="KRX", session_bucket="KRX_REGULAR",
+            bundle_sha256="b" * 64, machine_action="BLOCK",
+            machine_observation_hash_verified=True,
+            source_report_hash_verified=False,
+        )
+        evidence = _mechanistic_evidence(spread_bp=30, fillability=70, ratio=0.8)
+        row["setup_evidence"] = evidence
+    receipt = {
+        "target_date": "2026-09-15",
+        "machine_threshold_tuning_input_allowed": True,
+        "machine_terminal_tuning_gate": {
+            "economic_tuning_input_allowed": False,
+            "excluded_evaluation_keys": [], "pending_evaluation_keys": [],
+        },
+    }
+    return rows, receipt
+
+
+def test_common_refinement_consumes_natural_block_without_ai_or_fills():
+    rows, receipt = _natural_refinement_fixture()
+    normalized, contract = calibration._common_refinement_population(
+        [], rows, target_date="2026-09-15", source_receipt=receipt,
+        paired_contract={},
+    )
+    assert len(normalized) == len(rows)
+    assert contract["accepted_lane_counts"] == {"natural": len(rows)}
+    assert contract["actual_fills_or_ai_calls_required"] is False
+    parent = json.loads(json.dumps(calibration.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1))
+    parent["thresholds"]["maximum_spread_bp"] = 20
+    result = calibration.build_clean_baseline_mechanistic_refinement(
+        Path("unused"), target_date="2026-09-15", source_rows=normalized,
+        source_contract=contract, parent_policy=parent,
+    )
+    assert result["promotion_pass"] is True
+    candidate = result["policy_candidate"]
+    assert candidate["incumbent_machine_policy_sha256"] == calibration._canonical_sha256(parent)
+    assert candidate["calibration_paired_population"]["paired_terminal_proxy_delta_pct"] > 0
+    assert rows[0]["comparison"]["control_action"] == "WAIT"
+
+
+@pytest.mark.parametrize("block", ["receipt", "cost", "pending", "hash", "conflict", "date"])
+def test_common_refinement_fails_closed_for_natural_source_gaps(block):
+    rows, receipt = _natural_refinement_fixture()
+    kwargs = {}
+    if block == "receipt":
+        receipt["machine_threshold_tuning_input_allowed"] = False
+    elif block == "cost":
+        for row in rows:
+            row["comparison"].pop("entry_cost_contract")
+    elif block == "pending":
+        receipt["machine_terminal_tuning_gate"]["pending_evaluation_keys"] = [
+            calibration._machine_evaluation_key(row) for row in rows
+        ]
+    elif block == "hash":
+        for row in rows:
+            row["setup_evidence"]["setup_state"] = "tampered"
+    elif block == "conflict":
+        kwargs["natural_conflicting_attempt_identity_count"] = 1
+    else:
+        receipt["target_date"] = "2026-09-14"
+    normalized, contract = calibration._common_refinement_population(
+        [], rows, target_date="2026-09-15", source_receipt=receipt,
+        paired_contract={}, **kwargs,
+    )
+    assert normalized == []
+    assert sum(contract["row_exclusion_reason_counts"].values()) == len(rows)
+
+
+def test_common_refinement_no_improvement_over_incumbent_does_not_promote():
+    rows, receipt = _natural_refinement_fixture()
+    normalized, contract = calibration._common_refinement_population(
+        [], rows, target_date="2026-09-15", source_receipt=receipt,
+        paired_contract={},
+    )
+    parent = json.loads(json.dumps(calibration.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1))
+    parent["thresholds"]["maximum_spread_bp"] = 35
+    result = calibration.build_clean_baseline_mechanistic_refinement(
+        Path("unused"), target_date="2026-09-15", source_rows=normalized,
+        source_contract=contract, parent_policy=parent,
+    )
+    assert result["promotion_pass"] is False
+    assert result["policy_candidate"] is None
+
+
+@pytest.mark.parametrize("net_ev", [0.07, 0.0, -0.01])
+@pytest.mark.parametrize("next_generation", [False, True])
+def test_full_population_small_positive_net_is_selectable_but_zero_or_loss_is_not(net_ev, next_generation):
+    rows, receipt = _natural_refinement_fixture()
+    for row in rows:
+        row["comparison"]["entry_path_target_pct"] = 0.2 + net_ev
+    normalized, contract = calibration._common_refinement_population(
+        [], rows, target_date="2026-09-15", source_receipt=receipt, paired_contract={},
+    )
+    parent = json.loads(json.dumps(calibration.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1))
+    parent["thresholds"]["maximum_spread_bp"] = 20
+    if next_generation:
+        parent["version"] = calibration.MECHANISTIC_FULL_POPULATION_POLICY_VERSION
+        parent["postclose_selection"]["minimum_cost_adjusted_ev_pct"] = 0.0
+    result = calibration.build_clean_baseline_mechanistic_refinement(
+        Path("unused"), target_date="2026-09-15", source_rows=normalized,
+        source_contract=contract, parent_policy=parent,
+    )
+    assert result["promotion_pass"] is (net_ev > 0)
+    assert result["objective"]["minimum_ev_pct"] == 0.0
+    assert result["policy_version"] == calibration.MECHANISTIC_FULL_POPULATION_POLICY_VERSION
+
+
+def test_common_refinement_deduplicates_exact_natural_attempts():
+    import copy
+    rows, receipt = _natural_refinement_fixture()
+    normalized, contract = calibration._common_refinement_population(
+        [], rows + [copy.deepcopy(rows[0])], target_date="2026-09-15",
+        source_receipt=receipt, paired_contract={},
+    )
+    assert len(normalized) == len(rows)
+    assert contract["row_exclusion_reason_counts"]["identical_duplicate"] == 1
+    assert contract["input_row_disposition_complete"] is True
+
+
+@pytest.mark.parametrize("conflict", [False, True])
+def test_common_refinement_trace_cannot_inflate_cross_lane_population(conflict):
+    import copy
+    rows, receipt = _natural_refinement_fixture()
+    paired = copy.deepcopy(rows[0])
+    if conflict:
+        paired["comparison"]["entry_path_target_pct"] = 0.4
+    normalized, contract = calibration._common_refinement_population(
+        [paired], rows, target_date="2026-09-15", source_receipt=receipt, paired_contract={},
+    )
+    assert len(normalized) == len(rows) - int(conflict)
+    assert contract["input_row_disposition_complete"] is True
+    assert len({r["decision_trace_id"] for r in normalized}) == len(normalized)
+    assert contract["row_exclusion_reason_counts"]["conflicting_duplicate" if conflict else "identical_duplicate"] == (2 if conflict else 1)
+
+
+def test_report_common_refinement_uses_natural_population_and_current_parent(monkeypatch, tmp_path):
+    from src.engine.scalping import mechanistic_entry_runtime_policy as runtime_policy
+    rows, receipt = _natural_refinement_fixture()
+    parent = json.loads(json.dumps(calibration.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1))
+    parent["thresholds"]["maximum_spread_bp"] = 20
+    monkeypatch.setattr(runtime_policy, "load_effective", lambda **kw: {"machine_policy": parent})
+    monkeypatch.setattr(calibration, "load_machine_observation_rows", lambda *a, **kw: (rows, {"evaluable": len(rows)}))
+    monkeypatch.setattr(calibration, "_machine_ai_natural_source_receipt", lambda *a: receipt)
+    monkeypatch.setattr(calibration, "_compact_history_receipt", lambda root, day, observations, incumbent, receipt: receipt)
+    report = calibration.build_report(target_date="2026-09-15", data_root=tmp_path)
+    result = report["mechanistic_entry_refinement"]
+    assert result["promotion_pass"] is True
+    assert result["source_contract"]["accepted_lane_counts"] == {"natural": len(rows)}
+    assert result["incumbent_machine_policy_sha256"] == calibration._canonical_sha256(parent)
+
+
 def test_mechanistic_source_loader_includes_supported_nxt_only_for_all_scope_mode(
     tmp_path: Path,
 ) -> None:

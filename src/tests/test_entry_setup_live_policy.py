@@ -1,4 +1,5 @@
 import hashlib
+import json
 import os
 from datetime import datetime
 
@@ -1556,7 +1557,8 @@ def test_running_process_with_previous_runtime_date_falls_back(monkeypatch, tmp_
     )
 
 
-def test_mechanistic_candidate_projects_to_preopen_primary_owner(monkeypatch, tmp_path):
+@pytest.mark.parametrize("parent_state", ["legacy", "current", "tampered"])
+def test_mechanistic_candidate_projects_to_preopen_primary_owner(monkeypatch, tmp_path, parent_state):
     monkeypatch.setattr(policy, "DATA_DIR", tmp_path)
     report_dir = tmp_path / "report" / "ai_decision_action_outcome_calibration"
     report_dir.mkdir(parents=True)
@@ -1581,6 +1583,13 @@ def test_mechanistic_candidate_projects_to_preopen_primary_owner(monkeypatch, tm
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
     }
+    if parent_state != "legacy":
+        parent = json.loads(json.dumps(policy.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1))
+        parent["thresholds"]["minimum_micro_net_aggressive_delta_10t"] = 7.0
+        candidate_body["incumbent_machine_policy"] = parent
+        candidate_body["incumbent_machine_policy_sha256"] = calibration._canonical_sha256(parent)
+        if parent_state == "tampered":
+            parent["thresholds"]["minimum_micro_net_aggressive_delta_10t"] = 9.0
     candidate = {
         **candidate_body,
         "candidate_content_sha256": calibration._canonical_sha256(candidate_body),
@@ -1603,9 +1612,16 @@ def test_mechanistic_candidate_projects_to_preopen_primary_owner(monkeypatch, tm
 
     projection, errors = policy._mechanistic_primary_activation_projection(SOURCE_DATE)
 
+    if parent_state == "tampered":
+        assert projection is None
+        assert errors == ["mechanistic_primary_candidate_parent_invalid"]
+        return
     assert errors == []
     assert projection["primary_decision_owner"] == "mechanistic_entry_adjudicator"
     assert projection["ai_role"] == "auxiliary_risk_screen_pass_veto_no_promotion"
     assert projection["threshold_policy"]["thresholds"]["maximum_spread_bp"] == 40.0
     assert projection["runtime_effect"] is False
     assert projection["allowed_runtime_apply"] is False
+    if parent_state == "current":
+        assert projection["threshold_policy"]["thresholds"]["minimum_micro_net_aggressive_delta_10t"] == 7.0
+        assert projection["incumbent_machine_policy_sha256"] == calibration._canonical_sha256(parent)

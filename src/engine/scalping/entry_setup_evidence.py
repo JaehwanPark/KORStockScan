@@ -126,6 +126,8 @@ MECHANISTIC_PRIMARY_ROLE_CONTRACT = {
     "ai_can_veto_entry": True,
     "ai_can_override_hard_safety": False,
 }
+MECHANISTIC_FULL_POPULATION_POLICY_VERSION = "mechanistic_entry_full_population_positive_net_v2"
+
 MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1 = {
     "schema": MECHANISTIC_ENTRY_THRESHOLD_POLICY_SCHEMA,
     "version": "mechanistic_entry_thresholds_initial_v1",
@@ -1915,7 +1917,8 @@ def validate_mechanistic_entry_threshold_policy(policy: Any) -> list[str]:
     minimum_ev = _number(selection.get("minimum_cost_adjusted_ev_pct"))
     if set(selection) != expected_selection_fields:
         errors.append("mechanistic_entry_postclose_selection_fields_invalid")
-    if minimum_ev is None or minimum_ev < 0.10:
+    floor = 0.0 if value.get("version") == MECHANISTIC_FULL_POPULATION_POLICY_VERSION else 0.10
+    if minimum_ev is None or minimum_ev < floor:
         errors.append("mechanistic_entry_net_ev_floor_invalid")
     for field, floor in (
         ("minimum_exposure_count", 10),
