@@ -525,6 +525,85 @@ def test_low_price_postclose_contract_uses_target_date_profile_inventory(
     )
 
 
+def test_low_price_postclose_contract_snapshots_profiles_before_research_loader(
+    monkeypatch,
+):
+    """Research discovery must not widen the source-date tuning contract."""
+    from types import SimpleNamespace
+
+    from src.engine.monitoring import low_price_two_leg_expanded_candidate_research
+    from src.engine.monitoring.low_price_two_leg_expanded_candidate_research import (
+        CandidateRecommendationNotifier,
+    )
+    from src.engine.monitoring.low_price_two_leg_tuning import REPORT_SCHEMA
+    from src.trading.low_price_two_leg import policy_runtime, profiles
+
+    target_date = "2026-09-16"
+    target_profiles = {"source_profile": object()}
+
+    monkeypatch.setattr(
+        profiles,
+        "profiles_for_target_date",
+        lambda _target_date: target_profiles,
+    )
+    monkeypatch.setattr(
+        policy_runtime,
+        "validate_candidate",
+        lambda *_args, **_kwargs: (True, "ok"),
+    )
+    monkeypatch.setattr(
+        policy_runtime,
+        "report_artifact_hash",
+        lambda _report: "snapshot-hash",
+    )
+    monkeypatch.setattr(
+        CandidateRecommendationNotifier,
+        "_valid_report",
+        staticmethod(lambda _report: True),
+    )
+
+    def mutate_catalog(*_args, **_kwargs):
+        target_profiles["future_research_profile"] = object()
+        return SimpleNamespace(
+            research_profiles={}, time_extension_profiles={}, logic_improvement_profiles={}
+        )
+
+    monkeypatch.setattr(
+        low_price_two_leg_expanded_candidate_research,
+        "_target_date_research_inventory",
+        mutate_catalog,
+    )
+    tuning = {
+        "schema": REPORT_SCHEMA,
+        "target_date": target_date,
+        "daily": {"profiles": {"source_profile": {}}},
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "artifact_hash": "snapshot-hash",
+    }
+    expanded = {
+        "target_date": target_date,
+        "status": "source_quality_blocked",
+        "candidate_symbols": {},
+        "candidate_universe_size": 0,
+        "new_symbol_profile_count": 0,
+        "existing_symbol_time_extension_profile_count": 0,
+        "existing_symbol_logic_improvement_profile_count": 0,
+        "research_profile_inventory": {},
+        "profiles": {},
+        "recommendations": [],
+    }
+
+    status = mod._low_price_two_leg_postclose_contract_status(
+        tuning, {"source_date": target_date}, expanded, target_date=target_date
+    )
+
+    assert status["status"] == "pass"
+    assert "tuning_profile_inventory_mismatch" not in status["issues"]
+    assert status["live_profile_count"] == 1
+
+
 def test_low_price_postclose_contract_rejects_malformed_daily_profiles(
     monkeypatch,
 ):
