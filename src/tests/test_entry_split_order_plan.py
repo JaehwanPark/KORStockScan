@@ -13,7 +13,7 @@ from src.engine import daily_threshold_cycle_report as daily_report
 from src.engine import threshold_cycle_preopen_apply as preopen_apply
 
 
-def test_quantity_leg_four_arm_requires_same_attempt_and_cost_adjusted_edge():
+def _quantity_leg_four_arm_events():
     events = []
     for index in range(30):
 
@@ -61,7 +61,11 @@ def test_quantity_leg_four_arm_requires_same_attempt_and_cost_adjusted_edge():
         ).hexdigest()
         events.append({"entry_quantity_leg_four_arm_evaluation": receipt})
 
-    result = split_plan.build_quantity_leg_four_arm_evaluation(events)
+    return events
+
+
+def test_quantity_leg_four_arm_requires_same_attempt_and_cost_adjusted_edge():
+    result = split_plan.build_quantity_leg_four_arm_evaluation(_quantity_leg_four_arm_events())
 
     assert result["complete_exact_attempt_count"] == 30
     assert result["exact_attempt_join_coverage"] == 1.0
@@ -79,6 +83,83 @@ def test_quantity_leg_four_arm_requires_same_attempt_and_cost_adjusted_edge():
         result["promotion_gate"]["initial_baseline_activation_blocked_by_this_gate"]
         is False
     )
+
+
+def _resign_four_arm_receipt(receipt):
+    body = {key: value for key, value in receipt.items() if key != "receipt_sha256"}
+    receipt["receipt_sha256"] = hashlib.sha256(
+        json.dumps(body, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("ascii")
+    ).hexdigest()
+
+
+@pytest.mark.parametrize("field,value", [
+    ("net_return_pct", float("nan")),
+    ("net_pnl_krw", float("inf")),
+    ("capital_krw_minutes", -1),
+    ("capital_krw_minutes", 0),
+    ("fill_participation_rate", 1.1),
+    ("fill_participation_rate", -0.1),
+    ("net_return_pct", True),
+])
+def test_four_arm_quarantines_invalid_economics(field, value):
+    events = _quantity_leg_four_arm_events()
+    receipt = events[0]["entry_quantity_leg_four_arm_evaluation"]
+    receipt["arms"][split_plan.QUANTITY_LEG_FOUR_ARM_IDS[-1]][field] = value
+    _resign_four_arm_receipt(receipt)
+    result = split_plan.build_quantity_leg_four_arm_evaluation(events)
+    assert result["complete_exact_attempt_count"] == 29
+    assert result["excluded_counts"]["arm_economics_or_executability_invalid"] == 1
+    assert result["promotion_gate"]["passed"] is False
+
+
+def test_four_arm_conflicting_duplicate_quarantines_both_versions():
+    events = _quantity_leg_four_arm_events()
+    conflicting = json.loads(json.dumps(events[0]))
+    receipt = conflicting["entry_quantity_leg_four_arm_evaluation"]
+    receipt["arms"][split_plan.QUANTITY_LEG_FOUR_ARM_IDS[-1]]["net_pnl_krw"] = 999
+    _resign_four_arm_receipt(receipt)
+    events.append(conflicting)
+    for ordered in (events, list(reversed(events))):
+        result = split_plan.build_quantity_leg_four_arm_evaluation(ordered)
+        assert result["complete_exact_attempt_count"] == 29
+        assert result["excluded_counts"]["conflicting_exact_attempt_quarantined"] == 1
+        assert result["promotion_gate"]["passed"] is False
+
+
+def test_four_arm_invalid_unsigned_duplicate_cannot_hide_valid_attempt():
+    events = _quantity_leg_four_arm_events()
+    invalid = json.loads(json.dumps(events[0]))
+    invalid["entry_quantity_leg_four_arm_evaluation"]["receipt_sha256"] = "0" * 64
+    invalid["entry_quantity_leg_four_arm_evaluation"]["eligible_attempt_count"] = 999
+    result = split_plan.build_quantity_leg_four_arm_evaluation([invalid, *events])
+    assert result["complete_exact_attempt_count"] == 30
+    assert result["excluded_counts"]["immutable_receipt_hash_invalid"] == 1
+    assert result["promotion_gate"]["passed"] is True
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), True, 30.5])
+def test_four_arm_invalid_denominator_cannot_promote_or_crash(value):
+    events = _quantity_leg_four_arm_events()
+    for event in events:
+        receipt = event["entry_quantity_leg_four_arm_evaluation"]
+        receipt["eligible_attempt_count"] = value
+        _resign_four_arm_receipt(receipt)
+    result = split_plan.build_quantity_leg_four_arm_evaluation(events)
+    assert result["eligible_attempt_count"] == 0
+    assert result["exact_attempt_join_coverage"] is None
+    assert result["promotion_gate"]["passed"] is False
+
+
+def test_four_arm_confirmed_no_exposure_stays_in_paired_denominator():
+    events = _quantity_leg_four_arm_events()
+    receipt = events[0]["entry_quantity_leg_four_arm_evaluation"]
+    for arm in receipt["arms"].values():
+        arm.update(net_return_pct=0, net_pnl_krw=0, capital_krw_minutes=0, fill_participation_rate=0)
+    _resign_four_arm_receipt(receipt)
+    result = split_plan.build_quantity_leg_four_arm_evaluation(events)
+    assert result["complete_exact_attempt_count"] == 30
+    assert result["exact_attempt_join_coverage"] == 1
+    assert result["arms"][split_plan.QUANTITY_LEG_FOUR_ARM_IDS[-1]]["positive_terminal_frequency"] == pytest.approx(29 / 30)
 
 
 def test_quantity_leg_four_arm_sums_daily_eligible_denominators_for_cumulative_gate():

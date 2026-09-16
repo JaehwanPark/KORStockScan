@@ -1477,6 +1477,7 @@ def _materialize_mechanistic_entry_price_policy(
         or value <= 0
         or joined < 20
         or ev is None
+        or not math.isfinite(ev)
         or ev < 0.10
     ):
         return
@@ -1567,6 +1568,7 @@ def _materialize_integrated_entry_execution_sizing_policy(
         "quantity_policy_sha256": str(quantity_values.get("policy_sha256") or ""),
         "split_policy_file": str(split_values.get("policy_file") or ""),
         "split_policy_version": str(split_values.get("policy_version") or ""),
+        "split_policy_sha256": str(split_values.get("policy_sha256") or ""),
     }
     if not all(required.values()) or not all(
         Path(required[key]).is_file()
@@ -1574,27 +1576,38 @@ def _materialize_integrated_entry_execution_sizing_policy(
     ):
         return
     try:
-        quantity_policy = json.loads(
-            Path(required["quantity_policy_file"]).read_text(encoding="utf-8")
-        )
-        split_policy = json.loads(
-            Path(required["split_policy_file"]).read_text(encoding="utf-8")
-        )
-    except (OSError, json.JSONDecodeError):
+        quantity_bytes = Path(required["quantity_policy_file"]).read_bytes()
+        split_bytes = Path(required["split_policy_file"]).read_bytes()
+        quantity_policy = json.loads(quantity_bytes)
+        split_policy = json.loads(split_bytes)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return
     paired_identity = evaluation.get("paired_policy_identity") or {}
     if (
         not isinstance(quantity_policy, dict)
         or not isinstance(split_policy, dict)
+        or hashlib.sha256(quantity_bytes).hexdigest()
+        != required["quantity_policy_sha256"]
+        or hashlib.sha256(split_bytes).hexdigest() != required["split_policy_sha256"]
+        or not position_sizing_policy_authority_valid(quantity_policy)
+        or quantity_policy.get("policy_version") != required["quantity_policy_version"]
+        or quantity_policy.get("source_date") != source_date
+        or quantity_policy.get("active_date") != _next_krx_trading_date(source_date)
+        or quantity_policy.get("runtime_apply_allowed") is not True
+        or quantity_policy.get("sizing_scope") != "initial_entry_only"
+        or split_policy.get("source_date") != source_date
+        or split_policy.get("schema_version") != "entry_split_order_policy_v1"
+        or split_policy.get("runtime_apply_allowed") is not True
+        or split_policy.get("policy_version") != required["split_policy_version"]
         or quantity_policy.get("formula_version")
         != paired_identity.get("candidate_quantity_policy_version")
         or split_policy.get("policy_version")
         != paired_identity.get("candidate_leg_policy_version")
     ):
         return
-    split_sha256 = hashlib.sha256(
-        Path(required["split_policy_file"]).read_bytes()
-    ).hexdigest()
+    # Bind exactly the bytes inspected above, not a second potentially replaced
+    # generation. PREOPEN/runtime independently recheck these references.
+    split_sha256 = hashlib.sha256(split_bytes).hexdigest()
     active_date = _next_krx_trading_date(source_date)
     policy_version = f"entry_execution_sizing:{source_date}"
     policy = {
@@ -9658,6 +9671,15 @@ def _build_entry_split_order_plan_family(*, target_date: str | None = None) -> d
         "exploration_seed_allowed": exploration_seed_allowed,
         "ev_validated_runtime_apply_allowed": ev_validated_runtime_apply_allowed,
     }
+    # Preserve the generation observed by this reader until the atomic
+    # materializer runs; never bless a file replaced between evaluation/publish.
+    if recommended["enabled"]:
+        try:
+            recommended["policy_sha256"] = hashlib.sha256(
+                Path(policy_file).read_bytes()
+            ).hexdigest()
+        except OSError:
+            recommended["policy_sha256"] = ""
     if runtime_disable_recommended:
         recommended = {
             **recommended,
