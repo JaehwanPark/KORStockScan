@@ -11,6 +11,85 @@ from pathlib import Path
 import pytest
 
 
+@pytest.mark.parametrize("exit_code", [0, 7])
+def test_postclose_command_metrics_preserve_cpu_wait_stdout_and_exit(tmp_path, exit_code):
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
+    start = script.index("run_postclose_cmd() {")
+    end = script.index("\n}\n", start) + 3
+    runner = tmp_path / "measured.sh"
+    runner.write_text(
+        "#!/bin/bash\nset -u\n"
+        "POSTCLOSE_NICE_LEVEL=0\nPOSTCLOSE_IONICE_CLASS=-1\n"
+        "POSTCLOSE_IONICE_LEVEL=0\nPOSTCLOSE_CPU_AFFINITY=\n"
+        "TARGET_DATE=2026-09-17\n"
+        f"VENV_PY={sys.executable}\n"
+        + script[start:end]
+        + "\nrun_postclose_cmd sleep 0.2\n"
+        + f"run_postclose_cmd '{sys.executable}' -c "
+        + "'import time,sys,subprocess; "
+        + "subprocess.run([sys.executable, \"-c\", "
+        + "\"import time; start=time.process_time(); "
+        + "exec(\\\"while time.process_time()-start<0.1: pass\\\")\"]); "
+        + f"print(\"fixture_stdout\"); sys.exit({exit_code})' secret_fixture_argument\n",
+        encoding="utf-8",
+    )
+    result = subprocess.run(["bash", str(runner)], capture_output=True, text=True, timeout=10)
+    assert result.returncode == exit_code, result.stderr
+    assert result.stdout == "fixture_stdout\n"
+    assert "secret_fixture_argument" not in result.stderr
+    metrics = [json.loads(line[7:]) for line in result.stderr.splitlines() if line.startswith("[PERF] ")]
+    assert len(metrics) == 2
+    wait, compute = metrics
+    assert wait["target_date"] == "2026-09-17"
+    assert wait["phase"] == "bounded_wait"
+    assert wait["wall_sec"] >= 0.19
+    assert wait["child_user_cpu_sec"] + wait["child_system_cpu_sec"] < 0.1
+    assert compute["measurement_complete"] is True
+    assert compute["exit_code"] == exit_code
+    assert compute["child_user_cpu_sec"] + compute["child_system_cpu_sec"] >= 0.09
+    assert compute["peak_waited_child_rss_kib"] > 0
+
+
+def test_postclose_command_metrics_on_term_are_explicitly_partial(tmp_path):
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
+    start = script.index("run_postclose_cmd() {")
+    end = script.index("\n}\n", start) + 3
+    preamble = script[:script.index('PROJECT_DIR="${PROJECT_DIR:-')]
+    runner = tmp_path / "terminate-measured.sh"
+    runner.write_text(
+        preamble
+        + "\nPOSTCLOSE_NICE_LEVEL=0\nPOSTCLOSE_IONICE_CLASS=-1\n"
+        + "POSTCLOSE_IONICE_LEVEL=0\nPOSTCLOSE_CPU_AFFINITY=\n"
+        + "TARGET_DATE=2026-09-17\n"
+        + f"VENV_PY={sys.executable}\n"
+        + script[start:end]
+        + f"\nrun_postclose_cmd '{sys.executable}' -c "
+        + "'import time; print(\"started\",flush=True); time.sleep(30)'\n",
+        encoding="utf-8",
+    )
+    process = subprocess.Popen(
+        ["bash", str(runner)], text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        env={**os.environ, "THRESHOLD_CYCLE_WRAPPER_SNAPSHOT_EXECUTED": "true"},
+    )
+    try:
+        assert process.stdout.readline().strip() == "started"
+        process.send_signal(signal.SIGTERM)
+        _stdout, stderr = process.communicate(timeout=8)
+        assert process.returncode == 143
+        metrics = [json.loads(line[7:]) for line in stderr.splitlines() if line.startswith("[PERF] ")]
+        assert len(metrics) == 1
+        assert metrics[0]["measurement_complete"] is False
+        assert metrics[0]["exit_code"] == 143
+        assert metrics[0]["wall_sec"] is not None
+        assert metrics[0]["child_user_cpu_sec"] is None
+        assert metrics[0]["child_system_cpu_sec"] is None
+        assert metrics[0]["peak_waited_child_rss_kib"] is None
+    finally:
+        if process.poll() is None:
+            process.send_signal(signal.SIGTERM)
+            process.communicate(timeout=8)
+
+
 def test_postclose_symbol_master_resolves_mount_but_rejects_child_symlink(tmp_path):
     from src.utils.jsonl_io import read_json_object_strict_receipt
 

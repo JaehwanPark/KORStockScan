@@ -575,6 +575,10 @@ run_postclose_cmd() {
   local observed_state=""
   local observed_process=""
   local pending_signal=""
+  local metric_phase="command"
+  if [ "${cmd[0]:-}" = "sleep" ]; then
+    metric_phase="bounded_wait"
+  fi
   local supervisor_python="${VENV_PY:-/usr/bin/python3}"
   if command -v nice >/dev/null 2>&1; then
     cmd=(nice -n "$POSTCLOSE_NICE_LEVEL" "${cmd[@]}")
@@ -602,17 +606,56 @@ run_postclose_cmd() {
   # recorded by handle_wrapper_signal and delivered to the verified group.
   setsid -- "$supervisor_python" -c '
 import os
+import json
+import resource
 import signal
 import subprocess
 import sys
+import time
+
+started = None
+def emit_metrics(returncode, complete):
+    usage = resource.getrusage(resource.RUSAGE_CHILDREN) if complete else None
+    receipt = {
+        "schema": "postclose_command_metrics_v1",
+        "target_date": sys.argv[1],
+        "phase": sys.argv[2],
+        "wall_sec": None if started is None else time.monotonic() - started,
+        "child_user_cpu_sec": None if usage is None else usage.ru_utime,
+        "child_system_cpu_sec": None if usage is None else usage.ru_stime,
+        "peak_waited_child_rss_kib": None if usage is None else usage.ru_maxrss,
+        "cpu_scope": "reaped_children_rusage_not_supervisor",
+        "rss_scope": "largest_waited_child_not_concurrent_group_sum",
+        "measurement_complete": complete,
+        "exit_code": returncode,
+        "runtime_effect": False,
+    }
+    try:
+        print("[PERF] " + json.dumps(receipt, sort_keys=True), file=sys.stderr, flush=True)
+    except OSError:
+        pass  # Diagnostic output cannot change the producer exit contract.
+
+def terminate(signal_number, _frame):
+    emit_metrics(128 + signal_number, False)
+    # Preserve the original signal exit and process-group termination contract.
+    # Do not wait/restart/retry the producer inside a signal handler.
+    signal.signal(signal_number, signal.SIG_DFL)
+    os.kill(os.getpid(), signal_number)
 
 for signal_number in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
-    signal.signal(signal_number, signal.SIG_DFL)
+    signal.signal(signal_number, terminate)
 os.kill(os.getpid(), signal.SIGSTOP)
-completed = subprocess.run(sys.argv[1:], check=False)
+started = time.monotonic()
+try:
+    completed = subprocess.run(sys.argv[3:], check=False)
+except OSError:
+    emit_metrics(1, False)
+    raise
 returncode = completed.returncode
-raise SystemExit(returncode if returncode >= 0 else 128 - returncode)
-  ' "${cmd[@]}" <&0 &
+exit_code = returncode if returncode >= 0 else 128 - returncode
+emit_metrics(exit_code, True)
+raise SystemExit(exit_code)
+  ' "${TARGET_DATE:-unknown}" "$metric_phase" "${cmd[@]}" <&0 &
   command_pid=$!
   ACTIVE_POSTCLOSE_PID="$command_pid"
   for _pgid_attempt in {1..100}; do
