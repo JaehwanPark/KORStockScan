@@ -763,8 +763,7 @@ def _price_ready_plan(event: EntryEvent) -> dict:
             or price.get("schema_version") != "entry_price_plan_v1"
             or price.get("action_receipt_id") != plan.get("action_receipt_id")
             or not all(
-                isinstance(plan.get(k), str)
-                and plan[k].strip() not in {"", "-"}
+                isinstance(plan.get(k), str) and plan[k].strip() not in {"", "-"}
                 for k in (
                     "scanner_promotion_id",
                     "action_receipt_id",
