@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 from datetime import datetime
 from pathlib import Path
@@ -46,6 +47,12 @@ ENTRY_PRICE_POLICY_SHA256 = hashlib.sha256(
 ).hexdigest()
 SCALE_IN_PRICE_OWNER = "existing_scale_in_price_resolver"
 QUANTITY_OWNER = "position_sizing_dynamic_formula"
+PRICE_POLICY_ENV_KEYS = frozenset({
+    "KORSTOCKSCAN_SCALPING_NORMAL_DEFENSIVE_BPS",
+    "KORSTOCKSCAN_SCALPING_CONDITIONAL_STRONG_DEFENSIVE_BPS",
+    "KORSTOCKSCAN_SCALPING_NORMAL_FAVORABLE_DEFENSIVE_BPS",
+    "KORSTOCKSCAN_SCALPING_NORMAL_WEAK_DEFENSIVE_BPS",
+})
 
 _ENTRY_EXECUTION_POLICY_PREFIX = "KORSTOCKSCAN_ENTRY_EXECUTION_SIZING_POLICY_"
 _ENTRY_PRICE_POLICY_PREFIX = "KORSTOCKSCAN_MECHANISTIC_ENTRY_PRICE_POLICY_"
@@ -99,6 +106,26 @@ def _runtime_policy(
     return payload, "loaded"
 
 
+def mechanistic_entry_price_authority_valid(policy: Any) -> bool:
+    """The numeric-price owner cannot acquire action or sizing authority."""
+    if not isinstance(policy, dict):
+        return False
+    runtime_env = policy.get("runtime_env")
+    return bool(
+        policy.get("policy_owner") == PRICE_OWNER
+        and type(policy.get("provider_calls")) is int
+        and policy["provider_calls"] == 0
+        and policy.get("ai_price_authority") is False
+        and policy.get("action_quantity_leg_scale_in_authority", False) is False
+        and str(policy.get("candidate_id") or "").strip()
+        and "ai" not in str(policy["candidate_id"]).lower()
+        and isinstance(runtime_env, dict)
+        and len(runtime_env) == 1
+        and set(runtime_env) <= PRICE_POLICY_ENV_KEYS
+        and all(_positive_int(value) > 0 for value in runtime_env.values())
+    )
+
+
 def runtime_mechanistic_entry_price_policy(
     *, active_date: str | None = None
 ) -> tuple[dict[str, Any], str]:
@@ -117,7 +144,7 @@ def runtime_mechanistic_entry_price_policy(
                 "runtime_env": {},
             }, status
         return {}, status
-    if policy.get("provider_calls") != 0 or policy.get("ai_price_authority") is not False:
+    if not mechanistic_entry_price_authority_valid(policy):
         return {}, "policy_authority_invalid"
     candidate_id = str(policy.get("candidate_id") or "").strip()
     if not candidate_id or "ai" in candidate_id.lower():
@@ -172,8 +199,12 @@ def runtime_entry_execution_sizing_policy(
 
 
 def _positive_int(value: Any) -> int:
+    if isinstance(value, bool) or type(value) not in (str, int, float):
+        return 0
     try:
-        return max(0, int(value or 0))
+        if isinstance(value, float) and (not math.isfinite(value) or not value.is_integer()):
+            return 0
+        return max(0, int(value))
     except (TypeError, ValueError, OverflowError):
         return 0
 

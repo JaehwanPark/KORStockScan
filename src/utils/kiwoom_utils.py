@@ -4414,7 +4414,7 @@ def check_execution_strength_ka10046(token, code):
     )
 
 
-def get_tick_history_ka10003(token, code, limit=10):
+def get_tick_history_ka10003(token, code, limit=10, *, request_owner=None, request_class=None):
     """
     [ka10003] 주식체결정보요청.
 
@@ -4434,8 +4434,14 @@ def get_tick_history_ka10003(token, code, limit=10):
 
     payload = {"stk_cd": str(req_code)}
 
+    purpose = {}
+    if request_owner is not None:
+        purpose["request_owner"] = request_owner
+    if request_class is not None:
+        purpose["request_class"] = request_class
     results = fetch_kiwoom_api_continuous(
-        url=url, token=token, api_id="ka10003", payload=payload, use_continuous=False
+        url=url, token=token, api_id="ka10003", payload=payload, use_continuous=False,
+        **purpose,
     )
 
     ticks = []

@@ -637,3 +637,36 @@ def test_default_runtime_policy_date_uses_kst_during_utc_date_boundary(tmp_path,
         monkeypatch.setenv(prefix + suffix, value)
     assert sizing._runtime_policy(prefix=prefix, schema="test-schema", owner="test-owner") == (payload, "loaded")
     assert sizing._runtime_policy(prefix=prefix, schema="test-schema", owner="test-owner", active_date="2026-09-17") == (None, "policy_inactive_date")
+
+
+def test_price_policy_authority_cannot_alias_boolean_or_sizing_env():
+    payload = {
+        "policy_owner": PRICE_OWNER, "candidate_id": "normal:25",
+        "provider_calls": 0, "ai_price_authority": False,
+        "runtime_env": {"KORSTOCKSCAN_SCALPING_NORMAL_DEFENSIVE_BPS": "25"},
+    }
+    assert sizing.mechanistic_entry_price_authority_valid(payload)
+    for update in (
+        {"provider_calls": False}, {"provider_calls": 0.0},
+        {"action_quantity_leg_scale_in_authority": True},
+        {"runtime_env": {"KORSTOCKSCAN_SCALPING_MAX_QTY": "25"}},
+        {"runtime_env": {}},
+        {"runtime_env": {"KORSTOCKSCAN_SCALPING_NORMAL_DEFENSIVE_BPS": True}},
+        {"runtime_env": {"KORSTOCKSCAN_SCALPING_NORMAL_DEFENSIVE_BPS": 25.9}},
+    ):
+        assert not sizing.mechanistic_entry_price_authority_valid({**payload, **update})
+
+
+def test_atomic_sizing_never_truncates_fractional_or_boolean_quantity_and_price(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_ENTRY_EXECUTION_SIZING_POLICY_ENABLED", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_MECHANISTIC_ENTRY_PRICE_POLICY_ENABLED", raising=False)
+    for bad in (True, 1.9, float("nan"), float("inf")):
+        for field in ("qty", "price"):
+            order = _priced({"qty": 1, "price": 1000, field: bad})
+            _, fields = compose_entry_execution_sizing_plan(
+                [order], expected_total_qty=1, action_receipt=_receipt(),
+                quantity_policy_version="qty:current", split_policy_version="split:current",
+            )
+            assert fields["entry_execution_sizing_valid"] is False
+    assert sizing._positive_int(9007199254740993) == 9007199254740993
+    assert sizing._positive_int("25") == 25

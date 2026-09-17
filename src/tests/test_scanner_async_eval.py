@@ -618,3 +618,148 @@ def test_async_eval_stress_16_promotions_and_superseded_generation():
     ]
     assert len(superseded) == 1
     assert superseded[0].observation_only is True
+
+
+def _bounded_request(key, prepare=None, *, generation=None):
+    now = time.time()
+    context = ScannerAsyncEvalContext.create(
+        generation=generation or _generation(), cache_key=key,
+        submitted_epoch=now, deadline_epoch=now + 5,
+        stock_snapshot={}, ws_snapshot={}, state_version="WATCHING:0:0",
+    )
+    return ScannerAsyncEvalRequest(
+        context=context, prepare=prepare or (lambda _ctx: {}),
+        evaluate=lambda _ctx, _prepared: {}, requires_ai_dispatch=False,
+    )
+
+
+@pytest.mark.parametrize("submitted,deadline", [(True, 2), (1, True), (float("nan"), 2), (1, float("inf")), (float("-inf"), 2)])
+def test_context_rejects_invalid_clock_values(submitted, deadline):
+    with pytest.raises(ValueError):
+        ScannerAsyncEvalContext.create(
+            generation=_generation(), cache_key="invalid-clock",
+            submitted_epoch=submitted, deadline_epoch=deadline,
+            stock_snapshot={}, ws_snapshot={}, state_version="WATCHING",
+        )
+
+
+def test_preparation_capacity_preserves_pending_and_commit_results(monkeypatch):
+    from src.engine.scalping import scanner_async_eval as module
+    monkeypatch.setattr(module, "_MAX_READY_RESULTS", 3)
+    coordinator = ScannerAsyncEvalCoordinator(ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1))
+    entered, release = threading.Event(), threading.Event()
+    def prepare(_ctx):
+        entered.set()
+        assert release.wait(2)
+        return {}
+    requests = [_bounded_request(str(i), prepare if i == 0 else None) for i in range(4)]
+    try:
+        assert coordinator.submit(requests[0]).accepted
+        assert entered.wait(1)
+        assert coordinator.submit(requests[1]).accepted
+        assert coordinator.submit(requests[2]).accepted
+        assert not coordinator.submit(requests[0]).accepted
+        assert coordinator.submit(requests[3]).reason == "market_preparation_capacity_deferred"
+        release.set()
+        deadline = time.time() + 1
+        while coordinator.pending_count() and time.time() < deadline:
+            time.sleep(.005)
+        assert coordinator.pending_count() == 0
+        # Notification drain alone cannot discard output needed for COMMIT.
+        assert len(coordinator.drain_completed()) == 3
+        assert coordinator.submit(requests[3]).reason == "market_preparation_capacity_deferred"
+        first = requests[0].context
+        assert coordinator.take_completed(generation_id=first.generation.generation_id, cache_key=first.cache_key)
+        assert coordinator.submit(requests[3]).accepted
+    finally:
+        release.set()
+        coordinator.shutdown(wait=True)
+
+
+def test_preparation_enqueue_failure_does_not_leave_pending(monkeypatch):
+    coordinator = ScannerAsyncEvalCoordinator(ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1))
+    request = _bounded_request("enqueue-failure")
+    original = coordinator._preparation_executor.submit
+    def fail(*args, **kwargs):
+        raise RuntimeError("executor unavailable")
+    try:
+        monkeypatch.setattr(coordinator._preparation_executor, "submit", fail)
+        assert coordinator.submit(request).reason == "market_preparation_enqueue_failed"
+        assert coordinator.pending_count() == 0
+        assert coordinator._preparation_futures == {}
+        monkeypatch.setattr(coordinator._preparation_executor, "submit", original)
+        assert coordinator.submit(request).accepted
+        assert _wait_for_result(coordinator).status == "completed"
+    finally:
+        coordinator.shutdown(wait=True)
+
+
+def test_cancelled_queued_preparation_never_calls_source(monkeypatch):
+    from src.engine.scalping import scanner_async_eval as module
+    monkeypatch.setattr(module, "_MAX_CANCELLED_GENERATIONS", 2)
+    coordinator = ScannerAsyncEvalCoordinator(ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1))
+    entered, release = threading.Event(), threading.Event()
+    calls = []
+    def prepare(_ctx):
+        entered.set()
+        assert release.wait(2)
+        return {}
+    first = _bounded_request("running", prepare)
+    second = _bounded_request("queued", lambda _ctx: calls.append(True) or {}, generation=_generation(promotion_id="PROMO-2"))
+    try:
+        assert coordinator.submit(first).accepted
+        assert entered.wait(1)
+        assert coordinator.submit(second).accepted
+        coordinator.invalidate_generation(second.context.generation.generation_id)
+        result = _wait_for_result(coordinator)
+        assert result.status == "superseded_before_preparation"
+        assert result.observation_only
+        assert calls == []
+        coordinator.invalidate_generation(first.context.generation.generation_id)
+        for i in range(5):
+            coordinator.invalidate_generation(f"quiescent-{i}")
+        assert first.context.generation.generation_id in coordinator._cancelled_generations
+        assert not coordinator.reactivate_generation(first.context.generation.generation_id)
+        release.set()
+        result = _wait_for_result(coordinator)
+        assert result.observation_only and result.status == "superseded_before_ai"
+    finally:
+        release.set()
+        coordinator.shutdown(wait=True)
+
+
+def test_consumed_result_notification_is_bounded_until_drained(monkeypatch):
+    from src.engine.scalping import scanner_async_eval as module
+    monkeypatch.setattr(module, "_MAX_READY_RESULTS", 2)
+    coordinator = ScannerAsyncEvalCoordinator(ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1))
+    try:
+        requests = [_bounded_request(str(i)) for i in range(3)]
+        for request in requests[:2]:
+            assert coordinator.submit(request).accepted
+            deadline = time.time() + 1
+            while coordinator.pending_count() and time.time() < deadline:
+                time.sleep(.005)
+            ctx = request.context
+            assert coordinator.take_completed(generation_id=ctx.generation.generation_id, cache_key=ctx.cache_key)
+        assert coordinator.submit(requests[0]).reason == "completed_notification_pending_drain"
+        assert coordinator.submit(requests[2]).reason == "market_preparation_capacity_deferred"
+        assert len(coordinator.drain_completed(limit=1)) == 1
+        assert coordinator.submit(requests[2]).accepted
+    finally:
+        coordinator.shutdown(wait=True)
+
+
+def test_ai_dispatch_exception_closes_pending_as_observation(monkeypatch):
+    coordinator = ScannerAsyncEvalCoordinator(ai_dispatcher=HotPathAIDispatcher(loaded_key_count=1))
+    request = _bounded_request("ai-enqueue-failure")
+    request = ScannerAsyncEvalRequest(context=request.context, prepare=request.prepare, evaluate=request.evaluate, requires_ai_dispatch=True)
+    def fail(*args, **kwargs):
+        raise RuntimeError("dispatcher unavailable")
+    try:
+        monkeypatch.setattr(coordinator.ai_dispatcher, "submit", fail)
+        assert coordinator.submit(request).accepted
+        result = _wait_for_result(coordinator)
+        assert result.status == "ai_dispatch_error" and result.observation_only
+        assert coordinator.pending_count() == 0
+    finally:
+        coordinator.shutdown(wait=True)
