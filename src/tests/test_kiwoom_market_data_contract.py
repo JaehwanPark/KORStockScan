@@ -722,3 +722,216 @@ def test_strength_shadow_feedback_uses_first_ask_level_as_best_ask(monkeypatch):
     assert payload["best_ask"] == 10010
     assert payload["best_bid"] == 9990
     assert recorded and recorded[0]["best_ask"] == 10010
+
+
+def test_market_read_transport_scope_and_receipt_are_preserved(monkeypatch):
+    from copy import deepcopy
+
+    calls, keys = [], []
+
+    class Runner:
+        def run(self, key, fetch, *, wait_sec):
+            keys.append(key)
+            result = fetch()
+            return deepcopy(result), bool(len(keys) > 1), 0.1
+
+    def transport(**kwargs):
+        calls.append(kwargs)
+        return [{"value": 10}], {
+            "rest_received_ts_ms": 12345,
+            "request_attempt_count": 1,
+            "request_owner": kwargs["request_owner"],
+            "request_class": kwargs["request_class"],
+        }
+
+    monkeypatch.setattr(kiwoom_utils, "_MARKET_READ_SINGLE_FLIGHT", Runner())
+    monkeypatch.setattr(
+        kiwoom_utils, "_fetch_kiwoom_api_continuous_transport", transport
+    )
+    base = dict(
+        url="https://api.kiwoom.com/api/dostk/chart",
+        token="SECRET",
+        api_id="ka10080",
+        payload={"stk_cd": "005930_AL", "base_dt": "20260917"},
+        max_pages=2,
+        request_owner="one",
+        return_meta=True,
+    )
+    _, owner = kiwoom_utils.fetch_kiwoom_api_continuous(**base)
+    _, follower = kiwoom_utils.fetch_kiwoom_api_continuous(
+        **{**base, "request_owner": "two"}
+    )
+    assert keys[0] == keys[1]
+    assert follower["rest_received_ts_ms"] == owner["rest_received_ts_ms"] == 12345
+    assert follower["read_singleflight_caller_http_attempt_count"] == 0
+    assert follower["request_owner"] == "two"
+    for change in (
+        {"token": "OTHER"},
+        {"url": "https://mockapi.kiwoom.com/api/dostk/chart"},
+        {"payload": {"stk_cd": "005930_NX", "base_dt": "20260917"}},
+        {"payload": {"stk_cd": "005930_AL", "base_dt": "20260916"}},
+        {"max_pages": 3},
+        {"use_continuous": True},
+        {"request_class": "source_only"},
+        {"request_timeout": 0.5},
+        {"read_rate_max_wait_sec": 0},
+    ):
+        kiwoom_utils.fetch_kiwoom_api_continuous(**{**base, **change})
+        assert keys[-1] != keys[0]
+    assert all(len(key) == 64 and "SECRET" not in key for key in keys)
+
+
+def test_critical_quote_account_order_paths_never_join_market_read(monkeypatch):
+    class Runner:
+        def run(self, *args, **kwargs):
+            raise AssertionError("fresh guarded request cannot join an older read")
+
+    calls = []
+    monkeypatch.setattr(kiwoom_utils, "_MARKET_READ_SINGLE_FLIGHT", Runner())
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "_fetch_kiwoom_api_continuous_transport",
+        lambda **kwargs: calls.append(kwargs) or [],
+    )
+    for api_id, purpose in (
+        ("ka10004", "runtime_required"),
+        ("kt00007", "runtime_required"),
+        ("kt10000", "runtime_required"),
+        ("ka10080", "execution_critical"),
+    ):
+        kiwoom_utils.fetch_kiwoom_api_continuous(
+            "https://api.test",
+            "secret",
+            api_id,
+            {"stk_cd": "005930"},
+            request_class=purpose,
+        )
+    assert len(calls) == 4
+
+
+def test_market_join_timeout_returns_defer_without_transport(monkeypatch):
+    from src.utils.kiwoom_read_request_control import MarketReadJoinDeferred
+
+    class Runner:
+        def run(self, *args, **kwargs):
+            raise MarketReadJoinDeferred(
+                "market_read_singleflight_wait_budget_exhausted"
+            )
+
+    monkeypatch.setattr(kiwoom_utils, "_MARKET_READ_SINGLE_FLIGHT", Runner())
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "_fetch_kiwoom_api_continuous_transport",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("duplicate transport")),
+    )
+    rows, meta = kiwoom_utils.fetch_kiwoom_api_continuous(
+        "https://api.test", "secret", "ka10080", {"stk_cd": "005930"}, return_meta=True
+    )
+    assert rows == []
+    assert meta["read_rate_control_status"] == "deferred"
+    assert meta["request_attempt_count"] == 0
+    assert meta["rest_received_ts_ms"] is None
+    assert meta["read_singleflight_caller_http_attempt_count"] == 0
+
+
+def test_normalized_market_cache_is_token_origin_and_day_scoped(monkeypatch):
+    _clear_market_data_cache()
+    monkeypatch.setattr(kiwoom_utils, "get_effective_kiwoom_code", lambda code: code)
+    origin = ["https://api.test"]
+    monkeypatch.setattr(kiwoom_utils, "get_kiwoom_base_url", lambda: origin[0])
+    calls = []
+
+    def fetch(**kwargs):
+        calls.append(kwargs)
+        return [], {"rest_received_ts_ms": 100, "api_id": kwargs["api_id"]}
+
+    monkeypatch.setattr(kiwoom_utils, "fetch_kiwoom_api_continuous", fetch)
+    for token in ("first", "first", "second"):
+        kiwoom_utils.get_minute_candles_ka10080_with_meta(
+            token, "005930", base_dt="20260917"
+        )
+    assert len(calls) == 2
+    origin[0] = "https://mock.test"
+    kiwoom_utils.get_minute_candles_ka10080_with_meta(
+        "first", "005930", base_dt="20260917"
+    )
+    assert len(calls) == 3
+    assert "first" not in repr(kiwoom_utils._MARKET_DATA_CACHE)
+    _clear_market_data_cache()
+
+
+def test_deferred_market_read_never_replaces_a_valid_cache_entry():
+    _clear_market_data_cache()
+    good = ([{"price": 42}], {"rest_received_ts_ms": 100})
+    kiwoom_utils._cache_set("namespace", "key", good, 5)
+    defer = ([], {"read_rate_control_status": "deferred", "rest_received_ts_ms": None})
+    assert kiwoom_utils._cache_set("namespace", "key", defer, 5) == defer
+    assert kiwoom_utils._cache_get("namespace", "key") == good
+    _clear_market_data_cache()
+
+
+def test_deferred_dataframe_never_replaces_a_valid_cache_entry():
+    _clear_market_data_cache()
+    good = pd.DataFrame([{"price": 42}])
+    kiwoom_utils._cache_set("namespace", "key", good, 5)
+    defer = pd.DataFrame()
+    defer.attrs["kiwoom_source_meta"] = {"read_singleflight_status": "deferred"}
+    assert kiwoom_utils._cache_set("namespace", "key", defer, 5) is defer
+    assert kiwoom_utils._cache_get("namespace", "key").equals(good)
+    _clear_market_data_cache()
+
+
+def test_legacy_market_read_without_defer_receipt_keeps_original_transport(monkeypatch):
+    class Runner:
+        def run(self, *args, **kwargs):
+            raise AssertionError(
+                "legacy consumer cannot distinguish deferred from empty"
+            )
+
+    monkeypatch.setattr(kiwoom_utils, "_MARKET_READ_SINGLE_FLIGHT", Runner())
+    calls = []
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "_fetch_kiwoom_api_continuous_transport",
+        lambda **kwargs: calls.append(kwargs) or [{"value": 1}],
+    )
+    assert kiwoom_utils.fetch_kiwoom_api_continuous(
+        "https://api.test", "secret", "ka10080", {"stk_cd": "005930"}
+    ) == [{"value": 1}]
+    assert calls[0]["return_meta"] is False
+
+
+def test_normalized_market_cache_has_a_hard_live_entry_bound(monkeypatch):
+    _clear_market_data_cache()
+    monkeypatch.setattr(kiwoom_utils, "_MARKET_DATA_CACHE_MAX_ENTRIES", 2)
+    for key, ttl in (("early", 100), ("late", 300), ("middle", 200)):
+        kiwoom_utils._cache_set("namespace", key, {"value": key}, ttl)
+    assert len(kiwoom_utils._MARKET_DATA_CACHE) == 2
+    assert kiwoom_utils._cache_get("namespace", "early") is None
+    assert kiwoom_utils._cache_get("namespace", "late") == {"value": "late"}
+    _clear_market_data_cache()
+
+
+def test_unbounded_continuous_read_does_not_duplicate_its_result_for_followers(
+    monkeypatch,
+):
+    class Runner:
+        def run(self, *args, **kwargs):
+            raise AssertionError("unbounded history cannot enter bounded singleflight")
+
+    monkeypatch.setattr(kiwoom_utils, "_MARKET_READ_SINGLE_FLIGHT", Runner())
+    calls = []
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "_fetch_kiwoom_api_continuous_transport",
+        lambda **kwargs: calls.append(kwargs) or ([], {}),
+    )
+    assert kiwoom_utils.fetch_kiwoom_api_continuous(
+        "https://api.test",
+        "secret",
+        "ka10080",
+        {"stk_cd": "005930"},
+        use_continuous=True,
+        return_meta=True,
+    ) == ([], {})
+    assert calls[0]["max_pages"] is None

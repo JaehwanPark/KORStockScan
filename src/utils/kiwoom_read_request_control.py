@@ -19,6 +19,8 @@ import json
 import math
 import os
 import time
+import threading
+from copy import deepcopy
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -47,6 +49,56 @@ DEFAULT_SOURCE_ONLY_MAX_WAIT_SEC = 1.25
 RATE_LIMIT_RETURN_CODES = frozenset({"1700", "1701", "1702"})
 STATE_SCHEMA_VERSION = "kiwoom_domestic_read_rate_control_v1"
 DEFAULT_STATE_DIR = DATA_DIR / "runtime" / "kiwoom_read_rate_control"
+
+
+class MarketReadJoinDeferred(RuntimeError):
+    """A duplicate read cannot join within its own bounded wait budget."""
+
+
+class MarketReadSingleFlight:
+    """Collapse concurrent, exactly scoped reads; retain no completed cache.
+
+    Only market-data callers may use this helper. A follower timeout never
+    starts another transport or cancels the owner's bounded request/retries.
+    """
+
+    def __init__(self, *, max_in_flight: int = 128) -> None:
+        self._lock = threading.Lock()
+        self._in_flight: dict[str, dict[str, Any]] = {}
+        self._max_in_flight = max_in_flight
+
+    def run(self, key: str, fetch: Callable[[], Any], *, wait_sec: float):
+        started = time.monotonic()
+        if not math.isfinite(wait_sec) or wait_sec < 0:
+            raise ValueError("market_read_join_wait_invalid")
+        with self._lock:
+            flight = self._in_flight.get(key)
+            owner = flight is None
+            if owner:
+                if len(self._in_flight) >= self._max_in_flight:
+                    raise MarketReadJoinDeferred("market_read_singleflight_capacity")
+                flight = {"event": threading.Event(), "thread": threading.get_ident()}
+                self._in_flight[key] = flight
+            elif flight["thread"] == threading.get_ident():
+                raise RuntimeError("market_read_singleflight_recursive")
+        if owner:
+            try:
+                flight["result"] = deepcopy(fetch())
+            except BaseException as exc:
+                flight["error"] = exc
+            finally:
+                with self._lock:
+                    self._in_flight.pop(key, None)
+                    flight["event"].set()
+        elif not flight["event"].wait(
+            max(0.0, wait_sec - (time.monotonic() - started))
+        ):
+            raise MarketReadJoinDeferred(
+                "market_read_singleflight_wait_budget_exhausted"
+            )
+        if "error" in flight:
+            raise flight["error"]
+        return deepcopy(flight["result"]), not owner, time.monotonic() - started
 
 
 @dataclass(frozen=True)

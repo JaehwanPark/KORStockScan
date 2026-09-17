@@ -32,10 +32,33 @@ from src.utils.kiwoom_read_request_control import (
     DEFAULT_COORDINATOR as _DEFAULT_KIWOOM_READ_COORDINATOR,
     REQUEST_CLASS_RUNTIME_REQUIRED,
     is_kiwoom_read_rate_limit,
+    MarketReadSingleFlight,
+    MarketReadJoinDeferred,
+    REQUEST_CLASS_SOURCE_ONLY,
+    DEFAULT_REQUIRED_MAX_WAIT_SEC,
+    DEFAULT_SOURCE_ONLY_MAX_WAIT_SEC,
 )
 
 _MARKET_DATA_CACHE = {}
 _MARKET_DATA_CACHE_LOCK = threading.RLock()
+_MARKET_DATA_CACHE_MAX_ENTRIES = 2048
+_MARKET_READ_SINGLE_FLIGHT = MarketReadSingleFlight()
+_SINGLE_FLIGHT_MARKET_API_IDS = frozenset(
+    {
+        "ka10003",
+        "ka10046",
+        "ka10059",
+        "ka10061",
+        "ka10063",
+        "ka10064",
+        "ka10066",
+        "ka10080",
+        "ka10081",
+        "ka10084",
+        "ka20005",
+        "ka90008",
+    }
+)
 _KIWOOM_TOKEN_PROCESS_LOCK = threading.RLock()
 _KIWOOM_TOKEN_REPLACEMENTS = {}
 _KIWOOM_TOKEN_REPLACEMENT_LIMIT = 64
@@ -66,6 +89,15 @@ def _cache_clone(value):
     return deepcopy(value)
 
 
+def _market_data_cache_scope(token):
+    # Do not share normalized results between accounts, origins or trading dates.
+    return (
+        hashlib.sha256(str(resolve_kiwoom_request_token(token)).encode()).hexdigest(),
+        get_kiwoom_base_url(),
+        datetime.now(_KST).date().isoformat(),
+    )
+
+
 def _cache_get(namespace, key):
     cache_key = (namespace, key)
     now = time.time()
@@ -80,6 +112,16 @@ def _cache_get(namespace, key):
 
 
 def _cache_set(namespace, key, value, ttl_sec):
+    meta = getattr(value, "attrs", {}).get("kiwoom_source_meta", {})
+    if isinstance(value, tuple) and len(value) == 2 and isinstance(value[1], dict):
+        meta = value[1]
+    if (
+        meta.get("read_rate_control_status") == "deferred"
+        or meta.get("read_singleflight_status") == "deferred"
+        or meta.get("rate_limit_retry_exhausted") is True
+    ):
+        # A timed-out follower must never poison the owner's shared cache.
+        return value
     if ttl_sec <= 0:
         return value
     cache_key = (namespace, key)
@@ -89,7 +131,7 @@ def _cache_set(namespace, key, value, ttl_sec):
             "expires_at": now + float(ttl_sec),
             "value": _cache_clone(value),
         }
-        if len(_MARKET_DATA_CACHE) > 2048:
+        if len(_MARKET_DATA_CACHE) > _MARKET_DATA_CACHE_MAX_ENTRIES:
             expired = [
                 k
                 for k, v in _MARKET_DATA_CACHE.items()
@@ -97,6 +139,16 @@ def _cache_set(namespace, key, value, ttl_sec):
             ]
             for item in expired[:512]:
                 _MARKET_DATA_CACHE.pop(item, None)
+            # Token/origin/date scoping must not turn the former cleanup
+            # threshold into unbounded retained data when every TTL is live.
+            excess = len(_MARKET_DATA_CACHE) - _MARKET_DATA_CACHE_MAX_ENTRIES
+            if excess > 0:
+                earliest = sorted(
+                    _MARKET_DATA_CACHE,
+                    key=lambda item: _MARKET_DATA_CACHE[item]["expires_at"],
+                )
+                for item in earliest[:excess]:
+                    _MARKET_DATA_CACHE.pop(item, None)
     return value
 
 
@@ -2157,9 +2209,7 @@ def get_stock_eligibility_map_ka10099(
         snapshot["complete"] = snapshot_complete
         if not snapshot_complete:
             snapshot["quality_state"] = (
-                "CONFLICT"
-                if snapshot.get("quality_state") == "CONFLICT"
-                else "UNKNOWN"
+                "CONFLICT" if snapshot.get("quality_state") == "CONFLICT" else "UNKNOWN"
             )
             snapshot["eligible_venues_json"] = []
             snapshot["blocked_reasons"] = list(
@@ -2348,6 +2398,7 @@ def get_daily_ohlcv_ka10081_df(token, code, end_date=""):
     if not end_date:
         end_date = datetime.now().strftime("%Y%m%d")
     cache_key = (str(code), str(end_date))
+    cache_key = (_market_data_cache_scope(token), cache_key)
     cached_df = _cache_get("ka10081_daily_df", cache_key)
     if cached_df is not None:
         return cached_df
@@ -2495,6 +2546,7 @@ def get_index_minute_candles_ka20005_with_meta(token, inds_cd="001", limit=60):
 
     requested_limit = max(1, int(limit or 1))
     cache_key = (str(inds_cd), requested_limit)
+    cache_key = (_market_data_cache_scope(token), cache_key)
     cached = _cache_get("ka20005_index_minutes_with_meta", cache_key)
     if cached is not None:
         return cached
@@ -2687,6 +2739,7 @@ def get_investor_daily_ka10059_df(token, code, base_dt=None, is_nxt=None):
         base_dt = base_dt.replace("-", "")
 
     cache_key = (str(req_code), str(base_dt))
+    cache_key = (_market_data_cache_scope(token), cache_key)
     cached_df = _cache_get("ka10059_investor_df", cache_key)
     if cached_df is not None:
         return cached_df
@@ -4134,6 +4187,7 @@ def check_program_buying_ka90008(token, code, date_str=None, retry_prev_if_zero=
     url = get_api_url("/api/dostk/mrkcond")
     target_date = str(date_str or _get_prev_business_day_str())
     cache_key = (str(code), str(target_date))
+    cache_key = (_market_data_cache_scope(token), cache_key)
     cached = _cache_get("ka90008_program_snapshot", cache_key)
     if cached is not None:
         return cached
@@ -4241,6 +4295,7 @@ def get_program_flow_realtime(token, code, ws_data=None):
 def check_execution_strength_ka10046(token, code):
     """[ka10046] 체결강도 및 거래대금 상세 데이터 패키지 반환"""
     cache_key = str(get_effective_kiwoom_code(code))
+    cache_key = (_market_data_cache_scope(token), cache_key)
     cached = _cache_get("ka10046_strength", cache_key)
     if cached is not None:
         return cached
@@ -4356,6 +4411,7 @@ def get_tick_history_ka10003(token, code, limit=10):
     """
     req_code = get_effective_kiwoom_code(code)
     cache_key = (str(req_code), int(limit))
+    cache_key = (_market_data_cache_scope(token), cache_key)
     cached = _cache_get("ka10003_ticks", cache_key)
     if cached is not None:
         return cached
@@ -4661,6 +4717,7 @@ def get_recent_signed_trades_ka10084(token, code, limit=10, tm=""):
         limit_int,
         request_tm or datetime.now().strftime("%H%M"),
     )
+    cache_key = (_market_data_cache_scope(token), cache_key)
     cached = _cache_get("ka10084_signed_trades", cache_key)
     if cached is not None:
         return cached
@@ -4756,6 +4813,7 @@ def get_minute_candles_ka10080_with_meta(
     if len(request_base_dt) != 8 or not request_base_dt.isdigit():
         raise ValueError("base_dt must use YYYYMMDD")
     cache_key = (str(req_code), int(limit), request_base_dt)
+    cache_key = (_market_data_cache_scope(token), cache_key)
     cached = _cache_get("ka10080_minutes_with_meta", cache_key)
     if cached is not None:
         return cached
@@ -4883,6 +4941,127 @@ def get_top_marketcap_stocks(limit=300):
 # =====================================================================
 # 💡 함수 정의부에 use_continuous: bool = False 가 반드시 포함되어야 합니다!
 def fetch_kiwoom_api_continuous(
+    url: str,
+    token: str,
+    api_id: str,
+    payload: dict,
+    max_retries: int = 3,
+    use_continuous: bool = False,
+    max_pages: int | None = None,
+    return_meta: bool = False,
+    request_owner: str | None = None,
+    request_class: str = REQUEST_CLASS_RUNTIME_REQUIRED,
+    request_code: str | None = None,
+    read_rate_max_wait_sec: float | None = None,
+    read_rate_coordinator=None,
+    request_timeout: float | tuple[float, float] | None = None,
+) -> list:
+    """Reuse only in-flight market reads with identical wire/priority/bounds.
+
+    Fresh execution-critical, account, quote, authentication and broker writes
+    always retain their existing independent request path.
+    """
+    kwargs = dict(
+        url=url,
+        token=token,
+        api_id=api_id,
+        payload=payload,
+        max_retries=max_retries,
+        use_continuous=use_continuous,
+        max_pages=max_pages,
+        return_meta=True,
+        request_owner=request_owner,
+        request_class=request_class,
+        request_code=request_code,
+        read_rate_max_wait_sec=read_rate_max_wait_sec,
+        read_rate_coordinator=read_rate_coordinator,
+        request_timeout=request_timeout,
+    )
+    if (
+        not return_meta
+        or api_id not in _SINGLE_FLIGHT_MARKET_API_IDS
+        or (use_continuous and (type(max_pages) is not int or max_pages <= 0))
+        or request_class
+        not in {
+            REQUEST_CLASS_SOURCE_ONLY,
+            REQUEST_CLASS_RUNTIME_REQUIRED,
+        }
+    ):
+        kwargs["return_meta"] = return_meta
+        return _fetch_kiwoom_api_continuous_transport(**kwargs)
+    frozen_payload = deepcopy(payload)
+    kwargs["payload"] = frozen_payload
+    scope = {
+        "url": url,
+        "token_digest": hashlib.sha256(
+            str(resolve_kiwoom_request_token(token)).encode()
+        ).hexdigest(),
+        "api_id": api_id,
+        "payload": frozen_payload,
+        "date": datetime.now(_KST).date().isoformat(),
+        "request_class": request_class,
+        "request_code": request_code,
+        "max_retries": max_retries,
+        "use_continuous": use_continuous,
+        "max_pages": max_pages,
+        "request_timeout": request_timeout,
+        "read_rate_max_wait_sec": read_rate_max_wait_sec,
+        "coordinator": id(read_rate_coordinator or _DEFAULT_KIWOOM_READ_COORDINATOR),
+    }
+    key = hashlib.sha256(
+        json.dumps(scope, sort_keys=True, allow_nan=False).encode()
+    ).hexdigest()
+    default_wait = (
+        DEFAULT_SOURCE_ONLY_MAX_WAIT_SEC
+        if request_class == REQUEST_CLASS_SOURCE_ONLY
+        else DEFAULT_REQUIRED_MAX_WAIT_SEC
+    )
+    wait_sec = (
+        default_wait
+        if read_rate_max_wait_sec is None
+        else float(read_rate_max_wait_sec)
+    )
+    try:
+        (results, meta), joined, elapsed = _MARKET_READ_SINGLE_FLIGHT.run(
+            key,
+            lambda: _fetch_kiwoom_api_continuous_transport(**kwargs),
+            wait_sec=wait_sec,
+        )
+    except MarketReadJoinDeferred as exc:
+        results, meta = [], _empty_kiwoom_source_meta(api_id)
+        meta.update(
+            {
+                "read_rate_control_status": "deferred",
+                "read_rate_control_reason": str(exc),
+                "read_singleflight_status": "deferred",
+                "read_singleflight_caller_http_attempt_count": 0,
+                "request_owner": str(request_owner or f"kiwoom_utils.{api_id}"),
+                "request_class": request_class,
+                "request_pid": os.getpid(),
+                "request_code": str(
+                    request_code
+                    or payload.get("stk_cd")
+                    or payload.get("upjong_cd")
+                    or "not_applicable"
+                ),
+            }
+        )
+        return (results, meta) if return_meta else results
+    meta.update(
+        {
+            "read_singleflight_status": "joined" if joined else "owner",
+            "read_singleflight_waited_sec": round(elapsed, 6) if joined else 0.0,
+            "read_singleflight_caller_http_attempt_count": (
+                0 if joined else meta.get("request_attempt_count", 0)
+            ),
+            "transport_request_owner": meta.get("request_owner"),
+            "request_owner": str(request_owner or f"kiwoom_utils.{api_id}"),
+        }
+    )
+    return (results, meta) if return_meta else results
+
+
+def _fetch_kiwoom_api_continuous_transport(
     url: str,
     token: str,
     api_id: str,
@@ -5476,6 +5655,7 @@ def get_investor_period_total_ka10061(
         str(trde_tp),
         str(unit_tp),
     )
+    cache_key = (_market_data_cache_scope(token), cache_key)
     cached = _cache_get("ka10061_investor_period_total", cache_key)
     if cached is not None:
         return cached
@@ -5536,6 +5716,7 @@ def get_intraday_investor_trade_ka10063(
         str(smtm_netprps_tp),
         str(stex_tp),
     )
+    cache_key = (_market_data_cache_scope(token), cache_key)
     cached = _cache_get("ka10063_intraday_investor_trade", cache_key)
     if cached is not None:
         return cached
@@ -5588,6 +5769,7 @@ def get_intraday_investor_chart_ka10064(
     """[ka10064] 종목별 장중 외인/기관 매매 차트 최신값."""
     req_code = get_effective_kiwoom_code(code, is_nxt=is_nxt)
     cache_key = (str(req_code), str(market_tp), str(amt_qty_tp), str(trde_tp))
+    cache_key = (_market_data_cache_scope(token), cache_key)
     cached = _cache_get("ka10064_intraday_investor_chart", cache_key)
     if cached is not None:
         return cached
@@ -5629,6 +5811,7 @@ def get_postclose_investor_trade_ka10066(
 ):
     """[ka10066] 장마감 후 투자자별 매매 목록."""
     cache_key = (str(market_tp), str(amt_qty_tp), str(trde_tp), str(stex_tp))
+    cache_key = (_market_data_cache_scope(token), cache_key)
     cached = _cache_get("ka10066_postclose_investor_trade", cache_key)
     if cached is not None:
         return cached
