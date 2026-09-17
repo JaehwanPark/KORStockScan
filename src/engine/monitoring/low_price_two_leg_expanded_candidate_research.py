@@ -1056,6 +1056,7 @@ class _DayStateCheckpoint:
         self.incoming_sha, self.days = _canonical_digest(None), {}
         self.dirty, self.write_disabled = False, False
         self.native_cpu = 0.0
+        self.probe_started, self.probe_aborted = None, False
 
     def _candidate(self, key):
         from src.engine.monitoring.research_cache_storage import read
@@ -1091,10 +1092,25 @@ class _DayStateCheckpoint:
         self.previous_day, self.incoming_sha = None, _canonical_digest(None)
 
     def __call__(self, candidate, context, carried):
+        if self.probe_aborted:
+            return _advance_candidate_day(candidate, context, carried)
         key = self.candidate_keys.get(candidate)
         if key is None:
             key = self.candidate_keys[candidate] = _canonical_digest(candidate.public())
         if key != self.current:
+            # Probe one existing 16-candidate page, not the entire grid.
+            # A useful warm cache is retained; cheap cold replay avoids I/O.
+            if (
+                self.probe_started is not None
+                and len(self.ordinals) == 16
+                and self.stats.get("day_hit", 0) < self.stats.get("day_replay", 0)
+            ):
+                self.flush()
+                elapsed = time_module.process_time() - self.probe_started
+                if self.native_cpu < max(0.0, elapsed - self.native_cpu):
+                    self.probe_aborted = True
+                    self.stats["probe_aborted_fast_reference"] = 1
+                    return _advance_candidate_day(candidate, context, carried)
             self._candidate(key)
         day = context.trade_date.isoformat()
         if self.previous_day is None or day <= self.previous_day:
@@ -1348,6 +1364,7 @@ def _select_profile_checkpoint(
             )
         else:
             probe_started = time_module.process_time()
+            transitions.probe_started = probe_started
             with day_replay_scope(transitions):
                 result = select_profile_spot(
                     profile,
@@ -1358,7 +1375,9 @@ def _select_profile_checkpoint(
             total = time_module.process_time() - probe_started
             # Only compute-path selection: no opportunity, candidate, sample,
             # policy or authority changes. Cheap native replay avoids cache overhead.
-            enabled = transitions.native_cpu >= max(0.0, total - transitions.native_cpu)
+            enabled = not transitions.probe_aborted and transitions.native_cpu >= max(
+                0.0, total - transitions.native_cpu
+            )
             _write_profile_checkpoint(
                 strategy_path,
                 dict(
@@ -1573,7 +1592,11 @@ def build_report(
     checkpoint_stats: dict[str, int] = {}
     phase_totals = {
         name: {"wall_seconds": 0.0, "cpu_seconds": 0.0}
-        for name in ("profile_source_binding", "profile_selection", "profile_enrichment")
+        for name in (
+            "profile_source_binding",
+            "profile_selection",
+            "profile_enrichment",
+        )
     }
     for profile_id, profile in selected_profiles.items():
         observation_contract = _operator_observation_contract(profile)

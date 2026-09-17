@@ -191,3 +191,8 @@ C0–C8/P1–P6은 이번 source 변경과 기존 producer/consumer에 연결했
 사용자 승인 순서대로 C7 native mature revision 폐기/verified carry 차단과 C4 paired fixed-allocator incumbent 비교를 보완했다. P3 state-boundary checkpoint는 원 rolling HELD 의미를 유지한다. 작은 fixture에서는 cache overhead가 커 measured backend selection으로 빠른 기존 replay를 사용한다. 따라서 모든 경로의 unchanged-day replay0/전체 CPU50%는 OPEN이며 optional cache 유무로 admission/grid/표본을 바꾸지 않는다. P6은2GiB/10GiB reserve와 live/run/reference pin을 적용한 optional-only LRU metadata index다. 원천·정책·receipt retention을 변경하지 않는다. 최신 source gate·규모 실측·실제 배포/PID와 자연 acceptance 구분은 [잔여 구현 기록](../audit-reports/2026-09-17-widget-episode-closed-loop-completion.md)을 따른다.
 
 최종 후속 receipt: selected/pushedfdc28f25,17:39:32 KST 관련4 reader active·actualC6 widget3/episode3 consumed·main780712 유지. Native 규모 N100D120은87완료/13fixture backlog·5400초 budgetdeferred로 성능 acceptance 미달이다. Universal day-replay0/overallCPU50%/swap0와 자연 신규 정책·실제 수익은 기존 OPEN acceptance이며 source closure와 구분한다. 상세 gate/byte equivalence/source provenance는 위 잔여 구현 기록을 따른다.
+
+
+### 제한된 검증과 cold-probe 보완
+
+사용자 후속 지시에 따라 기존 episode16-candidate page만 초기 cache backend를 probe하고 overhead가 크면 나머지 전수 grid를 native fast-reference로 평가한다. 추가 production module/job/benchmark는 만들지 않는다. 검증은 episode3 native templates×46일·widget2종목×32일 및 warm/하루 append로 제한했고 원 grid·비용·보유 상태·qualified calendar와 승격 floor는 유지한다. Large synthetic 조건의 미달/미검증 기록은 이전 receipt로 보존하며 이번 source 배포·기동을 위한 추가 필수 gate로 확대하지 않는다. 자연 신규 정책 소비와 실제 수익 검증은 기존 두 OPEN owner를 유지한다. 디스크 정리·검증·최종 실제 source/PID는 [후속 기록](../audit-reports/2026-09-17-widget-episode-closed-loop-completion.md#bounded-cold-probe-follow-up)을 따른다.

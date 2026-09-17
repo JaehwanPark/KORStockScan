@@ -1,0 +1,275 @@
+{
+  "actual_mature_economics": "waiting",
+  "disk_cleanup": {
+    "asof": "2026-09-17T17:48:24.171948",
+    "free_bytes_after": 24933728256,
+    "free_bytes_before": 23602634752,
+    "primary_market_research_policy_holding_deleted": false,
+    "protected_roots": [
+      "/home/ubuntu/KORStockScan",
+      "/home/ubuntu/KORStockScan'",
+      "/home/ubuntu/KORStockScan-runtime-releases",
+      "/home/ubuntu/KORStockScan-runtime-releases/entry-opportunity-census-profile-20260917",
+      "/home/ubuntu/KORStockScan-runtime-releases/entry-source-clock-scope-20260917",
+      "/home/ubuntu/KORStockScan-runtime-releases/intraday-entry-evidence-20260916-3e875fd0",
+      "/home/ubuntu/KORStockScan-runtime-releases/krx-aftermarket-sor-r2-20260914",
+      "/home/ubuntu/KORStockScan-runtime-releases/widget-episode-completion-r2-20260917",
+      "/home/ubuntu/KORStockScan-runtime-releases/widget-episode-completion-r6-20260917",
+      "/home/ubuntu/KORStockScan-runtime-releases/widget-episode-full-closed-loop-20260917",
+      "/home/ubuntu/KORStockScan-worktrees",
+      "/home/ubuntu/KORStockScan-worktrees/widget-episode-closed-loop-20260917",
+      "/home/ubuntu/KORStockScan-worktrees/widget-episode-remaining-20260917"
+    ],
+    "removed": [
+      {
+        "commit": "9031cb65f276ed7cbef189cab7eccf16e617b363",
+        "kind": "unused_release_removed_before_interrupted_cleanup",
+        "path": "/home/ubuntu/KORStockScan-runtime-releases/widget-episode-completion-r3-20260917",
+        "remote_recoverable": true,
+        "size_bytes": 73056256
+      },
+      {
+        "commit": "ced28dab8fa78106cbf70347b291bbda9f82e5a2",
+        "kind": "remote_recoverable_unused_release",
+        "path": "/home/ubuntu/KORStockScan-runtime-releases/tp1-bbo-boundary-20260914",
+        "remote_recoverable": true,
+        "size_bytes": 267960320
+      },
+      {
+        "commit": "c10def6eeaf8f8429d8da83e9144ebec36ea67be",
+        "kind": "remote_recoverable_unused_release",
+        "path": "/home/ubuntu/KORStockScan-runtime-releases/entry-opportunity-native-replay-r2-20260917",
+        "remote_recoverable": true,
+        "size_bytes": 86388736
+      },
+      {
+        "commit": "b49e7ecb2c74bad365ea7fe8432354c88218a4e0",
+        "kind": "remote_recoverable_unused_release",
+        "path": "/home/ubuntu/KORStockScan-runtime-releases/machine-fill-telegram-v2-20260911",
+        "remote_recoverable": true,
+        "size_bytes": 105414656
+      },
+      {
+        "commit": "80f96cfe2fa08f544fc711112f916e3caebcc103",
+        "kind": "remote_recoverable_unused_release",
+        "path": "/home/ubuntu/KORStockScan-runtime-releases/entry-opportunity-native-replay-20260917",
+        "remote_recoverable": true,
+        "size_bytes": 86147072
+      },
+      {
+        "commit": "cd8f75c4ed724fab344d360c61d379213c818b3e",
+        "kind": "remote_recoverable_unused_release",
+        "path": "/home/ubuntu/KORStockScan-runtime-releases/widget-episode-completion-r5-20260917",
+        "remote_recoverable": true,
+        "size_bytes": 76365824
+      },
+      {
+        "commit": "c7292edd70538ae37aa298aa0072b7f1d42e0916",
+        "kind": "remote_recoverable_unused_release",
+        "path": "/home/ubuntu/KORStockScan-runtime-releases/widget-episode-completion-r4-20260917",
+        "remote_recoverable": true,
+        "size_bytes": 72601600
+      },
+      {
+        "commit": "48885ca0e7ae1dfae291195d5e24491fa37c6aa6",
+        "kind": "remote_recoverable_unused_release",
+        "path": "/home/ubuntu/KORStockScan-runtime-releases/widget-episode-completion-20260917",
+        "remote_recoverable": true,
+        "size_bytes": 61628416
+      },
+      {
+        "commit": "c4e5e899719b498b7593aea487e265b82ea8c470",
+        "kind": "remote_recoverable_unused_release",
+        "path": "/home/ubuntu/KORStockScan-runtime-releases/postclose-cycle-phases-20260917",
+        "remote_recoverable": true,
+        "size_bytes": 79962112
+      },
+      {
+        "kind": "dead_optional_synthetic_cache",
+        "path": "/home/ubuntu/KORStockScan/tmp/completion-scale-latest-r2-120-cache",
+        "size_bytes": 494985216
+      },
+      {
+        "kind": "dead_optional_synthetic_cache",
+        "path": "/home/ubuntu/KORStockScan/tmp/completion-scale-latest-r2-72-cache",
+        "size_bytes": 60018688
+      },
+      {
+        "commit": "b26bda3e1fac63c8eeb41426c591aa76a5e7fe53",
+        "kind": "remote_recoverable_unused_worktree",
+        "path": "/home/ubuntu/KORStockScan-worktrees/qty-policy-repair-20260912",
+        "size_bytes": 231858176
+      }
+    ],
+    "removed_allocated_bytes": 1696387072,
+    "schema": "widget_episode_authorized_disk_cleanup_v1"
+  },
+  "episode": {
+    "actual_order_submitted": false,
+    "allowed_runtime_apply": false,
+    "broker_order_forbidden": true,
+    "completed_symbol_count": 3,
+    "fixture": "native_templates_synthetic_390_bars_no_broker_or_policy_acceptance",
+    "measurements": {
+      "append_N3_D47": {
+        "candidate_compute_cpu_seconds": 1.3441126729999997,
+        "candidate_compute_wall_seconds": 6.734468444999948,
+        "canonical_original_parity": true,
+        "checkpoint": {
+          "miss": 3
+        },
+        "day_transitions": {
+          "cache_disabled_fast_reference": 2,
+          "day_replay": 496,
+          "probe_aborted_fast_reference": 1
+        },
+        "digest": "c119848b163d523c55902ccce2869cfe51364ac0fecf7840bec93e5fadf30e3d",
+        "native_grid_sizes": [
+          270,
+          5940
+        ],
+        "native_grid_total": 6480,
+        "peak_rss_kib": 225472,
+        "remote_requests": 0,
+        "separate_preparation_cpu_seconds": 0.7943882139999987,
+        "separate_reference_cpu_seconds": 3.318584076999999
+      },
+      "cold_N3_D46": {
+        "candidate_compute_cpu_seconds": 1.4619746510000002,
+        "candidate_compute_wall_seconds": 7.41828391499439,
+        "canonical_original_parity": true,
+        "checkpoint": {
+          "miss": 3
+        },
+        "day_transitions": {
+          "day_replay": 1440,
+          "probe_aborted_fast_reference": 1
+        },
+        "digest": "7bd2f0108edbb9d417f254f3427b1a50c61680ec07f1323d07a726b01740be90",
+        "native_grid_sizes": [
+          270,
+          5940
+        ],
+        "native_grid_total": 6480,
+        "peak_rss_kib": 222668,
+        "remote_requests": 0,
+        "separate_preparation_cpu_seconds": 0.8799412750000004,
+        "separate_reference_cpu_seconds": 3.193547251000001
+      },
+      "warm_N3_D46": {
+        "candidate_compute_cpu_seconds": 0.040288286000000006,
+        "candidate_compute_wall_seconds": 0.20019570600561565,
+        "canonical_original_parity": true,
+        "checkpoint": {
+          "hit": 3
+        },
+        "day_transitions": {},
+        "digest": "7bd2f0108edbb9d417f254f3427b1a50c61680ec07f1323d07a726b01740be90",
+        "native_grid_sizes": [
+          270,
+          5940
+        ],
+        "native_grid_total": 6480,
+        "peak_rss_kib": 222668,
+        "remote_requests": 0,
+        "separate_preparation_cpu_seconds": 0.775907032000001,
+        "separate_reference_cpu_seconds": 0.0
+      }
+    },
+    "producer_sha256": "fba8fade23708b4d96923e219890fdd4f9335e1ab3b55336d24d3a33e0ddc642",
+    "reason": null,
+    "requested_scope": {
+      "days": 46,
+      "modes": [
+        "cold",
+        "warm",
+        "append"
+      ],
+      "symbols": 3
+    },
+    "runtime_effect": false,
+    "status": "complete",
+    "unprocessed_symbol_count": 0
+  },
+  "natural_new_policy_consumption": "waiting",
+  "schema": "widget_episode_bounded_probe_review_v1",
+  "scope": "offline synthetic bounded full native grids; no broker/publication authority",
+  "source_sha256": "5b3fe17490998b6a9299a532a53a945df0f41ea7116344fefa943b1b2a730dfc",
+  "validation": [
+    "218 passed in 41.47s",
+    "145 passed in 18.70s; suites overlap"
+  ],
+  "widget": {
+    "actual_order_submitted": false,
+    "allowed_runtime_apply": false,
+    "broker_order_forbidden": true,
+    "fixture": "deterministic_390_bars_per_symbol_day_sinusoid_v2",
+    "measurements": {
+      "append_N2_D33": {
+        "cache_hits": 49184,
+        "cache_misses": 3072,
+        "cache_write_skips": 0,
+        "candidate_digest": "64a5d51d12fa9810261fbab0cf39e5ed3a8434e08f698010effccc58c66bb326",
+        "caps": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "cpu_seconds": 2.4353364799999992,
+        "day_count": 33,
+        "grid": 1536,
+        "peak_rss_kib": 140556,
+        "remote_requests": 0,
+        "symbols": 2,
+        "wall_seconds": 12.194840856995143
+      },
+      "cold_N2_D32": {
+        "cache_hits": 0,
+        "cache_misses": 49184,
+        "cache_write_skips": 0,
+        "candidate_digest": "b20c9d68d308f4dc4952e46f5d70e5925452ed5994ff347c524d8df026bf753a",
+        "caps": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "cpu_seconds": 4.3461998799999995,
+        "day_count": 32,
+        "grid": 1536,
+        "peak_rss_kib": 139776,
+        "remote_requests": 0,
+        "symbols": 2,
+        "wall_seconds": 21.785312050000357
+      },
+      "warm_N2_D32": {
+        "cache_hits": 49184,
+        "cache_misses": 0,
+        "cache_write_skips": 0,
+        "candidate_digest": "b20c9d68d308f4dc4952e46f5d70e5925452ed5994ff347c524d8df026bf753a",
+        "caps": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "cpu_seconds": 2.217552554,
+        "day_count": 32,
+        "grid": 1536,
+        "peak_rss_kib": 140300,
+        "remote_requests": 0,
+        "symbols": 2,
+        "wall_seconds": 11.09668321499339
+      }
+    },
+    "populated": true,
+    "producer_sha256": "fba8fade23708b4d96923e219890fdd4f9335e1ab3b55336d24d3a33e0ddc642",
+    "runtime_effect": false,
+    "schema": "machine_research_closed_loop_v1",
+    "status": "complete"
+  }
+}

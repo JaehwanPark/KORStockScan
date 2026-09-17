@@ -441,3 +441,41 @@ def test_cheap_episode_cache_uses_measured_fast_reference_without_reducing_grid(
     assert actual == cold
     assert actual["grid_candidate_count"] == len(spot.candidate_grid(profile))
     assert stats == {"cache_disabled_fast_reference": 1}
+
+
+@pytest.mark.parametrize("mode", ["zero", "complete", "held"])
+def test_cold_probe_stops_after_one_page_and_keeps_entire_native_grid(
+    tmp_path, monkeypatch, mode
+):
+    from src.tests.test_low_price_two_leg_expanded_candidate_research import (
+        _selection_checkpoint_fixture,
+    )
+
+    profile, contexts = _selection_checkpoint_fixture(mode)
+    expected = spot.select_profile_spot(
+        profile, deepcopy(contexts), calibration_days=30, holdout_days=16
+    )
+    native = expanded._DayStateCheckpoint.__call__
+
+    def cheap(self, *args):
+        self.native_cpu = 0.0
+        return native(self, *args)
+
+    monkeypatch.setattr(expanded._DayStateCheckpoint, "__call__", cheap)
+    stats = {}
+    actual = expanded._select_profile_checkpoint(
+        profile,
+        deepcopy(contexts),
+        calibration_days=30,
+        cache_dir=tmp_path,
+        contract={"generation": "cold"},
+        day_stats=stats,
+    )
+    assert actual == expected
+    assert actual["grid_candidate_count"] == len(spot.candidate_grid(profile))
+    assert stats["probe_aborted_fast_reference"] == 1
+    assert stats["day_replay"] <= 16 * len(contexts)
+    assert (
+        loop.read_object(next(tmp_path.glob(".day_strategy_*.meta")))["enabled"]
+        is False
+    )

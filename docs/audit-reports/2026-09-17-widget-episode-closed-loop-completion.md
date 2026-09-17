@@ -81,3 +81,16 @@ Latest native episode first19 existing templates/G총30,780(270/810/1350/2700/29
 Actual native C6 receipt는 widget3종목005930/034020/042660, episode3프로필auto_028670_midday/auto_034020_midday/auto_111770_late_morning을 `consumed`, rejected0, import_root/cwd=release로 확인했다. 기존 검증된 incumbent 소비이며 새로운 prospective candidate 승격이나 신규 주문/실현이익 증명이 아니다. [Sanitized 실제 deployment/consumer receipt](../../data/runtime/widget_episode_completion_acceptance_2026-09-17.json)와 [규모/저장소 receipt](../../data/runtime/widget_episode_completion_scale_review_2026-09-17.json)가 source binding과 실제 scope를 소유한다.
 
 **잔여 acceptance:** N100D1205400초 미달/13fixture backlog·untested native 규모 조건, adaptive backend의 universal day-replay0/overallCPU50%, swap0·전체 cold baseline 이하가 OPEN이다. Lossless cold replay/whole-grid probe overhead 축소 후 동일 grid/source/자원으로 재검증한다. 오늘20:10 evaluation/21:15 final refresh는 배포 당시 not_yet_due이며 자연 신규 종목/정책10+16 widget·30+16 episode qualified calendar, next-date 실제 소비와 version 비용차감 EV/net profit은 기존2개 OPEN owner가 담당한다. Broad postclose regeneration/외부 sync/추가 main restart/직접 주문은 실행하지 않았다.
+
+
+### Bounded cold-probe follow-up
+
+사용자가 과도한 성능 검증과 불필요한 코드 확장을 금지한 후속 범위다. 기존 episode checkpoint의 초기 backend probe를 기존16-candidate page 하나로 제한했다. Cache 처리 CPU가 원 재생보다 크면 나머지 후보는 fast-reference로 끝까지 평가하며 useful warm cache는 유지한다. 신규 module/collector/job/benchmark와 영속 EV 통계는 추가하지 않았다. 원 grid/calendar/비용/수량/holding alias/승격 floor 및 주문·custody·safety 계약은 그대로다. Prefix proof 없는 raw delta는 기존 full fallback을 유지한다.
+
+관련3-suite218 PASS/41.47초와 추가 quote/runtime/closed-loop6-suite145 PASS/18.70초(일부 중복)를 확인했다. 추가 회귀는 미진입·청산·보유 상태에서 probe 중단 이후에도 전수 후보 수와 원 선정/경제성 동일함을 검증한다. Self review → supplemental fix → re-review에서 범위 내 미해결 finding0. Ruff F,E9/compile/diff-check와 print-only parser를 적용하며 큰 규모 조건을 반복하지 않는다.
+
+기존 offline fixture를 CPUQuota20%/MemoryMax512MiB/Nice19로 제한했다. Episode3 native templates,46일/append47일, G총6,480: cold compute wall7.418초/CPU1.462초, warm0.200초/0.040초, append6.734초/1.344초. 원본 canonical parity와 full grid를 확인했다. 별도 original comparison CPU3.194/0/3.319초에는 deepcopy가 포함되므로 순수 재생 대비 감소율로 주장하지 않는다. RSS최대225,472KiB·remote0. Widget2종목,32일/append33일, G1536/cap1–5: cold21.785초/CPU4.346초, warm11.097초/2.218초, append12.195초/2.435초. Warm49,184hit/miss0·cold/warm digest 동일, append49,184hit/신규3,072miss·write-skip0·RSS140,556KiB·remote0. Widget CLI 최소 fixture 기간32일을 따르며 실제 widget10+16/episode30+16 qualified calendar를 줄인 것이 아니다. 전체 시장 native/source acquisition/publication throughput이나100종목 deadline/무조건 replay0/swap0 달성을 추정하지 않는다.
+
+종료된 optional synthetic cache2개, 사용되지 않는 원격 복구 가능 배포본9개, 작업본1개를 삭제해 allocated1.580GiB를 확보했다. 삭제 시 현재/이전 selector·실제 PID·effective systemd/EnvironmentFiles·dirty/untracked source·원격 복구 가능 여부를 확인했다. 고유 변경/설정이 있거나 원격 Git-tree 원본과 같다고 증명할 수 없는 복사본은 보존했다. 원천 시장/연구 데이터·정책·holding/receipt/운영 권한 파일은 삭제하지 않았다. 신규 배포본은 하나만 만들고 현재 release는 rollback으로 보존한다.
+
+Source commit/push와 actual release/PID 기동 receipt는 아래 배포 완료 후 기록한다. 기존 두 stable owners의 자연20:10/21:15 생성·다음 날짜 신규 정책 소비·실제 비용차감 EV/net profit은 계속 OPEN이다.

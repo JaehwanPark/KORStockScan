@@ -210,3 +210,8 @@ Timing은 cycle 진단 receipt에만 넣고 rolling/R3 후보 본문·정책 선
 - O1은 기존 exact 완료 checkpoint/호출 reservation·budget 및 local reader 공유를 유지한다. 추가 transport 최적화/모델 변경은 이번에 하지 않는다. Whole endpoint 계측·확대 규모 matrix는 기능 gate가 아니므로 추가 synthetic 규모 시험을 하지 않고 다음 정상 장후의 기존 phase/resource receipt로 관찰한다.
 
 현재 실행 owner는 기존 checklist ID를 유지한다. 정책 생성/자동 publish/PREOPEN·actual PID 소비와 자연 비용차감 EV·순익은 code/parity PASS와 별개이며, 다음 정상 장후에 기존 consumer의 generation/terminal·자연 성능을 확인한다. Entry machine/compact AI·가격·수량/leg·scale-in/custody 및 hard/broker guard·sample floor/자동 선정 권한은 변경하지 않는다.
+
+
+### 제한된 검증과 cold-probe 보완
+
+사용자 후속 지시에 따라 기존 episode16-candidate page만 초기 cache backend를 probe하고 overhead가 크면 나머지 전수 grid를 native fast-reference로 평가한다. 추가 production module/job/benchmark는 만들지 않는다. 검증은 episode3 native templates×46일·widget2종목×32일 및 warm/하루 append로 제한했고 원 grid·비용·보유 상태·qualified calendar와 승격 floor는 유지한다. Large synthetic 조건의 미달/미검증 기록은 이전 receipt로 보존하며 이번 source 배포·기동을 위한 추가 필수 gate로 확대하지 않는다. 자연 신규 정책 소비와 실제 수익 검증은 기존 두 OPEN owner를 유지한다. 디스크 정리·검증·최종 실제 source/PID는 [후속 기록](../audit-reports/2026-09-17-widget-episode-closed-loop-completion.md#bounded-cold-probe-follow-up)을 따른다.
