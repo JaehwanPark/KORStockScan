@@ -158,3 +158,10 @@ Supplemental review에서 spawn 실패 계측 누락, cache 위치/크기 bound,
 - Selector lock·동시 변경 compare-before-publish 아래 **14:39:32.863624 KST** 선택. Cron9·당일 postclose/start print-plan PASS. Offline helper만 변경하여 main PID501022/실제5ca24599 cwd와 병행 세션이 새로 반영한 독립 trader553146·episode553117·runtime collector553143·research collector553239의 CF root/active 상태를 유지했다. Main `actual_pid_consumed=false`; 기동 가능 routing과 실제 새 PID 소비를 구분한다. 재기동·env/dated policy·Provider/model·주문/수량/leg/custody를 변경하지 않았다.
 - Broker **14:36:33.721803 사전→14:39:38.727473 사후** KRX/NXT complete·삼성005930 25주/매수가269471·미체결0 동일, registry `46fe3ef3…`/env `65121195…`/dated machine policy `395a9447…` SHA 동일·strict env/PID PASS(mismatch/missing0). 이는 이 배포 구간의 관측이며 이전 구간의 registry 변경을 소급 취소하지 않는다. Validation `data/runtime/runtime_release_validation/postclose-day-low-facts-r2-20260917-f36fef8b.json`.
 - 본 범위 최종 finding0·코드/예정 자동 경로 연결은 닫혔으나 자연 장후 fact/cache 소비→artifact→tower/checklist/strict/controller/finalization은 **not_yet_due**, 신규 정책 및 비용차감 EV/순익은 미관측이다. 조건을 과도하게 늘리지 않고 기존 선정/승격 guard를 유지했다. 전체 계획 잔여·경제성 acceptance는 기존 stable-ID OPEN에 남기며 전체 구현 완료로 보고하지 않는다.
+
+
+## 21. 병행 릴리스 successor·현재 PID 최종 관측
+
+- 14:41:15 병행 세션이 본 f36fef8b를 predecessor로 보존한 `opportunity-clock-evidence-20260917`/`7ffe30de34540e979ac2d830c7be4a319b6782db`를 선택하고 14:41:46.755588 main PID575313의 cwd/commit receipt를 발급했다. 최종 selector 동등성 검사의 assertion은 이 successor 교체로 실패했으며 본 selected를 강제로 복구하지 않았다. Successor source-clean·helper SHA `40568bd5…` 동일, closure `code_contract()` **24개 source 전수 diff0**을 확인했다. 예정 두 unit은 f36fef8b root에 남지만 동일 code contract이므로 현재 receipt validation과 호환된다. 불필요한 repin/재기동은 추가하지 않았다.
+- **14:42:44.966510 KST** 현재 PID575313 strict env/PID PASS(mismatch/missing0), 양시장 complete·삼성25주/미체결0·registry/env/dated policy hash 동일. 독립 trader553146·episode553117은 CF root를 유지하고, 병행 세션의 collector574765/574949는 successor root/active다. 이번 세션에서 새 매매/collector 기동을 실행한 것으로 귀속하지 않는다. 과거14:39:32 배포 당시 PID 유지 receipt와 현재 상태를 별도로 보존한다.
+- 현재 PID의 successor 코드 반영은 확인됐지만 offline day-low 함수의 자연 장후 실행/경제성은 여전히 not_yet_due/미관측이다. §19 fixture·787 PASS·본 scope finding0만 완료이며 전체 계획 잔여를 닫지 않는다.
