@@ -146,8 +146,8 @@ def run(
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--symbols", type=int, default=100)
-    parser.add_argument("--days", type=int, default=120)
+    parser.add_argument("--symbols", type=int, default=3)
+    parser.add_argument("--days", type=int, default=46)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--cache", type=Path)
     parser.add_argument("--populated", action="store_true")
@@ -157,9 +157,9 @@ def main(argv=None):
         choices=("cold", "warm", "append"),
         default=["cold", "warm", "append"],
     )
-    parser.add_argument("--compute-budget-sec", type=int, default=5400)
+    parser.add_argument("--compute-budget-sec", type=int, default=300)
     args = parser.parse_args(argv)
-    if args.symbols < 1 or args.days < 32:
+    if args.symbols < 1 or args.days < 32 or args.compute_budget_sec <= 0:
         raise ValueError("benchmark_fixture_shape_invalid")
     with tempfile.TemporaryDirectory(prefix="research-scale-") as temporary:
         receipt = run(

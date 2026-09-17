@@ -283,6 +283,13 @@ Supplemental review에서 spawn 실패 계측 누락, cache 위치/크기 bound,
 - Managed **c4e5e899719b498b7593aea487e265b82ea8c470** push·**17:17:09.516823 KST** 기존 selectorSHA/최고pin/PID780712cwd/activewrapper0/unitinactive/sharedsyms/sourceclean 확인 후 selector·예정2pin 동일root publish. Cron9/09-17postclose·09-18PREOPEN/start print-plan PASS·timer20:10/21:15 active·resource200ms/512MiB/2GiB 유지. 본 세션 매매재기동0·실제PID780712/67da0cc7 유지·새 offline code PID 소비false. 17:17:16 양시장complete/삼성25/미체결0/strictPIDenvPASS/registry·runtimeenv·datedmachinepolicy3hash 불변. 자체 rollout 검토에서 predecessor review/backup metadata 잔존을 발견해 current selector lock 아래 이번 source/test/backup 정보로 정정했다. 원래 predecessor evidence는 별도 필드로 보존했다.
 - [최종 receipt](../../data/runtime/runtime_release_validation/postclose-cycle-phases-20260917-c4e5e899.json). 기대효과는 실제 병목의 가시성이다. Child CPU/Provider transport 세부/읽기byte·row 및전체규모·자연소비·경제성은 미측정/OPEN이며 정책승격/기동 성능gate를 추가하지 않았다. 다른 세션P3 source의 별도 release/실제 소비·규모 회귀를 잔여 owner에서 확인한다. Prefix proof 없는 raw delta는 full fallback 유지, EV영속 충분통계·whole O0/O1 미완료를 숨기지 않는다.
 
+## 36. Widget day-cache 공통 reader 통합·적정 검증 범위
+
+- 최신 source-clock 릴리스552152a5/메인 PID871393을 predecessor로 확인하며 다른 세션 변경을 보존한다. 위젯 ReplayContext가 별도 read_bytes/JSON decode를 사용하여 optional null/list payload와 RecursionError를 source failure처럼 전파할 수 있었다. 이전 함수만 process-local로 재구성한 회귀에서5건 중4 FAIL/1 PASS로 실제 결함을 재현했고 repository source를 되돌리지 않았다.
+- 기존 stable/bounded/pinned compressed reader를 소비하고 payload/results object와 checksum을 검증한다. 손상/recursion/읽는 중 변경은 optional miss이며 전수 native replay로 복구한다. Required raw/source-quality/정책/비용 검증·owner·선정/holdout/자동 apply·broker safety는 그대로다. 새 module/collector/job을 만들지 않는다.
+- Offline widget/episode engineering 기본값만3종목×46일/각 compute phase300초로 조정했다. 실운영 universe/calendar/grid/floor는 축소하지 않으며 N100/D120 시험·Provider 호출·장후 선행 중복 실행을 하지 않는다. CLI 기본값/음수 예산 회귀는 mock으로 확인하고 실제 전체 규모 통과를 주장하지 않는다.
+- 검증/배포는 진행 중이다. 예정 evaluation/final-refresh의 inactive/MainPID0는 아직 자연 실행 성공이 아니다. 신규 정책/actual next-date 소비/비용 차감 순익은 기존 stable owner의 OPEN을 유지한다.
+
 ## 35. P3 잔여 배포 연결과 선택적 cache 예외 최소 보완
 
 - 과도한 성능 시험/불필요한 코드 확장 금지에 따라 새로운 benchmark/production module/collector/job을 추가하지 않았다. 기존 main의 P3 state-boundary/partition·C7 original revision feedback·C4 fixed-allocator paired evidence를 clean 작업본에서 대사해 장후 release 연결을 준비했다. Day/candidate state와 rolling window를 분리하고 source/helper/tick/cost/profile hash·HELD custody alias·전수 grid/동률·reference fallback/optional byte cap·live pins를 검토했다. Entry/compact AI/가격/수량·leg/scale-in·broker/hard guard와 자동 선정 권한은 그대로다.

@@ -1464,3 +1464,39 @@ def test_scale_cli_honors_phase_and_compute_budget(tmp_path, monkeypatch):
         )
         == 75
     )
+
+
+def test_scale_cli_defaults_are_bounded_not_full_expansion(tmp_path, monkeypatch):
+    from src.engine.monitoring import research_scale_benchmark as benchmark
+
+    def bounded_run(symbol_count, day_count, cache, output, **options):
+        assert (symbol_count, day_count) == (3, 46)
+        assert options["modes"] == ("cold", "warm", "append")
+        assert options["compute_budget_sec"] == 300
+        return dict(status="complete")
+
+    monkeypatch.setattr(benchmark, "run", bounded_run)
+    assert benchmark.main(["--output", str(tmp_path / "receipt.json")]) == 0
+
+
+@pytest.mark.parametrize("budget", ["0", "-1"])
+def test_scale_cli_rejects_nonpositive_budget_before_compute(tmp_path, monkeypatch, budget):
+    from src.engine.monitoring import research_scale_benchmark as benchmark
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("invalid fixture budget must not start replay")
+
+    monkeypatch.setattr(benchmark, "run", forbidden)
+    with pytest.raises(ValueError, match="benchmark_fixture_shape_invalid"):
+        benchmark.main(["--output", str(tmp_path / "receipt.json"), "--compute-budget-sec", budget])
+
+
+def test_episode_scale_cli_defaults_are_bounded(tmp_path, monkeypatch):
+    from analysis.benchmarks import widget_episode_incremental_scale as benchmark
+
+    def bounded_run(symbols, days, output, cache, budget):
+        assert (symbols, days, budget) == (3, 46, 300)
+        return dict(status="complete")
+
+    monkeypatch.setattr(benchmark, "run", bounded_run)
+    assert benchmark.main(["--output", str(tmp_path / "receipt.json")]) == 0
