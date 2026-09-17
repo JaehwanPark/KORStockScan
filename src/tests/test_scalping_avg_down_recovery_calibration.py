@@ -1,9 +1,33 @@
 import json
+import os
 from pathlib import Path
 
 import pytest
 
 from src.engine.monitoring import scalping_avg_down_recovery_calibration as mod
+
+
+def test_replay_source_identity_detects_same_size_rewrite_and_atomic_replacement(
+    tmp_path,
+):
+    path = tmp_path / "pipeline_events_2026-09-16.jsonl"
+    path.write_text('{"price":1}\n')
+    before = mod._replay_source_files([path])
+    original = path.stat()
+    path.write_text('{"price":2}\n')
+    os.utime(path, ns=(original.st_atime_ns, original.st_mtime_ns))
+    rewritten = mod._replay_source_files([path])
+    assert before != rewritten
+    replacement = tmp_path / "replacement.jsonl"
+    replacement.write_text('{"price":2}\n')
+    os.utime(replacement, ns=(original.st_atime_ns, original.st_mtime_ns))
+    replacement.replace(path)
+    replaced = mod._replay_source_files([path])
+    assert rewritten != replaced
+    assert replaced == mod._replay_source_files([path])
+    for value in (before, rewritten, replaced):
+        binding = next(iter(next(iter(value.values())).values()))
+        assert binding[:2] == [original.st_size, original.st_mtime_ns]
 
 
 @pytest.fixture(autouse=True)

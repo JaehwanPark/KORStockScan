@@ -1,4 +1,5 @@
 from copy import deepcopy
+import os
 from datetime import datetime
 from types import SimpleNamespace
 
@@ -415,6 +416,14 @@ def test_production_string_fields_roundtrip_through_logger_and_report(
     assert reused["cached_episode_count"] == 1
     assert reused["complete_episode_count"] == 1
     assert reused["policy_ai_provider_call_count"] == 0
+    # A physical correction invalidates replay reuse even with size/mtime
+    # preserved. Provider replies still require independent exact bindings.
+    metadata = paths[0].stat()
+    content = paths[0].read_bytes()
+    paths[0].write_bytes(content)
+    os.utime(paths[0], ns=(metadata.st_atime_ns, metadata.st_mtime_ns))
+    rewritten_cache, _, _, _ = calibration._load_replay_cache(paths)
+    assert rewritten_cache == {}
     # A newly appended source frame invalidates whole-result reuse, even if
     # the old file has not been replaced and the symbol/policy did not change.
     emit(

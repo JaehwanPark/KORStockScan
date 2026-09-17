@@ -10251,7 +10251,7 @@ def test_streaming_normalizes_once_per_row_with_full_contract_parity(
     """Frozen all-contract population: no grid/sample/semantic reduction."""
     raw = tmp_path / ("frozen.jsonl.gz" if compressed else "frozen.jsonl")
     rows = []
-    for index, stage in enumerate(audit.STAGE_CONTRACTS):
+    for index, stage in enumerate(sorted(audit.STAGE_CONTRACTS)):
         for fields in (
             {},
             {"source_quality_blocker": "unknown", "current_price": 0},
