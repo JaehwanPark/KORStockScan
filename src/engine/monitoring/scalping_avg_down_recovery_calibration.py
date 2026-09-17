@@ -826,6 +826,9 @@ def _replay_source_files(paths: list[Path]) -> dict:
         identity.setdefault(day, {})[str(path.absolute())] = [
             stat.st_size,
             stat.st_mtime_ns,
+            stat.st_dev,
+            stat.st_ino,
+            stat.st_ctime_ns,
         ]
     return identity
 
