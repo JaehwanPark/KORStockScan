@@ -1250,7 +1250,7 @@ def test_market_halt_window_artifact_is_not_gitignored():
     path = Path("data/source_quality/market_halt_windows/windows/2026-06-08.json")
     result = subprocess.run(
         ["git", "check-ignore", "-q", str(path)],
-        cwd=Path(__file__).resolve().parents[2],
+        cwd=audit.DATA_DIR.parent,
         check=False,
     )
 
@@ -1619,7 +1619,7 @@ def test_market_halt_session_events_artifact_is_gitignored():
     )
     result = subprocess.run(
         ["git", "check-ignore", "-q", str(path)],
-        cwd=Path(__file__).resolve().parents[2],
+        cwd=audit.DATA_DIR.parent,
         check=False,
     )
 
