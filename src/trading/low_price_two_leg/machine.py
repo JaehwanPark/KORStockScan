@@ -246,6 +246,9 @@ class LowPriceTwoLegMachine(SamsungRegularTwoLegMachine):
                     or "prior_state_custody_compatibility"
                 ),
                 runtime_policy_hash=str(features.get("runtime_policy_hash") or ""),
+                candidate_revision_sha256=str(
+                    features.get("candidate_revision_sha256") or ""
+                ),
             )
         except (TypeError, ValueError):
             return None
@@ -253,6 +256,23 @@ class LowPriceTwoLegMachine(SamsungRegularTwoLegMachine):
     def _bind_policy(self, policy) -> None:
         self.policy = policy
         self.leg_ids = tuple(policy.entry_leg_ids)
+
+    def _submit_planned_buys(self, now):
+        if not self.profile.entry_runtime_eligible and any(
+            leg.get("status") == "PLANNED" for leg in self._state.get("legs", [])
+        ):
+            self._state["blocked_reason"] = "exact_date_profile_entry_retired"
+            self._save()
+            return
+        return super()._submit_planned_buys(now)
+
+    def _consider_entry(self, now):
+        if not self.profile.entry_runtime_eligible:
+            self._state["last_action"] = "retired_entry_exit_custody_only"
+            self._state["blocked_reason"] = "exact_date_profile_entry_retired"
+            self._save()
+            return self.snapshot()
+        return super()._consider_entry(now)
 
     def run_once(self, now: datetime | None = None) -> dict:
         now = (now or datetime.now(tz=KST)).astimezone(KST)

@@ -352,8 +352,8 @@ def _source_quality_preflight(target_date: str, source_quality_dir: Path) -> dic
 def _empty_row(profile_id: str, target_date: str, reason: str) -> dict:
     return {
         "profile_id": profile_id,
-        "symbol": PROFILES[profile_id].symbol,
-        "session": PROFILES[profile_id].session,
+        "symbol": PROFILES[profile_id].symbol if profile_id in PROFILES else "",
+        "session": PROFILES[profile_id].session if profile_id in PROFILES else "",
         "target_date": target_date,
         "source_quality": "gap",
         "source_quality_reasons": [reason],
@@ -380,6 +380,8 @@ def _pre_operational_row(profile_id: str, target_date: str) -> dict:
 
 
 def _profile_was_operational(profile_id: str, target_date: date) -> bool:
+    if profile_id.startswith("auto_"):
+        return profile_id in _effective_report_profiles(target_date)
     return target_date >= PROFILE_FIRST_OPERATIONAL_DATES[profile_id]
 
 
@@ -839,7 +841,9 @@ def _sanitize_leg(raw: dict[str, Any], cost_pct: float) -> dict[str, Any]:
         else (
             "broker_target_fill_price"
             if completed and target_fill_price > 0
-            else "configured_target_price_proxy" if completed else "not_completed"
+            else "configured_target_price_proxy"
+            if completed
+            else "not_completed"
         )
     )
     net_profit_pct = (
@@ -879,7 +883,9 @@ def _sanitize_leg(raw: dict[str, Any], cost_pct: float) -> dict[str, Any]:
         "target_fill_timestamp_status": (
             "unavailable"
             if raw.get("target_filled_at") in (None, "")
-            else "observed" if target_filled_at is not None else "invalid"
+            else "observed"
+            if target_filled_at is not None
+            else "invalid"
         ),
         "exit_fill_source": exit_fill_source or None,
         # Preserve dated reconciliation evidence without inventing a fill time.
@@ -928,8 +934,9 @@ def extract_profile_row(
     target_date: str,
     cost_pct: float,
     applied_dir: Path = APPLIED_DIR,
+    profile=None,
 ) -> dict:
-    profile = PROFILES[profile_id]
+    profile = profile or PROFILES[profile_id]
     state = _read_json(state_path)
     if state is None:
         return _empty_row(profile_id, target_date, "state_missing_or_invalid")
@@ -962,7 +969,15 @@ def extract_profile_row(
         parsed_target_date = date.fromisoformat(target_date)
         applied_policy: dict[str, Any] | None = None
         applied_hash = ""
-        if parsed_target_date >= APPLIED_POLICY_PROVENANCE_REQUIRED_DATE:
+        if profile.policy.runtime_policy_source == "exact_date_auto_expansion_policy":
+            if (
+                features.get("runtime_policy_source")
+                != "exact_date_auto_expansion_policy"
+                or features.get("runtime_policy_hash")
+                != profile.policy.runtime_policy_hash
+            ):
+                reasons.append("exact_date_auto_expansion_policy_provenance_mismatch")
+        elif parsed_target_date >= APPLIED_POLICY_PROVENANCE_REQUIRED_DATE:
             applied_policy, applied_hash, applied_reason = load_applied_profile_policy(
                 profile_id,
                 target_date=parsed_target_date,
@@ -1481,7 +1496,7 @@ def _policy_windows(
 def _load_history(
     output_dir: Path, target_date: date, cost_pct: float
 ) -> dict[str, dict[str, dict]]:
-    target_profiles = profiles_for_target_date(target_date)
+    target_profiles = _effective_report_profiles(target_date)
     history: dict[str, dict[str, dict]] = {}
     for path in sorted(output_dir.glob(f"{REPORT_TYPE}_*.json")):
         raw_date = path.stem.removeprefix(f"{REPORT_TYPE}_")
@@ -1493,6 +1508,7 @@ def _load_history(
             continue
         if not is_krx_trading_day(report_date):
             continue
+        target_profiles = _effective_report_profiles(report_date)
         payload = _read_json(path)
         profiles = (payload or {}).get("daily", {}).get("profiles", {})
         if (
@@ -1511,11 +1527,21 @@ def _load_history(
                 for profile_id in target_profiles
             }
             continue
+        native_ids = set(target_profiles)
+        native_ids.update(
+            profile_id
+            for profile_id, row in profiles.items()
+            if isinstance(row, dict)
+            and profile_id.startswith("auto_")
+            and row.get("profile_id") == profile_id
+            and (row.get("signal_features") or {}).get("runtime_policy_source")
+            == "exact_date_auto_expansion_policy"
+        )
         history[raw_date] = {
             profile_id: _historical_profile_row(
                 profile_id, report_date, profiles, cost_pct
             )
-            for profile_id in target_profiles
+            for profile_id in sorted(native_ids)
         }
     return history
 
@@ -1559,6 +1585,26 @@ def _samsung_same_stage_owner(
     }
 
 
+def _effective_report_profiles(day):
+    profiles = profiles_for_target_date(day)
+    try:
+        from src.engine.automation.low_price_two_leg_auto_expansion_policy import (
+            load_policy,
+        )
+        from src.trading.low_price_two_leg.auto_expansion_service import _profile
+
+        payload = load_policy(day)
+        profiles.update(
+            {
+                key: _profile(value, authority_hash=payload["policy_hash"])
+                for key, value in payload["profiles"].items()
+            }
+        )
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return profiles
+
+
 def build_report(
     *,
     target_date: str,
@@ -1571,7 +1617,7 @@ def build_report(
     realized_pnl_loader: RealizedPnlLoader | None = None,
 ) -> dict:
     parsed_date = date.fromisoformat(target_date)
-    target_profiles = profiles_for_target_date(parsed_date)
+    target_profiles = _effective_report_profiles(parsed_date)
     expected_clean_dates = _clean_trading_dates_through(parsed_date)
     target_date_is_trading = is_krx_trading_day(parsed_date)
     if not math.isfinite(cost_pct) or not 0 <= cost_pct < 100:
@@ -1701,6 +1747,7 @@ def build_report(
             target_date=target_date,
             cost_pct=cost_pct,
             applied_dir=applied_dir,
+            profile=target_profiles[profile_id],
         )
     source_preflight = _source_quality_preflight(target_date, source_quality_dir)
     if not source_preflight["tuning_input_allowed"]:
@@ -1863,6 +1910,19 @@ def build_report(
         "actual_order_submitted": False,
         "decision": "profile_separated_actual_outcome_observation_only",
     }
+    from src.engine.monitoring.research_closed_loop import version_economics
+
+    native_version_rows = [
+        row for day in sorted(history) for row in history[day].values()
+    ]
+    report["policy_version_economics"] = version_economics(native_version_rows)
+    native_dates = sorted(history)
+    report["policy_version_rolling_last_30"] = version_economics(
+        [row for row in native_version_rows if row["target_date"] in native_dates[-30:]]
+    )
+    report["policy_version_holdout_last_16"] = version_economics(
+        [row for row in native_version_rows if row["target_date"] in native_dates[-16:]]
+    )
     report["artifact_hash"] = report_artifact_hash(report)
     return report
 

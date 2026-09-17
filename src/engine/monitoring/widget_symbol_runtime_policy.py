@@ -185,6 +185,7 @@ def _research_universe(
                 "established_widget_symbol",
                 "operator_enrolled_research_watch",
                 "completed_daily_recommendation_auto_discovery",
+                "causal_scanner_research_admission",
             }
             for origin in origins.values()
         )
@@ -397,11 +398,16 @@ def _observation_effective_at(
     return boundary.isoformat()
 
 
+CLOSED_LOOP_POLICY_SCHEMA = "widget_symbol_runtime_policy_v2"
+
+
 def build_policy(
     research: dict[str, Any],
     *,
     evidence_report_path: Path | None = None,
     legacy_observation_enrollment: bool = False,
+    reader_validation: bool = False,
+    incumbent_policy_dir: Path | None = None,
 ) -> dict[str, Any]:
     if (
         research.get("schema") not in SUPPORTED_RESEARCH_SCHEMAS
@@ -441,8 +447,20 @@ def build_policy(
         source_date >= date(2026, 9, 9) or quality_by_symbol is not None
     )
     quality_blocks: dict[str, str] = {}
+    from src.engine.monitoring import research_closed_loop as loop
+
+    closed_loop = research.get("closed_loop_contract") == loop.SCHEMA
+    joint_gate = (
+        loop.report_joint_gate(research, source_date=source_date)
+        if closed_loop
+        else None
+    )
+    if closed_loop and joint_gate != research.get("joint_allocation_gate"):
+        raise ValueError("widget_joint_allocation_reconstruction_mismatch")
     incumbent_by_symbol = (
-        WidgetSymbolRuntimePolicyLoader().resolve_all(observed_date=source_date)
+        WidgetSymbolRuntimePolicyLoader(
+            incumbent_policy_dir or DEFAULT_POLICY_DIR
+        ).resolve_all(observed_date=source_date)
         if source_date >= date(2026, 9, 17)
         else {}
     )
@@ -498,7 +516,33 @@ def build_policy(
                     "KRX_NXT_AFTERMARKET": "prospective_reference_seed_no_transferred_economics",
                 },
             }
-        if legacy_observation_enrollment and symbol in observation_symbols:
+        revision = (
+            result.get("candidate_revision") if isinstance(result, dict) else None
+        )
+        if closed_loop and revision is not None:
+            loop.validate_revision(revision, symbol=symbol, owner="widget")
+            frozen = (
+                revision
+                if reader_validation and loop.registered_revision(revision)
+                else loop.load_candidate(symbol)
+            )
+            if frozen != revision or revision["parameters"] != result.get(
+                "selected_policy"
+            ):
+                raise ValueError("widget_frozen_candidate_reconstruction_mismatch")
+            if symbol in observation_symbols:
+                observation_symbols[symbol].update(
+                    seed_id=revision["revision_sha256"],
+                    registered_at_kst=revision["frozen_at"],
+                    effective_at_kst=revision["calibration_dates"][0]
+                    + "T09:03:00+09:00",
+                    candidate_revision_sha256=revision["revision_sha256"],
+                )
+        if (
+            legacy_observation_enrollment
+            and symbol in observation_symbols
+            and not closed_loop
+        ):
             observation_symbols[symbol] = {"name": name, **observation}
         selected = _validated_selected_policy(result)
         if selected is None:
@@ -530,12 +574,43 @@ def build_policy(
                 for key in ("signal_policy", "execution_policy")
             )
             if not unchanged:
-                feasibility = signal_execution_feasibility(
-                    result,
-                    symbol=symbol,
-                    source_date=source_date,
-                    signal_policy=selected["signal_policy"],
-                    observation_dir=DEFAULT_OBSERVATION_DIR,
+                if source_date >= date(2026, 9, 17) and not closed_loop:
+                    quality_blocks[symbol] = "closed_loop_evidence_contract_missing"
+                    continue
+                if closed_loop and (joint_gate or {}).get("status") != "pass":
+                    quality_blocks[symbol] = "joint_allocation_blocked"
+                    continue
+                if closed_loop and revision is not None:
+                    prospective = result.get("prospective_window") or {}
+                    qualified = (
+                        (source_meta.get(symbol) or {}).get("daily_source_coverage")
+                        or {}
+                    ).get("qualified_dates", [])
+                    if (
+                        loop.prospective_window(
+                            revision, source_date=source_date, qualified_dates=qualified
+                        )
+                        != prospective
+                        or prospective.get("status") != "ready"
+                    ):
+                        quality_blocks[symbol] = "prospective_calendar_not_validated"
+                        continue
+                feasibility = (
+                    {
+                        "status": "pass"
+                        if loop.verified_execution_receipt(
+                            result.get("execution_feasibility") or {}
+                        )
+                        else "source_gap"
+                    }
+                    if reader_validation and closed_loop
+                    else signal_execution_feasibility(
+                        result,
+                        symbol=symbol,
+                        source_date=source_date,
+                        signal_policy=selected["signal_policy"],
+                        observation_dir=DEFAULT_OBSERVATION_DIR,
+                    )
                 )
                 if feasibility["status"] != "pass":
                     quality_blocks[symbol] = (
@@ -590,13 +665,57 @@ def build_policy(
                 "entry_cap_comparison": result.get("entry_cap_comparison"),
             },
         }
+    if closed_loop:
+        for symbol, incumbent in incumbent_by_symbol.items():
+            if symbol in symbols or symbol not in universe:
+                continue
+            quality = (quality_by_symbol or {}).get(symbol) or {}
+            if (
+                quality.get("schema") != "widget_execution_incidents_v1"
+                or quality.get("symbol") != symbol
+                or quality.get("owner") != EXECUTION_OWNER
+                or quality.get("session") != "KRX_REGULAR"
+                or quality.get("source_target_date") != str(source_date)
+                or quality.get("runtime_apply_allowed") is not True
+                or any(
+                    quality.get(key) != 0
+                    for key in (
+                        "source_gap_count",
+                        "unresolved_incident_count",
+                        "same_day_failure_event_count",
+                    )
+                )
+            ):
+                continue
+            try:
+                parent = loop.read_object(
+                    Path(incumbent["policy_path"]), limit=32 * 1024 * 1024
+                )
+                original = parent["symbols"][symbol]
+                symbols[symbol] = {
+                    **original,
+                    "selection_status": "verified_incumbent_carry",
+                    "parent_policy_content_sha256": incumbent["policy_content_sha256"],
+                    "candidate_revision_sha256": incumbent.get(
+                        "candidate_revision_sha256"
+                    ),
+                }
+            except (OSError, ValueError, KeyError, TypeError):
+                quality_blocks[symbol] = "verified_incumbent_parent_missing"
     return {
-        "schema": POLICY_SCHEMA,
+        "schema": CLOSED_LOOP_POLICY_SCHEMA if closed_loop else POLICY_SCHEMA,
+        **(
+            {"closed_loop_contract": loop.SCHEMA, "joint_allocation_gate": joint_gate}
+            if closed_loop
+            else {}
+        ),
         **({} if legacy_observation_enrollment else {"observation_catalog_version": 2}),
         "status": (
             "verified"
             if symbols
-            else "observation_only" if observation_symbols else "no_ready_policy"
+            else "observation_only"
+            if observation_symbols
+            else "no_ready_policy"
         ),
         "policy_version": (
             f"widget_symbol_runtime_policy_{effective_date.isoformat()}_"
@@ -605,7 +724,7 @@ def build_policy(
         "source_target_date": source_date.isoformat(),
         "effective_date": effective_date.isoformat(),
         "clean_tuning_baseline_date": CLEAN_BASELINE_DATE.isoformat(),
-        "evidence_report_path": str(evidence_path),
+        "evidence_report_path": str(evidence_path.resolve()),
         "evidence_report_sha256": _payload_sha256(research),
         "source_quality_status": "PASS",
         "official_reference": OFFICIAL_REFERENCE,
@@ -637,13 +756,24 @@ OBSERVATION_CATALOG_AUTHORITY = "prospective_exact_observation_only"
 
 
 def build_observation_catalog(
-    research: dict[str, Any], *, evidence_report_path: Path | None = None
+    research: dict[str, Any],
+    *,
+    evidence_report_path: Path | None = None,
+    reader_validation: bool = False,
+    incumbent_policy_dir: Path | None = None,
 ) -> dict[str, Any]:
-    expanded = build_policy(research, evidence_report_path=evidence_report_path)
+    expanded = build_policy(
+        research,
+        evidence_report_path=evidence_report_path,
+        reader_validation=reader_validation,
+        incumbent_policy_dir=incumbent_policy_dir,
+    )
     execution = build_policy(
         research,
         evidence_report_path=evidence_report_path,
         legacy_observation_enrollment=True,
+        reader_validation=reader_validation,
+        incumbent_policy_dir=incumbent_policy_dir,
     )
     return {
         **expanded,
@@ -680,7 +810,7 @@ class WidgetSymbolRuntimePolicyLoader:
             return {}
         if (
             not isinstance(payload, dict)
-            or payload.get("schema") != POLICY_SCHEMA
+            or payload.get("schema") not in {POLICY_SCHEMA, CLOSED_LOOP_POLICY_SCHEMA}
             or payload.get("status") != "verified"
             or payload.get("effective_date") != observed_date.isoformat()
             or payload.get("authority") != POLICY_AUTHORITY
@@ -715,8 +845,21 @@ class WidgetSymbolRuntimePolicyLoader:
         ):
             return {}
         try:
+            if payload.get("schema") == CLOSED_LOOP_POLICY_SCHEMA:
+                from src.engine.monitoring.research_closed_loop import (
+                    verify_publication,
+                )
+
+                verify_publication(
+                    self.policy_dir,
+                    effective_date=observed_date,
+                    name=path.name,
+                    value=payload,
+                )
             reconstructed = build_policy(
                 evidence,
+                reader_validation=payload.get("schema") == CLOSED_LOOP_POLICY_SCHEMA,
+                incumbent_policy_dir=self.policy_dir,
                 evidence_report_path=evidence_path,
                 legacy_observation_enrollment=payload.get("observation_catalog_version")
                 is None,
@@ -789,9 +932,21 @@ class WidgetSymbolRuntimePolicyLoader:
                 "symbol": symbol,
                 "name": universe[symbol],
                 "policy_id": str(payload["policy_version"]),
+                "policy_content_sha256": _payload_sha256(payload),
+                "closed_loop_contract": payload.get("closed_loop_contract"),
+                "joint_gate_sha256": _payload_sha256(
+                    payload.get("joint_allocation_gate")
+                ),
+                "candidate_revision_sha256": value.get("candidate_revision_sha256")
+                if value.get("selection_status") == "verified_incumbent_carry"
+                else (
+                    ((evidence.get("symbols") or {}).get(symbol) or {})
+                    .get("candidate_revision", {})
+                    .get("revision_sha256")
+                ),
                 "source_target_date": source_date.isoformat(),
                 "effective_date": observed_date.isoformat(),
-                "policy_path": str(path),
+                "policy_path": str(path.resolve()),
                 "signal_policy": normalized["signal_policy"],
                 "execution_policy": normalized["execution_policy"],
                 "authority": POLICY_AUTHORITY,
@@ -839,6 +994,20 @@ class WidgetSymbolRuntimePolicyLoader:
             or payload.get("source_quality_status") != "PASS"
         ):
             return {}
+        if payload.get("closed_loop_contract") is not None:
+            try:
+                from src.engine.monitoring.research_closed_loop import (
+                    verify_publication,
+                )
+
+                verify_publication(
+                    self.policy_dir,
+                    effective_date=observed_date,
+                    name=path.name,
+                    value=payload,
+                )
+            except (OSError, ValueError, TypeError):
+                return {}
         evidence_path = Path(str(payload.get("evidence_report_path") or ""))
         if not evidence_path.is_absolute():
             evidence_path = self.research_dir / evidence_path.name
@@ -858,7 +1027,12 @@ class WidgetSymbolRuntimePolicyLoader:
             return {}
         try:
             reconstructed = (
-                build_observation_catalog(evidence, evidence_report_path=evidence_path)
+                build_observation_catalog(
+                    evidence,
+                    evidence_report_path=evidence_path,
+                    reader_validation=bool(payload.get("closed_loop_contract")),
+                    incumbent_policy_dir=self.policy_dir,
+                )
                 if is_catalog
                 else build_policy(
                     evidence,
@@ -898,9 +1072,21 @@ class WidgetSymbolRuntimePolicyLoader:
                 "symbol": symbol,
                 "name": universe[symbol],
                 "policy_id": str(payload["policy_version"]),
+                "policy_content_sha256": _payload_sha256(payload),
+                "closed_loop_contract": payload.get("closed_loop_contract"),
+                "joint_gate_sha256": _payload_sha256(
+                    payload.get("joint_allocation_gate")
+                ),
+                "candidate_revision_sha256": value.get("candidate_revision_sha256")
+                if value.get("selection_status") == "verified_incumbent_carry"
+                else (
+                    ((evidence.get("symbols") or {}).get(symbol) or {})
+                    .get("candidate_revision", {})
+                    .get("revision_sha256")
+                ),
                 "source_target_date": source_date.isoformat(),
                 "effective_date": observed_date.isoformat(),
-                "policy_path": str(path),
+                "policy_path": str(path.resolve()),
                 **{
                     key: value.get(key)
                     for key in (
@@ -943,17 +1129,33 @@ def write_outputs(
         research,
         evidence_report_path=evidence_report_path,
         legacy_observation_enrollment=True,
+        incumbent_policy_dir=policy_dir,
     )
     catalog = build_observation_catalog(
-        research, evidence_report_path=evidence_report_path
+        research,
+        evidence_report_path=evidence_report_path,
+        incumbent_policy_dir=policy_dir,
     )
     effective_date = date.fromisoformat(policy["effective_date"])
     policy_path = policy_dir / f"{POLICY_PREFIX}_{effective_date.isoformat()}.json"
     catalog_path = (
         policy_dir / f"{OBSERVATION_CATALOG_PREFIX}_{effective_date.isoformat()}.json"
     )
-    _atomic_write(catalog_path, catalog)
-    _atomic_write(policy_path, policy)
+    if policy.get("schema") == CLOSED_LOOP_POLICY_SCHEMA:
+        from src.engine.monitoring.research_closed_loop import (
+            publication_transaction,
+            future_publication_parent,
+        )
+
+        publication_transaction(
+            policy_dir,
+            effective_date=effective_date,
+            files={policy_path.name: policy, catalog_path.name: catalog},
+            expected_generation=future_publication_parent(policy_dir, effective_date),
+        )
+    else:
+        _atomic_write(catalog_path, catalog)
+        _atomic_write(policy_path, policy)
     loaded = WidgetSymbolRuntimePolicyLoader(policy_dir).resolve_all(
         observed_date=effective_date
     )

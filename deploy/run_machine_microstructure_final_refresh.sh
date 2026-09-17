@@ -2,11 +2,12 @@
 
 set -u
 
-PROJECT_DIR="${KORSTOCKSCAN_PROJECT_DIR:-/home/ubuntu/KORStockScan}"
+SCRIPT_PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PROJECT_DIR="${KORSTOCKSCAN_PROJECT_DIR:-$SCRIPT_PROJECT_DIR}"
 PYTHON_BIN="${KORSTOCKSCAN_PYTHON_BIN:-$PROJECT_DIR/.venv/bin/python}"
 
 cd "$PROJECT_DIR" || exit 1
-export PYTHONPATH="${PYTHONPATH:-$PROJECT_DIR}"
+export PYTHONPATH="$PROJECT_DIR"
 
 if (($# > 1)); then
   printf 'usage: %s [YYYY-MM-DD]\n' "$0" >&2
@@ -72,6 +73,17 @@ else
   entry_timing_rc=0
 fi
 
+research_closure_rc=0
+if [[ "$completed_target_date" > "2026-09-16" ]]; then
+  "$PYTHON_BIN" -m src.engine.monitoring.research_native_capacity_source \
+    --source-date "$completed_target_date" --write || research_closure_rc=$?
+  "$PYTHON_BIN" -m src.engine.automation.machine_research_closed_loop_refresh \
+  --source-date "$completed_target_date" \
+  --source-wait-sec 900 \
+  --write \
+  --collect-costs || research_closure_rc=$?
+fi
+
 policy_rc=0
 "$PYTHON_BIN" -m src.engine.automation.machine_microstructure_policy_approval \
   --phase postclose \
@@ -92,9 +104,14 @@ builder_rc=0
 # visible even when an earlier producer failed and fallback steps still ran.
 printf '[MACHINE_MICRO_FINAL_REFRESH] target_date=%s expansion_rc=%s attribution_rc=%s weakness_hysteresis_rc=%s entry_timing_rc=%s policy_rc=%s builder_rc=%s\n' \
   "$completed_target_date" "$expansion_rc" "$attribution_rc" "$weakness_hysteresis_rc" "$entry_timing_rc" "$policy_rc" "$builder_rc" >&2
+printf '[MACHINE_RESEARCH_CLOSED_LOOP] target_date=%s research_closure_rc=%s\n' \
+  "$completed_target_date" "$research_closure_rc" >&2
 
 if ((builder_rc != 0)); then
   exit "$builder_rc"
+fi
+if ((research_closure_rc != 0)); then
+  exit "$research_closure_rc"
 fi
 if ((policy_rc != 0)); then
   exit "$policy_rc"

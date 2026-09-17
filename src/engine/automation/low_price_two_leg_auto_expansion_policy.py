@@ -19,6 +19,7 @@ from src.utils.constants import DATA_DIR
 from src.utils.market_day import is_krx_trading_day
 
 SCHEMA = "low_price_two_leg_auto_expansion_policy_v1"
+CLOSED_LOOP_SCHEMA = "low_price_two_leg_auto_expansion_policy_v2"
 AUTHORITY = "automatic_exact_date_episode_expansion"
 REPORT_SCHEMA = "low_price_two_leg_expanded_candidate_research_v6"
 REPORT_DIR = DATA_DIR / "report" / "low_price_two_leg_expanded_candidate_research"
@@ -101,6 +102,39 @@ def _valid_recommendation(row: dict[str, Any]) -> bool:
 
 
 def _mature_nonperforming_profile_ids(report: dict[str, Any]) -> set[str]:
+    if report.get("closed_loop_contract"):
+        feedback = report.get("policy_version_feedback") or {}
+        cumulative = (feedback.get("cumulative") or {}).get("strategy_revisions") or {}
+        holdout = (feedback.get("holdout_last_16") or {}).get(
+            "strategy_revisions"
+        ) or {}
+        retired = set()
+        for revision, full in cumulative.items():
+            tail = holdout.get(revision) or {}
+            try:
+                if (
+                    revision == "unattributed_version"
+                    or full["exact_completed_count"] < 6
+                    or full["exact_completed_legs"] < 8
+                    or tail["exact_completed_count"] < 3
+                    or tail["exact_completed_legs"] < 4
+                    or float(full["realized_net_return_pct"]) > 0
+                    or float(tail["realized_net_return_pct"]) > 0
+                ):
+                    continue
+                if not all(
+                    __import__("math").isfinite(float(x["realized_net_return_pct"]))
+                    for x in (full, tail)
+                ):
+                    continue
+                retired.update(
+                    profile
+                    for profile in full["profile_ids"]
+                    if str(profile).startswith("auto_")
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+        return retired
     if int(report.get("trading_date_count") or 0) < 40:
         return set()
     retired: set[str] = set()
@@ -157,6 +191,16 @@ def build_policy(
     ):
         raise ValueError("episode_auto_expansion_source_contract_invalid")
     recommendation_inventory(report)
+    from src.engine.monitoring import research_closed_loop as loop
+
+    closed_loop = report.get("closed_loop_contract") == loop.SCHEMA
+    joint = (
+        loop.combined_joint_gate(report, family="episode", source_date=source_date)
+        if closed_loop
+        else None
+    )
+    if closed_loop and joint != report.get("joint_allocation_gate"):
+        raise ValueError("episode_joint_allocation_reconstruction_mismatch")
     effective_date = _next_trading_date(source_date)
     profiles = _previous_profiles(effective_date, policy_dir=policy_dir)
     retired_nonperforming_profile_ids = _mature_nonperforming_profile_ids(report)
@@ -174,11 +218,39 @@ def build_policy(
         retired_nonperforming_profile_ids | superseded_by_static_profile_ids
     )
     for profile_id in retired_profile_ids:
-        profiles.pop(profile_id, None)
+        if profile_id in profiles:
+            profiles[profile_id]["entry_runtime_eligible"] = False
+            profiles[profile_id]["selection_status"] = "retired_entry_exit_custody_only"
     promoted: list[str] = []
     for row in report.get("recommendations") or []:
         if not isinstance(row, dict) or not _valid_recommendation(row):
             continue
+        if closed_loop:
+            from src.engine.monitoring.episode_prospective_research import (
+                execution_feasibility,
+            )
+
+            result = report.get("profiles", {}).get(row.get("profile_id")) or {}
+            revision = result.get("candidate_revision")
+            if (
+                joint.get("status") != "pass"
+                or not revision
+                or loop.load_candidate(
+                    result.get("symbol"), owner="episode", lane_id=row.get("profile_id")
+                )
+                != revision
+                or revision["parameters"] != row.get("recommended_spot")
+                or (result.get("prospective_window") or {}).get("status") != "ready"
+                or loop.prospective_window(
+                    revision,
+                    source_date=source_date,
+                    qualified_dates=(result.get("prospective_qualified_dates") or []),
+                )["status"]
+                != "ready"
+                or execution_feasibility(result, source_date=source_date).get("status")
+                != "pass"
+            ):
+                continue
         symbol = str(row.get("symbol") or "")
         session = str(row.get("session") or "")
         if (symbol, session) in static_symbol_sessions:
@@ -196,10 +268,23 @@ def build_policy(
             ],
             "policy": spot,
             "selection_status": "automatically_promoted_qualified_recommendation",
+            **(
+                {
+                    "entry_runtime_eligible": True,
+                    "candidate_revision_sha256": revision["revision_sha256"],
+                }
+                if closed_loop
+                else {}
+            ),
         }
         promoted.append(profile_id)
     payload: dict[str, Any] = {
-        "schema": SCHEMA,
+        "schema": CLOSED_LOOP_SCHEMA if closed_loop or retired_profile_ids else SCHEMA,
+        **(
+            {"closed_loop_contract": loop.SCHEMA, "joint_allocation_gate": joint}
+            if closed_loop
+            else {}
+        ),
         "authority": AUTHORITY,
         "source_date": source_date.isoformat(),
         "effective_date": effective_date.isoformat(),
@@ -228,7 +313,7 @@ def validate_policy(payload: Any, *, effective_date: date) -> None:
     canonical = {key: value for key, value in payload.items() if key != "policy_hash"}
     profiles = payload.get("profiles")
     if (
-        payload.get("schema") != SCHEMA
+        payload.get("schema") not in {SCHEMA, CLOSED_LOOP_SCHEMA}
         or payload.get("authority") != AUTHORITY
         or payload.get("effective_date") != effective_date.isoformat()
         or payload.get("policy_hash") != _digest(canonical)
@@ -273,6 +358,16 @@ def validate_policy(payload: Any, *, effective_date: date) -> None:
         ):
             raise ValueError("episode_auto_expansion_profile_contract_invalid")
 
+        if payload.get("schema") == CLOSED_LOOP_SCHEMA and (
+            type(row.get("entry_runtime_eligible", True)) is not bool
+            or row.get("selection_status") == "retired_entry_exit_custody_only"
+            and row.get("entry_runtime_eligible") is not False
+        ):
+            raise ValueError("episode_retired_entry_contract_invalid")
+        from src.trading.low_price_two_leg.auto_expansion_service import _profile
+
+        _profile(row, authority_hash=payload["policy_hash"])
+
 
 def load_policy(day: date, *, policy_dir: Path = POLICY_DIR) -> dict[str, Any]:
     path = policy_path(day, policy_dir=policy_dir)
@@ -281,11 +376,85 @@ def load_policy(day: date, *, policy_dir: Path = POLICY_DIR) -> dict[str, Any]:
     except (OSError, ValueError) as exc:
         raise ValueError("episode_auto_expansion_policy_unreadable") from exc
     validate_policy(payload, effective_date=day)
+    if payload.get("schema") == CLOSED_LOOP_SCHEMA:
+        from src.engine.monitoring.research_closed_loop import verify_publication
+
+        verify_publication(
+            policy_dir, effective_date=day, name=path.name, value=payload
+        )
     source = Path(str(payload.get("source_report") or ""))
     if not source.is_file() or _file_sha256(source) != payload.get(
         "source_report_sha256"
     ):
         raise ValueError("episode_auto_expansion_source_hash_mismatch")
+    if payload.get("schema") == CLOSED_LOOP_SCHEMA:
+        from src.engine.monitoring import research_closed_loop as loop
+
+        report = loop.read_object(source, limit=32 * 1024 * 1024)
+        source_date = date.fromisoformat(payload["source_date"])
+        if (
+            report.get("target_date") != str(source_date)
+            or _next_trading_date(source_date) != day
+        ):
+            raise ValueError("episode_policy_source_date_invalid")
+        recommendation_inventory(report)
+        # The immutable source report and native publisher manifest bind the
+        # gate; historical candidates are checked against their registry archive.
+        previous = _previous_profiles(day, policy_dir=policy_dir)
+        for profile_id, row in payload["profiles"].items():
+            recommendations = [
+                item
+                for item in report.get("recommendations", [])
+                if item.get("recommendation_id") == row.get("source_recommendation_id")
+            ]
+            if previous.get(profile_id) == row:
+                continue
+            if recommendations:
+                recommendation = recommendations[0]
+                result = (report.get("profiles") or {}).get(
+                    recommendation.get("profile_id")
+                ) or {}
+                revision = result.get("candidate_revision")
+                if (
+                    not _valid_recommendation(recommendation)
+                    or row["policy"] != recommendation.get("recommended_spot")
+                    or row["symbol"] != recommendation.get("symbol")
+                    or row["session"] != recommendation.get("session")
+                    or (report.get("joint_allocation_gate") or {}).get("status")
+                    != "pass"
+                    or not revision
+                    or not loop.registered_revision(revision)
+                    or revision["revision_sha256"]
+                    != row.get("candidate_revision_sha256")
+                    or revision["parameters"] != row["policy"]
+                    or loop.prospective_window(
+                        revision,
+                        source_date=source_date,
+                        qualified_dates=result.get("prospective_qualified_dates") or [],
+                    )["status"]
+                    != "ready"
+                    or not loop.verified_execution_receipt(
+                        result.get("execution_feasibility") or {}
+                    )
+                ):
+                    raise ValueError("episode_closed_loop_reconstruction_invalid")
+            else:
+                parent = previous.get(profile_id)
+                if parent is None:
+                    raise ValueError("episode_closed_loop_parent_missing")
+                inherited = dict(row)
+                if row.get("entry_runtime_eligible") is False:
+                    if profile_id not in set(
+                        _mature_nonperforming_profile_ids(report)
+                    ) | set(payload.get("superseded_by_static_profile_ids") or []):
+                        raise ValueError("episode_retirement_not_declared")
+                    inherited.pop("entry_runtime_eligible", None)
+                    inherited.pop("selection_status", None)
+                    parent = dict(parent)
+                    parent.pop("entry_runtime_eligible", None)
+                    parent.pop("selection_status", None)
+                if inherited != parent:
+                    raise ValueError("episode_closed_loop_carry_parent_mismatch")
     return payload
 
 
@@ -316,7 +485,22 @@ def main(argv: list[str] | None = None) -> int:
         date.fromisoformat(payload["effective_date"]), policy_dir=args.policy_dir
     )
     if args.write:
-        _atomic_write(output, payload)
+        if payload.get("schema") == CLOSED_LOOP_SCHEMA:
+            from src.engine.monitoring.research_closed_loop import (
+                publication_transaction,
+                future_publication_parent,
+            )
+
+            publication_transaction(
+                args.policy_dir,
+                effective_date=date.fromisoformat(payload["effective_date"]),
+                files={output.name: payload},
+                expected_generation=future_publication_parent(
+                    args.policy_dir, date.fromisoformat(payload["effective_date"])
+                ),
+            )
+        else:
+            _atomic_write(output, payload)
         load_policy(
             date.fromisoformat(payload["effective_date"]), policy_dir=args.policy_dir
         )

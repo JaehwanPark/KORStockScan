@@ -349,11 +349,15 @@ def _event_venue(row: dict[str, Any]) -> str:
 
 def _actual_execution_venue(row: dict[str, Any]) -> str:
     fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
-    value = str(
-        row.get("actual_execution_venue")
-        or fields.get("actual_execution_venue")
-        or ""
-    ).strip().upper()
+    value = (
+        str(
+            row.get("actual_execution_venue")
+            or fields.get("actual_execution_venue")
+            or ""
+        )
+        .strip()
+        .upper()
+    )
     return value if value in {"KRX", "NXT"} else "UNKNOWN"
 
 
@@ -871,9 +875,13 @@ def capture_market_snapshots(
     )
     non_common_exclusions = {}
     if collect_executable_bbo:
-        _, capture_master_binding = _load_symbol_master_binding(target_date, symbol_master_path=None)
+        _, capture_master_binding = _load_symbol_master_binding(
+            target_date, symbol_master_path=None
+        )
         if capture_master_binding.get("status") == "verified":
-            non_common_exclusions = capture_master_binding.get("non_common_stock_exclusions") or {}
+            non_common_exclusions = (
+                capture_master_binding.get("non_common_stock_exclusions") or {}
+            )
     bbo_request_count = 0
     last_bbo_request_started_monotonic: float | None = None
     observed_at = captured_at or datetime.now(KST)
@@ -890,7 +898,9 @@ def capture_market_snapshots(
         and _session_for_capture(venue="KRX", captured_at=observed_at)
         == "SESSION_TRANSITION"
     ):
-        raise ValueError("market opportunity census is disabled during session transition")
+        raise ValueError(
+            "market opportunity census is disabled during session transition"
+        )
     captured_at_text = observed_at.isoformat()
     records: list[dict[str, Any]] = []
     capture_started_monotonic = monotonic()
@@ -994,10 +1004,16 @@ def capture_market_snapshots(
                     and rank <= EXTERNAL_BBO_CAPTURE_TOP_N
                 ):
                     if code in non_common_exclusions:
-                        normalized_row["executable_bbo_observation"] = _external_bbo_budget_gap(
-                            code=code, venue=venue, reason="verified_non_common_stock_excluded"
+                        normalized_row["executable_bbo_observation"] = (
+                            _external_bbo_budget_gap(
+                                code=code,
+                                venue=venue,
+                                reason="verified_non_common_stock_excluded",
+                            )
                         )
-                        normalized_row["executable_bbo_observation"]["symbol_master_exclusion"] = non_common_exclusions[code]
+                        normalized_row["executable_bbo_observation"][
+                            "symbol_master_exclusion"
+                        ] = non_common_exclusions[code]
                     elif (
                         monotonic() - capture_started_monotonic
                         >= EXTERNAL_BBO_CAPTURE_REQUEST_WINDOW_SEC
@@ -1083,8 +1099,7 @@ def capture_market_snapshots(
                 if rows
                 and (
                     source_error
-                    or response_contract_status
-                    not in {"", "verified_success"}
+                    or response_contract_status not in {"", "verified_success"}
                 )
                 else (
                     "ok"
@@ -1112,9 +1127,7 @@ def capture_market_snapshots(
                         venue=venue,
                         captured_at=panel_observed_at,
                     ),
-                    "market_data_route": (
-                        "nxt_only" if venue == "NXT" else "krx_only"
-                    ),
+                    "market_data_route": ("nxt_only" if venue == "NXT" else "krx_only"),
                     "actual_execution_venue": "UNKNOWN",
                     "session": _session_for_capture(
                         venue=venue,
@@ -1924,6 +1937,8 @@ def _load_stage_index(
     index: dict[str, dict[str, list[dict[str, Any]]]] = defaultdict(
         lambda: defaultdict(list)
     )
+    causal_groups = {}
+    causal_parent_ids = set()
     premarket_route_promotions: set[tuple[str, str]] = set()
     reverse_stage: dict[str, list[str]] = defaultdict(list)
     for logical_stage, raw_stages in PIPELINE_STAGE_MAP.items():
@@ -1945,6 +1960,54 @@ def _load_stage_index(
             and ts.date().isoformat() == target_date
         ):
             decoded = decode_receipt(fields)
+            causal_delta = []
+            for source_index, source in enumerate(decoded or []):
+                key = (
+                    source["stock_code"],
+                    source.get("venue"),
+                    json.dumps(
+                        source.get(
+                            "market_data_routes", source.get("market_data_route")
+                        ),
+                        sort_keys=True,
+                    ),
+                )
+                native_binding = hashlib.sha256(
+                    json.dumps(
+                        [
+                            fields.get("scanner_source_cycle_id"),
+                            fields.get("scanner_source_rows_sha256"),
+                            source_index,
+                        ],
+                        sort_keys=True,
+                    ).encode()
+                ).hexdigest()
+                if key not in causal_groups:
+                    parent = dict(source)
+                    parent["canonical_scanner_row_sha256"] = hashlib.sha256(
+                        json.dumps(
+                            source, sort_keys=True, separators=(",", ":")
+                        ).encode()
+                    ).hexdigest()
+                    parent["native_parent_count"] = 0
+                    parent["native_projection_count"] = 0
+                    parent["parent_bindings_sha256"] = ""
+                    causal_groups[key] = parent
+                    causal_delta.append(parent)
+                parent = causal_groups[key]
+                parent["native_projection_count"] += 1
+                native_parent = hashlib.sha256(
+                    json.dumps(
+                        [fields.get("scanner_source_cycle_id"), key], sort_keys=True
+                    ).encode()
+                ).digest()
+                if native_parent in causal_parent_ids:
+                    continue
+                causal_parent_ids.add(native_parent)
+                parent["native_parent_count"] += 1
+                parent["parent_bindings_sha256"] = hashlib.sha256(
+                    (parent["parent_bindings_sha256"] + native_binding).encode()
+                ).hexdigest()
             if scanner_source_receipts is not None:
                 scanner_source_receipts.append(
                     {
@@ -1960,6 +2023,7 @@ def _load_stage_index(
                         "source_name": fields.get("scanner_source_name"),
                         "status": fields.get("scanner_source_status"),
                         "contract_valid": decoded is not None,
+                        "causal_rows": causal_delta,
                         "row_count": len(decoded) if decoded is not None else None,
                         "unknown_route_count": (
                             sum(r["venue"] == "UNKNOWN" for r in decoded)
@@ -2074,9 +2138,7 @@ def _load_stage_index(
                         observation["stock_code"], {}
                     ).setdefault(observation["venue"], {}).setdefault(
                         observation["session"], []
-                    ).append(
-                        observation
-                    )
+                    ).append(observation)
             if executable_bbo_gap_counts is not None:
                 executable_bbo_gap_counts.update(gap_reasons)
         if (
@@ -3455,7 +3517,9 @@ def build_report(
         if row.get("source_quality_status") in VALID_SOURCE_QUALITY_STATUSES
     ]
     valid_empty_snapshots = [
-        row for row in source_ok_snapshots if row.get("source_quality_status") == "valid_empty"
+        row
+        for row in source_ok_snapshots
+        if row.get("source_quality_status") == "valid_empty"
     ]
     partial_source_snapshots = [
         row
@@ -3542,9 +3606,9 @@ def build_report(
                 ]
                 excluded_count = len(observations) - len(retained)
                 if excluded_count:
-                    executable_bbo_gap_counts[
-                        "nxt_scheduled_pause_bbo_excluded"
-                    ] += excluded_count
+                    executable_bbo_gap_counts["nxt_scheduled_pause_bbo_excluded"] += (
+                        excluded_count
+                    )
                 session_index[session] = retained
     _deduplicate_executable_bbo_index(executable_bbo_index)
     selected_external_bbo_budget_path = external_bbo_budget_path or (
@@ -3635,6 +3699,23 @@ def build_report(
         target_date,
         symbol_master_path=symbol_master_path,
     )
+    # Join already verified effective-dated metadata before order-free catalog
+    # admission. Raw scanner payload/hash remains a separate provenance owner.
+    for receipt in scanner_source_receipts:
+        for source in receipt.get("causal_rows") or []:
+            lookup = (
+                symbol_master.lookup(
+                    source["stock_code"], as_of=date.fromisoformat(target_date)
+                )
+                if symbol_master is not None
+                else None
+            )
+            source["symbol_master_status"] = (
+                lookup.status.value if lookup else "master_unavailable"
+            )
+            if lookup and lookup.record:
+                source["instrument_type"] = lookup.record.instrument_type.value
+                source["listing_market"] = lookup.record.listing_market.value
     trigger_contract = _load_trigger_contract(trigger_receipt_path)
     valid_capture_times_by_venue_panel: dict[str, int] = {}
     observed_capture_cadence_by_venue_panel: dict[str, Any] = {}
@@ -4646,7 +4727,8 @@ def write_report(report: dict[str, Any]) -> tuple[Path, Path]:
         raise RuntimeError("census_publication_lock_unavailable")
     descriptor = os.open(
         REPORT_DIR / f"{REPORT_TYPE}_{target_date}.publish.lock",
-        os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o644,
+        os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW,
+        0o644,
     )
     with os.fdopen(descriptor, "r+") as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -4668,6 +4750,10 @@ def write_report(report: dict[str, Any]) -> tuple[Path, Path]:
             + "\n",
         )
         publish(md_path, render_markdown(report))
+        from src.engine.monitoring.research_closed_loop import write_admissions
+
+        write_admissions(report)
+
     return json_path, md_path
 
 

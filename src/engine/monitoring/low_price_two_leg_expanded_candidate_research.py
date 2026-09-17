@@ -341,6 +341,11 @@ def _dynamic_candidate_snapshot(
     )
     if source_date is not None and source_date < CLEAN_BASELINE_DATE:
         return None, {}
+    from src.engine.monitoring.research_closed_loop import admission_symbols
+
+    for symbol, name in admission_symbols(target_date, owner="episode").items():
+        if symbol not in excluded:
+            symbols.setdefault(symbol, name)
     return source_date, symbols
 
 
@@ -1055,6 +1060,55 @@ def _select_profile_checkpoint(
     return result
 
 
+class _SequentialContexts(dict):
+    """Keep one symbol's replay state while retaining the complete inventory."""
+
+    def __init__(self, sources):
+        super().__init__()
+        self.sources = sources
+        self.current_symbol = None
+        self.current = None
+
+    def __getitem__(self, symbol):
+        if symbol not in self:
+            raise KeyError(symbol)
+        if self.current_symbol != symbol:
+            self.current = None
+            self.current = build_day_contexts(self.sources[symbol][0])
+            self.current_symbol = symbol
+        return self.current
+
+    def get(self, symbol, default=None):
+        return self[symbol] if symbol in self else default
+
+
+class _SequentialSources(dict):
+    """Native source caches own bars; the inventory owns only their loaders."""
+
+    def __init__(self, cache_dir, start_date, end_date, expected_trading_day_count):
+        super().__init__()
+        self.arguments = dict(
+            cache_dir=cache_dir,
+            start_date=start_date,
+            end_date=end_date,
+            expected_trading_day_count=expected_trading_day_count,
+        )
+
+    def __getitem__(self, symbol):
+        if symbol not in self:
+            raise KeyError(symbol)
+        result = _load_source_cache(symbol=symbol, **self.arguments)
+        if result is None:
+            raise ResearchError("research_frozen_source_cache_changed:" + symbol)
+        return result
+
+    def get(self, symbol, default=None):
+        return self[symbol] if symbol in self else default
+
+    def items(self):
+        return ((symbol, self[symbol]) for symbol in self)
+
+
 def build_report(
     *,
     sources: dict[str, tuple[list[Bar], dict[str, Any]]],
@@ -1098,7 +1152,7 @@ def build_report(
             "research_profile_active_symbol_session_conflict:"
             + ",".join(sorted(conflicting_profiles))
         )
-    contexts_by_symbol: dict[str, dict[date, DayContext]] = {}
+    contexts_by_symbol = _SequentialContexts(sources)
     source_meta: dict[str, dict[str, Any]] = {}
     source_quarantine: dict[str, str] = {}
     for symbol in selected_symbols:
@@ -1114,7 +1168,7 @@ def build_report(
         if tuple(sorted(contexts)) != expected_dates:
             source_quarantine[symbol] = "clean_baseline_trading_date_window_mismatch"
             continue
-        contexts_by_symbol[symbol] = contexts
+        contexts_by_symbol[symbol] = True
         meta = dict(raw_meta)
         aftermarket_counts: dict[str, int] = {}
         for bar in bars:
@@ -1248,6 +1302,17 @@ def build_report(
                     "allowed_runtime_apply": False,
                     "decision_authority": "source_only_no_runtime_or_order_authority",
                 }
+            )
+        if end_date >= date(2026, 9, 17):
+            from src.engine.monitoring.episode_prospective_research import (
+                frozen_research,
+            )
+
+            selected = frozen_research(
+                selected,
+                profile=profile,
+                contexts=contexts_by_symbol[profile.symbol],
+                source_date=end_date,
             )
         profiles[profile_id] = selected
     recommendations = _recommendation_rows(
@@ -1487,6 +1552,20 @@ def attach_recommendation_contract(report: dict[str, Any]) -> dict[str, Any]:
                 consumer=producer,
                 acceptance="Keep collecting exact source-only observations; no profile enrollment or trading authority.",
             )
+    end_date = date.fromisoformat(report["target_date"])
+    if end_date >= date(2026, 9, 17):
+        from src.engine.monitoring.research_closed_loop import (
+            SCHEMA,
+            combined_joint_gate,
+        )
+
+        report["closed_loop_contract"] = SCHEMA
+        from src.engine.monitoring.research_version_outcomes import episode_feedback
+
+        report["policy_version_feedback"] = episode_feedback(end_date)
+        report["joint_allocation_gate"] = combined_joint_gate(
+            report, family="episode", source_date=end_date
+        )
     return report
 
 
@@ -2349,6 +2428,15 @@ class CandidateRecommendationNotifier:
 def write_report(
     report: dict[str, Any], output_dir: Path = OUTPUT_DIR
 ) -> tuple[Path, Path]:
+    from src.engine.monitoring.research_closed_loop import freeze_candidate
+
+    for result in report["profiles"].values():
+        revision = result.get("candidate_revision")
+        if revision is not None and freeze_candidate(revision) != revision:
+            raise ValueError("episode_concurrent_frozen_candidate_conflict")
+    from src.engine.monitoring.research_closed_loop import write_joint_inputs
+
+    write_joint_inputs(report, family="episode")
     stem = f"low_price_two_leg_expanded_candidate_research_{report['end_date']}"
     json_path = output_dir / f"{stem}.json"
     markdown_path = output_dir / f"{stem}.md"
@@ -2562,7 +2650,41 @@ def research_input_fingerprint(
     dynamic_universe_source_date: date | None,
     applied_policy_snapshots: dict[str, dict[str, Any]],
 ) -> str:
+    from src.engine.monitoring import research_closed_loop as loop
+
+    dependency_paths = [
+        Path(__file__).with_name(name)
+        for name in (
+            "episode_prospective_research.py",
+            "research_closed_loop.py",
+            "research_source_facts.py",
+            "research_fact_archive.py",
+            "research_version_outcomes.py",
+        )
+    ]
+    dependency_paths += list((loop.DIRECTORY / "candidates").glob("episode_*.json"))
+    dependency_paths += list((loop.DIRECTORY / "facts").glob("*.jsonl*"))
+    dependency_paths += list((loop.DIRECTORY / "facts").glob("source_gap_*.json"))
+    dependency_paths += list((loop.DIRECTORY).glob("widget_outcomes_*.json"))
+    dependency_paths += [
+        loop.DIRECTORY / f"allocator_{target_date}.json",
+        loop.DIRECTORY / f"joint_inputs_widget_{target_date}.json",
+    ]
+    generations = {}
+    for path in dependency_paths:
+        try:
+            info = path.lstat()
+            generations[str(path)] = (
+                info.st_dev,
+                info.st_ino,
+                info.st_size,
+                info.st_mtime_ns,
+                info.st_ctime_ns,
+            )
+        except FileNotFoundError:
+            generations[str(path)] = None
     payload = {
+        "closed_loop_dependencies": generations,
         "schema": "low_price_two_leg_expanded_research_input_v1",
         "producer_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "admission_helper_sha256": hashlib.sha256(
@@ -2606,7 +2728,8 @@ def research_input_fingerprint(
                 "source_quality_status": meta.get("source_quality_status"),
                 "bar_count": len(bars),
             }
-            for symbol, (bars, meta) in sorted(sources.items())
+            for symbol in sorted(sources)
+            for bars, meta in [sources[symbol]]
         },
     }
     return _canonical_digest(payload)
@@ -2779,7 +2902,9 @@ def main(argv: list[str] | None = None) -> int:
         )
         research_profiles = target_inventory.research_profiles
         allowlist = target_inventory.research_symbols
-        sources: dict[str, tuple[list[Bar], dict[str, Any]]] = {}
+        sources = _SequentialSources(
+            args.source_cache_dir, start_date, end_date, expected_trading_day_count
+        )
         fetch_failures: dict[str, str] = {}
         deferred_failures: dict[str, str] = {}
         for symbol in sorted(allowlist):
@@ -2791,10 +2916,11 @@ def main(argv: list[str] | None = None) -> int:
                 expected_trading_day_count=expected_trading_day_count,
             )
             if cached is not None:
-                sources[symbol] = cached
+                sources[symbol] = True
+                del cached
                 continue
             try:
-                sources[symbol] = fetch_sor_history(
+                fetched_bars, fetched_meta = fetch_sor_history(
                     symbol=symbol,
                     token=token,
                     start_date=start_date,
@@ -2807,12 +2933,10 @@ def main(argv: list[str] | None = None) -> int:
                     shared_defer_delay_sec=args.shared_defer_delay_sec,
                     include_integrated_aftermarket=True,
                 )
-                fetched_bars, fetched_meta = sources[symbol]
                 fetched_meta = dict(fetched_meta)
                 fetched_meta["source_content_sha256"] = _canonical_digest(
                     _bar_rows(fetched_bars)
                 )
-                sources[symbol] = (fetched_bars, fetched_meta)
                 _write_source_cache(
                     cache_dir=args.source_cache_dir,
                     symbol=symbol,
@@ -2822,6 +2946,8 @@ def main(argv: list[str] | None = None) -> int:
                     bars=fetched_bars,
                     meta=fetched_meta,
                 )
+                sources[symbol] = True
+                del fetched_bars, fetched_meta
             except ResearchDeferred as exc:
                 deferred_failures[symbol] = str(exc)
             except (ResearchError, requests.RequestException) as exc:

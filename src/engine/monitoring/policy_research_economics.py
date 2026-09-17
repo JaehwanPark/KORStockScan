@@ -7,6 +7,7 @@ orders, create owner signals, or assign live capital/quantity authority.
 from __future__ import annotations
 
 from collections import Counter
+from bisect import bisect_left
 from datetime import datetime, timedelta
 import hashlib
 import json
@@ -62,34 +63,26 @@ def modeled_summary(episodes, qualified_dates, quantity=10):
     """Valid zero-signal days stay in the denominator; unknown PnL stays null."""
     dates = set(qualified_dates)
     valid = type(quantity) is int and quantity > 0
-    valid &= all(
-        numeric(row.get("entry_price")) is not None
-        and row["entry_price"] > 0
-        and numeric(row.get("net_return_pct")) is not None
-        and aware(row.get("entry_at")) is not None
-        and aware(row.get("exit_at")) is not None
-        and aware(row["entry_at"]).date() in dates
-        and aware(row["exit_at"]) >= aware(row["entry_at"])
-        for row in episodes
-    )
-    pnl = (
-        sum(
-            row["entry_price"] * quantity * row["net_return_pct"] / 100
-            for row in episodes
-        )
-        if valid
-        else None
-    )
-    capital_seconds = (
-        sum(
-            row["entry_price"]
-            * quantity
-            * (aware(row["exit_at"]) - aware(row["entry_at"])).total_seconds()
-            for row in episodes
-        )
-        if valid
-        else None
-    )
+    pnl = capital_seconds = 0
+    for row in episodes:
+        price = numeric(row.get("entry_price"))
+        net = numeric(row.get("net_return_pct"))
+        entry, exit_ = aware(row.get("entry_at")), aware(row.get("exit_at"))
+        if (
+            price is None
+            or price <= 0
+            or net is None
+            or entry is None
+            or exit_ is None
+            or entry.date() not in dates
+            or exit_ < entry
+        ):
+            valid = False
+            break
+        pnl += price * quantity * net / 100
+        capital_seconds += price * quantity * (exit_ - entry).total_seconds()
+    if not valid:
+        pnl = capital_seconds = None
     return {
         "qualified_source_day_count": len(dates),
         "modeled_quantity_each": quantity,
@@ -105,15 +98,18 @@ def modeled_summary(episodes, qualified_dates, quantity=10):
     }
 
 
-def joint_capital_demand(symbol_episodes, *, capital_limit_krw=None, quantity=10):
+def joint_capital_demand(
+    symbol_episodes, *, capital_limit_krw=None, quantity=10, buy_fee_bps=0
+):
     """Measure simultaneous demand; do not invent a shared allocation limit."""
     events, invalid, pnl = [], 0, 0.0
     identities = set()
     for symbol, episodes in sorted(symbol_episodes.items()):
         for row in episodes:
             entry, exit_ = aware(row.get("entry_at")), aware(row.get("exit_at"))
-            price, net = numeric(row.get("entry_price")), numeric(
-                row.get("net_return_pct")
+            price, net = (
+                numeric(row.get("entry_price")),
+                numeric(row.get("net_return_pct")),
             )
             identity = (symbol, row.get("entry_at"), row.get("exit_at"))
             if (
@@ -130,9 +126,9 @@ def joint_capital_demand(symbol_episodes, *, capital_limit_krw=None, quantity=10
                 invalid += 1
                 continue
             identities.add(identity)
-            notional = price * quantity
+            notional = price * quantity * (1 + buy_fee_bps / 10000)
             events.extend([(entry, 1, notional), (exit_, 0, -notional)])
-            pnl += notional * net / 100
+            pnl += price * quantity * net / 100
     occupied = peak = 0.0
     for _clock, _order, delta in sorted(events):
         occupied += delta
@@ -144,7 +140,9 @@ def joint_capital_demand(symbol_episodes, *, capital_limit_krw=None, quantity=10
         "status": (
             "source_gap"
             if invalid
-            else "observed" if valid_limit else "allocation_contract_missing"
+            else "observed"
+            if valid_limit
+            else "allocation_contract_missing"
         ),
         "modeled_peak_concurrent_notional_krw": peak if not invalid else None,
         "independent_modeled_net_profit_krw": pnl if not invalid else None,
@@ -221,11 +219,13 @@ def source_only_timing_observation(*, source_date, row, replay):
         terminal_bid = numeric(terminal.get("executable_bid"))
         terminal_qty = numeric(terminal.get("available_bid_quantity"))
         terminal_age = numeric(terminal.get("quote_age_ms"))
-        ask, bid = numeric(entry.get("ask_price")), numeric(
-            hit.get("target_executable_bid")
+        ask, bid = (
+            numeric(entry.get("ask_price")),
+            numeric(hit.get("target_executable_bid")),
         )
-        target, available = numeric(hit.get("target_price")), numeric(
-            hit.get("target_available_bid_quantity")
+        target, available = (
+            numeric(hit.get("target_price")),
+            numeric(hit.get("target_available_bid_quantity")),
         )
         entry_at, exit_at = aware(entry.get("entry_at")), aware(hit.get("target_at"))
         limit = numeric(row.get("owner_entry_limit_price"))
@@ -387,6 +387,26 @@ def signal_execution_feasibility(
     Missing historical quotes leave the proxy available for research, but do
     not authorize a newly selected execution policy. No API is called here.
     """
+    revision = result.get("candidate_revision")
+    if revision is not None:
+        from src.engine.monitoring.research_closed_loop import validate_revision
+
+        try:
+            validate_revision(revision, symbol=symbol, owner="widget")
+            if revision["parameters"] != result.get("selected_policy"):
+                raise ValueError("prospective_parameters_changed")
+            from src.engine.monitoring.research_closed_loop import (
+                widget_prospective_summary_valid,
+            )
+
+            if not widget_prospective_summary_valid(result, revision):
+                raise ValueError("prospective_native_economic_summary_mismatch")
+        except (TypeError, ValueError, KeyError):
+            return {
+                "status": "source_gap",
+                "reason": "prospective_revision_invalid",
+                **AUTHORITY,
+            }
     expected_seed = digest(signal_policy)
     windows = {
         window: (result.get(window) or {}).get(
@@ -405,6 +425,8 @@ def signal_execution_feasibility(
         "matched_episode_count": 0,
         "status": "source_gap",
         "source_hashes": {},
+        "source_generations": {},
+        "depth_demands": [],
         "evidence_role": "modeled_full_quantity_BBO_not_actual_fill",
         **AUTHORITY,
     }
@@ -426,6 +448,33 @@ def signal_execution_feasibility(
     if any(clock is None or clock.date() > source_date for clock in clocks):
         receipt["reason"] = "selected_episode_clock_invalid"
         return receipt
+    if revision is not None:
+        for row in episodes:
+            entry = aware(row.get("entry_at"))
+            signal = aware(row.get("signal_at"))
+            cost = comparison_cost_contract(entry.date())
+            price, exit_price, net = (
+                numeric(row.get("entry_price")),
+                numeric(row.get("exit_price")),
+                numeric(row.get("net_return_pct")),
+            )
+            if (
+                signal is None
+                or signal >= entry
+                or entry.date().isoformat()
+                not in revision["calibration_dates"] + revision["holdout_dates"]
+                or price is None
+                or price <= 0
+                or exit_price is None
+                or net is None
+                or row.get("cost_contract_sha256") != cost["contract_sha256"]
+                or abs(
+                    net - ((exit_price / price - 1) * 100 - cost["round_trip_cost_pct"])
+                )
+                > 0.0000011
+            ):
+                receipt["reason"] = "prospective_episode_causal_cost_contract_invalid"
+                return receipt
     days = {clock.date() for clock in clocks}
     observations = {}
     quote_identities = {}
@@ -434,22 +483,80 @@ def signal_execution_feasibility(
             Path(observation_dir)
             / f"widget_symbol_advisory_{symbol}_{day:%Y%m%d}.jsonl"
         )
-        try:
-            before = path.lstat()
-            if path.is_symlink() or before.st_size > 64 * 1024 * 1024:
-                continue
-            now = datetime.now().astimezone(clocks[0].tzinfo)
-            if day > now.date() or (
-                day == now.date() and (now.hour, now.minute) < (20, 5)
-            ):
-                continue
-            source_hash = hashlib.sha256()
-            with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), "rb") as handle:
-                for line in handle:
-                    source_hash.update(line)
-                    payload = json.loads(line)
-                    if not isinstance(payload, dict):
-                        raise ValueError("observation_not_object")
+        from src.engine.monitoring.research_closed_loop import DIRECTORY, _directory
+
+        paths = [path]
+        if revision is not None:
+            from src.engine.monitoring.research_fact_archive import fact_path
+
+            paths.append(fact_path(_directory(DIRECTORY), symbol, day))
+        for path in paths:
+            path_observations = []
+            try:
+                before = path.lstat()
+                if path.is_symlink() or before.st_size > 64 * 1024 * 1024:
+                    continue
+                now = datetime.now().astimezone(clocks[0].tzinfo)
+                if day > now.date() or (
+                    day == now.date() and (now.hour, now.minute) < (20, 5)
+                ):
+                    continue
+                from src.engine.monitoring.research_source_facts import (
+                    indexed_day_facts,
+                )
+
+                source_sha256, facts = indexed_day_facts(
+                    path,
+                    windows=[
+                        (clock - timedelta(seconds=5), clock + timedelta(seconds=5))
+                        for clock in clocks
+                        if clock.date() == day
+                    ],
+                )
+                for payload in facts:
+                    if (
+                        revision is not None
+                        and payload.get("schema")
+                        == "prospective_registered_seed_market_facts_v1"
+                    ):
+                        memberships = payload.get("seed_memberships") or ()
+                        member = next(
+                            (
+                                value
+                                for value in memberships
+                                if value.get("revision_sha256")
+                                == revision["revision_sha256"]
+                                and value.get("parameters_sha256")
+                                == revision["parameters_sha256"]
+                                and value.get("frozen_at") == revision["frozen_at"]
+                            ),
+                            None,
+                        )
+                        at = aware(payload.get("observed_at_kst"))
+                        if (
+                            member is None
+                            or at is None
+                            or at <= aware(revision["frozen_at"])
+                            or any(
+                                payload.get(key) is not value
+                                for key, value in AUTHORITY.items()
+                            )
+                        ):
+                            continue
+                        payload = dict(payload)
+                        payload["observation_seed"] = {
+                            "parameters_sha256": expected_seed,
+                            "effective_at_kst": revision["calibration_dates"][0]
+                            + "T09:03:00+09:00",
+                        }
+                        payload["advisory"] = {
+                            "session": "KRX_REGULAR",
+                            "state": "CF_ENTRY",
+                            "source_quality": {
+                                "status": payload.get("source_quality_status")
+                            },
+                        }
+                        payload["advisory_generated"] = None
                     seed = payload.get("observation_seed") or {}
                     advisory, bbo = (
                         payload.get("advisory") or {},
@@ -501,33 +608,58 @@ def signal_execution_feasibility(
                     effective = aware(seed.get("effective_at_kst"))
                     if effective is None or at < effective:
                         continue
-                    observations.setdefault(day, []).append(
-                        (at, bbo, advisory.get("state"))
-                    )
-            after = path.lstat()
-            if (before.st_ino, before.st_size, before.st_mtime_ns) != (
-                after.st_ino,
-                after.st_size,
-                after.st_mtime_ns,
-            ):
-                observations.pop(day, None)
+                    anchors = [clock for clock in clocks if clock.date() == day]
+                    if any(0 <= (at - clock).total_seconds() <= 5 for clock in anchors):
+                        path_observations.append((at, bbo, advisory.get("state")))
+                after = path.lstat()
+                if (before.st_ino, before.st_size, before.st_mtime_ns) != (
+                    after.st_ino,
+                    after.st_size,
+                    after.st_mtime_ns,
+                ):
+                    continue
+                observations.setdefault(day, []).extend(path_observations)
+                receipt["source_hashes"][str(path.resolve())] = source_sha256
+                from src.engine.monitoring.research_source_facts import generation
+
+                receipt["source_generations"][str(path.resolve())] = generation(
+                    path.lstat()
+                )
+            except ValueError as exc:
+                if str(exc) == "conflicting_quote_identity":
+                    receipt["reason"] = "conflicting_quote_identity"
+                    return receipt
+            except (OSError, TypeError, AttributeError, UnicodeError):
                 continue
-            receipt["source_hashes"][str(path.resolve())] = source_hash.hexdigest()
-        except (OSError, ValueError, TypeError, AttributeError, UnicodeError):
-            observations.pop(day, None)
+    for day, facts in observations.items():
+        facts.sort(key=lambda row: row[0])
+    quote_clocks = {
+        day: [row[0] for row in facts] for day, facts in observations.items()
+    }
+
+    def nearby(clock):
+        facts = observations.get(clock.date(), [])
+        at = quote_clocks.get(clock.date(), [])
+        return facts[
+            bisect_left(at, clock) : bisect_left(
+                at, clock + timedelta(seconds=5, microseconds=1)
+            )
+        ]
+
     for row in episodes:
         entry, exit_ = aware(row["entry_at"]), aware(row["exit_at"])
-        price, exit_price = numeric(row.get("entry_price")), numeric(
-            row.get("exit_price")
+        price, exit_price = (
+            numeric(row.get("entry_price")),
+            numeric(row.get("exit_price")),
         )
         if price is None or exit_price is None:
             continue
         opening = next(
             (
                 bbo
-                for at, bbo, state in observations.get(entry.date(), [])
+                for at, bbo, state in nearby(entry)
                 if 0 <= (at - entry).total_seconds() <= 5
-                and state in {"ENTRY_READY", "ENTRY_CAUTION"}
+                and state in {"ENTRY_READY", "ENTRY_CAUTION", "CF_ENTRY"}
                 and bbo["best_ask"] <= price
                 and bbo["best_ask_qty"] >= 40
             ),
@@ -536,8 +668,17 @@ def signal_execution_feasibility(
         closing = next(
             (
                 bbo
-                for at, bbo, _state in observations.get(exit_.date(), [])
+                for at, bbo, _state in nearby(exit_)
                 if 0 <= (at - exit_).total_seconds() <= 5
+                and (
+                    revision is None
+                    or (
+                        opening is not None
+                        and type(opening.get("source_epoch")) is int
+                        and opening["source_epoch"] > 0
+                        and bbo.get("source_epoch") == opening["source_epoch"]
+                    )
+                )
                 and bbo["best_bid"] >= exit_price
                 and bbo["best_bid_qty"] >= 40
             ),
@@ -545,6 +686,22 @@ def signal_execution_feasibility(
         )
         if opening is not None and closing is not None:
             receipt["matched_episode_count"] += 1
+            for side, book in (("best_ask_qty", opening), ("best_bid_qty", closing)):
+                receipt["depth_demands"].append(
+                    dict(
+                        quote_id=digest(
+                            [
+                                symbol,
+                                book.get("source_epoch"),
+                                book.get("received_at"),
+                                book.get("source_sequence"),
+                                side,
+                            ]
+                        ),
+                        stress_quantity=40,
+                        available_quantity=book[side],
+                    )
+                )
     receipt["status"] = (
         "pass" if receipt["matched_episode_count"] == len(episodes) else "source_gap"
     )
@@ -553,7 +710,9 @@ def signal_execution_feasibility(
         if receipt["status"] == "pass"
         else "exact_seed_entry_exit_depth_missing"
     )
-    return receipt
+    from src.engine.monitoring.research_closed_loop import seal_execution_receipt
+
+    return seal_execution_receipt(receipt)
 
 
 def research_universe_handoff(census, *, source_date, universe, results):
@@ -639,13 +798,16 @@ def _load_bounded_research_summary(path, *, maximum_bytes):
             raw = handle.read(maximum_bytes + 1)
             after = os.fstat(handle.fileno())
             current = os.stat(path, follow_symlinks=False)
-        identity = lambda value: (
-            value.st_dev,
-            value.st_ino,
-            value.st_size,
-            value.st_mtime_ns,
-            value.st_ctime_ns,
-        )
+
+        def identity(value):
+            return (
+                value.st_dev,
+                value.st_ino,
+                value.st_size,
+                value.st_mtime_ns,
+                value.st_ctime_ns,
+            )
+
         if (
             len(raw) > maximum_bytes
             or identity(before) != identity(after)

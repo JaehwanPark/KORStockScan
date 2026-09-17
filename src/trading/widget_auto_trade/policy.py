@@ -620,6 +620,11 @@ class WidgetAutoTradePolicyLoader:
             )
             if validated is None:
                 continue
+            from src.engine.monitoring.research_closed_loop import digest
+
+            for sessions in validated.values():
+                for policy in sessions.values():
+                    policy["policy_content_sha256"] = digest(payload)
             any_policy = next(
                 session_policy
                 for sessions in validated.values()
@@ -684,6 +689,10 @@ class WidgetAutoTradePolicyLoader:
                 "effective_date": payload["effective_date"],
                 "source_target_date": payload["source_target_date"],
                 "policy_path": payload["policy_path"],
+                "policy_content_sha256": payload.get("policy_content_sha256"),
+                "candidate_revision_sha256": payload.get("candidate_revision_sha256"),
+                "joint_gate_sha256": payload.get("joint_gate_sha256"),
+                "closed_loop_contract": payload.get("closed_loop_contract"),
                 "authority": payload["authority"],
                 "new_entry_runtime_eligible": True,
                 "new_entry_runtime_block_reason": None,

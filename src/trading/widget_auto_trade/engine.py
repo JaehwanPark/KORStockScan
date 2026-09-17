@@ -540,6 +540,10 @@ def _atomic_write(path: Path, payload: dict[str, Any]) -> None:
 class WidgetTradeEventRecorder:
     def __init__(self, output_dir: Path = DEFAULT_EVENT_DIR) -> None:
         self.output_dir = output_dir
+        self._decision_day = None
+        self._decisions = {}
+        self._decision_flush_at = None
+        self._decision_source_gap = False
 
     def record(self, event: dict[str, Any], observed_at: datetime) -> None:
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -548,6 +552,152 @@ class WidgetTradeEventRecorder:
         )
         with path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
+        try:
+            self._record_research_decision(event, observed_at, path)
+        except (OSError, ValueError, TypeError, KeyError):
+            print("widget_native_decision_summary_source_gap", flush=True)
+
+    def _record_research_decision(self, event, observed_at, path, *, source_day=None):
+        from src.engine.monitoring import research_closed_loop as loop
+
+        day = source_day or observed_at.date().isoformat()
+        if self._decision_day == day:
+            self._fold_research_decision(event)
+            if (
+                self._decision_flush_at is not None
+                and (observed_at - self._decision_flush_at).total_seconds() < 30
+            ):
+                return
+        try:
+            with loop.writer_lock(
+                self.output_dir / "research_decision_checkpoint", blocking=False
+            ):
+                # Recover the latest committed prefix under the shared writer
+                # lock; a postclose finalizer cannot overwrite newer events.
+                self._decision_day = None
+                self._write_research_decisions(event, observed_at, path, source_day=day)
+        except BlockingIOError:
+            return
+
+    def _write_research_decisions(self, event, observed_at, path, *, source_day=None):
+        from src.engine.monitoring import research_closed_loop as loop
+
+        source_info = path.lstat()
+        previous = {}
+
+        day = source_day or observed_at.date().isoformat()
+        destination = self.output_dir / f"research_decisions_{day}.json"
+        if self._decision_day != day:
+            self._decision_day = day
+            self._decisions = {}
+            self._decision_flush_at = None
+            self._decision_source_gap = False
+            try:
+                previous = loop.read_object(destination, limit=16 * 1024 * 1024)
+                body = {k: v for k, v in previous.items() if k != "summary_sha256"}
+                if previous.get("summary_sha256") != loop.digest(body):
+                    raise ValueError("native_decision_summary_invalid")
+                self._decisions = dict(previous["native_decisions"])
+                info = source_info
+                expected = previous.get("event_source_identity") or []
+                start = previous.get("event_source_offset")
+                if (
+                    expected != [info.st_dev, info.st_ino]
+                    or type(start) is not int
+                    or not 0 <= info.st_size - start <= 16 * 1024 * 1024
+                ):
+                    self._decision_source_gap = True
+                else:
+                    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+                    with os.fdopen(fd, "rb") as handle:
+                        handle.seek(start)
+                        raw = handle.read(info.st_size - start)
+                    for line in raw.splitlines():
+                        self._fold_research_decision(json.loads(line))
+                self._decision_source_gap |= previous.get("status") != "complete"
+            except FileNotFoundError:
+                # A missing checkpoint with an earlier log prefix is a known
+                # attribution gap. Fresh observations remain lower bounds.
+                info = source_info
+                if info.st_size <= 16 * 1024 * 1024:
+                    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+                    with os.fdopen(fd, "rb") as handle:
+                        raw = handle.read(16 * 1024 * 1024 + 1)
+                    for line in raw.splitlines():
+                        self._fold_research_decision(json.loads(line))
+                else:
+                    self._decision_source_gap = True
+        self._fold_research_decision(event)
+        if (
+            self._decision_flush_at is not None
+            and (observed_at - self._decision_flush_at).total_seconds() < 30
+        ):
+            return
+        info = source_info
+        counts = {}
+        for row in self._decisions.values():
+            bucket = counts.setdefault(
+                row["version"],
+                dict(
+                    decision_count=0,
+                    attempted_count=0,
+                    submitted_count=0,
+                    no_submit_count=0,
+                ),
+            )
+            bucket["decision_count"] += 1
+            bucket["attempted_count"] += row["attempted"]
+            bucket["submitted_count"] += row["submitted"]
+            bucket["no_submit_count"] += not row["submitted"]
+        body = dict(
+            schema=loop.SCHEMA,
+            source_date=day,
+            status="source_gap" if self._decision_source_gap else "complete",
+            native_decisions=self._decisions,
+            versions=counts,
+            event_source_identity=[info.st_dev, info.st_ino],
+            event_source_offset=info.st_size,
+            observed_at=observed_at.isoformat(),
+            writer_pid=os.getpid(),
+            profit_from_no_submit=None,
+            evidence_role="native_decision_participation_not_realized_or_CF_profit",
+            **loop.AUTHORITY,
+        )
+        self._decision_flush_at = observed_at
+        stable_keys = (
+            "source_date",
+            "status",
+            "native_decisions",
+            "versions",
+            "event_source_identity",
+            "event_source_offset",
+        )
+        if previous and all(previous.get(key) == body.get(key) for key in stable_keys):
+            return
+        loop.atomic_write(destination, {**body, "summary_sha256": loop.digest(body)})
+        self._decision_flush_at = observed_at
+
+    def _fold_research_decision(self, event):
+        signal = event.get("parent_entry_signal_id") or event.get("signal_id")
+        if not isinstance(signal, str) or ":ENTRY:" not in signal:
+            return
+        if signal.split(":")[1] != self._decision_day:
+            return
+        version = event.get("execution_policy_content_sha256") or "unattributed_version"
+        from src.engine.monitoring.research_closed_loop import digest
+
+        identity = digest([event.get("symbol"), signal, version])
+        if identity not in self._decisions and len(self._decisions) >= 60000:
+            self._decision_source_gap = True
+            return
+        row = self._decisions.setdefault(
+            identity, dict(version=version, attempted=False, submitted=False)
+        )
+        if event.get("side") == "BUY" and str(event.get("event_type") or "").startswith(
+            "order_submit"
+        ):
+            row["attempted"] = True
+            row["submitted"] |= event.get("actual_order_submitted") is True
 
 
 class WidgetSignalAutoTrader:
@@ -608,6 +758,51 @@ class WidgetSignalAutoTrader:
         self._last_policy_catalog_refresh_at: datetime | None = None
         self._validate_policy_quantities()
         self._state = self._load_state()
+        self._record_policy_consumption()
+
+    def _record_policy_consumption(self):
+        from src.engine.monitoring.research_closed_loop import consumer_receipt
+
+        accepted = {
+            symbol: {
+                session: {
+                    key: policy.get(key)
+                    for key in (
+                        "policy_id",
+                        "policy_content_sha256",
+                        "candidate_revision_sha256",
+                        "joint_gate_sha256",
+                        "authority",
+                        "new_entry_runtime_eligible",
+                    )
+                }
+                for session, policy in sessions.items()
+            }
+            for symbol, sessions in self._dated_execution_policies.items()
+        }
+        owner_activation = {}
+        for symbol in accepted:
+            try:
+                owner_activation[symbol] = bool(
+                    independent_machine_ownership_source(
+                        symbol, owner="widget_auto_trade", target_date=self._policy_date
+                    )
+                )
+            except (OSError, ValueError):
+                owner_activation[symbol] = False
+        accepted = {
+            symbol: {
+                "sessions": sessions,
+                "owner_activation_valid": owner_activation[symbol],
+            }
+            for symbol, sessions in accepted.items()
+        }
+        try:
+            consumer_receipt(
+                owner="widget", effective_date=self._policy_date, accepted=accepted
+            )
+        except (OSError, ValueError, TypeError):
+            print("widget_policy_consumer_receipt_write_failed", flush=True)
 
     def _refresh_dynamic_specs(self) -> None:
         promoted = set(self._dated_execution_policies)
@@ -822,6 +1017,33 @@ class WidgetSignalAutoTrader:
             for session, policy in sessions.items():
                 if session in current_sessions or not isinstance(policy, dict):
                     continue
+                if policy.get("closed_loop_contract") and observed_at.time().replace(
+                    tzinfo=None
+                ) >= time(8, 56):
+                    try:
+                        from src.engine.monitoring.research_closed_loop import (
+                            DIRECTORY,
+                            atomic_write,
+                        )
+
+                        atomic_write(
+                            DIRECTORY
+                            / "consumers"
+                            / f"widget_late_{symbol}_{observed_at.date()}.json",
+                            dict(
+                                status="published_not_consumed",
+                                pid=os.getpid(),
+                                effective_date=observed_at.date().isoformat(),
+                                policy_content_sha256=policy.get(
+                                    "policy_content_sha256"
+                                ),
+                                reason="after_existing_preopen_cutoff_no_intraday_policy_update",
+                                actual_order_submitted=False,
+                            ),
+                        )
+                    except (OSError, ValueError):
+                        print("widget_late_policy_receipt_write_failed", flush=True)
+                    continue
                 if _positive_int(policy.get("leg_quantity_each")) != self.entry_qty:
                     continue
                 additions.setdefault(symbol, {})[session] = policy
@@ -838,6 +1060,7 @@ class WidgetSignalAutoTrader:
         self._refresh_dynamic_specs()
         self._validate_policy_quantities()
         self._configured_execution_policies = self._policy_manifest()
+        self._record_policy_consumption()
 
         symbols = self._state.get("symbols")
         if not isinstance(symbols, dict):
@@ -1007,6 +1230,7 @@ class WidgetSignalAutoTrader:
         self._refresh_dynamic_specs()
         self._validate_policy_quantities()
         self._configured_execution_policies = self._policy_manifest()
+        self._record_policy_consumption()
         new_symbols: dict[str, dict[str, Any]] = {}
         for spec in self.specs:
             if spec.code in frozen_symbols:
@@ -1152,6 +1376,19 @@ class WidgetSignalAutoTrader:
                 explicit_policy_id
                 or (execution_policy["policy_id"] if execution_policy else None)
             ),
+            "execution_policy_content_sha256": execution_policy.get(
+                "policy_content_sha256"
+            )
+            if execution_policy
+            else None,
+            "candidate_revision_sha256": execution_policy.get(
+                "candidate_revision_sha256"
+            )
+            if execution_policy
+            else None,
+            "joint_gate_sha256": execution_policy.get("joint_gate_sha256")
+            if execution_policy
+            else None,
             "execution_policy_research_arm": (
                 execution_policy["research_arm"] if execution_policy else None
             ),
@@ -1636,7 +1873,24 @@ class WidgetSignalAutoTrader:
             if integrated_aftermarket
             else route
         )
+        stored = (self._state.get("symbols", {}).get(spec.code) or {}).get(
+            "entry_execution_policy"
+        ) or {}
+        current = (
+            self._dated_execution_policies.get(spec.code, {}).get(market_context.name)
+            or {}
+        )
+        lineage = (
+            stored
+            if stored.get("policy_id") == execution_policy_id
+            else current
+            if current.get("policy_id") == execution_policy_id
+            else {}
+        )
         return {
+            "execution_policy_content_sha256": lineage.get("policy_content_sha256"),
+            "candidate_revision_sha256": lineage.get("candidate_revision_sha256"),
+            "joint_gate_sha256": lineage.get("joint_gate_sha256"),
             "side": side,
             "requested_qty": qty,
             "filled_qty": 0,
@@ -1862,7 +2116,9 @@ class WidgetSignalAutoTrader:
                 state=(
                     "ORDER_BOUND"
                     if result.accepted
-                    else "INTENT_AMBIGUOUS" if result.ambiguous else "INTENT_REJECTED"
+                    else "INTENT_AMBIGUOUS"
+                    if result.ambiguous
+                    else "INTENT_REJECTED"
                 ),
                 broker_order_no=result.order_no if result.accepted else "",
                 reason=result.return_msg,
@@ -2140,7 +2396,9 @@ class WidgetSignalAutoTrader:
                 else (
                     "order_submit_ambiguous"
                     if result.ambiguous
-                    else "order_submitted" if result.accepted else "order_submit_failed"
+                    else "order_submitted"
+                    if result.accepted
+                    else "order_submit_failed"
                 )
             ),
             spec,
@@ -2292,7 +2550,9 @@ class WidgetSignalAutoTrader:
                 order["status"] = (
                     "FILLED"
                     if filled == requested
-                    else "PARTIAL_CANCELED" if filled else "CANCELED"
+                    else "PARTIAL_CANCELED"
+                    if filled
+                    else "CANCELED"
                 )
             changed = True
             execution_venue_changed = bool(
@@ -3062,10 +3322,15 @@ class WidgetSignalAutoTrader:
             )
             self._save()
             self._record_entry_block_once(
-                spec=spec, symbol_state=symbol_state, signal_id=scale_in_liquidity_identity,
-                reason="scale_in_blocked_liquidity_guard", now=now,
-                trigger_price=trigger_price, current_price=current_price,
-                actual_order_submitted=False, **final_liquidity.event_fields(),
+                spec=spec,
+                symbol_state=symbol_state,
+                signal_id=scale_in_liquidity_identity,
+                reason="scale_in_blocked_liquidity_guard",
+                now=now,
+                trigger_price=trigger_price,
+                current_price=current_price,
+                actual_order_submitted=False,
+                **final_liquidity.event_fields(),
             )
             return
         if not leg_trigger_already_requested:
@@ -4404,10 +4669,15 @@ class WidgetSignalAutoTrader:
             symbol_state["last_entry_liquidity_block_identity"] = confirmation_identity
             self._save()
             self._record_entry_block_once(
-                spec=spec, symbol_state=symbol_state, signal_id=signal_id,
-                reason="entry_blocked_liquidity_guard", now=now,
-                confirmation_identity=confirmation_identity, source_state=source_state,
-                actual_order_submitted=False, **final_liquidity.event_fields(),
+                spec=spec,
+                symbol_state=symbol_state,
+                signal_id=signal_id,
+                reason="entry_blocked_liquidity_guard",
+                now=now,
+                confirmation_identity=confirmation_identity,
+                source_state=source_state,
+                actual_order_submitted=False,
+                **final_liquidity.event_fields(),
             )
             return
         if self._market_weakness_blocks_entry(

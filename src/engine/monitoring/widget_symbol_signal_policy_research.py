@@ -16,6 +16,8 @@ import inspect
 import fcntl
 import zlib
 from collections import deque
+from array import array
+from bisect import bisect_left
 import json
 import os
 import signal
@@ -185,6 +187,12 @@ def load_symbol_universe(
         if symbol not in universe:
             universe[symbol] = name
             origins[symbol] = "completed_daily_recommendation_auto_discovery"
+    from src.engine.monitoring.research_closed_loop import admission_symbols
+
+    for symbol, name in admission_symbols(observed_date, owner="widget").items():
+        if symbol not in universe and symbol not in pruned:
+            universe[symbol] = name
+            origins[symbol] = "causal_scanner_research_admission"
     return universe, origins
 
 
@@ -676,6 +684,11 @@ def _setup_feature(
     )
 
 
+@lru_cache(maxsize=4096)
+def _policy_cache_key(policy):
+    return json.dumps(asdict(policy), sort_keys=True, separators=(",", ":"))
+
+
 class ReplayContext:
     """Bounded symbol-local setup/reclaim/exit reuse with legacy arithmetic."""
 
@@ -687,32 +700,59 @@ class ReplayContext:
         self.exits: dict[tuple[Any, ...], Any] = {}
         self.grouped = grouped
         self.cache_dir = cache_dir
+        self.setup_indices = {}
+        self.reclaim_indices = {}
+        self.day_pages = {}
+        self.dirty_days = set()
+        self.day_keys = {}
+        self.cache_write_skips = 0
+        self.policy_pages = {
+            _policy_cache_key(policy): index // 128
+            for index, policy in enumerate(policy_grid())
+        }
         self.day_results: dict[date, dict[str, Any]] = {}
         self.cached_day_results: dict[date, dict[str, Any]] = {}
         self.cache_hits = self.cache_misses = 0
         self.contract = research_contract_hash() if cache_dir is not None else ""
         self.symbol = ""
 
-    def _day_path(self, day: date) -> Path:
-        key = hashlib.sha256(
-            json.dumps(
-                {
-                    "source": canonical_bar_hash(self.grouped[day]),
-                    "algorithm": self.contract,
-                    "cost": comparison_cost_contract(day),
-                },
-                sort_keys=True,
-            ).encode()
-        ).hexdigest()
-        return self.cache_dir / f"{day.isoformat()}_{key}.json.z"
+    def _policy_page(self, policy):
+        key = _policy_cache_key(policy)
+        return self.policy_pages.get(
+            key, "extra_" + hashlib.sha256(key.encode()).hexdigest()[:16]
+        )
 
-    def _load_day(self, day: date) -> dict[str, Any]:
+    def _day_path(self, day: date) -> Path:
+        if day not in self.day_keys:
+            self.day_keys[day] = hashlib.sha256(
+                json.dumps(
+                    {
+                        "source": canonical_bar_hash(self.grouped[day]),
+                        "algorithm": self.contract,
+                        "cost": comparison_cost_contract(day),
+                    },
+                    sort_keys=True,
+                ).encode()
+            ).hexdigest()
+        return (
+            self.cache_dir
+            / f"{day.isoformat()}_{self.day_keys[day]}_p{self.day_pages.get(day, 0)}.json.z"
+        )
+
+    def _load_day(self, day: date, policy: SignalPolicy) -> dict[str, Any]:
+        page = self._policy_page(policy)
+        if self.day_pages.get(day) != page:
+            if day in self.dirty_days:
+                self._flush_day(day)
+            self.day_results.pop(day, None)
+            self.cached_day_results.pop(day, None)
+            self.day_pages[day] = page
         if day not in self.day_results:
             result = {}
             if self.cache_dir is not None:
                 path = self._day_path(day)
                 try:
-                    if path.stat().st_size <= 1024 * 1024:
+                    if not path.is_symlink() and path.lstat().st_size <= 1024 * 1024:
                         decoder = zlib.decompressobj()
                         raw = decoder.decompress(path.read_bytes(), 8 * 1024 * 1024)
                         if decoder.eof and not decoder.unused_data:
@@ -737,8 +777,8 @@ class ReplayContext:
     def read_day(self, day: date, policy: SignalPolicy) -> list[dict[str, Any]] | None:
         if self.cache_dir is None:
             return None
-        key = json.dumps(asdict(policy), sort_keys=True, separators=(",", ":"))
-        self._load_day(day)
+        key = _policy_cache_key(policy)
+        self._load_day(day, policy)
         rows = self.cached_day_results[day].get(key)
         if isinstance(rows, list) and all(
             isinstance(row, dict) and row.get("trade_date") == day.isoformat()
@@ -754,77 +794,47 @@ class ReplayContext:
     ) -> None:
         if self.cache_dir is None:
             return
-        results = self._load_day(day)
-        results[json.dumps(asdict(policy), sort_keys=True, separators=(",", ":"))] = (
-            rows
+        results = self._load_day(day, policy)
+        results[_policy_cache_key(policy)] = rows
+        self.dirty_days.add(day)
+
+    def _flush_day(self, day):
+        if day not in self.dirty_days:
+            return
+        results = self.day_results[day]
+        content = json.dumps(results, sort_keys=True, separators=(",", ":"))
+        encoded = zlib.compress(
+            json.dumps(
+                {
+                    "checksum": hashlib.sha256(content.encode()).hexdigest(),
+                    "results": results,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
         )
-        # Optional day cache is capped below the corresponding source size.
-        if len(results) > 256:
-            del results[next(iter(results))]
+        from src.engine.monitoring.research_closed_loop import optional_cache_write
+
+        if len(encoded) <= 1024 * 1024 and len(content) <= 8 * 1024 * 1024:
+            self.cache_dir.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                written = optional_cache_write(
+                    self._day_path(day), encoded, cache_root=self.cache_dir.parent
+                )
+            except (OSError, ValueError):
+                written = False
+            if not written:
+                self.cache_write_skips += 1
+        else:
+            self.cache_write_skips += 1
+        self.dirty_days.discard(day)
 
     def flush(self) -> None:
         if self.cache_dir is None:
             return
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        for day, results in self.day_results.items():
-            limit = len(
-                json.dumps(
-                    [
-                        (
-                            bar.timestamp.isoformat(),
-                            bar.open_price,
-                            bar.high_price,
-                            bar.low_price,
-                            bar.close_price,
-                            bar.volume,
-                        )
-                        for bar in self.grouped[day]
-                    ]
-                ).encode()
-            )
-            while results:
-                content = json.dumps(results, sort_keys=True, separators=(",", ":"))
-                encoded = zlib.compress(
-                    json.dumps(
-                        {
-                            "checksum": hashlib.sha256(content.encode()).hexdigest(),
-                            "results": results,
-                        },
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    ).encode()
-                )
-                if len(encoded) <= limit:
-                    break
-                del results[next(iter(results))]
-            if results:
-                path = self._day_path(day)
-                fd, temporary = tempfile.mkstemp(
-                    prefix=".day-cache-", dir=self.cache_dir
-                )
-                try:
-                    with os.fdopen(fd, "wb") as handle:
-                        handle.write(encoded)
-                        handle.flush()
-                        os.fsync(handle.fileno())
-                    os.replace(temporary, path)
-                    for previous in self.cache_dir.glob(f"{day.isoformat()}_*.json.z"):
-                        if previous != path:
-                            previous.unlink(missing_ok=True)
-                finally:
-                    if os.path.exists(temporary):
-                        os.unlink(temporary)
-        # Remove only optional cache files; source, policies and receipts are separate.
-        files = sorted(
-            self.cache_dir.glob("*.json.z"),
-            key=lambda path: path.stat().st_mtime,
-            reverse=True,
-        )
-        total = 0
-        for path in files:
-            total += path.stat().st_size
-            if total > 32 * 1024 * 1024:
-                path.unlink(missing_ok=True)
+        for day in list(self.dirty_days):
+            self._flush_day(day)
 
     def feature(self, day: date, index: int, policy: SignalPolicy) -> Any:
         minimum = (
@@ -876,6 +886,57 @@ class ReplayContext:
                 )
             self.features[key] = values
         return self.features[key][index]
+
+    def eligible_setup_indices(self, day: date, policy: SignalPolicy):
+        minimum = (
+            policy.lookback_bars
+            if policy.minimum_history_bars is None
+            else policy.minimum_history_bars
+        )
+        key = (
+            day,
+            policy.segment,
+            policy.lookback_bars,
+            policy.anchor_mode,
+            minimum,
+            policy.drawdown_pct,
+            policy.near_low_pct,
+            policy.setup_valid_bars,
+        )
+        if key not in self.setup_indices:
+            start, end = SEGMENTS[policy.segment]
+            indices = array("I")
+            rows = self.grouped[day]
+            if day not in self.reclaim_indices:
+                self.reclaim_indices[day] = array(
+                    "I",
+                    (
+                        i
+                        for i, row in enumerate(rows[:-1])
+                        if row.close_price >= row.open_price
+                        and _trend_not_down(rows, i, 3)
+                        and _trend_not_down(rows, i, 5)
+                    ),
+                )
+            reclaim = self.reclaim_indices[day]
+            for index, bar in enumerate(self.grouped[day][:-1]):
+                if index < minimum - 1 or not start <= bar.timestamp.time() < end:
+                    continue
+                position = bisect_left(reclaim, index + 1)
+                if (
+                    position >= len(reclaim)
+                    or reclaim[position] > index + policy.setup_valid_bars
+                ):
+                    continue
+                feature = self.feature(day, index, policy)
+                if (
+                    feature is not None
+                    and feature[0] + 1e-12 >= policy.drawdown_pct
+                    and feature[1] - 1e-12 <= policy.near_low_pct
+                ):
+                    indices.append(index)
+            self.setup_indices[key] = indices
+        return self.setup_indices[key]
 
     def entry(self, day: date, index: int, policy: SignalPolicy, end: time) -> Any:
         key = (
@@ -1049,7 +1110,17 @@ def evaluate_policy(
         index = minimum_history - 1
         cooldown_until = -1
         daily_entry_count = 0
+        setup_indices = (
+            replay_context.eligible_setup_indices(trade_date, policy)
+            if replay_context
+            else None
+        )
         while index < len(rows) - 1:
+            if setup_indices is not None:
+                position = bisect_left(setup_indices, max(index, cooldown_until))
+                if position >= len(setup_indices):
+                    break
+                index = setup_indices[position]
             if daily_entry_count >= max(ENTRY_CAP_VALUES):
                 break
             bar = rows[index]
@@ -1154,41 +1225,55 @@ def _subset_evaluation(evaluation: dict[str, Any], dates: list[date]) -> dict[st
 
 
 def _summarize_episodes(episodes: list[dict[str, Any]]) -> dict[str, Any]:
-    attempted_notional = sum(row["entry_price"] for row in episodes)
-    pnl = sum(row["entry_price"] * row["net_return_pct"] / 100.0 for row in episodes)
-    return {
-        "episode_count": len(episodes),
-        "target_count": sum(row["exit_reason"] == "target" for row in episodes),
-        "adverse_exit_count": sum(
-            row["exit_reason"]
-            in {"confirmed_support_break", "same_bar_conflict_adverse"}
-            for row in episodes
-        ),
-        "force_flat_count": sum(row["exit_reason"] == "force_flat" for row in episodes),
-        "entry_ready_count": sum(
-            row["entry_state"] == "ENTRY_READY" for row in episodes
-        ),
-        "entry_caution_count": sum(
-            row["entry_state"] == "ENTRY_CAUTION" for row in episodes
-        ),
-        "notional_weighted_ev_pct": (
-            round(pnl / attempted_notional * 100.0, 6) if attempted_notional else None
-        ),
-        "worst_episode_return_pct": (
-            min(row["net_return_pct"] for row in episodes) if episodes else None
-        ),
-        "average_peak_return_pct": (
-            round(sum(row["peak_return_pct"] for row in episodes) / len(episodes), 6)
-            if episodes
-            else None
-        ),
-        "entry_state_breakdown": {
-            state: _summarize_episode_subset(
-                [row for row in episodes if row["entry_state"] == state]
+    notional = pnl = peaks = 0
+    worst = None
+    target = adverse = flat = ready = caution = 0
+    states = {state: [0, 0, 0, 0, None] for state in ("ENTRY_READY", "ENTRY_CAUTION")}
+    for row in episodes:
+        price, net = row["entry_price"], row["net_return_pct"]
+        notional += price
+        profit = price * net / 100.0
+        pnl += profit
+        peaks += row["peak_return_pct"]
+        worst = net if worst is None else min(worst, net)
+        is_target = row["exit_reason"] == "target"
+        target += is_target
+        adverse += row["exit_reason"] in {
+            "confirmed_support_break",
+            "same_bar_conflict_adverse",
+        }
+        flat += row["exit_reason"] == "force_flat"
+        ready += row["entry_state"] == "ENTRY_READY"
+        caution += row["entry_state"] == "ENTRY_CAUTION"
+        state = states.get(row["entry_state"])
+        if state is not None:
+            state[0] += 1
+            state[1] += is_target
+            state[2] += price
+            state[3] += profit
+            state[4] = net if state[4] is None else min(state[4], net)
+    return dict(
+        episode_count=len(episodes),
+        target_count=target,
+        adverse_exit_count=adverse,
+        force_flat_count=flat,
+        entry_ready_count=ready,
+        entry_caution_count=caution,
+        notional_weighted_ev_pct=round(pnl / notional * 100.0, 6) if notional else None,
+        worst_episode_return_pct=worst,
+        average_peak_return_pct=round(peaks / len(episodes), 6) if episodes else None,
+        entry_state_breakdown={
+            name: dict(
+                episode_count=value[0],
+                target_count=value[1],
+                notional_weighted_ev_pct=round(value[3] / value[2] * 100.0, 6)
+                if value[2]
+                else None,
+                worst_episode_return_pct=value[4],
             )
-            for state in ("ENTRY_READY", "ENTRY_CAUTION")
+            for name, value in states.items()
         },
-    }
+    )
 
 
 def _entry_cap_comparison(
@@ -1604,6 +1689,212 @@ def discover_symbol_policy(
     }
 
 
+def _frozen_prospective_result(
+    result,
+    *,
+    symbol,
+    grouped,
+    qualified_dates,
+    end_date,
+    replay_context,
+    baseline,
+    baseline_policy_id=None,
+):
+    """Keep the historical grid diagnostic; validate a prespecified future seed."""
+    from src.engine.monitoring import research_closed_loop as loop
+
+    parameters = result.get("selected_policy")
+    frozen = loop.load_candidate(symbol)
+    previous = frozen
+    reason = None
+    if frozen is not None:
+        prefix = canonical_bar_hash(
+            bar
+            for day, rows in grouped.items()
+            if str(day) <= frozen["frozen_source_date"]
+            for bar in rows
+        )
+        if (
+            prefix != frozen["frozen_source_sha256"]
+            or comparison_cost_contract(
+                date.fromisoformat(frozen["frozen_source_date"])
+            )["contract_sha256"]
+            != frozen["cost_sha256"]
+        ):
+            frozen, reason = None, "source_or_cost_correction"
+        elif frozen.get("baseline_parameters") != baseline:
+            frozen, reason = None, "incumbent_parent_changed"
+    if frozen is None:
+        if not isinstance(parameters, dict):
+            return result
+        frozen = loop.candidate_revision(
+            symbol=symbol,
+            parameters=parameters,
+            source_date=end_date,
+            source_sha256=canonical_bar_hash(
+                bar for rows in grouped.values() for bar in rows
+            ),
+            cost_sha256=comparison_cost_contract(end_date)["contract_sha256"],
+            baseline_parameters=baseline,
+            baseline_policy_id=baseline_policy_id,
+            supersedes_revision_sha256=previous["revision_sha256"] if reason else None,
+            supersession_reason=reason,
+        )
+    loop.validate_revision(frozen, symbol=symbol, owner="widget")
+    historical = result
+    result = {
+        **historical,
+        "historical_proxy_diagnostic": {
+            key: historical.get(key)
+            for key in (
+                "decision",
+                "selected_policy",
+                "date_split",
+                "grid_candidate_count",
+            )
+        },
+        "candidate_revision": frozen,
+        "prospective_window": loop.prospective_window(
+            frozen, source_date=end_date, qualified_dates=qualified_dates
+        ),
+        "selected_policy": frozen["parameters"],
+    }
+    if result["prospective_window"]["status"] != "ready":
+        result["decision"] = (
+            "pending_prospective_validation_no_widget_runtime_promotion"
+        )
+        return result
+    dates = [
+        date.fromisoformat(day)
+        for day in frozen["calibration_dates"] + frozen["holdout_dates"]
+    ]
+    parameters = frozen["parameters"]
+    policy = SignalPolicy(
+        **{
+            key: value
+            for key, value in parameters.items()
+            if key in SignalPolicy.__dataclass_fields__
+        }
+    )
+    full = evaluate_policy(
+        grouped, dates, policy, include_episodes=True, replay_context=replay_context
+    )
+    cal = dates[: len(frozen["calibration_dates"])]
+    windows = dict(
+        calibration=cal,
+        calibration_first_half=cal[: len(cal) // 2],
+        calibration_second_half=cal[len(cal) // 2 :],
+        holdout=dates[len(cal) :],
+    )
+    cap = parameters["max_completed_entries_per_day"]
+    result["selected_episodes"], result["entry_cap_comparison"] = {}, {}
+    for name, window in windows.items():
+        replay = _subset_evaluation(full, window)
+        episodes = [
+            row for row in replay["episodes"] if row["daily_entry_ordinal"] <= cap
+        ]
+        result[name] = {
+            **_summarize_episodes(episodes),
+            **modeled_summary(episodes, window),
+            "episodes": episodes,
+        }
+        result["entry_cap_comparison"][name] = replay["entry_cap_comparison"]
+        if name in ("calibration", "holdout"):
+            result["selected_episodes"][name] = episodes
+    ready = _calibration_ready(
+        result["calibration"],
+        result["calibration_first_half"],
+        result["calibration_second_half"],
+    )
+    ready &= result["holdout"]["episode_count"] >= 4 and _positive_ev(result["holdout"])
+    ready &= (
+        _metric_float(result["holdout"], "worst_episode_return_pct", default=-999) > -3
+    )
+    ready &= all(
+        _incremental_entry_cap_ready(result["entry_cap_comparison"][name], cap)
+        for name in windows
+    )
+    # Component attribution remains an independent required contract for changes
+    # to an incumbent. A frozen new-symbol experiment has no incumbent arm.
+    result.pop("component_selection", None)
+    result.pop("component_comparison", None)
+    if baseline:
+        arms = {}
+        signal_keys = tuple(
+            key
+            for key in SignalPolicy.__dataclass_fields__
+            if key not in {"target_bps", "force_flat_time"}
+        )
+        for name, arm_parameters in component_arms(
+            baseline,
+            parameters,
+            signal_keys=signal_keys,
+            exit_keys=("target_bps", "force_flat_time"),
+        ).items():
+            arm_policy = SignalPolicy(
+                **{
+                    key: value
+                    for key, value in arm_parameters.items()
+                    if key in SignalPolicy.__dataclass_fields__
+                }
+            )
+            arm_replay = evaluate_policy(
+                grouped,
+                dates,
+                arm_policy,
+                include_episodes=True,
+                replay_context=replay_context,
+            )
+            arm = {"parameters": arm_parameters}
+            for window, window_dates in windows.items():
+                subset = _subset_evaluation(arm_replay, window_dates)
+                selected_rows = [
+                    row
+                    for row in subset["episodes"]
+                    if row["daily_entry_ordinal"]
+                    <= arm_parameters["max_completed_entries_per_day"]
+                ]
+                arm[window] = {
+                    **_summarize_episodes(selected_rows),
+                    **modeled_summary(selected_rows, window_dates),
+                    "episodes": selected_rows,
+                    "entry_cap_comparison": subset["entry_cap_comparison"],
+                }
+            arms[name] = arm
+        result["component_comparison"] = objective_comparison(
+            arms, baseline_policy_id=frozen["baseline_policy_id"]
+        )
+        selection = select_policy_component(result["component_comparison"])
+        result["component_selection"] = selection
+        chosen = arms.get(selection["selected_arm"])
+        # No different holdout winner can replace the prespecified seed.
+        expected = {
+            key: value
+            for key, value in (chosen or {}).get("parameters", {}).items()
+            if key in SignalPolicy.__dataclass_fields__
+            or key == "max_completed_entries_per_day"
+        }
+        ready &= expected == parameters
+        if chosen and expected == parameters:
+            for window in windows:
+                result[window] = chosen[window]
+    result["decision"] = (
+        "holdout_pass_widget_signal_policy_candidate"
+        if ready
+        else "prospective_holdout_failed_no_widget_runtime_promotion"
+    )
+    result["date_split"] = dict(
+        qualified_trading_date_count=len(dates),
+        calibration_trading_date_count=len(cal),
+        holdout_trading_date_count=len(dates) - len(cal),
+        calibration_start=str(cal[0]),
+        calibration_end=str(cal[-1]),
+        holdout_start=str(dates[len(cal)]),
+        holdout_end=str(dates[-1]),
+    )
+    return result
+
+
 def build_report(
     *,
     sources: dict[str, tuple[list[Bar], dict[str, Any]]],
@@ -1633,6 +1924,7 @@ def build_report(
                 "established_widget_symbol",
                 "operator_enrolled_research_watch",
                 "completed_daily_recommendation_auto_discovery",
+                "causal_scanner_research_admission",
             }
             for origin in origins.values()
         )
@@ -1838,6 +2130,28 @@ def build_report(
                 result["decision"] = "holdout_pass_widget_signal_policy_candidate"
             else:
                 result["decision"] = "component_economics_or_holdout_not_ready"
+        selected_parameters = result.get("selected_policy") or {}
+        unchanged = baseline is not None and all(
+            selected_parameters.get(key) == baseline.get(key)
+            for key in selected_parameters
+        )
+        if end_date >= date(2026, 9, 17) and not unchanged:
+            frozen_baseline = {
+                key: value
+                for key, value in (baseline or {}).items()
+                if key in SignalPolicy.__dataclass_fields__
+                or key == "max_completed_entries_per_day"
+            } or None
+            result = _frozen_prospective_result(
+                result,
+                symbol=symbol,
+                grouped=grouped_qualified,
+                qualified_dates=qualified_dates,
+                end_date=end_date,
+                replay_context=replay_context,
+                baseline=frozen_baseline,
+                baseline_policy_id=baseline_receipt.get("policy_id"),
+            )
         replay_context.flush()
         _ACTIVE_REPLAY_CONTEXT = None
         results[symbol] = {"symbol": symbol, "name": name, **result}
@@ -1990,6 +2304,16 @@ def _attach_population_evidence(report, *, market_census=None, capital_limit_krw
         },
         capital_limit_krw=capital_limit_krw,
     )
+    if end_date >= date(2026, 9, 17):
+        from src.engine.monitoring.research_closed_loop import SCHEMA, report_joint_gate
+
+        report["closed_loop_contract"] = SCHEMA
+        from src.engine.monitoring.research_version_outcomes import outcome_feedback
+
+        report["policy_version_feedback"] = outcome_feedback(end_date)
+        report["joint_allocation_gate"] = report_joint_gate(
+            report, source_date=end_date
+        )
     return report
 
 
@@ -2028,6 +2352,8 @@ def research_contract_hash() -> str:
         widget_signal_quality,
         widget_comparison_cost,
         policy_research_economics,
+        research_closed_loop,
+        research_source_facts,
     )
 
     digest = hashlib.sha256()
@@ -2037,6 +2363,8 @@ def research_contract_hash() -> str:
         widget_signal_quality,
         widget_comparison_cost,
         policy_research_economics,
+        research_closed_loop,
+        research_source_facts,
     ):
         digest.update(Path(module.__file__).read_bytes())
     digest.update(Path(__file__).read_bytes())
@@ -2054,7 +2382,19 @@ def _external_evidence_generation(end_date, symbols):
         / "market_opportunity_census"
         / f"market_opportunity_census_{end_date.isoformat()}.json"
     )
-    paths = [census]
+    from src.engine.monitoring.research_closed_loop import DIRECTORY
+
+    paths = [
+        census,
+        DIRECTORY / f"allocator_{end_date.isoformat()}.json",
+        DIRECTORY / f"joint_inputs_episode_{end_date.isoformat()}.json",
+    ]
+    paths.extend(DIRECTORY.glob("widget_outcomes_*.json"))
+    for symbol in sorted(symbols):
+        paths.extend(
+            sorted((DIRECTORY / "facts").glob(f"prospective_facts_{symbol}_*.jsonl*"))
+        )
+        paths.extend((DIRECTORY / "facts").glob(f"source_gap_{symbol}_*.json"))
     if end_date >= date(2026, 9, 17):
         for symbol in sorted(symbols):
             paths.extend(
@@ -2089,6 +2429,8 @@ def research_input_fingerprint(
     symbol_universe: Collection[str],
     symbol_origins: dict[str, str],
 ) -> str:
+    from src.engine.monitoring.research_closed_loop import load_candidate
+
     payload = {
         "schema": "widget_symbol_signal_policy_research_input_v3",
         "external_evidence_generation": _external_evidence_generation(
@@ -2097,6 +2439,9 @@ def research_input_fingerprint(
         "producer_sha256": research_contract_hash(),
         "end_date": end_date.isoformat(),
         "cost_contract": comparison_cost_contract(end_date),
+        "frozen_candidates": {
+            symbol: load_candidate(symbol) for symbol in sorted(symbol_universe)
+        },
         "applied_baselines": applied_baselines or {},
         "symbol_universe": sorted(symbol_universe),
         "symbol_origins": {
@@ -2226,6 +2571,15 @@ def render_markdown(report: dict[str, Any]) -> str:
 def write_report(
     report: dict[str, Any], *, output_dir: Path = OUTPUT_DIR
 ) -> tuple[Path, Path]:
+    from src.engine.monitoring.research_closed_loop import freeze_candidate
+
+    for result in report["symbols"].values():
+        revision = result.get("candidate_revision")
+        if revision is not None and freeze_candidate(revision) != revision:
+            raise ValueError("research_concurrent_frozen_candidate_conflict")
+    from src.engine.monitoring.research_closed_loop import write_joint_inputs
+
+    write_joint_inputs(report, family="widget")
     stem = f"widget_symbol_signal_policy_research_{report['end_date']}"
     json_path = output_dir / f"{stem}.json"
     markdown_path = output_dir / f"{stem}.md"
@@ -2677,7 +3031,16 @@ def main(argv: list[str] | None = None) -> int:
         if reusable is None:
             report = build_report(
                 **kwargs,
-                replay_cache_dir=args.snapshot_dir / "replay",
+                replay_cache_dir=(
+                    __import__(
+                        "src.engine.monitoring.research_closed_loop",
+                        fromlist=["DIRECTORY"],
+                    ).DIRECTORY
+                    / "cache"
+                    / "replay"
+                    if end_date >= date(2026, 9, 17)
+                    else args.snapshot_dir / "replay"
+                ),
                 # Population evidence belongs to the final combined report,
                 # not N copies of the census in per-symbol checkpoints.
                 market_census={},

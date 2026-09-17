@@ -932,7 +932,8 @@ class SamsungRegularTwoLegMachine:
             for leg in self._state.get("legs", []):
                 if (
                     leg.get("status") == "PLANNED"
-                    and str(leg.get("route") or normalized_route).upper() == normalized_route
+                    and str(leg.get("route") or normalized_route).upper()
+                    == normalized_route
                 ):
                     entry_adverse_owners.terminalize_original_owner_guard(
                         leg, final_liquidity.reason
@@ -940,8 +941,10 @@ class SamsungRegularTwoLegMachine:
                     leg["status"] = "NO_FILL"
             self._state["blocked_reason"] = final_liquidity.reason
             self._record(
-                now, "entry_liquidity_blocked_before_buy",
-                route=normalized_route, **final_liquidity.event_fields(),
+                now,
+                "entry_liquidity_blocked_before_buy",
+                route=normalized_route,
+                **final_liquidity.event_fields(),
             )
             return False
         return True
@@ -2478,6 +2481,9 @@ class SamsungRegularTwoLegMachine:
                     "scan_last_bar": self.policy.scan_last_bar.isoformat(),
                     "leg_quantities": [leg_quantity for _ in plans],
                     "runtime_policy_hash": str(self.policy.runtime_policy_hash),
+                    "candidate_revision_sha256": str(
+                        getattr(self.policy, "candidate_revision_sha256", "")
+                    ),
                     "lookback_bars": int(self.policy.lookback_bars),
                     "rolling_high_drawdown_pct": float(
                         self.policy.rolling_high_drawdown_pct
@@ -2728,6 +2734,9 @@ class SamsungRegularTwoLegMachine:
                     "target_ticks": int(self.policy.target_ticks),
                     "runtime_policy_source": str(self.policy.runtime_policy_source),
                     "runtime_policy_hash": str(self.policy.runtime_policy_hash),
+                    "candidate_revision_sha256": str(
+                        getattr(self.policy, "candidate_revision_sha256", "")
+                    ),
                     "new_entry_quantity_receipt": new_entry_quantity_receipt(now),
                     "entry_legs": [
                         {

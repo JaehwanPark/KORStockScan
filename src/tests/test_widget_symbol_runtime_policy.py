@@ -422,7 +422,7 @@ def test_prior_catalog_still_loads_without_backfilling_seed_registration(tmp_pat
     policy = runtime.build_policy(
         report, evidence_report_path=evidence, legacy_observation_enrollment=True
     )
-    path = tmp_path / f'{runtime.POLICY_PREFIX}_{policy["effective_date"]}.json'
+    path = tmp_path / f"{runtime.POLICY_PREFIX}_{policy['effective_date']}.json"
     path.write_text(json.dumps(policy))
     resolved = runtime.WidgetSymbolRuntimePolicyLoader(
         tmp_path
@@ -482,7 +482,7 @@ def test_native_publisher_separates_observation_and_execution_catalogs(tmp_path)
     )
 
 
-def test_new_proxy_promotion_needs_feasibility_and_keeps_observation_lane():
+def test_new_proxy_promotion_needs_closed_loop_contract_and_keeps_observation_lane():
     report = _research()
     report["end_date"] = "2026-09-17"
     policy = runtime.build_policy(report)
@@ -490,7 +490,7 @@ def test_new_proxy_promotion_needs_feasibility_and_keeps_observation_lane():
     assert "006800" in policy["observation_symbols"]
     assert (
         policy["execution_quality_blocks"]["006800"]
-        == "selected_proxy_execution_feasibility_missing"
+        == "closed_loop_evidence_contract_missing"
     )
 
 

@@ -119,3 +119,24 @@
 현재 U10A/B 구현 owner는 오늘 체크리스트 `KiwoomCommonHealthOpportunityCostAcceptance0917`, widget 자연 source/evaluation owner는 `WidgetPostcloseEvaluationPinAcceptance0916`이다. 본 계획은 계산 후속의 범위 문서이며 별도 자동 실행 OPEN/cron을 만들지 않았다. 사용자가 계산 구현을 지시하면 그때 owner·일정·허용 resource를 정하고 이 순서로 진행한다. source code/targeted 검증, selected release, 실제 wrapper/PID 소비, 자연 정책 생성, 비용차감 실현수익은 각각 보고한다.
 
 문서-only 검증은 링크·owner·authority 검토, diff check 및 print-only parser로 수행한다. 위 성능 백분율은 구현 후 측정할 목표이며 이번 작성으로 달성된 실측 결과가 아니다.
+
+## 7. 전체 폐루프·연구 universe 확대의 추가 성능 패키지
+
+[전체 폐루프 상세계획](./widget-episode-full-closed-loop-and-scale-performance-implementation-plan-2026-09-17.md) C0–C8/P1–P6을 이번 확대 범위 owner로 참조한다. 기존 widget source closure에서 구현된 prefix/setup/exit reuse·bounded day cache·projection·checkpoint는 다시 미착수로 표시하지 않는다. 신규 census admission·전향적 seed K·executable CF·joint rule replay·성과 attribution의 추가 비용이 대상이다.
+
+| 추가 패키지 | 기존 후보와의 연결 | 구현 선후·oracle |
+| --- | --- | --- |
+| P1 공통 day source/manifest·single decode | O0/O3 | C0 fixture/semantic dependency→C1 native ledger; writer freeze와 consumer 검증책임 확정 |
+| P2 raw quote/depth/TTL/seed execution index | O3/O2 | C2 budget/clock/epoch→C3 prospective contract 먼저; raw-only를 과거 seed 신호로 만들지 않음 |
+| P3 incremental full-grid/partition | O2 | 수정 완료 의미 reference→기존 day cache/feature reuse 확장; 새 day/정정/dependent state만 replay |
+| P4 공통 경제성·joint interval/registered rule replay | O2/O3 | C4 기존 allocator·owner를 고정한 calibration/holdout/joint economics oracle; 권한과 eligibility 공유 금지 |
+| P5 readiness/phase 재개·중복 refresh 방지 | O0 | 기존 wrapper 단계 contract/lock→동일 target·source completion을 기다려 필요한 단계만 재실행 |
+| P6 memory/storage/scale matrix | O0/O3 | N19/50/100·D72/120·G전체1,536/cap1–5·K1/4 cold/warm/append/정정/TERM 계측; live/rollback evidence 보호 |
+
+상세 계획 §7의 `12N초` REST cycle과 `N×D×G×B` 계산 모델로 관측 capacity·CPU·read bytes·disk를 따로 예측한다. 최종19종목 synthetic cold1,209.895초/warm43.818초/RSS281.3MiB는 **확대 폐루프 구현 전 engineering baseline**이다. 단순 비례에서100종목 cold약6,368초는 단계budget5,400초를 초과할 수 있으며 실제 provider/EOD wait를 더하면 critical path는 더 길어진다. 기존21:15 refresh의900초 wait와 nightly acceptance도 포함해 deadline을 검증한다. N100/D120 stage budget·RSS/parity 목표와 추가 compute20% 목표는 후속 실측 대상이다.
+
+모든 단계의 optimization key·invalidation을 source/code/helper/seed/수량/비용/exclusion/label as-of/calendar/parent allocator까지 확장한다. N/K 확대가 raw TR을 후보수만큼 늘리지 않아야 한다. Cold/warm/매일 incremental 비용을 따로 기록하고 unchanged replay0·동일 source provider 중복0을 검증한다. Cache byte cap/LRU는 고정 working set·현재 free disk 계측 후 숫자로 확정하며 원본 raw·policy·receipt retention을 축소하지 않는다.
+
+O3→O2→O1의 기존 local 최적화 우선순위는 유지하되, C1–C4 correctness 변경 의미가 봉인되기 전에 성능 parity를 주장하지 않는다. 위젯/episode 확대 critical path는 P1/P2/P3/P4를 먼저 닫고 provider O1은 실제 병목일 때 이어서 적용한다. 계획 작성만으로 CPUQuota·MemoryMax·REST/provider cap·timer·sampling/floor를 바꾸지 않는다. Backlog는 native ledger/phase checkpoint에 남고 미완료 joint/source를 완료 policy로 발행하지 않는다.
+
+이번 전체 폐루프 source 구현과 반복 리뷰·규모 실측/배포 상태는 [09-17 구현 기록](../audit-reports/2026-09-17-widget-episode-full-closed-loop-implementation.md)을 따른다. C0–C8/P1–P6 producer/consumer를 연결하며 자연 신규 정책·actual next-date 소비·경제성은 기존 stable-ID acceptance owner에서 따로 확인한다. Final-refresh의 native account source 취득은 N/K에 비례하지 않고 기존 read adapter/cached token만 사용한다. Timer/grid/caps/sample/hard guard는 유지한다.

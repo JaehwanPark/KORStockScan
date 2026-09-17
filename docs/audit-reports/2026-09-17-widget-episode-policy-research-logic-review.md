@@ -96,3 +96,23 @@ source가 유효하되 signal이 0인 날, source 누락인 날, pair가 censore
 ## 6. 후속 구현 인계
 
 위 §1–§5는 최초 read-only 점검 시점의 기록이다. 이후 별도 사용자 지시로 R1–R5의 원천 adapter·목표함수·census handoff·실행가능성·source-day/자본 경계를 보완하고 반복 리뷰·검증을 수행했다. [구현·검증·배포 기록](2026-09-17-widget-episode-policy-research-implementation.md)을 현재 상태 owner로 참조한다. 원래 연구 누락이 재현되는 옛 코드와 실제 selected consumer를 섞지 않는다. 미등록 종목의 새로운 원천, 자연 공통-horizon 표본, 공동 capital contract와 실현 수익은 별도 원천/자연 acceptance이며 코드 테스트만으로 완료되지 않는다.
+
+## 7. 전체 폐루프·연구 확대 성능 후속 계획
+
+사용자의 추가 계획 보완 지시에 따라 [전체 폐루프·성능 상세 구현계획](../proposals/widget-episode-full-closed-loop-and-scale-performance-implementation-plan-2026-09-17.md)을 작성했다. §1–§5는 초기 read-only 리뷰, §6은 선행 코드 보완 인계다. 기존 조건부 자동 발행이 없다는 뜻이 아니며, 아래 잔여를 선행 R1–R5 코드 배포 완료와 혼동하지 않는다.
+
+| 잔여 | 상세 단계 | 완료 증거 |
+| --- | --- | --- |
+| Canonical census 누락→인과적 후보 admission→budgeted research catalog | C0–C2 | Native ID/count·defer/source gap·원래 clock/session을 보존한 전체 admission과 수집 coverage |
+| 새 정책의 과거 seed 부재 bootstrap·분봉 proxy와 실행검증 분리 | C3 | Historical full-grid 탐색→candidate freeze→전향적 calibration/holdout; 과거 quote 합성·winner 재탐색 금지 |
+| 공동 자본 결과를 최종 선정·발행에 결속 | C4–C5 | Existing allocator/owner snapshot 아래 feasible joint profit·incumbent 비교·독립 publisher 재구성 |
+| 신규 종목/registered 정책의 익일 자동 소비와 성과 회수 | C6–C8 | PREOPEN owner activation→actual consumer ack→full/partial terminal·exact-cost version attribution→final handoff |
+| 확대 N/D/G/K·I/O·관측·deadline·disk/RSS 오버행 | P1–P6/critical path | Full semantic parity, 19/50/100종목 cold/warm/append/정정/재개 계측과 capacity·deadline·storage receipt |
+
+기존 `load_symbol_universe`의 완료 일일 추천 자동 편입, widget next-date publisher/dated reader, episode 신규 종목·시간대 auto-expansion publisher/service는 재사용한다. 자동 미등록 후보 admission, 실행 source와 joint decision의 최종 gate 결속, 자연 generation/소비/성과까지의 전체 closure는 **후속 계획**이다. 전향적 이중-window 변경은 새 계약 제안이며 현재 gate를 문서로 해제하지 않는다.
+
+현재 raw REST budget에서 nominal cycle은12N초이며 N19=228초/N50=600초다. Historical bar 수집의 universe 확대만으로 subsecond timing/fresh5초 BBO나 full-session coverage가 생기지 않는다. 과거 전체 구간에 새 seed를 요구하는 검증 순환조건과 낮은 sampling capacity를 각각 닫아야 한다. 성능은 기존 최적화된 correctness reference와 비교하고, grid/미진입/zero-day 표본 축소로 deadline을 맞추지 않는다.
+
+[계산 최적화 계획](../proposals/postclose-computation-optimization-implementation-plan-2026-09-17.md) O0–O3에 추가 범위/의존을 연결했다. 현재 owner는 오늘 checklist의 `KiwoomCommonHealthOpportunityCostAcceptance0917` 및 `WidgetPostcloseEvaluationPinAcceptance0916`을 유지한다. 본 추가는 문서-only이며 새로운 자동 실행·운영 권한·구현 완료를 뜻하지 않는다.
+
+이번 전체 폐루프 source 구현과 반복 리뷰·규모 실측/배포 상태는 [09-17 구현 기록](../audit-reports/2026-09-17-widget-episode-full-closed-loop-implementation.md)을 따른다. C0–C8/P1–P6 producer/consumer를 연결하며 자연 신규 정책·actual next-date 소비·경제성은 기존 stable-ID acceptance owner에서 따로 확인한다. Final-refresh의 native account source 취득은 N/K에 비례하지 않고 기존 read adapter/cached token만 사용한다. Timer/grid/caps/sample/hard guard는 유지한다.

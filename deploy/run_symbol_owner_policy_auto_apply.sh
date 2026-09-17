@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PROJECT_DIR="/home/ubuntu/KORStockScan"
-PYTHON_BIN="$PROJECT_DIR/.venv/bin/python"
+SCRIPT_PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PROJECT_DIR="${KORSTOCKSCAN_PROJECT_DIR:-$SCRIPT_PROJECT_DIR}"
+PYTHON_BIN="${KORSTOCKSCAN_PYTHON_BIN:-$PROJECT_DIR/.venv/bin/python}"
 AUTHORITY_PATH="$PROJECT_DIR/data/config/symbol_owner_policy_standing_authority.json"
 OWNER_APPLY_DATE="$(TZ=Asia/Seoul /bin/date +%F)"
 if [[ "$OWNER_APPLY_DATE" > "2026-09-09" ]]; then

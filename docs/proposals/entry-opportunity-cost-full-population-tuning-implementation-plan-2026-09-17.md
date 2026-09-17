@@ -522,6 +522,8 @@ entry-spot/reentry의 minute-bar proxy 후보는 raw exact feasibility를 확인
 
 scanner/recheck/ADD-NOADD/exit family에서도 raw/미노출 CF가 existing candidate 생성으로 연결될 수 있으면 같은 보존·paired 비교를 적용한다. 다만 보유가 필요한 scale-in/exit 평가의 holding 조건은 제거하지 않는다. OFF/퇴역 producer의 raw 호환 reader는 current optimization으로 복원하지 않는다.
 
+전체 폐루프·확대 계산 후속: [C0–C8/P1–P6 상세 구현계획](widget-episode-full-closed-loop-and-scale-performance-implementation-plan-2026-09-17.md). U10A/B의 canonical admission·전향적 executable validation·shared allocation과 U11 next-date publication/actual consumer/version attribution을 연결한다. 기존 자동 일일추천·위젯/episode 경로는 재사용하며 whole-loop closure는 별도다. 새 consumer/가족 권한 및 sampling/floor 변경을 문서만으로 허용하지 않는다.
+
 ### 7.4 달성 가능성·불합리한 gate 검토
 
 | 조건 | 유지/보완 판단 | 구현 acceptance |
@@ -1135,3 +1137,5 @@ DI src/engine/wait6579_ev_cohort_report.py
 ~~~
 
 </details>
+
+이번 전체 폐루프 source 구현과 반복 리뷰·규모 실측/배포 상태는 [09-17 구현 기록](../audit-reports/2026-09-17-widget-episode-full-closed-loop-implementation.md)을 따른다. C0–C8/P1–P6 producer/consumer를 연결하며 자연 신규 정책·actual next-date 소비·경제성은 기존 stable-ID acceptance owner에서 따로 확인한다. Final-refresh의 native account source 취득은 N/K에 비례하지 않고 기존 read adapter/cached token만 사용한다. Timer/grid/caps/sample/hard guard는 유지한다.

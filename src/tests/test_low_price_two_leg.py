@@ -1526,8 +1526,9 @@ def test_20260821_profile_revision_validates_but_does_not_apply_source_generatio
 
     assert status == "candidate_validated_profile_revision_applied"
     assert revised["policy_mutations"] == []
-    assert revised["profiles"][profile_id]["policy"] == (
-        PROFILE_20260821_BASELINE_POLICIES[profile_id]
+    assert (
+        revised["profiles"][profile_id]["policy"]
+        == (PROFILE_20260821_BASELINE_POLICIES[profile_id])
     )
     assert revised["profiles"][profile_id]["selection_status"] == (
         "profile_revision_same_stage_mutation_not_applied"
@@ -2049,14 +2050,19 @@ def test_machine_blocks_entire_episode_when_latest_ten_prints_are_too_slow(
     assert guard["entry_execution_velocity_allowed"] is False
 
 
-def test_episode_velocity_wait_cannot_renew_original_liquidity_clock(tmp_path, monkeypatch):
+def test_episode_velocity_wait_cannot_renew_original_liquidity_clock(
+    tmp_path, monkeypatch
+):
     import src.trading.order.entry_liquidity_guard as guard
 
     profile = PROFILES["youngone_afternoon"]
     gateway = FakeGateway(profile.profile_id)
     machine = LowPriceTwoLegMachine(
-        profile=profile, gateway=gateway, state_path=tmp_path / "delayed-prints.json",
-        live_enabled=True, ownership_source=lambda code: "manual_operator",
+        profile=profile,
+        gateway=gateway,
+        state_path=tmp_path / "delayed-prints.json",
+        live_enabled=True,
+        ownership_source=lambda code: "manual_operator",
     )
     clock = [datetime.now().timestamp()]
     monkeypatch.setattr(guard.time, "time", lambda: clock[0])
@@ -2146,8 +2152,9 @@ def test_machine_rechecks_same_signal_after_bounded_entry_delay(tmp_path, monkey
     assert gateway.buy_calls == [22_650, 22_600]
     assert gateway.liquidity_calls == ["SOR", "SOR"]
     assert submitted["signal_features"]["signal_decision_at"] == first_at.isoformat()
-    assert submitted["signal_features"]["source_entry_event_id"] == (
-        armed["pending_entry_confirmation"]["source_entry_event_id"]
+    assert (
+        submitted["signal_features"]["source_entry_event_id"]
+        == (armed["pending_entry_confirmation"]["source_entry_event_id"])
     )
     assert submitted["signal_features"]["entry_confirmation_delay_sec"] == 3
     assert (
@@ -2477,9 +2484,12 @@ def test_prior_policy_mismatch_with_open_exposure_never_rolls(tmp_path):
     assert state["position_qty"] == 1
 
 
-def test_prior_held_inventory_keeps_its_original_target_policy(tmp_path):
+@pytest.mark.parametrize("entry_retired", [False, True])
+def test_prior_held_inventory_keeps_its_original_target_policy(tmp_path, entry_retired):
     prior_profile = PRE_RECOMMENDATION_PROFILES["kakao_late_morning"]
-    current_profile = PROFILES["kakao_late_morning"]
+    current_profile = replace(
+        PROFILES["kakao_late_morning"], entry_runtime_eligible=not entry_retired
+    )
     signal_close = 38_850
     legs = []
     owned_order_nos = []
@@ -3094,9 +3104,9 @@ def test_research_evidence_gate_validates_each_selected_profile(tmp_path):
         )[0]
         for profile in legacy_profiles
     )
-    payload["profiles"]["samsung_heavy_midday"]["recommended_spot"][
-        "scan_start"
-    ] = "13:19"
+    payload["profiles"]["samsung_heavy_midday"]["recommended_spot"]["scan_start"] = (
+        "13:19"
+    )
     path.write_text(json.dumps(payload), encoding="utf-8")
     assert not validate_research_evidence(
         PROFILES["samsung_heavy_midday"], path, expected_sha256=digest
@@ -4024,8 +4034,9 @@ def test_tuning_keeps_profiles_separate_without_subset_promotion(tmp_path):
     )
     assert migrated_status == "candidate_applied"
     assert set(migrated["profiles"]) == set(PRE_RECOMMENDATION_PROFILES)
-    assert migrated["profiles"]["mirae_asset_morning"]["policy"] == (
-        PRE_RECOMMENDATION_BASELINE_POLICIES["mirae_asset_morning"]
+    assert (
+        migrated["profiles"]["mirae_asset_morning"]["policy"]
+        == (PRE_RECOMMENDATION_BASELINE_POLICIES["mirae_asset_morning"])
     )
 
     pre_expanded_v2 = json.loads(json.dumps(candidate))
@@ -4064,8 +4075,9 @@ def test_tuning_keeps_profiles_separate_without_subset_promotion(tmp_path):
     )
     assert expanded_status == "candidate_applied"
     assert set(expanded_applied["profiles"]) == set(PRE_RECOMMENDATION_PROFILES)
-    assert expanded_applied["profiles"]["kakao_morning"]["policy"] == (
-        PRE_RECOMMENDATION_BASELINE_POLICIES["kakao_morning"]
+    assert (
+        expanded_applied["profiles"]["kakao_morning"]["policy"]
+        == (PRE_RECOMMENDATION_BASELINE_POLICIES["kakao_morning"])
     )
 
     source_gap_report = json.loads(json.dumps(report))

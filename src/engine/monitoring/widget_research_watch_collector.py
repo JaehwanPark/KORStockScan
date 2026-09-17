@@ -457,8 +457,9 @@ class WidgetResearchWatchCollector:
                 ):
                     return None
             price = _positive_int(source.get("current_price"))
-            bid, ask = _positive_int(bbo.get("best_bid")), _positive_int(
-                bbo.get("best_ask")
+            bid, ask = (
+                _positive_int(bbo.get("best_bid")),
+                _positive_int(bbo.get("best_ask")),
             )
             if not price or not bid or not ask or ask < bid:
                 return None
@@ -850,6 +851,25 @@ def main(argv: list[str] | None = None) -> int:
         config, observed_date=observed_at.date(), config_path=args.config
     )
     collector = WidgetResearchWatchCollector(config=config)
+    if not args.once:
+        import atexit
+        import threading
+        from src.engine.monitoring.research_source_facts import SharedResearchFactWriter
+
+        stop = threading.Event()
+        writer = SharedResearchFactWriter(
+            row["stock_code"] for row in config["symbols"]
+        )
+        thread = threading.Thread(
+            target=writer.run, args=(stop,), name="research-shared-facts", daemon=True
+        )
+        thread.start()
+
+        def stop_research_writer():
+            stop.set()
+            thread.join(timeout=5)
+
+        atexit.register(stop_research_writer)
     if args.once:
         collector.collect_once(observed_at, pace_requests=True)
         return 0

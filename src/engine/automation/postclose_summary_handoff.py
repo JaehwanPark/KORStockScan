@@ -188,6 +188,12 @@ def source_paths(report_dir: Path, target_date: str, consumer: str) -> dict[str,
             / "runtime_env"
             / f"threshold_runtime_env_verify_{target_date}.json"
         )
+    if target_date >= "2026-09-17":
+        from src.engine.automation.machine_research_closed_loop_refresh import (
+            report_path,
+        )
+
+        paths["machine_research_closed_loop"] = report_path(report_dir, target_date)
     return paths
 
 

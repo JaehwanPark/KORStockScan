@@ -8847,6 +8847,13 @@ def build_threshold_cycle_postclose_verification(
             require_checklist="next_stage2_checklist" not in disabled_stage_flags,
         )
         missing_downstream_links.extend(summary_handoff["issues"])
+        if target_date >= "2026-09-17":
+            from src.engine.automation.machine_research_closed_loop_refresh import (
+                report_path, validate_current_receipt,
+            )
+            research_closure = _load_json(report_path(REPORT_DIR, target_date))
+            if not validate_current_receipt(research_closure, target_date):
+                missing_downstream_links.append("machine_research_closed_loop_incomplete")
         from src.engine.automation.drought_handoff import (
             EFFECTIVE_DATE,
             verify_drought_handoff,

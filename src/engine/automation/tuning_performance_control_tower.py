@@ -529,7 +529,9 @@ def _selected_runtime(
             "status": (
                 "reported_pass_matching_date_and_families"
                 if pid_contract_matches
-                else "unmatched_or_failed" if pid_receipt else "missing"
+                else "unmatched_or_failed"
+                if pid_receipt
+                else "missing"
             ),
             "pid": pid_receipt.get("pid"),
             "target_date": pid_receipt.get("target_date"),
@@ -1596,7 +1598,6 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
     if verifier_path.exists() and not verifier_payload:
         warnings.append("threshold_cycle_postclose_verification_parse_failed")
 
-
     threshold_ev = payloads["threshold_cycle_ev"]
     strategy_scope = str(
         threshold_ev.get("strategy_scope")
@@ -1957,6 +1958,16 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
 
     if target_date >= EFFECTIVE_DATE:
         report["recommendation_intake"] = build_intake(REPORT_ROOT_DIR, target_date)
+    if target_date >= "2026-09-17":
+        from src.engine.automation.machine_research_closed_loop_refresh import (
+            report_path,
+            validate_current_receipt,
+        )
+
+        closure = _load_json(report_path(REPORT_ROOT_DIR, target_date))
+        report["machine_research_closed_loop"] = closure
+        if not validate_current_receipt(closure, target_date):
+            warnings.append("machine_research_closed_loop_incomplete")
     report["source_generation_contract"] = handoff_receipt
     json_text = json.dumps(
         report, ensure_ascii=False, indent=2, sort_keys=True, default=str

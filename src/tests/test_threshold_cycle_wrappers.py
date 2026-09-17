@@ -90,6 +90,67 @@ def test_postclose_command_metrics_on_term_are_explicitly_partial(tmp_path):
             process.communicate(timeout=8)
 
 
+@pytest.mark.parametrize(
+    "wrapper,boundary",
+    [
+        ("run_widget_evaluation.sh", "completed_target_date="),
+        ("run_machine_microstructure_final_refresh.sh", "completed_target_date_rc="),
+    ],
+)
+@pytest.mark.parametrize("explicit_root", [False, True])
+def test_independent_postclose_wrapper_binds_cwd_and_actual_python_imports(
+    tmp_path, wrapper, boundary, explicit_root
+):
+    release = tmp_path / "release"
+    workspace = tmp_path / "workspace"
+    override = tmp_path / "override"
+    for root, marker in [
+        (release, "release"),
+        (workspace, "workspace"),
+        (override, "override"),
+    ]:
+        package = root / "route_fixture"
+        package.mkdir(parents=True)
+        (package / "__init__.py").write_text("")
+        (package / "probe.py").write_text(f"MARKER = {marker!r}\nprint(MARKER)\n")
+    deploy = release / "deploy"
+    deploy.mkdir()
+    source = (Path(__file__).resolve().parents[2] / "deploy" / wrapper).read_text()
+    # Exercise the real initialization without running any report producer.
+    probe = deploy / wrapper
+    probe.write_text(
+        source[: source.index(boundary)]
+        + '\n"$PYTHON_BIN" -c "import route_fixture.probe"\n'
+        + '"$PYTHON_BIN" -m route_fixture.probe\n'
+        + 'printf "%s\\n" "$PWD" "$PYTHONPATH"\n'
+    )
+    env = {
+        **os.environ,
+        "PYTHONPATH": str(workspace),
+        "KORSTOCKSCAN_PYTHON_BIN": sys.executable,
+    }
+    env.pop("KORSTOCKSCAN_PROJECT_DIR", None)
+    if explicit_root:
+        env["KORSTOCKSCAN_PROJECT_DIR"] = str(override)
+    result = subprocess.run(
+        ["bash", str(probe)],
+        cwd=workspace,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+    expected_root = override if explicit_root else release
+    expected_marker = "override" if explicit_root else "release"
+    assert result.stdout.splitlines() == [
+        expected_marker,
+        expected_marker,
+        str(expected_root),
+        str(expected_root),
+    ]
+
+
 def test_postclose_symbol_master_resolves_mount_but_rejects_child_symlink(tmp_path):
     from src.utils.jsonl_io import read_json_object_strict_receipt
 

@@ -237,6 +237,7 @@ class RegularTwoLegPolicy:
     max_source_lag_minutes: int = 2
     runtime_policy_source: str = "clean_baseline_replay_selected_default"
     runtime_policy_hash: str = ""
+    candidate_revision_sha256: str = ""
     dynamic_authority_hash: str = ""
 
     def __post_init__(self) -> None:
@@ -357,6 +358,7 @@ class MachineProfile:
     policy: RegularTwoLegPolicy
     enable_env: str
     live_confirmation: str
+    entry_runtime_eligible: bool = True
 
 
 def _profile(

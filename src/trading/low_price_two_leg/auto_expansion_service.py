@@ -55,9 +55,11 @@ def _profile(row: dict, *, authority_hash: str) -> MachineProfile:
             runtime_policy_source="exact_date_auto_expansion_policy",
             runtime_policy_hash=authority_hash,
             dynamic_authority_hash=authority_hash,
+            candidate_revision_sha256=str(row.get("candidate_revision_sha256") or ""),
         ),
         enable_env=ENABLE_ENV,
         live_confirmation="EXACT_DATE_AUTO_EXPANSION_POLICY",
+        entry_runtime_eligible=row.get("entry_runtime_eligible", True),
     )
 
 
@@ -73,7 +75,7 @@ def _load_profiles(now: datetime) -> tuple[str, list[MachineProfile]]:
             profile.symbol,
             owner="episode",
             target_date=now.date(),
-            new_entry=True,
+            new_entry=profile.entry_runtime_eligible,
         ):
             raise ValueError(
                 f"episode_auto_expansion_owner_authority_missing:{profile.symbol}"
@@ -129,10 +131,56 @@ def main(argv: list[str] | None = None) -> int:
         )
         for profile in profiles
     ]
+    from src.engine.monitoring.research_closed_loop import consumer_receipt
+
+    try:
+        consumer_receipt(
+            owner="episode",
+            effective_date=now.date(),
+            accepted={
+                profile.profile_id: {
+                    "policy_content_sha256": authority_hash,
+                    "symbol": profile.symbol,
+                    "owner": "episode",
+                    "owner_activation_validated": True,
+                }
+                for profile in profiles
+            },
+        )
+    except (OSError, ValueError, TypeError):
+        print("episode_policy_consumer_receipt_write_failed", flush=True)
     for machine in machines:
         machine.profit_exit_lock_held = lambda bound=lock: not bound.closed
+    checked_publication_at = None
     while True:
         observed = datetime.now(KST)
+        if (
+            checked_publication_at is None
+            or (observed - checked_publication_at).total_seconds() >= 30
+        ):
+            try:
+                published_hash, published_profiles = _load_profiles(observed)
+                if published_hash != authority_hash:
+                    consumer_receipt(
+                        owner="episode",
+                        effective_date=observed.date(),
+                        accepted={
+                            profile.profile_id: {
+                                "policy_content_sha256": authority_hash,
+                                "symbol": profile.symbol,
+                                "owner_activation_validated": True,
+                            }
+                            for profile in profiles
+                        },
+                        rejected={
+                            profile.profile_id: "published_not_consumed_active_custody_preserved"
+                            for profile in published_profiles
+                        },
+                    )
+            except (OSError, ValueError, TypeError, KeyError):
+                print("episode_late_publication_check_source_gap", flush=True)
+            checked_publication_at = observed
+
         states = [machine.run_once(now=observed) for machine in machines]
         if args.once:
             print(json.dumps(states, ensure_ascii=False, indent=2))
