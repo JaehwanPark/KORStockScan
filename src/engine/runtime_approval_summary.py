@@ -30,7 +30,7 @@ from src.engine.automation.source_quality_hard_gate import (
 from src.engine.automation.key_lineage_ledger import entry_replay_observe_only_status
 from src.engine.daily_threshold_cycle_report import REPORT_DIR
 from src.engine.lifecycle_bucket_discovery import discovery_report_path
-from src.engine.threshold_cycle_ev_report import ev_report_paths
+from src.engine.threshold_cycle_ev_report import ev_report_paths, compact_scale_in_policy_attribution
 
 SUMMARY_DIR = REPORT_DIR / "runtime_approval_summary"
 SWING_RUNTIME_APPROVAL_DIR = REPORT_DIR / "swing_runtime_approval"
@@ -2343,6 +2343,7 @@ def build_runtime_approval_summary(
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "report_type": "runtime_approval_summary",
         "purpose": "read_only_summary_only_no_runtime_mutation",
+        "scale_in_policy_attribution": compact_scale_in_policy_attribution(ev_report.get("scale_in_policy_attribution")),
         "runtime_mutation_allowed": False,
         "strategy_scope": "scalp_and_swing" if include_swing else "scalp_only",
         "swing_sources_enabled": include_swing,

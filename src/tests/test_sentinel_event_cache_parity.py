@@ -210,3 +210,63 @@ def test_holding_exit_sentinel_raw_cache_report_parity(monkeypatch, tmp_path):
     )
 
     assert _without_event_load(cache_report) == _without_event_load(raw_report)
+
+
+def test_verified_day_facts_cold_warm_append_correction_partial_and_corruption(tmp_path):
+    from src.engine.sentinel_event_cache import load_verified_day_projection
+    source = tmp_path / "pipeline_events_2026-09-16.jsonl"
+    cache = tmp_path / "cache"
+    source.write_text('{"stage":"route","price":100}\n{"stage":"unrelated"}\n')
+    parsed = []
+    def project(row):
+        parsed.append(row)
+        return row if row["stage"] == "route" else {"_census": {"irrelevant": 1}}
+    def load():
+        return load_verified_day_projection(raw_path=source, cache_dir=cache,
+            cache_name="day-facts", parser_version="frozen-parser-v1", parse_payload=project)
+    cold, first = load()
+    parsed.clear()
+    warm, second = load()
+    assert warm == cold and second["raw_scanned"] is False and parsed == []
+    assert first["source_sha256"] == second["source_sha256"]
+    with source.open("a") as handle:
+        handle.write('{"stage":"route","price":101}\n')
+    appended, status = load()
+    assert [row["price"] for row in appended] == [100, 101] and status["raw_scanned"] is True
+    import os
+    before = source.stat()
+    source.write_text(source.read_text().replace('"price":100', '"price":102'))
+    os.utime(source, ns=(before.st_atime_ns, before.st_mtime_ns))
+    corrected, status = load()
+    assert corrected[0]["price"] == 102 and status["raw_scanned"] is True
+    completed = next(cache.glob("*.json")).read_bytes()
+    with source.open("a") as handle:
+        handle.write('{"stage":"route","price":')
+    partial, status = load()
+    assert partial == corrected and status["checkpoint_complete"] is False
+    assert next(cache.glob("*.json")).read_bytes() == completed
+    with source.open("a") as handle:
+        handle.write('103}\n')
+    recovered, status = load()
+    assert recovered[-1]["price"] == 103 and status["checkpoint_complete"] is True
+    next(cache.glob("*.json")).write_text('{"body":{"generation":[]},"body_sha256":"bad"}')
+    repaired, status = load()
+    assert repaired == recovered and status["raw_scanned"] is True
+    # Interrupted temporary publication is never a completed checkpoint.
+    checkpoint = next(cache.glob("*.json"))
+    (cache / (checkpoint.name + ".interrupted.tmp")).write_text('{"body":')
+    unchanged, status = load()
+    assert unchanged == recovered and status["raw_scanned"] is False
+    # A concurrent retry evaluates changed input but does not overwrite the
+    # other writer's checkpoint, and subsequent exclusive retry completes it.
+    import fcntl
+    completed = checkpoint.read_bytes()
+    with checkpoint.with_suffix(".lock").open("a") as concurrent:
+        fcntl.flock(concurrent, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with source.open("a") as handle:
+            handle.write('{"stage":"route","price":104}\n')
+        concurrent_rows, status = load()
+        assert concurrent_rows[-1]["price"] == 104 and status["raw_scanned"] is True
+        assert checkpoint.read_bytes() == completed
+    retry, status = load()
+    assert retry == concurrent_rows and status["checkpoint_complete"] is True

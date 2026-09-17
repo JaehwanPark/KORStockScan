@@ -1282,8 +1282,8 @@ def test_pyramid_quality_calibration_profit_grid_sets_one_step_min_profit(
     grid_decision = candidate["source_metrics"]["profit_threshold_grid_decision"]
     grid = candidate["source_metrics"]["profit_threshold_grid"]
 
-    assert candidate["calibration_state"] == "adjust_down"
-    assert candidate["calibration_reason"] == "grid_loosen_profit_threshold_one_step"
+    assert candidate["calibration_state"] == "hold_runtime_scope"
+    assert candidate["calibration_reason"] == "requires_independent_paired_exit_economics"
     assert (
         candidate["recommended_values"]["min_profit_pct"]
         == grid_decision["selected_min_profit_pct"]
@@ -1618,7 +1618,7 @@ def test_positive_candidate_changes_only_profit_threshold(tmp_path):
     }
     assert changed == {"min_profit_pct"}
     assert candidate["recommended_values"]["min_profit_pct"] == 1.0
-    assert candidate["target_env_keys"] == ["SCALPING_PYRAMID_MIN_PROFIT_PCT"]
+    assert candidate["target_env_keys"] == []
     assert candidate["condition_feasibility"]["state"] == "bounded_candidate_ready"
     assert candidate["source_sample_count"] == 20
     assert candidate["decision_sample_count"] == 20
@@ -1705,3 +1705,49 @@ def test_quality_calibration_rolls_up_winner_recovery_runtime_funnel(
         {"reason": "real_pyramid_ai_score_no_submit_authority", "count": 1}
     ]
     assert observation["runtime_effect"] is False
+
+
+def test_independent_pyramid_twenty_episodes_selects_existing_axis_with_holdout(tmp_path, monkeypatch):
+    from src.tests.test_scalping_avg_down_recovery_calibration import _write_independent_fixture
+    from src.engine.monitoring import scalping_pyramid_intraday_feedback as feedback
+    _write_independent_fixture(tmp_path, monkeypatch, family="PYRAMID", episodes_per_day=10)
+    inputs = tmp_path / "feedback"
+    inputs.mkdir()
+    monkeypatch.setattr(mod, "INPUT_REPORT_DIR", inputs)
+    monkeypatch.setattr(mod, "OUTPUT_REPORT_DIR", tmp_path / "pyramid-report")
+    paths = []
+    for day in ("2026-09-15", "2026-09-16"):
+        source = tmp_path / "pipeline_events" / f"pipeline_events_{day}.jsonl"
+        daily = feedback.build_report(day, pipeline_path=source)
+        path = inputs / f"scalping_pyramid_intraday_feedback_{day}.json"
+        path.write_text(json.dumps(daily))
+        paths.append(path)
+    report = mod.build_report("2026-09-16", input_paths=paths)
+    candidate = report["calibration_candidates"][0]
+    assert report["independent_exit_replay"]["complete_episode_count"] == 20
+    assert candidate["allowed_runtime_apply"] is True
+    assert candidate["recommended_value"] == 1.6
+    assert candidate["target_env_keys"] == ["SCALPING_PYRAMID_MIN_PROFIT_PCT"]
+    assert candidate["economic_validation"]["calibration"]["count"] == 10
+    assert candidate["economic_validation"]["holdout"]["count"] == 10
+    assert candidate["sample_count"] == 20
+    from src.engine.lifecycle.avg_down_replay import economic_candidate_contract_errors
+    assert economic_candidate_contract_errors(candidate) == []
+
+
+def test_pyramid_completed_replay_reuses_unchanged_episode_results(tmp_path, monkeypatch):
+    from src.tests.test_scalping_avg_down_recovery_calibration import _write_independent_fixture
+    from src.engine.monitoring import scalping_pyramid_intraday_feedback as feedback
+    _write_independent_fixture(tmp_path, monkeypatch, family="PYRAMID", episodes_per_day=10)
+    inputs, outputs = tmp_path / "feedback", tmp_path / "quality"
+    inputs.mkdir(); outputs.mkdir()
+    monkeypatch.setattr(mod, "INPUT_REPORT_DIR", inputs)
+    monkeypatch.setattr(mod, "OUTPUT_REPORT_DIR", outputs)
+    for day in ("2026-09-15", "2026-09-16"):
+        payload = feedback.build_report(day, pipeline_path=tmp_path / "pipeline_events" / f"pipeline_events_{day}.jsonl")
+        (inputs / f"scalping_pyramid_intraday_feedback_{day}.json").write_text(json.dumps(payload))
+    cold = mod.build_report("2026-09-16")
+    mod.write_outputs(cold, output_json=outputs / "scalping_pyramid_quality_calibration_2026-09-16.json", output_md=outputs / "out.md")
+    warm = mod.build_report("2026-09-16")
+    assert warm["independent_exit_replay"]["cached_episode_count"] == 20
+    assert warm["calibration_candidates"] == cold["calibration_candidates"]

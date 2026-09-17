@@ -4679,9 +4679,17 @@ def build_report(
         list
     )
     terminal_sell_records: dict[str, dict[str, Any]] = {}
+    lifecycle_source_events = []
+    loaded_configs = []
 
     for row in iter_jsonl(pipeline_path):
         fields = _fields(row)
+        stage = str(row.get("stage") or fields.get("stage") or "")
+        if stage == "avg_down_runtime_config_observed":
+            loaded_configs.append({**row, **fields})
+        if stage in {"pyramid_lifecycle_replay_observed", "sell_completed", "scale_in_executed"} or (
+            stage == "avg_down_exit_replay_frame_observed" and str(fields.get("source_observation_id") or "").startswith("pyr-lifecycle-")):
+            lifecycle_source_events.append({**row, **fields, "_source_event_date": target_date})
         key = _record_key(row, fields)
         if not key:
             continue
@@ -5079,6 +5087,9 @@ def build_report(
         source_quality_status = "winner_recovery_qty_cap_invalid"
     return {
         "schema_version": 5,
+        "pyramid_lifecycle_source_contract": "pyramid_lifecycle_replay_v1",
+        "pyramid_lifecycle_source_events": lifecycle_source_events,
+        "runtime_loaded_configs": loaded_configs,
         "report_type": REPORT_TYPE,
         "target_date": target_date,
         "generated_at": generated_at,

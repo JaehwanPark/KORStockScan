@@ -2823,6 +2823,16 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
         ),
         decision_authority="source_only_route_sizing_observation",
     ),
+    "pyramid_lifecycle_replay_observed": StageContract(
+        required_fields=("pyramid_lifecycle_schema", "source_event_id", "position_episode_id",
+            "scale_in_decision_id", "configured_min_profit_pct", "effective_min_profit_pct",
+            "runtime_value_source", "runtime_pid_value_verified", "pyramid_policy_version",
+            "sizing_policy_version", "cost_policy_version", "route_replay", "pre_add_buy_price", "pre_add_buy_qty",
+            "metric_role", "decision_authority", "window_policy", "sample_floor", "primary_decision_metric",
+            "source_quality_gate", "forbidden_uses", "runtime_effect", "allowed_runtime_apply",
+            "actual_order_submitted", "broker_order_forbidden"),
+        decision_authority="source_only_route_arbitration_observation",
+    ),
     "avg_down_runtime_config_observed": StageContract(
         required_fields=(
             "runtime_config_schema",
@@ -5609,7 +5619,7 @@ def _avg_down_route_contract_violated(fields: dict[str, Any]) -> bool:
                 not runtime_env_written
                 or not runtime_pid_verified
                 or runtime_quality_update_id == "baseline_no_selected_candidate"
-                or runtime_evidence_version != "avg_down_paired_economics_v2"
+                or runtime_evidence_version != "avg_down_paired_economics_v3"
                 or not re.fullmatch(r"[0-9a-f]{64}", runtime_evidence_digest)
                 or runtime_attribution_state
                 not in {
@@ -6204,6 +6214,19 @@ def _row_contract_violations(
             ).items()
             if violated
         )
+    if stage == "pyramid_lifecycle_replay_observed":
+        current = _safe_float(fields.get("effective_min_profit_pct"))
+        configured = _safe_float(fields.get("configured_min_profit_pct"))
+        arms = _safe_dict(fields.get("route_replay"))
+        if (fields.get("pyramid_lifecycle_schema") != "pyramid_lifecycle_replay_v1"
+            or current is None or configured != current or not 0.2 <= current <= 2.5
+            or f"{current:g}" not in arms
+            or fields.get("decision_authority") != "source_only_route_arbitration_observation"
+            or not _contract_bool(fields.get("runtime_effect"), False)
+            or not _contract_bool(fields.get("allowed_runtime_apply"), False)
+            or not _contract_bool(fields.get("actual_order_submitted"), False)
+            or not _contract_bool(fields.get("broker_order_forbidden"), True)):
+            invalid.append("pyramid_lifecycle_replay_source_contract")
     if stage == "avg_down_route_arbitration_observed" and (
         _avg_down_route_contract_violated(fields)
     ):

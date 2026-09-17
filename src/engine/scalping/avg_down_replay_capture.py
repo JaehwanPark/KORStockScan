@@ -293,9 +293,10 @@ def _cached_policy(handlers, now_ts):
     return snapshot
 
 
-def prepare(handlers, stock: dict, code: str, episode: str, *, now_ts: float) -> dict:
+def prepare(handlers, stock: dict, code: str, episode: str, *, now_ts: float, family: str = "AVG_DOWN") -> dict:
     """Prepare before emitting the first decision; do not replace a failed first opportunity."""
     global _DAY, _DAILY_FRAME_BYTES
+    registry_key = episode if family == "AVG_DOWN" else family + ":" + episode
     day = datetime.fromtimestamp(now_ts, tz=_KST).date().isoformat()
     with _LOCK:
         if day != _DAY:
@@ -303,7 +304,7 @@ def prepare(handlers, stock: dict, code: str, episode: str, *, now_ts: float) ->
             _SEEN.clear()
             _DAY = day
             _DAILY_FRAME_BYTES = 0
-        if episode in _SEEN:
+        if registry_key in _SEEN:
             return {"replay_capture_state": "first_episode_decision_already_registered"}
         if len(_ACTIVE) >= MAX_ACTIVE or _DAILY_FRAME_BYTES >= MAX_DAILY_FRAME_BYTES:
             return {"replay_capture_state": "capture_capacity_gap"}
@@ -320,6 +321,7 @@ def prepare(handlers, stock: dict, code: str, episode: str, *, now_ts: float) ->
         "replay_peak_price": peak,
         "replay_start_sequence": 0,
         "replay_capture_state": "armed_source_only",
+        "replay_registry_key": registry_key,
         "replay_max_frame_gap_sec": MAX_FRAME_GAP_SEC,
     }
 
@@ -333,17 +335,19 @@ def register(
     venue: str,
     now_ts: float,
     fields: dict,
-) -> None:
+) -> str:
+    registry_key = fields.get("replay_registry_key") or episode
     with _LOCK:
-        if episode in _SEEN:
-            return
-        _SEEN.add(episode)
+        if registry_key in _SEEN:
+            return "first_episode_decision_already_registered"
+        _SEEN.add(registry_key)
         if fields.get("replay_capture_state") != "armed_source_only":
-            return
+            return str(fields.get("replay_capture_state") or "source_snapshot_gap")
         # A different observer can claim the last slot after prepare returns.
         if len(_ACTIVE) >= MAX_ACTIVE or _DAILY_FRAME_BYTES >= MAX_DAILY_FRAME_BYTES:
-            return
-        _ACTIVE[episode] = {
+            return "capture_capacity_race_gap"
+        _ACTIVE[registry_key] = {
+            "replay_registry_key": registry_key,
             "position_episode_id": episode,
             "source_observation_id": source_id,
             "scale_in_decision_id": decision_id,
@@ -355,6 +359,8 @@ def register(
             "started_at": now_ts,
             "captured_bytes": 0,
         }
+
+    return "armed_source_only"
 
 
 def observe_cycle(*, now_ts: float, snapshot_provider, market_builder, emit) -> int:
@@ -411,7 +417,7 @@ def observe_cycle(*, now_ts: float, snapshot_provider, market_builder, emit) -> 
         frame_bytes = len(json.dumps(frame, ensure_ascii=True).encode())
         with _LOCK:
             _DAILY_FRAME_BYTES += frame_bytes
-            active = _ACTIVE.get(frame["position_episode_id"])
+            active = _ACTIVE.get(frame.get("replay_registry_key") or frame["position_episode_id"])
             if active is not None:
                 active["captured_bytes"] += frame_bytes
                 if (
@@ -419,7 +425,7 @@ def observe_cycle(*, now_ts: float, snapshot_provider, market_builder, emit) -> 
                     or _DAILY_FRAME_BYTES >= MAX_DAILY_FRAME_BYTES
                 ):
                     frame["capture_end"] = "capture_byte_budget_exhausted"
-                    _ACTIVE.pop(frame["position_episode_id"], None)
+                    _ACTIVE.pop(frame.get("replay_registry_key") or frame["position_episode_id"], None)
         frame["source_event_id"] = "avgdn-frame-" + canonical_digest(frame)
         try:
             result = emit(frame)

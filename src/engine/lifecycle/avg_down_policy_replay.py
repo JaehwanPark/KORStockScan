@@ -634,6 +634,7 @@ def _worker_replay(observation: dict, frames: list[dict]) -> dict:
     uuid.uuid4 = deterministic_uuid4
     handlers._log_holding_pipeline = quiet
     handlers._log_entry_pipeline = quiet
+    handlers._observe_pyramid_lifecycle_replay = quiet
     handlers._observe_avg_down_runtime_config = quiet
     handlers._observe_avg_down_route_arbitration = quiet
     handlers._persist_scalping_position_peak = quiet
@@ -718,10 +719,11 @@ def _worker_replay(observation: dict, frames: list[dict]) -> dict:
 
         handlers._log_holding_pipeline = record_stage
         runtime_rules = Rules(**rules)
+        tuning_key = state.get("tuning_env_key", "SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE")
+        if tuning_key not in {"SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE", "SCALPING_PYRAMID_MIN_PROFIT_PCT"}:
+            raise ReplayInputGap("unsupported_scale_in_tuning_axis")
         if state["min_buy_pressure"] is not None:
-            runtime_rules.SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE = state[
-                "min_buy_pressure"
-            ]
+            setattr(runtime_rules, tuning_key, state["min_buy_pressure"])
         for module in original_modules:
             if hasattr(module, "TRADING_RULES"):
                 digest = snapshot.get("module_rules", {}).get(module.__name__)
@@ -730,12 +732,8 @@ def _worker_replay(observation: dict, frames: list[dict]) -> dict:
                     if values is None or canonical_digest(values) != digest:
                         raise ReplayInputGap("module_rules_digest_mismatch")
                     fixed = Rules(**thaw(values))
-                    if state["min_buy_pressure"] is not None and hasattr(
-                        fixed, "SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE"
-                    ):
-                        fixed.SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE = state[
-                            "min_buy_pressure"
-                        ]
+                    if state["min_buy_pressure"] is not None and hasattr(fixed, tuning_key):
+                        setattr(fixed, tuning_key, state["min_buy_pressure"])
                     module.TRADING_RULES = fixed
         handlers.TRADING_RULES = runtime_rules
         if observation.get("strategy_owner_replay"):

@@ -1986,3 +1986,37 @@ def test_modeled_price_summary_preserves_zero_realized_sample():
     assert summary['opportunity_replay_sample'] == 20
     assert summary['real_sample'] == 0
     assert summary['price_selection_evidence_sha256'] == proof['evidence_sha256']
+
+
+def test_scale_in_actual_ledger_excludes_invalid_and_conflicting_receipts(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path)
+    name = "scalping_pyramid_quality_calibration"
+    folder = tmp_path / name
+    folder.mkdir()
+    path = folder / f"{name}_2026-09-18.json"
+    valid = {"origin": "actual_policy_outcome", "status": "COMPLETED",
+        "new_incremental_profit_claimed": False, "position_episode_id": "fixture-episode",
+        "scale_in_decision_id": "fixture-decision", "quality_update_id": "fixture-quality",
+        "evidence_digest": "a" * 64, "net_pnl_krw": 100, "profit_rate": 0.1,
+        "quantity": 10, "cost_policy_version": "trade_profit_net_realized_pnl:rate=0.00230000",
+        "venue": "KRX", "session": "KRX_REGULAR"}
+    invalid = [{**valid, "position_episode_id": f"invalid-{index}", **change}
+               for index, change in enumerate((
+                   {"quantity": 1.5}, {"cost_policy_version": "invalid"}, {"venue": "UNKNOWN"},
+                   {"session": "unknown"}, {"evidence_digest": "broken"},
+                   {"scale_in_decision_id": []}, {"net_pnl_krw": "100"},
+                   {"origin": "modeled_policy_delta"}))]
+    payload = {"target_date": "2026-09-18", "actual_policy_outcomes": [valid, *invalid, valid]}
+    path.write_text(json.dumps(payload))
+    summary = mod._scale_in_economic_attribution("2026-09-18")[name]
+    assert summary["actual_completed_count"] == 1
+    assert summary["actual_completed_net_pnl_krw"] == 100
+    assert summary["actual_invalid_row_count"] == 8
+    assert summary["actual_duplicate_row_count"] == 1
+    assert summary["actual_economic_acceptance"] is False
+    payload["actual_policy_outcomes"].append({**valid, "net_pnl_krw": 200})
+    path.write_text(json.dumps(payload))
+    conflicting = mod._scale_in_economic_attribution("2026-09-18")[name]
+    assert conflicting["actual_completed_count"] == 0
+    assert conflicting["actual_completed_net_pnl_krw"] is None
+    assert conflicting["actual_conflicting_episode_count"] == 1

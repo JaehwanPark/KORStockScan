@@ -31,6 +31,9 @@ from src.engine.lifecycle.avg_down_replay import (
     source_only_observation_valid,
     canonical_digest,
     replay_evidence_contract_errors,
+    bind_report_paired_terminals,
+    chronological_economic_selection,
+    actual_policy_outcomes,
 )
 from src.engine.trade_profit import calculate_net_realized_pnl
 from src.utils.constants import DATA_DIR, TRADING_RULES
@@ -45,7 +48,7 @@ CLEAN_BASELINE_DATE = "2026-06-05"
 CLEAN_BASELINE_TS = datetime(2026, 6, 5, tzinfo=KST)
 SCHEMA_VERSION = 2
 ROUTE_EVENT_SCHEMA = "avg_down_route_arbitration_v2"
-EVIDENCE_CONTRACT_VERSION = "avg_down_paired_economics_v2"
+EVIDENCE_CONTRACT_VERSION = "avg_down_paired_economics_v3"
 FIXED_EXIT_METHOD = "fixed_observed_exit_counterfactual"
 PAIRED_EXIT_METHOD = "paired_add_no_add_lifecycle_replay"
 SOURCE_ONLY_AUTHORITY = "fixed_observed_exit_source_only"
@@ -178,23 +181,41 @@ def _iter_events_paths_for_window(target_date: str) -> list[Path]:
 
 
 def _iter_events(paths: list[Path]) -> Iterable[dict[str, Any]]:
+    from src.engine.sentinel_event_cache import load_verified_day_projection
+
+    relevant = {
+        "avg_down_runtime_config_observed", "avg_down_route_arbitration_observed",
+        "avg_down_route_sizing_observed", "avg_down_exit_replay_frame_observed",
+        "sell_completed", "scale_in_executed", "avg_down_route_arbitration_terminal",
+        "scalp_sim_scale_in_candidate_funnel", "stop_line_touch_mandatory_avg_down_submitted",
+    }
+    import inspect
+    parser_version = "avg_down_day_facts_v1:" + hashlib.sha256(
+        (inspect.getsource(_iter_events) + inspect.getsource(_parse_time)
+         + inspect.getsource(load_verified_day_projection) + CLEAN_BASELINE_DATE).encode()
+    ).hexdigest()
     for source in paths:
         source_date = _date_from_events_path(source)
-        opener = gzip.open if str(source).endswith(".gz") else open
         if not source.exists():
             continue
-        with opener(source, "rt", encoding="utf-8", errors="ignore") as handle:
-            for line in handle:
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(event, dict):
-                    continue
-                fields = (
-                    event.get("fields") if isinstance(event.get("fields"), dict) else {}
-                )
-                yield {**event, **fields, "_source_event_date": source_date}
+
+        def project(event):
+            fields = event.get("fields") if isinstance(event.get("fields"), dict) else {}
+            row = {**event, **fields, "_source_event_date": source_date}
+            if row.get("stage") in relevant:
+                return {key: value for key, value in row.items() if key not in {"fields", "text_payload"}}
+            stamp = _parse_time(row.get("emitted_at"))
+            reason = ("invalid_or_prebaseline_timestamp" if stamp is None or stamp < CLEAN_BASELINE_TS
+                      else "timestamp_file_date_mismatch" if stamp.date().isoformat() != source_date
+                      else "irrelevant_valid_event_count")
+            return {"_census": {reason: 1, "projected_out_count": 1}}
+
+        rows, census = load_verified_day_projection(
+            raw_path=source, cache_dir=DATA_DIR / "cache" / REPORT_TYPE,
+            cache_name="day-facts", parser_version=parser_version, parse_payload=project,
+        )
+        yield {"_projection_census": census}
+        yield from rows
 
 
 def _current_value() -> float:
@@ -295,7 +316,7 @@ def _valid_paired_exit_outcome(value: Any) -> dict[str, Any] | None:
 
 
 def _collect_exact_evidence(
-    paths: list[Path], *, replay_cache: dict | None = None
+    paths: list[Path], *, replay_cache: dict | None = None, events=None
 ) -> dict[str, Any]:
     diagnostics: Counter[str] = Counter()
     raw_event_count = 0
@@ -310,10 +331,27 @@ def _collect_exact_evidence(
     sizing_events: dict[str, dict[str, Any]] = {}
     sizing_conflicts: set[str] = set()
     replay_frames: dict[str, list[dict[str, Any]]] = {}
+    actual_add_receipts = {}
+    opportunity_ids, missing_opportunity_id_count = set(), 0
 
-    for event in _iter_events(paths):
+    for event in (_iter_events(paths) if events is None else events):
+        if "_projection_census" in event:
+            census = event["_projection_census"]
+            raw_event_count += census.get("projected_out_count", 0)
+            if census.get("checkpoint_complete") is False:
+                diagnostics["source_projection_generation_or_partial_write_gap"] += 1
+            for name in ("invalid_or_prebaseline_timestamp", "timestamp_file_date_mismatch"):
+                if census.get(name, 0):
+                    diagnostics[name] += census[name]
+            continue
         raw_event_count += 1
         stage = str(event.get("stage") or "")
+        if stage == "avg_down_route_arbitration_observed":
+            source_id = str(event.get("source_event_id") or "").strip()
+            if source_id:
+                opportunity_ids.add(source_id)
+            else:
+                missing_opportunity_id_count += 1
         if stage in {
             "scalp_sim_scale_in_candidate_funnel",
             "stop_line_touch_mandatory_avg_down_submitted",
@@ -346,6 +384,12 @@ def _collect_exact_evidence(
             continue
         if source_date and observed_at.date().isoformat() != source_date:
             diagnostics["timestamp_file_date_mismatch"] += 1
+            continue
+
+        if stage == "scale_in_executed":
+            decision = str(event.get("scale_in_decision_id") or "")
+            if decision and _boolish(event.get("actual_order_submitted")) and not _boolish(event.get("broker_order_forbidden")):
+                actual_add_receipts.setdefault(_identity(event), []).append(event)
             continue
 
         if stage == "avg_down_runtime_config_observed":
@@ -524,6 +568,10 @@ def _collect_exact_evidence(
                             "replay_start_sequence",
                             "replay_max_frame_gap_sec",
                             "effective_min_buy_pressure",
+                            "replay_capture_state",
+                            "tuning_env_key",
+                            "replay_capital_limit_krw",
+                            "replay_actual_entry_anchor_valid",
                         )
                     },
                     "emitted_at": observed_at.isoformat(),
@@ -651,6 +699,7 @@ def _collect_exact_evidence(
                 event.get("evidence_authority") or "real_fill_completed"
             ),
             "paired_exit_replay": paired_exit_replay,
+            "actual_receipt": event if real_completed else None,
             "source_observation_id": str(event.get("source_observation_id") or ""),
             "stock_code": str(event.get("stock_code") or event.get("code") or ""),
             "venue": str(event.get("main_lifecycle_venue") or event.get("venue") or ""),
@@ -680,6 +729,7 @@ def _collect_exact_evidence(
         observed.pop(source_event_id, None)
 
     for source_id, row in observed.items():
+        row["actual_add_receipts"] = actual_add_receipts.get(row["position_episode_id"], [])
         if source_id in (replay_cache or {}):
             row["independent_replay_input"]["cached_replay_result"] = replay_cache[
                 source_id
@@ -703,6 +753,9 @@ def _collect_exact_evidence(
         ):
             diagnostics["sizing_enrichment_identity_or_time_mismatch"] += 1
             continue
+        capital = _safe_float(enrichment.get("replay_capital_limit_krw"), None)
+        if capital is not None and capital > 0:
+            row["independent_replay_input"]["replay_capital_limit_krw"] = capital
         for key, values in _json_value(enrichment.get("sizing_replay"), {}).items():
             arm = row["route_replay"].get(key)
             if not arm or not isinstance(values, dict) or not arm["should_add"]:
@@ -809,6 +862,10 @@ def _collect_exact_evidence(
         "decisions": decisions,
         "runtime_configs": runtime_configs,
         "diagnostics": dict(sorted(diagnostics.items())),
+        "opportunity_census": {"identified_opportunity_count": len(opportunity_ids),
+            "missing_identity_event_count": missing_opportunity_id_count,
+            "valid_decision_count": len(decisions),
+            "excluded_source_invalid_count": len(opportunity_ids) - len(decisions)},
         "unique_decision_count": len(decisions),
         "unique_episode_count": len({row["position_episode_id"] for row in decisions}),
         "terminal_counts": dict(Counter(row.get("outcome_state") for row in decisions)),
@@ -822,7 +879,7 @@ def _replay_source_files(paths: list[Path]) -> dict:
             stat = path.stat()
         except OSError:
             continue
-        day = _date_from_events_path(path)
+        day = _date_from_events_path(path) or path.stem[-10:]
         identity.setdefault(day, {})[str(path.absolute())] = [
             stat.st_size,
             stat.st_mtime_ns,
@@ -833,39 +890,38 @@ def _replay_source_files(paths: list[Path]) -> dict:
     return identity
 
 
-def _load_replay_cache(paths: list[Path]) -> tuple[dict, dict, dict, str]:
-    """Reuse only verified source-only results of unchanged physical inputs.
+def _load_replay_cache(paths: list[Path], *, report_dir=None, report_type=REPORT_TYPE) -> tuple[dict, dict, dict, str]:
+    """Reuse attested episode results, including historical rows in later reports.
 
-    Source-date quality filtering has already run. Historical frames need not
-    accumulate in memory, and pending exact-prompt replies survive next-day jobs.
-    A code change invalidates cached evaluation, never silently re-labels it.
+    Every source day used by a completed outcome must still have the same
+    physical generation. Pending replies remain keyed by their exact prompts.
     """
     from src.engine.lifecycle.avg_down_policy_replay import implementation_identity
-
     source_files = _replay_source_files(paths)
     implementation = canonical_digest(implementation_identity())
     cached, replies = {}, {}
-    for day, identity in source_files.items():
-        path = DATA_DIR / "report" / REPORT_TYPE / f"{REPORT_TYPE}_{day}.json"
+    directory = DATA_DIR / "report" / report_type if report_dir is None else report_dir
+    for path in sorted(directory.glob(f"{report_type}_*.json"), reverse=True):
         try:
             if path.stat().st_size > 32_000_000:
                 continue
             previous = json.loads(path.read_text(encoding="utf-8"))
             replay = previous.get("independent_exit_replay")
-            if previous.get("target_date") != day or replay_evidence_contract_errors(
-                replay
-            ):
+            if replay_evidence_contract_errors(replay):
                 continue
-            unchanged = (
-                previous.get("replay_source_files", {}).get(day) == identity
-                and previous.get("replay_engine_implementation") == implementation
-            )
             for episode, value in replay["episodes"].items():
-                if value.get("replay_source_date") != day:
+                day = value.get("replay_source_date")
+                if day not in source_files:
                     continue
-                replies[episode] = value.get("policy_ai_replay_records", [])
-                if unchanged and value.get("replay_observation_digest"):
-                    cached[value["source_observation_id"]] = value
+                replies.setdefault(episode, value.get("policy_ai_replay_records", []))
+                dependencies = {day, *(str(outcome.get("exit_time", ""))[:10]
+                                      for outcome in value.get("outcomes", {}).values())}
+                unchanged = (previous.get("replay_engine_implementation") == implementation
+                    and all(dependency in source_files and
+                            previous.get("replay_source_files", {}).get(dependency) == source_files[dependency]
+                            for dependency in dependencies))
+                if unchanged and value.get("state") == "paired_exit_complete_source_only" and value.get("replay_observation_digest"):
+                    cached.setdefault(value["source_observation_id"], value)
         except (OSError, ValueError, TypeError, KeyError, AttributeError):
             continue
     return cached, replies, source_files, implementation
@@ -978,12 +1034,18 @@ def _candidate_economics(
             str(value.get("terminal_source_event_id") or "")
             for value in paired_outcome_rows
         ]
+        modeled_paired = terminal.get("stage") == "report_paired_lifecycle_terminal"
         paired_ready = bool(
             # The observation remains immutable source-only evidence. Replay
             # authority belongs to a separately bound terminal, not to a
             # prediction of its future exit method on the original route arm.
-            terminal.get("stage") == "avg_down_route_arbitration_terminal"
-            and terminal.get("evidence_authority") == RUNTIME_AUTHORITY
+            ((terminal.get("stage") == "avg_down_route_arbitration_terminal"
+              and terminal.get("evidence_authority") == RUNTIME_AUTHORITY)
+             or (modeled_paired and terminal.get("evidence_authority") == "source_only_paired_exit_replay"
+                 and terminal.get("runtime_effect") is False
+                 and terminal.get("allowed_runtime_apply") is False
+                 and terminal.get("actual_order_submitted") is False
+                 and terminal.get("broker_order_forbidden") is True))
             and terminal.get("source_observation_id") == row["source_event_id"]
             and all(
                 terminal.get(key) and terminal[key] == row[key]
@@ -1018,6 +1080,21 @@ def _candidate_economics(
             candidate_total_pnl = _arm_total_pnl(
                 candidate_arm, candidate_outcome["exit_price"], **arm_kwargs
             )
+            if modeled_paired:
+                # Outcome already includes actual modeled fills and costs once.
+                no_add_total_pnl = no_add_outcome["net_pnl_krw"]
+                current_total_pnl = current_outcome["net_pnl_krw"]
+                candidate_total_pnl = candidate_outcome["net_pnl_krw"]
+                # The original decision can precede a later ADD/exit transition.
+                # Count the modeled lifecycle's action, not only the first gate.
+                def lifecycle_arm(arm, outcome):
+                    fill = outcome.get("add_fill_evidence") or {}
+                    return {**arm, "should_add": outcome["filled_add_qty"] > 0,
+                        "proposed_add_qty": outcome["filled_add_qty"], "proposed_add_price": fill.get("price", 0),
+                        "behavior_signature": _canonical_hash({key: outcome.get(key) for key in
+                            ("filled_add_qty", "exit_qty", "exit_price", "exit_time", "peak_add_reserved_notional_krw")})}
+                current_arm = lifecycle_arm(current_arm, current_outcome)
+                candidate_arm = lifecycle_arm(candidate_arm, candidate_outcome)
             current_pnl = (
                 None
                 if current_total_pnl is None
@@ -1059,6 +1136,25 @@ def _candidate_economics(
                 "scale_in_decision_id": row["scale_in_decision_id"],
                 "position_episode_id": episode_id,
                 "venue": row["venue"],
+                "source_date": row["source_date"],
+                "terminal_source_date": terminal["terminal_time"].date().isoformat(),
+                "origin": "modeled_policy_delta" if modeled_paired else "legacy_economic_diagnostic",
+                "no_add_total_pnl_krw": no_add_total_pnl if paired_ready else None,
+                "candidate_capital_occupancy_krw_seconds": candidate_outcome.get("add_capital_occupancy_krw_seconds") if modeled_paired else ((candidate_arm.get("proposed_add_price") or 0) * candidate_arm.get("proposed_add_qty", 0)
+                    * (terminal["terminal_time"] - row["decision_time"]).total_seconds()),
+                "current_capital_occupancy_krw_seconds": current_outcome.get("add_capital_occupancy_krw_seconds") if modeled_paired else ((current_arm.get("proposed_add_price") or 0) * current_arm.get("proposed_add_qty", 0)
+                    * (terminal["terminal_time"] - row["decision_time"]).total_seconds()),
+                "unmodeled_capital_reallocation_opportunity_cost": None,
+                "current_peak_exposure_krw": reference_notional + (current_outcome["peak_add_reserved_notional_krw"] if modeled_paired else
+                    (current_arm.get("proposed_add_price") or 0) * current_arm.get("proposed_add_qty", 0)),
+                "candidate_peak_exposure_krw": reference_notional + (candidate_outcome["peak_add_reserved_notional_krw"] if modeled_paired else
+                    (candidate_arm.get("proposed_add_price") or 0) * candidate_arm.get("proposed_add_qty", 0)),
+                "capital_limit_krw": row["independent_replay_input"].get("replay_capital_limit_krw"),
+                "current_total_pnl_krw": current_total_pnl if paired_ready else None,
+                "candidate_total_pnl_krw": candidate_total_pnl if paired_ready else None,
+                "execution_stress_cost_krw": row.get("execution_stress_cost_krw"),
+                "execution_quality_validated": row.get("execution_quality_validated") is True,
+                "capture_coverage_validated": row.get("capture_coverage_validated") is True,
                 "reference_notional": reference_notional,
                 "current_incremental_pnl_krw": current_pnl,
                 "candidate_incremental_pnl_krw": candidate_pnl,
@@ -1079,8 +1175,9 @@ def _candidate_economics(
                 ),
                 "paired_exit_replay_ready": paired_ready,
                 "paired_exit_policy_version": (
-                    next(iter(paired_exit_policy_versions)) if paired_ready else ""
+                    terminal.get("exit_policy_cohort") or next(iter(paired_exit_policy_versions)) if paired_ready else ""
                 ),
+                "exact_episode_exit_policy_version": next(iter(paired_exit_policy_versions)) if paired_ready else "",
                 "paired_terminal_source_event_ids": (
                     paired_terminal_source_ids if paired_ready else []
                 ),
@@ -1169,6 +1266,7 @@ def _candidate_economics(
         "reference_notional_krw": reference_total,
         "excluded_by_reason": dict(sorted(excluded.items())),
         "comparison_universe_hash": _canonical_hash(rows),
+        "episode_economics": rows,
     }
 
 
@@ -1225,7 +1323,7 @@ def build_report(
         path for path in intended_paths if _date_from_events_path(path) in allowed_set
     ]
     replay_cache, prior_replies, replay_source_files, replay_implementation = (
-        _load_replay_cache(paths)
+        _load_replay_cache(paths, report_dir=REPORT_DIR)
     )
     evidence = _collect_exact_evidence(paths, replay_cache=replay_cache)
     prior_replies.update(cached_policy_ai_records or {})
@@ -1305,6 +1403,15 @@ def build_report(
         )
         == selected_policy_cohort
     ]
+    independent_replay = build_replay_evidence(
+        [row["independent_replay_input"] for row in decisions],
+        policy_ai_enabled=policy_ai_enabled and exact_current is not None,
+        cached_policy_ai_records=prior_replies,
+    )
+    decisions, replay_adapter_errors = bind_report_paired_terminals(decisions, independent_replay)
+    if evidence["diagnostics"].get("source_projection_generation_or_partial_write_gap"):
+        for row in decisions:
+            row["capture_coverage_validated"] = False
     neighbor_values = [
         value
         for value in TUNING_GRID
@@ -1353,13 +1460,9 @@ def build_report(
         for item in paired_complete
         if _positive_economic_improvement(item, current=current)
     ]
-    runtime_winner = max(
-        paired_positive,
-        key=lambda item: (
-            item["source_quality_adjusted_ev_pct"],
-            item["candidate_minus_current_ev_pct"],
-        ),
-        default=None,
+    runtime_winner, economic_validation = chronological_economic_selection(
+        paired_economics, current=current, sample_floor=RUNTIME_PROMOTION_SAMPLE_FLOOR,
+        minimum_ev=MIN_COST_ADJUSTED_EV_PCT,
     )
     source_winner_has_complete_paired_evidence = bool(
         source_winner
@@ -1426,6 +1529,8 @@ def build_report(
                 "adjust_down" if winner["candidate_value"] < current else "adjust_up"
             )
             reason = "paired_incremental_net_edge_ready"
+    elif economic_validation.get("winner_fixed_before_holdout"):
+        state, reason = "hold_no_edge", economic_validation["blocker"]
     elif coverage_gap:
         state, reason = "hold_runtime_scope", "route_economic_coverage_gap"
     elif not source_economics or max_economic_sample < RUNTIME_PROMOTION_SAMPLE_FLOOR:
@@ -1483,6 +1588,7 @@ def build_report(
         ),
         "source_economics": source_economics,
         "paired_runtime_economics": paired_economics,
+        "economic_validation": economic_validation,
     }
     evidence_digest = _canonical_hash(evidence_material)
     quality_update_id = f"{FAMILY}:{target_date}:{evidence_digest[:16]}"
@@ -1610,7 +1716,9 @@ def build_report(
         ),
         "attribution_states": dict(sorted(runtime_attribution_states.items())),
     }
+    from src.engine.build_next_stage2_checklist import _next_krx_trading_day
     candidate = {
+        "apply_date": _next_krx_trading_day(target_date),
         "family": FAMILY,
         "stage": STAGE,
         "priority": 37,
@@ -1673,6 +1781,7 @@ def build_report(
         "condition_feasibility": condition_feasibility,
         "runtime_application_attribution": runtime_application_attribution,
         "metric_contract": metric_contract,
+        "economic_validation": economic_validation,
         "source_metrics": {
             "economic_decision_policy": "directional_add_or_no_add_improvement_v1",
             "coverage_gap": coverage_gap,
@@ -1736,11 +1845,17 @@ def build_report(
         "runtime_update_contract": contract,
         "replay_source_files": replay_source_files,
         "replay_engine_implementation": replay_implementation,
-        "independent_exit_replay": build_replay_evidence(
-            [row["independent_replay_input"] for row in decisions],
-            policy_ai_enabled=policy_ai_enabled,
-            cached_policy_ai_records=prior_replies,
-        ),
+        "independent_exit_replay": independent_replay,
+        "population_disposition": {
+            "state": "missing_input" if not paths else "source_gap" if not all_decisions and evidence["opportunity_census"]["identified_opportunity_count"] else "valid_empty" if target_date_configs and not all_decisions else "observed" if all_decisions else "source_gap",
+            "owner_ready_opportunity_count": evidence["unique_episode_count"],
+            "actual_add_fill_required_for_population": False,
+            "invalid_or_conflicting_decision_count": sum(evidence["diagnostics"].values()),
+            "paired_complete_count": independent_replay["complete_episode_count"],
+            "pending_or_censored_count": independent_replay["unique_episode_count"] - independent_replay["complete_episode_count"],
+        },
+        "replay_adapter_errors": replay_adapter_errors,
+        "actual_policy_outcomes": actual_policy_outcomes(decisions),
         "calibration_candidates": [candidate],
     }
 
@@ -1845,3 +1960,24 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+def collect_pyramid_lifecycle_evidence(events):
+    """Reuse lifecycle identity/frame validation; keep the public PYRAMID schema."""
+    normalized = []
+    for event in events:
+        stage = event.get("stage")
+        if stage == "pyramid_lifecycle_replay_observed":
+            normalized.append({**event, "stage": "avg_down_route_arbitration_observed",
+                               "avg_down_route_schema": ROUTE_EVENT_SCHEMA if event.get("pyramid_lifecycle_schema") == "pyramid_lifecycle_replay_v1" else "unknown_pyramid_lifecycle_schema",
+                               "configured_min_buy_pressure": event.get("configured_min_profit_pct"),
+                               "effective_min_buy_pressure": event.get("effective_min_profit_pct"),
+                               "avg_down_policy_version": event.get("pyramid_policy_version"),
+                               "tuning_env_key": "SCALPING_PYRAMID_MIN_PROFIT_PCT"})
+        elif stage == "avg_down_exit_replay_frame_observed" and str(event.get("source_observation_id", "")).startswith("pyr-lifecycle-"):
+            normalized.append(event)
+        elif stage == "avg_down_route_sizing_observed" and str(event.get("source_observation_id", "")).startswith("pyr-lifecycle-"):
+            normalized.append(event)
+        elif stage in {"sell_completed", "scale_in_executed"}:
+            normalized.append(event)
+    return _collect_exact_evidence([], events=normalized)

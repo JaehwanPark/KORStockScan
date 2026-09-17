@@ -46646,7 +46646,7 @@ def test_avg_down_route_observation_binds_selected_preopen_identity_to_pid(
     )
     monkeypatch.setenv(
         "KORSTOCKSCAN_AVG_DOWN_RUNTIME_EVIDENCE_CONTRACT_VERSION",
-        "avg_down_paired_economics_v2",
+        "avg_down_paired_economics_v3",
     )
     monkeypatch.setenv("KORSTOCKSCAN_AVG_DOWN_RUNTIME_EVIDENCE_DIGEST", "c" * 64)
 
@@ -53999,3 +53999,68 @@ def test_mechanistic_entry_price_owner_preserves_numeric_price_without_provider(
     assert gate["entry_price_provider_calls"] == 0
     assert gate["entry_price_numeric_price_changed"] is False
     assert logs[0][0] == "entry_mechanistic_price_owner_applied"
+
+
+def test_scale_in_frozen_budget_never_fetches_and_preserves_zero_unknown(monkeypatch):
+    stock = {"buy_price": 100, "buy_qty": 10, "code": "005930"}
+    action = {"add_type": "PYRAMID", "reason": "test"}
+    called = []
+    monkeypatch.setattr(state_handlers, "describe_dynamic_scale_in_qty", lambda **kwargs: called.append(kwargs) or {"qty": 0})
+    monkeypatch.setattr(state_handlers, "_scale_in_quantity_limit_decision", lambda *a, **kw: {"allowed_qty": kw["requested_qty"]})
+    assert state_handlers._scale_in_observation_sizing(stock, "005930", 101, action, {}, 1000) is None
+    assert called == []
+    stock["_scale_in_observation_budget"] = {"code": "005930", "position_basis": [100, 10],
+        "resolved_price": 101, "observed_at": 1000, "budget": {"budget_base": 10000, "cash_orderable_qty_cap": 0}}
+    assert state_handlers._scale_in_observation_sizing(stock, "005930", 101, action, {}, 1001)["qty"] == 0
+    assert len(called) == 1
+    assert state_handlers._scale_in_observation_sizing(stock, "005930", 101, action, {}, 1003) is None
+    assert state_handlers._scale_in_observation_sizing(stock, "005930", 102, action, {}, 1001) is None
+    assert state_handlers._scale_in_observation_sizing(stock, "005930", 101, action, {}, 999) is None
+    assert len(called) == 1
+
+
+def test_scale_in_loaded_defaults_and_applied_lineage_are_independent(monkeypatch):
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", SimpleNamespace(
+        SCALPING_PYRAMID_MIN_PROFIT_PCT=1.5, SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE=85))
+    monkeypatch.delenv("KORSTOCKSCAN_SCALPING_PYRAMID_MIN_PROFIT_PCT", raising=False)
+    assert state_handlers._avg_down_runtime_config_fields()["pyramid_loaded_value_verified"] is True
+    monkeypatch.setenv("KORSTOCKSCAN_SCALPING_PYRAMID_MIN_PROFIT_PCT", "1.6")
+    assert state_handlers._avg_down_runtime_config_fields()["pyramid_loaded_value_verified"] is False
+    prefix = "KORSTOCKSCAN_SCALPING_PYRAMID_RUNTIME_"
+    for key, value in {"QUALITY_UPDATE_ID": "quality-1", "EVIDENCE_DIGEST": "a"*64,
+                       "EVIDENCE_CONTRACT_VERSION": "pyramid_paired_economics_v2"}.items():
+        monkeypatch.setenv(prefix+key, value)
+    stock = {}
+    state_handlers._record_scale_in_policy_lineage(stock, "PYRAMID", "episode", "first", "source")
+    state_handlers._record_scale_in_policy_lineage(stock, "PYRAMID", "episode", "later", "other")
+    assert stock["_scale_in_applied_policy_lineage"]["decision_id"] == "first"
+    monkeypatch.setenv(prefix+"QUALITY_UPDATE_ID", "quality-2")
+    state_handlers._record_scale_in_policy_lineage(stock, "PYRAMID", "episode", "later", "other")
+    assert stock["_scale_in_applied_lineage_conflict"] is True
+
+
+def test_pyramid_blocked_opportunity_is_captured_before_submit_once(monkeypatch):
+    from src.engine.scalping import avg_down_replay_capture as capture
+    stock = {"id": 123, "code": "005930", "scanner_promotion_id": "scanner-attempt-123", "buy_price": 10000, "buy_qty": 10,
+             "last_entry_receipt_economics_complete": True, "last_entry_receipt_quantity_contract_complete": True}
+    events, registrations = [], []
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", SimpleNamespace(SCALPING_PYRAMID_MIN_PROFIT_PCT=1.5))
+    monkeypatch.setattr(state_handlers, "_is_any_simulated_position", lambda *a: False)
+    monkeypatch.setattr(state_handlers, "_scale_in_exit_authority_block_reason", lambda *a: None)
+    monkeypatch.setattr(state_handlers, "evaluate_scalping_pyramid", lambda *a, min_profit_override, **kw:
+                        {"should_add": min_profit_override <= 1.4, "add_type": "PYRAMID"})
+    monkeypatch.setattr(state_handlers, "_avg_down_route_arm_observation", lambda *, action, **kw:
+                        {"should_add": action["should_add"], "route_evaluation_complete": True})
+    monkeypatch.setattr(state_handlers, "_log_holding_pipeline", lambda stock, code, stage, **fields:
+                        events.append({"stage": stage, **fields}) or {"structured_append_succeeded": True})
+    monkeypatch.setattr(capture, "prepare", lambda *a, **kw: {"replay_capture_state": "armed_source_only", "exit_policy_version": "exit"})
+    monkeypatch.setattr(capture, "register", lambda **kw: registrations.append(kw) or "armed_source_only")
+    arguments = dict(stock=stock, code="005930", profit_rate=1.4, peak_profit=1.4, is_new_high=True,
+                     current_ai_score=80, runtime_prior={}, curr_price=10140, ws_data={}, now_ts=1000)
+    state_handlers._observe_pyramid_lifecycle_replay(**arguments)
+    state_handlers._observe_pyramid_lifecycle_replay(**arguments)
+    assert len(events) == len(registrations) == 1
+    route = json.loads(events[0]["route_replay"])
+    assert len(route) == 24 and route["1.5"]["should_add"] is False and route["1.4"]["should_add"] is True
+    assert events[0]["actual_order_submitted"] is False and events[0]["runtime_effect"] is False
+    assert registrations[0]["source_id"] == events[0]["source_event_id"]

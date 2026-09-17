@@ -17609,6 +17609,15 @@ def _guard_ai_correction_proposal(candidate: dict, proposal: dict) -> dict:
     guard_accepted = False
     route_action = "proposal_only"
 
+    if candidate.get("family") in {"scalping_pyramid_quality_gate", "scalping_avg_down_recovery_quality_gate"} and (
+        proposed_state in {"adjust_up", "adjust_down"} or proposed_value not in (None, "")):
+        from src.engine.lifecycle.avg_down_replay import economic_candidate_contract_errors
+        errors = economic_candidate_contract_errors(candidate)
+        if (candidate.get("allowed_runtime_apply") is not True or errors
+                or (proposed_value not in (None, "") and proposed_value != candidate.get("recommended_value"))):
+            return {"guard_accepted": False, "guard_reject_reason": errors[0] if errors else "scale_in_calibration_winner_immutable",
+                "effective_state": "hold_sample", "effective_value": current_value, "clamped": False,
+                "anomaly_route": anomaly_route, "route_action": "reject_or_hold_sample", "runtime_change": False}
     if anomaly_route == "instrumentation_gap":
         return {
             "guard_accepted": True,
@@ -21161,6 +21170,13 @@ def _merge_direct_scale_in_calibration_candidate(
         if family in existing_families:
             continue
         normalized = dict(candidate)
+        from src.engine.lifecycle.avg_down_replay import economic_candidate_contract_errors
+        from src.engine.lifecycle.avg_down_replay import economic_report_contract_errors
+        economic_errors = economic_candidate_contract_errors(normalized) or economic_report_contract_errors(payload)
+        if economic_errors:
+            normalized.update({"allowed_runtime_apply": False, "calibration_state": "hold_runtime_scope",
+                               "calibration_reason": economic_errors[0]})
+        normalized["source_report_content_sha256"] = _json_sha256(payload)
         source_reports = (
             dict(normalized.get("source_reports"))
             if isinstance(normalized.get("source_reports"), dict)

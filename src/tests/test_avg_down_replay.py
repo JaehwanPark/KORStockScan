@@ -419,3 +419,64 @@ def test_identical_duplicate_frame_is_idempotent_but_conflict_blocks():
     assert mod.replay_exit_paths(observation, frames, full_exit_evaluator=decision)[
         "blockers"
     ] == {"source": "conflicting_replay_frame"}
+
+
+def test_actual_attribution_requires_exact_applied_identity_and_complete_economics():
+    row = {"position_episode_id": "episode", "scale_in_decision_id": "decision", "source_event_id": "source",
+        "runtime_candidate_quality_update_id": "quality", "runtime_candidate_evidence_digest": "a"*64,
+        "runtime_candidate_selected": True, "runtime_pid_value_verified": True, "stock_code": "005930",
+        "venue": "KRX", "session": "krx_regular", "cost_policy_version": "trade_profit_net_realized_pnl:rate=0.00230000",
+        "actual_terminal": {"actual_receipt": {"actual_order_submitted": True,
+            "sell_execution_receipt_economics_complete": True, "sell_execution_receipt_quantity_contract_complete": True,
+            "scale_in_applied_source_observation_id": "source",
+            "scale_in_applied_decision_id": "decision", "scale_in_applied_quality_update_id": "quality",
+            "scale_in_applied_evidence_digest": "a"*64, "sell_execution_cumulative_net_pnl_krw": 1234,
+            "profit_rate": 1.1, "sell_execution_cumulative_qty": 10}}}
+    actual = mod.actual_policy_outcomes([row, deepcopy(row)])
+    assert len(actual) == 1 and actual[0]["net_pnl_krw"] == 1234
+    assert actual[0]["new_incremental_profit_claimed"] is False
+    for key, value in {"scale_in_applied_decision_id": "other", "scale_in_applied_lineage_conflict": True,
+                       "sell_execution_cumulative_qty": 0, "profit_rate": None}.items():
+        broken = deepcopy(row)
+        broken["actual_terminal"]["actual_receipt"][key] = value
+        assert mod.actual_policy_outcomes([broken]) == []
+
+
+def test_frozen_policy_cohort_preserves_rules_without_fragmenting_on_daily_receipts():
+    snapshot = {"implementation": {"policy.py": "original-sha"}, "rules": {"SCALP_STOP": -1.5},
+                "environment": {"KORSTOCKSCAN_AVG_DOWN_RUNTIME_QUALITY_UPDATE_ID": "q1"},
+                "files": {"owner_2026-09-15.json": {"sha256": "a"}}}
+    later = deepcopy(snapshot)
+    later["environment"]["KORSTOCKSCAN_AVG_DOWN_RUNTIME_QUALITY_UPDATE_ID"] = "q2"
+    later["files"] = {"owner_2026-09-16.json": {"sha256": "b"}}
+    assert mod.replay_policy_cohort_digest(snapshot) == mod.replay_policy_cohort_digest(later)
+    later["rules"]["SCALP_STOP"] = -2.0
+    assert mod.replay_policy_cohort_digest(snapshot) != mod.replay_policy_cohort_digest(later)
+
+    modules = deepcopy(snapshot)
+    modules.update(rule_blobs={"original": {"SCALP_STOP": -2.0}}, module_rules={"holding": "original"})
+    assert mod.replay_policy_cohort_digest(snapshot) != mod.replay_policy_cohort_digest(modules)
+
+
+def test_pending_replay_is_retried_instead_of_permanently_cached():
+    observation, frames = replay_fixture()
+    observation["independent_exit_replay_frames"] = frames
+    first = mod.build_replay_evidence([observation])
+    pending = first["episodes"][observation["position_episode_id"]]
+    assert pending["state"] != "paired_exit_complete_source_only"
+    observation["cached_replay_result"] = pending
+    retried = mod.build_replay_evidence([observation])
+    assert retried["cached_episode_count"] == 0
+
+
+def test_position_net_rounding_matches_cumulative_sell_receipt_once():
+    observation, frames = replay_fixture()
+    frames[1]["market"].update(best_bid=9500, best_ask=9510)
+    result = mod.replay_exit_paths(observation, frames,
+        full_exit_evaluator=lambda state, frame, policy, digest: decision(state, frame, policy, digest,
+            action="EXIT" if frame["sequence"] == 2 else "HOLD"))
+    outcome = result["outcomes"]["80"]
+    expected = calculate_net_realized_pnl(round((10000*10+9900*5)/15,4),9500,15,cost_rate=0.0023)
+    assert outcome["net_pnl_krw"] == expected
+    assert expected != sum(calculate_net_realized_pnl(price,9500,qty,cost_rate=0.0023)
+                           for price,qty in ((10000,10),(9900,5)))

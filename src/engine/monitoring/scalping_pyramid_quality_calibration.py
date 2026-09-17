@@ -25,7 +25,7 @@ INPUT_REPORT_DIR = DATA_DIR / "report" / "scalping_pyramid_intraday_feedback"
 OUTPUT_REPORT_DIR = DATA_DIR / "report" / REPORT_TYPE
 RUNTIME_ENV_DIR = DATA_DIR / "threshold_cycle" / "runtime_env"
 CLEAN_BASELINE_DATE = "2026-06-05"
-EVIDENCE_CONTRACT_VERSION = "pyramid_fixed_exit_replay_v1"
+EVIDENCE_CONTRACT_VERSION = "pyramid_paired_economics_v2"
 REPLAY_SOURCE_CONTRACT_VERSION = "pyramid_gate_replay_source_v1"
 REPLAY_SOURCE_SCHEMA_VERSION = 5
 REPLAY_EVENT_SCHEMA = "pyramid_gate_observation_v2"
@@ -2639,11 +2639,136 @@ def _calibration_candidate(
     }
 
 
+def _independent_lifecycle_candidate(target_date, reports, candidate, *, policy_ai_enabled=False, replay_cache=None, prior_replies=None):
+    from src.engine.monitoring.scalping_avg_down_recovery_calibration import (
+        collect_pyramid_lifecycle_evidence, _candidate_economics,
+    )
+    from src.engine.lifecycle.avg_down_replay import (
+        build_replay_evidence, bind_report_paired_terminals, chronological_economic_selection,
+        canonical_digest, actual_policy_outcomes,
+    )
+    configs = [config for report in reports if report.get("target_date") == target_date
+               for config in report.get("runtime_loaded_configs", [])]
+    from src.engine.lifecycle.avg_down_replay import finite_number
+    currents = {value for config in configs
+                if _boolish(config.get("pyramid_loaded_value_verified"))
+                and (value := finite_number(config.get("pyramid_loaded_min_profit_pct"))) is not None}
+    provenance = bool(configs) and len(currents) == 1 and all(
+        _boolish(config.get("pyramid_loaded_value_verified"))
+        and finite_number(config.get("pyramid_loaded_min_profit_pct")) is not None
+        and str(config.get("emitted_at", ""))[:10] == target_date for config in configs)
+    current = next(iter(currents)) if provenance else float(candidate["current_values"]["min_profit_pct"])
+    evidence = collect_pyramid_lifecycle_evidence([
+        event for report in reports for event in report.get("pyramid_lifecycle_source_events", [])])
+    target_cohorts = {(row["policy_version"], row["sizing_policy_version"], row["cost_policy_version"])
+                      for row in evidence["decisions"] if row["source_date"] == target_date}
+    if not target_cohorts:
+        target_cohorts = {(config.get("pyramid_policy_version"), config.get("sizing_policy_version"), config.get("cost_policy_version")) for config in configs}
+    decisions = [row for row in evidence["decisions"] if provenance and len(target_cohorts) == 1
+                 and (row["policy_version"], row["sizing_policy_version"], row["cost_policy_version"]) in target_cohorts
+                 and row["runtime_pid_value_verified"] is True
+                 and math.isclose(row["effective_min_buy_pressure"], current, abs_tol=1e-9)]
+    for row in decisions:
+        cached = (replay_cache or {}).get(row["source_event_id"])
+        if cached:
+            row["independent_replay_input"]["cached_replay_result"] = cached
+    replay = build_replay_evidence([row["independent_replay_input"] for row in decisions],
+                                  policy_ai_enabled=policy_ai_enabled and provenance,
+                                  cached_policy_ai_records=prior_replies)
+    bound, errors = bind_report_paired_terminals(decisions, replay)
+    grid = [_candidate_economics(bound, current=current, candidate=threshold, paired_only=True)
+            for threshold in [round(PROFIT_GRID_MIN + index * PROFIT_GRID_STEP, 1)
+                              for index in range(24)]
+            if not math.isclose(threshold, current, abs_tol=1e-9)
+            and abs(threshold-current) <= PROFIT_GRID_RUNTIME_STEP + 1e-9]
+    winner, validation = chronological_economic_selection(grid, current=current,
+                        sample_floor=PROFIT_GRID_MIN_ELIGIBLE, minimum_ev=0.0)
+    if not configs and not any(report.get("pyramid_lifecycle_source_events") for report in reports):
+        if candidate.get("allowed_runtime_apply"):
+            candidate.update({"calibration_state": "hold_runtime_scope", "calibration_reason": "requires_independent_paired_exit_economics"})
+        candidate.update({"allowed_runtime_apply": False, "target_env_keys": [], "economic_validation": validation})
+        candidate["source_metrics"]["legacy_fixed_exit_role"] = "diagnostic_only_no_runtime_authority"
+        return candidate, replay, errors, []
+    venues = set((winner or {}).get("venue_counts", {}))
+    scope_ready = venues.issuperset({"KRX", "NXT"})
+    ready = bool(winner and provenance and scope_ready and not errors
+                 and candidate.get("input_source_quality_status") in {"pass", "pass_with_row_exclusions"})
+    recommended = float(winner["candidate_value"]) if ready else current
+    # Legacy fixed-exit economics stay diagnostic; only independent exits own selection.
+    from src.engine.build_next_stage2_checklist import _next_krx_trading_day
+    candidate.update({"apply_date": _next_krx_trading_day(target_date), "allowed_runtime_apply": ready, "economic_validation": validation,
+        "source_date": target_date, "target_date": target_date,
+        "calibration_state": ("adjust_up" if recommended > current else "adjust_down") if ready else
+                             "hold_no_edge" if validation.get("winner_fixed_before_holdout") else "hold_sample" if provenance else "hold_runtime_scope",
+        "calibration_reason": "paired_incremental_net_edge_ready" if ready else
+                              "common_runtime_venue_scope_not_closed" if winner and not scope_ready else validation["blocker"] if provenance else "current_min_profit_runtime_provenance_missing",
+        "current_value": current, "recommended_value": recommended,
+        "current_values": {**candidate["current_values"], "min_profit_pct": current},
+        "recommended_values": {**candidate["current_values"], "min_profit_pct": recommended},
+        "target_env_keys": TARGET_ENV_KEYS if ready else [],
+        "changed_target_env_keys": TARGET_ENV_KEYS if ready else [],
+        "recommended_values_changed": ready, "rollback_value": current,
+        "sample_floor_passed": bool(winner),
+        "sample_count": winner["sample_count"] if winner else max((item["sample_count"] for item in grid), default=0),
+        "decision_sample_count": winner["sample_count"] if winner else 0,
+        "decision_universe_count": len(decisions),
+        "evaluation_method": "paired_add_no_add_lifecycle_replay",
+        "evidence_authority": "paired_add_no_add_lifecycle_replay" if ready else "source_only_paired_exit_replay",
+        "cost_policy_version": next(iter(target_cohorts))[2] if len(target_cohorts) == 1 else "unknown",
+        "comparison_universe_hash": (winner or {}).get("comparison_universe_hash"),
+        "impact_scope": "common_runtime", "venue_scope_authority": "common_or_all_active_venues" if scope_ready else "incomplete"})
+    if ready:
+        candidate.update({"source_quality_gate": "pass", "source_quality_status": "pass",
+            "source_quality_blocked": None, "decision_evidence_gate": "pass", "decision_evidence_blockers": [],
+            "runtime_baseline_gate": "pass", "runtime_baseline_blockers": [], "runtime_scope_gate": "pass", "runtime_scope_blockers": []})
+    if winner:
+        candidate["source_metrics"]["diagnostic_label_metrics"] = {
+            key: candidate["source_metrics"].get(key) for key in ("sample_count", "source_quality_adjusted_ev_pct", "final_profit_avg")}
+        candidate["source_metrics"].update({"provenance_present": provenance, "source_quality_pass": not errors,
+                                               "source_quality_evidence_contract": "pyramid_lifecycle_replay_v1"})
+        candidate["source_metrics"].update({key: winner[key] for key in (
+            "sample_count", "source_quality_adjusted_ev_pct", "candidate_minus_current_ev_pct",
+            "candidate_minus_current_net_profit_krw", "reference_notional_krw")})
+    candidate["source_metrics"].update({"paired_runtime_candidate_economics": grid,
+        "selected_candidate_economics": winner, "lifecycle_decision_accounting": {
+            key: value for key, value in evidence.items() if key not in {"decisions", "runtime_configs"}},
+        "population_disposition": {"state": "observed" if evidence["decisions"] else "source_gap" if evidence["opportunity_census"]["identified_opportunity_count"] or not configs else "valid_empty",
+            "actual_add_fill_required_for_population": False, **evidence["opportunity_census"],
+            "paired_complete_count": replay["complete_episode_count"],
+            "pending_or_censored_count": replay["unique_episode_count"] - replay["complete_episode_count"]},
+        "legacy_fixed_exit_role": "diagnostic_only_no_runtime_authority"})
+    candidate["source_metrics"]["legacy_current_value_provenance"] = candidate["current_value_provenance"]
+    candidate["current_value_provenance"] = {
+        "status": "pass" if provenance else "blocked",
+        "blockers": [] if provenance else ["current_min_profit_runtime_provenance_missing"],
+        "selected_min_profit_pct": current,
+        "values": {"min_profit_pct": current},
+        "field_sources": {"min_profit_pct": "same_day_runtime_config_event" if provenance else "unverified_fallback"},
+        "runtime_config_event_count": len(configs),
+        "loaded_value_verified": provenance,
+    }
+    candidate["condition_feasibility"].update({"independent_exit_economics_passed": ready,
+        "runtime_current_value_provenance_ready": provenance, "state": "bounded_candidate_ready" if ready else candidate["calibration_reason"],
+        "condition_currently_achievable": ready, "profit_improvement_demonstrated": ready,
+        "source_blockers": errors,
+        "runtime_baseline_blockers": [] if provenance else ["current_min_profit_runtime_provenance_missing"],
+        "runtime_scope_blockers": [] if scope_ready else ["common_runtime_venue_scope_not_closed"],
+        "next_action": "select_same_stage_owner_then_next_preopen" if ready else candidate["calibration_reason"],
+        "indefinite_wait_appropriate": not ready})
+    material = {"legacy_evidence_digest": candidate["evidence_digest"], "validation": validation,
+                "grid": grid, "replay_digests": {key: value["evidence_digest"] for key, value in replay["episodes"].items()},
+                "source_contract": "pyramid_lifecycle_replay_v1", "current": current, "recommended": recommended}
+    candidate["evidence_digest"] = canonical_digest(material)
+    candidate["quality_update_id"] = f"{FAMILY}:{target_date}:{candidate['evidence_digest'][:16]}"
+    return candidate, replay, errors, actual_policy_outcomes(bound)
+
+
 def build_report(
     target_date: str,
     *,
     input_paths: list[Path] | None = None,
     generated_at: str | None = None,
+    policy_ai_enabled: bool = False,
 ) -> dict[str, Any]:
     generated_at = generated_at or datetime.now(KST).isoformat(timespec="seconds")
     intended_paths = (
@@ -2673,8 +2798,18 @@ def build_report(
         source_paths=paths,
         source_quality_excluded_dates=source_quality_excluded_dates,
     )
+    from src.engine.monitoring.scalping_avg_down_recovery_calibration import _load_replay_cache
+    replay_cache, prior_replies, replay_source_files, replay_implementation = _load_replay_cache(
+        paths, report_dir=OUTPUT_REPORT_DIR, report_type=REPORT_TYPE)
+    candidate, independent_replay, adapter_errors, actual_outcomes = _independent_lifecycle_candidate(
+        target_date, reports, candidate, policy_ai_enabled=policy_ai_enabled, replay_cache=replay_cache, prior_replies=prior_replies)
     return {
         "schema_version": 1,
+        "replay_source_files": replay_source_files,
+        "replay_engine_implementation": replay_implementation,
+        "independent_exit_replay": independent_replay,
+        "replay_adapter_errors": adapter_errors,
+        "actual_policy_outcomes": actual_outcomes,
         "report_type": REPORT_TYPE,
         "target_date": target_date,
         "generated_at": generated_at,
@@ -2936,13 +3071,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-json", type=Path)
     parser.add_argument("--output-md", type=Path)
     parser.add_argument("--print-summary", action="store_true")
+    parser.add_argument("--policy-replay-ai", choices=("off", "current"), default="off")
     args = parser.parse_args(argv)
     output_json, output_md = (
         (args.output_json, args.output_md)
         if args.output_json and args.output_md
         else _default_output_paths(args.target_date)
     )
-    report = build_report(args.target_date)
+    report = build_report(args.target_date, policy_ai_enabled=args.policy_replay_ai == "current")
     write_outputs(report, output_json=output_json, output_md=output_md)
     if args.print_summary:
         print(

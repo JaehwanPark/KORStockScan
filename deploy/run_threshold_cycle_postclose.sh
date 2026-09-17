@@ -1713,6 +1713,7 @@ if [ "$RUN_SCALPING_PYRAMID_QUALITY_CALIBRATION" = "true" ] || [ "$RUN_SCALPING_
   wait_for_postclose_resources "scalping_pyramid_quality_calibration"
   run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.monitoring.scalping_pyramid_quality_calibration \
     --target-date "$TARGET_DATE" \
+    --policy-replay-ai current \
     --print-summary
   wait_for_report_artifact \
     "$PROJECT_DIR/data/report/scalping_pyramid_quality_calibration/scalping_pyramid_quality_calibration_${TARGET_DATE}.json" \
@@ -1743,6 +1744,7 @@ if [ "$RUN_SCALPING_AVG_DOWN_RECOVERY_CALIBRATION" = "true" ] || [ "$RUN_SCALPIN
     "$PROJECT_DIR/src/engine/kiwoom_orders.py" \
     "$PROJECT_DIR/src/engine/scalping/micro_estimator_state.py" \
     "$PROJECT_DIR/src/engine/trade_profit.py" \
+    "$PROJECT_DIR/src/engine/sentinel_event_cache.py" \
     "$PROJECT_DIR/src/engine/monitoring/scalping_avg_down_recovery_calibration.py"; then
     emit_postclose_marker "[REUSE] scalping_avg_down_recovery_calibration target_date=$TARGET_DATE reason=completed_artifact_checkpoint"
   else

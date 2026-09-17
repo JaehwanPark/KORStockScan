@@ -771,6 +771,7 @@ _BUY_RECEIPT_SNAPSHOT_KEYS = (
     "buy_qty",
     "initial_buy_qty",
     "last_entry_receipt_economics_complete",
+    "last_entry_receipt_quantity_contract_complete",
     "last_entry_receipt_execution_no",
     "scale_in_filled_qty",
     "rising_missed_scout_position_cycle_active",
@@ -813,12 +814,15 @@ _SELL_RECEIPT_SNAPSHOT_KEYS = (
     *_MAIN_LIFECYCLE_SNAPSHOT_KEYS,
     *_BROKER_EXECUTION_PROVENANCE_KEYS,
     *_SCOUT_AI_ATTRIBUTION_SNAPSHOT_KEYS,
+    "_scale_in_applied_policy_lineage",
+    "_scale_in_applied_lineage_conflict",
     *ENTRY_OPPORTUNITY_RECHECK_ATTRIBUTION_KEYS,
     "actual_order_submitted",
     "broker_order_forbidden",
     "buy_price",
     "buy_qty",
     "last_entry_receipt_economics_complete",
+    "last_entry_receipt_quantity_contract_complete",
     "last_entry_receipt_execution_no",
     "sell_buy_price_reconciled_from_entry_receipt",
     "sell_buy_price_reconcile_db_price",
@@ -1394,6 +1398,10 @@ def _log_holding_pipeline_impl(
         if field_name != "attempt_id" or lifecycle_stage_mapped:
             fields.pop(field_name, None)
     if isinstance(candidate_stock, dict):
+        lineage = candidate_stock.get("_scale_in_applied_policy_lineage") or {}
+        if stage in {"sell_completed", "scale_in_executed"} and lineage:
+            fields.update({"scale_in_applied_" + key: value for key, value in lineage.items()})
+            fields["scale_in_applied_lineage_conflict"] = bool(candidate_stock.get("_scale_in_applied_lineage_conflict"))
         fields.update(
             entry_opportunity_recheck_attribution_fields(
                 candidate_stock,
@@ -11241,6 +11249,12 @@ def _handle_entry_buy_execution(
         # holding-side transient cleanup and is cleared by terminal/revive
         # resets through _SCOUT_AI_ATTRIBUTION_SNAPSHOT_KEYS.
         target_stock["rising_missed_scout_position_cycle_active"] = True
+    if int(target_stock.get("entry_filled_qty", 0) or 0) == 0:
+        for observation_key in ("_scale_in_applied_policy_lineage", "_scale_in_applied_lineage_conflict",
+                                "_pyramid_lifecycle_context", "_pyramid_lifecycle_observed_episode",
+                                "_scale_in_observation_budget"):
+            target_stock.pop(observation_key, None)
+    target_stock["last_entry_receipt_quantity_contract_complete"] = bool(entry_receipt.get("quantity_contract_complete"))
     target_stock["entry_filled_qty"] = (
         int(target_stock.get("entry_filled_qty", 0) or 0) + effective_exec_qty
     )

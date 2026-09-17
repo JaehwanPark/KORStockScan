@@ -555,6 +555,7 @@ def _scalping_pyramid_strong_continuation_context(
     is_new_high,
     *,
     current_ai_score=None,
+    min_profit_override=None,
 ):
     enabled = bool(
         getattr(TRADING_RULES, "SCALPING_PYRAMID_STRONG_CONTINUATION_ENABLED", False)
@@ -562,6 +563,7 @@ def _scalping_pyramid_strong_continuation_context(
     base_min_profit = max(
         0.0,
         _safe_float(
+            min_profit_override if min_profit_override is not None else
             getattr(TRADING_RULES, "SCALPING_PYRAMID_MIN_PROFIT_PCT", 1.5), 1.5
         ),
     )
@@ -1115,6 +1117,7 @@ def evaluate_scalping_pyramid(
     is_new_high,
     current_ai_score=None,
     runtime_prior_context=None,
+    min_profit_override=None,
 ):
     """
     스캘핑 불타기(PYRAMID) 평가: 1차는 profit/peak 기반 단순 조건.
@@ -1127,6 +1130,7 @@ def evaluate_scalping_pyramid(
     base_min_profit = max(
         0.0,
         _safe_float(
+            min_profit_override if min_profit_override is not None else
             getattr(TRADING_RULES, "SCALPING_PYRAMID_MIN_PROFIT_PCT", 1.5), 1.5
         ),
     )
@@ -1136,6 +1140,7 @@ def evaluate_scalping_pyramid(
         drawdown_from_peak,
         is_new_high,
         current_ai_score=current_ai_score,
+        min_profit_override=min_profit_override,
     )
     effective_min_profit = base_min_profit
     profit_gate_mode = "base"

@@ -3691,7 +3691,7 @@ def test_direct_scale_in_hold_calibration_is_merged_but_excluded_from_ai_review(
     assert ai_report["ai_coverage"]["status"] == "complete"
 
 
-def test_pyramid_positive_candidate_reaches_preopen_after_parsed_review(
+def test_pyramid_arithmetic_only_candidate_is_rejected_after_parsed_review(
     tmp_path, monkeypatch
 ):
     from src.engine import threshold_cycle_preopen_apply as preopen
@@ -3796,6 +3796,10 @@ def test_pyramid_positive_candidate_reaches_preopen_after_parsed_review(
         target_date="2026-09-04", reports=[source], source_paths=[]
     )
     assert candidate["allowed_runtime_apply"] is True
+    from src.tests.test_threshold_cycle_preopen_apply import _with_economic_proof
+    candidate.update({"source_date": "2026-09-04", "target_date": "2026-09-04", "current_value": 1.1,
+                      "recommended_value": 1.0, "changed_target_env_keys": ["SCALPING_PYRAMID_MIN_PROFIT_PCT"], "rollback_value": 1.1})
+    _with_economic_proof(candidate)
     source_path = tmp_path / "scalping_pyramid_quality_calibration_2026-09-04.json"
     source_path.write_text(
         json.dumps({"target_date": "2026-09-04", "calibration_candidates": [candidate]})
@@ -3844,18 +3848,13 @@ def test_pyramid_positive_candidate_reaches_preopen_after_parsed_review(
         require_ai=True,
         target_date="2026-09-07",
     )
-    assert [item["family"] for item in selected] == [pyramid.FAMILY], decisions
-    assert env == {"KORSTOCKSCAN_SCALPING_PYRAMID_MIN_PROFIT_PCT": "1"}
-    assert ai_report["items"][0]["guard_accepted"] is True
-    assert ai_report["items"][0]["quality_update_id"] == candidate["quality_update_id"]
-    assert ai_report["items"][0]["evidence_digest"] == candidate["evidence_digest"]
-    assert (
-        context["calibration_candidates"][0]["condition_feasibility"]["state"]
-        == "bounded_candidate_ready"
-    )
+    assert selected == [], decisions
+    assert env == {}
+    assert ai_report["items"] == []
+    assert report["calibration_candidates"][0]["allowed_runtime_apply"] is False
 
 
-def test_avg_down_candidate_identity_survives_ai_and_preopen_handoff(
+def test_avg_down_arithmetic_only_candidate_is_rejected_after_parsed_review(
     tmp_path, monkeypatch
 ):
     from src.engine import threshold_cycle_preopen_apply as preopen
@@ -3923,6 +3922,8 @@ def test_avg_down_candidate_identity_survives_ai_and_preopen_handoff(
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
     }
+    from src.tests.test_threshold_cycle_preopen_apply import _with_economic_proof
+    _with_economic_proof(candidate)
     source_path = tmp_path / "scalping_avg_down_recovery_calibration_2026-09-04.json"
     source_path.write_text(
         json.dumps(
@@ -3942,10 +3943,7 @@ def test_avg_down_candidate_identity_survives_ai_and_preopen_handoff(
         report, "2026-09-04", source_path=source_path
     )
     context = report_mod._build_ai_correction_input_context(report)
-    context_candidate = context["calibration_candidates"][0]
-    assert context_candidate["target_env_key"] == preopen.AVG_DOWN_TARGET_ENV_KEY
-    assert context_candidate["current_value"] == 85.0
-    assert context_candidate["recommended_value"] == 80.0
+    assert context["calibration_candidates"] == []
 
     ai_report = report_mod.build_threshold_cycle_ai_correction_report(
         report,
@@ -3973,27 +3971,13 @@ def test_avg_down_candidate_identity_survives_ai_and_preopen_handoff(
         ai_provider_status={"provider": "file", "status": "loaded"},
         ai_input_context=context,
     )
-    item = ai_report["items"][0]
-    assert item["quality_update_id"] == candidate["quality_update_id"]
-    assert item["target_env_key"] == candidate["target_env_key"]
-    assert item["current_value"] == candidate["current_value"]
-    assert item["recommended_value"] == candidate["recommended_value"]
-    selected, decisions, env = preopen._select_auto_apply_candidates(
-        [candidate],
-        ai_review={"items_by_family": {candidate["family"]: item}},
-        require_ai=True,
-        target_date="2026-09-07",
-    )
-    assert [entry["family"] for entry in selected] == [candidate["family"]], decisions
-    assert env == {
-        "KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE": "80",
-        "KORSTOCKSCAN_AVG_DOWN_RUNTIME_QUALITY_UPDATE_ID": "avg-down-quality-1",
-        "KORSTOCKSCAN_AVG_DOWN_RUNTIME_EVIDENCE_CONTRACT_VERSION": (
-            preopen.AVG_DOWN_EVIDENCE_CONTRACT_VERSION
-        ),
-        "KORSTOCKSCAN_AVG_DOWN_RUNTIME_EVIDENCE_DIGEST": "a" * 64,
-        "KORSTOCKSCAN_AVG_DOWN_RUNTIME_PREVIOUS_MIN_BUY_PRESSURE": "85.0",
-    }
+    assert ai_report["items"] == []
+    assert report["calibration_candidates"][0]["allowed_runtime_apply"] is False
+    selected, decisions, env = preopen._select_auto_apply_candidates([candidate],
+        ai_review={"items_by_family": {}}, require_ai=True, target_date="2026-09-07")
+    assert selected == [], decisions
+    assert env == {}
+
 
 
 @pytest.mark.parametrize("source_date", ["2026-09-03", "2026-09-07"])
@@ -10059,3 +10043,166 @@ def test_new_price_contract_cannot_publish_legacy_completed_average_after_cutoff
             'exact_outcome_joined_sample': 20, 'metrics': {'source_quality_adjusted_ev_pct': .2}}})
     report_mod._materialize_mechanistic_entry_price_policy({'calibration_candidates': [candidate]}, '2026-09-17')
     assert not list(tmp_path.glob('*.json'))
+
+
+@pytest.mark.parametrize("family,blocked_baseline", [("PYRAMID", False), ("AVG_DOWN", False), ("PYRAMID", True), ("AVG_DOWN", True)])
+def test_independent_producer_to_daily_ai_and_preopen_automatic_handoff(tmp_path, monkeypatch, family, blocked_baseline):
+    from src.tests.test_scalping_avg_down_recovery_calibration import _write_independent_fixture
+    from src.engine.monitoring import scalping_avg_down_recovery_calibration as avg
+    from src.engine.monitoring import scalping_pyramid_quality_calibration as pyramid
+    from src.engine.monitoring import scalping_pyramid_intraday_feedback as feedback
+    from src.engine import threshold_cycle_preopen_apply as preopen
+    from src.engine.lifecycle.avg_down_replay import replay_evidence_contract_errors
+    day = "2026-09-16"
+    preflight = lambda date: {"status": "pass", "tuning_input_allowed": True,
+                              "allowed_runtime_apply": True, "source_quality_gate": "pass"}
+    monkeypatch.setattr(avg, "load_source_quality_preflight", preflight)
+    monkeypatch.setattr(pyramid, "load_source_quality_preflight", preflight)
+    monkeypatch.setattr(preopen, "RUNTIME_ENV_DIR", tmp_path / "runtime-env")
+    _write_independent_fixture(tmp_path, monkeypatch, family=family, episodes_per_day=10 if family == "PYRAMID" else 5, blocked_baseline=blocked_baseline)
+    if family == "PYRAMID":
+        inputs = tmp_path / "feedback"
+        inputs.mkdir()
+        monkeypatch.setattr(pyramid, "INPUT_REPORT_DIR", inputs)
+        monkeypatch.setattr(pyramid, "RUNTIME_ENV_DIR", tmp_path / "runtime-env")
+        for date in ("2026-09-15", day):
+            payload = feedback.build_report(date, pipeline_path=tmp_path / "pipeline_events" / f"pipeline_events_{date}.jsonl")
+            (inputs / f"scalping_pyramid_intraday_feedback_{date}.json").write_text(json.dumps(payload))
+        payload = pyramid.build_report(day)
+        merge = report_mod.merge_scalping_pyramid_quality_calibration_candidate
+    else:
+        payload = avg.build_report(day)
+        merge = report_mod.merge_scalping_avg_down_recovery_calibration_candidate
+    candidate = payload["calibration_candidates"][0]
+    if blocked_baseline:
+        actual_add_count = sum(json.loads(line).get("stage") == "scale_in_executed"
+            for path in (tmp_path / "pipeline_events").glob("*.jsonl") for line in path.read_text().splitlines())
+        assert actual_add_count == 0
+        assert candidate["economic_validation"]["risk_reduction_only"] is False
+        assert candidate["recommended_value"] < candidate["current_value"]
+    assert candidate["allowed_runtime_apply"] is True
+    if family == "PYRAMID":
+        assert candidate["current_value_provenance"]["status"] == "pass"
+        assert candidate["current_value_provenance"]["blockers"] == []
+        assert candidate["condition_feasibility"]["condition_currently_achievable"] is True
+        assert candidate["condition_feasibility"]["source_blockers"] == []
+        assert candidate["condition_feasibility"]["runtime_baseline_blockers"] == []
+    assert replay_evidence_contract_errors(payload["independent_exit_replay"]) == []
+    source = tmp_path / "source.json"
+    source.write_text(json.dumps(payload))
+    report = {"date": day, "calibration_candidates": [], "calibration_source_bundle": {}}
+    merge(report, day, source_path=source)
+    assert report["calibration_candidates"][0]["economic_validation"] == candidate["economic_validation"]
+    proposal = {"proposed_state": candidate["calibration_state"], "proposed_value": candidate["recommended_value"],
+                "anomaly_route": "normal_drift"}
+    guard = report_mod._guard_ai_correction_proposal(candidate, proposal)
+    assert guard["guard_accepted"] is True, guard
+    ai_report = report_mod.build_threshold_cycle_ai_correction_report(report,
+        ai_raw_response=json.dumps({"schema_version": 1, "corrections": [{
+            "family": candidate["family"], "anomaly_type": "normal_drift", "ai_review_state": "agree",
+            "correction_proposal": {**proposal, "sample_window": "cumulative"},
+            "correction_reason": "Verified chronological paired net improvement.",
+            "required_evidence": ["paired episode economics"], "risk_flags": []}]}),
+        ai_provider_status={"provider": "file", "status": "loaded"},
+        ai_input_context=report_mod._build_ai_correction_input_context(report))
+    selected, decisions, env = preopen._select_auto_apply_candidates(
+        [report["calibration_candidates"][0]],
+        ai_review={"items_by_family": {item["family"]: item for item in ai_report["items"]}},
+        require_ai=True, target_date=candidate["apply_date"])
+    assert [row["family"] for row in selected] == [candidate["family"]], decisions
+    expected_key = "KORSTOCKSCAN_SCALPING_PYRAMID_MIN_PROFIT_PCT" if family == "PYRAMID" else "KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE"
+    assert expected_key in env
+    assert any(key.endswith("RUNTIME_EVIDENCE_DIGEST") and value == candidate["evidence_digest"] for key, value in env.items())
+    # Dated publishing and rule loading use only this fixture's root/environment.
+    runtime_dir = tmp_path / "runtime-env"
+    runtime_dir.mkdir(exist_ok=True)
+    manifest = {"target_date": candidate["apply_date"], "selected_families": [candidate["family"]],
+                "env_overrides": env, "auto_apply_candidates": selected, "auto_apply_decisions": decisions}
+    monkeypatch.setattr(preopen, "OPERATOR_RUNTIME_ENV_LOCK_DIR", tmp_path / "locks")
+    preopen._write_runtime_env(candidate["apply_date"], manifest, env)
+    loaded_env = preopen._read_shell_export_env(preopen.runtime_env_path(candidate["apply_date"]))
+    assert loaded_env[expected_key] == env[expected_key]
+    import src.utils.constants as constants
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    loaded_rules = constants._build_trading_rules()
+    assert getattr(loaded_rules, expected_key.removeprefix("KORSTOCKSCAN_")) == candidate["recommended_value"]
+    from src.engine import threshold_cycle_ev_report as ev, verify_threshold_cycle_postclose_chain as verifier
+    report_root = tmp_path / "report"
+    monkeypatch.setattr(ev, "REPORT_DIR", report_root)
+    monkeypatch.setattr(verifier, "REPORT_DIR", report_root)
+    name = payload["report_type"]
+    current_source = report_root / name / f"{name}_{day}.json"
+    current_source.parent.mkdir(parents=True, exist_ok=True)
+    current_source.write_text(json.dumps(payload))
+    monkeypatch.setattr(preopen, "load_source_quality_preflight", preflight)
+    directory_key = "SCALPING_PYRAMID_QUALITY_CALIBRATION_DIR" if family == "PYRAMID" else "SCALPING_AVG_DOWN_RECOVERY_CALIBRATION_DIR"
+    monkeypatch.setattr(preopen, directory_key, current_source.parent)
+    direct_reader = preopen._load_scalping_pyramid_quality_calibration_candidates if family == "PYRAMID" else preopen._load_scalping_avg_down_recovery_calibration_candidates
+    direct, direct_status = direct_reader(day)
+    assert direct[0]["allowed_runtime_apply"] is True, direct_status
+    assert direct[0]["source_report_content_sha256"] == report["calibration_candidates"][0]["source_report_content_sha256"]
+    ev_path = report_root / "threshold_cycle_ev" / f"threshold_cycle_ev_{day}.json"
+    ev_path.parent.mkdir(exist_ok=True)
+    attribution = ev._scale_in_economic_attribution(day)
+    ev_path.write_text(json.dumps({"target_date": day, "scale_in_policy_attribution": attribution}))
+    assert attribution[name]["actual_completed_count"] == 0
+    assert attribution[name]["actual_completed_net_pnl_krw"] is None
+    assert verifier._scale_in_attribution_handoff_status(day)["status"] == "pass"
+    changed = {**payload, "generated_at": "changed-generation"}
+    current_source.write_text(json.dumps(changed))
+    assert verifier._scale_in_attribution_handoff_status(day)["status"] == "fail"
+    current_source.write_text(json.dumps(payload))
+    import copy
+    from src.engine.lifecycle.avg_down_replay import (
+        chronological_economic_selection, economic_candidate_contract_errors,
+        economic_report_contract_errors,
+    )
+    contract_reader = verifier._pyramid_calibration_contract_status if family == "PYRAMID" else verifier._avg_down_calibration_contract_status
+    assert contract_reader(day)["status"] == "pass"
+    # Preserve the real arm deltas but inflate absolute EV in a newly issued
+    # report/proof. Arithmetic alone must not replace independent arm PnL.
+    changed = copy.deepcopy(payload)
+    changed_candidate = changed["calibration_candidates"][0]
+    grid = changed_candidate["source_metrics"]["paired_runtime_candidate_economics"]
+    for item in grid:
+        for row in item["episode_economics"]:
+            row["candidate_incremental_pnl_krw"] += 100000
+            row["current_incremental_pnl_krw"] += 100000
+    _, inflated_proof = chronological_economic_selection(grid, current=candidate["current_value"],
+        sample_floor=20 if family == "PYRAMID" else 10, minimum_ev=0.0 if family == "PYRAMID" else 0.1)
+    changed_candidate["economic_validation"] = inflated_proof
+    assert economic_candidate_contract_errors(changed_candidate) == []
+    assert economic_report_contract_errors(changed) == ["scale_in_paired_economic_arm_binding_invalid"]
+    current_source.write_text(json.dumps(changed))
+    assert contract_reader(day)["status"] == "fail"
+    rejected, _ = direct_reader(day)
+    assert rejected[0]["allowed_runtime_apply"] is False
+    merged = {"date": day, "calibration_candidates": [], "calibration_source_bundle": {}}
+    merge(merged, day, source_path=current_source)
+    assert merged["calibration_candidates"][0]["allowed_runtime_apply"] is False
+    # Four distinct episodes cannot become the floor through duplicate rows.
+    duplicate_grid = copy.deepcopy(candidate["source_metrics"]["paired_runtime_candidate_economics"])
+    for item in duplicate_grid:
+        rows = item["episode_economics"]
+        four = [next(row for row in rows if row["source_date"] == date and row["venue"] == venue)
+                for date in ("2026-09-15", day) for venue in ("KRX", "NXT")]
+        item["episode_economics"] = [copy.deepcopy(row) for row in four for _ in range(5)]
+    winner, duplicate_proof = chronological_economic_selection(duplicate_grid,
+        current=candidate["current_value"], sample_floor=20 if family == "PYRAMID" else 10,
+        minimum_ev=0.0 if family == "PYRAMID" else 0.1)
+    assert winner is None
+    assert duplicate_proof["blocker"] == "duplicate_episode_in_comparison_universe"
+    for field in ("economic_validation", "source_metrics"):
+        malformed = copy.deepcopy(payload)
+        malformed_candidate = malformed["calibration_candidates"][0]
+        malformed_candidate[field] = [1]
+        assert economic_candidate_contract_errors(malformed_candidate)
+        assert economic_report_contract_errors(malformed)
+        current_source.write_text(json.dumps(malformed))
+        assert contract_reader(day)["status"] == "fail"
+        rejected, _ = direct_reader(day)
+        assert rejected[0]["allowed_runtime_apply"] is False
+    current_source.write_text(json.dumps(payload))
+    # No actual PID, notification, provider or orders.
+    assert payload["actual_policy_outcomes"] == []

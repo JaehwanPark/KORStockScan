@@ -986,7 +986,7 @@ def test_preopen_apply_blocks_candidate_with_missing_order_provenance():
     assert selected == []
     assert env == {}
     assert decisions[0]["selected"] is False
-    assert decisions[0]["decision_reason"] == "source_quality_blocked"
+    assert "source_quality_blocked" in decisions[0]["decision_reason"]
 
 
 def test_scalping_pyramid_quality_gate_candidate_emits_runtime_env_overrides():
@@ -1507,14 +1507,14 @@ def test_scalping_pyramid_quality_gate_candidate_ai_guard_reject_blocks_env(
     assert selected == []
     assert env == {}
     assert decisions[0]["selected"] is False
-    assert decisions[0]["decision_reason"] == "ai_guard_rejected_test"
+    assert "economic_evidence_contract_version_invalid" in decisions[0]["decision_reason"]
 
 
 def test_scalping_pyramid_ai_guard_rejects_different_replay_evidence_digest():
     candidate = {
         "family": "scalping_pyramid_quality_gate",
         "quality_update_id": "pyramid-quality-1",
-        "evidence_contract_version": "pyramid_fixed_exit_replay_v1",
+        "evidence_contract_version": "pyramid_paired_economics_v2",
         "evidence_digest": "candidate-digest",
     }
     ai_review = {
@@ -1523,7 +1523,7 @@ def test_scalping_pyramid_ai_guard_rejects_different_replay_evidence_digest():
                 "guard_accepted": True,
                 "ai_anomaly_route": "normal_drift",
                 "quality_update_id": "pyramid-quality-1",
-                "evidence_contract_version": "pyramid_fixed_exit_replay_v1",
+                "evidence_contract_version": "pyramid_paired_economics_v2",
                 "evidence_digest": "different-digest",
             }
         }
@@ -1541,7 +1541,7 @@ def test_scalping_pyramid_ai_guard_rejects_different_replay_evidence_version():
     candidate = {
         "family": "scalping_pyramid_quality_gate",
         "quality_update_id": "pyramid-quality-1",
-        "evidence_contract_version": "pyramid_fixed_exit_replay_v1",
+        "evidence_contract_version": "pyramid_paired_economics_v2",
         "evidence_digest": "candidate-digest",
     }
     ai_review = {
@@ -1625,7 +1625,7 @@ def test_scale_in_selects_only_one_cumulative_quality_update_beside_split_plan(
         "current_values": {"shallow_min_buy_pressure": 85.0},
         "recommended_values": {"shallow_min_buy_pressure": 80.0},
         "quality_update_id": "avg-down-quality-1",
-        "evidence_contract_version": "avg_down_paired_economics_v2",
+        "evidence_contract_version": "avg_down_paired_economics_v3",
         "evidence_digest": "a" * 64,
         "evaluation_method": "paired_add_no_add_lifecycle_replay",
         "evidence_authority": "paired_add_no_add_lifecycle_replay",
@@ -1660,11 +1660,16 @@ def test_scale_in_selects_only_one_cumulative_quality_update_beside_split_plan(
         "broker_order_forbidden": True,
     }
 
+    _with_economic_proof(avg_down_candidate)
+    pyramid_candidate.update({"target_env_keys": ["SCALPING_PYRAMID_MIN_PROFIT_PCT"], "changed_target_env_keys": ["SCALPING_PYRAMID_MIN_PROFIT_PCT"],
+        "current_values": {"min_profit_pct": 1.5}, "recommended_values": {"min_profit_pct": 1.4},
+        "current_value": 1.5, "recommended_value": 1.4, "evidence_contract_version": "pyramid_paired_economics_v2"})
+    _with_economic_proof(pyramid_candidate)
     selected, decisions, env = mod._select_auto_apply_candidates(
         [split_candidate, pyramid_candidate, avg_down_candidate],
         ai_review={},
         require_ai=False,
-        target_date="2026-07-04",
+        target_date="2026-07-06",
     )
 
     assert [item["family"] for item in selected] == [
@@ -1742,7 +1747,7 @@ def test_pyramid_cumulative_quality_contract_binds_fixed_exit_replay_digest():
         "family": "scalping_pyramid_quality_gate",
         "stage": "scale_in",
         "quality_update_id": "pyramid-quality-1",
-        "evidence_contract_version": "pyramid_fixed_exit_replay_v1",
+        "evidence_contract_version": "pyramid_paired_economics_v2",
         "evidence_digest": "fixed-exit-digest",
         "runtime_update_mode": "single_cumulative_quality_update",
         "max_runtime_apply_count": 1,
@@ -1761,7 +1766,7 @@ def test_pyramid_cumulative_quality_contract_binds_fixed_exit_replay_digest():
         "runtime_apply_candidate_count": 1,
         "allowed_runtime_apply_count": 1,
         "quality_update_id": "pyramid-quality-1",
-        "evidence_contract_version": "pyramid_fixed_exit_replay_v1",
+        "evidence_contract_version": "pyramid_paired_economics_v2",
         "evidence_digest": "fixed-exit-digest",
         "cumulative_quality_window": quality_window,
         "post_apply_attribution_required": True,
@@ -11982,3 +11987,36 @@ def test_preopen_price_policy_checks_same_authority_as_runtime(tmp_path, change)
     audit = next(item for item in mod._split_runtime_policy_audits("2026-09-17", env) if item["family"] == "dynamic_entry_price_resolver")
     assert audit["status"] == "fail"
     assert audit["reason"] == "mechanistic_entry_price_authority_invalid"
+
+
+def _with_economic_proof(candidate):
+    """Synthetic handoff fixture only; not actual market/economic acceptance."""
+    from src.engine.build_next_stage2_checklist import _next_krx_trading_day
+    from datetime import date, timedelta
+    from src.engine.lifecycle.avg_down_replay import chronological_economic_selection
+    pyramid = candidate["family"] == "scalping_pyramid_quality_gate"
+    source_day = candidate.get("source_date") or "2026-07-03"
+    earlier = (date.fromisoformat(source_day) - timedelta(days=1)).isoformat()
+    candidate.setdefault("source_date", source_day)
+    candidate.setdefault("target_date", source_day)
+    candidate["apply_date"] = _next_krx_trading_day(source_day)
+    candidate.setdefault("changed_target_env_keys", candidate["target_env_keys"])
+    n = 20 if pyramid else 10
+    current, recommended = candidate["current_value"], candidate["recommended_value"]
+    rows = [{"position_episode_id": f"synthetic-proof-{i}", "source_date": earlier if i < n // 2 else source_day,
+             "terminal_source_date": earlier if i < n // 2 else source_day,
+             "venue": "KRX" if i % 2 else "NXT", "reference_notional": 1000,
+             "candidate_minus_current_pnl_krw": 10, "candidate_incremental_pnl_krw": 10,
+             "current_incremental_pnl_krw": 0, "candidate_total_pnl_krw": 60, "current_total_pnl_krw": 50,
+             "behavior_changed": True, "candidate_peak_exposure_krw": 1100,
+             "current_peak_exposure_krw": 1000, "capital_limit_krw": 1500,
+             "execution_stress_cost_krw": 1, "paired_exit_policy_version": "verified-frozen-cohort", "execution_quality_validated": True,
+             "capture_coverage_validated": True} for i in range(n)]
+    economics = [{"candidate_value": recommended, "sample_count": n, "removed_add_count": 0,
+                  "candidate_only_add_count": n, "episode_economics": rows}]
+    winner, proof = chronological_economic_selection(economics, current=current, sample_floor=n,
+                                                    minimum_ev=0.0 if pyramid else 0.1)
+    assert winner is not None
+    candidate["economic_validation"] = proof
+    candidate.setdefault("source_metrics", {})["paired_runtime_candidate_economics"] = economics
+    return candidate

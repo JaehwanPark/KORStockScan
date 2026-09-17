@@ -466,6 +466,7 @@ def _project_fields_for_text(stage: str, fields: dict[str, str]) -> dict[str, st
         } | {"text_field_projection": "scanner_source_batch_hash_only_v1"}
     if stage in {
         "avg_down_route_arbitration_observed",
+        "pyramid_lifecycle_replay_observed",
         "avg_down_exit_replay_frame_observed",
         "strategy_owner_replay_seed_observed",
     }:

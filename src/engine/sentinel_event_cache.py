@@ -161,3 +161,95 @@ def update_and_load_cached_event_rows(
         "status": "ok",
         **new_meta,
     }
+
+
+def load_verified_day_projection(*, raw_path, cache_dir, cache_name, parser_version,
+                                 parse_payload):
+    """Immutable day facts; a changed shard rebuilds only that shard.
+
+    This stricter profile leaves the existing intraday append cache untouched.
+    Economic policy/cost hashes belong to replay, not to these lossless facts.
+    """
+    import hashlib
+    import os
+    import tempfile
+    import fcntl
+
+    def digest(value):
+        return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"),
+                                        allow_nan=False).encode()).hexdigest()
+
+    def generation():
+        s = raw_path.stat()
+        return [s.st_dev, s.st_ino, s.st_ctime_ns, s.st_mtime_ns, s.st_size]
+
+    raw_path = Path(raw_path)
+    cache_dir = Path(cache_dir)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    key = hashlib.sha256(str(raw_path.resolve()).encode()).hexdigest()[:24]
+    cache_path = cache_dir / f"{cache_name}-{key}.json"
+    # One source lock, unique temporary file, atomic completed publication.
+    with (cache_dir / f"{cache_name}-{key}.lock").open("a") as lock:
+        owns_lock = True
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            owns_lock = False
+        before = generation()
+        cached = _read_json(cache_path)
+        cached = cached if isinstance(cached, dict) else {}
+        body = cached.get("body")
+        try:
+            cache_valid = (isinstance(body, dict) and body.get("generation") == before
+                and body.get("parser_version") == parser_version
+                and body.get("raw_path") == str(raw_path.resolve())
+                and isinstance(body.get("rows"), list) and isinstance(body.get("census"), dict)
+                and isinstance(body.get("source_sha256"), str) and len(body["source_sha256"]) == 64
+                and cached.get("body_sha256") == digest(body))
+        except (ValueError, TypeError):
+            cache_valid = False
+        if cache_valid:
+            return body["rows"], {**body["census"], "raw_scanned": False,
+                                  "source_sha256": body["source_sha256"]}
+        rows, counts = [], {"raw_event_count": 0, "decode_errors": 0}
+        hasher = hashlib.sha256()
+        complete = True
+        opener = gzip.open if raw_path.suffix == ".gz" else open
+        with opener(raw_path, "rb") as handle:
+            for line in handle:
+                hasher.update(line)
+                if not line.endswith(b"\n"):
+                    complete = False
+                    break
+                try:
+                    payload = json.loads(line)
+                except (ValueError, UnicodeDecodeError):
+                    counts["decode_errors"] += 1
+                    continue
+                if not isinstance(payload, dict):
+                    continue
+                counts["raw_event_count"] += 1
+                parsed = parse_payload(payload)
+                if isinstance(parsed, dict) and "_census" in parsed:
+                    for name, count in parsed["_census"].items():
+                        counts[name] = counts.get(name, 0) + count
+                elif parsed is not None:
+                    rows.append(parsed)
+        after = generation()
+        body = {"generation": before, "parser_version": parser_version,
+                "raw_path": str(raw_path.resolve()), "source_sha256": hasher.hexdigest(),
+                "rows": rows, "census": counts}
+        if owns_lock and complete and before == after:
+            fd, temporary = tempfile.mkstemp(prefix=cache_path.name + ".", dir=cache_dir)
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as output:
+                    json.dump({"body": body, "body_sha256": digest(body)}, output,
+                              separators=(",", ":"), allow_nan=False)
+                    output.flush()
+                    os.fsync(output.fileno())
+                os.replace(temporary, cache_path)
+            finally:
+                if os.path.exists(temporary):
+                    os.unlink(temporary)
+        return rows, {**counts, "raw_scanned": True, "source_sha256": hasher.hexdigest(),
+                      "checkpoint_complete": complete and before == after}

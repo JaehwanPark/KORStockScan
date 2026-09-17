@@ -131,7 +131,7 @@ ENTRY_RECHECK_DROUGHT_CONTROLLER_DIR = (
 ENTRY_AI_GATE_DROUGHT_RUNTIME_UPDATE_MODE = "drought_triggered_bounded_live"
 CUMULATIVE_QUALITY_RUNTIME_UPDATE_MODE = "single_cumulative_quality_update"
 AVG_DOWN_RECOVERY_FAMILY = "scalping_avg_down_recovery_quality_gate"
-AVG_DOWN_EVIDENCE_CONTRACT_VERSION = "avg_down_paired_economics_v2"
+AVG_DOWN_EVIDENCE_CONTRACT_VERSION = "avg_down_paired_economics_v3"
 AVG_DOWN_EVIDENCE_AUTHORITY = "paired_add_no_add_lifecycle_replay"
 AVG_DOWN_EVALUATION_METHOD = "paired_add_no_add_lifecycle_replay"
 AVG_DOWN_TARGET_ENV_KEY = "SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE"
@@ -145,6 +145,12 @@ AVG_DOWN_RUNTIME_PROVENANCE_ENV_KEYS = {
     ),
     "evidence_digest": "KORSTOCKSCAN_AVG_DOWN_RUNTIME_EVIDENCE_DIGEST",
     "rollback_value": "KORSTOCKSCAN_AVG_DOWN_RUNTIME_PREVIOUS_MIN_BUY_PRESSURE",
+}
+PYRAMID_RUNTIME_PROVENANCE_ENV_KEYS = {
+    "quality_update_id": "KORSTOCKSCAN_SCALPING_PYRAMID_RUNTIME_QUALITY_UPDATE_ID",
+    "evidence_contract_version": "KORSTOCKSCAN_SCALPING_PYRAMID_RUNTIME_EVIDENCE_CONTRACT_VERSION",
+    "evidence_digest": "KORSTOCKSCAN_SCALPING_PYRAMID_RUNTIME_EVIDENCE_DIGEST",
+    "rollback_value": "KORSTOCKSCAN_SCALPING_PYRAMID_RUNTIME_PREVIOUS_MIN_PROFIT_PCT",
 }
 POST_PROBE_WINNER_RECOVERY_FAMILY = "post_probe_winner_recovery"
 POST_PROBE_WINNER_RECOVERY_STAGE = "post_probe_recovery"
@@ -928,7 +934,7 @@ def _cumulative_quality_update_contract_error(
         if str(item.get("quality_update_id") or "") != contract_quality_update_id:
             return "candidate_quality_update_id_mismatch"
         expected_evidence_version = {
-            "scalping_pyramid_quality_gate": "pyramid_fixed_exit_replay_v1",
+            "scalping_pyramid_quality_gate": "pyramid_paired_economics_v2",
             AVG_DOWN_RECOVERY_FAMILY: AVG_DOWN_EVIDENCE_CONTRACT_VERSION,
         }.get(owner_family)
         if expected_evidence_version:
@@ -1309,7 +1315,8 @@ def _candidate_apply_contract_blockers(
     require_runtime_handoff_contract: bool = False,
     runtime_handoff_contract_source_version: int = RUNTIME_HANDOFF_CONTRACT_VERSION,
 ) -> list[str]:
-    blockers: list[str] = []
+    from src.engine.lifecycle.avg_down_replay import economic_candidate_contract_errors
+    blockers: list[str] = economic_candidate_contract_errors(candidate)
     avg_down_contract_error = _avg_down_candidate_contract_error(candidate)
     if avg_down_contract_error:
         blockers.append(avg_down_contract_error)
@@ -1740,13 +1747,17 @@ def _load_scalping_pyramid_quality_calibration_candidates(
     if not isinstance(candidates, list):
         candidate = payload.get("calibration_candidate")
         candidates = [candidate] if isinstance(candidate, dict) else []
-    normalized = [item for item in candidates if isinstance(item, dict)]
+    from src.engine.daily_threshold_cycle_report import _json_sha256
+    normalized = [{**item, "source_report_content_sha256": _json_sha256(payload)}
+                  for item in candidates if isinstance(item, dict)]
     cumulative_contract_error = _cumulative_quality_update_contract_error(
         payload,
         normalized,
         owner_family="scalping_pyramid_quality_gate",
         owner_stage="scale_in",
     )
+    from src.engine.lifecycle.avg_down_replay import economic_report_contract_errors
+    cumulative_contract_error = cumulative_contract_error or next(iter(economic_report_contract_errors(payload)), "")
     if cumulative_contract_error:
         normalized = [
             {
@@ -1797,7 +1808,9 @@ def _load_scalping_avg_down_recovery_calibration_candidates(
     if not isinstance(candidates, list):
         candidate = payload.get("calibration_candidate")
         candidates = [candidate] if isinstance(candidate, dict) else []
-    normalized = [item for item in candidates if isinstance(item, dict)]
+    from src.engine.daily_threshold_cycle_report import _json_sha256
+    normalized = [{**item, "source_report_content_sha256": _json_sha256(payload)}
+                  for item in candidates if isinstance(item, dict)]
     report_schema_error = (
         "avg_down_report_schema_version_invalid"
         if payload.get("schema_version") != 2
@@ -1822,6 +1835,8 @@ def _load_scalping_avg_down_recovery_calibration_candidates(
         or cumulative_contract_error
         or next((error for error in candidate_contract_errors if error), "")
     )
+    from src.engine.lifecycle.avg_down_replay import economic_report_contract_errors
+    contract_error = contract_error or next(iter(economic_report_contract_errors(payload)), "")
     if contract_error:
         normalized = [
             {
@@ -2756,12 +2771,11 @@ def _env_overrides_for_candidate(candidate: dict[str, Any]) -> dict[str, str]:
 def _avg_down_runtime_provenance_env(
     candidate: dict[str, Any],
 ) -> dict[str, str]:
-    if str(candidate.get("family") or "") != AVG_DOWN_RECOVERY_FAMILY:
-        return {}
-    values = {
-        key: str(candidate.get(field) or "").strip()
-        for field, key in AVG_DOWN_RUNTIME_PROVENANCE_ENV_KEYS.items()
-    }
+    family = str(candidate.get("family") or "")
+    keys = AVG_DOWN_RUNTIME_PROVENANCE_ENV_KEYS if family == AVG_DOWN_RECOVERY_FAMILY else (
+        PYRAMID_RUNTIME_PROVENANCE_ENV_KEYS if family == "scalping_pyramid_quality_gate" else {})
+    values = {key: str(candidate.get(field) if candidate.get(field) is not None else "").strip()
+              for field, key in keys.items()}
     if any(not value for value in values.values()):
         return {}
     return values
@@ -3461,7 +3475,7 @@ def _ai_guard_allows_candidate(
         candidate_evidence_digest = str(candidate.get("evidence_digest") or "")
         if (
             not candidate_update_id
-            or candidate_evidence_version != "pyramid_fixed_exit_replay_v1"
+            or candidate_evidence_version != "pyramid_paired_economics_v2"
             or not candidate_evidence_digest
         ):
             return (False, "pyramid_candidate_evidence_identity_missing")
@@ -3731,6 +3745,10 @@ def _select_auto_apply_candidates(
                 runtime_handoff_contract_source_version
             ),
         )
+        if (family in {AVG_DOWN_RECOVERY_FAMILY, "scalping_pyramid_quality_gate"}
+                and candidate.get("allowed_runtime_apply") is True and target_date
+                and candidate.get("apply_date") != target_date):
+            contract_blockers.append("scale_in_apply_target_date_mismatch")
         cumulative_quality_update = (
             str(candidate.get("runtime_update_mode") or "")
             == CUMULATIVE_QUALITY_RUNTIME_UPDATE_MODE
@@ -3964,7 +3982,7 @@ def _select_auto_apply_candidates(
             selected_env_overrides = hold_carry_forward_env_overrides
         elif not reject_reason:
             selected_env_overrides = _env_overrides_for_candidate(candidate)
-            if family == AVG_DOWN_RECOVERY_FAMILY:
+            if family in {AVG_DOWN_RECOVERY_FAMILY, "scalping_pyramid_quality_gate"}:
                 selected_env_overrides.update(
                     _avg_down_runtime_provenance_env(candidate)
                 )

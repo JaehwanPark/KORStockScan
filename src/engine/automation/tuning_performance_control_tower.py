@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from src.utils.constants import DATA_DIR
+from src.engine.threshold_cycle_ev_report import compact_scale_in_policy_attribution
 
 REPORT_TYPE = "tuning_performance_control_tower"
 SCHEMA_VERSION = 1
@@ -1940,6 +1941,7 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
                 / f"threshold_runtime_env_verify_{target_date}.json"
             ),
         ),
+        "scale_in_policy_attribution": compact_scale_in_policy_attribution(threshold_ev.get("scale_in_policy_attribution")),
         "runtime_approval": runtime,
         "runtime_apply_gap_audit": runtime_gap_audit,
         "conversion_first_summary": conversion_first,

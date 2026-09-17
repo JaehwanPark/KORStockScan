@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 from datetime import date, datetime
@@ -2422,6 +2423,74 @@ def _lifecycle_bucket_windows_summary(
     return {**retired_status(), "windows": {}}, []
 
 
+def compact_scale_in_policy_attribution(attribution):
+    """Keep version/generation and actual totals without copying replay rows."""
+    keys = ("status", "quality_update_id", "evidence_digest", "source_report_path",
+            "source_report_body_sha256", "actual_completed_count", "actual_completed_net_pnl_krw",
+            "actual_economic_acceptance", "actual_incremental_profit_claimed", "next_action")
+    return {name: {**{key: value.get(key) for key in keys},
+                   "modeled_validation_passed": (value.get("economic_validation") or {}).get("passed") is True}
+            for name, value in (attribution or {}).items() if isinstance(value, dict)}
+
+
+def _scale_in_economic_attribution(target_date):
+    """Report model deltas and exact actual receipts as separate populations."""
+    result = {}
+    for name in ("scalping_pyramid_quality_calibration", "scalping_avg_down_recovery_calibration"):
+        path = REPORT_DIR / name / f"{name}_{target_date}.json"
+        payload = _load_json(path)
+        if payload.get("target_date") != target_date:
+            result[name] = {"status": "missing_current_source", "actual_economic_acceptance": False}
+            continue
+        candidates = payload.get("calibration_candidates") or []
+        candidate = candidates[0] if candidates else {}
+        from src.engine.lifecycle.avg_down_replay import finite_number, cost_rate_from_version
+        actual_by_episode, conflicts, invalid_count, duplicate_count = {}, set(), 0, 0
+        ledger = payload.get("actual_policy_outcomes", [])
+        if not isinstance(ledger, list):
+            invalid_count += 1
+            ledger = []
+        for row in ledger:
+            qty = finite_number(row.get("quantity")) if isinstance(row, dict) else None
+            digest = row.get("evidence_digest") if isinstance(row, dict) else None
+            if (not isinstance(row, dict) or row.get("origin") != "actual_policy_outcome"
+                    or row.get("status") != "COMPLETED" or row.get("new_incremental_profit_claimed") is not False
+                    or type(row.get("net_pnl_krw")) not in (int, float)
+                    or finite_number(row.get("net_pnl_krw")) is None
+                    or finite_number(row.get("profit_rate")) is None
+                    or qty is None or qty <= 0 or not qty.is_integer()
+                    or not all(isinstance(row.get(key), str) and row[key]
+                               for key in ("position_episode_id", "scale_in_decision_id", "quality_update_id", "session"))
+                    or not isinstance(digest, str) or len(digest) != 64
+                    or any(char not in "0123456789abcdef" for char in digest)
+                    or cost_rate_from_version(row.get("cost_policy_version")) is None
+                    or row.get("venue") not in {"KRX", "NXT"}
+                    or row.get("session") in (None, "", "unknown")):
+                invalid_count += 1
+                continue
+            identity = row["position_episode_id"]
+            if identity in actual_by_episode:
+                duplicate_count += 1
+                if actual_by_episode[identity] != row:
+                    conflicts.add(identity)
+            else:
+                actual_by_episode[identity] = row
+        actual = [row for identity, row in actual_by_episode.items() if identity not in conflicts]
+        result[name] = {"status": candidate.get("calibration_state"),
+            "quality_update_id": candidate.get("quality_update_id"), "evidence_digest": candidate.get("evidence_digest"),
+            "source_report_path": str(path), "source_report_body_sha256": hashlib.sha256(
+                json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest(),
+            "modeled_policy_delta": (candidate.get("source_metrics") or {}).get("selected_candidate_economics"),
+            "economic_validation": candidate.get("economic_validation"),
+            "actual_policy_outcome": actual, "actual_completed_count": len(actual),
+            "actual_invalid_row_count": invalid_count, "actual_duplicate_row_count": duplicate_count,
+            "actual_conflicting_episode_count": len(conflicts),
+            "actual_completed_net_pnl_krw": sum(row["net_pnl_krw"] for row in actual) if actual else None,
+            "actual_economic_acceptance": False, "actual_incremental_profit_claimed": False,
+            "next_action": "rolling_post_apply_same_version_actual_economic_review" if actual else "await_exact_applied_policy_receipts"}
+    return result
+
+
 def build_threshold_cycle_ev_report(
     target_date: str,
     *,
@@ -2742,6 +2811,7 @@ def build_threshold_cycle_ev_report(
     )
 
     report = {
+        "scale_in_policy_attribution": _scale_in_economic_attribution(target_date),
         "date": target_date,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "purpose": "daily_ev_performance_report_for_unattended_threshold_calibration",

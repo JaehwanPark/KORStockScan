@@ -1829,11 +1829,12 @@ def _validated_pipeline_transition(
     except (TypeError, ValueError):
         return None, "pipeline_lifecycle_explicit_timestamp_invalid", True
 
-    if source_stage == "avg_down_route_arbitration_observed":
+    if source_stage in {"avg_down_route_arbitration_observed", "pyramid_lifecycle_replay_observed"}:
         # Counterfactual route arms are not actual ADD/NO_ADD decisions. Their
         # raw evidence belongs to the route replay owner, not lifecycle actions.
         if (
-            fields.get("avg_down_route_schema") == "avg_down_route_arbitration_v2"
+            (fields.get("avg_down_route_schema") == "avg_down_route_arbitration_v2"
+             if source_stage == "avg_down_route_arbitration_observed" else fields.get("pyramid_lifecycle_schema") == "pyramid_lifecycle_replay_v1")
             and fields.get("decision_authority")
             == "source_only_route_arbitration_observation"
             and _pipeline_bool(fields.get("runtime_effect")) is False

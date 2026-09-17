@@ -4448,6 +4448,45 @@ def _calibration_path(target_date: str) -> Path:
     )
 
 
+def _scale_in_attribution_handoff_status(target_date):
+    from src.engine.lifecycle.avg_down_replay import canonical_digest
+    ev_path = REPORT_DIR / "threshold_cycle_ev" / f"threshold_cycle_ev_{target_date}.json"
+    ev = _load_json(ev_path)
+    issues, checked = [], 0
+    for name in ("scalping_pyramid_quality_calibration", "scalping_avg_down_recovery_calibration"):
+        path = REPORT_DIR / name / f"{name}_{target_date}.json"
+        payload = _load_json(path)
+        candidates = payload.get("calibration_candidates") or []
+        if not any(row.get("allowed_runtime_apply") is True and row.get("economic_validation", {}).get("passed") is True for row in candidates):
+            continue
+        checked += 1
+        row = (ev.get("scale_in_policy_attribution") or {}).get(name) or {}
+        if row.get("source_report_body_sha256") != canonical_digest(payload):
+            issues.append(f"{name}_economic_handoff_source_generation_mismatch")
+    return {"status": "fail" if issues else "pass", "issues": issues, "checked_source_count": checked}
+
+
+def _pyramid_calibration_contract_status(target_date: str) -> dict[str, Any]:
+    from src.engine.lifecycle.avg_down_replay import economic_candidate_contract_errors, replay_evidence_contract_errors, economic_report_contract_errors
+    path = REPORT_DIR / "scalping_pyramid_quality_calibration" / f"scalping_pyramid_quality_calibration_{target_date}.json"
+    if not path.exists():
+        return {"status": "missing", "path": str(path), "issues": [], "runtime_candidate_present": False}
+    payload = _load_json(path)
+    issues = []
+    if payload.get("target_date") != target_date:
+        issues.append("pyramid_calibration_target_date_mismatch")
+    candidates = [row for row in payload.get("calibration_candidates", [])
+                  if isinstance(row, dict) and row.get("family") == "scalping_pyramid_quality_gate"]
+    ready = any(row.get("allowed_runtime_apply") is True for row in candidates)
+    if ready:
+        issues.extend(replay_evidence_contract_errors(payload.get("independent_exit_replay")))
+        issues.extend(economic_report_contract_errors(payload))
+        for row in candidates:
+            issues.extend(economic_candidate_contract_errors(row))
+    return {"status": "fail" if issues else "pass", "path": str(path),
+            "issues": sorted(set(issues)), "runtime_candidate_present": ready}
+
+
 def _avg_down_calibration_contract_status(target_date: str) -> dict[str, Any]:
     path = (
         REPORT_DIR
@@ -4558,6 +4597,10 @@ def _avg_down_calibration_contract_status(target_date: str) -> dict[str, Any]:
                 issues.append("avg_down_source_only_evaluation_method_invalid")
             if bool(contract.get("allowed_runtime_apply_count")):
                 issues.append("avg_down_source_only_contract_allowed_count_leak")
+    from src.engine.lifecycle.avg_down_replay import economic_candidate_contract_errors
+    issues.extend(economic_candidate_contract_errors(candidate))
+    from src.engine.lifecycle.avg_down_replay import economic_report_contract_errors
+    issues.extend(economic_report_contract_errors(payload))
     replay = payload.get("independent_exit_replay")
     if replay is not None and (
         not isinstance(replay, dict)
@@ -7585,6 +7628,12 @@ def build_threshold_cycle_postclose_verification(
             and ai_correction.get("incomplete_runtime_candidate_families")
             else "ai_correction_unavailable_blocks_runtime_candidates"
         )
+    scale_in_attribution_handoff = _scale_in_attribution_handoff_status(target_date)
+    if scale_in_attribution_handoff["status"] == "fail":
+        log_issues.extend(scale_in_attribution_handoff["issues"])
+    pyramid_calibration_contract = _pyramid_calibration_contract_status(target_date)
+    if pyramid_calibration_contract.get("status") == "fail":
+        log_issues.extend(pyramid_calibration_contract.get("issues") or [])
     avg_down_calibration_contract = _avg_down_calibration_contract_status(target_date)
     if avg_down_calibration_contract.get("status") == "fail":
         log_issues.extend(avg_down_calibration_contract.get("issues") or [])
@@ -9342,6 +9391,8 @@ def build_threshold_cycle_postclose_verification(
         ),
         "mechanistic_entry_policy_publication": (mechanistic_entry_policy_publication),
         "ai_correction": ai_correction,
+        "scale_in_attribution_handoff": scale_in_attribution_handoff,
+        "pyramid_calibration_contract": pyramid_calibration_contract,
         "avg_down_calibration_contract": avg_down_calibration_contract,
         "scalp_sim_overnight_source_quality": scalp_sim_overnight_quality,
         "entry_bucket_handoff": entry_bucket_handoff,

@@ -802,7 +802,7 @@ def test_avg_down_route_observation_contract_is_strict_and_source_only() -> None
             "runtime_value_raw": "85",
             "runtime_candidate_quality_update_id": "avg-down-quality-1",
             "runtime_candidate_evidence_contract_version": (
-                "avg_down_paired_economics_v2"
+                "avg_down_paired_economics_v3"
             ),
             "runtime_candidate_evidence_digest": "c" * 64,
             "runtime_candidate_selected": True,

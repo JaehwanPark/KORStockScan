@@ -311,22 +311,23 @@ def test_paired_lifecycle_replay_can_emit_only_existing_buy_pressure_axis(
     report = mod.build_report("2026-07-10")
     candidate = report["calibration_candidates"][0]
 
-    assert candidate["calibration_state"] == "adjust_down"
-    assert candidate["calibration_reason"] == "paired_incremental_net_edge_ready"
-    assert candidate["allowed_runtime_apply"] is True
-    assert candidate["target_env_keys"] == [mod.TARGET_ENV_KEY]
-    assert candidate["changed_target_env_keys"] == [mod.TARGET_ENV_KEY]
+    assert candidate["calibration_state"] == "hold_no_edge"
+    assert candidate["calibration_reason"] == "paired_economic_hypothesis_rejected"
+    assert candidate["allowed_runtime_apply"] is False
+    assert candidate["economic_validation"]["blocker"] == "chronological_source_days_missing"
+    assert candidate["target_env_keys"] == []
+    assert candidate["changed_target_env_keys"] == []
     assert candidate["current_values"] == {mod.TARGET_VALUE_KEY: 85.0}
-    assert candidate["recommended_values"] == {mod.TARGET_VALUE_KEY: 80.0}
+    assert candidate["recommended_values"] == {mod.TARGET_VALUE_KEY: 85.0}
     assert candidate["bounds"] == mod.BOUNDS
     assert candidate["max_step_per_day"] == 5.0
     assert len(candidate["evidence_digest"]) == 64
-    assert report["runtime_update_contract"]["allowed_runtime_apply_count"] == 1
+    assert report["runtime_update_contract"]["allowed_runtime_apply_count"] == 0
     assert (
         report["runtime_update_contract"]["evidence_digest"]
         == candidate["evidence_digest"]
     )
-    selected = candidate["source_metrics"]["selected_candidate_economics"]
+    selected = next(item for item in candidate["source_metrics"]["paired_runtime_candidate_economics"] if item["candidate_value"] == 80)
     assert selected["evaluation_method"] == mod.PAIRED_EXIT_METHOD
     assert selected["candidate_incremental_net_profit_krw"] > 0
 
@@ -375,7 +376,8 @@ def test_paired_runtime_floor_uses_only_paired_rows_not_fixed_exit_history(
     candidate = mod.build_report("2026-07-10")["calibration_candidates"][0]
     paired = candidate["source_metrics"]["paired_runtime_candidate_economics"]
 
-    assert candidate["allowed_runtime_apply"] is True
+    assert candidate["allowed_runtime_apply"] is False
+    assert candidate["economic_validation"]["blocker"] == "chronological_source_days_missing"
     assert max(row["sample_count"] for row in paired) == 10
 
 
@@ -439,9 +441,10 @@ def test_fixed_diagnostic_negative_cannot_veto_valid_paired_positive(
             candidate_sell_price=1,
         )
     candidate = mod.build_report("2026-07-10")["calibration_candidates"][0]
-    assert candidate["allowed_runtime_apply"] is True
-    assert candidate["calibration_state"] == "adjust_down"
-    assert candidate["condition_feasibility"]["state"] == "bounded_candidate_ready"
+    assert candidate["allowed_runtime_apply"] is False
+    assert candidate["economic_validation"]["blocker"] == "chronological_source_days_missing"
+    assert candidate["calibration_state"] == "hold_no_edge"
+    assert candidate["condition_feasibility"]["state"] == "economic_hypothesis_rejected"
     assert (
         candidate["source_metrics"]["candidate_economics"][0][
             "source_quality_adjusted_ev_pct"
@@ -469,9 +472,10 @@ def test_zero_increment_no_add_tightening_can_improve_negative_current(
 
     _mutate_events(path, mutate)
     candidate = mod.build_report("2026-07-10")["calibration_candidates"][0]
-    assert candidate["allowed_runtime_apply"] is True
-    assert candidate["calibration_state"] == "adjust_up"
-    selected = candidate["source_metrics"]["selected_candidate_economics"]
+    assert candidate["allowed_runtime_apply"] is False
+    assert candidate["economic_validation"]["blocker"] == "chronological_source_days_missing"
+    assert candidate["calibration_state"] == "hold_no_edge"
+    selected = next(item for item in candidate["source_metrics"]["paired_runtime_candidate_economics"] if item["candidate_value"] == 90)
     assert selected["source_quality_adjusted_ev_pct"] == 0
     assert selected["candidate_minus_current_ev_pct"] > 0
 
@@ -720,11 +724,11 @@ def test_common_runtime_scope_uses_economic_sample_venues_not_any_terminal(
 
     candidate = mod.build_report("2026-07-10")["calibration_candidates"][0]
 
-    assert candidate["sample_count"] == 10
+    assert next(item for item in candidate["source_metrics"]["paired_runtime_candidate_economics"] if item["candidate_value"] == 80)["sample_count"] == 10
     assert (
         candidate["condition_feasibility"]["common_runtime_venue_scope_ready"] is False
     )
-    assert candidate["calibration_reason"] == "common_runtime_venue_scope_not_closed"
+    assert candidate["calibration_reason"] == "route_economic_coverage_gap"
     assert candidate["allowed_runtime_apply"] is False
 
 
@@ -770,7 +774,8 @@ def test_fresh_loaded_config_preserves_cumulative_evidence_without_daily_route(
         **_config_fields(),
     )
     candidate = mod.build_report("2026-07-10")["calibration_candidates"][0]
-    assert candidate["allowed_runtime_apply"] is True
+    assert candidate["allowed_runtime_apply"] is False
+    assert candidate["economic_validation"]["blocker"] == "chronological_source_days_missing"
     assert candidate["sample_count"] == 10
     assert candidate["current_value_source"] == "same_day_runtime_config_event"
     assert (
@@ -938,6 +943,7 @@ def test_independent_recorded_frames_flow_through_existing_postclose_producer(
         "evidence_digest",
         "replay_observation_digest",
         "replay_source_date",
+        "observed_max_spread_krw", "fill_evidence_class",
     }
     assert {key: value for key, value in actual.items() if key not in cache_fields} == {
         key: value for key, value in expected.items() if key not in cache_fields
@@ -988,3 +994,189 @@ def test_runtime_attribution_deduplicates_changed_no_add_episodes(
     assert attribution["terminal_attributed_count"] == 1
     assert attribution["no_add_behavior_changed_episode_count"] == 1
     assert attribution["realized_improvement_claimed"] is False
+
+
+def _write_independent_fixture(tmp_path, monkeypatch, *, holdout_loss=False, family="AVG_DOWN", episodes_per_day=5, blocked_baseline=False):
+    """Frozen synthetic receipts/policy answers; never production evidence."""
+    from copy import deepcopy
+    from src.engine.lifecycle import avg_down_replay as replay
+    from src.engine.lifecycle import avg_down_policy_replay as policy
+    from src.tests.test_avg_down_policy_replay import policy_fixture
+    template, _ = policy_fixture()
+    snapshot = template["policy_snapshot"]
+    snapshot["environment"]["KORSTOCKSCAN_MANUAL_CONTROL_EXCLUDED_CODES"] = ""
+    version = policy.snapshot_version(snapshot)
+    def recorded_fixture_adapter(observation, frames, **kwargs):
+        # Controlled full-policy answers for the economic/handoff fixture.
+        # Original isolated handler/receipt/authority behavior has its own
+        # unmocked worker regression suite; this is never natural evidence.
+        assert observation["policy_snapshot"]["implementation"] == policy.implementation_identity()
+        assert policy.snapshot_version(observation["policy_snapshot"]) == observation["exit_policy_version"]
+        return replay.replay_exit_paths(observation, frames)
+    monkeypatch.setattr(policy, "isolated_replay", recorded_fixture_adapter)
+
+    monkeypatch.setattr(mod, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path / "report")
+    pyramid = family == "PYRAMID"
+    current = 1.5 if pyramid else 85.0
+    grid = (1.4, 1.5, 1.6) if pyramid else (80, 85, 90)
+    root = tmp_path / "pipeline_events"
+    root.mkdir(exist_ok=True)
+    for day in ("2026-09-15", "2026-09-16"):
+        path = root / f"pipeline_events_{day}.jsonl"
+        _write_event(path, stage="avg_down_runtime_config_observed", emitted_at=day + "T09:00:00+09:00", **{**_config_fields(), "pyramid_loaded_min_profit_pct": 1.5, "pyramid_loaded_value_verified": True, "pyramid_loaded_value_source": "runtime_rules_loaded_value", "pyramid_policy_version": "policy-v2"})
+        for index in range(episodes_per_day):
+            episode = f"synthetic-{day}-{index}"
+            venue = "KRX" if index % 2 else "NXT"
+            observation = {
+                "source_event_id": ("pyr-lifecycle-" if pyramid else "observation-") + episode, "position_episode_id": episode,
+                "stock_code": "005930", "venue": venue, "scale_in_decision_id": ("pyr-fixture-decision-" if pyramid else "avgdn-fixture-decision-") + episode,
+                "emitted_at": day + "T10:00:00+09:00", "exit_policy_version": version,
+                "cost_rate": 0.0023, "pre_add_buy_qty": 10, "pre_add_buy_price": 10000,
+                "replay_peak_price": 10000, "replay_start_sequence": 0, "replay_max_frame_gap_sec": 5,
+                "replay_capture_state": "armed_source_only", "replay_actual_entry_anchor_valid": True, "initial_policy_state": deepcopy(template["initial_policy_state"]), "policy_snapshot": snapshot,
+                "effective_min_buy_pressure": current, "tuning_env_key": "SCALPING_PYRAMID_MIN_PROFIT_PCT" if pyramid else None,
+                "replay_capital_limit_krw": 150000 if blocked_baseline else None,
+                "route_replay": {str(value): {"add_type": family, **_route_arm(should_add=value == grid[0] if blocked_baseline else value != grid[-1], signature=f"arm-{value}", price=9900, qty=5),
+                    "add_order_expires_at": day + "T10:00:20+09:00"} for value in grid},
+            }
+            initial_stock = observation["initial_policy_state"]["stock"]
+            initial_stock.pop("exit_token", None)
+            initial_stock.pop("scale_in_locked", None)
+            frames = [{"source_event_id": f"frame-{episode}-{sequence}", "replay_frame_schema": replay.FRAME_SCHEMA,
+                "source_observation_id": observation["source_event_id"], "scale_in_decision_id": observation["scale_in_decision_id"],
+                "position_episode_id": episode, "stock_code": "005930", "venue": venue,
+                "exit_policy_version": version, "sequence": sequence,
+                "emitted_at": day + f"T10:00:{sequence:02d}+09:00",
+                "market": {"best_bid": bid, "best_ask": bid + 10, "best_bid_qty": 100, "best_ask_qty": 100,
+                           "source_quality": "fresh_conflict_free"}, "full_policy_decisions": {}}
+                for sequence, bid in ((1, 9890), (2, 10100 if blocked_baseline else 9800 if not (holdout_loss and day.endswith("16")) else 10300))]
+            def evaluator(state, frame, policy, digest):
+                record = {"source_event_id": "eval-" + digest, "input_digest": digest,
+                    "policy_version": policy, "full_policy_evaluation": True, "input_cutoff": frame["emitted_at"],
+                    "policy_state_after": deepcopy(state["policy_state"]), "action": "EXIT" if frame["sequence"] == 2 else "HOLD",
+                    "actual_order_submitted": False, "broker_order_forbidden": True}
+                record["policy_state_after"]["stock"].update(buy_qty=state["qty"], buy_price=state["buy_price"])
+                frames[frame["sequence"] - 1]["full_policy_decisions"][digest] = record
+                return record
+            modeled = replay.replay_exit_paths(observation, frames, full_exit_evaluator=evaluator)
+            assert modeled["state"] == "paired_exit_complete_source_only"
+            _write_event(path, stage="pyramid_lifecycle_replay_observed" if pyramid else "avg_down_route_arbitration_observed", emitted_at=observation["emitted_at"],
+                **{key: value for key, value in observation.items() if key != "emitted_at"},
+                avg_down_route_schema=mod.ROUTE_EVENT_SCHEMA, configured_min_buy_pressure=current,
+                pyramid_lifecycle_schema="pyramid_lifecycle_replay_v1", configured_min_profit_pct=current,
+                effective_min_profit_pct=current, pyramid_policy_version="policy-v2",
+                runtime_pid_value_verified=True, runtime_value_source="runtime_rules_loaded_value",
+                avg_down_policy_version="policy-v2", sizing_policy_version="sizing-v1",
+                cost_policy_version="trade_profit_net_realized_pnl:rate=0.00230000")
+            for frame in frames:
+                _write_event(path, stage="avg_down_exit_replay_frame_observed", emitted_at=frame["emitted_at"],
+                    **{key: value for key, value in frame.items() if key != "emitted_at"}, replay_observed_at=frame["emitted_at"],
+                    decision_authority="source_only_paired_exit_replay", runtime_effect=False, allowed_runtime_apply=False,
+                    actual_order_submitted=False, broker_order_forbidden=True)
+            actual = modeled["outcomes"][f"{current:g}"]
+            if not blocked_baseline:
+                _write_event(path, stage="scale_in_executed", emitted_at=day + "T10:00:01+09:00",
+                    position_episode_id=episode, scale_in_decision_id=observation["scale_in_decision_id"],
+                    stock_code="005930", venue=venue, add_type=family, order_no="1234567", execution_no="synthetic-fill-" + episode,
+                    actual_order_submitted=True, broker_order_forbidden=False, fill_qty=5, fill_price=9900,
+                    receipt_economics_complete=True, receipt_quantity_contract_complete=True, remaining_qty=0)
+
+            _write_event(path, stage="sell_completed", emitted_at=actual["exit_time"], position_episode_id=episode,
+                stock_code="005930", venue=venue, status="COMPLETED", sell_price=actual["exit_price"],
+                actual_order_submitted=True, sell_execution_receipt_economics_complete=True,
+                sell_execution_receipt_quantity_contract_complete=True, sell_execution_cumulative_qty=actual["exit_qty"],
+                sell_execution_cumulative_net_pnl_krw=actual["net_pnl_krw"],
+                profit_rate=100 * actual["net_pnl_krw"] / (100000 + actual["filled_add_qty"] * 9900))
+    return root
+
+
+def test_independent_replay_feeds_same_report_then_fixed_holdout_selects_tightening(tmp_path, monkeypatch):
+    _write_independent_fixture(tmp_path, monkeypatch)
+    report = mod.build_report("2026-09-16")
+    candidate = report["calibration_candidates"][0]
+    assert report["independent_exit_replay"]["complete_episode_count"] == 10
+    assert candidate["recommended_value"] == 90
+    assert candidate["allowed_runtime_apply"] is True
+    assert candidate["economic_validation"]["risk_reduction_only"] is True
+    assert candidate["economic_validation"]["calibration"]["count"] == 5
+    assert candidate["economic_validation"]["holdout"]["count"] == 5
+    selected = candidate["source_metrics"]["selected_candidate_economics"]
+    assert selected["candidate_minus_current_net_profit_krw"] > 0
+    assert selected["episode_economics"][0]["no_add_total_pnl_krw"] != 0
+    assert all(outcome["runtime_authority_ready"] is False for outcome in report["independent_exit_replay"]["episodes"].values())
+    assert report["actual_policy_outcomes"] == []
+    from src.engine.lifecycle.avg_down_replay import economic_candidate_contract_errors
+    assert economic_candidate_contract_errors(candidate) == []
+
+
+def test_holdout_failure_does_not_reselect_another_pressure(tmp_path, monkeypatch):
+    _write_independent_fixture(tmp_path, monkeypatch, holdout_loss=True)
+    candidate = mod.build_report("2026-09-16")["calibration_candidates"][0]
+    assert candidate["allowed_runtime_apply"] is False
+    assert candidate["economic_validation"]["candidate_value"] == 90
+    assert candidate["economic_validation"]["winner_fixed_before_holdout"] is True
+    assert candidate["economic_validation"]["guards"]["holdout_delta_net_positive"] is False
+
+
+@pytest.mark.parametrize("gap", ["missing_actual_fill", "entry_anchor", "capture_cap", "partial_actual_fill", "policy_snapshot", "wrong_fill_family"])
+def test_paired_model_cannot_approve_missing_anchor_capture_or_actual_fill_quality(tmp_path, monkeypatch, gap):
+    root = _write_independent_fixture(tmp_path, monkeypatch)
+    for path in root.glob("*.jsonl"):
+        records = [json.loads(line) for line in path.read_text().splitlines()]
+        if gap == "missing_actual_fill":
+            records = [row for row in records if row["stage"] != "scale_in_executed"]
+        for row in records:
+            if gap == "policy_snapshot" and row["stage"] == "avg_down_route_arbitration_observed":
+                row["fields"].pop("policy_snapshot", None)
+            if gap == "entry_anchor" and row["stage"] == "avg_down_route_arbitration_observed":
+                row["fields"]["replay_actual_entry_anchor_valid"] = False
+            if gap == "capture_cap" and row["stage"] == "avg_down_route_arbitration_observed":
+                row["fields"]["replay_capture_state"] = "capture_capacity_gap"
+            if gap == "wrong_fill_family" and row["stage"] == "scale_in_executed":
+                row["fields"]["add_type"] = "PYRAMID"
+            if gap == "partial_actual_fill" and row["stage"] == "scale_in_executed":
+                row["fields"]["fill_qty"] = 3
+                row["fields"]["remaining_qty"] = 2
+        path.write_text("".join(json.dumps(row) + "\n" for row in records))
+    candidate = mod.build_report("2026-09-16")["calibration_candidates"][0]
+    assert candidate["allowed_runtime_apply"] is False
+
+
+def test_repaired_economics_parity_on_warm_without_historical_raw_scan(tmp_path, monkeypatch):
+    import builtins
+    root = _write_independent_fixture(tmp_path, monkeypatch)
+    cold = mod.build_report("2026-09-16")
+    mod.REPORT_DIR.mkdir()
+    (mod.REPORT_DIR / "scalping_avg_down_recovery_calibration_2026-09-16.json").write_text(json.dumps(cold))
+    original_open = builtins.open
+    def forbid_raw(path, *args, **kwargs):
+        if str(path).startswith(str(root)):
+            raise AssertionError("unchanged historical raw must not be scanned")
+        return original_open(path, *args, **kwargs)
+    monkeypatch.setattr(builtins, "open", forbid_raw)
+    warm = mod.build_report("2026-09-16")
+    assert warm["independent_exit_replay"]["cached_episode_count"] == 10
+    assert warm["calibration_candidates"][0] == cold["calibration_candidates"][0]
+
+
+def test_later_exact_episode_fill_keeps_original_decision_and_model_action(tmp_path, monkeypatch):
+    from src.engine.lifecycle.avg_down_replay import build_replay_evidence, bind_report_paired_terminals
+    root = _write_independent_fixture(tmp_path, monkeypatch)
+    for path in root.glob("*.jsonl"):
+        rows = [json.loads(line) for line in path.read_text().splitlines()]
+        for row in rows:
+            if row["stage"] == "scale_in_executed":
+                row["scale_in_decision_id"] = "later-original-broker-decision"
+        path.write_text("".join(json.dumps(row)+"\n" for row in rows))
+    evidence = mod._collect_exact_evidence(list(root.glob("*.jsonl")))
+    replay = build_replay_evidence([row["independent_replay_input"] for row in evidence["decisions"]])
+    bound, errors = bind_report_paired_terminals(evidence["decisions"], replay)
+    assert errors == [] and all(row["execution_quality_validated"] for row in bound)
+    for row in bound:
+        # Initial gate NO_ADD is not the whole independent lifecycle behavior.
+        row["route_replay"]["85"]["should_add"] = False
+        row["route_replay"]["85"]["behavior_signature"] = row["route_replay"]["90"]["behavior_signature"]
+    result = mod._candidate_economics(bound, current=85, candidate=90, paired_only=True)
+    assert result["behavior_change_count"] == 10 and result["removed_add_count"] == 10
+    assert result["episode_economics"][0]["current_capital_occupancy_krw_seconds"] > 0

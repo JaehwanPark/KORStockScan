@@ -3015,6 +3015,7 @@ def _build_trading_rules() -> TradingConfig:
     )
     if (
         env_dynamic_strength_enabled is not None
+        or env_shallow_volatility_avg_down_min_buy_pressure is not None
         or env_dynamic_strength_tags is not None
         or env_dynamic_strength_reasons is not None
         or env_dynamic_strength_min_buy_value_ratio is not None
