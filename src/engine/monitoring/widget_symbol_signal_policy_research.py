@@ -3046,6 +3046,8 @@ def main(argv: list[str] | None = None) -> int:
     # Raw history is released before acquiring the next symbol.
     reports = []
     symbol_fingerprints = {}
+    source_quarantine = {}
+    failed_source_meta = {}
     for index, (symbol, name) in enumerate(symbol_universe.items(), 1):
         started = time_module.monotonic()
         print(
@@ -3060,97 +3062,142 @@ def main(argv: list[str] | None = None) -> int:
             ),
             flush=True,
         )
-        bars, meta = load_completed_symbol_source(
-            symbol=symbol,
-            end_date=end_date,
-            universe=symbol_universe,
-            origin=symbol_origins[symbol],
-            token_provider=kiwoom_utils.get_cached_kiwoom_token,
-            snapshot_dir=args.snapshot_dir,
-            max_pages=args.max_pages,
-            page_delay_sec=args.page_delay_sec,
-        )
-        kwargs = dict(
-            sources={symbol: (bars, meta)},
-            end_date=end_date,
-            applied_baselines=(
-                {symbol: applied_baselines[symbol]}
-                if symbol in applied_baselines
-                else {}
-            ),
-            symbol_universe={symbol: name},
-            symbol_origins={symbol: symbol_origins[symbol]},
-        )
-        fingerprint = research_input_fingerprint(**kwargs)
-        checkpoint = (
-            args.output_dir / "checkpoints" / f"{end_date.isoformat()}_{symbol}.json"
-        )
-        reusable = reusable_report(
-            checkpoint, end_date=end_date, fingerprint=fingerprint
-        )
-        if reusable is None:
-            report = build_report(
-                **kwargs,
-                replay_cache_dir=(
-                    __import__(
-                        "src.engine.monitoring.research_closed_loop",
-                        fromlist=["DIRECTORY"],
-                    ).DIRECTORY
-                    / "cache"
-                    / "replay"
-                    if end_date >= date(2026, 9, 17)
-                    else args.snapshot_dir / "replay"
+        meta, fingerprint = {}, None
+        try:
+            bars, meta = load_completed_symbol_source(
+                symbol=symbol,
+                end_date=end_date,
+                universe=symbol_universe,
+                origin=symbol_origins[symbol],
+                token_provider=kiwoom_utils.get_cached_kiwoom_token,
+                snapshot_dir=args.snapshot_dir,
+                max_pages=args.max_pages,
+                page_delay_sec=args.page_delay_sec,
+            )
+            kwargs = dict(
+                sources={symbol: (bars, meta)},
+                end_date=end_date,
+                applied_baselines=(
+                    {symbol: applied_baselines[symbol]}
+                    if symbol in applied_baselines
+                    else {}
                 ),
-                # Population evidence belongs to the final combined report,
-                # not N copies of the census in per-symbol checkpoints.
-                market_census={},
+                symbol_universe={symbol: name},
+                symbol_origins={symbol: symbol_origins[symbol]},
             )
-            if args.write:
-                checkpoint_payload = {
-                    **report,
-                    "checkpoint_sha256": hashlib.sha256(
-                        json.dumps(report, ensure_ascii=False, sort_keys=True).encode()
-                    ).hexdigest(),
-                }
-                _atomic_write(
-                    checkpoint,
-                    json.dumps(checkpoint_payload, ensure_ascii=False, sort_keys=True),
+            fingerprint = research_input_fingerprint(**kwargs)
+            checkpoint = (
+                args.output_dir / "checkpoints" / f"{end_date.isoformat()}_{symbol}.json"
+            )
+            reusable = reusable_report(
+                checkpoint, end_date=end_date, fingerprint=fingerprint
+            )
+            if reusable is None:
+                report = build_report(
+                    **kwargs,
+                    replay_cache_dir=(
+                        __import__(
+                            "src.engine.monitoring.research_closed_loop",
+                            fromlist=["DIRECTORY"],
+                        ).DIRECTORY
+                        / "cache"
+                        / "replay"
+                        if end_date >= date(2026, 9, 17)
+                        else args.snapshot_dir / "replay"
+                    ),
+                    # Population evidence belongs to the final combined report,
+                    # not N copies of the census in per-symbol checkpoints.
+                    market_census={},
                 )
-        else:
-            report = {
-                key: value
-                for key, value in reusable.items()
-                if key != "checkpoint_sha256"
-            }
-            report["execution_mode"] = "exact_symbol_checkpoint_reuse"
-            # Original retrieval times remain in dated snapshots; refresh only
-            # incident evidence, whose closure may change independently of OHLCV.
-            report["execution_quality_by_symbol"][symbol] = load_execution_incidents(
-                symbol, target_date=end_date, session="KRX_REGULAR"
+                if args.write:
+                    checkpoint_payload = {
+                        **report,
+                        "checkpoint_sha256": hashlib.sha256(
+                            json.dumps(report, ensure_ascii=False, sort_keys=True).encode()
+                        ).hexdigest(),
+                    }
+                    _atomic_write(
+                        checkpoint,
+                        json.dumps(checkpoint_payload, ensure_ascii=False, sort_keys=True),
+                    )
+            else:
+                report = {
+                    key: value
+                    for key, value in reusable.items()
+                    if key != "checkpoint_sha256"
+                }
+                report["execution_mode"] = "exact_symbol_checkpoint_reuse"
+                # Original retrieval times remain in dated snapshots; refresh only
+                # incident evidence, whose closure may change independently of OHLCV.
+                report["execution_quality_by_symbol"][symbol] = load_execution_incidents(
+                    symbol, target_date=end_date, session="KRX_REGULAR"
+                )
+            symbol_fingerprints[symbol] = fingerprint
+            reports.append(report)
+            print(
+                json.dumps(
+                    {
+                        "stage": "symbol_complete",
+                        "target_date": end_date.isoformat(),
+                        "symbol": symbol,
+                        "progress": f"{index}/{len(symbol_universe)}",
+                        "remote_requests": meta["request_count"],
+                        "cache_mode": report["execution_mode"],
+                        "wall_seconds": round(time_module.monotonic() - started, 3),
+                    },
+                    sort_keys=True,
+                ),
+                flush=True,
             )
-        symbol_fingerprints[symbol] = fingerprint
-        reports.append(report)
-        print(
-            json.dumps(
-                {
-                    "stage": "symbol_complete",
-                    "target_date": end_date.isoformat(),
-                    "symbol": symbol,
-                    "progress": f"{index}/{len(symbol_universe)}",
-                    "remote_requests": meta["request_count"],
-                    "cache_mode": report["execution_mode"],
-                    "wall_seconds": round(time_module.monotonic() - started, 3),
-                },
-                sort_keys=True,
-            ),
-            flush=True,
-        )
-        del bars, kwargs
+            del bars, kwargs
+        except ResearchError as exc:
+            reason = str(exc)
+            if reason not in {
+                f"{symbol}_daily_source_coverage_fail",
+                f"{symbol}_snapshot_coverage_incomplete",
+                f"{symbol}_source_quality_not_pass",
+            }:
+                raise
+            source_quarantine[symbol] = reason
+            failed_source_meta[symbol] = {
+                **meta, "source_quality_status": "FAIL", "source_quality_reason": reason,
+            }
+            if reason == f"{symbol}_daily_source_coverage_fail":
+                dates = _clean_trading_dates(end_date)
+                if meta.get("listing_history_accepted") is True and bars:
+                    first = min(bar.timestamp.date() for bar in bars)
+                    dates = [day for day in dates if day >= first]
+                failed_source_meta[symbol]["daily_source_coverage"] = (
+                    _daily_source_coverage(_group_bars(bars), dates)
+                )
+            symbol_fingerprints[symbol] = fingerprint or hashlib.sha256(
+                json.dumps(failed_source_meta[symbol], sort_keys=True).encode()
+            ).hexdigest()
+            print(json.dumps({
+                "stage": "symbol_quarantined", "symbol": symbol,
+                "progress": f"{index}/{len(symbol_universe)}", "reason": reason,
+            }, sort_keys=True), flush=True)
+    if not reports:
+        raise ResearchError("all_widget_symbols_source_quality_blocked")
     report = dict(reports[0])
     for key in ("symbols", "source_meta", "execution_quality_by_symbol"):
         report[key] = {
             symbol: value for part in reports for symbol, value in part[key].items()
         }
+    report["source_quarantine"] = source_quarantine
+    report["quarantined_source_symbol_count"] = len(source_quarantine)
+    report["eligible_source_symbol_count"] = len(symbol_universe) - len(source_quarantine)
+    report["source_quality_status"] = "PARTIAL" if source_quarantine else "PASS"
+    report["source_meta"].update(failed_source_meta)
+    report["symbols"].update({
+        symbol: {
+            "symbol": symbol, "name": symbol_universe[symbol],
+            "decision": "source_quality_quarantined_no_evaluation",
+            "source_quality_reason": reason, "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        }
+        for symbol, reason in source_quarantine.items()
+    })
     report["symbol_universe"] = symbol_universe
     report["symbol_origins"] = symbol_origins
     report["passed_symbols"] = [
