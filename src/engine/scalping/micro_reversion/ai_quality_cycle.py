@@ -23,6 +23,7 @@ import re
 import stat
 import subprocess
 import sys
+import time
 from collections import Counter, defaultdict
 from contextlib import ExitStack
 from dataclasses import asdict
@@ -7629,6 +7630,8 @@ def _default_command_runner(command: Sequence[str]) -> subprocess.CompletedProce
 def _command_step(
     *, name: str, command: Sequence[str], runner: CommandRunner
 ) -> dict[str, Any]:
+    started_wall = time.perf_counter()
+    started_cpu = time.process_time()
     result = runner(command)
     return {
         "name": name,
@@ -7637,6 +7640,14 @@ def _command_step(
         "stdout_tail": str(result.stdout or "")[-4000:],
         "stderr_tail": str(result.stderr or "")[-4000:],
         "status": "pass" if result.returncode == 0 else "failed",
+        "timing": {
+            "wall_seconds": time.perf_counter() - started_wall,
+            "parent_cpu_seconds": time.process_time() - started_cpu,
+            "child_cpu_seconds": None,
+            "measurement_scope": "runner_wall_and_parent_cpu_only",
+            "wall_includes_child_compute_transport_and_wait": True,
+            "diagnostic_only": True,
+        },
     }
 
 
@@ -10637,6 +10648,11 @@ def run_cycle(
 
     rolling_diagnostics: list[dict[str, Any]] = []
     counterfactual_entry_artifact: dict[str, Any] = {}
+    local_phase_timings: list[dict[str, Any]] = []
+    phase_name = "rolling_input_collection"
+    phase_wall = time.perf_counter()
+    phase_cpu = time.process_time()
+    phase_failed = False
     try:
         (
             execution_reports,
@@ -10646,6 +10662,15 @@ def run_cycle(
             outcome_label_artifacts,
             rolling_diagnostics,
         ) = _collect_rolling_inputs(target_date=target_date)
+        local_phase_timings.append({
+            "name": phase_name,
+            "wall_seconds": time.perf_counter() - phase_wall,
+            "parent_cpu_seconds": time.process_time() - phase_cpu,
+            "status": "pass",
+        })
+        phase_name = "rolling_lineage_validation_and_r2_r3_build"
+        phase_wall = time.perf_counter()
+        phase_cpu = time.process_time()
         # Stale same-date artifacts must not join current evidence when either
         # producer step was skipped, failed, or emitted an invalid receipt.
         execution_reports, lifecycle_reports = _bind_current_run_rolling_inputs(
@@ -10693,6 +10718,15 @@ def run_cycle(
         for blocker in source_gap_diagnostics["blocker_codes"]:
             if blocker not in blockers:
                 blockers.append(blocker)
+        local_phase_timings.append({
+            "name": phase_name,
+            "wall_seconds": time.perf_counter() - phase_wall,
+            "parent_cpu_seconds": time.process_time() - phase_cpu,
+            "status": "pass",
+        })
+        phase_name = "rolling_companion_and_consumer_publication"
+        phase_wall = time.perf_counter()
+        phase_cpu = time.process_time()
         if write:
             # Persist the referenced companion before either consumer.  A
             # diagnostic write failure must not leave a newly published
@@ -10705,10 +10739,18 @@ def run_cycle(
             _atomic_write_json(rolling_report_path(target_date), rolling)
             _atomic_write_json(r3_manifest_path(target_date), r3_manifest)
     except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        phase_failed = True
         rolling = {}
         r3_manifest = {}
         counterfactual_entry_artifact = {}
         blockers.append(f"rolling_r2_r3_failed:{type(exc).__name__}:{exc}")
+    finally:
+        local_phase_timings.append({
+            "name": phase_name,
+            "wall_seconds": time.perf_counter() - phase_wall,
+            "parent_cpu_seconds": time.process_time() - phase_cpu,
+            "status": "failed" if phase_failed else "pass",
+        })
 
     provider_call_performed = bool(
         historical_backfill_provider_call_performed
@@ -10740,6 +10782,12 @@ def run_cycle(
             )
         ),
         "steps": steps,
+        "local_phase_timings": {
+            "measurement_scope": "current_process_cpu_and_monotonic_wall",
+            "child_cpu_included": False,
+            "diagnostic_only": True,
+            "phases": local_phase_timings,
+        },
         "blockers": blockers,
         "current_run_observation_states": observation_states,
         "source_quality_audit": audit_source,

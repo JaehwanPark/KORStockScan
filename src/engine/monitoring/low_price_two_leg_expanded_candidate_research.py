@@ -9,13 +9,16 @@ machine, or mutate runtime policy.
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
 import hashlib
 import json
+import math
 import os
 import stat
+import sys
 import uuid
 import time as time_module
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any, Callable
@@ -56,6 +59,8 @@ from src.engine.monitoring.low_price_two_leg_entry_spot_research import (
     ECONOMIC_REPLAY_CONTRACT,
     fetch_sor_history,
     select_profile_spot,
+    day_replay_scope,
+    _advance_candidate_day,
 )
 from src.trading.low_price_two_leg.profiles import (
     PROFILES as LIVE_PROFILES,
@@ -1008,8 +1013,271 @@ def _write_profile_checkpoint(path: Path, payload: dict) -> bool:
                 os.close(parent_fd)
 
 
+class _DayStateCheckpoint:
+    """Paged optional causal transitions, independent of calendar partitions."""
+
+    def __init__(self, profile, contexts, directory, stats=None):
+        from src.engine.monitoring import research_closed_loop as loop
+
+        self.cache_root, self.soft_cap = directory.parent, 64 * 1024**2
+        if directory.resolve().is_relative_to(DATA_DIR.resolve()):
+            self.cache_root, self.soft_cap = (
+                loop._directory(loop.DIRECTORY) / "cache",
+                2 * 1024**3,
+            )
+            directory = self.cache_root / "episode_day_states" / directory.name
+        self.directory, self.contexts = directory, contexts
+        self.stats = stats if stats is not None else {}
+        self.semantic = _canonical_digest(
+            {
+                "schema": "low_price_two_leg_day_state_v3",
+                "profile": json.loads(
+                    json.dumps(asdict(profile), default=lambda v: v.isoformat())
+                ),
+                "cost": canonical_cost_contract(),
+                "replay_cost_pct": COST_PCT,
+                "helper": hashlib.sha256(
+                    Path(__file__)
+                    .with_name("low_price_two_leg_entry_spot_research.py")
+                    .read_bytes()
+                ).hexdigest(),
+                "storage": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+                "cache_storage": hashlib.sha256(
+                    Path(__file__).with_name("research_cache_storage.py").read_bytes()
+                ).hexdigest(),
+                "tick": hashlib.sha256(
+                    Path(tick_utils.__file__).read_bytes()
+                ).hexdigest(),
+            }
+        )
+        self.source, self.ordinals, self.page = {}, {}, {}
+        self.candidate_keys = {}
+        self.current, self.current_page, self.previous_day = None, None, None
+        self.incoming_sha, self.days = _canonical_digest(None), {}
+        self.dirty, self.write_disabled = False, False
+        self.native_cpu = 0.0
+
+    def _candidate(self, key):
+        from src.engine.monitoring.research_cache_storage import read
+
+        ordinal = self.ordinals.setdefault(key, len(self.ordinals))
+        page = ordinal // 16
+        if page != self.current_page:
+            self.flush()
+            self.current_page = page
+            value = read(
+                self.directory / (str(page) + ".json.z"),
+                root=self.cache_root,
+                max_bytes=PROFILE_CHECKPOINT_MAX_BYTES,
+            )
+            self.page = {}
+            try:
+                if (
+                    isinstance(value, dict)
+                    and value.get("semantic") == self.semantic
+                    and isinstance(value.get("candidates"), dict)
+                    and value.get("body_sha256")
+                    == _canonical_digest(
+                        {k: v for k, v in value.items() if k != "body_sha256"}
+                    )
+                ):
+                    self.page = value["candidates"]
+            except (TypeError, ValueError, RecursionError):
+                pass
+        self.current = key
+        self.days = self.page.setdefault(key, {})
+        if not isinstance(self.days, dict):
+            self.days = self.page[key] = {}
+        self.previous_day, self.incoming_sha = None, _canonical_digest(None)
+
+    def __call__(self, candidate, context, carried):
+        key = self.candidate_keys.get(candidate)
+        if key is None:
+            key = self.candidate_keys[candidate] = _canonical_digest(candidate.public())
+        if key != self.current:
+            self._candidate(key)
+        day = context.trade_date.isoformat()
+        if self.previous_day is None or day <= self.previous_day:
+            self.incoming_sha = _canonical_digest(carried)
+        source_key = (context.trade_date, candidate.lookback_bars)
+        if source_key not in self.source:
+            features = context.features[candidate.lookback_bars]
+            facts = getattr(context, "_research_fact_bindings", {})
+            prior = facts.get(candidate.lookback_bars)
+            if (
+                isinstance(context.bars, tuple)
+                and isinstance(features, tuple)
+                and prior is not None
+                and prior[0] is context.bars
+                and prior[1] is features
+            ):
+                self.source[source_key] = prior[2]
+            else:
+                self.source[source_key] = _canonical_digest(
+                    {
+                        "bars": _bar_rows(context.bars),
+                        "features": [
+                            [
+                                f.index,
+                                f.timestamp.isoformat(),
+                                f.close_price,
+                                f.drawdown_pct,
+                                f.near_low_pct,
+                            ]
+                            for f in features
+                        ],
+                    }
+                )
+                if isinstance(context.bars, tuple) and isinstance(features, tuple):
+                    facts[candidate.lookback_bars] = (
+                        context.bars,
+                        features,
+                        self.source[source_key],
+                    )
+                    context._research_fact_bindings = facts
+        source = self.source[source_key]
+        state = self.days.get(day)
+        if (
+            isinstance(state, dict)
+            and state.get("source_sha") == source
+            and state.get("input_sha") == self.incoming_sha
+            and isinstance(state.get("outgoing_sha"), str)
+        ):
+            output = None
+            if state.get("kind") == "held_delta" and carried is not None:
+                changes = state.get("changes")
+                fields = {
+                    "holding_completed_bars",
+                    "mark_price",
+                    "active_unrealized_pct",
+                    "max_adverse_excursion_pct",
+                }
+                if (
+                    isinstance(changes, list)
+                    and len(changes) == len(carried["legs"])
+                    and all(
+                        v is None
+                        or (
+                            isinstance(v, dict)
+                            and set(v) == fields
+                            and all(
+                                type(number) in (int, float) and math.isfinite(number)
+                                for number in v.values()
+                            )
+                            and type(v["holding_completed_bars"]) is int
+                            and v["holding_completed_bars"] >= 0
+                            and v["mark_price"] > 0
+                        )
+                        for v in changes
+                    )
+                ):
+                    for leg, change in zip(carried["legs"], changes):
+                        if change is not None:
+                            leg.update(change)
+                    output = [carried, None]
+            elif state.get("kind") == "output" and carried is None:
+                native = state.get("output")
+                if (
+                    isinstance(native, list)
+                    and len(native) == 2
+                    and all(
+                        v is None
+                        or (
+                            isinstance(v, dict)
+                            and isinstance(v.get("legs"), list)
+                            and len(v["legs"]) == 2
+                            and all(
+                                isinstance(leg, dict)
+                                and leg.get("status") in {"HELD", "COMPLETE", "NO_FILL"}
+                                for leg in v["legs"]
+                            )
+                            and v.get("runtime_effect", False) is False
+                            and v.get("actual_order_submitted", False) is False
+                            and v.get("broker_order_forbidden", True) is True
+                        )
+                        for v in native
+                    )
+                ):
+                    output = deepcopy(native) if native[0] is not None else native
+            if output is not None:
+                self.stats["day_hit"] = self.stats.get("day_hit", 0) + 1
+                self.incoming_sha, self.previous_day = state["outgoing_sha"], day
+                return output
+        self.stats["day_replay"] = self.stats.get("day_replay", 0) + 1
+        incoming = self.incoming_sha
+        had_carry = carried is not None
+        native_started = time_module.process_time()
+        output = _advance_candidate_day(candidate, context, carried)
+        self.native_cpu += time_module.process_time() - native_started
+        self.incoming_sha, self.previous_day = _canonical_digest(output[0]), day
+        if not self.write_disabled:
+            if had_carry:
+                record = dict(
+                    kind="held_delta",
+                    changes=[
+                        {
+                            field: leg[field]
+                            for field in (
+                                "holding_completed_bars",
+                                "mark_price",
+                                "active_unrealized_pct",
+                                "max_adverse_excursion_pct",
+                            )
+                        }
+                        if leg["status"] == "HELD" and context.bars
+                        else None
+                        for leg in output[0]["legs"]
+                    ],
+                )
+            else:
+                record = dict(kind="output", output=deepcopy(list(output)))
+            self.days[day] = dict(
+                record,
+                source_sha=source,
+                input_sha=incoming,
+                outgoing_sha=self.incoming_sha,
+            )
+            self.dirty = True
+        return output
+
+    def flush(self):
+        if not self.dirty or self.current_page is None:
+            return
+        self.dirty = False
+        value = dict(semantic=self.semantic, candidates=self.page)
+        value["body_sha256"] = _canonical_digest(value)
+        from src.engine.monitoring import research_closed_loop as loop
+        import zlib
+
+        try:
+            raw = json.dumps(
+                value, ensure_ascii=False, sort_keys=True, allow_nan=False
+            ).encode()
+            if len(raw) > PROFILE_CHECKPOINT_MAX_BYTES:
+                self.write_disabled = True
+                self.stats["day_write_skip"] = self.stats.get("day_write_skip", 0) + 1
+                return
+            if not loop.optional_cache_write(
+                self.directory / (str(self.current_page) + ".json.z"),
+                zlib.compress(raw),
+                cache_root=self.cache_root,
+                soft_cap=self.soft_cap,
+            ):
+                self.write_disabled = True
+                self.stats["day_write_skip"] = self.stats.get("day_write_skip", 0) + 1
+        except (OSError, ValueError, TypeError, RecursionError):
+            self.stats["day_write_skip"] = self.stats.get("day_write_skip", 0) + 1
+
+
 def _select_profile_checkpoint(
-    profile, contexts, *, calibration_days, cache_dir=None, contract=None, stats=None
+    profile,
+    contexts,
+    *,
+    calibration_days,
+    cache_dir=None,
+    contract=None,
+    stats=None,
+    day_stats=None,
 ):
     path = None
     if cache_dir is not None and contract is not None:
@@ -1039,9 +1307,70 @@ def _select_profile_checkpoint(
             pass
     if stats is not None:
         stats["miss"] = stats.get("miss", 0) + 1
-    result = select_profile_spot(
-        profile, contexts, calibration_days=calibration_days, holdout_days=HOLDOUT_DAYS
-    )
+    if cache_dir is None or contract is None:
+        result = select_profile_spot(
+            profile,
+            contexts,
+            calibration_days=calibration_days,
+            holdout_days=HOLDOUT_DAYS,
+        )
+    else:
+        transitions = _DayStateCheckpoint(
+            profile,
+            contexts,
+            cache_dir
+            / "day_states"
+            / hashlib.sha256(profile.profile_id.encode()).hexdigest(),
+            day_stats,
+        )
+        strategy_path = cache_dir / (
+            ".day_strategy_"
+            + hashlib.sha256(profile.profile_id.encode()).hexdigest()
+            + ".meta"
+        )
+        strategy = _read_stable_json(strategy_path, max_bytes=4096) or {}
+        disabled = (
+            strategy.get("semantic") == transitions.semantic
+            and strategy.get("enabled") is False
+            and type(strategy.get("observation_count")) is int
+            and len(contexts) < strategy["observation_count"] + 16
+        )
+        if disabled:
+            if day_stats is not None:
+                day_stats["cache_disabled_fast_reference"] = (
+                    day_stats.get("cache_disabled_fast_reference", 0) + 1
+                )
+            result = select_profile_spot(
+                profile,
+                contexts,
+                calibration_days=calibration_days,
+                holdout_days=HOLDOUT_DAYS,
+            )
+        else:
+            probe_started = time_module.process_time()
+            with day_replay_scope(transitions):
+                result = select_profile_spot(
+                    profile,
+                    contexts,
+                    calibration_days=calibration_days,
+                    holdout_days=HOLDOUT_DAYS,
+                )
+            total = time_module.process_time() - probe_started
+            # Only compute-path selection: no opportunity, candidate, sample,
+            # policy or authority changes. Cheap native replay avoids cache overhead.
+            enabled = transitions.native_cpu >= max(0.0, total - transitions.native_cpu)
+            _write_profile_checkpoint(
+                strategy_path,
+                dict(
+                    semantic=transitions.semantic,
+                    enabled=enabled,
+                    observation_count=len(contexts),
+                    native_cpu_seconds=transitions.native_cpu,
+                    probe_cpu_seconds=total,
+                    metric_role="optional_cache_performance_only",
+                    runtime_effect=False,
+                ),
+            )
     if path is not None and _valid_profile_selection(
         result, profile, contexts, calibration_days
     ):
@@ -1240,6 +1569,7 @@ def build_report(
         raise ResearchError("all_research_symbols_source_quality_blocked")
     profiles: dict[str, dict[str, Any]] = {}
     selection_source_digests = {}
+    day_cache_metrics = {}
     checkpoint_stats: dict[str, int] = {}
     phase_totals = {
         name: {"wall_seconds": 0.0, "cpu_seconds": 0.0}
@@ -1331,6 +1661,7 @@ def build_report(
             calibration_days=calibration_days,
             cache_dir=checkpoint_cache_dir,
             contract=checkpoint_contract,
+            day_stats=day_cache_metrics,
             stats=checkpoint_stats,
         )
         phase_totals["profile_selection"]["wall_seconds"] += (
@@ -1400,6 +1731,14 @@ def build_report(
         live_profiles=target_inventory.live_profiles,
         active_symbol_sessions=target_inventory.active_symbol_sessions,
     )
+    if checkpoint_cache_dir is not None:
+        print(
+            "[PERF] research_episode_day_cache_v2 "
+            + json.dumps(
+                dict(source_date=str(end_date), **day_cache_metrics), sort_keys=True
+            ),
+            file=sys.stderr,
+        )
     new_symbol_recommendations = [
         row for row in recommendations if row["discovery_lane"] == "new_symbol"
     ]

@@ -8,6 +8,8 @@
 
 ## 2. 시간 기준과 계측 선행
 
+현재 구현·배포 잔여 판정은 **§13을 우선**한다. 이전 후속의 미완료 표시는 해당 단계의 범위이며, 이미 통합된 P3를 새로 구축하거나 선택적 성능 목표를 필수 구현/기동 gate로 해석하지 않는다.
+
 2026-09-16/최근 완료·실패 receipt를 구분한 기존 장후 점검 기준이다. 이 수치를 세 후보 각각의 CPU baseline으로 대입하지 않는다.
 
 | 관측 | 시간 | 해석 |
@@ -179,3 +181,32 @@ Small full270-grid/46date 측정의 selector CPU는 약0.028~0.064초로 before/
 고정 synthetic 1,000/100,000행의 cohort/source summary before-after(5회 교대) CPU는0.005394→0.002580초/0.627793→0.274280초, 약52.18%/56.31% 감소다. Canonical 출력 전수 동일·peak traced allocation66,124→61,796bytes/6,095,044→5,694,636bytes. [fixture/측정](../../tmp/postclose-ev-distribution-benchmark-20260917.json)은 **한 창 completed 분포 계산**이며 전체 family/전체 scale/경제성 통과가 아니다. 보고값·null/tail/source authority·기존 full-cost/PREOPEN/주문 guard를 유지한다.
 
 이번 보완은 persistent daily sufficient-statistics 구현이 아니다. 영속화를 위해 mean/count만 저장하거나 창별 sum 재결합으로 기존 floating-point/tail 순서를 바꾸지 않는다. O2 persistent prefix state/partition·O3 frozen-prefix proof/delta/영속 충분통계·whole O0/O1·full populated P6와 자연 postclose/PID/경제성은 미완료로 남는다. 실제 phase/반복 비용에 이익이 없는 cache를 성능 백분율만 맞추려고 신설하지 않는다. 기존 자동 Daily/cumulative→EV consumer에서 소비하되 새 collector/모듈/job/floor/startup gate를 만들지 않는다.
+
+
+## 11. O2 day partition의 실제 비용 판정·신호 탐색 공유
+
+[후속 §33](../audit-reports/2026-09-17-postclose-computation-optimization-scoped-implementation.md#33-o2-invocation-local-신호-탐색-공유영속-partition-시제품-기각)을 따른다. 기존 profile checkpoint에 묶은 persistent signal partition 시제품은 reference보다 느려 제거했다. 작은270-grid뿐 아니라 실제9,450-grid에서도 compact 저장/검증 비용이 이익을 넘었으므로 강제 영속화하지 않는다. 기존 전체 결과 checkpoint와 atomic publisher/source-quality gate는 보존한다.
+
+대신 동일 신호 기준을 반복하는 execution-plan 대안의 immutable first-signal fact만 invocation 안에서 공유한다. Feature 정정/가변 입력은 miss/reference,64,000 fact bound 이후에도 grid를 빠짐없이 평가한다. Offset/TTL/target·leg·HELD state 및 calibration/holdout은 독립 재생한다. 단일 실행계획 grid는 기존 fast reference 탐색식을 유지한다. 기대효과는 중복 신호 탐색 절감이며 경제성 개선·새 진입·runtime owner 변경은 아니다.
+
+전체 persistent day-state/append-resume·proof 기반 raw delta/누적 EV 영속 충분통계·whole O0/O1 및 populated P6는 이번 보완의 완료 범위가 아니다. 다른 세션의 P3 구현/자연 소비 문서와 이번 managed source parity는 별도 검증해야 하며, performance 목표를 선정/기동 floor로 추가하지 않는다. 예정 장후 process 자동 routing과 실제 PID/자연 정책/실수익 acceptance를 각각 구분한다.
+
+## 12. O0/O1 내부 phase receipt 보완
+
+기존 `ai_quality_cycle.run_cycle`의 cycle receipt에서 rolling 원천 수집, exact lineage 검증/R2–R3 생성, companion/consumer 저장을 구분한다. 각 구간은 monotonic wall과 현재 Python process CPU만 기록하며, 구간 실패도 원래 blocker와 함께 남긴다. 기존 `_command_step`은 명령별 wall/parent CPU를 기록하되 child CPU는 미측정 `null`이다. 명령 wall에는 자식 계산·Provider transport·원천 대기가 함께 포함되므로 이를 transport 시간이나 계산 CPU로 단정하지 않는다. Wrapper의 기존 reaped-child CPU/RSS 계측과 함께 실제 병목을 판정한다.
+
+Timing은 cycle 진단 receipt에만 넣고 rolling/R3 후보 본문·정책 선정·승격/기동 조건에는 전달하지 않는다. 기대효과는 병목 위치의 가시성이지 즉각적인 호출량·CPU·손익 개선이 아니다. 실패를 성공/무표본으로 바꾸거나 더 많은 Provider 호출을 허용하지 않는다. 추가 module/collector/job, runtime owner/모델/가격/수량·leg/scale-in·broker/safety 변경은 없다.
+
+검증·배포는 [리뷰 §34](../audit-reports/2026-09-17-postclose-computation-optimization-scoped-implementation.md#34-o0o1-r0r3-내부-phase-receipt-보완)를 따른다. 전 endpoint phase/read bytes/rows, Provider transport 세부 분해, 전체 populated 규모 및 자연 소비는 별도 잔여다. Persistent day-state/append-resume, prefix proof 없는 raw delta, EV 영속 충분통계는 완료로 바꾸지 않는다. 다른 세션의 코드/규모 결과는 현행 selected release와 실제 소비자를 확인한 뒤에만 대사한다.
+
+## 13. 필수 잔여 연결과 선택적 최적화의 구분
+
+사용자는 잔여 구현·리뷰·배포를 승인하되 과도한 성능 시험/불필요한 코드 확장을 금지했다. 기존 main의 P3 day-state/partition과 C7 original-version feedback/C4 fixed-allocator paired evidence를 clean 작업본에서 함께 검증하여 기존 장후 producer/consumer 릴리스에 연결한다. 추가 production module/collector/job이나 benchmark를 만들지 않는다. 배포 receipt가 나오기 전에는 code 통합을 실제 적용으로 보고하지 않는다([리뷰 §35](../audit-reports/2026-09-17-postclose-computation-optimization-scoped-implementation.md#35-p3-잔여-배포-연결과-선택적-cache-예외-최소-보완)).
+
+- P3는 source/helper/정책/비용·incoming HELD state/day hash를 결속한 기존 paged transition backend다. Moving calibration/holdout은 state와 독립적으로 집계하며 warm/하루 append/정정에서 원 replay와 같은 전수 후보·선정/경제성을 유지한다. 작은 계산은 measured fast-reference를 사용한다. 모든 입력의 무조건 replay0을 계약으로 강제하지 않는다.
+- Optional compressed cache의 JSON parser RecursionError는 miss로 처리하여 native 계산을 유지한다. SQLite는 기존 catalog wrapper의 ValueError 정규화로 처리하므로 중복 예외 코드를 추가하지 않는다. Required raw/정책/비용/lineage 결손은 이 fallback으로 정상화하지 않는다.
+- Prefix proof가 없는 raw의 delta 처리 대신 기존 exact-generation projection/full fallback을 유지한다. 별도 writer 봉인 서비스는 신설하지 않는다. 이는 성능 fast-path 미사용이지 source 검증 누락이나 정책 기능 결손이 아니다.
+- EV는 현재의 exact daily projection·한 번 정렬한 전체 분포를 계속 소비한다. 실제 병목이 입증되지 않은 추가 영속 충분통계는 **현재 필수 잔여 구현에서 제외**한다. Mean-only cache나 분포/미진입 모집단 축소는 금지하고 향후 반복 CPU가 실제 deadline을 막을 때 재검토한다.
+- O1은 기존 exact 완료 checkpoint/호출 reservation·budget 및 local reader 공유를 유지한다. 추가 transport 최적화/모델 변경은 이번에 하지 않는다. Whole endpoint 계측·확대 규모 matrix는 기능 gate가 아니므로 추가 synthetic 규모 시험을 하지 않고 다음 정상 장후의 기존 phase/resource receipt로 관찰한다.
+
+현재 실행 owner는 기존 checklist ID를 유지한다. 정책 생성/자동 publish/PREOPEN·actual PID 소비와 자연 비용차감 EV·순익은 code/parity PASS와 별개이며, 다음 정상 장후에 기존 consumer의 generation/terminal·자연 성능을 확인한다. Entry machine/compact AI·가격·수량/leg·scale-in/custody 및 hard/broker guard·sample floor/자동 선정 권한은 변경하지 않는다.

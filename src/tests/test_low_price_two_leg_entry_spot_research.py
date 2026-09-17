@@ -35,6 +35,88 @@ class FakeResponse:
         return self._body
 
 
+@pytest.mark.parametrize("has_signal", [False, True])
+def test_first_signal_fact_shared_only_across_execution_plans(monkeypatch, has_signal):
+    anchor = datetime(2026, 6, 5, 9, 0, tzinfo=KST)
+    row = SignalFeature(0, anchor, 20000, 1.0 if has_signal else 0.0, 0.1)
+    context = DayContext(anchor.date(), (), {15: (row,)})
+    context._signal_partition = {}
+    context._signal_partition_limit = 2
+    candidate = SpotCandidate(540, 540, 15, 0.5, 0.5)
+    calls = []
+    original = DayContext.iter_window_features
+
+    def counted(self, *args):
+        calls.append(args)
+        return original(self, *args)
+
+    monkeypatch.setattr(DayContext, "iter_window_features", counted)
+    expected = row if has_signal else None
+    assert context.first_signal(candidate) == expected
+    assert context.first_signal(replace(candidate, target_ticks=4)) == expected
+    assert context.first_signal(replace(candidate, entry_offsets_ticks=(-1, -2))) == expected
+    assert len(calls) == 1
+    # A source correction invalidates positive and negative search facts.
+    context.features[15] = (replace(row, drawdown_pct=0.0 if has_signal else 1.0),)
+    assert context.first_signal(candidate) == (None if has_signal else context.features[15][0])
+    assert len(calls) == 2
+
+
+def test_first_signal_mutable_source_and_bound_use_reference_fallback():
+    anchor = datetime(2026, 6, 5, 9, 0, tzinfo=KST)
+    row = SignalFeature(0, anchor, 20000, 1.0, 0.1)
+    context = DayContext(anchor.date(), (), {15: [row]})
+    context._signal_partition = {}
+    context._signal_partition_limit = 1
+    candidate = SpotCandidate(540, 540, 15, 0.5, 0.5)
+    assert context.first_signal(candidate) == row
+    context.features[15][0] = replace(row, drawdown_pct=0.0)
+    assert context.first_signal(candidate) is None
+    assert not context._signal_partition
+    context.features[15] = (row,)
+    assert context.first_signal(candidate) == row
+    assert context.first_signal(replace(candidate, rolling_high_drawdown_pct=2.0)) is None
+    assert len(context._signal_partition) == 1
+
+
+@pytest.mark.parametrize("mode", ["zero", "complete", "held"])
+@pytest.mark.parametrize("append", [False, True])
+def test_execution_plan_full_grid_search_reuse_matches_serial_custody(monkeypatch, mode, append):
+    profile = SimpleNamespace(**{
+        **vars(PROFILES["samsung_heavy_midday"]),
+        "discovery_lane": "existing_symbol_logic_improvement",
+    })
+    anchor = datetime.combine(date(2026, 6, 5), profile.policy.scan_start, tzinfo=KST) - timedelta(minutes=60)
+    days = 47 if append else 46
+    contexts = research.build_day_contexts([
+        Bar(anchor + timedelta(days=day, minutes=i), 20000,
+            20000 if mode == "zero" or (mode == "held" and i >= 60) else 20600,
+            20000, 20000)
+        for day in range(days) for i in range(180)
+    ])
+    actual = select_profile_spot(profile, contexts, calibration_days=days-16)
+    assert actual["grid_candidate_count"] == len(candidate_grid(profile))
+    assert any(context._signal_partition for context in contexts.values())
+    assert sum(len(context._signal_partition) for context in contexts.values()) <= 64_000
+    # Independent old signal search and full-prefix custody replay. No cached
+    # outcome or earlier invocation state may substitute for a moving split.
+    def serial_views(candidate, source, windows, *, include_episodes=False):
+        return [_reference_evaluate(candidate, source, window, include_episodes=include_episodes)
+                for window in windows]
+    monkeypatch.setattr(research, "_evaluate_candidate_windows", serial_views)
+    assert actual == select_profile_spot(profile, contexts, calibration_days=days-16)
+
+
+def test_unique_signal_grid_keeps_fast_reference_path():
+    profile = PROFILES["samsung_heavy_midday"]
+    contexts = research.build_day_contexts([
+        Bar(datetime(2026, 6, 5, 9, tzinfo=KST) + timedelta(days=i), 20000, 20000, 20000, 20000)
+        for i in range(46)
+    ])
+    select_profile_spot(profile, contexts)
+    assert all(context._signal_partition is None for context in contexts.values())
+
+
 def test_day_low_fact_reuses_frozen_bars_and_invalidates_corrected_tuple(monkeypatch):
     import builtins
 

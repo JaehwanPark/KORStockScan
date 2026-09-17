@@ -643,7 +643,10 @@ def test_profile_checkpoint_interrupted_write_is_optional_and_cleans_temp(
         )
         == expected
     )
-    assert list(tmp_path.iterdir()) == []
+    assert not list(tmp_path.glob("*.json"))
+    assert not list(tmp_path.rglob(".selection-*"))
+    assert not list(tmp_path.rglob(".day-cache-*"))
+    assert not list(tmp_path.rglob(".cache-bytes-*"))
 
 
 def test_report_profile_checkpoints_selectively_replay_corrected_symbol_and_keep_source_gate(

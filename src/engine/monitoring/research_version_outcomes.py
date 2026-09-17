@@ -249,7 +249,7 @@ def outcome_feedback(source_date, *, directory=loop.DIRECTORY):
         body = {k: v for k, v in value.items() if k != "outcomes_sha256"}
         if value.get("outcomes_sha256") != loop.digest(body):
             raise ValueError("version_feedback_hash_invalid")
-        sources[str(path)] = value["outcomes_sha256"]
+        sources[str(path.resolve())] = value["outcomes_sha256"]
         native_decisions = value.get("policy_decision_feedback")
         if native_decisions:
             decisions[value["source_date"]] = native_decisions
@@ -268,13 +268,26 @@ def outcome_feedback(source_date, *, directory=loop.DIRECTORY):
     ordered_rows = sorted(
         rows.values(), key=lambda row: (row["target_date"], row["native_attempt_id"])
     )
-    dates = sorted({row["target_date"] for row in ordered_rows})[-30:]
+    from datetime import date, timedelta
+    from src.utils.market_day import is_krx_trading_day
+
+    dates, day = [], source_date
+    while len(dates) < 30 and day >= date(2026, 6, 5):
+        if is_krx_trading_day(day):
+            dates.append(day.isoformat())
+        day -= timedelta(days=1)
     return dict(
         schema=loop.SCHEMA,
         source_date=source_date.isoformat(),
         cumulative=loop.version_economics(ordered_rows),
         rolling_last_30=loop.version_economics(
             [row for row in ordered_rows if row["target_date"] in dates]
+        ),
+        holdout_last_16=loop.version_economics(
+            [row for row in ordered_rows if row["target_date"] in dates[:16]]
+        ),
+        window_dates=dict(
+            rolling_last_30=sorted(dates), holdout_last_16=sorted(dates[:16])
         ),
         source_hashes=sources,
         native_policy_decisions=decisions,
@@ -322,3 +335,32 @@ def episode_feedback(source_date, *, report_root=None):
         holdout_last_16=value.get("policy_version_holdout_last_16"),
         **loop.AUTHORITY,
     )
+
+
+def mature_widget_retired_revisions(feedback):
+    """Retire only matured exact-cost revisions; missing economics never votes."""
+    import math
+
+    retired = set()
+    cumulative = (feedback.get("cumulative") or {}).get("strategy_revisions") or {}
+    holdout = (feedback.get("holdout_last_16") or {}).get("strategy_revisions") or {}
+    for revision, full in cumulative.items():
+        tail = holdout.get(revision) or {}
+        if revision == "unattributed_version":
+            continue
+        try:
+            valid = all(
+                type(bucket.get("exact_completed_count")) is int
+                and bucket["exact_completed_count"] >= floor
+                and type(bucket.get("realized_net_return_pct")) in (int, float)
+                and math.isfinite(bucket["realized_net_return_pct"])
+                and bucket["realized_net_return_pct"] <= 0
+                and type(bucket.get("realized_buy_notional_krw")) in (int, float)
+                and bucket["realized_buy_notional_krw"] > 0
+                for bucket, floor in ((full, 6), (tail, 4))
+            )
+            if valid:
+                retired.add(revision)
+        except (KeyError, TypeError, ValueError):
+            continue
+    return retired
