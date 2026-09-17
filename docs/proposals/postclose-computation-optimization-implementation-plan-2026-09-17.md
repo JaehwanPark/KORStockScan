@@ -83,6 +83,8 @@
 
 ### 정확성과 성능 acceptance
 
+O2 day-state 디스크 시제품은 [성능 거절 근거 §25](../audit-reports/2026-09-17-postclose-computation-optimization-scoped-implementation.md#25-day-state-디스크-시제품-성능-거절o0-producerio-식별-보완)에 따라 배포하지 않았다. 완료46일/full270-grid에서 warm replay0이어도 CPU0.066→0.438초로 악화됐다. 후보별 영구 캐시를 먼저 늘리는 접근은 재설계하며, 기존 report/profile checkpoint와 원 replay를 유지한다. 다음 구현은 고정 일반/고거래량 fixture에서 cache 검증·집계·write 비용까지 포함한 개선을 입증해야 한다. 이는 O2 완료나 원천·경제성 guard 완화가 아니다. O0는 기존 receipt에 producer module 및 OS block-operation 계측을 추가했으며 bytes/rows·전체 phase/scale 검증은 잔여다.
+
 - 모든 등록 grid·유효 no-submit opportunity·valid-zero source day를 유지한다. random sampling, grid 축소, 상위 종목만 계산, sample floor 완화로 속도를 맞추지 않는다.
 - U10 의미 보완 전후 output 차이는 correctness 변경으로 설명한다. 성능 동등성은 **동일한 수정 완료 의미**의 reference/optimized 구현 사이에서 검사한다. 과거 filled-only 결과 일치를 전수 완료 acceptance로 쓰지 않는다.
 - Reference/optimized의 episode/leg 원천 identity·filled/held/censored disposition·net PnL·notional/자본 점유·calibration/holdout/half·선정·cap incremental·carry 이유를 비교한다. 수치 누적 순서/반올림을 유지하여 near-zero gate와 tie가 달라지지 않게 한다.
