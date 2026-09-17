@@ -56,6 +56,7 @@ def _raw_generation(path: Path) -> dict[str, Any]:
             "inode": stat.st_ino,
             "size_bytes": stat.st_size,
             "mtime_ns": stat.st_mtime_ns,
+            "ctime_ns": stat.st_ctime_ns,
         }
     except OSError:
         return {}
@@ -6038,10 +6039,20 @@ def _row_identity(row: dict[str, Any], *, line_no: int | None = None) -> dict[st
 
 
 def _row_contract_violations(
-    stage: str, row: dict[str, Any], contract: StageContract
+    stage: str,
+    row: dict[str, Any],
+    contract: StageContract,
+    *,
+    normalized_fields: dict[str, Any] | None = None,
 ) -> dict[str, list[str]]:
-    fields = _normalized_fields_for_contract(
-        stage, row.get("fields") if isinstance(row.get("fields"), dict) else {}
+    # A streaming caller already normalized this exact row. Reuse only within
+    # that iteration; never cache across rows, generations, or contract changes.
+    fields = (
+        normalized_fields
+        if normalized_fields is not None
+        else _normalized_fields_for_contract(
+            stage, row.get("fields") if isinstance(row.get("fields"), dict) else {}
+        )
     )
     fail_closed_optional_fields = _explicit_fail_closed_optional_feature_fields(
         stage, fields
@@ -7359,6 +7370,9 @@ def _streaming_contract_audit(
     stage_last: dict[str, str] = {}
     example_keys: dict[str, list[str]] = {}
     field_presence: dict[str, Counter[str]] = defaultdict(Counter)
+    # Labels repeat across rows. This bounded, pass-local cache stores only
+    # field-name classification, not row values or source/contract decisions.
+    source_field_classifications: dict[str, bool] = {}
     unknown_counts: dict[str, Counter[str]] = defaultdict(Counter)
     reviewed_unknown_counts: dict[str, Counter[str]] = defaultdict(Counter)
     unknown_examples: dict[tuple[str, str], list[str]] = defaultdict(list)
@@ -7399,7 +7413,9 @@ def _streaming_contract_audit(
 
         contract = STAGE_CONTRACTS.get(stage)
         if contract is not None:
-            violations = _row_contract_violations(stage, payload, contract)
+            violations = _row_contract_violations(
+                stage, payload, contract, normalized_fields=normalized
+            )
             stats = contract_stats[stage]
             stats["missing"].update(violations["missing_fields"])
             stats["zero"].update(violations["zero_fields"])
@@ -7475,7 +7491,16 @@ def _streaming_contract_audit(
                     }
                 )
         for key, value in normalized.items():
-            if _source_like_field(key) and _is_present(value):
+            source_like = source_field_classifications.get(key)
+            if source_like is None:
+                source_like = _source_like_field(key)
+                if (
+                    len(source_field_classifications) < 4096
+                    and isinstance(key, str)
+                    and len(key) <= 256
+                ):
+                    source_field_classifications[key] = source_like
+            if source_like and _is_present(value):
                 field_presence[stage][key] += 1
         for key, value in _unknown_scan_values(payload, normalized).items():
             if not _unknown_token_present(value):

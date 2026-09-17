@@ -1907,12 +1907,19 @@ def _axis_observations(
         (max(current_drawdown, 1.50), min(current_near_low, 0.10)),
     }
     observations = []
+    # These observed features are candidate-invariant. Decode them once for
+    # this cohort/window, preserving row order and independent candidate state.
+    cohort_features = [
+        (
+            row,
+            _as_float(row.get("signal_features", {}).get("observed_drawdown_pct")),
+            _as_float(row.get("signal_features", {}).get("observed_near_low_pct")),
+        )
+        for row in current_cohort
+    ]
     for min_drawdown, max_near_low in sorted(policy_grid):
         matching = []
-        for row in current_cohort:
-            features = row.get("signal_features", {})
-            drawdown = _as_float(features.get("observed_drawdown_pct"))
-            near_low = _as_float(features.get("observed_near_low_pct"))
+        for row, drawdown, near_low in cohort_features:
             if drawdown is None or near_low is None:
                 continue
             if min_drawdown is not None and drawdown < min_drawdown:

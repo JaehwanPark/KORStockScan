@@ -6,6 +6,63 @@ from pathlib import Path
 
 import pytest
 
+
+def test_axis_grid_decodes_candidate_invariant_features_once_with_outcome_parity(
+    monkeypatch,
+):
+    from src.engine.monitoring import samsung_machine_entry_tuning as tuning
+
+    cohort = {"rolling_high_drawdown_pct": 1.0, "rolling_low_proximity_pct": 0.2}
+    rows = [
+        {
+            "policy_cohort_id": "frozen-cohort",
+            "policy_cohort": cohort,
+            "eligible_for_cumulative_tuning": True,
+            "attempted": True,
+            "signal_features": {
+                "observed_drawdown_pct": drawdown,
+                "observed_near_low_pct": near_low,
+            },
+            "legs": [{"equal_weight_profit_pct": profit}],
+        }
+        for drawdown, near_low, profit in (
+            ("1.2", "0.15", 0.05),
+            ("1.6", "0.05", -0.2),
+            (None, "0.05", None),
+            ("1.5", "0.1", 0.005),
+        )
+    ]
+    snapshot = json.dumps(rows, sort_keys=True)
+    original = tuning._as_float
+    calls = []
+
+    def counted(value):
+        if isinstance(value, str) or value is None:
+            calls.append(value)
+        return original(value)
+
+    monkeypatch.setattr(tuning, "_as_float", counted)
+    result = tuning._axis_observations(rows, "midday")
+    feature_calls = [value for value in calls if isinstance(value, str)]
+    assert len(feature_calls) == 7  # Not 7 * 4 candidate variants.
+    assert len(result) == 4
+    for axis in result:
+        matching = [
+            row
+            for row in rows
+            if original(row["signal_features"]["observed_drawdown_pct"]) is not None
+            and original(row["signal_features"]["observed_near_low_pct"]) is not None
+            and original(row["signal_features"]["observed_drawdown_pct"])
+            >= axis["min_observed_drawdown_pct"]
+            and original(row["signal_features"]["observed_near_low_pct"])
+            <= axis["max_observed_near_low_pct"]
+        ]
+        assert axis["outcome"] == tuning._aggregate_rows(
+            matching, observation_day_count=4, current_policy_signal_count=4
+        )
+    assert json.dumps(rows, sort_keys=True) == snapshot
+
+
 from src.engine.monitoring.samsung_machine_entry_tuning import (
     CLEAN_WINDOW_NAME,
     POST_APPLY_WINDOW_NAME,

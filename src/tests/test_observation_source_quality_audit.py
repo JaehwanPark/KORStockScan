@@ -1,6 +1,7 @@
 import gzip
 import fcntl
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -10241,3 +10242,104 @@ def test_invalid_raw_line_is_counted_not_silently_approved(tmp_path, monkeypatch
     report = audit.build_observation_source_quality_audit("2026-09-08")
     assert report["source"]["invalid_json_line_count"] == 2
     assert report["summary"]["tuning_input_allowed"] is False
+
+
+@pytest.mark.parametrize("compressed", [False, True])
+def test_streaming_normalizes_once_per_row_with_full_contract_parity(
+    tmp_path, monkeypatch, compressed
+):
+    """Frozen all-contract population: no grid/sample/semantic reduction."""
+    raw = tmp_path / ("frozen.jsonl.gz" if compressed else "frozen.jsonl")
+    rows = []
+    for index, stage in enumerate(audit.STAGE_CONTRACTS):
+        for fields in (
+            {},
+            {"source_quality_blocker": "unknown", "current_price": 0},
+            {
+                "decision_market_scope": "KRX_NXT_INTEGRATED",
+                "market_data_route": "krx_nxt_integrated",
+                "market_session_regime": "KRX_NXT_AFTERMARKET",
+                "actual_execution_venue": "UNKNOWN",
+            },
+        ):
+            rows.append(_event(stage, fields, record_id=index + 1))
+    rows.append(_event("unregistered_fixture_stage", {}))
+    content = "\n".join(json.dumps(row) for row in rows) + "\n{invalid}\n[]\n"
+    if compressed:
+        with gzip.open(raw, "wt", encoding="utf-8") as handle:
+            handle.write(content)
+    else:
+        raw.write_text(content, encoding="utf-8")
+    original = audit._row_contract_violations
+    normalize = audit._normalized_fields_for_contract
+    calls = []
+
+    def counted(stage, fields):
+        calls.append(stage)
+        return normalize(stage, fields)
+
+    def reference(stage, row, contract, **_kwargs):
+        return original(stage, row, contract)
+
+    monkeypatch.setattr(audit, "_normalized_fields_for_contract", counted)
+    monkeypatch.setattr(audit, "_row_contract_violations", reference)
+    before_receipt = {}
+    reference_output = audit._streaming_contract_audit(
+        raw, source_receipt=before_receipt
+    )
+    assert len(calls) == 2 * (len(rows) - 1) + 1
+    calls.clear()
+    monkeypatch.setattr(audit, "_row_contract_violations", original)
+    after_receipt = {}
+    optimized_output = audit._streaming_contract_audit(
+        raw, source_receipt=after_receipt
+    )
+    assert len(calls) == len(rows)
+    assert optimized_output == reference_output
+    assert after_receipt == before_receipt
+    assert after_receipt["invalid_json_line_count"] == 2
+
+
+def test_reused_normalized_contract_fields_are_read_only_and_empty_is_valid():
+    stage = "entry_price_ai_request"
+    contract = audit.StageContract(required_fields=("current_price",))
+    row = {"fields": {"current_price": 123}}
+    normalized = {}
+    result = audit._row_contract_violations(
+        stage, row, contract, normalized_fields=normalized
+    )
+    assert result["missing_fields"] == ["current_price"]
+    assert normalized == {}
+    assert row == {"fields": {"current_price": 123}}
+
+
+def test_streaming_field_classification_cache_is_bounded_and_pass_local(monkeypatch):
+    fields = {f"source_fixture_{index}": "present" for index in range(4200)}
+    rows = [_event("unregistered_fixture_stage", fields)] * 2
+    monkeypatch.setattr(audit, "_audited_jsonl", lambda *_args: iter(rows))
+    classify = audit._source_like_field
+    calls = []
+
+    def counted(key):
+        calls.append(key)
+        return classify(key)
+
+    monkeypatch.setattr(audit, "_source_like_field", counted)
+    first = audit._streaming_contract_audit(Path("absent_frozen_fixture.jsonl"))
+    assert len(calls) == 4200 + (4200 - 4096)
+    assert len(first[2]["field_presence_top"]["unregistered_fixture_stage"]) == 20
+    monkeypatch.setattr(audit, "SOURCE_LIKE_TOKENS", ())
+    second = audit._streaming_contract_audit(Path("absent_frozen_fixture.jsonl"))
+    assert second[2]["field_presence_top"] == {}
+
+
+def test_raw_generation_detects_same_size_rewrite_with_restored_mtime(tmp_path):
+    raw = tmp_path / "frozen.jsonl"
+    raw.write_text('{"value":1}\n')
+    before = audit._raw_generation(raw)
+    raw.write_text('{"value":2}\n')
+    os.utime(raw, ns=(raw.stat().st_atime_ns, before["mtime_ns"]))
+    after = audit._raw_generation(raw)
+    assert before["size_bytes"] == after["size_bytes"]
+    assert before["mtime_ns"] == after["mtime_ns"]
+    assert before != after
