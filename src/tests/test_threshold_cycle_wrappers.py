@@ -63,7 +63,7 @@ def test_postclose_metrics_identify_only_actual_module_not_payload(tmp_path, rea
     command = (
         f"'{sys.executable}' -m {module} secret_fixture_argument"
         if real_module else
-        f"'{sys.executable}' -c 'pass' secret_fixture_argument -m {module}"
+        f"'{sys.executable}' -c 'pass' secret_fixture_argument python -m {module}"
     )
     runner = tmp_path / "module-metrics.sh"
     runner.write_text(
