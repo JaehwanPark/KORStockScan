@@ -233,3 +233,43 @@ warning is Python3.13's fork-in-thread deprecation in the bounded fork regressio
 One earlier test command named a nonexistent cache suite and ran no tests; the
 resolved fourteen-suite gate above is the success evidence. Broker/provider write,
 expensive postclose recomputation and external sync were not part of validation.
+
+
+## Async/authority integration release and actual startup
+
+Implementation **03ddbd2d6bf0b1c77073bb80c867d5cda695c6d7** is pushed to main
+and the managed release branch. The `opportunity-async-sizing-20260917` root
+includes the latest closed-loop-r3 and feature-index optimization source.
+Physical twenty-suite gate: **1051 PASS/1 missing original lineage fixture**,
+then the single failed test **1 PASS** after restoring four exact-hash original
+reports (each under20KB). Compile/Ruff/bash-n/source-clean/diff and print-only
+parser passed. Physical fixture directories are retained in the shared-mount
+backup `tmp/runtime_release_mounts/opportunity-async-sizing-20260917.5fasy0er`.
+
+An initial deployment verifier accessed an absent optional EnvironmentFiles
+property. Only new owned drop-ins had been written; selector/PIDs were unchanged.
+Those drop-ins were removed, prior routes reloaded and every PID preserved. The
+verifier was corrected before final deployment. Both attempt backups are retained.
+The first web HTTP probe hit a connection reset during worker startup and stopped
+before the main restart command; the later settled probe returned expected404.
+Neither boundary is reported as uninterrupted success.
+
+Eight affected unit pins preserve native arguments, policy sources and resource/
+retry settings. Three inactive analysis/apply owners remain inactive. Four active
+widget/episode/read-only owners and the web were each restarted once into this
+root: trader615120, auto-expansion615208, research615423, runtime615580,
+Gunicorn615909. All five settled ActiveStateactive/SubStaterunning/Resultsuccess/
+NRestarts0 and actual cwd match. Unaffected original collectors and scheduled
+individual episode routes were not silently relabeled as deployed by this change.
+
+Canonical graceful main restart **575313 → 616502** completed. Selected-release
+PID attestation and strict September17 dated env/PID verification passed. Complete
+KRX/NXT broker comparison at **15:04:14 KST** preserves Samsung25 and open orders0.
+The existing owner registry byte prefix, exact dated env/mechanistic policy,
+manual custody policy, episode expansion policy and watch config are preserved.
+[Final scoped validation record](../../data/runtime/runtime_release_validation/opportunity-async-sizing-20260917.json)
+contains roots/commits, actual PID, prior properties, failed-boundary provenance,
+backups and broker receipts. Nine installed cron routes passed. September18
+PREOPEN/start print plans target this root; this is future path readiness, not
+future PID/policy/economic acceptance. Whole U0–U12 implementation remains OPEN
+as identified above, with H repairs and runtime receipt closed separately.
