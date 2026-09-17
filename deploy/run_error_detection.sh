@@ -20,8 +20,9 @@ RUN_REPORT_FILE="${PROJECT_DIR}/tmp/error_detection_${RUN_ID}.json"
 mkdir -p "$PROJECT_DIR/tmp" "$PROJECT_DIR/logs"
 touch "$LOG_FILE"
 cd "$PROJECT_DIR"
-# Keep each explicit recovery attempt as audit evidence, including a failed
-# report that cannot replace the previous canonical generation.
+# Keep each explicit recovery attempt as audit evidence. A valid recovery
+# report is authoritative even when it records an unresolved failure; the
+# wrapper still exits non-zero after publishing that failure.
 if [[ -z "$POSTCLOSE_SOURCE_DATE" ]]; then
     trap 'rm -f "$RUN_REPORT_FILE"' EXIT
 fi
@@ -79,8 +80,6 @@ errors = validate_report_contract(
     expected_run_id=expected_run_id,
     expected_target_date=expected_target_date,
 )
-if report.get("postclose_recovery") is True and report.get("summary_severity") == "fail":
-    errors.append("postclose_recovery_unresolved_failure")
 if errors:
     print(f"[ERROR] invocation report contract invalid errors={','.join(errors)}")
     raise SystemExit(1)
@@ -99,6 +98,22 @@ print(
 )
 PY
     then
+        if [[ -n "$POSTCLOSE_SOURCE_DATE" ]] && env PYTHONPATH=. "$VENV_PY" - "$RUN_REPORT_FILE" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+report = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+raise SystemExit(0 if report.get("summary_severity") == "fail" else 1)
+PY
+        then
+            # A recovery detector can be healthy while correctly observing an
+            # unresolved predecessor. Preserve its canonical receipt before
+            # returning a failure to finalization.
+            finished_at="$(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S')"
+            echo "[FAIL] error detection mode=${MODE} run_id=${RUN_ID} postclose_recovery_unresolved_failure report_published=true finished_at=${finished_at}" | tee -a "$LOG_FILE"
+            exit 1
+        fi
         notify_cmd=(env PYTHONPATH=. "$VENV_PY" -m src.engine.notify_error_detection_admin \
             --report-file "$RUN_REPORT_FILE" \
             --mode "$MODE" \
