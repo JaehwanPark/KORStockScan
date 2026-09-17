@@ -22731,7 +22731,12 @@ def _prepare_scale_in_budget_source(stock, code, ws_data, now_ts, *, family):
             return None
         from src.engine.scalping import avg_down_replay_capture as capture
         with capture._LOCK:
-            if len(capture._ACTIVE) >= capture.MAX_ACTIVE:
+            day = datetime.fromtimestamp(now_ts, tz=_KST).date().isoformat()
+            # prepare() resets the previous day's registry. Its old capacity
+            # must not suppress the first source acquisition on a new day.
+            if capture._DAY == day and (
+                    len(capture._ACTIVE) >= capture.MAX_ACTIVE
+                    or capture._DAILY_FRAME_BYTES >= capture.MAX_DAILY_FRAME_BYTES):
                 return None
         signature = _scale_in_budget_inventory_signature()
         if all(_scale_in_observation_budget(stock, code, price, now_ts) is not None for price in prices):

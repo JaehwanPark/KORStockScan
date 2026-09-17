@@ -54095,7 +54095,7 @@ def test_scale_in_process_config_without_holdings_retries_and_is_consumable(monk
 
 
 @pytest.mark.parametrize("family", ["PYRAMID", "AVG_DOWN"])
-@pytest.mark.parametrize("case", ["valid", "zero", "missing", "inventory_changed", "owner_registry_changed", "stale", "late"])
+@pytest.mark.parametrize("case", ["valid", "zero", "missing", "inventory_changed", "owner_registry_changed", "stale", "late", "prior_day_capacity"])
 def test_blocked_scale_in_budget_normal_producer_to_consumer(monkeypatch, tmp_path, case, family):
     from src.engine.scalping import avg_down_replay_capture as capture
     from src.engine.monitoring.scalping_avg_down_recovery_calibration import collect_pyramid_lifecycle_evidence
@@ -54110,7 +54110,8 @@ def test_blocked_scale_in_budget_normal_producer_to_consumer(monkeypatch, tmp_pa
     monkeypatch.setattr(state_handlers, "_scale_in_exit_authority_block_reason", lambda *a: None)
     monkeypatch.setattr(state_handlers, "_is_any_simulated_position", lambda *a: False)
     monkeypatch.setattr(state_handlers, "TRADING_RULES", SimpleNamespace(SCALPING_PYRAMID_MIN_PROFIT_PCT=1.5))
-    monkeypatch.setattr(capture, "_ACTIVE", {})
+    monkeypatch.setattr(capture, "_ACTIVE", {str(i): {} for i in range(capture.MAX_ACTIVE)} if case == "prior_day_capacity" else {})
+    monkeypatch.setattr(capture, "_DAY", "2026-09-17")
     monkeypatch.setattr(state_handlers.kiwoom_orders, "get_last_deposit_meta", lambda: {})
     monkeypatch.setattr(state_handlers.kiwoom_utils, "get_api_url", lambda path: "https://example.invalid" + path)
     monkeypatch.setattr(state_handlers.kiwoom_utils, "get_orderable_by_margin_kt00011", _REAL_KT00011_LOOKUP)
@@ -54149,7 +54150,7 @@ def test_blocked_scale_in_budget_normal_producer_to_consumer(monkeypatch, tmp_pa
     arm = state_handlers._avg_down_route_arm_observation(stock=stock, code="005930", ws_data={},
         curr_price=10140, action={"should_add": True, "add_type": "PYRAMID"},
         downstream_action=None, downstream_evaluated=True, now_ts=clock + (3 if case == "stale" else 0))
-    if case not in {"valid", "zero"}:
+    if case not in {"valid", "zero", "prior_day_capacity"}:
         assert arm["proposed_add_qty"] == 0
         assert arm["sizing_status"] == "real_budget_not_available_without_extra_api_call"
         return
