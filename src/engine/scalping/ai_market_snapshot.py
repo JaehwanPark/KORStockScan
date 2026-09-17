@@ -19,6 +19,7 @@ from zoneinfo import ZoneInfo
 
 from src.utils import kiwoom_utils
 from src.engine.scalping.multi_timeframe_context import promotion_activation_state
+from src.trading.market.quote_consistency import build_market_data_health
 
 SCHEMA = "ai_market_snapshot_v1"
 PREFLIGHT_SCHEMA = "ai_input_preflight_v1"
@@ -76,6 +77,8 @@ def classify_ai_input_blocker(blocker: Any) -> str:
     value = str(blocker or "").strip().lower()
     if not value or value == "unclassified":
         return "unclassified"
+    if value.startswith("required_feature_"):
+        return "required_feature_insufficient"
     if value == "ai_market_snapshot_missing" or value.endswith("_missing"):
         return "missing_source"
     if value.endswith(("_stale", "_future", "_unknown_age")) or value in {
@@ -1265,6 +1268,37 @@ def build_ai_market_snapshot(
     )
     provenance = realtime_type_provenance(ws, now_ts=now_epoch)
     suffix, route = preferred_ws_route(ws, now_ts=now_epoch)
+    # Recompute at consumption time from the original route receipts. Never
+    # trust an older envelope's health or count quiet episodes in this consumer.
+    market_health = build_market_data_health(raw_ws, now_ts=now_epoch)
+    health_key = f"{suffix or 'KRX'}|{route}"
+    activity = market_health["routes"].get(health_key, {})
+    activity_proven = bool(
+        activity.get("observation_continuity_proven") is True
+        and activity.get("quote_state") == "fresh"
+        and activity.get("item")
+        == provenance["0B"].get("item")
+        == provenance["0D"].get("item")
+        and all(
+            row.get("market_route") == activity.get("market_route")
+            and row.get("effective_venue") == activity.get("effective_venue")
+            for row in provenance.values()
+        )
+        and activity.get("trade_receive_age_ms")
+        == (
+            (now_epoch - provenance["0B"]["observed_epoch"]) * 1000.0
+            if provenance["0B"].get("observed_epoch") is not None
+            else None
+        )
+        and activity.get("quote_receive_age_ms")
+        == (
+            (now_epoch - provenance["0D"]["observed_epoch"]) * 1000.0
+            if provenance["0D"].get("observed_epoch") is not None
+            else None
+        )
+        and activity.get("trade_activity_state")
+        in {"RECENT_TRADE", "QUIET_TAPE_OBSERVED", "REPEATED_QUIET_TAPE_OBSERVED"}
+    )
     market_data_route = _market_data_route(suffix=suffix, route=route)
     underlying_event_venue, underlying_event_venue_source = _underlying_event_venue(
         provenance
@@ -1674,8 +1708,18 @@ def build_ai_market_snapshot(
     )
     if max_skew_ms is not None and max_skew_ms > _FRESH_MS:
         blockers.append("source_time_skew")
+    feature_blockers: list[str] = []
+    if activity_proven:
+        # Proven absence of a new print is not transport/source corruption.
+        # Old tape/last-sale values remain stale and cannot become current
+        # features, micro backing, executable prices or provider-call authority.
+        for blocker in ("current_price_stale", "tape_stale", "source_time_skew"):
+            if blocker in blockers:
+                blockers.remove(blocker)
+                feature_blockers.append(f"required_feature_{blocker}")
     source_blocker_evaluation_order = list(dict.fromkeys(blockers))
     source_blockers = sorted(set(blockers))
+    blockers.extend(feature_blockers)
     preflight_required = runtime_preflight_required()
     preflight_mode = runtime_preflight_mode()
     artifact_status = (
@@ -1705,6 +1749,8 @@ def build_ai_market_snapshot(
         "schema": PREFLIGHT_SCHEMA,
         "allowed": not blockers,
         "source_allowed": not source_blockers,
+        "feature_allowed": not feature_blockers,
+        "feature_blockers": feature_blockers,
         "status": status,
         "blockers": blockers,
         "source_blockers": source_blockers,
@@ -1815,6 +1861,8 @@ def build_ai_market_snapshot(
         "session_bucket": session_bucket,
         "route_partition": route_partition,
         "required_sources": required_sources,
+        "market_data_health": market_health,
+        "trade_activity": {**activity, "canonical_binding_proven": activity_proven},
         "realtime_type_provenance": provenance,
         "sources": sources,
         "max_source_skew_ms": max_skew_ms,
@@ -1911,6 +1959,11 @@ def ai_market_snapshot_log_fields(
         if isinstance(row, dict)
     }
     return {
+        "ai_input_preflight_feature_allowed": bool(
+            preflight.get("feature_allowed", False)
+        ),
+        "ai_input_preflight_feature_blockers": preflight.get("feature_blockers", []),
+        "ai_input_preflight_trade_activity": snapshot.get("trade_activity", {}),
         "ai_input_preflight_source_timing": source_timing,
         "ai_input_preflight_source_timing_basis": "source_observed_at_to_snapshot_capture",
         "ai_input_preflight_external_delay_attribution": "unproven_without_exchange_and_receive_clocks",

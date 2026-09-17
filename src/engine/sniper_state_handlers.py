@@ -51865,6 +51865,7 @@ def _build_ai_ops_log_fields(
     if ai_cooldown_blocked is not None:
         out["ai_cooldown_blocked"] = bool(ai_cooldown_blocked)
     out.update(microstructure_delivery_fields(payload))
+    _copy_ai_preflight_log_fields(payload, out)
     return out
 
 
@@ -52101,6 +52102,9 @@ def _ensure_ai_source_quality_fields(
 
 
 def _copy_ai_preflight_log_fields(payload: dict, out: dict) -> None:
+    activity = payload.get("ai_input_preflight_trade_activity")
+    if isinstance(activity, dict):
+        out["ai_input_preflight_trade_activity"] = dict(activity)
     for field_name in (
         "ai_market_snapshot_id",
         "ai_market_snapshot_effective_venue",
@@ -52121,6 +52125,8 @@ def _copy_ai_preflight_log_fields(payload: dict, out: dict) -> None:
     for field_name in (
         "ai_input_preflight_allowed",
         "ai_input_preflight_source_allowed",
+        "ai_input_preflight_feature_allowed",
+        "machine_required_feature_receipt",
         "ai_input_preflight_venue_consistent",
     ):
         if field_name not in payload:
@@ -52138,6 +52144,8 @@ def _copy_ai_preflight_log_fields(payload: dict, out: dict) -> None:
     for field_name in (
         "ai_input_preflight_blockers",
         "ai_input_preflight_source_blockers",
+        "ai_input_preflight_feature_blockers",
+        "entry_required_feature_blockers",
         "ai_input_preflight_blocker_evaluation_order",
         "ai_input_preflight_source_blocker_evaluation_order",
         "ai_input_preflight_quality_warnings",

@@ -9010,6 +9010,17 @@ class GPTSniperEngine:
             return merged
 
         candle_preflight = ai_input_preflight(candle_context)
+        feature_input_blocked = bool(
+            candle_preflight.get("source_allowed") is True
+            and isinstance(candle_preflight.get("feature_blockers"), list)
+            and candle_preflight.get("feature_blockers")
+            and isinstance(candle_preflight.get("blockers"), list)
+            and all(isinstance(value, str) for value in candle_preflight["blockers"])
+            and all(isinstance(value, str) and value.startswith("required_feature_")
+                    for value in candle_preflight["feature_blockers"])
+            and set(candle_preflight.get("blockers") or [])
+            == set(candle_preflight["feature_blockers"])
+        )
         if (
             is_scalping_entry_call
             and (runtime_preflight_required() or decision_quality_v2_7_selected)
@@ -9075,9 +9086,19 @@ class GPTSniperEngine:
                         or [],
                     },
                     assessment={
-                        "schema": "mechanistic_entry_source_invalid_v1",
-                        "action": "source_invalid",
-                        "reason": "ai_input_preflight_blocked",
+                        "schema": (
+                            "mechanistic_entry_required_feature_v1"
+                            if feature_input_blocked
+                            else "mechanistic_entry_source_invalid_v1"
+                        ),
+                        "action": (
+                            "RECHECK" if feature_input_blocked else "source_invalid"
+                        ),
+                        "reason": (
+                            "required_feature_input_insufficient"
+                            if feature_input_blocked
+                            else "ai_input_preflight_blocked"
+                        ),
                     },
                     bundle_sha256=str(
                         entry_setup_live_policy.get("machine_bundle_sha256") or ""
@@ -9091,8 +9112,15 @@ class GPTSniperEngine:
                         "entry_primary_decision_owner": (
                             entry_setup_live_policy.get("primary_decision_owner")
                         ),
-                        "entry_mechanistic_action": "source_invalid",
-                        "entry_mechanistic_policy_decision": "source_invalid",
+                        "entry_mechanistic_action": (
+                            "RECHECK" if feature_input_blocked else "source_invalid"
+                        ),
+                        "entry_mechanistic_policy_decision": (
+                            "RECHECK" if feature_input_blocked else "source_invalid"
+                        ),
+                        "entry_required_feature_blockers": candle_preflight.get(
+                            "feature_blockers", []
+                        ),
                         "entry_mechanistic_policy_version": (
                             (
                                 entry_setup_live_policy.get(
@@ -9132,7 +9160,9 @@ class GPTSniperEngine:
                             else "legacy_sorted_blocker_fallback"
                         ),
                         "entry_ai_screen_status": (
-                            "not_requested_machine_source_invalid"
+                            "not_requested_required_feature_insufficient"
+                            if feature_input_blocked
+                            else "not_requested_machine_source_invalid"
                         ),
                         "entry_ai_screen_required": False,
                         "entry_ai_screen_pass": False,
@@ -9141,25 +9171,44 @@ class GPTSniperEngine:
                         ),
                     }
                 )
+                if feature_input_blocked:
+                    machine_source_invalid_fields = {
+                        key: value
+                        for key, value in machine_source_invalid_fields.items()
+                        if not key.startswith("entry_source_invalid_")
+                    }
             return self._annotate_analysis_result(
                 _merge_runtime_fields(
                     {
-                        "action": "DROP",
+                        "action": "WAIT" if feature_input_blocked else "DROP",
                         "score": 0,
-                        "reason": "ai_input_preflight_blocked",
+                        "reason": (
+                            "required_feature_input_insufficient"
+                            if feature_input_blocked
+                            else "ai_input_preflight_blocked"
+                        ),
                         "ai_semantic_evaluation_state": "INSUFFICIENT_DATA",
                         "decision_evaluation_status": (
                             "not_evaluated_provider_or_preflight"
                         ),
-                        "runtime_fail_closed_action": "DROP",
+                        "runtime_fail_closed_action": (
+                            "WAIT" if feature_input_blocked else "DROP"
+                        ),
                         "ai_decision_outcome_eligible": False,
                         "provider_called": False,
                         "machine_evaluation_status": (
-                            "source_quality_blocked_before_assessment"
+                            "required_feature_blocked_before_assessment"
+                            if feature_input_blocked
+                            else "source_quality_blocked_before_assessment"
                         ),
                         "machine_source_invalid_receipt": bool(
                             machine_policy_trace_fields
-                        ),
+                        )
+                        and not feature_input_blocked,
+                        "machine_required_feature_receipt": bool(
+                            machine_policy_trace_fields
+                        )
+                        and feature_input_blocked,
                         **machine_source_invalid_fields,
                         **ai_market_snapshot_log_fields(candle_context),
                     }
@@ -10387,7 +10436,7 @@ class GPTSniperEngine:
         )
         late_recheck_source_preflight_blocked = bool(
             late_recheck_source_preflight_required
-            and not preflight.get("source_allowed", False)
+            and not (preflight.get("source_allowed", False) and preflight.get("allowed", False))
         )
         if global_preflight_blocked or late_recheck_source_preflight_blocked:
             preflight_block_reason = (

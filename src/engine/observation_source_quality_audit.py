@@ -395,6 +395,22 @@ def _machine_ai_natural_source_consumption(
         for trace in machine_expected_traces
         if trace.get("machine_evaluation_status") == "assessed"
     ]
+    machine_feature_insufficient_traces = [
+        trace
+        for trace in machine_expected_traces
+        if trace.get("machine_required_feature_receipt") is True
+        and trace.get("machine_source_invalid_receipt") is False
+        and trace.get("machine_evaluation_status")
+        == "required_feature_blocked_before_assessment"
+        and trace.get("provider_called") is False
+        and trace.get("entry_mechanistic_action") == "RECHECK"
+        and isinstance(trace.get("entry_required_feature_blockers"), list)
+        and trace["entry_required_feature_blockers"]
+        and all(
+            isinstance(value, str) and value.startswith("required_feature_")
+            for value in trace["entry_required_feature_blockers"]
+        )
+    ]
     machine_assessed_capture_verified_traces = [
         trace
         for trace in machine_assessed_traces
@@ -410,6 +426,7 @@ def _machine_ai_natural_source_consumption(
     ]
     machine_accounted_trace_count = (
         len(machine_source_invalid_traces)
+        + len(machine_feature_insufficient_traces)
         + len(machine_assessed_capture_verified_traces)
         + len(machine_contract_invalid_traces)
     )
@@ -606,7 +623,11 @@ def _machine_ai_natural_source_consumption(
                         else (
                             "warning_machine_source_invalid_excluded"
                             if machine_source_invalid_traces
-                            else "pass"
+                            else (
+                                "warning_machine_required_feature_excluded"
+                                if machine_feature_insufficient_traces
+                                else "pass"
+                            )
                         )
                     )
                 )
@@ -650,6 +671,9 @@ def _machine_ai_natural_source_consumption(
                 machine_assessed_capture_verified_traces
             ),
             "source_invalid_excluded_trace_count": len(machine_source_invalid_traces),
+            "feature_insufficient_excluded_trace_count": len(
+                machine_feature_insufficient_traces
+            ),
             "assessment_contract_invalid_trace_count": len(
                 machine_contract_invalid_traces
             ),
@@ -730,9 +754,13 @@ def _machine_ai_natural_source_consumption(
                 "machine_assessment_contract_invalid"
                 if machine_contract_invalid_traces
                 else (
-                    "machine_source_quality_blocked_before_assessment"
-                    if machine_expected_traces and not captures
-                    else None
+                    "machine_required_feature_blocked_before_assessment"
+                    if machine_feature_insufficient_traces
+                    else (
+                        "machine_source_quality_blocked_before_assessment"
+                        if machine_expected_traces and not captures
+                        else None
+                    )
                 )
             )
         ),

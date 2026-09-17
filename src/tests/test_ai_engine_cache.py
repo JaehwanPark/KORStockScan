@@ -1,5 +1,6 @@
 import threading
 import json
+import pytest
 from datetime import datetime
 from types import SimpleNamespace
 from dataclasses import replace
@@ -281,11 +282,23 @@ def test_ai_input_preflight_blocks_provider_calls(monkeypatch):
     )
 
 
+@pytest.mark.parametrize("feature_shortfall", [False, True])
 def test_late_confirmation_recheck_requires_source_preflight_when_global_mode_off(
     monkeypatch,
+    feature_shortfall,
 ):
     engine = _build_engine()
     monkeypatch.setenv("KORSTOCKSCAN_AI_INPUT_PREFLIGHT_MODE", "off")
+    if feature_shortfall:
+        monkeypatch.setattr(
+            ai_engine_openai_module,
+            "ai_input_preflight",
+            lambda context: {
+                "allowed": False,
+                "source_allowed": True,
+                "feature_blockers": ["required_feature_tape_stale"],
+            },
+        )
     monkeypatch.setattr(
         engine,
         "_call_openai_safe",
