@@ -590,7 +590,10 @@ def _load_entry_events(target_date: str) -> list[EntryEvent]:
                 continue
             if str(key) in _PRICE_PLAN_FIELDS:
                 try:
-                    if len(json.dumps(value, ensure_ascii=True, allow_nan=False)) > 16_384:
+                    if (
+                        len(json.dumps(value, ensure_ascii=True, allow_nan=False))
+                        > 16_384
+                    ):
                         value = None
                 except (TypeError, ValueError):
                     value = None
@@ -608,6 +611,7 @@ def _load_entry_events(target_date: str) -> list[EntryEvent]:
                 fields=projected_fields,
             )
         )
+
     def event_sort_key(item):
         parsed = _parse_event_dt(item.emitted_at)
         if parsed is not None and parsed.tzinfo is not None:
@@ -639,18 +643,34 @@ def _split_attempt_segments(item_events: list[EntryEvent]) -> list[list[EntryEve
         plan = _price_ready_plan(event)
         if plan:
             attempt_id = plan["action_receipt_id"]
-        scope = tuple(str(plan.get(key) or event.fields.get(key) or "") for key in (
-            "scanner_promotion_id", "effective_venue", "market_session_bucket", "policy_bundle_hash",
-        ))
+        scope = tuple(
+            str(plan.get(key) or event.fields.get(key) or "")
+            for key in (
+                "scanner_promotion_id",
+                "effective_venue",
+                "market_session_bucket",
+                "policy_bundle_hash",
+            )
+        )
         if not all(scope):
             scope = ()
-        attempt_changed = bool(current and attempt_id and current_attempt_id
-                               and attempt_id != current_attempt_id)
+        attempt_changed = bool(
+            current
+            and attempt_id
+            and current_attempt_id
+            and attempt_id != current_attempt_id
+        )
         scope_changed = bool(current_scope and scope and current_scope != scope)
         same_exact_attempt = bool(attempt_id and attempt_id == current_attempt_id)
-        should_rollover = (record_changed and not same_exact_attempt) or attempt_changed or scope_changed or (
-            segment_terminated and event.stage not in _ATTEMPT_AUXILIARY_STAGES
-            and not same_exact_attempt
+        should_rollover = (
+            (record_changed and not same_exact_attempt)
+            or attempt_changed
+            or scope_changed
+            or (
+                segment_terminated
+                and event.stage not in _ATTEMPT_AUXILIARY_STAGES
+                and not same_exact_attempt
+            )
         )
 
         if should_rollover and current:
@@ -686,8 +706,11 @@ def _price_ready_plan(event: EntryEvent) -> dict:
         return {}
     try:
         emitted_at = datetime.fromisoformat(event.emitted_at.replace("Z", "+00:00"))
-        if (emitted_at.tzinfo is None or emitted_at.astimezone(_KST).date().isoformat() != event.signal_date
-                or not re.fullmatch(r"[0-9]{6}", event.code)):
+        if (
+            emitted_at.tzinfo is None
+            or emitted_at.astimezone(_KST).date().isoformat() != event.signal_date
+            or not re.fullmatch(r"[0-9]{6}", event.code)
+        ):
             return {}
         plan = event.fields.get("entry_execution_sizing_plan")
         price = event.fields.get("entry_price_plan")
@@ -697,15 +720,28 @@ def _price_ready_plan(event: EntryEvent) -> dict:
             price = json.loads(price)
         if not isinstance(plan, dict) or not isinstance(price, dict):
             return {}
-        if any(len(json.dumps(value, ensure_ascii=True, allow_nan=False)) > 16384
-               for value in (plan, price)):
+        if any(
+            len(json.dumps(value, ensure_ascii=True, allow_nan=False)) > 16384
+            for value in (plan, price)
+        ):
             return {}
 
         def digest(value):
-            return hashlib.sha256(json.dumps(value, ensure_ascii=True, sort_keys=True,
-                separators=(",", ":"), allow_nan=False).encode("utf-8")).hexdigest()
+            return hashlib.sha256(
+                json.dumps(
+                    value,
+                    ensure_ascii=True,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                ).encode("utf-8")
+            ).hexdigest()
 
-        price_body = {k: v for k, v in price.items() if k not in {"price_plan_id", "price_plan_sha256"}}
+        price_body = {
+            k: v
+            for k, v in price.items()
+            if k not in {"price_plan_id", "price_plan_sha256"}
+        }
         price_sha = digest(price_body)
         if (
             digest(plan) != event.fields.get("entry_execution_sizing_plan_sha256")
@@ -718,51 +754,94 @@ def _price_ready_plan(event: EntryEvent) -> dict:
             or plan.get("action_owner") != "mechanistic_entry_adjudicator"
             or plan.get("price_policy_owner") != "mechanistic_entry_price_resolver"
             or plan.get("quantity_policy_owner") != "position_sizing_dynamic_formula"
-            or plan.get("valid") is not True or plan.get("blockers")
+            or plan.get("valid") is not True
+            or plan.get("blockers")
             or plan.get("quantity_conservation_holds") is not True
             or plan.get("quantity_increase_forbidden") is not True
             or plan.get("action_authority_forbidden") is not True
             or price.get("price_owner") != "mechanistic_entry_price_resolver"
             or price.get("schema_version") != "entry_price_plan_v1"
             or price.get("action_receipt_id") != plan.get("action_receipt_id")
-            or not all(str(plan.get(k) or "").strip() not in {"", "-"} for k in
-                ("scanner_promotion_id", "action_receipt_id", "market_session_bucket"))
-            or not re.fullmatch(r"[a-f0-9]{64}", str(plan.get("policy_bundle_hash") or ""))
+            or not all(
+                str(plan.get(k) or "").strip() not in {"", "-"}
+                for k in (
+                    "scanner_promotion_id",
+                    "action_receipt_id",
+                    "market_session_bucket",
+                )
+            )
+            or not re.fullmatch(
+                r"[a-f0-9]{64}", str(plan.get("policy_bundle_hash") or "")
+            )
             or plan.get("effective_venue") not in _EXPLICIT_TRADABLE_VENUES
-            or type(plan.get("total_qty")) is not int or plan["total_qty"] <= 0
+            or type(plan.get("total_qty")) is not int
+            or plan["total_qty"] <= 0
         ):
             return {}
-        for key, expected in (("evaluation_attempt_id", plan["action_receipt_id"]),
-                              ("scanner_promotion_id", plan["scanner_promotion_id"]),
-                              ("effective_venue", plan["effective_venue"]),
-                              ("market_session_bucket", plan["market_session_bucket"]),
-                              ("policy_bundle_hash", plan["policy_bundle_hash"]),
-                              ("policy_bundle_sha256", plan["policy_bundle_hash"])):
+        for key, expected in (
+            ("evaluation_attempt_id", plan["action_receipt_id"]),
+            ("scanner_promotion_id", plan["scanner_promotion_id"]),
+            ("effective_venue", plan["effective_venue"]),
+            ("market_session_bucket", plan["market_session_bucket"]),
+            ("policy_bundle_hash", plan["policy_bundle_hash"]),
+            ("policy_bundle_sha256", plan["policy_bundle_hash"]),
+        ):
             observed = event.fields.get(key)
             if observed not in (None, "", "-") and observed != expected:
                 return {}
         candidates = price["price_candidates"]
-        if not isinstance(candidates, list) or not candidates or candidates != plan["price_candidates"] or any(
-            not isinstance(c, dict) or (c.get("numeric_price") is not None and (
-                type(c["numeric_price"]) is not int or c["numeric_price"] <= 0))
-            for c in candidates
-        ) or not any(type(c.get("numeric_price")) is int and c["numeric_price"] > 0 for c in candidates):
+        if (
+            not isinstance(candidates, list)
+            or not candidates
+            or candidates != plan["price_candidates"]
+            or any(
+                not isinstance(c, dict)
+                or (
+                    c.get("numeric_price") is not None
+                    and (type(c["numeric_price"]) is not int or c["numeric_price"] <= 0)
+                )
+                for c in candidates
+            )
+            or not any(
+                type(c.get("numeric_price")) is int and c["numeric_price"] > 0
+                for c in candidates
+            )
+        ):
             return {}
         legs = plan.get("legs")
-        if not isinstance(legs, list) or not legs or any(
-            not isinstance(leg, dict) or type(leg.get("qty")) is not int or leg["qty"] <= 0
-            or (leg.get("numeric_price") is not None and (
-                type(leg["numeric_price"]) is not int or leg["numeric_price"] <= 0))
-            for leg in legs
-        ) or sum(leg["qty"] for leg in legs) != plan["total_qty"]:
+        if (
+            not isinstance(legs, list)
+            or not legs
+            or any(
+                not isinstance(leg, dict)
+                or type(leg.get("qty")) is not int
+                or leg["qty"] <= 0
+                or (
+                    leg.get("numeric_price") is not None
+                    and (
+                        type(leg["numeric_price"]) is not int
+                        or leg["numeric_price"] <= 0
+                    )
+                )
+                for leg in legs
+            )
+            or sum(leg["qty"] for leg in legs) != plan["total_qty"]
+        ):
             return {}
         issued = {c.get("price_leg_id"): c for c in candidates}
         if len(issued) != len(candidates) or any(
-            not leg.get("price_leg_id") or leg["price_leg_id"] not in issued
-            or leg.get("numeric_price") != issued[leg["price_leg_id"]].get("numeric_price")
-            or (leg.get("numeric_price") is None and (
-                leg.get("execution_phase") != "after_verified_probe_fill"
-                or issued[leg["price_leg_id"]].get("source") != "probe_fill_price_resolver"))
+            not leg.get("price_leg_id")
+            or leg["price_leg_id"] not in issued
+            or leg.get("numeric_price")
+            != issued[leg["price_leg_id"]].get("numeric_price")
+            or (
+                leg.get("numeric_price") is None
+                and (
+                    leg.get("execution_phase") != "after_verified_probe_fill"
+                    or issued[leg["price_leg_id"]].get("source")
+                    != "probe_fill_price_resolver"
+                )
+            )
             for leg in legs
         ):
             return {}
@@ -776,7 +855,15 @@ def _buy_intent_events(
 ) -> tuple[list[EntryEvent], str]:
     price_ready_events = [event for event in attempt_events if _price_ready_plan(event)]
     if price_ready_events:
-        if len({event.fields["entry_execution_sizing_plan_sha256"] for event in price_ready_events}) != 1:
+        if (
+            len(
+                {
+                    event.fields["entry_execution_sizing_plan_sha256"]
+                    for event in price_ready_events
+                }
+            )
+            != 1
+        ):
             return [], "conflicting_price_ready_plans"
         return price_ready_events, "mechanistic_price_ready_plan"
     explicit_buy_events = [
@@ -972,10 +1059,16 @@ def _build_buy_attempts(
             if not frozen:
                 segments.append(segment)
                 continue
-            identity = tuple(frozen[key] for key in (
-                "scanner_promotion_id", "action_receipt_id", "effective_venue",
-                "market_session_bucket", "policy_bundle_hash",
-            ))
+            identity = tuple(
+                frozen[key]
+                for key in (
+                    "scanner_promotion_id",
+                    "action_receipt_id",
+                    "effective_venue",
+                    "market_session_bucket",
+                    "policy_bundle_hash",
+                )
+            )
             if identity in exact_segments:
                 exact_segments[identity].extend(segment)
             else:
@@ -1041,18 +1134,23 @@ def _build_buy_attempts(
 
             price_ready_plan = (
                 _price_ready_plan(buy_events[0])
-                if buy_intent_source == "mechanistic_price_ready_plan" else {}
+                if buy_intent_source == "mechanistic_price_ready_plan"
+                else {}
             )
-            anchor_event = buy_events[0] if price_ready_plan else (
-                next(
-                    (
-                        event
-                        for event in reversed(attempt_events)
-                        if event.stage in _ENTRY_ARMED_STAGES
-                    ),
-                    None,
+            anchor_event = (
+                buy_events[0]
+                if price_ready_plan
+                else (
+                    next(
+                        (
+                            event
+                            for event in reversed(attempt_events)
+                            if event.stage in _ENTRY_ARMED_STAGES
+                        ),
+                        None,
+                    )
+                    or buy_events[-1]
                 )
-                or buy_events[-1]
             )
 
             anchor_dt = _parse_event_dt(anchor_event.emitted_at)
@@ -1073,8 +1171,11 @@ def _build_buy_attempts(
                 _resolve_terminal_executable_entry_price(terminal_event.fields)
             )
             if price_ready_plan:
-                signal_price = next(c["numeric_price"] for c in price_ready_plan["price_candidates"]
-                                    if type(c.get("numeric_price")) is int and c["numeric_price"] > 0)
+                signal_price = next(
+                    c["numeric_price"]
+                    for c in price_ready_plan["price_candidates"]
+                    if type(c.get("numeric_price")) is int and c["numeric_price"] > 0
+                )
                 signal_price_source = "owner_issued_limit_diagnostic_not_assumed_fill"
                 evaluation_dt = anchor_dt
             elif executable_ask > 0:
@@ -1113,19 +1214,37 @@ def _build_buy_attempts(
                     market_session_bucket=price_ready_plan["market_session_bucket"],
                     entry_price_plan_id=price_ready_plan["price_plan_id"],
                     entry_price_plan_sha256=price_ready_plan["price_plan_sha256"],
-                    entry_execution_sizing_plan_sha256=anchor_event.fields["entry_execution_sizing_plan_sha256"],
+                    entry_execution_sizing_plan_sha256=anchor_event.fields[
+                        "entry_execution_sizing_plan_sha256"
+                    ],
                     price_ready_source={
                         "status": "owner_issued_plan_observed",
                         "target_qty": price_ready_plan["total_qty"],
                         "planned_notional_krw": (
-                            sum(leg["qty"] * leg["numeric_price"] for leg in price_ready_plan["legs"])
-                            if all(leg.get("numeric_price") is not None for leg in price_ready_plan["legs"])
-                            else None),
-                        "priced_leg_planned_notional_krw": sum(leg["qty"] * (leg.get("numeric_price") or 0)
-                                                               for leg in price_ready_plan["legs"]),
-                        "quantity_policy_version": price_ready_plan["quantity_policy_version"],
-                        "split_policy_version": price_ready_plan["split_policy_version"],
-                        "intended_numeric_prices": [c["numeric_price"] for c in price_ready_plan["price_candidates"]],
+                            sum(
+                                leg["qty"] * leg["numeric_price"]
+                                for leg in price_ready_plan["legs"]
+                            )
+                            if all(
+                                leg.get("numeric_price") is not None
+                                for leg in price_ready_plan["legs"]
+                            )
+                            else None
+                        ),
+                        "priced_leg_planned_notional_krw": sum(
+                            leg["qty"] * (leg.get("numeric_price") or 0)
+                            for leg in price_ready_plan["legs"]
+                        ),
+                        "quantity_policy_version": price_ready_plan[
+                            "quantity_policy_version"
+                        ],
+                        "split_policy_version": price_ready_plan[
+                            "split_policy_version"
+                        ],
+                        "intended_numeric_prices": [
+                            c["numeric_price"]
+                            for c in price_ready_plan["price_candidates"]
+                        ],
                         "economic_pair_eligible": False,
                         "blocker": "exact_fill_exit_cost_counterfactual_replay_missing",
                         "bar_followup_role": "diagnostic_not_executable_net_payoff",
@@ -1137,13 +1256,23 @@ def _build_buy_attempts(
             candidates.append(
                 {
                     "candidate_id": (
-                        f"{anchor_event.code}:{price_ready_plan['action_receipt_id']}:" + hashlib.sha256(
-                            json.dumps([anchor_event.code, price_ready_plan['scanner_promotion_id'],
-                                price_ready_plan['action_receipt_id'], price_ready_plan['effective_venue'],
-                                price_ready_plan['market_session_bucket'], price_ready_plan['policy_bundle_hash'],
-                                price_ready_plan['price_plan_sha256']], separators=(",", ":")).encode("utf-8")
+                        f"{anchor_event.code}:{price_ready_plan['action_receipt_id']}:"
+                        + hashlib.sha256(
+                            json.dumps(
+                                [
+                                    anchor_event.code,
+                                    price_ready_plan["scanner_promotion_id"],
+                                    price_ready_plan["action_receipt_id"],
+                                    price_ready_plan["effective_venue"],
+                                    price_ready_plan["market_session_bucket"],
+                                    price_ready_plan["policy_bundle_hash"],
+                                    price_ready_plan["price_plan_sha256"],
+                                ],
+                                separators=(",", ":"),
+                            ).encode("utf-8")
                         ).hexdigest()
-                        if price_ready_plan else f"{anchor_event.code}:{anchor_event.record_id or '-'}:{evaluation_dt.strftime('%H%M%S')}"
+                        if price_ready_plan
+                        else f"{anchor_event.code}:{anchor_event.record_id or '-'}:{evaluation_dt.strftime('%H%M%S')}"
                     ),
                     "signal_date": target_date,
                     "signal_time": evaluation_dt.strftime("%H:%M:%S"),
@@ -1158,8 +1287,12 @@ def _build_buy_attempts(
                     "signal_price": signal_price,
                     "signal_price_source": signal_price_source,
                     "ai_score": round(ai_score, 1),
-                    "target_qty": price_ready_plan["total_qty"] if price_ready_plan else _safe_int(
-                        (budget_event.fields if budget_event else {}).get("qty"), 0
+                    "target_qty": (
+                        price_ready_plan["total_qty"]
+                        if price_ready_plan
+                        else _safe_int(
+                            (budget_event.fields if budget_event else {}).get("qty"), 0
+                        )
                     ),
                     "safe_budget": _safe_int(
                         (budget_event.fields if budget_event else {}).get(
@@ -2169,7 +2302,8 @@ def _build_watch_cycle_participation_ledger(
         )
         primary_metrics = horizon_metrics.get("20", {})
         price_ready_diagnostic_only = bool(
-            reference_evaluation is not None and reference_evaluation.get("price_ready_source")
+            reference_evaluation is not None
+            and reference_evaluation.get("price_ready_source")
         )
         primary_source_quality = _metric_source_quality_state(primary_metrics, 20)
         gross_close_ret_pct = _safe_float(primary_metrics.get("close_ret_pct"), 0.0)
@@ -2183,7 +2317,9 @@ def _build_watch_cycle_participation_ledger(
         )
         estimated_net_pnl = (
             int(round(notional * cost_adjusted_return_pct / 100.0))
-            if notional > 0 and primary_source_quality == "pass" and not price_ready_diagnostic_only
+            if notional > 0
+            and primary_source_quality == "pass"
+            and not price_ready_diagnostic_only
             else None
         )
         if primary_source_quality != "pass":
@@ -2291,11 +2427,15 @@ def _build_watch_cycle_participation_ledger(
                 ),
                 "cost_adjusted_counterfactual_return_pct": (
                     cost_adjusted_return_pct
-                    if primary_source_quality == "pass" and not price_ready_diagnostic_only
+                    if primary_source_quality == "pass"
+                    and not price_ready_diagnostic_only
                     else None
                 ),
-                **({"price_ready_source": reference_evaluation["price_ready_source"]}
-                   if price_ready_diagnostic_only else {}),
+                **(
+                    {"price_ready_source": reference_evaluation["price_ready_source"]}
+                    if price_ready_diagnostic_only
+                    else {}
+                ),
                 "counterfactual_notional_krw": notional,
                 "estimated_counterfactual_net_pnl_krw": estimated_net_pnl,
                 "actionable_missed_winner": actionable_missed_winner,
@@ -3149,7 +3289,9 @@ def build_missed_entry_counterfactual_report(
         for item in all_buy_attempts
         if str(item.get("attempt_status") or "") == "MISSED"
     ]
-    price_events = [event for event in entry_events if event.stage == "entry_execution_sizing_plan"]
+    price_events = [
+        event for event in entry_events if event.stage == "entry_execution_sizing_plan"
+    ]
     price_plan_hashes = defaultdict(set)
     invalid_price_events = 0
     for event in price_events:
@@ -3157,17 +3299,32 @@ def build_missed_entry_counterfactual_report(
         if not plan:
             invalid_price_events += 1
             continue
-        identity = (event.code, plan["scanner_promotion_id"], plan["action_receipt_id"],
-                    plan["effective_venue"], plan["market_session_bucket"], plan["policy_bundle_hash"])
-        price_plan_hashes[identity].add(event.fields["entry_execution_sizing_plan_sha256"])
-    input_streaming.update({
-        "price_ready_plan_event_count": len(price_events),
-        "price_ready_plan_invalid_event_count": invalid_price_events,
-        "price_ready_plan_valid_event_count": len(price_events) - invalid_price_events,
-        "price_ready_conflicting_identity_count": sum(len(hashes) > 1 for hashes in price_plan_hashes.values()),
-        "price_ready_attempt_count": sum(bool(item.get("price_ready_source")) for item in all_buy_attempts),
-        "price_ready_diagnostic_economic_pair_eligible": False,
-    })
+        identity = (
+            event.code,
+            plan["scanner_promotion_id"],
+            plan["action_receipt_id"],
+            plan["effective_venue"],
+            plan["market_session_bucket"],
+            plan["policy_bundle_hash"],
+        )
+        price_plan_hashes[identity].add(
+            event.fields["entry_execution_sizing_plan_sha256"]
+        )
+    input_streaming.update(
+        {
+            "price_ready_plan_event_count": len(price_events),
+            "price_ready_plan_invalid_event_count": invalid_price_events,
+            "price_ready_plan_valid_event_count": len(price_events)
+            - invalid_price_events,
+            "price_ready_conflicting_identity_count": sum(
+                len(hashes) > 1 for hashes in price_plan_hashes.values()
+            ),
+            "price_ready_attempt_count": sum(
+                bool(item.get("price_ready_source")) for item in all_buy_attempts
+            ),
+            "price_ready_diagnostic_economic_pair_eligible": False,
+        }
+    )
     summary = MissedEntryCounterfactualSummary(date=safe_date)
     summary.total_candidates = len(candidates)
 
@@ -3325,29 +3482,37 @@ def build_missed_entry_counterfactual_report(
         )
         entry_price_used = _safe_int(metrics_10m.get("entry_price_used"), 0)
         owner_planned = candidate.get("price_ready_source") or {}
-        capacity = {
-            "qty": owner_planned["target_qty"],
-            "simulation": True,
-            "actual_order_submitted": False,
-            "broker_order_forbidden": True,
-        } if owner_planned else _sim_virtual_qty(
-            entry_price_used,
-            _safe_float(candidate.get("ai_score"), 0.0),
-            reference_time=candidate.get("reference_time"),
-            source_signature=candidate.get("source_signature"),
-            effective_venue=candidate.get("effective_venue"),
+        capacity = (
+            {
+                "qty": owner_planned["target_qty"],
+                "simulation": True,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            }
+            if owner_planned
+            else _sim_virtual_qty(
+                entry_price_used,
+                _safe_float(candidate.get("ai_score"), 0.0),
+                reference_time=candidate.get("reference_time"),
+                source_signature=candidate.get("source_signature"),
+                effective_venue=candidate.get("effective_venue"),
+            )
         )
         qty = _safe_int(capacity.get("qty"), 0)
-        est_pnl_10m = None if owner_planned else (
-            int(
-                round(
-                    entry_price_used
-                    * qty
-                    * (_safe_float(metrics_10m.get("close_ret_pct"), 0.0) / 100.0)
+        est_pnl_10m = (
+            None
+            if owner_planned
+            else (
+                int(
+                    round(
+                        entry_price_used
+                        * qty
+                        * (_safe_float(metrics_10m.get("close_ret_pct"), 0.0) / 100.0)
+                    )
                 )
+                if entry_price_used > 0 and qty > 0
+                else 0
             )
-            if entry_price_used > 0 and qty > 0
-            else 0
         )
         evaluations.append(
             {
@@ -3381,7 +3546,8 @@ def build_missed_entry_counterfactual_report(
                 **source_quality_15m,
                 "counterfactual_qty": int(qty),
                 "counterfactual_qty_source": (
-                    "observed_owner_planned_quantity_not_modeled_fill" if owner_planned
+                    "observed_owner_planned_quantity_not_modeled_fill"
+                    if owner_planned
                     else "scalping_position_sizing_allocator" if qty > 0 else "unpriced"
                 ),
                 "virtual_budget_override": not bool(owner_planned),
@@ -3394,9 +3560,13 @@ def build_missed_entry_counterfactual_report(
                 ),
                 "counterfactual_max_budget": int(capacity.get("max_budget") or 0),
                 "counterfactual_notional_krw": (
-                    None if owner_planned else int(entry_price_used * qty)
-                    if entry_price_used > 0 and qty > 0
-                    else 0
+                    None
+                    if owner_planned
+                    else (
+                        int(entry_price_used * qty)
+                        if entry_price_used > 0 and qty > 0
+                        else 0
+                    )
                 ),
                 "real_target_qty_observed": _safe_int(candidate.get("target_qty"), 0),
                 "estimated_counterfactual_pnl_10m_krw": est_pnl_10m,
@@ -3708,8 +3878,10 @@ def build_missed_entry_counterfactual_report(
             "counterfactual_safe_budget": int(
                 _safe_int(item.get("counterfactual_safe_budget"), 0)
             ),
-            "counterfactual_notional_krw": None if item.get("price_ready_source") else int(
-                _safe_int(item.get("counterfactual_notional_krw"), 0)
+            "counterfactual_notional_krw": (
+                None
+                if item.get("price_ready_source")
+                else int(_safe_int(item.get("counterfactual_notional_krw"), 0))
             ),
             **{key: item.get(key) for key in _COUNTERFACTUAL_SIZING_KEYS},
             "ai_score": round(_safe_float(item.get("ai_score"), 0.0), 1),
@@ -3753,14 +3925,24 @@ def build_missed_entry_counterfactual_report(
             ),
             "mfe_15m_pct": round(_safe_float(metrics_15m.get("mfe_pct"), 0.0), 3),
             "mae_15m_pct": round(_safe_float(metrics_15m.get("mae_pct"), 0.0), 3),
-            "estimated_counterfactual_pnl_10m_krw": None if item.get("price_ready_source") else int(
-                _safe_int(item.get("estimated_counterfactual_pnl_10m_krw"), 0)
+            "estimated_counterfactual_pnl_10m_krw": (
+                None
+                if item.get("price_ready_source")
+                else int(_safe_int(item.get("estimated_counterfactual_pnl_10m_krw"), 0))
             ),
-            **{key: item[key] for key in (
-                "scanner_promotion_id", "evaluation_attempt_id", "policy_bundle_sha256",
-                "entry_price_plan_id", "entry_price_plan_sha256",
-                "entry_execution_sizing_plan_sha256", "price_ready_source",
-            ) if key in item},
+            **{
+                key: item[key]
+                for key in (
+                    "scanner_promotion_id",
+                    "evaluation_attempt_id",
+                    "policy_bundle_sha256",
+                    "entry_price_plan_id",
+                    "entry_price_plan_sha256",
+                    "entry_execution_sizing_plan_sha256",
+                    "price_ready_source",
+                )
+                if key in item
+            },
             "missed_submit_cohort": str(item.get("missed_submit_cohort") or ""),
             "stage_flow": [str(stage) for stage in (item.get("stage_flow") or [])],
             "source_signature": _rising_missed_source_field(item, "source_signature"),

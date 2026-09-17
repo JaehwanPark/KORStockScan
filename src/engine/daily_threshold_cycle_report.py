@@ -1437,9 +1437,7 @@ def _write_dated_policy(path: Path, policy: dict[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _materialize_mechanistic_entry_price_policy(
-    report: dict, source_date: str
-) -> None:
+def _materialize_mechanistic_entry_price_policy(report: dict, source_date: str) -> None:
     """Publish only a reviewed mechanistic price candidate for next PREOPEN."""
 
     candidate = next(
@@ -1563,9 +1561,8 @@ def _materialize_integrated_entry_execution_sizing_policy(
     if gate.get("passed") is not True:
         return
     if (
-        (source_date >= "2026-09-17" or evaluation.get("selection_contract"))
-        and not quantity_leg_promotion_evidence_valid(evaluation)
-    ):
+        source_date >= "2026-09-17" or evaluation.get("selection_contract")
+    ) and not quantity_leg_promotion_evidence_valid(evaluation):
         return
     if evaluation.get("selection_contract"):
         partitions = evaluation["chronological_partitions"]
@@ -2013,23 +2010,36 @@ def _compact_threshold_cycle_event(payload: dict) -> dict:
     else:
         compact["fields"] = {}
     if payload.get("stage") == "entry_execution_sizing_plan":
-        from src.engine.sniper_missed_entry_counterfactual import EntryEvent, _price_ready_plan
+        from src.engine.sniper_missed_entry_counterfactual import (
+            EntryEvent,
+            _price_ready_plan,
+        )
 
-        plan = _price_ready_plan(EntryEvent(
-            str(payload.get("emitted_at") or ""), str(payload.get("emitted_date") or ""),
-            str(payload.get("stock_name") or ""), str(payload.get("stock_code") or ""),
-            "entry_execution_sizing_plan", str(payload.get("record_id") or ""), fields,
-        ))
+        plan = _price_ready_plan(
+            EntryEvent(
+                str(payload.get("emitted_at") or ""),
+                str(payload.get("emitted_date") or ""),
+                str(payload.get("stock_name") or ""),
+                str(payload.get("stock_code") or ""),
+                "entry_execution_sizing_plan",
+                str(payload.get("record_id") or ""),
+                fields,
+            )
+        )
         if plan:
-            compact["fields"].update({
-                "evaluation_attempt_id": plan["action_receipt_id"],
-                "scanner_promotion_id": plan["scanner_promotion_id"],
-                "policy_bundle_sha256": plan["policy_bundle_hash"],
-                "effective_venue": plan["effective_venue"],
-                "market_session_bucket": plan["market_session_bucket"],
-                "entry_price_plan_id": plan["price_plan_id"],
-                "entry_execution_sizing_plan_sha256": fields["entry_execution_sizing_plan_sha256"],
-            })
+            compact["fields"].update(
+                {
+                    "evaluation_attempt_id": plan["action_receipt_id"],
+                    "scanner_promotion_id": plan["scanner_promotion_id"],
+                    "policy_bundle_sha256": plan["policy_bundle_hash"],
+                    "effective_venue": plan["effective_venue"],
+                    "market_session_bucket": plan["market_session_bucket"],
+                    "entry_price_plan_id": plan["price_plan_id"],
+                    "entry_execution_sizing_plan_sha256": fields[
+                        "entry_execution_sizing_plan_sha256"
+                    ],
+                }
+            )
     return compact
 
 
@@ -2377,10 +2387,17 @@ def _payload_rows(payload: dict) -> list[dict]:
 def _entry_counterfactual_join_keys_from_fields(fields: dict) -> set[str]:
     keys: set[str] = set()
     if fields.get("evaluation_attempt_id"):
-        identity = tuple(str(fields.get(k) or "").strip() for k in (
-            "scanner_promotion_id", "evaluation_attempt_id", "stock_code",
-            "effective_venue", "market_session_bucket", "policy_bundle_sha256",
-        ))
+        identity = tuple(
+            str(fields.get(k) or "").strip()
+            for k in (
+                "scanner_promotion_id",
+                "evaluation_attempt_id",
+                "stock_code",
+                "effective_venue",
+                "market_session_bucket",
+                "policy_bundle_sha256",
+            )
+        )
         if all(value not in {"", "-"} for value in identity):
             return {"exact_evaluation:" + json.dumps(identity, separators=(",", ":"))}
         return set()
@@ -2440,7 +2457,9 @@ def _dynamic_entry_price_counterfactual_join_diagnostics(
             continue
         eligible_events.append(event)
         event_key_sets.append(
-            _entry_counterfactual_join_keys_from_fields({**event, **_event_fields(event)})
+            _entry_counterfactual_join_keys_from_fields(
+                {**event, **_event_fields(event)}
+            )
         )
 
     source_path = (
@@ -10197,10 +10216,12 @@ def _build_entry_price_execution_quality_family(
         for key in (_entry_price_event_record_key(event) for event in submitted_real)
         if key is not None
     }
-    terminal_receipt_join_count = len({
-        _json_sha256(exact_outcome[key])
-        for key in submitted_record_keys & set(exact_outcome)
-    })
+    terminal_receipt_join_count = len(
+        {
+            _json_sha256(exact_outcome[key])
+            for key in submitted_record_keys & set(exact_outcome)
+        }
+    )
     return {
         "family": "entry_price_execution_quality",
         "stage": "entry",
