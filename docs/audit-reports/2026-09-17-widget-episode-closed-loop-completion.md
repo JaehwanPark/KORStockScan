@@ -51,3 +51,21 @@ Shared-path normalization source f91b5cbf: source7 suites381 PASS/61.10초, affe
 오래된 own synthetic fixture units를 supersede한 뒤 PID identity/live·persistent pins 부재 및 optional-only 파일명들을 확인하여72,928,483bytes의 cache payload/metadata를 정리했다. 원천·정책·runtime receipt·holding은 삭제하지 않았다. 별도 외부 정리로 변한 host 전체 free space를 본 작업의 절감으로 세지 않는다.
 
 Episode scale generator는 `analysis/benchmarks/widget_episode_incremental_scale.py`의 offline ownership이다. Native allowlist guard가 invented symbol을 거부했으므로 guard를 유지하고 기존61 templates의 첫19개 원 symbol/profile 및 모든 native grid를 그대로 사용한다. Synthetic390-bar D120/D121 cold/warm/append 결과를 original no-cache와 비교하고 oracle/preparation CPU를 candidate compute와 분리한다. No broker/native policy acceptance이며 actual source/registry에 fixture를 기록하지 않는다.
+
+### Latest upstream integration and final review repair
+
+Latest upstream35955c5f native replay/EV distribution/signal-fact fast path를9031cb65에 통합했다. 12-suite source887 PASS/136.64초, immutable r3 physical/shared397 PASS/78.95초. 이후 upstreamf826ebcb의 test-only clock/source isolation을 통합하고 incoming190 PASS/15.22초를 확인했다.
+
+최종 C4 재검토에서 episode legs가 absent/empty/one-leg여도 빈 reference로 바뀌는 누락을 수정했다. 정확히2개의 COMPLETE native legs만 변환하며 no-entry의 빈 episodes calendar와 구분한다. Final source c7292edd는 해당 보완 source83 PASS/16.97초 및 immutable r4 동일83 PASS/21.45초, Ruff/compile/diff-check와 print-only parser를 통과했다. 기존 admission/비용/qty10/holding exit/allocator·custody·threshold guards를 변경하지 않았다. Source scope unresolved finding0.
+
+규모 측정 frozen source는 widget discovery f91b5cbf 및 episode native replay9031cb65다. 최종 변경은 C4 malformed-leg 변환 거부이며 두 측정 경로는 이 함수를 실행하지 않는다. Widget discovery/cache bytes와 episode native replay/checkpoint bytes가 final source와 동일함을 파일 SHA로 검증했다. Whole producer helper SHA는 final475e5d500c0dce57…로 달라졌으므로 이전fa3fe2ae…를 최신 전체 hash로 주장하지 않는다. Latest C4/C7 normalized synthetic6조건을 final source에서 다시 측정했다. N100D120 wall5.196초/CPU1.036초(공동 비교0.326초), RSS156,900KiB, remote0;6조건의 paired economics digest는 이전 source와 모두 일치했다. Feedback digest에는 별도 temporary source directory provenance가 포함되므로 독립 실행끼리 같은 digest를 요구하지 않는다. 이는 비용·원천 획득·발행·consumer 전체 native chain throughput 증명이 아니다.
+
+### Final full-grid engineering scale closure
+
+Engineering resource 계약은 CPUQuota20%/MemoryMax512MiB/Nice19이며 실제 운영 unit 자원을 증설하지 않았다. Invented390-bar fixture의 full widget G1536/caps1–5를 유지했다. N19D72: cold wall670.393초/CPU131.957초, warm293.99996초/58.804초, appendD73 300.598초/60.136초. Cold/warm digest 동일, warm1,634,608hit·miss0, append기존1,634,608hit/신규29,184miss(19×1536), write-skip0, RSS171,400KiB, remote0.
+
+N100D120 cold는 N19 wall1,201.015초/CPU237.794초, N50 wall3,126.418초/CPU621.739초/RSS205,872KiB checkpoint를 남겼다. Final87종목 완료/13종목 미처리, observed unit elapsed5,413초/CPU1,077.837초, budget 초과exit75/deferred. 100종목 전체 PASS가 아니며 이13개는 synthetic fixture backlog다. 실제 runtime backlog나 승격 증거로 바꾸지 않는다. Remaining N50/N100D72 및 N100D120 warm/append의 full native chain acceptance를 추정으로 채우지 않는다.
+
+Latest native episode first19 existing templates/G총30,780(270/810/1350/2700/2970/5130/5940), D120/D121: cold candidate wall556.251초/CPU111.196초, warm1.478초/0.265초, append99.640초/19.874초. Whole-profile warm19hit, append19개는 measured cache-disabled fast-reference다. Cold/warm·append 모두 original no-cache canonical parity PASS이며 앞 source와 경제성 digest도 같다. Preparation CPU는 각13.81/13.62/13.73초, original comparison CPU53.28/0/52.83초(deepcopy 포함)로 candidate compute와 분리한다. RSS최대390,780KiB/remote0. Warm1.478초를 모든 preparation/native source 획득을 포함한 wall로 세지 않는다.
+
+추가 metadata/fixtures의 scale receipt는 [source와 측정 범위/잔여량 결속](../../data/runtime/widget_episode_completion_scale_review_2026-09-17.json)을 참조한다. Cold optional checkpoint probe가 원본보다 비싸며 항상 unchanged-day replay0/전체 CPU50%는 OPEN이다. Largest unit MemorySwapPeak56,217,600bytes, episode final 직전 sample319,488bytes로 swap0 목표도 미달이다. RSS는512MiB 안이지만 P6 전체 baseline 이하·zero-swap acceptance를 주장하지 않는다. 다음 성능 owner는 full-grid probe/cache overhead와 lossless cold computation 재사용을 줄이고 동일 grid/calendar/원본 결과/단위 자원으로 재검증해야 한다. Admission/종목/grid/표본 축소로 목표를 맞추지 않는다. 기존20:10/21:15 natural policy와 real economics owners는 OPEN이다.
