@@ -37,6 +37,94 @@ def _bar(timestamp: datetime, *, low=20_000, high=20_000) -> Bar:
     return Bar(timestamp, 20_000, high, low, 20_000)
 
 
+def _reference_day_contexts(bars):
+    """Frozen full-window oracle: preserve the pre-optimization semantics."""
+    grouped = {}
+    for bar in bars:
+        grouped.setdefault(bar.timestamp.date(), []).append(bar)
+    result = {}
+    for day_key, raw in sorted(grouped.items()):
+        day = tuple(sorted(raw, key=lambda item: item.timestamp))
+        features = {}
+        for lookback in research.LOOKBACK_GRID:
+            rows = []
+            for index in range(lookback - 1, len(day)):
+                window = day[index - lookback + 1:index + 1]
+                if any(current.timestamp - previous.timestamp != timedelta(minutes=1)
+                       for previous, current in zip(window, window[1:])):
+                    continue
+                candidate = day[index]
+                high = max(item.high_price for item in window)
+                low = min(item.low_price for item in window)
+                if min(high, low, candidate.close_price) <= 0:
+                    continue
+                rows.append(SignalFeature(index, candidate.timestamp, candidate.close_price,
+                                          (high - candidate.close_price) / high * 100.0,
+                                          (candidate.close_price - low) / low * 100.0))
+            features[lookback] = tuple(rows)
+        result[day_key] = DayContext(day_key, day, features)
+    return result
+
+
+@pytest.mark.parametrize("kind", ["ordered", "shuffled", "gap", "duplicate", "zero_low", "zero_close", "negative_high", "short", "empty"])
+def test_rolling_day_features_match_full_window_oracle(kind):
+    bars = []
+    for offset in range(3):
+        anchor = datetime(2026, 8, 10 + offset, 9, 0, tzinfo=KST)
+        for index in range(90):
+            price = 20000 + ((index * 17) % 101)
+            bars.append(Bar(anchor + timedelta(minutes=index), price,
+                            price + (index % 5), price - (index % 7), price))
+    if kind == "shuffled":
+        bars = bars[::2][::-1] + bars[1::2]
+    elif kind == "gap":
+        bars = [bar for index, bar in enumerate(bars) if index % 90 not in {12, 48}]
+    elif kind == "duplicate":
+        bars.insert(15, bars[15])
+    elif kind in {"zero_low", "zero_close", "negative_high"}:
+        old = bars[21]
+        bars[21] = Bar(old.timestamp, old.open_price,
+                       -1 if kind == "negative_high" else old.high_price,
+                       0 if kind == "zero_low" else old.low_price,
+                       0 if kind == "zero_close" else old.close_price)
+    elif kind == "short":
+        bars = bars[:2]
+    elif kind == "empty":
+        bars = []
+    original = tuple(bars)
+    assert research.build_day_contexts(bars) == _reference_day_contexts(bars)
+    assert tuple(bars) == original
+
+
+def test_rolling_features_preserve_full_grid_replay_and_carry_partitions():
+    anchor = datetime(2026, 8, 10, 9, 0, tzinfo=KST)
+    bars = [Bar(anchor + timedelta(days=day, minutes=index), 20000, 20100,
+                19950 if index < 40 else 19700, 20000 if index < 40 else 19800)
+            for day in range(4) for index in range(120)]
+    actual = research.build_day_contexts(bars)
+    expected = _reference_day_contexts(bars)
+    dates = sorted(actual)
+    profile = next(iter(PROFILES.values()))
+    for candidate in candidate_grid(profile):
+        for partition in (dates, dates[:2], dates[2:]):
+            assert research.evaluate_candidate(candidate, actual, partition, include_episodes=True) == research.evaluate_candidate(candidate, expected, partition, include_episodes=True)
+
+
+@pytest.mark.parametrize("outcome", ["zero", "complete_partial_fill", "held"])
+def test_rolling_features_preserve_selection_full_grid_and_holdout(outcome):
+    profile = next(iter(PROFILES.values()))
+    anchor = datetime.combine(date(2026, 6, 5), profile.policy.scan_start, tzinfo=KST) - timedelta(minutes=60)
+    high = 20000 if outcome == "zero" else 20600 if outcome == "complete_partial_fill" else 20100
+    bars = [Bar(anchor + timedelta(days=day, minutes=index), 20000, high, 20000, 20000)
+            for day in range(research.CALIBRATION_DAYS + research.HOLDOUT_DAYS)
+            for index in range(180)]
+    actual = research.build_day_contexts(bars)
+    expected = _reference_day_contexts(bars)
+    assert select_profile_spot(profile, actual) == select_profile_spot(profile, expected)
+    assert actual.keys() == expected.keys()
+    assert actual == expected  # Includes candidate-specific outcome-cache state.
+
+
 def test_candidate_grid_stays_inside_each_profile_base_window():
     for profile in PROFILES.values():
         lower = profile.policy.scan_start.hour * 60 + profile.policy.scan_start.minute
