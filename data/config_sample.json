@@ -1,7 +1,0 @@
-{
-  "TELEGRAM_TOKEN": "YOUR_TOKEN_HERE",
-  "ADMIN_ID": "YOUR_CHAT_ID",
-  "VIRTUAL_ORDERABLE_AMOUNT": 0,
-  "KIWOOM_WS_URI": "wss://mockapi.kiwoom.com:10000/api/dostk/websocket",
-  "DB_URL": "postgresql://user:password@localhost:5432/dbname"
-}
