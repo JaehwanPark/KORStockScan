@@ -115,7 +115,9 @@ def reference_inputs(report, family):
                 windows[side + "_" + name] = converted
             windows[name + "_dates"] = dates
         lanes[family + ":" + key] = windows
-    return dict(lanes=lanes, missing_reference_lanes=failures)
+    # Missing IDs are diagnostic gaps; their digest must survive JSON writers
+    # sorting the source mapping without changing any portfolio membership.
+    return dict(lanes=lanes, missing_reference_lanes=sorted(failures))
 
 
 def _summary(lanes, side, window, limit, fee):

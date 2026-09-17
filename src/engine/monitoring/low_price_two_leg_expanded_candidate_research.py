@@ -728,6 +728,13 @@ def _recommendation_rows(
                 "current_economic_outcome": baseline_holdout,
                 "candidate_economic_outcome": holdout,
                 "baseline_notional_weighted_ev_pct": baseline_ev,
+                "economic_comparison_status": (
+                    "comparable_cost_adjusted_ev" if baseline_ev is not None
+                    else "baseline_custody_censored" if (
+                        baseline_holdout.get("carry_in_held_legs", 0)
+                        or baseline_holdout.get("held_legs", 0)
+                    ) else "baseline_no_completed_outcome"
+                ),
                 "baseline_policy_source": item.get("baseline_policy_source"),
                 "baseline_policy_hash": item.get("baseline_policy_hash"),
                 "ev_uplift_pct_point": (
@@ -735,7 +742,11 @@ def _recommendation_rows(
                     if baseline_ev is not None
                     else None
                 ),
-                "implementation_status": "source_only_eligible_for_automatic_promotion",
+                "implementation_status": (
+                    "source_only_existing_logic_review_required"
+                    if profile.discovery_lane == "existing_symbol_logic_improvement"
+                    else "source_only_eligible_for_automatic_promotion"
+                ),
                 "runtime_effect": False,
             }
         )
@@ -1954,8 +1965,14 @@ def attach_recommendation_contract(report: dict[str, Any]) -> dict[str, Any]:
                 scope=f"{row['symbol']}/{row['session']}/{row['profile_id']}",
                 axis=axis,
                 proposal=row.get(proposal_key) or {},
-                consumer="low_price_two_leg_policy_apply",
-                acceptance=acceptance,
+                consumer=(producer if row.get("discovery_lane") ==
+                          "existing_symbol_logic_improvement" else
+                          "low_price_two_leg_policy_apply"),
+                acceptance=(
+                    "Source-only existing-profile logic review; the automatic expansion bridge does not enroll this lane. Preserve exact applied baseline, custody and cost evidence; no runtime or order authority."
+                    if row.get("discovery_lane") == "existing_symbol_logic_improvement"
+                    else acceptance
+                ),
             )
     # These lists mirror the authoritative recommendations, not new orders.
     for key, lane in (
@@ -2129,6 +2146,18 @@ def render_markdown(report: dict[str, Any]) -> str:
         "Economic decision: same-window cost-adjusted net profit with positive EV; calibration-half signs are robustness diagnostics. HELD custody continues across date/window boundaries without invented resolution.",
         "",
     ]
+    if report.get("recommendations"):
+        lines.extend(["## Recommendation economics and handoff", ""])
+        for row in report["recommendations"]:
+            lines.append(
+                f"- `{row['profile_id']}`: candidate cost-adjusted EV "
+                f"`{row.get('notional_weighted_ev_pct')}`%; baseline EV "
+                f"`{row.get('baseline_notional_weighted_ev_pct')}`%; uplift "
+                f"`{row.get('ev_uplift_pct_point')}` percentage points; comparison "
+                f"`{row.get('economic_comparison_status', 'not_recorded')}`; handoff "
+                f"`{row.get('implementation_status')}`. Replay economics are not actual trading profit."
+            )
+        lines.append("")
     axis_replays = {
         profile_id: item.get("existing_axis_economic_replay") or {}
         for profile_id, item in (report.get("profiles") or {}).items()
@@ -2810,8 +2839,11 @@ class CandidateRecommendationNotifier:
                 >= -MAX_MANAGEABLE_HELD_MARK_TO_MARKET_LOSS_PCT
             )
             and float(row.get("notional_weighted_ev_pct", 0.0) or 0.0) > 0.0
-            and row.get("implementation_status")
-            == "source_only_eligible_for_automatic_promotion"
+            and row.get("implementation_status") == (
+                "source_only_existing_logic_review_required"
+                if row.get("discovery_lane") == "existing_symbol_logic_improvement"
+                else "source_only_eligible_for_automatic_promotion"
+            )
             and row.get("runtime_effect") is False
             and (
                 report.get("schema") == LEGACY_REPORT_SCHEMA
@@ -2888,6 +2920,21 @@ class CandidateRecommendationNotifier:
 def write_report(
     report: dict[str, Any], output_dir: Path = OUTPUT_DIR
 ) -> tuple[Path, Path]:
+    stored = dict(report)
+    stored.pop("result_cache_receipt", None)
+    if stored.get("source_input_fingerprint"):
+        stored["result_cache_receipt"] = {
+            "schema": REPORT_CACHE_SCHEMA,
+            "body_sha256": _report_cache_digest(stored),
+        }
+    # Preserve every diagnostic and economic field without indentation that
+    # makes the complete population exceed the existing report read contract.
+    serialized = json.dumps(
+        stored, ensure_ascii=True, separators=(",", ":"), sort_keys=True,
+        allow_nan=False,
+    ) + "\n"
+    if len(serialized.encode("utf-8")) > REPORT_CACHE_MAX_BYTES:
+        raise ValueError("low_price_research_report_size_exceeds_contract")
     from src.engine.monitoring.research_closed_loop import freeze_candidate
 
     for result in report["profiles"].values():
@@ -2900,16 +2947,9 @@ def write_report(
     stem = f"low_price_two_leg_expanded_candidate_research_{report['end_date']}"
     json_path = output_dir / f"{stem}.json"
     markdown_path = output_dir / f"{stem}.md"
-    stored = dict(report)
-    stored.pop("result_cache_receipt", None)
-    if stored.get("source_input_fingerprint"):
-        stored["result_cache_receipt"] = {
-            "schema": REPORT_CACHE_SCHEMA,
-            "body_sha256": _report_cache_digest(stored),
-        }
     _atomic_write(
         json_path,
-        json.dumps(stored, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        serialized,
     )
     _atomic_write(markdown_path, render_markdown(report))
     return json_path, markdown_path
@@ -3246,7 +3286,11 @@ def _read_stable_json(path: Path, *, max_bytes: int | None = None) -> dict | Non
             != (current_parent.st_dev, current_parent.st_ino)
         ):
             return None
-        report = json.loads(raw)
+        # Release the byte buffer before allocating the parsed population.
+        # ASCII-escaped publications also avoid a wide whole-document string.
+        text = raw.decode("utf-8")
+        del raw
+        report = json.loads(text)
     except (OSError, ValueError, TypeError, RecursionError):
         return None
     finally:
@@ -3255,6 +3299,14 @@ def _read_stable_json(path: Path, *, max_bytes: int | None = None) -> dict | Non
         if parent_fd is not None:
             os.close(parent_fd)
     return report if isinstance(report, dict) else None
+
+
+def read_report(path: Path) -> dict:
+    """Read the producer's bounded, generation-stable report contract."""
+    report = _read_stable_json(path)
+    if report is None:
+        raise ValueError("low_price_research_source_unreadable_or_changed")
+    return report
 
 
 def reusable_report(path: Path, *, target_date: date, fingerprint: str) -> dict | None:
@@ -3331,6 +3383,7 @@ def main(argv: list[str] | None = None) -> int:
     expected_trading_day_count = len(clean_baseline_trading_dates(end_date))
     if args.notify and not args.write:
         raise ValueError("telegram_notification_requires_written_report")
+    source_failure_details: dict[str, dict[str, Any]] = {}
     try:
         token = kiwoom_utils.get_cached_kiwoom_token()
         if not token:
@@ -3412,6 +3465,13 @@ def main(argv: list[str] | None = None) -> int:
                 deferred_failures[symbol] = str(exc)
             except (ResearchError, requests.RequestException) as exc:
                 fetch_failures[symbol] = str(exc)
+                failure_meta = getattr(exc, "source_quality_meta", None)
+                if (
+                    isinstance(failure_meta, dict)
+                    and failure_meta.get("symbol") == symbol
+                    and failure_meta.get("source_quality_status") == "FAIL"
+                ):
+                    source_failure_details[symbol] = dict(failure_meta)
         if deferred_failures:
             print(
                 json.dumps(
@@ -3524,6 +3584,7 @@ def main(argv: list[str] | None = None) -> int:
         report = build_source_quality_blocked_report(
             start_date=start_date, end_date=end_date, reason=str(exc)
         )
+    report["source_failure_details"] = source_failure_details
     report["telegram_status"] = "not_requested"
     paths = write_report(report, args.output_dir) if args.write else (None, None)
     if args.notify:

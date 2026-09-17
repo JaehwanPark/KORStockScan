@@ -173,8 +173,12 @@ def build_policy(
     report_path = report_dir / (
         f"low_price_two_leg_expanded_candidate_research_{source_date.isoformat()}.json"
     )
+    from src.engine.monitoring.low_price_two_leg_expanded_candidate_research import (
+        read_report,
+    )
+
     try:
-        report = json.loads(report_path.read_text(encoding="utf-8"))
+        report = read_report(report_path)
     except (OSError, ValueError) as exc:
         raise ValueError("episode_auto_expansion_source_unreadable") from exc
     if (
@@ -392,7 +396,11 @@ def load_policy(day: date, *, policy_dir: Path = POLICY_DIR) -> dict[str, Any]:
     if payload.get("schema") == CLOSED_LOOP_SCHEMA:
         from src.engine.monitoring import research_closed_loop as loop
 
-        report = loop.read_object(source, limit=32 * 1024 * 1024)
+        from src.engine.monitoring.low_price_two_leg_expanded_candidate_research import (
+            read_report,
+        )
+
+        report = read_report(source)
         source_date = date.fromisoformat(payload["source_date"])
         if (
             report.get("target_date") != str(source_date)

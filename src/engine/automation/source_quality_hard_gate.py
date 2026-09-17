@@ -90,7 +90,7 @@ def _compact_raw_row_exclusion(raw_row_exclusion: Any) -> dict[str, Any]:
 
 @lru_cache(maxsize=64)
 def _archived_raw_digest(
-    path: str, device: int, inode: int, size: int, mtime: int
+    path: str, device: int, inode: int, size: int, mtime: int, ctime: int | None = None
 ) -> str:
     """Only compressed-generation migration needs a logical-byte recheck."""
     digest = hashlib.sha256()
@@ -98,6 +98,17 @@ def _archived_raw_digest(
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _generation_matches(recorded: Any, current: dict) -> bool:
+    """Validate all claimed fields in either supported stat receipt version."""
+    required = {"device", "inode", "size_bytes", "mtime_ns"}
+    if not isinstance(recorded, dict) or set(recorded) not in (
+        required, required | {"ctime_ns"}
+    ):
+        return False
+    return all(type(value) is int and value == current.get(key)
+               for key, value in recorded.items())
 
 
 def _archive_matches_source(archived: Path, source: dict, current: dict) -> bool:
@@ -109,7 +120,7 @@ def _archive_matches_source(archived: Path, source: dict, current: dict) -> bool
         if (
             isinstance(receipt, dict)
             and receipt.get("schema") == "pipeline_raw_archive_identity_v1"
-            and receipt.get("archive_generation") == current
+            and _generation_matches(receipt.get("archive_generation"), current)
             and receipt.get("logical_path") == source.get("pipeline_events")
             and receipt.get("runtime_effect") is False
             and receipt.get("allowed_runtime_apply") is False
@@ -125,6 +136,7 @@ def _archive_matches_source(archived: Path, source: dict, current: dict) -> bool
         current["inode"],
         current["size_bytes"],
         current["mtime_ns"],
+        current.get("ctime_ns"),
     ) == source.get("logical_content_sha256")
 
 
@@ -201,12 +213,13 @@ def load_source_quality_preflight(
                     "inode": stat.st_ino,
                     "size_bytes": stat.st_size,
                     "mtime_ns": stat.st_mtime_ns,
+                    "ctime_ns": stat.st_ctime_ns,
                 }
                 same_content = migrated and _archive_matches_source(
                     archived, source, current
                 )
                 if source.get("generation_stable") is not True or not (
-                    source.get("generation") == current or same_content
+                    _generation_matches(source.get("generation"), current) or same_content
                 ):
                     validation_errors.append(
                         "source_quality_preflight_source_generation_changed"
@@ -221,11 +234,12 @@ def load_source_quality_preflight(
                         "source_quality_preflight_source_digest_invalid"
                     )
                 after = (archived if migrated else raw_path).stat()
-                if (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) != (
+                if (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns) != (
                     stat.st_dev,
                     stat.st_ino,
                     stat.st_size,
                     stat.st_mtime_ns,
+                    stat.st_ctime_ns,
                 ):
                     validation_errors.append(
                         "source_quality_preflight_source_changed_during_validation"

@@ -69,6 +69,7 @@ def test_v2_raw_generation_and_lossless_archive_binding(tmp_path, monkeypatch):
     raw.write_text('{"event_type":"other"}\n')
     monkeypatch.setattr(producer, "_pipeline_events_path", lambda d: raw)
     payload = producer.build_observation_source_quality_audit("2026-09-08")
+    assert "ctime_ns" in payload["source"]["generation"]
     _write_preflight(tmp_path, "2026-09-08", payload)
     assert (
         mod.load_source_quality_preflight("2026-09-08")["tuning_input_allowed"] is True
@@ -84,6 +85,17 @@ def test_v2_raw_generation_and_lossless_archive_binding(tmp_path, monkeypatch):
     assert (
         mod.load_source_quality_preflight("2026-09-08")["tuning_input_allowed"] is False
     )
+
+
+def test_generation_versions_validate_every_claimed_field_and_reject_unknown_shapes():
+    current = {"device": 2, "inode": 3, "size_bytes": 4, "mtime_ns": 5, "ctime_ns": 6}
+    legacy = {key: value for key, value in current.items() if key != "ctime_ns"}
+    assert mod._generation_matches(legacy, current)
+    assert mod._generation_matches(dict(current), current)
+    assert not mod._generation_matches(dict(current, ctime_ns=7), current)
+    assert not mod._generation_matches(dict(current, extra=1), current)
+    assert not mod._generation_matches(dict(current, size_bytes=True), current)
+    assert not mod._generation_matches({"mtime_ns": 5}, current)
 
 
 def test_v2_append_invalidates_previous_audited_generation(tmp_path, monkeypatch):

@@ -282,6 +282,64 @@ def test_report_writer_seals_current_body_without_mutating_caller(
     assert expanded.CandidateRecommendationNotifier._valid_report(restored)
 
 
+def test_report_writer_compacts_complete_payload_under_existing_read_bound(
+    monkeypatch, tmp_path
+):
+    report = _sealed_cache_report()
+    report["diagnostic_population"] = [
+        {"source": "한글", "nested": {"samples": [1, 2, None]}}
+        for _ in range(30)
+    ]
+    compact = dict(report)
+    compact.pop("result_cache_receipt")
+    compact["result_cache_receipt"] = {
+        "schema": expanded.REPORT_CACHE_SCHEMA,
+        "body_sha256": expanded._report_cache_digest(compact),
+    }
+    expected = json.dumps(
+        compact, ensure_ascii=True, separators=(",", ":"), sort_keys=True,
+        allow_nan=False,
+    ) + "\n"
+    monkeypatch.setattr(expanded, "REPORT_CACHE_MAX_BYTES", len(expected.encode()))
+    monkeypatch.setattr(expanded, "render_markdown", lambda value: "fixture\n")
+    path, _ = expanded.write_report(report, tmp_path)
+    assert path.read_text() == expected
+    assert expanded.read_report(path) == compact
+    assert _read_cache_fixture(path) == compact
+
+
+def test_report_writer_rejects_oversize_before_registry_or_file_mutation(
+    monkeypatch, tmp_path
+):
+    from src.engine.monitoring import research_closed_loop as loop
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("oversized publication must not mutate registry")
+
+    monkeypatch.setattr(expanded, "REPORT_CACHE_MAX_BYTES", 8)
+    monkeypatch.setattr(loop, "freeze_candidate", unexpected)
+    monkeypatch.setattr(loop, "write_joint_inputs", unexpected)
+    with pytest.raises(ValueError, match="report_size_exceeds_contract"):
+        expanded.write_report(_sealed_cache_report(), tmp_path)
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("kind", ["oversize", "symlink", "not_object"])
+def test_public_report_reader_preserves_bounded_regular_object_contract(
+    monkeypatch, tmp_path, kind
+):
+    source = tmp_path / "source.json"
+    source.write_text("[]" if kind == "not_object" else '{"field":1}')
+    path = source
+    if kind == "symlink":
+        path = tmp_path / "alias.json"
+        path.symlink_to(source)
+    if kind == "oversize":
+        monkeypatch.setattr(expanded, "REPORT_CACHE_MAX_BYTES", 8)
+    with pytest.raises(ValueError, match="unreadable_or_changed"):
+        expanded.read_report(path)
+
+
 @pytest.mark.parametrize(
     "key,value",
     [
@@ -1986,6 +2044,32 @@ def test_malformed_postclose_logic_recommendation_is_rejected_without_error():
     )
 
 
+def test_failed_collector_receipt_survives_daily_quarantine(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        expanded.kiwoom_utils, "get_cached_kiwoom_token", lambda: "TOKEN"
+    )
+    monkeypatch.setattr(expanded, "_load_source_cache", lambda **kwargs: None)
+    meta = {"source_quality_status": "FAIL", "observed_trading_dates": [],
+            "trading_date_count": 0, "expected_trading_date_count": 47,
+            "invalid_row_count": 2}
+
+    def fail_fetch(**kwargs):
+        error = ResearchError("missing actual source window")
+        error.source_quality_meta = {"symbol": kwargs["symbol"], **meta}
+        raise error
+
+    monkeypatch.setattr(expanded, "fetch_sor_history", fail_fetch)
+    assert expanded.main([
+        "--target-date", "2026-08-11", "--output-dir", str(tmp_path), "--write"
+    ]) == 0
+    report = json.loads((tmp_path / "low_price_two_leg_expanded_candidate_research_2026-08-11.json").read_text())
+    assert report["status"] == "source_quality_blocked"
+    assert report["runtime_effect"] is False
+    assert report["source_failure_details"]
+    for symbol, receipt in report["source_failure_details"].items():
+        assert receipt == {"symbol": symbol, **meta}
+
+
 def test_daily_network_failure_becomes_source_quality_admin_artifact(
     tmp_path, monkeypatch
 ):
@@ -2018,3 +2102,28 @@ def test_daily_network_failure_becomes_source_quality_admin_artifact(
     assert report["status"] == "source_quality_blocked"
     assert report["telegram_status"] == "not_requested"
     assert "network unavailable" in report["source_quality_reasons"][0]
+
+
+@pytest.mark.parametrize("carry,expected", [(1, "baseline_custody_censored"), (0, "baseline_no_completed_outcome")])
+def test_logic_recommendation_keeps_missing_baseline_ev_and_research_handoff(carry, expected):
+    from src.engine.automation import low_price_two_leg_auto_expansion_policy as bridge
+
+    profile = expanded.RESEARCH_PROFILES["logic_fan_ocean_morning"]
+    item = _profile_result(symbol=profile.symbol, name=profile.name, session=profile.session,
+                           candidate_ev=0.28, baseline_ev=0.01)
+    item["baseline"]["holdout"]["notional_weighted_ev_pct"] = None
+    item["baseline"]["holdout"]["carry_in_held_legs"] = carry
+    rows = expanded._recommendation_rows({profile.profile_id: item},
+                                        {profile.symbol: {"latest_close_price": 5900}})
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["notional_weighted_ev_pct"] == 0.28
+    assert row["baseline_notional_weighted_ev_pct"] is None
+    assert row["ev_uplift_pct_point"] is None
+    assert row["economic_comparison_status"] == expected
+    assert row["implementation_status"] == "source_only_existing_logic_review_required"
+    assert not bridge._valid_recommendation(row)
+    report = _notification_report(rows)
+    expanded.attach_recommendation_contract(report)
+    assert row["recommendation_consumer"] == "low_price_two_leg_expanded_candidate_research"
+    assert row["recommendation_identity_grants_authority"] is False

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import pytest
 from datetime import date
 from pathlib import Path
 
@@ -139,6 +140,50 @@ def test_auto_expansion_systemd_preflight_does_not_depend_on_private_tmux_socket
     assert "PrivateTmp=true" in unit
     assert "ExecCondition=/usr/bin/tmux" not in unit
     assert "auto_expansion_service --check-active" in unit
+
+
+def test_episode_policy_accepts_complete_source_above_legacy_32mib_bound(tmp_path):
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir()
+    source = report_dir / "low_price_two_leg_expanded_candidate_research_2026-09-15.json"
+    report = _report()
+    report["diagnostic_population"] = "x" * (32 * 1024 * 1024)
+    source.write_text(json.dumps(report), encoding="utf-8")
+    payload = expansion.build_policy(
+        source_date=date(2026, 9, 15), report_dir=report_dir,
+        policy_dir=tmp_path / "policies",
+    )
+    assert payload["newly_promoted_profile_ids"] == ["auto_111770_late_morning"]
+    assert payload["actual_order_submitted"] is False
+    assert payload["hard_safety_preserved"] is True
+
+
+@pytest.mark.parametrize("kind", ["oversize", "symlink", "order_authority"])
+def test_episode_policy_preserves_source_and_authority_rejection(
+    monkeypatch, tmp_path, kind
+):
+    from src.engine.monitoring import low_price_two_leg_expanded_candidate_research as producer
+
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir()
+    source = report_dir / "low_price_two_leg_expanded_candidate_research_2026-09-15.json"
+    report = _report()
+    if kind == "order_authority":
+        report["actual_order_submitted"] = True
+    if kind == "symlink":
+        actual = tmp_path / "actual.json"
+        actual.write_text(json.dumps(report))
+        source.symlink_to(actual)
+    else:
+        source.write_text(json.dumps(report))
+    if kind == "oversize":
+        monkeypatch.setattr(producer, "REPORT_CACHE_MAX_BYTES", 8)
+    with pytest.raises(ValueError, match="episode_auto_expansion_source_"):
+        expansion.build_policy(
+            source_date=date(2026, 9, 15), report_dir=report_dir,
+            policy_dir=tmp_path / "policies",
+        )
+    assert not (tmp_path / "policies").exists()
 
 
 def test_integrated_aftermarket_episode_profile_is_runtime_compilable():

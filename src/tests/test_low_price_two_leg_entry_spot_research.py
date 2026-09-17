@@ -1092,6 +1092,30 @@ def test_fetch_waits_and_retries_the_same_continuation_page_on_shared_defer(
     assert meta["shared_read_deferred_wait_sec"] == 1.0
 
 
+def test_failed_history_preserves_actual_source_quality_receipt():
+    rows = [
+        {"cntr_tm": "20260605131500", "open_pric": "20000",
+         "high_pric": "20100", "low_pric": "19900", "cur_prc": "20000"},
+        {"cntr_tm": "20260604131500", "open_pric": "20000",
+         "high_pric": "20100", "low_pric": "19900", "cur_prc": "20000"},
+    ]
+    with pytest.raises(research.ResearchError, match="010140_source_quality_fail") as failure:
+        fetch_sor_history(
+            symbol="010140", token="CACHED", start_date=date(2026, 6, 5),
+            end_date=date(2026, 8, 11), expected_trading_day_count=46,
+            post=lambda *args, **kwargs: FakeResponse(
+                {"return_code": 0, "stk_min_pole_chart_qry": rows}
+            ),
+        )
+    meta = failure.value.source_quality_meta
+    assert meta["source_quality_status"] == "FAIL"
+    assert meta["observed_trading_dates"] == ["2026-06-05"]
+    assert meta["trading_date_count"] == 1
+    assert meta["expected_trading_date_count"] == 46
+    assert meta["start_date_fully_bracketed"] is True
+    assert meta["invalid_row_count"] == 0
+
+
 def test_fetch_accepts_expanding_clean_baseline_trading_day_count():
     start = date(2026, 6, 5)
     dates = [start + timedelta(days=index) for index in range(47)]

@@ -527,6 +527,7 @@ def fetch_sor_history(
         "page_count": page_count,
         "bar_count": len(bars),
         "trading_date_count": len(trading_dates),
+        "observed_trading_dates": trading_dates,
         "expected_trading_date_count": int(expected_trading_day_count),
         "oldest_source_date": trading_dates[0] if trading_dates else None,
         "latest_source_date": trading_dates[-1] if trading_dates else None,
@@ -540,7 +541,11 @@ def fetch_sor_history(
         "shared_read_deferred_wait_sec": round(shared_read_deferred_wait_sec, 3),
     }
     if source_quality_status != "PASS":
-        raise ResearchError(f"{symbol}_source_quality_{source_quality_status.lower()}")
+        error = ResearchError(f"{symbol}_source_quality_{source_quality_status.lower()}")
+        # Keep the actual collector receipt when the caller quarantines this
+        # symbol. A generic failure string cannot identify a missing window.
+        error.source_quality_meta = meta
+        raise error
     return bars, meta
 
 

@@ -526,3 +526,17 @@ def test_optional_byte_ledger_parser_recursion_is_recovered(tmp_path, monkeypatc
         root / "symbol" / "day.json.z", b"cache", cache_root=root, reserve=0
     )
     assert native(root / ".optional_cache_bytes.json")["charged_bytes"] == 5
+
+
+def test_joint_missing_reference_hash_survives_sorted_json_roundtrip():
+    import json
+
+    report = {"profiles": {code: {
+        "decision": "holdout_pass_source_only_early_candidate",
+        "candidate_revision": None,
+    } for code in ("999999", "000001")}}
+    inputs = portfolio.reference_inputs(report, "episode")
+    restored = json.loads(json.dumps(report, sort_keys=True))
+    assert inputs == portfolio.reference_inputs(restored, "episode")
+    assert inputs["missing_reference_lanes"] == ["000001", "999999"]
+    assert loop.digest(inputs) == loop.digest(portfolio.reference_inputs(restored, "episode"))
