@@ -6,7 +6,7 @@
 
 ## 1. 목적·최종 개선 방향·권한
 
-구현 현황: [9/17 부분 H 구현 리뷰](../audit-reports/2026-09-17-common-health-opportunity-cost-scoped-implementation.md). 기존 WS 공통 health/quote clock·observer age·all-VETO CF gate의 scoped 구현만 검증됐다. U0–U12 전수 완료 또는 전체 미진입 튜닝 완료가 아니다.
+구현 현황: [9/17 부분 구현 리뷰](../audit-reports/2026-09-17-common-health-opportunity-cost-scoped-implementation.md). WS 공통 health/quote clock·observer age, 기존 튜닝/원천 전달의 부분 보완과 U3 canonical activity/required feature 분리를 범위별로 검증했다. 최신 release/PID와 자연/경제성 잔여는 해당 리뷰의 receipt를 따른다. U2~U4 전수 전환·U0–U12 전수 완료 또는 전체 미진입 튜닝 완료가 아니다.
 
 목표는 **잘못된 입력 차단과 중복작업을 먼저 수리한 뒤, 진입하지 않은 실행가능 기회를 포함한 동일 모집단의 비용 후 기대값·일별 순이익을 최대화하는 것**이다. 작은 양수 수익의 유효 반복·tail·자본점유를 함께 평가한다. 주문 수나 체결된 거래의 평균 수익률만 높이는 후보를 고르지 않는다.
 
