@@ -10,6 +10,90 @@ import pytest
 
 from src.engine import daily_threshold_cycle_report as report_mod
 
+def _serial_profit_summary(rows):
+    values = [
+        report_mod._safe_float(row.get("profit_rate"), None)
+        for row in report_mod._valid_profit_rows(rows)
+    ]
+    wins = sum(value > 0 for value in values)
+    losses = sum(value < 0 for value in values)
+    return {
+        "sample": len(values), "win_count": wins, "loss_count": losses,
+        "avg_profit_rate": round(report_mod._avg(values) or 0.0, 4) if values else None,
+        "median_profit_rate": round(report_mod._percentile(values, 50), 4) if values else None,
+        "downside_p10_profit_rate": round(report_mod._percentile(values, 10), 4) if values else None,
+        "upside_p90_profit_rate": round(report_mod._percentile(values, 90), 4) if values else None,
+        "win_rate": round(wins / len(values), 4) if values else None,
+        "loss_rate": round(losses / len(values), 4) if values else None,
+        "stddev_profit_rate": round(report_mod._stddev(values) or 0.0, 4) if len(values) >= 2 else None,
+    }
+
+
+@pytest.mark.parametrize("values", [
+    [], [None, "", "-", "invalid", float("nan"), float("inf"), -float("inf")],
+    [0], [-0.01], ["0.01"], [0.01, -0.02],
+    [0.01, -0.02, 0, 0.01, None, "invalid"],
+    [1e16, 1, -1e16, 1e-9, -1e-9, 0, 0],
+    [(i * 7919 % 10007 - 5003) / 10000 for i in range(1001)],
+])
+def test_completed_profit_single_distribution_matches_serial_and_preserves_input(values, monkeypatch):
+    import builtins
+    rows = [{"profit_rate": value, "cost_status": None} for value in values]
+    expected = _serial_profit_summary(rows)
+    parse = report_mod._safe_float
+    calls = []
+    sorts = []
+
+    def counted(value, default=None):
+        calls.append(value)
+        return parse(value, default)
+
+    def counted_sort(values):
+        sorts.append(True)
+        return builtins.sorted(values)
+
+    monkeypatch.setattr(report_mod, "_safe_float", counted)
+    monkeypatch.setattr(report_mod, "sorted", counted_sort, raising=False)
+    assert report_mod._completed_profit_summary(rows) == expected
+    assert len(calls) == len(rows)
+    assert sorts == [True]
+    assert all(row["profit_rate"] is value and row["cost_status"] is None
+               for row, value in zip(rows, values))
+
+
+@pytest.mark.parametrize("sim", [[], [{"profit_rate": -0.03}], [{"profit_rate": None}]])
+def test_cumulative_profit_reuse_matches_serial_and_keeps_views_independent(sim, monkeypatch):
+    rows = [
+        {"rec_date": "2026-09-17", "profit_rate": 0.01, "status": "COMPLETED",
+         "actual_execution_venue": "NXT", "cost_status": None},
+        {"rec_date": "2026-09-16", "profit_rate": -0.02, "status": "COMPLETED"},
+        {"rec_date": None, "profit_rate": None},
+    ]
+    arguments = dict(target_date="2026-09-17", start_date="2026-09-15",
+                     pipeline_loader=lambda _: [], completed_rows_loader=lambda *args: rows)
+    monkeypatch.setattr(report_mod, "_extract_scalp_sim_completed_rows", lambda _: sim)
+    optimized = report_mod.build_cumulative_threshold_cycle_report(**arguments)
+    source = report_mod._completed_by_source_summary
+
+    def serial_source(real, sim, **kwargs):
+        return source(real, sim)
+
+    monkeypatch.setattr(report_mod, "_completed_by_source_summary", serial_source)
+    monkeypatch.setattr(report_mod, "_completed_profit_summary", _serial_profit_summary)
+    reference = report_mod.build_cumulative_threshold_cycle_report(**arguments)
+    optimized["meta"].pop("generated_at")
+    reference["meta"].pop("generated_at")
+    assert optimized == reference
+    real = optimized["completed_by_source"]["cumulative"]["real"]
+    cohort = optimized["completed_cohorts"]["cumulative"]["all_completed_valid"]
+    combined = optimized["completed_by_source"]["cumulative"]["combined"]
+    assert real is not cohort and real is not combined
+    real["sample"] = -99
+    assert cohort["sample"] == 2
+    assert combined["sample"] != -99
+
+
+
 
 @pytest.mark.parametrize("missing_fallback", [True, False])
 @pytest.mark.parametrize(
