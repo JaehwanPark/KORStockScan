@@ -13,6 +13,16 @@ from src.engine import daily_threshold_cycle_report as daily_report
 from src.engine import threshold_cycle_preopen_apply as preopen_apply
 
 
+@pytest.fixture(autouse=True)
+def isolate_native_replay_generation(monkeypatch, tmp_path):
+    """Mock windows must not fingerprint a growing production collector."""
+    from src.engine.monitoring import machine_microstructure_attribution as micro
+    monkeypatch.setattr(micro, "OBSERVATION_ROOT", tmp_path / "native_observations")
+    monkeypatch.setattr(micro, "DEFAULT_SOURCE_EXCLUSION_MANIFEST", tmp_path / "exclusions.json")
+    monkeypatch.setattr(micro, "DEFAULT_CANARY_SNAPSHOT_PATH", tmp_path / "canary.json")
+    monkeypatch.setattr(micro, "CANARY_DAILY_SNAPSHOT_DIR", tmp_path / "canary_daily")
+
+
 def _quantity_leg_four_arm_events():
     events = []
     for index in range(30):
@@ -5003,6 +5013,11 @@ def test_split_native_replay_persists_census_across_prior_state(monkeypatch, tmp
     from src.engine.scalping.strategy_owner_replay import build_entry_opportunity_replays
     from src.engine.monitoring import machine_microstructure_attribution as micro
     _patch_dirs(monkeypatch, tmp_path)
+    from src.engine.scalping import strategy_owner_replay as native_replay
+    original_replay = native_replay.build_entry_opportunity_replays
+    frozen_at = datetime.fromisoformat('2026-09-17T15:00:00+09:00').timestamp()
+    monkeypatch.setattr(native_replay, 'build_entry_opportunity_replays',
+        lambda *a, **kw: original_replay(*a, **{'evaluated_at': frozen_at, **kw}))
     days = ['2026-09-14', '2026-09-15', '2026-09-17']
     events = []
     for day in days[:-1]:
@@ -5030,6 +5045,11 @@ def test_split_reader_reuses_owner_plan_without_second_pipeline_scan(monkeypatch
     from src.engine import sniper_missed_entry_counterfactual as missed
     from src.engine.monitoring import machine_microstructure_attribution as micro
     data_dir = _patch_dirs(monkeypatch, tmp_path)
+    from src.engine.scalping import strategy_owner_replay as native_replay
+    original_replay = native_replay.build_entry_opportunity_replays
+    frozen_at = datetime.fromisoformat('2026-09-17T15:00:00+09:00').timestamp()
+    monkeypatch.setattr(native_replay, 'build_entry_opportunity_replays',
+        lambda *a, **kw: original_replay(*a, **{'evaluated_at': frozen_at, **kw}))
     day = '2026-09-17'
     event = entry_owner_event(day)
     row = {'pipeline': 'ENTRY_PIPELINE', 'stage': event.stage, 'emitted_at': event.emitted_at,
