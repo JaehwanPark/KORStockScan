@@ -444,11 +444,9 @@ def build_day_contexts(bars: list[Bar]) -> dict[date, DayContext]:
             last_discontinuity = 0
             for index, candidate in enumerate(day):
                 start = index - lookback + 1
-                if (
-                    index
-                    and candidate.timestamp - day[index - 1].timestamp
-                    != timedelta(minutes=1)
-                ):
+                if index and candidate.timestamp - day[
+                    index - 1
+                ].timestamp != timedelta(minutes=1):
                     last_discontinuity = index
                 while highs and highs[0] < start:
                     highs.popleft()
@@ -735,28 +733,52 @@ def evaluate_candidate(
     *,
     include_episodes: bool = False,
 ) -> dict[str, Any]:
-    if (
+    return _evaluate_candidate_windows(
+        candidate, contexts, [dates], include_episodes=include_episodes
+    )[0]
+
+
+def _evaluate_candidate_windows(
+    candidate: SpotCandidate,
+    contexts: dict[date, DayContext],
+    windows: list[list[date]],
+    *,
+    include_episodes: bool = False,
+) -> list[dict[str, Any]]:
+    """Replay one candidate prefix; seal each window at its own last date.
+
+    No state/result is persisted or shared across candidates or invocations.
+    A later carry update must not change an earlier window's sealed evidence.
+    """
+    if not windows or any(
         not dates
         or len(dates) != len(set(dates))
         or any(day not in contexts for day in dates)
+        for dates in windows
     ):
         raise ResearchError("economic_replay_observation_dates_invalid")
     if any(day < CLEAN_BASELINE_DATE for day in contexts):
         raise ResearchError("economic_replay_prebaseline_context_forbidden")
-    requested_dates = set(dates)
-    last_date = max(dates)
-    episodes: list[dict[str, Any]] = []
-    blocked_dates: list[str] = []
+    boundaries: dict[date, list[int]] = {}
+    for index, dates in enumerate(windows):
+        boundaries.setdefault(max(dates), []).append(index)
+    requested = [set(dates) for dates in windows]
+    requested_union = set().union(*requested)
+    results: dict[int, dict[str, Any]] = {}
+    last_date = max(boundaries)
+    events: list[tuple[date, dict[str, Any]]] = []
+    blocked: list[date] = []
     carried: dict[str, Any] | None = None
     # Start at the clean prefix even for a half/holdout view. Otherwise slicing
     # the window would erase the inventory that prevented the next entry.
     for trade_date in sorted(day for day in contexts if day <= last_date):
         context = contexts[trade_date]
         if carried is not None:
-            if trade_date in requested_dates:
-                blocked_dates.append(trade_date.isoformat())
+            if trade_date in requested_union:
+                blocked.append(trade_date)
             # The live machine does not retarget HELD legs from a future bar
             # touch. Only an external custody resolution can close them.
+            day_low = min((bar.low_price for bar in context.bars), default=None)
             for leg in carried["legs"]:
                 if leg["status"] != "HELD" or not context.bars:
                     continue
@@ -770,58 +792,67 @@ def evaluate_candidate(
                 )
                 leg["max_adverse_excursion_pct"] = min(
                     float(leg.get("max_adverse_excursion_pct", 0)),
-                    (min(bar.low_price for bar in context.bars) / price - 1) * 100,
+                    (day_low / price - 1) * 100,
                 )
-            continue
-        signal = next(
-            (
-                item
-                for item in context.features[candidate.lookback_bars]
-                if candidate.scan_start_minute
-                <= item.timestamp.hour * 60 + item.timestamp.minute
-                <= candidate.scan_end_minute
-                and item.drawdown_pct + 1e-12 >= candidate.rolling_high_drawdown_pct
-                and item.near_low_pct - 1e-12 <= candidate.rolling_low_proximity_pct
-            ),
-            None,
-        )
-        if signal is not None:
-            episode = _episode(context, signal, candidate)
-            if any(leg["status"] == "HELD" for leg in episode["legs"]):
-                episode = deepcopy(episode)
-                carried = episode
-            if trade_date in requested_dates:
-                episodes.append(episode)
-    result = _summary(episodes)
-    result.update(
-        {
-            "economic_replay_contract": ECONOMIC_REPLAY_CONTRACT,
-            "metric_contract": ECONOMIC_METRIC_CONTRACT,
-            "source_valid_observation_days": len(dates),
-            "observation_dates": [day.isoformat() for day in sorted(dates)],
-            "cost_pct": COST_PCT,
-            "cost_adjusted_net_profit_krw_per_source_valid_observation_day": round(
-                result["realized_net_profit_krw"] / len(dates), 8
-            ),
-            "attempted_episodes_per_source_valid_observation_day": round(
-                len(episodes) / len(dates), 8
-            ),
-            "custody_blocked_dates": blocked_dates,
-            "custody_resolution_required": carried is not None,
-            "carry_in_held_legs": (
-                sum(leg["status"] == "HELD" for leg in (carried or {}).get("legs", []))
-                if carried and carried["date"] < min(dates).isoformat()
-                else 0
-            ),
-            "runtime_effect": False,
-            "actual_order_submitted": False,
-            "broker_order_forbidden": True,
-            "decision_authority": "source_only_no_runtime_or_order_authority",
-        }
-    )
-    if include_episodes:
-        result["episodes"] = deepcopy(episodes)
-    return result
+        else:
+            signal = next(
+                (
+                    item
+                    for item in context.features[candidate.lookback_bars]
+                    if candidate.scan_start_minute
+                    <= item.timestamp.hour * 60 + item.timestamp.minute
+                    <= candidate.scan_end_minute
+                    and item.drawdown_pct + 1e-12 >= candidate.rolling_high_drawdown_pct
+                    and item.near_low_pct - 1e-12 <= candidate.rolling_low_proximity_pct
+                ),
+                None,
+            )
+            if signal is not None:
+                episode = _episode(context, signal, candidate)
+                if any(leg["status"] == "HELD" for leg in episode["legs"]):
+                    episode = deepcopy(episode)
+                    carried = episode
+                if trade_date in requested_union:
+                    events.append((trade_date, episode))
+        for index in boundaries.get(trade_date, ()):
+            dates = windows[index]
+            episodes = [episode for day, episode in events if day in requested[index]]
+            result = _summary(episodes)
+            result.update(
+                {
+                    "economic_replay_contract": ECONOMIC_REPLAY_CONTRACT,
+                    "metric_contract": ECONOMIC_METRIC_CONTRACT,
+                    "source_valid_observation_days": len(dates),
+                    "observation_dates": [day.isoformat() for day in sorted(dates)],
+                    "cost_pct": COST_PCT,
+                    "cost_adjusted_net_profit_krw_per_source_valid_observation_day": round(
+                        result["realized_net_profit_krw"] / len(dates), 8
+                    ),
+                    "attempted_episodes_per_source_valid_observation_day": round(
+                        len(episodes) / len(dates), 8
+                    ),
+                    "custody_blocked_dates": [
+                        day.isoformat() for day in blocked if day in requested[index]
+                    ],
+                    "custody_resolution_required": carried is not None,
+                    "carry_in_held_legs": (
+                        sum(
+                            leg["status"] == "HELD"
+                            for leg in (carried or {}).get("legs", [])
+                        )
+                        if carried and carried["date"] < min(dates).isoformat()
+                        else 0
+                    ),
+                    "runtime_effect": False,
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "decision_authority": "source_only_no_runtime_or_order_authority",
+                }
+            )
+            if include_episodes:
+                result["episodes"] = deepcopy(episodes)
+            results[index] = result
+    return [results[index] for index in range(len(windows))]
 
 
 def _positive_ev(summary: dict[str, Any]) -> bool:
@@ -1056,9 +1087,9 @@ def select_profile_spot(
     grid = candidate_grid(profile)
     sample_ready_count = manageable_carry_count = both_half_positive_count = 0
     for candidate in grid:
-        first = evaluate_candidate(candidate, contexts, first_half)
-        second = evaluate_candidate(candidate, contexts, second_half)
-        full = evaluate_candidate(candidate, contexts, calibration)
+        first, second, full = _evaluate_candidate_windows(
+            candidate, contexts, [first_half, second_half, calibration]
+        )
         evidence = {"first_half": first, "second_half": second, "full": full}
         if _calibration_sample_ready(full, first, second):
             sample_ready_count += 1
