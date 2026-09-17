@@ -2,7 +2,7 @@
 
 ## 1. 목표·범위·현 상태
 
-상태: **O0 main wrapper 계측·O3 행 내부 중복 계산 제거·O2 삼성 공통 feature/AVG_DOWN cache 정정 감지·저가주 rolling feature·clean-prefix 재생·report/profile checkpoint·bounded 선정 evidence·immutable day-low fact 및 replay/tick/비용 의존 결속·O1 discovery-local floor 재파싱 제거 부분 구현**. [부분 구현·검증](../audit-reports/2026-09-17-postclose-computation-optimization-scoped-implementation.md)을 기준으로 하며 전체 O0–O3 완료가 아니다. 대상은 ① main AI quality/provider replay ② 삼성 entry·저가주 2leg·AVG_DOWN 연구 계산 ③ source-quality/cumulative EV 반복 원천 처리다. 계획 문서 자체는 production 실행·provider/주문 호출·배포·재기동 권한이 아니며 별도 사용자 실행 요청 범위만 따른다.
+상태: **O0 main wrapper 계측·O3 행 내부 중복 계산 제거·O2 삼성 공통 feature/AVG_DOWN cache 정정 감지·저가주 rolling feature·clean-prefix 재생·report/profile checkpoint·bounded 선정 evidence·immutable day-low fact·feature minute index 및 replay/tick/비용 의존 결속·O1 discovery-local floor 재파싱 제거 부분 구현**. [부분 구현·검증](../audit-reports/2026-09-17-postclose-computation-optimization-scoped-implementation.md)을 기준으로 하며 전체 O0–O3 완료가 아니다. 대상은 ① main AI quality/provider replay ② 삼성 entry·저가주 2leg·AVG_DOWN 연구 계산 ③ source-quality/cumulative EV 반복 원천 처리다. 계획 문서 자체는 production 실행·provider/주문 호출·배포·재기동 권한이 아니며 별도 사용자 실행 요청 범위만 따른다.
 
 목표는 동일한 유효 전체 모집단·후보·정책 의미를 유지하면서 parsing/replay/반복 결과 계산을 줄이는 것이다. 전수 연구의 정확성 보완은 [연구 로직 점검](../audit-reports/2026-09-17-widget-episode-policy-research-logic-review.md) 및 [전수 튜닝 계획](entry-opportunity-cost-full-population-tuning-implementation-plan-2026-09-17.md) U10A/B에 따른다. 계산 변경과 경제성·선정 의미 변경을 별도 diff/검증으로 구분한다.
 
@@ -75,6 +75,11 @@
 ### Immutable day-low fact 후속
 
 기존 `DayContext`의 frozen bar tuple에서 최소 low를 한 번 계산해 후보별 HELD replay가 재사용한다. 후보 custody/state는 공유하지 않으며 tuple 정정은 무효화, 비정규 mutable list는 uncached로 처리한다. [리뷰 §19](../audit-reports/2026-09-17-postclose-computation-optimization-scoped-implementation.md#19-o2-immutable-day-low-fact-재사용정정-회귀)의 작업본407 PASS·synthetic HELD CPU46.739% 감소/선정 parity는 전체50% 목표·RSS·경제성 완료가 아니다. 새로운 승인/floor/작업 없이 기존 자동 장후 경로가 소비하며 최신CF 폐루프 위 managed f36fef8b/13 suite787 physical·shared PASS를 확인하고, selector·예정20:10 evaluation/21:15 refresh의 code root를 맞췄다([배포 §20](../audit-reports/2026-09-17-postclose-computation-optimization-scoped-implementation.md#20-최신-폐루프-보존-릴리스예정-unit-code-contract-일치)). Resource/timer·기존 매매 PID는 유지하고 재기동하지 않았다. 자동 연결은 자연 실행 성공과 구분한다. Persistent day-state append/partition·전체 O0–O3와 자연 acceptance는 OPEN이다.
+
+### Feature minute index 후속
+
+기존 DayContext에 정렬된 frozen feature tuple의 private unsigned-short 시간 인덱스를 재사용해 시간창 밖 threshold 재검사를 줄인다. 역전/NaN window·duplicate minute·양 endpoint·tuple 정정·mutable list/비정렬 fallback·cache5개 bound를 보존하고, 원래 전체 grid/first signal/epsilon/비용/holdout/custody/owner·자동 승격 조건은 바꾸지 않는다. [반복 리뷰 §22](../audit-reports/2026-09-17-postclose-computation-optimization-scoped-implementation.md#22-o2-feature-시간창-인덱스-재사용memory-보완): 최종 작업본800 PASS, synthetic CPU zero79.325%/complete25.725%/HELD19.826% 감소·canonical output parity. 작은 allocation 증가는 남아 있으며 전체 RSS/scale/경제성 acceptance가 아니다. 최신 폐루프 보존 배포·예정 unit/helper code-contract 연결은 §23에 분리한다. Persistent day-state append/partition·O0/O1/O3 및 자연 후행/경제성은 OPEN이다.
+
 
 ### 정확성과 성능 acceptance
 
