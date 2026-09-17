@@ -228,6 +228,7 @@ def build_policy(
         if closed_loop:
             from src.engine.monitoring.episode_prospective_research import (
                 execution_feasibility,
+                prospective_summary_valid,
             )
 
             result = report.get("profiles", {}).get(row.get("profile_id")) or {}
@@ -240,6 +241,7 @@ def build_policy(
                 )
                 != revision
                 or revision["parameters"] != row.get("recommended_spot")
+                or not prospective_summary_valid(result, revision)
                 or (result.get("prospective_window") or {}).get("status") != "ready"
                 or loop.prospective_window(
                     revision,
@@ -410,6 +412,10 @@ def load_policy(day: date, *, policy_dir: Path = POLICY_DIR) -> dict[str, Any]:
             if previous.get(profile_id) == row:
                 continue
             if recommendations:
+                from src.engine.monitoring.episode_prospective_research import (
+                    prospective_summary_valid,
+                )
+
                 recommendation = recommendations[0]
                 result = (report.get("profiles") or {}).get(
                     recommendation.get("profile_id")
@@ -427,6 +433,7 @@ def load_policy(day: date, *, policy_dir: Path = POLICY_DIR) -> dict[str, Any]:
                     or revision["revision_sha256"]
                     != row.get("candidate_revision_sha256")
                     or revision["parameters"] != row["policy"]
+                    or not prospective_summary_valid(result, revision)
                     or loop.prospective_window(
                         revision,
                         source_date=source_date,

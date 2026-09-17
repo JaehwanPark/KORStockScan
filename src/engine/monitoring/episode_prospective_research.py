@@ -14,6 +14,12 @@ from src.engine.monitoring.low_price_two_leg_entry_spot_research import (
     _calibration_ready,
     _manageable_carry,
     _positive_ev,
+    _summary,
+    COST_PCT,
+    ECONOMIC_REPLAY_CONTRACT,
+    ECONOMIC_METRIC_CONTRACT,
+    clamp_price_to_tick,
+    move_price_by_ticks,
 )
 from src.trading.low_price_two_leg.economics import cost_contract
 from src.engine.monitoring.research_source_facts import indexed_day_facts
@@ -34,6 +40,166 @@ def spot(parameters):
         parameters["entry_valid_completed_bars"],
         parameters["target_ticks"],
     )
+
+
+def _promotion_ready(selected, baseline):
+    return bool(
+        _calibration_ready(
+            selected["calibration"],
+            selected["calibration_first_half"],
+            selected["calibration_second_half"],
+        )
+        and all(
+            selected[name]["completed_legs"] >= 3
+            for name in ("calibration_first_half", "calibration_second_half")
+        )
+        and selected["holdout"]["signal_episodes"] >= 3
+        and selected["holdout"]["completed_legs"] >= 4
+        and selected["full"]["completed_legs"] >= 10
+        and _manageable_carry(selected["holdout"])
+        and _manageable_carry(selected["full"])
+        and _positive_ev(selected["holdout"])
+        and paired_economics(baseline["holdout"], selected["holdout"])[
+            "net_profit_improved"
+        ]
+    )
+
+
+def prospective_summary_valid(result, revision):
+    """Reconstruct fixed-window economics from native sealed episode snapshots.
+
+    This is a bounded publication/consumer check, not a grid or bar replay.
+    Earlier HELD marks remain sealed at their own boundary.
+    """
+    from src.engine.monitoring.policy_research_economics import aware
+
+    try:
+        cal, holdout = revision["calibration_dates"], revision["holdout_dates"]
+        windows = dict(
+            calibration=cal,
+            calibration_first_half=cal[:15],
+            calibration_second_half=cal[15:],
+            holdout=holdout,
+            full=cal + holdout,
+        )
+        for arm, parameter_key in (
+            ("selected", "parameters"),
+            ("baseline", "baseline_parameters"),
+        ):
+            output = result[arm]
+            if output["parameters"] != revision[parameter_key]:
+                return False
+            full = output["full"]["episodes"]
+            if not isinstance(full, list) or len(full) > len(windows["full"]):
+                return False
+            identities = [(row["date"], row["signal_at"]) for row in full]
+            if len(identities) != len(set(identities)) or len(
+                {day for day, _ in identities}
+            ) != len(identities):
+                return False
+            for name, dates in windows.items():
+                summary = output[name]
+                episodes = summary["episodes"]
+                expected = [row for row in full if row["date"] in dates]
+                if not isinstance(episodes, list) or [
+                    (row["date"], row["signal_at"]) for row in episodes
+                ] != [(row["date"], row["signal_at"]) for row in expected]:
+                    return False
+                for row, terminal in zip(episodes, expected):
+                    clock = aware(row["signal_at"])
+                    if (
+                        clock is None
+                        or str(clock.date()) != row["date"]
+                        or row["date"] not in dates
+                    ):
+                        return False
+                    if len(row["legs"]) != 2 or len(terminal["legs"]) != 2:
+                        return False
+                    parameters = revision[parameter_key]
+                    if row.get("execution_plan") != {
+                        key: parameters[key]
+                        for key in (
+                            "entry_offsets_ticks",
+                            "entry_valid_completed_bars",
+                            "target_ticks",
+                        )
+                    }:
+                        return False
+                    close = clamp_price_to_tick(row["signal_close"])
+                    for offset, leg, later in zip(
+                        parameters["entry_offsets_ticks"], row["legs"], terminal["legs"]
+                    ):
+                        price = move_price_by_ticks(close, offset)
+                        if leg["entry_price"] != price:
+                            return False
+                        if (
+                            leg["status"] not in {"COMPLETE", "HELD", "NO_FILL"}
+                            or leg["status"] != later["status"]
+                        ):
+                            return False
+                        if leg["status"] != "NO_FILL":
+                            target = move_price_by_ticks(
+                                price, parameters["target_ticks"]
+                            )
+                            fill = aware(leg.get("fill_at"))
+                            if (
+                                leg.get("target_price") != target
+                                or fill is None
+                                or fill <= clock
+                                or fill.date() != clock.date()
+                            ):
+                                return False
+                            if leg["status"] == "COMPLETE":
+                                exit_ = aware(leg.get("target_at"))
+                                if (
+                                    exit_ is None
+                                    or exit_ <= fill
+                                    or exit_.date() != clock.date()
+                                    or leg.get("net_profit_pct")
+                                    != round((target / price - 1.0) * 100 - COST_PCT, 6)
+                                ):
+                                    return False
+                        # Native HELD custody never closes through a future bar
+                        # touch; only mark/exposure fields may evolve later.
+                        if leg["status"] != "HELD" and leg != later:
+                            return False
+                        if any(
+                            leg.get(key) != later.get(key)
+                            for key in (
+                                "entry_price",
+                                "target_price",
+                                "fill_at",
+                                "target_at",
+                                "net_profit_pct",
+                            )
+                        ):
+                            return False
+                derived = _summary(episodes)
+                derived.update(
+                    observation_dates=dates,
+                    source_valid_observation_days=len(dates),
+                    cost_pct=COST_PCT,
+                    economic_replay_contract=ECONOMIC_REPLAY_CONTRACT,
+                    metric_contract=ECONOMIC_METRIC_CONTRACT,
+                    cost_adjusted_net_profit_krw_per_source_valid_observation_day=round(
+                        derived["realized_net_profit_krw"] / len(dates), 8
+                    ),
+                    attempted_episodes_per_source_valid_observation_day=round(
+                        len(episodes) / len(dates), 8
+                    ),
+                )
+                if loop.digest(derived) != loop.digest(
+                    {key: summary.get(key) for key in derived}
+                ):
+                    return False
+        paired = paired_economics(
+            result["baseline"]["holdout"], result["selected"]["holdout"]
+        )
+        return result.get("paired_economics") == paired and _promotion_ready(
+            result["selected"], result["baseline"]
+        )
+    except (KeyError, TypeError, ValueError, OverflowError, AttributeError):
+        return False
 
 
 def frozen_research(result, *, profile, contexts, source_date):
@@ -149,26 +315,7 @@ def frozen_research(result, *, profile, contexts, source_date):
         )
         output.update(zip(names, evaluated))
     paired = paired_economics(baseline["holdout"], selected["holdout"])
-    ready = _calibration_ready(
-        selected["calibration"],
-        selected["calibration_first_half"],
-        selected["calibration_second_half"],
-    )
-    ready &= all(
-        selected[name]["completed_legs"] >= 3
-        for name in ("calibration_first_half", "calibration_second_half")
-    )
-    ready &= (
-        selected["holdout"]["signal_episodes"] >= 3
-        and selected["holdout"]["completed_legs"] >= 4
-        and selected["full"]["completed_legs"] >= 10
-    )
-    ready &= (
-        _manageable_carry(selected["holdout"])
-        and _manageable_carry(selected["full"])
-        and _positive_ev(selected["holdout"])
-    )
-    ready &= paired["net_profit_improved"]
+    ready = _promotion_ready(selected, baseline)
     result.update(
         selected=selected,
         baseline=baseline,

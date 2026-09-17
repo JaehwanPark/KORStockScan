@@ -629,6 +629,40 @@ def test_final_completed_regular_bar_is_force_flat_boundary():
     assert result["exit_reason"] == "force_flat"
 
 
+def test_entry_cap_comparison_reuses_empty_adjacent_caps_without_shared_results(
+    monkeypatch,
+):
+    rows = [
+        dict(
+            daily_entry_ordinal=ordinal,
+            entry_price=10001 + index,
+            net_return_pct=(-1) ** index * 0.1234567,
+            peak_return_pct=0.3,
+            exit_reason="target" if index % 2 else "force_flat",
+            entry_state="ENTRY_READY",
+        )
+        for index, ordinal in enumerate([1, 3, 1, 3, 1])
+    ]
+    native, calls = research._summarize_episodes, []
+    expected = {
+        str(cap): native([row for row in rows if row["daily_entry_ordinal"] <= cap])
+        for cap in research.ENTRY_CAP_VALUES
+    }
+
+    def counted(episodes):
+        calls.append(True)
+        return native(episodes)
+
+    monkeypatch.setattr(research, "_summarize_episodes", counted)
+    comparison = research._entry_cap_comparison(rows)
+    assert {key: value["cumulative"] for key, value in comparison.items()} == expected
+    assert len(calls) == 2
+    comparison["1"]["cumulative"]["entry_state_breakdown"]["ENTRY_READY"][
+        "episode_count"
+    ] = 999
+    assert comparison["2"]["cumulative"] == expected["2"]
+
+
 def test_entry_cap_comparison_requires_positive_fourth_and_fifth_episode_ev():
     episodes = [
         {
@@ -767,8 +801,9 @@ def test_report_requires_exact_sources_and_declares_cross_owner_prohibition():
         "sell_other_owner_quantity"
         in research.OWNER_CONTRACT["forbidden_cross_owner_actions"]
     )
-    assert "mutate_low_price_two_leg_profile_policy_or_service" in (
-        research.OWNER_CONTRACT["forbidden_cross_owner_actions"]
+    assert (
+        "mutate_low_price_two_leg_profile_policy_or_service"
+        in (research.OWNER_CONTRACT["forbidden_cross_owner_actions"])
     )
 
 

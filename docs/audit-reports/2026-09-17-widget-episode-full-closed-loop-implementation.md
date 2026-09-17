@@ -4,7 +4,7 @@
 
 사용자 승인: 구현 → 코드리뷰·수정보완 반복 → commit/push → 배포·기동. [계획](../proposals/widget-episode-full-closed-loop-and-scale-performance-implementation-plan-2026-09-17.md)을 참고자료로 사용했다. Source 구현과 실제 release/PID 적용, 자연 신규 정책 소비, 실제 비용차감 수익 개선을 분리한다. 분리 worktree `fix/widget-episode-closed-loop-20260917`에서 최신 profile-checkpoint 및 market-read/fork safety를 통합했다. 운영 원천·env·주문·소유권 자료는 테스트로 변경하지 않았다.
 
-현재 source 최종 gate 진행 중이다. 오늘 20:10 evaluation/21:15 final-refresh 자연 실행은 아직 예정 전이다. 신규 seed는 등록 이후 widget10+16/episode30+16 고정 qualified 거래일이 필요하며, 기존 시계열이나 실체결을 전향적 검증으로 대체하지 않는다. 신규 선택/다음 날짜 실제 소비/경제성은 이 코드 배포만으로 완료가 아니다.
+현재 source gate를 통과했고 1차 commit/push·배포·관련 4개 서비스 기동을 완료했다. 추가 리뷰의 episode summary 소비 경계와 계산 병목 보완을 후속 release로 반영한다. 오늘 20:10 evaluation/21:15 final-refresh 자연 실행은 아직 예정 전이다. 신규 seed는 등록 이후 widget10+16/episode30+16 고정 qualified 거래일이 필요하며, 기존 시계열이나 실체결을 전향적 검증으로 대체하지 않는다. 신규 선택/다음 날짜 실제 소비/경제성은 이 코드 배포만으로 완료가 아니다.
 
 ## 2. 코드 연결과 source 검증
 
@@ -51,3 +51,16 @@ Official Kiwoom repository commit `953e5dbff123f437ab4d11a78a95191a685eb51f`를 
 추가 리뷰에서 완료 receipt의 strict/tower 소비가 단순 self-hash만 확인하던 연결을 current dependency/code/source-generation 검증으로 보완했다. 현재 실제 PID, dated policy 또는 신규 economics가 source gate에 의해 자동 PASS로 승격되지 않는다. Shared indexed fact의 필요한 row도 immutable bounded decode cache를 공유해 K4 reader 반복 decode0을 검증했다. 완료 fixed-point retry가 native outcome/cost producer를 다시 호출하지 않는 회귀도 통과했다.
 
 [격리한 scale 실측 snapshot](2026-09-17-widget-episode-scale-validation.json)은 engineering source이며 publisher 입력이 아니다. 신호 발생 N19D120 cold1,565.342초/CPU302.455초/RSS195,232KiB; N100 요청의 나머지는 측정 중이다. N100 cold와 전체 N19/50/100×D72/120 성능을 달성했다고 주장하지 않는다. 5,400초 phase deadline 초과 시 DEFERRED/backlog 계약을 유지한다. Completed-study 재시도0 replay와 원 데이터 의미 parity는 검증했으며 운영 whole-stage 성능/자연 handoff·next-date 신종목/경제성은 OPEN이다.
+
+
+## 7. 이어서 실행한 보완 리뷰·성능 검증
+
+Episode 발행/reader가 보고서의 요약값을 신뢰하던 경계를 보완했다. Selected/baseline의 calibration·반기2·holdout·full을 각 구간 끝에 봉인한 원 episode로 독립 재집계한다. 원 가격/tick/target/round-trip 비용·원 두 leg·date/identity·COMPLETE/NO_FILL과 HELD custody 경계를 확인하고 기존 표본/EV/carry/paired 개선 조건을 동일 helper로 재검증한다. HELD의 후일 mark를 앞선 구간에 소급하지 않는다. Forged EV·반기 표본·paired uplift·baseline·중복·가격·비용을 거절한다. Native episode fixture 46일/원 두 leg CF92건→신규 종목 next-date 발행→reader resolve를 검증했고, self-consistent source/publication도 잘못된 summary는 reader에서 거절한다. 이 episode 테스트의 joint gate는 별도 경계로 격리했으며 실제 cash/joint positive E2E는 위 widget 회귀가 담당한다. 주문0·운영 수익 증거 아님.
+
+Profile에서 반복 cap 경제성 집계를 확인해 한 episode의 시각/가격/손익을 한 번 해석하고 cap별 원 순서로 합산한다. Missing/invalid는 해당 episode를 포함하는 cap에만 null/censored를 유지한다. Cap 추가 episode가 없으면 동일 native sum을 독립 dict로 복제한다. Symbol-local 시간대/minimum-history index를 재사용하고 등록 policy page의 불필요한 hash 계산을 제거했다. Setup/exit/cooldown·전체1,536 grid/caps1–5·원 floating sum/tie·cost는 그대로다. CLI가 `--modes`/`--compute-budget-sec`를 runner에 전달하지 않던 측정 도구 결함도 수정했다.
+
+동일 quota20%/512MiB의 신호 발생 N1D120 cold 비교: 보완 전 wall86.468초/CPU15.977초/RSS191,924KiB; cap 집계 통합만 적용 wall77.513초/CPU14.204초; 시간대/index·동일 cap 재사용까지 적용 wall70.831초/CPU12.883초/RSS191,916KiB. CPU19.37%·wall18.08% 감소, 세 결과 canonical digest `f89d72cdf48d95f9cbdcb2af9ede7b40b63d6e0aa23d10edaebe958f38b8ed5e` 동일, remote0. 이는 N1 실측이며 N100 목표5,400초나 whole-stage SLA를 달성했다는 증거가 아니다. 기존 N100 populated 작업과 full matrix는 OPEN; deadline 초과는 DEFERRED/전체 backlog이고 기존 verified 정책을 유지한다.
+
+Stable-source 최종16 suite **1,089 PASS / 89.40초**, 보완 구간3 suite135 PASS. Python compile/Ruff F,E9·두 wrapper bash-n·diff-check PASS. Source review 범위 finding0. Natural seed/next-date 신규 정책 소비·실제 exact-cost economics 및 full-scale SLA는 기존 OPEN owner에 남긴다.
+
+1차 배포: `06321fdb` source→latest main 통합 `cf42b542` push. 14:29 관련4서비스 기동, widget553146/episode553117의 native C6 receipt에서 당일 기존 widget3종목/episode3정책 소비 확인. Watch553239/runtime553143 및 예정 producer/owner-apply7개 code root를 초기 release로 맞췄고 기존 resource/env/소유권/정책/threshold·operator hash6개를 보존했다. 첫 deployment receipt는 `data/runtime/widget_episode_full_closed_loop_deployment_2026-09-17.json`. 이후 독립 upstream 배포가 일부 source pins/main PID를 갱신했으므로 이 초기 receipt를 현재 PID로 재사용하지 않고 후속 배포 직전 최신 상태를 다시 봉인한다. 초기 main501022 유지 사실과 후속 main575313은 서로 다른 as-of다.

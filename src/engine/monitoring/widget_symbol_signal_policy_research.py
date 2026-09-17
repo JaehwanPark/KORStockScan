@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import inspect
+from copy import deepcopy
 import fcntl
 import zlib
 from collections import deque
@@ -47,6 +48,7 @@ from src.engine.monitoring.machine_candidate_lifecycle import (
 from src.engine.monitoring.widget_execution_quality import load_execution_incidents
 from src.engine.monitoring.policy_research_economics import (
     modeled_summary,
+    modeled_cap_summaries,
     joint_capital_demand,
     research_universe_handoff,
     load_research_census,
@@ -701,6 +703,7 @@ class ReplayContext:
         self.grouped = grouped
         self.cache_dir = cache_dir
         self.setup_indices = {}
+        self.segment_indices = {}
         self.reclaim_indices = {}
         self.day_pages = {}
         self.dirty_days = set()
@@ -718,8 +721,11 @@ class ReplayContext:
 
     def _policy_page(self, policy):
         key = _policy_cache_key(policy)
-        return self.policy_pages.get(
-            key, "extra_" + hashlib.sha256(key.encode()).hexdigest()[:16]
+        page = self.policy_pages.get(key)
+        return (
+            page
+            if page is not None
+            else "extra_" + hashlib.sha256(key.encode()).hexdigest()[:16]
         )
 
     def _day_path(self, day: date) -> Path:
@@ -919,9 +925,17 @@ class ReplayContext:
                     ),
                 )
             reclaim = self.reclaim_indices[day]
-            for index, bar in enumerate(self.grouped[day][:-1]):
-                if index < minimum - 1 or not start <= bar.timestamp.time() < end:
-                    continue
+            segment_key = (day, policy.segment, minimum)
+            if segment_key not in self.segment_indices:
+                self.segment_indices[segment_key] = array(
+                    "I",
+                    (
+                        index
+                        for index, bar in enumerate(rows[:-1])
+                        if index >= minimum - 1 and start <= bar.timestamp.time() < end
+                    ),
+                )
+            for index in self.segment_indices[segment_key]:
                 position = bisect_left(reclaim, index + 1)
                 if (
                     position >= len(reclaim)
@@ -1280,15 +1294,20 @@ def _entry_cap_comparison(
     episodes: list[dict[str, Any]],
 ) -> dict[str, dict[str, Any]]:
     comparison: dict[str, dict[str, Any]] = {}
+    rows = [(int(row["daily_entry_ordinal"]), row) for row in episodes]
+    cumulative_summary = None
+    previous_cap = None
     for cap in ENTRY_CAP_VALUES:
-        cumulative = [row for row in episodes if int(row["daily_entry_ordinal"]) <= cap]
-        incremental = [
-            row for row in episodes if int(row["daily_entry_ordinal"]) == cap
-        ]
+        cumulative = [row for ordinal, row in rows if ordinal <= cap]
+        incremental = [row for ordinal, row in rows if ordinal == cap]
+        if cumulative_summary is None or incremental or cap != previous_cap + 1:
+            cumulative_summary = _summarize_episodes(cumulative)
         incremental_summary = _summarize_episode_subset(incremental)
         incremental_ev = incremental_summary.get("notional_weighted_ev_pct")
         comparison[str(cap)] = {
-            "cumulative": _summarize_episodes(cumulative),
+            # No episode added at this adjacent cap: the native sum is exactly
+            # unchanged. Keep independent dicts for later modeled annotations.
+            "cumulative": deepcopy(cumulative_summary),
             "incremental": incremental_summary,
             "incremental_ev_positive": bool(
                 incremental_summary["episode_count"] > 0
@@ -1296,6 +1315,7 @@ def _entry_cap_comparison(
                 and float(incremental_ev) > 0.0
             ),
         }
+        previous_cap = cap
     return comparison
 
 
@@ -1440,14 +1460,12 @@ def discover_symbol_policy(
             (first_evaluation, first_dates),
             (second_evaluation, second_dates),
         ):
+            cap_summaries = modeled_cap_summaries(
+                evaluation["episodes"], dates, ENTRY_CAP_VALUES
+            )
             for cap in ENTRY_CAP_VALUES:
-                selected_episodes = [
-                    row
-                    for row in evaluation["episodes"]
-                    if row["daily_entry_ordinal"] <= cap
-                ]
                 evaluation["entry_cap_comparison"][str(cap)]["cumulative"].update(
-                    modeled_summary(selected_episodes, dates)
+                    cap_summaries[str(cap)]
                 )
         for entry_cap in ENTRY_CAP_VALUES:
             evaluated += 1
