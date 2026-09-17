@@ -228,3 +228,62 @@ def test_cache_rejects_future_submillisecond_freshness_and_accepts_proven_next_s
     assert cache.get_best_bid("042660") == 10010
     assert not cache.get_quote_health("042660").quote_stale
     assert cache.get_quote_health("042660").ws_jitter_ms == 0
+
+
+def test_typed_quote_health_preserves_raw_facts_without_renewal(monkeypatch):
+    from src.trading.market.quote_consistency import build_market_data_health
+
+    now = 1000.5
+    monkeypatch.setattr("src.trading.market.market_data_cache.time.time", lambda: now)
+    scope = ("005930", "krx", "regular", "2")
+    cache = MarketDataCache(stale_after_ms=700)
+    cache.update("005930", scope=scope, received_at=1000.0,
+                 source_identity=("0D", 12), last_price=10000,
+                 best_bid=10000, best_ask=10010)
+    state = QuietTapeState(last_quote=1000.0, last_trade=990.0, closed_episodes=2)
+    binding = {"item": "005930", "market_route": "krx", "effective_venue": "KRX",
+               "transport_epoch": 2}
+    frame = {"market_data_transport_epoch": 2,
+             "last_realtime_type_ts": {"0D": 1000.0},
+             "last_realtime_type_item": {"0D": "005930"},
+             "realtime_type_snapshots_by_route": {"krx": {
+                 "0D": {**binding, "observed_epoch": 1000.0,
+                        "best_bid": 10000, "best_ask": 10010},
+                 "0B": {**binding, "observed_epoch": 990.0},
+                 "_quiet_tape_state": state}},
+             "market_data_health": {"quote_receive_age_ms": 0}}
+    for _ in range(100):
+        health = cache.get_quote_health("005930", scope=scope, source_frame=frame)
+        assert health.quote_received_epoch == 1000.0
+        assert health.quote_receive_age_ms == 500.0
+        assert health.source_scope == scope
+        assert health.source_identity == ("0D", 12)
+        assert health.ws_jitter_ms == 0
+        assert not health.quote_stale
+        facts = health.market_data_health["routes"]["krx"]
+        assert facts["trade_receive_age_ms"] == 10500.0
+        assert facts["quiet_episode_count"] == 3
+        assert facts["trade_activity_state"] == "REPEATED_QUIET_TAPE_OBSERVED"
+    assert state.closed_episodes == 2
+    assert health.to_dict()["market_data_health"] == build_market_data_health(
+        frame, now_ts=now, quote_max_age_ms=700)
+    now = 1000.8
+    assert cache.get_quote_health("005930", scope=scope, source_frame=frame).quote_stale
+    assert cache.get_quote_health("005930", scope=("005930_NX",)).quote_received_epoch is None
+
+
+def test_typed_quote_health_keeps_unknown_and_signed_future_clock(monkeypatch):
+    now = 1000.0
+    monkeypatch.setattr("src.trading.market.market_data_cache.time.time", lambda: now)
+    cache = MarketDataCache()
+    cache.update("legacy", best_bid=10000, best_ask=10010)
+    legacy = cache.get_quote_health("legacy")
+    assert legacy.quote_received_epoch is None
+    assert legacy.quote_receive_age_ms is None
+    assert legacy.market_data_health is None
+    cache.update("original", received_at=now, best_bid=10000, best_ask=10010)
+    now -= .1
+    future = cache.get_quote_health("original")
+    assert future.quote_received_epoch == 1000.0
+    assert future.quote_receive_age_ms < 0
+    assert future.quote_stale

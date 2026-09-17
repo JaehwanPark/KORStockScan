@@ -4923,7 +4923,9 @@ def evaluate_live_buy_entry(
             best_bid=best_bid,
             received_at=received_at,
         )
-        quote_health = _CACHE.get_quote_health(code, scope=quote_scope)
+        quote_health = _CACHE.get_quote_health(
+            code, scope=quote_scope, source_frame=ws_data or {},
+        )
         if received_at <= 0 or received_at > time.time():
             # A missing/future source stamp is not a fresh consume-time packet.
             # Preserve the cache, but do not borrow a prior caller's freshness.
@@ -4978,6 +4980,11 @@ def evaluate_live_buy_entry(
                         "pre_submit_quote_refresh_received_epoch"
                     ],
                 )
+                # The observer owns the adopted quote's original receipt;
+                # common health still describes the unchanged input WS frame.
+                quote_health = _CACHE.get_quote_health(
+                    code, scope=quote_scope, source_frame=ws_data or {},
+                )
     snapshot = build_signal_snapshot(
         symbol=code,
         strategy_id=strategy_id,
@@ -4989,6 +4996,8 @@ def evaluate_live_buy_entry(
         context={
             "stock_name": stock.get("name"),
             "position_tag": stock.get("position_tag"),
+            "market_data_health": getattr(quote_health, "market_data_health", None),
+            "input_quote_source_receipt": source_receipt,
         },
     )
     policy = _ENTRY_POLICY.evaluate(
@@ -5410,6 +5419,10 @@ def evaluate_live_buy_entry(
         "ws_jitter_ms": latency.ws_jitter_ms,
         "spread_ratio": latency.spread_ratio,
         "quote_stale": latency.quote_stale,
+        "market_data_health": getattr(quote_health, "market_data_health", None),
+        "input_quote_source_receipt": source_receipt,
+        "cached_quote_received_epoch": getattr(quote_health, "quote_received_epoch", None),
+        "cached_quote_receive_age_ms": getattr(quote_health, "quote_receive_age_ms", None),
         "latency_danger_reasons": latency_danger_reasons,
         "latency_danger_remeasure_reasons": latency_danger_remeasure_reasons,
         **latency_danger_provenance,

@@ -2759,19 +2759,22 @@ def test_pre_submit_quote_refresh_uses_fresh_observer_quote_for_stale_ws(monkeyp
     )
 
     stock = {"name": "TEST", "position_tag": "MIDDLE"}
+    now = time.time()
+    monkeypatch.setattr(entry_latency_module.time, "time", lambda: now)
     entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.reset()
     entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.record_quote(
         "123456_refresh",
         best_bid=10_020,
         best_ask=10_030,
-        ts=time.time(),
+        ts=now - .1,
     )
     result = evaluate_live_buy_entry(
         stock=stock,
         code="123456_refresh",
         ws_data={
             "curr": 10_000,
-            "last_ws_update_ts": time.time() - 3.0,
+            "last_ws_update_ts": now,
+            "last_realtime_type_ts": {"0D": now - 3.0},
             "orderbook": {
                 "asks": [{"price": 10_010, "volume": 100}],
                 "bids": [{"price": 10_000, "volume": 100}],
@@ -2795,6 +2798,12 @@ def test_pre_submit_quote_refresh_uses_fresh_observer_quote_for_stale_ws(monkeyp
     assert result["orderbook_stability"]["best_bid"] == 10_020
     assert result["orderbook_stability"]["best_ask"] == 10_030
 
+
+    assert result["cached_quote_received_epoch"] == now - .1
+    assert 99 <= result["cached_quote_receive_age_ms"] <= 101
+    assert result["input_quote_source_receipt"]["observed_epoch"] == now - 3.0
+    assert result["market_data_health"]["executable_quote_receive_age_ms"] == 3000
+    assert result["market_data_health"]["decision_authority"] is False
 
 def test_pre_submit_quote_refresh_uses_pid_env_when_runtime_rules_are_stale(
     monkeypatch,
@@ -9989,3 +9998,33 @@ def test_observer_refresh_rejects_another_epoch_and_preserves_exact_receive_cloc
     )
     assert receipt["pre_submit_quote_refresh_applied"]
     assert receipt["pre_submit_quote_refresh_received_epoch"] == now - .05
+
+
+def test_latency_input_health_survives_existing_pipeline_events(monkeypatch):
+    logs = []
+    monkeypatch.setattr(state_handlers, "emit_pipeline_event",
+                        lambda *args, **kwargs: logs.append((args[3], kwargs["fields"])))
+    now = time.time()
+    monkeypatch.setattr(entry_latency_module.time, "time", lambda: now)
+    result = evaluate_live_buy_entry(
+        stock={"name": "FACTS", "position_tag": "MIDDLE"}, code="123456_facts",
+        ws_data={"curr": 10000, "last_ws_update_ts": now,
+                 "last_realtime_type_ts": {"0D": now - .1},
+                 "orderbook": {"asks": [{"price": 10010, "volume": 100}],
+                               "bids": [{"price": 10000, "volume": 100}]}},
+        strategy_id="SCALPING", planned_qty=1, signal_price=10000,
+        signal_strength=.9)
+    assert result["cached_quote_received_epoch"] == now - .1
+    assert result["market_data_health"]["executable_quote_receive_age_ms"] > 0
+    assert result["market_data_health"]["decision_authority"] is False
+    retained = {key: result[key] for key in (
+        "market_data_health", "input_quote_source_receipt",
+        "cached_quote_received_epoch", "cached_quote_receive_age_ms")}
+    for stage in ("latency_block", "latency_pass", "order_bundle_submitted"):
+        state_handlers._log_entry_pipeline({"id": 9, "name": "FACTS"},
+                                           "123456_facts", stage, **retained)
+    assert [stage for stage, _ in logs] == [
+        "latency_block", "latency_pass", "order_bundle_submitted"]
+    for _, fields in logs:
+        assert {key: fields[key] for key in retained} == retained
+        assert json.loads(json.dumps(fields))["market_data_health"] == retained["market_data_health"]

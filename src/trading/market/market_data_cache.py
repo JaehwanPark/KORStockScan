@@ -4,8 +4,10 @@ import time
 import math
 from collections import deque
 from dataclasses import dataclass, field
+from typing import Mapping
 
 from src.trading.market.quote_health import QuoteHealth
+from src.trading.market.quote_consistency import build_market_data_health
 
 
 @dataclass(slots=True)
@@ -105,6 +107,7 @@ class _SymbolQuote:
     last_packet_ts: float = 0.0
     receipt_conflict: bool = False
     source_identity: tuple | None = None
+    source_clock_proven: bool = False
     packet_intervals_ms: deque[int] = field(default_factory=lambda: deque(maxlen=20))
 
 
@@ -166,6 +169,7 @@ class MarketDataCache:
             return
         quote.receipt_conflict = False
         quote.source_identity = source_identity
+        quote.source_clock_proven = received_at is not None
         while len(self._quotes) > 4096:
             self._quotes.pop(next(iter(self._quotes)))
         if quote.last_packet_ts > 0:
@@ -197,7 +201,10 @@ class MarketDataCache:
         key = symbol if scope is None else (symbol, *scope)
         return self._quotes.get(key, _SymbolQuote()).best_bid
 
-    def get_quote_health(self, symbol: str, *, scope: tuple | None = None) -> QuoteHealth:
+    def get_quote_health(
+        self, symbol: str, *, scope: tuple | None = None,
+        source_frame: Mapping | None = None,
+    ) -> QuoteHealth:
         key = symbol if scope is None else (symbol, *scope)
         quote = self._quotes.get(key, _SymbolQuote())
         now = time.time()
@@ -222,4 +229,18 @@ class MarketDataCache:
             best_ask=quote.best_ask,
             best_bid=quote.best_bid,
             last_price=quote.last_price,
+            quote_received_epoch=(quote.last_packet_ts if quote.source_clock_proven else None),
+            quote_receive_age_ms=(
+                (now - quote.last_packet_ts) * 1000.0
+                if quote.source_clock_proven else None
+            ),
+            source_scope=scope,
+            source_identity=quote.source_identity,
+            # Current raw receipts only: no stored companion, history copy,
+            # activity counter or freshness renewal in this getter.
+            market_data_health=(
+                build_market_data_health(source_frame, now_ts=now,
+                                         quote_max_age_ms=self._stale_after_ms)
+                if isinstance(source_frame, Mapping) else None
+            ),
         )
