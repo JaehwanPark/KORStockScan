@@ -94,3 +94,6 @@ Actual native C6 receipt는 widget3종목005930/034020/042660, episode3프로필
 종료된 optional synthetic cache2개, 사용되지 않는 원격 복구 가능 배포본9개, 작업본1개를 삭제해 allocated1.580GiB를 확보했다. 삭제 시 현재/이전 selector·실제 PID·effective systemd/EnvironmentFiles·dirty/untracked source·원격 복구 가능 여부를 확인했다. 고유 변경/설정이 있거나 원격 Git-tree 원본과 같다고 증명할 수 없는 복사본은 보존했다. 원천 시장/연구 데이터·정책·holding/receipt/운영 권한 파일은 삭제하지 않았다. 신규 배포본은 하나만 만들고 현재 release는 rollback으로 보존한다.
 
 Source commit/push와 actual release/PID 기동 receipt는 아래 배포 완료 후 기록한다. 기존 두 stable owners의 자연20:10/21:15 생성·다음 날짜 신규 정책 소비·실제 비용차감 EV/net profit은 계속 OPEN이다.
+
+
+최신 병행 upstream의 stable shared widget cache reader/default3×46 fixture와 signed source-age/health diagnostics를 보존 통합했다. Docs conflict는 신규 후속과 최신 actual receipt를 함께 보존했다. Widget/closed-loop/completion115 PASS/18.42초 및 incoming samsung advisory150 PASS/1.61초를 추가 확인했다. Widget helper가 변경되어 같은2×32 제한 fixture만 재검증했으며 latest cold wall21.697초/CPU4.340초, warm11.005초/2.203초, append12.302초/2.458초·RSS140,816KiB·기존 digest/hit/miss 의미 동일이었다. Episode 측정 commit4d8367281의 expanded/entry-spot/cache-storage bytes는 최종 통합과 같음을 확인했고 전체 producer hash 차이는 receipt에 분리한다. 기존 큰 규모 matrix를 재시작하지 않았다. 배포는 latest main PID871393/552152a5의 custody를 보존한다. [제한 검증·정리 receipt](../../data/runtime/widget_episode_bounded_probe_review_2026-09-17.json)가 실제 범위와 source provenance를 소유한다.

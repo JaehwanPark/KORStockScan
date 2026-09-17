@@ -191,15 +191,97 @@
     "status": "complete",
     "unprocessed_symbol_count": 0
   },
+  "episode_measurement_commit": "4d8367281",
+  "episode_native_bytes_preserved_after_merge": {
+    "low_price_two_leg_entry_spot_research.py": true,
+    "low_price_two_leg_expanded_candidate_research.py": true,
+    "research_cache_storage.py": true
+  },
   "natural_new_policy_consumption": "waiting",
+  "postcleanup_free_bytes": 24584454144,
   "schema": "widget_episode_bounded_probe_review_v1",
   "scope": "offline synthetic bounded full native grids; no broker/publication authority",
   "source_sha256": "5b3fe17490998b6a9299a532a53a945df0f41ea7116344fefa943b1b2a730dfc",
   "validation": [
     "218 passed in 41.47s",
-    "145 passed in 18.70s; suites overlap"
+    "145 passed in 18.70s; suites overlap",
+    "merged widget/closed-loop/completion 115 passed in 18.42s",
+    "incoming samsung advisory 150 passed in 1.61s"
   ],
   "widget": {
+    "actual_order_submitted": false,
+    "allowed_runtime_apply": false,
+    "broker_order_forbidden": true,
+    "fixture": "deterministic_390_bars_per_symbol_day_sinusoid_v2",
+    "measurements": {
+      "append_N2_D33": {
+        "cache_hits": 49184,
+        "cache_misses": 3072,
+        "cache_write_skips": 0,
+        "candidate_digest": "64a5d51d12fa9810261fbab0cf39e5ed3a8434e08f698010effccc58c66bb326",
+        "caps": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "cpu_seconds": 2.4579753099999992,
+        "day_count": 33,
+        "grid": 1536,
+        "peak_rss_kib": 140816,
+        "remote_requests": 0,
+        "symbols": 2,
+        "wall_seconds": 12.30212904799555
+      },
+      "cold_N2_D32": {
+        "cache_hits": 0,
+        "cache_misses": 49184,
+        "cache_write_skips": 0,
+        "candidate_digest": "b20c9d68d308f4dc4952e46f5d70e5925452ed5994ff347c524d8df026bf753a",
+        "caps": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "cpu_seconds": 4.340388675,
+        "day_count": 32,
+        "grid": 1536,
+        "peak_rss_kib": 139676,
+        "remote_requests": 0,
+        "symbols": 2,
+        "wall_seconds": 21.697109665001335
+      },
+      "warm_N2_D32": {
+        "cache_hits": 49184,
+        "cache_misses": 0,
+        "cache_write_skips": 0,
+        "candidate_digest": "b20c9d68d308f4dc4952e46f5d70e5925452ed5994ff347c524d8df026bf753a",
+        "caps": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "cpu_seconds": 2.202623278,
+        "day_count": 32,
+        "grid": 1536,
+        "peak_rss_kib": 140304,
+        "remote_requests": 0,
+        "symbols": 2,
+        "wall_seconds": 11.005392394996306
+      }
+    },
+    "populated": true,
+    "producer_sha256": "70972d2ed4d3ba2f9fe60ff8d7fbe66b8c33b0bae43f351d2f53bce874fe61d2",
+    "runtime_effect": false,
+    "schema": "machine_research_closed_loop_v1",
+    "status": "complete"
+  },
+  "widget_before_shared_reader": {
     "actual_order_submitted": false,
     "allowed_runtime_apply": false,
     "broker_order_forbidden": true,
@@ -271,5 +353,6 @@
     "runtime_effect": false,
     "schema": "machine_research_closed_loop_v1",
     "status": "complete"
-  }
+  },
+  "widget_measurement_commit": "9d346521f"
 }
