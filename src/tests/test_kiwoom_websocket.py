@@ -528,6 +528,10 @@ def test_micro_observer_receives_packet_clock_without_replacing_tick_clock(
     )
     tick = snapshot["last_trade_tick" if realtime_type == "0B" else "last_depth_tick"]
     assert tick["received_at_ms"] == int(now * 1000)
+    if realtime_type == "0B":
+        assert tick["provider_trade_epoch"] == now
+        assert tick["provider_trade_time_precision_ms"] == 1000
+        assert tick["provider_trade_date_basis"] == "local_receive_calendar_date_not_provider_date"
     assert "micro_observer_packet_received_at_ms" not in manager.realtime_data["005930"]
 
 

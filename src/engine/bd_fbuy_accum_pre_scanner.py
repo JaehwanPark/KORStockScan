@@ -813,10 +813,13 @@ def _ws_snapshot_string_map(value: Any) -> dict[str, str]:
 
 
 def _ws_snapshot_age_ms(ts: Any, now_ts: float) -> Any:
+    if isinstance(ts, bool):
+        return "not_available_timestamp"
     ts_value = _safe_float(ts, 0.0)
     if ts_value <= 0 or not math.isfinite(ts_value):
         return "not_available_timestamp"
-    return round(max(0.0, now_ts - ts_value) * 1000.0, 3)
+    age_ms = (now_ts - ts_value) * 1000.0
+    return age_ms if age_ms < 0 else round(age_ms, 3)
 
 
 def _ws_snapshot_last_trade_tick(value: Any) -> dict[str, Any]:
@@ -894,6 +897,8 @@ def _ws_machine_route_payload(row: Any, *, now_ts: float) -> dict[str, Any]:
             }
             if realtime_type == "0B":
                 normalized["provider_trade_epoch"] = source.get("provider_trade_epoch")
+                normalized["provider_trade_time_precision_ms"] = source.get("provider_trade_time_precision_ms")
+                normalized["provider_trade_date_basis"] = source.get("provider_trade_date_basis")
                 normalized.update(
                     {
                         "trade_price": _safe_int(source.get("trade_price")),
@@ -939,6 +944,10 @@ def _ws_machine_route_payload(row: Any, *, now_ts: float) -> dict[str, Any]:
                     "best_ask": _safe_int(source.get("best_ask")),
                     "aggressor_side": str(source.get("aggressor_side") or "UNKNOWN"),
                     "aggressor_quality": str(source.get("aggressor_quality") or ""),
+                    **{key: source[key] for key in (
+                        "provider_trade_epoch", "provider_trade_time_precision_ms",
+                        "provider_trade_date_basis",
+                    ) if key in source},
                 }
             )
         recent_depth = []

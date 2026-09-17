@@ -2216,3 +2216,41 @@ def test_stale_source_timing_is_diagnostic_and_does_not_change_snapshot():
     )
     assert fields["ai_input_preflight_allowed"] is False
     assert json.dumps(snapshot, sort_keys=True) == before
+
+
+@pytest.mark.parametrize("provider_delay", [6, -0.001])
+def test_fresh_received_but_six_second_old_provider_trade_is_feature_shortfall(provider_delay):
+    now = datetime(2026, 9, 17, 10, 0, tzinfo=KST).timestamp()
+    ws = _ws(now, effective_venue='KRX')
+    ws['market_data_transport_epoch'] = 2
+    record = {
+        'item': '005930', 'market_route': 'krx_only', 'market_suffix': '',
+        'effective_venue': 'KRX', 'transport_epoch': 2,
+        'orderbook': {'bids': [{'price': 9990}], 'asks': [{'price': 10000}]},
+    }
+    ws['realtime_type_snapshots_by_route'] = {'KRX|krx_only': {
+        '0D': {**record, 'observed_epoch': now - 0.2},
+        '0B': {**record, 'observed_epoch': now - 0.1, 'current_price': 10000,
+               'provider_trade_epoch': now - provider_delay,
+               'provider_trade_time_precision_ms': 1000,
+               'provider_trade_date_basis': 'local_receive_calendar_date_not_provider_date'},
+        'quiet_tape_observation': {'last_quote': now - 0.2, 'last_trade': now - 0.1,
+                                   'closed_episodes': 0},
+    }}
+    snapshot = mod.build_ai_market_snapshot(
+        stock_code='005930', decision_stage='entry_screen', ws_data=ws,
+        effective_venue='KRX', session_bucket='krx_regular', broker_route='KRX',
+        candle_context=_candle(), now_ts=now,
+    )
+    preflight = snapshot['ai_input_preflight_v1']
+    assert snapshot['trade_activity']['trade_activity_state'] == 'RECENT_TRADE'
+    if provider_delay < 0:
+        assert preflight['source_allowed'] is False
+        assert preflight['allowed'] is False
+        assert 'provider_trade_clock_future' in preflight['source_blockers']
+        return
+    assert preflight['source_allowed'] is True
+    assert preflight['feature_allowed'] is False
+    assert preflight['allowed'] is False
+    assert 'required_feature_provider_trade_late' in preflight['feature_blockers']
+    assert snapshot['sources']['tape']['observed_at'] == mod._iso(now - 0.1)

@@ -288,6 +288,8 @@ def build_market_data_health(
             "quote_receive_age_ms": quote_age,
             "trade_receive_age_ms": trade_age,
             "trade_event_age_ms": age(trade.get("provider_trade_epoch")),
+            "provider_trade_time_precision_ms": trade.get("provider_trade_time_precision_ms"),
+            "provider_trade_date_basis": trade.get("provider_trade_date_basis"),
             "quote_state": quote_state,
             **quiet_facts,
             "market_no_print_proven": False,

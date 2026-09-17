@@ -1724,6 +1724,10 @@ def build_ai_market_snapshot(
     if max_skew_ms is not None and max_skew_ms > _FRESH_MS:
         blockers.append("source_time_skew")
     feature_blockers: list[str] = []
+    provider_event_age = activity.get("trade_event_age_ms")
+    if (isinstance(provider_event_age, (int, float))
+            and not isinstance(provider_event_age, bool) and provider_event_age < 0):
+        blockers.append("provider_trade_clock_future")
     if activity_proven:
         # Proven absence of a new print is not transport/source corruption.
         # Old tape/last-sale values remain stale and cannot become current
@@ -1732,6 +1736,12 @@ def build_ai_market_snapshot(
             if blocker in blockers:
                 blockers.remove(blocker)
                 feature_blockers.append(f"required_feature_{blocker}")
+        event_age = activity.get("trade_event_age_ms")
+        precision_ms = activity.get("provider_trade_time_precision_ms")
+        if (isinstance(event_age, (int, float)) and not isinstance(event_age, bool)
+                and type(precision_ms) is int and precision_ms == 1000
+                and event_age - precision_ms > _FRESH_MS):
+            feature_blockers.append("required_feature_provider_trade_late")
     source_blocker_evaluation_order = list(dict.fromkeys(blockers))
     source_blockers = sorted(set(blockers))
     blockers.extend(feature_blockers)

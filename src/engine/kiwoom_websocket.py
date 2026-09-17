@@ -758,7 +758,7 @@ class KiwoomWSManager:
         if len(text) < 6 or not text[:6].isdigit():
             return 0
         now_value = time.time() if now_ts is None else float(now_ts)
-        now_dt = datetime.fromtimestamp(now_value)
+        now_dt = datetime.fromtimestamp(now_value, tz=KST)
         try:
             tick_dt = now_dt.replace(
                 hour=int(text[:2]),
@@ -3953,6 +3953,19 @@ class KiwoomWSManager:
                                     ),
                                     "time": tick_time,
                                     "exchange_time_raw": str(values.get("20") or ""),
+                                    "provider_trade_epoch": (
+                                        self._tick_time_to_epoch_ms(values.get("20"), now_ts=received_ts) / 1000.0
+                                        if len(str(values.get("20") or "")) == 6
+                                        and str(values.get("20") or "").isascii()
+                                        and str(values.get("20") or "").isdigit()
+                                        else None
+                                    ),
+                                    "provider_trade_time_precision_ms": (
+                                        1000 if len(str(values.get("20") or "")) == 6
+                                        and str(values.get("20") or "").isascii()
+                                        and str(values.get("20") or "").isdigit() else None
+                                    ),
+                                    "provider_trade_date_basis": "local_receive_calendar_date_not_provider_date",
                                     "exchange_code_9081": str(values.get("9081") or ""),
                                     "price": trade_price,
                                     "volume": int(trade_volume or 0),
@@ -4486,12 +4499,10 @@ class KiwoomWSManager:
                                                     values.get("28"), 0
                                                 ),
                                                 "provider_trade_epoch": (
-                                                    self._tick_time_to_epoch_ms(
-                                                        values.get("20"),
-                                                        now_ts=now_update_ts,
-                                                    )
-                                                    / 1000.0
+                                                    last_trade.get("provider_trade_epoch")
                                                 ),
+                                                "provider_trade_time_precision_ms": last_trade.get("provider_trade_time_precision_ms"),
+                                                "provider_trade_date_basis": last_trade.get("provider_trade_date_basis"),
                                                 "aggressor_side": str(
                                                     last_trade.get("aggressor_side")
                                                     or "UNKNOWN"
@@ -4576,8 +4587,8 @@ class KiwoomWSManager:
                                             volume=safe_int(values.get("13"), 0),
                                             provider_event_at=(
                                                 realtime_snapshot.get(
-                                                    "provider_trade_epoch", 0.0
-                                                )
+                                                    "provider_trade_epoch"
+                                                ) or 0.0
                                                 if real_type == "0B"
                                                 else None
                                             ),

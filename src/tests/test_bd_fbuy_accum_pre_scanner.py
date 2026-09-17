@@ -258,7 +258,10 @@ def test_ws_file_projection_preserves_common_activity_and_original_clocks(
         "realtime_type_snapshots_by_route": {
             "exact": {
                 "0D": record,
-                "0B": {**record, "observed_epoch": 105.0},
+                "0B": {**record, "observed_epoch": 105.0,
+                       "provider_trade_epoch": 100.0,
+                       "provider_trade_time_precision_ms": 1000,
+                       "provider_trade_date_basis": "local_receive_calendar_date_not_provider_date"},
                 "quiet_tape_observation": {
                     "last_quote": 110.0,
                     "last_trade": 105.0,
@@ -325,3 +328,19 @@ def test_write_ws_snapshot_persists_exact_date_registration_receipt(
         )
         == receipt
     )
+
+
+def test_machine_file_trade_rows_preserve_provider_clock_without_legacy_synthesis():
+    source = {'item': '005930_NX', 'transport_epoch': 3, 'received_at_ms': 110000,
+              'route_sequence': 2, 'price': 10000, 'volume': 1,
+              'provider_trade_epoch': 104.0, 'provider_trade_time_precision_ms': 1000,
+              'provider_trade_date_basis': 'local_receive_calendar_date_not_provider_date'}
+    legacy = {k: v for k, v in source.items() if not k.startswith('provider_')}
+    row = {'recent_trade_ticks_by_route': {'route': [source, legacy]}}
+    projected = mod._ws_machine_route_payload(row, now_ts=110.0)['route']['recent_trades']
+    assert projected[0]['received_at_ms'] == 110000
+    for key in ('provider_trade_epoch', 'provider_trade_time_precision_ms', 'provider_trade_date_basis'):
+        assert projected[0][key] == source[key]
+        assert key not in projected[1]
+    assert mod._ws_snapshot_age_ms(110.000001, 110.0) < 0
+    assert mod._ws_snapshot_age_ms(True, 110.0) == 'not_available_timestamp'

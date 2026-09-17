@@ -92,6 +92,17 @@ def _normalize(row: Mapping[str, Any], *, depth: bool) -> dict[str, Any]:
         result.update(
             price=price, quantity=quantity, side=side if isinstance(side, str) else None
         )
+        for key in ("provider_trade_epoch", "provider_trade_time_precision_ms",
+                    "provider_trade_date_basis"):
+            if key in row:
+                result[key] = row[key]
+        if "provider_trade_epoch" in result:
+            try:
+                if isinstance(result["provider_trade_epoch"], bool):
+                    raise ValueError("boolean_provider_clock")
+                result["provider_trade_epoch"] = _number(result["provider_trade_epoch"])
+            except (TypeError, ValueError, OverflowError):
+                result["provider_trade_epoch"] = None
     return result
 
 
@@ -194,6 +205,20 @@ def build_confirmation_window(
     if not trades or checkpoint_at_ms - trades[-1]["at_ms"] > maximum_age_ms:
         reasons.append("trade_watermark_stale_or_missing")
     active_trades = [r for r in trades if start_ms <= r["at_ms"] <= checkpoint_at_ms]
+    for trade in active_trades:
+        if "provider_trade_epoch" not in trade:
+            continue  # Preserve the declared legacy receive-window adapter.
+        try:
+            provider_ms = _number(trade["provider_trade_epoch"]) * 1000
+            precision = trade.get("provider_trade_time_precision_ms")
+            if provider_ms <= 0 or type(precision) is not int or precision != 1000:
+                raise ValueError("trade_provider_clock_contract_unproven")
+            if provider_ms > trade["at_ms"]:
+                reasons.append("trade_provider_clock_future")
+            elif trade["at_ms"] - (provider_ms + precision) > WINDOW_MS:
+                reasons.append("trade_provider_event_late")
+        except (TypeError, ValueError, OverflowError):
+            reasons.append("trade_provider_clock_contract_unproven")
     if any(r["side"] not in {"BUY", "SELL"} for r in active_trades):
         reasons.append("aggressor_side_unresolved")
     if depths:

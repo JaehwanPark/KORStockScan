@@ -340,3 +340,32 @@ def test_live_progress_rejects_reconnect_against_original_signal_epoch(monkeypat
         "signal_anchor_route_or_epoch_changed"
         in result["checkpoints"]["1"]["source_gap_reasons"]
     )
+
+
+@pytest.mark.parametrize('delay,precision,reason', [
+    (6, 1000, 'trade_provider_event_late'),
+    (-1, 1000, 'trade_provider_clock_future'),
+    (0.1, None, 'trade_provider_clock_contract_unproven'),
+    (float('nan'), 1000, 'trade_provider_clock_contract_unproven'),
+])
+def test_provider_clock_cannot_back_current_micro(delay, precision, reason):
+    depths, trades = _rows()
+    trades[-1].update(
+        provider_trade_epoch=trades[-1]['received_at_ms'] / 1000 - delay,
+        provider_trade_time_precision_ms=precision,
+        provider_trade_date_basis='local_receive_calendar_date_not_provider_date',
+    )
+    feature = _feature(depths, trades)
+    assert reason in feature['source_gap_reasons']
+    assert feature['eligible_for_feature_ablation'] is False
+    assert _live(depths, trades)['source_quality_status'] == 'source_gap'
+
+
+def test_coarse_provider_clock_and_unused_old_row_preserve_micro_window():
+    depths, trades = _rows()
+    trades[0].update(provider_trade_epoch=None, provider_trade_time_precision_ms=None)
+    trades[-1].update(
+        provider_trade_epoch=trades[-1]['received_at_ms'] / 1000 - 0.9,
+        provider_trade_time_precision_ms=1000,
+    )
+    assert _feature(depths, trades)['eligible_for_feature_ablation'] is True
