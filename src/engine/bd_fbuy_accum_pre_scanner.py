@@ -21,6 +21,7 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 
 from src.utils.constants import DATA_DIR, POSTGRES_URL
+from src.trading.market.quote_consistency import build_market_data_health
 
 SCHEMA_VERSION = "BD_FBUY_ACCUM_PRE_V1"
 ARTIFACT_DIR = DATA_DIR / "runtime" / "bd_fbuy_accum_pre"
@@ -892,6 +893,7 @@ def _ws_machine_route_payload(row: Any, *, now_ts: float) -> dict[str, Any]:
                 "route_sequence": route_sequence,
             }
             if realtime_type == "0B":
+                normalized["provider_trade_epoch"] = source.get("provider_trade_epoch")
                 normalized.update(
                     {
                         "trade_price": _safe_int(source.get("trade_price")),
@@ -982,6 +984,12 @@ def _ws_machine_route_payload(row: Any, *, now_ts: float) -> dict[str, Any]:
                 "sequence_authority": "local_projection_continuity_not_exchange_completeness",
                 "window_capacity_rows_per_type": 120,
             }
+            observation = route_snapshot.get("quiet_tape_observation")
+            if isinstance(observation, dict):
+                result[str(route_key)]["quiet_tape_observation"] = {
+                    key: observation.get(key)
+                    for key in ("last_quote", "last_trade", "closed_episodes")
+                }
     return result
 
 
@@ -1057,6 +1065,7 @@ def write_ws_snapshot(
             "machine_confirmation_routes": _ws_machine_route_payload(
                 row, now_ts=now_ts
             ),
+            "market_data_transport_epoch": row.get("market_data_transport_epoch"),
         }
     for raw_item, row in (observation_route_data or {}).items():
         item = str(raw_item or "").strip().upper()
@@ -1090,10 +1099,18 @@ def write_ws_snapshot(
             },
         )
         stock_routes = stock.setdefault("machine_confirmation_routes", {})
+        epoch = row.get("market_data_transport_epoch")
+        if "market_data_transport_epoch" not in stock:
+            stock["market_data_transport_epoch"] = epoch
+        elif stock["market_data_transport_epoch"] != epoch:
+            # Mixed connection epochs are not one atomic observation frame.
+            stock["market_data_transport_epoch"] = None
         for route_key, route_payload in _ws_machine_route_payload(
             row, now_ts=now_ts
         ).items():
             stock_routes[route_key] = route_payload
+    for stock in stocks.values():
+        stock["market_data_health"] = build_market_data_health(stock, now_ts=now_ts)
     payload = {
         "schema_version": "kiwoom_ws_dashboard_snapshot_v1",
         "generated_at_epoch": now_ts,

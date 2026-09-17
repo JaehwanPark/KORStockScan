@@ -9113,6 +9113,69 @@ def test_scanner_ws_subscription_recheck_selects_manager_snapshot_by_normalized_
     )
 
 
+@pytest.mark.parametrize("suffix,route,venue", [
+    ("", "krx_only", "KRX"), ("_AL", "krx_nxt_integrated", "UNKNOWN"),
+])
+@pytest.mark.parametrize("gap", [5.0, 35.0])
+def test_scanner_trade_feature_wait_does_not_repair_proven_live_source(
+    monkeypatch, suffix, route, venue, gap
+):
+    from src.trading.market.quote_consistency import build_market_data_health
+
+    monkeypatch.setattr(
+        kiwoom_sniper_v2, "_scanner_ws_subscription_recheck_fresh_sec", lambda: 3.0
+    )
+    record = {
+        "item": f"005930{suffix}",
+        "market_route": route,
+        "effective_venue": venue,
+        "transport_epoch": 2,
+        "observed_epoch": 1029.8,
+        "orderbook": {"bids": [{"price": 70900}], "asks": [{"price": 71100}]},
+    }
+    snapshot = {
+        "curr": 71000,
+        "last_ws_update_ts": 1029.8,
+        "last_realtime_type_ts": {"0D": 1029.8, "0B": 1030 - gap},
+        "last_realtime_type_item": {"0D": record["item"], "0B": record["item"]},
+        "market_data_transport_epoch": 2,
+        "received_types": ["0D", "0B"],
+        "realtime_type_snapshots_by_route": {
+            "exact": {
+                "0D": record,
+                "0B": {**record, "observed_epoch": 1030 - gap},
+                "quiet_tape_observation": {
+                    "last_quote": 1029.8,
+                    "last_trade": 1030 - gap,
+                    "closed_episodes": 0,
+                },
+            }
+        },
+    }
+    manager = SimpleNamespace(
+        subscribed_codes={"005930"}, get_latest_data=lambda code: snapshot
+    )
+    _, fields = kiwoom_sniper_v2._scanner_ws_subscription_recheck_snapshot_and_fields(
+        manager, "005930", snapshot, now_ts=1030.0
+    )
+    assert (
+        fields["ws_subscription_recheck_trade_activity"]
+        == build_market_data_health(snapshot, now_ts=1030.0)["routes"]["exact"]
+    )
+    assert fields["ws_subscription_repair_needed"] is False
+    assert fields["ws_subscription_recheck_entry_realtime_fresh"] is False
+    assert (
+        fields["ws_subscription_recheck_status"]
+        == "subscribed_observation_proven_required_feature_wait"
+    )
+    snapshot["market_data_transport_epoch"] = 3
+    _, failed = kiwoom_sniper_v2._scanner_ws_subscription_recheck_snapshot_and_fields(
+        manager, "005930", snapshot, now_ts=1030.0
+    )
+    assert failed["ws_subscription_repair_needed"] is True
+    assert failed["ws_subscription_recheck_observation_proven"] is False
+
+
 def test_scanner_ws_subscription_recheck_does_not_normalize_from_non_price_type_only():
     manager = SimpleNamespace(
         subscribed_codes={"005930"},

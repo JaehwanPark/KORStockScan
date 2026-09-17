@@ -78,6 +78,9 @@ def test_websocket_price_comparison_accepts_fresh_shared_0b(monkeypatch, tmp_pat
     assert comparison["age_ms"] == 400.0
     assert comparison["used_for_manual_order"] is False
     assert comparison["runtime_effect"] is False
+    assert comparison["market_data_health"]["as_of_epoch"] == now.timestamp()
+    assert comparison["market_data_health"]["routes"] == {}  # legacy lacks exact receipts
+    assert comparison["market_data_health"]["decision_authority"] is False
 
 
 def test_websocket_price_comparison_rejects_stale_0b(monkeypatch, tmp_path):
