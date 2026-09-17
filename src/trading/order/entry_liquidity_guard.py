@@ -474,6 +474,13 @@ def parse_ka10003_entry_execution_velocity_snapshot(
         latest_age_ms = (
             observed_seconds - seconds[0]
         ) * 1_000 + observed.microsecond // 1_000
+        receive_order_valid = True
+        if source_meta:
+            received = datetime.fromtimestamp(source_meta["rest_received_ts_ms"] / 1000, tz=KST)
+            received_seconds = received.hour * 3600 + received.minute * 60 + received.second
+            # A cached/reused response must not cure a clock conflict merely
+            # because consumption waited until its future print time.
+            receive_order_valid = received_seconds >= seconds[0]
         if latest_age_ms < -MAX_EVENT_CLOCK_SKEW_MS:
             raise ValueError("ka10003_latest_trade_time_in_future")
     except (TypeError, ValueError) as exc:
@@ -484,7 +491,7 @@ def parse_ka10003_entry_execution_velocity_snapshot(
         )
 
     return EntryExecutionVelocitySnapshot(
-        source_ok=True,
+        source_ok=latest_age_ms >= 0 and receive_order_valid,
         symbol=expected_code,
         route=normalized_route,
         request_code=request_code,
@@ -498,6 +505,7 @@ def parse_ka10003_entry_execution_velocity_snapshot(
         source_meta=source_meta,
         response_item_raw=response_item,
         market_data_health=market_health,
+        error="" if latest_age_ms >= 0 and receive_order_valid else "ka10003_latest_trade_time_in_future",
     )
 
 

@@ -718,3 +718,15 @@ def test_velocity_future_print_age_is_signed_and_never_normalized_to_zero():
     decision = evaluate_entry_execution_velocity(snapshot, requested_quantity=20, now_ts=observed.timestamp())
     assert not decision.allowed
     assert decision.reason == 'ka10003_latest_trade_time_in_future'
+
+
+def test_velocity_future_packet_does_not_recover_by_wait_or_cached_reparse():
+    observed = datetime(2026, 9, 17, 15, 12, 31, tzinfo=KST)
+    rows = _velocity_receipted_rows(observed)
+    snapshot = parse_ka10003_entry_execution_velocity_snapshot(rows, symbol='111770', route='SOR', observed_at=observed)
+    assert not snapshot.source_ok
+    waited = evaluate_entry_execution_velocity(snapshot, requested_quantity=20, now_ts=observed.timestamp() + 1)
+    assert not waited.allowed
+    reparsed = parse_ka10003_entry_execution_velocity_snapshot(rows, symbol='111770', route='SOR', observed_at=observed + timedelta(seconds=1))
+    assert not reparsed.source_ok
+    assert reparsed.error == 'ka10003_latest_trade_time_in_future'
