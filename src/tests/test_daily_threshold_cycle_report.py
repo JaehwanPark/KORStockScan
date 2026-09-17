@@ -2,6 +2,7 @@ import gzip
 import hashlib
 import json
 from collections import Counter
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -9796,3 +9797,90 @@ def test_ai_guard_requires_typed_boolean_proposal():
     )
     assert accepted["guard_accepted"] is True
     assert accepted["effective_value"] is False
+
+
+def test_native_price_replay_reaches_publisher_preopen_runtime_with_small_positive_ev(monkeypatch, tmp_path):
+    from src.tests.test_strategy_owner_replay import entry_owner_event, native_entry_loader
+    from src.engine.scalping.strategy_owner_replay import build_entry_opportunity_replays
+    from src.engine.scalping import entry_execution_sizing_plan as sizing
+    from src.engine import threshold_cycle_preopen_apply as preopen
+    monkeypatch.setattr(report_mod, 'ENTRY_SPLIT_ORDER_PLAN_DIR', tmp_path)
+    monkeypatch.setattr(report_mod, 'MECHANISTIC_ENTRY_PRICE_POLICY_DIR', tmp_path)
+    monkeypatch.setattr(report_mod, 'TRADING_RULES', SimpleNamespace(SCALPING_CONDITIONAL_STRONG_DEFENSIVE_BPS=11))
+    events = []
+    for day in ['2026-09-14', '2026-09-15']:
+        out = build_entry_opportunity_replays(day, [entry_owner_event(day, i) for i in range(10)],
+            evaluated_at=datetime.fromisoformat('2026-09-17T10:00:00+09:00').timestamp(),
+            micro_loader=native_entry_loader)
+        assert out['counts']['completed'] == 10
+        events.extend(out['quantity_leg_events'])
+    split = dict(date='2026-09-17', source_quality={'tuning_input_allowed': True},
+        cumulative_state={'quantity_leg_four_arm_events': events,
+            'entry_opportunity_replay_source_counts': {'2026-09-14': 10, '2026-09-15': 10}})
+    from src.engine.scalping import entry_split_order_plan as split_owner
+    monkeypatch.setattr(split_owner, 'POLICY_DIR', tmp_path)
+    atomic = dict(entry_execution_sizing_plan_schema=split_owner.ATOMIC_EXECUTION_SIZING_SCHEMA,
+        entry_execution_sizing_policy=split_owner.ATOMIC_EXECUTION_SIZING_BASELINE_POLICY,
+        entry_price_plan_schema=split_owner.ATOMIC_PRICE_PLAN_SCHEMA)
+    split_policy = dict(schema_version=split_owner.POLICY_SCHEMA_VERSION,
+        policy_version='native-fixture-split', source_date='2026-09-17', **atomic)
+    split.update(schema_version=split_owner.SCHEMA_VERSION,
+        recommended_policy=dict(policy_version=split_policy['policy_version'], **atomic))
+    split, split_policy = split_owner.bind_report_policy_generation(split, split_policy)
+    frozen_path = split_owner.generation_policy_snapshot_path(split)
+    frozen_path.parent.mkdir(parents=True)
+    frozen_path.write_text(json.dumps(split_policy))
+    source_path = tmp_path / 'entry_split_order_plan_2026-09-17.json'
+    source_path.write_text(json.dumps(split))
+    family = report_mod._build_dynamic_entry_price_resolver_family([], [], target_date='2026-09-17')
+    assert family['sample']['primary_sample_book'] == 'executable_opportunity_replay'
+    assert family['sample']['real_candidate_observations'] == 0
+    assert family['sample']['real_outcome_joined_sample'] == 0
+    candidates = report_mod._build_calibration_candidates([family])
+    candidate = candidates[0]
+    assert candidate['sample_count'] == 20
+    assert candidate['calibration_state'] == 'adjust_up'
+    assert candidate['runtime_apply_eligible_now'] is True
+    assert candidate['recommended_values']['conditional_strong_defensive_bps'] == 10
+    report = {'date': '2026-09-17', 'calibration_candidates': candidates}
+    report_mod.apply_window_policy_registry_to_report(report, {})
+    assert candidates[0]['runtime_apply_eligible_now'] is True
+    assert candidates[0]['window_policy_resolution']['daily_only_allowed'] is False
+    report_mod._materialize_mechanistic_entry_price_policy(report, '2026-09-17')
+    path = tmp_path / 'mechanistic_entry_price_policy_2026-09-17.json'
+    policy = json.loads(path.read_text())
+    assert 0 < policy['cost_adjusted_ev_pct'] < .1
+    prefix = 'KORSTOCKSCAN_MECHANISTIC_ENTRY_PRICE_POLICY_'
+    env = {prefix + suffix: str(value) for suffix, value in {
+        'ENABLED': 'true', 'FILE': path, 'VERSION': policy['policy_version'],
+        'SOURCE_DATE': policy['source_date'], 'ACTIVE_DATE': policy['active_date'],
+        'SHA256': hashlib.sha256(path.read_bytes()).hexdigest()}.items()}
+    env.update(policy['runtime_env'])
+    audit = next(a for a in preopen._split_runtime_policy_audits(policy['active_date'], env)
+        if a['family'] == 'dynamic_entry_price_resolver')
+    assert audit['status'] == 'pass'
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    loaded, status = sizing.runtime_mechanistic_entry_price_policy(active_date=policy['active_date'])
+    assert status == 'loaded'
+    monkeypatch.setattr(sizing, 'runtime_mechanistic_entry_price_policy', lambda: (loaded, status))
+    assert sizing.scoped_entry_price_bps('strong_1tick_pressure', 10, venue='KRX', session='KRX_REGULAR', policy_bundle_sha256='a' * 64) == 10
+    assert sizing.scoped_entry_price_bps('strong_1tick_pressure', 10, venue='NXT', session='KRX_REGULAR') == 11
+    assert sizing.scoped_entry_price_bps('strong_1tick_pressure', 10, venue='KRX', session='UNKNOWN') == 11
+    assert sizing.scoped_entry_price_bps('strong_1tick_pressure', 10, venue='KRX', session='KRX_REGULAR', policy_bundle_sha256='b' * 64) == 11
+    assert sizing.scoped_entry_price_bps('weak_liquidity_wide_spread', 40, venue='KRX', session='KRX_REGULAR') == 40
+    split['cumulative_state']['entry_opportunity_replay_source_counts']['2026-09-17'] = 1
+    source_path.write_text(json.dumps(split))
+    grid = report_mod._entry_price_opportunity_candidate_grid('2026-09-17', {'conditional_strong_defensive_bps': 11})
+    assert grid['selected_candidate'] is None
+    assert grid['blocker'] == 'executable_split_replay_source_missing_or_invalid'
+
+
+def test_new_price_contract_cannot_publish_legacy_completed_average_after_cutoff(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, 'MECHANISTIC_ENTRY_PRICE_POLICY_DIR', tmp_path)
+    candidate = dict(family='dynamic_entry_price_resolver', runtime_apply_eligible_now=True,
+        calibration_state='adjust_up', source_metrics={'entry_price_profile_selected_candidate': {
+            'candidate_id': 'normal:10', 'target_value_key': 'normal_defensive_bps', 'profile_bps': 10,
+            'exact_outcome_joined_sample': 20, 'metrics': {'source_quality_adjusted_ev_pct': .2}}})
+    report_mod._materialize_mechanistic_entry_price_policy({'calibration_candidates': [candidate]}, '2026-09-17')
+    assert not list(tmp_path.glob('*.json'))

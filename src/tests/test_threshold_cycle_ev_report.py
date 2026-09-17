@@ -1971,3 +1971,17 @@ def test_microstructure_summary_propagates_clean_baseline_cumulative(
     assert cumulative["included_date_count"] == 40
     assert cumulative["source_quality_adjusted_ev_pct"] == 0.31
     assert cumulative["runtime_apply_required"] is False
+
+
+def test_modeled_price_summary_preserves_zero_realized_sample():
+    from src.tests.test_strategy_owner_replay import entry_seed, entry_replay
+    from src.engine.scalping.strategy_owner_replay import select_entry_price_replay
+    rows = [entry_replay(entry_seed(day, i)) for day in ['2026-09-14', '2026-09-15'] for i in range(10)]
+    proof = select_entry_price_replay(rows)[0]
+    summary = mod._top_level_summary({'calibration_outcome': {'decisions': [{
+        'family': 'dynamic_entry_price_resolver', 'source_metrics': {
+            'primary_sample_book': 'executable_opportunity_replay',
+            'entry_price_profile_selected_candidate': {'price_selection_evidence': proof}}}]}})
+    assert summary['opportunity_replay_sample'] == 20
+    assert summary['real_sample'] == 0
+    assert summary['price_selection_evidence_sha256'] == proof['evidence_sha256']

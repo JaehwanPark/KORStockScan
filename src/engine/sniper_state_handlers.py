@@ -72329,6 +72329,10 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 compose_entry_execution_sizing_plan(
                     planned_orders,
                     expected_total_qty=requested_qty,
+                    replay_context={"stock_code": str(code), "observed_at": time.time(),
+                        "profile": latency_gate.get("entry_price_gap_profile"),
+                        "profile_bps": latency_gate.get("entry_price_gap_profile_bps"),
+                        "sizing_context": sizing_context},
                     action_receipt=machine_action_receipt,
                     quantity_policy_version=(
                         stock.get("position_sizing_policy_version")
