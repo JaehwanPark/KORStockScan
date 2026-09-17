@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from src.trading.market.quote_consistency import (
     ws_quote_receive_age_ms,
     build_market_data_health,
@@ -152,6 +154,64 @@ def test_serialized_quiet_observation_keeps_pure_counter_and_expiry():
         assert route["quiet_episode_count"] == 1
     expired = build_market_data_health(frame, now_ts=114.0)["routes"]["KRX|krx"]
     assert expired["trade_activity_state"] == "OBSERVATION_UNPROVEN"
+
+
+@pytest.mark.parametrize(
+    "route,item,venue,proven",
+    [
+        ("krx_nxt_integrated", "005930_AL", "UNKNOWN", True),
+        ("krx_only", "005930", "UNKNOWN", False),
+        ("krx_nxt_integrated", "005930", "UNKNOWN", False),
+        ("krx_only", "005930", "KRX", True),
+    ],
+)
+def test_activity_scope_is_not_underlying_integrated_exchange(
+    route, item, venue, proven
+):
+    record = {
+        "item": item,
+        "market_route": route,
+        "effective_venue": venue,
+        "transport_epoch": 2,
+        "observed_epoch": 110.0,
+        "orderbook": {"bids": [{"price": 9990}], "asks": [{"price": 10010}]},
+    }
+    records = {
+        "0D": record,
+        "0B": {**record, "observed_epoch": 105.0},
+        "quiet_tape_observation": {
+            "last_quote": 110.0,
+            "last_trade": 105.0,
+            "closed_episodes": 0,
+        },
+    }
+    frame = {
+        "market_data_transport_epoch": 2,
+        "realtime_type_snapshots_by_route": {"scope": records},
+    }
+    facts = build_market_data_health(frame, now_ts=110.0)["routes"]["scope"]
+    assert facts["observation_continuity_proven"] is proven
+    assert facts["effective_venue"] == venue
+    assert facts["underlying_event_venue_proven"] is (proven and venue == "KRX")
+    assert facts["trade_activity_state"] == (
+        "RECENT_TRADE" if proven else "OBSERVATION_UNPROVEN"
+    )
+    # Neither companion timestamps nor cross-epoch records can prove activity.
+    records["quiet_tape_observation"]["last_trade"] = 109.0
+    assert (
+        build_market_data_health(frame, now_ts=110.0)["routes"]["scope"][
+            "observation_continuity_proven"
+        ]
+        is False
+    )
+    records["quiet_tape_observation"]["last_trade"] = 105.0
+    records["0B"]["transport_epoch"] = 1
+    assert (
+        build_market_data_health(frame, now_ts=110.0)["routes"]["scope"][
+            "observation_continuity_proven"
+        ]
+        is False
+    )
 
 
 def _ws(

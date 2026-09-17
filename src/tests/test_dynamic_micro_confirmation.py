@@ -267,6 +267,57 @@ def test_live_checkpoint_uses_exact_route_causal_0b_0d_and_enters() -> None:
     assert decision["selected_delay_sec"] == 0
 
 
+def test_common_recent_trade_does_not_impute_micro_trade_backing() -> None:
+    from src.trading.market.quote_consistency import build_market_data_health
+
+    now = datetime.fromisoformat("2026-09-17T10:00:00+09:00")
+    snapshot = _live_snapshot(now)
+    row = snapshot["stocks"]["005930"]
+    row["market_data_transport_epoch"] = 3
+    route = row["machine_confirmation_routes"]["_NX|nxt_only"]
+    for kind, receipt in route["realtime_types"].items():
+        receipt.update(market_route="nxt_only", effective_venue="NXT")
+        receipt["observed_epoch"] = now.timestamp() - (5 if kind == "0B" else 0.1)
+    route["realtime_types"]["0D"]["orderbook"] = {
+        "bids": [{"price": 10000}],
+        "asks": [{"price": 10010}],
+    }
+    route["quiet_tape_observation"] = {
+        "last_quote": now.timestamp() - 0.1,
+        "last_trade": now.timestamp() - 5,
+        "closed_episodes": 0,
+    }
+    route["recent_trades"] = []
+    checkpoint, _ = build_live_dynamic_confirmation_checkpoint(
+        snapshot=snapshot,
+        now=now,
+        signal_decision_at=now,
+        checkpoint_sec=0,
+        symbol="005930",
+        route="NXT",
+        owner="episode",
+        baseline_fill_price=10010,
+        owner_entry_limit_price=10010,
+        owner_target_price=10050,
+        round_trip_cost_pct=0.23,
+        widget_take_profit=False,
+    )
+    assert checkpoint["market_data_health"] == build_market_data_health(
+        row, now_ts=now.timestamp()
+    )
+    assert (
+        checkpoint["market_data_health"]["routes"]["_NX|nxt_only"][
+            "trade_activity_state"
+        ]
+        == "RECENT_TRADE"
+    )
+    assert checkpoint["source_quality_status"] != "eligible"
+    assert (
+        evaluate_live_dynamic_confirmation_progress({0: checkpoint})["action"]
+        != "ENTER"
+    )
+
+
 def test_live_progress_accepts_rebound_without_requiring_full_anchor_recovery() -> None:
     first = _checkpoint(0, bid_return_bps=-5.0, trade_backed_ratio=0.2)
     second = _checkpoint(1, bid_return_bps=-3.0)

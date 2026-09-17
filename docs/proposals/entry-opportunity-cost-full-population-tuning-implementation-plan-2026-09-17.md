@@ -514,6 +514,8 @@ atomic entry_execution_sizing_plan은 이미 승인된 quantity/split/price를 �
 
 ### 7.3 Widget·episode 및 기타 family
 
+2026-09-17 추가 코드 점검: [정책 연구 로직 리뷰](../audit-reports/2026-09-17-widget-episode-policy-research-logic-review.md). 분봉/paired CF 연구가 이미 있는 경로와 actual-only timing adapter를 구분한다. U10A에서 raw opportunity union·실행가능성·source-day/자본 계약을 확인하고, 최초 EV 탐색과 총 순익 목표의 차이는 기존 component/paired guard를 보존한 채 검토한다. [장후 계산 최적화 3후보 계획](postclose-computation-optimization-implementation-plan-2026-09-17.md)은 별도 계산 후속이며 작성 완료가 구현·배포·자연 정책·수익 acceptance를 뜻하지 않는다. 기존 U10A/B owner를 중복 생성하지 않는다.
+
 Widget paired replay의 before_confirmation trace/BBO loader를 미진입 timing adapter에 재사용한다. source-only 경제성 outcome의 modeled terminal과 실제 owner_outcome.realized를 분리하고, actual adapter의 실체결 검증은 삭제하지 않는다. 모든 raw signal이 정책 anchor인 것은 아니므로 실제 decision anchor·incumbent reject·diagnostic prospective를 명시한다.
 
 entry-spot/reentry의 minute-bar proxy 후보는 raw exact feasibility를 확인하기 전 자동 실전 승격 자료가 아니다. 기존 삼성/저가주 admission·source day·baseline/holdout 계약을 각각 유지한다. 위젯 signal/target과 entry-timing을 같은 stage에서 중복 변경하지 않는다.
@@ -584,6 +586,7 @@ scanner/recheck/ADD-NOADD/exit family에서도 raw/미노출 CF가 existing cand
 - 작업: 호환 dataclass/return/envelope에 같은 health를 전달한다. REST API별 source 의미·route·response시각/cache provenance, WS quiet state를 보존한다. REST-only는 독립repeat counter를 만들지 않는다.
 - acceptance: 직접/우회client metadata 탈락0, file capture/serialize 시각으로 fresh화0, minute/history/account/auth/order에 trade activity 적용0, legacy adapter 명시적동등/parity 또는unproven.
 - 테스트: 기존 kiwoom/utils/episode read-control/enrichment/collector tests. request/parser/FID/REG 변경은 U0 reference 근거와 protocol regression을 확인한다.
+- 검증된 부분 전달: 기존 WS dashboard writer의 bounded type projection에 transport epoch·0B provider clock·quiet observation 원시각을 보존한다. 공통 owner가 raw route/file projection을 같은 함수로 소비하며 capture 시각·이전 health companion으로 fresh화하지 않는다. 이 전달과 micro/web 소비 parity는 U2 전수 direct REST/client 전환 완료를 대신하지 않는다.
 
 ### U3 — main/scanner·기계/AI·price/sizing/holding consumer 전환
 
@@ -595,6 +598,7 @@ scanner/recheck/ADD-NOADD/exit family에서도 raw/미노출 CF가 existing cand
 - 작업: 독립 freshness 추정을 위임하고 quote/tape/transport/local lag·required feature 이유를 분리한다. atomic frame/attempt/promotion/정책hash를 다음stage로 전달한다. 공통health가 action/threshold를 변경하지 않는다.
 - 소비 계약 보완: canonical snapshot은 기존 공통 `build_market_data_health`에 원래 WS route receipt를 전달해 현재 consume 시점의 facts를 받는다. 이전 envelope의 health를 신뢰하거나 소비자가10초/공백 횟수를 재계산하지 않는다. 동일 item/route/venue/type 시각·epoch/연속성이 결속된 정상 체결공백의 `current_price_stale/tape_stale/source_time_skew`는 source 손상과 분리한 `required_feature_*` 부족이다. source/feature gate를 분리하되 최종 `allowed`는 둘 다 만족해야 하며, 오래된 tape 값·원시각·quality는 그대로다. feature-only 미판정 receipt는 `RECHECK/WAIT`·Provider 미호출로 보존하고 실제 missing/conflict/quote 및 runtime artifact 실패는 기존 source/runtime 차단이다. late confirmation recheck도 source뿐 아니라 전체 preflight를 확인해 feature 우회를 막는다. 기존 #11/#74의 expected attempt 보존식은 feature-before-assessment를 별도 제외 분모로 소비해야 한다.
 - 필수 회귀: `공백5/9.999초+fresh0D+정상 관측`은 공통 `RECENT_TRADE`와 일치하고 전체 `SOURCE_INVALID`로 라벨링하지 않는다. `10/30초`·서로 다른3episode·같은 frame 반복·새 trade/epoch 복귀를 공통 facts와 대사한다. 필수 현재 feature가 부족하면 여전히 미진입/AI 미호출이며, stale/crossed quote·cross-epoch·route/clock/continuity 결손·변조 companion은 source 차단한다. snapshot→ai ops/tick event→trace→#11/#74가 상태/원시각/분모를 보존해야 한다. 이 회귀나 한 helper 적용만으로 U2~U4의 전수 adapter/file reader/독립 owner 전환을 완료로 판정하지 않는다.
+- 자연 관측 후 보완: `_AL/krx_nxt_integrated`의 동일 item/type/epoch 관측 범위는 underlying event venue UNKNOWN과 별개다. 공통 health는 integrated scope를 증명하되 실제 거래소를 추정하지 않는다. canonical SOR view도 기존 KRX regular 시간창·candle·stage/broker 계약 안에서만 이 facts를 소비하며 old tape quality/feature 차단을 유지한다. scanner subscription recheck는 공통 경로가 정상인 required trade feature 대기를 재등록 필요와 분리한다. entry feature TTL·warm reactivation/new source·최종 quote/submit guard는 그대로다.
 - acceptance: source-time skew/current_price/type provenance의 원인 구분, 동일input health parity·consumer TTL 유지, quote-only 변화로 판단 가능한 경로의정상복귀, PASS/SAFE/CAUTION/DANGER의 기존 집행contract 유지.
 - 테스트: 기존 ai_market_snapshot/entry_setup/scanner async bridge/orchestrator/holding 관련tests; actual source collection→#11/#74/#76/#119의 metadata 전달 테스트.
 

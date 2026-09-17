@@ -12,6 +12,26 @@ RUNTIME_FAMILY = "quote_consistency_normalization"
 MARKET_DATA_HEALTH_SCHEMA = "kiwoom_market_data_health_v1"
 
 
+def _type_route_records(data: Mapping[str, Any]) -> Mapping[str, Any]:
+    routes = data.get("realtime_type_snapshots_by_route")
+    if routes is not None:
+        return routes if isinstance(routes, Mapping) else {}
+    projections = data.get("machine_confirmation_routes")
+    if not isinstance(projections, Mapping):
+        return {}
+    # Existing bounded file projection, never captured/precomputed clocks.
+    return {
+        key: {
+            "0B": projection["realtime_types"].get("0B"),
+            "0D": projection["realtime_types"].get("0D"),
+            "quiet_tape_observation": projection.get("quiet_tape_observation"),
+        }
+        for key, projection in projections.items()
+        if isinstance(projection, Mapping)
+        and isinstance(projection.get("realtime_types"), Mapping)
+    }
+
+
 def ws_quote_receive_age_ms(data: Mapping[str, Any], *, now_ts: float) -> float | None:
     """Shared source clock; transport never renews a type-specific book.
 
@@ -31,8 +51,7 @@ def ws_quote_receive_age_ms(data: Mapping[str, Any], *, now_ts: float) -> float 
     if "market_data_transport_epoch" in data:
         if type(data.get("market_data_transport_epoch")) is not int:
             return None
-        routes = data.get("realtime_type_snapshots_by_route")
-        routes = routes if isinstance(routes, Mapping) else {}
+        routes = _type_route_records(data)
         items = data.get("last_realtime_type_item")
         item = items.get("0D") if isinstance(items, Mapping) else None
         candidates = [
@@ -95,8 +114,7 @@ def build_market_data_health(
             return None
         return (now_ts - stamp) * 1000.0
 
-    routes = data.get("realtime_type_snapshots_by_route")
-    routes = routes if isinstance(routes, Mapping) else {}
+    routes = _type_route_records(data)
     current_epoch = data.get("market_data_transport_epoch")
     facts: dict[str, Any] = {}
     for key, records in routes.items():
@@ -109,15 +127,22 @@ def build_market_data_health(
         quote_age = age(quote.get("observed_epoch"))
         trade_age = age(trade.get("observed_epoch"))
         bid, ask = _best_levels(quote)
+        quote_venue = str(quote.get("effective_venue") or "UNKNOWN").upper()
+        trade_venue = str(trade.get("effective_venue") or "UNKNOWN").upper()
+        integrated_scope = bool(
+            str(quote.get("item") or "").endswith("_AL")
+            and quote.get("market_route") == "krx_nxt_integrated"
+            and trade.get("market_route") == "krx_nxt_integrated"
+        )
         same_scope = bool(
             quote.get("item")
             and quote.get("item") == trade.get("item")
-            and current_epoch is not None
+            and type(current_epoch) is int
             and quote.get("transport_epoch")
             == trade.get("transport_epoch")
             == current_epoch
-            and quote.get("effective_venue") == trade.get("effective_venue")
-            and quote.get("effective_venue") not in (None, "", "UNKNOWN")
+            and quote_venue == trade_venue
+            and (quote_venue != "UNKNOWN" or integrated_scope)
             and quote.get("market_route") == trade.get("market_route")
         )
         quote_state = (
@@ -143,7 +168,16 @@ def build_market_data_health(
             "observation_continuity_proven": False,
         }
         state = records.get("_quiet_tape_state")
-        if same_scope and quote_state == "fresh" and hasattr(state, "facts"):
+        last_print_age = age(getattr(state, "last_trade", None))
+        if (
+            same_scope
+            and quote_state == "fresh"
+            and hasattr(state, "facts")
+            and age(getattr(state, "last_quote", None)) == quote_age
+            and trade_age is not None
+            and last_print_age is not None
+            and 0 <= trade_age <= last_print_age
+        ):
             quiet_facts.update(state.facts(now=now_ts))
         elif same_scope and quote_state == "fresh":
             observation = records.get("quiet_tape_observation")
@@ -155,6 +189,9 @@ def build_market_data_health(
                     and 0 <= last_quote_age <= 3000
                     and last_trade_age is not None
                     and last_trade_age >= 0
+                    and last_quote_age == quote_age
+                    and trade_age is not None
+                    and 0 <= trade_age <= last_trade_age
                 )
                 if proven:
                     quiet = last_trade_age >= 10_000
@@ -175,6 +212,12 @@ def build_market_data_health(
         facts[str(key)] = {
             "item": quote.get("item") or trade.get("item"),
             "effective_venue": quote.get("effective_venue") or "UNKNOWN",
+            "market_data_scope": (
+                "KRX_NXT_INTEGRATED" if integrated_scope else quote_venue
+            ),
+            "underlying_event_venue_proven": not integrated_scope
+            and quote_venue in {"KRX", "NXT"}
+            and same_scope,
             "market_route": quote.get("market_route"),
             "transport_epoch": current_epoch,
             "quote_receive_age_ms": quote_age,

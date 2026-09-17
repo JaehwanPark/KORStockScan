@@ -25,6 +25,7 @@ from src.trading.market.confirmation_window import (
     build_confirmation_window,
 )
 from src.utils.constants import DATA_DIR
+from src.trading.market.quote_consistency import build_market_data_health
 
 DYNAMIC_CONFIRMATION_SCHEMA = "machine_dynamic_micro_confirmation_replay_v2"
 DYNAMIC_CONFIRMATION_POLICY_ID = "machine_dynamic_micro_confirmation_policy_v2"
@@ -885,6 +886,11 @@ def build_live_dynamic_confirmation_checkpoint(
         "refill_ratio": None,
         "downward_reprice_observed": None,
         "source_gap_reasons": [],
+        "market_data_health": (
+            build_market_data_health(row, now_ts=now_value.timestamp())
+            if isinstance(row, Mapping) and now_value is not None
+            else None
+        ),
     }
     anchor = {"best_bid": None, "best_ask": None, "best_ask_qty": None}
     reasons: list[str] = []

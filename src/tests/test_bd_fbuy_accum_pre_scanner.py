@@ -4,6 +4,7 @@ import json
 from datetime import date, timedelta
 
 import pandas as pd
+import pytest
 
 from src.engine import bd_fbuy_accum_pre_scanner as mod
 
@@ -223,6 +224,66 @@ def test_write_ws_snapshot_preserves_realtime_type_and_trade_tick_provenance(
     assert stock["last_trade_cum_volume"] == 1234
     assert "nested" not in stock["last_trade_tick"]
     assert stock["last_trade_tick_age_ms"] == 1500.0
+
+
+@pytest.mark.parametrize(
+    "suffix,route,venue",
+    [
+        ("", "krx_only", "KRX"),
+        ("_AL", "krx_nxt_integrated", "UNKNOWN"),
+    ],
+)
+def test_ws_file_projection_preserves_common_activity_and_original_clocks(
+    monkeypatch, tmp_path, suffix, route, venue
+):
+    from src.trading.market.quote_consistency import build_market_data_health
+
+    monkeypatch.setattr(mod, "WS_SNAPSHOT_PATH", tmp_path / "latest.json")
+    record = {
+        "item": f"005930{suffix}",
+        "market_route": route,
+        "market_suffix": suffix,
+        "effective_venue": venue,
+        "transport_epoch": 2,
+        "route_sequence": 5,
+        "observed_epoch": 110.0,
+        "orderbook": {"bids": [{"price": 9990}], "asks": [{"price": 10010}]},
+    }
+    row = {
+        "curr": 10000,
+        "last_ws_update_ts": 110.0,
+        "last_realtime_type_ts": {"0D": 110.0, "0B": 105.0},
+        "last_realtime_type_item": {"0D": record["item"], "0B": record["item"]},
+        "market_data_transport_epoch": 2,
+        "realtime_type_snapshots_by_route": {
+            "exact": {
+                "0D": record,
+                "0B": {**record, "observed_epoch": 105.0},
+                "quiet_tape_observation": {
+                    "last_quote": 110.0,
+                    "last_trade": 105.0,
+                    "closed_episodes": 0,
+                },
+            }
+        },
+    }
+    path = mod.write_ws_snapshot({"005930": row}, now_ts=110.0)
+    stock = json.loads(path.read_text())["stocks"]["005930"]
+    raw = build_market_data_health(row, now_ts=110.0)
+    assert stock["market_data_health"] == raw
+    assert build_market_data_health(stock, now_ts=110.0) == raw
+    assert raw["routes"]["exact"]["trade_activity_state"] == "RECENT_TRADE"
+    # A captured health companion cannot keep an expired quote fresh.
+    expired = build_market_data_health(stock, now_ts=114.0)
+    assert expired["routes"]["exact"]["quote_state"] == "stale"
+    assert expired["routes"]["exact"]["trade_activity_state"] == "OBSERVATION_UNPROVEN"
+    stock["market_data_transport_epoch"] = 3
+    assert (
+        build_market_data_health(stock, now_ts=110.0)["routes"]["exact"][
+            "observation_continuity_proven"
+        ]
+        is False
+    )
 
 
 def test_write_ws_snapshot_persists_exact_date_registration_receipt(

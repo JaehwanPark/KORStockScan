@@ -18,25 +18,30 @@ KST = ZoneInfo("Asia/Seoul")
         (30, "QUIET_TAPE_OBSERVED"),
     ],
 )
+@pytest.mark.parametrize("integrated", [False, True])
 def test_proven_five_second_trade_gap_is_feature_shortfall_not_source_damage(
-    gap, state
+    gap, state, integrated
 ):
     from src.trading.market.quote_consistency import build_market_data_health
 
     now = datetime(2026, 9, 17, 10, 0, tzinfo=KST).timestamp()
-    ws = _ws(now, effective_venue="KRX")
+    suffix = "_AL" if integrated else ""
+    route = "krx_nxt_integrated" if integrated else "krx_only"
+    venue = "UNKNOWN" if integrated else "KRX"
+    key = f"{suffix or 'KRX'}|{route}"
+    ws = _ws(now, suffix=suffix, route=route, effective_venue=venue)
     ws["last_realtime_type_ts"]["0B"] = now - gap
     ws["market_data_transport_epoch"] = 2
     record = {
-        "item": "005930",
-        "market_route": "krx_only",
-        "market_suffix": "",
-        "effective_venue": "KRX",
+        "item": f"005930{suffix}",
+        "market_route": route,
+        "market_suffix": suffix,
+        "effective_venue": venue,
         "transport_epoch": 2,
         "orderbook": {"bids": [{"price": 9990}], "asks": [{"price": 10000}]},
     }
     ws["realtime_type_snapshots_by_route"] = {
-        "KRX|krx_only": {
+        key: {
             "0D": {**record, "observed_epoch": now - 0.2},
             "0B": {**record, "observed_epoch": now - gap, "current_price": 10000},
             "quiet_tape_observation": {
@@ -47,14 +52,19 @@ def test_proven_five_second_trade_gap_is_feature_shortfall_not_source_damage(
         }
     }
 
-    def build():
+    def build(*, broker_route=None, session_bucket="krx_regular"):
+        candle = _candle(
+            rest_route=suffix or "KRX", ws_route=route, request_code=f"005930{suffix}"
+        )
+        candle["ws_suffix"] = suffix
         return mod.build_ai_market_snapshot(
             stock_code="005930",
             decision_stage="entry_screen",
             ws_data=ws,
             effective_venue="KRX",
-            session_bucket="krx_regular",
-            candle_context=_candle(),
+            session_bucket=session_bucket,
+            broker_route=broker_route or ("SOR" if integrated else "KRX"),
+            candle_context=candle,
             now_ts=now,
         )
 
@@ -65,6 +75,16 @@ def test_proven_five_second_trade_gap_is_feature_shortfall_not_source_damage(
     assert snapshot["trade_activity"]["canonical_binding_proven"] is True
     assert preflight["source_allowed"] is True
     assert preflight["allowed"] is False  # no provider/entry bypass
+    if integrated:
+        assert snapshot["underlying_event_venue"] is None
+        assert snapshot["venue_attribution_allowed"] is False
+        assert snapshot["integrated_sor_route_proven"] is True
+        assert snapshot["trade_activity"]["market_data_scope"] == "KRX_NXT_INTEGRATED"
+        assert snapshot["trade_activity"]["underlying_event_venue_proven"] is False
+        assert build(broker_route="KRX")["integrated_sor_route_proven"] is False
+        assert (
+            build(session_bucket="nxt_overlap")["integrated_sor_route_proven"] is False
+        )
     assert preflight["feature_allowed"] is False
     assert "required_feature_tape_stale" in preflight["feature_blockers"]
     assert "tape_stale" not in preflight["source_blockers"]
@@ -87,11 +107,11 @@ def test_proven_five_second_trade_gap_is_feature_shortfall_not_source_damage(
     assert ops["ai_input_preflight_feature_allowed"] is False
     # Companion health cannot manufacture continuity on missing raw evidence.
     ws["market_data_health"] = snapshot["market_data_health"]
-    del ws["realtime_type_snapshots_by_route"]["KRX|krx_only"]["quiet_tape_observation"]
+    del ws["realtime_type_snapshots_by_route"][key]["quiet_tape_observation"]
     missing = build()
     assert missing["trade_activity"]["canonical_binding_proven"] is False
     assert "tape_stale" in missing["ai_input_preflight_v1"]["source_blockers"]
-    records = ws["realtime_type_snapshots_by_route"]["KRX|krx_only"]
+    records = ws["realtime_type_snapshots_by_route"][key]
     records["quiet_tape_observation"] = {
         "last_quote": now - 0.2,
         "last_trade": now - gap,

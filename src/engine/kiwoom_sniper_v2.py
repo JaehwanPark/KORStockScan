@@ -81,6 +81,7 @@ from src.engine.scalping.limit_down_watch import (  # noqa: E402
     LIMIT_DOWN_OBSERVATION_REGISTRY,
 )
 from src.engine.scalping.market_data_enrichment import build_market_data_enrichment
+from src.trading.market.quote_consistency import build_market_data_health
 from src.engine.scalping.position_sizing_allocator import (
     ScalpingSizingContext,
     infer_scalping_venue,
@@ -7954,15 +7955,41 @@ def _scanner_ws_subscription_recheck_snapshot_and_fields(
             fresh_sec=fresh_sec,
         )
     )
-    repair_needed = not (subscribed and fresh_curr and entry_realtime_fresh)
+    health = build_market_data_health(snapshot, now_ts=float(now_ts))
+    items = snapshot.get("last_realtime_type_item")
+    items = items if isinstance(items, dict) else {}
+    expected_item = items.get("0D")
+    activity = [
+        facts
+        for facts in health["routes"].values()
+        if expected_item
+        and facts.get("item") == expected_item == items.get("0B")
+        and str(expected_item).split("_", 1)[0] == norm_code
+    ]
+    activity = activity[0] if len(activity) == 1 else {}
+    observation_proven = bool(
+        activity.get("observation_continuity_proven") is True
+        and activity.get("quote_state") == "fresh"
+        and activity.get("trade_activity_state")
+        in {"RECENT_TRADE", "QUIET_TAPE_OBSERVED", "REPEATED_QUIET_TAPE_OBSERVED"}
+    )
+    # A required trade feature may wait for a print without re-registering a
+    # proven live source. This never makes that feature or entry fresh.
+    repair_needed = not (
+        subscribed and fresh_curr and (entry_realtime_fresh or observation_proven)
+    )
     fields = {
         "ws_subscription_recheck_status": (
             "subscribed_fresh_snapshot"
             if subscribed and fresh_curr and entry_realtime_fresh
             else (
-                "subscribed_snapshot_stale_or_missing"
-                if subscribed
-                else "not_subscribed"
+                "subscribed_observation_proven_required_feature_wait"
+                if subscribed and fresh_curr and observation_proven
+                else (
+                    "subscribed_snapshot_stale_or_missing"
+                    if subscribed
+                    else "not_subscribed"
+                )
             )
         ),
         "ws_subscription_recheck_manager_available": bool(manager_available),
@@ -7978,6 +8005,8 @@ def _scanner_ws_subscription_recheck_snapshot_and_fields(
         ),
         "ws_subscription_recheck_entry_realtime_fresh": bool(entry_realtime_fresh),
         "ws_subscription_recheck_entry_realtime_source": entry_realtime_source,
+        "ws_subscription_recheck_trade_activity": activity,
+        "ws_subscription_recheck_observation_proven": observation_proven,
         "ws_subscription_repair_needed": bool(repair_needed),
         **entry_timestamp_fields,
     }
