@@ -2,7 +2,7 @@
 
 ## 1. 목적·현재 상태·범위
 
-상태: **C0–C8/P1–P6 source 구현·반복 리뷰 및 최종 gate 통과, commit/push·배포 진행**. 이번 사용자 지시는 구현·코드리뷰/수정 반복·commit/push·배포·기동을 명시적으로 승인했다. 계획 문서만으로 운영 권한을 추론하지 않는다. [이번 구현·검증 기록](../audit-reports/2026-09-17-widget-episode-full-closed-loop-implementation.md)에서 source closure, 실제 release/PID, 자연 다음 날짜 소비, mature 경제성을 분리한다.
+상태: **C0–C8/P1–P6 source 구현·반복 리뷰 및 최종 gate 통과, 1차 commit/push·배포·4서비스 기동 완료, 보완 gate1,089 PASS·후속 배포 진행**. 이번 사용자 지시는 구현·코드리뷰/수정 반복·commit/push·배포·기동을 명시적으로 승인했다. 계획 문서만으로 운영 권한을 추론하지 않는다. [이번 구현·검증 기록](../audit-reports/2026-09-17-widget-episode-full-closed-loop-implementation.md)에서 source closure, 실제 release/PID, 자연 다음 날짜 소비, mature 경제성을 분리한다.
 
 목표는 시장에서 발견한 유효 기회를 실제 체결 여부와 무관하게 연구에 연결하고, 비용·원래 수량·실행가능성·공동 자본 아래 더 좋은 정책을 선정하여 **다음 거래일 위젯/episode가 자동 소비하고 결과를 다시 연구에 돌려주는 것**이다. 무조건 종목/정책을 늘리는 목표가 아니다. 모든 발견 기회의 admission/defer/block 이유를 보존하며 연구 범위 확장을 표본·grid 축소로 상쇄하지 않는다.
 
@@ -184,4 +184,4 @@ F0에서 `T_finish = T_EOD_ready + T_required_research + T_publication_and_hando
 
 C0–C8/P1–P6은 이번 source 변경과 기존 producer/consumer에 연결했다. 신규 종목 무체결 CF→고정 prospective calendar→joint 검증→다음 날짜 발행/reader 회귀, 기존 보유 episode의 retired BUY 차단/원 target 청산, 원 버전별 exact 비용과 missing-cost/null, 완성 source fixed-point 재시도, 손실 없는 fact 압축·cache reserve를 검증한다. 세부 코드·회귀·실측과 미달 성능 목표는 [구현 기록](../audit-reports/2026-09-17-widget-episode-full-closed-loop-implementation.md)을 따른다. 기존 두 stable-ID owner를 유지하며 자연 next-date 신규 선택/소비/성과와 비용차감 수익 개선은 별도 OPEN이다. `git diff --check`와 print-only parser로 owner·authority를 검증하고 external sync는 실행하지 않는다.
 
-문서 보완 검증: 변경 문서의 새 링크 결손0·whitespace/diff check PASS, print-only parser32개 task와 existing 두 stable owner 각각1개 확인. 기존 당일 미래 산출물 참조5회는 그대로 보존했다. Checklist의 기존 widget/episode follow-up 문단은 해당 common OPEN owner 바로 아래로 옮겨 소유 경계를 정리했다. Document-only이므로 pytest/compile/provider/API/production 연구 실행·정책 발행·배포·재기동은 수행하지 않았다. 위 C/P 단계의 코드 closure·성능 목표·자연 소비·경제성은 잔여다.
+문서 보완 검증: 변경 문서의 새 링크 결손0·whitespace/diff check PASS, print-only parser32개 task와 existing 두 stable owner 각각1개 확인. 기존 당일 미래 산출물 참조5회는 그대로 보존했다. Checklist의 기존 widget/episode follow-up 문단은 해당 common OPEN owner 바로 아래로 옮겨 소유 경계를 정리했다. 이는 최초 계획 보완 당시의 document-only 기록이다. 이후 사용자 승인으로 C/P source 구현·테스트·1차 배포/기동을 수행했고, episode summary 독립 재검증과 신호 발생 계산 병목을 추가 보완했다. 최신 gate·release/PID·실측은 구현 기록 §7 이후를 따른다. Full-scale 성능 목표·자연 신규 정책 소비·실제 경제성은 OPEN이다.

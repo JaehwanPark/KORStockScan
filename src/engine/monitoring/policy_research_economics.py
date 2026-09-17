@@ -83,6 +83,10 @@ def modeled_summary(episodes, qualified_dates, quantity=10):
         capital_seconds += price * quantity * (exit_ - entry).total_seconds()
     if not valid:
         pnl = capital_seconds = None
+    return _modeled_result(len(episodes), dates, quantity, pnl, capital_seconds, valid)
+
+
+def _modeled_result(count, dates, quantity, pnl, capital_seconds, valid):
     return {
         "qualified_source_day_count": len(dates),
         "modeled_quantity_each": quantity,
@@ -92,9 +96,63 @@ def modeled_summary(episodes, qualified_dates, quantity=10):
         ),
         "modeled_capital_krw_seconds": capital_seconds,
         "completed_episodes_per_qualified_day": (
-            len(episodes) / len(dates) if valid and dates else None
+            count / len(dates) if valid and dates else None
         ),
         "economic_basis": "source_only_registered_quantity_not_broker_profit",
+    }
+
+
+def modeled_cap_summaries(episodes, qualified_dates, caps, quantity=10):
+    """Decode each native episode once; retain each cap's original sum order.
+
+    Local accumulators have no cache or policy state. An invalid episode only
+    censors caps that would include it, exactly as separate summary calls do.
+    """
+    dates = set(qualified_dates)
+    totals = {cap: [0, 0, 0, type(quantity) is int and quantity > 0] for cap in caps}
+    for row in episodes:
+        eligible = [cap for cap in caps if row["daily_entry_ordinal"] <= cap]
+        if not eligible:
+            continue
+        price, net = numeric(row.get("entry_price")), numeric(row.get("net_return_pct"))
+        entry, exit_ = aware(row.get("entry_at")), aware(row.get("exit_at"))
+        valid = bool(
+            price is not None
+            and price > 0
+            and net is not None
+            and entry is not None
+            and exit_ is not None
+            and entry.date() in dates
+            and exit_ >= entry
+        )
+        profit = (
+            price * quantity * net / 100
+            if valid and type(quantity) is int and quantity > 0
+            else None
+        )
+        exposure = (
+            price * quantity * (exit_ - entry).total_seconds()
+            if profit is not None
+            else None
+        )
+        for cap in eligible:
+            total = totals[cap]
+            total[0] += 1
+            if total[3] and valid:
+                total[1] += profit
+                total[2] += exposure
+            else:
+                total[3] = False
+    return {
+        str(cap): _modeled_result(
+            count,
+            dates,
+            quantity,
+            pnl if valid else None,
+            capital if valid else None,
+            valid,
+        )
+        for cap, (count, pnl, capital, valid) in totals.items()
     }
 
 

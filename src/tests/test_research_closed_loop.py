@@ -1183,3 +1183,284 @@ def test_seed_readers_share_bounded_immutable_point_decode(tmp_path):
         != first[0]
     )
     assert facts.COUNTERS["point_decodes"] == before + 2
+
+
+def _native_episode_prospective_fixture():
+    from datetime import timedelta
+    from src.engine.monitoring import episode_prospective_research as prospective
+    from src.engine.monitoring import low_price_two_leg_entry_spot_research as native
+    from src.trading.low_price_two_leg.economics import cost_contract
+
+    parameters = dict(
+        scan_start="10:05",
+        scan_end="10:59",
+        lookback_bars=20,
+        rolling_high_drawdown_pct=0.5,
+        rolling_low_proximity_pct=0.2,
+        entry_offsets_ticks=[0, -1],
+        entry_valid_completed_bars=5,
+        target_ticks=5,
+    )
+    baseline = {**parameters, "rolling_high_drawdown_pct": 9.0}
+    revision = loop.candidate_revision(
+        symbol="000001",
+        owner="episode",
+        lane_id="new_000001_late_morning",
+        parameters=parameters,
+        baseline_parameters=baseline,
+        source_date=DAY,
+        source_sha256="a" * 64,
+        cost_sha256=loop.digest(cost_contract()),
+        calibration_days=30,
+        holdout_days=16,
+        frozen_at=datetime.fromisoformat(f"{DAY}T20:10:00+09:00"),
+    )
+    cal = [date.fromisoformat(day) for day in revision["calibration_dates"]]
+    hold = [date.fromisoformat(day) for day in revision["holdout_dates"]]
+    contexts = {}
+    for day in cal + hold:
+        signal = datetime.fromisoformat(f"{day}T10:05:00+09:00")
+        bars = (
+            native.Bar(signal, 10000, 10000, 10000, 10000),
+            native.Bar(signal + timedelta(minutes=1), 10000, 10000, 9980, 10000),
+            native.Bar(signal + timedelta(minutes=2), 10000, 10060, 10000, 10050),
+        )
+        contexts[day] = native.DayContext(
+            day, bars, {20: (native.SignalFeature(0, signal, 10000, 1.0, 0.0),)}
+        )
+    windows = dict(
+        calibration=cal,
+        calibration_first_half=cal[:15],
+        calibration_second_half=cal[15:],
+        holdout=hold,
+        full=cal + hold,
+    )
+    result = dict(symbol="000001", candidate_revision=revision)
+    for name, params in (("selected", parameters), ("baseline", baseline)):
+        summaries = native._evaluate_candidate_windows(
+            prospective.spot(params),
+            contexts,
+            list(windows.values()),
+            include_episodes=True,
+        )
+        result[name] = dict(parameters=params, **dict(zip(windows, summaries)))
+    result["paired_economics"] = native.paired_economics(
+        result["baseline"]["holdout"], result["selected"]["holdout"]
+    )
+    result["prospective_qualified_dates"] = [str(day) for day in cal + hold]
+    result["prospective_window"] = loop.prospective_window(
+        revision, source_date=hold[-1], qualified_dates=cal + hold
+    )
+    return result, revision, hold[-1]
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["ev", "half_samples", "paired", "baseline", "duplicate", "price", "cost"],
+)
+def test_episode_promotion_reconstructs_native_window_economics(mutation):
+    from src.engine.monitoring.episode_prospective_research import (
+        prospective_summary_valid,
+    )
+
+    result, revision, _ = _native_episode_prospective_fixture()
+    assert prospective_summary_valid(result, revision)
+    if mutation == "ev":
+        result["selected"]["holdout"]["notional_weighted_ev_pct"] += 10
+    elif mutation == "half_samples":
+        result["selected"]["calibration_first_half"]["completed_legs"] = 0
+    elif mutation == "paired":
+        result["paired_economics"]["net_profit_uplift_krw_per_observation_day"] = 10000
+    elif mutation == "baseline":
+        result["baseline"]["holdout"]["realized_net_profit_krw"] = -99999
+    elif mutation == "duplicate":
+        result["selected"]["full"]["episodes"].append(
+            deepcopy(result["selected"]["full"]["episodes"][0])
+        )
+    elif mutation == "price":
+        result["selected"]["holdout"]["episodes"][0]["legs"][0]["entry_price"] += 10
+    else:
+        result["selected"]["holdout"]["episodes"][0]["legs"][0]["net_profit_pct"] += (
+            0.23
+        )
+    assert not prospective_summary_valid(result, revision)
+
+
+def test_episode_native_cf_publication_and_reader_recheck_summary(
+    tmp_path, monkeypatch
+):
+    from datetime import timedelta
+    from src.engine.monitoring import episode_prospective_research as prospective
+    from src.engine.automation import (
+        low_price_two_leg_auto_expansion_policy as publisher,
+    )
+    from src.engine.monitoring.machine_recommendation_identity import (
+        bind_recommendation,
+    )
+    from src.tests.test_machine_candidate_auto_expansion import _report
+
+    result, revision, day = _native_episode_prospective_fixture()
+    directory = tmp_path / "research"
+    loop.freeze_candidate(revision, directory=directory)
+    from contextvars import ContextVar
+
+    monkeypatch.setattr(
+        loop, "_RESEARCH_SCOPE", ContextVar("episode_test_scope", default=directory)
+    )
+    monkeypatch.setattr(
+        prospective,
+        "execution_feasibility",
+        (
+            lambda value, *, source_date, native=prospective.execution_feasibility: (
+                native(value, source_date=source_date, directory=directory)
+            )
+        ),
+    )
+
+    class NativeClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            clock = datetime.fromisoformat(f"{day}T20:10:00+09:00")
+            return clock.astimezone(tz) if tz else clock
+
+    monkeypatch.setattr(loop, "datetime", NativeClock)
+    for episode in result["selected"]["full"]["episodes"]:
+        signal = datetime.fromisoformat(episode["signal_at"])
+        rows = []
+        for seq, at, bid, ask in (
+            (1, signal + timedelta(minutes=1), 9980, 9990),
+            (2, signal + timedelta(minutes=2), 10050, 10060),
+        ):
+            rows.append(
+                dict(
+                    schema="prospective_registered_seed_market_facts_v1",
+                    source_quality_status="PASS",
+                    market_venue="KRX",
+                    observed_at_kst=at.isoformat(),
+                    seed_memberships=[
+                        dict(
+                            revision_sha256=revision["revision_sha256"],
+                            parameters_sha256=revision["parameters_sha256"],
+                            frozen_at=revision["frozen_at"],
+                        )
+                    ],
+                    bbo=dict(
+                        received_at=at.isoformat(),
+                        best_bid=bid,
+                        best_ask=ask,
+                        best_bid_qty=100,
+                        best_ask_qty=100,
+                        source_epoch=1,
+                        source_sequence=seq,
+                    ),
+                    **loop.AUTHORITY,
+                )
+            )
+        path = directory / "facts" / f"prospective_facts_000001_{signal:%Y%m%d}.jsonl"
+        path.parent.mkdir(exist_ok=True)
+        path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    proof = prospective.execution_feasibility(result, source_date=day)
+    assert proof["status"] == "pass" and proof["matched_completed_legs"] == 92
+    result["execution_feasibility"] = proof
+    report = _report()
+    row = report["recommendations"][0]
+    row.update(
+        profile_id=revision["lane_id"],
+        symbol="000001",
+        discovery_lane="new_symbol",
+        recommended_spot=revision["parameters"],
+        paired_economics=result["paired_economics"],
+    )
+    for key in list(row):
+        if key.startswith("recommendation_"):
+            del row[key]
+    bind_recommendation(
+        row,
+        producer="low_price_two_leg_expanded_candidate_research",
+        scope="000001/late_morning/new_000001_late_morning",
+        axis="profile_policy",
+        proposal=revision["parameters"],
+        consumer="low_price_two_leg_policy_apply",
+        acceptance="native CF fixture",
+    )
+    joint = dict(status="pass")
+    # Native capital reconstruction has its separate widget/joint positive E2E;
+    # isolate this episode publisher/reader semantic boundary here.
+    monkeypatch.setattr(loop, "combined_joint_gate", lambda *a, **kw: joint)
+    report.update(
+        target_date=str(day),
+        closed_loop_contract=loop.SCHEMA,
+        profiles={revision["lane_id"]: result},
+        joint_allocation_gate=joint,
+    )
+    report_dir, policy_dir = tmp_path / "reports", tmp_path / "policies"
+    source = report_dir / f"low_price_two_leg_expanded_candidate_research_{day}.json"
+    loop.atomic_write(source, report)
+    payload = publisher.build_policy(
+        source_date=day, report_dir=report_dir, policy_dir=policy_dir
+    )
+    assert "auto_000001_late_morning" in payload["profiles"]
+    effective = date.fromisoformat(payload["effective_date"])
+    path = publisher.policy_path(effective, policy_dir=policy_dir)
+    loop.publication_transaction(
+        policy_dir,
+        effective_date=effective,
+        files={path.name: payload},
+        expected_generation=None,
+    )
+    assert (
+        publisher.load_policy(effective, policy_dir=policy_dir)["profiles"][
+            "auto_000001_late_morning"
+        ]["policy"]
+        == revision["parameters"]
+    )
+    report["profiles"][revision["lane_id"]]["selected"]["holdout"]["completed_legs"] = 1
+    loop.atomic_write(source, report)
+    rejected = publisher.build_policy(
+        source_date=day, report_dir=report_dir, policy_dir=tmp_path / "fresh"
+    )
+    assert "auto_000001_late_morning" not in rejected["profiles"]
+    # Even a self-consistent signed source/publication cannot bypass the
+    # consumer's independent sample/economic reconstruction.
+    payload["source_report_sha256"] = publisher._file_sha256(source)
+    payload["policy_hash"] = publisher._digest(
+        {key: value for key, value in payload.items() if key != "policy_hash"}
+    )
+    forged_dir = tmp_path / "forged"
+    loop.publication_transaction(
+        forged_dir,
+        effective_date=effective,
+        files={path.name: payload},
+        expected_generation=None,
+    )
+    with pytest.raises(ValueError, match="episode_closed_loop_reconstruction_invalid"):
+        publisher.load_policy(effective, policy_dir=forged_dir)
+
+
+def test_scale_cli_honors_phase_and_compute_budget(tmp_path, monkeypatch):
+    from src.engine.monitoring import research_scale_benchmark as benchmark
+
+    def bounded_run(symbol_count, day_count, cache, output, **options):
+        assert symbol_count == 100 and day_count == 120
+        assert options["modes"] == ("cold",)
+        assert options["compute_budget_sec"] == 17
+        return dict(status="deferred")
+
+    monkeypatch.setattr(benchmark, "run", bounded_run)
+    assert (
+        benchmark.main(
+            [
+                "--symbols",
+                "100",
+                "--days",
+                "120",
+                "--modes",
+                "cold",
+                "--compute-budget-sec",
+                "17",
+                "--output",
+                str(tmp_path / "receipt.json"),
+            ]
+        )
+        == 75
+    )

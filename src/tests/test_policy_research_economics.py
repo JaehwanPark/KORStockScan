@@ -16,6 +16,46 @@ from src.tests.test_machine_entry_timing_tuning import _entry_row
 DAY = date(2026, 8, 28)
 
 
+@pytest.mark.parametrize("bad_cap", [None, 1, 3, 5])
+@pytest.mark.parametrize("quantity", [10, 0, -1, True])
+def test_shared_cap_economics_preserves_order_and_local_censoring(
+    bad_cap, quantity, monkeypatch
+):
+    rows = [
+        dict(
+            daily_entry_ordinal=ordinal,
+            entry_price=10001 + index,
+            net_return_pct=(-1) ** index * 0.1234567,
+            entry_at=f"{DAY}T09:{index:02d}:00+09:00",
+            exit_at=f"{DAY}T10:{index:02d}:00+09:00",
+        )
+        for index, ordinal in enumerate([1, 4, 2, 5, 3, 1, 3])
+    ]
+    if bad_cap is not None:
+        next(row for row in rows if row["daily_entry_ordinal"] == bad_cap)[
+            "exit_at"
+        ] = "unknown"
+    caps = (1, 2, 3, 4, 5)
+    expected = {
+        str(cap): economics.modeled_summary(
+            [row for row in rows if row["daily_entry_ordinal"] <= cap], [DAY], quantity
+        )
+        for cap in caps
+    }
+    calls, native = [], economics.aware
+
+    def once(value):
+        calls.append(value)
+        return native(value)
+
+    monkeypatch.setattr(economics, "aware", once)
+    assert economics.modeled_cap_summaries(rows, [DAY], caps, quantity) == expected
+    assert len(calls) == len(rows) * 2
+    assert economics.modeled_cap_summaries([], [], caps, quantity) == {
+        str(cap): economics.modeled_summary([], [], quantity) for cap in caps
+    }
+
+
 def admission_row(native="opportunity:1", symbol="000001"):
     return {
         "opportunity_episode_id": native,
@@ -468,7 +508,7 @@ def test_common_economics_rejects_missing_signal_quantity_epoch_and_terminal(mut
 def episode(day="2026-08-28", *, price=100, net=1, minute=0):
     return {
         "entry_at": f"{day}T09:{minute:02}:00+09:00",
-        "exit_at": f"{day}T09:{minute+1:02}:00+09:00",
+        "exit_at": f"{day}T09:{minute + 1:02}:00+09:00",
         "entry_price": price,
         "exit_price": price * (1 + net / 100),
         "net_return_pct": net,

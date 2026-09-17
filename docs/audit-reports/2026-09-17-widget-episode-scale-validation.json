@@ -1,10 +1,42 @@
 {
+  "actual_order_submitted": false,
+  "allowed_runtime_apply": false,
   "artifact_role": "offline_engineering_evidence_not_policy_input",
   "asof_kst": "2026-09-17T14:24:18.336142+09:00",
-  "runtime_effect": false,
-  "allowed_runtime_apply": false,
-  "actual_order_submitted": false,
   "receipts": {
+    "closed-loop-quota-populated-N100D120.json": {
+      "actual_order_submitted": false,
+      "allowed_runtime_apply": false,
+      "broker_order_forbidden": true,
+      "fixture": "deterministic_390_bars_per_symbol_day_sinusoid_v2",
+      "measurements": {
+        "cold_N19_D120": {
+          "cache_hits": 0,
+          "cache_misses": 3035440,
+          "cache_write_skips": 0,
+          "candidate_digest": "29fa014de8291bcce612f7e1b0f56966bed9f754e3e04995ec874cc1458738b1",
+          "caps": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "cpu_seconds": 302.455201928,
+          "day_count": 120,
+          "grid": 1536,
+          "peak_rss_kib": 195232,
+          "remote_requests": 0,
+          "symbols": 19,
+          "wall_seconds": 1565.3417113159994
+        }
+      },
+      "populated": true,
+      "producer_sha256": "b59a53ce7c51bea5c451cc7d0f71554896055743f934817bcb03c03c5ece8fcc",
+      "runtime_effect": false,
+      "schema": "machine_research_closed_loop_v1",
+      "status": "running"
+    },
     "closed-loop-quota-populated-N19D72.json": {
       "actual_order_submitted": false,
       "allowed_runtime_apply": false,
@@ -270,18 +302,21 @@
       "runtime_effect": false,
       "schema": "machine_research_closed_loop_v1",
       "status": "complete"
-    },
-    "closed-loop-quota-populated-N100D120.json": {
+    }
+  },
+  "runtime_effect": false,
+  "supplemental_full_grid_N1D120": {
+    "after": {
       "actual_order_submitted": false,
       "allowed_runtime_apply": false,
       "broker_order_forbidden": true,
       "fixture": "deterministic_390_bars_per_symbol_day_sinusoid_v2",
       "measurements": {
-        "cold_N19_D120": {
+        "cold_N1_D120": {
           "cache_hits": 0,
-          "cache_misses": 3035440,
+          "cache_misses": 159760,
           "cache_write_skips": 0,
-          "candidate_digest": "29fa014de8291bcce612f7e1b0f56966bed9f754e3e04995ec874cc1458738b1",
+          "candidate_digest": "f89d72cdf48d95f9cbdcb2af9ede7b40b63d6e0aa23d10edaebe958f38b8ed5e",
           "caps": [
             1,
             2,
@@ -289,20 +324,96 @@
             4,
             5
           ],
-          "cpu_seconds": 302.455201928,
+          "cpu_seconds": 14.203666563,
           "day_count": 120,
           "grid": 1536,
-          "peak_rss_kib": 195232,
+          "peak_rss_kib": 191968,
           "remote_requests": 0,
-          "symbols": 19,
-          "wall_seconds": 1565.3417113159994
+          "symbols": 1,
+          "wall_seconds": 77.51269529400088
         }
       },
       "populated": true,
-      "producer_sha256": "b59a53ce7c51bea5c451cc7d0f71554896055743f934817bcb03c03c5ece8fcc",
+      "producer_sha256": "ee5862652041a7f989fe3695b5b79f2ee8494c0b6a5f49fdfbe9bd1c425bb8f7",
       "runtime_effect": false,
       "schema": "machine_research_closed_loop_v1",
-      "status": "running"
+      "status": "complete"
+    },
+    "before": {
+      "actual_order_submitted": false,
+      "allowed_runtime_apply": false,
+      "broker_order_forbidden": true,
+      "fixture": "deterministic_390_bars_per_symbol_day_sinusoid_v2",
+      "measurements": {
+        "cold_N1_D120": {
+          "cache_hits": 0,
+          "cache_misses": 159760,
+          "cache_write_skips": 0,
+          "candidate_digest": "f89d72cdf48d95f9cbdcb2af9ede7b40b63d6e0aa23d10edaebe958f38b8ed5e",
+          "caps": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "cpu_seconds": 15.976872658000001,
+          "day_count": 120,
+          "grid": 1536,
+          "peak_rss_kib": 191924,
+          "remote_requests": 0,
+          "symbols": 1,
+          "wall_seconds": 86.468015552
+        }
+      },
+      "populated": true,
+      "producer_sha256": "f370b84eb7aaf17deaffb4be0fbe2b623d08633adc2eb0e11801abaa388001d7",
+      "runtime_effect": false,
+      "schema": "machine_research_closed_loop_v1",
+      "status": "complete"
+    },
+    "setup-after": {
+      "actual_order_submitted": false,
+      "allowed_runtime_apply": false,
+      "broker_order_forbidden": true,
+      "fixture": "deterministic_390_bars_per_symbol_day_sinusoid_v2",
+      "measurements": {
+        "cold_N1_D120": {
+          "cache_hits": 0,
+          "cache_misses": 159760,
+          "cache_write_skips": 0,
+          "candidate_digest": "f89d72cdf48d95f9cbdcb2af9ede7b40b63d6e0aa23d10edaebe958f38b8ed5e",
+          "caps": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "cpu_seconds": 12.882702534,
+          "day_count": 120,
+          "grid": 1536,
+          "peak_rss_kib": 191916,
+          "remote_requests": 0,
+          "symbols": 1,
+          "wall_seconds": 70.83080057700136
+        }
+      },
+      "populated": true,
+      "producer_sha256": "21c4203bb0cbbc835247a34c886a31f103d9ad1b5ee9c081797b97122921ed31",
+      "runtime_effect": false,
+      "schema": "machine_research_closed_loop_v1",
+      "status": "complete"
     }
+  },
+  "supplemental_validation": {
+    "N100_populated_full_matrix_acceptance": "open",
+    "actual_economics": "waiting",
+    "canonical_digest_equal": true,
+    "cpu_reduction_pct": 19.37,
+    "natural_new_policy_consumption": "waiting",
+    "status": "source_gate_pass",
+    "tests": 1089,
+    "wall_reduction_pct": 18.08
   }
 }

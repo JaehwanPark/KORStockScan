@@ -168,6 +168,8 @@ def main(argv=None):
             args.cache or Path(temporary),
             args.output,
             populated=args.populated,
+            modes=tuple(args.modes),
+            compute_budget_sec=args.compute_budget_sec,
         )
     print(json.dumps(receipt, sort_keys=True))
     return 0 if receipt["status"] == "complete" else 75
