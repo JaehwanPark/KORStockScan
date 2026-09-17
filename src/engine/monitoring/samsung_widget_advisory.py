@@ -3662,6 +3662,23 @@ class KiwoomReadOnlyClient:
     def last_request_receipt(self, value: dict[str, Any]) -> None:
         self._request_receipts.receipt = value
 
+    def response_received_at(self, *, api_id: str, request_code: str) -> datetime:
+        """Use this exact successful response clock, never a collection clock."""
+        receipt = self.last_request_receipt
+        stamp = receipt.get("rest_received_ts_ms")
+        if (
+            receipt.get("request_succeeded") is not True
+            or receipt.get("api_id") != api_id
+            or receipt.get("request_code") != request_code
+            or type(stamp) is not int
+            or stamp <= 0
+        ):
+            raise RuntimeError("widget_rest_receive_receipt_invalid")
+        try:
+            return datetime.fromtimestamp(stamp / 1000.0, tz=KST)
+        except (ValueError, OverflowError, OSError) as exc:
+            raise RuntimeError("widget_rest_receive_receipt_invalid") from exc
+
     def post(
         self,
         path: str,

@@ -23,6 +23,150 @@ from src.engine.monitoring.widget_auxiliary_context import (
 )
 
 
+def test_direct_quote_bbo_cache_keeps_http_clock_across_later_collection(
+    monkeypatch, tmp_path
+):
+    from src.engine.monitoring import samsung_widget_advisory as advisory
+
+    cycle = datetime(2026, 9, 17, 14, 0, 1, tzinfo=KST)
+    received = cycle + timedelta(seconds=5)
+    monkeypatch.setattr(advisory.time, "time", lambda: received.timestamp())
+    monkeypatch.setattr(
+        advisory.kiwoom_utils, "get_api_url", lambda path: "https://api.test" + path
+    )
+    monkeypatch.setattr(
+        advisory.kiwoom_utils, "resolve_kiwoom_request_token", lambda token: token
+    )
+    calls = []
+
+    class Response:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "return_code": 0,
+                "cur_prc": "10000",
+                "buy_fpr_bid": "9990",
+                "sel_fpr_bid": "10000",
+            }
+
+    class Session:
+        def post(self, endpoint, **kwargs):
+            calls.append(kwargs["headers"]["api-id"])
+            return Response()
+
+    client = advisory.KiwoomReadOnlyClient("TEST", session=Session())
+    collector = WidgetSymbolRuntimeCollector(observation_dir=tmp_path)
+    args = dict(
+        client=client, symbol="111111", request_code="111111", observed_at=cycle
+    )
+    collector._quote(**args)
+    collector._bbo(**args)
+    args["observed_at"] = received + timedelta(seconds=2)
+    quote, age = collector._quote(**args)
+    bbo = collector._bbo(**args)
+    assert quote["cur_prc"] == "10000" and age == 2
+    assert bbo["received_at"] == received.isoformat() and bbo["age_sec"] == 2
+    assert collector._quote_cache["111111:111111"][2] == received
+    assert calls == ["ka10001", "ka10004"]
+
+
+@pytest.mark.parametrize("delay,blocked", [(2, False), (40, True)])
+def test_runtime_direct_read_rechecks_original_bbo_at_final_decision(
+    monkeypatch, tmp_path, delay, blocked
+):
+    from src.engine.monitoring import samsung_widget_advisory as advisory
+    from src.engine.monitoring import widget_symbol_runtime_collector as runtime
+
+    cycle = datetime(2026, 8, 12, 11, 30, 5, tzinfo=KST)
+    decision = cycle + timedelta(seconds=delay)
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return decision
+
+    monkeypatch.setattr(runtime, "datetime", Clock)
+    monkeypatch.setattr(
+        runtime_contract, "DEFAULT_SNAPSHOT_DIR", tmp_path / "snapshots"
+    )
+    monkeypatch.setattr(advisory.time, "time", lambda: cycle.timestamp())
+    monkeypatch.setattr(
+        advisory.kiwoom_utils, "get_api_url", lambda path: "https://api.test" + path
+    )
+    monkeypatch.setattr(
+        advisory.kiwoom_utils, "resolve_kiwoom_request_token", lambda token: token
+    )
+
+    class Response:
+        status_code = 200
+
+        def __init__(self, api_id):
+            self.api_id = api_id
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            if self.api_id == "ka10001":
+                return {"return_code": 0, "cur_prc": "10000"}
+            if self.api_id == "ka10004":
+                return {"return_code": 0, "buy_fpr_bid": "9990", "sel_fpr_bid": "10000"}
+            assert self.api_id == "ka10080"
+            return {
+                "return_code": 0,
+                "stk_min_pole_chart_qry": [
+                    {
+                        "cntr_tm": f"2026081211{i:02d}00",
+                        "open_pric": "10000",
+                        "high_pric": "10010",
+                        "low_pric": "9990",
+                        "cur_prc": "10000",
+                        "trde_qty": "1000",
+                    }
+                    for i in range(30)
+                ],
+            }
+
+    class Session:
+        def post(self, endpoint, **kwargs):
+            return Response(kwargs["headers"]["api-id"])
+
+    client = advisory.KiwoomReadOnlyClient("TEST", session=Session())
+    collector = WidgetSymbolRuntimeCollector(observation_dir=tmp_path / "raw")
+    collector._active_date = cycle.date().isoformat()
+    collector._auxiliary_collectors.clear()
+    policy = {
+        "policy_id": "POLICY",
+        "effective_date": cycle.date().isoformat(),
+        "signal_policy": {
+            "segment_start_time": "10:30:00",
+            "segment_end_time": "13:30:00",
+            "lookback_bars": 15,
+            "drawdown_pct": 1.0,
+            "near_low_pct": 0.5,
+            "reclaim_ticks": 1,
+            "target_bps": 50,
+            "setup_valid_bars": 5,
+            "reentry_cooldown_bars": 10,
+        },
+    }
+    row = collector._collect_symbol(
+        symbol="080220", policy=policy, client=client, observed_at=cycle
+    )
+    assert row["observed_at_kst"] == decision.isoformat()
+    assert row["bbo"]["received_at"] == cycle.isoformat()
+    assert row["bbo"]["age_sec"] == delay
+    assert row["advisory"]["source_quality"]["status"] == (
+        "BLOCKED" if blocked else "PASS"
+    )
+    if blocked:
+        assert row["entry_event"] is None and row["exit_event"] is None
+
+
 def _bar(minute: int, open_: int, high: int, low: int, close: int, volume: int):
     return MinuteBar(
         source_time=f"2026081211{minute:02d}00",

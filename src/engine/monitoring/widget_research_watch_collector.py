@@ -370,7 +370,7 @@ def safe_collection_error(
     # bodies, URLs, headers, credentials and accounts are deliberately excluded.
     raw = str(exc)
     known = re.fullmatch(
-        r"(?:widget_request_budget_exhausted|widget_kiwoom_429_cooldown|shared_cached_token_unavailable|ka[0-9]+_(?:return_code_missing|rejected_-?[0-9]+)|widget_kiwoom_shared_read_rate_deferred:[A-Za-z0-9_:-]+)",
+        r"(?:widget_request_budget_exhausted|widget_kiwoom_429_cooldown|shared_cached_token_unavailable|widget_rest_receive_receipt_invalid|widget_read_scope_or_clock_changed_during_collection|ka[0-9]+_(?:return_code_missing|rejected_-?[0-9]+)|widget_kiwoom_shared_read_rate_deferred:[A-Za-z0-9_:-]+)",
         raw,
     )
     response = getattr(exc, "response", None)
@@ -530,17 +530,46 @@ class WidgetResearchWatchCollector:
         )
         if reused is not None:
             quote, reused_bbo, reuse_receipt = reused
+            quote_received = datetime.fromisoformat(
+                reuse_receipt["quote_received_at_kst"]
+            )
+            bbo_received = datetime.fromisoformat(reuse_receipt["bbo_received_at_kst"])
             bbo_raw = {}
         else:
             quote = request("/api/dostk/stkinfo", "ka10001", {"stk_cd": request_code})
+            quote_received = (
+                client.response_received_at(api_id="ka10001", request_code=request_code)
+                if isinstance(client, KiwoomReadOnlyClient)
+                else observed_at
+            )
             bbo_raw = request("/api/dostk/mrkcond", "ka10004", {"stk_cd": request_code})
+            bbo_received = (
+                client.response_received_at(api_id="ka10004", request_code=request_code)
+                if isinstance(client, KiwoomReadOnlyClient)
+                else observed_at
+            )
             reuse_receipt = None
         bars_raw = request(
             "/api/dostk/chart",
             "ka10080",
             {"stk_cd": request_code, "tic_scope": "1", "upd_stkpc_tp": "1"},
         )
-        bbo = reused_bbo if reused is not None else _parse_bbo(bbo_raw, observed_at)
+        if isinstance(client, KiwoomReadOnlyClient):
+            decision_at = datetime.now(KST)
+            if (
+                decision_at < observed_at
+                or decision_at.date() != observed_at.date()
+                or WidgetSymbolRuntimeContract(
+                    code, symbol["stock_name"]
+                ).session_context(decision_at)
+                != context
+            ):
+                raise RuntimeError(
+                    "widget_read_scope_or_clock_changed_during_collection"
+                )
+            observed_at = decision_at
+        bbo = reused_bbo if reused is not None else _parse_bbo(bbo_raw, bbo_received)
+        bbo["age_sec"] = (observed_at - bbo_received).total_seconds()
         received_rows = bars_raw.get("stk_min_pole_chart_qry")
         bars = completed_session_bars(
             received_rows,
@@ -557,6 +586,10 @@ class WidgetResearchWatchCollector:
         best_bid = _positive_int(bbo.get("best_bid"))
         best_ask = _positive_int(bbo.get("best_ask"))
         source_issues: list[str] = []
+        if not 0 <= (observed_at - quote_received).total_seconds() <= 10:
+            source_issues.append("quote_stale_or_clock_invalid")
+        if not 0 <= bbo["age_sec"] <= 10:
+            source_issues.append("bbo_stale_or_clock_invalid")
         if current_price is None:
             source_issues.append("quote_price_missing")
         if best_bid is None or best_ask is None or best_ask < best_bid:
@@ -595,11 +628,7 @@ class WidgetResearchWatchCollector:
             ),
             "current_price": current_price,
             "common_market_source_reuse": reuse_receipt,
-            "quote_received_at_kst": (
-                reuse_receipt["quote_received_at_kst"]
-                if reuse_receipt
-                else observed_at.isoformat()
-            ),
+            "quote_received_at_kst": quote_received.isoformat(),
             "bbo_received_at_kst": bbo.get("received_at"),
             "best_bid": best_bid,
             "best_ask": best_ask,

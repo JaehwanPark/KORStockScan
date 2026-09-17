@@ -3792,3 +3792,36 @@ def test_direct_read_client_never_marks_malformed_return_code_as_success(
     assert client.last_request_receipt["request_succeeded"] is False
     assert client.last_request_receipt["request_attempt_count"] == 1
     assert client.last_request_receipt["rest_received_ts_ms"] > 0
+
+
+@pytest.mark.parametrize("bad", [None, False, -1, 0, 1.5, "1789600000000", 10**30])
+def test_response_receive_clock_rejects_invalid_or_unbound_receipt(bad):
+    client = advisory.KiwoomReadOnlyClient("TEST", session=object())
+    client.last_request_receipt = {
+        "api_id": "ka10004",
+        "request_code": "005930",
+        "request_succeeded": True,
+        "rest_received_ts_ms": bad,
+    }
+    with pytest.raises(RuntimeError, match="widget_rest_receive_receipt_invalid"):
+        client.response_received_at(api_id="ka10004", request_code="005930")
+
+
+def test_response_receive_clock_preserves_exact_response_and_rejects_other_request():
+    received = datetime(2026, 9, 17, 14, 0, 0, 123000, tzinfo=KST)
+    client = advisory.KiwoomReadOnlyClient("TEST", session=object())
+    client.last_request_receipt = {
+        "api_id": "ka10004",
+        "request_code": "005930",
+        "request_succeeded": True,
+        "rest_received_ts_ms": int(received.timestamp() * 1000),
+    }
+    assert (
+        client.response_received_at(api_id="ka10004", request_code="005930") == received
+    )
+    for api_id, code in [("ka10001", "005930"), ("ka10004", "005930_AL")]:
+        with pytest.raises(RuntimeError, match="widget_rest_receive_receipt_invalid"):
+            client.response_received_at(api_id=api_id, request_code=code)
+    client.last_request_receipt["request_succeeded"] = False
+    with pytest.raises(RuntimeError, match="widget_rest_receive_receipt_invalid"):
+        client.response_received_at(api_id="ka10004", request_code="005930")
