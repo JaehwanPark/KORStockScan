@@ -40,6 +40,8 @@
 
 독립 velocity 후속: [리뷰 §27](../audit-reports/2026-09-17-common-health-opportunity-cost-scoped-implementation.md#27-독립-episode-체결속도-dataclass소비-clock-잔여-후속). 기존 ka10003 dataclass에서 original receipt/common facts·signed future·소비 age와 same packet wait/reparse 경계를 보완하고 필요한 독립 세 소비자에 배포했다. main 세대/예약과 global 잔여는 별도 상태다.
 
+진행현황·잔여 재대사: [리뷰 §28](../audit-reports/2026-09-17-common-health-opportunity-cost-scoped-implementation.md#28-진행현황-대사와-재진입-holdout표시-future-잔여-수리). 실제 재진입 family holdout 재사용과 표시 미래 체결의 age0 정규화를 기존 두 경로에서 수리했다. 전수 U0 의미분류/U2~U4 migration 및 active family disposition·자연 새 정책/경제성은 OPEN이며 scoped finding0/웹 소비를 전체 완료로 합산하지 않는다.
+
 ## 2. 선행·병행 순서와 두 개의 독립 완료 gate
 
 ### 2.1 실행 원칙

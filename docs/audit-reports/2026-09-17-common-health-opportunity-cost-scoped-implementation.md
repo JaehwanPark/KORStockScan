@@ -401,3 +401,35 @@ U2~U4의 이번 clock/metadata scope H와 전수 consumer migration은 구분한
 - 전/후 broker KRX+NXT 00593025주·042660/0124500·미체결0 및 3guardSHA 동일. actual main dated env/policy/override strict 검증 PASS. private receipt `data/runtime/runtime_release_validation/entry-execution-velocity-scope-r2-20260917-9667d605.json`. 새 자연 velocity attempt/order/새 후보/비용 후 실수익은 미관측이며 기존 OPEN으로 남긴다.
 
 공식 ka10003 gate는 §26의 current upstream SHA/시각/specs/core/API JSON/Postman 근거를 재사용한다. path/header/sign/unit/continuation/주문·auth wire는 변경하지 않았고 HHMMSS를 authoritative provider date로 승격하지 않는다. U2/U4의 이 소비자 수리는 global 직접client/reader 전수 disposition을 대체하지 않는다.
+
+
+## 28. 진행현황 대사와 재진입 holdout·표시 future 잔여 수리
+
+확인 기준 2026-09-17T18:47:55.051179+09:00. 사용자 요청은 진행현황/잔여 확인과 잔여 코드의 구현→리뷰/수정 반복→commit/push→배포/필요 기동이며, 과도한 성능검증/불필요한 코드확장을 금지했다. 계획 작성 당시 실행 금지 문구를 현재 요청의 권한으로 혼동하지 않는다. 이전 scoped PASS/배포를 global 완료로 합산하지 않는다.
+
+| Package | 확인된 코드/소비 근거 | 남은 상태와 closure |
+| --- | --- | --- |
+| U0 | 부록306 파일 static AST와 U9 direct19 call/8 file, 기존 qualified reader 임시 inventory는 존재한다. | **전수 의미분류 OPEN**. I/O 검색 membership은 실제 raw 소비·SQL predicate·passed-frame/alias dataflow·active owner 검토 완료가 아니다. 함수/callsite별 source→adapter→consumer disposition을 확정해야 global 미분류0을 판정할 수 있다. |
+| U1/U2/U3/U4/U5 | §26의 원 WS type/route/epoch/provider clock·canonical feature/source 분리·exact observer/cache와 §22/27의 REST 호가/velocity 소비 수리가 배포되어 있다. Main912586/R3, 독립 trader927210·expansion927278/R2가 해당 범위를 소비한다. | **부분 H 완료, 전수 migration OPEN**. QuoteHealth와 기존 stage-specific feature validator의 존재만으로 공통 health 전수 소비를 입증하지 않는다. 원 getter/adapter/typed return/passed dict/file reader와 마지막 소비자를 대사한다. 자연 async/독립 velocity 후속은 별도다. |
+| U6/U7/U8 | `_machine_terminal_tuning_gate`의 decision CF/operational gate 분리와 calibration의 natural lane·exact6 상충 격리가 기존 코드에 있다. §16/26의 source→trace→#11/#74 receipt를 유지한다. | 같은 scope의 code receipt를 재사용하며 all-BLOCK/all-VETO를 이유로 연구를 막거나 BLOCK에 AI를 발명하지 않는다. **전 active family disposition 및 새 current-compatible compact 후보의 자연 선정/소비·경제성 OPEN**. |
+| U9 | §24/25 native executable quartet/price union·explicit date census·profile별 scoped runtime BPS 및 기존 publisher/PREOPEN/runtime evidence 검증이 구현돼 있다. | 자연 price-ready seed/quartet·owner 발급 leg 대안·새 chronological 후보/다음 PREOPEN/version 경제성은 **미관측**. 입력이 없어 생기는 기다림을 새 collector/floor 완화/가상 체결로 메우지 않는다. |
+| U10A/U10B | Timing의 `source_only_timing_observation`과 actual submitted/realized adapter는 이미 분리되어 있다. low-price entry-spot은 calibration 후 고정 후보를 holdout에 검증한다. Samsung morning reentry는 아래 실제 결함을 이번에 수리했다. | Holding/exit/actual headline의 적정 actual 조건은 유지한다. **나머지 active raw family 전수 disposition OPEN**; 검색 hit만으로 fill-only 결함을 확정하거나 OFF 복원을 하지 않는다. 재진입 연구는 기존 on-demand source-only이며 실전 재진입/새 자동 owner 권한이 없다. |
+| U11/U12 | 기존 candidate→publisher→PREOPEN→dated loader와 scoped immutable release/PID 검증을 유지한다. | **이번 두 경로 finding0**. Global U0–U11 disposition/U12A 통합 finding0, 새 정책 next-date actual consumption/자연 비용 후 경제성을 완료로 표시하지 않는다. 20:10/21:15 예정 owner는 유지한다. |
+
+### 확인한 결함과 수정
+
+1. `samsung_morning_reentry_research.select_candidate`는 세 family를 같은 holdout에 순차 평가하고 첫 PASS family를 채택했다. Calibration winner가 실패해도 다른 family의 holdout을 채택할 수 있어 계획 §6.4/U10A의 독립 검증과 충돌했다. **기존 family 우선순위와 calibration ranking을 유지**하면서 calibration에서 첫 eligible family/winner를 고정하고 그 후보만 holdout에 한 번 검증한다. 실패하면 candidate null·기존 live machine 유지다. 나머지 family는 calibration evidence만 보존하고 holdout/full null·untouched 사유를 반환한다. 빈 calibration은 holdout 평가0이며 rendering도 calibration 결손과 holdout 실패를 구분한다. 기존 sample/held/양수 EV/분봉 proxy·source-only/order 금지 계약은 유지한다.
+2. `samsung_price_widget_routes._websocket_price_comparison`는 2초 이내 미래0B를 OK/age0으로 표시했다. 미래 clock을 크기와 관계없이 unavailable/direct future reason·signed age로 보존한다. 현재 가격/차이는 null이며 기존5초 표시 TTL·exact item/type clock 대사·manual order authority 분리는 유지한다. bool clock을 숫자로 쓰지 않는다. 이는 WS 파일 소비/표시 수리이며 Kiwoom wire/parser/FID/REG/auth/order 변경이 아니다.
+
+### 리뷰·검증·배포 receipt
+
+- 코드 **8eb91d8c4bff81c9d7400248b484d523bdcbc6ed**, branch/main non-force push 확인. 기존 production2/test2 파일만 수정했으며 신규 module/collector/job/cache/운영 CLI0, performance benchmark0이다.
+- 최초 두 suite43 PASS 뒤 빈 calibration 회귀와 두 상속 UI 경로를 추가 확인해 최종 **4 suite52 PASS/2.50초**. Immutable physical release의 같은4 suite **52 PASS/4.22초**, source4 byte parity·실제 import path·compile·Ruff F/E9·diff PASS. 무관한 full trading/performance suite/Provider/운영 report 재생성을 실행하지 않았다. Physical premount import의 config 부재 경고는 기존 shared mount 결속 뒤 정상 config/import로 재확인했다.
+- Re-review에서 holdout 실패 후 타 family 재선정0·calibration 불충족 family의 skip·단일 holdout/full 진단·micro/실체결/quantity/exit authority 불변을 확인했다. 표시 미래1µs/1ms/1.5초/3초가 unavailable/negative age인 회귀를 포함한다. **검토한 두 경로 unresolved finding0**이며 global 미검토를0으로 보고하지 않는다.
+- 최초 Managed physical `entry-reentry-web-scope-20260917`/8eb91d8c4에서 **gunicorn949437** active/cwd/ExecStart를 확인했다. 실제 web 소비자 한 곳의 기존 effective 명령/조건·CPU/memory/restart 계약을 보존했다. **Main912586/R3 selector는 그대로**이며 독립 trader/expansion·공통 collector·장후 oneshot 등 다른9 owner PID/root가 같다. 재진입 연구는 installed active consumer가 없는 기존 on-demand source-only이므로 새 연구 job/실전 episode를 기동하지 않았다.
+- 전/후 cached-token read-only broker는 KRX+NXT complete·00593025주/다른 위젯2종목0·미체결0·snapshot SHA 동일이다. Registry/당일 runtime env/operator override3 SHA 동일, actual main strict dated env/policy/override PASS. Private receipt `data/runtime/runtime_release_validation/entry-reentry-web-scope-20260917-8eb91d8c.json`; 원 pin/body와 이전 immutable release를 rollback 근거로 보존한다.
+
+- **최초 배포 후 재리뷰 finding/R2**: Tick 시각은 현재여도 type0B receipt가1ms 이내 미래이면 기존 timestamp 대사의1ms 허용오차를 통과할 수 있었다. 두 원 시각을 모두 signed로 검사해 future receipt를 unavailable로 유지한다. 두 미래 type-only 회귀를 추가했고 **최종 코드 470f9003b87e631e88d7bacd34fa021b8d19d672** branch/main push, source 관련2 suite **46 PASS/2.09초**, physical R2의 같은2 suite **46 PASS/4.01초**·compile/Ruff/diff·4 source/test byte parity PASS다. 기존 unaffected 두 UI suite의 최초52 PASS receipt를 재사용했고 성능/broad suite를 반복하지 않았다. 최초8eb91d8c 배포의 scoped review를 새 결함으로 재개한 것이며 처음부터 finding0이었다고 보고하지 않는다.
+- **최종 2026-09-17T18:50:32.519462+09:00 소비**: `entry-reentry-web-scope-r2-20260917`/470f9003b의 gunicorn **952556** active/cwd/source root, Main912586/R3 selector·다른9 owner PID/root·예약 유지, 양시장 보유25/미체결0·broker hash/3guardSHA 동일·strict dated env PASS다. 최종 private receipt `data/runtime/runtime_release_validation/entry-reentry-web-scope-r2-20260917-470f9003.json`. 새 연구/주문/Provider/expansion/main 재기동은 실행하지 않았다.
+
+- 새 자연 재진입 연구/새 candidate/PREOPEN/실주문·비용 후 추가 수익은 미관측이다. 현재 단계의 잔여를 **전수 정적 계약 리뷰/소비 전환 확인**과 **자연 원천·경제성 대기**로 구분하고 기존 `KiwoomCommonHealthOpportunityCostAcceptance0917` owner를 OPEN으로 유지한다. 전체 잔여 구현 완료/전체 전수 finding0을 선언하지 않는다.
