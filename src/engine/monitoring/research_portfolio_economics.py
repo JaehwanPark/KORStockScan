@@ -78,11 +78,17 @@ def reference_inputs(report, family):
                 return summary.get("episodes", [])
             converted = []
             for episode in summary.get("episodes", []):
-                if any(
-                    leg.get("status") != "COMPLETE" for leg in episode.get("legs", [])
+                legs = episode.get("legs")
+                if (
+                    not isinstance(legs, list)
+                    or len(legs) != 2
+                    or any(
+                        not isinstance(leg, dict) or leg.get("status") != "COMPLETE"
+                        for leg in legs
+                    )
                 ):
                     raise ValueError("joint_reference_partial_held_or_missing_leg")
-                for i, leg in enumerate(episode.get("legs", [])):
+                for i, leg in enumerate(legs):
                     converted.append(
                         dict(
                             entry_at=leg.get("fill_at"),

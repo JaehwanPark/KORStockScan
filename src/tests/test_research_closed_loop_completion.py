@@ -2,7 +2,7 @@
 
 from copy import deepcopy
 from dataclasses import replace
-from datetime import date
+from datetime import date, datetime
 import subprocess
 import sys
 
@@ -37,9 +37,9 @@ def test_version_feedback_shared_alias_preserves_native_identity(tmp_path):
         native / f"widget_outcomes_{day}.json",
         dict(body, outcomes_sha256=loop.digest(body)),
     )
-    assert outcomes.outcome_feedback(day, directory=native) == outcomes.outcome_feedback(
-        day, directory=alias
-    )
+    assert outcomes.outcome_feedback(
+        day, directory=native
+    ) == outcomes.outcome_feedback(day, directory=alias)
 
 
 @pytest.mark.parametrize(
@@ -141,6 +141,35 @@ def test_joint_incomplete_or_degraded_reference_cannot_promote(mutation):
         portfolio.paired_joint_economics(inputs, funding)["status"]
         == "allocation_blocked"
     )
+
+
+@pytest.mark.parametrize("legs", [None, [], [{"status": "COMPLETE"}], [None, None]])
+def test_episode_joint_reference_rejects_missing_native_two_leg_outcome(legs):
+    revision = loop.candidate_revision(
+        symbol="007660",
+        parameters={},
+        owner="episode",
+        calibration_days=30,
+        source_date=date(2026, 6, 5),
+        source_sha256="a" * 64,
+        cost_sha256="b" * 64,
+        frozen_at=datetime.fromisoformat("2026-06-05T21:30:00+09:00"),
+    )
+    report = dict(
+        profiles={
+            "candidate_007660_midday": dict(
+                decision="holdout_pass_source_only_early_candidate",
+                candidate_revision=revision,
+                selected=dict(
+                    calibration=dict(episodes=[dict(legs=legs)]),
+                    holdout=dict(episodes=[]),
+                ),
+                baseline=dict(calibration=dict(episodes=[]), holdout=dict(episodes=[])),
+            )
+        }
+    )
+    with pytest.raises(ValueError, match="partial_held_or_missing_leg"):
+        portfolio.reference_inputs(report, "episode")
 
 
 def _cached_windows(directory, contexts, windows, candidate, stats):
