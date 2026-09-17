@@ -153,6 +153,7 @@
 
 ## 위젯 원천·장후 평가 구현 후 자연 확인
 
+  - Widget/episode 연구 보완: [R1–R5 구현 기록](../audit-reports/2026-09-17-widget-episode-policy-research-implementation.md). 미진입 원래 decision의 CF 경제성·canonical census 미등록 disposition을 연결한다. 자동 실전 universe 확장·공유 자본 limit 신규 설정은 하지 않으며 source owner·exact-date allocation 계약/자연 경제성 잔여는 OPEN이다.
 - [ ] `[WidgetPostcloseEvaluationPinAcceptance0916] 위젯 19종목 source 폐쇄·장후 평가 동일 release 자연 acceptance` (`Due: 2026-09-17`, `Slot: POSTCLOSE`, `TimeWindow: 20:10~23:20`, `Track: RuntimeStability`)
   - Source: [상세계획·현재 운영 계약](../proposals/widget-postclose-performance-and-source-closure-implementation-plan-2026-09-16.md), [09-17 구현·검증·배포 기록](../audit-reports/2026-09-17-widget-postclose-source-closure-implementation.md), [이관한 원래 acceptance·실패·역사 receipt](2026-09-16-stage2-todo-checklist.md), `data/runtime/widget_postclose_source_closure_2026-09-17.json`.
   - 판정 기준: 동일 code generation의 actual raw/runtime collector import/PID와 evaluation WorkingDirectory/PYTHONPATH/project/Python/ExecStart를 확인한다. 19종목 raw/advisory/seed/session census는 `expected=source_valid+classified_not_applicable+explicit_source_gap`, `unclassified=0`이어야 한다. KRX raw와 advisory 0·raw-only·future effective seed를 분리하고, AM은 실제 `_AL` 원천 및 frozen seed effective 뒤 prospective event만 인정한다.
@@ -169,3 +170,5 @@
 ```bash
 PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTHONPATH=. .venv/bin/python -m src.engine.sync_github_project_calendar
 ```
+
+  - R1–R5 후속 운영 계약: [정책 연구 보완 구현·배포 기록](../audit-reports/2026-09-17-widget-episode-policy-research-implementation.md), `data/runtime/widget_episode_research_release_2026-09-17.json`. actual/CF 공통 horizon·profit rank·census·exact-seed execution proof·zero-day/joint capital을 자연 평가에서 검증한다. 기존 main/trader selector/PID를 보존하며 연구 collector·evaluation/final-refresh만 새 immutable pin으로 기동/대기한다. 자연 정책·실체결 net profit은 OPEN이다.

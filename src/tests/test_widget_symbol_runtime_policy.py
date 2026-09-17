@@ -480,3 +480,43 @@ def test_native_publisher_separates_observation_and_execution_catalogs(tmp_path)
     assert "999999" not in loader.resolve_all(
         observed_date=date.fromisoformat(canonical["effective_date"])
     )
+
+
+def test_new_proxy_promotion_needs_feasibility_and_keeps_observation_lane():
+    report = _research()
+    report["end_date"] = "2026-09-17"
+    policy = runtime.build_policy(report)
+    assert "006800" not in policy["symbols"]
+    assert "006800" in policy["observation_symbols"]
+    assert (
+        policy["execution_quality_blocks"]["006800"]
+        == "selected_proxy_execution_feasibility_missing"
+    )
+
+
+def test_verified_unchanged_incumbent_carry_does_not_require_new_proxy_receipt(
+    monkeypatch, tmp_path
+):
+    from src.engine.monitoring.widget_execution_quality import load_execution_incidents
+
+    report = _research()
+    report["end_date"] = "2026-09-17"
+    incumbent = runtime._normalized_selected_parameters(
+        report["symbols"]["006800"]["selected_policy"]
+    )
+    report["execution_quality_by_symbol"] = {
+        symbol: load_execution_incidents(
+            symbol,
+            target_date=date(2026, 9, 17),
+            session="KRX_REGULAR",
+            event_dir=tmp_path,
+        )
+        for symbol in SYMBOLS
+    }
+    monkeypatch.setattr(
+        runtime.WidgetSymbolRuntimePolicyLoader,
+        "resolve_all",
+        lambda self, observed_date: {"006800": incumbent},
+    )
+    policy = runtime.build_policy(report)
+    assert "006800" in policy["symbols"]

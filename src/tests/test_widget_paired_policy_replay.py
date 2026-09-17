@@ -762,3 +762,35 @@ def test_native_projection_preserves_paired_input_and_corruption_falls_back(tmp_
     assert replay.load_inputs([source], symbol="005930", target_date=DAY) == original
     source.with_suffix(".calibration.jsonl").write_text("invalid\n")
     assert replay.load_inputs([source], symbol="005930", target_date=DAY) == original
+
+
+def test_pair_selection_preserves_valid_zero_signal_day_in_profit_denominator():
+    report = study()
+    before = replay.select_candidate(report, previous_value=100)
+    report["source_audit"]["qualified_source_dates_by_session"] = {
+        "KRX_REGULAR": ["2026-09-07", "2026-09-08", "2026-09-09"]
+    }
+    report["content_hash"] = replay.digest(
+        {key: value for key, value in report.items() if key != "content_hash"}
+    )
+    after = replay.select_candidate(report, previous_value=100)
+    # A valid zero day changes the day denominator without adding any outcomes.
+    old = before["diagnostics"][0]["windows"]["base"]["calibration"]
+    new = after["diagnostics"][0]["windows"]["base"]["calibration"]
+    assert (
+        new["candidate"]["net_profit_krw_per_source_day"]
+        == old["candidate"]["net_profit_krw_per_source_day"] / 2
+    )
+    assert new["sample_count"] == old["sample_count"]
+
+
+def test_zero_day_ledger_does_not_discard_valid_pairs_from_partial_source_dates():
+    report = study()
+    before = replay.select_candidate(report, previous_value=100)
+    report["source_audit"]["qualified_source_dates_by_session"] = {"KRX_REGULAR": []}
+    report["content_hash"] = replay.digest(
+        {key: value for key, value in report.items() if key != "content_hash"}
+    )
+    after = replay.select_candidate(report, previous_value=100)
+    assert after["diagnostics"] == before["diagnostics"]
+    assert after["decision"] == before["decision"]

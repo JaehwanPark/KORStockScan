@@ -3373,6 +3373,75 @@ def _verified_manual_timestamp_loss(
     }
 
 
+def _unfilled_episode_decision_anchor(
+    *,
+    leg,
+    lifecycle_id,
+    leg_id,
+    decision_at,
+    source_event_id,
+    owner_row_eligible,
+    symbol,
+    session,
+    scope_id,
+    expected_venues,
+    expected_buckets,
+    cost_pct,
+    source_quality,
+):
+    """Keep the original owner decision even when no broker fill followed."""
+    entry_price = _finite_float(leg.get("entry_price"))
+    quantity = _finite_float(leg.get("quantity"))
+    target_price = _finite_float(leg.get("target_price"))
+    if (
+        decision_at is None
+        or not source_event_id
+        or entry_price is None
+        or entry_price <= 0
+        or target_price is None
+        or target_price <= entry_price
+        or quantity is None
+        or quantity <= 0
+        or not quantity.is_integer()
+    ):
+        return None
+    submitted = leg.get("actual_order_submitted")
+    if type(submitted) is not bool:
+        submitted = bool(leg["buy_order_no"]) if "buy_order_no" in leg else None
+    return {
+        "anchor_id": f"{lifecycle_id}:{leg_id}:signal_decision",
+        "lifecycle_id": lifecycle_id,
+        "owner": "episode",
+        "scope_id": scope_id,
+        "symbol": symbol,
+        "session": session,
+        "expected_venues": expected_venues,
+        "expected_session_buckets": expected_buckets,
+        "anchor_at": decision_at.isoformat(),
+        "anchor_price": entry_price,
+        "anchor_price_provenance": "original_owner_entry_limit_no_fill",
+        "owner_entry_limit_price": entry_price,
+        "owner_requested_quantity": int(quantity),
+        "owner_target_price": target_price,
+        "lifecycle_stage": "entry",
+        "anchor_role": "episode_signal_decision_leg",
+        "entry_timing_decision_anchor_valid": True,
+        "source_entry_event_id": source_event_id,
+        "owner_round_trip_cost_pct": cost_pct,
+        "owner_round_trip_cost_provenance": "effective_dated_owner_cost_contract",
+        "owner_outcome": {
+            "realized": False,
+            "entry_fill_status": "unfilled",
+            "cost_aware_net_return_pct": None,
+            "entry_notional_krw": None,
+        },
+        "owner_lifecycle_contract_valid": True,
+        "owner_policy_tuning_eligible": owner_row_eligible,
+        "owner_source_quality": source_quality,
+        "actual_order_submitted": submitted,
+    }
+
+
 def _episode_inventory(
     target_date: str, report_root: Path
 ) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
@@ -3690,6 +3759,26 @@ def _episode_inventory(
                     exit_provenance = _episode_exit_outcome_provenance(
                         leg, realized=realized
                     )
+                    if buy_filled_qty == 0:
+                        pending = _unfilled_episode_decision_anchor(
+                            leg=leg,
+                            lifecycle_id=lifecycle_id,
+                            leg_id=leg_id,
+                            decision_at=decision_at,
+                            source_event_id=str(
+                                signal_features.get("source_entry_event_id") or ""
+                            ),
+                            owner_row_eligible=owner_row_eligible,
+                            symbol=row["symbol"],
+                            session=row["session"],
+                            scope_id=profile_id,
+                            expected_venues=["SOR"],
+                            expected_buckets=["SOR_REGULAR"],
+                            cost_pct=episode_round_trip_cost_pct,
+                            source_quality=payload.get("source_quality"),
+                        )
+                        if pending is not None:
+                            anchors.append(pending)
                     if valid_buy_fill:
                         leg_gross_return_pct = _finite_float(
                             leg.get("gross_no_slippage_return_pct")
@@ -4065,6 +4154,27 @@ def _episode_inventory(
                         f"{leg_id}:buy_fill_contract_invalid"
                     )
                     continue
+                if buy_filled_qty == 0:
+                    pending = _unfilled_episode_decision_anchor(
+                        leg=leg,
+                        lifecycle_id=lifecycle_id,
+                        leg_id=leg_id,
+                        decision_at=decision_at,
+                        source_event_id=str(
+                            features.get("source_entry_event_id") or ""
+                        ),
+                        owner_row_eligible=owner_row_eligible,
+                        symbol="005930",
+                        session=session,
+                        scope_id=scope_id,
+                        expected_venues=[expected_venue],
+                        expected_buckets=[expected_bucket],
+                        cost_pct=_finite_float((samsung or {}).get("cost_pct")),
+                        source_quality=payload.get("source_quality"),
+                    )
+                    if pending is not None:
+                        anchors.append(pending)
+                        emitted_decision_anchor = True
                 if not valid_buy_fill:
                     continue
                 realized = bool(
@@ -6894,7 +7004,59 @@ def _anchor_result(
                 and cost_pct is not None
                 else None
             )
+            # One evaluation-only deadline for every confirmation alternative.
+            # Diagnostic adverse touches are not owner stop/exit instructions.
+            common_deadline = (
+                anchor_at + timedelta(seconds=300) if anchor_at is not None else None
+            )
+            common_candidates = [
+                item
+                for item in checkpoint_bid_path
+                if common_deadline is not None
+                and item[0]["timestamp"] <= common_deadline
+            ]
+            common_row = common_candidates[-1] if common_candidates else None
+            common_age_ms = (
+                (common_deadline - common_row[0]["timestamp"]).total_seconds() * 1000
+                if common_row is not None
+                else None
+            )
+            common_ready = bool(
+                common_row is not None
+                and common_age_ms is not None
+                and 0 <= common_age_ms <= 5000
+            )
+            common_gaps = [
+                gap
+                for gap in checkpoint_gaps
+                if gap != "checkpoint_5min_timeout_bbo_not_mature"
+            ]
+            if not common_ready:
+                common_gaps.append("common_horizon_terminal_not_mature")
             dynamic_first_hit_checkpoints[str(checkpoint_sec)] = {
+                "common_horizon_terminal": {
+                    "schema": "machine_common_horizon_terminal_v1",
+                    "deadline_at": (
+                        common_deadline.isoformat() if common_deadline else None
+                    ),
+                    "observed_at": (
+                        common_row[0]["timestamp"].isoformat() if common_ready else None
+                    ),
+                    "executable_bid": (
+                        float(common_row[0]["best_bid"]) if common_ready else None
+                    ),
+                    "available_bid_quantity": (
+                        int(common_row[1]["best_bid_qty"]) if common_ready else None
+                    ),
+                    "quote_age_ms": common_age_ms if common_ready else None,
+                    "source_quality_status": (
+                        "eligible" if not common_gaps else "blocked"
+                    ),
+                    "source_gap_reasons": sorted(set(common_gaps)),
+                    "evaluation_only": True,
+                    "runtime_effect": False,
+                    "allowed_runtime_apply": False,
+                },
                 "checkpoint_sec": checkpoint_sec,
                 "sequence_epoch": checkpoint_epoch,
                 "source_quality_status": (
@@ -7200,7 +7362,11 @@ def _entry_confirmation_label(result: dict[str, Any]) -> dict[str, Any] | None:
         ),
         "classification": label,
         "source_gap_reasons": sorted(set(source_gaps)),
-        "actual_order_submitted": result.get("actual_order_submitted") is True,
+        "actual_order_submitted": (
+            result.get("actual_order_submitted")
+            if type(result.get("actual_order_submitted")) is bool
+            else None
+        ),
         "actual_realized_response_eligible": (
             result.get("actual_realized_response_eligible") is not False
         ),

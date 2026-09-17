@@ -17,6 +17,7 @@ from statistics import fmean
 from zoneinfo import ZoneInfo
 
 from src.engine.monitoring.widget_comparison_cost import comparison_cost_contract
+from src.engine.monitoring.policy_research_economics import trading_window
 from src.trading.order.tick_utils import move_price_up_by_bps
 from src.utils.market_day import is_krx_trading_day
 
@@ -366,6 +367,14 @@ def build_study(
         "target_date": target_date.isoformat(),
         "baseline_parameters": parameters,
         "baseline_confirmations": baseline_confirmations,
+        "source_day_basis": (
+            "paired_opportunity_days_plus_verified_zero_signal_days"
+            if (source_audit.get("qualified_source_dates_by_session") or {}).get(
+                session
+            )
+            is not None
+            else "opportunity_days_legacy_unknown_zero_signal_coverage"
+        ),
         "source_audit": source_audit,
         "metric_contract": CONTRACT,
         "runtime_effect": False,
@@ -648,6 +657,20 @@ def select_candidate(study, *, previous_value):
                 if row["source_date"] >= window_floor.isoformat()
             }
         )
+        qualified = (source.get("qualified_source_dates_by_session") or {}).get(
+            study.get("session")
+        )
+        if qualified is not None:
+            expected = {
+                day.isoformat()
+                for day in trading_window(date.fromisoformat(study["target_date"]), 20)
+            }
+            if not isinstance(qualified, list) or any(
+                not isinstance(day, str) or day not in expected for day in qualified
+            ):
+                carry["decision"] = "carry_forward_source_day_contract_invalid"
+                return carry
+            dates = sorted(set(dates) | set(qualified))
         holdout_count = max(1, len(dates) // 5)
         windows = {
             "calibration": dates[:-holdout_count],

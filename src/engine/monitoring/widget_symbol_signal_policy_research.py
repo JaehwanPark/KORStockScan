@@ -43,6 +43,11 @@ from src.engine.monitoring.machine_candidate_lifecycle import (
     widget_long_term_pruned_symbols,
 )
 from src.engine.monitoring.widget_execution_quality import load_execution_incidents
+from src.engine.monitoring.policy_research_economics import (
+    modeled_summary,
+    joint_capital_demand,
+    research_universe_handoff,
+)
 from src.engine.monitoring.widget_signal_quality import (
     component_arms,
     objective_comparison,
@@ -1344,6 +1349,20 @@ def discover_symbol_policy(
         full_comparison = full_evaluation["entry_cap_comparison"]
         first_comparison = first_evaluation["entry_cap_comparison"]
         second_comparison = second_evaluation["entry_cap_comparison"]
+        for evaluation, dates in (
+            (full_evaluation, calibration_dates),
+            (first_evaluation, first_dates),
+            (second_evaluation, second_dates),
+        ):
+            for cap in ENTRY_CAP_VALUES:
+                selected_episodes = [
+                    row
+                    for row in evaluation["episodes"]
+                    if row["daily_entry_ordinal"] <= cap
+                ]
+                evaluation["entry_cap_comparison"][str(cap)]["cumulative"].update(
+                    modeled_summary(selected_episodes, dates)
+                )
         for entry_cap in ENTRY_CAP_VALUES:
             evaluated += 1
             full = full_comparison[str(entry_cap)]["cumulative"]
@@ -1390,13 +1409,14 @@ def discover_symbol_policy(
                 gate_counts["high_entry_cap_incremental_positive"] += 1
             if not _calibration_ready(full, first, second) or not high_cap_ready:
                 continue
-            score = (
-                min(
-                    float(first["notional_weighted_ev_pct"]),
-                    float(second["notional_weighted_ev_pct"]),
-                )
-                * min(first["episode_count"], second["episode_count"])
-                / (min(first["episode_count"], second["episode_count"]) + 6.0)
+            if (
+                first["modeled_net_pnl_per_qualified_day"] is None
+                or second["modeled_net_pnl_per_qualified_day"] is None
+            ):
+                continue
+            score = min(
+                first["modeled_net_pnl_per_qualified_day"],
+                second["modeled_net_pnl_per_qualified_day"],
             )
             if entry_cap >= HIGH_ENTRY_CAP_START:
                 high_caps.setdefault(policy, set()).add(entry_cap)
@@ -1484,6 +1504,15 @@ def discover_symbol_policy(
         replay_context=replay_context,
     )
     holdout_cap_comparison = holdout_evaluation["entry_cap_comparison"]
+    for cap in ENTRY_CAP_VALUES:
+        episodes = [
+            row
+            for row in holdout_evaluation["episodes"]
+            if row["daily_entry_ordinal"] <= cap
+        ]
+        holdout_cap_comparison[str(cap)]["cumulative"].update(
+            modeled_summary(episodes, holdout_dates)
+        )
     selected_entry_cap = calibration_selected_cap
 
     def holdout_cap_ready(cap: int) -> bool:
@@ -1520,6 +1549,19 @@ def discover_symbol_policy(
         ]
     )
     full_window = full_window_cap_comparison[str(selected_entry_cap)]["cumulative"]
+    full_window.update(
+        modeled_summary(
+            [
+                row
+                for row in [
+                    *calibration_selected_evaluation["episodes"],
+                    *holdout_evaluation["episodes"],
+                ]
+                if row["daily_entry_ordinal"] <= selected_entry_cap
+            ],
+            expected_dates,
+        )
+    )
     holdout_pass = holdout_cap_ready(selected_entry_cap)
     return {
         "decision": (
@@ -1536,6 +1578,14 @@ def discover_symbol_policy(
         "calibration_second_half": second,
         "holdout": holdout,
         "full_window": full_window,
+        "selected_episodes": {
+            "calibration": [
+                row
+                for row in calibration_selected_evaluation["episodes"]
+                if row["daily_entry_ordinal"] <= selected_entry_cap
+            ],
+            "holdout": holdout["episodes"],
+        },
         "entry_cap_comparison": {
             "calibration": calibration_cap_comparison,
             "calibration_first_half": first_cap_comparison,
@@ -1561,6 +1611,8 @@ def build_report(
     symbol_universe: dict[str, str] | None = None,
     symbol_origins: dict[str, str] | None = None,
     replay_cache_dir: Path | None = None,
+    market_census: dict[str, Any] | None = None,
+    capital_limit_krw: float | None = None,
 ) -> dict[str, Any]:
     global _ACTIVE_REPLAY_CONTEXT
     universe = dict(symbol_universe or SYMBOLS)
@@ -1832,6 +1884,20 @@ def build_report(
             symbol_origins=origins,
         ),
         "execution_mode": "full_recompute",
+        "selection_metric_contract": {
+            "metric_role": "modeled_net_profit_objective_under_existing_primary_ev_guards",
+            "decision_authority": AUTHORITY,
+            "window_policy": "qualified_calendar_days_including_valid_zero_signal",
+            "sample_floor": METRIC_CONTRACT["sample_floor"],
+            "primary_decision_metric": "notional_weighted_ev_pct",
+            "candidate_rank_metric": "minimum_half_modeled_net_pnl_per_qualified_day",
+            "source_quality_gate": METRIC_CONTRACT["source_quality_gate"],
+            "forbidden_uses": [
+                "broker_profit",
+                "quantity_or_cap_change",
+                "missing_outcome_as_zero",
+            ],
+        },
         "runtime_effect": False,
         "allowed_runtime_apply": False,
         "collector_created": False,
@@ -1839,7 +1905,96 @@ def build_report(
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
     }
-    return attach_recommendation_contract(report)
+    if end_date >= date(2026, 9, 17):
+        from src.engine.monitoring.widget_symbol_runtime_policy import (
+            _normalized_selected_parameters,
+        )
+        from src.engine.monitoring.widget_symbol_runtime_contract import (
+            DEFAULT_OBSERVATION_DIR,
+        )
+        from src.engine.monitoring.policy_research_economics import (
+            signal_execution_feasibility,
+        )
+
+        for symbol, result in results.items():
+            if result.get("decision") != "holdout_pass_widget_signal_policy_candidate":
+                continue
+            selected = _normalized_selected_parameters(result.get("selected_policy"))
+            incumbent = applied_baselines.get(symbol) or {}
+            carry = selected is not None and all(
+                incumbent.get(key) == selected.get(key)
+                for key in ("signal_policy", "execution_policy")
+            )
+            if carry:
+                result["execution_feasibility"] = {
+                    "status": "carry_verified_unchanged_incumbent",
+                    "runtime_effect": False,
+                }
+            elif selected is not None:
+                proof = signal_execution_feasibility(
+                    result,
+                    symbol=symbol,
+                    source_date=end_date,
+                    signal_policy=selected["signal_policy"],
+                    observation_dir=DEFAULT_OBSERVATION_DIR,
+                )
+                result["execution_feasibility"] = proof
+                if proof["status"] != "pass":
+                    result["proxy_research_decision"] = result["decision"]
+                    result["decision"] = (
+                        "execution_feasibility_missing_no_widget_runtime_promotion"
+                    )
+    return attach_recommendation_contract(
+        _attach_population_evidence(
+            report, market_census=market_census, capital_limit_krw=capital_limit_krw
+        )
+    )
+
+
+def _attach_population_evidence(report, *, market_census=None, capital_limit_krw=None):
+    """Reconcile both single-symbol checkpoints and the combined universe."""
+    end_date = date.fromisoformat(report["end_date"])
+    results, universe = report["symbols"], report["symbol_universe"]
+    if market_census is None:
+        census_path = (
+            DATA_DIR
+            / "report"
+            / "market_opportunity_census"
+            / f"market_opportunity_census_{end_date.isoformat()}.json"
+        )
+        try:
+            if census_path.is_symlink() or census_path.stat().st_size > 4 * 1024 * 1024:
+                raise ValueError("census_not_bounded_summary")
+            market_census = json.loads(census_path.read_text())
+        except (OSError, ValueError):
+            market_census = None
+    report["passed_symbols"] = [
+        symbol
+        for symbol, result in results.items()
+        if result.get("decision") == "holdout_pass_widget_signal_policy_candidate"
+    ]
+    report["decision"] = (
+        "widget_signal_policy_candidates_ready"
+        if report["passed_symbols"]
+        else "no_widget_signal_policy_candidate"
+    )
+    report["research_universe_handoff"] = research_universe_handoff(
+        market_census, source_date=end_date, universe=universe, results=results
+    )
+    report["joint_capital_demand"] = joint_capital_demand(
+        {
+            symbol: [
+                row
+                for window in ("calibration", "holdout")
+                for row in (result.get(window) or {}).get(
+                    "episodes", (result.get("selected_episodes") or {}).get(window, [])
+                )
+            ]
+            for symbol, result in results.items()
+        },
+        capital_limit_krw=capital_limit_krw,
+    )
+    return report
 
 
 class VerifiedBars(tuple):
@@ -1873,7 +2028,11 @@ def research_contract_hash() -> str:
     # Bind replay, tick/price, calendar and component/cost dependencies together.
     from src.trading.order import tick_utils
     from src.utils import market_day
-    from src.engine.monitoring import widget_signal_quality, widget_comparison_cost
+    from src.engine.monitoring import (
+        widget_signal_quality,
+        widget_comparison_cost,
+        policy_research_economics,
+    )
 
     digest = hashlib.sha256()
     for module in (
@@ -1881,10 +2040,49 @@ def research_contract_hash() -> str:
         market_day,
         widget_signal_quality,
         widget_comparison_cost,
+        policy_research_economics,
     ):
         digest.update(Path(module.__file__).read_bytes())
     digest.update(Path(__file__).read_bytes())
     return digest.hexdigest()
+
+
+def _external_evidence_generation(end_date, symbols):
+    from src.engine.monitoring.widget_symbol_runtime_contract import (
+        DEFAULT_OBSERVATION_DIR,
+    )
+
+    census = (
+        DATA_DIR
+        / "report"
+        / "market_opportunity_census"
+        / f"market_opportunity_census_{end_date.isoformat()}.json"
+    )
+    paths = [census]
+    if end_date >= date(2026, 9, 17):
+        for symbol in sorted(symbols):
+            paths.extend(
+                sorted(
+                    Path(DEFAULT_OBSERVATION_DIR).glob(
+                        f"widget_symbol_advisory_{symbol}_*.jsonl"
+                    )
+                )
+            )
+    generations = {}
+    for path in paths:
+        try:
+            stat = path.lstat()
+            generations[str(path)] = [
+                stat.st_dev,
+                stat.st_ino,
+                stat.st_size,
+                stat.st_mtime_ns,
+                stat.st_ctime_ns,
+                path.is_symlink(),
+            ]
+        except OSError:
+            generations[str(path)] = None
+    return generations
 
 
 def research_input_fingerprint(
@@ -1896,7 +2094,10 @@ def research_input_fingerprint(
     symbol_origins: dict[str, str],
 ) -> str:
     payload = {
-        "schema": "widget_symbol_signal_policy_research_input_v2",
+        "schema": "widget_symbol_signal_policy_research_input_v3",
+        "external_evidence_generation": _external_evidence_generation(
+            end_date, symbol_universe
+        ),
         "producer_sha256": research_contract_hash(),
         "end_date": end_date.isoformat(),
         "cost_contract": comparison_cost_contract(end_date),
@@ -2542,7 +2743,7 @@ def main(argv: list[str] | None = None) -> int:
     ).hexdigest()
     report["execution_mode"] = "sequential_symbol_checkpoints"
     report["generated_at_kst"] = datetime.now(KST).isoformat(timespec="seconds")
-    report = attach_recommendation_contract(report)
+    report = attach_recommendation_contract(_attach_population_evidence(report))
     paths = (
         write_report(report, output_dir=args.output_dir) if args.write else (None, None)
     )

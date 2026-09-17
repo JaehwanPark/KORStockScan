@@ -22,7 +22,15 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from src.engine.monitoring.widget_comparison_cost import comparison_cost_contract
-from src.engine.monitoring.machine_entry_confirmation_study import build_study
+from src.engine.monitoring.machine_entry_confirmation_study import (
+    build_study,
+    _decisions,
+)
+from src.engine.monitoring.policy_research_economics import (
+    source_only_timing_observation,
+    trading_window,
+    population_dispositions,
+)
 from src.engine.monitoring.machine_rebound_reentry_evaluation import (
     SECTION as REBOUND_SECTION,
     build_evaluation as build_rebound_evaluation,
@@ -632,7 +640,15 @@ def _dynamic_baseline_observation(
 ) -> dict[str, Any] | None:
     replay = row.get("dynamic_confirmation_source_only_replay")
     outcome = row.get("owner_outcome")
-    if not isinstance(replay, dict) or not isinstance(outcome, dict):
+    if not isinstance(replay, dict):
+        return None
+    if row.get("actual_order_submitted") is False:
+        if not _dynamic_replay_contract_valid(row=row, replay=replay):
+            return None
+        return source_only_timing_observation(
+            source_date=source_date, row=row, replay=replay
+        )
+    if not isinstance(outcome, dict):
         return None
     replay_valid = _dynamic_replay_contract_valid(row=row, replay=replay)
     if not replay_valid:
@@ -1002,6 +1018,7 @@ def _decision_economic_baseline(
     return {
         "source_date": source_date,
         "lifecycle_id": str(row.get("lifecycle_id") or ""),
+        "anchor_id": row.get("anchor_id"),
         "terminal_action": terminal_action,
         "selected_delay_sec": selected_delay,
         "baseline_net_pct": baseline_net,
@@ -1231,7 +1248,7 @@ def _candidate_from_decision_baseline(
     if baseline is None or baseline["terminal_action"] != "ENTER":
         return baseline
     delay_sec = int(baseline["selected_delay_sec"])
-    if delay_sec == 0:
+    if delay_sec == 0 or baseline.get("modeled_quantity") is not None:
         return baseline
     selected_decision = (replay.get("checkpoint_decisions") or [])[-1]
     selected_horizon = (row.get("entry_confirmation_bbo_horizons") or {}).get(
@@ -1281,6 +1298,12 @@ def _candidate_from_decision_baseline(
 def _study_economic_observer(
     *, source_date: date, row: dict[str, Any], replay: dict[str, Any]
 ) -> dict[str, Any] | None:
+    if row.get("actual_order_submitted") is not True:
+        if replay not in _decisions(row).values():
+            return None
+        return source_only_timing_observation(
+            source_date=source_date, row=row, replay=replay
+        )
     baseline = _decision_economic_baseline(
         source_date=source_date, row=row, replay=replay
     )
@@ -1331,7 +1354,10 @@ def _evaluate_dynamic_cohort(
         (source_date, row)
         for source_date, row in cohort_rows
         if row.get("owner_policy_tuning_eligible") is True
-        and row.get("actual_order_submitted") is True
+        and (
+            row.get("actual_order_submitted") is None
+            or type(row.get("actual_order_submitted")) is bool
+        )
     ]
     anchor_counts: dict[tuple[date, str], int] = defaultdict(int)
     for source_date, row in source_owner_rows:
@@ -1353,23 +1379,51 @@ def _evaluate_dynamic_cohort(
         if str(row.get("anchor_id") or "")
         and (source_date, str(row.get("anchor_id"))) not in duplicate_anchor_keys
     ]
-    realized_eligible_count = sum(
-        isinstance((outcome := row.get("owner_outcome")), dict)
-        and outcome.get("realized") is True
+    common_horizon_mode = any(
+        isinstance(label, dict) and "common_horizon_terminal" in label
         for _, row in eligible_owner_rows
+        for label in (
+            (row.get("dynamic_confirmation_first_hit_outcomes") or {}).get(
+                "checkpoint_outcomes"
+            )
+            or {}
+        ).values()
+    )
+
+    def observe(day, row):
+        if common_horizon_mode:
+            replay = row.get("dynamic_confirmation_source_only_replay")
+            if not isinstance(replay, dict) or not _dynamic_replay_contract_valid(
+                row=row, replay=replay
+            ):
+                return None
+            return source_only_timing_observation(
+                source_date=day, row=row, replay=replay
+            )
+        return _dynamic_candidate_observation(source_date=day, row=row)
+
+    realized_eligible_count = sum(
+        (
+            not common_horizon_mode
+            and row.get("actual_order_submitted") is True
+            and isinstance((outcome := row.get("owner_outcome")), dict)
+            and outcome.get("realized") is True
+        )
+        or (
+            (common_horizon_mode or row.get("actual_order_submitted") is False)
+            and observe(day, row) is not None
+        )
+        for day, row in eligible_owner_rows
     )
     observations = [
         observation
         for source_date, row in eligible_owner_rows
-        if (
-            observation := _dynamic_candidate_observation(
-                source_date=source_date,
-                row=row,
-            )
-        )
-        is not None
+        if (observation := observe(source_date, row)) is not None
     ]
     observed_dates = sorted({item["source_date"] for item in observations})
+    source_only_pair_count = sum(
+        item.get("modeled_quantity") is not None for item in observations
+    )
     latest_observation_date = observed_dates[-1] if observed_dates else None
     scope_row = cohort_rows[-1][1] if cohort_rows else {}
     latest_observation_lag_trading_days, latest_observation_lag_limit = (
@@ -1557,6 +1611,23 @@ def _evaluate_dynamic_cohort(
         and candidate_p10 >= baseline_p10 - MAX_P10_DETERIORATION_PCT
         and rolling_ready
     )
+    holdout = {"required": common_horizon_mode, "ready": not common_horizon_mode}
+    if common_horizon_mode:
+        # The registered dynamic rule is fixed. Latest qualified source day
+        # validates it independently; an empty/missing label cannot pass.
+        last_day = rolling_calendar_dates[-1] if rolling_calendar_dates else None
+        held = [item for item in observations if item["source_date"] == last_day]
+        base_profit = sum(item["baseline_modeled_net_profit_krw"] for item in held)
+        cand_profit = sum(item["candidate_modeled_net_profit_krw"] for item in held)
+        holdout = {
+            "required": True,
+            "source_date": last_day.isoformat() if last_day else None,
+            "sample_count": len(held),
+            "baseline_modeled_net_profit_krw": base_profit if held else None,
+            "candidate_modeled_net_profit_krw": cand_profit if held else None,
+            "ready": bool(held and cand_profit > 0 and cand_profit > base_profit),
+        }
+        economics_ready = economics_ready and holdout["ready"]
     ready = sample_and_source_ready and economics_ready and latest_observation_fresh
     action_counts = {
         action: sum(item["terminal_action"] == action for item in observations)
@@ -1574,6 +1645,17 @@ def _evaluate_dynamic_cohort(
         )
     }
     return {
+        "source_only_economic_pair_count": source_only_pair_count,
+        "latest_source_day_holdout": holdout,
+        "population_disposition": population_dispositions(
+            cohort_rows,
+            {(item["source_date"], item.get("anchor_id")) for item in observations},
+        ),
+        "economic_population_basis": (
+            "common_300s_counterfactual_all_decisions"
+            if common_horizon_mode
+            else "legacy_actual_outcome_cohort"
+        ),
         "schema": "machine_per_signal_dynamic_confirmation_ev_v2",
         "condition_feasibility": {
             "sample_and_source_ready": sample_and_source_ready,
@@ -1692,6 +1774,7 @@ def _evaluate_cohort(
     cohort_rows: list[tuple[date, dict[str, Any]]],
     delay_sec: int,
     target_date: date,
+    source_report_dates: set[date] | None = None,
 ) -> dict[str, Any]:
     try:
         runtime_cost_contract = comparison_cost_contract(
@@ -1798,7 +1881,13 @@ def _evaluate_cohort(
     rolling: dict[str, Any] = {}
     rolling_ready = True
     for window_days in ROLLING_WINDOWS_DAYS:
-        window_dates = observed_dates[-window_days:]
+        expected_window = trading_window(target_date, window_days)
+        qualified_dates = (
+            source_report_dates
+            if source_report_dates is not None
+            else {day for day, _ in cohort_rows}
+        )
+        window_dates = [day for day in expected_window if day in qualified_dates]
         window_rows = [
             item for item in observations if item["source_date"] in set(window_dates)
         ]
@@ -2394,7 +2483,10 @@ def build_report(
     for source_date, row in all_confirmation_rows:
         if (
             row.get("owner_policy_tuning_eligible") is True
-            and row.get("actual_order_submitted") is True
+            and (
+                row.get("actual_order_submitted") is None
+                or type(row.get("actual_order_submitted")) is bool
+            )
             and (anchor_id := str(row.get("anchor_id") or ""))
         ):
             global_anchor_counts[(source_date, anchor_id)] += 1
@@ -2420,6 +2512,7 @@ def build_report(
                 cohort_rows=rows,
                 delay_sec=delay,
                 target_date=target_date,
+                source_report_dates=source_report_dates,
             )
             for delay in DELAYS_SEC
         ]

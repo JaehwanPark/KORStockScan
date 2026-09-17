@@ -674,6 +674,10 @@ def test_discovery_selects_on_calibration_and_can_fail_untouched_holdout(
                 "trade_date": trade_date.isoformat(),
                 "daily_entry_ordinal": cap,
                 "entry_price": 10_000,
+                "entry_at": datetime.combine(trade_date, time(9, cap), KST).isoformat(),
+                "exit_at": datetime.combine(
+                    trade_date, time(9, cap + 1), KST
+                ).isoformat(),
                 "net_return_pct": net_return,
                 "exit_reason": "target" if net_return > 0 else "force_flat",
                 "entry_state": "ENTRY_READY",
@@ -727,6 +731,10 @@ def test_discovery_auto_expands_to_positive_fourth_episode_without_chasing_cap_e
                 "trade_date": trade_date.isoformat(),
                 "daily_entry_ordinal": cap,
                 "entry_price": 10_000,
+                "entry_at": datetime.combine(trade_date, time(9, cap), KST).isoformat(),
+                "exit_at": datetime.combine(
+                    trade_date, time(9, cap + 1), KST
+                ).isoformat(),
                 "net_return_pct": incremental_ev[cap],
                 "exit_reason": "target" if incremental_ev[cap] > 0 else "force_flat",
                 "entry_state": "ENTRY_READY",
@@ -1200,3 +1208,48 @@ def test_overlap_revision_revokes_incomplete_cache_and_preserves_original_bars(
     assert research._read_snapshot(middle, "006800", dates[1]) is None
     assert meta["source_revision_dates"] == [str(dates[1])]
     assert meta["snapshot_hit_dates"] == 0
+
+
+def test_discovery_profit_objective_keeps_lower_ev_more_profitable_candidate(
+    monkeypatch,
+):
+    from dataclasses import replace
+
+    sparse = replace(_policy(), target_bps=100)
+    frequent = replace(_policy(), target_bps=50)
+    dates = [date(2026, 6, 5) + timedelta(days=index) for index in range(26)]
+    monkeypatch.setattr(
+        research, "_group_bars", lambda bars: {day: () for day in dates}
+    )
+    monkeypatch.setattr(research, "policy_grid", lambda: (sparse, frequent))
+
+    def replay(
+        grouped, selected_dates, policy, *, include_episodes=False, replay_context=None
+    ):
+        count, net = (1, 1.0) if policy == sparse else (3, 0.5)
+        episodes = [
+            {
+                "trade_date": day.isoformat(),
+                "daily_entry_ordinal": ordinal,
+                "entry_price": 10000,
+                "net_return_pct": net,
+                "exit_reason": "target",
+                "entry_state": "ENTRY_READY",
+                "peak_return_pct": net,
+                "entry_at": datetime.combine(day, time(9, ordinal), KST).isoformat(),
+                "exit_at": datetime.combine(day, time(9, ordinal + 1), KST).isoformat(),
+            }
+            for day in selected_dates
+            for ordinal in range(1, count + 1)
+        ]
+        return {
+            "episodes": episodes,
+            "entry_cap_comparison": research._entry_cap_comparison(episodes),
+        }
+
+    monkeypatch.setattr(research, "evaluate_policy", replay)
+    result = research.discover_symbol_policy([], expected_dates=dates)
+    assert result["selected_policy"]["target_bps"] == 50
+    assert result["calibration"]["notional_weighted_ev_pct"] == 0.5
+    assert result["calibration"]["modeled_net_pnl_per_qualified_day"] == 1500
+    assert result["selected_policy"]["max_completed_entries_per_day"] == 3

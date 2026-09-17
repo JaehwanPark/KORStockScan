@@ -1158,7 +1158,28 @@ def _summary(trades: Sequence[dict[str, Any]]) -> dict[str, Any]:
     target_count = sum(
         row.get("exit_reason") == "fixed_average_take_profit" for row in trades
     )
+    complete_profit = 0.0
+    complete_profit_valid = True
+    for trade in trades:
+        average = _positive_price(
+            trade.get("average_price") or trade.get("entry_price")
+        )
+        legs, net = trade.get("filled_leg_count"), trade.get("net_return_pct")
+        if (
+            average is None
+            or type(legs) is not int
+            or legs <= 0
+            or type(net) not in (int, float)
+            or not math.isfinite(net)
+            or trade.get("exit_reason") == "right_censored"
+        ):
+            complete_profit_valid = False
+            break
+        complete_profit += average * legs * WIDGET_AUTO_TRADE_LEG_QUANTITY * net / 100
     return {
+        "modeled_complete_position_net_profit_krw": (
+            complete_profit if complete_profit_valid else None
+        ),
         "signal_trade_count": len(trades),
         "distinct_signal_date_count": len(dates),
         "signal_dates": dates,
@@ -1727,9 +1748,11 @@ def _calibrate_session(
 
     def rank(candidate: dict[str, Any]) -> tuple[float, ...]:
         summary = candidate["summary"]
+        modeled_profit = summary.get("modeled_complete_position_net_profit_krw")
         if session.force_flat:
             return (
                 float(candidate["ready"]),
+                float(modeled_profit if modeled_profit is not None else -1e100),
                 float(
                     summary["source_quality_adjusted_ev_pct"]
                     if summary.get("source_quality_adjusted_ev_pct") is not None
@@ -1745,6 +1768,7 @@ def _calibrate_session(
             )
         return (
             float(candidate["ready"]),
+            float(modeled_profit if modeled_profit is not None else -1e100),
             float(
                 summary["source_quality_adjusted_ev_pct"]
                 if summary.get("source_quality_adjusted_ev_pct") is not None
@@ -2643,6 +2667,17 @@ def apply_paired_target_selection(
     confirmation_axis_changed=False,
 ):
     """Replace the winner-only Samsung selector; freeze every non-target knob."""
+    source_audit = dict(source_audit)
+    qualified = (calibration.get("research_accumulation") or {}).get(
+        "qualified_observation_dates"
+    )
+    if isinstance(qualified, list):
+        from src.engine.monitoring.policy_research_economics import trading_window
+
+        window = {day.isoformat() for day in trading_window(target_date, 20)}
+        source_audit["qualified_source_dates_by_session"] = {
+            session: [day for day in qualified if day in window]
+        }
     parameters = paired_replay.policy_parameters(previous)
     study = paired_replay.build_study(
         (

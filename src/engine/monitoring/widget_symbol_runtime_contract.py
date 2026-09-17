@@ -55,6 +55,7 @@ METRIC_CONTRACT = {
 
 CALIBRATION_PROJECTION_SCHEMA = "widget_calibration_projection_v1"
 CALIBRATION_FIELDS = (
+    "bbo",
     "execution_replay_input",
     "current_price",
     "observation_role",

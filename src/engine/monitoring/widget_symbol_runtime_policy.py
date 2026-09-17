@@ -441,6 +441,11 @@ def build_policy(
         source_date >= date(2026, 9, 9) or quality_by_symbol is not None
     )
     quality_blocks: dict[str, str] = {}
+    incumbent_by_symbol = (
+        WidgetSymbolRuntimePolicyLoader().resolve_all(observed_date=source_date)
+        if source_date >= date(2026, 9, 17)
+        else {}
+    )
     for symbol, name in universe.items():
         result = (research.get("symbols") or {}).get(symbol)
         if research.get("schema") in {
@@ -510,6 +515,33 @@ def build_policy(
         ):
             quality_blocks[symbol] = "component_selection_contract_missing"
             continue
+        if source_date >= date(2026, 9, 17):
+            from src.engine.monitoring.policy_research_economics import (
+                signal_execution_feasibility,
+            )
+            from src.engine.monitoring.widget_symbol_runtime_contract import (
+                DEFAULT_OBSERVATION_DIR,
+            )
+
+            # Exact unchanged incumbent is carry, not a new proxy promotion.
+            incumbent = incumbent_by_symbol.get(symbol)
+            unchanged = isinstance(incumbent, dict) and all(
+                incumbent.get(key) == selected.get(key)
+                for key in ("signal_policy", "execution_policy")
+            )
+            if not unchanged:
+                feasibility = signal_execution_feasibility(
+                    result,
+                    symbol=symbol,
+                    source_date=source_date,
+                    signal_policy=selected["signal_policy"],
+                    observation_dir=DEFAULT_OBSERVATION_DIR,
+                )
+                if feasibility["status"] != "pass":
+                    quality_blocks[symbol] = (
+                        "selected_proxy_execution_feasibility_missing"
+                    )
+                    continue
         if require_execution_quality:
             quality = (
                 quality_by_symbol.get(symbol)

@@ -223,3 +223,9 @@ projection은 optional speed path다. 원본보다 source 검사를 느슨하게
 - [기존 pin/import 보완 기록](../audit-reports/2026-09-16-widget-evaluation-release-pin-repair.md): 설정 설치와 실제 import 검증의 구분.
 - [Kiwoom 공통 data health 계획](kiwoom-intraday-common-data-health-implementation-plan-2026-09-16.md): 기존 market source·route·metadata 재사용 경계. 이 문서의 기능이 이미 구현됐다고 가정하지 않는다.
 - [raw producer](../../src/engine/monitoring/widget_research_watch_collector.py), [advisory producer](../../src/engine/monitoring/widget_symbol_runtime_collector.py), [local calibration](../../src/engine/monitoring/widget_auto_trade_policy_calibration.py), [signal research](../../src/engine/monitoring/widget_symbol_signal_policy_research.py), [observation/execution policy loader](../../src/engine/monitoring/widget_symbol_runtime_policy.py).
+
+### 7.2 정책 연구 보완 운영 계약 (09-17)
+
+- [R1–R5 구현·배포 기록](../audit-reports/2026-09-17-widget-episode-policy-research-implementation.md): 미체결 원래 decision의 공통300초 CF 평가, 기존 EV guard 아래 source-day 순익 탐색, canonical census 누락 대사, 신규 후보의 exact-seed/full-quantity BBO 증거, valid-zero day 및 공동 자본 수요 검증을 연결한다. 미확인 제출·손익은 null, actual/CF·proxy/실행·독립/feasible 공동 순익을 분리한다.
+- 신규 execution 증거가 없는 09-17 이후 source-date 후보는 observation seed만 유지하고 runtime promotion을 차단한다. 검증된 동일 incumbent carry와 기존 incident/holdout/owner guard는 유지한다. 코드 세대·census/raw 파일 세대 변경은 checkpoint 재사용을 무효화하며 per-symbol 결과 결합 후 전 universe를 대사한다.
+- 배포는 연구 수집기 및 widget evaluation/machine final refresh의 immutable code pin을 사용한다. 기존 자원·interval·timer를 유지하고 main selected release/trading PID·수량/cap/env/현재 dated policy·custody를 변경하지 않는다. 새 자연 source·정책/경제성 및 allocation contract는 현재 checklist OPEN owner로 검증한다.
