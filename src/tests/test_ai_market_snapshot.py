@@ -1,4 +1,5 @@
 import json
+import pytest
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -6,6 +7,104 @@ from zoneinfo import ZoneInfo
 from src.engine.scalping import ai_market_snapshot as mod
 
 KST = ZoneInfo("Asia/Seoul")
+
+
+@pytest.mark.parametrize(
+    "gap,state",
+    [
+        (5, "RECENT_TRADE"),
+        (9.999, "RECENT_TRADE"),
+        (10, "QUIET_TAPE_OBSERVED"),
+        (30, "QUIET_TAPE_OBSERVED"),
+    ],
+)
+def test_proven_five_second_trade_gap_is_feature_shortfall_not_source_damage(
+    gap, state
+):
+    from src.trading.market.quote_consistency import build_market_data_health
+
+    now = datetime(2026, 9, 17, 10, 0, tzinfo=KST).timestamp()
+    ws = _ws(now, effective_venue="KRX")
+    ws["last_realtime_type_ts"]["0B"] = now - gap
+    ws["market_data_transport_epoch"] = 2
+    record = {
+        "item": "005930",
+        "market_route": "krx_only",
+        "market_suffix": "",
+        "effective_venue": "KRX",
+        "transport_epoch": 2,
+        "orderbook": {"bids": [{"price": 9990}], "asks": [{"price": 10000}]},
+    }
+    ws["realtime_type_snapshots_by_route"] = {
+        "KRX|krx_only": {
+            "0D": {**record, "observed_epoch": now - 0.2},
+            "0B": {**record, "observed_epoch": now - gap, "current_price": 10000},
+            "quiet_tape_observation": {
+                "last_quote": now - 0.2,
+                "last_trade": now - gap,
+                "closed_episodes": 0,
+            },
+        }
+    }
+
+    def build():
+        return mod.build_ai_market_snapshot(
+            stock_code="005930",
+            decision_stage="entry_screen",
+            ws_data=ws,
+            effective_venue="KRX",
+            session_bucket="krx_regular",
+            candle_context=_candle(),
+            now_ts=now,
+        )
+
+    snapshot = build()
+    preflight = snapshot["ai_input_preflight_v1"]
+    assert snapshot["market_data_health"] == build_market_data_health(ws, now_ts=now)
+    assert snapshot["trade_activity"]["trade_activity_state"] == state
+    assert snapshot["trade_activity"]["canonical_binding_proven"] is True
+    assert preflight["source_allowed"] is True
+    assert preflight["allowed"] is False  # no provider/entry bypass
+    assert preflight["feature_allowed"] is False
+    assert "required_feature_tape_stale" in preflight["feature_blockers"]
+    assert "tape_stale" not in preflight["source_blockers"]
+    assert snapshot["sources"]["tape"]["quality"] == "stale"
+    assert snapshot["sources"]["current_price"]["observed_at"] == mod._iso(now - gap)
+    assert (
+        mod.ai_market_snapshot_log_fields(snapshot)["ai_input_preflight_trade_activity"]
+        == snapshot["trade_activity"]
+    )
+    from src.engine import sniper_state_handlers as handlers
+
+    event = handlers._build_tick_source_quality_log_fields(
+        mod.ai_market_snapshot_log_fields(snapshot)
+    )
+    assert event["ai_input_preflight_trade_activity"] == snapshot["trade_activity"]
+    assert event["ai_input_preflight_feature_allowed"] is False
+    assert "required_feature_tape_stale" in event["ai_input_preflight_feature_blockers"]
+    ops = handlers._build_ai_ops_log_fields(mod.ai_market_snapshot_log_fields(snapshot))
+    assert ops["ai_input_preflight_trade_activity"] == snapshot["trade_activity"]
+    assert ops["ai_input_preflight_feature_allowed"] is False
+    # Companion health cannot manufacture continuity on missing raw evidence.
+    ws["market_data_health"] = snapshot["market_data_health"]
+    del ws["realtime_type_snapshots_by_route"]["KRX|krx_only"]["quiet_tape_observation"]
+    missing = build()
+    assert missing["trade_activity"]["canonical_binding_proven"] is False
+    assert "tape_stale" in missing["ai_input_preflight_v1"]["source_blockers"]
+    records = ws["realtime_type_snapshots_by_route"]["KRX|krx_only"]
+    records["quiet_tape_observation"] = {
+        "last_quote": now - 0.2,
+        "last_trade": now - gap,
+        "closed_episodes": 2,
+    }
+    repeated = build()
+    assert repeated["trade_activity"]["trade_activity_state"] == (
+        "REPEATED_QUIET_TAPE_OBSERVED" if gap >= 10 else "RECENT_TRADE"
+    )
+    records["0B"]["transport_epoch"] = 1
+    cross_epoch = build()
+    assert cross_epoch["trade_activity"]["canonical_binding_proven"] is False
+    assert "tape_stale" in cross_epoch["ai_input_preflight_v1"]["source_blockers"]
 
 
 def _ws(

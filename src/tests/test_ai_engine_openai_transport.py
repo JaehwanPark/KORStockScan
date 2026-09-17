@@ -4110,7 +4110,10 @@ def test_machine_initial_policy_assesses_before_provider_cache_and_lock(
         assert result["action"] in {"WAIT", "DROP"}
 
 
-def test_machine_policy_preflight_block_preserves_source_invalid_receipt(monkeypatch):
+@pytest.mark.parametrize("feature_shortfall", [False, True])
+def test_machine_policy_preflight_block_preserves_source_invalid_receipt(
+    monkeypatch, feature_shortfall
+):
     from src.engine.scalping import mechanistic_entry_runtime_policy as initial_policy
     from src.engine.scalping.entry_setup_evidence import (
         MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
@@ -4145,6 +4148,21 @@ def test_machine_policy_preflight_block_preserves_source_invalid_receipt(monkeyp
         "_call_openai_safe",
         lambda *args, **kwargs: pytest.fail("source-invalid input cannot call AI"),
     )
+    if feature_shortfall:
+        monkeypatch.setattr(
+            openai_module,
+            "ai_input_preflight",
+            lambda context: {
+                "allowed": False,
+                "source_allowed": True,
+                "feature_allowed": False,
+                "feature_blockers": ["required_feature_tape_stale"],
+                "blockers": ["required_feature_tape_stale"],
+                "source_blockers": [],
+                "status": "blocked",
+                "primary_blocker": "required_feature_tape_stale",
+            },
+        )
 
     result = engine.analyze_target(
         "test",
@@ -4162,6 +4180,21 @@ def test_machine_policy_preflight_block_preserves_source_invalid_receipt(monkeyp
         candle_context=None,
     )
 
+    if feature_shortfall:
+        assert result["action"] == "WAIT"
+        assert result["provider_called"] is False
+        assert result["machine_source_invalid_receipt"] is False
+        assert result["machine_required_feature_receipt"] is True
+        assert result["entry_mechanistic_action"] == "RECHECK"
+        assert result["entry_required_feature_blockers"] == [
+            "required_feature_tape_stale"
+        ]
+        assert (
+            result["machine_evaluation_status"]
+            == "required_feature_blocked_before_assessment"
+        )
+        assert result["scanner_promotion_id"] == "SCANPROM-source-invalid"
+        return
     assert result["action"] == "DROP"
     assert result["machine_evaluation_expected"] is True
     assert result["machine_evaluation_status"] == (

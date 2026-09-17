@@ -207,6 +207,15 @@ Official reference receipt (`2026-09-17T01:15:02+09:00` 재확인 기록): upstr
 - 10초 체결공백/서로 다른3episode는 trade activity 계약이고, quote/submit 안전 TTL이 아니다. 현재 전수 reader의 activity/required feature 분리가 완료됐다는 주장은 하지 않는다. 공통 health의 `OBSERVATION_UNPROVEN`·원천 continuity/venue gap·U9 경제성 quartet/U10/U11는 기존 OPEN owner에 유지한다.
 - 확장7 suite는458 passed/1 failed였다. `test_openai_scalping_analyze_target_returns_feature_audit_fields`의 micro delivery `not_attempted` 대 `computed_not_sent` 기대 불일치는 작업본·수정 전 운영3f9a358a에서 각각 단독 동일 재현됐다. 이번 handler/helper를 호출하지 않는 기존 결함이며 숨기거나 기대값을 바꾸지 않는다. 핵심6 suite454 pass와 확장 나머지 검증을 분리하고 전체 repo finding0은 선언하지 않는다. 후속 owner는 기존 Main AI source-quality acceptance다.
 
+## 18. 공통 활동 facts의 canonical 소비와 feature-only 미판정 분리
+
+- U2~U4 전수 완료가 아니라 U3의 canonical snapshot→Entry preflight→기존 trace/event→#11/#74 소비 결손을 우선 수리한다. 기존 공통 health를 원래 route receipt에서 consume 시점으로 다시 호출하며 별도의 activity classifier/counter·collector·장후 단계를 만들지 않는다. route projection의 aggregate 시각을 공통 transport 원시각으로 사용하지 않도록 최초 회귀 finding을 수정했다.
+- 동일 item/route/venue/0B·0D 시각과 공통 epoch/연속성이 입증된 활동의 old last-sale/tape/skew는 필수 feature 부족과 source 손상을 분리한다. 오래된 tape가 fresh나 현재 매수 체결이 되지는 않으며 final allowed=false/Provider 미호출을 유지한다. feature-only는 machine RECHECK/runtime WAIT·별도 receipt이고 SOURCE_INVALID가 아니다. source/quote/clock 결손과 runtime artifact 미준비가 함께 있으면 feature-only로 정상화하지 않는다. late recheck가 source-only PASS를 전체 preflight PASS로 오인하는 우회도 보완했다.
+- 기존 ai ops/tick log와 immutable trace가 활동/feature 사유를 전달한다. #11/#74 감사의 expected→accounted 보존식에 feature-before-assessment 별도 제외 분모를 추가해 정상 미판정이 새 unaccounted source 결손이나 경제성 assessed 표본으로 변환되지 않게 했다. numeric 가격/수량·leg/scale-in·compact body/model·호가/submit/micro·broker/hard safety·당일 정책/env는 변경하지 않는다.
+- 최초 관련3 suite239 pass, 경계/consumer 회귀 후9 suite710 pass. 기존 cache 확장에서는787 pass/1 fail이며 holding payload 크기5447>5000은 수정 전 운영3f9a358a에서도 단독 동일 재현했다. 앞선 §17 micro delivery 기존 실패와 함께 숨기지 않고 별도 Main AI source-quality owner에 남긴다. audit/cache targeted265 pass/1 known deselected. 최종 검증/배포 receipt는 후속에 별도로 기록한다.
+- 조사 범위: main Entry/holding/price의 canonical snapshot·entry revalidation·enrichment는 같은 공통 owner 경로다. scanner normalization/warm reactivation/scheduler, direct REST/episode/widget client·file projection, micro/exit/web 전달의 U2/U4 전수 migration은 아직 미완료다. quote/bar/micro/REST tape feature TTL은 activity classifier가 아니며 제거하지 않는다. grep 경로 확인을 static/offline/natural coverage 완료나 missing consumer0으로 보고하지 않는다. 기존 acceptance ID를 유지한다.
+- 기대효과는 정상 체결 공백과 source 손상을 구분한 진단·미진입 원천 보존이며, tape feature가 부족한 실제 타점의 무조건 ENTER 증가나 순익 개선을 보장하지 않는다. quote-only 판단 가능 owner의 feature 요구 재설계와 전수 공통 소비는 별도 잔여이며 이 단계에서 임의 중립 feature·10초 일괄 TTL·새 정책 승격으로 우회하지 않는다.
+
 Project/Calendar 동기화는 실행하지 않는다. 사용자 표준 명령:
 
 ```bash

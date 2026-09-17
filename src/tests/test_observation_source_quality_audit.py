@@ -323,8 +323,10 @@ def test_machine_ai_natural_source_audit_does_not_require_provider_archives_with
     )
 
 
+@pytest.mark.parametrize("feature_shortfall", [False, True])
 def test_machine_ai_natural_source_audit_excludes_source_invalid_attempts(
     tmp_path: Path,
+    feature_shortfall,
 ):
     day = "2026-09-14"
     payload_path = (
@@ -341,9 +343,18 @@ def test_machine_ai_natural_source_audit_excludes_source_invalid_attempts(
                 "decision_stage": "entry_screen",
                 "machine_evaluation_expected": True,
                 "machine_evaluation_status": (
-                    "source_quality_blocked_before_assessment"
+                    "required_feature_blocked_before_assessment"
+                    if feature_shortfall
+                    else "source_quality_blocked_before_assessment"
                 ),
-                "machine_source_invalid_receipt": True,
+                "machine_source_invalid_receipt": not feature_shortfall,
+                "machine_required_feature_receipt": feature_shortfall,
+                "entry_required_feature_blockers": (
+                    ["required_feature_tape_stale"] if feature_shortfall else []
+                ),
+                "entry_mechanistic_action": (
+                    "RECHECK" if feature_shortfall else "source_invalid"
+                ),
                 "provider_called": False,
                 "result_source": "input_preflight_blocked",
             }
@@ -354,16 +365,27 @@ def test_machine_ai_natural_source_audit_excludes_source_invalid_attempts(
 
     report = audit._machine_ai_natural_source_consumption(day, data_root=tmp_path)
 
-    assert report["status"] == "warning_machine_source_invalid_excluded"
+    assert report["status"] == (
+        "warning_machine_required_feature_excluded"
+        if feature_shortfall
+        else "warning_machine_source_invalid_excluded"
+    )
     assert report["machine_attempt_conservation"] == {
         "expected_trace_count": 1,
         "assessed_trace_count": 0,
         "assessed_capture_verified_trace_count": 0,
-        "source_invalid_excluded_trace_count": 1,
+        "source_invalid_excluded_trace_count": int(not feature_shortfall),
+        "feature_insufficient_excluded_trace_count": int(feature_shortfall),
         "assessment_contract_invalid_trace_count": 0,
         "accounted_trace_count": 1,
         "unaccounted_trace_count": 0,
-        "status_counts": {"source_quality_blocked_before_assessment": 1},
+        "status_counts": {
+            (
+                "required_feature_blocked_before_assessment"
+                if feature_shortfall
+                else "source_quality_blocked_before_assessment"
+            ): 1
+        },
         "denominator_preserved": True,
         "source_invalid_rows_are_tuning_excluded": True,
         "missing_economics_imputed": False,
@@ -371,7 +393,9 @@ def test_machine_ai_natural_source_audit_excludes_source_invalid_attempts(
     assert report["tuning_input_allowed"] is True
     assert report["machine_threshold_tuning_input_allowed"] is False
     assert report["machine_threshold_tuning_blocked_reason"] == (
-        "machine_source_quality_blocked_before_assessment"
+        "machine_required_feature_blocked_before_assessment"
+        if feature_shortfall
+        else "machine_source_quality_blocked_before_assessment"
     )
 
 
