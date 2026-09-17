@@ -191,7 +191,8 @@ def scoped_entry_price_bps(profile, configured_bps, *, venue, session, policy_bu
     from src.engine.scalping.strategy_owner_replay import ENTRY_REPLAY_PROFILES
     if ENTRY_REPLAY_PROFILES.get(profile) != proof['target_value_key']:
         return configured_bps
-    return (proof['selected_bps'] if [venue, session, policy_bundle_sha256] == proof['scope_parent'][:3]
+    return (proof['selected_bps'] if profile == proof['profile']
+            and [venue, session, policy_bundle_sha256] == proof['scope_parent'][:3]
             else proof['incumbent_bps'])
 
 

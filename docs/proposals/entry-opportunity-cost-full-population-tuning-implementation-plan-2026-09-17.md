@@ -651,6 +651,8 @@ scanner/recheck/ADD-NOADD/exit family에서도 raw/미노출 CF가 existing cand
 
 ### U9 — 가격·수량/leg의 no-submit/no-fill 경제성→Daily publisher
 
+- 추가 잔여 보완: [부분 구현 리뷰 §25](../audit-reports/2026-09-17-common-health-opportunity-cost-scoped-implementation.md#25-승인된-디스크-정리와-u9-날짜별-분모profile-소비-잔여-보완). producer date census 없는 completed-only 가격 선정·날짜별 분모 이동/underflow와 같은 BPS env를 공유하는 profile 간 runtime 적용 누출을 수정한다. 빈 native census와 적정 signed actual 4군 역할은 분리한다. 전수 U0–U12·자연 경제성 완료와 구분한다.
+
 - 후속 구현 receipt: [부분 구현 리뷰 §24](../audit-reports/2026-09-17-common-health-opportunity-cost-scoped-implementation.md#24-u9-native-executable-replay가격-계약과-영향-handoff). 실제 owner 발급 계획에서 frozen 메뉴를 기록하고 기존 native 경로로 4군/가격 replay를 생성해 기존 split producer→Daily→PREOPEN→runtime으로 전달한다. 날짜별 미완료 분모/최신 source-day holdout을 보존한다. 신규 leg 대안은 owner 발급 receipt가 있어야 하며 없으면 leg control이다. 코드 closure와 자연 quartet/선정/소비/경제성은 분리하고 전수 U0–U12 완료로 보고하지 않는다.
 
 - 의존: U6 + 해당 가격/집행 scope의 검증된 원천. 초기 action은 검증된 현재 incumbent로 고정하며 U7/U8 새 정책의 선승격을 요구하지 않는다.
