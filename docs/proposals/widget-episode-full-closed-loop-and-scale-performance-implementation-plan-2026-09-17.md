@@ -191,3 +191,15 @@ C0–C8/P1–P6은 이번 source 변경과 기존 producer/consumer에 연결했
 사용자 승인 순서대로 C7 native mature revision 폐기/verified carry 차단과 C4 paired fixed-allocator incumbent 비교를 보완했다. P3 state-boundary checkpoint는 원 rolling HELD 의미를 유지한다. 작은 fixture에서는 cache overhead가 커 measured backend selection으로 빠른 기존 replay를 사용한다. 따라서 모든 경로의 unchanged-day replay0/전체 CPU50%는 OPEN이며 optional cache 유무로 admission/grid/표본을 바꾸지 않는다. P6은2GiB/10GiB reserve와 live/run/reference pin을 적용한 optional-only LRU metadata index다. 원천·정책·receipt retention을 변경하지 않는다. 최신 source gate·규모 실측·실제 배포/PID와 자연 acceptance 구분은 [잔여 구현 기록](../audit-reports/2026-09-17-widget-episode-closed-loop-completion.md)을 따른다.
 
 최종 후속 receipt: selected/pushedfdc28f25,17:39:32 KST 관련4 reader active·actualC6 widget3/episode3 consumed·main780712 유지. Native 규모 N100D120은87완료/13fixture backlog·5400초 budgetdeferred로 성능 acceptance 미달이다. Universal day-replay0/overallCPU50%/swap0와 자연 신규 정책·실제 수익은 기존 OPEN acceptance이며 source closure와 구분한다. 상세 gate/byte equivalence/source provenance는 위 잔여 구현 기록을 따른다.
+
+
+### 제한된 검증과 cold-probe 보완
+
+사용자 후속 지시에 따라 기존 episode16-candidate page만 초기 cache backend를 probe하고 overhead가 크면 나머지 전수 grid를 native fast-reference로 평가한다. 추가 production module/job/benchmark는 만들지 않는다. 검증은 episode3 native templates×46일·widget2종목×32일 및 warm/하루 append로 제한했고 원 grid·비용·보유 상태·qualified calendar와 승격 floor는 유지한다. Large synthetic 조건의 미달/미검증 기록은 이전 receipt로 보존하며 이번 source 배포·기동을 위한 추가 필수 gate로 확대하지 않는다. 자연 신규 정책 소비와 실제 수익 검증은 기존 두 OPEN owner를 유지한다. 디스크 정리·검증·최종 실제 source/PID는 [후속 기록](../audit-reports/2026-09-17-widget-episode-closed-loop-completion.md#bounded-cold-probe-follow-up)을 따른다.
+
+제한 검증 후속 완료: sourcebbd23da34 push/17:59:11 immutable7pin·4 reader actual cwd/PID·C6 incumbent widget3/episode3 consumed·main871393/552152a5 및6guard보존. Immutable91 PASS. 자연 신규 정책/실수익은 기존 OPEN owner이며 상세 evidence는 위 후속 기록·sanitized receipt를 따른다.
+
+
+후속 cache 리뷰: optional byte JSON의 손상/형태/recursion·잘못된 counter로 연구가 중단되지 않도록 기존 writer만 최소 보완했다. SQLite charge/LRU/pin·원천/정책/경제성 guard는 유지하며 관련120 PASS, 추가 module/job/성능 benchmark는 없다. [후속 리뷰·배포 기록](../audit-reports/2026-09-17-widget-episode-closed-loop-completion.md#optional-byte-ledger-repair-review)을 따른다. 자연 장후 생성·신규 next-date 정책 소비·실제 경제성은 기존 두 OPEN owner의 후행 acceptance다.
+
+Cache 후속 완료: source d2b1ec1f5 push·18:06:28 related7pin/4 reader actual cwd·C6 incumbent 소비 확인,source120/immutable96 PASS·review finding1수리/미해결0. Main871393/552152a5·6guard 유지,규모benchmark/추가module 없음. 자연 신규 정책/실수익은 기존 OPEN acceptance이며 위 후속 기록의 실제 receipt를 따른다.

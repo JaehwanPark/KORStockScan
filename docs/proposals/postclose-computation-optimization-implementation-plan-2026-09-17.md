@@ -211,6 +211,10 @@ Timing은 cycle 진단 receipt에만 넣고 rolling/R3 후보 본문·정책 선
 
 현재 실행 owner는 기존 checklist ID를 유지한다. 정책 생성/자동 publish/PREOPEN·actual PID 소비와 자연 비용차감 EV·순익은 code/parity PASS와 별개이며, 다음 정상 장후에 기존 consumer의 generation/terminal·자연 성능을 확인한다. Entry machine/compact AI·가격·수량/leg·scale-in/custody 및 hard/broker guard·sample floor/자동 선정 권한은 변경하지 않는다.
 
+
+### 제한된 검증과 cold-probe 보완
+
+사용자 후속 지시에 따라 기존 episode16-candidate page만 초기 cache backend를 probe하고 overhead가 크면 나머지 전수 grid를 native fast-reference로 평가한다. 추가 production module/job/benchmark는 만들지 않는다. 검증은 episode3 native templates×46일·widget2종목×32일 및 warm/하루 append로 제한했고 원 grid·비용·보유 상태·qualified calendar와 승격 floor는 유지한다. Large synthetic 조건의 미달/미검증 기록은 이전 receipt로 보존하며 이번 source 배포·기동을 위한 추가 필수 gate로 확대하지 않는다. 자연 신규 정책 소비와 실제 수익 검증은 기존 두 OPEN owner를 유지한다. 디스크 정리·검증·최종 실제 source/PID는 [후속 기록](../audit-reports/2026-09-17-widget-episode-closed-loop-completion.md#bounded-cold-probe-follow-up)을 따른다.
 ## 14. 적정 검증 범위·공통 cache reader 보완
 
 사용자는 과도한 성능 검증·코드 확장 없이 적정 수준의 종목/기간 조정을 요청했다. 기존 offline widget/episode 규모 CLI의 기본 fixture를 **3종목·46거래일·각 compute phase 300초 예산**으로 조정한다. 이는 전체 grid를 유지하는 소규모 engineering 기본값이며 live 연구 종목 cap, 과거 raw 삭제, 선정 floor 하향 또는 실행 전체 wall deadline이 아니다. 명시적 확대 옵션은 유지하되 이번에는 N100/D120 matrix를 재실행하지 않는다. 기존87완료/13미처리 synthetic 결과를 전체 통과로 바꾸지 않는다.
@@ -220,3 +224,10 @@ Timing은 cycle 진단 receipt에만 넣고 rolling/R3 후보 본문·정책 선
 Widget day-cache의 별도 compressed JSON reader를 기존 stable/pinned/bounded 공통 reader로 통합한다. Top-level object·results object·checksum을 검증하고 optional JSON recursion/형태/세대 변경은 cache miss→원 계산이다. Required raw/정책/비용/lineage guard는 그대로 유지하며 cache를 지우거나 null outcome을0으로 바꾸지 않는다. 후행 자동 evaluation/final-refresh에 배포하되 이 offline 수정만을 위해 매매 process를 재기동하지 않는다.
 
 검증·push·배포 및 잔여 자연 acceptance는 [보완 리뷰 §36](../audit-reports/2026-09-17-postclose-computation-optimization-scoped-implementation.md#36-widget-day-cache-공통-reader-통합적정-검증-범위)를 따른다.
+
+제한 검증 후속 완료: sourcebbd23da34 push/17:59:11 immutable7pin·4 reader actual cwd/PID·C6 incumbent widget3/episode3 consumed·main871393/552152a5 및6guard보존. Immutable91 PASS. 자연 신규 정책/실수익은 기존 OPEN owner이며 상세 evidence는 위 후속 기록·sanitized receipt를 따른다.
+
+
+후속 cache 리뷰: optional byte JSON의 손상/형태/recursion·잘못된 counter로 연구가 중단되지 않도록 기존 writer만 최소 보완했다. SQLite charge/LRU/pin·원천/정책/경제성 guard는 유지하며 관련120 PASS, 추가 module/job/성능 benchmark는 없다. [후속 리뷰·배포 기록](../audit-reports/2026-09-17-widget-episode-closed-loop-completion.md#optional-byte-ledger-repair-review)을 따른다. 자연 장후 생성·신규 next-date 정책 소비·실제 경제성은 기존 두 OPEN owner의 후행 acceptance다.
+
+Cache 후속 완료: source d2b1ec1f5 push·18:06:28 related7pin/4 reader actual cwd·C6 incumbent 소비 확인,source120/immutable96 PASS·review finding1수리/미해결0. Main871393/552152a5·6guard 유지,규모benchmark/추가module 없음. 자연 신규 정책/실수익은 기존 OPEN acceptance이며 위 후속 기록의 실제 receipt를 따른다.

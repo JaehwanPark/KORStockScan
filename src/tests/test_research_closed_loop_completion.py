@@ -441,3 +441,88 @@ def test_cheap_episode_cache_uses_measured_fast_reference_without_reducing_grid(
     assert actual == cold
     assert actual["grid_candidate_count"] == len(spot.candidate_grid(profile))
     assert stats == {"cache_disabled_fast_reference": 1}
+
+
+@pytest.mark.parametrize("mode", ["zero", "complete", "held"])
+def test_cold_probe_stops_after_one_page_and_keeps_entire_native_grid(
+    tmp_path, monkeypatch, mode
+):
+    from src.tests.test_low_price_two_leg_expanded_candidate_research import (
+        _selection_checkpoint_fixture,
+    )
+
+    profile, contexts = _selection_checkpoint_fixture(mode)
+    expected = spot.select_profile_spot(
+        profile, deepcopy(contexts), calibration_days=30, holdout_days=16
+    )
+    native = expanded._DayStateCheckpoint.__call__
+
+    def cheap(self, *args):
+        self.native_cpu = 0.0
+        return native(self, *args)
+
+    monkeypatch.setattr(expanded._DayStateCheckpoint, "__call__", cheap)
+    stats = {}
+    actual = expanded._select_profile_checkpoint(
+        profile,
+        deepcopy(contexts),
+        calibration_days=30,
+        cache_dir=tmp_path,
+        contract={"generation": "cold"},
+        day_stats=stats,
+    )
+    assert actual == expected
+    assert actual["grid_candidate_count"] == len(spot.candidate_grid(profile))
+    assert stats["probe_aborted_fast_reference"] == 1
+    assert stats["day_replay"] <= 16 * len(contexts)
+    assert (
+        loop.read_object(next(tmp_path.glob(".day_strategy_*.meta")))["enabled"]
+        is False
+    )
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        "{broken",
+        "[]",
+        '{"evicted_bytes":"bad","written_bytes":false}',
+        '{"evicted_bytes":-1,"written_bytes":-5}',
+    ],
+)
+def test_optional_byte_ledger_damage_does_not_abort_cache_write(tmp_path, metadata):
+    import json
+    import zlib
+
+    root = tmp_path / "cache"
+    path = root / "symbol" / "day.json.z"
+    required = tmp_path / "native-source"
+    required.write_bytes(b"preserve")
+    raw = zlib.compress(json.dumps({"rows": []}).encode())
+    assert loop.optional_cache_write(path, raw, cache_root=root, reserve=0)
+    (root / ".optional_cache_bytes.json").write_text(metadata)
+    assert loop.optional_cache_write(path, raw, cache_root=root, reserve=0)
+    assert storage.read(path, root=root) == {"rows": []}
+    ledger = loop.read_object(root / ".optional_cache_bytes.json")
+    assert ledger["charged_bytes"] == len(raw)
+    assert ledger["evicted_bytes"] == 0
+    assert ledger["written_bytes"] == len(raw)
+    assert required.read_bytes() == b"preserve"
+
+
+def test_optional_byte_ledger_parser_recursion_is_recovered(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    root = tmp_path / "cache"
+    native = loop.read_object
+
+    def recursive_ledger(path, *args, **kwargs):
+        if Path(path).name == ".optional_cache_bytes.json":
+            raise RecursionError("damaged optional metadata")
+        return native(path, *args, **kwargs)
+
+    monkeypatch.setattr(loop, "read_object", recursive_ledger)
+    assert loop.optional_cache_write(
+        root / "symbol" / "day.json.z", b"cache", cache_root=root, reserve=0
+    )
+    assert native(root / ".optional_cache_bytes.json")["charged_bytes"] == 5

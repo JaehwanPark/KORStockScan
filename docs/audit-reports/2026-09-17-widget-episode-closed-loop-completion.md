@@ -81,3 +81,42 @@ Latest native episode first19 existing templates/G총30,780(270/810/1350/2700/29
 Actual native C6 receipt는 widget3종목005930/034020/042660, episode3프로필auto_028670_midday/auto_034020_midday/auto_111770_late_morning을 `consumed`, rejected0, import_root/cwd=release로 확인했다. 기존 검증된 incumbent 소비이며 새로운 prospective candidate 승격이나 신규 주문/실현이익 증명이 아니다. [Sanitized 실제 deployment/consumer receipt](../../data/runtime/widget_episode_completion_acceptance_2026-09-17.json)와 [규모/저장소 receipt](../../data/runtime/widget_episode_completion_scale_review_2026-09-17.json)가 source binding과 실제 scope를 소유한다.
 
 **잔여 acceptance:** N100D1205400초 미달/13fixture backlog·untested native 규모 조건, adaptive backend의 universal day-replay0/overallCPU50%, swap0·전체 cold baseline 이하가 OPEN이다. Lossless cold replay/whole-grid probe overhead 축소 후 동일 grid/source/자원으로 재검증한다. 오늘20:10 evaluation/21:15 final refresh는 배포 당시 not_yet_due이며 자연 신규 종목/정책10+16 widget·30+16 episode qualified calendar, next-date 실제 소비와 version 비용차감 EV/net profit은 기존2개 OPEN owner가 담당한다. Broad postclose regeneration/외부 sync/추가 main restart/직접 주문은 실행하지 않았다.
+
+
+### Bounded cold-probe follow-up
+
+사용자가 과도한 성능 검증과 불필요한 코드 확장을 금지한 후속 범위다. 기존 episode checkpoint의 초기 backend probe를 기존16-candidate page 하나로 제한했다. Cache 처리 CPU가 원 재생보다 크면 나머지 후보는 fast-reference로 끝까지 평가하며 useful warm cache는 유지한다. 신규 module/collector/job/benchmark와 영속 EV 통계는 추가하지 않았다. 원 grid/calendar/비용/수량/holding alias/승격 floor 및 주문·custody·safety 계약은 그대로다. Prefix proof 없는 raw delta는 기존 full fallback을 유지한다.
+
+관련3-suite218 PASS/41.47초와 추가 quote/runtime/closed-loop6-suite145 PASS/18.70초(일부 중복)를 확인했다. 추가 회귀는 미진입·청산·보유 상태에서 probe 중단 이후에도 전수 후보 수와 원 선정/경제성 동일함을 검증한다. Self review → supplemental fix → re-review에서 범위 내 미해결 finding0. Ruff F,E9/compile/diff-check와 print-only parser를 적용하며 큰 규모 조건을 반복하지 않는다.
+
+기존 offline fixture를 CPUQuota20%/MemoryMax512MiB/Nice19로 제한했다. Episode3 native templates,46일/append47일, G총6,480: cold compute wall7.418초/CPU1.462초, warm0.200초/0.040초, append6.734초/1.344초. 원본 canonical parity와 full grid를 확인했다. 별도 original comparison CPU3.194/0/3.319초에는 deepcopy가 포함되므로 순수 재생 대비 감소율로 주장하지 않는다. RSS최대225,472KiB·remote0. Widget2종목,32일/append33일, G1536/cap1–5: cold21.785초/CPU4.346초, warm11.097초/2.218초, append12.195초/2.435초. Warm49,184hit/miss0·cold/warm digest 동일, append49,184hit/신규3,072miss·write-skip0·RSS140,556KiB·remote0. Widget CLI 최소 fixture 기간32일을 따르며 실제 widget10+16/episode30+16 qualified calendar를 줄인 것이 아니다. 전체 시장 native/source acquisition/publication throughput이나100종목 deadline/무조건 replay0/swap0 달성을 추정하지 않는다.
+
+종료된 optional synthetic cache2개, 사용되지 않는 원격 복구 가능 배포본9개, 작업본1개를 삭제해 allocated1.580GiB를 확보했다. 삭제 시 현재/이전 selector·실제 PID·effective systemd/EnvironmentFiles·dirty/untracked source·원격 복구 가능 여부를 확인했다. 고유 변경/설정이 있거나 원격 Git-tree 원본과 같다고 증명할 수 없는 복사본은 보존했다. 원천 시장/연구 데이터·정책·holding/receipt/운영 권한 파일은 삭제하지 않았다. 신규 배포본은 하나만 만들고 현재 release는 rollback으로 보존한다.
+
+Source commit/push와 actual release/PID 기동 receipt는 아래 배포 완료 후 기록한다. 기존 두 stable owners의 자연20:10/21:15 생성·다음 날짜 신규 정책 소비·실제 비용차감 EV/net profit은 계속 OPEN이다.
+
+
+최신 병행 upstream의 stable shared widget cache reader/default3×46 fixture와 signed source-age/health diagnostics를 보존 통합했다. Docs conflict는 신규 후속과 최신 actual receipt를 함께 보존했다. Widget/closed-loop/completion115 PASS/18.42초 및 incoming samsung advisory150 PASS/1.61초를 추가 확인했다. Widget helper가 변경되어 같은2×32 제한 fixture만 재검증했으며 latest cold wall21.697초/CPU4.340초, warm11.005초/2.203초, append12.302초/2.458초·RSS140,816KiB·기존 digest/hit/miss 의미 동일이었다. Episode 측정 commit4d8367281의 expanded/entry-spot/cache-storage bytes는 최종 통합과 같음을 확인했고 전체 producer hash 차이는 receipt에 분리한다. 기존 큰 규모 matrix를 재시작하지 않았다. 배포는 latest main PID871393/552152a5의 custody를 보존한다. [제한 검증·정리 receipt](../../data/runtime/widget_episode_bounded_probe_review_2026-09-17.json)가 실제 범위와 source provenance를 소유한다.
+
+
+**17:59:11 KST pushed/selected immutable source bbd23da34**, `/home/ubuntu/KORStockScan-runtime-releases/widget-episode-bounded-probe-20260917`. Immutable/shared2-suite91 PASS/7.63초와 Ruff/compile/bash-n/diff/parser를 통과한 뒤 related7개 source pins·cron9·postclose print-plan를 같은 root로 맞췄다. 필요한4 reader active/NRestarts0/실제cwd=root: widget889225, episode889192, research-watch889381, symbol-runtime889221. Main871393/552152a5 cwd/src를 유지했고 main selected-source-consumed=false다. Current predecessor60cba1ca와 기존 실제 reader552152a5 소스를 보존 통합했다. Root alias만 바꾸고 EnvironmentFiles/resource/기존 guard·argv·condition 및6개 policy/registry/custody/threshold/operator SHA가 동일했다.
+
+Actual C6 receipt의 boot ID/PID start ticks와 실제 PID/root를 대사했다. Widget005930/034020/042660 및 episodeauto_028670_midday/auto_034020_midday/auto_111770_late_morning consumed/rejected0이며 검증된 incumbent 수신이다. [Sanitized actual deployment/consumer receipt](../../data/runtime/widget_episode_bounded_probe_acceptance_2026-09-17.json)에 source와 범위를 결속한다. 신규 prospective 종목/정책 승격·주문·이익으로 주장하지 않는다. Host free 약22.84GiB는 배포 후 전체 상태이고 이번 정리 allocated1.580GiB와 별도로 보고한다.
+
+이번 최소 변경·제한 검증·push·배포·기동은 완료했다. 과도한 N100/D120 재검증/추가 code 확장/실행 모집단·grid·경제성 floor 하향은 하지 않았다. 기존 큰 규모 미달 기록은 유지하며 자연20:10 evaluation/21:15 final refresh는 현재not_yet_due, 신규 종목/정책의qualified calendar→joint→다음날 발행/소비 및 실제 비용차감EV/net profit은 existing 두 OPEN owner의 후행 acceptance다. External sync/추가 main restart/직접 주문은 실행하지 않았다.
+
+
+### Optional byte-ledger repair review
+
+사용자 추가 review/fix/re-review/commit/push/deploy/start 승인에 따라 existing cache writer/reader, episode fast-reference/cached state, C4 fixed allocator/C7 exact mature feedback 회귀 경계를 검토했다. 새 성능 시험·production module/job·Provider/broker/order/threshold/cap/quantity 변경은 없다. 기존 clean 작업본을 재사용하고 당일 Plan Rebase/체크리스트 context 및 두 stable owners를 유지한다.
+
+Finding1: optional `.optional_cache_bytes.json`의 malformed JSON/non-object/RecursionError와 잘못된 counter가 공통 writer에서 전파됐다. Widget `_flush_day`는 TypeError/RecursionError를 처리하지 않아 선택적 저장 중 primary 연구가 중단될 수 있었다. SQLite catalog charge·LRU/pin을 바꾸지 않고 telemetry read만 safe recovery, 정상 nonnegative integer counter만 보존, charged bytes는 기존 SQLite 값으로 재기록한다. Required native source/정책/비용 evidence의 exception 계약은 그대로다. 변경은 기존 storage 파일8줄이며 새로운 모듈을 만들지 않았다.
+
+Regression으로 malformed JSON/non-object/string·boolean/negative counter를 재현했다. 첫 회귀의 parser injection에 Path import 누락을 보완하고 최종 관련3-suite120 PASS/18.34초를 확인했다. Parser RecursionError는 deterministic injection으로 검증한다. 정상 cached payload의 stable reader 반환·실제 charged bytes·required native source 보존과 기존 pin/LRU/HELD alias/rolling candidate parity/C4/C7 회귀를 함께 확인했다. Self review→수정→재리뷰 범위 내 미해결 finding0. Ruff F,E9/compile/diff/bash-n 및 print-only parser를 검증하며 이전 N/D 성능 수치를 변경된 helper의 최신 측정으로 재사용하지 않는다. 이번에는 규모 benchmark가 없다. 실제 배포 root/PID와 natural policy/economics 후행 상태는 다음 완료 receipt로 분리한다.
+
+
+**18:06:28 KST review repair pushed/selected source d2b1ec1f5**, `/home/ubuntu/KORStockScan-runtime-releases/widget-episode-cache-review-20260917`. 관련3-suite120 PASS/18.34초, immutable/shared2-suite96 PASS/7.94초 및 Ruff/compile/bash-n/diff/print-only parser를 통과했다. Helper exception/type recovery와 producer/consumer 재리뷰 범위의 미해결finding0. 이전 성능 receipt를 최신 helper 성능으로 격상하지 않고 별도 규모 시험·새모듈/job을 추가하지 않았다.
+
+Related7개effective source pins와 cron9/postclose print-plan 동일root,4 reader active/NRestarts0/실제cwd=root: widget898987, episode898974, research-watch899055, symbol-runtime898983. Main871393/552152a5 cwd/src와 source custody를 유지하며 main selected-source-consumed=false다. EnvironmentFiles/resource/기존guard·argv·condition은 root alias 외 동일,policy/registry/custody/threshold/operator6개 SHA 불변이다. Selector와 신규pin은 CAS/lock·rollback 준비 후 적용했고 기존 predecessorbbd23da34는 보존한다.
+
+Actual C6 boot ID/start ticks/native receipt 및 accepted-policy digest를 대사했다. Widget005930/034020/042660, episodeauto_028670_midday/auto_034020_midday/auto_111770_late_morning consumed/rejected0이다. 기존 incumbent 수신이며 신규 prospective 정책·주문·수익의 증명이 아니다. [Sanitized 실제 review/배포/consumer receipt](../../data/runtime/widget_episode_cache_review_acceptance_2026-09-17.json)가 source와 gate를 결속한다. 자연20:10 evaluation/21:15 final refresh는현재not_yet_due,신규 next-date policy/qualified calendar/joint·actual consumption·비용차감 EV/net profit은 기존 두 OPEN owners에 남긴다. External sync/추가 main restart/직접 주문·package 설치는 수행하지 않았다.
