@@ -2,7 +2,7 @@
 
 ## 1. 목적·현재 상태·범위
 
-상태: **C0–C8/P1–P6 source 구현·반복 리뷰 및 최종 gate 통과, 1차 commit/push·배포·4서비스 기동 완료, 보완 gate1,089 PASS·후속 배포 진행**. 이번 사용자 지시는 구현·코드리뷰/수정 반복·commit/push·배포·기동을 명시적으로 승인했다. 계획 문서만으로 운영 권한을 추론하지 않는다. [이번 구현·검증 기록](../audit-reports/2026-09-17-widget-episode-full-closed-loop-implementation.md)에서 source closure, 실제 release/PID, 자연 다음 날짜 소비, mature 경제성을 분리한다.
+상태: **C0–C8/P1–P6 source 구현·반복 리뷰 및 최종 gate 통과, commit/push·최종 배포·4서비스 기동 완료, source gate1,089 PASS/최신 helper207 PASS/physical343 PASS**. 이번 사용자 지시는 구현·코드리뷰/수정 반복·commit/push·배포·기동을 명시적으로 승인했다. 계획 문서만으로 운영 권한을 추론하지 않는다. [이번 구현·검증 기록](../audit-reports/2026-09-17-widget-episode-full-closed-loop-implementation.md)에서 source closure, 실제 release/PID, 자연 다음 날짜 소비, mature 경제성을 분리한다.
 
 목표는 시장에서 발견한 유효 기회를 실제 체결 여부와 무관하게 연구에 연결하고, 비용·원래 수량·실행가능성·공동 자본 아래 더 좋은 정책을 선정하여 **다음 거래일 위젯/episode가 자동 소비하고 결과를 다시 연구에 돌려주는 것**이다. 무조건 종목/정책을 늘리는 목표가 아니다. 모든 발견 기회의 admission/defer/block 이유를 보존하며 연구 범위 확장을 표본·grid 축소로 상쇄하지 않는다.
 

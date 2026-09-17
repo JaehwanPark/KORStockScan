@@ -4,7 +4,7 @@
 
 사용자 승인: 구현 → 코드리뷰·수정보완 반복 → commit/push → 배포·기동. [계획](../proposals/widget-episode-full-closed-loop-and-scale-performance-implementation-plan-2026-09-17.md)을 참고자료로 사용했다. Source 구현과 실제 release/PID 적용, 자연 신규 정책 소비, 실제 비용차감 수익 개선을 분리한다. 분리 worktree `fix/widget-episode-closed-loop-20260917`에서 최신 profile-checkpoint 및 market-read/fork safety를 통합했다. 운영 원천·env·주문·소유권 자료는 테스트로 변경하지 않았다.
 
-현재 source gate를 통과했고 1차 commit/push·배포·관련 4개 서비스 기동을 완료했다. 추가 리뷰의 episode summary 소비 경계와 계산 병목 보완을 후속 release로 반영한다. 오늘 20:10 evaluation/21:15 final-refresh 자연 실행은 아직 예정 전이다. 신규 seed는 등록 이후 widget10+16/episode30+16 고정 qualified 거래일이 필요하며, 기존 시계열이나 실체결을 전향적 검증으로 대체하지 않는다. 신규 선택/다음 날짜 실제 소비/경제성은 이 코드 배포만으로 완료가 아니다.
+현재 source gate를 통과했고 1차 commit/push·배포·관련 4개 서비스 기동을 완료했다. 추가 리뷰의 episode summary 소비 경계·계산 병목 및 최신 feature-index 보완도 최종 release로 배포·기동했다. 오늘 20:10 evaluation/21:15 final-refresh 자연 실행은 아직 예정 전이다. 신규 seed는 등록 이후 widget10+16/episode30+16 고정 qualified 거래일이 필요하며, 기존 시계열이나 실체결을 전향적 검증으로 대체하지 않는다. 신규 선택/다음 날짜 실제 소비/경제성은 이 코드 배포만으로 완료가 아니다.
 
 ## 2. 코드 연결과 source 검증
 
@@ -64,3 +64,14 @@ Profile에서 반복 cap 경제성 집계를 확인해 한 episode의 시각/가
 Stable-source 최종16 suite **1,089 PASS / 89.40초**, 보완 구간3 suite135 PASS. Python compile/Ruff F,E9·두 wrapper bash-n·diff-check PASS. Source review 범위 finding0. Natural seed/next-date 신규 정책 소비·실제 exact-cost economics 및 full-scale SLA는 기존 OPEN owner에 남긴다.
 
 1차 배포: `06321fdb` source→latest main 통합 `cf42b542` push. 14:29 관련4서비스 기동, widget553146/episode553117의 native C6 receipt에서 당일 기존 widget3종목/episode3정책 소비 확인. Watch553239/runtime553143 및 예정 producer/owner-apply7개 code root를 초기 release로 맞췄고 기존 resource/env/소유권/정책/threshold·operator hash6개를 보존했다. 첫 deployment receipt는 `data/runtime/widget_episode_full_closed_loop_deployment_2026-09-17.json`. 이후 독립 upstream 배포가 일부 source pins/main PID를 갱신했으므로 이 초기 receipt를 현재 PID로 재사용하지 않고 후속 배포 직전 최신 상태를 다시 봉인한다. 초기 main501022 유지 사실과 후속 main575313은 서로 다른 as-of다.
+
+
+## 8. 최종 commit/push·실제 배포·기동
+
+- 보완 source `acac4f27` commit/main push 뒤 병행 O2 feature-index source `e159ff3c`와 최신 remote를 force 없이 병합했다. Latest dependency 3 suite **207 PASS / 42.38초**, 최종 source 동등성을 확인한 main integration **`bf7105f1c70716ca0637e0b0c5864ebead0f9951`** push. 새로운 engine-root 모듈/패키지 설치·변경 없음.
+- 최종 physical immutable release: `/home/ubuntu/KORStockScan-runtime-releases/widget-episode-closed-loop-r3-20260917`, HEAD bf7105f1. Physical src/deploy tracked clean, data/docs/logs/tmp/venv만 기존 workspace shared 경로. Physical/shared 7 suite **343 PASS / 40.09초**. 당일 예정 evaluation/final-refresh/owner-apply 및 실제 widget/episode/watch/runtime 7개 WorkingDirectory·ExecStart와 필요한 ExecCondition을 동일 root로 검증했다. 기존 실행 인자·EnvironmentFiles·CPU/Memory/Nice/User/Group/restart/stop 제한은 그대로다. 병행 producer drop-in 우선순위 때문에 첫 root 검증이 멈췄고 실제 effective 우선순위를 수정한 뒤 7개 root·보호 설정을 재검증했다. 실패 검증으로 기동/selector PASS를 대신하지 않았다.
+- 2026-09-17 **14:58 최종 기동**: widget **609186**, episode **609158**, watch **609286**, runtime collector **609182**. 전부 active/running·NRestarts0·실제 cwd/import root 일치·startup ExecMainStatus0. 예정3개는 inactive/MainPID0·not_yet_due. Main **575313**의 실제 cwd를 유지했고 이 배포가 main의 새 코드 소비를 증명한다고 표시하지 않는다.
+- C6 당일 native receipt: `consumers/widget_2026-09-17_609186.json` / `episode_2026-09-17_609158.json`, status consumed, 기존 widget3종목(005930/034020/042660)/episode3정책(028670_midday/034020_midday/111770_late_morning)와 source policy SHA 확인. **기존 v1 소비이며 신규 v2 폐루프 선정/경제성 proof가 아니다.** 당일 정책·owner registry/custody·threshold env·operator override hash6개 동일, manual 주문 호출0.
+- Durable current receipt: `data/runtime/widget_episode_closed_loop_r3_deployment_2026-09-17.json`. Rollback: `tmp/systemd_widget_episode_closed_loop_r3_20260917_145815`의 effective-before/기존 selector 및 1차 immutable release 보존. Runtime router postclose print-plan은 최종 root로 결속한다. Workspace tracked/untracked foreign 변경은 별도 stash 백업 후 병합·복원했고, 문서 충돌은 신규 source 보완과 원 owner의 추가 evidence를 함께 보존했다. 외부 Project/Calendar sync, 비싼 production 보고서 재생성, 수동 정책/threshold/owner 적용은 하지 않았다.
+
+판정: 구현·반복 리뷰 보완·대상 validation·commit/push·관련 서비스 배포/기동 완료. 최종 검토 범위 source finding0. 두 기존 checklist OPEN owner와 일정은 유지한다. 오늘 자연 장후 generation→두 publication→tower/checklist/strict/controller/finalization은 예정 전이다. 등록 이후 widget10+16/episode30+16 qualified 거래일·next-date native owner activation/실제 신규 소비·원 버전 exact-cost net profit는 WAITING이다. N100 populated/full scale SLA는 OPEN이며 N1 개선을 전체 시간 목표 달성으로 확대하지 않는다.
