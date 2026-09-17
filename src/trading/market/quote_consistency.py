@@ -88,7 +88,8 @@ def ws_quote_receive_age_ms(data: Mapping[str, Any], *, now_ts: float) -> float 
             )
             if (
                 type(row.get("transport_epoch")) is int
-                and row.get("transport_epoch") == data.get("market_data_transport_epoch")
+                and row.get("transport_epoch")
+                == data.get("market_data_transport_epoch")
                 and bid > 0
                 and ask >= bid
                 and (bid, ask) == (visible_bid, visible_ask)
@@ -236,6 +237,58 @@ def build_market_data_health(
             **quiet_facts,
             "market_no_print_proven": False,
         }
+    rest_quote = None
+    if data.get("source") == "ka10004_rest_orderbook":
+        rest_age = rest_quote_receive_age_ms(data, now_ts=now_ts)
+        request_code = str(data.get("request_code") or "")
+        symbol = str(data.get("stock_code") or "")
+        scope = (
+            "KRX_NXT_INTEGRATED"
+            if request_code == f"{symbol}_AL"
+            else (
+                "NXT"
+                if request_code == f"{symbol}_NX"
+                else "KRX" if request_code == symbol else "UNKNOWN"
+            )
+        )
+        identity_ok = bool(
+            len(symbol) == 6
+            and symbol.isascii()
+            and symbol.isdigit()
+            and scope != "UNKNOWN"
+            and data.get("rest_freshness_basis") == "response_received_epoch_ms"
+        )
+        bid, ask = _best_levels(data)
+        rest_quote = {
+            "source": "ka10004_rest_orderbook",
+            "item": request_code,
+            "market_data_scope": scope,
+            # An explicit request scope does not identify an underlying print.
+            "effective_venue": "UNKNOWN",
+            "underlying_event_venue_proven": False,
+            "quote_receive_age_ms": rest_age,
+            "quote_state": (
+                "unproven"
+                if not identity_ok
+                else (
+                    "missing"
+                    if rest_age is None
+                    else (
+                        "future"
+                        if rest_age < 0
+                        else (
+                            "invalid"
+                            if bid <= 0 or ask < bid
+                            else "stale" if rest_age > quote_max_age_ms else "fresh"
+                        )
+                    )
+                )
+            ),
+            "trade_activity_state": "OBSERVATION_UNPROVEN",
+            "quiet_episode_count": None,
+            "observation_continuity_proven": False,
+            "market_no_print_proven": False,
+        }
     return {
         "schema": MARKET_DATA_HEALTH_SCHEMA,
         "as_of_epoch": now_ts,
@@ -244,6 +297,7 @@ def build_market_data_health(
         "quote_max_age_ms": quote_max_age_ms,
         "quiet_tape_after_ms": 10_000,
         "routes": facts,
+        "rest_quote": rest_quote,
         "decision_authority": False,
         "missing_values_imputed": False,
     }
@@ -472,12 +526,37 @@ def quote_input_from_ws(
     )
 
 
+def rest_quote_receive_age_ms(
+    data: Mapping[str, Any], *, now_ts: float
+) -> float | None:
+    """Original REST receive clock only; never renew a carried age/companion."""
+    for field, scale in (
+        ("rest_received_ts_ms", 1.0),
+        ("received_at_ms", 1.0),
+        ("rest_received_ts", 1000.0),
+        ("received_ts", 1000.0),
+    ):
+        if field not in data:
+            continue
+        value = data[field]
+        try:
+            if isinstance(value, bool):
+                return None
+            stamp = float(value) * scale
+            if not math.isfinite(stamp) or stamp <= 0 or not math.isfinite(now_ts):
+                return None
+            return now_ts * 1000.0 - stamp
+        except (TypeError, ValueError, OverflowError):
+            return None
+    return None
+
+
 def quote_input_from_rest_orderbook(
     data: Mapping[str, Any] | None,
     *,
     now_ts: float | None = None,
 ) -> QuoteInput:
-    now_ts = float(now_ts or time.time())
+    now_ts = float(time.time() if now_ts is None else now_ts)
     data = data or {}
     best_bid, best_ask = _best_levels(data)
     rest_current = _to_int(data.get("rest_current_price")) or _to_int(
@@ -487,15 +566,17 @@ def quote_input_from_rest_orderbook(
     if midpoint <= 0 and best_bid > 0 and best_ask > 0:
         midpoint = int(round((best_bid + best_ask) / 2.0))
     mark = rest_current or midpoint
-    received_ts = _to_float(data.get("rest_received_ts") or data.get("received_ts"))
-    received_ms = _to_float(
-        data.get("rest_received_ts_ms") or data.get("received_at_ms")
+    age_ms = rest_quote_receive_age_ms(data, now_ts=now_ts)
+    has_receive_clock = any(
+        key in data
+        for key in (
+            "rest_received_ts_ms",
+            "rest_received_ts",
+            "received_at_ms",
+            "received_ts",
+        )
     )
-    if received_ms > 0:
-        age_ms = max(0.0, (now_ts * 1000.0) - received_ms)
-    elif received_ts > 0:
-        age_ms = max(0.0, (now_ts - received_ts) * 1000.0)
-    else:
+    if not has_receive_clock:
         age_ms = data.get("pre_submit_rest_orderbook_refresh_age_ms")
         is_ka10004_snapshot = (
             str(data.get("source") or "").strip() == "ka10004_rest_orderbook"
@@ -507,7 +588,13 @@ def quote_input_from_rest_orderbook(
             and raw_time_authority != "raw_not_freshness_input"
         ):
             age_ms = data.get("age_ms")
-    age_ms = None if age_ms is None else max(0.0, _to_float(age_ms))
+    if age_ms is not None:
+        try:
+            age_ms = float(age_ms) if not isinstance(age_ms, bool) else math.nan
+        except (TypeError, ValueError, OverflowError):
+            age_ms = math.nan
+        if not math.isfinite(age_ms):
+            age_ms = None
     return QuoteInput(
         source="rest",
         mark_price=mark,

@@ -341,7 +341,7 @@ class FakeGateway:
             best_bid_qty=self.best_bid_qty,
             best_ask_qty=self.best_ask_qty,
             age_ms=0,
-            received_ts_ms=1,
+            received_ts_ms=int(datetime.now().timestamp() * 1000),
         )
 
     def entry_execution_velocity_snapshot(self, *, route="SOR"):
@@ -2047,6 +2047,35 @@ def test_machine_blocks_entire_episode_when_latest_ten_prints_are_too_slow(
         35_000
     )
     assert guard["entry_execution_velocity_allowed"] is False
+
+
+def test_episode_velocity_wait_cannot_renew_original_liquidity_clock(tmp_path, monkeypatch):
+    import src.trading.order.entry_liquidity_guard as guard
+
+    profile = PROFILES["youngone_afternoon"]
+    gateway = FakeGateway(profile.profile_id)
+    machine = LowPriceTwoLegMachine(
+        profile=profile, gateway=gateway, state_path=tmp_path / "delayed-prints.json",
+        live_enabled=True, ownership_source=lambda code: "manual_operator",
+    )
+    clock = [datetime.now().timestamp()]
+    monkeypatch.setattr(guard.time, "time", lambda: clock[0])
+    book_read = gateway.entry_liquidity_snapshot
+    print_read = gateway.entry_execution_velocity_snapshot
+
+    def book(**kwargs):
+        return replace(book_read(**kwargs), received_ts_ms=int(clock[0] * 1000))
+
+    def prints(**kwargs):
+        clock[0] += 3
+        return print_read(**kwargs)
+
+    monkeypatch.setattr(gateway, "entry_liquidity_snapshot", book)
+    monkeypatch.setattr(gateway, "entry_execution_velocity_snapshot", prints)
+    state = machine.run_once(_profile_run_at(profile.profile_id))
+    assert state["blocked_reason"] == "entry_liquidity_snapshot_stale"
+    assert gateway.buy_calls == []
+    assert gateway.liquidity_calls == gateway.execution_velocity_calls == ["SOR"]
 
 
 def test_machine_rechecks_liquidity_after_restart_with_a_planned_leg(tmp_path):

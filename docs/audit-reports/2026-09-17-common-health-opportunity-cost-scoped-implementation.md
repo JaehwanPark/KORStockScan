@@ -257,6 +257,17 @@ Official reference receipt (`2026-09-17T01:15:02+09:00` 재확인 기록): upstr
 
 다음 작업은 direct REST/독립 gateway/file 전수 parity와 U4 독립 owner 전달을 먼저 닫는 것이다. [위젯·에피소드 연구 로직 리뷰](2026-09-17-widget-episode-policy-research-logic-review.md)의 U10A actual-only admission/source-day/실행가능성 결손은 그대로 잔여다. U5~U11의 나머지 실제 경제성·자동 후보 선정 acceptance와 구분한다. 오늘 기계진입·compact AI 모델/prompt·숫자 가격·수량/leg·scale-in·broker/custody/hard safety와 dated env/policy는 변경하지 않는다.
 
+## 22. REST 호가 common facts와 독립 owner 소비 보완
+
+- 범위: U2의 `ka10004` normalized envelope와 U4의 기존 공통 유동성 guard·다섯 gateway/공용 episode machine/widget engine 소비. 새로운 module/collector/장후 producer는 만들지 않았다. 전체 U2~U4/U0~U12와 U10A/R1~R5는 아직 미완료다.
+- 결함: 독립 유동성 parser가 carried `rest_age_ms=0`을 그대로 사용했고, 공통 REST quote adapter는 미래 receive clock도0으로 clamp했다. print API 대기 뒤 기존 유동성 PASS를 그대로 BUY bundle에 사용할 수 있었다. 정상 무체결 공백과 별개인 실행 호가의 원시각 전달 결손이다.
+- 수정: 기존 common owner의 원 REST receive-age helper와 `rest_quote` facts를 사용한다. normalized snapshot/dataclass/event_fields에 facts를 보존하고 parser/유동성 평가/current micro checkpoint에서 재계산한다. 미래/불명/변조 원시각·잘못된 request scope·typed depth는 fail closed이며 health companion은 권위가 아니다. `_AL`은 integrated request scope만 증명하며 underlying event venue UNKNOWN을 유지한다. REST-only trade activity는 unproven, repeat count null이고 account/history/order에는 활동 판정기를 넣지 않는다.
+- 소비 보완: widget 신규/기존 독립 scale-in 및 공용 episode BUY bundle은 print read 뒤 기존 호가를 순수 재평가한다. 추가 REST/Provider 호출0이며 numeric 가격·수량/leg·진입 선정·AI prompt/model·scale-in 전략·SELL/target/custody·broker/hard safety는 변경하지 않는다. 유동성 호가2초와 기존 execution velocity5초/10print·micro/비용 검사는 각기 유지한다. 이것은 기존3초 체결 공백을10초로 일괄 변경하는 작업이 아니다.
+- Official reference gate: `2026-09-17T11:23:49+09:00` upstream HEAD `953e5dbff123f437ab4d11a78a95191a685eb51f` 확인. `kiwoom_docs/시세.md`는404/부재였으며 `kiwoom/specs.py`, `_data/kiwoom_api_spec.json:ka10004`, `kiwoom/core/client.py`, Postman의 PRD/MOCK ka10004를 대사했다. POST/path/api-id/Bearer/continuation, stk_cd KRX/_NX/_AL, 최우선 가격·잔량/원·주 단위를 확인했다. bid_req_base_tm의 packaged YYYYMMDD 설명과 실측HHmmss 차이는 raw provenance로 유지하며 freshness 권위로 쓰지 않는다. Postman query는 prerequest에서 JSON body로 변환되는 예시다. 기존 request/retry/rate limit/auth/order/wire/FID/REG 변경·실 API/주문 호출 없이 parser 후단만 보완했다.
+- 검증: 기존28 suite 중간2237 passed→typed depth4 회귀를 포함한 broad2241 passed/기존 holding payload1 known deselected. 추가 invalid injected age4 회귀 뒤 최종 유동성 guard41 passed, compile/shell/diff/print-only parser owner1 PASS. 기존2개 actual machine/widget 회귀에서 print read 대기3초 뒤 BUY0·호가/print read각1회·stale quote 차단을 확인했다. 다섯 gateway 동일 input/common facts parity, future/invalid clock, 재사용 payload의 나이 재계산, delayed micro anchor 보존/current 만료를 검증했다. scoped review→보완→재리뷰에서 이번 REST 호가 전달/소비 범위의 미해결 finding0이며 전체 natural acceptance/경제성/U0~U12 finding0으로 확대하지 않는다.
+- 기대효과: stale 호가의 가짜 신선도와 미래시각 fresh화를 제거하고 동일 호가 재사용의 불필요 중복 TR 없이 안전하게 소비한다. 건강한 REST quote를 정상 체결 활동/실제 micro backing으로 합성하지 않는다. missed opportunity 전수 executable outcome·자동 정책 선정의 잔여는 별개이며 실제 accepted submit·비용 차감 작은 순익의 빈도 개선은 아직 미관측이다.
+- 배포 상태: 검증 작업본과 별도 managed release/PID·unit pin·자연 receipt를 대사한 뒤 후속 기록한다. 현재 main ec1b3096/PID270515 및 독립 unit의 d6fe1978/PID28368·80922는 이번 REST 수정 반영 근거가 아니다. inactive Samsung 시간창을 늦게 보충 기동하거나 정책을 변경하지 않는다.
+
 Project/Calendar 동기화는 실행하지 않는다. 사용자 표준 명령:
 
 ```bash

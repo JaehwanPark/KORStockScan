@@ -3822,6 +3822,11 @@ def get_stock_orderbook_ka10004(
         },
         "raw": row,
     }
+    from src.trading.market.quote_consistency import build_market_data_health
+
+    snapshot["market_data_health"] = build_market_data_health(
+        snapshot, now_ts=time.time()
+    )
     return (snapshot, source_meta) if return_meta else snapshot
 
 

@@ -121,7 +121,7 @@ class ReentryGateway:
             best_bid_qty=1_000,
             best_ask_qty=1_000,
             age_ms=0,
-            received_ts_ms=1,
+            received_ts_ms=int(datetime.now().timestamp() * 1000),
         )
 
     def entry_execution_velocity_snapshot(self, *, route="SOR"):

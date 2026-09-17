@@ -921,6 +921,29 @@ class SamsungRegularTwoLegMachine:
             route=normalized_route,
             **velocity_decision.event_fields(),
         )
+        # The print read may take time. Reuse the original book without a
+        # second TR, but do not renew its receive clock before the BUY bundle.
+        final_liquidity = evaluate_entry_liquidity(
+            decision.snapshot, requested_quantity=requested_quantity
+        )
+        features["entry_liquidity"] = final_liquidity.event_fields()
+        self._state["signal_features"] = features
+        if not final_liquidity.allowed:
+            for leg in self._state.get("legs", []):
+                if (
+                    leg.get("status") == "PLANNED"
+                    and str(leg.get("route") or normalized_route).upper() == normalized_route
+                ):
+                    entry_adverse_owners.terminalize_original_owner_guard(
+                        leg, final_liquidity.reason
+                    )
+                    leg["status"] = "NO_FILL"
+            self._state["blocked_reason"] = final_liquidity.reason
+            self._record(
+                now, "entry_liquidity_blocked_before_buy",
+                route=normalized_route, **final_liquidity.event_fields(),
+            )
+            return False
         return True
 
     def _position_qty(self) -> int:

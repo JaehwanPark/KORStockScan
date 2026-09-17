@@ -12,6 +12,36 @@ from src.trading.market.quote_consistency import (
 )
 
 
+@pytest.mark.parametrize(
+    "stamp,expected",
+    [(100000, 500), (101000, -500), (True, None), ("bad", None), (float("nan"), None)],
+)
+def test_rest_clock_and_common_health_have_identical_age_without_future_clamp(
+    stamp, expected
+):
+    payload = {
+        "source": "ka10004_rest_orderbook",
+        "stock_code": "005930",
+        "request_code": "005930_NX",
+        "rest_freshness_basis": "response_received_epoch_ms",
+        "rest_received_ts_ms": stamp,
+        "best_bid": 9990,
+        "best_ask": 10010,
+        "age_ms": 0,
+    }
+    quote = quote_input_from_rest_orderbook(payload, now_ts=100.5)
+    health = build_market_data_health(payload, now_ts=100.5)
+    rest = health["rest_quote"]
+    assert quote.age_ms == rest["quote_receive_age_ms"] == expected
+    assert rest["market_data_scope"] == "NXT"
+    assert rest["trade_activity_state"] == "OBSERVATION_UNPROVEN"
+    if expected is None or expected < 0:
+        assert rest["quote_state"] != "fresh"
+        assert not build_quote_consistency_snapshot(
+            rest=quote, config=_config()
+        ).safety_exit_allowed
+
+
 def test_program_packet_cannot_refresh_executable_ws_book():
     ws = quote_input_from_ws(
         {

@@ -3051,6 +3051,23 @@ class WidgetSignalAutoTrader:
             actual_order_submitted=False,
             **velocity_decision.event_fields(),
         )
+        final_liquidity = evaluate_entry_liquidity(
+            liquidity_decision.snapshot,
+            requested_quantity=int(policy["leg_quantity_each"]),
+        )
+        symbol_state["last_scale_in_liquidity_check"] = final_liquidity.event_fields()
+        if not final_liquidity.allowed:
+            symbol_state["last_scale_in_liquidity_block_identity"] = (
+                scale_in_liquidity_identity
+            )
+            self._save()
+            self._record_entry_block_once(
+                spec=spec, symbol_state=symbol_state, signal_id=scale_in_liquidity_identity,
+                reason="scale_in_blocked_liquidity_guard", now=now,
+                trigger_price=trigger_price, current_price=current_price,
+                actual_order_submitted=False, **final_liquidity.event_fields(),
+            )
+            return
         if not leg_trigger_already_requested:
             symbol_state["scale_in_requested"] = True
             symbol_state["scale_in_trigger_price"] = trigger_price
@@ -4379,6 +4396,20 @@ class WidgetSignalAutoTrader:
         # Re-read the independently updated latch immediately before consuming
         # the signal and writing broker intent.  Liquidity/velocity collection
         # may overlap a market-weakness transition.
+        final_liquidity = evaluate_entry_liquidity(
+            liquidity_decision.snapshot, requested_quantity=entry_quantity
+        )
+        symbol_state["last_entry_liquidity_check"] = final_liquidity.event_fields()
+        if not final_liquidity.allowed:
+            symbol_state["last_entry_liquidity_block_identity"] = confirmation_identity
+            self._save()
+            self._record_entry_block_once(
+                spec=spec, symbol_state=symbol_state, signal_id=signal_id,
+                reason="entry_blocked_liquidity_guard", now=now,
+                confirmation_identity=confirmation_identity, source_state=source_state,
+                actual_order_submitted=False, **final_liquidity.event_fields(),
+            )
+            return
         if self._market_weakness_blocks_entry(
             spec=spec,
             symbol_state=symbol_state,
