@@ -38,6 +38,8 @@
 
 추가 잔여 수리 receipt: [부분 구현 리뷰 §26](../audit-reports/2026-09-17-common-health-opportunity-cost-scoped-implementation.md#26-장중-원천-시각routeepoch-전환과-미래지연-체결-잔여-수리). 원 source clock·exact observer/cache·signed future·provider 지연 feature/micro 판정과 기존 trace/audit 전달을 검증·배포했다. scoped H finding0/실제 PID와 global 전수 migration·자연 E 완료는 분리한다.
 
+독립 velocity 후속: [리뷰 §27](../audit-reports/2026-09-17-common-health-opportunity-cost-scoped-implementation.md#27-독립-episode-체결속도-dataclass소비-clock-잔여-후속). 기존 ka10003 dataclass에서 original receipt/common facts·signed future·소비 age와 same packet wait/reparse 경계를 보완하고 필요한 독립 세 소비자에 배포했다. main 세대/예약과 global 잔여는 별도 상태다.
+
 ## 2. 선행·병행 순서와 두 개의 독립 완료 gate
 
 ### 2.1 실행 원칙

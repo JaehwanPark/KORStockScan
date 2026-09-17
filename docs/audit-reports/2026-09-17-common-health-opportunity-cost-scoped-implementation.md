@@ -387,3 +387,17 @@ Official reference gate: 수정 전 upstream `953e5dbff123f437ab4d11a78a95191a68
 ### 남은 owner와 완료 경계
 
 U2~U4의 이번 clock/metadata scope H와 전수 consumer migration은 구분한다. global U0 semantic ledger·U7~U11 모든 active family disposition·자연 async attempt/가격 quartet·새 후보 선정→next PREOPEN→actual consumer/version attribution·비용 후 실수익은 기존 `KiwoomCommonHealthOpportunityCostAcceptance0917` OPEN을 유지한다. 실제 태생 source, selected family, PID와 자연 경제성을 각각 확인한다. 원천 결손/Provider 미호출·늦은 horizon을 완료 또는 기대 PnL0으로 바꾸지 않는다. 20:10/21:15 자연 스케줄을 앞당기거나 운영 report 전수 재생성하지 않았다.
+
+
+## 27. 독립 episode 체결속도 dataclass·소비 clock 잔여 후속
+
+§26 이후 direct gateway 소비 리뷰에서 `EntryExecutionVelocitySnapshot`으로 ka10003 원 receipt가 전달되지 않고 미래 print age가 0으로 정규화되는 경로를 확인했다. 기존 `entry_liquidity_guard.py`/tests만 확장해 metadata 있는 packet은 원 API/request item/response receive epoch·common REST facts를 보존하고 매 소비에서 이를 재검증한다. 선언된 legacy metadata 부재는 명시 unproven adapter로 유지하며 가상의 WS trade activity/반복 counter/underlying venue를 생성하지 않는다.
+
+잘못된 API/item·future receive clock·mixed packet·누락된 packet receipt는 source 차단한다. 최신 print age와 이후 consume lag를 분리하고 **기존 5초 freshness/10 print·20초 span·volume/quantity guard를 유지**했다. future print는 signed age/source error로 남기며 같은 packet을 기다리거나 cached reparse해도 최초 receive→print clock 충돌이 해제되지 않는다. 현재 quote/미체결/부분체결/account/broker/SELL·cancel/target owner와 budget/retry/cap은 변경하지 않는다. snapshot/decision의 기존 `asdict` event에 이 facts를 전달하며 새 report/module/API/Provider/주문은 만들지 않았다.
+
+- 최초 코드 `0ed55e178`: source478 PASS, physical476 PASS·외부 frozen fixture 의존2건은 shared59 PASS에서 확인. 재리뷰에서 future packet의 wait/reparse 경계를 발견해 추가 수정했다. 테스트 중 실제 host 장후시각에 의존하던 기존 low-price write fixture는 기존 `set_order_context`로 regular KST를 고정했다. production session guard를 삭제하지 않았다.
+- **최종 코드 `9667d6050`**: branch/main push 확인. source11 suite479 PASS(13.64초). physical478 PASS(15.77초)·기존 research report 외부경로 의존1건은 canonical 공유 경로의 **60 PASS(2.34초)**에서 재검증했다. physical 단계의 bounded frozen fixture copy2개는 owned 입력 byte 동일성을 확인했다. source/test3파일 byte parity·compile·Ruff F/E9·diff PASS; 검토한 velocity scope finding0. 이 숫자는 고유 경제성 표본 또는 global U0–U12 완료가 아니다.
+- managed scope `entry-execution-velocity-scope-r2-20260917`: widget trader **927210**, low-price auto-expansion **927278**, gunicorn **927287** active/cwd/code pin 확인. 세 active 소비자의 기존 effective 명령/조건·CPU/memory/restart 계약을 보존했다. main/공통 collector는 해당 helper를 소비하지 않아 **main912586·selected `entry-source-clock-scope-r3-20260917`/ffd565c83**과 나머지 source-clock pin·20:10/21:15 예약은 유지했다. 독립 scope 배포를 selected main 전체 세대 변경으로 보고하지 않는다.
+- 전/후 broker KRX+NXT 00593025주·042660/0124500·미체결0 및 3guardSHA 동일. actual main dated env/policy/override strict 검증 PASS. private receipt `data/runtime/runtime_release_validation/entry-execution-velocity-scope-r2-20260917-9667d605.json`. 새 자연 velocity attempt/order/새 후보/비용 후 실수익은 미관측이며 기존 OPEN으로 남긴다.
+
+공식 ka10003 gate는 §26의 current upstream SHA/시각/specs/core/API JSON/Postman 근거를 재사용한다. path/header/sign/unit/continuation/주문·auth wire는 변경하지 않았고 HHMMSS를 authoritative provider date로 승격하지 않는다. U2/U4의 이 소비자 수리는 global 직접client/reader 전수 disposition을 대체하지 않는다.
