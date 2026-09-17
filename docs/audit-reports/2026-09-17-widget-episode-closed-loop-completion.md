@@ -39,3 +39,7 @@ Source d49c51f7, latest upstream028141ee 통합48885ca0. 통합11 suites **1,157
 ### C4/C7 normalized statistics scale
 
 동일 native helper source SHA `c81a8a8e…`, CPUQuota20%/MemoryMax512MiB/Nice19에서 N19/50/100 × D72/120 총6조건의 normalized exact-cost synthetic fixtures·paired fixed allocator 집계를 완료했다. N100D120: wall5.096초, CPU1.023초(공동 비교0.326초), peakRSS158,404KiB, modeled paired24,000 trades·12,000 invented normalized outcomes·remote0. 모든 revision cumulative120/holdout16건 및 matured-retired100개를 확인했다. Broker reconciliation/acquisition·native promotion/publication 전체 체인의 실측으로 세지 않는다. Dataset/reproduction은 `analysis/benchmarks/widget_episode_completion_statistics.py`가 소유하며 기존 offline analysis role/location gate를 따르고 live consumer가 없다. Invocation은 `PYTHONPATH=. .venv/bin/python analysis/benchmarks/widget_episode_completion_statistics.py --output /tmp/completion-statistics-reproduction.json`이다.
+
+### Supplemental shared-path review
+
+C7 independent native reconstruction의 source receipt key를 resolved canonical shared path로 정규화했다. 같은 native bytes를 다른 release symlink에서 읽어도 동일 feedback이며 alias 회귀를 추가했다. 기존 source SHA c81a8a8e scale units는 첫 N19 checkpoint 이전 의도적으로 supersede/중단했고 latest code 성능으로 재사용하지 않는다. 최신 frozen 소스로 전체 grid 측정을 다시 시작한다. 이 수정은 economic/retirement floor·비용·qty·정책 authority를 바꾸지 않는다.

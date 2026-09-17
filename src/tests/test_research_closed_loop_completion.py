@@ -26,6 +26,22 @@ def _bucket(count, net=-0.2):
     )
 
 
+def test_version_feedback_shared_alias_preserves_native_identity(tmp_path):
+    native = tmp_path / "native"
+    native.mkdir()
+    alias = tmp_path / "release_data_alias"
+    alias.symlink_to(native, target_is_directory=True)
+    day = date(2026, 9, 17)
+    body = dict(source_date=str(day), rows=[], **loop.AUTHORITY)
+    loop.atomic_write(
+        native / f"widget_outcomes_{day}.json",
+        dict(body, outcomes_sha256=loop.digest(body)),
+    )
+    assert outcomes.outcome_feedback(day, directory=native) == outcomes.outcome_feedback(
+        day, directory=alias
+    )
+
+
 @pytest.mark.parametrize(
     "full,tail,expected",
     [

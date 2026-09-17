@@ -249,7 +249,7 @@ def outcome_feedback(source_date, *, directory=loop.DIRECTORY):
         body = {k: v for k, v in value.items() if k != "outcomes_sha256"}
         if value.get("outcomes_sha256") != loop.digest(body):
             raise ValueError("version_feedback_hash_invalid")
-        sources[str(path)] = value["outcomes_sha256"]
+        sources[str(path.resolve())] = value["outcomes_sha256"]
         native_decisions = value.get("policy_decision_feedback")
         if native_decisions:
             decisions[value["source_date"]] = native_decisions
