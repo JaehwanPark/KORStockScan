@@ -60,6 +60,7 @@ from src.engine.scalping.entry_execution_sizing_plan import (
     SCALE_IN_OWNERS,
     SCALE_IN_POLICY_VERSIONS,
     SCALE_IN_PRICE_OWNER,
+    mechanistic_entry_price_authority_valid,
 )
 from src.engine.scalping.scale_in_split_order_plan import (
     MAX_POLICY_AGE_KRX_TRADING_DAYS,
@@ -5740,11 +5741,7 @@ def _split_runtime_policy_audits(
                 audits.append(audit)
                 continue
             if spec["family"] == "dynamic_entry_price_resolver" and (
-                policy.get("policy_owner") != ENTRY_PRICE_OWNER
-                or policy.get("provider_calls") != 0
-                or policy.get("ai_price_authority") is not False
-                or "ai" in str(policy.get("candidate_id") or "").lower()
-                or not isinstance(policy.get("runtime_env"), dict)
+                not mechanistic_entry_price_authority_valid(policy)
                 or any(
                     str(effective_env.get(str(key)) or "") != str(value)
                     for key, value in (policy.get("runtime_env") or {}).items()

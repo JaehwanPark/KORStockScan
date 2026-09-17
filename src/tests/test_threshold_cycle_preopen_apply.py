@@ -11938,3 +11938,34 @@ def test_main_accepts_runtime_change_only_after_handoff_verification_passes(
     )
 
     assert mod.main(["--target-date", "2026-07-22", "--auto-apply"]) == 0
+
+
+@pytest.mark.parametrize("change", [
+    {"provider_calls": False},
+    {"action_quantity_leg_scale_in_authority": True},
+    {"runtime_env": {"KORSTOCKSCAN_SCALPING_MAX_QTY": "25"}},
+])
+def test_preopen_price_policy_checks_same_authority_as_runtime(tmp_path, change):
+    policy = {
+        "schema_version": mod.MECHANISTIC_ENTRY_PRICE_POLICY_SCHEMA,
+        "policy_owner": mod.ENTRY_PRICE_OWNER, "policy_version": "price:test",
+        "source_date": "2026-09-16", "active_date": "2026-09-17",
+        "candidate_id": "normal:25", "provider_calls": 0,
+        "ai_price_authority": False, "runtime_apply_allowed": True,
+        "runtime_env": {"KORSTOCKSCAN_SCALPING_NORMAL_DEFENSIVE_BPS": "25"},
+        **change,
+    }
+    path = tmp_path / "price.json"
+    path.write_text(json.dumps(policy), encoding="utf-8")
+    env = {
+        "KORSTOCKSCAN_MECHANISTIC_ENTRY_PRICE_POLICY_ENABLED": "true",
+        "KORSTOCKSCAN_MECHANISTIC_ENTRY_PRICE_POLICY_FILE": str(path),
+        "KORSTOCKSCAN_MECHANISTIC_ENTRY_PRICE_POLICY_VERSION": "price:test",
+        "KORSTOCKSCAN_MECHANISTIC_ENTRY_PRICE_POLICY_SOURCE_DATE": "2026-09-16",
+        "KORSTOCKSCAN_MECHANISTIC_ENTRY_PRICE_POLICY_ACTIVE_DATE": "2026-09-17",
+        "KORSTOCKSCAN_MECHANISTIC_ENTRY_PRICE_POLICY_SHA256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        **policy["runtime_env"],
+    }
+    audit = next(item for item in mod._split_runtime_policy_audits("2026-09-17", env) if item["family"] == "dynamic_entry_price_resolver")
+    assert audit["status"] == "fail"
+    assert audit["reason"] == "mechanistic_entry_price_authority_invalid"

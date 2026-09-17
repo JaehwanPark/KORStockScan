@@ -383,7 +383,9 @@ class KiwoomMiddayOneShareGateway:
         try:
             request_code = entry_liquidity_request_code("005930", route)
             payload = kiwoom_utils.get_tick_history_ka10003(
-                self._token(), request_code, limit=REQUIRED_RECENT_PRINT_COUNT
+                self._token(), request_code, limit=REQUIRED_RECENT_PRINT_COUNT,
+                request_owner="samsung_midday_one_share_entry_velocity",
+                request_class="execution_critical",
             )
         except Exception as exc:
             return unavailable_entry_execution_velocity_snapshot(

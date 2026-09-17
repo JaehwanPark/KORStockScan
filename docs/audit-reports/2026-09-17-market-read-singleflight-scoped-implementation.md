@@ -186,3 +186,50 @@ implementation/evidence. Related closed-loop code is preserved; new natural
 policy selection, next-date consumer and cost-adjusted economics remain separate
 OPEN acceptance. Existing operator enable/date, source/sample/economic floors,
 quantity/custody and order/provider/hard-safety guards remain unchanged.
+
+
+## Bounded async preparation and price/sizing owner re-review
+
+The U5 coordinator retained an unbounded preparation queue and completion
+notifications. Executor submission failure could leave an orphan pending request;
+an exception during AI dispatcher submission could do the same. Use the existing
+128-result bound across pending, retained COMMIT output and undrained notification
+identities. Admission defers before transport/provider work and keeps retained
+output. Executor failure removes pending immediately; dispatcher failure publishes
+an explicit observation-only terminal. Queued cancelled preparations never run
+the source getter. Cancellation collection does not discard a live generation;
+late/closed results remain observation-only, and quiescence still gates reuse.
+No worker, request budget, retry, deadline or live threshold was increased.
+
+The compatible `ka10003` helper now forwards optional read-purpose keywords. All
+five independent entry velocity gateways use `execution_critical`; exact route,
+latest ten prints, 2-second cache, heuristic aggressor label and source/fill guards
+remain unchanged. Web quote fallback uses `source_only`, while its account read
+keeps `runtime_required`, retry1 and timeout5. Boolean/fractional response success
+codes are rejected. Official main was fetched again at **14:49 KST**, unchanged
+SHA953e5dbff123f437ab4d11a78a95191a685eb51f; inspected core/client, specs and
+production/demo Postman ka10003/ka10001/kt00018 paths, fields, route suffix,
+HHmmss, signed price/quantity and continuation. No protocol field was changed.
+
+Re-review of the U9 binder found bool and fractional quantities/prices silently
+converted to integers. Reject them and nonfinite values, retaining integral
+precision and the original quantity conservation contract. A shared numeric-price
+policy authority validator is used by PREOPEN and runtime: one existing profile
+BPS key, no sizing/action/leg/scale-in env and no false/float provider-call count.
+Original exact date/hash/policy pins and existing economic floors remain unchanged.
+Missing historical optional no-authority metadata is not retroactively invented.
+
+The existing four-arm evaluator still cannot turn bar touches or unbound outcome
+fields into executable no-fill/exit/cost quartets. `_entry_price_profile_candidate_grid`
+still represents observed-profile diagnostics/legacy selection; its small-positive
+net version and same-opportunity price replay remain implementation residuals,
+not natural sample waits. U0's306-path semantic closure and active-family U10B
+are also not completed by these focused repairs. Whole U0–U12 acceptance remains
+OPEN. This section records scoped repairs, not whole-plan completion.
+
+Final focused source gate: fourteen affected suites **862 PASS**, Ruff/changed
+Python compile/diff and print-only parser PASS; scoped review findings0. The sole
+warning is Python3.13's fork-in-thread deprecation in the bounded fork regression.
+One earlier test command named a nonexistent cache suite and ran no tests; the
+resolved fourteen-suite gate above is the success evidence. Broker/provider write,
+expensive postclose recomputation and external sync were not part of validation.
