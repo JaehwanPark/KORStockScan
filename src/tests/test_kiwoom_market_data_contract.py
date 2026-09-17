@@ -935,3 +935,66 @@ def test_unbounded_continuous_read_does_not_duplicate_its_result_for_followers(
         return_meta=True,
     ) == ([], {})
     assert calls[0]["max_pages"] is None
+
+
+def test_forked_market_reader_reinitializes_cache_and_token_locks(monkeypatch):
+    import pytest
+    import hashlib
+    import multiprocessing
+    import os
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    if not hasattr(os, "register_at_fork"):
+        pytest.skip("fork reset is POSIX-only")
+    monkeypatch.setattr(kiwoom_utils, "_MARKET_DATA_CACHE", {})
+    monkeypatch.setattr(kiwoom_utils, "_KIWOOM_TOKEN_REPLACEMENTS", {})
+    monkeypatch.setattr(kiwoom_utils, "get_kiwoom_base_url", lambda: "https://api.test")
+    kiwoom_utils.register_kiwoom_token_replacement(
+        "fork-stale", "fork-fresh", source="fork_test"
+    )
+    kiwoom_utils._cache_set("namespace", "key", {"price": 42}, 5)
+    entered, release = threading.Event(), threading.Event()
+    ctx = multiprocessing.get_context("fork")
+    receive, send = ctx.Pipe(duplex=False)
+
+    def hold_parent_mutexes():
+        with (
+            kiwoom_utils._MARKET_DATA_CACHE_LOCK,
+            kiwoom_utils._KIWOOM_TOKEN_PROCESS_LOCK,
+        ):
+            entered.set()
+            assert release.wait(5)
+
+    def child_read():
+        try:
+            send.send(
+                (
+                    kiwoom_utils._cache_get("namespace", "key"),
+                    kiwoom_utils._market_data_cache_scope("fork-stale")[0],
+                )
+            )
+        finally:
+            send.close()
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        holder = pool.submit(hold_parent_mutexes)
+        assert entered.wait(1)
+        child = ctx.Process(target=child_read)
+        child.start()
+        try:
+            assert receive.poll(
+                3
+            ), "child inherited locks owned by a parent-only thread"
+            assert receive.recv() == (None, hashlib.sha256(b"fork-fresh").hexdigest())
+            child.join(1)
+            assert child.exitcode == 0
+        finally:
+            if child.is_alive():
+                child.terminate()
+                child.join(1)
+            release.set()
+            receive.close()
+            send.close()
+        holder.result(1)
+    assert kiwoom_utils._cache_get("namespace", "key") == {"price": 42}
