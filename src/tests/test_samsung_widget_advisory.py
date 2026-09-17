@@ -66,6 +66,16 @@ def _external(change_by_key=None, quality="BEST_EFFORT_DELAYED"):
     }
 
 
+def test_external_source_future_age_stays_signed_and_unavailable():
+    from datetime import timedelta
+    now = datetime(2026, 8, 3, 9, 10, tzinfo=KST) - timedelta(milliseconds=1)
+    points = advisory._age_external_points(_external(), now)
+    assert points
+    assert all(point.age_sec < 0 for point in points.values())
+    assert all(point.quality == "UNAVAILABLE" for point in points.values())
+    assert all(point.reason == "future_source_timestamp" for point in points.values())
+
+
 def _ready_input(current_price=100_400, bbo_age=0.0):
     now = datetime(2026, 8, 3, 9, 10, 5, tzinfo=KST)
     bars = _bars(

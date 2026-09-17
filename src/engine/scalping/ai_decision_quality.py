@@ -2836,6 +2836,14 @@ def _captured_control_fields(trace: dict[str, Any]) -> dict[str, Any]:
                 },
             }
         )
+    # Preserve original input facts as diagnostics, without inventing legacy
+    # companions or changing decision/eligibility/threshold semantics.
+    fields.update({
+        f"captured_{key}": trace[key]
+        for key in ("market_data_health", "input_trade_activity",
+                    "input_feature_allowed", "input_feature_blockers")
+        if key in trace
+    })
     return fields
 
 

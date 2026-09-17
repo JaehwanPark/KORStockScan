@@ -546,6 +546,18 @@ def _pending(action="DROP"):
     }
 
 
+def test_captured_control_preserves_original_health_without_legacy_imputation():
+    health = {"schema": "kiwoom_market_data_health_v1", "decision_authority": False}
+    source = {**_trace(), "market_data_health": health,
+              "input_feature_allowed": False,
+              "input_feature_blockers": ["required_feature_tape_stale"]}
+    fields = quality._captured_control_fields(source)
+    assert fields["captured_market_data_health"] == health
+    assert fields["captured_input_feature_allowed"] is False
+    assert fields["captured_input_feature_blockers"] == source["input_feature_blockers"]
+    assert "captured_market_data_health" not in quality._captured_control_fields(_trace())
+
+
 def test_historical_repaired_control_requires_final_response_not_raw_evidence():
     source = {
         **_trace(),
