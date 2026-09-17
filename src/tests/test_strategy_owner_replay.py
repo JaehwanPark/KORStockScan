@@ -21,6 +21,32 @@ from src.tests.test_strategy_owner_components import (
 from src.tests.test_score_recovery_net_approval import sign
 
 
+@pytest.fixture(autouse=True)
+def isolate_native_replay_generation(monkeypatch, tmp_path):
+    """Keep source generation deterministic; never inspect live raw paths."""
+    from src.engine.monitoring import machine_microstructure_attribution as micro
+    monkeypatch.setattr(micro, "OBSERVATION_ROOT", tmp_path / "native_observations")
+    monkeypatch.setattr(micro, "DEFAULT_SOURCE_EXCLUSION_MANIFEST", tmp_path / "exclusions.json")
+    monkeypatch.setattr(micro, "DEFAULT_CANARY_SNAPSHOT_PATH", tmp_path / "canary.json")
+    monkeypatch.setattr(micro, "CANARY_DAILY_SNAPSHOT_DIR", tmp_path / "canary_daily")
+
+
+def test_native_replay_still_rejects_generation_change_with_mock_windows():
+    from src.engine.monitoring import machine_microstructure_attribution as micro
+    event = entry_owner_event()
+
+    def changing_source(*args):
+        micro.DEFAULT_SOURCE_EXCLUSION_MANIFEST.write_text("{}")
+        return native_entry_loader(*args)
+
+    result = mod.build_entry_opportunity_replays(event.signal_date, [event],
+        evaluated_at=datetime.fromisoformat(event.emitted_at).timestamp() + 181,
+        micro_loader=changing_source)
+    assert result["native_source"]["reason"] == "native_source_generation_changed_during_replay"
+    assert result["rows"][0]["status"] == "source_gap"
+    assert result["quantity_leg_events"] == []
+
+
 def seed(day="2026-09-08", family=owner.PROFIT, ordinal=0):
     values = profiles()
     rules = {k: v for p in values.values() for k, v in p.items()}
