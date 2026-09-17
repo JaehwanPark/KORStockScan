@@ -13,6 +13,16 @@ from src.engine import daily_threshold_cycle_report as daily_report
 from src.engine import threshold_cycle_preopen_apply as preopen_apply
 
 
+@pytest.fixture(autouse=True)
+def isolate_native_replay_generation(monkeypatch, tmp_path):
+    """Mock windows must not fingerprint a growing production collector."""
+    from src.engine.monitoring import machine_microstructure_attribution as micro
+    monkeypatch.setattr(micro, "OBSERVATION_ROOT", tmp_path / "native_observations")
+    monkeypatch.setattr(micro, "DEFAULT_SOURCE_EXCLUSION_MANIFEST", tmp_path / "exclusions.json")
+    monkeypatch.setattr(micro, "DEFAULT_CANARY_SNAPSHOT_PATH", tmp_path / "canary.json")
+    monkeypatch.setattr(micro, "CANARY_DAILY_SNAPSHOT_DIR", tmp_path / "canary_daily")
+
+
 def _quantity_leg_four_arm_events():
     events = []
     for index in range(30):
