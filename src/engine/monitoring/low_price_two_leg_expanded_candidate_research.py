@@ -57,6 +57,7 @@ from src.trading.low_price_two_leg.profiles import (
 from src.trading.low_price_two_leg.economics import (
     cost_contract as canonical_cost_contract,
 )
+from src.trading.order import tick_utils
 from src.trading.low_price_two_leg.policy_runtime import load_applied_profile_policy
 from src.trading.order.regular_two_leg_machine import KST
 from src.utils import kiwoom_utils
@@ -2300,6 +2301,14 @@ def research_input_fingerprint(
     payload = {
         "schema": "low_price_two_leg_expanded_research_input_v1",
         "producer_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        "entry_replay_helper_sha256": hashlib.sha256(
+            Path(__file__).with_name("low_price_two_leg_entry_spot_research.py").read_bytes()
+        ).hexdigest(),
+        "tick_helper_sha256": hashlib.sha256(
+            Path(tick_utils.__file__).read_bytes()
+        ).hexdigest(),
+        "cost_contract": canonical_cost_contract(),
+        "replay_cost_pct": COST_PCT,
         "target_date": target_date.isoformat(),
         "candidate_symbols": candidate_symbols,
         "research_profiles": {
@@ -2338,6 +2347,8 @@ def reusable_report(path: Path, *, target_date: date, fingerprint: str) -> dict 
     try:
         report = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError, TypeError):
+        return None
+    if not isinstance(report, dict):
         return None
     if (
         report.get("schema") != REPORT_SCHEMA

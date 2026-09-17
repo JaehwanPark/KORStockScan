@@ -36,7 +36,7 @@ class FakeResponse:
         return {"return_code": 0, "stk_min_pole_chart_qry": self._rows}
 
 
-def test_expanded_research_fingerprint_is_stable_and_policy_sensitive() -> None:
+def test_expanded_research_fingerprint_is_stable_and_policy_sensitive(monkeypatch, tmp_path) -> None:
     profile_id, profile = next(iter(expanded.RESEARCH_PROFILES.items()))
     bar = Bar(
         datetime(2026, 9, 14, 9, 10, tzinfo=ZoneInfo("Asia/Seoul")),
@@ -66,6 +66,32 @@ def test_expanded_research_fingerprint_is_stable_and_policy_sensitive() -> None:
     assert first == expanded.research_input_fingerprint(**kwargs)
     kwargs["applied_policy_snapshots"] = {profile_id: {"policy_hash": "c" * 64}}
     assert first != expanded.research_input_fingerprint(**kwargs)
+    kwargs["applied_policy_snapshots"] = {profile_id: {"policy_hash": "b" * 64}}
+
+    from pathlib import Path
+
+    report_path = tmp_path / "report.json"
+    report_path.write_text(json.dumps({
+        "schema": expanded.REPORT_SCHEMA, "target_date": "2026-09-14",
+        "status": "complete", "source_input_fingerprint": first,
+        "runtime_effect": False, "allowed_runtime_apply": False,
+    }))
+    original_read = Path.read_bytes
+    for helper_name in ("low_price_two_leg_entry_spot_research.py", "tick_utils.py"):
+        with monkeypatch.context() as patch:
+            patch.setattr(Path, "read_bytes", lambda path: original_read(path) +
+                          (b"\n# semantic revision\n" if path.name == helper_name else b""))
+            changed = expanded.research_input_fingerprint(**kwargs)
+            assert changed != first
+            assert expanded.reusable_report(report_path, target_date=kwargs["target_date"], fingerprint=changed) is None
+    with monkeypatch.context() as patch:
+        original_contract = expanded.canonical_cost_contract()
+        patch.setattr(expanded, "canonical_cost_contract", lambda: {**original_contract, "version": "changed"})
+        assert expanded.research_input_fingerprint(**kwargs) != first
+    with monkeypatch.context() as patch:
+        patch.setattr(expanded, "COST_PCT", expanded.COST_PCT + 0.01)
+        assert expanded.research_input_fingerprint(**kwargs) != first
+    assert expanded.research_input_fingerprint(**kwargs) == first
 
 
 def test_exact_date_report_reuse_requires_matching_fingerprint(tmp_path) -> None:
@@ -92,6 +118,13 @@ def test_exact_date_report_reuse_requires_matching_fingerprint(tmp_path) -> None
         )
         is None
     )
+
+
+@pytest.mark.parametrize("raw", ["[]", "null", "1", '"text"', "{", '{"schema":null}'])
+def test_reusable_report_corrupt_or_non_object_is_cache_miss(tmp_path, raw):
+    path = tmp_path / "report.json"
+    path.write_text(raw)
+    assert expanded.reusable_report(path, target_date=date(2026, 9, 14), fingerprint="a" * 64) is None
 
 
 def test_expanded_profiles_separate_new_symbols_and_inactive_existing_sessions():

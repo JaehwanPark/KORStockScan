@@ -9,6 +9,7 @@ clean-baseline calibration day; the final 16 days remain untouched holdout data.
 from __future__ import annotations
 
 import argparse
+from collections import deque
 from copy import deepcopy
 import json
 import math
@@ -438,16 +439,33 @@ def build_day_contexts(bars: list[Bar]) -> dict[date, DayContext]:
         features: dict[int, tuple[SignalFeature, ...]] = {}
         for lookback in LOOKBACK_GRID:
             rows: list[SignalFeature] = []
-            for index in range(lookback - 1, len(day)):
-                window = day[index - lookback + 1 : index + 1]
-                if any(
-                    current.timestamp - previous.timestamp != timedelta(minutes=1)
-                    for previous, current in zip(window, window[1:])
+            highs: deque[int] = deque()
+            lows: deque[int] = deque()
+            last_discontinuity = 0
+            for index, candidate in enumerate(day):
+                start = index - lookback + 1
+                if (
+                    index
+                    and candidate.timestamp - day[index - 1].timestamp
+                    != timedelta(minutes=1)
                 ):
+                    last_discontinuity = index
+                while highs and highs[0] < start:
+                    highs.popleft()
+                while lows and lows[0] < start:
+                    lows.popleft()
+                while highs and day[highs[-1]].high_price < candidate.high_price:
+                    highs.pop()
+                while lows and day[lows[-1]].low_price > candidate.low_price:
+                    lows.pop()
+                highs.append(index)
+                lows.append(index)
+                # A break immediately before the first window bar is allowed;
+                # a gap/duplicate inside the window remains excluded.
+                if start < 0 or last_discontinuity > start:
                     continue
-                candidate = day[index]
-                rolling_high = max(item.high_price for item in window)
-                rolling_low = min(item.low_price for item in window)
+                rolling_high = day[highs[0]].high_price
+                rolling_low = day[lows[0]].low_price
                 if min(rolling_high, rolling_low, candidate.close_price) <= 0:
                     continue
                 rows.append(
