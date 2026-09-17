@@ -188,3 +188,11 @@ Small full270-grid/46date 측정의 selector CPU는 약0.028~0.064초로 before/
 대신 동일 신호 기준을 반복하는 execution-plan 대안의 immutable first-signal fact만 invocation 안에서 공유한다. Feature 정정/가변 입력은 miss/reference,64,000 fact bound 이후에도 grid를 빠짐없이 평가한다. Offset/TTL/target·leg·HELD state 및 calibration/holdout은 독립 재생한다. 단일 실행계획 grid는 기존 fast reference 탐색식을 유지한다. 기대효과는 중복 신호 탐색 절감이며 경제성 개선·새 진입·runtime owner 변경은 아니다.
 
 전체 persistent day-state/append-resume·proof 기반 raw delta/누적 EV 영속 충분통계·whole O0/O1 및 populated P6는 이번 보완의 완료 범위가 아니다. 다른 세션의 P3 구현/자연 소비 문서와 이번 managed source parity는 별도 검증해야 하며, performance 목표를 선정/기동 floor로 추가하지 않는다. 예정 장후 process 자동 routing과 실제 PID/자연 정책/실수익 acceptance를 각각 구분한다.
+
+## 12. O0/O1 내부 phase receipt 보완
+
+기존 `ai_quality_cycle.run_cycle`의 cycle receipt에서 rolling 원천 수집, exact lineage 검증/R2–R3 생성, companion/consumer 저장을 구분한다. 각 구간은 monotonic wall과 현재 Python process CPU만 기록하며, 구간 실패도 원래 blocker와 함께 남긴다. 기존 `_command_step`은 명령별 wall/parent CPU를 기록하되 child CPU는 미측정 `null`이다. 명령 wall에는 자식 계산·Provider transport·원천 대기가 함께 포함되므로 이를 transport 시간이나 계산 CPU로 단정하지 않는다. Wrapper의 기존 reaped-child CPU/RSS 계측과 함께 실제 병목을 판정한다.
+
+Timing은 cycle 진단 receipt에만 넣고 rolling/R3 후보 본문·정책 선정·승격/기동 조건에는 전달하지 않는다. 기대효과는 병목 위치의 가시성이지 즉각적인 호출량·CPU·손익 개선이 아니다. 실패를 성공/무표본으로 바꾸거나 더 많은 Provider 호출을 허용하지 않는다. 추가 module/collector/job, runtime owner/모델/가격/수량·leg/scale-in·broker/safety 변경은 없다.
+
+검증·배포는 [리뷰 §34](../audit-reports/2026-09-17-postclose-computation-optimization-scoped-implementation.md#34-o0o1-r0r3-내부-phase-receipt-보완)를 따른다. 전 endpoint phase/read bytes/rows, Provider transport 세부 분해, 전체 populated 규모 및 자연 소비는 별도 잔여다. Persistent day-state/append-resume, prefix proof 없는 raw delta, EV 영속 충분통계는 완료로 바꾸지 않는다. 다른 세션의 코드/규모 결과는 현행 selected release와 실제 소비자를 확인한 뒤에만 대사한다.

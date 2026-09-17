@@ -4425,6 +4425,42 @@ def test_cycle_does_not_claim_or_roll_same_date_stale_execution_when_step_skips(
     assert report["status"] == "source_only_blocked_or_deferred"
 
 
+@pytest.mark.parametrize("returncode", [0, 2, -15])
+def test_command_step_monotonic_timing_preserves_failure_and_output(monkeypatch, returncode):
+    wall = iter([10.0, 15.5])
+    cpu = iter([1.0, 1.125])
+    monkeypatch.setattr(cycle.time, "perf_counter", lambda: next(wall))
+    monkeypatch.setattr(cycle.time, "process_time", lambda: next(cpu))
+    commands = []
+
+    def runner(command):
+        commands.append(command)
+        return SimpleNamespace(returncode=returncode, stdout="ok", stderr="problem")
+
+    result = cycle._command_step(name="paired", command=["mock", "--offline"], runner=runner)
+    assert commands == [["mock", "--offline"]]
+    assert result["returncode"] == returncode
+    assert result["status"] == ("pass" if returncode == 0 else "failed")
+    assert result["stdout_tail"] == "ok"
+    assert result["stderr_tail"] == "problem"
+    assert result["timing"] == {
+        "wall_seconds": 5.5,
+        "parent_cpu_seconds": 0.125,
+        "child_cpu_seconds": None,
+        "measurement_scope": "runner_wall_and_parent_cpu_only",
+        "wall_includes_child_compute_transport_and_wait": True,
+        "diagnostic_only": True,
+    }
+
+
+def test_command_step_runner_error_is_not_normalized_to_success():
+    def runner(_command):
+        raise OSError("runner unavailable")
+
+    with pytest.raises(OSError, match="runner unavailable"):
+        cycle._command_step(name="paired", command=["mock"], runner=runner)
+
+
 def test_provider_bound_r0_generation_reuses_exact_companion_set(
     tmp_path,
     monkeypatch,
@@ -4620,9 +4656,11 @@ def test_provider_bound_r0_generation_reuses_exact_companion_set(
         )
 
 
+@pytest.mark.parametrize("failed_phase", [None, "collection", "build", "publication"])
 def test_cycle_capacity_gate_blocks_large_chain_but_keeps_lifecycle_source_work(
     tmp_path,
     monkeypatch,
+    failed_phase,
 ):
     target_date = "2026-08-14"
     audit_path = tmp_path / "source-audit.json"
@@ -4679,6 +4717,23 @@ def test_cycle_capacity_gate_blocks_large_chain_but_keeps_lifecycle_source_work(
         commands.append(command)
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
+    def fail_phase(*_args, **_kwargs):
+        raise OSError("synthetic phase failure")
+
+    if failed_phase == "collection":
+        monkeypatch.setattr(cycle, "_collect_rolling_inputs", fail_phase)
+    elif failed_phase == "build":
+        monkeypatch.setattr(cycle, "build_rolling_source_only_candidates", fail_phase)
+    elif failed_phase == "publication":
+        original_write = cycle._atomic_write_json
+
+        def write_with_failed_rolling(path, payload):
+            if path == tmp_path / "rolling.json":
+                fail_phase()
+            return original_write(path, payload)
+
+        monkeypatch.setattr(cycle, "_atomic_write_json", write_with_failed_rolling)
+
     report = cycle.run_cycle(
         target_date=target_date,
         write=True,
@@ -4704,6 +4759,24 @@ def test_cycle_capacity_gate_blocks_large_chain_but_keeps_lifecycle_source_work(
     assert report["provider_call_performed"] is False
     assert len(commands) == 1
     assert "src.engine.scalping.main_lifecycle_paired" in commands[0]
+    telemetry = report["local_phase_timings"]
+    assert telemetry["diagnostic_only"] is True
+    assert telemetry["child_cpu_included"] is False
+    expected_phases = [
+        "rolling_input_collection",
+        "rolling_lineage_validation_and_r2_r3_build",
+        "rolling_companion_and_consumer_publication",
+    ]
+    if failed_phase:
+        expected_phases = expected_phases[:["collection", "build", "publication"].index(failed_phase) + 1]
+        assert telemetry["phases"][-1]["status"] == "failed"
+        assert any("rolling_r2_r3_failed:OSError" in value for value in report["blockers"])
+        assert report["r3_source_candidate_count"] == 0
+    else:
+        assert all(phase["status"] == "pass" for phase in telemetry["phases"])
+    assert [phase["name"] for phase in telemetry["phases"]] == expected_phases
+    assert all(phase["wall_seconds"] >= 0 and phase["parent_cpu_seconds"] >= 0
+               for phase in telemetry["phases"])
 
 
 def _sample_floor_materialized_report(
