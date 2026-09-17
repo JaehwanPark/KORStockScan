@@ -230,6 +230,18 @@ paths, and retrieval time in the change/review evidence. Verify at least:
   admission plus an exact response/gap receipt; this contract alone creates no
   bot restart, provider, threshold, broker/order, quantity, cap, or hard-safety
   authority.
+4. Parser/request tests for the documented happy path, missing/unknown fields,
+   sign and unit preservation, continuation, venue/session routing, and
+   redaction of credentials/account identifiers.
+
+Official documentation establishes the vendor protocol, but does not grant
+runtime authority. KORStockScan may remain more conservative. An upstream
+example or field description must not relax stale/conflict handling, broker
+guards, order/quantity limits, provider routes, thresholds, bot state, or
+hard/protect/emergency safety. A newly observed field that is absent from the
+official contract remains raw/source-quality provenance until its semantics
+are confirmed and the local producer-to-consumer contract is reviewed.
+
 ### Bounded concurrent market reads
 
 The shared utils transport may join an already-running read only for
@@ -257,17 +269,16 @@ original independent transport. This does not coalesce account/order/auth,
 Existing cross-process admission, retries, cooldowns and all trading guards
 remain authoritative. See the [implementation and verification evidence](audit-reports/2026-09-17-market-read-singleflight-scoped-implementation.md).
 
-4. Parser/request tests for the documented happy path, missing/unknown fields,
-   sign and unit preservation, continuation, venue/session routing, and
-   redaction of credentials/account identifiers.
+### Direct read-only collector receipts and local budgets
 
-Official documentation establishes the vendor protocol, but does not grant
-runtime authority. KORStockScan may remain more conservative. An upstream
-example or field description must not relax stale/conflict handling, broker
-guards, order/quantity limits, provider routes, thresholds, bot state, or
-hard/protect/emergency safety. A newly observed field that is absent from the
-official contract remains raw/source-quality provenance until its semantics
-are confirmed and the local producer-to-consumer contract is reviewed.
+`KiwoomReadOnlyClient.last_request_receipt` belongs to the calling thread.
+The direct client records the original HTTP receive timestamp, physical attempt
+count and validated success; malformed body return codes remain rejected.
+Local request-window inspection and charge are atomic under one mutex. A forked
+child resets only the mutex, preserving inherited counts and cooldown. Existing
+per-minute limits, mandatory reserve, shared admission and cooldown remain.
+This does not introduce a response cache, request join, auth refresh or retry.
+Collector root changes preserve their existing policy/config and launch arguments.
 
 ### 2026-09-03 Samsung Morning New-BUY PID Handoff Guard
 

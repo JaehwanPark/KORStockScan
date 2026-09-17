@@ -44,3 +44,29 @@ A concurrent deployment selected **e47587c9** while the first prepared integrati
 Final **14:05:56 KST** broker receipt confirms complete KRX/NXT inventory and current unfilled-order contracts: Samsung **25 shares**, open orders **0**. Final pre/post inventory, orders, owner-registry/env/dated-mechanistic-policy hashes and the eight compared independent service PID/state/drop-in records are unchanged. No independent service was restarted and future research pins were retained. Actual main cwd/commit/source-clean provenance, singleton and strict dated env/PID verification passed with mismatch/missing/unverified selected-family counts0. A post-launch WS snapshot contains **14** symbols with new0B and **14** with new0D timestamps; this is not all-scope freshness or economic acceptance.
 
 [Scoped runtime validation record](../../data/runtime/runtime_release_validation/market-read-singleflight-20260917-5ca24599.json) preserves both broker receipts, actual PID attestation, scope exclusions and backup paths. Natural joined-request receipt, new policy selection and cost-adjusted economic improvement remain unestablished. Whole U0–U12, nonmetadata/direct-client and WS/scheduler parity, executable quartet production, admission/capacity/joint selection and future dated consumer acceptance remain OPEN under the existing owner. This record does not close the full implementation plan.
+
+
+## Direct read-only client re-review supplement
+
+Re-fetched the official reference before changes at `2026-09-17T14:09:07+09:00`;
+SHA remains `953e5dbff123f437ab4d11a78a95191a685eb51f`. Inspected the existing
+read specs and `kiwoom/core/client.py` HTTP/body error contract. No wire fields,
+timeout, authentication lifecycle, numeric read limit or retry change was made.
+
+Direct client parallel requests previously overwrote one shared receipt, and
+local budget inspection/charge was not atomic. Receipts are now thread-local,
+with original HTTP receive time, attempt count and validated success. Local
+window inspection/charge, rate cooldown and snapshot use one mutex; fork resets
+only the mutex and retains inherited request window/count/cooldown. Re-review
+also rejected bool/float/collection/malformed return codes that integer coercion
+previously accepted as success. The calling-thread property remains compatible
+with runtime/research collector direct consumers.
+
+Seven affected source suites **264 passed**; compile/Ruff/diff passed. Tests
+cover parallel distinct-symbol receipts, atomic optional/mandatory reservation,
+fork with held parent mutex and preserved counts, and nine malformed body return
+codes. Four missing historical research config source fixtures were copied from
+existing bounded original reports, with configured SHA256 verified; no source
+or policy was fabricated. Scope findings0. Deployment and natural collector
+receipts are recorded separately after integration validation. Whole-plan and
+other direct-client/WS/scheduler or economic acceptance remain OPEN.

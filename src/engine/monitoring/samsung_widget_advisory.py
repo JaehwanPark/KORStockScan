@@ -12,7 +12,9 @@ import argparse
 import json
 import math
 import os
+import re
 import time
+import threading
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
@@ -3643,12 +3645,22 @@ class KiwoomReadOnlyClient:
         self.token = token
         self.session = session or requests.Session()
         self.budget = budget
-        self.last_request_receipt: dict[str, Any] = {}
+        self._request_receipts = threading.local()
         self.shared_read_control_enabled = (
             session is None
             if shared_read_control_enabled is None
             else bool(shared_read_control_enabled)
         )
+
+    @property
+    def last_request_receipt(self) -> dict[str, Any]:
+        if not hasattr(self._request_receipts, "receipt"):
+            self._request_receipts.receipt = {}
+        return self._request_receipts.receipt
+
+    @last_request_receipt.setter
+    def last_request_receipt(self, value: dict[str, Any]) -> None:
+        self._request_receipts.receipt = value
 
     def post(
         self,
@@ -3666,6 +3678,9 @@ class KiwoomReadOnlyClient:
             "http_status_code": None,
             "response_code": None,
             "admission_waited_sec": None,
+            "rest_received_ts_ms": None,
+            "request_attempt_count": 0,
+            "request_succeeded": False,
         }
         if (path, api_id) not in READ_ONLY_KIWOOM_REQUESTS:
             raise RuntimeError(f"forbidden_widget_kiwoom_request:{api_id}:{path}")
@@ -3709,6 +3724,7 @@ class KiwoomReadOnlyClient:
                 )
         if not self.shared_read_control_enabled:
             self.last_request_receipt["admission_status"] = "local_only"
+        self.last_request_receipt["request_attempt_count"] = 1
         response = self.session.post(
             endpoint,
             headers={
@@ -3719,6 +3735,7 @@ class KiwoomReadOnlyClient:
             json=payload,
             timeout=(5, 10),
         )
+        self.last_request_receipt["rest_received_ts_ms"] = int(time.time() * 1000)
         self.last_request_receipt["http_status_code"] = getattr(
             response, "status_code", None
         )
@@ -3740,7 +3757,13 @@ class KiwoomReadOnlyClient:
         response.raise_for_status()
         data = response.json()
         try:
-            return_code = int(data["return_code"])
+            raw_code = data["return_code"]
+            if type(raw_code) is not int and (
+                not isinstance(raw_code, str)
+                or re.fullmatch(r"[+-]?[0-9]+", raw_code.strip()) is None
+            ):
+                raise ValueError("return_code_integer_contract_invalid")
+            return_code = int(raw_code)
         except (KeyError, TypeError, ValueError) as exc:
             raise RuntimeError(f"{api_id}_return_code_missing") from exc
         self.last_request_receipt["response_code"] = return_code
@@ -3760,6 +3783,7 @@ class KiwoomReadOnlyClient:
             )
         if return_code != 0:
             raise RuntimeError(f"{api_id}_rejected_{return_code}")
+        self.last_request_receipt["request_succeeded"] = True
         return data
 
 
@@ -3772,38 +3796,49 @@ class ReadOnlyRequestBudget:
         self._cooldown_until = 0.0
         self.total_request_count = 0
         self.rate_limit_count = 0
+        self._lock = threading.RLock()
+        if hasattr(os, "register_at_fork"):
+            os.register_at_fork(after_in_child=self._reset_mutex_after_fork)
+
+    def _reset_mutex_after_fork(self) -> None:
+        # Keep the inherited request window/cooldown; a child cannot replenish
+        # the remaining budget by resetting its parent-only mutex dependency.
+        self._lock = threading.RLock()
 
     def _prune(self, now: float) -> None:
         while self._requests and now - self._requests[0] >= 60.0:
             self._requests.popleft()
 
     def acquire(self, *, optional: bool) -> None:
-        now = time.monotonic()
-        self._prune(now)
-        if now < self._cooldown_until:
-            raise RuntimeError("widget_kiwoom_429_cooldown")
-        reserve = 2 if optional else 0
-        if len(self._requests) >= self.max_requests_per_minute - reserve:
-            raise RuntimeError("widget_request_budget_exhausted")
-        self._requests.append(now)
-        self.total_request_count += 1
+        with self._lock:
+            now = time.monotonic()
+            self._prune(now)
+            if now < self._cooldown_until:
+                raise RuntimeError("widget_kiwoom_429_cooldown")
+            reserve = 2 if optional else 0
+            if len(self._requests) >= self.max_requests_per_minute - reserve:
+                raise RuntimeError("widget_request_budget_exhausted")
+            self._requests.append(now)
+            self.total_request_count += 1
 
     def note_rate_limited(self) -> None:
-        self.rate_limit_count += 1
-        self._cooldown_until = max(self._cooldown_until, time.monotonic() + 30.0)
+        with self._lock:
+            self.rate_limit_count += 1
+            self._cooldown_until = max(self._cooldown_until, time.monotonic() + 30.0)
 
     def snapshot(self) -> dict[str, int]:
-        now = time.monotonic()
-        self._prune(now)
-        return {
-            "max_requests_per_minute": self.max_requests_per_minute,
-            "requests_in_last_minute": len(self._requests),
-            "remaining_requests": max(
-                0, self.max_requests_per_minute - len(self._requests)
-            ),
-            "total_request_count": self.total_request_count,
-            "rate_limit_count": self.rate_limit_count,
-        }
+        with self._lock:
+            now = time.monotonic()
+            self._prune(now)
+            return {
+                "max_requests_per_minute": self.max_requests_per_minute,
+                "requests_in_last_minute": len(self._requests),
+                "remaining_requests": max(
+                    0, self.max_requests_per_minute - len(self._requests)
+                ),
+                "total_request_count": self.total_request_count,
+                "rate_limit_count": self.rate_limit_count,
+            }
 
 
 def _parse_bbo(payload: dict[str, Any], observed_at: datetime) -> dict[str, Any]:
