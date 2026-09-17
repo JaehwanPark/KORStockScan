@@ -179,3 +179,12 @@ Small full270-grid/46date 측정의 selector CPU는 약0.028~0.064초로 before/
 고정 synthetic 1,000/100,000행의 cohort/source summary before-after(5회 교대) CPU는0.005394→0.002580초/0.627793→0.274280초, 약52.18%/56.31% 감소다. Canonical 출력 전수 동일·peak traced allocation66,124→61,796bytes/6,095,044→5,694,636bytes. [fixture/측정](../../tmp/postclose-ev-distribution-benchmark-20260917.json)은 **한 창 completed 분포 계산**이며 전체 family/전체 scale/경제성 통과가 아니다. 보고값·null/tail/source authority·기존 full-cost/PREOPEN/주문 guard를 유지한다.
 
 이번 보완은 persistent daily sufficient-statistics 구현이 아니다. 영속화를 위해 mean/count만 저장하거나 창별 sum 재결합으로 기존 floating-point/tail 순서를 바꾸지 않는다. O2 persistent prefix state/partition·O3 frozen-prefix proof/delta/영속 충분통계·whole O0/O1·full populated P6와 자연 postclose/PID/경제성은 미완료로 남는다. 실제 phase/반복 비용에 이익이 없는 cache를 성능 백분율만 맞추려고 신설하지 않는다. 기존 자동 Daily/cumulative→EV consumer에서 소비하되 새 collector/모듈/job/floor/startup gate를 만들지 않는다.
+
+
+## 11. O2 day partition의 실제 비용 판정·신호 탐색 공유
+
+[후속 §33](../audit-reports/2026-09-17-postclose-computation-optimization-scoped-implementation.md#33-o2-invocation-local-신호-탐색-공유영속-partition-시제품-기각)을 따른다. 기존 profile checkpoint에 묶은 persistent signal partition 시제품은 reference보다 느려 제거했다. 작은270-grid뿐 아니라 실제9,450-grid에서도 compact 저장/검증 비용이 이익을 넘었으므로 강제 영속화하지 않는다. 기존 전체 결과 checkpoint와 atomic publisher/source-quality gate는 보존한다.
+
+대신 동일 신호 기준을 반복하는 execution-plan 대안의 immutable first-signal fact만 invocation 안에서 공유한다. Feature 정정/가변 입력은 miss/reference,64,000 fact bound 이후에도 grid를 빠짐없이 평가한다. Offset/TTL/target·leg·HELD state 및 calibration/holdout은 독립 재생한다. 단일 실행계획 grid는 기존 fast reference 탐색식을 유지한다. 기대효과는 중복 신호 탐색 절감이며 경제성 개선·새 진입·runtime owner 변경은 아니다.
+
+전체 persistent day-state/append-resume·proof 기반 raw delta/누적 EV 영속 충분통계·whole O0/O1 및 populated P6는 이번 보완의 완료 범위가 아니다. 다른 세션의 P3 구현/자연 소비 문서와 이번 managed source parity는 별도 검증해야 하며, performance 목표를 선정/기동 floor로 추가하지 않는다. 예정 장후 process 자동 routing과 실제 PID/자연 정책/실수익 acceptance를 각각 구분한다.
