@@ -7731,9 +7731,13 @@ def _entry_cancel_wait_standalone_decision(
         ENTRY_CANCEL_WAIT_TUNING_DIR / f"entry_cancel_wait_tuning_{source_date}.json"
     )
     report = _load_json(report_path) if report_path.exists() else {}
+    tuning_allowed = source_date < "2026-09-17" or (
+        report.get("economic_tuning_input_allowed") is True
+        and report.get("source_quality_status") == "pass"
+    )
     values = (
         report.get("recommended_thresholds")
-        if isinstance(report.get("recommended_thresholds"), dict)
+        if tuning_allowed and isinstance(report.get("recommended_thresholds"), dict)
         else {}
     )
     _previous_families, previous_manifest = (
@@ -7786,7 +7790,10 @@ def _entry_cancel_wait_standalone_decision(
         "decision_reason": (
             f"explicit_operator_off:{off_lock_id}"
             if explicit_off
-            else "persistent_on_daily_deterministic_ev"
+            else (
+                "persistent_on_daily_deterministic_ev" if tuning_allowed
+                else "persistent_on_carry_source_contract_gap"
+            )
         ),
         "runtime_effect": not explicit_off,
         "allowed_runtime_apply": True,
@@ -7795,6 +7802,8 @@ def _entry_cancel_wait_standalone_decision(
         "source_quality_status": str(
             report.get("source_quality_status") or "missing_hold_defaults"
         ),
+        "economic_tuning_input_allowed": tuning_allowed,
+        "economic_source_gap": report.get("economic_source_gap") if not tuning_allowed else None,
         "selected_thresholds": selected_values,
         "env_overrides": env_overrides,
         "excluded_consumers": [

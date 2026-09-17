@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import gzip
 import json
+import math
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -19,6 +20,7 @@ from src.utils.constants import DATA_DIR
 
 REPORT_DIR = DATA_DIR / "report" / "entry_cancel_wait_tuning"
 SAMPLE_FLOOR = 5
+EXECUTABLE_EVIDENCE_DATE = "2026-09-17"
 
 
 def report_paths(target_date: str) -> tuple[Path, Path]:
@@ -83,6 +85,7 @@ def build_report(target_date: str) -> dict[str, Any]:
     )
     registered = defaultdict(int)
     invalid_rows = 0
+    diagnostic_proxy_rows = 0
     for event in _iter_events(target_date) or []:
         stage = str(event.get("stage") or "")
         fields = event.get("fields") if isinstance(event.get("fields"), dict) else {}
@@ -91,6 +94,16 @@ def build_report(target_date: str) -> dict[str, Any]:
         profile = str(fields.get("wait_profile") or "standard")
         if profile not in DEFAULT_THRESHOLDS:
             invalid_rows += 1
+            continue
+        if target_date >= EXECUTABLE_EVIDENCE_DATE and stage in {
+            "entry_cancel_wait_counterfactual_registered",
+            "entry_cancel_wait_counterfactual_completed",
+        }:
+            # The current runtime touch/60s-mark observer is diagnostic. Its
+            # gross return is not executable, cost-adjusted tuning evidence.
+            diagnostic_proxy_rows += 1
+            if stage == "entry_cancel_wait_counterfactual_registered":
+                registered[profile] += 1
             continue
         if stage == "entry_cancel_wait_counterfactual_registered":
             registered[profile] += 1
@@ -113,6 +126,8 @@ def build_report(target_date: str) -> dict[str, Any]:
             try:
                 timeout = int(float(fields.get("timeout_sec")))
                 ev = float(fields.get("counterfactual_ev_pct"))
+                if timeout <= 0 or not math.isfinite(ev):
+                    raise ValueError("invalid_counterfactual_metric")
             except Exception:
                 invalid_rows += 1
                 continue
@@ -148,7 +163,10 @@ def build_report(target_date: str) -> dict[str, Any]:
                 else "hold_best_unchanged"
             )
         else:
-            state = "hold_sample"
+            state = (
+                "hold_source_contract"
+                if target_date >= EXECUTABLE_EVIDENCE_DATE else "hold_sample"
+            )
         profiles[profile] = {
             "previous_threshold_sec": previous[profile],
             "recommended_threshold_sec": recommended[profile],
@@ -168,7 +186,7 @@ def build_report(target_date: str) -> dict[str, Any]:
     source_quality_status = (
         "missing_source_hold"
         if not source_path.exists()
-        else "warning" if invalid_rows else "pass"
+        else "warning" if invalid_rows or diagnostic_proxy_rows else "pass"
     )
     total_registered = sum(registered.values())
     total_completed = sum(
@@ -182,8 +200,8 @@ def build_report(target_date: str) -> dict[str, Any]:
         "missing_source_hold"
         if not source_path.exists()
         else (
-            "invalid_rows_warning"
-            if invalid_rows
+            "diagnostic_proxy_hold" if diagnostic_proxy_rows else "invalid_rows_warning"
+            if invalid_rows or diagnostic_proxy_rows
             else (
                 "no_observation_hold"
                 if total_registered == 0 and total_completed == 0
@@ -213,6 +231,14 @@ def build_report(target_date: str) -> dict[str, Any]:
         ],
         "source_quality_status": source_quality_status,
         "invalid_row_count": invalid_rows,
+        "diagnostic_proxy_row_count": diagnostic_proxy_rows,
+        "economic_tuning_input_allowed": (
+            target_date < EXECUTABLE_EVIDENCE_DATE and total_completed > 0 and not invalid_rows
+        ),
+        "economic_source_gap": (
+            "touch_mark_proxy_missing_executable_fill_exit_cost"
+            if target_date >= EXECUTABLE_EVIDENCE_DATE else None
+        ),
         "evidence_summary": {
             "state": evidence_state,
             "registered_count": total_registered,

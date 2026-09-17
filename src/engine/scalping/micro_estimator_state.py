@@ -8,6 +8,8 @@ import threading
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from src.trading.market.quote_consistency import ws_quote_source_receipt
+
 POLICY_VERSION = "micro_estimator_state_v1"
 DEFAULT_HOT_TTL_SEC = 600.0
 DEFAULT_WARM_TTL_SEC = 180.0
@@ -150,6 +152,8 @@ class SymbolMicroEstimatorState:
     last_update_ts: float = 0.0
     last_rest_ts: float = 0.0
     last_ws_ts: float = 0.0
+    last_ws_source_scope: tuple = ()
+    last_ws_source_identity: tuple = ()
     last_probe_ts: float = 0.0
     ofi_ewma: float = 0.0
     true_ofi_ewma: float = 0.0
@@ -413,26 +417,61 @@ class MicroEstimatorStore:
             depth = estimate_orderbook_pressure(data)
             if depth["total_depth"] <= 0:
                 return state
+            # Only an original depth receipt can advance this estimator. A
+            # reported age, transport event or consumer clock is not a receipt.
+            times = data.get("last_realtime_type_ts")
+            if not isinstance(times, Mapping) or "0D" not in times:
+                return state
+            receipt = ws_quote_source_receipt(data, now_ts=now_ts)
+            observed_at = receipt.get("observed_epoch")
+            if observed_at is None or receipt.get("source_type", "0D") != "0D":
+                return state
+            item = str(receipt.get("item") or symbol)
+            if item.split("_", 1)[0] != str(symbol).split("_", 1)[0]:
+                return state
+            age_ms = (now_ts - observed_at) * 1000.0
+            stale = "stale" in str(data.get("source_quality_state") or "").lower()
+            stale = stale or str(data.get("quote_stale") or "").strip().lower() in {
+                "1", "true", "stale",
+            }
+            if not math.isfinite(age_ms) or not 0 <= age_ms <= 3000.0 or stale:
+                return state
+            scope = (receipt.get("item", symbol), receipt.get("market_route"),
+                     receipt.get("transport_epoch"),
+                     int((observed_at + 9 * 3600) // 86400),
+                     data.get("market_session_state"))
+            if observed_at < state.last_ws_ts:
+                return state
+            if state.last_ws_source_scope and (
+                isinstance(scope[2], int) and isinstance(state.last_ws_source_scope[2], int)
+                and scope[2] < state.last_ws_source_scope[2]
+            ):
+                return state
+            sequence = receipt.get("route_sequence")
+            if receipt.get("transport_epoch") is not None and (
+                isinstance(sequence, bool) or not isinstance(sequence, int) or sequence <= 0
+            ):
+                return state
+            identity = (*scope, observed_at, sequence)
+            if state.last_ws_source_scope == scope and (
+                identity == state.last_ws_source_identity
+                or observed_at < max(state.last_ws_ts, state.last_update_ts)
+                or (sequence is not None and state.last_ws_source_identity[-1] is not None
+                    and sequence <= state.last_ws_source_identity[-1])
+            ):
+                return state
+            if state.last_ws_source_scope and state.last_ws_source_scope != scope:
+                # A delta cannot span a route/session generation boundary.
+                state = SymbolMicroEstimatorState(symbol=state.symbol, tier=state.tier)
+                self._states[state.symbol] = state
+            if not state.last_ws_source_scope:
+                state.prev_best_bid_price = state.prev_best_bid_size = 0.0
+                state.prev_best_ask_price = state.prev_best_ask_size = 0.0
             current_best = _best_level_snapshot(data)
             true_ofi_norm, raw_ofi_event = self._calculate_true_ofi(state, current_best)
-            quote_age_ms = _safe_float(data.get("quote_age_ms"), 0.0)
-            stale = (
-                str(data.get("source_quality_state") or "").lower().find("stale") >= 0
-            )
-            stale = stale or str(data.get("quote_stale") or "").strip().lower() in {
-                "1",
-                "true",
-                "stale",
-            }
-            fresh = bool(
-                depth["total_depth"] > 0
-                and (quote_age_ms <= 3000.0 or quote_age_ms <= 0)
-                and not stale
-            )
-            confidence = 0.85 if fresh else 0.15 if depth["total_depth"] > 0 else 0.0
             self._apply_observation(
                 state,
-                now_ts=now_ts,
+                now_ts=observed_at,
                 ofi_norm=(
                     true_ofi_norm
                     if true_ofi_norm is not None
@@ -443,20 +482,9 @@ class MicroEstimatorStore:
                 raw_ofi_event=raw_ofi_event,
                 pressure=float(depth["pressure"]),
                 top_depth_ratio=float(depth["top_depth_ratio"]),
-                confidence=confidence,
-                source_state=(
-                    "fresh_ws_order_flow_delta"
-                    if fresh and true_ofi_norm is not None
-                    else (
-                        "fresh_ws_estimate"
-                        if fresh
-                        else (
-                            "decayed_ws_order_flow_delta"
-                            if true_ofi_norm is not None
-                            else "decayed_ws_estimate"
-                        )
-                    )
-                ),
+                confidence=0.85,
+                source_state=("fresh_ws_order_flow_delta"
+                              if true_ofi_norm is not None else "fresh_ws_estimate"),
                 ofi_source=(
                     "ws_order_flow_delta"
                     if true_ofi_norm is not None
@@ -464,8 +492,9 @@ class MicroEstimatorStore:
                 ),
                 current_best=current_best,
             )
-            if confidence > 0:
-                state.last_ws_ts = float(now_ts)
+            state.last_ws_ts = float(observed_at)
+            state.last_ws_source_scope = scope
+            state.last_ws_source_identity = identity
             return state
 
     def update_from_feature_probe(
@@ -575,6 +604,7 @@ class MicroEstimatorStore:
                 "last_update_ts": state.last_update_ts,
                 "last_rest_ts": state.last_rest_ts,
                 "last_ws_ts": state.last_ws_ts,
+                "last_ws_source_identity": state.last_ws_source_identity,
                 "last_probe_ts": state.last_probe_ts,
                 "prev_best_bid_price": state.prev_best_bid_price,
                 "prev_best_bid_size": state.prev_best_bid_size,

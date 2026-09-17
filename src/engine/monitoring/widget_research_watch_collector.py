@@ -587,9 +587,25 @@ class WidgetResearchWatchCollector:
         best_bid = _positive_int(bbo.get("best_bid"))
         best_ask = _positive_int(bbo.get("best_ask"))
         source_issues: list[str] = []
+        from src.trading.market.quote_consistency import build_rest_market_data_health
+
+        meta = bbo.get("_kiwoom_source_meta")
+        meta = meta if isinstance(meta, dict) else {}
+        health = build_rest_market_data_health(
+            {"buy_fpr_bid": best_bid, "sel_fpr_bid": best_ask,
+             "stk_cd": bbo.get("response_item_raw")},
+            api_id="ka10004", request_code=request_code, source_meta=meta,
+            now_ts=observed_at.timestamp(), quote_max_age_ms=10_000,
+        )
+        bbo["market_data_health"] = health
+        if meta or bbo.get("rest_receipt_metadata_present"):
+            age_ms = health["rest_quote"]["quote_receive_age_ms"]
+            bbo["age_sec"] = age_ms / 1000.0 if age_ms is not None else None
+            if health["rest_quote"]["quote_state"] != "fresh":
+                source_issues.append("bbo_receive_receipt_invalid_or_stale")
         if not 0 <= (observed_at - quote_received).total_seconds() <= 10:
             source_issues.append("quote_stale_or_clock_invalid")
-        if not 0 <= bbo["age_sec"] <= 10:
+        if bbo["age_sec"] is None or not 0 <= bbo["age_sec"] <= 10:
             source_issues.append("bbo_stale_or_clock_invalid")
         if current_price is None:
             source_issues.append("quote_price_missing")
@@ -629,6 +645,7 @@ class WidgetResearchWatchCollector:
             ),
             "current_price": current_price,
             "common_market_source_reuse": reuse_receipt,
+            "market_data_health": health,
             "quote_received_at_kst": quote_received.isoformat(),
             "bbo_received_at_kst": bbo.get("received_at"),
             "best_bid": best_bid,

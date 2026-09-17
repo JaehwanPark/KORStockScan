@@ -197,9 +197,26 @@ def _advance_support_break_count(episode: "EpisodeState", latest: MinuteBar) -> 
 
 
 def _source_quality(
-    *, latest: MinuteBar | None, bbo: dict[str, Any], observed_at: datetime
+    *, latest: MinuteBar | None, bbo: dict[str, Any], observed_at: datetime,
+    request_code: str = "",
 ) -> tuple[str, tuple[str, ...]]:
     reasons: list[str] = []
+    from src.trading.market.quote_consistency import build_rest_market_data_health
+
+    meta = bbo.get("_kiwoom_source_meta")
+    meta = meta if isinstance(meta, dict) else {}
+    health = build_rest_market_data_health(
+        {"buy_fpr_bid": bbo.get("best_bid"), "sel_fpr_bid": bbo.get("best_ask"),
+         "stk_cd": bbo.get("response_item_raw")},
+        api_id="ka10004", request_code=request_code or str(meta.get("request_code") or ""),
+        source_meta=meta, now_ts=observed_at.timestamp(), quote_max_age_ms=35_000,
+    )
+    bbo["market_data_health"] = health
+    if meta or bbo.get("rest_receipt_metadata_present"):
+        age_ms = health["rest_quote"]["quote_receive_age_ms"]
+        bbo["age_sec"] = age_ms / 1000.0 if age_ms is not None else None
+        if health["rest_quote"]["quote_state"] != "fresh":
+            reasons.append("bbo_receive_receipt_invalid_or_stale")
     if latest is None:
         reasons.append("completed_1m_missing")
     else:
@@ -1032,7 +1049,8 @@ class WidgetSymbolRuntimeCollector:
                     reason="observation_seed_completed_bar_boundary_pending",
                 )
         source_quality, source_quality_reasons = _source_quality(
-            latest=latest, bbo=bbo, observed_at=observed_at
+            latest=latest, bbo=bbo, observed_at=observed_at,
+            request_code=context.request_code,
         )
         from src.engine.monitoring.widget_research_watch_collector import (
             attach_bar_delta,
@@ -1122,7 +1140,8 @@ class WidgetSymbolRuntimeCollector:
             bbo_received = self._bbo_cache[f"{symbol}:{context.request_code}"][2]
             bbo["age_sec"] = (observed_at - bbo_received).total_seconds()
             source_quality, source_quality_reasons = _source_quality(
-                latest=latest, bbo=bbo, observed_at=observed_at
+                latest=latest, bbo=bbo, observed_at=observed_at,
+                request_code=context.request_code,
             )
             if not 0 <= quote_age_sec <= 35.0:
                 source_quality = "BLOCKED"

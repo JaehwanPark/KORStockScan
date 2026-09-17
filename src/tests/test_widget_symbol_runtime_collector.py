@@ -160,6 +160,9 @@ def test_runtime_direct_read_rechecks_original_bbo_at_final_decision(
     assert row["observed_at_kst"] == decision.isoformat()
     assert row["bbo"]["received_at"] == cycle.isoformat()
     assert row["bbo"]["age_sec"] == delay
+    facts = row["bbo"]["market_data_health"]["rest_quote"]
+    assert facts["quote_receive_age_ms"] == delay * 1000
+    assert facts["quote_state"] == ("stale" if blocked else "fresh")
     assert row["advisory"]["source_quality"]["status"] == (
         "BLOCKED" if blocked else "PASS"
     )
@@ -700,3 +703,18 @@ def test_raw_only_research_receipts_never_create_client_or_episode(
         audit["required_contract_missing_count"] == 0
         and audit["excluded_row_count"] == 0
     )
+
+
+@pytest.mark.parametrize("extra", [
+    {"api_id": "ka10003"}, {"request_code": "042660"},
+    {"rest_received_ts_ms": None}, {"rest_received_ts_ms": 9999999999999},
+])
+def test_runtime_source_quality_rechecks_original_receipt_binding(extra):
+    now = datetime(2026, 9, 17, 14, 0, tzinfo=KST)
+    bbo = {"best_bid": 9990, "best_ask": 10000, "age_sec": 0,
+           "_kiwoom_source_meta": {"api_id": "ka10004", "request_code": "005930",
+              "rest_received_ts_ms": int(now.timestamp() * 1000), **extra}}
+    status, reasons = _source_quality(latest=None, bbo=bbo, observed_at=now,
+                                      request_code="005930")
+    assert status == "BLOCKED"
+    assert "bbo_receive_receipt_invalid_or_stale" in reasons

@@ -44,6 +44,8 @@
 
 Typed 소비 후속: [리뷰 §29](../audit-reports/2026-09-17-common-health-opportunity-cost-scoped-implementation.md#29-typed-quotehealth-원-receipt와-기존-pipeline-json-전달-잔여-수리). 기존 `QuoteHealth`→main latency→세 기존 pipeline 이벤트에 원 receipt/scope/type identity·현재 raw common facts를 전달하고 실제 logger의 JSON 경계를 보완했다. 최종8384b6091/main971096 소비와 전수 migration·자연 typed handoff/새 정책 경제성은 분리한다.
 
+확정 결함·전수 검증 세 묶음 후속: [리뷰 §30](../audit-reports/2026-09-17-common-health-opportunity-cost-scoped-implementation.md#30-확정-결함-수리와-전수-검증-3묶음). Micro estimator 원0D clock/identity·동일 packet 표본 억제, 두 collector의 현재 REST health·adverse receipt·IPO clock, cancel-wait gross proxy의 명시 source gap/carry 및 시장 약세 calibration winner/single holdout을 수리했다. 306파일 reader 역할 ledger·live transport/주입/file 경계·active family disposition을 결속한다. 검증·release/PID와 신규 정책/자연 경제성은 해당 receipt에서 분리한다. Cancel-wait executable fill/exit/cost 없는 원천은 표본 대기가 아닌 구조적 결손이다.
+
 ## 2. 선행·병행 순서와 두 개의 독립 완료 gate
 
 ### 2.1 실행 원칙

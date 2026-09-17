@@ -396,13 +396,12 @@ def top_depth_notional(ws_data: dict[str, Any], levels: int = 3) -> int:
 
 
 def quote_age_sec(ws_data: dict[str, Any], now_ts: float | None = None) -> float | None:
-    raw_ts = ws_data.get("last_ws_update_ts")
-    if raw_ts in (None, "", 0):
-        return None
-    try:
-        return max(0.0, float(now_ts or time.time()) - float(raw_ts))
-    except (TypeError, ValueError):
-        return None
+    from src.trading.market.quote_consistency import ws_quote_receive_age_ms
+
+    age_ms = ws_quote_receive_age_ms(
+        ws_data, now_ts=time.time() if now_ts is None else float(now_ts)
+    )
+    return age_ms / 1000.0 if age_ms is not None else None
 
 
 def suspected_quote_vacuum(ws_data: dict[str, Any]) -> bool:
@@ -441,8 +440,11 @@ def evaluate_entry_gate(
             },
         )
     age = quote_age_sec(ws_data, now_ts=now_ts)
-    if age is not None and age > 2.0:
-        return IpoDecision(False, "quote_stale", {"quote_age_sec": round(age, 3)})
+    if age is None or not 0.0 <= age <= 2.0:
+        return IpoDecision(
+            False, "quote_stale",
+            {"quote_age_sec": round(age, 3) if age is not None else None},
+        )
     if suspected_quote_vacuum(ws_data):
         return IpoDecision(
             False, "quote_vacuum_or_vi_suspected", {"entry_price": price}

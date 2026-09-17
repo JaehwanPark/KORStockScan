@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from datetime import datetime, time as dt_time, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 
 from src.engine import sniper_overnight_gatekeeper as overnight
 from src.engine import sniper_state_handlers as handlers
@@ -190,6 +190,7 @@ def test_holding_flow_ofi_prefers_micro_estimator_true_ofi(monkeypatch):
                 "best_ask": 10020,
                 "best_bid_qty": 1000 + (idx * 1000),
                 "best_ask_qty": 1,
+                "last_realtime_type_ts": {"0D": 999.9 + idx},
                 "quote_age_ms": 100.0,
                 "quote_stale": False,
             },
@@ -260,6 +261,20 @@ def test_holding_flow_ofi_falls_back_to_legacy_observer_without_micro_state(
     assert stock["holding_flow_ofi_reason"] == "ready"
 
 
+
+def test_holding_micro_estimator_rejected_receipt_is_not_logged_as_applied(monkeypatch):
+    store = handlers.MicroEstimatorStore()
+    monkeypatch.setattr(handlers, "_SCALPING_MICRO_ESTIMATOR_STORE", store)
+    fields = handlers._scalping_micro_estimator_log_fields(
+        stock={}, code="005930",
+        ws_data={"best_bid": 10000, "best_ask": 10010,
+                 "best_bid_qty": 100, "best_ask_qty": 100, "quote_age_ms": 0},
+        now_ts=1000, prefix="micro", consumer_stage="holding_flow_override",
+    )
+    assert fields["micro_update_attempted"] is True
+    assert fields["micro_update_applied"] is False
+    assert fields["micro_sample_count"] == 0
+
 def test_holding_flow_micro_estimator_reads_nested_orderbook_ws(monkeypatch):
     store = handlers.MicroEstimatorStore()
     monkeypatch.setattr(handlers, "_SCALPING_MICRO_ESTIMATOR_STORE", store)
@@ -287,6 +302,7 @@ def test_holding_flow_micro_estimator_reads_nested_orderbook_ws(monkeypatch):
                     "bids": [{"price": 10000 + idx, "volume": 1000 + (idx * 1000)}],
                     "asks": [{"price": 10020, "volume": 1}],
                 },
+                "last_realtime_type_ts": {"0D": 999.9 + idx},
                 "quote_age_ms": 100.0,
                 "quote_stale": False,
             },

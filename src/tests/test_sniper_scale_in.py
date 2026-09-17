@@ -12100,6 +12100,61 @@ def test_rising_missed_tp1_pass_still_obeys_existing_submit_safety_veto(monkeypa
     )
 
 
+
+def test_micro_estimator_ws_original_receipt_identity_and_scope():
+    book = {"best_bid": 10000, "best_ask": 10010,
+            "best_bid_qty": 100, "best_ask_qty": 100}
+    for extra in ({}, {"quote_age_ms": -1}, {"quote_age_ms": 0},
+                  {"last_realtime_type_ts": {"0D": 1001}},
+                  {"last_realtime_type_ts": {"0D": True}},
+                  {"last_realtime_type_ts": {"0D": float("nan")}},
+                  {"last_realtime_type_ts": {"0D": 990}, "quote_age_ms": 0},
+                  {"last_ws_update_ts": 1000}):
+        store = MicroEstimatorStore()
+        store.update_from_ws_quote("005930", {**book, **extra}, now_ts=1000)
+        assert store.snapshot("005930", now_ts=1000)["sample_count"] == 0
+
+    def frame(stamp, sequence, epoch=1, item="005930"):
+        return {**book, "last_realtime_type_ts": {"0D": stamp},
+                "last_realtime_type_item": {"0D": item},
+                "market_data_transport_epoch": epoch,
+                "realtime_type_snapshots_by_route": {"exact": {"0D": {
+                    "item": item, "market_route": "krx", "transport_epoch": epoch,
+                    "observed_epoch": stamp, "route_sequence": sequence}}}}
+
+    store = MicroEstimatorStore()
+    store.update_from_ws_quote("005930", frame(999, 1, item="042660"), now_ts=1000)
+    assert store.snapshot("005930", now_ts=1000)["sample_count"] == 0
+    first = frame(999, 1)
+    store.update_from_ws_quote("005930", first, now_ts=1000)
+    for _ in range(100):
+        store.update_from_ws_quote("005930", first, now_ts=1001)
+    snap = store.snapshot("005930", now_ts=1001)
+    assert snap["sample_count"] == 1
+    assert snap["last_ws_ts"] == 999
+    assert snap["age_sec"] == 2
+    store.update_from_ws_quote("005930", frame(998.9, 2), now_ts=1001)
+    assert store.snapshot("005930", now_ts=1001)["sample_count"] == 1
+    # Two genuine depth events may have the same receive clock.
+    second = frame(999, 2)
+    second["best_bid_qty"] = 1000
+    store.update_from_ws_quote("005930", second, now_ts=1001)
+    assert store.snapshot("005930", now_ts=1001)["true_ofi_sample_count"] == 1
+    store.update_from_ws_quote("005930", first, now_ts=1001)
+    assert store.snapshot("005930", now_ts=1001)["sample_count"] == 2
+    for bad_sequence in (None, True, 0):
+        bad = frame(1000, bad_sequence)
+        store.update_from_ws_quote("005930", bad, now_ts=1001)
+        assert store.snapshot("005930", now_ts=1001)["sample_count"] == 2
+    # New generation starts with a proxy, never a cross-generation OFI delta.
+    store.update_from_ws_quote("005930", frame(1000, 1, epoch=2), now_ts=1001)
+    snap = store.snapshot("005930", now_ts=1001)
+    assert snap["sample_count"] == 1
+    assert snap["true_ofi_sample_count"] == 0
+    assert snap["source_state"] == "fresh_ws_estimate"
+    store.update_from_ws_quote("005930", frame(1001, 3, epoch=1), now_ts=1001)
+    assert store.snapshot("005930", now_ts=1001)["sample_count"] == 1
+
 def test_micro_estimator_state_defaults_rest_probe_ws_and_eviction():
     store = MicroEstimatorStore(
         MicroEstimatorConfig(
@@ -12144,6 +12199,7 @@ def test_micro_estimator_state_defaults_rest_probe_ws_and_eviction():
             "best_ask": 10010,
             "best_bid_qty": 100,
             "best_ask_qty": 100,
+            "last_realtime_type_ts": {"0D": 999.9},
             "quote_age_ms": 100.0,
             "quote_stale": False,
         },
@@ -12160,6 +12216,7 @@ def test_micro_estimator_state_defaults_rest_probe_ws_and_eviction():
             "best_ask": 10010,
             "best_bid_qty": 1000,
             "best_ask_qty": 1,
+            "last_realtime_type_ts": {"0D": 1000.9},
             "quote_age_ms": 100.0,
             "quote_stale": False,
         },
@@ -12206,6 +12263,7 @@ def test_micro_estimator_state_defaults_rest_probe_ws_and_eviction():
         {
             "best_bid_qty": 1000,
             "best_ask_qty": 200,
+            "last_realtime_type_ts": {"0D": 1019.9},
             "quote_age_ms": 100.0,
             "quote_stale": False,
         },

@@ -100,3 +100,22 @@ def test_invalid_rows_hold_previous_thresholds(tmp_path, monkeypatch):
         "threshold_change_supported": False,
         "carry_forward_applied": True,
     }
+
+
+def test_touch_mark_proxy_is_retained_but_cannot_tune_current_policy(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path / "reports")
+    monkeypatch.setattr(mod, "DATA_DIR", tmp_path)
+    event_dir = tmp_path / "pipeline_events"
+    event_dir.mkdir()
+    row = {"stage": "entry_cancel_wait_counterfactual_completed", "fields": {
+        "runtime_family": "entry_cancel_wait_runtime", "wait_profile": "standard",
+        "timeout_sec": 90, "counterfactual_ev_pct": 10.0}}
+    (event_dir / "pipeline_events_2026-09-17.jsonl").write_text(
+        "".join(json.dumps(row) + "\n" for _ in range(5)), encoding="utf-8")
+    payload = mod.build_report("2026-09-17")
+    assert payload["diagnostic_proxy_row_count"] == 5
+    assert payload["economic_tuning_input_allowed"] is False
+    assert payload["evidence_summary"]["state"] == "diagnostic_proxy_hold"
+    assert payload["recommended_thresholds"] == mod.DEFAULT_THRESHOLDS
+    assert payload["enabled"] is True
+    assert payload["automatic_off_allowed"] is False

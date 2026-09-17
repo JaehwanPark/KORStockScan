@@ -8,6 +8,7 @@ from src.trading.market.confirmation_window import (
     build_confirmation_window,
 )
 from src.trading.market.micro_confirmation import _live_route_item
+from src.trading.market.quote_consistency import build_market_data_health
 
 CONTRACT = "machine_entry_adverse_flow_v1"
 CHECKPOINTS_MS = (0, 1000, 3000, 5000)
@@ -57,7 +58,11 @@ def evaluate_snapshot(
         ):
             raise ValueError("invalid_snapshot_authority")
         item = _live_route_item(symbol, route)
-        routes = snapshot["stocks"][symbol]["machine_confirmation_routes"]
+        stock = snapshot["stocks"][symbol]
+        result["market_data_health"] = build_market_data_health(
+            stock, now_ts=cutoff_ms / 1000.0, quote_max_age_ms=MAXIMUM_SOURCE_AGE_MS,
+        )
+        routes = stock["machine_confirmation_routes"]
         matches = [
             r
             for r in routes.values()

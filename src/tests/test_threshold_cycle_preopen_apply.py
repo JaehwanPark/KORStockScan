@@ -487,6 +487,19 @@ def _source_quality_preflight_pass(monkeypatch):
     )
 
 
+
+def test_entry_cancel_wait_proxy_recommendation_carries_previous_env(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "ENTRY_CANCEL_WAIT_TUNING_DIR", tmp_path)
+    monkeypatch.setattr(mod, "_load_previous_runtime_env_selected_families", lambda _date: (
+        [], {"env_overrides": {"KORSTOCKSCAN_SCALPING_ENTRY_TIMEOUT_SEC": "75"}}))
+    report = {"recommended_thresholds": {"standard": 90},
+              "source_quality_status": "pass"}
+    (tmp_path / "entry_cancel_wait_tuning_2026-09-17.json").write_text(json.dumps(report))
+    decision, env = mod._entry_cancel_wait_standalone_decision(
+        source_date="2026-09-17", target_date="2026-09-18", operator_locks=[])
+    assert decision["selected_thresholds"]["standard"] == 75
+    assert env["KORSTOCKSCAN_ENTRY_CANCEL_WAIT_ATTRIBUTION_ENABLED"] == "true"
+
 def test_entry_cancel_wait_standalone_defaults_on(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "ENTRY_CANCEL_WAIT_TUNING_DIR", tmp_path / "reports")
     monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", tmp_path / "runtime_env")

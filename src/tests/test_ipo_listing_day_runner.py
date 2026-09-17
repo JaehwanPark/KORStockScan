@@ -200,6 +200,24 @@ def test_entry_gate_allows_fresh_liquid_non_overheated_quote(target):
     assert decision.fields["qty"] == 15
 
 
+@pytest.mark.parametrize("receipt", [None, True, float("nan"), 1001.0, 990.0])
+def test_entry_gate_rejects_missing_future_or_stale_original_depth_clock(target, receipt):
+    snapshot = ws_snapshot(ts=1000.0)
+    snapshot["last_realtime_type_ts"] = {"0D": receipt}
+    snapshot["quote_age_ms"] = 0.0
+    decision = ipo.evaluate_entry_gate(target, snapshot, now_ts=1000.0)
+    assert decision.allowed is False
+    assert decision.reason == "quote_stale"
+
+
+def test_entry_gate_fresh_transport_cannot_renew_original_depth_clock(target):
+    snapshot = ws_snapshot(ts=1000.0)
+    snapshot["last_realtime_type_ts"] = {"0D": 999.5}
+    assert ipo.quote_age_sec(snapshot, now_ts=1000.0) == 0.5
+    snapshot["last_realtime_type_ts"]["0D"] = 995.0
+    assert ipo.evaluate_entry_gate(target, snapshot, now_ts=1000.0).reason == "quote_stale"
+
+
 def test_exit_hard_stop_precedes_ai_and_profit_logic(target):
     position = ipo.IpoPosition(
         code=target.code,

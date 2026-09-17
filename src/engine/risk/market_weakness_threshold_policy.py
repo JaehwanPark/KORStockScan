@@ -96,9 +96,11 @@ def threshold_recommendation_review_hash(
 ) -> str:
     """Recalculate the deterministic review hash owned by the source report."""
 
-    return canonical_sha256(
-        {field: recommendation.get(field) for field in THRESHOLD_REVIEW_FIELDS}
-    )
+    body = {field: recommendation.get(field) for field in THRESHOLD_REVIEW_FIELDS}
+    for field in ("calibration_selected_candidate_key", "selection_window"):
+        if field in recommendation:
+            body[field] = recommendation[field]
+    return canonical_sha256(body)
 
 
 def validate_threshold_recommendation(
@@ -314,6 +316,16 @@ def validate_threshold_recommendation(
             or not stratum_guards_valid
         ):
             return False, "market_weakness_policy_economic_review_invalid"
+    if str(recommendation.get("window_end") or "") >= "2026-09-17":
+        if (
+            recommendation.get("selection_window")
+            != "calibration_only_single_holdout_no_fallback"
+            or (isinstance(selected, Mapping) and (
+                selected.get("candidate_key")
+                != recommendation.get("calibration_selected_candidate_key")
+            ))
+        ):
+            return False, "market_weakness_policy_calibration_selection_missing_or_mismatched"
     review_hash = recommendation.get("review_hash")
     if (
         not isinstance(review_hash, str)

@@ -148,6 +148,8 @@ def pin(tmp_path, monkeypatch):
 def test_relational_rule(adverse):
     result = calc(tape(adverse=adverse))
     assert result["action"] == ("DEFER_ADVERSE_FLOW" if adverse else "CONTINUE")
+    assert result["market_data_health"]["schema"] == "kiwoom_market_data_health_v1"
+    assert result["market_data_health"]["decision_authority"] is False
 
 
 def test_integrated_route_identity_is_preserved_without_krx_inference():

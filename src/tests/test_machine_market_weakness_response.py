@@ -434,8 +434,9 @@ def _threshold_counterfactual_row(day: str, index: int) -> dict:
     }
 
 
+@pytest.mark.parametrize("winner_holdout_fails", [False, True])
 def test_threshold_review_uses_clean_cumulative_holdout_and_current_neighbor(
-    tmp_path,
+    tmp_path, winner_holdout_fails,
 ):
     history_root = tmp_path / "machine_microstructure_attribution"
     history_root.mkdir()
@@ -451,6 +452,25 @@ def test_threshold_review_uses_clean_cumulative_holdout_and_current_neighbor(
         "2026-08-27",
         TARGET_DATE,
     ]
+    def rows_for_day(day):
+        rows = [_threshold_counterfactual_row(day, index) for index in range(5)]
+        if winner_holdout_fails:
+            for index, row in enumerate(rows):
+                # a3_r3 wins calibration, then loses on holdout. The other
+                # neighbor would pass holdout, but must never be substituted.
+                row["threshold_candidate_states"]["a2_r4"] = (
+                    day in dates[-3:] or index >= 3
+                )
+                row["threshold_candidate_states"]["a2_r2"] = True
+                if day in dates[-3:]:
+                    row["executable_bbo_counterfactual"]["horizons_minutes"]["30"][
+                        "cost_aware_net_return_pct"
+                    ] = -0.1
+                    row["executable_bbo_counterfactual"]["target_adverse_first_hit"][
+                        "state"
+                    ] = "adverse_first"
+        return rows
+
     for day in dates[:-1]:
         response = {
             "schema": "machine_market_weakness_response_v2",
@@ -461,9 +481,7 @@ def test_threshold_review_uses_clean_cumulative_holdout_and_current_neighbor(
                 "allowed_runtime_apply": False,
                 "broker_order_forbidden": True,
             },
-            "entry_responses": [
-                _threshold_counterfactual_row(day, index) for index in range(5)
-            ],
+            "entry_responses": rows_for_day(day),
         }
         (history_root / f"machine_microstructure_attribution_{day}.json").write_text(
             json.dumps({"market_weakness_entry_response": response}),
@@ -472,9 +490,7 @@ def test_threshold_review_uses_clean_cumulative_holdout_and_current_neighbor(
 
     result = _cumulative_counterfactual_evidence(
         target_date=TARGET_DATE,
-        current_rows=[
-            _threshold_counterfactual_row(TARGET_DATE, index) for index in range(5)
-        ],
+        current_rows=rows_for_day(TARGET_DATE),
         history_report_dir=history_root,
         current_activation_observations=2,
         current_release_observations=3,
@@ -486,8 +502,23 @@ def test_threshold_review_uses_clean_cumulative_holdout_and_current_neighbor(
     )
 
     assert validate_threshold_recommendation(result) == (True, "ready")
+    from src.engine.risk.market_weakness_threshold_policy import threshold_recommendation_review_hash
+    current_review = {**result, "window_end": "2026-09-17"}
+    current_review.pop("selection_window")
+    current_review["review_hash"] = threshold_recommendation_review_hash(current_review)
+    assert validate_threshold_recommendation(current_review) == (
+        False, "market_weakness_policy_calibration_selection_missing_or_mismatched"
+    )
     assert result["holdout_dates"] == dates[-3:]
     assert all(result["sample_floor"].values())
+    assert result["calibration_selected_candidate_key"] == "a3_r3"
+    untouched = [row for row in result["candidates"] if row["candidate_key"] != "a3_r3"]
+    assert all(row["holdout_sample_count"] == 0 for row in untouched)
+    assert all(row["holdout_incremental_vs_current_policy_avg_pct"] is None for row in untouched)
+    if winner_holdout_fails:
+        assert result["selected_policy"] is None
+        assert result["policy_candidate_ready"] is False
+        return
     assert result["policy_candidate_ready"] is True
     assert result["selected_policy"]["candidate_key"] == "a3_r3"
     assert result["selected_policy"]["changed_axis"] == (

@@ -35958,13 +35958,16 @@ def _scalping_micro_estimator_log_fields(
             )
             applied_sources.append("rest_orderbook")
         else:
-            _SCALPING_MICRO_ESTIMATOR_STORE.update_from_ws_quote(
+            ws_state = _SCALPING_MICRO_ESTIMATOR_STORE.update_from_ws_quote(
                 symbol,
                 source,
                 now_ts=now_ts,
                 tier=tier,
             )
-            applied_sources.append("ws_quote")
+            if ws_state.last_ws_source_identity and ws_state.last_ws_source_identity != (
+                snapshot_before.get("last_ws_source_identity") or ()
+            ):
+                applied_sources.append("ws_quote")
 
     probe, source_quality, observed_ts = _scalping_micro_estimator_feature_probe(stock)
     if probe or source_quality:
@@ -77568,13 +77571,18 @@ def _maybe_update_rising_missed_micro_estimator_from_fresh_ws(
         now_ts=now_ts,
         tier="hot",
     )
-    if observation_ts > 0 and isinstance(stock, dict):
-        stock["_rising_missed_tp1_last_micro_ws_observation_ts"] = observation_ts
     snapshot = _RISING_MISSED_MICRO_ESTIMATOR_STORE.snapshot(code, now_ts=now_ts)
+    applied = bool(snapshot.get("last_ws_source_identity")) and (
+        snapshot.get("last_ws_source_identity") != pre_snapshot.get("last_ws_source_identity")
+    )
+    if applied and observation_ts > 0 and isinstance(stock, dict):
+        stock["_rising_missed_tp1_last_micro_ws_observation_ts"] = observation_ts
     fields.update(
         {
-            "rising_missed_micro_estimator_ws_update_applied": True,
-            "rising_missed_micro_estimator_ws_update_reason": "trusted_fresh_ws_updated",
+            "rising_missed_micro_estimator_ws_update_applied": applied,
+            "rising_missed_micro_estimator_ws_update_reason": (
+                "trusted_fresh_ws_updated" if applied else "ws_receipt_not_advanced"
+            ),
             "rising_missed_micro_estimator_ws_observation_ts": (
                 observation_ts if observation_ts > 0 else "-"
             ),

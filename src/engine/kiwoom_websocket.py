@@ -2110,7 +2110,9 @@ class KiwoomWSManager:
             }
         return target_store[item_code]
 
-    def _update_micro_estimator_from_orderbook(self, item_code, target, *, now_ts):
+    def _update_micro_estimator_from_orderbook(
+        self, item_code, target, *, now_ts, source_observation
+    ):
         if not _micro_estimator_ws_observation_enabled():
             return
 
@@ -2145,8 +2147,19 @@ class KiwoomWSManager:
             "best_ask_qty": best_ask_qty,
             "bid_tot": bid_tot,
             "ask_tot": ask_tot,
-            "quote_age_ms": 0.0,
-            "quote_stale": False,
+            "last_realtime_type_ts": {"0D": source_observation["received_at_ms"] / 1000.0},
+            "last_realtime_type_item": {"0D": item_code},
+            "market_data_transport_epoch": source_observation["transport_epoch"],
+            "market_session_state": self.market_session_state,
+            "realtime_type_snapshots_by_route": {
+                "depth": {"0D": {
+                    "item": item_code,
+                    "market_route": self._ws_item_route(item_code),
+                    "transport_epoch": source_observation["transport_epoch"],
+                    "route_sequence": source_observation["route_sequence"],
+                    "observed_epoch": source_observation["received_at_ms"] / 1000.0,
+                }}
+            },
             "source_quality_state": "fresh_ws_orderbook_observation",
         }
         try:
@@ -2161,7 +2174,7 @@ class KiwoomWSManager:
                 f"[MICRO_ESTIMATOR_WS_OBSERVATION] update failed code={item_code}: {exc}"
             )
             return
-        target["micro_estimator_ws_observation_ts"] = float(now_ts)
+        target["micro_estimator_ws_observation_ts"] = float(state.last_ws_ts)
         target["micro_estimator_ws_observation_source"] = "0D_orderbook"
         target["micro_estimator_ws_observation_sample_count"] = int(
             getattr(state, "sample_count", 0) or 0
@@ -4239,6 +4252,7 @@ class KiwoomWSManager:
                                     normalized_raw_item,
                                     target,
                                     now_ts=time.time(),
+                                    source_observation=current_depth_observation,
                                 )
                                 route_depth_buffers = target.setdefault(
                                     "recent_depth_ticks_by_route", {}

@@ -1068,7 +1068,7 @@ def _cumulative_counterfactual_evidence(
         "allowed_runtime_apply": False,
     }
 
-    def policy_metrics(key: str) -> dict[str, Any]:
+    def policy_metrics(key: str, *, calibration_only: bool = False) -> dict[str, Any]:
         deltas: list[tuple[str, float]] = []
         candidate_returns: list[float] = []
         current_policy_returns: list[float] = []
@@ -1080,6 +1080,8 @@ def _cumulative_counterfactual_evidence(
             "market:KOSDAQ": [],
         }
         for source_date, row, net_return in eligible:
+            if calibration_only and source_date not in calibration_dates:
+                continue
             states = row["threshold_candidate_states"]
             current_policy_blocked = bool(states[current_key])
             candidate_blocked = bool(states[key])
@@ -1212,8 +1214,47 @@ def _cumulative_counterfactual_evidence(
             if abs(release - current_release_observations) == 1
         }
     )
+    calibration_metrics = {
+        f"a{activation}_r{release}": policy_metrics(
+            f"a{activation}_r{release}", calibration_only=True
+        )
+        for activation, release in neighboring_pairs
+    }
+    calibration_eligible = [
+        metrics for metrics in calibration_metrics.values()
+        if (
+            (value := _finite_float(
+                metrics.get("calibration_incremental_vs_current_policy_avg_pct")
+            )) is not None
+            and value >= 0.005
+        )
+    ]
+    calibration_selected_key = (
+        max(
+            calibration_eligible,
+            key=lambda metrics: (
+                float(metrics["calibration_incremental_vs_current_policy_avg_pct"]),
+                metrics["candidate_key"],
+            ),
+        )["candidate_key"]
+        if calibration_eligible else None
+    )
     for activation, release in neighboring_pairs:
         key = f"a{activation}_r{release}"
+        if key != calibration_selected_key:
+            candidate_rows.append({
+                "activation_unique_observations": activation,
+                "release_unique_observations": release,
+                "candidate_key": key,
+                "calibration_sample_count": calibration_metrics[key]["calibration_sample_count"],
+                "calibration_incremental_vs_current_policy_avg_pct": calibration_metrics[key]["calibration_incremental_vs_current_policy_avg_pct"],
+                "holdout_sample_count": 0,
+                "holdout_incremental_vs_current_policy_avg_pct": None,
+                "full_incremental_vs_current_policy_avg_pct": None,
+                "review_status": "holdout_not_evaluated_calibration_selection",
+                "review_passed": False,
+            })
+            continue
         metrics = policy_metrics(key)
         calibration_ev = _finite_float(
             metrics.get("calibration_incremental_vs_current_policy_avg_pct")
@@ -1270,19 +1311,8 @@ def _cumulative_counterfactual_evidence(
                 "review_passed": review_passed,
             }
         )
-    passing = [row for row in candidate_rows if row["review_passed"] is True]
-    selected = (
-        max(
-            passing,
-            key=lambda row: (
-                float(row["holdout_incremental_vs_current_policy_avg_pct"]),
-                float(row["full_incremental_vs_current_policy_avg_pct"]),
-                -int(row["misclassification_count"]),
-                row["candidate_key"],
-            ),
-        )
-        if passing
-        else None
+    selected = next(
+        (row for row in candidate_rows if row["review_passed"] is True), None
     )
     selected_policy = (
         {
@@ -1328,6 +1358,8 @@ def _cumulative_counterfactual_evidence(
             **current_policy_metrics,
         },
         "selected_policy": selected_policy,
+        "calibration_selected_candidate_key": calibration_selected_key,
+        "selection_window": "calibration_only_single_holdout_no_fallback",
     }
     recommendation = {
         **review_payload,
