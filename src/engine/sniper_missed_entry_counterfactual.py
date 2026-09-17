@@ -9,6 +9,7 @@ from pathlib import Path
 import hashlib
 import json
 import re
+import ast
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -706,18 +707,32 @@ def _price_ready_plan(event: EntryEvent) -> dict:
         return {}
     try:
         emitted_at = datetime.fromisoformat(event.emitted_at.replace("Z", "+00:00"))
-        if (
-            emitted_at.tzinfo is None
-            or emitted_at.astimezone(_KST).date().isoformat() != event.signal_date
-            or not re.fullmatch(r"[0-9]{6}", event.code)
+        # emit_pipeline_event uses the declared host-local KST envelope clock.
+        # This interpretation is diagnostic, not signed economic timing proof.
+        if emitted_at.tzinfo is None:
+            emitted_at = emitted_at.replace(tzinfo=_KST)
+        if emitted_at.astimezone(
+            _KST
+        ).date().isoformat() != event.signal_date or not re.fullmatch(
+            r"[0-9]{6}", event.code
         ):
             return {}
         plan = event.fields.get("entry_execution_sizing_plan")
         price = event.fields.get("entry_price_plan")
-        if isinstance(plan, str):
-            plan = json.loads(plan)
-        if isinstance(price, str):
-            price = json.loads(price)
+
+        def decode(value):
+            if not isinstance(value, str):
+                return value
+            if len(value) > 16384:
+                return None
+            try:
+                return json.loads(value)
+            except ValueError:
+                # The existing raw logger stringifies dict fields with repr.
+                # literal_eval is bounded and never executes calls or names.
+                return ast.literal_eval(value)
+
+        plan, price = decode(plan), decode(price)
         if not isinstance(plan, dict) or not isinstance(price, dict):
             return {}
         if any(
@@ -849,7 +864,14 @@ def _price_ready_plan(event: EntryEvent) -> dict:
         ):
             return {}
         return plan
-    except (KeyError, TypeError, ValueError, OverflowError):
+    except (
+        KeyError,
+        TypeError,
+        ValueError,
+        OverflowError,
+        SyntaxError,
+        RecursionError,
+    ):
         return {}
 
 
@@ -1160,7 +1182,11 @@ def _build_buy_attempts(
             if anchor_dt is None:
                 continue
             if price_ready_plan:
-                anchor_dt = anchor_dt.astimezone(_KST)
+                anchor_dt = (
+                    anchor_dt.replace(tzinfo=_KST)
+                    if anchor_dt.tzinfo is None
+                    else anchor_dt
+                ).astimezone(_KST)
 
             budget_event = next(
                 (
@@ -1251,6 +1277,7 @@ def _build_buy_attempts(
                         "economic_pair_eligible": False,
                         "blocker": "exact_fill_exit_cost_counterfactual_replay_missing",
                         "bar_followup_role": "diagnostic_not_executable_net_payoff",
+                        "timestamp_semantics": "pipeline_emit_local_kst_or_explicit_offset_v1",
                         "runtime_effect": False,
                         "broker_order_forbidden": True,
                     },

@@ -164,7 +164,6 @@ def test_price_ready_plan_reaches_existing_cf_and_daily_without_assuming_fill(
         "scope",
         "oversized",
         "date",
-        "naive_clock",
         "missing_version",
         "invalid_identity_type",
     ],
@@ -187,8 +186,6 @@ def test_invalid_price_ready_plan_never_invents_buy_intent(
         fields["effective_venue"] = "NXT"
     elif corruption == "date":
         row["emitted_at"] = "2026-09-16T10:00:00+09:00"
-    elif corruption == "naive_clock":
-        row["emitted_at"] = "2026-09-17T10:00:00"
     elif corruption == "missing_version":
         del fields["entry_execution_sizing_plan"]["quantity_policy_version"]
     elif corruption == "invalid_identity_type":
@@ -314,7 +311,7 @@ def test_price_ready_kst_anchor_and_bad_clock_row_isolation(monkeypatch, tmp_pat
     valid = _price_ready_row(monkeypatch)
     valid["emitted_at"] = "2026-09-17T01:00:00Z"
     invalid = _price_ready_row(monkeypatch, attempt="bad")
-    invalid["emitted_at"] = "2026-09-17T10:00:00"
+    invalid["emitted_at"] = "not-an-envelope-time"
     previous = _price_ready_row(monkeypatch, attempt="past")
     previous.update(emitted_at="2026-09-16T10:00:00+09:00", emitted_date="2026-09-16")
     _write_pipeline_events(tmp_path, "2026-09-17", [invalid, previous, valid])
@@ -324,6 +321,69 @@ def test_price_ready_kst_anchor_and_bad_clock_row_isolation(monkeypatch, tmp_pat
     assert attempts[0]["evaluation_attempt_id"] == "eval-1"
     assert attempts[0]["signal_date"] == "2026-09-17"
     assert attempts[0]["signal_time"] == "10:00:00"
+
+
+@pytest.mark.parametrize("encoding", ["native_dict", "json_string"])
+def test_actual_pipeline_emitter_representation_reaches_cf_and_daily(
+    monkeypatch, tmp_path, encoding
+):
+    from datetime import datetime
+    from src.utils import pipeline_event_logger as emitter
+    from src.engine import daily_threshold_cycle_report as daily
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 9, 17, 10, 0, 0)
+
+    row = _price_ready_row(monkeypatch)
+    fields = row["fields"]
+    if encoding == "json_string":
+        for key in ("entry_execution_sizing_plan", "entry_price_plan"):
+            fields[key] = json.dumps(fields[key])
+    monkeypatch.setattr(emitter, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(emitter, "datetime", FixedDateTime)
+    monkeypatch.setattr(emitter, "_get_producer_compactor", lambda: None)
+    monkeypatch.setattr(emitter, "log_info", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        emitter,
+        "TRADING_RULES",
+        types.SimpleNamespace(PIPELINE_EVENT_JSONL_ENABLED=True),
+    )
+    emitted = emitter.emit_pipeline_event(
+        "ENTRY_PIPELINE",
+        "Samsung",
+        "005930",
+        "entry_execution_sizing_plan",
+        record_id=1,
+        fields=fields,
+    )
+    assert emitted["structured_append_succeeded"] is True
+    assert emitted["emitted_at"] == "2026-09-17T10:00:00"
+    assert isinstance(emitted["fields"]["entry_execution_sizing_plan"], str)
+    attempts = report_mod._build_buy_attempts(
+        "2026-09-17", events=report_mod._load_entry_events("2026-09-17")
+    )
+    assert len(attempts) == 1
+    assert attempts[0]["signal_price"] == 10000
+    assert attempts[0]["price_ready_source"]["economic_pair_eligible"] is False
+    assert (
+        daily._compact_threshold_cycle_event(emitted)["fields"]["evaluation_attempt_id"]
+        == "eval-1"
+    )
+
+
+def test_price_plan_repr_parser_does_not_execute_expressions(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    row = _price_ready_row(monkeypatch)
+    row["fields"][
+        "entry_execution_sizing_plan"
+    ] = "dict(schema_version='entry_execution_sizing_plan_v1')"
+    _write_pipeline_events(tmp_path, "2026-09-17", [row])
+    events = report_mod._load_entry_events("2026-09-17")
+    assert report_mod._price_ready_plan(events[0]) == {}
+    assert report_mod._build_buy_attempts("2026-09-17", events=events) == []
 
 
 def _make_candle(
