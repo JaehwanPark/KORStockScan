@@ -41,6 +41,99 @@ def _wait_for_result(coordinator, timeout=1.0):
     raise AssertionError("async result did not complete")
 
 
+def test_async_execution_refresh_is_immutable_and_retained_for_commit():
+    dispatcher = HotPathAIDispatcher(loaded_key_count=1)
+    coordinator = ScannerAsyncEvalCoordinator(ai_dispatcher=dispatcher)
+    source = {"ws_data": {"curr": 1002}, "recent_ticks": [{"price": 1002}]}
+    evaluated = []
+    now = time.time()
+    context = ScannerAsyncEvalContext.create(
+        generation=_generation(),
+        cache_key="execution-frame",
+        submitted_epoch=now,
+        deadline_epoch=now + 1,
+        stock_snapshot={"status": "WATCHING"},
+        ws_snapshot={"curr": 1000},
+        state_version="WATCHING:0:0",
+    )
+
+    def refresh(_ctx, prepared):
+        assert prepared["ws_data"]["curr"] == 1000
+        with pytest.raises(TypeError):
+            prepared["ws_data"]["curr"] = 9
+        return source
+
+    def evaluate(_ctx, prepared):
+        evaluated.append(prepared)
+        with pytest.raises(TypeError):
+            prepared["ws_data"]["curr"] = 9
+        source["ws_data"]["curr"] = 9000
+        return {"action": "WAIT", "evaluated_price": prepared["ws_data"]["curr"]}
+
+    try:
+        assert coordinator.submit(
+            ScannerAsyncEvalRequest(
+                context=context,
+                prepare=lambda _ctx: {"ws_data": {"curr": 1000}},
+                evaluate=evaluate,
+                refresh_before_evaluate=refresh,
+            )
+        ).accepted
+        result = _wait_for_result(coordinator)
+        assert result.status == "completed"
+        assert result.prepared_context == evaluated[0]
+        assert result.prepared_context["ws_data"]["curr"] == 1002
+        assert result.ai_payload["evaluated_price"] == 1002
+        assert context.ws_snapshot["curr"] == 1000
+    finally:
+        coordinator.shutdown(wait=True)
+
+
+@pytest.mark.parametrize("failure", ["error", "deadline", "superseded", "malformed"])
+def test_async_refresh_failure_never_reaches_evaluator(failure):
+    dispatcher = HotPathAIDispatcher(loaded_key_count=1)
+    coordinator = ScannerAsyncEvalCoordinator(ai_dispatcher=dispatcher)
+    now = time.time()
+    context = ScannerAsyncEvalContext.create(
+        generation=_generation(),
+        cache_key=f"refresh-{failure}",
+        submitted_epoch=now,
+        deadline_epoch=now + 1,
+        stock_snapshot={"status": "WATCHING"},
+        ws_snapshot={"curr": 1000},
+        state_version="WATCHING:0:0",
+    )
+    evaluated = []
+
+    def refresh(_ctx, prepared):
+        if failure == "malformed":
+            return None
+        if failure == "error":
+            raise ValueError("invalid frame")
+        if failure == "superseded":
+            coordinator.invalidate_generation(context.generation.generation_id)
+        if failure == "deadline":
+            threading.Event().wait(max(0, context.deadline_epoch - time.time()) + 0.02)
+        return {"ws_data": {"curr": 1002}}
+
+    try:
+        assert coordinator.submit(
+            ScannerAsyncEvalRequest(
+                context=context,
+                prepare=lambda _ctx: {"ws_data": {"curr": 1000}},
+                evaluate=lambda _ctx, _prepared: evaluated.append(True) or {},
+                refresh_before_evaluate=refresh,
+            )
+        ).accepted
+        result = _wait_for_result(coordinator, timeout=2.0)
+        assert evaluated == []
+        assert result.observation_only is True
+        assert result.status in {"error", "superseded_result"}
+        assert result.ai_payload == {}
+    finally:
+        coordinator.shutdown(wait=True)
+
+
 def test_async_eval_reports_exact_retained_result_before_commit_consumes_it():
     dispatcher = HotPathAIDispatcher(loaded_key_count=1)
     coordinator = ScannerAsyncEvalCoordinator(ai_dispatcher=dispatcher)

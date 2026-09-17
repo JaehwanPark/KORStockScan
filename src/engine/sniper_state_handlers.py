@@ -63105,6 +63105,25 @@ def _resolve_scanner_async_entry_ai(
             "candle_context": candle_context,
         }
 
+    def refresh_before_evaluate(
+        async_context: ScannerAsyncEvalContext,
+        prepared: dict,
+    ) -> dict:
+        refreshed = thaw_scanner_async_value(prepared)
+        if refreshed.get("source_quality_ok"):
+            (
+                refreshed["ws_data"],
+                refreshed["recent_ticks"],
+                refreshed["candle_context"],
+                refreshed["final_entry_refresh_fields"],
+            ) = _refresh_prepared_entry_inputs(
+                code,
+                refreshed.get("ws_data") or {},
+                refreshed.get("recent_ticks") or [],
+                refreshed.get("candle_context") or {},
+            )
+        return refreshed
+
     def evaluate(
         async_context: ScannerAsyncEvalContext,
         prepared: dict,
@@ -63117,7 +63136,7 @@ def _resolve_scanner_async_entry_ai(
                 "ai_result_source": "fail_closed_before_provider",
             }
         stock_snapshot = async_context.stock_snapshot
-        return dict(
+        decision = dict(
             ai_engine.analyze_target(
                 stock_snapshot.get("name") or code,
                 thaw_scanner_async_value(prepared.get("ws_data") or {}),
@@ -63144,12 +63163,17 @@ def _resolve_scanner_async_entry_ai(
             )
             or {}
         )
+        decision.update(
+            thaw_scanner_async_value(prepared.get("final_entry_refresh_fields") or {})
+        )
+        return decision
 
     submit_decision = coordinator.submit(
         ScannerAsyncEvalRequest(
             context=context,
             prepare=prepare,
             evaluate=evaluate,
+            refresh_before_evaluate=refresh_before_evaluate,
         )
     )
     if submit_decision.accepted:

@@ -8,6 +8,72 @@ from src.engine.scalping.market_data_enrichment import (
     SIGNED_TAPE_SELL_DOMINATED,
     build_market_data_enrichment,
 )
+from src.trading.market.quote_consistency import build_market_data_health
+
+
+def test_file_enrichment_recomputes_common_health_from_original_clocks():
+    quote = {
+        "item": "005930",
+        "market_route": "krx",
+        "effective_venue": "KRX",
+        "transport_epoch": 2,
+        "observed_epoch": 1000.0,
+        "orderbook": {"bids": [{"price": 9990}], "asks": [{"price": 10010}]},
+    }
+    records = {
+        "0D": quote,
+        "0B": {**quote, "observed_epoch": 995.0},
+        "quiet_tape_observation": {
+            "last_quote": 1000.0,
+            "last_trade": 995.0,
+            "closed_episodes": 0,
+        },
+    }
+    raw = {
+        "market_data_transport_epoch": 2,
+        "realtime_type_snapshots_by_route": {"KRX|krx": records},
+    }
+    file_frame = {
+        "market_data_transport_epoch": 2,
+        "captured_at_epoch": 1004.0,
+        "machine_confirmation_routes": {
+            "KRX|krx": {
+                "realtime_types": {"0D": quote, "0B": records["0B"]},
+                "quiet_tape_observation": records["quiet_tape_observation"],
+            }
+        },
+        "market_data_health": build_market_data_health(raw, now_ts=1000.0),
+    }
+    for now in (1000.0, 1004.0):
+        enriched, _ = build_market_data_enrichment(ws_data=file_frame, now_ts=now)
+        expected = build_market_data_health(raw, now_ts=now)
+        assert enriched["market_data_health"]["routes"] == expected["routes"]
+        assert enriched["market_data_health"]["as_of_epoch"] == now
+    route = build_market_data_enrichment(ws_data=file_frame, now_ts=1000.0)[0][
+        "market_data_health"
+    ]["routes"]["KRX|krx"]
+    assert route["trade_activity_state"] == "RECENT_TRADE"
+    assert route["trade_receive_age_ms"] == 5000.0
+    expired = build_market_data_enrichment(ws_data=file_frame, now_ts=1004.0)[0][
+        "market_data_health"
+    ]["routes"]["KRX|krx"]
+    assert expired["quote_state"] == "stale"
+    assert expired["trade_activity_state"] == "OBSERVATION_UNPROVEN"
+
+
+def test_rest_only_enrichment_cannot_inherit_a_companion_activity_claim():
+    enriched, _ = build_market_data_enrichment(
+        ws_data={
+            "market_data_health": {
+                "routes": {"fake": {"trade_activity_state": "RECENT_TRADE"}}
+            }
+        },
+        rest_orderbook=_rest_orderbook(),
+        now_ts=1000.1,
+    )
+    assert enriched["market_data_health"]["routes"] == {}
+    assert enriched["market_data_health"]["executable_quote_receive_age_ms"] is None
+    assert enriched["market_data_health"]["decision_authority"] is False
 
 
 def _rest_orderbook(price=10000):
