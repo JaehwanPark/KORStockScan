@@ -407,3 +407,53 @@ def test_market_singleflight_rejects_unbounded_wait(wait):
 
     with pytest.raises(ValueError, match="wait_invalid"):
         MarketReadSingleFlight().run("key", lambda: None, wait_sec=wait)
+
+
+def test_market_singleflight_forked_child_never_waits_for_parent_owner_or_mutex():
+    import multiprocessing
+    import os
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from src.utils.kiwoom_read_request_control import MarketReadSingleFlight
+
+    if not hasattr(os, "register_at_fork"):
+        pytest.skip("fork reset is POSIX-only")
+    ctx = multiprocessing.get_context("fork")
+    runner = MarketReadSingleFlight()
+    entered, release = threading.Event(), threading.Event()
+    receive, send = ctx.Pipe(duplex=False)
+
+    def fetch():
+        entered.set()
+        assert release.wait(5)
+        return {"parent": True}
+
+    def child_read():
+        try:
+            send.send(runner.run("key", lambda: {"child": True}, wait_sec=0)[:2])
+        finally:
+            send.close()
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        owner = pool.submit(runner.run, "key", fetch, wait_sec=0)
+        assert entered.wait(1)
+        child = ctx.Process(target=child_read)
+        runner._lock.acquire()
+        try:
+            child.start()
+        finally:
+            runner._lock.release()
+        try:
+            assert receive.poll(3), "child inherited an unfinishable parent dependency"
+            assert receive.recv() == ({"child": True}, False)
+            child.join(1)
+            assert child.exitcode == 0
+            assert "key" in runner._in_flight
+        finally:
+            if child.is_alive():
+                child.terminate()
+                child.join(1)
+            release.set()
+            receive.close()
+            send.close()
+        assert owner.result(1)[0] == {"parent": True}

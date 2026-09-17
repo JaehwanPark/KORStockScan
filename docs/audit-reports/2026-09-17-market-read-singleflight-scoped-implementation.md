@@ -24,6 +24,10 @@ Final implementation worktree: nine affected suites, **707 passed**; compile, Ru
 
 Initial broad run had 502 passes and two fixture failures in physical-worktree low-price research tests; after copying only the existing bounded read fixtures (candidate 520,562 bytes and report 6,145,805 bytes), 504 passed. No source rows, policies or economics were synthesized. A attempted nonexistent suite path ran no tests; it is not counted as validation. The final nine-suite 707 run includes the affected low-price tests. Existing pandas deprecation warning remains a dependency warning, with no package mutation.
 
+## Fork re-review supplement
+
+After the first guarded deployment, the final concurrency review identified inherited parent-thread mutexes and unfinished flights in forked children. Singleflight now resets its mutex/flights in the child; utils resets the process-local normalized cache mutex/cache and token-resolution mutex while retaining valid token replacements. Parent state is unchanged. Regression tests fork with a live parent owner and parent-only held mutexes, require bounded child completion and independent child reads, and preserve the parent response/cache and token handoff. This introduces no authentication request or retry change. Final validation and deployment are recorded below.
+
 ## Remaining acceptance and scope
 
 This closes the reviewed process-local metadata-aware market-read and normalized-cache defects. It does **not** close whole U0–U12, all U5 scheduling/direct-client/WS subscription budgets, production executable no-submit/no-fill/exit/cost quartets, admission/capacity/joint selection, natural next-date policy consumption or economics. Original guards and the existing OPEN owner remain; missing costs/outcomes stay null.

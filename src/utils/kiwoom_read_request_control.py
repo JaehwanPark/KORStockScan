@@ -66,6 +66,14 @@ class MarketReadSingleFlight:
         self._lock = threading.Lock()
         self._in_flight: dict[str, dict[str, Any]] = {}
         self._max_in_flight = max_in_flight
+        if hasattr(os, "register_at_fork"):
+            os.register_at_fork(after_in_child=self._reset_after_fork)
+
+    def _reset_after_fork(self) -> None:
+        # A parent's owner thread does not exist in the forked child. Neither
+        # its mutex nor unfinished result/event may become a child dependency.
+        self._lock = threading.Lock()
+        self._in_flight = {}
 
     def run(self, key: str, fetch: Callable[[], Any], *, wait_sec: float):
         started = time.monotonic()

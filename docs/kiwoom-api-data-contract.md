@@ -240,7 +240,9 @@ retry bound and read coordinator. Continuous reads require an explicit positive
 page bound. `source_only` and `runtime_required` remain separate.
 
 This is process-local singleflight, with at most 128 in-flight keys and no
-completed-response retention. A follower uses its existing read wait budget;
+completed-response retention. A forked child resets inherited mutexes/flights and
+normalized cache retention; valid token replacements and parent state remain.
+A follower uses its existing read wait budget;
 expiry defers without a second HTTP call or cancellation of the owner. Preserve
 the owner's original receive timestamp and physical attempts, and record the
 follower's zero HTTP attempts separately. Never stamp a reused response as new.
