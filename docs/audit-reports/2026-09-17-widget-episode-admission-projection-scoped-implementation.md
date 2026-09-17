@@ -38,3 +38,12 @@ Workspace의 12개 관련 suite **601 passed**를 확인했다. Compile·shell/d
 - 기존 common-health 통합계획 U2–U4 전수 consumer parity/U5 및 나머지 자연·경제성 acceptance도 이번 부분 구현으로 닫지 않는다.
 
 오늘 자연 producer가 만든 projection의 크기·parent binding·native conservation, 20:10/21:15 동일 generation 소비·각 unit terminal을 확인해야 한다. 장중 기동 가능한 immutable source-only release와 next-date policy consumption/실체결 비용 후 EV는 별도 상태다.
+
+## 6. 실제 배포 receipt — 12:18:38 KST
+
+- Source/main commit `d395cf069271fcebed3c8204dfded5b155f916d9`와 managed branch `release/widget-episode-admission-20260917` 모두 원격 push 완료. Release root는 `/home/ubuntu/KORStockScan-runtime-releases/widget-episode-admission-20260917`다. 다른 세션의 wrapper/verifier/문서/generated 변경은 제외했으며 checklist는 이번 추가 한 줄만 선택적으로 commit했다.
+- Workspace 관련12 suite601건, 마지막 supplemental targeted143건, managed shared-path 동일12 suite **601 passed**. 코드/import root 및 변경 module4개의 SHA 일치, source-clean·compile·3 wrapper shell 검증·diff check·print-only current owner1 확인. 이번 검토 범위 finding0이며 전체 계획 finding0/완료가 아니다.
+- `korstockscan-samsung-widget-evaluation.service`와 `korstockscan-machine-microstructure-final-refresh.service`의 working directory/PYTHONPATH/project/python/ExecStart를 해당 root로 pin하고 daemon-reload했다. CPUQuota200%·MemoryMax512MiB/2GiB·timeout·timer20:10/21:15와 기존 기타 env/guard를 보존했다. 두 unit 모두 inactive/MainPID0로 **not_yet_due**이며 과거 Result=success를 오늘 실행 성공으로 세지 않는다. 조기 service start나 report 재생성은 하지 않았다.
+- Main326500·widget trader327012·episode auto-expansion327094 및 메인 selector SHA `ebb089e169777e36c758d206f0d582aebb2e1582f538ca996d779362f5fb5f56` 모두 보존했다. 기존 research collectors pin도 보존했다. 매매 코드/PID 변경이 없어 broker/order API·Provider 호출·재기동은0이다.
+- 오늘 projection은 점검 시 아직 미생성이다. 기존 cron의 다음 자연 report refresh(현행15:15/19:45 등)와 source finalization이 원래 cadence에서 발행해야 한다. 41MiB 원본 full scan/조기 재생성으로 이를 가장하지 않았다. Policy publication/actual consumer acknowledgement·자연 ENTER/SELL·비용 차감 EV/순익은 미입증이다.
+- Scoped validation은 `data/runtime/runtime_release_validation/widget-episode-admission-20260917-d395cf06.json`; operating DONE이나 전략 승인 marker가 아니다. 원래 physical mount 자료는 `tmp/runtime_release_mounts/widget-episode-admission-20260917.AQXzJI`에 보존했다. Rollback은 두 unit의 이번17-z drop-in을 보존 위치로 이동하고 daemon-reload하여 기존16-z research root77abb524로 복귀하는 최소 범위다. 실행 중 여부를 먼저 확인하며 main selector/트레이더는 건드리지 않는다.
