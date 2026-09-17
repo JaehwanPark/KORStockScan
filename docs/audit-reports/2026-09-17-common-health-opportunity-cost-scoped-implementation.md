@@ -356,3 +356,34 @@ Official reference gate: 수정 전 upstream `953e5dbff123f437ab4d11a78a95191a68
 - **16:47:57→16:49:55** cached-token read-only broker 양시장 complete·삼성25/다른2종목0·미체결0·snapshot hash 동일, registry/당일 runtime env/operator override3 hash 불변. Strict env/PID `passed=true`, mismatch/missing/runtime policy fail/dated override fail0; 독립5서비스의 PID/WorkingDirectory/ActiveState 불변. 새16:49:54 snapshot **49stock/health49·기동 후0B7/0D8stock**, 후속 clock 검사future age0이다.
 - Growing pipeline3.91GB는 stat 뒤 **8MiB bounded tail**만 읽었다. 새 PID receipt 뒤402 event의 tail에서price-ready plan/seed0이며 전수 당일 기회0·실패로 해석하지 않는다. 자연 quartet/새price·qty·leg 후보/다음PREOPEN·경제성은 미관측/기존 OPEN이다. 코드·테스트·release/PID 소비를 전수 U0–U12/전체306 의미분류/live migration·경제성 완료로 바꾸지 않는다.
 - [검증·원천·cleanup·rollback record](../../data/runtime/runtime_release_validation/entry-opportunity-census-profile-20260917-67da0cc7.json). 직전 예정b91와 직전 actualc10 release/선택·두 pin backup `tmp/entry-opportunity-census-profile-deploy-20260917-164840`·원 mount `tmp/runtime_release_mounts/entry-opportunity-census-profile-20260917`을 보존한다. 최초 selection receipt는 root-owned600이라 일반 진단 read가 permission error였고 새 receipt/backup 파일의 소유권만 수리했다; 설치 pin은 root 소유 유지다. 비용 큰 report 재생성/실Provider·auth·주문 호출/수동 정책·env·lock·cap·안전 변경0. Cleanup의 free bytes와 별개로 정상 raw 증가/새검증본 생성 뒤 실제 df 여유는 약24GiB(사용84%)다.
+
+
+## 26. 장중 원천 시각·route/epoch 전환과 미래·지연 체결 잔여 수리
+
+사용자 승인: 잔여 구현→리뷰/수정 반복→commit/push→배포/필요 기동. 계획 작성 당시 실행 금지 문구와 구분한다. 기존 helper/cache/adapter/test만 수정했고 신규 Python production module·collector/service/timer/cron/DB/장후 단계·Provider/주문 호출을 추가하지 않았다. U0–U12 전수 완료 receipt가 아니다.
+
+### 수리와 교차 소비 리뷰
+
+- U2/U3/U4: 기존 REST 성공 응답에 원 response receive clock/API/request scope/owner/class를 결속하고 01/03/04/84 및 공유 advisory/collector/holding 소비에서 원시각을 보존했다. type 시각 필드가 있으면 malformed/missing을 aggregate/copy 시각으로 보충하지 않는다. HTTP200/행 수/호가를 genuine 0B·trade pressure·실제 venue로 승격하지 않는다. REST-only activity/count는 unproven/null이다.
+- U5: 기존 market cache/observer/entry latency를 exact item/route/session/epoch와 원 quote receipt/sequence에 결속했다. 동일/과거 frame 재소비는 freshness/jitter를 갱신하지 않으며 observer refresh의 consume clock으로 새 수신시각을 만들지 않는다. 0B/0D 갱신과 transport 감시를 분리하고 NXT quote-only holding/SELL 경로는 유지한다.
+- 미래 clock: canonical source/type/등록 age·widget external context·feature probe와 writer에 signed age를 보존한다. 미래값을 age0 또는 source confidence로 바꾸지 않는다. 기존 broker/account의 별도 시각 계약·stage quote/submit/micro TTL·approved relief는 유지한다.
+- 지연 0B: 공식 FID20의 6자리 HHMMSS만 1초 정밀도를 선언하고 original receive clock에 한 번 결속했다. 날짜 기준은 `local_receive_calendar_date_not_provider_date`이며 KST를 명시한다. 미정의 format/provider date는 raw/null로 남긴다. quote/trade receipt→file bounded projection→common facts→canonical preflight·1초 micro kernel에 provider clock/precision/basis를 전달한다.
+- 최근 수신된 6초 전 event는 로컬 RECENT_TRADE와 현재 required feature 부족을 분리하고 `required_feature_provider_trade_late`로 Provider 호출/진입 우회를 막는다. 미래 provider clock은 source 차단한다. micro에서는 현재 1초 receive window의 known late/future/unproven clock이 trade backing/refill을 증명하지 못한다. 창 밖의 과거 invalid row와 metadata 없는 선언된 legacy receive-window adapter는 정상 입력을 전부 폐기하는 근거로 쓰지 않는다. live/offline hash parity와 malformed/nonfinite source-gap 처리를 확인했다.
+- U6 downstream: 기존 trace/#11 capture에 실제 input health/feature facts를 전달하고 #74에 present/missing receipt 보존식 진단만 추가했다. legacy metadata 부재를 새로운 경제성/승격 gate로 만들거나 기계 BLOCK에 AI 응답을 합성하지 않았다.
+- 기존 shared optional cache의 최신 타 세션 bounded probe/byte-ledger 수리를 merge하고 직접 변경·관련 tests를 재검증했다. 원천/기회/후보/holdout/quantity/target/exit/정책 권한은 유지했다.
+
+### 검증·commit/release/PID
+
+- 첫 세대 `552152a5a92638a5edf17ce41c15c5ac0de64be4`: source 2675 PASS; physical 2674 PASS와 shared report 의존 1건을 공유 경로에서 재검증한 235 PASS를 구분한다. 17:46 main871393 및 영향 8서비스 소비를 확인했다. 이후 미래·지연 event finding을 추가 수리했다.
+- 최종 코드 `ffd565c83018bbe81bcadb4b35a0d6e998e9d0ac`: non-force branch/main push 확인. source 영향 24 suite 2920 PASS(54.13초), 후속 malformed provider normalization/live-offline parity 21 PASS. physical 최종 hash에서 같은 24 suite **2920 PASS(61.33초)**; canonical 공유 경로에서 추가 161 PASS(1.78초). 테스트 수는 겹치는 회귀 분모이므로 합산한 고유 표본/경제성으로 해석하지 않는다.
+- physical source/test 65파일 byte parity·compile·module origins·Ruff F/E9·diff check PASS. scoped finding0이며 global 306 reader의 semantic disposition/전수 live common-health missing0를 증명한 것은 아니다. qualified static AST 306파일/2310 고유 reader-like callsite는 검색 membership이며 semantic/PID 완료표가 아니다.
+- 공식 upstream 조회 16:56:57 KST·배포 전 재fetch 동일 SHA `953e5dbff123f437ab4d11a78a95191a685eb51f`: `kiwoom/specs.py`, `kiwoom/core/client.py`, `kiwoom/realtime/{packets,schemas}.py`, `kiwoom/_data/kiwoom_api_spec.json`, Postman 대사. `kiwoom_docs`는 현행 tree에 없어 contract gap으로 기록했다. request/FID sign/unit/continuation/REG/auth/order wire 계약은 변경하지 않았다.
+- selected managed release: `entry-source-clock-scope-r3-20260917`; **18:15:28 KST main912586** launcher attestation/cwd/source hash 일치. 영향 8서비스 PID: Samsung911385·Doosan911395·Hanwha911401·symbol collector911509·research watch911615·widget trader911626·low-price expansion911699·gunicorn911731. 10 기존 unit의 effective pin/명령/조건/resource 제한을 보존했고 20:10/21:15 2oneshot은 inactive/PID0·예약 유지했다.
+- 전/후 KRX+NXT account/open-order contract PASS: Samsung00593025주·042660/0124500·미체결0, broker snapshot hash `4b42ed0a77efa4f53d79c47191d9edd0b2a8c2c91f3ea4f49f918da96ac1f869` 동일. order-owner registry/당일 threshold env/operator overrides 3SHA 동일. strict dated policy/override와 actual PID env 검증 PASS·missing/mismatch0. custody-aware 기존 restart 사용; 주문·Provider·env/lock/cap/정책 수동 변경0.
+- review/배포 private receipt: `data/runtime/runtime_release_validation/entry-source-clock-scope-r3-20260917-ffd565c8.json`. 준비 중 gunicorn 디렉터리 권한/absent ExecCondition/daemon-reload의 실행 metadata reset을 명시 처리했고 명령 path/argv/flags·MainPID를 별도로 검증했다. 가동 release를 직접 편집하지 않았다.
+
+자연 H receipt(18:17:13 KST): 최신 WS 파일 762209B·47종목/health47, 새 0B8·0D10종목·provider 1초 precision24route·future type age0. 새 기동 이후 기존 pipeline 8MiB bounded tail에서 raw325event를 확인했으나 이 tail에는 preflight/새 quartet event가 없었다. 전체 장중 분모0 또는 정상 source 복구→ENTER/제출/수익 개선으로 해석하지 않는다. 전체 raw 4.81GB는 전수 재스캔하지 않았다.
+
+### 남은 owner와 완료 경계
+
+U2~U4의 이번 clock/metadata scope H와 전수 consumer migration은 구분한다. global U0 semantic ledger·U7~U11 모든 active family disposition·자연 async attempt/가격 quartet·새 후보 선정→next PREOPEN→actual consumer/version attribution·비용 후 실수익은 기존 `KiwoomCommonHealthOpportunityCostAcceptance0917` OPEN을 유지한다. 실제 태생 source, selected family, PID와 자연 경제성을 각각 확인한다. 원천 결손/Provider 미호출·늦은 horizon을 완료 또는 기대 PnL0으로 바꾸지 않는다. 20:10/21:15 자연 스케줄을 앞당기거나 운영 report 전수 재생성하지 않았다.

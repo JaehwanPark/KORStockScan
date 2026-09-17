@@ -36,6 +36,8 @@
 - [기계+compact workorder](machine-compact-auxiliary-postclose-implementation-workorder-2026-09-14.md): 기존 역할·prompt/source partition 계약.
 - [Widget source·성능 계획](widget-postclose-performance-and-source-closure-implementation-plan-2026-09-16.md): 필요한 W0–W7 source/replay closure와 연결한다. 그 계획까지 신규 package로 중복 합산하지 않는다.
 
+추가 잔여 수리 receipt: [부분 구현 리뷰 §26](../audit-reports/2026-09-17-common-health-opportunity-cost-scoped-implementation.md#26-장중-원천-시각routeepoch-전환과-미래지연-체결-잔여-수리). 원 source clock·exact observer/cache·signed future·provider 지연 feature/micro 판정과 기존 trace/audit 전달을 검증·배포했다. scoped H finding0/실제 PID와 global 전수 migration·자연 E 완료는 분리한다.
+
 ## 2. 선행·병행 순서와 두 개의 독립 완료 gate
 
 ### 2.1 실행 원칙
