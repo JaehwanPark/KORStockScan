@@ -12,9 +12,12 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from datetime import date
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
+
+KST = ZoneInfo("Asia/Seoul")
 
 SCHEMA_VERSION = "entry_execution_sizing_plan_v1"
 SCALE_IN_SCHEMA_VERSION = "scale_in_execution_sizing_plan_v1"
@@ -90,7 +93,7 @@ def _runtime_policy(
     )
     if not all(checks):
         return None, "policy_contract_invalid"
-    runtime_date = str(active_date or date.today().isoformat())
+    runtime_date = str(active_date or datetime.now(KST).date().isoformat())
     if expected_active_date != runtime_date:
         return None, "policy_inactive_date"
     return payload, "loaded"

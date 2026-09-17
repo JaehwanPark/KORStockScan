@@ -1,8 +1,11 @@
 import hashlib
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
+
+import pytest
 
 from src.engine.ai_prompt_contracts import (
     DECISION_QUALITY_ENTRY_PRICE_V2_5_LIVE_KRX_PROMPT_VERSION,
@@ -73,6 +76,96 @@ def _env(path: Path) -> dict[str, str]:
         policy.EVIDENCE_PATH_ENV: str(path),
         policy.EVIDENCE_SHA256_ENV: sha,
     }
+
+
+@pytest.mark.parametrize(
+    "invalid", [True, False, float("nan"), float("inf"), -float("inf"), "NaN", 10**1000]
+)
+def test_price_selector_never_accepts_nonfinite_bool_or_overflow_ev(tmp_path, invalid):
+    report = _report()
+    report["outcome_comparison"]["source_quality_adjusted_ev_delta_pct"] = invalid
+    path = tmp_path / "report.json"
+    path.write_text(json.dumps(report))
+    result = policy.resolve_entry_price_live_policy(
+        _snapshot(),
+        env=_env(path),
+        now=datetime(2026, 8, 14, 9, 1, tzinfo=KST),
+    )
+    assert result["selected_prompt_version"] == policy.CONTROL_PROMPT_VERSION
+    assert result["runtime_effect"] is False
+    assert "evidence_ev_delta_not_positive" in result["blocking_reasons"]
+
+
+@pytest.mark.parametrize(
+    "field,invalid",
+    [
+        ("provider_failed_count", False),
+        ("schema_rejected_count", False),
+        ("request_count", True),
+        ("request_count", float("inf")),
+    ],
+)
+def test_price_selector_rejects_boolean_and_nonfinite_result_counts(field, invalid):
+    report = _report()
+    report[field] = invalid
+    assert policy._evidence_errors(report)
+
+
+def test_price_evidence_hash_and_json_use_one_opened_snapshot(tmp_path, monkeypatch):
+    path = tmp_path / "report.json"
+    path.write_text(json.dumps(_report()))
+    env = _env(path)
+    read_text = Path.read_text
+
+    def forbid_second_read(self, *args, **kwargs):
+        if self == path:
+            pytest.fail("Hash and JSON must use the same opened evidence snapshot")
+        return read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", forbid_second_read)
+    result = policy.resolve_entry_price_live_policy(
+        _snapshot(),
+        env=env,
+        now=datetime(2026, 8, 14, 9, 1, tzinfo=KST),
+    )
+    assert result["status"] == "active_krx_regular_v2_5"
+
+
+def test_price_evidence_cache_rechecks_changed_content_with_same_size_and_mtime(
+    tmp_path,
+):
+    path = tmp_path / "report.json"
+    original = json.dumps(_report()) + " " * 32
+    path.write_text(original)
+    stat = path.stat()
+    env = _env(path)
+    now = datetime(2026, 8, 14, 9, 1, tzinfo=KST)
+    assert (
+        policy.resolve_entry_price_live_policy(_snapshot(), env=env, now=now)["status"]
+        == "active_krx_regular_v2_5"
+    )
+    changed = _report()
+    changed["outcome_comparison"]["source_quality_adjusted_ev_delta_pct"] = float("nan")
+    modified = json.dumps(changed)
+    path.write_text(modified + " " * (len(original) - len(modified)))
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+    assert path.stat().st_size == stat.st_size
+    assert path.stat().st_mtime_ns == stat.st_mtime_ns
+    result = policy.resolve_entry_price_live_policy(_snapshot(), env=env, now=now)
+    assert result["selected_prompt_version"] == policy.CONTROL_PROMPT_VERSION
+    assert "evidence_report_hash_mismatch" in result["blocking_reasons"]
+
+
+def test_invalid_utf8_pinned_price_evidence_fails_closed(tmp_path):
+    path = tmp_path / "report.json"
+    path.write_bytes(b"\xffinvalid-json")
+    result = policy.resolve_entry_price_live_policy(
+        _snapshot(),
+        env=_env(path),
+        now=datetime(2026, 8, 14, 9, 1, tzinfo=KST),
+    )
+    assert result["selected_prompt_version"] == policy.CONTROL_PROMPT_VERSION
+    assert "evidence_schema_invalid" in result["blocking_reasons"]
 
 
 def test_resolve_entry_price_live_policy_selects_only_verified_krx_regular(

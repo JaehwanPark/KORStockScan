@@ -3885,7 +3885,7 @@ def build_quantity_leg_four_arm_evaluation(
                 valid_date = (
                     parsed_date.isoformat() == signed_date
                     and signed_date >= "2026-06-05"
-                    and parsed_date <= date.today()
+                    and parsed_date <= datetime.now(timezone(timedelta(hours=9))).date()
                     and source_date in {"undated", signed_date}
                 )
             except ValueError:

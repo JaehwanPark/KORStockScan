@@ -1,5 +1,8 @@
 import hashlib
 import json
+from datetime import datetime
+
+from src.engine.scalping import entry_execution_sizing_plan as sizing
 
 from src.engine.scalping.entry_execution_sizing_plan import (
     ENTRY_EXECUTION_SIZING_POLICY_SCHEMA,
@@ -114,10 +117,7 @@ def test_dated_price_and_integrated_sizing_policies_bind_without_new_authority(
         "SHA256": sizing_sha,
     }.items():
         monkeypatch.setenv(f"KORSTOCKSCAN_ENTRY_EXECUTION_SIZING_POLICY_{suffix}", value)
-    monkeypatch.setattr(
-        "src.engine.scalping.entry_execution_sizing_plan.date",
-        type("FixedDate", (), {"today": staticmethod(lambda: __import__("datetime").date(2026, 9, 16))}),
-    )
+    _freeze_kst_clock(monkeypatch, "2026-09-16T10:00:00+09:00")
     priced = _priced({"qty": 1, "price": 1000})
     priced["entry_price_policy_version"] = "mechanistic:test"
     priced["entry_price_policy_sha256"] = price_sha
@@ -181,10 +181,7 @@ def test_dated_sizing_policy_rejects_cross_owner_version_mismatch(
         "SHA256": sha,
     }.items():
         monkeypatch.setenv(f"KORSTOCKSCAN_ENTRY_EXECUTION_SIZING_POLICY_{suffix}", value)
-    monkeypatch.setattr(
-        "src.engine.scalping.entry_execution_sizing_plan.date",
-        type("FixedDate", (), {"today": staticmethod(lambda: __import__("datetime").date(2026, 9, 16))}),
-    )
+    _freeze_kst_clock(monkeypatch, "2026-09-16T10:00:00+09:00")
 
     _, fields = compose_entry_execution_sizing_plan(
         [_priced({"qty": 1, "price": 1000})],
@@ -237,14 +234,7 @@ def test_dated_sizing_policy_rejects_referenced_policy_hash_drift(
         "SHA256": sha,
     }.items():
         monkeypatch.setenv(f"KORSTOCKSCAN_ENTRY_EXECUTION_SIZING_POLICY_{suffix}", value)
-    monkeypatch.setattr(
-        "src.engine.scalping.entry_execution_sizing_plan.date",
-        type(
-            "FixedDate",
-            (),
-            {"today": staticmethod(lambda: __import__("datetime").date(2026, 9, 16))},
-        ),
-    )
+    _freeze_kst_clock(monkeypatch, "2026-09-16T10:00:00+09:00")
     quantity_path.write_text('{"policy_version":"drifted"}', encoding="utf-8")
 
     _, fields = compose_entry_execution_sizing_plan(
@@ -617,3 +607,33 @@ def test_scale_in_plan_rejects_quantity_below_final_authorized_total():
     assert "quantity_conservation_failed" in fields[
         "scale_in_execution_sizing_blockers"
     ]
+
+
+def _freeze_kst_clock(monkeypatch, value):
+    instant = datetime.fromisoformat(value)
+
+    class FixedClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            assert tz is not None
+            return instant.astimezone(tz)
+
+    monkeypatch.setattr(sizing, "datetime", FixedClock)
+
+
+def test_default_runtime_policy_date_uses_kst_during_utc_date_boundary(tmp_path, monkeypatch):
+    _freeze_kst_clock(monkeypatch, "2026-09-17T16:00:00+00:00")
+    prefix = "TEST_DATED_POLICY_"
+    payload = {
+        "schema_version": "test-schema", "policy_owner": "test-owner",
+        "policy_version": "v1", "source_date": "2026-09-17",
+        "active_date": "2026-09-18", "runtime_apply_allowed": True,
+    }
+    path, sha = _write_policy(tmp_path, "dated.json", payload)
+    for suffix, value in {
+        "ENABLED": "true", "FILE": str(path), "VERSION": "v1",
+        "SOURCE_DATE": "2026-09-17", "ACTIVE_DATE": "2026-09-18", "SHA256": sha,
+    }.items():
+        monkeypatch.setenv(prefix + suffix, value)
+    assert sizing._runtime_policy(prefix=prefix, schema="test-schema", owner="test-owner") == (payload, "loaded")
+    assert sizing._runtime_policy(prefix=prefix, schema="test-schema", owner="test-owner", active_date="2026-09-17") == (None, "policy_inactive_date")

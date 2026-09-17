@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 from datetime import datetime
 from pathlib import Path
@@ -31,37 +32,23 @@ EVIDENCE_SHA256_ENV = "KORSTOCKSCAN_ENTRY_PRICE_V2_5_KRX_EVIDENCE_SHA256"
 EXPECTED_REPORT_SCHEMA = "ai_prompt_stage_coverage_replay_v1"
 EXPECTED_REPORT_STATUS = "coverage_replay_complete_candidate_quality_pass_offline_only"
 EXPECTED_SEMANTIC_VALIDATOR = "entry_price_explicit_fill_value_semantic_v6"
-_EVIDENCE_CACHE: dict[tuple[str, int, int, str], tuple[str | None, list[str]]] = {}
+_EVIDENCE_CACHE: dict[
+    tuple[str, int, int, int, int, int, str], tuple[str | None, list[str]]
+] = {}
 
 
 def _enabled(value: Any) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _file_sha256(path: Path) -> str | None:
-    try:
-        digest = hashlib.sha256()
-        with path.open("rb") as handle:
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                digest.update(chunk)
-        return digest.hexdigest()
-    except OSError:
-        return None
-
-
-def _read_json(path: Path) -> dict[str, Any]:
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    return payload if isinstance(payload, dict) else {}
-
-
 def _number(value: Any) -> float | None:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
+    if isinstance(value, bool):
         return None
+    try:
+        result = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return result if math.isfinite(result) else None
 
 
 def _integer(value: Any) -> int | None:
@@ -158,19 +145,32 @@ def _validated_evidence(
     path: Path, configured_sha: str
 ) -> tuple[str | None, list[str]]:
     try:
-        stat = path.stat()
+        with path.open("rb") as handle:
+            stat = os.fstat(handle.fileno())
+            key = (
+                str(path),
+                stat.st_dev,
+                stat.st_ino,
+                stat.st_ctime_ns,
+                stat.st_mtime_ns,
+                stat.st_size,
+                configured_sha,
+            )
+            cached = _EVIDENCE_CACHE.get(key)
+            if cached is not None:
+                return cached
+            encoded = handle.read()
     except OSError:
         return None, ["evidence_report_missing"]
-    key = (str(path), stat.st_mtime_ns, stat.st_size, configured_sha)
-    cached = _EVIDENCE_CACHE.get(key)
-    if cached is not None:
-        return cached
-    actual_sha = _file_sha256(path)
-    errors = (
-        ["evidence_report_hash_mismatch"]
-        if not configured_sha or configured_sha != actual_sha
-        else _evidence_errors(_read_json(path))
-    )
+    actual_sha = hashlib.sha256(encoded).hexdigest()
+    if not configured_sha or configured_sha != actual_sha:
+        errors = ["evidence_report_hash_mismatch"]
+    else:
+        try:
+            payload = json.loads(encoded.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            payload = {}
+        errors = _evidence_errors(payload if isinstance(payload, dict) else {})
     result = (actual_sha, errors)
     _EVIDENCE_CACHE.clear()
     _EVIDENCE_CACHE[key] = result

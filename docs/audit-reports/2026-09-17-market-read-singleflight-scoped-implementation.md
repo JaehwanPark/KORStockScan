@@ -118,3 +118,22 @@ follow after closure.
 Whole U0–U12, full transport migration/scheduler, executable four-arm production,
 admission/capacity/joint selection, next-date natural policy and economics remain
 OPEN; these are not all mislabeled as sample waits.
+
+
+## Price evidence and KST dated handoff re-review
+
+The existing entry-price prompt selector accepted bool/nonfinite numeric evidence,
+and hashed one file read before parsing another. Reject bool, NaN, infinity and
+numeric overflow; hash and parse one UTF-8 opened snapshot. The bounded evidence
+cache also binds device/inode/ctime, so equal-size retimestamped replacement does
+not reuse an earlier PASS. Invalid evidence keeps the original v1 fallback;
+operator enable/date, economic/sample floors and order/provider authority remain
+unchanged. This is evidence validation, not activation of a new prompt.
+
+The atomic execution-sizing dated loader and signed quantity/leg four-arm source
+date upper bound now use explicit KST instead of host-local date. Regression
+fixtures cover UTC/KST midnight, future signed date rejection and explicit-date
+mismatch. Existing sizing policy pins, quantity conservation and promotion
+contracts remain unchanged. Scope findings0; nine affected suites **826 passed**, compile/Ruff/diff and
+print-only parser passed. Managed release/PID receipts follow below. Whole U0–U12 and economic acceptance remain
+OPEN under the same owner.

@@ -4920,3 +4920,33 @@ def test_hydrated_exploration_restores_terminal_guards_exact_target(
         assert stock["entry_split_probe_terminal_abort_reason"] == (
             "entry_setup_bounded_exploration_probe_only"
         )
+
+
+@pytest.mark.parametrize("signed_date,expected", [("2026-09-18", 30), ("2026-09-19", 0)])
+def test_four_arm_source_date_uses_kst_and_rejects_future_date(monkeypatch, signed_date, expected):
+    instant = datetime(2026, 9, 17, 16, 0, tzinfo=timezone.utc)
+
+    class HostUTCDate(date):
+        @classmethod
+        def today(cls):
+            return instant.date()
+
+    class FixedClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            assert tz is not None
+            return instant.astimezone(tz)
+
+    monkeypatch.setattr(split_plan, "date", HostUTCDate)
+    monkeypatch.setattr(split_plan, "datetime", FixedClock)
+    events = _quantity_leg_four_arm_events()
+    for event in events:
+        receipt = event["entry_quantity_leg_four_arm_evaluation"]
+        receipt["source_date"] = signed_date
+        for arm in receipt["arms"].values():
+            arm["terminal_observed_at"] = "2026-09-18T00:30:00+09:00"
+        _resign_four_arm_receipt(receipt)
+    result = split_plan.build_quantity_leg_four_arm_evaluation(events)
+    assert result["complete_exact_attempt_count"] == expected
+    if not expected:
+        assert result["excluded_counts"]["source_date_contract_invalid"] == 30
