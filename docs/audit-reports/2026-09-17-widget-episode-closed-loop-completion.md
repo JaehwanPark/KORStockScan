@@ -43,3 +43,11 @@ Source d49c51f7, latest upstream028141ee 통합48885ca0. 통합11 suites **1,157
 ### Supplemental shared-path review
 
 C7 independent native reconstruction의 source receipt key를 resolved canonical shared path로 정규화했다. 같은 native bytes를 다른 release symlink에서 읽어도 동일 feedback이며 alias 회귀를 추가했다. 기존 source SHA c81a8a8e scale units는 첫 N19 checkpoint 이전 의도적으로 supersede/중단했고 latest code 성능으로 재사용하지 않는다. 최신 frozen 소스로 전체 grid 측정을 다시 시작한다. 이 수정은 economic/retirement floor·비용·qty·정책 authority를 바꾸지 않는다.
+
+### Latest supplemental source / storage receipt
+
+Shared-path normalization source f91b5cbf: source7 suites381 PASS/61.10초, affected C7/C4/publisher79 PASS 및 immutable r2 동일79 PASS/21.72초. Final producer/helper SHA `fa3fe2ae…` 고정. 최신 normalized statistics6조건 완료: N100D120 wall5.427초/CPU1.051초(공동 비교0.341초)/RSS156,224KiB/remote0이며 source byte/path 정합을 유지한다. 이는 full native chain throughput이 아니다.
+
+오래된 own synthetic fixture units를 supersede한 뒤 PID identity/live·persistent pins 부재 및 optional-only 파일명들을 확인하여72,928,483bytes의 cache payload/metadata를 정리했다. 원천·정책·runtime receipt·holding은 삭제하지 않았다. 별도 외부 정리로 변한 host 전체 free space를 본 작업의 절감으로 세지 않는다.
+
+Episode scale generator는 `analysis/benchmarks/widget_episode_incremental_scale.py`의 offline ownership이다. Native allowlist guard가 invented symbol을 거부했으므로 guard를 유지하고 기존61 templates의 첫19개 원 symbol/profile 및 모든 native grid를 그대로 사용한다. Synthetic390-bar D120/D121 cold/warm/append 결과를 original no-cache와 비교하고 oracle/preparation CPU를 candidate compute와 분리한다. No broker/native policy acceptance이며 actual source/registry에 fixture를 기록하지 않는다.
