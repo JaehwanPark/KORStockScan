@@ -59,7 +59,7 @@ Official reference receipt (`2026-09-17T01:15:02+09:00` 재확인 기록): upstr
 | U6 | partial | operational/decision-CF gate와 중복 case 분모 수정. 전체 row disposition/census 전수 잔여 |
 | U7 | scoped common/all-supported hierarchy implemented | §8–§10 전수 원천·현재 incumbent 비교·양수 순 EV/전체 paired 개선·exact-parent 자동 발행. 자연 generation·전체 원장 대사는 잔여 |
 | U8 | scoped router implemented / natural pending | §11 CAUTION checkpoint 기회비용·차단으로 피한 손실의 대칭 비교, INSUFFICIENT 원천 복구 분리, 현재 compact partition과 next-date 자동 발행. 자연 generation·전수 전달 acceptance 잔여 |
-| U9 | scoped receipt/publisher/chronological proof closure implemented | §12–§14 four-arm finite/분모·상충 격리·정책 hash/date/authority·calibration/holdout 증거의 publisher/PREOPEN/runtime 독립 검증. 전체 price-ready no-submit/no-fill adapter·양수 small-net versioned 평가 계약은 잔여 |
+| U9 | scoped receipt/publisher/proof/source-delivery implemented | §12–§15 four-arm finite/분모·상충 격리·정책 hash/date/authority·calibration/holdout 증거의 publisher/PREOPEN/runtime 독립 검증과 owner 발급 price-ready 계획→기존 미진입 보고서→Daily exact lineage 전달. executable no-fill/exit/cost quartet 생성·양수 small-net versioned 평가 계약은 잔여 |
 | U10 | pending | 독립 owner CF admission 및 active family fill-bias 실제 결손 수리 |
 | U11 | pending | family별 auto handoff·floor 달성 가능성·최종 요약 closure |
 | U12 | scoped validation complete | 부분 H managed release 통합 검증·오늘 기존 PREOPEN/start route. 전체 fixed-point 미완료 |
@@ -168,6 +168,18 @@ Official reference receipt (`2026-09-17T01:15:02+09:00` 재확인 기록): upstr
 - 소스 `9776fab0`를 기존 main 이력에 일반 merge한 **`b8db75d8`**를 검증/fast-forward push하고 새 managed release를 선택했다. 기존 graceful 경로1회로 PID56789 종료→**PID73587**,08:43:47 기동·singleton1·source-clean·strict 당일 env/PID PASS/mismatch·missing0/미검증 family0. 오늘 가격·수량/leg loader는 모두 `disabled_baseline`으로 새 challenger가 아니라 기존 기본 정책을 소비한다. [가동 검증 receipt](../../data/runtime/runtime_release_validation/u9-chronological-closure-20260917-b8db75d8.json)를 보존한다.
 - broker 사전08:42:34/사후08:44:06 KRX/NXT 정상화 complete, 삼성25주/매수가269471·미체결0 동일, custody·env·dated machine policy SHA256 동일. main loop/broker sync와 새 WS 연결·LOGIN ACK·005930 첫0B/0D 수신을 확인했다. 단,08:44:02 source-only registration receipt는43 item 중12 complete/31 incomplete·exact-route complete=false다. 첫 데이터 수신을 전 scope ordered micro acceptance로 확대하지 않으며 WS budget/continuity는 기존 U5 잔여에 유지한다.
 - 잔여: production 자연 quartet 생성·signed date 전달의 실제 실행 증거, 전체 price-ready 미제출/no-fill CF adapter·stress/capacity 선정과 절대0.10% owning 계약 개선, U0–U6 전수 parity/budget 및 U10/U11. 검색에서 quartet field의 기존 reader들은 확인됐지만 자연 생성자를 입증하지 못했으므로 collector 정상·유한 ETA·U9 전체 완료로 표시하지 않는다. 코드 검증과 자연 정책 소비/미진입 기회비용 개선·실수익은 별도다.
+
+## 15. Owner 발급 price-ready 계획의 기존 미진입 보고서·Daily 전달 보완
+
+2026-09-17 09시대 후속. 기존 `sniper_missed_entry_counterfactual`/Daily compact reader와 기존 회귀 테스트만 보완했다. 새 collector·모듈·서비스·장후 producer·Provider 호출은 없다. U9 전체 경제성 adapter 또는 U0–U12 전체 구현 완료가 아니다.
+
+- 최초 결손: 미진입 보고서는 기존 AI BUY/armed만 인식했고, `entry_execution_sizing_plan`의 원래 가격·수량과 attempt/정책 hash를 projection에서 버렸다. 실제 binder가 이미 발급한 유효한 plan/price SHA256·schema·초기진입 owner·quantity 보존/authority 금지·같은 scope를 검증하여 가격 준비 뒤 미제출 기회를 기존 후행 보고서에 남긴다. BLOCK 종목에 주문가격이나 AI PASS를 발명하지 않는다.
+- `scanner_promotion_id × evaluation_attempt_id × stock_code × effective_venue × market_session_bucket × policy_bundle_sha256`으로 Daily 직접 소비를 결속한다. exact identity가 불완전/다른 scope이면 shared record/candidate 별칭으로 우회하지 않는다. 기존 legacy 진단은 원래 분모로 보존한다. 계획 본문은 각16KiB 이하로 제한하고 Daily에는 검증 후 scalar identity만 남긴다.
+- 같은 exact attempt의 중복은 최초 anchor를 유지하고 다른 legacy record/중간 scope를 거친 반복도 합친다. 상충하는 유효 계획은 전체 exact identity를 격리한다. 같은 legacy record/초에 발생한 다른 attempt·정책 bundle은 별개다. 새 projection은 `missed_entry_counterfactual_compact_v3`이며 UTC anchor를 KST로 대사하고 잘못된 date/naive clock은 새 price-ready 원천으로 인정하지 않는다.
+- 원 owner의 계획 가격·수량을 유지하며 기존 virtual sizing을 다시 호출하지 않는다. probe 잔량의 미발급 미래 가격은 null이다. 전체 계획금액과 이미 가격이 있는 leg 금액을 분리하고, `counterfactual_notional_krw`/추정 PnL은 null이다. watch-cycle의 net EV 분모에도 넣지 않는다. `price_ready_source.economic_pair_eligible=false`, `exact_fill_exit_cost_counterfactual_replay_missing`를 직접 전달하여 분봉 MFE/close를 fill·exit·비용 replay 또는 자연 경제성 quartet으로 승격하지 않는다.
+- 기대효과는 가격/수량 준비 뒤 사라진 미제출 기회를 기존 보고서와 Daily에서 추적할 수 있게 하는 것이다. 아직 추가 순익/참여율의 수치를 예측하거나 가격·수량 정책 승격 효과로 귀속할 근거는 없다. 기존 장후 자동 실행/다음 PREOPEN publisher·loader 연결은 유지하며 별도 사용자 승인·실체결·추가 표본 floor를 원천 수리의 수용조건에 붙이지 않는다. 기계 action·compact AI·numeric 가격·수량 tier/cap·leg 집행·scale-in·broker/source/hard safety와 오늘 env/dated 정책은 변경하지 않는다.
+- 구현→self review→수정→re-review에서 hash 변조/상충·중복 anchor·scope 혼입·미래 잔량·원래 qty 재계산·분봉 경제성 오인·날짜/시계 결손을 점검했다. 최종 작업본 관련10개 suite **1117 passed**, compile·shell syntax·`git diff --check`·print-only parser 통과(count31/기존 acceptance owner1). 이번 원천 전달 범위의 미해결 finding0이며 배포/PID는 후속 receipt로 별도 검증한다. 전체 잔여 경제성 구현에는 finding0을 선언하지 않는다.
+- 잔여: signed-date 자연 quartet 생성자/직접 전달, same-opportunity executable fill/confirmed no-fill/owner exit/cost/stress/capacity·holdout 및 절대0.10% owning 계약 재설계, 전수 parity/scheduler와 U10/U11. 오늘 대용량 growing raw의 전체 스캔, 조기 report 재생성 및 Provider/API replay는 하지 않는다. 테스트 후속 가격 API는 fixture로 격리하며 배포 broker 점검은 기존 adapter의 읽기 전용 조회로 별도 기록한다.
 
 Project/Calendar 동기화는 실행하지 않는다. 사용자 표준 명령:
 
