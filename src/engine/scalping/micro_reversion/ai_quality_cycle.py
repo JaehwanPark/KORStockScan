@@ -24,6 +24,7 @@ import stat
 import subprocess
 import sys
 from collections import Counter, defaultdict
+from contextlib import ExitStack
 from dataclasses import asdict
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -438,6 +439,67 @@ def _artifact_path_present(path: Path) -> bool:
     """Census a directory entry without following a possibly broken symlink."""
 
     return path.exists() or path.is_symlink()
+
+
+def _load_discovery_floor(
+    path: Path, cache: dict[Path, tuple[tuple[Any, ...], dict[str, Any]]] | None
+) -> dict[str, Any]:
+    """Reuse only unchanged small floors within one backfill discovery.
+
+    This is not a Provider-result or budget cache. Both plain/gzip entries and
+    the pinned parent remain part of the identity; callers still validate the
+    floor's semantic hash, date and exact receipt binding on every use. The
+    private discovery/selection readers borrow facts read-only; no candidate,
+    checkpoint, reservation or mutable owner state is stored here.
+    """
+
+    if cache is None:
+        return _load_json_auto(path)
+    with ExitStack() as stack:
+        try:
+            lease = stack.enter_context(
+                json_artifact_generation_lock(path, exclusive=False, blocking=False)
+            )
+        except OSError as exc:
+            if not str(exc).startswith("json_generation_lock_busy:"):
+                raise
+            # Optimization must not add a reservation/source wait. The original
+            # strict pinned reader still rejects unstable or conflicting files.
+            cache.clear()
+            return _load_json_auto(path)
+
+        def census() -> tuple[Any, ...]:
+            lease.assert_parent_current()
+            entries = []
+            for name in (lease.logical.name, lease.logical.name + ".gz"):
+                metadata = lease.stat_name(name)
+                if metadata is None:
+                    continue
+                if not stat.S_ISREG(metadata.st_mode):
+                    raise ValueError(f"json_artifact_path_type_invalid:{path}")
+                entries.append(
+                    (name, metadata.st_dev, metadata.st_ino, metadata.st_size,
+                     metadata.st_mtime_ns, metadata.st_ctime_ns)
+                )
+            return (lease.parent_identity, tuple(entries))
+
+        before = census()
+        cached = cache.get(lease.logical)
+        if cached is not None and cached[0] == before:
+            payload = cached[1]
+        else:
+            # Never keep a stale entry if strict decoding/dual-copy validation
+            # fails. A corrected source must be decoded by the original reader.
+            cache.pop(lease.logical, None)
+            payload = read_json_object_strict(lease.logical, generation=lease)
+        if census() != before:
+            cache.pop(lease.logical, None)
+            raise ValueError(f"json_artifact_changed_during_read:{path}")
+        if cached is None or cached[0] != before:
+            # Bound decoded storage too: a tiny gzip is not a small payload.
+            if len(cache) < 32 and len(json.dumps(payload).encode("utf-8")) <= 262144:
+                cache[lease.logical] = (before, payload)
+        return payload
 
 
 def _load_json_with_raw_artifact(
@@ -8950,6 +9012,7 @@ def _historical_backfill_dates(
     current_target_date: str,
     daily_attempt_cap: int,
     parent_cap: int,
+    floor_cache: dict[Path, tuple[tuple[Any, ...], dict[str, Any]]] | None = None,
 ) -> list[str]:
     """Return the oldest bounded dates that can receive one A/B/C parent.
 
@@ -8982,7 +9045,7 @@ def _historical_backfill_dates(
         if floor_date == current_target_date:
             floor = provider_floor
         elif _artifact_path_present(existing_or_gzip_path(logical_path)):
-            floor = _load_json_auto(logical_path)
+            floor = _load_discovery_floor(logical_path, floor_cache)
         else:
             continue
         if not isinstance(floor, Mapping):
@@ -9237,6 +9300,7 @@ def _historical_backfill_floor(
     target_date: str,
     current_target_date: str,
     current_floor: Mapping[str, Any],
+    floor_cache: dict[Path, tuple[tuple[Any, ...], dict[str, Any]]] | None = None,
 ) -> tuple[Path, dict[str, Any]]:
     """Select the oldest exact floor, preserving any persisted hash binding."""
 
@@ -9304,7 +9368,7 @@ def _historical_backfill_floor(
         if floor_date == current_target_date:
             floor = dict(current_floor)
         elif _artifact_path_present(existing_or_gzip_path(logical_path)):
-            floor = _load_json_auto(logical_path)
+            floor = _load_discovery_floor(logical_path, floor_cache)
         else:
             continue
         content_hash = str(floor.get("floor_content_sha256") or "")
@@ -9413,12 +9477,14 @@ def _run_bounded_historical_provider_backfill(
     )
     if parent_slot_limit <= 0:
         return steps, admissions, 0, False, blockers
+    floor_cache: dict[Path, tuple[tuple[Any, ...], dict[str, Any]]] = {}
     try:
         historical_dates = _historical_backfill_dates(
             provider_floor=current_floor,
             current_target_date=current_target_date,
             daily_attempt_cap=daily_attempt_cap,
             parent_cap=parent_cap,
+            floor_cache=floor_cache,
         )
     except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
         blockers.append(
@@ -9432,6 +9498,7 @@ def _run_bounded_historical_provider_backfill(
                 target_date=historical_date,
                 current_target_date=current_target_date,
                 current_floor=current_floor,
+                floor_cache=floor_cache,
             )
             context = _load_historical_backfill_context(
                 target_date=historical_date,
