@@ -2,8 +2,193 @@ import sys
 import types
 import json
 import weakref
+import copy
+import hashlib
+import pytest
 
 from src.engine import sniper_missed_entry_counterfactual as report_mod
+
+
+def _price_ready_row(monkeypatch, *, attempt="eval-1", second="00", price=10000, bundle="a", deferred=False):
+    from src.engine.scalping.entry_execution_sizing_plan import (
+        compose_entry_execution_sizing_plan, PRICE_OWNER, ENTRY_PRICE_POLICY_VERSION,
+        ENTRY_PRICE_POLICY_SHA256,
+    )
+    for prefix in ("ENTRY_EXECUTION_SIZING", "MECHANISTIC_ENTRY_PRICE"):
+        monkeypatch.setenv(f"KORSTOCKSCAN_{prefix}_POLICY_ENABLED", "false")
+    _, fields = compose_entry_execution_sizing_plan(
+        [{"qty": 1 if deferred else 10, "price": price, "entry_price_owner": PRICE_OWNER,
+          **({"entry_split_order_probe_continuation": {"requested_qty": 10, "residual_quantities": [9]}}
+             if deferred else {}),
+          "entry_price_policy_version": ENTRY_PRICE_POLICY_VERSION,
+          "entry_price_policy_sha256": ENTRY_PRICE_POLICY_SHA256,
+          "entry_price_receipt_sha256": "b" * 64, "entry_price_route": "KRX",
+          "entry_price_epoch": "epoch-1", "entry_price_captured_at": 1789603200.0}],
+        expected_total_qty=10, action_receipt={
+            "evaluation_attempt_id": attempt, "scanner_promotion_id": "promo-1",
+            "policy_bundle_hash": bundle * 64, "effective_venue": "KRX",
+            "market_session_bucket": "KRX_REGULAR",
+            "entry_primary_decision_owner": "mechanistic_entry_adjudicator",
+            "entry_mechanistic_action": "ENTER_NOW", "entry_ai_screen_pass": True,
+        }, quantity_policy_version="qty-current", split_policy_version="split-current",
+    )
+    assert fields["entry_execution_sizing_valid"]
+    return {"pipeline": "ENTRY_PIPELINE", "stock_code": "005930", "stock_name": "Samsung",
+        "record_id": "record-1", "emitted_at": f"2026-09-17T10:00:{second}+09:00",
+        "emitted_date": "2026-09-17", "stage": "entry_execution_sizing_plan", "fields": fields}
+
+
+def test_price_ready_plan_reaches_existing_cf_and_daily_without_assuming_fill(monkeypatch, tmp_path):
+    from src.engine import daily_threshold_cycle_report as daily
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(daily, "REPORT_DIR", tmp_path / "report")
+    row = _price_ready_row(monkeypatch)
+    _write_pipeline_events(tmp_path, "2026-09-17", [row])
+    events = report_mod._load_entry_events("2026-09-17")
+    attempts = report_mod._build_buy_attempts("2026-09-17", events=events)
+    assert len(attempts) == 1
+    assert attempts[0]["buy_intent_source"] == "mechanistic_price_ready_plan"
+    assert attempts[0]["signal_price"] == 10000
+    assert attempts[0]["evaluation_attempt_id"] == "eval-1"
+    assert attempts[0]["target_qty"] == 10
+    fake = types.SimpleNamespace(get_minute_candles_ka10080=lambda *_a, **_k: [
+        _make_candle(f"10:{minute:02}:00", 10000, 10200, 9990, 10100) for minute in range(1, 17)])
+    import src.utils as utils_pkg
+    monkeypatch.setattr(utils_pkg, "kiwoom_utils", fake, raising=False)
+    monkeypatch.setitem(sys.modules, "src.utils.kiwoom_utils", fake)
+    monkeypatch.setattr(report_mod, "_sim_virtual_qty", lambda *_a, **_k: pytest.fail("owner quantity must not be recalculated"))
+    report = report_mod.build_missed_entry_counterfactual_report("2026-09-17", token="dummy")
+    cf_row = report["full_rows"][0]
+    assert cf_row["price_ready_source"]["economic_pair_eligible"] is False
+    assert cf_row["estimated_counterfactual_pnl_10m_krw"] is None
+    assert cf_row["counterfactual_qty"] == 10
+    assert cf_row["counterfactual_notional_krw"] is None
+    assert cf_row["price_ready_source"]["planned_notional_krw"] == 100000
+    assert report["watch_cycle_participation_ledger"]["summary"]["unsubmitted_ev_eligible_cycle_count"] == 0
+    assert report["meta"]["input_streaming"]["price_ready_attempt_count"] == 1
+    path = tmp_path / "report" / "monitor_snapshots" / "missed_entry_counterfactual_2026-09-17.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"rows": [cf_row]}))
+    compact = daily._compact_threshold_cycle_event(row)
+    assert "entry_execution_sizing_plan" not in compact["fields"]
+    assert compact["fields"]["evaluation_attempt_id"] == "eval-1"
+    diagnostics = daily._dynamic_entry_price_counterfactual_join_diagnostics([compact], target_date="2026-09-17")
+    assert diagnostics["joined_sample"] == 1
+    assert diagnostics["join_semantics"] == "identity_lineage_diagnostic_only_not_economic_pair"
+    cf_row["effective_venue"] = "NXT"
+    path.write_text(json.dumps({"rows": [cf_row]}))
+    assert daily._dynamic_entry_price_counterfactual_join_diagnostics([compact], target_date="2026-09-17")["joined_sample"] == 0
+
+
+@pytest.mark.parametrize("corruption", ["plan_hash", "price_hash", "owner", "authority", "scope", "oversized", "date", "naive_clock"])
+def test_invalid_price_ready_plan_never_invents_buy_intent(monkeypatch, tmp_path, corruption):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    row = _price_ready_row(monkeypatch)
+    fields = row["fields"]
+    if corruption == "plan_hash":
+        fields["entry_execution_sizing_plan_sha256"] = "0" * 64
+    elif corruption == "price_hash":
+        fields["entry_price_plan_sha256"] = "0" * 64
+    elif corruption == "owner":
+        fields["entry_execution_sizing_plan"]["action_owner"] = "other"
+    elif corruption == "authority":
+        fields["entry_execution_sizing_plan"]["valid"] = False
+    elif corruption == "scope":
+        fields["effective_venue"] = "NXT"
+    elif corruption == "date":
+        row["emitted_at"] = "2026-09-16T10:00:00+09:00"
+    elif corruption == "naive_clock":
+        row["emitted_at"] = "2026-09-17T10:00:00"
+    else:
+        fields["entry_execution_sizing_plan"]["unused"] = "x" * 20000
+    if corruption in {"owner", "authority"}:
+        fields["entry_execution_sizing_plan_sha256"] = hashlib.sha256(json.dumps(
+            fields["entry_execution_sizing_plan"], ensure_ascii=True, sort_keys=True,
+            separators=(",", ":"), allow_nan=False,
+        ).encode("utf-8")).hexdigest()
+    _write_pipeline_events(tmp_path, "2026-09-17", [row])
+    events = report_mod._load_entry_events("2026-09-17")
+    assert report_mod._price_ready_plan(events[0]) == {}
+    assert report_mod._build_buy_attempts("2026-09-17", events=events) == []
+
+
+def test_price_ready_attempts_are_separate_with_same_legacy_record_and_second(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    rows = [_price_ready_row(monkeypatch, attempt=attempt) for attempt in ("eval-1", "eval-2")]
+    _write_pipeline_events(tmp_path, "2026-09-17", rows)
+    attempts = report_mod._build_buy_attempts("2026-09-17", events=report_mod._load_entry_events("2026-09-17"))
+    assert len(attempts) == 2
+    assert len({row["candidate_id"] for row in attempts}) == 2
+
+
+def test_repeated_price_ready_plan_keeps_first_anchor_and_exact_attempt(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    first = _price_ready_row(monkeypatch)
+    repeated = copy.deepcopy(first)
+    repeated.update(emitted_at="2026-09-17T10:00:10+09:00", record_id="record-2")
+    _write_pipeline_events(tmp_path, "2026-09-17", [first, repeated])
+    attempts = report_mod._build_buy_attempts("2026-09-17", events=report_mod._load_entry_events("2026-09-17"))
+    assert len(attempts) == 1
+    assert attempts[0]["signal_time"] == "10:00:00"
+
+
+def test_conflicting_valid_price_ready_plans_are_not_last_writer_wins(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    rows = [_price_ready_row(monkeypatch, second="00"),
+            _price_ready_row(monkeypatch, second="01", price=10100)]
+    _write_pipeline_events(tmp_path, "2026-09-17", rows)
+    events = report_mod._load_entry_events("2026-09-17")
+    assert all(report_mod._price_ready_plan(event) for event in events)
+    assert report_mod._buy_intent_events(events) == ([], "conflicting_price_ready_plans")
+    assert report_mod._build_buy_attempts("2026-09-17", events=events) == []
+
+
+def test_price_ready_full_scope_identity_and_interleaved_conflicts(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    rows = [_price_ready_row(monkeypatch), _price_ready_row(monkeypatch, second="01", bundle="c")]
+    _write_pipeline_events(tmp_path, "2026-09-17", rows)
+    attempts = report_mod._build_buy_attempts("2026-09-17", events=report_mod._load_entry_events("2026-09-17"))
+    assert len(attempts) == 2
+    assert len({attempt["candidate_id"] for attempt in attempts}) == 2
+    rows.append(_price_ready_row(monkeypatch, second="02", price=10100))
+    _write_pipeline_events(tmp_path, "2026-09-17", rows)
+    attempts = report_mod._build_buy_attempts("2026-09-17", events=report_mod._load_entry_events("2026-09-17"))
+    assert len(attempts) == 1
+    assert attempts[0]["policy_bundle_sha256"] == "c" * 64
+    fake = types.SimpleNamespace(get_minute_candles_ka10080=lambda *_a, **_k: [])
+    import src.utils as utils_pkg
+    monkeypatch.setattr(utils_pkg, "kiwoom_utils", fake, raising=False)
+    monkeypatch.setitem(sys.modules, "src.utils.kiwoom_utils", fake)
+    report = report_mod.build_missed_entry_counterfactual_report("2026-09-17", token="dummy")
+    assert report["meta"]["input_streaming"]["price_ready_conflicting_identity_count"] == 1
+
+
+def test_probe_residual_future_price_is_not_fabricated(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    _write_pipeline_events(tmp_path, "2026-09-17", [_price_ready_row(monkeypatch, deferred=True)])
+    attempts = report_mod._build_buy_attempts("2026-09-17", events=report_mod._load_entry_events("2026-09-17"))
+    assert len(attempts) == 1
+    assert attempts[0]["target_qty"] == 10
+    assert attempts[0]["price_ready_source"]["intended_numeric_prices"] == [10000, None]
+    assert attempts[0]["price_ready_source"]["planned_notional_krw"] is None
+    assert attempts[0]["price_ready_source"]["priced_leg_planned_notional_krw"] == 10000
+
+
+def test_price_ready_kst_anchor_and_bad_clock_row_isolation(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    valid = _price_ready_row(monkeypatch)
+    valid["emitted_at"] = "2026-09-17T01:00:00Z"
+    invalid = _price_ready_row(monkeypatch, attempt="bad")
+    invalid["emitted_at"] = "2026-09-17T10:00:00"
+    previous = _price_ready_row(monkeypatch, attempt="past")
+    previous.update(emitted_at="2026-09-16T10:00:00+09:00", emitted_date="2026-09-16")
+    _write_pipeline_events(tmp_path, "2026-09-17", [invalid, previous, valid])
+    events = report_mod._load_entry_events("2026-09-17")
+    attempts = report_mod._build_buy_attempts("2026-09-17", events=events)
+    assert len(attempts) == 1
+    assert attempts[0]["evaluation_attempt_id"] == "eval-1"
+    assert attempts[0]["signal_date"] == "2026-09-17"
+    assert attempts[0]["signal_time"] == "10:00:00"
 
 
 def _make_candle(

@@ -2012,6 +2012,24 @@ def _compact_threshold_cycle_event(payload: dict) -> dict:
         compact["fields"] = compact_fields
     else:
         compact["fields"] = {}
+    if payload.get("stage") == "entry_execution_sizing_plan":
+        from src.engine.sniper_missed_entry_counterfactual import EntryEvent, _price_ready_plan
+
+        plan = _price_ready_plan(EntryEvent(
+            str(payload.get("emitted_at") or ""), str(payload.get("emitted_date") or ""),
+            str(payload.get("stock_name") or ""), str(payload.get("stock_code") or ""),
+            "entry_execution_sizing_plan", str(payload.get("record_id") or ""), fields,
+        ))
+        if plan:
+            compact["fields"].update({
+                "evaluation_attempt_id": plan["action_receipt_id"],
+                "scanner_promotion_id": plan["scanner_promotion_id"],
+                "policy_bundle_sha256": plan["policy_bundle_hash"],
+                "effective_venue": plan["effective_venue"],
+                "market_session_bucket": plan["market_session_bucket"],
+                "entry_price_plan_id": plan["price_plan_id"],
+                "entry_execution_sizing_plan_sha256": fields["entry_execution_sizing_plan_sha256"],
+            })
     return compact
 
 
@@ -2358,6 +2376,14 @@ def _payload_rows(payload: dict) -> list[dict]:
 
 def _entry_counterfactual_join_keys_from_fields(fields: dict) -> set[str]:
     keys: set[str] = set()
+    if fields.get("evaluation_attempt_id"):
+        identity = tuple(str(fields.get(k) or "").strip() for k in (
+            "scanner_promotion_id", "evaluation_attempt_id", "stock_code",
+            "effective_venue", "market_session_bucket", "policy_bundle_sha256",
+        ))
+        if all(value not in {"", "-"} for value in identity):
+            return {"exact_evaluation:" + json.dumps(identity, separators=(",", ":"))}
+        return set()
     for key in (
         "submit_attempt_id",
         "attempt_key",
@@ -2414,8 +2440,7 @@ def _dynamic_entry_price_counterfactual_join_diagnostics(
             continue
         eligible_events.append(event)
         event_key_sets.append(
-            _entry_counterfactual_join_keys_from_fields(event)
-            | _entry_counterfactual_join_keys_from_fields(_event_fields(event))
+            _entry_counterfactual_join_keys_from_fields({**event, **_event_fields(event)})
         )
 
     source_path = (
@@ -2453,9 +2478,8 @@ def _dynamic_entry_price_counterfactual_join_diagnostics(
     counterfactual_keys: set[str] = set()
     counterfactual_row_keys: list[set[str]] = []
     for row in rows:
-        row_keys = _entry_counterfactual_join_keys_from_fields(row)
         nested = row.get("fields") if isinstance(row.get("fields"), dict) else {}
-        row_keys.update(_entry_counterfactual_join_keys_from_fields(nested))
+        row_keys = _entry_counterfactual_join_keys_from_fields({**row, **nested})
         counterfactual_row_keys.append(row_keys)
         counterfactual_keys.update(row_keys)
 
