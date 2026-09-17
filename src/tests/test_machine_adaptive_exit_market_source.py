@@ -77,7 +77,12 @@ def projection(route="SOR", *, now_ms=MS):
             actual_order_submitted=False,
             broker_order_forbidden=True,
         ),
-        stocks={"005930": {"machine_confirmation_routes": routes}},
+        stocks={
+            "005930": {
+                "market_data_transport_epoch": 16,
+                "machine_confirmation_routes": routes,
+            }
+        },
     )
     # JSON consumers do not share the producer's in-memory dict aliases.
     return json.loads(json.dumps(payload))

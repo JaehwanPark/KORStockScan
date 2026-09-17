@@ -3571,7 +3571,9 @@ def test_real_payload_with_exchange_suffix_updates_canonical_snapshot():
     assert route_snapshot["actual_execution_venue"] == "UNKNOWN"
 
 
-def test_realtime_snapshots_preserve_plain_and_integrated_routes_independently():
+def test_realtime_snapshots_preserve_plain_and_integrated_routes_independently(monkeypatch):
+    clock = [kiwoom_websocket.time.time()]
+    monkeypatch.setattr(kiwoom_websocket.time, "time", lambda: clock[0])
     manager = KiwoomWSManager("test-token")
     manager._micro_reversion_forward_collector = SimpleNamespace(
         flags=SimpleNamespace(depth_capture_active=True),
@@ -3579,6 +3581,11 @@ def test_realtime_snapshots_preserve_plain_and_integrated_routes_independently()
         observe_kiwoom_0d=lambda *_args, **_kwargs: None,
     )
     manager.subscribed_codes.add("039490")
+    # Parsing/observer latency must not make the same depth receipt younger.
+    monkeypatch.setattr(
+        manager, "_update_micro_estimator_from_orderbook",
+        lambda *_args, **_kwargs: clock.__setitem__(0, clock[0] + 0.1),
+    )
 
     asyncio.run(
         manager._handle_message(
@@ -3598,6 +3605,14 @@ def test_realtime_snapshots_preserve_plain_and_integrated_routes_independently()
                                 "21": "090001000",
                                 "41": "10010",
                                 "61": "100",
+                                "42": "10020",
+                                "62": "120",
+                                "43": "10030",
+                                "63": "130",
+                                "44": "10040",
+                                "64": "140",
+                                "45": "10050",
+                                "65": "150",
                                 "51": "10000",
                                 "71": "200",
                                 "121": "100",
@@ -3647,6 +3662,15 @@ def test_realtime_snapshots_preserve_plain_and_integrated_routes_independently()
         "KRX": {"ask": 0, "bid": 0},
         "NXT": {"ask": 100, "bid": 200},
     }
+    assert manager.realtime_data["039490"]["recent_depth_ticks_by_route"][
+        "_AL|krx_nxt_integrated"
+    ][0]["ask_levels"][0]["price"] == 10010
+    integrated_depth = manager.realtime_data["039490"]["recent_depth_ticks_by_route"][
+        "_AL|krx_nxt_integrated"
+    ][0]
+    assert snapshots["_AL|krx_nxt_integrated"]["0D"]["observed_epoch"] == (
+        integrated_depth["received_at_ms"] / 1000
+    )
     assert snapshots["KRX|krx_only"]["0B"]["current_price"] == 9990
     assert snapshots["KRX|krx_only"]["0D"]["orderbook"]["bids"][0]["price"] == 9990
     depth = manager.realtime_data["039490"]["last_depth_tick"]

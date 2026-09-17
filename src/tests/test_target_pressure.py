@@ -55,6 +55,7 @@ def snapshot(now=NOW):
         ),
         stocks={
             "005930": {
+                "market_data_transport_epoch": 1,
                 "machine_confirmation_routes": {
                     "SOR": dict(
                         realtime_types={
@@ -63,6 +64,8 @@ def snapshot(now=NOW):
                                 transport_epoch=1,
                                 route_sequence=seq,
                                 observed_epoch=(cutoff + offset) / 1000,
+                                best_bid=10100,
+                                best_ask=10110,
                             )
                             for k, seq, offset in (("0B", 4, -150), ("0D", 3, 0))
                         },
@@ -79,7 +82,7 @@ def snapshot(now=NOW):
                         ],
                         sequence_authority="local_projection_continuity_not_exchange_completeness",
                     )
-                }
+                },
             }
         },
     )
@@ -103,6 +106,7 @@ def evaluate(s):
 def test_combined_pressure_raises_one_tick_without_new_observation_wait():
     r = evaluate(snapshot())
     assert r["decision"] == "RAISE_ONE_TICK"
+
     assert r["next_price"] == 10110
     assert r["buy_speed_early_qty_per_sec"] == 80
     assert r["buy_speed_recent_qty_per_sec"] == 140
@@ -120,6 +124,21 @@ def test_combined_pressure_raises_one_tick_without_new_observation_wait():
     assert len(r["observed_window_trade_rows"]) == 3
     assert len(r["feature"]["source_hash_depth_rows"]) == 3
     assert len(r["feature"]["source_hash_trade_rows"]) == 4
+
+
+def test_quote_only_acceptance_does_not_invent_past_second_trade_backing():
+    from src.trading.market.profit_stagnation_quote import executable_quote
+
+    s = snapshot()
+    for row in source(s)["recent_trades"]:
+        row["received_at_ms"] -= 5000
+    source(s)["realtime_types"]["0B"]["observed_epoch"] -= 5
+    quote = executable_quote(
+        snapshot=s, symbol="005930", route="SOR", quantity=10, now=NOW
+    )
+    assert quote["market_data_health"]["routes"]["SOR"]["quote_state"] == "fresh"
+    with pytest.raises(ValueError, match="pressure_source_gap"):
+        evaluate(s)
 
 
 def test_recent_half_zero_is_explicit_local_observation_not_market_completeness():
