@@ -162,3 +162,12 @@ O3→O2→O1의 기존 local 최적화 우선순위는 유지하되, C1–C4 cor
 - EV는 기존 daily native partition projection이 실제 계산 owner이고 EV 요약 consumer는 이미 compact 결과를 읽는다. 날짜 정규화의 중복만 제거했고 충분통계 영구화는 필요한 numerator/denominator/분포/비용·native identity 의존성이 봉인된 이후의 잔여다. Mean-only 캐시·filled-only 모집단 축소로 tail/미진입 연구를 대체하지 않는다.
 - O1은 확인한 local duplicate reader만 보완했고 Provider checkpoint/reservation/budget 및 매 호출 semantic 검증을 유지했다. Warm decode 절감은 새 호출의 transport 지연을 없앤 증거가 아니다.
 - O0 내부 phase/전체 populated P6 scale 검증은 계속 OPEN이다. 이번 N100×D120 **reader** 측정을 full-grid 완료로 대체하지 않는다. 기존 CPUQuota/MemoryMax/deadline/grid/sample floors는 그대로이며 성능 목표30/50/60%를 추가 runtime apply·기동 승인 gate로 만들지 않는다. 개선 폭을 맞추기 위한 과도한 캐시 신설보다 잔여 correctness·자동 producer→consumer·실제 자연 소비 검증을 우선한다.
+
+
+## 9. 디스크 보존·추가 재생 보완의 실제 범위
+
+[후속 §30](../audit-reports/2026-09-17-postclose-computation-optimization-scoped-implementation.md#30-승인된-디스크-정리final-view-prefix-보완내부-phase-계측)을 따른다. Unused 물리 validation copy28개는 비교 검증한 archive로 축소, unused release worktree10개는 remote commit을 보존하고 제거했다. 현행/rollback/실제 PID 및 원본 시장·연구 source/고유 복구 증거는 보존한다. 이전 physical backup path는 archive manifest의 대응 경로에서 복원한다.
+
+최종 baseline/winner의 여러 window prefix를 추가로 묶고 기존 expanded report에 profile source-binding/selection/enrichment wall·CPU 및 checkpoint hit/miss를 진단 전용으로 연결했다. Selection phase에는 feature 생성·checkpoint 검증·replay가 함께 포함되며 whole-wrapper/provider latency나 전 endpoint 계측이 아니다.
+
+Small full270-grid/46date 측정의 selector CPU는 약0.028~0.064초로 before/after 차이가 거의 없다. 후보/day 영속화가 이 구간을 더 복잡하게 만들지 않도록 실제 내부 phase CPU와 전체 deadline에 대한 기여를 먼저 확인한다. Persistent day-state/partition append·검증 가능한 frozen-prefix delta·EV 충분통계 및 full populated scale은 **미완료**이며 cache hit/작은 phase 보완을 전체 완료로 바꾸지 않는다. 비용·표본·미체결/미진입·HELD·owner·자동 선정/안전 조건은 변경하지 않는다.
