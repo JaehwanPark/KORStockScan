@@ -9,9 +9,10 @@ import math
 import os
 import re
 import shutil
+import stat
 import subprocess
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -28,6 +29,7 @@ from src.utils.constants import DATA_DIR, PROJECT_ROOT
 from src.utils.jsonl_io import (
     existing_or_gzip_path,
     iter_jsonl,
+    json_artifact_generation_lock,
     write_json_object_generation_safe,
 )
 
@@ -37,6 +39,17 @@ DEFAULT_HEAVY_ANALYSIS_LOCK_PATH = PROJECT_ROOT / "tmp" / "intraday_heavy_analys
 AUDIT_SCHEMA_VERSION = "observation_source_quality_audit_v2"
 MACHINE_AI_NATURAL_SOURCE_SCHEMA = "machine_ai_natural_source_consumption_v1"
 MACHINE_TERMINAL_TUNING_GATE_SCHEMA = "machine_terminal_tuning_gate_v1"
+RAW_CONTRACT_PROJECTION_SCHEMA = "raw_contract_aggregate_projection_v1"
+RAW_CONTRACT_RESULT_FIELDS = (
+    "stage_contracts",
+    "warning_stages",
+    "invalid_label_findings",
+    "high_volume_no_source_fields",
+    "unknown_token_findings",
+    "reviewed_unknown_token_findings",
+    "numeric_consistency_findings",
+    "field_presence_top",
+)
 
 
 def _canonical_digest(value: Any) -> str:
@@ -215,13 +228,16 @@ def _machine_terminal_tuning_gate(
 def _audited_jsonl(path: Path, receipt: dict[str, Any]):
     """One streaming pass; invalid lines must not disappear from the audit census."""
     digest = hashlib.sha256()
-    receipt.update(nonempty_line_count=0, invalid_json_line_count=0)
+    receipt.update(
+        nonempty_line_count=0, invalid_json_line_count=0, logical_read_bytes=0
+    )
     if not path.exists():
         return
     opener = gzip.open if path.suffix == ".gz" else open
     with opener(path, "rb") as handle:
         for raw in handle:
             digest.update(raw)
+            receipt["logical_read_bytes"] += len(raw)
             if not raw.strip():
                 continue
             receipt["nonempty_line_count"] += 1
@@ -7822,16 +7838,156 @@ def _streaming_contract_audit(
     return event_count, stage_counts, contract_result, exclusions
 
 
+def _raw_contract_projection_key(target_date, raw_path, generation):
+    """Bind only the raw aggregate; external machine/AI receipts stay fresh."""
+    try:
+        parent = raw_path.parent.lstat()
+        if (not generation or not stat.S_ISREG(raw_path.lstat().st_mode)
+                or not stat.S_ISDIR(parent.st_mode)):
+            return None
+        paths = {
+            Path(__file__),
+            *(
+                Path(function.__globals__["__file__"])
+                for function in (
+                    normalize_flow_state_label,
+                    normalize_gatekeeper_action_key,
+                    runtime_config_valid,
+                )
+            ),
+        }
+        return _canonical_digest(
+            {
+                "schema": RAW_CONTRACT_PROJECTION_SCHEMA,
+                "target_date": target_date,
+                "raw_path": str(raw_path.absolute()),
+                "generation": generation,
+                "parent_identity": [parent.st_dev, parent.st_ino],
+                "code": {
+                    str(path): hashlib.sha256(path.read_bytes()).hexdigest()
+                    for path in sorted(paths)
+                },
+                "contracts": {
+                    key: asdict(value) for key, value in STAGE_CONTRACTS.items()
+                },
+                "source_like_tokens": SOURCE_LIKE_TOKENS,
+            }
+        )
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
+
+
+def _read_raw_contract_projection(target_date, key):
+    """Reuse the existing bounded daily report, not a second cache/job.
+
+    A failed optimization is a miss. No previous hard gate, machine/AI census,
+    exclusion application or runtime permission is reused. Gzip-only/oversize
+    reports are intentionally misses to keep optional decoding bounded.
+    """
+    if key is None:
+        return None
+    path, _ = report_paths(target_date)
+    try:
+        # A read-only build must not create a cache directory for a cold miss.
+        if not stat.S_ISREG(path.lstat().st_mode):
+            return None
+        with json_artifact_generation_lock(
+            path, exclusive=False, blocking=False
+        ) as lease:
+            metadata = lease.stat_name(path.name)
+            if (
+                metadata is None
+                or not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_size > 16 * 1024 * 1024
+                or lease.stat_name(path.name + ".gz") is not None
+            ):
+                return None
+            descriptor = lease.open_name(path.name, os.O_RDONLY)
+            with os.fdopen(descriptor, "rb") as handle:
+                before = os.fstat(handle.fileno())
+                payload = json.loads(handle.read(16 * 1024 * 1024 + 1))
+                after = os.fstat(handle.fileno())
+                current = lease.stat_name(path.name)
+            identity = lambda value: (
+                value.st_dev,
+                value.st_ino,
+                value.st_size,
+                value.st_mtime_ns,
+                value.st_ctime_ns,
+            )
+            if current is None or not identity(metadata) == identity(
+                before
+            ) == identity(after) == identity(current):
+                return None
+        source = payload["source"]
+        receipt = source["contract_projection"]
+        order = source["audited_stage_order"]
+        counts = source["audited_stage_counts"]
+        if len(order) != len(counts) or set(order) != set(counts):
+            return None
+        result = {
+            "event_count": source["audited_event_count"],
+            "stage_counts": [[stage, counts[stage]] for stage in order],
+            "contract_result": {
+                field: payload[field] for field in RAW_CONTRACT_RESULT_FIELDS
+            },
+            "row_exclusions": payload["hard_blocking_row_exclusions"],
+            "source_receipt": {
+                field: source[field]
+                for field in (
+                    "nonempty_line_count",
+                    "invalid_json_line_count",
+                    "logical_content_sha256",
+                    "logical_read_bytes",
+                )
+            },
+        }
+        if (
+            payload["target_date"] != target_date
+            or receipt["schema"] != RAW_CONTRACT_PROJECTION_SCHEMA
+            or receipt["key"] != key
+            or receipt["reusable"] is not True
+            or receipt["body_sha256"] != _canonical_digest(result)
+            or type(result["event_count"]) is not int
+            or result["event_count"] < 0
+            or any(
+                type(value) is not int or value < 0
+                for _, value in result["stage_counts"]
+            )
+            or sum(value for _, value in result["stage_counts"]) != result["event_count"]
+        ):
+            return None
+        return result, receipt["audited_at"]
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
+        return None
+
+
 def build_observation_source_quality_audit(
     target_date: str, *, audit_phase: str = "manual"
 ) -> dict[str, Any]:
     raw_path = existing_or_gzip_path(_pipeline_events_path(target_date))
     generation_before = _raw_generation(raw_path)
-    source_receipt: dict[str, Any] = {}
-    event_count, stage_counts, contract_result, row_exclusions = (
-        _streaming_contract_audit(raw_path, source_receipt=source_receipt)
+    projection_key = _raw_contract_projection_key(
+        target_date, raw_path, generation_before
     )
+    projection = _read_raw_contract_projection(target_date, projection_key)
+    source_receipt: dict[str, Any] = {}
+    audited_at = datetime.now().astimezone().isoformat(timespec="seconds")
+    if projection is None:
+        event_count, stage_counts, contract_result, row_exclusions = (
+            _streaming_contract_audit(raw_path, source_receipt=source_receipt)
+        )
+    else:
+        aggregate, audited_at = projection
+        event_count = aggregate["event_count"]
+        stage_counts = Counter(dict(aggregate["stage_counts"]))
+        contract_result = aggregate["contract_result"]
+        row_exclusions = aggregate["row_exclusions"]
+        source_receipt = aggregate["source_receipt"]
     generation_after = _raw_generation(raw_path)
+    projection_contract_stable = projection_key == _raw_contract_projection_key(
+        target_date, raw_path, generation_after
+    )
     hard_gate = _hard_gate_summary(contract_result)
     status = (
         "fail"
@@ -7858,9 +8014,10 @@ def build_observation_source_quality_audit(
             "source_quality_raw_changed_during_audit"
             if generation_before != generation_after
             else (
-                "source_quality_raw_invalid_json"
-                if source_receipt.get("invalid_json_line_count")
-                else None
+                "source_quality_audit_contract_changed_during_audit"
+                if projection_key and not projection_contract_stable
+                else ("source_quality_raw_invalid_json"
+                      if source_receipt.get("invalid_json_line_count") else None)
             )
         )
     )
@@ -7893,8 +8050,41 @@ def build_observation_source_quality_audit(
         "source": {
             "pipeline_events": str(raw_path),
             "exists": raw_path.exists(),
-            "read_mode": "streaming_contract_aggregate",
+            "read_mode": (
+                "verified_contract_aggregate_projection"
+                if projection is not None
+                else "streaming_contract_aggregate"
+            ),
             "full_source_materialized": False,
+            "logical_raw_read_bytes_this_run": (
+                0
+                if projection is not None
+                else source_receipt.get("logical_read_bytes")
+            ),
+            "audited_event_count": event_count,
+            "audited_stage_counts": dict(stage_counts),
+            "audited_stage_order": list(stage_counts),
+            "contract_projection_reused": projection is not None,
+            "contract_projection": {
+                "schema": RAW_CONTRACT_PROJECTION_SCHEMA,
+                "key": projection_key,
+                "audited_at": audited_at,
+                "reusable": bool(
+                    projection_key and projection_contract_stable
+                    and generation_before == generation_after
+                    and source_receipt.get("logical_content_sha256")
+                ),
+                "body_sha256": _canonical_digest(
+                    {
+                        "event_count": event_count,
+                        "stage_counts": list(stage_counts.items()),
+                        "contract_result": contract_result,
+                        "row_exclusions": row_exclusions,
+                        "source_receipt": source_receipt,
+                    }
+                ),
+                "scope": "raw_contract_aggregate_only_not_machine_ai_or_application",
+            },
             "generation": generation_after,
             "generation_stable": bool(
                 generation_before and generation_before == generation_after

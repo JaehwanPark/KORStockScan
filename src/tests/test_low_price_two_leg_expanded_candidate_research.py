@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import date, datetime, timedelta
 import json
+import os
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
@@ -23,6 +24,96 @@ LEGACY_TEST_RESEARCH_PROFILES = {
     **expanded.RESEARCH_PROFILES,
     **expanded._new_symbol_profiles({"017670": "SK텔레콤", "007660": "이수페타시스"}),
 }
+
+
+def _sequential_source_fixture(tmp_path, monkeypatch):
+    end = date(2026, 9, 17)
+    sources = expanded._SequentialSources(tmp_path, end, end, 1)
+    calls = []
+
+    def load(**kwargs):
+        calls.append(kwargs["symbol"])
+        return [
+            Bar(
+                datetime(2026, 9, 17, 9, 0, tzinfo=ZoneInfo("Asia/Seoul")),
+                100,
+                101,
+                99,
+                100,
+            )
+        ], {"source_quality_status": "PASS"}
+
+    monkeypatch.setattr(expanded, "_load_source_cache", load)
+    for symbol in ("A", "B"):
+        path = expanded._source_cache_path(tmp_path, end_date=end, symbol=symbol)
+        path.parent.mkdir(exist_ok=True)
+        path.write_text('{"frozen":1}')
+        sources[symbol] = True
+    return sources, calls
+
+
+def test_sequential_sources_one_working_set_and_shared_contexts(tmp_path, monkeypatch):
+    sources, calls = _sequential_source_fixture(tmp_path, monkeypatch)
+    first = sources["A"]
+    assert sources["A"] is first
+    contexts = expanded._SequentialContexts(sources)
+    contexts["A"] = True
+    assert contexts["A"] is contexts["A"]
+    assert calls == ["A"]
+    sources["B"]
+    assert sources.current_symbol == "B"
+    assert set(sources.generations) == {"A", "B"}
+    assert sources["A"] == first
+    assert calls == ["A", "B", "A"]
+    assert sources.metrics["source_decodes"] == 3
+
+
+@pytest.mark.parametrize("change", ["rewrite", "symlink", "missing", "replace_parent"])
+def test_sequential_sources_detect_frozen_source_correction_even_context_hit(
+    tmp_path, monkeypatch, change
+):
+    sources, calls = _sequential_source_fixture(tmp_path, monkeypatch)
+    contexts = expanded._SequentialContexts(sources)
+    contexts["A"] = True
+    contexts["A"]
+    path = expanded._source_cache_path(tmp_path, end_date=date(2026, 9, 17), symbol="A")
+    if change == "rewrite":
+        before = path.stat()
+        path.write_text('{"frozen":2}')
+        os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+    elif change == "symlink":
+        saved = path.with_suffix(".saved")
+        path.replace(saved)
+        path.symlink_to(saved)
+    elif change == "missing":
+        path.unlink()
+    else:
+        saved = path.parent.with_name("old")
+        path.parent.rename(saved)
+        path.parent.mkdir()
+        (saved / "A.json").rename(path)
+    with pytest.raises(ResearchError, match="research_frozen_source_cache_changed:A"):
+        contexts["A"]
+    assert calls == ["A"]
+
+
+def test_sequential_sources_reject_change_during_first_decode(tmp_path, monkeypatch):
+    sources, calls = _sequential_source_fixture(tmp_path, monkeypatch)
+    original = expanded._load_source_cache
+
+    def changed(**kwargs):
+        result = original(**kwargs)
+        path = expanded._source_cache_path(
+            tmp_path, end_date=date(2026, 9, 17), symbol="A"
+        )
+        path.write_text('{"frozen":2}')
+        return result
+
+    monkeypatch.setattr(expanded, "_load_source_cache", changed)
+    with pytest.raises(ResearchError, match="research_frozen_source_cache_changed:A"):
+        sources["A"]
+    assert sources.current is None
+    assert sources.generations == {}
 
 
 class FakeResponse:
@@ -958,7 +1049,15 @@ def test_expanded_report_builds_daily_artifact_for_complete_source_universe(
     )
     sources = {
         symbol: (
-            [SimpleNamespace(close_price=20_000)],
+            [
+                SimpleNamespace(
+                    close_price=20_000,
+                    timestamp=datetime.combine(
+                        day, datetime.min.time(), tzinfo=ZoneInfo("Asia/Seoul")
+                    ),
+                )
+                for day in trading_dates
+            ],
             {"source_quality_status": "PASS"},
         )
         for symbol in target_inventory.research_symbols
@@ -1015,7 +1114,15 @@ def test_expanded_report_quarantines_one_bad_symbol_without_blocking_others(
     missing_symbol = sorted(target_inventory.research_symbols)[0]
     sources = {
         symbol: (
-            [SimpleNamespace(close_price=20_000)],
+            [
+                SimpleNamespace(
+                    close_price=20_000,
+                    timestamp=datetime.combine(
+                        day, datetime.min.time(), tzinfo=ZoneInfo("Asia/Seoul")
+                    ),
+                )
+                for day in trading_dates
+            ],
             {"source_quality_status": "PASS"},
         )
         for symbol in target_inventory.research_symbols
@@ -1168,7 +1275,15 @@ def test_dynamic_universe_report_pins_inventory_for_notifier_validation(monkeypa
     report = expanded.build_report(
         sources={
             symbol: (
-                [SimpleNamespace(close_price=20_000)],
+                [
+                    SimpleNamespace(
+                        close_price=20_000,
+                        timestamp=datetime.combine(
+                            day, datetime.min.time(), tzinfo=ZoneInfo("Asia/Seoul")
+                        ),
+                    )
+                    for day in trading_dates
+                ],
                 {"source_quality_status": "PASS", "source_content_sha256": "a" * 64},
             )
             for symbol in source_symbols
