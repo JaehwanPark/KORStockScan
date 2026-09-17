@@ -281,6 +281,48 @@ def test_cache_symlink_and_corrupt_catalog_never_remove_evidence(tmp_path):
     assert required.read_bytes() == b"keep"
 
 
+def test_optional_deep_json_is_safe_miss_without_removing_source(tmp_path, monkeypatch):
+    import json
+    import zlib
+
+    root = tmp_path / "cache"
+    path = root / "profile" / "day.json.z"
+    original = tmp_path / "required-source"
+    original.write_bytes(b"preserve")
+    raw = zlib.compress(b"[" * 2000 + b"0" + b"]" * 2000)
+    assert loop.optional_cache_write(path, raw, cache_root=root, reserve=0)
+
+    def parser_recursion(payload):
+        assert payload == zlib.decompress(raw)
+        raise RecursionError("fixture parser recursion limit")
+
+    monkeypatch.setattr(json, "loads", parser_recursion)
+    assert storage.read(path, root=root) is None
+    assert original.read_bytes() == b"preserve"
+    assert path.read_bytes() == raw
+
+
+def test_optional_catalog_transaction_error_does_not_abort_reader(tmp_path, monkeypatch):
+    import sqlite3
+
+    root = tmp_path / "cache"
+    original = tmp_path / "required-source"
+    original.write_bytes(b"preserve")
+
+    class BrokenConnection:
+        def execute(self, *_args):
+            raise sqlite3.OperationalError("database is locked")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(storage, "_catalog", lambda _root: storage._Catalog(BrokenConnection()))
+    assert storage.read(root / "profile" / "day.json.z", root=root) is None
+    with pytest.raises(ValueError, match="optional_cache_catalog_invalid"):
+        loop.optional_cache_write(root / "other" / "day.json.z", b"x", cache_root=root, reserve=0)
+    assert original.read_bytes() == b"preserve"
+
+
 def test_native_widget_realized_feedback_retires_incumbent_carry_only(
     tmp_path, monkeypatch
 ):
