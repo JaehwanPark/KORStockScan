@@ -75,3 +75,12 @@ Stable-source 최종16 suite **1,089 PASS / 89.40초**, 보완 구간3 suite135 
 - Durable current receipt: `data/runtime/widget_episode_closed_loop_r3_deployment_2026-09-17.json`. Rollback: `tmp/systemd_widget_episode_closed_loop_r3_20260917_145815`의 effective-before/기존 selector 및 1차 immutable release 보존. Runtime router postclose print-plan은 최종 root로 결속한다. Workspace tracked/untracked foreign 변경은 별도 stash 백업 후 병합·복원했고, 문서 충돌은 신규 source 보완과 원 owner의 추가 evidence를 함께 보존했다. 외부 Project/Calendar sync, 비싼 production 보고서 재생성, 수동 정책/threshold/owner 적용은 하지 않았다.
 
 판정: 구현·반복 리뷰 보완·대상 validation·commit/push·관련 서비스 배포/기동 완료. 최종 검토 범위 source finding0. 두 기존 checklist OPEN owner와 일정은 유지한다. 오늘 자연 장후 generation→두 publication→tower/checklist/strict/controller/finalization은 예정 전이다. 등록 이후 widget10+16/episode30+16 qualified 거래일·next-date native owner activation/실제 신규 소비·원 버전 exact-cost net profit는 WAITING이다. N100 populated/full scale SLA는 OPEN이며 N1 개선을 전체 시간 목표 달성으로 확대하지 않는다.
+
+
+## 9. 15:03 후속 통합 배포 이후 현재 consumer 재검증
+
+병행 owner가 최신 async/sizing·execution-critical tick metadata 보완을 통합 배포했다. 최종 문서 remote 보존 merge `c8ea749d`와 현재 selected/physical **`03ddbd2d6bf0b1c77073bb80c867d5cda695c6d7`** (`opportunity-async-sizing-20260917`)의 src/deploy diff0을 확인했다. 이번 episode summary·cap/시간대 집계와 feature-index 소스가 모두 포함된다. 추가 upstream 영향8 suite **693 PASS / 19.88초**. 이전 bf7105f1 기동/575313 유지 receipt는 14:58 역사 상태로 보존하며 현재 PID로 재사용하지 않는다.
+
+현재7개 code root는 통합 physical release로 일치한다. Main **616502** actual PID receipt/실제 cwd `.../opportunity-async-sizing-20260917/src`를 확인했다. Widget **615120**, episode **615208**, watch **615423**, runtime **615580**, active·NRestarts0. Native C6 status consumed·cwd/import root와 당일 기존 widget3/episode3 acceptance 확인. 기존 원 policy/owner/custody/threshold/operator hash6개가 14:58 원 snapshot과 동일하다. 실제 재검증 receipt: `data/runtime/widget_episode_post_integration_validation_2026-09-17.json`. 이 검증은 후속 owner의 배포를 확인한 것이며 별도 수동 주문/정책 변경을 실행한 것이 아니다.
+
+현재 판정도 code/deploy/PID 소비와 신규 정책 자연 선정·경제성을 분리한다. 신규 v2 정책·mature net profit·N100 full-scale 목표 OPEN, 당일 20:10/21:15 장후 자연 실행은 아직 예정 전이다. 외부 문서 sync는 실행하지 않았다.
