@@ -62,8 +62,11 @@ def ws_quote_receive_age_ms(data: Mapping[str, Any], *, now_ts: float) -> float 
             and (not item or records["0D"].get("item") == item)
         ]
         stamp = 0.0
-        if len(candidates) == 1 and candidates[0].get("transport_epoch") == data.get(
-            "market_data_transport_epoch"
+        if (
+            len(candidates) == 1
+            and type(candidates[0].get("transport_epoch")) is int
+            and candidates[0].get("transport_epoch")
+            == data.get("market_data_transport_epoch")
         ):
             stamp = _to_float(candidates[0].get("observed_epoch"))
         # Documented 0B FIDs 27/28 are a fresh best quote in their own right.
@@ -84,7 +87,8 @@ def ws_quote_receive_age_ms(data: Mapping[str, Any], *, now_ts: float) -> float 
                 row.get("inline_best_ask")
             )
             if (
-                row.get("transport_epoch") == data.get("market_data_transport_epoch")
+                type(row.get("transport_epoch")) is int
+                and row.get("transport_epoch") == data.get("market_data_transport_epoch")
                 and bid > 0
                 and ask >= bid
                 and (bid, ask) == (visible_bid, visible_ask)
@@ -138,6 +142,8 @@ def build_market_data_health(
             quote.get("item")
             and quote.get("item") == trade.get("item")
             and type(current_epoch) is int
+            and type(quote.get("transport_epoch")) is int
+            and type(trade.get("transport_epoch")) is int
             and quote.get("transport_epoch")
             == trade.get("transport_epoch")
             == current_epoch
@@ -153,7 +159,9 @@ def build_market_data_health(
                 if quote_age < 0
                 else (
                     "unproven"
-                    if quote.get("transport_epoch") != current_epoch
+                    if type(current_epoch) is not int
+                    or type(quote.get("transport_epoch")) is not int
+                    or quote.get("transport_epoch") != current_epoch
                     else (
                         "invalid"
                         if bid <= 0 or ask <= 0 or bid > ask
@@ -192,13 +200,14 @@ def build_market_data_health(
                     and last_quote_age == quote_age
                     and trade_age is not None
                     and 0 <= trade_age <= last_trade_age
+                    and type(observation.get("closed_episodes")) is int
+                    and 0 <= observation["closed_episodes"] <= 3
                 )
                 if proven:
                     quiet = last_trade_age >= 10_000
                     count = min(
                         3,
-                        max(0, _to_int(observation.get("closed_episodes")))
-                        + int(quiet),
+                        observation["closed_episodes"] + int(quiet),
                     )
                     quiet_facts.update(
                         observation_continuity_proven=True,

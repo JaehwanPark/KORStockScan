@@ -105,6 +105,9 @@ class ScannerAsyncEvalRequest:
         [ScannerAsyncEvalContext, Mapping[str, Any]], Mapping[str, Any]
     ] = field(repr=False, compare=False)
     requires_ai_dispatch: bool = True
+    refresh_before_evaluate: (
+        Callable[[ScannerAsyncEvalContext, Mapping[str, Any]], Mapping[str, Any]] | None
+    ) = field(default=None, repr=False, compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,6 +183,10 @@ class ScannerAsyncEvalCoordinator:
             raise TypeError("coordinator accepts ScannerAsyncEvalRequest only")
         if not callable(request.prepare) or not callable(request.evaluate):
             raise TypeError("scanner async request requires prepare and evaluate")
+        if request.refresh_before_evaluate is not None and not callable(
+            request.refresh_before_evaluate
+        ):
+            raise TypeError("scanner async refresh must be callable")
         request_id = request.context.request_id
         with self._lock:
             if self._closed:
@@ -296,7 +303,7 @@ class ScannerAsyncEvalCoordinator:
             venue=request.context.generation.venue,
             submitted_epoch=completed,
             deadline_epoch=request.context.deadline_epoch,
-            execute=lambda: request.evaluate(request.context, prepared),
+            execute=lambda: self._evaluate_prepared(request, prepared),
             metadata={
                 "scanner_async_request_id": request_id,
                 "scanner_state_version": request.context.state_version,
@@ -315,6 +322,39 @@ class ScannerAsyncEvalCoordinator:
                 error_type="HotPathAISubmitRejected",
                 error_message=decision.reason,
             )
+
+    def _evaluate_prepared(
+        self, request: ScannerAsyncEvalRequest, prepared: Mapping[str, Any]
+    ) -> Mapping[str, Any]:
+        """Pin the exact execution frame for both evaluation and final commit."""
+        request_id = request.context.request_id
+        with self._lock:
+            if (
+                self._closed
+                or self._requests.get(request_id) is not request
+                or request.context.generation.generation_id
+                in self._cancelled_generations
+            ):
+                raise RuntimeError("scanner_async_superseded_before_evaluation")
+        if request.refresh_before_evaluate is not None:
+            refreshed = request.refresh_before_evaluate(request.context, prepared)
+            if not isinstance(refreshed, Mapping):
+                raise TypeError("scanner_async_refreshed_frame_must_be_mapping")
+            prepared = _immutable_mapping(refreshed)
+        # Refresh may outlive the deadline or cancellation. No provider call
+        # or runtime commit may resurrect a superseded execution frame.
+        with self._lock:
+            if (
+                self._closed
+                or self._requests.get(request_id) is not request
+                or request.context.generation.generation_id
+                in self._cancelled_generations
+            ):
+                raise RuntimeError("scanner_async_superseded_during_refresh")
+            if time.time() > request.context.deadline_epoch:
+                raise RuntimeError("scanner_async_refresh_deadline_expired")
+            self._prepared[request_id] = prepared
+        return request.evaluate(request.context, prepared)
 
     def poll(self) -> int:
         finished = 0

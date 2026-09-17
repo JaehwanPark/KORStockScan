@@ -8999,6 +8999,33 @@ def test_recover_missing_ws_snapshot_cycle_store_survives_target_object_refresh(
     assert len(published) == 1
 
 
+@pytest.mark.parametrize(
+    "timestamp_source",
+    [
+        "last_ws_update_ts",
+        "last_realtime_type_ts",
+        "last_trade_tick",
+        "strength_momentum_history",
+    ],
+)
+def test_scanner_entry_feature_rejects_future_receive_clock(timestamp_source):
+    frame = {"curr": 70000, "received_types": ["0B"]}
+    if timestamp_source == "last_realtime_type_ts":
+        frame[timestamp_source] = {"0B": 1001.0}
+    elif timestamp_source == "last_trade_tick":
+        frame[timestamp_source] = {"ts": 1001.0}
+    elif timestamp_source == "strength_momentum_history":
+        frame[timestamp_source] = [{"ts": 1001.0}]
+    else:
+        frame[timestamp_source] = 1001.0
+    fresh, _ = kiwoom_sniper_v2._scanner_ws_snapshot_entry_realtime_fresh(
+        frame,
+        now_ts=1000.0,
+        fresh_sec=3.0,
+    )
+    assert fresh is False
+
+
 def test_scanner_ws_subscription_recheck_closes_when_subscribed_snapshot_fresh():
     manager = SimpleNamespace(
         subscribed_codes={"005930"},

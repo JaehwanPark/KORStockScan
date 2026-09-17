@@ -238,6 +238,26 @@ Official reference receipt (`2026-09-17T01:15:02+09:00` 재확인 기록): upstr
 - 10:59:32 사전/11:01:18 사후 양시장 broker 계약 complete·삼성25주/매수가269471·미체결0, registry/env/dated machine policy3 hash 동일이다.11:01:17 자연 snapshot41 stock 모두 공통 health/38 route 전달·future receive age0, 삼성 integrated UNKNOWN 귀속을 유지한 RECENT_TRADE/quote fresh/continuity true를 확인했다. 앞선§19의010140 native6.80초 공백 자연 표본과 함께 source/feature/quote 분리를 확인하되, feature-only RECHECK 자연 발생·외부 unit PID 전수 소비·accepted submit/fill·비용 후 순익 개선은 아직 확인하지 않았다. [부분 릴리스 검증·가동 receipt](../../data/runtime/runtime_release_validation/common-activity-frame-clock-20260917-65e8bc32.json)를 보존한다.
 - 다음 순서: U2 direct REST/독립 gateway·모든 file adapter 전달 → U3 async immutable prepared-frame/clock·scheduler 소비 → U4 위젯/에피소드/exit 전수 동일 입력 parity를 먼저 닫는다. 현재의 scanner/file/micro/web 부분 검증을 전수 누락0으로 보고하지 않는다. 이 선행 gate 뒤 U5 중복 호출/예산·U6~U8 자연 정책 전달·U9 executable no-submit/no-fill/exit/cost/capacity·U10/U11 기존 owner 자동 선정 연결을 진행한다. 기존 acceptance ID는 OPEN이며 전체 U0~U12 완료가 아니다. 오늘 dated env/기계·compact AI·가격·수량/leg·scale-in·broker/hard safety는 변경하지 않았다.
 
+## 21. Async execution frame 전달·파일 enrichment 소비 시각 보완
+
+- 범위는 U2 파일 enrichment와 U3 async WATCHING의 잔여 동일-frame 결손이다. 기존 `scanner_async_eval`/handler/enrichment/common helper와 기존 테스트만 수정했다. 새 module·collector·장후 producer/서비스는 없다. 위젯 연구 리뷰 R1~R5와 전체 U2~U4/U0~U12를 완료로 바꾸지 않는다.
+- 기존 coordinator의 선택적 `refresh_before_evaluate`는 AI queue 대기 뒤 실행 직전에 로컬 WS 단회 갱신·canonical revalidation을 수행한다. 새 prepared frame을 immutable하게 고정하여 AI 평가와 결과의 prepared context가 동일하게 전달된다. mutable 원본의 이후 변경은 평가/commit frame을 바꾸지 않는다. refresh 오류·non-mapping 반환·deadline 초과·cancelled generation은 Provider 호출 전 observation-only error로 닫는다. 기존 main-thread commit의 generation/venue/state/source/current quote/position/order/cooldown 검사는 삭제하지 않았다. source/feature 차단은 기존 canonical AI owner가 유지한다.
+- `build_market_data_enrichment`는 raw/file/legacy 입력 모두 소비 시점에 기존 공통 health를 재계산한다. 저장된 companion·파일 capture 시각으로 원 type clock을 갱신하지 않는다. REST-only/legacy가 route 증거 없이 RECENT_TRADE를 상속하지 못하며 REST quote 보완은 tape proof가 아니다. 동일 원시각의 object/file에서5초 공백+fresh quote는 RECENT_TRADE, 이후 quote 만료는 unproven으로 일치한다. signed REST tape·micro·호가·submit TTL은 유지한다.
+- 추가 self-review: serialized quiet count는 bool/string/float/범위 밖을0/3으로 바꾸지 않고 unproven이다. route epoch의 bool==int 우회도 차단한다. scanner required-feature age의 미래 시각을0으로 clamp해 fresh로 인정하던 두 경로를 수정했다. 이것은 체결 공백의 별도 재판정이나3초→10초 변경이 아니며 정상5초 공백의 공통 진단/required feature wait 계약은 유지한다.
+- 초기 shared-data async fixture2건과 compatibility fixture1건의 timeout은 기존 배포65e8에서도 cold promotion hydration이 production pipeline을 읽을 때 재현됐다. 테스트의 runtime source를 임시 경로로 격리하고 reader/hydration 전용 fixture는 유지했다. 운영 promotion/재진입 history 검사를 삭제하거나 임의 bounded tail로 대체하지 않았다. 실제 API 호출을 테스트 성공조건으로 사용하지 않는다.
+- 작업본 최종20 suite **1686 passed/1 known holding-payload deselected**, related4 suite105 pass 및 scanner 포함4 suite442 pass, compile/shell/diff PASS. 기존 baseline holding payload/micro delivery 결함·전체 미완료 migration에 finding0을 선언하지 않는다. 이번 async frame/file consume/typed proof 범위 review finding0이며 별도 managed release 검증·실제 PID·자연 작동은 후속 receipt로 추가한다.
+- Official reference 재확인:11:12:46.764741+09:00 upstream HEAD `953e5dbff123f437ab4d11a78a95191a685eb51f` 유지, `kiwoom/core/ws_client.py`, `kiwoom/realtime/packets.py`, `kiwoom/specs.py`를 다시 읽었다. 기존§19의0B/0D/ka10004/spec/Postman binding을 유지하고 wire/parser/FID/REG/auth/continuation을 변경하지 않았다. local future feature guard는 공식 이벤트 시각·실제 venue를 추정할 권한이 아니다.
+
+| 소비 지점 | 이번 검증 범위 | 남은 경계 |
+| --- | --- | --- |
+| 공통 `build_market_data_health` / `ws_quote_receive_age_ms` | 기존 raw/file 동일 원시각, typed epoch/count proof | 전수 실제 source 자연 coverage 별도 |
+| `build_market_data_enrichment` | raw/file/legacy 재계산, stale companion 차단 | direct REST/gateway 전수 전달 미완료 |
+| async coordinator → WATCHING handler → commit | 실행 직전 WS 단회 refresh, immutable 동일 frame, error/deadline/cancel | 자연 async 동일 attempt receipt 미관측 |
+| scanner required-feature freshness | 미래 age clamp 제거, 기존 TTL 유지 | 전체 warm/scheduler/capacity 검증 별도 |
+| widget/episode gateways·micro/exit·web | 기존 source 역할 조사, 앞선 micro/web 부분 회귀 유지 | active owner 전수 전환·외부 PID 소비 미완료 |
+
+다음 작업은 direct REST/독립 gateway/file 전수 parity와 U4 독립 owner 전달을 먼저 닫는 것이다. [위젯·에피소드 연구 로직 리뷰](2026-09-17-widget-episode-policy-research-logic-review.md)의 U10A actual-only admission/source-day/실행가능성 결손은 그대로 잔여다. U5~U11의 나머지 실제 경제성·자동 후보 선정 acceptance와 구분한다. 오늘 기계진입·compact AI 모델/prompt·숫자 가격·수량/leg·scale-in·broker/custody/hard safety와 dated env/policy는 변경하지 않는다.
+
 Project/Calendar 동기화는 실행하지 않는다. 사용자 표준 명령:
 
 ```bash

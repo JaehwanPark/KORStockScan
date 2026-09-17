@@ -7880,8 +7880,8 @@ def _scanner_ws_snapshot_entry_realtime_fresh(snapshot, *, now_ts, fresh_sec):
 
     if candidates:
         source, latest_ts = max(candidates, key=lambda item: item[1])
-        age_sec = max(0.0, float(now_ts) - latest_ts)
-        return age_sec <= fresh_sec, source
+        age_sec = float(now_ts) - latest_ts
+        return 0.0 <= age_sec <= fresh_sec, source
     if isinstance(type_ts, dict) and type_ts:
         return False, "missing_fresh_0B_or_strength_history"
 
@@ -7892,8 +7892,8 @@ def _scanner_ws_snapshot_entry_realtime_fresh(snapshot, *, now_ts, fresh_sec):
         received_types = set()
     base_ts = _safe_float(snapshot.get("last_ws_update_ts"), 0.0)
     if "0B" in received_types and base_ts > 0:
-        age_sec = max(0.0, float(now_ts) - base_ts)
-        return age_sec <= fresh_sec, "last_ws_update_ts_with_0B"
+        age_sec = float(now_ts) - base_ts
+        return 0.0 <= age_sec <= fresh_sec, "last_ws_update_ts_with_0B"
     return False, "missing_fresh_0B_or_strength_history"
 
 
