@@ -2225,6 +2225,24 @@ def test_unproven_conflict_manifest_cannot_bypass_global_natural_block(manifest)
     assert contract["input_row_disposition_complete"] is True
 
 
+def test_invalid_manifest_cannot_restore_conflicted_attempt_through_paired_lane():
+    import copy
+
+    rows, receipt = _natural_refinement_fixture()
+    alias = copy.deepcopy(rows[0])
+    conflicting = copy.deepcopy(rows[0])
+    conflicting["machine_action"] = "ENTER_NOW"
+    normalized, contract = calibration._common_refinement_population(
+        [alias], [*rows, conflicting], target_date="2026-09-15",
+        source_receipt=receipt, paired_contract={},
+        natural_conflicting_attempt_identity_count=1,
+        natural_conflicting_evaluation_keys=["machine:unproven"],
+    )
+    assert normalized == []
+    assert contract["row_exclusion_reason_counts"]["conflicting_exact_attempt"] == 1
+    assert contract["input_row_disposition_complete"] is True
+
+
 def _compact_conflict_case_table(valid_count=20):
     import copy
     from src.engine.scalping.mechanistic_entry_runtime_policy import AI_VERSION
