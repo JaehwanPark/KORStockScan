@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+import pytest
 
 from src.engine.monitoring import samsung_widget_advisory as advisory
 from src.engine.monitoring import samsung_widget_contract as contract
@@ -3618,3 +3619,176 @@ def test_collector_local_request_budget_reserves_mandatory_quote_and_bbo_calls()
     budget.acquire(optional=False)
     budget.acquire(optional=False)
     assert budget.snapshot()["remaining_requests"] == 0
+
+
+def test_direct_read_client_concurrent_receipts_keep_exact_request_identity(
+    monkeypatch,
+):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    ready = threading.Barrier(2)
+    monkeypatch.setattr(
+        advisory.kiwoom_utils, "get_api_url", lambda path: "https://api.test" + path
+    )
+    monkeypatch.setattr(
+        advisory.kiwoom_utils, "resolve_kiwoom_request_token", lambda token: token
+    )
+
+    class Response:
+        status_code = 200
+
+        def __init__(self, code):
+            self.code = code
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"return_code": self.code}
+
+    class Session:
+        def post(self, endpoint, *, json, **kwargs):
+            ready.wait(timeout=2)
+            return Response(0 if json["stk_cd"] == "005930" else 1700)
+
+    client = advisory.KiwoomReadOnlyClient("TOKEN", session=Session())
+
+    def read(code):
+        try:
+            client.post("/api/dostk/stkinfo", "ka10001", {"stk_cd": code})
+        except RuntimeError:
+            pass
+        return dict(client.last_request_receipt)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        receipts = list(pool.map(read, ("005930", "000660")))
+    assert [receipt["request_code"] for receipt in receipts] == ["005930", "000660"]
+    assert [receipt["response_code"] for receipt in receipts] == [0, 1700]
+    assert [receipt["request_succeeded"] for receipt in receipts] == [True, False]
+    assert all(receipt["request_attempt_count"] == 1 for receipt in receipts)
+    assert all(receipt["rest_received_ts_ms"] > 0 for receipt in receipts)
+    assert client.last_request_receipt == {}
+
+
+def test_collector_budget_check_and_charge_are_atomic_for_concurrent_requests():
+    import time
+    import threading
+    from collections import deque
+    from concurrent.futures import ThreadPoolExecutor
+
+    class YieldingDeque(deque):
+        def __len__(self):
+            before = super().__len__()
+            time.sleep(0.001)
+            return before
+
+    budget = advisory.ReadOnlyRequestBudget(max_requests_per_minute=4)
+    budget._requests = YieldingDeque()
+    ready = threading.Barrier(16)
+
+    def acquire(_):
+        ready.wait(timeout=3)
+        try:
+            budget.acquire(optional=True)
+        except RuntimeError as exc:
+            return str(exc)
+        return "admitted"
+
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        outcomes = list(pool.map(acquire, range(16)))
+    assert outcomes.count("admitted") == 2
+    assert outcomes.count("widget_request_budget_exhausted") == 14
+    assert budget.snapshot()["total_request_count"] == 2
+    budget.acquire(optional=False)
+    budget.acquire(optional=False)
+    assert budget.snapshot()["total_request_count"] == 4
+    assert budget.snapshot()["remaining_requests"] == 0
+
+
+def test_forked_collector_budget_preserves_window_without_parent_mutex_dependency():
+    import os
+    import multiprocessing
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    import pytest
+
+    if not hasattr(os, "register_at_fork"):
+        pytest.skip("fork reset is POSIX-only")
+    budget = advisory.ReadOnlyRequestBudget(max_requests_per_minute=4)
+    for _ in range(4):
+        budget.acquire(optional=False)
+    entered, release = threading.Event(), threading.Event()
+    ctx = multiprocessing.get_context("fork")
+    receive, send = ctx.Pipe(duplex=False)
+
+    def hold():
+        with budget._lock:
+            entered.set()
+            assert release.wait(5)
+
+    def read_child():
+        try:
+            try:
+                budget.acquire(optional=False)
+            except RuntimeError as exc:
+                send.send((str(exc), budget.snapshot()))
+        finally:
+            send.close()
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        holder = pool.submit(hold)
+        assert entered.wait(1)
+        child = ctx.Process(target=read_child)
+        child.start()
+        try:
+            assert receive.poll(3), "child inherited a parent-only mutex"
+            reason, snapshot = receive.recv()
+            assert reason == "widget_request_budget_exhausted"
+            assert snapshot["total_request_count"] == 4
+            assert snapshot["remaining_requests"] == 0
+            child.join(1)
+            assert child.exitcode == 0
+        finally:
+            if child.is_alive():
+                child.terminate()
+                child.join(1)
+            release.set()
+            receive.close()
+            send.close()
+        holder.result(1)
+    assert budget.snapshot()["total_request_count"] == 4
+
+
+@pytest.mark.parametrize(
+    "raw_code", [None, False, True, 0.0, 0.5, {}, [], "bad-code", "0.0"]
+)
+def test_direct_read_client_never_marks_malformed_return_code_as_success(
+    monkeypatch, raw_code
+):
+    monkeypatch.setattr(
+        advisory.kiwoom_utils, "get_api_url", lambda path: "https://api.test" + path
+    )
+    monkeypatch.setattr(
+        advisory.kiwoom_utils, "resolve_kiwoom_request_token", lambda token: token
+    )
+
+    class Response:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"return_code": raw_code}
+
+    class Session:
+        def post(self, *args, **kwargs):
+            return Response()
+
+    client = advisory.KiwoomReadOnlyClient("TOKEN", session=Session())
+    with pytest.raises(RuntimeError, match="return_code_missing"):
+        client.post("/api/dostk/stkinfo", "ka10001", {"stk_cd": "005930"})
+    assert client.last_request_receipt["request_succeeded"] is False
+    assert client.last_request_receipt["request_attempt_count"] == 1
+    assert client.last_request_receipt["rest_received_ts_ms"] > 0
