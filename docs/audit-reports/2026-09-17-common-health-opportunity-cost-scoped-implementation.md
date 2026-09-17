@@ -184,6 +184,18 @@ Official reference receipt (`2026-09-17T01:15:02+09:00` 재확인 기록): upstr
 - 이번 §15 보완 과정에는 첫 `5ecfeffd`/PID94085(09:08), malformed 보완 `1ee69645`/PID99065(09:12), 실제 producer 호환 최종 `51232b62`/PID111554(09:22)의 **graceful3회**가 있었다. 이를1회로 보고하지 않는다. 원 selector/release·mount 원본은 rollback용으로 보존했고 다른 세션의 위젯 dirty 변경은 포함하지 않았다. [최종 배포·가동 receipt](../../data/runtime/runtime_release_validation/u9-price-ready-native-closure-20260917-51232b62.json)를 보존한다. 자연 장후 산출물 소비·새 정책 선정/승격·순익 개선은 별도 OPEN이다.
 - 잔여: signed-date 자연 quartet 생성자/직접 전달, same-opportunity executable fill/confirmed no-fill/owner exit/cost/stress/capacity·holdout 및 절대0.10% owning 계약 재설계, 전수 parity/scheduler와 U10/U11. 오늘 대용량 growing raw의 전체 스캔, 조기 report 재생성 및 Provider/API replay는 하지 않는다. 테스트 후속 가격 API는 fixture로 격리하며 배포 broker 점검은 기존 adapter의 읽기 전용 조회로 별도 기록한다.
 
+## 16. 기계·AI 상충 attempt의 행 격리와 자동 선정 전달 보완
+
+2026-09-17 장중 후속. U6/U7/U8의 기존 calibration과 next-date machine/compact publisher·기존 테스트만 보완했다. 새 module·collector·서비스·장후 producer 없이 현재 owner·경제성 계약을 유지한다. 전체 U0–U12 완료가 아니다.
+
+- 최초 결함: case table의 상충 count가 하나라도 있으면 정상 종목/venue/session/bundle의 기계 natural 연구와 compact 자동 선정까지 일괄 차단했다. 같은 action/trace의 다른 후행 outcome은 중복으로 덮었고, 다른 trace/action의 상충은 첫 행을 학습에서 확실히 격리하지 않았다.
+- 동일 exact6 evaluation key의 decision/evidence/path/cost/AI 본문을 사전 대사하여 상충 위치를 발급한다. 같은 내용의 반복은 한 번만 계수하고 모든 상충 버전은 처음부터 `policy_learning_excluded=true`, `conflicting_exact_attempt`다. 원 diagnostic 행/count는 보존하되 기회비용·순 EV·학습 denominator에 넣지 않는다. arrival 시각만 다른 동일 본문은 새 기회가 아니다.
+- common/all-supported hierarchy consumer는 count·위치와 원 natural rows의 실제 상충을 독립 재대사한다. 정상 source/clock/cost/terminal/identity 검증은 유지하며 상충 attempt와 같은 paired 별칭도 격리한다. 위치가 없는 외부 count·누락/변조/중복/invalid manifest는 natural lane fail closed다. 이를 정상0/유한 ETA/임의 PASS로 바꾸지 않는다.
+- compact consumer는 현재 prompt/정책 partition의 유효 ENTER screen만 비교하며 profitable VETO와 avoided loss를 기존 대칭 평가로 유지한다. 상충을 제외한 정상20건이 남으면 기존 bounded next-date publisher가 별도 사용자 승인 없이 자동 선정한다.19건이면 기존 표본 gate로 incumbent carry다. publisher는 manifest/count/type·미해결 위치·상충 key의 학습 재유입을 다시 검사한다. 새 실체결 floor·관찰기간·양수 EV 조건을 진단 수리에 붙이지 않았다.
+- 기대효과: 정상 미진입/VETO 사례가 관련 없는 상충 때문에 학습에서 사라지는 것을 방지하면서, 상충 이익/손실이 자동 승격 방향을 오염시키지 않도록 한다. 현재 기계 action/compact body·모델·price/qty/leg·scale-in·cap·broker/source/hard safety·당일 dated policy/env는 변경하지 않는다. 신규 후보 선정은 기존 정기 장후→next-date publisher→PREOPEN→loader가 소유하며 오늘 정책을 수동 재발행하지 않는다. 실제 자연 generation/새 정책 소비·비용 후 순익은 별도 OPEN이다.
+- 리뷰·검증: 순서 반전, 같은 action/trace의 outcome 상충, 첫 행 격리, 반복 상충 version의 중복 collapse, paired 별칭 우회, malformed manifest, 정상19/20 screen 경계, 실제 flag-free next-date publisher와 machine/provider 비변경 회귀를 검증한다. 최종 test/배포/PID는 검증 뒤 receipt에 기록하며 전체 잔여 구현에는 finding0을 선언하지 않는다.
+- 잔여: U0–U6 전수 reader/예산/census, U9 executable no-fill/exit/cost quartet·가격 absolute0.10% owning 계약 개선, U10/U11 전수 handoff 및 자연 경제성 acceptance. 본 보완은 이 결손들을 대신 완료하지 않는다.
+
 Project/Calendar 동기화는 실행하지 않는다. 사용자 표준 명령:
 
 ```bash

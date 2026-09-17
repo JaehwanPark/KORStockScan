@@ -2214,6 +2214,7 @@ def _common_refinement_population(
     paired_rows: list[dict], natural_rows: list[dict], *,
     target_date: str, source_receipt: dict, paired_contract: dict,
     natural_conflicting_attempt_identity_count: int = 0,
+    natural_conflicting_evaluation_keys: list[str] | None = None,
     cohort: tuple[str, str] = ("KRX", "KRX_REGULAR"),
 ) -> tuple[list[dict], dict]:
     """Union existing exact CF lanes before selection; no fills/AI required.
@@ -2230,10 +2231,44 @@ def _common_refinement_population(
     excluded_keys = set(gate.get("excluded_evaluation_keys") or []) | set(
         gate.get("pending_evaluation_keys") or []
     )
+    observed_conflict_keys = _machine_conflicting_evaluation_keys(natural_rows)
+    conflict_manifest_valid = (
+        natural_conflicting_evaluation_keys is None
+        or (
+            isinstance(natural_conflicting_evaluation_keys, list)
+            and all(isinstance(key, str) and key for key in natural_conflicting_evaluation_keys)
+            and len(set(natural_conflicting_evaluation_keys)) == len(natural_conflicting_evaluation_keys)
+        )
+    )
+    # The direct caller can omit a manifest when no external conflicts were
+    # reported: independently localize its input. A nonzero external count
+    # without proven locations remains a global natural-lane blocker.
+    conflict_keys = (
+        observed_conflict_keys
+        if natural_conflicting_evaluation_keys is None
+        and natural_conflicting_attempt_identity_count == 0
+        else set(natural_conflicting_evaluation_keys or [])
+        if conflict_manifest_valid else set()
+    )
+    effective_conflict_count = (
+        len(observed_conflict_keys)
+        if natural_conflicting_evaluation_keys is None
+        and natural_conflicting_attempt_identity_count == 0
+        else natural_conflicting_attempt_identity_count
+    )
+    conflict_locations_complete = (
+        type(natural_conflicting_attempt_identity_count) is int
+        and natural_conflicting_attempt_identity_count >= 0
+        and conflict_manifest_valid
+        and type(effective_conflict_count) is int
+        and len(conflict_keys) == effective_conflict_count
+        and all(isinstance(key, str) and key for key in conflict_keys)
+        and conflict_keys == observed_conflict_keys
+    )
     natural_allowed = (
         source_receipt.get("target_date") == target_date
         and source_receipt.get("machine_threshold_tuning_input_allowed") is True
-        and natural_conflicting_attempt_identity_count == 0
+        and conflict_locations_complete
     )
     for lane, originals in (("paired", paired_rows), ("natural", natural_rows)):
         for original in originals:
@@ -2276,6 +2311,9 @@ def _common_refinement_population(
                 ))
             ):
                 excluded["natural_machine_receipt_or_identity_invalid"] += 1
+                continue
+            if _machine_evaluation_key(row) in conflict_keys:
+                excluded["conflicting_exact_attempt"] += 1
                 continue
             comparison = _as_dict(row.get("comparison"))
             if row.get("entry_quality_contract_valid") is not True:
@@ -2330,6 +2368,9 @@ def _common_refinement_population(
         "paired_source_contract": paired_contract,
         "natural_machine_source_receipt": source_receipt,
         "natural_conflicting_attempt_identity_count": natural_conflicting_attempt_identity_count,
+        "effective_natural_conflicting_attempt_identity_count": effective_conflict_count,
+        "natural_conflicting_evaluation_keys": sorted(conflict_keys),
+        "natural_conflict_locations_complete": conflict_locations_complete,
         "input_lane_counts": {"paired": len(paired_rows), "natural": len(natural_rows)},
         "accepted_lane_counts": dict(Counter(r["refinement_source_lane"] for r in result)),
         "accepted_unique_trace_count": len(result),
@@ -3944,6 +3985,32 @@ def _machine_evaluation_key(row: Mapping[str, Any]) -> str:
     return "machine:" + "|".join(str(value).strip() for value in values)
 
 
+def _machine_learning_fingerprint(row: Mapping[str, Any]) -> str:
+    """Compare decision/outcome bodies, not duplicate arrival metadata."""
+    return _canonical_sha256({key: row.get(key) for key in (
+        "decision_trace_id", "source_date", "machine_action", "machine_reason",
+        "setup_evidence", "comparison", "entry_quality_path",
+        "machine_applied_thresholds", "machine_core_comparison",
+        "machine_hierarchy_selection", "machine_liquidity_inputs",
+        "ai_and_final_guard", "outcome_horizon_metrics",
+    )})
+
+
+def _machine_conflicting_evaluation_keys(rows: list[dict]) -> set[str]:
+    """Locate whole conflicting attempts before either arm contributes EV."""
+    seen, conflicts = {}, set()
+    for row in rows:
+        key = _machine_evaluation_key(row)
+        if not key:
+            continue
+        fingerprint = _machine_learning_fingerprint(row)
+        if key in seen and seen[key] != fingerprint:
+            conflicts.add(key)
+        else:
+            seen[key] = fingerprint
+    return conflicts
+
+
 def _compact_history_receipt(
     data_root: Path,
     target_date: str,
@@ -4134,9 +4201,10 @@ def build_machine_decision_case_table(
     compact_prompt_version_counts: Counter[str] = Counter()
     selected_child_rule_ids: set[str] = set()
     cases: list[dict] = []
-    seen_attempts: dict[tuple[str, str, str, str, str, str], tuple[str, str]] = {}
+    seen_attempts: dict[tuple[str, str, str, str, str, str], set[str]] = {}
     duplicate_same_action_collapsed_count = 0
-    conflicting_attempt_identity_count = 0
+    conflicting_evaluation_keys = _machine_conflicting_evaluation_keys(rows)
+    conflicting_attempt_identity_count = len(conflicting_evaluation_keys)
     incomplete_attempt_identity_count = 0
     for row in sorted(rows, key=lambda item: str(item.get("decision_ts") or "")):
         action = str(row.get("machine_action") or "").upper()
@@ -4161,17 +4229,20 @@ def build_machine_decision_case_table(
             str(row.get("session_bucket") or ""),
             str(row.get("bundle_sha256") or ""),
         )
-        previous = seen_attempts.get(attempt_key)
-        current_identity = (action, str(row.get("decision_trace_id") or ""))
+        previous = seen_attempts.setdefault(attempt_key, set())
+        current_identity = _machine_learning_fingerprint(row)
         evaluation_key = _machine_evaluation_key(row)
-        policy_learning_excluded = evaluation_key in terminal_lineage_excluded_keys
-        if previous is not None:
-            if previous == current_identity:
+        conflict_excluded = evaluation_key in conflicting_evaluation_keys
+        policy_learning_excluded = (
+            evaluation_key in terminal_lineage_excluded_keys or conflict_excluded
+        )
+        if previous:
+            if current_identity in previous:
                 duplicate_same_action_collapsed_count += 1
                 continue
-            conflicting_attempt_identity_count += 1
-        else:
-            seen_attempts[attempt_key] = current_identity
+            if not evaluation_key:
+                conflicting_attempt_identity_count += 1
+        previous.add(current_identity)
         path = _as_dict(row.get("entry_quality_path"))
         label = str(path.get("entry_quality_label") or "CENSORED_OR_SOURCE_GAP")
         if path.get("status") != "evaluable" or label == "CENSORED_OR_SOURCE_GAP":
@@ -4249,9 +4320,15 @@ def build_machine_decision_case_table(
                     )
                     if policy_learning_excluded:
                         compact_screen_outcomes[
-                            "|".join(("TERMINAL_LINEAGE_EXCLUDED", label))
+                            "|".join((
+                                "CONFLICTING_EXACT_ATTEMPT" if conflict_excluded
+                                else "TERMINAL_LINEAGE_EXCLUDED", label
+                            ))
                         ] += 1
-                        compact_exclusions["terminal_lineage_unresolved"] += 1
+                        compact_exclusions[
+                            "conflicting_exact_attempt" if conflict_excluded
+                            else "terminal_lineage_unresolved"
+                        ] += 1
                     elif not partition_allowed:
                         compact_screen_outcomes[
                             "|".join(("SOURCE_PARTITION_NOT_ALLOWED", label))
@@ -4381,7 +4458,9 @@ def build_machine_decision_case_table(
                 ),
                 "policy_learning_excluded": policy_learning_excluded,
                 "policy_learning_exclusion_reason": (
-                    "terminal_lineage_unresolved" if policy_learning_excluded else None
+                    "conflicting_exact_attempt" if conflict_excluded
+                    else "terminal_lineage_unresolved" if policy_learning_excluded
+                    else None
                 ),
                 "runtime_effect": False,
                 "allowed_runtime_apply": False,
@@ -4548,7 +4627,7 @@ def build_machine_decision_case_table(
     compact_selection_eligible = bool(
         compact_tuning_input_allowed
         and economic_eligible_count >= minimum_economic_count
-        and conflicting_attempt_identity_count == 0
+        and conflicting_attempt_identity_count == len(conflicting_evaluation_keys)
     )
     if not compact_selection_eligible:
         selected_compact_version = incumbent_compact_version
@@ -4600,6 +4679,10 @@ def build_machine_decision_case_table(
             duplicate_same_action_collapsed_count
         ),
         "conflicting_attempt_identity_count": conflicting_attempt_identity_count,
+        "conflicting_evaluation_keys": sorted(conflicting_evaluation_keys),
+        "conflict_locations_complete": (
+            conflicting_attempt_identity_count == len(conflicting_evaluation_keys)
+        ),
         "incomplete_attempt_identity_count": incomplete_attempt_identity_count,
         "policy_learning_eligible_observation_count": (
             sum(
@@ -4607,7 +4690,8 @@ def build_machine_decision_case_table(
                 and case.get("policy_learning_excluded") is not True
                 for case in cases
             )
-            if conflicting_attempt_identity_count == 0 and machine_tuning_allowed
+            if conflicting_attempt_identity_count == len(conflicting_evaluation_keys)
+            and machine_tuning_allowed
             else 0
         ),
         "terminal_lineage_exclusion": {
@@ -6914,6 +6998,7 @@ def build_report(
         target_date=target_date, source_receipt=machine_source_receipt,
         paired_contract=mechanistic_source_contract,
         natural_conflicting_attempt_identity_count=machine_decision_case_table["conflicting_attempt_identity_count"],
+        natural_conflicting_evaluation_keys=machine_decision_case_table["conflicting_evaluation_keys"],
     )
     mechanistic_refinement = build_clean_baseline_mechanistic_refinement(
         report_root / PAIRED_SUBDIR, target_date=target_date,
@@ -6970,6 +7055,7 @@ def build_report(
             repriced, machine_observations, target_date=target_date,
             source_receipt=machine_source_receipt, paired_contract=all_scope_contract,
             natural_conflicting_attempt_identity_count=machine_decision_case_table["conflicting_attempt_identity_count"],
+            natural_conflicting_evaluation_keys=machine_decision_case_table["conflicting_evaluation_keys"],
             cohort=cohort,
         )
         extension = build_mechanistic_hierarchy_candidate(
