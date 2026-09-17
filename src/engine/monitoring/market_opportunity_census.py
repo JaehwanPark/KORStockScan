@@ -13,6 +13,7 @@ import json
 import math
 import os
 import subprocess
+import tempfile
 import time
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta, timezone
@@ -4608,15 +4609,65 @@ def render_markdown(report: dict[str, Any]) -> str:
 
 
 def write_report(report: dict[str, Any]) -> tuple[Path, Path]:
+    from src.engine.monitoring.policy_research_economics import (
+        research_census_file_generation,
+        research_census_projection,
+    )
+
     target_date = str(report.get("target_date") or date.today().isoformat())
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
     json_path = REPORT_DIR / f"{REPORT_TYPE}_{target_date}.json"
     md_path = REPORT_DIR / f"{REPORT_TYPE}_{target_date}.md"
-    json_path.write_text(
-        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
+
+    def publish(path, text):
+        descriptor, temporary = tempfile.mkstemp(
+            prefix=f".{path.name}.", dir=path.parent
+        )
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                os.fchmod(handle.fileno(), 0o644)
+                handle.write(text)
+                handle.flush()
+                os.fsync(handle.fileno())
+                written_inode = os.fstat(handle.fileno()).st_ino
+            os.replace(temporary, path)
+            return written_inode
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+
+    text = (
+        json.dumps(
+            report, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False
+        )
+        + "\n"
     )
-    md_path.write_text(render_markdown(report), encoding="utf-8")
+    if fcntl is None:
+        raise RuntimeError("census_publication_lock_unavailable")
+    descriptor = os.open(
+        REPORT_DIR / f"{REPORT_TYPE}_{target_date}.publish.lock",
+        os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o644,
+    )
+    with os.fdopen(descriptor, "r+") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        written_inode = publish(json_path, text)
+        generation = research_census_file_generation(json_path)
+        if generation["inode"] != written_inode:
+            raise ValueError("census_publication_generation_changed")
+        projection = research_census_projection(
+            report,
+            parent_filename=json_path.name,
+            parent_sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            generation=generation,
+        )
+        if generation != research_census_file_generation(json_path):
+            raise ValueError("census_publication_generation_changed")
+        publish(
+            json_path.with_suffix(".admission.json"),
+            json.dumps(projection, ensure_ascii=False, sort_keys=True, allow_nan=False)
+            + "\n",
+        )
+        publish(md_path, render_markdown(report))
     return json_path, md_path
 
 

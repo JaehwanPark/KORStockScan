@@ -136,6 +136,7 @@
 ## 사용자 승인 통합 구현 후속
 
 - [ ] `[KiwoomCommonHealthOpportunityCostAcceptance0917] 공통 health 부분 릴리스·미진입 전체 모집단 구현 잔여 확인` (`Due: 2026-09-17`, `Slot: INTRADAY`, `TimeWindow: 07:35~20:00`, `Track: RuntimeStability`)
+  - Admission projection 부분 구현: [원천 대사·projection 리뷰](../audit-reports/2026-09-17-widget-episode-admission-projection-scoped-implementation.md). 기존 census writer→bounded widget/episode reader와 native 전수 대사·중복/상충/clock/master/scope 회귀를 보완한다. Full F0–F5, catalog/capacity·seed·joint 선정·next-date 자연 소비/경제성은 OPEN이며 main/trader 재기동이나 새 cron을 요구하지 않는다. 자연 projection 및 20:10/21:15 unit 소비는 별도 acceptance다.
   - Source: [통합 계획](../proposals/entry-opportunity-cost-full-population-tuning-implementation-plan-2026-09-17.md), [부분 구현 리뷰](../audit-reports/2026-09-17-common-health-opportunity-cost-scoped-implementation.md).
   - 이번 실행: 01시대 WS/common quote clock·quiet observation·observer 원 나이·#74→#82 all-VETO gate·중복 learning count targeted845건 검증. 06시대 common natural/paired 전수 소비·현재 incumbent 비교·양수 순 EV/paired 개선 v2·exact-parent 자동 발행과 verifier 보완, targeted736건 통과. existing selected release를 보존한 managed release integration을 사용한다. PID/자연 policy/실체결 경제성 미관측.
   - Acceptance: exact-date PREOPEN→07:55 selected release/PID·원 WS0B/0D/inline BBO receipt를 검증하고 U0–U12 ledger의 미완료 구현을 별도로 닫는다. 부분 H 배포를 전체 opportunity-cost 자동 선정·수익 완료로 표시하지 않는다.

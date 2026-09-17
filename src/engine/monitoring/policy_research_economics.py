@@ -12,7 +12,9 @@ import hashlib
 import json
 import math
 import os
+import stat
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from src.engine.monitoring.widget_comparison_cost import comparison_cost_contract
 from src.utils.market_day import is_krx_trading_day
@@ -556,12 +558,15 @@ def signal_execution_feasibility(
 
 def research_universe_handoff(census, *, source_date, universe, results):
     """Conserve upstream census IDs without enrolling or reviving symbols."""
+    admission = research_admission_ledger(
+        census, source_date=source_date, universe=universe, owner="widget"
+    )
     rows = census.get("opportunity_details") if isinstance(census, dict) else None
     if isinstance(rows, dict):
         # Use the canonical panel once; other panels overlap the same census.
-        rows = ((rows.get("liquid_common") or {}).get("top_20") or {}).get(
-            "forward_exact"
-        )
+        panel = rows.get("liquid_common")
+        window = panel.get("top_20") if isinstance(panel, dict) else None
+        rows = window.get("forward_exact") if isinstance(window, dict) else None
     if (
         not isinstance(rows, list)
         or census.get("target_date") != source_date.isoformat()
@@ -569,12 +574,17 @@ def research_universe_handoff(census, *, source_date, universe, results):
         return {
             "status": "source_gap",
             "reason": "exact_date_census_missing",
+            "admission_ledger": admission,
             **AUTHORITY,
         }
-    try:
-        census_hash = digest(census)
-    except (TypeError, ValueError):
-        return {"status": "source_gap", "reason": "census_content_invalid", **AUTHORITY}
+    census_hash = admission.get("census_content_sha256")
+    if census_hash is None:
+        return {
+            "status": "source_gap",
+            "reason": "census_content_invalid",
+            "admission_ledger": admission,
+            **AUTHORITY,
+        }
     dispositions = []
     for index, row in enumerate(rows):
         if not isinstance(row, dict):
@@ -613,5 +623,431 @@ def research_universe_handoff(census, *, source_date, universe, results):
         "disposition_counts": dict(Counter(row["disposition"] for row in dispositions)),
         "unaccounted_count": len(rows) - len(dispositions),
         "recall_role": "observed_census_to_research_not_whole_market_recall",
+        "admission_ledger": admission,
         **AUTHORITY,
+    }
+
+
+def _load_bounded_research_summary(path, *, maximum_bytes):
+    """Read a bounded, stable regular summary; never scan growing raw data."""
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(descriptor, "rb") as handle:
+            before = os.fstat(handle.fileno())
+            if not stat.S_ISREG(before.st_mode) or before.st_size > maximum_bytes:
+                return None
+            raw = handle.read(maximum_bytes + 1)
+            after = os.fstat(handle.fileno())
+            current = os.stat(path, follow_symlinks=False)
+        identity = lambda value: (
+            value.st_dev,
+            value.st_ino,
+            value.st_size,
+            value.st_mtime_ns,
+            value.st_ctime_ns,
+        )
+        if (
+            len(raw) > maximum_bytes
+            or identity(before) != identity(after)
+            or identity(after) != identity(current)
+        ):
+            return None
+        payload = json.loads(raw)
+        if not isinstance(payload, dict):
+            return None
+        digest(payload)  # Reject non-finite facts, even in optional fields.
+        return payload
+    except (OSError, ValueError, TypeError, UnicodeError, RecursionError):
+        return None
+
+
+def research_census_file_generation(path):
+    value = os.stat(path, follow_symlinks=False)
+    if not stat.S_ISREG(value.st_mode):
+        raise ValueError("census_parent_not_regular")
+    return {
+        "device": value.st_dev,
+        "inode": value.st_ino,
+        "size": value.st_size,
+        "mtime_ns": value.st_mtime_ns,
+        "ctime_ns": value.st_ctime_ns,
+    }
+
+
+def load_research_census(path, *, maximum_bytes=4 * 1024 * 1024):
+    """Prefer the writer-issued compact projection bound to the current parent."""
+    path = Path(path)
+    sidecar = path.with_suffix(".admission.json")
+    try:
+        if sidecar.exists() or sidecar.is_symlink():
+            before = research_census_file_generation(path)
+            payload = _load_bounded_research_summary(
+                sidecar, maximum_bytes=maximum_bytes
+            )
+            if (
+                not payload
+                or payload.get("schema") != "market_opportunity_research_projection_v1"
+            ):
+                return None
+            parent = payload.get("canonical_parent") or {}
+            parent_hash = parent.get("sha256") if isinstance(parent, dict) else None
+            if (
+                not isinstance(parent, dict)
+                or parent.get("filename") != path.name
+                or parent.get("generation") != before
+                or not isinstance(parent_hash, str)
+                or len(parent_hash) != 64
+                or any(character not in "0123456789abcdef" for character in parent_hash)
+            ):
+                return None
+            checksum = payload.get("projection_content_sha256")
+            if checksum != digest(
+                {
+                    key: value
+                    for key, value in payload.items()
+                    if key != "projection_content_sha256"
+                }
+            ):
+                return None
+            if any(
+                payload.get(key) is not expected for key, expected in AUTHORITY.items()
+            ):
+                return None
+            if before != research_census_file_generation(path):
+                return None
+            return payload
+        return _load_bounded_research_summary(path, maximum_bytes=maximum_bytes)
+    except (OSError, ValueError, TypeError, RecursionError):
+        return None
+
+
+def research_census_projection(report, *, parent_filename, parent_sha256, generation):
+    """Project admission facts during the existing producer's publication."""
+    keys = (
+        "opportunity_episode_id",
+        "opportunity_id",
+        "episode_id",
+        "stock_code",
+        "symbol",
+        "stock_name",
+        "venue",
+        "session",
+        "first_census_at",
+        "symbol_master_status",
+        "instrument_type",
+        "listing_market",
+    )
+    details = report.get("opportunity_details")
+
+    def slim(row):
+        if not isinstance(row, dict):
+            return row
+        stages, clocks = row.get("stage_reached"), row.get("first_stage_at")
+        return {
+            **{key: row[key] for key in keys if key in row},
+            "stage_reached": (
+                {"candidate_evaluated": stages.get("candidate_evaluated")}
+                if isinstance(stages, dict)
+                else None
+            ),
+            "first_stage_at": (
+                {"candidate_evaluated": clocks.get("candidate_evaluated")}
+                if isinstance(clocks, dict)
+                else None
+            ),
+            "canonical_source_row_sha256": digest(row),
+        }
+
+    if isinstance(details, list):
+        projected = [slim(row) for row in details]
+    elif isinstance(details, dict):
+        projected = {}
+        for panel, windows in details.items():
+            if not isinstance(windows, dict):
+                projected[panel] = None
+                continue
+            projected[panel] = {}
+            for window, evidence in windows.items():
+                rows = (
+                    evidence.get("forward_exact")
+                    if isinstance(evidence, dict)
+                    else None
+                )
+                projected[panel][window] = {
+                    "forward_exact": (
+                        [slim(row) for row in rows] if isinstance(rows, list) else None
+                    )
+                }
+    else:
+        projected = None
+    payload = {
+        "schema": "market_opportunity_research_projection_v1",
+        "target_date": report.get("target_date"),
+        "generated_at": report.get("generated_at"),
+        "canonical_parent": {
+            "filename": parent_filename,
+            "sha256": parent_sha256,
+            "generation": generation,
+        },
+        "opportunity_details": projected,
+        **AUTHORITY,
+    }
+    payload["projection_content_sha256"] = digest(payload)
+    return payload
+
+
+def research_admission_ledger(census, *, source_date, universe, owner):
+    """Audit causal admission readiness, not signals or live enrollment.
+
+    All forward panels are projections. Preserve every input location while
+    deduplicating native IDs; retrospective outcomes never choose admission.
+    A new symbol waits for the existing catalog/capacity contract, not a fill.
+    """
+    base = {
+        "schema": "machine_research_admission_ledger_v1",
+        "owner": owner,
+        "source_date": source_date.isoformat(),
+        "metric_role": "funnel_count",
+        "decision_authority": "research_admission_readiness_only",
+        "catalog_mutated": False,
+        "primary_recall_denominator_changed": False,
+        "window_policy": "exact_source_date_forward_candidate_join",
+        "sample_floor": "one_native_causal_candidate_with_official_master",
+        "primary_decision_metric": "input_count_and_disposition_conservation",
+        "source_quality_gate": "bounded_summary_native_clock_scope_master_binding",
+        "valid_zero_day_proven": False,
+        "forbidden_uses": [
+            "runtime_policy_selection",
+            "actual_order_permission",
+            "ex_post_profit_admission_priority",
+            "whole_market_recall_acceptance",
+        ],
+        **AUTHORITY,
+    }
+    lane_scopes = {
+        "widget": {("KRX", "KRX_REGULAR")},
+        "low_price_two_leg": {("KRX", "KRX_REGULAR"), ("NXT", "NXT_REGULAR_OVERLAP")},
+    }.get(owner, set())
+    try:
+        if source_date.isoformat() < "2026-06-05" or not lane_scopes:
+            raise ValueError("research_date_or_owner_contract_invalid")
+        if (
+            not isinstance(census, dict)
+            or census.get("target_date") != source_date.isoformat()
+        ):
+            raise ValueError("exact_date_census_missing")
+        census_hash = digest(census)
+        details = census.get("opportunity_details")
+        inputs, malformed = [], []
+        if isinstance(details, list):
+            inputs = [
+                (f"opportunity_details/{i}", row) for i, row in enumerate(details)
+            ]
+        elif isinstance(details, dict):
+            for panel, windows in sorted(details.items()):
+                if not isinstance(windows, dict):
+                    malformed.append(f"opportunity_details/{panel}")
+                    continue
+                for window, evidence in sorted(windows.items()):
+                    location = f"opportunity_details/{panel}/{window}/forward_exact"
+                    rows = (
+                        evidence.get("forward_exact")
+                        if isinstance(evidence, dict)
+                        else None
+                    )
+                    if not isinstance(rows, list):
+                        malformed.append(location)
+                        continue
+                    inputs.extend(
+                        (f"{location}/{i}", row) for i, row in enumerate(rows)
+                    )
+        else:
+            raise ValueError("census_details_invalid")
+    except (TypeError, ValueError, RecursionError) as error:
+        return {
+            **base,
+            "status": "source_gap",
+            "reason": str(error),
+            "input_count": None,
+            "unaccounted_count": None,
+        }
+
+    # Detect conflicting bindings before deduplication; no first-row winner.
+    bindings = {}
+    generation_clock = aware(census.get("generated_at"))
+    for _, row in inputs:
+        if not isinstance(row, dict):
+            continue
+        native = (
+            row.get("opportunity_episode_id")
+            or row.get("opportunity_id")
+            or row.get("episode_id")
+        )
+        if isinstance(native, str) and native.strip():
+            binding = digest(
+                {
+                    **{
+                        key: row.get(key)
+                        for key in (
+                            "venue",
+                            "session",
+                            "first_census_at",
+                            "symbol_master_status",
+                            "instrument_type",
+                            "listing_market",
+                        )
+                    },
+                    "symbol": row.get("stock_code") or row.get("symbol"),
+                    "candidate_reached": (
+                        (row.get("stage_reached") or {}).get("candidate_evaluated")
+                        if isinstance(row.get("stage_reached"), dict)
+                        else None
+                    ),
+                    "candidate_at": (
+                        (row.get("first_stage_at") or {}).get("candidate_evaluated")
+                        if isinstance(row.get("first_stage_at"), dict)
+                        else None
+                    ),
+                }
+            )
+            bindings.setdefault(native, set()).add(binding)
+    ledger, seen = [], set()
+    for location, row in inputs:
+        item = {
+            "source_location": location,
+            "disposition": "source_gap",
+            "reason": "native_identity_missing",
+        }
+        if not isinstance(row, dict):
+            item["reason"] = "invalid_census_row"
+            ledger.append(item)
+            continue
+        native = (
+            row.get("opportunity_episode_id")
+            or row.get("opportunity_id")
+            or row.get("episode_id")
+        )
+        symbol = row.get("stock_code") or row.get("symbol")
+        venue, session = row.get("venue"), row.get("session")
+        item.update(
+            native_id=native,
+            symbol=symbol,
+            venue=venue,
+            session=session,
+            source_row_sha256=digest(row),
+            canonical_source_row_sha256=row.get("canonical_source_row_sha256"),
+        )
+        if (
+            not isinstance(native, str)
+            or not native.strip()
+            or not isinstance(symbol, str)
+            or len(symbol) != 6
+            or not symbol.isascii()
+            or not symbol.isdigit()
+            or not isinstance(venue, str)
+            or not isinstance(session, str)
+            or not session
+        ):
+            ledger.append(item)
+            continue
+        if len(bindings[native]) != 1:
+            item["reason"] = "conflicting_native_scope"
+            ledger.append(item)
+            continue
+        if native in seen:
+            item.update(
+                disposition="duplicate_projection",
+                reason="native_opportunity_already_accounted",
+            )
+            ledger.append(item)
+            continue
+        seen.add(native)
+        if (venue, session) not in lane_scopes:
+            item.update(
+                disposition="excluded_by_contract",
+                reason="registered_research_lane_scope_mismatch",
+            )
+        elif (
+            row.get("symbol_master_status") != "verified"
+            or row.get("instrument_type") != "EQUITY"
+            or not isinstance(row.get("listing_market"), str)
+            or row.get("listing_market") not in {"KOSPI", "KOSDAQ"}
+        ):
+            item["reason"] = "official_common_stock_binding_missing"
+        else:
+            first = aware(row.get("first_census_at"))
+            stages, clocks = row.get("stage_reached"), row.get("first_stage_at")
+            candidate_at = (
+                aware(clocks.get("candidate_evaluated"))
+                if isinstance(clocks, dict)
+                else None
+            )
+            try:
+                clock_dates_valid = (
+                    first is not None
+                    and candidate_at is not None
+                    and (
+                        first.astimezone(ZoneInfo("Asia/Seoul")).date() == source_date
+                        and candidate_at.astimezone(ZoneInfo("Asia/Seoul")).date()
+                        == source_date
+                    )
+                )
+            except (OverflowError, ValueError):
+                clock_dates_valid = False
+            if (
+                not isinstance(stages, dict)
+                or stages.get("candidate_evaluated") is not True
+                or first is None
+                or candidate_at is None
+                or candidate_at < first
+                or not clock_dates_valid
+                or ("generated_at" in census and generation_clock is None)
+                or (generation_clock is not None and candidate_at > generation_clock)
+            ):
+                item["reason"] = "causal_scanner_candidate_join_unproven"
+            elif symbol in universe:
+                item.update(
+                    disposition="admitted",
+                    reason="existing_research_catalog_causal_candidate",
+                    research_state="pending_consumer_source_validation",
+                )
+            else:
+                item.update(
+                    disposition="deferred_capacity",
+                    reason="research_catalog_capacity_contract_pending",
+                    research_state="pending_catalog_admission",
+                )
+        ledger.append(item)
+    counts = dict(Counter(row["disposition"] for row in ledger))
+    return {
+        **base,
+        "status": "source_gap" if malformed or counts.get("source_gap") else "observed",
+        "census_content_sha256": census_hash,
+        "canonical_parent": census.get("canonical_parent"),
+        "input_count": len(inputs),
+        "native_id_count": len(bindings),
+        "dispositions": ledger,
+        "disposition_counts": counts,
+        "unaccounted_count": len(inputs) - sum(counts.values()),
+        "malformed_scopes": malformed,
+        "admission_rule": "causal_candidate_and_official_master_not_ex_post_profit",
+        "catalog_capacity_closure_pending": True,
+        "source_generation_clock_proven": generation_clock is not None,
+        "registered_research_scopes": sorted([list(scope) for scope in lane_scopes]),
+        "scope_disposition_counts": {
+            scope: dict(
+                Counter(
+                    row["disposition"]
+                    for row in ledger
+                    if f"{row.get('venue', 'UNKNOWN')}:{row.get('session', 'UNKNOWN')}"
+                    == scope
+                )
+            )
+            for scope in sorted(
+                {
+                    f"{row.get('venue', 'UNKNOWN')}:{row.get('session', 'UNKNOWN')}"
+                    for row in ledger
+                }
+            )
+        },
     }

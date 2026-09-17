@@ -39,6 +39,7 @@ dist/
 # Local execution locks and custody-recovery backups are not delivery assets.
 /data/pipeline_event_summaries/*.lock
 /data/report/strategy_owner_first_use_replay/*.lock
+/data/report/market_opportunity_census/*.publish.lock
 /data/runtime/manual_close_reconciliation/
 # Exact reviewed approval assets required by the dated profile/preflight contract.
 !docs/audit-reports/2026-09-08-low-price-recommendation-apply-evidence.json

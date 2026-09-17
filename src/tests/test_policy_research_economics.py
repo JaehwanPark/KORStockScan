@@ -16,6 +16,364 @@ from src.tests.test_machine_entry_timing_tuning import _entry_row
 DAY = date(2026, 8, 28)
 
 
+def admission_row(native="opportunity:1", symbol="000001"):
+    return {
+        "opportunity_episode_id": native,
+        "stock_code": symbol,
+        "venue": "KRX",
+        "session": "KRX_REGULAR",
+        "first_census_at": f"{DAY}T09:00:00+09:00",
+        "symbol_master_status": "verified",
+        "instrument_type": "EQUITY",
+        "listing_market": "KOSPI",
+        "stage_reached": {"candidate_evaluated": True},
+        "first_stage_at": {"candidate_evaluated": f"{DAY}T09:00:01+09:00"},
+    }
+
+
+def test_admission_union_conserves_native_projections_without_outcome_selection():
+    enrolled = admission_row()
+    missed = admission_row("opportunity:2", "000002")
+    census = {
+        "target_date": str(DAY),
+        "opportunity_details": {
+            "liquid_common": {"top_20": {"forward_exact": [enrolled]}},
+            "all": {
+                "top_50": {
+                    "forward_exact": [dict(enrolled, ex_post_profit=999), missed],
+                    "same_day_any_venue_retrospective": [admission_row("oracle")],
+                }
+            },
+        },
+    }
+    ledger = economics.research_admission_ledger(
+        census, source_date=DAY, universe={"000001": "fixed"}, owner="widget"
+    )
+    assert ledger["input_count"] == 3
+    assert ledger["native_id_count"] == 2
+    assert ledger["disposition_counts"] == {
+        "admitted": 1,
+        "deferred_capacity": 1,
+        "duplicate_projection": 1,
+    }
+    assert ledger["unaccounted_count"] == 0
+    assert ledger["catalog_mutated"] is False
+    assert ledger["allowed_runtime_apply"] is False
+    assert all(row.get("native_id") != "oracle" for row in ledger["dispositions"])
+    del census["opportunity_details"]["all"]["top_50"]["forward_exact"][0][
+        "ex_post_profit"
+    ]
+    second = economics.research_admission_ledger(
+        census, source_date=DAY, universe={"000001": "fixed"}, owner="widget"
+    )
+    assert second["disposition_counts"] == ledger["disposition_counts"]
+
+
+@pytest.mark.parametrize(
+    "mutation,reason",
+    [
+        ({"opportunity_episode_id": None}, "native_identity_missing"),
+        ({"symbol_master_status": "missing"}, "official_common_stock_binding_missing"),
+        (
+            {"stage_reached": {"candidate_evaluated": "true"}},
+            "causal_scanner_candidate_join_unproven",
+        ),
+        (
+            {"first_stage_at": {"candidate_evaluated": f"{DAY}T08:59:59+09:00"}},
+            "causal_scanner_candidate_join_unproven",
+        ),
+        (
+            {"first_census_at": "2026-08-27T09:00:00+09:00"},
+            "causal_scanner_candidate_join_unproven",
+        ),
+    ],
+)
+def test_admission_never_invents_causal_candidate_or_common_stock(mutation, reason):
+    census = {
+        "target_date": str(DAY),
+        "opportunity_details": [dict(admission_row(), **mutation)],
+    }
+    result = economics.research_admission_ledger(
+        census, source_date=DAY, universe={"000001": "fixed"}, owner="widget"
+    )
+    assert result["dispositions"][0]["reason"] == reason
+    assert result["disposition_counts"] == {"source_gap": 1}
+
+
+def test_admission_conflicting_native_binding_is_not_first_projection_winner():
+    rows = [
+        admission_row(),
+        dict(admission_row(), stage_reached={"candidate_evaluated": False}),
+    ]
+    for source in (rows, rows[::-1]):
+        result = economics.research_admission_ledger(
+            {"target_date": str(DAY), "opportunity_details": source},
+            source_date=DAY,
+            universe={"000001": "fixed"},
+            owner="widget",
+        )
+        assert result["disposition_counts"] == {"source_gap": 2}
+        assert {row["reason"] for row in result["dispositions"]} == {
+            "conflicting_native_scope"
+        }
+
+
+def test_admission_gap_scope_and_valid_lane_are_isolated():
+    census = {
+        "target_date": str(DAY),
+        "opportunity_details": {
+            "all": {"top_20": {"forward_exact": [dict(admission_row(), venue="NXT")]}},
+            "liquid_common": {
+                "top_20": {"forward_exact": [admission_row("valid")]},
+                "top_50": None,
+            },
+        },
+    }
+    result = economics.research_admission_ledger(
+        census, source_date=DAY, universe={"000001": "fixed"}, owner="widget"
+    )
+    assert result["status"] == "source_gap"
+    assert result["disposition_counts"] == {"excluded_by_contract": 1, "admitted": 1}
+    assert result["unaccounted_count"] == 0
+    assert len(result["malformed_scopes"]) == 1
+
+
+def test_bounded_census_reader_rejects_alias_nonfinite_oversize_and_non_object(
+    tmp_path,
+):
+    path = tmp_path / "census.json"
+    path.write_text(json.dumps({"target_date": str(DAY), "opportunity_details": []}))
+    assert economics.load_research_census(path)["target_date"] == str(DAY)
+    alias = tmp_path / "alias.json"
+    alias.symlink_to(path)
+    assert economics.load_research_census(alias) is None
+    assert economics.load_research_census(path, maximum_bytes=1) is None
+    for raw in ('{"bad": NaN}', "[]", "not-json"):
+        path.write_text(raw)
+        assert economics.load_research_census(path) is None
+
+
+def test_handoff_malformed_primary_preserves_valid_expanded_scope():
+    census = {
+        "target_date": str(DAY),
+        "opportunity_details": {
+            "liquid_common": [],
+            "all": {"top_50": {"forward_exact": [admission_row()]}},
+        },
+    }
+    result = economics.research_universe_handoff(
+        census, source_date=DAY, universe={"000001": "fixed"}, results={}
+    )
+    assert result["status"] == "source_gap"
+    assert result["admission_ledger"]["disposition_counts"] == {"admitted": 1}
+
+
+def test_future_ai_progress_does_not_change_native_admission_deduplication():
+    row = admission_row()
+    projection = dict(
+        row,
+        stage_reached={"candidate_evaluated": True, "submitted": True},
+        first_stage_at={**row["first_stage_at"], "submitted": f"{DAY}T09:10:00+09:00"},
+    )
+    result = economics.research_admission_ledger(
+        {"target_date": str(DAY), "opportunity_details": [row, projection]},
+        source_date=DAY,
+        universe={"000001": "fixed"},
+        owner="widget",
+    )
+    assert result["disposition_counts"] == {"admitted": 1, "duplicate_projection": 1}
+
+
+def test_malformed_master_field_is_a_scoped_gap_not_global_crash():
+    result = economics.research_admission_ledger(
+        {
+            "target_date": str(DAY),
+            "opportunity_details": [
+                dict(admission_row(), listing_market=[]),
+                admission_row("valid"),
+            ],
+        },
+        source_date=DAY,
+        universe={"000001": "fixed"},
+        owner="widget",
+    )
+    assert result["disposition_counts"] == {"source_gap": 1, "admitted": 1}
+
+
+def test_admission_registered_scope_is_owner_specific_and_future_clock_is_blocked():
+    census = {
+        "target_date": str(DAY),
+        "generated_at": f"{DAY}T09:00:02+09:00",
+        "opportunity_details": [
+            dict(admission_row(), venue="NXT", session="NXT_REGULAR_OVERLAP")
+        ],
+    }
+    episode = economics.research_admission_ledger(
+        census, source_date=DAY, universe={"000001": "fixed"}, owner="low_price_two_leg"
+    )
+    widget = economics.research_admission_ledger(
+        census, source_date=DAY, universe={"000001": "fixed"}, owner="widget"
+    )
+    assert episode["disposition_counts"] == {"admitted": 1}
+    assert widget["disposition_counts"] == {"excluded_by_contract": 1}
+    census["generated_at"] = f"{DAY}T09:00:00+09:00"
+    episode = economics.research_admission_ledger(
+        census, source_date=DAY, universe={"000001": "fixed"}, owner="low_price_two_leg"
+    )
+    assert episode["disposition_counts"] == {"source_gap": 1}
+
+
+def test_admission_before_baseline_is_never_tuning_ready():
+    old = date(2026, 6, 4)
+    ledger = economics.research_admission_ledger(
+        {"target_date": str(old), "opportunity_details": []},
+        source_date=old,
+        universe={},
+        owner="widget",
+    )
+    assert ledger["status"] == "source_gap"
+    assert ledger["input_count"] is None
+
+
+def test_bounded_census_reader_rejects_replaced_path_generation(tmp_path, monkeypatch):
+    path = tmp_path / "census.json"
+    path.write_text('{"opportunity_details": []}')
+    original = economics.os.stat
+
+    def replaced_stat(target, **kwargs):
+        if target == path:
+            replacement = tmp_path / "replacement.json"
+            replacement.write_text('{"opportunity_details": []}')
+            replacement.replace(path)
+        return original(target, **kwargs)
+
+    monkeypatch.setattr(economics.os, "stat", replaced_stat)
+    assert economics.load_research_census(path) is None
+
+
+def test_compact_census_publication_consumes_large_parent_without_rescan(
+    tmp_path, monkeypatch
+):
+    from src.engine.monitoring import market_opportunity_census as producer
+
+    monkeypatch.setattr(producer, "REPORT_DIR", tmp_path)
+    monkeypatch.setattr(producer, "render_markdown", lambda report: "source-only")
+    report = {
+        "target_date": str(DAY),
+        "generated_at": f"{DAY}T15:30:00+09:00",
+        "opportunity_details": {
+            "all": {"top_50": {"forward_exact": [admission_row()]}},
+            "liquid_common": {"top_20": {"forward_exact": [admission_row()]}},
+        },
+        "large_ex_post_diagnostic": "x" * (5 * 1024 * 1024),
+    }
+    json_path, _ = producer.write_report(report)
+    assert json_path.stat().st_size > 4 * 1024 * 1024
+    sidecar = json_path.with_suffix(".admission.json")
+    assert sidecar.stat().st_size < 4096
+    reads = []
+    original = economics._load_bounded_research_summary
+
+    def observed_read(path, **kwargs):
+        reads.append(path)
+        return original(path, **kwargs)
+
+    monkeypatch.setattr(economics, "_load_bounded_research_summary", observed_read)
+    compact = economics.load_research_census(json_path)
+    assert reads == [sidecar]
+    assert (
+        compact["canonical_parent"]["sha256"]
+        == __import__("hashlib").sha256(json_path.read_bytes()).hexdigest()
+    )
+    oracle = economics.research_admission_ledger(
+        report, source_date=DAY, universe={"000001": "fixed"}, owner="widget"
+    )
+    result = economics.research_admission_ledger(
+        compact, source_date=DAY, universe={"000001": "fixed"}, owner="widget"
+    )
+    assert result["disposition_counts"] == oracle["disposition_counts"]
+    assert result["input_count"] == 2
+    assert result["unaccounted_count"] == 0
+    assert result["dispositions"][0]["canonical_source_row_sha256"] == economics.digest(
+        admission_row()
+    )
+    json_path.write_text(json_path.read_text() + " ")
+    assert economics.load_research_census(json_path) is None
+
+
+def test_compact_corruption_never_falls_back_to_old_full_summary(tmp_path, monkeypatch):
+    from src.engine.monitoring import market_opportunity_census as producer
+
+    monkeypatch.setattr(producer, "REPORT_DIR", tmp_path)
+    monkeypatch.setattr(producer, "render_markdown", lambda report: "source-only")
+    report = {"target_date": str(DAY), "opportunity_details": [admission_row()]}
+    parent, _ = producer.write_report(report)
+    sidecar = parent.with_suffix(".admission.json")
+    payload = json.loads(sidecar.read_text())
+    payload["opportunity_details"][0]["stock_code"] = "999999"
+    sidecar.write_text(json.dumps(payload))
+    assert economics.load_research_census(parent) is None
+
+
+def test_episode_admission_phase_refresh_preserves_economic_selection():
+    from src.engine.monitoring import (
+        low_price_two_leg_expanded_candidate_research as producer,
+    )
+
+    report = {
+        "end_date": str(DAY),
+        "research_profile_inventory": {
+            "profile": {"symbol": "000001", "name": "fixed"}
+        },
+        "recommendations": [{"policy": "unchanged"}],
+        "source_input_fingerprint": "frozen-economics",
+    }
+    original = json.loads(json.dumps(report))
+    producer._attach_admission_evidence(
+        report,
+        market_census={
+            "target_date": str(DAY),
+            "opportunity_details": [admission_row()],
+        },
+    )
+    assert report["research_admission_ledger"]["disposition_counts"] == {"admitted": 1}
+    old_phase = report["admission_input_fingerprint"]
+    producer._attach_admission_evidence(
+        report,
+        market_census={
+            "target_date": str(DAY),
+            "opportunity_details": [admission_row(), admission_row("new", "000002")],
+        },
+    )
+    assert report["admission_input_fingerprint"] != old_phase
+    assert report["research_admission_ledger"]["disposition_counts"] == {
+        "admitted": 1,
+        "deferred_capacity": 1,
+    }
+    assert report["recommendations"] == original["recommendations"]
+    assert report["source_input_fingerprint"] == original["source_input_fingerprint"]
+
+
+def test_census_publication_busy_preserves_verified_parent(tmp_path, monkeypatch):
+    from src.engine.monitoring import market_opportunity_census as producer
+
+    monkeypatch.setattr(producer, "REPORT_DIR", tmp_path)
+    monkeypatch.setattr(producer, "render_markdown", lambda report: "source-only")
+    report = {"target_date": str(DAY), "opportunity_details": [admission_row()]}
+    parent, _ = producer.write_report(report)
+    previous = parent.read_bytes()
+    with (tmp_path / f"market_opportunity_census_{DAY}.publish.lock").open(
+        "r+"
+    ) as lock:
+        producer.fcntl.flock(
+            lock.fileno(), producer.fcntl.LOCK_EX | producer.fcntl.LOCK_NB
+        )
+        with pytest.raises(BlockingIOError):
+            producer.write_report(dict(report, added="not published"))
+    assert parent.read_bytes() == previous
+    assert economics.load_research_census(parent) is not None
+
+
 def common_row(*, loss=False, submitted=False):
     row = _entry_row(DAY, 1)
     row.update(

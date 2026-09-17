@@ -22,6 +22,10 @@ from urllib import parse, request
 import requests
 
 from src.engine.monitoring.machine_recommendation_identity import bind_recommendation
+from src.engine.monitoring.policy_research_economics import (
+    load_research_census,
+    research_admission_ledger,
+)
 from src.engine.monitoring.machine_candidate_lifecycle import (
     completed_daily_recommendation_symbols,
     episode_long_term_pruned_symbols,
@@ -874,6 +878,7 @@ def build_report(
     research_profiles: dict[str, ResearchProfile] | None = None,
     dynamic_universe_source_date: date | None = None,
     applied_policy_snapshots: dict[str, dict[str, Any]] | None = None,
+    market_census: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if start_date != CLEAN_BASELINE_DATE or end_date < start_date:
         raise ValueError("research_window_must_start_at_clean_baseline")
@@ -1145,7 +1150,35 @@ def build_report(
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
     }
-    return attach_recommendation_contract(report)
+    return attach_recommendation_contract(
+        _attach_admission_evidence(report, market_census=market_census)
+    )
+
+
+def _attach_admission_evidence(report, *, market_census=None):
+    end_date = date.fromisoformat(report["end_date"])
+    report["research_admission_ledger"] = research_admission_ledger(
+        (
+            market_census
+            if market_census is not None
+            else load_research_census(
+                DATA_DIR
+                / "report"
+                / "market_opportunity_census"
+                / f"market_opportunity_census_{end_date.isoformat()}.json"
+            )
+        ),
+        source_date=end_date,
+        universe={
+            str(row["symbol"]): str(row.get("name") or row["symbol"])
+            for row in report.get("research_profile_inventory", {}).values()
+        },
+        owner="low_price_two_leg",
+    )
+    report["admission_input_fingerprint"] = report["research_admission_ledger"].get(
+        "census_content_sha256"
+    )
+    return report
 
 
 def attach_recommendation_contract(report: dict[str, Any]) -> dict[str, Any]:
@@ -2300,6 +2333,9 @@ def research_input_fingerprint(
     payload = {
         "schema": "low_price_two_leg_expanded_research_input_v1",
         "producer_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        "admission_helper_sha256": hashlib.sha256(
+            Path(__file__).with_name("policy_research_economics.py").read_bytes()
+        ).hexdigest(),
         "target_date": target_date.isoformat(),
         "candidate_symbols": candidate_symbols,
         "research_profiles": {
@@ -2487,6 +2523,12 @@ def main(argv: list[str] | None = None) -> int:
                 "all_research_symbols_source_quality_blocked:"
                 + "|".join(distinct_reasons)
             )
+        market_census = load_research_census(
+            DATA_DIR
+            / "report"
+            / "market_opportunity_census"
+            / f"market_opportunity_census_{target_date.isoformat()}.json"
+        )
         fingerprint = research_input_fingerprint(
             sources=sources,
             target_date=target_date,
@@ -2502,6 +2544,14 @@ def main(argv: list[str] | None = None) -> int:
             existing_path, target_date=target_date, fingerprint=fingerprint
         )
         if reusable is not None:
+            # Admission is a separate evidence phase. Refresh it on the frozen
+            # source without replaying unchanged economic grids or acquisitions.
+            reusable = _attach_admission_evidence(
+                reusable,
+                market_census=market_census if market_census is not None else {},
+            )
+            if args.write:
+                write_report(reusable, output_dir=args.output_dir)
             if args.print_summary:
                 print(
                     json.dumps(
@@ -2525,6 +2575,7 @@ def main(argv: list[str] | None = None) -> int:
             research_profiles=research_profiles,
             dynamic_universe_source_date=dynamic_source_date,
             applied_policy_snapshots=applied_policy_snapshots,
+            market_census=market_census if market_census is not None else {},
         )
         report["source_input_fingerprint"] = fingerprint
         report["execution_mode"] = "full_recompute"

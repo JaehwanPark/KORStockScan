@@ -47,6 +47,7 @@ from src.engine.monitoring.policy_research_economics import (
     modeled_summary,
     joint_capital_demand,
     research_universe_handoff,
+    load_research_census,
 )
 from src.engine.monitoring.widget_signal_quality import (
     component_arms,
@@ -1962,12 +1963,7 @@ def _attach_population_evidence(report, *, market_census=None, capital_limit_krw
             / "market_opportunity_census"
             / f"market_opportunity_census_{end_date.isoformat()}.json"
         )
-        try:
-            if census_path.is_symlink() or census_path.stat().st_size > 4 * 1024 * 1024:
-                raise ValueError("census_not_bounded_summary")
-            market_census = json.loads(census_path.read_text())
-        except (OSError, ValueError):
-            market_census = None
+        market_census = load_research_census(census_path)
     report["passed_symbols"] = [
         symbol
         for symbol, result in results.items()
@@ -2680,7 +2676,11 @@ def main(argv: list[str] | None = None) -> int:
         )
         if reusable is None:
             report = build_report(
-                **kwargs, replay_cache_dir=args.snapshot_dir / "replay"
+                **kwargs,
+                replay_cache_dir=args.snapshot_dir / "replay",
+                # Population evidence belongs to the final combined report,
+                # not N copies of the census in per-symbol checkpoints.
+                market_census={},
             )
             if args.write:
                 checkpoint_payload = {
