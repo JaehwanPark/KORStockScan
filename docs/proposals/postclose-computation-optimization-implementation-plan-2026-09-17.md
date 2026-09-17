@@ -2,7 +2,7 @@
 
 ## 1. 목표·범위·현 상태
 
-상태: **O0 main wrapper 계측·O3 행 내부 중복 계산 제거·O2 삼성 공통 feature/AVG_DOWN cache 정정 감지·저가주 rolling feature·clean-prefix 재생·report/profile checkpoint·bounded 선정 evidence 및 replay/tick/비용 의존 결속·O1 discovery-local floor 재파싱 제거 부분 구현**. [부분 구현·검증](../audit-reports/2026-09-17-postclose-computation-optimization-scoped-implementation.md)을 기준으로 하며 전체 O0–O3 완료가 아니다. 대상은 ① main AI quality/provider replay ② 삼성 entry·저가주 2leg·AVG_DOWN 연구 계산 ③ source-quality/cumulative EV 반복 원천 처리다. 계획 문서 자체는 production 실행·provider/주문 호출·배포·재기동 권한이 아니며 별도 사용자 실행 요청 범위만 따른다.
+상태: **O0 main wrapper 계측·O3 행 내부 중복 계산 제거·O2 삼성 공통 feature/AVG_DOWN cache 정정 감지·저가주 rolling feature·clean-prefix 재생·report/profile checkpoint·bounded 선정 evidence·immutable day-low fact 및 replay/tick/비용 의존 결속·O1 discovery-local floor 재파싱 제거 부분 구현**. [부분 구현·검증](../audit-reports/2026-09-17-postclose-computation-optimization-scoped-implementation.md)을 기준으로 하며 전체 O0–O3 완료가 아니다. 대상은 ① main AI quality/provider replay ② 삼성 entry·저가주 2leg·AVG_DOWN 연구 계산 ③ source-quality/cumulative EV 반복 원천 처리다. 계획 문서 자체는 production 실행·provider/주문 호출·배포·재기동 권한이 아니며 별도 사용자 실행 요청 범위만 따른다.
 
 목표는 동일한 유효 전체 모집단·후보·정책 의미를 유지하면서 parsing/replay/반복 결과 계산을 줄이는 것이다. 전수 연구의 정확성 보완은 [연구 로직 점검](../audit-reports/2026-09-17-widget-episode-policy-research-logic-review.md) 및 [전수 튜닝 계획](entry-opportunity-cost-full-population-tuning-implementation-plan-2026-09-17.md) U10A/B에 따른다. 계산 변경과 경제성·선정 의미 변경을 별도 diff/검증으로 구분한다.
 
@@ -71,6 +71,10 @@
 3. 결과를 source-day/candidate-semantic-key 단위로 checkpoint한다. 키에 profile/모든 tunable parameter·owner·수량·entry/exit/cooldown·cost·expected source-day/holdout partition을 포함한다. Source cache는 비용 불변 가격 자료와 경제성 결과를 나누어 비용 변경 시 raw 재다운로드 없이 경제성만 재계산한다.
 4. 계산은 bounded iterator/chunk로 처리하고 stable grid order/tie-break를 유지한다. winner·gate counters·incremental caps·필수 diagnostics만 memory에 유지하되 선정 계약이 요구하는 대안 후보를 버리지 않는다. 공통 owner state를 여러 후보가 mutation으로 공유하지 않는다.
 5. 날짜 append 시 신규 날짜만 replay하고 calibration/holdout 이동으로 영향받는 집계는 갱신한다. 과거 정정·profile/exit/cost 수정은 해당 replay와 dependent aggregate를 무효화한다. Family 간 source facts는 공유 가능하나 eligibility와 apply 권한은 공유하지 않는다.
+
+### Immutable day-low fact 후속
+
+기존 `DayContext`의 frozen bar tuple에서 최소 low를 한 번 계산해 후보별 HELD replay가 재사용한다. 후보 custody/state는 공유하지 않으며 tuple 정정은 무효화, 비정규 mutable list는 uncached로 처리한다. [리뷰 §19](../audit-reports/2026-09-17-postclose-computation-optimization-scoped-implementation.md#19-o2-immutable-day-low-fact-재사용정정-회귀)의 작업본407 PASS·synthetic HELD CPU46.739% 감소/선정 parity는 전체50% 목표·RSS·경제성 완료가 아니다. 새로운 승인/floor/작업 없이 기존 자동 장후 경로가 소비하며 최신CF 폐루프 위 managed f36fef8b/13 suite787 physical·shared PASS를 확인하고, selector·예정20:10 evaluation/21:15 refresh의 code root를 맞췄다([배포 §20](../audit-reports/2026-09-17-postclose-computation-optimization-scoped-implementation.md#20-최신-폐루프-보존-릴리스예정-unit-code-contract-일치)). Resource/timer·기존 매매 PID는 유지하고 재기동하지 않았다. 자동 연결은 자연 실행 성공과 구분한다. Persistent day-state append/partition·전체 O0–O3와 자연 acceptance는 OPEN이다.
 
 ### 정확성과 성능 acceptance
 
