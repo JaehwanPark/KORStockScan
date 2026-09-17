@@ -165,6 +165,8 @@ def test_price_ready_plan_reaches_existing_cf_and_daily_without_assuming_fill(
         "oversized",
         "date",
         "naive_clock",
+        "missing_version",
+        "invalid_identity_type",
     ],
 )
 def test_invalid_price_ready_plan_never_invents_buy_intent(
@@ -187,9 +189,13 @@ def test_invalid_price_ready_plan_never_invents_buy_intent(
         row["emitted_at"] = "2026-09-16T10:00:00+09:00"
     elif corruption == "naive_clock":
         row["emitted_at"] = "2026-09-17T10:00:00"
+    elif corruption == "missing_version":
+        del fields["entry_execution_sizing_plan"]["quantity_policy_version"]
+    elif corruption == "invalid_identity_type":
+        fields["entry_execution_sizing_plan"]["scanner_promotion_id"] = ["promo-1"]
     else:
         fields["entry_execution_sizing_plan"]["unused"] = "x" * 20000
-    if corruption in {"owner", "authority"}:
+    if corruption in {"owner", "authority", "missing_version", "invalid_identity_type"}:
         fields["entry_execution_sizing_plan_sha256"] = hashlib.sha256(
             json.dumps(
                 fields["entry_execution_sizing_plan"],
