@@ -891,7 +891,18 @@ def _evaluate_candidate_windows(
                     (day_low / price - 1) * 100,
                 )
         else:
-            signal = context.first_signal(candidate)
+            if context._signal_partition is None:
+                # Do not pay tuple-key/cache lookup cost on a unique grid.
+                signal = next(
+                    (item for item in context.iter_window_features(
+                        candidate.lookback_bars, candidate.scan_start_minute,
+                        candidate.scan_end_minute,
+                    ) if item.drawdown_pct + 1e-12 >= candidate.rolling_high_drawdown_pct
+                    and item.near_low_pct - 1e-12 <= candidate.rolling_low_proximity_pct),
+                    None,
+                )
+            else:
+                signal = context.first_signal(candidate)
             if signal is not None:
                 episode = _episode(context, signal, candidate)
                 if any(leg["status"] == "HELD" for leg in episode["legs"]):
