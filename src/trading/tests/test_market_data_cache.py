@@ -10,7 +10,7 @@ def test_cache_duplicate_identity_cannot_advance_source_clock(monkeypatch):
                  best_bid=10000, best_ask=10010)
     cache.update("042660", received_at="bad", source_identity=("0D", 11))
     cache.update("042660", received_at=1000.5, source_identity=("0D",))
-    assert cache.get_quote_health("042660").quote_age_ms == 1000
+    assert cache.get_quote_health("042660").ws_age_ms == 1000
 
 
 def test_quiet_tape_requires_distinct_episodes_not_repeated_getters():
