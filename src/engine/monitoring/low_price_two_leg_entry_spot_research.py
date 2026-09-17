@@ -9,9 +9,12 @@ clean-baseline calibration day; the final 16 days remain untouched holdout data.
 from __future__ import annotations
 
 import argparse
+from array import array
+from bisect import bisect_left, bisect_right
 from collections import deque
 from copy import deepcopy
 from heapq import heappush, heapreplace
+from itertools import islice
 import json
 import math
 import os
@@ -20,7 +23,7 @@ import time as time_module
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 import requests
 
@@ -149,6 +152,46 @@ class DayContext:
     _minimum_low: int | None = field(
         default=None, init=False, repr=False, compare=False
     )
+    _feature_minute_index: dict[
+        int, tuple[tuple[SignalFeature, ...], array | None]
+    ] = field(default_factory=dict, init=False, repr=False, compare=False)
+
+    def iter_window_features(
+        self, lookback: int, start: int, end: int
+    ) -> Iterator[SignalFeature]:
+        source = self.features[lookback]
+        if not start <= end:
+            return iter(())
+        if isinstance(source, tuple):
+            cached = self._feature_minute_index.get(lookback)
+            if cached is None or cached[0] is not source:
+                # Minute-of-day is 0..1439. A private read-only-after-build
+                # unsigned-short index avoids a Python integer per feature.
+                minutes = array(
+                    "H",
+                    (item.timestamp.hour * 60 + item.timestamp.minute for item in source),
+                )
+                # Preserve library callers' original ordering, including
+                # duplicate minutes. An unsorted tuple uses the old filter.
+                if any(a > b for a, b in zip(minutes, minutes[1:])):
+                    minutes = None
+                if (
+                    lookback not in self._feature_minute_index
+                    and len(self._feature_minute_index) >= len(LOOKBACK_GRID)
+                ):
+                    self._feature_minute_index.clear()
+                cached = (source, minutes)
+                self._feature_minute_index[lookback] = cached
+            minutes = cached[1]
+            if minutes is not None:
+                return islice(
+                    source, bisect_left(minutes, start), bisect_right(minutes, end)
+                )
+        # Mutable inputs cannot prove unchanged contents by their identity.
+        return (
+            item for item in source
+            if start <= item.timestamp.hour * 60 + item.timestamp.minute <= end
+        )
 
     @property
     def minimum_low_price(self) -> int | None:
@@ -820,11 +863,12 @@ def _evaluate_candidate_windows(
             signal = next(
                 (
                     item
-                    for item in context.features[candidate.lookback_bars]
-                    if candidate.scan_start_minute
-                    <= item.timestamp.hour * 60 + item.timestamp.minute
-                    <= candidate.scan_end_minute
-                    and item.drawdown_pct + 1e-12 >= candidate.rolling_high_drawdown_pct
+                    for item in context.iter_window_features(
+                        candidate.lookback_bars,
+                        candidate.scan_start_minute,
+                        candidate.scan_end_minute,
+                    )
+                    if item.drawdown_pct + 1e-12 >= candidate.rolling_high_drawdown_pct
                     and item.near_low_pct - 1e-12 <= candidate.rolling_low_proximity_pct
                 ),
                 None,
