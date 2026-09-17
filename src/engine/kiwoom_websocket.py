@@ -4138,7 +4138,10 @@ class KiwoomWSManager:
                                             }
                                         )
 
-                                target["orderbook"]["asks"] = asks[::-1]
+                                # FIDs 41..45 already enumerate ask levels 1..5.
+                                # Every numeric consumer treats index zero as
+                                # the executable touch, not display order.
+                                target["orderbook"]["asks"] = asks
                                 target["orderbook"]["bids"] = bids
                                 best_ask = (
                                     target["orderbook"]["asks"][0].get("price", 0)
@@ -4343,7 +4346,14 @@ class KiwoomWSManager:
                                 target["last_foreign_broker_update_ts"] = time.time()
 
                             target["received_types"].add(real_type)
-                            now_update_ts = time.time()
+                            # A 0D receipt and its ordered depth are one event.
+                            # Parsing/observer work must not renew that clock.
+                            now_update_ts = (
+                                current_depth_observation["received_at_ms"] / 1000.0
+                                if real_type == "0D"
+                                and isinstance(current_depth_observation, dict)
+                                else time.time()
+                            )
                             target["last_ws_update_ts"] = now_update_ts
                             self._record_micro_reversion_registration_receipt(
                                 item=normalized_raw_item,

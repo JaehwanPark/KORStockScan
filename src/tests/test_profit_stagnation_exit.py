@@ -281,30 +281,39 @@ def test_original_target_fill_facts_requires_exact_registry_amount_and_date():
         10100,
         DATE + "T13:00:01+09:00",
     )
-    assert bridge._original_target_fill_facts(
-        registry,
-        TARGET,
-        9,
-        owner_id="episode:test:005930:" + DATE,
-        symbol="005930",
-    ) is None
+    assert (
+        bridge._original_target_fill_facts(
+            registry,
+            TARGET,
+            9,
+            owner_id="episode:test:005930:" + DATE,
+            symbol="005930",
+        )
+        is None
+    )
     row["fill_amount"] = 101001
-    assert bridge._original_target_fill_facts(
-        registry,
-        TARGET,
-        10,
-        owner_id="episode:test:005930:" + DATE,
-        symbol="005930",
-    ) is None
+    assert (
+        bridge._original_target_fill_facts(
+            registry,
+            TARGET,
+            10,
+            owner_id="episode:test:005930:" + DATE,
+            symbol="005930",
+        )
+        is None
+    )
     row["fill_amount"] = 101000
     row["owner_id"] = "episode:other:005930:" + DATE
-    assert bridge._original_target_fill_facts(
-        registry,
-        TARGET,
-        10,
-        owner_id="episode:test:005930:" + DATE,
-        symbol="005930",
-    ) is None
+    assert (
+        bridge._original_target_fill_facts(
+            registry,
+            TARGET,
+            10,
+            owner_id="episode:test:005930:" + DATE,
+            symbol="005930",
+        )
+        is None
+    )
 
 
 def test_registry_projection_retains_fill_time_after_terminal_transition():
@@ -386,8 +395,12 @@ def unsent_widget_buy(buy):
     """Durable EntryNotSent receipt after registry reservation release."""
     row = deepcopy(buy)
     row.update(
-        status="NOT_SENT", order_no="", broker_accepted=False,
-        actual_order_submitted=False, filled_qty=0, fill_price=None,
+        status="NOT_SENT",
+        order_no="",
+        broker_accepted=False,
+        actual_order_submitted=False,
+        filled_qty=0,
+        fill_price=None,
         return_code="ENTRY_ADVERSE_NOT_SENT",
         owner_registry_bind_confirmed=False,
     )
@@ -409,17 +422,29 @@ def test_widget_unsent_attempt_preserves_observation_and_exit(running):
     assert running.record()["quantity"] == 10
 
 
-@pytest.mark.parametrize("change", [
-    {"status": "AMBIGUOUS"}, {"status": "SUBMITTED"},
-    {"status": "FAILED"}, {"broker_accepted": True},
-    {"actual_order_submitted": True}, {"actual_order_submitted": None},
-    {"filled_qty": 1}, {"filled_qty": False}, {"filled_qty": "0"},
-    {"fill_price": 10000}, {"order_no": "0000006"},
-    {"return_code": "0"}, {"owner_registry_bind_confirmed": True},
-    {"owner_registry_reconciliation_required": True},
-    {"ambiguous": True}, {"fill_amount": 10000},
-    {"fill_amount_krw": 10000}, {"owner_registry_error": "failed_release"},
-])
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"status": "AMBIGUOUS"},
+        {"status": "SUBMITTED"},
+        {"status": "FAILED"},
+        {"broker_accepted": True},
+        {"actual_order_submitted": True},
+        {"actual_order_submitted": None},
+        {"filled_qty": 1},
+        {"filled_qty": False},
+        {"filled_qty": "0"},
+        {"fill_price": 10000},
+        {"order_no": "0000006"},
+        {"return_code": "0"},
+        {"owner_registry_bind_confirmed": True},
+        {"owner_registry_reconciliation_required": True},
+        {"ambiguous": True},
+        {"fill_amount": 10000},
+        {"fill_amount_krw": 10000},
+        {"owner_registry_error": "failed_release"},
+    ],
+)
 def test_widget_unproven_unsent_remains_blocked(running, change):
     if running.owner != "widget":
         return
@@ -436,8 +461,14 @@ def test_widget_unproven_unsent_remains_blocked(running, change):
 def test_unsent_receipt_requires_explicit_fill_fields():
     order = unsent_widget_buy({"side": "BUY"})
     assert bridge.widget_buy_proven_not_sent(order)
-    for field in ("fill_price", "filled_qty", "broker_accepted",
-                  "actual_order_submitted", "order_no", "return_code"):
+    for field in (
+        "fill_price",
+        "filled_qty",
+        "broker_accepted",
+        "actual_order_submitted",
+        "order_no",
+        "return_code",
+    ):
         missing = deepcopy(order)
         missing.pop(field)
         assert not bridge.widget_buy_proven_not_sent(missing), field
@@ -741,6 +772,88 @@ def test_existing_ws_projection_exact_route_worst_depth(route):
             now=datetime.fromtimestamp(NOW / 1000, KST),
             snapshot=snapshot,
         )
+
+
+def test_quote_only_exit_consumes_common_health_during_normal_five_second_gap():
+    from src.trading.market.quote_consistency import build_market_data_health
+
+    snapshot = projection("SOR", now_ms=NOW)
+    stock = snapshot["stocks"]["005930"]
+    source = stock["machine_confirmation_routes"]["SOR"]
+    for kind, receipt in source["realtime_types"].items():
+        receipt.update(market_route="krx_nxt_integrated", effective_venue="UNKNOWN")
+        if kind == "0B":
+            receipt["observed_epoch"] -= 5
+    source["quiet_tape_observation"] = dict(
+        last_quote=NOW / 1000, last_trade=NOW / 1000 - 5, closed_episodes=0
+    )
+    original = deepcopy(snapshot)
+    result = executable_quote(
+        symbol="005930",
+        route="SOR",
+        quantity=10,
+        now=datetime.fromtimestamp(NOW / 1000, KST),
+        snapshot=snapshot,
+    )
+    expected = build_market_data_health(stock, now_ts=NOW / 1000, quote_max_age_ms=2000)
+    assert result["market_data_health"] == expected
+    facts = expected["routes"]["SOR"]
+    assert facts["trade_activity_state"] == "RECENT_TRADE"
+    assert facts["quote_state"] == "fresh"
+    assert facts["underlying_event_venue_proven"] is False
+    assert snapshot == original
+
+
+@pytest.mark.parametrize(
+    "defect",
+    ["epoch", "missing_epoch", "bool_epoch", "clock", "price", "future", "stale"],
+)
+def test_exit_quote_rejects_old_epoch_and_unbound_depth_despite_fresh_companion(defect):
+    snapshot = projection("SOR", now_ms=NOW)
+    stock = snapshot["stocks"]["005930"]
+    receipt = stock["machine_confirmation_routes"]["SOR"]["realtime_types"]["0D"]
+    stock["market_data_health"] = {"routes": {"SOR": {"quote_state": "fresh"}}}
+    snapshot["generated_at_epoch"] = NOW / 1000
+    if defect == "epoch":
+        stock["market_data_transport_epoch"] += 1
+    elif defect == "missing_epoch":
+        stock.pop("market_data_transport_epoch")
+    elif defect == "bool_epoch":
+        stock["market_data_transport_epoch"] = True
+    elif defect == "clock":
+        receipt["observed_epoch"] -= 0.5
+    elif defect == "price":
+        receipt["orderbook"]["bids"][0]["price"] -= 5
+    elif defect == "future":
+        receipt["observed_epoch"] += 0.1
+    else:
+        receipt["observed_epoch"] -= 2.001
+    with pytest.raises(ValueError):
+        executable_quote(
+            symbol="005930",
+            route="SOR",
+            quantity=10,
+            now=datetime.fromtimestamp(NOW / 1000, KST),
+            snapshot=snapshot,
+        )
+
+
+@pytest.mark.parametrize("age_ms, allowed", [(2000, True), (2001, False)])
+def test_exit_quote_common_owner_keeps_original_two_second_ttl(age_ms, allowed):
+    snapshot = projection("SOR", now_ms=NOW - age_ms)
+    kwargs = dict(
+        symbol="005930",
+        route="SOR",
+        quantity=10,
+        now=datetime.fromtimestamp(NOW / 1000, KST),
+        snapshot=snapshot,
+    )
+    if allowed:
+        result = executable_quote(**kwargs)
+        assert result["market_data_health"]["routes"]["SOR"]["quote_state"] == "fresh"
+    else:
+        with pytest.raises(ValueError):
+            executable_quote(**kwargs)
 
 
 def test_policy_absent_off_and_cost_or_pin_invalid(tmp_path, monkeypatch):

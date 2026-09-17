@@ -10,6 +10,7 @@ from src.trading.market.micro_confirmation import (
     load_live_dynamic_confirmation_source,
 )
 from src.trading.order.profit_stagnation import _finite
+from src.trading.market.quote_consistency import build_market_data_health, _best_levels
 
 
 def executable_quote(
@@ -22,15 +23,25 @@ def executable_quote(
         if snapshot is None:
             raise ValueError(reason)
     item = _live_route_item(symbol, route)
-    rows = snapshot["stocks"][symbol]["machine_confirmation_routes"]
+    stock = snapshot["stocks"][symbol]
+    rows = stock["machine_confirmation_routes"]
     matches = [
-        r
-        for r in rows.values()
+        (key, r)
+        for key, r in rows.items()
         if r.get("realtime_types", {}).get("0D", {}).get("item") == item
     ]
     if not item or len(matches) != 1:
         raise ValueError("profit_quote_exact_route_missing_or_duplicate")
-    source = matches[0]
+    key, source = matches[0]
+    # Quote-only execution must not require recent trades. Consume the common
+    # owner with the existing two-second quote TTL, never cached health or the
+    # file publication clock. Current connection epoch remains mandatory.
+    health = build_market_data_health(
+        stock, now_ts=now.timestamp(), quote_max_age_ms=2000
+    )
+    facts = health["routes"].get(key, {})
+    if facts.get("quote_state") != "fresh":
+        raise ValueError("profit_quote_common_health_not_fresh")
     receipt = source["realtime_types"]["0D"]
     candidates = [
         r
@@ -44,9 +55,14 @@ def executable_quote(
     raw = candidates[0]
     quote = _normalize(raw, depth=True)
     stamp = quote["at_ms"] / 1000
+    receipt_bid, receipt_ask = _best_levels(receipt)
     if (
-        quote["sequence"] != receipt.get("route_sequence")
-        or not 0 <= now.timestamp() - stamp <= 2
+        type(receipt.get("route_sequence")) is not int
+        or quote["sequence"] != receipt.get("route_sequence")
+        or type(receipt.get("observed_epoch")) not in {int, float}
+        or not _finite(receipt["observed_epoch"])
+        or abs(receipt["observed_epoch"] * 1000 - quote["at_ms"]) > 1
+        or (quote["bid"], quote["ask"]) != (receipt_bid, receipt_ask)
     ):
         raise ValueError("profit_quote_stale_or_endpoint_mismatch")
     levels = raw.get("bid_levels")
@@ -83,4 +99,5 @@ def executable_quote(
         quote_at=stamp,
         quote_id=f"{item}:{quote['epoch']}:{quote['sequence']}",
         source_epoch=f"{item}:{quote['epoch']}",
+        market_data_health=health,
     )
