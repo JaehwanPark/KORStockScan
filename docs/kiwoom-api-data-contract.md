@@ -279,6 +279,14 @@ child resets only the mutex, preserving inherited counts and cooldown. Existing
 per-minute limits, mandatory reserve, shared admission and cooldown remain.
 This does not introduce a response cache, request join, auth refresh or retry.
 Collector root changes preserve their existing policy/config and launch arguments.
+Runtime/research quote and BBO caches preserve the exact successful caller-thread
+receipt clock bound to API ID and request code. Their final source check runs
+after the remaining collection work; reuse does not refresh clocks. The existing
+runtime 35-second quote/BBO source ceiling and research 10-second reuse ceiling
+are checked at that final clock. Date/session changes, clock reversal and missing
+or malformed production response receipts remain explicit source errors. Legacy
+injected fixture clients keep their caller-supplied simulated collection clock;
+this compatibility seam is not a production HTTP provenance claim.
 
 ### 2026-09-03 Samsung Morning New-BUY PID Handoff Guard
 

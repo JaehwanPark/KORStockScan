@@ -70,3 +70,51 @@ existing bounded original reports, with configured SHA256 verified; no source
 or policy was fabricated. Scope findings0. Deployment and natural collector
 receipts are recorded separately after integration validation. Whole-plan and
 other direct-client/WS/scheduler or economic acceptance remain OPEN.
+
+
+## Direct-client deployment and source-clock supplement
+
+Source **60bb8169** was pushed to main. Preserve the two independent collector
+parents: original Samsung/Doosan/Hanwha collectors `3e875fd0` → scoped
+`08428ee8` / `collector-read-receipts-base-20260917`; runtime/research collectors
+`77abb524` → scoped `c34b5fa2` / `collector-read-receipts-research-20260917`.
+Both release branches were pushed, only the two reviewed classes and regression
+tests were transplanted, and their AST parity passed. Physical suites **179**
+and **170** passed; the research shared-path run also **170** passed.
+
+At14:19:29~14:19:41 the five read-only collectors were restarted once each:
+Samsung **531852**, Doosan **531869**, Hanwha **531874**, runtime **532006**,
+research **532245**. Immediate `/proc/cwd` inspection raced with process startup
+and failed; settled read-only verification proved all five selected roots,
+active/success and restart count0, without an additional restart. All launch
+intervals, conditional checks, resource caps, request limits and configurations
+were retained. The four compared trading-service records/PIDs are unchanged
+since14:05:56. Today env and dated mechanistic policy hashes are unchanged.
+The owner registry gained natural BUY028050 reserved/rejected records; the full
+prior registry prefix hash is preserved, so append activity is not reported as
+registry immutability or as a custody mutation by this repair.
+
+[Collector deployment record](../../data/runtime/collector_read_receipts_deployment.json)
+retains current roots/PIDs, prior PIDs, scopes and rollback. Original three
+snapshots resumed updating. Research reports include PASS, source gaps and an
+explicit shared-read deferred receipt with HTTP attempts0/receive clock null.
+A source warning or full population acceptance is not replaced by service success.
+
+The next re-review found direct runtime/research quote/BBO clocks still stamped
+with collection-start time and source checks performed before later reads. Exact
+successful API/request-bound response receive time is now validated and retained
+in caches and output. The final source check recalculates age after collection,
+retains existing 35-second runtime source and 10-second research reuse ceilings,
+blocks crossed date/session or backwards clocks, and preserves recognized safe
+error reasons. No transport retry/API field, TTL, admission or numeric live
+policy change occurs. Existing injected fixture clients retain their simulated
+clock only as a compatibility seam, not production receipt evidence.
+
+Re-fetched official main at **14:23:33 KST**, same SHA953e5dbf; read/time semantics
+and error contract remain as inspected above. Final source seven suites **278 passed**, compile/Ruff/diff and print-only parser
+passed; scope findings0. Initial new fixture missed its timedelta import and was
+fixed before this final run. Managed source-clock integration/deployment receipts
+follow after closure.
+Whole U0–U12, full transport migration/scheduler, executable four-arm production,
+admission/capacity/joint selection, next-date natural policy and economics remain
+OPEN; these are not all mislabeled as sample waits.

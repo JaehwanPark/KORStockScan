@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -345,6 +345,58 @@ class _FakeClient:
                 ]
             }
         raise AssertionError(api_id)
+
+
+@pytest.mark.parametrize("delay,blocked", [(3, False), (15, True), (22_110, True)])
+def test_direct_research_source_keeps_http_clocks_and_rechecks_after_bar_wait(
+    tmp_path, monkeypatch, delay, blocked
+):
+    cycle = datetime(2026, 8, 13, 10, 1, 30, tzinfo=KST)
+    decision = cycle + timedelta(seconds=delay)
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return decision
+
+    class Client(_FakeClient, watch.KiwoomReadOnlyClient):
+        def __init__(self):
+            watch.KiwoomReadOnlyClient.__init__(self, "TEST", session=object())
+            _FakeClient.__init__(self)
+
+        def post(self, path, api_id, payload):
+            received = cycle + timedelta(
+                seconds={"ka10001": 1, "ka10004": 2, "ka10080": delay}[api_id]
+            )
+            self.last_request_receipt = {
+                "api_id": api_id,
+                "request_code": payload["stk_cd"],
+                "request_succeeded": True,
+                "rest_received_ts_ms": int(received.timestamp() * 1000),
+            }
+            return _FakeClient.post(self, path, api_id, payload)
+
+    monkeypatch.setattr(watch, "datetime", Clock)
+    collector = watch.WidgetResearchWatchCollector(
+        config=_runtime_config([("111111", "research")]),
+        client=Client(),
+        output_dir=tmp_path / "raw",
+        snapshot_dir=tmp_path / "snapshots",
+    )
+    monkeypatch.setattr(collector, "_reuse_quote_bbo", lambda **kwargs: None)
+    row = collector.collect_once(cycle)[0]
+    if delay == 22_110:
+        assert row["status"] == "SOURCE_ERROR"
+        assert row["source_error_detail"]["reason"] == "widget_read_scope_or_clock_changed_during_collection"
+        assert row["entry_event"] is None and row["exit_event"] is None
+        return
+    assert row["observed_at_kst"] == decision.isoformat()
+    assert row["quote_received_at_kst"] == (cycle + timedelta(seconds=1)).isoformat()
+    assert row["bbo_received_at_kst"] == (cycle + timedelta(seconds=2)).isoformat()
+    assert row["status"] == ("SOURCE_QUALITY_BLOCKED" if blocked else "PASS")
+    assert ("bbo_stale_or_clock_invalid" in row["source_quality_issues"]) is blocked
+    assert row["entry_event"] is None and row["exit_event"] is None
+    assert row["broker_order_forbidden"] is True
 
 
 def _runtime_config(symbols: list[tuple[str, str]]) -> dict:

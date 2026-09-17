@@ -475,7 +475,12 @@ class WidgetSymbolRuntimeCollector:
             payload = client.post(
                 "/api/dostk/stkinfo", "ka10001", {"stk_cd": request_code}
             )
-            self._quote_cache[cache_key] = (bucket, payload, observed_at)
+            received = (
+                client.response_received_at(api_id="ka10001", request_code=request_code)
+                if isinstance(client, KiwoomReadOnlyClient)
+                else observed_at
+            )
+            self._quote_cache[cache_key] = (bucket, payload, received)
         cached = self._quote_cache[cache_key]
         return dict(cached[1]), max(0.0, (observed_at - cached[2]).total_seconds())
 
@@ -533,7 +538,11 @@ class WidgetSymbolRuntimeCollector:
         cached = self._bbo_cache.get(cache_key)
         if cached is None or cached[0] != bucket:
             raw = client.post("/api/dostk/mrkcond", "ka10004", {"stk_cd": request_code})
-            received = observed_at
+            received = (
+                client.response_received_at(api_id="ka10004", request_code=request_code)
+                if isinstance(client, KiwoomReadOnlyClient)
+                else observed_at
+            )
             self._bbo_cache[cache_key] = (
                 bucket,
                 _parse_bbo(raw, received),
@@ -898,6 +907,11 @@ class WidgetSymbolRuntimeCollector:
             return "request_budget_deferred"
         if message == "widget_kiwoom_429_cooldown":
             return "kiwoom_rate_limit_cooldown"
+        if message in {
+            "widget_rest_receive_receipt_invalid",
+            "widget_read_scope_or_clock_changed_during_collection",
+        }:
+            return message
         return f"read_only_source_error:{type(exc).__name__}"
 
     @staticmethod
@@ -1093,6 +1107,37 @@ class WidgetSymbolRuntimeCollector:
                     "runtime_effect": False,
                 },
             }
+        if isinstance(client, KiwoomReadOnlyClient):
+            decision_at = datetime.now(KST)
+            decision_context = contract.session_context(decision_at)
+            if (
+                decision_at < observed_at
+                or decision_at.date() != observed_at.date()
+                or decision_context != context
+            ):
+                raise RuntimeError(
+                    "widget_read_scope_or_clock_changed_during_collection"
+                )
+            observed_at = decision_at
+            quote_received = self._quote_cache[f"{symbol}:{context.request_code}"][2]
+            quote_age_sec = (observed_at - quote_received).total_seconds()
+            bbo_received = self._bbo_cache[f"{symbol}:{context.request_code}"][2]
+            bbo["age_sec"] = (observed_at - bbo_received).total_seconds()
+            source_quality, source_quality_reasons = _source_quality(
+                latest=latest, bbo=bbo, observed_at=observed_at
+            )
+            if not 0 <= quote_age_sec <= 35.0:
+                source_quality = "BLOCKED"
+                source_quality_reasons = (
+                    *source_quality_reasons,
+                    "quote_stale_or_clock_invalid",
+                )
+            if source_check["conflicting_completed_bars"]:
+                source_quality = "BLOCKED"
+                source_quality_reasons = (
+                    *source_quality_reasons,
+                    "conflicting_completed_bar",
+                )
         _relative_ok, _relative_issues, relative_assessment = (
             _relative_quality_assessment(auxiliary["relative"], context)
         )
