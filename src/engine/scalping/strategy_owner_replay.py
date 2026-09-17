@@ -1474,16 +1474,19 @@ def select_entry_price_replay(rows, *, eligible_count=None, source_counts=None):
             seen[identity] = row
         except (KeyError, TypeError, ValueError, OverflowError):
             continue
+    union = [row for identity, row in seen.items() if identity not in conflicts]
+    def group_key(seed):
+        return tuple(seed.get(k) for k in ('profile', 'target_value_key', 'incumbent_bps',
+            'effective_venue', 'session_bucket', 'policy_bundle_sha256', 'entry_price_policy_sha256'))
     for identity, row in seen.items():
         if identity in conflicts:
             continue
         seed = row['seed']
         if not seed.get('price_candidates') or str(seed.get('incumbent_bps')) not in row['price_arms']:
             continue
-        group = tuple(seed[k] for k in ('profile', 'target_value_key', 'incumbent_bps',
-            'effective_venue', 'session_bucket', 'policy_bundle_sha256', 'entry_price_policy_sha256'))
+        group = group_key(seed)
         groups[group].append(row)
-    def metrics(sample, bps):
+    def metrics(sample, bps, target_group):
         if not sample:
             raise ValueError("latest_source_partition_missing_outcomes")
         ordered = sorted(sample, key=lambda r: (r['seed']['observed_at'], r['seed']['seed_sha256']))
@@ -1498,7 +1501,14 @@ def select_entry_price_replay(rows, *, eligible_count=None, source_counts=None):
                     capital_krw_minutes=0., fill_participation_rate=0., cost_complete=True,
                     counterfactual_executable=True))
             else:
-                arms.append(r['price_arms'][str(bps)])
+                if bps is not None and group_key(seed) == target_group:
+                    arms.append(r['price_arms'][str(bps)])
+                elif seed.get('price_candidates'):
+                    arms.append(r['price_arms'][str(seed['incumbent_bps'])])
+                else:
+                    # Other price branches stay on their original owner-issued plan.
+                    from src.engine.scalping.entry_split_order_plan import QUANTITY_LEG_FOUR_ARM_IDS
+                    arms.append(r['arms'][QUANTITY_LEG_FOUR_ARM_IDS[0]])
                 reserved_until = at + ENTRY_REPLAY_ALLOCATION['reservation_sec']
                 promotions.add(promotion)
         for a in arms:
@@ -1532,25 +1542,25 @@ def select_entry_price_replay(rows, *, eligible_count=None, source_counts=None):
     selected, proposals = [], []
     for group, sample in groups.items():
         try:
-            days = sorted(d for d, n in source_counts.items() if n > 0) if source_counts is not None else sorted({r['seed']['source_date'] for r in sample})
-            if source_counts is not None and any(r['seed']['source_date'] not in source_counts for r in sample):
+            days = sorted(d for d, n in source_counts.items() if n > 0) if source_counts is not None else sorted({r['seed']['source_date'] for r in union})
+            if source_counts is not None and any(r['seed']['source_date'] not in source_counts for r in union):
                 continue
             if len(sample) < 20 or len(days) < 2:
                 continue
-            cal = [r for r in sample if r['seed']['source_date'] < days[-1]]
-            hold = [r for r in sample if r['seed']['source_date'] == days[-1]]
+            cal = [r for r in union if r['seed']['source_date'] < days[-1]]
+            hold = [r for r in union if r['seed']['source_date'] == days[-1]]
             inc_bps = group[2]
             menu = set.intersection(*(set(r['price_arms']) for r in sample))
-            incumbent = metrics(cal, inc_bps)
-            candidates = [(int(bps), metrics(cal, bps)) for bps in menu if int(bps) != inc_bps]
+            incumbent = metrics(cal, None, group)
+            candidates = [(int(bps), metrics(cal, bps, group)) for bps in menu if int(bps) != inc_bps]
             candidates = [(bps, m) for bps, m in candidates if improved(m, incumbent)]
             if not candidates:
                 continue
             bps, _ = max(candidates, key=lambda x: (x[1]['modeled_net_profit_per_source_day'], -x[0]))
             denominator = eligible_count if eligible_count is not None else len(rows)
-            if type(denominator) is not int or denominator < len(sample) or len(sample) / denominator < .8:
+            if type(denominator) is not int or denominator < len(union) or len(union) / denominator < .8:
                 continue
-            proposals.append((group, sample, days, cal, hold, bps, metrics(cal, bps)))
+            proposals.append((group, sample, days, cal, hold, bps, metrics(cal, bps, group)))
         except (KeyError, TypeError, ValueError, OverflowError):
             continue
     proposals.sort(key=lambda p: (-p[-1]['modeled_net_profit_per_source_day'], str(p[0]), p[5]))
@@ -1558,20 +1568,22 @@ def select_entry_price_replay(rows, *, eligible_count=None, source_counts=None):
         try:
             inc_bps = group[2]
             # No second candidate is tested against the same holdout after a veto.
-            if not improved(metrics(hold, bps), metrics(hold, inc_bps)):
+            if not improved(metrics(hold, bps, group), metrics(hold, None, group)):
                 continue
-            candidate_metrics = metrics(sample, bps)
-            if not improved(candidate_metrics, metrics(sample, inc_bps)):
+            candidate_metrics = metrics(union, bps, group)
+            if not improved(candidate_metrics, metrics(union, None, group)):
                 continue
             denominator = eligible_count if eligible_count is not None else len(rows)
-            if type(denominator) is not int or denominator < len(sample) or len(sample) / denominator < .8:
+            if type(denominator) is not int or denominator < len(union) or len(union) / denominator < .8:
                 continue
             proof = dict(selection_contract=ENTRY_PRICE_SELECTION, profile=group[0],
                 target_value_key=group[1], incumbent_bps=inc_bps, selected_bps=bps,
                 scope_parent=list(group[3:]), eligible_attempt_count=denominator,
-                paired_rows=sample, calibration_dates=days[:-1], holdout_dates=[days[-1]],
+                paired_rows=union, changed_profile_paired_sample_count=len(sample),
+                union_contract='all_valid_price_ready_fixed_other_profiles_v1',
+                calibration_dates=days[:-1], holdout_dates=[days[-1]],
                 source_counts=source_counts,
-                metrics=candidate_metrics, incumbent_metrics=metrics(sample, inc_bps),
+                metrics=candidate_metrics, incumbent_metrics=metrics(union, None, group),
                 allocation_contract=ENTRY_REPLAY_ALLOCATION.copy(),
                 minimum_cost_adjusted_ev_pct=0.0, positive_net_required=True,
                 cost_scope='conditional_price_execution_common_upstream_screen_cost_not_reestimated',

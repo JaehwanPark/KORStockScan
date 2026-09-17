@@ -674,7 +674,7 @@ def test_market_regime_cutoff_without_prior_real_holding_inputs(offset, blocked)
         assert set(result["blockers"].values()) == {"pending_exit_outcome"}, result
 
 
-def entry_seed(day='2026-09-14', ordinal=0):
+def entry_seed(day='2026-09-14', ordinal=0, *, profile='strong_1tick_pressure', bps=11, anchor=10020):
     plan = dict(valid=True, blockers=[], total_qty=10, deferred_probe_residual_qty=0,
         scanner_promotion_id=f'promotion-{day}-{ordinal}', action_receipt_id=f'attempt-{day}-{ordinal}',
         effective_venue='KRX', market_session_bucket='KRX_REGULAR', policy_bundle_hash='a' * 64,
@@ -683,7 +683,7 @@ def entry_seed(day='2026-09-14', ordinal=0):
         legs=[dict(qty=10, numeric_price=10000, execution_phase='immediate')])
     clock = datetime.fromisoformat(day + 'T10:00:00+09:00').timestamp() + ordinal * 240
     return mod.freeze_entry_opportunity(plan, stock_code='005930', observed_at=clock,
-        profile='strong_1tick_pressure', profile_bps=11, anchor_price=10020)
+        profile=profile, profile_bps=bps, anchor_price=anchor)
 
 
 def entry_native_path(seed):
@@ -765,6 +765,36 @@ def test_price_union_small_positive_pair_recomputed_by_final_consumer():
     assert mechanistic_entry_price_authority_valid(policy)
     policy['runtime_env']['KORSTOCKSCAN_SCALPING_CONDITIONAL_STRONG_DEFENSIVE_BPS'] = '8'
     assert not mechanistic_entry_price_authority_valid(policy)
+
+
+@pytest.mark.parametrize('other_branch', ['normal', 'unregistered'])
+def test_price_union_retains_other_owner_price_branches_without_profile_coverage_bias(other_branch):
+    from src.engine.monitoring.research_closed_loop import digest
+    rows = []
+    for day in ('2026-09-14', '2026-09-15'):
+        for i in range(30):
+            seed = entry_seed(day, i) if i < 10 else entry_seed(day, i,
+                profile='normal', bps=20, anchor=10030)
+            if i >= 10 and other_branch == 'unregistered':
+                # An original plan outside the registered BPS branch remains incumbent.
+                seed['price_candidates'] = {}
+                for key in ('profile', 'target_value_key', 'incumbent_bps', 'anchor_price'):
+                    seed.pop(key, None)
+                seed['seed_sha256'] = digest({k: v for k, v in seed.items() if k != 'seed_sha256'})
+            rows.append(entry_replay(seed))
+    selected = mod.select_entry_price_replay(rows, eligible_count=60,
+        source_counts={'2026-09-14': 30, '2026-09-15': 30})
+    assert len(selected) == 1
+    proof = selected[0]
+    assert proof['changed_profile_paired_sample_count'] == 20
+    assert proof['metrics']['paired_sample_count'] == 60
+    assert len(proof['paired_rows']) == 60
+    assert proof['metrics']['source_quality_adjusted_ev_pct'] == pytest.approx(
+        rows[0]['price_arms']['10']['net_return_pct'] / 3)
+    assert mod.entry_price_selection_evidence_valid(proof)
+    # A real missing-source cohort still fails the same union coverage guard.
+    assert not mod.select_entry_price_replay(rows, eligible_count=80,
+        source_counts={'2026-09-14': 40, '2026-09-15': 40})
 
 
 def entry_owner_event(day='2026-09-14', ordinal=0):
