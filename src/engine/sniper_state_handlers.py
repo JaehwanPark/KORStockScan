@@ -31370,6 +31370,76 @@ def _pre_submit_refresh_real_ws_snapshot(
     return refreshed, fields
 
 
+def _refresh_prepared_entry_inputs(code, ws_data, recent_ticks, candle_context):
+    """Rebind prepared entry input to local WS only; never relax source gates."""
+    snapshot = candle_context.get("ai_market_snapshot_v1")
+    snapshot = snapshot if isinstance(snapshot, dict) else {}
+    sources = snapshot.get("sources")
+    sources = sources if isinstance(sources, dict) else {}
+    fields = {}
+    try:
+        limits = [
+            sources.get(name, {}).get("freshness_limit_ms")
+            for name in ("current_price", "bbo", "tape")
+        ]
+        if not all(
+            type(limit) in (int, float) and math.isfinite(limit) and limit >= 1
+            for limit in limits
+        ):
+            raise ValueError("prepared_entry_source_age_contract_invalid")
+        ws_data, refresh = _pre_submit_refresh_real_ws_snapshot(
+            code,
+            ws_data,
+            "SCALPING",
+            context_max_age_ms=int(min(limits)),
+            refresh_even_if_input_fresh=True,
+        )
+        fields.update(
+            {
+                key.replace(
+                    "pre_submit_ws_snapshot_refresh_",
+                    "entry_ai_final_ws_snapshot_refresh_",
+                    1,
+                ): value
+                for key, value in refresh.items()
+                if key.startswith("pre_submit_ws_snapshot_refresh_")
+            }
+        )
+        if refresh.get("pre_submit_ws_snapshot_refresh_applied"):
+            # Do not resurrect old REST tape when the new WS frame lacks it.
+            recent_ticks = list(ws_data.get("recent_trade_ticks") or [])
+        candle_context = revalidate_entry_candle_snapshot(
+            candle_context, ws_data, now_ts=time.time()
+        )
+        fields["entry_ai_final_prepared_snapshot_age_ms"] = candle_context.get(
+            "market_snapshot_revalidation", {}
+        ).get("elapsed_ms")
+    except (AttributeError, KeyError, TypeError, ValueError, OverflowError) as exc:
+        # Canonical preflight remains the rejection owner. Never reuse a
+        # previously allowed snapshot after a route/clock/contract error.
+        candle_context = copy.deepcopy(candle_context)
+        blocked_snapshot = candle_context.get("ai_market_snapshot_v1")
+        blocked_snapshot = (
+            blocked_snapshot if isinstance(blocked_snapshot, dict) else {}
+        )
+        candle_context["ai_market_snapshot_v1"] = blocked_snapshot
+        old_preflight = blocked_snapshot.get("ai_input_preflight_v1")
+        preflight = (
+            copy.deepcopy(old_preflight) if isinstance(old_preflight, dict) else {}
+        )
+        reason = "prepared_entry_snapshot_revalidation_failed"
+        preflight.update(allowed=False, source_allowed=False, status="blocked")
+        preflight["blockers"] = list(preflight.get("blockers") or []) + [reason]
+        preflight["source_blockers"] = list(preflight.get("source_blockers") or []) + [
+            reason
+        ]
+        preflight["primary_blocker"] = reason
+        preflight["primary_blocker_category"] = "source_quality"
+        blocked_snapshot["ai_input_preflight_v1"] = preflight
+        fields["entry_ai_final_snapshot_revalidation_error"] = str(exc)
+    return ws_data, recent_ticks, candle_context, fields
+
+
 def _rest_orderbook_received_age_ms(
     snapshot: dict | None, *, now_ts: float | None = None
 ) -> float | None:
@@ -51402,7 +51472,7 @@ def _build_ai_ops_log_fields(
             value = payload.get(field_name, "-")
             out[field_name] = str(value if value is not None else "-")
     for field_name, value in payload.items():
-        if str(field_name).startswith("holding_context_"):
+        if str(field_name).startswith(("holding_context_", "entry_ai_final_")):
             out[field_name] = value
     for field_name in (
         "openai_transport_mode",
@@ -52218,6 +52288,9 @@ def _build_tick_source_quality_log_fields(feature_probe):
                 out[field_name] = str(raw_value or "-")
     tick_source_quality_fields_sent = bool(out)
     _copy_ai_preflight_log_fields(payload, out)
+    out.update(
+        {key: value for key, value in payload.items() if str(key).startswith("entry_ai_final_")}
+    )
     if tick_source_quality_fields_sent:
         out["tick_source_quality_fields_sent"] = True
     out.update(microstructure_delivery_fields(payload))
@@ -64455,6 +64528,17 @@ def _handle_watching_strategy_branch(
                                     include_investor_source=True,
                                 )
                                 stock.pop("ai_wait_rebound_recheck_pending", None)
+                                (
+                                    entry_ai_ws_data,
+                                    recent_ticks,
+                                    candle_context,
+                                    final_entry_refresh_fields,
+                                ) = _refresh_prepared_entry_inputs(
+                                    code, entry_ai_ws_data, recent_ticks, candle_context
+                                )
+                                pre_ai_ws_refresh_fields.update(
+                                    final_entry_refresh_fields
+                                )
                                 ai_decision = ai_engine.analyze_target(
                                     stock["name"],
                                     entry_ai_ws_data,

@@ -587,7 +587,10 @@ scanner/recheck/ADD-NOADD/exit family에서도 raw/미노출 CF가 existing cand
 
 ### U3 — main/scanner·기계/AI·price/sizing/holding consumer 전환
 
+- 장중 관측 보완: 일반 `watching_analyze_target`에서 handler 시작 시 current/tape 1.55초·BBO0.98초였던 입력이 준비3.33초 뒤4.88/4.31초로 stale 전환됐다. U3/U5의 기존 작업 안에서 history/context 준비 완료→로컬 최신 WS 단회 재취득→기존 `revalidate_entry_candle_snapshot`→기계/AI 판정으로 연결한다. async evaluation도 실행 직전 같은 처리와 같은 frame의 prepared handoff를 유지한다. source별 원시각/route/epoch/완성봉·optional 원천을 보존하고 새 snapshot에 없는 tape를 과거 REST로 메우지 않는다. 기존 입력 age 계약으로 취득하되 최종 submit TTL/guard는 별도 유지한다. 새 collector/API/Provider 호출·장후 작업·3초/700ms 완화·가격/수량/scale-in owner 변경은 없다. missing/malformed 계약·route 변경·역행 clock은 기존 canonical preflight에서 차단하고 refresh/준비 age/error를 기존 이벤트에 보존한다. 최종 자연 검증은 같은 attempt의 queue/start/preflight와 source별 observed_at을 연결하며, input freshness 회복과 수익·제출 개선을 구분한다.
+
 - 의존: U2의 해당scope adapter.
+- 이번 구현 closure는 일반 WATCHING 최종 로컬 재취득/재검증으로 한정한다. async dispatcher 직전 갱신은 immutable prepared-context와 결과의 동일 frame handoff를 함께 바꿔야 하므로 아직 잔여다. 10초/3episode는 trade activity 계약이며 기존 3초 입력 freshness·최종 submit700ms·micro1초를 일괄 치환하지 않는다. 공통 health 전수 소비/feature 유효성 분리는 별도 잔여 acceptance로 유지한다.
 - 대상: kiwoom_sniper_v2/scalping_scanner, sniper_state_handlers/analysis, ai_market_snapshot/preflight, entry_setup_evidence, feature/context, orchestrator/latency/scale-in/holding passed frame.
 - 작업: 독립 freshness 추정을 위임하고 quote/tape/transport/local lag·required feature 이유를 분리한다. atomic frame/attempt/promotion/정책hash를 다음stage로 전달한다. 공통health가 action/threshold를 변경하지 않는다.
 - acceptance: source-time skew/current_price/type provenance의 원인 구분, 동일input health parity·consumer TTL 유지, quote-only 변화로 판단 가능한 경로의정상복귀, PASS/SAFE/CAUTION/DANGER의 기존 집행contract 유지.
@@ -602,6 +605,8 @@ scanner/recheck/ADD-NOADD/exit family에서도 raw/미노출 CF가 existing cand
 - 테스트: 기존 widget/episode gateway/collector/dynamic micro/entry adverse/target pressure/profit stagnation/exit source tests와 표시client 호환검증.
 
 ### U5 — latency·중복 read/refresh·scheduler 감시예산
+
+- queue14.29초 표본은 앞 handler12.27초의 직렬 점유와 함께 관측됐으나 뒤 handler 실행 전 snapshot 갱신도 있었다. queue 전체를 stale의 직접 원인으로 합산하지 않는다. 원천이 시작 전부터 stale인 사례와 준비 중 fresh→stale 전환을 분리하고, 기존 stage receipt로 queue·history/context·Provider·최종 source age를 대사한다. 먼저 U3 최종 로컬 재취득 비대칭을 닫으며, 광범위 scheduler 재설계/실주문 floor 완화나 동일 원천의 반복 replay로 대체하지 않는다.
 
 - 의존: U3/U4의 해당scope health/frame 연결. 공유 TTL/identity가 고정되기 전 무조건 caching하지 않는다.
 - 대상: sniper_entry_latency/MarketDataCache, existing market/shortTTL/sameMinute caches/read control/coordinator와 request class callsite.

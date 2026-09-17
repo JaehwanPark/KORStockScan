@@ -146,6 +146,108 @@ def test_revalidation_does_not_turn_fresh_quote_into_fresh_tape():
     assert "tape_stale" in preflight["blockers"]
 
 
+def test_watching_final_acquisition_recovers_prepared_stale_input_without_io(
+    monkeypatch,
+):
+    context = _context()
+    original = deepcopy(context)
+    monkeypatch.setattr(handlers.time, "time", lambda: NOW + 5)
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_ENABLED", "true")
+    calls = []
+    latest = _ws(NOW + 4.9, price=10020)
+    monkeypatch.setattr(
+        handlers,
+        "WS_MANAGER",
+        SimpleNamespace(get_latest_data=lambda code: calls.append(code) or latest),
+    )
+    ws, ticks, refreshed, fields = handlers._refresh_prepared_entry_inputs(
+        "123456", _ws(NOW - 0.1), [{"old_rest_tape": True}], context
+    )
+    assert calls == ["123456"]
+    assert fields["entry_ai_final_ws_snapshot_refresh_applied"] is True
+    assert fields["entry_ai_final_ws_snapshot_refresh_max_age_ms"] == 3000
+    assert ws["curr"] == 10020
+    assert ticks == latest["recent_trade_ticks"]
+    sources = refreshed["ai_market_snapshot_v1"]["sources"]
+    assert sources["current_price"]["age_ms"] == pytest.approx(100, abs=1)
+    assert sources["tape"]["age_ms"] == pytest.approx(100, abs=1)
+    assert refreshed["bars"] == original["bars"]
+    assert context == original
+    assert handlers._build_tick_source_quality_log_fields(fields) == fields
+
+
+@pytest.mark.parametrize("missing_tape", [False, True])
+def test_watching_final_quote_cannot_resurrect_old_tape(monkeypatch, missing_tape):
+    context = _context()
+    monkeypatch.setattr(handlers.time, "time", lambda: NOW + 5)
+    latest = _ws(NOW + 4.9)
+    latest["last_realtime_type_ts"]["0B"] = NOW - 5
+    if missing_tape:
+        latest.pop("recent_trade_ticks")
+        latest["last_realtime_type_ts"].pop("0B")
+    monkeypatch.setattr(
+        handlers, "WS_MANAGER", SimpleNamespace(get_latest_data=lambda _: latest)
+    )
+    ws, ticks, refreshed, _ = handlers._refresh_prepared_entry_inputs(
+        "123456", _ws(NOW - 0.1), [{"old_rest_tape": True}], context
+    )
+    assert ticks == latest.get("recent_trade_ticks", [])
+    assert not refreshed["ai_market_snapshot_v1"]["ai_input_preflight_v1"]["allowed"]
+
+
+@pytest.mark.parametrize("broken", ["route", "clock", "limit", "malformed_preflight"])
+def test_watching_final_revalidation_errors_fail_closed(monkeypatch, broken):
+    context = _context()
+    latest = _ws(NOW + 4.9)
+    clock = NOW + 5
+    if broken == "route":
+        latest["last_realtime_type_market_route"] = {
+            "0B": "nxt_regular",
+            "0D": "nxt_regular",
+        }
+        latest["last_realtime_type_market_suffix"] = {"0B": "_NX", "0D": "_NX"}
+    elif broken == "clock":
+        clock = NOW - 1
+    else:
+        context["ai_market_snapshot_v1"]["sources"]["tape"]["freshness_limit_ms"] = True
+        if broken == "malformed_preflight":
+            context["ai_market_snapshot_v1"]["ai_input_preflight_v1"] = []
+    monkeypatch.setattr(handlers.time, "time", lambda: clock)
+    monkeypatch.setattr(
+        handlers, "WS_MANAGER", SimpleNamespace(get_latest_data=lambda _: latest)
+    )
+    _, _, refreshed, fields = handlers._refresh_prepared_entry_inputs(
+        "123456", _ws(NOW), [], context
+    )
+    assert not snapshot_module.ai_input_preflight(refreshed)["allowed"]
+    assert "entry_ai_final_snapshot_revalidation_error" in fields
+
+
+def test_watching_final_refresh_is_wired_before_provider():
+    import inspect
+
+    text = inspect.getsource(handlers._handle_watching_strategy_branch)
+    start = text.index("entry_context_now_ts = time.time()")
+    normal = text[start:]
+    assert (
+        normal.index("build_entry_candle_context(")
+        < normal.index("_refresh_prepared_entry_inputs(")
+        < normal.index("ai_engine.analyze_target(")
+    )
+
+
+@pytest.mark.parametrize("mode", ["missing_manager", "disabled", "stale_manager"])
+def test_watching_final_refresh_failure_rechecks_original_clock(monkeypatch, mode):
+    monkeypatch.setattr(handlers.time, "time", lambda: NOW + 5)
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_ENABLED", "false" if mode == "disabled" else "true")
+    monkeypatch.setattr(handlers, "WS_MANAGER", None if mode == "missing_manager" else SimpleNamespace(get_latest_data=lambda _: _ws(NOW)))
+    _, _, context, fields = handlers._refresh_prepared_entry_inputs("123456", _ws(NOW), [], _context())
+    assert fields["entry_ai_final_ws_snapshot_refresh_applied"] is False
+    preflight = snapshot_module.ai_input_preflight(context)
+    assert preflight["allowed"] is False
+    assert "current_price_stale" in preflight["blockers"]
+
+
 def test_revalidation_rejects_changed_route_and_reversed_clock():
     ws = _ws(NOW + 4.9)
     ws["last_realtime_type_market_route"] = {"0B": "nxt_regular", "0D": "nxt_regular"}

@@ -196,6 +196,16 @@ Official reference receipt (`2026-09-17T01:15:02+09:00` 재확인 기록): upstr
 - 리뷰·검증: 순서 반전, 같은 action/trace의 outcome 상충, 첫 행 격리, 반복 상충 version의 중복 collapse, paired 별칭 우회, malformed manifest, 정상19/20 screen 경계, 실제 flag-free next-date publisher와 machine/provider 비변경 회귀를 검증한다. 최종 test/배포/PID는 검증 뒤 receipt에 기록하며 전체 잔여 구현에는 finding0을 선언하지 않는다.
 - 잔여: U0–U6 전수 reader/예산/census, U9 executable no-fill/exit/cost quartet·가격 absolute0.10% owning 계약 개선, U10/U11 전수 handoff 및 자연 경제성 acceptance. 본 보완은 이 결손들을 대신 완료하지 않는다.
 
+## 17. 일반 WATCHING 준비 후 최종 로컬 WS snapshot 재검증
+
+- 대상은 U3/U5 안의 `watching_analyze_target` 준비 중 fresh→stale 전환이다. 288180 exact 평가의 handler start 10:02:01.490에 current/tape1.547초·BBO0.980초였지만 snapshot capture10:02:04.822868에서4.879532/4.312726초로 전환됐다. Provider 미호출·candle build96ms라 전체3.333초를 AI 응답 latency나 분봉 build로 귀속하지 않는다. 355390은 시작부터 tape4.361초였고 최종 호가만0.230초로 회복됐으므로 원래 체결 공백과 구분한다.
+- 기존 handler 파일 안의 `_refresh_prepared_entry_inputs`는 history/context 준비 완료 뒤 기존 로컬 WS 취득기를 단회 호출한다. canonical input의 current/BBO/tape age 계약으로 취득하며 기존 `revalidate_entry_candle_snapshot`으로 원시각·route·완성봉/optional source를 보존한다. final submit700ms·가격/수량/leg/scale-in/Provider/정책/guard는 불변이며 추가 REST/Provider 호출·collector·장후 producer는 없다. latest frame에 없는 tape를 과거 REST로 메우지 않는다.
+- route/clock/source-age 계약 실패는 이전 allowed preflight를 재사용하지 않고 canonical source preflight를 blocked로 보존한다. refresh reason/max-age/준비 snapshot age/error는 기존 ai ops/tick-source 이벤트 consumer에 `entry_ai_final_*`로 전달한다. 진단 metadata만으로 tick audit 성공을 만들지 않는다.
+- review 보완: 최초 회귀에서 telemetry 소비 누락을 수정했다. async immutable prepared-context를 직접 갱신하는 초안은 계약 오류가 확인돼 모두 제외하고 기존 async 구현을 유지했다. async dispatch 직전 갱신·동일 frame 결과 handoff는 잔여다. 일반 WATCHING 기존 build→최종 로컬취득→analyze 순서와 기존 async bridge 불변을 검증한다.
+- 검증: 준비5초 후 정상 local frame 회복·tape 누락/오래된 tape·route 변경/역행 clock·bool source limit/malformed preflight·manager 누락/disabled/stale 시 원시각 재검증·telemetry 보존 회귀를 추가했다. 첫 관련3 suite297건, 추가 입력 실패 회귀 뒤 관련6 suite454건 통과. 최종 확장 suite와 배포/PID 확인은 아래 후속 receipt로 별도 기록한다. 이번 범위 수리는 경제성·전체 통합계획 완료가 아니다.
+- 10초 체결공백/서로 다른3episode는 trade activity 계약이고, quote/submit 안전 TTL이 아니다. 현재 전수 reader의 activity/required feature 분리가 완료됐다는 주장은 하지 않는다. 공통 health의 `OBSERVATION_UNPROVEN`·원천 continuity/venue gap·U9 경제성 quartet/U10/U11는 기존 OPEN owner에 유지한다.
+- 확장7 suite는458 passed/1 failed였다. `test_openai_scalping_analyze_target_returns_feature_audit_fields`의 micro delivery `not_attempted` 대 `computed_not_sent` 기대 불일치는 작업본·수정 전 운영3f9a358a에서 각각 단독 동일 재현됐다. 이번 handler/helper를 호출하지 않는 기존 결함이며 숨기거나 기대값을 바꾸지 않는다. 핵심6 suite454 pass와 확장 나머지 검증을 분리하고 전체 repo finding0은 선언하지 않는다. 후속 owner는 기존 Main AI source-quality acceptance다.
+
 Project/Calendar 동기화는 실행하지 않는다. 사용자 표준 명령:
 
 ```bash
