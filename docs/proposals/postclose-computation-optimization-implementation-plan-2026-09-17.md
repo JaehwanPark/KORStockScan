@@ -152,3 +152,13 @@ O2 day-state 디스크 시제품은 [성능 거절 근거 §25](../audit-reports
 O3→O2→O1의 기존 local 최적화 우선순위는 유지하되, C1–C4 correctness 변경 의미가 봉인되기 전에 성능 parity를 주장하지 않는다. 위젯/episode 확대 critical path는 P1/P2/P3/P4를 먼저 닫고 provider O1은 실제 병목일 때 이어서 적용한다. 계획 작성만으로 CPUQuota·MemoryMax·REST/provider cap·timer·sampling/floor를 바꾸지 않는다. Backlog는 native ledger/phase checkpoint에 남고 미완료 joint/source를 완료 policy로 발행하지 않는다.
 
 이번 전체 폐루프 source 구현과 반복 리뷰·규모 실측/배포 상태는 [09-17 구현 기록](../audit-reports/2026-09-17-widget-episode-full-closed-loop-implementation.md)을 따른다. C0–C8/P1–P6 producer/consumer를 연결하며 자연 신규 정책·actual next-date 소비·경제성은 기존 stable-ID acceptance owner에서 따로 확인한다. Final-refresh의 native account source 취득은 N/K에 비례하지 않고 기존 read adapter/cached token만 사용한다. Timer/grid/caps/sample/hard guard는 유지한다.
+
+## 8. 잔여 구현 집중·실제 reader 대사 결과
+
+[후속 구현 §28](../audit-reports/2026-09-17-postclose-computation-optimization-scoped-implementation.md#28-중복-source-reader-보완aggregate-projection-재사용)의 O2 한-symbol source decode/날짜 admission 분리, O3 기존 audit aggregate projection, O1 execution discovery/coverage decode 공유와 cumulative 날짜 정규화를 구현했다. 후보별 day-state 디스크 시제품은 재도입하지 않는다. Entry/AI auxiliary/가격/수량·leg/scale-in 및 custody/safety/자동 선정 조건은 유지한다.
+
+- O2 다음 설계 단위는 기존 source/profile checkpoint의 **batched prefix state**다. 후보별·day별 파일/lock/fsync를 만들지 않고 profile 한 번의 atomic publication으로 묶으며, incoming HELD state와 moving calibration/holdout view를 반드시 구분한다. 원 replay가 충분히 빠르면 강제 persistent cache를 추가하지 않는다. 현재는 source working-set 재사용까지만 구현했으며 append-resume/partition 재설계는 OPEN이다.
+- O3 감사 projection은 기존 audit aggregate의 모든 count/finding/exclusion identity를 보존한다. 날짜/path/code/source generation이 같을 때만 재사용하고 machine/AI companion 소비와 application gate는 새로 계산한다. Delta는 기존 writer/freeze의 immutable prefix proof가 있어야 한다. 현재 raw writer는 이 증거를 제공하지 않으므로 append/정정은 원 full fallback이며 별도 봉인 서비스·collector/job을 신설하지 않는다.
+- EV는 기존 daily native partition projection이 실제 계산 owner이고 EV 요약 consumer는 이미 compact 결과를 읽는다. 날짜 정규화의 중복만 제거했고 충분통계 영구화는 필요한 numerator/denominator/분포/비용·native identity 의존성이 봉인된 이후의 잔여다. Mean-only 캐시·filled-only 모집단 축소로 tail/미진입 연구를 대체하지 않는다.
+- O1은 확인한 local duplicate reader만 보완했고 Provider checkpoint/reservation/budget 및 매 호출 semantic 검증을 유지했다. Warm decode 절감은 새 호출의 transport 지연을 없앤 증거가 아니다.
+- O0 내부 phase/전체 populated P6 scale 검증은 계속 OPEN이다. 이번 N100×D120 **reader** 측정을 full-grid 완료로 대체하지 않는다. 기존 CPUQuota/MemoryMax/deadline/grid/sample floors는 그대로이며 성능 목표30/50/60%를 추가 runtime apply·기동 승인 gate로 만들지 않는다. 개선 폭을 맞추기 위한 과도한 캐시 신설보다 잔여 correctness·자동 producer→consumer·실제 자연 소비 검증을 우선한다.
