@@ -170,9 +170,40 @@ class DayContext:
     _minimum_low: int | None = field(
         default=None, init=False, repr=False, compare=False
     )
-    _feature_minute_index: dict[int, tuple[tuple[SignalFeature, ...], array | None]] = (
-        field(default_factory=dict, init=False, repr=False, compare=False)
+    _feature_minute_index: dict[
+        int, tuple[tuple[SignalFeature, ...], array | None]
+    ] = field(default_factory=dict, init=False, repr=False, compare=False)
+    _signal_partition: dict | None = field(
+        default=None, init=False, repr=False, compare=False
     )
+    _signal_partition_limit: int = field(
+        default=0, init=False, repr=False, compare=False
+    )
+
+    def first_signal(self, candidate: SpotCandidate) -> SignalFeature | None:
+        """Bounded invocation-local fact, never persistent or custody state."""
+        key = (
+            candidate.lookback_bars, candidate.scan_start_minute,
+            candidate.scan_end_minute, candidate.rolling_high_drawdown_pct,
+            candidate.rolling_low_proximity_pct,
+        )
+        source = self.features[candidate.lookback_bars]
+        cached = (self._signal_partition or {}).get(key)
+        if isinstance(source, tuple) and cached is not None and cached[0] is source:
+            return cached[1]
+        signal = next(
+            (
+                item for item in self.iter_window_features(*key[:3])
+                if item.drawdown_pct + 1e-12 >= key[3]
+                and item.near_low_pct - 1e-12 <= key[4]
+            ),
+            None,
+        )
+        if (self._signal_partition is not None and isinstance(source, tuple)
+            and (key in self._signal_partition
+                 or len(self._signal_partition) < self._signal_partition_limit)):
+            self._signal_partition[key] = (source, signal)
+        return signal
 
     def iter_window_features(
         self, lookback: int, start: int, end: int
@@ -842,19 +873,22 @@ def _advance_candidate_day(candidate, context, carried):
                 (day_low / price - 1) * 100,
             )
         return carried, None
-    signal = next(
-        (
-            item
-            for item in context.iter_window_features(
-                candidate.lookback_bars,
-                candidate.scan_start_minute,
-                candidate.scan_end_minute,
-            )
-            if item.drawdown_pct + 1e-12 >= candidate.rolling_high_drawdown_pct
-            and item.near_low_pct - 1e-12 <= candidate.rolling_low_proximity_pct
-        ),
-        None,
-    )
+    if context._signal_partition is None:
+        signal = next(
+            (
+                item
+                for item in context.iter_window_features(
+                    candidate.lookback_bars,
+                    candidate.scan_start_minute,
+                    candidate.scan_end_minute,
+                )
+                if item.drawdown_pct + 1e-12 >= candidate.rolling_high_drawdown_pct
+                and item.near_low_pct - 1e-12 <= candidate.rolling_low_proximity_pct
+            ),
+            None,
+        )
+    else:
+        signal = context.first_signal(candidate)
     episode = _episode(context, signal, candidate) if signal is not None else None
     if episode and any(leg["status"] == "HELD" for leg in episode["legs"]):
         episode = deepcopy(episode)
@@ -1207,6 +1241,19 @@ def select_profile_spot(
     diagnostic_heap = []
     calibration_ready_count = 0
     grid = candidate_grid(profile)
+    search_keys = {
+        (item.lookback_bars, item.scan_start_minute, item.scan_end_minute,
+         item.rolling_high_drawdown_pct, item.rolling_low_proximity_pct)
+        for item in grid
+    }
+    # Execution-plan alternatives often repeat exactly the same signal
+    # search. Share only that immutable fact, not episode/leg/carry outcomes.
+    # Unique-key grids retain the fast reference path. Reset at each selector
+    # invocation; append, split changes and corrections replay normally.
+    repeated_searches = len(search_keys) < len(grid)
+    for context in contexts.values():
+        context._signal_partition = {} if repeated_searches else None
+        context._signal_partition_limit = 64_000 // max(1, len(contexts))
     sample_ready_count = manageable_carry_count = both_half_positive_count = 0
     for ordinal, candidate in enumerate(grid):
         first, second, full = _evaluate_candidate_windows(
@@ -1257,11 +1304,14 @@ def select_profile_spot(
     ]
     diagnostic_ranked = [item for _, item in diagnostic_heap]
     baseline = baseline_candidate(profile)
-    baseline_results = {
-        "calibration": evaluate_candidate(baseline, contexts, calibration),
-        "holdout": evaluate_candidate(baseline, contexts, holdout),
-        "full": evaluate_candidate(baseline, contexts, dates, include_episodes=True),
-    }
+    # Keep each observation boundary sealed, but traverse the custody prefix
+    # only once. The first two views remain summary-only in the public report.
+    baseline_views = _evaluate_candidate_windows(
+        baseline, contexts, [calibration, holdout, dates], include_episodes=True
+    )
+    for view in baseline_views[:2]:
+        view.pop("episodes", None)
+    baseline_results = dict(zip(("calibration", "holdout", "full"), baseline_views))
     if not ranked:
         return {
             "profile_id": profile.profile_id,
@@ -1295,12 +1345,16 @@ def select_profile_spot(
             "runtime_effect": False,
         }
     score, _, _, candidate, calibration_evidence = ranked[0]
+    candidate_views = _evaluate_candidate_windows(
+        candidate, contexts, [holdout, dates], include_episodes=True
+    )
+    candidate_views[0].pop("episodes", None)
     candidate_results = {
         "calibration": calibration_evidence["full"],
         "calibration_first_half": calibration_evidence["first_half"],
         "calibration_second_half": calibration_evidence["second_half"],
-        "holdout": evaluate_candidate(candidate, contexts, holdout),
-        "full": evaluate_candidate(candidate, contexts, dates, include_episodes=True),
+        "holdout": candidate_views[0],
+        "full": candidate_views[1],
     }
     candidate_holdout = candidate_results["holdout"]
     holdout_ready = bool(

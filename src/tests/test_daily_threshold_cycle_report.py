@@ -2,12 +2,97 @@ import gzip
 import hashlib
 import json
 from collections import Counter
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from src.engine import daily_threshold_cycle_report as report_mod
+
+def _serial_profit_summary(rows):
+    values = [
+        report_mod._safe_float(row.get("profit_rate"), None)
+        for row in report_mod._valid_profit_rows(rows)
+    ]
+    wins = sum(value > 0 for value in values)
+    losses = sum(value < 0 for value in values)
+    return {
+        "sample": len(values), "win_count": wins, "loss_count": losses,
+        "avg_profit_rate": round(report_mod._avg(values) or 0.0, 4) if values else None,
+        "median_profit_rate": round(report_mod._percentile(values, 50), 4) if values else None,
+        "downside_p10_profit_rate": round(report_mod._percentile(values, 10), 4) if values else None,
+        "upside_p90_profit_rate": round(report_mod._percentile(values, 90), 4) if values else None,
+        "win_rate": round(wins / len(values), 4) if values else None,
+        "loss_rate": round(losses / len(values), 4) if values else None,
+        "stddev_profit_rate": round(report_mod._stddev(values) or 0.0, 4) if len(values) >= 2 else None,
+    }
+
+
+@pytest.mark.parametrize("values", [
+    [], [None, "", "-", "invalid", float("nan"), float("inf"), -float("inf")],
+    [0], [-0.01], ["0.01"], [0.01, -0.02],
+    [0.01, -0.02, 0, 0.01, None, "invalid"],
+    [1e16, 1, -1e16, 1e-9, -1e-9, 0, 0],
+    [(i * 7919 % 10007 - 5003) / 10000 for i in range(1001)],
+])
+def test_completed_profit_single_distribution_matches_serial_and_preserves_input(values, monkeypatch):
+    import builtins
+    rows = [{"profit_rate": value, "cost_status": None} for value in values]
+    expected = _serial_profit_summary(rows)
+    parse = report_mod._safe_float
+    calls = []
+    sorts = []
+
+    def counted(value, default=None):
+        calls.append(value)
+        return parse(value, default)
+
+    def counted_sort(values):
+        sorts.append(True)
+        return builtins.sorted(values)
+
+    monkeypatch.setattr(report_mod, "_safe_float", counted)
+    monkeypatch.setattr(report_mod, "sorted", counted_sort, raising=False)
+    assert report_mod._completed_profit_summary(rows) == expected
+    assert len(calls) == len(rows)
+    assert sorts == [True]
+    assert all(row["profit_rate"] is value and row["cost_status"] is None
+               for row, value in zip(rows, values))
+
+
+@pytest.mark.parametrize("sim", [[], [{"profit_rate": -0.03}], [{"profit_rate": None}]])
+def test_cumulative_profit_reuse_matches_serial_and_keeps_views_independent(sim, monkeypatch):
+    rows = [
+        {"rec_date": "2026-09-17", "profit_rate": 0.01, "status": "COMPLETED",
+         "actual_execution_venue": "NXT", "cost_status": None},
+        {"rec_date": "2026-09-16", "profit_rate": -0.02, "status": "COMPLETED"},
+        {"rec_date": None, "profit_rate": None},
+    ]
+    arguments = dict(target_date="2026-09-17", start_date="2026-09-15",
+                     pipeline_loader=lambda _: [], completed_rows_loader=lambda *args: rows)
+    monkeypatch.setattr(report_mod, "_extract_scalp_sim_completed_rows", lambda _: sim)
+    optimized = report_mod.build_cumulative_threshold_cycle_report(**arguments)
+    source = report_mod._completed_by_source_summary
+
+    def serial_source(real, sim, **kwargs):
+        return source(real, sim)
+
+    monkeypatch.setattr(report_mod, "_completed_by_source_summary", serial_source)
+    monkeypatch.setattr(report_mod, "_completed_profit_summary", _serial_profit_summary)
+    reference = report_mod.build_cumulative_threshold_cycle_report(**arguments)
+    optimized["meta"].pop("generated_at")
+    reference["meta"].pop("generated_at")
+    assert optimized == reference
+    real = optimized["completed_by_source"]["cumulative"]["real"]
+    cohort = optimized["completed_cohorts"]["cumulative"]["all_completed_valid"]
+    combined = optimized["completed_by_source"]["cumulative"]["combined"]
+    assert real is not cohort and real is not combined
+    real["sample"] = -99
+    assert cohort["sample"] == 2
+    assert combined["sample"] != -99
+
+
 
 
 @pytest.mark.parametrize("missing_fallback", [True, False])
@@ -9887,3 +9972,90 @@ def test_ai_guard_requires_typed_boolean_proposal():
     )
     assert accepted["guard_accepted"] is True
     assert accepted["effective_value"] is False
+
+
+def test_native_price_replay_reaches_publisher_preopen_runtime_with_small_positive_ev(monkeypatch, tmp_path):
+    from src.tests.test_strategy_owner_replay import entry_owner_event, native_entry_loader
+    from src.engine.scalping.strategy_owner_replay import build_entry_opportunity_replays
+    from src.engine.scalping import entry_execution_sizing_plan as sizing
+    from src.engine import threshold_cycle_preopen_apply as preopen
+    monkeypatch.setattr(report_mod, 'ENTRY_SPLIT_ORDER_PLAN_DIR', tmp_path)
+    monkeypatch.setattr(report_mod, 'MECHANISTIC_ENTRY_PRICE_POLICY_DIR', tmp_path)
+    monkeypatch.setattr(report_mod, 'TRADING_RULES', SimpleNamespace(SCALPING_CONDITIONAL_STRONG_DEFENSIVE_BPS=11))
+    events = []
+    for day in ['2026-09-14', '2026-09-15']:
+        out = build_entry_opportunity_replays(day, [entry_owner_event(day, i) for i in range(10)],
+            evaluated_at=datetime.fromisoformat('2026-09-17T10:00:00+09:00').timestamp(),
+            micro_loader=native_entry_loader)
+        assert out['counts']['completed'] == 10
+        events.extend(out['quantity_leg_events'])
+    split = dict(date='2026-09-17', source_quality={'tuning_input_allowed': True},
+        cumulative_state={'quantity_leg_four_arm_events': events,
+            'entry_opportunity_replay_source_counts': {'2026-09-14': 10, '2026-09-15': 10}})
+    from src.engine.scalping import entry_split_order_plan as split_owner
+    monkeypatch.setattr(split_owner, 'POLICY_DIR', tmp_path)
+    atomic = dict(entry_execution_sizing_plan_schema=split_owner.ATOMIC_EXECUTION_SIZING_SCHEMA,
+        entry_execution_sizing_policy=split_owner.ATOMIC_EXECUTION_SIZING_BASELINE_POLICY,
+        entry_price_plan_schema=split_owner.ATOMIC_PRICE_PLAN_SCHEMA)
+    split_policy = dict(schema_version=split_owner.POLICY_SCHEMA_VERSION,
+        policy_version='native-fixture-split', source_date='2026-09-17', **atomic)
+    split.update(schema_version=split_owner.SCHEMA_VERSION,
+        recommended_policy=dict(policy_version=split_policy['policy_version'], **atomic))
+    split, split_policy = split_owner.bind_report_policy_generation(split, split_policy)
+    frozen_path = split_owner.generation_policy_snapshot_path(split)
+    frozen_path.parent.mkdir(parents=True)
+    frozen_path.write_text(json.dumps(split_policy))
+    source_path = tmp_path / 'entry_split_order_plan_2026-09-17.json'
+    source_path.write_text(json.dumps(split))
+    family = report_mod._build_dynamic_entry_price_resolver_family([], [], target_date='2026-09-17')
+    assert family['sample']['primary_sample_book'] == 'executable_opportunity_replay'
+    assert family['sample']['real_candidate_observations'] == 0
+    assert family['sample']['real_outcome_joined_sample'] == 0
+    candidates = report_mod._build_calibration_candidates([family])
+    candidate = candidates[0]
+    assert candidate['sample_count'] == 20
+    assert candidate['calibration_state'] == 'adjust_up'
+    assert candidate['runtime_apply_eligible_now'] is True
+    assert candidate['recommended_values']['conditional_strong_defensive_bps'] == 10
+    report = {'date': '2026-09-17', 'calibration_candidates': candidates}
+    report_mod.apply_window_policy_registry_to_report(report, {})
+    assert candidates[0]['runtime_apply_eligible_now'] is True
+    assert candidates[0]['window_policy_resolution']['daily_only_allowed'] is False
+    report_mod._materialize_mechanistic_entry_price_policy(report, '2026-09-17')
+    path = tmp_path / 'mechanistic_entry_price_policy_2026-09-17.json'
+    policy = json.loads(path.read_text())
+    assert 0 < policy['cost_adjusted_ev_pct'] < .1
+    prefix = 'KORSTOCKSCAN_MECHANISTIC_ENTRY_PRICE_POLICY_'
+    env = {prefix + suffix: str(value) for suffix, value in {
+        'ENABLED': 'true', 'FILE': path, 'VERSION': policy['policy_version'],
+        'SOURCE_DATE': policy['source_date'], 'ACTIVE_DATE': policy['active_date'],
+        'SHA256': hashlib.sha256(path.read_bytes()).hexdigest()}.items()}
+    env.update(policy['runtime_env'])
+    audit = next(a for a in preopen._split_runtime_policy_audits(policy['active_date'], env)
+        if a['family'] == 'dynamic_entry_price_resolver')
+    assert audit['status'] == 'pass'
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    loaded, status = sizing.runtime_mechanistic_entry_price_policy(active_date=policy['active_date'])
+    assert status == 'loaded'
+    monkeypatch.setattr(sizing, 'runtime_mechanistic_entry_price_policy', lambda: (loaded, status))
+    assert sizing.scoped_entry_price_bps('strong_1tick_pressure', 10, venue='KRX', session='KRX_REGULAR', policy_bundle_sha256='a' * 64) == 10
+    assert sizing.scoped_entry_price_bps('strong_1tick_pressure', 10, venue='NXT', session='KRX_REGULAR') == 11
+    assert sizing.scoped_entry_price_bps('strong_1tick_pressure', 10, venue='KRX', session='UNKNOWN') == 11
+    assert sizing.scoped_entry_price_bps('strong_1tick_pressure', 10, venue='KRX', session='KRX_REGULAR', policy_bundle_sha256='b' * 64) == 11
+    assert sizing.scoped_entry_price_bps('weak_liquidity_wide_spread', 40, venue='KRX', session='KRX_REGULAR') == 40
+    split['cumulative_state']['entry_opportunity_replay_source_counts']['2026-09-17'] = 1
+    source_path.write_text(json.dumps(split))
+    grid = report_mod._entry_price_opportunity_candidate_grid('2026-09-17', {'conditional_strong_defensive_bps': 11})
+    assert grid['selected_candidate'] is None
+    assert grid['blocker'] == 'executable_split_replay_source_missing_or_invalid'
+
+
+def test_new_price_contract_cannot_publish_legacy_completed_average_after_cutoff(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, 'MECHANISTIC_ENTRY_PRICE_POLICY_DIR', tmp_path)
+    candidate = dict(family='dynamic_entry_price_resolver', runtime_apply_eligible_now=True,
+        calibration_state='adjust_up', source_metrics={'entry_price_profile_selected_candidate': {
+            'candidate_id': 'normal:10', 'target_value_key': 'normal_defensive_bps', 'profile_bps': 10,
+            'exact_outcome_joined_sample': 20, 'metrics': {'source_quality_adjusted_ev_pct': .2}}})
+    report_mod._materialize_mechanistic_entry_price_policy({'calibration_candidates': [candidate]}, '2026-09-17')
+    assert not list(tmp_path.glob('*.json'))

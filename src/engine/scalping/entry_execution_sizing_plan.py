@@ -106,11 +106,32 @@ def _runtime_policy(
     return payload, "loaded"
 
 
+# Existing approved numeric BPS envelope; replay cannot broaden this surface.
+PRICE_POLICY_BPS_BOUNDS = {
+    'normal_defensive_bps': (20, 50), 'conditional_strong_defensive_bps': (5, 20),
+    'normal_favorable_defensive_bps': (10, 35), 'normal_weak_defensive_bps': (35, 65),
+}
+
+
 def mechanistic_entry_price_authority_valid(policy: Any) -> bool:
     """The numeric-price owner cannot acquire action or sizing authority."""
     if not isinstance(policy, dict):
         return False
     runtime_env = policy.get("runtime_env")
+    evidence = policy.get("price_selection_evidence")
+    if evidence is not None:
+        from src.engine.scalping.strategy_owner_replay import entry_price_selection_evidence_valid
+        if (not entry_price_selection_evidence_valid(evidence)
+            or policy.get("cost_adjusted_ev_pct") != evidence["metrics"]["source_quality_adjusted_ev_pct"]
+            or policy.get("exact_terminal_sample_count") != evidence["metrics"]["paired_sample_count"]
+            or evidence["holdout_dates"][-1] > str(policy.get("source_date") or "")
+            or policy.get("minimum_cost_adjusted_ev_pct") != 0.0
+            or runtime_env != {"KORSTOCKSCAN_SCALPING_" + evidence["target_value_key"].upper():
+                               str(evidence["selected_bps"])}):
+            return False
+    elif (policy.get("minimum_cost_adjusted_ev_pct") == 0.0
+          or str(policy.get("source_date") or "") >= "2026-09-17"):
+        return False
     return bool(
         policy.get("policy_owner") == PRICE_OWNER
         and type(policy.get("provider_calls")) is int
@@ -159,6 +180,20 @@ def runtime_mechanistic_entry_price_policy(
         **policy,
         "policy_sha256": str(os.getenv(f"{_ENTRY_PRICE_POLICY_PREFIX}SHA256")),
     }, status
+
+
+def scoped_entry_price_bps(profile, configured_bps, *, venue, session, policy_bundle_sha256=None):
+    """A global env surface carries a scoped policy, never a cross-venue trial."""
+    policy, status = runtime_mechanistic_entry_price_policy()
+    proof = policy.get('price_selection_evidence')
+    if not proof or status != 'loaded':
+        return configured_bps
+    from src.engine.scalping.strategy_owner_replay import ENTRY_REPLAY_PROFILES
+    if ENTRY_REPLAY_PROFILES.get(profile) != proof['target_value_key']:
+        return configured_bps
+    return (proof['selected_bps'] if profile == proof['profile']
+            and [venue, session, policy_bundle_sha256] == proof['scope_parent'][:3]
+            else proof['incumbent_bps'])
 
 
 def runtime_entry_execution_sizing_policy(
@@ -264,6 +299,7 @@ def compose_entry_execution_sizing_plan(
     action_receipt: dict[str, Any] | None,
     quantity_policy_version: str | None,
     split_policy_version: str | None,
+    replay_context: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Validate and decorate an existing entry plan without changing it.
 
@@ -565,8 +601,22 @@ def compose_entry_execution_sizing_plan(
         continuation_common = dict(continuation.get("common_fields") or {})
         continuation["common_fields"] = {**continuation_common, **common_fields}
         decorated_orders[0]["entry_split_order_probe_continuation"] = continuation
+    # Observation failure must never alter an already validated broker plan.
+    replay_seed = None
+    if isinstance(replay_context, dict) and replay_context and not blockers:
+        from src.engine.scalping.strategy_owner_replay import freeze_entry_opportunity
+        replay_seed = freeze_entry_opportunity(
+            plan_core, stock_code=str(replay_context.get("stock_code") or ""),
+            observed_at=replay_context.get("observed_at", datetime.now(KST).timestamp()),
+            profile=replay_context.get("profile"),
+            profile_bps=replay_context.get("profile_bps"),
+            sizing_context=replay_context.get('sizing_context'),
+            candidate_leg_plan=replay_context.get('candidate_leg_plan'),
+            anchor_price=(orders[0].get("entry_price_current_price") if orders else None),
+        )
     return decorated_orders, {
         **common_fields,
+        "entry_opportunity_replay_seed": replay_seed,
         "entry_price_plan": price_receipt,
         "entry_execution_sizing_plan": plan_core,
     }

@@ -672,3 +672,310 @@ def test_market_regime_cutoff_without_prior_real_holding_inputs(offset, blocked)
     else:
         assert "adapter_error" not in result, result
         assert set(result["blockers"].values()) == {"pending_exit_outcome"}, result
+
+
+def entry_seed(day='2026-09-14', ordinal=0, *, profile='strong_1tick_pressure', bps=11, anchor=10020):
+    plan = dict(valid=True, blockers=[], total_qty=10, deferred_probe_residual_qty=0,
+        scanner_promotion_id=f'promotion-{day}-{ordinal}', action_receipt_id=f'attempt-{day}-{ordinal}',
+        effective_venue='KRX', market_session_bucket='KRX_REGULAR', policy_bundle_hash='a' * 64,
+        quantity_policy_version='qty-original', split_policy_version='leg-original',
+        price_policy_sha256='c' * 64, price_plan_sha256='d' * 64,
+        legs=[dict(qty=10, numeric_price=10000, execution_phase='immediate')])
+    clock = datetime.fromisoformat(day + 'T10:00:00+09:00').timestamp() + ordinal * 240
+    return mod.freeze_entry_opportunity(plan, stock_code='005930', observed_at=clock,
+        profile=profile, profile_bps=bps, anchor_price=anchor)
+
+
+def entry_native_path(seed):
+    from src.tests.test_machine_microstructure_attribution import _depth_row, _micro_row
+    start = datetime.fromisoformat(seed['observed_at'])
+    depths, trades = [], []
+    for i in range(181):
+        at = (start + timedelta(seconds=i)).isoformat()
+        d = _depth_row('005930', at)
+        bid, ask = (10000, 10010) if i < 30 else (10040, 10050)
+        d.update(source_sequence=i + 1, series_sequence=i + 1,
+                 best_bid=bid, best_ask=ask, bid_levels=[[1, bid, 1000]], ask_levels=[[1, ask, 800]])
+        depths.append(d)
+        if i <= 10:
+            t = _micro_row('005930', at, 10100, venue='KRX', session='KRX_REGULAR')
+            t.update(source_sequence=i + 1, series_sequence=i + 1)
+            trades.append(t)
+    return depths, trades
+
+
+def entry_replay(seed):
+    depths, trades = entry_native_path(seed)
+    return mod.replay_entry_opportunity(seed, depths, trades, source_ready=True,
+        evaluated_at=datetime.fromisoformat(seed['observed_at']).timestamp() + 181)
+
+
+def test_entry_union_prices_replay_no_fill_and_registered_marketable_price():
+    seed = entry_seed()
+    original = deepcopy(seed)
+    result = entry_replay(seed)
+    assert seed == original
+    assert result['status'] == 'completed_source_only'
+    assert result['price_arms']['11']['modeled_outcome'] == 'supported_no_fill'
+    assert 0 < result['price_arms']['10']['net_return_pct'] < 0.1
+    assert result['price_arms']['10']['actual_fill_evidence'] is False
+    assert result['actual_order_submitted'] is False
+    assert len(result['arms']) == 4
+
+
+@pytest.mark.parametrize('defect', ['gap', 'epoch', 'depth', 'passive_touch', 'scope', 'source'])
+def test_entry_replay_rejects_unsupported_fill_exit_or_native_window(defect):
+    seed = entry_seed()
+    depths, trades = entry_native_path(seed)
+    if defect == 'gap':
+        del depths[10:15]
+    elif defect == 'epoch':
+        depths[10]['sequence_epoch'] = 2
+    elif defect == 'depth':
+        depths[0]['best_ask_qty'] = 1
+        depths[0]['ask_levels'][0][2] = 1
+    elif defect == 'passive_touch':
+        trades[3]['trade_price'] = 10000
+    elif defect == 'scope':
+        depths[5]['venue'] = 'NXT'
+    result = mod.replay_entry_opportunity(seed, depths, trades,
+        source_ready=defect != 'source', evaluated_at=datetime.fromisoformat(seed['observed_at']).timestamp() + 181)
+    assert result['status'] == 'source_gap'
+    assert result['arms'] is None
+    assert result['price_arms'] is None
+
+
+def test_price_union_small_positive_pair_recomputed_by_final_consumer():
+    rows = [entry_replay(entry_seed(day, i)) for day in ['2026-09-14', '2026-09-15'] for i in range(10)]
+    selected = mod.select_entry_price_replay(rows, eligible_count=20,
+        source_counts={'2026-09-14': 10, '2026-09-15': 10})
+    assert len(selected) == 1
+    proof = selected[0]
+    assert proof['selected_bps'] == 10
+    assert proof['holdout_dates'] == ['2026-09-15']
+    assert mod.entry_price_selection_evidence_valid(proof)
+    forged = deepcopy(proof)
+    forged['metrics']['modeled_net_profit_krw'] += 1
+    assert not mod.entry_price_selection_evidence_valid(forged)
+    from src.engine.scalping.entry_execution_sizing_plan import mechanistic_entry_price_authority_valid
+    policy = dict(policy_owner='mechanistic_entry_price_resolver', provider_calls=0, ai_price_authority=False,
+        candidate_id='mechanistic:strong_1tick_pressure:union-v2', source_date='2026-09-15',
+        minimum_cost_adjusted_ev_pct=0.0, exact_terminal_sample_count=20,
+        cost_adjusted_ev_pct=proof['metrics']['source_quality_adjusted_ev_pct'],
+        price_selection_evidence=proof, runtime_env={'KORSTOCKSCAN_SCALPING_CONDITIONAL_STRONG_DEFENSIVE_BPS': '10'})
+    assert mechanistic_entry_price_authority_valid(policy)
+    policy['runtime_env']['KORSTOCKSCAN_SCALPING_CONDITIONAL_STRONG_DEFENSIVE_BPS'] = '8'
+    assert not mechanistic_entry_price_authority_valid(policy)
+
+
+@pytest.mark.parametrize('other_branch', ['normal', 'unregistered'])
+def test_price_union_retains_other_owner_price_branches_without_profile_coverage_bias(other_branch):
+    from src.engine.monitoring.research_closed_loop import digest
+    rows = []
+    for day in ('2026-09-14', '2026-09-15'):
+        for i in range(30):
+            seed = entry_seed(day, i) if i < 10 else entry_seed(day, i,
+                profile='normal', bps=20, anchor=10030)
+            if i >= 10 and other_branch == 'unregistered':
+                # An original plan outside the registered BPS branch remains incumbent.
+                seed['price_candidates'] = {}
+                for key in ('profile', 'target_value_key', 'incumbent_bps', 'anchor_price'):
+                    seed.pop(key, None)
+                seed['seed_sha256'] = digest({k: v for k, v in seed.items() if k != 'seed_sha256'})
+            rows.append(entry_replay(seed))
+    selected = mod.select_entry_price_replay(rows, eligible_count=60,
+        source_counts={'2026-09-14': 30, '2026-09-15': 30})
+    assert len(selected) == 1
+    proof = selected[0]
+    assert proof['changed_profile_paired_sample_count'] == 20
+    assert proof['metrics']['paired_sample_count'] == 60
+    assert len(proof['paired_rows']) == 60
+    assert proof['metrics']['source_quality_adjusted_ev_pct'] == pytest.approx(
+        rows[0]['price_arms']['10']['net_return_pct'] / 3)
+    assert mod.entry_price_selection_evidence_valid(proof)
+    # A real missing-source cohort still fails the same union coverage guard.
+    assert not mod.select_entry_price_replay(rows, eligible_count=80,
+        source_counts={'2026-09-14': 40, '2026-09-15': 40})
+
+
+def entry_owner_event(day='2026-09-14', ordinal=0):
+    from src.tests.test_entry_execution_sizing_plan import _receipt, _priced
+    from src.engine.scalping.entry_execution_sizing_plan import compose_entry_execution_sizing_plan
+    from src.engine.sniper_missed_entry_counterfactual import EntryEvent
+    seed = entry_seed(day, ordinal)
+    clock = datetime.fromisoformat(seed['observed_at']).timestamp()
+    receipt = _receipt(evaluation_attempt_id=seed['evaluation_attempt_id'],
+        scanner_promotion_id=seed['scanner_promotion_id'], policy_bundle_hash='a' * 64,
+        effective_venue='KRX', market_session_bucket='KRX_REGULAR')
+    order = _priced({'qty': 10, 'price': 10000, 'order_type_code': '00'})
+    order.update(entry_price_current_price=10020, entry_price_captured_at=clock)
+    _, fields = compose_entry_execution_sizing_plan(planned_orders=[order], action_receipt=receipt,
+        quantity_policy_version='qty-original', split_policy_version='leg-original', expected_total_qty=10,
+        replay_context=dict(stock_code='005930', observed_at=clock, profile='strong_1tick_pressure', profile_bps=11))
+    assert fields['entry_execution_sizing_plan']['valid']
+    assert fields['entry_opportunity_replay_seed']
+    return EntryEvent(seed['observed_at'], day, 'Samsung', '005930',
+        'entry_execution_sizing_plan', f'row-{ordinal}', fields)
+
+
+def native_entry_loader(day, root, symbols, anchors, manifest, canary, evaluated_at):
+    windows = {}
+    for anchor in anchors:
+        seed = dict(observed_at=anchor['anchor_at'])
+        depths, trades = entry_native_path(seed)
+        windows[anchor['anchor_id']] = dict(raw_depth_rows=depths, raw_market_rows=trades)
+    return {'source_contract_ready': True}, {}, windows
+
+
+def test_native_entry_producer_generates_signed_quartets_without_submission():
+    from src.engine.scalping.entry_split_order_plan import build_quantity_leg_four_arm_evaluation
+    event = entry_owner_event()
+    out = mod.build_entry_opportunity_replays(event.signal_date, [event, event],
+        evaluated_at=datetime.fromisoformat(event.emitted_at).timestamp() + 181,
+        micro_loader=native_entry_loader)
+    assert out['counts']['completed'] == 1
+    assert out['counts']['excluded']['duplicate_exact_plan'] == 1
+    receipt = out['quantity_leg_events'][0]['entry_quantity_leg_four_arm_evaluation']
+    assert receipt['source_date'] == event.signal_date
+    assert receipt['arms']['incumbent_qty_x_incumbent_leg']['actual_fill_evidence'] is False
+    evaluation = build_quantity_leg_four_arm_evaluation(out['quantity_leg_events'])
+    assert evaluation['complete_exact_attempt_count'] == 1
+    assert evaluation['exact_attempt_join_coverage'] == 1
+    assert evaluation['status'] == 'evidence_pending_or_blocked'
+
+
+def test_native_entry_producer_quarantines_conflicts_and_retains_missing_population():
+    event = entry_owner_event()
+    conflicting = deepcopy(event)
+    conflicting.fields['entry_opportunity_replay_seed']['candidate_qty'] = 8
+    from src.engine.monitoring.research_closed_loop import digest
+    seed = conflicting.fields['entry_opportunity_replay_seed']
+    seed['seed_sha256'] = digest({k: v for k, v in seed.items() if k != 'seed_sha256'})
+    missing = deepcopy(event)
+    missing.record_id = 'missing'
+    missing.fields.pop('entry_opportunity_replay_seed')
+    out = mod.build_entry_opportunity_replays(event.signal_date, [event, conflicting, missing],
+        evaluated_at=datetime.fromisoformat(event.emitted_at).timestamp() + 181,
+        micro_loader=native_entry_loader)
+    assert out['counts']['raw_plan_rows'] == 3
+    assert sum(out['counts']['raw_row_disposition'].values()) == 3
+    assert out['counts']['raw_row_disposition']['conflicting_rows'] == 2
+    assert out['counts']['excluded']['conflicting_exact_plan'] == 1
+    assert out['counts']['excluded']['original_plan_or_frozen_seed_missing_or_invalid'] == 1
+    assert out['quantity_leg_events'] == []
+
+
+def test_price_replay_allocation_keeps_overlap_rows_without_summing_capital():
+    rows = [entry_replay(entry_seed(day, 0)) for day in ['2026-09-14', '2026-09-15'] for _ in range(10)]
+    # Different real attempts, same source time: one common research reservation.
+    from src.engine.monitoring.research_closed_loop import digest
+    for i, row in enumerate(rows):
+        row['seed']['evaluation_attempt_id'] += f'-{i}'
+        row['seed']['seed_sha256'] = digest({k: v for k, v in row['seed'].items() if k != 'seed_sha256'})
+        row['seed_sha256'] = row['seed']['seed_sha256']
+        row['replay_sha256'] = digest({k: v for k, v in row.items() if k != 'replay_sha256'})
+    proof = mod.select_entry_price_replay(rows, eligible_count=20,
+        source_counts={'2026-09-14': 10, '2026-09-15': 10})[0]
+    assert proof['metrics']['paired_sample_count'] == 20
+    one = rows[0]['price_arms']['10']['net_pnl_krw']
+    assert proof['metrics']['modeled_net_profit_krw'] == pytest.approx(2 * one)
+
+
+def test_latest_valid_source_without_complete_outcomes_cannot_be_skipped():
+    rows = [entry_replay(entry_seed(day, i)) for day in ['2026-09-14', '2026-09-15'] for i in range(10)]
+    census = {'2026-09-14': 10, '2026-09-15': 10, '2026-09-17': 1}
+    assert mod.select_entry_price_replay(rows, eligible_count=21, source_counts=census) == []
+    census.pop('2026-09-17')
+    proof = mod.select_entry_price_replay(rows, eligible_count=20, source_counts=census)[0]
+    assert mod.entry_price_selection_evidence_valid(proof)
+    proof['source_counts']['2026-09-17'] = 1
+    assert not mod.entry_price_selection_evidence_valid(proof)
+
+
+@pytest.mark.parametrize('census', [None, {'2026-09-14': 0, '2026-09-15': 20},
+    {'2026-09-14': 9, '2026-09-15': 11}, {'2026-09-15': 20}])
+def test_price_union_requires_original_per_date_eligible_population(census):
+    rows = [entry_replay(entry_seed(day, i)) for day in
+        ['2026-09-14', '2026-09-15'] for i in range(10)]
+    assert mod.select_entry_price_replay(rows, eligible_count=20, source_counts=census) == []
+    proof = mod.select_entry_price_replay(rows, eligible_count=20,
+        source_counts={'2026-09-14': 10, '2026-09-15': 10})[0]
+    # Even a recomputed digest cannot make a shifted/absent census authoritative.
+    from src.engine.monitoring.research_closed_loop import digest
+    proof['source_counts'] = census
+    proof['evidence_sha256'] = digest({k: v for k, v in proof.items() if k != 'evidence_sha256'})
+    assert not mod.entry_price_selection_evidence_valid(proof)
+
+
+@pytest.mark.parametrize('profile,other_profile', [('favorable_micro', 'favorable_wide_micro'),
+    ('favorable_wide_micro', 'favorable_micro')])
+def test_price_union_shared_env_profiles_consume_only_the_selected_profile(monkeypatch, profile, other_profile):
+    from src.engine.scalping import entry_execution_sizing_plan as sizing
+    rows = [entry_replay(entry_seed(day, i, profile=profile)) for day in
+        ['2026-09-14', '2026-09-15'] for i in range(10)]
+    proof = mod.select_entry_price_replay(rows, eligible_count=20,
+        source_counts={'2026-09-14': 10, '2026-09-15': 10})[0]
+    monkeypatch.setattr(sizing, 'runtime_mechanistic_entry_price_policy',
+        lambda: ({'price_selection_evidence': proof}, 'loaded'))
+    scope = dict(venue='KRX', session='KRX_REGULAR', policy_bundle_sha256='a' * 64)
+    assert sizing.scoped_entry_price_bps(profile, 10, **scope) == 10
+    # Both profiles share the env key, but the replay left the other unchanged.
+    assert sizing.scoped_entry_price_bps(other_profile, 10, **scope) == 11
+
+
+def test_native_leg_control_preserves_original_policy_and_weights():
+    event = entry_owner_event()
+    seed = event.fields['entry_opportunity_replay_seed']
+    assert seed['candidate_leg_control_only'] is True
+    assert seed['candidate_leg_policy_version'] == seed['incumbent_leg_policy_version']
+    assert seed['candidate_legs'] == seed['legs']
+    result = entry_replay(seed)
+    ids = ['incumbent_qty_x_incumbent_leg', 'candidate_qty_x_incumbent_leg',
+           'incumbent_qty_x_candidate_leg', 'candidate_qty_x_candidate_leg']
+    assert result['arms'][ids[0]] == result['arms'][ids[2]]
+    assert result['arms'][ids[1]] == result['arms'][ids[3]]
+
+
+def test_registered_candidate_leg_plan_requires_same_owner_action_and_original_prices():
+    event = entry_owner_event()
+    plan = event.fields['entry_execution_sizing_plan']
+    candidate = deepcopy(plan)
+    candidate['split_policy_version'] = 'known-registered-leg-candidate'
+    clock = datetime.fromisoformat(event.emitted_at).timestamp()
+    args = dict(stock_code='005930', observed_at=clock, candidate_leg_plan=candidate)
+    seed = mod.freeze_entry_opportunity(plan, **args)
+    assert seed['candidate_leg_control_only'] is False
+    assert seed['candidate_leg_policy_version'] == 'known-registered-leg-candidate'
+    assert mod._entry_seed_valid(seed)
+    candidate['legs'][0]['numeric_price'] += 10
+    assert mod.freeze_entry_opportunity(plan, **args) is None
+    candidate = deepcopy(plan)
+    candidate['action_receipt_id'] = 'other-attempt'
+    assert mod.freeze_entry_opportunity(plan, **{**args, 'candidate_leg_plan': candidate}) is None
+
+
+def test_owner_issued_market_order_zero_keeps_market_semantics_without_price_invention():
+    from src.tests.test_entry_execution_sizing_plan import _receipt, _priced
+    from src.engine.scalping.entry_execution_sizing_plan import compose_entry_execution_sizing_plan
+    from src.engine.sniper_missed_entry_counterfactual import _price_ready_plan
+    event = entry_owner_event()
+    clock = datetime.fromisoformat(event.emitted_at).timestamp()
+    order = _priced({'qty': 10, 'price': 0, 'order_type_code': '03'})
+    order.update(entry_price_captured_at=clock, entry_price_current_price=10020)
+    _, fields = compose_entry_execution_sizing_plan([order], expected_total_qty=10,
+        action_receipt=_receipt(evaluation_attempt_id='market-attempt', scanner_promotion_id='market-promotion',
+            policy_bundle_hash='a' * 64, effective_venue='KRX', market_session_bucket='KRX_REGULAR'),
+        quantity_policy_version='qty-original', split_policy_version='leg-original',
+        replay_context={'stock_code': '005930', 'observed_at': clock,
+                        'profile': 'strong_1tick_pressure', 'profile_bps': 11})
+    event.fields = fields
+    assert _price_ready_plan(event)
+    seed = fields['entry_opportunity_replay_seed']
+    assert seed['legs'][0]['price'] == 0
+    assert seed['legs'][0]['order_type_code'] == '03'
+    assert seed['price_candidates'] == {}
+    result = entry_replay(seed)
+    assert result['status'] == 'completed_source_only'
+    assert result['arms']['incumbent_qty_x_incumbent_leg']['modeled_filled_qty'] == 10
+    assert result['price_arms'] == {}
+    assert result['actual_order_submitted'] is False

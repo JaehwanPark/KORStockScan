@@ -68,7 +68,7 @@ _BUY_TP_PCT = 0.5
 _BUY_SL_PCT = -0.5
 _RISING_MISSED_STAGE = "rising_missed_one_share_entry"
 _EVENT_FIELD_PROJECTION_VERSION = "missed_entry_counterfactual_compact_v3"
-_PRICE_PLAN_FIELDS = frozenset({"entry_execution_sizing_plan", "entry_price_plan"})
+_PRICE_PLAN_FIELDS = frozenset({"entry_execution_sizing_plan", "entry_price_plan", "entry_opportunity_replay_seed"})
 _EVENT_FIELD_KEYS = frozenset(
     {
         "action",
@@ -79,6 +79,7 @@ _EVENT_FIELD_KEYS = frozenset(
         "entry_execution_sizing_plan_sha256",
         "entry_price_plan",
         "entry_price_plan_sha256",
+        "entry_opportunity_replay_seed",
         "microstructure_reaction_context_id",
         "microstructure_reaction_context_version",
         "microstructure_reaction_context_status",
@@ -571,12 +572,12 @@ class MissedEntryCounterfactualSummary:
     top_avoided_losers: list[dict] = field(default_factory=list)
 
 
-def _load_entry_events(target_date: str) -> list[EntryEvent]:
+def _load_entry_events(target_date: str, *, rows=None) -> list[EntryEvent]:
     events: list[EntryEvent] = []
     # The live pipeline can exceed multiple gigabytes.  Decode one row at a
     # time and retain only fields consumed by this report so full-monitor
     # generation cannot duplicate the entire source in memory.
-    for row in iter_jsonl(_pipeline_events_path(target_date)):
+    for row in (iter_jsonl(_pipeline_events_path(target_date)) if rows is None else rows):
         if str(row.get("pipeline") or "").strip() != "ENTRY_PIPELINE":
             continue
         code = str(row.get("stock_code") or "").strip()[:6]
@@ -816,16 +817,19 @@ def _price_ready_plan(event: EntryEvent) -> dict:
                 not isinstance(c, dict)
                 or (
                     c.get("numeric_price") is not None
-                    and (type(c["numeric_price"]) is not int or c["numeric_price"] <= 0)
+                    and (type(c["numeric_price"]) is not int or c["numeric_price"] < 0
+                         or (c["numeric_price"] == 0 and c.get("order_type_code") not in {"3", "03"}))
                 )
                 for c in candidates
             )
             or not any(
-                type(c.get("numeric_price")) is int and c["numeric_price"] > 0
+                type(c.get("numeric_price")) is int and (c["numeric_price"] > 0
+                    or (c["numeric_price"] == 0 and c.get("order_type_code") in {"3", "03"}))
                 for c in candidates
             )
         ):
             return {}
+        issued = {c.get("price_leg_id"): c for c in candidates}
         legs = plan.get("legs")
         if (
             not isinstance(legs, list)
@@ -838,7 +842,8 @@ def _price_ready_plan(event: EntryEvent) -> dict:
                     leg.get("numeric_price") is not None
                     and (
                         type(leg["numeric_price"]) is not int
-                        or leg["numeric_price"] <= 0
+                        or leg["numeric_price"] < 0
+                        or (leg["numeric_price"] == 0 and issued.get(leg.get("price_leg_id"), {}).get("order_type_code") not in {"3", "03"})
                     )
                 )
                 for leg in legs
@@ -3355,6 +3360,17 @@ def build_missed_entry_counterfactual_report(
             "price_ready_diagnostic_economic_pair_eligible": False,
         }
     )
+    from src.engine.monitoring.research_closed_loop import read_object
+    try:
+        from src.engine.scalping.entry_split_order_plan import REPORT_DIR as split_report_dir
+        split = read_object(split_report_dir / f'entry_split_order_plan_{safe_date}.json',
+                            limit=64 * 1024 * 1024)
+        executable_replay = split['input_summary']['daily_diagnostic']['entry_opportunity_executable_replay']
+        if split.get('date') != safe_date or executable_replay.get('source_date') != safe_date:
+            raise ValueError('canonical_replay_date_mismatch')
+    except (OSError, KeyError, TypeError, ValueError):
+        executable_replay = dict(status='canonical_split_replay_not_yet_available',
+            source_date=safe_date, actual_order_submitted=False)
     summary = MissedEntryCounterfactualSummary(date=safe_date)
     summary.total_candidates = len(candidates)
 
@@ -3370,6 +3386,7 @@ def build_missed_entry_counterfactual_report(
         )
         return {
             "date": safe_date,
+            "entry_opportunity_executable_replay": executable_replay,
             "summary": missed_entry_counterfactual_summary_to_dict(summary),
             "metrics": {
                 "total_candidates": 0,
@@ -3999,6 +4016,7 @@ def build_missed_entry_counterfactual_report(
 
     return {
         "date": safe_date,
+        "entry_opportunity_executable_replay": executable_replay,
         "summary": missed_entry_counterfactual_summary_to_dict(summary),
         "metrics": {
             "total_candidates": int(summary.total_candidates),

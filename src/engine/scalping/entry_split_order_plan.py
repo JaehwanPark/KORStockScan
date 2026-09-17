@@ -10,7 +10,7 @@ import os
 import re
 import tempfile
 import threading
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from statistics import mean
@@ -1711,6 +1711,8 @@ def _source_quality_summary(target_date: str) -> dict[str, Any]:
 
 
 def _iter_input_events(target_date: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    from src.engine.sniper_missed_entry_counterfactual import _load_entry_events
+    native_plan_events = []
     clean_policy = clean_baseline_policy()
     source_quality = _source_quality_summary(target_date)
     hard_blocking_stages = set(source_quality.get("hard_blocking_stages") or [])
@@ -1724,6 +1726,8 @@ def _iter_input_events(target_date: str) -> tuple[list[dict[str, Any]], dict[str
         for event in _iter_entry_split_input_rows(
             path, hard_blocking_stages=hard_blocking_stages
         ):
+            if source_name == "pipeline_events" and event.get("stage") == "entry_execution_sizing_plan":
+                native_plan_events.extend(_load_entry_events(target_date, rows=[event]))
             fields = _event_fields(event)
             event_date = _event_date(fields) or target_date
             if not is_date_allowed(event_date, clean_policy):
@@ -1755,6 +1759,7 @@ def _iter_input_events(target_date: str) -> tuple[list[dict[str, Any]], dict[str
             fields["source_date"] = event_date
             events.append(fields)
     return events, {
+        "_entry_opportunity_plan_events": native_plan_events,
         "source_paths": {
             name: _existing_jsonl_source(path) for name, path in source_paths.items()
         },
@@ -3720,6 +3725,18 @@ def quantity_leg_promotion_evidence_valid(evaluation: object) -> bool:
         if sorted(partition_hashes) != sorted(hashes) or len(set(partition_hashes)) != count:
             return False
         cal_dates, hold_dates = calibration["source_dates"], holdout["source_dates"]
+        census = evaluation.get("native_source_counts")
+        if census is not None:
+            if (not isinstance(census, dict) or any(type(n) is not int or n < 0
+                    or date.fromisoformat(d).isoformat() != d or d < "2026-06-05"
+                    for d, n in census.items())
+                or (any(census.values()) and (not hold_dates or hold_dates[-1] < max(d for d, n in census.items() if n)))):
+                return False
+            census_applies = any(census.values()) or any(d in census for d in cal_dates + hold_dates)
+            if census_applies and (sum(census.values()) != denominator
+                or any(p["complete_exact_attempt_count"] > sum(census.get(d, 0)
+                           for d in p["source_dates"]) for p in (calibration, holdout))):
+                return False
         if (
             not cal_dates or len(hold_dates) != 1
             or cal_dates != sorted(set(cal_dates))
@@ -3804,7 +3821,7 @@ def quantity_leg_policy_selection_evidence_valid(policy: dict[str, Any]) -> bool
 
 
 def build_quantity_leg_four_arm_evaluation(
-    events: list[dict[str, Any]],
+    events: list[dict[str, Any]], *, source_counts: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     """Evaluate quantity and leg changes only on complete exact-attempt quartets."""
 
@@ -4003,6 +4020,17 @@ def build_quantity_leg_four_arm_evaluation(
             }
         )
 
+    if source_counts is not None:
+        for census_date, census_count in source_counts.items():
+            try:
+                if (date.fromisoformat(census_date).isoformat() != census_date
+                    or census_date < "2026-06-05" or type(census_count) is not int or census_count < 0):
+                    raise ValueError("source_census_invalid")
+                # Zero is a producer declaration, not an absent census value.
+                declared_eligible_by_source[census_date].add(census_count)
+            except (TypeError, ValueError):
+                excluded["source_census_invalid"] += 1
+                declared_eligible_by_source["invalid"].update({0, 1})
     if conflicting_attempts:
         quarantined = [
             item for item in complete if item["identity"] in conflicting_attempts
@@ -4053,7 +4081,8 @@ def build_quantity_leg_four_arm_evaluation(
         len(source_dates) >= 2
         and all(item["signed_source_date"] for item in complete)
     )
-    latest_date = source_dates[-1] if chronology_proven else None
+    census_dates = sorted(d for d, n in (source_counts or {}).items() if type(n) is int and n > 0)
+    latest_date = max(source_dates + census_dates) if chronology_proven else None
     partitions = {}
     for name, items in (
         ("calibration", [item for item in complete
@@ -4083,6 +4112,20 @@ def build_quantity_leg_four_arm_evaluation(
         excluded["eligible_population_contract_conflicting_source_date"] += len(
             conflicting_eligible_sources
         )
+    if source_counts is not None and any(source_counts.values()) and any(
+        source_counts.get(item["source_date"]) is None
+        or source_counts.get(item["source_date"]) not in
+            declared_eligible_by_source[item["source_date"]]
+        for item in complete
+    ):
+        excluded["eligible_population_source_date_missing"] += 1
+        eligible_attempt_count = 0
+    complete_by_date = Counter(item["source_date"] for item in complete)
+    if any(len(declared_eligible_by_source[d]) != 1
+           or n > next(iter(declared_eligible_by_source[d]))
+           for d, n in complete_by_date.items()):
+        excluded["eligible_population_source_date_underflow"] += 1
+        eligible_attempt_count = 0
     if eligible_attempt_count and eligible_attempt_count < len(seen):
         excluded["eligible_population_count_underflow"] += 1
         eligible_attempt_count = 0
@@ -4137,6 +4180,7 @@ def build_quantity_leg_four_arm_evaluation(
         "source_receipt_count": len(receipts),
         "eligible_attempt_count": eligible_attempt_count,
         "eligible_source_date_count": len(declared_eligible_by_source),
+        "native_source_counts": source_counts,
         "complete_exact_attempt_count": len(complete),
         "exact_attempt_join_coverage": coverage,
         "excluded_counts": dict(sorted(excluded.items())),
@@ -4233,6 +4277,11 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
     target_date = str(target_date).strip()
     source_quality = _source_quality_summary(target_date)
     daily_events, daily_load_summary = _iter_input_events(target_date)
+    from src.engine.scalping.strategy_owner_replay import build_entry_opportunity_replays
+    executable_replay = build_entry_opportunity_replays(target_date,
+        daily_load_summary.pop("_entry_opportunity_plan_events", []))
+    daily_load_summary["entry_opportunity_executable_replay"] = executable_replay
+    daily_events.extend(executable_replay["quantity_leg_events"])
     daily_allowed_events, daily_excluded_source_quality = (
         _source_quality_filtered_events(daily_events, {target_date: source_quality})
     )
@@ -4296,6 +4345,9 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
     else:
         atomic_contract_status = "natural_first_use_pending"
     prior_state, prior_state_path = _latest_prior_cumulative_state(target_date)
+    native_source_counts = dict((prior_state or {}).get("entry_opportunity_replay_source_counts") or {})
+    if source_quality.get("tuning_input_allowed") is True:
+        native_source_counts[target_date] = executable_replay["counts"]["unique_retained"]
     if prior_state:
         cumulative_four_arm_events = [
             event
@@ -4339,6 +4391,10 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
             else:
                 replay_events, replay_summary = _iter_input_events(replay_date)
                 replay_quality = _source_quality_summary(replay_date)
+                if replay_date >= "2026-09-17" and replay_quality.get("tuning_input_allowed") is True:
+                    native = build_entry_opportunity_replays(replay_date, replay_summary.pop("_entry_opportunity_plan_events", []))
+                    replay_events.extend(native["quantity_leg_events"])
+                    native_source_counts[replay_date] = native["counts"]["unique_retained"]
                 allowed_events, excluded_count = _source_quality_filtered_events(
                     replay_events, {replay_date: replay_quality}
                 )
@@ -4427,6 +4483,10 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
                 excluded_count = daily_excluded_source_quality
             else:
                 source_events, source_summary = _iter_input_events(source_date)
+                if source_date >= "2026-09-17" and source_date_quality.get("tuning_input_allowed") is True:
+                    native = build_entry_opportunity_replays(source_date, source_summary.pop("_entry_opportunity_plan_events", []))
+                    source_events.extend(native["quantity_leg_events"])
+                    native_source_counts[source_date] = native["counts"]["unique_retained"]
                 allowed_events, excluded_count = _source_quality_filtered_events(
                     source_events, {source_date: source_date_quality}
                 )
@@ -4483,7 +4543,7 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
             "clean_tuning_baseline": clean_baseline_policy(),
         }
     quantity_leg_four_arm_evaluation = build_quantity_leg_four_arm_evaluation(
-        cumulative_four_arm_events
+        cumulative_four_arm_events, source_counts=native_source_counts
     )
     quantity_leg_four_arm_evaluation["daily_diagnostic"] = {
         "source_receipt_count": daily_quantity_leg_four_arm_evaluation.get(
@@ -4692,6 +4752,7 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
                 real_split_child_variant_ev_values
             ),
             "quantity_leg_four_arm_events": cumulative_four_arm_events,
+            "entry_opportunity_replay_source_counts": native_source_counts,
             "source_quality_contract_bindings": _source_quality_contract_bindings(
                 list(load_summary.get("source_dates") or [])
             ),

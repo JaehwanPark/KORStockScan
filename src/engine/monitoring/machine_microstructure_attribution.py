@@ -5392,6 +5392,8 @@ def _micro_context(
             anchors_by_symbol[anchor["symbol"]].append((anchor, anchor_at))
 
     def post_window_sec(anchor: Mapping[str, Any]) -> int:
+        if anchor.get("bounded_entry_opportunity_replay") is True:
+            return 180
         if anchor.get("adaptive_exit_source_only") is True:
             return ADAPTIVE_EXIT_HORIZON_SEC
         rebound_frame = anchor.get("rebound_source_frame")
@@ -5494,7 +5496,8 @@ def _micro_context(
                 <= timestamp
                 <= anchor_at + timedelta(seconds=post_window_sec(anchor))
             ):
-                if anchor.get("adaptive_exit_source_only") is True:
+                if (anchor.get("adaptive_exit_source_only") is True
+                    or anchor.get("bounded_entry_opportunity_replay") is True):
                     window = windows[anchor["anchor_id"]]
                     if (
                         len(window["raw_market_rows"]) >= ADAPTIVE_EXIT_MAX_SOURCE_ROWS
@@ -5572,7 +5575,8 @@ def _micro_context(
                 <= timestamp
                 <= anchor_at + timedelta(seconds=post_window_sec(anchor))
             ):
-                if anchor.get("adaptive_exit_source_only") is True:
+                if (anchor.get("adaptive_exit_source_only") is True
+                    or anchor.get("bounded_entry_opportunity_replay") is True):
                     window = windows[anchor["anchor_id"]]
                     if (
                         len(window["raw_depth_rows"]) >= ADAPTIVE_EXIT_MAX_SOURCE_ROWS
