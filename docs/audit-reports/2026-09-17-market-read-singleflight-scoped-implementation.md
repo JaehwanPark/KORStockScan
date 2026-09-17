@@ -137,3 +137,52 @@ mismatch. Existing sizing policy pins, quantity conservation and promotion
 contracts remain unchanged. Scope findings0; nine affected suites **826 passed**, compile/Ruff/diff and
 print-only parser passed. Managed release/PID receipts follow below. Whole U0–U12 and economic acceptance remain
 OPEN under the same owner.
+
+
+## Integrated clock/evidence release and intraday startup
+
+Source clock fix **788318b9** and evidence/KST fix **7ffe30de** were pushed to
+main. The managed `opportunity-clock-evidence-20260917` branch/root is pinned to
+**7ffe30de34540e979ac2d830c7be4a319b6782db**. It retains concurrent closed-loop
+`cf42b542` and day-low-fact `a9b28ef2` changes. Physical managed nine-suite gate
+**826 PASS**; closed-loop four-suite initial **386 PASS/1 missing fixture**,
+then that test **1 PASS** with the exact original bounded September4 candidate.
+Ruff/compile/bash-n/diff/source-clean and print-only parser passed. No source
+fixtures or economic outcomes were fabricated; no package was modified.
+
+Deployment initially stopped on unprivileged `/proc` inspection and later on a
+foreign selector update to `f36fef8b`; neither attempt changed the selection.
+That root's code is retained by the integrated source. The later root-user cron
+query failed after publication because root has no crontab. The actual ubuntu
+nine-row cron read check passed before continuing the service transition; no
+crontab was modified. The failures are retained in the scoped validation record,
+rather than represented as uninterrupted success.
+
+Runtime/research read-only units were each restarted once into the new root:
+PID **574765 / 574949**. Settled cwd, active/result, original module/interval and
+condition, resource/retry settings passed. The four compared independent trading
+units were unchanged during this supplement. The canonical main graceful
+restart completed **501022 → 575313**; selected-release actual consumption and
+strict September17 env/PID verification passed. Final broker comparison at
+**14:42:08 KST** preserves Samsung **25 shares**, open orders **0**, complete
+KRX/NXT inventory/unfilled contracts. Original dated env, mechanistic policy,
+watch config and existing owner-registry byte prefix were preserved; normal
+append-only owner events are not reported as manual ledger edits.
+
+[Scoped integration validation record](../../data/runtime/runtime_release_validation/opportunity-clock-evidence-20260917.json)
+contains pre/post broker receipts, unit properties, backups and the final
+observation. Nine research snapshots generated after the transition preserve
+separate original quote/BBO HTTP clocks and final decision time. New WS timestamps
+were observed for **13 0B / 14 0D** symbols; this is not all-scope freshness or
+full-day acceptance. Earlier snapshots are not relabeled as the new generation.
+Tomorrow September18 PREOPEN/start **print-plan** resolves the new root; no
+future startup or policy selection was executed.
+
+This closes reviewed clock/evidence/KST handoff defects and their authorized
+intraday deployment. It does not close whole U0–U12: full I/O/direct-consumer
+parity, scheduler/WS budgets, executable no-submit/no-fill/exit/cost quartet
+production and the versioned small-net price evaluation contract still require
+implementation/evidence. Related closed-loop code is preserved; new natural
+policy selection, next-date consumer and cost-adjusted economics remain separate
+OPEN acceptance. Existing operator enable/date, source/sample/economic floors,
+quantity/custody and order/provider/hard-safety guards remain unchanged.
