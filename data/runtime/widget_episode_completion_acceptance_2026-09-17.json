@@ -1,0 +1,115 @@
+{
+  "actual_mature_economics": "waiting",
+  "asof_kst": "2026-09-17T17:39:32.387955+09:00",
+  "consumers": {
+    "episode": {
+      "accepted_keys": [
+        "auto_028670_midday",
+        "auto_034020_midday",
+        "auto_111770_late_morning"
+      ],
+      "accepted_policy_sha256": "bcc61ae67648acaa51d974c45e815b96702af17c15821e551cd1ab5391128e91",
+      "cwd": "/home/ubuntu/KORStockScan-runtime-releases/widget-episode-completion-r6-20260917",
+      "effective_date": "2026-09-17",
+      "import_root": "/home/ubuntu/KORStockScan-runtime-releases/widget-episode-completion-r6-20260917",
+      "pid": 859558,
+      "receipt_sha256": "dfb86c4d216994c32d2e5bb5c0b6166c95696863800c77d86f85e5a873f27905",
+      "status": "consumed"
+    },
+    "widget": {
+      "accepted_keys": [
+        "005930",
+        "034020",
+        "042660"
+      ],
+      "accepted_policy_sha256": "8069bbbf8af2df1d119aa296b4a6347233cc689d0f1aafc7d6c2632d044d842e",
+      "cwd": "/home/ubuntu/KORStockScan-runtime-releases/widget-episode-completion-r6-20260917",
+      "effective_date": "2026-09-17",
+      "import_root": "/home/ubuntu/KORStockScan-runtime-releases/widget-episode-completion-r6-20260917",
+      "pid": 859572,
+      "receipt_sha256": "09e0db7a7f187da571ae907b6c9c3f149d7fad27227e73e4f7e475c0f8251044",
+      "status": "consumed"
+    }
+  },
+  "deployment_receipt_sha256": "f3c2ec2b2b3e892aaf1fb604445c41d1cb5331bba138783e5e02850015b4e071",
+  "git_commit": "fdc28f2507693c4713df2c610579193a8ea1faba",
+  "main_pid_retained": 780712,
+  "main_selected_source_consumed": false,
+  "natural_new_policy_consumption": "waiting_qualified_calendars_20:10_and_21:15_not_yet_due",
+  "release_root": "/home/ubuntu/KORStockScan-runtime-releases/widget-episode-completion-r6-20260917",
+  "schema": "widget_episode_completion_acceptance_v1",
+  "scope": "legacy_incumbent_actual_consumption_and_source_deployment_not_new_policy_or_profit_acceptance",
+  "services": {
+    "korstockscan-low-price-two-leg-auto-expansion.service": {
+      "ActiveState": "active",
+      "CPUQuotaPerSecUSec": "250ms",
+      "MainPID": "859558",
+      "MemoryMax": "536870912",
+      "NRestarts": "0",
+      "Nice": "5",
+      "WorkingDirectory": "/home/ubuntu/KORStockScan-runtime-releases/widget-episode-completion-r6-20260917"
+    },
+    "korstockscan-machine-microstructure-final-refresh.service": {
+      "ActiveState": "inactive",
+      "CPUQuotaPerSecUSec": "200ms",
+      "MainPID": "0",
+      "MemoryMax": "2147483648",
+      "NRestarts": "0",
+      "Nice": "10",
+      "WorkingDirectory": "/home/ubuntu/KORStockScan-runtime-releases/widget-episode-completion-r6-20260917"
+    },
+    "korstockscan-samsung-widget-evaluation.service": {
+      "ActiveState": "inactive",
+      "CPUQuotaPerSecUSec": "200ms",
+      "MainPID": "0",
+      "MemoryMax": "536870912",
+      "NRestarts": "0",
+      "Nice": "10",
+      "WorkingDirectory": "/home/ubuntu/KORStockScan-runtime-releases/widget-episode-completion-r6-20260917"
+    },
+    "korstockscan-symbol-owner-policy-auto-apply.service": {
+      "ActiveState": "inactive",
+      "CPUQuotaPerSecUSec": "infinity",
+      "MainPID": "0",
+      "MemoryMax": "infinity",
+      "NRestarts": "0",
+      "Nice": "0",
+      "WorkingDirectory": "/home/ubuntu/KORStockScan-runtime-releases/widget-episode-completion-r6-20260917"
+    },
+    "korstockscan-widget-research-watch-collector.service": {
+      "ActiveState": "active",
+      "CPUQuotaPerSecUSec": "100ms",
+      "MainPID": "859667",
+      "MemoryMax": "268435456",
+      "NRestarts": "0",
+      "Nice": "10",
+      "WorkingDirectory": "/home/ubuntu/KORStockScan-runtime-releases/widget-episode-completion-r6-20260917"
+    },
+    "korstockscan-widget-signal-auto-trader.service": {
+      "ActiveState": "active",
+      "CPUQuotaPerSecUSec": "100ms",
+      "MainPID": "859572",
+      "MemoryMax": "268435456",
+      "NRestarts": "0",
+      "Nice": "5",
+      "WorkingDirectory": "/home/ubuntu/KORStockScan-runtime-releases/widget-episode-completion-r6-20260917"
+    },
+    "korstockscan-widget-symbol-runtime-collector.service": {
+      "ActiveState": "active",
+      "CPUQuotaPerSecUSec": "200ms",
+      "MainPID": "859568",
+      "MemoryMax": "402653184",
+      "NRestarts": "0",
+      "Nice": "10",
+      "WorkingDirectory": "/home/ubuntu/KORStockScan-runtime-releases/widget-episode-completion-r6-20260917"
+    }
+  },
+  "unchanged_guard_hashes": {
+    "data/runtime/low_price_two_leg_auto_expansion/low_price_two_leg_auto_expansion_2026-09-17.json": true,
+    "data/runtime/order_owner_registry.jsonl": true,
+    "data/runtime/symbol_owner_policy/owner_custody.env": true,
+    "data/runtime/symbol_owner_policy/symbol_owner_policy_2026-09-17.json": true,
+    "data/threshold_cycle/runtime_env/operator_runtime_overrides.env": true,
+    "data/threshold_cycle/runtime_env/threshold_runtime_env_2026-09-17.env": true
+  }
+}
