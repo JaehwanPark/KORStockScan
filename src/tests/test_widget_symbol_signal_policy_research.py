@@ -1348,3 +1348,70 @@ def test_discovery_profit_objective_keeps_lower_ev_more_profitable_candidate(
     assert result["calibration"]["notional_weighted_ev_pct"] == 0.5
     assert result["calibration"]["modeled_net_pnl_per_qualified_day"] == 1500
     assert result["selected_policy"]["max_completed_entries_per_day"] == 3
+
+
+@pytest.mark.parametrize("failure", [
+    "daily_source_coverage_fail", "ka10080_response_not_json", "all_symbols_invalid",
+])
+def test_main_isolates_identifiable_source_failure_and_keeps_global_failures(
+    tmp_path, monkeypatch, failure,
+):
+    from src.engine.monitoring.widget_symbol_runtime_policy import WidgetSymbolRuntimePolicyLoader
+    universe = {"001550": "bad source", "006800": "valid source"}
+    if failure == "all_symbols_invalid":
+        universe = {"001550": "bad source"}
+    monkeypatch.setattr(research.signal, "signal", lambda *args: None)
+    monkeypatch.setattr(research, "load_symbol_universe", lambda **kwargs: (
+        universe, {symbol: "established_widget_symbol" for symbol in universe},
+    ))
+    monkeypatch.setattr(WidgetSymbolRuntimePolicyLoader, "resolve_all", lambda *args, **kwargs: {})
+    monkeypatch.setattr(research, "load_completed_symbol_source", lambda **kwargs: (
+        [], {"request_count": 0, "source_quality_status": "PASS"},
+    ))
+    monkeypatch.setattr(research, "research_input_fingerprint", lambda **kwargs: "fixture-source")
+    monkeypatch.setattr(research, "_attach_population_evidence", lambda report: report)
+    monkeypatch.setattr(research, "attach_recommendation_contract", lambda report: report)
+    seen, written = [], {}
+
+    def build(**kwargs):
+        symbol = next(iter(kwargs["sources"]))
+        seen.append(symbol)
+        if symbol == "001550":
+            reason = (
+                "ka10080_response_not_json" if failure == "ka10080_response_not_json"
+                else f"{symbol}_daily_source_coverage_fail"
+            )
+            raise ResearchError(reason)
+        return dict(
+            schema=research.REPORT_SCHEMA, status="complete", end_date="2026-09-17",
+            symbols={symbol: {"name": universe[symbol], "decision": "no_candidate"}},
+            source_meta={symbol: {}}, execution_quality_by_symbol={symbol: {}},
+            passed_symbols=[], runtime_effect=False, allowed_runtime_apply=False,
+            execution_mode="full_recompute",
+        )
+
+    monkeypatch.setattr(research, "build_report", build)
+    def write(report, **kwargs):
+        written.update(report)
+        return tmp_path / "report.json", tmp_path / "report.md"
+    monkeypatch.setattr(research, "write_report", write)
+    argv = ["--end-date", "2026-09-17", "--output-dir", str(tmp_path), "--write"]
+    if failure == "all_symbols_invalid":
+        with pytest.raises(ResearchError, match="all_widget_symbols_source_quality_blocked"):
+            research.main(argv)
+        assert not written
+    elif failure == "ka10080_response_not_json":
+        with pytest.raises(ResearchError, match=failure):
+            research.main(argv)
+        assert seen == ["001550"] and not written
+    else:
+        assert research.main(argv) == 0
+        assert seen == list(universe)
+        assert set(written["symbols"]) == set(universe)
+        assert written["source_quarantine"] == {"001550": "001550_daily_source_coverage_fail"}
+        assert written["eligible_source_symbol_count"] == 1
+        assert written["quarantined_source_symbol_count"] == 1
+        assert written["symbols"]["001550"]["decision"] == "source_quality_quarantined_no_evaluation"
+        assert "notional_weighted_ev_pct" not in written["symbols"]["001550"]
+        assert written["source_meta"]["001550"]["source_quality_status"] == "FAIL"
+        assert written["source_meta"]["001550"]["daily_source_coverage"]["status"] == "FAIL"
