@@ -35,6 +35,92 @@ class FakeResponse:
         return self._body
 
 
+def test_day_low_fact_reuses_frozen_bars_and_invalidates_corrected_tuple(monkeypatch):
+    import builtins
+
+    anchor = datetime(2026, 6, 5, 9, 0, tzinfo=KST)
+    context = DayContext(
+        anchor.date(), (Bar(anchor, 20000, 20000, 19900, 20000),), {}
+    )
+    calls = []
+
+    def counted_min(*args, **kwargs):
+        calls.append(True)
+        return builtins.min(*args, **kwargs)
+
+    monkeypatch.setattr(research, "min", counted_min, raising=False)
+    assert context.minimum_low_price == 19900
+    assert context.minimum_low_price == 19900
+    assert len(calls) == 1
+    context.bars = (Bar(anchor, 20000, 20000, 19000, 20000),)
+    assert context.minimum_low_price == 19000
+    assert len(calls) == 2
+    context.bars = ()
+    assert context.minimum_low_price is None
+    assert context.minimum_low_price is None
+    assert len(calls) == 3
+    copied = deepcopy(context)
+    assert copied.minimum_low_price is None
+    assert len(calls) == 3
+
+
+def test_day_low_fact_cache_is_nonsemantic_and_copy_has_independent_lifetime():
+    anchor = datetime(2026, 6, 5, 9, 0, tzinfo=KST)
+    context = DayContext(
+        anchor.date(), (Bar(anchor, 20000, 20000, 19000, 20000),), {}
+    )
+    uncomputed = deepcopy(context)
+    assert context.minimum_low_price == 19000
+    assert context == uncomputed
+    copied = deepcopy(context)
+    assert copied._minimum_low_source is copied.bars
+    copied.bars = (Bar(anchor, 20000, 20000, 18000, 20000),)
+    assert copied.minimum_low_price == 18000
+    assert context.minimum_low_price == 19000
+
+
+def test_day_low_fact_does_not_trust_mutable_list_identity():
+    anchor = datetime(2026, 6, 5, 9, 0, tzinfo=KST)
+    bars = [Bar(anchor, 20000, 20000, 19000, 20000)]
+    context = DayContext(anchor.date(), bars, {})
+    assert context.minimum_low_price == 19000
+    bars[0] = Bar(anchor, 20000, 20000, 18000, 20000)
+    assert context.minimum_low_price == 18000
+    bars.clear()
+    assert context.minimum_low_price is None
+
+
+def test_held_replay_uses_corrected_day_low_without_sharing_candidate_custody():
+    anchor = datetime(2026, 6, 5, 9, 0, tzinfo=KST)
+    bars = [
+        Bar(
+            anchor + timedelta(days=day, minutes=i),
+            20000, 20600 if i < 60 else 20000, 20000, 20000,
+        )
+        for day in range(6)
+        for i in range(100)
+    ]
+    contexts = research.build_day_contexts(bars)
+    dates = sorted(contexts)
+    candidate = SpotCandidate(10 * 60, 10 * 60, 30, 0.5, 0.5)
+    before = research.evaluate_candidate(
+        candidate, contexts, dates, include_episodes=True
+    )
+    assert before["held_legs"] > 0
+    changed = contexts[dates[3]]
+    assert changed.minimum_low_price == 20000
+    changed.bars = tuple(replace(bar, low_price=18000) for bar in changed.bars)
+    actual = research.evaluate_candidate(candidate, contexts, dates, include_episodes=True)
+    assert actual == _reference_evaluate(
+        candidate, deepcopy(contexts), dates, include_episodes=True
+    )
+    assert actual["worst_filled_max_adverse_excursion_pct"] < before[
+        "worst_filled_max_adverse_excursion_pct"
+    ]
+    assert before["episodes"] is not actual["episodes"]
+    assert actual["custody_resolution_required"] is True
+
+
 def _bar(timestamp: datetime, *, low=20_000, high=20_000) -> Bar:
     return Bar(timestamp, 20_000, high, low, 20_000)
 
