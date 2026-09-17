@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 from datetime import date, datetime, time, timedelta
 from types import SimpleNamespace
 
@@ -239,6 +240,134 @@ def test_window_batch_selection_matches_frozen_serial_oracle(monkeypatch, mode):
         ],
     )
     assert actual == select_profile_spot(profile, contexts)
+
+
+def _full_sort_rank(item):
+    """Frozen original economic ordering, before bounded retention."""
+    return (
+        item[4]["full"][
+            "cost_adjusted_net_profit_krw_per_source_valid_observation_day"
+        ],
+        item[0],
+        item[1],
+        item[2],
+    )
+
+
+def _retain_full_sort_reference(heap, item, ordinal, limit):
+    # Keep all eligible calibration evidence. Diagnostic output needs only the
+    # stable-sort winner; it never participates in choosing the live candidate.
+    heap.append((_full_sort_rank(item) + (-ordinal,), item))
+    if limit == 1:
+        heap[:] = sorted(
+            heap, key=lambda row: _full_sort_rank(row[1]), reverse=True
+        )[:1]
+
+
+@pytest.mark.parametrize("limit", [1, 10])
+@pytest.mark.parametrize("ordering", ["ascending", "descending", "ties", "mixed"])
+def test_bounded_calibration_retention_matches_original_stable_sort(limit, ordering):
+    items = []
+    heap = []
+    for ordinal in range(1536):
+        score = {
+            "ascending": ordinal,
+            "descending": 1536 - ordinal,
+            "ties": 1,
+            "mixed": (ordinal * 23) % 13 - 6,
+        }[ordering]
+        item = (
+            score / 3,
+            (ordinal % 5 if ordering == "mixed" else 1) / 7,
+            ordinal % 3 if ordering == "mixed" else 8,
+            {"ordinal": ordinal},
+            {
+                "full": {
+                    "cost_adjusted_net_profit_krw_per_source_valid_observation_day": score
+                }
+            },
+        )
+        items.append(item)
+        research._retain_calibration_candidate(heap, item, ordinal, limit)
+        assert len(heap) <= limit
+    actual = [item for _, item in sorted(heap, key=lambda row: row[0], reverse=True)]
+    assert actual == sorted(items, key=_full_sort_rank, reverse=True)[:limit]
+    if ordering == "ties":
+        assert [item[3]["ordinal"] for item in actual] == list(range(limit))
+
+
+@pytest.mark.parametrize("mode", ["zero", "complete", "held"])
+def test_bounded_selection_full_grid_matches_full_sort_oracle(monkeypatch, mode):
+    profile = PROFILES["samsung_heavy_midday"]
+    anchor = datetime.combine(
+        date(2026, 6, 5), profile.policy.scan_start, tzinfo=KST
+    ) - timedelta(minutes=60)
+    bars = [
+        Bar(
+            anchor + timedelta(days=day, minutes=i),
+            20000,
+            20000 if mode == "zero" or (mode == "held" and i >= 60) else 20600,
+            20000,
+            20000,
+        )
+        for day in range(research.CALIBRATION_DAYS + research.HOLDOUT_DAYS)
+        for i in range(180)
+    ]
+    contexts = research.build_day_contexts(bars)
+    actual = select_profile_spot(profile, deepcopy(contexts))
+    monkeypatch.setattr(
+        research, "_retain_calibration_candidate", _retain_full_sort_reference
+    )
+    expected = select_profile_spot(profile, deepcopy(contexts))
+    assert actual == expected
+    assert actual["grid_candidate_count"] == len(candidate_grid(profile))
+    if mode == "complete":
+        assert actual["calibration_ready_candidate_count"] > 10
+        assert actual["baseline"]["full"]["completed_legs"] > 0
+    if mode == "held":
+        assert actual["baseline"]["full"]["held_legs"] > 0
+
+
+@pytest.mark.parametrize("holdout_net", [-0.20, 0.10, 0.20])
+def test_bounded_selection_counts_all_candidates_and_does_not_rank_on_holdout(
+    monkeypatch, holdout_net
+):
+    candidate = SpotCandidate(800, 809, 30, 1.5, 0.1)
+    grid = tuple(
+        replace(candidate, rolling_high_drawdown_pct=1.3 + i * 0.005)
+        for i in range(36)
+    )
+    monkeypatch.setattr(research, "candidate_grid", lambda profile: grid)
+    calls = []
+    original = research._evaluate_candidate_windows
+
+    def counted(item, contexts, windows, **kwargs):
+        calls.append((item, deepcopy(windows)))
+        return original(item, contexts, windows, **kwargs)
+
+    monkeypatch.setattr(research, "_evaluate_candidate_windows", counted)
+    profile = RESEARCH_PROFILES["candidate_007660_midday"]
+    contexts = _contexts(holdout_candidate_net=holdout_net)
+    actual = select_profile_spot(profile, deepcopy(contexts))
+    assert [item for item, _ in calls[:len(grid)]] == list(grid)
+    assert all(
+        max(max(w) for w in windows) < sorted(contexts)[30]
+        for _, windows in calls[: len(grid)]
+    )
+    assert actual["calibration_ready_candidate_count"] == len(grid)
+    assert actual["calibration_gate_counts"] == {
+        "sample_ready": len(grid),
+        "manageable_carry": len(grid),
+        "both_halves_positive_ev": len(grid),
+    }
+    assert [item["parameters"] for item in actual["top_calibration_candidates"]] == [
+        item.public() for item in grid[:10]
+    ]
+    assert actual["calibration_winner"]["parameters"] == grid[0].public()
+    monkeypatch.setattr(
+        research, "_retain_calibration_candidate", _retain_full_sort_reference
+    )
+    assert actual == select_profile_spot(profile, deepcopy(contexts))
 
 
 @pytest.mark.parametrize(
