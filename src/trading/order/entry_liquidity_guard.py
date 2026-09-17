@@ -19,7 +19,7 @@ from typing import Any, Mapping
 from zoneinfo import ZoneInfo
 
 from src.utils import kiwoom_utils
-from src.trading.market.quote_consistency import build_market_data_health
+from src.trading.market.quote_consistency import build_market_data_health, build_rest_market_data_health
 
 ENTRY_LIQUIDITY_POLICY_ID = "entry_touch_liquidity_guard_v1"
 MIN_TOUCH_QUANTITY_EACH_SIDE = 100
@@ -245,6 +245,9 @@ class EntryExecutionVelocitySnapshot:
     print_times: tuple[str, ...] = ()
     venues: tuple[str, ...] = ()
     error: str = ""
+    source_meta: dict[str, Any] = field(default_factory=dict)
+    response_item_raw: str = ""
+    market_data_health: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -414,11 +417,32 @@ def parse_ka10003_entry_execution_velocity_snapshot(
     volumes: list[int] = []
     accumulated_volumes: list[int] = []
     venues: list[str] = []
+    source_meta: dict[str, Any] = {}
+    market_health: dict[str, Any] = {}
+    response_item = ""
+    receipt_present = any("_kiwoom_source_meta" in tick for tick in payload[:REQUIRED_RECENT_PRINT_COUNT] if isinstance(tick, dict))
     try:
         for tick in payload[:REQUIRED_RECENT_PRINT_COUNT]:
             if not isinstance(tick, dict) or not isinstance(tick.get("raw"), dict):
                 raise ValueError("ka10003_trade_row_invalid")
             raw = tick["raw"]
+            if receipt_present:
+                meta = tick.get("_kiwoom_source_meta")
+                if not isinstance(meta, dict):
+                    raise ValueError("ka10003_receive_receipt_missing_or_invalid")
+                health = build_rest_market_data_health(
+                    {"stk_cd": tick.get("response_item_raw")}, api_id="ka10003",
+                    request_code=request_code, source_meta=meta, now_ts=observed.timestamp(),
+                )
+                facts = health["rest_input"]
+                age = facts["response_receive_age_ms"]
+                if facts["receipt_binding_proven"] is not True or age is None or age < 0:
+                    raise ValueError("ka10003_receive_receipt_scope_or_clock_invalid")
+                if source_meta and meta != source_meta:
+                    raise ValueError("ka10003_receive_receipt_packet_conflict")
+                source_meta = deepcopy(meta)
+                market_health = health
+                response_item = str(tick.get("response_item_raw") or "")
             raw_time = str(raw.get("tm") or "").strip()
             if str(tick.get("time") or "").strip() != raw_time:
                 raise ValueError("ka10003_trade_time_normalization_conflict")
@@ -452,7 +476,6 @@ def parse_ka10003_entry_execution_velocity_snapshot(
         ) * 1_000 + observed.microsecond // 1_000
         if latest_age_ms < -MAX_EVENT_CLOCK_SKEW_MS:
             raise ValueError("ka10003_latest_trade_time_in_future")
-        latest_age_ms = max(0, latest_age_ms)
     except (TypeError, ValueError) as exc:
         return unavailable_entry_execution_velocity_snapshot(
             symbol=symbol,
@@ -472,6 +495,9 @@ def parse_ka10003_entry_execution_velocity_snapshot(
         observed_at_kst=observed.isoformat(),
         print_times=tuple(times),
         venues=tuple(venues),
+        source_meta=source_meta,
+        response_item_raw=response_item,
+        market_data_health=market_health,
     )
 
 
@@ -831,8 +857,34 @@ def evaluate_executable_micro_confirmation(
 
 
 def evaluate_entry_execution_velocity(
-    snapshot: EntryExecutionVelocitySnapshot, *, requested_quantity: int
+    snapshot: EntryExecutionVelocitySnapshot, *, requested_quantity: int,
+    now_ts: float | None = None,
 ) -> EntryExecutionVelocityDecision:
+    # Revalidate the original successful response, not the carried health age.
+    # Legacy declared print fixtures retain their existing receive-window adapter.
+    if snapshot.source_meta:
+        consumed = time.time() if now_ts is None else now_ts
+        health = build_rest_market_data_health(
+            {"stk_cd": snapshot.response_item_raw}, api_id="ka10003",
+            request_code=snapshot.request_code, source_meta=snapshot.source_meta, now_ts=consumed,
+        )
+        facts = health["rest_input"]
+        age = facts["response_receive_age_ms"]
+        try:
+            evaluated = datetime.fromisoformat(snapshot.observed_at_kst)
+            if evaluated.tzinfo is None:
+                raise ValueError("velocity_consume_timezone_missing")
+            lag_ms = (consumed - evaluated.timestamp()) * 1000
+            if not math.isfinite(lag_ms) or lag_ms < 0:
+                raise ValueError("velocity_consume_clock_invalid")
+            valid = facts["receipt_binding_proven"] is True and age is not None and 0 <= age <= MAX_LATEST_PRINT_AGE_MS
+            snapshot = replace(snapshot, source_ok=snapshot.source_ok and valid,
+                               latest_print_age_ms=snapshot.latest_print_age_ms + math.ceil(lag_ms),
+                               market_data_health=health,
+                               error=snapshot.error if valid else "ka10003_receive_receipt_scope_or_clock_invalid")
+        except (ValueError, TypeError, OverflowError):
+            snapshot = replace(snapshot, source_ok=False, market_data_health=health,
+                               error="ka10003_consume_clock_invalid")
     requested = _positive_int(requested_quantity)
     required_recent_volume = max(
         MIN_RECENT_PRINT_VOLUME,
@@ -840,6 +892,9 @@ def evaluate_entry_execution_velocity(
     )
     if not snapshot.source_ok:
         reason = snapshot.error or "entry_execution_velocity_source_unavailable"
+        allowed = False
+    elif snapshot.latest_print_age_ms < 0:
+        reason = "ka10003_latest_trade_time_in_future"
         allowed = False
     elif snapshot.print_count < REQUIRED_RECENT_PRINT_COUNT:
         reason = "entry_execution_velocity_print_count_insufficient"

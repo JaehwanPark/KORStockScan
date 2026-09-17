@@ -666,3 +666,55 @@ def test_all_five_gateways_preserve_common_rest_quote_health(
     assert rest["underlying_event_venue_proven"] is False
     assert rest["trade_activity_state"] == "OBSERVATION_UNPROVEN"
     assert rest["quiet_episode_count"] is None
+
+
+def _velocity_receipted_rows(observed):
+    times = ['151232', '151231', '151230', '151229', '151228', '151227', '151226', '151225', '151224', '151223']
+    rows = _velocity_ticks(times, volume=100)
+    for row in rows:
+        row['_kiwoom_source_meta'] = {'api_id': 'ka10003', 'request_code': '111770_AL',
+            'rest_received_ts_ms': int(observed.timestamp() * 1000),
+            'request_owner': 'entry_velocity', 'request_class': 'execution_critical'}
+        row['market_data_health'] = {'rest_input': {'response_receive_age_ms': 0}}
+    return rows
+
+
+def test_velocity_retains_original_receipt_and_revalidates_without_tr():
+    observed = datetime(2026, 9, 17, 15, 12, 32, tzinfo=KST)
+    snapshot = parse_ka10003_entry_execution_velocity_snapshot(
+        _velocity_receipted_rows(observed), symbol='111770', route='SOR', observed_at=observed)
+    assert snapshot.source_ok
+    assert snapshot.market_data_health['rest_input']['trade_activity_state'] == 'OBSERVATION_UNPROVEN'
+    assert snapshot.market_data_health['rest_input']['quiet_episode_count'] is None
+    fresh = evaluate_entry_execution_velocity(snapshot, requested_quantity=20, now_ts=observed.timestamp())
+    assert fresh.allowed
+    snapshot.market_data_health['rest_input']['response_receive_age_ms'] = 0
+    expired = evaluate_entry_execution_velocity(snapshot, requested_quantity=20, now_ts=observed.timestamp() + 5.001)
+    assert not expired.allowed
+    assert expired.snapshot.latest_print_age_ms >= 5001
+    assert expired.snapshot.source_meta == snapshot.source_meta
+    assert expired.snapshot.market_data_health['rest_input']['response_receive_age_ms'] > 5000
+
+
+@pytest.mark.parametrize('change', ['future_clock', 'wrong_item', 'wrong_api', 'mixed_packet', 'missing_receipt'])
+def test_velocity_rejects_receipt_clock_scope_or_packet_conflict(change):
+    observed = datetime(2026, 9, 17, 15, 12, 32, tzinfo=KST)
+    rows = _velocity_receipted_rows(observed)
+    if change == 'future_clock':rows[0]['_kiwoom_source_meta']['rest_received_ts_ms'] += 1
+    elif change == 'wrong_item':rows[0]['response_item_raw'] = '005930_NX'
+    elif change == 'wrong_api':rows[0]['_kiwoom_source_meta']['api_id'] = 'ka10004'
+    elif change == 'mixed_packet':rows[0]['_kiwoom_source_meta']['rest_received_ts_ms'] -= 1
+    elif change == 'missing_receipt':del rows[0]['_kiwoom_source_meta']
+    snapshot = parse_ka10003_entry_execution_velocity_snapshot(rows, symbol='111770', route='SOR', observed_at=observed)
+    assert not snapshot.source_ok
+    assert not evaluate_entry_execution_velocity(snapshot, requested_quantity=20, now_ts=observed.timestamp()).allowed
+
+
+def test_velocity_future_print_age_is_signed_and_never_normalized_to_zero():
+    observed = datetime(2026, 9, 17, 15, 12, 31, tzinfo=KST)
+    rows = _velocity_receipted_rows(observed)
+    snapshot = parse_ka10003_entry_execution_velocity_snapshot(rows, symbol='111770', route='SOR', observed_at=observed)
+    assert snapshot.latest_print_age_ms == -1000
+    decision = evaluate_entry_execution_velocity(snapshot, requested_quantity=20, now_ts=observed.timestamp())
+    assert not decision.allowed
+    assert decision.reason == 'ka10003_latest_trade_time_in_future'

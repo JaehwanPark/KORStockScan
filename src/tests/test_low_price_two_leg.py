@@ -2685,6 +2685,7 @@ def test_gateway_uses_bound_symbol_sor_and_one_share_for_every_write():
         order_authority=True,
         base_url="https://api.kiwoom.com",
     )
+    gateway.set_order_context(observed_at=datetime(2026, 9, 17, 13, 16, tzinfo=KST))
     assert gateway.submit_limit_buy(price=17_000, quantity=10).accepted
     assert gateway.submit_limit_sell(price=17_050, quantity=10).accepted
     assert gateway.cancel_buy(order_no="B1").accepted
