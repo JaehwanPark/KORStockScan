@@ -2596,3 +2596,55 @@ def test_fallback_policy_nonapplication_survives_trace_and_pending_label(
         )
         assert row["entry_setup_live_policy_target_date"] == "2026-09-11"
         assert row["entry_setup_live_policy_runtime_effect"] is False
+
+
+def test_feature_blocked_trace_preserves_health_without_creating_forward_label(monkeypatch, tmp_path):
+    _enable(monkeypatch, tmp_path)
+    health = {"schema": "kiwoom_market_data_health_v1", "routes": {
+        "integrated": {"trade_receive_age_ms": 6000, "quote_receive_age_ms": 100,
+                       "quote_state": "fresh"}},
+        "decision_authority": "market_data_input_only_no_order_authority"}
+    activity = {"trade_activity_state": "RECENT_TRADE", "quiet_episode_count": 0}
+    fields = {"ai_input_preflight_market_data_health": health,
+              "ai_input_preflight_trade_activity": activity,
+              "ai_input_preflight_feature_allowed": False,
+              "ai_input_preflight_feature_blockers": ["required_feature_tape_stale"]}
+    trace.record_ai_decision_trace(
+        {"action": "WAIT", "score": 0}, prompt_type="scalping_entry",
+        prompt_version="compact", result_source="preflight_blocked",
+        stock_code="005930", provider_called=False, input_contract_fields=fields,
+    )
+    for path in (trace._trace_path(trace._date_text()),):
+        row = _rows(path)[0]
+        assert row["market_data_health"] == health
+        assert row["input_trade_activity"] == activity
+        assert row["input_feature_allowed"] is False
+        assert row["input_feature_blockers"] == ["required_feature_tape_stale"]
+        assert row["actual_order_submitted"] is False
+    assert not trace._outcome_path(trace._date_text()).exists()
+
+
+def test_actual_screen_trace_and_forward_label_preserve_same_common_health(monkeypatch, tmp_path):
+    _enable(monkeypatch, tmp_path)
+    health = {"schema": "kiwoom_market_data_health_v1", "routes": {
+        "integrated": {"trade_receive_age_ms": 100, "quote_receive_age_ms": 100}},
+        "decision_authority": "market_data_input_only_no_order_authority"}
+    request_fields = trace.capture_ai_request(
+        prompt="risk screen", user_input={"stock_code": "005930"},
+        endpoint_name="analyze_target", symbol="005930", request_id="health-screen",
+        model="gpt-test", schema_name="entry_setup_risk_adjudication_v1", require_json=True,
+    )
+    trace.record_ai_decision_trace(
+        {**request_fields, "action": "WAIT", "score": 50},
+        prompt_type="scalping_entry", prompt_version="entry_machine_auxiliary_compact_v3",
+        result_source="live", stock_code="005930", provider_called=True,
+        input_contract_fields={"ai_input_preflight_market_data_health": health,
+                               "ai_input_preflight_feature_allowed": True,
+                               "ai_input_preflight_feature_blockers": []},
+    )
+    for path in (trace._trace_path(trace._date_text()), trace._outcome_path(trace._date_text())):
+        row = _rows(path)[0]
+        assert row["market_data_health"] == health
+        assert row["input_feature_allowed"] is True
+        assert row["input_feature_blockers"] == []
+        assert row["actual_order_submitted"] is False

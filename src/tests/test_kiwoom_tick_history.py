@@ -266,5 +266,87 @@ def test_tick_history_preserves_request_purpose_and_legacy_return_shape(monkeypa
     assert calls[0]["request_owner"] == "widget_auto_trade_entry_velocity"
     assert calls[0]["payload"] == {"stk_cd": "005930_AL"}
     assert calls[0]["use_continuous"] is False
-    assert kiwoom_utils.get_tick_history_ka10003("token", "005930_AL") == result
+    again = kiwoom_utils.get_tick_history_ka10003("token", "005930_AL")
+    assert again[0]["volume"] == result[0]["volume"]
+    assert again[0]["provider_trade_epoch"] is None
+    assert again[0]["rest_received_ts_ms"] is None
+    assert len(calls) == 2  # An unproven wrapper is not a successful fresh cache entry.
+
+
+def test_tick_cache_retains_receive_clock_recalculates_age_and_consumer_purpose(monkeypatch):
+    monkeypatch.setattr(kiwoom_utils, "_MARKET_DATA_CACHE", {})
+    monkeypatch.setattr(kiwoom_utils, "get_effective_kiwoom_code", lambda code: code)
+    clock = [1000.0]
+    monkeypatch.setattr(kiwoom_utils.time, "time", lambda: clock[0])
+    calls = []
+
+    def fetch(**kwargs):
+        calls.append(kwargs)
+        return [{"return_code": 0, "stk_cd": "005930", "cntr_infr": [
+            {"tm": "090010", "cur_prc": "10000", "cntr_trde_qty": "10"},
+        ]}], {"api_id": "ka10003", "request_code": "005930",
+              "rest_received_ts_ms": 1000000, "request_owner": "producer",
+              "request_class": "source_only"}
+
+    monkeypatch.setattr(kiwoom_utils, "fetch_kiwoom_api_continuous", fetch)
+    first = kiwoom_utils.get_tick_history_ka10003("token", "005930", request_owner="first")
+    clock[0] += .5
+    second = kiwoom_utils.get_tick_history_ka10003("token", "005930", request_owner="second")
     assert len(calls) == 1
+    assert first[0]["market_data_health"]["rest_input"]["response_receive_age_ms"] == 0
+    assert second[0]["rest_received_ts_ms"] == 1000000
+    assert second[0]["market_data_health"]["rest_input"]["response_receive_age_ms"] == 500
+    assert second[0]["market_data_health"]["rest_input"]["request_owner"] == "producer"
+    assert second[0]["market_data_consumer_receipt"]["request_owner"] == "second"
+    assert second[0]["market_data_consumer_receipt"]["normalized_cache_reused"]
+    assert second[0]["provider_trade_epoch"] is None
+
+
+def test_tick_helpers_share_one_transport_for_different_local_limits(monkeypatch):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from src.utils.kiwoom_read_request_control import MarketReadSingleFlight
+
+    monkeypatch.setattr(kiwoom_utils, "_MARKET_DATA_CACHE", {})
+    monkeypatch.setattr(kiwoom_utils, "get_effective_kiwoom_code", lambda code: code)
+    runner = MarketReadSingleFlight()
+    monkeypatch.setattr(kiwoom_utils, "_MARKET_READ_SINGLE_FLIGHT", runner)
+    entered, release, joined = threading.Event(), threading.Event(), threading.Event()
+    calls = []
+
+    def transport(**kwargs):
+        calls.append(kwargs)
+        entered.set()
+        assert release.wait(3)
+        return [{"return_code": 0, "cntr_infr": [
+            {"tm": "090010", "cur_prc": "10000", "cntr_trde_qty": "10"}
+            for _ in range(30)
+        ]}], {"api_id": "ka10003", "request_code": "005930",
+              "rest_received_ts_ms": int(kiwoom_utils.time.time() * 1000)}
+
+    class ObserveWait:
+        def __init__(self, event):
+            self.event = event
+        def wait(self, timeout):
+            joined.set()
+            return self.event.wait(timeout)
+        def set(self):
+            self.event.set()
+
+    monkeypatch.setattr(kiwoom_utils, "_fetch_kiwoom_api_continuous_transport", transport)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        one = pool.submit(kiwoom_utils.get_tick_history_ka10003, "token", "005930", 10)
+        assert entered.wait(1)
+        with runner._lock:
+            assert len(runner._in_flight) == 1
+            flight = next(iter(runner._in_flight.values()))
+            flight["event"] = ObserveWait(flight["event"])
+        two = pool.submit(kiwoom_utils.get_tick_history_ka10003, "token", "005930", 30)
+        try:
+            assert joined.wait(1)
+        finally:
+            release.set()
+        assert len(one.result(2)) == 10
+        assert len(two.result(2)) == 30
+    assert len(calls) == 1
+    assert calls[0]["return_meta"] is True

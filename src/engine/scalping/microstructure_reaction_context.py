@@ -13,6 +13,7 @@ from pathlib import Path
 from statistics import mean
 from typing import Any
 
+from src.trading.market.quote_consistency import build_market_data_health
 from src.utils.constants import DATA_DIR
 
 CONTEXT_VERSION = "microstructure_reaction_context_v2"
@@ -593,6 +594,12 @@ def _safe_epoch_ms(value: Any) -> int | None:
 def _quote_age_ms(
     ws_data: dict[str, Any], *, now: datetime | None = None
 ) -> tuple[int | None, str]:
+    if "last_realtime_type_ts" in ws_data or "last_ws_update_ts" in ws_data:
+        from src.trading.market.quote_consistency import ws_quote_receive_age_ms
+
+        age = ws_quote_receive_age_ms(ws_data, now_ts=(now or datetime.now()).timestamp())
+        basis = "last_realtime_type_ts:0D" if "last_realtime_type_ts" in ws_data else "last_ws_update_ts"
+        return age, basis if age is not None else "invalid_quote_receive_timestamp"
     quote_ts_keys = (
         "quote_age_ms",
         "ws_age_ms",
@@ -871,6 +878,10 @@ def precompute_microstructure_reaction_inputs(
         "same_price_buy_absorption": same_price_buy_absorption,
         "quote_age_ms": quote_age_ms,
         "quote_age_source": quote_age_source,
+        "market_data_health": build_market_data_health(
+            ws_data, now_ts=(now or datetime.now()).timestamp(),
+            quote_max_age_ms=normalize_quote_stale_threshold(ws_data.get("ai_quote_stale_max_ms"))[0],
+        ),
         "candle_highs": candle_highs,
         "candle_lows": candle_lows,
         "session_high": max(candle_highs or [curr_price]),
@@ -1107,7 +1118,7 @@ def build_microstructure_reaction_context(
     if isinstance(now, (float, int)):
         now = datetime.fromtimestamp(now)
     elif not isinstance(now, datetime):
-        now = None
+        now = datetime.now()
     payload = _calculate_microstructure_reaction_context(
         ws_data, recent_ticks, recent_candles, now=now, precomputed=precomputed
     )
@@ -1132,10 +1143,13 @@ def build_microstructure_reaction_context(
             if row.get("quality") == "fresh"
             and row.get("effective_venue") in {"KRX", "NXT"}
         )
-    _, setting = normalize_quote_stale_threshold(
+    quote_threshold, setting = normalize_quote_stale_threshold(
         (precomputed or {}).get(
             "ai_quote_stale_max_ms", source.get("ai_quote_stale_max_ms")
         )
+    )
+    payload["market_data_health"] = build_market_data_health(
+        source, now_ts=now.timestamp(), quote_max_age_ms=quote_threshold,
     )
     payload.update(
         {

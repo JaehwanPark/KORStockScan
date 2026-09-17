@@ -1978,6 +1978,7 @@ def ai_market_snapshot_log_fields(
         ),
         "ai_input_preflight_feature_blockers": preflight.get("feature_blockers", []),
         "ai_input_preflight_trade_activity": snapshot.get("trade_activity", {}),
+        "ai_input_preflight_market_data_health": snapshot.get("market_data_health"),
         "ai_input_preflight_source_timing": source_timing,
         "ai_input_preflight_source_timing_basis": "source_observed_at_to_snapshot_capture",
         "ai_input_preflight_external_delay_attribution": "unproven_without_exchange_and_receive_clocks",

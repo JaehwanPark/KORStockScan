@@ -3367,6 +3367,7 @@ def test_collector_uses_only_read_only_market_data_and_cached_token(
     monkeypatch, tmp_path
 ):
     now = datetime(2026, 8, 3, 9, 10, 5, tzinfo=KST)
+    monkeypatch.setattr(advisory.time, "time", lambda: now.timestamp())
     monkeypatch.setattr(
         advisory.kiwoom_utils, "get_cached_kiwoom_token", lambda _: "TOKEN"
     )
@@ -3825,3 +3826,41 @@ def test_response_receive_clock_preserves_exact_response_and_rejects_other_reque
     client.last_request_receipt["request_succeeded"] = False
     with pytest.raises(RuntimeError, match="widget_rest_receive_receipt_invalid"):
         client.response_received_at(api_id="ka10004", request_code="005930")
+
+
+def test_bbo_common_health_recomputes_receipt_and_does_not_trust_carried_age():
+    now = datetime(2026, 9, 17, 14, 0, 0, tzinfo=KST)
+    receipt = now - timedelta(seconds=21)
+    bbo = advisory._parse_bbo(
+        {"buy_fpr_bid": "10000", "sel_fpr_bid": "10010", "_kiwoom_source_meta": {
+            "api_id": "ka10004", "request_code": "005930", "rest_received_ts_ms": int(receipt.timestamp() * 1000),
+        }}, receipt,
+    )
+    bbo["age_sec"] = 0.0
+    bbo["market_data_health"]["rest_quote"]["quote_state"] = "fresh"
+    result = advisory._source_quality(
+        observed_at=now, context=advisory.session_context(now), bars=[], bbo=bbo,
+        previous_day={}, quote_age_sec=0, current_price=10000,
+    )
+    assert "bbo_receive_receipt_invalid_or_stale" in result["issues"]
+    assert bbo["age_sec"] == 21
+    assert bbo["market_data_health"]["rest_quote"]["quote_state"] == "stale"
+    assert bbo["market_data_health"]["rest_quote"]["quiet_episode_count"] is None
+
+
+@pytest.mark.parametrize("response_item", ["042660", "005930_NX"])
+def test_bbo_response_identity_conflict_survives_consume_recalculation(response_item):
+    now = datetime(2026, 9, 17, 14, tzinfo=KST)
+    bbo = advisory._parse_bbo({
+        "stk_cd": response_item, "buy_fpr_bid": "10000", "sel_fpr_bid": "10010",
+        "_kiwoom_source_meta": {"api_id": "ka10004", "request_code": "005930",
+                                 "rest_received_ts_ms": int(now.timestamp() * 1000)},
+    }, now)
+    bbo["market_data_health"]["rest_quote"]["quote_state"] = "fresh"
+    result = advisory._source_quality(
+        observed_at=now, context=advisory.session_context(now), bars=[], bbo=bbo,
+        previous_day={}, quote_age_sec=0, current_price=10000,
+    )
+    assert "bbo_receive_receipt_invalid_or_stale" in result["issues"]
+    assert bbo["market_data_health"]["rest_input"]["receipt_binding_conflict"]
+    assert bbo["response_item_raw"] == response_item

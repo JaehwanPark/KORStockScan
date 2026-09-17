@@ -2422,6 +2422,10 @@ def record_ai_decision_trace(
             ),
             "input_blockers": merged.get("ai_input_preflight_blockers", []),
             "input_source_timing": merged.get("ai_input_preflight_source_timing", {}),
+            "market_data_health": merged.get("ai_input_preflight_market_data_health"),
+            "input_trade_activity": merged.get("ai_input_preflight_trade_activity"),
+            "input_feature_allowed": merged.get("ai_input_preflight_feature_allowed"),
+            "input_feature_blockers": merged.get("ai_input_preflight_feature_blockers"),
             "input_source_timing_basis": merged.get(
                 "ai_input_preflight_source_timing_basis"
             ),
@@ -2725,6 +2729,10 @@ def record_ai_decision_trace(
             "input_preflight_status": trace_row["input_preflight_status"],
             "input_preflight_mode": trace_row["input_preflight_mode"],
             "input_quality_warnings": trace_row["input_quality_warnings"],
+            "market_data_health": trace_row["market_data_health"],
+            "input_trade_activity": trace_row["input_trade_activity"],
+            "input_feature_allowed": trace_row["input_feature_allowed"],
+            "input_feature_blockers": trace_row["input_feature_blockers"],
             "reference_price_type": trace_row["reference_price_type"],
             "reference_price": trace_row["reference_price"],
             "best_bid": trace_row["best_bid"],

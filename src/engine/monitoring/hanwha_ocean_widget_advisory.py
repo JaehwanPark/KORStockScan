@@ -1044,14 +1044,18 @@ class HanwhaOceanWidgetCollector:
         quote = client.post(
             "/api/dostk/stkinfo", "ka10001", {"stk_cd": contract.HANWHA_OCEAN_CODE}
         )
-        quote_received_at = now if observed_at is not None else _now_kst()
+        quote_received_at = client.response_received_at(
+            api_id="ka10001", request_code=context.request_code
+        )
         current_price = _positive_int(quote.get("cur_prc"))
         if current_price is None:
             raise RuntimeError("kiwoom_price_missing")
         bbo_payload = client.post(
             "/api/dostk/mrkcond", "ka10004", {"stk_cd": contract.HANWHA_OCEAN_CODE}
         )
-        bbo_received_at = now if observed_at is not None else _now_kst()
+        bbo_received_at = client.response_received_at(
+            api_id="ka10004", request_code=context.request_code
+        )
         bbo = _parse_bbo(bbo_payload, bbo_received_at)
 
         minute_key = now.strftime("%Y%m%d%H%M")
@@ -1100,12 +1104,8 @@ class HanwhaOceanWidgetCollector:
         )
 
         decision_now = now if observed_at is not None else _now_kst()
-        quote_age_sec = max(
-            0.0, (decision_now - _as_kst(quote_received_at)).total_seconds()
-        )
-        bbo["age_sec"] = max(
-            0.0, (decision_now - _as_kst(bbo_received_at)).total_seconds()
-        )
+        quote_age_sec = (decision_now - _as_kst(quote_received_at)).total_seconds()
+        bbo["age_sec"] = (decision_now - _as_kst(bbo_received_at)).total_seconds()
         self._restore_state(decision_now, context)
         advisory = evaluate_advisory(
             observed_at=decision_now,

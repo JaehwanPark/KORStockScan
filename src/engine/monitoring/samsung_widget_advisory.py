@@ -1288,6 +1288,24 @@ def _source_quality(
     current_price: int,
 ) -> dict[str, Any]:
     issues: list[str] = []
+    meta = bbo.get("_kiwoom_source_meta")
+    if isinstance(meta, dict) and (meta or bbo.get("rest_receipt_metadata_present")):
+        from src.trading.market.quote_consistency import build_rest_market_data_health
+
+        health = build_rest_market_data_health(
+            {"buy_fpr_bid": bbo.get("best_bid"), "sel_fpr_bid": bbo.get("best_ask"),
+             "stk_cd": bbo.get("response_item_raw")},
+            api_id="ka10004", request_code=str(meta.get("request_code") or ""),
+            source_meta=meta, now_ts=_as_kst(observed_at).timestamp(),
+            quote_max_age_ms=20_000,
+        )
+        bbo["market_data_health"] = health
+        age_ms = health["rest_quote"]["quote_receive_age_ms"]
+        bbo["age_sec"] = age_ms / 1000.0 if age_ms is not None else None
+        if meta.get("api_id") != "ka10004" or meta.get("request_code") != context.request_code:
+            issues.append("bbo_receive_receipt_scope_conflict")
+        if health["rest_quote"]["quote_state"] != "fresh":
+            issues.append("bbo_receive_receipt_invalid_or_stale")
     if not context.active or context.start is None:
         issues.append("session_not_active")
     if len(bars) < context.minimum_bars:
@@ -1473,6 +1491,7 @@ def evaluate_advisory(
         "valid_until": valid_until,
         "observed_at": _as_kst(observed_at).isoformat(),
         "source_quality": source_quality,
+        "market_data_health": bbo.get("market_data_health"),
         "external_risk": external_risk,
         "external_points": {
             key: asdict(point) for key, point in external_points.items()
@@ -3801,6 +3820,14 @@ class KiwoomReadOnlyClient:
         if return_code != 0:
             raise RuntimeError(f"{api_id}_rejected_{return_code}")
         self.last_request_receipt["request_succeeded"] = True
+        data = dict(data)
+        data["_kiwoom_source_meta"] = {
+            "api_id": api_id,
+            "request_code": payload.get("stk_cd"),
+            "rest_received_ts_ms": self.last_request_receipt["rest_received_ts_ms"],
+            "request_owner": "widget_monitoring_read_only_client",
+            "request_class": "source_only",
+        }
         return data
 
 
@@ -3859,7 +3886,13 @@ class ReadOnlyRequestBudget:
 
 
 def _parse_bbo(payload: dict[str, Any], observed_at: datetime) -> dict[str, Any]:
-    return {
+    from src.trading.market.quote_consistency import build_rest_market_data_health
+
+    meta = payload.get("_kiwoom_source_meta")
+    meta = meta if isinstance(meta, dict) else {}
+    if meta and meta.get("api_id") != "ka10004":
+        raise RuntimeError("widget_bbo_receive_receipt_api_conflict")
+    result = {
         "best_bid": _positive_int(payload.get("buy_fpr_bid")),
         "best_ask": _positive_int(payload.get("sel_fpr_bid")),
         "best_bid_qty": _positive_int(payload.get("buy_fpr_req")),
@@ -3869,7 +3902,28 @@ def _parse_bbo(payload: dict[str, Any], observed_at: datetime) -> dict[str, Any]
         "source": "kiwoom_ka10004_response_received_time",
         "raw_bid_time": str(payload.get("bid_req_base_tm") or "").strip() or None,
         "raw_bid_time_authority": "provenance_only_not_freshness",
+        "_kiwoom_source_meta": dict(meta),
+        "response_item_raw": payload.get("stk_cd"),
+        "rest_receipt_metadata_present": "_kiwoom_source_meta" in payload,
     }
+    if meta or result["rest_receipt_metadata_present"]:
+        stamp = meta.get("rest_received_ts_ms")
+        if type(stamp) is int and stamp > 0:
+            try:
+                result["received_at"] = datetime.fromtimestamp(stamp / 1000.0, tz=KST).isoformat()
+            except (ValueError, OverflowError, OSError):
+                result["received_at"] = None
+        else:
+            result["received_at"] = None
+    result["market_data_health"] = build_rest_market_data_health(
+        payload, api_id="ka10004", request_code=str(meta.get("request_code") or ""),
+        source_meta=meta, now_ts=_as_kst(observed_at).timestamp(),
+        quote_max_age_ms=20_000,
+    )
+    age_ms = result["market_data_health"]["rest_quote"]["quote_receive_age_ms"]
+    if meta or result["rest_receipt_metadata_present"]:
+        result["age_sec"] = age_ms / 1000.0 if age_ms is not None else None
+    return result
 
 
 def _recent_trade_negative_veto(payload: dict[str, Any]) -> bool:
@@ -4456,14 +4510,18 @@ class SamsungWidgetCollector:
         quote = client.post(
             "/api/dostk/stkinfo", "ka10001", {"stk_cd": context.request_code}
         )
-        quote_received_at = now if observed_at is not None else _now_kst()
+        quote_received_at = client.response_received_at(
+            api_id="ka10001", request_code=context.request_code
+        )
         current_price = _positive_int(quote.get("cur_prc"))
         if current_price is None:
             raise RuntimeError("kiwoom_price_missing")
         bbo_payload = client.post(
             "/api/dostk/mrkcond", "ka10004", {"stk_cd": context.request_code}
         )
-        bbo_received_at = now if observed_at is not None else _now_kst()
+        bbo_received_at = client.response_received_at(
+            api_id="ka10004", request_code=context.request_code
+        )
         bbo = _parse_bbo(bbo_payload, bbo_received_at)
         trade_payload = self._optional_post(
             client,
@@ -4711,12 +4769,8 @@ class SamsungWidgetCollector:
             self._last_flow_fetch = epoch
 
         decision_now = now if observed_at is not None else _now_kst()
-        quote_age_sec = max(
-            0.0, (decision_now - _as_kst(quote_received_at)).total_seconds()
-        )
-        bbo["age_sec"] = max(
-            0.0, (decision_now - _as_kst(bbo_received_at)).total_seconds()
-        )
+        quote_age_sec = (decision_now - _as_kst(quote_received_at)).total_seconds()
+        bbo["age_sec"] = (decision_now - _as_kst(bbo_received_at)).total_seconds()
 
         advisory = evaluate_advisory(
             observed_at=decision_now,

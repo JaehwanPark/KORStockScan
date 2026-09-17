@@ -1,6 +1,18 @@
 from src.trading.market.market_data_cache import MarketDataCache, QuietTapeState
 
 
+def test_cache_duplicate_identity_cannot_advance_source_clock(monkeypatch):
+    monkeypatch.setattr("src.trading.market.market_data_cache.time.time", lambda: 1001.0)
+    cache = MarketDataCache()
+    cache.update("042660", received_at=1000.0, source_identity=("0D", 10),
+                 best_bid=10000, best_ask=10010)
+    cache.update("042660", received_at=1000.5, source_identity=("0D", 10),
+                 best_bid=10000, best_ask=10010)
+    cache.update("042660", received_at="bad", source_identity=("0D", 11))
+    cache.update("042660", received_at=1000.5, source_identity=("0D",))
+    assert cache.get_quote_health("042660").quote_age_ms == 1000
+
+
 def test_quiet_tape_requires_distinct_episodes_not_repeated_getters():
     state = QuietTapeState()
     state.observe(kind="0D", now=100.0, sequence=1)
@@ -186,3 +198,33 @@ def test_market_data_cache_preserves_normal_jitter_signal():
 
     assert 35 <= health.ws_jitter_ms <= 55
     assert health.best_ask == 10_040
+
+
+def test_cache_separates_exact_route_epoch_and_does_not_replace_equal_receipt(monkeypatch):
+    monkeypatch.setattr("src.trading.market.market_data_cache.time.time", lambda: 1000.5)
+    cache = MarketDataCache()
+    krx, nxt, recovered = ("005930", "regular", 1), ("005930_NX", "regular", 1), ("005930", "regular", 2)
+    cache.update("005930", scope=krx, received_at=1000, best_bid=10000, best_ask=10010)
+    cache.update("005930", scope=nxt, received_at=1000.1, best_bid=10100, best_ask=10110)
+    for _ in range(100):
+        cache.update("005930", scope=krx, received_at=1000, best_bid=10000, best_ask=10010)
+    assert cache.get_best_bid("005930", scope=krx) == 10000
+    assert cache.get_best_bid("005930", scope=nxt) == 10100
+    assert cache.get_quote_health("005930", scope=recovered).quote_stale
+    assert cache.get_quote_health("005930", scope=krx).ws_age_ms == 500
+    assert cache.get_quote_health("005930", scope=krx).ws_jitter_ms == 0
+    cache.update("005930", scope=krx, received_at=1000, best_bid=9990, best_ask=10000)
+    assert cache.get_best_bid("005930", scope=krx) == 10000
+    assert cache.get_quote_health("005930", scope=krx).quote_stale
+
+
+def test_cache_rejects_future_submillisecond_freshness_and_accepts_proven_next_sequence(monkeypatch):
+    monkeypatch.setattr("src.trading.market.market_data_cache.time.time", lambda: 1000.0)
+    cache = MarketDataCache()
+    cache.update("005930", received_at=1000.0001, best_bid=10000, best_ask=10010)
+    assert cache.get_quote_health("005930").quote_stale
+    cache.update("042660", received_at=1000, source_identity=("0D", 1), best_bid=10000, best_ask=10010)
+    cache.update("042660", received_at=1000, source_identity=("0D", 2), best_bid=10010, best_ask=10020)
+    assert cache.get_best_bid("042660") == 10010
+    assert not cache.get_quote_health("042660").quote_stale
+    assert cache.get_quote_health("042660").ws_jitter_ms == 0

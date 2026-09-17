@@ -1899,3 +1899,17 @@ def test_log_fields_can_namespace_contract_for_cross_stage_composition():
         nested["holding_context_decision_authority"] == "bounded_holding_confirmation"
     )
     assert nested["holding_context_metric_role"] == "holding_context_feature_bundle"
+
+
+@pytest.mark.parametrize("age_seconds", [6.0, -0.001])
+def test_holding_quote_uses_0d_clock_instead_of_fresh_transport_or_carried_age(age_seconds):
+    now = datetime(2026, 9, 17, 14, 0, tzinfo=KST).timestamp()
+    age, _ = holding_context_module._quote_age_ms({
+        "last_realtime_type_ts": {"0D": now - age_seconds},
+        "last_ws_update_ts": now, "quote_age_ms": 0,
+    }, now)
+    assert age == pytest.approx(age_seconds * 1000, abs=0.001)
+    age, _ = holding_context_module._quote_age_ms({
+        "last_realtime_type_ts": None, "last_ws_update_ts": now, "quote_age_ms": 0,
+    }, now)
+    assert age is None

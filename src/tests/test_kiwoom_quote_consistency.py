@@ -50,11 +50,11 @@ def test_ka10004_orderbook_does_not_publish_best_ask_as_curr(monkeypatch):
     assert snapshot["source_time_basis"] == "response_received_epoch_ms"
     assert snapshot["rest_freshness_basis"] == "response_received_epoch_ms"
     assert snapshot["rest_age_source"] == "response_received_epoch_ms"
-    assert snapshot["rest_age_ms"] == 0
-    assert snapshot["age_ms"] == 0
-    assert snapshot["rest_received_ts_ms"] > 0
+    assert snapshot["rest_age_ms"] is None
+    assert snapshot["age_ms"] is None
+    assert snapshot["rest_received_ts_ms"] is None
     rest = snapshot["market_data_health"]["rest_quote"]
-    assert rest["quote_state"] == "fresh"
+    assert rest["quote_state"] == "missing"
     assert rest["trade_activity_state"] == "OBSERVATION_UNPROVEN"
     assert rest["quiet_episode_count"] is None
 
@@ -358,3 +358,36 @@ def test_normalize_stock_code_does_not_collapse_alphanumeric_instrument_namespac
     assert (
         kiwoom_utils.kiwoom_stock_code_identity("1001820_AL")["is_equity_code"] is False
     )
+
+
+def test_orderbook_keeps_transport_receipt_across_slow_consume_and_future_clock(monkeypatch):
+    now = 1_789_621_200.0
+    monkeypatch.setattr(kiwoom_utils.time, "time", lambda: now)
+    raw = {"buy_fpr_bid": "10000", "sel_fpr_bid": "10100"}
+    for lag_ms, expected in [(5000, "stale"), (-1, "future")]:
+        stamp = int(now * 1000) - lag_ms
+        monkeypatch.setattr(
+            kiwoom_utils, "fetch_kiwoom_api_continuous",
+            lambda **kwargs: ([raw], {"rest_received_ts_ms": stamp}),
+        )
+        snapshot = kiwoom_utils.get_stock_orderbook_ka10004("token", "005930", explicit_request_code=True)
+        assert snapshot["rest_received_ts_ms"] == stamp
+        assert snapshot["rest_age_ms"] == lag_ms
+        assert snapshot["market_data_health"]["rest_quote"]["quote_state"] == expected
+
+
+def test_adopted_quote_receipt_cannot_pick_equal_clock_from_another_item():
+    from src.trading.market.quote_consistency import ws_quote_source_receipt
+    now = 1_800_000_000.0
+    frame = {"market_data_transport_epoch": 1, "last_realtime_type_ts": {"0D": now},
+             "last_realtime_type_item": {"0D": "005930_AL"},
+             "realtime_type_snapshots_by_route": {
+                 "krx": {"0D": {"item": "005930", "market_route": "krx",
+                                  "observed_epoch": now, "transport_epoch": 1, "route_sequence": 8}},
+                 "integrated": {"0D": {"item": "005930_AL", "market_route": "krx_nxt_integrated",
+                                         "observed_epoch": now, "transport_epoch": 1, "route_sequence": 9}},
+             }}
+    receipt = ws_quote_source_receipt(frame, now_ts=now)
+    assert receipt["item"] == "005930_AL"
+    assert receipt["route_sequence"] == 9
+    assert receipt["observed_epoch"] == now

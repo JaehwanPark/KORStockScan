@@ -39,9 +39,13 @@ def ws_quote_receive_age_ms(data: Mapping[str, Any], *, now_ts: float) -> float 
     does not attest venue or trade provenance and makes no network request.
     """
     times = data.get("last_realtime_type_ts")
+    if "last_realtime_type_ts" in data and not isinstance(times, Mapping):
+        return None
     stamp = (
         times.get("0D") if isinstance(times, Mapping) else data.get("last_ws_update_ts")
     )
+    if isinstance(stamp, bool) or not math.isfinite(now_ts):
+        return None
     try:
         stamp = float(stamp or 0.0)
     except (TypeError, ValueError, OverflowError):
@@ -100,6 +104,55 @@ def ws_quote_receive_age_ms(data: Mapping[str, Any], *, now_ts: float) -> float 
     return (now_ts - stamp) * 1000.0
 
 
+def ws_quote_source_receipt(data: Mapping[str, Any], *, now_ts: float) -> dict[str, Any]:
+    """Identity of the adopted quote clock; never infer an execution venue."""
+    age = ws_quote_receive_age_ms(data, now_ts=now_ts)
+    if age is None:
+        return {}
+    adopted_at = now_ts - age / 1000.0
+    visible = _best_levels(data)
+    epoch = data.get("market_data_transport_epoch")
+    if epoch is not None:
+        for kind in ("0D", "0B"):
+            for records in _type_route_records(data).values():
+                row = records.get(kind) if isinstance(records, Mapping) else None
+                if not isinstance(row, Mapping) or row.get("transport_epoch") != epoch:
+                    continue
+                items = data.get("last_realtime_type_item")
+                item = items.get(kind) if isinstance(items, Mapping) else None
+                if item and row.get("item") != item:
+                    continue
+                stamp = _to_float(row.get("observed_epoch"))
+                if abs(stamp - adopted_at) > .000001:
+                    continue
+                if kind == "0B" and (
+                    _to_int(row.get("inline_best_bid")), _to_int(row.get("inline_best_ask"))
+                ) != visible:
+                    continue
+                return {"source_type": kind, "observed_epoch": stamp,
+                        "item": row.get("item"), "market_route": row.get("market_route"),
+                        "transport_epoch": epoch, "route_sequence": row.get("route_sequence")}
+    return {"observed_epoch": adopted_at, "identity_status": "legacy_source_clock_only"}
+
+
+def ws_trade_receive_age_ms(data: Mapping[str, Any], *, now_ts: float) -> float | None:
+    """Read the original trade receipt, preserving the declared legacy adapter."""
+    if "last_realtime_type_ts" in data:
+        times = data.get("last_realtime_type_ts")
+        stamp = times.get("0B") if isinstance(times, Mapping) else None
+    else:
+        stamp = data.get("last_ws_update_ts")
+    try:
+        if isinstance(stamp, bool):
+            return None
+        stamp = float(stamp)
+        if stamp <= 0 or not math.isfinite(stamp) or not math.isfinite(now_ts):
+            return None
+        return (now_ts - stamp) * 1000.0
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
 def build_market_data_health(
     data: Mapping[str, Any], *, now_ts: float, quote_max_age_ms: int = 3000
 ) -> dict[str, Any]:
@@ -112,6 +165,8 @@ def build_market_data_health(
 
     def age(value: Any) -> float | None:
         try:
+            if isinstance(value, bool) or not math.isfinite(now_ts):
+                return None
             stamp = float(value)
         except (TypeError, ValueError, OverflowError):
             return None
@@ -549,6 +604,63 @@ def rest_quote_receive_age_ms(
         except (TypeError, ValueError, OverflowError):
             return None
     return None
+
+
+def build_rest_market_data_health(
+    data: Mapping[str, Any], *, api_id: str, request_code: str,
+    source_meta: Mapping[str, Any], now_ts: float, quote_max_age_ms: int = 2000,
+) -> dict[str, Any]:
+    """Project exact REST receipts; response freshness never attests trade activity.
+
+    Provider intraday times remain raw: date/session/precision cannot be inferred
+    from a successful HTTP response. Bar/account/auth readers retain their own
+    contracts and must not consume these facts as a trade feature.
+    """
+    symbol = request_code.removesuffix("_NX").removesuffix("_AL")
+    envelope = {
+        "source": "ka10004_rest_orderbook" if api_id == "ka10004" else api_id,
+        "stock_code": symbol,
+        "request_code": request_code,
+        "rest_received_ts_ms": source_meta.get("rest_received_ts_ms"),
+        "rest_freshness_basis": "response_received_epoch_ms",
+        "best_bid": abs(_to_int(data.get("buy_fpr_bid"))),
+        "best_ask": abs(_to_int(data.get("sel_fpr_bid"))),
+    }
+    health = build_market_data_health(
+        envelope, now_ts=now_ts, quote_max_age_ms=quote_max_age_ms,
+    )
+    response_item = str(data.get("stk_cd") or "").strip()
+    response_symbol = response_item.removesuffix("_NX").removesuffix("_AL")
+    binding_conflict = (
+        source_meta.get("api_id") not in (None, api_id)
+        or source_meta.get("request_code") not in (None, request_code)
+        or bool(response_item and response_symbol != symbol)
+        or bool(response_item.endswith(("_NX", "_AL")) and response_item != request_code)
+    )
+    binding_proven = bool(
+        request_code and source_meta.get("api_id") == api_id
+        and source_meta.get("request_code") == request_code
+        and not binding_conflict
+    )
+    if not binding_proven and health["rest_quote"] is not None:
+        health["rest_quote"]["quote_state"] = "unproven"
+    age_ms = rest_quote_receive_age_ms(envelope, now_ts=now_ts)
+    health["rest_input"] = {
+        "api_id": api_id,
+        "requested_item": request_code,
+        "response_item_raw": data.get("stk_cd"),
+        "response_receive_epoch_ms": source_meta.get("rest_received_ts_ms"),
+        "response_receive_age_ms": age_ms,
+        "provider_event_epoch": None,
+        "source_timestamp_authority": "response_receive_only_provider_event_unproven",
+        "request_owner": source_meta.get("request_owner"),
+        "request_class": source_meta.get("request_class"),
+        "trade_activity_state": "OBSERVATION_UNPROVEN",
+        "quiet_episode_count": None,
+        "receipt_binding_conflict": binding_conflict,
+        "receipt_binding_proven": binding_proven,
+    }
+    return health
 
 
 def quote_input_from_rest_orderbook(

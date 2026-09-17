@@ -6,7 +6,7 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from math import sqrt
+from math import sqrt, isfinite
 from pathlib import Path
 from statistics import median
 from typing import Any
@@ -73,6 +73,7 @@ class _PendingReversion:
 
 @dataclass
 class _SymbolState:
+    transport_epoch: int | None = None
     quotes: deque[dict[str, Any]] = field(default_factory=deque)
     trades: deque[dict[str, Any]] = field(default_factory=deque)
     micro_samples: deque[dict[str, Any]] = field(default_factory=deque)
@@ -152,11 +153,14 @@ class OrderbookStabilityObserver:
         bid_depth_l: int = 0,
         ask_depth_l: int = 0,
         ts: float | None = None,
+        transport_epoch: int | None = None,
     ) -> None:
-        safe_code = str(code or "").strip()[:6]
+        safe_code = str(code or "").strip()
         if not safe_code:
             return
         now = float(ts if ts is not None else time.time())
+        if not isfinite(now) or now <= 0:
+            return
         bid = _safe_int(best_bid)
         ask = _safe_int(best_ask)
         bid_qty = _safe_int(best_bid_qty)
@@ -167,6 +171,11 @@ class OrderbookStabilityObserver:
             return
         with self._lock:
             state = self._states.setdefault(safe_code, _SymbolState())
+            if transport_epoch is not None and state.transport_epoch != transport_epoch:
+                state = _SymbolState(transport_epoch=transport_epoch)
+                self._states[safe_code] = state
+            if now < state.last_quote_ts:
+                return
             self._prune(state, now)
             previous_bid = state.last_bid
             previous_ask = state.last_ask
@@ -199,20 +208,28 @@ class OrderbookStabilityObserver:
             )
             self._mark_reversions(state, now)
 
-    def record_trade(self, code: str, *, price: int, ts: float | None = None) -> None:
-        safe_code = str(code or "").strip()[:6]
+    def record_trade(self, code: str, *, price: int, ts: float | None = None,
+                     transport_epoch: int | None = None) -> None:
+        safe_code = str(code or "").strip()
         if not safe_code:
             return
         now = float(ts if ts is not None else time.time())
+        if not isfinite(now) or now <= 0:
+            return
         trade_price = _safe_int(price)
         if trade_price <= 0:
             return
         with self._lock:
             state = self._states.setdefault(safe_code, _SymbolState())
+            if transport_epoch is not None and state.transport_epoch != transport_epoch:
+                state = _SymbolState(transport_epoch=transport_epoch)
+                self._states[safe_code] = state
+            if now <= state.last_trade_ts:
+                return
             self._prune(state, now)
             age_ms = None
             if state.last_quote_ts > 0:
-                age_ms = max(0.0, (now - state.last_quote_ts) * 1000.0)
+                age_ms = (now - state.last_quote_ts) * 1000.0
             aligned = self._is_aligned(trade_price, state.last_bid, state.last_ask)
             state.trades.append(
                 {
@@ -227,7 +244,7 @@ class OrderbookStabilityObserver:
             state.last_trade_ts = now
 
     def snapshot(self, code: str, *, now: float | None = None) -> dict[str, Any]:
-        safe_code = str(code or "").strip()[:6]
+        safe_code = str(code or "").strip()
         current = float(now if now is not None else time.time())
         with self._lock:
             state = self._states.setdefault(safe_code, _SymbolState())
@@ -257,15 +274,19 @@ class OrderbookStabilityObserver:
             if alignment is not None and alignment < DEFAULT_ALIGNMENT_THRESHOLD:
                 reasons.append("print_quote_alignment")
             last_quote_age_ms = (
-                round(max(0.0, (current - state.last_quote_ts) * 1000.0), 3)
+                round((current - state.last_quote_ts) * 1000.0, 3)
                 if state.last_quote_ts > 0
                 else None
             )
             last_trade_age_ms = (
-                round(max(0.0, (current - state.last_trade_ts) * 1000.0), 3)
+                round((current - state.last_trade_ts) * 1000.0, 3)
                 if state.last_trade_ts > 0
                 else None
             )
+            if last_quote_age_ms is not None and last_quote_age_ms < 0:
+                reasons.append("quote_clock_future")
+            if last_trade_age_ms is not None and last_trade_age_ms < 0:
+                reasons.append("trade_clock_future")
             observer_missing_reason = self._observer_missing_reason(state)
             return {
                 "captured_at_ms": int(round(current * 1000)),
@@ -273,6 +294,9 @@ class OrderbookStabilityObserver:
                 "observer_healthy": observer_missing_reason == "ok",
                 "observer_missing_reason": observer_missing_reason,
                 "observer_last_quote_age_ms": last_quote_age_ms,
+                "observer_quote_received_epoch": state.last_quote_ts or None,
+                "observer_requested_item": safe_code,
+                "observer_transport_epoch": state.transport_epoch,
                 "observer_last_trade_age_ms": last_trade_age_ms,
                 "fr_10s": int(state.flicker_count),
                 "quote_age_p50_ms": p50,
@@ -690,12 +714,12 @@ class OrderbookStabilityObserver:
                 micro_state = "neutral"
 
         quote_age_ms = (
-            round(max(0.0, (now - state.last_quote_ts) * 1000.0), 3)
+            round((now - state.last_quote_ts) * 1000.0, 3)
             if state.last_quote_ts > 0
             else None
         )
         trade_age_ms = (
-            round(max(0.0, (now - state.last_trade_ts) * 1000.0), 3)
+            round((now - state.last_trade_ts) * 1000.0, 3)
             if state.last_trade_ts > 0
             else None
         )

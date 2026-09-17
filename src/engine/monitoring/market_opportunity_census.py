@@ -737,7 +737,7 @@ def _capture_external_bbo_observation(
         gap_reason = "ka10004_exact_request_route_mismatch"
     elif (
         received_epoch is None
-        or not request_started_epoch <= received_epoch <= request_completed_epoch + 0.1
+        or not request_started_epoch <= received_epoch <= request_completed_epoch
     ):
         gap_reason = "ka10004_response_received_epoch_invalid"
     elif (
@@ -765,10 +765,14 @@ def _capture_external_bbo_observation(
     else:
         status = "captured"
         gap_reason = "not_applicable_capture_pass"
+    from src.trading.market.quote_consistency import (
+        build_market_data_health, rest_quote_receive_age_ms,
+    )
+
+    health = build_market_data_health(snapshot, now_ts=request_completed_epoch)
     quote_age_ms = (
-        max(0.0, (request_completed_epoch - received_epoch) * 1_000.0)
-        if status == "captured" and received_epoch is not None
-        else None
+        rest_quote_receive_age_ms(snapshot, now_ts=request_completed_epoch)
+        if status == "captured" else None
     )
     return {
         "schema_version": EXTERNAL_BBO_OBSERVATION_SCHEMA_VERSION,
@@ -805,6 +809,7 @@ def _capture_external_bbo_observation(
             round(received_epoch, 6) if received_epoch is not None else None
         ),
         "quote_age_ms": round(quote_age_ms, 3) if quote_age_ms is not None else None,
+        "market_data_health": health,
         "best_bid": int(bid) if bid is not None and bid.is_integer() else None,
         "best_ask": int(ask) if ask is not None and ask.is_integer() else None,
         "best_bid_qty": (
@@ -1561,7 +1566,7 @@ def _prune_bbo_observation(
     assert bid_qty is not None
     assert ask_qty is not None
     if not (
-        request_started_epoch <= observed_epoch <= request_completed_epoch + 0.1
+        request_started_epoch <= observed_epoch <= request_completed_epoch
         and request_started_epoch <= request_completed_epoch
         and request_completed_epoch <= emitted_at.timestamp() + 0.1
     ):
@@ -1851,7 +1856,7 @@ def _external_snapshot_bbo_observation(
     assert bid_qty is not None
     assert ask_qty is not None
     if not (
-        request_started_epoch <= observed_epoch <= request_completed_epoch + 0.1
+        request_started_epoch <= observed_epoch <= request_completed_epoch
         and request_started_epoch <= request_completed_epoch
     ):
         return None, "external_census_receipt_time_invalid"

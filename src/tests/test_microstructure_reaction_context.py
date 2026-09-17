@@ -489,3 +489,20 @@ def test_precomputed_snapshot_counts_cached_orderbook_touch_separately():
     assert snapshot["tick_aggressor_orderbook_touch_count"] == 0
     assert snapshot["tick_aggressor_trusted_count"] == 1
     assert snapshot["buy_pressure_pct"] == 100.0
+
+
+def test_reaction_quote_uses_0d_clock_over_carried_age_and_capture_clock():
+    from src.engine.scalping.microstructure_reaction_context import _quote_age_ms
+
+    now = datetime(2026, 9, 17, 14, 0)
+    age, _ = _quote_age_ms({
+        "last_realtime_type_ts": {"0D": now.timestamp() - 6},
+        "last_ws_update_ts": now.timestamp(), "quote_age_ms": 0,
+        "captured_at_ms": int(now.timestamp() * 1000),
+    }, now=now)
+    assert age == 6000
+    age, _ = _quote_age_ms({
+        "last_realtime_type_ts": None, "quote_age_ms": 0,
+        "last_ws_update_ts": now.timestamp(),
+    }, now=now)
+    assert age is None

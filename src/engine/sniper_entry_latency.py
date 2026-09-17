@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import math
 import threading
 import time
 from datetime import UTC, datetime, timedelta, timezone
@@ -20,7 +21,7 @@ from src.trading.entry.normal_entry_builder import NormalEntryBuilder
 from src.trading.entry.orderbook_stability_observer import ORDERBOOK_STABILITY_OBSERVER
 from src.trading.entry.signal_snapshot import build_signal_snapshot
 from src.trading.market.market_data_cache import MarketDataCache
-from src.trading.market.quote_consistency import ws_quote_receive_age_ms
+from src.trading.market.quote_consistency import ws_quote_receive_age_ms, ws_quote_source_receipt
 from src.trading.order.tick_utils import clamp_price_to_tick
 from src.trading.order.tick_utils import get_tick_size
 from src.trading.order.tick_utils import move_price_by_ticks
@@ -4172,6 +4173,7 @@ def _maybe_refresh_stale_quote_from_observer(
     latest_price: int,
     frozen_price: int,
     latency,
+    ws_data: dict[str, Any] | None = None,
 ) -> tuple[Any, dict[str, Any]]:
     provenance = {
         "pre_submit_quote_refresh_enabled": _pre_submit_quote_refresh_enabled(
@@ -4197,7 +4199,22 @@ def _maybe_refresh_stale_quote_from_observer(
         provenance["pre_submit_quote_refresh_reason"] = "quote_not_stale"
         return latency, provenance
 
-    snapshot = ORDERBOOK_STABILITY_OBSERVER.snapshot(code)
+    frame = ws_data or {}
+    receipt = ws_quote_source_receipt(frame, now_ts=time.time())
+    source_item = str(receipt.get("item") or code)
+    snapshot = ORDERBOOK_STABILITY_OBSERVER.snapshot(source_item)
+    expected_epoch = frame.get("market_data_transport_epoch")
+    if expected_epoch is not None and (
+        type(expected_epoch) is not int
+        or snapshot.get("observer_transport_epoch") != expected_epoch
+    ):
+        provenance["pre_submit_quote_refresh_reason"] = "observer_transport_epoch_unproven"
+        return latency, provenance
+    received_epoch = snapshot.get("observer_quote_received_epoch")
+    if not isinstance(received_epoch, (int, float)) or not math.isfinite(received_epoch):
+        provenance["pre_submit_quote_refresh_reason"] = "observer_quote_receive_clock_unproven"
+        return latency, provenance
+    provenance["pre_submit_quote_refresh_received_epoch"] = received_epoch
     best_bid = int(snapshot.get("best_bid") or 0)
     best_ask = int(snapshot.get("best_ask") or 0)
     quote_age = snapshot.get("observer_last_quote_age_ms")
@@ -4212,7 +4229,7 @@ def _maybe_refresh_stale_quote_from_observer(
         provenance["pre_submit_quote_refresh_reason"] = "observer_quote_missing"
         return latency, provenance
     max_age = _pre_submit_quote_refresh_max_age_ms()
-    if float(quote_age) > max_age:
+    if not 0 <= float(quote_age) <= max_age:
         provenance["pre_submit_quote_refresh_reason"] = "observer_quote_stale"
         return latency, provenance
     if best_bid <= 0 or best_ask <= 0 or best_ask <= best_bid:
@@ -4886,15 +4903,27 @@ def evaluate_live_buy_entry(
         0.0 if source_quote_age is None else quote_clock - source_quote_age / 1000.0
     )
 
+    source_receipt = ws_quote_source_receipt(ws_data or {}, now_ts=quote_clock)
+    quote_scope = tuple(str(value or "") for value in (
+        source_receipt.get("item") or code,
+        source_receipt.get("market_route"),
+        (ws_data or {}).get("market_session_bucket"),
+        source_receipt.get("transport_epoch"),
+    ))
+    quote_sequence = source_receipt.get("route_sequence")
+    quote_identity = ((source_receipt.get("source_type"), quote_sequence)
+                      if type(quote_sequence) is int and quote_sequence > 0 else None)
     with _CACHE_LOCK:
         _CACHE.update(
             code,
+            scope=quote_scope,
+            source_identity=quote_identity,
             last_price=latest_price,
             best_ask=best_ask,
             best_bid=best_bid,
             received_at=received_at,
         )
-        quote_health = _CACHE.get_quote_health(code)
+        quote_health = _CACHE.get_quote_health(code, scope=quote_scope)
         if received_at <= 0 or received_at > time.time():
             # A missing/future source stamp is not a fresh consume-time packet.
             # Preserve the cache, but do not borrow a prior caller's freshness.
@@ -4922,6 +4951,7 @@ def evaluate_live_buy_entry(
         latest_price=latest_price,
         frozen_price=frozen_price,
         latency=latency,
+        ws_data=ws_data,
     )
     if pre_submit_quote_refresh.get("pre_submit_quote_refresh_applied"):
         refreshed_best_bid = int(
@@ -4940,18 +4970,13 @@ def evaluate_live_buy_entry(
             with _CACHE_LOCK:
                 _CACHE.update(
                     code,
+                    scope=quote_scope,
                     last_price=latest_price,
                     best_ask=best_ask,
                     best_bid=best_bid,
-                    received_at=(
-                        time.time()
-                        - float(
-                            pre_submit_quote_refresh[
-                                "pre_submit_quote_refresh_quote_age_ms"
-                            ]
-                        )
-                        / 1000.0
-                    ),
+                    received_at=pre_submit_quote_refresh[
+                        "pre_submit_quote_refresh_received_epoch"
+                    ],
                 )
     snapshot = build_signal_snapshot(
         symbol=code,

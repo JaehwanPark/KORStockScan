@@ -4077,6 +4077,7 @@ class KiwoomWSManager:
                                     normalized_raw_item,
                                     price=trade_price,
                                     ts=target["last_trade_tick"]["ts"],
+                                    transport_epoch=int(self._market_data_transport_epoch),
                                 )
                                 self._append_strength_momentum(
                                     target,
@@ -4212,6 +4213,8 @@ class KiwoomWSManager:
                                     best_ask_qty=best_ask_qty,
                                     bid_depth_l=bid_depth_l,
                                     ask_depth_l=ask_depth_l,
+                                    ts=current_depth_observation["received_at_ms"] / 1000.0,
+                                    transport_epoch=int(self._market_data_transport_epoch),
                                 )
                                 self._update_tob_cache(
                                     normalized_raw_item,

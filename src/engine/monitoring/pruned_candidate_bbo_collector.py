@@ -882,7 +882,7 @@ class PrunedCandidateBBOCollector:
         )
         receipt_time_valid = bool(
             math.isfinite(received)
-            and request_started_epoch <= received <= request_completed_epoch + 0.1
+            and request_started_epoch <= received <= request_completed_epoch
         )
         bbo_valid = bool(bid > 0 and ask >= bid)
         if not request_attempted:
@@ -908,10 +908,14 @@ class PrunedCandidateBBOCollector:
             gap_reason = "not_applicable_capture_pass"
 
         observed_epoch = received if status == "captured" else request_completed_epoch
+        from src.trading.market.quote_consistency import (
+            build_market_data_health, rest_quote_receive_age_ms,
+        )
+
+        health = build_market_data_health(snapshot, now_ts=request_completed_epoch)
         quote_age_ms = (
-            max(0.0, (request_completed_epoch - received) * 1000.0)
-            if status == "captured"
-            else None
+            rest_quote_receive_age_ms(snapshot, now_ts=request_completed_epoch)
+            if status == "captured" else None
         )
         terminal_sample = sample_index + 1 >= len(
             episode.get("scheduled_offsets_sec") or []
@@ -1009,6 +1013,7 @@ class PrunedCandidateBBOCollector:
                 ask_qty if status == "captured" and ask_qty >= 0 else None
             ),
             "scanner_prune_observer_quote_age_ms": quote_age_ms,
+            "market_data_health": health,
             "scanner_prune_observer_bid_req_base_tm": str(
                 snapshot.get("bid_req_base_tm") or "absent_or_undocumented"
             ),

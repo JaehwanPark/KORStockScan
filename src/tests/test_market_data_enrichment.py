@@ -4,6 +4,7 @@ from src.engine.scalping.market_data_enrichment import (
     CONFLICTED,
     FRESH_WS,
     REST_ENRICHED,
+    STALE,
     SIGNED_TAPE_BUY_DOMINATED,
     SIGNED_TAPE_SELL_DOMINATED,
     build_market_data_enrichment,
@@ -103,6 +104,21 @@ def test_enrichment_uses_depth_clock_not_program_clock():
     _, fields = build_market_data_enrichment(ws_data=ws, now_ts=1000.0)
     assert fields["market_data_ws_quote_age_ms"] == 10000.0
     assert fields["market_data_freshness_state"] != FRESH_WS
+
+
+def test_effective_quote_receipt_preserves_depth_clock_when_program_updates():
+    ws = {
+        "curr": 10000,
+        "best_bid": 9990,
+        "best_ask": 10010,
+        "last_ws_update_ts": 1000.0,
+        "last_realtime_type_ts": {"0D": 999.5, "0w": 1000.0},
+    }
+    _, fields = build_market_data_enrichment(ws_data=ws, now_ts=1000.0)
+    assert fields["market_data_freshness_state"] == FRESH_WS
+    assert fields["market_data_effective_quote_age_ms"] == 500.0
+    assert fields["market_data_effective_quote_observed_epoch"] == 999.5
+    assert fields["market_data_effective_quote_reference_epoch"] == 1000.0
 
 
 def test_market_data_enrichment_uses_fresh_ws_without_rest():
@@ -345,10 +361,13 @@ def test_market_data_enrichment_reported_ws_age_without_time_basis_is_labeled_un
         now_ts=1000.0,
     )
 
-    assert fields["market_data_freshness_state"] == FRESH_WS
+    assert fields["market_data_freshness_state"] == STALE
     assert (
         fields["market_data_ws_age_basis"] == "reported_age_no_time_basis:quote_age_ms"
     )
+
+    assert fields["market_data_ws_quote_age_ms"] == "-"
+    assert _enriched["quote_stale"] is True
 
 
 def test_market_data_enrichment_rejects_ka10004_without_receive_timestamp_as_fresh():
@@ -529,3 +548,13 @@ def test_market_data_signed_tape_accepts_fresh_official_ka10084_time_shape():
     assert fields["market_data_signed_tape_age_basis"].endswith(
         "source_time:ka10084_tm"
     )
+
+
+def test_market_data_enrichment_future_rest_receipt_is_never_fresh():
+    _enriched, fields = build_market_data_enrichment(
+        ws_data={}, rest_orderbook={**_rest_orderbook(10000), "rest_received_ts": 1000.001},
+        now_ts=1000.0,
+    )
+    assert fields["market_data_freshness_state"] == STALE
+    assert fields["market_data_rest_quote_age_ms"] < 0
+    assert _enriched["quote_stale"] is True

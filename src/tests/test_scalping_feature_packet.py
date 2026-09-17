@@ -1,4 +1,6 @@
 import json
+
+import pytest
 from datetime import datetime, timedelta
 
 from src.engine import ai_engine_openai as openai_module
@@ -1156,10 +1158,10 @@ def test_extract_scalping_feature_packet_uses_ws_update_timestamp_for_quote_age(
     )
     fields = build_scalping_feature_audit_fields(packet)
 
-    assert packet["quote_age_ms"] == 450
+    assert packet["quote_age_ms"] == pytest.approx(450, abs=0.001)
     assert packet["quote_age_source"] == "last_ws_update_ts"
     assert packet["quote_stale"] is False
-    assert fields["quote_age_ms"] == 450
+    assert fields["quote_age_ms"] == pytest.approx(450, abs=0.001)
     assert fields["quote_age_source"] == "last_ws_update_ts"
     assert fields["quote_stale_threshold_ms"] == 3000
     assert fields["quote_stale"] is False

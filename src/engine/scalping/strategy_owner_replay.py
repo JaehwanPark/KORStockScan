@@ -231,8 +231,10 @@ def observe_seed(handlers, stock, code, *, now_ts, ws_data, entry=None, ai_engin
                 levels = (ws_data.get("orderbook") or {}).get("asks") or []
                 available = finite_number(levels[0].get("volume")) if levels else None
                 depth_price = finite_number(levels[0].get("price")) if levels else None
-            quote_ts = ws_data.get("last_ws_update_ts")
-            age = now_ts - quote_ts if _finite(quote_ts) else None
+            from src.trading.market.quote_consistency import ws_quote_receive_age_ms
+
+            quote_age_ms = ws_quote_receive_age_ms(ws_data, now_ts=now_ts)
+            age = quote_age_ms / 1000.0 if quote_age_ms is not None else None
             if (
                 type(qty) is not int
                 or qty <= 0

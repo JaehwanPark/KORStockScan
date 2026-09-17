@@ -13,6 +13,7 @@ from typing import Any
 from src.trading.market.quote_consistency import (
     build_market_data_health,
     ws_quote_receive_age_ms,
+    ws_quote_source_receipt,
 )
 
 FRESH_WS = "fresh_ws"
@@ -66,7 +67,7 @@ def _epoch_ms_to_age_ms(value: Any, now_ts: float) -> float | None:
         return None
     if parsed > 10_000_000_000:
         parsed = parsed / 1000.0
-    return max(0.0, (float(now_ts) - float(parsed)) * 1000.0)
+    return (float(now_ts) - float(parsed)) * 1000.0
 
 
 def _age_ms_from_keys(
@@ -114,13 +115,12 @@ def _age_details(
                     float(reported_age) + elapsed,
                     f"reported_age_plus_elapsed:{key}:{snapshot_key}",
                 )
-        return float(reported_age), f"reported_age_no_time_basis:{key}"
+        return None, f"reported_age_no_time_basis:{key}"
     return None, "missing"
 
 
 def _ws_age_details(ws_data: dict[str, Any], now_ts: float) -> tuple[float | None, str]:
-    type_times = ws_data.get("last_realtime_type_ts")
-    if isinstance(type_times, dict):
+    if "last_realtime_type_ts" in ws_data:
         age = ws_quote_receive_age_ms(ws_data, now_ts=now_ts)
         return age, (
             "last_realtime_type_ts.0D"
@@ -355,9 +355,9 @@ def _rest_signed_tape_source_age_ms(
         return None, "invalid_source_timestamp"
 
     delta_ms = (float(now_ts) - observed.timestamp()) * 1000.0
-    if delta_ms < -1000.0:
+    if delta_ms < 0:
         return None, "future_source_timestamp"
-    return max(0.0, delta_ms), "source_time:ka10084_tm"
+    return delta_ms, "source_time:ka10084_tm"
 
 
 def rest_signed_tape_tick_freshness(
@@ -383,7 +383,8 @@ def rest_signed_tape_tick_freshness(
         return False, None, f"{receive_basis}|{source_basis}"
     effective_age = max(float(receive_age), float(source_age))
     return (
-        effective_age <= max(0.0, float(max_age_ms)),
+        0 <= receive_age <= max(0.0, float(max_age_ms))
+        and 0 <= source_age <= max(0.0, float(max_age_ms)),
         effective_age,
         f"{receive_basis}|{source_basis}",
     )
@@ -547,6 +548,12 @@ def build_market_data_enrichment(
         base, now_ts=now_value, quote_max_age_ms=int(max_ws_age_ms)
     )
     rest_orderbook = rest_orderbook if isinstance(rest_orderbook, dict) else {}
+    if rest_orderbook:
+        # Preserve WS activity facts while re-evaluating the separate REST book.
+        # Neither a carried companion nor the enrichment/copy clock is evidence.
+        base["market_data_health"]["rest_quote"] = build_market_data_health(
+            rest_orderbook, now_ts=now_value, quote_max_age_ms=int(max_rest_age_ms)
+        )["rest_quote"]
     metadata = candidate_metadata if isinstance(candidate_metadata, dict) else {}
     ws_levels = _quote_levels(base)
     rest_levels = _quote_levels(rest_orderbook)
@@ -590,7 +597,7 @@ def build_market_data_enrichment(
         and 0 <= ws_age <= max_ws_age_ms
     )
     rest_fresh = bool(
-        rest_usable and rest_age is not None and rest_age <= max_rest_age_ms
+        rest_usable and rest_age is not None and 0 <= rest_age <= max_rest_age_ms
     )
     gap = _gap_bps(ws_levels, rest_levels)
     conflicted = bool(
@@ -722,7 +729,11 @@ def build_market_data_enrichment(
         "market_data_effective_quote_observed_epoch": (
             _safe_float(rest_orderbook.get("rest_received_ts"), None)
             if effective_source == "ka10004_rest_orderbook"
-            else _safe_float(base.get("last_ws_update_ts"), None)
+            else (
+                ws_quote_source_receipt(base, now_ts=now_value).get("observed_epoch")
+                if effective_source == "ws"
+                else None
+            )
         ),
         # Quote age is measured against this instant.  Persist it separately
         # from pipeline-event emission time so source-only consumers can audit
@@ -766,6 +777,7 @@ def build_market_data_enrichment(
         "market_data_forbidden_uses": MARKET_DATA_FORBIDDEN_USES,
         **signed_fields,
     }
+    base["quote_stale"] = freshness_state in {STALE, MISSING, CONFLICTED}
     base.update(fields)
     if rest_signed_ticks:
         base["rest_signed_trade_ticks"] = list(rest_signed_ticks)

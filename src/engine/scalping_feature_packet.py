@@ -637,8 +637,8 @@ def extract_scalping_feature_packet(
     quote_stale_threshold_ms, _ = normalize_quote_stale_threshold(
         snapshot.get("ai_quote_stale_max_ms")
     )
-    tick_stale = tick_latest_age_ms is not None and tick_latest_age_ms > 5000
-    quote_stale = quote_age_ms is not None and quote_age_ms > quote_stale_threshold_ms
+    tick_stale = tick_latest_age_ms is not None and not 0 <= tick_latest_age_ms <= 5000
+    quote_stale = quote_age_ms is not None and not 0 <= quote_age_ms <= quote_stale_threshold_ms
     tick_context_quality = "unknown"
     if not ticks:
         tick_context_quality = "missing_ticks"
@@ -747,6 +747,7 @@ def extract_scalping_feature_packet(
 
     return {
         "packet_version": SCALP_FEATURE_PACKET_VERSION,
+        "market_data_health": snapshot.get("market_data_health"),
         "curr_price": curr_price,
         "latest_strength": latest_strength,
         "spread_krw": spread_krw,
@@ -910,6 +911,7 @@ def build_scalping_feature_audit_fields(packet):
     payload = packet or {}
     microstructure_computed = "microstructure_reaction_context_version" in payload
     return {
+        "market_data_health": payload.get("market_data_health"),
         **microstructure_delivery_fields(payload),
         "scalp_feature_packet_version": str(
             payload.get("packet_version", SCALP_FEATURE_PACKET_VERSION)

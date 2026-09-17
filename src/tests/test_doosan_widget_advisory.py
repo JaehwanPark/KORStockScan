@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+import time
 
 from src.engine.monitoring import doosan_widget_advisory as doosan
 from src.engine.monitoring import doosan_widget_contract as contract
@@ -991,6 +992,7 @@ def test_collector_uses_cached_token_and_auxiliary_read_only_market_requests(
     monkeypatch, tmp_path
 ):
     now = datetime(2026, 8, 5, 10, 0, 5, tzinfo=KST)
+    monkeypatch.setattr(time, "time", lambda: now.timestamp())
     monkeypatch.setattr(
         doosan.kiwoom_utils, "get_cached_kiwoom_token", lambda _: "TOKEN"
     )

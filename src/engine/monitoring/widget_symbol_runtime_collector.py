@@ -482,7 +482,7 @@ class WidgetSymbolRuntimeCollector:
             )
             self._quote_cache[cache_key] = (bucket, payload, received)
         cached = self._quote_cache[cache_key]
-        return dict(cached[1]), max(0.0, (observed_at - cached[2]).total_seconds())
+        return dict(cached[1]), (observed_at - cached[2]).total_seconds()
 
     def _shared_market_payload(
         self,
@@ -549,9 +549,7 @@ class WidgetSymbolRuntimeCollector:
                 received,
             )
         bbo = dict(self._bbo_cache[cache_key][1])
-        bbo["age_sec"] = max(
-            0.0, (observed_at - self._bbo_cache[cache_key][2]).total_seconds()
-        )
+        bbo["age_sec"] = (observed_at - self._bbo_cache[cache_key][2]).total_seconds()
         return bbo
 
     @staticmethod

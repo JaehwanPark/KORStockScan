@@ -6032,7 +6032,7 @@ def test_rising_missed_one_share_hook_retries_not_evaluated_ai_before_block(
     submitted = state_handlers._maybe_submit_rising_missed_one_share_entry(
         stock,
         "123456",
-        {"curr": 10000, "v_pw": 100.0},
+        {"last_ws_update_ts": 1000.0, "best_bid": 10000, "best_ask": 10010, "curr": 10000, "v_pw": 100.0},
         admin_id=1,
         runtime=runtime,
         strategy="SCALPING",
@@ -8924,7 +8924,7 @@ def test_rising_missed_one_share_entry_blocks_fresh_adverse_micro_before_submit(
             "last_watching_ai_action": "BUY",
         },
         "319660",
-        {
+        {"last_ws_update_ts": now_ts - .134907, "best_bid": 195400, "best_ask": 195500,
             "curr": 195400,
             "v_pw": 100.0,
             "quote_age_ms": 134.907,
@@ -9343,7 +9343,7 @@ def test_rising_missed_quality_guard_pre_envelope_compares_fresh_ws_with_rest(
     refreshed_ws, fields = state_handlers._rising_missed_quality_guard_pre_envelope(
         {},
         "123462",
-        {
+        {"last_ws_update_ts": 999.9,
             "curr": 10000,
             "best_bid": 9990,
             "best_ask": 10000,
@@ -9467,7 +9467,7 @@ def test_rising_missed_submit_safety_prefers_fresh_live_ws_over_older_scanner_ca
             "market_data_signed_tape_sample_count": 5,
             "market_data_rest_signed_tape_pressure_usable": False,
         },
-        "_scanner_market_data_enrichment_ws_data": {
+        "_scanner_market_data_enrichment_ws_data": {"last_ws_update_ts": 999.5,
             "curr": 9900,
             "best_bid": 9890,
             "best_ask": 9900,
@@ -9481,7 +9481,7 @@ def test_rising_missed_submit_safety_prefers_fresh_live_ws_over_older_scanner_ca
 
     merged = state_handlers._merge_scanner_market_data_enrichment_into_ws_data(
         stock,
-        {
+        {"last_ws_update_ts": 999.9,
             "curr": 10000,
             "best_bid": 9990,
             "best_ask": 10000,
@@ -9530,7 +9530,7 @@ def test_rising_missed_submit_safety_preserves_cached_conflict_until_rest_rechec
             "market_data_ws_rest_gap_bps": 250.0,
             "market_data_source_selection_policy": "freshest_age",
         },
-        "_scanner_market_data_enrichment_ws_data": {
+        "_scanner_market_data_enrichment_ws_data": {"last_ws_update_ts": 999.5,
             "curr": 9900,
             "best_bid": 9890,
             "best_ask": 9900,
@@ -9541,7 +9541,7 @@ def test_rising_missed_submit_safety_preserves_cached_conflict_until_rest_rechec
             "market_data_ws_rest_gap_bps": 250.0,
         },
     }
-    current_ws = {
+    current_ws = {"last_ws_update_ts": 999.9,
         "curr": 10000,
         "best_bid": 9990,
         "best_ask": 10000,
@@ -27719,7 +27719,7 @@ def test_watching_state_logs_latency_entry_price_guard(monkeypatch):
     state_handlers.handle_watching_state(
         stock=stock,
         code="123456",
-        ws_data={
+        ws_data={"last_ws_update_ts": state_handlers.time.time(),
             "curr": 10_020,
             "v_pw": 120.0,
             "ask_tot": 20_000,
@@ -27903,7 +27903,7 @@ def test_watching_state_blocks_quote_fresh_composite_negative_orderbook_micro(
     state_handlers.handle_watching_state(
         stock=stock,
         code="123456",
-        ws_data={
+        ws_data={"last_ws_update_ts": state_handlers.time.time(),
             "curr": 10_020,
             "v_pw": 120.0,
             "ask_tot": 20_000,
@@ -28163,7 +28163,7 @@ def test_rising_missed_normal_buy_bridge_controls_first_ai_score_prior_path(
     state_handlers.handle_watching_state(
         stock=stock,
         code="123456",
-        ws_data={
+        ws_data={"last_ws_update_ts": state_handlers.time.time(),
             "curr": 10_020,
             "v_pw": 120.0,
             "ask_tot": 20_000,
@@ -28644,7 +28644,7 @@ def test_ai_numeric_consistency_recheck_failed_attempt_consumes_symbol_budget(
     state_handlers.handle_watching_state(
         stock=stock,
         code="123456",
-        ws_data={
+        ws_data={"last_ws_update_ts": state_handlers.time.time(),
             "curr": 10020,
             "v_pw": 120.0,
             "ask_tot": 20000,
@@ -28817,7 +28817,7 @@ def test_ai_numeric_consistency_recheck_corrected_updates_last_reason(monkeypatc
     state_handlers.handle_watching_state(
         stock=stock,
         code="123456",
-        ws_data={
+        ws_data={"last_ws_update_ts": state_handlers.time.time(),
             "curr": 10020,
             "v_pw": 120.0,
             "ask_tot": 20000,
@@ -28991,7 +28991,7 @@ def test_ai_numeric_consistency_recheck_buy_below_min_score_does_not_arm_entry(
     state_handlers.handle_watching_state(
         stock=stock,
         code="123456",
-        ws_data={
+        ws_data={"last_ws_update_ts": state_handlers.time.time(),
             "curr": 10020,
             "v_pw": 120.0,
             "ask_tot": 20000,
@@ -29473,7 +29473,7 @@ def test_watching_state_blocks_deep_below_bid_pre_submit_price(monkeypatch):
     state_handlers.handle_watching_state(
         stock=stock,
         code="001440",
-        ws_data={
+        ws_data={"last_ws_update_ts": state_handlers.time.time(),
             "curr": 50_500,
             "v_pw": 120.0,
             "ask_tot": 20_000,
@@ -30550,7 +30550,7 @@ def test_scalping_pre_ai_context_reaches_ai_and_blocks_low_liquidity_at_submit(
     state_handlers.handle_watching_state(
         stock=stock,
         code="123123",
-        ws_data={
+        ws_data={"last_ws_update_ts": state_handlers.time.time(),
             "curr": 10_000,
             "v_pw": 100.0,
             "ask_tot": 100,
@@ -30868,7 +30868,7 @@ def test_pre_submit_liquidity_relief_allows_strong_bundle_submit(
     state_handlers.handle_watching_state(
         stock=stock,
         code="555555",
-        ws_data={
+        ws_data={"last_ws_update_ts": state_handlers.time.time(),
             "curr": 10_000,
             "v_pw": 100.0,
             "ask_tot": 100,
@@ -35355,7 +35355,7 @@ def test_entry_arm_skips_strength_recheck_after_ai_confirm(monkeypatch):
         "position_tag": "SCANNER",
         "prob": 0.7,
     }
-    ws_data = {
+    ws_data = {"last_ws_update_ts": state_handlers.time.time(),
         "curr": 10000,
         "v_pw": 100.0,
         "ask_tot": 30000,
@@ -43138,7 +43138,10 @@ def test_holding_stale_ws_rest_quote_recovery_allows_exit_evaluation(monkeypatch
     monkeypatch.setattr(
         state_handlers.kiwoom_utils,
         "fetch_kiwoom_api_continuous",
-        lambda *args, **kwargs: [{"cur_prc": "9,810"}],
+        lambda *args, **kwargs: [{"cur_prc": "9,810", "_kiwoom_source_meta": {
+            "api_id": "ka10001", "request_code": args[3]["stk_cd"],
+            "rest_received_ts_ms": int(now_ts * 1000),
+        }}],
     )
     stock = _dynamic_soft_stop_stock()
     now_ts = datetime(2026, 8, 24, 10, 0, tzinfo=state_handlers._KST).timestamp()
@@ -43216,7 +43219,9 @@ def test_holding_rest_quote_recovery_uses_venue_qualified_premarket_code(
 
     def _fetch(*args, **kwargs):
         requested_payloads.append(args[3])
-        return [{"cur_prc": "9,810"}]
+        return [{"cur_prc": "9,810", "_kiwoom_source_meta": {
+            "api_id": "ka10001", "request_code": "123456_NX", "rest_received_ts_ms": 1_000_000,
+        }}]
 
     monkeypatch.setattr(
         state_handlers.kiwoom_utils,
@@ -43280,7 +43285,10 @@ def test_holding_rest_quote_only_recovery_does_not_inflate_peak(monkeypatch):
     monkeypatch.setattr(
         state_handlers.kiwoom_utils,
         "fetch_kiwoom_api_continuous",
-        lambda *args, **kwargs: [{"cur_prc": "10,500"}],
+        lambda *args, **kwargs: [{"cur_prc": "10,500", "_kiwoom_source_meta": {
+            "api_id": "ka10001", "request_code": args[3]["stk_cd"],
+            "rest_received_ts_ms": int(state_handlers.time.time() * 1000),
+        }}],
     )
     stock = _dynamic_soft_stop_stock(**_fresh_holding_score_fields(90))
 
@@ -44114,7 +44122,10 @@ def test_holding_recent_ws_blocks_divergent_rest_quote_recovery(monkeypatch):
     monkeypatch.setattr(
         state_handlers.kiwoom_utils,
         "fetch_kiwoom_api_continuous",
-        lambda *args, **kwargs: [{"cur_prc": "8,800"}],
+        lambda *args, **kwargs: [{"cur_prc": "8,800", "_kiwoom_source_meta": {
+            "api_id": "ka10001", "request_code": args[3]["stk_cd"],
+            "rest_received_ts_ms": int(state_handlers.time.time() * 1000),
+        }}],
     )
     monkeypatch.setattr(
         state_handlers,

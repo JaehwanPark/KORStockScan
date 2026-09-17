@@ -14485,7 +14485,7 @@ def observe_rising_missed_adverse_micro_recovery_observations(
         type_venues = type_venues if isinstance(type_venues, dict) else {}
         received_at = _safe_float(type_ts.get("0B"), 0.0)
         age_ms = (
-            max(0.0, (observed_ts - received_at) * 1000.0) if received_at > 0 else None
+            (observed_ts - received_at) * 1000.0 if received_at > 0 else None
         )
         price = _safe_float(snapshot.get("curr"), 0.0)
         price_fresh = bool(price > 0 and age_ms is not None and age_ms <= 3000.0)
@@ -15415,7 +15415,7 @@ def observe_rising_missed_nxt_post_block_samplers(
         type_routes = type_routes if isinstance(type_routes, dict) else {}
         received_at = _safe_float(type_ts.get("0B"), 0.0)
         age_ms = (
-            max(0.0, (observed_ts - received_at) * 1000.0) if received_at > 0 else None
+            (observed_ts - received_at) * 1000.0 if received_at > 0 else None
         )
         actual_item = str(type_items.get("0B") or "").strip()
         actual_suffix = str(type_suffixes.get("0B") or "").strip()
@@ -15433,7 +15433,7 @@ def observe_rising_missed_nxt_post_block_samplers(
         fresh = bool(
             price > 0
             and age_ms is not None
-            and age_ms <= max_ws_age_ms
+            and 0 <= age_ms <= max_ws_age_ms
             and item_is_nxt
             and route_is_nxt
             and sample_within_horizon
@@ -15442,7 +15442,7 @@ def observe_rising_missed_nxt_post_block_samplers(
             source_reason = "price_missing"
         elif age_ms is None:
             source_reason = "absolute_0b_receive_ts_missing"
-        elif age_ms > max_ws_age_ms:
+        elif not 0 <= age_ms <= max_ws_age_ms:
             source_reason = "ws_0b_stale"
         elif not item_is_nxt:
             source_reason = "actual_nxt_item_missing"
@@ -15463,11 +15463,9 @@ def observe_rising_missed_nxt_post_block_samplers(
             source_reason = "trade_price_not_executable_for_latency_tick_counterfactual"
 
         quote_received_at = _safe_float(type_ts.get("0D"), 0.0)
-        quote_age_ms = (
-            max(0.0, (observed_ts - quote_received_at) * 1000.0)
-            if quote_received_at > 0
-            else None
-        )
+        from src.trading.market.quote_consistency import ws_quote_receive_age_ms
+
+        quote_age_ms = ws_quote_receive_age_ms(snapshot, now_ts=observed_ts)
         quote_item = str(type_items.get("0D") or "").strip()
         quote_suffix = str(type_suffixes.get("0D") or "").strip()
         quote_route = str(type_routes.get("0D") or "unknown").strip()
@@ -15487,7 +15485,7 @@ def observe_rising_missed_nxt_post_block_samplers(
             and best_bid > 0
             and best_ask >= best_bid
             and quote_age_ms is not None
-            and quote_age_ms <= max_ws_age_ms
+            and 0 <= quote_age_ms <= max_ws_age_ms
             and quote_item_is_nxt
             and quote_route_is_nxt
             and quote_within_horizon
@@ -19197,11 +19195,9 @@ def _capture_rising_missed_entry_turn_bbo_impl(
     ):
         return {**base, "reason": "exact_route_best_quantity_missing_or_invalid"}
     observed_epoch = _safe_float(scoped_ws.get("last_ws_update_ts"), 0.0)
-    quote_age_ms = (
-        max(0.0, (float(now_ts) - observed_epoch) * 1_000.0)
-        if observed_epoch > 0
-        else None
-    )
+    from src.trading.market.quote_consistency import ws_quote_receive_age_ms
+
+    quote_age_ms = ws_quote_receive_age_ms(scoped_ws, now_ts=float(now_ts))
     if (
         best_bid <= 0
         or best_ask < best_bid
@@ -37995,7 +37991,12 @@ def _risky_micro_route_scoped_0d_bbo(
         "best_bid_qty_source_valid": bid_qty_source_valid,
         "orderbook": copy.deepcopy(orderbook),
         "last_ws_update_ts": observed_epoch,
+        "last_realtime_type_ts": {"0D": observed_epoch},
+        "last_realtime_type_item": {"0D": snapshot.get("item")},
+        "realtime_type_snapshots_by_route": {"selected_0D": {"0D": snapshot}},
     }
+    if "market_data_transport_epoch" in ws_data:
+        scoped_ws["market_data_transport_epoch"] = ws_data["market_data_transport_epoch"]
     return scoped_ws, {
         "risky_micro_episode_horizon_observer_route_scope_status": route_scope_status,
         "risky_micro_episode_horizon_observer_route_scope_eligible": True,
@@ -47817,13 +47818,15 @@ def _apply_entry_ai_price_canary(
 
 
 def _get_ws_snapshot_age_sec(ws_data):
-    raw_ts = (ws_data or {}).get("last_ws_update_ts")
-    if raw_ts in (None, "", 0):
+    """Transport age for transport/recovery consumers; not a quote proof."""
+    stamp = (ws_data or {}).get("last_ws_update_ts")
+    if isinstance(stamp, bool):
         return None
     try:
-        age = time.time() - float(raw_ts)
-        return max(0.0, float(age))
-    except Exception:
+        stamp = float(stamp)
+        age = time.time() - stamp
+        return age if stamp > 0 and math.isfinite(age) else None
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -47874,11 +47877,28 @@ def _fetch_holding_rest_quote_snapshot(code, now_ts, *, ws_data=None):
             break
     if curr <= 0:
         return {}
+    meta = row.get("_kiwoom_source_meta")
+    if not isinstance(meta, dict):
+        return {}
+    from src.trading.market.quote_consistency import build_rest_market_data_health
+
+    health = build_rest_market_data_health(
+        row, api_id="ka10001", request_code=request_code,
+        source_meta=meta, now_ts=now_ts,
+    )
+    receipt = health["rest_input"]
+    age_ms = receipt["response_receive_age_ms"]
+    if (not receipt["receipt_binding_proven"] or age_ms is None
+            or not 0 <= age_ms <= _holding_exit_ws_max_age_sec() * 1000.0):
+        return {}
     return {
         "curr": curr,
-        "last_ws_update_ts": float(now_ts),
+        "source": "ka10001_rest_reference_mark",
+        "market_data_health": health,
+        "rest_received_ts_ms": meta.get("rest_received_ts_ms"),
+        "last_ws_update_ts": meta["rest_received_ts_ms"] / 1000.0,
         "quote_stale": False,
-        "quote_age_ms": 0,
+        "quote_age_ms": age_ms,
         "quote_age_source": "ka10001_rest_quote_fallback",
         "ws_snapshot_recovery_source": "holding_ka10001_rest_quote_fallback",
         "ws_snapshot_recovery_epoch": float(now_ts),
@@ -48368,10 +48388,12 @@ def _holding_quote_provenance_fields(
     quote_age_ms = _safe_float(quote_fields.get("quote_consistency_age_ms"), -1.0)
     quote_age_source = "quote_consistency_age_ms"
     if quote_age_ms < 0:
-        age_sec = _get_ws_snapshot_age_sec(ws_data)
-        if age_sec is not None:
-            quote_age_ms = max(0.0, float(age_sec) * 1000.0)
-            quote_age_source = "last_ws_update_ts"
+        from src.trading.market.quote_consistency import ws_quote_receive_age_ms
+
+        adopted_age_ms = ws_quote_receive_age_ms(ws_data, now_ts=now_ts)
+        if adopted_age_ms is not None:
+            quote_age_ms = adopted_age_ms
+            quote_age_source = "canonical_adopted_quote_receive"
         else:
             quote_age_source = "unavailable_fail_closed"
     quote_state = str(quote_fields.get("quote_consistency_state") or "").strip().lower()
@@ -48884,6 +48906,8 @@ def _normalize_pre_ai_strength_ws_timestamp(snapshot: dict | None) -> tuple[dict
     if _safe_int(normalized.get("curr"), 0) <= 0:
         return normalized, ""
 
+    if "last_realtime_type_ts" in normalized:
+        return normalized, ""
     base_ts = _safe_float(normalized.get("last_ws_update_ts"), 0.0)
     candidates: list[tuple[str, float]] = []
     type_ts = normalized.get("last_realtime_type_ts")
@@ -48912,7 +48936,7 @@ def _normalize_pre_ai_strength_ws_timestamp(snapshot: dict | None) -> tuple[dict
         return normalized, ""
     source, candidate_ts = max(candidates, key=lambda item: item[1])
     now_ts = time.time()
-    if candidate_ts <= 0 or candidate_ts > now_ts + 1.0:
+    if candidate_ts <= 0 or candidate_ts > now_ts:
         return normalized, ""
     if base_ts > 0 and candidate_ts <= base_ts:
         return normalized, ""
@@ -48948,7 +48972,10 @@ def _pre_ai_refresh_strength_momentum_ws_snapshot(
         return base, fields
 
     fields["pre_ai_ws_snapshot_refresh_enabled"] = True
-    base_age = _get_ws_snapshot_age_sec(base)
+    from src.trading.market.quote_consistency import ws_trade_receive_age_ms
+
+    base_age_ms = ws_trade_receive_age_ms(base, now_ts=time.time())
+    base_age = base_age_ms / 1000.0 if base_age_ms is not None else None
     max_age_sec = _rule_float("SCALP_PRE_AI_MAX_WS_AGE_SEC", 3.0)
     near_stale_buffer_sec = min(0.5, max(0.0, max_age_sec * 0.2))
     base_history = base.get("strength_momentum_history") or []
@@ -48958,7 +48985,7 @@ def _pre_ai_refresh_strength_momentum_ws_snapshot(
         fields["pre_ai_ws_snapshot_refresh_input_age_ms"] = round(base_age * 1000.0, 3)
     if base_age is None:
         fields["pre_ai_ws_snapshot_refresh_reason"] = "input_timestamp_missing"
-    elif base_age < max(0.0, max_age_sec - near_stale_buffer_sec):
+    elif 0 <= base_age < max(0.0, max_age_sec - near_stale_buffer_sec):
         fields["pre_ai_ws_snapshot_refresh_reason"] = "input_snapshot_fresh"
         return base, fields
     else:
@@ -48984,9 +49011,7 @@ def _pre_ai_refresh_strength_momentum_ws_snapshot(
     )
     latest_ts = _safe_float(latest.get("last_ws_update_ts"), 0.0)
     base_ts = _safe_float(base.get("last_ws_update_ts"), 0.0)
-    latest_age = (
-        None if latest_ts <= 0 else max(0.0, (time.time() - latest_ts) * 1000.0)
-    )
+    latest_age = ws_trade_receive_age_ms(latest, now_ts=time.time())
     history = latest.get("strength_momentum_history") or []
     history_count = len(history) if hasattr(history, "__len__") else 0
     fields.update(
@@ -49004,7 +49029,7 @@ def _pre_ai_refresh_strength_momentum_ws_snapshot(
     if base_ts > 0 and latest_ts < base_ts:
         fields["pre_ai_ws_snapshot_refresh_reason"] = "latest_snapshot_older_than_input"
         return base, fields
-    if latest_age is None or latest_age > max_age_sec * 1000.0:
+    if latest_age is None or not 0 <= latest_age <= max_age_sec * 1000.0:
         fields["pre_ai_ws_snapshot_refresh_reason"] = "latest_snapshot_stale"
         return base, fields
     if _safe_int(latest.get("curr"), 0) <= 0:
@@ -49047,13 +49072,16 @@ def _pre_ai_refresh_quote_ws_snapshot(
         return base, fields
 
     fields["pre_ai_ws_snapshot_refresh_enabled"] = True
-    base_age = _get_ws_snapshot_age_sec(base)
+    from src.trading.market.quote_consistency import ws_quote_receive_age_ms
+
+    base_quote_age_ms = ws_quote_receive_age_ms(base, now_ts=time.time())
+    base_age = base_quote_age_ms / 1000.0 if base_quote_age_ms is not None else None
     max_age_sec = _rule_float("SCALP_PRE_AI_MAX_WS_AGE_SEC", 3.0)
     if base_age is not None:
         fields["pre_ai_ws_snapshot_refresh_input_age_ms"] = round(base_age * 1000.0, 3)
     if (
         base_age is not None
-        and base_age <= max_age_sec
+        and 0 <= base_age <= max_age_sec
         and _safe_int(base.get("curr"), 0) > 0
     ):
         fields["pre_ai_ws_snapshot_refresh_reason"] = "input_snapshot_fresh"
@@ -49079,9 +49107,7 @@ def _pre_ai_refresh_quote_ws_snapshot(
     )
     latest_ts = _safe_float(latest.get("last_ws_update_ts"), 0.0)
     base_ts = _safe_float(base.get("last_ws_update_ts"), 0.0)
-    latest_age = (
-        None if latest_ts <= 0 else max(0.0, (time.time() - latest_ts) * 1000.0)
-    )
+    latest_age = ws_quote_receive_age_ms(latest, now_ts=time.time())
     history = latest.get("strength_momentum_history") or []
     history_count = len(history) if hasattr(history, "__len__") else 0
     fields.update(
@@ -49099,7 +49125,7 @@ def _pre_ai_refresh_quote_ws_snapshot(
     if base_ts > 0 and latest_ts < base_ts:
         fields["pre_ai_ws_snapshot_refresh_reason"] = "latest_snapshot_older_than_input"
         return base, fields
-    if latest_age is None or latest_age > max_age_sec * 1000.0:
+    if latest_age is None or not 0 <= latest_age <= max_age_sec * 1000.0:
         fields["pre_ai_ws_snapshot_refresh_reason"] = "latest_snapshot_stale"
         return base, fields
     if _safe_int(latest.get("curr"), 0) <= 0:
@@ -49117,17 +49143,22 @@ def _update_ai_quote_freshness_fields(ws_data: dict | None) -> dict:
     """Recompute AI quote freshness from the current snapshot instead of preserving stale flags."""
     if not isinstance(ws_data, dict):
         return {}
-    quote_age_sec = _get_ws_snapshot_age_sec(ws_data)
-    if quote_age_sec is not None:
-        quote_age_ms = int(round(quote_age_sec * 1000.0))
+    from src.trading.market.quote_consistency import (
+        build_market_data_health, ws_quote_receive_age_ms,
+    )
+
+    now_ts = time.time()
+    quote_age_ms = ws_quote_receive_age_ms(ws_data, now_ts=now_ts)
+    ws_data["market_data_health"] = build_market_data_health(ws_data, now_ts=now_ts)
+    if quote_age_ms is not None:
         ws_data["quote_age_ms"] = quote_age_ms
-        ws_data["quote_age_source"] = "last_ws_update_ts"
+        ws_data["quote_age_source"] = "canonical_adopted_quote_receive"
         max_quote_age_ms = int(
             float(_rule("SCALP_PRE_AI_MAX_WS_AGE_SEC", 3.0) or 3.0) * 1000.0
         )
         stale_max_ms = max(1, max_quote_age_ms)
         ws_data["ai_quote_stale_max_ms"] = stale_max_ms
-        ws_data["quote_stale"] = quote_age_ms > stale_max_ms
+        ws_data["quote_stale"] = not 0 <= quote_age_ms <= stale_max_ms
         pre_ai_refresh_age_ms = _safe_float(
             ws_data.get("pre_ai_ws_snapshot_refresh_age_ms"), -1.0
         )
@@ -49151,19 +49182,10 @@ def _update_ai_quote_freshness_fields(ws_data: dict | None) -> dict:
         else:
             ws_data["quote_stale_source_class"] = "fresh_at_consume"
         return ws_data
-    elif ws_data.get("orderbook"):
-        ws_data.setdefault("quote_age_source", "orderbook_without_timestamp")
-    quote_freshness = _quote_freshness_bucket(ws_data)
-    if quote_freshness in {"fresh", "aging"}:
-        ws_data["quote_stale"] = False
-    elif quote_freshness == "stale":
-        ws_data["quote_stale"] = True
-    elif ws_data.get("orderbook") and "quote_stale" not in ws_data:
-        ws_data["quote_stale"] = False
-        ws_data.setdefault(
-            "quote_freshness_source_quality",
-            "orderbook_timestamp_missing",
-        )
+    ws_data["quote_age_ms"] = None
+    ws_data["quote_age_source"] = "quote_receive_receipt_unproven"
+    ws_data["quote_stale"] = True
+    ws_data["quote_freshness_source_quality"] = "quote_receive_receipt_unproven"
     return ws_data
 
 
@@ -50343,7 +50365,7 @@ def _limit_down_live_pre_submit_guard(
     reason = "limit_down_live_pre_submit_pass"
     if not contract_valid:
         reason = "limit_down_live_runtime_contract_invalid"
-    elif quote_age_ms is None or quote_age_ms > max_quote_age_ms:
+    elif quote_age_ms is None or not 0 <= quote_age_ms <= max_quote_age_ms:
         reason = "limit_down_live_pre_submit_quote_stale"
     elif not (best_ask >= current > 0 and best_ask >= best_bid > 0):
         reason = "limit_down_live_relocked_or_quote_invalid"
@@ -53036,9 +53058,9 @@ def _strength_momentum_stability_recheck_decision(
     quote_age_ms = _numeric_or_none(fields.get("quote_age_ms"))
     refresh_age_ms = _numeric_or_none(fields.get("refresh_age_ms"))
     refresh_reason = str(fields.get("refresh_reason") or "").strip().lower()
-    quote_fresh = (quote_age_ms is not None and quote_age_ms <= max_ws_age_ms) or (
+    quote_fresh = (quote_age_ms is not None and 0 <= quote_age_ms <= max_ws_age_ms) or (
         refresh_age_ms is not None
-        and refresh_age_ms <= max_ws_age_ms
+        and 0 <= refresh_age_ms <= max_ws_age_ms
         and refresh_reason in {"input_snapshot_fresh", "latest_ws_snapshot_fresh"}
     )
     source_quality_recheckable = (

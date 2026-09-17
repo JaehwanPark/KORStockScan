@@ -3282,15 +3282,10 @@ def test_pre_ai_strength_ws_snapshot_refresh_normalizes_latest_tick_timestamp(
 
     assert fields["pre_ai_ws_snapshot_refresh_applied"] is True
     assert fields["pre_ai_ws_snapshot_refresh_reason"] == "latest_ws_snapshot_fresh"
-    assert (
-        fields["pre_ai_ws_snapshot_refresh_latest_timestamp_normalized_from"]
-        == "last_realtime_type_ts_0B"
-    )
+    assert fields["pre_ai_ws_snapshot_refresh_latest_timestamp_normalized_from"] == ""
     assert fields["pre_ai_ws_snapshot_refresh_age_ms"] < 1000
-    assert (
-        refreshed["pre_ai_last_ws_update_ts_normalized_from"]
-        == "last_realtime_type_ts_0B"
-    )
+    assert refreshed["last_ws_update_ts"] == now - 8.0
+    assert refreshed["last_realtime_type_ts"]["0B"] == now - .2
 
 
 def test_pre_ai_strength_ws_snapshot_refresh_keeps_fresh_input_history_count(
@@ -7971,7 +7966,7 @@ def test_latency_ws_jitter_relief_canary_overrides_reject_danger_to_normal(monke
     monkeypatch.setattr(
         entry_latency_module._CACHE,
         "get_quote_health",
-        lambda code: SimpleNamespace(
+        lambda code, **_scope: SimpleNamespace(
             ws_age_ms=120,
             ws_jitter_ms=320,
             quote_stale=False,
@@ -8024,7 +8019,7 @@ def test_latency_ws_jitter_relief_canary_requires_jitter_only_danger(monkeypatch
     monkeypatch.setattr(
         entry_latency_module._CACHE,
         "get_quote_health",
-        lambda code: SimpleNamespace(
+        lambda code, **_scope: SimpleNamespace(
             ws_age_ms=720,
             ws_jitter_ms=320,
             quote_stale=False,
@@ -8089,7 +8084,7 @@ def test_latency_other_danger_relief_canary_overrides_reject_danger_to_normal(
     monkeypatch.setattr(
         entry_latency_module._CACHE,
         "get_quote_health",
-        lambda code: SimpleNamespace(
+        lambda code, **_scope: SimpleNamespace(
             ws_age_ms=220,
             ws_jitter_ms=0,
             quote_stale=False,
@@ -8155,7 +8150,7 @@ def test_latency_other_danger_relief_canary_enforces_stricter_residual_limits(
     monkeypatch.setattr(
         entry_latency_module._CACHE,
         "get_quote_health",
-        lambda code: SimpleNamespace(
+        lambda code, **_scope: SimpleNamespace(
             ws_age_ms=220,
             ws_jitter_ms=120,
             quote_stale=False,
@@ -8217,7 +8212,7 @@ def test_latency_other_danger_relief_canary_blocks_below_85_signal(monkeypatch):
     monkeypatch.setattr(
         entry_latency_module._CACHE,
         "get_quote_health",
-        lambda code: SimpleNamespace(
+        lambda code, **_scope: SimpleNamespace(
             ws_age_ms=220,
             ws_jitter_ms=0,
             quote_stale=False,
@@ -8281,7 +8276,7 @@ def test_latency_other_danger_relief_canary_blocks_unstable_quote(monkeypatch):
     monkeypatch.setattr(
         entry_latency_module._CACHE,
         "get_quote_health",
-        lambda code: SimpleNamespace(
+        lambda code, **_scope: SimpleNamespace(
             ws_age_ms=220,
             ws_jitter_ms=0,
             quote_stale=False,
@@ -8347,7 +8342,7 @@ def test_latency_quote_fresh_composite_canary_overrides_mixed_danger_to_normal(
     monkeypatch.setattr(
         entry_latency_module._CACHE,
         "get_quote_health",
-        lambda code: SimpleNamespace(
+        lambda code, **_scope: SimpleNamespace(
             ws_age_ms=820,
             ws_jitter_ms=380,
             quote_stale=False,
@@ -8404,7 +8399,7 @@ def test_latency_quote_fresh_composite_price_guard_respects_target_buy_price(
     monkeypatch.setattr(
         entry_latency_module._CACHE,
         "get_quote_health",
-        lambda code: SimpleNamespace(
+        lambda code, **_scope: SimpleNamespace(
             ws_age_ms=820,
             ws_jitter_ms=380,
             quote_stale=False,
@@ -8513,7 +8508,7 @@ def test_latency_quote_fresh_composite_price_guard_uses_valid_tick_at_price_boun
     monkeypatch.setattr(
         entry_latency_module._CACHE,
         "get_quote_health",
-        lambda code: SimpleNamespace(
+        lambda code, **_scope: SimpleNamespace(
             ws_age_ms=820,
             ws_jitter_ms=380,
             quote_stale=False,
@@ -8567,7 +8562,7 @@ def test_latency_quote_fresh_composite_canary_blocks_below_88_signal(monkeypatch
     monkeypatch.setattr(
         entry_latency_module._CACHE,
         "get_quote_health",
-        lambda code: SimpleNamespace(
+        lambda code, **_scope: SimpleNamespace(
             ws_age_ms=820,
             ws_jitter_ms=380,
             quote_stale=False,
@@ -8627,7 +8622,7 @@ def test_latency_signal_quality_quote_composite_backup_canary_overrides_to_norma
     monkeypatch.setattr(
         entry_latency_module._CACHE,
         "get_quote_health",
-        lambda code: SimpleNamespace(
+        lambda code, **_scope: SimpleNamespace(
             ws_age_ms=1040,
             ws_jitter_ms=470,
             quote_stale=False,
@@ -8686,7 +8681,7 @@ def test_latency_signal_quality_quote_composite_backup_blocks_weak_buy_pressure(
     monkeypatch.setattr(
         entry_latency_module._CACHE,
         "get_quote_health",
-        lambda code: SimpleNamespace(
+        lambda code, **_scope: SimpleNamespace(
             ws_age_ms=1040,
             ws_jitter_ms=470,
             quote_stale=False,
@@ -8749,7 +8744,7 @@ def test_latency_mechanical_momentum_relief_overrides_low_ai_score_quote_family(
     monkeypatch.setattr(
         entry_latency_module._CACHE,
         "get_quote_health",
-        lambda code: SimpleNamespace(
+        lambda code, **_scope: SimpleNamespace(
             ws_age_ms=204,
             ws_jitter_ms=383,
             quote_stale=False,
@@ -8809,7 +8804,7 @@ def test_latency_mechanical_momentum_relief_blocks_high_ai_score_to_avoid_axis_o
     monkeypatch.setattr(
         entry_latency_module._CACHE,
         "get_quote_health",
-        lambda code: SimpleNamespace(
+        lambda code, **_scope: SimpleNamespace(
             ws_age_ms=204,
             ws_jitter_ms=383,
             quote_stale=False,
@@ -9937,3 +9932,60 @@ def test_p1_post_probe_defer_has_no_executable_price():
     assert resolved["allowed"] is False
     assert resolved["resolved_order_price"] == 0
     assert resolved["reason"] == "continuation_defer"
+
+
+def test_pre_ai_quote_clock_cannot_be_renewed_by_program_or_reported_age(monkeypatch):
+    now = 1_800_000_000.0
+    monkeypatch.setattr(state_handlers.time, "time", lambda: now)
+    frame = {"last_ws_update_ts": now, "last_realtime_type_ts": {"0D": now - 6},
+             "quote_age_ms": 0, "orderbook": {"best_bid": 10000, "best_ask": 10010}}
+    result = state_handlers._update_ai_quote_freshness_fields(frame)
+    assert result["quote_age_ms"] == 6000
+    assert result["quote_stale"] is True
+    frame["last_realtime_type_ts"] = None
+    result = state_handlers._update_ai_quote_freshness_fields(frame)
+    assert result["quote_age_ms"] is None
+    assert result["quote_stale"] is True
+
+
+def test_pre_ai_future_quote_keeps_signed_age_and_blocks(monkeypatch):
+    now = 1_800_000_000.0
+    monkeypatch.setattr(state_handlers.time, "time", lambda: now)
+    result = state_handlers._update_ai_quote_freshness_fields({
+        "last_ws_update_ts": now, "last_realtime_type_ts": {"0D": now + .001},
+    })
+    assert result["quote_age_ms"] < 0
+    assert result["quote_stale"] is True
+
+
+def test_observer_refresh_rejects_another_epoch_and_preserves_exact_receive_clock(monkeypatch):
+    from types import SimpleNamespace
+    now = 1_800_000_000.0
+    monkeypatch.setattr(entry_latency_module.time, "time", lambda: now)
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_ENABLED", "true")
+    observer = entry_latency_module.ORDERBOOK_STABILITY_OBSERVER
+    observer.reset()
+    observer.record_quote("005930_AL", best_bid=10000, best_ask=10010,
+                          ts=now - .1, transport_epoch=1)
+    source = {"item": "005930_AL", "market_route": "krx_nxt_integrated",
+              "observed_epoch": now - 5, "transport_epoch": 2, "route_sequence": 1}
+    frame = {"last_realtime_type_ts": {"0D": now - 5},
+             "last_realtime_type_item": {"0D": "005930_AL"},
+             "market_data_transport_epoch": 2,
+             "realtime_type_snapshots_by_route": {"integrated": {"0D": source}}}
+    stale = SimpleNamespace(quote_stale=True)
+    unchanged, receipt = entry_latency_module._maybe_refresh_stale_quote_from_observer(
+        code="005930", strategy_id="SCALPING", latest_price=10000, frozen_price=10000,
+        latency=stale, ws_data=frame,
+    )
+    assert unchanged is stale
+    assert not receipt["pre_submit_quote_refresh_applied"]
+    assert receipt["pre_submit_quote_refresh_reason"] == "observer_transport_epoch_unproven"
+    observer.record_quote("005930_AL", best_bid=10000, best_ask=10010,
+                          ts=now - .05, transport_epoch=2)
+    _, receipt = entry_latency_module._maybe_refresh_stale_quote_from_observer(
+        code="005930", strategy_id="SCALPING", latest_price=10000, frozen_price=10000,
+        latency=stale, ws_data=frame,
+    )
+    assert receipt["pre_submit_quote_refresh_applied"]
+    assert receipt["pre_submit_quote_refresh_received_epoch"] == now - .05

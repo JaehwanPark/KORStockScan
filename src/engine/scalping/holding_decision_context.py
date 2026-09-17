@@ -200,20 +200,18 @@ def _age_ms_from_epoch(value: Any, now_epoch: float) -> float | None:
         return None
     if parsed > 10_000_000_000:
         parsed /= 1000.0
-    return max(0.0, (now_epoch - parsed) * 1000.0)
+    return (now_epoch - parsed) * 1000.0
 
 
 def _quote_age_ms(
     ws_data: dict[str, Any], now_epoch: float
 ) -> tuple[float | None, str]:
-    realtime_times = ws_data.get("last_realtime_type_ts")
-    if isinstance(realtime_times, dict) and "0D" in realtime_times:
-        observed = _safe_float(realtime_times["0D"], None)
-        if observed is None or observed <= 0:
-            return None, "invalid_0d_timestamp"
-        if observed > 10_000_000_000:
-            observed /= 1000.0
-        return (now_epoch - observed) * 1000.0, "absolute_timestamp:0D"
+    from src.trading.market.quote_consistency import ws_quote_receive_age_ms
+
+    if "last_realtime_type_ts" in ws_data or "last_ws_update_ts" in ws_data:
+        age = ws_quote_receive_age_ms(ws_data, now_ts=now_epoch)
+        basis = "canonical_adopted_quote_receive" if "last_realtime_type_ts" in ws_data else "absolute_timestamp:last_ws_update_ts"
+        return age, basis if age is not None else "invalid_quote_receive_timestamp"
     for key in ("last_ws_update_ts", "received_at", "received_ts", "timestamp", "ts"):
         if key in ws_data:
             age = _age_ms_from_epoch(ws_data.get(key), now_epoch)
@@ -347,7 +345,7 @@ def _trusted_ws_tape(
         if volume_source and volume_source not in TRUSTED_TICK_VOLUME_SOURCES:
             continue
         age = _tick_age_ms(tick, now_epoch)
-        if age is None or age > max_age_ms:
+        if age is None or not 0 <= age <= max_age_ms:
             continue
         qty = abs(
             _safe_int(
@@ -876,6 +874,9 @@ def build_holding_decision_context(
     tape["fallback_fetched"] = fetched_rest_tape
     tape["fallback_cache_hit"] = rest_tape_cache_hit
 
+    from src.trading.market.quote_consistency import build_market_data_health
+
+    common_health = build_market_data_health(ws, now_ts=now_epoch, quote_max_age_ms=3000)
     levels = _best_levels(ws)
     quote_age_ms, quote_age_basis = _quote_age_ms(ws, now_epoch)
     best_bid = levels["best_bid"]
@@ -1160,6 +1161,7 @@ def build_holding_decision_context(
                 round(quote_age_ms, 3) if quote_age_ms is not None else None
             ),
             "quote_age_basis": quote_age_basis,
+            "market_data_health": common_health,
             "bbo_fresh": bbo_fresh,
             "spread_bps": spread_bps,
             "ask_total_depth": ask_total,

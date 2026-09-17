@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import time
+import math
 import threading
 import hashlib
 import re
@@ -3751,8 +3752,6 @@ def get_stock_orderbook_ka10004(
         else get_effective_kiwoom_code(str(code))
     )
     payload = {"stk_cd": request_code}
-    received_ts = time.time()
-
     try:
         fetch_result = fetch_kiwoom_api_continuous(
             url=url,
@@ -3785,7 +3784,6 @@ def get_stock_orderbook_ka10004(
                     "read_rate_control_status": "wrapper_meta_unavailable",
                 }
             )
-        received_ts = time.time()
     except Exception as e:
         log_info(f"⚠️ [ka10004] 주식호가 조회 실패 [{code}]: {e}")
         empty_meta = _empty_kiwoom_source_meta("ka10004")
@@ -3842,7 +3840,6 @@ def get_stock_orderbook_ka10004(
         "bid_req_base_tm_authority": "raw_not_freshness_input",
         "source_time_basis": "response_received_epoch_ms",
         "rest_freshness_basis": "response_received_epoch_ms",
-        "rest_age_ms": 0,
         "rest_age_source": "response_received_epoch_ms",
         "curr": 0,
         "rest_current_price": 0,
@@ -3859,9 +3856,7 @@ def get_stock_orderbook_ka10004(
         "best_bid_qty": best_bid_qty,
         "ask_tot": _scanner_to_int(row.get("tot_sel_req")),
         "bid_tot": _scanner_to_int(row.get("tot_buy_req")),
-        "rest_received_ts": received_ts,
-        "rest_received_ts_ms": int(received_ts * 1000),
-        "age_ms": 0,
+        "rest_received_ts_ms": source_meta.get("rest_received_ts_ms"),
         "request_control": {
             "request_owner": source_meta.get("request_owner"),
             "request_class": source_meta.get("request_class"),
@@ -3894,6 +3889,11 @@ def get_stock_orderbook_ka10004(
     snapshot["market_data_health"] = build_market_data_health(
         snapshot, now_ts=time.time()
     )
+    age = snapshot["market_data_health"]["rest_quote"]["quote_receive_age_ms"]
+    snapshot["rest_age_ms"] = math.ceil(age) if age is not None else None
+    snapshot["age_ms"] = snapshot["rest_age_ms"]
+    stamp = source_meta.get("rest_received_ts_ms")
+    snapshot["rest_received_ts"] = stamp / 1000.0 if type(stamp) is int and stamp > 0 else None
     return (snapshot, source_meta) if return_meta else snapshot
 
 
@@ -4414,6 +4414,44 @@ def check_execution_strength_ka10046(token, code):
     )
 
 
+def _rest_trade_rows_at_consume(rows, *, api_id, request_code, request_owner,
+                                request_class, reuse=False):
+    """Keep original receive clocks and separate consumer purpose from fetch."""
+    from src.trading.market.quote_consistency import build_rest_market_data_health
+
+    consumed = _cache_clone(rows)
+    now_ts = time.time()
+    for row in consumed:
+        meta = row.get("_kiwoom_source_meta", {})
+        row["market_data_health"] = build_rest_market_data_health(
+            {"stk_cd": row.get("response_item_raw")}, api_id=api_id,
+            request_code=request_code, source_meta=meta, now_ts=now_ts,
+        )
+        row["market_data_consumer_receipt"] = {
+            "request_owner": request_owner,
+            "request_class": request_class,
+            "normalized_cache_reused": reuse,
+            "evaluated_at": now_ts,
+        }
+    return consumed
+
+
+def _rest_trade_rows_cacheable(rows, source_meta, data):
+    stamp = source_meta.get("rest_received_ts_ms")
+    if type(stamp) is not int or stamp <= 0 or not rows:
+        return False
+    if str(data.get("return_code", data.get("rt_cd", ""))) != "0":
+        return False
+    if (source_meta.get("read_rate_control_status") == "deferred"
+            or source_meta.get("read_singleflight_status") == "deferred"
+            or source_meta.get("rate_limit_retry_exhausted") is True):
+        return False
+    receipt = rows[0]["market_data_health"]["rest_input"]
+    age = receipt["response_receive_age_ms"]
+    return (age is not None and math.isfinite(age) and age >= 0
+            and receipt["receipt_binding_proven"])
+
+
 def get_tick_history_ka10003(token, code, limit=10, *, request_owner=None, request_class=None):
     """
     [ka10003] 주식체결정보요청.
@@ -4428,7 +4466,10 @@ def get_tick_history_ka10003(token, code, limit=10, *, request_owner=None, reque
     cache_key = (_market_data_cache_scope(token), cache_key)
     cached = _cache_get("ka10003_ticks", cache_key)
     if cached is not None:
-        return cached
+        return _rest_trade_rows_at_consume(
+            cached, api_id="ka10003", request_code=str(req_code),
+            request_owner=request_owner, request_class=request_class, reuse=True,
+        )
 
     url = get_api_url("/api/dostk/stkinfo")
 
@@ -4439,10 +4480,16 @@ def get_tick_history_ka10003(token, code, limit=10, *, request_owner=None, reque
         purpose["request_owner"] = request_owner
     if request_class is not None:
         purpose["request_class"] = request_class
-    results = fetch_kiwoom_api_continuous(
+    fetched = fetch_kiwoom_api_continuous(
         url=url, token=token, api_id="ka10003", payload=payload, use_continuous=False,
-        **purpose,
+        return_meta=True, **purpose,
     )
+    if isinstance(fetched, tuple) and len(fetched) == 2 and isinstance(fetched[1], dict):
+        results, source_meta = fetched
+    else:
+        results, source_meta = fetched, _empty_kiwoom_source_meta("ka10003")
+
+    from src.trading.market.quote_consistency import build_rest_market_data_health
 
     ticks = []
 
@@ -4502,9 +4549,25 @@ def get_tick_history_ka10003(token, code, limit=10, *, request_owner=None, reque
                     "strength": to_f(item.get("cntr_str")),  # 체결강도
                     "acc_vol": to_i(item.get("acc_trde_qty")),  # 누적거래량
                     "raw": item,
+                    "rest_received_ts_ms": source_meta.get("rest_received_ts_ms"),
+                    "_kiwoom_source_meta": dict(source_meta),
+                    "response_item_raw": data.get("stk_cd"),
+                    "request_code": str(req_code),
+                    "provider_trade_time_raw": item.get("tm"),
+                    "provider_trade_epoch": None,
+                    "market_data_health": build_rest_market_data_health(
+                        data, api_id="ka10003", request_code=str(req_code),
+                        source_meta=source_meta, now_ts=time.time(),
+                    ),
                 }
             )
 
+    ticks = _rest_trade_rows_at_consume(
+        ticks, api_id="ka10003", request_code=str(req_code),
+        request_owner=request_owner, request_class=request_class,
+    )
+    if not ticks or not _rest_trade_rows_cacheable(ticks, source_meta, data):
+        return ticks
     return _cache_set(
         "ka10003_ticks",
         cache_key,
@@ -4720,7 +4783,7 @@ def compute_buy_dominance_from_ka10003_entries(
     }
 
 
-def get_recent_signed_trades_ka10084(token, code, limit=10, tm=""):
+def get_recent_signed_trades_ka10084(token, code, limit=10, tm="", *, request_owner=None, request_class=None):
     """
     [ka10084] 당일전일체결요청.
 
@@ -4740,7 +4803,10 @@ def get_recent_signed_trades_ka10084(token, code, limit=10, tm=""):
     cache_key = (_market_data_cache_scope(token), cache_key)
     cached = _cache_get("ka10084_signed_trades", cache_key)
     if cached is not None:
-        return cached
+        return _rest_trade_rows_at_consume(
+            cached, api_id="ka10084", request_code=str(req_code),
+            request_owner=request_owner, request_class=request_class, reuse=True,
+        )
 
     url = get_api_url("/api/dostk/stkinfo")
     payload = {
@@ -4749,16 +4815,29 @@ def get_recent_signed_trades_ka10084(token, code, limit=10, tm=""):
         "tic_min": "0",
         "tm": request_tm,
     }
-    results = fetch_kiwoom_api_continuous(
+    purpose = {}
+    if request_owner is not None:
+        purpose["request_owner"] = request_owner
+    if request_class is not None:
+        purpose["request_class"] = request_class
+    fetched = fetch_kiwoom_api_continuous(
         url=url,
         token=token,
         api_id="ka10084",
         payload=payload,
         use_continuous=False,
+        return_meta=True, **purpose,
     )
+    if isinstance(fetched, tuple) and len(fetched) == 2 and isinstance(fetched[1], dict):
+        results, meta = fetched
+    else:
+        results, meta = fetched, _empty_kiwoom_source_meta("ka10084")
 
     rows = []
-    received_at = time.time()
+    from src.trading.market.quote_consistency import build_rest_market_data_health
+
+    stamp_ms = meta.get("rest_received_ts_ms")
+    received_at = stamp_ms / 1000.0 if type(stamp_ms) is int and stamp_ms > 0 else None
     if results and isinstance(results[0], dict):
         data = results[0].get("tdy_pred_cntr", [])
         if isinstance(data, list):
@@ -4785,12 +4864,28 @@ def get_recent_signed_trades_ka10084(token, code, limit=10, tm=""):
                         "aggressor_aux_pressure_usable": False,
                         "rest_signed_tape_source": "ka10084",
                         "rest_signed_tape_received_at": received_at,
+                        "rest_received_ts_ms": stamp_ms,
+                        "_kiwoom_source_meta": dict(meta),
+                        "response_item_raw": results[0].get("stk_cd"),
+                        "request_code": str(req_code),
+                        "provider_trade_time_raw": item.get("tm"),
+                        "provider_trade_epoch": None,
+                        "market_data_health": build_rest_market_data_health(
+                            results[0], api_id="ka10084", request_code=str(req_code),
+                            source_meta=meta, now_ts=time.time(),
+                        ),
                         "strength": item.get("cntr_str"),
                         "acc_vol": abs(_parse_signed_int(item.get("acc_trde_qty"), 0)),
                         "raw": item,
                     }
                 )
 
+    rows = _rest_trade_rows_at_consume(
+        rows, api_id="ka10084", request_code=str(req_code),
+        request_owner=request_owner, request_class=request_class,
+    )
+    if not rows or not _rest_trade_rows_cacheable(rows, meta, results[0]):
+        return rows
     return _cache_set(
         "ka10084_signed_trades",
         cache_key,
@@ -5211,6 +5306,7 @@ def _fetch_kiwoom_api_continuous_transport(
                         else request_timeout
                     ),
                 )
+                response_received_ts_ms = int(time.time() * 1000)
                 meta["request_attempt_count"] = (
                     int(meta.get("request_attempt_count") or 0) + 1
                 )
@@ -5338,7 +5434,7 @@ def _fetch_kiwoom_api_continuous_transport(
             break
 
         res_json = response.json()
-        meta["rest_received_ts_ms"] = int(time.time() * 1000)
+        meta["rest_received_ts_ms"] = response_received_ts_ms
 
         # return_code 체크 (정상이 아니면 경고 후 응답값 저장)
         response_code = str(res_json.get("return_code", res_json.get("rt_cd", "0")))
@@ -5413,6 +5509,15 @@ def _fetch_kiwoom_api_continuous_transport(
             )
             pending_failed_token = ""
 
+        if response_code == "0" and api_id in {"ka10001", "ka10003", "ka10004", "ka10084"}:
+            res_json = dict(res_json)
+            res_json["_kiwoom_source_meta"] = {
+                "api_id": api_id,
+                "request_code": normalized_request_code,
+                "rest_received_ts_ms": response_received_ts_ms,
+                "request_owner": normalized_owner,
+                "request_class": str(request_class),
+            }
         all_results.append(res_json)
         meta["page_count"] = len(all_results)
 
