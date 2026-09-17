@@ -481,7 +481,9 @@ class KiwoomLowPriceTwoLegGateway:
         try:
             request_code = entry_liquidity_request_code(self.symbol, route)
             payload = kiwoom_utils.get_tick_history_ka10003(
-                self._token(), request_code, limit=REQUIRED_RECENT_PRINT_COUNT
+                self._token(), request_code, limit=REQUIRED_RECENT_PRINT_COUNT,
+                request_owner="low_price_two_leg_entry_velocity",
+                request_class="execution_critical",
             )
         except Exception as exc:
             return unavailable_entry_execution_velocity_snapshot(

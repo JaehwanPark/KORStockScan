@@ -951,3 +951,24 @@ def test_minute_trend_uses_flat_band_for_small_net_change():
 
     assert trend == "flat"
     assert trend_at == "20260728100100"
+
+
+def test_widget_screen_quote_cannot_take_runtime_required_read_budget(monkeypatch):
+    calls = []
+    def fetch(**kwargs):
+        calls.append(kwargs)
+        return [{"return_code": 0}]
+    monkeypatch.setattr(routes.kiwoom_utils, "fetch_kiwoom_api_continuous", fetch)
+    assert routes._kiwoom_post("token", path="/api/dostk/stkinfo", api_id="ka10001", payload={"stk_cd": "005930"})
+    assert routes._kiwoom_post("token", path="/api/dostk/acnt", api_id="kt00018", payload={"qry_tp": "1", "dmst_stex_tp": "KRX"})
+    assert [c["request_class"] for c in calls] == ["source_only", "runtime_required"]
+    assert all(c["max_retries"] == 1 and c["request_timeout"] == 5 for c in calls)
+
+
+def test_widget_http_fallback_rejects_malformed_success_codes(monkeypatch):
+    for code in (False, True, 0.0, 0.9, None, [], {}):
+        monkeypatch.setattr(routes.kiwoom_utils, "fetch_kiwoom_api_continuous", lambda **kwargs: [{"return_code": code}])
+        assert routes._kiwoom_post("token", path="/api/dostk/stkinfo", api_id="ka10001", payload={"stk_cd": "005930"}) is None
+    for code in (0, "0"):
+        monkeypatch.setattr(routes.kiwoom_utils, "fetch_kiwoom_api_continuous", lambda **kwargs: [{"return_code": code}])
+        assert routes._kiwoom_post("token", path="/api/dostk/stkinfo", api_id="ka10001", payload={"stk_cd": "005930"})

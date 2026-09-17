@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from concurrent.futures import Future, ThreadPoolExecutor
+from collections import OrderedDict
+from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import dataclass, field
-from queue import Empty, SimpleQueue
+import math
 import threading
 import time
 from types import MappingProxyType
@@ -77,7 +78,13 @@ class ScannerAsyncEvalContext:
             raise TypeError("scanner async context requires ScannerGeneration")
         submitted = float(submitted_epoch)
         deadline = float(deadline_epoch)
-        if deadline <= submitted:
+        if (
+            isinstance(submitted_epoch, bool)
+            or isinstance(deadline_epoch, bool)
+            or not math.isfinite(submitted)
+            or not math.isfinite(deadline)
+            or deadline <= submitted
+        ):
             raise ValueError("scanner async context requires future deadline")
         return cls(
             generation=generation,
@@ -172,7 +179,7 @@ class ScannerAsyncEvalCoordinator:
         self._preparation_futures: dict[str, Future] = {}
         self._prepared: dict[str, Mapping[str, Any]] = {}
         self._preparation_timings: dict[str, tuple[float, float]] = {}
-        self._completed: SimpleQueue[ScannerAsyncEvalResult] = SimpleQueue()
+        self._completed: OrderedDict[str, ScannerAsyncEvalResult] = OrderedDict()
         self._ready: dict[str, ScannerAsyncEvalResult] = {}
         self._undrained_request_ids: set[str] = set()
         self._cancelled_generations: set[str] = set()
@@ -210,8 +217,32 @@ class ScannerAsyncEvalCoordinator:
                     request_id=request_id,
                     pending_count=len(self._requests),
                 )
+            if request_id in self._undrained_request_ids:
+                return ScannerAsyncSubmitDecision(
+                    accepted=False,
+                    reason="completed_notification_pending_drain",
+                    request_id=request_id,
+                    pending_count=len(self._requests),
+                )
+            retained = set(self._requests) | set(self._ready) | self._undrained_request_ids
+            if len(retained) >= _MAX_READY_RESULTS:
+                return ScannerAsyncSubmitDecision(
+                    accepted=False,
+                    reason="market_preparation_capacity_deferred",
+                    request_id=request_id,
+                    pending_count=len(self._requests),
+                )
             self._requests[request_id] = request
-            future = self._preparation_executor.submit(self._prepare, request)
+            try:
+                future = self._preparation_executor.submit(self._prepare, request)
+            except Exception:
+                self._requests.pop(request_id, None)
+                return ScannerAsyncSubmitDecision(
+                    accepted=False,
+                    reason="market_preparation_enqueue_failed",
+                    request_id=request_id,
+                    pending_count=len(self._requests),
+                )
             self._preparation_futures[request_id] = future
             future.add_done_callback(
                 lambda completed, rid=request_id: self._on_prepared(rid, completed)
@@ -223,12 +254,13 @@ class ScannerAsyncEvalCoordinator:
                 pending_count=len(self._requests),
             )
 
-    @staticmethod
     def _prepare(
-        request: ScannerAsyncEvalRequest,
+        self, request: ScannerAsyncEvalRequest,
     ) -> tuple[float, float, Mapping[str, Any]]:
         started = time.time()
-        if started > request.context.deadline_epoch:
+        with self._lock:
+            cancelled = self._closed or request.context.generation.generation_id in self._cancelled_generations
+        if cancelled or started > request.context.deadline_epoch:
             return started, started, MappingProxyType({})
         prepared = request.prepare(request.context)
         completed = time.time()
@@ -246,7 +278,7 @@ class ScannerAsyncEvalCoordinator:
             now = time.time()
             self._finish(
                 request,
-                status="preparation_error",
+                status="superseded_before_preparation" if isinstance(exc, CancelledError) else "preparation_error",
                 preparation_started_epoch=now,
                 preparation_completed_epoch=now,
                 completed_epoch=now,
@@ -257,6 +289,7 @@ class ScannerAsyncEvalCoordinator:
             return
         with self._lock:
             generation_cancelled = (
+                self._closed or
                 request.context.generation.generation_id in self._cancelled_generations
             )
         if generation_cancelled:
@@ -270,7 +303,7 @@ class ScannerAsyncEvalCoordinator:
                 prepared_context=prepared,
             )
             return
-        if completed > request.context.deadline_epoch:
+        if completed >= request.context.deadline_epoch:
             self._finish(
                 request,
                 status="preparation_deadline_expired",
@@ -293,23 +326,39 @@ class ScannerAsyncEvalCoordinator:
             )
             return
         with self._lock:
+            if self._requests.get(request_id) is not request:
+                return
             self._prepared[request_id] = prepared
             self._preparation_timings[request_id] = (started, completed)
-        ai_request = HotPathAIRequest.create(
-            request_id=request_id,
-            generation_id=request.context.generation.generation_id,
-            cache_key=request.context.cache_key,
-            endpoint="scanner_entry",
-            venue=request.context.generation.venue,
-            submitted_epoch=completed,
-            deadline_epoch=request.context.deadline_epoch,
-            execute=lambda: self._evaluate_prepared(request, prepared),
-            metadata={
-                "scanner_async_request_id": request_id,
-                "scanner_state_version": request.context.state_version,
-            },
-        )
-        decision = self.ai_dispatcher.submit(ai_request)
+        try:
+            ai_request = HotPathAIRequest.create(
+                request_id=request_id,
+                generation_id=request.context.generation.generation_id,
+                cache_key=request.context.cache_key,
+                endpoint="scanner_entry",
+                venue=request.context.generation.venue,
+                submitted_epoch=completed,
+                deadline_epoch=request.context.deadline_epoch,
+                execute=lambda: self._evaluate_prepared(request, prepared),
+                metadata={
+                    "scanner_async_request_id": request_id,
+                    "scanner_state_version": request.context.state_version,
+                },
+            )
+            decision = self.ai_dispatcher.submit(ai_request)
+        except Exception as exc:
+            self._finish(
+                request,
+                status="ai_dispatch_error",
+                preparation_started_epoch=started,
+                preparation_completed_epoch=completed,
+                completed_epoch=time.time(),
+                observation_only=True,
+                prepared_context=prepared,
+                error_type=type(exc).__name__,
+                error_message="scanner_async_ai_enqueue_failed",
+            )
+            return
         if not decision.accepted:
             self._finish(
                 request,
@@ -373,6 +422,7 @@ class ScannerAsyncEvalCoordinator:
                 continue
             with self._lock:
                 superseded = (
+                    self._closed or
                     request.context.generation.generation_id
                     in self._cancelled_generations
                 )
@@ -440,6 +490,8 @@ class ScannerAsyncEvalCoordinator:
             error_message=error_message,
         )
         with self._lock:
+            if self._requests.get(context.request_id) is not request:
+                return
             self._requests.pop(context.request_id, None)
             self._preparation_futures.pop(context.request_id, None)
             self._prepared.pop(context.request_id, None)
@@ -449,7 +501,9 @@ class ScannerAsyncEvalCoordinator:
             while len(self._ready) > _MAX_READY_RESULTS:
                 oldest_request_id = next(iter(self._ready))
                 self._ready.pop(oldest_request_id, None)
-        self._completed.put(result)
+                self._completed.pop(oldest_request_id, None)
+                self._undrained_request_ids.discard(oldest_request_id)
+            self._completed[context.request_id] = result
 
     def drain_completed(
         self, *, limit: int | None = None
@@ -457,14 +511,11 @@ class ScannerAsyncEvalCoordinator:
         self.poll()
         completed: list[ScannerAsyncEvalResult] = []
         max_items = None if limit is None else max(0, int(limit))
-        while max_items is None or len(completed) < max_items:
-            try:
-                result = self._completed.get_nowait()
-            except Empty:
-                break
-            with self._lock:
+        with self._lock:
+            while self._completed and (max_items is None or len(completed) < max_items):
+                _, result = self._completed.popitem(last=False)
                 self._undrained_request_ids.discard(result.request_id)
-            completed.append(result)
+                completed.append(result)
         return completed
 
     def take_completed(
@@ -540,7 +591,15 @@ class ScannerAsyncEvalCoordinator:
             with self._lock:
                 self._cancelled_generations.add(normalized)
                 while len(self._cancelled_generations) > _MAX_CANCELLED_GENERATIONS:
-                    self._cancelled_generations.pop()
+                    live = {r.context.generation.generation_id for r in self._requests.values()}
+                    removable = next((g for g in self._cancelled_generations if g not in live), None)
+                    if removable is None:
+                        break
+                    self._cancelled_generations.discard(removable)
+                for request_id, future in list(self._preparation_futures.items()):
+                    request = self._requests.get(request_id)
+                    if request and request.context.generation.generation_id == normalized:
+                        future.cancel()
                 stale_ready_ids = [
                     request_id
                     for request_id, result in self._ready.items()

@@ -246,3 +246,25 @@ def test_get_recent_signed_trades_ka10084_preserves_signed_quantities(monkeypatc
     assert ticks[0]["aggressor_source"] == "kiwoom_rest_ka10084_signed_trade_qty"
     assert ticks[0]["aggressor_aux_pressure_usable"] is False
     assert ticks[1]["aggressor_side"] == "BUY"
+
+
+def test_tick_history_preserves_request_purpose_and_legacy_return_shape(monkeypatch):
+    with kiwoom_utils._MARKET_DATA_CACHE_LOCK:
+        kiwoom_utils._MARKET_DATA_CACHE.clear()
+    calls = []
+    monkeypatch.setattr(kiwoom_utils, "get_effective_kiwoom_code", lambda code: code)
+    def fetch(**kwargs):
+        calls.append(kwargs)
+        return [{"cntr_infr": [{"tm": "090010", "cur_prc": "+10100", "cntr_trde_qty": "3"}]}]
+    monkeypatch.setattr(kiwoom_utils, "fetch_kiwoom_api_continuous", fetch)
+    result = kiwoom_utils.get_tick_history_ka10003(
+        "token", "005930_AL", request_owner="widget_auto_trade_entry_velocity", request_class="execution_critical"
+    )
+    assert isinstance(result, list) and result[0]["volume"] == 3
+    assert result[0]["aggressor_source"] == "price_change_heuristic"
+    assert calls[0]["request_class"] == "execution_critical"
+    assert calls[0]["request_owner"] == "widget_auto_trade_entry_velocity"
+    assert calls[0]["payload"] == {"stk_cd": "005930_AL"}
+    assert calls[0]["use_continuous"] is False
+    assert kiwoom_utils.get_tick_history_ka10003("token", "005930_AL") == result
+    assert len(calls) == 1

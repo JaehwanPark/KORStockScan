@@ -497,8 +497,10 @@ def test_production_gateways_request_exact_route_and_latest_ten_prints(
 ):
     calls = []
 
-    def fake_tick_history(token, request_code, *, limit):
+    def fake_tick_history(token, request_code, *, limit, request_owner, request_class):
         calls.append((token, request_code, limit))
+        assert request_owner.endswith("_entry_velocity")
+        assert request_class == "execution_critical"
         now = datetime.now(tz=KST)
         venue = "NXT" if request_code.endswith("_NX") else "KRX"
         return _velocity_ticks(

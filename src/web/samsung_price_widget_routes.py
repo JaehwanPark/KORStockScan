@@ -364,7 +364,7 @@ def _kiwoom_post(token: str, *, path: str, api_id: str, payload: dict):
             max_retries=1,
             use_continuous=False,
             request_owner="samsung_price_widget_http_fallback",
-            request_class="runtime_required",
+            request_class="source_only" if api_id == "ka10001" else "runtime_required",
             request_code=payload.get("stk_cd", "not_applicable"),
             request_timeout=5,
         )
@@ -372,7 +372,8 @@ def _kiwoom_post(token: str, *, path: str, api_id: str, payload: dict):
     except (TypeError, ValueError):
         return None
     try:
-        if int(response_payload["return_code"]) != 0:
+        return_code = response_payload["return_code"]
+        if type(return_code) not in (str, int) or str(return_code).strip() != "0":
             return None
     except (AttributeError, KeyError, TypeError, ValueError):
         return None
