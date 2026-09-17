@@ -76,6 +76,19 @@ def report_path(report_root, day):
     return Path(report_root) / REPORT_TYPE / f"{REPORT_TYPE}_{day}.json"
 
 
+def _read_report_dependency(path):
+    if path.parent.name in {
+        "widget_symbol_signal_policy_research",
+        "low_price_two_leg_expanded_candidate_research",
+    }:
+        from src.engine.monitoring.low_price_two_leg_expanded_candidate_research import (
+            read_report,
+        )
+
+        return read_report(path)
+    return loop.read_object(path, limit=32 * 1024 * 1024)
+
+
 def read_studies(day, *, report_root=DATA_DIR / "report"):
     paths = {
         "widget": Path(report_root)
@@ -89,7 +102,7 @@ def read_studies(day, *, report_root=DATA_DIR / "report"):
     studies, missing = {}, []
     for family, path in paths.items():
         try:
-            value = loop.read_object(path, limit=32 * 1024 * 1024)
+            value = _read_report_dependency(path)
             if (
                 str(value.get("end_date") or value.get("target_date"))
                 != day.isoformat()
@@ -391,7 +404,7 @@ def _refresh(
         for path in sorted(dependency_paths):
             try:
                 dependency_sources[str(path.resolve())] = loop.digest(
-                    loop.read_object(path, limit=32 * 1024 * 1024)
+                    _read_report_dependency(path)
                 )
             except FileNotFoundError:
                 dependency_sources[str(path.resolve())] = None
@@ -495,7 +508,7 @@ def validate_current_receipt(value, day):
                 if os.path.lexists(path):
                     return False
                 continue
-            if loop.digest(loop.read_object(path, limit=32 * 1024 * 1024)) != expected:
+            if loop.digest(_read_report_dependency(path)) != expected:
                 return False
         for publication in value["publications"].values():
             folder = Path(publication["directory"])

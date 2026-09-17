@@ -390,11 +390,18 @@ def test_full_grid_setup_jump_matches_reference_and_warm_append_replays_only_new
 
 
 def test_native_capacity_source_is_once_per_account_and_never_uses_operator_floor(
-    tmp_path,
+    tmp_path, monkeypatch,
 ):
     from src.engine.monitoring.research_native_capacity_source import acquire
-    from zoneinfo import ZoneInfo
 
+    from types import SimpleNamespace
+    from src.engine.monitoring import research_native_capacity_source as source
+
+    captured = datetime.fromisoformat(str(DAY) + "T20:05:00+09:00")
+    monkeypatch.setattr(source, "datetime", SimpleNamespace(
+        now=lambda tz: captured,
+        fromisoformat=datetime.fromisoformat,
+    ))
     calls = []
 
     def inventory(token):
@@ -420,7 +427,7 @@ def test_native_capacity_source_is_once_per_account_and_never_uses_operator_floo
             capacity_contract_version=1,
             requested_stock_code=symbol,
             error="",
-            capacity_observed_at=datetime.now(ZoneInfo("Asia/Seoul")).isoformat(),
+            capacity_observed_at=captured.isoformat(),
         )
 
     adapters = dict(

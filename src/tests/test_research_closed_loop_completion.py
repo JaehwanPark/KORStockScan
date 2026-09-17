@@ -540,3 +540,37 @@ def test_joint_missing_reference_hash_survives_sorted_json_roundtrip():
     assert inputs == portfolio.reference_inputs(restored, "episode")
     assert inputs["missing_reference_lanes"] == ["000001", "999999"]
     assert loop.digest(inputs) == loop.digest(portfolio.reference_inputs(restored, "episode"))
+
+
+def test_refresh_reads_large_studies_and_preserves_contract_rejection(tmp_path):
+    import json
+    from src.engine.automation.machine_research_closed_loop_refresh import (
+        read_studies, _read_report_dependency,
+    )
+
+    day = date(2026, 9, 17)
+    families = {
+        "widget": "widget_symbol_signal_policy_research",
+        "episode": "low_price_two_leg_expanded_candidate_research",
+    }
+    payload = dict(
+        target_date=str(day),
+        closed_loop_contract=loop.SCHEMA,
+        padding="x" * (32 * 1024 * 1024),
+        **loop.AUTHORITY,
+    )
+    for family, producer in families.items():
+        directory = tmp_path / producer
+        directory.mkdir()
+        (directory / f"{producer}_{day}.json").write_text(json.dumps(payload))
+    studies, paths, missing = read_studies(day, report_root=tmp_path)
+    assert set(studies) == set(families) and missing == []
+    assert _read_report_dependency(paths["episode"]) == studies["episode"]
+    unrelated = tmp_path / "unrelated.json"
+    unrelated.write_text(json.dumps(payload))
+    with pytest.raises(ValueError):
+        _read_report_dependency(unrelated)
+    payload["actual_order_submitted"] = True
+    paths["episode"].write_text(json.dumps(payload))
+    studies, _, missing = read_studies(day, report_root=tmp_path)
+    assert set(studies) == {"widget"} and missing == ["episode"]
