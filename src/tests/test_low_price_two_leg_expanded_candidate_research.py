@@ -36,7 +36,9 @@ class FakeResponse:
         return {"return_code": 0, "stk_min_pole_chart_qry": self._rows}
 
 
-def test_expanded_research_fingerprint_is_stable_and_policy_sensitive(monkeypatch, tmp_path) -> None:
+def test_expanded_research_fingerprint_is_stable_and_policy_sensitive(
+    monkeypatch, tmp_path
+) -> None:
     profile_id, profile = next(iter(expanded.RESEARCH_PROFILES.items()))
     bar = Bar(
         datetime(2026, 9, 14, 9, 10, tzinfo=ZoneInfo("Asia/Seoul")),
@@ -71,22 +73,42 @@ def test_expanded_research_fingerprint_is_stable_and_policy_sensitive(monkeypatc
     from pathlib import Path
 
     report_path = tmp_path / "report.json"
-    report_path.write_text(json.dumps({
-        "schema": expanded.REPORT_SCHEMA, "target_date": "2026-09-14",
-        "status": "complete", "source_input_fingerprint": first,
-        "runtime_effect": False, "allowed_runtime_apply": False,
-    }))
+    report_path.write_text(
+        json.dumps(
+            {
+                "schema": expanded.REPORT_SCHEMA,
+                "target_date": "2026-09-14",
+                "status": "complete",
+                "source_input_fingerprint": first,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+            }
+        )
+    )
     original_read = Path.read_bytes
     for helper_name in ("low_price_two_leg_entry_spot_research.py", "tick_utils.py"):
         with monkeypatch.context() as patch:
-            patch.setattr(Path, "read_bytes", lambda path: original_read(path) +
-                          (b"\n# semantic revision\n" if path.name == helper_name else b""))
+            patch.setattr(
+                Path,
+                "read_bytes",
+                lambda path: original_read(path)
+                + (b"\n# semantic revision\n" if path.name == helper_name else b""),
+            )
             changed = expanded.research_input_fingerprint(**kwargs)
             assert changed != first
-            assert expanded.reusable_report(report_path, target_date=kwargs["target_date"], fingerprint=changed) is None
+            assert (
+                expanded.reusable_report(
+                    report_path, target_date=kwargs["target_date"], fingerprint=changed
+                )
+                is None
+            )
     with monkeypatch.context() as patch:
         original_contract = expanded.canonical_cost_contract()
-        patch.setattr(expanded, "canonical_cost_contract", lambda: {**original_contract, "version": "changed"})
+        patch.setattr(
+            expanded,
+            "canonical_cost_contract",
+            lambda: {**original_contract, "version": "changed"},
+        )
         assert expanded.research_input_fingerprint(**kwargs) != first
     with monkeypatch.context() as patch:
         patch.setattr(expanded, "COST_PCT", expanded.COST_PCT + 0.01)
@@ -96,25 +118,23 @@ def test_expanded_research_fingerprint_is_stable_and_policy_sensitive(monkeypatc
 
 def test_exact_date_report_reuse_requires_matching_fingerprint(tmp_path) -> None:
     path = tmp_path / "report.json"
-    report = {
-        "schema": expanded.REPORT_SCHEMA,
-        "target_date": "2026-09-14",
-        "status": "complete",
-        "source_input_fingerprint": "a" * 64,
-        "runtime_effect": False,
-        "allowed_runtime_apply": False,
+    report = _notification_report()
+    report["source_input_fingerprint"] = "a" * 64
+    report["result_cache_receipt"] = {
+        "schema": expanded.REPORT_CACHE_SCHEMA,
+        "body_sha256": expanded._report_cache_digest(report),
     }
     path.write_text(json.dumps(report), encoding="utf-8")
 
     assert (
         expanded.reusable_report(
-            path, target_date=date(2026, 9, 14), fingerprint="a" * 64
+            path, target_date=date(2026, 8, 24), fingerprint="a" * 64
         )
         == report
     )
     assert (
         expanded.reusable_report(
-            path, target_date=date(2026, 9, 14), fingerprint="b" * 64
+            path, target_date=date(2026, 8, 24), fingerprint="b" * 64
         )
         is None
     )
@@ -124,7 +144,251 @@ def test_exact_date_report_reuse_requires_matching_fingerprint(tmp_path) -> None
 def test_reusable_report_corrupt_or_non_object_is_cache_miss(tmp_path, raw):
     path = tmp_path / "report.json"
     path.write_text(raw)
-    assert expanded.reusable_report(path, target_date=date(2026, 9, 14), fingerprint="a" * 64) is None
+    assert (
+        expanded.reusable_report(
+            path, target_date=date(2026, 9, 14), fingerprint="a" * 64
+        )
+        is None
+    )
+
+
+def _sealed_cache_report():
+    report = _notification_report()
+    report["source_input_fingerprint"] = "a" * 64
+    report["result_cache_receipt"] = {
+        "schema": expanded.REPORT_CACHE_SCHEMA,
+        "body_sha256": expanded._report_cache_digest(report),
+    }
+    return report
+
+
+def _read_cache_fixture(path):
+    return expanded.reusable_report(
+        path, target_date=date(2026, 8, 24), fingerprint="a" * 64
+    )
+
+
+def test_report_writer_seals_current_body_without_mutating_caller(
+    monkeypatch, tmp_path
+):
+    from copy import deepcopy
+
+    report = _sealed_cache_report()
+    report["telegram_status"] = "sent"
+    before = deepcopy(report)
+    monkeypatch.setattr(
+        expanded, "render_markdown", lambda value: "source-only fixture\n"
+    )
+    path, _ = expanded.write_report(report, tmp_path)
+    restored = _read_cache_fixture(path)
+    assert restored is not None
+    assert restored["telegram_status"] == "sent"
+    assert (
+        restored["result_cache_receipt"]["body_sha256"]
+        != before["result_cache_receipt"]["body_sha256"]
+    )
+    assert report == before
+    assert expanded.CandidateRecommendationNotifier._valid_report(restored)
+
+
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        ("profiles", {}),
+        ("recommendations", [{}]),
+        ("cost_pct", 0),
+        ("telegram_status", "forged"),
+        ("source_meta", {}),
+    ],
+)
+def test_report_cache_body_tamper_is_miss(tmp_path, key, value):
+    report = _sealed_cache_report()
+    report[key] = value
+    path = tmp_path / "report.json"
+    path.write_text(json.dumps(report))
+    assert _read_cache_fixture(path) is None
+
+
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        ("status", "running"),
+        ("status", "waiting"),
+        ("status", "failed"),
+        ("status", "source_quality_blocked"),
+        ("status", "complete"),
+        ("status", []),
+        ("authority", "real_order_authority"),
+        ("actual_order_submitted", True),
+        ("cost_pct", 0),
+        ("profiles", []),
+        ("recommendations", [{}]),
+    ],
+)
+def test_report_cache_seal_does_not_replace_semantic_validation(tmp_path, key, value):
+    report = _sealed_cache_report()
+    report[key] = value
+    report["result_cache_receipt"]["body_sha256"] = expanded._report_cache_digest(
+        report
+    )
+    path = tmp_path / "report.json"
+    path.write_text(json.dumps(report))
+    assert _read_cache_fixture(path) is None
+
+
+def test_old_unsealed_report_and_nonfinite_result_are_miss(tmp_path):
+    report = _sealed_cache_report()
+    path = tmp_path / "report.json"
+    report.pop("result_cache_receipt")
+    path.write_text(json.dumps(report))
+    assert _read_cache_fixture(path) is None
+    report = _sealed_cache_report()
+    report["diagnostic"] = float("nan")
+    path.write_text(json.dumps(report))
+    assert _read_cache_fixture(path) is None
+
+
+@pytest.mark.parametrize(
+    "kind",
+    ["leaf_symlink", "parent_symlink", "fifo", "oversize", "changed_during_read"],
+)
+def test_report_cache_rejects_unsafe_or_unstable_reader(monkeypatch, tmp_path, kind):
+    import os
+    import stat
+
+    path = tmp_path / "report.json"
+    path.write_text(json.dumps(_sealed_cache_report()))
+    if kind == "leaf_symlink":
+        other = tmp_path / "link.json"
+        other.symlink_to(path)
+        path = other
+    elif kind == "parent_symlink":
+        parent = tmp_path / "linked"
+        parent.symlink_to(tmp_path, target_is_directory=True)
+        path = parent / path.name
+    elif kind == "fifo":
+        path = tmp_path / "fifo"
+        os.mkfifo(path)
+    elif kind == "oversize":
+        monkeypatch.setattr(expanded, "REPORT_CACHE_MAX_BYTES", 8)
+    elif kind == "changed_during_read":
+        original = os.fstat
+        calls = 0
+
+        def altered(fd):
+            nonlocal calls
+            value = original(fd)
+            if stat.S_ISREG(value.st_mode):
+                calls += 1
+                if calls == 2:
+                    return SimpleNamespace(
+                        **{
+                            key: getattr(value, key)
+                            for key in ("st_dev", "st_ino", "st_size", "st_mtime_ns")
+                        },
+                        st_ctime_ns=value.st_ctime_ns + 1,
+                    )
+            return value
+
+        monkeypatch.setattr(expanded.os, "fstat", altered)
+    assert _read_cache_fixture(path) is None
+
+
+@pytest.mark.parametrize("notification", [None, "sent", "duplicate", "send_failed"])
+def test_main_verified_reuse_preserves_notification_handoff(
+    monkeypatch, tmp_path, notification
+):
+    report = _sealed_cache_report()
+    path = tmp_path / f"{expanded.REPORT_TYPE}_2026-08-24.json"
+    path.write_text(json.dumps(report))
+    calls = []
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("verified reuse must not acquire or replay")
+
+    monkeypatch.setattr(
+        expanded.kiwoom_utils, "get_cached_kiwoom_token", lambda: "test"
+    )
+    monkeypatch.setattr(
+        expanded, "_dynamic_candidate_snapshot", lambda *a, **k: (None, {})
+    )
+    monkeypatch.setattr(
+        expanded,
+        "load_applied_profile_policy",
+        lambda *a, **k: (None, "", "unavailable"),
+    )
+    monkeypatch.setattr(
+        expanded,
+        "_load_source_cache",
+        lambda **k: ([], {"source_quality_status": "PASS"}),
+    )
+    monkeypatch.setattr(
+        expanded, "load_research_census", lambda *a, **k: None, raising=False
+    )
+    monkeypatch.setattr(expanded, "research_input_fingerprint", lambda **k: "a" * 64)
+    monkeypatch.setattr(expanded, "fetch_sor_history", forbidden)
+    monkeypatch.setattr(expanded, "build_report", forbidden)
+    monkeypatch.setattr(expanded, "render_markdown", lambda value: "fixture\n")
+    monkeypatch.setattr(
+        expanded, "_attach_admission_evidence", lambda value, **k: value, raising=False
+    )
+    monkeypatch.setattr(
+        expanded.CandidateRecommendationNotifier,
+        "notify",
+        lambda self, value: calls.append(value["target_date"]) or notification,
+    )
+    args = ["--target-date", "2026-08-24", "--output-dir", str(tmp_path), "--write"]
+    if notification is not None:
+        args.append("--notify")
+    if notification == "send_failed":
+        with pytest.raises(RuntimeError, match="telegram_not_delivered:send_failed"):
+            expanded.main(args)
+    else:
+        assert expanded.main(args) == 0
+    assert calls == ([] if notification is None else ["2026-08-24"])
+    restored = _read_cache_fixture(path)
+    assert restored is not None
+    if notification is not None:
+        assert restored["telegram_status"] == notification
+
+
+def test_partial_source_quality_terminal_can_reuse_without_extra_economic_gate(
+    tmp_path,
+):
+    report = _sealed_cache_report()
+    report["status"] = "partial_source_quality"
+    symbol = next(iter(report["source_meta"]))
+    report["source_meta"].pop(symbol)
+    report["source_quarantine"][symbol] = "isolated_source_gap"
+    report["eligible_source_symbol_count"] -= 1
+    report["quarantined_source_symbol_count"] += 1
+    report["result_cache_receipt"]["body_sha256"] = expanded._report_cache_digest(
+        report
+    )
+    path = tmp_path / "report.json"
+    path.write_text(json.dumps(report))
+    assert _read_cache_fixture(path) == report
+
+
+def test_interrupted_cache_publication_keeps_previous_verified_body(
+    monkeypatch, tmp_path
+):
+    report = _sealed_cache_report()
+    path = tmp_path / f"{expanded.REPORT_TYPE}_2026-08-24.json"
+    path.write_text(json.dumps(report))
+    before = path.read_bytes()
+    report["telegram_status"] = "sent"
+    monkeypatch.setattr(expanded, "render_markdown", lambda value: "fixture\n")
+
+    def interrupted(*args, **kwargs):
+        raise OSError("publication interrupted")
+
+    monkeypatch.setattr(expanded.os, "replace", interrupted)
+    with pytest.raises(OSError, match="publication interrupted"):
+        expanded.write_report(report, tmp_path)
+    assert path.read_bytes() == before
+    assert _read_cache_fixture(path) is not None
+    assert sorted(p.name for p in tmp_path.iterdir()) == [path.name]
 
 
 def test_expanded_profiles_separate_new_symbols_and_inactive_existing_sessions():

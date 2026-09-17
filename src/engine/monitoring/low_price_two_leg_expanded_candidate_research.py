@@ -12,6 +12,7 @@ import argparse
 import hashlib
 import json
 import os
+import stat
 import time as time_module
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
@@ -78,6 +79,11 @@ DEFAULT_STATE_FILE = (
 )
 DEFAULT_SOURCE_CACHE_DIR = DATA_DIR / "cache" / "low_price_two_leg_ka10080"
 SOURCE_CACHE_SCHEMA = "low_price_two_leg_ka10080_source_cache_v1"
+REPORT_CACHE_SCHEMA = "low_price_two_leg_verified_report_cache_v1"
+REPORT_CACHE_MAX_BYTES = 128 * 1024 * 1024
+REPORT_CACHE_TERMINALS = frozenset(
+    {"recommendations_ready", "no_qualified_candidate", "partial_source_quality"}
+)
 DEFAULT_DYNAMIC_UNIVERSE_PATH = DATA_DIR / "daily_recommendations_v2.csv"
 DEFAULT_DYNAMIC_UNIVERSE_DIAGNOSTIC_PATH = (
     DATA_DIR / "daily_recommendations_v2_diagnostics.json"
@@ -2128,9 +2134,16 @@ def write_report(
     stem = f"low_price_two_leg_expanded_candidate_research_{report['end_date']}"
     json_path = output_dir / f"{stem}.json"
     markdown_path = output_dir / f"{stem}.md"
+    stored = dict(report)
+    stored.pop("result_cache_receipt", None)
+    if stored.get("source_input_fingerprint"):
+        stored["result_cache_receipt"] = {
+            "schema": REPORT_CACHE_SCHEMA,
+            "body_sha256": _report_cache_digest(stored),
+        }
     _atomic_write(
         json_path,
-        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        json.dumps(stored, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
     )
     _atomic_write(markdown_path, render_markdown(report))
     return json_path, markdown_path
@@ -2338,7 +2351,9 @@ def research_input_fingerprint(
             Path(__file__).with_name("policy_research_economics.py").read_bytes()
         ).hexdigest(),
         "entry_replay_helper_sha256": hashlib.sha256(
-            Path(__file__).with_name("low_price_two_leg_entry_spot_research.py").read_bytes()
+            Path(__file__)
+            .with_name("low_price_two_leg_entry_spot_research.py")
+            .read_bytes()
         ).hexdigest(),
         "tick_helper_sha256": hashlib.sha256(
             Path(tick_utils.__file__).read_bytes()
@@ -2379,11 +2394,62 @@ def research_input_fingerprint(
     return _canonical_digest(payload)
 
 
+def _report_cache_digest(report: dict[str, Any]) -> str:
+    # Covers the actual result, not just markers/input names. No self-hash.
+    body = {
+        key: value for key, value in report.items() if key != "result_cache_receipt"
+    }
+    return hashlib.sha256(
+        json.dumps(
+            body,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
 def reusable_report(path: Path, *, target_date: date, fingerprint: str) -> dict | None:
+    parent_fd = file_fd = None
     try:
-        report = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError, TypeError):
+        parent_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        parent = os.fstat(parent_fd)
+        file_fd = os.open(
+            path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent_fd
+        )
+        before = os.fstat(file_fd)
+        if not stat.S_ISREG(before.st_mode) or before.st_size > REPORT_CACHE_MAX_BYTES:
+            return None
+        with os.fdopen(file_fd, "rb") as handle:
+            file_fd = None
+            raw = handle.read(REPORT_CACHE_MAX_BYTES + 1)
+            after = os.fstat(handle.fileno())
+        named = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+        current_parent = os.stat(path.parent, follow_symlinks=False)
+        generation = lambda value: (
+            value.st_dev,
+            value.st_ino,
+            value.st_size,
+            value.st_mtime_ns,
+            value.st_ctime_ns,
+        )
+        if (
+            len(raw) > REPORT_CACHE_MAX_BYTES
+            or generation(before) != generation(after)
+            or generation(before) != generation(named)
+            or (parent.st_dev, parent.st_ino)
+            != (current_parent.st_dev, current_parent.st_ino)
+        ):
+            return None
+        report = json.loads(raw)
+    except (OSError, ValueError, TypeError, RecursionError):
         return None
+    finally:
+        if file_fd is not None:
+            os.close(file_fd)
+        if parent_fd is not None:
+            os.close(parent_fd)
     if not isinstance(report, dict):
         return None
     if (
@@ -2392,7 +2458,28 @@ def reusable_report(path: Path, *, target_date: date, fingerprint: str) -> dict 
         or report.get("source_input_fingerprint") != fingerprint
         or report.get("runtime_effect") is not False
         or report.get("allowed_runtime_apply") is not False
-        or str(report.get("status") or "").lower() in {"failed", "error"}
+        or not isinstance(report.get("status"), str)
+        or report.get("status") not in REPORT_CACHE_TERMINALS
+    ):
+        return None
+    receipt = report.get("result_cache_receipt")
+    try:
+        if (
+            not isinstance(receipt, dict)
+            or set(receipt) != {"schema", "body_sha256"}
+            or receipt.get("schema") != REPORT_CACHE_SCHEMA
+            or receipt.get("body_sha256") != _report_cache_digest(report)
+            or not CandidateRecommendationNotifier._valid_report(report)
+        ):
+            return None
+    except (
+        OSError,
+        ValueError,
+        TypeError,
+        KeyError,
+        AttributeError,
+        OverflowError,
+        RecursionError,
     ):
         return None
     return report
@@ -2563,6 +2650,22 @@ def main(argv: list[str] | None = None) -> int:
             )
             if args.write:
                 write_report(reusable, output_dir=args.output_dir)
+            if args.notify:
+                # Reuse economic replay, not the notification handoff. The
+                # existing notifier owns deduplication and bounded delivery.
+                reusable["telegram_status"] = CandidateRecommendationNotifier().notify(
+                    reusable
+                )
+                write_report(reusable, output_dir=args.output_dir)
+                if reusable["telegram_status"] not in {
+                    "sent",
+                    "duplicate",
+                    "sent_state_persist_failed",
+                }:
+                    raise RuntimeError(
+                        "candidate_recommendation_telegram_not_delivered:"
+                        f"{reusable['telegram_status']}"
+                    )
             if args.print_summary:
                 print(
                     json.dumps(
