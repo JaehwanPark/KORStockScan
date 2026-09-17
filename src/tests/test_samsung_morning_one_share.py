@@ -89,7 +89,7 @@ class FakeGateway:
             best_bid_qty=self.best_bid_qty,
             best_ask_qty=self.best_ask_qty,
             age_ms=0,
-            received_ts_ms=1,
+            received_ts_ms=int(datetime.now().timestamp() * 1000),
         )
 
     def entry_execution_velocity_snapshot(self, *, route="SOR"):

@@ -192,7 +192,7 @@ class FakeGateway:
             best_bid_qty=self.best_bid_qty,
             best_ask_qty=self.best_ask_qty,
             age_ms=0,
-            received_ts_ms=1,
+            received_ts_ms=int(datetime.now().timestamp() * 1000),
         )
 
     def entry_execution_velocity_snapshot(self, *, code, route):
@@ -1274,6 +1274,33 @@ def test_thin_touch_depth_blocks_widget_entry_without_order_and_is_not_requeried
     assert second["symbols"]["999999"]["orders"] == []
     assert recorder.events[-1]["event_type"] == "entry_blocked_liquidity_guard"
     assert recorder.events[-1]["entry_liquidity_required_each_side_quantity"] == 100
+    assert recorder.events[-1]["actual_order_submitted"] is False
+
+
+def test_widget_velocity_wait_cannot_renew_original_liquidity_clock(tmp_path, monkeypatch):
+    import src.trading.order.entry_liquidity_guard as guard
+
+    now = _at(10)
+    box = {"payload": _payload(now, entry_id="DELAYED-VELOCITY")}
+    trader, gateway, recorder = _trader(tmp_path, monkeypatch, box, qty=10)
+    clock = [datetime.now().timestamp()]
+    monkeypatch.setattr(guard.time, "time", lambda: clock[0])
+    book_read = gateway.entry_liquidity_snapshot
+    print_read = gateway.entry_execution_velocity_snapshot
+
+    def book(**kwargs):
+        return replace(book_read(**kwargs), received_ts_ms=int(clock[0] * 1000))
+
+    def prints(**kwargs):
+        clock[0] += 3
+        return print_read(**kwargs)
+
+    monkeypatch.setattr(gateway, "entry_liquidity_snapshot", book)
+    monkeypatch.setattr(gateway, "entry_execution_velocity_snapshot", prints)
+    trader.run_once(now)
+    assert gateway.buy_calls == []
+    assert len(gateway.liquidity_calls) == len(gateway.execution_velocity_calls) == 1
+    assert recorder.events[-1]["entry_liquidity_reason"] == "entry_liquidity_snapshot_stale"
     assert recorder.events[-1]["actual_order_submitted"] is False
 
 
@@ -3056,7 +3083,7 @@ def test_gateway_liquidity_read_uses_explicit_integrated_or_nxt_book(monkeypatch
             "bid_tot": 1_255,
             "ask_tot": 880,
             "rest_age_ms": 0,
-            "rest_received_ts_ms": 1,
+            "rest_received_ts_ms": int(datetime.now().timestamp() * 1000),
         }
 
     monkeypatch.setattr(

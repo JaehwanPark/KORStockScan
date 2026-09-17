@@ -53,6 +53,10 @@ def test_ka10004_orderbook_does_not_publish_best_ask_as_curr(monkeypatch):
     assert snapshot["rest_age_ms"] == 0
     assert snapshot["age_ms"] == 0
     assert snapshot["rest_received_ts_ms"] > 0
+    rest = snapshot["market_data_health"]["rest_quote"]
+    assert rest["quote_state"] == "fresh"
+    assert rest["trade_activity_state"] == "OBSERVATION_UNPROVEN"
+    assert rest["quiet_episode_count"] is None
 
 
 def test_ka10004_preserves_explicit_nxt_market_suffix(monkeypatch):

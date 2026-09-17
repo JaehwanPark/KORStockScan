@@ -11,13 +11,15 @@ from __future__ import annotations
 
 import math
 import re
+import time
 from copy import deepcopy
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
 from typing import Any, Mapping
 from zoneinfo import ZoneInfo
 
 from src.utils import kiwoom_utils
+from src.trading.market.quote_consistency import build_market_data_health
 
 ENTRY_LIQUIDITY_POLICY_ID = "entry_touch_liquidity_guard_v1"
 MIN_TOUCH_QUANTITY_EACH_SIDE = 100
@@ -104,11 +106,12 @@ EXECUTABLE_MICRO_CONFIRMATION_POLICY_CONTRACT = {
 
 KIWOOM_OFFICIAL_REFERENCE = {
     "repository": "Kiwoom-Securities/Kiwoom-REST-API",
-    "commit_sha": "234560d213acd8871ae344b5481aecd2f30287fa",
-    "retrieved_at_kst": "2026-09-03T15:11:43+09:00",
+    "commit_sha": "953e5dbff123f437ab4d11a78a95191a685eb51f",
+    "retrieved_at_kst": "2026-09-17T11:23:49+09:00",
     "inspected_paths": [
         "kiwoom/_data/kiwoom_api_spec.json",
         "kiwoom/specs.py",
+        "kiwoom/core/client.py",
         "postman/kiwoom-openapi.postman_collection.json",
     ],
     "request_scope": ["ka10004"],
@@ -199,6 +202,7 @@ class EntryLiquiditySnapshot:
     age_ms: int = 0
     received_ts_ms: int = 0
     error: str = ""
+    market_data_health: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -472,7 +476,7 @@ def parse_ka10003_entry_execution_velocity_snapshot(
 
 
 def parse_ka10004_entry_liquidity_snapshot(
-    payload: object, *, symbol: str, route: str
+    payload: object, *, symbol: str, route: str, now_ts: float | None = None
 ) -> EntryLiquiditySnapshot:
     """Validate normalized ``get_stock_orderbook_ka10004`` output."""
 
@@ -496,7 +500,7 @@ def parse_ka10004_entry_liquidity_snapshot(
         ask_total_qty = _nonnegative_int(payload.get("ask_tot", 0))
         age_ms = _nonnegative_int(payload.get("rest_age_ms"))
         received_ts_ms = _positive_int(payload.get("rest_received_ts_ms"))
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
         return unavailable_entry_liquidity_snapshot(
             symbol=symbol,
             route=route,
@@ -517,6 +521,22 @@ def parse_ka10004_entry_liquidity_snapshot(
         contract_error = "ka10004_freshness_contract_invalid"
     elif best_ask < best_bid:
         contract_error = "ka10004_crossed_book_invalid"
+    health = build_market_data_health(
+        payload,
+        now_ts=time.time() if now_ts is None else now_ts,
+        quote_max_age_ms=MAX_SNAPSHOT_AGE_MS,
+    )
+    rest = health.get("rest_quote") or {}
+    measured_age = rest.get("quote_receive_age_ms")
+    if not contract_error and rest.get("quote_state") in {
+        "future",
+        "missing",
+        "unproven",
+        "invalid",
+    }:
+        contract_error = "ka10004_receive_clock_or_quote_contract_invalid"
+    if measured_age is not None and measured_age >= 0:
+        age_ms = max(age_ms, math.ceil(measured_age))
     return EntryLiquiditySnapshot(
         source_ok=not contract_error,
         symbol=expected_code,
@@ -532,12 +552,75 @@ def parse_ka10004_entry_liquidity_snapshot(
         age_ms=age_ms,
         received_ts_ms=received_ts_ms,
         error=contract_error,
+        market_data_health=health,
+    )
+
+
+def _refresh_liquidity_snapshot(
+    snapshot: EntryLiquiditySnapshot, *, now_ts: float | None = None
+) -> EntryLiquiditySnapshot:
+    """Recompute quote facts at the decision, never tape inactivity/authority."""
+    health = build_market_data_health(
+        {
+            "source": snapshot.source,
+            "stock_code": snapshot.symbol,
+            "request_code": snapshot.request_code,
+            "rest_freshness_basis": "response_received_epoch_ms",
+            "rest_received_ts_ms": snapshot.received_ts_ms,
+            "best_bid": snapshot.best_bid,
+            "best_ask": snapshot.best_ask,
+        },
+        now_ts=time.time() if now_ts is None else now_ts,
+        quote_max_age_ms=MAX_SNAPSHOT_AGE_MS,
+    )
+    rest = health.get("rest_quote") or {}
+    age = rest.get("quote_receive_age_ms")
+    try:
+        scope_valid = snapshot.request_code == entry_liquidity_request_code(
+            snapshot.symbol, snapshot.route
+        )
+    except ValueError:
+        scope_valid = False
+    invalid = (
+        rest.get("quote_state") not in {"fresh", "stale"}
+        or type(snapshot.age_ms) is not int
+        or snapshot.age_ms < 0
+        or any(
+            type(value) is not int or value < 0
+            for value in (
+                snapshot.best_bid,
+                snapshot.best_ask,
+                snapshot.best_bid_qty,
+                snapshot.best_ask_qty,
+                snapshot.received_ts_ms,
+            )
+        )
+        or not scope_valid
+    )
+    recorded_age = (
+        snapshot.age_ms if type(snapshot.age_ms) is int and snapshot.age_ms >= 0 else 0
+    )
+    return replace(
+        snapshot,
+        source_ok=snapshot.source_ok is True and not invalid,
+        age_ms=(
+            max(recorded_age, math.ceil(age))
+            if age is not None and age >= 0
+            else recorded_age
+        ),
+        error=snapshot.error
+        or ("ka10004_receive_clock_or_quote_contract_invalid" if invalid else ""),
+        market_data_health=health,
     )
 
 
 def evaluate_entry_liquidity(
-    snapshot: EntryLiquiditySnapshot, *, requested_quantity: int
+    snapshot: EntryLiquiditySnapshot,
+    *,
+    requested_quantity: int,
+    now_ts: float | None = None,
 ) -> EntryLiquidityDecision:
+    snapshot = _refresh_liquidity_snapshot(snapshot, now_ts=now_ts)
     requested = _positive_int(requested_quantity)
     required = max(
         MIN_TOUCH_QUANTITY_EACH_SIDE,
@@ -596,8 +679,9 @@ def _coerce_liquidity_snapshot(
             age_ms=contract_int("age_ms", 0),
             received_ts_ms=contract_int("received_ts_ms"),
             error=str(raw.get("error") or ""),
+            market_data_health=deepcopy(raw.get("market_data_health", {})),
         )
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -610,6 +694,7 @@ def evaluate_executable_micro_confirmation(
     maximum_entry_price: int,
     target_price: int,
     policy: Mapping[str, Any] | None,
+    now_ts: float | None = None,
 ) -> ExecutableMicroConfirmationDecision:
     """Confirm one selected delayed entry without creating a new signal.
 
@@ -638,6 +723,8 @@ def evaluate_executable_micro_confirmation(
         target = 0
     anchor = _coerce_liquidity_snapshot(anchor_snapshot)
     current = _coerce_liquidity_snapshot(current_snapshot)
+    if current is not None:
+        current = _refresh_liquidity_snapshot(current, now_ts=now_ts)
     cost_pct: float | None = None
     if isinstance(policy, Mapping):
         raw_cost = policy.get("round_trip_cost_pct")

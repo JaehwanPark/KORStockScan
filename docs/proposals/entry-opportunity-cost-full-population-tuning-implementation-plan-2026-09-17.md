@@ -588,6 +588,7 @@ scanner/recheck/ADD-NOADD/exit family에서도 raw/미노출 CF가 existing cand
 - 테스트: 기존 kiwoom/utils/episode read-control/enrichment/collector tests. request/parser/FID/REG 변경은 U0 reference 근거와 protocol regression을 확인한다.
 - 검증된 부분 전달: 기존 WS dashboard writer의 bounded type projection에 transport epoch·0B provider clock·quiet observation 원시각을 보존한다. 공통 owner가 raw route/file projection을 같은 함수로 소비하며 capture 시각·이전 health companion으로 fresh화하지 않는다. 이 전달과 micro/web 소비 parity는 U2 전수 direct REST/client 전환 완료를 대신하지 않는다.
 - writer worker의 consume 시각은 callback launch가 아니라 lock 아래 두 view를 고정한 뒤 기록한다. source가 launch 뒤 수신돼 가짜 future age로 보이지 않게 하되 원 receipt clock·주기 제어·callback lock·atomic publish는 유지한다.
+- REST 호가 부분 전환: 기존 `ka10004` normalized envelope→공통 `rest_quote` facts→기존 `EntryLiquiditySnapshot`→widget/Samsung 오전·정오·오후/low-price의 다섯 gateway를 결속한다. 원 response receive clock으로 parser·유동성 평가·현재 micro checkpoint에서 재계산하며 carried `age_ms=0`/health로 fresh화하지 않는다. REST-only activity는 `OBSERVATION_UNPROVEN`/repeat count null이고 `_AL` request scope는 underlying event venue를 증명하지 않는다. 기존 호가2초·체결속도/micro guard를 유지하고 print 조회 뒤 BUY bundle 직전 같은 호가를 추가 TR 없이 재검사한다. 이 범위의 검증·배포/PID와 U2/U4 전수 완료는 [부분 구현 리뷰 §22](../audit-reports/2026-09-17-common-health-opportunity-cost-scoped-implementation.md#22-rest-호가-common-facts와-독립-owner-소비-보완)로 구분한다.
 
 ### U3 — main/scanner·기계/AI·price/sizing/holding consumer 전환
 
