@@ -8,7 +8,7 @@
 
 ## 2. 시간 기준과 계측 선행
 
-현재 구현·배포 잔여 판정은 **§13을 우선**한다. 이전 후속의 미완료 표시는 해당 단계의 범위이며, 이미 통합된 P3를 새로 구축하거나 선택적 성능 목표를 필수 구현/기동 gate로 해석하지 않는다.
+현재 구현·배포 잔여 판정은 **§13·§14를 우선**한다. 이전 후속의 미완료 표시는 해당 단계의 범위이며, 이미 통합된 P3를 새로 구축하거나 선택적 성능 목표를 필수 구현/기동 gate로 해석하지 않는다.
 
 2026-09-16/최근 완료·실패 receipt를 구분한 기존 장후 점검 기준이다. 이 수치를 세 후보 각각의 CPU baseline으로 대입하지 않는다.
 
@@ -215,3 +215,12 @@ Timing은 cycle 진단 receipt에만 넣고 rolling/R3 후보 본문·정책 선
 ### 제한된 검증과 cold-probe 보완
 
 사용자 후속 지시에 따라 기존 episode16-candidate page만 초기 cache backend를 probe하고 overhead가 크면 나머지 전수 grid를 native fast-reference로 평가한다. 추가 production module/job/benchmark는 만들지 않는다. 검증은 episode3 native templates×46일·widget2종목×32일 및 warm/하루 append로 제한했고 원 grid·비용·보유 상태·qualified calendar와 승격 floor는 유지한다. Large synthetic 조건의 미달/미검증 기록은 이전 receipt로 보존하며 이번 source 배포·기동을 위한 추가 필수 gate로 확대하지 않는다. 자연 신규 정책 소비와 실제 수익 검증은 기존 두 OPEN owner를 유지한다. 디스크 정리·검증·최종 실제 source/PID는 [후속 기록](../audit-reports/2026-09-17-widget-episode-closed-loop-completion.md#bounded-cold-probe-follow-up)을 따른다.
+## 14. 적정 검증 범위·공통 cache reader 보완
+
+사용자는 과도한 성능 검증·코드 확장 없이 적정 수준의 종목/기간 조정을 요청했다. 기존 offline widget/episode 규모 CLI의 기본 fixture를 **3종목·46거래일·각 compute phase 300초 예산**으로 조정한다. 이는 전체 grid를 유지하는 소규모 engineering 기본값이며 live 연구 종목 cap, 과거 raw 삭제, 선정 floor 하향 또는 실행 전체 wall deadline이 아니다. 명시적 확대 옵션은 유지하되 이번에는 N100/D120 matrix를 재실행하지 않는다. 기존87완료/13미처리 synthetic 결과를 전체 통과로 바꾸지 않는다.
+
+실운영은 기존 등록/승인·admission universe와 source-quality-valid clean-baseline calendar를 그대로 사용한다. 당일 자연 원천이 제공하는 기간을 소비하고 미래 invented120일을 정상 운영 요구조건으로 삼지 않는다. 3종목 fixture 결과를 전체 자연 모집단의 EV/포착률로 외삽하지 않는다. 소규모 회귀와 기존 phase/resource receipt로 필요한 결함을 닫고, 실제 정상 장후가 deadline을 못 지킬 때만 해당 종목/기간/phase의 다음 조정을 검토한다.
+
+Widget day-cache의 별도 compressed JSON reader를 기존 stable/pinned/bounded 공통 reader로 통합한다. Top-level object·results object·checksum을 검증하고 optional JSON recursion/형태/세대 변경은 cache miss→원 계산이다. Required raw/정책/비용/lineage guard는 그대로 유지하며 cache를 지우거나 null outcome을0으로 바꾸지 않는다. 후행 자동 evaluation/final-refresh에 배포하되 이 offline 수정만을 위해 매매 process를 재기동하지 않는다.
+
+검증·push·배포 및 잔여 자연 acceptance는 [보완 리뷰 §36](../audit-reports/2026-09-17-postclose-computation-optimization-scoped-implementation.md#36-widget-day-cache-공통-reader-통합적정-검증-범위)를 따른다.

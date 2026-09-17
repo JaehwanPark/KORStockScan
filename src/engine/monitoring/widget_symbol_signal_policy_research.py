@@ -758,34 +758,29 @@ class ReplayContext:
             if self.cache_dir is not None:
                 path = self._day_path(day)
                 try:
-                    from src.engine.monitoring.research_cache_storage import touch
+                    from src.engine.monitoring.research_cache_storage import read
                     from src.engine.monitoring import research_closed_loop as loop
 
                     root = self.cache_dir.parent
                     aggregate = loop._directory(loop.DIRECTORY) / "cache"
                     if path.absolute().is_relative_to(aggregate.absolute()):
                         root = aggregate
-                    if (
-                        not path.is_symlink()
-                        and path.lstat().st_size <= 1024 * 1024
-                        and touch(path, root=root)
-                    ):
-                        decoder = zlib.decompressobj()
-                        raw = decoder.decompress(path.read_bytes(), 8 * 1024 * 1024)
-                        if decoder.eof and not decoder.unused_data:
-                            payload = json.loads(raw)
-                            if (
-                                payload.get("checksum")
-                                == hashlib.sha256(
-                                    json.dumps(
-                                        payload["results"],
-                                        sort_keys=True,
-                                        separators=(",", ":"),
-                                    ).encode()
-                                ).hexdigest()
-                            ):
-                                result = payload["results"]
-                except (OSError, ValueError, KeyError, TypeError, zlib.error):
+                    if not path.is_symlink() and path.lstat().st_size <= 1024 * 1024:
+                        payload = read(path, root=root, max_bytes=8 * 1024 * 1024)
+                        if (
+                            isinstance(payload, dict)
+                            and isinstance(payload.get("results"), dict)
+                            and payload.get("checksum")
+                            == hashlib.sha256(
+                                json.dumps(
+                                    payload["results"],
+                                    sort_keys=True,
+                                    separators=(",", ":"),
+                                ).encode()
+                            ).hexdigest()
+                        ):
+                            result = payload["results"]
+                except (OSError, ValueError, KeyError, TypeError, RecursionError, zlib.error):
                     pass
             self.cached_day_results[day] = dict(result)
             self.day_results[day] = result
