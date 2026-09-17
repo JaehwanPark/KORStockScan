@@ -196,3 +196,5 @@ C0–C8/P1–P6은 이번 source 변경과 기존 producer/consumer에 연결했
 ### 제한된 검증과 cold-probe 보완
 
 사용자 후속 지시에 따라 기존 episode16-candidate page만 초기 cache backend를 probe하고 overhead가 크면 나머지 전수 grid를 native fast-reference로 평가한다. 추가 production module/job/benchmark는 만들지 않는다. 검증은 episode3 native templates×46일·widget2종목×32일 및 warm/하루 append로 제한했고 원 grid·비용·보유 상태·qualified calendar와 승격 floor는 유지한다. Large synthetic 조건의 미달/미검증 기록은 이전 receipt로 보존하며 이번 source 배포·기동을 위한 추가 필수 gate로 확대하지 않는다. 자연 신규 정책 소비와 실제 수익 검증은 기존 두 OPEN owner를 유지한다. 디스크 정리·검증·최종 실제 source/PID는 [후속 기록](../audit-reports/2026-09-17-widget-episode-closed-loop-completion.md#bounded-cold-probe-follow-up)을 따른다.
+
+제한 검증 후속 완료: sourcebbd23da34 push/17:59:11 immutable7pin·4 reader actual cwd/PID·C6 incumbent widget3/episode3 consumed·main871393/552152a5 및6guard보존. Immutable91 PASS. 자연 신규 정책/실수익은 기존 OPEN owner이며 상세 evidence는 위 후속 기록·sanitized receipt를 따른다.

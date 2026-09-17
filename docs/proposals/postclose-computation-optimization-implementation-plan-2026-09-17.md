@@ -224,3 +224,5 @@ Timing은 cycle 진단 receipt에만 넣고 rolling/R3 후보 본문·정책 선
 Widget day-cache의 별도 compressed JSON reader를 기존 stable/pinned/bounded 공통 reader로 통합한다. Top-level object·results object·checksum을 검증하고 optional JSON recursion/형태/세대 변경은 cache miss→원 계산이다. Required raw/정책/비용/lineage guard는 그대로 유지하며 cache를 지우거나 null outcome을0으로 바꾸지 않는다. 후행 자동 evaluation/final-refresh에 배포하되 이 offline 수정만을 위해 매매 process를 재기동하지 않는다.
 
 검증·push·배포 및 잔여 자연 acceptance는 [보완 리뷰 §36](../audit-reports/2026-09-17-postclose-computation-optimization-scoped-implementation.md#36-widget-day-cache-공통-reader-통합적정-검증-범위)를 따른다.
+
+제한 검증 후속 완료: sourcebbd23da34 push/17:59:11 immutable7pin·4 reader actual cwd/PID·C6 incumbent widget3/episode3 consumed·main871393/552152a5 및6guard보존. Immutable91 PASS. 자연 신규 정책/실수익은 기존 OPEN owner이며 상세 evidence는 위 후속 기록·sanitized receipt를 따른다.
