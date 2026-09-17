@@ -230,6 +230,31 @@ paths, and retrieval time in the change/review evidence. Verify at least:
   admission plus an exact response/gap receipt; this contract alone creates no
   bot restart, provider, threshold, broker/order, quantity, cap, or hard-safety
   authority.
+### Bounded concurrent market reads
+
+The shared utils transport may join an already-running read only for
+`ka10003|ka10046|ka10059|ka10061|ka10063|ka10064|ka10066|ka10080|ka10081|ka10084|ka20005|ka90008`,
+with a metadata-aware caller, the same resolved token digest, origin/path,
+payload/route, KST date, priority class, continuation/page bounds, timeout,
+retry bound and read coordinator. Continuous reads require an explicit positive
+page bound. `source_only` and `runtime_required` remain separate.
+
+This is process-local singleflight, with at most 128 in-flight keys and no
+completed-response retention. A follower uses its existing read wait budget;
+expiry defers without a second HTTP call or cancellation of the owner. Preserve
+the owner's original receive timestamp and physical attempts, and record the
+follower's zero HTTP attempts separately. Never stamp a reused response as new.
+
+Normalized market caches keep their existing TTLs and now separate resolved
+token, origin and KST date. The existing 2,048-entry cleanup threshold is also
+a hard retention bound; earliest expiry is evicted if all entries remain live.
+Deferred/rate-exhausted metadata tuples and dataframes cannot replace valid
+cache entries. Legacy callers unable to carry deferral metadata retain their
+original independent transport. This does not coalesce account/order/auth,
+`ka10004`, execution-critical reads, other direct clients or WS recovery.
+Existing cross-process admission, retries, cooldowns and all trading guards
+remain authoritative. See the [implementation and verification evidence](audit-reports/2026-09-17-market-read-singleflight-scoped-implementation.md).
+
 4. Parser/request tests for the documented happy path, missing/unknown fields,
    sign and unit preservation, continuation, venue/session routing, and
    redaction of credentials/account identifiers.
