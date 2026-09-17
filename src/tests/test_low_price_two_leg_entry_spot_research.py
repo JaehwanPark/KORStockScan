@@ -121,6 +121,70 @@ def test_held_replay_uses_corrected_day_low_without_sharing_candidate_custody():
     assert actual["custody_resolution_required"] is True
 
 
+@pytest.mark.parametrize("ordered", [True, False])
+@pytest.mark.parametrize(
+    "bounds", [(540, 541), (541, 541), (530, 539), (542, 541), (float("nan"), 600)]
+)
+def test_feature_window_index_preserves_order_duplicates_and_bounds(ordered, bounds):
+    anchor = datetime(2026, 6, 5, 9, 0, tzinfo=KST)
+    rows = tuple(
+        SignalFeature(i, anchor + timedelta(minutes=m), 20000, 0.5, 0.1)
+        for i, m in enumerate([0, 1, 1, 2, 3])
+    )
+    if not ordered:
+        rows = rows[::-1]
+    context = DayContext(anchor.date(), (), {15: rows})
+    start, end = bounds
+    expected = [
+        item for item in rows
+        if start <= item.timestamp.hour * 60 + item.timestamp.minute <= end
+    ]
+    assert list(context.iter_window_features(15, start, end)) == expected
+    assert list(context.iter_window_features(15, start, end)) == expected
+
+
+def test_feature_window_index_reuses_source_and_invalidates_replaced_tuple():
+    anchor = datetime(2026, 6, 5, 9, 0, tzinfo=KST)
+    row = SignalFeature(0, anchor, 20000, 0.5, 0.1)
+    context = DayContext(anchor.date(), (), {15: (row,)})
+    uncomputed = deepcopy(context)
+    assert list(context.iter_window_features(15, 540, 540)) == [row]
+    cached = context._feature_minute_index[15]
+    assert list(context.iter_window_features(15, 530, 550)) == [row]
+    assert context._feature_minute_index[15] is cached
+    assert context == uncomputed
+    copied = deepcopy(context)
+    assert copied._feature_minute_index[15][0] is copied.features[15]
+    context.features[15] = (replace(row, timestamp=anchor + timedelta(minutes=1)),)
+    assert list(context.iter_window_features(15, 540, 540)) == []
+    assert context._feature_minute_index[15] is not cached
+    assert list(copied.iter_window_features(15, 540, 540)) == [row]
+    context.features[15] = ()
+    assert list(context.iter_window_features(15, 530, 550)) == []
+
+
+def test_feature_window_index_does_not_cache_mutable_list_or_missing_lookback():
+    anchor = datetime(2026, 6, 5, 9, 0, tzinfo=KST)
+    row = SignalFeature(0, anchor, 20000, 0.5, 0.1)
+    context = DayContext(anchor.date(), (), {15: [row]})
+    assert list(context.iter_window_features(15, 540, 540)) == [row]
+    context.features[15][0] = replace(row, timestamp=anchor + timedelta(minutes=1))
+    assert list(context.iter_window_features(15, 540, 540)) == []
+    assert not context._feature_minute_index
+    with pytest.raises(KeyError):
+        context.iter_window_features(999, 540, 539)
+
+
+def test_feature_window_index_has_declared_lookback_bound():
+    anchor = datetime(2026, 6, 5, 9, 0, tzinfo=KST)
+    row = SignalFeature(0, anchor, 20000, 0.5, 0.1)
+    context = DayContext(anchor.date(), (), {})
+    for lookback in range(50):
+        context.features[lookback] = (row,)
+        assert list(context.iter_window_features(lookback, 540, 540)) == [row]
+        assert len(context._feature_minute_index) <= len(research.LOOKBACK_GRID)
+
+
 def _bar(timestamp: datetime, *, low=20_000, high=20_000) -> Bar:
     return Bar(timestamp, 20_000, high, low, 20_000)
 
