@@ -404,6 +404,84 @@ def _full_sort_rank(item):
     )
 
 
+@pytest.mark.parametrize("holdout_net", [-0.2, 0.1, 0.2])
+def test_selection_final_views_share_prefix_without_changing_public_results(
+    monkeypatch, holdout_net
+):
+    candidate = SpotCandidate(800, 809, 30, 1.5, 0.1)
+    profile = RESEARCH_PROFILES["candidate_007660_midday"]
+    monkeypatch.setattr(research, "candidate_grid", lambda _: (candidate,))
+    contexts = _contexts(holdout_candidate_net=holdout_net)
+    calls = []
+    original = research._evaluate_candidate_windows
+
+    def counted(item, source, windows, **kwargs):
+        calls.append((item, tuple(len(window) for window in windows), kwargs))
+        return original(item, source, windows, **kwargs)
+
+    monkeypatch.setattr(research, "_evaluate_candidate_windows", counted)
+    actual = select_profile_spot(profile, deepcopy(contexts))
+    assert [lengths for _, lengths, _ in calls] == [
+        (15, 15, 30), (30, 16, 46), (16, 46)
+    ]
+    assert all(options == {"include_episodes": True} for _, _, options in calls[1:])
+    for owner in ("baseline", "calibration_winner", "selected"):
+        assert "episodes" not in actual[owner]["calibration"]
+        assert "episodes" not in actual[owner]["holdout"]
+        assert "episodes" in actual[owner]["full"]
+
+    def serial_views(item, source, windows, *, include_episodes=False):
+        return [
+            _reference_evaluate(
+                item, deepcopy(source), window, include_episodes=include_episodes
+            )
+            for window in windows
+        ]
+
+    monkeypatch.setattr(research, "_evaluate_candidate_windows", serial_views)
+    assert actual == select_profile_spot(profile, deepcopy(contexts))
+
+
+@pytest.mark.parametrize("mode", ["zero", "complete", "held"])
+def test_selection_final_views_full_grid_and_carry_match_serial_oracle(
+    monkeypatch, mode
+):
+    profile = PROFILES["samsung_heavy_midday"]
+    anchor = datetime.combine(
+        date(2026, 6, 5), profile.policy.scan_start, tzinfo=KST
+    ) - timedelta(minutes=60)
+    contexts = research.build_day_contexts([
+        Bar(
+            anchor + timedelta(days=day, minutes=i), 20000,
+            20000 if mode == "zero" or (mode == "held" and i >= 60) else 20600,
+            20000, 20000,
+        )
+        for day in range(46) for i in range(180)
+    ])
+    actual = select_profile_spot(profile, deepcopy(contexts))
+
+    def serial_views(item, source, windows, *, include_episodes=False):
+        return [
+            _reference_evaluate(
+                item, deepcopy(source), window, include_episodes=include_episodes
+            )
+            for window in windows
+        ]
+
+    # Calibration full-grid batching is already covered elsewhere. Keep that
+    # original implementation; independently check the final baseline/winner
+    # views that this change batches for the first time.
+    original = research._evaluate_candidate_windows
+
+    def oracle(item, source, windows, **kwargs):
+        return (serial_views if kwargs.get("include_episodes") else original)(
+            item, source, windows, **kwargs
+        )
+
+    monkeypatch.setattr(research, "_evaluate_candidate_windows", oracle)
+    assert actual == select_profile_spot(profile, deepcopy(contexts))
+
+
 def _retain_full_sort_reference(heap, item, ordinal, limit):
     # Keep all eligible calibration evidence. Diagnostic output needs only the
     # stable-sort winner; it never participates in choosing the live candidate.

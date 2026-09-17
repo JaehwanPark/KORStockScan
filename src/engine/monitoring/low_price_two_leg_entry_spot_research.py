@@ -1221,11 +1221,14 @@ def select_profile_spot(
     ]
     diagnostic_ranked = [item for _, item in diagnostic_heap]
     baseline = baseline_candidate(profile)
-    baseline_results = {
-        "calibration": evaluate_candidate(baseline, contexts, calibration),
-        "holdout": evaluate_candidate(baseline, contexts, holdout),
-        "full": evaluate_candidate(baseline, contexts, dates, include_episodes=True),
-    }
+    # Keep each observation boundary sealed, but traverse the custody prefix
+    # only once. The first two views remain summary-only in the public report.
+    baseline_views = _evaluate_candidate_windows(
+        baseline, contexts, [calibration, holdout, dates], include_episodes=True
+    )
+    for view in baseline_views[:2]:
+        view.pop("episodes", None)
+    baseline_results = dict(zip(("calibration", "holdout", "full"), baseline_views))
     if not ranked:
         return {
             "profile_id": profile.profile_id,
@@ -1259,12 +1262,16 @@ def select_profile_spot(
             "runtime_effect": False,
         }
     score, _, _, candidate, calibration_evidence = ranked[0]
+    candidate_views = _evaluate_candidate_windows(
+        candidate, contexts, [holdout, dates], include_episodes=True
+    )
+    candidate_views[0].pop("episodes", None)
     candidate_results = {
         "calibration": calibration_evidence["full"],
         "calibration_first_half": calibration_evidence["first_half"],
         "calibration_second_half": calibration_evidence["second_half"],
-        "holdout": evaluate_candidate(candidate, contexts, holdout),
-        "full": evaluate_candidate(candidate, contexts, dates, include_episodes=True),
+        "holdout": candidate_views[0],
+        "full": candidate_views[1],
     }
     candidate_holdout = candidate_results["holdout"]
     holdout_ready = bool(
