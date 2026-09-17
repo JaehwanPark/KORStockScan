@@ -265,6 +265,7 @@ def freeze_candidate(value, *, directory=DIRECTORY):
             ] or value.get("supersession_reason") not in {
                 "source_or_cost_correction",
                 "incumbent_parent_changed",
+                "mature_nonperforming_revision",
             }:
                 return existing
             atomic_write(
@@ -932,7 +933,13 @@ def joint_inputs(report, *, family):
                 ]
     else:
         raise ValueError("research_joint_family_invalid")
+    from src.engine.monitoring.research_portfolio_economics import reference_inputs
+    try:
+        portfolio_reference = reference_inputs(report, family)
+    except (ValueError, TypeError, KeyError):
+        portfolio_reference = dict(lanes={}, missing_reference_lanes=["invalid_native_reference"])
     body = dict(
+        portfolio_reference=portfolio_reference,
         schema=SCHEMA,
         family=family,
         source_date=source_date,
@@ -1192,6 +1199,12 @@ def combined_joint_gate(report, *, family, source_date, directory=DIRECTORY):
         source_date=source_date,
         parent_sha256=parent,
     )
+    if result["status"] == "pass" and (own.get("candidate_revisions") or other.get("candidate_revisions")):
+        from src.engine.monitoring.research_portfolio_economics import paired_joint_economics
+        economics = paired_joint_economics([own, other], load_allocator(source_date, directory=directory))
+        result["paired_joint_economics"] = economics
+        if economics["status"] != "pass":
+            result.update(status="allocation_blocked", reason=economics["reason"], feasible_combined_net_profit_krw=None)
     return {
         **result,
         "family_inputs": {
@@ -1206,63 +1219,13 @@ def combined_joint_gate(report, *, family, source_date, directory=DIRECTORY):
 def optional_cache_write(
     path, raw, *, cache_root, soft_cap=2 * 1024**3, reserve=10 * 1024**3
 ):
-    """Bound only optional research caches; never evict raw/policy/receipts.
-
-    An interrupted reservation is conservatively charged. A full working set
-    skips writes and recomputes; it never removes pins or required evidence.
-    """
-    import shutil
-
+    """LRU only optional caches, retaining process and persistent pins."""
+    from src.engine.monitoring.research_cache_storage import write
     path, cache_root = Path(path), Path(cache_root)
     aggregate = _directory(DIRECTORY) / "cache"
     if path.absolute().is_relative_to(aggregate.absolute()):
         cache_root = aggregate
-    if not path.absolute().is_relative_to(cache_root.absolute()):
-        raise ValueError("optional_cache_scope_invalid")
-    if shutil.disk_usage(cache_root).free - len(raw) < reserve:
-        return False
-    with writer_lock(cache_root):
-        ledger_path = cache_root / ".optional_cache_bytes.json"
-        try:
-            ledger = read_object(ledger_path)
-            charged = ledger["charged_bytes"]
-            if type(charged) is not int or charged < 0:
-                raise ValueError("optional_cache_ledger_invalid")
-        except FileNotFoundError:
-            charged = 0
-            for existing in cache_root.rglob("*.json.z"):
-                info = existing.lstat()
-                if stat.S_ISREG(info.st_mode):
-                    charged += info.st_size
-        try:
-            prior = path.lstat()
-            if not stat.S_ISREG(prior.st_mode):
-                raise ValueError("optional_cache_target_invalid")
-            prior_size = prior.st_size
-        except FileNotFoundError:
-            prior_size = 0
-        delta = len(raw) - prior_size
-        if charged + max(0, delta) > soft_cap:
-            return False
-        # Reserve before writing so TERM cannot create unaccounted cache bytes.
-        atomic_write(
-            ledger_path, {"schema": SCHEMA, "charged_bytes": charged + max(0, delta)}
-        )
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fd, temporary = tempfile.mkstemp(prefix=".day-cache-", dir=path.parent)
-        try:
-            with os.fdopen(fd, "wb") as handle:
-                handle.write(raw)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary, path)
-            atomic_write(
-                ledger_path, {"schema": SCHEMA, "charged_bytes": charged + delta}
-            )
-        finally:
-            if os.path.exists(temporary):
-                os.unlink(temporary)
-    return True
+    return write(path, raw, cache_root=cache_root, soft_cap=soft_cap, reserve=reserve)
 
 
 def version_economics(rows, *, strategy_revision=False):

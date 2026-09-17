@@ -457,6 +457,19 @@ def build_policy(
     )
     if closed_loop and joint_gate != research.get("joint_allocation_gate"):
         raise ValueError("widget_joint_allocation_reconstruction_mismatch")
+    from src.engine.monitoring.research_version_outcomes import (
+        outcome_feedback,
+        mature_widget_retired_revisions,
+    )
+
+    feedback = outcome_feedback(source_date) if closed_loop else {}
+    if (
+        closed_loop
+        and research.get("policy_version_feedback") is not None
+        and research["policy_version_feedback"] != feedback
+    ):
+        raise ValueError("widget_native_version_feedback_reconstruction_mismatch")
+    retired_revisions = mature_widget_retired_revisions(feedback)
     incumbent_by_symbol = (
         WidgetSymbolRuntimePolicyLoader(
             incumbent_policy_dir or DEFAULT_POLICY_DIR
@@ -544,6 +557,9 @@ def build_policy(
             and not closed_loop
         ):
             observation_symbols[symbol] = {"name": name, **observation}
+        if revision is not None and revision["revision_sha256"] in retired_revisions:
+            quality_blocks[symbol] = "mature_nonperforming_revision_entry_retired"
+            continue
         selected = _validated_selected_policy(result)
         if selected is None:
             continue
@@ -667,6 +683,9 @@ def build_policy(
         }
     if closed_loop:
         for symbol, incumbent in incumbent_by_symbol.items():
+            if incumbent.get("candidate_revision_sha256") in retired_revisions:
+                quality_blocks[symbol] = "mature_nonperforming_revision_entry_retired"
+                continue
             if symbol in symbols or symbol not in universe:
                 continue
             quality = (quality_by_symbol or {}).get(symbol) or {}
@@ -705,7 +724,12 @@ def build_policy(
     return {
         "schema": CLOSED_LOOP_POLICY_SCHEMA if closed_loop else POLICY_SCHEMA,
         **(
-            {"closed_loop_contract": loop.SCHEMA, "joint_allocation_gate": joint_gate}
+            {
+                "closed_loop_contract": loop.SCHEMA,
+                "joint_allocation_gate": joint_gate,
+                "version_feedback_sha256": loop.digest(feedback),
+                "retired_candidate_revision_sha256": sorted(retired_revisions),
+            }
             if closed_loop
             else {}
         ),

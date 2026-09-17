@@ -758,7 +758,18 @@ class ReplayContext:
             if self.cache_dir is not None:
                 path = self._day_path(day)
                 try:
-                    if not path.is_symlink() and path.lstat().st_size <= 1024 * 1024:
+                    from src.engine.monitoring.research_cache_storage import touch
+                    from src.engine.monitoring import research_closed_loop as loop
+
+                    root = self.cache_dir.parent
+                    aggregate = loop._directory(loop.DIRECTORY) / "cache"
+                    if path.absolute().is_relative_to(aggregate.absolute()):
+                        root = aggregate
+                    if (
+                        not path.is_symlink()
+                        and path.lstat().st_size <= 1024 * 1024
+                        and touch(path, root=root)
+                    ):
                         decoder = zlib.decompressobj()
                         raw = decoder.decompress(path.read_bytes(), 8 * 1024 * 1024)
                         if decoder.eof and not decoder.unused_data:
@@ -1717,6 +1728,7 @@ def _frozen_prospective_result(
     replay_context,
     baseline,
     baseline_policy_id=None,
+    version_feedback=None,
 ):
     """Keep the historical grid diagnostic; validate a prespecified future seed."""
     from src.engine.monitoring import research_closed_loop as loop
@@ -1742,8 +1754,29 @@ def _frozen_prospective_result(
             frozen, reason = None, "source_or_cost_correction"
         elif frozen.get("baseline_parameters") != baseline:
             frozen, reason = None, "incumbent_parent_changed"
+        elif version_feedback is not None:
+            from src.engine.monitoring.research_version_outcomes import (
+                mature_widget_retired_revisions,
+            )
+
+            if frozen["revision_sha256"] in mature_widget_retired_revisions(
+                version_feedback
+            ):
+                if parameters == frozen["parameters"]:
+                    return {
+                        **result,
+                        "decision": "mature_nonperforming_revision_entry_retired",
+                        "candidate_revision": frozen,
+                    }
+                frozen, reason = None, "mature_nonperforming_revision"
     if frozen is None:
         if not isinstance(parameters, dict):
+            if reason == "mature_nonperforming_revision":
+                return {
+                    **result,
+                    "candidate_revision": previous,
+                    "decision": "mature_nonperforming_revision_entry_retired",
+                }
             return result
         frozen = loop.candidate_revision(
             symbol=symbol,
@@ -1957,6 +1990,11 @@ def build_report(
         applied_baselines = WidgetSymbolRuntimePolicyLoader().resolve_all(
             observed_date=end_date
         )
+    from src.engine.monitoring.research_version_outcomes import outcome_feedback
+
+    version_feedback = (
+        outcome_feedback(end_date) if end_date >= date(2026, 9, 17) else {}
+    )
     results: dict[str, Any] = {}
     source_meta: dict[str, Any] = {}
     for symbol, name in universe.items():
@@ -2169,6 +2207,7 @@ def build_report(
                 replay_context=replay_context,
                 baseline=frozen_baseline,
                 baseline_policy_id=baseline_receipt.get("policy_id"),
+                version_feedback=version_feedback,
             )
         replay_context.flush()
         _ACTIVE_REPLAY_CONTEXT = None
@@ -2180,6 +2219,7 @@ def build_report(
         if result["decision"] == "holdout_pass_widget_signal_policy_candidate"
     ]
     report = {
+        "policy_version_feedback": version_feedback,
         "schema": REPORT_SCHEMA,
         "status": "complete",
         "decision": (
@@ -2328,7 +2368,8 @@ def _attach_population_evidence(report, *, market_census=None, capital_limit_krw
         report["closed_loop_contract"] = SCHEMA
         from src.engine.monitoring.research_version_outcomes import outcome_feedback
 
-        report["policy_version_feedback"] = outcome_feedback(end_date)
+        if "policy_version_feedback" not in report:
+            report["policy_version_feedback"] = outcome_feedback(end_date)
         report["joint_allocation_gate"] = report_joint_gate(
             report, source_date=end_date
         )
@@ -2372,6 +2413,9 @@ def research_contract_hash() -> str:
         policy_research_economics,
         research_closed_loop,
         research_source_facts,
+        research_portfolio_economics,
+        research_version_outcomes,
+        research_cache_storage,
     )
 
     digest = hashlib.sha256()
@@ -2383,6 +2427,9 @@ def research_contract_hash() -> str:
         policy_research_economics,
         research_closed_loop,
         research_source_facts,
+        research_portfolio_economics,
+        research_version_outcomes,
+        research_cache_storage,
     ):
         digest.update(Path(module.__file__).read_bytes())
     digest.update(Path(__file__).read_bytes())
