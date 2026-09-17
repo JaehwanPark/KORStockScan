@@ -608,6 +608,7 @@ run_postclose_cmd() {
 import os
 import json
 import resource
+import re
 import signal
 import subprocess
 import sys
@@ -616,14 +617,26 @@ import time
 started = None
 def emit_metrics(returncode, complete):
     usage = resource.getrusage(resource.RUSAGE_CHILDREN) if complete else None
+    # Allowlisted module identity only; never publish arbitrary argv/payloads.
+    modules = [
+        sys.argv[index + 1]
+        for index in range(3, len(sys.argv) - 1)
+        if sys.argv[index] == "-m"
+        and re.fullmatch(r"python(?:[0-9]+(?:\.[0-9]+)?)?", os.path.basename(sys.argv[index - 1]))
+        and re.fullmatch(r"src\.engine\.[a-zA-Z0-9_.]+", sys.argv[index + 1])
+    ]
     receipt = {
         "schema": "postclose_command_metrics_v1",
         "target_date": sys.argv[1],
         "phase": sys.argv[2],
+        "producer_module": modules[0] if modules else None,
         "wall_sec": None if started is None else time.monotonic() - started,
         "child_user_cpu_sec": None if usage is None else usage.ru_utime,
         "child_system_cpu_sec": None if usage is None else usage.ru_stime,
         "peak_waited_child_rss_kib": None if usage is None else usage.ru_maxrss,
+        "child_input_block_operations": None if usage is None else usage.ru_inblock,
+        "child_output_block_operations": None if usage is None else usage.ru_oublock,
+        "io_scope": "reaped_children_block_operations_not_read_write_bytes_or_rows",
         "cpu_scope": "reaped_children_rusage_not_supervisor",
         "rss_scope": "largest_waited_child_not_concurrent_group_sum",
         "measurement_complete": complete,
