@@ -1,0 +1,453 @@
+{
+  "artifacts": {
+    "episode_19_d120": {
+      "path": "/home/ubuntu/KORStockScan/tmp/completion-latest-native-episode-grid-N19D120.json",
+      "receipt": {
+        "actual_order_submitted": false,
+        "allowed_runtime_apply": false,
+        "broker_order_forbidden": true,
+        "completed_symbol_count": 19,
+        "fixture": "native_templates_synthetic_390_bars_no_broker_or_policy_acceptance",
+        "measurements": {
+          "append_N19_D121": {
+            "candidate_compute_cpu_seconds": 19.874082256999998,
+            "candidate_compute_wall_seconds": 99.64017259998946,
+            "canonical_original_parity": true,
+            "checkpoint": {
+              "miss": 19
+            },
+            "day_transitions": {
+              "cache_disabled_fast_reference": 19
+            },
+            "digest": "620a73abaefb92639e3163a1bb52c705540a24b98b53723c78d73e3027615b90",
+            "native_grid_sizes": [
+              270,
+              810,
+              1350,
+              2700,
+              2970,
+              5130,
+              5940
+            ],
+            "native_grid_total": 30780,
+            "peak_rss_kib": 390780,
+            "remote_requests": 0,
+            "separate_preparation_cpu_seconds": 13.730596878999933,
+            "separate_reference_cpu_seconds": 52.826806466999955
+          },
+          "cold_N19_D120": {
+            "candidate_compute_cpu_seconds": 111.19641908100004,
+            "candidate_compute_wall_seconds": 556.2509861870058,
+            "canonical_original_parity": true,
+            "checkpoint": {
+              "miss": 19
+            },
+            "day_transitions": {
+              "day_hit": 3224,
+              "day_replay": 3201616
+            },
+            "digest": "bf7205aebe2a60a646a84a6cee758480c46b3d78a8489101b9ce86bc622cc9f3",
+            "native_grid_sizes": [
+              270,
+              810,
+              1350,
+              2700,
+              2970,
+              5130,
+              5940
+            ],
+            "native_grid_total": 30780,
+            "peak_rss_kib": 387780,
+            "remote_requests": 0,
+            "separate_preparation_cpu_seconds": 13.81382628599998,
+            "separate_reference_cpu_seconds": 53.27570904999999
+          },
+          "warm_N19_D120": {
+            "candidate_compute_cpu_seconds": 0.26503838700000415,
+            "candidate_compute_wall_seconds": 1.4779295190091943,
+            "canonical_original_parity": true,
+            "checkpoint": {
+              "hit": 19
+            },
+            "day_transitions": {},
+            "digest": "bf7205aebe2a60a646a84a6cee758480c46b3d78a8489101b9ce86bc622cc9f3",
+            "native_grid_sizes": [
+              270,
+              810,
+              1350,
+              2700,
+              2970,
+              5130,
+              5940
+            ],
+            "native_grid_total": 30780,
+            "peak_rss_kib": 387780,
+            "remote_requests": 0,
+            "separate_preparation_cpu_seconds": 13.621006942999998,
+            "separate_reference_cpu_seconds": 0.0
+          }
+        },
+        "producer_sha256": "fa3fe2ae0d60bc18d66fe3d8ed9c03cfa76f0a7e1fdd4dd820ba7bbce6cf1456",
+        "reason": null,
+        "requested_scope": {
+          "days": 120,
+          "modes": [
+            "cold",
+            "warm",
+            "append"
+          ],
+          "symbols": 19
+        },
+        "runtime_effect": false,
+        "status": "complete",
+        "unprocessed_symbol_count": 0
+      },
+      "sha256": "2c1bf8e74abc985dfc95d98a482be1c6ded1baa1d637194d5a7307139c3c7840"
+    },
+    "normalized_statistics_latest": {
+      "path": "/home/ubuntu/KORStockScan/tmp/completion-r4-statistics.json",
+      "receipt": {
+        "actual_order_submitted": false,
+        "allowed_runtime_apply": false,
+        "broker_order_forbidden": true,
+        "fixture": "synthetic_normalized_exact_cost_and_paired_statistics_not_native_broker_or_candidate_publication_acceptance",
+        "measurements": {
+          "N100D120": {
+            "cpu_seconds": 1.0359389229999998,
+            "feedback_digest": "9ce69ebb0fde981026cc04db6649a52339820178b77a24c5243d9e3259dc4763",
+            "joint_compute_cpu_seconds": 0.32572510099999974,
+            "joint_digest": "e9f07274550412bf2fc878561347924f4f85281df50d7f8fa13f3216c76641a5",
+            "native_fixture_bytes": 8140680,
+            "normalized_exact_cost_outcomes": 12000,
+            "paired_trade_episodes": 24000,
+            "peak_rss_kib": 156900,
+            "remote_requests": 0,
+            "wall_seconds": 5.195942379999906
+          },
+          "N100D72": {
+            "cpu_seconds": 0.6494169159999998,
+            "feedback_digest": "8288d2fb9fe36ad4ac384f8785bc29b2851e64d427ce0f76c3c48d41ad1a4d3b",
+            "joint_compute_cpu_seconds": 0.22101656899999989,
+            "joint_digest": "48da4b0a725731dc8c03529f079e51086be13ef89e0cbbab806b5dbb01dd02ab",
+            "native_fixture_bytes": 4884408,
+            "normalized_exact_cost_outcomes": 7200,
+            "paired_trade_episodes": 14400,
+            "peak_rss_kib": 143100,
+            "remote_requests": 0,
+            "wall_seconds": 3.2084888739991584
+          },
+          "N19D120": {
+            "cpu_seconds": 0.2565285909999999,
+            "feedback_digest": "79be224d86577a955c8437034041f7b3a746804b8ed299e69813ec7372c092d7",
+            "joint_compute_cpu_seconds": 0.05788549300000012,
+            "joint_digest": "b525c170ab244199e837eca1f70c3cc45c4aa7a550cf790425b269069e6c1c7e",
+            "native_fixture_bytes": 1569960,
+            "normalized_exact_cost_outcomes": 2280,
+            "paired_trade_episodes": 4560,
+            "peak_rss_kib": 143100,
+            "remote_requests": 0,
+            "wall_seconds": 1.5239317439991282
+          },
+          "N19D72": {
+            "cpu_seconds": 0.15636881800000002,
+            "feedback_digest": "f2372c204ff5ef7c4e012bf6e71ccb102e678fd6d230e134247fb9b2ea890a50",
+            "joint_compute_cpu_seconds": 0.03219724600000007,
+            "joint_digest": "a2b4d5d35d26267bf7e977d6aba97d1b0e356612339257af6f9367b6ed788987",
+            "native_fixture_bytes": 941976,
+            "normalized_exact_cost_outcomes": 1368,
+            "paired_trade_episodes": 2736,
+            "peak_rss_kib": 126880,
+            "remote_requests": 0,
+            "wall_seconds": 0.9919972799980314
+          },
+          "N50D120": {
+            "cpu_seconds": 0.5476845290000001,
+            "feedback_digest": "0b11f4da68cb722970904e0835647700e09f2878769edf1968d8e26e3f03c524",
+            "joint_compute_cpu_seconds": 0.15833966500000018,
+            "joint_digest": "76bd3d0a055329e88d3806547af5b9fe590cf037c033b2c722ab5ae7affd21c7",
+            "native_fixture_bytes": 4084680,
+            "normalized_exact_cost_outcomes": 6000,
+            "paired_trade_episodes": 12000,
+            "peak_rss_kib": 143100,
+            "remote_requests": 0,
+            "wall_seconds": 2.970910890995583
+          },
+          "N50D72": {
+            "cpu_seconds": 0.3257449119999999,
+            "feedback_digest": "97407d80c63f151e81e113922a0748cca57ba4df7b474fea74246360533b0829",
+            "joint_compute_cpu_seconds": 0.089377331,
+            "joint_digest": "cca355a794e37fa0f07f79e6f5b030a42883743d7ad0cf0b249d626a1c329979",
+            "native_fixture_bytes": 2450808,
+            "normalized_exact_cost_outcomes": 3600,
+            "paired_trade_episodes": 7200,
+            "peak_rss_kib": 133076,
+            "remote_requests": 0,
+            "wall_seconds": 1.6797713490013848
+          }
+        },
+        "producer_sha256": "475e5d500c0dce57a4a076ffa348040252144dfd51b77959a0ff647c38779bee",
+        "runtime_effect": false,
+        "status": "complete"
+      },
+      "sha256": "08a597d544bc540eda1f96fe2242918d0c8a8efe21615dd1fed036cea5fb2940"
+    },
+    "widget_100_d120": {
+      "path": "/home/ubuntu/KORStockScan/tmp/completion-scale-latest-r2-N100D120.json",
+      "receipt": {
+        "actual_order_submitted": false,
+        "allowed_runtime_apply": false,
+        "broker_order_forbidden": true,
+        "completed_symbol_count": 87,
+        "failed_phase": "cold",
+        "measurements": {
+          "cold_N19_D120": {
+            "cache_hits": 0,
+            "cache_misses": 3035440,
+            "cache_write_skips": 0,
+            "candidate_digest": "29fa014de8291bcce612f7e1b0f56966bed9f754e3e04995ec874cc1458738b1",
+            "caps": [
+              1,
+              2,
+              3,
+              4,
+              5
+            ],
+            "cpu_seconds": 237.794008917,
+            "day_count": 120,
+            "grid": 1536,
+            "peak_rss_kib": 205872,
+            "remote_requests": 0,
+            "symbols": 19,
+            "wall_seconds": 1201.014669559001
+          },
+          "cold_N50_D120": {
+            "cache_hits": 0,
+            "cache_misses": 7988000,
+            "cache_write_skips": 0,
+            "candidate_digest": "c3caedabe6cd7b9bc69d619e48eab17113b3647f23e72fdd55b4a9e585abdc8c",
+            "caps": [
+              1,
+              2,
+              3,
+              4,
+              5
+            ],
+            "cpu_seconds": 621.738908718,
+            "day_count": 120,
+            "grid": 1536,
+            "peak_rss_kib": 205872,
+            "remote_requests": 0,
+            "symbols": 50,
+            "wall_seconds": 3126.4177731140007
+          }
+        },
+        "populated": true,
+        "producer_sha256": "fa3fe2ae0d60bc18d66fe3d8ed9c03cfa76f0a7e1fdd4dd820ba7bbce6cf1456",
+        "reason": "compute_phase_budget_exceeded",
+        "requested_scope": {
+          "caps": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "days": 120,
+          "grid": 1536,
+          "symbols": 100
+        },
+        "runtime_effect": false,
+        "schema": "machine_research_closed_loop_v1",
+        "status": "deferred",
+        "unprocessed_symbol_count": 13
+      },
+      "sha256": "ae275c16899325d0df99b2ec7d29b1df44ed1b95c0269434de59289212c82dc3"
+    },
+    "widget_19_d72": {
+      "path": "/home/ubuntu/KORStockScan/tmp/completion-scale-latest-r2-N19D72.json",
+      "receipt": {
+        "actual_order_submitted": false,
+        "allowed_runtime_apply": false,
+        "broker_order_forbidden": true,
+        "fixture": "deterministic_390_bars_per_symbol_day_sinusoid_v2",
+        "measurements": {
+          "append_N19_D73": {
+            "cache_hits": 1634608,
+            "cache_misses": 29184,
+            "cache_write_skips": 0,
+            "candidate_digest": "61b175011ad2b70dd889ac38bb4b7bd62bfd5850ade099f2d1df455932419228",
+            "caps": [
+              1,
+              2,
+              3,
+              4,
+              5
+            ],
+            "cpu_seconds": 60.13627751000001,
+            "day_count": 73,
+            "grid": 1536,
+            "peak_rss_kib": 171400,
+            "remote_requests": 0,
+            "symbols": 19,
+            "wall_seconds": 300.5976237460054
+          },
+          "cold_N19_D72": {
+            "cache_hits": 0,
+            "cache_misses": 1634608,
+            "cache_write_skips": 0,
+            "candidate_digest": "0ec79a34c5158820ee7909e632a1818f749b10d05d5c1c96e37075af72707b18",
+            "caps": [
+              1,
+              2,
+              3,
+              4,
+              5
+            ],
+            "cpu_seconds": 131.957451125,
+            "day_count": 72,
+            "grid": 1536,
+            "peak_rss_kib": 171400,
+            "remote_requests": 0,
+            "symbols": 19,
+            "wall_seconds": 670.3930346509951
+          },
+          "warm_N19_D72": {
+            "cache_hits": 1634608,
+            "cache_misses": 0,
+            "cache_write_skips": 0,
+            "candidate_digest": "0ec79a34c5158820ee7909e632a1818f749b10d05d5c1c96e37075af72707b18",
+            "caps": [
+              1,
+              2,
+              3,
+              4,
+              5
+            ],
+            "cpu_seconds": 58.80439899699999,
+            "day_count": 72,
+            "grid": 1536,
+            "peak_rss_kib": 171400,
+            "remote_requests": 0,
+            "symbols": 19,
+            "wall_seconds": 293.999958073
+          }
+        },
+        "populated": true,
+        "producer_sha256": "fa3fe2ae0d60bc18d66fe3d8ed9c03cfa76f0a7e1fdd4dd820ba7bbce6cf1456",
+        "runtime_effect": false,
+        "schema": "machine_research_closed_loop_v1",
+        "status": "complete"
+      },
+      "sha256": "68c5a718c595ef0336b1693179185dd34c7b615363f252f6f8feae7c6e9a6798"
+    }
+  },
+  "asof_kst": "2026-09-17T17:31:57.944225+09:00",
+  "broker_account_order_calls": 0,
+  "final_measured_scope": {
+    "completed_symbol_count": 87,
+    "fixture_backlog_not_actual_runtime_symbol_backlog": true,
+    "unprocessed_symbol_count": 13
+  },
+  "frozen_measurement_scope": {
+    "episode_native_grid_source": "9031cb65:native replay/checkpoint bytes equal final source",
+    "final_delta": "c7292edd rejects malformed episode leg collections in C4 reference conversion; full discovery/episode grids do not execute that function. Latest normalized C4/C7 N19/50/100 D72/120 rerun completed; all six paired economics digests unchanged.",
+    "full_native_acquisition_publication_consumer_benchmark": false,
+    "same_whole_producer_hash": false,
+    "widget_discovery_source": "f91b5cbf:widget/discovery/native-cache bytes equal final source"
+  },
+  "last_live_resource_samples": {
+    "korstockscan-completion-latest-native-episode-grid-20260917.service": {
+      "asof": "2026-09-17T17:26:15.575754",
+      "properties": {
+        "ActiveState": "active",
+        "CPUQuotaPerSecUSec": "200ms",
+        "CPUUsageNSec": "281238707000",
+        "Id": "korstockscan-completion-latest-native-episode-grid-20260917.service",
+        "MainPID": "805519",
+        "MemoryMax": "536870912",
+        "MemorySwapPeak": "319488",
+        "Nice": "19"
+      }
+    },
+    "korstockscan-completion-scale-latest-r2-100-120-20260917.service": {
+      "asof": "2026-09-17T17:31:16.055366",
+      "properties": {
+        "ActiveState": "active",
+        "CPUQuotaPerSecUSec": "200ms",
+        "CPUUsageNSec": "1077165963000",
+        "Id": "korstockscan-completion-scale-latest-r2-100-120-20260917.service",
+        "MainPID": "703024",
+        "MemoryMax": "536870912",
+        "MemorySwapPeak": "56217600",
+        "Nice": "19"
+      }
+    }
+  },
+  "natural_new_policy_consumption": "not_yet_due_at_measurement_then_wait_for_registered_qualified_calendars",
+  "observed_100_symbol_unit_elapsed_seconds": 5413.0,
+  "optional_storage": {
+    "free_reserve_bytes": 10737418240,
+    "primary_raw_policy_holding_deleted": false,
+    "soft_cap_bytes": 2147483648,
+    "superseded_own_fixture_bytes_removed": 72928483
+  },
+  "performance_acceptance": {
+    "actual_policy_profit": "waiting_not_fixture_economics",
+    "full_100_120_budget": "miss_deferred_backlog_retained",
+    "overall_cpu_reduction_50pct": "OPEN_not_established",
+    "swap_zero": "miss_concurrent_engineering_units_swapped",
+    "universal_unchanged_day_replay_zero": "OPEN_adaptive_reference_fallback"
+  },
+  "provider_requests": 0,
+  "runtime_effect": false,
+  "schema": "widget_episode_completion_engineering_scale_review_v1",
+  "source_gates": {
+    "final_missing_leg_physical": 83,
+    "final_missing_leg_source": 83,
+    "incoming_test_clock_delta": 190,
+    "latest_integrated": 887,
+    "latest_physical_shared": 397,
+    "location": 3
+  },
+  "source_sha256": {
+    "low_price_two_leg_entry_spot_research.py": "224829574b1034e9ba3eeb7425f1ed5270febd9e6d2f0a6feb1915fcc2d955ea",
+    "low_price_two_leg_expanded_candidate_research.py": "442471b860340958cf4ec3fbb2a0e14192366af50451b96538fcf367e8bd3546",
+    "research_cache_storage.py": "a78aa803036e76b5608049ec678d7d132a0acd0190718a2e7067c960627cc75c",
+    "research_closed_loop.py": "eebf885b7c41d2e0fca6fe28c25b767d0d1dab1336f52c203b0a4f8705a10195",
+    "research_portfolio_economics.py": "c53b27572d7b4de7c9c5127e13265296b41ab7f6f5ae8119c8b772d209885c80",
+    "research_version_outcomes.py": "83544d45ed5d89b2b553a267e62ba3e7a6e60552a784f49ca31ca7194cc69330",
+    "widget_symbol_signal_policy_research.py": "393a21cb50d56ad3c882fffea8fa07abcd5bde71156810f1d54d25e04eb69ed7"
+  },
+  "unit_resource_receipts": {
+    "korstockscan-completion-latest-native-episode-grid-20260917.service": {
+      "ActiveState": "inactive",
+      "CPUQuotaPerSecUSec": "infinity",
+      "CPUUsageNSec": "[not set]",
+      "ExecMainExitTimestamp": "",
+      "ExecMainStartTimestamp": "",
+      "ExecMainStatus": "0",
+      "Id": "korstockscan-completion-latest-native-episode-grid-20260917.service",
+      "MainPID": "0",
+      "MemoryMax": "infinity",
+      "MemorySwapPeak": "[not set]",
+      "Nice": "0",
+      "Result": "success"
+    },
+    "korstockscan-completion-scale-latest-r2-100-120-20260917.service": {
+      "ActiveState": "failed",
+      "CPUQuotaPerSecUSec": "200ms",
+      "CPUUsageNSec": "1077837060000",
+      "ExecMainExitTimestamp": "Thu 2026-09-17 17:31:19 KST",
+      "ExecMainStartTimestamp": "Thu 2026-09-17 16:01:06 KST",
+      "ExecMainStatus": "75",
+      "Id": "korstockscan-completion-scale-latest-r2-100-120-20260917.service",
+      "MainPID": "0",
+      "MemoryMax": "536870912",
+      "MemorySwapPeak": "56217600",
+      "Nice": "19",
+      "Result": "exit-code"
+    }
+  },
+  "validation_source_commit": "c7292edd70538ae37aa298aa0072b7f1d42e0916",
+  "validation_source_root": "/home/ubuntu/KORStockScan-runtime-releases/widget-episode-completion-r4-20260917"
+}
