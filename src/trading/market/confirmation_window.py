@@ -103,6 +103,11 @@ def _normalize(row: Mapping[str, Any], *, depth: bool) -> dict[str, Any]:
                 result["provider_trade_epoch"] = _number(result["provider_trade_epoch"])
             except (TypeError, ValueError, OverflowError):
                 result["provider_trade_epoch"] = None
+        if "provider_trade_time_precision_ms" in result:
+            precision = result["provider_trade_time_precision_ms"]
+            result["provider_trade_time_precision_ms"] = precision if type(precision) is int else None
+        if "provider_trade_date_basis" in result and not isinstance(result["provider_trade_date_basis"], str):
+            result["provider_trade_date_basis"] = None
     return result
 
 

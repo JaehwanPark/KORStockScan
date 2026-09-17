@@ -359,6 +359,9 @@ def test_provider_clock_cannot_back_current_micro(delay, precision, reason):
     assert reason in feature['source_gap_reasons']
     assert feature['eligible_for_feature_ablation'] is False
     assert _live(depths, trades)['source_quality_status'] == 'source_gap'
+    offline = _offline(depths, trades)['horizons'][0]
+    assert reason in offline['source_gap_reasons']
+    assert offline['window_source_sha256'] == feature['window_source_sha256']
 
 
 def test_coarse_provider_clock_and_unused_old_row_preserve_micro_window():
