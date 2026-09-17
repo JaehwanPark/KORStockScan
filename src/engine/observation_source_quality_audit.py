@@ -672,6 +672,25 @@ def _machine_ai_natural_source_consumption(
             "generation_stable": not source_generation_changed,
         },
         "sources": receipts,
+        "market_data_health_receipt_population": {
+            "metric_role": "funnel_count",
+            "decision_authority": "diagnostic_no_order_authority",
+            "window_policy": "exact_source_date_entry_screen_trace_archive",
+            "primary_decision_metric": "not_applicable_diagnostic",
+            "sample_floor": "not_applicable_contract_validation",
+            "trace_count": len(traces),
+            "companion_mapping_present_count": sum(
+                isinstance(trace.get("market_data_health"), dict)
+                for trace in traces
+            ),
+            "companion_missing_or_nonmapping_count": sum(
+                not isinstance(trace.get("market_data_health"), dict)
+                for trace in traces
+            ),
+            "source_quality_gate": "original_trace_and_source_manifest_digest_only",
+            "forbidden_uses": ["economic_eligibility", "policy_promotion", "order_authority"],
+            "missing_values_imputed": False,
+        },
         "machine_evaluation_population": {
             "count": len(captures),
             "action_counts": dict(sorted(machine_actions.items())),

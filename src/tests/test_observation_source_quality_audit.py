@@ -208,6 +208,10 @@ def test_machine_ai_natural_source_audit_keeps_noncall_and_provider_denominators
         "machine_bundle_sha256": "b" * 64,
         "entry_mechanistic_action": "RECHECK",
         "provider_called": False,
+        "market_data_health": {
+            "schema": "kiwoom_market_data_health_v1",
+            "decision_authority": False,
+        },
         "result_source": "mechanistic_pre_adjudication",
     }
     provider_trace = {
@@ -238,6 +242,12 @@ def test_machine_ai_natural_source_audit_keeps_noncall_and_provider_denominators
     report = audit._machine_ai_natural_source_consumption(day, data_root=tmp_path)
 
     assert report["status"] == "pass"
+    health_counts = report["market_data_health_receipt_population"]
+    assert health_counts["trace_count"] == 2
+    assert health_counts["companion_mapping_present_count"] == 1
+    assert health_counts["companion_missing_or_nonmapping_count"] == 1
+    assert health_counts["missing_values_imputed"] is False
+    assert "economic_eligibility" in health_counts["forbidden_uses"]
     assert report["machine_evaluation_population"]["count"] == 1
     assert report["machine_evaluation_population"]["action_counts"] == {"RECHECK": 1}
     assert report["ai_screen_population"] == {

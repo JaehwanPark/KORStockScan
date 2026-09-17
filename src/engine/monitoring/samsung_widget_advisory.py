@@ -872,14 +872,17 @@ class YahooExternalMarketProvider:
                 "naive_source_timestamp",
             )
         observed_kst = observed_index.tz_convert(KST)
-        age_sec = max(0.0, (received_at - observed_kst.to_pydatetime()).total_seconds())
+        age_sec = (received_at - observed_kst.to_pydatetime()).total_seconds()
         reference_cutoff = observed_index - pd.Timedelta(minutes=15)
         reference_rows = closes.loc[closes.index <= reference_cutoff]
         reference = float(reference_rows.iloc[-1]) if not reference_rows.empty else None
         change_pct = None
         if reference not in {None, 0.0}:
             change_pct = ((float(closes.iloc[-1]) - reference) / reference) * 100.0
-        if market_state == "MARKET_CLOSED":
+        if age_sec < 0:
+            quality = "UNAVAILABLE"
+            reason = "future_source_timestamp"
+        elif market_state == "MARKET_CLOSED":
             quality = "MARKET_CLOSED"
             reason = None
         elif change_pct is None:
@@ -898,7 +901,7 @@ class YahooExternalMarketProvider:
             round(change_pct, 4) if change_pct is not None else None,
             observed_kst.isoformat(),
             received_at.isoformat(),
-            round(age_sec, 2),
+            age_sec if age_sec < 0 else round(age_sec, 2),
             "yahoo_best_effort",
             quality,
             market_state,
@@ -948,14 +951,18 @@ def _age_external_points(
     aged: dict[str, ExternalPoint] = {}
     for key, point in points.items():
         age_sec = point.age_sec
+        reason = point.reason
         if point.observed_at:
             try:
                 source_time = datetime.fromisoformat(point.observed_at).astimezone(KST)
-                age_sec = max(0.0, (now - source_time).total_seconds())
+                age_sec = (now - source_time).total_seconds()
             except (TypeError, ValueError):
                 pass
         quality = point.quality
-        if (
+        if age_sec is not None and age_sec < 0:
+            quality = "UNAVAILABLE"
+            reason = "future_source_timestamp"
+        elif (
             point.market_state != "MARKET_CLOSED"
             and age_sec is not None
             and age_sec > EXTERNAL_STALE_SEC
@@ -964,7 +971,9 @@ def _age_external_points(
         aged[key] = ExternalPoint(
             **{
                 **asdict(point),
-                "age_sec": round(age_sec, 2) if age_sec is not None else None,
+                "reason": reason,
+                "age_sec": (age_sec if age_sec is not None and age_sec < 0 else
+                            round(age_sec, 2) if age_sec is not None else None),
                 "quality": quality,
             }
         )

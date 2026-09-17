@@ -498,17 +498,22 @@ class MicroEstimatorStore:
                 0.0,
             )
             observed = _safe_float(observed_ts, 0.0)
-            age_sec = (
-                max(0.0, float(now_ts) - observed) if observed > 0 else max_age_sec
+            age_sec = float(now_ts) - observed
+            source_time_proven = bool(
+                observed > 0 and math.isfinite(observed)
+                and math.isfinite(age_sec) and age_sec >= 0
             )
-            age_confidence = _clamp(1.0 - (age_sec / max(1.0, max_age_sec)), 0.0, 1.0)
+            age_confidence = (
+                _clamp(1.0 - (age_sec / max(1.0, max_age_sec)), 0.0, 1.0)
+                if source_time_proven else 0.0
+            )
             decayed_pressure = 50.0 + (
                 (_clamp(pressure, 0.0, 100.0) - 50.0) * age_confidence
             )
             ofi_hint = (
                 _clamp(delta / max(abs(delta), 1000.0), -1.0, 1.0) if delta else 0.0
             )
-            confidence = 0.40 * age_confidence if observed > 0 else 0.0
+            confidence = 0.40 * age_confidence
             self._apply_observation(
                 state,
                 now_ts=now_ts,

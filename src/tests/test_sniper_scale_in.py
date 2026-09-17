@@ -27,6 +27,16 @@ from src.engine.scalping.micro_estimator_state import (
     MicroEstimatorStore,
     feature_only_fields_from_snapshot,
 )
+
+
+def test_micro_estimator_future_probe_has_no_source_confidence():
+    store = MicroEstimatorStore()
+    state = store.update_from_feature_probe(
+        "000001", {"buy_pressure_10t": 100, "net_aggressive_delta_10t": 1000},
+        now_ts=1000.0, observed_ts=1000.001,
+    )
+    assert state.confidence == 0.0
+    assert state.source_state == "default_prior"
 from src.utils.constants import TRADING_RULES as CONFIG
 from src.engine.scalping.rising_missed_one_share_entry import (
     BLOCK_ALREADY_HOLDING,

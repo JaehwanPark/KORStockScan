@@ -455,13 +455,14 @@ def realtime_type_provenance(
             ).upper(),
             "observed_at": _iso(observed_epoch),
             "observed_epoch": observed_epoch,
-            "age_ms": (round(max(0.0, age_ms), 3) if age_ms is not None else None),
+            "age_ms": (age_ms if age_ms is not None and age_ms < 0 else
+                       round(age_ms, 3) if age_ms is not None else None),
             "quality": (
                 "missing"
                 if observed_epoch is None
                 else (
                     "future"
-                    if age_ms is not None and age_ms < -_FUTURE_TOLERANCE_MS
+                    if age_ms is not None and age_ms < 0
                     else (
                         "fresh"
                         if age_ms is not None and age_ms <= _FRESH_MS
@@ -614,7 +615,7 @@ def route_realtime_partition_status(
             continue
         observed_epoch = _epoch(row.get("observed_epoch"))
         age_ms = (
-            max(0.0, (now_epoch - observed_epoch) * 1000.0)
+            (now_epoch - observed_epoch) * 1000.0
             if observed_epoch is not None
             else None
         )
@@ -626,8 +627,7 @@ def route_realtime_partition_status(
             row.get("quality") == "fresh"
             if source == "canonical_exact_route"
             else age_ms is not None
-            and age_ms <= _FRESH_MS
-            and observed_epoch <= now_epoch + (_FUTURE_TOLERANCE_MS / 1000.0)
+            and 0 <= age_ms <= _FRESH_MS
         )
         if not route_exact:
             blockers.append(f"{realtime_type.lower()}_route_mismatch")
@@ -909,13 +909,14 @@ def _source_row(
     raw_age_ms = (
         (now_epoch - observed_epoch) * 1000.0 if observed_epoch is not None else None
     )
-    age_ms = round(max(0.0, raw_age_ms), 3) if raw_age_ms is not None else None
+    age_ms = (raw_age_ms if raw_age_ms is not None and raw_age_ms < 0 else
+              round(raw_age_ms, 3) if raw_age_ms is not None else None)
     quality = "fresh"
     if value is None:
         quality = "missing"
     elif age_ms is None:
         quality = "unknown_age"
-    elif raw_age_ms is not None and raw_age_ms < -_FUTURE_TOLERANCE_MS:
+    elif raw_age_ms is not None and raw_age_ms < 0:
         quality = "future"
     elif age_ms > freshness_limit_ms:
         quality = "stale"

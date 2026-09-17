@@ -923,10 +923,13 @@ def test_disabled_preflight_does_not_read_runtime_artifact(monkeypatch):
     assert snapshot["runtime_preflight_artifact"]["status"] == "not_required"
 
 
-def test_future_or_missing_realtime_identity_is_not_fresh():
+@pytest.mark.parametrize("future_offset", [2.0, 0.001, 0.0000001])
+def test_future_or_missing_realtime_identity_is_not_fresh(future_offset):
     now = datetime(2026, 7, 23, 10, 0, tzinfo=KST).timestamp()
     future_ws = _ws(now)
-    future_ws["last_realtime_type_ts"]["0B"] = now + 2
+    # Use at least one representable unit at this epoch for sub-ms coverage.
+    import math
+    future_ws["last_realtime_type_ts"]["0B"] = max(now + future_offset, math.nextafter(now, math.inf))
     future = mod.build_ai_market_snapshot(
         stock_code="005930",
         decision_stage="entry_screen",
@@ -949,6 +952,7 @@ def test_future_or_missing_realtime_identity_is_not_fresh():
     )
 
     assert future["realtime_type_provenance"]["0B"]["quality"] == "future"
+    assert future["realtime_type_provenance"]["0B"]["age_ms"] < 0
     assert future["ai_input_preflight_v1"]["source_allowed"] is False
     assert missing_item["ai_input_preflight_v1"]["source_allowed"] is False
     assert (
