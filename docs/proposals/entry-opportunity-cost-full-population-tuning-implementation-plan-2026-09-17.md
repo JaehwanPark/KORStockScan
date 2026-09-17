@@ -587,6 +587,7 @@ scanner/recheck/ADD-NOADD/exit family에서도 raw/미노출 CF가 existing cand
 - acceptance: 직접/우회client metadata 탈락0, file capture/serialize 시각으로 fresh화0, minute/history/account/auth/order에 trade activity 적용0, legacy adapter 명시적동등/parity 또는unproven.
 - 테스트: 기존 kiwoom/utils/episode read-control/enrichment/collector tests. request/parser/FID/REG 변경은 U0 reference 근거와 protocol regression을 확인한다.
 - 검증된 부분 전달: 기존 WS dashboard writer의 bounded type projection에 transport epoch·0B provider clock·quiet observation 원시각을 보존한다. 공통 owner가 raw route/file projection을 같은 함수로 소비하며 capture 시각·이전 health companion으로 fresh화하지 않는다. 이 전달과 micro/web 소비 parity는 U2 전수 direct REST/client 전환 완료를 대신하지 않는다.
+- writer worker의 consume 시각은 callback launch가 아니라 lock 아래 두 view를 고정한 뒤 기록한다. source가 launch 뒤 수신돼 가짜 future age로 보이지 않게 하되 원 receipt clock·주기 제어·callback lock·atomic publish는 유지한다.
 
 ### U3 — main/scanner·기계/AI·price/sizing/holding consumer 전환
 
