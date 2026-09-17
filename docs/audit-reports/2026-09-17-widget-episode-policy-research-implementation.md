@@ -75,3 +75,13 @@
 Inactive postclose oneshot은 자연 timer 시각을 유지하여 대기시킨다. 오늘 EOD 전 수동으로 expensive 연구를 돌려 source 날짜를 과거로 바꾸지 않는다. Collector는 검증된 기존 scope에서 기동하며 source/date/owner guard와 resource budget을 유지한다. 최종 effective unit/import/PID receipt 및 rollback 경로는 배포 후 추가한다.
 
 현재 자연 owner: 오늘 체크리스트 `WidgetPostcloseEvaluationPinAcceptance0916`. U10A/B 및 미등록 universe/공통 자본 계약의 외부 원천 잔여는 `KiwoomCommonHealthOpportunityCostAcceptance0917`에 연결한다. Source/code closure와 자연/경제성 closure를 별도로 관리한다.
+
+### 8.1 최종 배포 receipt
+
+- 구현 commit `1cecf1ad`, 최신 원격 변경 보존 통합 `77abb524`를 `origin/main`에 push했다. 운영 source는 `/home/ubuntu/KORStockScan-runtime-releases/widget-episode-research-20260917-77abb524`의 동일 통합 commit이며 source/deploy/restart.sh git clean이다. 아래 receipt 보완의 문서 commit은 이 source 세대와 구분한다.
+- 통합 15개 suite **661 passed**, wrapper/cost/collector-expansion **147 passed**, 동일 immutable release의 physical data 검증 **134 passed**. compile/Ruff/bash -n/diff/link·owner/print-only parser 검증을 수행했다. package install·운영 API 수동 호출·production 보고서 재생성은 실행하지 않았다.
+- 11:24:34 KST raw collector PID **282239**, 11:24:37 observer PID **282392**가 새 release에서 active/running이다. 실제 `/proc` cwd/argv/PYTHONPATH 및 그 release에서의 핵심 6 module import origin을 확인했다. 재시작 횟수0, 기존60초/1초 interval과 각각 CPU10%/20%, Memory256/384MiB를 보존했다.
+- Widget evaluation CPU20%/512MiB·machine final refresh CPU20%/2GiB를 보존한 채 WorkingDirectory/PYTHONPATH/project/Python/ExecStart를 같은 release로 고정했다. 각 oneshot은 inactive/PID0이며 **not_yet_due**; timer는 active이고 오늘 **20:10/21:15**에 자연 실행한다. Daytime 강제 평가를 기동 receipt로 사용하지 않았다.
+- 배포 전후 main selector SHA 동일, main actual PID **270515**, trader **28368** 및 cwd/상태, 오늘 widget dated policy SHA 동일을 검증했다. 기존 exact-date loader 결과는 이전 widget release와 동일 SHA `ab6d3f69686e42de3b6f4edde6d5687ead523c33bff0e21fd3748bb6fc83d833`이다. 현재 실행/seed 정책0과 raw 관측19의 의미를 구분한다.
+- 11:26:04 KST의 bounded snapshot census19는 PASS10/SOURCE_ERROR5/SOURCE_QUALITY_BLOCKED4다. 기존 snapshot과 새 수집의 혼합 시점이며 전체 cycle·full-session source PASS가 아니다. 실제 source issue·AM/new common-horizon 표본·policy/PID 소비·공동 capital 계약·cost-adjusted net profit은 기존 자연 owner에서 **OPEN**이다. source gap을 threshold/depth/freshness guard 완화로 없애지 않았다.
+- 세부 receipt: `data/runtime/widget_episode_research_release_2026-09-17.json`; unit 이전 설정 및 새 drop-in: `tmp/widget_episode_research_deploy_20260917`. 네 unit의 신규 `zzzzzzzzzzzzzzzz-widget-episode-research-20260917.conf`만 제거한 뒤 daemon-reload와 read-only collector2개 재기동으로 원 pin을 복구한다. 이전 drop-in·main selector·dated policy·raw/seed는 보존했다.
