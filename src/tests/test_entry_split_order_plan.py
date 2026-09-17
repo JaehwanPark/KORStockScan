@@ -4950,3 +4950,66 @@ def test_four_arm_source_date_uses_kst_and_rejects_future_date(monkeypatch, sign
     assert result["complete_exact_attempt_count"] == expected
     if not expected:
         assert result["excluded_counts"]["source_date_contract_invalid"] == 30
+
+
+def test_four_arm_latest_source_with_no_completed_receipt_retains_denominator():
+    result = split_plan.build_quantity_leg_four_arm_evaluation(_quantity_leg_four_arm_events(),
+        source_counts={'2026-09-14': 20, '2026-09-15': 10, '2026-09-17': 1})
+    assert result['eligible_attempt_count'] == 31
+    assert result['exact_attempt_join_coverage'] == pytest.approx(30 / 31)
+    assert result['chronological_partitions']['holdout']['complete_exact_attempt_count'] == 0
+    assert not result['promotion_gate']['passed']
+    assert not split_plan.quantity_leg_promotion_evidence_valid(result)
+
+
+def test_split_native_replay_persists_census_across_prior_state(monkeypatch, tmp_path):
+    from src.tests.test_strategy_owner_replay import entry_owner_event, native_entry_loader
+    from src.engine.scalping.strategy_owner_replay import build_entry_opportunity_replays
+    from src.engine.monitoring import machine_microstructure_attribution as micro
+    _patch_dirs(monkeypatch, tmp_path)
+    days = ['2026-09-14', '2026-09-15', '2026-09-17']
+    events = []
+    for day in days[:-1]:
+        native = build_entry_opportunity_replays(day, [entry_owner_event(day, i) for i in range(10)],
+            evaluated_at=datetime.fromisoformat('2026-09-17T15:00:00+09:00').timestamp(),
+            micro_loader=native_entry_loader)
+        events.extend(native['quantity_leg_events'])
+    prior = {'quantity_leg_four_arm_events': events, 'source_dates': days[:-1],
+        'entry_opportunity_replay_source_counts': {d: 10 for d in days[:-1]}}
+    monkeypatch.setattr(split_plan, '_latest_prior_cumulative_state', lambda d: (prior, 'fixture-prior'))
+    monkeypatch.setattr(split_plan, '_available_calibration_dates', lambda d: days)
+    monkeypatch.setattr(split_plan, '_source_quality_summary', lambda d: {'tuning_input_allowed': True})
+    monkeypatch.setattr(split_plan, '_iter_input_events', lambda d: ([],
+        {'_entry_opportunity_plan_events': [entry_owner_event(d)]}))
+    monkeypatch.setattr(micro, '_micro_context', native_entry_loader)
+    report = split_plan.build_report(days[-1], write=False)
+    ledger = report['cumulative_state']['entry_opportunity_replay_source_counts']
+    assert ledger == {days[0]: 10, days[1]: 10, days[2]: 1}
+    assert len(report['cumulative_state']['quantity_leg_four_arm_events']) == 21
+    assert report['quantity_leg_four_arm_evaluation']['eligible_attempt_count'] == 21
+
+
+def test_split_reader_reuses_owner_plan_without_second_pipeline_scan(monkeypatch, tmp_path):
+    from src.tests.test_strategy_owner_replay import entry_owner_event, native_entry_loader
+    from src.engine import sniper_missed_entry_counterfactual as missed
+    from src.engine.monitoring import machine_microstructure_attribution as micro
+    data_dir = _patch_dirs(monkeypatch, tmp_path)
+    day = '2026-09-17'
+    event = entry_owner_event(day)
+    row = {'pipeline': 'ENTRY_PIPELINE', 'stage': event.stage, 'emitted_at': event.emitted_at,
+        'emitted_date': day, 'stock_code': event.code, 'record_id': event.record_id,
+        'fields': {k: str(v) for k, v in event.fields.items()}}
+    _write_jsonl(data_dir / 'pipeline_events' / f'pipeline_events_{day}.jsonl', [row])
+    monkeypatch.setattr(split_plan, '_available_calibration_dates', lambda d: [day])
+    monkeypatch.setattr(split_plan, '_latest_prior_cumulative_state', lambda d: ({}, ''))
+    monkeypatch.setattr(split_plan, '_source_quality_summary', lambda d: {'tuning_input_allowed': True})
+    def forbidden_second_read(path):
+        raise AssertionError('second pipeline read')
+    monkeypatch.setattr(missed, 'iter_jsonl', forbidden_second_read)
+    monkeypatch.setattr(micro, '_micro_context', native_entry_loader)
+    report = split_plan.build_report(day, write=False)
+    native = report['input_summary']['daily_diagnostic']['entry_opportunity_executable_replay']
+    assert native['counts']['completed'] == 1
+    assert report['cumulative_state']['entry_opportunity_replay_source_counts'] == {day: 1}
+    assert len(report['cumulative_state']['quantity_leg_four_arm_events']) == 1
+    assert '_entry_opportunity_plan_events' not in report['input_summary']['daily_diagnostic']

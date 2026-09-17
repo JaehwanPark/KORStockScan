@@ -506,7 +506,7 @@ daily_threshold_cycle_report의 existing profile grid 안에서 incumbent와 등
 
 publisher의 fixed20/EV0.1%와 evaluator/후행 family validation을 한 contract에서 대사한다. 개선 제안은 절대0.1%를 보편 수익 floor로 유지하기보다 **비용 후 양의 기대값+동일모집단 대비 개선+stress/tail 비훼손**을 쓰는 것이다. 실제 numeric 기준 변경은 기존 권한·근거·회귀검증을 확인한 후 구현하며 이 문서가 임의 floor 변경 receipt는 아니다. 표본20 자체는 충분성 근거/유입 가능성을 확인하고 raw CF eligible을 수용하되 후보의 사전 실체결20건을 새 요구조건으로 추가하지 않는다.
 
-현재 Plan Rebase §5/§7에도 비용후0.10% 기준이 존재한다. 따라서 절대 floor 재설계는 현행 계약이 아니라 제안이며, 승인된 구현에서 owning contract 변경과 관련 운영문서 정합화를 함께 닫아야 한다. 소스만 낮추고 상위 계약은 그대로 남기거나, 이 계획을 근거로 현재 runtime floor를 변경하지 않는다.
+사용자 후속 구현 승인에 따라 Plan Rebase §5의 entry price 계약과 신규 `entry_price_chronological_union_v2`를 함께 정합화한다. 신규 계약은 원래 owner의 price-ready 기회·native executable fill/no-fill·선언 비용/exit·calibration에서 고정한 후보의 최신 유효 source-day holdout·비용 및 stress 후 양수/paired 개선·tail/자본/fill guard를 검증한다. 기존20 표본을 유지하고 partition마다20 또는 절대0.10%를 추가하지 않는다. legacy frozen 가격 정책의0.10% 증거 및 기계/수량의 별도0.10% 계약은 유지한다. 당일 env/가격 정책을 수동 변경하는 권한은 아니다.
 
 수량/leg는 existing four-arm evaluator를 재사용한다: incumbent qty×incumbent leg, candidate qty×incumbent leg, incumbent qty×candidate leg, candidate qty×candidate leg. 동일 opportunity/price/cost/exit/capital contract에서 complete4군을 평가하고 no-fill도 지원된 모델일 때 포함한다.
 
@@ -650,6 +650,8 @@ scanner/recheck/ADD-NOADD/exit family에서도 raw/미노출 CF가 existing cand
 - 테스트: 기존 compact/runtime policy·main_ai_prompt_optimizer/consumer·paired replay contract tests, provider mocking. 자연 Provider 호출은 구현테스트에 필요 없음.
 
 ### U9 — 가격·수량/leg의 no-submit/no-fill 경제성→Daily publisher
+
+- 후속 구현 receipt: [부분 구현 리뷰 §24](../audit-reports/2026-09-17-common-health-opportunity-cost-scoped-implementation.md#24-u9-native-executable-replay가격-계약과-영향-handoff). 실제 owner 발급 계획에서 frozen 메뉴를 기록하고 기존 native 경로로 4군/가격 replay를 생성해 기존 split producer→Daily→PREOPEN→runtime으로 전달한다. 날짜별 미완료 분모/최신 source-day holdout을 보존한다. 신규 leg 대안은 owner 발급 receipt가 있어야 하며 없으면 leg control이다. 코드 closure와 자연 quartet/선정/소비/경제성은 분리하고 전수 U0–U12 완료로 보고하지 않는다.
 
 - 의존: U6 + 해당 가격/집행 scope의 검증된 원천. 초기 action은 검증된 현재 incumbent로 고정하며 U7/U8 새 정책의 선승격을 요구하지 않는다.
 - 대상: daily_threshold_cycle_report grid/materializers, entry_split_order_plan four-arm, strategy_owner_replay, position_sizing_allocator, entry_execution_sizing_plan, main_lifecycle_paired.
@@ -798,7 +800,7 @@ scanner/recheck/ADD-NOADD/exit family에서도 raw/미노출 CF가 existing cand
 
 정량 예상은 동일 frozen 기회에서 incumbent/candidate의 cost-adjusted payoff delta, recovered executable participation, added loss/tail, net profit/source day·capital occupancy로 계산한다. overlap/cooldown/기존 quantity/cap과 exit가 동일해야 한다. 실제 trades·비용·실현순익은 별도 actual acceptance이며 CF 이익을 실현 headline에 합산하지 않는다.
 
-§7.4의 gate 합리성 검토를 H에도 경제성 floor를 붙이는 일반 gate로 사용하지 않는다. source-invalid는 수리 대상이고, 정상 BLOCK/VETO의 경제적 최적성은 source-valid 대칭 평가 대상이다. 가격의 0.10% 재설계는 현재 Plan 계약과 다른 제안이므로 owning contract/권한/문서 정합화가 선행되어야 한다.
+§7.4의 gate 합리성 검토를 H에도 경제성 floor를 붙이는 일반 gate로 사용하지 않는다. source-invalid는 수리 대상이고, 정상 BLOCK/VETO의 경제적 최적성은 source-valid 대칭 평가 대상이다. 가격의 신규 평가 계약은 사용자 구현 승인에 따라 Plan Rebase의 entry price 소유 계약과 함께 정합화한다. legacy frozen 정책의 0.10% 증거는 보존하며 신규 계약의 코드·정책 발행·actual PID/자연 경제성은 별도 receipt로 판정한다.
 
 ## 12. 문서 정합·전수 완료·이번 요청의 검증 범위
 

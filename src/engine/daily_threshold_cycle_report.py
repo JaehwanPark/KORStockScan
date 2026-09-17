@@ -1456,6 +1456,11 @@ def _materialize_mechanistic_entry_price_policy(report: dict, source_date: str) 
     metrics = candidate.get("source_metrics") or {}
     selected = metrics.get("entry_price_profile_selected_candidate") or {}
     selected_metrics = selected.get("metrics") or {}
+    from src.engine.scalping.strategy_owner_replay import entry_price_selection_evidence_valid
+    price_evidence = selected.get("price_selection_evidence")
+    new_contract = entry_price_selection_evidence_valid(price_evidence)
+    if source_date >= "2026-09-17" and not new_contract:
+        return
     candidate_id = str(selected.get("candidate_id") or "").strip()
     value_key = str(selected.get("target_value_key") or "").strip()
     value = _safe_int(selected.get("profile_bps"), 0) or 0
@@ -1478,8 +1483,13 @@ def _materialize_mechanistic_entry_price_policy(report: dict, source_date: str) 
         or isinstance(selected_metrics.get("source_quality_adjusted_ev_pct"), bool)
         or ev is None
         or not math.isfinite(ev)
-        or ev < 0.10
+        or (ev <= 0 if new_contract else ev < 0.10)
     ):
+        return
+    if new_contract and (value_key != price_evidence['target_value_key']
+        or value != price_evidence['selected_bps'] or selected_metrics != price_evidence['metrics']
+        or joined != price_evidence['metrics']['paired_sample_count']
+        or price_evidence['holdout_dates'][-1] > source_date):
         return
     active_date = _next_krx_trading_date(source_date)
     policy_version = f"mechanistic_entry_price:{source_date}:{candidate_id}"
@@ -1492,7 +1502,8 @@ def _materialize_mechanistic_entry_price_policy(report: dict, source_date: str) 
         "candidate_id": candidate_id,
         "runtime_env": {env_key: str(value)},
         "cost_adjusted_ev_pct": ev,
-        "minimum_cost_adjusted_ev_pct": 0.10,
+        "minimum_cost_adjusted_ev_pct": 0.0 if new_contract else 0.10,
+        "price_selection_evidence": price_evidence if new_contract else None,
         "exact_terminal_sample_count": joined,
         "provider_calls": 0,
         "ai_price_authority": False,
@@ -8583,6 +8594,76 @@ def _entry_price_exact_outcome_rows_by_record(
     return indexed
 
 
+def _entry_price_opportunity_candidate_grid(target_date: str, current: dict) -> dict:
+    """Consume the existing split producer's immutable full-population replay."""
+    from src.engine.monitoring.research_closed_loop import read_object
+    from src.engine.scalping.strategy_owner_replay import select_entry_price_replay
+    from src.engine.monitoring.research_closed_loop import digest
+    result = {"candidate_grid": [], "selected_candidate": None, "eligible_exact_candidate_count": 0,
+              "identity_missing_event_count": 0, "unclassified_record_count": 0,
+              "aggressive_override_record_count": 0, "related_identity_unmatched_event_count": 0,
+              "related_identity_ambiguous_event_count": 0, "exact_outcome_conflicting_identity_count": 0,
+              "exact_outcome_ambiguous_record_count": 0, "selection_contract": "entry_price_chronological_union_v2"}
+    try:
+        source = read_object(ENTRY_SPLIT_ORDER_PLAN_DIR / f"entry_split_order_plan_{target_date}.json",
+                             limit=64 * 1024 * 1024)
+        if source.get("date") != target_date or source.get("source_quality", {}).get("tuning_input_allowed") is not True:
+            return {**result, "blocker": "split_source_date_or_quality_invalid"}
+        from src.engine.scalping.entry_split_order_plan import generation_policy_snapshot_path, validate_report_policy_generation
+        policy_path = generation_policy_snapshot_path(source)
+        if policy_path is None:
+            raise ValueError("split_replay_immutable_generation_missing")
+        split_policy = read_object(policy_path, limit=64 * 1024 * 1024)
+        if not validate_report_policy_generation(source, split_policy)[0]:
+            raise ValueError("split_replay_generation_invalid")
+        result['entry_opportunity_replay_counts'] = source.get('input_summary', {}).get('daily_diagnostic', {}).get('entry_opportunity_executable_replay', {}).get('counts', {})
+        result['canonical_split_source_sha256'] = digest(source)
+        events = source.get("cumulative_state", {}).get("quantity_leg_four_arm_events") or []
+        replay_rows = []
+        counts = source.get("cumulative_state", {}).get("entry_opportunity_replay_source_counts")
+        if (not isinstance(counts, dict) or any(type(n) is not int or n < 0
+                or date.fromisoformat(d).isoformat() != d or not "2026-06-05" <= d <= target_date
+                for d, n in counts.items())):
+            raise ValueError("replay_source_census_missing_or_invalid")
+        current_counts = result['entry_opportunity_replay_counts']
+        if current_counts and counts.get(target_date) != current_counts.get('unique_retained'):
+            raise ValueError("replay_current_census_conflict")
+        for event in events:
+            receipt = event.get("entry_quantity_leg_four_arm_evaluation") or {}
+            row = receipt.get("entry_price_replay_row")
+            if (isinstance(row, dict)
+                and receipt.get('receipt_sha256') == digest({k: v for k, v in receipt.items() if k != 'receipt_sha256'})
+                and receipt.get('native_replay_sha256') == row.get('replay_sha256')
+                and receipt.get('source_date') == row.get('seed', {}).get('source_date')):
+                replay_rows.append(row)
+                source_date = receipt['source_date']
+                if source_date > target_date:
+                    raise ValueError('future_replay_source')
+                count = receipt['eligible_attempt_count']
+                if type(count) is not int or count <= 0 or counts.get(source_date) != count:
+                    raise ValueError('conflicting_replay_denominator')
+        proofs = select_entry_price_replay(replay_rows, eligible_count=sum(counts.values()), source_counts=counts)
+        for proof in proofs:
+            if current.get(proof["target_value_key"]) != proof["incumbent_bps"]:
+                continue
+            result["candidate_grid"].append({
+                "candidate_id": f"mechanistic:{proof['profile']}:bps{proof['selected_bps']}:union-v2",
+                "target_value_key": proof["target_value_key"], "profile_bps": proof["selected_bps"],
+                "current_value": proof["incumbent_bps"], "metrics": proof["metrics"],
+                "exact_outcome_joined_sample": proof["metrics"]["paired_sample_count"],
+                "eligible_for_runtime_recommendation": True, "price_selection_evidence": proof})
+        result["eligible_exact_candidate_count"] = len(result["candidate_grid"])
+        # Cross-parent scopes never vote for the same global env surface differently.
+        candidates = result["candidate_grid"]
+        if len({(c["target_value_key"], c["profile_bps"]) for c in candidates}) == 1:
+            result["selected_candidate"] = candidates[0]
+        elif candidates:
+            result["blocker"] = "price_scope_candidate_conflict"
+    except (OSError, KeyError, TypeError, ValueError):
+        result["blocker"] = "executable_split_replay_source_missing_or_invalid"
+    return result
+
+
 def _entry_price_profile_candidate_grid(
     real_events: list[dict],
     related_events: list[dict],
@@ -8849,6 +8930,12 @@ def _entry_price_primary_sample_book(
     metrics: dict,
     candidate_metrics: dict,
 ) -> tuple[str, str]:
+    proof = (metrics.get('entry_price_profile_selected_candidate') or {}).get('price_selection_evidence')
+    if proof:
+        from src.engine.scalping.strategy_owner_replay import entry_price_selection_evidence_valid
+        if entry_price_selection_evidence_valid(proof):
+            return 'executable_opportunity_replay', 'modeled_union_primary_next_preopen_bounded_price_policy_not_realized_pnl'
+        return 'none', 'invalid_executable_price_evidence'
     explicit = str(metrics.get("primary_sample_book") or "").strip()
     if explicit:
         authority = str(metrics.get("decision_authority") or "").strip() or (
@@ -9170,6 +9257,14 @@ def _entry_price_source_recommended_values(
         return clean, audit
     scope = _entry_price_recommended_values_scope(source_metrics, recommended)
     real_exact_ready = source_metrics.get("real_exact_outcome_policy_ready") is True
+    if scope == 'executable_opportunity_replay':
+        from src.engine.scalping.strategy_owner_replay import entry_price_selection_evidence_valid
+        proof = (source_metrics.get('entry_price_profile_selected_candidate') or {}).get('price_selection_evidence')
+        if entry_price_selection_evidence_valid(proof):
+            key, value = proof['target_value_key'], proof['selected_bps']
+            if current.get(key) == proof['incumbent_bps'] and recommended.get(key) == value:
+                return {key: value}, {'accepted': {key: value}, 'clamped': {}, 'rejected': {}}
+        return {}, {'accepted': {}, 'clamped': {}, 'rejected': {'executable_price_evidence': 'invalid'}}
     if not (
         _entry_price_recommended_values_scope_is_sim(scope)
         or (
@@ -9391,6 +9486,10 @@ def _build_dynamic_entry_price_resolver_family(
         completed_rows or [],
         current,
     )
+    if target_date and target_date >= "2026-09-17":
+        observed_profile_selection = profile_selection
+        profile_selection = _entry_price_opportunity_candidate_grid(target_date, current)
+        profile_selection["observed_profile_monitoring"] = observed_profile_selection
     selected_profile = profile_selection.get("selected_candidate")
     selected_profile_metrics = (
         selected_profile.get("metrics") if isinstance(selected_profile, dict) else {}
@@ -9448,7 +9547,7 @@ def _build_dynamic_entry_price_resolver_family(
         {
             "real_candidate_observations": (
                 int(selected_profile.get("exact_outcome_joined_sample") or 0)
-                if isinstance(selected_profile, dict)
+                if isinstance(selected_profile, dict) and not selected_profile.get("price_selection_evidence")
                 else len(real_events)
             ),
             "sim_candidate_observations": len(sim_events),
@@ -9456,8 +9555,12 @@ def _build_dynamic_entry_price_resolver_family(
         },
         candidate_metrics,
     )
-    sample_floor_ready = primary_sample_book in {"real", "sim"}
-    metrics_ready = _entry_price_candidate_metrics_ready(
+    executable_price_proof = (selected_profile or {}).get("price_selection_evidence")
+    if executable_price_proof:
+        primary_sample_book = "executable_opportunity_replay"
+        decision_authority = "modeled_union_primary_next_preopen_bounded_price_policy_not_realized_pnl"
+    sample_floor_ready = primary_sample_book in {"real", "sim", "executable_opportunity_replay"}
+    metrics_ready = bool(executable_price_proof) or _entry_price_candidate_metrics_ready(
         candidate_metrics,
         required_books=(
             (primary_sample_book,)
@@ -9476,9 +9579,10 @@ def _build_dynamic_entry_price_resolver_family(
         "stage": "entry",
         "sample": {
             "candidate_observations": len(real_events) + len(sim_events),
+            "opportunity_replay_sample_count": (executable_price_proof or {}).get('metrics', {}).get('paired_sample_count', 0),
             "real_candidate_observations": (
                 int(selected_profile.get("exact_outcome_joined_sample") or 0)
-                if isinstance(selected_profile, dict)
+                if isinstance(selected_profile, dict) and not selected_profile.get("price_selection_evidence")
                 else len(real_events)
             ),
             "sim_candidate_observations": len(sim_events),
@@ -9562,6 +9666,9 @@ def _build_dynamic_entry_price_resolver_family(
                 or 0
             ),
             "unpriced_or_stale_warning_count": sim_unpriced_or_stale_warning_count,
+            "entry_opportunity_replay_counts": profile_selection.get('entry_opportunity_replay_counts', {}),
+            "canonical_split_source_sha256": profile_selection.get('canonical_split_source_sha256'),
+            "entry_price_selection_contract": profile_selection.get('selection_contract'),
             "entry_price_profile_candidate_grid": profile_selection["candidate_grid"],
             "entry_price_profile_selected_candidate": selected_profile,
             "entry_price_profile_eligible_exact_candidate_count": profile_selection[
@@ -9584,9 +9691,9 @@ def _build_dynamic_entry_price_resolver_family(
             ],
             "recommended_values": recommended_values if selected_profile else {},
             "recommended_values_decision_scope": (
-                "real_exact_outcome" if selected_profile else ""
+                "executable_opportunity_replay" if executable_price_proof else ("real_exact_outcome" if selected_profile else "")
             ),
-            "real_exact_outcome_policy_ready": bool(selected_profile),
+            "real_exact_outcome_policy_ready": bool(selected_profile) and not bool(executable_price_proof),
         },
         "apply_ready": sample_ready,
         "current": current,
@@ -14285,6 +14392,10 @@ def _source_sample_count_for_family(output_family: str, source_metrics: dict) ->
             _safe_int(source_metrics.get("submit_revalidation_block"), 0) or 0,
         )
     if output_family == "dynamic_entry_price_resolver":
+        proof = (source_metrics.get('entry_price_profile_selected_candidate') or {}).get('price_selection_evidence')
+        if proof:
+            from src.engine.scalping.strategy_owner_replay import entry_price_selection_evidence_valid
+            return proof['metrics']['paired_sample_count'] if entry_price_selection_evidence_valid(proof) else 0
         primary_book = str(source_metrics.get("primary_sample_book") or "").strip()
         if primary_book in {"real", "real_outcome_pending"}:
             return _safe_int(source_metrics.get("real_candidate_observations"), 0) or 0
@@ -14714,6 +14825,12 @@ def _calibration_state_for_family(
             "entry_price_execution_quality는 real-only 제출/체결/취소/late-fill 감사 전용이며 runtime threshold apply 권한이 없다.",
         )
     if output_family == "dynamic_entry_price_resolver":
+        proof = (source_metrics.get('entry_price_profile_selected_candidate') or {}).get('price_selection_evidence')
+        if proof:
+            from src.engine.scalping.strategy_owner_replay import entry_price_selection_evidence_valid
+            if entry_price_selection_evidence_valid(proof) and sample_count >= sample_floor:
+                return 'adjust_up', 'Executable common-population price replay passed positive cost/stress EV, paired improvement, tail and frozen chronological holdout.'
+            return 'hold', 'Executable price selection evidence invalid or insufficient.'
         family_sample = (
             family.get("sample") if isinstance(family.get("sample"), dict) else {}
         )
@@ -15715,6 +15832,8 @@ def _build_calibration_candidates(
                 "entry_price_profile_candidate_grid",
                 "entry_price_profile_selected_candidate",
                 "entry_price_profile_eligible_exact_candidate_count",
+                "opportunity_replay_sample_count", "entry_opportunity_replay_counts",
+                "canonical_split_source_sha256", "entry_price_selection_contract",
             ):
                 if key in family_sample and key not in source_metrics:
                     source_metrics = dict(source_metrics)
@@ -15733,7 +15852,7 @@ def _build_calibration_candidates(
                 primary_metrics,
                 candidate_metrics,
             )
-            if primary_book in {"real", "sim"}:
+            if primary_book in {"real", "sim", "executable_opportunity_replay"}:
                 source_sample_count = _source_sample_count_for_family(
                     output_family,
                     {
@@ -15754,10 +15873,8 @@ def _build_calibration_candidates(
             required_books = (
                 (primary_book,) if primary_book in {"real", "sim"} else ("sim",)
             )
-            source_ready = source_ready and _entry_price_candidate_metrics_ready(
-                candidate_metrics,
-                required_books=required_books,
-            )
+            source_ready = source_ready and (primary_book == 'executable_opportunity_replay' or
+                _entry_price_candidate_metrics_ready(candidate_metrics, required_books=required_books))
             if candidate_metrics:
                 source_metrics = dict(source_metrics)
                 for key in (
@@ -15774,13 +15891,13 @@ def _build_calibration_candidates(
                 source_metrics["primary_sample_book"] = primary_book
                 source_metrics["decision_authority"] = decision_authority
                 source_metrics["candidate_metrics_ready"] = (
-                    _entry_price_candidate_metrics_ready(
+                    primary_book == "executable_opportunity_replay" or _entry_price_candidate_metrics_ready(
                         candidate_metrics,
                         required_books=required_books,
                     )
                 )
                 source_metrics["candidate_metrics_missing"] = (
-                    _entry_price_missing_metrics(
+                    {} if primary_book == "executable_opportunity_replay" else _entry_price_missing_metrics(
                         candidate_metrics,
                         required_books=required_books,
                     )
@@ -16656,6 +16773,21 @@ def _owned_scale_in_rolling_metrics(candidate: dict) -> dict:
 def _build_window_policy_resolution(
     candidate: dict, cumulative_report: dict | None
 ) -> dict:
+    if candidate.get('family') == 'dynamic_entry_price_resolver':
+        metrics = candidate.get('source_metrics') or {}
+        proof = (metrics.get('entry_price_profile_selected_candidate') or {}).get('price_selection_evidence')
+        if proof:
+            from src.engine.scalping.strategy_owner_replay import entry_price_selection_evidence_valid
+            valid = entry_price_selection_evidence_valid(proof)
+            count = proof.get('metrics', {}).get('paired_sample_count', 0) if valid else 0
+            return dict(primary='frozen_opportunity_union_chronological_latest_day_holdout',
+                daily_only_allowed=False, primary_sample_count=count,
+                primary_snapshot_sample_count=None, primary_source_sample_count=count,
+                primary_raw_provisional_source_sample_count=None,
+                primary_source_sample_role='executable_common_opportunity_not_actual_fill',
+                primary_sample_ready=valid, primary_snapshot_available=False,
+                primary_source_available=valid, primary_source_metrics=metrics,
+                source_evidence_sha256=proof.get('evidence_sha256'), sample_floor=20, secondary={})
     policy = (
         candidate.get("window_policy")
         if isinstance(candidate.get("window_policy"), dict)

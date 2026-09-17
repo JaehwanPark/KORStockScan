@@ -5475,6 +5475,15 @@ def evaluate_live_buy_entry(
             applied_bps = int(
                 gap_profile.get("bps", normal_defensive_bps) or normal_defensive_bps
             )
+            from src.engine.scalping.entry_execution_sizing_plan import scoped_entry_price_bps
+            from src.engine.monitoring.entry_attempt_identity import submit_attempt_machine_lineage
+            price_lineage = submit_attempt_machine_lineage(stock, code)
+            applied_bps = scoped_entry_price_bps(
+                str(gap_profile.get('profile')), applied_bps,
+                venue=str(price_lineage.get('effective_venue') or '').upper(),
+                session=str(price_lineage.get('market_session_bucket') or ''),
+                policy_bundle_sha256=price_lineage.get('policy_bundle_hash'))
+            gap_profile['bps'] = applied_bps
             entry_price_guard = {
                 "normal": "normal_defensive_percent_bps",
                 "strong_1tick_pressure": "conditional_strong_defensive_percent_bps",

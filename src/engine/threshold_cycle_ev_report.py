@@ -247,6 +247,8 @@ def _top_level_summary(report: dict[str, Any]) -> dict[str, Any]:
     primary_sample_book = (
         "real" if real_sample >= 20 else "sim" if sim_sample > 0 else "none"
     )
+    opportunity_replay_sample = 0
+    price_selection_evidence_sha256 = None
     for item in decisions if isinstance(decisions, list) else []:
         if not isinstance(item, dict):
             continue
@@ -256,6 +258,12 @@ def _top_level_summary(report: dict[str, Any]) -> dict[str, Any]:
             else {}
         )
         if str(item.get("family") or "") == "dynamic_entry_price_resolver":
+            proof = (metrics.get('entry_price_profile_selected_candidate') or {}).get('price_selection_evidence')
+            if proof:
+                from src.engine.scalping.strategy_owner_replay import entry_price_selection_evidence_valid
+                if entry_price_selection_evidence_valid(proof):
+                    opportunity_replay_sample = proof['metrics']['paired_sample_count']
+                    price_selection_evidence_sha256 = proof['evidence_sha256']
             real_outcome_joined_sample = max(
                 real_outcome_joined_sample,
                 _safe_int(metrics.get("real_outcome_joined_sample"), 0),
@@ -296,6 +304,8 @@ def _top_level_summary(report: dict[str, Any]) -> dict[str, Any]:
         primary_verdict = "live_auto_candidate_present"
     elif real_sample_ready and real_outcome_joined_sample > 0:
         primary_verdict = "real_primary_evidence_present"
+    elif opportunity_replay_sample > 0:
+        primary_verdict = "modeled_opportunity_evidence_present_not_actual_fill"
     elif sim_sample > 0:
         primary_verdict = "sim_evidence_present_no_live_bucket"
     else:
@@ -308,6 +318,8 @@ def _top_level_summary(report: dict[str, Any]) -> dict[str, Any]:
             "tuning_input_allowed"
         ),
         "real_sample": real_sample,
+        "opportunity_replay_sample": opportunity_replay_sample,
+        "price_selection_evidence_sha256": price_selection_evidence_sha256,
         "sim_sample": sim_sample,
         "real_sample_ready": real_sample_ready,
         "real_outcome_joined_sample": real_outcome_joined_sample,

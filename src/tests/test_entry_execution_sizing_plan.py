@@ -670,3 +670,23 @@ def test_atomic_sizing_never_truncates_fractional_or_boolean_quantity_and_price(
             assert fields["entry_execution_sizing_valid"] is False
     assert sizing._positive_int(9007199254740993) == 9007199254740993
     assert sizing._positive_int("25") == 25
+
+
+def test_replay_anchor_uses_plan_issue_clock_without_refreshing_original_quote():
+    from src.tests.test_strategy_owner_replay import entry_owner_event
+    event = entry_owner_event()
+    plan = event.fields['entry_execution_sizing_plan']
+    quote_at = datetime.fromisoformat(event.emitted_at).timestamp()
+    original = _priced({'qty': 10, 'price': 10000, 'order_type_code': '00'})
+    original.update(entry_price_current_price=10020, entry_price_captured_at=quote_at)
+    orders, fields = compose_entry_execution_sizing_plan([original], expected_total_qty=10,
+        action_receipt=_receipt(evaluation_attempt_id=plan['action_receipt_id'],
+            scanner_promotion_id=plan['scanner_promotion_id'], policy_bundle_hash='a' * 64,
+            effective_venue='KRX', market_session_bucket='KRX_REGULAR'),
+        quantity_policy_version='qty-original', split_policy_version='leg-original',
+        replay_context={'stock_code': '005930', 'observed_at': quote_at + 2,
+                        'profile': 'strong_1tick_pressure', 'profile_bps': 11})
+    seed = fields['entry_opportunity_replay_seed']
+    assert datetime.fromisoformat(seed['observed_at']).timestamp() == quote_at + 2
+    assert orders[0]['entry_price_captured_at'] == quote_at
+    assert fields['entry_execution_sizing_plan']['price_candidates'][0]['captured_at'] == quote_at

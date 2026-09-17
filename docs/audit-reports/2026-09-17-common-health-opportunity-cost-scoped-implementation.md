@@ -296,3 +296,27 @@ Project/Calendar 동기화는 실행하지 않는다. 사용자 표준 명령:
 ```bash
 PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTHONPATH=. .venv/bin/python -m src.engine.sync_github_project_calendar
 ```
+
+
+## 24. U9 native executable replay·가격 계약과 영향 handoff
+
+사용자 후속 승인 범위는 U9 executable replay/4군 생성→가격 평가 계약→inventory에서 입증된 누락 수정→영향 handoff closure, 반복 코드 리뷰/수정/검증 뒤 commit/push/배포/기동이다. 통합 전 계획의 문서 작성 권한 문구를 이번 구현의 금지로 해석하지 않는다. U0–U12 전수 완료 및 자연 경제성의 receipt는 아니다.
+
+| source→consumer / 파일·함수 | 구현·검증 책임 |
+| --- | --- |
+| `sniper_state_handlers`의 최초 entry compose→`entry_execution_sizing_plan.compose_entry_execution_sizing_plan` | 원래 action/AI/가격/수량/leg/6필드 receipt를 변경하지 않고 frozen research seed를 기록한다. 기존 sizing context/cap 안의 flat-10 대안을 재사용하며 수량 증가/미래 probe 가격을 만들지 않는다. |
+| `strategy_owner_replay.freeze_entry_opportunity/replay_entry_opportunity/build_entry_opportunity_replays` | 기존 native quote/trade parser·scope/epoch/sequence·canary/exclusion/retention를 재사용한다. 원 시각·700ms submit quote 계약, ask/bid 수량과 실제 도착 전 호가를 사용한다. passive touch/queue 결손은 null/source gap, 확인 가능한 no-fill은 modeled zero로 분리한다. |
+| `machine_microstructure_attribution._micro_context`→`entry_split_order_plan.build_report` | 기존180초 bounded read 분기에 연결한다. submit/buy-intent가 없어도 실제 owner-issued price-ready 계획을 보존한다. 동일 pipeline read에서 plan event를 재사용하고 미완료 source-date 분모를 cumulative state에 저장하여 gap/full replay에서도 복구한다. 새 collector/producer/stage/API 호출은 없다. |
+| split signed quartet + embedded price row→`daily_threshold_cycle_report` | canonical split artifact 한 곳을 소비한다. 임의 equal-leg family를 발명하지 않고 owner-issued candidate leg plan이 없으면 동일 identity/shape control로 표시한다. 자동 bundle은 기존 candidate identity/등록 policy/30건·80%·aggregate0.10%/chronological gate를 유지한다. |
+| Daily price grid/calibration/window registry/materializer→PREOPEN/runtime/scoped numeric price | 신규 가격 계약은 원래 price-ready 공통 모집단에서 calibration-only 후보 고정 후 최신 eligible source-day holdout 한 번, 비용/stress 후 양수·paired EV/일별 순익/tail/capital/fill guard를 확인한다. 기존20 floor를 유지하고 명시적80% source join coverage를 검사한다. proof/당일 source hash/parent/date/범위가 틀리면 carry 또는 차단한다. 신규 proof 없는 legacy 평균의 발행을9/17부터 막고 이전 frozen 정책은 유지한다. |
+| `sniper_missed_entry_counterfactual`·`threshold_cycle_ev_report` | canonical split 결과를 전달하고 별도 native 전체 스캔/장후 job을 추가하지 않는다. actual PnL/실체결 headline/기존 minute proxy는 그대로이며 modeled 표본·proof digest를 별도로 표시한다. |
+
+연구 비용은 기존 missed-entry의 round-trip0.23%를 재사용하고 stress0.28%를 명시한다. fixed180초/TP+0.5%/SL−0.5%는 연구용 executable bid exit이며 실제 exit 변경이 아니다. 동일1-slot/180초 conservative reservation을 모든 arm/정책에 적용해 겹치는 기회를 중복 수익으로 합산하지 않는다. 원래 price-ready 이전 machine/AI 비용은 가격 후보 사이 공통 선행 비용이며 실제 Provider 비용은null로 보존하고 실현 PnL을0으로 합성하지 않는다. 이 conditional price-execution 증거를 end-to-end Entry 순익/AI 심사 경제성으로 사용하는 것을 proof의 forbidden_uses에 금지한다. 신규 가격의 proof 없는 절대 floor 변경·당일 수동 env 변경은 하지 않는다.
+
+리뷰에서 수정한 finding: trade price native 필드, tick/BPS 반올림, 도착 뒤 future quote 채택, price quote clock으로 plan 발급 시각을 backdate하는 경로, 같은 top-depth의 leg 중복 사용, 마지막 leg 체결 전 exit/자본시간, cross-venue global BPS 적용, same opportunity capital 중복, 임의 equal-leg identity, all-incomplete 최신일의 분모/holdout 탈락, raw conflict/duplicate 행 보존식, legacy completed-only downgrade, 시장가03의 원래0가격을 결손으로 탈락시키는 adapter, split immutable generation/source hash 검증, window registry가 새 proof를 지우는 경로. raw 행은 retained anchor+duplicates+conflicting rows+rejected rows로 닫고 unique usable attempt는 complete+waiting+source gap으로 닫는다. 기존 U10A/R1–R5 연구 수리는 다시 구현하지 않는다. 일반306 reader 의미분류·전수 live adapter/active family 자연 closure는 미완료다.
+
+Official reference gate: 수정 전 upstream `953e5dbff123f437ab4d11a78a95191a685eb51f` 확인 및 `2026-09-17T15:33:14.146149+09:00`에 `kiwoom/realtime/schemas.py`, `packets.py`, `_data/kiwoom_api_spec.json`의0B/0D를 읽었다. 해당 tree의 `kiwoom_docs` 부재를 유지한다. canonical native parser만 재사용하며 REST/WS wire/FID/REG/recovery/auth/account/order/continuation 수정 및 실제 API/Provider 호출은 구현 검증에 없다.
+
+검증/배포/actual PID/자연 receipt는 최종 같은 source generation 검증 후 아래에 분리 기록한다. 장후 신규 quartet/가격 후보 publication과 다음 PREOPEN 자연 소비는 아직 예정 시간 전이며, offline fixture의 modeled 개선을 실현 이익으로 보고하지 않는다.
+
+- 작업본 검증: 15개 영향 suite **1530 passed / pandas-ta 기존 경고1**; 추가 producer→Daily→window registry→publisher→PREOPEN→runtime/scoped parent/EV summary와 source ledger·최신일 outcome0·시장가03·raw 상충·원 clock/owner 보존을 포함한다. Ruff/변경14 Python compile/diff/print-only parser PASS, 현재 stable OPEN owner1. 존재하지 않는 `test_entry_attempt_identity.py` 호출은 테스트0건으로 중단했고 실제 scanner bridge/summary/gap suite로 바로잡았다. immutable fixture의 generation directory 부재도 수정 후 재검증했다. 리뷰된 U9/직접 영향 handoff의 finding0이며 작업본 code generation을 통합 release에서 다시 확인한다.
