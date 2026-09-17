@@ -12,6 +12,7 @@ import pytest
 
 import src.engine.sniper_scale_in as scale_in
 import src.engine.sniper_state_handlers as state_handlers
+_REAL_KT00011_LOOKUP = state_handlers.kiwoom_utils.get_orderable_by_margin_kt00011
 import src.engine.sniper_execution_receipts as receipts
 import src.engine.sniper_entry_state as entry_state
 import src.engine.sniper_sync as sniper_sync
@@ -54064,3 +54065,131 @@ def test_pyramid_blocked_opportunity_is_captured_before_submit_once(monkeypatch)
     assert len(route) == 24 and route["1.5"]["should_add"] is False and route["1.4"]["should_add"] is True
     assert events[0]["actual_order_submitted"] is False and events[0]["runtime_effect"] is False
     assert registrations[0]["source_id"] == events[0]["source_event_id"]
+
+
+def test_scale_in_process_config_without_holdings_retries_and_is_consumable(monkeypatch):
+    import os
+    from src.engine.monitoring.scalping_avg_down_recovery_calibration import _collect_exact_evidence
+    now = datetime(2026, 9, 18, 8, 0, tzinfo=state_handlers._KST)
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", SimpleNamespace(
+        SCALPING_PYRAMID_MIN_PROFIT_PCT=1.5, SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE=85,
+        AVG_DOWN_POLICY_ENABLED=True))
+    monkeypatch.setattr(state_handlers, "_AVG_DOWN_RUNTIME_CONFIG_LAST_SIGNATURE", None)
+    monkeypatch.delenv("KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_SCALPING_PYRAMID_MIN_PROFIT_PCT", raising=False)
+    events = []
+    def emit(pipeline, name, code, stage, **kwargs):
+        assert code == "" and kwargs["record_id"] is None
+        events.append({"stage": stage, "emitted_at": now.isoformat(),
+                       "_source_event_date": "2026-09-18", **kwargs["fields"]})
+        return {"structured_append_succeeded": len(events) > 1}
+    monkeypatch.setattr(state_handlers, "emit_pipeline_event", emit)
+    for _ in range(3):
+        state_handlers._observe_avg_down_runtime_config(now_ts=now.timestamp())
+    assert len(events) == 2
+    assert events[-1]["runtime_process_pid"] == os.getpid()
+    assert events[-1]["pyramid_loaded_value_verified"] is True
+    collected = _collect_exact_evidence([], events=[events[-1]])
+    assert len(collected["runtime_configs"]) == 1, collected
+    assert collected["decisions"] == []
+
+
+@pytest.mark.parametrize("family", ["PYRAMID", "AVG_DOWN"])
+@pytest.mark.parametrize("case", ["valid", "zero", "missing", "inventory_changed", "owner_registry_changed", "stale", "late"])
+def test_blocked_scale_in_budget_normal_producer_to_consumer(monkeypatch, tmp_path, case, family):
+    from src.engine.scalping import avg_down_replay_capture as capture
+    from src.engine.monitoring.scalping_avg_down_recovery_calibration import collect_pyramid_lifecycle_evidence
+    stock = {"id": 123, "strategy": "SCALPING", "code": "005930", "buy_price": 10000,
+             "scanner_promotion_id": "scanner-attempt-123",
+             "buy_qty": 10, "initial_buy_qty": 10, "last_entry_receipt_economics_complete": True,
+             "last_entry_receipt_quantity_contract_complete": True}
+    other = {"id": 124, "code": "000660", "status": "HOLDING", "buy_qty": 1}
+    monkeypatch.setattr(state_handlers, "ACTIVE_TARGETS", [stock, other])
+    monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "fixture-no-network")
+    monkeypatch.setattr(state_handlers, "can_consider_scale_in", lambda *a, **k: {"allowed": True})
+    monkeypatch.setattr(state_handlers, "_scale_in_exit_authority_block_reason", lambda *a: None)
+    monkeypatch.setattr(state_handlers, "_is_any_simulated_position", lambda *a: False)
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", SimpleNamespace(SCALPING_PYRAMID_MIN_PROFIT_PCT=1.5))
+    monkeypatch.setattr(capture, "_ACTIVE", {})
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_last_deposit_meta", lambda: {})
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_api_url", lambda path: "https://example.invalid" + path)
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_orderable_by_margin_kt00011", _REAL_KT00011_LOOKUP)
+    monkeypatch.setattr(state_handlers, "resolve_scale_in_order_price", lambda **k: {"allowed": True, "order_price": 10140})
+    owner_path = tmp_path / "order_owner_registry.jsonl"
+    owner_path.write_text("initial generation\n")
+    monkeypatch.setattr(state_handlers, "default_order_owner_registry", lambda: SimpleNamespace(path=owner_path))
+    calls = []
+    def wire(**kwargs):
+        calls.append(kwargs)
+        if case == "owner_registry_changed":
+            owner_path.write_text("new owner reservation generation\n")
+        assert kwargs["api_id"] == "kt00011" and kwargs["payload"] == {"stk_cd": "005930", "uv": "10140"}
+        assert kwargs["request_class"] == "source_only" and kwargs["max_retries"] == 1
+        assert kwargs["read_rate_max_wait_sec"] == 0
+        if case == "inventory_changed":
+            other["status"] = "BUY_ORDERED"
+        if case == "late":
+            import time
+            time.sleep(0.35)
+        row = {"return_code": 0, "entr": "1000000", "min_ord_alow_amt": "1000000",
+               "min_ord_alowq": "0" if case == "zero" else "50", "aplc_rt": "100%"}
+        if case == "missing":
+            row.pop("min_ord_alowq")
+        return [row]
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "fetch_kiwoom_api_continuous", wire)
+    # Real wire parser and budget producer populate the cache; never inject it.
+    clock = state_handlers._prepare_scale_in_budget_source(stock, "005930", {"curr": 10140},
+                                                          state_handlers.time.time(), family=family)
+    assert len(calls) == 1 and clock is not None, stock
+    state_handlers._prepare_scale_in_budget_source(stock, "005930", {"curr": 10140}, clock, family=family)
+    assert len(calls) == 1
+    # Size through the normal pure owner; controlled qty isolates source binding.
+    monkeypatch.setattr(state_handlers, "describe_dynamic_scale_in_qty",
+                        lambda **kw: {"qty": min(2, kw["cash_orderable_qty_cap"])})
+    arm = state_handlers._avg_down_route_arm_observation(stock=stock, code="005930", ws_data={},
+        curr_price=10140, action={"should_add": True, "add_type": "PYRAMID"},
+        downstream_action=None, downstream_evaluated=True, now_ts=clock + (3 if case == "stale" else 0))
+    if case not in {"valid", "zero"}:
+        assert arm["proposed_add_qty"] == 0
+        assert arm["sizing_status"] == "real_budget_not_available_without_extra_api_call"
+        return
+    assert arm["proposed_add_qty"] == (0 if case == "zero" else 2)
+    if case == "zero":
+        return
+    events = []
+    monkeypatch.setattr(state_handlers, "evaluate_scalping_pyramid", lambda *a, min_profit_override, **kw:
+        {"should_add": min_profit_override <= 1.4, "add_type": "PYRAMID"})
+    monkeypatch.setattr(state_handlers, "_log_holding_pipeline", lambda stock, code, stage, **fields:
+        events.append({"stage": stage, "stock_code": code, "emitted_at": datetime.fromtimestamp(clock, state_handlers._KST).isoformat(),
+                       "venue": "KRX", "session": "krx_regular",
+                       "_source_event_date": datetime.fromtimestamp(clock, state_handlers._KST).date().isoformat(), **fields})
+        or {"structured_append_succeeded": True})
+    monkeypatch.setattr(capture, "prepare", lambda *a, **kw:
+        {"replay_capture_state": "armed_source_only", "exit_policy_version": "exit", "policy_snapshot": {}, "initial_policy_state": {}})
+    monkeypatch.setattr(capture, "register", lambda **kw: "armed_source_only")
+    state_handlers._observe_pyramid_lifecycle_replay(stock=stock, code="005930", profit_rate=1.4, peak_profit=1.4,
+        is_new_high=True, current_ai_score=80, runtime_prior={}, curr_price=10140, ws_data={}, now_ts=clock)
+    evidence = collect_pyramid_lifecycle_evidence(events)
+    assert len(evidence["decisions"]) == 1, evidence
+    source = evidence["decisions"][0]["independent_replay_input"]
+    assert source["route_replay"]["1.5"]["should_add"] is False
+    assert source["route_replay"]["1.4"]["proposed_add_qty"] == 2
+    assert source["replay_capital_limit_krw"] > 100000
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("pending", ["pending_add_order", "pending_add_requested_at", "pending_add_ord_no"])
+def test_scale_in_budget_source_never_enters_order_recovery(monkeypatch, pending):
+    stock = {"id": 1, "strategy": "SCALPING", "buy_price": 10000, "buy_qty": 10,
+             "last_entry_receipt_economics_complete": True,
+             "last_entry_receipt_quantity_contract_complete": True, pending: 1}
+    monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "fixture")
+    monkeypatch.setattr(state_handlers, "_is_any_simulated_position", lambda *a: False)
+    monkeypatch.setattr(state_handlers, "_scale_in_exit_authority_block_reason", lambda *a: None)
+    def forbidden(*args, **kwargs):
+        pytest.fail("source-only observation entered live recovery or account lookup")
+    monkeypatch.setattr(state_handlers, "can_consider_scale_in", forbidden)
+    monkeypatch.setattr(state_handlers, "_resolve_scalp_cash_budget_context", forbidden)
+    assert state_handlers._prepare_scale_in_budget_source(
+        stock, "005930", {}, time.time(), family="PYRAMID") is None
+    assert "_scale_in_budget_source_epochs" not in stock

@@ -383,6 +383,7 @@ DB = None
 EVENT_BUS = None
 ACTIVE_TARGETS = None
 WS_MANAGER = None
+SCALE_IN_BUDGET_SOURCE_CALLBACK = None
 _SMOOTHING_NON_REVIVE_POST_SELL_REGISTRY: dict[str, dict[str, Any]] = {}
 _SMOOTHING_NON_REVIVE_POST_SELL_MAX_ACTIVE_ARMS = 8
 _SMOOTHING_NON_REVIVE_POST_SELL_OBSERVER_LOCK = threading.RLock()
@@ -2915,7 +2916,7 @@ def _entry_context_ws_data(ws_data, stock):
     return enriched
 
 
-def _resolve_scalp_cash_budget_context(code, unit_price, fallback_orderable_amount):
+def _resolve_scalp_cash_budget_context(code, unit_price, fallback_orderable_amount, *, source_only=False):
     fallback = max(0, _safe_int(fallback_orderable_amount, 0))
     deposit_meta = kiwoom_orders.get_last_deposit_meta()
     kt00001_floor_applied = bool(deposit_meta.get("minimum_floor_applied", False))
@@ -2949,6 +2950,7 @@ def _resolve_scalp_cash_budget_context(code, unit_price, fallback_orderable_amou
             KIWOOM_TOKEN,
             code,
             unit_price=_safe_int(unit_price, 0),
+            **({"source_only": True} if source_only else {}),
         )
     except Exception as exc:
         context["kt00011_error"] = str(exc)
@@ -11891,12 +11893,14 @@ def bind_state_dependencies(
     dual_persona_engine=None,
     scanner_generation_submit_guard=None,
     broker_snapshot_refresh_callback=None,
+    scale_in_budget_source_callback=None,
 ):
     global KIWOOM_TOKEN, DB, EVENT_BUS, ACTIVE_TARGETS, COOLDOWNS, ALERTED_STOCKS, HIGHEST_PRICES
     global LAST_AI_CALL_TIMES, LAST_LOG_TIMES, TRADING_RULES, PUBLISH_GATEKEEPER_REPORT
     global SHOULD_BLOCK_SWING_ENTRY, CONFIRM_CANCEL_OR_RELOAD_REMAINING, SEND_EXIT_BEST_IOC
     global DUAL_PERSONA_ENGINE, WS_MANAGER, SCANNER_GENERATION_SUBMIT_GUARD
     global BROKER_SNAPSHOT_REFRESH_CALLBACK
+    global SCALE_IN_BUDGET_SOURCE_CALLBACK
 
     if kiwoom_token is not None:
         KIWOOM_TOKEN = kiwoom_token
@@ -11934,6 +11938,8 @@ def bind_state_dependencies(
         SCANNER_GENERATION_SUBMIT_GUARD = scanner_generation_submit_guard
     if broker_snapshot_refresh_callback is not None:
         BROKER_SNAPSHOT_REFRESH_CALLBACK = broker_snapshot_refresh_callback
+    if scale_in_budget_source_callback is not None:
+        SCALE_IN_BUDGET_SOURCE_CALLBACK = scale_in_budget_source_callback
 
 
 def _request_broker_snapshot_refresh(code: str, *, reason: str) -> None:
@@ -22615,24 +22621,24 @@ def _avg_down_runtime_config_fields() -> dict[str, Any]:
     }
 
 
-def _observe_avg_down_runtime_config(stock, code, now_ts) -> None:
+def _observe_avg_down_runtime_config(stock=None, code="", now_ts=None) -> None:
     """Record loaded configuration even when no shallow opportunity occurs."""
     global _AVG_DOWN_RUNTIME_CONFIG_LAST_SIGNATURE
     try:
-        if normalize_strategy(stock.get("strategy")) != "SCALPING":
+        if stock is not None and normalize_strategy(stock.get("strategy")) != "SCALPING":
             return
+        now_ts = time.time() if now_ts is None else now_ts
         fields = _avg_down_runtime_config_fields()
+        fields.update(runtime_process_pid=os.getpid(),
+                      runtime_source_commit=os.getenv("KORSTOCKSCAN_RUNTIME_GIT_COMMIT") or "",
+                      runtime_config_scope="main_process_loaded_rules")
         signature = (
             datetime.fromtimestamp(float(now_ts), tz=_KST).date().isoformat(),
             json.dumps(fields, sort_keys=True),
         )
         if signature == _AVG_DOWN_RUNTIME_CONFIG_LAST_SIGNATURE:
             return
-        emitted = _log_holding_pipeline(
-            stock,
-            code,
-            "avg_down_runtime_config_observed",
-            **fields,
+        fields.update(
             metric_role="runtime_configuration_provenance",
             decision_authority="source_only_runtime_config_observation",
             window_policy="exact_source_date_loaded_process_config",
@@ -22645,10 +22651,14 @@ def _observe_avg_down_runtime_config(stock, code, now_ts) -> None:
             actual_order_submitted=False,
             broker_order_forbidden=True,
         )
-        if emitted is False or (
-            isinstance(emitted, dict)
-            and emitted.get("structured_append_succeeded") is not True
-        ):
+        if stock is None:
+            emitted = emit_pipeline_event(
+                "HOLDING_PIPELINE", "MainRuntime", "", "avg_down_runtime_config_observed",
+                record_id=None, fields={**fields, "pipeline_lifecycle_population_scope": "runtime_configuration_only"},
+            )
+        else:
+            emitted = _log_holding_pipeline(stock, code, "avg_down_runtime_config_observed", **fields)
+        if not isinstance(emitted, dict) or emitted.get("structured_append_succeeded") is not True:
             return
         _AVG_DOWN_RUNTIME_CONFIG_LAST_SIGNATURE = signature
     except Exception as exc:
@@ -22658,12 +22668,148 @@ def _observe_avg_down_runtime_config(stock, code, now_ts) -> None:
             pass
 
 
-def _scale_in_observation_sizing(stock, code, price, action, resolution, now_ts):
-    """Existing frozen symbol budget only. Never fetch account/orderable data."""
-    cached = stock.get("_scale_in_observation_budget") or {}
+def _scale_in_budget_inventory_signature():
+    with ENTRY_LOCK:
+        rows = [{key: row.get(key) for key in (
+            "id", "code", "status", "buy_price", "buy_qty", "pending_add_order",
+            "pending_add_ord_no", "pending_add_requested_at", "add_odno", "ord_no",
+            "order_no", "exit_token", "pending_sell_cancel_intent",
+            "pending_add_qty", "pending_buy_msg", "order_time", "entry_split_probe_phase",
+            "entry_split_probe_residual_qty", "scale_in_submit_reserved_qty",
+        )} for row in (ACTIVE_TARGETS or [])]
+    # Shared custody reservations can change outside Main's ACTIVE_TARGETS.
+    # Stat the append-only owner journal; never scan it on the live path.
+    try:
+        receipt = default_order_owner_registry().path.stat()
+        owner_generation = [receipt.st_dev, receipt.st_ino, receipt.st_size, receipt.st_mtime_ns]
+    except FileNotFoundError:
+        owner_generation = None
+    return hashlib.sha256(json.dumps(
+        {"inventory": rows, "owner_generation": owner_generation},
+        sort_keys=True, default=str).encode()).hexdigest()
+
+
+def _prepare_scale_in_budget_source(stock, code, ws_data, now_ts, *, family):
+    """Main-bound budget owner: one bounded acquisition before decision time.
+
+    Replay/telemetry consumers never bind this callback. Late worker results
+    are discarded; no order or deposit request is introduced here.
+    """
+    try:
+        if family not in {"PYRAMID", "AVG_DOWN"}:
+            return None
+        if (not KIWOOM_TOKEN or _is_any_simulated_position(stock, "SCALPING")
+                or normalize_strategy(stock.get("strategy")) != "SCALPING"
+                or _scale_in_exit_authority_block_reason(stock)
+                or stock.get("last_entry_receipt_economics_complete") is not True
+                or stock.get("last_entry_receipt_quantity_contract_complete") is not True):
+            return None
+        # The live guard can cancel/reconcile pending orders. Observation must
+        # never enter that recovery path, even for an expired pending timestamp.
+        if any(stock.get(key) for key in (
+            "pending_add_order", "pending_add_ord_no", "pending_add_requested_at",
+            "add_order_time", "pending_add_msg", "add_odno",
+        )):
+            return None
+        guard = can_consider_scale_in(stock, code, ws_data, "SCALPING", "NORMAL",
+                                     skip_add_judgment_lock=True)
+        if guard.get("allowed") is not True:
+            return None
+        basis = [stock.get("buy_price"), stock.get("buy_qty")]
+        epoch = [stock.get("id"), code, *basis]
+        epochs = stock.setdefault("_scale_in_budget_source_epochs", {})
+        if epochs.get(family) == epoch:
+            return None
+        prices = set()
+        for add_type, reason in ((family, "shallow_volatility_avg_down" if family == "AVG_DOWN" else "pyramid"),):
+            resolution = resolve_scale_in_order_price(
+                stock=stock, ws_data=ws_data, action={"add_type": add_type, "reason": reason},
+                strategy="SCALPING", curr_price=_safe_int(ws_data.get("curr"), 0))
+            if resolution.get("allowed") and _safe_int(resolution.get("order_price"), 0) > 0:
+                prices.add(_safe_int(resolution["order_price"], 0))
+        if not prices:
+            return None
+        from src.engine.scalping import avg_down_replay_capture as capture
+        with capture._LOCK:
+            if len(capture._ACTIVE) >= capture.MAX_ACTIVE:
+                return None
+        signature = _scale_in_budget_inventory_signature()
+        if all(_scale_in_observation_budget(stock, code, price, now_ts) is not None for price in prices):
+            epochs[family] = epoch
+            return None
+        epochs[family] = epoch
+        results = queue.Queue(maxsize=2)
+        deposit_meta = kiwoom_orders.get_last_deposit_meta() or {}
+        fallback = _safe_int(deposit_meta.get("effective_amount"), 0)
+
+        def acquire(price):
+            try:
+                value = _resolve_scalp_cash_budget_context(code, price, fallback, source_only=True)
+            except Exception as exc:
+                value = {"kt00011_error": type(exc).__name__}
+            results.put((price, value, time.time()))
+
+        deadline = time.monotonic() + 0.3
+        for price in sorted(prices):
+            threading.Thread(target=acquire, args=(price,), name="scale-in-budget-source", daemon=True).start()
+        acquired = {}
+        errors = {}
+        for _ in prices:
+            try:
+                price, budget, observed_at = results.get(timeout=max(0, deadline - time.monotonic()))
+            except queue.Empty:
+                break
+            if budget.get("kt00011_error") or budget.get("cash_orderable_qty_cap") is None:
+                errors[str(price)] = str(budget.get("kt00011_error") or "missing_quantity_capacity")
+                continue
+            if (budget.get("kt00011_requested_stock_code") != code
+                    or budget.get("kt00011_cash_orderable_contract_status") != "valid"):
+                continue
+            digest = str(budget.get("kt00011_capacity_source_sha256") or "")
+            if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
+                continue
+            if budget.get("kt00011_requested_unit_price") != price:
+                errors[str(price)] = "capacity_price_mismatch"
+                continue
+            source_at = datetime.fromisoformat(str(budget.get("kt00011_capacity_observed_at") or ""))
+            if source_at.tzinfo is None or not 0 <= observed_at - source_at.timestamp() <= 2.0:
+                errors[str(price)] = "capacity_source_clock_invalid"
+                continue
+            acquired[str(price)] = {"code": code, "position_basis": basis,
+                "resolved_price": price, "observed_at": observed_at, "budget": budget,
+                "inventory_signature": signature,
+                "stage_qty_cap": _scale_in_quantity_limit_decision(stock, requested_qty=0).get("remaining_scale_in_qty")}
+        if (basis != [stock.get("buy_price"), stock.get("buy_qty")]
+                or signature != _scale_in_budget_inventory_signature()):
+            acquired = {}
+        stock["_scale_in_observation_budgets"] = acquired
+        stock["_scale_in_budget_source_errors"] = errors
+        stock["_scale_in_budget_source_state"] = "ready" if acquired else "missing_or_deferred_budget_source"
+        # Decision clock follows the real source acquisition, never backdates it.
+        return time.time()
+    except Exception as exc:
+        stock["_scale_in_budget_source_state"] = "source_error:" + type(exc).__name__
+        return None
+
+
+def _scale_in_observation_budget(stock, code, price, now_ts):
+    cached = (stock.get("_scale_in_observation_budgets") or {}).get(str(price))
+    if cached is None:
+        cached = stock.get("_scale_in_observation_budget") or {}
     if (cached.get("code") != code or cached.get("position_basis") != [stock.get("buy_price"), stock.get("buy_qty")]
             or not 0 <= now_ts - float(cached.get("observed_at") or 0) <= 2.0
-            or cached.get("resolved_price") != price):
+            or cached.get("resolved_price") != price
+            or (cached.get("inventory_signature") is not None
+                and cached["inventory_signature"] != _scale_in_budget_inventory_signature())):
+        return None
+    budget = cached.get("budget") or {}
+    return None if budget.get("kt00011_error") or budget.get("cash_orderable_qty_cap") is None else cached
+
+
+def _scale_in_observation_sizing(stock, code, price, action, resolution, now_ts):
+    """Existing frozen symbol budget only. Never fetch account/orderable data."""
+    cached = _scale_in_observation_budget(stock, code, price, now_ts)
+    if cached is None:
         return None
     budget = cached["budget"]
     if budget.get("kt00011_error") or budget.get("cash_orderable_qty_cap") is None:
@@ -22676,7 +22822,8 @@ def _scale_in_observation_sizing(stock, code, price, action, resolution, now_ts)
         account_deposit=budget.get("account_deposit"), cash_orderable_amount=budget.get("cash_orderable_amount"),
         effective_venue=stock.get("effective_venue"), stage_qty_cap=cached.get("stage_qty_cap"),
     )
-    limit = _scale_in_quantity_limit_decision(stock, requested_qty=int(details.get("qty") or 0))
+    requested_qty = max(0, int(details.get("qty") or 0))
+    limit = _scale_in_quantity_limit_decision(stock, requested_qty=requested_qty) if requested_qty else {"allowed_qty": 0}
     return {**details, "qty": int(limit.get("allowed_qty") or 0), "budget_digest": hashlib.sha256(
         json.dumps(cached, sort_keys=True, default=str).encode()).hexdigest()}
 
@@ -22698,7 +22845,11 @@ def _record_scale_in_policy_lineage(stock, family, episode, decision, source):
 
 
 def _scale_in_observation_capital_limit(stock, code, now_ts):
-    context = stock.get("_scale_in_observation_budget") or {}
+    candidates = list((stock.get("_scale_in_observation_budgets") or {}).values())
+    context = candidates[0] if candidates else stock.get("_scale_in_observation_budget") or {}
+    context = _scale_in_observation_budget(stock, code, context.get("resolved_price"), now_ts)
+    if context is None:
+        return None
     if context.get("code") != code or not 0 <= now_ts - float(context.get("observed_at") or 0) <= 2:
         return None
     if context.get("position_basis") != [stock.get("buy_price"), stock.get("buy_qty")]:
@@ -22756,6 +22907,15 @@ def _observe_pyramid_lifecycle_replay(*, stock, code, profit_rate, peak_profit,
             return
         if _safe_int(stock.get("buy_qty"), 0) <= 0 or _safe_float(stock.get("buy_price"), 0) <= 0:
             return
+        if SCALE_IN_BUDGET_SOURCE_CALLBACK is not None:
+            source_clock = SCALE_IN_BUDGET_SOURCE_CALLBACK(stock, code, ws_data, now_ts, family="PYRAMID")
+            if source_clock is not None:
+                now_ts = source_clock
+            with ENTRY_LOCK:
+                if any(stock.get(key) != frozen_stock.get(key) for key in ("id", "buy_price", "buy_qty")):
+                    raise ValueError("position_changed_during_budget_source")
+                # Include the newly acquired source, never a future submit budget.
+                frozen_stock = copy.deepcopy(stock)
         from src.engine.scalping import avg_down_replay_capture as capture
         configured = _rule_float("SCALPING_PYRAMID_MIN_PROFIT_PCT", 1.5)
         grid = sorted({configured, *(round(0.2 + 0.1 * index, 1) for index in range(24))})
@@ -22798,6 +22958,8 @@ def _observe_pyramid_lifecycle_replay(*, stock, code, profit_rate, peak_profit,
             sizing_policy_version=SCALPING_SIZING_FORMULA_VERSION,
             cost_policy_version=f"trade_profit_net_realized_pnl:rate={get_trade_cost_rate():.8f}",
             replay_actual_entry_anchor_valid=bool(frozen_stock.get("last_entry_receipt_economics_complete") is True and frozen_stock.get("last_entry_receipt_quantity_contract_complete") is True),
+            replay_budget_source_state=frozen_stock.get("_scale_in_budget_source_state") or "existing_budget_or_missing_source",
+            replay_budget_source_errors=json.dumps(frozen_stock.get("_scale_in_budget_source_errors") or {}, sort_keys=True),
             cost_rate=get_trade_cost_rate(), replay_capital_limit_krw=_scale_in_observation_capital_limit(frozen_stock, code, now_ts),
             evidence_authority="fixed_observed_exit_source_only",
             decision_authority="source_only_route_arbitration_observation", metric_role="bounded_tunable_route_observation",
@@ -22906,8 +23068,9 @@ def _avg_down_route_arm_observation(
                 frozen = _scale_in_observation_sizing(stock, code or str(stock.get("code") or stock.get("stock_code") or ""),
                     proposed_price, selected, resolution, time.time() if now_ts is None else now_ts)
                 proposed_qty = int(frozen["qty"]) if frozen is not None else 0
-                sizing_status = ("existing_sizing_owner_observed" if frozen is not None
-                                 else "real_budget_not_available_without_extra_api_call")
+                sizing_status = ("real_budget_not_available_without_extra_api_call" if frozen is None
+                                 else "existing_sizing_owner_observed" if proposed_qty > 0
+                                 else "existing_sizing_owner_zero_qty")
     action_reason = str((selected or action or {}).get("reason") or selected_route)
     signature_material = {
         "should_add": should_add,
@@ -22963,6 +23126,13 @@ def _observe_avg_down_route_arbitration_impl(
         shallow_scope.get("pnl_ok") and shallow_scope.get("hold_ok")
     ):
         return
+    if SCALE_IN_BUDGET_SOURCE_CALLBACK is not None:
+        basis = (stock.get("id"), stock.get("buy_price"), stock.get("buy_qty"))
+        source_clock = SCALE_IN_BUDGET_SOURCE_CALLBACK(stock, code, ws_data, now_ts, family="AVG_DOWN")
+        if source_clock is not None:
+            now_ts = source_clock
+        if basis != (stock.get("id"), stock.get("buy_price"), stock.get("buy_qty")):
+            raise ValueError("position_changed_during_budget_source")
     configured = _rule_float("SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE", 85.0)
     previous_value = _safe_float(
         os.getenv("KORSTOCKSCAN_AVG_DOWN_RUNTIME_PREVIOUS_MIN_BUY_PRESSURE"), None
@@ -23225,6 +23395,8 @@ def _observe_avg_down_route_arbitration_impl(
         broker_order_forbidden=True,
         cost_rate=get_trade_cost_rate(),
         replay_actual_entry_anchor_valid=bool(stock.get("last_entry_receipt_economics_complete") is True and stock.get("last_entry_receipt_quantity_contract_complete") is True),
+        replay_budget_source_state=stock.get("_scale_in_budget_source_state") or "existing_budget_or_missing_source",
+        replay_budget_source_errors=json.dumps(stock.get("_scale_in_budget_source_errors") or {}, sort_keys=True),
         replay_capital_limit_krw=_scale_in_observation_capital_limit(stock, code, now_ts),
         **{
             key: (

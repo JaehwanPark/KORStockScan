@@ -12914,3 +12914,13 @@ def test_ws_prune_retains_nxt_post_block_sampler_subscription(monkeypatch):
     kiwoom_sniper_v2._prune_ws_subscriptions_for_inactive_targets([])
 
     assert published == []
+
+
+def test_main_dependency_binding_owns_scale_in_budget_source(monkeypatch):
+    calls = []
+    monkeypatch.setattr(kiwoom_sniper_v2, "_STATE_HANDLER_DEPS", {})
+    monkeypatch.setattr(kiwoom_sniper_v2, "bind_state_dependencies", lambda **kw: calls.append(kw))
+    kiwoom_sniper_v2._ensure_state_handler_deps()
+    assert len(calls) == 1
+    assert calls[0]["scale_in_budget_source_callback"] is (
+        kiwoom_sniper_v2.sniper_state_handlers._prepare_scale_in_budget_source)

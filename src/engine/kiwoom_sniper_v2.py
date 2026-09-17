@@ -1089,6 +1089,7 @@ def _ensure_state_handler_deps():
         "broker_snapshot_refresh_callback": (
             _request_broker_snapshot_refresh_after_execution
         ),
+        "scale_in_budget_source_callback": sniper_state_handlers._prepare_scale_in_budget_source,
     }
     if any(_STATE_HANDLER_DEPS.get(k) is not v for k, v in snapshot.items()):
         bind_state_dependencies(**snapshot)
@@ -12217,6 +12218,7 @@ def run_sniper(is_test_mode=False):
                 regime=current_market_regime, observed_at=time.time()
             )
             _ensure_state_handler_deps()
+            sniper_state_handlers._observe_avg_down_runtime_config(now_ts=now_ts)
 
             from src.engine.error_detectors.process_health import (
                 write_heartbeat as _sn_whb,
