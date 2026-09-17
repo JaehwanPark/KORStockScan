@@ -1322,6 +1322,76 @@ def test_build_report_blocks_malformed_source_rows_even_with_pass_rows(
     assert symbol["source_quality_status"] == "BLOCKED"
     assert symbol["source_contract_valid"] is False
     assert symbol["source_contract_gap_codes"] == [
-        "invalid_optional_lifecycle_event_count"
+        "invalid_optional_lifecycle_event_count",
+        "universe_contract_missing_or_invalid",
     ]
     assert report["source_quality_status"] == "BLOCKED"
+
+
+def test_native_runtime_writer_projection_and_raw_loader_are_identical(tmp_path):
+    from src.engine.monitoring.widget_symbol_runtime_collector import (
+        WidgetSymbolRuntimeCollector,
+    )
+    from src.engine.monitoring import widget_symbol_runtime_contract as contract
+
+    collector = WidgetSymbolRuntimeCollector(observation_dir=tmp_path)
+    collector._active_date = "2026-09-16"
+    symbol = "999999"
+    spec = SymbolSpec(
+        symbol=symbol,
+        name="fixture",
+        observation_dir=tmp_path,
+        prefix=f"widget_symbol_advisory_{symbol}",
+        sessions=(),
+        add_trigger_arms=((),),
+        target_bps_values=(50,),
+        max_entries_values=(1,),
+        minimum_signal_dates=1,
+        minimum_trades=1,
+        analysis_start_date=date(2026, 9, 16),
+        minimum_qualified_observation_dates=0,
+    )
+    payload = {
+        "schema_version": 1,
+        "symbol": symbol,
+        "status": "ok",
+        "observed_at_kst": "2026-09-16T10:01:30+09:00",
+        "market_venue": "KRX",
+        "current_price": 10000,
+        "advisory": {
+            "state": "ENTRY_READY",
+            "session": "KRX_REGULAR",
+            "source_quality": {"status": "PASS"},
+            "chart_context": ["unused"] * 1000,
+        },
+        "latest_completed_bar": {
+            "source_time": "20260916100000",
+            "open": 10000,
+            "close": 10000,
+            "low": 9990,
+            "high": 10010,
+            "volume": 100,
+        },
+        "entry_event": None,
+        "exit_event": None,
+        "episode": None,
+        "runtime_effect": False,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    collector._record(symbol, payload)
+    rows, _, audit = calibration._load_rows(spec, target_date=date(2026, 9, 16))
+    assert len(rows) == 1 and audit["accepted_row_count"] == 1
+    source = tmp_path / "widget_symbol_advisory_999999_20260916.jsonl"
+    projection = source.with_suffix(".calibration.jsonl")
+    assert projection.stat().st_size < source.stat().st_size
+    projection.unlink()
+    raw_rows, _, raw_audit = calibration._load_rows(spec, target_date=date(2026, 9, 16))
+    assert rows == raw_rows and audit == raw_audit
+    raw_line = source.read_text()
+    record = json.loads(raw_line)
+    contract.append_calibration_projection(source, record, raw_line)
+    corrupt = json.loads(projection.read_text())
+    corrupt["payload"]["current_price"] = 1
+    projection.write_text(json.dumps(corrupt) + "\n")
+    assert calibration._load_rows(spec, target_date=date(2026, 9, 16))[0] == raw_rows

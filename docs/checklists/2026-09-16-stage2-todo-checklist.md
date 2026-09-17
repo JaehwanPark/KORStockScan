@@ -158,11 +158,12 @@
   - 완료 조건: scoped commit/push·immutable release/PID 소비, 해당 orphan journal 종료·DB 상태 일치 및 새 missing-original-order 반복 0. 후속 자연 주문/체결/terminal·비용차감 경제성은 별도 판정한다.
   - 권한 경계: 사용자 구현·배포·기동 승인 범위의 한 generation 복구만 수행한다. 수량/threshold/provider/owner/독립 unit pin/quote·broker·account·cooldown·hard-safety 변경, 수동 주문 및 일괄 DB/journal 해제는 금지한다.
 
-- [ ] `[WidgetPostcloseEvaluationPinAcceptance0916] 위젯 장후 평가 최신 release 소비 및 최종 handoff 자연 확인` (`Due: 2026-09-16`, `Slot: POSTCLOSE`, `TimeWindow: 20:10~23:20`, `Track: RuntimeStability`)
+- [x] `[WidgetPostcloseEvaluationPinAcceptance0916] 위젯 장후 평가 최신 release 소비 및 최종 handoff 자연 확인` (`Due: 2026-09-16`, `Slot: POSTCLOSE`, `TimeWindow: 20:10~23:20`, `Track: RuntimeStability`)
   - Source: [pin 보완·rollback 계약](../audit-reports/2026-09-16-widget-evaluation-release-pin-repair.md), `korstockscan-samsung-widget-evaluation.service`, `data/runtime/widget_evaluation_release_pin_repair_2026-09-16.json`.
   - 판정 기준: 20:10 자연 평가가 `sell-no-call-aftermarket-20260916-0b712b54`에서 실행되고 exact-date calibration/research/runtime-policy 산출물을 생성한다. 이후 final sources → tower → checklist → strict verifier `--require-summary-handoff` → controller/finalization 정합성을 확인한다.
   - 권한 경계: 이번 사용자 보완 지시는 위젯 평가 oneshot pin과 systemd reload만 허용한다. 메인·매매·collector·episode·machine 서비스 재기동, 수동 report/provider/order 호출, timer·threshold·quantity·owner·hard-safety 변경은 하지 않는다. 설치 검증은 자연 완료·자동승격·경제성으로 대체하지 않는다.
   - 배포 증거 (17:00 KST): 위젯 평가 unit의 effective WorkingDirectory/PYTHONPATH/ExecStart가 `0b712b54`로 일치하며 inactive, timer는 20:10 active다. workspace/release 각 `252 passed`, compile/bash/parser/diff PASS, scoped review finding 0. 기존 drop-in backup·SHA를 receipt에 보존했고 메인 PID `3779784`, widget collector/trader PID `3654913`/`3654984` 및 machine-final-refresh route는 유지했다. 자연 실행은 `not_yet_due`다.
+  - 09-17 이관: TRANSFERRED. 위 acceptance·23:35 TERM 실패·역사 receipt를 보존하고 동일 stable ID의 실행 owner를 [09-17 checklist](2026-09-17-stage2-todo-checklist.md)로 이전한다. 이 체크 표시는 자연 완료를 의미하지 않는다.
 
 - [ ] `[IntegratedAftermarketRouteRepair0916] 통합 애프터마켓 runtime AL 원천 등록·정상 source 자연 확인` (`Due: 2026-09-16`, `Slot: INTRADAY`, `TimeWindow: 18:40~20:10`, `Track: RuntimeStability`)
   - Source: [원인·공식 API 검증·수리·rollback 계약](../audit-reports/2026-09-16-integrated-aftermarket-runtime-route-repair.md), `data/runtime/integrated_aftermarket_runtime_route_repair_2026-09-16.json`, `data/runtime/kiwoom_ws_snapshot/latest.json`.

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
@@ -464,3 +466,93 @@ def test_new_symbol_snapshot_records_partial_flow_without_granting_signal_author
     )
     assert payload["actual_order_submitted"] is False
     assert payload["broker_order_forbidden"] is True
+    assert payload["quote_source_meta"]["received_at"] == now.isoformat()
+    from src.engine.monitoring.widget_research_watch_collector import (
+        WidgetResearchWatchCollector,
+    )
+
+    watch = WidgetResearchWatchCollector(config={"symbols": []})
+    context = collector._contract("080220").session_context(now)
+    reused = watch._reuse_quote_bbo(symbol="080220", context=context, observed_at=now)
+    assert reused is not None
+    assert reused[2]["quote_received_at_kst"] == now.isoformat()
+
+    # A revised historical bar must be blocked before the kernel and shared publish.
+    collector._minute_cache.clear()
+    client = Client()
+    original_post = client.post
+
+    def revised_post(path, api_id, request, **kwargs):
+        response = original_post(path, api_id, request, **kwargs)
+        if api_id == "ka10080":
+            response["stk_min_pole_chart_qry"][0]["trde_qty"] = "999"
+        return response
+
+    client.post = revised_post
+    before_episode = collector._episodes["080220"].as_dict()
+    blocked = collector._collect_symbol(
+        symbol="080220", policy=policy, client=client, observed_at=now
+    )
+    assert blocked["advisory"]["source_quality"]["status"] == "BLOCKED"
+    assert blocked["entry_event"] is None and blocked["exit_event"] is None
+    assert collector._episodes["080220"].as_dict() == before_episode
+    shared = collector._contract("080220").load_snapshot()
+    assert shared["advisory"]["source_quality"]["status"] == "BLOCKED"
+    assert shared["entry_event"] is None and shared["exit_event"] is None
+
+
+def test_raw_only_research_receipts_never_create_client_or_episode(
+    tmp_path, monkeypatch
+):
+    from datetime import date
+    from src.engine.monitoring import (
+        widget_auto_trade_policy_calibration as calibration,
+    )
+    from src.engine.monitoring import widget_research_watch_collector as watch
+    from src.engine.monitoring.widget_symbol_runtime_contract import (
+        iter_calibration_records,
+    )
+
+    class EmptyLoader:
+        def resolve_observation_all(self, *, observed_date):
+            return {}
+
+    collector = WidgetSymbolRuntimeCollector(
+        policy_loader=EmptyLoader(),
+        observation_dir=tmp_path / "observation",
+        research_universe={"999999": "research"},
+    )
+    monkeypatch.setattr(
+        collector, "_client", lambda: pytest.fail("raw-only must not make requests")
+    )
+    monkeypatch.setattr(watch, "DEFAULT_SNAPSHOT_DIR", tmp_path / "missing")
+    observed = datetime(2026, 9, 16, 10, 0, tzinfo=KST)
+    result = collector.collect_once(observed)
+    row = result["symbols"]["999999"]
+    assert row["status"] == "raw_only_no_seed"
+    assert row["raw_source_status"] == "producer_missing"
+    assert row["entry_event"] is None and row["exit_event"] is None
+    assert not collector._episodes and not collector._policies
+    path = tmp_path / "observation" / "widget_symbol_advisory_999999_20260916.jsonl"
+    decoded = list(iter_calibration_records(path))[0][1]
+    assert decoded["observation_role"] == "raw_only_seed_receipt"
+    spec = calibration.SymbolSpec(
+        symbol="999999",
+        name="research",
+        observation_dir=path.parent,
+        prefix="widget_symbol_advisory_999999",
+        sessions=(),
+        add_trigger_arms=((),),
+        target_bps_values=(50,),
+        max_entries_values=(1,),
+        minimum_signal_dates=10,
+        minimum_trades=10,
+        analysis_start_date=date(2026, 9, 16),
+        minimum_qualified_observation_dates=40,
+    )
+    rows, _, audit = calibration._load_rows(spec, target_date=date(2026, 9, 16))
+    assert rows == [] and audit["raw_only_no_seed_receipt_count"] == 1
+    assert (
+        audit["required_contract_missing_count"] == 0
+        and audit["excluded_row_count"] == 0
+    )

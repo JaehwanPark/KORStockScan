@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from copy import deepcopy
 from datetime import date
+from pathlib import Path
 
 import pytest
 
@@ -379,3 +380,103 @@ def test_integrated_sor_research_provenance_is_rejected_for_krx_runtime():
         ValueError, match="widget_symbol_research_krx_source_provenance_invalid"
     ):
         runtime.build_policy(research)
+
+
+def test_research_diagnostic_seed_enrolls_without_execution_promotion():
+    report = _research()
+    universe = {**SYMBOLS, "999999": "research"}
+    report["symbol_universe"] = universe
+    report["symbol_origins"] = {
+        symbol: "established_widget_symbol" for symbol in SYMBOLS
+    }
+    report["symbol_origins"]["999999"] = "operator_enrolled_research_watch"
+    parameters = report["symbols"]["006800"]["selected_policy"]
+    report["symbols"]["999999"] = {
+        "decision": "no_robust_calibration_policy",
+        "best_diagnostic_candidate": {"parameters": deepcopy(parameters)},
+        "runtime_effect": False,
+    }
+    report["source_meta"]["999999"] = {
+        "symbol": "999999",
+        "request_code": "999999",
+        "market": "KRX_regular",
+        "source_quality_status": "PASS",
+    }
+    report["generated_at_kst"] = "2026-08-12T10:23:30+09:00"
+    policy = runtime.build_policy(report)
+    assert "999999" not in policy["symbols"]
+    seed = policy["observation_symbols"]["999999"]
+    assert seed["effective_at_kst"] == "2026-08-12T10:23:30+09:00"
+    assert seed["aftermarket_effective_at_kst"] == "2026-08-12T16:03:00+09:00"
+    assert seed["runtime_effect"] is False and seed["broker_order_forbidden"] is True
+    assert seed["parameters_sha256"] == runtime._payload_sha256(seed["signal_policy"])
+    assert seed["source_report_sha256"] == runtime._payload_sha256(report)
+    legacy = runtime.build_policy(report, legacy_observation_enrollment=True)
+    assert "999999" not in legacy["observation_symbols"]
+
+
+def test_prior_catalog_still_loads_without_backfilling_seed_registration(tmp_path):
+    report = _research()
+    evidence = tmp_path / "report.json"
+    evidence.write_text(json.dumps(report))
+    policy = runtime.build_policy(
+        report, evidence_report_path=evidence, legacy_observation_enrollment=True
+    )
+    path = tmp_path / f'{runtime.POLICY_PREFIX}_{policy["effective_date"]}.json'
+    path.write_text(json.dumps(policy))
+    resolved = runtime.WidgetSymbolRuntimePolicyLoader(
+        tmp_path
+    ).resolve_observation_all(
+        observed_date=date.fromisoformat(policy["effective_date"])
+    )
+    assert set(resolved) == set(policy["observation_symbols"])
+    assert all(value["registered_at_kst"] is None for value in resolved.values())
+
+
+def test_native_publisher_separates_observation_and_execution_catalogs(tmp_path):
+    report = _research()
+    report["symbol_universe"] = {**SYMBOLS, "999999": "research"}
+    report["symbol_origins"] = {
+        symbol: "established_widget_symbol" for symbol in SYMBOLS
+    }
+    report["symbol_origins"]["999999"] = "operator_enrolled_research_watch"
+    report["symbols"]["999999"] = {
+        "decision": "no_robust_calibration_policy",
+        "runtime_effect": False,
+        "best_diagnostic_candidate": {
+            "parameters": deepcopy(report["symbols"]["006800"]["selected_policy"])
+        },
+    }
+    report["source_meta"]["999999"] = {
+        "symbol": "999999",
+        "request_code": "999999",
+        "market": "KRX_regular",
+        "source_quality_status": "PASS",
+    }
+    evidence = tmp_path / "report.json"
+    evidence.write_text(json.dumps(report))
+    path, _, receipt = runtime.write_outputs(
+        report,
+        policy_dir=tmp_path / "policy",
+        apply_report_dir=tmp_path / "apply",
+        evidence_report_path=evidence,
+    )
+    canonical = json.loads(path.read_text())
+    assert "observation_catalog_version" not in canonical
+    assert canonical == runtime.build_policy(
+        report, evidence_report_path=evidence, legacy_observation_enrollment=True
+    )
+    catalog = json.loads(Path(receipt["observation_catalog_path"]).read_text())
+    assert catalog["symbols"] == {} and catalog["runtime_effect"] is False
+    assert (
+        catalog["allowed_runtime_apply"] is False
+        and catalog["broker_order_forbidden"] is True
+    )
+    assert receipt["policy_verification"]["status"] == "pass"
+    loader = runtime.WidgetSymbolRuntimePolicyLoader(path.parent)
+    assert "999999" in loader.resolve_observation_all(
+        observed_date=date.fromisoformat(canonical["effective_date"])
+    )
+    assert "999999" not in loader.resolve_all(
+        observed_date=date.fromisoformat(canonical["effective_date"])
+    )

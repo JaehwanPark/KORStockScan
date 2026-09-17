@@ -4020,3 +4020,35 @@ def test_opening_rotation_tuning_and_preopen_apply_are_retired():
     assert "-m src.engine.scalping.opening_rotation_tuning" not in postclose
     assert 'RUN_OPENING_ROTATION_PROFILE_TUNING="retired"' in postclose
     assert "-m src.engine.scalping.opening_rotation_tuning" not in preopen
+
+
+def test_widget_phase_timeout_fails_with_target_and_preserves_prior_checkpoint(
+    tmp_path,
+):
+    source = Path("deploy/run_widget_evaluation.sh").read_text()
+    start = source.index("PHASE_BUDGET_SEC=")
+    end = source.index("\nrun_stage advisory ", start)
+    checkpoint = tmp_path / "completed_symbol.json"
+    checkpoint.write_text('{"complete":true}')
+    wrapper = tmp_path / "budget.sh"
+    wrapper.write_text(
+        "#!/bin/bash\nset -Eeuo pipefail\ncompleted_target_date=2026-09-16\n"
+        + source[start:end]
+        + "\nrun_stage signal_research "
+        + sys.executable
+        + " -c 'import time;time.sleep(10)'\n"
+        + "echo completed\n"
+    )
+    result = subprocess.run(
+        ["bash", str(wrapper)],
+        capture_output=True,
+        text=True,
+        timeout=5,
+        env={**os.environ, "KORSTOCKSCAN_WIDGET_EVALUATION_PHASE_BUDGET_SEC": "1"},
+    )
+    assert result.returncode == 124
+    assert (
+        "failed target_date=2026-09-16 stage=signal_research exit=124" in result.stderr
+    )
+    assert "completed" not in result.stdout
+    assert checkpoint.read_text() == '{"complete":true}'

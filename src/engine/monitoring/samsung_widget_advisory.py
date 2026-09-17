@@ -208,6 +208,7 @@ def completed_session_bars(
     session_start: datetime_time,
     session_end: datetime_time | None = None,
     limit: int = 120,
+    preserve_duplicates: bool = False,
 ) -> list[MinuteBar]:
     """Normalize current-session completed stock/index one-minute bars."""
     if not isinstance(rows, list):
@@ -220,6 +221,7 @@ def completed_session_bars(
         f"{today}{session_end.strftime('%H%M')}" if session_end is not None else None
     )
     by_time: dict[str, MinuteBar] = {}
+    received_bars: list[MinuteBar] = []
     for row in rows:
         if not isinstance(row, dict):
             continue
@@ -242,10 +244,12 @@ def completed_session_bars(
             continue
         high = max(high, open_price, close)
         low = min(low, open_price, close)
-        by_time[raw_time[:14]] = MinuteBar(
-            raw_time[:14], open_price, high, low, close, volume
-        )
-    return sorted(by_time.values(), key=lambda bar: bar.source_time)[-max(1, limit) :]
+        bar = MinuteBar(raw_time[:14], open_price, high, low, close, volume)
+        by_time[raw_time[:14]] = bar
+        if preserve_duplicates:
+            received_bars.append(bar)
+    result = received_bars if preserve_duplicates else by_time.values()
+    return sorted(result, key=lambda bar: bar.source_time)[-max(1, limit) :]
 
 
 def _contiguous_window(bars: list[MinuteBar], count: int) -> list[MinuteBar]:
@@ -1497,9 +1501,7 @@ def evaluate_advisory(
     }
     if context.market_data_route == "krx_nxt_integrated":
         base["unmet_conditions"] = list(
-            dict.fromkeys(
-                [*base["unmet_conditions"], "dual_aftermarket_observe_only"]
-            )
+            dict.fromkeys([*base["unmet_conditions"], "dual_aftermarket_observe_only"])
         )
         base["derived"] = {
             "dual_aftermarket_context": {
@@ -3641,6 +3643,7 @@ class KiwoomReadOnlyClient:
         self.token = token
         self.session = session or requests.Session()
         self.budget = budget
+        self.last_request_receipt: dict[str, Any] = {}
         self.shared_read_control_enabled = (
             session is None
             if shared_read_control_enabled is None
@@ -3655,6 +3658,15 @@ class KiwoomReadOnlyClient:
         *,
         optional: bool = False,
     ) -> dict[str, Any]:
+        self.last_request_receipt = {
+            "endpoint": path,
+            "api_id": api_id,
+            "request_code": payload.get("stk_cd"),
+            "admission_status": "not_admitted",
+            "http_status_code": None,
+            "response_code": None,
+            "admission_waited_sec": None,
+        }
         if (path, api_id) not in READ_ONLY_KIWOOM_REQUESTS:
             raise RuntimeError(f"forbidden_widget_kiwoom_request:{api_id}:{path}")
         if self.budget is not None:
@@ -3673,10 +3685,30 @@ class KiwoomReadOnlyClient:
                 request_code=payload.get("stk_cd", "not_applicable"),
                 max_wait_sec=1.25,
             )
+            self.last_request_receipt.update(
+                {
+                    "admission_status": (
+                        "admitted" if admission.admitted else "deferred"
+                    ),
+                    "admission_reason": admission.reason,
+                    **{
+                        field: getattr(admission, field, None)
+                        for field in (
+                            "waited_sec",
+                            "requests_in_window_before",
+                            "effective_limit",
+                            "max_limit",
+                            "cooldown_remaining_sec",
+                        )
+                    },
+                }
+            )
             if not admission.admitted:
                 raise RuntimeError(
                     f"widget_kiwoom_shared_read_rate_deferred:{admission.reason}"
                 )
+        if not self.shared_read_control_enabled:
+            self.last_request_receipt["admission_status"] = "local_only"
         response = self.session.post(
             endpoint,
             headers={
@@ -3686,6 +3718,9 @@ class KiwoomReadOnlyClient:
             },
             json=payload,
             timeout=(5, 10),
+        )
+        self.last_request_receipt["http_status_code"] = getattr(
+            response, "status_code", None
         )
         if getattr(response, "status_code", None) == 429 and self.budget is not None:
             self.budget.note_rate_limited()
@@ -3708,6 +3743,7 @@ class KiwoomReadOnlyClient:
             return_code = int(data["return_code"])
         except (KeyError, TypeError, ValueError) as exc:
             raise RuntimeError(f"{api_id}_return_code_missing") from exc
+        self.last_request_receipt["response_code"] = return_code
         if self.shared_read_control_enabled and kiwoom_utils.is_kiwoom_read_rate_limit(
             http_status_code=getattr(response, "status_code", None),
             response_body=data,
@@ -4117,7 +4153,24 @@ class ObservationRecorder:
             "metric_contract": METRIC_CONTRACT,
         }
         with target.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+            raw_line = json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n"
+            handle.write(raw_line)
+        from src.engine.monitoring.widget_symbol_runtime_contract import (
+            append_calibration_projection,
+        )
+
+        try:
+            append_calibration_projection(target, row, raw_line)
+        except OSError:
+            print(
+                json.dumps(
+                    {
+                        "stage": "optional_projection_write_failed",
+                        "producer": self.file_prefix,
+                    }
+                ),
+                flush=True,
+            )
         cutoff = _as_kst(observed_at).date() - timedelta(days=self.retention_days)
         for path in self.directory.glob(f"{self.file_prefix}_*.jsonl"):
             raw_date = path.stem.rsplit("_", 1)[-1]
@@ -4128,6 +4181,7 @@ class ObservationRecorder:
             if artifact_date < cutoff:
                 try:
                     path.unlink()
+                    path.with_suffix(".calibration.jsonl").unlink(missing_ok=True)
                 except OSError:
                     pass
 

@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-PROJECT_DIR="${KORSTOCKSCAN_PROJECT_DIR:-/home/ubuntu/KORStockScan}"
+SCRIPT_PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PROJECT_DIR="${KORSTOCKSCAN_PROJECT_DIR:-$SCRIPT_PROJECT_DIR}"
 PYTHON_BIN="${KORSTOCKSCAN_PYTHON_BIN:-$PROJECT_DIR/.venv/bin/python}"
 EOD_WAIT_REQUIRED="${KORSTOCKSCAN_WIDGET_EVALUATION_WAIT_FOR_EOD:-true}"
 EOD_WAIT_SEC="${KORSTOCKSCAN_WIDGET_EVALUATION_EOD_WAIT_SEC:-5400}"
 EOD_WAIT_INTERVAL_SEC="${KORSTOCKSCAN_WIDGET_EVALUATION_EOD_WAIT_INTERVAL_SEC:-30}"
 
 cd "$PROJECT_DIR"
-export PYTHONPATH="${PYTHONPATH:-$PROJECT_DIR}"
+# Python -c/-m searches cwd first; bind both cwd and imports to this code root.
+export PYTHONPATH="$PROJECT_DIR"
 
 completed_target_date="$(
   "$PYTHON_BIN" -c 'from src.engine.monitoring.widget_auto_trade_policy_calibration import resolve_completed_policy_target_date; print(resolve_completed_policy_target_date().isoformat())' \
@@ -76,17 +78,44 @@ wait_for_eod_terminal() {
   done
 }
 
-"$PYTHON_BIN" -m src.engine.monitoring.widget_advisory_calibration \
+PHASE_BUDGET_SEC="${KORSTOCKSCAN_WIDGET_EVALUATION_PHASE_BUDGET_SEC:-5400}"
+if [[ ! "$PHASE_BUDGET_SEC" =~ ^[0-9]+$ ]]; then
+  printf '[WIDGET_EVALUATION] invalid phase budget target_date=%s\n' "$completed_target_date" >&2
+  exit 2
+fi
+active_stage="initialization"
+stage_started=0
+trap 'stage_rc=$?; printf "[WIDGET_EVALUATION] failed target_date=%s stage=%s exit=%s wall=%ss\n" "$completed_target_date" "$active_stage" "$stage_rc" "$((SECONDS-stage_started))" >&2; exit "$stage_rc"' ERR
+run_stage() {
+  active_stage="$1"
+  shift
+  stage_started=$SECONDS
+  printf '[WIDGET_EVALUATION] stage_start target_date=%s stage=%s phase_budget=%ss\n' \
+    "$completed_target_date" "$active_stage" "$PHASE_BUDGET_SEC"
+  if [[ "$PHASE_BUDGET_SEC" -gt 0 ]]; then
+    /usr/bin/time -f '[WIDGET_EVALUATION] child_resources wall=%e user_cpu=%U system_cpu=%S peak_rss_kib=%M' \
+      timeout --signal=TERM --kill-after=30 "$PHASE_BUDGET_SEC" "$@"
+  else
+    /usr/bin/time -f '[WIDGET_EVALUATION] child_resources wall=%e user_cpu=%U system_cpu=%S peak_rss_kib=%M' "$@"
+  fi
+  printf '[WIDGET_EVALUATION] stage_end target_date=%s stage=%s wall=%ss\n' \
+    "$completed_target_date" "$active_stage" "$((SECONDS-stage_started))"
+}
+
+run_stage advisory "$PYTHON_BIN" -m src.engine.monitoring.widget_advisory_calibration \
   --target-date "$completed_target_date" \
   --write
-"$PYTHON_BIN" -m src.engine.monitoring.widget_auto_trade_policy_calibration \
+run_stage auto_policy "$PYTHON_BIN" -m src.engine.monitoring.widget_auto_trade_policy_calibration \
   --target-date "$completed_target_date" \
   --write
+active_stage="eod_wait"
+stage_started=$SECONDS
 wait_for_eod_terminal
-"$PYTHON_BIN" -m src.engine.monitoring.widget_symbol_signal_policy_research \
+printf '[WIDGET_EVALUATION] stage_end target_date=%s stage=eod_wait wall=%ss\n' "$completed_target_date" "$((SECONDS-stage_started))"
+run_stage signal_research "$PYTHON_BIN" -m src.engine.monitoring.widget_symbol_signal_policy_research \
   --end-date "$completed_target_date" \
   --write
-"$PYTHON_BIN" -m src.engine.monitoring.widget_symbol_runtime_policy \
+run_stage runtime_policy "$PYTHON_BIN" -m src.engine.monitoring.widget_symbol_runtime_policy \
   --target-date "$completed_target_date" \
   --write
 

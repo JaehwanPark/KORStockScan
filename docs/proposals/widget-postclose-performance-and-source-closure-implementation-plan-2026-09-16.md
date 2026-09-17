@@ -1,6 +1,6 @@
 # 위젯 장후 평가 원천 폐쇄·성능 개선 상세 구현계획
 
-상태: 구현계획 및 읽기 전용 원천 점검 완료. 본 문서는 알고리즘 구현, 성능 달성, 배포 또는 자연 정책 생성 receipt가 아니다.
+상태: 09-16 계획·원천 점검을 바탕으로 09-17 사용자 명시 구현·리뷰·commit/push·배포·기동 지시를 수행한다. 구현 및 검증·배포 receipt는 [09-17 구현 기록](../audit-reports/2026-09-17-widget-postclose-source-closure-implementation.md), 자연 acceptance의 현재 실행 owner는 [09-17 checklist](../checklists/2026-09-17-stage2-todo-checklist.md)의 `[WidgetPostcloseEvaluationPinAcceptance0916]`이다.
 
 목표: 생산·소비 결손을 먼저 구분하고, 튜닝의 입력 기간·정책 탐색·비용·holdout 품질을 최대한 유지하면서 장후 CPU·메모리·재조회 비용을 줄인다. 기존 모듈 안에서 작업본을 구현·리뷰·검증하고, 통과한 동일 코드 세대만 배포본에 인계한다.
 
@@ -151,6 +151,15 @@ projection은 optional speed path다. 원본보다 source 검사를 느슨하게
 - CPUQuota/MemoryMax 증설은 기본 개선수단으로 쓰지 않는다. 현재 20%/512MiB에서 먼저 측정하고, resource 조정은 host 병행부하 근거가 필요한 후속 운영 선택으로 둔다.
 - final sources → tower → checklist → strict verifier `--require-summary-handoff` → controller DONE/finalization 순서를 검증한다. optional cache 파일을 summary 필수 source hash에 넣어 eviction으로 최종 계약이 흔들리게 하지 않는다.
 
+### 7.1 09-17 구현 운영 계약
+
+- 기존 raw collector는 동일 validated universe helper의 19종목을 정규장·실제 integrated AM route에서 관측한다. 18/min local budget·headroom 3을 유지하고 명목 cycle은 228초 이상이다. 10초 이내의 검증된 공통 quote/BBO는 원래 수신시각을 보존하여 재사용하며 chart는 실제 조회한다.
+- 실행 canonical policy는 기존 trader가 재구성할 수 있는 기존 형식을 유지한다. 확대 관측 seed는 동일 writer의 `widget_symbol_observation_catalog_<effective_date>.json` companion에만 고정하며 `symbols={}`, `runtime_effect=false`, `allowed_runtime_apply=false`, `broker_order_forbidden=true`이다. observer는 exact-date evidence로 재구성한 companion만 우선 소비한다. seed가 없는 종목은 raw-only receipt이며 주문·episode를 만들지 않는다.
+- source snapshot은 EOD terminal·exact date·checksum·parser contract·coverage로 검증한다. `data/cache/widget_signal_research_sources`의 symbol/date 파일과 bounded day replay cache, 기존 research output의 symbol checkpoint는 optional 재개 입력이다. growing/unmarked source는 durable snapshot으로 승인하지 않으며 cache read로 source time을 갱신하지 않는다.
+- 기존 observation `.calibration.jsonl` projection은 원본 경로·행 digest·contract·payload checksum을 검증하고 실패하면 raw를 소비한다. 실제 BBO/quantity·paired trace·event·cost identity를 보존한다. 종료되지 않은 당일 입력과 64MiB 초과 입력은 full scan하지 않고 명시적인 source gap을 반환한다.
+- wrapper의 각 분석 단계 default budget은 5,400초, EOD wait는 별도 최대 5,400초다. engineering 합성 full bootstrap 측정에 여유를 둔 상한이며 실제 API acquisition의 완료 보장은 아니다. `KORSTOCKSCAN_WIDGET_EVALUATION_PHASE_BUDGET_SEC`의 0은 명시적으로 상한을 끄는 값이다. 실패 시 target date·stage·exit code를 기록하고 completed symbol checkpoint 및 TERM 때 bounded partial day cache를 남기며 final completed/apply receipt를 만들지 않는다.
+- 배포는 새 immutable release에 raw/runtime collectors와 evaluation unit만 pin한다. runtime collector condition은 validated raw scope를 허용하는 `--check-observation-scope`; seeded 평가와 execution policy는 각각 기존 exact-date 검증을 유지한다. timer 20:10·CPU/memory·admission·trading PID·holding/order custody는 기존 계약을 유지한다. rollback은 저장된 이전 drop-in으로 세 unit만 복원한다.
+
 ## 8. 작업본 구현·검증 순서
 
 | 단계 | 작업본 변경 | 검증과 종료 기준 |
@@ -205,7 +214,7 @@ projection은 optional speed path다. 원본보다 source 검사를 느슨하게
 7. 자연 acceptance는 새 raw 생산→all-scope census→유효 seeded advisory→완료된 full-cost/holdout 연구→dated policy 소비→strict final chain으로 확인한다. raw-only/seed 없음/지원되지 않는 venue는 설명된 상태로 유지한다.
 8. 오류 detail repair의 다음 자연 표본에서 원인과 recurrence를 확인한다. 과거 RuntimeError 598행은 원래 receipt로 보존한다. audit exclusion이나 cache hit만으로 producer-gap을 닫지 않는다.
 
-본 요청의 현재 deliverable은 이 상세계획과 원천 정상성 점검이다. 위 W0~W7을 실제 수행한 뒤에야 구현·성능·배포 완료를 주장한다. 기존 OPEN 자연 owner `[WidgetPostcloseEvaluationPinAcceptance0916]`에는 오늘 실패 및 본 계획을 연결하고, 미래 실행 일정은 그 시점의 daily checklist owner로 이관한다.
+09-16 요청의 deliverable은 상세계획과 원천 점검이었다. 09-17의 별도 사용자 지시는 실제 구현·반복 리뷰·보완·검증·commit/push·배포·기동까지 허용한다. 합성 성능·code closure·설정 설치·actual collector PID와 장후 자연 완료·정책 소비·경제성을 분리해 기록한다. 기존 stable ID `[WidgetPostcloseEvaluationPinAcceptance0916]`는 과거 실패·acceptance를 보존하여 09-17 daily의 단일 OPEN owner로 이관한다.
 
 ## 11. 참조
 

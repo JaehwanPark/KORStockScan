@@ -95,9 +95,7 @@ def test_research_input_fingerprint_changes_only_with_material_input() -> None:
         "end_date": date(2026, 8, 18),
         "applied_baselines": baseline,
         "symbol_universe": symbol_universe,
-        "symbol_origins": {
-            symbol: "established_widget_symbol" for symbol in symbols
-        },
+        "symbol_origins": {symbol: "established_widget_symbol" for symbol in symbols},
     }
     first = research.research_input_fingerprint(**kwargs)
     second = research.research_input_fingerprint(**kwargs)
@@ -108,9 +106,7 @@ def test_research_input_fingerprint_changes_only_with_material_input() -> None:
             "006800": {"policy_id": "successor", "policy_hash": "c" * 64}
         },
         symbol_universe=symbol_universe,
-        symbol_origins={
-            symbol: "established_widget_symbol" for symbol in symbols
-        },
+        symbol_origins={symbol: "established_widget_symbol" for symbol in symbols},
     )
     changed_universe = research.research_input_fingerprint(
         **{
@@ -666,7 +662,9 @@ def test_discovery_selects_on_calibration_and_can_fail_untouched_holdout(
     monkeypatch.setattr(research, "policy_grid", lambda: (selected,))
     evaluated_windows: list[tuple[date, ...]] = []
 
-    def fake_evaluate(grouped_arg, dates, policy, *, include_episodes=False):
+    def fake_evaluate(
+        grouped_arg, dates, policy, *, include_episodes=False, replay_context=None
+    ):
         del grouped_arg, policy
         evaluated_windows.append(tuple(dates))
         is_holdout = dates == expected_dates[-research.HOLDOUT_DAYS :]
@@ -719,7 +717,9 @@ def test_discovery_auto_expands_to_positive_fourth_episode_without_chasing_cap_e
     monkeypatch.setattr(research, "_group_bars", lambda bars: grouped)
     monkeypatch.setattr(research, "policy_grid", lambda: (selected,))
 
-    def fake_evaluate(grouped_arg, dates, policy, *, include_episodes=False):
+    def fake_evaluate(
+        grouped_arg, dates, policy, *, include_episodes=False, replay_context=None
+    ):
         del grouped_arg, policy
         incremental_ev = {1: 0.5, 2: 0.3, 3: 0.15, 4: 0.05, 5: -0.1}
         episodes = [
@@ -793,8 +793,12 @@ def test_build_report_binds_the_loaded_symbol_universe_to_its_fingerprint(
         },
     )
     monkeypatch.setattr(research, "objective_comparison", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(research, "load_execution_incidents", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(research, "attach_recommendation_contract", lambda report: report)
+    monkeypatch.setattr(
+        research, "load_execution_incidents", lambda *_args, **_kwargs: {}
+    )
+    monkeypatch.setattr(
+        research, "attach_recommendation_contract", lambda report: report
+    )
 
     report = research.build_report(
         sources=sources,
@@ -813,3 +817,386 @@ def test_build_report_binds_the_loaded_symbol_universe_to_its_fingerprint(
         symbol_universe=universe,
         symbol_origins=origins,
     )
+
+
+def test_precomputed_features_and_replay_match_legacy_with_gaps(tmp_path):
+    from dataclasses import replace
+
+    values = [
+        (10000 + (i % 7) * 10, 10200, 9800, 9900 + (i % 13) * 20, 100 + i % 5)
+        for i in range(100)
+    ]
+    rows = _bars(values)
+    for with_gap in (False, True):
+        current = tuple(
+            (
+                replace(row, timestamp=row.timestamp + timedelta(minutes=2))
+                if with_gap and i >= 55
+                else row
+            )
+            for i, row in enumerate(rows)
+        )
+        day = current[0].timestamp.date()
+        grouped = {day: current}
+        context = research.ReplayContext(grouped, tmp_path / str(with_gap))
+        for lookback in (3, 15, 30, 45):
+            for anchor in ("rolling", "session"):
+                policy = replace(
+                    _policy(),
+                    lookback_bars=lookback,
+                    anchor_mode=anchor,
+                    minimum_history_bars=min(lookback, 15),
+                )
+                for i in range(len(current)):
+                    assert context.feature(day, i, policy) == research._setup_feature(
+                        current,
+                        i,
+                        lookback,
+                        anchor_mode=anchor,
+                        minimum_history_bars=policy.minimum_history_bars,
+                    )
+                for target in (30, 50, 100):
+                    selected = replace(policy, target_bps=target)
+                    expected = research.evaluate_policy(
+                        grouped, [day], selected, include_episodes=True
+                    )
+                    assert (
+                        research.evaluate_policy(
+                            grouped,
+                            [day],
+                            selected,
+                            include_episodes=True,
+                            replay_context=context,
+                        )
+                        == expected
+                    )
+        context.flush()
+        warm = research.ReplayContext(grouped, tmp_path / str(with_gap))
+        for lookback in (3, 15, 30, 45):
+            for anchor in ("rolling", "session"):
+                policy = replace(
+                    _policy(),
+                    lookback_bars=lookback,
+                    anchor_mode=anchor,
+                    minimum_history_bars=min(lookback, 15),
+                    target_bps=100,
+                )
+                assert research.evaluate_policy(
+                    grouped, [day], policy, include_episodes=True, replay_context=warm
+                ) == research.evaluate_policy(
+                    grouped, [day], policy, include_episodes=True
+                )
+        assert warm.cache_hits > 0
+        assert (
+            sum(p.stat().st_size for p in (tmp_path / str(with_gap)).glob("*.json.z"))
+            < 20000
+        )
+
+
+def test_corrupt_day_cache_and_changed_source_recompute(tmp_path):
+    from dataclasses import replace
+
+    rows = _bars([(10000, 10100, 9900, 10000, 100)] * 60)
+    day = rows[0].timestamp.date()
+    context = research.ReplayContext({day: rows}, tmp_path)
+    expected = research.evaluate_policy(
+        {day: rows}, [day], _policy(), include_episodes=True, replay_context=context
+    )
+    context.flush()
+    path = context._day_path(day)
+    path.write_bytes(b"corrupt")
+    warm = research.ReplayContext({day: rows}, tmp_path)
+    assert (
+        research.evaluate_policy(
+            {day: rows}, [day], _policy(), include_episodes=True, replay_context=warm
+        )
+        == expected
+    )
+    assert warm.cache_hits == 0
+    changed = (replace(rows[0], volume=101), *rows[1:])
+    assert research.ReplayContext({day: changed}, tmp_path)._day_path(day) != path
+
+
+def test_completed_snapshots_skip_remote_and_refetch_corruption_and_new_day(
+    tmp_path, monkeypatch
+):
+    first = date(2026, 8, 11)
+    dates = [first, first + timedelta(days=1)]
+    monkeypatch.setattr(
+        research,
+        "_clean_trading_dates",
+        lambda end: [day for day in dates if day <= end],
+    )
+    monkeypatch.setattr(
+        research,
+        "_freeze_receipt",
+        lambda end: {"target_date": end.isoformat(), "sha256": "a" * 64},
+    )
+    calls = []
+
+    def fetch(**kwargs):
+        calls.append(kwargs)
+        bars = [
+            Bar(
+                datetime.combine(day, time(9), tzinfo=KST) + timedelta(minutes=minute),
+                100,
+                101,
+                99,
+                100,
+                10,
+            )
+            for day in dates
+            if kwargs["start_date"] <= day <= kwargs["end_date"]
+            for minute in range(390)
+        ]
+        return bars, {
+            "retrieved_at_kst": kwargs["end_date"].isoformat() + "T20:10:00+09:00",
+            "request_count": 1,
+        }
+
+    monkeypatch.setattr(research, "fetch_krx_history", fetch)
+    kwargs = dict(
+        symbol="006800",
+        end_date=dates[-1],
+        universe={"006800": "test"},
+        origin="established_widget_symbol",
+        token_provider=lambda: "cached",
+        snapshot_dir=tmp_path,
+        max_pages=120,
+        page_delay_sec=0,
+    )
+    bars, meta = research.load_completed_symbol_source(**kwargs)
+    assert len(calls) == 1
+    expected_hash = meta["source_content_sha256"]
+    kwargs["token_provider"] = lambda: pytest.fail("warm run must not read credentials")
+    warm_bars, warm = research.load_completed_symbol_source(**kwargs)
+    assert warm_bars == bars and warm["request_count"] == 0
+    assert warm["retrieved_at_by_date"] == meta["retrieved_at_by_date"]
+    (tmp_path / "006800" / f"{dates[0]}.json").write_text("{}")
+    kwargs["token_provider"] = lambda: "cached"
+    _, repaired = research.load_completed_symbol_source(**kwargs)
+    assert calls[-1]["end_date"] == dates[0] and calls[-1]["incremental_source"] is True
+    assert repaired["source_content_sha256"] == expected_hash
+    dates.append(first + timedelta(days=2))
+    kwargs["end_date"] = dates[-1]
+    final, _ = research.load_completed_symbol_source(**kwargs)
+    assert len(final) == 3 * 390
+    assert calls[-1]["start_date"] == dates[-1]
+
+
+def test_snapshot_without_freeze_marker_is_never_durably_reused(tmp_path, monkeypatch):
+    day = date(2026, 8, 11)
+    monkeypatch.setattr(research, "_clean_trading_dates", lambda end: [day])
+    monkeypatch.setattr(research, "_freeze_receipt", lambda end: None)
+    calls = []
+
+    def fetch(**kwargs):
+        calls.append(kwargs)
+        return list(_bars([(100, 101, 99, 100, 10)])), {
+            "retrieved_at_kst": "2026-08-11T15:32:00+09:00",
+            "request_count": 1,
+        }
+
+    monkeypatch.setattr(research, "fetch_krx_history", fetch)
+    kwargs = dict(
+        symbol="006800",
+        end_date=day,
+        universe={"006800": "test"},
+        origin="established_widget_symbol",
+        token_provider=lambda: "cached",
+        snapshot_dir=tmp_path,
+        max_pages=120,
+        page_delay_sec=0,
+    )
+    research.load_completed_symbol_source(**kwargs)
+    research.load_completed_symbol_source(**kwargs)
+    assert len(calls) == 2
+    assert not list(tmp_path.glob("006800/*.json"))
+
+
+def test_source_parser_hash_survives_cost_and_replay_changes(monkeypatch):
+    expected = research.source_parser_contract_hash()
+    monkeypatch.setattr(
+        research, "comparison_cost_contract", lambda day: {"changed": True}
+    )
+    monkeypatch.setattr(research, "research_contract_hash", lambda: "changed_algorithm")
+    assert research.source_parser_contract_hash() == expected
+
+
+def test_completed_source_concurrent_publication_fetches_once(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+
+    day = date(2026, 8, 11)
+    monkeypatch.setattr(research, "_clean_trading_dates", lambda end: [day])
+    monkeypatch.setattr(
+        research,
+        "_freeze_receipt",
+        lambda end: {"target_date": str(end), "sha256": "a" * 64},
+    )
+    calls = []
+
+    def fetch(**kwargs):
+        calls.append(kwargs)
+        return [
+            Bar(
+                datetime.combine(day, time(9), tzinfo=KST) + timedelta(minutes=i),
+                100,
+                101,
+                99,
+                100,
+                10,
+            )
+            for i in range(390)
+        ], {"retrieved_at_kst": "2026-08-11T20:10:00+09:00", "request_count": 1}
+
+    monkeypatch.setattr(research, "fetch_krx_history", fetch)
+    kwargs = dict(
+        symbol="006800",
+        end_date=day,
+        universe={"006800": "test"},
+        origin="established_widget_symbol",
+        token_provider=lambda: "cached",
+        snapshot_dir=tmp_path,
+        max_pages=120,
+        page_delay_sec=0,
+    )
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(
+            pool.map(
+                lambda _: research.load_completed_symbol_source(**kwargs), range(2)
+            )
+        )
+    assert len(calls) == 1
+    assert results[0][0] == results[1][0]
+    assert sorted(item[1]["request_count"] for item in results) == [0, 1]
+
+
+def test_incomplete_daily_coverage_is_not_durable(tmp_path, monkeypatch):
+    day = date(2026, 8, 11)
+    monkeypatch.setattr(research, "_clean_trading_dates", lambda end: [day])
+    monkeypatch.setattr(
+        research,
+        "_freeze_receipt",
+        lambda end: {"target_date": str(end), "sha256": "a" * 64},
+    )
+
+    def fetch(**kwargs):
+        return list(_bars([(100, 101, 99, 100, 10)])), {
+            "retrieved_at_kst": "2026-08-11T20:10:00+09:00",
+            "request_count": 1,
+        }
+
+    monkeypatch.setattr(research, "fetch_krx_history", fetch)
+    research.load_completed_symbol_source(
+        symbol="006800",
+        end_date=day,
+        universe={"006800": "test"},
+        origin="established_widget_symbol",
+        token_provider=lambda: "cached",
+        snapshot_dir=tmp_path,
+        max_pages=120,
+        page_delay_sec=0,
+    )
+    assert not (tmp_path / "006800" / f"{day}.json").exists()
+
+
+def test_snapshot_eod_generation_change_invalidates_reuse(tmp_path, monkeypatch):
+    day = date(2026, 8, 11)
+    freeze = {"target_date": str(day), "sha256": "a" * 64}
+    monkeypatch.setattr(research, "_freeze_receipt", lambda end: freeze)
+    bars = [
+        Bar(
+            datetime.combine(day, time(9), tzinfo=KST) + timedelta(minutes=i),
+            100,
+            101,
+            99,
+            100,
+            10,
+        )
+        for i in range(390)
+    ]
+    payload = {
+        "key": research._snapshot_key("006800", day),
+        "complete": True,
+        "freeze_receipt": dict(freeze),
+        "retrieved_at_kst": str(day) + "T20:10:00+09:00",
+        "source_quality_status": "PASS",
+        "sha256": research.canonical_bar_hash(bars),
+        "bars": [
+            [
+                bar.timestamp.isoformat(),
+                bar.open_price,
+                bar.high_price,
+                bar.low_price,
+                bar.close_price,
+                bar.volume,
+            ]
+            for bar in bars
+        ],
+    }
+    payload["receipt_sha256"] = research._receipt_checksum(payload)
+    path = tmp_path / "source.json"
+    path.write_text(__import__("json").dumps(payload))
+    assert research._read_snapshot(path, "006800", day) is not None
+    freeze["sha256"] = "b" * 64
+    assert research._read_snapshot(path, "006800", day) is None
+
+
+def test_overlap_revision_revokes_incomplete_cache_and_preserves_original_bars(
+    tmp_path, monkeypatch
+):
+    import json
+
+    dates = [date(2026, 8, 11) + timedelta(days=i) for i in range(3)]
+    monkeypatch.setattr(research, "_clean_trading_dates", lambda end: dates)
+    monkeypatch.setattr(
+        research,
+        "_freeze_receipt",
+        lambda end: {"target_date": str(end), "sha256": "a" * 64},
+    )
+    revised = [False]
+
+    def fetch(**kwargs):
+        bars = [
+            Bar(
+                datetime.combine(day, time(9), tzinfo=KST) + timedelta(minutes=i),
+                100,
+                101,
+                99,
+                100,
+                10,
+            )
+            for day in dates
+            if kwargs["start_date"] <= day <= kwargs["end_date"]
+            for i in range(100 if revised[0] and day == dates[1] else 390)
+        ]
+        return bars, {
+            "retrieved_at_kst": "2026-08-13T20:10:00+09:00",
+            "request_count": 1,
+        }
+
+    monkeypatch.setattr(research, "fetch_krx_history", fetch)
+    kwargs = dict(
+        symbol="006800",
+        end_date=dates[-1],
+        universe={"006800": "test"},
+        origin="established_widget_symbol",
+        token_provider=lambda: "cached",
+        snapshot_dir=tmp_path,
+        max_pages=120,
+        page_delay_sec=0,
+    )
+    research.load_completed_symbol_source(**kwargs)
+    middle = tmp_path / "006800" / f"{dates[1]}.json"
+    original = json.loads(middle.read_text())
+    for day in [dates[0], dates[2]]:
+        (tmp_path / "006800" / f"{day}.json").write_text("invalid")
+    revised[0] = True
+    _, meta = research.load_completed_symbol_source(**kwargs)
+    invalidated = json.loads(middle.read_text())
+    assert invalidated["complete"] is False
+    assert invalidated["bars"] == original["bars"]
+    assert invalidated["previous_receipt_sha256"] == original["receipt_sha256"]
+    assert research._read_snapshot(middle, "006800", dates[1]) is None
+    assert meta["source_revision_dates"] == [str(dates[1])]
+    assert meta["snapshot_hit_dates"] == 0

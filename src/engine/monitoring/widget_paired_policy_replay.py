@@ -114,15 +114,27 @@ def load_inputs(
         if not BASELINE <= day <= target_date:
             continue
         try:
-            raw = path.read_bytes()
-            lines = raw.decode().splitlines()
-        except (OSError, UnicodeError):
+            if path.stat().st_size > 64 * 1024 * 1024:
+                gaps += 1
+                continue
+            current = datetime.now(KST)
+            if day == current.date() and (current.hour, current.minute) < (20, 5):
+                gaps += 1
+                continue
+            source_digest = hashlib.sha256()
+            with path.open("rb") as source_handle:
+                for chunk in iter(lambda: source_handle.read(1024 * 1024), b""):
+                    source_digest.update(chunk)
+        except OSError:
             gaps += 1
             continue
-        hashes[str(path)] = hashlib.sha256(raw).hexdigest()
-        for line in lines:
+        hashes[str(path)] = source_digest.hexdigest()
+        from src.engine.monitoring.widget_symbol_runtime_contract import (
+            iter_calibration_records,
+        )
+
+        for _line_number, payload in iter_calibration_records(path):
             try:
-                payload = json.loads(line)
                 advisory = payload.get("advisory", {})
                 trace = advisory.get("confirmation_input_trace", {}).get("rows", [])
                 candidates = [

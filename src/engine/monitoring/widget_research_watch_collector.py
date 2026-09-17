@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import time
+import re
 from datetime import date, datetime, time as clock_time
 from pathlib import Path
 from typing import Any
@@ -37,7 +38,7 @@ DEFAULT_CONFIG_PATH = PROJECT_ROOT / "data/config/widget_research_watch_symbols.
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "data/monitoring/widget_research_watch"
 DEFAULT_SNAPSHOT_DIR = PROJECT_ROOT / "data/runtime/widget_research_watch"
 COLLECTION_START = clock_time(9, 0)
-COLLECTION_END = clock_time(15, 31)
+COLLECTION_END = clock_time(20, 1)
 DEFAULT_INTERVAL_SEC = 60.0
 MAX_SYMBOLS = 15
 REQUESTS_PER_SYMBOL_CYCLE = 3
@@ -235,8 +236,8 @@ def load_config(
     used_lineages: set[tuple[str, str]] = set()
     for symbol in symbols:
         lineage = (
-            symbol["source_target_date"] or default_lineage[0],
-            symbol["source_report_sha256"] or default_lineage[1],
+            symbol.get("source_target_date") or default_lineage[0],
+            symbol.get("source_report_sha256") or default_lineage[1],
         )
         allowed = allowed_by_lineage.get(lineage)
         if allowed is None or symbol["stock_code"] not in allowed:
@@ -250,6 +251,146 @@ def load_config(
         "symbols": symbols,
         "source_reports_resolved": resolved_sources,
         "source_report_resolved": default_source_path,
+    }
+
+
+def research_collection_config(
+    config: dict[str, Any],
+    *,
+    observed_date: date,
+    config_path: Path = DEFAULT_CONFIG_PATH,
+) -> dict[str, Any]:
+    from src.engine.monitoring.widget_symbol_signal_policy_research import (
+        load_symbol_universe,
+    )
+
+    universe, origins = load_symbol_universe(
+        observed_date=observed_date, config_path=config_path
+    )
+    enrolled = {row["stock_code"]: row for row in config["symbols"]}
+    scope_hash = hashlib.sha256(
+        json.dumps(
+            {"universe": universe, "origins": origins},
+            sort_keys=True,
+            ensure_ascii=False,
+        ).encode()
+    ).hexdigest()
+    return {
+        **config,
+        "symbols": [
+            {
+                **enrolled.get(symbol, {}),
+                "stock_code": symbol,
+                "stock_name": name,
+                "origin": origins[symbol],
+                "universe_sha256": scope_hash,
+            }
+            for symbol, name in sorted(universe.items())
+        ],
+    }
+
+
+def attach_bar_delta(payload: dict[str, Any], previous: dict[str, Any]) -> None:
+    """Preserve received completed OHLCV; never reconstruct quote/event history."""
+    route = str(
+        payload.get("request_code")
+        or payload.get("stock_code")
+        or payload.get("symbol")
+    )
+    session = str(
+        payload.get("market_session") or (payload.get("advisory") or {}).get("session")
+    )
+    day = str(payload.get("trading_date") or str(payload.get("observed_at_kst"))[:10])
+    namespace = f"{day}:{route}:{session}:adjusted_1"
+    indices = (
+        dict(previous.get("bar_content_index") or {})
+        if previous.get("bar_delta_namespace") == namespace
+        else {}
+    )
+    delta, conflicts = [], []
+    completed_bars = payload.pop("completed_bars", [])
+    payload["received_bars_sha256"] = hashlib.sha256(
+        json.dumps(completed_bars, sort_keys=True).encode()
+    ).hexdigest()
+    for row in completed_bars:
+        stamp = str(row["source_time"])
+        digest = hashlib.sha256(
+            json.dumps(row, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        old = indices.get(stamp)
+        if old and old != digest:
+            conflicts.append(
+                {
+                    "source_time": stamp,
+                    "previous_sha256": old,
+                    "received_sha256": digest,
+                    "received_bar": row,
+                }
+            )
+            continue
+        if old is None:
+            delta.append({**row, "content_sha256": digest})
+            indices[stamp] = digest
+    payload.update(
+        {
+            "bar_delta_namespace": namespace,
+            "bar_content_index": indices,
+            "completed_bar_delta": delta,
+            "conflicting_completed_bars": conflicts,
+            "bar_delta_role": "ohlcv_only_no_historical_quote_or_signal_reconstruction",
+            "source_role": (
+                "market_observation"
+                if payload.get("advisory_generated") is False
+                else "seeded_advisory"
+            ),
+            "producer_code_sha256": _sha256(Path(__file__)),
+            "sampling_cadence": "budget_paced_symbol_cycle_not_complete_minute_quotes",
+        }
+    )
+    if conflicts:
+        payload["source_quality_issues"] = [
+            *payload.get("source_quality_issues", []),
+            "conflicting_completed_bar",
+        ]
+        if "advisory" in payload:
+            quality = payload["advisory"].get("source_quality") or {}
+            payload["advisory"]["source_quality"] = {
+                **quality,
+                "status": "BLOCKED",
+                "reasons": [*quality.get("reasons", []), "conflicting_completed_bar"],
+            }
+        else:
+            payload["status"] = "SOURCE_QUALITY_BLOCKED"
+
+
+def safe_collection_error(
+    exc: BaseException, *, request: dict[str, Any], budget: dict[str, Any]
+) -> dict[str, Any]:
+    # Only allow known machine reasons and integer codes. Exception text, HTTP
+    # bodies, URLs, headers, credentials and accounts are deliberately excluded.
+    raw = str(exc)
+    known = re.fullmatch(
+        r"(?:widget_request_budget_exhausted|widget_kiwoom_429_cooldown|shared_cached_token_unavailable|ka[0-9]+_(?:return_code_missing|rejected_-?[0-9]+)|widget_kiwoom_shared_read_rate_deferred:[A-Za-z0-9_:-]+)",
+        raw,
+    )
+    response = getattr(exc, "response", None)
+    return {
+        **request,
+        "exception_type": type(exc).__name__,
+        "reason": raw if known else "unclassified_source_error",
+        "http_status_code": getattr(response, "status_code", None),
+        "response_code": (
+            int(raw.rsplit("_", 1)[-1])
+            if re.fullmatch(r"ka[0-9]+_rejected_-?[0-9]+", raw)
+            else None
+        ),
+        "local_budget": budget,
+        "shared_budget_state": (
+            "see_shared_admission_receipt"
+            if "shared_read_rate_deferred" in raw
+            else "not_observed"
+        ),
+        "admission_wait_bound_sec": 1.25,
     }
 
 
@@ -270,6 +411,7 @@ class WidgetResearchWatchCollector:
         )
         self._client_override = client
         self._last_record_key: dict[str, str] = {}
+        self._request_context: dict[str, Any] = {}
 
     def _client(self) -> KiwoomReadOnlyClient:
         if self._client_override is not None:
@@ -279,6 +421,61 @@ class WidgetResearchWatchCollector:
             raise RuntimeError("shared_cached_token_unavailable")
         return KiwoomReadOnlyClient(token, budget=self.request_budget)
 
+    def _reuse_quote_bbo(
+        self, *, symbol: str, context: Any, observed_at: datetime
+    ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]] | None:
+        from src.engine.monitoring.widget_symbol_runtime_contract import (
+            WidgetSymbolRuntimeContract,
+        )
+
+        path = WidgetSymbolRuntimeContract(symbol, "").DEFAULT_SNAPSHOT_PATH
+        try:
+            if path.stat().st_size > 2 * 1024 * 1024:
+                return None
+            raw = path.read_bytes()
+            source = json.loads(raw)
+            quote_meta = source.get("quote_source_meta") or {}
+            bbo = source.get("bbo") or {}
+            if (
+                source.get("schema_version") != 1
+                or source.get("symbol") != symbol
+                or source.get("market_data_request_code") != context.request_code
+                or source.get("market_data_route") != context.market_data_route
+                or quote_meta.get("source") != "kiwoom_ka10001_response_received_time"
+                or bbo.get("source") != "kiwoom_ka10004_response_received_time"
+            ):
+                return None
+            for value in (
+                source.get("observed_at_kst"),
+                quote_meta.get("received_at"),
+                bbo.get("received_at"),
+            ):
+                stamp = datetime.fromisoformat(str(value or ""))
+                if (
+                    stamp.tzinfo is None
+                    or not 0 <= (observed_at - stamp).total_seconds() <= 10
+                ):
+                    return None
+            price = _positive_int(source.get("current_price"))
+            bid, ask = _positive_int(bbo.get("best_bid")), _positive_int(
+                bbo.get("best_ask")
+            )
+            if not price or not bid or not ask or ask < bid:
+                return None
+            return (
+                {"cur_prc": str(price)},
+                dict(bbo),
+                {
+                    "path": str(path.resolve()),
+                    "sha256": hashlib.sha256(raw).hexdigest(),
+                    "quote_received_at_kst": quote_meta["received_at"],
+                    "bbo_received_at_kst": bbo["received_at"],
+                    "role": "public_quote_bbo_only_no_signal_or_owner_transfer",
+                },
+            )
+        except (OSError, ValueError, TypeError, AttributeError, OverflowError):
+            return None
+
     def _collect_symbol(
         self,
         *,
@@ -286,21 +483,74 @@ class WidgetResearchWatchCollector:
         observed_at: datetime,
         client: KiwoomReadOnlyClient,
     ) -> dict[str, Any]:
+        from src.engine.monitoring.widget_symbol_runtime_contract import (
+            WidgetSymbolRuntimeContract,
+        )
+
         code = symbol["stock_code"]
-        quote = client.post("/api/dostk/stkinfo", "ka10001", {"stk_cd": code})
-        bbo_raw = client.post("/api/dostk/mrkcond", "ka10004", {"stk_cd": code})
-        bars_raw = client.post(
+        context = WidgetSymbolRuntimeContract(
+            code, symbol["stock_name"]
+        ).session_context(observed_at)
+        if not context.active:
+            return {
+                "schema": OBSERVATION_SCHEMA,
+                "status": "outside_collection_window",
+                "stock_code": code,
+                "observed_at_kst": observed_at.isoformat(),
+                "trading_date": observed_at.date().isoformat(),
+                "market_venue": "UNKNOWN",
+                "market_session": "CLOSED",
+                "advisory_generated": False,
+                "entry_event": None,
+                "exit_event": None,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            }
+        request_code = context.request_code
+
+        def request(path: str, api_id: str, fields: dict[str, str]) -> dict[str, Any]:
+            self._request_context = {
+                "endpoint": path,
+                "api_id": api_id,
+                "source_stage": {
+                    "ka10001": "quote",
+                    "ka10004": "bbo",
+                    "ka10080": "completed_bars",
+                }[api_id],
+                "request_symbol": code,
+                "request_code": request_code,
+                "market_data_route": context.market_data_route,
+            }
+            return client.post(path, api_id, fields)
+
+        reused = self._reuse_quote_bbo(
+            symbol=code, context=context, observed_at=observed_at
+        )
+        if reused is not None:
+            quote, reused_bbo, reuse_receipt = reused
+            bbo_raw = {}
+        else:
+            quote = request("/api/dostk/stkinfo", "ka10001", {"stk_cd": request_code})
+            bbo_raw = request("/api/dostk/mrkcond", "ka10004", {"stk_cd": request_code})
+            reuse_receipt = None
+        bars_raw = request(
             "/api/dostk/chart",
             "ka10080",
-            {"stk_cd": code, "tic_scope": "1", "upd_stkpc_tp": "1"},
+            {"stk_cd": request_code, "tic_scope": "1", "upd_stkpc_tp": "1"},
         )
-        bbo = _parse_bbo(bbo_raw, observed_at)
+        bbo = reused_bbo if reused is not None else _parse_bbo(bbo_raw, observed_at)
+        received_rows = bars_raw.get("stk_min_pole_chart_qry")
         bars = completed_session_bars(
-            bars_raw.get("stk_min_pole_chart_qry"),
+            received_rows,
             observed_at=observed_at,
-            session_start=COLLECTION_START,
-            session_end=clock_time(15, 30),
-            limit=400,
+            session_start=context.start,
+            session_end=context.end,
+            limit=max(
+                400, len(received_rows) if isinstance(received_rows, list) else 0
+            ),
+            preserve_duplicates=True,
         )
         latest = bars[-1] if bars else None
         current_price = _positive_int(quote.get("cur_prc"))
@@ -331,9 +581,26 @@ class WidgetResearchWatchCollector:
             "stock_name": symbol["stock_name"],
             "observed_at_kst": observed_at.isoformat(),
             "trading_date": observed_at.date().isoformat(),
-            "market_venue": "KRX",
-            "market_session": "KRX_REGULAR",
+            "request_code": request_code,
+            "market_data_route": context.market_data_route,
+            "market_venue": (
+                "UNKNOWN"
+                if context.market_data_route == "krx_nxt_integrated"
+                else "KRX"
+            ),
+            "market_session": (
+                "KRX_NXT_AFTERMARKET"
+                if context.market_data_route == "krx_nxt_integrated"
+                else "KRX_REGULAR"
+            ),
             "current_price": current_price,
+            "common_market_source_reuse": reuse_receipt,
+            "quote_received_at_kst": (
+                reuse_receipt["quote_received_at_kst"]
+                if reuse_receipt
+                else observed_at.isoformat()
+            ),
+            "bbo_received_at_kst": bbo.get("received_at"),
             "best_bid": best_bid,
             "best_ask": best_ask,
             "spread_bp": (
@@ -341,6 +608,17 @@ class WidgetResearchWatchCollector:
                 if best_bid and best_ask
                 else None
             ),
+            "completed_bars": [
+                {
+                    "source_time": row.source_time,
+                    "open": row.open,
+                    "high": row.high,
+                    "low": row.low,
+                    "close": row.close,
+                    "volume": row.volume,
+                }
+                for row in bars
+            ],
             "latest_completed_bar": (
                 {
                     "source_time": latest.source_time,
@@ -354,10 +632,15 @@ class WidgetResearchWatchCollector:
                 else None
             ),
             "source_quality_issues": source_issues,
+            "collection_scope": {
+                "origin": symbol.get("origin", "operator_enrolled_research_watch"),
+                "universe_sha256": symbol.get("universe_sha256"),
+                "effective_from": self.config.get("effective_from"),
+            },
             "source_recommendation": {
-                "target_date": symbol["source_target_date"],
-                "report_sha256": symbol["source_report_sha256"],
-                "recommendation_tier": symbol["recommendation_tier"],
+                "target_date": symbol.get("source_target_date"),
+                "report_sha256": symbol.get("source_report_sha256"),
+                "recommendation_tier": symbol.get("recommendation_tier"),
                 "operator_directed_implementation": True,
             },
             "official_reference": OFFICIAL_REFERENCE,
@@ -387,21 +670,29 @@ class WidgetResearchWatchCollector:
             previous_snapshot = _load_json(snapshot_path)
         except ValueError:
             previous_snapshot = {}
+        attach_bar_delta(payload, previous_snapshot)
+        key += ":" + payload["received_bars_sha256"]
         payload["record_key"] = key
-        _atomic_write(snapshot_path, payload)
         if (
             self._last_record_key.get(code) == key
             or previous_snapshot.get("record_key") == key
         ):
+            _atomic_write(snapshot_path, payload)
             self._last_record_key[code] = key
             return False
-        self._last_record_key[code] = key
         self.output_dir.mkdir(parents=True, exist_ok=True)
         path = self.output_dir / (
             f"widget_research_watch_{code}_{payload['trading_date'].replace('-', '')}.jsonl"
         )
         with path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
+            record = {
+                key: value
+                for key, value in payload.items()
+                if key != "bar_content_index"
+            }
+            handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+        _atomic_write(snapshot_path, payload)
+        self._last_record_key[code] = key
         return True
 
     def _collect_symbol_safely(
@@ -418,6 +709,13 @@ class WidgetResearchWatchCollector:
                 client=client,
             )
         except Exception as exc:
+            from src.engine.monitoring.widget_symbol_runtime_contract import (
+                WidgetSymbolRuntimeContract,
+            )
+
+            context = WidgetSymbolRuntimeContract(
+                symbol["stock_code"], symbol["stock_name"]
+            ).session_context(observed_at)
             return {
                 "schema": OBSERVATION_SCHEMA,
                 "status": "SOURCE_ERROR",
@@ -425,14 +723,37 @@ class WidgetResearchWatchCollector:
                 "stock_name": symbol["stock_name"],
                 "observed_at_kst": observed_at.isoformat(),
                 "trading_date": observed_at.date().isoformat(),
-                "market_venue": "KRX",
-                "market_session": "KRX_REGULAR",
+                "request_code": context.request_code,
+                "market_data_route": context.market_data_route,
+                "market_venue": (
+                    "UNKNOWN"
+                    if context.market_data_route == "krx_nxt_integrated"
+                    else "KRX"
+                ),
+                "market_session": (
+                    "KRX_NXT_AFTERMARKET"
+                    if context.market_data_route == "krx_nxt_integrated"
+                    else "KRX_REGULAR"
+                ),
+                "source_error_detail": {
+                    **safe_collection_error(
+                        exc,
+                        request=self._request_context,
+                        budget=self.request_budget.snapshot(),
+                    ),
+                    "request_receipt": getattr(client, "last_request_receipt", {}),
+                },
                 "latest_completed_bar": None,
                 "source_quality_issues": [type(exc).__name__],
+                "collection_scope": {
+                    "origin": symbol.get("origin", "operator_enrolled_research_watch"),
+                    "universe_sha256": symbol.get("universe_sha256"),
+                    "effective_from": self.config.get("effective_from"),
+                },
                 "source_recommendation": {
-                    "target_date": symbol["source_target_date"],
-                    "report_sha256": symbol["source_report_sha256"],
-                    "recommendation_tier": symbol["recommendation_tier"],
+                    "target_date": symbol.get("source_target_date"),
+                    "report_sha256": symbol.get("source_report_sha256"),
+                    "recommendation_tier": symbol.get("recommendation_tier"),
                     "operator_directed_implementation": True,
                 },
                 "official_reference": OFFICIAL_REFERENCE,
@@ -525,6 +846,9 @@ def main(argv: list[str] | None = None) -> int:
         return 1 if args.check_config else 2
     if args.check_config:
         return 0
+    config = research_collection_config(
+        config, observed_date=observed_at.date(), config_path=args.config
+    )
     collector = WidgetResearchWatchCollector(config=config)
     if args.once:
         collector.collect_once(observed_at, pace_requests=True)

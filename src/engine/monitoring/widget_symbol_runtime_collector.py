@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import time
@@ -300,10 +301,13 @@ class WidgetSymbolRuntimeCollector:
         policy_loader: WidgetSymbolRuntimePolicyLoader | None = None,
         request_session: requests.Session | None = None,
         observation_dir: Path = DEFAULT_OBSERVATION_DIR,
+        research_universe: dict[str, str] | None = None,
     ) -> None:
         self.policy_loader = policy_loader or WidgetSymbolRuntimePolicyLoader()
         self.request_session = request_session
         self.observation_dir = observation_dir
+        self._research_universe = dict(research_universe or {})
+        self._raw_only_symbols: dict[str, str] = {}
         # Four primary symbols, four peer charts, two shared index charts, and
         # four flow pairs produce a bounded 52-call rolling-minute overlap at
         # cache warm-up/boundaries. The steady-state rate is lower, but 36 let
@@ -337,6 +341,7 @@ class WidgetSymbolRuntimeCollector:
         self._episode_sessions: dict[str, str] = {}
         self._last_record_key: dict[str, str] = {}
         self._symbol_cursor = 0
+        self._completed_bar_buffers: dict[str, list[dict[str, Any]]] = {}
 
     def _activate_date(self, observed_at: datetime) -> None:
         day = observed_at.date().isoformat()
@@ -346,11 +351,17 @@ class WidgetSymbolRuntimeCollector:
         self._policies = self.policy_loader.resolve_observation_all(
             observed_date=observed_at.date()
         )
+        self._raw_only_symbols = {
+            symbol: name
+            for symbol, name in self._research_universe.items()
+            if symbol not in self._policies
+        }
         self._contracts = {
             symbol: CONTRACTS.get(symbol)
             or WidgetSymbolRuntimeContract(symbol, str(policy["name"]))
             for symbol, policy in self._policies.items()
         }
+        self._completed_bar_buffers.clear()
         self._minute_cache.clear()
         self._bbo_cache.clear()
         self._quote_cache.clear()
@@ -420,13 +431,34 @@ class WidgetSymbolRuntimeCollector:
                 {"stk_cd": request_code, "tic_scope": "1", "upd_stkpc_tp": "1"},
             )
             self._minute_cache[cache_key] = (minute_key, payload)
-        return completed_session_bars(
+        bars = completed_session_bars(
             self._minute_cache[cache_key][1].get("stk_min_pole_chart_qry"),
             observed_at=observed_at,
             session_start=context.start,
             session_end=context.end,
             limit=400,
         )
+        raw_rows = self._minute_cache[cache_key][1].get("stk_min_pole_chart_qry")
+        received_bars = completed_session_bars(
+            raw_rows,
+            observed_at=observed_at,
+            session_start=context.start,
+            session_end=context.end,
+            limit=max(400, len(raw_rows) if isinstance(raw_rows, list) else 0),
+            preserve_duplicates=True,
+        )
+        self._completed_bar_buffers[symbol] = [
+            {
+                "source_time": row.source_time,
+                "open": row.open,
+                "high": row.high,
+                "low": row.low,
+                "close": row.close,
+                "volume": row.volume,
+            }
+            for row in received_bars
+        ]
+        return bars
 
     def _quote(
         self,
@@ -700,19 +732,80 @@ class WidgetSymbolRuntimeCollector:
         return blocked("entry_price_range_invalid")
 
     def _record(self, symbol: str, payload: dict[str, Any]) -> None:
+        from src.engine.monitoring.widget_research_watch_collector import (
+            attach_bar_delta,
+        )
+
+        snapshot_path = self.observation_dir / ".bar_state" / f"{symbol}.json"
+        try:
+            previous = json.loads(snapshot_path.read_text())
+        except (OSError, ValueError):
+            previous = {}
+        policy = self._policies.get(symbol) or {}
+        payload["observation_seed"] = {
+            key: policy.get(key)
+            for key in (
+                "seed_id",
+                "parameters_sha256",
+                "source_report_sha256",
+                "registered_at_kst",
+                "effective_at_kst",
+                "aftermarket_effective_at_kst",
+                "session_authority",
+            )
+        }
+        payload["completed_bars"] = self._completed_bar_buffers.pop(symbol, [])
+        attach_bar_delta(payload, previous)
+        payload["producer_code_sha256"] = hashlib.sha256(
+            Path(__file__).read_bytes()
+        ).hexdigest()
+        if payload["conflicting_completed_bars"] and "advisory" in payload:
+            payload["status"] = "data_wait"
+            payload["advisory"]["state"] = "DATA_WAIT"
+            payload["entry_event"] = None
+            payload["exit_event"] = None
         latest = payload.get("latest_completed_bar") or {}
         event = payload.get("entry_event") or payload.get("exit_event") or {}
-        key = f"{latest.get('source_time')}:{event.get('event_id', '')}:{payload.get('status')}"
+        key = f"{payload.get('bar_delta_namespace')}:{latest.get('source_time')}:{event.get('event_id', '')}:{payload.get('status')}"
+        if payload["completed_bar_delta"] or payload["conflicting_completed_bars"]:
+            key += (
+                ":"
+                + str(payload["completed_bar_delta"])
+                + str(payload["conflicting_completed_bars"])
+            )
         if key == self._last_record_key.get(symbol):
             return
-        self._last_record_key[symbol] = key
         self.observation_dir.mkdir(parents=True, exist_ok=True)
         path = (
             self.observation_dir
             / f"widget_symbol_advisory_{symbol}_{self._active_date.replace('-', '')}.jsonl"
         )
         with path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
+            record = {
+                key: value
+                for key, value in payload.items()
+                if key != "bar_content_index"
+            }
+            raw_line = json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n"
+            handle.write(raw_line)
+        from src.engine.monitoring.widget_symbol_runtime_contract import (
+            append_calibration_projection,
+        )
+
+        try:
+            append_calibration_projection(path, record, raw_line)
+        except OSError:
+            print(
+                json.dumps(
+                    {"stage": "optional_projection_write_failed", "symbol": symbol}
+                ),
+                flush=True,
+            )
+        _atomic_write(
+            snapshot_path,
+            {key: payload[key] for key in ("bar_content_index", "bar_delta_namespace")},
+        )
+        self._last_record_key[symbol] = key
 
     def _degraded_symbol_payload(
         self,
@@ -721,6 +814,7 @@ class WidgetSymbolRuntimeCollector:
         policy: dict[str, Any],
         observed_at: datetime,
         reason: str,
+        source_error_detail: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Publish a fail-closed snapshot without terminating other symbols."""
         contract = self._contract(symbol)
@@ -756,6 +850,7 @@ class WidgetSymbolRuntimeCollector:
             "strategy_profile": contract.STRATEGY_PROFILE,
             "policy_id": policy["policy_id"],
             "policy_effective_date": policy.get("effective_date"),
+            "source_error_detail": source_error_detail,
             "official_reference": COLLECTOR_OFFICIAL_REFERENCE,
             "advisory": {
                 "state": "DATA_WAIT",
@@ -792,8 +887,8 @@ class WidgetSymbolRuntimeCollector:
             "actual_order_submitted": False,
             "broker_order_forbidden": True,
         }
-        _atomic_write(contract.DEFAULT_SNAPSHOT_PATH, payload)
         self._record(symbol, payload)
+        _atomic_write(contract.DEFAULT_SNAPSHOT_PATH, payload)
         return payload
 
     @staticmethod
@@ -838,6 +933,27 @@ class WidgetSymbolRuntimeCollector:
         market_session = (
             "krx_nxt_aftermarket" if integrated_aftermarket else "krx_regular"
         )
+        boundary = policy.get(
+            "aftermarket_effective_at_kst"
+            if integrated_aftermarket
+            else "effective_at_kst"
+        )
+        if boundary:
+            try:
+                effective_at = datetime.fromisoformat(str(boundary))
+            except ValueError:
+                effective_at = None
+            if (
+                effective_at is None
+                or effective_at.tzinfo is None
+                or observed_at < effective_at
+            ):
+                return self._degraded_symbol_payload(
+                    symbol=symbol,
+                    policy=policy,
+                    observed_at=observed_at,
+                    reason="observation_seed_not_yet_effective_or_boundary_invalid",
+                )
         effective_policy = dict(policy)
         if integrated_aftermarket:
             seeded = policy.get("integrated_aftermarket_observation_policy")
@@ -892,9 +1008,43 @@ class WidgetSymbolRuntimeCollector:
             context=context,
         )
         latest = bars[-1] if bars else None
+        if boundary and latest is not None:
+            latest_at = datetime.strptime(
+                latest.source_time[:12], "%Y%m%d%H%M"
+            ).replace(tzinfo=KST)
+            if latest_at < effective_at:
+                return self._degraded_symbol_payload(
+                    symbol=symbol,
+                    policy=policy,
+                    observed_at=observed_at,
+                    reason="observation_seed_completed_bar_boundary_pending",
+                )
         source_quality, source_quality_reasons = _source_quality(
             latest=latest, bbo=bbo, observed_at=observed_at
         )
+        from src.engine.monitoring.widget_research_watch_collector import (
+            attach_bar_delta,
+        )
+
+        previous_bar_state_path = self.observation_dir / ".bar_state" / f"{symbol}.json"
+        try:
+            previous_bar_state = json.loads(previous_bar_state_path.read_text())
+        except (OSError, ValueError):
+            previous_bar_state = {}
+        source_check = {
+            "symbol": symbol,
+            "request_code": context.request_code,
+            "market_session": market_session,
+            "observed_at_kst": observed_at.isoformat(),
+            "completed_bars": self._completed_bar_buffers.get(symbol, []),
+        }
+        attach_bar_delta(source_check, previous_bar_state)
+        if source_check["conflicting_completed_bars"]:
+            source_quality = "BLOCKED"
+            source_quality_reasons = (
+                *source_quality_reasons,
+                "conflicting_completed_bar",
+            )
         auxiliary_collector = self._auxiliary_collectors.get(symbol)
         profile = WIDGET_SYMBOL_AUXILIARY_PROFILES.get(symbol)
         if auxiliary_collector is not None and profile is not None:
@@ -1042,7 +1192,7 @@ class WidgetSymbolRuntimeCollector:
                 "broker_order_forbidden": True,
                 "features": candidate,
             }
-        if episode.active and latest is not None:
+        if episode.active and latest is not None and source_quality == "PASS":
             episode.peak = max(episode.peak, current_price)
             _advance_support_break_count(episode, latest)
             reason = None
@@ -1078,6 +1228,7 @@ class WidgetSymbolRuntimeCollector:
                     "actual_order_submitted": False,
                     "broker_order_forbidden": True,
                 }
+        cached_quote_receipt = self._quote_cache.get(f"{symbol}:{context.request_code}")
         payload = {
             "schema_version": SNAPSHOT_SCHEMA_VERSION,
             "status": "ok" if source_quality == "PASS" else "data_wait",
@@ -1131,6 +1282,14 @@ class WidgetSymbolRuntimeCollector:
                 else None
             ),
             "bbo": bbo,
+            "quote_source_meta": {
+                "source": "kiwoom_ka10001_response_received_time",
+                "received_at": (
+                    cached_quote_receipt[2].isoformat()
+                    if cached_quote_receipt
+                    else None
+                ),
+            },
             "quote_provenance": {
                 "source": "kiwoom_ka10001_response_received_time",
                 "age_sec": round(quote_age_sec, 3),
@@ -1146,17 +1305,78 @@ class WidgetSymbolRuntimeCollector:
             "actual_order_submitted": False,
             "broker_order_forbidden": True,
         }
-        _atomic_write(contract.DEFAULT_SNAPSHOT_PATH, payload)
         self._record(symbol, payload)
+        _atomic_write(contract.DEFAULT_SNAPSHOT_PATH, payload)
         return payload
+
+    def _raw_only_receipts(self, observed_at: datetime) -> dict[str, dict[str, Any]]:
+        from src.engine.monitoring.widget_research_watch_collector import (
+            DEFAULT_SNAPSHOT_DIR,
+        )
+
+        results = {}
+        for symbol, name in self._raw_only_symbols.items():
+            path = DEFAULT_SNAPSHOT_DIR / f"{symbol}.json"
+            try:
+                source_bytes = path.read_bytes()
+                source = json.loads(source_bytes)
+                valid = (
+                    source.get("stock_code") == symbol
+                    and source.get("trading_date") == observed_at.date().isoformat()
+                    and source.get("advisory_generated") is False
+                    and source.get("broker_order_forbidden") is True
+                    and source.get("actual_order_submitted") is False
+                    and source.get("runtime_effect") is False
+                )
+            except (OSError, ValueError, AttributeError):
+                source, valid = {}, False
+            payload = {
+                "schema_version": SNAPSHOT_SCHEMA_VERSION,
+                "status": "raw_only_no_seed",
+                "symbol": symbol,
+                "name": name,
+                "observed_at_kst": observed_at.isoformat(),
+                "observation_role": "raw_only_seed_receipt",
+                "market_session": source.get("market_session"),
+                "market_venue": source.get("market_venue", "UNKNOWN"),
+                "request_code": source.get("request_code", symbol),
+                "raw_source_path": str(path),
+                "raw_source_sha256": (
+                    hashlib.sha256(source_bytes).hexdigest() if valid else None
+                ),
+                "raw_source_status": (
+                    source.get("status") if valid else "producer_missing"
+                ),
+                "raw_source_observed_at_kst": (
+                    source.get("observed_at_kst") if valid else None
+                ),
+                "latest_completed_bar": (
+                    source.get("latest_completed_bar") if valid else None
+                ),
+                "advisory_generated": False,
+                "entry_event": None,
+                "exit_event": None,
+                "runtime_effect": False,
+                "allowed_runtime_apply": False,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+            }
+            self._record(symbol, payload)
+            results[symbol] = payload
+        return results
 
     def collect_once(self, observed_at: datetime | None = None) -> dict[str, Any]:
         now = _as_kst(observed_at or datetime.now(KST))
         self._activate_date(now)
+        results = self._raw_only_receipts(now)
         if not self._policies:
-            return {"status": "no_active_exact_date_policy", "symbols": {}}
+            return {
+                "status": (
+                    "raw_only_no_seed" if results else "no_active_exact_date_policy"
+                ),
+                "symbols": results,
+            }
         client = self._client()
-        results: dict[str, dict[str, Any]] = {}
         failures: dict[str, str] = {}
         for symbol, policy in self._ordered_policy_items():
             try:
@@ -1174,6 +1394,7 @@ class WidgetSymbolRuntimeCollector:
                     policy=policy,
                     observed_at=now,
                     reason=reason,
+                    source_error_detail=getattr(client, "last_request_receipt", {}),
                 )
         return {
             "status": "partial_data_wait" if failures else "ok",
@@ -1203,7 +1424,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--interval-sec", type=float, default=15.0)
     args = parser.parse_args(argv)
-    collector = WidgetSymbolRuntimeCollector()
+    from src.engine.monitoring.widget_symbol_signal_policy_research import (
+        load_symbol_universe,
+    )
+
+    universe, _origins = load_symbol_universe(observed_date=datetime.now(KST).date())
+    collector = WidgetSymbolRuntimeCollector(research_universe=universe)
     if args.once:
         result = collector.collect_once()
         print(

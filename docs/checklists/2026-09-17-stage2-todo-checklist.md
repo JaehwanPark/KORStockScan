@@ -149,6 +149,15 @@
   - 후속 U6/U7/U8 상충 행 격리: [부분 구현 리뷰 §16](../audit-reports/2026-09-17-common-health-opportunity-cost-scoped-implementation.md#16-기계ai-상충-attempt의-행-격리와-자동-선정-전달-보완). exact6 상충의 첫 행/동일 action 다른 outcome/paired 별칭을 격리하고 정상 scope의 기계·compact 연구를 보존한다. count/manifest 위치를 독립 대사하며 미해결/변조는 carry/fail closed. 작업본·물리 release 각각887건, 공유경로885건+Git ignore2건 물리 재검증 통과, scoped finding0. 실제 next-date publisher 정상20건 자동 선정/19건 carry 회귀; 별도 승인·사전 실체결 gate 추가 없음. `3f9a358a` main push·graceful1회09:41 PID140621 source-clean/strict env/PID PASS/singleton1,09:41:06~09:42:14 삼성25주/미체결0·registry/env/dated policy hash 보존. 오늘 정책·price/qty-leg는 기존 baseline; 자연 장후 generation/새 정책 소비·경제성 OPEN.
   - 잔여: direct REST/widget/episode 전수 parity, single-flight/scheduler budget, 전체 opportunity/capacity census·자연 scope/AI router generation, U9 executable no-submit/no-fill adapter·small-net 평가 계약과 절대 EV 0.10% 조건 개선, U10 독립 owner, U11 family auto handoff. 신규 producer/수동 env/주문/owner·cap·hard-safety 변경 금지. 실제 기동 시 broker/custody·중복 PID·WS first-data와 dated policy receipt를 보존한다.
 
+## 위젯 원천·장후 평가 구현 후 자연 확인
+
+- [ ] `[WidgetPostcloseEvaluationPinAcceptance0916] 위젯 19종목 source 폐쇄·장후 평가 동일 release 자연 acceptance` (`Due: 2026-09-17`, `Slot: POSTCLOSE`, `TimeWindow: 20:10~23:20`, `Track: RuntimeStability`)
+  - Source: [상세계획·현재 운영 계약](../proposals/widget-postclose-performance-and-source-closure-implementation-plan-2026-09-16.md), [09-17 구현·검증·배포 기록](../audit-reports/2026-09-17-widget-postclose-source-closure-implementation.md), [이관한 원래 acceptance·실패·역사 receipt](2026-09-16-stage2-todo-checklist.md), `data/runtime/widget_postclose_source_closure_2026-09-17.json`.
+  - 판정 기준: 동일 code generation의 actual raw/runtime collector import/PID와 evaluation WorkingDirectory/PYTHONPATH/project/Python/ExecStart를 확인한다. 19종목 raw/advisory/seed/session census는 `expected=source_valid+classified_not_applicable+explicit_source_gap`, `unclassified=0`이어야 한다. KRX raw와 advisory 0·raw-only·future effective seed를 분리하고, AM은 실제 `_AL` 원천 및 frozen seed effective 뒤 prospective event만 인정한다.
+  - 완료 조건: exact-date EOD terminal 후 full clean-baseline·1,536 grid·cap 1~5·16-day holdout·full-cost 연구와 dated policy apply loader 검증이 완료되고, 최종 widget source hash → tower → next checklist → strict verifier `--require-summary-handoff` → controller/finalization 순서가 닫힌다. 과거 RuntimeError 598행 원인은 추정하지 않으며 새 detail receipt의 실제 오류 원인·recurrence를 확인한 뒤 producer-gap을 닫는다. source-only/합성 PASS·pin·collector PID를 자연 정책 소비나 비용 반영 EV/net profit으로 대체하지 않는다.
+  - 권한 경계: 09-17 사용자 지시는 관련 기존 widget raw/runtime collector와 evaluation의 구현·commit/push·immutable release pin·reload·관측 기동을 허용한다. main/trader/legacy collectors의 restart, manual order, threshold/provider/bot/cap/quantity/guard·owner/custody 변경 권한은 추가하지 않는다. 원 drop-in/selector/release 및 raw/exclusion/seed receipt를 보존한다.
+  - 다음 액션: 낮에는 `waiting`으로 actual regular source와 detail receipt를 확인한다. AM과 20:10 자연 평가는 `not_yet_due`; seed 부재는 `raw_only_no_seed`로 계속 수집한다. 자연 평가 실패는 exact stage·target·source hash·checkpoint를 기록하여 같은 owner에서 복구하며 완료된 code review를 표본 부재만으로 재개하지 않는다.
+
 ## Project/Calendar 동기화
 
 문서/checklist를 수정했으면 parser 검증은 실행하고, Project/Calendar 동기화는 사용자가 아래 명령으로 수동 실행한다.

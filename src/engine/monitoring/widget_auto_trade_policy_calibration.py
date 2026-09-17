@@ -10,6 +10,7 @@ KRX trading day but never submits an order or controls a process.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -17,7 +18,7 @@ import statistics
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 from src.engine.monitoring.doosan_widget_contract import (
     DEFAULT_OBSERVATION_DIR as DOOSAN_OBSERVATION_DIR,
@@ -56,7 +57,6 @@ from src.engine.monitoring.samsung_widget_contract import (
     previous_krx_trading_date,
 )
 from src.trading.widget_auto_trade.policy import (
-    CUMULATIVE_RESEARCH_GATE_SYMBOLS,
     CUMULATIVE_RESEARCH_MIN_QUALIFIED_DATES,
     CUMULATIVE_RESEARCH_QUALIFICATION_CONTRACT,
     CUMULATIVE_RESEARCH_START_DATE,
@@ -417,7 +417,7 @@ def _positive_price(value: object) -> float | None:
         parsed = float(value)
     except (TypeError, ValueError):
         return None
-    return parsed if parsed > 0 else None
+    return parsed if math.isfinite(parsed) and parsed > 0 else None
 
 
 def _optional_lifecycle_event_valid(
@@ -489,8 +489,10 @@ def _load_rows(
     rows: list[dict[str, Any]] = []
     source_paths: list[str] = []
     audit_counts = {
+        "source_file_not_frozen_or_oversized_count": 0,
         "raw_line_count": 0,
         "accepted_row_count": 0,
+        "raw_only_no_seed_receipt_count": 0,
         "invalid_json_or_object_count": 0,
         "required_contract_missing_count": 0,
         "invalid_observed_at_or_date_count": 0,
@@ -507,180 +509,205 @@ def _load_rows(
         if source_date < spec.analysis_start_date or source_date > target_date:
             continue
         source_paths.append(str(path))
-        with path.open(encoding="utf-8") as handle:
-            for line_number, line in enumerate(handle, 1):
-                audit_counts["raw_line_count"] += 1
-                try:
-                    payload = json.loads(line)
-                except ValueError:
-                    audit_counts["invalid_json_or_object_count"] += 1
-                    continue
-                if not isinstance(payload, dict):
-                    audit_counts["invalid_json_or_object_count"] += 1
-                    continue
-                advisory = payload.get("advisory")
-                latest_bar = payload.get("latest_completed_bar")
-                if not isinstance(advisory, dict):
+        current = datetime.now(KST)
+        if path.stat().st_size > 64 * 1024 * 1024 or (
+            source_date == current.date() and current.time() < time(20, 5)
+        ):
+            audit_counts["source_file_not_frozen_or_oversized_count"] += 1
+            continue
+        from src.engine.monitoring.widget_symbol_runtime_contract import (
+            iter_calibration_records,
+        )
+
+        for line_number, payload in iter_calibration_records(path):
+            audit_counts["raw_line_count"] += 1
+            if not isinstance(payload, dict):
+                audit_counts["invalid_json_or_object_count"] += 1
+                continue
+            if (
+                payload.get("observation_role") == "raw_only_seed_receipt"
+                and payload.get("symbol") == spec.symbol
+                and payload.get("advisory_generated") is False
+                and payload.get("runtime_effect") is False
+                and payload.get("actual_order_submitted") is False
+                and payload.get("broker_order_forbidden") is True
+                and payload.get("entry_event") is None
+                and payload.get("exit_event") is None
+            ):
+                audit_counts["raw_only_no_seed_receipt_count"] += 1
+                continue
+            if payload.get("symbol") not in (None, spec.symbol):
+                audit_counts["required_contract_missing_count"] += 1
+                continue
+            advisory = payload.get("advisory")
+            latest_bar = payload.get("latest_completed_bar")
+            if not isinstance(advisory, dict):
+                audit_counts["required_contract_missing_count"] += 1
+                continue
+            if not isinstance(latest_bar, dict):
+                source_quality_status = str(
+                    (advisory.get("source_quality") or {}).get("status") or ""
+                )
+                if source_quality_status and source_quality_status != "PASS":
+                    audit_counts[
+                        "expected_source_blocked_without_completed_bar_count"
+                    ] += 1
+                else:
                     audit_counts["required_contract_missing_count"] += 1
-                    continue
-                if not isinstance(latest_bar, dict):
-                    source_quality_status = str(
+                continue
+            entry_event = payload.get("entry_event")
+            exit_event = payload.get("exit_event")
+            episode = payload.get("episode")
+            if any(
+                value is not None and not isinstance(value, dict)
+                for value in (entry_event, exit_event, episode)
+            ):
+                audit_counts["invalid_optional_lifecycle_event_count"] += 1
+                entry_event = exit_event = episode = None
+            episode_sequence = (
+                int(episode.get("sequence"))
+                if isinstance(episode, dict)
+                and not isinstance(episode.get("sequence"), bool)
+                and isinstance(episode.get("sequence"), int)
+                and int(episode["sequence"]) > 0
+                else None
+            )
+            episode_contract_valid = bool(
+                not isinstance(episode, dict)
+                or (
+                    episode_sequence is not None
+                    and episode.get("actual_order_submitted") is False
+                    and episode.get("broker_order_forbidden") is True
+                    and episode.get("runtime_effect") is False
+                )
+            )
+            if not episode_contract_valid:
+                audit_counts["invalid_optional_lifecycle_event_count"] += 1
+                entry_event = exit_event = episode = None
+                episode_sequence = None
+            if any(
+                isinstance(event, dict)
+                and not _optional_lifecycle_event_valid(
+                    event,
+                    expected_type=expected_type,
+                    symbol=spec.symbol,
+                    source_date=source_date,
+                    episode_sequence=episode_sequence,
+                )
+                for event, expected_type in (
+                    (entry_event, "ENTRY"),
+                    (exit_event, "EXIT"),
+                )
+            ):
+                audit_counts["invalid_optional_lifecycle_event_count"] += 1
+                entry_event = exit_event = None
+            try:
+                observed_at = datetime.fromisoformat(
+                    str(payload.get("observed_at_kst") or "")
+                )
+                if observed_at.tzinfo is None:
+                    raise ValueError("observation_timezone_missing")
+                observed_at = observed_at.astimezone(KST)
+            except ValueError:
+                audit_counts["invalid_observed_at_or_date_count"] += 1
+                continue
+            if observed_at.date() != source_date:
+                audit_counts["invalid_observed_at_or_date_count"] += 1
+                continue
+            current_price = _positive_price(payload.get("current_price"))
+            bar_low = _positive_price(latest_bar.get("low"))
+            bar_high = _positive_price(latest_bar.get("high"))
+            if (
+                current_price is None
+                or bar_low is None
+                or bar_high is None
+                or bar_low > bar_high
+            ):
+                audit_counts["invalid_price_or_bar_time_count"] += 1
+                continue
+            try:
+                bar_at = datetime.strptime(
+                    str(latest_bar.get("source_time") or ""), "%Y%m%d%H%M%S"
+                ).replace(tzinfo=KST)
+            except ValueError:
+                audit_counts["invalid_price_or_bar_time_count"] += 1
+                continue
+            if bar_at.date() != source_date or bar_at > observed_at:
+                audit_counts["invalid_price_or_bar_time_count"] += 1
+                continue
+            session = str(advisory.get("session") or "")
+            venue = _calibration_venue(session, payload)
+            rows.append(
+                {
+                    "trade_date": source_date,
+                    "observed_at": observed_at,
+                    "session": session,
+                    "venue": venue,
+                    "state": str(advisory.get("state") or ""),
+                    "previous_state": str(payload.get("previous_advisory_state") or ""),
+                    "current_price": current_price,
+                    "low": bar_low,
+                    "high": bar_high,
+                    "bar_at": bar_at,
+                    "source_quality_status": str(
                         (advisory.get("source_quality") or {}).get("status") or ""
-                    )
-                    if source_quality_status and source_quality_status != "PASS":
-                        audit_counts[
-                            "expected_source_blocked_without_completed_bar_count"
-                        ] += 1
-                    else:
-                        audit_counts["required_contract_missing_count"] += 1
-                    continue
-                entry_event = payload.get("entry_event")
-                exit_event = payload.get("exit_event")
-                episode = payload.get("episode")
-                if any(
-                    value is not None and not isinstance(value, dict)
-                    for value in (entry_event, exit_event, episode)
-                ):
-                    audit_counts["invalid_optional_lifecycle_event_count"] += 1
-                    continue
-                episode_sequence = (
-                    int(episode.get("sequence"))
-                    if isinstance(episode, dict)
-                    and not isinstance(episode.get("sequence"), bool)
-                    and isinstance(episode.get("sequence"), int)
-                    and int(episode["sequence"]) > 0
-                    else None
-                )
-                episode_contract_valid = bool(
-                    not isinstance(episode, dict)
-                    or (
-                        episode_sequence is not None
-                        and episode.get("actual_order_submitted") is False
-                        and episode.get("broker_order_forbidden") is True
-                        and episode.get("runtime_effect") is False
-                    )
-                )
-                if not episode_contract_valid:
-                    audit_counts["invalid_optional_lifecycle_event_count"] += 1
-                    continue
-                if any(
-                    isinstance(event, dict)
-                    and not _optional_lifecycle_event_valid(
-                        event,
-                        expected_type=expected_type,
-                        symbol=spec.symbol,
-                        source_date=source_date,
-                        episode_sequence=episode_sequence,
-                    )
-                    for event, expected_type in (
-                        (entry_event, "ENTRY"),
-                        (exit_event, "EXIT"),
-                    )
-                ):
-                    audit_counts["invalid_optional_lifecycle_event_count"] += 1
-                    continue
-                try:
-                    observed_at = datetime.fromisoformat(
-                        str(payload.get("observed_at_kst") or "")
-                    ).astimezone(KST)
-                except ValueError:
-                    audit_counts["invalid_observed_at_or_date_count"] += 1
-                    continue
-                if observed_at.date() != source_date:
-                    audit_counts["invalid_observed_at_or_date_count"] += 1
-                    continue
-                current_price = _positive_price(payload.get("current_price"))
-                bar_low = _positive_price(latest_bar.get("low"))
-                bar_high = _positive_price(latest_bar.get("high"))
-                if (
-                    current_price is None
-                    or bar_low is None
-                    or bar_high is None
-                    or bar_low > bar_high
-                ):
-                    audit_counts["invalid_price_or_bar_time_count"] += 1
-                    continue
-                try:
-                    bar_at = datetime.strptime(
-                        str(latest_bar.get("source_time") or ""), "%Y%m%d%H%M%S"
-                    ).replace(tzinfo=KST)
-                except ValueError:
-                    audit_counts["invalid_price_or_bar_time_count"] += 1
-                    continue
-                if bar_at.date() != source_date or bar_at > observed_at:
-                    audit_counts["invalid_price_or_bar_time_count"] += 1
-                    continue
-                session = str(advisory.get("session") or "")
-                venue = _calibration_venue(session, payload)
-                rows.append(
-                    {
-                        "trade_date": source_date,
-                        "observed_at": observed_at,
-                        "session": session,
-                        "venue": venue,
-                        "state": str(advisory.get("state") or ""),
-                        "previous_state": str(
-                            payload.get("previous_advisory_state") or ""
-                        ),
-                        "current_price": current_price,
-                        "low": bar_low,
-                        "high": bar_high,
-                        "bar_at": bar_at,
-                        "source_quality_status": str(
-                            (advisory.get("source_quality") or {}).get("status") or ""
-                        ),
-                        "entry_event_id": (
-                            str(entry_event.get("event_id") or "")
-                            if isinstance(entry_event, dict)
-                            else ""
-                        ),
-                        "entry_event_state": (
-                            str(entry_event.get("state") or "")
-                            if isinstance(entry_event, dict)
-                            else ""
-                        ),
-                        "exit_event_id": (
-                            str(exit_event.get("event_id") or "")
-                            if isinstance(exit_event, dict)
-                            else ""
-                        ),
-                        "exit_event_reason": (
-                            str(exit_event.get("reason") or "")
-                            if isinstance(exit_event, dict)
-                            else ""
-                        ),
-                        "exit_event_reference_price": (
-                            _positive_price(exit_event.get("reference_exit_price"))
-                            if isinstance(exit_event, dict)
-                            else None
-                        ),
-                        "entry_event_at": (
-                            datetime.fromisoformat(
-                                str(entry_event["observed_at"])
-                            ).astimezone(KST)
-                            if isinstance(entry_event, dict)
-                            else None
-                        ),
-                        "exit_event_at": (
-                            datetime.fromisoformat(
-                                str(exit_event["observed_at"])
-                            ).astimezone(KST)
-                            if isinstance(exit_event, dict)
-                            else None
-                        ),
-                        "episode_sequence": (episode_sequence),
-                        "structural_support": (
-                            _positive_price(episode.get("structural_support"))
-                            if isinstance(episode, dict)
-                            else None
-                        ),
-                        "source_path": str(path),
-                        "source_line_number": line_number,
-                    }
-                )
-                audit_counts["accepted_row_count"] += 1
+                    ),
+                    "entry_event_id": (
+                        str(entry_event.get("event_id") or "")
+                        if isinstance(entry_event, dict)
+                        else ""
+                    ),
+                    "entry_event_state": (
+                        str(entry_event.get("state") or "")
+                        if isinstance(entry_event, dict)
+                        else ""
+                    ),
+                    "exit_event_id": (
+                        str(exit_event.get("event_id") or "")
+                        if isinstance(exit_event, dict)
+                        else ""
+                    ),
+                    "exit_event_reason": (
+                        str(exit_event.get("reason") or "")
+                        if isinstance(exit_event, dict)
+                        else ""
+                    ),
+                    "exit_event_reference_price": (
+                        _positive_price(exit_event.get("reference_exit_price"))
+                        if isinstance(exit_event, dict)
+                        else None
+                    ),
+                    "entry_event_at": (
+                        datetime.fromisoformat(
+                            str(entry_event["observed_at"])
+                        ).astimezone(KST)
+                        if isinstance(entry_event, dict)
+                        else None
+                    ),
+                    "exit_event_at": (
+                        datetime.fromisoformat(
+                            str(exit_event["observed_at"])
+                        ).astimezone(KST)
+                        if isinstance(exit_event, dict)
+                        else None
+                    ),
+                    "episode_sequence": (episode_sequence),
+                    "structural_support": (
+                        _positive_price(episode.get("structural_support"))
+                        if isinstance(episode, dict)
+                        else None
+                    ),
+                    "source_path": str(path),
+                    "source_line_number": line_number,
+                }
+            )
+            audit_counts["accepted_row_count"] += 1
     rows.sort(key=lambda row: row["observed_at"])
-    excluded = audit_counts["raw_line_count"] - audit_counts["accepted_row_count"]
+    excluded = (
+        audit_counts["raw_line_count"]
+        - audit_counts["accepted_row_count"]
+        - audit_counts["raw_only_no_seed_receipt_count"]
+    )
     return (
         rows,
         source_paths,
@@ -690,6 +717,174 @@ def _load_rows(
             "raw_row_exclusion_applied": excluded > 0,
         },
     )
+
+
+def _market_source_census(
+    spec: SymbolSpec, *, target_date: date
+) -> list[dict[str, Any]]:
+    """Market and seeded-advisory roles stay separate; raw cannot grant signals."""
+    from src.engine.monitoring.widget_research_watch_collector import (
+        DEFAULT_OUTPUT_DIR,
+        OBSERVATION_SCHEMA,
+    )
+
+    path = (
+        DEFAULT_OUTPUT_DIR
+        / f"widget_research_watch_{spec.symbol}_{target_date.strftime('%Y%m%d')}.jsonl"
+    )
+    counts = {
+        session: {
+            "raw_row_count": 0,
+            "unique_bar_count": 0,
+            "producer_error_count": 0,
+            "blocked_row_count": 0,
+            "first_source_time": None,
+            "last_source_time": None,
+        }
+        for session in ("KRX_REGULAR", DUAL_AFTERMARKET_SESSION)
+    }
+    unique = {session: set() for session in counts}
+    observed_times = {session: set() for session in counts}
+    producer_shas = {session: set() for session in counts}
+    source_schemas = {session: set() for session in counts}
+    digest = hashlib.sha256()
+    gap = None
+    if path.exists():
+        size = path.stat().st_size
+        current = datetime.now(KST)
+        if target_date == current.date() and current.time() < time(20, 5):
+            gap = "collection_in_progress_requires_bounded_summary"
+        elif size > 64 * 1024 * 1024:
+            gap = "source_requires_bounded_summary"
+        else:
+            with path.open("rb") as handle:
+                for raw in handle:
+                    digest.update(raw)
+                    try:
+                        payload = json.loads(raw)
+                        if (
+                            payload.get("schema") != OBSERVATION_SCHEMA
+                            or payload.get("stock_code") != spec.symbol
+                            or payload.get("trading_date") != target_date.isoformat()
+                            or payload.get("advisory_generated") is not False
+                            or payload.get("runtime_effect") is not False
+                            or payload.get("actual_order_submitted") is not False
+                            or payload.get("broker_order_forbidden") is not True
+                        ):
+                            gap = "consumer_path_or_schema_mismatch"
+                            continue
+                        session = payload.get("market_session")
+                        if session == "CLOSED":
+                            continue
+                        if session not in counts:
+                            gap = "route_or_session_mismatch"
+                            continue
+                        expected_route = (
+                            spec.symbol
+                            if session == "KRX_REGULAR"
+                            else f"{spec.symbol}_AL"
+                        )
+                        if payload.get("request_code", spec.symbol) != expected_route:
+                            gap = "route_or_session_mismatch"
+                            continue
+                        item = counts[session]
+                        item["raw_row_count"] += 1
+                        if payload.get("producer_code_sha256"):
+                            producer_shas[session].add(payload["producer_code_sha256"])
+                        if payload.get("schema"):
+                            source_schemas[session].add(payload["schema"])
+                        observed = datetime.fromisoformat(
+                            str(payload.get("observed_at_kst") or "")
+                        )
+                        if (
+                            observed.tzinfo is not None
+                            and observed.date() == target_date
+                        ):
+                            observed_times[session].add(observed)
+                        item["producer_error_count"] += (
+                            payload.get("status") == "SOURCE_ERROR"
+                        )
+                        item["blocked_row_count"] += (
+                            payload.get("status") == "SOURCE_QUALITY_BLOCKED"
+                        )
+                        bars = [*payload.get("completed_bar_delta", [])]
+                        latest = payload.get("latest_completed_bar")
+                        if isinstance(latest, dict):
+                            bars.append(latest)
+                        for bar in bars:
+                            stamp = str(bar.get("source_time") or "")
+                            if not stamp:
+                                continue
+                            unique[session].add(stamp)
+                            item["first_source_time"] = min(
+                                item["first_source_time"] or stamp, stamp
+                            )
+                            item["last_source_time"] = max(
+                                item["last_source_time"] or stamp, stamp
+                            )
+                    except (ValueError, TypeError, AttributeError):
+                        gap = "consumer_path_or_schema_mismatch"
+    else:
+        gap = "producer_missing"
+    return [
+        {
+            "symbol": spec.symbol,
+            "trading_date": target_date.isoformat(),
+            "session": session,
+            "input_role": "raw_market",
+            "source_path": str(path),
+            "source_sha256": (
+                digest.hexdigest()
+                if path.exists()
+                and gap
+                not in {
+                    "source_requires_bounded_summary",
+                    "collection_in_progress_requires_bounded_summary",
+                }
+                else None
+            ),
+            **item,
+            "unique_bar_count": len(unique[session]),
+            "producer_code_sha256": sorted(producer_shas[session]),
+            "source_schema": sorted(source_schemas[session]),
+            "first_observed_at_kst": (
+                min(observed_times[session]).isoformat()
+                if observed_times[session]
+                else None
+            ),
+            "last_observed_at_kst": (
+                max(observed_times[session]).isoformat()
+                if observed_times[session]
+                else None
+            ),
+            "actual_cadence_seconds": (
+                statistics.median(
+                    [
+                        (right - left).total_seconds()
+                        for left, right in zip(
+                            sorted(observed_times[session]),
+                            sorted(observed_times[session])[1:],
+                        )
+                    ]
+                )
+                if len(observed_times[session]) > 1
+                else None
+            ),
+            "status": gap
+            or (
+                "producer_error"
+                if item["producer_error_count"]
+                else (
+                    "source_quality_blocked"
+                    if item["blocked_row_count"]
+                    else "source_valid" if unique[session] else "producer_missing"
+                )
+            ),
+            "expected_cadence": "budget_paced_symbol_cycle_not_complete_minute_quotes",
+            "economic_authority": False,
+        }
+        for session, item in counts.items()
+    ]
 
 
 def _calibration_venue(session: str, payload: Mapping[str, Any]) -> str:
@@ -1530,8 +1725,51 @@ def _calibrate_session(
             )
         ]
 
+    def rank(candidate: dict[str, Any]) -> tuple[float, ...]:
+        summary = candidate["summary"]
+        if session.force_flat:
+            return (
+                float(candidate["ready"]),
+                float(
+                    summary["source_quality_adjusted_ev_pct"]
+                    if summary.get("source_quality_adjusted_ev_pct") is not None
+                    else -999.0
+                ),
+                float(
+                    summary["simple_sum_net_return_pct"]
+                    if summary.get("simple_sum_net_return_pct") is not None
+                    else -999.0
+                ),
+                float(candidate["target_bps"]),
+                -float(summary.get("average_filled_leg_count") or 99.0),
+            )
+        return (
+            float(candidate["ready"]),
+            float(
+                summary["source_quality_adjusted_ev_pct"]
+                if summary.get("source_quality_adjusted_ev_pct") is not None
+                else -999.0
+            ),
+            float(
+                summary["simple_sum_net_return_pct"]
+                if summary.get("simple_sum_net_return_pct") is not None
+                else -999.0
+            ),
+            float(summary.get("target_completion_ratio") or 0.0),
+            float(candidate["target_bps"]),
+            -float(summary.get("right_censored_count") or 0),
+        )
+
+    family_keys = (
+        "add_trigger_bps_from_initial_fill",
+        "target_bps",
+        "new_entry_cutoff_time",
+        "reentry_cooldown_minutes",
+        "force_exit_time",
+    )
+    candidate_count = 0
     candidates: list[dict[str, Any]] = []
-    for add_triggers in spec.add_trigger_arms:
+    for add_triggers in spec.add_trigger_arms if ordered_dates else ():
         for target_bps in spec.target_bps_values:
             for cutoff in session.new_entry_cutoffs:
                 for cooldown in (5, 10, 20):
@@ -1585,25 +1823,26 @@ def _calibrate_session(
                                     ],
                                 }
                             )
-
-    def rank(candidate: dict[str, Any]) -> tuple[float, ...]:
-        summary = candidate["summary"]
-        if session.force_flat:
-            return (
-                float(candidate["ready"]),
-                float(summary.get("source_quality_adjusted_ev_pct") or -999.0),
-                float(summary.get("simple_sum_net_return_pct") or -999.0),
-                float(candidate["target_bps"]),
-                -float(summary.get("average_filled_leg_count") or 99.0),
-            )
-        return (
-            float(candidate["ready"]),
-            float(summary.get("source_quality_adjusted_ev_pct") or -999.0),
-            float(summary.get("simple_sum_net_return_pct") or -999.0),
-            float(summary.get("target_completion_ratio") or 0.0),
-            float(candidate["target_bps"]),
-            -float(summary.get("right_censored_count") or 0),
-        )
+                        candidate_count += len(spec.max_entries_values)
+                        base = [
+                            candidate
+                            for candidate in candidates
+                            if int(candidate["max_completed_entries_per_day"])
+                            < HIGH_ENTRY_CAP_START
+                        ]
+                        winners = [max(candidates, key=rank)]
+                        if base:
+                            winners.append(max(base, key=rank))
+                        candidates = [
+                            candidate
+                            for candidate in candidates
+                            if any(
+                                all(
+                                    candidate[key] == winner[key] for key in family_keys
+                                )
+                                for winner in winners
+                            )
+                        ]
 
     base_candidates = [
         candidate
@@ -1673,7 +1912,12 @@ def _calibrate_session(
             ready = bool(
                 summary["resolved_trade_count"] == summary["signal_trade_count"]
                 and float(summary.get("source_quality_adjusted_ev_pct") or 0.0) > 0
-                and float(summary.get("worst_net_return_pct") or -999.0) >= -2.0
+                and float(
+                    summary["worst_net_return_pct"]
+                    if summary.get("worst_net_return_pct") is not None
+                    else -999.0
+                )
+                >= -2.0
             )
             if not ready:
                 reason = "independent_holdout_ev_or_tail_failed"
@@ -1854,7 +2098,7 @@ def _calibrate_session(
             if carry_forward_previous and previous_runtime_policy is not None
             else None
         ),
-        "candidate_count": len(candidates),
+        "candidate_count": candidate_count,
         "selected_policy": selected_parameters,
         "selected_summary": selected["summary"],
         "entry_cap_comparison": selected["entry_cap_comparison"],
@@ -2021,8 +2265,107 @@ def build_report(
         feedback_symbols = {}
     symbol_reports: dict[str, Any] = {}
     source_paths: list[str] = []
+    from src.engine.monitoring.widget_symbol_signal_policy_research import (
+        load_symbol_universe,
+    )
+    from src.engine.monitoring.widget_symbol_runtime_policy import (
+        WidgetSymbolRuntimePolicyLoader,
+    )
+
+    try:
+        collection_universe, collection_origins = load_symbol_universe(
+            observed_date=target_date
+        )
+        scope_status = "validated"
+    except (OSError, ValueError):
+        collection_universe, collection_origins = {}, {}
+        scope_status = "universe_contract_missing_or_invalid"
+    observation_seeds = WidgetSymbolRuntimePolicyLoader().resolve_observation_all(
+        observed_date=target_date
+    )
+    census = []
     for spec in _specs_for_target_date(target_date):
         rows, paths, source_load_audit = _load_rows(spec, target_date=target_date)
+        market_census = _market_source_census(spec, target_date=target_date)
+        enrolled = spec.symbol in collection_universe
+        seed = observation_seeds.get(spec.symbol) or {}
+        for item in market_census:
+            item["universe_origin"] = collection_origins.get(
+                spec.symbol, "legacy_advisory_collector_scope"
+            )
+            item["expected_collection_scope"] = enrolled
+            if not enrolled:
+                item["status"] = (
+                    "not_enrolled" if scope_status == "validated" else scope_status
+                )
+            census.append(item)
+            session_rows = [
+                row
+                for row in rows
+                if row["trade_date"] == target_date
+                and row["session"] == item["session"]
+            ]
+            source_gaps = any(
+                int(source_load_audit.get(key) or 0)
+                for key in (
+                    "source_file_not_frozen_or_oversized_count",
+                    "required_contract_missing_count",
+                    "invalid_json_or_object_count",
+                    "invalid_price_or_bar_time_count",
+                    "invalid_observed_at_or_date_count",
+                )
+            )
+            advisory_status = (
+                "not_enrolled"
+                if not enrolled
+                else (
+                    "consumer_path_or_schema_mismatch"
+                    if source_gaps
+                    else (
+                        "source_valid"
+                        if any(row.get("entry_event_id") for row in session_rows)
+                        else (
+                            "valid_empty_no_signal"
+                            if session_rows
+                            and all(
+                                row.get("source_quality_status") == "PASS"
+                                for row in session_rows
+                            )
+                            else (
+                                "producer_error"
+                                if session_rows
+                                else (
+                                    "raw_only_no_seed"
+                                    if not seed
+                                    else "producer_missing"
+                                )
+                            )
+                        )
+                    )
+                )
+            )
+            census.append(
+                {
+                    "symbol": spec.symbol,
+                    "trading_date": target_date.isoformat(),
+                    "session": item["session"],
+                    "input_role": "seeded_advisory",
+                    "status": advisory_status,
+                    "universe_origin": item["universe_origin"],
+                    "expected_collection_scope": enrolled,
+                    "source_paths": paths,
+                    "advisory_row_count": len(session_rows),
+                    "eligible_row_count": sum(
+                        row.get("source_quality_status") == "PASS"
+                        for row in session_rows
+                    ),
+                    "seed_id": seed.get("seed_id"),
+                    "parameters_sha256": seed.get("parameters_sha256"),
+                    "source_report_sha256": seed.get("source_report_sha256"),
+                    "effective_at_kst": seed.get("effective_at_kst"),
+                    "economic_authority": False,
+                }
+            )
         source_paths.extend(paths)
         source_dates = sorted({row["trade_date"].isoformat() for row in rows})
         pass_row_count = sum(row["source_quality_status"] == "PASS" for row in rows)
@@ -2030,6 +2373,7 @@ def build_report(
         source_contract_gap_codes = sorted(
             key
             for key in (
+                "source_file_not_frozen_or_oversized_count",
                 "invalid_json_or_object_count",
                 "required_contract_missing_count",
                 "invalid_observed_at_or_date_count",
@@ -2038,17 +2382,31 @@ def build_report(
             )
             if int(source_load_audit.get(key) or 0) > 0
         )
+        if scope_status != "validated":
+            source_contract_gap_codes.append("universe_contract_missing_or_invalid")
         source_contract_valid = not source_contract_gap_codes
         active_session_specs = _active_session_specs(spec, target_date=target_date)
         sessions = {
-            session.session: _calibrate_session(
-                spec,
-                session,
-                rows,
-                target_date=target_date,
-                previous_runtime_policy=previous_session_policies.get(
-                    spec.symbol, {}
-                ).get(session.session),
+            session.session: (
+                _calibrate_session(
+                    spec,
+                    session,
+                    rows,
+                    target_date=target_date,
+                    previous_runtime_policy=previous_session_policies.get(
+                        spec.symbol, {}
+                    ).get(session.session),
+                )
+                if scope_status == "validated"
+                else {
+                    "decision": "source_contract_invalid_grid_skipped",
+                    "selected_policy": None,
+                    "candidate_count": 0,
+                    "automatic_promotion_allowed": False,
+                    "source_contract_gap_codes": [
+                        "universe_contract_missing_or_invalid"
+                    ],
+                }
             )
             for session in active_session_specs
         }
@@ -2068,7 +2426,8 @@ def build_report(
                     }
                 )
         if (
-            target_date >= paired_replay.SELECTION_START_DATE
+            scope_status == "validated"
+            and target_date >= paired_replay.SELECTION_START_DATE
             and spec.symbol == SAMSUNG_CODE
         ):
             inputs, input_audit = paired_replay.load_inputs(
@@ -2140,8 +2499,17 @@ def build_report(
                 "PASS" if pass_row_count and source_contract_valid else "BLOCKED"
             ),
             "source_contract_valid": source_contract_valid,
+            "market_contract_valid": not [
+                key
+                for key in source_contract_gap_codes
+                if key != "invalid_optional_lifecycle_event_count"
+            ],
             "source_contract_gap_codes": source_contract_gap_codes,
             "source_load_audit": source_load_audit,
+            "market_source_census": market_census,
+            "invalid_optional_events_isolated": int(
+                source_load_audit.get("invalid_optional_lifecycle_event_count") or 0
+            ),
             "source_dates": source_dates,
             "actual_evidence_start_date": source_dates[0] if source_dates else None,
             "analysis_start_date": spec.analysis_start_date.isoformat(),
@@ -2203,6 +2571,40 @@ def build_report(
         ],
         "comparison_cost_contract": comparison_cost_contract(target_date),
         "source_paths": sorted(set(source_paths)),
+        "market_collection_universe": collection_universe,
+        "market_collection_origins": collection_origins,
+        "source_census": census,
+        "source_census_reconciliation": {
+            "expected": len(census),
+            "source_valid": sum(
+                item["status"] in {"source_valid", "valid_empty_no_signal"}
+                for item in census
+            ),
+            "classified_not_applicable": sum(
+                item["status"]
+                in {
+                    "not_enrolled",
+                    "not_yet_effective",
+                    "outside_collection_window",
+                    "raw_only_no_seed",
+                }
+                for item in census
+            ),
+            "explicit_source_gap": sum(
+                item["status"]
+                not in {
+                    "source_valid",
+                    "valid_empty_no_signal",
+                    "not_enrolled",
+                    "not_yet_effective",
+                    "outside_collection_window",
+                    "raw_only_no_seed",
+                }
+                for item in census
+            ),
+            "unclassified": 0,
+            "scope_status": scope_status,
+        },
         "source_quality_status": (
             "PASS"
             if any(

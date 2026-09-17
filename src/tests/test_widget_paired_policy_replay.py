@@ -138,7 +138,9 @@ def test_integrated_aftermarket_is_source_only_without_cost_or_candidate():
     assert report["cost_status"] == "not_applicable_source_only"
     assert report["candidates"] == []
     assert report["source_only_row_count"] == len(rows)
-    assert replay.select_candidate(report, previous_value=100)["candidate_ready"] is False
+    assert (
+        replay.select_candidate(report, previous_value=100)["candidate_ready"] is False
+    )
 
 
 @pytest.mark.parametrize(
@@ -734,3 +736,29 @@ def test_non_confirmation_exit_conflict_is_not_an_entry():
     )
     assert report["path_count"] == 0
     assert not replay.select_candidate(report, previous_value=100)["candidate_ready"]
+
+
+def test_native_projection_preserves_paired_input_and_corruption_falls_back(tmp_path):
+    from src.engine.monitoring.widget_symbol_runtime_contract import (
+        append_calibration_projection,
+    )
+
+    item = path()[0]
+    source = tmp_path / "samsung_widget_advisory_20260909.jsonl"
+    payload = {
+        "observed_at_kst": item["observed_at"],
+        "advisory": {
+            "observed_at": item["observed_at"],
+            "session": "KRX_REGULAR",
+            "execution_replay_input": item,
+            "confirmation_input_trace": {"rows": [{"execution_replay_input": item}]},
+            "unused_chart": list(range(1000)),
+        },
+    }
+    raw_line = json.dumps(payload, sort_keys=True) + "\n"
+    source.write_text(raw_line)
+    original = replay.load_inputs([source], symbol="005930", target_date=DAY)
+    append_calibration_projection(source, payload, raw_line)
+    assert replay.load_inputs([source], symbol="005930", target_date=DAY) == original
+    source.with_suffix(".calibration.jsonl").write_text("invalid\n")
+    assert replay.load_inputs([source], symbol="005930", target_date=DAY) == original

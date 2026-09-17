@@ -9,7 +9,7 @@ User=ubuntu
 Group=www-data
 WorkingDirectory=/home/ubuntu/KORStockScan
 Environment="PYTHONPATH=/home/ubuntu/KORStockScan"
-ExecCondition=/home/ubuntu/KORStockScan/.venv/bin/python -m src.engine.monitoring.widget_symbol_runtime_policy --check-active
+ExecCondition=/home/ubuntu/KORStockScan/.venv/bin/python -m src.engine.monitoring.widget_symbol_runtime_policy --check-observation-scope
 ExecStart=/home/ubuntu/KORStockScan/.venv/bin/python -m src.engine.monitoring.widget_symbol_runtime_collector --interval-sec 15
 Restart=on-failure
 RestartSec=3

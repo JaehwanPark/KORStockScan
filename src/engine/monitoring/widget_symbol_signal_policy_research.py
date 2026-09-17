@@ -12,10 +12,16 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import inspect
+import fcntl
+import zlib
+from collections import deque
 import json
 import os
+import signal
 import tempfile
 import time as time_module
+from functools import lru_cache
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
@@ -260,13 +266,14 @@ def fetch_krx_history(
     shared_read_control_enabled: bool | None = None,
     allowed_symbols: Collection[str] | None = None,
     allow_short_listing_history: bool = False,
+    incremental_source: bool = False,
 ) -> tuple[list[Bar], dict[str, Any]]:
     """Fetch widget-owned research OHLCV without auth/account/order mutation."""
     if symbol not in (allowed_symbols if allowed_symbols is not None else SYMBOLS):
         raise ValueError("symbol_not_in_widget_research_allowlist")
     if start_date < CLEAN_BASELINE_DATE or start_date > end_date:
         raise ValueError("invalid_clean_baseline_date_range")
-    if int(expected_trading_day_count) <= HOLDOUT_DAYS:
+    if int(expected_trading_day_count) <= (0 if incremental_source else HOLDOUT_DAYS):
         raise ValueError("expected_trading_day_count_below_research_minimum")
     clean_token = (
         str(kiwoom_utils.resolve_kiwoom_request_token(token) or "")
@@ -285,6 +292,7 @@ def fetch_krx_history(
     cont_yn, next_key = "N", ""
     oldest_seen: date | None = None
     invalid_row_count = duplicate_row_count = out_of_session_row_count = 0
+    out_of_target_range_row_count = 0
     page_count = 0
     request_count = 0
     rate_limit_retry_count = 0
@@ -387,6 +395,9 @@ def fetch_krx_history(
                 if oldest_seen is None
                 else min(oldest_seen, timestamp.date())
             )
+            if not start_date <= timestamp.date() <= end_date:
+                out_of_target_range_row_count += 1
+                continue
             if not time(9, 0) <= timestamp.time() < time(15, 30):
                 out_of_session_row_count += 1
                 continue
@@ -464,6 +475,8 @@ def fetch_krx_history(
         else "FAIL"
     )
     meta = {
+        "retrieved_at_kst": datetime.now(KST).isoformat(),
+        "source_content_sha256": canonical_bar_hash(bars),
         "symbol": symbol,
         "request_code": request_code,
         "api_id": "ka10080",
@@ -483,6 +496,7 @@ def fetch_krx_history(
         "invalid_row_count": invalid_row_count,
         "duplicate_row_count": duplicate_row_count,
         "out_of_session_row_count": out_of_session_row_count,
+        "out_of_target_range_row_count": out_of_target_range_row_count,
         "source_quality_status": source_quality_status,
     }
     if source_quality_status != "PASS":
@@ -656,6 +670,239 @@ def _setup_feature(
     )
 
 
+class ReplayContext:
+    """Bounded symbol-local setup/reclaim/exit reuse with legacy arithmetic."""
+
+    def __init__(
+        self, grouped: dict[date, tuple[Bar, ...]], cache_dir: Path | None = None
+    ) -> None:
+        self.features: dict[tuple[date, int, str, int], list[Any]] = {}
+        self.entries: dict[tuple[Any, ...], Any] = {}
+        self.exits: dict[tuple[Any, ...], Any] = {}
+        self.grouped = grouped
+        self.cache_dir = cache_dir
+        self.day_results: dict[date, dict[str, Any]] = {}
+        self.cached_day_results: dict[date, dict[str, Any]] = {}
+        self.cache_hits = self.cache_misses = 0
+        self.contract = research_contract_hash() if cache_dir is not None else ""
+        self.symbol = ""
+
+    def _day_path(self, day: date) -> Path:
+        key = hashlib.sha256(
+            json.dumps(
+                {
+                    "source": canonical_bar_hash(self.grouped[day]),
+                    "algorithm": self.contract,
+                    "cost": comparison_cost_contract(day),
+                },
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()
+        return self.cache_dir / f"{day.isoformat()}_{key}.json.z"
+
+    def _load_day(self, day: date) -> dict[str, Any]:
+        if day not in self.day_results:
+            result = {}
+            if self.cache_dir is not None:
+                path = self._day_path(day)
+                try:
+                    if path.stat().st_size <= 1024 * 1024:
+                        decoder = zlib.decompressobj()
+                        raw = decoder.decompress(path.read_bytes(), 8 * 1024 * 1024)
+                        if decoder.eof and not decoder.unused_data:
+                            payload = json.loads(raw)
+                            if (
+                                payload.get("checksum")
+                                == hashlib.sha256(
+                                    json.dumps(
+                                        payload["results"],
+                                        sort_keys=True,
+                                        separators=(",", ":"),
+                                    ).encode()
+                                ).hexdigest()
+                            ):
+                                result = payload["results"]
+                except (OSError, ValueError, KeyError, TypeError, zlib.error):
+                    pass
+            self.cached_day_results[day] = dict(result)
+            self.day_results[day] = result
+        return self.day_results[day]
+
+    def read_day(self, day: date, policy: SignalPolicy) -> list[dict[str, Any]] | None:
+        if self.cache_dir is None:
+            return None
+        key = json.dumps(asdict(policy), sort_keys=True, separators=(",", ":"))
+        self._load_day(day)
+        rows = self.cached_day_results[day].get(key)
+        if isinstance(rows, list) and all(
+            isinstance(row, dict) and row.get("trade_date") == day.isoformat()
+            for row in rows
+        ):
+            self.cache_hits += 1
+            return rows
+        self.cache_misses += 1
+        return None
+
+    def write_day(
+        self, day: date, policy: SignalPolicy, rows: list[dict[str, Any]]
+    ) -> None:
+        if self.cache_dir is None:
+            return
+        results = self._load_day(day)
+        results[json.dumps(asdict(policy), sort_keys=True, separators=(",", ":"))] = (
+            rows
+        )
+        # Optional day cache is capped below the corresponding source size.
+        if len(results) > 256:
+            del results[next(iter(results))]
+
+    def flush(self) -> None:
+        if self.cache_dir is None:
+            return
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        for day, results in self.day_results.items():
+            limit = len(
+                json.dumps(
+                    [
+                        (
+                            bar.timestamp.isoformat(),
+                            bar.open_price,
+                            bar.high_price,
+                            bar.low_price,
+                            bar.close_price,
+                            bar.volume,
+                        )
+                        for bar in self.grouped[day]
+                    ]
+                ).encode()
+            )
+            while results:
+                content = json.dumps(results, sort_keys=True, separators=(",", ":"))
+                encoded = zlib.compress(
+                    json.dumps(
+                        {
+                            "checksum": hashlib.sha256(content.encode()).hexdigest(),
+                            "results": results,
+                        },
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode()
+                )
+                if len(encoded) <= limit:
+                    break
+                del results[next(iter(results))]
+            if results:
+                path = self._day_path(day)
+                fd, temporary = tempfile.mkstemp(
+                    prefix=".day-cache-", dir=self.cache_dir
+                )
+                try:
+                    with os.fdopen(fd, "wb") as handle:
+                        handle.write(encoded)
+                        handle.flush()
+                        os.fsync(handle.fileno())
+                    os.replace(temporary, path)
+                    for previous in self.cache_dir.glob(f"{day.isoformat()}_*.json.z"):
+                        if previous != path:
+                            previous.unlink(missing_ok=True)
+                finally:
+                    if os.path.exists(temporary):
+                        os.unlink(temporary)
+        # Remove only optional cache files; source, policies and receipts are separate.
+        files = sorted(
+            self.cache_dir.glob("*.json.z"),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        total = 0
+        for path in files:
+            total += path.stat().st_size
+            if total > 32 * 1024 * 1024:
+                path.unlink(missing_ok=True)
+
+    def feature(self, day: date, index: int, policy: SignalPolicy) -> Any:
+        minimum = (
+            policy.lookback_bars
+            if policy.minimum_history_bars is None
+            else policy.minimum_history_bars
+        )
+        key = (day, policy.lookback_bars, policy.anchor_mode, minimum)
+        if key not in self.features:
+            rows = self.grouped[day]
+            highs: deque[int] = deque()
+            lows: deque[int] = deque()
+            last_gap = -1
+            values = []
+            for i, row in enumerate(rows):
+                if i and row.timestamp - rows[i - 1].timestamp != timedelta(minutes=1):
+                    last_gap = i
+                start = (
+                    0
+                    if policy.anchor_mode == "session"
+                    else max(0, i - policy.lookback_bars + 1)
+                )
+                while highs and highs[0] < start:
+                    highs.popleft()
+                while lows and lows[0] < start:
+                    lows.popleft()
+                while highs and rows[highs[-1]].high_price <= row.high_price:
+                    highs.pop()
+                while lows and rows[lows[-1]].low_price >= row.low_price:
+                    lows.pop()
+                highs.append(i)
+                lows.append(i)
+                high, low, close = (
+                    rows[highs[0]].high_price,
+                    rows[lows[0]].low_price,
+                    row.close_price,
+                )
+                valid = (
+                    policy.anchor_mode in {"session", "rolling"}
+                    and 2 <= minimum <= policy.lookback_bars
+                    and i + 1 >= minimum
+                    and last_gap <= start
+                    and min(high, low, close) > 0
+                )
+                values.append(
+                    ((high - close) / high * 100.0, (close - low) / low * 100.0)
+                    if valid
+                    else None
+                )
+            self.features[key] = values
+        return self.features[key][index]
+
+    def entry(self, day: date, index: int, policy: SignalPolicy, end: time) -> Any:
+        key = (
+            day,
+            index,
+            policy.reclaim_ticks,
+            policy.setup_valid_bars,
+            policy.max_reclaim_chase_ticks,
+            end,
+        )
+        if key not in self.entries:
+            if len(self.entries) >= 8192:
+                self.entries.clear()
+            self.entries[key] = _find_entry(
+                self.grouped[day], index, policy, segment_end=end
+            )
+        return self.entries[key]
+
+    def exit(self, day: date, index: int, price: int, support: int, target: int) -> Any:
+        key = (day, index, price, support, target)
+        if key not in self.exits:
+            if len(self.exits) >= 8192:
+                self.exits.clear()
+            self.exits[key] = _exit_episode(
+                self.grouped[day],
+                entry_index=index,
+                entry_price=price,
+                support=support,
+                target_bps=target,
+            )
+        return self.exits[key]
+
+
 def _volume_state(rows: tuple[Bar, ...], index: int) -> tuple[str, float | None]:
     prior = [row.volume for row in rows[max(0, index - 5) : index] if row.volume > 0]
     current = rows[index].volume
@@ -777,10 +1024,16 @@ def evaluate_policy(
     policy: SignalPolicy,
     *,
     include_episodes: bool = False,
+    replay_context: ReplayContext | None = None,
 ) -> dict[str, Any]:
     segment_start, segment_end = SEGMENTS[policy.segment]
     episodes: list[dict[str, Any]] = []
     for trade_date in dates:
+        cached = replay_context.read_day(trade_date, policy) if replay_context else None
+        if cached is not None:
+            episodes.extend(cached)
+            continue
+        day_start = len(episodes)
         rows = grouped[trade_date]
         minimum_history = (
             policy.lookback_bars
@@ -799,12 +1052,16 @@ def evaluate_policy(
                 continue
             if bar.timestamp.time() >= segment_end:
                 break
-            feature = _setup_feature(
-                rows,
-                index,
-                policy.lookback_bars,
-                anchor_mode=policy.anchor_mode,
-                minimum_history_bars=minimum_history,
+            feature = (
+                replay_context.feature(trade_date, index, policy)
+                if replay_context
+                else _setup_feature(
+                    rows,
+                    index,
+                    policy.lookback_bars,
+                    anchor_mode=policy.anchor_mode,
+                    minimum_history_bars=minimum_history,
+                )
             )
             if feature is None:
                 index += 1
@@ -816,18 +1073,28 @@ def evaluate_policy(
             ):
                 index += 1
                 continue
-            found = _find_entry(rows, index, policy, segment_end=segment_end)
+            found = (
+                replay_context.entry(trade_date, index, policy, segment_end)
+                if replay_context
+                else _find_entry(rows, index, policy, segment_end=segment_end)
+            )
             if found is None:
                 index += 1
                 continue
             entry_index, entry_price, state, volume_ratio = found
             support = min(row.low_price for row in rows[index:entry_index])
-            outcome = _exit_episode(
-                rows,
-                entry_index=entry_index,
-                entry_price=entry_price,
-                support=support,
-                target_bps=policy.target_bps,
+            outcome = (
+                replay_context.exit(
+                    trade_date, entry_index, entry_price, support, policy.target_bps
+                )
+                if replay_context
+                else _exit_episode(
+                    rows,
+                    entry_index=entry_index,
+                    entry_price=entry_price,
+                    support=support,
+                    target_bps=policy.target_bps,
+                )
             )
             daily_entry_count += 1
             episodes.append(
@@ -850,6 +1117,8 @@ def evaluate_policy(
             )
             index = int(outcome["exit_index"]) + policy.reentry_cooldown_bars
             cooldown_until = index
+        if replay_context:
+            replay_context.write_day(trade_date, policy, episodes[day_start:])
     result = _summarize_episodes(episodes)
     result["entry_cap_comparison"] = _entry_cap_comparison(episodes)
     if include_episodes:
@@ -989,9 +1258,13 @@ def _calibration_ready(
 
 
 def discover_symbol_policy(
-    bars: list[Bar], *, expected_dates: list[date]
+    bars: list[Bar],
+    *,
+    expected_dates: list[date],
+    replay_context: ReplayContext | None = None,
 ) -> dict[str, Any]:
     grouped = _group_bars(bars)
+    replay_context = replay_context or ReplayContext(grouped)
     if set(grouped) != set(expected_dates):
         raise ResearchError("symbol_trading_dates_mismatch")
     calibration_dates = expected_dates[:-HOLDOUT_DAYS]
@@ -1041,12 +1314,30 @@ def discover_symbol_policy(
         "high_entry_cap_incremental_positive": 0,
     }
     evaluated = 0
-    for policy in policy_grid():
+    calibration_ready_count = 0
+    high_caps: dict[SignalPolicy, set[int]] = {}
+    for policy_number, policy in enumerate(policy_grid(), 1):
+        if replay_context.cache_dir is not None and policy_number % 128 == 0:
+            print(
+                json.dumps(
+                    {
+                        "stage": "grid_progress",
+                        "symbol": replay_context.symbol,
+                        "grid_policies": policy_number,
+                        "calibration_dates": len(calibration_dates),
+                        "day_cache_hits": replay_context.cache_hits,
+                        "day_cache_misses": replay_context.cache_misses,
+                    },
+                    sort_keys=True,
+                ),
+                flush=True,
+            )
         full_evaluation = evaluate_policy(
             grouped,
             calibration_dates,
             policy,
             include_episodes=True,
+            replay_context=replay_context,
         )
         first_evaluation = _subset_evaluation(full_evaluation, first_dates)
         second_evaluation = _subset_evaluation(full_evaluation, second_dates)
@@ -1107,6 +1398,9 @@ def discover_symbol_policy(
                 * min(first["episode_count"], second["episode_count"])
                 / (min(first["episode_count"], second["episode_count"]) + 6.0)
             )
+            if entry_cap >= HIGH_ENTRY_CAP_START:
+                high_caps.setdefault(policy, set()).add(entry_cap)
+            calibration_ready_count += 1
             candidates.append(
                 (
                     score,
@@ -1121,6 +1415,23 @@ def discover_symbol_policy(
                     full_evaluation,
                 )
             )
+            # Stable rank preserves the earliest grid item on exact ties.
+            for base in (True, False):
+                group = [
+                    item
+                    for item in candidates
+                    if (item[2] < HIGH_ENTRY_CAP_START) is base
+                ]
+                if len(group) > 1:
+                    winner = max(
+                        group, key=lambda item: (item[0], item[3]["episode_count"])
+                    )
+                    candidates = [
+                        item
+                        for item in candidates
+                        if (item[2] < HIGH_ENTRY_CAP_START) is not base
+                    ]
+                    candidates.append(winner)
     if not candidates:
         diagnostic_payload = None
         if best_diagnostic is not None:
@@ -1163,18 +1474,14 @@ def discover_symbol_policy(
     ) = (base_candidates or candidates)[0]
     calibration_selected_cap = base_entry_cap
     for high_cap in range(HIGH_ENTRY_CAP_START, max(ENTRY_CAP_VALUES) + 1):
-        if any(
-            candidate_policy == selected and candidate_cap == high_cap
-            for (
-                _,
-                candidate_policy,
-                candidate_cap,
-                *_rest,
-            ) in candidates
-        ):
+        if high_cap in high_caps.get(selected, set()):
             calibration_selected_cap = high_cap
     holdout_evaluation = evaluate_policy(
-        grouped, holdout_dates, selected, include_episodes=True
+        grouped,
+        holdout_dates,
+        selected,
+        include_episodes=True,
+        replay_context=replay_context,
     )
     holdout_cap_comparison = holdout_evaluation["entry_cap_comparison"]
     selected_entry_cap = calibration_selected_cap
@@ -1238,7 +1545,7 @@ def discover_symbol_policy(
         },
         "robust_calibration_score": round(score, 6),
         "grid_candidate_count": evaluated,
-        "calibration_ready_candidate_count": len(candidates),
+        "calibration_ready_candidate_count": calibration_ready_count,
         "calibration_gate_counts": gate_counts,
         "date_split": date_split,
         "runtime_effect": False,
@@ -1253,7 +1560,9 @@ def build_report(
     applied_baselines: dict[str, dict] | None = None,
     symbol_universe: dict[str, str] | None = None,
     symbol_origins: dict[str, str] | None = None,
+    replay_cache_dir: Path | None = None,
 ) -> dict[str, Any]:
+    global _ACTIVE_REPLAY_CONTEXT
     universe = dict(symbol_universe or SYMBOLS)
     origins = dict(
         symbol_origins or {symbol: "established_widget_symbol" for symbol in universe}
@@ -1307,9 +1616,16 @@ def build_report(
         qualified_bars = [
             bar for bar in bars if bar.timestamp.date() in qualified_date_set
         ]
+        grouped_qualified = _group_bars(qualified_bars)
+        replay_context = ReplayContext(
+            grouped_qualified,
+            replay_cache_dir / symbol if replay_cache_dir is not None else None,
+        )
+        replay_context.symbol = symbol
+        _ACTIVE_REPLAY_CONTEXT = replay_context
+        discovery_kwargs = {"replay_context": replay_context}
         result = discover_symbol_policy(
-            qualified_bars,
-            expected_dates=qualified_dates,
+            qualified_bars, expected_dates=qualified_dates, **discovery_kwargs
         )
         baseline_receipt = applied_baselines.get(symbol) or {}
         baseline = baseline_receipt.get("signal_policy")
@@ -1322,6 +1638,8 @@ def build_report(
             }
         selected_parameters = result.get("selected_policy") or {}
         comparisons = {}
+        component_grouped = grouped_qualified
+        component_context = replay_context
         if selected_parameters:
             signal_keys = tuple(
                 key
@@ -1342,6 +1660,13 @@ def build_report(
                     }
                 )
                 comparisons[arm_name] = {"parameters": parameters}
+                component_full = evaluate_policy(
+                    component_grouped,
+                    qualified_dates,
+                    replay_policy,
+                    include_episodes=True,
+                    replay_context=component_context,
+                )
                 for window, dates in (
                     ("calibration", qualified_dates[:-HOLDOUT_DAYS]),
                     (
@@ -1358,12 +1683,7 @@ def build_report(
                     ),
                     ("holdout", qualified_dates[-HOLDOUT_DAYS:]),
                 ):
-                    replay = evaluate_policy(
-                        _group_bars(qualified_bars),
-                        dates,
-                        replay_policy,
-                        include_episodes=True,
-                    )
+                    replay = _subset_evaluation(component_full, dates)
                     episodes = [
                         row
                         for row in replay["episodes"]
@@ -1465,6 +1785,8 @@ def build_report(
                 result["decision"] = "holdout_pass_widget_signal_policy_candidate"
             else:
                 result["decision"] = "component_economics_or_holdout_not_ready"
+        replay_context.flush()
+        _ACTIVE_REPLAY_CONTEXT = None
         results[symbol] = {"symbol": symbol, "name": name, **result}
         source_meta[symbol] = {**meta, "daily_source_coverage": coverage}
     pass_symbols = [
@@ -1520,6 +1842,51 @@ def build_report(
     return attach_recommendation_contract(report)
 
 
+class VerifiedBars(tuple):
+    def __new__(cls, bars: Iterable[Bar]):
+        value = super().__new__(cls, sorted(bars, key=lambda bar: bar.timestamp))
+        value.source_content_sha256 = canonical_bar_hash(value)
+        return value
+
+
+def canonical_bar_hash(bars: Iterable[Bar]) -> str:
+    digest = hashlib.sha256()
+    for bar in sorted(bars, key=lambda item: item.timestamp):
+        digest.update(
+            json.dumps(
+                (
+                    bar.timestamp.isoformat(),
+                    bar.open_price,
+                    bar.high_price,
+                    bar.low_price,
+                    bar.close_price,
+                    bar.volume,
+                ),
+                separators=(",", ":"),
+            ).encode("ascii")
+            + b"\n"
+        )
+    return digest.hexdigest()
+
+
+def research_contract_hash() -> str:
+    # Bind replay, tick/price, calendar and component/cost dependencies together.
+    from src.trading.order import tick_utils
+    from src.utils import market_day
+    from src.engine.monitoring import widget_signal_quality, widget_comparison_cost
+
+    digest = hashlib.sha256()
+    for module in (
+        tick_utils,
+        market_day,
+        widget_signal_quality,
+        widget_comparison_cost,
+    ):
+        digest.update(Path(module.__file__).read_bytes())
+    digest.update(Path(__file__).read_bytes())
+    return digest.hexdigest()
+
+
 def research_input_fingerprint(
     *,
     sources: dict[str, tuple[list[Bar], dict[str, Any]]],
@@ -1529,40 +1896,34 @@ def research_input_fingerprint(
     symbol_origins: dict[str, str],
 ) -> str:
     payload = {
-        "schema": "widget_symbol_signal_policy_research_input_v1",
-        "producer_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        "schema": "widget_symbol_signal_policy_research_input_v2",
+        "producer_sha256": research_contract_hash(),
         "end_date": end_date.isoformat(),
         "cost_contract": comparison_cost_contract(end_date),
         "applied_baselines": applied_baselines or {},
         "symbol_universe": sorted(symbol_universe),
         "symbol_origins": {
-            symbol: symbol_origins.get(symbol)
-            for symbol in sorted(symbol_universe)
+            symbol: symbol_origins.get(symbol) for symbol in sorted(symbol_universe)
         },
         "sources": {
             symbol: {
-                "bars": [
-                    (
-                        bar.timestamp.isoformat(),
-                        bar.open_price,
-                        bar.high_price,
-                        bar.low_price,
-                        bar.close_price,
-                        bar.volume,
-                    )
-                    for bar in bars
-                ],
+                "source_content_sha256": (
+                    bars.source_content_sha256
+                    if isinstance(bars, VerifiedBars)
+                    else canonical_bar_hash(bars)
+                ),
                 "source_quality_status": meta.get("source_quality_status"),
-                "source_content_sha256": meta.get("source_content_sha256"),
                 "excluded_dates": meta.get("excluded_dates") or [],
+                "listing_history_accepted": meta.get("listing_history_accepted", False),
             }
             for symbol, (bars, meta) in sorted(sources.items())
         },
     }
-    encoded = json.dumps(
-        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
+    return hashlib.sha256(
+        json.dumps(
+            payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+    ).hexdigest()
 
 
 def reusable_report(path: Path, *, end_date: date, fingerprint: str) -> dict | None:
@@ -1571,7 +1932,8 @@ def reusable_report(path: Path, *, end_date: date, fingerprint: str) -> dict | N
     except (OSError, ValueError, TypeError):
         return None
     if (
-        report.get("schema") != REPORT_SCHEMA
+        not isinstance(report, dict)
+        or report.get("schema") != REPORT_SCHEMA
         or report.get("status") != "complete"
         or report.get("end_date") != end_date.isoformat()
         or report.get("source_input_fingerprint") != fingerprint
@@ -1579,6 +1941,20 @@ def reusable_report(path: Path, *, end_date: date, fingerprint: str) -> dict | N
         or report.get("allowed_runtime_apply") is not False
     ):
         return None
+    checksum = report.get("checkpoint_sha256")
+    if path.parent.name == "checkpoints" and checksum is None:
+        return None
+    if checksum is not None:
+        material = {
+            key: value for key, value in report.items() if key != "checkpoint_sha256"
+        }
+        if (
+            checksum
+            != hashlib.sha256(
+                json.dumps(material, sort_keys=True, ensure_ascii=False).encode()
+            ).hexdigest()
+        ):
+            return None
     return report
 
 
@@ -1684,40 +2060,370 @@ def _default_end_date(now: datetime | None = None) -> date:
     return resolve_completed_research_end_date(now)
 
 
+_ACTIVE_REPLAY_CONTEXT: ReplayContext | None = None
+
+
+def _handle_research_termination(signum: int, _frame: Any) -> None:
+    context = _ACTIVE_REPLAY_CONTEXT
+    if context is not None:
+        context.flush()
+        print(
+            json.dumps(
+                {
+                    "stage": "research_terminated",
+                    "symbol": context.symbol,
+                    "partial_replay_checkpoint": True,
+                    "complete": False,
+                    "signal": signum,
+                }
+            ),
+            flush=True,
+        )
+    raise SystemExit(128 + signum)
+
+
+SNAPSHOT_SCHEMA = "widget_krx_completed_source_v1"
+DEFAULT_SNAPSHOT_DIR = DATA_DIR / "cache" / "widget_signal_research_sources"
+
+
+def _freeze_receipt(end_date: date) -> dict[str, Any] | None:
+    path = (
+        DATA_DIR
+        / "runtime"
+        / "update_kospi_status"
+        / f"update_kospi_{end_date.isoformat()}.json"
+    )
+    try:
+        receipt_bytes = path.read_bytes()
+        receipt = json.loads(receipt_bytes)
+        db = receipt.get("db_state") or {}
+        if (
+            receipt.get("status") not in {"completed", "completed_with_warnings"}
+            or receipt.get("target_date") != end_date.isoformat()
+            or db.get("latest_quote_date") != end_date.isoformat()
+            or int(db.get("rows_on_latest_date") or 0) <= 0
+            or end_date > resolve_completed_research_end_date()
+        ):
+            return None
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None
+    return {
+        "target_date": end_date.isoformat(),
+        "sha256": hashlib.sha256(receipt_bytes).hexdigest(),
+    }
+
+
+def _snapshot_freeze_valid(freeze: object, day: date) -> bool:
+    try:
+        target = date.fromisoformat(freeze["target_date"])
+        expected = _freeze_receipt(target)
+        return (
+            target >= day
+            and expected is not None
+            and freeze.get("sha256") == expected["sha256"]
+        )
+    except (TypeError, ValueError, KeyError, AttributeError):
+        return False
+
+
+@lru_cache(maxsize=16)
+def _source_parser_digest(functions: tuple[Callable[..., Any], ...]) -> str:
+    # Dependencies are immutable within a pinned research process.
+    from src.utils import market_day
+
+    digest = hashlib.sha256()
+    for function in functions:
+        digest.update(inspect.getsource(function).encode())
+    digest.update(Path(market_day.__file__).read_bytes())
+    digest.update(json.dumps(OFFICIAL_REFERENCE, sort_keys=True).encode())
+    digest.update(SNAPSHOT_SCHEMA.encode())
+    return digest.hexdigest()
+
+
+def source_parser_contract_hash() -> str:
+    # Source acquisition must survive unrelated cost/seed/replay changes.
+    return _source_parser_digest(
+        (
+            fetch_krx_history,
+            _parse_response,
+            _positive_int,
+            canonical_bar_hash,
+            _daily_source_coverage,
+            _read_snapshot,
+            _snapshot_freeze_valid,
+            _freeze_receipt,
+        )
+    )
+
+
+def _snapshot_key(symbol: str, day: date) -> dict[str, Any]:
+    return {
+        "schema": SNAPSHOT_SCHEMA,
+        "symbol": symbol,
+        "date": day.isoformat(),
+        "route": symbol,
+        "session": "KRX_REGULAR",
+        "adjustment": "1",
+        "parser_contract": source_parser_contract_hash(),
+    }
+
+
+def _receipt_checksum(payload: dict[str, Any]) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            {key: value for key, value in payload.items() if key != "receipt_sha256"},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+
+
+def _read_snapshot(
+    path: Path, symbol: str, day: date
+) -> tuple[list[Bar], dict[str, Any]] | None:
+    try:
+        if path.stat().st_size > 4 * 1024 * 1024:
+            return None
+        payload = json.loads(path.read_text())
+        if (
+            payload.get("receipt_sha256") != _receipt_checksum(payload)
+            or payload.get("key") != _snapshot_key(symbol, day)
+            or payload.get("complete") is not True
+            or not _snapshot_freeze_valid(payload.get("freeze_receipt"), day)
+            or payload.get("source_quality_status") != "PASS"
+            or not payload.get("retrieved_at_kst")
+        ):
+            return None
+        retrieved = datetime.fromisoformat(payload["retrieved_at_kst"])
+        if (
+            retrieved.tzinfo is None
+            or retrieved.utcoffset() != timedelta(hours=9)
+            or retrieved > datetime.now(KST)
+        ):
+            return None
+        bars = [
+            Bar(datetime.fromisoformat(row[0]), *row[1:]) for row in payload["bars"]
+        ]
+        if (
+            not bars
+            or retrieved < max(bar.timestamp for bar in bars) + timedelta(minutes=1)
+            or canonical_bar_hash(bars) != payload.get("sha256")
+            or any(
+                bar.timestamp.tzinfo is None
+                or bar.timestamp.utcoffset() != timedelta(hours=9)
+                or any(
+                    isinstance(value, bool) or not isinstance(value, int)
+                    for value in (
+                        bar.open_price,
+                        bar.high_price,
+                        bar.low_price,
+                        bar.close_price,
+                        bar.volume,
+                    )
+                )
+                or bar.timestamp.date() != day
+                or not time(9) <= bar.timestamp.time() < time(15, 30)
+                or min(bar.open_price, bar.high_price, bar.low_price, bar.close_price)
+                <= 0
+                or bar.high_price < max(bar.open_price, bar.close_price, bar.low_price)
+                or bar.low_price > min(bar.open_price, bar.close_price, bar.high_price)
+                or bar.volume < 0
+                for bar in bars
+            )
+            or len({bar.timestamp for bar in bars}) != len(bars)
+        ):
+            return None
+        if _daily_source_coverage(_group_bars(bars), [day])["status"] != "PASS":
+            return None
+        return bars, payload
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, IndexError):
+        return None
+
+
+def load_completed_symbol_source(
+    *,
+    symbol: str,
+    end_date: date,
+    universe: dict[str, str],
+    origin: str,
+    token_provider: Callable[[], str | None],
+    snapshot_dir: Path,
+    max_pages: int,
+    page_delay_sec: float,
+) -> tuple[list[Bar], dict[str, Any]]:
+    """Validate dated immutable snapshots before any remote read; serialize publication."""
+    if end_date > resolve_completed_research_end_date():
+        raise ResearchError("research_target_date_not_completed")
+    dates = _clean_trading_dates(end_date)
+    root = snapshot_dir / symbol
+    root.mkdir(parents=True, exist_ok=True)
+    with (root / ".publish.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        records = {
+            day: _read_snapshot(root / f"{day.isoformat()}.json", symbol, day)
+            for day in dates
+        }
+        manifest_path = root / "listing.json"
+        try:
+            manifest = json.loads(manifest_path.read_text())
+            listing_start = date.fromisoformat(manifest["first_date"])
+            if (
+                manifest.get("receipt_sha256") != _receipt_checksum(manifest)
+                or not CLEAN_BASELINE_DATE <= listing_start <= end_date
+                or manifest.get("contract") != source_parser_contract_hash()
+                or manifest.get("complete") is not True
+                or manifest.get("symbol") != symbol
+                or manifest.get("route") != symbol
+                or not _snapshot_freeze_valid(
+                    manifest.get("freeze_receipt"), listing_start
+                )
+                or origin == "established_widget_symbol"
+            ):
+                listing_start = CLEAN_BASELINE_DATE
+        except (OSError, ValueError, KeyError, TypeError):
+            listing_start = CLEAN_BASELINE_DATE
+        required = [day for day in dates if day >= listing_start]
+        missing = [day for day in required if records[day] is None]
+        remote_count = 0
+        updated_dates: set[date] = set()
+        revised_dates: list[str] = []
+        meta: dict[str, Any] = {}
+        if missing:
+            token = token_provider()
+            if not token:
+                raise ResearchError("cached_token_missing_no_issue_or_refresh_allowed")
+            # A cold import keeps the original whole-period validation. Incremental
+            # reads bracket only missing dates and still validate every bar/date.
+            cold = not any(records.values())
+            start = CLEAN_BASELINE_DATE if cold else min(missing)
+            finish = end_date if cold else max(missing)
+            expected = [day for day in dates if start <= day <= finish]
+            fetched, meta = fetch_krx_history(
+                symbol=symbol,
+                token=token,
+                start_date=start,
+                end_date=finish,
+                expected_trading_day_count=len(expected),
+                max_pages=max_pages,
+                page_delay_sec=page_delay_sec,
+                allowed_symbols=universe,
+                allow_short_listing_history=origin != "established_widget_symbol",
+                incremental_source=not cold,
+            )
+            remote_count = int(meta.get("request_count") or 0)
+            freeze = _freeze_receipt(end_date)
+            grouped = _group_bars(fetched)
+            for day, rows in grouped.items():
+                old = records.get(day)
+                same_source = old and canonical_bar_hash(old[0]) == canonical_bar_hash(
+                    rows
+                )
+                if same_source:
+                    continue  # Keep original receipt and retrieval time on overlap.
+                if old:
+                    revised_dates.append(day.isoformat())
+                updated_dates.add(day)
+                payload = {
+                    "key": _snapshot_key(symbol, day),
+                    "complete": True,
+                    "freeze_receipt": freeze,
+                    "retrieved_at_kst": meta["retrieved_at_kst"],
+                    "source_quality_status": "PASS",
+                    "sha256": canonical_bar_hash(rows),
+                    "bars": [
+                        (
+                            bar.timestamp.isoformat(),
+                            bar.open_price,
+                            bar.high_price,
+                            bar.low_price,
+                            bar.close_price,
+                            bar.volume,
+                        )
+                        for bar in rows
+                    ],
+                }
+                payload["receipt_sha256"] = _receipt_checksum(payload)
+                records[day] = (list(rows), payload)
+                if (
+                    freeze
+                    and _daily_source_coverage({day: rows}, [day])["status"] == "PASS"
+                ):
+                    _atomic_write(
+                        root / f"{day.isoformat()}.json",
+                        json.dumps(payload, sort_keys=True),
+                    )
+                elif old:
+                    # Preserve original bars/provenance but revoke the optional
+                    # cache's completion when a remote revision is incomplete.
+                    invalidated = {
+                        **old[1],
+                        "complete": False,
+                        "invalidated_by_source_sha256": payload["sha256"],
+                        "previous_receipt_sha256": old[1]["receipt_sha256"],
+                    }
+                    invalidated["receipt_sha256"] = _receipt_checksum(invalidated)
+                    _atomic_write(
+                        root / f"{day.isoformat()}.json",
+                        json.dumps(invalidated, sort_keys=True),
+                    )
+            if cold and meta.get("listing_history_accepted"):
+                listing_start = min(grouped)
+                required = [day for day in dates if day >= listing_start]
+                if freeze:
+                    manifest = {
+                        "symbol": symbol,
+                        "route": symbol,
+                        "first_date": listing_start.isoformat(),
+                        "complete": True,
+                        "contract": source_parser_contract_hash(),
+                        "freeze_receipt": freeze,
+                    }
+                    manifest["receipt_sha256"] = _receipt_checksum(manifest)
+                    _atomic_write(manifest_path, json.dumps(manifest))
+        if any(records[day] is None for day in required):
+            raise ResearchError(f"{symbol}_snapshot_coverage_incomplete")
+        bars = VerifiedBars(bar for day in required for bar in records[day][0])
+        retrieval_times = {
+            day.isoformat(): records[day][1]["retrieved_at_kst"] for day in required
+        }
+        return bars, {
+            **meta,
+            "symbol": symbol,
+            "request_code": symbol,
+            "api_id": "ka10080",
+            "market": "KRX_regular",
+            "source_quality_status": "PASS",
+            "source_content_sha256": bars.source_content_sha256,
+            "bar_count": len(bars),
+            "trading_date_count": len(required),
+            "expected_trading_date_count": len(dates),
+            "listing_history_accepted": listing_start > CLEAN_BASELINE_DATE,
+            "oldest_source_date": required[0].isoformat(),
+            "latest_source_date": end_date.isoformat(),
+            "retrieved_at_by_date": retrieval_times,
+            "snapshot_hit_dates": sum(day not in updated_dates for day in required),
+            "source_revision_dates": revised_dates,
+            "snapshot_miss_dates": len(missing),
+            "request_count": remote_count,
+        }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--end-date")
     parser.add_argument("--max-pages", type=int, default=120)
     parser.add_argument("--page-delay-sec", type=float, default=0.2)
     parser.add_argument("--output-dir", type=Path, default=OUTPUT_DIR)
+    parser.add_argument("--snapshot-dir", type=Path, default=DEFAULT_SNAPSHOT_DIR)
     parser.add_argument("--write", action="store_true")
     args = parser.parse_args(argv)
+    signal.signal(signal.SIGTERM, _handle_research_termination)
     end_date = (
         date.fromisoformat(args.end_date)
         if args.end_date
         else resolve_completed_research_end_date()
     )
-    expected_dates = _clean_trading_dates(end_date)
     symbol_universe, symbol_origins = load_symbol_universe(observed_date=end_date)
-    token = kiwoom_utils.get_cached_kiwoom_token()
-    if not token:
-        raise ResearchError("cached_token_missing_no_issue_or_refresh_allowed")
-    sources = {
-        symbol: fetch_krx_history(
-            symbol=symbol,
-            token=token,
-            start_date=CLEAN_BASELINE_DATE,
-            end_date=end_date,
-            max_pages=args.max_pages,
-            page_delay_sec=args.page_delay_sec,
-            expected_trading_day_count=len(expected_dates),
-            allowed_symbols=symbol_universe,
-            allow_short_listing_history=(
-                symbol_origins[symbol] != "established_widget_symbol"
-            ),
-        )
-        for symbol in symbol_universe
-    }
     from src.engine.monitoring.widget_symbol_runtime_policy import (
         WidgetSymbolRuntimePolicyLoader,
     )
@@ -1725,44 +2431,118 @@ def main(argv: list[str] | None = None) -> int:
     applied_baselines = WidgetSymbolRuntimePolicyLoader().resolve_all(
         observed_date=end_date
     )
-    fingerprint = research_input_fingerprint(
-        sources=sources,
-        end_date=end_date,
-        applied_baselines=applied_baselines,
-        symbol_universe=symbol_universe,
-        symbol_origins=symbol_origins,
-    )
-    existing_path = (
-        args.output_dir
-        / f"widget_symbol_signal_policy_research_{end_date.isoformat()}.json"
-    )
-    reusable = reusable_report(
-        existing_path, end_date=end_date, fingerprint=fingerprint
-    )
-    if reusable is not None:
+    # Checkpoint each symbol against source, code, cost and applied incumbent.
+    # Raw history is released before acquiring the next symbol.
+    reports = []
+    symbol_fingerprints = {}
+    for index, (symbol, name) in enumerate(symbol_universe.items(), 1):
+        started = time_module.monotonic()
         print(
             json.dumps(
                 {
-                    "decision": reusable["decision"],
-                    "passed_symbols": reusable["passed_symbols"],
-                    "json_path": str(existing_path),
-                    "markdown_path": str(existing_path.with_suffix(".md")),
-                    "execution_mode": "exact_date_fingerprint_reuse",
-                    "source_input_fingerprint": fingerprint,
-                    "runtime_effect": False,
+                    "stage": "symbol_start",
+                    "target_date": end_date.isoformat(),
+                    "symbol": symbol,
+                    "progress": f"{index}/{len(symbol_universe)}",
                 },
-                ensure_ascii=False,
                 sort_keys=True,
-            )
+            ),
+            flush=True,
         )
-        return 0
-    report = build_report(
-        sources=sources,
-        end_date=end_date,
-        applied_baselines=applied_baselines,
-        symbol_universe=symbol_universe,
-        symbol_origins=symbol_origins,
+        bars, meta = load_completed_symbol_source(
+            symbol=symbol,
+            end_date=end_date,
+            universe=symbol_universe,
+            origin=symbol_origins[symbol],
+            token_provider=kiwoom_utils.get_cached_kiwoom_token,
+            snapshot_dir=args.snapshot_dir,
+            max_pages=args.max_pages,
+            page_delay_sec=args.page_delay_sec,
+        )
+        kwargs = dict(
+            sources={symbol: (bars, meta)},
+            end_date=end_date,
+            applied_baselines=(
+                {symbol: applied_baselines[symbol]}
+                if symbol in applied_baselines
+                else {}
+            ),
+            symbol_universe={symbol: name},
+            symbol_origins={symbol: symbol_origins[symbol]},
+        )
+        fingerprint = research_input_fingerprint(**kwargs)
+        checkpoint = (
+            args.output_dir / "checkpoints" / f"{end_date.isoformat()}_{symbol}.json"
+        )
+        reusable = reusable_report(
+            checkpoint, end_date=end_date, fingerprint=fingerprint
+        )
+        if reusable is None:
+            report = build_report(
+                **kwargs, replay_cache_dir=args.snapshot_dir / "replay"
+            )
+            if args.write:
+                checkpoint_payload = {
+                    **report,
+                    "checkpoint_sha256": hashlib.sha256(
+                        json.dumps(report, ensure_ascii=False, sort_keys=True).encode()
+                    ).hexdigest(),
+                }
+                _atomic_write(
+                    checkpoint,
+                    json.dumps(checkpoint_payload, ensure_ascii=False, sort_keys=True),
+                )
+        else:
+            report = {
+                key: value
+                for key, value in reusable.items()
+                if key != "checkpoint_sha256"
+            }
+            report["execution_mode"] = "exact_symbol_checkpoint_reuse"
+            # Original retrieval times remain in dated snapshots; refresh only
+            # incident evidence, whose closure may change independently of OHLCV.
+            report["execution_quality_by_symbol"][symbol] = load_execution_incidents(
+                symbol, target_date=end_date, session="KRX_REGULAR"
+            )
+        symbol_fingerprints[symbol] = fingerprint
+        reports.append(report)
+        print(
+            json.dumps(
+                {
+                    "stage": "symbol_complete",
+                    "target_date": end_date.isoformat(),
+                    "symbol": symbol,
+                    "progress": f"{index}/{len(symbol_universe)}",
+                    "remote_requests": meta["request_count"],
+                    "cache_mode": report["execution_mode"],
+                    "wall_seconds": round(time_module.monotonic() - started, 3),
+                },
+                sort_keys=True,
+            ),
+            flush=True,
+        )
+        del bars, kwargs
+    report = dict(reports[0])
+    for key in ("symbols", "source_meta", "execution_quality_by_symbol"):
+        report[key] = {
+            symbol: value for part in reports for symbol, value in part[key].items()
+        }
+    report["symbol_universe"] = symbol_universe
+    report["symbol_origins"] = symbol_origins
+    report["passed_symbols"] = [
+        symbol for part in reports for symbol in part["passed_symbols"]
+    ]
+    report["decision"] = (
+        "widget_signal_policy_candidates_ready"
+        if report["passed_symbols"]
+        else "no_widget_signal_policy_candidate"
     )
+    report["source_input_fingerprint"] = hashlib.sha256(
+        json.dumps(symbol_fingerprints, sort_keys=True).encode()
+    ).hexdigest()
+    report["execution_mode"] = "sequential_symbol_checkpoints"
+    report["generated_at_kst"] = datetime.now(KST).isoformat(timespec="seconds")
+    report = attach_recommendation_contract(report)
     paths = (
         write_report(report, output_dir=args.output_dir) if args.write else (None, None)
     )

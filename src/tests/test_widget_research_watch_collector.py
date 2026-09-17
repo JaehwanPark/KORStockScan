@@ -440,3 +440,215 @@ def test_service_is_low_rate_and_has_no_trading_process_dependency():
     assert "MemoryMax=256M" in service
     assert "order" not in service.lower()
     assert "OnCalendar=Mon..Fri *-*-* 08:58:00 Asia/Seoul" in timer
+
+
+def test_writer_preserves_bar_delta_and_quarantines_overlap_conflict(tmp_path):
+    from copy import deepcopy
+
+    client = _FakeClient()
+    collector = watch.WidgetResearchWatchCollector(
+        config=_runtime_config([("111111", "test")]),
+        client=client,
+        output_dir=tmp_path / "raw",
+        snapshot_dir=tmp_path / "state",
+    )
+    observed = datetime(2026, 8, 13, 10, 1, 30, tzinfo=KST)
+    payload = collector._collect_symbol(
+        symbol=collector.config["symbols"][0], observed_at=observed, client=client
+    )
+    base = deepcopy(payload["latest_completed_bar"])
+    earlier = {**base, "source_time": "20260813095900"}
+    payload["completed_bars"] = [earlier, base]
+    assert collector._record(payload)
+    assert len(payload["completed_bar_delta"]) == 2
+    second = collector._collect_symbol(
+        symbol=collector.config["symbols"][0], observed_at=observed, client=client
+    )
+    second["completed_bars"] = [earlier, {**base, "volume": base["volume"] + 1}]
+    collector._record(second)
+    assert second["completed_bar_delta"] == []
+    assert len(second["conflicting_completed_bars"]) == 1
+    assert second["status"] == "SOURCE_QUALITY_BLOCKED"
+    assert second["entry_event"] is None and second["exit_event"] is None
+
+
+def test_error_detail_never_contains_exception_credentials(tmp_path):
+    class FailingClient:
+        def post(self, path, api_id, payload):
+            raise RuntimeError("Bearer secret-token account=1234")
+
+    collector = watch.WidgetResearchWatchCollector(
+        config=_runtime_config([("111111", "test")]),
+        client=FailingClient(),
+        output_dir=tmp_path / "raw",
+        snapshot_dir=tmp_path / "state",
+    )
+    row = collector.collect_once(datetime(2026, 8, 13, 10, 1, 30, tzinfo=KST))[0]
+    detail = row["source_error_detail"]
+    assert detail["api_id"] == "ka10001" and detail["source_stage"] == "quote"
+    assert detail["reason"] == "unclassified_source_error"
+    assert "secret-token" not in json.dumps(row)
+    assert "1234" not in json.dumps(row)
+
+
+def test_am_raw_uses_authoritative_route_without_regular_relabel(tmp_path):
+    client = _FakeClient()
+    collector = watch.WidgetResearchWatchCollector(
+        config=_runtime_config([("111111", "test")]),
+        client=client,
+        output_dir=tmp_path / "raw",
+        snapshot_dir=tmp_path / "state",
+    )
+    row = collector.collect_once(datetime(2026, 9, 16, 16, 10, tzinfo=KST))[0]
+    assert row["request_code"] == "111111_AL"
+    assert row["market_session"] == "KRX_NXT_AFTERMARKET"
+    assert row["market_venue"] == "UNKNOWN"
+    assert row["latest_completed_bar"] is None
+    assert row["advisory_generated"] is False
+    assert all(call[2]["stk_cd"] == "111111_AL" for call in client.calls)
+
+
+def test_native_raw_writer_and_calibration_census_keep_roles_distinct(
+    tmp_path, monkeypatch
+):
+    from datetime import date
+    from src.engine.monitoring import (
+        widget_auto_trade_policy_calibration as calibration,
+    )
+
+    class DatedClient(_FakeClient):
+        def post(self, path, api_id, payload):
+            result = super().post(path, api_id, payload)
+            if api_id == "ka10080":
+                for row in result["stk_min_pole_chart_qry"]:
+                    row["cntr_tm"] = row["cntr_tm"].replace("20260813", "20260916")
+            return result
+
+    collector = watch.WidgetResearchWatchCollector(
+        config=_runtime_config([("999999", "research")]),
+        client=DatedClient(),
+        output_dir=tmp_path / "raw",
+        snapshot_dir=tmp_path / "state",
+    )
+    result = collector.collect_once(datetime(2026, 9, 16, 10, 1, 30, tzinfo=KST))
+    assert result[0]["status"] == "PASS"
+    monkeypatch.setattr(watch, "DEFAULT_OUTPUT_DIR", tmp_path / "raw")
+    spec = calibration.SymbolSpec(
+        symbol="999999",
+        name="research",
+        observation_dir=tmp_path / "advisory",
+        prefix="widget_symbol_advisory_999999",
+        sessions=(),
+        add_trigger_arms=((),),
+        target_bps_values=(50,),
+        max_entries_values=(1,),
+        minimum_signal_dates=10,
+        minimum_trades=10,
+        analysis_start_date=date(2026, 9, 16),
+        minimum_qualified_observation_dates=40,
+    )
+    assert calibration._load_rows(spec, target_date=date(2026, 9, 16))[0] == []
+    census = calibration._market_source_census(spec, target_date=date(2026, 9, 16))
+    regular, am = census
+    assert regular["status"] == "source_valid" and regular["raw_row_count"] == 1
+    assert regular["unique_bar_count"] > 0
+    assert am["status"] == "producer_missing" and am["raw_row_count"] == 0
+    assert (
+        regular["input_role"] == "raw_market" and regular["economic_authority"] is False
+    )
+    collector.collect_once(datetime(2026, 9, 16, 10, 5, 30, tzinfo=KST))
+    regular, _am = calibration._market_source_census(
+        spec, target_date=date(2026, 9, 16)
+    )
+    assert regular["status"] == "source_quality_blocked"
+    assert regular["blocked_row_count"] == 1 and regular["raw_row_count"] == 2
+    assert regular["actual_cadence_seconds"] == 240
+    assert regular["producer_code_sha256"] and regular["source_schema"]
+
+    class GrowingClock(datetime):
+        @classmethod
+        def now(cls, timezone):
+            return cls(2026, 9, 16, 10, 10, tzinfo=timezone)
+
+    monkeypatch.setattr(calibration, "datetime", GrowingClock)
+    regular, _am = calibration._market_source_census(
+        spec, target_date=date(2026, 9, 16)
+    )
+    assert regular["source_sha256"] is None
+    assert regular["status"] == "collection_in_progress_requires_bounded_summary"
+    _rows, _paths, audit = calibration._load_rows(spec, target_date=date(2026, 9, 16))
+    # Absent advisory input is distinct from the growing market source.
+    assert audit["source_file_not_frozen_or_oversized_count"] == 0
+
+
+def test_common_market_reuse_preserves_receive_time_and_rejects_stale_route(
+    tmp_path, monkeypatch
+):
+    from src.engine.monitoring import widget_symbol_runtime_contract as contract
+
+    monkeypatch.setattr(contract, "DEFAULT_SNAPSHOT_DIR", tmp_path / "shared")
+    (tmp_path / "shared").mkdir()
+    received = "2026-08-13T10:01:25+09:00"
+    source = {
+        "schema_version": 1,
+        "symbol": "111111",
+        "observed_at_kst": received,
+        "market_data_request_code": "111111",
+        "market_data_route": "krx_only",
+        "current_price": 10000,
+        "quote_source_meta": {
+            "source": "kiwoom_ka10001_response_received_time",
+            "received_at": received,
+        },
+        "bbo": {
+            "source": "kiwoom_ka10004_response_received_time",
+            "received_at": received,
+            "best_bid": 9990,
+            "best_ask": 10000,
+        },
+    }
+    path = tmp_path / "shared" / "111111.json"
+    path.write_text(json.dumps(source))
+    client = _FakeClient()
+    collector = watch.WidgetResearchWatchCollector(
+        config=_runtime_config([("111111", "research")]),
+        client=client,
+        output_dir=tmp_path / "raw",
+        snapshot_dir=tmp_path / "state",
+    )
+    row = collector.collect_once(datetime(2026, 8, 13, 10, 1, 30, tzinfo=KST))[0]
+    assert [call[1] for call in client.calls] == ["ka10080"]
+    assert (
+        row["quote_received_at_kst"] == received
+        and row["bbo_received_at_kst"] == received
+    )
+    assert row["entry_event"] is None and row["exit_event"] is None
+    client.calls.clear()
+    collector.collect_once(datetime(2026, 8, 13, 10, 1, 50, tzinfo=KST))
+    assert [call[1] for call in client.calls] == ["ka10001", "ka10004", "ka10080"]
+    client.calls.clear()
+    source["market_data_request_code"] = "111111_AL"
+    path.write_text(json.dumps(source))
+    collector.collect_once(datetime(2026, 8, 13, 10, 1, 30, tzinfo=KST))
+    assert [call[1] for call in client.calls] == ["ka10001", "ka10004", "ka10080"]
+
+
+def test_same_response_conflicting_bars_are_not_lost_by_parser_dedup(tmp_path):
+    class ConflictingClient(_FakeClient):
+        def post(self, path, api_id, payload):
+            response = super().post(path, api_id, payload)
+            if api_id == "ka10080":
+                row = response["stk_min_pole_chart_qry"][1]
+                response["stk_min_pole_chart_qry"].append({**row, "trde_qty": "999"})
+            return response
+
+    collector = watch.WidgetResearchWatchCollector(
+        config=_runtime_config([("111111", "test")]),
+        client=ConflictingClient(),
+        output_dir=tmp_path / "raw",
+        snapshot_dir=tmp_path / "state",
+    )
+    result = collector.collect_once(datetime(2026, 8, 13, 10, 1, 30, tzinfo=KST))
+    assert result[0]["status"] == "SOURCE_QUALITY_BLOCKED"
+    assert len(result[0]["conflicting_completed_bars"]) == 1
+    assert result[0]["entry_event"] is None and result[0]["exit_event"] is None

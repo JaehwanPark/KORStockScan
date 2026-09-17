@@ -382,8 +382,26 @@ def _validated_observation_policy(result: object) -> dict[str, Any] | None:
     }
 
 
+def _observation_effective_at(
+    research: dict[str, Any], effective_date: date, hour: int, minute: int
+) -> str:
+    boundary = datetime.combine(
+        effective_date, datetime.min.time(), tzinfo=KST
+    ).replace(hour=hour, minute=minute)
+    try:
+        registered = datetime.fromisoformat(str(research.get("generated_at_kst") or ""))
+        if registered.tzinfo is not None:
+            boundary = max(boundary, registered.astimezone(KST))
+    except ValueError:
+        pass  # Legacy evidence keeps unknown registration explicit, never refreshed.
+    return boundary.isoformat()
+
+
 def build_policy(
-    research: dict[str, Any], *, evidence_report_path: Path | None = None
+    research: dict[str, Any],
+    *,
+    evidence_report_path: Path | None = None,
+    legacy_observation_enrollment: bool = False,
 ) -> dict[str, Any]:
     if (
         research.get("schema") not in SUPPORTED_RESEARCH_SCHEMAS
@@ -406,6 +424,7 @@ def build_policy(
         or source_meta[symbol].get("request_code") != symbol
         or source_meta[symbol].get("market") != "KRX_regular"
         or source_meta[symbol].get("source_quality_status") != "PASS"
+        or source_meta[symbol].get("source_role") == "synthetic_frozen_benchmark_only"
         for symbol in universe
     ):
         raise ValueError("widget_symbol_research_krx_source_provenance_invalid")
@@ -444,18 +463,42 @@ def build_policy(
                 raise ValueError("widget_symbol_research_v3_parameters_missing")
         observation = (
             _validated_observation_policy(result)
-            if origins[symbol] == "established_widget_symbol"
+            if not legacy_observation_enrollment
+            or origins[symbol] == "established_widget_symbol"
             else None
         )
         if observation is not None:
+            observation_symbols[symbol] = {
+                "name": name,
+                **observation,
+                "seed_id": _payload_sha256(
+                    {
+                        "symbol": symbol,
+                        "source": _payload_sha256(research),
+                        "parameters": observation["signal_policy"],
+                        "effective_date": effective_date.isoformat(),
+                    }
+                ),
+                "parameters_sha256": _payload_sha256(observation["signal_policy"]),
+                "source_report_sha256": _payload_sha256(research),
+                "registered_at_kst": research.get("generated_at_kst"),
+                "effective_at_kst": _observation_effective_at(
+                    research, effective_date, 9, 3
+                ),
+                "aftermarket_effective_at_kst": _observation_effective_at(
+                    research, effective_date, 16, 3
+                ),
+                "session_authority": {
+                    "KRX_REGULAR": "prospective_observation_only",
+                    "KRX_NXT_AFTERMARKET": "prospective_reference_seed_no_transferred_economics",
+                },
+            }
+        if legacy_observation_enrollment and symbol in observation_symbols:
             observation_symbols[symbol] = {"name": name, **observation}
         selected = _validated_selected_policy(result)
         if selected is None:
             continue
-        if observation is None and origins[symbol] in {
-            "operator_enrolled_research_watch",
-            "completed_daily_recommendation_auto_discovery",
-        }:
+        if legacy_observation_enrollment and observation is None:
             observation = _validated_observation_policy(result)
             if observation is not None:
                 observation_symbols[symbol] = {"name": name, **observation}
@@ -517,6 +560,7 @@ def build_policy(
         }
     return {
         "schema": POLICY_SCHEMA,
+        **({} if legacy_observation_enrollment else {"observation_catalog_version": 2}),
         "status": (
             "verified"
             if symbols
@@ -552,6 +596,35 @@ def build_policy(
         "observation_runtime_effect": bool(observation_symbols),
         "actual_order_submitted": False,
         "broker_order_forbidden": not bool(symbols),
+    }
+
+
+OBSERVATION_CATALOG_SCHEMA = "widget_symbol_observation_catalog_v1"
+OBSERVATION_CATALOG_PREFIX = "widget_symbol_observation_catalog"
+OBSERVATION_CATALOG_AUTHORITY = "prospective_exact_observation_only"
+
+
+def build_observation_catalog(
+    research: dict[str, Any], *, evidence_report_path: Path | None = None
+) -> dict[str, Any]:
+    expanded = build_policy(research, evidence_report_path=evidence_report_path)
+    execution = build_policy(
+        research,
+        evidence_report_path=evidence_report_path,
+        legacy_observation_enrollment=True,
+    )
+    return {
+        **expanded,
+        "schema": OBSERVATION_CATALOG_SCHEMA,
+        "authority": OBSERVATION_CATALOG_AUTHORITY,
+        "status": (
+            "observation_only" if expanded["observation_symbols"] else "no_ready_policy"
+        ),
+        "symbols": {},
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "broker_order_forbidden": True,
+        "execution_catalog_sha256": _payload_sha256(execution),
     }
 
 
@@ -610,7 +683,12 @@ class WidgetSymbolRuntimePolicyLoader:
         ):
             return {}
         try:
-            reconstructed = build_policy(evidence, evidence_report_path=evidence_path)
+            reconstructed = build_policy(
+                evidence,
+                evidence_report_path=evidence_path,
+                legacy_observation_enrollment=payload.get("observation_catalog_version")
+                is None,
+            )
             universe, _origins = _research_universe(evidence)
         except (TypeError, ValueError):
             return {}
@@ -701,17 +779,25 @@ class WidgetSymbolRuntimePolicyLoader:
     ) -> dict[str, dict[str, Any]]:
         """Load exact-date source-only policies without granting order authority."""
 
-        path = self.policy_dir / f"{POLICY_PREFIX}_{observed_date.isoformat()}.json"
+        path = (
+            self.policy_dir
+            / f"{OBSERVATION_CATALOG_PREFIX}_{observed_date.isoformat()}.json"
+        )
+        is_catalog = path.exists()
+        if not is_catalog:
+            path = self.policy_dir / f"{POLICY_PREFIX}_{observed_date.isoformat()}.json"
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return {}
         if (
             not isinstance(payload, dict)
-            or payload.get("schema") != POLICY_SCHEMA
+            or payload.get("schema")
+            != (OBSERVATION_CATALOG_SCHEMA if is_catalog else POLICY_SCHEMA)
             or payload.get("status") not in {"verified", "observation_only"}
             or payload.get("effective_date") != observed_date.isoformat()
-            or payload.get("authority") != POLICY_AUTHORITY
+            or payload.get("authority")
+            != (OBSERVATION_CATALOG_AUTHORITY if is_catalog else POLICY_AUTHORITY)
             or payload.get("owner") != OWNER
             or payload.get("metric_contract") != METRIC_CONTRACT
             or payload.get("observation_runtime_effect") is not True
@@ -739,11 +825,29 @@ class WidgetSymbolRuntimePolicyLoader:
         ):
             return {}
         try:
-            reconstructed = build_policy(evidence, evidence_report_path=evidence_path)
+            reconstructed = (
+                build_observation_catalog(evidence, evidence_report_path=evidence_path)
+                if is_catalog
+                else build_policy(
+                    evidence,
+                    evidence_report_path=evidence_path,
+                    legacy_observation_enrollment=payload.get(
+                        "observation_catalog_version"
+                    )
+                    is None,
+                )
+            )
             universe, _origins = _research_universe(evidence)
         except (TypeError, ValueError):
             return {}
-        if reconstructed != payload:
+        if reconstructed != payload or (
+            is_catalog
+            and (
+                payload.get("runtime_effect") is not False
+                or payload.get("allowed_runtime_apply") is not False
+                or payload.get("symbols") != {}
+            )
+        ):
             return {}
         resolved: dict[str, dict[str, Any]] = {}
         observation_symbols = payload.get("observation_symbols")
@@ -765,6 +869,18 @@ class WidgetSymbolRuntimePolicyLoader:
                 "source_target_date": source_date.isoformat(),
                 "effective_date": observed_date.isoformat(),
                 "policy_path": str(path),
+                **{
+                    key: value.get(key)
+                    for key in (
+                        "seed_id",
+                        "parameters_sha256",
+                        "source_report_sha256",
+                        "registered_at_kst",
+                        "effective_at_kst",
+                        "aftermarket_effective_at_kst",
+                        "session_authority",
+                    )
+                },
                 "signal_policy": normalized["signal_policy"],
                 "integrated_aftermarket_observation_policy": {
                     **normalized["signal_policy"],
@@ -791,9 +907,20 @@ def write_outputs(
     apply_report_dir: Path = DEFAULT_APPLY_REPORT_DIR,
     evidence_report_path: Path | None = None,
 ) -> tuple[Path, Path, dict[str, Any]]:
-    policy = build_policy(research, evidence_report_path=evidence_report_path)
+    policy = build_policy(
+        research,
+        evidence_report_path=evidence_report_path,
+        legacy_observation_enrollment=True,
+    )
+    catalog = build_observation_catalog(
+        research, evidence_report_path=evidence_report_path
+    )
     effective_date = date.fromisoformat(policy["effective_date"])
     policy_path = policy_dir / f"{POLICY_PREFIX}_{effective_date.isoformat()}.json"
+    catalog_path = (
+        policy_dir / f"{OBSERVATION_CATALOG_PREFIX}_{effective_date.isoformat()}.json"
+    )
+    _atomic_write(catalog_path, catalog)
     _atomic_write(policy_path, policy)
     loaded = WidgetSymbolRuntimePolicyLoader(policy_dir).resolve_all(
         observed_date=effective_date
@@ -806,12 +933,12 @@ def write_outputs(
         "status": (
             "pass"
             if set(loaded) == expected
-            and set(observed) == set(policy["observation_symbols"])
+            and set(observed) == set(catalog["observation_symbols"])
             else "fail"
         ),
         "expected_symbols": sorted(expected),
         "loaded_symbols": sorted(loaded),
-        "expected_observation_symbols": sorted(policy["observation_symbols"]),
+        "expected_observation_symbols": sorted(catalog["observation_symbols"]),
         "loaded_observation_symbols": sorted(observed),
         "policy_path": str(policy_path),
     }
@@ -823,6 +950,9 @@ def write_outputs(
         "selected_symbols": sorted(expected),
         "withheld_symbols": sorted(set(_research_universe(research)[0]) - expected),
         "policy_status": policy["status"],
+        "observation_catalog_path": str(catalog_path),
+        "observation_catalog_sha256": _payload_sha256(catalog),
+        "observation_catalog_runtime_effect": False,
         "policy_verification": verification,
         "metric_contract": METRIC_CONTRACT,
         "runtime_effect": False,
@@ -849,8 +979,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--write", action="store_true")
     parser.add_argument("--check-active", action="store_true")
+    parser.add_argument("--check-observation-scope", action="store_true")
     args = parser.parse_args(argv)
-    if args.check_active:
+    if args.check_active or args.check_observation_scope:
         target = (
             date.fromisoformat(args.target_date)
             if args.target_date
@@ -868,6 +999,25 @@ def main(argv: list[str] | None = None) -> int:
                 ensure_ascii=False,
             )
         )
+        if args.check_observation_scope:
+            from src.engine.monitoring.widget_symbol_signal_policy_research import (
+                load_symbol_universe,
+            )
+
+            try:
+                universe, _origins = load_symbol_universe(observed_date=target)
+            except (OSError, ValueError):
+                return 3
+            print(
+                json.dumps(
+                    {
+                        "raw_observation_symbols": sorted(universe),
+                        "order_authority": False,
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 0 if universe else 3
         return 0 if active else 3
     source_date = (
         date.fromisoformat(args.target_date)

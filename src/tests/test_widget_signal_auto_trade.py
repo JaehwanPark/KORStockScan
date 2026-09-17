@@ -4261,7 +4261,7 @@ def test_widget_evaluation_wrapper_fails_closed_when_eod_failed(
     assert "widget_symbol_signal_policy_research" not in calls
 
 
-def test_calibrated_widget_symbol_collector_is_exact_date_policy_gated():
+def test_calibrated_widget_symbol_collector_separates_raw_scope_from_exact_date_seed():
     service = Path(
         "deploy/systemd/korstockscan-widget-symbol-runtime-collector.service"
     ).read_text(encoding="utf-8")
@@ -4269,7 +4269,7 @@ def test_calibrated_widget_symbol_collector_is_exact_date_policy_gated():
         "deploy/systemd/korstockscan-widget-symbol-runtime-collector.timer"
     ).read_text(encoding="utf-8")
 
-    assert "widget_symbol_runtime_policy --check-active" in service
+    assert "widget_symbol_runtime_policy --check-observation-scope" in service
     assert "widget_symbol_runtime_collector --interval-sec 15" in service
     assert "Restart=on-failure" in service
     assert "OnCalendar=Mon..Fri *-*-* 08:57:00 Asia/Seoul" in timer

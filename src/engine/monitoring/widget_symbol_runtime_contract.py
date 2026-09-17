@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -50,6 +51,124 @@ METRIC_CONTRACT = {
         "uncalibrated_auxiliary_entry_veto",
     ],
 }
+
+
+CALIBRATION_PROJECTION_SCHEMA = "widget_calibration_projection_v1"
+CALIBRATION_FIELDS = (
+    "execution_replay_input",
+    "current_price",
+    "observation_role",
+    "advisory_generated",
+    "schema_version",
+    "status",
+    "symbol",
+    "name",
+    "observed_at_kst",
+    "market_venue",
+    "market_cohort",
+    "market_data_route",
+    "strategy_profile",
+    "policy_id",
+    "advisory",
+    "previous_advisory_state",
+    "latest_completed_bar",
+    "entry_event",
+    "exit_event",
+    "episode",
+    "runtime_effect",
+    "actual_order_submitted",
+    "broker_order_forbidden",
+    "observation_seed",
+)
+
+
+def append_calibration_projection(
+    path: Path, payload: dict[str, Any], raw_line: str
+) -> None:
+    compact = {key: payload[key] for key in CALIBRATION_FIELDS if key in payload}
+    advisory = compact.get("advisory")
+    if isinstance(advisory, dict):
+        compact["advisory"] = {
+            key: advisory[key]
+            for key in (
+                "session",
+                "state",
+                "source_quality",
+                "execution_replay_input",
+                "confirmation_input_trace",
+                "observed_at",
+            )
+            if key in advisory
+        }
+    projection = {
+        "schema": CALIBRATION_PROJECTION_SCHEMA,
+        "raw_path": str(path.resolve()),
+        "raw_line_sha256": hashlib.sha256(raw_line.encode("utf-8")).hexdigest(),
+        "preserved_fields": list(compact),
+        "payload": compact,
+    }
+    projection["contract_sha256"] = hashlib.sha256(
+        Path(__file__).read_bytes()
+    ).hexdigest()
+    projection["payload_sha256"] = hashlib.sha256(
+        json.dumps(compact, sort_keys=True, ensure_ascii=False).encode()
+    ).hexdigest()
+    with path.with_suffix(".calibration.jsonl").open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(projection, ensure_ascii=False, sort_keys=True) + "\n")
+
+
+def iter_calibration_records(path: Path):
+    """Each compact record is byte-bound to its original; mismatches use raw."""
+    projection_path = path.with_suffix(".calibration.jsonl")
+    contract = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+    with path.open(encoding="utf-8") as raw_handle:
+        try:
+            projection_handle = projection_path.open(encoding="utf-8")
+        except OSError:
+            projection_handle = None
+        try:
+            for line_number, raw_line in enumerate(raw_handle, 1):
+                payload = None
+                if projection_handle is not None:
+                    try:
+                        compact_line = projection_handle.readline()
+                        projection = json.loads(compact_line)
+                        if (
+                            projection.get("schema") == CALIBRATION_PROJECTION_SCHEMA
+                            and projection.get("raw_path") == str(path.resolve())
+                            and projection.get("raw_line_sha256")
+                            == hashlib.sha256(raw_line.encode("utf-8")).hexdigest()
+                            and isinstance(projection.get("payload"), dict)
+                            and projection.get("contract_sha256") == contract
+                            and projection.get("payload_sha256")
+                            == hashlib.sha256(
+                                json.dumps(
+                                    projection["payload"],
+                                    sort_keys=True,
+                                    ensure_ascii=False,
+                                ).encode()
+                            ).hexdigest()
+                            and set(projection.get("preserved_fields") or [])
+                            == set(projection["payload"])
+                        ):
+                            payload = projection["payload"]
+                    except (
+                        OSError,
+                        UnicodeError,
+                        ValueError,
+                        TypeError,
+                        AttributeError,
+                    ):
+                        pass
+                if payload is None:
+                    try:
+                        payload = json.loads(raw_line)
+                    except ValueError:
+                        payload = None
+                yield line_number, payload
+        finally:
+            if projection_handle is not None:
+                projection_handle.close()
 
 
 def _aware(value: object) -> datetime | None:
