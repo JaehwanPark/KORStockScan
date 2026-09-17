@@ -120,8 +120,11 @@ def test_websocket_price_comparison_rejects_stale_0b(monkeypatch, tmp_path):
     assert comparison["reason"] == "samsung_0b_stale"
 
 
-@pytest.mark.parametrize("future_seconds", [0.000001, 0.001, 1.5, 3.0])
-def test_websocket_price_comparison_preserves_future_clock(monkeypatch, tmp_path, future_seconds):
+@pytest.mark.parametrize("future_seconds,clock_target", [
+    (0.000001, "both"), (0.001, "both"), (1.5, "both"), (3.0, "both"),
+    (0.000001, "type_only"), (0.001, "type_only"),
+])
+def test_websocket_price_comparison_preserves_future_clock(monkeypatch, tmp_path, future_seconds, clock_target):
     now = datetime(2026, 9, 17, 9, 20, tzinfo=ZoneInfo("Asia/Seoul"))
     stamp = now.timestamp() + future_seconds
     snapshot_path = tmp_path / "ws.json"
@@ -132,7 +135,7 @@ def test_websocket_price_comparison_preserves_future_clock(monkeypatch, tmp_path
         "stocks": {"005930": {
             "last_realtime_type_ts": {"0B": stamp},
             "last_realtime_type_item": {"0B": "005930_AL"},
-            "last_trade_tick": {"price": 242_500, "ts": stamp},
+            "last_trade_tick": {"price": 242_500, "ts": stamp if clock_target == "both" else now.timestamp()},
         }},
     }), encoding="utf-8")
     monkeypatch.setenv("KORSTOCKSCAN_SAMSUNG_WIDGET_WS_SNAPSHOT_PATH", str(snapshot_path))

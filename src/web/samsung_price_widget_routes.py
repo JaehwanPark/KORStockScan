@@ -161,11 +161,13 @@ def _websocket_price_comparison(*, reference_price: int, observed_at: datetime) 
     ):
         result["reason"] = "samsung_0b_price_missing"
         return result
-    if age_sec < 0 or age_sec > _WS_COMPARISON_MAX_AGE_SEC:
+    type_age_sec = observed_at.timestamp() - type_tick_ts
+    if age_sec < 0 or type_age_sec < 0 or age_sec > _WS_COMPARISON_MAX_AGE_SEC:
+        rejected_age = min(age_sec, type_age_sec)
         result.update(
             {
-                "age_ms": age_sec * 1000.0,
-                "reason": "samsung_0b_future" if age_sec < 0 else "samsung_0b_stale",
+                "age_ms": rejected_age * 1000.0,
+                "reason": "samsung_0b_future" if rejected_age < 0 else "samsung_0b_stale",
             }
         )
         return result
