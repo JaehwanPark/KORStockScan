@@ -171,3 +171,11 @@ O3→O2→O1의 기존 local 최적화 우선순위는 유지하되, C1–C4 cor
 최종 baseline/winner의 여러 window prefix를 추가로 묶고 기존 expanded report에 profile source-binding/selection/enrichment wall·CPU 및 checkpoint hit/miss를 진단 전용으로 연결했다. Selection phase에는 feature 생성·checkpoint 검증·replay가 함께 포함되며 whole-wrapper/provider latency나 전 endpoint 계측이 아니다.
 
 Small full270-grid/46date 측정의 selector CPU는 약0.028~0.064초로 before/after 차이가 거의 없다. 후보/day 영속화가 이 구간을 더 복잡하게 만들지 않도록 실제 내부 phase CPU와 전체 deadline에 대한 기여를 먼저 확인한다. Persistent day-state/partition append·검증 가능한 frozen-prefix delta·EV 충분통계 및 full populated scale은 **미완료**이며 cache hit/작은 phase 보완을 전체 완료로 바꾸지 않는다. 비용·표본·미체결/미진입·HELD·owner·자동 선정/안전 조건은 변경하지 않는다.
+
+## 10. O3 누적 EV 분포의 실제 중복 계산 보완
+
+기존 Daily의 completed 손익 분포·source 요약 consumer를 직접 대사했다. 동일 cohort가 median/p10/p90을 각각 재정렬하고 profit 값을 중복 변환하며 cumulative same-window real 요약을 다시 계산했다. 유효 finite 값을 한 번 변환하고 **전체 정확 분포 한 번 정렬**을 재사용한다. 평균/분산은 원래 행 순서·산술을 보존하고 real/sim/combined dict는 독립적이다. 동일 창의 real cohort summary만 source summary로 전달하며 영속/다른 날짜·owner의 집계를 소비하지 않는다. 미진입 연구용 전체 raw population·family reports·cost/native identity·선정/승격 정책은 변경하지 않는다.
+
+고정 synthetic 1,000/100,000행의 cohort/source summary before-after(5회 교대) CPU는0.005394→0.002580초/0.627793→0.274280초, 약52.18%/56.31% 감소다. Canonical 출력 전수 동일·peak traced allocation66,124→61,796bytes/6,095,044→5,694,636bytes. [fixture/측정](../../tmp/postclose-ev-distribution-benchmark-20260917.json)은 **한 창 completed 분포 계산**이며 전체 family/전체 scale/경제성 통과가 아니다. 보고값·null/tail/source authority·기존 full-cost/PREOPEN/주문 guard를 유지한다.
+
+이번 보완은 persistent daily sufficient-statistics 구현이 아니다. 영속화를 위해 mean/count만 저장하거나 창별 sum 재결합으로 기존 floating-point/tail 순서를 바꾸지 않는다. O2 persistent prefix state/partition·O3 frozen-prefix proof/delta/영속 충분통계·whole O0/O1·full populated P6와 자연 postclose/PID/경제성은 미완료로 남는다. 실제 phase/반복 비용에 이익이 없는 cache를 성능 백분율만 맞추려고 신설하지 않는다. 기존 자동 Daily/cumulative→EV consumer에서 소비하되 새 collector/모듈/job/floor/startup gate를 만들지 않는다.
