@@ -54106,7 +54106,12 @@ def test_blocked_scale_in_budget_normal_producer_to_consumer(monkeypatch, tmp_pa
     other = {"id": 124, "code": "000660", "status": "HOLDING", "buy_qty": 1}
     monkeypatch.setattr(state_handlers, "ACTIVE_TARGETS", [stock, other])
     monkeypatch.setattr(state_handlers, "KIWOOM_TOKEN", "fixture-no-network")
-    monkeypatch.setattr(state_handlers, "can_consider_scale_in", lambda *a, **k: {"allowed": True})
+    def source_guard(guard_stock, *args, **kwargs):
+        assert guard_stock is not stock
+        assert guard_stock["id"] == stock["id"]
+        assert kwargs["skip_add_judgment_lock"] is True
+        return {"allowed": True}
+    monkeypatch.setattr(state_handlers, "can_consider_scale_in", source_guard)
     monkeypatch.setattr(state_handlers, "_scale_in_exit_authority_block_reason", lambda *a: None)
     monkeypatch.setattr(state_handlers, "_is_any_simulated_position", lambda *a: False)
     monkeypatch.setattr(state_handlers, "TRADING_RULES", SimpleNamespace(SCALPING_PYRAMID_MIN_PROFIT_PCT=1.5))

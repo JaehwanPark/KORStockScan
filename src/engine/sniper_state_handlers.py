@@ -22704,14 +22704,17 @@ def _prepare_scale_in_budget_source(stock, code, ws_data, now_ts, *, family):
                 or stock.get("last_entry_receipt_economics_complete") is not True
                 or stock.get("last_entry_receipt_quantity_contract_complete") is not True):
             return None
-        # The live guard can cancel/reconcile pending orders. Observation must
-        # never enter that recovery path, even for an expired pending timestamp.
-        if any(stock.get(key) for key in (
+        # Freeze before checking pending state: receipt threads may mutate the
+        # live row while the shared guard evaluates. Its recovery branches must
+        # never see a newly pending live order from this source-only invocation.
+        with ENTRY_LOCK:
+            guard_stock = copy.deepcopy(stock)
+        if any(guard_stock.get(key) for key in (
             "pending_add_order", "pending_add_ord_no", "pending_add_requested_at",
             "add_order_time", "pending_add_msg", "add_odno",
         )):
             return None
-        guard = can_consider_scale_in(stock, code, ws_data, "SCALPING", "NORMAL",
+        guard = can_consider_scale_in(guard_stock, code, ws_data, "SCALPING", "NORMAL",
                                      skip_add_judgment_lock=True)
         if guard.get("allowed") is not True:
             return None
