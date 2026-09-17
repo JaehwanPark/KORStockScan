@@ -308,3 +308,102 @@ def test_mock_environment_uses_one_per_second_per_tr(tmp_path: Path) -> None:
         "ka10004",
     }
     assert {payload["max_requests"] for payload in payloads} == {1}
+
+
+def test_market_singleflight_joins_once_and_returns_independent_copies(monkeypatch):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from src.utils.kiwoom_read_request_control import MarketReadSingleFlight
+
+    runner = MarketReadSingleFlight()
+    entered, release, joining = threading.Event(), threading.Event(), threading.Event()
+    calls = []
+
+    def fetch():
+        calls.append(1)
+        entered.set()
+        assert release.wait(2)
+        return [{"source_received_at": 100, "price": 42}]
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        owner = pool.submit(runner.run, "exact-scope", fetch, wait_sec=1)
+        assert entered.wait(1)
+        event = runner._in_flight["exact-scope"]["event"]
+        real_wait = event.wait
+
+        def wait(timeout):
+            joining.set()
+            return real_wait(timeout)
+
+        monkeypatch.setattr(event, "wait", wait)
+        follower = pool.submit(runner.run, "exact-scope", fetch, wait_sec=1)
+        assert joining.wait(1)
+        release.set()
+        first, owned, _ = owner.result(1)
+        second, joined, _ = follower.result(1)
+    assert calls == [1]
+    assert owned is False and joined is True
+    first[0]["price"] = 0
+    assert second == [{"source_received_at": 100, "price": 42}]
+    assert not runner._in_flight
+    runner.run("exact-scope", lambda: calls.append(2), wait_sec=1)
+    assert calls == [1, 2]
+
+
+def test_market_singleflight_follower_timeout_does_not_duplicate_or_cancel_owner():
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from src.utils.kiwoom_read_request_control import (
+        MarketReadSingleFlight,
+        MarketReadJoinDeferred,
+    )
+
+    runner = MarketReadSingleFlight()
+    entered, release = threading.Event(), threading.Event()
+    calls = []
+
+    def fetch():
+        calls.append(1)
+        entered.set()
+        assert release.wait(2)
+        return {"received_at": 100}
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        owner = pool.submit(runner.run, "key", fetch, wait_sec=1)
+        assert entered.wait(1)
+        with pytest.raises(MarketReadJoinDeferred, match="wait_budget"):
+            runner.run("key", fetch, wait_sec=0)
+        assert not owner.done()
+        assert calls == [1]
+        release.set()
+        assert owner.result(1)[0] == {"received_at": 100}
+    assert not runner._in_flight
+
+
+def test_market_singleflight_failure_cleanup_and_recursive_call():
+    from src.utils.kiwoom_read_request_control import MarketReadSingleFlight
+
+    runner = MarketReadSingleFlight()
+    with pytest.raises(ValueError, match="source_broken"):
+        runner.run(
+            "key",
+            lambda: (_ for _ in ()).throw(ValueError("source_broken")),
+            wait_sec=0,
+        )
+    assert not runner._in_flight
+    assert runner.run("key", lambda: {"recovered": True}, wait_sec=0)[0] == {
+        "recovered": True
+    }
+    with pytest.raises(RuntimeError, match="recursive"):
+        runner.run(
+            "key", lambda: runner.run("key", lambda: None, wait_sec=0), wait_sec=0
+        )
+    assert not runner._in_flight
+
+
+@pytest.mark.parametrize("wait", [-1, float("nan"), float("inf")])
+def test_market_singleflight_rejects_unbounded_wait(wait):
+    from src.utils.kiwoom_read_request_control import MarketReadSingleFlight
+
+    with pytest.raises(ValueError, match="wait_invalid"):
+        MarketReadSingleFlight().run("key", lambda: None, wait_sec=wait)
