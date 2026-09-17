@@ -48,6 +48,38 @@ def test_postclose_command_metrics_preserve_cpu_wait_stdout_and_exit(tmp_path, e
     assert compute["exit_code"] == exit_code
     assert compute["child_user_cpu_sec"] + compute["child_system_cpu_sec"] >= 0.09
     assert compute["peak_waited_child_rss_kib"] > 0
+    assert compute["producer_module"] is None
+    assert compute["child_input_block_operations"] >= 0
+    assert compute["child_output_block_operations"] >= 0
+    assert compute["io_scope"] == "reaped_children_block_operations_not_read_write_bytes_or_rows"
+
+
+@pytest.mark.parametrize("real_module", [False, True])
+def test_postclose_metrics_identify_only_actual_module_not_payload(tmp_path, real_module):
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text()
+    start = script.index("run_postclose_cmd() {")
+    end = script.index("\n}\n", start) + 3
+    module = "src.engine.not_a_real_perf_fixture"
+    command = (
+        f"'{sys.executable}' -m {module} secret_fixture_argument"
+        if real_module else
+        f"'{sys.executable}' -c 'pass' secret_fixture_argument python -m {module}"
+    )
+    runner = tmp_path / "module-metrics.sh"
+    runner.write_text(
+        "#!/bin/bash\nset -u\n"
+        "POSTCLOSE_NICE_LEVEL=0\nPOSTCLOSE_IONICE_CLASS=-1\n"
+        "POSTCLOSE_IONICE_LEVEL=0\nPOSTCLOSE_CPU_AFFINITY=\n"
+        "TARGET_DATE=2026-09-17\n"
+        f"VENV_PY={sys.executable}\n"
+        + script[start:end] + "\nrun_postclose_cmd " + command + "\n"
+    )
+    result = subprocess.run(["bash", str(runner)], capture_output=True, text=True, timeout=10)
+    assert result.returncode == (1 if real_module else 0)
+    metrics = [json.loads(line[7:]) for line in result.stderr.splitlines() if line.startswith("[PERF] ")]
+    assert len(metrics) == 1
+    assert metrics[0]["producer_module"] == (module if real_module else None)
+    assert "secret_fixture_argument" not in result.stderr
 
 
 def test_postclose_command_metrics_on_term_are_explicitly_partial(tmp_path):
@@ -84,6 +116,8 @@ def test_postclose_command_metrics_on_term_are_explicitly_partial(tmp_path):
         assert metrics[0]["child_user_cpu_sec"] is None
         assert metrics[0]["child_system_cpu_sec"] is None
         assert metrics[0]["peak_waited_child_rss_kib"] is None
+        assert metrics[0]["child_input_block_operations"] is None
+        assert metrics[0]["child_output_block_operations"] is None
     finally:
         if process.poll() is None:
             process.send_signal(signal.SIGTERM)
