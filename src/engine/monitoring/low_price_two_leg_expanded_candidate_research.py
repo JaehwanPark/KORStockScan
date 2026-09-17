@@ -1074,7 +1074,10 @@ class _SequentialContexts(dict):
             raise KeyError(symbol)
         if self.current_symbol != symbol:
             self.current = None
-            self.current = build_day_contexts(self.sources[symbol][0])
+            self.current_symbol = None
+        source = self.sources[symbol]
+        if self.current is None:
+            self.current = build_day_contexts(source[0])
             self.current_symbol = symbol
         return self.current
 
@@ -1083,7 +1086,11 @@ class _SequentialContexts(dict):
 
 
 class _SequentialSources(dict):
-    """Native source caches own bars; the inventory owns only their loaders."""
+    """One decoded symbol at a time, frozen across a complete report pass.
+
+    Profiles share source facts, never candidate custody or replay state. A
+    correction during this pass is a source failure, not a new mixed snapshot.
+    """
 
     def __init__(self, cache_dir, start_date, end_date, expected_trading_day_count):
         super().__init__()
@@ -1093,13 +1100,55 @@ class _SequentialSources(dict):
             end_date=end_date,
             expected_trading_day_count=expected_trading_day_count,
         )
+        self.current_symbol = None
+        self.current = None
+        self.generations = {}
+        self.metrics = {"source_decodes": 0, "source_reuses": 0}
+
+    def _generation(self, symbol):
+        path = _source_cache_path(
+            self.arguments["cache_dir"],
+            end_date=self.arguments["end_date"],
+            symbol=symbol,
+        )
+        try:
+            parent = path.parent.lstat()
+            metadata = path.lstat()
+            if not stat.S_ISDIR(parent.st_mode) or not stat.S_ISREG(metadata.st_mode):
+                raise OSError("source_cache_not_regular")
+            return (
+                parent.st_dev,
+                parent.st_ino,
+                metadata.st_dev,
+                metadata.st_ino,
+                metadata.st_size,
+                metadata.st_mtime_ns,
+                metadata.st_ctime_ns,
+            )
+        except OSError as exc:
+            raise ResearchError(
+                "research_frozen_source_cache_changed:" + symbol
+            ) from exc
 
     def __getitem__(self, symbol):
         if symbol not in self:
             raise KeyError(symbol)
-        result = _load_source_cache(symbol=symbol, **self.arguments)
-        if result is None:
+        generation = self._generation(symbol)
+        if symbol in self.generations and generation != self.generations[symbol]:
             raise ResearchError("research_frozen_source_cache_changed:" + symbol)
+        if symbol == self.current_symbol:
+            self.metrics["source_reuses"] += 1
+            return self.current
+        # Release the previous working set before decoding the next symbol.
+        self.current_symbol = None
+        self.current = None
+        result = _load_source_cache(symbol=symbol, **self.arguments)
+        self.metrics["source_decodes"] += 1
+        if result is None or generation != self._generation(symbol):
+            raise ResearchError("research_frozen_source_cache_changed:" + symbol)
+        self.generations[symbol] = generation
+        self.current_symbol = symbol
+        self.current = result
         return result
 
     def get(self, symbol, default=None):
@@ -1164,8 +1213,9 @@ def build_report(
         if not bars or raw_meta.get("source_quality_status") != "PASS":
             source_quarantine[symbol] = "source_quality_not_pass"
             continue
-        contexts = build_day_contexts(bars)
-        if tuple(sorted(contexts)) != expected_dates:
+        # Calendar admission needs dates only. Build rolling features once
+        # when this symbol is actually replayed, not once here and once again.
+        if tuple(sorted({bar.timestamp.date() for bar in bars})) != expected_dates:
             source_quarantine[symbol] = "clean_baseline_trading_date_window_mismatch"
             continue
         contexts_by_symbol[symbol] = True
@@ -1388,6 +1438,7 @@ def build_report(
             target_inventory.logic_improvement_profiles
         ),
         "eligible_source_symbol_count": len(contexts_by_symbol),
+        "source_cache_read_metrics": getattr(sources, "metrics", None),
         "quarantined_source_symbol_count": len(source_quarantine),
         "source_quarantine": source_quarantine,
         "research_profile_inventory": _research_profile_inventory_public(

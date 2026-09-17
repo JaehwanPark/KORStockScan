@@ -1250,7 +1250,7 @@ def test_market_halt_window_artifact_is_not_gitignored():
     path = Path("data/source_quality/market_halt_windows/windows/2026-06-08.json")
     result = subprocess.run(
         ["git", "check-ignore", "-q", str(path)],
-        cwd=Path(__file__).resolve().parents[2],
+        cwd=audit.DATA_DIR.parent,
         check=False,
     )
 
@@ -1619,7 +1619,7 @@ def test_market_halt_session_events_artifact_is_gitignored():
     )
     result = subprocess.run(
         ["git", "check-ignore", "-q", str(path)],
-        cwd=Path(__file__).resolve().parents[2],
+        cwd=audit.DATA_DIR.parent,
         check=False,
     )
 
@@ -10343,3 +10343,184 @@ def test_raw_generation_detects_same_size_rewrite_with_restored_mtime(tmp_path):
     assert before["size_bytes"] == after["size_bytes"]
     assert before["mtime_ns"] == after["mtime_ns"]
     assert before != after
+
+
+def _projection_fixture(tmp_path, monkeypatch, rows=None):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    raw = tmp_path / "pipeline_events" / "pipeline_events_2026-09-17.jsonl"
+    raw.parent.mkdir()
+    raw.write_text(
+        "".join(
+            json.dumps(row) + "\n"
+            for row in (
+                rows or [_event("fixture_unregistered", {"source_fixture": "valid"})]
+            )
+        )
+    )
+    machine_calls = []
+
+    def machine(*args, **kwargs):
+        machine_calls.append(len(machine_calls))
+        return {"status": str(len(machine_calls)), "tuning_input_allowed": False}
+
+    monkeypatch.setattr(audit, "_machine_ai_natural_source_consumption", machine)
+    cold = audit.build_observation_source_quality_audit(
+        "2026-09-17", audit_phase="preflight"
+    )
+    path, _ = audit.report_paths("2026-09-17")
+    audit.write_json_object_generation_safe(path, cold)
+    return raw, path, cold, machine_calls
+
+
+def test_raw_contract_projection_warm_parity_and_external_census_is_fresh(
+    tmp_path, monkeypatch
+):
+    raw, path, cold, calls = _projection_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        audit,
+        "_streaming_contract_audit",
+        lambda *a, **k: pytest.fail("warm raw decode"),
+    )
+    warm = audit.build_observation_source_quality_audit(
+        "2026-09-17", audit_phase="final"
+    )
+    assert warm["source"]["contract_projection_reused"] is True
+    assert (
+        warm["source"]["contract_projection"] == cold["source"]["contract_projection"]
+    )
+    assert warm["audit_phase"] == "final"
+    assert calls == [0, 1]
+    assert warm["machine_ai_natural_source_consumption"]["status"] == "2"
+    for field in (
+        *audit.RAW_CONTRACT_RESULT_FIELDS,
+        "hard_blocking_row_exclusions",
+        "hard_blocking_contract_gaps",
+        "status",
+    ):
+        assert warm[field] == cold[field]
+    audit.write_json_object_generation_safe(path, warm)
+    again = audit.build_observation_source_quality_audit("2026-09-17")
+    assert again["source"]["contract_projection_reused"] is True
+    assert len(calls) == 3
+
+
+def test_raw_contract_projection_contract_changes_during_use_fail_closed(tmp_path, monkeypatch):
+    _projection_fixture(tmp_path, monkeypatch)
+    original = audit._raw_contract_projection_key
+    count = 0
+    def changed(*args):
+        nonlocal count
+        count += 1
+        result = original(*args)
+        return result if count == 1 else "changed_contract"
+    monkeypatch.setattr(audit, "_raw_contract_projection_key", changed)
+    result = audit.build_observation_source_quality_audit("2026-09-17")
+    assert result["source"]["contract_projection_reused"] is True
+    assert result["summary"]["blocked_reason"] == "source_quality_audit_contract_changed_during_audit"
+    assert result["summary"]["tuning_input_allowed"] is False
+    assert result["source"]["contract_projection"]["reusable"] is False
+
+
+def test_raw_contract_projection_preserves_tied_stage_first_seen_order(tmp_path, monkeypatch):
+    rows = [_event(f"fixture_stage_{index:02d}", {"source_fixture": "valid"}) for index in reversed(range(30))]
+    raw, path, cold, calls = _projection_fixture(tmp_path, monkeypatch, rows)
+    monkeypatch.setattr(audit, "_streaming_contract_audit", lambda *a, **k: pytest.fail("warm raw decode"))
+    warm = audit.build_observation_source_quality_audit("2026-09-17")
+    assert warm["source"]["contract_projection_reused"] is True
+    assert list(warm["summary"]["top_stages"]) == list(cold["summary"]["top_stages"])
+    assert list(warm["source"]["audited_stage_counts"]) == list(cold["source"]["audited_stage_counts"])
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "append",
+        "same_size_rewrite",
+        "truncate",
+        "rotate",
+        "gzip",
+        "missing",
+        "contract",
+        "tokens",
+    ],
+)
+def test_raw_contract_projection_source_or_contract_change_is_miss(
+    tmp_path, monkeypatch, change
+):
+    raw, path, cold, calls = _projection_fixture(tmp_path, monkeypatch)
+    if change == "append":
+        with raw.open("a") as handle:
+            handle.write("invalid-json\n")
+    elif change == "same_size_rewrite":
+        original_mtime = raw.stat().st_mtime_ns
+        raw.write_text(raw.read_text().replace("valid", "other"))
+        os.utime(raw, ns=(raw.stat().st_atime_ns, original_mtime))
+    elif change == "truncate":
+        raw.write_text("")
+    elif change == "rotate":
+        replacement = raw.with_suffix(".replacement")
+        replacement.write_bytes(raw.read_bytes())
+        replacement.replace(raw)
+    elif change == "gzip":
+        with gzip.open(str(raw) + ".gz", "wb") as handle:
+            handle.write(raw.read_bytes())
+        raw.unlink()
+    elif change == "missing":
+        raw.unlink()
+    elif change == "contract":
+        monkeypatch.setitem(
+            audit.STAGE_CONTRACTS,
+            "fixture_unregistered",
+            audit.StageContract(required_fields=("new_required",)),
+        )
+    else:
+        monkeypatch.setattr(audit, "SOURCE_LIKE_TOKENS", ())
+    final = audit.build_observation_source_quality_audit("2026-09-17")
+    assert final["source"]["contract_projection_reused"] is False
+    if change == "append":
+        assert final["summary"]["blocked_reason"] == "source_quality_raw_invalid_json"
+        assert final["summary"]["tuning_input_allowed"] is False
+
+
+@pytest.mark.parametrize(
+    "change", ["corrupt", "body", "symlink", "oversize", "gzip_sidecar", "unstable"]
+)
+def test_raw_contract_projection_optional_reader_failure_falls_back(
+    tmp_path, monkeypatch, change
+):
+    raw, path, cold, calls = _projection_fixture(tmp_path, monkeypatch)
+    if change == "corrupt":
+        path.write_text("[]")
+    elif change == "body":
+        cold["stage_contracts"] = {}
+        audit.write_json_object_generation_safe(path, cold)
+    elif change == "symlink":
+        saved = path.with_suffix(".saved")
+        path.replace(saved)
+        path.symlink_to(saved)
+    elif change == "oversize":
+        with path.open("wb") as handle:
+            handle.truncate(16 * 1024 * 1024 + 1)
+    elif change == "gzip_sidecar":
+        with gzip.open(str(path) + ".gz", "wb") as handle:
+            handle.write(b"{}")
+    else:
+        generation = audit._raw_generation
+        n = 0
+
+        def altered(value):
+            nonlocal n
+            n += 1
+            result = generation(value)
+            if n > 1:
+                result["ctime_ns"] += 1
+            return result
+
+        monkeypatch.setattr(audit, "_raw_generation", altered)
+    final = audit.build_observation_source_quality_audit("2026-09-17")
+    if change == "unstable":
+        assert final["status"] == "fail"
+        assert final["source"]["contract_projection"]["reusable"] is False
+    else:
+        assert final["source"]["contract_projection_reused"] is False
+        assert final["summary"]["event_count"] == 1

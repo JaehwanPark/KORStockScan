@@ -11,6 +11,97 @@ import pytest
 from src.engine import daily_threshold_cycle_report as report_mod
 
 
+@pytest.mark.parametrize("missing_fallback", [True, False])
+@pytest.mark.parametrize(
+    "bounds",
+    [
+        ("2026-09-01", "2026-09-17"),
+        ("2026-09-18", "2026-09-19"),
+        ("2026-09-19", "2026-09-18"),
+    ],
+)
+def test_completed_date_projection_preserves_order_duplicates_null_and_cost(
+    bounds, missing_fallback
+):
+    rows = [
+        {
+            "rec_date": "2026-09-17",
+            "status": "COMPLETED",
+            "profit_rate": 0,
+            "cost_status": "missing",
+        },
+        {"rec_date": "invalid", "status": "HELD", "profit_rate": None},
+        {
+            "rec_date": "2026-09-01",
+            "profit_rate": -0.02,
+            "actual_execution_venue": "NXT",
+        },
+        {
+            "rec_date": "2026-09-17",
+            "profit_rate": 0.01,
+            "actual_execution_venue": "KRX",
+        },
+        {"rec_date": None, "profit_rate": 0.03},
+    ]
+    original = json.dumps(rows, sort_keys=True)
+    reference = report_mod._filter_completed_rows_by_date(
+        rows, *bounds, allow_missing_date_fallback=missing_fallback
+    )
+    optimized = report_mod._filter_completed_rows_by_date(
+        rows,
+        *bounds,
+        allow_missing_date_fallback=missing_fallback,
+        parsed_dates=[report_mod._row_rec_date(row) for row in rows],
+    )
+    assert optimized == reference
+    assert all(any(row is source for source in rows) for row in optimized)
+    assert json.dumps(rows, sort_keys=True) == original
+
+
+def test_completed_date_projection_rejects_alignment_loss():
+    with pytest.raises(ValueError, match="date_projection_length_mismatch"):
+        report_mod._filter_completed_rows_by_date(
+            [{}], "2026-09-01", "2026-09-17", parsed_dates=[]
+        )
+
+
+def test_cumulative_completed_dates_are_parsed_once_and_full_report_matches_reference(
+    monkeypatch,
+):
+    rows = [
+        {"rec_date": "2026-09-17", "profit_rate": 0.01},
+        {"rec_date": "2026-09-16", "profit_rate": -0.02},
+        {"rec_date": None, "profit_rate": None},
+    ]
+    arguments = dict(
+        target_date="2026-09-17",
+        start_date="2026-09-15",
+        pipeline_loader=lambda _: [],
+        completed_rows_loader=lambda *args: rows,
+    )
+    parse = report_mod._row_rec_date
+    calls = []
+
+    def counted(row):
+        calls.append(row)
+        return parse(row)
+
+    monkeypatch.setattr(report_mod, "_row_rec_date", counted)
+    optimized = report_mod.build_cumulative_threshold_cycle_report(**arguments)
+    assert calls == rows
+    filter_rows = report_mod._filter_completed_rows_by_date
+
+    def reference(rows, start, end, **kwargs):
+        kwargs.pop("parsed_dates", None)
+        return filter_rows(rows, start, end, **kwargs)
+
+    monkeypatch.setattr(report_mod, "_filter_completed_rows_by_date", reference)
+    original = report_mod.build_cumulative_threshold_cycle_report(**arguments)
+    optimized["meta"].pop("generated_at")
+    original["meta"].pop("generated_at")
+    assert optimized == original
+
+
 def test_aftermarket_sor_successor_policy_requires_broker_acceptance(
     monkeypatch, tmp_path
 ):
