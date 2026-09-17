@@ -6195,12 +6195,21 @@ def _extend_unique_scalp_sim_completed_rows(
         target.append(row)
 
 
-def _completed_by_source_summary(real_rows: list[dict], sim_rows: list[dict]) -> dict:
+def _completed_by_source_summary(
+    real_rows: list[dict], sim_rows: list[dict], *,
+    real_profit_summary: dict | None = None,
+) -> dict:
     combined = list(real_rows or []) + list(sim_rows or [])
+    # Only the caller's same-window summary is reused, never a persisted mean
+    # or a different owner/cohort. Public views retain independent dicts.
+    real = (
+        dict(real_profit_summary) if real_profit_summary is not None
+        else _completed_profit_summary(real_rows or [])
+    )
     return {
-        "real": _completed_profit_summary(real_rows or []),
+        "real": real,
         "sim": _completed_profit_summary(sim_rows or []),
-        "combined": _completed_profit_summary(combined),
+        "combined": dict(real) if not sim_rows else _completed_profit_summary(combined),
         "real_family_candidate_authority": "real_only",
         "sim_calibration_authority": "sim_equal_weight",
         "combined_authority": "diagnostic_only_not_family_candidate_input",
@@ -6449,9 +6458,18 @@ def _is_initial_only_row(row: dict) -> bool:
 
 
 def _completed_profit_summary(rows: list[dict]) -> dict:
-    valid_rows = _valid_profit_rows(rows)
-    profit_values = [_safe_float(row.get("profit_rate"), None) for row in valid_rows]
-    profit_values = [value for value in profit_values if value is not None]
+    # Parse each finite value once. Retain original order for floating-point
+    # sums/variance; share one exact sorted distribution only for quantiles.
+    profit_values = [
+        value for row in rows
+        if (value := _safe_float(row.get("profit_rate"), None)) is not None
+    ]
+    ordered = sorted(profit_values)
+    quantiles = {
+        pct: ordered[max(0, min(len(ordered) - 1, math.ceil(pct / 100 * len(ordered)) - 1))]
+        if ordered else None
+        for pct in (10, 50, 90)
+    }
     wins = [value for value in profit_values if value > 0]
     losses = [value for value in profit_values if value < 0]
     return {
@@ -6462,13 +6480,13 @@ def _completed_profit_summary(rows: list[dict]) -> dict:
             round(_avg(profit_values) or 0.0, 4) if profit_values else None
         ),
         "median_profit_rate": (
-            round(_percentile(profit_values, 50, 0.0), 4) if profit_values else None
+            round(quantiles[50], 4) if profit_values else None
         ),
         "downside_p10_profit_rate": (
-            round(_percentile(profit_values, 10, 0.0), 4) if profit_values else None
+            round(quantiles[10], 4) if profit_values else None
         ),
         "upside_p90_profit_rate": (
-            round(_percentile(profit_values, 90, 0.0), 4) if profit_values else None
+            round(quantiles[90], 4) if profit_values else None
         ),
         "win_rate": round(len(wins) / len(profit_values), 4) if profit_values else None,
         "loss_rate": (
@@ -20470,6 +20488,7 @@ def build_cumulative_threshold_cycle_report(
         label: _completed_by_source_summary(
             real_completed_by_window.get(label, []),
             sim_completed_by_window.get(label, []),
+            real_profit_summary=completed_summary_by_window[label]["all_completed_valid"],
         )
         for label in completed_by_window
     }
