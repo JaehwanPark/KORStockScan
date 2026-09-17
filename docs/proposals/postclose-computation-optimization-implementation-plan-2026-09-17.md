@@ -58,6 +58,7 @@
 - [samsung_machine_entry_tuning](../../src/engine/monitoring/samsung_machine_entry_tuning.py): owner leg/lifecycle aggregate 및 `_axis_observations`, `build_policy_candidate`. 삼성의 subset-tightening 설명을 full relaxation 경제성 연구로 바꾸지 않는다.
 - [low_price_two_leg_expanded_candidate_research](../../src/engine/monitoring/low_price_two_leg_expanded_candidate_research.py): minute-bar loading/기존 `_load_source_cache`, `_source_cache_contract`, `research_input_fingerprint`, `reusable_report`와 profile replay. 기존 source/result 캐시가 있어 중복 구축하지 않는다.
   - [기존 entry spot helper](../../src/engine/monitoring/low_price_two_leg_entry_spot_research.py)의 `build_day_contexts`는 전체 lookback의 rolling extrema/연속성 계산을 재사용한다. 기존 전체 grid·후보별 state·holdout·비용·선정 의미를 보존한다. Report fingerprint에 replay/tick helper와 실제 비용 계약을 결속하고 손상/non-object JSON은 miss로 처리한다. 이 부분 검증은 full candidate/day checkpoint·append/정정 matrix 완료가 아니다.
+  - O2 관측창 재생 후속: 기존 `select_profile_spot`의 calibration 전반/후반/전체를 `_evaluate_candidate_windows`의 한 clean-prefix 재생으로 처리한다. 각 창의 종료 시점 evidence·HELD 이월·후보별 state·원래 full grid/선정은 유지한다. [부분 리뷰 §11](../audit-reports/2026-09-17-postclose-computation-optimization-scoped-implementation.md#11-o2-calibration-관측창-clean-prefix-재생-통합)을 따른다. Persistent day checkpoint·append/정정 및 전체 scale matrix는 여전히 미완료다.
 - [scalping_avg_down_recovery_calibration](../../src/engine/monitoring/scalping_avg_down_recovery_calibration.py): `_replay_source_files`, `_load_replay_cache`, `build_report`의 source normalization/replay/summary. 실제 ADD와 source-only/CF를 합치지 않는다.
 
 ### 구현 단계
