@@ -143,6 +143,27 @@ class DayContext:
     bars: tuple[Bar, ...]
     features: dict[int, tuple[SignalFeature, ...]]
     outcome_cache: dict[Any, dict[str, Any]] = field(default_factory=dict)
+    _minimum_low_source: tuple[Bar, ...] | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
+    _minimum_low: int | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
+
+    @property
+    def minimum_low_price(self) -> int | None:
+        # Bar is frozen and bars is a tuple: share only an immutable day fact,
+        # never a candidate's HELD mark/state. A corrected tuple invalidates it.
+        if not isinstance(self.bars, tuple):
+            # Library callers outside the normalized builder may supply a
+            # mutable list. Its identity cannot prove an unchanged day.
+            return min((bar.low_price for bar in self.bars), default=None)
+        if self._minimum_low_source is not self.bars:
+            self._minimum_low = min(
+                (bar.low_price for bar in self.bars), default=None
+            )
+            self._minimum_low_source = self.bars
+        return self._minimum_low
 
 
 @dataclass(frozen=True)
@@ -779,7 +800,7 @@ def _evaluate_candidate_windows(
                 blocked.append(trade_date)
             # The live machine does not retarget HELD legs from a future bar
             # touch. Only an external custody resolution can close them.
-            day_low = min((bar.low_price for bar in context.bars), default=None)
+            day_low = context.minimum_low_price
             for leg in carried["legs"]:
                 if leg["status"] != "HELD" or not context.bars:
                     continue
