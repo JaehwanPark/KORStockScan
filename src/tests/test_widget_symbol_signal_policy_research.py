@@ -960,6 +960,66 @@ def test_corrupt_day_cache_and_changed_source_recompute(tmp_path):
     assert research.ReplayContext({day: changed}, tmp_path)._day_path(day) != path
 
 
+@pytest.mark.parametrize("payload", [None, [], {"results": []}, {"results": None}])
+def test_non_object_optional_day_cache_recomputes(tmp_path, payload):
+    import hashlib
+    import zlib
+    from src.engine.monitoring import research_closed_loop as loop
+
+    rows = _bars([(10000, 10100, 9900, 10000, 100)] * 60)
+    day = rows[0].timestamp.date()
+    directory = tmp_path / "symbol"
+    context = research.ReplayContext({day: rows}, directory)
+    expected = research.evaluate_policy(
+        {day: rows}, [day], _policy(), include_episodes=True, replay_context=context
+    )
+    context.flush()
+    path = context._day_path(day)
+    if isinstance(payload, dict):
+        payload["checksum"] = hashlib.sha256(
+            json.dumps(payload["results"], sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+    raw = zlib.compress(json.dumps(payload).encode())
+    assert loop.optional_cache_write(path, raw, cache_root=tmp_path, reserve=0)
+    warm = research.ReplayContext({day: rows}, directory)
+    assert research.evaluate_policy(
+        {day: rows}, [day], _policy(), include_episodes=True, replay_context=warm
+    ) == expected
+    assert warm.cache_hits == 0
+    assert path.read_bytes() == raw
+
+
+def test_optional_day_cache_parser_recursion_uses_shared_fallback(tmp_path, monkeypatch):
+    from src.engine.monitoring import research_cache_storage as storage
+
+    rows = _bars([(10000, 10100, 9900, 10000, 100)] * 60)
+    day = rows[0].timestamp.date()
+    context = research.ReplayContext({day: rows}, tmp_path / "symbol")
+    context.write_day(day, _policy(), [])
+    context.flush()
+    path = context._day_path(day)
+    original_loads = json.loads
+
+    def parser(value, *args, **kwargs):
+        if isinstance(value, bytes):
+            raise RecursionError("fixture optional cache parser limit")
+        return original_loads(value, *args, **kwargs)
+
+    original_read = storage.read
+    calls = []
+
+    def shared_read(source, **options):
+        calls.append(source)
+        return original_read(source, **options)
+
+    monkeypatch.setattr(json, "loads", parser)
+    monkeypatch.setattr(storage, "read", shared_read)
+    warm = research.ReplayContext({day: rows}, tmp_path / "symbol")
+    assert warm.read_day(day, _policy()) is None
+    assert calls == [path]
+    assert path.is_file()
+
+
 def test_completed_snapshots_skip_remote_and_refetch_corruption_and_new_day(
     tmp_path, monkeypatch
 ):

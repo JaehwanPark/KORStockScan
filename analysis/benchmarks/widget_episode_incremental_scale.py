@@ -122,13 +122,13 @@ def run(symbols, days, output, cache, budget=5400):
     return receipt
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--symbols", type=int, default=19)
-    parser.add_argument("--days", type=int, default=120)
-    parser.add_argument("--budget", type=int, default=5400)
+    parser.add_argument("--symbols", type=int, default=3)
+    parser.add_argument("--days", type=int, default=46)
+    parser.add_argument("--budget", type=int, default=300)
     parser.add_argument("--output", type=Path, required=True)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if not 1 <= args.symbols <= 100 or not 46 <= args.days <= 121 or args.budget <= 0:
         raise ValueError("synthetic_episode_fixture_scope_invalid")
     with tempfile.TemporaryDirectory(prefix="episode-native-grid-fixture-") as tmp:
