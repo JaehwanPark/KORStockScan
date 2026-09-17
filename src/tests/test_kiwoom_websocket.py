@@ -601,8 +601,11 @@ def test_widget_dashboard_snapshot_interval_defaults_to_one_second(monkeypatch):
 
 def test_dashboard_snapshot_freezes_main_and_exact_route_views(monkeypatch):
     manager = KiwoomWSManager("test-token")
+    clock = [1000.0]
+    monkeypatch.setattr(kiwoom_websocket.time, "time", lambda: clock[0])
     main_target = manager._ensure_target_defaults("005930")
     main_target["curr"] = 70000
+    main_target["last_realtime_type_ts"] = {"0D": 1000.4}
     route_target = dict(main_target)
     route_target["curr"] = 70010
     route_target["recent_trade_ticks"] = deque(
@@ -628,6 +631,7 @@ def test_dashboard_snapshot_freezes_main_and_exact_route_views(monkeypatch):
             self.target = target
 
         def start(self):
+            clock[0] = 1000.5  # receipt arrived after worker launch was queued
             self.target()
 
     monkeypatch.setattr(kiwoom_websocket, "write_ws_snapshot", _capture)
@@ -644,6 +648,9 @@ def test_dashboard_snapshot_freezes_main_and_exact_route_views(monkeypatch):
         {"price": 70010, "volume": 2}
     ]
     assert captured["receipt"] == {}
+    assert captured["now_ts"] == 1000.5
+    assert captured["main"]["005930"]["last_realtime_type_ts"]["0D"] == 1000.4
+    assert manager._last_dashboard_snapshot_at == 1000.0  # throttle clock unchanged
     assert manager._dashboard_snapshot_write_inflight is False
 
 

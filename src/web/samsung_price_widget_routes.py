@@ -27,6 +27,7 @@ from src.engine.sniper_config import CONF
 from src.trading.order.tick_utils import get_tick_size
 from src.trading.widget_auto_trade.manual_orders import ManualWidgetOrderExecutor
 from src.utils import kiwoom_utils
+from src.trading.market.quote_consistency import build_market_data_health
 
 samsung_price_widget_bp = Blueprint("samsung_price_widget", __name__)
 
@@ -135,6 +136,9 @@ def _websocket_price_comparison(*, reference_price: int, observed_at: datetime) 
     if not isinstance(row, dict):
         result["reason"] = "samsung_0b_not_subscribed"
         return result
+    result["market_data_health"] = build_market_data_health(
+        row, now_ts=observed_at.timestamp()
+    )
     last_trade_tick = row.get("last_trade_tick")
     last_trade_tick = last_trade_tick if isinstance(last_trade_tick, dict) else {}
     price = _parse_positive_price(last_trade_tick.get("price"))

@@ -17,6 +17,11 @@ from src.engine.scalping.scanner_runtime_scheduler import ScannerGeneration
 from src.engine import sniper_state_handlers as handlers
 
 
+@pytest.fixture(autouse=True)
+def _isolate_runtime_source_files(monkeypatch, tmp_path):
+    monkeypatch.setattr(handlers, "DATA_DIR", tmp_path)
+
+
 class _FakeAI:
     def analyze_target(self, *args, **kwargs):
         return {"action": "BUY", "score": 77, "reason": "fresh continuation"}
@@ -597,7 +602,9 @@ def test_scanner_entry_ai_attempt_promotes_trusted_terminal_result():
     assert stock["entry_setup_live_policy_mode"] == "one_share_exploration"
     assert stock["entry_opportunity_recheck_exploration_probe_only"] is True
     assert stock["entry_setup_bounded_exploration_probe_only"] is True
-    assert stock["entry_setup_prompt_quantity_owner"] == "position_sizing_dynamic_formula"
+    assert (
+        stock["entry_setup_prompt_quantity_owner"] == "position_sizing_dynamic_formula"
+    )
     assert stock["entry_setup_prompt_residual_owner"] == "entry_split_order_plan"
     assert stock["entry_setup_prompt_scale_in_owner"] == "scale_in_split_order_plan"
     assert "entry_split_probe_residual_expand_forbidden" not in stock
@@ -844,14 +851,20 @@ def test_async_entry_expired_result_is_discarded_and_schedules_fresh_recheck(
         ("NXT", "", "", "KRX", "005930_NX"),
     ),
 )
+@pytest.mark.parametrize("execution_refresh", [False, True])
 def test_async_entry_bridge_prepares_off_thread_then_commits_on_current_state(
     monkeypatch,
+    tmp_path,
     venue,
     ws_suffix,
     ws_route,
     broker_route,
     expected_request_code,
+    execution_refresh,
 ):
+    # Cold hydration must never scan the growing production pipeline in a
+    # scheduler fixture. The hydration reader has its own temporary-file tests.
+    monkeypatch.setattr(handlers, "DATA_DIR", tmp_path)
     monkeypatch.setattr(handlers, "KIWOOM_TOKEN", "token")
     monkeypatch.setattr(
         handlers.kiwoom_orders,
@@ -932,11 +945,30 @@ def test_async_entry_bridge_prepares_off_thread_then_commits_on_current_state(
         "scanner_async_generation": generation,
         "scanner_async_commit_phase": False,
     }
+    evaluated = []
+
+    class CapturingAI(_FakeAI):
+        def analyze_target(self, name, frame, ticks, candles, **kwargs):
+            evaluated.append((frame, ticks, kwargs["candle_context"]))
+            return super().analyze_target(name, frame, ticks, candles, **kwargs)
+
+    ai = CapturingAI()
+    if execution_refresh:
+
+        def refresh(_code, frame, _ticks, _context):
+            return (
+                {**frame, "curr": 1003},
+                [{"price": 1003}],
+                {"schema": "execution-frame"},
+                {"entry_ai_final_ws_snapshot_refresh_applied": True},
+            )
+
+        monkeypatch.setattr(handlers, "_refresh_prepared_entry_inputs", refresh)
     dispatched = handlers._resolve_scanner_async_entry_ai(
         stock,
         "005930",
         ws_data,
-        _FakeAI(),
+        ai,
         runtime,
         trigger_reason="first_call",
         last_ai_time=0,
@@ -953,7 +985,7 @@ def test_async_entry_bridge_prepares_off_thread_then_commits_on_current_state(
         stock,
         "005930",
         ws_data,
-        _FakeAI(),
+        ai,
         runtime,
         trigger_reason="first_call",
         last_ai_time=0,
@@ -964,8 +996,21 @@ def test_async_entry_bridge_prepares_off_thread_then_commits_on_current_state(
     assert committed["status"] == "completed"
     assert committed["ai_decision"]["action"] == "BUY"
     assert [dict(item) for item in committed["prepared_context"]["recent_ticks"]] == [
-        {"price": 1000}
+        {"price": 1003 if execution_refresh else 1000}
     ]
+    assert len(evaluated) == 1
+    assert dict(committed["prepared_context"]["ws_data"]) == evaluated[0][0]
+    if execution_refresh:
+        assert (
+            committed["ai_decision"]["entry_ai_final_ws_snapshot_refresh_applied"]
+            is True
+        )
+        assert (
+            committed["prepared_context"]["candle_context"]["schema"]
+            == "execution-frame"
+        )
+        assert evaluated[0][0]["curr"] == 1003
+        assert ws_data["curr"] == 1001
     assert requested_codes == [expected_request_code]
     assert "_scanner_async_cache_key" not in stock
 

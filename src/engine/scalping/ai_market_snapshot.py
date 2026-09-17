@@ -1046,6 +1046,7 @@ def _integrated_sor_execution_view_proof(
     position: dict[str, Any],
     provenance: dict[str, dict[str, Any]],
     now_epoch: float,
+    activity_proven: bool = False,
 ) -> tuple[bool, str]:
     """Prove a bounded executable SOR view without inventing an event venue.
 
@@ -1117,14 +1118,25 @@ def _integrated_sor_execution_view_proof(
             )
         ),
         "integrated_realtime_routes": all(
-            row.get("quality") == "fresh"
+            (
+                row.get("quality") == "fresh"
+                or (
+                    activity_proven
+                    and row.get("realtime_type") == "0B"
+                    and row.get("quality") == "stale"
+                )
+            )
             and str(row.get("market_suffix") or "").strip().upper() == "_AL"
             and _market_data_route(
                 suffix=str(row.get("market_suffix") or ""),
                 route=str(row.get("market_route") or ""),
             )
             == "krx_nxt_integrated"
-            and str(row.get("effective_venue") or "").strip().upper() in {"", "KRX"}
+            and (
+                str(row.get("effective_venue") or "").strip().upper() in {"", "KRX"}
+                or activity_proven
+                and str(row.get("effective_venue") or "").strip().upper() == "UNKNOWN"
+            )
             for row in rows
         ),
     }
@@ -1281,7 +1293,8 @@ def build_ai_market_snapshot(
         == provenance["0D"].get("item")
         and all(
             row.get("market_route") == activity.get("market_route")
-            and row.get("effective_venue") == activity.get("effective_venue")
+            and str(row.get("effective_venue") or "UNKNOWN").upper()
+            == activity.get("effective_venue")
             for row in provenance.values()
         )
         and activity.get("trade_receive_age_ms")
@@ -1597,6 +1610,7 @@ def build_ai_market_snapshot(
             position=position_ctx,
             provenance=provenance,
             now_epoch=now_epoch,
+            activity_proven=activity_proven,
         )
     )
     # Compatibility fields remain explicit and false. Integrated market data

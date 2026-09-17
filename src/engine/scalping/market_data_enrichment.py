@@ -540,10 +540,12 @@ def build_market_data_enrichment(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     now_value = time.time() if now_ts is None else float(now_ts)
     base = dict(ws_data or {})
-    if "realtime_type_snapshots_by_route" in base:
-        base["market_data_health"] = build_market_data_health(
-            base, now_ts=now_value, quote_max_age_ms=int(max_ws_age_ms)
-        )
+    # Both raw WS and the existing file projection use original type clocks.
+    # Never carry a captured/precomputed health claim into a new consume time.
+    # Legacy/REST-only frames remain unproven; enrichment is not tape proof.
+    base["market_data_health"] = build_market_data_health(
+        base, now_ts=now_value, quote_max_age_ms=int(max_ws_age_ms)
+    )
     rest_orderbook = rest_orderbook if isinstance(rest_orderbook, dict) else {}
     metadata = candidate_metadata if isinstance(candidate_metadata, dict) else {}
     ws_levels = _quote_levels(base)

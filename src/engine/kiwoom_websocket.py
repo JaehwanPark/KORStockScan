@@ -2312,7 +2312,9 @@ class KiwoomWSManager:
                     micro_reversion_registration_receipt=(
                         registration_receipt_snapshot
                     ),
-                    now_ts=now_ts,
+                    # The worker may start after newer packets arrive. Use
+                    # the frozen-frame consume clock, never its launch clock.
+                    now_ts=time.time(),
                 )
                 if written_snapshot is None:
                     log_error(
