@@ -2138,6 +2138,136 @@ def test_common_refinement_no_improvement_over_incumbent_does_not_promote():
     assert result["policy_candidate"] is None
 
 
+@pytest.mark.parametrize("reverse", [False, True])
+def test_localized_natural_attempt_conflict_preserves_unaffected_population(reverse):
+    import copy
+
+    rows, receipt = _natural_refinement_fixture()
+    conflicting = copy.deepcopy(rows[0])
+    conflicting["comparison"]["entry_path_target_pct"] = 0.9
+    originals = [*rows, conflicting]
+    if reverse:
+        originals.reverse()
+    key = calibration._machine_evaluation_key(rows[0])
+    case_table = calibration.build_machine_decision_case_table(
+        originals, source_receipt=receipt
+    )
+    assert case_table["conflicting_evaluation_keys"] == [key]
+    assert case_table["conflicting_attempt_identity_count"] == 1
+    assert case_table["conflict_locations_complete"] is True
+    assert case_table["policy_learning_eligible_observation_count"] == len(rows) - 1
+    assert all(
+        row["policy_learning_excluded"] is True
+        and row["policy_learning_exclusion_reason"] == "conflicting_exact_attempt"
+        for row in case_table["rows"] if row["evaluation_key"] == key
+    )
+    normalized, contract = calibration._common_refinement_population(
+        [], originals, target_date="2026-09-15", source_receipt=receipt,
+        paired_contract={}, natural_conflicting_attempt_identity_count=1,
+        natural_conflicting_evaluation_keys=case_table["conflicting_evaluation_keys"],
+    )
+    assert len(normalized) == len(rows) - 1
+    assert contract["natural_conflict_locations_complete"] is True
+    assert contract["row_exclusion_reason_counts"]["conflicting_exact_attempt"] == 2
+    assert contract["input_row_disposition_complete"] is True
+
+
+def test_localized_conflict_excludes_matching_paired_alias_too():
+    import copy
+
+    rows, receipt = _natural_refinement_fixture()
+    alias = copy.deepcopy(rows[0])
+    conflicting = copy.deepcopy(rows[0])
+    conflicting["machine_action"] = "ENTER_NOW"
+    key = calibration._machine_evaluation_key(rows[0])
+    normalized, contract = calibration._common_refinement_population(
+        [alias], [*rows, conflicting], target_date="2026-09-15",
+        source_receipt=receipt, paired_contract={},
+        natural_conflicting_attempt_identity_count=1,
+        natural_conflicting_evaluation_keys=[key],
+    )
+    assert len(normalized) == len(rows) - 1
+    assert contract["row_exclusion_reason_counts"]["conflicting_exact_attempt"] == 3
+    assert contract["input_row_disposition_complete"] is True
+
+
+def test_localized_conflict_repeated_versions_cannot_inflate_case_denominators():
+    import copy
+
+    rows, receipt = _natural_refinement_fixture()
+    conflicting = copy.deepcopy(rows[0])
+    conflicting["machine_action"] = "ENTER_NOW"
+    table = calibration.build_machine_decision_case_table(
+        [*rows, conflicting, copy.deepcopy(conflicting), copy.deepcopy(rows[0])],
+        source_receipt=receipt,
+    )
+    assert table["conflicting_attempt_identity_count"] == 1
+    assert table["duplicate_same_action_collapsed_count"] == 2
+    assert table["case_count"] == len(rows) + 1
+    assert table["policy_learning_eligible_observation_count"] == len(rows) - 1
+
+
+@pytest.mark.parametrize("manifest", [[], ["machine:unknown"], None, [{}]])
+def test_unproven_conflict_manifest_cannot_bypass_global_natural_block(manifest):
+    import copy
+
+    rows, receipt = _natural_refinement_fixture()
+    conflicting = copy.deepcopy(rows[0])
+    conflicting["comparison"]["entry_path_target_pct"] = 0.9
+    normalized, contract = calibration._common_refinement_population(
+        [], [*rows, conflicting], target_date="2026-09-15",
+        source_receipt=receipt, paired_contract={},
+        natural_conflicting_attempt_identity_count=1,
+        natural_conflicting_evaluation_keys=manifest,
+    )
+    assert normalized == []
+    assert contract["natural_conflict_locations_complete"] is False
+    assert contract["input_row_disposition_complete"] is True
+
+
+def _compact_conflict_case_table(valid_count=20):
+    import copy
+    from src.engine.scalping.mechanistic_entry_runtime_policy import AI_VERSION
+
+    template = _compact_router_case_table(verdict="VETO")["rows"][0]
+    rows = []
+    for index in range(valid_count + 1):
+        row = copy.deepcopy(template)
+        row.update(
+            decision_trace_id=f"trace-{index}", evaluation_attempt_id=f"attempt-{index}",
+            scanner_promotion_id=f"promotion-{index}",
+        )
+        rows.append(row)
+    conflicting = copy.deepcopy(rows[0])
+    conflicting["entry_quality_path"]["gross_net_target_pct"] = 999.0
+    receipt = {
+        "target_date": "2026-09-15", "tuning_input_allowed": True,
+        "source_manifest_sha256": "d" * 64,
+        "machine_terminal_tuning_gate": {
+            "decision_counterfactual_tuning_input_allowed": True,
+        },
+        "compact_auxiliary_policy_measurement": {
+            "prompt_version": AI_VERSION, "measurement_allowed": True,
+        },
+    }
+    return calibration.build_machine_decision_case_table(
+        [*rows, conflicting], source_receipt=receipt
+    )
+
+
+@pytest.mark.parametrize("valid_count", [19, 20])
+def test_compact_conflicting_veto_attempt_does_not_freeze_unaffected_screens(valid_count):
+    report = _compact_conflict_case_table(valid_count)
+    compact = report["compact_auxiliary_screen_outcomes"]
+    economic = compact["economic_contract"]
+    assert report["conflicting_attempt_identity_count"] == 1
+    assert economic["economic_eligible_count"] == valid_count
+    assert economic["missed_profit_veto_net_sum_pct"] == pytest.approx(valid_count * 0.07)
+    assert economic["exclusion_counts"]["conflicting_exact_attempt"] == 2
+    assert economic["denominator_preserved"] is True
+    assert compact["automatic_successor_selection"]["eligible"] is (valid_count == 20)
+
+
 @pytest.mark.parametrize("net_ev", [0.07, 0.0, -0.01])
 @pytest.mark.parametrize("next_generation", [False, True])
 def test_full_population_small_positive_net_is_selectable_but_zero_or_loss_is_not(net_ev, next_generation):

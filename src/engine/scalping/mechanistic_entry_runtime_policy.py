@@ -430,6 +430,25 @@ def _selected_compact_prompt_version(source: dict, previous: dict | None) -> str
     economic = outcomes.get("economic_contract") or {}
     router_contract = economic.get("schema") == "compact_auxiliary_router_economic_selection_v3"
     source_receipt = case_table.get("machine_ai_natural_source_receipt") or {}
+    conflict_count = case_table.get("conflicting_attempt_identity_count", 0)
+    conflict_keys = case_table.get("conflicting_evaluation_keys")
+    # A localized exclusion can preserve other screens; an unresolved or
+    # malformed exclusion must never be turned into a positive publisher gate.
+    if type(conflict_count) is not int or conflict_count < 0:
+        return previous_version
+    if conflict_keys is not None:
+        if (
+            not isinstance(conflict_keys, list)
+            or any(not isinstance(key, str) or not key for key in conflict_keys)
+            or len(set(conflict_keys)) != conflict_count
+            or len(conflict_keys) != conflict_count
+            or case_table.get("conflict_locations_complete") is not True
+            or any(key in (case_table.get("policy_learning_exact_enter_keys") or [])
+                   for key in conflict_keys)
+        ):
+            return previous_version
+    elif conflict_count:
+        return previous_version
     if not compact_outcome_counts_valid(economic):
         return previous_version
     # Publication precedes the final strict verifier. Validate the evidence

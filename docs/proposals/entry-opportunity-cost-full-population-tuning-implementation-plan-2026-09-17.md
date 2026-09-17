@@ -622,6 +622,7 @@ scanner/recheck/ADD-NOADD/exit family에서도 raw/미노출 CF가 existing cand
 - 의존: U6 + 해당 scope의 검증된 원천. U3의 새 health 연결 또는 동등성이 확인된 기존 frozen 원천을 사용한다.
 - 대상: ai_action_outcome_calibration의 existing refinement/hierarchy 함수, entry_setup_evidence.
 - 작업: natural rows+paired rows 정규화·중복제거; shared current incumbent 재판정; BLOCK/RECHECK의 executable recovered/loss 비교; stage별 incumbent policy parent 고정.
+- 상충 원천 보완: 같은 exact6 attempt의 decision/outcome 본문 상충은 첫 행부터 모두 학습 제외하고 paired 별칭도 우회하지 못하게 한다. 위치·count가 독립 대사된 상충만 row 단위로 격리하며 정상 scope의 미진입 연구는 유지한다. 외부 상충 count에 위치 근거가 없으면 natural lane은 fail closed한다. [부분 구현 리뷰 §16](../audit-reports/2026-09-17-common-health-opportunity-cost-scoped-implementation.md#16-기계ai-상충-attempt의-행-격리와-자동-선정-전달-보완)를 따른다.
 - acceptance: submitted0이면서 raw CF valid인 cohort도 후보 연구 가능. 유리한 진입일만 남긴 후보/unsafe guard relaxation/ambiguous future touch는 승격 불가.
 - 테스트: 기존 test_ai_action_outcome_calibration 및 shared machine policy tests; 동일6필드·동일입력 action/metric parity.
 

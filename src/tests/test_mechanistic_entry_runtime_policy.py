@@ -541,6 +541,39 @@ def test_router_caution_successor_publishes_flag_free_with_exact_contract(tmp_pa
     assert "provider" not in successor["ai_policy"]
 
 
+@pytest.mark.parametrize("corruption", [None, "unlocated", "duplicate", "missing", "learned", "count_bool"])
+def test_localized_conflict_retains_flag_free_automatic_compact_publication(tmp_path, corruption):
+    from src.tests.test_ai_action_outcome_calibration import _compact_conflict_case_table
+
+    previous = initial(tmp_path)
+    path = source(tmp_path, "2026-09-15")
+    report = json.loads(path.read_text())
+    table = _compact_conflict_case_table()
+    if corruption == "unlocated":
+        table["conflict_locations_complete"] = False
+    elif corruption == "duplicate":
+        table["conflicting_evaluation_keys"] *= 2
+    elif corruption == "missing":
+        table.pop("conflicting_evaluation_keys")
+    elif corruption == "learned":
+        table["policy_learning_exact_enter_keys"].extend(table["conflicting_evaluation_keys"])
+    elif corruption == "count_bool":
+        table["conflicting_attempt_identity_count"] = True
+    report["hierarchical_entry_quality"] = {"machine_decision_case_table": table}
+    report.pop("artifact_content_sha256")
+    calibration._atomic_write_json(path, calibration._with_artifact_content_sha256(report))
+    successor = policy.publish(
+        path, data_root=tmp_path, now=datetime(2026, 9, 15, 21, tzinfo=policy.KST)
+    )
+    assert successor["machine_policy"] == previous["machine_policy"]
+    assert successor["ai_policy"]["prompt_version"] == (
+        policy.ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION
+        if corruption is None else policy.AI_VERSION
+    )
+    assert "model" not in successor["ai_policy"]
+    assert "provider" not in successor["ai_policy"]
+
+
 def test_all_continuous_adoption_carry_and_exact_scope_projection(tmp_path):
     from src.engine.scalping.entry_setup_scalping_rollout import AUTO_PROMOTION_SCOPES
 
