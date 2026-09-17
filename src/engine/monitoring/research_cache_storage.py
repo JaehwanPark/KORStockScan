@@ -465,7 +465,7 @@ def read(path, *, root, max_bytes=32 * 1024**2):
         if not decoder.eof or decoder.unused_data:
             return None
         return json.loads(raw)
-    except (OSError, ValueError, zlib.error):
+    except (OSError, ValueError, RecursionError, zlib.error):
         return None
 
 
