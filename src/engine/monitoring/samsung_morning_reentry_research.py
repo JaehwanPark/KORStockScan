@@ -614,12 +614,19 @@ def select_candidate(contexts: dict[date, DayContext]) -> dict[str, Any]:
             "calibration_ready_candidate_count": 0,
             "calibration_gate_counts": gate_counts,
             "family_results": {},
+            "family_selection_contract": "calibration_fixed_family_single_holdout_v1",
+            "calibration_selected_family": None,
+            "holdout_evaluation_count": 0,
+            "holdout_reuse_warning": None,
             "candidate": None,
             "decision": "no_robust_calibration_candidate",
             "recommended_action": "do_not_change_live_machine",
         }
     family_results: dict[str, dict[str, Any]] = {}
     selected: dict[str, Any] | None = None
+    # Preserve the declared family priority, fixing the family and its winner
+    # from calibration before looking at any holdout outcome.
+    fixed_family = next(family for family in family_order if ranked_by_family[family])
     for family in family_order:
         ranked = ranked_by_family[family]
         if not ranked:
@@ -629,6 +636,21 @@ def select_candidate(contexts: dict[date, DayContext]) -> dict[str, Any]:
             }
             continue
         score, _, _, winner, evidence = ranked[0]
+        if family != fixed_family:
+            family_results[family] = {
+                "calibration_ready_candidate_count": len(ranked),
+                "candidate": {
+                    "parameters": winner.public(),
+                    "robust_calibration_score": round(score, 6),
+                    "calibration_first_half": evidence["first_half"],
+                    "calibration_second_half": evidence["second_half"],
+                    "calibration": evidence["full"],
+                    "holdout": None,
+                    "full": None,
+                },
+                "decision": "calibration_family_not_selected_holdout_untouched",
+            }
+            continue
         holdout_result = evaluate_candidate(winner, contexts, holdout)
         full_result = evaluate_candidate(winner, contexts, dates, include_episodes=True)
         holdout_ready = bool(
@@ -656,7 +678,7 @@ def select_candidate(contexts: dict[date, DayContext]) -> dict[str, Any]:
             ),
         }
         family_results[family] = result
-        if selected is None and holdout_ready:
+        if holdout_ready:
             selected = result["candidate"]
     return {
         "date_split": split,
@@ -667,9 +689,10 @@ def select_candidate(contexts: dict[date, DayContext]) -> dict[str, Any]:
         "calibration_gate_counts": gate_counts,
         "family_results": family_results,
         "family_iteration_count": len(family_order),
-        "holdout_reuse_warning": (
-            "holdout_is_not_single-family-untouched_after_sequential_family_iteration"
-        ),
+        "family_selection_contract": "calibration_fixed_family_single_holdout_v1",
+        "calibration_selected_family": fixed_family,
+        "holdout_evaluation_count": 1,
+        "holdout_reuse_warning": None,
         "candidate": selected,
         "decision": (
             "holdout_pass_source_only_reentry_candidate"
@@ -738,7 +761,11 @@ def render_markdown(report: dict[str, Any]) -> str:
         "",
     ]
     if candidate is None:
-        lines.append("No calibration-ready re-entry candidate was found.")
+        lines.append(
+            "The calibration-selected candidate failed holdout; retain the live machine."
+            if selection["decision"] == "holdout_failed_do_not_change_live_machine"
+            else "No calibration-ready re-entry candidate was found."
+        )
     else:
         lines.extend(
             [
@@ -746,7 +773,7 @@ def render_markdown(report: dict[str, Any]) -> str:
                 f"- calibration: `{candidate['calibration']}`",
                 f"- holdout: `{candidate['holdout']}`",
                 "",
-                "Each family used calibration-only selection before holdout evaluation; the same holdout was reused across the disclosed family iteration. Minute-bar touches are not real fill evidence.",
+                "The family and candidate were fixed using calibration before a single holdout validation. Minute-bar touches are not real fill evidence.",
             ]
         )
     lines.append("")

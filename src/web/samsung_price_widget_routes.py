@@ -143,6 +143,10 @@ def _websocket_price_comparison(*, reference_price: int, observed_at: datetime) 
     last_trade_tick = last_trade_tick if isinstance(last_trade_tick, dict) else {}
     price = _parse_positive_price(last_trade_tick.get("price"))
     try:
+        if isinstance(last_trade_tick.get("ts"), bool) or isinstance(
+            (row.get("last_realtime_type_ts") or {}).get("0B"), bool
+        ):
+            raise ValueError("invalid_trade_clock")
         tick_ts = float(last_trade_tick.get("ts"))
         type_tick_ts = float((row.get("last_realtime_type_ts") or {}).get("0B"))
     except (TypeError, ValueError, AttributeError):
@@ -157,11 +161,11 @@ def _websocket_price_comparison(*, reference_price: int, observed_at: datetime) 
     ):
         result["reason"] = "samsung_0b_price_missing"
         return result
-    if age_sec < -2.0 or age_sec > _WS_COMPARISON_MAX_AGE_SEC:
+    if age_sec < 0 or age_sec > _WS_COMPARISON_MAX_AGE_SEC:
         result.update(
             {
-                "age_ms": round(max(0.0, age_sec) * 1000.0, 1),
-                "reason": "samsung_0b_stale",
+                "age_ms": age_sec * 1000.0,
+                "reason": "samsung_0b_future" if age_sec < 0 else "samsung_0b_stale",
             }
         )
         return result
@@ -186,7 +190,7 @@ def _websocket_price_comparison(*, reference_price: int, observed_at: datetime) 
             "current_price": price,
             "price_delta": price - int(reference_price),
             "observed_at_kst": tick_time.isoformat(),
-            "age_ms": round(max(0.0, age_sec) * 1000.0, 1),
+            "age_ms": round(age_sec * 1000.0, 1),
             "ws_item": ws_item,
             "market_route": route,
             "market_data_route": route,

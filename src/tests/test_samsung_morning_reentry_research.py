@@ -236,8 +236,12 @@ def test_metric_contract_and_report_authority_are_source_only(monkeypatch):
     )
 
 
-def test_family_iteration_selects_first_calibration_winner_that_passes_holdout(
-    monkeypatch,
+@pytest.mark.parametrize(
+    "first_calibration_ready,holdout_pass",
+    [(True, False), (True, True), (False, True)],
+)
+def test_family_is_fixed_before_single_holdout_validation(
+    monkeypatch, first_calibration_ready, holdout_pass,
 ):
     dates = [date(2026, 6, 5) + timedelta(days=index) for index in range(44)]
     contexts = {trade_date: object() for trade_date in dates}
@@ -262,13 +266,27 @@ def test_family_iteration_selects_first_calibration_winner_that_passes_holdout(
     )
     monkeypatch.setattr(research, "candidate_grid", lambda: candidates)
 
+    holdout_families = []
+    full_families = []
+
     def fake_evaluate(candidate, unused_contexts, selected_dates, **kwargs):
         selected_dates = list(selected_dates)
         is_holdout = selected_dates == dates[-16:]
         is_full = len(selected_dates) == 44
+        if is_holdout:
+            holdout_families.append(candidate.family)
+        if is_full:
+            full_families.append(candidate.family)
+        fixed_family = (
+            "direct_low_proximity"
+            if first_calibration_ready else "low_hold_reclaim_close_split"
+        )
         held = int(
-            (is_holdout or is_full)
-            and candidate.family != "low_hold_reclaim_passive_split"
+            (not first_calibration_ready and candidate.family == "direct_low_proximity")
+            or (
+                (is_holdout or is_full)
+                and candidate.family == fixed_family and not holdout_pass
+            )
         )
         result = {
             "signal_episodes": max(3, len(selected_dates) // 2),
@@ -286,12 +304,41 @@ def test_family_iteration_selects_first_calibration_winner_that_passes_holdout(
 
     selection = research.select_candidate(contexts)
 
-    assert selection["decision"] == "holdout_pass_source_only_reentry_candidate"
-    assert (
-        selection["candidate"]["parameters"]["family"]
-        == "low_hold_reclaim_passive_split"
+    fixed_family = (
+        "direct_low_proximity" if first_calibration_ready
+        else "low_hold_reclaim_close_split"
     )
-    assert (
-        selection["family_results"]["direct_low_proximity"]["decision"]
-        == "holdout_failed_do_not_change_live_machine"
+    assert holdout_families == full_families == [fixed_family]
+    assert selection["calibration_selected_family"] == fixed_family
+    assert selection["holdout_evaluation_count"] == 1
+    assert selection["holdout_reuse_warning"] is None
+    if holdout_pass:
+        assert selection["decision"] == "holdout_pass_source_only_reentry_candidate"
+        assert selection["candidate"]["parameters"]["family"] == fixed_family
+    else:
+        # Both other families would pass, but must not reuse this holdout.
+        assert selection["decision"] == "holdout_failed_do_not_change_live_machine"
+        assert selection["candidate"] is None
+    for family in ("low_hold_reclaim_close_split", "low_hold_reclaim_passive_split"):
+        if family != fixed_family:
+            result = selection["family_results"][family]
+            assert result["candidate"]["holdout"] is None
+            assert result["decision"] == "calibration_family_not_selected_holdout_untouched"
+
+
+def test_no_calibration_candidate_leaves_holdout_untouched(monkeypatch):
+    contexts = {
+        date(2026, 6, 5) + timedelta(days=index): object() for index in range(44)
+    }
+    monkeypatch.setattr(research, "candidate_grid", lambda: ())
+    monkeypatch.setattr(
+        research, "evaluate_candidate",
+        lambda *args, **kwargs: pytest.fail("holdout must remain untouched"),
     )
+
+    selection = research.select_candidate(contexts)
+
+    assert selection["candidate"] is None
+    assert selection["holdout_evaluation_count"] == 0
+    assert selection["calibration_selected_family"] is None
+    assert selection["decision"] == "no_robust_calibration_candidate"

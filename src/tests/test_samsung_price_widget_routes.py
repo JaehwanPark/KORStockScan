@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from flask import Flask
+import pytest
 
 from src.web import samsung_price_widget_routes as routes
 
@@ -117,6 +118,32 @@ def test_websocket_price_comparison_rejects_stale_0b(monkeypatch, tmp_path):
 
     assert comparison["status"] == "UNAVAILABLE"
     assert comparison["reason"] == "samsung_0b_stale"
+
+
+@pytest.mark.parametrize("future_seconds", [0.000001, 0.001, 1.5, 3.0])
+def test_websocket_price_comparison_preserves_future_clock(monkeypatch, tmp_path, future_seconds):
+    now = datetime(2026, 9, 17, 9, 20, tzinfo=ZoneInfo("Asia/Seoul"))
+    stamp = now.timestamp() + future_seconds
+    snapshot_path = tmp_path / "ws.json"
+    snapshot_path.write_text(__import__("json").dumps({
+        "schema_version": "kiwoom_ws_dashboard_snapshot_v1",
+        "decision_authority": "source_quality_only",
+        "runtime_effect": False,
+        "stocks": {"005930": {
+            "last_realtime_type_ts": {"0B": stamp},
+            "last_realtime_type_item": {"0B": "005930_AL"},
+            "last_trade_tick": {"price": 242_500, "ts": stamp},
+        }},
+    }), encoding="utf-8")
+    monkeypatch.setenv("KORSTOCKSCAN_SAMSUNG_WIDGET_WS_SNAPSHOT_PATH", str(snapshot_path))
+
+    comparison = routes._websocket_price_comparison(reference_price=242_000, observed_at=now)
+
+    assert comparison["status"] == "UNAVAILABLE"
+    assert comparison["reason"] == "samsung_0b_future"
+    assert comparison["age_ms"] < 0
+    assert comparison["current_price"] is None
+    assert comparison["runtime_effect"] is False
 
 
 def test_websocket_price_comparison_rejects_unknown_samsung_item(monkeypatch, tmp_path):
