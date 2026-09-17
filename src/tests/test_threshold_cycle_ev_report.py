@@ -1977,7 +1977,8 @@ def test_modeled_price_summary_preserves_zero_realized_sample():
     from src.tests.test_strategy_owner_replay import entry_seed, entry_replay
     from src.engine.scalping.strategy_owner_replay import select_entry_price_replay
     rows = [entry_replay(entry_seed(day, i)) for day in ['2026-09-14', '2026-09-15'] for i in range(10)]
-    proof = select_entry_price_replay(rows)[0]
+    proof = select_entry_price_replay(rows, eligible_count=20,
+        source_counts={'2026-09-14': 10, '2026-09-15': 10})[0]
     summary = mod._top_level_summary({'calibration_outcome': {'decisions': [{
         'family': 'dynamic_entry_price_resolver', 'source_metrics': {
             'primary_sample_book': 'executable_opportunity_replay',

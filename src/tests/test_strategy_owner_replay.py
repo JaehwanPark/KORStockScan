@@ -747,7 +747,8 @@ def test_entry_replay_rejects_unsupported_fill_exit_or_native_window(defect):
 
 def test_price_union_small_positive_pair_recomputed_by_final_consumer():
     rows = [entry_replay(entry_seed(day, i)) for day in ['2026-09-14', '2026-09-15'] for i in range(10)]
-    selected = mod.select_entry_price_replay(rows)
+    selected = mod.select_entry_price_replay(rows, eligible_count=20,
+        source_counts={'2026-09-14': 10, '2026-09-15': 10})
     assert len(selected) == 1
     proof = selected[0]
     assert proof['selected_bps'] == 10
@@ -873,7 +874,8 @@ def test_price_replay_allocation_keeps_overlap_rows_without_summing_capital():
         row['seed']['seed_sha256'] = digest({k: v for k, v in row['seed'].items() if k != 'seed_sha256'})
         row['seed_sha256'] = row['seed']['seed_sha256']
         row['replay_sha256'] = digest({k: v for k, v in row.items() if k != 'replay_sha256'})
-    proof = mod.select_entry_price_replay(rows)[0]
+    proof = mod.select_entry_price_replay(rows, eligible_count=20,
+        source_counts={'2026-09-14': 10, '2026-09-15': 10})[0]
     assert proof['metrics']['paired_sample_count'] == 20
     one = rows[0]['price_arms']['10']['net_pnl_krw']
     assert proof['metrics']['modeled_net_profit_krw'] == pytest.approx(2 * one)
@@ -888,6 +890,37 @@ def test_latest_valid_source_without_complete_outcomes_cannot_be_skipped():
     assert mod.entry_price_selection_evidence_valid(proof)
     proof['source_counts']['2026-09-17'] = 1
     assert not mod.entry_price_selection_evidence_valid(proof)
+
+
+@pytest.mark.parametrize('census', [None, {'2026-09-14': 0, '2026-09-15': 20},
+    {'2026-09-14': 9, '2026-09-15': 11}, {'2026-09-15': 20}])
+def test_price_union_requires_original_per_date_eligible_population(census):
+    rows = [entry_replay(entry_seed(day, i)) for day in
+        ['2026-09-14', '2026-09-15'] for i in range(10)]
+    assert mod.select_entry_price_replay(rows, eligible_count=20, source_counts=census) == []
+    proof = mod.select_entry_price_replay(rows, eligible_count=20,
+        source_counts={'2026-09-14': 10, '2026-09-15': 10})[0]
+    # Even a recomputed digest cannot make a shifted/absent census authoritative.
+    from src.engine.monitoring.research_closed_loop import digest
+    proof['source_counts'] = census
+    proof['evidence_sha256'] = digest({k: v for k, v in proof.items() if k != 'evidence_sha256'})
+    assert not mod.entry_price_selection_evidence_valid(proof)
+
+
+@pytest.mark.parametrize('profile,other_profile', [('favorable_micro', 'favorable_wide_micro'),
+    ('favorable_wide_micro', 'favorable_micro')])
+def test_price_union_shared_env_profiles_consume_only_the_selected_profile(monkeypatch, profile, other_profile):
+    from src.engine.scalping import entry_execution_sizing_plan as sizing
+    rows = [entry_replay(entry_seed(day, i, profile=profile)) for day in
+        ['2026-09-14', '2026-09-15'] for i in range(10)]
+    proof = mod.select_entry_price_replay(rows, eligible_count=20,
+        source_counts={'2026-09-14': 10, '2026-09-15': 10})[0]
+    monkeypatch.setattr(sizing, 'runtime_mechanistic_entry_price_policy',
+        lambda: ({'price_selection_evidence': proof}, 'loaded'))
+    scope = dict(venue='KRX', session='KRX_REGULAR', policy_bundle_sha256='a' * 64)
+    assert sizing.scoped_entry_price_bps(profile, 10, **scope) == 10
+    # Both profiles share the env key, but the replay left the other unchanged.
+    assert sizing.scoped_entry_price_bps(other_profile, 10, **scope) == 11
 
 
 def test_native_leg_control_preserves_original_policy_and_weights():

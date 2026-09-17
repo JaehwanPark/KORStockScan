@@ -1443,18 +1443,19 @@ def select_entry_price_replay(rows, *, eligible_count=None, source_counts=None):
     Entire common opportunity population includes supported zero-fill arms.
     Output is re-evaluated by publisher/PREOPEN/runtime from signed paired rows.
     """
-    from collections import defaultdict
+    from collections import Counter, defaultdict
     from src.engine.monitoring.research_closed_loop import digest
     groups, seen, conflicts = defaultdict(list), {}, set()
-    if source_counts is not None:
-        try:
-            if (not isinstance(source_counts, dict) or any(
-                    date.fromisoformat(d).isoformat() != d or d < '2026-06-05'
-                    or type(n) is not int or n < 0 for d, n in source_counts.items())
-                or sum(source_counts.values()) != eligible_count):
-                return []
-        except (TypeError, ValueError):
+    # A completed-row list cannot prove the original population or its latest
+    # eligible date. Formal selection always needs the producer's full census.
+    try:
+        if (not isinstance(source_counts, dict) or type(eligible_count) is not int
+            or any(date.fromisoformat(d).isoformat() != d or d < '2026-06-05'
+                   or type(n) is not int or n < 0 for d, n in source_counts.items())
+            or sum(source_counts.values()) != eligible_count):
             return []
+    except (TypeError, ValueError):
+        return []
     for row in rows:
         try:
             if row.get('status') != 'completed_source_only':
@@ -1475,6 +1476,9 @@ def select_entry_price_replay(rows, *, eligible_count=None, source_counts=None):
         except (KeyError, TypeError, ValueError, OverflowError):
             continue
     union = [row for identity, row in seen.items() if identity not in conflicts]
+    complete_by_date = Counter(r['seed']['source_date'] for r in union)
+    if any(n > source_counts.get(day, 0) for day, n in complete_by_date.items()):
+        return []
     def group_key(seed):
         return tuple(seed.get(k) for k in ('profile', 'target_value_key', 'incumbent_bps',
             'effective_venue', 'session_bucket', 'policy_bundle_sha256', 'entry_price_policy_sha256'))

@@ -10,7 +10,7 @@ import os
 import re
 import tempfile
 import threading
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from statistics import mean
@@ -3732,6 +3732,11 @@ def quantity_leg_promotion_evidence_valid(evaluation: object) -> bool:
                     for d, n in census.items())
                 or (any(census.values()) and (not hold_dates or hold_dates[-1] < max(d for d, n in census.items() if n)))):
                 return False
+            census_applies = any(census.values()) or any(d in census for d in cal_dates + hold_dates)
+            if census_applies and (sum(census.values()) != denominator
+                or any(p["complete_exact_attempt_count"] > sum(census.get(d, 0)
+                           for d in p["source_dates"]) for p in (calibration, holdout))):
+                return False
         if (
             not cal_dates or len(hold_dates) != 1
             or cal_dates != sorted(set(cal_dates))
@@ -4021,8 +4026,8 @@ def build_quantity_leg_four_arm_evaluation(
                 if (date.fromisoformat(census_date).isoformat() != census_date
                     or census_date < "2026-06-05" or type(census_count) is not int or census_count < 0):
                     raise ValueError("source_census_invalid")
-                if census_count:
-                    declared_eligible_by_source[census_date].add(census_count)
+                # Zero is a producer declaration, not an absent census value.
+                declared_eligible_by_source[census_date].add(census_count)
             except (TypeError, ValueError):
                 excluded["source_census_invalid"] += 1
                 declared_eligible_by_source["invalid"].update({0, 1})
@@ -4107,6 +4112,20 @@ def build_quantity_leg_four_arm_evaluation(
         excluded["eligible_population_contract_conflicting_source_date"] += len(
             conflicting_eligible_sources
         )
+    if source_counts is not None and any(source_counts.values()) and any(
+        source_counts.get(item["source_date"]) is None
+        or source_counts.get(item["source_date"]) not in
+            declared_eligible_by_source[item["source_date"]]
+        for item in complete
+    ):
+        excluded["eligible_population_source_date_missing"] += 1
+        eligible_attempt_count = 0
+    complete_by_date = Counter(item["source_date"] for item in complete)
+    if any(len(declared_eligible_by_source[d]) != 1
+           or n > next(iter(declared_eligible_by_source[d]))
+           for d, n in complete_by_date.items()):
+        excluded["eligible_population_source_date_underflow"] += 1
+        eligible_attempt_count = 0
     if eligible_attempt_count and eligible_attempt_count < len(seen):
         excluded["eligible_population_count_underflow"] += 1
         eligible_attempt_count = 0

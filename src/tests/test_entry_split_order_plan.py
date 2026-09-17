@@ -4962,6 +4962,42 @@ def test_four_arm_latest_source_with_no_completed_receipt_retains_denominator():
     assert not split_plan.quantity_leg_promotion_evidence_valid(result)
 
 
+@pytest.mark.parametrize('census', [{'2026-09-14': 0, '2026-09-15': 30},
+    {'2026-09-14': 10, '2026-09-15': 20}, {'2026-09-15': 30}])
+def test_four_arm_census_cannot_shift_or_erase_original_source_dates(census):
+    events = _quantity_leg_four_arm_events()
+    result = split_plan.build_quantity_leg_four_arm_evaluation(events, source_counts=census)
+    assert not result['promotion_gate']['passed']
+    assert not split_plan.quantity_leg_promotion_evidence_valid(result)
+    valid = split_plan.build_quantity_leg_four_arm_evaluation(events,
+        source_counts={'2026-09-14': 20, '2026-09-15': 10})
+    assert split_plan.quantity_leg_promotion_evidence_valid(valid)
+    valid['native_source_counts'] = census
+    assert not split_plan.quantity_leg_promotion_evidence_valid(valid)
+
+
+def test_four_arm_per_day_count_underflow_blocks_even_with_matching_total():
+    events = _quantity_leg_four_arm_events()
+    for event in events:
+        receipt = event['entry_quantity_leg_four_arm_evaluation']
+        receipt['eligible_attempt_count'] = 10 if receipt['source_date'] == '2026-09-14' else 20
+        _resign_four_arm_receipt(receipt)
+    result = split_plan.build_quantity_leg_four_arm_evaluation(events,
+        source_counts={'2026-09-14': 10, '2026-09-15': 20})
+    assert result['complete_exact_attempt_count'] == 30
+    assert result['excluded_counts']['eligible_population_source_date_underflow'] == 1
+    assert not result['promotion_gate']['passed']
+
+
+@pytest.mark.parametrize('census', [{}, {'2026-09-17': 0}])
+def test_four_arm_empty_native_census_preserves_existing_signed_actual_population(census):
+    result = split_plan.build_quantity_leg_four_arm_evaluation(_quantity_leg_four_arm_events(),
+        source_counts=census)
+    assert result['eligible_attempt_count'] == 30
+    assert result['promotion_gate']['passed']
+    assert split_plan.quantity_leg_promotion_evidence_valid(result)
+
+
 def test_split_native_replay_persists_census_across_prior_state(monkeypatch, tmp_path):
     from src.tests.test_strategy_owner_replay import entry_owner_event, native_entry_loader
     from src.engine.scalping.strategy_owner_replay import build_entry_opportunity_replays
