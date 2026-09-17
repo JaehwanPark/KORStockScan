@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import stat
+import uuid
 import time as time_module
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
@@ -46,6 +47,7 @@ from src.engine.monitoring.low_price_two_leg_entry_spot_research import (
     SpotCandidate,
     _atomic_write,
     baseline_candidate,
+    candidate_grid,
     build_day_contexts,
     evaluate_candidate,
     existing_axis_economic_replay,
@@ -84,6 +86,8 @@ REPORT_CACHE_MAX_BYTES = 128 * 1024 * 1024
 REPORT_CACHE_TERMINALS = frozenset(
     {"recommendations_ready", "no_qualified_candidate", "partial_source_quality"}
 )
+PROFILE_CHECKPOINT_SCHEMA = "low_price_two_leg_profile_selection_checkpoint_v1"
+PROFILE_CHECKPOINT_MAX_BYTES = 16 * 1024 * 1024
 DEFAULT_DYNAMIC_UNIVERSE_PATH = DATA_DIR / "daily_recommendations_v2.csv"
 DEFAULT_DYNAMIC_UNIVERSE_DIAGNOSTIC_PATH = (
     DATA_DIR / "daily_recommendations_v2_diagnostics.json"
@@ -876,6 +880,181 @@ def _target_date_logic_attribution(
     return rows
 
 
+def _valid_profile_selection(result, profile, contexts, calibration_days):
+    dates = sorted(contexts)
+    if (
+        not isinstance(result, dict)
+        or calibration_days < CALIBRATION_DAYS
+        or len(dates) != calibration_days + HOLDOUT_DAYS
+        or any(day < CLEAN_BASELINE_DATE for day in dates)
+    ):
+        return False
+    if (
+        result.get("profile_id") != profile.profile_id
+        or result.get("symbol") != profile.symbol
+        or result.get("name") != profile.name
+        or result.get("session") != profile.session
+        or result.get("runtime_effect") is not False
+        or result.get("decision")
+        not in {
+            "no_robust_calibration_candidate_do_not_promote",
+            "holdout_pass_source_only_early_candidate",
+            "holdout_positive_not_better_keep_baseline",
+            "holdout_failed_keep_baseline",
+        }
+        or result.get("grid_candidate_count") != len(candidate_grid(profile))
+        or (result.get("baseline") or {}).get("parameters")
+        != baseline_candidate(profile).public()
+        or result.get("date_split")
+        != {
+            "calibration_start": dates[0].isoformat(),
+            "calibration_end": dates[calibration_days - 1].isoformat(),
+            "holdout_start": dates[calibration_days].isoformat(),
+            "holdout_end": dates[-1].isoformat(),
+            "calibration_trading_day_count": calibration_days,
+            "holdout_trading_day_count": HOLDOUT_DAYS,
+        }
+    ):
+        return False
+    for owner in ("baseline", "selected"):
+        for stage, window in (
+            ("calibration", dates[:calibration_days]),
+            ("holdout", dates[calibration_days:]),
+            ("full", dates),
+        ):
+            outcome = (result.get(owner) or {}).get(stage) or {}
+            if (
+                outcome.get("economic_replay_contract") != ECONOMIC_REPLAY_CONTRACT
+                or outcome.get("cost_pct") != COST_PCT
+                or outcome.get("observation_dates")
+                != [day.isoformat() for day in window]
+                or outcome.get("source_valid_observation_days") != len(window)
+                or outcome.get("runtime_effect") is not False
+                or outcome.get("actual_order_submitted") is not False
+                or outcome.get("broker_order_forbidden") is not True
+            ):
+                return False
+    pending = [result]
+    while pending:
+        value = pending.pop()
+        if isinstance(value, dict):
+            if (
+                any(
+                    value.get(key, False) is not False
+                    for key in (
+                        "runtime_effect",
+                        "actual_order_submitted",
+                        "allowed_runtime_apply",
+                    )
+                )
+                or value.get("broker_order_forbidden", True) is not True
+            ):
+                return False
+            pending.extend(value.values())
+        elif isinstance(value, list):
+            pending.extend(value)
+    return True
+
+
+def _write_profile_checkpoint(path: Path, payload: dict) -> bool:
+    """Optional cache only: descriptor-pinned publication, never policy/state."""
+    parent_fd = None
+    temp_name = ".selection-" + uuid.uuid4().hex
+    try:
+        raw = json.dumps(
+            payload, ensure_ascii=False, sort_keys=True, allow_nan=False
+        ).encode()
+        if len(raw) > PROFILE_CHECKPOINT_MAX_BYTES:
+            return False
+        path.parent.mkdir(parents=True, exist_ok=True)
+        parent_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        parent = os.fstat(parent_fd)
+        try:
+            existing = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+            if not stat.S_ISREG(existing.st_mode):
+                return False
+        except FileNotFoundError:
+            pass
+        fd = os.open(
+            temp_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o600,
+            dir_fd=parent_fd,
+        )
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(raw)
+            handle.flush()
+            os.fsync(handle.fileno())
+        current = os.stat(path.parent, follow_symlinks=False)
+        if (parent.st_dev, parent.st_ino) != (current.st_dev, current.st_ino):
+            return False
+        os.replace(temp_name, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        os.fsync(parent_fd)
+        return True
+    except (OSError, ValueError, TypeError, RecursionError):
+        return False
+    finally:
+        if parent_fd is not None:
+            try:
+                os.unlink(temp_name, dir_fd=parent_fd)
+            except OSError:
+                pass
+            finally:
+                os.close(parent_fd)
+
+
+def _select_profile_checkpoint(
+    profile, contexts, *, calibration_days, cache_dir=None, contract=None, stats=None
+):
+    path = None
+    if cache_dir is not None and contract is not None:
+        # One replaceable checkpoint per profile; revisions do not accumulate.
+        path = cache_dir / (
+            hashlib.sha256(profile.profile_id.encode()).hexdigest() + ".json"
+        )
+        cached = _read_stable_json(path, max_bytes=PROFILE_CHECKPOINT_MAX_BYTES)
+        try:
+            if (
+                isinstance(cached, dict)
+                and set(cached) == {"schema", "contract", "result", "body_sha256"}
+                and cached["schema"] == PROFILE_CHECKPOINT_SCHEMA
+                and cached["contract"] == contract
+                and cached["body_sha256"]
+                == _report_cache_digest(
+                    {k: v for k, v in cached.items() if k != "body_sha256"}
+                )
+                and _valid_profile_selection(
+                    cached["result"], profile, contexts, calibration_days
+                )
+            ):
+                if stats is not None:
+                    stats["hit"] = stats.get("hit", 0) + 1
+                return cached["result"]
+        except (ValueError, TypeError, KeyError, AttributeError, RecursionError):
+            pass
+    if stats is not None:
+        stats["miss"] = stats.get("miss", 0) + 1
+    result = select_profile_spot(
+        profile, contexts, calibration_days=calibration_days, holdout_days=HOLDOUT_DAYS
+    )
+    if path is not None and _valid_profile_selection(
+        result, profile, contexts, calibration_days
+    ):
+        payload = {
+            "schema": PROFILE_CHECKPOINT_SCHEMA,
+            "contract": contract,
+            "result": result,
+        }
+        try:
+            payload["body_sha256"] = _report_cache_digest(payload)
+            _write_profile_checkpoint(path, payload)
+        except (ValueError, TypeError, RecursionError):
+            # An optional cache cannot repair or override primary report data.
+            # Its normal writer/quality gate still owns invalid economics.
+            pass
+    return result
+
+
 def build_report(
     *,
     sources: dict[str, tuple[list[Bar], dict[str, Any]]],
@@ -886,6 +1065,7 @@ def build_report(
     dynamic_universe_source_date: date | None = None,
     applied_policy_snapshots: dict[str, dict[str, Any]] | None = None,
     market_census: dict[str, Any] | None = None,
+    checkpoint_cache_dir: Path | None = None,
 ) -> dict[str, Any]:
     if start_date != CLEAN_BASELINE_DATE or end_date < start_date:
         raise ValueError("research_window_must_start_at_clean_baseline")
@@ -954,6 +1134,7 @@ def build_report(
     if not contexts_by_symbol:
         raise ResearchError("all_research_symbols_source_quality_blocked")
     profiles: dict[str, dict[str, Any]] = {}
+    selection_source_digests = {}
     for profile_id, profile in selected_profiles.items():
         observation_contract = _operator_observation_contract(profile)
         if profile.symbol not in contexts_by_symbol:
@@ -990,11 +1171,48 @@ def build_report(
                 "runtime_effect": False,
             }
             continue
-        selected = select_profile_spot(
+        checkpoint_contract = None
+        if checkpoint_cache_dir is not None:
+            # Hash actual bars once per symbol, not the caller's source marker.
+            if profile.symbol not in selection_source_digests:
+                selection_source_digests[profile.symbol] = _canonical_digest(
+                    _bar_rows(sources[profile.symbol][0])
+                )
+            digest = selection_source_digests[profile.symbol]
+            checkpoint_contract = {
+                "input_fingerprint": research_input_fingerprint(
+                    sources={
+                        profile.symbol: (
+                            sources[profile.symbol][0],
+                            {
+                                **sources[profile.symbol][1],
+                                "source_content_sha256": digest,
+                            },
+                        )
+                    },
+                    target_date=end_date,
+                    candidate_symbols={profile.symbol: profile.name},
+                    research_profiles={profile_id: profile},
+                    dynamic_universe_source_date=dynamic_universe_source_date,
+                    applied_policy_snapshots={
+                        profile_id: (applied_policy_snapshots or {}).get(
+                            profile_id.removeprefix("logic_")
+                        )
+                    },
+                ),
+                "profile_id": profile_id,
+                "source_contract": sources[profile.symbol][1],
+                "observation_dates": [day.isoformat() for day in expected_dates],
+                "calibration_days": calibration_days,
+                "holdout_days": HOLDOUT_DAYS,
+                "grid": [item.public() for item in candidate_grid(profile)],
+            }
+        selected = _select_profile_checkpoint(
             profile,
             contexts_by_symbol[profile.symbol],
             calibration_days=calibration_days,
-            holdout_days=HOLDOUT_DAYS,
+            cache_dir=checkpoint_cache_dir,
+            contract=checkpoint_contract,
         )
         selected["discovery_lane"] = profile.discovery_lane
         selected["active_profile_ids_for_symbol"] = sorted(
@@ -2410,7 +2628,8 @@ def _report_cache_digest(report: dict[str, Any]) -> str:
     ).hexdigest()
 
 
-def reusable_report(path: Path, *, target_date: date, fingerprint: str) -> dict | None:
+def _read_stable_json(path: Path, *, max_bytes: int | None = None) -> dict | None:
+    max_bytes = REPORT_CACHE_MAX_BYTES if max_bytes is None else max_bytes
     parent_fd = file_fd = None
     try:
         parent_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
@@ -2419,11 +2638,13 @@ def reusable_report(path: Path, *, target_date: date, fingerprint: str) -> dict 
             path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent_fd
         )
         before = os.fstat(file_fd)
-        if not stat.S_ISREG(before.st_mode) or before.st_size > REPORT_CACHE_MAX_BYTES:
+        if not stat.S_ISREG(before.st_mode) or before.st_size > max_bytes:
             return None
         with os.fdopen(file_fd, "rb") as handle:
             file_fd = None
-            raw = handle.read(REPORT_CACHE_MAX_BYTES + 1)
+            # A limit is not a preallocation target. Read one byte beyond the
+            # pinned size; growth/rewrite is rejected by the generation checks.
+            raw = handle.read(min(max_bytes + 1, before.st_size + 1))
             after = os.fstat(handle.fileno())
         named = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
         current_parent = os.stat(path.parent, follow_symlinks=False)
@@ -2435,7 +2656,7 @@ def reusable_report(path: Path, *, target_date: date, fingerprint: str) -> dict 
             value.st_ctime_ns,
         )
         if (
-            len(raw) > REPORT_CACHE_MAX_BYTES
+            len(raw) > max_bytes
             or generation(before) != generation(after)
             or generation(before) != generation(named)
             or (parent.st_dev, parent.st_ino)
@@ -2450,7 +2671,12 @@ def reusable_report(path: Path, *, target_date: date, fingerprint: str) -> dict 
             os.close(file_fd)
         if parent_fd is not None:
             os.close(parent_fd)
-    if not isinstance(report, dict):
+    return report if isinstance(report, dict) else None
+
+
+def reusable_report(path: Path, *, target_date: date, fingerprint: str) -> dict | None:
+    report = _read_stable_json(path)
+    if report is None:
         return None
     if (
         report.get("schema") != REPORT_SCHEMA
@@ -2690,6 +2916,7 @@ def main(argv: list[str] | None = None) -> int:
             dynamic_universe_source_date=dynamic_source_date,
             applied_policy_snapshots=applied_policy_snapshots,
             market_census=market_census if market_census is not None else {},
+            checkpoint_cache_dir=args.source_cache_dir / "profile_selection",
         )
         report["source_input_fingerprint"] = fingerprint
         report["execution_mode"] = "full_recompute"

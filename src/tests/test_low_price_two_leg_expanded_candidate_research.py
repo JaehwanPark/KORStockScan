@@ -391,6 +391,326 @@ def test_interrupted_cache_publication_keeps_previous_verified_body(
     assert sorted(p.name for p in tmp_path.iterdir()) == [path.name]
 
 
+def _selection_checkpoint_fixture(mode="zero"):
+    profile = PROFILES["samsung_heavy_midday"]
+    anchor = datetime.combine(
+        date(2026, 6, 5), profile.policy.scan_start, tzinfo=ZoneInfo("Asia/Seoul")
+    ) - timedelta(minutes=60)
+    bars = [
+        Bar(
+            anchor + timedelta(days=day, minutes=index),
+            20000,
+            20000 if mode == "zero" or (mode == "held" and index >= 60) else 20600,
+            20000,
+            20000,
+        )
+        for day in range(46)
+        for index in range(180)
+    ]
+    return profile, expanded.build_day_contexts(bars)
+
+
+@pytest.mark.parametrize("mode", ["zero", "complete", "held"])
+def test_profile_checkpoint_exact_replay_and_fresh_mutable_results(
+    monkeypatch, tmp_path, mode
+):
+    from copy import deepcopy
+
+    profile, contexts = _selection_checkpoint_fixture(mode)
+    expected = expanded.select_profile_spot(profile, deepcopy(contexts))
+    contract = {"input": "frozen", "cost": expanded.COST_PCT}
+    stats = {}
+    cold = expanded._select_profile_checkpoint(
+        profile,
+        deepcopy(contexts),
+        calibration_days=30,
+        cache_dir=tmp_path,
+        contract=contract,
+        stats=stats,
+    )
+    assert cold == expected
+    assert stats == {"miss": 1}
+    if mode == "held":
+        assert cold["baseline"]["full"]["held_legs"] > 0
+    if mode == "complete":
+        assert cold["baseline"]["full"]["completed_legs"] > 0
+    monkeypatch.setattr(
+        expanded, "select_profile_spot", lambda *a, **k: pytest.fail("warm replay")
+    )
+    warm = expanded._select_profile_checkpoint(
+        profile,
+        deepcopy(contexts),
+        calibration_days=30,
+        cache_dir=tmp_path,
+        contract=contract,
+        stats=stats,
+    )
+    assert warm == expected
+    assert stats == {"miss": 1, "hit": 1}
+    warm["baseline"]["full"]["held_legs"] = 999
+    again = expanded._select_profile_checkpoint(
+        profile,
+        deepcopy(contexts),
+        calibration_days=30,
+        cache_dir=tmp_path,
+        contract=contract,
+    )
+    assert again == expected
+    assert len(list(tmp_path.glob("*.json"))) == 1
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "contract",
+        "tamper",
+        "nonfinite",
+        "resealed_authority",
+        "resealed_cost",
+        "resealed_dates",
+        "resealed_baseline",
+        "corrupt",
+        "symlink",
+        "oversize",
+    ],
+)
+def test_profile_checkpoint_invalid_cache_falls_back_to_original_selection(
+    monkeypatch, tmp_path, kind
+):
+    profile, contexts = _selection_checkpoint_fixture()
+    contract = {"input": "frozen"}
+    expected = expanded._select_profile_checkpoint(
+        profile, contexts, calibration_days=30, cache_dir=tmp_path, contract=contract
+    )
+    path = next(tmp_path.glob("*.json"))
+    payload = json.loads(path.read_bytes())
+    if kind == "contract":
+        contract = {"input": "corrected"}
+    elif kind in {
+        "tamper",
+        "nonfinite",
+        "resealed_authority",
+        "resealed_cost",
+        "resealed_dates",
+        "resealed_baseline",
+    }:
+        if kind == "tamper":
+            payload["result"]["recommended_spot"] = {"target_ticks": 100}
+        elif kind == "nonfinite":
+            payload["result"]["diagnostic"] = float("nan")
+        elif kind == "resealed_authority":
+            payload["result"]["selected"]["full"]["actual_order_submitted"] = True
+        elif kind == "resealed_cost":
+            payload["result"]["selected"]["full"]["cost_pct"] = 0
+        elif kind == "resealed_dates":
+            payload["result"]["date_split"]["holdout_start"] = "2026-06-05"
+        else:
+            payload["result"]["baseline"]["parameters"]["target_ticks"] = 100
+        if kind.startswith("resealed_"):
+            payload["body_sha256"] = expanded._report_cache_digest(
+                {k: v for k, v in payload.items() if k != "body_sha256"}
+            )
+        path.write_text(json.dumps(payload))
+    elif kind == "corrupt":
+        path.write_text("{")
+    elif kind == "symlink":
+        stored = tmp_path / "preserved"
+        path.rename(stored)
+        path.symlink_to(stored)
+    elif kind == "oversize":
+        monkeypatch.setattr(expanded, "PROFILE_CHECKPOINT_MAX_BYTES", 8)
+    calls = []
+    monkeypatch.setattr(
+        expanded, "select_profile_spot", lambda *a, **k: calls.append(1) or expected
+    )
+    actual = expanded._select_profile_checkpoint(
+        profile, contexts, calibration_days=30, cache_dir=tmp_path, contract=contract
+    )
+    assert actual == expected
+    assert calls == [1]
+    if kind == "symlink":
+        assert path.is_symlink()
+
+
+def test_profile_checkpoint_interrupted_write_is_optional_and_cleans_temp(
+    monkeypatch, tmp_path
+):
+    profile, contexts = _selection_checkpoint_fixture()
+    expected = expanded.select_profile_spot(profile, contexts)
+    monkeypatch.setattr(
+        expanded.os,
+        "replace",
+        lambda *a, **k: (_ for _ in ()).throw(OSError("interrupted")),
+    )
+    assert (
+        expanded._select_profile_checkpoint(
+            profile,
+            contexts,
+            calibration_days=30,
+            cache_dir=tmp_path,
+            contract={"input": "frozen"},
+        )
+        == expected
+    )
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_report_profile_checkpoints_selectively_replay_corrected_symbol_and_keep_source_gate(
+    monkeypatch, tmp_path
+):
+    from copy import deepcopy
+
+    end = date(2026, 8, 10)
+    dates = expanded.clean_baseline_trading_dates(end)
+    profiles = {}
+    for key, profile in expanded.RESEARCH_PROFILES.items():
+        if profile.discovery_lane == "new_symbol" and profile.session == "morning":
+            profiles[key] = profile
+            if len(profiles) == 2:
+                break
+    assert len({p.symbol for p in profiles.values()}) == 2
+    inventory = SimpleNamespace(
+        research_profiles=profiles,
+        candidate_symbols={p.symbol: p.name for p in profiles.values()},
+        research_symbols={p.symbol for p in profiles.values()},
+        live_profiles={},
+        active_symbol_sessions=set(),
+        implemented_symbols={},
+        new_symbol_profiles=profiles,
+        time_extension_profiles={},
+        logic_improvement_profiles={},
+    )
+    monkeypatch.setattr(
+        expanded, "_target_date_research_inventory", lambda *a, **k: inventory
+    )
+    monkeypatch.setattr(
+        expanded, "_attach_admission_evidence", lambda value, **k: value, raising=False
+    )
+    sources = {}
+    for profile in profiles.values():
+        bars = []
+        for day in dates:
+            anchor = datetime.combine(
+                day, profile.policy.scan_start, tzinfo=ZoneInfo("Asia/Seoul")
+            ) - timedelta(minutes=60)
+            bars.extend(
+                Bar(anchor + timedelta(minutes=i), 20000, 20600, 20000, 20000)
+                for i in range(180)
+            )
+        sources[profile.symbol] = (
+            bars,
+            {"source_quality_status": "PASS", "source_content_sha256": "a" * 64},
+        )
+    calls = []
+    original = expanded.select_profile_spot
+    monkeypatch.setattr(
+        expanded,
+        "select_profile_spot",
+        lambda profile, *a, **k: calls.append(profile.symbol)
+        or original(profile, *a, **k),
+    )
+
+    def build(values, cache):
+        result = expanded.build_report(
+            sources=values,
+            start_date=expanded.CLEAN_BASELINE_DATE,
+            end_date=end,
+            checkpoint_cache_dir=cache,
+        )
+        result.pop("generated_at_kst")
+        return result
+
+    reference = build(deepcopy(sources), None)
+    calls.clear()
+    assert build(deepcopy(sources), tmp_path) == reference
+    assert len(calls) == 2
+    calls.clear()
+    assert build(deepcopy(sources), tmp_path) == reference
+    assert calls == []
+    changed = deepcopy(sources)
+    symbol = next(iter(changed))
+    changed[symbol][0][-1] = replace(changed[symbol][0][-1], close_price=20100)
+    # Unchanged external markers must not hide an actual bar correction.
+    reference = build(deepcopy(changed), None)
+    calls.clear()
+    assert build(deepcopy(changed), tmp_path) == reference
+    assert calls == [symbol]
+    calls.clear()
+    changed[symbol][1]["source_quality_status"] = "FAIL"
+    result = build(changed, tmp_path)
+    assert calls == []
+    assert result["source_quarantine"][symbol] == "source_quality_not_pass"
+    assert all(
+        row["decision"] == "source_quality_quarantined_no_evaluation"
+        for row in result["profiles"].values()
+        if row["symbol"] == symbol
+    )
+
+
+def test_profile_checkpoint_parent_replacement_does_not_publish_to_new_parent(
+    monkeypatch, tmp_path
+):
+    import os
+
+    parent = tmp_path / "cache"
+    path = parent / "result.json"
+    original = os.stat
+    moved = False
+
+    def changed(value, *args, **kwargs):
+        nonlocal moved
+        if value == parent and not moved:
+            moved = True
+            parent.rename(tmp_path / "old")
+            parent.mkdir()
+        return original(value, *args, **kwargs)
+
+    # mkdir itself may stat: arm the replacement only after temporary fd write.
+    original_fsync = os.fsync
+
+    def arm(fd):
+        original_fsync(fd)
+        monkeypatch.setattr(os, "stat", changed)
+
+    monkeypatch.setattr(os, "fsync", arm)
+    assert not expanded._write_profile_checkpoint(path, {"fixture": "no authority"})
+    assert moved
+    assert list(parent.iterdir()) == []
+    assert list((tmp_path / "old").iterdir()) == []
+
+
+def test_stable_cache_reader_requests_actual_size_not_memory_cap(monkeypatch, tmp_path):
+    path = tmp_path / "small.json"
+    path.write_text('{"fixture":true}')
+    original = expanded.os.fdopen
+    reads = []
+
+    class SizedReader:
+        def __init__(self, handle):
+            self.handle = handle
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self.handle.close()
+
+        def fileno(self):
+            return self.handle.fileno()
+
+        def read(self, count):
+            reads.append(count)
+            return self.handle.read(count)
+
+    monkeypatch.setattr(
+        expanded.os, "fdopen", lambda *a, **k: SizedReader(original(*a, **k))
+    )
+    assert expanded._read_stable_json(path, max_bytes=1024 * 1024 * 1024) == {
+        "fixture": True
+    }
+    assert reads == [path.stat().st_size + 1]
+
+
 def test_expanded_profiles_separate_new_symbols_and_inactive_existing_sessions():
     assert len(expanded.NEW_SYMBOL_PROFILES) == (
         len(expanded.CANDIDATE_SYMBOLS) * len(expanded.SESSION_WINDOWS)
