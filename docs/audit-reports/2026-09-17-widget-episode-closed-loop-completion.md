@@ -104,3 +104,12 @@ Source commit/push와 actual release/PID 기동 receipt는 아래 배포 완료 
 Actual C6 receipt의 boot ID/PID start ticks와 실제 PID/root를 대사했다. Widget005930/034020/042660 및 episodeauto_028670_midday/auto_034020_midday/auto_111770_late_morning consumed/rejected0이며 검증된 incumbent 수신이다. [Sanitized actual deployment/consumer receipt](../../data/runtime/widget_episode_bounded_probe_acceptance_2026-09-17.json)에 source와 범위를 결속한다. 신규 prospective 종목/정책 승격·주문·이익으로 주장하지 않는다. Host free 약22.84GiB는 배포 후 전체 상태이고 이번 정리 allocated1.580GiB와 별도로 보고한다.
 
 이번 최소 변경·제한 검증·push·배포·기동은 완료했다. 과도한 N100/D120 재검증/추가 code 확장/실행 모집단·grid·경제성 floor 하향은 하지 않았다. 기존 큰 규모 미달 기록은 유지하며 자연20:10 evaluation/21:15 final refresh는 현재not_yet_due, 신규 종목/정책의qualified calendar→joint→다음날 발행/소비 및 실제 비용차감EV/net profit은 existing 두 OPEN owner의 후행 acceptance다. External sync/추가 main restart/직접 주문은 실행하지 않았다.
+
+
+### Optional byte-ledger repair review
+
+사용자 추가 review/fix/re-review/commit/push/deploy/start 승인에 따라 existing cache writer/reader, episode fast-reference/cached state, C4 fixed allocator/C7 exact mature feedback 회귀 경계를 검토했다. 새 성능 시험·production module/job·Provider/broker/order/threshold/cap/quantity 변경은 없다. 기존 clean 작업본을 재사용하고 당일 Plan Rebase/체크리스트 context 및 두 stable owners를 유지한다.
+
+Finding1: optional `.optional_cache_bytes.json`의 malformed JSON/non-object/RecursionError와 잘못된 counter가 공통 writer에서 전파됐다. Widget `_flush_day`는 TypeError/RecursionError를 처리하지 않아 선택적 저장 중 primary 연구가 중단될 수 있었다. SQLite catalog charge·LRU/pin을 바꾸지 않고 telemetry read만 safe recovery, 정상 nonnegative integer counter만 보존, charged bytes는 기존 SQLite 값으로 재기록한다. Required native source/정책/비용 evidence의 exception 계약은 그대로다. 변경은 기존 storage 파일8줄이며 새로운 모듈을 만들지 않았다.
+
+Regression으로 malformed JSON/non-object/string·boolean/negative counter를 재현했다. 첫 회귀의 parser injection에 Path import 누락을 보완하고 최종 관련3-suite120 PASS/18.34초를 확인했다. Parser RecursionError는 deterministic injection으로 검증한다. 정상 cached payload의 stable reader 반환·실제 charged bytes·required native source 보존과 기존 pin/LRU/HELD alias/rolling candidate parity/C4/C7 회귀를 함께 확인했다. Self review→수정→재리뷰 범위 내 미해결 finding0. Ruff F,E9/compile/diff/bash-n 및 print-only parser를 검증하며 이전 N/D 성능 수치를 변경된 helper의 최신 측정으로 재사용하지 않는다. 이번에는 규모 benchmark가 없다. 실제 배포 root/PID와 natural policy/economics 후행 상태는 다음 완료 receipt로 분리한다.

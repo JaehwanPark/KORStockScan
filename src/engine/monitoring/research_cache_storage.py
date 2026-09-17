@@ -348,8 +348,14 @@ def write(path, raw, *, cache_root, soft_cap, reserve):
                 ledger_path = root / ".optional_cache_bytes.json"
                 try:
                     ledger = loop.read_object(ledger_path)
-                except FileNotFoundError:
+                except (OSError, ValueError, RecursionError):
                     ledger = {}
+                # This JSON is optional telemetry; SQLite owns the byte charge.
+                ledger = {
+                    name: ledger[name]
+                    for name in ("evicted_bytes", "written_bytes")
+                    if type(ledger.get(name)) is int and ledger[name] >= 0
+                }
                 ledger.update(
                     schema=loop.SCHEMA,
                     charged_bytes=charged - old_size + len(raw),
