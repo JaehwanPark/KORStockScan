@@ -395,7 +395,9 @@ def _refresh(
                 )
             except FileNotFoundError:
                 dependency_sources[str(path.resolve())] = None
+        from src.engine.monitoring.research_cache_storage import capacity_receipt
         body = dict(
+            storage_capacity=capacity_receipt(directory, day, report_root),
             schema=loop.SCHEMA,
             target_date=day.isoformat(),
             status="complete",

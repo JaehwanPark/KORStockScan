@@ -12,6 +12,8 @@ import argparse
 from array import array
 from bisect import bisect_left, bisect_right
 from collections import deque
+from contextlib import contextmanager
+from contextvars import ContextVar
 from copy import deepcopy
 from heapq import heappush, heapreplace
 from itertools import islice
@@ -64,6 +66,22 @@ EXECUTION_PLAN_GRID = (
     ((0, -1), 3, 4),
     ((-1, -2), 5, 4),
 )
+_DAY_REPLAY = ContextVar("low_price_two_leg_day_replay", default=None)
+
+
+@contextmanager
+def day_replay_scope(transition):
+    """Bind optional research-only day transitions to one profile invocation."""
+    token = _DAY_REPLAY.set(transition)
+    try:
+        yield
+    finally:
+        try:
+            transition.flush()
+        finally:
+            _DAY_REPLAY.reset(token)
+
+
 PROFILE_EXECUTION_PLAN_EXTENSIONS = {
     "kakao_morning": (((0, -1), 5, 3),),
 }
@@ -200,16 +218,18 @@ class DayContext:
                 # unsigned-short index avoids a Python integer per feature.
                 minutes = array(
                     "H",
-                    (item.timestamp.hour * 60 + item.timestamp.minute for item in source),
+                    (
+                        item.timestamp.hour * 60 + item.timestamp.minute
+                        for item in source
+                    ),
                 )
                 # Preserve library callers' original ordering, including
                 # duplicate minutes. An unsorted tuple uses the old filter.
                 if any(a > b for a, b in zip(minutes, minutes[1:])):
                     minutes = None
-                if (
-                    lookback not in self._feature_minute_index
-                    and len(self._feature_minute_index) >= len(LOOKBACK_GRID)
-                ):
+                if lookback not in self._feature_minute_index and len(
+                    self._feature_minute_index
+                ) >= len(LOOKBACK_GRID):
                     self._feature_minute_index.clear()
                 cached = (source, minutes)
                 self._feature_minute_index[lookback] = cached
@@ -220,7 +240,8 @@ class DayContext:
                 )
         # Mutable inputs cannot prove unchanged contents by their identity.
         return (
-            item for item in source
+            item
+            for item in source
             if start <= item.timestamp.hour * 60 + item.timestamp.minute <= end
         )
 
@@ -233,9 +254,7 @@ class DayContext:
             # mutable list. Its identity cannot prove an unchanged day.
             return min((bar.low_price for bar in self.bars), default=None)
         if self._minimum_low_source is not self.bars:
-            self._minimum_low = min(
-                (bar.low_price for bar in self.bars), default=None
-            )
+            self._minimum_low = min((bar.low_price for bar in self.bars), default=None)
             self._minimum_low_source = self.bars
         return self._minimum_low
 
@@ -834,6 +853,49 @@ def evaluate_candidate(
     )[0]
 
 
+def _advance_candidate_day(candidate, context, carried):
+    """Compute one original custody transition; window membership is irrelevant."""
+    if carried is not None:
+        day_low = context.minimum_low_price
+        for leg in carried["legs"]:
+            if leg["status"] != "HELD" or not context.bars:
+                continue
+            price = int(leg["entry_price"])
+            leg["holding_completed_bars"] = int(
+                leg.get("holding_completed_bars", 0)
+            ) + len(context.bars)
+            leg["mark_price"] = context.bars[-1].close_price
+            leg["active_unrealized_pct"] = round(
+                (leg["mark_price"] / price - 1) * 100 - COST_PCT, 6
+            )
+            leg["max_adverse_excursion_pct"] = min(
+                float(leg.get("max_adverse_excursion_pct", 0)),
+                (day_low / price - 1) * 100,
+            )
+        return carried, None
+    if context._signal_partition is None:
+        signal = next(
+            (
+                item
+                for item in context.iter_window_features(
+                    candidate.lookback_bars,
+                    candidate.scan_start_minute,
+                    candidate.scan_end_minute,
+                )
+                if item.drawdown_pct + 1e-12 >= candidate.rolling_high_drawdown_pct
+                and item.near_low_pct - 1e-12 <= candidate.rolling_low_proximity_pct
+            ),
+            None,
+        )
+    else:
+        signal = context.first_signal(candidate)
+    episode = _episode(context, signal, candidate) if signal is not None else None
+    if episode and any(leg["status"] == "HELD" for leg in episode["legs"]):
+        episode = deepcopy(episode)
+        return episode, episode
+    return None, episode
+
+
 def _evaluate_candidate_windows(
     candidate: SpotCandidate,
     contexts: dict[date, DayContext],
@@ -843,8 +905,8 @@ def _evaluate_candidate_windows(
 ) -> list[dict[str, Any]]:
     """Replay one candidate prefix; seal each window at its own last date.
 
-    No state/result is persisted or shared across candidates or invocations.
-    A later carry update must not change an earlier window's sealed evidence.
+    Optional scoped transitions restore independent custody copies. A later
+    carry update must not change an earlier window's sealed evidence.
     """
     if not windows or any(
         not dates
@@ -869,47 +931,25 @@ def _evaluate_candidate_windows(
     # the window would erase the inventory that prevented the next entry.
     for trade_date in sorted(day for day in contexts if day <= last_date):
         context = contexts[trade_date]
-        if carried is not None:
-            if trade_date in requested_union:
-                blocked.append(trade_date)
-            # The live machine does not retarget HELD legs from a future bar
-            # touch. Only an external custody resolution can close them.
-            day_low = context.minimum_low_price
-            for leg in carried["legs"]:
-                if leg["status"] != "HELD" or not context.bars:
-                    continue
-                price = int(leg["entry_price"])
-                leg["holding_completed_bars"] = int(
-                    leg.get("holding_completed_bars", 0)
-                ) + len(context.bars)
-                leg["mark_price"] = context.bars[-1].close_price
-                leg["active_unrealized_pct"] = round(
-                    (leg["mark_price"] / price - 1) * 100 - COST_PCT, 6
-                )
-                leg["max_adverse_excursion_pct"] = min(
-                    float(leg.get("max_adverse_excursion_pct", 0)),
-                    (day_low / price - 1) * 100,
-                )
+        previous = carried
+        if previous is not None and trade_date in requested_union:
+            blocked.append(trade_date)
+        transition = _DAY_REPLAY.get()
+        if transition is None:
+            carried, episode = _advance_candidate_day(candidate, context, carried)
         else:
-            if context._signal_partition is None:
-                # Do not pay tuple-key/cache lookup cost on a unique grid.
-                signal = next(
-                    (item for item in context.iter_window_features(
-                        candidate.lookback_bars, candidate.scan_start_minute,
-                        candidate.scan_end_minute,
-                    ) if item.drawdown_pct + 1e-12 >= candidate.rolling_high_drawdown_pct
-                    and item.near_low_pct - 1e-12 <= candidate.rolling_low_proximity_pct),
-                    None,
-                )
-            else:
-                signal = context.first_signal(candidate)
-            if signal is not None:
-                episode = _episode(context, signal, candidate)
-                if any(leg["status"] == "HELD" for leg in episode["legs"]):
-                    episode = deepcopy(episode)
-                    carried = episode
-                if trade_date in requested_union:
-                    events.append((trade_date, episode))
+            carried, episode = transition(candidate, context, carried)
+            # Restore the alias between an original HELD event and its evolving
+            # custody. Serialized checkpoints cannot preserve object identity.
+            if previous is not None:
+                if carried is not previous:
+                    previous.clear()
+                    previous.update(carried)
+                carried = previous
+            elif carried is not None:
+                episode = carried
+        if episode is not None and trade_date in requested_union:
+            events.append((trade_date, episode))
         for index in boundaries.get(trade_date, ()):
             dates = windows[index]
             episodes = [episode for day, episode in events if day in requested[index]]
