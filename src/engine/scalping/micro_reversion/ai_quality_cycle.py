@@ -441,16 +441,19 @@ def _artifact_path_present(path: Path) -> bool:
     return path.exists() or path.is_symlink()
 
 
-def _load_discovery_floor(
+def _load_discovery_artifact(
     path: Path, cache: dict[Path, tuple[tuple[Any, ...], dict[str, Any]]] | None
 ) -> dict[str, Any]:
-    """Reuse only unchanged small floors within one backfill discovery.
+    """Reuse unchanged small source artifacts within one backfill discovery.
 
-    This is not a Provider-result or budget cache. Both plain/gzip entries and
+    This reuses JSON decoding, not Provider execution or budget authority.
+    Both plain/gzip entries and
     the pinned parent remain part of the identity; callers still validate the
-    floor's semantic hash, date and exact receipt binding on every use. The
+    artifact's semantic hash, date and exact receipt binding on every use. The
     private discovery/selection readers borrow facts read-only; no candidate,
-    checkpoint, reservation or mutable owner state is stored here.
+    checkpoint, reservation or mutable owner state is stored here. The same
+    execution source is read by floor discovery and coverage validation;
+    both validators still run even when its decoded facts are reused.
     """
 
     if cache is None:
@@ -478,8 +481,14 @@ def _load_discovery_floor(
                 if not stat.S_ISREG(metadata.st_mode):
                     raise ValueError(f"json_artifact_path_type_invalid:{path}")
                 entries.append(
-                    (name, metadata.st_dev, metadata.st_ino, metadata.st_size,
-                     metadata.st_mtime_ns, metadata.st_ctime_ns)
+                    (
+                        name,
+                        metadata.st_dev,
+                        metadata.st_ino,
+                        metadata.st_size,
+                        metadata.st_mtime_ns,
+                        metadata.st_ctime_ns,
+                    )
                 )
             return (lease.parent_identity, tuple(entries))
 
@@ -9045,7 +9054,7 @@ def _historical_backfill_dates(
         if floor_date == current_target_date:
             floor = provider_floor
         elif _artifact_path_present(existing_or_gzip_path(logical_path)):
-            floor = _load_discovery_floor(logical_path, floor_cache)
+            floor = _load_discovery_artifact(logical_path, floor_cache)
         else:
             continue
         if not isinstance(floor, Mapping):
@@ -9309,7 +9318,7 @@ def _historical_backfill_floor(
     bound_floor_hashes: set[str] = set()
     execution_path = selected_paths["execution"]
     if _artifact_path_present(existing_or_gzip_path(execution_path)):
-        existing_report = _load_json_auto(execution_path)
+        existing_report = _load_discovery_artifact(execution_path, floor_cache)
         if existing_report.get("report_content_sha256") != _content_hash(
             existing_report, "report_content_sha256"
         ):
@@ -9368,7 +9377,7 @@ def _historical_backfill_floor(
         if floor_date == current_target_date:
             floor = dict(current_floor)
         elif _artifact_path_present(existing_or_gzip_path(logical_path)):
-            floor = _load_discovery_floor(logical_path, floor_cache)
+            floor = _load_discovery_artifact(logical_path, floor_cache)
         else:
             continue
         content_hash = str(floor.get("floor_content_sha256") or "")
@@ -9401,11 +9410,12 @@ def _historical_backfill_already_covered(
     target_date: str,
     context: Mapping[str, Any],
     provider_floor: Mapping[str, Any],
+    artifact_cache: dict[Path, tuple[tuple[Any, ...], dict[str, Any]]] | None = None,
 ) -> bool:
     execution_path = context["paths"]["execution"]
     if not _artifact_path_present(existing_or_gzip_path(execution_path)):
         return False
-    report = _load_json_auto(execution_path)
+    report = _load_discovery_artifact(execution_path, artifact_cache)
     try:
         _validated_execution_rows(
             report,
@@ -9555,6 +9565,7 @@ def _run_bounded_historical_provider_backfill(
                 target_date=historical_date,
                 context=context,
                 provider_floor=provider_floor,
+                artifact_cache=floor_cache,
             ):
                 admission_body = {
                     **admission_body,

@@ -4860,24 +4860,34 @@ def test_discovery_floor_reuses_strict_decode_for_read_only_floor_facts(
 
     monkeypatch.setattr(cycle, "read_json_object_strict", counted)
     cache = {}
-    first = cycle._load_discovery_floor(logical, cache)
-    assert cycle._load_discovery_floor(logical, cache) == payload
-    assert cycle._load_discovery_floor(logical, cache) is first
+    first = cycle._load_discovery_artifact(logical, cache)
+    assert cycle._load_discovery_artifact(logical, cache) == payload
+    assert cycle._load_discovery_artifact(logical, cache) is first
     assert len(calls) == 1
-    assert cycle._load_discovery_floor(logical, {}) == payload
+    assert cycle._load_discovery_artifact(logical, {}) == payload
     assert len(calls) == 2  # A separate discovery must decode again.
 
 
-@pytest.mark.parametrize("change", ["rewrite", "replace", "append", "gzip", "dual_conflict", "symlink", "missing", "corrupt"])
-def test_discovery_floor_never_reuses_corrected_or_invalid_generation(
-    tmp_path, change
-):
+@pytest.mark.parametrize(
+    "change",
+    [
+        "rewrite",
+        "replace",
+        "append",
+        "gzip",
+        "dual_conflict",
+        "symlink",
+        "missing",
+        "corrupt",
+    ],
+)
+def test_discovery_floor_never_reuses_corrected_or_invalid_generation(tmp_path, change):
     import os
 
     logical = tmp_path / "floor.json"
     logical.write_text('{"value":1}')
     cache = {}
-    assert cycle._load_discovery_floor(logical, cache) == {"value": 1}
+    assert cycle._load_discovery_artifact(logical, cache) == {"value": 1}
     previous = logical.stat()
     if change == "rewrite":
         logical.write_text('{"value":2}')
@@ -4891,9 +4901,13 @@ def test_discovery_floor_never_reuses_corrected_or_invalid_generation(
         logical.write_text('{"value":2}\n')
     elif change == "gzip":
         logical.unlink()
-        logical.with_name(logical.name + ".gz").write_bytes(gzip.compress(b'{"value":2}'))
+        logical.with_name(logical.name + ".gz").write_bytes(
+            gzip.compress(b'{"value":2}')
+        )
     elif change == "dual_conflict":
-        logical.with_name(logical.name + ".gz").write_bytes(gzip.compress(b'{"value":2}'))
+        logical.with_name(logical.name + ".gz").write_bytes(
+            gzip.compress(b'{"value":2}')
+        )
     elif change == "symlink":
         target = tmp_path / "target.json"
         target.write_text('{"value":2}')
@@ -4905,9 +4919,9 @@ def test_discovery_floor_never_reuses_corrected_or_invalid_generation(
         logical.write_text('{"value":')
     if change in {"dual_conflict", "symlink", "missing", "corrupt"}:
         with pytest.raises((ValueError, OSError)):
-            cycle._load_discovery_floor(logical, cache)
+            cycle._load_discovery_artifact(logical, cache)
     else:
-        assert cycle._load_discovery_floor(logical, cache) == {"value": 2}
+        assert cycle._load_discovery_artifact(logical, cache) == {"value": 2}
 
 
 def test_discovery_floor_bounds_decoded_gzip_and_entry_count(tmp_path):
@@ -4916,16 +4930,80 @@ def test_discovery_floor_bounds_decoded_gzip_and_entry_count(tmp_path):
     logical.with_name(logical.name + ".gz").write_bytes(
         gzip.compress(json.dumps({"value": "a" * 262144}).encode())
     )
-    assert cycle._load_discovery_floor(logical, cache)["value"] == "a" * 262144
+    assert cycle._load_discovery_artifact(logical, cache)["value"] == "a" * 262144
     assert cache == {}
     for index in range(35):
         path = tmp_path / f"small-{index}.json"
         path.write_text(json.dumps({"index": index}))
-        assert cycle._load_discovery_floor(path, cache) == {"index": index}
+        assert cycle._load_discovery_artifact(path, cache) == {"index": index}
     assert len(cache) == 32
 
 
-def test_discovery_floor_rejects_change_during_decode_and_parent_swap(tmp_path, monkeypatch):
+def test_historical_execution_duplicate_decode_reuse_still_validates_every_use(
+    tmp_path, monkeypatch
+):
+    logical = tmp_path / "execution.json"
+    payload = {
+        "target_date": "2026-08-25",
+        "status": "offline_three_arm_execution_complete",
+    }
+    logical.write_text(json.dumps(payload))
+    cache = {}
+    read = cycle.read_json_object_strict
+    decodes, validations = [], []
+
+    def counted(*args, **kwargs):
+        decodes.append(str(args[0]))
+        return read(*args, **kwargs)
+
+    def validate(report, **kwargs):
+        validations.append(report)
+        if report.get("rejected"):
+            raise ValueError("exact_source_binding_rejected")
+        return []
+
+    monkeypatch.setattr(cycle, "read_json_object_strict", counted)
+    monkeypatch.setattr(cycle, "_validated_execution_rows", validate)
+    context = {
+        "paths": {"execution": logical},
+        **{
+            name: {}
+            for name in (
+                "labels",
+                "bridge",
+                "materialized",
+                "source_bundle",
+                "prepared",
+                "paired",
+                "checkpoint",
+            )
+        },
+    }
+    assert cycle._load_discovery_artifact(logical, cache) == payload
+    for _ in range(2):
+        assert cycle._historical_backfill_already_covered(
+            target_date="2026-08-25",
+            context=context,
+            provider_floor={},
+            artifact_cache=cache,
+        )
+    assert len(decodes) == 1
+    assert len(validations) == 2
+    logical.write_text(json.dumps({**payload, "rejected": True}))
+    with pytest.raises(ValueError, match="exact_source_binding_rejected"):
+        cycle._historical_backfill_already_covered(
+            target_date="2026-08-25",
+            context=context,
+            provider_floor={},
+            artifact_cache=cache,
+        )
+    assert len(decodes) == 2
+    assert len(validations) == 3
+
+
+def test_discovery_floor_rejects_change_during_decode_and_parent_swap(
+    tmp_path, monkeypatch
+):
     root = tmp_path / "floors"
     root.mkdir()
     logical = root / "floor.json"
@@ -4940,28 +5018,28 @@ def test_discovery_floor_rejects_change_during_decode_and_parent_swap(tmp_path, 
 
     monkeypatch.setattr(cycle, "read_json_object_strict", changed)
     with pytest.raises(ValueError, match="changed_during_read"):
-        cycle._load_discovery_floor(logical, cache)
+        cycle._load_discovery_artifact(logical, cache)
     assert cache == {}
     monkeypatch.setattr(cycle, "read_json_object_strict", reader)
-    assert cycle._load_discovery_floor(logical, cache) == {"value": 2}
+    assert cycle._load_discovery_artifact(logical, cache) == {"value": 2}
     root.rename(tmp_path / "previous")
     root.mkdir()
     logical.write_text('{"value":3}')
-    assert cycle._load_discovery_floor(logical, cache) == {"value": 3}
+    assert cycle._load_discovery_artifact(logical, cache) == {"value": 3}
     root.rename(tmp_path / "replacement")
     root.symlink_to(tmp_path / "previous", target_is_directory=True)
     with pytest.raises((ValueError, OSError)):
-        cycle._load_discovery_floor(logical, cache)
+        cycle._load_discovery_artifact(logical, cache)
 
 
 def test_discovery_floor_busy_writer_falls_back_without_new_wait(tmp_path):
     logical = tmp_path / "floor.json"
     logical.write_text('{"value":1}')
     cache = {}
-    assert cycle._load_discovery_floor(logical, cache) == {"value": 1}
+    assert cycle._load_discovery_artifact(logical, cache) == {"value": 1}
     with cycle.json_artifact_generation_lock(logical, exclusive=True, blocking=False):
         logical.write_text('{"value":2}')
-        assert cycle._load_discovery_floor(logical, cache) == {"value": 2}
+        assert cycle._load_discovery_artifact(logical, cache) == {"value": 2}
         assert cache == {}
 
 
@@ -4969,22 +5047,32 @@ def test_historical_floor_discovery_and_selection_share_decode_with_full_parity(
     tmp_path, monkeypatch
 ):
     prior_body = {
-        "target_date": "2026-08-31", "pass": True,
+        "target_date": "2026-08-31",
+        "pass": True,
         "status": "pass_provider_ablation_floor_met",
         "included_artifacts": [{"target_date": "2026-08-25", "parent_count": 20}],
     }
     prior = {**prior_body, "floor_content_sha256": cycle._sha256(prior_body)}
     current_body = {
-        **prior_body, "target_date": "2026-09-01",
+        **prior_body,
+        "target_date": "2026-09-01",
         "included_artifacts": [{"target_date": "2026-08-26", "parent_count": 20}],
     }
     current = {**current_body, "floor_content_sha256": cycle._sha256(current_body)}
-    monkeypatch.setattr(cycle, "provider_ablation_floor_path", lambda day: tmp_path / f"floor-{day}.json")
+    monkeypatch.setattr(
+        cycle,
+        "provider_ablation_floor_path",
+        lambda day: tmp_path / f"floor-{day}.json",
+    )
     cycle.provider_ablation_floor_path("2026-08-31").write_text(json.dumps(prior))
-    monkeypatch.setattr(cycle, "_default_paths", lambda day: {
-        "execution": tmp_path / f"missing-execution-{day}.json",
-        "execution_checkpoint": tmp_path / f"missing-checkpoint-{day}.json",
-    })
+    monkeypatch.setattr(
+        cycle,
+        "_default_paths",
+        lambda day: {
+            "execution": tmp_path / f"missing-execution-{day}.json",
+            "execution_checkpoint": tmp_path / f"missing-checkpoint-{day}.json",
+        },
+    )
     reader = cycle.read_json_object_strict
     calls = []
 
@@ -4996,17 +5084,33 @@ def test_historical_floor_discovery_and_selection_share_decode_with_full_parity(
     cache = {}
     common = dict(current_target_date="2026-09-01", current_floor=current)
     dates = cycle._historical_backfill_dates(
-        provider_floor=current, current_target_date="2026-09-01",
-        daily_attempt_cap=390, parent_cap=130, floor_cache=cache,
+        provider_floor=current,
+        current_target_date="2026-09-01",
+        daily_attempt_cap=390,
+        parent_cap=130,
+        floor_cache=cache,
     )
     assert dates == ["2026-08-25", "2026-08-26"]
-    actual = [cycle._historical_backfill_floor(target_date=day, floor_cache=cache, **common) for day in dates]
+    actual = [
+        cycle._historical_backfill_floor(target_date=day, floor_cache=cache, **common)
+        for day in dates
+    ]
     assert len(calls) == 1
-    expected = [cycle._historical_backfill_floor(target_date=day, **common) for day in dates]
+    expected = [
+        cycle._historical_backfill_floor(target_date=day, **common) for day in dates
+    ]
     assert actual == expected
     assert len(calls) == 3
-    assert cycle._load_discovery_floor(cycle.provider_ablation_floor_path("2026-08-31"), cache) == prior
-    assert current == {**current_body, "floor_content_sha256": cycle._sha256(current_body)}
+    assert (
+        cycle._load_discovery_artifact(
+            cycle.provider_ablation_floor_path("2026-08-31"), cache
+        )
+        == prior
+    )
+    assert current == {
+        **current_body,
+        "floor_content_sha256": cycle._sha256(current_body),
+    }
 
 
 def test_historical_backfill_dates_are_oldest_first_and_reserve_current_parent(

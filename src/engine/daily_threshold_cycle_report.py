@@ -6074,13 +6074,18 @@ def _filter_completed_rows_by_date(
     end_date: str,
     *,
     allow_missing_date_fallback: bool = True,
+    parsed_dates: list[date | None] | None = None,
 ) -> list[dict]:
     start = datetime.strptime(start_date, "%Y-%m-%d").date()
     end = datetime.strptime(end_date, "%Y-%m-%d").date()
     filtered: list[dict] = []
     missing_date_rows: list[dict] = []
-    for row in rows:
-        rec_date = _row_rec_date(row)
+    if parsed_dates is not None and len(parsed_dates) != len(rows):
+        raise ValueError("completed_rows_date_projection_length_mismatch")
+    for index, row in enumerate(rows):
+        rec_date = (
+            parsed_dates[index] if parsed_dates is not None else _row_rec_date(row)
+        )
         if rec_date is None:
             missing_date_rows.append(row)
             continue
@@ -20278,6 +20283,9 @@ def build_cumulative_threshold_cycle_report(
             "completed trade 로드는 skip-db 옵션 또는 pre-baseline target으로 생략됨"
         )
 
+    # Date normalization is invariant across overlapping windows. Keep row
+    # order and the legacy missing-date fallback; no lossy mean-only EV cache.
+    completed_dates = [_row_rec_date(row) for row in completed_rows]
     real_completed_by_window: dict[str, list[dict]] = {}
     sim_completed_by_window: dict[str, list[dict]] = {}
     completed_by_window: dict[str, list[dict]] = {}
@@ -20298,7 +20306,9 @@ def build_cumulative_threshold_cycle_report(
             event_count_by_window[label] = 0
             continue
         window_events = load_events_for_window(label, dates)
-        real_rows = _filter_completed_rows_by_date(completed_rows, dates[0], dates[-1])
+        real_rows = _filter_completed_rows_by_date(
+            completed_rows, dates[0], dates[-1], parsed_dates=completed_dates
+        )
         sim_rows = _extract_scalp_sim_completed_rows(window_events)
         real_completed_by_window[label] = real_rows
         sim_completed_by_window[label] = sim_rows
