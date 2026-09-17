@@ -2,7 +2,7 @@
 
 ## 1. 목표·범위·현 상태
 
-상태: **O0 main wrapper 계측·O3 행 내부 중복 계산 제거·O2 삼성 공통 feature/AVG_DOWN cache 정정 감지 부분 구현**. [부분 구현·검증](../audit-reports/2026-09-17-postclose-computation-optimization-scoped-implementation.md)을 기준으로 하며 전체 O0–O3 완료가 아니다. 대상은 ① main AI quality/provider replay ② 삼성 entry·저가주 2leg·AVG_DOWN 연구 계산 ③ source-quality/cumulative EV 반복 원천 처리다. 계획 문서 자체는 production 실행·provider/주문 호출·배포·재기동 권한이 아니며 별도 사용자 실행 요청 범위만 따른다.
+상태: **O0 main wrapper 계측·O3 행 내부 중복 계산 제거·O2 삼성 공통 feature/AVG_DOWN cache 정정 감지·O1 discovery-local floor 재파싱 제거 부분 구현**. [부분 구현·검증](../audit-reports/2026-09-17-postclose-computation-optimization-scoped-implementation.md)을 기준으로 하며 전체 O0–O3 완료가 아니다. 대상은 ① main AI quality/provider replay ② 삼성 entry·저가주 2leg·AVG_DOWN 연구 계산 ③ source-quality/cumulative EV 반복 원천 처리다. 계획 문서 자체는 production 실행·provider/주문 호출·배포·재기동 권한이 아니며 별도 사용자 실행 요청 범위만 따른다.
 
 목표는 동일한 유효 전체 모집단·후보·정책 의미를 유지하면서 parsing/replay/반복 결과 계산을 줄이는 것이다. 전수 연구의 정확성 보완은 [연구 로직 점검](../audit-reports/2026-09-17-widget-episode-policy-research-logic-review.md) 및 [전수 튜닝 계획](entry-opportunity-cost-full-population-tuning-implementation-plan-2026-09-17.md) U10A/B에 따른다. 계산 변경과 경제성·선정 의미 변경을 별도 diff/검증으로 구분한다.
 
