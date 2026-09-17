@@ -709,6 +709,22 @@ def test_report_profile_checkpoints_selectively_replay_corrected_symbol_and_keep
             checkpoint_cache_dir=cache,
         )
         result.pop("generated_at_kst")
+        metrics = result.pop("computation_metrics")
+        evaluated = sum(
+            row["decision"] != "source_quality_quarantined_no_evaluation"
+            for row in result["profiles"].values()
+        )
+        assert metrics["cache_hit"] + metrics["cache_miss"] == evaluated
+        assert metrics["decision_authority"] == "no_runtime_apply_or_order_authority"
+        assert metrics["forbidden_uses"] == [
+            "economic_acceptance", "selection_gate", "startup_gate"
+        ]
+        assert set(metrics["profile_phases"]) == {
+            "profile_source_binding", "profile_selection", "profile_enrichment"
+        }
+        for phase in metrics["profile_phases"].values():
+            assert phase["wall_seconds"] >= 0
+            assert phase["cpu_seconds"] >= 0
         return result
 
     reference = build(deepcopy(sources), None)

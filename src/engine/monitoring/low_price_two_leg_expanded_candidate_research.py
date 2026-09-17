@@ -1170,6 +1170,7 @@ def build_report(
     market_census: dict[str, Any] | None = None,
     checkpoint_cache_dir: Path | None = None,
 ) -> dict[str, Any]:
+    build_started = (time_module.monotonic(), time_module.process_time())
     if start_date != CLEAN_BASELINE_DATE or end_date < start_date:
         raise ValueError("research_window_must_start_at_clean_baseline")
     expected_dates = clean_baseline_trading_dates(end_date)
@@ -1239,6 +1240,11 @@ def build_report(
         raise ResearchError("all_research_symbols_source_quality_blocked")
     profiles: dict[str, dict[str, Any]] = {}
     selection_source_digests = {}
+    checkpoint_stats: dict[str, int] = {}
+    phase_totals = {
+        name: {"wall_seconds": 0.0, "cpu_seconds": 0.0}
+        for name in ("profile_source_binding", "profile_selection", "profile_enrichment")
+    }
     for profile_id, profile in selected_profiles.items():
         observation_contract = _operator_observation_contract(profile)
         if profile.symbol not in contexts_by_symbol:
@@ -1275,6 +1281,7 @@ def build_report(
                 "runtime_effect": False,
             }
             continue
+        phase_started = (time_module.monotonic(), time_module.process_time())
         checkpoint_contract = None
         if checkpoint_cache_dir is not None:
             # Hash actual bars once per symbol, not the caller's source marker.
@@ -1311,13 +1318,28 @@ def build_report(
                 "holdout_days": HOLDOUT_DAYS,
                 "grid": [item.public() for item in candidate_grid(profile)],
             }
+        phase_totals["profile_source_binding"]["wall_seconds"] += (
+            time_module.monotonic() - phase_started[0]
+        )
+        phase_totals["profile_source_binding"]["cpu_seconds"] += (
+            time_module.process_time() - phase_started[1]
+        )
+        phase_started = (time_module.monotonic(), time_module.process_time())
         selected = _select_profile_checkpoint(
             profile,
             contexts_by_symbol[profile.symbol],
             calibration_days=calibration_days,
             cache_dir=checkpoint_cache_dir,
             contract=checkpoint_contract,
+            stats=checkpoint_stats,
         )
+        phase_totals["profile_selection"]["wall_seconds"] += (
+            time_module.monotonic() - phase_started[0]
+        )
+        phase_totals["profile_selection"]["cpu_seconds"] += (
+            time_module.process_time() - phase_started[1]
+        )
+        phase_started = (time_module.monotonic(), time_module.process_time())
         selected["discovery_lane"] = profile.discovery_lane
         selected["active_profile_ids_for_symbol"] = sorted(
             live_profile_id
@@ -1365,6 +1387,12 @@ def build_report(
                 source_date=end_date,
             )
         profiles[profile_id] = selected
+        phase_totals["profile_enrichment"]["wall_seconds"] += (
+            time_module.monotonic() - phase_started[0]
+        )
+        phase_totals["profile_enrichment"]["cpu_seconds"] += (
+            time_module.process_time() - phase_started[1]
+        )
     recommendations = _recommendation_rows(
         profiles,
         source_meta,
@@ -1439,6 +1467,25 @@ def build_report(
         ),
         "eligible_source_symbol_count": len(contexts_by_symbol),
         "source_cache_read_metrics": getattr(sources, "metrics", None),
+        "computation_metrics": {
+            "schema": "low_price_research_phase_metrics_v1",
+            "scope": "this_build_invocation_not_end_to_end_wrapper_or_provider",
+            "selection_includes": "feature_materialization_checkpoint_validation_and_replay",
+            "cache_hit": checkpoint_stats.get("hit", 0),
+            "cache_miss": checkpoint_stats.get("miss", 0),
+            "profile_phases": phase_totals,
+            "elapsed_until_report_assembly": {
+                "wall_seconds": time_module.monotonic() - build_started[0],
+                "cpu_seconds": time_module.process_time() - build_started[1],
+            },
+            "metric_role": "compute_diagnostic",
+            "decision_authority": "no_runtime_apply_or_order_authority",
+            "window_policy": "single_build_invocation_validated_source_profiles",
+            "sample_floor": "not_applicable_compute_diagnostic",
+            "primary_decision_metric": None,
+            "source_quality_gate": "existing_profile_source_admission_unchanged",
+            "forbidden_uses": ["economic_acceptance", "selection_gate", "startup_gate"],
+        },
         "quarantined_source_symbol_count": len(source_quarantine),
         "source_quarantine": source_quarantine,
         "research_profile_inventory": _research_profile_inventory_public(
