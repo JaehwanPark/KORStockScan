@@ -10001,9 +10001,19 @@ def test_observer_refresh_rejects_another_epoch_and_preserves_exact_receive_cloc
 
 
 def test_latency_input_health_survives_existing_pipeline_events(monkeypatch):
+    from src.utils import pipeline_event_logger as pipeline_logger
+
+    monkeypatch.setattr(pipeline_logger, "TRADING_RULES",
+                        SimpleNamespace(PIPELINE_EVENT_JSONL_ENABLED=False))
+    monkeypatch.setattr(pipeline_logger, "_should_emit_text_info", lambda *args: False)
     logs = []
-    monkeypatch.setattr(state_handlers, "emit_pipeline_event",
-                        lambda *args, **kwargs: logs.append((args[3], kwargs["fields"])))
+
+    def real_emit(*args, **kwargs):
+        emitted = pipeline_logger.emit_pipeline_event(*args, **kwargs)
+        logs.append((emitted["stage"], emitted["fields"]))
+        return emitted
+
+    monkeypatch.setattr(state_handlers, "emit_pipeline_event", real_emit)
     now = time.time()
     monkeypatch.setattr(entry_latency_module.time, "time", lambda: now)
     result = evaluate_live_buy_entry(
@@ -10026,5 +10036,7 @@ def test_latency_input_health_survives_existing_pipeline_events(monkeypatch):
     assert [stage for stage, _ in logs] == [
         "latency_block", "latency_pass", "order_bundle_submitted"]
     for _, fields in logs:
-        assert {key: fields[key] for key in retained} == retained
-        assert json.loads(json.dumps(fields))["market_data_health"] == retained["market_data_health"]
+        assert json.loads(fields["market_data_health"]) == retained["market_data_health"]
+        assert json.loads(fields["input_quote_source_receipt"]) == retained["input_quote_source_receipt"]
+        assert float(fields["cached_quote_received_epoch"]) == retained["cached_quote_received_epoch"]
+        assert float(fields["cached_quote_receive_age_ms"]) == retained["cached_quote_receive_age_ms"]

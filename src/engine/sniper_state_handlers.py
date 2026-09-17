@@ -13204,6 +13204,12 @@ _MACHINE_PRIMARY_LINEAGE_PIPELINE_STAGES = frozenset(
 
 
 def _log_entry_pipeline(stock, code, stage, **fields):
+    if stage in {"latency_block", "latency_pass", "order_bundle_submitted"}:
+        # The existing pipeline wire contract stores field values as strings.
+        # Preserve these input facts as parseable JSON, not Python dict repr.
+        for key in ("market_data_health", "input_quote_source_receipt"):
+            if isinstance(fields.get(key), dict):
+                fields[key] = json.dumps(fields[key], sort_keys=True, separators=(",", ":"))
     if stage in _MACHINE_PRIMARY_LINEAGE_PIPELINE_STAGES and isinstance(stock, dict):
         # Downstream submit stages belong to the exact trusted AI attempt kept
         # on the watched stock.  Add provenance only; this does not authorize a
