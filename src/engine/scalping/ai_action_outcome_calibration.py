@@ -2312,7 +2312,7 @@ def _common_refinement_population(
             ):
                 excluded["natural_machine_receipt_or_identity_invalid"] += 1
                 continue
-            if _machine_evaluation_key(row) in conflict_keys:
+            if _machine_evaluation_key(row) in observed_conflict_keys:
                 excluded["conflicting_exact_attempt"] += 1
                 continue
             comparison = _as_dict(row.get("comparison"))
