@@ -42,6 +42,8 @@
 
 진행현황·잔여 재대사: [리뷰 §28](../audit-reports/2026-09-17-common-health-opportunity-cost-scoped-implementation.md#28-진행현황-대사와-재진입-holdout표시-future-잔여-수리). 실제 재진입 family holdout 재사용과 표시 미래 체결의 age0 정규화를 기존 두 경로에서 수리했다. 전수 U0 의미분류/U2~U4 migration 및 active family disposition·자연 새 정책/경제성은 OPEN이며 scoped finding0/웹 소비를 전체 완료로 합산하지 않는다.
 
+Typed 소비 후속: [리뷰 §29](../audit-reports/2026-09-17-common-health-opportunity-cost-scoped-implementation.md#29-typed-quotehealth-원-receipt와-기존-pipeline-json-전달-잔여-수리). 기존 `QuoteHealth`→main latency→세 기존 pipeline 이벤트에 원 receipt/scope/type identity·현재 raw common facts를 전달하고 실제 logger의 JSON 경계를 보완했다. 최종8384b6091/main971096 소비와 전수 migration·자연 typed handoff/새 정책 경제성은 분리한다.
+
 ## 2. 선행·병행 순서와 두 개의 독립 완료 gate
 
 ### 2.1 실행 원칙
