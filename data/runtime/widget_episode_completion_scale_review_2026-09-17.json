@@ -105,7 +105,7 @@
       "sha256": "2c1bf8e74abc985dfc95d98a482be1c6ded1baa1d637194d5a7307139c3c7840"
     },
     "normalized_statistics_latest": {
-      "path": "/home/ubuntu/KORStockScan/tmp/completion-r4-statistics.json",
+      "path": "/home/ubuntu/KORStockScan/tmp/completion-r6-statistics.json",
       "receipt": {
         "actual_order_submitted": false,
         "allowed_runtime_apply": false,
@@ -113,83 +113,83 @@
         "fixture": "synthetic_normalized_exact_cost_and_paired_statistics_not_native_broker_or_candidate_publication_acceptance",
         "measurements": {
           "N100D120": {
-            "cpu_seconds": 1.0359389229999998,
-            "feedback_digest": "9ce69ebb0fde981026cc04db6649a52339820178b77a24c5243d9e3259dc4763",
-            "joint_compute_cpu_seconds": 0.32572510099999974,
+            "cpu_seconds": 1.033572265,
+            "feedback_digest": "fd71930a5b7ea7748ff51aaab8e96b493d958c975006867ea4eecc4a2331ce62",
+            "joint_compute_cpu_seconds": 0.33283006000000004,
             "joint_digest": "e9f07274550412bf2fc878561347924f4f85281df50d7f8fa13f3216c76641a5",
             "native_fixture_bytes": 8140680,
             "normalized_exact_cost_outcomes": 12000,
             "paired_trade_episodes": 24000,
-            "peak_rss_kib": 156900,
+            "peak_rss_kib": 156936,
             "remote_requests": 0,
-            "wall_seconds": 5.195942379999906
+            "wall_seconds": 5.108615610006382
           },
           "N100D72": {
-            "cpu_seconds": 0.6494169159999998,
-            "feedback_digest": "8288d2fb9fe36ad4ac384f8785bc29b2851e64d427ce0f76c3c48d41ad1a4d3b",
-            "joint_compute_cpu_seconds": 0.22101656899999989,
+            "cpu_seconds": 0.640982817,
+            "feedback_digest": "5103edab0ebce5d9c98dd79a6c42d23ac3bd96983ccbaf03a845dc50d6f2f03a",
+            "joint_compute_cpu_seconds": 0.22321649199999993,
             "joint_digest": "48da4b0a725731dc8c03529f079e51086be13ef89e0cbbab806b5dbb01dd02ab",
             "native_fixture_bytes": 4884408,
             "normalized_exact_cost_outcomes": 7200,
             "paired_trade_episodes": 14400,
-            "peak_rss_kib": 143100,
+            "peak_rss_kib": 143168,
             "remote_requests": 0,
-            "wall_seconds": 3.2084888739991584
+            "wall_seconds": 3.1938564400043106
           },
           "N19D120": {
-            "cpu_seconds": 0.2565285909999999,
-            "feedback_digest": "79be224d86577a955c8437034041f7b3a746804b8ed299e69813ec7372c092d7",
-            "joint_compute_cpu_seconds": 0.05788549300000012,
+            "cpu_seconds": 0.24862503800000013,
+            "feedback_digest": "2bb7328f204671fac76fe0ff8a1dea14ea666cc6c95ab5041d9d768dddf59909",
+            "joint_compute_cpu_seconds": 0.05871082499999991,
             "joint_digest": "b525c170ab244199e837eca1f70c3cc45c4aa7a550cf790425b269069e6c1c7e",
             "native_fixture_bytes": 1569960,
             "normalized_exact_cost_outcomes": 2280,
             "paired_trade_episodes": 4560,
-            "peak_rss_kib": 143100,
+            "peak_rss_kib": 143296,
             "remote_requests": 0,
-            "wall_seconds": 1.5239317439991282
+            "wall_seconds": 1.4092057270026999
           },
           "N19D72": {
-            "cpu_seconds": 0.15636881800000002,
-            "feedback_digest": "f2372c204ff5ef7c4e012bf6e71ccb102e678fd6d230e134247fb9b2ea890a50",
-            "joint_compute_cpu_seconds": 0.03219724600000007,
+            "cpu_seconds": 0.15634200900000006,
+            "feedback_digest": "72c41714ef1451327fa54f0ea5e6643e129df67f4786bd9460d8e2abf441bc61",
+            "joint_compute_cpu_seconds": 0.034024162999999996,
             "joint_digest": "a2b4d5d35d26267bf7e977d6aba97d1b0e356612339257af6f9367b6ed788987",
             "native_fixture_bytes": 941976,
             "normalized_exact_cost_outcomes": 1368,
             "paired_trade_episodes": 2736,
-            "peak_rss_kib": 126880,
+            "peak_rss_kib": 126960,
             "remote_requests": 0,
-            "wall_seconds": 0.9919972799980314
+            "wall_seconds": 0.9014078059990425
           },
           "N50D120": {
-            "cpu_seconds": 0.5476845290000001,
-            "feedback_digest": "0b11f4da68cb722970904e0835647700e09f2878769edf1968d8e26e3f03c524",
-            "joint_compute_cpu_seconds": 0.15833966500000018,
+            "cpu_seconds": 0.541077633,
+            "feedback_digest": "b592953c72e455d1b741897402e2491de7b8d5cbf1584b1f381c9b27108a7dcf",
+            "joint_compute_cpu_seconds": 0.16331955600000025,
             "joint_digest": "76bd3d0a055329e88d3806547af5b9fe590cf037c033b2c722ab5ae7affd21c7",
             "native_fixture_bytes": 4084680,
             "normalized_exact_cost_outcomes": 6000,
             "paired_trade_episodes": 12000,
-            "peak_rss_kib": 143100,
+            "peak_rss_kib": 143296,
             "remote_requests": 0,
-            "wall_seconds": 2.970910890995583
+            "wall_seconds": 2.692979125997226
           },
           "N50D72": {
-            "cpu_seconds": 0.3257449119999999,
-            "feedback_digest": "97407d80c63f151e81e113922a0748cca57ba4df7b474fea74246360533b0829",
-            "joint_compute_cpu_seconds": 0.089377331,
+            "cpu_seconds": 0.323717264,
+            "feedback_digest": "7cb745952ba83e7731d8d975d5826332e0c764ae59e040e1b7f87e0610b0366f",
+            "joint_compute_cpu_seconds": 0.09349019199999997,
             "joint_digest": "cca355a794e37fa0f07f79e6f5b030a42883743d7ad0cf0b249d626a1c329979",
             "native_fixture_bytes": 2450808,
             "normalized_exact_cost_outcomes": 3600,
             "paired_trade_episodes": 7200,
-            "peak_rss_kib": 133076,
+            "peak_rss_kib": 132864,
             "remote_requests": 0,
-            "wall_seconds": 1.6797713490013848
+            "wall_seconds": 1.5913049829978263
           }
         },
-        "producer_sha256": "475e5d500c0dce57a4a076ffa348040252144dfd51b77959a0ff647c38779bee",
+        "producer_sha256": "fba8fade23708b4d96923e219890fdd4f9335e1ab3b55336d24d3a33e0ddc642",
         "runtime_effect": false,
         "status": "complete"
       },
-      "sha256": "08a597d544bc540eda1f96fe2242918d0c8a8efe21615dd1fed036cea5fb2940"
+      "sha256": "78bfba52c2075b56a0e922db83f01bb7a8c35b44e9ae1e425ee18c0c752489ff"
     },
     "widget_100_d120": {
       "path": "/home/ubuntu/KORStockScan/tmp/completion-scale-latest-r2-N100D120.json",
@@ -343,6 +343,28 @@
   },
   "asof_kst": "2026-09-17T17:31:57.944225+09:00",
   "broker_account_order_calls": 0,
+  "capacity_receipt": {
+    "actual_order_submitted": false,
+    "allowed_runtime_apply": false,
+    "available_bytes": 23935221760,
+    "broker_order_forbidden": true,
+    "cache_bytes": 0,
+    "cache_evicted_bytes": 0,
+    "daily_native_bytes": 2657,
+    "forecast_additional_bytes_at_current_daily_rate": 79710,
+    "forecast_basis": "same_daily_growth_scenario_not_measured_future_growth",
+    "forecast_horizon_days": 30,
+    "free_reserve_bytes": 10737418240,
+    "optional_cache_soft_cap_bytes": 2147483648,
+    "projection_bytes": 2657,
+    "raw_bytes": 0,
+    "report_bytes": 0,
+    "reserve_passed": true,
+    "runtime_effect": false,
+    "scope": "additional_closed_loop_research_storage_metadata_only",
+    "source_date": "2026-09-17",
+    "source_retention": "existing_retention_unchanged_no_finite_retention_override"
+  },
   "final_measured_scope": {
     "completed_symbol_count": 87,
     "fixture_backlog_not_actual_runtime_symbol_backlog": true,
@@ -350,10 +372,10 @@
   },
   "frozen_measurement_scope": {
     "episode_native_grid_source": "9031cb65:native replay/checkpoint bytes equal final source",
-    "final_delta": "c7292edd rejects malformed episode leg collections in C4 reference conversion; full discovery/episode grids do not execute that function. Latest normalized C4/C7 N19/50/100 D72/120 rerun completed; all six paired economics digests unchanged.",
+    "final_delta": "c729 malformed C4 leg rejection and preserved predecessor9d8 optional decode RecursionError safe-miss. Full valid discovery/episode fixtures do not execute those branches. Final C4/C7 normalized six-case rerun completed; whole helper hash differs and source scope explicitly bound.",
     "full_native_acquisition_publication_consumer_benchmark": false,
     "same_whole_producer_hash": false,
-    "widget_discovery_source": "f91b5cbf:widget/discovery/native-cache bytes equal final source"
+    "widget_discovery_source": "f91b5cbf:discovery/replay bytes equal final; valid cache decode path unchanged by 9d8 exception-only repair"
   },
   "last_live_resource_samples": {
     "korstockscan-completion-latest-native-episode-grid-20260917.service": {
@@ -402,8 +424,9 @@
   "runtime_effect": false,
   "schema": "widget_episode_completion_engineering_scale_review_v1",
   "source_gates": {
-    "final_missing_leg_physical": 83,
-    "final_missing_leg_source": 83,
+    "final_physical_with_incoming_phase": 296,
+    "final_source_supplement": 85,
+    "incoming_phase": 211,
     "incoming_test_clock_delta": 190,
     "latest_integrated": 887,
     "latest_physical_shared": 397,
@@ -412,7 +435,7 @@
   "source_sha256": {
     "low_price_two_leg_entry_spot_research.py": "224829574b1034e9ba3eeb7425f1ed5270febd9e6d2f0a6feb1915fcc2d955ea",
     "low_price_two_leg_expanded_candidate_research.py": "442471b860340958cf4ec3fbb2a0e14192366af50451b96538fcf367e8bd3546",
-    "research_cache_storage.py": "a78aa803036e76b5608049ec678d7d132a0acd0190718a2e7067c960627cc75c",
+    "research_cache_storage.py": "ac7338bad4c1a4b3730084b72aed90e157518f766369aead3c96c196736c3f81",
     "research_closed_loop.py": "eebf885b7c41d2e0fca6fe28c25b767d0d1dab1336f52c203b0a4f8705a10195",
     "research_portfolio_economics.py": "c53b27572d7b4de7c9c5127e13265296b41ab7f6f5ae8119c8b772d209885c80",
     "research_version_outcomes.py": "83544d45ed5d89b2b553a267e62ba3e7a6e60552a784f49ca31ca7194cc69330",
@@ -448,6 +471,6 @@
       "Result": "exit-code"
     }
   },
-  "validation_source_commit": "c7292edd70538ae37aa298aa0072b7f1d42e0916",
-  "validation_source_root": "/home/ubuntu/KORStockScan-runtime-releases/widget-episode-completion-r4-20260917"
+  "validation_source_commit": "fdc28f2507693c4713df2c610579193a8ea1faba",
+  "validation_source_root": "/home/ubuntu/KORStockScan-runtime-releases/widget-episode-completion-r6-20260917"
 }
