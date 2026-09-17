@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 from collections import deque
 from copy import deepcopy
+from heapq import heappush, heapreplace
 import json
 import math
 import os
@@ -1063,6 +1064,27 @@ def valid_existing_axis_economic_replay(replay: Any) -> bool:
     return True
 
 
+def _retain_calibration_candidate(heap, item, ordinal, limit):
+    """Keep only published evidence; evaluate/count every grid member.
+
+    Earlier grid order wins an exact tie, as with the original stable sort.
+    The ordinal also keeps heap comparisons away from mutable evidence.
+    """
+    key = (
+        item[4]["full"][
+            "cost_adjusted_net_profit_krw_per_source_valid_observation_day"
+        ],
+        item[0],
+        item[1],
+        item[2],
+        -ordinal,
+    )
+    if len(heap) < limit:
+        heappush(heap, (key, item))
+    elif key > heap[0][0]:
+        heapreplace(heap, (key, item))
+
+
 def select_profile_spot(
     profile: MachineProfile,
     contexts: dict[date, DayContext],
@@ -1080,13 +1102,12 @@ def select_profile_spot(
     holdout = dates[calibration_days:]
     first_half = calibration[: calibration_days // 2]
     second_half = calibration[calibration_days // 2 :]
-    ranked: list[tuple[float, float, int, SpotCandidate, dict[str, Any]]] = []
-    diagnostic_ranked: list[tuple[float, float, int, SpotCandidate, dict[str, Any]]] = (
-        []
-    )
+    ranked_heap = []
+    diagnostic_heap = []
+    calibration_ready_count = 0
     grid = candidate_grid(profile)
     sample_ready_count = manageable_carry_count = both_half_positive_count = 0
-    for candidate in grid:
+    for ordinal, candidate in enumerate(grid):
         first, second, full = _evaluate_candidate_windows(
             candidate, contexts, [first_half, second_half, calibration]
         )
@@ -1099,42 +1120,41 @@ def select_profile_spot(
             if manageable_carry:
                 manageable_carry_count += 1
                 score = _robust_score(first, second)
-                diagnostic_ranked.append(
+                _retain_calibration_candidate(
+                    diagnostic_heap,
                     (
                         score,
                         float(full["notional_weighted_ev_pct"]),
                         int(full["completed_legs"]),
                         candidate,
                         evidence,
-                    )
+                    ),
+                    ordinal,
+                    1,
                 )
                 if _positive_ev(first) and _positive_ev(second):
                     both_half_positive_count += 1
         if not _calibration_ready(full, first, second):
             continue
         score = _robust_score(first, second)
-        ranked.append(
+        calibration_ready_count += 1
+        _retain_calibration_candidate(
+            ranked_heap,
             (
                 score,
                 float(full["notional_weighted_ev_pct"]),
                 int(full["completed_legs"]),
                 candidate,
                 evidence,
-            )
+            ),
+            ordinal,
+            10,
         )
 
-    def economic_rank(item):
-        return (
-            item[4]["full"][
-                "cost_adjusted_net_profit_krw_per_source_valid_observation_day"
-            ],
-            item[0],
-            item[1],
-            item[2],
-        )
-
-    ranked.sort(key=economic_rank, reverse=True)
-    diagnostic_ranked.sort(key=economic_rank, reverse=True)
+    ranked = [
+        item for _, item in sorted(ranked_heap, key=lambda row: row[0], reverse=True)
+    ]
+    diagnostic_ranked = [item for _, item in diagnostic_heap]
     baseline = baseline_candidate(profile)
     baseline_results = {
         "calibration": evaluate_candidate(baseline, contexts, calibration),
@@ -1226,7 +1246,7 @@ def select_profile_spot(
             "holdout_trading_day_count": len(holdout),
         },
         "grid_candidate_count": len(grid),
-        "calibration_ready_candidate_count": len(ranked),
+        "calibration_ready_candidate_count": calibration_ready_count,
         "calibration_gate_counts": {
             "sample_ready": sample_ready_count,
             "manageable_carry": manageable_carry_count,
