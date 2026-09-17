@@ -64,6 +64,20 @@ _KIWOOM_TOKEN_REPLACEMENTS = {}
 _KIWOOM_TOKEN_REPLACEMENT_LIMIT = 64
 _SCANNER_CODE_NAMESPACE_BLOCK_LOGGED = set()
 _KST = ZoneInfo("Asia/Seoul")
+
+
+def _reset_kiwoom_process_cache_locks_after_fork():
+    global _MARKET_DATA_CACHE_LOCK, _KIWOOM_TOKEN_PROCESS_LOCK
+    _MARKET_DATA_CACHE_LOCK = threading.RLock()
+    _KIWOOM_TOKEN_PROCESS_LOCK = threading.RLock()
+    # Retain valid token replacements; only unfinished thread dependencies and
+    # process-local normalized cache retention are reset in the child.
+    _MARKET_DATA_CACHE.clear()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_kiwoom_process_cache_locks_after_fork)
+
 KIWOOM_CONNECT_TIMEOUT_SEC = float(os.getenv("KIWOOM_CONNECT_TIMEOUT_SEC", "5"))
 KIWOOM_READ_TIMEOUT_SEC = float(os.getenv("KIWOOM_READ_TIMEOUT_SEC", "20"))
 KIWOOM_TOKEN_CACHE_DEFAULT_TTL_SEC = int(
