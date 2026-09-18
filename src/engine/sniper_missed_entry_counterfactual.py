@@ -798,7 +798,7 @@ def _price_ready_plan(event: EntryEvent) -> dict:
             or not re.fullmatch(
                 r"[a-f0-9]{64}", str(plan.get("policy_bundle_hash") or "")
             )
-            or plan.get("effective_venue") not in _EXPLICIT_TRADABLE_VENUES
+            or plan.get("effective_venue") not in (_EXPLICIT_TRADABLE_VENUES | {"KRX_NXT_INTEGRATED"})
             or type(plan.get("total_qty")) is not int
             or plan["total_qty"] <= 0
         ):

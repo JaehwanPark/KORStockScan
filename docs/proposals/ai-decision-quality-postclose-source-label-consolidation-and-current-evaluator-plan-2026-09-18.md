@@ -187,7 +187,7 @@ ADQ6 결과 closure는 승인된 bounded regeneration의 exact date/generation/�
 4. 기존 compact projection은 source contract 버전과 owner subsection을 결속한다. 코드-only/동일 sealed raw generation 변경은 작은 materialized label·owner report만 재결속하며 전수 trace/payload 재스캔을 피한다. 실제 raw/path 변화는 기존 producer가 새 generation을 작성한다. 과거 제외 행의 삭제된 input은 재구성하지 않는다.
 5. 기존 운영 모델의 선행 actual calibration/model holdout을 검증하고 동일 frozen 자본의 paired 순익·EV·tail·보유 자본·reserve·체결 참여율을 계산한다. 겹치는 단일 포지션 기회는 별도 allocation 모델 없이 독립 이익을 더하지 않고 unsupported/null로 처리한다. 지원 범위가 생겼다는 것과 자연 모델 검증 완료를 구분한다. 운영 arm·선행 모델·reviewed 비용 결손인 진단 행은 provider-funded 후보 탐색에서 제외한다.
 6. 기존 reviewed provider pricing owner를 재사용한다. 현재 `operator_accounting_zero_cost`는 유효기간·원천 bytes/hash·정확 모델을 검증한 경우만 Δcost0이다. nonzero USD 가격은 measured token delta와 reviewed KRW conversion 계약이 없으면 source gap/null이며 임의 환율을 만들지 않는다.
-7. compact 승격 v4는 v3의20 learning/20 holdout/2 held dates/coverage1.0 및 기존 scope·tail·일별 순익·holdout 미사용 조건을 유지하고 실측 오차/stress 하한을 추가한다. 하한은 같은 pair의 base/stress Δ 최소값에서 changed-decision 두 arm의 empirical error envelope와 추론비용을 차감한 평균이다. unchanged decision은 모델 오차가 상쇄된다. 이는 통계적 신뢰하한이나 실제 이익이 아니다.
+7. compact 승격 v5는 기존20 learning/20 holdout/2 held dates/coverage1.0 및 기존 scope·tail·일별 순익·holdout 미사용 조건을 유지하고 실측 오차/stress 하한을 추가한다. 하한은 같은 pair의 base/stress Δ 최소값에서 changed-decision 두 arm의 empirical error envelope와 추론비용을 차감한 평균이다. unchanged decision은 모델 오차가 상쇄된다. 이는 통계적 신뢰하한이나 실제 이익이 아니다.
 8. 기존 dated publisher/Daily/PREOPEN reader/Main loader 및 적용 버전 performance owner를 재사용한다. 실제 submit에서 validated machine/compact 판단 버전·bundle·attempt·trace·PID를 frozen context에 기록하고 기존 완료 비용/주문 journal owner로 joint applied version별 중복 제거·rolling/cumulative EV/순익/tail/노출/model error를 계산한다. Split 정책 적용만으로 machine/compact 소비를 주장하지 않는다. active 조건 통과, fail carry, hash/stale/scope/holdout 차단을 회귀 검증하고9/17 source→9/18 publication→9/21 effective로 제한 갱신한다. 정규 PREOPEN 동결/PID·자연 완료 경제성은 수행하지 않는다.
 
 ### 8.3 탐색 가설과 지원 범위
@@ -197,7 +197,7 @@ ADQ6 결과 closure는 승인된 bounded regeneration의 exact date/generation/�
 | 현행 machine | 기존 spread/fillability/book ratio grid 안에서 위험한 현재 ENTER_NOW를 필터링하여 실제 비용 후 손실·노출을 줄이는가 | 실제 downstream compact 판단과 기존 guard를 고정한 current ENTER_NOW filter 비교. 기존 grid/guard를 보존하되 완화 후보의 신규 non-entry 승격은 uncalled downstream AI를 PASS로 가정할 수 없어 primary unsupported; 기존 missed-opportunity 연구는 별도 진단이다. supported owner CF가 source population에 공급된 경우만 비용·모델/stress·별도 chronological holdout gate로 평가한다. |
 | compact | 같은 machine ENTER_NOW/plan에서 불필요 VETO를 PASS로 바꾸거나 손실 PASS를 VETO로 바꾸는가 | 현행 등록 prompt만 비교. PASS/VETO 완료 경로 지원, CAUTION의 실제 recheck 종결 부재는 제외. 판정 불변/self comparison은 Δ0 진단이며 독립 승격이 아니다. |
 
-현재 operating execution 모델의 지원 venue는 KRX/NXT 초기 Main real, native full-depth·full fill·독립 full holding exit다. `KRX_NXT_INTEGRATED`/SOR는 source observer에서 명시적 unsupported이며 공통 venue를 추정하지 않는다. partial/no-fill의 cancel acknowledgement·late-fill inventory, 후행 ADD, 미지원 holding service/시장 입력도 null·구체 owner/closure를 유지한다. 지원 범위 확정은 추가 모델이나 collector 생성 승인이 아니다. 자연21 중 통합 애프터마켓10을 지원 KRX11로 합치지 않는다.
+현행 초기 Main real의 등록된 venue/session 및 SOR 주문 경로를 지원한다. decision scope·native market-data venue·broker route·actual fill venue를 별개로 보존하며 route와 quote venue의 동일성을 요구하지 않는다. 프리마켓 NXT, 정규장 KRX/NXT, 통합 애프터마켓은 기존 등록 scope를 재사용한다. 통합 decision scope는 기존 native SOR feed(_AL), 프리마켓 호환 scope는 native NXT feed(_NX)로 조회하되 실제 체결시장을 추정하지 않는다. native full-depth·통합 component conservation·full fill·독립 holding exit 및 route별 선행 실측 모델을 검증해야 한다. partial/no-fill cancel acknowledgement·late-fill inventory, 후행 ADD, 미기록 holding service는 별도 null/owner/closure다. 새 collector·모델 계약 완화·주문 라우팅 변경은 없다.
 
 ### 8.4 판정과 자연 OPEN
 
@@ -209,6 +209,20 @@ ADQ6 결과 closure는 승인된 bounded regeneration의 exact date/generation/�
 | 자연 실증 대기 | 배포 코드의 지원 기회 관측/actual owner ledger/완료 비용 receipt 유입, 선행 독립 actual 모델 표본 축적, 이후 별도 후보 holdout,9/21 정규 PREOPEN/PID·자연 적용·적용 버전별 rolling/cumulative 완료 손익. 미래 원천 회귀가 PASS인 지원 scope에만 적용한다. |
 | valid no-edge | 모든 필수 source/model/coverage/independent holdout 계약이 유효한 비교에서 양수 조건 불충족. 모델 미검증 또는 null을 no-edge로 바꾸지 않는다. |
 
-후속 route 대사: 자연 KRX quote-view11의 `broker_route`는 SOR, 통합 애프터마켓10의 route는 NXT이다. 현행 직접 KRX 승격 cohort/단일 venue operating model을 유지하며 quote venue와 실제 broker route를 합치지 않는다. 미래 producer는 exact broker route를 요구하고 route/quote venue 불일치를 명시 unsupported로 기록한다. Frozen model scope에도 broker route를 포함한다. SOR routing/통합 venue 계약 확대는 기존 operating owner의 별도 source/model closure이며 단순 자연 표본 대기가 아니다. 직접 KRX/NXT 지원 입력의 producer·계산 회귀 통과를 현재 모든 자연 route의 승격 가능성으로 확대하지 않는다.
+후속 route 판정 정정: `broker_route == effective_venue`와 직접 KRX-only 후보 동결/승격은 현행 SOR 운영 입력을 제외한 구현 결함이다. 이 제한을 제거하고 기존 등록 scope와 exact broker route를 각각 검증한다. 모델 scope hash의 broker route binding은 유지하고 SOR/direct route 표본을 합쳐 holdout floor를 충족시키지 않는다. 후보 학습/동결은 등록 scope별로 가능하며 dated publisher는 독립 검증된 scope만 변경하고 나머지 incumbent를 유지한다. 과거21 복원·재탐색은 후속 수리의 완료 기준이 아니다.
 
-최종 source-label identity 검토: 운영 CF가 유효하더라도 원 label의 payload/trace venue·session 또는 canonical-context venue/session 충돌은 해제하지 않는다. source projection v3에 이 사유를 보존하고 기존 primary source quality 경계를 승계한다. 자연 path 제외1건은 정확 attempt `analyze_target:272210:1789618146665:381de9ad`의 canonical venue/session mismatch이며, 다른 098460 사례와 혼동하지 않는다.
+### 다음 장후작업의 실행 가능한 closure
+
+| 순서 | 해소할 지점 / 기존 owner | closure test / 대기 판정 |
+|---|---|---|
+|1 정상 운영 모집단 | Main pre-AI observer → atomic plan → lossless execution partition/census → replay → compact. SOR/통합의 잘못된 equality와 parser/anchor 차단 제거 | 프리마켓·정규장·통합 애프터마켓 운영 producer가 생성한 입력으로 저장→scope 보존→독립 비용/stop/capital/reserve 계산 회귀. native identity/component 충돌은 계속 차단 |
+|2 다음 자연 원천 생성 | 기존 WS native observer/collector와 Main의 frozen 운영 plan·AI availability·market regime 입력 | 정규 기동에서 기존 observer 활성/수집 scope receipt와 exact attempt의 plan/depth/trade 기록 확인. disabled·zero source·조인 실패는 자연 표본 대기가 아니라 해당 startup/source owner 수리 항목. env를 수동 변경하거나 default OFF를 임의 해제하지 않음 |
+|3 선행 모델 검증 | 기존 entry_split 실제 owner/order/fill/completed-cost projection → empirical chronological calibration/holdout | 지원 scope/route의 원천 계약이 생성·전달된 뒤 검증된 actual completed rows 축적만 자연 대기. 잘못된 projection·owner identity 누락은 구현 수리. 실제 SELL을 CF에 대체하지 않음 |
+|4 유의미한 판단 비교 | machine current ENTER risk filter / compact PASS↔VETO의 기존 후보 공간 | 같은 frozen 자본과 후행 guard의 paired 순익/EV/tail/reserve/fill, empirical error+stress 하한 및 별도 후보 holdout. 등록된 모든 scope의 후보 동결 가능; 모델 미검증 행은 provider 호출 금지 |
+|5 검증 scope만 적용 | 기존 dated publisher → Daily/PREOPEN reader → Main loader | SOR 양수 조건의 활성 policy 발행/해당 scope 소비와 다른 scope carry 회귀. 모델·후보 sample floor/coverage/tail/error/stress/비용 guard 유지 |
+
+다음 장후 결과는 source gap·unsupported·pending·insufficient sample·valid no-edge를 유지하되 SOR 그 자체를 source gap/unsupported로 기록하지 않는다. 원천 생성 계약이 검증되기 전에 미래 표본 축적만 기다리면 해결된다고 보고하지 않는다. 양수 후보·자연 ΔEV·실제 이익은 보장하지 않는다.
+
+기존 자연 수집 설정 확인: canonical `data/threshold_cycle/runtime_env/operator_runtime_overrides.env`에 `SCALP_MICRO_REVERSION_OBSERVER_ENABLED=true`, `SCALP_MICRO_REVERSION_PATH_CAPTURE_ENABLED=true`, `SCALP_MICRO_REVERSION_DEPTH_CAPTURE_ENABLED=true`가 이미 승인·보존되어 있다. 기존 `src/run_bot.sh`의 정규 runtime handoff가 이 persistent override를 source한다. 별도 활성화/env 수정은 필요하지 않다. 다음 정규 기동에서 이 계약의 실제 PID 소비·등록 item/scope·정확 attempt별 native 기록을 확인하는 것이 자연 acceptance이며 default OFF라는 이유로 미래 생성 계약을 미정의로 보고하지 않는다.
+
+실제 세션 시각 회귀의 추가 원천 수리: 프리마켓/애프터마켓 holding route가 사용하는 기존 `_holding_sell_nxt_enabled_status`의 NXT listing 여부·owner·종목·frozen clock를 당시 initial policy state와 함께 기록한다. Replay는 동일 sealed receipt를 검증하여 사후 운영 DB를 조회하지 않는다. SOR/시세/실제 타 경로 SELL로 NXT 여부를 만들지 않으며 미확인 값은 null로 보존한다.

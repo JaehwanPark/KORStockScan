@@ -725,8 +725,12 @@ def test_before_ai_observation_is_not_a_submit_pass_and_keeps_frozen_seed():
     assert blocked['entry_execution_sizing_valid'] is False
 
 
-@pytest.mark.parametrize('guard_allowed,broker_route', [(True,'KRX'),(False,'KRX'),(True,'SOR')])
-def test_runtime_pre_ai_producer_freezes_owner_inputs_without_submit(monkeypatch, tmp_path, guard_allowed,broker_route):
+@pytest.mark.parametrize('guard_allowed,broker_route,venue,session', [
+    (True,'KRX','KRX','KRX_REGULAR'),(False,'SOR','KRX','KRX_REGULAR'),
+    (True,'SOR','KRX','KRX_REGULAR'),(True,'SOR','NXT','NXT_PREMARKET'),
+    (True,'SOR','KRX_NXT_INTEGRATED','KRX_NXT_AFTERMARKET'),
+    (True,'SOR','NXT','NXT_REGULAR_OVERLAP'),(True,'SOR','NXT','NXT_AFTERMARKET')])
+def test_runtime_pre_ai_producer_freezes_owner_inputs_without_submit(monkeypatch, tmp_path, guard_allowed,broker_route,venue,session):
     from copy import deepcopy
     from types import SimpleNamespace
     from src.engine import sniper_state_handlers as handlers
@@ -767,7 +771,8 @@ def test_runtime_pre_ai_producer_freezes_owner_inputs_without_submit(monkeypatch
     policy_observation, _ = exit_fixture()
     policy_snapshot = deepcopy(policy_observation['policy_snapshot'])
     day = datetime.now(sizing.KST).date().isoformat()
-    frozen_clock=datetime.fromisoformat(day+'T10:00:00+09:00')
+    slot='08:15:00' if 'PREMARKET' in session else '15:45:00' if session=='NXT_AFTERMARKET' else '16:15:00' if 'AFTERMARKET' in session else '10:00:00'
+    frozen_clock=datetime.fromisoformat(day+'T'+slot+'+09:00')
     class FixedDatetime(datetime):
         @classmethod
         def now(cls,tz=None):
@@ -777,23 +782,23 @@ def test_runtime_pre_ai_producer_freezes_owner_inputs_without_submit(monkeypatch
     policy_snapshot['environment']['KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ACTIVE_DATE'] = day
     policy_snapshot['files']={key.replace('2026-09-04',day):value for key,value in policy_snapshot['files'].items()}
     monkeypatch.setattr(capture_owner, '_cached_policy', lambda *a: policy_snapshot)
-    stock={'name':'TEST','id':1,'strategy':'SCALPING','source_signature':'scanner-confirmed'}
+    stock={'name':'TEST','id':1,'strategy':'SCALPING','source_signature':'scanner-confirmed','is_nxt':True}
     before=deepcopy(stock)
-    ws={'curr':10020,'effective_route':'KRX','source_epoch':'epoch-1'}
-    exact={'current':{'price':10020},'session_bucket':'KRX_REGULAR','broker_route':broker_route,
+    ws={'curr':10020,'effective_route':replay.entry_native_market_venue(venue),'source_epoch':'epoch-1'}
+    exact={'current':{'price':10020},'session_bucket':session,'broker_route':broker_route,
            'orderbook_top1':{'bid':{'price':10000},'ask':{'price':10010}}}
     receipt={'evaluation_attempt_id':'pre-ai-live','scanner_promotion_id':'promotion-pre-ai',
-             'effective_venue':'KRX','session_bucket':'KRX_REGULAR'}
+             'effective_venue':venue,'session_bucket':session}
     result=handlers._observe_entry_economics_before_ai(stock,'005930',ws,
         exact_payload=exact,assessment={'action':'ENTER_NOW'},capture=receipt,bundle_sha256='a'*64)
     assert stock == before
-    assert requests == ([] if broker_route=='SOR' else [('005930',10020,0,{'source_only':True})])
+    assert requests == [('005930',10020,0,{'source_only':True})]
     logger.flush_pipeline_event_producer_summary()
     day=datetime.now(sizing.KST).date().isoformat()
     events, source_contract=split._bounded_execution_projection(day)
     assert source_contract['producer_census']['identity_conservation_holds'] is True
     assert len(events)==1
-    if guard_allowed and broker_route=='KRX':
+    if guard_allowed:
         assert result['entry_economic_source_status']=='recorded_source_only', result
         event=_load_entry_events(day,rows=events)[0]
         plan=_price_ready_plan(event)
@@ -801,6 +806,8 @@ def test_runtime_pre_ai_producer_freezes_owner_inputs_without_submit(monkeypatch
         seed=json.loads(event.fields['entry_opportunity_replay_seed'])
         assert replay._entry_seed_valid(seed)
         assert seed['operating_contract']['budget_krw'] > 0
+        assert seed['operating_contract']['nxt_listing_receipt']['value'] is True
+        assert seed['operating_contract']['nxt_listing_receipt']['owner']=='stock.is_nxt'
         assert seed['actual_order_submitted'] is False
         assert events[0]['fields']['entry_ai_screen_pass']=='False'
         # The actual source producer's frozen input reaches the existing full
@@ -819,7 +826,15 @@ def test_runtime_pre_ai_producer_freezes_owner_inputs_without_submit(monkeypatch
             windows={}
             for anchor in anchors:
                 depths,trades=entry_native_path({'observed_at':anchor['anchor_at']})
+                native_venue=replay.entry_native_market_venue(venue)
+                for tick in trades:
+                    tick.update(venue=native_venue,session_bucket=session)
                 for frame in depths:
+                    frame.update(venue=native_venue,session_bucket=session,item='005930'+({'NXT':'_NX','SOR':'_AL'}.get(native_venue,'')),
+                        orderbook_time_raw=datetime.fromisoformat(frame['exchange_timestamp']).strftime('%H%M%S'))
+                    if native_venue=='SOR':
+                        frame['route_depth_totals']={'combined':{'bid':1000,'ask':800},
+                            'KRX':{'bid':600,'ask':400},'NXT':{'bid':400,'ask':400}}
                     at=datetime.fromisoformat(frame['exchange_timestamp']).timestamp()
                     bid,ask=(9980,9990) if frame['source_sequence']<=1 else (9500,9510)
                     frame.update(best_bid=bid,best_ask=ask,bid_levels=[[1,bid,1000]],ask_levels=[[1,ask,800]],
@@ -833,6 +848,7 @@ def test_runtime_pre_ai_producer_freezes_owner_inputs_without_submit(monkeypatch
             source_stage='entry_ai_economic_plan_observed', micro_loader=native_loader,
             evaluated_at=datetime.fromisoformat(available_at).timestamp()+250)
         assert computed['counts']['unique_retained']==1
+        assert computed['rows'][0]['status']=='completed_source_only', computed['rows'][0]
         operating=next(iter(computed['rows'][0]['operating_arms'].values()))
         assert operating['status']=='completed_source_only', operating['blocker']
         assert operating['net_pnl_krw']<0
@@ -851,7 +867,7 @@ def test_runtime_pre_ai_producer_freezes_owner_inputs_without_submit(monkeypatch
             endpoint_name='analyze_target',symbol='005930',request_id='producer-risk-fixture',
             model='gpt-5.4-nano',schema_name='entry_setup_risk_adjudication_v1',require_json=True,
             metadata=dict(evaluation_attempt_id=receipt['evaluation_attempt_id'],
-                scanner_promotion_id=receipt['scanner_promotion_id'],effective_venue='KRX',session_bucket='KRX_REGULAR',broker_route='KRX'))
+                scanner_promotion_id=receipt['scanner_promotion_id'],effective_venue=venue,session_bucket=session,broker_route=broker_route))
         stored=trace.record_ai_decision_trace({**request,**receipt,
             'machine_bundle_sha256':'a'*64,'entry_mechanistic_action':'ENTER_NOW',
             'semantic_validation_status':'pass','decision_quality_contract_status':'pass',
@@ -874,7 +890,7 @@ def test_runtime_pre_ai_producer_freezes_owner_inputs_without_submit(monkeypatch
         # source still cannot satisfy the independent model/candidate floors.
         assert compact.primary_input_blocker(row,{})[0]=='source_gap'
     else:
-        prefix='unsupported_pre_ai_broker_route_quote_venue_scope:' if broker_route=='SOR' else 'common_guard_block:'
+        prefix='common_guard_block:'
         assert result['entry_economic_source_blocker'].startswith(prefix)
         assert events[0]['stage']=='entry_ai_economic_source_gap'
     logger._flush_producer_summary_at_exit()

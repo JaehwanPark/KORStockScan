@@ -982,6 +982,19 @@ ENTRY_REPLAY_PROFILES = {
 }
 
 
+def entry_native_market_venue(venue):
+    """Map a decision scope to the existing native feed, never a fill venue."""
+    return {"PREMARKET_KRX_LIKE": "NXT", "KRX_NXT_INTEGRATED": "SOR"}.get(venue, venue)
+
+
+def entry_operating_route_supported(venue, session, broker_route):
+    from src.engine.scalping.entry_setup_evidence import mechanistic_scope_supported
+    venue, session = str(venue or "").upper(), str(session or "").upper()
+    return bool(mechanistic_scope_supported(venue, session)
+        and broker_route in {"KRX", "NXT", "SOR"}
+        and (broker_route == "SOR" or broker_route == entry_native_market_venue(venue)))
+
+
 def freeze_entry_opportunity(plan, *, stock_code, observed_at, profile=None,
                              profile_bps=None, anchor_price=None, sizing_context=None, candidate_leg_plan=None, operating_context=None):
     """Freeze an order-free, non-increasing research menu alongside an owner plan.
@@ -996,7 +1009,8 @@ def freeze_entry_opportunity(plan, *, stock_code, observed_at, profile=None,
             or type(plan.get('total_qty')) is not int or plan['total_qty'] <= 0
             or plan.get('deferred_probe_residual_qty') != 0
             or not re.fullmatch(r'\d{6}', stock_code)
-            or plan.get('effective_venue') not in ('KRX', 'NXT')
+            or not entry_operating_route_supported(plan.get('effective_venue'), plan.get('market_session_bucket'),
+                (operating_context or {}).get('broker_route') or entry_native_market_venue(plan.get('effective_venue')))
             or not plan.get('market_session_bucket') or not _sha(plan.get('policy_bundle_hash'))):
             return None
         clock = datetime.fromtimestamp(observed_at, KST)
@@ -1151,7 +1165,8 @@ def _entry_seed_valid(seed):
                         {(a['price'], a.get('order_type_code', '00')) for a in seed['legs']}
                     for x in seed['candidate_legs'])))
             and re.fullmatch(r'\d{6}', seed['stock_code'])
-            and seed['effective_venue'] in ('KRX', 'NXT')
+            and entry_operating_route_supported(seed['effective_venue'], seed['session_bucket'],
+                (seed.get('operating_contract') or {}).get('broker_route') or entry_native_market_venue(seed['effective_venue']))
             and all(seed[k] for k in ('scanner_promotion_id', 'evaluation_attempt_id', 'session_bucket'))
             and all(_sha(seed[k]) for k in ('policy_bundle_sha256', 'plan_sha256',
                 'entry_price_receipt_sha256', 'entry_price_policy_sha256')))
@@ -1188,7 +1203,7 @@ def replay_entry_opportunity(seed, depth_rows, trade_rows, *, source_ready, eval
             at = clock.timestamp()
             if not start - 1.5 <= at <= end + 1.5:
                 continue
-            if (row.get('symbol') != seed['stock_code'] or row.get('venue') != seed['effective_venue']
+            if (row.get('symbol') != seed['stock_code'] or row.get('venue') != entry_native_market_venue(seed['effective_venue'])
                 or row.get('session_bucket') != seed['session_bucket']
                 or row.get('path_consumer_eligible') is False):
                 raise ValueError('native_scope_mismatch')
@@ -1217,7 +1232,7 @@ def replay_entry_opportunity(seed, depth_rows, trade_rows, *, source_ready, eval
                 raise ValueError('native_trade_contract_invalid')
             at = clock.timestamp()
             if start <= at <= start + seed['research_entry_ttl_sec']:
-                if (row.get('symbol') != seed['stock_code'] or row.get('venue') != seed['effective_venue']
+                if (row.get('symbol') != seed['stock_code'] or row.get('venue') != entry_native_market_venue(seed['effective_venue'])
                     or row.get('session_bucket') != seed['session_bucket']
                     or row.get('sequence_epoch') not in epochs
                     or type(row.get('source_sequence')) is not int
@@ -1424,7 +1439,7 @@ def build_entry_opportunity_replays(day, events, *, evaluated_at=None, micro_loa
                 blocker='declared_replay_window_not_due', seed=seed, arms=None, price_arms=None, **AUTHORITY))
     if ready:
         anchors = [dict(anchor_id=k, symbol=v['stock_code'], anchor_at=v['observed_at'],
-                    expected_venues=[v['effective_venue']], expected_session_buckets=[v['session_bucket']],
+                    expected_venues=[entry_native_market_venue(v['effective_venue'])], expected_session_buckets=[v['session_bucket']],
                     bounded_entry_opportunity_replay=True) for k, v in ready.items()]
         try:
             canary = micro.resolve_target_canary_snapshot(target_date=date.fromisoformat(day),
@@ -1451,7 +1466,7 @@ def build_entry_opportunity_replays(day, events, *, evaluated_at=None, micro_loa
                                   and not window.get('adaptive_exit_source_overflow')
                                   and not micro._invalid_contract_count_for_scope(
                                       inventory.get(seed['stock_code']) or {},
-                                      expected_venues=[seed['effective_venue']],
+                                      expected_venues=[entry_native_market_venue(seed['effective_venue'])],
                                       expected_sessions=[seed['session_bucket']])))
                 if result.get('seed') is None:
                     result['seed'] = seed
@@ -1724,7 +1739,15 @@ def freeze_entry_operating_context(handlers, stock, sizing_context, *, now_ts):
             return None
         initial_exit = initial_scalp_preset_exit_fields(stock, rules=SimpleNamespace(**snapshot["rules"]))
         decision_source=stock.get("last_watching_ai_machine_primary_fields") or {}
+        # Record the SAME existing listing owner used by holding routing. A
+        # quote scope or SOR route never manufactures NXT eligibility.
+        nxt_enabled, nxt_owner = handlers._holding_sell_nxt_enabled_status(stock, stock.get("code", ""))
+        initial_state = capture.holding_state(handlers, {k:v for k,v in stock.items() if k not in
+            {"entry_split_initial_entry_seed", "entry_split_initial_entry_lineage_conflict"}})
+        initial_state["stock"]["is_nxt"] = nxt_enabled
         value = dict(schema=ENTRY_OPERATING_SCHEMA,
+            nxt_listing_receipt=dict(value=nxt_enabled, owner=nxt_owner, stock_code=stock.get("code"),
+                frozen_at=datetime.fromtimestamp(now_ts, KST).isoformat()),
             broker_route=decision_source.get("ai_trace_broker_route"),
             initial_fill_exit_contract_version="main_scalp_preset_initial_fill_v1",
             initial_fill_exit_owner="sniper_execution_receipts.initial_scalp_preset_exit_fields",
@@ -1732,7 +1755,7 @@ def freeze_entry_operating_context(handlers, stock, sizing_context, *, now_ts):
             initial_micro_estimator_state=capture.micro_state(handlers, stock.get('code', '')),
             frozen_at=datetime.fromtimestamp(now_ts, KST).isoformat(),
             policy_snapshot=snapshot, exit_policy_version=snapshot_version(snapshot),
-            initial_policy_state=capture.holding_state(handlers, {k:v for k,v in stock.items() if k not in {"entry_split_initial_entry_seed","entry_split_initial_entry_lineage_conflict"}}),
+            initial_policy_state=initial_state,
             budget_krw=budget, cost_rate=get_trade_cost_rate(),
             model_implementation_sha256=entry_operating_model_identity(),
             cost_policy_version='trade_profit_net_realized_pnl:rate=' + str(get_trade_cost_rate()),
@@ -1774,8 +1797,9 @@ def replay_operating_entry_arm(seed, arm, depth_rows, *, executor=None, trade_ro
             or _timestamp(context['frozen_at'], seed['source_date']) > _timestamp(seed['observed_at'], seed['source_date'])
             or not _entry_seed_valid(seed) or arm.get('requested_qty') != seed['total_qty']):
             raise ValueError('frozen_operating_contract_or_quantity_scope_invalid')
-        if context.get('broker_route') not in (None, seed['effective_venue']):
-            result.update(status='unsupported_scope',blocker='operating_broker_route_quote_venue_scope_unsupported')
+        if not entry_operating_route_supported(seed['effective_venue'], seed['session_bucket'],
+                context.get('broker_route') or entry_native_market_venue(seed['effective_venue'])):
+            result.update(status='unsupported_scope',blocker='operating_session_market_route_contract_invalid')
             return {**result,'sha256':economics_digest(result)}
         started = _timestamp(seed['observed_at'], seed['source_date']).timestamp()
         fills = arm.get('modeled_fill_events') or []
@@ -1817,6 +1841,14 @@ def replay_operating_entry_arm(seed, arm, depth_rows, *, executor=None, trade_ro
         weighted = amount / qty
         state = copy.deepcopy(context['initial_policy_state'])
         stock = state['stock']
+        if "nxt_listing_receipt" in context:
+            listing = context["nxt_listing_receipt"]
+            if (not isinstance(listing, dict) or listing.get("stock_code") != seed['stock_code']
+                or listing.get("frozen_at") != context['frozen_at']
+                or not listing.get("owner")
+                or listing.get("value") not in (None, True, False)
+                or stock.get("is_nxt") is not listing.get("value")):
+                raise ValueError('frozen_nxt_listing_owner_receipt_invalid')
         if "initial_fill_exit_state" in context:
             from types import SimpleNamespace
             from src.engine.sniper_execution_receipts import initial_scalp_preset_exit_fields
@@ -1831,6 +1863,10 @@ def replay_operating_entry_arm(seed, arm, depth_rows, *, executor=None, trade_ro
             buy_price=weighted, buy_qty=qty, pending_add_order=None, pending_entry_orders=[],
             sell_submit_pending=False, buy_time=datetime.fromtimestamp(last_at, KST).isoformat(),
             holding_started_at=adapter._json_value(datetime.fromtimestamp(last_at, KST)), order_time=last_at)
+        if context.get('broker_route'):
+            stock.update(entry_execution_broker_route=context['broker_route'],
+                entry_execution_broker_route_resolution='frozen_planned_route_counterfactual',
+                effective_venue=seed['effective_venue'])
         episode = 'entry-operating-' + seed['seed_sha256']
         observation = dict(source_event_id=episode, scale_in_decision_id=episode,
             position_episode_id=episode, stock_code=seed['stock_code'], venue=seed['effective_venue'],
@@ -1856,7 +1892,7 @@ def replay_operating_entry_arm(seed, arm, depth_rows, *, executor=None, trade_ro
             # Native validation precedes this helper; exact policy/service values
             # remain bound to the recorded frame, never looked up from today's env.
             from src.engine.monitoring.machine_microstructure_attribution import _validate_depth_row
-            if (row.get('symbol') != seed['stock_code'] or row.get('venue') != seed['effective_venue']
+            if (row.get('symbol') != seed['stock_code'] or row.get('venue') != entry_native_market_venue(seed['effective_venue'])
                 or row.get('session_bucket') != seed['session_bucket']):
                 raise ValueError('operating_native_frame_scope_mismatch')
             valid, parsed, _, _, bid, ask = _validate_depth_row(row)
@@ -1871,7 +1907,7 @@ def replay_operating_entry_arm(seed, arm, depth_rows, *, executor=None, trade_ro
                 for tick in trade_rows:
                     valid_tick, eligible_tick, tick_at, tick_price, _, _ = _validate_stream_row(tick)
                     if (valid_tick and eligible_tick and tick_at is not None
-                        and tick.get('symbol') == seed['stock_code'] and tick.get('venue') == seed['effective_venue']
+                        and tick.get('symbol') == seed['stock_code'] and tick.get('venue') == entry_native_market_venue(seed['effective_venue'])
                         and tick.get('session_bucket') == seed['session_bucket']
                         and 0 <= parsed.timestamp() - tick_at.timestamp() <= context['max_frame_gap_sec']):
                         tick_values.append((tick_at.timestamp(), tick_price))
@@ -1880,6 +1916,18 @@ def replay_operating_entry_arm(seed, arm, depth_rows, *, executor=None, trade_ro
                 ws = dict(curr=max(tick_values)[1], best_bid=bid, best_ask=ask,
                     best_bid_qty=row['best_bid_qty'], best_ask_qty=row['best_ask_qty'],
                     last_ws_update_ts=parsed.timestamp(), last_realtime_type_ts={'0D':parsed.timestamp()},quote_stale=False)
+            # Reconstruct only metadata carried by the validated native depth
+            # identity. Keep supplied metadata so conflicts still hit guards.
+            ws = copy.deepcopy(ws)
+            native_route = {"KRX": "krx_only", "NXT": "nxt_only", "SOR": "krx_nxt_integrated"}[row['venue']]
+            for key, value in (("last_realtime_type_item", row['item']),
+                    ("last_realtime_type_market_suffix", row['item'][6:]),
+                    ("last_realtime_type_market_route", native_route),
+                    ("last_realtime_type_ts", parsed.timestamp())):
+                mapping = ws.setdefault(key, {})
+                if not isinstance(mapping, dict):
+                    raise ValueError('operating_ws_native_provenance_invalid')
+                mapping.setdefault("0D", value)
             micro_frame = row.get('micro_estimator_state')
             if micro_store is not None:
                 micro_store.update_from_ws_quote(seed['stock_code'], ws, now_ts=parsed.timestamp(), tier='hot')

@@ -45,3 +45,16 @@ Provider 비용은 기존 operator-reviewed zero-accounting artifact의 모델·
 검증 제외의 근거: origin/main에도 `test_production_string_fields_roundtrip_through_logger_and_report`는 이미 제거된 `_route_arm` fixture를 참조하고 `test_runtime_capture_uses_only_matching_bbo_quantity`는 폐기된 `observe_avg_down_exit_replay_cycle`(항상0)의 관측을 요구한다. 이 둘의 최초 suite 실패는 별도 log에 보존하며 현행 full holding interpreter 테스트 및 새 production writer→paired 계산 회귀로 영향 범위를 검증한다. 퇴역 producer를 테스트 통과용으로 복원하지 않는다. 현행 observer의 실제 enabled/config/PID·자연 source receipt는 다음 정규 기동의 acceptance이고 기본OFF 관측자를 임의로 켜지 않는다.
 
 최종 source-label identity 검토: 운영 CF가 유효하더라도 원 label의 payload/trace venue·session 또는 canonical-context venue/session 충돌은 해제하지 않는다. source projection v3에 이 사유를 보존하고 기존 primary source quality 경계를 승계한다. 자연 path 제외1건은 정확 attempt `analyze_target:272210:1789618146665:381de9ad`의 canonical venue/session mismatch이며, 다른 098460 사례와 혼동하지 않는다.
+
+
+## 다음 장후용 route 구현 결함 정정
+
+직접 KRX/NXT 한정과 `broker_route == effective_venue`는 정상 SOR 운영 입력을 제외한 잘못된 제한이었다. 위 최초 배포의 unsupported 분류를 운영 계약 확대 필요로 설명한 판정을 정정한다. 기존 producer/plan parser/native anchor/operating replay/compact evaluator의 이 제한을 수리하고 기존 등록 scope별 후보 동결·독립 승격·해당 dated policy 소비를 연결한다. native venue와 broker route를 보존하며 실제 체결시장을 추정하지 않는다. 통합 native SOR depth는 기존 KRX/NXT component conservation 검증을 유지한다. 모델/후보 holdout·비용·자본·tail·stress floor는 유지한다.
+
+운영 producer 회귀는 실제 계획 저장/census/public AI trace→native replay/독립 비용 손익→compact source join을 프리마켓 NXT+SOR·정규 KRX+SOR·통합 애프터마켓+SOR에서 검증한다. 별도 통제 입력은 각 route의 empirical model proof 및 후보 holdout으로 활성 dated policy/해당 scope reader를 검증한다. 자연 수익 증거가 아니다. 과거21 복원/재평가를 반복하지 않는다. 다음 source contract closure는 계획의 실행 순서표를 따르며 native capture disabled/조인 실패를 자연 기다림으로 바꾸지 않는다. 검증/배포 receipt는 같은 evidence directory의 `route-successor.json`, `pytest-sor-source-successor.log`다.
+
+기존 자연 수집 설정 확인: canonical `data/threshold_cycle/runtime_env/operator_runtime_overrides.env`에 `SCALP_MICRO_REVERSION_OBSERVER_ENABLED=true`, `SCALP_MICRO_REVERSION_PATH_CAPTURE_ENABLED=true`, `SCALP_MICRO_REVERSION_DEPTH_CAPTURE_ENABLED=true`가 이미 승인·보존되어 있다. 기존 `src/run_bot.sh`의 정규 runtime handoff가 이 persistent override를 source한다. 별도 활성화/env 수정은 필요하지 않다. 다음 정규 기동에서 이 계약의 실제 PID 소비·등록 item/scope·정확 attempt별 native 기록을 확인하는 것이 자연 acceptance이며 default OFF라는 이유로 미래 생성 계약을 미정의로 보고하지 않는다.
+
+실제 세션 시각 회귀의 추가 원천 수리: 프리마켓/애프터마켓 holding route가 사용하는 기존 `_holding_sell_nxt_enabled_status`의 NXT listing 여부·owner·종목·frozen clock를 당시 initial policy state와 함께 기록한다. Replay는 동일 sealed receipt를 검증하여 사후 운영 DB를 조회하지 않는다. SOR/시세/실제 타 경로 SELL로 NXT 여부를 만들지 않으며 미확인 값은 null로 보존한다.
+
+최종 route 후속 검증: 영향7 suite588 PASS(75.68s), producer 실제 세션7 PASS. Frozen planned broker route를 hypothetical initial HOLDING 상태에 전달하며 native item/suffix/route/0D 시각은 검증된 depth identity에서 재구성한다. 입력에 이미 기록된 provenance를 덮어쓰지 않고 source/quote guard를 유지한다. 기존 설정·실행 중 release·과거 자연21 및9/21 incumbent carry policy는 변경하지 않는다. 선택할 successor는 검증된 source commit의 별도 immutable checkout이며 재시작·주문·조기 PREOPEN은 수행하지 않는다.

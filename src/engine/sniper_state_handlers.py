@@ -11816,13 +11816,12 @@ def _observe_entry_economics_before_ai(stock, code, ws_data, *, exact_payload,
             raise ValueError("unsupported_noninitial_or_nonreal_machine_scope")
         # No route inference or use of the retired hard_stop_price TTL field.
         venue = identity["effective_venue"]
-        if venue not in {"KRX", "NXT"}:
-            raise ValueError("unsupported_pre_ai_execution_venue:" + str(venue))
         broker_route=exact_payload.get("broker_route")
         if not broker_route:
             raise ValueError("exact_broker_route_missing")
-        if broker_route != venue:
-            raise ValueError("unsupported_pre_ai_broker_route_quote_venue_scope:"+str(broker_route)+"/"+str(venue))
+        from src.engine.scalping.strategy_owner_replay import entry_operating_route_supported
+        if not entry_operating_route_supported(venue, identity["market_session_bucket"], broker_route):
+            raise ValueError("unsupported_pre_ai_session_market_route_contract:"+str(broker_route)+"/"+str(venue))
         current = _safe_int((exact_payload.get("current") or {}).get("price"), 0)
         if current <= 0:
             raise ValueError("exact_reference_price_missing")

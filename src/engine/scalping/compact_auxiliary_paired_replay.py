@@ -27,7 +27,7 @@ AUTHORITY = dict(
     broker_order_forbidden=True,
 )
 CONTRACT = {
-    "schema": "compact_auxiliary_paired_promotion_v4",
+    "schema": "compact_auxiliary_paired_promotion_v5",
     "learning_episode_floor": 20,
     "holdout_episode_floor": 20,
     "holdout_source_day_floor": 2,
@@ -44,7 +44,7 @@ CONTRACT = {
     "model_holdout_precedes_prompt_learning": True,
     "empirical_error_and_stress_lower_bound_required": True,
 }
-SOURCE_PROJECTION_CONTRACT = "compact_pre_ai_execution_source_v3"
+SOURCE_PROJECTION_CONTRACT = "compact_pre_ai_execution_source_v4"
 
 
 def digest(value):
@@ -136,7 +136,7 @@ def owner_operating_arm(replay, row):
     """Use the independently closed holding outcome, never the research arm."""
     from src.engine.scalping import entry_split_order_plan as split
     from src.engine.scalping.strategy_owner_replay import (
-        ENTRY_OPERATING_SCHEMA, entry_operating_model_identity,
+        ENTRY_OPERATING_SCHEMA, entry_operating_model_identity, entry_operating_route_supported,
     )
     from src.engine.monitoring.research_closed_loop import digest as owner_digest
     if not owner_replay_valid(replay, row):
@@ -147,7 +147,7 @@ def owner_operating_arm(replay, row):
     if (
         context.get("schema") != ENTRY_OPERATING_SCHEMA
         or context.get("broker_route") != row.get("broker_route")
-        or context.get("broker_route") != seed.get("effective_venue")
+        or not entry_operating_route_supported(seed.get("effective_venue"), seed.get("session_bucket"), context.get("broker_route"))
         or context.get("sha256") != owner_digest({k: v for k, v in context.items() if k != "sha256"})
         or context.get("model_implementation_sha256") != entry_operating_model_identity()
         or arm.get("schema") != ENTRY_OPERATING_SCHEMA
@@ -653,7 +653,7 @@ def portfolio_metrics(pairs):
     }
 
 
-def promotion_valid(report, *, incumbent, selected, source_manifest_sha256, effective_date=None):
+def promotion_valid(report, *, incumbent, selected, source_manifest_sha256, effective_date=None, scope=("KRX", "KRX_REGULAR")):
     """A percentage path alone cannot prove executable daily net-profit uplift."""
     if (
         not valid(report)
@@ -716,6 +716,8 @@ def promotion_valid(report, *, incumbent, selected, source_manifest_sha256, effe
     cohorts = defaultdict(lambda: [[], []])
     for i, rows in enumerate((learning, holdout)):
         for p in rows:
+            if (p.get("effective_venue"), p.get("session_bucket")) != tuple(scope):
+                continue
             if p.get("incumbent_prompt_version") != incumbent or not owner_replay_valid(
                 p.get("owner_replay") or {}, p
             ):
@@ -751,9 +753,15 @@ def promotion_valid(report, *, incumbent, selected, source_manifest_sha256, effe
             cohorts[cohort][i].append(p)
     if not cohorts or report.get("metrics", {}).get("response_coverage") != 1.0:
         return False
-    if ("KRX", "KRX_REGULAR", "KRX") not in cohorts:
+    from src.engine.scalping.entry_setup_evidence import mechanistic_scope_supported
+    from src.engine.scalping.strategy_owner_replay import entry_operating_route_supported
+    if not mechanistic_scope_supported(*scope):
         return False
-    for train, test in [cohorts[("KRX", "KRX_REGULAR", "KRX")]]:
+    exact = [halves for cohort, halves in cohorts.items() if cohort[:2] == tuple(scope)
+             and entry_operating_route_supported(*cohort)]
+    if not exact:
+        return False
+    for train, test in exact:
         if (
             len({(p["source_date"], p["scanner_promotion_id"]) for p in train})
             < CONTRACT["learning_episode_floor"]
@@ -788,7 +796,7 @@ def promotion_valid(report, *, incumbent, selected, source_manifest_sha256, effe
     return proof.get("holdout_consumed") is False
 
 
-def consume_holdout(proof, data_root):
+def consume_holdout(proof, data_root, *, scopes=None):
     """Called under the existing publisher lock; retries of one proof are safe."""
     path = (
         report_path(data_root, proof["target_date"]).parent
@@ -800,6 +808,8 @@ def consume_holdout(proof, data_root):
     claims = previous.get("claims", {})
     identity = proof["artifact_content_sha256"]
     for pair in proof["chronological_validation"]["holdout_pairs"]:
+        if scopes is not None and "|".join((pair["effective_venue"], pair["session_bucket"])) not in scopes:
+            continue
         key = pair["evaluation_key"]
         if key in claims and claims[key] != identity:
             raise ValueError("compact_holdout_already_consumed")
@@ -839,8 +849,9 @@ def primary_input_blocker(row, model):
         return ("unsupported_scope" if reason == "natural_contract_invalid" else "source_gap", reason)
     if row.get("source_label_identity_reasons"):
         return "source_gap", "source_label_identity_contract_invalid:"+row["source_label_identity_reasons"][0]
-    if row.get("broker_route") != row.get("effective_venue"):
-        return "unsupported_scope", "broker_route_quote_venue_scope_unsupported"
+    from src.engine.scalping.strategy_owner_replay import entry_operating_route_supported
+    if not entry_operating_route_supported(row.get("effective_venue"), row.get("session_bucket"), row.get("broker_route")):
+        return "unsupported_scope", "session_market_route_contract_invalid"
     replay = row.get("owner_replay") or {}
     arm = owner_operating_arm(replay, row)
     if not arm:
@@ -1249,18 +1260,13 @@ def run(
                 history.extend(old.get("metrics", {}).get("pairs", []))
         all_pairs = history + metrics["pairs"]
         frozen_at = plan.get("candidate_frozen_at")
-        if (
-            not frozen_at
-            and len(
-                {
-                    (p["source_date"], p["scanner_promotion_id"])
-                    for p in all_pairs
-                    if (p["effective_venue"], p["session_bucket"], p["broker_route"])
-                    == ("KRX", "KRX_REGULAR", "KRX")
-                }
-            )
-            >= CONTRACT["learning_episode_floor"]
-        ):
+        learning_by_scope = defaultdict(set)
+        from src.engine.scalping.strategy_owner_replay import entry_operating_route_supported
+        for pair in all_pairs:
+            cohort = (pair["effective_venue"], pair["session_bucket"], pair["broker_route"])
+            if entry_operating_route_supported(*cohort):
+                learning_by_scope[cohort].add((pair["source_date"], pair["scanner_promotion_id"]))
+        if not frozen_at and any(len(keys) >= CONTRACT["learning_episode_floor"] for keys in learning_by_scope.values()):
             frozen_at = datetime.now(KST).isoformat()
             write(
                 plan_path,
@@ -1321,12 +1327,11 @@ def run(
                 **AUTHORITY,
             }
         )
-        report["promotion_pass"] = promotion_valid(
-            report,
-            incumbent=report["incumbent_prompt_version"],
-            selected=candidate,
-            source_manifest_sha256=report["source_manifest_sha256"],
-        )
+        from src.engine.scalping.entry_setup_scalping_rollout import AUTO_PROMOTION_SCOPES
+        report["promotion_scopes"] = [scope for scope in AUTO_PROMOTION_SCOPES if promotion_valid(
+            report, incumbent=report["incumbent_prompt_version"], selected=candidate,
+            source_manifest_sha256=report["source_manifest_sha256"], scope=tuple(scope.split("|")))]
+        report["promotion_pass"] = bool(report["promotion_scopes"])
         report["candidate_improvement_proven"] = report["promotion_pass"]
         report["selection_disposition"] = (
             "candidate_selected" if report["promotion_pass"] else "incumbent_preserved"
@@ -1399,8 +1404,8 @@ def _finalize(*, data_root, day, publication_day):
         "paired_path": str(report_path(root, day).resolve()),
         "evaluation_status": paired["status"],
         "selection_disposition": "candidate_selected"
-        if bundle["ai_policy"]["prompt_version"] == paired["candidate_prompt_version"]
-        and paired["candidate_prompt_version"] != paired["incumbent_prompt_version"]
+        if bundle.get("compact_promoted_scopes") or (bundle["ai_policy"]["prompt_version"] == paired["candidate_prompt_version"]
+        and paired["candidate_prompt_version"] != paired["incumbent_prompt_version"])
         else "incumbent_preserved",
         "next_owner": paired.get(
             "next_owner", "existing_main_owner_execution_cf_and_portfolio_replay"

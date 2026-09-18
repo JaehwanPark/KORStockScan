@@ -496,22 +496,38 @@ def _publish_compact_scope(source: dict, *, data_root: Path, current: datetime) 
         receipt = table.get("compact_auxiliary_evaluation_source_receipt") or table["machine_ai_natural_source_receipt"]
         version = previous["ai_policy"]["prompt_version"]
         selected = proof["candidate_prompt_version"]
-        promote = (receipt.get("tuning_input_allowed") is True
+        measurement_allowed = (receipt.get("tuning_input_allowed") is True
                    and compact_terminal_gate_allowed(receipt)
-                   and (receipt.get("compact_auxiliary_policy_measurement") or {}).get("measurement_allowed") is True
-                   and paired.promotion_valid(proof, incumbent=version, selected=selected,
-                       source_manifest_sha256=receipt.get("source_manifest_sha256"), effective_date=target))
+                   and (receipt.get("compact_auxiliary_policy_measurement") or {}).get("measurement_allowed") is True)
+        scope_keys = list((previous.get("scope_policies") or {})) or ["|".join(COHORT)]
+        promoted_scopes = []
+        for scope_key in scope_keys:
+            old_ai = (previous.get("scope_policies") or {}).get(scope_key, previous)["ai_policy"]
+            if measurement_allowed and paired.promotion_valid(proof,
+                    incumbent=old_ai["prompt_version"], selected=selected,
+                    source_manifest_sha256=receipt.get("source_manifest_sha256"), effective_date=target,
+                    scope=tuple(scope_key.split("|"))):
+                promoted_scopes.append(scope_key)
+        promote = bool(promoted_scopes)
         if existing and existing["ai_policy"]["prompt_version"] != version:
             raise ValueError("compact_future_stage_owner_conflict")
+        for scope_key in promoted_scopes:
+            old_ai = (previous.get("scope_policies") or {}).get(scope_key, previous)["ai_policy"]
+            current_ai = ((existing or {}).get("scope_policies") or {}).get(scope_key, existing or previous)["ai_policy"]
+            if current_ai["prompt_version"] != old_ai["prompt_version"]:
+                raise ValueError("compact_future_stage_owner_conflict:" + scope_key)
         inherited = existing or previous
         if existing:
             calibration._atomic_write_json(root(data_root) / "generations" / f"{existing['bundle_sha256']}.json", existing)
         bundle = copy.deepcopy(inherited)
         bundle.pop("bundle_sha256", None)
         if promote:
-            paired.consume_holdout(proof, data_root)
-            for ai, context in [(bundle["ai_policy"], bundle.get("historical_context"))] + [
-                    (s["ai_policy"], s["historical_context"]) for scope,s in (bundle.get("scope_policies") or {}).items() if scope == "|".join(COHORT)]:
+            paired.consume_holdout(proof, data_root, scopes=promoted_scopes)
+            selected_policies = [(s["ai_policy"], s["historical_context"]) for scope,s in
+                                 (bundle.get("scope_policies") or {}).items() if scope in promoted_scopes]
+            if "|".join(COHORT) in promoted_scopes:
+                selected_policies.append((bundle["ai_policy"], bundle.get("historical_context")))
+            for ai, context in selected_policies:
                 ai.update(prompt_version=selected, variant=compact_prompt_variant(selected),
                           system_prompt=compact_auxiliary_prompt(context, prompt_version=selected))
                 ai["system_prompt_sha256"] = digest(ai["system_prompt"])
@@ -525,7 +541,8 @@ def _publish_compact_scope(source: dict, *, data_root: Path, current: datetime) 
                       compact_inherited_bundle_sha256=inherited["bundle_sha256"],
                       compact_inherited_source_date=inherited["source_date"],
                       compact_paired_artifact_sha256=proof["artifact_content_sha256"],
-                      compact_prompt_disposition="compact_paired_candidate_selected" if promote else "compact_incumbent_carry")
+                      compact_prompt_disposition="compact_paired_candidate_selected" if promote else "compact_incumbent_carry",
+                      compact_promoted_scopes=promoted_scopes)
         bundle["bundle_sha256"] = digest(bundle)
         validate(bundle, target_date=target)
         calibration._atomic_write_json(root(data_root) / "generations" / f"{bundle['bundle_sha256']}.json", bundle)

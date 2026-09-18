@@ -1341,3 +1341,72 @@ def test_supported_operating_owner_cannot_override_source_label_venue_conflict()
     row['source_label_identity_reasons']=['canonical_context_venue_session_mismatch']
     blocker=compact.primary_input_blocker(row,full_compact_proof()['owner_execution_model_validation'])
     assert blocker==('source_gap','source_label_identity_contract_invalid:canonical_context_venue_session_mismatch')
+
+
+@pytest.mark.parametrize("venue,session,route", [
+    ("KRX", "KRX_REGULAR", "SOR"),
+    ("NXT", "NXT_PREMARKET", "SOR"),
+    ("KRX_NXT_INTEGRATED", "KRX_NXT_AFTERMARKET", "SOR"),
+    ("NXT", "NXT_REGULAR_OVERLAP", "SOR"),
+    ("NXT", "NXT_AFTERMARKET", "SOR"),
+])
+def test_registered_sor_scope_independent_promotion_and_dated_consumer(tmp_path, venue, session, route):
+    from copy import deepcopy
+    from datetime import datetime
+    from src.engine.scalping import entry_split_order_plan as split, mechanistic_entry_runtime_policy as policy
+    from src.tests.test_mechanistic_entry_runtime_policy import source
+    parent = policy.publish(source(tmp_path), data_root=tmp_path, bootstrap=True,
+        adopt_all_continuous=True, now=datetime(2026,9,13,20,tzinfo=policy.KST))
+    proof = full_compact_proof()
+    scope = (venue, session)
+    for pair in proof['chronological_validation']['learning_pairs'] + proof['chronological_validation']['holdout_pairs']:
+        pair.update(effective_venue=venue, session_bucket=session, broker_route=route)
+        owner=pair['owner_replay']; seed=owner['seed']
+        seed.update(effective_venue=venue,session_bucket=session)
+        context=seed['operating_contract'];context['broker_route']=route
+        context['sha256']=compact.digest({k:v for k,v in context.items() if k!='sha256'})
+        seed['seed_sha256']=compact.digest({k:v for k,v in seed.items() if k!='seed_sha256'})
+        for arm in owner['operating_arms'].values():
+            arm['contract_sha256']=context['sha256']
+            arm['sha256']=split._canonical_sha256({k:v for k,v in arm.items() if k!='sha256'})
+        owner['replay_sha256']=compact.digest({k:v for k,v in owner.items() if k!='replay_sha256'})
+    exact_scope=split._entry_operating_scope(proof['chronological_validation']['learning_pairs'][0]['owner_replay']['seed'])
+    model=proof['owner_execution_model_validation']['validated_scopes'][0]
+    model['scope_sha256']=exact_scope
+    for key in ('calibration_rows','holdout_rows'):
+        for row in model[key]:row['scope_sha256']=exact_scope
+    model['actual_rows_sha256']=split._canonical_sha256(model['calibration_rows']+model['holdout_rows'])
+    model['sha256']=split._canonical_sha256({k:v for k,v in model.items() if k!='sha256'})
+    proof=compact.sealed(proof)
+    kwargs=dict(incumbent=proof['incumbent_prompt_version'],selected=proof['candidate_prompt_version'],source_manifest_sha256='d'*64)
+    assert compact.promotion_valid(proof,scope=scope,**kwargs)
+    assert compact.primary_input_blocker(proof['chronological_validation']['learning_pairs'][0],proof['owner_execution_model_validation']) is None
+    assert not compact.promotion_valid(proof,scope=('NXT','NXT_REGULAR'),**kwargs)
+    # Existing public dated publisher receives the validated economic proof.
+    from src.tests.test_ai_action_outcome_calibration import _compact_router_case_table
+    receipt=deepcopy(_compact_router_case_table()['machine_ai_natural_source_receipt'])
+    receipt['source_manifest_sha256']='d'*64
+    receipt['compact_auxiliary_policy_measurement']={'measurement_allowed':True}
+    table={'compact_auxiliary_screen_outcomes':{'paired_economic_evaluation':proof},
+           'machine_ai_natural_source_receipt':receipt}
+    report=compact.sealed({'report_scope':'compact_auxiliary_only','target_date':'2026-09-18',
+        'evaluation_source_date':'2026-09-17','hierarchical_entry_quality':{'machine_decision_case_table':table}})
+    successor=policy._publish_compact_scope(report,data_root=tmp_path,current=datetime(2026,9,18,21,tzinfo=policy.KST))
+    assert successor['compact_promoted_scopes']==['|'.join(scope)]
+    loaded=policy.load_effective(data_root=tmp_path,target_date='2026-09-21')
+    assert policy.for_cohort(loaded,scope)['ai_policy']['prompt_version']==proof['candidate_prompt_version']
+    for scope_key,value in parent['scope_policies'].items():
+        if scope_key!='|'.join(scope):
+            assert loaded['scope_policies'][scope_key]['ai_policy']['prompt_version']==value['ai_policy']['prompt_version']
+    # No route pooling may manufacture a passing learning/holdout population.
+    short=deepcopy(proof)
+    short['chronological_validation']['holdout_pairs']=short['chronological_validation']['holdout_pairs'][:19]
+    assert not compact.promotion_valid(compact.sealed(short),scope=scope,**kwargs)
+
+
+@pytest.mark.parametrize('venue,session,route', [
+    ('KRX','KRX_REGULAR','UNKNOWN'),('KRX','KRX_REGULAR','NXT'),
+    ('NXT','NXT_PREMARKET','KRX'),('NXT','UNREGISTERED','SOR')])
+def test_operating_market_route_contract_rejects_real_mismatch(venue,session,route):
+    from src.engine.scalping.strategy_owner_replay import entry_operating_route_supported
+    assert not entry_operating_route_supported(venue,session,route)
