@@ -101,6 +101,8 @@ def full_compact_proof():
         "candidate_prompt_version": policy.ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION,
         "source_manifest_sha256": "d"*64, "promotion_contract_sha256": compact.digest(compact.CONTRACT),
         "status": "comparison_complete", "candidate_frozen_at": frozen,
+        # Synthetic approved model tests wiring only; the current real owner is unsupported.
+        "owner_execution_model_validation": {"contract_version": "entry_split_execution_model_validation_v1", "source_date": "2026-09-17", "status": "validated_scope", "allowed_runtime_apply": True},
         "metrics": metrics, "candidate_improvement_proven": True, "selection_disposition": "candidate_selected",
         "chronological_validation": {"candidate_frozen_at": frozen, "learning_pairs": metrics["pairs"][:20],
                                      "holdout_pairs": metrics["pairs"][20:], "holdout_consumed": False}, **compact.AUTHORITY})
@@ -184,6 +186,8 @@ def test_compact_recomputed_owner_economics_and_consumed_holdout(tmp_path):
     proof = full_compact_proof()
     kwargs = dict(incumbent=proof["incumbent_prompt_version"], selected=proof["candidate_prompt_version"], source_manifest_sha256="d"*64)
     assert compact.promotion_valid(proof, **kwargs)
+    missing_model = dict(proof, owner_execution_model_validation={})
+    assert not compact.promotion_valid(compact.sealed(missing_model), **kwargs)
     compact.consume_holdout(proof, tmp_path)
     compact.consume_holdout(proof, tmp_path)
     proof["chronological_validation"]["holdout_pairs"][0]["delta_net_pct"] += 1

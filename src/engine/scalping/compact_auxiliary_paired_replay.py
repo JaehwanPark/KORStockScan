@@ -39,6 +39,7 @@ CONTRACT = {
     "tail_must_not_worsen": True,
     "stress_delta_must_be_positive": True,
     "runtime_inference_cost_delta_required": True,
+    "validated_owner_operating_model_required": True,
 }
 
 
@@ -278,6 +279,7 @@ def prepare(data_root, day):
             "source_tuning_allowed": receipt.get("tuning_input_allowed") is True
             and isinstance(manifest.get("source_manifest_sha256"), str)
             and len(manifest["source_manifest_sha256"]) == 64,
+            "owner_execution_model_validation": split.get("execution_model_validation") or {},
             "screened_total": len(rows),
             "exclusion_counts": dict(exclusions),
             "rows": rows,
@@ -491,6 +493,13 @@ def promotion_valid(report, *, incumbent, selected, source_manifest_sha256):
         or report.get("promotion_contract_sha256") != digest(CONTRACT)
         or any(report.get(k) is not v for k, v in AUTHORITY.items())
     ):
+        return False
+    from src.engine.scalping.entry_split_order_plan import EXECUTION_MODEL_CONTRACT
+    model = report.get("owner_execution_model_validation") or {}
+    if (model.get("contract_version") != EXECUTION_MODEL_CONTRACT
+            or model.get("source_date") != report.get("target_date")
+            or model.get("status") != "validated_scope"
+            or model.get("allowed_runtime_apply") is not True):
         return False
     proof = report.get("chronological_validation") or {}
     if proof.get("candidate_frozen_at") != report.get("candidate_frozen_at"):
@@ -937,6 +946,8 @@ def run(
                 "incumbent_prompt_version": versions[0] if len(versions) == 1 else None,
                 "source_manifest_sha256": projection["source_manifest_sha256"],
                 "source_projection_sha256": projection["artifact_content_sha256"],
+                "owner_execution_model_validation": projection.get("owner_execution_model_validation") or {},
+                "owner_execution_model_status": (projection.get("owner_execution_model_validation") or {}).get("status", "missing"),
                 "promotion_contract_sha256": digest(CONTRACT),
                 "promotion_contract": CONTRACT,
                 "candidate_improvement_proven": False,
