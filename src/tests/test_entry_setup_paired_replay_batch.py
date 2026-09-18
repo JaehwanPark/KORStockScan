@@ -192,7 +192,8 @@ def test_compact_signed_owner_cf_forward_holdout_positive_and_corruption():
 
 
 @pytest.mark.parametrize("promote", [False, True])
-def test_compact_public_finalization_consumes_policy_and_all_summaries(tmp_path, promote, monkeypatch):
+@pytest.mark.parametrize("integrated", [False, True])
+def test_compact_public_finalization_consumes_policy_and_all_summaries(tmp_path, promote, monkeypatch, integrated):
     from src.tests.test_mechanistic_entry_runtime_policy import initial
     from src.engine.scalping import mechanistic_entry_runtime_policy as policy
     from src.engine.scalping.main_ai_prompt_consumer import verify_compact_handoff
@@ -227,7 +228,34 @@ def test_compact_public_finalization_consumes_policy_and_all_summaries(tmp_path,
     compact.write(compact.report_path(tmp_path, "2026-09-17"), proof)
     for p in compact.summary_paths(tmp_path, "2026-09-17"):
         compact.write(p, {"date": "2026-09-17", "native_status": "blocked_resource_guard", "unrelated": 42})
-    result = compact.finalize(data_root=tmp_path, day="2026-09-17", publication_day="2026-09-18")
+    if integrated:
+        from src.engine.scalping import ai_action_outcome_calibration as calibration
+        phase_calls = []
+        def reuse_run(**kwargs):
+            phase_calls.append((kwargs["execute"], kwargs["allow_source_rebuild"]))
+            return compact.read(compact.report_path(tmp_path, "2026-09-17"))
+        monkeypatch.setattr(compact, "run", reuse_run)
+        kwargs = dict(data_root=tmp_path, source_day="2026-09-17", publication_day="2026-09-18", compact_scope_only=True)
+        calibration.run_postclose_phase(**kwargs, phase="prepare")
+        for _ in range(2):
+            evaluated = calibration.run_postclose_phase(**kwargs, phase="evaluate", execute=True)
+            assert evaluated["provider_calls_this_run"] == 0
+            assert evaluated["policy_publication"] == "not_requested_provisional"
+            assert policy.load(data_root=tmp_path, target_date="2026-09-21") is None
+        result = calibration.run_postclose_phase(**kwargs, phase="finalize")
+        assert phase_calls == [(True, True), (True, True), (False, False)]
+        assert set(result["postclose_integration"]["phases"]) == {"prepare", "evaluate", "finalize"}
+        # A late parent rewrite needs summary binding, not another publication.
+        summary_path = compact.summary_paths(tmp_path, "2026-09-17")[0]
+        value = compact.read(summary_path)
+        value.pop("compact_auxiliary_economic_tuning")
+        compact.write(summary_path, value)
+        monkeypatch.setattr(policy, "publish", lambda *a, **k: pytest.fail("handoff must not publish"))
+        rebound = calibration.run_postclose_phase(**kwargs, phase="handoff")
+        assert rebound["policy_bundle_sha256"] == result["policy_bundle_sha256"]
+        assert compact.read(summary_path)["unrelated"] == 42
+    else:
+        result = compact.finalize(data_root=tmp_path, day="2026-09-17", publication_day="2026-09-18")
     assert result["effective_date"] == "2026-09-21"
     child = policy.load(data_root=tmp_path, target_date=result["effective_date"])
     assert child["machine_policy"] == parent["machine_policy"]
@@ -1503,3 +1531,118 @@ def test_public_compact_run_preserves_prior_unanswered_holdout_and_recovers(monk
 def test_operating_market_route_contract_rejects_real_mismatch(venue,session,route):
     from src.engine.scalping.strategy_owner_replay import entry_operating_route_supported
     assert not entry_operating_route_supported(venue,session,route)
+
+
+@pytest.mark.parametrize("phase", ["prepare", "finalize", "handoff"])
+def test_postclose_integration_provider_authority_is_evaluate_only(tmp_path, phase):
+    from src.engine.scalping.ai_action_outcome_calibration import run_postclose_phase
+    with pytest.raises(ValueError, match="integration_arguments_invalid"):
+        run_postclose_phase(data_root=tmp_path, source_day="2026-09-17", phase=phase, execute=True)
+    assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("changed_contract", ["prompt", "schema", "pricing"])
+def test_compact_reuse_binds_current_candidate_and_pricing(monkeypatch, tmp_path, changed_contract):
+    from src.engine.scalping import entry_setup_evidence as evidence
+    from src.engine.scalping import mechanistic_entry_runtime_policy as policy
+    proof = full_compact_proof()
+    row = operating_compact_row()
+    projection = compact.sealed(dict(rows=[row], screened_total=1, exclusion_counts={},
+        source_manifest_sha256="d"*64, source_tuning_allowed=True,
+        owner_execution_model_validation=proof["owner_execution_model_validation"], **compact.AUTHORITY))
+    monkeypatch.setattr(compact, "prepare", lambda *_: projection)
+    monkeypatch.setattr(compact, "runtime_inference_cost_receipt", lambda *_: proof["runtime_inference_cost_receipt"])
+    monkeypatch.setattr(evidence, "entry_risk_adjudication_openai_schema", lambda *_: {})
+    monkeypatch.setattr(evidence, "validate_entry_risk_adjudication", lambda *a, **k: [])
+    calls = []
+    def runner(request):
+        calls.append(request)
+        return {"candidate_response": {"risk_verdict": "PASS"}}
+    first = compact.run(data_root=tmp_path, day="2026-09-17", execute=True, runner=runner)
+    assert first["metrics"]["paired_comparable_count"] == 1
+    if changed_contract == "prompt":
+        original = policy.compact_auxiliary_prompt
+        monkeypatch.setattr(policy, "compact_auxiliary_prompt", lambda **k: original(**k) + "\nReviewed revision.")
+    elif changed_contract == "schema":
+        monkeypatch.setattr(evidence, "entry_risk_adjudication_openai_schema", lambda *_: {"changed": True})
+    else:
+        monkeypatch.setattr(compact, "runtime_inference_cost_receipt", lambda *_: dict(status="source_gap", delta_krw=None, blocker="pricing_missing"))
+    refreshed = compact.run(data_root=tmp_path, day="2026-09-17", execute=False, runner=runner)
+    assert len(calls) == 1
+    assert refreshed["metrics"]["paired_comparable_count"] == 0
+    assert refreshed["metrics"]["delta_net_ev_pct"] is None
+    if changed_contract != "pricing":
+        compact.run(data_root=tmp_path, day="2026-09-17", execute=True, runner=runner)
+        assert len(calls) == 2
+
+
+def test_compact_shared_data_mount_reuses_snapshot_and_finalization_never_rescans(monkeypatch, tmp_path):
+    from src.engine.scalping import entry_setup_evidence as evidence
+    root = tmp_path / "actual"
+    root.mkdir()
+    alias = tmp_path / "release_data"
+    alias.symlink_to(root, target_is_directory=True)
+    proof = full_compact_proof()
+    row = operating_compact_row()
+    projection = compact.sealed(dict(rows=[row], screened_total=1, exclusion_counts={},
+        source_manifest_sha256="d"*64, source_tuning_allowed=True,
+        owner_execution_model_validation=proof["owner_execution_model_validation"], **compact.AUTHORITY))
+    prepared = []
+    monkeypatch.setattr(compact, "prepare", lambda *a: prepared.append(a) or projection)
+    monkeypatch.setattr(compact, "runtime_inference_cost_receipt", lambda *_: proof["runtime_inference_cost_receipt"])
+    monkeypatch.setattr(evidence, "entry_risk_adjudication_openai_schema", lambda *_: {})
+    monkeypatch.setattr(evidence, "validate_entry_risk_adjudication", lambda *a, **k: [])
+    calls = []
+    def runner(request):
+        calls.append(request)
+        return {"candidate_response": {"risk_verdict": "PASS"}}
+    compact.run(data_root=root, day="2026-09-17", execute=True, runner=runner)
+    compact.run(data_root=alias, day="2026-09-17", execute=True, runner=runner)
+    assert len(prepared) == len(calls) == 1
+    raw = root / "ai_decision_trace/ai_decision_trace_2026-09-17.jsonl"
+    raw.parent.mkdir()
+    raw.write_text("changed generation")
+    with pytest.raises(ValueError, match="finalize_requires_evaluation"):
+        compact.run(data_root=alias, day="2026-09-17", allow_source_rebuild=False)
+    assert len(prepared) == len(calls) == 1
+
+
+def test_integrated_wrapper_preserves_initial_daily_and_final_consumers():
+    source = Path("deploy/run_threshold_cycle_postclose.sh").read_text()
+    prepare = source.index("--postclose-phase prepare")
+    evaluate = source.index("--postclose-phase evaluate")
+    finalize = source.index("--postclose-phase finalize")
+    handoff = source.index("--postclose-phase handoff")
+    assert source.index('"ai_decision_outcome_labels"', source.index('"ai_decision_quality_daily_materialization"')) < prepare
+    assert prepare < source.index('wait_for_postclose_resources "daily_threshold_cycle_report"') < evaluate
+    assert evaluate < source.index('wait_for_postclose_resources "intraday_ws_freshness_finalize"') < finalize
+    assert finalize < source.index('--refresh-machine-evaluation-only') < source.index('run_threshold_cycle_ev_and_wait "pre_workorder"')
+    assert finalize < source.index('wait_for_postclose_resources "runtime_approval_summary"') < handoff
+    assert handoff < source.index('wait_for_postclose_resources "build_next_stage2_checklist_final_refresh"')
+    assert "--compact-only --execute-compact-candidate" not in source
+    paired = Path("deploy/run_ai_entry_setup_paired_replay_postclose.sh").read_text()
+    assert "for phase in prepare evaluate finalize" in paired
+
+
+@pytest.mark.parametrize("defect", ["paired", "labels", "source"])
+def test_integrated_finalize_rejects_generation_change_before_publisher(monkeypatch, tmp_path, defect):
+    from src.engine.scalping import ai_action_outcome_calibration as calibration
+    from src.engine.scalping import mechanistic_entry_runtime_policy as policy
+    proof = full_compact_proof()
+    expected = dict(paired_artifact_content_sha256=proof["artifact_content_sha256"])
+    integration = dict(phase="finalize", source_label_report_sha256="b"*64,
+                       phases={"finalize": expected},
+                       dependency_signatures=compact.source_dependency_signatures(tmp_path, "2026-09-17"))
+    report = dict(postclose_integration=integration, hierarchical_entry_quality={"machine_decision_case_table": {
+        "ai_quality_diagnostics": {"source_label_report_sha256": "b"*64},
+        "compact_auxiliary_screen_outcomes": {"paired_economic_evaluation": proof}}})
+    if defect == "paired":
+        expected["paired_artifact_content_sha256"] = "0"*64
+    elif defect == "labels":
+        integration["source_label_report_sha256"] = "0"*64
+    else:
+        integration["dependency_signatures"] = {}
+    monkeypatch.setattr(calibration, "build_compact_scope_report", lambda *a, **k: report)
+    monkeypatch.setattr(policy, "publish", lambda *a, **k: pytest.fail("stale source cannot publish"))
+    with pytest.raises(ValueError, match="source_changed_before_publication"):
+        compact.finalize(data_root=tmp_path, day="2026-09-17", publication_day="2026-09-18")

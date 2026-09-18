@@ -1751,6 +1751,10 @@ if [ "$RUN_AI_DECISION_QUALITY_DAILY_MATERIALIZATION" = "true" ] || [ "$RUN_AI_D
   wait_for_json_artifact \
     "$PROJECT_DIR/data/report/ai_decision_outcome_labels/ai_decision_outcome_labels_${TARGET_DATE}.json" \
     "ai_decision_outcome_labels"
+  if [[ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" == "true" || "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" == "1" ]]; then
+    run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.ai_action_outcome_calibration \
+      --target-date "$TARGET_DATE" --data-root "$PROJECT_DIR/data" --postclose-phase prepare --write
+  fi
 fi
 ai_review_json="$PROJECT_DIR/data/report/threshold_cycle_ai_review/threshold_cycle_ai_review_${TARGET_DATE}_postclose.json"
 ai_review_md="$PROJECT_DIR/data/report/threshold_cycle_ai_review/threshold_cycle_ai_review_${TARGET_DATE}_postclose.md"
@@ -2052,14 +2056,9 @@ if [ "$RUN_LIMIT_DOWN_WATCH_REPORT" = "true" ] || [ "$RUN_LIMIT_DOWN_WATCH_REPOR
 fi
 if [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "true" ] || [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "1" ]; then
   wait_for_postclose_resources "ai_decision_action_outcome_calibration"
-  wait_for_postclose_resources "compact_auxiliary_paired_replay"
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.entry_setup_paired_replay_batch \
-    --date "$TARGET_DATE" --compact-only --execute-compact-candidate --write
   run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.ai_action_outcome_calibration \
-    --target-date "$TARGET_DATE" \
-    --write \
-    --require-policy-publication \
-    --print-summary
+    --target-date "$TARGET_DATE" --data-root "$PROJECT_DIR/data" \
+    --postclose-phase evaluate --execute-compact-candidate --write --print-summary
   wait_for_json_artifact \
     "$PROJECT_DIR/data/report/ai_decision_action_outcome_calibration/ai_decision_action_outcome_calibration_${TARGET_DATE}.json" \
     "ai_decision_action_outcome_calibration"
@@ -2198,6 +2197,11 @@ if [ "$RUN_INTRADAY_WS_FRESHNESS_FINALIZE" = "true" ] || [ "$RUN_INTRADAY_WS_FRE
     "intraday_ws_freshness_finalize"
 fi
 # Refresh the existing daily consumer once after the late machine parent changes.
+# Finalize after the compact/machine input producers and before their consumers.
+if [[ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" == "true" || "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" == "1" ]]; then
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.ai_action_outcome_calibration \
+    --target-date "$TARGET_DATE" --data-root "$PROJECT_DIR/data" --postclose-phase finalize --write
+fi
 if [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "true" ] || [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "1" ] || [ "$RUN_INTRADAY_WS_FRESHNESS_FINALIZE" = "true" ] || [ "$RUN_INTRADAY_WS_FRESHNESS_FINALIZE" = "1" ]; then
   wait_for_postclose_resources "daily_machine_evaluation_handoff"
   run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.daily_threshold_cycle_report \
@@ -2338,8 +2342,8 @@ fi
 wait_for_postclose_resources "automation_trigger_decision_final_refresh"
 refresh_automation_trigger_decision_snapshot "final_consumer"
 if [[ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" == "true" || "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" == "1" ]]; then
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.entry_setup_paired_replay_batch \
-    --date "$TARGET_DATE" --compact-only --write --finalize-compact
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.ai_action_outcome_calibration \
+    --target-date "$TARGET_DATE" --data-root "$PROJECT_DIR/data" --postclose-phase handoff --write
   run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.verify_threshold_cycle_postclose_chain \
     --date "$TARGET_DATE" --compact-summary-only --require-summary-handoff
 fi

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import fcntl
 import hashlib
 import json
 import math
@@ -7414,7 +7415,7 @@ def materialized_quality_diagnostics(data_root: Path, source_day: str) -> dict:
     }
 
 
-def build_compact_scope_report(data_root: Path, source_day: str, publication_day: str) -> dict:
+def build_compact_scope_report(data_root: Path, source_day: str, publication_day: str, *, preserve_noncompact_scope: bool = False) -> dict:
     """Explicit successor; older observations retain their actual source day."""
     from src.engine.scalping import compact_auxiliary_paired_replay as compact
     paired = compact.read(compact.report_path(data_root, source_day))
@@ -7434,7 +7435,9 @@ def build_compact_scope_report(data_root: Path, source_day: str, publication_day
         table.setdefault("compact_auxiliary_screen_outcomes", {})["paired_economic_evaluation"] = paired
         table["compact_auxiliary_evaluation_source_receipt"] = receipt
         table["ai_quality_diagnostics"] = materialized_quality_diagnostics(data_root, source_day)
-        existing.update(evaluation_source_date=source_day, report_scope="compact_auxiliary_only", noncompact_sections_refreshed=False)
+        existing.update(evaluation_source_date=source_day, noncompact_sections_refreshed=False)
+        if not preserve_noncompact_scope:
+            existing["report_scope"] = "compact_auxiliary_only"
         return _with_artifact_content_sha256(existing)
     return _with_artifact_content_sha256({
         "schema": SCHEMA, "target_date": publication_day,
@@ -7447,6 +7450,102 @@ def build_compact_scope_report(data_root: Path, source_day: str, publication_day
             "compact_auxiliary_screen_outcomes": {"paired_economic_evaluation": paired}}},
         "noncompact_sections_refreshed": False, **compact.AUTHORITY,
     })
+
+
+
+def run_postclose_phase(*, data_root: Path, source_day: str, phase: str,
+                        publication_day: str | None = None, execute: bool = False,
+                        compact_scope_only: bool = False, max_new: int = 30,
+                        timeout_sec: float = 45.0) -> dict:
+    """Coordinate existing producers; only evaluate may call the candidate."""
+    from src.engine.scalping import compact_auxiliary_paired_replay as compact
+
+    publication_day = publication_day or source_day
+    if (phase not in {"prepare", "evaluate", "finalize", "handoff"}
+            or not CLEAN_BASELINE_DATE <= date.fromisoformat(source_day).isoformat()
+            <= date.fromisoformat(publication_day).isoformat()
+            <= datetime.now(KST).date().isoformat()
+            or (execute and phase != "evaluate") or max_new <= 0 or timeout_sec <= 0):
+        raise ValueError("postclose_integration_arguments_invalid")
+    root = Path(data_root).resolve()
+    path = report_path(publication_day, root / "report")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Outer coordination lock, then existing paired-day, then publisher locks.
+    # Partial compact CLI uses the paired-day lock and never acquires this lock.
+    with path.with_suffix(".integration.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        existing = compact.read(path)
+        if path.exists() and (not _artifact_content_sha256_valid(existing)
+                              or existing.get("schema") != SCHEMA
+                              or existing.get("target_date") != publication_day):
+            raise ValueError("postclose_existing_calibration_invalid")
+        if phase == "handoff":
+            return compact.refresh_handoff(data_root=root, day=source_day, publication_day=publication_day)
+        quality = materialized_quality_diagnostics(root, source_day)
+        if quality["status"] != "diagnostic_available":
+            raise ValueError("postclose_source_labels_prepare_required:" + ",".join(quality["reasons"]))
+        receipt = _machine_ai_natural_source_receipt(root, source_day)
+        if phase == "evaluate" and not compact_scope_only and publication_day != source_day:
+            raise ValueError("full_machine_publication_requires_own_source_day")
+        binding = dict(source_date=source_day, publication_date=publication_day,
+                       source_manifest_sha256=receipt.get("source_manifest_sha256"),
+                       source_label_report_sha256=quality["source_label_report_sha256"],
+                       label_owner=quality["owner"], **compact.AUTHORITY)
+        prior_integration = existing.get("postclose_integration") or {}
+        phases = dict(prior_integration.get("phases") or {}) if prior_integration.get("source_date") == source_day else {}
+        paired = None
+        provider_calls = 0
+        refresh_link = False
+        if phase != "prepare":
+            previous_paired = compact.read(compact.report_path(root, source_day))
+            paired = compact.run(data_root=root, day=source_day, execute=execute,
+                                 max_new=max_new, timeout_sec=timeout_sec,
+                                 allow_source_rebuild=phase == "evaluate")
+            binding["dependency_signatures"] = compact.source_dependency_signatures(root, source_day)
+            if paired.get("source_label_report_sha256") != quality["source_label_report_sha256"]:
+                raise ValueError("postclose_evaluation_label_generation_mismatch")
+            if phase == "evaluate" and paired.get("artifact_content_sha256") != previous_paired.get("artifact_content_sha256"):
+                provider_calls = paired.get("provider_calls_this_run", 0)
+        if phase == "evaluate" and not compact_scope_only:
+            prerequisite = ensure_machine_economic_reference(data_root=root, target_date=source_day)
+            report = build_report(target_date=source_day, data_root=root)
+            report["machine_economic_reference_prerequisite"] = prerequisite
+            machine_table = _as_dict(_as_dict(report.get("hierarchical_entry_quality")).get("machine_decision_case_table"))
+            if machine_table.get("microstructure_evaluation") is not None:
+                # The link is refreshed after the provisional report is sealed.
+                refresh_link = True
+        elif phase == "prepare":
+            report = existing or dict(schema=SCHEMA, target_date=publication_day,
+                                      status="source_prepared", clean_tuning_baseline_date=CLEAN_BASELINE_DATE,
+                                      report_scope="compact_auxiliary_only",
+                                      hierarchical_entry_quality={"machine_decision_case_table": {}},
+                                      **compact.AUTHORITY)
+        else:
+            report = build_compact_scope_report(root, source_day, publication_day,
+                                               preserve_noncompact_scope=not compact_scope_only)
+        phases[phase] = dict(binding, provider_calls_this_run=provider_calls, status="source_prepared" if paired is None else paired["status"],
+                             paired_artifact_content_sha256=paired.get("artifact_content_sha256") if paired else None)
+        report["postclose_integration"] = dict(binding, phase=phase, phases=phases,
+            provider_execution_phase="evaluate_only", economic_comparison_complete=bool(
+                paired and paired["metrics"].get("paired_comparable_count", 0) > 0
+                and paired["metrics"]["paired_comparable_count"] == paired["metrics"].get("economic_eligible_count")
+                and paired.get("candidate_prompt_version") != paired.get("incumbent_prompt_version")
+                and (paired["metrics"].get("operating_economic_comparison") or {}).get("status")
+                == "supported_operating_comparison"))
+        report = _with_artifact_content_sha256(report)
+        _atomic_write_json(path, report)
+        if refresh_link:
+            from src.engine.scalping.microstructure_reaction_context import refresh_machine_evaluation_link
+            refresh_machine_evaluation_link(path, report_root=root / "report")
+        if phase == "finalize":
+            return compact.finalize(data_root=root, day=source_day, publication_day=publication_day,
+                                    preserve_noncompact_scope=not compact_scope_only)
+        return dict(status=phases[phase]["status"], phase=phase,
+                    source_date=source_day, publication_date=publication_day,
+                    calibration_path=str(path), policy_publication="not_requested_provisional",
+                    provider_calls_this_run=provider_calls,
+                    economic_comparison_complete=report["postclose_integration"]["economic_comparison_complete"],
+                    **compact.AUTHORITY)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -7463,7 +7562,24 @@ def main(argv: list[str] | None = None) -> int:
         help="Fail unless the canonical next-trading-date policy is hash-bound",
     )
     parser.add_argument("--print-summary", action="store_true")
+    parser.add_argument("--postclose-phase", choices=("prepare", "evaluate", "finalize", "handoff"))
+    parser.add_argument("--publication-date")
+    parser.add_argument("--execute-compact-candidate", action="store_true")
+    parser.add_argument("--compact-scope-only", action="store_true")
+    parser.add_argument("--max-new-requests-per-cohort", type=int, default=30)
+    parser.add_argument("--candidate-timeout-sec", type=float, default=45.0)
     args = parser.parse_args(argv)
+    if args.postclose_phase:
+        if not args.write or args.ensure_economic_reference_only or args.require_policy_publication:
+            parser.error("postclose phases require --write and own their final publication")
+        result = run_postclose_phase(data_root=args.data_root, source_day=args.target_date,
+            publication_day=args.publication_date, phase=args.postclose_phase,
+            execute=args.execute_compact_candidate, compact_scope_only=args.compact_scope_only,
+            max_new=args.max_new_requests_per_cohort, timeout_sec=args.candidate_timeout_sec)
+        print(json.dumps(result, ensure_ascii=False))
+        return 1 if result.get("status") == "execution_failed" else 0
+    if args.publication_date or args.execute_compact_candidate or args.compact_scope_only:
+        parser.error("integration options require --postclose-phase")
     if args.ensure_economic_reference_only:
         if not args.write or args.require_policy_publication:
             parser.error("--ensure-economic-reference-only requires --write and forbids policy publication")

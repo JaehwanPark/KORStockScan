@@ -1026,6 +1026,21 @@ def candidate_zero_disposition(rows, blockers, report):
         valid_no_edge=status == "valid_no_edge", model_delta_ev_is_actual_profit=False)
 
 
+
+def source_dependency_signatures(data_root, day):
+    root = Path(data_root).resolve()
+    paths = [root / "ai_decision_trace" / f"ai_decision_trace_{day}.jsonl",
+             root / "ai_decision_payloads" / f"ai_decision_payloads_{day}.jsonl",
+             root / "report/ai_decision_outcome_labels" / f"ai_decision_outcome_labels_{day}.json",
+             root / "report/observation_source_quality_audit" / f"observation_source_quality_audit_{day}.json",
+             root / "report/entry_split_order_plan" / f"entry_split_order_plan_{day}.json"]
+    signatures = {}
+    for dependency in paths:
+        actual = dependency if dependency.exists() else Path(str(dependency) + ".gz")
+        signatures[str(dependency)] = [actual.stat().st_size, actual.stat().st_mtime_ns] if actual.exists() else None
+    return signatures
+
+
 def run(
     *,
     data_root,
@@ -1035,6 +1050,7 @@ def run(
     max_new=30,
     timeout_sec=45.0,
     runner=None,
+    allow_source_rebuild=True,
 ):
     """Bounded, resumable offline batch; all mutation occurs under a day lock."""
     from src.engine.scalping import ai_decision_quality as quality
@@ -1056,36 +1072,15 @@ def run(
         or timeout_sec <= 0
     ):
         raise ValueError("compact_batch_bounds_invalid")
-    root = Path(data_root)
+    root = Path(data_root).resolve()
     path = report_path(root, day)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.with_suffix(".lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         projection_path = path.with_suffix(".source.json")
         projection = read(projection_path)
-        dependency_paths = [
-            root / "ai_decision_trace" / f"ai_decision_trace_{day}.jsonl",
-            root / "ai_decision_payloads" / f"ai_decision_payloads_{day}.jsonl",
-            root
-            / "report/ai_decision_outcome_labels"
-            / f"ai_decision_outcome_labels_{day}.json",
-            root
-            / "report/observation_source_quality_audit"
-            / f"observation_source_quality_audit_{day}.json",
-            root
-            / "report/entry_split_order_plan"
-            / f"entry_split_order_plan_{day}.json",
-        ]
-        signatures = {}
-        for dependency in dependency_paths:
-            actual = (
-                dependency if dependency.exists() else Path(str(dependency) + ".gz")
-            )
-            signatures[str(dependency)] = (
-                [actual.stat().st_size, actual.stat().st_mtime_ns]
-                if actual.exists()
-                else None
-            )
+        signatures = source_dependency_signatures(root, day)
+        dependency_paths = [Path(p) for p in signatures]
         label_dependency = str(root / "report/ai_decision_outcome_labels" / f"ai_decision_outcome_labels_{day}.json")
         split_dependency = str(root / "report/entry_split_order_plan" / f"entry_split_order_plan_{day}.json")
         # An additive label contract revision does not require rereading large
@@ -1157,6 +1152,8 @@ def run(
                     / (projection["artifact_content_sha256"] + ".json"),
                     projection,
                 )
+            if not allow_source_rebuild:
+                raise ValueError("compact_finalize_requires_evaluation_of_changed_source")
             projection = sealed(
                 {**prepare(root, day), "dependency_signatures": signatures,
                  "projection_contract_sha256": digest(CONTRACT), "source_projection_contract": SOURCE_PROJECTION_CONTRACT}
@@ -1173,10 +1170,22 @@ def run(
         )
         if candidate not in COMPACT_AI_VARIANTS:
             raise ValueError("unregistered_compact_candidate")
+        candidate_prompt = compact_auxiliary_prompt(prompt_version=candidate)
+        candidate_contract = digest([candidate_prompt, {
+            r["evaluation_key"]: digest(entry_risk_adjudication_openai_schema(r["input"]["entry_setup_evidence_v1"]))
+            for r in projection["rows"] if not r.get("exclusion_reason") and isinstance(r.get("input"), dict)
+        }])
+        frozen_plan = read(path.parent / f"compact_candidate_plan_{candidate}.json")
+        if (frozen_plan.get("scope_candidates") and frozen_plan.get("candidate_prompt_sha256")
+                and frozen_plan["candidate_prompt_sha256"] != digest(candidate_prompt)):
+            raise ValueError("frozen_candidate_prompt_or_schema_changed")
+        cost_receipt = runtime_inference_cost_receipt(root, day)
         previous = read(path)
         if valid(previous) and previous.get("candidate_prompt_version") != candidate:
             raise ValueError("frozen_candidate_selection_mismatch")
         if (valid(previous)
+                and previous.get("candidate_contract_sha256") == candidate_contract
+                and previous.get("runtime_inference_cost_receipt") == cost_receipt
                 and previous.get("promotion_contract_sha256") == digest(CONTRACT)
                 and previous.get("source_projection_sha256") == projection["artifact_content_sha256"]
                 and previous.get("comparison_dependency_signatures") == _comparison_signatures(path.parent, day, candidate)
@@ -1222,9 +1231,16 @@ def run(
                     }
                 )
                 continue
+            setup = row["input"]["entry_setup_evidence_v1"]
+            schema = entry_risk_adjudication_openai_schema(setup)
+            prompt = candidate_prompt
+            identity = digest([day, key, input_identity(row), candidate, digest(prompt), digest(schema)])
+            cached = results.get(key) or {}
+            if cached and cached.get("candidate_identity") != identity:
+                results.pop(key, None)
+                cached = {}
             if not execute or calls >= max_new:
                 continue
-            cached = results.get(key) or {}
             if (
                 valid(cached)
                 and cached.get("input_sha256") == input_identity(row)
@@ -1232,19 +1248,6 @@ def run(
             ):
                 continue
             try:
-                setup = row["input"]["entry_setup_evidence_v1"]
-                schema = entry_risk_adjudication_openai_schema(setup)
-                prompt = compact_auxiliary_prompt(prompt_version=candidate)
-                identity = digest(
-                    [
-                        day,
-                        key,
-                        input_identity(row),
-                        candidate,
-                        digest(prompt),
-                        digest(schema),
-                    ]
-                )
                 request = {
                     "paired_replay_id": identity,
                     "paired_replay_parent_id": key,
@@ -1415,6 +1418,9 @@ def run(
             plan = read(plan_path)
             if plan and (not valid(plan) or plan.get("candidate_prompt_version") != candidate):
                 raise ValueError("candidate_plan_hash_invalid")
+            if (plan.get("scope_candidates") and plan.get("candidate_prompt_sha256")
+                    and plan["candidate_prompt_sha256"] != digest(candidate_prompt)):
+                raise ValueError("frozen_candidate_prompt_or_schema_changed")
             if plan.get("scope_candidates") and plan.get("promotion_contract_sha256") != digest(CONTRACT):
                 raise ValueError("candidate_plan_contract_mismatch")
             scope_validation, scope_candidates = scope_candidate_validation(
@@ -1422,7 +1428,8 @@ def run(
                 candidate=candidate, now=datetime.now(KST))
             if scope_candidates != (plan.get("scope_candidates") or {}):
                 write(plan_path, sealed({"candidate_prompt_version": candidate,
-                    "scope_candidates": scope_candidates, "promotion_contract_sha256": digest(CONTRACT), **AUTHORITY}))
+                    "scope_candidates": scope_candidates, "promotion_contract_sha256": digest(CONTRACT),
+                    "candidate_prompt_sha256": digest(candidate_prompt), **AUTHORITY}))
         frozen_at = min((v["candidate_frozen_at"] for v in scope_validation.values()
                          if v["candidate_frozen_at"]), default=None)
         chronology = {"candidate_frozen_at": frozen_at,
@@ -1437,6 +1444,7 @@ def run(
                 "generated_at": datetime.now(KST).isoformat(),
                 "candidate_frozen_at": frozen_at,
                 "candidate_prompt_version": candidate,
+                "candidate_contract_sha256": candidate_contract,
                 "incumbent_prompt_version": versions[0] if len(versions) == 1 else None,
                 "source_manifest_sha256": projection["source_manifest_sha256"],
                 "source_projection_sha256": projection["artifact_content_sha256"],
@@ -1484,15 +1492,16 @@ def run(
         return report
 
 
-def finalize(*, data_root, day, publication_day):
+def finalize(*, data_root, day, publication_day, preserve_noncompact_scope=False):
     path = report_path(data_root, day)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.with_suffix(".lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        return _finalize(data_root=data_root, day=day, publication_day=publication_day)
+        return _finalize(data_root=data_root, day=day, publication_day=publication_day,
+                         preserve_noncompact_scope=preserve_noncompact_scope)
 
 
-def _finalize(*, data_root, day, publication_day):
+def _finalize(*, data_root, day, publication_day, preserve_noncompact_scope=False):
     """Reuse calibration, optimizer, publisher and final consumer; no provider."""
     from src.engine.scalping import ai_action_outcome_calibration as calibration
     from src.engine.scalping.micro_reversion import (
@@ -1504,9 +1513,23 @@ def _finalize(*, data_root, day, publication_day):
     root = Path(data_root)
     if publication_day > datetime.now(KST).date().isoformat():
         raise ValueError("compact_publication_date_in_future")
-    report = calibration.build_compact_scope_report(root, day, publication_day)
+    report = calibration.build_compact_scope_report(root, day, publication_day,
+                                                    preserve_noncompact_scope=preserve_noncompact_scope)
+    integration = report.get("postclose_integration") or {}
+    if integration.get("phase") == "finalize":
+        expected = (integration.get("phases") or {}).get("finalize") or {}
+        paired = report["hierarchical_entry_quality"]["machine_decision_case_table"]["compact_auxiliary_screen_outcomes"]["paired_economic_evaluation"]
+        if (expected.get("paired_artifact_content_sha256") != paired["artifact_content_sha256"]
+                or integration.get("source_label_report_sha256") != report["hierarchical_entry_quality"]["machine_decision_case_table"]["ai_quality_diagnostics"]["source_label_report_sha256"]
+                or (integration.get("dependency_signatures") is not None
+                    and integration["dependency_signatures"] != source_dependency_signatures(root, day))):
+            raise ValueError("postclose_finalize_source_changed_before_publication")
     calibration_path = calibration.report_path(publication_day, root / "report")
     calibration._atomic_write_json(calibration_path, report)
+    table = report["hierarchical_entry_quality"]["machine_decision_case_table"]
+    if preserve_noncompact_scope and table.get("microstructure_evaluation") is not None:
+        from src.engine.scalping.microstructure_reaction_context import refresh_machine_evaluation_link
+        refresh_machine_evaluation_link(calibration_path, report_root=root / "report")
     bundle = policy.publish(calibration_path, data_root=root)
     if bundle is None:
         raise ValueError("compact_dated_policy_not_published")
@@ -1557,6 +1580,7 @@ def _finalize(*, data_root, day, publication_day):
             "full_cost_stop_owner_plan_portfolio_and_forward_holdout_receipts",
         ),
         "candidate_improvement_proven": paired["candidate_improvement_proven"],
+        "postclose_integration": report.get("postclose_integration"),
         "metrics": {k: v for k, v in paired["metrics"].items() if k != "pairs"},
         "actual_pid_consumed": False,
         "actual_net_profit_improvement": None,
@@ -1589,6 +1613,32 @@ def _finalize(*, data_root, day, publication_day):
         **view,
         "strict_family_verification": verified,
     }
+
+
+def refresh_handoff(*, data_root, day, publication_day):
+    """Rebind late summaries without candidate execution or policy publication."""
+    from src.engine.scalping import main_ai_prompt_consumer as consumer
+    from src.engine.scalping import mechanistic_entry_runtime_policy as policy
+    root = Path(data_root).resolve()
+    path = report_path(root, day)
+    with path.with_suffix(".lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        consumer_path = root / "report/main_ai_prompt_consumer" / f"main_ai_prompt_consumer_{publication_day}.json"
+        handoff = read(consumer_path)
+        view = handoff.get("compact_auxiliary") or {}
+        paired = read(path)
+        bundle = policy.load(data_root=root, target_date=view.get("effective_date", ""))
+        if (not valid(handoff) or not valid(paired) or view.get("source_date") != day
+                or view.get("publication_date") != publication_day
+                or view.get("paired_artifact_content_sha256") != paired.get("artifact_content_sha256")
+                or bundle is None or bundle["bundle_sha256"] != view.get("policy_bundle_sha256")):
+            raise ValueError("compact_existing_handoff_generation_invalid")
+        refresh_summaries(root, day, view, consumer_path)
+        verified = consumer.verify_compact_handoff(root, day)
+        if verified["status"] != "PASS":
+            raise ValueError("compact_last_consumer_handoff_failed:" + ",".join(verified["issues"]))
+        return {"status": "compact_scope_policy_and_summary_handoff_complete", **view,
+                "strict_family_verification": verified}
 
 
 def source_is_compact(report):

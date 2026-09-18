@@ -1088,6 +1088,7 @@ def test_machine_case_table_automatically_selects_bounded_compact_variant():
             {
                 "decision_trace_id": f"trace-{index}",
                 "evaluation_attempt_id": f"attempt-{index}",
+                "scanner_promotion_id": "promotion-fixture",
                 "decision_snapshot_id": f"snapshot-{index}",
                 "decision_ts": f"2026-09-14T12:00:{index:02d}+09:00",
                 "source_date": "2026-09-14",
@@ -1124,7 +1125,9 @@ def test_machine_case_table_automatically_selects_bounded_compact_variant():
         rows,
         capture_census={"captured": 20, "evaluable": 20},
         source_receipt={
+            "target_date": "2026-09-14",
             "tuning_input_allowed": True,
+            "machine_terminal_tuning_gate": {"decision_counterfactual_tuning_input_allowed": True},
             "compact_auxiliary_policy_measurement": {
                 "prompt_version": AI_VERSION,
                 "measurement_allowed": True,
@@ -1177,7 +1180,9 @@ def test_machine_case_table_automatically_selects_bounded_compact_variant():
         rows,
         capture_census={"captured": 20, "evaluable": 20},
         source_receipt={
+            "target_date": "2026-09-14",
             "tuning_input_allowed": True,
+            "machine_terminal_tuning_gate": {"decision_counterfactual_tuning_input_allowed": True},
             "compact_auxiliary_policy_measurement": {
                 "prompt_version": AI_VERSION,
                 "measurement_allowed": True,
@@ -1198,7 +1203,9 @@ def test_machine_case_table_automatically_selects_bounded_compact_variant():
         rows,
         capture_census={"captured": 20, "evaluable": 20},
         source_receipt={
+            "target_date": "2026-09-14",
             "tuning_input_allowed": True,
+            "machine_terminal_tuning_gate": {"decision_counterfactual_tuning_input_allowed": True},
             "compact_auxiliary_policy_measurement": {
                 "prompt_version": AI_VERSION,
                 "measurement_allowed": True,
@@ -1222,7 +1229,9 @@ def test_machine_case_table_automatically_selects_bounded_compact_variant():
         sparse_economics_rows,
         capture_census={"captured": 20, "evaluable": 20},
         source_receipt={
+            "target_date": "2026-09-14",
             "tuning_input_allowed": True,
+            "machine_terminal_tuning_gate": {"decision_counterfactual_tuning_input_allowed": True},
             "compact_auxiliary_policy_measurement": {
                 "prompt_version": AI_VERSION,
                 "measurement_allowed": True,
@@ -1249,7 +1258,9 @@ def test_machine_case_table_automatically_selects_bounded_compact_variant():
         all_pass_rows,
         capture_census={"captured": 20, "evaluable": 20},
         source_receipt={
+            "target_date": "2026-09-14",
             "tuning_input_allowed": True,
+            "machine_terminal_tuning_gate": {"decision_counterfactual_tuning_input_allowed": True},
             "compact_auxiliary_policy_measurement": {
                 "prompt_version": AI_VERSION,
                 "measurement_allowed": True,
@@ -1268,7 +1279,9 @@ def test_machine_case_table_automatically_selects_bounded_compact_variant():
         tail_rows,
         capture_census={"captured": 20, "evaluable": 20},
         source_receipt={
+            "target_date": "2026-09-14",
             "tuning_input_allowed": True,
+            "machine_terminal_tuning_gate": {"decision_counterfactual_tuning_input_allowed": True},
             "compact_auxiliary_policy_measurement": {
                 "prompt_version": AI_VERSION,
                 "measurement_allowed": True,

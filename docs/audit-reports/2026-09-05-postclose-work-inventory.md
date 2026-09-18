@@ -28,7 +28,7 @@ PID·lock·progress·deadline·latest terminal을 실제 run 기준으로 확인
 | 20:10 | router `tuning` → `run_tuning_monitoring_postclose.sh` | predecessor 완료 뒤 Parquet/DuckDB late-pass·counts/hash·status success |
 | 20:10 | `korstockscan-samsung-widget-evaluation.timer/service` → `run_widget_evaluation.sh` | §4.3의 네 producer·EOD wait·같은 completed target date |
 | 20:50 | router `archive` → dashboard DB archive | 대상일 DB/archive 검증·최신 DONE·원천 보존 |
-| 21:05 | router `paired-replay` → `run_ai_entry_setup_paired_replay_postclose.sh` | detailed batch→calibration→optimizer/holding→consumer의 같은 source generation |
+| 21:05 기존 위치 | 현재 cron 등록 없음; 부분 실행 wrapper `run_ai_entry_setup_paired_replay_postclose.sh` | 공통 prepare/evaluate/finalize→scoped verifier; 후보는 evaluate에서만 호출 |
 | 21:15 | `korstockscan-machine-microstructure-final-refresh.timer/service` → `run_machine_microstructure_final_refresh.sh` | §4.4 전체 stage rc·approval·checklist·unit terminal |
 | 21:55부터, bounded | router `finalize` → `run_postclose_finalization.sh` | predecessor→summary/tower/checklist/strict→cleanup→final detector terminal |
 | 정기 5분, 21:50까지 및 finalization 후 | `run_error_detection.sh` | operational/source-quality unresolved critical·canonical/final detector의 stage별 실제 receipt |
@@ -83,7 +83,7 @@ PID·lock·progress·deadline·latest terminal을 실제 run 기준으로 확인
 | #78 | `scalping.micro_reversion.main_ai_prompt_optimizer` | 조건/후행 refresh, 선정 | calibration 후보 고정·holdout·same-date freeze·현재 compact/legacy 분리 → publisher/consumer |
 | #79 | `scalping.main_ai_holding_base_replay_batch` | 조건부 ON, holding 연구 | 원 holding stage/context·full-cost outcome·manifest; 초기 entry 분모와 분리 |
 | #80 | `scalping.main_ai_prompt_consumer` | 조건부 ON, handoff | frozen evidence/current-role hash·trusted consumption → 기존 dated owner |
-| #82 | `scalping.ai_action_outcome_calibration` | 조건/후행 refresh, 경제성 | natural machine 전체 actions + actual ENTER 후 AI screens·paired/case counts·incumbent 재판정·holdout/threshold/hierarchy/compact successor |
+| #82 | `scalping.ai_action_outcome_calibration --postclose-phase` | 조건부, 공통 조정 | quality source 준비 뒤 prepare→final 감사 뒤 evaluate→WS 입력 뒤 finalize/단일 날짜 정책→late handoff; 기존 machine·scope/route 검증 보존 |
 | 별도 기존 호출 | `automation.main_ai_current_axis` | 조건부 ON, manifest | 기존 current-axis source/metric/prompt partition·guard·consumer; legacy #81 live 복원 아님 |
 | #89 | `monitoring.intraday_ws_freshness_monitor --finalize --monitor-only` | 조건부 ON, 품질 | type/route/epoch/원 clock·선언 scope/window·false invalid exclusion → #74/EV |
 | #90/#92/#95/#104/#109 | `threshold_cycle_ev_report` 여러 refresh | ON/의존별, 경제성 요약 | 원 family EV·net profit·raw/economic/count·selected/blocked/carry와 새 source hash; 반복 refresh는 새 표본 아님 |
@@ -148,3 +148,10 @@ BUY/HOLD sentinels·market opportunity census/pruned BBO·rising-missed 관찰·
 [결과 점검 §9](../postclose-tuning-result-review-task-instructions.md#9-최종-판정과-보고)에 따라 각 활성 논리 작업의 결과 행을 작성한다: 기계적 terminal, 실제 출력/primary metric, 분석 판정, 결손/영향 범위, 시간 경과/구조 차단 판정, 직접 consumer와 다음 closure. 오래된 완료 이력을 반복하지 않고 미관측을 PASS로 채우지 않는다. 불명 ETA=null이다. 이 목록의 현행화 자체는 producer·API/Provider·report 재생성·policy apply·restart를 실행하지 않는다.
 
 Claude 폐기 실행·검증·cleanup 및 선택 배포 증거는 [9/18 폐기 검증](2026-09-18-claude-scalping-pattern-lab-retirement-review.md)을 따른다. EV 개선 또는 자연 PID 소비를 삭제 완료로 대체하지 않는다.
+
+
+## Compact AI 공통 실행·소비 계약 (2026-09-19)
+
+기존 quality materialization의 control/labels는 최초 Daily 앞에서 생성·재사용하고 calibration prepare가 receipt를 결속한다. final source audit 뒤 evaluate만 후보 호출을 허용한다. WS 등 필수 입력 producer 뒤 finalize가 기존 machine/compact 검증과 단일 dated publisher를 소비하며 Daily refresh·최초 EV·runtime summary보다 앞에 실행한다. 이후 tail 요약 갱신은 handoff로 재결속하고 provider/publisher를 호출하지 않는다. 부분 compact CLI는 공통 finalize를 소비한다.
+
+동일 원천은 shared data 실체 경로로 재사용한다. source 변경 시 finalize가 재평가 요구로 차단되며 과거21 excluded/비교0을 EV0 또는 no-edge로 표시하지 않는다. 자연 model/prompt holdout·실제 PREOPEN/PID·완료 비용 성과는 기존 stable owner의 다음 거래일 acceptance다. [통합 계획](../proposals/compact-ai-postclose-source-paired-evaluation-and-preopen-consumer-integration-plan-2026-09-19.md).
