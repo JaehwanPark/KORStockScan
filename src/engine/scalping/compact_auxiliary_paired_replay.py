@@ -1083,17 +1083,28 @@ def run(
         dependency_paths = [Path(p) for p in signatures]
         label_dependency = str(root / "report/ai_decision_outcome_labels" / f"ai_decision_outcome_labels_{day}.json")
         split_dependency = str(root / "report/entry_split_order_plan" / f"entry_split_order_plan_{day}.json")
+        label_report = read(Path(label_dependency))
+        label_rows = [x for x in label_report.get("labels") or [] if isinstance(x, dict)]
+        label_index = {x.get("decision_trace_id"): x for x in label_rows}
+        label_counts = Counter(x.get("decision_trace_id") for x in label_rows)
+        # A hash-only label refresh must not hide a changed admission decision.
+        # Check even unchanged signatures: an older writer may already have
+        # attached the new label hash to a projection with stale exclusions.
+        label_projection_matches = signatures[label_dependency] is None or (
+            label_report.get("target_date") == day
+            and all(label_counts[row.get("evaluation_key")] == 1
+                and row.get("entry_quality_path") == ((label_index[row["evaluation_key"]].get("horizon_metrics") or {}).get("10m") or {}).get("entry_quality_path", {})
+                and (row.get("source_label_identity_reasons") or []) == [
+                    r for r in label_index[row["evaluation_key"]].get("primary_cohort_exclusion_reasons") or []
+                    if r in {"payload_trace_venue_mismatch", "payload_trace_session_mismatch", "canonical_context_venue_session_mismatch"}]
+                for row in projection.get("rows") or []))
         # An additive label contract revision does not require rereading large
         # frozen raw inputs. Changed diagnostic/economic paths still rebuild.
         if valid(projection):
             prior = projection.get("dependency_signatures") or {}
             if prior.get(label_dependency) != signatures.get(label_dependency) and all(
                     prior.get(k) == v for k, v in signatures.items() if k not in (label_dependency,split_dependency)):
-                label_report = read(Path(label_dependency))
-                label_index = {x.get("decision_trace_id"): x for x in label_report.get("labels") or [] if isinstance(x, dict)}
-                if label_report.get("target_date") == day and all(
-                        row.get("entry_quality_path") == (((label_index.get(row.get("evaluation_key")) or {}).get("horizon_metrics") or {}).get("10m") or {}).get("entry_quality_path", {})
-                        for row in projection.get("rows") or []):
+                if label_projection_matches:
                     write(path.parent / "compact_source_generations" / (projection["artifact_content_sha256"] + ".json"), projection)
                     projection = sealed({**projection, "dependency_signatures": {**prior,label_dependency:signatures[label_dependency]},
                                          "source_label_report_sha256": digest(label_report)})
@@ -1103,7 +1114,7 @@ def run(
         # with no original frozen input stays excluded, even if an owner exists.
         prior = projection.get("dependency_signatures") or {}
         split_dependency = str(root / "report/entry_split_order_plan" / f"entry_split_order_plan_{day}.json")
-        unchanged_raw = (valid(projection) and prior.get(label_dependency) == signatures.get(label_dependency)
+        unchanged_raw = (valid(projection) and label_projection_matches and prior.get(label_dependency) == signatures.get(label_dependency)
             and all(prior.get(k) == v for k, v in signatures.items() if k not in (split_dependency, label_dependency)))
         if unchanged_raw and (projection.get("source_projection_contract") != SOURCE_PROJECTION_CONTRACT
             or projection.get("projection_contract_sha256") != digest(CONTRACT)
@@ -1142,6 +1153,7 @@ def run(
             write(projection_path, projection)
         if (
             not valid(projection)
+            or not label_projection_matches
             or projection.get("dependency_signatures") != signatures
             or projection.get("projection_contract_sha256") != digest(CONTRACT)
         ):

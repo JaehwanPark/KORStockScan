@@ -1259,6 +1259,8 @@ def test_additive_label_revision_reuses_frozen_projection_without_raw_rescan(mon
     report = {"target_date": "2026-09-17", "labels": [{"decision_trace_id": row["evaluation_key"],
         "horizon_metrics": {"10m": {"entry_quality_path": row["entry_quality_path"]}},
         "evaluation_label_contract": {"diagnostic": "additive_revision"}}]}
+    # Other label cohorts must not invalidate this frozen compact population.
+    report["labels"].extend([{"decision_trace_id": "unrelated"}] * 2)
     compact.write(path, report)
     monkeypatch.setattr(compact, "prepare", lambda *_: pytest.fail("additive revision cannot rescan frozen raw"))
     refreshed = compact.run(data_root=tmp_path, day="2026-09-17", execute=False)
@@ -1267,6 +1269,43 @@ def test_additive_label_revision_reuses_frozen_projection_without_raw_rescan(mon
     # A real path revision must reach the original source producer.
     report["labels"][0]["horizon_metrics"]["10m"]["entry_quality_path"]["gross_net_target_pct"] = .8
     compact.write(path, report)
+    calls = []
+    monkeypatch.setattr(compact, "prepare", lambda *_: calls.append(True) or projection)
+    compact.run(data_root=tmp_path, day="2026-09-17", execute=False)
+    assert calls == [True]
+
+
+@pytest.mark.parametrize("revision", ["identity_changed", "label_removed", "duplicate_identity"])
+def test_label_admission_revision_requires_evaluation_before_publication(monkeypatch, tmp_path, revision):
+    row = compact_row()
+    projection = compact.sealed(dict(rows=[row], screened_total=1,
+        source_manifest_sha256="d" * 64, source_tuning_allowed=True,
+        exclusion_counts={}, **compact.AUTHORITY))
+    label = {"decision_trace_id": row["evaluation_key"],
+        "horizon_metrics": {"10m": {"entry_quality_path": row["entry_quality_path"]}}}
+    label_path = tmp_path / "report/ai_decision_outcome_labels/ai_decision_outcome_labels_2026-09-17.json"
+    labels = {"target_date": "2026-09-17", "labels": [label]}
+    compact.write(label_path, labels)
+    monkeypatch.setattr(compact, "prepare", lambda *_: projection)
+    compact.run(data_root=tmp_path, day="2026-09-17", execute=False)
+    if revision == "identity_changed":
+        label["primary_cohort_exclusion_reasons"] = ["canonical_context_venue_session_mismatch"]
+    elif revision == "label_removed":
+        labels["labels"] = []
+    else:
+        labels["labels"].append(dict(label))
+    compact.write(label_path, labels)
+    monkeypatch.setattr(compact, "prepare", lambda *_: pytest.fail("finalization must not rescan raw"))
+    with pytest.raises(ValueError, match="compact_finalize_requires_evaluation_of_changed_source"):
+        compact.run(data_root=tmp_path, day="2026-09-17", execute=False, allow_source_rebuild=False)
+    # Reproduce an old writer masking the revision with current stat/hash.
+    source_path = compact.report_path(tmp_path, "2026-09-17").with_suffix(".source.json")
+    source = compact.read(source_path)
+    source["dependency_signatures"] = compact.source_dependency_signatures(tmp_path, "2026-09-17")
+    source["source_label_report_sha256"] = compact.digest(compact.read(label_path))
+    compact.write(source_path, compact.sealed(source))
+    with pytest.raises(ValueError, match="compact_finalize_requires_evaluation_of_changed_source"):
+        compact.run(data_root=tmp_path, day="2026-09-17", execute=False, allow_source_rebuild=False)
     calls = []
     monkeypatch.setattr(compact, "prepare", lambda *_: calls.append(True) or projection)
     compact.run(data_root=tmp_path, day="2026-09-17", execute=False)

@@ -22,3 +22,5 @@
 ## Limit-down 폐기 배포 완료
 
 - Limit-down 후속 리뷰·관련 커밋/푸시·immutable 배포: `fcfd7b8e5`. 검토 범위 결함0·통합1,531 passed(기존 wrapper 실패5/제외1은 baseline 재현)·물리 release6 passed·전용 산출물 잔여0. [최종 증거](../audit-reports/2026-09-19-limit-down-watch-retirement-review.md). main 정기 cron target 부재는 기존 상태이며 선택/route 검증과 분리한다. 독립 unit pin·공유 원천/guard 보존; 기동/주문/조기 PREOPEN 미실행·PID 소비 미확인.
+
+- Compact 후속 경제성 리뷰: label hash-only cache의 admission stale 결함 보완·cohort 격리,244+최종7 targeted PASS. 실제21건 label 불일치0/비교0/EV null 및9/21 carry 보존. [후속 리뷰·다음 WS 분석](../audit-reports/2026-09-19-compact-ai-postclose-integration-implementation-review.md). 미래 자연 owner·거래 권한 변경 없음.
