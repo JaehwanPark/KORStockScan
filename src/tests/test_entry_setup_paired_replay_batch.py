@@ -50,6 +50,9 @@ def test_compact_whole_population_zero_same_verdict_and_unresolved_caution():
 
 
 def test_compact_no_notional_is_percentage_diagnostic_not_daily_profit():
+    empty = compact.evaluate([], {})
+    assert empty["portfolio_daily_net_delta_krw"] is None
+    assert empty["net_profit_status"] == "not_available_without_owner_plan_and_portfolio_replay"
     row = compact_row()
     row["owner_replay"] = None
     metrics = compact.evaluate([row], {row["evaluation_key"]: compact_result(row)})

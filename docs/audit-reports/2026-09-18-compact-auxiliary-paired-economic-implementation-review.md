@@ -23,3 +23,6 @@
 병행 entry split의 최종 source `363131824`를 포함해 재리뷰했다. [기존 owner review](2026-09-18-entry-split-execution-model-source-and-consumer-review.md)는180초/±0.5%/고정0.23% 연구 exit·cost·reservation을 supporting diagnostic으로만 인정하며 운영 청산·실제 비용·자본 모델 및 validated scope는 미구현/미입증이다. Compact 승격도 이 미검증 모델을 경제성 증거로 사용하지 않도록 기존 `execution_model_validation`의 검증 상태를 소비한다. 현재 실제 proof로 승격 가능한 cohort는 없다.
 
 따라서 구현된 연결 루프와 다음 날짜 carry 발행을 CP2의 운영 경제성 구현 완료 또는 양수 EV 도출로 발표하지 않는다. 물리적인 historical stop/quote/owner plan 결손은 시간만으로 복구되지 않는다. 유효 input·당시 plan/exit/cost·검증된 owner 모델·reviewed inference 비용/원화 차이를 제공하는 기존 owner가 다음 closure이며, 그 뒤 current compact 독립 날짜 holdout과 적용 버전 자연 COMPLETED 경제성을 확인한다. 이 작업에서 다른 세션의 운영 모델/실행 sizing 코드를 재구현하지 않는다.
+
+
+실제 제한 재생성에서 비교0건의 빈 portfolio가 `{}`/평가됨으로 표시되는 추가 결함을 발견했다. 빈 비교는 null/미평가로 수정하고, 정상 no-fill은 해당 날짜의 비용 차이를 포함한0과 구분한다. 새 계약 generation으로 최종 검증·immutable successor 배포·재생성을 수행한다. 최초 generation의 PASS를 최종 source의 증거로 재사용하지 않는다.

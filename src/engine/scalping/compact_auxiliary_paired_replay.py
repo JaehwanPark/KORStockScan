@@ -27,7 +27,7 @@ AUTHORITY = dict(
     broker_order_forbidden=True,
 )
 CONTRACT = {
-    "schema": "compact_auxiliary_paired_promotion_v1",
+    "schema": "compact_auxiliary_paired_promotion_v2",
     "learning_episode_floor": 20,
     "holdout_episode_floor": 20,
     "holdout_source_day_floor": 2,
@@ -435,6 +435,8 @@ def portfolio_metrics(pairs):
         "portfolio_daily_net_delta_krw": None,
         "net_profit_status": "not_available_without_owner_plan_and_portfolio_replay",
     }
+    if not pairs:
+        return empty
     days = defaultdict(lambda: [0.0, 0.0])
     reservations = {}
     for pair in sorted(
@@ -453,6 +455,9 @@ def portfolio_metrics(pairs):
         if arm.get("modeled_outcome") == "modeled_no_exposure_common_reservation":
             return empty
         if arm.get("fill_participation_rate") == 0 and arm.get("net_pnl_krw") == 0:
+            days[pair["source_date"]]
+            if finite(pair.get("runtime_inference_cost_delta_krw")):
+                days[pair["source_date"]][1] -= pair["runtime_inference_cost_delta_krw"]
             continue
         start, end = arm.get("modeled_entry_at"), arm.get("modeled_exit_at")
         if not start or not end or end <= start:
