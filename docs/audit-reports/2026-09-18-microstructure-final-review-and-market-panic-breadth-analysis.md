@@ -1,5 +1,7 @@
 # Microstructure 최종 재리뷰 및 다음 장후 단위 분석 — 2026-09-18
 
+후속 개별 단위: [panic_sell_defense_report 결과·입력 보완 review](2026-09-18-panic-sell-defense-result-review.md). breadth 다음 실제작업의9/17 결과·시간대기/구조결손·코드보완·배포 근거는 이 owning review를 따른다.
+
 ## 판단과 검증 범위
 
 사용자가 microstructure 통합 변경의 반복 코드리뷰·수정보완·commit/push·배포와 다음 장후 단위 분석을 승인했다. selected `53aecf7466d1f4aa52807ab9e8c1b175734b898a`를 기준으로 별도 clean worktree에서 재리뷰했다. unrelated 작업본 변경, 실행 중 worker, broker/provider/주문·정책·env·cron은 보존한다.

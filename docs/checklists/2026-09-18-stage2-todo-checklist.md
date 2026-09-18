@@ -16,6 +16,13 @@
 
 ## 배포·성과 검증
 
+- [ ] `[PanicSellDefenseSourceAcceptance0918] panic 보고서 날짜·cutoff·zero-sample 경계의 자연 소비 확인` (`Due: 2026-09-18`, `Slot: INTRADAY`, `TimeWindow: 13:00~15:28`, `Track: RuntimeStability`)
+  - 사용자 승인: 반복 code review/fix/검증·commit/push·소스 배포·9/17 장후 결과 갱신. [개별단위 owning review](../audit-reports/2026-09-18-panic-sell-defense-result-review.md), `tmp/panic-defense-result-review-20260918/` receipt. breadth 다음 단위는 panic 보고서이며 다음은 조건부 scale-in plan이다. 기존 real/sim/probe/custody·정책·guard·수량·비용·schedule 보존.
+  - 구현 Closure: KST target date/as_of 이전의 pipeline·mutable state/market/breadth·feedback만 해석, 실제0거래 반등 placeholder를 baseline에서 제외, 미구현 EV를 null/context로 선언. 주문identity별 중복 보존까지 기존2개 source/test 안에서최종82PASS·compile/diff/링크/print-only parser.5.7GB raw 재스캔·API/주문·전체chain 재실행 없음.
+  - 현재9/17: 해당 단계exit0/40.41초/NORMAL, raw/real exit0·분위수표본0, evaluated3,005 중book missing2,468·insufficient537. 작은 source preview는 stale active3→eligible0, zero-trade rebound dynamic→insufficient. actual EV/일별순익null·전일chain미완료. 관측/현행owner coverage·horizon/full-cost/독립holdout 결손은 단순시간으로 복구하지 않음.
+  - Acceptance: 검토본 common release/원본·동결SHA 보존, 활성intraday workspace producer와 reviewed source hash/날짜/cutoff 분모가 자연결과에서 일치하는지 확인. source repair를 positive EV 또는 broker natural action 조건으로 확대하지 않는다. native postclose cron 부재는 보존하며 source trigger 없음은 waiting ETA가아니다. 실제 closed-cost 경제성은 기존market-weakness tuner/attribution owner의 별도계약이다.
+
+
 - [ ] `[MicrostructureMachineAuxiliaryNaturalAcceptance0918] 현행 기계·보조 AI microstructure 평가 결속의 자연 소비·경제성 확인` (`Due: 2026-09-18`, `Slot: POSTCLOSE`, `TimeWindow: 20:10~21:55`, `Track: RuntimeStability`)
   - 후속 상세계획: [전용 raw 장후 집계 폐기·현행 판정기 평가 통합 MC0–MC6](../proposals/microstructure-reaction-context-postclose-consolidation-plan-2026-09-18.md). 사용자가 구현·반복 리뷰/수정·검증 후 commit/push·배포와 제한 장후 결과 갱신을 승인했다. 전용 wrapper 호출·raw 연구/rollup/backfill 제거와 modern-only consumer/strict 인계 전환을 구현·검증했다. 배포/결과 갱신 receipt는 아래 추가 Closure를 따른다. 기존 원천 통합 구현 Closure/검증 이력을 보존하고 이 stable ID를 재사용한다. 구현·배포에서 live 특징·holding/entry 안전과 별도 machine microstructure attribution/정책 경로를 보존하며 자연/경제성 Acceptance는 별도로 닫는다.
   - Source: [정리·통합·경제성 재점검 review](../audit-reports/2026-09-18-disk-cleanup-and-microstructure-integration-review.md), [현행 평가 운영 계약](../postclose-tuning-result-review-task-instructions.md#511-microstructure의-현행-평가-결속), `tmp/microstructure-integration-20260918/evaluation-result-2026-09-16.json`, `evaluation-result-2026-09-17.json`, `closure.json`.

@@ -3,7 +3,7 @@ from datetime import datetime
 
 from src.engine import panic_sell_defense_report as report_mod
 
-TARGET_DATE = "2026-05-12"
+TARGET_DATE = "2026-06-05"
 
 
 def _event(
@@ -40,6 +40,10 @@ def _write_events(tmp_path, rows: list[dict]) -> None:
 
 
 def _write_json(path, payload: dict) -> None:
+    if path.name in {"scalp_live_simulator_state.json", "swing_intraday_probe_state.json"}:
+        payload = {"updated_at": f"{TARGET_DATE}T10:00:00", **payload}
+    if path.name == f"post_sell_feedback_{TARGET_DATE}.json":
+        payload = {"date": TARGET_DATE, "meta": {"generated_at": f"{TARGET_DATE}T10:00:00"}, **payload}
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
@@ -48,6 +52,7 @@ def _write_market_regime(tmp_path, *, risk_state: str = "NEUTRAL") -> None:
     _write_json(
         tmp_path / "cache" / "market_regime_snapshot.json",
         {
+            "timestamp": f"{TARGET_DATE}T10:00:00",
             "risk_state": risk_state,
             "allow_swing_entry": risk_state != "RISK_OFF",
             "swing_score": 35 if risk_state == "RISK_OFF" else 60,
@@ -673,6 +678,9 @@ def test_recovery_confirmed_keeps_probe_report_only_and_broker_forbidden(
     assert rebound["allowed_runtime_apply"] is False
     assert rebound["provenance_check_passed"] is True
     assert report["policy"]["report_only"] is True
+    assert report["economics"]["cost_adjusted_ev_pct"] is None
+    assert report["economics"]["daily_net_profit_krw"] is None
+    assert report["panic_regime_contract"]["primary_decision_metric"] == "confirmed_panic_risk_regime_state"
 
 
 def test_micro_recovery_confirmed_does_not_release_market_risk_off():
@@ -893,3 +901,114 @@ def test_microstructure_risk_off_needs_market_or_breadth_confirmation(
         "microstructure risk_off unconfirmed by market/breadth context"
         in report["panic_state_reasons"]
     )
+
+
+def test_as_of_filters_exit_receipts_and_normalizes_market_time(monkeypatch):
+    signal = _event("10:20:00", fields={"exit_rule": "scalp_soft_stop_loss"})
+    signal["emitted_at"] = f"{TARGET_DATE}T01:20:00+00:00"
+    receipt = _event("10:31:00", stage="sell_completed",
+                     fields={"actual_order_submitted": True, "sell_order_no": "FUTURE"})
+    other_day = _event("10:10:00")
+    other_day["emitted_at"] = "2026-06-06T10:10:00+09:00"
+    malformed = _event("10:10:00")
+    malformed["emitted_at"] = "invalid"
+    wrong_declared_day = _event("10:10:00")
+    wrong_declared_day["emitted_date"] = "2026-06-06"
+    monkeypatch.setattr(report_mod, "iter_jsonl", lambda _: iter(
+        [signal, receipt, other_day, malformed, wrong_declared_day]))
+    cutoff = datetime.fromisoformat(f"{TARGET_DATE}T10:30:00+09:00")
+    retained, _, latest, contract = report_mod._stream_pipeline_inputs(
+        report_mod.Path("unused"), as_of=cutoff, target_date=TARGET_DATE)
+    assert retained == [signal]
+    assert latest == datetime.fromisoformat(f"{TARGET_DATE}T10:20:00")
+    assert contract["accepted_time_row_count"] == 1
+    assert sum(contract["excluded_time_counts"].values()) == 4
+    metrics = report_mod._summarize_exit_metrics(retained, as_of=report_mod._parse_dt(cutoff))
+    assert metrics["real_exit_count"] == 0
+    assert metrics["unproven_exit_count"] == 1
+
+
+def test_mutable_market_cache_and_invalid_breadth_cannot_confirm_panic(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    _write_market_panic_breadth(tmp_path)
+    breadth = report_mod._market_panic_breadth_path(TARGET_DATE)
+    body = json.loads(breadth.read_text())
+    body["source_quality"]["status"] = "partial"
+    _write_json(breadth, body)
+    _write_json(tmp_path / "cache/market_regime_snapshot.json", {
+        "timestamp": "2026-06-06T10:00:00", "risk_state": "RISK_OFF"})
+    summary = report_mod._load_source_summary(
+        TARGET_DATE, as_of=datetime.fromisoformat(f"{TARGET_DATE}T10:30:00"))
+    context = report_mod._microstructure_market_context(
+        {"evaluated_symbol_count": 1, "risk_off_advisory_count": 1}, summary)
+    assert context["confirmed_risk_off_advisory"] is False
+    assert context["market_risk_state"] == "UNKNOWN"
+    assert summary["market_regime"]["reported_risk_state"] == "RISK_OFF"
+    assert summary["market_panic_breadth"]["market_weakness_observation"] == {}
+    assert "market_panic_breadth:source_quality_not_ok" in context["threshold_contract"]["source_quality_blockers"]
+    body["source_quality"]["status"] = "ok"
+    body["as_of"] = f"{TARGET_DATE}T10:31:00+09:00"
+    _write_json(breadth, body)
+    assert report_mod._load_source_summary(
+        TARGET_DATE, as_of=datetime.fromisoformat(f"{TARGET_DATE}T10:30:00"))[
+            "market_panic_breadth"]["time_status"] == "source_after_as_of"
+
+
+def test_stale_or_real_positions_do_not_populate_recovery_baseline(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    position = {"stock_code": "000001", "buy_price": 10000, "curr_price": 10500,
+                "actual_order_submitted": False, "broker_order_forbidden": True}
+    _write_json(tmp_path / "runtime/swing_intraday_probe_state.json", {
+        "updated_at": "2026-06-04T10:00:00", "active_positions": [position]})
+    real = {**position, "actual_order_submitted": True, "broker_order_forbidden": False}
+    _write_json(tmp_path / "runtime/scalp_live_simulator_state.json", {
+        "active_positions": [position, real]})
+    active = report_mod._summarize_active_recovery(
+        TARGET_DATE, as_of=datetime.fromisoformat(f"{TARGET_DATE}T10:30:00"))
+    assert active["observed_active_positions"] == 3
+    assert active["active_positions"] == 1
+    assert active["excluded_active_positions"] == 2
+    assert active["profit_sample"] == 1
+    assert active["provenance_check"]["passed"] is False
+    assert active["state_sources"]["swing_probe"]["time_status"] == "source_date_mismatch"
+
+
+def test_zero_trade_feedback_rates_are_not_observation_samples(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    path = report_mod._post_sell_feedback_path(TARGET_DATE)
+    _write_json(path, {"soft_stop_forensics": {
+        "total_soft_stop": 0, "rebound_above_sell_rate": {"10m": 0.0, "20m": 0.0},
+        "rebound_above_buy_rate": {"10m": 0.0, "20m": 0.0}}})
+    result = report_mod._post_sell_recovery_metrics(
+        TARGET_DATE, as_of=datetime.fromisoformat(f"{TARGET_DATE}T10:30:00"))
+    assert result["soft_stop_total"] == 0
+    assert result["threshold_contract"]["threshold_mode"] == "insufficient_sample"
+    for contract in result["threshold_contract"]["thresholds"].values():
+        assert contract["sample_count"] == 0
+        assert contract["sample_ready"] is False
+        assert contract["dynamic_threshold_value"] is None
+
+
+def test_feedback_from_after_cutoff_is_not_recovery_evidence(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    _write_json(report_mod._post_sell_feedback_path(TARGET_DATE), {
+        "meta": {"generated_at": f"{TARGET_DATE}T10:31:00"},
+        "soft_stop_forensics": {"total_soft_stop": 5,
+            "rebound_above_sell_rate": {"10m": 90.0, "20m": 95.0}}})
+    result = report_mod._post_sell_recovery_metrics(
+        TARGET_DATE, as_of=datetime.fromisoformat(f"{TARGET_DATE}T10:30:00"))
+    assert result["source_date_status"] == "source_timestamp_missing_or_after_as_of"
+    assert result["soft_stop_total"] == 0
+    assert result["threshold_contract"]["threshold_mode"] == "insufficient_sample"
+
+
+def test_repeated_first_order_does_not_displace_second_order_profit():
+    rows = [_event(f"10:0{index}:00", fields={
+        "actual_order_submitted": True, "sell_order_no": order,
+        "exit_rule": "scalp_soft_stop_loss", "profit_rate": profit})
+        for index, (order, profit) in enumerate((("A", -1.0), ("A", -1.0), ("B", 2.0)))]
+    metrics = report_mod._summarize_exit_metrics(
+        rows, as_of=datetime.fromisoformat(f"{TARGET_DATE}T10:30:00"))
+    assert metrics["real_exit_count"] == 2
+    assert metrics["duplicate_real_exit_signal_count"] == 1
+    assert metrics["avg_exit_profit_rate_pct"] == 0.5

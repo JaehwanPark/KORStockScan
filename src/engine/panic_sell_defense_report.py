@@ -14,6 +14,7 @@ from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from src.engine.panic_sell_state_detector import (
     summarize_microstructure_detector_from_events,
@@ -22,6 +23,7 @@ from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import iter_jsonl
 
 SCHEMA_VERSION = 2
+KST = ZoneInfo("Asia/Seoul")
 REPORT_DIRNAME = "panic_sell_defense"
 PANIC_WINDOW_MIN = 30
 PANIC_STOP_LOSS_RATIO_FLOOR_PCT = 70.0
@@ -146,7 +148,8 @@ def _parse_dt(value: Any) -> datetime | None:
     if not text:
         return None
     try:
-        return datetime.fromisoformat(text)
+        parsed = datetime.fromisoformat(text)
+        return parsed.astimezone(KST).replace(tzinfo=None) if parsed.tzinfo else parsed
     except ValueError:
         pass
     for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
@@ -155,6 +158,21 @@ def _parse_dt(value: Any) -> datetime | None:
         except ValueError:
             continue
     return None
+
+
+def _source_time_status(payload: dict[str, Any], target_date: str, as_of: datetime,
+                        *, timestamp_field: str) -> str:
+    for field in ("target_date", "date", "cached_session_date"):
+        if payload.get(field) is not None and str(payload[field]) != target_date:
+            return "source_date_mismatch"
+    timestamp = _parse_dt(payload.get(timestamp_field))
+    if timestamp is None:
+        return "source_timestamp_missing_or_invalid"
+    if timestamp.date().isoformat() != target_date:
+        return "source_date_mismatch"
+    if timestamp > as_of:
+        return "source_after_as_of"
+    return "ok"
 
 
 def _avg(values: list[float]) -> float | None:
@@ -367,7 +385,7 @@ def _deduplicate_real_exit_signals(
         ordered = sorted(
             rows,
             key=lambda item: (
-                _safe_str(item.get("emitted_at")),
+                _parse_dt(item.get("emitted_at")) or datetime.min,
                 _safe_str(item.get("record_id")),
             ),
         )
@@ -386,8 +404,20 @@ def _deduplicate_real_exit_signals(
             len(direct_identities),
             1 if direct_submitted_without_order else 0,
         )
-        canonical.extend(ordered[:canonical_count])
-        duplicates.extend(ordered[canonical_count:])
+        by_order: dict[str, dict[str, Any]] = {}
+        sparse = []
+        for row in ordered:
+            identity = _broker_order_identity(row)
+            if not identity:
+                sparse.append(row)
+            elif identity in by_order:
+                duplicates.append(row)
+            else:
+                by_order[identity] = row
+        canonical.extend(by_order.values())
+        sparse_capacity = max(0, canonical_count - len(by_order))
+        canonical.extend(sparse[:sparse_capacity])
+        duplicates.extend(sparse[sparse_capacity:])
     return canonical, duplicates
 
 
@@ -588,6 +618,7 @@ def _summarize_exit_metrics(
     )
     return {
         "panic_decision_basis": "broker_confirmed_exit_identity_deduplicated",
+        "profit_metric_scope": "exit_signal_profit_diagnostic_not_completed_cost_adjusted_ev",
         "real_exit_provenance_required": True,
         "raw_exit_signal_count": len(exit_events),
         "real_exit_count": len(real_exits),
@@ -647,8 +678,11 @@ def _summarize_exit_metrics(
 
 
 def _stream_pipeline_inputs(
-    path: Path, *, as_of: datetime
+    path: Path, *, as_of: datetime, target_date: str | None = None
 ) -> tuple[list[dict[str, Any]], dict[str, Any], datetime | None, dict[str, Any]]:
+    as_of = _parse_dt(as_of.isoformat())
+    target_date = target_date or as_of.date().isoformat()
+    excluded_time_counts: Counter[str] = Counter()
     retained_exit_events: list[dict[str, Any]] = []
     latest_dt: datetime | None = None
     scanned_row_count = 0
@@ -663,7 +697,13 @@ def _stream_pipeline_inputs(
         for row in iter_jsonl(path):
             scanned_row_count += 1
             event_dt = _parse_dt(row.get("emitted_at"))
-            if event_dt is not None and (latest_dt is None or event_dt > latest_dt):
+            status = _source_time_status(
+                {"timestamp": row.get("emitted_at"), "date": row.get("emitted_date")},
+                target_date, as_of, timestamp_field="timestamp")
+            if status != "ok":
+                excluded_time_counts[status] += 1
+                continue
+            if latest_dt is None or event_dt > latest_dt:
                 latest_dt = event_dt
             is_exit = _is_holding_exit_signal(row)
             is_non_real_provenance = _safe_str(
@@ -689,7 +729,7 @@ def _stream_pipeline_inputs(
     streaming_contract = {
         "metric_role": "source_quality_instrumentation",
         "decision_authority": "source_quality_only",
-        "window_policy": "target_date_pipeline_jsonl_single_pass",
+        "window_policy": "target_date_pipeline_jsonl_single_pass_through_as_of_kst",
         "sample_floor": 0,
         "primary_decision_metric": None,
         "source_quality_gate": "valid JSON object rows with monotonic per-symbol event time",
@@ -702,6 +742,8 @@ def _stream_pipeline_inputs(
         ],
         "memory_bounded_streaming": True,
         "scanned_row_count": scanned_row_count,
+        "excluded_time_counts": dict(excluded_time_counts),
+        "accepted_time_row_count": scanned_row_count - sum(excluded_time_counts.values()),
         "retained_exit_event_count": len(retained_exit_events),
         "retained_non_real_provenance_count": retained_non_real_provenance_count,
         "retained_broker_exit_receipt_count": retained_broker_exit_receipt_count,
@@ -802,14 +844,23 @@ def _active_positions_from_state(
     }
 
 
-def _summarize_active_recovery() -> dict[str, Any]:
+def _summarize_active_recovery(target_date: str, *, as_of: datetime) -> dict[str, Any]:
     swing_rows, swing_meta = _active_positions_from_state(
         _swing_probe_state_path(), source="swing_probe"
     )
     scalp_rows, scalp_meta = _active_positions_from_state(
         _scalp_sim_state_path(), source="scalp_sim"
     )
-    rows = swing_rows + scalp_rows
+    observed_rows = swing_rows + scalp_rows
+    rows = []
+    for source_rows, meta in ((swing_rows, swing_meta), (scalp_rows, scalp_meta)):
+        status = _source_time_status(meta, target_date, as_of, timestamp_field="updated_at")
+        meta["time_status"] = status
+        meta["used_for_recovery"] = status == "ok"
+        if status == "ok":
+            rows.extend(row for row in source_rows
+                        if row.get("actual_order_submitted_false")
+                        and row.get("broker_order_forbidden_true"))
     profits = [
         row["profit_rate_pct"] for row in rows if row.get("profit_rate_pct") is not None
     ]
@@ -827,11 +878,13 @@ def _summarize_active_recovery() -> dict[str, Any]:
         )
     provenance_violations = [
         row
-        for row in rows
+        for row in observed_rows
         if not row.get("actual_order_submitted_false")
         or not row.get("broker_order_forbidden_true")
     ]
     return {
+        "observed_active_positions": len(observed_rows),
+        "excluded_active_positions": len(observed_rows) - len(rows),
         "active_positions": len(rows),
         "profit_sample": len(profits),
         "avg_unrealized_profit_rate_pct": _avg(profits),
@@ -871,7 +924,7 @@ def _summarize_active_recovery() -> dict[str, Any]:
         "flat": sum(1 for value in profits if value == 0),
         "provenance_check": {
             "passed": not provenance_violations,
-            "checked_positions": len(rows),
+            "checked_positions": len(observed_rows),
             "violations": provenance_violations[:10],
         },
         "state_sources": {
@@ -890,12 +943,19 @@ def _summarize_active_recovery() -> dict[str, Any]:
     }
 
 
-def _post_sell_recovery_metrics(target_date: str) -> dict[str, Any]:
+def _post_sell_recovery_metrics(target_date: str, *, as_of: datetime) -> dict[str, Any]:
     path = _post_sell_feedback_path(target_date)
     payload = _load_json(path)
     if isinstance(payload, list):
         payload = payload[-1] if payload and isinstance(payload[-1], dict) else {}
     if not isinstance(payload, dict):
+        payload = {}
+    source_date_status = "ok" if str(payload.get("date")) == target_date else "source_date_missing_or_mismatch"
+    meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+    generated_at = _parse_dt(meta.get("generated_at"))
+    if source_date_status == "ok" and (generated_at is None or generated_at > as_of):
+        source_date_status = "source_timestamp_missing_or_after_as_of"
+    if source_date_status != "ok":
         payload = {}
     soft = (
         payload.get("soft_stop_forensics")
@@ -912,6 +972,11 @@ def _post_sell_recovery_metrics(target_date: str) -> dict[str, Any]:
         if isinstance(soft.get("rebound_above_buy_rate"), dict)
         else {}
     )
+    soft_stop_total = _safe_int(soft.get("total_soft_stop"), 0)
+    if soft_stop_total <= 0:
+        # The producer exports zero rates even when there are no trades.
+        # Those placeholders cannot populate the recovery baseline.
+        above_sell, above_buy = {}, {}
     sell_10_20 = max(
         _safe_float(above_sell.get("10m"), 0.0) or 0.0,
         _safe_float(above_sell.get("20m"), 0.0) or 0.0,
@@ -949,7 +1014,9 @@ def _post_sell_recovery_metrics(target_date: str) -> dict[str, Any]:
     return {
         "source_path": str(path),
         "source_exists": path.exists(),
-        "soft_stop_total": _safe_int(soft.get("total_soft_stop"), 0) if soft else 0,
+        "source_date_status": source_date_status,
+        "soft_stop_total": soft_stop_total,
+        "sample_unit": "observed_horizon_rate_statistics_not_independent_trades",
         "rebound_above_sell_10_20m_pct": sell_10_20,
         "rebound_above_buy_10_20m_pct": buy_10_20,
         "threshold_contract": {
@@ -989,7 +1056,7 @@ def _post_sell_recovery_metrics(target_date: str) -> dict[str, Any]:
     }
 
 
-def _load_source_summary(target_date: str) -> dict[str, Any]:
+def _load_source_summary(target_date: str, *, as_of: datetime) -> dict[str, Any]:
     buy = _load_json(_json_report_path("buy_funnel_sentinel", target_date))
     hold = _load_json(_json_report_path("holding_exit_sentinel", target_date))
     market = _load_json(_market_regime_path())
@@ -999,7 +1066,7 @@ def _load_source_summary(target_date: str) -> dict[str, Any]:
         if isinstance(market_breadth, dict)
         else {}
     )
-    return {
+    summary = {
         "buy_funnel_sentinel": {
             "path": str(_json_report_path("buy_funnel_sentinel", target_date)),
             "exists": _json_report_path("buy_funnel_sentinel", target_date).exists(),
@@ -1096,6 +1163,23 @@ def _load_source_summary(target_date: str) -> dict[str, Any]:
         },
     }
 
+    market_status = _source_time_status(
+        market if isinstance(market, dict) else {}, target_date, as_of, timestamp_field="timestamp")
+    breadth_status = _source_time_status(
+        market_breadth if isinstance(market_breadth, dict) else {}, target_date, as_of, timestamp_field="as_of")
+    if breadth_status == "ok" and summary["market_panic_breadth"]["source_quality_status"] != "ok":
+        breadth_status = "source_quality_not_ok"
+    summary["market_regime"].update(
+        time_status=market_status, timestamp=(market or {}).get("timestamp") if isinstance(market, dict) else None,
+        reported_risk_state=summary["market_regime"]["risk_state"])
+    if market_status != "ok":
+        summary["market_regime"].update(risk_state="UNKNOWN", allow_swing_entry=None, swing_score=None)
+    summary["market_panic_breadth"]["time_status"] = breadth_status
+    if breadth_status != "ok":
+        summary["market_panic_breadth"].update(
+            risk_off_advisory=False, single_market_risk_off_advisory=False, market_weakness_observation={})
+    return summary
+
 
 def _microstructure_market_context(
     microstructure_detector: dict[str, Any], source_summary: dict[str, Any]
@@ -1142,7 +1226,10 @@ def _microstructure_market_context(
         sample_floor=MICRO_MARKET_BREADTH_SYMBOL_FLOOR,
         threshold_source="same_day_microstructure_risk_off_ratio_p95",
     )
-    live_breadth_risk_off = bool(market_breadth.get("risk_off_advisory"))
+    live_breadth_risk_off = market_breadth.get("risk_off_advisory") is True
+    source_blockers = [f"{name}:{payload.get('time_status', 'source_time_unverified')}"
+                       for name, payload in (("market_regime", market), ("market_panic_breadth", market_breadth))
+                       if payload.get("exists") and payload.get("time_status") != "ok"]
     market_confirms = risk_state == "RISK_OFF"
     breadth_confirms = (
         bool(evaluated_contract["sample_ready"])
@@ -1212,7 +1299,7 @@ def _microstructure_market_context(
                 and risk_off_contract["sample_ready"]
                 else "insufficient_sample"
             ),
-            "source_quality_blockers": (
+            "source_quality_blockers": source_blockers + (
                 []
                 if evaluated_contract["sample_ready"]
                 and risk_off_contract["sample_ready"]
@@ -1463,7 +1550,7 @@ def _panic_regime_contract(mode: str) -> dict[str, Any]:
         "decision_authority": "source_quality_only",
         "window_policy": "same_day_intraday_light + postclose_attribution + next_preopen_apply",
         "sample_floor": "panic report freshness <= 5m; microstructure breadth floor when used",
-        "primary_decision_metric": "source_quality_adjusted_avoided_loss_vs_missed_upside_ev_pct",
+        "primary_decision_metric": "confirmed_panic_risk_regime_state",
         "source_quality_gate": "panic provenance + real/sim/probe split + market/breadth confirmation",
         "panic_confirmation_policy": "portfolio stop-loss clusters are evidence; PANIC_DETECTED requires market or microstructure confirmation",
         "runtime_effect": "report_only_no_mutation",
@@ -1593,14 +1680,15 @@ def build_panic_sell_defense_report(
     dry_run: bool = False,
 ) -> dict[str, Any]:
     if as_of is None:
-        as_of = datetime.now()
+        as_of = datetime.now(KST)
+    as_of = _parse_dt(as_of.isoformat())
     events, microstructure_detector, latest_dt, input_streaming = (
-        _stream_pipeline_inputs(_pipeline_events_path(target_date), as_of=as_of)
+        _stream_pipeline_inputs(_pipeline_events_path(target_date), as_of=as_of, target_date=target_date)
     )
     panic_metrics = _summarize_exit_metrics(events, as_of=as_of)
-    active_recovery = _summarize_active_recovery()
-    post_sell_recovery = _post_sell_recovery_metrics(target_date)
-    source_summary = _load_source_summary(target_date)
+    active_recovery = _summarize_active_recovery(target_date, as_of=as_of)
+    post_sell_recovery = _post_sell_recovery_metrics(target_date, as_of=as_of)
+    source_summary = _load_source_summary(target_date, as_of=as_of)
     microstructure_market_context = _microstructure_market_context(
         microstructure_detector, source_summary
     )
@@ -1640,6 +1728,12 @@ def build_panic_sell_defense_report(
         "panic_state_reasons": reasons,
         "panic_regime_contract": _panic_regime_contract(panic_regime_mode),
         "panic_metrics": panic_metrics,
+        "economics": {
+            "status": "not_evaluated_context_report",
+            "cost_adjusted_ev_pct": None,
+            "daily_net_profit_krw": None,
+            "reason": "exit_signal_clusters_and_recovery_observations_are_not_paired_completed_cost_outcomes",
+        },
         "recovery_metrics": {
             "active_sim_probe": active_recovery,
             "post_sell_feedback": post_sell_recovery,
