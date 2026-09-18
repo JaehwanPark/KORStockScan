@@ -3496,6 +3496,7 @@ def _episode_inventory(
         "low_price_two_leg_tuning_report_v6",
         "low_price_two_leg_tuning_report_v7",
         "low_price_two_leg_tuning_report_v8",
+        "low_price_two_leg_tuning_report_v9",
     )
     expansion_schemas = (
         "low_price_two_leg_expanded_candidate_research_v5",

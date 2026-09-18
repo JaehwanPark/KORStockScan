@@ -21438,6 +21438,9 @@ def refresh_economic_evaluation_only(target_date: str) -> dict:
             raise ValueError("daily_economic_exact_clean_date_required")
         # Read the existing latest family generation, not shared raw inputs.
         signatures = {}
+        if target_date >= "2026-09-17":
+            from src.engine.monitoring.low_price_two_leg_tuning import paired_search_handoff
+            report["low_price_actual_paired_search"] = paired_search_handoff(target_date)
         for family_name, producer, builder in (
             ("entry_split_order_plan", _entry_split_order_plan_path(target_date), _build_entry_split_order_plan_family),
             ("scale_in_split_order_plan", REPORT_DIR / "scale_in_split_order_plan" / f"scale_in_split_order_plan_{target_date}.json", _build_scale_in_split_order_plan_family)):

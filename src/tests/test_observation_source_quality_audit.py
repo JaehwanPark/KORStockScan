@@ -10602,3 +10602,28 @@ def test_final_without_verified_projection_never_bootstraps_raw(tmp_path, monkey
     monkeypatch.setattr(audit, "_streaming_contract_audit", lambda *args, **kwargs: pytest.fail("unauthorized final raw bootstrap"))
     with pytest.raises(ValueError, match="final_verified_raw_projection_required_no_automatic_bootstrap"):
         audit.build_observation_source_quality_audit("2026-09-17", audit_phase="final")
+
+
+def test_final_bound_projection_migration_is_byte_bound_without_raw_bootstrap(tmp_path, monkeypatch):
+    import shutil
+    raw, path, _, _ = _projection_fixture(tmp_path, monkeypatch)
+    audit.write_report("2026-09-17", audit_phase="final")
+    original = tmp_path / "immutable-source"
+    tree = __import__("ast").parse(Path(audit.__file__).read_text())
+    owner = next(node for node in tree.body if isinstance(node, __import__("ast").FunctionDef) and node.name == "_final_implementation_digest")
+    names = next(node for node in __import__("ast").walk(owner) if isinstance(node, __import__("ast").Tuple) and all(isinstance(part, __import__("ast").Constant) and isinstance(part.value, str) for part in node.elts))
+    paths = {audit.PROJECT_ROOT / part.value for part in names.elts}
+    paths.update(Path(fn.__globals__["__file__"]) for fn in (audit.normalize_flow_state_label, audit.normalize_gatekeeper_action_key, audit.runtime_config_valid))
+    for source in paths:
+        destination = original / source.relative_to(audit.PROJECT_ROOT)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
+    producer = original / "src/engine/observation_source_quality_audit.py"
+    monkeypatch.setattr(audit, "_streaming_contract_audit", lambda *args, **kwargs: pytest.fail("final migration raw bootstrap"))
+    migrated = audit._verified_legacy_projection("2026-09-17", raw, audit._raw_generation(raw), producer)
+    assert migrated is not None and migrated[0]["event_count"] == 1
+    receipt = path.with_name(path.name + ".final-contract.json")
+    body = json.loads(receipt.read_text())
+    body["artifact_sha256"] = "0" * 64
+    receipt.write_text(json.dumps(body))
+    assert audit._verified_legacy_projection("2026-09-17", raw, audit._raw_generation(raw), producer) is None

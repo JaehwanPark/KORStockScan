@@ -466,8 +466,8 @@ def _low_price_two_leg_postclose_contract_status(
 
     issues: list[str] = []
     if tuning.get("schema") != REPORT_SCHEMA and not (
-        target_date <= "2026-09-04"
-        and tuning.get("schema") == "low_price_two_leg_tuning_report_v6"
+        (target_date <= "2026-09-04" and tuning.get("schema") == "low_price_two_leg_tuning_report_v6")
+        or (target_date < "2026-09-17" and tuning.get("schema") in {"low_price_two_leg_tuning_report_v7", "low_price_two_leg_tuning_report_v8"})
     ):
         issues.append("tuning_schema_invalid")
     if tuning.get("target_date") != target_date:
@@ -7537,6 +7537,12 @@ def build_threshold_cycle_postclose_verification(
         or validated_source_quality.get("load_error")
     ):
         log_issues.append("source_quality_preflight_invalid_contract")
+    if target_date >= "2026-09-17" and low_price_two_leg_verification_enabled:
+        from src.engine.monitoring.low_price_two_leg_tuning import paired_search_handoff
+        handoff = paired_search_handoff(target_date)
+        for label, summary in (("ev", ev_report), ("runtime", runtime_summary)):
+            if summary.get("low_price_actual_paired_search") != handoff:
+                log_issues.append(f"low_price_actual_paired_{label}_generation_mismatch")
     source_quality_hard_block = _source_quality_hard_block_status(
         validated_source_quality,
         ev_report=ev_report,

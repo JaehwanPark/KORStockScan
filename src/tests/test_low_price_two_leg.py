@@ -4282,7 +4282,7 @@ def test_profile_inventory_blocks_tuning_even_when_held_row_has_no_axis_features
 def _write_source_quality_audit(directory: Path, target_date: str) -> None:
     directory.mkdir(parents=True, exist_ok=True)
     (directory / f"observation_source_quality_audit_{target_date}.json").write_text(
-        json.dumps({"status": "pass", "summary": {"tuning_input_allowed": True}}),
+        json.dumps({"status": "pass", "target_date": target_date, "report_type": "observation_source_quality_audit", "source": {"exists": True}, "summary": {"tuning_input_allowed": True, "hard_blocking_contract_gap_count": 0}}),
         encoding="utf-8",
     )
 
@@ -5127,3 +5127,144 @@ def test_contradictory_complete_receipt_is_quarantined(tmp_path):
         source_quality_dir=source_quality_dir,
     )["daily"]["profiles"][profile_id]
     assert "leg_execution_contract_invalid" in below_limit["source_quality_reasons"]
+
+
+# Actual-conditioned successor uses native writers/loaders, not subset authority.
+def test_actual_paired_carry_generates_next_trading_policy_and_freezes(tmp_path, monkeypatch):
+    from src.engine.monitoring import low_price_two_leg_tuning as tuner
+    from src.trading.low_price_two_leg import policy_runtime as runtime
+    target = "2026-09-17"
+    _write_source_quality_audit(tmp_path / "sq", target)
+    # Admission binding is exercised separately; this fixture isolates publication.
+    monkeypatch.setattr(tuner, "_source_quality_preflight", lambda day, directory: {
+        "status": "pass", "tuning_input_allowed": True, "source_path": str(directory / f"observation_source_quality_audit_{day}.json"),
+        "source_sha256": __import__("hashlib").sha256((directory / f"observation_source_quality_audit_{day}.json").read_bytes()).hexdigest()})
+    atomic_write_json(tmp_path / "reports" / "low_price_two_leg_tuning_2026-08-10.json", {"schema": "low_price_two_leg_tuning_report_v8", "report_type": "low_price_two_leg_tuning", "target_date": "2026-08-10", "clean_tuning_baseline_date": "2026-06-05", "daily": {"profiles": {}}})
+    report = tuner.build_report(target_date=target, state_dir=tmp_path / "states", output_dir=tmp_path / "reports",
+        source_quality_dir=tmp_path / "sq", applied_dir=tmp_path / "applied", paired_selection_dir=tmp_path / "candidates",
+        paired_context_loader=lambda *args: pytest.fail("empty actuals must not replay"))
+    candidate = tuner.build_candidate(report, candidate_dir=tmp_path / "candidates", samsung_candidate_dir=tmp_path / "samsung")
+    assert candidate["schema"] == runtime.PAIRED_CANDIDATE_SCHEMA
+    assert candidate["policy_mutations"] == []
+    assert candidate["effective_date"] == str(runtime.next_policy_date(date.fromisoformat(target), date.fromisoformat(candidate["publication_date"])))
+    tuner.write_outputs(report, candidate, output_dir=tmp_path / "reports", candidate_dir=tmp_path / "candidates")
+    assert runtime.validate_candidate(candidate, require_source_files=True) == (True, "valid")
+    effective = date.fromisoformat(candidate["effective_date"])
+    applied, status = build_applied_policy(target_date=effective, candidate_dir=tmp_path / "candidates")
+    assert status == "incumbent_preserved"
+    assert applied["policy_hash"] == candidate["policy_hash"]
+    assert runtime.validate_applied(applied, target_date=effective)[0]
+    handoff = tuner.paired_search_handoff(target, output_dir=tmp_path / "reports", candidate_dir=tmp_path / "candidates")
+    assert handoff["status"] == status and handoff["candidate_policy_hash"] == applied["policy_hash"]
+    candidate["effective_date"] = "2026-09-20"
+    assert not runtime.validate_candidate(candidate, source_report=report)[0]
+
+
+def test_actual_admission_rejects_wrong_internal_date_and_role(tmp_path):
+    from src.engine.monitoring.low_price_two_leg_tuning import _source_quality_preflight
+    day = "2026-09-16"
+    _write_source_quality_audit(tmp_path, day)
+    path = tmp_path / f"observation_source_quality_audit_{day}.json"
+    body = json.loads(path.read_text())
+    body["target_date"] = "2026-09-15"
+    path.write_text(json.dumps(body))
+    assert not _source_quality_preflight(day, tmp_path)["tuning_input_allowed"]
+    body["target_date"] = day
+    body["report_type"] = "unrelated_report"
+    path.write_text(json.dumps(body))
+    assert not _source_quality_preflight(day, tmp_path)["tuning_input_allowed"]
+
+
+def test_actual_execution_missing_durable_population_is_gap():
+    from src.engine.monitoring.low_price_two_leg_tuning import actual_execution_confirmation
+    result = {"baseline": {"full": {"episodes": []}}}
+    proof = actual_execution_confirmation([{"eligible_for_tuning": True, "attempted": True}], result)
+    assert proof["status"] == "source_gap"
+    assert proof["reason"] == "actual_durable_observation_lineage_missing"
+
+
+def test_actual_capture_disabled_never_claims_persisted(tmp_path, monkeypatch):
+    import src.utils.pipeline_event_logger as logger
+    monkeypatch.setattr(logger, "emit_pipeline_event", lambda *args, **kwargs: {"structured_append_succeeded": False})
+    profile = get_profile("kakao_late_morning", target_date=date(2026, 9, 17))
+    machine = LowPriceTwoLegMachine(profile=profile, gateway=object(), state_path=tmp_path / "state.json")
+    machine._record(datetime.fromisoformat("2026-09-17T10:00:00+09:00"), "bar_evaluated_no_signal", bar="2026-09-17T09:59:00+09:00")
+    assert machine.snapshot()["economic_capture"]["status"] == "source_gap"
+
+
+def test_actual_full_terminal_reproduction_requires_eight_native_legs():
+    from src.engine.monitoring.low_price_two_leg_tuning import actual_execution_confirmation
+    episodes, rows = [], []
+    for i in range(4):
+        signal = f"2026-09-{14+i:02d}T10:00:00+09:00"
+        model = {"status": "COMPLETE", "entry_price": 10000, "target_price": 10040}
+        actual = {"completed": True, "profit_price_source": "broker_target_fill_price", "quantity": 10,
+            "buy_filled_qty": 10, "target_filled_qty": 10, "fill_price": 10000, "profit_exit_price": 10040}
+        episodes.append({"signal_at": signal, "legs": [dict(model), dict(model)]})
+        rows.append({"eligible_for_tuning": True, "attempted": True, "signal_features": {"signal_bar": signal},
+            "durable_observation_capture": {"status": "pass", "profile": {"bar_evaluations": 1}},
+            "legs": [dict(actual), dict(actual)]})
+    result = {"baseline": {"full": {"episodes": episodes}}}
+    assert actual_execution_confirmation(rows, result)["status"] == "pass"
+    rows[-1]["legs"][0]["target_filled_qty"] = 9
+    assert actual_execution_confirmation(rows, result)["status"] == "source_gap"
+
+
+def test_paired_successor_selection_consumer_requires_promotion_adapter(tmp_path, monkeypatch):
+    """Isolate native external proof admission; test selected writer/apply/loader."""
+    from src.engine.monitoring import low_price_two_leg_tuning as tuner
+    from src.trading.low_price_two_leg import policy_runtime as runtime
+    from src.engine.monitoring.low_price_two_leg_entry_spot_research import baseline_candidate
+    from src.engine.monitoring.low_price_two_leg_expanded_candidate_research import ResearchProfile
+    target = date(2026, 9, 17)
+    applied, _ = build_applied_policy(target_date=target, candidate_dir=tmp_path / "empty")
+    atomic_write_json(tmp_path / "applied" / f"low_price_two_leg_policy_{target}.json", applied)
+    report = tuner.build_report(target_date=str(target), state_dir=tmp_path / "states", output_dir=tmp_path / "reports",
+        source_quality_dir=tmp_path / "sq", applied_dir=tmp_path / "applied", paired_selection_dir=tmp_path / "candidates")
+    pid = "samsung_heavy_midday"
+    live = get_profile(pid, target_date=target)
+    parameters = baseline_candidate(ResearchProfile(pid, live.symbol, live.name, live.session, live.policy, "actual_existing_axis")).public()
+    bounds = runtime.policy_bounds_for_target_date(target)[pid]
+    parameters["rolling_high_drawdown_pct"] = bounds["drawdown_max"]
+    proof = report["paired_economic_search"]["profiles"][pid]
+    # Five dated source-valid observations and eight terminal legs are synthetic
+    # component evidence; native external execution/authority remains isolated.
+    dates = [f"2026-09-{i:02d}" for i in (11, 14, 15, 16, 17)]
+    rows = [{"target_date": day, "source_quality": "pass"} for day in dates]
+    window = report["windows"]["post_apply_version"][pid]
+    window["rows"] = rows
+    window["summary"].update(broker_priced_completed_legs=8, source_valid_observation_days=5)
+    proof.update(selected_axis="rolling_high_drawdown_pct", selected_parameters=parameters, actual_rows=rows,
+        completed_actual_legs=8, actual_source_valid_days=5,
+        candidate_revision={"calibration_dates": dates, "holdout_dates": []}, baseline_policy_hash=applied["policy_hash"])
+    report["paired_economic_search"].update(selected_profile=pid, selected_axis=proof["selected_axis"])
+    report["source_quality_preflight"]["tuning_input_allowed"] = False
+    # False admission must reject even a ready external adapter.
+    monkeypatch.setattr(tuner, "paired_promotion_ready", lambda *args, **kwargs: True)
+    monkeypatch.setattr(runtime, "paired_promotion_ready", lambda *args, **kwargs: True)
+    candidate = tuner.build_candidate(report, samsung_candidate_dir=tmp_path / "samsung")
+    assert runtime.validate_candidate(candidate, source_report=report)[0] is False
+    # External source admission is separately covered by bound final tests.
+    report["source_quality_preflight"]["tuning_input_allowed"] = True
+    source = tmp_path / "source-quality.json"
+    atomic_write_json(source, {"target_date": str(target), "audit_phase": "final"})
+    report["source_quality_preflight"].update(source_path=str(source),
+        source_sha256=__import__("hashlib").sha256(source.read_bytes()).hexdigest())
+    from src.engine.automation import source_quality_hard_gate
+    monkeypatch.setattr(source_quality_hard_gate, "load_source_quality_preflight",
+        lambda *args, **kwargs: {"tuning_input_allowed": True, "validation_errors": []})
+    report["artifact_hash"] = runtime.report_artifact_hash(report)
+    candidate = tuner.build_candidate(report, samsung_candidate_dir=tmp_path / "samsung")
+    atomic_write_json(Path(report["artifact_path"]), report)
+    assert runtime.validate_candidate(candidate, source_report=report)[0]
+    assert len(candidate["policy_mutations"]) == 1
+    atomic_write_json(tmp_path / "candidates" / f"low_price_two_leg_policy_candidate_{target}.json", candidate)
+    successor, status = build_applied_policy(target_date=date.fromisoformat(candidate["effective_date"]),
+        candidate_dir=tmp_path / "candidates")
+    assert status == "paired_economic_policy_selected"
+    assert successor["policy_hash"] == candidate["policy_hash"]
+    assert successor["profiles"][pid]["policy"][proof["selected_axis"]] == parameters[proof["selected_axis"]]
+    assert candidate["profiles"][pid]["policy"]["quantity"] == applied["profiles"][pid]["policy"]["quantity"]
+    # Restore real admission: a self-declared selection without native proofs fails.
+    monkeypatch.undo()
+    assert runtime.validate_candidate(candidate, source_report=report)[0] is False

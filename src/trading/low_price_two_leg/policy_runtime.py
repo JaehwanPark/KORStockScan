@@ -47,12 +47,15 @@ from src.utils.constants import DATA_DIR
 
 KST = ZoneInfo("Asia/Seoul")
 CANDIDATE_SCHEMA = "low_price_two_leg_policy_candidate_v3"
+PAIRED_CANDIDATE_SCHEMA = "low_price_two_leg_policy_candidate_v4"
+PAIRED_AUTHORITY_CONTRACT = "low_price_actual_conditioned_paired_economics_v1"
 SUBSET_AUTHORITY_CONTRACT = "low_price_existing_axis_subset_diagnostic_only_v1"
 SUPPORTED_CANDIDATE_SCHEMAS = frozenset(
     {
         "low_price_two_leg_policy_candidate_v1",
         "low_price_two_leg_policy_candidate_v2",
         CANDIDATE_SCHEMA,
+        PAIRED_CANDIDATE_SCHEMA,
     }
 )
 LEGACY_V1_PROFILE_IDS = frozenset(
@@ -84,6 +87,7 @@ SUPPORTED_SOURCE_REPORT_SCHEMAS = frozenset(
         "low_price_two_leg_tuning_report_v6",
         "low_price_two_leg_tuning_report_v7",
         "low_price_two_leg_tuning_report_v8",
+        "low_price_two_leg_tuning_report_v9",
     }
 )
 APPLIED_SCHEMA = "low_price_two_leg_policy_applied_v1"
@@ -928,7 +932,7 @@ def validate_candidate(
         return False, "candidate_source_date_precedes_clean_baseline"
     if (
         source_date >= SOURCE_PROVENANCE_REQUIRED_DATE
-        and payload.get("schema") != CANDIDATE_SCHEMA
+        and payload.get("schema") not in {CANDIDATE_SCHEMA, PAIRED_CANDIDATE_SCHEMA}
     ):
         return False, "candidate_legacy_schema_after_subset_retirement"
     if (
@@ -998,22 +1002,23 @@ def validate_candidate(
         policies[profile_id] = item["policy"]
     if payload.get("policy_hash") != policy_hash(policies):
         return False, "candidate_policy_hash_mismatch"
-    if payload.get("schema") == CANDIDATE_SCHEMA:
+    if payload.get("schema") in {CANDIDATE_SCHEMA, PAIRED_CANDIDATE_SCHEMA}:
         # Neither a sample count nor a report/self hash turns an observed-signal
         # subset into a causal counterfactual. Keep actual policy custody only.
-        if payload.get("policy_mutations"):
+        if payload.get("schema") == CANDIDATE_SCHEMA and payload.get("policy_mutations"):
             return False, "candidate_subset_promotion_authority_retired"
         binding = payload.get("source_runtime_policy_binding")
         if (
-            payload.get("evaluation_authority_contract") != SUBSET_AUTHORITY_CONTRACT
+            payload.get("evaluation_authority_contract") != (PAIRED_AUTHORITY_CONTRACT if payload.get("schema") == PAIRED_CANDIDATE_SCHEMA else SUBSET_AUTHORITY_CONTRACT)
             or payload.get("source_report_schema")
             not in {
                 "low_price_two_leg_tuning_report_v7",
                 "low_price_two_leg_tuning_report_v8",
+                "low_price_two_leg_tuning_report_v9",
             }
             or not isinstance(binding, dict)
             or binding.get("source_date") != source_date.isoformat()
-            or binding.get("policies") != policies
+            or (payload.get("schema") == CANDIDATE_SCHEMA and binding.get("policies") != policies)
         ):
             return False, "candidate_actual_runtime_binding_invalid"
         if binding.get("status") == "missing_baseline_only":
@@ -1041,14 +1046,14 @@ def validate_candidate(
                 not valid
                 or _canonical_hash(applied) != binding.get("artifact_hash")
                 or {key: item["policy"] for key, item in applied["profiles"].items()}
-                != policies
+                != binding.get("policies")
             ):
                 return False, "candidate_actual_runtime_source_mismatch"
         else:
             return False, "candidate_actual_runtime_binding_status_invalid"
     if (
         source_date >= SOURCE_PROVENANCE_REQUIRED_DATE
-        or payload.get("schema") == CANDIDATE_SCHEMA
+        or payload.get("schema") in {CANDIDATE_SCHEMA, PAIRED_CANDIDATE_SCHEMA}
     ):
         report_path_text = str(payload.get("source_report_path") or "").strip()
         report_digest = str(payload.get("source_report_artifact_hash") or "")
@@ -1062,7 +1067,7 @@ def validate_candidate(
                     Path(report_path_text).read_text(encoding="utf-8")
                 )
             except (OSError, json.JSONDecodeError):
-                if require_source_files or payload.get("schema") == CANDIDATE_SCHEMA:
+                if require_source_files or payload.get("schema") in {CANDIDATE_SCHEMA, PAIRED_CANDIDATE_SCHEMA}:
                     return False, "candidate_source_report_unreadable"
         if observed_report is not None:
             expected_cost_contract = cost_contract()
@@ -1079,7 +1084,7 @@ def validate_candidate(
                 or observed_report.get("cost_contract") != expected_cost_contract
             ):
                 return False, "candidate_source_cost_contract_invalid"
-            if payload.get("schema") == CANDIDATE_SCHEMA and (
+            if payload.get("schema") in {CANDIDATE_SCHEMA, PAIRED_CANDIDATE_SCHEMA} and (
                 observed_report.get("schema") != payload.get("source_report_schema")
                 or observed_report.get("source_runtime_policy_binding")
                 != payload.get("source_runtime_policy_binding")
@@ -1104,7 +1109,145 @@ def validate_candidate(
                     return False, "candidate_source_quality_unreadable"
                 if observed_source_quality_digest != source_quality_digest:
                     return False, "candidate_source_quality_hash_mismatch"
+                if payload.get("schema") == PAIRED_CANDIDATE_SCHEMA and payload.get("policy_mutations"):
+                    from src.engine.automation.source_quality_hard_gate import load_source_quality_preflight
+                    current_gate = load_source_quality_preflight(payload["source_date"],
+                        artifact_path=Path(str(preflight["source_path"])), require_final=True)
+                    if current_gate.get("tuning_input_allowed") is not True or current_gate.get("validation_errors"):
+                        return False, "candidate_source_quality_final_binding_invalid"
+    if payload.get("schema") == PAIRED_CANDIDATE_SCHEMA:
+        return validate_paired_candidate(payload, observed_report)
     return True, "valid"
+
+
+def next_policy_date(source_date: date, publication_date: date | None = None) -> date:
+    from src.utils.market_day import is_krx_trading_day
+    day = max(source_date, publication_date or source_date) + timedelta(days=1)
+    while not is_krx_trading_day(day):
+        day += timedelta(days=1)
+    return day
+
+
+def validate_paired_candidate(payload: dict, report: dict | None) -> tuple[bool, str]:
+    """Independent paired proof intake; v3 subset promotion stays retired."""
+    try:
+        source = date.fromisoformat(payload["source_date"])
+        publication = date.fromisoformat(payload["publication_date"])
+        if source < date(2026, 9, 17) or publication < source or payload.get("source_report_schema") != "low_price_two_leg_tuning_report_v9":
+            raise ValueError("paired_source_date_schema")
+        if payload["effective_date"] != next_policy_date(source, publication).isoformat():
+            raise ValueError("effective_date")
+        baseline = payload["source_runtime_policy_binding"]["policies"]
+        selected = {key: value["policy"] for key, value in payload["profiles"].items()}
+        mutations = policy_mutations_between(baseline, selected)
+        if mutations != payload["policy_mutations"] or len(mutations) > 1:
+            raise ValueError("mutation_lineage")
+        search = report["paired_economic_search"]
+        if search != payload["paired_economic_search"] or search["contract"] != PAIRED_AUTHORITY_CONTRACT:
+            raise ValueError("search_binding")
+        if not mutations:
+            if search.get("selected_profile") is not None or payload.get("selection_status") != "incumbent_preserved":
+                raise ValueError("carry_selection")
+            return True, "valid"
+        # CF/model values cannot create real approval. Require existing real
+        # family approval, unused registered window, execution and capital.
+        mutation = mutations[0]
+        profile = search["selected_profile"]
+        if mutation["profile_id"] != profile or mutation["axis"] != search.get("selected_axis"):
+            raise ValueError("selected_profile")
+        proof = search["profiles"][profile]
+        window = report["windows"]["post_apply_version"][profile]
+        revision = proof["candidate_revision"]
+        dates = revision["calibration_dates"] + revision["holdout_dates"]
+        if proof["actual_rows"] != [row for row in window["rows"] if row["target_date"] in dates] or proof["completed_actual_legs"] != window["summary"]["broker_priced_completed_legs"] or proof["actual_source_valid_days"] != window["summary"]["source_valid_observation_days"] or proof["baseline_policy_hash"] != policy_hash(baseline):
+            raise ValueError("actual_proof_lineage")
+        if (mutation["axis"] == "rolling_high_drawdown_pct" and mutation["after"] <= mutation["before"]) or (mutation["axis"] == "rolling_low_proximity_pct" and mutation["after"] >= mutation["before"]):
+            raise ValueError("threshold_relaxation")
+        if proof["completed_actual_legs"] < 8 or proof["actual_source_valid_days"] < 5:
+            raise ValueError("actual_sample_floor")
+        if not paired_promotion_ready(proof, source_date=source):
+            raise ValueError("economic_authority")
+        axis = proof["selected_axis"]
+        expected = {key: dict(value) for key, value in baseline.items()}
+        expected[profile][axis] = proof["selected_parameters"][axis]
+        if selected != expected or payload.get("selection_status") != "paired_economic_policy_selected":
+            raise ValueError("unexpected_fields")
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return False, "candidate_paired_economic_contract_invalid"
+    return True, "valid"
+
+
+def paired_capital_confirmation(result: dict, *, source_date: date) -> dict:
+    """Consume each day's native opening budget for both fixed leg lanes."""
+    from src.engine.monitoring import research_closed_loop as loop
+    confirmations = {arm: {"status": "pass", "days": {}} for arm in ("baseline", "selected")}
+    revision = result["candidate_revision"]
+    for day_string in revision["calibration_dates"] + revision["holdout_dates"]:
+        day = date.fromisoformat(day_string)
+        snapshot = loop.load_allocator(day)
+        for arm in ("baseline", "selected"):
+            lanes = {}
+            for index in (0, 1):
+                lanes[f"episode:{result['symbol']}:{result['profile_id']}:{index}"] = [
+                    {"entry_at": leg["fill_at"], "exit_at": leg["target_at"],
+                     "entry_price": leg["entry_price"], "net_return_pct": leg["net_profit_pct"]}
+                    for episode in result[arm]["full"]["episodes"]
+                    for leg in [episode["legs"][index]]
+                    if leg["status"] == "COMPLETE" and str(leg["fill_at"])[:10] == day_string]
+            receipt = loop.joint_allocation(lanes, snapshot=snapshot,
+                source_date=day, parent_sha256=revision["revision_sha256"])
+            confirmations[arm]["days"][day_string] = receipt
+            if receipt["status"] != "pass":
+                confirmations[arm]["status"] = "capital_source_gap"
+    return confirmations
+
+
+def paired_promotion_ready(proof: dict, *, source_date: date) -> bool:
+    from src.engine.monitoring.episode_prospective_research import prospective_summary_valid, execution_feasibility
+    from src.engine.monitoring import research_closed_loop as loop
+    from src.engine.monitoring.low_price_two_leg_entry_spot_research import paired_economics
+    from src.trading.low_price_two_leg.preflight import default_authority_path, validate_authority
+    from src.trading.low_price_two_leg.machine import KST
+    from src.trading.low_price_two_leg.profiles import profiles_for_target_date
+    try:
+        revision = loop.validate_revision(proof["candidate_revision"], owner="episode")
+        result = proof["prospective_result"]
+        if not loop.registered_revision(revision) or source_date.isoformat() < revision["holdout_dates"][-1]:
+            return False
+        if not prospective_summary_valid(result, revision):
+            return False
+        comparison = paired_economics(result["baseline"]["holdout"], result["selected"]["holdout"])
+        if not (comparison["economic_superiority_confirmed"] and comparison["ev_uplift_pct_point"] >= 0.005):
+            return False
+        execution = {arm: execution_feasibility(result, source_date=source_date, arm=arm) for arm in ("baseline", "selected")}
+        capital = paired_capital_confirmation(result, source_date=source_date)
+        if execution != proof["execution_confirmation"] or capital != proof["capital_confirmation"]:
+            return False
+        if any(value.get("status") != "pass" for value in (*execution.values(), *capital.values())):
+            return False
+        approval = proof["family_approval"]
+        profile = profiles_for_target_date(source_date)[proof["profile_id"]]
+        authority = default_authority_path(profile)
+        if str(authority) != approval["path"] or hashlib.sha256(authority.read_bytes()).hexdigest() != approval["sha256"]:
+            return False
+        real = json.loads(authority.read_text())
+        as_of = datetime.fromisoformat(real["observed_at_kst"])
+        if as_of.tzinfo is None or as_of.astimezone(KST).date() != source_date:
+            return False
+        if not validate_authority(profile=profile, now=as_of, path=authority)[0]:
+            return False
+        # The native authority is existing permission, not proof that price-touch
+        # CF reproduces broker execution. The producer must reconcile that too.
+        from src.engine.monitoring.low_price_two_leg_tuning import actual_execution_confirmation
+        actual = actual_execution_confirmation(proof["actual_rows"], result)
+        return bool(actual == proof["actual_execution_confirmation"] and actual["status"] == "pass"
+            and real["decision"]["applied_policy_hash"] == proof["baseline_policy_hash"]
+            and proof.get("actual_eligibility_passed") is True
+            and proof.get("completed_actual_legs", 0) >= 8
+            and proof.get("actual_source_valid_days", 0) >= 5
+            and proof.get("selected_axis") in {"rolling_high_drawdown_pct", "rolling_low_proximity_pct"})
+    except (OSError, KeyError, TypeError, ValueError, AttributeError):
+        return False
 
 
 def candidate_policies_with_current_baselines(
@@ -1185,6 +1328,28 @@ def validate_applied(payload: Any, *, target_date: date) -> tuple[bool, str]:
     valid, reason = _validate_policy_mutations(payload.get("policy_mutations"))
     if not valid:
         return False, reason
+    if payload.get("source_candidate_schema") == PAIRED_CANDIDATE_SCHEMA:
+        try:
+            candidate_path = Path(payload["source_candidate"])
+            raw = candidate_path.read_bytes()
+            candidate = json.loads(raw)
+            policies = {pid: item["policy"] for pid, item in candidate["profiles"].items()}
+            expected = apply_operator_policy_transitions(policies, target_date=target_date)
+            observed = {pid: item["policy"] for pid, item in payload["profiles"].items()}
+            if (hashlib.sha256(raw).hexdigest() != payload["source_candidate_artifact_sha256"]
+                or candidate.get("schema") != PAIRED_CANDIDATE_SCHEMA
+                or payload["effective_date"] != target_date.isoformat()
+                or candidate["effective_date"] != payload["effective_date"]
+                or candidate["source_date"] != payload["source_date"]
+                or candidate["publication_date"] != payload["publication_date"]
+                or candidate["selection_status"] != payload["paired_selection_status"]
+                or candidate["policy_mutations"] != payload["policy_mutations"]
+                or expected != observed):
+                return False, "applied_paired_candidate_binding_invalid"
+            if payload["policy_mutations"] and not validate_candidate(candidate, require_source_files=True)[0]:
+                return False, "applied_paired_economic_proof_invalid"
+        except (OSError, KeyError, TypeError, ValueError):
+            return False, "applied_paired_candidate_binding_invalid"
     expected_transitions = operator_policy_transitions(target_date)
     if list(payload.get("operator_policy_transitions") or []) != expected_transitions:
         return False, "applied_operator_policy_transition_invalid"

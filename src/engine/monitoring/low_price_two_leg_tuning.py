@@ -2,8 +2,9 @@
 
 This producer reads durable profile states, its own prior reports, and exact
 realized-cost account rows for uniquely attributable completed episodes. It
-never queries market-price history. Observed-signal subsets remain diagnostics;
-the next-PREOPEN candidate preserves actual applied policy custody only.
+never queries market-price history. Observed-signal subsets remain diagnostics.
+Actual-qualified profiles reuse cached replay and registered unused windows;
+only native execution, daily capital and family authority can select a change.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ import os
 import statistics
 import tempfile
 import time
+from dataclasses import replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
@@ -33,6 +35,11 @@ from src.trading.low_price_two_leg.policy_runtime import (
     APPLIED_DIR,
     CANDIDATE_DIR,
     CANDIDATE_SCHEMA,
+    PAIRED_CANDIDATE_SCHEMA,
+    PAIRED_AUTHORITY_CONTRACT,
+    next_policy_date,
+    paired_promotion_ready,
+    paired_capital_confirmation,
     atomic_write_json,
     baseline_policies_for_target_date,
     load_applied_profile_policy,
@@ -59,7 +66,7 @@ from src.utils import kiwoom_utils
 from src.utils.market_day import is_krx_trading_day
 
 REPORT_TYPE = "low_price_two_leg_tuning"
-REPORT_SCHEMA = "low_price_two_leg_tuning_report_v8"
+REPORT_SCHEMA = "low_price_two_leg_tuning_report_v9"
 SUPPORTED_REPORT_SCHEMAS = frozenset(
     {
         "low_price_two_leg_tuning_report_v1",
@@ -69,6 +76,7 @@ SUPPORTED_REPORT_SCHEMAS = frozenset(
         "low_price_two_leg_tuning_report_v5",
         "low_price_two_leg_tuning_report_v6",
         "low_price_two_leg_tuning_report_v7",
+        "low_price_two_leg_tuning_report_v8",
         REPORT_SCHEMA,
     }
 )
@@ -323,30 +331,17 @@ def _aware_timestamp(value: Any) -> datetime | None:
 
 
 def _source_quality_preflight(target_date: str, source_quality_dir: Path) -> dict:
+    from src.engine.automation.source_quality_hard_gate import load_source_quality_preflight
     path = source_quality_dir / f"observation_source_quality_audit_{target_date}.json"
-    payload = _read_json(path)
-    if payload is None:
-        return {
-            "status": "blocked",
-            "tuning_input_allowed": False,
-            "reason": "observation_source_quality_audit_missing_or_invalid",
-            "source_path": str(path),
-        }
-    status = str(payload.get("status") or "").lower()
-    allowed = (payload.get("summary") or {}).get("tuning_input_allowed") is True
-    passed = allowed and status in {"pass", "warning"}
-    try:
-        source_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
-    except OSError:
-        source_sha256 = ""
-    return {
-        "status": "pass" if passed else "blocked",
-        "tuning_input_allowed": passed,
+    gate = load_source_quality_preflight(target_date, artifact_path=path,
+        require_final=target_date >= "2026-09-17")
+    role_valid = (_read_json(path) or {}).get("report_type") == "observation_source_quality_audit"
+    passed = role_valid and gate.get("tuning_input_allowed") is True and not gate.get("validation_errors")
+    return {"status": "pass" if passed else "blocked", "tuning_input_allowed": passed,
         "reason": "ready" if passed else "observation_source_quality_audit_blocked",
-        "source_path": str(path),
-        "source_sha256": source_sha256,
-        "audit_status": status,
-    }
+        "source_path": str(path), "source_sha256": gate.get("artifact_sha256") or "",
+        "audit_status": gate.get("status"), "audit_phase": gate.get("audit_phase"),
+        "validation_errors": gate.get("validation_errors") or []}
 
 
 def _empty_row(profile_id: str, target_date: str, reason: str) -> dict:
@@ -1493,6 +1488,32 @@ def _policy_windows(
     return cohort, epoch
 
 
+def _read_daily_history(path: Path, *, wanted=None) -> dict | None:
+    wanted = wanted or {"schema", "report_type", "target_date", "clean_tuning_baseline_date", "daily"}
+    sections, current = {}, None
+    try:
+        with path.open(encoding="utf-8") as handle:
+            for line in handle:
+                if line.startswith('  "'):
+                    if current in wanted:
+                        sections[current] = json.loads("".join(sections[current]).rstrip().rstrip(","))
+                    current = line.split('"', 2)[1]
+                    if current in wanted:
+                        sections[current] = [line.split(":", 1)[1]]
+                elif current in wanted:
+                    if line.strip() == "}" and line.startswith("}"):
+                        sections[current] = json.loads("".join(sections[current]).rstrip().rstrip(","))
+                        current = None
+                    else:
+                        sections[current].append(line)
+        if wanted <= sections.keys() and all(not isinstance(sections[k], list) for k in wanted):
+            return sections
+        # Legacy small compact publications remain readable.
+        return _read_json(path) if path.stat().st_size <= 64 * 1024 * 1024 else None
+    except (OSError, ValueError, TypeError):
+        return None
+
+
 def _load_history(
     output_dir: Path, target_date: date, cost_pct: float
 ) -> dict[str, dict[str, dict]]:
@@ -1509,7 +1530,7 @@ def _load_history(
         if not is_krx_trading_day(report_date):
             continue
         target_profiles = _effective_report_profiles(report_date)
-        payload = _read_json(path)
+        payload = _read_daily_history(path)
         profiles = (payload or {}).get("daily", {}).get("profiles", {})
         if (
             not payload
@@ -1586,7 +1607,7 @@ def _samsung_same_stage_owner(
 
 
 def _effective_report_profiles(day):
-    profiles = profiles_for_target_date(day)
+    profiles = dict(profiles_for_target_date(day))
     try:
         from src.engine.automation.low_price_two_leg_auto_expansion_policy import (
             load_policy,
@@ -1615,9 +1636,11 @@ def build_report(
     cost_pct: float = DEFAULT_ROUND_TRIP_COST_PCT,
     machine_microstructure_report_dir: Path = MACHINE_MICROSTRUCTURE_REPORT_DIR,
     realized_pnl_loader: RealizedPnlLoader | None = None,
+    paired_context_loader: Callable | None = None,
+    paired_selection_dir: Path = CANDIDATE_DIR,
 ) -> dict:
     parsed_date = date.fromisoformat(target_date)
-    target_profiles = _effective_report_profiles(parsed_date)
+    target_profiles = dict(profiles_for_target_date(parsed_date)) if parsed_date >= date(2026, 9, 17) else _effective_report_profiles(parsed_date)
     expected_clean_dates = _clean_trading_dates_through(parsed_date)
     target_date_is_trading = is_krx_trading_day(parsed_date)
     if not math.isfinite(cost_pct) or not 0 <= cost_pct < 100:
@@ -1823,7 +1846,7 @@ def build_report(
         POST_APPLY_WINDOW_NAME: {},
     }
     for profile_id in target_profiles:
-        rows = [history[day][profile_id] for day in dates]
+        rows = [history[day].get(profile_id) or _empty_row(profile_id, day, "profile_not_observed_in_historical_inventory") for day in dates]
         windows[CLEAN_WINDOW_NAME][profile_id] = {
             "summary": _aggregate(rows),
             "rows": rows,
@@ -1912,6 +1935,11 @@ def build_report(
     }
     from src.engine.monitoring.research_closed_loop import version_economics
 
+    capture = durable_observation_manifest(target_date, source_quality_dir) if report["source_quality_preflight"]["tuning_input_allowed"] and parsed_date >= date(2026, 9, 17) else {"status": "source_gap", "reason": "capture_not_admitted", "profiles": {}}
+    report["durable_observation_manifest"] = capture
+    for pid, row in daily.items():
+        row["durable_observation_capture"] = {**{key: value for key, value in capture.items() if key != "profiles"}, "profile": capture["profiles"].get(pid)}
+
     native_version_rows = [
         row for day in sorted(history) for row in history[day].values()
     ]
@@ -1923,8 +1951,291 @@ def build_report(
     report["policy_version_holdout_last_16"] = version_economics(
         [row for row in native_version_rows if row["target_date"] in native_dates[-16:]]
     )
+    report["paired_economic_search"] = _paired_economic_search(report, context_loader=paired_context_loader, selection_dir=paired_selection_dir)
     report["artifact_hash"] = report_artifact_hash(report)
     return report
+
+
+def paired_search_handoff(target_date: str, *, output_dir=OUTPUT_DIR, candidate_dir=CANDIDATE_DIR) -> dict:
+    """Bounded native projection for Daily/EV/runtime; no economic re-execution."""
+    report_path = output_dir / f"{REPORT_TYPE}_{target_date}.json"
+    candidate_path = candidate_dir / f"low_price_two_leg_policy_candidate_{target_date}.json"
+    wanted = {"schema", "target_date", "artifact_hash", "paired_economic_search"}
+    report = _read_daily_history(report_path, wanted=wanted) or {}
+    candidate = _read_json(candidate_path) or {}
+    if (report.get("schema") != REPORT_SCHEMA or report.get("target_date") != target_date
+        or candidate.get("schema") != PAIRED_CANDIDATE_SCHEMA
+        or report.get("artifact_hash") != candidate.get("source_report_artifact_hash")
+        or report.get("paired_economic_search") != candidate.get("paired_economic_search")):
+        return {"status": "source_gap", "source_date": target_date, "reason": "native_actual_candidate_generation_missing_or_mismatched", "runtime_effect": False}
+    search = report["paired_economic_search"]
+    return {"status": candidate["selection_status"], "source_date": target_date,
+        "publication_date": candidate["publication_date"], "effective_date": candidate["effective_date"],
+        "report_path": str(report_path), "report_artifact_hash": report["artifact_hash"],
+        "candidate_path": str(candidate_path), "candidate_policy_hash": candidate["policy_hash"],
+        "candidate_artifact_sha256": hashlib.sha256(candidate_path.read_bytes()).hexdigest(),
+        "selected_profile": search["selected_profile"], "selected_axis": search["selected_axis"],
+        "policy_mutations": candidate["policy_mutations"],
+        "profiles": {pid: {key: value for key, value in proof.items() if key in {"disposition", "completed_actual_legs", "actual_source_valid_days", "actual_eligibility_passed"}} for pid, proof in search["profiles"].items()},
+        "runtime_effect": False, "actual_order_submitted": False,
+        "natural_preopen_consumption": "pending_scheduled_preopen"}
+
+
+def _cached_paired_contexts(profile, source_date):
+    from src.engine.monitoring.low_price_two_leg_expanded_candidate_research import DEFAULT_SOURCE_CACHE_DIR, _load_source_cache
+    from src.engine.monitoring.low_price_two_leg_entry_spot_research import build_day_contexts
+    for directory in sorted(DEFAULT_SOURCE_CACHE_DIR.glob("????-??-??"), reverse=True):
+        try:
+            end = date.fromisoformat(directory.name)
+        except ValueError:
+            continue
+        if end > source_date:
+            continue
+        cached = _load_source_cache(cache_dir=DEFAULT_SOURCE_CACHE_DIR, symbol=profile.symbol,
+            start_date=CLEAN_BASELINE_DATE, end_date=end,
+            expected_trading_day_count=len(_clean_trading_dates_through(end)))
+        if cached is not None:
+            return build_day_contexts(cached[0]), cached[1]["source_content_sha256"]
+    return None
+
+
+def durable_observation_manifest(target_date: str, source_quality_dir: Path) -> dict:
+    """Final census first; stream only a declared native observation population."""
+    import gzip
+    audit = _read_json(source_quality_dir / f"observation_source_quality_audit_{target_date}.json") or {}
+    source = audit.get("source") or {}
+    expected = (source.get("audited_stage_counts") or {}).get("low_price_actual_economic_observation", 0)
+    manifest = {"schema": "low_price_actual_capture_manifest_v1", "target_date": target_date,
+        "source_path": source.get("pipeline_events"), "source_sha256": source.get("logical_content_sha256"),
+        "source_generation": source.get("generation"), "expected_event_count": expected,
+        "event_count": 0, "invalid_event_count": 0, "profiles": {}, "status": "source_gap"}
+    if not expected:
+        manifest["reason"] = "native_durable_observation_population_absent"
+        return manifest
+    raw = Path(source["pipeline_events"])
+    if not raw.exists():
+        raw = raw.with_name(raw.name + ".gz")
+    before = raw.stat()
+    observed_bars = {}
+    opener = gzip.open if raw.suffix == ".gz" else open
+    with opener(raw, "rb") as handle:
+        for line in handle:
+            if b'low_price_actual_economic_observation' not in line:
+                continue
+            event = json.loads(line)
+            if event.get("stage") != "low_price_actual_economic_observation":
+                continue
+            manifest["event_count"] += 1
+            fields = event.get("fields") or {}
+            try:
+                encoded = fields["observation_json"]
+                body = json.loads(encoded)
+                if (hashlib.sha256(encoded.encode()).hexdigest() != fields["observation_sha256"]
+                    or body["schema"] != "low_price_actual_economic_observation_v1"
+                    or body["logical_date"] != target_date or body["owner"] != "episode"
+                    or body["profile_id"] != fields["profile_id"]):
+                    raise ValueError("observation_lineage_invalid")
+                profile = manifest["profiles"].setdefault(body["profile_id"], {"events": 0, "bar_evaluations": 0, "policy_hashes": []})
+                profile["events"] += 1
+                if body.get("bar_source") and body.get("last_evaluated_bar"):
+                    observed_bars.setdefault(body["profile_id"], set()).add(body["last_evaluated_bar"])
+                    profile["bar_evaluations"] = len(observed_bars[body["profile_id"]])
+                if body["policy_hash"] not in profile["policy_hashes"]:
+                    profile["policy_hashes"].append(body["policy_hash"])
+            except (KeyError, TypeError, ValueError):
+                manifest["invalid_event_count"] += 1
+    after = raw.stat()
+    stable = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) == (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)
+    manifest.update(status="pass" if stable and manifest["event_count"] == expected and not manifest["invalid_event_count"] else "source_gap",
+        reason="native_capture_reconciled" if stable else "native_capture_generation_changed")
+    return manifest
+
+
+def actual_execution_confirmation(rows, result):
+    """Reconcile baseline CF with full native broker terminal legs, never touches."""
+    modeled = {episode.get("signal_at"): episode for episode in result["baseline"]["full"]["episodes"]}
+    matched = 0
+    for row in rows:
+        if not row.get("eligible_for_tuning") or not row.get("attempted"):
+            continue
+        capture = row.get("durable_observation_capture") or {}
+        if capture.get("status") != "pass" or capture.get("profile", {}).get("bar_evaluations", 0) == 0:
+            return {"status": "source_gap", "reason": "actual_durable_observation_lineage_missing", "matched_legs": matched}
+        episode = modeled.get(row.get("signal_features", {}).get("signal_bar"))
+        if not episode:
+            return {"status": "source_gap", "reason": "actual_baseline_signal_not_reproduced", "matched_legs": matched}
+        if len(row.get("legs", [])) != 2 or len(episode.get("legs", [])) != 2:
+            return {"status": "source_gap", "reason": "actual_two_leg_lineage_missing", "matched_legs": matched}
+        for actual, model in zip(row.get("legs", []), episode.get("legs", [])):
+            if not actual.get("completed") or actual.get("profit_price_source") not in {"broker_target_fill_price", "broker_fill_price"}:
+                return {"status": "source_gap", "reason": "actual_full_target_terminal_missing", "matched_legs": matched}
+            if (actual.get("quantity") != 10 or actual.get("buy_filled_qty") != 10
+                or actual.get("target_filled_qty") != 10 or model.get("status") != "COMPLETE"
+                or actual.get("fill_price") != model.get("entry_price")
+                or actual.get("profit_exit_price") != model.get("target_price")):
+                return {"status": "source_gap", "reason": "actual_baseline_execution_not_reproduced", "matched_legs": matched}
+            matched += 1
+    return {"status": "pass" if matched >= SAMPLE_FLOOR_COMPLETED_LEGS else "source_gap",
+        "reason": "native_baseline_terminal_reconciled" if matched >= SAMPLE_FLOOR_COMPLETED_LEGS else "actual_prospective_execution_sample_missing",
+        "matched_legs": matched, "evidence_role": "actual_broker_baseline_reproduction_only"}
+
+
+def _paired_economic_search(report, *, context_loader=None, selection_dir=CANDIDATE_DIR):
+    """Two existing axes, actual-conditioned; sealed prospective owner reused."""
+    from src.engine.monitoring import research_closed_loop as loop
+    from src.engine.monitoring import episode_prospective_research as prospective
+    from src.engine.monitoring.low_price_two_leg_entry_spot_research import baseline_candidate, _evaluate_candidate_windows, paired_economics, _calibration_ready
+    from src.engine.monitoring.low_price_two_leg_expanded_candidate_research import ResearchProfile
+    source = date.fromisoformat(report["target_date"])
+    binding = report["source_runtime_policy_binding"]
+    result = {"contract": PAIRED_AUTHORITY_CONTRACT, "profiles": {}, "selected_profile": None,
+        "selected_axis": None, "runtime_effect": False, "allowed_runtime_apply": False,
+        "actual_order_submitted": False, "source_date": str(source), "frozen_selection": None}
+    if source < date(2026, 9, 17):
+        result["status"] = "historical_observation_only"
+        return result
+    fixed = _read_json(selection_dir / "low_price_two_leg_paired_selection.json")
+    if fixed:
+        revision = loop.validate_revision(fixed["candidate_revision"], owner="episode")
+        if not loop.registered_revision(revision) or revision["lane_id"] != fixed["profile_id"] or fixed["selected_axis"] not in {"rolling_high_drawdown_pct", "rolling_low_proximity_pct"}:
+            raise ValueError("paired_frozen_selection_invalid")
+    previous_selection, reset_reason = None, None
+    context_cache = {}
+    if fixed and binding.get("status") == "ready":
+        pid = fixed["profile_id"]
+        live = profiles_for_target_date(source)[pid]
+        policy = binding["policies"][pid]
+        actual_profile = ResearchProfile(pid, live.symbol, live.name, live.session,
+            replace(live.policy, **{key: policy[key] for key in ("rolling_high_drawdown_pct", "rolling_low_proximity_pct", "lookback_bars", "entry_valid_completed_bars", "target_ticks")}), "actual_existing_axis")
+        if fixed["candidate_revision"]["baseline_parameters"] != baseline_candidate(actual_profile).public():
+            previous_selection, reset_reason, fixed = fixed, "incumbent_parent_changed", None
+        elif source.isoformat() > fixed["candidate_revision"]["holdout_dates"][-1]:
+            loaded = (context_loader or _cached_paired_contexts)(actual_profile, source)
+            context_cache[pid] = loaded
+            if loaded:
+                sealed = prospective.frozen_research({"profile_id": pid, "symbol": live.symbol}, profile=actual_profile, contexts=loaded[0], source_date=source)
+                comparison = sealed.get("paired_economics") or {}
+                if sealed["prospective_window"]["status"] == "ready" and comparison.get("economic_comparison_status") == "distinct_resolved_economic_pair" and not (comparison.get("economic_superiority_confirmed") and comparison.get("ev_uplift_pct_point", 0) >= MIN_NOTIONAL_EV_UPLIFT_PCT):
+                    previous_selection, reset_reason, fixed = fixed, "mature_nonperforming_revision", None
+    ranked = []
+    for pid, window in report["windows"][POST_APPLY_WINDOW_NAME].items():
+        actual = window["summary"]
+        daily = report["daily"]["profiles"][pid]
+        proof = {"profile_id": pid, "actual_eligibility_passed": False, "selected_axis": None,
+            "completed_actual_legs": actual["broker_priced_completed_legs"], "actual_source_valid_days": actual["source_valid_observation_days"],
+            "disposition": "hold_sample", "calibration_diagnostics": []}
+        result["profiles"][pid] = proof
+        if not report["source_quality_preflight"]["tuning_input_allowed"] or daily["source_quality"] != "pass" or binding.get("status") != "ready":
+            proof["disposition"] = "source_gap"
+            continue
+        if actual["held_or_unresolved_legs"]:
+            proof["disposition"] = "hold_inventory_custody"
+            continue
+        if not actual["broker_priced_completed_legs"]:
+            proof["disposition"] = "source_gap" if any(row.get("source_quality") != "pass" or any(_as_int(leg.get("buy_filled_qty")) > 0 or _as_int(leg.get("fill_price")) > 0 for leg in row.get("legs", [])) for row in window["rows"]) else "valid_empty_no_fill"
+            continue
+        if actual["broker_priced_completed_legs"] < SAMPLE_FLOOR_COMPLETED_LEGS or actual["source_valid_observation_days"] < BOUNDED_MIN_OBSERVED_DAYS:
+            continue
+        proof["actual_eligibility_passed"] = True
+        if binding["policies"][pid]["quantity"] != 20:
+            proof["disposition"] = "execution_source_gap_quantity_model"
+            continue
+        live = profiles_for_target_date(source)[pid]
+        policy = binding["policies"][pid]
+        profile = ResearchProfile(pid, live.symbol, live.name, live.session,
+            replace(live.policy, **{k: policy[k] for k in ("rolling_high_drawdown_pct", "rolling_low_proximity_pct", "lookback_bars", "entry_valid_completed_bars", "target_ticks")}),
+            "actual_existing_axis")
+        if fixed and fixed.get("profile_id") != pid:
+            proof["disposition"] = "incumbent_preserved"
+            continue
+        loaded = context_cache.get(pid) if pid in context_cache else (context_loader or _cached_paired_contexts)(profile, source)
+        context_cache[pid] = loaded
+        if loaded is None:
+            proof["disposition"] = "execution_source_gap"
+            continue
+        contexts, content_sha = loaded
+        dates = sorted(day for day in contexts if CLEAN_BASELINE_DATE <= day <= source)
+        if len(dates) < 46:
+            proof["disposition"] = "hold_sample"
+            continue
+        baseline = baseline_candidate(profile)
+        cal = dates[:-16]
+        split = len(cal) // 2
+        windows = [cal, cal[:split], cal[split:]]
+        current = _evaluate_candidate_windows(baseline, contexts, windows) if not fixed else None
+        bounds = policy_bounds_for_target_date(source)[pid]
+        for axis, after in (() if fixed else (("rolling_high_drawdown_pct", bounds["drawdown_max"]), ("rolling_low_proximity_pct", bounds["near_low_min"]))):
+            if getattr(baseline, axis) == after:
+                continue
+            challenger = replace(baseline, **{axis: after})
+            outcome = _evaluate_candidate_windows(challenger, contexts, windows)
+            comparison = paired_economics(current[0], outcome[0])
+            diagnostic = {"axis": axis, "parameters": challenger.public(), "baseline": current[0],
+                "challenger": outcome[0], "comparison": comparison,
+                "evidence_role": "CF_calibration_unit_quantity_one_not_actual_PnL", "native_per_leg_quantity": 10,
+                "calibration_sample_passed": _calibration_ready(*outcome),
+                "calibration_dates": [str(day) for day in cal], "validation_usage": "calibration_only_no_holdout_read"}
+            proof["calibration_diagnostics"].append(diagnostic)
+            if comparison["economic_superiority_confirmed"] and comparison["ev_uplift_pct_point"] >= MIN_NOTIONAL_EV_UPLIFT_PCT and _calibration_ready(*outcome):
+                ranked.append((comparison["net_profit_uplift_krw_per_observation_day"], pid, axis, challenger.public(), baseline.public(), content_sha))
+        comparisons = [item["comparison"] for item in proof["calibration_diagnostics"]]
+        proof["disposition"] = ("self_comparison" if not comparisons else "measured_no_edge" if all(item.get("economic_comparison_status") == "distinct_resolved_economic_pair" for item in comparisons) else "hold_inventory_custody")
+        if any(item["comparison"]["economic_superiority_confirmed"] for item in proof["calibration_diagnostics"]):
+            proof["disposition"] = "hold_sample" if not any(item["calibration_sample_passed"] for item in proof["calibration_diagnostics"]) else "incumbent_preserved"
+        if fixed and fixed.get("profile_id") == pid:
+            revision = fixed["candidate_revision"]
+            if revision.get("baseline_parameters") != baseline.public():
+                proof["disposition"] = "source_gap_incumbent_parent_changed"
+                continue
+            frozen = prospective.frozen_research({"profile_id": pid, "symbol": live.symbol,
+                "calibration_winner": {"parameters": revision["parameters"]}}, profile=profile, contexts=contexts, source_date=source)
+            if frozen["candidate_revision"] != revision:
+                fixed = {"profile_id": pid, "selected_axis": fixed["selected_axis"], "candidate_revision": frozen["candidate_revision"],
+                    "supersedes_selection_sha256": loop.digest(fixed), "selection_reset_reason": frozen["candidate_revision"]["supersession_reason"]}
+                revision = frozen["candidate_revision"]
+            proof.update(candidate_revision=revision, prospective_result=frozen,
+                selected_axis=fixed["selected_axis"], selected_parameters=revision["parameters"],
+                baseline_policy_hash=policy_hash(binding["policies"]),
+                disposition="hold_unused_holdout" if frozen["prospective_window"]["status"] != "ready" else "hold_execution_confirmation")
+            if frozen["prospective_window"]["status"] == "ready":
+                proof["execution_confirmation"] = {arm: prospective.execution_feasibility(frozen, source_date=source, arm=arm) for arm in ("baseline", "selected")}
+                proof["capital_confirmation"] = paired_capital_confirmation(frozen, source_date=source)
+                proof["actual_rows"] = [row for row in window["rows"] if row["target_date"] in revision["calibration_dates"] + revision["holdout_dates"]]
+                proof["actual_execution_confirmation"] = actual_execution_confirmation(proof["actual_rows"], frozen)
+                from src.trading.low_price_two_leg.preflight import default_authority_path
+                authority = default_authority_path(live)
+                proof["family_approval"] = {"path": str(authority), "sha256": hashlib.sha256(authority.read_bytes()).hexdigest() if authority.exists() else ""}
+                if paired_promotion_ready(proof, source_date=source):
+                    proof["disposition"] = "eligible_paired_policy"
+                    result.update(selected_profile=pid, selected_axis=fixed["selected_axis"])
+    if fixed:
+        result["frozen_selection"] = fixed
+    elif ranked:
+        _, pid, axis, parameters, baseline, content_sha = max(ranked, key=lambda row: (row[0], row[1], row[2]))
+        profile = profiles_for_target_date(source)[pid]
+        actual_policy = binding["policies"][pid]
+        actual_profile = ResearchProfile(pid, profile.symbol, profile.name, profile.session,
+            replace(profile.policy, **{key: actual_policy[key] for key in ("rolling_high_drawdown_pct", "rolling_low_proximity_pct", "lookback_bars", "entry_valid_completed_bars", "target_ticks")}), "actual_existing_axis")
+        contexts, _ = context_cache[pid]
+        frozen = prospective.frozen_research({"profile_id": pid, "symbol": profile.symbol,
+            "calibration_winner": {"parameters": parameters}}, profile=actual_profile, contexts=contexts, source_date=source)
+        revision = frozen["candidate_revision"]
+        if previous_selection and previous_selection["profile_id"] == pid and revision["revision_sha256"] == previous_selection["candidate_revision"]["revision_sha256"]:
+            revision = loop.candidate_revision(symbol=profile.symbol, owner="episode", lane_id=pid,
+                parameters=parameters, baseline_parameters=baseline, baseline_policy_id=pid,
+                source_date=source, source_sha256=loop.digest([[bar.timestamp.isoformat(), bar.open_price, bar.high_price, bar.low_price, bar.close_price] for day in sorted(contexts) for bar in contexts[day].bars]),
+                cost_sha256=loop.digest(canonical_cost_contract()), calibration_days=30, holdout_days=16,
+                supersedes_revision_sha256=revision["revision_sha256"], supersession_reason=reset_reason)
+        result["frozen_selection"] = {"profile_id": pid, "selected_axis": axis, "candidate_revision": revision}
+        if previous_selection:
+            result["frozen_selection"].update(supersedes_selection_sha256=loop.digest(previous_selection), selection_reset_reason=reset_reason)
+        result["profiles"][pid]["disposition"] = "hold_unused_holdout"
+    owner = _samsung_same_stage_owner(str(source), SAMSUNG_CANDIDATE_DIR)
+    if result["selected_profile"] and owner["mutation_present"]:
+        result["profiles"][result["selected_profile"]]["disposition"] = "hold_same_stage_owner"
+        result.update(selected_profile=None, selected_axis=None)
+    result["status"] = "paired_policy_selected" if result["selected_profile"] else "incumbent_preserved"
+    return result
 
 
 def build_candidate(
@@ -2087,14 +2398,24 @@ def build_candidate(
     same_stage_owner = _samsung_same_stage_owner(
         report["target_date"], samsung_candidate_dir
     )
+    search = report.get("paired_economic_search") or {}
+    selected_pid = search.get("selected_profile")
+    if selected_pid and not same_stage_owner["mutation_present"]:
+        proof = search["profiles"][selected_pid]
+        if paired_promotion_ready(proof, source_date=source_date):
+            selected_policies[selected_pid][proof["selected_axis"]] = proof["selected_parameters"][proof["selected_axis"]]
+        else:
+            raise ValueError("paired_selection_proof_changed_before_publication")
+    elif selected_pid:
+        raise ValueError("paired_same_stage_owner_changed_before_publication")
     mutations = policy_mutations_between(prior, selected_policies)
     if len(mutations) > 1:
         raise ValueError("same_stage_multiple_axis_candidate_forbidden")
     profiles = {}
     for profile_id in target_profiles:
         profiles[profile_id] = {
-            "selection_status": "carry_forward_profile_policy",
-            "selected_axis": None,
+            "selection_status": "paired_economic_policy_selected" if profile_id == selected_pid else "carry_forward_profile_policy",
+            "selected_axis": search.get("selected_axis") if profile_id == selected_pid else None,
             "policy": selected_policies[profile_id],
             "evaluation": evaluations[profile_id],
             "allowed_runtime_apply": True,
@@ -2121,6 +2442,13 @@ def build_candidate(
         "rollback": "next_preopen_exact_date_artifact_or_verified_baseline",
         "forbidden_uses": METRIC_CONTRACT["forbidden_uses"],
     }
+    if source_date >= date(2026, 9, 17):
+        publication = datetime.fromisoformat(report["generated_at_kst"]).astimezone(KST).date()
+        candidate.update(schema=PAIRED_CANDIDATE_SCHEMA, publication_date=str(publication),
+            effective_date=str(next_policy_date(source_date, publication)),
+            evaluation_authority_contract=PAIRED_AUTHORITY_CONTRACT, paired_economic_search=search,
+            selection_status="paired_economic_policy_selected" if mutations else "incumbent_preserved",
+            decision="paired_economic_policy_selected" if mutations else "carry_actual_policy_paired_search_incomplete")
     if report.get("artifact_hash"):
         candidate.update(
             {
@@ -2148,7 +2476,7 @@ def _atomic_write(path: Path, content: str) -> None:
             os.unlink(temp_name)
 
 
-def render_markdown(report: dict, candidate: dict) -> str:
+def _render_actual_markdown(report: dict, candidate: dict) -> str:
     cost_model = report["cost_model"]
     reconciliation = cost_model["broker_realized_reconciliation"]
     lines = [
@@ -2194,7 +2522,21 @@ def render_markdown(report: dict, candidate: dict) -> str:
     return "\n".join(lines)
 
 
-def write_outputs(
+def render_markdown(report: dict, candidate: dict) -> str:
+    text = _render_actual_markdown(report, candidate)
+    lines = ["", "## Actual-conditioned paired economic search", "",
+        f"Selection: {candidate.get('selection_status', candidate.get('decision'))}; source={report['target_date']}; effective={candidate.get('effective_date')}",
+        "", "| Profile | Disposition | Actual completed legs / days | Calibration distinct comparisons |", "|---|---|---|---|"]
+    for pid, proof in (report.get("paired_economic_search") or {}).get("profiles", {}).items():
+        diagnostics = proof["calibration_diagnostics"]
+        lines.append(f"| {pid} | {proof['disposition']} | {proof['completed_actual_legs']} / {proof['actual_source_valid_days']} | {len(diagnostics)} |")
+        for item in diagnostics:
+            comp = item["comparison"]
+            lines.append(f"| {pid}/{item['axis']} | CF calibration only | Delta EV={comp.get('ev_uplift_pct_point')} pp | Delta net/day={comp.get('net_profit_uplift_krw_per_observation_day')} KRW; confirmed={comp.get('economic_superiority_confirmed')} |")
+    return text + "\n".join(lines) + "\n"
+
+
+def _write_outputs_locked(
     report: dict, candidate: dict, *, output_dir: Path, candidate_dir: Path
 ) -> tuple[Path, Path, Path]:
     stem = f"{REPORT_TYPE}_{report['target_date']}"
@@ -2203,6 +2545,24 @@ def write_outputs(
     candidate_path = candidate_dir / (
         f"low_price_two_leg_policy_candidate_{report['target_date']}.json"
     )
+    if candidate.get("schema") == PAIRED_CANDIDATE_SCHEMA:
+        for applied_file in APPLIED_DIR.glob("low_price_two_leg_policy_*.json"):
+            applied = _read_json(applied_file) or {}
+            if applied.get("source_candidate") == str(candidate_path) and _read_json(candidate_path) != candidate:
+                raise ValueError("candidate_already_consumed_by_frozen_applied_policy")
+    search = report.get("paired_economic_search") or {}
+    fixed = search.get("frozen_selection")
+    if fixed:
+        from src.engine.monitoring import research_closed_loop as loop
+        pointer = candidate_dir / "low_price_two_leg_paired_selection.json"
+        existing = _read_json(pointer)
+        if existing is not None and existing != fixed:
+            if fixed.get("supersedes_selection_sha256") != loop.digest(existing) or fixed.get("selection_reset_reason") not in {"incumbent_parent_changed", "mature_nonperforming_revision", "source_or_cost_correction"}:
+                raise ValueError("paired_selection_frozen_conflict")
+        stored = loop.freeze_candidate(fixed["candidate_revision"])
+        if stored != fixed["candidate_revision"]:
+            raise ValueError("paired_candidate_revision_frozen_conflict")
+        atomic_write_json(pointer, fixed)
     _atomic_write(
         json_path,
         json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
@@ -2210,6 +2570,14 @@ def write_outputs(
     _atomic_write(md_path, render_markdown(report, candidate))
     atomic_write_json(candidate_path, candidate)
     return json_path, md_path, candidate_path
+
+
+def write_outputs(report, candidate, *, output_dir, candidate_dir):
+    import fcntl
+    DEFAULT_STATE_DIR.mkdir(parents=True, exist_ok=True)
+    with (DEFAULT_STATE_DIR / "policy_apply.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return _write_outputs_locked(report, candidate, output_dir=output_dir, candidate_dir=candidate_dir)
 
 
 def _live_realized_pnl_loader() -> RealizedPnlLoader:
@@ -2318,6 +2686,7 @@ def main(argv: list[str] | None = None) -> int:
             source_quality_dir=args.source_quality_dir,
             applied_dir=args.applied_policy_dir,
             cost_pct=args.cost_pct,
+            paired_selection_dir=args.candidate_dir,
             realized_pnl_loader=(
                 None if args.skip_broker_realized_pnl else _live_realized_pnl_loader()
             ),

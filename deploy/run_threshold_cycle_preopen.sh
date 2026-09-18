@@ -166,6 +166,13 @@ cd "$PROJECT_DIR"
 
 echo "[START] threshold-cycle preopen target_date=$TARGET_DATE apply_mode=$APPLY_MODE auto_apply=$AUTO_APPLY require_ai=$REQUIRE_AI"
 
+# Publish one frozen global episode policy before individual profile preflights.
+# The native writer shares policy_apply.lock with those idempotent fallbacks.
+if { [ "$AUTO_APPLY" = "true" ] || [ "$AUTO_APPLY" = "1" ]; } && [ "$APPLY_MODE" = "auto_bounded_live" ]; then
+  PYTHONPATH=. "$VENV_PY" -m src.engine.automation.low_price_two_leg_policy_apply \
+    --target-date "$TARGET_DATE" --write
+fi
+
 # The microstructure approval ledger is a supplemental control plane.  It may
 # remind the operator and emit a family-owned PREOPEN authorization handoff,
 # but it cannot mutate this wrapper's threshold env.  A ledger incident is

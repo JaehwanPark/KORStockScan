@@ -207,7 +207,7 @@ def prospective_summary_valid(result, revision):
 
 def frozen_research(result, *, profile, contexts, source_date):
     if (
-        profile.discovery_lane not in {"new_symbol", "existing_symbol_time_extension"}
+        profile.discovery_lane not in {"new_symbol", "existing_symbol_time_extension", "actual_existing_axis"}
         or profile.fixed_observation
     ):
         return result
@@ -336,7 +336,7 @@ def frozen_research(result, *, profile, contexts, source_date):
     return result
 
 
-def execution_feasibility(result, *, source_date, directory=loop.DIRECTORY):
+def execution_feasibility(result, *, source_date, directory=loop.DIRECTORY, arm="selected"):
     """Exact seeded full-depth CF, with TTL NO_FILL and shared-depth accounting."""
     revision = loop.validate_revision(
         result["candidate_revision"], symbol=result["symbol"], owner="episode"
@@ -344,6 +344,7 @@ def execution_feasibility(result, *, source_date, directory=loop.DIRECTORY):
     receipt = dict(
         schema=loop.SCHEMA,
         status="source_gap",
+        arm=arm,
         revision_sha256=revision["revision_sha256"],
         source_hashes={},
         source_generations={},
@@ -355,12 +356,14 @@ def execution_feasibility(result, *, source_date, directory=loop.DIRECTORY):
     from src.engine.monitoring.policy_research_economics import aware
     from datetime import timedelta
 
-    episodes = (result.get("selected") or {}).get("full", {}).get("episodes")
+    if arm not in {"selected", "baseline"}:
+        raise ValueError("execution_arm_invalid")
+    episodes = (result.get(arm) or {}).get("full", {}).get("episodes")
     if not isinstance(episodes, list) or not episodes:
         return {**receipt, "reason": "prospective_episode_lineage_missing"}
     if (
         source_date.isoformat() < revision["holdout_dates"][-1]
-        or (result.get("selected") or {}).get("parameters") != revision["parameters"]
+        or (result.get(arm) or {}).get("parameters") != revision["baseline_parameters" if arm == "baseline" else "parameters"]
         or loop.digest(cost_contract()) != revision["cost_sha256"]
     ):
         return {**receipt, "reason": "prospective_window_parameters_or_cost_invalid"}

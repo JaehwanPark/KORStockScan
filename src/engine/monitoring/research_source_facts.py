@@ -517,6 +517,17 @@ class SharedResearchFactWriter:
             revisions = {}
             for path in (self.directory / "candidates").glob("*.json"):
                 value = loop.validate_revision(loop.read_object(path))
+                # Existing actual profiles already have an episode owner. A
+                # registered paired seed consumes their received native books;
+                # this adds no subscription, polling or order permission.
+                if value["owner"] == "episode":
+                    from src.trading.low_price_two_leg.profiles import profiles_for_target_date
+                    native = profiles_for_target_date(now.date()).get(value["lane_id"])
+                    if (native is not None and native.symbol == value["symbol"]
+                            and value.get("baseline_policy_id") == native.profile_id
+                            and native.entry_runtime_eligible
+                            and value["calibration_dates"][0] <= now.date().isoformat() <= value["holdout_dates"][-1]):
+                        self.symbols.add(value["symbol"])
                 if (
                     value["symbol"] in self.symbols
                     and value["calibration_dates"][0]

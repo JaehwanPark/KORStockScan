@@ -1322,6 +1322,10 @@ SIM_SUBMIT_GUARD_STAGE_ACTIONS = {
 
 
 STAGE_CONTRACTS: dict[str, StageContract] = {
+    "low_price_actual_economic_observation": StageContract(
+        required_fields=("logical_date", "profile_id", "owner", "session", "observation_schema", "observation_sha256", "observation_json", "policy_hash", "action"),
+        decision_authority="low_price_actual_economic_lineage_only",
+    ),
     "scalp_entry_action_decision_snapshot": StageContract(
         required_fields=(*AI_SOURCE_FIELDS, *ENTRY_ADM_SNAPSHOT_FIELDS),
         max_missing_rate=0.10,
@@ -8138,7 +8142,36 @@ def _verified_legacy_projection(target_date: str, raw_path: Path, generation: di
         if len(raw_report) > 16 * 1024 * 1024:
             return None
         report = json.loads(raw_report)
-        receipt = json.loads(Path(str(path) + ".reuse-contract.json").read_bytes())
+        try:
+            receipt = json.loads(Path(str(path) + ".reuse-contract.json").read_bytes())
+        except FileNotFoundError:
+            # A final binding replaces the old generic reuse receipt. It also
+            # seals the aggregate key; unchanged observed-stage semantics can
+            # migrate without reopening the raw population.
+            final = json.loads(Path(str(path) + ".final-contract.json").read_bytes())
+            original_tree = ast.parse(producer_source.read_text())
+            owner = next(node for node in original_tree.body if isinstance(node, ast.FunctionDef) and node.name == "_final_implementation_digest")
+            names = next(node for node in ast.walk(owner) if isinstance(node, ast.Tuple) and all(isinstance(part, ast.Constant) and isinstance(part.value, str) for part in node.elts))
+            root = producer_source.parents[2]
+            implementation = _canonical_digest({part.value: hashlib.sha256((root / part.value).read_bytes()).hexdigest() for part in names.elts})
+            if (final.get("schema") != "observation_source_quality_final_binding_v1"
+                    or final.get("target_date") != target_date or final.get("audit_phase") != "final"
+                    or final.get("artifact_sha256") != hashlib.sha256(raw_report).hexdigest()
+                    or final.get("implementation_sha256") != implementation
+                    or report.get("consumer_implementation_sha256") != implementation
+                    or report["source"]["generation"] != generation
+                    or _raw_semantic_digest(producer_source, set(report["source"]["audited_stage_counts"]))
+                    != _raw_semantic_digest(Path(__file__), set(report["source"]["audited_stage_counts"]))):
+                return None
+            for function in (normalize_flow_state_label, normalize_gatekeeper_action_key, runtime_config_valid):
+                current = Path(function.__globals__["__file__"])
+                original = root / current.relative_to(PROJECT_ROOT)
+                if _raw_semantic_digest(original, entry_points=(function.__name__,)) != _raw_semantic_digest(current, entry_points=(function.__name__,)):
+                    return None
+            projected = _read_raw_contract_projection(target_date, report["source"]["contract_projection"]["key"])
+            if projected is None or _canonical_digest(projected[0]) != report["source"]["contract_projection"]["body_sha256"]:
+                return None
+            return projected
         original_hash = receipt["aftermarket_contract_sha256s"]["src/engine/observation_source_quality_audit.py"]
         if (receipt["target_date"] != target_date
                 or receipt["artifact_sha256"] != hashlib.sha256(raw_report).hexdigest()

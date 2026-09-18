@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
+import hashlib
+import json
+import os
+
+from dataclasses import asdict, replace
 from datetime import date, datetime, time
 from pathlib import Path
 from typing import Callable
@@ -60,6 +64,56 @@ class LowPriceTwoLegMachine(SamsungRegularTwoLegMachine):
             entry_timing_session=profile.session,
             adaptive_exit_services=adaptive_exit_services,
         )
+
+    def _source(self, now):
+        source = super()._source(now)
+        bars = [asdict(bar) for bar in source.bars[-(self.policy.lookback_bars + 1):]]
+        encoded = json.dumps(bars, sort_keys=True, default=str)
+        self._economic_bar_source = {"source_ok": source.source_ok, "error": source.error,
+            "observed_at_kst": now.isoformat(), "completed_bars": bars,
+            "content_sha256": hashlib.sha256(encoded.encode()).hexdigest(),
+            "source": "existing_completed_sor_minute_bars_no_extra_poll"}
+        return source
+
+    def _record(self, now: datetime, action: str, **fields: object) -> None:
+        super()._record(now, action, **fields)
+        # Publish every completed-bar evaluation and ledger transition through
+        # the existing lossless raw writer. The bounded state audit is not input.
+        from src.utils.pipeline_event_logger import emit_pipeline_event
+        body = {"schema": "low_price_actual_economic_observation_v1",
+            "profile_id": self.profile.profile_id, "symbol": self.profile.symbol,
+            "session": self.profile.session, "owner": "episode",
+            "logical_date": now.date().isoformat(), "observed_at_kst": now.isoformat(),
+            "trade_date": self._state.get("trade_date"), "action": action,
+            "policy_hash": self.policy.runtime_policy_hash,
+            "policy_source": self.policy.runtime_policy_source,
+            "policy_parameters": {"rolling_high_drawdown_pct": self.policy.rolling_high_drawdown_pct,
+                "rolling_low_proximity_pct": self.policy.rolling_low_proximity_pct,
+                "lookback_bars": self.policy.lookback_bars, "target_ticks": self.policy.target_ticks,
+                "entry_valid_completed_bars": self.policy.entry_valid_completed_bars},
+            "last_evaluated_bar": self._state.get("last_evaluated_bar"),
+            "signal_features": self._state.get("signal_features"),
+            "bar_source": getattr(self, "_economic_bar_source", None),
+            "legs": self._state.get("legs", []), "position_qty": self._state.get("position_qty"),
+            "owned_order_nos": self._state.get("owned_order_nos", []),
+            "state_path": str(self.state_path), "runtime_pid": os.getpid(),
+            "runtime_cwd": str(Path.cwd().resolve()), "fields": fields,
+            "quote_source": "unavailable_in_state", "capital_source": "unavailable_in_state"}
+        encoded = json.dumps(body, sort_keys=True, separators=(",", ":"), default=str)
+        try:
+            receipt = emit_pipeline_event("LOW_PRICE_TWO_LEG", self.profile.name, self.profile.symbol,
+                "low_price_actual_economic_observation", fields={"logical_date": body["logical_date"],
+                    "profile_id": self.profile.profile_id, "owner": "episode", "session": self.profile.session,
+                    "observation_schema": body["schema"], "observation_sha256": hashlib.sha256(encoded.encode()).hexdigest(),
+                    "observation_json": encoded, "policy_hash": self.policy.runtime_policy_hash or "unavailable",
+                    "action": action})
+            persisted = receipt.get("structured_append_succeeded") is True
+        except Exception:
+            persisted = False
+        # Capture failure blocks economic promotion, not owned inventory exits.
+        self._state["economic_capture"] = {"status": "persisted" if persisted else "source_gap",
+            "observed_at_kst": now.isoformat(), "observation_sha256": hashlib.sha256(encoded.encode()).hexdigest()}
+        self._save()
 
     def _validate_state_contract(self, now) -> bool:
         if not super()._validate_state_contract(now):

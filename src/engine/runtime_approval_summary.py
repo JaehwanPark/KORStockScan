@@ -2757,6 +2757,9 @@ def build_runtime_approval_summary(
         report["drought_handoff"] = canonical_receipt(
             ev_json.parent.parent, target_date, ev_report
         )
+    if target_date >= "2026-09-17":
+        from src.engine.monitoring.low_price_two_leg_tuning import paired_search_handoff
+        report["low_price_actual_paired_search"] = paired_search_handoff(target_date)
     report = apply_source_quality_preflight_block(report, source_quality_preflight_gate)
     if not include_swing:
         for key in ("pattern_lab_currentness_audit", "pattern_lab_ai_review", "pattern_lab_propagation_audit"):

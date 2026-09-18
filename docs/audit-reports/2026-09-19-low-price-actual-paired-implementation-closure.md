@@ -1,0 +1,48 @@
+# Low-price actual paired 구현 종결
+
+기록일: 2026-09-19 KST. 원천: 2026-09-17. Candidate 발행: 9/18, 적용예정: 9/21. 사용자 승인: 구현·리뷰/수정 반복·commit/push·immutable 배포·제한 장후 재생성. 주문·Main/거래 service restart·조기 PREOPEN은 실행하지 않는다.
+
+소유 계획: [LP-A0–A7](../proposals/low-price-two-leg-actual-conditioned-paired-economic-search-and-preopen-runtime-consumer-improvement-plan-2026-09-18.md). 실행 owner는 기존 [LowPriceExpandedResearchRepair0918](../checklists/2026-09-18-stage2-todo-checklist.md) 하나다. 9/19 checklist는 없어 현재 승인 범위를 대신하는 과거 일정으로 간주하지 않는다.
+
+| 묶음 | 구현·리뷰 종결 | 실제 증거/다음 자연 조건 |
+| --- | --- | --- |
+| A0–A1 | native dated state/history·actual cost/cohort·final byte/dependency admission, absent historical profile row 수리 | 61profile 대사; exact/fixed 비용과 held/manual 구분 |
+| A2 | 이미 조회한 completed bars/state/order transition의 공개 pipeline lossless stage, native final stage 선언; 기존 등록 actual seed→이미 받은 호가 writer 연결 | 과거 없는 durable 관측을 복원하지 않음; 신규 호가 subscription/API 없음 |
+| A3 | actual5일/8broker 완료leg 조건부, 기존 두 축 bound·calibration만 최대2대안, profile/axis1개 고정 미래30/16일; 양측 native BBO/일별 자본 및 실제 terminal 대사 | eligible0으로 이번 paired replay0; 미래 실제 source 유입 필요 |
+| A4 | v4 검증·actual row/summary/baseline hash 재대사·native promotion proof 재계산; legacy v3 subset retired 유지 | 선언 ready/CF price touch로 real 승격 불가; synthetic positive component와 forged rejection 구분 |
+| A5 | 공통 PREOPEN 한 번·CLI 공통 lock·atomic/idempotent frozen file·profile fallback·기존 loader, same-stage guard·소비된 candidate 재봉인 차단 | prepared9/21 보존 loader PASS; 정상7:35 PREOPEN 이후 service/preflight 소비 |
+| A6 | EV/runtime/Daily brief·tower/checklist generation·strict/controller bounded handoff, 기존 post-apply hash/cohort·rollback carry 재사용 | whole DONE 외부 실패 보존; 자연 applied/PID/주문/경제성 별도 OPEN |
+| A7 | 기존 role 모듈/기존 테스트·wrapper만 사용, cached audit 이전 SHA/관측stage/normalizer 동등성 검증 migration | 5.7GB raw bootstrap/read0·동일 census 보존; 전체 expanded grid/API 조회 재실행 없음 |
+
+## 경제 결과
+
+Native61profile: **hold_sample24 / valid_empty_no_fill19 / source_gap9 / hold_inventory_custody9**. 현재 실제 epoch의 최대 완료leg6으로 8leg floor를 채우는 profile0이다. 타 profile/epoch의 완료80leg를 합쳐 eligibility를 만들지 않는다. 표본 보류는 추가 실제 체결로 개선될 수 있지만 달력 경과 자체가 해소를 보장하지 않는다. 재고9는 실제 청산/custody 대사가 필요하다. 원천9는 dated state/lineage 복구 또는 향후 유효 신규 관측이 필요하며 과거 결손을 현재 데이터로 바꾸지 않는다.
+
+역사 실제 비용 후 순익합 **22,257.107원**은 profile별 기존 실적합이며 새로운 개선액/통합 portfolio EV가 아니다. Exact비용10leg와 fixed추정70leg를 분리했다. Native profile EV는 양수29/음수3/null29이며 서로 다른 epoch이다. **distinct validated joint 개선0은 eligible0으로 평가가 미실시된 상태**다. 기준 완화·무체결 baseline EV0·미청산 손익0·역사 PnL을 신규 이익으로 처리하지 않았다.
+
+Candidate [native 결과](../../data/report/low_price_two_leg_tuning/low_price_two_leg_tuning_2026-09-17.md)는 v4, source9/17/publication9/18/effective9/21, incumbent_preserved, mutation0이다. Policy hash: `590642d99e263254fc10663b01f62966d6461f78a63a4574998115296a738ebb`. Prepared는 tmp 격리 검증이며 실제 applied/PID 소비가 아니다.
+
+## 연결·운영 경계
+
+공통 cron PREOPEN7:35(평일)→Main7:55→개별 native preflight/service 순서를 확인했다. 적용 CLI와 개별 fallback은 같은 policy_apply.lock을 소유한다. 동일 날짜 파일을 덮지 않으며 malformed 후보는 fail closed, 검증된 보존은 독립 incumbent 근거로 유지한다. Machine이 이미 소유한 재고/target/quantity/order owner는 변경하지 않는다.
+
+Selector만 바꾸면 실제 low-price unit에는 반영되지 않는 오래된9/16 WorkingDirectory/ExecStart pin을 발견했다. 두 template의 마지막 source pin을 새 immutable root로 정비하고 daemon-reload만 수행한다. 배포 직전 low-price 실행unit/PID0이며 자연 기동/재시작은 하지 않는다. selected release/미래 unit source와 실제 PID 소비를 구분한다.
+
+A6 refresh 중 compact native parent generation의 재결속이 필요해 finalize-only로 source9/17/pub9/18/effective9/21의 incumbent 소비 view를 갱신했다. Compact 자체 평가의 source_contract_blocked는 보존한다. Sibling 신규 prompt/경제 개선 승격·PID 적용으로 보고하지 않는다. 원본 proof와 변경된 generation receipt는 `tmp/low-price-actual-paired-20260918/`에 보존한다.
+
+## 검증과 남은 Acceptance
+
+최종 pytest/compile/bash/diff/parser 및 commit/release 결과는 아래 영수증에 추가한다. Positive fixture는 source/execution/family authority adapter를 격리한 producer→validator→apply 구성 검증이며 시장 실제 경제증거가 아니다. Real native promotion adapter를 복원하면 자기 선언 positive는 거절된다.
+
+Whole strict/controller는 다른 AI correction/calibration·expanded contract·machine policy/전역 predecessor·swing/strategy scope 및 실패 marker를 자동 승인하지 않는다. 새 값은 마지막 summary 소비까지 전달하며 전체 DONE은 실패 상태를 보존한다. 다른 세션 소유 producer의 전체 재실행/코드 수정은 하지 않는다.
+
+다음 조치: 9/21 정상 PREOPEN exact-date file/hash→preflight→service/machine receipt 확인, 해당 버전 실제 체결·COMPLETED 비용 후 EV/유효 일당 순익을 기존 owner에 귀속한다. Positive 정책은 실제 eligibility와 새 unused window/execution/capital/authority 조건이 닫힌 경우에만 선정한다. Implementation 완료와 자연 경제성 Acceptance OPEN을 분리한다.
+
+## 최종 source 검증 receipt
+
+- 기존+신규 영향 경로703PASS, 추가 positive fixture의 누락 원천 파일 수정 후1PASS: 합계704개 검증 종결. 호가 actual seed 회귀1PASS(기존46PASS), final sealed projection migration 회귀1PASS 및 기존 auditor213PASS를 재사용한다. EV/runtime/PREOPEN 후행304PASS를 재사용하며 Python compile·두 wrapper bash-n·git diff-check·docs print-only parser PASS다. 원천 없음은 promotion 거절로 검증했다.
+- `tmp/lp-closure-final-suite.txt`의 초기703PASS/1FAIL은 원본 보존하고 `tmp/lp-positive-final.txt`의 수정 후PASS로 닫았다. 동일 전체 suite를 불필요하게 다시 실행하지 않았다.
+- `tmp/low-price-actual-paired-20260918/final-consumer-evidence.json`: candidate/applied 모두valid, prepared 전체loader58ready/기존quarantine3유지, mutation0·incumbent hash일치. Active9/21 applied/PID/신규 실제 개선은 생성/측정하지 않았다.
+- Native compact scoped strict는 PASS/issue0(`compact-strict-final.json`); 전체 strict는22issue FAIL이며 저가주 actual v4/EV/runtime brief mismatch는0이다. Worktree의 문서 경로 때문에 native checklist 계약은 clean release의 canonical docs mount에서 다시 연결한다. Controller는 blocked_recoverable_action_failed를 보존했다.
+
+Source revision과 deployment receipt는 승인 배포 후 아래에 기록한다.

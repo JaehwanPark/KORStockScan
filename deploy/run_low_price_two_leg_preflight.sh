@@ -4,7 +4,7 @@ set -euo pipefail
 PROJECT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 PYTHON_BIN="$PROJECT_DIR/.venv/bin/python"
 PROFILE="${1:-}"
-TARGET_DATE="$(/bin/date +%F)"
+TARGET_DATE="$(TZ=Asia/Seoul /bin/date +%F)"
 
 case "$PROFILE" in
   lotte_chemical_midday|lx_semicon_morning|lotte_chemical_morning|lotte_chemical_afternoon|tym_late_morning) ;;
@@ -16,13 +16,10 @@ case "$PROFILE" in
 esac
 
 /usr/bin/mkdir -p "$PROJECT_DIR/data/runtime/low_price_two_leg"
-exec 9>"$PROJECT_DIR/data/runtime/low_price_two_leg/policy_apply.lock"
-/usr/bin/flock -w 30 9
 PYTHONPATH="$PROJECT_DIR" "$PYTHON_BIN" -m \
   src.engine.automation.low_price_two_leg_policy_apply \
   --target-date "$TARGET_DATE" \
   --write
-/usr/bin/flock -u 9
 
 for attempt in $(/usr/bin/seq 1 18); do
   if /usr/bin/tmux has-session -t bot 2>/dev/null; then

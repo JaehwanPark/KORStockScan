@@ -1524,3 +1524,27 @@ def test_native_capacity_rejects_wrong_clock_before_account_or_token_helpers(tmp
     assert result['status'] == 'source_gap'
     assert result['reason'] == 'native_source_requires_current_completed_date_after_20_05'
     assert not (tmp_path/'native_capacity').exists()
+
+
+def test_registered_actual_episode_seed_consumes_native_books_without_discovery_admission(tmp_path):
+    from src.tests.test_dynamic_micro_confirmation import _live_snapshot
+    from src.trading.low_price_two_leg.profiles import get_profile
+    profile = get_profile("kakao_late_morning", target_date=DAY)
+    revision = loop.candidate_revision(symbol=profile.symbol, owner="episode", lane_id=profile.profile_id,
+        baseline_policy_id=profile.profile_id, parameters={}, baseline_parameters={}, calibration_days=30, holdout_days=16, source_date=DAY,
+        source_sha256="a" * 64, cost_sha256="b" * 64,
+        frozen_at=datetime.fromisoformat(f"{DAY}T20:10:00+09:00"))
+    loop.freeze_candidate(revision, directory=tmp_path)
+    now = datetime.fromisoformat(revision["calibration_dates"][0] + "T09:05:00+09:00")
+    snapshot = tmp_path / "ws.json"
+    native_snapshot = _live_snapshot(now, item=profile.symbol)
+    native_snapshot["stocks"][profile.symbol] = native_snapshot["stocks"].pop("005930")
+    loop.atomic_write(snapshot, native_snapshot)
+    assert not loop.admission_symbols(now.date(), owner="episode", directory=tmp_path)
+    writer = facts.SharedResearchFactWriter([], directory=tmp_path, snapshot_path=snapshot)
+    receipt = writer.collect_once(now)
+    assert receipt["remote_requests"] == 0
+    assert writer.revisions[profile.symbol] == [revision]
+    assert receipt["written_facts"] == 2
+    rows = [json.loads(line) for line in (tmp_path / "facts" / f"prospective_facts_{profile.symbol}_{now:%Y%m%d}.jsonl").read_text().splitlines()]
+    assert all(row["seed_memberships"][0]["revision_sha256"] == revision["revision_sha256"] for row in rows)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from datetime import date, datetime
 from pathlib import Path
@@ -13,6 +14,7 @@ from src.trading.low_price_two_leg.policy_runtime import (
     APPLIED_SCHEMA,
     CANDIDATE_DIR,
     CANDIDATE_SCHEMA,
+    PAIRED_CANDIDATE_SCHEMA,
     KST,
     MAX_CANDIDATE_AGE_DAYS,
     apply_operator_policy_transitions,
@@ -110,11 +112,21 @@ def build_applied_policy(
         raise ValueError(reason)
     if candidate.get("source_date") != candidate_date.isoformat():
         raise ValueError("candidate_filename_payload_date_mismatch")
+    if candidate.get("schema") == PAIRED_CANDIDATE_SCHEMA and candidate.get("effective_date") != target_date.isoformat():
+        raise ValueError("candidate_effective_date_mismatch")
+    if candidate.get("schema") == PAIRED_CANDIDATE_SCHEMA and candidate.get("policy_mutations"):
+        from src.engine.monitoring.low_price_two_leg_tuning import _samsung_same_stage_owner
+        from src.trading.order.samsung_entry_policy import CANDIDATE_DIR as samsung_dir
+        dates = [path.name.removeprefix("samsung_machine_entry_policy_candidate_").removesuffix(".json")
+            for path in samsung_dir.glob("samsung_machine_entry_policy_candidate_????-??-??.json")]
+        previous = max((day for day in dates if day < target_date.isoformat()), default=candidate["source_date"])
+        if _samsung_same_stage_owner(previous, samsung_dir)["mutation_present"]:
+            raise ValueError("same_stage_samsung_policy_owner_conflict_at_preopen")
     candidate_source_policies = _candidate_policies(
         candidate, target_date=candidate_date
     )
     candidate_policies = _candidate_policies(candidate, target_date=target_date)
-    if candidate.get("schema") != CANDIDATE_SCHEMA and target_date >= date(2026, 9, 7):
+    if candidate.get("schema") not in {CANDIDATE_SCHEMA, PAIRED_CANDIDATE_SCHEMA} and target_date >= date(2026, 9, 7):
         if candidate.get(
             "policy_mutations"
         ) or candidate_source_policies != baseline_policies_for_target_date(
@@ -123,7 +135,7 @@ def build_applied_policy(
             raise ValueError("legacy_subset_candidate_cannot_create_runtime_authority")
     previous_path = (
         None
-        if candidate.get("schema") == CANDIDATE_SCHEMA
+        if candidate.get("schema") in {CANDIDATE_SCHEMA, PAIRED_CANDIDATE_SCHEMA}
         else _latest_prior_candidate(candidate_dir, candidate_date)
     )
     previous_source_policies = {
@@ -136,11 +148,11 @@ def build_applied_policy(
         profile_id: dict(policy)
         for profile_id, policy in baseline_policies_for_target_date(target_date).items()
     }
-    if candidate.get("schema") == CANDIDATE_SCHEMA:
+    if candidate.get("schema") in {CANDIDATE_SCHEMA, PAIRED_CANDIDATE_SCHEMA}:
         previous_source_policies = candidate["source_runtime_policy_binding"][
             "policies"
         ]
-        previous_target_policies = candidate_policies
+        previous_target_policies = candidate_policies if candidate.get("schema") == CANDIDATE_SCHEMA else {key: dict(value) for key, value in previous_source_policies.items()}
     if previous_path is not None:
         try:
             previous = json.loads(previous_path.read_text(encoding="utf-8"))
@@ -180,6 +192,8 @@ def build_applied_policy(
         if profile_revision_applied
         else "candidate_applied"
     )
+    if candidate.get("schema") == PAIRED_CANDIDATE_SCHEMA:
+        selection_status = candidate["selection_status"]
     payload = {
         "schema": APPLIED_SCHEMA,
         "target_date": target_date.isoformat(),
@@ -228,6 +242,10 @@ def build_applied_policy(
             "provider_bot_cap_or_broker_guard_change",
         ],
     }
+    if candidate.get("schema") == PAIRED_CANDIDATE_SCHEMA:
+        payload.update(source_candidate_schema=PAIRED_CANDIDATE_SCHEMA, source_candidate_artifact_sha256=hashlib.sha256(candidate_path.read_bytes()).hexdigest(),
+            publication_date=candidate["publication_date"], effective_date=candidate["effective_date"],
+            paired_selection_status=candidate["selection_status"])
     transitions = operator_policy_transitions(target_date)
     if transitions:
         payload["operator_policy_transitions"] = transitions
@@ -246,6 +264,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--applied-dir", type=Path, default=APPLIED_DIR)
     parser.add_argument("--write", action="store_true")
     args = parser.parse_args(argv)
+    if args.write:
+        import fcntl
+        from src.trading.low_price_two_leg.machine import DEFAULT_STATE_DIR
+        DEFAULT_STATE_DIR.mkdir(parents=True, exist_ok=True)
+        with (DEFAULT_STATE_DIR / "policy_apply.lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            return _apply(args)
+    return _apply(args)
+
+
+def _apply(args) -> int:
     target_date = date.fromisoformat(args.target_date)
     output_path = applied_path(target_date, applied_dir=args.applied_dir)
     if output_path.exists():
