@@ -4354,7 +4354,7 @@ def evaluate_entry_split_operating_economics(rows, model_rows, source_counts, *,
         source_counts=source_counts, input_rows=rows, model_rows=model_rows,
         source_gap_owner="entry_execution_sizing_plan->owner_custody_registry->strategy_owner_replay",
         closure_test="same frozen submitted-order scope; independent completed-cost model calibration/holdout followed by complete paired candidate calibration/holdout",
-        model_dispositions=dict(Counter(r.get("status","source_gap") for r in model_rows)),
+        model_dispositions=dict(Counter(r.get("model_support_status") or r.get("status","source_gap") for r in model_rows)),
         input_dispositions=dict(Counter(a.get("status","source_gap") for r in rows for a in r.get("arms",{}).values())),
         consumed_holdouts=dict(consumed_holdouts or {}), blockers=[],
         metric_role="primary_ev", decision_authority="next_preopen_bounded_entry_split_policy",
@@ -4535,8 +4535,8 @@ def evaluate_entry_split_operating_economics(rows, model_rows, source_counts, *,
         if not retained:output["blockers"].append("operating_paired_source_missing")
         if not output["candidates"] and output["status"]=="insufficient_sample":
             dispositions=output["input_dispositions"]
-            if dispositions.get("source_gap"):output["status"]="source_gap"
-            elif dispositions.get("unsupported_scope"):output["status"]="unsupported_scope"
+            if dispositions.get("source_gap") or output["model_dispositions"].get("source_gap"):output["status"]="source_gap"
+            elif dispositions.get("unsupported_scope") or output["model_dispositions"].get("unsupported_scope"):output["status"]="unsupported_scope"
             elif dispositions.get("terminal_pending") or output["model_dispositions"].get("terminal_pending"):output["status"]="pending"
     except (KeyError,ValueError,TypeError,OverflowError) as exc:
         output.update(status="source_gap",candidates=[],valid_no_edge=False)
@@ -4559,8 +4559,11 @@ def build_entry_split_post_apply_performance(actual_rows, *, target_date, rollin
         and r.get("exact_lineage") is True and r.get("pid_consumed") is True and r.get("policy_applied") is True
         and r.get("policy_version") and re.fullmatch(r"[a-f0-9]{64}",str(r.get("policy_sha256") or ""))
         and "2026-06-05"<=str(r.get("completion_date"))<=target_date
-        and all(numeric(r.get(k)) for k in ("net_pnl_krw","profit_rate","budget_krw","capital_krw_minutes","reserve_krw_minutes"))
-        and r["budget_krw"]>0 and r["capital_krw_minutes"]>=0 and r["reserve_krw_minutes"]>=0]
+        and all(numeric(r.get(k)) for k in ("net_pnl_krw","profit_rate","budget_krw"))
+        and r["budget_krw"]>0]
+    exposure_fields=("capital_krw_minutes", "reserve_krw_minutes")
+    exposure_valid=lambda row,key:numeric(row.get(key)) and row[key]>=0
+    exposure_gaps=sorted(r["episode_id"] for r in valid if any(not exposure_valid(r,key) for key in exposure_fields))
     dates=sorted({r["completion_date"] for r in valid})
     rolling=set(dates[-rolling_days:]);groups=[]
     for key in sorted({(r["policy_version"],r["policy_sha256"],r["scope_sha256"],r.get("fill_class")) for r in valid}):
@@ -4571,14 +4574,18 @@ def build_entry_split_post_apply_performance(actual_rows, *, target_date, rollin
             return dict(completed_episodes=len(half),net_pnl_krw=sum(r["net_pnl_krw"] for r in half),
                 cost_adjusted_ev_pct=sum(r["net_pnl_krw"] for r in half)/sum(r["budget_krw"] for r in half)*100,
                 equal_weight_avg_profit_pct=mean(values),tail=dict(p10=values[n-1],es10=mean(values[:n]),worst=values[0]),
-                exposure=dict(capital_krw_minutes=sum(r["capital_krw_minutes"] for r in half),reserve_krw_minutes=sum(r["reserve_krw_minutes"] for r in half)),
+                exposure=dict(**{key:sum(r[key] for r in half) if all(exposure_valid(r,key) for r in half) else None for key in exposure_fields},
+                    covered_episodes={key:sum(exposure_valid(r,key) for r in half) for key in exposure_fields},
+                    status="complete" if all(exposure_valid(r,key) for r in half for key in exposure_fields) else "source_gap",
+                    owner="owner_custody_registry->entry_split_exact_order_capital_join",
+                    closure_test="verified chronological submitted/cumulative-fill/terminal journal through independent completed SELL"),
                 model_error=dict(comparable_episodes=sum(numeric(r.get("net_error_budget_pct")) for r in half),
                     mean_signed_budget_pct=mean(r["net_error_budget_pct"] for r in half if numeric(r.get("net_error_budget_pct"))) if any(numeric(r.get("net_error_budget_pct")) for r in half) else None,
                     maximum_absolute_budget_pct=max(abs(r["net_error_budget_pct"]) for r in half if numeric(r.get("net_error_budget_pct"))) if any(numeric(r.get("net_error_budget_pct")) for r in half) else None))
         groups.append(dict(policy_version=key[0],policy_sha256=key[1],scope_sha256=key[2],fill_class=key[3],
             cumulative=metrics(sample),rolling=metrics([r for r in sample if r["completion_date"] in rolling])))
     return dict(status="observed" if valid else "waiting_natural_applied_completed_cost_evidence",
-        groups=groups,quarantined_episodes=sorted(conflicts),rolling_completed_source_days=rolling_days,
+        groups=groups,quarantined_episodes=sorted(conflicts),exposure_gap_episodes=exposure_gaps,rolling_completed_source_days=rolling_days,
         model_delta_ev_is_actual_profit=False,new_incremental_profit_claimed=False)
 
 
@@ -4754,17 +4761,25 @@ def _attach_operating_model_outcomes(validation,replays,actual_outcomes):
         try:
             if round(actual["actual_entry_vwap"],4)!=round(diagnostic["actual_entry_vwap"],4):
                 raise ValueError("actual_initial_entry_vwap_does_not_match_completed_inventory")
-            capital,reserve=_actual_entry_capital(diagnostic,actual["completed_at"])
         except (KeyError,ValueError,TypeError):
-            diagnostic["reason"]="actual_capital_or_reservation_source_missing"
+            diagnostic["reason"]="actual_initial_entry_vwap_missing_or_conflicting"
             model_rows.append(dict(episode_id=actual["episode_id"],scope_sha256=_entry_operating_scope(seed),source_date=seed["source_date"],status="source_gap",blocker=diagnostic["reason"]))
             continue
-        actual={**actual,"capital_krw_minutes":capital,"reserve_krw_minutes":reserve}
         numeric=lambda x:type(x) in (int,float) and math.isfinite(x)
-        if not all(numeric(actual.get(k)) for k in ("net_pnl_krw","profit_rate","capital_krw_minutes","reserve_krw_minutes")):continue
-        if actual["capital_krw_minutes"]<0 or actual["reserve_krw_minutes"]<0:continue
+        if not all(numeric(actual.get(k)) for k in ("net_pnl_krw","profit_rate")):continue
+        try:
+            capital,reserve=_actual_entry_capital(diagnostic,actual["completed_at"])
+            if not all(numeric(x) and x>=0 for x in (capital,reserve)):
+                raise ValueError("actual_exposure_nonfinite_or_negative")
+        except (KeyError,ValueError,TypeError):
+            diagnostic["reason"]="actual_capital_or_reservation_source_missing"
+            model_rows.append({**actual,"capital_krw_minutes":None,"reserve_krw_minutes":None,
+                "net_error_budget_pct":None,"model_support_status":"source_gap","blocker":diagnostic["reason"]})
+            continue
+        actual={**actual,"capital_krw_minutes":capital,"reserve_krw_minutes":reserve}
         if arm.get("status")!="completed_source_only":
-            model_rows.append({**actual,"net_error_budget_pct":None,"blocker":arm.get("blocker") or "incumbent_operating_replay_unsupported"})
+            model_rows.append({**actual,"net_error_budget_pct":None,"model_support_status":arm.get("status") or "source_gap",
+                "blocker":arm.get("blocker") or "incumbent_operating_replay_unsupported"})
             continue
         price=diagnostic.get("actual_entry_vwap");error=diagnostic.get("vwap_error_krw");clock=diagnostic.get("receipt_clock_error_sec")
         if not price or not numeric(error) or not numeric(clock):continue
@@ -4778,7 +4793,7 @@ def _attach_operating_model_outcomes(validation,replays,actual_outcomes):
         model_rows.append(value)
         diagnostic.update(actual_net_pnl_krw=actual["net_pnl_krw"],model_net_error_krw=arm["net_pnl_krw"]-actual["net_pnl_krw"],
             capital_error=value["capital_error_minutes"],reserve_error=value["reserve_error_minutes"],reason="independent_scope_validation_required")
-    validation["actual_completed_net_comparable_count"]=len(model_rows)
+    validation["actual_completed_net_comparable_count"]=sum(type(r.get("net_error_budget_pct")) in (int,float) and math.isfinite(r["net_error_budget_pct"]) for r in model_rows if r.get("status")=="COMPLETED")
     return model_rows
 
 

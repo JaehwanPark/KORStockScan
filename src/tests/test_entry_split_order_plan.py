@@ -5533,3 +5533,43 @@ def test_actual_pnl_is_reported_with_null_unsupported_model_error():
     result=split_plan.build_entry_split_post_apply_performance([row,row],target_date='2026-09-17')
     assert result['groups'][0]['cumulative']['net_pnl_krw']==200.
     assert result['groups'][0]['cumulative']['model_error']['mean_signed_budget_pct'] is None
+
+
+@pytest.mark.parametrize('missing', ['capital_krw_minutes', 'reserve_krw_minutes'])
+def test_completed_net_survives_missing_exposure_with_explicit_gap(missing):
+    row=dict(episode_id='actual-missing-exposure',status='COMPLETED',origin='real',owner='main_scalping',cost_complete=True,
+        exact_lineage=True,pid_consumed=True,policy_applied=True,policy_version='v1',policy_sha256='1'*64,
+        scope_sha256='2'*64,fill_class='full',completion_date='2026-09-17',net_pnl_krw=200.,profit_rate=.2,
+        reserve_krw_minutes=10.,budget_krw=100000.,capital_krw_minutes=100.,net_error_budget_pct=None)
+    row[missing]=None
+    result=split_plan.build_entry_split_post_apply_performance([row,row],target_date='2026-09-17')
+    metrics=result['groups'][0]['cumulative']
+    assert metrics['completed_episodes']==1 and metrics['net_pnl_krw']==200.
+    assert metrics['cost_adjusted_ev_pct']==pytest.approx(.2)
+    assert metrics['exposure'][missing] is None
+    assert metrics['exposure']['status']=='source_gap'
+    assert metrics['exposure']['covered_episodes'][missing]==0
+    assert metrics['exposure']['owner'] and metrics['exposure']['closure_test']
+    assert result['exposure_gap_episodes']==['actual-missing-exposure']
+
+
+def test_verified_completed_receipt_survives_capital_join_gap_in_producer():
+    rows,_,_=_operating_economic_fixture(); seed=rows[0]['seed']; plan=seed['plan_sha256'];scope=split_plan._entry_operating_scope(seed)
+    actual=dict(episode_id='verified-completed-capital-gap',plan_sha256=plan,scope_sha256=scope,
+        source_date=seed['source_date'],completion_date=seed['source_date'],completed_at=seed['source_date']+'T12:00:00+09:00',
+        entry_qty=10,actual_entry_vwap=1000.,status='COMPLETED',origin='real',owner='main_scalping',cost_complete=True,
+        exact_lineage=True,pid_consumed=True,policy_applied=True,policy_version='v1',policy_sha256='1'*64,
+        fill_class='full',net_pnl_krw=200.,profit_rate=.2,budget_krw=100000.,
+        cost_policy_version=seed['operating_contract']['cost_policy_version'],capital_krw_minutes=None,reserve_krw_minutes=None)
+    actual['sha256']=split_plan._canonical_sha256(actual)
+    diagnostic=dict(scope={'plan_sha256':plan},actual_filled_qty=10,actual_entry_vwap=1000.,actual_journal_legs=[],
+        modeled_filled_qty=10,vwap_error_krw=0.,receipt_clock_error_sec=0.,false_fill=False,missed_fill=False)
+    validation={'rows':[diagnostic]}
+    models=split_plan._attach_operating_model_outcomes(validation,[{'seed':seed,'operating_arms':rows[0]['arms']}],[actual])
+    perf=split_plan.build_entry_split_post_apply_performance(models,target_date='2026-09-17')
+    assert perf['groups'][0]['cumulative']['net_pnl_krw']==200.
+    assert perf['groups'][0]['cumulative']['exposure']['capital_krw_minutes'] is None
+    assert validation['actual_completed_net_comparable_count']==0
+    assert models[0]['blocker']=='actual_capital_or_reservation_source_missing'
+    evidence=split_plan.evaluate_entry_split_operating_economics(rows,models,{},target_date='2026-09-17')
+    assert evidence['status']=='source_gap' and not evidence['candidates'] and not any(x['validated'] for x in evidence['model_scopes'])
