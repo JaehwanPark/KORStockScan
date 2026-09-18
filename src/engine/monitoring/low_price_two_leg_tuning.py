@@ -2035,13 +2035,19 @@ def durable_observation_manifest(target_date: str, source_quality_dir: Path) -> 
                     or body["logical_date"] != target_date or body["owner"] != "episode"
                     or body["profile_id"] != fields["profile_id"]):
                     raise ValueError("observation_lineage_invalid")
-                profile = manifest["profiles"].setdefault(body["profile_id"], {"events": 0, "bar_evaluations": 0, "policy_hashes": []})
+                profile = manifest["profiles"].setdefault(body["profile_id"], {"events": 0, "bar_evaluations": 0, "policy_hashes": [], "signal_policy_bindings": []})
                 profile["events"] += 1
                 if body.get("bar_source") and body.get("last_evaluated_bar"):
                     observed_bars.setdefault(body["profile_id"], set()).add(body["last_evaluated_bar"])
                     profile["bar_evaluations"] = len(observed_bars[body["profile_id"]])
                 if body["policy_hash"] not in profile["policy_hashes"]:
                     profile["policy_hashes"].append(body["policy_hash"])
+                signal = (body.get("signal_features") or {}).get("signal_bar")
+                signal_policy = (body.get("signal_features") or {}).get("runtime_policy_hash")
+                if signal and signal_policy == body["policy_hash"] and len(str(signal_policy)) == 64:
+                    identity = f"{signal_policy}|{signal}"
+                    if identity not in profile["signal_policy_bindings"]:
+                        profile["signal_policy_bindings"].append(identity)
             except (KeyError, TypeError, ValueError):
                 manifest["invalid_event_count"] += 1
     after = raw.stat()
@@ -2061,6 +2067,11 @@ def actual_execution_confirmation(rows, result):
         capture = row.get("durable_observation_capture") or {}
         if capture.get("status") != "pass" or capture.get("profile", {}).get("bar_evaluations", 0) == 0:
             return {"status": "source_gap", "reason": "actual_durable_observation_lineage_missing", "matched_legs": matched}
+        features = row.get("signal_features") or {}
+        signal_policy = features.get("runtime_policy_hash")
+        identity = f"{signal_policy}|{features.get('signal_bar')}"
+        if len(str(signal_policy)) != 64 or identity not in capture.get("profile", {}).get("signal_policy_bindings", []):
+            return {"status": "source_gap", "reason": "actual_capture_signal_policy_binding_missing", "matched_legs": matched}
         episode = modeled.get(row.get("signal_features", {}).get("signal_bar"))
         if not episode:
             return {"status": "source_gap", "reason": "actual_baseline_signal_not_reproduced", "matched_legs": matched}

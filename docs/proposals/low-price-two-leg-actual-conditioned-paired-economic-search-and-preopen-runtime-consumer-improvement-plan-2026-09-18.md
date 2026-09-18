@@ -174,4 +174,4 @@ LP-A0–A7은 기존 모듈과 두 wrapper에서 구현했다. Actual report v9/
 
 9/17 native 61profile은 hold_sample24/valid_empty_no_fill19/source_gap9/hold_inventory_custody9로 대사된다. Eligible0이므로 추가 CF replay0이며 검증된 개선0을 no-edge로 해석하지 않는다. Source9/17·publication9/18·effective9/21의 mutation0 보존 candidate와 격리된 prepared applied/loader를 검증했다. 실제9/21 applied 파일 발행은 정상 PREOPEN에 맡긴다. 자세한 검사·선택 commit/release·service pin·전체 chain 외부 blocker는 owning closure를 따른다.
 
-9/19 KST checklist는 존재하지 않는다. 주말 임시 owner를 신설하지 않고 사용자 명시 승인과 기존 LowPriceExpandedResearchRepair0918의 Acceptance를 보존한다. 다음 실행일 자연 PREOPEN/PID/체결/완료 비용 경제성은 동일 ID로 이관하며 새 구현 완료로 계산하지 않는다.
+9/19 KST checklist는 존재하지 않는다. 주말 임시 owner를 신설하지 않고 사용자 명시 승인과 기존 LowPriceExpandedResearchRepair0918의 Acceptance를 보존한다. [9/21 자연 PREOPEN/PID/체결/완료 비용 경제성](../checklists/2026-09-21-stage2-todo-checklist.md)은 동일 ID로 이관했으며 새 구현 완료로 계산하지 않는다.

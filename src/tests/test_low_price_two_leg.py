@@ -5201,11 +5201,14 @@ def test_actual_full_terminal_reproduction_requires_eight_native_legs():
         actual = {"completed": True, "profit_price_source": "broker_target_fill_price", "quantity": 10,
             "buy_filled_qty": 10, "target_filled_qty": 10, "fill_price": 10000, "profit_exit_price": 10040}
         episodes.append({"signal_at": signal, "legs": [dict(model), dict(model)]})
-        rows.append({"eligible_for_tuning": True, "attempted": True, "signal_features": {"signal_bar": signal},
-            "durable_observation_capture": {"status": "pass", "profile": {"bar_evaluations": 1}},
+        rows.append({"eligible_for_tuning": True, "attempted": True, "signal_features": {"signal_bar": signal, "runtime_policy_hash": "a" * 64},
+            "durable_observation_capture": {"status": "pass", "profile": {"bar_evaluations": 1, "signal_policy_bindings": [f"{'a' * 64}|{signal}"]}},
             "legs": [dict(actual), dict(actual)]})
     result = {"baseline": {"full": {"episodes": episodes}}}
     assert actual_execution_confirmation(rows, result)["status"] == "pass"
+    rows[-1]["signal_features"]["runtime_policy_hash"] = "b" * 64
+    assert actual_execution_confirmation(rows, result)["reason"] == "actual_capture_signal_policy_binding_missing"
+    rows[-1]["signal_features"]["runtime_policy_hash"] = "a" * 64
     rows[-1]["legs"][0]["target_filled_qty"] = 9
     assert actual_execution_confirmation(rows, result)["status"] == "source_gap"
 

@@ -2,7 +2,7 @@
 
 기록일: 2026-09-19 KST. 원천: 2026-09-17. Candidate 발행: 9/18, 적용예정: 9/21. 사용자 승인: 구현·리뷰/수정 반복·commit/push·immutable 배포·제한 장후 재생성. 주문·Main/거래 service restart·조기 PREOPEN은 실행하지 않는다.
 
-소유 계획: [LP-A0–A7](../proposals/low-price-two-leg-actual-conditioned-paired-economic-search-and-preopen-runtime-consumer-improvement-plan-2026-09-18.md). 실행 owner는 기존 [LowPriceExpandedResearchRepair0918](../checklists/2026-09-18-stage2-todo-checklist.md) 하나다. 9/19 checklist는 없어 현재 승인 범위를 대신하는 과거 일정으로 간주하지 않는다.
+소유 계획: [LP-A0–A7](../proposals/low-price-two-leg-actual-conditioned-paired-economic-search-and-preopen-runtime-consumer-improvement-plan-2026-09-18.md). 실행 owner는 기존 stable ID [LowPriceExpandedResearchRepair0918](../checklists/2026-09-21-stage2-todo-checklist.md) 하나로 9/21에 이관했다. 9/18 기록은 완료 구현 및 Acceptance/History 근거다. 9/19 checklist는 없어 현재 승인 범위를 대신하는 과거 일정으로 간주하지 않는다.
 
 | 묶음 | 구현·리뷰 종결 | 실제 증거/다음 자연 조건 |
 | --- | --- | --- |
@@ -46,3 +46,21 @@ Whole strict/controller는 다른 AI correction/calibration·expanded contract·
 - Native compact scoped strict는 PASS/issue0(`compact-strict-final.json`); 전체 strict는22issue FAIL이며 저가주 actual v4/EV/runtime brief mismatch는0이다. Worktree의 문서 경로 때문에 native checklist 계약은 clean release의 canonical docs mount에서 다시 연결한다. Controller는 blocked_recoverable_action_failed를 보존했다.
 
 Source revision과 deployment receipt는 승인 배포 후 아래에 기록한다.
+
+## 승인 배포 결과
+
+Source commit `8ff8634a45fea435539fd04866abd3ab898c48d5`를 remote main/review branch에 atomic push했다. Selected immutable root는 `/home/ubuntu/KORStockScan-runtime-releases/low-price-actual-paired-reviewed-20260919`다. Router의 source-clean/HEAD/shared-path 검증 PASS. Low-price live/preflight template의 최종 drop-in 모두 동일 root/ExecStart/PYTHONPATH를 가리키며 daemon-reload만 수행했다. 두 확인 unit PID0/NRestarts0·start/restart0이다. Native9/21 applied는 정상 PREOPEN 전이므로 미발행이고 prepared58ready/3quarantine 증거만 기록한다.
+
+원본 selector 백업·배포 receipt: `tmp/low-price-actual-paired-20260918/selection-before.json`, `deployment.json`. Source/consumer 묶음: `final-consumer-evidence.json`, `handoff.json`. API/전량 raw/전체 expanded grid/거래 기동은 실행하지 않았다.
+
+동일 stable ID의 자연 Acceptance를 9/21 PREOPEN7:35~9:35로 옮겼고 9/18 checkbox는 이력으로 닫았다. 기존 승인/경제·source/custody/peer·rollback 조건과 History를 링크로 보존했다. Worktree 및 canonical docs의 print-only parser가 각각 OPEN owner1개임을 검증했다. 기존9/21 canonical 파일의 다른 세션 내용은 보존했다.
+
+배포된 source에서 summary-handoff-only controller가 native canonical docs를 소비하도록 실행했다. Whole-chain controller는 외부 실패 때문에 blocked_recoverable_action_failed이며 DONE을 부여하지 않았다. 이어 source fingerprint→runtime→tower→canonical checklist→strict를 제한 갱신하여 current generation으로 연결했다. 최종 issue/영수증은 `strict-release-final.json`, `controller-release-final.json` 및 아래 native 확인을 따른다.
+
+## 재리뷰 보완 및 최종 native 인계
+
+추가 결함: durable stream의 profile/day/bar 존재만으로 실제 거래의 signal/policy lineage가 닫혔다고 볼 수 없었다. Manifest에 같은 관측 body의 signal_bar/runtime_policy_hash 결속을 추가하고 actual baseline 재현은 정확한 signal+policy identity가 있는 경우만 받는다. 다른 정책 hash·missing durable·partial terminal을 거절하는 회귀3PASS(`tmp/lp-terminal-binding-final.txt`). Native9/17의 관측 population0·mutation0·candidate 내용/EV/native brief는 바뀌지 않아 전체 계산은 반복하지 않았다.
+
+Clean release 최종 strict는18issue FAIL(`strict-release-final.json`)이며 actual candidate/EV/runtime·tower/checklist source generation mismatch 및 drought stale receipt는0이다. 외부 AI correction/calibration·expanded contract·기존 entry policy/research closed loop·전역 predecessor/fail marker·OFF swing/strategy scope가 남는다. Controller blocked 상태를 보존한다. Source equivalence상 이번 signal-policy 검사는 mutation 승격 전용이고 현재 mutation0 native 인계에는 영향이 없어 이18issue receipt를 재사용한다. 후속 bound source의 동일 handoff/준비 policy/loader 검증과 selected release/template 경로는 `deployment.json`의 최종 source_commit을 따른다.
+
+최종 future root: `/home/ubuntu/KORStockScan-runtime-releases/low-price-actual-paired-bound-reviewed-20260919`. 초기8ff source 및 selector 백업을 보존하고 재리뷰 보완source로 미래 호출만 갱신한다. 자연 실행/정책 적용/실제 EV 개선 Acceptance는 동일 stable ID9/21 OPEN이다.
