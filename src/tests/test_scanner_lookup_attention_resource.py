@@ -578,3 +578,15 @@ def test_final_native_resource_export_is_bounded_but_preserves_exact_receipts(mo
     assert section["native_events"] == [proof, receipt]
     assert section["lineage"]["resource_capture_diagnostics"][target.isoformat()]["raw_row_count"] == 58_532
     assert section["snapshot_proxy"]["pairs"] == book(rows)["pairs"]
+
+
+
+@pytest.mark.parametrize("field", ["baseline_budget_ev_pct", "candidate_net_pnl_krw", "tail", "model_error"])
+def test_source_gap_policy_rejects_self_hashed_zero_or_fabricated_primary_metrics(monkeypatch, tmp_path, field):
+    integrated_fixture(monkeypatch)
+    section = resource.integrated_selection_evaluation(date(2026, 9, 17), {})
+    section["primary_economics"][field] = 0
+    section["artifact_sha256"] = policy.canonical_sha256({k:v for k,v in section.items() if k != "artifact_sha256"})
+    report = {"target_date": "2026-09-17", "scanner_unique_funnel": {"economic_cohorts": {"lookup_attention_selection": section}}}
+    with pytest.raises(ValueError, match="integrated_disposition_invalid"):
+        policy.publish_integrated_policy(report, policy_dir=tmp_path)

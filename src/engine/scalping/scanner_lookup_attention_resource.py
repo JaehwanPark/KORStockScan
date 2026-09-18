@@ -762,7 +762,10 @@ def validate_integrated_selection(section, policy, *, target):
             or policy.get("source_report_artifact_sha256") != section.get("artifact_sha256")
             or policy.get("status") != "source_quality_blocked"
             or section.get("status") != "source_gap"
-            or primary.get("paired_delta_ev_pct") is not None
+            or primary.get("status") != "source_gap"
+            or any(key not in primary or primary[key] is not None for key in (
+                "paired_delta_ev_pct", "baseline_budget_ev_pct", "candidate_budget_ev_pct",
+                "baseline_net_pnl_krw", "candidate_net_pnl_krw", "tail", "exposure", "model_error"))
             or not primary.get("source_gaps")
             or policy.get("effective_bonus_points") != 0.0):
         issues.append("integrated_disposition_invalid")
