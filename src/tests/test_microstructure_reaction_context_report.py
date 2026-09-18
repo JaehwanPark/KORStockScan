@@ -54,7 +54,7 @@ def test_machine_parent_access_time_change_is_not_a_new_source_generation(tmp_pa
     import json
     path = tmp_path / 'ai_decision_action_outcome_calibration_2026-09-17.json'
     evaluation = {'status': 'evaluable_descriptive_counterfactual'}
-    path.write_text(json.dumps({'target_date': '2026-09-17', 'hierarchical_entry_quality': {'machine_decision_case_table': {'microstructure_evaluation': evaluation}}}))
+    path.write_text(json.dumps({'schema': 'ai_decision_action_outcome_calibration_v2', 'runtime_effect': False, 'allowed_runtime_apply': False, 'target_date': '2026-09-17', 'hierarchical_entry_quality': {'machine_decision_case_table': {'microstructure_evaluation': evaluation}}}))
     os.utime(path, ns=(1, path.stat().st_mtime_ns))
     result = microstructure_summary_contract({'machine_primary_auxiliary_evaluation': {
         'status': 'evaluable_descriptive_counterfactual', 'source_report_path': str(path),
@@ -149,3 +149,35 @@ def test_daily_refresh_changes_only_modern_handoff_without_policy_replay(tmp_pat
     assert actual['apply_candidate_list'] == original['apply_candidate_list']
     assert actual['calibration_source_bundle']['source_metrics']['other_owner'] == {'valid': True}
     assert actual['calibration_source_bundle']['source_metrics']['microstructure_reaction_context']['legacy_study_status'] == 'retired'
+
+
+def test_machine_parent_authority_and_report_metric_contract(tmp_path):
+    import json
+    import hashlib
+    import pytest
+    from src.engine.scalping.microstructure_reaction_context import (
+        MACHINE_EVALUATION_SCHEMA, refresh_machine_evaluation_link, microstructure_summary_contract,
+    )
+    parent = tmp_path / 'ai_decision_action_outcome_calibration_2026-09-17.json'
+    body = {'schema': 'ai_decision_action_outcome_calibration_v2', 'target_date': '2026-09-17',
+            'runtime_effect': False, 'allowed_runtime_apply': False,
+            'hierarchical_entry_quality': {'machine_decision_case_table': {'microstructure_evaluation': {
+                'schema': MACHINE_EVALUATION_SCHEMA, 'partitions': [], 'case_count': 0,
+                'runtime_effect': False, 'allowed_runtime_apply': False}}}}
+    parent.write_text(json.dumps(body))
+    report = refresh_machine_evaluation_link(parent, report_root=tmp_path)
+    for key in ('metric_role', 'decision_authority', 'window_policy', 'sample_floor',
+                'primary_decision_metric', 'source_quality_gate', 'forbidden_uses'):
+        assert report[key]
+    linked = dict(report['summary']['machine_primary_auxiliary_evaluation'])
+    body['allowed_runtime_apply'] = True
+    parent.write_text(json.dumps(body))
+    linked['source_report_sha256'] = hashlib.sha256(parent.read_bytes()).hexdigest()
+    assert microstructure_summary_contract({'machine_primary_auxiliary_evaluation': linked})['machine_primary_auxiliary_evaluation']['status'] == 'source_gap_machine_evaluation_parent_hash_mismatch'
+    body['allowed_runtime_apply'] = False
+    parent.write_text(json.dumps(body))
+    path = tmp_path / 'microstructure_reaction_context/microstructure_reaction_context_2026-09-17.json'
+    report['allowed_runtime_apply'] = True
+    path.write_text(json.dumps(report))
+    with pytest.raises(ValueError, match='diagnostic_authority_invalid'):
+        refresh_machine_evaluation_link(parent, report_root=tmp_path)

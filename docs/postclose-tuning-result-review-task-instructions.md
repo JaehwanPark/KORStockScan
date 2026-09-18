@@ -132,7 +132,7 @@ bash deploy/run_runtime_release.sh finalize "$TARGET_DATE" --print-plan
 
 전용 raw 재스캔·구 entry funnel·독립 누적 연구/rollup/backfill 장후작업은 폐기한다. 실시간 특징·holding/entry 안전 소비와 별도 `machine_microstructure_attribution`/정책 경로는 유지한다. legacy 통계는 N/A이며 구 보고서가 없어도 정상이다.
 
-후행 calibration `--write`는 전체 case의 통합 진단을 날짜가 같은 microstructure 보고서에 가볍게 갱신한다. EV/daily/runtime summary는 같은 계약을 소비하고 부모 보고서 hash가 바뀌거나 없으면 source gap으로 표시한다. 기존 가격 labeler의3분 window 마지막 관측값에서 검증된 full-cost estimate를 차감한 값은 관측 endpoint lag까지 명시한 CF 진단이다. 실제 completed EV/순익·인과 ΔEV와 합산하지 않으며 별도 tuner·정책 승격·런타임 권한을 만들지 않는다. 선정/발행/PREOPEN은 기존 기계·보조 AI의 source/terminal/holdout/promotion gate를 따른다.
+후행 calibration `--write`는 전체 case의 통합 진단을 날짜가 같은 microstructure 보고서에 가볍게 갱신한다. EV/daily/runtime summary는 같은 계약을 소비하고 부모 보고서 hash가 바뀌거나 없으면 source gap으로 표시한다. 부모의 날짜·calibration schema·diagnostic-only 권한과 기존 modern 보고서의 false apply/runtime 권한도 재검증한다. 진단 지표는 기존 labeler window·owner sample/promotion gate·source-quality 선언을 포함한다. 기존 가격 labeler의3분 window 마지막 관측값에서 검증된 full-cost estimate를 차감한 값은 관측 endpoint lag까지 명시한 CF 진단이다. 실제 completed EV/순익·인과 ΔEV와 합산하지 않으며 별도 tuner·정책 승격·런타임 권한을 만들지 않는다. 선정/발행/PREOPEN은 기존 기계·보조 AI의 source/terminal/holdout/promotion gate를 따른다.
 
 마지막 calibration 이후 기존 일일 보고서는 `daily_threshold_cycle_report --date <target-date> --refresh-machine-evaluation-only`로 해당 진단만 갱신한다. 이 경로는 기존 후보/보정·정책·누적 연구를 재산출하지 않는다. EV/daily/runtime summary와 strict handoff는 같은 modern 부모 SHA를 확인하며 missing/changed parent는 active 인계 결손이다. full-cost 결손은 경제성 source gap으로 보고하고 무기회/no-edge와 구분한다. 의도된 전용 작업 폐기를 delivery coverage 실패나 retired owner 복원 업무로 바꾸지 않는다.
 
