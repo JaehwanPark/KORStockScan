@@ -185,4 +185,6 @@ Source/tests는 기존 role package/파일을 확장한다. `src/engine` root에
 
 ## 11. 구현 및 잔여 계약
 
-[실행 모델·원천·소비 리뷰](../audit-reports/2026-09-18-entry-split-execution-model-source-and-consumer-review.md)와 `tmp/entry-split-model-validation-20260918/`가 source tests·배포·제한 regeneration·consumer 증거 및 ES별 실제 완료 범위를 소유한다. 원천/차단/재사용/소비 계약과 entry 오차 진단을 구현했으나 운영 exit/cost/capital 재생·scope tolerance/holdout·robust paired 경제성은 미지원/미완료다. 양수 정책 또는 전체 전수 경제성 구현 완료로 닫지 않는다. 미지원 상태는 active 승격을 차단하고 prepared9/21 inactive/keep-original 정책으로 인계한다. 기존4군/holdout/price·quantity·scale-in·operator/안전 owner는 보존한다.
+[경제성 완결 리뷰](../audit-reports/2026-09-18-entry-split-economic-completion-review.md)와 `tmp/entry-split-economic-completion-20260918/`가 ES0–ES6 실행 계약/회귀/배포/제한 재생성 증거를 소유한다. 운영 청산 interpreter·당시 비용 provenance·reserve/holding capital·모델 calibration 및 chronological holdout·동일 qty/budget paired 경제성·stress/error 하한·독립 candidate holdout·Daily/PREOPEN/장중 소비를 구현했다. 지원 입력은 활성 정책까지 계산하며 source gap/unsupported/pending/insufficient/valid-no-edge는 별도 null/blocker/owner/closure로 반환한다.
+
+지원 범위는 정확 frozen Main initial full fill 및 독립 full SELL 경로다. partial/no-fill CF cancel/late fill·후속 ADD/partial SELL·누락 AI/시장 입력은 재현 근거 부족으로 unsupported이며 지원 전체를 차단하지 않는다. ES7 실제 버전별 평가 경로는 구현했지만 미래 자연 PREOPEN/PID/적용/완료 비용 성과는 OPEN이다. 기존 invalid3 상세/전체 historical Main census는 미확정이다. 자연 후보0일 때 prepared9/21 inactive keep-original도 정상 정책 준비이며 합성 활성 회귀를 자연 성과로 주장하지 않는다.

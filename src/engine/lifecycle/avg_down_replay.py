@@ -294,6 +294,9 @@ def replay_exit_paths(
         )
         if not isinstance(route_replay, dict) or not route_replay:
             raise ValueError("route_replay_missing")
+        entry_only = observation.get("entry_split_initial_only") is True
+        if entry_only and route_replay != {"ENTRY": {"should_add": False, "route_evaluation_complete": True}}:
+            raise ValueError("entry_only_route_contract_invalid")
         if "NO_ADD" in route_replay:
             raise ValueError("reserved_no_add_arm_in_route_replay")
         current_key = (
@@ -301,7 +304,7 @@ def replay_exit_paths(
             if component
             else f"{_positive(observation.get('effective_min_buy_pressure')):g}"
         )
-        if current_key not in route_replay or len(route_replay) < 2:
+        if not entry_only and (current_key not in route_replay or len(route_replay) < 2):
             raise ValueError("current_and_candidate_route_required")
         if not isinstance(frames, list) or any(
             not isinstance(frame, dict) for frame in frames
@@ -409,7 +412,7 @@ def replay_exit_paths(
         replay_arms = (
             route_replay
             if component
-            else {
+            else route_replay if entry_only else {
                 **route_replay,
                 "NO_ADD": {"should_add": False, "route_evaluation_complete": True},
             }
@@ -430,7 +433,7 @@ def replay_exit_paths(
                 state = initial_state(observation, arm)
                 state["tuning_env_key"] = observation.get("tuning_env_key") or "SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE"
                 state["min_buy_pressure"] = (
-                    None if component or key == "NO_ADD" else _positive(key)
+                    None if component or entry_only or key == "NO_ADD" else _positive(key)
                 )
                 # Component replay does not suppress another owner's ADD gate.
                 # Its unmodelled broker boundary becomes an explicit source gap.
@@ -586,8 +589,8 @@ def replay_exit_paths(
                             "expired_add_requires_state_bound_cancel_evaluation"
                         )
                     if record["action"] == "ADD":
-                        if state["no_add_control"] or state["pending_add"] is not None:
-                            raise ValueError("add_violates_control_or_pending_order")
+                        if entry_only or state["no_add_control"] or state["pending_add"] is not None:
+                            raise ValueError("add_violates_initial_only_scope_control_or_pending_order")
                         proposal = record.get("add_order") or {}
                         if (
                             proposal.get("existing_sizing_price_and_safety_evaluated")
@@ -670,10 +673,10 @@ def replay_exit_paths(
         denominator = _positive(observation["pre_add_buy_price"]) * _positive(
             observation["pre_add_buy_qty"]
         )
-        control = result["outcomes"]["baseline" if component else "NO_ADD"][
+        control = result["outcomes"]["ENTRY" if entry_only else "baseline" if component else "NO_ADD"][
             "net_pnl_krw"
         ]
-        baseline = result["outcomes"][current_key]["net_pnl_krw"]
+        baseline = result["outcomes"]["ENTRY" if entry_only else current_key]["net_pnl_krw"]
         result["economics"] = {
             key: {
                 "incremental_net_pnl_krw": value["net_pnl_krw"] - control,

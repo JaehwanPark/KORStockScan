@@ -2033,3 +2033,30 @@ def test_forward_collector_has_no_forbidden_runtime_imports() -> None:
         for module_name in imported
         for fragment in forbidden_fragments
     )
+
+
+def test_depth_freezes_existing_owner_inputs_without_future_or_new_requests(tmp_path):
+    from src.engine.scalping.avg_down_replay_capture import record_market_inputs
+    snapshot=_depth_snapshot()
+    cutoff=datetime.fromisoformat(snapshot['exchange_timestamp']).timestamp() if 'exchange_timestamp' in snapshot else None
+    # The collector owns the actual canonical clock; inspect its persisted point
+    # before recording a second frame, without modifying protocol fields.
+    collector=_collector(tmp_path,path_capture_enabled=True,depth_capture_enabled=True)
+    try:
+        assert collector.observe_kiwoom_0d('000001',snapshot,realtime_type='0D') is ProducerCanaryResult.ENQUEUED
+    finally:collector.close()
+    path=next(tmp_path.rglob('market_depth_stream.jsonl'))
+    first=json.loads(path.read_text().splitlines()[0])
+    clock=datetime.fromisoformat(first['exchange_timestamp']).timestamp()
+    record_market_inputs('000001',now_ts=clock-1,market_regime='BULL')
+    record_market_inputs('000001',now_ts=clock+1,future_input='forbidden')
+    from dataclasses import replace
+    from src.engine.scalping.micro_reversion.path_journal import MarketDepthPoint
+    fields={k:first[k] for k in ('symbol','exchange_timestamp','local_receive_timestamp','source_sequence','sequence_epoch','series_sequence','venue','session_bucket','item','orderbook_time_raw','best_bid','best_ask','best_bid_qty','best_ask_qty','bid_depth','ask_depth','bid_levels','ask_levels','route_depth_totals')}
+    point=MarketDepthPoint(**fields)
+    row=point.as_dict()
+    assert row['recorded_inputs']['market_regime']['value']=='BULL'
+    assert 'future_input' not in row['recorded_inputs']
+    record_market_inputs('000001',now_ts=clock,market_regime='BEAR')
+    assert point.as_dict()==row
+    assert row['actual_order_submitted'] is False and row['broker_order_forbidden'] is True

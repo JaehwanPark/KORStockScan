@@ -2031,10 +2031,11 @@ def _entry_split_order_plan_summary(
             "status": (
                 (payload.get("evaluation_state") or {}).get("status") or "source_quality_blocked"
                 if source_quality.get("tuning_input_allowed") is False
-                else (payload.get("execution_model_validation") or {}).get("status", "pass")
+                else (payload.get("economic_acceptance") or {}).get("status") or (payload.get("execution_model_validation") or {}).get("status", "pass")
             ),
             "execution_model_validation": payload.get("execution_model_validation"),
             "economic_acceptance": payload.get("economic_acceptance"),
+            "post_apply_version_performance": payload.get("post_apply_version_performance"),
             "prepared_effective_date": recommended.get("prepared_effective_date"),
             "schema_version": payload.get("schema_version"),
             "candidate_grid_count": len(candidate_grid),

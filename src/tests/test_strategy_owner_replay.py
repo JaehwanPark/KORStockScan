@@ -1005,3 +1005,66 @@ def test_owner_issued_market_order_zero_keeps_market_semantics_without_price_inv
     assert result['arms']['incumbent_qty_x_incumbent_leg']['modeled_filled_qty'] == 10
     assert result['price_arms'] == {}
     assert result['actual_order_submitted'] is False
+
+
+def _operating_entry_fixture():
+    from src.tests.test_avg_down_policy_replay import exit_fixture
+    observation,_=exit_fixture()
+    seed=entry_seed('2026-09-04')
+    seed['legs'][0]['price']=10010
+    seed['price_candidates']={}
+    context=dict(order_leg_ttl_sec=[10]*len(seed['legs']),order_bundle_hard_ttl_sec=10,order_timeout_owner='explicit_fixture',schema=mod.ENTRY_OPERATING_SCHEMA,frozen_at=seed['observed_at'],
+        policy_snapshot=observation['policy_snapshot'],initial_policy_state=observation['initial_policy_state'],
+        exit_policy_version=observation['exit_policy_version'],budget_krw=120000.,cost_rate=.0023,
+        cost_policy_version='trade_profit_net_realized_pnl:rate=0.0023',
+        cost_provenance='frozen_loaded_trade_profit_configuration_not_broker_settlement',
+        stress_cost_rate_increment=.0005,max_frame_gap_sec=5.,**mod.AUTHORITY)
+    context['policy_snapshot']['environment']['KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ACTIVE_DATE']='2026-09-04'
+    context['exit_policy_version']=adapter.snapshot_version(context['policy_snapshot'])
+    context['sha256']=owner.digest(context)
+    seed['operating_contract']=context;seed.pop('seed_sha256');seed['seed_sha256']=owner.digest(seed)
+    depths,trades=entry_native_path(seed)
+    replay=mod.replay_entry_opportunity(seed,depths,trades,evaluated_at=datetime.fromisoformat(seed['observed_at']).timestamp()+181,source_ready=True)
+    arm=replay['arms']['incumbent_qty_x_incumbent_leg']
+    return seed,arm,depths
+
+
+def test_operating_entry_executes_existing_full_policy_and_cost_owner():
+    from src.engine.trade_profit import calculate_net_realized_pnl
+    seed,arm,depths=_operating_entry_fixture()
+    for row in depths:
+        if row['source_sequence']>1:
+            row.update(ws_data=dict(curr=9500,best_bid=9500,best_ask=9510,best_bid_qty=row['best_bid_qty'],best_ask_qty=row['best_ask_qty'],last_ws_update_ts=datetime.fromisoformat(row['exchange_timestamp']).timestamp(),last_realtime_type_ts={'0D':datetime.fromisoformat(row['exchange_timestamp']).timestamp()},quote_stale=False), market_regime='BULL',best_bid=9500,best_ask=9510, bid_levels=[[1,9500,row['best_bid_qty']]], ask_levels=[[1,9510,row['best_ask_qty']]])
+    result=mod.replay_operating_entry_arm(seed,arm,depths)
+    assert result['status']=='completed_source_only',result
+    assert result['net_pnl_krw']==calculate_net_realized_pnl(arm['modeled_entry_vwap'],9500,10,cost_rate=.0023)
+    assert result['stress_net_pnl_krw']<=result['net_pnl_krw']
+    assert result['capital_krw_minutes']>0 and result['reserve_krw_minutes']>0
+    assert result['actual_fill_evidence'] is False and result['broker_order_forbidden'] is True
+
+
+def test_operating_entry_contract_cannot_copy_an_actual_sell_or_missing_cost():
+    seed,arm,depths=_operating_entry_fixture()
+    seed['operating_contract']['cost_rate']=None
+    result=mod.replay_operating_entry_arm(seed,arm,depths)
+    assert result['status']=='source_gap' and result['net_pnl_krw'] is None
+
+
+def test_initial_entry_only_full_policy_rejects_add_inventory_changes():
+    from src.engine.lifecycle.avg_down_replay import replay_exit_paths
+    from src.tests.test_avg_down_replay import replay_fixture,decision
+    observation,frames=replay_fixture()
+    observation.update(entry_split_initial_only=True,route_replay={'ENTRY':dict(should_add=False,route_evaluation_complete=True)})
+    def adds(state,frame,policy,input_digest):
+        return decision(state,frame,policy,input_digest,action='ADD')
+    result=replay_exit_paths(observation,frames,full_exit_evaluator=adds)
+    assert result['state']=='paired_exit_replay_blocked' and not result['outcomes']
+
+
+def test_operating_pending_entry_inventory_is_not_assumed_cancelled():
+    seed,arm,depths=_operating_entry_fixture()
+    for qty,reason in [(0,'zero_fill'),(5,'partial_pending')]:
+        candidate={**arm,'modeled_filled_qty':qty,'modeled_fill_events':[] if not qty else [dict(at=seed['observed_at'],qty=qty,price=10010,reserved_price=10010)]}
+        result=mod.replay_operating_entry_arm(seed,candidate,depths)
+        assert result['status']=='unsupported_scope' and reason in result['blocker']
+        assert result['net_pnl_krw'] is None and result['closure_test']

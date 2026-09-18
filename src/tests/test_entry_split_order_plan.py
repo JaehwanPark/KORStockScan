@@ -5279,3 +5279,257 @@ def test_entry_replay_maturity_changes_reuse_identity_only_at_declared_boundary(
     assert waiting == split_plan._entry_replay_maturity_revision(events, now=start + 179.5)
     assert waiting != split_plan._entry_replay_maturity_revision(events, now=start + 180)
     assert split_plan._entry_replay_maturity_revision(events, now=start + 180) == split_plan._entry_replay_maturity_revision(events, now=start + 181)
+
+
+def _operating_economic_fixture():
+    scope='8'*64
+    template=dict(leg_count=2,price_offsets_ticks=[0,1],qty_weight_min=.4,qty_weight_max=.4,
+        urgency_score=0.,passive_edge_score=0.,policy_mode=split_plan.POLICY_MODE_REAL_PRIMARY_EV,
+        candidate_leg_policy_version='entry_split_quantity_fixed_guarded_weights_v1',effective_venue='KRX',
+        session_bucket='krx_regular',order_types=['00','00'])
+    models=[]
+    for day in ['2026-09-08','2026-09-09']:
+        for n in range(10):
+            models.append(dict(episode_id=f'model-{day}-{n}',scope_sha256=scope,source_date=day,
+                status='COMPLETED',origin='real',cost_complete=True,exact_lineage=True,owner='main_scalping',
+                vwap_error_bps=0.,receipt_clock_error_sec=.1,quantity_error=0,
+                net_error_budget_pct=0.,capital_error_minutes=0.,reserve_error_minutes=0.,false_fill=False,missed_fill=False))
+    from src.engine.scalping.strategy_owner_replay import freeze_entry_opportunity, AUTHORITY, ENTRY_OPERATING_SCHEMA, entry_operating_model_identity
+    from src.engine.lifecycle.avg_down_policy_replay import snapshot_version
+    snapshot={'rules':{},'environment':{},'implementation':{}}
+    context=dict(order_leg_ttl_sec=[10,10],order_bundle_hard_ttl_sec=10,order_timeout_owner='explicit_fixture',model_implementation_sha256=entry_operating_model_identity(),schema=ENTRY_OPERATING_SCHEMA,frozen_at='2026-09-08T09:00:00+09:00',policy_snapshot=snapshot,
+        exit_policy_version=snapshot_version(snapshot),initial_policy_state={'stock':{'entry_split_order_bucket':'balanced_normal'}},
+        budget_krw=100000.,cost_rate=.0023,cost_policy_version='trade_profit_net_realized_pnl:rate=0.0023',
+        cost_provenance='frozen_loaded_trade_profit_configuration_not_broker_settlement',stress_cost_rate_increment=.0005,max_frame_gap_sec=5.,**AUTHORITY)
+    context['sha256']=split_plan._canonical_sha256(context)
+    rows=[]
+    for day in ['2026-09-10','2026-09-11']:
+        for n in range(15):
+            arms={}
+            for i,key in enumerate(split_plan.QUANTITY_LEG_FOUR_ARM_IDS):
+                arm=dict(**AUTHORITY,status='completed_source_only',actual_fill_evidence=False,requested_qty=10,modeled_filled_qty=10,
+                    budget_krw=100000.,net_pnl_krw=200. if i>=2 else 100.,stress_net_pnl_krw=190. if i>=2 else 90.,
+                    capital_krw_minutes=100. if i>=2 else 200.,reserve_krw_minutes=10.,fill_participation_rate=1.)
+                arm['sha256']=split_plan._canonical_sha256(arm);arms[key]=arm
+            plan=dict(valid=True,blockers=[],total_qty=10,deferred_probe_residual_qty=0,
+                scanner_promotion_id=f'p-{day}-{n}',action_receipt_id=f'a-{day}-{n}',effective_venue='KRX',
+                market_session_bucket='krx_regular',policy_bundle_hash='a'*64,quantity_policy_version='qty-original',
+                split_policy_version='leg-original',price_policy_sha256='c'*64,price_plan_sha256='d'*64,
+                legs=[dict(qty=8,numeric_price=1000,execution_phase='immediate'),dict(qty=2,numeric_price=999,execution_phase='immediate')])
+            seed=freeze_entry_opportunity(plan,stock_code='005930',observed_at=datetime.fromisoformat(day+'T10:00:00+09:00').timestamp()+n*240,operating_context=context)
+            scope=split_plan._entry_operating_scope(seed)
+            for model in models:model['scope_sha256']=scope
+            for arm in arms.values():
+                arm.update(modeled_exit_at=day+'T12:00:00+09:00',cost_policy_version=context['cost_policy_version'],
+                    cost_provenance=context['cost_provenance'],exit_policy_sha256=context['exit_policy_version'],contract_sha256=context['sha256'],terminal_evidence_sha256='9'*64);arm.pop('sha256');arm['sha256']=split_plan._canonical_sha256(arm)
+            row=dict(attempt_id=f'candidate-{day}-{n}',episode_id=f'candidate-episode-{day}-{n}',
+                scope_sha256=scope,source_date=day,total_qty=10,budget_krw=100000.,arms=arms,
+                context_bucket='balanced_normal',candidate_template=template,origin='counterfactual',owner='main_scalping',seed=seed)
+            row['sha256']=split_plan._canonical_sha256(row);rows.append(row)
+    return rows,models,{'2026-09-08':10,'2026-09-09':10,'2026-09-10':15,'2026-09-11':15}
+
+
+def test_operating_economics_positive_and_recomputed_policy_contract(tmp_path):
+    rows,models,census=_operating_economic_fixture()
+    evidence=split_plan.evaluate_entry_split_operating_economics(rows,models,census,target_date='2026-09-17')
+    assert evidence['status']=='positive_candidate'
+    assert evidence['primary_operating_ev_pct']==pytest.approx(.2)
+    assert evidence['robust_paired_delta_ev_lower_bound_pct']==pytest.approx(.09)
+    validation=split_plan.build_execution_model_validation('2026-09-17',[],[],[])
+    split_plan._apply_operating_model_support(validation,evidence)
+    policy,grid=split_plan._operating_policy('2026-09-17',tmp_path/'report.json',evidence)
+    policy.update(execution_model_validation_contract=split_plan.EXECUTION_MODEL_CONTRACT,
+        execution_model_validation_sha256=split_plan._canonical_sha256(validation))
+    events=split_plan._operating_four_arm_events(evidence)
+    proof=split_plan.build_quantity_leg_four_arm_evaluation(events,source_counts={d:n for d,n in census.items() if d>"2026-09-09"})
+    assert split_plan.quantity_leg_promotion_evidence_valid(proof)
+    report=dict(execution_model_validation=validation,economic_acceptance=evidence,operating_quantity_leg_four_arm_evaluation=proof)
+    assert policy['runtime_apply_allowed'] is True and len(grid)==1
+    assert split_plan.execution_model_policy_contract_status(report,policy)[0]
+    evidence['candidates'][0]['partitions']['holdout']['candidate']['ev_pct']=999.
+    assert not split_plan.execution_model_policy_contract_status(report,policy)[0]
+
+
+@pytest.mark.parametrize('defect,expected', [('no_models','insufficient_sample'),('holdout_error','model_validation_failed'),
+    ('no_candidate_holdout','insufficient_sample'),('no_edge','valid_no_edge'),('qty_change','source_gap'),
+    ('missing_cost','source_gap')])
+def test_operating_economic_dispositions(defect,expected):
+    rows,models,census=_operating_economic_fixture()
+    if defect=='no_models':models=[]
+    if defect=='holdout_error':models[-1]['vwap_error_bps']=1.
+    if defect=='no_candidate_holdout':rows=rows[:15];census.pop('2026-09-11')
+    if defect=='no_edge':
+        for row in rows:
+            for key in split_plan.QUANTITY_LEG_FOUR_ARM_IDS[2:]:
+                arm=row['arms'][key];arm.update(net_pnl_krw=80.,stress_net_pnl_krw=70.);arm.pop('sha256');arm['sha256']=split_plan._canonical_sha256(arm)
+            row.pop('sha256');row['sha256']=split_plan._canonical_sha256(row)
+    if defect in ('qty_change','missing_cost'):
+        for row in rows:
+            arm=row['arms'][split_plan.QUANTITY_LEG_FOUR_ARM_IDS[2]]
+            if defect=='qty_change':arm['requested_qty']=11
+            else:arm['net_pnl_krw']=None
+            arm.pop('sha256');arm['sha256']=split_plan._canonical_sha256(arm);row.pop('sha256');row['sha256']=split_plan._canonical_sha256(row)
+    result=split_plan.evaluate_entry_split_operating_economics(rows,models,census,target_date='2026-09-17')
+    assert result['status']==expected
+    assert not result['candidates']
+    assert result['valid_no_edge']==(expected=='valid_no_edge')
+
+
+def test_operating_holdout_revision_cannot_reuse_a_consumed_date():
+    rows,models,census=_operating_economic_fixture()
+    first=split_plan.evaluate_entry_split_operating_economics(rows,models,census,target_date='2026-09-17')
+    reused=split_plan.evaluate_entry_split_operating_economics(rows,models,census,target_date='2026-09-17',consumed_holdouts=first['consumed_holdouts'])
+    assert reused==first
+    rows[-1]['attempt_id']='different-after-viewing-holdout';rows[-1].pop('sha256');rows[-1]['sha256']=split_plan._canonical_sha256(rows[-1])
+    revised=split_plan.evaluate_entry_split_operating_economics(rows,models,census,target_date='2026-09-17',consumed_holdouts=first['consumed_holdouts'])
+    assert revised['status']=='source_gap' and not revised['candidates']
+
+
+def test_signed_actual_fill_capital_and_reserve_are_distinct():
+    diagnostic={'actual_journal_legs':[dict(quantity=10,submitted_price=10000,
+        submitted_at='2026-09-17T10:00:00+09:00',terminal_at='2026-09-17T10:00:06+09:00',fills=[
+            dict(event_hash='a',observed_at_kst='2026-09-17T10:00:02+09:00',filled_qty=4,fill_amount=40000),
+            dict(event_hash='b',observed_at_kst='2026-09-17T10:00:04+09:00',filled_qty=8,fill_amount=80000)])]}
+    capital,reserve=split_plan._actual_entry_capital(diagnostic,'2026-09-17T10:01:02+09:00')
+    assert capital==pytest.approx(40000+40000*58/60)
+    assert reserve==pytest.approx((100000*2+60000*2+20000*2)/60)
+    diagnostic['actual_journal_legs'][0]['fills'][1]['filled_qty']=11
+    with pytest.raises(ValueError,match='conservation'):split_plan._actual_entry_capital(diagnostic,'2026-09-17T10:01:02+09:00')
+
+
+def test_post_apply_version_episode_dedup_and_real_only():
+    row=dict(episode_id='actual-episode',status='COMPLETED',origin='real',owner='main_scalping',cost_complete=True,
+        exact_lineage=True,pid_consumed=True,policy_applied=True,policy_version='v1',policy_sha256='1'*64,
+        scope_sha256='2'*64,fill_class='full',completion_date='2026-09-17',net_pnl_krw=200.,profit_rate=.2,reserve_krw_minutes=10.,
+        budget_krw=100000.,capital_krw_minutes=100.,net_error_budget_pct=.01)
+    result=split_plan.build_entry_split_post_apply_performance([row,row,{**row,'episode_id':'sim','origin':'sim'}],target_date='2026-09-17')
+    assert result['groups'][0]['cumulative']['completed_episodes']==1
+    assert result['groups'][0]['cumulative']['cost_adjusted_ev_pct']==pytest.approx(.2)
+    assert not result['model_delta_ev_is_actual_profit']
+    bad=split_plan.build_entry_split_post_apply_performance([row,{**row,'net_pnl_krw':999}],target_date='2026-09-17')
+    assert not bad['groups'] and bad['quarantined_episodes']==['actual-episode']
+
+
+def test_operating_positive_generation_daily_preopen_and_runtime(monkeypatch,tmp_path):
+    """Real consumer code, synthetic supported witnesses; never natural EV."""
+    rows,models,census=_operating_economic_fixture()
+    evidence=split_plan.evaluate_entry_split_operating_economics(rows,models,census,target_date='2026-09-17')
+    validation=split_plan.build_execution_model_validation('2026-09-17',[],[],[])
+    split_plan._apply_operating_model_support(validation,evidence)
+    monkeypatch.setattr(split_plan,'REPORT_DIR',tmp_path/'reports')
+    monkeypatch.setattr(split_plan,'POLICY_DIR',tmp_path/'policies')
+    monkeypatch.setattr(daily_report,'ENTRY_SPLIT_ORDER_PLAN_DIR',tmp_path/'reports')
+    report_path,_=split_plan.report_paths('2026-09-17')
+    policy,grid=split_plan._operating_policy('2026-09-17',report_path,evidence)
+    policy.update(execution_model_validation_contract=split_plan.EXECUTION_MODEL_CONTRACT,
+        execution_model_validation_sha256=split_plan._canonical_sha256(validation))
+    proof=split_plan.build_quantity_leg_four_arm_evaluation(split_plan._operating_four_arm_events(evidence),
+        source_counts={d:n for d,n in census.items() if d>'2026-09-09'})
+    recommended={**policy,'policy_file':str(split_plan.policy_path('2026-09-17')),'candidates':grid}
+    report=dict(schema_version=split_plan.SCHEMA_VERSION,date='2026-09-17',source_quality={'tuning_input_allowed':True},
+        input_summary={'atomic_execution_sizing':{'status':'pass'}},execution_model_validation=validation,
+        economic_acceptance=evidence,operating_candidate_grid=grid,recommended_policy=recommended,
+        operating_quantity_leg_four_arm_evaluation=proof)
+    report,policy=split_plan.bind_report_policy_generation(report,policy)
+    gen=report['artifact_generation_binding']['generation_id']
+    for path,value in [(report_path,report),(split_plan.generation_report_path('2026-09-17',gen),report),
+        (split_plan.policy_path('2026-09-17'),policy),(split_plan.generation_policy_path('2026-09-17',gen),policy)]:
+        path.parent.mkdir(parents=True,exist_ok=True);path.write_text(json.dumps(value))
+    assert split_plan.policy_report_generation_contract_status(policy)[0]
+    family=daily_report._build_entry_split_order_plan_family(target_date='2026-09-17')
+    assert family['recommended']['enabled'] is True
+    path=split_plan.generation_policy_path('2026-09-17',gen)
+    prefix='KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_'
+    env={prefix+'ENABLED':'1',prefix+'FILE':str(path),prefix+'VERSION':policy['policy_version'],prefix+'ACTIVE_DATE':'2026-09-21'}
+    for key,value in env.items():monkeypatch.setenv(key,value)
+    audits=preopen_apply._split_runtime_policy_audits('2026-09-21',env)
+    audit=next(r for r in audits if r['family']=='entry_split_order_plan')
+    assert audit['status']=='pass',audit
+    context=rows[0]['seed']['operating_contract']
+    order=[dict(qty=10,price=1000,order_type_code='00',entry_price_policy_sha256='c'*64)]
+    stock=dict(entry_split_order_bucket='balanced_normal',effective_venue='KRX',market_session_bucket='krx_regular')
+    actual,fields=split_plan.apply_entry_split_order_policy(order,stock=stock,operating_context=context,
+        now=datetime.fromisoformat('2026-09-21T10:00:00+09:00'))
+    assert fields['entry_split_order_policy_applied'] is True,(fields.get('entry_split_order_skip_reason'),fields.get('entry_split_order_operating_shape_mismatch'))
+    assert [r['qty'] for r in actual]==[4,6] and sum(r['qty'] for r in actual)==10
+    assert fields['entry_split_order_runtime_consumed'] is True
+    unchanged,fields=split_plan.apply_entry_split_order_policy(order,stock=stock,operating_context=None,
+        now=datetime.fromisoformat('2026-09-21T10:00:00+09:00'))
+    assert unchanged==order and fields['entry_split_order_skip_reason']=='operating_model_scope_mismatch'
+    stale,fields=split_plan.apply_entry_split_order_policy(order,stock=stock,operating_context=context,
+        latency_gate={'quote_stale':True},now=datetime.fromisoformat('2026-09-21T10:00:00+09:00'))
+    assert stale==order and fields['entry_split_order_policy_applied'] is False
+
+
+def test_operating_predecessor_state_is_bounded_and_source_bound(monkeypatch,tmp_path):
+    monkeypatch.setattr(split_plan,'REPORT_DIR',tmp_path)
+    quality={'tuning_input_allowed':True,'status':'PASS'}
+    monkeypatch.setattr(split_plan,'_source_quality_summary',lambda day:quality)
+    state=dict(through_date='2026-09-16',source_counts={'2026-09-16':2},rows=[],model_rows=[],
+        source_quality_bindings={'2026-09-16':split_plan._source_quality_contract_sha256(quality)})
+    state['sha256']=split_plan._canonical_sha256(state)
+    path=tmp_path/'entry_split_order_plan_2026-09-16.json'
+    path.write_text(json.dumps({'operating_economic_state':state}))
+    assert split_plan._previous_operating_state('2026-09-17')==state
+    quality['tuning_input_allowed']=False
+    with pytest.raises(ValueError,match='source_quality_changed'):split_plan._previous_operating_state('2026-09-17')
+
+
+def test_operating_late_model_availability_and_dispositions():
+    rows,models,census=_operating_economic_fixture()
+    models[-1]['completion_date']='2026-09-11'
+    ev=split_plan.evaluate_entry_split_operating_economics(rows,models,census,target_date='2026-09-17')
+    assert not ev['candidates'] and ev['status']=='insufficient_sample'
+    for disposition,expected in [('unsupported_scope','unsupported_scope'),('terminal_pending','pending'),('source_gap','source_gap')]:
+        row=rows[0].copy();row['arms']={key:{'status':disposition} for key in split_plan.QUANTITY_LEG_FOUR_ARM_IDS}
+        ev=split_plan.evaluate_entry_split_operating_economics([row],[],census,target_date='2026-09-17')
+        assert ev['status']==expected and ev['primary_operating_ev_pct'] is None
+
+
+def test_operating_model_change_cannot_reuse_candidate_holdout():
+    rows,models,census=_operating_economic_fixture()
+    first=split_plan.evaluate_entry_split_operating_economics(rows,models,census,target_date='2026-09-17')
+    assert first['candidates']
+    models[0]['net_error_budget_pct']=.001
+    changed=split_plan.evaluate_entry_split_operating_economics(rows,models,census,target_date='2026-09-17',consumed_holdouts=first['consumed_holdouts'])
+    assert changed['status']=='source_gap' and not changed['candidates']
+    assert any('already_consumed' in b for c in changed['cohort_checks'] for choice in c['candidates'] for b in choice['blockers'])
+
+
+def test_initial_seed_survives_baseline_fill_and_completed_cost_producer(monkeypatch,tmp_path):
+    from src.engine import sniper_state_handlers as handlers
+    from src.engine.scalping.strategy_owner_replay import entry_split_actual_economic_receipt
+    rows,_,_=_operating_economic_fixture();seed=rows[0]['seed']
+    order={'qty':10,'entry_split_initial_entry_seed':seed,'entry_split_initial_entry_lineage_conflict':False}
+    meta=handlers._split_order_meta_fields(order)
+    stock=handlers._entry_split_position_provenance([meta])
+    assert stock['entry_split_initial_entry_seed']==seed
+    from src.engine import sniper_execution_receipts as receipts
+    for keys in (receipts._BUY_RECEIPT_SNAPSHOT_KEYS,receipts._SELL_RECEIPT_SNAPSHOT_KEYS):
+        snapshot=receipts._normalized_receipt_snapshot(receipts._receipt_snapshot(stock,keys))
+        assert snapshot['entry_split_initial_entry_seed']==seed
+    stock.update(code='005930',strategy='SCALPING',realized_pnl_krw=177,sell_execution_receipt_economics_complete=True,sell_execution_receipt_quantity_contract_complete=True)
+    # Existing producer accepts KST wall-clock values; no UTC day shift at 20:00.
+    result=entry_split_actual_economic_receipt(stock,buy_price=1000,buy_qty=10,profit_rate=1.7654,
+        completion_at=datetime.fromisoformat('2026-09-11T20:00:00'))
+    assert result['cost_complete'] is True and result['completed_at'].endswith('+09:00')
+    assert result['completion_date']=='2026-09-11'
+    assert result['sha256']==split_plan._canonical_sha256({k:v for k,v in result.items() if k!='sha256'})
+    monkeypatch.setattr(split_plan,'DATA_DIR',tmp_path)
+    path=split_plan._real_post_sell_candidate_path('2026-09-11');path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({'fields':{'entry_split_actual_economics':repr(result)}})+'\n')
+    found,source=split_plan._bounded_actual_entry_outcomes('2026-09-11')
+    assert found==[result] and source['status']=='ready'
+    path.write_text('{"incomplete":')
+    found,source=split_plan._bounded_actual_entry_outcomes('2026-09-11')
+    assert found==[] and source['status']=='source_gap'
+
+
+def test_actual_pnl_is_reported_with_null_unsupported_model_error():
+    row=dict(episode_id='completed-partial',status='COMPLETED',origin='real',owner='main_scalping',cost_complete=True,
+        exact_lineage=True,pid_consumed=True,policy_applied=True,policy_version='v1',policy_sha256='1'*64,
+        scope_sha256='2'*64,fill_class='partial',completion_date='2026-09-17',net_pnl_krw=200.,profit_rate=.2,
+        reserve_krw_minutes=10.,budget_krw=100000.,capital_krw_minutes=100.,net_error_budget_pct=None)
+    result=split_plan.build_entry_split_post_apply_performance([row,row],target_date='2026-09-17')
+    assert result['groups'][0]['cumulative']['net_pnl_krw']==200.
+    assert result['groups'][0]['cumulative']['model_error']['mean_signed_budget_pct'] is None

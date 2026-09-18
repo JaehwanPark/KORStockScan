@@ -1604,7 +1604,7 @@ def _materialize_integrated_entry_execution_sizing_policy(
         or split_policy.get("policy_version") != required["split_policy_version"]
         or quantity_policy.get("formula_version")
         != paired_identity.get("candidate_quantity_policy_version")
-        or split_policy.get("policy_version")
+        or split_policy.get("selection_leg_template_version",split_policy.get("policy_version"))
         != paired_identity.get("candidate_leg_policy_version")
     ):
         return
@@ -9748,8 +9748,8 @@ def _build_entry_split_order_plan_family(*, target_date: str | None = None) -> d
         else {}
     )
     candidate_grid = (
-        payload.get("candidate_grid")
-        if isinstance(payload.get("candidate_grid"), list)
+        payload.get("operating_candidate_grid",payload.get("candidate_grid"))
+        if isinstance(payload.get("operating_candidate_grid",payload.get("candidate_grid")), list)
         else []
     )
     source_quality = (
@@ -9768,8 +9768,8 @@ def _build_entry_split_order_plan_family(*, target_date: str | None = None) -> d
         else {}
     )
     quantity_leg_four_arm = (
-        payload.get("quantity_leg_four_arm_evaluation")
-        if isinstance(payload.get("quantity_leg_four_arm_evaluation"), dict)
+        payload.get("operating_quantity_leg_four_arm_evaluation",payload.get("quantity_leg_four_arm_evaluation"))
+        if isinstance(payload.get("operating_quantity_leg_four_arm_evaluation",payload.get("quantity_leg_four_arm_evaluation")), dict)
         else {}
     )
     candidates = (
@@ -9977,6 +9977,8 @@ def _build_entry_split_order_plan_family(*, target_date: str | None = None) -> d
                 else "real_outcome_pending" if real_sample >= 20 else "none"
             ),
             "quantity_leg_four_arm_evaluation": quantity_leg_four_arm,
+            "economic_acceptance":payload.get("economic_acceptance"),
+            "post_apply_version_performance":payload.get("post_apply_version_performance"),
             "source_quality_blocked": bool(source_quality_blocked),
             "source_quality_status": source_quality.get("status"),
             "excluded_source_quality_event_count": input_summary.get(

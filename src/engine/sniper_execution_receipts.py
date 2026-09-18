@@ -24,6 +24,7 @@ from src.engine.scalping.opening_rotation import (
     shadow_ratchet_price as opening_rotation_shadow_ratchet_price,
 )
 from src.engine.scalping.entry_split_order_plan import (
+    ENTRY_SPLIT_ECONOMIC_RECEIPT_KEYS,
     recover_probe_submit_contract_for_fill,
     trip_probe_runtime_circuit,
     update_probe_runtime_bundle,
@@ -762,6 +763,7 @@ _GENERAL_ENTRY_MARGIN_POSITION_KEYS = (
     "general_entry_margin_scope",
 )
 _BUY_RECEIPT_SNAPSHOT_KEYS = (
+    *ENTRY_SPLIT_ECONOMIC_RECEIPT_KEYS,
     *_ENTRY_CANDIDATE_LIFECYCLE_SNAPSHOT_KEYS,
     *_MAIN_LIFECYCLE_SNAPSHOT_KEYS,
     *_BROKER_EXECUTION_PROVENANCE_KEYS,
@@ -810,6 +812,7 @@ _BUY_RECEIPT_SNAPSHOT_KEYS = (
     "swing_live_order_dry_run",
 )
 _SELL_RECEIPT_SNAPSHOT_KEYS = (
+    *ENTRY_SPLIT_ECONOMIC_RECEIPT_KEYS,
     *_ENTRY_CANDIDATE_LIFECYCLE_SNAPSHOT_KEYS,
     *_MAIN_LIFECYCLE_SNAPSHOT_KEYS,
     *_BROKER_EXECUTION_PROVENANCE_KEYS,

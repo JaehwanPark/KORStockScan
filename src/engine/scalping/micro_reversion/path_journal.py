@@ -377,6 +377,7 @@ class MarketDepthPoint:
     route_depth_totals: dict[str, dict[str, int | None]]
     realtime_type: str = "0D"
     schema: str = MARKET_DEPTH_SCHEMA
+    recorded_inputs: dict | None = None
 
     def __post_init__(self) -> None:
         symbol = normalize_symbol(self.symbol)
@@ -466,6 +467,9 @@ class MarketDepthPoint:
                     )
         object.__setattr__(self, "symbol", symbol)
         object.__setattr__(self, "venue", venue)
+        if self.recorded_inputs is None:
+            from src.engine.scalping.avg_down_replay_capture import recorded_market_inputs
+            object.__setattr__(self,"recorded_inputs",recorded_market_inputs(symbol,cutoff_ts=exchange_ts.timestamp()))
 
     def as_dict(self) -> dict[str, Any]:
         payload = asdict(self)

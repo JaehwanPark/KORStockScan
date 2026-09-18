@@ -612,6 +612,7 @@ def compose_entry_execution_sizing_plan(
             profile_bps=replay_context.get("profile_bps"),
             sizing_context=replay_context.get('sizing_context'),
             candidate_leg_plan=replay_context.get('candidate_leg_plan'),
+            operating_context=replay_context.get('operating_context'),
             anchor_price=(orders[0].get("entry_price_current_price") if orders else None),
         )
     return decorated_orders, {

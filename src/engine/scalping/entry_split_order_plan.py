@@ -3820,6 +3820,7 @@ def quantity_leg_promotion_evidence_valid(evaluation: object) -> bool:
 def quantity_leg_policy_selection_evidence_valid(policy: dict[str, Any]) -> bool:
     """Preserve frozen legacy policies; validate newly published selection proof."""
     evidence = policy.get("quantity_leg_selection_evidence")
+    split_policy = {}
     if str(policy.get("source_date") or "") < "2026-09-17" and not evidence:
         return True
     if str(policy.get("source_date") or "") >= "2026-09-17":
@@ -3843,7 +3844,7 @@ def quantity_leg_policy_selection_evidence_valid(policy: dict[str, Any]) -> bool
     return bool(
         isinstance(identity, dict)
         and identity == policy.get("paired_policy_identity")
-        and identity.get("candidate_leg_policy_version") == policy.get("split_policy_version")
+        and identity.get("candidate_leg_policy_version") == split_policy.get("selection_leg_template_version",policy.get("split_policy_version"))
         and policy.get("selected_arm") == QUANTITY_LEG_FOUR_ARM_IDS[-1]
         and policy.get("promotion_gate") == evidence.get("promotion_gate")
         and evidence["chronological_partitions"]["holdout"]["source_dates"][-1]
@@ -4304,6 +4305,669 @@ def build_quantity_leg_four_arm_evaluation(
     }
 
 
+
+# Observation only: shared with existing durable BUY/SELL receipt snapshots.
+ENTRY_SPLIT_ECONOMIC_RECEIPT_KEYS = (
+    "entry_split_initial_entry_seed","entry_split_initial_entry_lineage_conflict",
+    "entry_split_order_policy_sha256","entry_split_order_runtime_pid","entry_split_order_runtime_consumed",
+    "entry_split_order_policy_applied","entry_split_order_policy_version","entry_split_order_bucket",
+    "entry_split_order_policy_mode","entry_split_order_policy_variant_id","entry_split_order_variant_id",
+    "entry_split_order_leg_count","entry_split_order_price_offsets_ticks","entry_split_order_qty_weight_min",
+    "entry_split_order_qty_weight_max","entry_split_order_runtime_default_policy_applied",
+    "entry_split_order_operator_fallback_authorized",
+)
+
+
+OPERATING_SELECTION_CONTRACT = "entry_split_operating_paired_selection_v1"
+
+
+def _economic_metrics(rows, arm_id):
+    arms = [row["arms"][arm_id] for row in rows]
+    if not arms:
+        return {key: None for key in ("ev_pct", "net_pnl_krw", "p10", "es10", "worst",
+            "capital_krw_minutes", "reserve_krw_minutes", "fill_participation", "positive_frequency", "capital_efficiency")}
+    returns = sorted(a["net_pnl_krw"] / r["budget_krw"] * 100 for a, r in zip(arms, rows))
+    capital = sum(a["capital_krw_minutes"] + a["reserve_krw_minutes"] for a in arms)
+    pnl = sum(a["net_pnl_krw"] for a in arms)
+    n = max(1, math.ceil(len(arms) * .1))
+    return dict(ev_pct=pnl / sum(r["budget_krw"] for r in rows) * 100,
+        equal_weight_avg_profit_pct=mean(returns), net_pnl_krw=pnl,
+        p10=returns[n-1], es10=mean(returns[:n]), worst=returns[0],
+        capital_krw_minutes=sum(a["capital_krw_minutes"] for a in arms),
+        reserve_krw_minutes=sum(a["reserve_krw_minutes"] for a in arms),
+        fill_participation=mean(a["fill_participation_rate"] for a in arms),
+        positive_frequency=sum(a["net_pnl_krw"] > 0 for a in arms) / len(arms),
+        capital_efficiency=pnl / capital if capital > 0 else None)
+
+
+def evaluate_entry_split_operating_economics(rows, model_rows, source_counts, *, target_date, consumed_holdouts=None):
+    """Fit once on actual calibration errors, then validate on later dates.
+
+    Candidate calibration/holdout are strictly AFTER model holdout. All metrics
+    are recomputed from immutable witnesses by producer and policy consumers.
+    """
+    from src.engine.scalping.strategy_owner_replay import ENTRY_MODEL_SELECTION
+    numeric = lambda x: type(x) in (int, float) and math.isfinite(x)
+    output = dict(contract=OPERATING_SELECTION_CONTRACT, status="source_gap",
+        valid_no_edge=False, primary_operating_ev_pct=None, robust_paired_delta_ev_lower_bound_pct=None,
+        source_date=target_date, candidates=[], model_scopes=[], cohort_checks=[],
+        source_counts=source_counts, input_rows=rows, model_rows=model_rows,
+        source_gap_owner="entry_execution_sizing_plan->owner_custody_registry->strategy_owner_replay",
+        closure_test="same frozen submitted-order scope; independent completed-cost model calibration/holdout followed by complete paired candidate calibration/holdout",
+        model_dispositions=dict(Counter(r.get("status","source_gap") for r in model_rows)),
+        input_dispositions=dict(Counter(a.get("status","source_gap") for r in rows for a in r.get("arms",{}).values())),
+        consumed_holdouts=dict(consumed_holdouts or {}), blockers=[],
+        metric_role="primary_ev", decision_authority="next_preopen_bounded_entry_split_policy",
+        sample_floor={"actual_model":20, "paired_complete":30, "coverage":.8},
+        window_policy="frozen_actual_model_calibration_then_model_holdout_then_candidate_calibration_then_latest_source_day_holdout",
+        primary_decision_metric="same_frozen_budget_net_ev_and_error_stress_adjusted_paired_lower_bound",
+        lower_bound_method="observed_minimum_stressed_paired_net_minus_both_arm_empirical_error_envelopes_not_statistical_confidence_bound",
+        source_quality_gate="exact_plan_order_terminal_cost_policy_scope_and_chronological_witnesses",
+        forbidden_uses=["actual_profit_claim_from_cf", "increase_quantity_or_budget", "actual_sell_reused_for_cf_exit", "guard_bypass"])
+    try:
+        if any(date.fromisoformat(day).isoformat()!=day or day < "2026-06-05" or day > target_date
+               or type(n) is not int or n < 0 for day,n in source_counts.items()):
+            raise ValueError("opportunity_source_census_invalid")
+        indexed, conflicts = {}, set()
+        for row in rows:
+            key=row["attempt_id"]
+            if key in indexed and indexed[key]!=row:conflicts.add(key)
+            indexed[key]=row
+        retained=[r for key,r in indexed.items() if key not in conflicts]
+        scopes=sorted({r["scope_sha256"] for r in retained})
+        for scope in scopes:
+            cohort=[r for r in retained if r["scope_sha256"]==scope]
+            actual_index, actual_conflicts={},set()
+            for r in model_rows:
+                if r.get("scope_sha256")!=scope:continue
+                key=r.get("episode_id")
+                if not key:continue
+                if key in actual_index and actual_index[key]!=r:actual_conflicts.add(key)
+                actual_index[key]=r
+            actual=[r for key,r in actual_index.items() if key not in actual_conflicts
+                and r.get("status") in {"COMPLETED","ORDER_NO_FILL"} and r.get("origin")=="real"
+                and r.get("cost_complete") is True and r.get("exact_lineage") is True
+                and r.get("owner")=="main_scalping"
+                and "2026-06-05" <= str(r.get("source_date")) <= target_date
+                and all(numeric(r.get(k)) for k in ("vwap_error_bps", "receipt_clock_error_sec", "quantity_error",
+                    "net_error_budget_pct", "capital_error_minutes", "reserve_error_minutes"))]
+            declared=[r for key,r in actual_index.items() if key not in actual_conflicts
+                and "2026-06-05"<=str(r.get("source_date"))<=target_date]
+            model_days=sorted({r["source_date"] for r in declared})
+            check=dict(scope_sha256=scope, status="insufficient_sample", blockers=[], candidates=[])
+            output["cohort_checks"].append(check)
+            if any(r.get("false_fill") is True or r.get("missed_fill") is True
+                or r.get("quantity_error") not in (None,0) for r in declared):
+                check.update(status="model_validation_failed",blockers=["known_incumbent_false_missed_or_quantity_fill_failure"]);continue
+            if len(model_days)<2 or len(actual)<20:
+                check["blockers"].append("independent_actual_model_sample_floor");continue
+            # Earliest fixed chronological source days establish the model; later
+            # candidate dates can never refit the calibration tolerance.
+            cal=[r for r in actual if r["source_date"]==model_days[0]]
+            held=[r for r in actual if r["source_date"]==model_days[1]]
+            if len(cal)+len(held)<20:
+                check["blockers"].append("independent_actual_model_sample_floor");continue
+            coverage={day:sum(r["source_date"]==day for r in cal+held)/sum(r["source_date"]==day for r in declared) for day in model_days[:2]}
+            if any(value<.8 for value in coverage.values()):
+                check.update(status="source_gap",blockers=["actual_model_scope_coverage_below_owner_floor"]);continue
+            dimensions=("vwap_error_bps", "receipt_clock_error_sec", "quantity_error", "net_error_budget_pct", "capital_error_minutes", "reserve_error_minutes")
+            tolerance={k:max(abs(r[k]) for r in cal) for k in dimensions}
+            model=dict(contract=ENTRY_MODEL_SELECTION, scope_sha256=scope,
+                calibration_dates=[model_days[0]], holdout_dates=[model_days[1]],
+                calibration_attempt_count=len(cal), holdout_attempt_count=len(held),
+                available_after_date=max(str(r.get("completion_date") or r["source_date"]) for r in cal+held),
+                tolerance=tolerance, tolerance_basis="empirical_max_absolute_actual_calibration_error_frozen_before_holdout",
+                sample_floor=20, coverage=coverage, actual_rows_sha256=_canonical_sha256(cal+held),
+                validated=not any(r.get("false_fill") is not False or r.get("missed_fill") is not False
+                    or r["quantity_error"]!=0 or any(abs(r[k]) > tolerance[k]+1e-12 for k in dimensions)
+                    for r in held),
+                optimistic_net_error_budget_pct=max([0.]+[r["net_error_budget_pct"] for r in held]),
+                calibration_rows=cal, holdout_rows=held)
+            # Calibration must also satisfy exact quantity/no invented fills.
+            model["validated"] &= not any(r.get("false_fill") is not False or r.get("missed_fill") is not False or r["quantity_error"]!=0 for r in cal)
+            model["sha256"]=_canonical_sha256(model);output["model_scopes"].append(model)
+            if not model["validated"]:
+                check.update(status="model_validation_failed",blockers=["independent_incumbent_fidelity_failed"]);continue
+            model_episodes={r["episode_id"] for r in cal+held}
+            availability=max(str(r.get("completion_date") or r["source_date"]) for r in cal+held)
+            candidate_days=sorted(day for day,n in source_counts.items() if n and day>availability)
+            if len(candidate_days)<2:
+                check["blockers"].append("independent_candidate_holdout_missing");continue
+            latest=candidate_days[-1]
+            eligible=sum(source_counts[d] for d in candidate_days)
+            usable=[]
+            for r in cohort:
+                if r["source_date"] not in candidate_days or r.get("episode_id") in model_episodes:continue
+                if (r.get("origin")!="counterfactual" or r.get("owner")!="main_scalping"
+                    or r.get("sha256")!=_canonical_sha256({k:v for k,v in r.items() if k!="sha256"})
+                    or not numeric(r.get("budget_krw")) or r["budget_krw"]<=0
+                    or set(r.get("arms",{}))!=set(QUANTITY_LEG_FOUR_ARM_IDS)):
+                    continue
+                declared_template=_entry_operating_input_rows([dict(seed=r.get("seed") or {},operating_arms=r["arms"])])
+                valid=bool(declared_template and declared_template[0]["candidate_template"]==r["candidate_template"]
+                    and declared_template[0]["scope_sha256"]==scope and declared_template[0]["budget_krw"]==r["budget_krw"])
+                for arm in r["arms"].values():
+                    if (arm.get("status")!="completed_source_only" or arm.get("actual_fill_evidence") is not False
+                        or arm.get("requested_qty")!=r.get("total_qty") or arm.get("budget_krw")!=r["budget_krw"]
+                        or any(arm.get(k) is not v for k,v in {"actual_order_submitted":False,"broker_order_forbidden":True,"runtime_effect":False,"allowed_runtime_apply":False}.items())
+                        or arm.get("cost_policy_version")!=r["seed"]["operating_contract"].get("cost_policy_version")
+                        or arm.get("cost_provenance")!=r["seed"]["operating_contract"].get("cost_provenance")
+                        or arm.get("exit_policy_sha256")!=r["seed"]["operating_contract"].get("exit_policy_version")
+                        or arm.get("contract_sha256")!=r["seed"]["operating_contract"].get("sha256")
+                        or not _valid_generation_id(arm.get("terminal_evidence_sha256"))
+                        or any(not numeric(arm.get(k)) for k in ("net_pnl_krw", "stress_net_pnl_krw", "capital_krw_minutes", "reserve_krw_minutes", "fill_participation_rate"))
+                        or arm["capital_krw_minutes"]<0 or arm["reserve_krw_minutes"]<0
+                        or not 0<=arm["fill_participation_rate"]<=1
+                        or arm.get("sha256")!=_canonical_sha256({k:v for k,v in arm.items() if k!="sha256"})):
+                        valid=False;break
+                if valid:usable.append(r)
+            if not usable and eligible:
+                dispositions=Counter(a.get("status","source_gap") for r in cohort for a in r.get("arms",{}).values())
+                check.update(status="unsupported_scope" if dispositions.get("unsupported_scope") else "pending" if dispositions.get("terminal_pending") else "source_gap",blockers=["paired_operating_support_or_contract_coverage_missing"])
+                continue
+            checks={}
+            # One existing quantity-fixed hypothesis per bucket, selected only on
+            # calibration; no second candidate is tried after holdout rejection.
+            for bucket in sorted({r["context_bucket"] for r in usable}):
+                sample=[r for r in usable if r["context_bucket"]==bucket]
+                calibration=[r for r in sample if r["source_date"]<latest]
+                holdout=[r for r in sample if r["source_date"]==latest]
+                if len(sample)<30 or len(usable)/eligible<.8 or not calibration or not holdout:
+                    checks[bucket]=dict(status="source_gap" if eligible and len(usable)/eligible<.8 else "insufficient_sample",blockers=["paired_sample_coverage_or_latest_holdout_floor"]);continue
+                identity={_canonical_sha256(r["candidate_template"]) for r in sample}
+                if len(identity)!=1:
+                    checks[bucket]=dict(status="source_gap",blockers=["paired_candidate_template_conflict"]);continue
+                partitions={}
+                for name,half in (("calibration",calibration),("holdout",holdout)):
+                    i=_economic_metrics(half,QUANTITY_LEG_FOUR_ARM_IDS[0]);c=_economic_metrics(half,QUANTITY_LEG_FOUR_ARM_IDS[2])
+                    deltas=[(r["arms"][QUANTITY_LEG_FOUR_ARM_IDS[2]]["net_pnl_krw"]-r["arms"][QUANTITY_LEG_FOUR_ARM_IDS[0]]["net_pnl_krw"])/r["budget_krw"]*100 for r in half]
+                    stress=[(r["arms"][QUANTITY_LEG_FOUR_ARM_IDS[2]]["stress_net_pnl_krw"]-r["arms"][QUANTITY_LEG_FOUR_ARM_IDS[0]]["net_pnl_krw"])/r["budget_krw"]*100 for r in half]
+                    error=2*max(model["optimistic_net_error_budget_pct"],model["tolerance"]["net_error_budget_pct"])
+                    # Conservative observed paired envelope, not a confidence
+                    # interval or a proof that incumbent errors cover new scopes.
+                    lower=min(deltas+stress)-error
+                    blockers=[]
+                    for field,predicate in {"ev_pct":lambda c,i:c>=.1 and c>i,
+                        "net_pnl_krw":lambda c,i:c>i, "p10":lambda c,i:c>=i,
+                        "es10":lambda c,i:c>=i, "worst":lambda c,i:c>=i,
+                        "positive_frequency":lambda c,i:c>=i,
+                        "fill_participation":lambda c,i:c>=i-.05,
+                        "capital_efficiency":lambda c,i:c>=i and c>0}.items():
+                        if c[field] is None or i[field] is None or not predicate(c[field],i[field]):blockers.append(field)
+                    if lower<=0:blockers.append("robust_paired_lower_bound_nonpositive")
+                    partitions[name]=dict(source_dates=sorted({r["source_date"] for r in half}), attempt_count=len(half),
+                        incumbent=i,candidate=c,paired_delta_ev_pct=mean(deltas), stress_paired_delta_ev_pct=mean(stress),
+                        robust_paired_delta_ev_lower_bound_pct=lower, model_error_penalty_pct=error, blockers=blockers)
+                key=_canonical_sha256([scope,bucket,next(iter(identity)),latest])
+                witness=_canonical_sha256([model["sha256"],sample])
+                previous=output["consumed_holdouts"].get(key)
+                blockers=list(partitions["calibration"]["blockers"])
+                if not blockers:
+                    blockers += ["holdout:"+b for b in partitions["holdout"]["blockers"]]
+                    if previous is not None and previous!=witness:blockers.append("candidate_holdout_already_consumed_with_different_input")
+                    output["consumed_holdouts"][key]=witness
+                status="positive_candidate" if not blockers else "valid_no_edge"
+                if any("consumed" in b for b in blockers):status="source_gap"
+                candidate=dict(scope_sha256=scope,context_bucket=bucket,status=status,
+                    model_contract_sha256=model["sha256"],partitions=partitions,blockers=blockers,
+                    sample_count=len(sample),eligible_attempt_count=eligible,coverage=len(usable)/eligible,
+                    selected_arm=QUANTITY_LEG_FOUR_ARM_IDS[2],candidate_template=sample[0]["candidate_template"],
+                    validated_attempt_sha256s=[r["sha256"] for r in sample],holdout_key=key)
+                candidate["sha256"]=_canonical_sha256(candidate);checks[bucket]=candidate
+                if not blockers:output["candidates"].append(candidate)
+            check["candidates"]=list(checks.values())
+            states={c["status"] for c in checks.values()}
+            check["status"]="positive_candidate" if "positive_candidate" in states else "source_gap" if "source_gap" in states else "insufficient_sample" if "insufficient_sample" in states or not states else "valid_no_edge"
+        if output["candidates"]:
+            output["status"]="positive_candidate"
+            output["primary_operating_ev_pct"]=min(c["partitions"]["holdout"]["candidate"]["ev_pct"] for c in output["candidates"])
+            output["robust_paired_delta_ev_lower_bound_pct"]=min(c["partitions"]["holdout"]["robust_paired_delta_ev_lower_bound_pct"] for c in output["candidates"])
+        elif output["cohort_checks"]:
+            states={c["status"] for c in output["cohort_checks"]}
+            output["status"]="model_validation_failed" if "model_validation_failed" in states else "source_gap" if "source_gap" in states else "unsupported_scope" if "unsupported_scope" in states else "pending" if "pending" in states else "insufficient_sample" if "insufficient_sample" in states else "valid_no_edge"
+            output["valid_no_edge"]=states=={"valid_no_edge"}
+        measured=[c for check in output["cohort_checks"] for c in check.get("candidates",[]) if c.get("partitions")]
+        if measured and not output["candidates"]:
+            output["primary_operating_ev_pct"]=min(c["partitions"]["holdout"]["candidate"]["ev_pct"] for c in measured)
+            output["robust_paired_delta_ev_lower_bound_pct"]=min(c["partitions"]["holdout"]["robust_paired_delta_ev_lower_bound_pct"] for c in measured)
+        if conflicts:output["blockers"].append("conflicting_attempt_quarantined")
+        output["blockers"]+=sorted({b for c in output["cohort_checks"] for b in c.get("blockers",[])})
+        if not retained:output["blockers"].append("operating_paired_source_missing")
+        if not output["candidates"] and output["status"]=="insufficient_sample":
+            dispositions=output["input_dispositions"]
+            if dispositions.get("source_gap"):output["status"]="source_gap"
+            elif dispositions.get("unsupported_scope"):output["status"]="unsupported_scope"
+            elif dispositions.get("terminal_pending") or output["model_dispositions"].get("terminal_pending"):output["status"]="pending"
+    except (KeyError,ValueError,TypeError,OverflowError) as exc:
+        output.update(status="source_gap",candidates=[],valid_no_edge=False)
+        output["blockers"].append("operating_contract_invalid:"+str(exc))
+    output["sha256"]=_canonical_sha256(output)
+    return output
+
+
+def build_entry_split_post_apply_performance(actual_rows, *, target_date, rolling_days=20):
+    """One real completed episode per applied version/scope; no modeled uplift."""
+    unique, conflicts={},set()
+    for row in actual_rows:
+        identity=str(row.get("episode_id") or "")
+        if not identity:continue
+        if identity in unique and unique[identity]!=row:conflicts.add(identity)
+        unique[identity]=row
+    numeric=lambda x:type(x) in (int,float) and math.isfinite(x)
+    valid=[r for key,r in unique.items() if key not in conflicts and r.get("status")=="COMPLETED"
+        and r.get("origin")=="real" and r.get("owner")=="main_scalping" and r.get("cost_complete") is True
+        and r.get("exact_lineage") is True and r.get("pid_consumed") is True and r.get("policy_applied") is True
+        and r.get("policy_version") and re.fullmatch(r"[a-f0-9]{64}",str(r.get("policy_sha256") or ""))
+        and "2026-06-05"<=str(r.get("completion_date"))<=target_date
+        and all(numeric(r.get(k)) for k in ("net_pnl_krw","profit_rate","budget_krw","capital_krw_minutes","reserve_krw_minutes"))
+        and r["budget_krw"]>0 and r["capital_krw_minutes"]>=0 and r["reserve_krw_minutes"]>=0]
+    dates=sorted({r["completion_date"] for r in valid})
+    rolling=set(dates[-rolling_days:]);groups=[]
+    for key in sorted({(r["policy_version"],r["policy_sha256"],r["scope_sha256"],r.get("fill_class")) for r in valid}):
+        sample=[r for r in valid if (r["policy_version"],r["policy_sha256"],r["scope_sha256"],r.get("fill_class"))==key]
+        def metrics(half):
+            if not half:return dict(completed_episodes=0,net_pnl_krw=None,cost_adjusted_ev_pct=None,tail=None,exposure=None,model_error=None)
+            values=sorted(r["profit_rate"] for r in half);n=max(1,math.ceil(len(values)*.1))
+            return dict(completed_episodes=len(half),net_pnl_krw=sum(r["net_pnl_krw"] for r in half),
+                cost_adjusted_ev_pct=sum(r["net_pnl_krw"] for r in half)/sum(r["budget_krw"] for r in half)*100,
+                equal_weight_avg_profit_pct=mean(values),tail=dict(p10=values[n-1],es10=mean(values[:n]),worst=values[0]),
+                exposure=dict(capital_krw_minutes=sum(r["capital_krw_minutes"] for r in half),reserve_krw_minutes=sum(r["reserve_krw_minutes"] for r in half)),
+                model_error=dict(comparable_episodes=sum(numeric(r.get("net_error_budget_pct")) for r in half),
+                    mean_signed_budget_pct=mean(r["net_error_budget_pct"] for r in half if numeric(r.get("net_error_budget_pct"))) if any(numeric(r.get("net_error_budget_pct")) for r in half) else None,
+                    maximum_absolute_budget_pct=max(abs(r["net_error_budget_pct"]) for r in half if numeric(r.get("net_error_budget_pct"))) if any(numeric(r.get("net_error_budget_pct")) for r in half) else None))
+        groups.append(dict(policy_version=key[0],policy_sha256=key[1],scope_sha256=key[2],fill_class=key[3],
+            cumulative=metrics(sample),rolling=metrics([r for r in sample if r["completion_date"] in rolling])))
+    return dict(status="observed" if valid else "waiting_natural_applied_completed_cost_evidence",
+        groups=groups,quarantined_episodes=sorted(conflicts),rolling_completed_source_days=rolling_days,
+        model_delta_ev_is_actual_profit=False,new_incremental_profit_claimed=False)
+
+
+def _entry_operating_scope(seed):
+    from src.engine.lifecycle.avg_down_replay import replay_policy_cohort_digest
+    context=seed.get("operating_contract") or {}
+    snapshot=dict(context.get("policy_snapshot") or {})
+    snapshot["environment"]={k:v for k,v in snapshot.get("environment",{}).items()
+        if not k.startswith(("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_","KORSTOCKSCAN_ENTRY_EXECUTION_SIZING_POLICY_"))}
+    return _canonical_sha256({"exit_cohort":context.get("exit_cohort_digest") or replay_policy_cohort_digest(snapshot),
+        "cost_version":context.get("cost_policy_version"),"model":"native_full_depth_no_passive_queue_v1",
+        "venue":seed.get("effective_venue"),"session":seed.get("session_bucket"),
+        "order_types":sorted({x.get("order_type_code") for x in seed.get("legs",[])}),
+        "price_policy":seed.get("entry_price_policy_sha256"),
+        "model_implementation":context.get("model_implementation_sha256")})
+
+
+def _compact_operating_seed(seed):
+    """Retain economic witnesses; exact snapshots stay in dated native generations.
+
+    This does not replace a frozen interpreter input. Incremental model joins
+    need the immutable scope/cost/quantity and incumbent output, not another copy
+    of the same full rule blobs for every report section and historical attempt.
+    """
+    context=seed.get("operating_contract") or {}
+    if not context or context.get("exit_cohort_digest"):return seed
+    from src.engine.lifecycle.avg_down_replay import replay_policy_cohort_digest
+    snapshot=dict(context.get("policy_snapshot") or {})
+    snapshot["environment"]={k:v for k,v in snapshot.get("environment",{}).items()
+        if not k.startswith(("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_","KORSTOCKSCAN_ENTRY_EXECUTION_SIZING_POLICY_"))}
+    witness={k:v for k,v in context.items() if k not in {"policy_snapshot","initial_policy_state"}}
+    witness["exit_cohort_digest"]=replay_policy_cohort_digest(snapshot)
+    witness["context_bucket"]=context.get("context_bucket") or _context_bucket((context.get("initial_policy_state") or {}).get("stock") or {})
+    return {**seed,"operating_contract":witness,"frozen_interpreter_input_role":"original_atomic_seed_and_dated_native_generation_only"}
+
+
+def _entry_operating_input_rows(replays):
+    rows=[]
+    from src.trading.order.split_execution_math import split_qty
+    for replay in replays:
+        seed=replay.get("seed") or {};arms=replay.get("operating_arms") or {}
+        if not seed.get("operating_contract") or not arms:continue
+        context=seed["operating_contract"];legs=seed.get("candidate_legs") or seed["legs"]
+        n=len(legs);base=seed["legs"][0]["price"]
+        offsets=[];price=base
+        # Only the existing 0/1/2-tick menu is publishable; the price binder
+        # remains the sole numeric owner in the future invocation.
+        for x in legs:
+            offset=next((i for i in range(3) if clamp_price_to_tick(base-i*_tick_size(base))==x["price"]),None)
+            if offset is None:break
+            offsets.append(offset)
+        if len(offsets)!=n or [x["qty"] for x in legs]!=split_qty(seed["total_qty"],n,min(1/n,PASSIVE_CENTER_MAX_FIRST_WEIGHT)):continue
+        template=dict(leg_count=n,price_offsets_ticks=offsets,qty_weight_min=min(1/n,PASSIVE_CENTER_MAX_FIRST_WEIGHT),qty_weight_max=min(1/n,PASSIVE_CENTER_MAX_FIRST_WEIGHT),
+            urgency_score=0.,passive_edge_score=0.,policy_mode=POLICY_MODE_REAL_PRIMARY_EV,
+            candidate_leg_policy_version=seed["candidate_leg_policy_version"],
+            effective_venue=seed["effective_venue"],session_bucket=seed["session_bucket"],
+            order_types=[x.get("order_type_code") for x in legs])
+        row=dict(attempt_id=seed["seed_sha256"],episode_id=seed["plan_sha256"],
+            plan_sha256=seed["plan_sha256"],source_date=seed["source_date"],scope_sha256=_entry_operating_scope(seed),
+            context_bucket=context.get("context_bucket") or _context_bucket((context.get("initial_policy_state") or {}).get("stock") or {}),
+            total_qty=seed["total_qty"],budget_krw=context["budget_krw"],arms=arms,
+            candidate_template=template,origin="counterfactual",owner="main_scalping",
+            seed=_compact_operating_seed(seed),native_replay_sha256=replay.get("replay_sha256"))
+        row["sha256"]=_canonical_sha256(row);rows.append(row)
+    return rows
+
+
+def _bounded_actual_entry_outcomes(target_date):
+    try:return _read_bounded_actual_entry_outcomes(target_date)
+    except (OSError,ValueError,TypeError,SyntaxError) as exc:
+        return [],{"status":"source_gap","path":str(_real_post_sell_candidate_path(target_date)),"reason":str(exc),"sha256":None,
+            "owner":"post_sell_completed_cost_receipt","closure_test":"sealed bounded original receipt parse/hash/lineage"}
+
+
+def _read_bounded_actual_entry_outcomes(target_date):
+    path=existing_or_gzip_path(_real_post_sell_candidate_path(target_date))
+    if not path.is_file():return [],{"path":str(path),"status":"missing","sha256":None}
+    before=path.stat()
+    if path.is_symlink() or before.st_size>64*1024*1024:return [],{"path":str(path),"status":"bounded_source_required","sha256":None}
+    rows=[];hasher=hashlib.sha256();size=0
+    with open_text_auto(path) as handle:
+        for line in handle:
+            size+=len(line.encode());hasher.update(line.encode())
+            if size>64*1024*1024 or not line.endswith("\n"):raise ValueError("actual_entry_outcome_source_unbounded_or_partial")
+            row=_event_fields(json.loads(line))
+            value=row.get("entry_split_actual_economics")
+            if isinstance(value,str):
+                import ast
+                if len(value)>2*1024*1024:raise ValueError("actual_entry_receipt_too_large")
+                try:value=json.loads(value)
+                except ValueError:value=ast.literal_eval(value)
+            if isinstance(value,dict):rows.append(value)
+    after=path.stat()
+    if (before.st_ino,before.st_size,before.st_mtime_ns)!=(after.st_ino,after.st_size,after.st_mtime_ns):raise ValueError("actual_entry_outcome_source_changed")
+    return rows,{"path":str(path.resolve()),"status":"ready","sha256":hasher.hexdigest()}
+
+
+
+def _actual_entry_capital(diagnostic,completed_at):
+    """Integrate signed cumulative fills and outstanding reserve independently."""
+    terminal=datetime.fromisoformat(completed_at)
+    if terminal.utcoffset() is None:raise ValueError("actual_completion_clock_missing")
+    capital=reserve=0.
+    for leg in diagnostic.get("actual_journal_legs") or []:
+        qty=leg["quantity"];price=leg["submitted_price"]
+        if type(qty) is not int or qty<=0 or type(price) not in (int,float) or price<=0:raise ValueError("actual_reserve_price_or_quantity_missing")
+        clock=datetime.fromisoformat(leg["submitted_at"])
+        if clock.utcoffset() is None:raise ValueError("actual_submit_clock_missing")
+        previous_qty=0;previous_amount=0.;seen=set()
+        for fill in leg["fills"]:
+            identity=fill.get("event_hash")
+            if identity in seen:continue
+            seen.add(identity)
+            at=datetime.fromisoformat(fill["observed_at_kst"])
+            cumulative=fill["filled_qty"];amount=fill["fill_amount"]
+            if at.utcoffset() is None or at<clock or at>terminal or cumulative<previous_qty or cumulative>qty or amount<previous_amount:raise ValueError("actual_fill_conservation_or_clock_invalid")
+            reserve+=(qty-previous_qty)*price*(at-clock).total_seconds()/60
+            capital+=(amount-previous_amount)*(terminal-at).total_seconds()/60
+            clock=at;previous_qty=cumulative;previous_amount=amount
+        ended=datetime.fromisoformat(leg["terminal_at"])
+        if ended.utcoffset() is None or ended<clock or ended>terminal:raise ValueError("actual_order_terminal_clock_invalid")
+        reserve+=(qty-previous_qty)*price*(ended-clock).total_seconds()/60
+    if not diagnostic.get("actual_journal_legs"):raise ValueError("actual_capital_journal_missing")
+    return capital,reserve
+
+def _attach_operating_model_outcomes(validation,replays,actual_outcomes):
+    replay_index={};replay_conflicts=set()
+    for replay in replays:
+        key=(replay.get("seed") or {}).get("plan_sha256")
+        if key in replay_index and replay_index[key]!=replay:replay_conflicts.add(key)
+        replay_index[key]=replay
+    actual_index={};conflicts=set(replay_conflicts)
+    for actual in actual_outcomes:
+        key=actual.get("plan_sha256")
+        if key in actual_index and actual_index[key]!=actual:conflicts.add(key)
+        actual_index[key]=actual
+    model_rows=[]
+    for diagnostic in validation["rows"]:
+        plan=(diagnostic.get("scope") or {}).get("plan_sha256")
+        replay=replay_index.get(plan) or {};seed=replay.get("seed") or {}
+        actual=actual_index.get(plan) or {};arm=(replay.get("operating_arms") or {}).get(QUANTITY_LEG_FOUR_ARM_IDS[0]) or {}
+        if (seed.get("operating_contract") and diagnostic.get("actual_filled_qty")==0
+            and diagnostic.get("actual_journal_legs") and arm.get("status")=="completed_source_only"):
+            try:
+                completed=max(x["terminal_at"] for x in diagnostic["actual_journal_legs"])
+                capital,reserve=_actual_entry_capital(diagnostic,completed)
+                clock=abs((datetime.fromisoformat(completed)-datetime.fromisoformat(seed["observed_at"])).total_seconds()-seed["research_entry_ttl_sec"])
+                model_rows.append(dict(episode_id="no-fill:"+plan,scope_sha256=_entry_operating_scope(seed),source_date=seed["source_date"],
+                    completion_date=completed[:10],completed_at=completed,status="ORDER_NO_FILL",origin="real",owner="main_scalping",
+                    cost_complete=True,exact_lineage=True,vwap_error_bps=0.,receipt_clock_error_sec=clock,
+                    quantity_error=diagnostic["modeled_filled_qty"],false_fill=diagnostic["false_fill"],missed_fill=False,
+                    net_error_budget_pct=arm["net_pnl_krw"]/seed["operating_contract"]["budget_krw"]*100,
+                    capital_error_minutes=arm["capital_krw_minutes"]-capital,reserve_error_minutes=arm["reserve_krw_minutes"]-reserve,
+                    net_pnl_krw=0.,profit_rate=None,cost_provenance="verified_zero_fill_zero_inventory_no_completed_trade_profit_claim"))
+                continue
+            except (KeyError,ValueError,TypeError):pass
+        if (not seed or not actual or plan in conflicts
+            or actual.get("sha256")!=_canonical_sha256({k:v for k,v in actual.items() if k!="sha256"})
+            or actual.get("source_date")!=seed.get("source_date") or actual.get("scope_sha256")!=_entry_operating_scope(seed)
+            or actual.get("entry_qty")!=diagnostic.get("actual_filled_qty")
+            or actual.get("cost_complete") is not True or actual.get("exact_lineage") is not True
+            or actual.get("origin")!="real" or actual.get("owner")!="main_scalping"
+            or actual.get("status")!="COMPLETED" or actual.get("cost_policy_version")!=seed.get("operating_contract",{}).get("cost_policy_version")
+            or actual.get("budget_krw")!=seed.get("operating_contract",{}).get("budget_krw")):
+            if seed.get("operating_contract"):
+                model_rows.append(dict(episode_id=actual.get("episode_id") or plan,scope_sha256=_entry_operating_scope(seed),
+                    source_date=seed["source_date"],status="terminal_pending" if not actual else "source_gap",
+                    blocker="completed_original_cost_receipt_or_supported_incumbent_join_missing",
+                    false_fill=diagnostic.get("false_fill"),missed_fill=diagnostic.get("missed_fill"),
+                    quantity_error=diagnostic["modeled_filled_qty"]-diagnostic["actual_filled_qty"]
+                        if diagnostic.get("modeled_filled_qty") is not None and diagnostic.get("actual_filled_qty") is not None else None))
+            continue
+        try:
+            if round(actual["actual_entry_vwap"],4)!=round(diagnostic["actual_entry_vwap"],4):
+                raise ValueError("actual_initial_entry_vwap_does_not_match_completed_inventory")
+            capital,reserve=_actual_entry_capital(diagnostic,actual["completed_at"])
+        except (KeyError,ValueError,TypeError):
+            diagnostic["reason"]="actual_capital_or_reservation_source_missing"
+            model_rows.append(dict(episode_id=actual["episode_id"],scope_sha256=_entry_operating_scope(seed),source_date=seed["source_date"],status="source_gap",blocker=diagnostic["reason"]))
+            continue
+        actual={**actual,"capital_krw_minutes":capital,"reserve_krw_minutes":reserve}
+        numeric=lambda x:type(x) in (int,float) and math.isfinite(x)
+        if not all(numeric(actual.get(k)) for k in ("net_pnl_krw","profit_rate","capital_krw_minutes","reserve_krw_minutes")):continue
+        if actual["capital_krw_minutes"]<0 or actual["reserve_krw_minutes"]<0:continue
+        if arm.get("status")!="completed_source_only":
+            model_rows.append({**actual,"net_error_budget_pct":None,"blocker":arm.get("blocker") or "incumbent_operating_replay_unsupported"})
+            continue
+        price=diagnostic.get("actual_entry_vwap");error=diagnostic.get("vwap_error_krw");clock=diagnostic.get("receipt_clock_error_sec")
+        if not price or not numeric(error) or not numeric(clock):continue
+        value={**actual,"vwap_error_bps":error/price*10000,"receipt_clock_error_sec":clock,
+            "quantity_error":diagnostic["modeled_filled_qty"]-diagnostic["actual_filled_qty"],
+            "net_error_budget_pct":(arm["net_pnl_krw"]-actual["net_pnl_krw"])/actual["budget_krw"]*100,
+            "capital_error_minutes":arm["capital_krw_minutes"]-actual["capital_krw_minutes"],
+            "reserve_error_minutes":arm["reserve_krw_minutes"]-actual["reserve_krw_minutes"],
+            "false_fill":diagnostic["false_fill"],"missed_fill":diagnostic["missed_fill"],
+            "modeled_net_pnl_krw":arm["net_pnl_krw"]}
+        model_rows.append(value)
+        diagnostic.update(actual_net_pnl_krw=actual["net_pnl_krw"],model_net_error_krw=arm["net_pnl_krw"]-actual["net_pnl_krw"],
+            capital_error=value["capital_error_minutes"],reserve_error=value["reserve_error_minutes"],reason="independent_scope_validation_required")
+    validation["actual_completed_net_comparable_count"]=len(model_rows)
+    return model_rows
+
+
+def _operating_owner_source_blockers(validation):
+    return ["operating_owner_source_invalid:"+key for key,value in (validation.get("source_contract") or {}).items()
+        if isinstance(value,dict) and value.get("status") in {"source_gap","bounded_source_required"}]
+
+
+def _apply_operating_model_support(validation,economics):
+    scopes=[s for s in economics["model_scopes"] if s["validated"]]
+    source_blockers=_operating_owner_source_blockers(validation)
+    if source_blockers:
+        validation.update(status="source_gap",allowed_runtime_apply=False,primary_blockers=source_blockers)
+        return validation
+    if scopes:
+        validation["sample_floor"].update(model_scope_floor=20,model_scope_floor_status="empirical_actual_chronological_owner_contract")
+        validation.update(status="validated_scope",allowed_runtime_apply=True,primary_blockers=[],
+            validated_scopes=scopes,tolerance_contract={"status":"frozen_actual_calibration","contracts":scopes},
+            model_validation_holdout={"status":"validated","contracts":scopes,"candidate_holdout_reusable":False})
+    else:
+        validation["status"]="model_validation_failed" if economics["status"]=="model_validation_failed" else validation["status"]
+    return validation
+
+
+def _operating_policy(target_date,report_json,economics):
+    grid=[]
+    for candidate in economics["candidates"]:
+        item={**candidate["candidate_template"],"context_bucket":candidate["context_bucket"],"candidate_passed":True,
+            "runtime_apply_scope":"ev_optimized_variant","runtime_apply_authority_class":"ev_validated_variant",
+            "exploration_seed_allowed":False,"ev_validated_runtime_apply_allowed":True,
+            "source_quality_adjusted_ev_pct":candidate["partitions"]["holdout"]["candidate"]["ev_pct"],
+            "notional_weighted_ev_pct":candidate["partitions"]["holdout"]["candidate"]["ev_pct"],
+            "downside_p10_profit_rate":candidate["partitions"]["holdout"]["candidate"]["p10"],
+            "real_sample_count":next(m["calibration_attempt_count"]+m["holdout_attempt_count"] for m in economics["model_scopes"] if m["scope_sha256"]==candidate["scope_sha256"]),
+            "real_outcome_joined_sample":next(m["calibration_attempt_count"]+m["holdout_attempt_count"] for m in economics["model_scopes"] if m["scope_sha256"]==candidate["scope_sha256"]),
+            "operating_scope_sha256":candidate["scope_sha256"],"operating_selection_sha256":candidate["sha256"]}
+        grid.append(item)
+    policy=_policy_payload(target_date,report_json,grid)
+    for item in grid:
+        bucket=policy["buckets"][item["context_bucket"]]
+        bucket.update(supported_total_quantities=sorted({r["total_qty"] for r in economics["input_rows"] if r["scope_sha256"]==item["operating_scope_sha256"]}),
+            operating_scope_sha256=item["operating_scope_sha256"],
+            operating_selection_sha256=item["operating_selection_sha256"],operating_template={key:item[key] for key in
+                ("effective_venue","session_bucket","order_types","leg_count","price_offsets_ticks","qty_weight_min","qty_weight_max")})
+    policy["selection_leg_template_version"]="entry_split_quantity_fixed_guarded_weights_v1"
+    policy["operating_economic_contract"]=OPERATING_SELECTION_CONTRACT
+    policy["operating_economic_sha256"]=economics["sha256"]
+    return policy,grid
+
+
+def _operating_economic_policy_valid(report,policy):
+    evidence=report.get("economic_acceptance") or {}
+    if evidence.get("contract")!=OPERATING_SELECTION_CONTRACT:return False
+    from src.engine.scalping.strategy_owner_replay import entry_operating_model_identity
+    current=entry_operating_model_identity()
+    if policy.get("runtime_apply_allowed") is True and any(
+        (r.get("seed",{}).get("operating_contract") or {}).get("model_implementation_sha256")!=current
+        for r in evidence.get("input_rows",[]) if r.get("scope_sha256") in {c["scope_sha256"] for c in evidence.get("candidates",[])}):return False
+    recomputed=evaluate_entry_split_operating_economics(evidence.get("input_rows") or [],evidence.get("model_rows") or [],
+        evidence.get("source_counts") or {},target_date=policy["source_date"],consumed_holdouts=evidence.get("consumed_holdouts") or {})
+    source_blockers=_operating_owner_source_blockers(report.get("execution_model_validation") or {})
+    if source_blockers:
+        recomputed.update(status="source_gap",candidates=[],valid_no_edge=False)
+        recomputed["blockers"]+=source_blockers
+        recomputed.pop("sha256");recomputed["sha256"]=_canonical_sha256(recomputed)
+    # Existing consumed witnesses are idempotent; changed holdout bytes are not.
+    events=_operating_four_arm_events(recomputed)
+    proof=build_quantity_leg_four_arm_evaluation(events,source_counts={d:n for d,n in recomputed["source_counts"].items()
+        if any(s["validated"] and d>s["available_after_date"] for s in recomputed["model_scopes"])})
+    if recomputed["candidates"] and not quantity_leg_promotion_evidence_valid(proof):
+        recomputed.update(status="source_gap",candidates=[],valid_no_edge=False)
+        recomputed["blockers"].append("existing_four_arm_owner_contract_not_passed")
+        recomputed.pop("sha256");recomputed["sha256"]=_canonical_sha256(recomputed)
+    if recomputed!=evidence or policy.get("operating_economic_sha256")!=evidence.get("sha256"):return False
+    if report.get("operating_quantity_leg_four_arm_evaluation") != proof:return False
+    if policy.get("runtime_apply_allowed") is not True:return True
+    expected,_=_operating_policy(policy["source_date"],Path(policy["source_report"]),evidence)
+    if not evidence.get("candidates") or expected["buckets"]!=policy.get("buckets"):return False
+    allowed={s["sha256"] for s in (report.get("execution_model_validation") or {}).get("validated_scopes",[]) if s.get("validated") is True}
+    return all(c["model_contract_sha256"] in allowed for c in evidence["candidates"])
+
+
+def _operating_four_arm_events(economics):
+    rows=economics.get("input_rows") or []
+    scopes={s["scope_sha256"]:s for s in economics.get("model_scopes",[]) if s["validated"]}
+    result=[]
+    for row in rows:
+        model=scopes.get(row["scope_sha256"])
+        if not model or row["source_date"]<=model["available_after_date"]:continue
+        seed=row.get("seed") or {};context=seed.get("operating_contract") or {}
+        if not seed or any(a.get("status")!="completed_source_only" for a in row["arms"].values()):continue
+        terminal=max([a.get("modeled_exit_at") or seed["observed_at"] for a in row["arms"].values()])
+        common=dict(entry_price_receipt_sha256=seed["entry_price_receipt_sha256"],
+            exit_policy_sha256=_canonical_sha256(context["exit_policy_version"]),
+            cost_contract_sha256=_canonical_sha256([context["cost_policy_version"],context["cost_provenance"]]),
+            terminal_contract_version="full_frozen_holding_initial_only_v1",terminal_observed_at=terminal,
+            terminal_conservation_holds=True,cost_complete=True,counterfactual_executable=True)
+        arms={key:{**a,**common,"net_return_pct":a["net_pnl_krw"]/row["budget_krw"]*100,
+            "capital_krw_minutes":a["capital_krw_minutes"]+a["reserve_krw_minutes"]} for key,a in row["arms"].items()}
+        receipt={key:seed[key] for key in ("source_date","scanner_promotion_id","evaluation_attempt_id",
+            "stock_code","effective_venue","session_bucket","policy_bundle_sha256",
+            "incumbent_quantity_policy_version","candidate_quantity_policy_version",
+            "incumbent_leg_policy_version","candidate_leg_policy_version","entry_price_policy_sha256")}
+        receipt.update(schema=QUANTITY_LEG_FOUR_ARM_SCHEMA,arms=arms,
+            eligible_attempt_count=economics["source_counts"][row["source_date"]],
+            operating_row_sha256=row["sha256"])
+        receipt["receipt_sha256"]=_canonical_sha256(receipt)
+        result.append(dict(source_date=row["source_date"],entry_quantity_leg_four_arm_evaluation=receipt))
+    return result
+
+
+def _previous_operating_state(target_date):
+    for path in sorted(REPORT_DIR.glob(f"{REPORT_TYPE}_????-??-??.json"),reverse=True):
+        day=path.stem[-10:]
+        if day>=target_date or day<"2026-06-05":continue
+        if path.is_symlink() or path.stat().st_size>64*1024*1024:continue
+        state=(_load_json(path) or {}).get("operating_economic_state") or {}
+        if not state:continue
+        if state.get("through_date")!=day or state.get("sha256")!=_canonical_sha256({k:v for k,v in state.items() if k!="sha256"}):
+            raise ValueError("operating_predecessor_state_hash_or_date_invalid")
+        for source,binding in state.get("source_quality_bindings",{}).items():
+            quality=_source_quality_summary(source)
+            if quality.get("tuning_input_allowed") is not True or _source_quality_contract_sha256(quality)!=binding:
+                raise ValueError("operating_predecessor_source_quality_changed:"+source)
+        return state
+    return {}
+
+
+def _refresh_operating_economics(report,validation,replay,actual_outcomes,*,target_date,events=(),registry=()):
+    predecessor=_previous_operating_state(target_date)
+    previous=report.get("operating_economic_state") or predecessor
+    if predecessor and previous.get("predecessor_sha256")!=predecessor.get("sha256") and previous is not predecessor:
+        previous={**predecessor,"consumed_holdouts":{**predecessor.get("consumed_holdouts",{}),**previous.get("consumed_holdouts",{})},
+            "actual_outcomes":predecessor.get("actual_outcomes",[])+[r for r in previous.get("actual_outcomes",[]) if r.get("completion_date")==target_date]}
+    if previous.get("sha256") and previous.get("sha256")!=_canonical_sha256({k:v for k,v in previous.items() if k!="sha256"}):
+        # A merged predecessor is recomputed below; stored unchanged state must match.
+        if not predecessor or previous.get("through_date")==target_date:raise ValueError("operating_current_state_hash_invalid")
+    new_rows=_entry_operating_input_rows(replay["rows"])
+    old_rows=[r for r in previous.get("rows",[]) if r["source_date"]!=target_date]
+    retained_replays=[r for r in previous.get("replays",[]) if (r.get("seed") or {}).get("source_date")!=target_date]+[
+        {**r,"seed":_compact_operating_seed(r.get("seed") or {})} for r in replay["rows"]]
+    retained_events=[e for e in previous.get("submission_events",[]) if _event_date(_event_fields(e))!=target_date]+[
+        {**e,"fields":{k:v for k,v in e.get("fields",{}).items() if k not in {"entry_split_initial_entry_seed","entry_opportunity_replay_seed"}}}
+        for e in events if _event_fields(e).get("stage")=="order_leg_sent"]
+    outcome_index={r["episode_id"]:r for r in previous.get("actual_outcomes",[])}
+    for row in actual_outcomes:
+        key=row.get("episode_id")
+        if key in outcome_index and outcome_index[key]!=row:
+            # Keep both; exact episode disagreement is quarantined downstream.
+            outcome_index[key+":conflict:"+_canonical_sha256(row)]=row
+        else:outcome_index[key]=row
+    actual=list(outcome_index.values())
+    if events or registry:
+        validation=build_execution_model_validation(target_date,retained_events,retained_replays,registry,
+            source_contract=validation.get("source_contract"))
+    model_rows=_attach_operating_model_outcomes(validation,retained_replays,actual)
+    # Existing exact completed witnesses survive a later journal projection gap.
+    old_models=[r for r in previous.get("model_rows",[]) if r["episode_id"] not in {m["episode_id"] for m in model_rows}
+        and r.get("plan_sha256") not in {m.get("plan_sha256") for m in model_rows if m.get("plan_sha256")}]
+    census=replay["counts"]
+    unique_census=census.get("unique_retained",census["raw_plan_rows"])+sum(census.get("excluded",{}).get(k,0) for k in ("original_plan_or_frozen_seed_missing_or_invalid","conflicting_exact_plan"))
+    counts={**previous.get("source_counts",{}),target_date:unique_census}
+    economics=evaluate_entry_split_operating_economics(old_rows+new_rows,old_models+model_rows,counts,
+        target_date=target_date,consumed_holdouts=previous.get("consumed_holdouts") or {})
+    validation=_apply_operating_model_support(validation,economics)
+    source_blockers=_operating_owner_source_blockers(validation)
+    if source_blockers:
+        economics.update(status="source_gap",candidates=[],valid_no_edge=False)
+        economics["blockers"]+=source_blockers
+        economics.pop("sha256");economics["sha256"]=_canonical_sha256(economics)
+    bindings={**previous.get("source_quality_bindings",{}),target_date:_source_quality_contract_sha256(_source_quality_summary(target_date))}
+    state=dict(through_date=target_date,predecessor_sha256=predecessor.get("sha256"),rows=old_rows+new_rows,model_rows=old_models+model_rows,
+        replays=retained_replays,submission_events=retained_events,actual_outcomes=actual,
+        source_quality_bindings=bindings,source_counts=counts,consumed_holdouts=economics["consumed_holdouts"])
+    state["sha256"]=_canonical_sha256(state)
+    report["operating_economic_state"]=state
+    report["economic_acceptance"]=economics
+    report["post_apply_version_performance"]=build_entry_split_post_apply_performance(old_models+model_rows,target_date=target_date)
+    events=_operating_four_arm_events(economics)
+    proof=build_quantity_leg_four_arm_evaluation(events,source_counts={d:n for d,n in counts.items()
+        if any(s["validated"] and d>s["available_after_date"] for s in economics["model_scopes"])})
+    report["operating_quantity_leg_four_arm_evaluation"]=proof
+    report["operating_quantity_leg_four_arm_events"]=events
+    if economics["candidates"] and not quantity_leg_promotion_evidence_valid(proof):
+        economics.update(status="source_gap",candidates=[],valid_no_edge=False)
+        economics["blockers"].append("existing_four_arm_owner_contract_not_passed")
+        economics.pop("sha256",None);economics["sha256"]=_canonical_sha256(economics)
+    return validation,economics
+
 EXECUTION_MODEL_CONTRACT = "entry_split_execution_model_validation_v1"
 EXECUTION_SOURCE_STAGES = frozenset({
     "entry_execution_sizing_plan", "entry_execution_sizing_plan_block",
@@ -4511,6 +5175,8 @@ def build_execution_model_validation(target_date, events, replays, registry_even
                     actual_entry_vwap=actual_price, modeled_entry_vwap=modeled_price,
                     vwap_error_krw=price_error, receipt_clock_error_sec=clock_error,
                     false_fill=bool(modeled_qty and not actual_qty), missed_fill=bool(actual_qty and not modeled_qty),
+                    actual_journal_legs=[dict(quantity=actual.get("quantity"),submitted_price=_safe_float(fields.get("entry_split_submitted_price"),None),
+                        submitted_at=fields.get("entry_split_submitted_at"),terminal_at=actual.get("observed_at_kst"),fills=fills[identity]) for identity,actual,fields in legs],
                     scope={"venue": seed.get("effective_venue"), "session": seed.get("session_bucket"),
                         "model": (modeled or {}).get("schema"), "plan_sha256": seed.get("plan_sha256")})
                 if price_error is not None:
@@ -4522,7 +5188,11 @@ def build_execution_model_validation(target_date, events, replays, registry_even
     return {"contract_version": EXECUTION_MODEL_CONTRACT, "source_date": target.isoformat(),
         "metric_role": "execution_quality_real_only", "decision_authority": "model_support_gate_only",
         "sample_floor": {"real_outcome_owner_floor": 20, "four_arm_complete_owner_floor": 30,
-            "model_scope_floor": None, "model_scope_floor_status": "owner_contract_missing"},
+            "model_scope_floor": 20, "model_scope_floor_status": "defined_requires_independent_actual_scope_validation"},
+        "model_version":"entry_split_empirical_model_holdout_v1",
+        "support_scope":{"owner":"main_scalping","native_fill":"full_marketability_and_full_depth_at_each_frozen_arrival",
+            "exit":"unchanged_isolated_full_holding_policy_initial_inventory_only",
+            "unsupported":["passive_queue_or_unknown_partial_fill","unacknowledged_cf_cancel_or_late_fill","subsequent_add_or_partial_sell","missing_state_specific_ai_or_market_input"]},
         "primary_decision_metric": "signed_incumbent_execution_error_not_research_ev",
         "source_quality_gate": "verified_owner_journal_exact_frozen_plan_order_scope_terminal_join",
         "forbidden_uses": ["standalone_live_promotion", "research_exit_as_actual_net_pnl",
@@ -4564,9 +5234,10 @@ def execution_model_policy_contract_status(report, policy):
             or policy.get("execution_model_validation_sha256") != _canonical_sha256(section)):
         return False, "execution_model_validation_hash_or_date_invalid"
     if policy.get("runtime_apply_allowed") is True:
-        # Entry fidelity alone and fixed research exits cannot establish operating EV.
-        return False, "operating_execution_model_not_validated"
-    if section.get("allowed_runtime_apply") is not False:
+        if section.get("allowed_runtime_apply") is not True or not _operating_economic_policy_valid(report, policy):
+            return False, "operating_execution_model_not_validated"
+        return True, "validated_operating_execution_model_and_independent_paired_economics"
+    if section.get("allowed_runtime_apply") is not False and not _operating_economic_policy_valid(report, policy):
         return False, "execution_model_authority_invalid"
     return True, "validated_inactive_execution_model_disposition"
 
@@ -4597,6 +5268,7 @@ def _refresh_execution_model_only(target_date, *, prepared_effective_date=None, 
         if date.fromisoformat(prepared_effective_date).isoformat() != prepared_effective_date or prepared_effective_date <= target_date:
             raise ValueError("entry_split_prepared_effective_date_invalid")
     events, projection = _bounded_execution_projection(target_date)
+    actual_outcomes, actual_source = _bounded_actual_entry_outcomes(target_date)
     registry, registry_contract = _execution_registry_snapshot()
     from src.engine.sniper_missed_entry_counterfactual import _load_entry_events
     from src.engine.scalping.strategy_owner_replay import build_entry_opportunity_replays
@@ -4606,8 +5278,9 @@ def _refresh_execution_model_only(target_date, *, prepared_effective_date=None, 
         micro.DEFAULT_CANARY_SNAPSHOT_PATH, micro.daily_canary_snapshot_path(date.fromisoformat(target_date), root=micro.CANARY_DAILY_SNAPSHOT_DIR)])
     implementation = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in
         (Path(__file__), Path(__file__).with_name("strategy_owner_replay.py"))}
-    precheck_sha256 = _canonical_sha256({"projection": projection, "registry": registry_contract,
-        "actual_events": registry, "model": implementation, "native_source": native_generation,
+    predecessor=_previous_operating_state(target_date)
+    precheck_sha256 = _canonical_sha256({"operating_predecessor_sha256":predecessor.get("sha256"),"projection": projection, "registry": registry_contract,
+        "actual_events": registry, "actual_outcomes": actual_source, "model": implementation, "native_source": native_generation,
         "effective_date": prepared_effective_date, "clean_baseline": clean_baseline_policy(),
         "source_quality": _source_quality_summary(target_date),
         "maturity": _entry_replay_maturity_revision(events, now=datetime.now(timezone.utc).timestamp())})
@@ -4624,8 +5297,9 @@ def _refresh_execution_model_only(target_date, *, prepared_effective_date=None, 
     native = _load_entry_events(target_date, rows=events)
     replay = build_entry_opportunity_replays(target_date, native)
     validation = build_execution_model_validation(target_date, events, replay["rows"], registry,
-        source_contract={"projection": projection, "registry": registry_contract})
-    fingerprint = _canonical_sha256({"model_revision": 1, "validation": validation,
+        source_contract={"projection": projection, "registry": registry_contract,"actual_outcomes":actual_source})
+    validation, economics = _refresh_operating_economics(report, validation, replay, actual_outcomes, target_date=target_date,events=events,registry=registry)
+    fingerprint = _canonical_sha256({"model_revision": 2, "validation": validation,
         "replay": replay, "effective_date": prepared_effective_date})
     prior = report.get("execution_model_refresh") or {}
     validation["source_inventory"] = {
@@ -4638,17 +5312,15 @@ def _refresh_execution_model_only(target_date, *, prepared_effective_date=None, 
     # The inventory is immutable predecessor context and belongs in reuse identity.
     fingerprint = _canonical_sha256({"input": fingerprint, "inventory": validation["source_inventory"]})
     report["execution_model_validation"] = validation
-    report["economic_acceptance"] = {"status": "unsupported_model", "valid_no_edge": False,
-        "primary_operating_ev_pct": None, "robust_paired_delta_ev_lower_bound_pct": None,
-        "research_metrics_are_supporting_only": True, "blockers": validation["primary_blockers"]}
     report["execution_model_refresh"] = {"input_sha256": fingerprint,
         "generated_at": datetime.now(timezone(timedelta(hours=9))).isoformat(),
         "phase": "postclose", "raw_not_read": True, "parent_asof_preserved": True,
         "precheck_sha256": precheck_sha256, "native_source_generation": native_generation,
         "model_implementation_sha256": implementation}
     report["input_summary"]["entry_opportunity_executable_replay_refresh"] = replay
-    policy = _policy_payload(target_date, json_path, [])
-    policy["policy_version"] = f"entry_split_order_plan:{target_date}:{_canonical_sha256(validation)[:10]}"
+    policy, operating_grid = _operating_policy(target_date, json_path, economics)
+    report["operating_candidate_grid"] = operating_grid
+    policy["policy_version"] = f"entry_split_order_plan:{target_date}:{_canonical_sha256([validation,economics])[:10]}"
     policy.update(execution_model_validation_contract=EXECUTION_MODEL_CONTRACT,
         execution_model_validation_sha256=_canonical_sha256(validation),
         prepared_effective_date=prepared_effective_date,
@@ -4664,6 +5336,8 @@ def _refresh_execution_model_only(target_date, *, prepared_effective_date=None, 
         execution_model_validation_contract=EXECUTION_MODEL_CONTRACT,
         execution_model_validation_sha256=policy["execution_model_validation_sha256"],
         execution_model_disposition=validation["status"], prepared_effective_date=prepared_effective_date)
+    recommended.update({key:policy[key] for key in ("runtime_apply_allowed","exploration_seed_allowed","exploration_seed_count","ev_validated_runtime_apply_allowed","ev_validated_bucket_count","explicit_bucket_count","runtime_apply_scope","runtime_apply_authority_classes","missing_bucket_action","policy_version")})
+    recommended.update(candidate_count=len(operating_grid),candidates=operating_grid,policy_file=str(policy_path(target_date)),operating_economic_sha256=economics["sha256"])
     report, policy = bind_report_policy_generation(report, policy)
     valid, reason = validate_report_policy_generation(report, policy)
     if not valid:
@@ -5279,6 +5953,13 @@ def build_report(target_date: str, *, write: bool = True) -> dict[str, Any]:
         },
     }
     if model_validation is not None:
+        actual_outcomes, actual_source = _bounded_actual_entry_outcomes(target_date)
+        model_validation["source_contract"]["actual_outcomes"]=actual_source
+        model_validation, economics = _refresh_operating_economics(report,model_validation,executable_replay,actual_outcomes,target_date=target_date,events=daily_allowed_events,registry=registry)
+        policy, operating_grid = _operating_policy(target_date,json_path,economics)
+        report["operating_candidate_grid"] = operating_grid
+        report["recommended_policy"].update({key:policy[key] for key in ("runtime_apply_allowed","exploration_seed_allowed","exploration_seed_count","ev_validated_runtime_apply_allowed","ev_validated_bucket_count","explicit_bucket_count","runtime_apply_scope","runtime_apply_authority_classes","missing_bucket_action","policy_version")})
+        report["recommended_policy"].update(candidate_count=len(operating_grid),candidates=operating_grid)
         report["execution_model_validation"] = model_validation
         model_fields = {"execution_model_validation_contract": EXECUTION_MODEL_CONTRACT,
                         "execution_model_validation_sha256": _canonical_sha256(model_validation),
@@ -5921,6 +6602,7 @@ def apply_entry_split_order_policy(
     latency_gate: dict[str, Any] | None = None,
     policy_file: str | None = None,
     now: datetime | None = None,
+    operating_context: dict | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     orders = [dict(item) for item in (planned_orders or []) if isinstance(item, dict)]
     latency_gate = latency_gate if isinstance(latency_gate, dict) else {}
@@ -5953,6 +6635,8 @@ def apply_entry_split_order_policy(
     if not policy:
         fields["entry_split_order_skip_reason"] = load_status
         return orders, fields
+    fields.update(entry_split_order_policy_sha256=_canonical_sha256(policy),
+                  entry_split_order_runtime_pid=os.getpid(), entry_split_order_runtime_consumed=True)
     fields["entry_execution_sizing_plan_schema"] = str(
         policy.get("entry_execution_sizing_plan_schema")
         or ATOMIC_EXECUTION_SIZING_SCHEMA
@@ -5996,6 +6680,20 @@ def apply_entry_split_order_policy(
             return orders, fields
         bucket_policy = _runtime_default_bucket_policy(bucket)
         fallback_policy_applied = True
+    operating_template = bucket_policy.get("operating_template")
+    if operating_template:
+        venue = str(context_fields.get("effective_venue") or context_fields.get("entry_effective_venue") or "")
+        session = str(context_fields.get("market_session_bucket") or context_fields.get("session_bucket") or "")
+        price_hashes={x.get("entry_price_policy_sha256") for x in orders}
+        types=[str(x.get("order_type_code") or "00") for x in orders]
+        current_scope=_entry_operating_scope(dict(operating_contract=operating_context or {},
+            effective_venue=venue,session_bucket=session,legs=[dict(order_type_code=t) for t in types],
+            entry_price_policy_sha256=next(iter(price_hashes)) if len(price_hashes)==1 else None))
+        if (not operating_context or current_scope!=bucket_policy.get("operating_scope_sha256")
+            or total_qty not in bucket_policy.get("supported_total_quantities",[])
+            or venue != operating_template["effective_venue"] or session != operating_template["session_bucket"]):
+            fields["entry_split_order_skip_reason"] = "operating_model_scope_mismatch"
+            return orders, fields
     policy_mode = str(bucket_policy.get("policy_mode") or "").strip()
     policy_split_variant_id = str(
         bucket_policy.get("split_variant_id") or ""
@@ -6086,6 +6784,11 @@ def apply_entry_split_order_policy(
         probe_enabled=_safe_bool(probe_config.get("enabled")),
         probe_eligible=probe_eligible,
     )
+    if operating_template and (market_first_leg_active or probe_config["enabled"] or runtime_weight_adjusted
+            or desired_legs != operating_template["leg_count"] or applied_offsets != operating_template["price_offsets_ticks"]):
+        fields["entry_split_order_operating_shape_mismatch"] = dict(market_first=market_first_leg_active,probe=probe_config["enabled"],weight_adjusted=runtime_weight_adjusted,weight=first_weight,legs=desired_legs,offsets=applied_offsets)
+        fields["entry_split_order_skip_reason"] = "operating_verified_shape_changed_by_runtime_guard"
+        return orders, fields
     if not shape_gate_passed:
         fields.update(
             {

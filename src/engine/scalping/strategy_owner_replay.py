@@ -18,6 +18,7 @@ import threading
 import time
 from datetime import datetime, date, timedelta
 from pathlib import Path
+from functools import lru_cache
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
@@ -982,7 +983,7 @@ ENTRY_REPLAY_PROFILES = {
 
 
 def freeze_entry_opportunity(plan, *, stock_code, observed_at, profile=None,
-                             profile_bps=None, anchor_price=None, sizing_context=None, candidate_leg_plan=None):
+                             profile_bps=None, anchor_price=None, sizing_context=None, candidate_leg_plan=None, operating_context=None):
     """Freeze an order-free, non-increasing research menu alongside an owner plan.
 
     The original orders, quantities, prices and signed plan are never changed.
@@ -1047,6 +1048,18 @@ def freeze_entry_opportunity(plan, *, stock_code, observed_at, profile=None,
             candidate_legs = alternative_legs
             candidate_leg_version = candidate_leg_plan['split_policy_version']
             candidate_leg_sha = digest(candidate_leg_plan)
+        if operating_context is not None and candidate_leg_plan is None:
+            # Existing capped weight menu retains every price
+            # issued by the original owner and keep quantity fixed in phase one.
+            n = len(original_legs)
+            if plan['total_qty'] >= n:
+                from src.trading.order.split_execution_math import split_qty
+                from src.engine.scalping.entry_split_order_plan import PASSIVE_CENTER_MAX_FIRST_WEIGHT
+                counts = split_qty(plan['total_qty'], n, min(1 / n, PASSIVE_CENTER_MAX_FIRST_WEIGHT))
+                candidate_legs = [{**x, 'qty': counts[i]} for i, x in enumerate(original_legs)]
+                candidate_leg_version = 'entry_split_quantity_fixed_guarded_weights_v1'
+                candidate_leg_sha = digest(candidate_legs)
+                candidate_qty, candidate_quantity_version = plan['total_qty'], plan['quantity_policy_version']
         seed = dict(schema=ENTRY_REPLAY_SCHEMA, stock_code=stock_code,
             source_date=clock.date().isoformat(), observed_at=clock.isoformat(),
             scanner_promotion_id=plan['scanner_promotion_id'],
@@ -1067,6 +1080,8 @@ def freeze_entry_opportunity(plan, *, stock_code, observed_at, profile=None,
             research_entry_ttl_sec=10, modeled_submit_delay_ms=150,
             allocation_contract=ENTRY_REPLAY_ALLOCATION.copy(),
             price_candidates={}, **AUTHORITY)
+        if operating_context is not None:
+            seed['operating_contract'] = copy.deepcopy(operating_context)
         # Only the exact existing BPS formula can become an automatic price policy.
         # Other price branches remain quantity/leg research, not guessed BPS joins.
         if (all(x['price'] > 0 and x['order_type_code'] not in ('3', '03') for x in original_legs)
@@ -1220,7 +1235,7 @@ def replay_entry_opportunity(seed, depth_rows, trade_rows, *, source_ready, eval
             or start + seed['research_entry_ttl_sec'] - trades[-1][0] > 1.5
             or any(b[2] != a[2] + 1 for a, b in zip(trades, trades[1:]))):
             raise ValueError('native_trade_window_unproven')
-        def arm(quantity, candidate_leg, prices):
+        def arm(quantity, candidate_leg, prices, *, execution_only=False):
             if type(quantity) is not int or not 0 < quantity <= seed['total_qty']:
                 raise ValueError('candidate_quantity_outside_frozen_bound')
             shape = (seed.get('candidate_legs') or seed['legs']) if candidate_leg else seed['legs']
@@ -1229,6 +1244,7 @@ def replay_entry_opportunity(seed, depth_rows, trade_rows, *, source_ready, eval
             entry_at = start + seed['modeled_submit_delay_ms'] / 1000
             total_buy = fill_qty = 0
             filled_legs = []
+            fill_events = []
             depth_used = {}
             for index, (qty, limit) in enumerate(zip(counts, prices)):
                 if not qty:
@@ -1248,6 +1264,7 @@ def replay_entry_opportunity(seed, depth_rows, trade_rows, *, source_ready, eval
                     fill_qty += qty
                     total_buy += qty * entry[2]
                     filled_legs.append((arrival, qty * entry[2]))
+                    fill_events.append(dict(at=datetime.fromtimestamp(arrival, KST).isoformat(), qty=qty, price=entry[2], reserved_price=limit or entry[2]))
                 elif not (all(q[2] > limit for q in quotes if arrival <= q[0] <= start + seed['research_entry_ttl_sec'])
                           and all(t[1] > limit for t in trades if arrival <= t[0])):
                     raise ValueError('passive_queue_fill_or_partial_unproven')
@@ -1257,13 +1274,19 @@ def replay_entry_opportunity(seed, depth_rows, trade_rows, *, source_ready, eval
                 terminal_contract_version='fixed_quote_research_exit_180sec_v1',
                 terminal_observed_at=datetime.fromtimestamp(end, KST).isoformat(),
                 requested_qty=quantity, modeled_filled_qty=fill_qty,
-                actual_fill_evidence=False)
+                actual_fill_evidence=False, modeled_fill_events=fill_events,
+                modeled_reserved_notional_krw=sum(q * p for q, p in zip(counts, prices)))
             if not fill_qty:
                 return dict(net_return_pct=0.0, net_pnl_krw=0.0, capital_krw_minutes=0.0,
                     stress_net_return_pct=0.0, fill_participation_rate=0.0,
                     modeled_outcome='supported_no_fill', **common)
             entry_price = total_buy / fill_qty
             last_fill_at = max(at for at, _ in filled_legs)
+            if execution_only:
+                return dict(modeled_entry_vwap=entry_price,
+                    modeled_last_fill_at=datetime.fromtimestamp(last_fill_at, KST).isoformat(),
+                    modeled_entry_at=datetime.fromtimestamp(min(at for at, _ in filled_legs), KST).isoformat(),
+                    modeled_outcome='operating_entry_execution_only', **common)
             exit_quote = next((q for q in quotes if q[0] > last_fill_at and q[0] <= end and
                 (q[1] / entry_price - 1) * 100 >= ENTRY_REPLAY_EXIT['take_profit_pct']), None)
             stop_quote = next((q for q in quotes if q[0] > last_fill_at and q[0] <= end and
@@ -1284,14 +1307,33 @@ def replay_entry_opportunity(seed, depth_rows, trade_rows, *, source_ready, eval
                 modeled_exit_at=datetime.fromtimestamp(terminal[0], KST).isoformat(),
                 modeled_outcome='modeled_full_or_partial_filled_terminal', **common)
         prices = [x['price'] for x in seed['legs']]
-        arms = {name: arm(seed['candidate_qty'] if i % 2 else seed['total_qty'], i >= 2,
-                         [x['price'] for x in (seed.get('candidate_legs') or seed['legs'])] if i >= 2 else prices)
-                for i, name in enumerate(QUANTITY_LEG_FOUR_ARM_IDS)}
-        price_arms = {bps: arm(seed['total_qty'], False, values)
-                      for bps, values in seed['price_candidates'].items()}
+        arms, price_arms, operating_arms = {}, {}, {}
+        for i, name in enumerate(QUANTITY_LEG_FOUR_ARM_IDS):
+            quantity=seed['candidate_qty'] if i % 2 else seed['total_qty']
+            values=[x['price'] for x in (seed.get('candidate_legs') or seed['legs'])] if i>=2 else prices
+            try:
+                execution=arm(quantity,i>=2,values,execution_only=True)
+                if seed.get('operating_contract'):
+                    operating_arms[name]=replay_operating_entry_arm(seed,execution,depth_rows,trade_rows=trade_rows)
+                try:arms[name]=arm(quantity,i>=2,values)
+                except ValueError:
+                    if not seed.get('operating_contract'):raise
+                    arms[name]=execution
+            except ValueError as exc:
+                if not seed.get('operating_contract'):raise
+                gap=dict(schema=ENTRY_OPERATING_SCHEMA,status='unsupported_scope',blocker=str(exc),
+                    net_pnl_krw=None,stress_net_pnl_krw=None,capital_krw_minutes=None,reserve_krw_minutes=None,
+                    requested_qty=quantity,actual_fill_evidence=False,**AUTHORITY)
+                from src.engine.scalping.entry_split_order_plan import _canonical_sha256
+                operating_arms[name]={**gap,'sha256':_canonical_sha256(gap)}
+        for bps,values in seed['price_candidates'].items():
+            try:price_arms[bps]=arm(seed['total_qty'],False,values)
+            except ValueError:
+                if not seed.get('operating_contract'):raise
         result.update(status='completed_source_only', blocker=None, seed=seed,
                       arms=arms, price_arms=price_arms,
                       native_window_sha256=digest([depth_rows, trade_rows]))
+        if seed.get('operating_contract'):result['operating_arms']=operating_arms
         result['replay_sha256'] = digest(result)
     except (KeyError, TypeError, ValueError, OverflowError) as exc:
         result.update(blocker=str(exc), arms=None, price_arms=None)
@@ -1318,7 +1360,7 @@ def build_entry_opportunity_replays(day, events, *, evaluated_at=None, micro_loa
             continue
         plan, seed = _price_ready_plan(event), event.fields.get('entry_opportunity_replay_seed')
         try:
-            if isinstance(seed, str) and len(seed) <= 16384:
+            if isinstance(seed, str) and len(seed) <= 2 * 1024 * 1024:
                 try:
                     seed = json.loads(seed)
                 except ValueError:
@@ -1410,7 +1452,7 @@ def build_entry_opportunity_replays(day, events, *, evaluated_at=None, micro_loa
         seed = row['seed']
         key = digest([seed[k] for k in ('stock_code', 'scanner_promotion_id',
             'evaluation_attempt_id', 'effective_venue', 'session_bucket', 'policy_bundle_sha256')])
-        row['incumbent_execution_arm'] = dict(row['arms'][QUANTITY_LEG_FOUR_ARM_IDS[0]])
+        row['incumbent_execution_arm'] = dict(row['arms'].get(QUANTITY_LEG_FOUR_ARM_IDS[0]) or {})
         row['allocation_admitted'] = key in admitted
         if key not in admitted:
             for arm in row['arms'].values():
@@ -1620,3 +1662,246 @@ def entry_price_selection_evidence_valid(proof):
         return any(digest(p) == digest(proof) for p in candidates)
     except (KeyError, TypeError, ValueError, OverflowError):
         return False
+
+# Initial-entry economics reuse the full holding interpreter, not the fixed
+# research TP/SL kernel. Missing exact-state services never become assumed HOLD.
+ENTRY_OPERATING_SCHEMA = 'entry_split_operating_economics_v1'
+ENTRY_MODEL_SELECTION = 'entry_split_empirical_model_holdout_v1'
+
+
+@lru_cache(maxsize=1)
+def entry_operating_model_identity():
+    from src.engine.lifecycle.avg_down_policy_replay import implementation_identity
+    identity=implementation_identity()
+    base=Path(__file__).resolve().parents[3]
+    import hashlib
+    for name in ("src/engine/scalping/avg_down_replay_capture.py","src/engine/scalping/micro_reversion/path_journal.py"):
+        identity[name]=hashlib.sha256((base/name).read_bytes()).hexdigest()
+    return owner.digest(identity)
+
+
+
+def freeze_entry_operating_context(handlers, stock, sizing_context, *, now_ts):
+    from src.engine.scalping import avg_down_replay_capture as capture
+    from src.engine.lifecycle.avg_down_policy_replay import snapshot_version
+    from src.engine.trade_profit import get_trade_cost_rate
+    try:
+        if handlers._is_any_simulated_position(stock, stock.get('strategy')):
+            return None
+        budget = sizing_context.budget_base_krw * sizing_context.safety_ratio
+        if sizing_context.absolute_budget_cap_krw > 0:
+            budget = min(budget, sizing_context.absolute_budget_cap_krw)
+        if not _finite(budget, positive=True):
+            return None
+        snapshot = capture._cached_policy(handlers, now_ts)
+        value = dict(schema=ENTRY_OPERATING_SCHEMA,
+            frozen_at=datetime.fromtimestamp(now_ts, KST).isoformat(),
+            policy_snapshot=snapshot, exit_policy_version=snapshot_version(snapshot),
+            initial_policy_state=capture.holding_state(handlers, {k:v for k,v in stock.items() if k not in {"entry_split_initial_entry_seed","entry_split_initial_entry_lineage_conflict"}}),
+            budget_krw=budget, cost_rate=get_trade_cost_rate(),
+            model_implementation_sha256=entry_operating_model_identity(),
+            cost_policy_version='trade_profit_net_realized_pnl:rate=' + str(get_trade_cost_rate()),
+            cost_provenance='frozen_loaded_trade_profit_configuration_not_broker_settlement',
+            stress_cost_rate_increment=(ENTRY_REPLAY_COST['stress_round_trip_pct'] - ENTRY_REPLAY_COST['round_trip_pct']) / 100,
+            max_frame_gap_sec=capture.MAX_FRAME_GAP_SEC, **AUTHORITY)
+        return {**value, 'sha256': owner.digest(value)}
+    except (ValueError, TypeError, AttributeError, KeyError):
+        return None
+
+
+def replay_operating_entry_arm(seed, arm, depth_rows, *, executor=None, trade_rows=()):
+    """Independent CF holding path, original reserve and conservative full exit.
+
+    Default executor is the existing no-network/no-write disposable interpreter.
+    Recorded exact-state policy evaluations can be supplied by its existing pure
+    replay engine in tests; an actual SELL is never an exit decision for this arm.
+    """
+    from src.engine.lifecycle import avg_down_policy_replay as adapter
+    from src.engine.trade_profit import calculate_net_realized_pnl
+    from src.engine.scalping.entry_split_order_plan import _canonical_sha256 as economics_digest
+    result = dict(schema=ENTRY_OPERATING_SCHEMA, status='source_gap', net_pnl_krw=None,
+        stress_net_pnl_krw=None, net_return_pct=None, capital_krw_minutes=None,
+        reserve_krw_minutes=None, blocker=None, actual_fill_evidence=False,
+        source_gap_owner='entry_execution_sizing_plan->sniper_state_handlers->strategy_owner_replay',
+        closure_test='frozen operating timeout/cost/state; full executable initial fill then independent full holding exit; partial/no-fill requires state-specific cancel acknowledgement and late-fill inventory witness', **AUTHORITY)
+    try:
+        context = seed.get('operating_contract')
+        if (not isinstance(context, dict) or context.get('schema') != ENTRY_OPERATING_SCHEMA
+            or owner.digest({k: v for k, v in context.items() if k != 'sha256'}) != context.get('sha256')
+            or context.get('exit_policy_version') != adapter.snapshot_version(context['policy_snapshot'])
+            or any(context.get(k) is not v for k, v in AUTHORITY.items())
+            or not _finite(context.get('cost_rate')) or not 0 <= context['cost_rate'] < 1
+            or not _finite(context.get('stress_cost_rate_increment')) or context['stress_cost_rate_increment'] < 0
+            or context.get('cost_policy_version') != 'trade_profit_net_realized_pnl:rate=' + str(context['cost_rate'])
+            or context.get('cost_provenance') != 'frozen_loaded_trade_profit_configuration_not_broker_settlement'
+            or not _finite(context.get('budget_krw'), positive=True)
+            or _timestamp(context['frozen_at'], seed['source_date']) > _timestamp(seed['observed_at'], seed['source_date'])
+            or not _entry_seed_valid(seed) or arm.get('requested_qty') != seed['total_qty']):
+            raise ValueError('frozen_operating_contract_or_quantity_scope_invalid')
+        started = _timestamp(seed['observed_at'], seed['source_date']).timestamp()
+        fills = arm.get('modeled_fill_events') or []
+        qty = arm.get('modeled_filled_qty')
+        if type(qty) is not int or qty < 0 or qty > seed['total_qty']:
+            raise ValueError('operating_entry_quantity_invalid')
+        if sum(x['qty'] for x in fills) != qty:
+            raise ValueError('operating_entry_fill_conservation_invalid')
+        reserve = arm.get('modeled_reserved_notional_krw')
+        if not _finite(reserve, positive=True):
+            reserve = sum(x['qty'] * (x['price'] or seed.get('anchor_price', 0)) for x in seed['legs'])
+        if not _finite(reserve, positive=True) or reserve > context['budget_krw']:
+            raise ValueError('frozen_reservation_or_budget_unproven')
+        result.update(budget_krw=context['budget_krw'], source_date=seed['source_date'],
+            exit_policy_sha256=context['exit_policy_version'], cost_policy_version=context['cost_policy_version'],
+            cost_provenance=context['cost_provenance'], contract_sha256=context['sha256'],
+            requested_qty=seed['total_qty'], modeled_filled_qty=qty,
+            fill_participation_rate=qty / seed['total_qty'])
+        ttls=context.get('order_leg_ttl_sec')
+        if (not isinstance(ttls,list) or len(ttls)!=len(seed['legs']) or any(not _finite(t,positive=True) for t in ttls)
+            or not _finite(context.get('order_bundle_hard_ttl_sec'),positive=True) or not context.get('order_timeout_owner')):
+            raise ValueError('frozen_operating_order_timeout_contract_missing')
+        if 0 < qty < seed['total_qty']:
+            result.update(status='unsupported_scope',blocker='counterfactual_partial_pending_entry_cancel_and_late_fill_inventory_unproven')
+            return {**result,'sha256':economics_digest(result)}
+        if not qty:
+            result.update(status='unsupported_scope',blocker='counterfactual_zero_fill_cancel_ack_and_late_fill_window_unproven')
+            return {**result,'sha256':economics_digest(result)}
+        if any(type(x['qty']) is not int or x['qty'] <= 0 or not _finite(x['price'], positive=True)
+               or _timestamp(x['at'], seed['source_date']).timestamp() < started for x in fills):
+            raise ValueError('operating_entry_fill_clock_or_price_invalid')
+        last_at = max(_timestamp(x['at'], seed['source_date']).timestamp() for x in fills)
+        first_at=min(_timestamp(x['at'],seed['source_date']).timestamp() for x in fills)
+        from src.engine.monitoring.machine_microstructure_attribution import _validate_depth_row
+        if any(valid and clock is not None and first_at < clock.timestamp() < last_at
+            for valid,clock,*_ in (_validate_depth_row(row) for row in depth_rows)):
+            raise ValueError('operating_pre_final_fill_holding_transition_unmodeled')
+        amount = sum(x['qty'] * x['price'] for x in fills)
+        weighted = amount / qty
+        state = copy.deepcopy(context['initial_policy_state'])
+        stock = state['stock']
+        # These are modeled inventory fields, never a receipt of a real fill.
+        stock.update(code=seed['stock_code'], status='HOLDING', strategy='SCALPING',
+            buy_price=weighted, buy_qty=qty, pending_add_order=None, pending_entry_orders=[],
+            sell_submit_pending=False, buy_time=datetime.fromtimestamp(last_at, KST).isoformat(),
+            holding_started_at=adapter._json_value(datetime.fromtimestamp(last_at, KST)), order_time=last_at)
+        episode = 'entry-operating-' + seed['seed_sha256']
+        observation = dict(source_event_id=episode, scale_in_decision_id=episode,
+            position_episode_id=episode, stock_code=seed['stock_code'], venue=seed['effective_venue'],
+            emitted_at=datetime.fromtimestamp(last_at, KST).isoformat(),
+            exit_policy_version=context['exit_policy_version'], policy_snapshot=context['policy_snapshot'],
+            initial_policy_state=state, pre_add_buy_qty=qty, pre_add_buy_price=weighted,
+            replay_peak_price=weighted, replay_start_sequence=0,
+            replay_max_frame_gap_sec=context['max_frame_gap_sec'], cost_rate=context['cost_rate'],
+            entry_split_initial_only=True, effective_min_buy_pressure=1,
+            route_replay={'ENTRY': dict(should_add=False, route_evaluation_complete=True)})
+        frames = []
+        for row in depth_rows:
+            clock = row.get('exchange_at') or row.get('observed_at') or row.get('emitted_at')
+            # Native validation precedes this helper; exact policy/service values
+            # remain bound to the recorded frame, never looked up from today's env.
+            from src.engine.monitoring.machine_microstructure_attribution import _validate_depth_row
+            valid, parsed, _, _, bid, ask = _validate_depth_row(row)
+            if not valid or parsed is None or row.get('path_consumer_eligible') is False:
+                raise ValueError('operating_native_frame_invalid')
+            if parsed.timestamp() <= last_at:
+                continue
+            ws = row.get('ws_data')
+            if not isinstance(ws, dict):
+                from src.engine.monitoring.machine_microstructure_attribution import _validate_stream_row
+                tick_values = []
+                for tick in trade_rows:
+                    valid_tick, eligible_tick, tick_at, tick_price, _, _ = _validate_stream_row(tick)
+                    if (valid_tick and eligible_tick and tick_at is not None
+                        and tick.get('symbol') == seed['stock_code'] and tick.get('venue') == seed['effective_venue']
+                        and tick.get('session_bucket') == seed['session_bucket']
+                        and 0 <= parsed.timestamp() - tick_at.timestamp() <= context['max_frame_gap_sec']):
+                        tick_values.append((tick_at.timestamp(), tick_price))
+                if not tick_values:
+                    raise ValueError('operating_recorded_trade_price_missing')
+                ws = dict(curr=max(tick_values)[1], best_bid=bid, best_ask=ask,
+                    best_bid_qty=row['best_bid_qty'], best_ask_qty=row['best_ask_qty'],
+                    last_ws_update_ts=parsed.timestamp(), last_realtime_type_ts={'0D':parsed.timestamp()},quote_stale=False)
+            frames.append(dict(source_event_id='entry-frame-' + owner.digest(row),
+                source_observation_id=episode, scale_in_decision_id=episode,
+                position_episode_id=episode, stock_code=seed['stock_code'], venue=seed['effective_venue'],
+                exit_policy_version=context['exit_policy_version'],
+                replay_frame_schema='avg_down_exit_replay_frame_v1', sequence=len(frames) + 1,
+                emitted_at=parsed.isoformat(), market=dict(best_bid=bid, best_ask=ask,
+                    best_bid_qty=row['best_bid_qty'], best_ask_qty=row['best_ask_qty'],
+                    source_quality='fresh_conflict_free', ws_data=copy.deepcopy(ws),
+                    market_regime=row.get('market_regime'),market_regime_observed_at=row.get('market_regime_observed_at'),
+                    recorded_inputs=row.get('recorded_inputs', {})),
+                full_policy_decisions=row.get('full_policy_decisions', {}), external_results=row.get('external_results', {})))
+        exit_result = (executor or adapter.isolated_replay)(observation, frames)
+        if exit_result.get('evidence_digest') != owner.digest({k: v for k, v in exit_result.items() if k != 'evidence_digest'}):
+            raise ValueError('operating_full_policy_result_digest_invalid')
+        outcome = (exit_result.get('outcomes') or {}).get('ENTRY') or {}
+        if (exit_result.get('state') != 'paired_exit_complete_source_only' or exit_result.get('blockers')
+            or exit_result.get('actual_order_submitted') is not False or exit_result.get('broker_order_forbidden') is not True
+            or outcome.get('status') != 'COMPLETED' or outcome.get('full_policy_evaluation') is not True
+            or outcome.get('exit_qty') != qty):
+            result['status'] = 'terminal_pending' if 'pending_exit_outcome' in str(exit_result.get('blockers')) else 'unsupported_scope'
+            result['blocker'] = 'operating_full_policy_incomplete:' + str(exit_result.get('blockers') or exit_result.get('adapter_error'))
+            return {**result, 'sha256': economics_digest(result)}
+        terminal = _timestamp(outcome['exit_time'], seed['source_date']).timestamp()
+        if terminal <= last_at or not _finite(outcome.get('exit_price'), positive=True):
+            raise ValueError('operating_exit_clock_or_price_invalid')
+        net = calculate_net_realized_pnl(round(weighted, 4), outcome['exit_price'], qty, cost_rate=context['cost_rate'])
+        if net != outcome.get('net_pnl_krw'):
+            raise ValueError('operating_cost_owner_result_mismatch')
+        stress = calculate_net_realized_pnl(round(weighted, 4), outcome['exit_price'], qty,
+            cost_rate=context['cost_rate'] + context['stress_cost_rate_increment'])
+        holding = sum(x['qty'] * x['price'] * (terminal - _timestamp(x['at'], seed['source_date']).timestamp()) / 60 for x in fills)
+        # Reserve each child until fill or its frozen TTL, then use holding capital.
+        ttl = started + context['order_bundle_hard_ttl_sec']
+        reserved=0.; outstanding=reserve; reserve_clock=started
+        for fill in sorted(fills,key=lambda x:x['at']):
+            at=_timestamp(fill['at'],seed['source_date']).timestamp()
+            reserved+=outstanding*max(0.,min(at,ttl)-reserve_clock)/60
+            outstanding-=fill['qty']*fill.get('reserved_price',fill['price'])
+            if outstanding < -1e-8:raise ValueError('operating_reserve_conservation_invalid')
+            reserve_clock=at
+        reserved+=max(0.,outstanding)*max(0.,ttl-reserve_clock)/60
+        result.update(status='completed_source_only', net_pnl_krw=net, stress_net_pnl_krw=stress,
+            net_return_pct=net / context['budget_krw'] * 100,
+            capital_krw_minutes=holding, reserve_krw_minutes=reserved,
+            modeled_entry_notional_krw=amount, modeled_exit_at=outcome['exit_time'],
+            terminal_evidence_sha256=exit_result['evidence_digest'], modeled_outcome='operating_terminal')
+    except (ValueError, TypeError, KeyError, OverflowError) as exc:
+        result['blocker'] = str(exc)
+    return {**result, 'sha256': economics_digest(result)}
+
+def entry_split_actual_economic_receipt(stock, *, buy_price, buy_qty, profit_rate, completion_at):
+    """Observe the existing completed sell receipt; missing fields remain null."""
+    from src.engine.scalping import entry_split_order_plan as split
+    from src.engine.trade_profit import get_trade_cost_rate
+    seed=stock.get('entry_split_initial_entry_seed') or {}
+    if not _entry_seed_valid(seed) or not seed.get('operating_contract'):
+        return None
+    context=seed['operating_contract']
+    completion_at=completion_at.replace(tzinfo=KST) if completion_at.tzinfo is None else completion_at.astimezone(KST)
+    cost_version='trade_profit_net_realized_pnl:rate=' + str(get_trade_cost_rate())
+    qty=int(buy_qty) if _finite(buy_qty,positive=True) and int(buy_qty)==buy_qty else None
+    net=stock.get('realized_pnl_krw')
+    complete=(stock.get('sell_execution_receipt_economics_complete') is True
+        and stock.get('sell_execution_receipt_quantity_contract_complete') is True
+        and _finite(net) and _finite(profit_rate) and qty is not None and 0<qty<=seed['total_qty']
+        and stock.get('entry_split_initial_entry_lineage_conflict') is not True
+        and cost_version==context['cost_policy_version'])
+    value=dict(episode_id=str(stock.get('position_episode_id') or seed['plan_sha256']),
+        plan_sha256=seed['plan_sha256'],source_date=seed['source_date'],
+        completion_date=completion_at.astimezone(KST).date().isoformat(),completed_at=completion_at.isoformat(),
+        status='COMPLETED',origin='real',owner='main_scalping',
+        scope_sha256=split._entry_operating_scope(seed),entry_qty=qty,
+        requested_qty=seed['total_qty'],actual_entry_vwap=buy_price,profit_rate=profit_rate if _finite(profit_rate) else None,
+        net_pnl_krw=net if _finite(net) else None,cost_complete=complete,exact_lineage=complete,
+        cost_policy_version=cost_version,cost_provenance='completed_sell_execution_receipt_trade_profit_configuration',
+        budget_krw=context['budget_krw'],capital_krw_minutes=None,reserve_krw_minutes=None,
+        policy_version=stock.get('entry_split_order_policy_version'),
+        policy_sha256=stock.get('entry_split_order_policy_sha256'),
+        policy_applied=stock.get('entry_split_order_policy_applied') is True,
+        runtime_pid=stock.get('entry_split_order_runtime_pid'),
+        pid_consumed=stock.get('entry_split_order_runtime_consumed') is True,
+        fill_class='full' if qty==seed['total_qty'] else 'partial',
+        cost_settlement_reconciled=stock.get('broker_cost_settlement_reconciled') is True,
+        blocker=None if complete else 'completed_initial_inventory_cost_or_lineage_unproven')
+    return {**value,'sha256':split._canonical_sha256(value)}

@@ -477,3 +477,18 @@ def record_market_inputs(code: str, *, now_ts: float, **values) -> None:
                 _MARKET_INPUTS.pop(next(iter(_MARKET_INPUTS)))
     except Exception:
         pass
+
+
+def recorded_market_inputs(code: str, *, cutoff_ts: float) -> dict:
+    """Freeze already observed owner inputs at the canonical depth cutoff.
+
+    No requests/subscriptions, no later values, no reconstruction of old frames.
+    """
+    with _LOCK:
+        values=deepcopy(_MARKET_INPUTS.get(str(code)[:6],{}))
+    values={key:row for key,row in values.items()
+        if isinstance(row,dict) and type(row.get("observed_at")) in (int,float)
+        and 0 <= cutoff_ts-row["observed_at"] <= MAX_FRAME_GAP_SEC}
+    if len(json.dumps(values,ensure_ascii=True).encode())>MAX_FRAME_BYTES:
+        return {"operating_capture":{"observed_at":cutoff_ts,"input_gap":"recorded_market_inputs_size_limit"}}
+    return values

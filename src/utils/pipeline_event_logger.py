@@ -450,6 +450,7 @@ def _project_fields_for_compact_stream(
         selected.update({key: value for key, value in fields.items()
             if key.startswith(("entry_execution_sizing_", "entry_price_plan_",
                                "entry_opportunity_", "entry_quantity_leg_"))
+            or key in {"entry_split_order_policy_sha256", "entry_split_order_runtime_pid", "entry_split_order_runtime_consumed", "entry_split_order_policy_version", "entry_split_order_policy_applied", "entry_split_submitted_price", "entry_split_submitted_at"}
             or key in {"broker_order_no", "ord_no", "effective_venue", "market_session_bucket"}})
     omitted_field_count = max(0, len(fields) - len(selected))
     if omitted_field_count <= 0:

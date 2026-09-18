@@ -41840,6 +41840,7 @@ def _decorate_scale_in_split_leg_ttls(split_orders, stock, strategy):
 def _split_order_meta_fields(order: dict | None) -> dict:
     src = order if isinstance(order, dict) else {}
     return {
+        **{key:src[key] for key in ("entry_split_initial_entry_seed","entry_split_initial_entry_lineage_conflict","entry_split_order_policy_sha256","entry_split_order_runtime_pid","entry_split_order_runtime_consumed") if key in src},
         "split_leg_ttl_sec": src.get("split_leg_ttl_sec"),
         "split_bundle_hard_ttl_sec": src.get("split_bundle_hard_ttl_sec"),
         "split_leg_role": src.get("split_leg_role"),
@@ -68388,8 +68389,11 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             return False
 
     if strategy == "SCALPING" and not opening_rotation_active:
+        from src.engine.scalping.strategy_owner_replay import freeze_entry_operating_context
+        operating_context = freeze_entry_operating_context(sys.modules[__name__], stock, sizing_context, now_ts=time.time())
         planned_orders, entry_split_fields = apply_entry_split_order_policy(
             planned_orders,
+            operating_context=operating_context,
             stock=stock,
             latency_gate={
                 **latency_gate,
@@ -68406,6 +68410,17 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         # let an incomplete or stale receipt become a valid execution plan.
         machine_action_receipt = submit_attempt_machine_lineage(stock, code)
         if planned_orders and machine_action_receipt:
+            planned_orders = _decorate_entry_split_leg_ttls(planned_orders, stock, strategy)
+            if operating_context:
+                timeout=_resolve_buy_order_timeout_sec(stock,strategy)
+                operating_context["order_leg_ttl_sec"]=[o.get("split_leg_ttl_sec") or timeout for o in planned_orders]
+                operating_context["order_bundle_hard_ttl_sec"]=max(o.get("split_bundle_hard_ttl_sec") or timeout for o in planned_orders)
+                operating_context["order_timeout_owner"]="sniper_state_handlers._resolve_buy_order_timeout_sec/_decorate_entry_split_leg_ttls"
+            if operating_context:
+                from src.engine.scalping.entry_split_order_plan import _context_bucket
+                operating_context["context_bucket"]=_context_bucket({**stock,**latency_gate,**entry_orderbook_micro_fields})
+                from src.engine.scalping.strategy_owner_components import digest
+                operating_context["sha256"]=digest({k:v for k,v in operating_context.items() if k!="sha256"})
             planned_orders, entry_execution_sizing_fields = (
                 compose_entry_execution_sizing_plan(
                     planned_orders,
@@ -68413,7 +68428,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     replay_context={"stock_code": str(code), "observed_at": time.time(),
                         "profile": latency_gate.get("entry_price_gap_profile"),
                         "profile_bps": latency_gate.get("entry_price_gap_profile_bps"),
-                        "sizing_context": sizing_context},
+                        "sizing_context": sizing_context, "operating_context": operating_context},
                     action_receipt=machine_action_receipt,
                     quantity_policy_version=(
                         stock.get("position_sizing_policy_version")
@@ -68425,6 +68440,16 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     ),
                 )
             )
+            seed = entry_execution_sizing_fields.get("entry_opportunity_replay_seed")
+            if seed:
+                original = stock.get("entry_split_initial_entry_seed")
+                if original and original.get("plan_sha256") != seed.get("plan_sha256"):
+                    stock["entry_split_initial_entry_lineage_conflict"] = True
+                else:
+                    stock["entry_split_initial_entry_seed"] = copy.deepcopy(seed)
+                if planned_orders:
+                    planned_orders[0]["entry_split_initial_entry_seed"]=copy.deepcopy(stock["entry_split_initial_entry_seed"])
+                    planned_orders[0]["entry_split_initial_entry_lineage_conflict"]=stock.get("entry_split_initial_entry_lineage_conflict",False)
         elif planned_orders:
             entry_execution_sizing_fields = {
                 "entry_execution_sizing_plan_schema": (
@@ -68457,6 +68482,11 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 ),
             }
         entry_split_fields.update(entry_execution_sizing_fields)
+        for receipt_key in ("entry_split_order_policy_sha256", "entry_split_order_runtime_pid", "entry_split_order_runtime_consumed"):
+            if receipt_key in entry_split_fields:
+                stock[receipt_key] = entry_split_fields[receipt_key]
+                for planned in planned_orders:
+                    planned[receipt_key] = entry_split_fields[receipt_key]
         if not entry_execution_sizing_fields.get("entry_execution_sizing_valid"):
             clear_signal_reference(stock)
             _log_entry_pipeline(
@@ -68491,7 +68521,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             ),
             **entry_execution_sizing_fields,
         )
-        planned_orders = _decorate_entry_split_leg_ttls(planned_orders, stock, strategy)
         submit_revalidation_fields.update(entry_split_fields)
         wait_probe_required = bool(
             entry_ai_submit_authority.get(
@@ -69812,6 +69841,9 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             broker_order_no_list=ord_no,
             broker_order_qty_list=f"{ord_no}:{qty}",
             order_response_ord_no=ord_no,
+            entry_split_submitted_price=price,
+            entry_split_submitted_at=datetime.fromtimestamp(order_sent_ts, _KST).isoformat(),
+            **{key: stock.get(key) for key in ("entry_split_order_policy_sha256", "entry_split_order_runtime_pid", "entry_split_order_runtime_consumed")},
             lifecycle_submission_leg_contract="exact_broker_order_leg_v1",
             lifecycle_submission_time_source=(
                 "pipeline_emit_after_broker_success_response"
@@ -70684,6 +70716,11 @@ def _merge_pending_entry_orders(existing_orders, entry_orders):
 
 
 ENTRY_SPLIT_POSITION_PROVENANCE_KEYS = (
+    "entry_split_initial_entry_seed",
+    "entry_split_initial_entry_lineage_conflict",
+    "entry_split_order_policy_sha256",
+    "entry_split_order_runtime_pid",
+    "entry_split_order_runtime_consumed",
     "entry_split_order_policy_applied",
     "entry_split_order_bucket",
     "entry_split_order_policy_version",
@@ -70707,7 +70744,8 @@ def _entry_split_position_provenance(entry_orders) -> dict:
         if not isinstance(order, dict):
             continue
         if not (
-            bool(order.get("entry_split_order_policy_applied"))
+            isinstance(order.get("entry_split_initial_entry_seed"),dict)
+            or bool(order.get("entry_split_order_policy_applied"))
             or str(order.get("entry_split_order_policy_variant_id") or "").strip()
             or str(order.get("entry_split_order_variant_id") or "").strip()
             or str(order.get("entry_split_order_policy_mode") or "").strip()

@@ -993,6 +993,9 @@ def record_post_sell_candidate(
             ),
             **_entry_split_post_sell_fields(stock),
         }
+        from src.engine.scalping.strategy_owner_replay import entry_split_actual_economic_receipt
+        payload["entry_split_actual_economics"] = entry_split_actual_economic_receipt(stock,
+            buy_price=buy_price, buy_qty=buy_qty, profit_rate=profit_rate, completion_at=sell_dt)
         for optional_key in (
             "no_scale_in_counterfactual_profit_pct",
             "scale_in_incremental_realized_delta_pct",
