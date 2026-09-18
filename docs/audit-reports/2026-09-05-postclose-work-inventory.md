@@ -158,3 +158,7 @@ Claude 폐기 실행·검증·cleanup 및 선택 배포 증거는 [9/18 폐기 �
 ## Limit-down 축 폐기
 
 사용자 지시로 전용 관찰 슬롯·스캐너 승격·PREOPEN 정책·장후 평가/검증 요구를 제거했다. 공유 주문·체결·손익 원천과 역사적 보유분의 안전 처리만 보존한다. 폐기 범위·산출물 삭제·검증과 배포 구분은 [폐기 리뷰](2026-09-19-limit-down-watch-retirement-review.md)를 따른다.
+
+### Compact 후속 순서 확인 (2026-09-19)
+
+통합 evaluate 뒤 기본 OFF인 performance/regime/producer-gap/stage-hook 분기를 지나 다음 활성 producer는 #89 WS finalize/monitor-only다. 그 다음 compact finalize→Daily refresh→EV/workorder 소비다. [후속 구조 리뷰·기존 결과·모델 한계](2026-09-19-compact-ai-postclose-integration-implementation-review.md#다음-활성-장후작업-ws-최종화-코드-변경-없는-분석)를 참조한다.9/17·18 intraday 보고서를 postclose final로 집계하지 않는다.

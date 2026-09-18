@@ -72,3 +72,7 @@ WS 최종화는 원 clock·type/route/session/epoch·시장 상태에 따라 sta
 | 모델 한계 |hotset은 first queue-rank capacity proxy, prune은 bounded selected episodes다. 실제 scheduler/capital/비중첩 운용 모델·대조군 검증 없이 전체 prune·실현 순익 또는 최적 capacity로 외삽할 수 없다. 최초 적절한 native pair를 확보한 뒤 기존 lookup-attention owner의 지원 범위로만 경제 비교한다.|
 
 판정: WS 최종화는 원천 품질과 기존 scanner 경제성 후행 연결을 위한 유지 가치가 있다. 현재는 장후 final 공급·BBO coverage/route·censored 원인이 우선이며 성능이나 capacity grid 확장을 먼저 할 근거는 없다. 전체 EV·일별 순익 동시 개선은 미입증이다. 다음 작업 소스·정책·산출물은 변경/재생성하지 않았다.
+
+### 후속 리뷰 배포 영수증
+
+- Source `9f814e30cbc08806750616e94f7ab099d5aa58d1` main/review branch atomic push 완료. `compact-ai-label-admission-reviewed-20260919` 실제 root의7 targeted·compile·compact scoped strict PASS 후 이전 selector bytes를 비교해 CAS 선택했다. router print-plan도 해당 root다. 기존 limit-down 폐기 및 다른 승인 구현을 포함한다.9/21 정책 bytes unchanged·raw/WS 원천·산출물 변경0, bot/서비스 재기동0·실제 PID 미소비다. 영수증 [review-deployment](../../tmp/compact-ai-integration-20260919/review-deployment.json), [review-strict](../../tmp/compact-ai-integration-20260919/review-strict.txt). 유효 입력이 바뀌지 않았으므로 정책 재생성·provider 호출·같은 raw의 전수 재실행을 하지 않았다.
