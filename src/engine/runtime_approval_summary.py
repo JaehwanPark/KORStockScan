@@ -2747,6 +2747,9 @@ def build_runtime_approval_summary(
             if message
         ],
     }
+    if target_date >= "2026-09-02":
+        from src.engine.scalping.scanner_lookup_attention_resource import selection_handoff
+        report["scanner_lookup_attention_selection"] = selection_handoff(REPORT_DIR, target_date)
     from src.engine.automation.drought_handoff import EFFECTIVE_DATE, canonical_receipt
 
     if target_date >= EFFECTIVE_DATE:

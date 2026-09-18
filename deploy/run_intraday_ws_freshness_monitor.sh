@@ -2,6 +2,23 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Default scheduled calls consume the selected reviewed source. Explicit
+# PROJECT_DIR remains the existing operator/test boundary; release calls share
+# workspace state and do not redirect recursively.
+WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+if [[ -z "${PROJECT_DIR:-}" && ! -L "$WORKSPACE_ROOT/data" && -f "$WORKSPACE_ROOT/data/runtime/runtime_release_selection.json" ]]; then
+  REVIEWED_ROOT="$("$WORKSPACE_ROOT/.venv/bin/python" -I - "$WORKSPACE_ROOT" <<'PYTHON'
+import runpy
+import sys
+from pathlib import Path
+workspace = Path(sys.argv[1])
+router = runpy.run_path(str(workspace / "src/engine/infrastructure/runtime_release_router.py"))
+root, _ = router["selected_release"](workspace)
+print(root)
+PYTHON
+  )"
+  exec bash "$REVIEWED_ROOT/deploy/run_intraday_ws_freshness_monitor.sh" "$@"
+fi
 PROJECT_DIR="${PROJECT_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 VENV_PY="${PROJECT_DIR}/.venv/bin/python"
 TARGET_DATE="${1:-$(TZ=Asia/Seoul date +%F)}"

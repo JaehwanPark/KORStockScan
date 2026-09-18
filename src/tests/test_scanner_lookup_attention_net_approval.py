@@ -49,7 +49,7 @@ def test_small_repeated_net_passes_all_three_economic_boundaries():
     assert not result["rollback_triggered"]
 
 
-def test_small_net_policy_reaches_frozen_preopen_and_runtime_without_approval(tmp_path):
+def test_small_net_archive_policy_cannot_bypass_integrated_execution_gap(tmp_path):
     source_date = date(2026, 9, 17)
     report, payload = _write_live_pair(tmp_path, source_date)
     base = small_rows()
@@ -90,11 +90,11 @@ def test_small_net_policy_reaches_frozen_preopen_and_runtime_without_approval(tm
         report_dir=tmp_path / "reports",
         applied_dir=applied_dir,
     )
-    assert receipt["active"]
+    assert not receipt["active"]
     assert not receipt["operator_approval_required"]
     loaded = policy.load_active_policy("2026-09-18", applied_dir=applied_dir)
-    assert loaded["active"]
-    assert policy.bounded_bonus(0.8, loaded)["bonus_points"] > 0
+    assert not loaded["active"]
+    assert policy.bounded_bonus(0.8, loaded)["bonus_points"] == 0
 
 
 def test_frozen_v1_diagnostics_remain_valid_without_new_approval_hurdle(tmp_path):

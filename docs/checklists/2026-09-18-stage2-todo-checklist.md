@@ -16,6 +16,16 @@
 
 ## 배포·성과 검증
 
+- [ ] `[ScannerLookupAttentionConsolidation0918] 조회 관심도 기존 스캐너 평가 통합·장중 소비·조건부 산출물 정리` (`Due: 2026-09-21`, `Slot: PREOPEN`, `TimeWindow: 07:00~07:35`, `Track: RuntimeStability`)
+  - Source: [LA0–LA6 개선계획](../proposals/scanner-lookup-attention-evaluation-consolidation-and-runtime-plan-2026-09-18.md). 후속 사용자가 구현·반복 리뷰/보완/검증·commit/push·배포와 제한 장후 결과 갱신을 승인했다. [Owning review](../audit-reports/2026-09-18-scanner-lookup-attention-consolidation-review.md), `tmp/scanner-attention-consolidation-20260918/` receipts를 따른다.
+  - 순서·소유: 장후 전체 개별단위 보완→통합 결과 검증→사용자 예정9/21 정책/PREOPEN 준비→자연 소비·성과.9/21 시간창은 최종 준비 경계이며 통합 구현/삭제를 휴장일·장전 창에 강제로 실행하지 않는다. 실제 calendar/선행 closure를 확인하고 기존 stable ID/Acceptance/History로 후속 checklist에 단일 owner 이전한다. 병행 `scale_in_split_order_plan` source/test/정책/수량은 해당 세션 소유다.
+  - 현황:9/17 독립 평가382.81초/hold_sample/applyfalse, valid6,277→full6→completed5(candidate1/control4), high/low 평균차이+0.02975044%p는 관찰값/가중치 미적용이다. 선택교체3개/3날짜의 snapshot 차이−2.38954987%p는 proxy no-edge이며 실제 실행EV가 아니다. 기존 산출물의 퇴역 conversion owner metadata 때문에 현행 read-only pair 검증은 `economic_acceptance_not_reproducible`1건이다.
+  - Acceptance: 기존 scanner monitor 경제성 section→Daily/strict/source/date/hash→단일 execution policy/PREOPEN→장중 같은 tier/budget/owner 정렬→Main 기계/실제 AI·가격/수량/최종 guard→자연 완료/cost를 연결한다. 동일 예산의 actual changed union에서 실행·청산·비용이 결속된 paired EV/순익 개선과 미사용 독립 holdout 및 기존 guard가 모두 통과한 경우만 bounded 가중치 적용한다. source gap/표본부족/no-effect/no-edge는 구분하고 bonus0을 유지한다. 원천/fact mart/보존정책/적용version/rollback/ledger/active input·다른 세션 증거를 보호한 manifest 검증 후 불필요 standalone 과거 산출물만 삭제한다. 구현·배포·결과 갱신·삭제의 receipt를 아래 Closure로 확인한다. 자연/PREOPEN/PID/positive 경제성은 OPEN이다.
+
+  - 구현 Closure: standalone CLI/publisher·heavy postclose/wait/DONE/strict old-artifact를 폐기하고 existing native incremental capture→final scanner section→Daily/EV/summary/strict→단일 zero-policy/date/hash 경로를 연결했다. 기존110MB state/5.7GB raw를 재구축하지 않고 기존 보고서의 해당 section만 갱신한다. 공식 master의 숫자 전용 identity 결함을 해당 validator에서 수리해 uppercase alphanumeric official 기록56개가 전체 master를 차단하지 않게 했으며 실제 선택 scope/guard는 보존했다.
+  - 현재 결과: exact fact revision 재결속 completed5·고정비용 비교 순익575.12765원·proxy3/3dates Δ−2.38954987%p, actual primary/null·source_gap·가중치0.9/17 관측→9/18 휴장 publication→9/21 prepared effective로 분리한다. PREOPEN first publication/기동은 미실행이다. 미선택 original recipe/요청량/실제 guard·ordered fill/exit/cost·same-budget capital 경로는 source 구조결손이며 데이터 누적만으로 active가 되지 않는다. 기존 exact CF replay owner의 원천/재현계약과 evaluator/publisher/PREOPEN positive 판정 보완 및 forward holdout closure를 별도로 요구한다.
+
+
 - [x] `[PanicSellDefenseSourceAcceptance0918] panic 보고서 날짜·cutoff·zero-sample 경계의 자연 소비 확인` (`Due: 2026-09-18`, `Slot: INTRADAY`, `TimeWindow: 13:00~15:28`, `Track: RuntimeStability`)
   - 사용자 승인: 반복 code review/fix/검증·commit/push·소스 배포·9/17 장후 결과 갱신. [개별단위 owning review](../audit-reports/2026-09-18-panic-sell-defense-result-review.md), `tmp/panic-defense-result-review-20260918/` receipt. breadth 다음 단위는 panic 보고서이며 다음은 조건부 scale-in plan이다. 기존 real/sim/probe/custody·정책·guard·수량·비용·schedule 보존.
   - 구현 Closure: KST target date/as_of 이전의 pipeline·mutable state/market/breadth·feedback만 해석, 실제0거래 반등 placeholder를 baseline에서 제외, 미구현 EV를 null/context로 선언. 주문identity별 중복 보존까지 기존2개 source/test 안에서최종82PASS·compile/diff/링크/print-only parser.5.7GB raw 재스캔·API/주문·전체chain 재실행 없음.

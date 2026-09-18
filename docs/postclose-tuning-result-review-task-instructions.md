@@ -152,6 +152,12 @@ Dated collection manifest는 Main의 기존 publisher→WS0B/0D callback에서 �
 
 기존 final-refresh service의 배포 source pin은 WorkingDirectory/ExecStart/PYTHONPATH/PROJECT_DIR/PYTHON_BIN을 동일 reviewed root로 맞춘다. 실행 중 worker를 변경/재시작하지 않고 미래 실행 binding만 갱신하며 소비 PID receipt를 별도 확인한다.
 
+### 5.1.3 조회 관심도 scanner 평가 통합
+
+조회 원천/점수/freshness·promotion/prune/attach·BBO 관측과 fact mart는 유지한다. 독립 lookup tuning 장후 CLI/정책 publisher/flag/DONE/wait는 폐기하고 기존 `intraday_ws_freshness_finalize`의 `scanner_unique_funnel.economic_cohorts.lookup_attention_selection`을 소비한다. 장중은 기존 native 변경분 수집만 하며, 최종은 fingerprint 변화에만 bounded 평가한다. 원본90일 재스캔·giant state migration을 새 반복 단계로 넣지 않는다. 운영 command와 구현 경계는 [LA0–LA6 계획](proposals/scanner-lookup-attention-evaluation-consolidation-and-runtime-plan-2026-09-18.md) 및 owning review를 따른다.
+
+Exact integrated section/date/hash를 Daily→EV/summary→strict와 단일 execution policy까지 결속한다. Full same-budget 실행/청산/요청량/guard/cost/자본 원천과 독립 검증이 없으면 primary EV/순익은 null/source_gap이며 가중치0 정책만 발행한다. Sampled BBO/snapshot 및 high/low COMPLETED 평균은 diagnostic으로 유지한다. 현행 existing CF owner의 exact replay 미구현은 시간만으로 해소되지 않으며 active promotion은 fail closed다. observed source date와 expected non-collection publication/next effective date를 분리하고 실제 target PREOPEN window 밖 receipt 발행은 금지한다. Parent monitor/전체 chain terminal과 lookup section 갱신은 별개다. Frozen 원본 hash/분모/비용/경제성 및 source-only successor provenance를 보존한 manifest 뒤 불필요 standalone 출력만 삭제한다.
+
 ### 5.2 결손·결함과 달성 가능성
 
 | 판정 | 입증할 내용 | 다음 조치·closure |

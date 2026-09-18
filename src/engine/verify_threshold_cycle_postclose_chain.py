@@ -3058,7 +3058,7 @@ def _missing_required_execution_flags(
     done_line_present: bool,
     recovery_done: bool,
 ) -> list[str]:
-    mandatory_true = {"scanner_lookup_attention_tuning"}
+    mandatory_true = {"intraday_ws_freshness_finalize"}
     return [
         key
         for key in required_flags
@@ -4263,9 +4263,9 @@ def _artifact_paths(target_date: str) -> dict[str, Path]:
         "observation_source_quality_audit": REPORT_DIR
         / "observation_source_quality_audit"
         / f"observation_source_quality_audit_{target_date}.json",
-        "scanner_lookup_attention_tuning": REPORT_DIR
-        / "scanner_lookup_attention_tuning"
-        / f"scanner_lookup_attention_tuning_{target_date}.json",
+        "scanner_lookup_attention_selection": REPORT_DIR
+        / "intraday_ws_freshness_monitor"
+        / f"intraday_ws_freshness_monitor_{target_date}.json",
         "scanner_lookup_attention_policy": PROJECT_ROOT
         / "data"
         / "threshold_cycle"
@@ -7091,41 +7091,22 @@ def _scanner_lookup_attention_required(target_date: str) -> bool:
 def _scanner_lookup_attention_status(
     report: dict[str, Any], policy: dict[str, Any], *, target_date: str
 ) -> dict[str, Any]:
-    from src.engine.monitoring.scanner_lookup_attention_tuning import (
-        validate_artifact_pair,
-    )
-    from src.engine.scalping.scanner_lookup_attention_policy import (
-        validate_policy_payload as validate_live_policy,
-    )
-
+    from src.engine.scalping.scanner_lookup_attention_resource import validate_integrated_selection
     try:
         parsed = date.fromisoformat(target_date)
-    except ValueError:
-        return {"status": "fail", "issues": ["target_date_invalid"]}
-    issues = validate_artifact_pair(report, policy, target=parsed)
-    state = str(report.get("status") or "")
-    if state not in {
-        "hold_sample",
-        "hold_no_edge",
-        "source_quality_blocked",
-        "forward_holdout_armed",
-        "live_auto_apply_ready",
-    }:
-        issues.append("promotion_state_invalid")
-    if state == "live_auto_apply_ready":
-        issues.extend(validate_live_policy(policy, source_date=parsed))
-    elif policy.get("allowed_runtime_apply") is not False:
-        issues.append("non_live_policy_runtime_apply_allowed")
-    return {
-        "status": "fail" if issues else "pass",
-        "issues": sorted(set(issues)),
-        "promotion_state": state or "missing",
-        "holdout_armed_since": report.get("holdout_armed_since"),
-        "allowed_runtime_apply": policy.get("allowed_runtime_apply"),
-        "runtime_effect": False,
-        "actual_order_submitted": False,
-        "broker_order_forbidden": True,
-    }
+        section = report["scanner_unique_funnel"]["economic_cohorts"]["lookup_attention_selection"]
+    except (ValueError, KeyError, TypeError):
+        return {"status": "fail", "issues": ["integrated_scanner_section_missing"]}
+    issues = validate_integrated_selection(section, policy, target=parsed)
+    daily = _load_json(REPORT_DIR / f"threshold_cycle_{target_date}.json")
+    handoff = daily.get("scanner_lookup_attention_selection") or {}
+    if handoff.get("source_section_sha256") != section.get("artifact_sha256"):
+        issues.append("scanner_daily_section_hash_handoff_missing")
+    if report.get("target_date") != target_date or section.get("evaluation_phase") != "postclose_final":
+        issues.append("integrated_final_date_missing")
+    return {"status": "fail" if issues else "pass", "issues": issues,
+            "promotion_state": section.get("status"), "allowed_runtime_apply": False,
+            "runtime_effect": False, "actual_order_submitted": False, "broker_order_forbidden": True}
 
 
 def _limit_down_watch_verification_enabled(
@@ -7228,15 +7209,15 @@ def build_threshold_cycle_postclose_verification(
 
     paths = _artifact_paths(target_date)
     ev_report = _load_json(paths["threshold_cycle_ev"])
-    scanner_lookup_attention_tuning = _load_json(
-        paths["scanner_lookup_attention_tuning"]
+    scanner_lookup_attention_selection = _load_json(
+        paths["scanner_lookup_attention_selection"]
     )
     scanner_lookup_attention_policy = _load_json(
         paths["scanner_lookup_attention_policy"]
     )
     scanner_lookup_attention = (
         _scanner_lookup_attention_status(
-            scanner_lookup_attention_tuning,
+            scanner_lookup_attention_selection,
             scanner_lookup_attention_policy,
             target_date=target_date,
         )
@@ -8001,7 +7982,7 @@ def build_threshold_cycle_postclose_verification(
     if _scanner_lookup_attention_required(target_date):
         required_execution_flags = (
             *required_execution_flags,
-            "scanner_lookup_attention_tuning",
+            "intraday_ws_freshness_finalize",
         )
     missing_execution_flags = _missing_required_execution_flags(
         required_execution_flags,
@@ -8275,7 +8256,7 @@ def build_threshold_cycle_postclose_verification(
         disabled_artifact_labels.add("limit_down_watch")
         disabled_artifact_labels.add("limit_down_watch_markdown")
     if not _scanner_lookup_attention_required(target_date):
-        disabled_artifact_labels.add("scanner_lookup_attention_tuning")
+        disabled_artifact_labels.add("scanner_lookup_attention_selection")
         disabled_artifact_labels.add("scanner_lookup_attention_policy")
     if execution_flags.get("stage_hook_workorder_discovery") is not True:
         disabled_artifact_labels.add("stage_hook_workorder_discovery")

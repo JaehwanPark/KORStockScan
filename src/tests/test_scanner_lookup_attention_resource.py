@@ -199,7 +199,7 @@ def test_preopen_freezes_policy_and_survives_previous_source_overwrite(tmp_path)
         report_dir=tmp_path / "reports",
         applied_dir=tmp_path / "applied",
     )
-    assert receipt["active"] is True
+    assert receipt["active"] is False
     loaded = policy.load_active_policy(target, applied_dir=tmp_path / "applied")
     (
         tmp_path / "policies" / "scanner_lookup_attention_policy_2026-09-17.json"
@@ -345,7 +345,7 @@ def test_invalid_generated_contract_is_not_published(monkeypatch):
     )
     published = []
     monkeypatch.setattr(tuning, "write_artifacts", lambda *args: published.append(args))
-    assert tuning.main() == 1
+    assert tuning.main() == 2
     assert published == []
 
 
@@ -367,6 +367,8 @@ def test_builder_to_preopen_auto_apply_requires_real_and_marginal_economics(
     observations = [
         {
             "observation_date": row["rec_date"],
+            "recommendation_id": row["recommendation_id"], "scanner_promotion_id": row.get("scanner_promotion_id", "SCANPROM-fixture"),
+            "stock_code": row.get("stock_code", "100000"), "effective_venue": "KRX", "market_session_bucket": "krx_regular",
             "lookup_attention_snapshot_score": (
                 0.9 if row["cohort"] == "candidate" else 0.4
             ),
@@ -414,7 +416,8 @@ def test_builder_to_preopen_auto_apply_requires_real_and_marginal_economics(
         tuning.validate_artifact_pair(report, candidate, target=date(2026, 9, 17)) == []
     )
     assert report["allowed_runtime_apply"] is positive_marginal
-    tuning.write_artifacts(report, candidate)
+    with pytest.raises(RuntimeError, match="publisher_retired"):
+        tuning.write_artifacts(report, candidate)
     receipt = policy.freeze_preopen_policy(
         date(2026, 9, 18),
         write=True,
@@ -423,11 +426,117 @@ def test_builder_to_preopen_auto_apply_requires_real_and_marginal_economics(
         report_dir=tmp_path / "reports",
         applied_dir=tmp_path / "applied",
     )
-    assert receipt["active"] is positive_marginal
+    assert receipt["active"] is False
     assert receipt["operator_approval_required"] is False
     loaded = policy.load_active_policy(
         date(2026, 9, 18), applied_dir=tmp_path / "applied"
     )
-    assert policy.bounded_bonus(0.9, loaded)["bonus_points"] == (
-        150 if positive_marginal else 0
-    )
+    assert policy.bounded_bonus(0.9, loaded)["bonus_points"] == 0
+
+
+def integrated_fixture(monkeypatch):
+    from src.engine.monitoring import scanner_lookup_attention_tuning as tuning
+    monkeypatch.setattr(tuning, "load_completed_facts", lambda *args: [])
+    monkeypatch.setattr(tuning, "_latest_symbol_master", lambda *args: (set(), {"status": "pass"}))
+    monkeypatch.setattr(tuning, "_source_quality", lambda *args: {"status": "pass"})
+    monkeypatch.setattr(tuning, "_latest_prior_policy", lambda *args: {})
+    monkeypatch.setattr(tuning, "_event_path", lambda *args: pytest.fail("rolling raw scan forbidden"))
+    return tuning
+
+
+def test_native_capture_decoder_preserves_full_partial_and_conflicting_mirrors(monkeypatch):
+    from src.tests.test_scanner_lookup_attention_tuning import _observation_event, _receipt_event
+    tuning = integrated_fixture(monkeypatch)
+    state = {}
+    for event in (_observation_event(), _receipt_event(), _receipt_event()):
+        resource.capture_native_event(state, event)
+    assert len(state["lookup_attention_native_events"]) == 2
+    events = list(state["lookup_attention_native_events"].values())
+    observations, lineage = tuning.collect_lineage(date(2026, 9, 2), events_by_date={"2026-09-02": events})
+    assert observations[0]["fill_class"] == "full_fill"
+    conflict = _observation_event()
+    conflict["fields"]["lookup_attention_snapshot_score"] = 0.1
+    resource.capture_native_event(state, conflict)
+    observations, lineage = tuning.collect_lineage(date(2026, 9, 2), events_by_date={"2026-09-02": list(state["lookup_attention_native_events"].values())})
+    assert observations == []
+    assert lineage["invalid_observation_count"] == 1
+
+
+def test_positive_snapshot_and_completed_cohorts_never_replace_executable_portfolio_ev(monkeypatch, tmp_path):
+    tuning = integrated_fixture(monkeypatch)
+    from src.tests.test_scanner_lookup_attention_tuning import _passing_rows
+    monkeypatch.setattr(tuning, "join_completed_outcomes", lambda *args, **kwargs: (_passing_rows(date(2026, 9, 2)), {}))
+    section = resource.integrated_selection_evaluation(date(2026, 9, 17), {}, migration={"resource_pair_rows": ready_resource_rows()})
+    assert section["snapshot_proxy"]["diagnostic_snapshot_gate_pass"]
+    assert section["actual_completed"]["book"]["candidate_control_ev_uplift_pct"] > 0
+    assert section["primary_economics"]["paired_delta_ev_pct"] is None
+    assert section["status"] == "source_gap"
+    report = {"target_date": "2026-09-17", "evaluation_phase": "postclose_final",
+              "scanner_unique_funnel": {"economic_cohorts": {"lookup_attention_selection": section}}}
+    payload = policy.publish_integrated_policy(report, policy_dir=tmp_path)
+    assert not resource.validate_integrated_selection(section, payload, target=date(2026, 9, 17))
+    fabricated = {**payload, "allowed_runtime_apply": True, "status": "live_auto_apply_ready"}
+    fabricated["artifact_sha256"] = policy.canonical_sha256({k:v for k,v in fabricated.items() if k != "artifact_sha256"})
+    assert "unsupported_execution_authority" in resource.validate_integrated_selection(section, fabricated, target=date(2026, 9, 17))
+
+
+def test_integrated_zero_policy_next_open_source_dates_cache_and_preopen_window(monkeypatch, tmp_path):
+    import json
+    integrated_fixture(monkeypatch)
+    section = resource.integrated_selection_evaluation(date(2026, 9, 17), {})
+    report = {"target_date": "2026-09-17", "evaluation_phase": "postclose_final",
+              "scanner_unique_funnel": {"economic_cohorts": {"lookup_attention_selection": section}}}
+    reports = tmp_path / "reports"
+    policies = tmp_path / "policies"
+    reports.mkdir()
+    source_path = reports / "intraday_ws_freshness_monitor_2026-09-17.json"
+    source_path.write_text(json.dumps(report))
+    payload = policy.publish_integrated_policy(report, publication_date="2026-09-18", effective_date="2026-09-21", policy_dir=policies)
+    assert payload["source_evaluation_date"] == "2026-09-17"
+    candidate = policy.load_candidate_policy("2026-09-21", policy_dir=policies, report_dir=reports)
+    assert candidate["reason"] == "prior_policy_not_live_auto_apply_ready"
+    # Cache invalidates on the actual observation source, not publication date.
+    report["scanner_unique_funnel"]["economic_cohorts"]["lookup_attention_selection"]["primary_economics"]["paired_delta_ev_pct"] = 100
+    source_path.write_text(json.dumps(report))
+    assert policy.load_candidate_policy("2026-09-21", policy_dir=policies, report_dir=reports)["reason"] == "prior_policy_contract_invalid"
+    with pytest.raises(ValueError, match="outside_target_date_window"):
+        policy.freeze_preopen_policy("2026-09-21", write=True,
+            now=datetime(2026, 9, 18, 8, tzinfo=ZoneInfo("Asia/Seoul")),
+            policy_dir=policies, report_dir=reports, applied_dir=tmp_path / "applied")
+
+
+def test_identical_final_input_reuses_result_and_cost_revision_invalidates(monkeypatch):
+    tuning = integrated_fixture(monkeypatch)
+    section = resource.integrated_selection_evaluation(date(2026, 9, 17), {})
+    monkeypatch.setattr(tuning, "_resource_allocation_pair_book", lambda *args, **kwargs: pytest.fail("unchanged input re-evaluated"))
+    assert resource.integrated_selection_evaluation(date(2026, 9, 17), {}, predecessor=section) is section
+
+
+def test_daily_and_strict_consume_same_section_without_touching_other_families(monkeypatch, tmp_path):
+    import json
+    from src.engine import daily_threshold_cycle_report as daily
+    from src.engine import verify_threshold_cycle_postclose_chain as verifier
+    integrated_fixture(monkeypatch)
+    root = tmp_path / "data" / "report"
+    root.mkdir(parents=True)
+    monkeypatch.setattr(daily, "REPORT_DIR", root)
+    monkeypatch.setattr(verifier, "REPORT_DIR", root)
+    (root / "threshold_cycle_2026-09-17.json").write_text(json.dumps({"date": "2026-09-17", "unrelated_family": [1, 2]}))
+    micro = root / "microstructure_reaction_context"
+    micro.mkdir()
+    (micro / "microstructure_reaction_context_2026-09-17.json").write_text(json.dumps({"date": "2026-09-17", "summary": {}}))
+    section = resource.integrated_selection_evaluation(date(2026, 9, 17), {})
+    report = {"target_date": "2026-09-17", "evaluation_phase": "intraday",
+              "scanner_unique_funnel": {"economic_cohorts": {"lookup_attention_selection": section}}}
+    monitor = root / "intraday_ws_freshness_monitor"
+    monitor.mkdir()
+    (monitor / "intraday_ws_freshness_monitor_2026-09-17.json").write_text(json.dumps(report))
+    payload = policy.publish_integrated_policy(report, policy_dir=root.parent / "threshold_cycle" / "scanner_lookup_attention_policy")
+    daily.refresh_machine_evaluation_only("2026-09-17")
+    consumed = json.loads((root / "threshold_cycle_2026-09-17.json").read_text())
+    assert consumed["unrelated_family"] == [1, 2]
+    assert consumed["scanner_lookup_attention_selection"]["source_section_sha256"] == section["artifact_sha256"]
+    assert verifier._scanner_lookup_attention_status(report, payload, target_date="2026-09-17")["status"] == "pass"
+    consumed["scanner_lookup_attention_selection"]["source_section_sha256"] = "0" * 64
+    (root / "threshold_cycle_2026-09-17.json").write_text(json.dumps(consumed))
+    assert verifier._scanner_lookup_attention_status(report, payload, target_date="2026-09-17")["status"] == "fail"

@@ -2,11 +2,12 @@
 
 Snapshot returns are opportunity proxies, never broker fills.  The caller must
 also pass the independent, real COMPLETED/full-fill economic promotion gates.
-This module performs no I/O and has no trading authority.
+Selection math is pure. Final evaluation reads existing compact sources only;
+no function has trading authority.
 """
 
 from collections import Counter, defaultdict
-from datetime import datetime
+from datetime import date, datetime
 import math
 from zoneinfo import ZoneInfo
 
@@ -510,3 +511,275 @@ def compact_evidence_rows(rows, *, capacity_reasons=()):
         "raw_reordered_generation_count": diagnostics["reordered_generation_count"],
         "raw_excluded_partition_counts": diagnostics["excluded_partition_counts"],
     }
+
+
+INTEGRATED_CONTRACT = "scanner_lookup_attention_integrated_selection_v1"
+NATIVE_FIELDS = (
+    '905',
+    '907',
+    'attempt_id',
+    'block_reason',
+    'buy_sell_type',
+    'decision',
+    'effective_venue',
+    'fill_quality',
+    'lookup_attention_actual_order_submitted',
+    'lookup_attention_allowed_runtime_apply',
+    'lookup_attention_broker_order_forbidden',
+    'lookup_attention_resource_actual_score',
+    'lookup_attention_resource_counterfactual_bonus_points',
+    'lookup_attention_resource_eligibility_pass',
+    'lookup_attention_resource_eligibility_reason',
+    'lookup_attention_resource_observed_epoch',
+    'lookup_attention_resource_pair_contract_version',
+    'lookup_attention_resource_pair_eligible',
+    'lookup_attention_resource_partition_codes_sha256',
+    'lookup_attention_resource_partition_count',
+    'lookup_attention_resource_price',
+    'lookup_attention_resource_price_observed_epoch',
+    'lookup_attention_resource_simple_capacity',
+    'lookup_attention_resource_snapshot_score',
+    'lookup_attention_runtime_effect',
+    'lookup_attention_snapshot_score',
+    'lookup_attention_state',
+    'lookup_attention_weight_actual_order_submitted',
+    'lookup_attention_weight_allowed_runtime_apply',
+    'lookup_attention_weight_bonus_points',
+    'lookup_attention_weight_broker_order_forbidden',
+    'lookup_attention_weight_decision_authority',
+    'lookup_attention_weight_effective_venue',
+    'lookup_attention_weight_eligible_session_buckets',
+    'lookup_attention_weight_eligible_venues',
+    'lookup_attention_weight_forbidden_uses',
+    'lookup_attention_weight_market_session_bucket',
+    'lookup_attention_weight_max_source_age_sec',
+    'lookup_attention_weight_policy_applied',
+    'lookup_attention_weight_policy_artifact_sha256',
+    'lookup_attention_weight_policy_reason',
+    'lookup_attention_weight_policy_source_date',
+    'lookup_attention_weight_policy_state',
+    'lookup_attention_weight_policy_version',
+    'lookup_attention_weight_preopen_artifact_sha256',
+    'lookup_attention_weight_rollback_bonus_points',
+    'lookup_attention_weight_runtime_effect',
+    'lookup_attention_weight_same_priority_tier_only',
+    'lookup_attention_weight_source_age_sec',
+    'lookup_attention_weight_source_fresh',
+    'main_lifecycle_attempt_id',
+    'main_lifecycle_record_id',
+    'main_lifecycle_scanner_promotion_id',
+    'main_lifecycle_session_bucket',
+    'main_lifecycle_trade_date',
+    'main_lifecycle_venue',
+    'market_session_bucket',
+    'order_filled_qty',
+    'order_remaining_qty',
+    'order_requested_qty',
+    'order_side',
+    'realtime_lookup_source_date',
+    'realtime_lookup_source_time',
+    'reason',
+    'receipt_quantity_contract_complete',
+    'runtime_record_id',
+    'scanner_promotion_id',
+    'scanner_prune_reason',
+    'scanner_rank_priority_flu_rate',
+    'scanner_rank_priority_market_gainer_partition',
+    'scanner_rank_priority_rank_partition',
+    'scanner_rank_priority_reserved_partition',
+    'scanner_rank_priority_score_with_lookup_attention',
+    'scanner_rank_priority_score_without_lookup_attention',
+    'scanner_rank_priority_source_rank',
+    'scanner_rank_priority_tier',
+    'scanner_ranked_candidate_count',
+    'scanner_scan_generation_id',
+    'scanner_scan_rank',
+    'scanner_watch_budget_owner',
+    'venue',
+)
+NATIVE_STAGES = {
+    "scalping_scanner_candidate_promoted", "scalping_scanner_candidate_pruned",
+    "scalping_scanner_runtime_target_attach", "position_rebased_after_fill",
+    "scalping_scanner_fast_precheck", "scalping_scanner_heavy_eval_completion",
+    "scalp_entry_action_decision_snapshot", "pre_submit_entry_ai_authority_guard_block",
+    "entry_submit_revalidation_block", "entry_submit_revalidation_warning",
+    "order_bundle_submitted",
+}
+
+
+def capture_native_event(state, event):
+    """Retain only existing decoder inputs; no API, AI, or sizing invocation."""
+    if event.get("stage") not in NATIVE_STAGES:
+        return
+    fields = event.get("fields")
+    if not isinstance(fields, dict):
+        return
+    if not (fields.get("scanner_promotion_id") or fields.get("main_lifecycle_scanner_promotion_id")
+            or fields.get("lookup_attention_resource_pair_contract_version")):
+        return
+    # Fingerprint includes all native semantics: conflicting mirrors must reach
+    # the decoder as conflicts rather than overwrite a valid source record.
+    native = {key: event.get(key) for key in
+              ("stage", "stock_code", "record_id", "emitted_date", "emitted_at", "fields")}
+    native["fields"] = {key: fields[key] for key in NATIVE_FIELDS if key in fields}
+    state.setdefault("lookup_attention_native_events", {})[canonical_sha256(native)] = native
+
+
+def integrated_selection_evaluation(target, events_by_date, *, predecessor=None, migration=None):
+    """Bounded final evaluation from incremental native ledgers, never rolling raw.
+
+    Existing missed-entry replay explicitly lacks exact fill/exit/capital replay.
+    Sampled snapshots and realized high/low cohorts cannot repair that source
+    contract. Keep the primary null until that existing execution owner supplies
+    a reproducible portfolio comparison; do not add a new fill simulator here.
+    """
+    from src.engine.monitoring.scanner_lookup_attention_tuning import (
+        collect_lineage, load_completed_facts, join_completed_outcomes,
+        _latest_symbol_master, _source_quality, _cohort_book, _resource_allocation_pair_book,
+        evaluate_post_apply, _latest_prior_policy, COST_CONTRACT, _resource_window_start, _conversion_diagnostics,
+    )
+    if migration is None and isinstance(predecessor, dict):
+        migration = predecessor.get("historical_migration_diagnostics")
+    migration = migration if isinstance(migration, dict) else {}
+    observations, lineage = collect_lineage(target, events_by_date=events_by_date)
+    rows = lineage.pop("_resource_pair_rows", [])
+    # Exact original COMPLETED observation identities can be rejoined to fresh
+    # fact revisions. Historical cohort denominators remain archive diagnostics.
+    identity = lambda row: (row.get("observation_date"), row.get("recommendation_id"), row.get("scanner_promotion_id"), row.get("stock_code"))
+    native_keys = {identity(row) for row in observations}
+    observations += [row for row in migration.get("outcomes", []) if identity(row) not in native_keys]
+    resource_keys = {(row.get("observation_date"), row.get("scan_generation_id"), row.get("stock_code")) for row in rows}
+    rows += [row for row in migration.get("resource_pair_rows", []) if (row.get("observation_date"), row.get("scan_generation_id"), row.get("stock_code")) not in resource_keys]
+    observations = [row for row in observations if lineage["window_start"] <= str(row.get("observation_date") or "") <= target.isoformat()]
+    resource_start = _resource_window_start(target).isoformat()
+    rows = [row for row in rows if resource_start <= str(row.get("observation_date") or "") <= target.isoformat()]
+    facts = load_completed_facts(date.fromisoformat(lineage["window_start"]), target)
+    symbols, master = _latest_symbol_master(target)
+    outcomes, exclusions = join_completed_outcomes(observations, facts, eligible_symbols=symbols)
+    source_quality = _source_quality(target, {date.fromisoformat(row["rec_date"]) for row in outcomes}
+                                    | {date.fromisoformat(row["observation_date"]) for row in rows if row.get("observation_date")})
+    prior_policy = _latest_prior_policy(target)
+    # Completion revisions and model/source version are in the final input hash.
+    fingerprint = canonical_sha256({"contract": INTEGRATED_CONTRACT, "evaluator_revision": 1,
+        "events": events_by_date, "facts": facts, "master": master,
+        "source_quality": source_quality, "migration": migration, "cost_contract": COST_CONTRACT,
+        "prior_policy": prior_policy})
+    if (isinstance(predecessor, dict) and predecessor.get("input_sha256") == fingerprint
+            and predecessor.get("artifact_sha256") == canonical_sha256({k:v for k,v in predecessor.items() if k != "artifact_sha256"})):
+        return predecessor
+    proxy = _resource_allocation_pair_book(rows, invalid_row_count=lineage["invalid_resource_pair_count"])
+    conversion = _conversion_diagnostics(observations)
+    conversion["intended_consumer"] = "intraday_ws_freshness_monitor.lookup_attention_selection"
+    conversion["scope"] = "known_exact_observations;historical_full_census_in_migration_receipt"
+    actual_book = _cohort_book(outcomes)
+    for cohort in ("all", "candidate", "control"):
+        if not actual_book[cohort]["completed_outcome_count"]:
+            actual_book[cohort]["net_pnl_krw"] = None
+    applied = evaluate_post_apply(prior_policy, outcomes)
+    applied["actual_ev_pct"] = None
+    applied["actual_net_pnl_krw"] = None
+    if applied["status"] == "not_applicable_before_live_apply":
+        applied.pop("book", None)
+    gaps = ["original_unselected_entry_recipe_quantity_guard_missing",
+            "exact_fill_exit_cost_counterfactual_replay_missing",
+            "same_budget_portfolio_capital_path_missing"]
+    result = {"contract_version": INTEGRATED_CONTRACT, "target_date": target.isoformat(),
+        "input_sha256": fingerprint, "status": "source_gap", "metric_role": "primary_ev",
+        "evaluation_phase": "postclose_final", "generated_at": datetime.now(ZoneInfo("Asia/Seoul")).isoformat(),
+        "decision_authority": "source_only_selection_economics",
+        "runtime_effect": False, "allowed_runtime_apply": False,
+        "actual_order_submitted": False, "broker_order_forbidden": True,
+        "window_policy": "rolling90_calendar_native_incremental_ledgers_clean_post_rollout",
+        "source_quality_gate": "native_exact_lineage_master_cost_and_same_budget_execution_replay",
+        "sample_floor": {"real_total": 20, "real_dates": 5, "real_cohort": 10, "real_cohort_dates": 3,
+                         "paired": 3, "paired_dates": 2},
+        "forbidden_uses": ["snapshot_as_execution_ev", "cohort_mean_as_causal_uplift", "source_gap_as_zero_or_no_edge"],
+        "native_events": events_by_date.get(target.isoformat(), []),
+        "historical_migration_diagnostics": migration,
+        "lineage": lineage, "source_quality": source_quality, "official_symbol_master": master,
+        "exclusions": exclusions, "resource_pair_rows": rows,
+        "snapshot_proxy": {**proxy, "metric_role": "supporting_proxy",
+                           "ready_for_live_gate": False, "diagnostic_snapshot_gate_pass": proxy["ready_for_live_gate"]},
+        "actual_completed": {"metric_role": "observational_completed_net", "book": actual_book,
+                             "outcomes": outcomes, "causal_uplift": None,
+                             "cost_basis": "fixed_fee_tax_comparison_actual_fill_prices_not_broker_reconciled"},
+        "actual_applied_version": applied,
+        "conversion_diagnostics": conversion,
+        "selection_disposition": ("source_gap" if not proxy["complete_partition_count"] else
+            "no_capacity_competition" if not proxy["paired_generation_count"] else
+            "hold_no_effect" if not proxy["reordered_generation_count"] else "changed_selection"),
+        "primary_economics": {"status": "source_gap", "paired_delta_ev_pct": None,
+            "baseline_budget_ev_pct": None, "candidate_budget_ev_pct": None,
+            "baseline_net_pnl_krw": None, "candidate_net_pnl_krw": None,
+            "tail": None, "exposure": None, "model_error": None, "source_gaps": gaps},
+        "independent_holdout": {"status": "not_armed", "historical_dates_not_fresh_holdout": True},
+        "source_gap_owner": "sniper_missed_entry_counterfactual.exact_fill_exit_cost_counterfactual_replay",
+        "closure_test": "native original requested quantity/recipe/guards plus ordered fill/exit/cost and full frozen capital path reproduce both selections before independent forward holdout",
+        "eta": None,
+    }
+    result["artifact_sha256"] = canonical_sha256(result)
+    return result
+
+
+def validate_integrated_selection(section, policy, *, target):
+    """Shared publisher/PREOPEN/verifier predicate for the supported contract.
+
+    The current source owner cannot reproduce executable portfolio CF. The only
+    publishable state is an explicit zero-bonus disposition. Unsupported ready
+    claims fail closed, including self-hashed fabricated paired economics.
+    """
+    issues = []
+    if not isinstance(section, dict) or not isinstance(policy, dict):
+        return ["integrated_source_or_policy_missing"]
+    for payload in (section, policy):
+        if (payload is section and payload.get("target_date") != target.isoformat()) or (payload is policy and payload.get("source_evaluation_date") != target.isoformat()):
+            issues.append("integrated_exact_date_mismatch")
+        try:
+            expected_hash = canonical_sha256({k:v for k,v in payload.items() if k != "artifact_sha256"})
+        except (TypeError, ValueError):
+            expected_hash = None
+        if not expected_hash or payload.get("artifact_sha256") != expected_hash:
+            issues.append("integrated_artifact_hash_mismatch")
+        if (payload.get("runtime_effect") is not False or payload.get("allowed_runtime_apply") is not False
+                or payload.get("actual_order_submitted") is not False or payload.get("broker_order_forbidden") is not True):
+            issues.append("unsupported_execution_authority")
+    primary = section.get("primary_economics")
+    if not isinstance(primary, dict):
+        return sorted(set(issues + ["primary_economics_missing"]))
+    if (section.get("contract_version") != INTEGRATED_CONTRACT
+            or section.get("evaluation_phase") != "postclose_final"
+            or policy.get("integrated_source_contract") != INTEGRATED_CONTRACT
+            or policy.get("source_report_artifact_sha256") != section.get("artifact_sha256")
+            or policy.get("status") != "source_quality_blocked"
+            or section.get("status") != "source_gap"
+            or primary.get("paired_delta_ev_pct") is not None
+            or not primary.get("source_gaps")
+            or policy.get("effective_bonus_points") != 0.0):
+        issues.append("integrated_disposition_invalid")
+    return sorted(set(issues))
+
+
+def selection_handoff(report_dir, target_date):
+    """Compact, hash-bound diagnostic consumption shared by Daily/EV/summary."""
+    import json
+    from pathlib import Path
+    root = Path(report_dir)
+    path = root / "intraday_ws_freshness_monitor" / f"intraday_ws_freshness_monitor_{target_date}.json"
+    result = {"source_path": str(path), "source_evaluation_date": target_date,
+              "status": "source_missing", "allowed_runtime_apply": False}
+    try:
+        if path.stat().st_size > 64 * 1024 * 1024:
+            raise ValueError("integrated_source_exceeds_bounded_read")
+        report = json.loads(path.read_text())
+        section = report["scanner_unique_funnel"]["economic_cohorts"]["lookup_attention_selection"]
+        policy_path = root.parent / "threshold_cycle" / "scanner_lookup_attention_policy" / f"scanner_lookup_attention_policy_{target_date}.json"
+        policy = json.loads(policy_path.read_text())
+        issues = validate_integrated_selection(section, policy, target=date.fromisoformat(target_date))
+        if issues or report.get("target_date") != target_date or section.get("evaluation_phase") != "postclose_final":
+            raise ValueError("integrated_final_handoff_invalid")
+        result.update({"status": section["status"], "source_section_sha256": section["artifact_sha256"],
+            "primary_economics": section["primary_economics"], "snapshot_proxy": section["snapshot_proxy"],
+            "actual_completed": {key:value for key,value in section["actual_completed"].items() if key != "outcomes"}})
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        result["source_gap"] = str(exc)
+    return result

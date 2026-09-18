@@ -21095,6 +21095,8 @@ def refresh_machine_evaluation_only(target_date: str) -> dict:
         "path": str(source_path), "exists": True, "loaded": True,
         "operating_status": "diagnostic_only", "top_keys": list(source),
     }
+    from src.engine.scalping.scanner_lookup_attention_resource import selection_handoff
+    report["scanner_lookup_attention_selection"] = selection_handoff(REPORT_DIR, target_date)
     report["microstructure_evaluation_refreshed_at"] = datetime.now().isoformat()
     current = path.stat()
     if (current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns) != (generation.st_dev, generation.st_ino, generation.st_size, generation.st_mtime_ns):

@@ -28,7 +28,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 POLICY_DIR = (
     PROJECT_ROOT / "data" / "threshold_cycle" / "scanner_lookup_attention_policy"
 )
-SOURCE_REPORT_DIR = PROJECT_ROOT / "data" / "report" / "scanner_lookup_attention_tuning"
+SOURCE_REPORT_DIR = PROJECT_ROOT / "data" / "report" / "intraday_ws_freshness_monitor"
 PREOPEN_DIR = (
     PROJECT_ROOT / "data" / "threshold_cycle" / "scanner_lookup_attention_preopen"
 )
@@ -509,67 +509,17 @@ def _non_live_payload_valid(payload: Any, *, source_date: date) -> bool:
 def _source_report_valid(
     payload: dict[str, Any], *, source_date: date, report_dir: Path
 ) -> bool:
-    path = (
-        report_dir / f"scanner_lookup_attention_tuning_{source_date.isoformat()}.json"
-    )
+    from src.engine.scalping.scanner_lookup_attention_resource import validate_integrated_selection
     try:
-        report = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return False
-    if not isinstance(report, dict):
-        return False
-    try:
-        expected_hash = canonical_sha256(
-            {key: value for key, value in report.items() if key != "artifact_sha256"}
-        )
-    except (TypeError, ValueError):
-        return False
-    source_quality = (
-        report.get("source_quality")
-        if isinstance(report.get("source_quality"), dict)
-        else {}
-    )
-    symbol_master = (
-        report.get("official_symbol_master")
-        if isinstance(report.get("official_symbol_master"), dict)
-        else {}
-    )
-    try:
-        policy_evidence_hash = canonical_sha256(payload.get("evidence"))
-    except (TypeError, ValueError):
-        return False
-    shallow_contract_valid = bool(
-        report.get("schema_version") == TUNING_REPORT_SCHEMA_VERSION
-        and report.get("report_type") == "scanner_lookup_attention_tuning"
-        and report.get("target_date") == source_date.isoformat()
-        and report.get("status") == "live_auto_apply_ready"
-        and report.get("decision_contract_version") == DECISION_CONTRACT_VERSION
-        and report.get("decision_authority") == DECISION_AUTHORITY
-        and report.get("user_authority") == USER_AUTHORITY
-        and source_quality.get("status") == "pass"
-        and symbol_master.get("status") == "pass"
-        and report.get("runtime_policy_provenance_status") == "pass"
-        and report.get("policy_evidence_sha256") == policy_evidence_hash
-        and report.get("allowed_runtime_apply") is True
-        and report.get("runtime_effect") is False
-        and report.get("actual_order_submitted") is False
-        and report.get("broker_order_forbidden") is True
-        and report.get("artifact_sha256") == expected_hash
-        and payload.get("source_report_artifact_sha256") == expected_hash
-    )
-    if not shallow_contract_valid:
-        return False
-    try:
-        # Import lazily so the live policy module keeps a small import surface.
-        # The shared validator is intentionally repeated here: a producer can
-        # write its pair before its subsequent --verify-only step fails, and
-        # that partially written pair must never gain next-session authority.
-        from src.engine.monitoring.scanner_lookup_attention_tuning import (
-            validate_artifact_pair,
-        )
-
-        return not validate_artifact_pair(report, payload, target=source_date)
-    except Exception:
+        evaluation_date = date.fromisoformat(payload["source_evaluation_date"])
+        if evaluation_date > source_date:
+            return False
+        report = json.loads((report_dir / f"intraday_ws_freshness_monitor_{evaluation_date}.json").read_text())
+        section = report["scanner_unique_funnel"]["economic_cohorts"]["lookup_attention_selection"]
+        return bool(report.get("target_date") == evaluation_date.isoformat()
+                    and section.get("evaluation_phase") == "postclose_final"
+                    and not validate_integrated_selection(section, payload, target=evaluation_date))
+    except (OSError, KeyError, TypeError, ValueError):
         return False
 
 
@@ -610,8 +560,11 @@ def _load_active_cached(
         return _inactive(
             "prior_policy_contract_invalid", validation_errors=["policy_not_object"]
         )
+    if payload.get("prepared_effective_date") and payload["prepared_effective_date"] != target.isoformat():
+        return _inactive("prepared_policy_effective_date_mismatch")
     if payload.get("status") != "live_auto_apply_ready":
-        if _non_live_payload_valid(payload, source_date=source_date):
+        if (_non_live_payload_valid(payload, source_date=source_date)
+                and _source_report_valid(payload, source_date=source_date, report_dir=Path(report_dir_text))):
             return _inactive(
                 "prior_policy_not_live_auto_apply_ready",
                 policy_source_date=source_date.isoformat(),
@@ -676,8 +629,14 @@ def load_candidate_policy(
         source_date, policy_path = latest
         report_path = (
             report_root
-            / f"scanner_lookup_attention_tuning_{source_date.isoformat()}.json"
+            / f"intraday_ws_freshness_monitor_{source_date.isoformat()}.json"
         )
+        try:
+            header = json.loads(policy_path.read_text())
+            observed = date.fromisoformat(header.get("source_evaluation_date", source_date.isoformat()))
+            report_path = report_root / f"intraday_ws_freshness_monitor_{observed}.json"
+        except (OSError, ValueError, TypeError):
+            pass
         for path in (policy_path, report_path):
             try:
                 stat = path.stat()
@@ -728,22 +687,10 @@ def validate_preopen_receipt(receipt, target):
         ):
             return False
         if not receipt["active"]:
-            return True
-        from src.engine.monitoring.scanner_lookup_attention_tuning import (
-            validate_artifact_pair,
-        )
-
-        payload, report = receipt["source_policy"], receipt["source_report"]
-        if not isinstance(payload, dict) or not isinstance(report, dict):
-            return False
-        source_date = date.fromisoformat(payload["target_date"])
-        return bool(
-            source_date < target
-            and receipt["policy_source_date"] == source_date.isoformat()
-            and count_krx_trading_days(source_date, target) == 1
-            and payload["status"] == "live_auto_apply_ready"
-            and not validate_artifact_pair(report, payload, target=source_date)
-        )
+            return "source_policy" not in receipt and "source_report" not in receipt
+        # Executable portfolio CF is unavailable in the current native owner.
+        # Historical active receipts cannot bypass the integrated contract.
+        return False
     except (KeyError, TypeError, ValueError, OverflowError):
         return False
 
@@ -796,7 +743,7 @@ def freeze_preopen_policy(
         )
         receipt["source_report"] = json.loads(
             (
-                Path(report_dir) / f"scanner_lookup_attention_tuning_{source}.json"
+                Path(report_dir) / f"intraday_ws_freshness_monitor_{source}.json"
             ).read_text(encoding="utf-8")
         )
     receipt["artifact_sha256"] = canonical_sha256(receipt)
@@ -993,6 +940,48 @@ __all__ = [
     "validate_preopen_receipt",
     "validate_policy_payload",
 ]
+
+
+
+
+def publish_integrated_policy(report, *, publication_date=None, effective_date=None, policy_dir=POLICY_DIR):
+    """Publish one zero-bonus execution disposition from the final scanner owner.
+
+    Publication date and actual observation/evaluation date stay separate on a
+    non-collection day. This prepares a candidate; it never freezes PREOPEN.
+    """
+    from src.engine.scalping.scanner_lookup_attention_resource import INTEGRATED_CONTRACT, validate_integrated_selection
+    from src.engine.monitoring.scanner_lookup_attention_tuning import _atomic_json
+    observed = date.fromisoformat(report["target_date"])
+    published = date.fromisoformat(publication_date) if publication_date else observed
+    section = report["scanner_unique_funnel"]["economic_cohorts"]["lookup_attention_selection"]
+    if published < observed or section.get("evaluation_phase") != "postclose_final":
+        raise ValueError("integrated_final_publication_date_invalid")
+    payload = {"schema_version": SCHEMA_VERSION, "report_type": REPORT_TYPE,
+        "target_date": published.isoformat(), "source_evaluation_date": observed.isoformat(),
+        "prepared_effective_date": effective_date, "integrated_source_contract": INTEGRATED_CONTRACT,
+        "status": "source_quality_blocked", "decision_contract_version": DECISION_CONTRACT_VERSION,
+        "decision_authority": DECISION_AUTHORITY, "activation_mode": ACTIVATION_MODE,
+        "user_authority": USER_AUTHORITY, "operator_approval_required": False,
+        "runtime_effect": False, "actual_order_submitted": False, "broker_order_forbidden": True,
+        "allowed_runtime_apply": False, "effective_bonus_points": 0.0,
+        "source_report_artifact_sha256": section["artifact_sha256"],
+        "source_quality_status": "blocked", "holdout_armed_since": None,
+        "reason": section["status"], "source_gaps": section["primary_economics"]["source_gaps"],
+        "policy": {"policy_version": POLICY_VERSION, "min_lookup_attention_score": MIN_SCORE,
+            "max_bonus_points": MAX_BONUS_POINTS, "max_source_age_sec": MAX_SOURCE_AGE_SEC,
+            "rollback_bonus_points": 0.0, "same_priority_tier_only": True,
+            "priority_tier_or_slot_change_allowed": False,
+            "weight_formula": "linear_above_min_score_capped_at_max_bonus",
+            "eligible_venues": ELIGIBLE_VENUES, "eligible_session_buckets": ELIGIBLE_SESSION_BUCKETS},
+    }
+    payload["artifact_sha256"] = canonical_sha256(payload)
+    issues = validate_integrated_selection(section, payload, target=observed)
+    if issues or not _non_live_payload_valid(payload, source_date=published):
+        raise ValueError("integrated_policy_invalid:" + ",".join(issues))
+    _atomic_json(Path(policy_dir) / f"scanner_lookup_attention_policy_{published}.json", payload)
+    clear_policy_cache()
+    return payload
 
 
 if __name__ == "__main__":

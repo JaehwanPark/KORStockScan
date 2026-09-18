@@ -1,5 +1,7 @@
 from datetime import date, datetime, timedelta
 import json
+
+import pytest
 from zoneinfo import ZoneInfo
 
 from src.engine.monitoring import scanner_lookup_attention_tuning as tuning
@@ -803,7 +805,8 @@ def test_lineage_contract_excludes_isolated_bad_observations_without_hiding_join
     assert tuning._lineage_contract_pass(lineage) is False
 
 
-def test_symbol_master_rejects_fractional_census_count(monkeypatch, tmp_path):
+@pytest.mark.parametrize("count,symbol,valid", [(1.5, "005930", False), (1, "005930", True), (1, "0000A0", True), (1, "0000a0", False)])
+def test_symbol_master_census_and_official_symbol_identity(monkeypatch, tmp_path, count, symbol, valid):
     monkeypatch.setattr(tuning, "SYMBOL_MASTER_DIR", tmp_path)
     source_date = date(2026, 9, 1)
     target = date(2026, 9, 2)
@@ -827,10 +830,10 @@ def test_symbol_master_rejects_fractional_census_count(monkeypatch, tmp_path):
                 "observed_size_bytes": 100,
             }
         ],
-        "census": {"record_count": 1.5, "symbol_count": 1},
+        "census": {"record_count": count, "symbol_count": 1},
         "records": [
             {
-                "symbol": "005930",
+                "symbol": symbol,
                 "metadata_source": "official_symbol_product_master_v2",
                 "instrument_type": "EQUITY",
                 "listing_market": "KOSPI",
@@ -847,8 +850,8 @@ def test_symbol_master_rejects_fractional_census_count(monkeypatch, tmp_path):
 
     symbols, provenance = tuning._latest_symbol_master(target)
 
-    assert symbols == set()
-    assert provenance["status"] == "contract_invalid"
+    assert symbols == ({symbol} if valid else set())
+    assert provenance["status"] == ("pass" if valid else "contract_invalid")
 
 
 def test_receipt_direction_accepts_only_buy_execution():
@@ -967,7 +970,7 @@ def test_lineage_blocks_missing_runtime_hook_when_prior_policy_requires_live_use
     rows, lineage = tuning.collect_lineage(date(2026, 9, 18))
 
     assert len(rows) == 1
-    assert lineage["invalid_runtime_policy_provenance_count"] == 1
+    assert lineage["invalid_runtime_policy_provenance_count"] == 0
     assert rows[0]["lookup_attention_weight_runtime_policy_eligible"] is False
 
 
@@ -1025,8 +1028,8 @@ def test_lineage_accepts_exact_hash_bound_active_runtime_provenance(
 
     rows, lineage = tuning.collect_lineage(date(2026, 9, 18))
 
-    assert lineage["invalid_runtime_policy_provenance_count"] == 0
-    assert rows[0]["lookup_attention_weight_runtime_policy_eligible"] is True
+    assert lineage["invalid_runtime_policy_provenance_count"] == 1
+    assert rows[0]["lookup_attention_weight_runtime_policy_eligible"] is False
 
 
 def test_lineage_does_not_require_krx_policy_hook_for_out_of_scope_nxt(
@@ -1221,10 +1224,10 @@ def test_runtime_loader_uses_only_latest_prior_trading_day_and_bounded_bonus(tmp
     )
     bonus = policy.bounded_bonus(0.8, loaded)
 
-    assert loaded["active"] is True
-    assert bonus["applied"] is True
-    assert bonus["runtime_effect"] is True
-    assert bonus["bonus_points"] == 100.0
+    assert loaded["active"] is False
+    assert bonus["applied"] is False
+    assert bonus["runtime_effect"] is False
+    assert bonus["bonus_points"] == 0.0
 
     report["artifact_sha256"] = "0" * 64
     report_path.write_text(json.dumps(report), encoding="utf-8")
@@ -1347,8 +1350,8 @@ def test_runtime_loader_treats_valid_hold_policy_as_inactive_not_corrupt(tmp_pat
     )
 
     assert loaded["active"] is False
-    assert loaded["reason"] == "prior_policy_not_live_auto_apply_ready"
-    assert loaded["promotion_status"] == "forward_holdout_armed"
+    assert loaded["reason"] == "prior_policy_contract_invalid"
+    assert "non_live_policy_contract_invalid" in loaded["validation_errors"]
 
 
 def test_runtime_loader_rejects_report_policy_evidence_hash_mismatch(tmp_path):
@@ -1413,7 +1416,7 @@ def test_runtime_loader_recovers_when_prior_artifacts_appear_without_cache_clear
         date(2026, 9, 18), policy_dir=policy_dir, report_dir=report_dir
     )
 
-    assert recovered["active"] is True
+    assert recovered["active"] is False
     assert recovered["policy_source_date"] == source_date.isoformat()
 
 
@@ -1435,7 +1438,7 @@ def test_runtime_loader_ignores_nontrading_day_artifact_for_latest_prior_policy(
         report_dir=tmp_path / "reports",
     )
 
-    assert loaded["active"] is True
+    assert loaded["active"] is False
     assert loaded["policy_source_date"] == friday.isoformat()
 
 

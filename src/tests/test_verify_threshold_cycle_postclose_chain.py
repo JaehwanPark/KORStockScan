@@ -2949,9 +2949,9 @@ def test_artifact_paths_include_limit_down_watch():
 def test_artifact_paths_and_rollout_include_scanner_lookup_attention():
     paths = mod._artifact_paths("2026-09-02")
 
-    assert str(paths["scanner_lookup_attention_tuning"]).endswith(
-        "data/report/scanner_lookup_attention_tuning/"
-        "scanner_lookup_attention_tuning_2026-09-02.json"
+    assert str(paths["scanner_lookup_attention_selection"]).endswith(
+        "data/report/intraday_ws_freshness_monitor/"
+        "intraday_ws_freshness_monitor_2026-09-02.json"
     )
     assert str(paths["scanner_lookup_attention_policy"]).endswith(
         "data/threshold_cycle/scanner_lookup_attention_policy/"
@@ -2962,18 +2962,18 @@ def test_artifact_paths_and_rollout_include_scanner_lookup_attention():
 
 
 def test_scanner_lookup_attention_done_flag_must_be_true_after_rollout():
-    required = ("daily_ev", "scanner_lookup_attention_tuning")
+    required = ("daily_ev", "intraday_ws_freshness_finalize")
 
     assert mod._missing_required_execution_flags(
         required,
-        {"daily_ev": True, "scanner_lookup_attention_tuning": False},
+        {"daily_ev": True, "intraday_ws_freshness_finalize": False},
         done_line_present=True,
         recovery_done=False,
-    ) == ["scanner_lookup_attention_tuning"]
+    ) == ["intraday_ws_freshness_finalize"]
     assert (
         mod._missing_required_execution_flags(
             required,
-            {"daily_ev": True, "scanner_lookup_attention_tuning": True},
+            {"daily_ev": True, "intraday_ws_freshness_finalize": True},
             done_line_present=True,
             recovery_done=False,
         )

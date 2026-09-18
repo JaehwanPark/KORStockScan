@@ -430,29 +430,14 @@ def test_postclose_materializes_current_lifecycle_before_single_daily_consumer()
     assert script.count("--refresh-machine-evaluation-only") == 1
 
 
-def test_postclose_wrapper_closes_lookup_attention_auto_promotion_after_fact_sync():
+def test_postclose_wrapper_integrates_lookup_evaluation_at_existing_final_boundary():
     script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
-
-    sync_idx = script.index("src.engine.strategy_position_performance_report")
-    producer_idx = script.index(
-        "src.engine.monitoring.scanner_lookup_attention_tuning", sync_idx
-    )
-    calibration_idx = script.index("src.engine.daily_threshold_cycle_report", sync_idx)
-
-    assert sync_idx < producer_idx < calibration_idx
-    block = script[producer_idx:calibration_idx]
-    assert '--target-date "$TARGET_DATE"' in block
-    assert "--write" in block
-    assert "--verify-only" in block
-    assert "scanner_lookup_attention_policy_${TARGET_DATE}.json" in block
-    assert (
-        "scanner_lookup_attention_tuning=$SCANNER_LOOKUP_ATTENTION_TUNING_EXECUTED"
-        in script
-    )
-    assert "SCANNER_LOOKUP_ATTENTION_TUNING_EXECUTED=false" in script
-    assert block.index("--verify-only") < block.index(
-        "SCANNER_LOOKUP_ATTENTION_TUNING_EXECUTED=true"
-    )
+    assert "src.engine.monitoring.scanner_lookup_attention_tuning" not in script
+    assert "RUN_SCANNER_LOOKUP_ATTENTION_TUNING" not in script
+    assert "scanner_lookup_attention_tuning=$" not in script
+    assert script.index("src.engine.strategy_position_performance_report") < script.index('wait_for_postclose_resources "intraday_ws_freshness_finalize"')
+    assert script.index('wait_for_postclose_resources "intraday_ws_freshness_finalize"') < script.index("--refresh-machine-evaluation-only")
+    assert "intraday_ws_freshness_finalize=$RUN_INTRADAY_WS_FRESHNESS_FINALIZE" in script
 
 
 @pytest.mark.parametrize(

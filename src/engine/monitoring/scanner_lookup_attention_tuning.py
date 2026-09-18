@@ -1,18 +1,12 @@
-"""Postclose auto-promotion for the scanner lookup-attention weight.
+"""Shared historical lookup lineage decoder and completed comparison math.
 
-The producer joins an exact scanner promotion to a broker-receipt-confirmed
-full fill and a completed main-scalping lifecycle.  It first arms a forward
-holdout without runtime effect, then requires an independent future sample
-before emitting bounded next-PREOPEN runtime authority.
-
-The resulting policy only adds a score inside the candidate's existing
-scanner priority tier.  It cannot change eligibility, slots, order ownership,
-prices, quantity, providers, or safety guards.
+Production evaluation belongs to the existing scanner monitor final boundary.
+The standalone CLI and publisher are retired. Pure historical promotion helpers
+remain for archive contract validation; runtime cannot consume their authority.
 """
 
 from __future__ import annotations
 
-import argparse
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta
 import gzip
@@ -418,7 +412,7 @@ def _conversion_markers_after_attach(markers, observed_at):
     }
 
 
-def collect_lineage(target: date) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def collect_lineage(target: date, *, events_by_date=None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Collect exact lookup observations and full-fill receipt classifications."""
 
     start = max(ROLLOUT_DATE, target - timedelta(days=ROLLING_CALENDAR_DAYS - 1))
@@ -446,15 +440,15 @@ def collect_lineage(target: date) -> tuple[list[dict[str, Any]], dict[str, Any]]
     cursor = start
     while cursor <= target:
         event_file_date = cursor
-        path = _event_path(event_file_date)
+        path = _event_path(event_file_date) if events_by_date is None else event_file_date.isoformat()
         cursor += timedelta(days=1)
-        if path is None:
+        if path is None or (events_by_date is not None and path not in events_by_date):
             continue
         resource_rows = {}
         conflicted_resource_keys = set()
         event_file_count += 1
         observed_event_dates.append(event_file_date.isoformat())
-        for event in _iter_events(path, parse_stats=parse_stats):
+        for event in (_iter_events(path, parse_stats=parse_stats) if events_by_date is None else events_by_date[path]):
             fields = (
                 event.get("fields") if isinstance(event.get("fields"), dict) else {}
             )
@@ -1128,7 +1122,7 @@ def _latest_symbol_master(target: date) -> tuple[set[str], dict[str, Any]]:
             invalid_record_count += 1
             continue
         if (
-            re.fullmatch(r"\d{6}", symbol) is not None
+            re.fullmatch(r"[0-9A-Z]{6}", symbol) is not None
             and row.get("metadata_source") == "official_symbol_product_master_v2"
             and row.get("instrument_type") == "EQUITY"
             and row.get("listing_market") in {"KOSPI", "KOSDAQ"}
@@ -2995,49 +2989,14 @@ def _markdown(report: dict[str, Any]) -> str:
 def write_artifacts(
     report: dict[str, Any], policy: dict[str, Any]
 ) -> tuple[Path, Path, Path]:
-    target = str(report["target_date"])
-    report_json = REPORT_DIR / f"scanner_lookup_attention_tuning_{target}.json"
-    report_md = REPORT_DIR / f"scanner_lookup_attention_tuning_{target}.md"
-    policy_json = POLICY_DIR / f"scanner_lookup_attention_policy_{target}.json"
-    _atomic_json(report_json, report)
-    _atomic_write(report_md, _markdown(report))
-    _atomic_json(policy_json, policy)
-    return report_json, report_md, policy_json
+    raise RuntimeError("standalone_lookup_attention_publisher_retired")
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--target-date", "--date", dest="target_date", required=True)
-    parser.add_argument("--write", action="store_true")
-    parser.add_argument("--verify-only", action="store_true")
-    args = parser.parse_args()
-    try:
-        target = date.fromisoformat(args.target_date)
-    except ValueError as exc:
-        parser.error(str(exc))
-    if args.verify_only:
-        report = _load_json(
-            REPORT_DIR / f"scanner_lookup_attention_tuning_{target}.json"
-        )
-        policy = _load_json(
-            POLICY_DIR / f"scanner_lookup_attention_policy_{target}.json"
-        )
-    else:
-        report, policy = build_artifacts(target)
-    issues = validate_artifact_pair(report, policy, target=target)
-    if args.write and not args.verify_only and not issues:
-        write_artifacts(report, policy)
-    print(
-        json.dumps(
-            {
-                "target_date": target.isoformat(),
-                "status": report.get("status"),
-                "issues": issues,
-            },
-            ensure_ascii=False,
-        )
-    )
-    return 1 if issues else 0
+    # Historical decoding/math remain shared library functions. No standalone
+    # production report or policy can be published through the retired CLI.
+    print(json.dumps({"status": "retired", "owner": "intraday_ws_freshness_monitor"}))
+    return 2
 
 
 if __name__ == "__main__":

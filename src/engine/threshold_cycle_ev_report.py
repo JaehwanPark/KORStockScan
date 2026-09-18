@@ -3013,6 +3013,9 @@ def build_threshold_cycle_ev_report(
         "warning_contract": warning_contract,
         "warnings": active_warnings,
     }
+    if target_date >= "2026-09-02":
+        from src.engine.scalping.scanner_lookup_attention_resource import selection_handoff
+        report["scanner_lookup_attention_selection"] = selection_handoff(REPORT_DIR, target_date)
     report["summary"] = _top_level_summary(report)
     report = apply_source_quality_preflight_block(report, source_quality_preflight_gate)
     report["summary"] = _top_level_summary(report)

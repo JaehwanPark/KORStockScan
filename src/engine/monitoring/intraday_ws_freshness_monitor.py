@@ -981,6 +981,7 @@ def _scanner_funnel_state_from_mapping(value: Any) -> dict[str, Any]:
     )
     fingerprints = value.get("event_fingerprints")
     return {
+        "lookup_attention_native_events": dict(value.get("lookup_attention_native_events") or {}),
         "lineages": {
             str(key): dict(item)
             for key, item in lineages.items()
@@ -5292,6 +5293,25 @@ def _build_workorders(
     return finalize_followups(summary, orders)
 
 
+def _lookup_native_inputs(target_date, current_events=None):
+    """Read bounded canonical report sections, never historical giant states."""
+    native = {}
+    migration = None
+    lower = (date.fromisoformat(target_date) - timedelta(days=89)).isoformat()
+    for path in sorted(REPORT_DIR.glob(f"{REPORT_TYPE}_*.json")):
+        day = path.stem.removeprefix(f"{REPORT_TYPE}_")
+        if not lower <= day <= target_date or path.stat().st_size > 64 * 1024 * 1024:
+            continue
+        section = _read_json(path).get("scanner_unique_funnel", {}).get("economic_cohorts", {}).get("lookup_attention_selection", {})
+        if isinstance(section.get("native_events"), list):
+            native[day] = section["native_events"]
+        if isinstance(section.get("historical_migration_diagnostics"), dict):
+            migration = section["historical_migration_diagnostics"]
+    if current_events is not None:
+        native[target_date] = current_events
+    return native, migration
+
+
 def build_report(
     target_date: str | None = None,
     *,
@@ -5391,6 +5411,7 @@ def build_report(
     scanner_funnel_state["_fingerprint_set"] = set(
         scanner_funnel_state.get("event_fingerprints") or []
     )
+    from src.engine.scalping.scanner_lookup_attention_resource import capture_native_event
     appended_event_count = 0
     invalid_json_line_count = 0
     source_offsets: dict[str, dict[str, Any]] = {}
@@ -5417,6 +5438,7 @@ def build_report(
             total_events += 1
             appended_event_count += 1
             source_appended_count += 1
+            capture_native_event(scanner_funnel_state, raw)
             flattened = _flatten_event(raw)
             flattened["market_session_states_by_scope"] = _market_session_states_at(
                 market_session_receipts, _event_time(flattened)
@@ -5595,6 +5617,20 @@ def build_report(
         symbol_master=symbol_master,
         symbol_master_binding=symbol_master_binding,
     )
+
+    if finalize:
+        from src.engine.scalping.scanner_lookup_attention_resource import integrated_selection_evaluation
+        native_by_date, migration = _lookup_native_inputs(target_date,
+            list(scanner_funnel_state.get("lookup_attention_native_events", {}).values()))
+        predecessor_report = _read_json(REPORT_DIR / f"{REPORT_TYPE}_{target_date}.json")
+        predecessor = (predecessor_report.get("scanner_unique_funnel", {}).get("economic_cohorts", {}).get("lookup_attention_selection"))
+        scanner_unique_funnel.setdefault("economic_cohorts", {})["lookup_attention_selection"] = integrated_selection_evaluation(
+            date.fromisoformat(target_date), native_by_date, predecessor=predecessor, migration=migration)
+    else:
+        scanner_unique_funnel.setdefault("economic_cohorts", {})["lookup_attention_selection"] = {
+            "status": "intraday_capture_only", "allowed_runtime_apply": False,
+            "native_event_count": len(scanner_funnel_state.get("lookup_attention_native_events") or {}),
+        }
 
     summary = {
         "target_date": target_date,
@@ -5899,6 +5935,9 @@ def write_report(
         monitor_json, report, sort_keys=True, trailing_newline=True
     )
     monitor_md.write_text(_render_monitor_markdown(report), encoding="utf-8")
+    if report.get("scanner_unique_funnel", {}).get("economic_cohorts", {}).get("lookup_attention_selection", {}).get("evaluation_phase") == "postclose_final":
+        from src.engine.scalping.scanner_lookup_attention_policy import publish_integrated_policy
+        publish_integrated_policy(report)
     if monitor_only:
         return monitor_json, monitor_md, None, None
 
@@ -5928,6 +5967,22 @@ def write_report(
 
 
 def _run_once(args: argparse.Namespace) -> dict[str, Any]:
+    if args.refresh_lookup_selection_only:
+        from src.engine.scalping.scanner_lookup_attention_resource import integrated_selection_evaluation
+        path = REPORT_DIR / f"{REPORT_TYPE}_{args.target_date}.json"
+        report = _read_json(path)
+        if report.get("target_date") != args.target_date:
+            raise ValueError("lookup_refresh_requires_existing_exact_date_report")
+        cohorts = report["scanner_unique_funnel"].setdefault("economic_cohorts", {})
+        native_by_date, migration = _lookup_native_inputs(args.target_date)
+        section = integrated_selection_evaluation(date.fromisoformat(args.target_date), native_by_date,
+            predecessor=cohorts.get("lookup_attention_selection"),
+            migration=_read_json(Path(args.lookup_migration_receipt)) if args.lookup_migration_receipt else migration)
+        cohorts["lookup_attention_selection"] = section
+        if args.write:
+            write_report(report, monitor_only=True)
+        print(json.dumps({"status": section["status"], "artifact_sha256": section["artifact_sha256"]}))
+        return report
     snapshot_path = (
         Path(args.subscription_snapshot) if args.subscription_snapshot else None
     )
@@ -5977,6 +6032,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--stale-sec", type=float, default=DEFAULT_STALE_SEC)
     parser.add_argument("--write", action="store_true")
     parser.add_argument("--monitor-only", action="store_true")
+    parser.add_argument("--refresh-lookup-selection-only", action="store_true")
+    parser.add_argument("--lookup-migration-receipt")
     parser.add_argument(
         "--finalize",
         action="store_true",
