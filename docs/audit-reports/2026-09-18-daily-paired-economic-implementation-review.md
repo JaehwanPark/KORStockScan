@@ -17,3 +17,14 @@
 ## 검증
 
 최종 targeted pytest·compile·diff·print-only parser 및 immutable release/routing·bounded regeneration·strict consumer 증거는 `tmp/daily-paired-economic-20260918/`에 저장한다. 원천 비교 불가를 개선0이나 valid-no-edge로 바꾸지 않는다. 전체 native expensive chain/주문/provider 호출·외부 Project/Calendar sync는 수행하지 않는다.
+
+## 최종 실행 결과
+
+- D0 현재 projection17 family: 동일 정책9, source gap5, 기존 floor 미달1, 유효 원천 terminal 대기1, actual 체결 중 평가 대상 없음1. retired2 row는 원본 predecessor와 분리했다. `allowed_runtime_apply`는 family capability이며 실제 정책 활성/PID 증거가 아니다. Report-only/observe family의 경제성 표본이나 방향으로 runtime을 활성화하지 않는다.
+- D2 실제 owner fixture20 parent/2날짜: incumbent modeled EV 0.000000000%, candidate 0.069700300%, Δ0.069700300%p, 공통 자본 일평균 modeled 순익 차이 697.70000원. Tail/stress/capital supporting metrics와 같은 frozen proof를 전달했다. PREOPEN fixture의 별도 적용 사유는 `no_runtime_env_override`: 경제성 검증이 env 권한을 만들지 않는 경계를 재현한 것이다. 이 값은 운영 실적/실제 수익이 아니다.
+- 운영 evidence: 유효 독립 개선/paired0, actual 개선 null. Source gap·지원 범위 밖 체결 때문에 경제성이 미확정이며 “독립 후보를 충분히 비교했으나 개선0”이라는 결론이 아니다. 변경된 정책/학습 상위만으로 승격하지 않는다.
+- D6 source9/17의 기존 producer만 소비한 Daily bounded refresh, calibration 저장·AI 대상0·EV/runtime summary·compact finalize·누적 current section 연결 완료. Consumer regeneration 4.087초; source/범위가 다른 최초305.35초와 동일 성능 비교로 주장하지 않는다. 신규 provider 호출0.
+- 기존 dated publisher가9/18 publication→9/21 effective policy bundle `1d379c082396c9230fa7807f698d4aaccd948b93bb69047ed7d49980a906b4ae`를 발행했고 loader/consumer strict family PASS(issues0)를 확인했다. Compact v3 incumbent 보존, scale-in dated base unsplit available=true/split_enabled=false이다. 정책 발행과 미래 자연 PREOPEN/PID/주문·비용 후 경제성은 분리한다.
+- 최종 source875PASS, 누적 추가282PASS, workspace25PASS; 최종 PREOPEN evidence SHA receipt 보완 검증은 `final-consumer-tests.log`. Compile/diff/print-only parser PASS. Bash wrapper 변경/신규 source module0.
+
+전체 native chain은 기존 source/resource 선행 owner의 별도 상태이며 이 결과로 DONE을 합성하지 않았다. Managed immutable 선택/원격 push·실제 SHA는 `closure.json`이 최종 owner다. 기존 자연 Acceptance의 단일 stable owner `ThresholdDailyEVReport0918`을 유지하며 다른 세션 source/report/정책과 raw/주문/비용 원장을 삭제하거나 복구 OPEN으로 만들지 않았다.

@@ -470,6 +470,12 @@ def test_exact_owner_price_pair_exposes_ev_and_daily_profit_and_binds_policy():
     assert sum(metrics["daily_delta_net_pnl_krw"].values()) > 0
     assert metrics["paired_comparable_count"] == 20
     assert daily.economic_challenger_blocker(row) is None
+    from src.engine import threshold_cycle_preopen_apply as preopen
+    _, decisions, _ = preopen._select_auto_apply_candidates(
+        [row], ai_review={}, require_ai=False, target_date="2026-09-16",
+        include_families={"dynamic_entry_price_resolver"})
+    assert decisions[0]["economic_evidence_sha256"] == row["economic_evaluation"]["artifact_content_sha256"]
+    assert decisions[0]["economic_evaluation_status"] == "validated_improvement"
     row["recommended_values"][key] += 1
     assert daily.economic_challenger_blocker(row) == "economic_evaluation_missing_or_stale"
     daily._attach_economic_evaluation(report)

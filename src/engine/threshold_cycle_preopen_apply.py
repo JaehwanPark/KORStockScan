@@ -3260,6 +3260,12 @@ def _select_auto_apply_candidates(
         decision["selection_change_class"] = selection_change_class
         decision["previous_selected"] = family in previous_selected_families
         decision["previous_env_overrides"] = previous_family_env
+        if candidate.get("economic_contract_version"):
+            evidence = candidate.get("economic_evaluation") or {}
+            decision["economic_contract_version"] = candidate["economic_contract_version"]
+            decision["economic_evidence_sha256"] = evidence.get("artifact_content_sha256")
+            decision["economic_input_sha256"] = evidence.get("input_sha256")
+            decision["economic_evaluation_status"] = evidence.get("status")
         if candidate.get("quality_update_id"):
             decision["quality_update_id"] = candidate.get("quality_update_id")
             decision["evidence_contract_version"] = candidate.get(
