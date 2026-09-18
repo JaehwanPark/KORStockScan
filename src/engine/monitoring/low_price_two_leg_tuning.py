@@ -10,6 +10,7 @@ only native execution, daily capital and family authority can select a change.
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import math
@@ -66,9 +67,10 @@ from src.utils import kiwoom_utils
 from src.utils.market_day import is_krx_trading_day
 
 REPORT_TYPE = "low_price_two_leg_tuning"
-REPORT_SCHEMA = "low_price_two_leg_tuning_report_v9"
+REPORT_SCHEMA = "low_price_two_leg_tuning_report_v10"
 SUPPORTED_REPORT_SCHEMAS = frozenset(
     {
+        "low_price_two_leg_tuning_report_v9",
         "low_price_two_leg_tuning_report_v1",
         "low_price_two_leg_tuning_report_v2",
         "low_price_two_leg_tuning_report_v3",
@@ -762,6 +764,78 @@ def _historical_profile_row(
     if not _profile_was_operational(profile_id, report_date):
         return _pre_operational_row(profile_id, report_date.isoformat())
     return _empty_row(profile_id, report_date.isoformat(), "prior_profile_row_missing")
+
+
+def reconcile_manual_exit_history(history, *, source_date, cost_pct, registry_path):
+    """Project applied owner receipts onto historical rows; never mutate custody."""
+    body = registry_path.read_bytes() if registry_path.exists() else b""
+    summary = {"path": str(registry_path), "sha256": hashlib.sha256(body).hexdigest(),
+        "source_date": source_date, "status": "missing" if not body else "ready",
+        "resolved_rows": [], "blocked_rows": [], "runtime_effect": False}
+    if not body:
+        return summary
+    try:
+        registry = json.loads(body)
+        if registry.get("schema") != "episode_manual_exit_receipt_registry_v1" or not isinstance(registry.get("receipts"), list):
+            raise ValueError("registry_schema")
+        receipts = registry["receipts"]
+        identities = [(r["order_date"], r["symbol"], str(r["order_no"]).lstrip("0")) for r in receipts]
+    except (ValueError, TypeError, KeyError):
+        summary["status"] = "source_gap_invalid_registry"
+        return summary
+    duplicates = {key for key in identities if identities.count(key) > 1}
+    for day, profiles in history.items():
+        for pid, original in list(profiles.items()):
+            held = [leg for leg in original.get("legs", []) if leg.get("held")]
+            matches = [r for r in receipts if r.get("owner_id") == pid and r.get("entry_trade_date") == day and r.get("status") == "applied"]
+            if not held or not matches:
+                continue
+            try:
+                live = profiles_for_target_date(date.fromisoformat(day))[pid]
+                if original.get("target_date") != day or original.get("profile_id") != pid:
+                    raise ValueError("historical_owner_date_binding")
+                for r in matches:
+                    key = (r["order_date"], r["symbol"], str(r["order_no"]).lstrip("0"))
+                    if (key in duplicates or not key[2] or r["symbol"] != live.symbol or r.get("source_api") != "kt00007"
+                        or not day <= date.fromisoformat(r["order_date"]).isoformat() <= source_date
+                        or not r.get("applied_at_kst") or _as_int(r.get("fill_price")) <= 0 or _as_int(r.get("filled_qty")) <= 0):
+                        raise ValueError("receipt_identity_or_asof")
+                if (any(not leg.get("contract_valid") or _as_int(leg.get("target_filled_qty")) > 0 for leg in held)
+                    or sum(_as_int(r["filled_qty"]) for r in matches) != sum(_as_int(leg["position_qty"]) for leg in held)):
+                    raise ValueError("whole_remaining_position_quantity")
+                row = copy.deepcopy(original)
+                pending = [[r, _as_int(r["filled_qty"])] for r in matches]
+                for i, leg in enumerate(row["legs"]):
+                    if not leg.get("held"):
+                        continue
+                    qty = _as_int(leg["position_qty"])
+                    available = next((item for item in pending if item[1] >= qty), None)
+                    if available is None:
+                        raise ValueError("split_price_allocation_unsupported")
+                    r = available[0]
+                    available[1] -= qty
+                    row["legs"][i] = _sanitize_leg({**leg, "status": "COMPLETE", "position_qty": 0,
+                        "target_filled_qty": leg["buy_filled_qty"], "target_fill_price": r["fill_price"],
+                        "target_filled_at": None, "target_fill_reconciled_at": r["applied_at_kst"],
+                        "exit_fill_source": MANUAL_EXIT_FILL_SOURCE,
+                        "manual_exit_receipt": {**r, "allocated_qty": qty, "allocation_authority": "explicit_owner_whole_position_exit"}}, cost_pct)
+                if not all(leg.get("contract_valid") for leg in row["legs"]):
+                    raise ValueError("resolved_leg_contract")
+                row["outcome_complete_for_ev"] = len(row["legs"]) == 2 and all(leg.get("terminal") for leg in row["legs"])
+                row["outcome_exclusion_reasons"] = [] if row["outcome_complete_for_ev"] else ["held_or_unresolved_inventory"]
+                row["eligible_for_tuning"] = row.get("source_quality") == "pass" and row["outcome_complete_for_ev"]
+                if row["outcome_complete_for_ev"]:
+                    row["state_status"] = "COMPLETE"
+                previous_cost = row.get("broker_realized_economics")
+                row["broker_realized_economics"] = {"status": "fixed_cost_fallback", "reason": "manual_receipt_projection_requires_new_exact_cost_attribution"}
+                row["manual_exit_history_reconciliation"] = {"registry_sha256": summary["sha256"],
+                    "original_state_status": original.get("state_status"), "original_held_legs": len(held),
+                    "superseded_broker_realized_economics": previous_cost, "receipts": matches}
+                profiles[pid] = row
+                summary["resolved_rows"].append({"profile_id": pid, "entry_trade_date": day, "resolved_legs": len(held)})
+            except (ValueError, TypeError, KeyError) as exc:
+                summary["blocked_rows"].append({"profile_id": pid, "entry_trade_date": day, "reason": str(exc)})
+    return summary
 
 
 def _sanitize_leg(raw: dict[str, Any], cost_pct: float) -> dict[str, Any]:
@@ -1812,6 +1886,9 @@ def build_report(
         history[source_date][profile_id] = reconciliation["row"]
     if target_date_is_trading:
         history[target_date] = daily
+    manual_exit_reconciliation = reconcile_manual_exit_history(history,
+        source_date=target_date, cost_pct=cost_pct,
+        registry_path=state_dir.parent / "episode_manual_exit_receipts.json")
     dates = sorted(history)
     observed_date_set = {date.fromisoformat(item) for item in dates}
     unobserved_dates = [
@@ -1908,6 +1985,7 @@ def build_report(
         "metric_contract": METRIC_CONTRACT,
         "source_quality_preflight": source_preflight,
         "daily": {"profiles": daily},
+        "manual_exit_history_reconciliation": manual_exit_reconciliation,
         "machine_microstructure_prior_trading_day_diagnostic_source": {
             key: value
             for key, value in micro_feedback.items()
@@ -1963,8 +2041,9 @@ def paired_search_handoff(target_date: str, *, output_dir=OUTPUT_DIR, candidate_
     wanted = {"schema", "target_date", "artifact_hash", "paired_economic_search"}
     report = _read_daily_history(report_path, wanted=wanted) or {}
     candidate = _read_json(candidate_path) or {}
-    if (report.get("schema") != REPORT_SCHEMA or report.get("target_date") != target_date
+    if (report.get("schema") not in {REPORT_SCHEMA, "low_price_two_leg_tuning_report_v9"} or report.get("target_date") != target_date
         or candidate.get("schema") != PAIRED_CANDIDATE_SCHEMA
+        or candidate.get("source_report_schema") != report.get("schema")
         or report.get("artifact_hash") != candidate.get("source_report_artifact_hash")
         or report.get("paired_economic_search") != candidate.get("paired_economic_search")):
         return {"status": "source_gap", "source_date": target_date, "reason": "native_actual_candidate_generation_missing_or_mismatched", "runtime_effect": False}
@@ -1976,7 +2055,11 @@ def paired_search_handoff(target_date: str, *, output_dir=OUTPUT_DIR, candidate_
         "candidate_artifact_sha256": hashlib.sha256(candidate_path.read_bytes()).hexdigest(),
         "selected_profile": search["selected_profile"], "selected_axis": search["selected_axis"],
         "policy_mutations": candidate["policy_mutations"],
-        "profiles": {pid: {key: value for key, value in proof.items() if key in {"disposition", "completed_actual_legs", "actual_source_valid_days", "actual_eligibility_passed"}} for pid, proof in search["profiles"].items()},
+        "stage_counts": search.get("stage_counts", {"research_status": "legacy_research_not_reported"}),
+        "profiles": {pid: {**{key: value for key, value in proof.items() if key in {"disposition", "completed_actual_legs", "actual_source_valid_days", "actual_eligibility_passed", "research_admission_passed", "research_disposition", "promotion_disposition", "actual_held_legs", "promotion_blocking_reasons", "evidence_grade"}},
+            "calibration_diagnostics": [{"axis": item["axis"], "baseline": _economic_brief(item["baseline"]), "challenger": _economic_brief(item["challenger"]), "comparison": item["comparison"], "evidence_role": item["evidence_role"],
+                "carry_target_diagnostic": item.get("carry_target_diagnostic")} for item in proof.get("calibration_diagnostics", [])]}
+            for pid, proof in search["profiles"].items()},
         "runtime_effect": False, "actual_order_submitted": False,
         "natural_preopen_consumption": "pending_scheduled_preopen"}
 
@@ -2091,11 +2174,16 @@ def actual_execution_confirmation(rows, result):
         "matched_legs": matched, "evidence_role": "actual_broker_baseline_reproduction_only"}
 
 
+def _economic_brief(outcome):
+    return {key: value for key, value in outcome.items() if key in {
+        "notional_weighted_ev_pct", "cost_adjusted_net_profit_krw_per_source_valid_observation_day", "source_valid_observation_days", "cost_pct", "custody_resolution_required", "realized_net_profit_krw", "completed_legs", "signal_episodes", "held_legs", "carry_in_held_legs", "observation_days", "no_fill_legs", "round_trip_cost_pct", "held_notional_krw", "capital_exposure_completed_bars", "worst_filled_max_adverse_excursion_pct"}}
+
+
 def _paired_economic_search(report, *, context_loader=None, selection_dir=CANDIDATE_DIR):
     """Two existing axes, actual-conditioned; sealed prospective owner reused."""
     from src.engine.monitoring import research_closed_loop as loop
     from src.engine.monitoring import episode_prospective_research as prospective
-    from src.engine.monitoring.low_price_two_leg_entry_spot_research import baseline_candidate, _evaluate_candidate_windows, paired_economics, _calibration_ready
+    from src.engine.monitoring.low_price_two_leg_entry_spot_research import baseline_candidate, _evaluate_candidate_windows, paired_economics, _calibration_ready, day_replay_scope, _advance_carried_target_day
     from src.engine.monitoring.low_price_two_leg_expanded_candidate_research import ResearchProfile
     source = date.fromisoformat(report["target_date"])
     binding = report["source_runtime_policy_binding"]
@@ -2134,20 +2222,30 @@ def _paired_economic_search(report, *, context_loader=None, selection_dir=CANDID
         daily = report["daily"]["profiles"][pid]
         proof = {"profile_id": pid, "actual_eligibility_passed": False, "selected_axis": None,
             "completed_actual_legs": actual["broker_priced_completed_legs"], "actual_source_valid_days": actual["source_valid_observation_days"],
-            "disposition": "hold_sample", "calibration_diagnostics": []}
+            "disposition": "hold_sample", "calibration_diagnostics": [],
+            "actual_held_legs": actual["held_or_unresolved_legs"], "research_admission_passed": False,
+            "research_disposition": "not_admitted", "promotion_disposition": "hold_sample",
+            "promotion_blocking_reasons": [], "evidence_grade": "actual_source_diagnostic_only"}
         result["profiles"][pid] = proof
         if not report["source_quality_preflight"]["tuning_input_allowed"] or daily["source_quality"] != "pass" or binding.get("status") != "ready":
             proof["disposition"] = "source_gap"
             continue
-        if actual["held_or_unresolved_legs"]:
-            proof["disposition"] = "hold_inventory_custody"
-            continue
-        if not actual["broker_priced_completed_legs"]:
+        source_completed = [leg for row in window["rows"] if row.get("source_quality") == "pass"
+            for leg in row.get("legs", []) if leg.get("completed") and leg.get("contract_valid")
+            and leg.get("profit_price_source") in {"broker_target_fill_price", MANUAL_EXIT_PRICE_SOURCE}
+            and _as_float(leg.get("net_profit_pct")) is not None]
+        if not source_completed:
             proof["disposition"] = "source_gap" if any(row.get("source_quality") != "pass" or any(_as_int(leg.get("buy_filled_qty")) > 0 or _as_int(leg.get("fill_price")) > 0 for leg in row.get("legs", [])) for row in window["rows"]) else "valid_empty_no_fill"
             continue
+        if actual["held_or_unresolved_legs"]:
+            proof["promotion_blocking_reasons"].append("actual_inventory_custody")
         if actual["broker_priced_completed_legs"] < SAMPLE_FLOOR_COMPLETED_LEGS or actual["source_valid_observation_days"] < BOUNDED_MIN_OBSERVED_DAYS:
+            proof["promotion_blocking_reasons"].append("actual_sample_floor")
+        proof["actual_eligibility_passed"] = not proof["promotion_blocking_reasons"]
+        if pid not in {"kakao_late_morning", "youngone_morning"} and (not fixed or fixed.get("profile_id") != pid):
+            proof["disposition"] = "incumbent_preserved"
+            proof["research_disposition"] = "outside_bounded_research_scope"
             continue
-        proof["actual_eligibility_passed"] = True
         if binding["policies"][pid]["quantity"] != 20:
             proof["disposition"] = "execution_source_gap_quantity_model"
             continue
@@ -2165,6 +2263,8 @@ def _paired_economic_search(report, *, context_loader=None, selection_dir=CANDID
             proof["disposition"] = "execution_source_gap"
             continue
         contexts, content_sha = loaded
+        proof["research_admission_passed"] = True
+        proof["evidence_grade"] = "cached_bar_CF_not_native_execution"
         dates = sorted(day for day in contexts if CLEAN_BASELINE_DATE <= day <= source)
         if len(dates) < 46:
             proof["disposition"] = "hold_sample"
@@ -2187,6 +2287,16 @@ def _paired_economic_search(report, *, context_loader=None, selection_dir=CANDID
                 "calibration_sample_passed": _calibration_ready(*outcome),
                 "calibration_dates": [str(day) for day in cal], "validation_usage": "calibration_only_no_holdout_read"}
             proof["calibration_diagnostics"].append(diagnostic)
+            if comparison.get("economic_comparison_status") != "distinct_resolved_economic_pair":
+                # Existing original-target carry model is a separate price-touch
+                # diagnostic, never ranking, actual custody or promotion proof.
+                with day_replay_scope(_advance_carried_target_day):
+                    carry_baseline = _evaluate_candidate_windows(baseline, contexts, [cal])[0]
+                    carry_challenger = _evaluate_candidate_windows(challenger, contexts, [cal])[0]
+                diagnostic["carry_target_diagnostic"] = {"baseline": _economic_brief(carry_baseline),
+                    "challenger": _economic_brief(carry_challenger), "comparison": paired_economics(carry_baseline, carry_challenger),
+                    "evidence_role": "original_target_continuation_price_touch_CF_report_only",
+                    "ranking_usage": False, "runtime_effect": False}
             if comparison["economic_superiority_confirmed"] and comparison["ev_uplift_pct_point"] >= MIN_NOTIONAL_EV_UPLIFT_PCT and _calibration_ready(*outcome):
                 ranked.append((comparison["net_profit_uplift_krw_per_observation_day"], pid, axis, challenger.public(), baseline.public(), content_sha))
         comparisons = [item["comparison"] for item in proof["calibration_diagnostics"]]
@@ -2216,7 +2326,7 @@ def _paired_economic_search(report, *, context_loader=None, selection_dir=CANDID
                 from src.trading.low_price_two_leg.preflight import default_authority_path
                 authority = default_authority_path(live)
                 proof["family_approval"] = {"path": str(authority), "sha256": hashlib.sha256(authority.read_bytes()).hexdigest() if authority.exists() else ""}
-                if paired_promotion_ready(proof, source_date=source):
+                if proof["actual_eligibility_passed"] and paired_promotion_ready(proof, source_date=source):
                     proof["disposition"] = "eligible_paired_policy"
                     result.update(selected_profile=pid, selected_axis=fixed["selected_axis"])
     if fixed:
@@ -2246,6 +2356,31 @@ def _paired_economic_search(report, *, context_loader=None, selection_dir=CANDID
         result["profiles"][result["selected_profile"]]["disposition"] = "hold_same_stage_owner"
         result.update(selected_profile=None, selected_axis=None)
     result["status"] = "paired_policy_selected" if result["selected_profile"] else "incumbent_preserved"
+    for proof in result["profiles"].values():
+        diagnostics = proof["calibration_diagnostics"]
+        if diagnostics:
+            proof["research_disposition"] = "research_tested" if all(item["comparison"].get("economic_comparison_status") == "distinct_resolved_economic_pair" for item in diagnostics) else "research_tested_model_custody_censored"
+        elif proof["research_admission_passed"]:
+            proof["research_disposition"] = "frozen_candidate_pending" if proof.get("candidate_revision") else "self_comparison_or_model_sample_gap"
+        if proof["actual_held_legs"]:
+            proof["promotion_disposition"] = "hold_actual_inventory_custody"
+        elif "actual_sample_floor" in proof["promotion_blocking_reasons"]:
+            proof["promotion_disposition"] = "hold_actual_sample"
+        else:
+            proof["promotion_disposition"] = "hold_model_inventory_custody" if proof["disposition"] == "hold_inventory_custody" else proof["disposition"]
+        if proof["disposition"] == "hold_inventory_custody" and not proof["actual_held_legs"]:
+            proof["disposition"] = "hold_model_inventory_custody"
+        if proof["research_admission_passed"]:
+            proof["promotion_blocking_reasons"].extend(["native_paired_execution_capital_and_authority_required"] if proof["promotion_disposition"] != "eligible_paired_policy" else [])
+    proofs = list(result["profiles"].values())
+    result["stage_counts"] = {"profiles": len(proofs), "research_admitted_profiles": sum(p["research_admission_passed"] for p in proofs),
+        "calibration_tested_profiles": sum(bool(p["calibration_diagnostics"]) for p in proofs),
+        "distinct_calibration_pairs": sum(len(p["calibration_diagnostics"]) for p in proofs),
+        "resolved_calibration_pairs": sum(d["comparison"].get("economic_comparison_status") == "distinct_resolved_economic_pair" for p in proofs for d in p["calibration_diagnostics"]),
+        "joint_improved_calibration_pairs": sum(d["comparison"].get("economic_superiority_confirmed", False) and (d["comparison"].get("ev_uplift_pct_point") or 0) >= MIN_NOTIONAL_EV_UPLIFT_PCT for p in proofs for d in p["calibration_diagnostics"]),
+        "unused_holdout_waiting_profiles": sum(p["disposition"] == "hold_unused_holdout" for p in proofs),
+        "actual_floor_flat_profiles": sum(p["actual_eligibility_passed"] for p in proofs),
+        "promotion_selected_profiles": int(result["selected_profile"] is not None), "policy_mutations": int(result["selected_profile"] is not None)}
     return result
 
 
@@ -2537,13 +2672,18 @@ def render_markdown(report: dict, candidate: dict) -> str:
     text = _render_actual_markdown(report, candidate)
     lines = ["", "## Actual-conditioned paired economic search", "",
         f"Selection: {candidate.get('selection_status', candidate.get('decision'))}; source={report['target_date']}; effective={candidate.get('effective_date')}",
-        "", "| Profile | Disposition | Actual completed legs / days | Calibration distinct comparisons |", "|---|---|---|---|"]
+        f"Stages: {report.get('paired_economic_search', {}).get('stage_counts', {})}",
+        "", "| Profile | Research / Promotion | Actual completed legs / days / held | Calibration distinct comparisons |", "|---|---|---|---|"]
     for pid, proof in (report.get("paired_economic_search") or {}).get("profiles", {}).items():
         diagnostics = proof["calibration_diagnostics"]
-        lines.append(f"| {pid} | {proof['disposition']} | {proof['completed_actual_legs']} / {proof['actual_source_valid_days']} | {len(diagnostics)} |")
+        lines.append(f"| {pid} | {proof.get('research_disposition')} / {proof.get('promotion_disposition', proof['disposition'])} | {proof['completed_actual_legs']} / {proof['actual_source_valid_days']} / {proof.get('actual_held_legs')} | {len(diagnostics)} |")
         for item in diagnostics:
             comp = item["comparison"]
             lines.append(f"| {pid}/{item['axis']} | CF calibration only | Delta EV={comp.get('ev_uplift_pct_point')} pp | Delta net/day={comp.get('net_profit_uplift_krw_per_observation_day')} KRW; confirmed={comp.get('economic_superiority_confirmed')} |")
+            for role, diagnostic in (("conservative CF unit quantity1", item), ("original-target price-touch CF report-only", item.get("carry_target_diagnostic"))):
+                if diagnostic:
+                    lines.append(f"- {pid}/{item['axis']} {role}: baseline={_economic_brief(diagnostic['baseline'])}; challenger={_economic_brief(diagnostic['challenger'])}; comparison={diagnostic['comparison']}")
+    lines.append(f"\nManual receipt projection (historical recovery, not new profit): {report.get('manual_exit_history_reconciliation', {})}")
     return text + "\n".join(lines) + "\n"
 
 

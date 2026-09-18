@@ -465,7 +465,7 @@ def _low_price_two_leg_postclose_contract_status(
     )
 
     issues: list[str] = []
-    if tuning.get("schema") != REPORT_SCHEMA and not (
+    if tuning.get("schema") not in {REPORT_SCHEMA, "low_price_two_leg_tuning_report_v9"} and not (
         (target_date <= "2026-09-04" and tuning.get("schema") == "low_price_two_leg_tuning_report_v6")
         or (target_date < "2026-09-17" and tuning.get("schema") in {"low_price_two_leg_tuning_report_v7", "low_price_two_leg_tuning_report_v8"})
     ):

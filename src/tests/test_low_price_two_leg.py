@@ -5271,3 +5271,98 @@ def test_paired_successor_selection_consumer_requires_promotion_adapter(tmp_path
     # Restore real admission: a self-declared selection without native proofs fails.
     monkeypatch.undo()
     assert runtime.validate_candidate(candidate, source_report=report)[0] is False
+
+
+@pytest.mark.parametrize("defect", [None, "duplicate", "reserved", "quantity", "future", "foreign", "partial", "source_gap"])
+def test_manual_journal_reconciles_historical_owner_without_mutating_custody(tmp_path, defect):
+    import copy
+    from src.engine.monitoring import low_price_two_leg_tuning as tuner
+    day, pid = "2026-08-21", "kakao_morning"
+    raw = {"leg_id": "leg1", "quantity": 10, "status": "HELD", "entry_price": 37000,
+        "fill_price": 37000, "target_price": 37300, "position_qty": 10,
+        "buy_filled_qty": 10, "target_filled_qty": 0}
+    if defect == "partial":
+        raw.update(position_qty=5, target_filled_qty=5, target_fill_price=37300)
+    row = {"profile_id": pid, "target_date": day, "state_status": "HELD", "source_quality": "pass",
+        "source_quality_reasons": [], "eligible_for_tuning": False, "attempted": True,
+        "legs": [tuner._sanitize_leg(raw, .23), tuner._sanitize_leg({**raw, "leg_id": "leg2"}, .23)]}
+    if defect == "source_gap":
+        row.update(source_quality="gap", source_quality_reasons=["policy_hash_missing"])
+    original = copy.deepcopy(row)
+    receipt = {"owner_id": pid, "symbol": "035720", "entry_trade_date": day,
+        "order_date": "2026-08-26", "order_no": "0010361", "filled_qty": 20,
+        "fill_price": 36500, "source_api": "kt00007", "status": "applied",
+        "applied_at_kst": "2026-08-26T11:02:46+09:00"}
+    if defect == "quantity": receipt["filled_qty"] = 10
+    if defect == "future": receipt["order_date"] = "2026-09-21"
+    if defect == "reserved": receipt["status"] = "reserved"
+    if defect == "foreign": receipt["owner_id"] = "kakao_midday"
+    receipts = [receipt, dict(receipt)] if defect == "duplicate" else [receipt]
+    path = tmp_path / "registry.json"
+    atomic_write_json(path, {"schema": "episode_manual_exit_receipt_registry_v1", "receipts": receipts})
+    before = path.read_bytes()
+    history = {day: {pid: row}}
+    summary = tuner.reconcile_manual_exit_history(history, source_date="2026-09-17", cost_pct=.23, registry_path=path)
+    assert path.read_bytes() == before and row == original
+    result = history[day][pid]
+    if defect in (None, "source_gap"):
+        assert len(summary["resolved_rows"]) == 1
+        assert result["eligible_for_tuning"] is (defect is None)
+        assert all(leg["manual_exit_realized"] and leg["realized_loss"] and not leg["held"] for leg in result["legs"])
+        assert all(leg["target_filled_at"] is None for leg in result["legs"])
+        assert result["broker_realized_economics"]["status"] == "fixed_cost_fallback"
+        assert tuner.reconcile_manual_exit_history(history, source_date="2026-09-17", cost_pct=.23, registry_path=path)["resolved_rows"] == []
+    else:
+        assert result == original and not summary["resolved_rows"]
+
+
+@pytest.mark.parametrize("held,completed", [(0, 0), (0, 6), (1, 8)])
+def test_research_admission_keeps_actual_promotion_floor_and_custody(tmp_path, held, completed):
+    from src.engine.monitoring import low_price_two_leg_tuning as tuner
+    from src.trading.low_price_two_leg import policy_runtime as runtime
+    pid, source = "youngone_morning", date(2026, 9, 17)
+    policies = runtime.baseline_policies_for_target_date(source)
+    rows = [{"source_quality": "pass", "target_date": str(source), "legs": [
+        {"completed": True, "contract_valid": True, "profit_price_source": "broker_target_fill_price", "net_profit_pct": .1}
+        for _ in range(completed)]}]
+    report = {"target_date": str(source), "source_runtime_policy_binding": {"status": "ready", "policies": policies},
+        "source_quality_preflight": {"tuning_input_allowed": True}, "daily": {"profiles": {pid: {"source_quality": "pass"}}},
+        "windows": {tuner.POST_APPLY_WINDOW_NAME: {pid: {"rows": rows, "summary": {
+            "broker_priced_completed_legs": completed, "source_valid_observation_days": 19, "held_or_unresolved_legs": held}}}}}
+    calls = []
+    def loader(*args):
+        calls.append(args)
+        return None
+    search = tuner._paired_economic_search(report, context_loader=loader, selection_dir=tmp_path)
+    proof = search["profiles"][pid]
+    assert bool(calls) is bool(completed)
+    assert proof["actual_eligibility_passed"] is False
+    assert search["selected_profile"] is None
+    assert proof["actual_held_legs"] == held
+    if held: assert proof["promotion_disposition"] == "hold_actual_inventory_custody"
+    if completed == 6: assert proof["promotion_disposition"] == "hold_actual_sample"
+
+@pytest.mark.parametrize("schema", ["low_price_two_leg_tuning_report_v9", "low_price_two_leg_tuning_report_v10"])
+def test_paired_handoff_binds_declared_schema_and_preserves_research_on_carry(tmp_path, schema):
+    from src.engine.monitoring import low_price_two_leg_tuning as tuner
+    target = "2026-09-17"
+    search = {"selected_profile": None, "selected_axis": None, "profiles": {"youngone_morning": {
+        "disposition": "hold_sample", "research_disposition": "research_tested", "promotion_disposition": "hold_actual_sample",
+        "research_admission_passed": True, "actual_eligibility_passed": False, "actual_held_legs": 0,
+        "calibration_diagnostics": [{"axis": "rolling_high_drawdown_pct", "baseline": {"notional_weighted_ev_pct": .1, "held_legs": 0},
+            "challenger": {"notional_weighted_ev_pct": .2, "held_legs": 0}, "comparison": {"economic_superiority_confirmed": True}, "evidence_role": "CF_report_only"}]}},
+        **({"stage_counts": {"calibration_tested_profiles": 1}} if schema.endswith("v10") else {})}
+    report = {"schema": schema, "target_date": target, "artifact_hash": "a"*64, "paired_economic_search": search}
+    candidate = {"schema": "low_price_two_leg_policy_candidate_v4", "source_report_schema": schema,
+        "source_report_artifact_hash": report["artifact_hash"], "paired_economic_search": search, "selection_status": "incumbent_preserved",
+        "publication_date": "2026-09-19", "effective_date": "2026-09-21", "policy_hash": "b"*64, "policy_mutations": []}
+    atomic_write_json(tmp_path / f"low_price_two_leg_tuning_{target}.json", report)
+    cp = tmp_path / f"low_price_two_leg_policy_candidate_{target}.json"
+    atomic_write_json(cp, candidate)
+    handoff = tuner.paired_search_handoff(target, output_dir=tmp_path, candidate_dir=tmp_path)
+    assert handoff["status"] == "incumbent_preserved" and handoff["policy_mutations"] == []
+    assert handoff["profiles"]["youngone_morning"]["calibration_diagnostics"][0]["challenger"]["notional_weighted_ev_pct"] == .2
+    if schema.endswith("v9"): assert handoff["stage_counts"]["research_status"] == "legacy_research_not_reported"
+    candidate["source_report_schema"] = "foreign_schema"
+    atomic_write_json(cp, candidate)
+    assert tuner.paired_search_handoff(target, output_dir=tmp_path, candidate_dir=tmp_path)["status"] == "source_gap"

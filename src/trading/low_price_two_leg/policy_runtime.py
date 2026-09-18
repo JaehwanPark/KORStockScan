@@ -88,6 +88,7 @@ SUPPORTED_SOURCE_REPORT_SCHEMAS = frozenset(
         "low_price_two_leg_tuning_report_v7",
         "low_price_two_leg_tuning_report_v8",
         "low_price_two_leg_tuning_report_v9",
+        "low_price_two_leg_tuning_report_v10",
     }
 )
 APPLIED_SCHEMA = "low_price_two_leg_policy_applied_v1"
@@ -1015,6 +1016,7 @@ def validate_candidate(
                 "low_price_two_leg_tuning_report_v7",
                 "low_price_two_leg_tuning_report_v8",
                 "low_price_two_leg_tuning_report_v9",
+                "low_price_two_leg_tuning_report_v10",
             }
             or not isinstance(binding, dict)
             or binding.get("source_date") != source_date.isoformat()
@@ -1133,7 +1135,7 @@ def validate_paired_candidate(payload: dict, report: dict | None) -> tuple[bool,
     try:
         source = date.fromisoformat(payload["source_date"])
         publication = date.fromisoformat(payload["publication_date"])
-        if source < date(2026, 9, 17) or publication < source or payload.get("source_report_schema") != "low_price_two_leg_tuning_report_v9":
+        if source < date(2026, 9, 17) or publication < source or payload.get("source_report_schema") not in {"low_price_two_leg_tuning_report_v9", "low_price_two_leg_tuning_report_v10"}:
             raise ValueError("paired_source_date_schema")
         if payload["effective_date"] != next_policy_date(source, publication).isoformat():
             raise ValueError("effective_date")
