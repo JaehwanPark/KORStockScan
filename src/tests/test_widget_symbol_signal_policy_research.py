@@ -1352,6 +1352,7 @@ def test_discovery_profit_objective_keeps_lower_ev_more_profitable_candidate(
 
 @pytest.mark.parametrize("failure", [
     "daily_source_coverage_fail", "ka10080_response_not_json", "all_symbols_invalid",
+    "source_quality_fail",
 ])
 def test_main_isolates_identifiable_source_failure_and_keeps_global_failures(
     tmp_path, monkeypatch, failure,
@@ -1365,9 +1366,20 @@ def test_main_isolates_identifiable_source_failure_and_keeps_global_failures(
         universe, {symbol: "established_widget_symbol" for symbol in universe},
     ))
     monkeypatch.setattr(WidgetSymbolRuntimePolicyLoader, "resolve_all", lambda *args, **kwargs: {})
-    monkeypatch.setattr(research, "load_completed_symbol_source", lambda **kwargs: (
-        [], {"request_count": 0, "source_quality_status": "PASS"},
-    ))
+    def load(**kwargs):
+        if failure == "source_quality_fail" and kwargs["symbol"] == "001550":
+            rows = [dict(
+                cntr_tm=stamp, open_pric="20000", high_pric="20100",
+                low_pric="19900", cur_prc="20000", trde_qty="100",
+            ) for stamp in ("20260604131500", "20260605131500")]
+            return research.fetch_krx_history(
+                symbol="001550", token="fixture-no-network", allowed_symbols=universe,
+                start_date=date(2026,6,5), end_date=date(2026,9,17),
+                expected_trading_day_count=73, page_delay_sec=0,
+                post=lambda *a, **kw: FakeResponse(rows),
+            )
+        return [], {"request_count": 0, "source_quality_status": "PASS"}
+    monkeypatch.setattr(research, "load_completed_symbol_source", load)
     monkeypatch.setattr(research, "research_input_fingerprint", lambda **kwargs: "fixture-source")
     monkeypatch.setattr(research, "_attach_population_evidence", lambda report: report)
     monkeypatch.setattr(research, "attach_recommendation_contract", lambda report: report)
@@ -1406,15 +1418,17 @@ def test_main_isolates_identifiable_source_failure_and_keeps_global_failures(
         assert seen == ["001550"] and not written
     else:
         assert research.main(argv) == 0
-        assert seen == list(universe)
+        assert seen == (["006800"] if failure == "source_quality_fail" else list(universe))
         assert set(written["symbols"]) == set(universe)
-        assert written["source_quarantine"] == {"001550": "001550_daily_source_coverage_fail"}
+        reason = "001550_source_quality_fail" if failure == "source_quality_fail" else "001550_daily_source_coverage_fail"
+        assert written["source_quarantine"] == {"001550": reason}
         assert written["eligible_source_symbol_count"] == 1
         assert written["quarantined_source_symbol_count"] == 1
         assert written["symbols"]["001550"]["decision"] == "source_quality_quarantined_no_evaluation"
         assert "notional_weighted_ev_pct" not in written["symbols"]["001550"]
         assert written["source_meta"]["001550"]["source_quality_status"] == "FAIL"
-        assert written["source_meta"]["001550"]["daily_source_coverage"]["status"] == "FAIL"
+        if failure != "source_quality_fail":
+            assert written["source_meta"]["001550"]["daily_source_coverage"]["status"] == "FAIL"
         progress = json.loads((tmp_path / "source_waiting_2026-09-17.json").read_text())
         assert progress["status"] == "complete" and progress["source_waiting"] == {}
 

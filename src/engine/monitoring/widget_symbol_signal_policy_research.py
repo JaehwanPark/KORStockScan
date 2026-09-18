@@ -3168,6 +3168,7 @@ def main(argv: list[str] | None = None) -> int:
                 f"{symbol}_daily_source_coverage_fail",
                 f"{symbol}_snapshot_coverage_incomplete",
                 f"{symbol}_source_quality_not_pass",
+                f"{symbol}_source_quality_fail",
             }:
                 raise
             source_quarantine[symbol] = reason

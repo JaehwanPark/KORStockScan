@@ -382,6 +382,40 @@ def test_integrated_sor_research_provenance_is_rejected_for_krx_runtime():
         runtime.build_policy(research)
 
 
+@pytest.mark.parametrize("tamper", [None, "authority", "missing_ledger", "count", "all_invalid"])
+def test_identified_source_quarantine_excludes_failed_symbol_and_retains_valid_policy(tamper):
+    report = _research()
+    rejected = next(symbol for symbol in SYMBOLS if symbol != "006800")
+    reason = rejected + "_source_quality_fail"
+    report["source_quarantine"] = {rejected: reason}
+    report["quarantined_source_symbol_count"] = 1
+    report["symbols"][rejected] = dict(
+        symbol=rejected, decision="source_quality_quarantined_no_evaluation",
+        source_quality_reason=reason, runtime_effect=False, allowed_runtime_apply=False,
+    )
+    report["source_meta"][rejected] = dict(
+        source_quality_status="FAIL", source_quality_reason=reason,
+    )
+    if tamper == "authority":
+        report["symbols"][rejected]["allowed_runtime_apply"] = True
+    elif tamper == "missing_ledger":
+        report["source_quarantine"] = {};report["quarantined_source_symbol_count"] = 0
+    elif tamper == "count":
+        report["quarantined_source_symbol_count"] = True
+    elif tamper == "all_invalid":
+        report["source_quarantine"] = {symbol: symbol+"_source_quality_fail" for symbol in SYMBOLS}
+        report["quarantined_source_symbol_count"] = len(SYMBOLS)
+    if tamper is not None:
+        with pytest.raises(ValueError, match="source_quarantine_invalid|krx_source_provenance_invalid"):
+            runtime.build_policy(report)
+        return
+    policy = runtime.build_policy(report)
+    assert set(policy["symbols"]) == {"006800"}
+    assert rejected not in policy["observation_symbols"]
+    assert policy["execution_quality_blocks"][rejected] == "source_quality_quarantined_no_evaluation"
+    assert policy["symbols"]["006800"]["execution_policy"]["leg_quantity_each"] == 10
+
+
 def test_research_diagnostic_seed_enrolls_without_execution_promotion():
     report = _research()
     universe = {**SYMBOLS, "999999": "research"}

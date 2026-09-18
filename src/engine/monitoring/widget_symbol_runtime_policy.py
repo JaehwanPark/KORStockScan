@@ -424,6 +424,36 @@ def build_policy(
         raise ValueError("widget_symbol_research_contract_invalid")
     universe, origins = _research_universe(research)
     source_meta = research.get("source_meta")
+    if not isinstance(source_meta, dict):
+        raise ValueError("widget_symbol_research_krx_source_provenance_invalid")
+    quarantine = research.get("source_quarantine", {})
+    if (
+        not isinstance(quarantine, dict)
+        or not set(quarantine).issubset(universe)
+        or type(research.get("quarantined_source_symbol_count", 0)) is not int
+        or research.get("quarantined_source_symbol_count", 0) != len(quarantine)
+        or len(quarantine) == len(universe)
+    ):
+        raise ValueError("widget_symbol_research_source_quarantine_invalid")
+    for symbol, reason in quarantine.items():
+        result = (research.get("symbols") or {}).get(symbol) or {}
+        meta = (source_meta or {}).get(symbol) or {}
+        if not isinstance(result, dict) or not isinstance(meta, dict):
+            raise ValueError("widget_symbol_research_source_quarantine_invalid")
+        if (
+            reason not in {
+                f"{symbol}_daily_source_coverage_fail", f"{symbol}_snapshot_coverage_incomplete",
+                f"{symbol}_source_quality_not_pass", f"{symbol}_source_quality_fail",
+            }
+            or result.get("decision") != "source_quality_quarantined_no_evaluation"
+            or result.get("source_quality_reason") != reason
+            or result.get("runtime_effect") is not False
+            or result.get("allowed_runtime_apply") is not False
+            or meta.get("source_quality_status") != "FAIL"
+            or meta.get("source_quality_reason") != reason
+            or symbol in research.get("passed_symbols", [])
+        ):
+            raise ValueError("widget_symbol_research_source_quarantine_invalid")
     if not isinstance(source_meta, dict) or any(
         not isinstance(source_meta.get(symbol), dict)
         or source_meta[symbol].get("symbol") != symbol
@@ -431,7 +461,7 @@ def build_policy(
         or source_meta[symbol].get("market") != "KRX_regular"
         or source_meta[symbol].get("source_quality_status") != "PASS"
         or source_meta[symbol].get("source_role") == "synthetic_frozen_benchmark_only"
-        for symbol in universe
+        for symbol in universe if symbol not in quarantine
     ):
         raise ValueError("widget_symbol_research_krx_source_provenance_invalid")
     source_date = date.fromisoformat(str(research.get("end_date") or ""))
@@ -479,6 +509,9 @@ def build_policy(
     )
     for symbol, name in universe.items():
         result = (research.get("symbols") or {}).get(symbol)
+        if symbol in quarantine:
+            quality_blocks[symbol] = "source_quality_quarantined_no_evaluation"
+            continue
         if research.get("schema") in {
             "widget_symbol_signal_policy_research_v3",
             REPORT_SCHEMA,
