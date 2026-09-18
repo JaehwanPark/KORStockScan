@@ -90321,7 +90321,7 @@ def handle_holding_state(
         action = _evaluate_scale_in_signal(stock=stock, code=code, strategy=strategy,
             market_regime=market_regime, profit_rate=profit_rate, peak_profit=peak_profit,
             curr_price=curr_p, ws_data=ws_data, current_ai_score=current_ai_score,
-            held_sec=held_sec, ai_engine=ai_engine, now_ts=now_ts)
+            held_sec=held_sec, ai_engine=ai_engine, now_ts=now_ts, stop_guard_pct=stop_line)
     if action:
         _emit_stat_action_decision_snapshot(stock=stock, code=code, strategy=strategy,
             ws_data=ws_data, chosen_action="avg_down_wait",
@@ -91240,6 +91240,7 @@ def _evaluate_scale_in_signal(
     ai_engine=None,
     now_ts=None,
     shallow_recheck_only=False,
+    stop_guard_pct=None,
 ):
     """Consume the shared Main rebound entry signal; no independent alpha tuning."""
     if str(strategy or "").upper() != "SCALPING" or shallow_recheck_only:
@@ -91249,6 +91250,13 @@ def _evaluate_scale_in_signal(
     if not _rule_bool("REVERSAL_ADD_ENABLED", True):
         return None
     if curr_price <= 0 or curr_price >= _safe_float(stock.get("buy_price"), 0):
+        return None
+    stop_guard_pct = (_rule_float("SCALP_STOP", -1.5) if stop_guard_pct is None
+        else _safe_float(stop_guard_pct, float("nan")))
+    if (not math.isfinite(stop_guard_pct)
+            or calculate_net_profit_rate(stock.get("buy_price"), curr_price)
+                <= max(stop_guard_pct, _rule_float("SCALP_HARD_STOP", -2.5))):
+        stock["_main_rebound_entry_assessment"] = {"reason": "common_stop_has_priority"}
         return None
     now_ts = time.time() if now_ts is None else float(now_ts)
     stock["_main_rebound_entry_assessment"] = {"reason": "shared_main_rebound_source_unavailable"}
@@ -91280,7 +91288,7 @@ def _evaluate_scale_in_signal(
         profit_rate=profit_rate, peak_profit=peak_profit, current_ai_score=current_ai_score,
         held_sec=held_sec, stock_code=code,
         position_basis=[stock.get("buy_price"), stock.get("buy_qty")],
-        signal_observed_at=now_ts, signal_source_digest=_main_rebound_source_digest(ws_data),
+        stop_guard_pct=stop_guard_pct, signal_observed_at=now_ts, signal_source_digest=_main_rebound_source_digest(ws_data),
         signal_market_digest=_main_rebound_source_digest({key: ws_data.get(key)
             for key in ("curr", "recent_trade_ticks")}))
     signal = _ensure_scale_in_action_receipt(stock, code, signal, now_ts=now_ts)
@@ -91541,6 +91549,8 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         current_net = calculate_net_profit_rate(stock.get("buy_price"), ws_data.get("curr"))
         if current_net <= _rule_float("SCALP_HARD_STOP", -2.5):
             return {"status": "blocked", "reason": "hard_stop_has_priority", "qty": 0}
+        if current_net <= _safe_float(action.get("stop_guard_pct"), _rule_float("SCALP_STOP", -1.5)):
+            return {"status": "blocked", "reason": "common_stop_has_priority", "qty": 0}
         gate = can_consider_scale_in(stock, code, ws_data, stock.get("strategy"), None,
             skip_add_judgment_lock=True)
         if not gate.get("allowed"):
@@ -92431,7 +92441,9 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                 or not 0 <= time.time() - _safe_float(action.get("signal_observed_at"), 0) <= 2.0
                 or action.get("position_basis") != [stock.get("buy_price"), stock.get("buy_qty")]
                 or final_price >= _safe_float(stock.get("buy_price"), 0)
-                or calculate_net_profit_rate(stock.get("buy_price"), final_price) <= _rule_float("SCALP_HARD_STOP", -2.5)):
+                or calculate_net_profit_rate(stock.get("buy_price"), final_price) <= max(
+                    _rule_float("SCALP_HARD_STOP", -2.5),
+                    _safe_float(action.get("stop_guard_pct"), _rule_float("SCALP_STOP", -1.5)))):
             return {"status": "blocked", "reason": "shared_rebound_signal_invalidated_before_submit", "qty": 0}
 
     if is_buy_side_paused():

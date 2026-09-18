@@ -11187,7 +11187,6 @@ class GPTSniperEngine:
         )
         from src.trading.market.micro_confirmation import load_live_dynamic_confirmation_source
         from src.trading.market.entry_adverse_flow import evaluate_snapshot
-        from src.utils.constants import DATA_DIR
 
         blocked = {"should_add": False, "reason": "shared_main_rebound_source_unavailable"}
         try:
@@ -11251,7 +11250,11 @@ class GPTSniperEngine:
                 "should_add": True,
                 "source_signal_id": policy_owner.digest({"symbol": stock_code,
                     "cohort": cohort, "bundle": bundle["bundle_sha256"],
-                    "source": {"ticks": recent_ticks, "ws": ws_data}}),
+                    "source": {"ticks": recent_ticks, "completed_bars": recent_candles,
+                        "ws": {key: value for key, value in ws_data.items()
+                            if key not in {"quote_age_ms", "tick_latest_age_ms",
+                                "market_data_effective_quote_age_ms",
+                                "quote_consistency_ws_age_ms", "quote_consistency_rest_age_ms"}}}}),
                 "machine_bundle_sha256": bundle["bundle_sha256"],
                 "machine_policy_version": assessment["policy_version"],
                 "machine_action": assessment["action"], "structure_phase_family": family,

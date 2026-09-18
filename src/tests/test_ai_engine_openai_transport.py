@@ -8393,7 +8393,7 @@ def test_shared_rebound_producer_uses_real_entry_core_and_never_provider(monkeyp
     builds = []
     def context(*a, **kw):
         builds.append(kw)
-        assert kw["recent_candles"] == []
+        assert isinstance(kw["recent_candles"], list)
         assert kw["source_meta"]["multi_timeframe_auxiliary_fetch"] is False
         assert kw["include_investor_source"] is False
         return _allowed_entry_candle_context()
@@ -8443,3 +8443,11 @@ def test_shared_rebound_producer_uses_real_entry_core_and_never_provider(monkeyp
         later = engine.evaluate_main_rebound_entry(stock_code="005930", ws_data={},
             recent_ticks=[], recent_candles=[], candle_meta={}, now_ts=2001)
         assert later["source_signal_id"] == result["source_signal_id"]
+
+        aged = engine.evaluate_main_rebound_entry(stock_code="005930",
+            ws_data={"quote_age_ms": 100, "market_data_effective_quote_age_ms": 100},
+            recent_ticks=[], recent_candles=[], candle_meta={}, now_ts=2001)
+        assert aged["source_signal_id"] == result["source_signal_id"]
+        new_bar = engine.evaluate_main_rebound_entry(stock_code="005930", ws_data={},
+            recent_ticks=[], recent_candles=[{"timestamp": 1900, "close": 9950}], candle_meta={}, now_ts=2001)
+        assert new_bar["source_signal_id"] != result["source_signal_id"]

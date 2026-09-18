@@ -18722,7 +18722,8 @@ def test_scale_in_exit_authority_blocks_gate_ai_and_broker(monkeypatch):
     assert broker_calls == []
     assert pipeline_logs == []
 
-def test_execute_scale_in_order_partial_split_submit_keeps_pending(monkeypatch):
+@pytest.mark.parametrize("resolved_stop_blocked", [False, True])
+def test_execute_scale_in_order_partial_split_submit_keeps_pending(monkeypatch, resolved_stop_blocked):
     monkeypatch.setattr(state_handlers, "_pre_submit_refresh_real_ws_snapshot", lambda code, ws, strategy: (ws, {}))
     monkeypatch.setattr(state_handlers, "_pre_submit_input_snapshot_needs_rest_orderbook_recheck", lambda ws: False)
     import requests
@@ -18774,7 +18775,7 @@ def test_execute_scale_in_order_partial_split_submit_keeps_pending(monkeypatch):
         lambda **kwargs: {
             "allowed": True,
             "reason": "test",
-            "order_price": 10000,
+            "order_price": 9990 if resolved_stop_blocked else 10000,
             "best_bid": 10000,
             "best_ask": 10010,
             "price_source": "test_limit",
@@ -18819,6 +18820,8 @@ def test_execute_scale_in_order_partial_split_submit_keeps_pending(monkeypatch):
     stock.update(name="TEST", buy_price=10100)
     state_handlers._record_main_rebound_entry_source(stock, "005930", [{"completed": True}], {}, now_ts=2000)
     rebound_kwargs.update(curr_price=10000, ws_data={"curr": 10000, "best_bid": 10000, "best_ask": 10010})
+    if resolved_stop_blocked:
+        rebound_kwargs["stop_guard_pct"] = state_handlers.calculate_net_profit_rate(10100, 10000) - 0.05
     action = state_handlers._evaluate_scale_in_signal(**rebound_kwargs)
     assert action is not None
     result = state_handlers.execute_scale_in_order(
@@ -18829,6 +18832,12 @@ def test_execute_scale_in_order_partial_split_submit_keeps_pending(monkeypatch):
         admin_id=1,
     )
 
+    if resolved_stop_blocked:
+        assert result == {"status": "blocked", "reason": "shared_rebound_signal_invalidated_before_submit", "qty": 0}
+        assert send_calls == []
+        assert not stock.get("pending_add_order")
+        assert "last_avg_down_rebound_signal_id" not in stock
+        return
     assert result is not None, stock
     assert stock["last_avg_down_rebound_signal_id"] == action["source_signal_id"]
     assert "_main_rebound_entry_permit" not in stock
@@ -45406,3 +45415,13 @@ def _execute_shared_rebound_guard_fixture(*, monkeypatch, stock, code, ws_data, 
     assert permit is not None
     return state_handlers.execute_scale_in_order(stock=stock, code=code,
         ws_data=ws_data, action=permit, admin_id=admin_id)
+
+
+@pytest.mark.parametrize("stop_guard_pct", [-0.5, float("nan")])
+def test_shared_rebound_source_does_not_mint_add_on_common_stop(monkeypatch, stop_guard_pct):
+    stock, kwargs = _shared_rebound_fixture(monkeypatch)
+    kwargs["stop_guard_pct"] = stop_guard_pct
+    kwargs["ai_engine"].evaluate_main_rebound_entry = lambda **k: pytest.fail("stop must precede rebound assessment")
+    assert state_handlers._evaluate_scale_in_signal(**kwargs) is None
+    assert stock["_main_rebound_entry_assessment"]["reason"] == "common_stop_has_priority"
+    assert "_main_rebound_entry_permit" not in stock

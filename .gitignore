@@ -135,3 +135,10 @@ Thumbs.db
 
 # Document refresh receipts include private cron backups and API context snapshots.
 /data/report/monitoring_instruction_refresh/
+
+# Local generated artifacts are not source or reviewed configuration.
+# Managed releases mount these directories from the workspace.
+/data/report/
+/data/cache/
+/data/runtime/
+/data/daily_recommendations*.csv
