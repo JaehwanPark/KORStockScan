@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import argparse
 import ast
-import gzip
 import hashlib
 import json
 import math
@@ -18,10 +16,6 @@ from src.utils.constants import DATA_DIR
 
 CONTEXT_VERSION = "microstructure_reaction_context_v2"
 REPORT_DIR = DATA_DIR / "report" / "microstructure_reaction_context"
-PIPELINE_EVENTS_DIR = DATA_DIR / "pipeline_events"
-MONITOR_SNAPSHOT_DIR = DATA_DIR / "report" / "monitor_snapshots"
-CLEAN_BASELINE_POLICY_PATH = DATA_DIR / "source_quality" / "clean_baseline_policy.json"
-SOURCE_QUALITY_AUDIT_DIR = DATA_DIR / "report" / "observation_source_quality_audit"
 TRUSTED_TICK_VOLUME_SOURCES = {"15_abs", "13_delta"}
 DEFAULT_QUOTE_STALE_MS = 3000
 
@@ -71,10 +65,295 @@ def microstructure_delivery_fields(payload: dict) -> dict:
     return {key: payload[key] for key in DELIVERY_KEYS if key in payload}
 
 
+
+MACHINE_EVALUATION_SCHEMA = "microstructure_machine_auxiliary_evaluation_v1"
+
+
+def bind_machine_microstructure_source(capture: dict) -> dict:
+    """Project the already verified exact capture; never reconstruct live inputs."""
+    source = capture.get("source") or {}
+    payload = source.get("exact_payload") or {}
+    evidence = source.get("setup_evidence") or {}
+    context = capture.get("label_context") or {}
+    snapshot = payload.get("ai_market_snapshot_v1") or {}
+    mechanistic = evidence.get("mechanistic_context") or {}
+    flow = mechanistic.get("flow") or {}
+    window = mechanistic.get("micro_window") or payload.get("mechanistic_micro_window") or {}
+    from src.trading.market.micro_confirmation import _live_route_item
+
+    expected_item = _live_route_item(str(context.get("stock_code") or ""), {"krx_only": "KRX", "nxt_only": "NXT", "krx_nxt_integrated": "SOR"}.get(str(context.get("market_data_route") or ""), ""))
+    features = payload.get("features") or {}
+    reaction = {k: v for k, v in features.items() if k.startswith("microstructure_reaction_")}
+    try:
+        captured = datetime.fromisoformat(capture["captured_at"])
+        cutoff = float(window["cutoff_ms"]) / 1000
+        cutoff_valid = captured.tzinfo is not None and 0 <= captured.timestamp() - cutoff <= 5
+    except (KeyError, TypeError, ValueError, OverflowError):
+        cutoff_valid = False
+    return {
+        "capture_sha256": capture.get("machine_observation_sha256"),
+        "setup_evidence_sha256": evidence.get("evidence_sha256"),
+        "flow_observation_sha256": flow.get("flow_observation_sha256"),
+        "decision_snapshot_id": context.get("snapshot_id"),
+        "snapshot_identity_matches": bool(context.get("snapshot_id") and context.get("snapshot_id") == snapshot.get("snapshot_id")),
+        "venue_session_matches": all(str(context.get(k) or "").upper() == str(snapshot.get(k) or "").upper() and bool(context.get(k)) for k in ("effective_venue", "session_bucket")),
+        "bundle_sha256": capture.get("bundle_sha256"),
+        "effective_venue": context.get("effective_venue"),
+        "session_bucket": context.get("session_bucket"),
+        "flow_source_quality_status": (flow.get("source_quality") or {}).get("status"),
+        "micro_recovery": evidence.get("micro_recovery_observation") or {},
+        "reaction_context": reaction,
+        "micro_window": window,
+        "micro_window_cutoff_valid": cutoff_valid,
+        "micro_window_item_matches": bool(expected_item and window.get("item") == expected_item),
+        "source_authority": "hash_verified_exact_machine_capture_not_legacy_score_join",
+    }
+
+
+
+def summarize_machine_capture_population(captures: list[dict]) -> dict:
+    """Preserve verified capture coverage before any cost/outcome exclusion."""
+    partitions = {}
+    seen = set()
+    duplicates = 0
+    for capture in captures:
+        digest = capture.get("machine_observation_sha256")
+        if digest in seen:
+            duplicates += 1
+            continue
+        seen.add(digest)
+        binding = bind_machine_microstructure_source(capture)
+        action = ((capture.get("source") or {}).get("assessment") or {}).get("action") or "UNKNOWN"
+        key = (str(capture.get("captured_at") or "")[:10], binding.get("bundle_sha256"), binding.get("effective_venue"), str(binding.get("session_bucket") or "").upper(), action)
+        partition = partitions.setdefault(key, {"source_date": key[0], "bundle_sha256": key[1], "effective_venue": key[2], "session_bucket": key[3], "machine_action": action, "capture_count": 0, "source_binding_counts": Counter()})
+        partition["capture_count"] += 1
+        bound = binding.get("snapshot_identity_matches") is True and binding.get("venue_session_matches") is True
+        partition["source_binding_counts"]["exact_bound" if bound else "exact_source_gap"] += 1
+        window = binding.get("micro_window") or {}
+        partition["source_binding_counts"]["micro_window_source_gap" if window.get("action") == "SOURCE_UNAVAILABLE" or not window or not binding.get("micro_window_cutoff_valid") else "micro_window_observed"] += 1
+    result = []
+    for key in sorted(partitions, key=lambda key: tuple(str(x or "") for x in key)):
+        partition = partitions[key]
+        partition["source_binding_counts"] = dict(sorted(partition["source_binding_counts"].items()))
+        result.append(partition)
+    return {"verified_capture_count": len(captures), "unique_verified_capture_count": len(seen), "duplicate_capture_collapsed_count": duplicates, "partitions": result, "economic_exclusions_do_not_erase_capture_population": True}
+
+
+def summarize_machine_microstructure_evaluation(cases: list[dict], *, source_receipt: dict, capture_census: dict | None = None) -> dict:
+    """Use all deduplicated cases before the case table's 200-row export limit.
+
+    Endpoint returns are descriptive counterfactuals, not realized strategy PnL
+    or causal feature uplift. AI denominators contain only machine ENTER_NOW.
+    """
+    def finite(value):
+        if isinstance(value, bool):
+            return None
+        try:
+            number = float(value)
+            return number if math.isfinite(number) else None
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+    from src.engine.scalping.ai_decision_quality import HORIZON_END_MAX_LAG_SEC
+
+    groups = {}
+    exclusions = Counter()
+    bindings = Counter()
+    ai_routes = Counter()
+    economic_count = 0
+    auxiliary_economic_count = 0
+    for case in cases:
+        binding = case.get("microstructure_evaluation_binding") or {}
+        bound = bool(binding.get("capture_sha256") and binding.get("snapshot_identity_matches") is True and binding.get("venue_session_matches") is True and binding.get("bundle_sha256") == case.get("bundle_sha256"))
+        recovery = binding.get("micro_recovery") or {}
+        reaction = binding.get("reaction_context") or {}
+        window = binding.get("micro_window") or {}
+        bindings["exact_source_bound" if bound else "exact_source_gap"] += 1
+        flow_usable = bound and binding.get("flow_source_quality_status") == "fresh_consistent" and recovery.get("source_usable") is True
+        reaction_usable = bound and reaction.get("microstructure_reaction_context_status") == "ok"
+        window_usable = bound and binding.get("micro_window_cutoff_valid") is True and binding.get("micro_window_item_matches") is True and window.get("source_quality_status") == "eligible" and window.get("action") != "SOURCE_UNAVAILABLE"
+        bindings["flow_recovery_usable" if flow_usable else "flow_recovery_source_gap"] += 1
+        bindings["reaction_context_usable" if reaction_usable else "reaction_context_source_gap"] += 1
+        bindings["micro_window_usable" if window_usable else "micro_window_source_gap"] += 1
+        action = case.get("machine_action") or "UNKNOWN"
+        ai = case.get("ai_and_final_guard") or {}
+        verdict = "NOT_APPLICABLE_MACHINE_NONENTER"
+        prompt = "NOT_APPLICABLE"
+        if action == "ENTER_NOW":
+            prompt = ai.get("prompt_version") or "UNKNOWN"
+            if ai.get("join_status") != "exact_snapshot_machine_action_join":
+                verdict = "EXACT_AI_JOIN_GAP"
+            elif ai.get("provider_called") is not True:
+                verdict = "PROVIDER_NOT_CALLED"
+            elif ai.get("decision_quality_contract_status") != "pass" or ai.get("semantic_validation_status") not in {None, "pass"}:
+                verdict = "SEMANTIC_INVALID"
+            else:
+                from src.engine.ai_prompt_contracts import MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS
+                observed = str(ai.get("ai_risk_verdict") or "").upper()
+                verdict = observed if prompt in MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS and observed in {"PASS", "VETO", "CAUTION", "INSUFFICIENT"} else "UNREGISTERED_OR_INVALID_VERDICT"
+            ai_routes[verdict] += 1
+        key = (case.get("source_date"), case.get("bundle_sha256"), case.get("effective_venue"), case.get("session_bucket"), action, prompt, verdict)
+        group = groups.setdefault(key, {"source_date": key[0], "bundle_sha256": key[1], "effective_venue": key[2], "session_bucket": key[3], "machine_action": action, "prompt_version": prompt, "ai_verdict": verdict, "case_count": 0, "classification_counts": Counter(), "net": [], "adverse": [], "flow_recovery_net": [], "reaction_context_net": [], "micro_window_net": []})
+        group["case_count"] += 1
+        group["classification_counts"][case.get("case_classification") or "UNKNOWN"] += 1
+        cost = case.get("cost_evidence") or {}
+        selected_cost = finite(cost.get("selected_economic_cost_pct"))
+        metric = (case.get("outcome_horizon_metrics") or {}).get("3m") or {}
+        end = finite(metric.get("end_return_pct"))
+        path = case.get("entry_quality_path") or {}
+        reason = None
+        if case.get("policy_learning_excluded") is True:
+            reason = case.get("policy_learning_exclusion_reason") or "lineage_excluded"
+        elif case.get("exact_attempt_identity_complete") is not True or not bound:
+            reason = "exact_identity_or_source_gap"
+        elif selected_cost is None or selected_cost < 0 or cost.get("selected_cost_basis") not in {"executable_estimated_cost_pct", "broker_reconciled_cost_pct"} or not cost.get("cost_source_sha256") or cost.get("missing_cost_imputed") is not False:
+            reason = "full_cost_contract_gap"
+        elif path.get("status") != "evaluable" or path.get("cadence_complete") is not True or metric.get("status") != "observed" or end is None:
+            reason = "mature_cadence_outcome_gap"
+        if reason:
+            exclusions[reason] += 1
+            continue
+        economic_count += 1
+        if action == "ENTER_NOW" and verdict in {"PASS", "VETO", "CAUTION"} and case.get("compact_partition_eligible") is True:
+            auxiliary_economic_count += 1
+        net = end - selected_cost
+        group["net"].append(net)
+        adverse = finite(metric.get("mae_pct"))
+        if adverse is not None:
+            group["adverse"].append(adverse - selected_cost)
+        for usable, name in [(flow_usable, "flow_recovery_net"), (reaction_usable, "reaction_context_net"), (window_usable, "micro_window_net")]:
+            if usable:
+                group[name].append(net)
+
+    def stats(values):
+        values = sorted(values)
+        return {"count": len(values), "mean_net_pct": mean(values) if values else None, "sum_equal_weight_net_pct": sum(values) if values else None, "p05_net_pct": values[int((len(values)-1)*0.05)] if values else None}
+
+    partitions = []
+    for key in sorted(groups, key=lambda k: tuple(str(x or "") for x in k)):
+        group = groups[key]
+        net = group.pop("net")
+        adverse = group.pop("adverse")
+        group["classification_counts"] = dict(sorted(group["classification_counts"].items()))
+        group["cost_adjusted_3m_endpoint_cf"] = stats(net)
+        group["worst_3m_cost_adjusted_path_mae_pct"] = min(adverse) if adverse else None
+        for name in ("flow_recovery", "reaction_context", "micro_window"):
+            group[name + "_usable_endpoint_cf"] = stats(group.pop(name + "_net"))
+        partitions.append(group)
+    return {
+        "schema": MACHINE_EVALUATION_SCHEMA,
+        "status": "evaluable_descriptive_counterfactual" if economic_count else "source_gap_no_cost_adjusted_outcomes",
+        "capture_population": (capture_census or {}).get("microstructure_capture_population"),
+        "capture_exclusion_counts": {key: value for key, value in (capture_census or {}).items() if key in {"invalid_capture", "unsupported_cohort", "machine_action_mismatch_excluded", "full_round_trip_cost_missing", "executable_reference_missing", "path_or_cost_missing", "machine_action_invalid"}},
+        "case_count": len(cases), "cost_adjusted_outcome_count": economic_count,
+        "exclusion_counts": dict(sorted(exclusions.items())),
+        "denominator_preserved": len(cases) == economic_count + sum(exclusions.values()),
+        "source_binding_counts": dict(sorted(bindings.items())),
+        "machine_action_counts": dict(sorted(Counter(case.get("machine_action") or "UNKNOWN" for case in cases).items())),
+        "machine_enter_ai_routing_counts": dict(sorted(ai_routes.items())),
+        "ai_denominator_role": "exact_joined_provider_called_machine_ENTER_NOW_only; nonentry_AI_absence_is_not_a_gap",
+        "partitions": partitions,
+        "measurement_role": "equal_weight_3m_endpoint_counterfactual_minus_existing_full_cost; not_strategy_EV_or_causal_delta_EV",
+        "outcome_window_contract": {"owner": "ai_decision_quality.mature_outcome_labels", "horizon_end_max_lag_sec": HORIZON_END_MAX_LAG_SEC, "endpoint_role": "last_observation_within_existing_3m_window_not_exact_close_or_fill"},
+        "source_receipt_machine_tuning_input_allowed": source_receipt.get("machine_threshold_tuning_input_allowed") is True,
+        "source_receipt_auxiliary_tuning_input_allowed": source_receipt.get("tuning_input_allowed") is True,
+        "machine_tuning_input_allowed": source_receipt.get("machine_threshold_tuning_input_allowed") is True and economic_count > 0,
+        "auxiliary_tuning_input_allowed": source_receipt.get("tuning_input_allowed") is True and auxiliary_economic_count > 0,
+        "auxiliary_cost_adjusted_outcome_count": auxiliary_economic_count,
+        "tuning_authority": "existing_machine_case_table_source_partition_terminal_holdout_and_promotion_gates_only; no_independent_feature_tuner",
+        "actual_completed_ev_pct": None, "actual_net_profit": None, "causal_model_delta_ev_pct": None,
+        "runtime_effect": False, "allowed_runtime_apply": False,
+    }
+
+
+def refresh_machine_evaluation_link(source_path: Path, *, report_root: Path) -> dict:
+    """Late producer refresh: no raw pipeline replay, policy/env or provider calls."""
+    before = source_path.stat()
+    source_bytes = source_path.read_bytes()
+    after = source_path.stat()
+    if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
+        raise ValueError("machine_evaluation_parent_changed_during_read")
+    source = json.loads(source_bytes)
+    target_date = source.get("target_date")
+    evaluation = ((source.get("hierarchical_entry_quality") or {}).get("machine_decision_case_table") or {}).get("microstructure_evaluation")
+    if source.get("schema") != "ai_decision_action_outcome_calibration_v2" or source.get("runtime_effect") is not False or source.get("allowed_runtime_apply") is not False or not isinstance(target_date, str) or not isinstance(evaluation, dict) or evaluation.get("schema") != MACHINE_EVALUATION_SCHEMA:
+        raise ValueError("exact_date_machine_evaluation_contract_missing")
+    if datetime.strptime(target_date, "%Y-%m-%d").date().isoformat() != target_date or target_date < _DEFAULT_CLEAN_BASELINE_DATE:
+        raise ValueError("machine_evaluation_target_date_invalid")
+    if source_path.name != f"ai_decision_action_outcome_calibration_{target_date}.json":
+        raise ValueError("machine_evaluation_source_filename_date_mismatch")
+    if any(part.get("source_date") and part["source_date"] > target_date for part in evaluation.get("partitions") or []):
+        raise ValueError("future_machine_evaluation_partition")
+    if evaluation.get("runtime_effect") is not False or evaluation.get("allowed_runtime_apply") is not False:
+        raise ValueError("machine_evaluation_diagnostic_authority_invalid")
+    path = report_root / "microstructure_reaction_context" / f"microstructure_reaction_context_{target_date}.json"
+    if path.exists():
+        report = json.loads(path.read_text())
+        if report.get("date") != target_date:
+            raise ValueError("microstructure_report_target_date_mismatch")
+    else:
+        report = {"schema_version": 6, "date": target_date, "report_type": "microstructure_reaction_context", "summary": {}, "warnings": [], "runtime_effect": False, "allowed_runtime_apply": False}
+    # Keep an old report's statistics as explicitly historical, never as current inputs.
+    if report.get("evaluation_mode") != "machine_primary_auxiliary_only":
+        if path.exists():
+            legacy_bytes = path.read_bytes()
+            legacy_digest = hashlib.sha256(legacy_bytes).hexdigest()
+            legacy_path = path.with_name(path.stem + ".legacy." + legacy_digest + ".json")
+            if not legacy_path.exists():
+                legacy_path.write_bytes(legacy_bytes)
+        report = {
+            "schema_version": 6, "date": target_date,
+            "report_type": "microstructure_reaction_context",
+            "legacy_generated_at": report.get("generated_at"),
+            "legacy_source_sha256": hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None,
+            "summary": {}, "warnings": [], "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        }
+    report["evaluation_mode"] = "machine_primary_auxiliary_only"
+    report["decision_authority"] = "postclose_diagnostic_only"
+    report["forbidden_uses"] = FORBIDDEN_USES
+    report["legacy_study_status"] = "retired"
+    report.setdefault("summary", {})["machine_primary_auxiliary_evaluation"] = {
+        **evaluation, "source_report_path": str(source_path),
+        "source_report_sha256": hashlib.sha256(source_bytes).hexdigest(),
+        "source_target_date": target_date,
+    }
+    report["primary_decision_metric"] = "machine_primary_auxiliary_full_cost_outcome_diagnostic"
+    report["generated_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + "." + uuid4().hex + ".tmp")
+    try:
+        temporary.write_text(json.dumps(report, ensure_ascii=False, indent=2))
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+    path.with_suffix(".md").write_text(render_microstructure_reaction_context_markdown(report))
+    return report
+
+
 def microstructure_summary_contract(summary: dict) -> dict:
-    cumulative = dict(
-        summary.get("clean_baseline_cumulative_opportunity_exploration") or {}
-    )
+    modern = dict(summary.get("machine_primary_auxiliary_evaluation") or {})
+    if not modern:
+        modern = {"schema": MACHINE_EVALUATION_SCHEMA, "status": "source_gap_exact_date_machine_evaluation_not_generated", "actual_completed_ev_pct": None, "runtime_effect": False, "allowed_runtime_apply": False}
+    elif modern.get("source_report_path") and modern.get("source_report_sha256"):
+        try:
+            path = Path(modern["source_report_path"])
+            before = path.stat()
+            source_bytes = path.read_bytes()
+            digest = hashlib.sha256(source_bytes).hexdigest()
+            parent = json.loads(source_bytes)
+            after = path.stat()
+            valid = digest == modern.get("source_report_sha256") and (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) == (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+            expected = ((parent.get("hierarchical_entry_quality") or {}).get("machine_decision_case_table") or {}).get("microstructure_evaluation")
+            observed = {k: v for k, v in modern.items() if k not in {"source_report_path", "source_report_sha256", "source_target_date"}}
+            valid = valid and parent.get("target_date") == modern.get("source_target_date") and path.name == f"ai_decision_action_outcome_calibration_{modern.get('source_target_date')}.json" and expected == observed
+        except (OSError, ValueError, TypeError, AttributeError):
+            valid = False
+        if not valid:
+            modern.update(status="source_gap_machine_evaluation_parent_hash_mismatch", machine_tuning_input_allowed=False, auxiliary_tuning_input_allowed=False)
+    else:
+        modern.update(status="source_gap_machine_evaluation_parent_hash_mismatch", machine_tuning_input_allowed=False, auxiliary_tuning_input_allowed=False)
+    cumulative = {"status": "retired"}
     cumulative.update(
         {
             "runtime_application": "not_applicable_diagnostic",
@@ -87,6 +366,8 @@ def microstructure_summary_contract(summary: dict) -> dict:
         **{
             key: summary.get(key)
             for key in (
+                "machine_primary_auxiliary_evaluation",
+                "v_pw_runtime_support_unknown_count",
                 "delivery_telemetry_v3_unique_count",
                 "delivery_applicability_unknown_row_count",
                 "context_applicable_count",
@@ -102,6 +383,15 @@ def microstructure_summary_contract(summary: dict) -> dict:
                 "code_improvement_order_ids",
             )
         },
+        "legacy_study_status": "retired",
+        "row_count": None,
+        "ok_count": None,
+        "missing_or_unusable_count": None,
+        "computed_coverage_pct": None,
+        "provider_delivery_coverage_pct": None,
+        "internal_consumption_coverage_pct": None,
+        "code_improvement_order_ids": [],
+        "machine_primary_auxiliary_evaluation": modern,
         "clean_baseline_cumulative_opportunity_exploration": cumulative,
         "runtime_application": "not_applicable_diagnostic",
         "applied_effect": "not_evaluated",
@@ -120,9 +410,6 @@ _ENTRY_OPPORTUNITY_STAGES = {
     "scalp_entry_action_decision_snapshot",
     "watching_analyze_target",
 }
-_OPPORTUNITY_CLUSTER_GAP_MS = 120_000
-_BLOCKER_LOOKAHEAD_MS = 15_000
-_OUTCOME_REFERENCE_TOLERANCE_MS = 5_000
 _DEFAULT_CLEAN_BASELINE_DATE = "2026-06-05"
 
 CONTEXT_KEYS = (
@@ -229,21 +516,6 @@ FORBIDDEN_USES = [
     "bot_restart",
     "cap_release",
 ]
-
-WORKORDER_FORBIDDEN_USES = [
-    "standalone_buy",
-    "submit_permission",
-    "pressure_math",
-    "broker_guard_bypass",
-    "stale_quote_guard_bypass",
-    "order_guard_relaxation",
-    "threshold_mutation",
-    "provider_route_change",
-    "bot_restart",
-    "cap_release",
-    "real_execution_quality_approval",
-]
-
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
     try:
@@ -1172,29 +1444,6 @@ def report_paths(target_date: str) -> tuple[Path, Path]:
     return base.with_suffix(".json"), base.with_suffix(".md")
 
 
-def _event_path(target_date: str) -> Path:
-    path = PIPELINE_EVENTS_DIR / f"pipeline_events_{target_date}.jsonl"
-    if path.exists():
-        return path
-    gz_path = Path(f"{path}.gz")
-    return gz_path
-
-
-def _iter_jsonl(path: Path):
-    if not path.exists():
-        return
-    opener = gzip.open if path.suffix == ".gz" else open
-    with opener(path, "rt", encoding="utf-8") as handle:
-        for line in handle:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                yield json.loads(line)
-            except Exception:
-                continue
-
-
 def _has_context(fields: dict[str, Any]) -> bool:
     return any(
         key in fields
@@ -1332,603 +1581,24 @@ def _row_from_event(event: dict[str, Any]) -> dict[str, Any] | None:
     return row
 
 
-def _sum_int(rows: list[dict[str, Any]], key: str) -> int:
-    return sum(_safe_int(row.get(key), 0) for row in rows)
 
 
-def _sum_counter_rows(rows: list[dict[str, Any]], key: str) -> dict[str, int]:
-    counter: Counter = Counter()
-    for row in rows:
-        counter.update(_dict_counter(row.get(key)))
-    return dict(sorted(counter.items()))
 
 
-def _field_counter(
-    rows: list[dict[str, Any]], key: str, *, default: str = "missing"
-) -> dict[str, int]:
-    return dict(sorted(Counter(str(row.get(key) or default) for row in rows).items()))
 
 
-def _rest_signed_trade_tick_count(rows: list[dict[str, Any]]) -> int:
-    return sum(len(_list_value(row.get("rest_signed_trade_ticks"))) for row in rows)
 
 
-def _rest_signed_trade_tick_source_counts(rows: list[dict[str, Any]]) -> dict[str, int]:
-    counter: Counter = Counter()
-    for row in rows:
-        for tick in _list_value(row.get("rest_signed_trade_ticks")):
-            if not isinstance(tick, dict):
-                counter["unparsed"] += 1
-                continue
-            source = (
-                tick.get("rest_signed_tape_source")
-                or tick.get("aggressor_source")
-                or tick.get("source")
-                or "unknown"
-            )
-            counter[str(source)] += 1
-    return dict(sorted(counter.items()))
 
 
-def _quote_freshness_state(row: dict[str, Any]) -> str:
-    raw_state = str(row.get("market_data_freshness_state") or "").strip().lower()
-    if raw_state in {"fresh", "stale", "missing", "unknown"}:
-        return raw_state
-    if "quote_stale" in row:
-        if _safe_bool(row.get("quote_stale"), False):
-            return "stale"
-        return "fresh"
-    age_candidates = (
-        row.get("quote_age_ms"),
-        row.get("quote_age_at_submit_ms"),
-        row.get("ws_age_ms"),
-    )
-    ages = [_safe_float(value, -1.0) for value in age_candidates]
-    ages = [age for age in ages if age >= 0]
-    if not ages:
-        return "unknown"
-    return "stale" if min(ages) > 1200.0 else "fresh"
 
 
-def _strength_diff_rows(rows: list[dict[str, Any]]) -> list[float]:
-    diffs: list[float] = []
-    for row in rows:
-        ws_value = _safe_float(row.get("v_pw_ws_value"), 0.0)
-        rest_value = _safe_float(row.get("v_pw_rest_value"), 0.0)
-        if ws_value <= 0 or rest_value <= 0:
-            continue
-        diffs.append(abs(ws_value - rest_value))
-    return diffs
 
 
-def _microstructure_code_improvement_orders(
-    summary: dict[str, Any], report_path: Path
-) -> list[dict[str, Any]]:
-    orders: list[dict[str, Any]] = []
-
-    def base_order(
-        order_id: str,
-        title: str,
-        *,
-        route: str,
-        improvement_type: str,
-        evidence: list[str],
-    ) -> dict[str, Any]:
-        order = {
-            "order_id": order_id,
-            "title": title,
-            "source_report_type": "microstructure_reaction_context",
-            "target_subsystem": "runtime_instrumentation",
-            "lifecycle_stage": "entry_source_quality",
-            "route": route,
-            "threshold_family": "microstructure_reaction_context",
-            "improvement_type": improvement_type,
-            "priority": 2,
-            "runtime_effect": False,
-            "allowed_runtime_apply": False,
-            "actual_order_submitted": False,
-            "broker_order_forbidden": True,
-            "decision_authority": "diagnostic_source_only",
-            "metric_role": "source_quality_gate",
-            "window_policy": "current_contract_version_unique_evaluations",
-            "sample_floor": "one_contract_violation_no_ev_floor",
-            "primary_decision_metric": "source_quality_adjusted_ev_pct",
-            "source_quality_gate": "microstructure source contract and forbidden-use counters",
-            "forbidden_uses": list(WORKORDER_FORBIDDEN_USES),
-            "evidence": [
-                *evidence,
-                "runtime_effect=false",
-                "allowed_runtime_apply=false",
-                "actual_order_submitted=false",
-                "broker_order_forbidden=true",
-            ],
-            "expected_ev_effect": (
-                "Correct existing AI input diagnostics without creating a runtime family."
-            ),
-            "files_likely_touched": [
-                "src/engine/scalping/microstructure_reaction_context.py",
-                "src/engine/scalping/market_data_enrichment.py",
-                "src/utils/pipeline_event_logger.py",
-                "src/engine/build_code_improvement_workorder.py",
-            ],
-            "acceptance_tests": [
-                "PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_microstructure_reaction_context_report.py src/tests/test_market_data_enrichment.py src/tests/test_pipeline_event_logger.py src/tests/test_build_code_improvement_workorder.py",
-                "regenerated microstructure_reaction_context keeps runtime_effect=false and allowed_runtime_apply=false",
-                "postclose code_improvement_workorder includes or explicitly closes this source-only order",
-            ],
-            "source_paths": [str(report_path)],
-            "implementation_provenance": {
-                "implementation_type": "microstructure_source_quality_workorder_handoff",
-                "runtime_effect": False,
-                "allowed_runtime_apply": False,
-                "actual_order_submitted": False,
-                "broker_order_forbidden": True,
-                "requires_separate_runtime_apply_candidate": False,
-            },
-        }
-        order["mapped_family"] = "microstructure_reaction_context"
-        return order
-
-    if (
-        _safe_int(
-            summary.get("market_data_rest_signed_tape_pressure_usable_true_count"), 0
-        )
-        > 0
-    ):
-        orders.append(
-            base_order(
-                "order_microstructure_rest_signed_tape_pressure_authority_violation",
-                "REST signed tape pressure authority violation",
-                route="instrumentation_order",
-                improvement_type="source_quality_forbidden_use_violation",
-                evidence=[
-                    "market_data_rest_signed_tape_pressure_usable_true_count="
-                    f"{summary.get('market_data_rest_signed_tape_pressure_usable_true_count')}",
-                    "REST signed tape must remain negative-veto/source-quality provenance only",
-                ],
-            )
-        )
-
-    if _safe_int(summary.get("ka10046_strength_runtime_effect_true_count"), 0) > 0:
-        orders.append(
-            base_order(
-                "order_microstructure_ka10046_runtime_effect_violation",
-                "ka10046 REST strength runtime-effect violation",
-                route="instrumentation_order",
-                improvement_type="source_quality_forbidden_use_violation",
-                evidence=[
-                    f"ka10046_strength_runtime_effect_true_count={summary.get('ka10046_strength_runtime_effect_true_count')}",
-                    "ka10046 REST strength fallback must not create runtime support by itself",
-                ],
-            )
-        )
-
-    if _safe_int(summary.get("ka10046_strength_missing_received_ts_count"), 0) > 0:
-        orders.append(
-            base_order(
-                "order_microstructure_ka10046_received_timestamp_gap",
-                "ka10046 REST strength received timestamp gap",
-                route="instrumentation_order",
-                improvement_type="source_quality_timestamp_provenance_gap",
-                evidence=[
-                    f"ka10046_strength_missing_received_ts_count={summary.get('ka10046_strength_missing_received_ts_count')}",
-                    "REST aggregate row time cannot substitute for client receive timestamp",
-                ],
-            )
-        )
-
-    row_count = _safe_int(summary.get("row_count"), 0)
-    v_pw_expected_count = _safe_int(summary.get("v_pw_expected_count"), 0)
-    v_pw_missing_count = _safe_int(summary.get("v_pw_missing_count"), 0)
-    v_pw_missing_rate_pct = _safe_float(
-        summary.get("v_pw_expected_missing_rate_pct"),
-        0.0,
-    )
-    if v_pw_expected_count >= 20 and v_pw_missing_rate_pct >= 95.0:
-        orders.append(
-            base_order(
-                "order_microstructure_v_pw_full_source_gap",
-                "microstructure v_pw full source coverage gap",
-                route="instrumentation_order",
-                improvement_type="source_quality_coverage_gap",
-                evidence=[
-                    f"row_count={row_count}",
-                    f"v_pw_expected_count={v_pw_expected_count}",
-                    f"v_pw_missing_count={v_pw_missing_count}",
-                    f"v_pw_expected_missing_rate_pct={v_pw_missing_rate_pct}",
-                ],
-            )
-        )
-
-    mismatch_evaluable_count = _safe_int(
-        summary.get("trade_volume_1030_1031_vs_15_comparable_evaluable_count"),
-        0,
-    )
-    mismatch_count = _safe_int(
-        summary.get("trade_volume_1030_1031_vs_15_contract_violation_count"),
-        0,
-    )
-    mismatch_rate_pct = _safe_float(
-        summary.get("trade_volume_1030_1031_vs_15_contract_violation_rate_pct"),
-        0.0,
-    )
-    if mismatch_evaluable_count >= 20 and mismatch_rate_pct >= 95.0:
-        orders.append(
-            base_order(
-                "order_microstructure_trade_volume_split_contract_mismatch",
-                "microstructure trade-volume split contract mismatch",
-                route="instrumentation_order",
-                improvement_type="source_quality_contract_mismatch",
-                evidence=[
-                    f"trade_volume_1030_1031_vs_15_comparable_evaluable_count={mismatch_evaluable_count}",
-                    f"trade_volume_1030_1031_vs_15_contract_violation_count={mismatch_count}",
-                    f"trade_volume_1030_1031_vs_15_contract_violation_rate_pct={mismatch_rate_pct}",
-                ],
-            )
-        )
-
-    for cause, count in sorted(
-        (summary.get("diagnostic_contract_violation_counts") or {}).items()
-    ):
-        if _safe_int(count) <= 0:
-            continue
-        order = base_order(
-            f"order_microstructure_v3_{cause}",
-            f"Microstructure diagnostic contract: {cause}",
-            route="instrumentation_order",
-            improvement_type="source_quality_contract_gap",
-            evidence=[
-                f"cause={cause}",
-                f"unique_affected_count={count}",
-                f"feature_version={CONTEXT_VERSION}",
-            ],
-        )
-        order.update(
-            {
-                "cause": cause,
-                "unique_affected_count": count,
-                "source_signature": summary.get("source_event_signature"),
-                "representative_receipt": (
-                    summary.get("diagnostic_contract_examples") or {}
-                ).get(cause),
-                "diagnostic_provenance": (
-                    summary.get("diagnostic_contract_provenance") or {}
-                ).get(cause),
-                "closure_condition": "contract_regression_pass_and_next_natural_receipt_valid",
-            }
-        )
-        orders.append(order)
-
-    return orders
 
 
-def _latest_rows_by_stock(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    latest: dict[str, dict[str, Any]] = {}
-    for row in rows:
-        stock_code = str(row.get("stock_code") or "").strip()
-        if not stock_code:
-            continue
-        latest[stock_code] = row
-    return list(latest.values())
 
 
-def _delivery_observation_summary(rows):
-    """Count logical evaluations, not scanner traffic or repeated log stages."""
-    groups = {}
-    unknown = 0
-    defects = {}
-    examples = {}
-    provenance = {}
-    # Explicit simulator execution-view provenance is not a main live holding
-    # consumer. Preserve raw observations, but do not open main repair orders
-    # for this deprioritized owner. Ambiguous/mixed identities stay diagnostic.
-    scope_groups = {}
-    for row in rows:
-        identity = row.get("microstructure_reaction_evaluation_id")
-        if identity:
-            scope_groups.setdefault(identity, []).append(row)
-    sim_only_ids = {
-        identity
-        for identity, copies in scope_groups.items()
-        if any(
-            row.get("holding_context_broker_route_authority")
-            == "simulated_execution_view_only"
-            for row in copies
-        )
-        and all(
-            row.get("holding_context_broker_route_authority")
-            in (None, "", "simulated_execution_view_only")
-            and row.get("actual_order_submitted") is not True
-            and row.get("order_submission_declaration_valid", True) is True
-            and not row.get("record_id")
-            for row in copies
-        )
-    }
-    sim_only_row_count = sum(
-        row.get("microstructure_reaction_evaluation_id") in sim_only_ids for row in rows
-    )
-
-    def defect(cause, identity, row):
-        ids = defects.setdefault(cause, set())
-        receipt = {
-            **{
-                key: row.get(key)
-                for key in (
-                    "stock_code",
-                    "record_id",
-                    "event_time",
-                    "stage",
-                    "source_event_stage",
-                    "ai_trace_endpoint_name",
-                    "ai_prompt_type",
-                    "effective_venue",
-                    "venue",
-                )
-            },
-            **microstructure_delivery_fields(row),
-        }
-        examples.setdefault(cause, receipt)
-        detail = provenance.setdefault(
-            cause,
-            {
-                "schema": "microstructure_diagnostic_provenance_v1",
-                "unique_evaluation_count": 0,
-                "stage_counts": {},
-                "receipts": [],
-                "receipt_limit": 20,
-                "truncated": False,
-                "historical_source_repaired": False,
-                "runtime_effect": False,
-                "allowed_runtime_apply": False,
-            },
-        )
-        if identity not in ids:
-            detail["unique_evaluation_count"] += 1
-            stage = str(row.get("stage") or "unknown")
-            detail["stage_counts"][stage] = detail["stage_counts"].get(stage, 0) + 1
-            if len(detail["receipts"]) < detail["receipt_limit"]:
-                detail["receipts"].append(receipt)
-            else:
-                detail["truncated"] = True
-        ids.add(identity)
-
-    for index, row in enumerate(rows):
-        if row.get("microstructure_reaction_evaluation_id") in sim_only_ids:
-            continue
-        if (
-            row.get("holding_context_broker_route_authority")
-            == "simulated_execution_view_only"
-            and row.get("actual_order_submitted") is True
-        ):
-            defect(
-                "simulated_execution_view_real_order_authority_conflict",
-                row.get("microstructure_reaction_evaluation_id") or f"row:{index}",
-                row,
-            )
-        if row.get("microstructure_reaction_delivery_telemetry_version") != "v3":
-            unknown += 1
-            continue
-        identity = row.get("microstructure_reaction_evaluation_id")
-        if not identity:
-            unknown += 1
-            defect("missing_evaluation_identity", f"row:{index}", row)
-            continue
-        groups.setdefault(identity, []).append(row)
-        reason = str(row.get("microstructure_reaction_source_quality") or "")
-        if reason.startswith(
-            (
-                "missing_tick_time",
-                "missing_quote_time",
-                "invalid_tick_age",
-                "invalid_quote_age",
-                "invalid_quote_threshold",
-            )
-        ):
-            defect(reason, identity, row)
-        if row.get("microstructure_reaction_context_sent") is True and (
-            row.get("microstructure_reaction_context_payload_included") is not True
-            or row.get("microstructure_reaction_provider_delivery_status")
-            != "response_received"
-        ):
-            defect("contradictory_delivery_receipt", identity, row)
-        if "provider_model" in str(
-            row.get("microstructure_reaction_context_consumer") or ""
-        ):
-            defect("provider_consumption_inferred", identity, row)
-        if (
-            row.get("microstructure_reaction_context_status") == "ok"
-            and _is_entry_opportunity_row(row)
-            and not row.get("microstructure_reaction_venue")
-        ):
-            defect("evaluation_venue_missing_or_conflicting", identity, row)
-        if row.get(
-            "microstructure_reaction_context_status"
-        ) == "ok" and _is_entry_opportunity_row(row):
-            if (
-                not row.get("record_id")
-                or _safe_epoch_ms(row.get("microstructure_reaction_reference_time"))
-                is None
-                or _safe_float(row.get("microstructure_reaction_reference_price")) <= 0
-            ):
-                defect("evaluation_anchor_contract_missing", identity, row)
-    computed = usable = included = sent = consumed = reused = unconfirmed = (
-        applicable
-    ) = 0
-    internal_required = internal_confirmed = provider_required = 0
-    state_counts = Counter()
-    consumer_counts = Counter()
-    for identity, copies in groups.items():
-
-        def has(key):
-            return any(
-                row.get("microstructure_reaction_" + key) is True for row in copies
-            )
-
-        is_reuse = has("context_reused")
-        did_compute = has("context_computed") and not is_reuse
-        payload_included = has("context_payload_included") and not is_reuse
-        delivery_confirmed = not is_reuse and any(
-            row.get("microstructure_reaction_context_sent") is True
-            and row.get("microstructure_reaction_context_payload_included") is True
-            and row.get("microstructure_reaction_provider_delivery_status")
-            == "response_received"
-            for row in copies
-        )
-        transport_attempted = any(
-            row.get("microstructure_reaction_provider_delivery_status")
-            in {"attempted_unconfirmed", "response_received"}
-            for row in copies
-        )
-        state_counts[
-            (
-                "cache_reused"
-                if has("context_reused")
-                else (
-                    "response_received"
-                    if has("context_sent")
-                    else (
-                        "attempted_unconfirmed"
-                        if any(
-                            row.get("microstructure_reaction_provider_delivery_status")
-                            == "attempted_unconfirmed"
-                            for row in copies
-                        )
-                        else "not_attempted"
-                    )
-                )
-            )
-        ] += 1
-        consumers = sorted(
-            {
-                str(row.get("microstructure_reaction_context_consumer"))
-                for row in copies
-                if row.get("microstructure_reaction_context_consumed") is True
-            }
-        )
-        consumer_counts["+".join(consumers) if consumers else "none"] += 1
-        for field in (
-            "context_id",
-            "reference_time",
-            "reference_price",
-            "venue",
-            "context_hash",
-        ):
-            if (
-                len(
-                    {
-                        str(row.get("microstructure_reaction_" + field))
-                        for row in copies
-                        if row.get("microstructure_reaction_" + field)
-                        not in (None, "", "-")
-                    }
-                )
-                > 1
-            ):
-                defect("evaluation_identity_conflict", identity, copies[-1])
-        holding_required = any(
-            row.get("ai_trace_endpoint_name") == "holding_score"
-            or row.get("ai_prompt_type") == "scalping_holding_score"
-            or "holding_score_preflight"
-            in str(row.get("microstructure_reaction_context_consumer") or "")
-            for row in copies
-        ) and not has("context_reused")
-        internal_required += int(holding_required)
-        internal_confirmed += int(holding_required and has("context_consumed"))
-        if holding_required and not has("context_consumed"):
-            defect(
-                "required_internal_consumption_receipt_missing", identity, copies[-1]
-            )
-        if holding_required and not payload_included and transport_attempted:
-            defect("required_holding_payload_missing", identity, copies[-1])
-        applicable += int(
-            not is_reuse
-            and (
-                did_compute
-                or any(
-                    row.get("ai_trace_endpoint_name")
-                    in {"analyze_target", "holding_score"}
-                    or _is_entry_opportunity_row(row)
-                    for row in copies
-                )
-            )
-        )
-        computed += int(did_compute)
-        usable += int(
-            did_compute
-            and any(row.get("microstructure_reaction_context_status") for row in copies)
-            and all(
-                row.get("microstructure_reaction_context_status") == "ok"
-                for row in copies
-                if row.get("microstructure_reaction_context_status")
-            )
-        )
-        included += int(payload_included)
-        provider_required += int(
-            payload_included or (holding_required and transport_attempted)
-        )
-        sent += int(delivery_confirmed)
-        consumed += int(has("context_consumed"))
-        reused += int(has("context_reused"))
-        unconfirmed += int(
-            has("context_payload_included")
-            and not has("context_sent")
-            and any(
-                row.get("microstructure_reaction_provider_delivery_status")
-                == "attempted_unconfirmed"
-                for row in copies
-            )
-        )
-        if not did_compute and not has("context_reused"):
-            defect("required_computation_missing", identity, copies[-1])
-        if (
-            has("context_payload_included")
-            and not has("context_sent")
-            and any(
-                row.get("microstructure_reaction_provider_delivery_status")
-                == "response_received"
-                for row in copies
-            )
-        ):
-            defect("response_delivery_receipt_missing", identity, copies[-1])
-    return {
-        "delivery_telemetry_v3_unique_count": len(groups),
-        "delivery_scope": "main_live_or_unresolved_owner",
-        "deprioritized_sim_unique_evaluation_count": len(sim_only_ids),
-        "deprioritized_sim_row_count": sim_only_row_count,
-        "deprioritized_sim_status": "not_applicable_retired_or_deprioritized",
-        "delivery_applicability_unknown_row_count": unknown,
-        "context_applicable_count": applicable,
-        "context_computed_count": computed,
-        "context_usable_count": usable,
-        "context_payload_included_count": included,
-        "provider_delivery_required_count": provider_required,
-        "context_sent_count": sent,
-        "context_consumed_count": consumed,
-        "internal_consumption_required_count": internal_required,
-        "internal_consumption_coverage_pct": (
-            _rate_pct(internal_confirmed, internal_required)
-            if internal_required
-            else None
-        ),
-        "context_reused_count": reused,
-        "context_delivery_state_counts": dict(state_counts),
-        "context_consumer_counts": dict(consumer_counts),
-        "context_delivery_unconfirmed_count": unconfirmed,
-        "computed_coverage_pct": (
-            _rate_pct(computed, applicable) if applicable else None
-        ),
-        "usable_coverage_pct": _rate_pct(usable, computed) if computed else None,
-        "provider_delivery_coverage_pct": (
-            _rate_pct(sent, provider_required) if provider_required else None
-        ),
-        "diagnostic_contract_violation_counts": {
-            cause: len(ids) for cause, ids in defects.items()
-        },
-        "diagnostic_contract_examples": examples,
-        "diagnostic_contract_provenance": provenance,
-        "runtime_application": "not_applicable_diagnostic",
-        "applied_effect": "not_evaluated",
-    }
 
 
 _DIAGNOSTIC_ROW_KEYS = (
@@ -1974,1825 +1644,83 @@ _DIAGNOSTIC_ROW_KEYS = (
 )
 
 
-def _compact_diagnostic_rows(
-    rows: list[dict[str, Any]], *, limit: int = 200
-) -> list[dict[str, Any]]:
-    selected: list[dict[str, Any]] = []
-    seen: set[tuple[str, ...]] = set()
-
-    def append_group(group: list[dict[str, Any]], group_limit: int) -> None:
-        added = 0
-        for row in group:
-            key = tuple(
-                str(row.get(field) or "")
-                for field in ("record_id", "sim_record_id", "event_time", "stage")
-            )
-            if key in seen:
-                continue
-            seen.add(key)
-            selected.append(
-                {
-                    field: row.get(field)
-                    for field in _DIAGNOSTIC_ROW_KEYS
-                    if field in row
-                }
-            )
-            added += 1
-            if added >= group_limit or len(selected) >= limit:
-                return
-
-    submitted = [row for row in rows if row.get("actual_order_submitted") is True]
-    favorable = [
-        row
-        for row in rows
-        if row.get("microstructure_reaction_entry_reaction_quality")
-        == "favorable_reaction"
-        and row.get("microstructure_reaction_context_status") == "ok"
-    ]
-    usable = [
-        row for row in rows if row.get("microstructure_reaction_context_status") == "ok"
-    ]
-    source_quality_incidents = [
-        row for row in rows if row.get("microstructure_reaction_context_status") != "ok"
-    ]
-    append_group(submitted, 50)
-    append_group(favorable, 50)
-    append_group(usable, 75)
-    append_group(source_quality_incidents, 25)
-    if len(selected) < limit:
-        append_group(rows, limit - len(selected))
-    return selected
 
 
-def _is_entry_opportunity_row(row: dict[str, Any]) -> bool:
-    stages = {
-        str(row.get("stage") or "").strip(),
-        str(row.get("source_event_stage") or "").strip(),
-    }
-    return bool(stages & _ENTRY_OPPORTUNITY_STAGES)
 
 
-def _opportunity_identity(row: dict[str, Any]) -> tuple[str, str]:
-    stock_code = str(row.get("stock_code") or "").lstrip("A")
-    record_id = str(
-        row.get("record_id")
-        or row.get("sim_record_id")
-        or row.get("sim_parent_record_id")
-        or ""
-    )
-    return stock_code, record_id
 
 
-def _unique_entry_opportunities(
-    favorable_rows: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    ordered_rows = sorted(
-        (row for row in favorable_rows if _is_entry_opportunity_row(row)),
-        key=lambda row: (
-            *_opportunity_identity(row),
-            _safe_epoch_ms(row.get("event_time")) or 0,
-        ),
-    )
-    opportunities: list[dict[str, Any]] = []
-    latest_by_identity: dict[tuple[str, str], dict[str, Any]] = {}
-    for row in ordered_rows:
-        identity = _opportunity_identity(row)
-        current = row.get("microstructure_reaction_context_version") == CONTEXT_VERSION
-        context_id = str(row.get("microstructure_reaction_context_id") or "")
-        venue = str(
-            row.get("microstructure_reaction_venue")
-            or row.get("effective_venue")
-            or row.get("venue")
-            or ""
-        )
-        event_ms = _safe_epoch_ms(
-            row.get("microstructure_reaction_reference_time")
-            if current
-            else row.get("event_time")
-        )
-        if current and (
-            not context_id
-            or not venue
-            or row.get("microstructure_reaction_context_reused") is True
-        ):
-            continue
-        if not identity[0] or event_ms is None:
-            continue
-        cluster_key = (*identity, venue, context_id if current else "legacy")
-        previous = latest_by_identity.get(cluster_key)
-        if (
-            previous is None
-            or event_ms - int(previous["cluster_end_ms"]) > _OPPORTUNITY_CLUSTER_GAP_MS
-        ):
-            opportunity = {
-                "opportunity_id": (
-                    context_id
-                    if current
-                    else f"{identity[0]}:{identity[1] or 'record_missing'}:{venue}:{event_ms}"
-                ),
-                "microstructure_reaction_context_id": context_id or None,
-                "feature_version": row.get("microstructure_reaction_context_version")
-                or "legacy_unknown",
-                "feature_cohort": (
-                    "feature_diagnostic" if current else "historical_diagnostic"
-                ),
-                "effective_venue": venue,
-                "stock_code": identity[0],
-                "stock_name": row.get("stock_name"),
-                "record_id": identity[1] or None,
-                "opportunity_identity_quality": (
-                    "pass" if identity[1] else "record_missing"
-                ),
-                "observation_time": (
-                    row.get("microstructure_reaction_reference_time")
-                    if current
-                    else row.get("event_time")
-                ),
-                "anchor_ms": event_ms,
-                "cluster_end_ms": event_ms,
-                "observation_event_count": 0,
-                "observation_stages": set(),
-                "actual_order_submitted": False,
-            }
-            opportunities.append(opportunity)
-            latest_by_identity[cluster_key] = opportunity
-        else:
-            opportunity = previous
-        opportunity["cluster_end_ms"] = max(
-            int(opportunity["cluster_end_ms"]), event_ms
-        )
-        opportunity["observation_event_count"] += 1
-        opportunity["observation_stages"].add(
-            str(row.get("source_event_stage") or row.get("stage") or "missing")
-        )
-        if row.get("actual_order_submitted") is True:
-            opportunity["actual_order_submitted"] = True
-    for opportunity in opportunities:
-        opportunity["observation_stages"] = sorted(opportunity["observation_stages"])
-    return opportunities
 
 
-def _event_fields(event: dict[str, Any]) -> dict[str, Any]:
-    fields = event.get("fields")
-    return fields if isinstance(fields, dict) else {}
 
 
-def _event_identity(event: dict[str, Any]) -> tuple[str, str]:
-    fields = _event_fields(event)
-    return (
-        str(event.get("stock_code") or fields.get("stock_code") or "").lstrip("A"),
-        str(event.get("record_id") or fields.get("record_id") or ""),
-    )
 
 
-def _blocking_event(event: dict[str, Any]) -> dict[str, Any] | None:
-    fields = _event_fields(event)
-    stage = str(event.get("stage") or fields.get("source_event_stage") or "")
-    action = str(fields.get("ai_action") or fields.get("action") or "").strip().upper()
-    chosen_action = str(fields.get("chosen_action") or "").strip().upper()
-    explicitly_blocked = (
-        stage.endswith("_block")
-        or stage.endswith("_blocked")
-        or "_guard_block" in stage
-        or stage in {"latency_block", "ai_confirmed_terminal_no_budget"}
-    )
-    ai_veto = stage == "ai_confirmed" and action == "DROP"
-    snapshot_veto = (
-        stage == "scalp_entry_action_decision_snapshot"
-        and chosen_action.startswith(("NO_BUY", "SKIP"))
-        and _safe_bool(fields.get("broker_order_forbidden"), False)
-    )
-    if not (explicitly_blocked or ai_veto or snapshot_veto):
-        return None
-    reason = str(
-        fields.get("block_reason")
-        or fields.get("reason")
-        or ("ai_drop" if ai_veto else stage)
-    )
-    blocker_class = "entry_guard"
-    stage_and_reason = f"{stage} {reason}".lower()
-    for token, candidate_class in (
-        ("ai_", "ai_decision"),
-        ("latency", "latency"),
-        ("tick_speed", "tick_speed"),
-        ("liquidity", "liquidity"),
-        ("strength", "strength_momentum"),
-        ("momentum", "strength_momentum"),
-        ("overbought", "overbought"),
-        ("source_quality", "source_quality"),
-        ("quantity", "quantity"),
-        ("zero_qty", "quantity"),
-        ("cooldown", "cooldown"),
-    ):
-        if token in stage_and_reason:
-            blocker_class = candidate_class
-            break
-    return {
-        "first_blocker": stage,
-        "first_blocker_reason": reason,
-        "first_blocker_class": blocker_class,
-        "first_blocker_venue": fields.get("effective_venue")
-        or fields.get("microstructure_reaction_venue")
-        or fields.get("venue")
-        or fields.get("ai_trace_effective_venue"),
-        "first_blocker_time": event.get("emitted_at")
-        or fields.get("event_time")
-        or fields.get("event_ts"),
-    }
 
 
-def _attach_first_blockers(
-    opportunities: list[dict[str, Any]], event_path: Path
-) -> None:
-    pending_by_identity: dict[tuple[str, str], list[dict[str, Any]]] = {}
-    for opportunity in opportunities:
-        if opportunity.get("actual_order_submitted") is True:
-            continue
-        identity = (
-            str(opportunity.get("stock_code") or ""),
-            str(opportunity.get("record_id") or ""),
-        )
-        pending_by_identity.setdefault(identity, []).append(opportunity)
-    if not pending_by_identity:
-        return
-    for event in _iter_jsonl(event_path) or []:
-        identity = _event_identity(event)
-        if identity not in pending_by_identity:
-            continue
-        event_ms = _safe_epoch_ms(
-            event.get("emitted_at") or _event_fields(event).get("event_time")
-        )
-        if event_ms is None:
-            continue
-        blocker = _blocking_event(event)
-        if blocker is None:
-            continue
-        for opportunity in pending_by_identity[identity]:
-            if opportunity.get(
-                "feature_version"
-            ) == CONTEXT_VERSION and opportunity.get("effective_venue") != blocker.get(
-                "first_blocker_venue"
-            ):
-                continue
-            if not (
-                int(opportunity["anchor_ms"])
-                <= event_ms
-                <= int(opportunity["cluster_end_ms"]) + _BLOCKER_LOOKAHEAD_MS
-            ):
-                continue
-            current_blocker_ms = _safe_epoch_ms(opportunity.get("first_blocker_time"))
-            if current_blocker_ms is not None and current_blocker_ms <= event_ms:
-                continue
-            opportunity.update(blocker)
 
 
-def _missed_entry_counterfactual_path(target_date: str) -> Path:
-    base = MONITOR_SNAPSHOT_DIR / f"missed_entry_counterfactual_{target_date}.json"
-    return base if base.exists() else Path(f"{base}.gz")
 
 
-def _load_watch_cycle_outcomes(
-    target_date: str,
-) -> tuple[list[dict[str, Any]], Path, str]:
-    path = _missed_entry_counterfactual_path(target_date)
-    if not path.exists():
-        return [], path, "missing"
-    opener = gzip.open if path.suffix == ".gz" else open
-    try:
-        with opener(path, "rt", encoding="utf-8") as handle:
-            payload = json.load(handle)
-    except (OSError, ValueError, TypeError):
-        return [], path, "unreadable"
-    if not isinstance(payload, dict):
-        return [], path, "contract_invalid"
-    ledger = payload.get("watch_cycle_participation_ledger")
-    if not isinstance(ledger, dict) or not isinstance(ledger.get("rows"), list):
-        return [], path, "contract_invalid"
-    attempt_section = (
-        payload.get("microstructure_attempt_outcomes")
-        or ledger.get("microstructure_attempt_outcomes")
-        or {"rows": []}
-    )
-    if not isinstance(attempt_section, dict) or not isinstance(
-        attempt_section.get("rows"), list
-    ):
-        return [], path, "contract_invalid"
-    return (
-        [row for row in attempt_section["rows"] if isinstance(row, dict)]
-        + [row for row in ledger["rows"] if isinstance(row, dict)],
-        path,
-        "loaded",
-    )
 
 
-def _attach_time_exact_outcomes(
-    opportunities: list[dict[str, Any]], target_date: str
-) -> tuple[Path, str]:
-    outcomes, path, source_status = _load_watch_cycle_outcomes(target_date)
-    by_identity: dict[tuple[str, str], list[dict[str, Any]]] = {}
-    for outcome in outcomes:
-        identity = (
-            str(outcome.get("stock_code") or "").lstrip("A"),
-            str(outcome.get("runtime_record_id") or ""),
-        )
-        if not identity[0] or not identity[1]:
-            continue
-        by_identity.setdefault(identity, []).append(outcome)
-    for opportunity in opportunities:
-        if opportunity.get("actual_order_submitted") is True:
-            opportunity["outcome_join_status"] = "not_applicable_submitted"
-            continue
-        identity = (
-            str(opportunity.get("stock_code") or ""),
-            str(opportunity.get("record_id") or ""),
-        )
-        candidates: list[tuple[int, dict[str, Any]]] = []
-        context_id = opportunity.get("microstructure_reaction_context_id")
-        venue = opportunity.get("effective_venue")
-        for outcome in by_identity.get(identity, []):
-            if not context_id and outcome.get("microstructure_reaction_context_id"):
-                continue
-            if context_id and outcome.get("feature_version") != CONTEXT_VERSION:
-                continue
-            if (
-                context_id
-                and outcome.get("microstructure_reaction_context_id") != context_id
-            ):
-                continue
-            if not venue or outcome.get("effective_venue") != venue:
-                continue
-            reference_ms = _safe_epoch_ms(outcome.get("reference_time"))
-            if reference_ms is None:
-                continue
-            candidates.append(
-                (abs(reference_ms - int(opportunity["anchor_ms"])), outcome)
-            )
-        if not candidates:
-            opportunity["outcome_join_status"] = (
-                "unrecoverable_historical_gap"
-                if source_status == "loaded"
-                else "outcome_source_missing"
-            )
-            continue
-        delta_ms, outcome = min(candidates, key=lambda item: item[0])
-        opportunity["outcome_reference_delta_ms"] = delta_ms
-        if delta_ms > _OUTCOME_REFERENCE_TOLERANCE_MS:
-            opportunity["outcome_join_status"] = "reference_time_mismatch"
-            continue
-        if (
-            len(
-                [
-                    item
-                    for item in candidates
-                    if item[0] <= _OUTCOME_REFERENCE_TOLERANCE_MS
-                ]
-            )
-            != 1
-        ):
-            opportunity["outcome_join_status"] = "ambiguous_outcome"
-            continue
-        if context_id and delta_ms != 0:
-            opportunity["outcome_join_status"] = "identity_time_conflict"
-            continue
-        source_quality = str(outcome.get("primary_source_quality_state") or "missing")
-        opportunity.update(
-            {
-                "outcome_join_status": (
-                    outcome.get("outcome_status")
-                    if outcome.get("outcome_status")
-                    in {
-                        "pending_outcome",
-                        "unrecoverable_historical_gap",
-                        "source_contract_conflict",
-                    }
-                    else "time_exact"
-                ),
-                "outcome_source_quality": source_quality,
-                "outcome_source_quality_pass": source_quality == "pass",
-                "effective_venue": outcome.get("effective_venue"),
-                "market_session_bucket": outcome.get("market_session_bucket"),
-                "opportunity_label": outcome.get("opportunity_label"),
-                "primary_horizon_min": outcome.get("primary_horizon_min"),
-                "cost_adjusted_counterfactual_return_pct": outcome.get(
-                    "cost_adjusted_counterfactual_return_pct"
-                ),
-                "forward_horizon_metrics": (
-                    outcome.get("forward_horizon_metrics")
-                    if isinstance(outcome.get("forward_horizon_metrics"), dict)
-                    else {}
-                ),
-            }
-        )
-    return path, source_status
 
 
-def _microstructure_exploration_funnel(
-    rows: list[dict[str, Any]], target_date: str, event_path: Path
-) -> dict[str, Any]:
-    by_quality: dict[str, Counter[str]] = {}
-    favorable_rows: list[dict[str, Any]] = []
-    for row in rows:
-        quality = str(
-            row.get("microstructure_reaction_entry_reaction_quality") or "missing"
-        )
-        status = str(row.get("microstructure_reaction_context_status") or "missing")
-        bucket = by_quality.setdefault(quality, Counter())
-        bucket["observed"] += 1
-        if status == "ok":
-            bucket["usable"] += 1
-        if row.get("actual_order_submitted") is True:
-            bucket["actual_order_submitted"] += 1
-        if quality == "favorable_reaction" and status == "ok":
-            favorable_rows.append(row)
-    favorable_submitted = sum(
-        1 for row in favorable_rows if row.get("actual_order_submitted") is True
-    )
-    favorable_unsubmitted_rows = [
-        row for row in favorable_rows if row.get("actual_order_submitted") is not True
-    ]
-    favorable_unsubmitted_stage_counts = Counter(
-        str(row.get("source_event_stage") or "missing")
-        for row in favorable_unsubmitted_rows
-    )
-    entry_favorable_rows = [
-        row for row in favorable_rows if _is_entry_opportunity_row(row)
-    ]
-    opportunities = _unique_entry_opportunities(favorable_rows)
-    _attach_first_blockers(opportunities, event_path)
-    outcome_source_path, outcome_source_status = _attach_time_exact_outcomes(
-        opportunities, target_date
-    )
-    unsubmitted_opportunities = [
-        item for item in opportunities if item.get("actual_order_submitted") is not True
-    ]
-    attributed_opportunities = [
-        item for item in unsubmitted_opportunities if item.get("first_blocker")
-    ]
-    joined_opportunities = [
-        item
-        for item in unsubmitted_opportunities
-        if item.get("outcome_join_status") == "time_exact"
-    ]
-    source_quality_pass_opportunities = [
-        item
-        for item in joined_opportunities
-        if item.get("outcome_source_quality_pass") is True
-    ]
-    blocker_counts = Counter(
-        str(item.get("first_blocker") or "missing")
-        for item in unsubmitted_opportunities
-    )
-    outcome_join_counts = Counter(
-        str(item.get("outcome_join_status") or "missing")
-        for item in unsubmitted_opportunities
-    )
-    identity_quality_counts = Counter(
-        str(item.get("opportunity_identity_quality") or "missing")
-        for item in opportunities
-    )
-    return {
-        "metric_role": "opportunity_exploration_funnel",
-        "decision_authority": "source_only_no_runtime_mutation",
-        "window_policy": (
-            "same_day_entry_stage_only_120s_attempt_cluster_with_15s_blocker_lookahead_"
-            "and_5s_exact_outcome_reference"
-        ),
-        "sample_floor": "rolling_source_quality_pass_unique_opportunities_ge_20",
-        "primary_decision_metric": "source_quality_adjusted_ev_pct",
-        "source_quality_gate": (
-            "entry_stage_only and unique stock-record-time attempt and first blocker "
-            "within attempt window and outcome reference delta <=5s and horizon quality pass"
-        ),
-        "runtime_effect": False,
-        "forbidden_uses": [
-            "broker_guard_bypass",
-            "direct_threshold_relaxation",
-            "direct_order_submission",
-            "raw_event_count_as_unique_opportunity_count",
-            "record_only_cross_attempt_outcome_join",
-            "realized_pnl_substitution",
-        ],
-        "by_quality": {
-            quality: dict(counts) for quality, counts in sorted(by_quality.items())
-        },
-        "favorable_reaction_usable_count": len(favorable_rows),
-        "favorable_reaction_submitted_count": favorable_submitted,
-        "favorable_reaction_unsubmitted_count": len(favorable_rows)
-        - favorable_submitted,
-        # Observation-stage counts remain raw diagnostics and are not causal
-        # blockers; the attempt-scoped attribution below owns that distinction.
-        "favorable_reaction_unsubmitted_observation_stage_counts": dict(
-            sorted(favorable_unsubmitted_stage_counts.items())
-        ),
-        "favorable_reaction_unsubmitted_unique_stock_count": len(
-            {
-                str(row.get("stock_code") or "")
-                for row in favorable_unsubmitted_rows
-                if row.get("stock_code")
-            }
-        ),
-        "raw_favorable_event_count": len(favorable_rows),
-        "entry_favorable_event_count": len(entry_favorable_rows),
-        "holding_or_non_entry_favorable_event_count": len(favorable_rows)
-        - len(entry_favorable_rows),
-        "unique_entry_opportunity_count": len(opportunities),
-        "unique_entry_submitted_opportunity_count": len(opportunities)
-        - len(unsubmitted_opportunities),
-        "unique_entry_unsubmitted_opportunity_count": len(unsubmitted_opportunities),
-        "opportunity_identity_quality_counts": dict(
-            sorted(identity_quality_counts.items())
-        ),
-        "first_blocker_attributed_count": len(attributed_opportunities),
-        "first_blocker_counts": dict(sorted(blocker_counts.items())),
-        "causal_blocker_attribution_complete": len(attributed_opportunities)
-        == len(unsubmitted_opportunities),
-        "outcome_time_exact_join_count": len(joined_opportunities),
-        "outcome_source_quality_pass_count": len(source_quality_pass_opportunities),
-        "outcome_join_status_counts": dict(sorted(outcome_join_counts.items())),
-        "post_observation_outcome_join_complete": len(joined_opportunities)
-        == len(unsubmitted_opportunities),
-        "outcome_source_path": (
-            str(outcome_source_path) if outcome_source_path.exists() else None
-        ),
-        "outcome_source_status": outcome_source_status,
-        "required_downstream_join": (
-            "generate attempt-time outcome rows for no_matching_watch_cycle or "
-            "reference_time_mismatch opportunities"
-        ),
-        "favorable_reaction_unique_stock_count": len(
-            {
-                str(row.get("stock_code") or "")
-                for row in favorable_rows
-                if row.get("stock_code")
-            }
-        ),
-        "opportunities": opportunities,
-    }
 
 
-def _clean_baseline_date() -> str:
-    try:
-        payload = json.loads(CLEAN_BASELINE_POLICY_PATH.read_text(encoding="utf-8"))
-    except (OSError, ValueError, TypeError):
-        return _DEFAULT_CLEAN_BASELINE_DATE
-    return str(
-        payload.get("clean_tuning_baseline_date") or _DEFAULT_CLEAN_BASELINE_DATE
-    )
 
 
-def _available_pipeline_dates(target_date: str) -> list[str]:
-    baseline_date = _clean_baseline_date()
-    dates: set[str] = set()
-    for path in PIPELINE_EVENTS_DIR.glob("pipeline_events_*.jsonl*"):
-        date_part = path.name.removeprefix("pipeline_events_")[:10]
-        if baseline_date <= date_part <= target_date:
-            dates.add(date_part)
-    return sorted(dates)
 
 
-def _daily_opportunity_rollup_path(target_date: str) -> Path:
-    return (
-        REPORT_DIR
-        / "daily_opportunity_rollups"
-        / f"microstructure_opportunity_rollup_{target_date}.json"
-    )
 
 
-def _source_signature(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        return {"path": None, "size_bytes": 0, "mtime_ns": 0}
-    stat = path.stat()
-    return {
-        "path": str(path),
-        "size_bytes": int(stat.st_size),
-        "mtime_ns": int(stat.st_mtime_ns),
-    }
 
 
-def _source_quality_audit_path(target_date: str) -> Path:
-    return SOURCE_QUALITY_AUDIT_DIR / (
-        f"observation_source_quality_audit_{target_date}.json"
-    )
 
 
-def _source_quality_preflight(target_date: str) -> dict[str, Any]:
-    path = _source_quality_audit_path(target_date)
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError, TypeError):
-        return {
-            "status": "missing_or_unreadable",
-            "tuning_input_allowed": False,
-            "blocked_reason": "source_quality_preflight_missing_or_unreadable",
-            "signature": _source_signature(path),
-        }
-    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
-    allowed = payload.get("tuning_input_allowed")
-    if allowed is None:
-        allowed = summary.get("tuning_input_allowed")
-    return {
-        "status": str(payload.get("status") or summary.get("status") or "missing"),
-        "tuning_input_allowed": allowed is True,
-        "blocked_reason": payload.get("blocked_reason")
-        or summary.get("blocked_reason"),
-        "signature": _source_signature(path),
-    }
 
 
-def _lightweight_daily_opportunity_funnel(
-    target_date: str,
-) -> tuple[dict[str, Any], Path]:
-    event_path = _event_path(target_date)
-    favorable_rows: list[dict[str, Any]] = []
-    for event in _iter_jsonl(event_path) or []:
-        fields = _event_fields(event)
-        if (
-            fields.get("microstructure_reaction_entry_reaction_quality")
-            == "favorable_reaction"
-            and fields.get("microstructure_reaction_context_status") == "ok"
-        ):
-            row = _row_from_event(event)
-            if row is not None:
-                favorable_rows.append(row)
-
-    opportunities = _unique_entry_opportunities(favorable_rows)
-    _attach_first_blockers(opportunities, event_path)
-    outcome_path, outcome_source_status = _attach_time_exact_outcomes(
-        opportunities, target_date
-    )
-    entry_rows = [row for row in favorable_rows if _is_entry_opportunity_row(row)]
-    unsubmitted = [
-        item for item in opportunities if item.get("actual_order_submitted") is not True
-    ]
-    first_blocker_counts = Counter(
-        str(item.get("first_blocker") or "missing") for item in unsubmitted
-    )
-    outcome_join_counts = Counter(
-        str(item.get("outcome_join_status") or "missing") for item in unsubmitted
-    )
-    return (
-        {
-            "raw_favorable_event_count": len(favorable_rows),
-            "entry_favorable_event_count": len(entry_rows),
-            "holding_or_non_entry_favorable_event_count": len(favorable_rows)
-            - len(entry_rows),
-            "unique_entry_opportunity_count": len(opportunities),
-            "unique_entry_submitted_opportunity_count": len(opportunities)
-            - len(unsubmitted),
-            "unique_entry_unsubmitted_opportunity_count": len(unsubmitted),
-            "first_blocker_attributed_count": sum(
-                1 for item in unsubmitted if item.get("first_blocker")
-            ),
-            "first_blocker_counts": dict(sorted(first_blocker_counts.items())),
-            "outcome_time_exact_join_count": sum(
-                1
-                for item in unsubmitted
-                if item.get("outcome_join_status") == "time_exact"
-            ),
-            "outcome_source_quality_pass_count": sum(
-                1
-                for item in unsubmitted
-                if item.get("outcome_source_quality_pass") is True
-            ),
-            "outcome_join_status_counts": dict(sorted(outcome_join_counts.items())),
-            "outcome_source_path": str(outcome_path) if outcome_path.exists() else None,
-            "outcome_source_status": outcome_source_status,
-            "opportunities": opportunities,
-        },
-        event_path,
-    )
 
 
-def _daily_opportunity_rollup(
-    target_date: str,
-    funnel: dict[str, Any],
-    event_path: Path,
-) -> dict[str, Any]:
-    source_quality_preflight = _source_quality_preflight(target_date)
-    opportunities = (
-        funnel.get("opportunities")
-        if isinstance(funnel.get("opportunities"), list)
-        else []
-    )
-    pass_opportunities = [
-        item
-        for item in opportunities
-        if isinstance(item, dict)
-        and item.get("outcome_source_quality_pass") is True
-        and item.get("outcome_join_status") == "time_exact"
-        and item.get("feature_version") == CONTEXT_VERSION
-        and item.get("actual_order_submitted") is not True
-        and source_quality_preflight["tuning_input_allowed"] is True
-    ]
-    cost_adjusted_returns = [
-        _safe_float(item.get("cost_adjusted_counterfactual_return_pct"), float("nan"))
-        for item in pass_opportunities
-    ]
-    cost_adjusted_returns = [
-        value for value in cost_adjusted_returns if math.isfinite(value)
-    ]
-    primary_metrics: list[dict[str, Any]] = []
-    for item in pass_opportunities:
-        horizons = item.get("forward_horizon_metrics")
-        if not isinstance(horizons, dict):
-            continue
-        primary = horizons.get(str(item.get("primary_horizon_min") or 20))
-        if isinstance(primary, dict) and all(
-            math.isfinite(_safe_float(primary.get(key), float("nan")))
-            for key in ("mfe_pct", "mae_pct")
-        ):
-            primary_metrics.append(primary)
-    label_counts = Counter(
-        str(item.get("opportunity_label") or "missing") for item in pass_opportunities
-    )
-    outcome_path = _missed_entry_counterfactual_path(target_date)
-    return {
-        "schema_version": 2,
-        "calculation_contract": {
-            "feature_version": CONTEXT_VERSION,
-            "quality_version": 2,
-            "metric_version": "finite_exact_diagnostic_v2",
-            "rollup_version": 2,
-        },
-        "feature_version_counts": dict(
-            Counter(
-                str(item.get("feature_version") or "legacy_unknown")
-                for item in opportunities
-            )
-        ),
-        "historical_diagnostic_opportunity_count": sum(
-            1
-            for item in opportunities
-            if item.get("feature_version") != CONTEXT_VERSION
-        ),
-        "applied_effect": "not_evaluated",
-        "date": target_date,
-        "metric_role": "counterfactual_opportunity_attribution",
-        "decision_authority": "source_only_no_runtime_mutation",
-        "runtime_effect": False,
-        "allowed_runtime_apply": False,
-        "actual_order_submitted": False,
-        "broker_order_forbidden": True,
-        "input_read_mode": "two_pass_streaming_filtered_no_full_event_materialization",
-        "source_event_signature": _source_signature(event_path),
-        "outcome_source_signature": _source_signature(outcome_path),
-        "source_quality_audit_signature": source_quality_preflight["signature"],
-        "source_quality_preflight_status": source_quality_preflight["status"],
-        "tuning_input_allowed": source_quality_preflight["tuning_input_allowed"],
-        "source_quality_blocked_reason": source_quality_preflight["blocked_reason"],
-        "raw_favorable_event_count": _safe_int(
-            funnel.get("raw_favorable_event_count"), 0
-        ),
-        "entry_favorable_event_count": _safe_int(
-            funnel.get("entry_favorable_event_count"), 0
-        ),
-        "holding_or_non_entry_favorable_event_count": _safe_int(
-            funnel.get("holding_or_non_entry_favorable_event_count"), 0
-        ),
-        "unique_entry_opportunity_count": _safe_int(
-            funnel.get("unique_entry_opportunity_count"), 0
-        ),
-        "unique_entry_submitted_opportunity_count": _safe_int(
-            funnel.get("unique_entry_submitted_opportunity_count"), 0
-        ),
-        "unique_entry_unsubmitted_opportunity_count": _safe_int(
-            funnel.get("unique_entry_unsubmitted_opportunity_count"), 0
-        ),
-        "first_blocker_attributed_count": _safe_int(
-            funnel.get("first_blocker_attributed_count"), 0
-        ),
-        "first_blocker_counts": funnel.get("first_blocker_counts") or {},
-        "outcome_time_exact_join_count": _safe_int(
-            funnel.get("outcome_time_exact_join_count"), 0
-        ),
-        "outcome_source_quality_pass_count": len(pass_opportunities),
-        "outcome_join_status_counts": funnel.get("outcome_join_status_counts") or {},
-        "outcome_source_status": funnel.get("outcome_source_status") or "missing",
-        "source_quality_adjusted_return_sum_pct": round(sum(cost_adjusted_returns), 6),
-        "source_quality_adjusted_ev_evaluable_count": len(cost_adjusted_returns),
-        "primary_mfe_sum_pct": round(
-            sum(_safe_float(item.get("mfe_pct"), 0.0) for item in primary_metrics),
-            6,
-        ),
-        "primary_mae_sum_pct": round(
-            sum(_safe_float(item.get("mae_pct"), 0.0) for item in primary_metrics),
-            6,
-        ),
-        "primary_horizon_evaluable_count": len(primary_metrics),
-        "opportunity_label_counts": dict(sorted(label_counts.items())),
-    }
 
 
-def _write_daily_opportunity_rollup(rollup: dict[str, Any]) -> Path:
-    path = _daily_opportunity_rollup_path(str(rollup.get("date") or ""))
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(rollup, ensure_ascii=False, indent=2), encoding="utf-8")
-    return path
 
 
-def _load_daily_opportunity_rollup(target_date: str) -> dict[str, Any]:
-    path = _daily_opportunity_rollup_path(target_date)
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError, TypeError):
-        return {}
-    if not isinstance(payload, dict):
-        return {}
-    if payload.get("schema_version") != 2 or payload.get("calculation_contract") != {
-        "feature_version": CONTEXT_VERSION,
-        "quality_version": 2,
-        "metric_version": "finite_exact_diagnostic_v2",
-        "rollup_version": 2,
-    }:
-        return {}
-    if _safe_int(
-        payload.get("source_quality_adjusted_ev_evaluable_count")
-    ) > 0 and not math.isfinite(
-        _safe_float(payload.get("source_quality_adjusted_return_sum_pct"), float("nan"))
-    ):
-        return {}
-    event_signature = payload.get("source_event_signature")
-    outcome_signature = payload.get("outcome_source_signature")
-    source_quality_audit_signature = payload.get("source_quality_audit_signature")
-    if (
-        not isinstance(event_signature, dict)
-        or not isinstance(outcome_signature, dict)
-        or not isinstance(source_quality_audit_signature, dict)
-    ):
-        return {}
-    current_event_signature = _source_signature(_event_path(target_date))
-    current_outcome_signature = _source_signature(
-        _missed_entry_counterfactual_path(target_date)
-    )
-    if event_signature != current_event_signature:
-        return {}
-    if outcome_signature != current_outcome_signature:
-        return {}
-    if source_quality_audit_signature != _source_signature(
-        _source_quality_audit_path(target_date)
-    ):
-        return {}
-    return payload
 
 
-def backfill_clean_baseline_opportunity_rollups(target_date: str) -> dict[str, Any]:
-    generated_dates: list[str] = []
-    reused_dates: list[str] = []
-    failed_dates: list[str] = []
-    failure_details: list[dict[str, str]] = []
-    for source_date in _available_pipeline_dates(target_date):
-        if _load_daily_opportunity_rollup(source_date):
-            reused_dates.append(source_date)
-            continue
-        try:
-            funnel, event_path = _lightweight_daily_opportunity_funnel(source_date)
-            _write_daily_opportunity_rollup(
-                _daily_opportunity_rollup(source_date, funnel, event_path)
-            )
-            generated_dates.append(source_date)
-        except Exception as exc:
-            failed_dates.append(source_date)
-            failure_details.append(
-                {
-                    "date": source_date,
-                    "error_type": type(exc).__name__,
-                    "error": str(exc),
-                }
-            )
-    return {
-        "generated_dates": generated_dates,
-        "reused_dates": reused_dates,
-        "failed_dates": failed_dates,
-        "failure_details": failure_details,
-    }
 
 
-def _sum_counter_field(rows: list[dict[str, Any]], field: str) -> dict[str, int]:
-    counts: Counter[str] = Counter()
-    for row in rows:
-        value = row.get(field)
-        if not isinstance(value, dict):
-            continue
-        counts.update({str(key): _safe_int(count, 0) for key, count in value.items()})
-    return dict(sorted(counts.items()))
 
 
-def _clean_baseline_cumulative_opportunity_exploration(
-    target_date: str,
-) -> dict[str, Any]:
-    available_dates = _available_pipeline_dates(target_date)
-    rows: list[dict[str, Any]] = []
-    missing_rollup_dates: list[str] = []
-    for source_date in available_dates:
-        row = _load_daily_opportunity_rollup(source_date)
-        if row:
-            rows.append(row)
-        else:
-            missing_rollup_dates.append(source_date)
-    decision_rows = [row for row in rows if row.get("tuning_input_allowed") is True]
-    source_quality_excluded_dates = [
-        {
-            "date": str(row.get("date") or ""),
-            "status": row.get("source_quality_preflight_status"),
-            "blocked_reason": row.get("source_quality_blocked_reason"),
-        }
-        for row in rows
-        if row.get("tuning_input_allowed") is not True
-    ]
-    pass_count = sum(
-        _safe_int(row.get("outcome_source_quality_pass_count"), 0)
-        for row in decision_rows
-    )
-    ev_count = sum(
-        _safe_int(row.get("source_quality_adjusted_ev_evaluable_count"), 0)
-        for row in decision_rows
-    )
-    ev_sum = sum(
-        _safe_float(row.get("source_quality_adjusted_return_sum_pct"), 0.0)
-        for row in decision_rows
-    )
-    horizon_count = sum(
-        _safe_int(row.get("primary_horizon_evaluable_count"), 0)
-        for row in decision_rows
-    )
-    unsubmitted_count = sum(
-        _safe_int(row.get("unique_entry_unsubmitted_opportunity_count"), 0)
-        for row in decision_rows
-    )
-    attributed_count = sum(
-        _safe_int(row.get("first_blocker_attributed_count"), 0) for row in decision_rows
-    )
-    exact_join_count = sum(
-        _safe_int(row.get("outcome_time_exact_join_count"), 0) for row in decision_rows
-    )
-    source_quality_adjusted_ev_pct = round(ev_sum / ev_count, 6) if ev_count else None
-    recent_rows = decision_rows[-20:]
-    recent_finite_count = sum(
-        _safe_int(row.get("source_quality_adjusted_ev_evaluable_count"))
-        for row in recent_rows
-    )
-    recent_rate = recent_finite_count / len(recent_rows) if recent_rows else 0
-    sample_floor_met = ev_count >= 20
-    source_window_usable = bool(decision_rows)
-    if not source_window_usable:
-        runtime_reflection_status = "source_quality_no_usable_window"
-    elif not sample_floor_met:
-        runtime_reflection_status = "sample_floor_not_met"
-    elif source_quality_adjusted_ev_pct is None or source_quality_adjusted_ev_pct <= 0:
-        runtime_reflection_status = "non_positive_ev_keep_observe"
-    else:
-        runtime_reflection_status = "positive_diagnostic_evidence"
-    runtime_reflection_blockers: list[str] = []
-    if not source_window_usable:
-        runtime_reflection_blockers.append("no_source_quality_pass_daily_rollup")
-    outcome_source_status_counts = Counter(
-        str(row.get("outcome_source_status") or "missing") for row in decision_rows
-    )
-    source_quality_exclusion_warnings: list[str] = []
-    if missing_rollup_dates:
-        source_quality_exclusion_warnings.append(
-            "daily_rollup_missing_or_stale_dates_excluded"
-        )
-    if outcome_source_status_counts.get("loaded", 0) < len(decision_rows):
-        source_quality_exclusion_warnings.append(
-            "historical_outcome_contract_coverage_incomplete"
-        )
-    if exact_join_count < unsubmitted_count:
-        source_quality_exclusion_warnings.append(
-            "exact_attempt_time_outcome_coverage_incomplete"
-        )
-    if not sample_floor_met:
-        runtime_reflection_blockers.append(
-            "source_quality_pass_outcome_sample_below_20"
-        )
-    if sample_floor_met and (
-        source_quality_adjusted_ev_pct is None or source_quality_adjusted_ev_pct <= 0
-    ):
-        runtime_reflection_blockers.append("source_quality_adjusted_ev_not_positive")
-    return {
-        "metric_role": "counterfactual_opportunity_attribution",
-        "decision_authority": "clean_baseline_cumulative_source_only",
-        "window_policy": "clean_tuning_baseline_through_target_date_available_pipeline_dates",
-        "sample_floor": "source_quality_pass_unique_opportunities_ge_20",
-        "primary_decision_metric": "source_quality_adjusted_ev_pct",
-        "source_quality_gate": (
-            "exclude missing/stale daily rollups and source-quality-blocked dates; "
-            "only exact attempt-time source-quality-pass outcome rows contribute to EV"
-        ),
-        "runtime_effect": False,
-        "allowed_runtime_apply": False,
-        "runtime_apply_required": False,
-        "input_read_mode": "compact_daily_rollups_only",
-        "analysis_status": runtime_reflection_status,
-        "diagnostic_sample_forecast": {
-            "window": "last_20_compatible_observed_dates",
-            "finite_outcomes_per_observed_date": (
-                round(recent_rate, 3) if recent_rows else None
-            ),
-            "additional_observed_dates_estimate": (
-                math.ceil(max(0, 20 - ev_count) / recent_rate)
-                if recent_rate > 0
-                else None
-            ),
-            "status": (
-                "diagnostic_floor_met"
-                if ev_count >= 20
-                else (
-                    "indicative_not_guaranteed"
-                    if recent_rate > 0
-                    else "unknown_no_arrivals"
-                )
-            ),
-            "runtime_gate": False,
-        },
-        "historical_diagnostic_opportunity_count": sum(
-            _safe_int(row.get("historical_diagnostic_opportunity_count"))
-            for row in rows
-        ),
-        "runtime_application": "not_applicable_diagnostic",
-        "applied_effect": "not_evaluated",
-        "runtime_reflection_status": "not_applicable_diagnostic",
-        "runtime_reflection_blockers": [],
-        "diagnostic_limitations": runtime_reflection_blockers,
-        "source_quality_exclusion_warnings": source_quality_exclusion_warnings,
-        "required_runtime_reflection_actions": [],
-        "candidate_review_required": False,
-        "forbidden_uses": [
-            "direct_threshold_mutation",
-            "direct_runtime_apply",
-            "broker_guard_bypass",
-            "order_submission",
-            "provider_route_change",
-            "bot_restart",
-            "pre_clean_baseline_tuning_evidence",
-        ],
-        "clean_tuning_baseline_date": _clean_baseline_date(),
-        "window_end_date": target_date,
-        "available_source_date_count": len(available_dates),
-        "loaded_rollup_date_count": len(rows),
-        "loaded_rollup_date_coverage_pct": _rate_pct(len(rows), len(available_dates)),
-        "included_date_count": len(decision_rows),
-        "included_dates": [str(row.get("date") or "") for row in decision_rows],
-        "missing_or_stale_rollup_dates": missing_rollup_dates,
-        "source_quality_excluded_dates": source_quality_excluded_dates,
-        "raw_favorable_event_count": sum(
-            _safe_int(row.get("raw_favorable_event_count"), 0) for row in decision_rows
-        ),
-        "entry_favorable_event_count": sum(
-            _safe_int(row.get("entry_favorable_event_count"), 0)
-            for row in decision_rows
-        ),
-        "unique_entry_opportunity_count": sum(
-            _safe_int(row.get("unique_entry_opportunity_count"), 0)
-            for row in decision_rows
-        ),
-        "unique_entry_unsubmitted_opportunity_count": unsubmitted_count,
-        "first_blocker_attributed_count": attributed_count,
-        "first_blocker_attribution_coverage_pct": _rate_pct(
-            attributed_count, unsubmitted_count
-        ),
-        "first_blocker_counts": _sum_counter_field(
-            decision_rows, "first_blocker_counts"
-        ),
-        "outcome_time_exact_join_count": exact_join_count,
-        "outcome_time_exact_join_coverage_pct": _rate_pct(
-            exact_join_count, unsubmitted_count
-        ),
-        "outcome_source_quality_pass_count": pass_count,
-        "outcome_source_quality_pass_coverage_pct": _rate_pct(
-            pass_count, unsubmitted_count
-        ),
-        "outcome_join_status_counts": _sum_counter_field(
-            decision_rows, "outcome_join_status_counts"
-        ),
-        "outcome_source_status_date_counts": dict(
-            sorted(outcome_source_status_counts.items())
-        ),
-        "opportunity_label_counts": _sum_counter_field(
-            decision_rows, "opportunity_label_counts"
-        ),
-        "source_quality_adjusted_ev_pct": source_quality_adjusted_ev_pct,
-        "source_quality_adjusted_ev_evaluable_count": ev_count,
-        "primary_horizon_avg_mfe_pct": (
-            round(
-                sum(
-                    _safe_float(row.get("primary_mfe_sum_pct"), 0.0)
-                    for row in decision_rows
-                )
-                / horizon_count,
-                6,
-            )
-            if horizon_count
-            else None
-        ),
-        "primary_horizon_avg_mae_pct": (
-            round(
-                sum(
-                    _safe_float(row.get("primary_mae_sum_pct"), 0.0)
-                    for row in decision_rows
-                )
-                / horizon_count,
-                6,
-            )
-            if horizon_count
-            else None
-        ),
-        "primary_horizon_evaluable_count": horizon_count,
-        "sample_floor_met": sample_floor_met,
-        "diagnostic_sample_floor_met": sample_floor_met,
-        "daily_rows": rows,
-    }
 
 
-def _write_clean_baseline_cumulative_artifact(
-    target_date: str, cumulative: dict[str, Any]
-) -> tuple[Path, Path]:
-    base = REPORT_DIR / (
-        f"microstructure_reaction_context_{target_date}_clean_baseline_cumulative"
-    )
-    json_path = base.with_suffix(".json")
-    md_path = base.with_suffix(".md")
-    json_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(
-        json.dumps(cumulative, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    md_path.write_text(
-        "\n".join(
-            [
-                f"# Microstructure Clean-Baseline Cumulative - {target_date}",
-                "",
-                f"- window: `{cumulative.get('clean_tuning_baseline_date')}` ~ `{target_date}`",
-                "- available/included dates: "
-                f"`{cumulative.get('available_source_date_count')}` / "
-                f"`{cumulative.get('included_date_count')}`",
-                f"- missing_or_stale_rollup_dates: `{cumulative.get('missing_or_stale_rollup_dates') or []}`",
-                "- raw/entry/unique opportunities: "
-                f"`{cumulative.get('raw_favorable_event_count')}` / "
-                f"`{cumulative.get('entry_favorable_event_count')}` / "
-                f"`{cumulative.get('unique_entry_opportunity_count')}`",
-                "- exact_join/source_quality_pass: "
-                f"`{cumulative.get('outcome_time_exact_join_count')}` / "
-                f"`{cumulative.get('outcome_source_quality_pass_count')}`",
-                "- exact_join/source_quality_pass coverage_pct: "
-                f"`{cumulative.get('outcome_time_exact_join_coverage_pct')}` / "
-                f"`{cumulative.get('outcome_source_quality_pass_coverage_pct')}`",
-                f"- outcome_source_status_date_counts: `{cumulative.get('outcome_source_status_date_counts') or {}}`",
-                f"- source_quality_adjusted_ev_pct: `{cumulative.get('source_quality_adjusted_ev_pct')}`",
-                f"- primary_horizon_avg_mfe_pct: `{cumulative.get('primary_horizon_avg_mfe_pct')}`",
-                f"- primary_horizon_avg_mae_pct: `{cumulative.get('primary_horizon_avg_mae_pct')}`",
-                f"- sample_floor_met: `{cumulative.get('sample_floor_met')}`",
-                f"- runtime_reflection_status: `{cumulative.get('runtime_reflection_status')}`",
-                f"- runtime_reflection_blockers: `{cumulative.get('runtime_reflection_blockers') or []}`",
-                "- runtime_effect/allowed_runtime_apply: `False` / `False`",
-                "",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    return json_path, md_path
 
 
-def build_microstructure_reaction_context_report(target_date: str) -> dict[str, Any]:
-    target_date = str(target_date).strip()
-    path = _event_path(target_date)
-    rows = [
-        row for event in (_iter_jsonl(path) or []) if (row := _row_from_event(event))
-    ]
-    status_counts = Counter(
-        str(row.get("microstructure_reaction_context_status") or "missing")
-        for row in rows
-    )
-    quality_counts = Counter(
-        str(row.get("microstructure_reaction_entry_reaction_quality") or "-")
-        for row in rows
-    )
-    source_quality_counts = Counter(
-        str(row.get("microstructure_reaction_source_quality") or "-") for row in rows
-    )
-    stage_counts = Counter(str(row.get("stage") or "-") for row in rows)
-    real_rows = [row for row in rows if row.get("actual_order_submitted") is True]
-    latest_stock_rows = _latest_rows_by_stock(rows)
-    v_pw_source_counts = _field_counter(rows, "v_pw_source")
-    v_pw_expected_count = sum(1 for row in rows if row.get("v_pw_expected") is True)
-    v_pw_expected_missing_count = sum(
-        1
-        for row in rows
-        if row.get("v_pw_expected") is True
-        and str(row.get("v_pw_source") or "missing") == "missing"
-    )
-    ka10046_fallback_rows = [
-        row
-        for row in rows
-        if str(row.get("v_pw_source") or "") == "ka10046_rest_fallback"
-    ]
-    ka10046_fallback_quote_freshness_counts = dict(
-        sorted(
-            Counter(
-                _quote_freshness_state(row) for row in ka10046_fallback_rows
-            ).items()
-        )
-    )
-    strength_diffs = _strength_diff_rows(rows)
-    strength_divergence20_count = sum(1 for value in strength_diffs if value >= 20.0)
-    window_trade_value_1313_count = _sum_int(rows, "tick_trade_value_1313_count")
-    window_trade_value_1313_missing_count = _sum_int(
-        rows, "tick_trade_value_1313_missing_count"
-    )
-    window_trade_volume_mismatch_evaluable_count = _sum_int(
-        rows,
-        "trade_volume_1030_1031_vs_15_evaluable_count",
-    )
-    window_trade_volume_mismatch_count = _sum_int(
-        rows,
-        "trade_volume_1030_1031_vs_15_mismatch_count",
-    )
-    comparable_trade_volume_rows = [
-        row
-        for row in rows
-        if str(row.get("trade_volume_1030_1031_vs_15_comparison_contract") or "")
-        == "same_tick_comparable"
-    ]
-    noncomparable_trade_volume_rows = [
-        row
-        for row in rows
-        if str(row.get("trade_volume_1030_1031_vs_15_comparison_contract") or "")
-        == "cumulative_split_vs_tick_not_comparable"
-    ]
-    unknown_contract_trade_volume_rows = [
-        row
-        for row in rows
-        if str(row.get("trade_volume_1030_1031_vs_15_comparison_contract") or "")
-        == "comparison_scope_unknown"
-    ]
-    comparable_trade_volume_evaluable_count = _sum_int(
-        comparable_trade_volume_rows,
-        "trade_volume_1030_1031_vs_15_evaluable_count",
-    )
-    comparable_trade_volume_mismatch_count = _sum_int(
-        comparable_trade_volume_rows,
-        "trade_volume_1030_1031_vs_15_mismatch_count",
-    )
-    noncomparable_trade_volume_evaluable_count = _sum_int(
-        noncomparable_trade_volume_rows,
-        "trade_volume_1030_1031_vs_15_evaluable_count",
-    )
-    unknown_contract_trade_volume_evaluable_count = _sum_int(
-        unknown_contract_trade_volume_rows,
-        "trade_volume_1030_1031_vs_15_evaluable_count",
-    )
-    cumulative_0b_count = _sum_int(latest_stock_rows, "kiwoom_0b_aux_observed_count")
-    cumulative_1313_missing_count = _sum_int(
-        latest_stock_rows, "kiwoom_0b_1313_missing_count"
-    )
-    cumulative_mismatch_evaluable_count = _sum_int(
-        latest_stock_rows,
-        "kiwoom_0b_1030_1031_vs_15_evaluable_count",
-    )
-    cumulative_mismatch_count = _sum_int(
-        latest_stock_rows,
-        "kiwoom_0b_1030_1031_vs_15_mismatch_count",
-    )
-    ka10003_split_vs_15_evaluable_count = _sum_int(
-        rows,
-        "ka10003_buy_dominance_observation_split_vs_15_evaluable_count",
-    )
-    ka10003_split_vs_15_mismatch_count = _sum_int(
-        rows,
-        "ka10003_buy_dominance_observation_split_vs_15_mismatch_count",
-    )
-    opportunity_exploration_funnel = _microstructure_exploration_funnel(
-        rows, target_date, path
-    )
-    daily_opportunity_rollup_path = _write_daily_opportunity_rollup(
-        _daily_opportunity_rollup(
-            target_date,
-            opportunity_exploration_funnel,
-            path,
-        )
-    )
-    opportunity_exploration_funnel["opportunities"] = (
-        opportunity_exploration_funnel.get("opportunities") or []
-    )[:50]
-    clean_baseline_cumulative = _clean_baseline_cumulative_opportunity_exploration(
-        target_date
-    )
-    delivery_v2_rows = [
-        row
-        for row in rows
-        if row.get("microstructure_reaction_delivery_telemetry_version") == "v2"
-    ]
-    delivery_summary = _delivery_observation_summary(rows)
-    usable_coverage_pct = delivery_summary["usable_coverage_pct"]
-    cumulative_base = REPORT_DIR / (
-        f"microstructure_reaction_context_{target_date}_clean_baseline_cumulative"
-    )
-    summary = {
-        "available": bool(rows),
-        "row_count": len(rows),
-        "ok_count": status_counts.get("ok", 0),
-        "usable_coverage_pct": usable_coverage_pct,
-        "missing_or_unusable_count": len(rows) - status_counts.get("ok", 0),
-        "delivery_telemetry_v2_count": len(delivery_v2_rows),
-        "delivery_telemetry_legacy_unverifiable_count": sum(
-            1
-            for row in rows
-            if row.get("microstructure_reaction_delivery_telemetry_version") != "v3"
-        ),
-        "context_computed_count": sum(
-            1
-            for row in delivery_v2_rows
-            if _safe_bool(row.get("microstructure_reaction_context_computed"), False)
-        ),
-        "context_sent_count": sum(
-            1
-            for row in delivery_v2_rows
-            if _safe_bool(row.get("microstructure_reaction_context_sent"), False)
-        ),
-        "context_consumed_count": sum(
-            1
-            for row in delivery_v2_rows
-            if _safe_bool(row.get("microstructure_reaction_context_consumed"), False)
-        ),
-        "context_delivery_state_counts": _field_counter(
-            delivery_v2_rows, "microstructure_reaction_context_delivery_state"
-        ),
-        "context_consumer_counts": _field_counter(
-            delivery_v2_rows, "microstructure_reaction_context_consumer"
-        ),
-        "status_counts": dict(sorted(status_counts.items())),
-        "entry_reaction_quality_counts": dict(sorted(quality_counts.items())),
-        "source_quality_counts": dict(sorted(source_quality_counts.items())),
-        "stage_counts": dict(sorted(stage_counts.items())),
-        "real_submitted_count": len(real_rows),
-        "opportunity_exploration_funnel": opportunity_exploration_funnel,
-        "clean_baseline_cumulative_opportunity_exploration": clean_baseline_cumulative,
-        "v_pw_source_counts": v_pw_source_counts,
-        "v_pw_rest_fallback_count": v_pw_source_counts.get("ka10046_rest_fallback", 0),
-        "v_pw_ws_0b_count": (
-            v_pw_source_counts.get("ws_0b", 0)
-            + v_pw_source_counts.get("ws_0b_latest_strength", 0)
-        ),
-        "v_pw_report_provenance_backfilled_count": sum(
-            1 for row in rows if row.get("v_pw_report_provenance_backfilled") is True
-        ),
-        "v_pw_expected_count": v_pw_expected_count,
-        "v_pw_not_applicable_count": len(rows) - v_pw_expected_count,
-        "v_pw_missing_count": v_pw_expected_missing_count,
-        "v_pw_expected_missing_rate_pct": _rate_pct(
-            v_pw_expected_missing_count,
-            v_pw_expected_count,
-        ),
-        "v_pw_rest_fallback_rate_pct": _rate_pct(
-            v_pw_source_counts.get("ka10046_rest_fallback", 0),
-            len(rows),
-        ),
-        "v_pw_runtime_support_unusable_count": sum(
-            1
-            for row in rows
-            if "v_pw_runtime_support_usable" in row
-            and not _safe_bool(row.get("v_pw_runtime_support_usable"), False)
-        ),
-        "ka10046_rest_fallback_quote_freshness_counts": ka10046_fallback_quote_freshness_counts,
-        "ka10046_rest_fallback_with_fresh_quote_count": ka10046_fallback_quote_freshness_counts.get(
-            "fresh", 0
-        ),
-        "ka10046_rest_fallback_with_stale_quote_count": ka10046_fallback_quote_freshness_counts.get(
-            "stale", 0
-        ),
-        "ka10046_strength_runtime_effect_true_count": sum(
-            1
-            for row in rows
-            if _safe_bool(row.get("ka10046_strength_runtime_effect"), False)
-        ),
-        "ka10046_strength_missing_received_ts_count": sum(
-            1
-            for row in rows
-            if str(row.get("ka10046_strength_source") or "")
-            == "ka10046_rest_strength_trend"
-            and _safe_int(row.get("ka10046_strength_rest_received_ts_ms"), 0) <= 0
-        ),
-        "ka10046_0b_strength_compare_evaluable_count": len(strength_diffs),
-        "ka10046_0b_strength_abs_diff_avg": (
-            round(sum(strength_diffs) / len(strength_diffs), 3)
-            if strength_diffs
-            else 0.0
-        ),
-        "ka10046_0b_strength_abs_diff_max": (
-            round(max(strength_diffs), 3) if strength_diffs else 0.0
-        ),
-        "ka10046_0b_strength_divergence20_count": strength_divergence20_count,
-        "ka10046_0b_strength_divergence20_rate_pct": _rate_pct(
-            strength_divergence20_count,
-            len(strength_diffs),
-        ),
-        "market_data_signed_tape_state_counts": _field_counter(
-            rows, "market_data_signed_tape_state"
-        ),
-        "market_data_signed_tape_sample_count_total": _sum_int(
-            rows, "market_data_signed_tape_sample_count"
-        ),
-        "market_data_signed_tape_buy_count_total": _sum_int(
-            rows, "market_data_signed_tape_buy_count"
-        ),
-        "market_data_signed_tape_sell_count_total": _sum_int(
-            rows, "market_data_signed_tape_sell_count"
-        ),
-        "market_data_signed_tape_buy_volume_total": _sum_int(
-            rows, "market_data_signed_tape_buy_volume"
-        ),
-        "market_data_signed_tape_sell_volume_total": _sum_int(
-            rows, "market_data_signed_tape_sell_volume"
-        ),
-        "market_data_rest_signed_tape_pressure_usable_true_count": sum(
-            1
-            for row in rows
-            if _safe_bool(
-                row.get("market_data_rest_signed_tape_pressure_usable"), False
-            )
-        ),
-        "rest_signed_trade_ticks_row_count": _rest_signed_trade_tick_count(rows),
-        "rest_signed_trade_ticks_source_counts": _rest_signed_trade_tick_source_counts(
-            rows
-        ),
-        "latency_true_ofi_direct_canary_signed_tape_sample_count_total": _sum_int(
-            rows,
-            "latency_true_ofi_direct_canary_signed_tape_sample_count",
-        ),
-        "latency_true_ofi_direct_canary_signed_tape_buy_count_total": _sum_int(
-            rows,
-            "latency_true_ofi_direct_canary_signed_tape_buy_count",
-        ),
-        "latency_true_ofi_direct_canary_signed_tape_sell_count_total": _sum_int(
-            rows,
-            "latency_true_ofi_direct_canary_signed_tape_sell_count",
-        ),
-        "latency_true_ofi_direct_canary_signed_tape_net_buy_volume_sum": _sum_int(
-            rows,
-            "latency_true_ofi_direct_canary_signed_tape_net_buy_volume",
-        ),
-        "latency_true_ofi_direct_canary_signed_tape_latest_side_counts": _field_counter(
-            rows,
-            "latency_true_ofi_direct_canary_signed_tape_latest_side",
-        ),
-        "latency_true_ofi_direct_canary_signed_tape_sell_dominated_count": sum(
-            1
-            for row in rows
-            if _safe_bool(
-                row.get("latency_true_ofi_direct_canary_signed_tape_sell_dominated"),
-                False,
-            )
-        ),
-        "latency_true_ofi_direct_canary_signed_tape_latest_single_sell_dominated_count": sum(
-            1
-            for row in rows
-            if _safe_bool(
-                row.get(
-                    "latency_true_ofi_direct_canary_signed_tape_latest_single_sell_dominated"
-                ),
-                False,
-            )
-        ),
-        "latency_true_ofi_direct_canary_tape_block_reason_counts": _field_counter(
-            rows,
-            "latency_true_ofi_direct_canary_tape_block_reason",
-        ),
-        "tick_aggressor_source_counts": _sum_counter_rows(
-            rows, "tick_aggressor_source_counts"
-        ),
-        "tick_trade_value_source_counts": _sum_counter_rows(
-            rows, "tick_trade_value_source_counts"
-        ),
-        "tick_trade_value_1313_count": window_trade_value_1313_count,
-        "tick_trade_value_1313_missing_count": window_trade_value_1313_missing_count,
-        "tick_trade_value_1313_missing_rate_pct": _rate_pct(
-            window_trade_value_1313_missing_count,
-            window_trade_value_1313_count + window_trade_value_1313_missing_count,
-        ),
-        "trade_volume_source_counts": _sum_counter_rows(
-            rows, "trade_volume_source_counts"
-        ),
-        "trade_volume_1030_1031_vs_15_evaluable_count": window_trade_volume_mismatch_evaluable_count,
-        "trade_volume_1030_1031_vs_15_mismatch_count": window_trade_volume_mismatch_count,
-        "trade_volume_1030_1031_vs_15_mismatch_rate_pct": _rate_pct(
-            window_trade_volume_mismatch_count,
-            window_trade_volume_mismatch_evaluable_count,
-        ),
-        "trade_volume_1030_1031_vs_15_comparison_contract_counts": _field_counter(
-            rows,
-            "trade_volume_1030_1031_vs_15_comparison_contract",
-        ),
-        "trade_volume_1030_1031_vs_15_comparable_evaluable_count": (
-            comparable_trade_volume_evaluable_count
-        ),
-        "trade_volume_1030_1031_vs_15_contract_violation_count": (
-            comparable_trade_volume_mismatch_count
-        ),
-        "trade_volume_1030_1031_vs_15_contract_violation_rate_pct": _rate_pct(
-            comparable_trade_volume_mismatch_count,
-            comparable_trade_volume_evaluable_count,
-        ),
-        "trade_volume_1030_1031_vs_15_noncomparable_count": (
-            noncomparable_trade_volume_evaluable_count
-        ),
-        "trade_volume_1030_1031_vs_15_unknown_contract_count": (
-            unknown_contract_trade_volume_evaluable_count
-        ),
-        "kiwoom_0b_latest_stock_count": len(latest_stock_rows),
-        "kiwoom_0b_aux_observed_count": cumulative_0b_count,
-        "kiwoom_0b_1313_present_count": _sum_int(
-            latest_stock_rows, "kiwoom_0b_1313_present_count"
-        ),
-        "kiwoom_0b_1313_missing_count": cumulative_1313_missing_count,
-        "kiwoom_0b_1313_missing_rate_pct": _rate_pct(
-            cumulative_1313_missing_count, cumulative_0b_count
-        ),
-        "kiwoom_0b_trade_value_source_counts": _sum_counter_rows(
-            latest_stock_rows,
-            "kiwoom_0b_trade_value_source_counts",
-        ),
-        "kiwoom_0b_trade_volume_source_counts": _sum_counter_rows(
-            latest_stock_rows,
-            "kiwoom_0b_trade_volume_source_counts",
-        ),
-        "kiwoom_0b_1030_1031_vs_15_evaluable_count": cumulative_mismatch_evaluable_count,
-        "kiwoom_0b_1030_1031_vs_15_mismatch_count": cumulative_mismatch_count,
-        "kiwoom_0b_1030_1031_vs_15_mismatch_rate_pct": _rate_pct(
-            cumulative_mismatch_count,
-            cumulative_mismatch_evaluable_count,
-        ),
-        "ka10003_buy_dominance_observation_source_counts": _sum_counter_rows(
-            rows,
-            "ka10003_buy_dominance_observation_source_counts",
-        ),
-        "ka10003_buy_dominance_observation_trade_value_source_counts": _sum_counter_rows(
-            rows,
-            "ka10003_buy_dominance_observation_trade_value_source_counts",
-        ),
-        "ka10003_buy_dominance_observation_inside_spread_count": _sum_int(
-            rows,
-            "ka10003_buy_dominance_observation_inside_spread_count",
-        ),
-        "ka10003_buy_dominance_observation_split_vs_15_evaluable_count": ka10003_split_vs_15_evaluable_count,
-        "ka10003_buy_dominance_observation_split_vs_15_mismatch_count": ka10003_split_vs_15_mismatch_count,
-        "ka10003_buy_dominance_observation_split_vs_15_mismatch_rate_pct": _rate_pct(
-            ka10003_split_vs_15_mismatch_count,
-            ka10003_split_vs_15_evaluable_count,
-        ),
-        "avg_ask_sweep_score": _avg_score(
-            rows, "microstructure_reaction_ask_sweep_score"
-        ),
-        "avg_post_sweep_hold_score": _avg_score(
-            rows, "microstructure_reaction_post_sweep_hold_score"
-        ),
-        "avg_bid_replenishment_score": _avg_score(
-            rows, "microstructure_reaction_bid_replenishment_score"
-        ),
-        "max_vi_proximity_risk": max(
-            [
-                _safe_int(row.get("microstructure_reaction_vi_proximity_risk"), 0)
-                for row in rows
-            ]
-            or [0]
-        ),
-    }
-    json_path, md_path = report_paths(target_date)
-    summary.update(delivery_summary)
-    summary["source_event_signature"] = _source_signature(path)
-    code_improvement_orders = _microstructure_code_improvement_orders(
-        summary, json_path
-    )
-    summary["code_improvement_order_count"] = len(code_improvement_orders)
-    summary["code_improvement_order_ids"] = [
-        order["order_id"] for order in code_improvement_orders
-    ]
-    summary["top_code_improvement_orders"] = [
-        {
-            "order_id": order.get("order_id"),
-            "title": order.get("title"),
-            "route": order.get("route"),
-            "improvement_type": order.get("improvement_type"),
-        }
-        for order in code_improvement_orders[:5]
-    ]
-    diagnostic_rows = _compact_diagnostic_rows(rows)
-    report = {
-        "schema_version": 5,
-        "date": target_date,
-        "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
-        "report_type": "microstructure_reaction_context",
-        "runtime_effect": False,
-        "allowed_runtime_apply": False,
-        "decision_authority": "diagnostic_source_only_with_fail_closed_holding_quality_consumer",
-        "metric_role": "source_quality_and_counterfactual_diagnostic",
-        "runtime_consumer_effect": "holding_score_source_quality_fail_closed_only",
-        "window_policy": "same_day_short_window_runtime_events_plus_postclose_source_summary",
-        "sample_floor": "finite_exact_outcomes_20_diagnostic_only_no_runtime_gate",
-        "primary_decision_metric": "source_quality_adjusted_ev_pct",
-        "source_quality_gate": "feature v2 fresh exact same-venue finite outcomes; delivery v3 observed separately",
-        "forbidden_uses": FORBIDDEN_USES,
-        "sources": {
-            "pipeline_events": str(path) if path.exists() else None,
-            "missed_entry_counterfactual": opportunity_exploration_funnel.get(
-                "outcome_source_path"
-            ),
-            "daily_opportunity_rollup": str(daily_opportunity_rollup_path),
-            "clean_baseline_cumulative_opportunity_exploration": str(
-                cumulative_base.with_suffix(".json")
-            ),
-        },
-        "summary": summary,
-        "row_storage_policy": "priority_compact_diagnostics_max_200_full_source_retained_in_pipeline_jsonl",
-        "source_row_count": len(rows),
-        "stored_row_count": len(diagnostic_rows),
-        "rows": diagnostic_rows,
-        "code_improvement_orders": code_improvement_orders,
-        "warnings": [
-            message
-            for message in [
-                "pipeline_events_missing" if not path.exists() else "",
-                "microstructure_reaction_context_missing" if not rows else "",
-                *[
-                    f"diagnostic_contract:{cause}"
-                    for cause in delivery_summary[
-                        "diagnostic_contract_violation_counts"
-                    ]
-                ],
-                *[
-                    f"clean_baseline:{item}"
-                    for item in clean_baseline_cumulative.get(
-                        "source_quality_exclusion_warnings", []
-                    )
-                ],
-            ]
-            if message
-        ],
-    }
-    REPORT_DIR.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(
-        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    md_path.write_text(
-        render_microstructure_reaction_context_markdown(report), encoding="utf-8"
-    )
-    _write_clean_baseline_cumulative_artifact(target_date, clean_baseline_cumulative)
-    return report
 
 
-def _avg_score(rows: list[dict[str, Any]], key: str) -> float | None:
-    values = [_safe_float(row.get(key), -1.0) for row in rows]
-    values = [value for value in values if value >= 0]
-    return round(sum(values) / len(values), 3) if values else None
 
 
 def render_microstructure_reaction_context_markdown(report: dict[str, Any]) -> str:
-    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
-    funnel = (
-        summary.get("opportunity_exploration_funnel")
-        if isinstance(summary.get("opportunity_exploration_funnel"), dict)
-        else {}
-    )
-    cumulative = (
-        summary.get("clean_baseline_cumulative_opportunity_exploration")
-        if isinstance(
-            summary.get("clean_baseline_cumulative_opportunity_exploration"),
-            dict,
-        )
-        else {}
-    )
+    modern = (report.get("summary") or {}).get("machine_primary_auxiliary_evaluation") or {}
     lines = [
-        f"# Microstructure Reaction Context - {report.get('date')}",
+        f"# Microstructure Machine Evaluation - {report.get('date')}",
         "",
-        "- runtime_effect: `False`",
-        f"- decision_authority: `{report.get('decision_authority')}`",
-        f"- forbidden_uses: `{report.get('forbidden_uses') or []}`",
+        "- legacy raw postclose study: retired",
+        "- decision_authority: diagnostic_only; runtime/apply: False",
+        f"- status: `{modern.get('status')}`",
+        f"- cases / full-cost outcomes: `{modern.get('case_count')}` / `{modern.get('cost_adjusted_outcome_count')}`",
+        f"- source: `{modern.get('source_report_path')}`",
+        f"- source SHA256: `{modern.get('source_report_sha256')}`",
+        f"- actual completed EV: `{modern.get('actual_completed_ev_pct')}`",
+        "- Price-window CF is descriptive; it is not realized profit or causal feature Delta EV.",
         "",
-        "## Summary",
-        f"- available: `{summary.get('available')}`",
-        f"- row_count: `{summary.get('row_count')}`",
-        f"- ok/missing_or_unusable: `{summary.get('ok_count')}` / `{summary.get('missing_or_unusable_count')}`",
-        f"- usable_coverage_pct: `{summary.get('usable_coverage_pct')}` (diagnostic warning floor `{summary.get('usable_coverage_warning_floor_pct')}`)",
-        "- delivery computed/sent/consumed (v2 only): "
-        f"`{summary.get('context_computed_count')}` / "
-        f"`{summary.get('context_sent_count')}` / "
-        f"`{summary.get('context_consumed_count')}`",
-        f"- delivery v2/legacy-unverifiable: `{summary.get('delivery_telemetry_v2_count')}` / `{summary.get('delivery_telemetry_legacy_unverifiable_count')}`",
-        f"- delivery_state_counts: `{summary.get('context_delivery_state_counts') or {}}`",
-        f"- consumer_counts: `{summary.get('context_consumer_counts') or {}}`",
-        f"- real_submitted_count: `{summary.get('real_submitted_count')}`",
-        f"- status_counts: `{summary.get('status_counts') or {}}`",
-        f"- entry_reaction_quality_counts: `{summary.get('entry_reaction_quality_counts') or {}}`",
-        f"- source_quality_counts: `{summary.get('source_quality_counts') or {}}`",
-        f"- stage_counts: `{summary.get('stage_counts') or {}}`",
-        "- opportunity_funnel raw/entry/unique_unsubmitted: "
-        f"`{funnel.get('raw_favorable_event_count')}` / "
-        f"`{funnel.get('entry_favorable_event_count')}` / "
-        f"`{funnel.get('unique_entry_unsubmitted_opportunity_count')}`",
-        f"- opportunity_first_blocker_counts: `{funnel.get('first_blocker_counts') or {}}`",
-        f"- opportunity_outcome_join_status_counts: `{funnel.get('outcome_join_status_counts') or {}}`",
-        f"- opportunity_outcome_source_status: `{funnel.get('outcome_source_status')}`",
-        "- opportunity_source_quality_pass/sample_floor: "
-        f"`{funnel.get('outcome_source_quality_pass_count')}` / "
-        f"`{funnel.get('sample_floor')}`",
-        "- cumulative available/included dates: "
-        f"`{cumulative.get('available_source_date_count')}` / "
-        f"`{cumulative.get('included_date_count')}`",
-        "- cumulative unique/pass/EV: "
-        f"`{cumulative.get('unique_entry_opportunity_count')}` / "
-        f"`{cumulative.get('outcome_source_quality_pass_count')}` / "
-        f"`{cumulative.get('source_quality_adjusted_ev_pct')}`",
-        f"- cumulative_runtime_reflection_status: `{cumulative.get('runtime_reflection_status')}`",
-        f"- cumulative_source_quality_exclusion_warnings: `{cumulative.get('source_quality_exclusion_warnings') or []}`",
-        f"- v_pw_source_counts: `{summary.get('v_pw_source_counts') or {}}`",
-        f"- v_pw_rest_fallback_rate_pct: `{summary.get('v_pw_rest_fallback_rate_pct')}`",
-        f"- v_pw_runtime_support_unusable_count: `{summary.get('v_pw_runtime_support_unusable_count')}`",
-        f"- ka10046_rest_fallback_quote_freshness_counts: `{summary.get('ka10046_rest_fallback_quote_freshness_counts') or {}}`",
-        f"- ka10046_strength_runtime_effect_true_count: `{summary.get('ka10046_strength_runtime_effect_true_count')}`",
-        f"- ka10046_strength_missing_received_ts_count: `{summary.get('ka10046_strength_missing_received_ts_count')}`",
-        "- ka10046_0b_strength_diff: "
-        f"avg=`{summary.get('ka10046_0b_strength_abs_diff_avg')}` "
-        f"max=`{summary.get('ka10046_0b_strength_abs_diff_max')}` "
-        f"divergence20=`{summary.get('ka10046_0b_strength_divergence20_count')}` / "
-        f"`{summary.get('ka10046_0b_strength_compare_evaluable_count')}` "
-        f"(`{summary.get('ka10046_0b_strength_divergence20_rate_pct')}`%)",
-        f"- market_data_signed_tape_state_counts: `{summary.get('market_data_signed_tape_state_counts') or {}}`",
-        f"- market_data_signed_tape_sample_count_total: `{summary.get('market_data_signed_tape_sample_count_total')}`",
-        f"- market_data_rest_signed_tape_pressure_usable_true_count: `{summary.get('market_data_rest_signed_tape_pressure_usable_true_count')}`",
-        f"- rest_signed_trade_ticks_row_count: `{summary.get('rest_signed_trade_ticks_row_count')}`",
-        f"- rest_signed_trade_ticks_source_counts: `{summary.get('rest_signed_trade_ticks_source_counts') or {}}`",
-        "- latency_true_ofi_direct_canary_signed_tape: "
-        f"sample_total=`{summary.get('latency_true_ofi_direct_canary_signed_tape_sample_count_total')}` "
-        f"net_buy_volume_sum=`{summary.get('latency_true_ofi_direct_canary_signed_tape_net_buy_volume_sum')}` "
-        f"sell_dominated=`{summary.get('latency_true_ofi_direct_canary_signed_tape_sell_dominated_count')}` "
-        f"latest_single_sell_dominated=`{summary.get('latency_true_ofi_direct_canary_signed_tape_latest_single_sell_dominated_count')}`",
-        f"- latency_true_ofi_direct_canary_signed_tape_latest_side_counts: `{summary.get('latency_true_ofi_direct_canary_signed_tape_latest_side_counts') or {}}`",
-        f"- latency_true_ofi_direct_canary_tape_block_reason_counts: `{summary.get('latency_true_ofi_direct_canary_tape_block_reason_counts') or {}}`",
-        f"- tick_aggressor_source_counts: `{summary.get('tick_aggressor_source_counts') or {}}`",
-        f"- tick_trade_value_source_counts: `{summary.get('tick_trade_value_source_counts') or {}}`",
-        f"- tick_trade_value_1313_missing_rate_pct: `{summary.get('tick_trade_value_1313_missing_rate_pct')}`",
-        f"- trade_volume_source_counts: `{summary.get('trade_volume_source_counts') or {}}`",
-        "- trade_volume_1030_1031_vs_15_mismatch: "
-        f"`{summary.get('trade_volume_1030_1031_vs_15_mismatch_count')}` / "
-        f"`{summary.get('trade_volume_1030_1031_vs_15_evaluable_count')}` "
-        f"(`{summary.get('trade_volume_1030_1031_vs_15_mismatch_rate_pct')}`%)",
-        f"- kiwoom_0b_latest_stock_count: `{summary.get('kiwoom_0b_latest_stock_count')}`",
-        f"- kiwoom_0b_trade_value_source_counts: `{summary.get('kiwoom_0b_trade_value_source_counts') or {}}`",
-        f"- kiwoom_0b_1313_missing_rate_pct: `{summary.get('kiwoom_0b_1313_missing_rate_pct')}`",
-        f"- kiwoom_0b_trade_volume_source_counts: `{summary.get('kiwoom_0b_trade_volume_source_counts') or {}}`",
-        "- kiwoom_0b_1030_1031_vs_15_mismatch: "
-        f"`{summary.get('kiwoom_0b_1030_1031_vs_15_mismatch_count')}` / "
-        f"`{summary.get('kiwoom_0b_1030_1031_vs_15_evaluable_count')}` "
-        f"(`{summary.get('kiwoom_0b_1030_1031_vs_15_mismatch_rate_pct')}`%)",
-        f"- ka10003_buy_dominance_observation_source_counts: `{summary.get('ka10003_buy_dominance_observation_source_counts') or {}}`",
-        f"- ka10003_buy_dominance_observation_trade_value_source_counts: `{summary.get('ka10003_buy_dominance_observation_trade_value_source_counts') or {}}`",
-        f"- ka10003_buy_dominance_observation_inside_spread_count: `{summary.get('ka10003_buy_dominance_observation_inside_spread_count')}`",
-        "- ka10003_buy_dominance_observation_split_vs_15_mismatch: "
-        f"`{summary.get('ka10003_buy_dominance_observation_split_vs_15_mismatch_count')}` / "
-        f"`{summary.get('ka10003_buy_dominance_observation_split_vs_15_evaluable_count')}` "
-        f"(`{summary.get('ka10003_buy_dominance_observation_split_vs_15_mismatch_rate_pct')}`%)",
-        f"- avg_ask_sweep_score: `{summary.get('avg_ask_sweep_score')}`",
-        f"- avg_post_sweep_hold_score: `{summary.get('avg_post_sweep_hold_score')}`",
-        f"- avg_bid_replenishment_score: `{summary.get('avg_bid_replenishment_score')}`",
-        f"- max_vi_proximity_risk: `{summary.get('max_vi_proximity_risk')}`",
-        f"- warnings: `{report.get('warnings') or []}`",
-        f"- code_improvement_order_count: `{summary.get('code_improvement_order_count')}`",
-        f"- top_code_improvement_orders: `{summary.get('top_code_improvement_orders') or []}`",
+        "## Partitions",
+        "```json",
+        json.dumps(modern.get("partitions") or [], ensure_ascii=False, indent=2),
+        "```",
     ]
     return "\n".join(lines) + "\n"
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description="Build source-only microstructure reaction context artifact."
-    )
-    parser.add_argument("--date", default=datetime.now().strftime("%Y-%m-%d"))
-    parser.add_argument(
-        "--backfill-clean-baseline-rollups",
-        action="store_true",
-        help=(
-            "Stream clean-baseline pipeline sources and create missing/stale compact "
-            "daily opportunity rollups before building the target-date report."
-        ),
-    )
-    args = parser.parse_args(argv)
-    backfill = (
-        backfill_clean_baseline_opportunity_rollups(args.date)
-        if args.backfill_clean_baseline_rollups
-        else None
-    )
-    report = build_microstructure_reaction_context_report(args.date)
-    print(
-        json.dumps(
-            {
-                "date": report.get("date"),
-                "summary": report.get("summary"),
-                "warnings": report.get("warnings"),
-                "backfill": backfill,
-            },
-            ensure_ascii=False,
-        )
-    )
-    return 0
-
-
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit("Legacy raw microstructure study is retired; use the existing machine calibration producer.")

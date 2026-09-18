@@ -498,17 +498,13 @@ def test_runtime_approval_summary_surfaces_microstructure_source_only_context(
     assert summary["available"] is True
     assert summary["runtime_mutation_allowed"] is False
     assert summary["decision_authority"] == "entry_confidence_modifier_source_only"
-    assert summary["row_count"] == 3
-    assert summary["ok_count"] == 2
+    assert summary["row_count"] is None
+    assert summary["ok_count"] is None
     assert (
         summary["opportunity_exploration_funnel"]["unique_entry_opportunity_count"] == 2
     )
-    assert (
-        summary["clean_baseline_cumulative_opportunity_exploration"][
-            "source_quality_adjusted_ev_pct"
-        ]
-        == 0.42
-    )
+    assert summary["clean_baseline_cumulative_opportunity_exploration"]["status"] == "retired"
+    assert "source_quality_adjusted_ev_pct" not in summary["clean_baseline_cumulative_opportunity_exploration"]
     assert "standalone_buy" in summary["forbidden_uses"]
     markdown = (out_dir / "runtime_approval_summary_2026-05-31.md").read_text(
         encoding="utf-8"
@@ -596,9 +592,9 @@ def test_runtime_approval_summary_microstructure_summary_tolerates_malformed_typ
 
     summary = mod._microstructure_reaction_context_summary(payload)
 
-    assert summary["row_count"] == 0
-    assert summary["ok_count"] == 2
-    assert summary["missing_or_unusable_count"] == 0
+    assert summary["row_count"] is None
+    assert summary["ok_count"] is None
+    assert summary["missing_or_unusable_count"] is None
     assert summary["real_submitted_count"] == 0
     assert summary["status_counts"] == {}
     assert summary["entry_reaction_quality_counts"] == {}

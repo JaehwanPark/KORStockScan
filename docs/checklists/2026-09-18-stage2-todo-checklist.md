@@ -16,6 +16,17 @@
 
 ## 배포·성과 검증
 
+- [ ] `[MicrostructureMachineAuxiliaryNaturalAcceptance0918] 현행 기계·보조 AI microstructure 평가 결속의 자연 소비·경제성 확인` (`Due: 2026-09-18`, `Slot: POSTCLOSE`, `TimeWindow: 20:10~21:55`, `Track: RuntimeStability`)
+  - 후속 상세계획: [전용 raw 장후 집계 폐기·현행 판정기 평가 통합 MC0–MC6](../proposals/microstructure-reaction-context-postclose-consolidation-plan-2026-09-18.md). 사용자가 구현·반복 리뷰/수정·검증 후 commit/push·배포와 제한 장후 결과 갱신을 승인했다. 전용 wrapper 호출·raw 연구/rollup/backfill 제거와 modern-only consumer/strict 인계 전환을 구현·검증했다. 배포/결과 갱신 receipt는 아래 추가 Closure를 따른다. 기존 원천 통합 구현 Closure/검증 이력을 보존하고 이 stable ID를 재사용한다. 구현·배포에서 live 특징·holding/entry 안전과 별도 machine microstructure attribution/정책 경로를 보존하며 자연/경제성 Acceptance는 별도로 닫는다.
+  - Source: [정리·통합·경제성 재점검 review](../audit-reports/2026-09-18-disk-cleanup-and-microstructure-integration-review.md), [현행 평가 운영 계약](../postclose-tuning-result-review-task-instructions.md#511-microstructure의-현행-평가-결속), `tmp/microstructure-integration-20260918/evaluation-result-2026-09-16.json`, `evaluation-result-2026-09-17.json`, `closure.json`.
+  - 사용자 지시: 불필요한 작업/배포/임시 사본·Codex archive 정리와 현행 machine-primary/auxiliary AI 원천 결속·분모·결과 연결 보완 및 구조/EV 재점검. 이번 구현은 source-only이며 selected release·service/PID·cron·env·provider budget·주문을 변경하지 않는다. 다른 세션의 source/release/실행·동결 원천을 보존한다.
+  - 구현 Closure: 비용 제외 전 capture census·200행 export 전 전체 case 통계·applied bundle/venue/session/machine action/AI 버전 구분·기존 terminal/partition gate 승계·부모 SHA binding을 수리했다. 비용 producer를 AI 연구 선행조건에서 독립시키고 긴 작업 전 기존 producer source-only 모드로 수집한다. 통합/프리마켓 비용은 검증된 snapshot broker route로 결속하고 Main/shared-rebound의 window 조회는 exact snapshot 시장데이터 route로 결속한다. review/fix/re-review,280 producer/runtime PASS·4 summary 소비 PASS·13 verifier 계약 PASS·71 live-source adapter PASS·compile/bash/diff 및 print-only parser 증거는 Source를 따른다.
+  - 현재 결과: 디스크7.971GiB 확보·사용률93→87%, source-clean/Git 보존14개 사본 root 제거. 9/16 비용 결손1,258→15·사례768→1,332·비용/관측 조건 충족CF1,213건; auxiliary 경제성 연결1건. 9/17 verified3,342건은 당일 비용 원천 부재로 EV/순익null이며 no-edge가 아니다. historical micro-window/가격 경로 gap과 실제 성과는 OPEN이다.
+  - Acceptance: 후속 정상 실행에서 동일 날짜 early cost source→검증 reference→calibration의 전체 사례→modern microstructure section→EV/daily/runtime summary parent SHA 소비를 확인한다. 과거 당일 원천 미확보를 현재 master/미호출 AI/수익0으로 대체하지 않는다. 별도 tuner·grid·threshold/safety 변경 없이 기존 holdout/promotion/publisher/PREOPEN/PID 계약과 자연 applied-version COMPLETED 비용 정산을 구분한다. 현재 source review 완료가 배포·자연 소비·actual ΔEV/신규 순익 acceptance는 아니다. 정지 cron을 복원하거나 비싼 전체 chain을 이번 검증에서 재실행하지 않는다.
+
+  - 추가 Closure: [전용 작업 폐기·통합 배포 review](../audit-reports/2026-09-18-microstructure-postclose-consolidation-review.md), `tmp/microstructure-consolidation-20260918/validation.json`, `deployment.json`, `result-refresh.json`. 현재 selected base의 미변경 live guard를 보존한 clean release로 관련 source만 배포한다. 전용 raw 재실행·현재 worker 재시작·정책/env/lock/provider 변경 없이 기존 cached 9/16·9/17 진단을 dated successor에 인계하고 9/17 일일 report의 해당 section만 갱신한다. scope strict handoff와 전체 chain DONE/정책 선정/실제 EV는 별개이며 자연/경제성 Acceptance는 OPEN이다.
+
+
 - [x] `[EntryRecheckDroughtRetirement0918] 전용 score/WAIT 복구 경로·장후/PREOPEN·산출물 폐기` (`Due: 2026-09-18`, `Slot: INTRADAY`, `TimeWindow: 10:50~12:00`, `Track: RuntimeStability`)
   - Source: [폐기 review와 검증 증거](../audit-reports/2026-09-18-entry-recheck-drought-retirement-review.md), `tmp/entry-recheck-retirement-20260918/deleted-products.json`, `src/engine/lifecycle/retirement.py`.
   - 사용자 지시: 관련 런타임·장후작업·산출물 삭제 후 반복 리뷰·보완·commit/push·배포 승인. 이전 전용 controller 파일선택 수리/전일 보고서 갱신 목표를 폐기로 대체한다.

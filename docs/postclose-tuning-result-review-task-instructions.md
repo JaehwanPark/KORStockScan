@@ -124,6 +124,18 @@ bash deploy/run_runtime_release.sh finalize "$TARGET_DATE" --print-plan
 6. 원래 family의 sample floor·가격/수량·prompt/current policy guard를 evaluator→publisher→PREOPEN/dated loader까지 같은 contract로 대사한다. 일반5/10/20일 동시 floor나 사전 candidate 실체결을 새로 요구하지 않고, 불합리하거나 불가능한 gate는 근거와 소유자를 기록한다.
 7. `valid_carry_or_reject`는 유효 비교와 탈락 사유가 입증된 결과다. challenger 없음·coverage 미달·source invalid 때문에 carry된 경우는 그 부족 상태를 함께 남겨 의도한 경제성 분석 완료와 구분한다. CF 기대개선은 actual 일별 순익·R6·자연 정책 효과로 합산하지 않는다.
 
+### 5.1.1 Microstructure의 현행 평가 결속
+
+`microstructure_reaction_context`의 진입 평가는 기존 `ai_action_outcome_calibration`의 기계 case table과 결속한다. 원본 capture hash·snapshot·applied bundle·venue/session을 보존하고 비용/결과 제외 전 수집 분모와 중복 제거 후 결과 분모를 별도로 확인한다. Main/shared-rebound의 window source는 같은 exact snapshot의 명시적 시장데이터 route/item으로 결속하고 scope alias나 broker 비용 route를 대신 넣지 않는다. 누락·충돌은 SOURCE_UNAVAILABLE로 유지한다. 통계는 상세 행200개 export 전에 계산한다. 보조 AI는 machine `ENTER_NOW`의 exact snapshot join·실제 provider 호출·등록된 prompt/verdict·source partition만 평가하며 기계 미진입의 AI 미호출은 N/A다.
+
+기존 비용 source producer는 main wrapper의 긴 raw/research 작업 전에 같은 날짜의 원천을 확보한다(`ai_action_outcome_calibration --write --ensure-economic-reference-only`). 비용 입력은 report 아래 private namespace로 작성하며 live provider budget/lock/env를 발행하지 않는다. 기존 검증 원천은 보존한다. 통합/프리마켓 시장데이터 scope의 비용은 검증된 snapshot의 명시적 broker route로 조회하고 scope label은 변경하지 않는다. 누락·충돌 route와 복구 불가 과거 당일 원천은 source gap/null이다.
+
+전용 raw 재스캔·구 entry funnel·독립 누적 연구/rollup/backfill 장후작업은 폐기한다. 실시간 특징·holding/entry 안전 소비와 별도 `machine_microstructure_attribution`/정책 경로는 유지한다. legacy 통계는 N/A이며 구 보고서가 없어도 정상이다.
+
+후행 calibration `--write`는 전체 case의 통합 진단을 날짜가 같은 microstructure 보고서에 가볍게 갱신한다. EV/daily/runtime summary는 같은 계약을 소비하고 부모 보고서 hash가 바뀌거나 없으면 source gap으로 표시한다. 기존 가격 labeler의3분 window 마지막 관측값에서 검증된 full-cost estimate를 차감한 값은 관측 endpoint lag까지 명시한 CF 진단이다. 실제 completed EV/순익·인과 ΔEV와 합산하지 않으며 별도 tuner·정책 승격·런타임 권한을 만들지 않는다. 선정/발행/PREOPEN은 기존 기계·보조 AI의 source/terminal/holdout/promotion gate를 따른다.
+
+마지막 calibration 이후 기존 일일 보고서는 `daily_threshold_cycle_report --date <target-date> --refresh-machine-evaluation-only`로 해당 진단만 갱신한다. 이 경로는 기존 후보/보정·정책·누적 연구를 재산출하지 않는다. EV/daily/runtime summary와 strict handoff는 같은 modern 부모 SHA를 확인하며 missing/changed parent는 active 인계 결손이다. full-cost 결손은 경제성 source gap으로 보고하고 무기회/no-edge와 구분한다. 의도된 전용 작업 폐기를 delivery coverage 실패나 retired owner 복원 업무로 바꾸지 않는다.
+
 ### 5.2 결손·결함과 달성 가능성
 
 | 판정 | 입증할 내용 | 다음 조치·closure |

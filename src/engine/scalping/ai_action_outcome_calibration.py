@@ -3593,6 +3593,27 @@ def _compact_machine_horizon_metrics(metrics: Any) -> dict[str, dict]:
     return result
 
 
+
+def _machine_capture_cost_reference_venue(capture: dict, cohort: tuple[str, str]) -> str | None:
+    """Economic catalog venue is not the integrated market-data scope label."""
+    if cohort[0] in {"KRX", "NXT"}:
+        return cohort[0]
+    context = _as_dict(capture.get("label_context"))
+    payload = _as_dict(_as_dict(capture.get("source")).get("exact_payload"))
+    snapshot = _as_dict(payload.get("ai_market_snapshot_v1"))
+    route = str(context.get("broker_route") or "").upper()
+    if (
+        route in {"KRX", "NXT", "SOR"}
+        and route == str(snapshot.get("broker_route") or "").upper()
+        and context.get("snapshot_id") == snapshot.get("snapshot_id")
+        and context.get("snapshot_id")
+        and context.get("market_data_route") == "krx_nxt_integrated"
+        and snapshot.get("market_data_route") == "krx_nxt_integrated"
+    ):
+        return route
+    return None
+
+
 def load_machine_observation_rows(
     data_root: Path, *, target_date: str
 ) -> tuple[list[dict], dict]:
@@ -3600,8 +3621,10 @@ def load_machine_observation_rows(
     from src.engine.scalping import ai_decision_quality as quality
     from src.engine.scalping.entry_setup_evidence import validate_entry_setup_evidence
     from src.engine.scalping.ai_decision_trace import _json_bytes
+    from src.engine.scalping.microstructure_reaction_context import bind_machine_microstructure_source, summarize_machine_capture_population
 
     result, counts = [], Counter()
+    capture_populations = []
     for path in sorted((data_root / "ai_decision_payloads").glob("*.jsonl*")):
         match = re.search(r"(\d{4}-\d{2}-\d{2})\.jsonl", path.name)
         # Machine-only capture started on 9/13. The clean-baseline paired
@@ -3655,6 +3678,7 @@ def load_machine_observation_rows(
                 counts["invalid_capture"] += 1
                 continue
             by_day[day].append(capture)
+        capture_populations.append(summarize_machine_capture_population([capture for observations in by_day.values() for capture in observations]))
         for day, observations in by_day.items():
             cost_profiles_by_venue = {}
             ai_trace_index = _machine_ai_trace_index(data_root, day)
@@ -3695,11 +3719,13 @@ def load_machine_observation_rows(
                 if not mechanistic_scope_supported(*cohort):
                     counts["unsupported_cohort"] += 1
                     continue
-                if cohort[0] not in cost_profiles_by_venue:
-                    cost_profiles_by_venue[cohort[0]] = _hierarchy_cost_profiles(
-                        data_root, day, cohort[0]
+                cost_reference_venue = _machine_capture_cost_reference_venue(capture, cohort)
+                if cost_reference_venue not in cost_profiles_by_venue:
+                    cost_profiles_by_venue[cost_reference_venue] = (
+                        _hierarchy_cost_profiles(data_root, day, cost_reference_venue)
+                        if cost_reference_venue else {}
                     )
-                cost_profiles = cost_profiles_by_venue[cohort[0]]
+                cost_profiles = cost_profiles_by_venue[cost_reference_venue]
                 cost_contract = capture["source"]["exact_payload"].get(
                     "entry_cost_contract"
                 )
@@ -3854,10 +3880,13 @@ def load_machine_observation_rows(
                         ),
                         "entry_quality_contract_valid": True,
                         "source_report_hash_verified": False,
+                        "microstructure_evaluation_binding": bind_machine_microstructure_source(capture),
                         "machine_observation_hash_verified": True,
                         "source_provenance_verified": True,
                         "comparison": {
                             "entry_cost_contract": cost_contract,
+                            "cost_reference_venue": cost_reference_venue,
+                            "cost_reference_identity_source": ("exact_market_venue" if cohort[0] in {"KRX", "NXT"} else "hash_verified_exact_snapshot_broker_route"),
                             "cost_evidence": _entry_cost_evidence(
                                 cost_contract, source_date=day
                             ),
@@ -3924,7 +3953,13 @@ def load_machine_observation_rows(
                     }
                 )
                 counts["evaluable"] += 1
-    return result, dict(counts)
+    population = {
+        key: sum(part[key] for part in capture_populations)
+        for key in ("verified_capture_count", "unique_verified_capture_count", "duplicate_capture_collapsed_count")
+    }
+    population["partitions"] = [partition for part in capture_populations for partition in part["partitions"]]
+    population["economic_exclusions_do_not_erase_capture_population"] = True
+    return result, {**dict(counts), "microstructure_capture_population": population}
 
 
 def _machine_ai_natural_source_receipt(data_root: Path, target_date: str) -> dict:
@@ -3992,7 +4027,7 @@ def _machine_learning_fingerprint(row: Mapping[str, Any]) -> str:
         "setup_evidence", "comparison", "entry_quality_path",
         "machine_applied_thresholds", "machine_core_comparison",
         "machine_hierarchy_selection", "machine_liquidity_inputs",
-        "ai_and_final_guard", "outcome_horizon_metrics",
+        "ai_and_final_guard", "outcome_horizon_metrics", "microstructure_evaluation_binding",
     )})
 
 
@@ -4420,6 +4455,7 @@ def build_machine_decision_case_table(
                 "machine_core_comparison": row.get("machine_core_comparison"),
                 "machine_applied_thresholds": row.get("machine_applied_thresholds"),
                 "machine_liquidity_inputs": row.get("machine_liquidity_inputs"),
+                "microstructure_evaluation_binding": row.get("microstructure_evaluation_binding") or {},
                 "hierarchy_selection": row.get("machine_hierarchy_selection"),
                 "entry_quality_label": label,
                 "entry_quality_path": path,
@@ -4662,8 +4698,19 @@ def build_machine_decision_case_table(
             "select_opportunity_preservation_variant": ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION,
             "select_material_risk_specificity_variant": ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION,
         }.get(compact_tuning_direction, incumbent_compact_version)
+    from src.engine.scalping.microstructure_reaction_context import summarize_machine_microstructure_evaluation
+
     return {
         "schema": MACHINE_DECISION_CASE_TABLE_SCHEMA,
+        "microstructure_evaluation": summarize_machine_microstructure_evaluation(
+            cases,
+            source_receipt={
+                **source_receipt,
+                "machine_threshold_tuning_input_allowed": machine_tuning_allowed and conflicting_attempt_identity_count == len(conflicting_evaluation_keys),
+                "tuning_input_allowed": compact_tuning_input_allowed,
+            },
+            capture_census=capture_census,
+        ),
         "status": (
             "evaluable"
             if cases
@@ -7253,6 +7300,30 @@ def _runtime_policy_publication_errors(
     return errors
 
 
+
+def ensure_machine_economic_reference(*, data_root: Path, target_date: str) -> dict:
+    """Decouple the full-cost source prerequisite from provider replay gates."""
+    from zoneinfo import ZoneInfo
+    from src.engine.scalping.micro_reversion.economic_reference import build_daily_resolution, atomic_write_json
+    from src.engine.scalping.micro_reversion.economic_reference_owner import build_daily_sources
+
+    root = data_root / "report" / "micro_reversion_economic_reference"
+    path = root / f"micro_reversion_economic_reference_{target_date}.json"
+    existing = existing_or_gzip_path(path)
+    if existing and _hierarchy_cost_profiles(data_root, target_date):
+        return {"status": "existing_verified_sources_preserved", "path": str(existing)}
+    if datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat() != target_date:
+        return {"status": "source_gap_historical_official_master_unavailable", "target_date": target_date, "path": str(path)}
+    try:
+        private = root / "machine_source_inputs" / target_date
+        build_daily_sources(target_date=target_date, policy_path=data_root / "config" / "micro_reversion_economic_policy.json", output_root=private)
+        report = build_daily_resolution(target_date=target_date, source_manifest_path=private / "economic_reference_sources.json")
+        atomic_write_json(path, report)
+        return {"status": report.get("status"), "verified": report.get("verified"), "path": str(path)}
+    except (OSError, ValueError, RuntimeError) as exc:
+        return {"status": "source_gap_cost_prerequisite_failed", "reason": str(exc), "path": str(path)}
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Build cumulative exact-trace action/outcome calibration."
@@ -7260,6 +7331,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--target-date", required=True)
     parser.add_argument("--data-root", type=Path, default=Path("data"))
     parser.add_argument("--write", action="store_true")
+    parser.add_argument("--ensure-economic-reference-only", action="store_true", help="Prepare only the existing full-cost source before lengthy research; no policy publication")
     parser.add_argument(
         "--require-policy-publication",
         action="store_true",
@@ -7267,11 +7339,28 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--print-summary", action="store_true")
     args = parser.parse_args(argv)
+    if args.ensure_economic_reference_only:
+        if not args.write or args.require_policy_publication:
+            parser.error("--ensure-economic-reference-only requires --write and forbids policy publication")
+        receipt = ensure_machine_economic_reference(data_root=args.data_root, target_date=args.target_date)
+        print(json.dumps(receipt))
+        return 0 if receipt.get("verified") is True or receipt.get("status") == "existing_verified_sources_preserved" else 2
+    economic_reference_prerequisite = (
+        ensure_machine_economic_reference(data_root=args.data_root, target_date=args.target_date)
+        if args.write else {"status": "not_requested_read_only"}
+    )
     report = build_report(target_date=args.target_date, data_root=args.data_root)
+    report["machine_economic_reference_prerequisite"] = economic_reference_prerequisite
+    report = _with_artifact_content_sha256(report)
     path = report_path(args.target_date, args.data_root / "report")
     published_policy = None
     if args.write:
         _atomic_write_json(path, report)
+        from src.engine.scalping.microstructure_reaction_context import refresh_machine_evaluation_link
+
+        machine_table = _as_dict(_as_dict(report.get("hierarchical_entry_quality")).get("machine_decision_case_table"))
+        if machine_table.get("microstructure_evaluation") is not None:
+            refresh_machine_evaluation_link(path, report_root=args.data_root / "report")
         from src.engine.scalping.mechanistic_entry_runtime_policy import publish
 
         published_policy = publish(path, data_root=args.data_root)
