@@ -736,3 +736,13 @@ def test_prospective_budget_respects_remaining_registration_capacity(tmp_path):
     assert payload["budget"]["prospective_overflow_count"] == 1
     write_collection_targets(payload, root=tmp_path)
     assert load_exact_date_collection_targets(payload["effective_date"], root=tmp_path)["status"] == "loaded"
+
+
+@pytest.mark.parametrize("budget", [None, "invalid", [1], 4, True])
+def test_loader_rejects_non_object_budget_without_registering(tmp_path, budget):
+    payload = build_collection_targets(_report([]))
+    payload["budget"] = budget
+    write_collection_targets(payload, root=tmp_path)
+    result = load_exact_date_collection_targets(payload["effective_date"], root=tmp_path)
+    assert result["status"] == "invalid_budget_contract"
+    assert result["registration_items"] == []

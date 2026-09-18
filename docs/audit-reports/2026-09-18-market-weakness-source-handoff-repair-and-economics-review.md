@@ -54,7 +54,7 @@ Model 기준 현행 CF EV−0.41349624%와 challenger calibration ΔEV0.0%p는 a
 | Blocker / owner artifact | 다음 행동 | Closure test |
 |---|---|---|
 | Main PREOPEN `runtime_env_handoff_missing`; 기존 dated runtime manifest/validator | 기존 승인된 bundle/env source owner가 strict 인계를 닫은 후 정상 Main 시작 경로로 소비; env 수동 우회·임의 주문 금지 | exact-date strict PASS→실제 Main PID→동일 날짜 target manifest→0B/0D 등록 receipt·정확 item·연속 경로/누락 disposition |
-| `scalp_micro_reversion_forward/trade_date=2026-09-18` 부재; 기존 Main callback observer | 기존 publisher/WS producer의 자연 실행 확인; 새 collector/timer를 만들지 않음 | dated partition·receipt·configured_at≤anchor·quantity/cost·depth/H30 보존, source eligible/blocked 분모 일치 |
+| 실제 다음 개장일의 forward 원천; 기존 Main callback observer | 오늘은 사용자 지정 휴장/미적재로 수집 비대상이며 기존 publisher/WS producer의 정상 개장 자연 실행 확인 | dated partition·receipt·configured_at≤anchor·quantity/cost·depth/H30 보존, source eligible/blocked 분모 일치 |
 | Prospective episode signal planned quantity 부재; 기존 expanded research 원천 | 신호 전 명시된 quantity/leg/target contract가 있을 때만 소비; retrospective fill proxy 금지 | unfilled/blocked 포함 native decision의 original quantity·target·route가 source SHA와 결속되고 depth capacity를 만족 |
 | Holdout/KOSDAQ/sample 부족; 기존 hysteresis evaluator | 위 원천 유효 표본의 자연 성숙 후 기존2/2·2/4·3/3만 재검증 | 기존 calibration selection→독립 chronological holdout·양시장/owner/cost/tail/promotion gate 충족; 후보0 disposition 명시 |
 | Actual applied-version completed 표본 부재; native observation/guard/ledger | 실제 적용 lineage가 있는 자연 완료 손익만 누적 | episode key 중복0·비용/venue/session/owner 일치→version별 rolling/cumulative EV/net/tail/exposure/error; actual/CF 분리 |
@@ -67,3 +67,13 @@ Executable acceptance: [당일 checklist](../checklists/2026-09-18-stage2-todo-c
 13:22:01 자연 collector에서 `exact_date_applied_policy`, source_date9/17·target9/18·applied를 확인했다. Notifier는 기존 fallback과 source 문자열이 다르다는 이유로 `intraday_hysteresis_policy_mismatch`를 반환했다. Native source 복구에 실제 consumer까지 이어지는 추가 결함이다. 기존 notifier에서 fallback→검증된 dated carry의 policy hash·횟수·최소 간격이 모두 동일한 경우만 출처 인계를 허용한다. 새 threshold/promotion·역방향 fallback·hash 불일치는 기존 차단을 유지한다. 기존 latch/streak를 다시 만들지 않고 원래 자연 관측으로 계속 진행한다.
 
 Pending weak streak1→정상 두 번째 관측의 발동2, active latch→첫 recovery 후 release_pending/active 유지, 동일 횟수라도 carry가 아닌 promotion의 거부와 기존 threshold 변경 거부를 검증했다. Notifier/guard/dated publisher 계약66 PASS(1.85초), compile/diff/parser 및 병합 후 wrapper 계약을 확인한다. Source/선택 commit과 자연 최종 observer health는 `deployment-r2.json`, `natural-and-version-evaluation.json`을 따른다. Raw 재계산·수동 notifier 상태 변경·Main 재시작은 없다.
+
+## 최종 재리뷰와 휴장 운영조건 정정
+
+사용자가 오늘 휴장·데이터 미적재를 명시했다. 9/18 forward partition/새 진입 부재를 Main/수집기 장애의 증거로 삼던 현재 판정을 철회한다. 앞선13:22/13:26 scheduled JSON과 observer health는 날짜/hash의 기계적 소비 증거로 보존하며 실제 거래세션의 유효 호가·자연 진입/경제성 acceptance를 증명하지 않는다. 당일 무수집과 과거9/17 quantity/depth/H30 결손, 현재 PREOPEN 정책 미생성/날짜/hash 결함은 분리한다. 누적1,323/유효11·후보없음·실제EV null은 historical as-of이며 오늘 휴장으로 새 분모를 더하지 않는다.
+
+재리뷰 수리: collection manifest의 non-object budget에서 AttributeError가 발생하던 경로를 `invalid_budget_contract`/빈 registration 목록으로 처리했다. null/string/list/number/bool 회귀5건을 추가하고 collection/attribution/notifier/dated tuner 관련218 PASS(12.32초)·compile/diff·print-only parser로 검증했다. 정상 budget·legacy schema·policy/threshold/quantity/cap/latch/등록 API는 변경하지 않았다. Raw 재계산·API 호출·봇/worker 재시작·자연 표본 polling은 하지 않았다. Evidence는 `tmp/market-weakness-final-review-20260918/validation.json`, `deployment.json`을 따른다.
+
+Read-only PREOPEN은 여전히 integrated bundle 구성/날짜/hash4개 결손이다. 기존9/17 machine-primary/all-continuous carry 정책은 존재하고9/18 정책은 없다. 현재 calendar helper는9/18을 trading_day로 반환해 사용자 운영조건과 불일치하므로 실제 다음 개장일을 아직 지정하지 않는다. 정책 발행07:35 cutoff를 우회하거나 날짜를 relabel하지 않는다. 경로 alias 가설은 현재 구성에서 재현되지 않아 canonicalization 코드를 추가하지 않았다.
+
+후속 상세계획: [P0–P6 거래일·원천·발행·PREOPEN·자연 경제성 수리](../proposals/market-weakness-entry-policy-handoff-next-open-repair-plan-2026-09-18.md). 다른 세션의 `scale_in_split_order_plan` source/test/정책/수량 검증 소유권을 유지하고 기존 stable ID에서 다음 실제 개장일로 Acceptance를 이관한다.

@@ -530,6 +530,8 @@ def load_exact_date_collection_targets(
             "registration_items": [],
         }
     budget = payload.get("budget")
+    if not isinstance(budget, dict):
+        return {"status": "invalid_budget_contract", "path": str(path), "registration_items": []}
     selected_targets = payload.get("selected_targets")
     overflow_targets = payload.get("overflow_targets")
     schema = payload.get("schema")

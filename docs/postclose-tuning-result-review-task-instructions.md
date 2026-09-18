@@ -138,6 +138,8 @@ bash deploy/run_runtime_release.sh finalize "$TARGET_DATE" --print-plan
 
 ### 5.1.2 Market weakness 원천·날짜 인계
 
+휴장 또는 명시된 무수집일에는 새 forward partition/진입 부재를 수집 장애로 판단하지 않는다. Scheduled snapshot/observer health는 기계적 소비 증거이며 실제 거래세션의 유효 호가·자연 행동·경제성 표본과 분리한다. 운영 휴장 조건과 market-day 함수가 충돌하면 공식 거래일/운영 조건을 대사하고 실제 다음 적용일을 확정한다. 이전 source_date/target을 복사·relabel하거나 publisher 시간창을 우회하지 않는다.
+
 Notifier의 장중 threshold 변경 차단은 유지한다. 다만 fallback→검증된 dated carry에서 policy hash·발동/해제 횟수·최소 간격이 모두 동일한 경우는 출처 복구로 인계하고 기존 latch/streak를 보존한다. Candidate promotion·역방향 fallback·값/hash 변경에는 이 예외를 쓰지 않는다.
 
 `machine_microstructure_attribution`의 dated 원천→기존 hysteresis tuner→다음 정확 KRX 날짜의 immutable source snapshot/정책→collector/notifier 소비를 확인한다. 승인 후보가 없는2/3 carry와 baseline fallback은 hash가 같아도 source_date/source/status로 구분한다. Source-only scanner/research-watch/auto-discovery의 calibration admission은 live active owner 등록이 아니다. 기존 active execution owner의 모든 route는 보존하고 prospective budget4(상한8)은 독립 적용하되 전체200symbol/400item cap과 legacy v3 shared-budget 소비 계약을 유지한다. Integrated aftermarket는 명시된 `krx_nxt_integrated`/`KRX_NXT` 계약이 있을 때 SOR 관측 item으로 결속하며 실제 체결 venue를 추정하지 않는다.
