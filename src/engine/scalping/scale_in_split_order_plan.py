@@ -2555,7 +2555,8 @@ def _query_actual_fill_inventory(target_date: str) -> list[dict[str, Any]]:
                            "source_date": receipt.event_time.date().isoformat(), "fill_time": receipt.event_time.isoformat(),
                            "request_qty": receipt.request_qty, "fill_qty": receipt.executed_qty,
                            "fill_price": receipt.executed_price, "request_price": receipt.request_price,
-                           "status": position.status if terminal_in_scope else "HOLDING",
+                           "status": position.status if terminal_in_scope or terminal is None else "HOLDING",
+                           "outcome_timing_status": "missing_completed_terminal_clock" if position.status == "COMPLETED" and terminal is None else "in_scope" if terminal_in_scope else "not_terminal_in_scope",
                            "sell_time": terminal.isoformat() if terminal_in_scope else None,
                            "sell_price": position.sell_price if terminal_in_scope else None,
                            "profit_rate": position.profit_rate if terminal_in_scope else None})
@@ -2674,6 +2675,8 @@ def build_report(target_date: str) -> dict[str, Any]:
               else "skipped_no_actual_fill" if not inventory else "skipped_no_applicable_fill" if not applicable
               else "pending_filled_outcome" if not ready
               else "skipped_unchanged_filled_outcome" if unchanged else "evaluated")
+    if status == "pending_filled_outcome" and any(r.get("status") == "COMPLETED" for r in applicable):
+        error = "completed_fill_terminal_clock_or_profit_contract_missing"
     report = None
     outcomes = []
     if status == "evaluated":
@@ -2728,6 +2731,8 @@ def build_report(target_date: str) -> dict[str, Any]:
         report["recommended_policy"]["policy_version"] = incumbent["policy_version"]
     report["evaluation_state"] = {"status": status, "reason": error or None, "actual_fill_receipt_count": len(inventory),
                                   "applicable_receipt_count": len(applicable), "completed_receipt_count": len(ready),
+                                  "actual_completed_receipt_count": sum(r.get("status") == "COMPLETED" for r in inventory),
+                                  "completed_missing_terminal_clock_count": sum(r.get("outcome_timing_status") == "missing_completed_terminal_clock" for r in inventory),
                                   "economic_gate_version": ECONOMIC_GATE_VERSION, "inventory_key": key,
                                   "modeled_ev_pct": None if status != "evaluated" else report["recommended_policy"]["runtime_refresh_evidence"].get("source_quality_adjusted_ev_pct")}
     report["filled_outcome_versions"] = versions if status in {"evaluated", "skipped_unchanged_filled_outcome"} else previous_versions
