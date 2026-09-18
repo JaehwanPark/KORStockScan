@@ -188,3 +188,7 @@ Closure: 미해결 실제 결손은 지시/owner가 있고 정상 unavailable은
 기존 producer/terminal gate/trigger/reader·원 보고서를 대조했다. 초기 설명의 모호함을 보완해 `terminal admitted`를 COMPLETED trade 경제성과 분리하고, BLOCK/VETO 반사실 연구의 비체결 분모를 보존했다. Final 미도달 사실과 잘못된 skip 가능성을 분리하고, Q1 미래 수리와 역사적4건 복구를 별도 closure로 명시했다. 다른 세션의 verbosity/AI decision quality 작업을 중복 구현하지 않는 범위를 확정했다.
 
 이번 턴 검증은 문서 링크/owner/권한·우선순위·diff 및 print-only parser에 한정한다. Trading tests/provider/보고서 재생성·외부 sync는 계획 수립에 필요하지 않아 생략한다.
+
+## 12. 후속 승인 구현 종결
+
+Q0–Q5 구현·반복 리뷰/보완·제한 회귀/재생성을 수행했다. 상세 code/final/마지막 소비/dated incumbent carry 및 외부 native blocker는 [Owning review](../audit-reports/2026-09-18-observation-source-quality-final-lineage-review.md#q0q5-구현-closure-및-제한-결과)를 따른다. 과거4 gap·미연결1·unknown 경고와 null 경제성을 보존하며 자연 terminal/PREOPEN/PID/비용 후 성과는 완료로 바꾸지 않는다.

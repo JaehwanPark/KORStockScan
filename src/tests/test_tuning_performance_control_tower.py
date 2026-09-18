@@ -1159,3 +1159,16 @@ def test_control_tower_does_not_warn_for_swing_sources_in_scalp_only_scope(
     assert "swing_lifecycle_decision_matrix_missing" not in report["warnings"]
     assert "swing_lifecycle_bucket_discovery_missing" not in report["warnings"]
     assert report["sources"]["swing_lifecycle_decision_matrix"]["applicable"] is False
+
+
+def test_control_tower_consumes_compact_handoff_from_bound_ev_source(monkeypatch, tmp_path):
+    report_root, _, _ = _patch_dirs(monkeypatch, tmp_path)
+    target = "2026-09-17"
+    view = {"source_date": target, "publication_date": "2026-09-18",
+            "effective_date": "2026-09-21", "selection_disposition": "incumbent_preserved",
+            "policy_bundle_sha256": "f" * 64}
+    path = report_root / "threshold_cycle_ev" / f"threshold_cycle_ev_{target}.json"
+    _write_json(path, {"compact_auxiliary_economic_tuning": view})
+    assert mod.build_tuning_performance_control_tower(target)["compact_auxiliary_economic_tuning"] == view
+    _write_json(path, {"compact_auxiliary_economic_tuning": {**view, "source_date": "2026-09-16"}})
+    assert "compact_auxiliary_economic_tuning" not in mod.build_tuning_performance_control_tower(target)

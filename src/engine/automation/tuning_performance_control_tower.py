@@ -1989,6 +1989,11 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
         if not validate_current_receipt(closure, target_date):
             warnings.append("machine_research_closed_loop_incomplete")
     report["source_generation_contract"] = handoff_receipt
+    compact_view = threshold_ev.get("compact_auxiliary_economic_tuning")
+    if isinstance(compact_view, dict) and compact_view.get("source_date") == target_date:
+        # The exact EV source is already bound above; family strict validates its
+        # policy/consumer hash. Preserve this handoff across native refreshes.
+        report["compact_auxiliary_economic_tuning"] = compact_view
     if target_date >= "2026-09-17":
         from src.engine.automation.entry_cancel_wait_tuning import load_handoff_view
         cancel_view=load_handoff_view(target_date,REPORT_ROOT_DIR)

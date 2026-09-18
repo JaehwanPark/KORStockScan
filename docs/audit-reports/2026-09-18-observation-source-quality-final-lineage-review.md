@@ -25,3 +25,17 @@ Machine capture4508 중 exact trace4507·미연결1(snapshot aims-53d448364dcc3f
 ## 마지막 소비·배포와 잔여 경계
 
 Final audit→workorder/EV/runtime summary→tower/checklist→strict/controller→compact dated carry를 같은 원 source에서 갱신한다. 이 단계의 실행 receipt와 global strict의 외부 blocker를 별도로 기록한다. Whole native DONE, 정책의 실제 PREOPEN/PID 소비, 양수 ΔEV 및 실현순익은 별도 증거가 필요하다. 자연 정상 PASS의 exact terminal/COMPLETED costs와 미사용 holdout의 경제성은 기존 checklist Acceptance로 OPEN이다.
+
+## Q0–Q5 구현 closure 및 제한 결과
+
+Q0 exact 원천 대사, Q1 미래 terminal/retry capture·reconciliation, Q2 final phase/implementation/dependency binding 및 verified projection migration, Q3 역할별 consumer, Q4 동일 native unknown workorder, Q5 제한 후행 소비를 구현·리뷰·보완했다. 마지막 소비 리뷰에서 native tower refresh가 compact section을 지우는 실제 결함을 수정했고, EV 원 source의 dated section을 보존하며 family strict가 exact policy/hash를 검증한다.
+
+최종 source regression251 PASS, tower18 PASS(동일 날짜 전달/타 날짜 거절 포함), 이전488 source/wrapper126 및 actual retry·late·ambiguous 추가 회귀를 통과했다. Broad trading/provider suites는 해당 수정에 필요하지 않아 실행하지 않았다. Parser/compile/bash/diff는 receipt를 따른다.
+
+Final audit SHA `38d263dc2f1259e95f9087864f3543fef72c3be0b257d4fd01afa79e96621a68`: phase=final, warning, source input allowed=true, decision CF input allowed=true, operational reconciled=false, economic eligible=false, EV=null. 원337300/87 stage·unknown28와 PASS4/gap4를 보존한다. Verified raw projection body는 원 SHA와 동일하고 5.7GB raw 재독0이며 최종 census/content binding을 별도로 갱신했다. Original funnel은 as-of 원 보고서로 보존하며 population 증명 없이 전체 보고서를 최신으로 재봉인하지 않았다.
+
+EV/runtime summary는 동일 final artifact SHA를 소비했다. Unknown field review는 `order_observation_source_quality_unknown_token_provenance_gap`에 전달됐고 tower/checklist의 source generation handoff는 PASS이다. Compact strict는 PASS이며 next-date loader가9/21 bundle `e1cd459fb0082708658f37fe68fc4d21be7024dc17c8fbdce7641acf5df0588a`를 읽는다. 선정은 incumbent_preserved, 경제 평가 source_contract_blocked다. Execution model/exposure·exact stop·natural contract·full cost terminal 부족은 null이며 양수 EV로 포장하지 않는다.
+
+감사 hash 변경으로 cancel-wait revalidation이 invalidated되어 기존 bounded owner로9/17→9/18→9/21 재-intake했다. raw_read0/source_gap/incumbent carry를 보존했다. 삼성/저가주 native tuner의9/17 artifact는 현재 source로 존재하지 않아 새 hash로 승격하거나 과거 policy/holdout을 재평가하지 않았다. 별도 low-price expanded 연구는 원 bar/source admission 계약이며 이번 machine terminal gate를 경제성 증거로 쓰지 않는다.
+
+Full strict/controller는 새 final source binding을 검증한 뒤 기존 선행 실패·AI correction·저가주 native source·machine timing policy·Swing 및 research loop 결손을 별도로 보존한다. 이 감사 수리의 closure와 전체 native DONE=false를 분리한다. 다음 정규 PREOPEN/PID 및 신규 정상 PASS의 terminal capture/완료 비용 성과는 기존 owner Acceptance로 OPEN이다. 새 코드/정책 선택은 future invocation only이며 bot restart/orders/early PREOPEN은 하지 않는다.
