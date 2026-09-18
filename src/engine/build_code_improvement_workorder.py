@@ -5901,7 +5901,7 @@ def _entry_split_order_plan_followup_orders(
     status = str(summary.get("status") or "").strip()
     if not summary.get("available"):
         issues.append("report_contract_gap")
-    if status == "source_quality_blocked":
+    if status == "source_quality_blocked" or status.startswith("blocked"):
         issues.append("source_quality_gap")
     if (
         _safe_int(summary.get("real_sample_count"), 0) >= 20
@@ -5983,15 +5983,23 @@ def _scale_in_split_order_plan_followup_orders(
     )
     if not summary:
         return []
+    state = (summary.get("evaluation_state") or {}).get("status")
+    if (summary.get("available") is True and summary.get("schema_version") == "scale_in_split_order_plan_v4"
+            and state in {"skipped_no_actual_fill", "skipped_no_applicable_fill", "skipped_unchanged_filled_outcome", "pending_filled_outcome"}
+            and not (summary.get("evaluation_state") or {}).get("reason")
+            and _safe_int(summary.get("unattributed_split_attempt_count"), 0) == 0):
+        return []
     issues: list[str] = []
     status = str(summary.get("status") or "").strip()
     if not summary.get("available"):
         issues.append("report_contract_gap")
-    if status == "source_quality_blocked":
+    if status == "source_quality_blocked" or str(state or "").startswith("blocked"):
         issues.append("source_quality_gap")
+    if (summary.get("evaluation_state") or {}).get("reason"):
+        issues.append("filled_execution_source_gap")
     if (
         summary.get("schema_version")
-        and summary.get("schema_version") != "scale_in_split_order_plan_v3"
+        and summary.get("schema_version") != "scale_in_split_order_plan_v4"
     ):
         issues.append("report_contract_gap")
     if _safe_int(summary.get("price_observation_join_gap_count"), 0) > 0:

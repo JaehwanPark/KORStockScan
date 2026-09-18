@@ -4351,7 +4351,7 @@ def test_scale_in_split_order_plan_counterfactual_candidates_are_apply_ready(
     (report_dir / f"scale_in_split_order_plan_{target_date}.json").write_text(
         json.dumps(
             {
-                "schema_version": "scale_in_split_order_plan_v3",
+                "schema_version": "scale_in_split_order_plan_v4",
                 "source_quality": {"status": "pass", "tuning_input_allowed": True},
                 "input_summary": {
                     "avg_down_observation_count": 9,
@@ -4382,7 +4382,7 @@ def test_scale_in_split_order_plan_counterfactual_candidates_are_apply_ready(
                 "recommended_policy": {
                     "runtime_apply_allowed": True,
                     "runtime_refresh_evidence": {
-                        "economic_gate_version": "ttl_paired_fixed_control_v3",
+                        "economic_gate_version": "filled_incumbent_bbo_holdout_v4",
                         "eligible_runtime_bucket_count": 1,
                         "paired_economic_sample_count": 3,
                         "economic_source_dates": ["2026-07-06", "2026-07-07"],
@@ -4397,6 +4397,11 @@ def test_scale_in_split_order_plan_counterfactual_candidates_are_apply_ready(
                         "price_observation_join_gap_count": 0,
                         "price_join_coverage": 1.0,
                         "blockers": [],
+                        "holdout_evidence": [{"runtime_apply_allowed": True, "runtime_apply_blockers": [], "blockers": [],
+                            "paired_economic_sample_count": 3, "economic_source_dates": ["2026-07-08", "2026-07-09"],
+                            "holdout_dates": ["2026-07-08", "2026-07-09"], "calibration_dates": ["2026-07-06", "2026-07-07"],
+                            "source_quality_adjusted_ev_pct": 0.1, "average_daily_delta_net_pnl_krw": 10,
+                            "price_join_coverage": 1.0, "modeled_fill_participation": 1.0, "downside_p10_profit_rate": 0.05}],
                     },
                     "policy_file": str(policy_file),
                     "policy_version": "scale_in_split_order_plan:test-counterfactual",
@@ -9401,7 +9406,7 @@ def test_owned_scale_in_verified_empty_day_is_available_but_never_ready(
     target_date = "2026-09-08"
     monkeypatch.setattr(report_mod, "SCALE_IN_SPLIT_ORDER_PLAN_DIR", tmp_path)
     payload = {
-        "schema_version": "scale_in_split_order_plan_v3",
+        "schema_version": "scale_in_split_order_plan_v4",
         "target_date": target_date,
         "source_quality": {"tuning_input_allowed": True},
         "input_summary": {"daily_unique_attempt_count": 0},
@@ -9465,7 +9470,7 @@ def test_owned_scale_in_window_source_distinguishes_zero_from_missing(
     monkeypatch.setattr(report_mod, "SCALE_IN_SPLIT_ORDER_PLAN_DIR", tmp_path)
     path = tmp_path / f"scale_in_split_order_plan_{target_date}.json"
     payload = {
-        "schema_version": "scale_in_split_order_plan_v3",
+        "schema_version": "scale_in_split_order_plan_v4",
         "target_date": target_date,
         "rolling_summary": {
             "target_date": target_date,

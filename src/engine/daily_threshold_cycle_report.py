@@ -10149,7 +10149,8 @@ def _build_scale_in_split_order_plan_family(*, target_date: str | None = None) -
     )
     policy_file = str(recommended_policy.get("policy_file") or "")
     policy_version = str(recommended_policy.get("policy_version") or "")
-    source_quality_blocked = source_quality.get("tuning_input_allowed") is not True
+    source_quality_blocked = (source_quality.get("tuning_input_allowed") is not True
+                              or str((payload.get("evaluation_state") or {}).get("status") or "").startswith("blocked"))
     runtime_refresh_evidence = (
         recommended_policy.get("runtime_refresh_evidence")
         if isinstance(recommended_policy.get("runtime_refresh_evidence"), dict)
@@ -10271,6 +10272,7 @@ def _build_scale_in_split_order_plan_family(*, target_date: str | None = None) -
             "policy_version": policy_version or None,
             "runtime_apply_allowed": runtime_apply_allowed,
             "atomic_execution_sizing": scale_in_atomic_sizing,
+            "evaluation_state": payload.get("evaluation_state"),
             "runtime_policy_refresh_allowed": runtime_policy_refresh_allowed,
             "runtime_refresh_evidence": runtime_refresh_evidence,
             "source_quality_adjusted_ev_pct": runtime_refresh_evidence.get(
@@ -15447,6 +15449,7 @@ def _build_calibration_candidates(
             )
             source_metrics = {
                 **source_metrics,
+                "evaluation_state": family_sample.get("evaluation_state"),
                 "paired_economic_sample_count": _safe_int(
                     family_sample.get("paired_economic_sample_count"), 0
                 )
@@ -16616,7 +16619,7 @@ def _owned_scale_in_rolling_metrics(candidate: dict) -> dict:
         )
     )
     if (
-        payload.get("schema_version") != "scale_in_split_order_plan_v3"
+        payload.get("schema_version") != "scale_in_split_order_plan_v4"
         or payload.get("target_date") != target_date
         or metrics.get("report_content_sha256") != _json_sha256(payload)
         or not isinstance(rolling, dict)

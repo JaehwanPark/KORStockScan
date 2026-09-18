@@ -20610,6 +20610,15 @@ def _emit_stat_action_decision_snapshot(
     )
     fields.update(_scale_in_ai_trace_fields(action))
 
+    # Preserve normalized observation fields at the existing snapshot cadence.
+    # This is telemetry only and never creates a quote request or decision.
+    for key in ("market_data_effective_best_ask", "market_data_effective_best_ask_qty",
+                "market_data_effective_best_ask_qty_source_valid", "market_data_effective_quote_observed_epoch",
+                "market_data_effective_quote_reference_epoch", "market_data_source_conflict"):
+        if key in (ws_data or {}):
+            fields[key] = ws_data[key]
+    from src.trading.market.quote_consistency import ws_quote_source_receipt
+    fields["scale_in_quote_source_receipt"] = ws_quote_source_receipt(ws_data or {}, now_ts=now_ts)
     _log_holding_pipeline(stock, code, "stat_action_decision_snapshot", **fields)
     _mutate_stock_state(stock, set_fields={"last_stat_action_snapshot_ts": now_ts})
     return True

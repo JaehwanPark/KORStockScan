@@ -1698,6 +1698,9 @@ def _scale_in_split_hold_carry_forward_blockers(
         if isinstance(source_metrics.get("runtime_refresh_evidence"), dict)
         else {}
     )
+    state = source_metrics.get("evaluation_state") or {}
+    if str(state.get("status") or "").startswith("blocked"):
+        return ["scale_in_split_execution_source_blocked"]
     observed_blockers = {
         str(item) for item in (refresh_evidence.get("blockers") or []) if str(item)
     }
@@ -5048,6 +5051,10 @@ def _split_runtime_policy_audits(
                 continue
             audit["operator_fallback_authorized"] = True
         if spec["family"] == "scale_in_split_order_plan":
+            if policy.get("effective_date") and policy["effective_date"] != target_date:
+                audit.update(status="fail", reason="policy_effective_date_mismatch")
+                audits.append(audit)
+                continue
             refresh_evidence = policy.get("runtime_refresh_evidence")
             audit["runtime_refresh_evidence"] = refresh_evidence
             refresh_error = scale_in_runtime_refresh_contract_error(refresh_evidence)
@@ -7683,6 +7690,12 @@ def build_preopen_apply_manifest(
                 json.dumps(runtime_env_verification, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
+    # Consume the dated base-order preservation decision as well as new splits.
+    # Availability is a policy handoff receipt, never auto-apply permission.
+    from src.engine.scalping.scale_in_split_order_plan import preopen_policy_handoff, policy_path
+    split_source_date = str(manifest.get("source_date") or source_date or "")
+    if split_source_date and policy_path(split_source_date).exists():
+        manifest["scale_in_execution_policy_handoff"] = preopen_policy_handoff(split_source_date, target_date)
     APPLY_PLAN_DIR.mkdir(parents=True, exist_ok=True)
     manifest["operator_policy_lock_inventory"] = policy_succession.inventory(
         [

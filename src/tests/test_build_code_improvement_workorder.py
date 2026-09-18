@@ -8283,3 +8283,12 @@ def test_submit_drought_legacy_contract_keeps_current_workorder_after_retirement
         current_report_view({"orders": orders})
     )
     assert "lifecycle_decision_matrix" not in str(order)
+
+
+def test_scale_in_conditioned_no_fill_is_normal_but_source_gap_is_actionable():
+    from src.engine.build_code_improvement_workorder import _scale_in_split_order_plan_followup_orders
+    summary = {"available": True, "schema_version": "scale_in_split_order_plan_v4",
+               "status": "skipped_no_actual_fill", "evaluation_state": {"status": "skipped_no_actual_fill", "reason": None}}
+    assert _scale_in_split_order_plan_followup_orders({"scale_in_split_order_plan": summary}) == []
+    summary.update(status="pending_filled_outcome", evaluation_state={"status": "pending_filled_outcome", "reason": "filled_outcome_receipt_price_or_lot_basis_incomplete"})
+    assert _scale_in_split_order_plan_followup_orders({"scale_in_split_order_plan": summary})

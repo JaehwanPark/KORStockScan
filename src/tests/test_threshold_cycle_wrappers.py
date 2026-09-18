@@ -395,7 +395,8 @@ def test_postclose_wrapper_syncs_exact_trade_facts_before_daily_calibration():
         'run_threshold_cycle_ev_and_wait "pre_workorder"', calibration_idx
     )
 
-    assert sync_idx < calibration_idx < ev_idx
+    scale_idx = script.index("src.engine.scalping.scale_in_split_order_plan", sync_idx)
+    assert sync_idx < scale_idx < calibration_idx < ev_idx
     sync_block = script[
         script.rindex(
             'if [ "$SKIP_DB" != "true" ]; then', 0, sync_idx

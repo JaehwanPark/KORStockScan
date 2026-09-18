@@ -231,7 +231,7 @@ def _scanner_discovery_type(fields: dict[str, Any]) -> str:
     return "unknown_scanner_provenance"
 
 
-def _load_scanner_promotion_events(target_date: str) -> dict[str, list[dict[str, Any]]]:
+def _load_scanner_promotion_events(target_date: str, *, scale_in_projection=None) -> dict[str, list[dict[str, Any]]]:
     path = _PIPELINE_EVENTS_DIR / f"pipeline_events_{target_date}.jsonl"
     by_code: dict[str, list[dict[str, Any]]] = defaultdict(list)
     if not path.exists():
@@ -242,6 +242,11 @@ def _load_scanner_promotion_events(target_date: str) -> dict[str, list[dict[str,
                 event = json.loads(line)
             except Exception:
                 continue
+            if scale_in_projection is not None:
+                from src.engine.scalping.scale_in_split_order_plan import _project_relevant_input_event, _record_id, _event_time
+                projected = _project_relevant_input_event(event, source_name="pipeline_events", event_date=target_date)
+                if projected is not None and _event_time(projected) is not None and _event_time(projected).date().isoformat() == target_date and _record_id(projected) in scale_in_projection["record_ids"]:
+                    scale_in_projection["rows"].append(projected)
             if event.get("stage") not in _SCANNER_PROMOTION_STAGES:
                 continue
             fields = (
@@ -314,8 +319,9 @@ def _select_scanner_event_for_trade(
 def _enrich_scanner_provenance(
     facts: list[dict[str, Any]],
     target_date: str,
+    *, scale_in_projection=None,
 ) -> list[dict[str, Any]]:
-    events_by_code = _load_scanner_promotion_events(target_date)
+    events_by_code = (_load_scanner_promotion_events(target_date) if scale_in_projection is None else _load_scanner_promotion_events(target_date, scale_in_projection=scale_in_projection))
     enriched: list[dict[str, Any]] = []
     for fact in facts:
         row = dict(fact)
@@ -354,7 +360,7 @@ def _enrich_scanner_provenance(
     return enriched
 
 
-def _build_trade_fact_rows(target_date: str) -> tuple[list[dict[str, Any]], list[str]]:
+def _build_trade_fact_rows(target_date: str, *, scale_in_projection=None) -> tuple[list[dict[str, Any]], list[str]]:
     report = build_trade_review_report(
         target_date=target_date,
         since_time=None,
@@ -428,7 +434,7 @@ def _build_trade_fact_rows(target_date: str) -> tuple[list[dict[str, Any]], list
                 ),
             }
         )
-    return _enrich_scanner_provenance(facts, target_date), warnings
+    return _enrich_scanner_provenance(facts, target_date, scale_in_projection=scale_in_projection), warnings
 
 
 def _aggregate_daily_rows(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -974,7 +980,12 @@ def _sync_status_payload(
 
 def sync_trade_performance_for_date(target_date: str) -> dict[str, Any]:
     _DB.init_db()
-    facts, warnings = _build_trade_fact_rows(target_date)
+    from src.engine.scalping.scale_in_split_order_plan import _query_actual_fill_inventory
+    inventory = _query_actual_fill_inventory(target_date)
+    projection = {"contract": "scale_in_execution_projection_v1", "target_date": target_date,
+                  "record_ids": sorted({row["record_id"] for row in inventory}), "rows": []}
+    facts, warnings = (_build_trade_fact_rows(target_date, scale_in_projection=projection)
+                       if inventory else _build_trade_fact_rows(target_date))
     rec_date = _parse_date(target_date)
 
     with _DB.get_session() as session:
@@ -1035,14 +1046,14 @@ def sync_trade_performance_for_date(target_date: str) -> dict[str, Any]:
     _DB.analyze_performance_tables()
     receipt = _write_status(
         target_date,
-        _sync_status_payload(
+        {"scale_in_execution_projection": projection, **_sync_status_payload(
             status=sync_status,
             facts=facts,
             warnings=warnings,
             issues=[],
             prior_fact_count=prior_fact_count,
             source_digest=source_digest,
-        ),
+        )},
     )
 
     return {

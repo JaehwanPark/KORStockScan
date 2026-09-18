@@ -404,6 +404,8 @@ def test_source_warning_preserves_prior_generation_and_writes_blocked_receipt(
     monkeypatch, tmp_path
 ):
     executed = []
+    from src.engine.scalping import scale_in_split_order_plan
+    monkeypatch.setattr(scale_in_split_order_plan, "_query_actual_fill_inventory", lambda _: [])
 
     class _Query:
         def filter(self, *_args):
@@ -467,3 +469,16 @@ def test_fact_sync_receipt_has_a_verifiable_generation_hash(monkeypatch, tmp_pat
 
     assert actual_hash == receipt["artifact_sha256"]
     assert actual_hash == report_mod._canonical_sha256(persisted)
+
+
+def test_existing_scanner_scan_projects_only_filled_ids_and_exact_date(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "_PIPELINE_EVENTS_DIR", tmp_path)
+    day = "2026-09-17"
+    rows = [{"stage": "scale_in_order_submitted", "emitted_at": stamp, "stock_code": "000001",
+             "strategy": "SCALPING", "fields": {"record_id": record, "add_type": "AVG_DOWN", "order_no": "BUY1", "request_qty": 4}}
+            for record, stamp in [("1", f"{day}T10:00:00+09:00"), ("2", f"{day}T10:00:00+09:00"), ("1", "2026-09-16T10:00:00+09:00")]]
+    (tmp_path / f"pipeline_events_{day}.jsonl").write_text("\n".join(map(json.dumps, rows)))
+    projection = {"record_ids": {"1"}, "rows": []}
+    report_mod._load_scanner_promotion_events(day, scale_in_projection=projection)
+    assert len(projection["rows"]) == 1
+    assert projection["rows"][0]["record_id"] == "1"

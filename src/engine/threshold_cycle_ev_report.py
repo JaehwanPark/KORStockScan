@@ -2027,8 +2027,9 @@ def _entry_split_order_plan_summary(
         {
             "available": True,
             "artifact": str(json_path),
+            "evaluation_state": payload.get("evaluation_state"),
             "status": (
-                "source_quality_blocked"
+                (payload.get("evaluation_state") or {}).get("status") or "source_quality_blocked"
                 if source_quality.get("tuning_input_allowed") is False
                 else "pass"
             ),
@@ -2165,16 +2166,17 @@ def _scale_in_split_order_plan_summary(
     warnings: list[str] = []
     if source_quality.get("tuning_input_allowed") is False:
         warnings.append("scale_in_split_order_plan_source_quality_blocked")
-    if payload.get("schema_version") != "scale_in_split_order_plan_v3":
+    if payload.get("schema_version") != "scale_in_split_order_plan_v4":
         warnings.append("scale_in_split_order_plan_schema_mismatch")
     return (
         {
             "available": True,
             "artifact": str(json_path),
+            "evaluation_state": payload.get("evaluation_state"),
             "status": (
                 "source_quality_blocked"
                 if source_quality.get("tuning_input_allowed") is False
-                else "pass"
+                else (payload.get("evaluation_state") or {}).get("status", "pass")
             ),
             "schema_version": payload.get("schema_version"),
             "candidate_grid_count": len(candidate_grid),

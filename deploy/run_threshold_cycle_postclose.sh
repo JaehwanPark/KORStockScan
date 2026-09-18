@@ -1681,18 +1681,6 @@ if [ "$RUN_MARKET_PANIC_BREADTH_REPORT" = "true" ] || [ "$RUN_MARKET_PANIC_BREAD
     "$PROJECT_DIR/data/report/market_panic_breadth/market_panic_breadth_${TARGET_DATE}.json" \
     "market_panic_breadth_postclose"
 fi
-if [ "$RUN_SCALE_IN_SPLIT_ORDER_PLAN" = "true" ] || [ "$RUN_SCALE_IN_SPLIT_ORDER_PLAN" = "1" ]; then
-  wait_for_postclose_resources "scale_in_split_order_plan"
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.scale_in_split_order_plan \
-    --date "$TARGET_DATE"
-  wait_for_report_artifact \
-    "$PROJECT_DIR/data/report/scale_in_split_order_plan/scale_in_split_order_plan_${TARGET_DATE}.json" \
-    "$PROJECT_DIR/data/report/scale_in_split_order_plan/scale_in_split_order_plan_${TARGET_DATE}.md" \
-    "scale_in_split_order_plan"
-  wait_for_json_artifact \
-    "$PROJECT_DIR/data/threshold_cycle/scale_in_split_order_policy/scale_in_split_order_policy_${TARGET_DATE}.json" \
-    "scale_in_split_order_policy"
-fi
 
 report_args=(--date "$TARGET_DATE")
 if [ "$SKIP_DB" = "true" ]; then
@@ -1721,6 +1709,17 @@ if [ "$SKIP_DB" != "true" ]; then
   fi
 else
   echo "[threshold-cycle] skip exact trade fact sync target_date=$TARGET_DATE reason=skip_db"
+fi
+
+if [ "$RUN_SCALE_IN_SPLIT_ORDER_PLAN" = "true" ] || [ "$RUN_SCALE_IN_SPLIT_ORDER_PLAN" = "1" ]; then
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.scale_in_split_order_plan \
+    --date "$TARGET_DATE"
+  wait_for_json_artifact \
+    "$PROJECT_DIR/data/report/scale_in_split_order_plan/scale_in_split_order_plan_${TARGET_DATE}.json" \
+    "scale_in_split_order_plan"
+  wait_for_json_artifact \
+    "$PROJECT_DIR/data/threshold_cycle/scale_in_split_order_policy/scale_in_split_order_policy_${TARGET_DATE}.json" \
+    "scale_in_split_order_policy"
 fi
 
 
