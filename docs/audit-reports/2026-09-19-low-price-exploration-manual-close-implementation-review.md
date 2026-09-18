@@ -34,8 +34,18 @@ Self review→수정→재리뷰→회귀 검증을 닫았다. 영향 범위671P
 
 Native bounded regeneration은 broker API/추가 시장조회 없이 기존 캐시만 사용했다. 전량 raw/expanded204종목·1020profile 재실행0, Main/거래 서비스 start/restart/조기 PREOPEN/주문0이다. 입력 전 report/candidate/journal 원본과 SHA를 보존하고 active writer/이미 소비된 candidate를 확인했다.
 
-Daily→EV→runtime→tower→canonical checklist→strict `require-summary-handoff`→summary-only controller가 현재 research/promotion generation을 소비하도록 갱신했다. Whole strict의 외부18issue(기존 expanded/AI/entry policy/predecessor/strategy scope 등)와 controller blocked 상태는 유지하며 family 검증으로 whole DONE을 부여하지 않는다. Exact 최종 issue/consumer/PREOPEN 준비 및 selected immutable source는 아래 receipt를 따른다.
+Daily→EV→runtime→tower→canonical checklist→strict `require-summary-handoff`→summary-only controller가 현재 research/promotion generation을 소비하도록 갱신했다. 초기 whole strict의 외부18issue(기존 expanded/AI/entry policy/predecessor/strategy scope 등)와 controller blocked 상태는 유지하며 family 검증으로 whole DONE을 부여하지 않는다. Exact 최종 issue/consumer/PREOPEN 준비 및 selected immutable source는 아래 receipt를 따른다.
 
 증거: `tmp/low-price-exploration-manual-close-20260919/inputs-before.json`, `economic-evidence.json`, `handoff.json`, `prepared-policy-evidence.json`, `strict-release-final.json`, `controller-release-final.json`, `deployment.json`. 미래 source root는 `/home/ubuntu/KORStockScan-runtime-releases/low-price-exploration-manual-close-reviewed-20260919`다. Remote main/task branch push 및 selector/live·preflight template pin을 같은 clean source로 맞춘다. Actual PID 소비는 false이고 자연 확인은9/21 기존 owner에 남긴다.
 
 복구/대기 경계: 실제 표본 미달은 추가 valid fill로 해소될 수 있다. 과거 closing/capture/BBO/capital 결손은 달력 경과로 회복되지 않는다. 새 native 관측은 기존 producer로 축적하되 과거를 대체하지 않는다. 이번 범위는 구조 수리와 가능한 경제 진단·보존 정책/자동 소비 준비를 종결했으며 실제 EV·일별 순익 동시 개선은 확인되지 않았다.
+
+## 최종 배포 및 native 인계 확인
+
+Source `988baa142c9338bad9085f56f257b3422392b3b2`를 remote main/task branch에 atomic push했고 위 immutable root에 선택했다. 기존 선택 삼성 source03810263a 및 최신main 변경을 모두 보존했다. Router source-clean/HEAD/shared-path 검증과 live/preflight 최종 source pin/WorkingDirectory/ExecStart 일치 PASS; 확인 unit PID0/NRestarts0이며 restart0이다. 배포는 미래 호출용이다.
+
+최종 strict는 **15외부 issue FAIL**이며 actual v4·Daily/EV/runtime handoff, tower/checklist generation mismatch 및 drought receipt mismatch는0이다. Whole FAIL은 AI correction/calibration, 기존 expanded/entry policy/closed loop, predecessor/fail marker, OFF swing 원천이다. Controller의 실제 summary-only 시도는 blocked 상태로 보존했고 마지막 current strict15 intake는 추가 recovery 없이 dry-run read-only로 수행했다(`controller-executed-before-final-intake.json`, `controller-release-final.json`). 최종 intake도 `summary_handoff_only_requires_upstream_repair`이고 actions0이다. 이를 전체 DONE으로 해석하지 않는다.
+
+Native current actual epoch census는 fill34profile/source-valid completed33profile이다(`actual-input-census.json`). 이 분모와 bounded 연구2profile/3대안·actual floor+flat2profile·최종 promotion0은 다른 단계다. Report artifact hash `0dddc7b16fa1608665bbbc285d8ef998303babce31d0f0a4de4b0737b4155116`, source/publication/effective9/17·9/19·9/21, policy mutation0·loader58ready/3quarantine. Journal byte SHA는 입력 전과 동일하다.
+
+Print-only parser는 canonical에서도 현재 OPEN stable owner1개이며 link validation PASS다. Project/Calendar sync는 실행하지 않았다. LP-B 구현·수리·가용 경제 진단·후행 소비·검증 보존 정책 준비는 닫았다. Receipt 없는8/18 역사 청산과 native durable/BBO/capital, 자연 PREOPEN/PID/적용-version 실제 EV 개선은 정확한 원천 또는 향후 자연 증거가 필요한 Acceptance로 유지한다.
