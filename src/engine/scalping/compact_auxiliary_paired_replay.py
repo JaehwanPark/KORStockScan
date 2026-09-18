@@ -27,7 +27,7 @@ AUTHORITY = dict(
     broker_order_forbidden=True,
 )
 CONTRACT = {
-    "schema": "compact_auxiliary_paired_promotion_v5",
+    "schema": "compact_auxiliary_paired_promotion_v6",
     "learning_episode_floor": 20,
     "holdout_episode_floor": 20,
     "holdout_source_day_floor": 2,
@@ -488,6 +488,10 @@ def input_identity(row):
 def evaluate(rows, results):
     """Cost/stop path CF is a percentage diagnostic, not portfolio realized PnL."""
     pairs, exclusions, transitions = [], Counter(), Counter()
+    scope_exclusions = defaultdict(Counter)
+    def exclude(row, reason):
+        exclusions[reason] += 1
+        scope_exclusions["|".join((row["effective_venue"], row["session_bucket"]))][reason] += 1
     for row in rows:
         key = row["evaluation_key"]
         reason = row.get("exclusion_reason")
@@ -517,20 +521,20 @@ def evaluate(rows, results):
         ):
             reason = "terminal_net_missing"
         if reason:
-            exclusions[reason] += 1
+            exclude(row, reason)
             continue
         candidate = response.get("risk_verdict")
         incumbent = row.get("incumbent_verdict")
         if candidate not in {"PASS", "VETO", "CAUTION"}:
-            exclusions["routing_semantics_missing"] += 1
+            exclude(row, "routing_semantics_missing")
             continue
         if "CAUTION" in (incumbent, candidate):
-            exclusions["caution_followup_terminal_missing"] += 1
+            exclude(row, "caution_followup_terminal_missing")
             continue
         net = arm.get("net_return_pct") if owner_valid else terminal - cost
         stress_net = arm.get("stress_net_return_pct") if owner_valid else net - cost
         if not finite(net) or not finite(stress_net):
-            exclusions["terminal_net_missing"] += 1
+            exclude(row, "terminal_net_missing")
             continue
         old, new = (
             (net if incumbent == "PASS" else 0.0),
@@ -572,6 +576,17 @@ def evaluate(rows, results):
     source_excluded = sum(bool(r.get("exclusion_reason")) for r in rows)
     eligible = len(rows) - source_excluded
     portfolio = portfolio_metrics(pairs)
+    scope_coverage = {}
+    paired_groups = _scope_groups(pairs)
+    for scope, population in _scope_groups(rows).items():
+        comparable = len(paired_groups.get(scope, []))
+        source_count = sum(bool(r.get("exclusion_reason")) for r in population)
+        eligible_count = len(population) - source_count
+        scope_coverage[scope] = dict(screened_total=len(population), paired_comparable_count=comparable,
+            source_excluded_count=source_count, economic_eligible_count=eligible_count,
+            response_coverage=comparable / eligible_count if eligible_count else None,
+            denominator_preserved=comparable + sum(scope_exclusions[scope].values()) == len(population),
+            exclusion_counts=dict(scope_exclusions[scope]))
     return {
         "screened_total": len(rows),
         "paired_comparable_count": n,
@@ -596,6 +611,7 @@ def evaluate(rows, results):
         "sample_floor": CONTRACT,
         "primary_decision_metric": "equal_weight_avg_profit_pct",
         "source_quality_gate": "exact_natural_compact_input_full_cost_terminal",
+        "scope_coverage": scope_coverage,
         "forbidden_uses": [
             "actual_pnl",
             "standalone_prompt_promotion",
@@ -603,6 +619,66 @@ def evaluate(rows, results):
         ],
         "pairs": pairs,
     }
+
+
+def _scope_groups(rows):
+    groups = defaultdict(list)
+    for row in rows:
+        groups["|".join((str(row.get("effective_venue")), str(row.get("session_bucket"))))].append(row)
+    return groups
+
+
+def scope_candidate_validation(pairs, rows, metrics, plan, *, candidate, now):
+    """Freeze each policy scope only after every observed route can learn.
+
+    Earlier scopes never move their cutoff. A later scope may collect its own
+    learning population, but may not use that population as its holdout.
+    """
+    from src.engine.scalping.strategy_owner_replay import entry_operating_route_supported
+    previous = plan.get("scope_candidates") or {}
+    frozen = dict(previous)
+    validations = {}
+    for scope, population in _scope_groups(rows).items():
+        versions = {r.get("incumbent_prompt_version") for r in population}
+        incumbent = next(iter(versions)) if len(versions) == 1 else None
+        exact = [p for p in _scope_groups(pairs).get(scope, [])
+                 if p.get("incumbent_prompt_version") == incumbent]
+        state = frozen.get(scope) or {}
+        if state and state.get("incumbent_prompt_version") != incumbent:
+            # A changed incumbent is a new comparison; old evidence cannot
+            # silently authorize it or reset already claimed holdout keys.
+            exact = []
+        routes = defaultdict(set)
+        for pair in exact:
+            if entry_operating_route_supported(pair["effective_venue"], pair["session_bucket"], pair["broker_route"]):
+                routes[pair["broker_route"]].add((pair["source_date"], pair["scanner_promotion_id"]))
+        if not state and incumbent and incumbent != candidate and routes and all(
+                len(keys) >= CONTRACT["learning_episode_floor"] for keys in routes.values()):
+            state = {"candidate_frozen_at": now.isoformat(), "incumbent_prompt_version": incumbent,
+                     "learning_manifest_sha256": digest(exact)}
+            frozen[scope] = state
+        cutoff = state.get("candidate_frozen_at")
+        cutoff_day = cutoff[:10] if cutoff else now.date().isoformat()
+        validations[scope] = {
+            "incumbent_prompt_version": incumbent,
+            "candidate_frozen_at": cutoff,
+            "coverage": metrics.get("scope_coverage", {}).get(scope, {}),
+            "chronological_validation": {"candidate_frozen_at": cutoff,
+                "learning_pairs": [p for p in exact if p["source_date"] <= cutoff_day],
+                "holdout_pairs": [p for p in exact if p["source_date"] > cutoff_day] if cutoff else [],
+                "holdout_consumed": False},
+        }
+    return validations, frozen
+
+
+def _comparison_signatures(parent, day, candidate):
+    paths = [parent / f"compact_candidate_plan_{candidate}.json"]
+    for path in parent.glob("compact_auxiliary_paired_economic_*.json"):
+        source_day = path.stem.removeprefix("compact_auxiliary_paired_economic_")
+        if len(source_day) == 10 and "2026-06-05" <= source_day < day:
+            paths.append(path)
+    return {str(path): [path.stat().st_size, path.stat().st_mtime_ns] if path.exists() else None
+            for path in sorted(paths)}
 
 
 def portfolio_metrics(pairs):
@@ -655,11 +731,12 @@ def portfolio_metrics(pairs):
 
 def promotion_valid(report, *, incumbent, selected, source_manifest_sha256, effective_date=None, scope=("KRX", "KRX_REGULAR")):
     """A percentage path alone cannot prove executable daily net-profit uplift."""
+    scoped = (report.get("scope_validation") or {}).get("|".join(scope))
     if (
         not valid(report)
         or report.get("schema") != SCHEMA
         or report.get("candidate_prompt_version") != selected
-        or report.get("incumbent_prompt_version") != incumbent
+        or (scoped or report).get("incumbent_prompt_version") != incumbent
         or selected == incumbent
         or report.get("source_manifest_sha256") != source_manifest_sha256
         or report.get("promotion_contract_sha256") != digest(CONTRACT)
@@ -684,8 +761,8 @@ def promotion_valid(report, *, incumbent, selected, source_manifest_sha256, effe
             or model.get("status") != "validated_scope"
             or model.get("allowed_runtime_apply") is not True):
         return False
-    proof = report.get("chronological_validation") or {}
-    if proof.get("candidate_frozen_at") != report.get("candidate_frozen_at"):
+    proof = (scoped or report).get("chronological_validation") or {}
+    if proof.get("candidate_frozen_at") != (scoped or report).get("candidate_frozen_at"):
         return False
     learning, holdout = (
         proof.get("learning_pairs") or [],
@@ -693,7 +770,7 @@ def promotion_valid(report, *, incumbent, selected, source_manifest_sha256, effe
     )
     try:
         frozen_day = (
-            datetime.fromisoformat(report["candidate_frozen_at"])
+            datetime.fromisoformat((scoped or report)["candidate_frozen_at"])
             .astimezone(KST)
             .date()
             .isoformat()
@@ -751,7 +828,11 @@ def promotion_valid(report, *, incumbent, selected, source_manifest_sha256, effe
                 p.get("broker_route"),
             )
             cohorts[cohort][i].append(p)
-    if not cohorts or report.get("metrics", {}).get("response_coverage") != 1.0:
+    coverage = scoped.get("coverage", {}) if scoped is not None else report.get("metrics", {})
+    if (not cohorts or coverage.get("response_coverage") != CONTRACT["minimum_response_coverage"]
+        or (scoped is not None and (coverage.get("denominator_preserved") is not True
+            or coverage.get("paired_comparable_count") != len(learning) + len(holdout)
+            or coverage.get("economic_eligible_count") != len(learning) + len(holdout)))):
         return False
     from src.engine.scalping.entry_setup_evidence import mechanistic_scope_supported
     from src.engine.scalping.strategy_owner_replay import entry_operating_route_supported
@@ -807,7 +888,11 @@ def consume_holdout(proof, data_root, *, scopes=None):
         raise ValueError("compact_holdout_consumption_hash_invalid")
     claims = previous.get("claims", {})
     identity = proof["artifact_content_sha256"]
-    for pair in proof["chronological_validation"]["holdout_pairs"]:
+    scoped = proof.get("scope_validation")
+    held = ([p for key, value in scoped.items() if scopes is None or key in scopes
+             for p in value["chronological_validation"]["holdout_pairs"]]
+            if scoped is not None else proof["chronological_validation"]["holdout_pairs"])
+    for pair in held:
         if scopes is not None and "|".join((pair["effective_venue"], pair["session_bucket"])) not in scopes:
             continue
         key = pair["evaluation_key"]
@@ -865,12 +950,57 @@ def primary_input_blocker(row, model):
 
 def candidate_zero_disposition(rows, blockers, report):
     counts = dict(Counter(value[0] for value in blockers.values()))
+    scope_dispositions = {}
+    for scope, proof in (report.get("scope_validation") or {}).items():
+        chronology = proof["chronological_validation"]
+        local_counts = Counter(blockers[r["evaluation_key"]][0] for r in _scope_groups(rows).get(scope, [])
+                               if r["evaluation_key"] in blockers)
+        train, held = chronology["learning_pairs"], chronology["holdout_pairs"]
+        by_route = defaultdict(lambda: [[], []])
+        for i, half in enumerate((train, held)):
+            for pair in half:
+                by_route[pair["broker_route"]][i].append(pair)
+        coverage = proof["coverage"]
+        complete = bool(by_route) and all(
+            len({(p["source_date"], p["scanner_promotion_id"]) for p in learn}) >= CONTRACT["learning_episode_floor"]
+            and len({(p["source_date"], p["scanner_promotion_id"]) for p in test}) >= CONTRACT["holdout_episode_floor"]
+            and len({p["source_date"] for p in test}) >= CONTRACT["holdout_source_day_floor"]
+            for learn, test in by_route.values())
+        if scope in report.get("promotion_scopes", []):
+            disposition = "candidate_selected"
+        elif local_counts:
+            disposition = next(k for k in ("source_gap", "unsupported_scope", "pending", "insufficient_sample") if local_counts.get(k))
+        elif coverage.get("economic_eligible_count", 0) > coverage.get("paired_comparable_count", 0):
+            disposition = "pending"
+        elif not complete or not proof.get("candidate_frozen_at"):
+            disposition = "insufficient_sample"
+        elif (coverage.get("denominator_preserved") is not True
+              or len({p["evaluation_key"] for p in train + held}) != len(train) + len(held)
+              or any(p["source_date"] > proof["candidate_frozen_at"][:10] for p in train)
+              or any(p["source_date"] <= proof["candidate_frozen_at"][:10] for p in held)
+              or chronology.get("holdout_consumed") is not False):
+            disposition = "source_gap"
+        else:
+            economics = [operating_comparison_metrics(half, report["owner_execution_model_validation"])
+                         for halves in by_route.values() for half in halves]
+            disposition = ("valid_no_edge" if all(e.get("status") == "supported_operating_comparison" for e in economics)
+                           and any(e["robust_paired_delta_ev_lower_bound_pct"] <= 0
+                                   or e["candidate"]["worst"] < e["incumbent"]["worst"]
+                                   or e["candidate"]["es10"] < e["incumbent"]["es10"] for e in economics)
+                           else "source_gap")
+        scope_dispositions[scope] = {"status": disposition, "primary_input_disposition_counts": dict(local_counts),
+            "coverage": coverage, "valid_no_edge": disposition == "valid_no_edge",
+            "owner": "existing_main_execution_and_empirical_model_owners",
+            "closure_test": "exact_scope_complete_population_prior_validated_model_and_independent_candidate_holdout"}
     if report.get("promotion_pass"):
         status = "candidate_selected"
     elif counts:
         status = next(k for k in ("source_gap","unsupported_scope","pending","insufficient_sample") if counts.get(k))
     elif report["metrics"]["paired_comparable_count"] < len(rows):
         status = "pending"
+    elif scope_dispositions:
+        states = {s["status"] for s in scope_dispositions.values()}
+        status = next(k for k in ("source_gap", "unsupported_scope", "pending", "insufficient_sample", "valid_no_edge") if k in states)
     else:
         proof = report.get("chronological_validation") or {}
         learning, held = proof.get("learning_pairs") or [], proof.get("holdout_pairs") or []
@@ -888,7 +1018,7 @@ def candidate_zero_disposition(rows, blockers, report):
         status = ("valid_no_edge" if complete and chronology and comparison.get("status") == "supported_operating_comparison"
             and comparison.get("robust_paired_delta_ev_lower_bound_pct") is not None
             and comparison["robust_paired_delta_ev_lower_bound_pct"] <= 0 else "source_gap" if complete and not chronology else "insufficient_sample")
-    return dict(status=status, primary_input_disposition_counts=counts,
+    return dict(status=status, primary_input_disposition_counts=counts, scope_dispositions=scope_dispositions,
         blockers=[dict(evaluation_key=key,disposition=value[0],blocker=value[1],
                        owner="existing_main_execution_and_empirical_model_owners",
                        closure_test="lossless_pre_ai_producer_full_operating_arm_prior_model_holdout_and_independent_candidate_holdout")
@@ -1049,6 +1179,7 @@ def run(
         if (valid(previous)
                 and previous.get("promotion_contract_sha256") == digest(CONTRACT)
                 and previous.get("source_projection_sha256") == projection["artifact_content_sha256"]
+                and previous.get("comparison_dependency_signatures") == _comparison_signatures(path.parent, day, candidate)
                 and (previous.get("status") in {"valid_empty", "comparison_complete", "incumbent_preserved"}
                      or previous.get("metrics", {}).get("economic_eligible_count") == 0)):
             return previous
@@ -1241,10 +1372,8 @@ def run(
             else "execution_deferred"
         )
         plan_path = path.parent / f"compact_candidate_plan_{candidate}.json"
-        plan = read(plan_path)
-        if plan and not valid(plan):
-            raise ValueError("candidate_plan_hash_invalid")
         history = []
+        coverage_history = []
         for old_path in sorted(
             path.parent.glob("compact_auxiliary_paired_economic_*.json")
         ):
@@ -1254,32 +1383,52 @@ def run(
                 and old.get("schema") == SCHEMA
                 and old.get("target_date", "") < day
                 and old.get("candidate_prompt_version") == candidate
-                and old.get("incumbent_prompt_version") in versions
                 and old.get("promotion_contract_sha256") == digest(CONTRACT)
             ):
                 history.extend(old.get("metrics", {}).get("pairs", []))
+                coverage_history.append(old)
         all_pairs = history + metrics["pairs"]
-        frozen_at = plan.get("candidate_frozen_at")
-        learning_by_scope = defaultdict(set)
-        from src.engine.scalping.strategy_owner_replay import entry_operating_route_supported
-        for pair in all_pairs:
-            cohort = (pair["effective_venue"], pair["session_bucket"], pair["broker_route"])
-            if entry_operating_route_supported(*cohort):
-                learning_by_scope[cohort].add((pair["source_date"], pair["scanner_promotion_id"]))
-        if not frozen_at and any(len(keys) >= CONTRACT["learning_episode_floor"] for keys in learning_by_scope.values()):
-            frozen_at = datetime.now(KST).isoformat()
-            write(
-                plan_path,
-                sealed(
-                    {
-                        "candidate_prompt_version": candidate,
-                        "candidate_frozen_at": frozen_at,
-                        "learning_manifest_sha256": digest(all_pairs),
-                        **AUTHORITY,
-                    }
-                ),
-            )
-        frozen_day = frozen_at[:10] if frozen_at else day
+        population = [
+            {**row, "exclusion_reason": row.get("exclusion_reason") or primary_blockers.get(row["evaluation_key"], (None, None))[1]}
+            for row in projection["rows"]]
+        # Count every eligible earlier request, including unanswered requests;
+        # successful pairs alone cannot establish chronological coverage.
+        cumulative_coverage = {}
+        for scope, group in _scope_groups(population).items():
+            versions_in_scope = {r.get("incumbent_prompt_version") for r in group}
+            incumbent = next(iter(versions_in_scope)) if len(versions_in_scope) == 1 else None
+            receipts = [metrics["scope_coverage"][scope]]
+            for old in coverage_history:
+                old_scope = (old.get("scope_validation") or {}).get(scope, old)
+                if old_scope.get("incumbent_prompt_version") == incumbent:
+                    receipt = (old.get("metrics", {}).get("scope_coverage") or {}).get(scope)
+                    if receipt:
+                        receipts.append(receipt)
+            totals = {k: sum(r.get(k, 0) for r in receipts) for k in
+                      ("screened_total", "paired_comparable_count", "source_excluded_count", "economic_eligible_count")}
+            totals["denominator_preserved"] = all(r.get("denominator_preserved") is True for r in receipts)
+            totals["response_coverage"] = (totals["paired_comparable_count"] / totals["economic_eligible_count"]
+                                           if totals["economic_eligible_count"] else None)
+            cumulative_coverage[scope] = totals
+        with plan_path.with_suffix(".lock").open("a") as candidate_lock:
+            fcntl.flock(candidate_lock, fcntl.LOCK_EX)
+            plan = read(plan_path)
+            if plan and (not valid(plan) or plan.get("candidate_prompt_version") != candidate):
+                raise ValueError("candidate_plan_hash_invalid")
+            if plan.get("scope_candidates") and plan.get("promotion_contract_sha256") != digest(CONTRACT):
+                raise ValueError("candidate_plan_contract_mismatch")
+            scope_validation, scope_candidates = scope_candidate_validation(
+                all_pairs, population, {"scope_coverage": cumulative_coverage}, plan,
+                candidate=candidate, now=datetime.now(KST))
+            if scope_candidates != (plan.get("scope_candidates") or {}):
+                write(plan_path, sealed({"candidate_prompt_version": candidate,
+                    "scope_candidates": scope_candidates, "promotion_contract_sha256": digest(CONTRACT), **AUTHORITY}))
+        frozen_at = min((v["candidate_frozen_at"] for v in scope_validation.values()
+                         if v["candidate_frozen_at"]), default=None)
+        chronology = {"candidate_frozen_at": frozen_at,
+            "learning_pairs": [p for v in scope_validation.values() for p in v["chronological_validation"]["learning_pairs"]],
+            "holdout_pairs": [p for v in scope_validation.values() for p in v["chronological_validation"]["holdout_pairs"]],
+            "holdout_consumed": False}
         report = sealed(
             {
                 "schema": SCHEMA,
@@ -1312,16 +1461,9 @@ def run(
                 "runtime_inference_cost_delta_krw": cost_receipt["delta_krw"],
                 "runtime_inference_cost_status": cost_receipt["status"],
                 "runtime_inference_cost_receipt": cost_receipt,
-                "chronological_validation": {
-                    "candidate_frozen_at": frozen_at,
-                    "learning_pairs": [
-                        p for p in all_pairs if p["source_date"] <= frozen_day
-                    ],
-                    "holdout_pairs": [
-                        p for p in all_pairs if p["source_date"] > frozen_day
-                    ],
-                    "holdout_consumed": False,
-                },
+                "chronological_validation": chronology,
+                "scope_validation": scope_validation,
+                "comparison_dependency_signatures": _comparison_signatures(path.parent, day, candidate),
                 "next_owner": "existing_main_owner_execution_cf_and_portfolio_replay",
                 "closure_test": "full_cost_stop_owner_plan_portfolio_and_forward_holdout_receipts",
                 **AUTHORITY,
@@ -1329,7 +1471,7 @@ def run(
         )
         from src.engine.scalping.entry_setup_scalping_rollout import AUTO_PROMOTION_SCOPES
         report["promotion_scopes"] = [scope for scope in AUTO_PROMOTION_SCOPES if promotion_valid(
-            report, incumbent=report["incumbent_prompt_version"], selected=candidate,
+            report, incumbent=(scope_validation.get(scope) or {}).get("incumbent_prompt_version"), selected=candidate,
             source_manifest_sha256=report["source_manifest_sha256"], scope=tuple(scope.split("|")))]
         report["promotion_pass"] = bool(report["promotion_scopes"])
         report["candidate_improvement_proven"] = report["promotion_pass"]

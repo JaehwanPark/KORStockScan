@@ -865,6 +865,9 @@ def main(argv: list[str] | None = None) -> int:
         summary = {k:v for k,v in report.items() if k not in {"results", "chronological_validation", "strict_family_verification"}}
         if "metrics" in summary:
             summary["metrics"] = {k:v for k,v in summary["metrics"].items() if k != "pairs"}
+        if "scope_validation" in summary:
+            summary["scope_validation"] = {scope: {k:v for k,v in proof.items() if k != "chronological_validation"}
+                                           for scope, proof in summary["scope_validation"].items()}
         print(json.dumps(summary, ensure_ascii=False))
         return 1 if execution_failed else 0
     if args.execute_compact_candidate or args.finalize_compact or args.publication_date or args.compact_candidate_version:

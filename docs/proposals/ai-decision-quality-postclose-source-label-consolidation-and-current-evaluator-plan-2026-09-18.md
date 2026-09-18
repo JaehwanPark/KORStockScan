@@ -226,3 +226,12 @@ ADQ6 결과 closure는 승인된 bounded regeneration의 exact date/generation/�
 기존 자연 수집 설정 확인: canonical `data/threshold_cycle/runtime_env/operator_runtime_overrides.env`에 `SCALP_MICRO_REVERSION_OBSERVER_ENABLED=true`, `SCALP_MICRO_REVERSION_PATH_CAPTURE_ENABLED=true`, `SCALP_MICRO_REVERSION_DEPTH_CAPTURE_ENABLED=true`가 이미 승인·보존되어 있다. 기존 `src/run_bot.sh`의 정규 runtime handoff가 이 persistent override를 source한다. 별도 활성화/env 수정은 필요하지 않다. 다음 정규 기동에서 이 계약의 실제 PID 소비·등록 item/scope·정확 attempt별 native 기록을 확인하는 것이 자연 acceptance이며 default OFF라는 이유로 미래 생성 계약을 미정의로 보고하지 않는다.
 
 실제 세션 시각 회귀의 추가 원천 수리: 프리마켓/애프터마켓 holding route가 사용하는 기존 `_holding_sell_nxt_enabled_status`의 NXT listing 여부·owner·종목·frozen clock를 당시 initial policy state와 함께 기록한다. Replay는 동일 sealed receipt를 검증하여 사후 운영 DB를 조회하지 않는다. SOR/시세/실제 타 경로 SELL로 NXT 여부를 만들지 않으며 미확인 값은 null로 보존한다.
+
+
+### 8.4 범위별 경제성 비교·후행 증거 재리뷰
+
+정상 SOR 원천 수리 이후에도 전역 응답 coverage·전역 incumbent·전역 후보 동결 시점이 독립 시장/세션의 검증을 막는 구현 결함을 추가 수리한다. 기존 compact evaluator/후보 계획 안에 등록 policy scope별 incumbent·모집단/제외·learning/holdout·동결 시점을 결속한다. 먼저 동결된 scope의 cutoff는 움직이지 않으며 늦게 유입되는 scope는 자체 learning floor를 채운 뒤 별도 forward holdout을 받는다. 동일 scope의 SOR/direct route별 표본을 합산해 floor를 충족시키지 않는다.
+
+Coverage는 현재와 이전 날짜의 같은 incumbent/scope에 속한 모든 적격 요청을 포함한다. 앞선 미응답/CAUTION followup 결손을 성공 pair만으로 지워 승격하지 않는다. 작은 dated 결과/후보 계획의 size/mtime dependency를 cache에 결속해 기존 resumable producer의 정상 복구가 후행 경제성/선정에 반영되게 한다. raw 재스캔/새 producer는 없다. 계약 revision은 v6이며 v5 승격 증거를 재사용하지 않는다. 후보0 disposition은 scope별로도 제공한다. 기존20 learning·20 holdout·2 held dates·완전 coverage·선행 실측 모델·비용/자본·tail·error/stress·정책 guard는 그대로다.
+
+검증: 운영 pre-AI producer 회귀를 포함한 영향 suite, 다른 scope 결손/다른 incumbent에서의 독립 승격/dated 소비, 늦은 scope 학습/동결 및 route pooling 차단, 실제 public batch의 과거 미응답 분모 보존→제한 재개→후행 cache 갱신→선정. 모두 통제 입력이며 자연 이익이 아니다. 현재9/21 incumbent carry는 보존하고 과거21 재탐색·봇 재시작·주문·조기 PREOPEN은 수행하지 않는다. 결과/배포 증거는 기존 owning review와 `tmp/ai-quality-source-attainability-20260918/scope-economic-final-review.json`이 소유한다.

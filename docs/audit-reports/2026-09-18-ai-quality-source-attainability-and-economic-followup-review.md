@@ -58,3 +58,19 @@ Provider 비용은 기존 operator-reviewed zero-accounting artifact의 모델·
 실제 세션 시각 회귀의 추가 원천 수리: 프리마켓/애프터마켓 holding route가 사용하는 기존 `_holding_sell_nxt_enabled_status`의 NXT listing 여부·owner·종목·frozen clock를 당시 initial policy state와 함께 기록한다. Replay는 동일 sealed receipt를 검증하여 사후 운영 DB를 조회하지 않는다. SOR/시세/실제 타 경로 SELL로 NXT 여부를 만들지 않으며 미확인 값은 null로 보존한다.
 
 최종 route 후속 검증: 영향7 suite588 PASS(75.68s), producer 실제 세션7 PASS. Frozen planned broker route를 hypothetical initial HOLDING 상태에 전달하며 native item/suffix/route/0D 시각은 검증된 depth identity에서 재구성한다. 입력에 이미 기록된 provenance를 덮어쓰지 않고 source/quote guard를 유지한다. 기존 설정·실행 중 release·과거 자연21 및9/21 incumbent carry policy는 변경하지 않는다. 선택할 successor는 검증된 source commit의 별도 immutable checkout이며 재시작·주문·조기 PREOPEN은 수행하지 않는다.
+
+
+## 범위별 후보 계약 최종 재리뷰
+
+이번 추가 변경은 기존 compact evaluator·기존 batch CLI의 scope 요약 출력과 기존 test module 안에서 수행했다. CLI 출력에는 scope별 원천 pair 본문을 중복 출력하지 않는다. 새 서비스/DB/collector/producer 및 Python module을 추가하지 않았다. SOR source/native/holding 수리는 재작업하지 않았다.
+
+| 확인한 결함 | 수리와 검증 | EV 판단에 미치는 의미 |
+|---|---|---|
+| 전역 coverage가 독립 scope까지 차단 | 시장/세션별 분모·제외·coverage, 다른 scope 미완료 시에도 검증된 scope만 dated 소비 | 정상 모집단의 비교를 불필요하게 막지 않음 |
+| 첫 scope 동결이 늦은 scope learning 확보를 차단 | scope별 cutoff/learning/holdout, 이전 cutoff 불변, route별 floor 보존 | 늦게 유입되는 정상 시장도 독립 탐색 가능 |
+| 서로 다른 scope incumbent를 None으로 합쳐 승격 차단 | scope별 실제 incumbent 결속·dated publisher와 일치 검증 | 적용 버전이 다른 시장의 실제 판단 차이를 비교 가능 |
+| 오늘 coverage만으로 과거 미응답을 숨김, 복구 뒤 후행 cache가 stale | 적격 요청 누적 분모·작은 보고서/계획 dependency, public batch의 미응답→resume→재선정 회귀 | 결손 은폐 없이 경제성 계산·후보 상태가 진전 |
+
+승격 계약 v6는 기존 model/candidate 독립성·20/20/2일·coverage1·동일 자본/비용·tail·stress/error·guard를 완화하지 않는다. 이전 v5 proof는 새로운 승격 근거로 소비하지 않는다. 후보0은 범위별 source_gap/unsupported_scope/pending/insufficient_sample/valid_no_edge로 보인다.
+
+검증·commit/push·immutable 선택·현재 준비 정책의 최종 숫자/해시는 `tmp/ai-quality-source-attainability-20260918/scope-economic-final-review.json` receipt가 소유한다. 기존 실행 source/병행 변경·과거 자연21 원천 및9/21 incumbent carry는 보존한다. 통제 입력에서 모델 비용 차감 계산/조건부 승격·dated 소비가 검증되었으며 자연 ΔEV·실제 순익·인과적 개선을 입증한 것은 아니다. 미래 자연 native/plan 유입·route별 선행 실측 모델/독립 후보 holdout·정규 PREOPEN/PID 소비·실제 완료 손익은 기존 owner의 OPEN이다.

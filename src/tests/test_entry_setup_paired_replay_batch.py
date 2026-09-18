@@ -1377,8 +1377,21 @@ def test_registered_sor_scope_independent_promotion_and_dated_consumer(tmp_path,
         for row in model[key]:row['scope_sha256']=exact_scope
     model['actual_rows_sha256']=split._canonical_sha256(model['calibration_rows']+model['holdout_rows'])
     model['sha256']=split._canonical_sha256({k:v for k,v in model.items() if k!='sha256'})
+    # An unrelated scope may be pending or have a different incumbent. Neither
+    # can remove this scope's complete population or authorize the other scope.
+    coverage = proof['metrics']['scope_coverage']['KRX|KRX_REGULAR']
+    proof['metrics']['response_coverage'] = .5
+    original_incumbent = proof['incumbent_prompt_version']
+    scope_key = '|'.join(scope)
+    proof['scope_validation'] = {scope_key: {
+        'incumbent_prompt_version': original_incumbent,
+        'candidate_frozen_at': proof['candidate_frozen_at'],
+        'coverage': coverage,
+        'chronological_validation': deepcopy(proof['chronological_validation']),
+    }}
+    proof['incumbent_prompt_version'] = None
     proof=compact.sealed(proof)
-    kwargs=dict(incumbent=proof['incumbent_prompt_version'],selected=proof['candidate_prompt_version'],source_manifest_sha256='d'*64)
+    kwargs=dict(incumbent=original_incumbent,selected=proof['candidate_prompt_version'],source_manifest_sha256='d'*64)
     assert compact.promotion_valid(proof,scope=scope,**kwargs)
     assert compact.primary_input_blocker(proof['chronological_validation']['learning_pairs'][0],proof['owner_execution_model_validation']) is None
     assert not compact.promotion_valid(proof,scope=('NXT','NXT_REGULAR'),**kwargs)
@@ -1395,13 +1408,93 @@ def test_registered_sor_scope_independent_promotion_and_dated_consumer(tmp_path,
     assert successor['compact_promoted_scopes']==['|'.join(scope)]
     loaded=policy.load_effective(data_root=tmp_path,target_date='2026-09-21')
     assert policy.for_cohort(loaded,scope)['ai_policy']['prompt_version']==proof['candidate_prompt_version']
-    for scope_key,value in parent['scope_policies'].items():
-        if scope_key!='|'.join(scope):
-            assert loaded['scope_policies'][scope_key]['ai_policy']['prompt_version']==value['ai_policy']['prompt_version']
+    for parent_scope_key,value in parent['scope_policies'].items():
+        if parent_scope_key!='|'.join(scope):
+            assert loaded['scope_policies'][parent_scope_key]['ai_policy']['prompt_version']==value['ai_policy']['prompt_version']
     # No route pooling may manufacture a passing learning/holdout population.
     short=deepcopy(proof)
-    short['chronological_validation']['holdout_pairs']=short['chronological_validation']['holdout_pairs'][:19]
+    short['scope_validation'][scope_key]['chronological_validation']['holdout_pairs']=short['scope_validation'][scope_key]['chronological_validation']['holdout_pairs'][:19]
     assert not compact.promotion_valid(compact.sealed(short),scope=scope,**kwargs)
+    missing = deepcopy(proof)
+    missing['scope_validation'][scope_key]['coverage']['response_coverage'] = .95
+    assert not compact.promotion_valid(compact.sealed(missing),scope=scope,**kwargs)
+
+
+def test_later_scope_freezes_without_moving_earlier_holdout_or_pooling_routes():
+    from copy import deepcopy
+    from datetime import datetime
+    earlier = full_compact_proof()['chronological_validation']['learning_pairs']
+    incumbent = earlier[0]['incumbent_prompt_version']
+    candidate = full_compact_proof()['candidate_prompt_version']
+    later = deepcopy(earlier)
+    for pair in later:
+        pair.update(effective_venue='NXT', session_bucket='NXT_PREMARKET', broker_route='SOR')
+    rows = [earlier[0], later[0]]
+    metrics = {'scope_coverage': {}}
+    first, frozen = compact.scope_candidate_validation(earlier + later[:1], rows, metrics, {},
+        candidate=candidate, now=datetime(2026,9,15,21,tzinfo=compact.KST))
+    assert first['KRX|KRX_REGULAR']['candidate_frozen_at'].startswith('2026-09-15')
+    assert first['NXT|NXT_PREMARKET']['candidate_frozen_at'] is None
+    for pair in later[1:]:
+        pair['source_date'] = '2026-09-16'
+    second, successor = compact.scope_candidate_validation(earlier + later, rows, metrics,
+        {'scope_candidates': frozen}, candidate=candidate, now=datetime(2026,9,17,21,tzinfo=compact.KST))
+    assert successor['KRX|KRX_REGULAR'] == frozen['KRX|KRX_REGULAR']
+    assert second['NXT|NXT_PREMARKET']['candidate_frozen_at'].startswith('2026-09-17')
+    assert len(second['NXT|NXT_PREMARKET']['chronological_validation']['learning_pairs']) == 20
+    assert not second['NXT|NXT_PREMARKET']['chronological_validation']['holdout_pairs']
+    # A newly observed direct route still needs its own 20 learning episodes.
+    direct = deepcopy(later[:19])
+    for pair in direct:
+        pair['broker_route'] = 'NXT'
+    waiting, _ = compact.scope_candidate_validation(earlier + later + direct, rows, metrics,
+        {'scope_candidates': frozen}, candidate=candidate, now=datetime(2026,9,17,21,tzinfo=compact.KST))
+    assert waiting['NXT|NXT_PREMARKET']['candidate_frozen_at'] is None
+
+
+@pytest.mark.parametrize('verdict,selected_scopes,status', [
+    ('PASS', ['KRX|KRX_REGULAR'], 'candidate_selected'), ('VETO', [], 'valid_no_edge')])
+def test_public_compact_run_preserves_prior_unanswered_holdout_and_recovers(monkeypatch, tmp_path, verdict, selected_scopes, status):
+    from datetime import datetime
+    from src.engine.scalping import entry_setup_evidence as evidence
+    proof = full_compact_proof()
+    monkeypatch.setattr(compact, 'runtime_inference_cost_receipt', lambda *_: proof['runtime_inference_cost_receipt'])
+    monkeypatch.setattr(evidence, 'entry_risk_adjudication_openai_schema', lambda *_: {})
+    monkeypatch.setattr(evidence, 'validate_entry_risk_adjudication', lambda *_args, **_kwargs: [])
+    class Clock(datetime):
+        day = '2026-09-15'
+        @classmethod
+        def now(cls, tz=None):
+            return datetime.fromisoformat(cls.day + 'T21:00:00+09:00')
+    monkeypatch.setattr(compact, 'datetime', Clock)
+    def prepare(_root, day):
+        model = {**proof['owner_execution_model_validation'], 'source_date': day}
+        return compact.sealed({'owner_execution_model_validation': model,
+            'rows': [operating_compact_row(day, i) for i in range(20)], 'screened_total': 20,
+            'source_manifest_sha256': 'd'*64, 'source_tuning_allowed': True,
+            'exclusion_counts': {}, **compact.AUTHORITY})
+    monkeypatch.setattr(compact, 'prepare', prepare)
+    runner = lambda _: {'candidate_response': {'risk_verdict': verdict}}
+    learning = compact.run(data_root=tmp_path, day='2026-09-14', execute=True, runner=runner)
+    assert learning['scope_validation']['KRX|KRX_REGULAR']['candidate_frozen_at'].startswith('2026-09-15')
+    Clock.day = '2026-09-16'
+    partial = compact.run(data_root=tmp_path, day='2026-09-16', execute=True, max_new=19, runner=runner)
+    assert partial['metrics']['paired_comparable_count'] == 19
+    Clock.day = '2026-09-17'
+    held = compact.run(data_root=tmp_path, day='2026-09-17', execute=True, runner=runner)
+    assert held['metrics']['response_coverage'] == 1.
+    scope = held['scope_validation']['KRX|KRX_REGULAR']
+    assert scope['coverage']['economic_eligible_count'] == 60
+    assert scope['coverage']['paired_comparable_count'] == 59
+    assert not held['promotion_pass']
+    assert held['candidate_zero_disposition']['scope_dispositions']['KRX|KRX_REGULAR']['status'] == 'pending'
+    # The resumable producer may repair the actual missing response. No
+    # complete response is reissued and no missing economics becomes zero.
+    compact.run(data_root=tmp_path, day='2026-09-16', execute=True, runner=runner)
+    recovered = compact.run(data_root=tmp_path, day='2026-09-17', execute=True, runner=runner)
+    assert recovered['scope_validation']['KRX|KRX_REGULAR']['coverage']['response_coverage'] == 1.
+    assert recovered['promotion_scopes'] == selected_scopes
+    assert recovered['candidate_zero_disposition']['scope_dispositions']['KRX|KRX_REGULAR']['status'] == status
 
 
 @pytest.mark.parametrize('venue,session,route', [
