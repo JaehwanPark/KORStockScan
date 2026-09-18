@@ -631,7 +631,7 @@ def execution_inputs(target, rows, receipts=None):
     """Read existing sealed compact/operating owners, never historical raw."""
     from src.engine.scalping import compact_auxiliary_paired_replay as compact
     from src.engine.scalping import scanner_lookup_attention_policy as policy
-    root = policy.PROJECT_ROOT / "data"
+    root = (policy.PROJECT_ROOT / "data").resolve(strict=True)
     inputs = {}
     for day in sorted({r.get("observation_date") for r in rows if r.get("observation_date")}):
         pricing = compact.runtime_inference_cost_receipt(root, day)
