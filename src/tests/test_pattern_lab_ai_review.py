@@ -124,7 +124,7 @@ def test_pattern_lab_ai_review_builds_two_pass_source_only_report(
             "status": "warning",
             "checks": [
                 {
-                    "check_id": "scalping_ldm_threshold_reentry_sources",
+                    "check_id": "swing_threshold_reentry_sources",
                     "status": "fail",
                     "severity": "automation_handoff_gap",
                     "finding": "missing LDM feedback",
@@ -4056,4 +4056,72 @@ def test_normalize_resolved_ldm_conclusion_is_idempotent():
     assert normalized["source_paths"] == [
         "/tmp/lifecycle_decision_matrix.json",
         "/tmp/observation_source_quality_audit.json",
+    ]
+
+
+def test_retired_lab_identity_cannot_reenter_shared_review_or_response_refresh(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path / "report")
+    monkeypatch.setattr(
+        mod, "_call_openai_ai_review",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no provider call")),
+    )
+    context = {"sources": {}, "currentness_checks": []}
+    conclusions = [
+        {"review_id": "uppercase_domain", "domain": " SCALPING "},
+        {"review_id": "symbolic_source", "domain": "cross_domain",
+         "source_paths": ["scalping_pattern_lab_automation"]},
+        {"review_id": "old_path", "domain": "swing",
+         "source_paths": ["analysis/claude_scalping_pattern_lab/outputs/ev.json"]},
+        {"review_id": "flat_filename", "domain": "cross_domain",
+         "source_paths": ["data/report/scalping_pattern_lab_automation_2026-09-17.json"]},
+        {"review_id": "owner_field", "domain": "cross_domain",
+         "source_report_type": "claude_scalping_pattern_lab"},
+        {"review_id": "scalping_pattern_lab_automation:old", "domain": "cross_domain"},
+        {"review_id": "active_swing_owner", "domain": "swing",
+         "source_paths": ["swing_pattern_lab_automation"]},
+    ]
+    raw = {
+        "schema_version": 1,
+        "interpretation": {"review_items": []},
+        "audit": {"status": "pass", "issues": [], "forbidden_use_violations": []},
+        "final_conclusions": [dict(
+            c, final_state="code_patch_required", final_decision="surface_workorder",
+            reason="Repair this owner contract.",
+        ) for c in conclusions],
+    }
+    report = mod.build_pattern_lab_ai_review_report(
+        "2026-09-18", provider="openai", ai_raw_response=raw, _context=context,
+    )
+    assert report["ai_two_pass_review"]["original_response"] == raw
+    assert [c["review_id"] for c in report["ai_two_pass_review"]["final_conclusions"]] == [
+        "active_swing_owner"
+    ]
+    assert [o["review_id"] for o in report["code_improvement_orders"]] == ["active_swing_owner"]
+    refreshed = mod.refresh_pattern_lab_ai_review_source_provenance(
+        "2026-09-18", _context=context,
+    )
+    assert refreshed["material_review_current"] is True
+    assert refreshed["ai_two_pass_review"]["original_response"] == raw
+    assert refreshed["ai_two_pass_review"]["provider_provenance"]["new_provider_call"] is False
+    assert [c["review_id"] for c in refreshed["ai_two_pass_review"]["final_conclusions"]] == [
+        "active_swing_owner"
+    ]
+    assert [o["review_id"] for o in refreshed["code_improvement_orders"]] == ["active_swing_owner"]
+
+
+def test_retired_lab_deterministic_checks_do_not_resurrect_recovery_orders():
+    context = {"sources": {}, "currentness_checks": [
+        {"check_id": "claude_small_net_generation_contract", "status": "fail"},
+        {"check_id": "swing_generation_contract", "status": "fail"},
+    ]}
+    report = mod.build_pattern_lab_ai_review_report(
+        "2026-09-18", provider="none", _context=context, _publish=False,
+    )
+    assert [c["review_id"] for c in report["ai_two_pass_review"]["final_conclusions"]] == [
+        "currentness:swing_generation_contract"
+    ]
+    assert [o["review_id"] for o in report["code_improvement_orders"]] == [
+        "currentness:swing_generation_contract"
     ]

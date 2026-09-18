@@ -44,3 +44,15 @@ Cleanup manifest는 현재 policy/PREOPEN/선택 배포 근거17개를 제한 �
 실제 native verifier는 Lab 범위 결함0·stale links0·source generation warnings0·handoff warnings0이나 **전체 status는 FAIL**이다. 저가주9/17 report/policy contract/hash/schema/authority/profile/date 불일치, machine timing applied-policy FileNotFoundError, 이전 postclose fail marker 및 Swing simulation/audit missing이 그대로 남는다. 이는 이번 폐기 scope의 수리/재실행 대상이 아니며 verifier를 완화하거나 전체 DONE/9/21 실전 승인을 합성하지 않았다. 상세 원인은 `consumer-closure.json`의 `preexisting_out_of_scope_issues`와 native verifier를 따른다. 실행 owner는 기존 low-price·machine timing·postclose-chain checklist를 유지하며 새 중복 OPEN을 만들지 않는다.
 
 따라서 이번 완료는 **Lab 계통의 코드·소비·복구·불필요 산출물 폐기 및 승인된 선택 배포**다. 다음 영업일 자연 invocation/PID 소비와 기존 정책의 PREOPEN 확인·완료 비용 손익/인과적 개선은 별도 기존 OPEN이다. Lab 정책이나 신규 양수 EV는 생성/보장하지 않는다.
+
+## 후속 재리뷰·수정보완 및 중복 임시 산출물 정리
+
+폐기된 원천을 `cross_domain`/`swing`, 대문자·공백 domain, symbolic source label, flat filename 또는 owner field로 표시하면 기존 domain-only 필터를 우회했다. 또한 deterministic currentness 실패의 재주입은 최초 필터 이후에 실행되어 과거 Claude 검사가 작업지시로 재등장할 수 있었다. 신규 회귀2건에서 수리 전 실제 실패를 재현했다.
+
+원본 provider response/hash는 변경하지 않고, effective conclusions와 orders 생성 경계에서 폐기 Lab identity를 제외한다. metadata-only response refresh와 deterministic 재주입에도 동일 검사를 적용한다. 기존 Swing owner, source-quality fail-closed와 provider budget·hash/currentness 검사는 보존한다. 전역 퇴역 필터를 확장하지 않으며 비-Claude 진단 resolution을 제거하지 않는다. 과거 Claude fixture로 남은 generic integrity 검사는 현행 Swing fixture로 전환해 실패 강제·35개 전체 검사·native owner 중복 방지 검증을 유지했다.
+
+영향 범위5파일 pytest **427 PASS**, 변경 Python3개 compile 및 diff check PASS다. 테스트는 통제 입력이며 자연 경제성/실제 손익 증거가 아니다. 운영 wrapper·정책 생성 로직은 이번 후속에서 바뀌지 않아 전체 장후 재실행·provider 호출·조기 PREOPEN을 수행하지 않는다. 기존 전체 verifier FAIL/타 축 OPEN을 이 결과로 닫지 않는다.
+
+추가 삭제는 최종 영수증과 동일 정보인 중간 3-way merge 사본44개 **6,044,845bytes**다. 활성 FD0 및 보호 정책·원천15개 SHA 불변을 확인하고 파일별 hash/size를 남겼다. 이전 삭제643개는 재삭제/신규 실적으로 중복 계수하지 않는다. 현행 전용 산출물 경로는 비어 있다. 다른 worktree의 tracked 과거 source 사본, immutable release, raw/order/custody 및 최종 검증·배포 영수증은 보존한다.
+
+추가 evidence: `tmp/claude-lab-retirement-20260918/followup-review-tests.log`, `followup-validation.json`, `followup-cleanup-receipt.json`, `followup-deployment.json`. 관련 source를 기존 격리 branch에서 commit/push하고 검증된 immutable successor로 선택하며 실제 선택 SHA/root는 마지막 deployment receipt가 소유한다. 이전 선택본을 직접 수정하거나 Main PID를 재시작하지 않는다.

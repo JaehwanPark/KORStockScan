@@ -358,7 +358,7 @@ def test_new_target_date_gets_its_own_budget_without_approving_old_date(
 def test_ai_cannot_omit_any_failed_currentness_check(isolated):
     isolated["currentness_checks"] = [
         {
-            "check_id": f"claude_{n}",
+            "check_id": f"swing_{n}",
             "status": "fail",
             "severity": "source_quality_blocker",
             "finding": "Bad hash",
@@ -371,7 +371,7 @@ def test_ai_cannot_omit_any_failed_currentness_check(isolated):
         i.get("deterministic_check_id")
         for i in conclusions
         if i.get("deterministic_check_id")
-    } == {f"claude_{n}" for n in range(35)}
+    } == {f"swing_{n}" for n in range(35)}
     assert r["status"] == "warning"
     assert len(r["code_improvement_orders"]) == 35
     assert all(
@@ -466,7 +466,7 @@ def test_new_currentness_failure_enforced_during_refresh(isolated):
     build()
     isolated["currentness_checks"] = [
         {
-            "check_id": "claude_hash",
+            "check_id": "swing_hash",
             "status": "fail",
             "severity": "source_quality_blocker",
             "finding": "New hash invalid",
@@ -475,7 +475,7 @@ def test_new_currentness_failure_enforced_during_refresh(isolated):
     r = ai.refresh_pattern_lab_ai_review_source_provenance(DAY, include_swing=True)
     assert r["status"] == "warning"
     assert any(
-        o.get("review_id") == "currentness:claude_hash"
+        o.get("review_id") == "currentness:swing_hash"
         for o in r["code_improvement_orders"]
     )
 
@@ -685,11 +685,11 @@ def test_currentness_native_order_handoff_is_not_duplicate_implementation(isolat
 
     isolated["currentness_checks"] = [
         {
-            "check_id": "claude_hash",
+            "check_id": "swing_hash",
             "status": "fail",
             "severity": "source_quality_blocker",
             "finding": "Bad generation",
-            "upstream_order_id": "order_pattern_lab_currentness_audit_claude_hash",
+            "upstream_order_id": "order_pattern_lab_currentness_audit_swing_hash",
         }
     ]
     r = build()

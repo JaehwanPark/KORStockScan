@@ -20,7 +20,11 @@ from src.engine.ai.postclose_review_config import (
     resolve_postclose_ai_review_config,
 )
 from src.engine.daily_threshold_cycle_report import REPORT_DIR
-from src.engine.lifecycle.retirement import current_report_view, retired_artifact
+from src.engine.lifecycle.retirement import (
+    CLAUDE_LAB_RETIRED_REPORTS,
+    current_report_view,
+    retired_artifact,
+)
 from src.utils.jsonl_io import (
     json_artifact_generation_lock,
     write_json_object_generation_safe,
@@ -2393,6 +2397,31 @@ def _material_context_hash(context: dict[str, Any]) -> str:
     )
 
 
+def _retired_lab_conclusion(item: dict[str, Any]) -> bool:
+    """Exclude retired identities from effective review; retain raw evidence."""
+    if str(item.get("domain") or "").strip().lower() == "scalping":
+        return True
+
+    def lab_owner(value: Any) -> bool:
+        return isinstance(value, str) and any(
+            value == owner
+            or value.startswith(tuple(owner + sep for sep in (":", "_", ".")))
+            for owner in CLAUDE_LAB_RETIRED_REPORTS
+        )
+
+    if any(lab_owner(item.get(key)) for key in (
+        "review_id", "source_report_type", "source_id", "family", "mapped_family",
+    )):
+        return True
+    paths = item.get("source_paths")
+    return isinstance(paths, list) and any(
+        lab_owner(path)
+        or lab_owner(Path(path).stem)
+        or any(part in CLAUDE_LAB_RETIRED_REPORTS for part in Path(path).parts)
+        for path in paths if isinstance(path, str)
+    )
+
+
 def _enforce_currentness_failures(conclusions, context):
     """An AI omission or KEEP cannot discharge a deterministic producer failure."""
     result = list(conclusions)
@@ -2468,7 +2497,7 @@ def _enforce_currentness_failures(conclusions, context):
                 context,
             )
         )
-    return result
+    return [item for item in result if not _retired_lab_conclusion(item)]
 
 
 def _state_for_check(check: dict[str, Any]) -> str:
@@ -3787,7 +3816,7 @@ def build_pattern_lab_ai_review_report(
     original_response = copy.deepcopy(ai_payload)
     ai_payload["final_conclusions"] = [
         item for item in ai_payload.get("final_conclusions", [])
-        if isinstance(item, dict) and item.get("domain") != "scalping"
+        if isinstance(item, dict) and not _retired_lab_conclusion(item)
     ]
     # These fields are deterministic reconciler outputs, never provider
     # authority. Recompute them even when consuming a legacy saved response.
