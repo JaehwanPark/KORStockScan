@@ -242,6 +242,13 @@ def drive(
             return False
         child = reconcile_amendment(adapter, intent, price=pending["price"])
         project(child, pending)
+        from src.engine.monitoring.machine_entry_confirmation_study import (
+            instrumentation_call,
+        )
+
+        ack_at = instrumentation_call(owner._state, lambda: current_time().isoformat())
+        if ack_at is not None:
+            pending["ack_observed_at"] = ack_at
         container.setdefault("holding_target_history", []).append(deepcopy(pending))
         container.pop(KEY)
         container["holding_target_status"] = "amendment_reconciled"

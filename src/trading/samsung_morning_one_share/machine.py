@@ -649,6 +649,33 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
                     "signal_close": int(opening.price),
                 }
             )
+        if routes == ["SOR"]:
+            from src.engine.monitoring.machine_entry_confirmation_study import (
+                capture_episode_opportunity,
+                instrumentation_call,
+                adaptive_new_enrollment_selected,
+            )
+
+            instrumentation_call(
+                self._state,
+                capture_episode_opportunity,
+                self._state,
+                self.policy,
+                owner=self.entry_timing_owner,
+                scope_id=self.entry_timing_scope_id,
+                now=now,
+                signal_bar=opening.source_timestamp,
+                plans=[dict(plan, route="SOR") for plan in plan_list],
+                quantity=int(self._state["legs"][0]["quantity"]),
+                quantity_receipt=features.get("new_entry_quantity_receipt")
+                or new_entry_quantity_receipt(now),
+                adaptive_required=adaptive_new_enrollment_selected(
+                    self.adaptive_exit_services
+                ),
+                live_eligible=bool(
+                    self.live_enabled and self.ownership_source(self.policy.symbol)
+                ),
+            )
         return True
 
     def _confirm_planned_route(self, now: datetime, route: str) -> bool:
@@ -660,6 +687,8 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
             symbol=str(self.policy.symbol),
             session="NXT_PREMARKET" if route == "NXT" else "KRX_REGULAR",
             entry_state="UNSPECIFIED",
+            native_policy=self.policy,
+            approved_leg_quantity=new_entry_quantity(now),
         )
         if timing["mode"] != DYNAMIC_MODE:
             return True
@@ -703,6 +732,9 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
             route=route,
             owner=self.entry_timing_owner,
             scope_id=self.entry_timing_scope_id,
+            feature_arm=str(
+                timing["provenance"].get("confirmation_feature_arm", "combined")
+            ),
             baseline_fill_price=baseline,
             owner_entry_limit_price=max(int(leg["entry_price"]) for leg in plans),
             owner_target_price=self.policy.target_price(baseline),
@@ -995,6 +1027,31 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
             ]
             open_price = 0
             signal_bar = now.isoformat()
+        if all(int(plan.get("entry_price") or 0) > 0 for plan in plans):
+            from src.engine.monitoring.machine_entry_confirmation_study import (
+                capture_episode_opportunity,
+                instrumentation_call,
+                adaptive_new_enrollment_selected,
+            )
+
+            instrumentation_call(
+                self._state,
+                capture_episode_opportunity,
+                self._state,
+                self.policy,
+                owner=self.entry_timing_owner,
+                scope_id=self.entry_timing_scope_id,
+                now=now,
+                signal_bar=str(signal_bar),
+                plans=[dict(plan, route=route) for plan in plans],
+                quantity=leg_quantity,
+                quantity_receipt=new_entry_quantity_receipt(now),
+                adaptive_required=adaptive_new_enrollment_selected(
+                    self.adaptive_exit_services
+                ),
+                live_eligible=bool(self.live_enabled and source_owner),
+            )
+            self._save()
         if not self.live_enabled:
             self._state.update(
                 {
@@ -1084,6 +1141,8 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
                 symbol=str(self.policy.symbol),
                 session=timing_session,
                 entry_state="UNSPECIFIED",
+                native_policy=self.policy,
+                approved_leg_quantity=new_entry_quantity(now),
             )
             active_delay = int(active_policy["delay_sec"])
             active_provenance = dict(active_policy["provenance"])
@@ -1128,6 +1187,11 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
                     route=route,
                     owner="episode",
                     scope_id=self.entry_timing_scope_id,
+                    feature_arm=str(
+                        timing_policy_provenance.get(
+                            "confirmation_feature_arm", "combined"
+                        )
+                    ),
                     baseline_fill_price=open_price,
                     owner_entry_limit_price=max(
                         int(plan["entry_price"]) for plan in plans
@@ -1184,6 +1248,8 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
                 symbol=str(self.policy.symbol),
                 session=timing_session,
                 entry_state="UNSPECIFIED",
+                native_policy=self.policy,
+                approved_leg_quantity=new_entry_quantity(now),
             )
             confirmation_delay_sec = int(timing_policy["delay_sec"])
             timing_policy_provenance = dict(timing_policy["provenance"])
@@ -1208,6 +1274,11 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
                     route=route,
                     owner="episode",
                     scope_id=self.entry_timing_scope_id,
+                    feature_arm=str(
+                        timing_policy_provenance.get(
+                            "confirmation_feature_arm", "combined"
+                        )
+                    ),
                     baseline_fill_price=open_price,
                     owner_entry_limit_price=max(
                         int(plan["entry_price"]) for plan in plans

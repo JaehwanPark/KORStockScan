@@ -693,6 +693,8 @@ class WidgetTradeEventRecorder:
         row = self._decisions.setdefault(
             identity, dict(version=version, attempted=False, submitted=False)
         )
+        if event.get("timing_operating_opportunity"):
+            row["timing_operating_opportunity"] = event["timing_operating_opportunity"]
         if event.get("side") == "BUY" and str(event.get("event_type") or "").startswith(
             "order_submit"
         ):
@@ -1099,6 +1101,29 @@ class WidgetSignalAutoTrader:
     def _save(self) -> None:
         if getattr(self, "_adaptive_enrollment_reload_required", False):
             raise EnrollmentReloadRequired("adaptive_enrollment_reload_required")
+        samsung_state = (self._state.get("symbols") or {}).get("005930")
+        if samsung_state is not None:
+            from src.engine.monitoring.machine_entry_confirmation_study import (
+                instrumentation_call,
+                record_widget_native,
+                record_operating_owner_tick,
+            )
+
+            if getattr(self, "_operating_observed_at", None):
+                instrumentation_call(
+                    samsung_state,
+                    record_operating_owner_tick,
+                    self,
+                    self._operating_observed_at,
+                )
+
+            instrumentation_call(
+                samsung_state,
+                record_widget_native,
+                samsung_state,
+                event={},
+                now=datetime.now(KST),
+            )
         monitored_symbols = [spec.code for spec in self.specs]
         policy_sessions = self._policy_execution_sessions()
         runtime_sessions = policy_sessions if self.enabled else {}
@@ -1376,19 +1401,19 @@ class WidgetSignalAutoTrader:
                 explicit_policy_id
                 or (execution_policy["policy_id"] if execution_policy else None)
             ),
-            "execution_policy_content_sha256": execution_policy.get(
-                "policy_content_sha256"
-            )
-            if execution_policy
-            else None,
-            "candidate_revision_sha256": execution_policy.get(
-                "candidate_revision_sha256"
-            )
-            if execution_policy
-            else None,
-            "joint_gate_sha256": execution_policy.get("joint_gate_sha256")
-            if execution_policy
-            else None,
+            "execution_policy_content_sha256": (
+                execution_policy.get("policy_content_sha256")
+                if execution_policy
+                else None
+            ),
+            "candidate_revision_sha256": (
+                execution_policy.get("candidate_revision_sha256")
+                if execution_policy
+                else None
+            ),
+            "joint_gate_sha256": (
+                execution_policy.get("joint_gate_sha256") if execution_policy else None
+            ),
             "execution_policy_research_arm": (
                 execution_policy["research_arm"] if execution_policy else None
             ),
@@ -1406,6 +1431,16 @@ class WidgetSignalAutoTrader:
             ),
             **fields,
         }
+        if spec.code == "005930" and symbol_state is not None:
+            from src.engine.monitoring.machine_entry_confirmation_study import (
+                record_widget_native,
+                instrumentation_call,
+                adaptive_new_enrollment_selected,
+            )
+
+            payload["timing_operating_opportunity"] = instrumentation_call(
+                symbol_state, record_widget_native, symbol_state, event=payload, now=now
+            )
         self.event_recorder.record(payload, now)
 
     def _record_entry_block_once(
@@ -1883,9 +1918,7 @@ class WidgetSignalAutoTrader:
         lineage = (
             stored
             if stored.get("policy_id") == execution_policy_id
-            else current
-            if current.get("policy_id") == execution_policy_id
-            else {}
+            else current if current.get("policy_id") == execution_policy_id else {}
         )
         return {
             "execution_policy_content_sha256": lineage.get("policy_content_sha256"),
@@ -2116,9 +2149,7 @@ class WidgetSignalAutoTrader:
                 state=(
                     "ORDER_BOUND"
                     if result.accepted
-                    else "INTENT_AMBIGUOUS"
-                    if result.ambiguous
-                    else "INTENT_REJECTED"
+                    else "INTENT_AMBIGUOUS" if result.ambiguous else "INTENT_REJECTED"
                 ),
                 broker_order_no=result.order_no if result.accepted else "",
                 reason=result.return_msg,
@@ -2396,9 +2427,7 @@ class WidgetSignalAutoTrader:
                 else (
                     "order_submit_ambiguous"
                     if result.ambiguous
-                    else "order_submitted"
-                    if result.accepted
-                    else "order_submit_failed"
+                    else "order_submitted" if result.accepted else "order_submit_failed"
                 )
             ),
             spec,
@@ -2533,6 +2562,12 @@ class WidgetSignalAutoTrader:
                     filled_qty=snapshot.filled_qty,
                     observed_at=now.isoformat(),
                 )
+            if filled != prior_filled:
+                order.setdefault("timing_first_fill_observed_at", now.isoformat())
+                if filled == requested:
+                    order.setdefault(
+                        "timing_terminal_fill_observed_at", now.isoformat()
+                    )
             order["filled_qty"] = filled
             order["remaining_qty"] = remaining
             if snapshot.fill_price is not None:
@@ -2547,12 +2582,14 @@ class WidgetSignalAutoTrader:
                 order["actual_execution_venue_source"] = "broker_execution_snapshot"
             order["last_reconciled_at"] = now.isoformat()
             if remaining == 0:
+                if filled < requested:
+                    order.setdefault(
+                        "timing_cancel_terminal_observed_at", now.isoformat()
+                    )
                 order["status"] = (
                     "FILLED"
                     if filled == requested
-                    else "PARTIAL_CANCELED"
-                    if filled
-                    else "CANCELED"
+                    else "PARTIAL_CANCELED" if filled else "CANCELED"
                 )
             changed = True
             execution_venue_changed = bool(
@@ -3069,6 +3106,20 @@ class WidgetSignalAutoTrader:
         entry_signal_id = str(symbol_state.get("entry_signal_id") or "")
         if not entry_signal_id or symbol_state.get("exit_requested"):
             return
+        if spec.code == "005930":
+            from src.engine.monitoring.machine_entry_confirmation_study import (
+                instrumentation_call,
+                record_widget_scale_source,
+            )
+
+            instrumentation_call(
+                symbol_state,
+                record_widget_scale_source,
+                symbol_state,
+                now=now,
+                current_price=_positive_int(payload.get("current_price")),
+                source_status="native_source_not_yet_validated",
+            )
         scale_orders = [
             order
             for order in symbol_state.get("orders") or []
@@ -3127,6 +3178,21 @@ class WidgetSignalAutoTrader:
         ):
             return
         current_price = _positive_int(payload.get("current_price"))
+        if spec.code == "005930":
+            from src.engine.monitoring.machine_entry_confirmation_study import (
+                instrumentation_call,
+                record_widget_scale_source,
+            )
+
+            instrumentation_call(
+                symbol_state,
+                record_widget_scale_source,
+                symbol_state,
+                now=now,
+                current_price=current_price,
+                source_status="PASS",
+                stage_index=next_leg_index,
+            )
         initial_fill_price = self._initial_entry_fill_price(
             symbol_state, entry_signal_id
         )
@@ -3372,6 +3438,22 @@ class WidgetSignalAutoTrader:
             counterfactual_anchor=scale_in_counterfactual_anchor,
         ):
             return
+        if spec.code == "005930":
+            from src.engine.monitoring.machine_entry_confirmation_study import (
+                instrumentation_call,
+                record_widget_scale_source,
+            )
+
+            instrumentation_call(
+                symbol_state,
+                record_widget_scale_source,
+                symbol_state,
+                now=now,
+                current_price=current_price,
+                source_status="PASS",
+                permitted=True,
+                stage_index=next_leg_index,
+            )
         self._submit(
             spec=spec,
             symbol_state=symbol_state,
@@ -4212,6 +4294,37 @@ class WidgetSignalAutoTrader:
             "required_quantity": entry_quantity,
             "expected_venues": [route],
         }
+        if spec.code == "005930":
+            from src.engine.monitoring.machine_entry_confirmation_study import (
+                capture_widget_opportunity,
+                instrumentation_call,
+                adaptive_new_enrollment_selected,
+            )
+
+            instrumentation_call(
+                symbol_state,
+                capture_widget_opportunity,
+                symbol_state,
+                symbol=spec.code,
+                scope_id=timing_scope_id,
+                session=timing_session,
+                route=route,
+                source_state=source_state,
+                signal_id=signal_id,
+                reference_price=counterfactual_reference_price,
+                quantity=entry_quantity,
+                execution_policy=entry_policy,
+                now=now,
+                target_bps=(
+                    int(entry_policy["take_profit_bps_from_equal_share_average"])
+                    if entry_policy
+                    else TAKE_PROFIT_BPS
+                ),
+                adaptive_required=adaptive_new_enrollment_selected(
+                    self.adaptive_exit_services
+                ),
+            )
+            self._save()
         if self._market_weakness_blocks_entry(
             spec=spec,
             symbol_state=symbol_state,
@@ -4282,6 +4395,8 @@ class WidgetSignalAutoTrader:
                     symbol=spec.code,
                     session=timing_session,
                     entry_state=source_state,
+                    native_policy=entry_policy or {},
+                    approved_leg_quantity=entry_quantity,
                 )
                 active_delay = int(active_policy["delay_sec"])
                 active_provenance = dict(active_policy["provenance"])
@@ -4325,6 +4440,12 @@ class WidgetSignalAutoTrader:
                         symbol=spec.code,
                         route=route,
                         owner="widget",
+                        scope_id=timing_scope_id,
+                        feature_arm=str(
+                            timing_policy_provenance.get(
+                                "confirmation_feature_arm", "combined"
+                            )
+                        ),
                         baseline_fill_price=counterfactual_reference_price,
                         owner_entry_limit_price=counterfactual_reference_price,
                         owner_target_price=counterfactual_target_price,
@@ -4401,6 +4522,8 @@ class WidgetSignalAutoTrader:
                 symbol=spec.code,
                 session=timing_session,
                 entry_state=source_state,
+                native_policy=entry_policy or {},
+                approved_leg_quantity=entry_quantity,
             )
             confirmation_delay_sec = int(timing_policy["delay_sec"])
             timing_policy_provenance = dict(timing_policy["provenance"])
@@ -4414,6 +4537,12 @@ class WidgetSignalAutoTrader:
                     symbol=spec.code,
                     route=route,
                     owner="widget",
+                    scope_id=timing_scope_id,
+                    feature_arm=str(
+                        timing_policy_provenance.get(
+                            "confirmation_feature_arm", "combined"
+                        )
+                    ),
                     baseline_fill_price=counterfactual_reference_price,
                     owner_entry_limit_price=counterfactual_reference_price,
                     owner_target_price=counterfactual_target_price,
@@ -5925,6 +6054,7 @@ class WidgetSignalAutoTrader:
 
     def run_once(self, observed_at: datetime | None = None) -> dict[str, Any]:
         now = (observed_at or _now_kst()).astimezone(KST)
+        self._operating_observed_at = now
         if getattr(self, "_profit_exit_reload_required", False):
             raise OSError("profit_exit_owner_reload_required")
         if (

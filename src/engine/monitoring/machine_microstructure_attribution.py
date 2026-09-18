@@ -2629,10 +2629,15 @@ def _widget_inventory(
             row.setdefault("owner_scope_kinds", {})
             row.setdefault("owner_scope_expected_venues", {})
             row.setdefault("owner_anchor_contract_gaps", [])
-            collection_origin = collection_origins.get(str(symbol)) if isinstance(collection_origins, dict) else None
+            collection_origin = (
+                collection_origins.get(str(symbol))
+                if isinstance(collection_origins, dict)
+                else None
+            )
             scope_kind = (
                 "prospective_widget_research"
-                if isinstance(collection_origin, str) and collection_origin in research_origins
+                if isinstance(collection_origin, str)
+                and collection_origin in research_origins
                 else "active_widget_owner"
             )
             if scope_kind not in row["scopes"]:
@@ -2647,8 +2652,16 @@ def _widget_inventory(
                 if str(session).startswith(DUAL_AFTERMARKET_SESSION_PREFIX):
                     # Integrated market-data scope is the SOR registration item,
                     # not proof of a KRX execution venue from a string prefix.
-                    if session_payload.get("market_data_route") != "krx_nxt_integrated" or session_payload.get("market_venue") != "KRX_NXT":
-                        row["owner_anchor_contract_gaps"].append({"scope_id": f"{symbol}:{session}", "reason": "integrated_aftermarket_market_data_identity_missing"})
+                    if (
+                        session_payload.get("market_data_route") != "krx_nxt_integrated"
+                        or session_payload.get("market_venue") != "KRX_NXT"
+                    ):
+                        row["owner_anchor_contract_gaps"].append(
+                            {
+                                "scope_id": f"{symbol}:{session}",
+                                "reason": "integrated_aftermarket_market_data_identity_missing",
+                            }
+                        )
                         continue
                     venue = "SOR"
                 scope_id = f"{symbol}:{session}"
@@ -3052,6 +3065,32 @@ def _widget_inventory(
         symbols=symbols,
     )
     anchors.extend(actual_anchors)
+    from src.engine.monitoring.research_closed_loop import read_object
+    from src.engine.monitoring.machine_entry_confirmation_study import (
+        native_parent_anchor,
+    )
+
+    try:
+        native_widget = read_object(widget_state_path, limit=16 * 1024 * 1024)
+    except (OSError, ValueError, TypeError):
+        native_widget = {}
+    if native_widget.get("trade_date") == target_date:
+        opportunities = ((native_widget.get("symbols") or {}).get("005930") or {}).get(
+            "timing_operating_opportunities"
+        ) or {}
+        if opportunities:
+            anchors = [
+                a
+                for a in anchors
+                if a.get("symbol") != "005930"
+                or a.get("anchor_role") != "actual_widget_entry_signal"
+            ]
+            for opportunity in opportunities.values():
+                parent = native_parent_anchor(opportunity)
+                if parent and _owner_ts_on_target_date(
+                    parent["anchor_at"], target_date
+                ):
+                    anchors.append(parent)
 
     for row in symbols.values():
         if not row.get("expected_venues"):
@@ -4043,6 +4082,28 @@ def _episode_inventory(
             scope_id = str(contract["scope_id"])
             profile_id = f"samsung:{scope_id}"
             features = payload.get("signal_features") or {}
+            native_opportunities = payload.get("timing_operating_opportunities") or {}
+            if isinstance(native_opportunities, dict) and native_opportunities:
+                from src.engine.monitoring.machine_entry_confirmation_study import (
+                    native_parent_anchor,
+                )
+
+                for opportunity in native_opportunities.values():
+                    native_anchor = native_parent_anchor(opportunity)
+                    if native_anchor is not None and _owner_ts_on_target_date(
+                        native_anchor["anchor_at"], target_date
+                    ):
+                        anchors.append(native_anchor)
+                # Native whole-plan parents own the opportunity denominator;
+                # individual legs remain in the Samsung custody report.
+                profiles.setdefault(profile_id, {}).update(
+                    profile_id=profile_id,
+                    symbol="005930",
+                    session="KRX_REGULAR",
+                    scope="active_samsung_episode_owner",
+                    owner_policy_tuning_eligible=True,
+                )
+                continue
             routes = {
                 str(leg.get("route") or "")
                 for leg in payload.get("legs") or []
@@ -5414,6 +5475,13 @@ def _micro_context(
             anchors_by_symbol[anchor["symbol"]].append((anchor, anchor_at))
 
     def post_window_sec(anchor: Mapping[str, Any]) -> int:
+        if anchor.get("native_operating_parent") is True:
+            start = _parse_ts(anchor.get("anchor_at"))
+            end = _parse_ts(
+                (anchor.get("native_operating_state") or {}).get("observed_at")
+            )
+            if start and end:
+                return max(5, min(8 * 3600, int((end - start).total_seconds())))
         if anchor.get("bounded_entry_opportunity_replay") is True:
             return 180
         if anchor.get("adaptive_exit_source_only") is True:
@@ -5518,8 +5586,10 @@ def _micro_context(
                 <= timestamp
                 <= anchor_at + timedelta(seconds=post_window_sec(anchor))
             ):
-                if (anchor.get("adaptive_exit_source_only") is True
-                    or anchor.get("bounded_entry_opportunity_replay") is True):
+                if (
+                    anchor.get("adaptive_exit_source_only") is True
+                    or anchor.get("bounded_entry_opportunity_replay") is True
+                ):
                     window = windows[anchor["anchor_id"]]
                     if (
                         len(window["raw_market_rows"]) >= ADAPTIVE_EXIT_MAX_SOURCE_ROWS
@@ -5531,6 +5601,16 @@ def _micro_context(
                         window["raw_market_rows"].append(payload)
                         adaptive_source_rows["market"] += 1
                     continue
+                window = windows[anchor["anchor_id"]]
+                if anchor.get("native_operating_parent") and (
+                    len(window["raw_market_rows"]) >= ADAPTIVE_EXIT_MAX_SOURCE_ROWS
+                    or adaptive_source_rows["market"]
+                    >= ADAPTIVE_EXIT_MAX_TOTAL_SOURCE_ROWS // 2
+                ):
+                    window["adaptive_exit_source_overflow"] = True
+                    continue
+                if anchor.get("native_operating_parent"):
+                    adaptive_source_rows["market"] += 1
                 windows[anchor["anchor_id"]]["rows"].append(normalized_market_row)
                 # A source row can fall inside many overlapping owner windows.
                 # The iterator yields a fresh immutable-by-contract mapping for
@@ -5576,6 +5656,7 @@ def _micro_context(
             continue
         inventory[symbol]["depth_row_count"] += 1
         normalized_depth_point = {
+            "venue": payload.get("venue"),
             "sequence_epoch": int(payload["sequence_epoch"]),
             "timestamp": timestamp,
             "best_bid": depth_best_bid,
@@ -5597,8 +5678,10 @@ def _micro_context(
                 <= timestamp
                 <= anchor_at + timedelta(seconds=post_window_sec(anchor))
             ):
-                if (anchor.get("adaptive_exit_source_only") is True
-                    or anchor.get("bounded_entry_opportunity_replay") is True):
+                if (
+                    anchor.get("adaptive_exit_source_only") is True
+                    or anchor.get("bounded_entry_opportunity_replay") is True
+                ):
                     window = windows[anchor["anchor_id"]]
                     if (
                         len(window["raw_depth_rows"]) >= ADAPTIVE_EXIT_MAX_SOURCE_ROWS
@@ -5610,11 +5693,29 @@ def _micro_context(
                         window["raw_depth_rows"].append(payload)
                         adaptive_source_rows["depth"] += 1
                     continue
+                window = windows[anchor["anchor_id"]]
+                if anchor.get("native_operating_parent") and (
+                    len(window["raw_depth_rows"]) >= ADAPTIVE_EXIT_MAX_SOURCE_ROWS
+                    or adaptive_source_rows["depth"]
+                    >= ADAPTIVE_EXIT_MAX_TOTAL_SOURCE_ROWS // 2
+                ):
+                    window["adaptive_exit_source_overflow"] = True
+                    continue
                 windows[anchor["anchor_id"]]["depth_rows"] += 1
                 windows[anchor["anchor_id"]]["depth_points"].append(
                     normalized_depth_point
                 )
-                windows[anchor["anchor_id"]]["raw_depth_rows"].append(payload)
+                window = windows[anchor["anchor_id"]]
+                if anchor.get("native_operating_parent") and (
+                    len(window["raw_depth_rows"]) >= ADAPTIVE_EXIT_MAX_SOURCE_ROWS
+                    or adaptive_source_rows["depth"]
+                    >= ADAPTIVE_EXIT_MAX_TOTAL_SOURCE_ROWS // 2
+                ):
+                    window["adaptive_exit_source_overflow"] = True
+                else:
+                    window["raw_depth_rows"].append(payload)
+                    if anchor.get("native_operating_parent"):
+                        adaptive_source_rows["depth"] += 1
 
     for payload in _iter_relevant_rows(
         ref_paths, symbols, diagnostics=read_diagnostics
@@ -6000,6 +6101,27 @@ def _anchor_result(
     clean_baseline_allowed: bool,
     registration_receipt_binding: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    operating_window = window
+    if anchor.get("native_operating_parent"):
+        venue = (anchor.get("native_operating_contract") or {}).get("market_data_venue")
+        if venue:
+            window = dict(
+                window,
+                rows=[r for r in window["rows"] if r.get("venue") == venue],
+                depth_points=[
+                    r for r in window.get("depth_points", []) if r.get("venue") == venue
+                ],
+                raw_depth_rows=[
+                    r
+                    for r in window.get("raw_depth_rows", [])
+                    if r.get("venue") == venue
+                ],
+                raw_market_rows=[
+                    r
+                    for r in window.get("raw_market_rows", [])
+                    if r.get("venue") == venue
+                ],
+            )
     rows = sorted(window["rows"], key=lambda row: row["timestamp"])
     dual_source_only_row_count = sum(
         row.get("dual_source_only") is True for row in rows
@@ -7193,6 +7315,39 @@ def _anchor_result(
         window,
         source_complete=status == "matched",
     )
+    if anchor.get("native_operating_parent") is True:
+        from src.engine.monitoring.machine_entry_confirmation_study import (
+            project_native_operating_path,
+            _seal,
+        )
+
+        native_rows = [
+            r
+            for r in operating_window.get("raw_depth_rows", [])
+            if _parse_ts(r.get("local_receive_timestamp")) is not None
+            and _parse_ts(r["local_receive_timestamp"]) >= anchor_at
+        ]
+        source = project_native_operating_path(
+            anchor.get("native_operating_contract") or {},
+            native_rows,
+            anchor.get("native_operating_state") or {},
+            market_rows=operating_window.get("raw_market_rows", []),
+        )
+        source = _seal(
+            source
+            | {"source_truncated": bool(window.get("adaptive_exit_source_overflow"))}
+        )
+        if status != "matched":
+            source = _seal(
+                source
+                | {
+                    "projection_errors": [
+                        *source.get("projection_errors", []),
+                        "native_path_source_quality_or_overflow:" + str(status),
+                    ]
+                }
+            )
+        metrics["machine_operating_source"] = source
     result = dict(anchor)
     result.update(
         {
@@ -7420,6 +7575,8 @@ def _entry_confirmation_label(result: dict[str, Any]) -> dict[str, Any] | None:
         "entry_confirmation_checkpoint_ask_depletion": metrics.get(
             "entry_confirmation_checkpoint_ask_depletion"
         ),
+        "native_operating_parent": result.get("native_operating_parent") is True,
+        "machine_operating_source": metrics.get("machine_operating_source"),
         "dynamic_confirmation_source_only_replay": _dynamic_confirmation_replay(result),
         "dynamic_confirmation_first_hit_outcomes": metrics.get(
             "dynamic_confirmation_first_hit_outcomes"

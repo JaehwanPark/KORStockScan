@@ -230,9 +230,32 @@ def validate_applied_policy(payload: Any, *, target_date: date) -> tuple[bool, s
             return False, "entry_timing_policy_scope_contract_invalid"
         if confirmation_mode == DYNAMIC_MODE:
             dynamic_confirmation = row.get("dynamic_confirmation")
-            expected_policy = dynamic_policy_for_scope(
-                owner=owner, scope_id=scope_id, symbol=symbol
+            arm = (
+                ((dynamic_confirmation or {}).get("policy") or {}).get(
+                    "feature_arm", "combined"
+                )
+                if isinstance(dynamic_confirmation, dict)
+                else "combined"
             )
+            try:
+                expected_policy = dynamic_policy_for_scope(
+                    owner=owner, scope_id=scope_id, symbol=symbol, feature_arm=arm
+                )
+            except ValueError:
+                return False, "entry_timing_policy_feature_arm_scope_invalid"
+            if symbol == "005930" and (
+                owner == "widget"
+                or scope_id in {"morning", "morning_sor_reentry", "midday", "afternoon"}
+            ):
+                from src.engine.monitoring.machine_entry_confirmation_study import (
+                    validate_operating_selection,
+                )
+
+                evidence = row.get("evidence") or {}
+                if not validate_operating_selection(
+                    evidence.get("operating_economics"), arm=arm
+                ):
+                    return False, "entry_timing_policy_operating_evidence_invalid"
             if (
                 payload.get("schema") != SCHEMA
                 or not isinstance(dynamic_confirmation, dict)
@@ -244,7 +267,8 @@ def validate_applied_policy(payload: Any, *, target_date: date) -> tuple[bool, s
                 or dynamic_confirmation.get("source_gap_action")
                 != (
                     "reject_unconfirmed_entry"
-                    if expected_policy == SAMSUNG_RISE_REBOUND_POLICY
+                    if expected_policy.policy_id
+                    == SAMSUNG_RISE_REBOUND_POLICY.policy_id
                     else "baseline_owner_guard_revalidation"
                 )
                 or dynamic_confirmation.get("source_schema")
@@ -681,6 +705,8 @@ def resolve_entry_confirmation_policy(
     symbol: str,
     session: str,
     entry_state: str = "*",
+    native_policy: Any = None,
+    approved_leg_quantity: int | None = None,
     policy_dir: Path = DEFAULT_POLICY_DIR,
     source_report_dir: Path = DEFAULT_SOURCE_REPORT_DIR,
 ) -> dict[str, Any]:
@@ -725,6 +751,23 @@ def resolve_entry_confirmation_policy(
     for key in keys:
         row = payload["scopes"].get(key)
         if isinstance(row, dict):
+            if symbol == "005930" and native_policy is not None:
+                from src.engine.monitoring.machine_entry_confirmation_study import (
+                    operating_runtime_matches,
+                )
+
+                if not operating_runtime_matches(
+                    (row.get("evidence") or {}).get("operating_economics") or {},
+                    native_policy=native_policy,
+                    leg_quantity=approved_leg_quantity,
+                ):
+                    return {
+                        "mode": "baseline_immediate",
+                        "delay_sec": 0,
+                        "provenance": dict(
+                            provenance, status="operating_runtime_scope_changed"
+                        ),
+                    }
             mode = str(row.get("entry_confirmation_mode") or FIXED_DELAY_MODE)
             return {
                 "mode": mode,
@@ -735,6 +778,9 @@ def resolve_entry_confirmation_policy(
                     "status": "applied",
                     "scope_key": key,
                     "evidence": row.get("evidence"),
+                    "confirmation_feature_arm": (
+                        (row.get("dynamic_confirmation") or {}).get("policy") or {}
+                    ).get("feature_arm", "combined"),
                     "executable_confirmation": row.get("executable_confirmation"),
                     "entry_confirmation_mode": mode,
                 },

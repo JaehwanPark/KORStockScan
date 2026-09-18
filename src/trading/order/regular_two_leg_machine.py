@@ -372,6 +372,26 @@ class SamsungRegularTwoLegMachine:
     def _save(self) -> None:
         if getattr(self, "_adaptive_enrollment_reload_required", False):
             raise EnrollmentReloadRequired("adaptive_enrollment_reload_required")
+        if self.policy.symbol == "005930":
+            from src.engine.monitoring.machine_entry_confirmation_study import (
+                refresh_native_opportunity,
+                record_operating_owner_tick,
+                instrumentation_call,
+            )
+
+            if getattr(self, "_operating_observed_at", None):
+                instrumentation_call(
+                    self._state,
+                    record_operating_owner_tick,
+                    self,
+                    self._operating_observed_at,
+                )
+            instrumentation_call(
+                self._state,
+                refresh_native_opportunity,
+                self._state,
+                route=getattr(self.policy, "route", None),
+            )
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         fd, temp_name = tempfile.mkstemp(
             prefix=f".{self.state_path.name}.", dir=self.state_path.parent
@@ -408,6 +428,25 @@ class SamsungRegularTwoLegMachine:
         # replaced by the leg-derived status.
         if self._state.get("legs") and self._state.get("status") != "BLOCKED":
             self._sync_aggregate()
+        # Additive native source instrumentation; no API/order/guard effects.
+        if self.policy.symbol == "005930":
+            from src.engine.monitoring.machine_entry_confirmation_study import (
+                record_native_source,
+                instrumentation_call,
+                adaptive_new_enrollment_selected,
+            )
+
+            instrumentation_call(
+                self._state,
+                record_native_source,
+                self._state,
+                self.policy,
+                owner=self.entry_timing_owner,
+                scope_id=self.entry_timing_scope_id,
+                now=now,
+                action=action,
+                fields=fields,
+            )
         self._state["last_action"] = action
         audit = self._state.setdefault("audit", [])
         audit.append({"at_kst": _iso(now), "action": action, **fields})
@@ -2366,6 +2405,8 @@ class SamsungRegularTwoLegMachine:
                     symbol=str(self.policy.symbol),
                     session=self.entry_timing_session,
                     entry_state="UNSPECIFIED",
+                    native_policy=self.policy,
+                    approved_leg_quantity=new_entry_quantity(now),
                 )
                 active_delay = int(active_policy["delay_sec"])
                 active_provenance = dict(active_policy["provenance"])
@@ -2421,6 +2462,31 @@ class SamsungRegularTwoLegMachine:
         plans = self.policy.entry_legs(signal.signal_bar.close_price)
         leg_quantity = new_entry_quantity(now)
         total_quantity = leg_quantity * len(plans)
+        if str(self.policy.symbol) == "005930":
+            from src.engine.monitoring.machine_entry_confirmation_study import (
+                capture_episode_opportunity,
+                instrumentation_call,
+                adaptive_new_enrollment_selected,
+            )
+
+            instrumentation_call(
+                self._state,
+                capture_episode_opportunity,
+                self._state,
+                self.policy,
+                owner=self.entry_timing_owner,
+                scope_id=self.entry_timing_scope_id,
+                now=now,
+                signal_bar=latest_iso,
+                plans=plans,
+                quantity=leg_quantity,
+                quantity_receipt=new_entry_quantity_receipt(now),
+                adaptive_required=adaptive_new_enrollment_selected(
+                    self.adaptive_exit_services
+                ),
+                live_eligible=bool(self.live_enabled and source_owner),
+            )
+            self._save()
         if not self.live_enabled:
             self._state.update(
                 {
@@ -2537,6 +2603,11 @@ class SamsungRegularTwoLegMachine:
                     route=str(getattr(self.policy, "route", "SOR") or "SOR").upper(),
                     owner="episode",
                     scope_id=self.entry_timing_scope_id,
+                    feature_arm=str(
+                        timing_policy_provenance.get(
+                            "confirmation_feature_arm", "combined"
+                        )
+                    ),
                     baseline_fill_price=int(signal.signal_bar.close_price),
                     owner_entry_limit_price=max(
                         int(plan["entry_price"]) for plan in plans
@@ -2590,6 +2661,8 @@ class SamsungRegularTwoLegMachine:
                 symbol=str(self.policy.symbol),
                 session=self.entry_timing_session,
                 entry_state="UNSPECIFIED",
+                native_policy=self.policy,
+                approved_leg_quantity=new_entry_quantity(now),
             )
             delay_sec = int(timing_policy["delay_sec"])
             timing_policy_provenance = dict(timing_policy["provenance"])
@@ -2612,6 +2685,11 @@ class SamsungRegularTwoLegMachine:
                     route=str(getattr(self.policy, "route", "SOR") or "SOR").upper(),
                     owner="episode",
                     scope_id=self.entry_timing_scope_id,
+                    feature_arm=str(
+                        timing_policy_provenance.get(
+                            "confirmation_feature_arm", "combined"
+                        )
+                    ),
                     baseline_fill_price=int(signal.signal_bar.close_price),
                     owner_entry_limit_price=max(
                         int(plan["entry_price"]) for plan in plans
@@ -2772,6 +2850,7 @@ class SamsungRegularTwoLegMachine:
         from src.trading.market.machine_rebound_reentry import observe_owner_terminal
 
         observed = (now or datetime.now(tz=KST)).astimezone(KST)
+        self._operating_observed_at = observed
         result = self._run_once_impl(observed)
         if not any(
             SESSION_KEY in leg

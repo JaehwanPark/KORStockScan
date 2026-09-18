@@ -81,8 +81,11 @@ class DynamicConfirmationPolicy:
     maximum_quote_age_ms: int = 1_500
     checkpoints_sec: tuple[int, ...] = CHECKPOINTS_SEC
     policy_id: str = DYNAMIC_CONFIRMATION_POLICY_ID
+    feature_arm: str = "combined"
 
     def __post_init__(self) -> None:
+        if self.feature_arm not in {"bid_rebound", "depletion_flow", "combined"}:
+            raise ValueError("confirmation feature arm invalid")
         numeric_values = (
             self.minimum_bid_return_bps,
             self.minimum_trade_backed_ratio,
@@ -132,7 +135,7 @@ SAMSUNG_CONFIRMATION_SCOPES = frozenset(
 
 
 def dynamic_policy_for_scope(
-    *, owner: str, scope_id: str, symbol: str
+    *, owner: str, scope_id: str, symbol: str, feature_arm: str = "combined"
 ) -> DynamicConfirmationPolicy:
     """One recipe shared by source replay, selection, validation and runtime."""
     if (
@@ -140,7 +143,15 @@ def dynamic_policy_for_scope(
         and symbol == "005930"
         and scope_id in SAMSUNG_CONFIRMATION_SCOPES
     ):
-        return SAMSUNG_RISE_REBOUND_POLICY
+        from dataclasses import replace
+
+        return replace(SAMSUNG_RISE_REBOUND_POLICY, feature_arm=feature_arm)
+    if feature_arm != "combined":
+        if owner != "widget" or symbol != "005930":
+            raise ValueError("feature ablation outside Samsung scope")
+        from dataclasses import replace
+
+        return replace(DEFAULT_DYNAMIC_CONFIRMATION_POLICY, feature_arm=feature_arm)
     return DEFAULT_DYNAMIC_CONFIRMATION_POLICY
 
 
@@ -638,10 +649,14 @@ def _checkpoint_status(
         source_eligible
         and (
             (
-                float(bid_return) <= policy.adverse_bid_return_bps
+                policy.feature_arm in {"bid_rebound", "combined"}
+                and float(bid_return) <= policy.adverse_bid_return_bps
                 and float(bid_recovery) < policy.minimum_rebound_from_low_bps
             )
-            or float(refill) >= policy.adverse_refill_ratio
+            or (
+                policy.feature_arm in {"depletion_flow", "combined"}
+                and float(refill) >= policy.adverse_refill_ratio
+            )
         )
     )
     directional_support = bool(
@@ -654,9 +669,21 @@ def _checkpoint_status(
     supportive = bool(
         source_eligible
         and not adverse
-        and directional_support
-        and float(trade_backed) >= policy.minimum_trade_backed_ratio
-        and float(refill) < policy.maximum_supportive_refill_ratio
+        and (policy.feature_arm == "depletion_flow" or directional_support)
+        and (
+            policy.feature_arm == "bid_rebound"
+            or (
+                float(trade_backed) >= policy.minimum_trade_backed_ratio
+                and float(refill) < policy.maximum_supportive_refill_ratio
+                and (
+                    policy.feature_arm != "depletion_flow"
+                    or (
+                        _finite(row.get("best_ask_depletion_velocity_qty_per_sec")) or 0
+                    )
+                    > 0
+                )
+            )
+        )
         and float(net_edge_after_cost_bps) > 0.0
         and owner_price_feasible is True
     )
@@ -797,7 +824,11 @@ def load_live_dynamic_confirmation_source(
         payload = json.loads(resolved.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, TypeError) as exc:
         return None, f"dynamic_ws_snapshot_unreadable:{type(exc).__name__}"
-    contract = payload.get("machine_confirmation_input_contract") if isinstance(payload, dict) else None
+    contract = (
+        payload.get("machine_confirmation_input_contract")
+        if isinstance(payload, dict)
+        else None
+    )
     if (
         not isinstance(payload, dict)
         or payload.get("schema_version") != "kiwoom_ws_dashboard_snapshot_v1"
@@ -1145,12 +1176,12 @@ def evaluate_live_dynamic_confirmation_progress(
             if any(row["state"] == "SOURCE_GAP" for row in rows):
                 action = (
                     "REJECT"
-                    if policy == SAMSUNG_RISE_REBOUND_POLICY
+                    if policy.policy_id == SAMSUNG_RISE_REBOUND_POLICY.policy_id
                     else "BASELINE_REVALIDATE"
                 )
                 reason = (
                     "rise_rebound_confirmation_source_unavailable"
-                    if policy == SAMSUNG_RISE_REBOUND_POLICY
+                    if policy.policy_id == SAMSUNG_RISE_REBOUND_POLICY.policy_id
                     else "source_gap_fallback_to_existing_owner_guards"
                 )
             else:
@@ -1163,11 +1194,13 @@ def evaluate_live_dynamic_confirmation_progress(
         next_checkpoint = policy.checkpoints_sec[len(rows)]
     else:
         action = (
-            "REJECT" if policy == SAMSUNG_RISE_REBOUND_POLICY else "BASELINE_REVALIDATE"
+            "REJECT"
+            if policy.policy_id == SAMSUNG_RISE_REBOUND_POLICY.policy_id
+            else "BASELINE_REVALIDATE"
         )
         reason = (
             "rise_rebound_confirmation_source_unavailable"
-            if policy == SAMSUNG_RISE_REBOUND_POLICY
+            if policy.policy_id == SAMSUNG_RISE_REBOUND_POLICY.policy_id
             else "no_checkpoint_source_fallback_to_existing_owner_guards"
         )
         next_checkpoint = None
@@ -1182,8 +1215,9 @@ def evaluate_live_dynamic_confirmation_progress(
         ),
         "next_checkpoint_sec": next_checkpoint,
         "checkpoint_decisions": rows,
-        "source_gap_fallback_requires_full_owner_guard_revalidation": policy
-        != SAMSUNG_RISE_REBOUND_POLICY,
+        "source_gap_fallback_requires_full_owner_guard_revalidation": (
+            policy.policy_id != SAMSUNG_RISE_REBOUND_POLICY.policy_id
+        ),
         "runtime_effect": True,
         "actual_order_submitted": False,
         "broker_order_forbidden": False,
@@ -1207,12 +1241,15 @@ def advance_live_dynamic_confirmation(
     widget_take_profit: bool,
     scope_id: str = "",
     snapshot_path: Path | str | None = None,
+    feature_arm: str = "combined",
     policy: DynamicConfirmationPolicy = DEFAULT_DYNAMIC_CONFIRMATION_POLICY,
 ) -> dict[str, Any]:
     """Advance one applied dynamic confirmation without touching the broker."""
 
     if scope_id:
-        policy = dynamic_policy_for_scope(owner=owner, scope_id=scope_id, symbol=symbol)
+        policy = dynamic_policy_for_scope(
+            owner=owner, scope_id=scope_id, symbol=symbol, feature_arm=feature_arm
+        )
 
     checkpoints = {
         int(key): dict(value)
@@ -1276,12 +1313,12 @@ def advance_live_dynamic_confirmation(
             {
                 "action": (
                     "REJECT"
-                    if policy == SAMSUNG_RISE_REBOUND_POLICY
+                    if policy.policy_id == SAMSUNG_RISE_REBOUND_POLICY.policy_id
                     else "BASELINE_REVALIDATE"
                 ),
                 "reason": (
                     "rise_rebound_confirmation_source_unavailable"
-                    if policy == SAMSUNG_RISE_REBOUND_POLICY
+                    if policy.policy_id == SAMSUNG_RISE_REBOUND_POLICY.policy_id
                     else "global_snapshot_gap_fallback_to_existing_owner_guards"
                 ),
                 "selected_delay_sec": None,
