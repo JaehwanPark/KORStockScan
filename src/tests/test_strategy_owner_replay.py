@@ -1095,3 +1095,44 @@ def test_operating_entry_rejects_frozen_model_version_mismatch():
     seed["seed_sha256"] = owner.digest({k: v for k, v in seed.items() if k != "seed_sha256"})
     result = mod.replay_operating_entry_arm(seed, arm, depths, executor=lambda *_: pytest.fail("old model executed"))
     assert result["status"] == "source_gap" and result["net_pnl_krw"] is None
+
+
+def test_pre_ai_replay_requires_actual_availability_and_preserves_source_clock():
+    from src.tests.test_entry_execution_sizing_plan import _priced, _receipt
+    from src.engine.scalping.entry_execution_sizing_plan import compose_entry_execution_sizing_plan
+    from src.engine.sniper_missed_entry_counterfactual import EntryEvent
+    original = entry_owner_event()
+    at = datetime.fromisoformat(original.emitted_at)
+    order = _priced({'qty':10,'price':10000,'order_type_code':'00'})
+    order.update(entry_price_current_price=10020, entry_price_captured_at=at.timestamp())
+    _, fields = compose_entry_execution_sizing_plan([order], expected_total_qty=10,
+        action_receipt=_receipt(entry_ai_screen_pass=False, effective_venue='KRX',
+            scanner_promotion_id='source-p',market_session_bucket='KRX_REGULAR',machine_bundle_sha256='a'*64),
+        quantity_policy_version='qty-original',split_policy_version='leg-original',observation_only=True,
+        replay_context={'stock_code':'005930','observed_at':at.timestamp()})
+    source = EntryEvent(original.emitted_at,original.signal_date,original.name,original.code,
+        'entry_ai_economic_plan_observed',original.record_id,fields)
+    waiting = mod.build_entry_opportunity_replays(original.signal_date,[source],
+        source_stage=source.stage, micro_loader=native_entry_loader,evaluated_at=at.timestamp()+250)
+    assert waiting['counts']['unique_retained']==0
+    assert waiting['counts']['raw_plan_rows']==1
+    available_at = (at+timedelta(seconds=30)).isoformat()
+    witness = EntryEvent(available_at,original.signal_date,original.name,original.code,
+        'entry_ai_economic_decision_available',original.record_id,
+        {'evaluation_attempt_id':'aims-test-1','entry_economic_plan_sha256':fields['entry_execution_sizing_plan_sha256'],
+         'entry_economic_decision_available_at':available_at})
+    result = mod.build_entry_opportunity_replays(original.signal_date,[source,witness],
+        source_stage=source.stage, micro_loader=native_entry_loader,evaluated_at=at.timestamp()+250)
+    assert result['counts']['unique_retained']==1
+    assert result['counts']['completed']==1, result['counts']
+    seed = result['rows'][0]['seed']
+    assert seed['plan_observed_at']==original.emitted_at
+    assert seed['observed_at']==available_at
+    assert seed['original_pre_ai_seed_sha256']==fields['entry_opportunity_replay_seed']['seed_sha256']
+    assert seed['legs']==fields['entry_opportunity_replay_seed']['legs']
+    assert next(iter(result['rows'][0]['arms'].values()))['net_pnl_krw'] is not None
+    bad = EntryEvent(witness.emitted_at,witness.signal_date,witness.name,witness.code,witness.stage,
+        witness.record_id,{**witness.fields,'entry_economic_decision_available_at':original.emitted_at})
+    conflict = mod.build_entry_opportunity_replays(original.signal_date,[source,witness,bad],
+        source_stage=source.stage,micro_loader=native_entry_loader,evaluated_at=at.timestamp()+250)
+    assert conflict['counts']['unique_retained']==0

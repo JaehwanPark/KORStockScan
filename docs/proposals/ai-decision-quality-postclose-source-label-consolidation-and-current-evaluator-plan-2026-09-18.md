@@ -166,3 +166,45 @@ ADQ0–ADQ5 코드 closure는 원천/라벨 공급·legacy consumer 전환·지�
 ADQ6 결과 closure는 승인된 bounded regeneration의 exact date/generation/경제성 상태/최종 consumer receipt다. 자연 표본/model 검증·forward candidate holdout·9/21 PREOPEN/PID·actual rolling/cumulative completed cost 수용은 별도 OPEN이며 양수 정책/EV 개선을 보장하지 않는다. blocker마다 기존 owner artifact·증거·수리 또는 natural 다음 행동·closure test를 남긴다.
 
 이번 문서는 source/consumer/role/지원 범위 및 링크·단일 stable owner·권한을 self review→보완→re-review하고 `git diff --check`와 문서 print-only parser로 검증한다. Python/runtime/automation 구현이 없으므로 trading/provider pytest·가격 backfill·보고서 재생성·서비스/봇 기동·배포·외부 Project/Calendar sync는 실행하지 않는다.
+
+## 8. 후속 보완: 미래 원천 계약과 primary 경제성 closure
+
+후속 사용자 지시로 ADQ1의 기존 완료 판정을 재개방한다. 원본/v2 라벨 보존과 reader 전환은 완료된 부분이며 재작업하지 않는다. 반면 pre-AI 실행 계약 생성, lossless execution projection의 모집단 대사, 원화 추론비용 결속, 실측 모델 오차 차감은 당시 구현·검증 미완료였으며 자연 표본 대기가 아니었다. 이번 보완의 최종 증거는 [원천 생성·경제성 후속 review](../audit-reports/2026-09-18-ai-quality-source-attainability-and-economic-followup-review.md)가 소유한다. 실행 owner는 위 stable ID를 그대로 유지한다.
+
+### 8.1 첫 결손과 과거 복구 경계
+
+- 자연 compact21의 배타적 첫 blocker는 `exact_stop_distance_missing_or_invalid`11, `natural_contract_invalid`9, `terminal_path_not_evaluable`1이다. 이는 valid no-edge가 아니다.
+- stop11: 현행 compact hot payload는 과거 fixed first-hit 연구가 요구하는 exact stop 필드를 생성하지 않았다. 주문 뒤에만 작성되던 atomic execution plan도 AI VETO의 pre-AI 계약이 될 수 없었다. retired `hard_stop_price`/TTL, 사후 고저가 또는 다른 보유 경로 SELL로 복구하지 않는다. 미래에는 당시 loaded holding policy/state·비용·수량·자본·owner TTL을 기존 atomic plan producer가 pre-AI 관측으로 고정하고 기존 full holding interpreter가 독립 청산을 계산한다. fixed-window label은 진단으로 보존한다.
+- contract9: materialized labels와 한 건의 exact 원 raw 대조 결과 timeout8, live PASS의 실제 `entry_risk_pass_residual_risk_not_considered` semantic reject1이다. false exclusion 근거가 없어 그대로 제외한다. transport 실패를 PASS로 바꾸거나 semantic guard를 완화하지 않는다.
+- path1: 098460의10:38:37 판단에 가격 원천이10:51부터 있으므로 고정 과거 window 결손이다. 미래 정상 수집과 구분하며 현재 가격으로 채우지 않는다.
+- 운영 모델: 기존 empty execution projection은 실제 Main 주문0의 근거가 아니었다. 기존 producer census에 stage별 lossless identity와 기존 threshold family partition을 결속한다. 원 broker/order/fill/terminal과 original post-sell completed-cost receipt가 없는 과거 모델 행은 제외한다. 기존 모델 검증 코드와 완료 손익 producer/consumer는 재사용한다.
+
+### 8.2 최소 구현 순서와 계약
+
+1. Main의 기존 live `analyze_target` 호출5경로에 optional source-only observer를 연결한다. 원 request의 machine assessment/capture 직후, provider 전에서 기존 capacity·중앙 allocator·공통 guard·P1 가격 owner·split/TTL·frozen holding/cost context를 사용한다. 실제 BUY receipt의 초기 손절/exit-mode 설정을 같은 pure helper로 frozen CF에 전달하고, loaded micro estimator 초기 상태와 native quote 변화로 정책 상태를 재생한다. watched stock을 복사하며 broker 주문·probe reserve·수량/예산 변경 권한은 없다. capacity 불명, 공통 guard 차단, probe reserve 필요, 보유/비실제/미지원 venue는 정확 blocker를 기록한다.
+2. 당시 관측 계획과 최종 AI trace의 실제 availability clock을 별도로 저장한다. CF의 실행 시작은 incumbent AI 응답 이후이며 응답 전 체결을 만들지 않는다. 양쪽은 같은 frozen 수량·자본·후행 guard·availability를 사용한다. 후보 latency 개선은 이 frozen-clock 비교의 지원 대상이 아니다.
+3. 기존 pipeline writer/summary compactor/threshold projection만 보완한다. pre-AI seed는 기존 decoder 상한2MiB 안에서 lossless 저장하고, 일반 필드는 기존16KiB를 유지한다. stage별 expected/observed count와 identity sum을 대사한다. Main이 이미 확보한 현재 시장 국면을 existing process-local cache에 기록하고 같은 프로세스의 기존 WS observer가 depth cutoff/MAX_FRAME_GAP_SEC 안의 값만 결속한다. 새 request/collector를 만들지 않는다. scope는 declared execution-stage producer census이며 과거 전체 raw/Main order coverage로 확대해 해석하지 않는다.
+4. 기존 compact projection은 source contract 버전과 owner subsection을 결속한다. 코드-only/동일 sealed raw generation 변경은 작은 materialized label·owner report만 재결속하며 전수 trace/payload 재스캔을 피한다. 실제 raw/path 변화는 기존 producer가 새 generation을 작성한다. 과거 제외 행의 삭제된 input은 재구성하지 않는다.
+5. 기존 운영 모델의 선행 actual calibration/model holdout을 검증하고 동일 frozen 자본의 paired 순익·EV·tail·보유 자본·reserve·체결 참여율을 계산한다. 겹치는 단일 포지션 기회는 별도 allocation 모델 없이 독립 이익을 더하지 않고 unsupported/null로 처리한다. 지원 범위가 생겼다는 것과 자연 모델 검증 완료를 구분한다. 운영 arm·선행 모델·reviewed 비용 결손인 진단 행은 provider-funded 후보 탐색에서 제외한다.
+6. 기존 reviewed provider pricing owner를 재사용한다. 현재 `operator_accounting_zero_cost`는 유효기간·원천 bytes/hash·정확 모델을 검증한 경우만 Δcost0이다. nonzero USD 가격은 measured token delta와 reviewed KRW conversion 계약이 없으면 source gap/null이며 임의 환율을 만들지 않는다.
+7. compact 승격 v4는 v3의20 learning/20 holdout/2 held dates/coverage1.0 및 기존 scope·tail·일별 순익·holdout 미사용 조건을 유지하고 실측 오차/stress 하한을 추가한다. 하한은 같은 pair의 base/stress Δ 최소값에서 changed-decision 두 arm의 empirical error envelope와 추론비용을 차감한 평균이다. unchanged decision은 모델 오차가 상쇄된다. 이는 통계적 신뢰하한이나 실제 이익이 아니다.
+8. 기존 dated publisher/Daily/PREOPEN reader/Main loader 및 적용 버전 performance owner를 재사용한다. 실제 submit에서 validated machine/compact 판단 버전·bundle·attempt·trace·PID를 frozen context에 기록하고 기존 완료 비용/주문 journal owner로 joint applied version별 중복 제거·rolling/cumulative EV/순익/tail/노출/model error를 계산한다. Split 정책 적용만으로 machine/compact 소비를 주장하지 않는다. active 조건 통과, fail carry, hash/stale/scope/holdout 차단을 회귀 검증하고9/17 source→9/18 publication→9/21 effective로 제한 갱신한다. 정규 PREOPEN 동결/PID·자연 완료 경제성은 수행하지 않는다.
+
+### 8.3 탐색 가설과 지원 범위
+
+| owner | 검증 가능한 판단 변경 | primary 지원·제외 경계 |
+|---|---|---|
+| 현행 machine | 기존 spread/fillability/book ratio grid 안에서 위험한 현재 ENTER_NOW를 필터링하여 실제 비용 후 손실·노출을 줄이는가 | 실제 downstream compact 판단과 기존 guard를 고정한 current ENTER_NOW filter 비교. 기존 grid/guard를 보존하되 완화 후보의 신규 non-entry 승격은 uncalled downstream AI를 PASS로 가정할 수 없어 primary unsupported; 기존 missed-opportunity 연구는 별도 진단이다. supported owner CF가 source population에 공급된 경우만 비용·모델/stress·별도 chronological holdout gate로 평가한다. |
+| compact | 같은 machine ENTER_NOW/plan에서 불필요 VETO를 PASS로 바꾸거나 손실 PASS를 VETO로 바꾸는가 | 현행 등록 prompt만 비교. PASS/VETO 완료 경로 지원, CAUTION의 실제 recheck 종결 부재는 제외. 판정 불변/self comparison은 Δ0 진단이며 독립 승격이 아니다. |
+
+현재 operating execution 모델의 지원 venue는 KRX/NXT 초기 Main real, native full-depth·full fill·독립 full holding exit다. `KRX_NXT_INTEGRATED`/SOR는 source observer에서 명시적 unsupported이며 공통 venue를 추정하지 않는다. partial/no-fill의 cancel acknowledgement·late-fill inventory, 후행 ADD, 미지원 holding service/시장 입력도 null·구체 owner/closure를 유지한다. 지원 범위 확정은 추가 모델이나 collector 생성 승인이 아니다. 자연21 중 통합 애프터마켓10을 지원 KRX11로 합치지 않는다.
+
+### 8.4 판정과 자연 OPEN
+
+| 구분 | closure |
+|---|---|
+| 구현·검증 완료 | 운영 producer 지원 입력→lossless 저장/분모→independent operating CF→실측 model/stress 계산, 기존 선정/dated consumer·fail carry 회귀를 증거로 판정한다. 합성 fixture는 연결 검증이며 자연 EV가 아니다. |
+| 과거 source gap | 원 pre-AI 계약/stop/path/order/completed-cost 부재는 복구 가능 원 bytes가 있을 때만 수리한다. 원천이 없으면 고정 exclusion이며 기다림으로 닫지 않는다. |
+| unsupported scope | venue/session·partial/no-fill·uncalled downstream AI·겹친 자본 등의 모델 지원 계약 밖. null과 정확 owner/closure; 단순 표본 대기가 아니다. |
+| 자연 실증 대기 | 배포 코드의 지원 기회 관측/actual owner ledger/완료 비용 receipt 유입, 선행 독립 actual 모델 표본 축적, 이후 별도 후보 holdout,9/21 정규 PREOPEN/PID·자연 적용·적용 버전별 rolling/cumulative 완료 손익. 미래 원천 회귀가 PASS인 지원 scope에만 적용한다. |
+| valid no-edge | 모든 필수 source/model/coverage/independent holdout 계약이 유효한 비교에서 양수 조건 불충족. 모델 미검증 또는 null을 no-edge로 바꾸지 않는다. |

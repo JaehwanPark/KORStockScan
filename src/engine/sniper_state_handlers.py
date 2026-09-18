@@ -11781,14 +11781,132 @@ _MACHINE_PRIMARY_LINEAGE_PIPELINE_STAGES = frozenset(
 )
 
 
+def _observe_entry_economics_before_ai(stock, code, ws_data, *, exact_payload,
+                                      assessment, capture, bundle_sha256):
+    """Freeze the existing owner plan before AI without submitting or reserving.
+
+    The clone protects watched state. Broker capacity uses the existing bounded
+    source-only request; missing capacity never falls back to fabricated cash.
+    Submitted-plan calibration and this observation remain separate populations.
+    """
+    from src.engine.scalping.strategy_owner_replay import freeze_entry_operating_context
+    from src.engine.scalping.strategy_owner_components import digest
+    snapshot = copy.deepcopy(stock or {})
+    now_ts = time.time()
+    source = {"entry_economic_source_status": "source_gap",
+              "entry_economic_source_owner": "main_entry_execution_owners",
+              "entry_economic_source_closure_test": "pre_ai_owner_plan_to_independent_operating_replay"}
+    identity = dict(evaluation_attempt_id=capture.get("evaluation_attempt_id"),
+        scanner_promotion_id=capture.get("scanner_promotion_id"),
+        effective_venue=capture.get("effective_venue"),
+        market_session_bucket=capture.get("session_bucket") or exact_payload.get("session_bucket"),
+        machine_bundle_sha256=bundle_sha256, entry_mechanistic_action=assessment.get("action"),
+        entry_primary_decision_owner="mechanistic_entry_adjudicator", entry_ai_screen_pass=False)
+    try:
+        if snapshot.get("code") and str(snapshot["code"])[:6] != str(code)[:6]:
+            raise ValueError("watched_stock_symbol_conflict")
+        snapshot["code"] = str(code)[:6]
+        from src.engine.scalping.avg_down_replay_capture import GLOBALS
+        for name in GLOBALS:
+            if getattr(sys.modules[__name__], name, None) is None:
+                raise ValueError("runtime_owner_state_not_initialized:" + name)
+        if (assessment.get("action") != "ENTER_NOW" or not identity["evaluation_attempt_id"]
+            or _safe_int(snapshot.get("buy_qty"), 0) > 0
+            or _is_any_simulated_position(snapshot, snapshot.get("strategy"))):
+            raise ValueError("unsupported_noninitial_or_nonreal_machine_scope")
+        # No route inference or use of the retired hard_stop_price TTL field.
+        venue = identity["effective_venue"]
+        if venue not in {"KRX", "NXT"}:
+            raise ValueError("unsupported_pre_ai_execution_venue:" + str(venue))
+        current = _safe_int((exact_payload.get("current") or {}).get("price"), 0)
+        if current <= 0:
+            raise ValueError("exact_reference_price_missing")
+        budget = _resolve_scalp_cash_budget_context(code, current, 0, source_only=True)
+        if budget.get("kt00011_error") or budget.get("cash_orderable_qty_cap") is None:
+            raise ValueError("exact_broker_capacity_missing")
+        budget = _apply_general_entry_margin_budget_authority(budget, unit_price=current)
+        margin = bool(budget.get("general_entry_margin_one_share_authorized"))
+        context = ScalpingSizingContext(allocation_stage="initial_entry",
+            reference_time=datetime.fromtimestamp(now_ts, tz=_KST), effective_venue=venue,
+            source_signature=snapshot.get("source_signature") or snapshot.get("scanner_source_signature"),
+            budget_base_krw=max(0, _safe_int(budget.get("budget_base"), 0)), price_krw=current,
+            safety_ratio=_rule_float("BUY_BUDGET_SAFETY_RATIO", 0.95),
+            absolute_budget_cap_krw=int(_rule("SCALPING_MAX_BUY_BUDGET_KRW", 0) or 0),
+            current_position_qty=0, max_position_qty_cap=max_position_qty_cap_from_budget(
+                budget.get("budget_base", 0), current, _rule_float("MAX_POSITION_PCT", 0.20)),
+            cash_orderable_qty_cap=None if margin else budget["cash_orderable_qty_cap"],
+            broker_qty_cap=budget.get("general_entry_margin_orderable_qty_cap") if margin else None,
+            broker_confirmed_one_share_floor=margin, stage_qty_cap=1 if margin else None,
+            min_one_share_floor_enabled=bool(_rule("SCALPING_MIN_ONE_SHARE_FLOOR_ENABLED", True)))
+        sizing = resolve_scalping_allocation(context)
+        if sizing.effective_qty <= 0:
+            raise ValueError("owner_sizing_zero_or_invalid")
+        gate = evaluate_live_buy_entry(stock=snapshot, code=code, ws_data=copy.deepcopy(ws_data),
+            strategy_id="SCALPING", planned_qty=sizing.effective_qty, signal_price=current,
+            target_buy_price=_safe_int(snapshot.get("target_buy_price"), 0))
+        if gate.get("allowed") is not True:
+            raise ValueError("common_guard_block:" + str(gate.get("reason")))
+        orders, _ = _apply_mechanistic_entry_price_owner(stock=snapshot, code=code,
+            strategy="SCALPING", ws_data=ws_data, ai_engine=None, latency_gate=gate,
+            planned_orders=gate.get("orders"), curr_price=current,
+            best_bid=_safe_int((exact_payload.get("orderbook_top1") or {}).get("bid", {}).get("price"), 0),
+            best_ask=_safe_int((exact_payload.get("orderbook_top1") or {}).get("ask", {}).get("price"), 0))
+        context, final_sizing, orders, _ = _revalidate_scalping_sizing_for_final_order_price(
+            context, sizing, orders, curr_price=current,
+            best_ask=_safe_int((exact_payload.get("orderbook_top1") or {}).get("ask", {}).get("price"), 0))
+        if not orders:
+            raise ValueError("owner_price_or_final_sizing_missing")
+        operating = freeze_entry_operating_context(sys.modules[__name__], snapshot, context, now_ts=now_ts)
+        if not operating:
+            raise ValueError("frozen_operating_contract_missing")
+        orders, split = apply_entry_split_order_policy(orders, stock=snapshot,
+            latency_gate=gate, operating_context=operating, observation_only=True)
+        if not orders:
+            raise ValueError(split.get("entry_split_order_skip_reason") or "owner_split_plan_missing")
+        orders = _decorate_entry_split_leg_ttls(orders, snapshot, "SCALPING")
+        timeout = _resolve_buy_order_timeout_sec(snapshot, "SCALPING")
+        operating.update(order_leg_ttl_sec=[o.get("split_leg_ttl_sec") or timeout for o in orders],
+            order_bundle_hard_ttl_sec=max(o.get("split_bundle_hard_ttl_sec") or timeout for o in orders),
+            order_timeout_owner="sniper_state_handlers._resolve_buy_order_timeout_sec/_decorate_entry_split_leg_ttls")
+        from src.engine.scalping.entry_split_order_plan import _context_bucket
+        operating["context_bucket"] = _context_bucket({**snapshot, **gate})
+        operating["sha256"] = digest({k:v for k,v in operating.items() if k != "sha256"})
+        _, fields = compose_entry_execution_sizing_plan(orders,
+            expected_total_qty=_entry_planned_total_qty(orders), action_receipt=identity,
+            quantity_policy_version=sizing.policy_version,
+            split_policy_version=split.get("entry_split_order_policy_version"), observation_only=True,
+            replay_context={"stock_code": code, "observed_at": time.time(),
+                "sizing_context": context, "operating_context": operating})
+        if fields.get("entry_execution_sizing_valid") is not True or not fields.get("entry_opportunity_replay_seed"):
+            raise ValueError("atomic_observation_plan_invalid:" + str(fields.get("entry_execution_sizing_blockers")))
+        fields["entry_economic_capacity_receipt"] = budget
+        source.update(entry_economic_source_status="recorded_source_only",
+                      entry_economic_plan_sha256=fields["entry_execution_sizing_plan_sha256"])
+        stage = "entry_ai_economic_plan_observed"
+    except (ValueError, TypeError, KeyError, AttributeError) as exc:
+        fields = {}
+        source["entry_economic_source_blocker"] = str(exc)
+        if str(exc).startswith("unsupported_"):
+            source["entry_economic_source_status"] = "unsupported_scope"
+        stage = "entry_ai_economic_source_gap"
+    event = _log_entry_pipeline(snapshot, code, stage, **identity, **fields, **source,
+        actual_order_submitted=False, broker_order_forbidden=True,
+        runtime_effect=False, allowed_runtime_apply=False)
+    if not isinstance(event, dict) or event.get("structured_append_succeeded") is not True:
+        source.update(entry_economic_source_status="source_gap",
+                      entry_economic_source_blocker="structured_pre_ai_observation_append_failed")
+    return source
+
+
 def _log_entry_pipeline(stock, code, stage, **fields):
     if stage in {"latency_block", "latency_pass", "order_bundle_submitted",
-                 "entry_execution_sizing_plan", "entry_execution_sizing_plan_block"}:
+                 "entry_execution_sizing_plan", "entry_execution_sizing_plan_block",
+                 "entry_ai_economic_plan_observed", "entry_ai_economic_source_gap"}:
         # The existing pipeline wire contract stores field values as strings.
         # Preserve these input facts as parseable JSON, not Python dict repr.
         for key in ("market_data_health", "input_quote_source_receipt",
                     "entry_execution_sizing_plan", "entry_price_plan",
-                    "entry_opportunity_replay_seed"):
+                    "entry_opportunity_replay_seed", "entry_economic_capacity_receipt"):
             if isinstance(fields.get(key), dict):
                 fields[key] = json.dumps(fields[key], sort_keys=True, separators=(",", ":"))
     if stage in _MACHINE_PRIMARY_LINEAGE_PIPELINE_STAGES and isinstance(stock, dict):
@@ -31259,6 +31377,9 @@ def _machine_primary_entry_provenance_fields(source: dict | None) -> dict:
         "entry_source_invalid_primary_category",
         "entry_source_invalid_primary_basis",
         "scanner_promotion_id",
+        "ai_prompt_version",
+        "ai_prompt_sha256",
+        "ai_decision_trace_id",
         "machine_bundle_sha256",
         "policy_bundle_hash",
         "entry_setup_live_policy_effective_venue",
@@ -39496,6 +39617,8 @@ def _retry_entry_ai_submit_authority_before_block(
             retry_ws_data,
             recent_ticks,
             recent_candles,
+            entry_economics_observer=lambda **facts: _observe_entry_economics_before_ai(
+                stock, code, retry_ws_data, **facts),
             prompt_profile="watching",
             metadata_extra={
                 **_scanner_promotion_correlation_fields(stock or {}),
@@ -60290,6 +60413,8 @@ def _resolve_scanner_async_entry_ai(
                 thaw_scanner_async_value(prepared.get("ws_data") or {}),
                 thaw_scanner_async_value(prepared.get("recent_ticks") or []),
                 thaw_scanner_async_value(prepared.get("recent_candles") or []),
+                entry_economics_observer=lambda **facts: _observe_entry_economics_before_ai(
+                    stock, code, thaw_scanner_async_value(prepared.get('ws_data') or {}), **facts),
                 prompt_profile="watching",
                 metadata_extra={
                     **_scanner_promotion_correlation_fields(stock_snapshot),
@@ -61596,6 +61721,8 @@ def _handle_watching_strategy_branch(
                                     entry_ai_ws_data,
                                     recent_ticks,
                                     recent_candles,
+                                    entry_economics_observer=lambda **facts: _observe_entry_economics_before_ai(
+                                        stock, code, entry_ai_ws_data, **facts),
                                     prompt_profile="watching",
                                     metadata_extra={
                                         **_scanner_promotion_correlation_fields(stock),
@@ -62078,6 +62205,8 @@ def _handle_watching_strategy_branch(
                                     ws_data,
                                     recent_ticks,
                                     recent_candles,
+                                    entry_economics_observer=lambda **facts: _observe_entry_economics_before_ai(
+                                        stock, code, ws_data, **facts),
                                     prompt_profile="watching",
                                     cache_profile="numeric_consistency_recheck",
                                     metadata_extra={
@@ -62325,6 +62454,8 @@ def _handle_watching_strategy_branch(
                                     ws_data,
                                     recent_ticks,
                                     recent_candles,
+                                    entry_economics_observer=lambda **facts: _observe_entry_economics_before_ai(
+                                        stock, code, ws_data, **facts),
                                     prompt_profile="watching",
                                     cache_profile="early_accel_strong_bundle_recheck",
                                     metadata_extra={
@@ -68419,6 +68550,17 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             if operating_context:
                 from src.engine.scalping.entry_split_order_plan import _context_bucket
                 operating_context["context_bucket"]=_context_bucket({**stock,**latency_gate,**entry_orderbook_micro_fields})
+                decision_source = stock.get("last_watching_ai_machine_primary_fields") or {}
+                decision_receipt = dict(
+                    evaluation_attempt_id=machine_action_receipt.get("evaluation_attempt_id"),
+                    machine_bundle_sha256=machine_action_receipt.get("machine_bundle_sha256") or machine_action_receipt.get("policy_bundle_hash"),
+                    machine_policy_version=decision_source.get("entry_mechanistic_policy_version"),
+                    compact_prompt_version=decision_source.get("ai_prompt_version"),
+                    decision_trace_id=stock.get("last_watching_ai_decision_trace_id"),
+                    runtime_pid=os.getpid(), consumed_at=datetime.fromtimestamp(time.time(),tz=_KST).isoformat())
+                from src.engine.scalping.strategy_owner_components import digest
+                decision_receipt["sha256"]=digest(decision_receipt)
+                operating_context["entry_decision_version_receipt"]=decision_receipt
                 from src.engine.scalping.strategy_owner_components import digest
                 operating_context["sha256"]=digest({k:v for k,v in operating_context.items() if k!="sha256"})
             planned_orders, entry_execution_sizing_fields = (

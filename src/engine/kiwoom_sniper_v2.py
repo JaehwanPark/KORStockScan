@@ -12207,6 +12207,8 @@ def run_sniper(is_test_mode=False):
             now_t = now.time()
             run_sniper.runtime_pause_state = is_buy_side_paused()
             current_market_regime = _current_market_regime_code()
+            from src.engine.scalping.avg_down_replay_capture import record_main_market_regime
+            record_main_market_regime(current_market_regime, now_ts=now_ts)
             _ensure_state_handler_deps()
 
             from src.engine.error_detectors.process_health import (

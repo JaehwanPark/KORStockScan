@@ -1219,9 +1219,9 @@ def test_emit_pipeline_event_compacts_submit_stage_threshold_stream(
         if line.strip()
     ]
     compact_fields = compact_rows[0]["fields"]
-    assert compact_fields["field_projection"] == "submit_compact_v1"
-    assert int(compact_fields["full_field_count"]) > len(compact_fields)
-    assert int(compact_fields["omitted_field_count"]) > 0
+    # Broker terminal conservation now requires this execution stage losslessly.
+    assert compact_fields == raw_rows[0]["fields"]
+    assert compact_fields["extra_field_49"] == "49"
     assert (
         compact_fields["ka10003_buy_dominance_observation_source_counts"]
         == "{'1030_1031_split': 2}"
@@ -1263,7 +1263,7 @@ def test_emit_pipeline_event_compacts_submit_stage_threshold_stream(
         compact_fields["latency_true_ofi_direct_canary_tape_block_reason"]
         == "signed_tape_sell_dominated"
     )
-    assert "extra_field_49" not in compact_fields
+    assert "extra_field_49" in compact_fields
 
 
 def test_emit_pipeline_event_compacts_high_volume_threshold_stream_losslessly(
@@ -1395,3 +1395,41 @@ def test_compact_execution_contract_survives_large_field_count(stage):
     for key in ("entry_execution_sizing_plan_id", "entry_execution_sizing_plan_sha256",
                 "entry_price_plan_sha256", "entry_opportunity_replay_seed", "broker_order_no"):
         assert compact[key] == fields[key]
+
+
+def test_execution_producer_family_projection_has_reconciled_census(monkeypatch, tmp_path):
+    from src.engine.scalping import entry_split_order_plan as owner
+    from src.engine.pipeline_event_summary import execution_projection_identity
+    _reset_logger_state(monkeypatch)
+    monkeypatch.setattr(logger_mod, 'DATA_DIR', tmp_path)
+    monkeypatch.setattr(owner, 'DATA_DIR', tmp_path)
+    monkeypatch.setattr(logger_mod, 'TRADING_RULES', SimpleNamespace(PIPELINE_EVENT_JSONL_ENABLED=True,
+        PIPELINE_EVENT_SCHEMA_VERSION=3, PIPELINE_EVENT_TEXT_INFO_LOG_ENABLED=False))
+    monkeypatch.setattr(logger_mod, 'log_info', lambda *a, **k: None)
+    event = logger_mod.emit_pipeline_event('ENTRY_PIPELINE','TEST','005930',
+        'entry_ai_economic_source_gap', record_id=1, fields={'evaluation_attempt_id':'pre-ai-1',
+        'entry_economic_source_blocker':'exact_broker_capacity_missing',
+        **{f'field-{i}':str(i) for i in range(80)}})
+    day = event['emitted_date']
+    logger_mod.flush_pipeline_event_producer_summary(day)
+    flat = tmp_path / 'threshold_cycle' / f'threshold_events_{day}.jsonl'
+    # A growing unrelated flat stream must not force a raw scan.
+    with flat.open('r+b') as handle: handle.truncate(65*1024*1024)
+    rows, contract = owner._bounded_execution_projection(day)
+    assert len(rows) == 1
+    assert rows[0]['fields']['field-79'] == '79'
+    assert contract['producer_census']['identity_conservation_holds'] is True
+    assert contract['full_population_coverage_verified'] is True
+    assert contract['flat_compact_included'] is False
+    part = next((tmp_path / 'threshold_cycle' / f'date={day}' / 'family=dynamic_entry_price_resolver').glob('part-execution-*'))
+    tampered = json.loads(part.read_text());tampered['fields']['evaluation_attempt_id']='changed'
+    part.write_text(json.dumps(tampered)+'\n')
+    with pytest.raises(ValueError, match='content_identity_mismatch'):
+        owner._bounded_execution_projection(day)
+    # Even a correctly resealed projection cannot alter the original producer census.
+    tampered['execution_source_event_sha256'] = execution_projection_identity(tampered)
+    part.write_text(json.dumps(tampered)+'\n')
+    _, bad = owner._bounded_execution_projection(day)
+    assert bad['status'] == 'source_gap'
+    logger_mod._flush_producer_summary_at_exit()
+    monkeypatch.setattr(logger_mod,'_PRODUCER_COMPACTOR',None)

@@ -8379,6 +8379,7 @@ class GPTSniperEngine:
         prompt_profile="shared",
         metadata_extra=None,
         candle_context=None,
+        entry_economics_observer=None,
     ):
         from src.engine.scalping.entry_setup_scalping_rollout import PATH_ENV, SHA_ENV
 
@@ -8393,6 +8394,7 @@ class GPTSniperEngine:
         )
         if rollout_entry:
             prompt_profile = "watching"
+        economic_source_fields = {}
         analysis_started = time.perf_counter()
         prompt_version = "default_v1"
         cache_strategy = strategy
@@ -8818,6 +8820,7 @@ class GPTSniperEngine:
             merged = merge_lifecycle_ai_context_fields(merged, lifecycle_ai_runtime)
             # Refresh diagnostic policy status even when reusing a cached decision.
             merged.update(fallback_policy_trace_fields)
+            merged.update(economic_source_fields)
             for key, value in machine_policy_trace_fields.items():
                 merged.setdefault(key, value)
             return merged
@@ -9140,6 +9143,16 @@ class GPTSniperEngine:
                         else {}
                     ),
                 )
+                if machine_assessment["action"] == "ENTER_NOW" and callable(entry_economics_observer):
+                    try:
+                        economic_source_fields = entry_economics_observer(
+                            exact_payload=machine_exact, assessment=machine_assessment,
+                            capture=machine_capture, bundle_sha256=entry_setup_live_policy["machine_bundle_sha256"],
+                        ) or {}
+                    except Exception as exc:
+                        # Instrumentation can never alter machine/AI/order authority.
+                        economic_source_fields = {"entry_economic_source_status": "source_gap",
+                            "entry_economic_source_blocker": "observer_failed:" + type(exc).__name__}
                 machine_first_context = {
                     "assessment": machine_assessment,
                     "flow_observation": build_mechanistic_entry_flow_observation(

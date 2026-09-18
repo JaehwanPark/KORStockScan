@@ -2459,6 +2459,9 @@ def record_ai_decision_trace(
             "adverse_price": _safe_number(_optional(merged, "ai_trace_adverse_price")),
             "target_pct": _safe_number(_optional(merged, "ai_trace_target_pct")),
             "adverse_pct": _safe_number(_optional(merged, "ai_trace_adverse_pct")),
+            "entry_economic_plan_sha256": merged.get("entry_economic_plan_sha256"),
+            "entry_economic_source_status": merged.get("entry_economic_source_status"),
+            "entry_economic_source_blocker": merged.get("entry_economic_source_blocker"),
             "actual_order_authority": bool(merged.get("actual_order_authority", False)),
             "outcome_label_eligible": not outcome_label_exclusion_reasons,
             "outcome_label_exclusion_reasons": outcome_label_exclusion_reasons,
@@ -2763,6 +2766,15 @@ def record_ai_decision_trace(
                 seen = _load_seen(path, "decision_trace_id")
                 _SEEN_TRACE_IDS[target_date] = seen
             if trace_id not in seen:
+                if trace_row.get("entry_economic_plan_sha256"):
+                    from src.utils.pipeline_event_logger import emit_pipeline_event
+                    emit_pipeline_event("ENTRY_PIPELINE", str(trace_row.get("stock_code") or ""),
+                        str(trace_row.get("stock_code") or ""), "entry_ai_economic_decision_available",
+                        fields={"evaluation_attempt_id": trace_row.get("evaluation_attempt_id"),
+                            "entry_economic_plan_sha256": trace_row["entry_economic_plan_sha256"],
+                            "entry_economic_decision_available_at": trace_row["decision_ts"],
+                            "decision_trace_id": trace_id, "actual_order_submitted": False,
+                            "broker_order_forbidden": True, "runtime_effect": False, "allowed_runtime_apply": False})
                 _append_jsonl(_trace_path(target_date), trace_row)
                 seen.add(trace_id)
             if trace_row["outcome_label_eligible"]:

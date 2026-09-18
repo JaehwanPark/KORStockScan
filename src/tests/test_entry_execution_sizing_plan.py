@@ -1,5 +1,7 @@
 import hashlib
 import json
+
+import pytest
 from datetime import datetime
 
 from src.engine.scalping import entry_execution_sizing_plan as sizing
@@ -690,3 +692,200 @@ def test_replay_anchor_uses_plan_issue_clock_without_refreshing_original_quote()
     assert datetime.fromisoformat(seed['observed_at']).timestamp() == quote_at + 2
     assert orders[0]['entry_price_captured_at'] == quote_at
     assert fields['entry_execution_sizing_plan']['price_candidates'][0]['captured_at'] == quote_at
+
+
+def test_before_ai_observation_is_not_a_submit_pass_and_keeps_frozen_seed():
+    from src.engine.sniper_missed_entry_counterfactual import _price_ready_plan, EntryEvent, _load_entry_events
+    from src.engine.monitoring.research_closed_loop import digest
+    clock = datetime.fromisoformat('2026-09-18T10:00:00+09:00').timestamp()
+    order = _priced({'qty': 10, 'price': 10000, 'order_type_code': '00'})
+    order.update(entry_price_current_price=10020, entry_price_captured_at=clock)
+    receipt = _receipt(entry_ai_screen_pass=False, scanner_promotion_id='pre-ai-p',
+        effective_venue='KRX', market_session_bucket='KRX_REGULAR', machine_bundle_sha256='a'*64)
+    kwargs = dict(expected_total_qty=10, action_receipt=receipt, quantity_policy_version='qty-original',
+        split_policy_version='leg-original', replay_context={'stock_code': '005930', 'observed_at': clock})
+    _, actual = compose_entry_execution_sizing_plan([order], **kwargs)
+    assert actual['entry_execution_sizing_valid'] is False
+    _, observed = compose_entry_execution_sizing_plan([order], observation_only=True, **kwargs)
+    assert observed['entry_execution_sizing_valid'] is True
+    seed = observed['entry_opportunity_replay_seed']
+    seed['retained_owner_metadata'] = 'x' * 32000
+    seed['seed_sha256'] = digest({k:v for k,v in seed.items() if k != 'seed_sha256'})
+    row = dict(pipeline='ENTRY_PIPELINE', stock_code='005930', stock_name='TEST', record_id=1,
+        stage='entry_ai_economic_plan_observed', emitted_at='2026-09-18T10:00:00+09:00',
+        emitted_date='2026-09-18', fields=observed)
+    decoded = _load_entry_events('2026-09-18', rows=[row])[0]
+    assert decoded.fields['entry_opportunity_replay_seed'] == seed
+    assert _price_ready_plan(decoded)['observation_only'] is True
+    assert _price_ready_plan(EntryEvent(decoded.emitted_at, decoded.signal_date, decoded.name,
+        decoded.code, 'entry_execution_sizing_plan', decoded.record_id, decoded.fields)) == {}
+    # Observation mode cannot promote machine non-entry or invent quantity.
+    _, blocked = compose_entry_execution_sizing_plan([order], observation_only=True,
+        **{**kwargs, 'action_receipt': {**receipt, 'entry_mechanistic_action': 'BLOCK'}})
+    assert blocked['entry_execution_sizing_valid'] is False
+
+
+@pytest.mark.parametrize('guard_allowed', [True, False])
+def test_runtime_pre_ai_producer_freezes_owner_inputs_without_submit(monkeypatch, tmp_path, guard_allowed):
+    from copy import deepcopy
+    from types import SimpleNamespace
+    from src.engine import sniper_state_handlers as handlers
+    from src.engine.scalping import entry_split_order_plan as split
+    from src.engine.scalping import strategy_owner_replay as replay
+    from src.engine.scalping import avg_down_replay_capture as capture_owner
+    from src.engine.sniper_missed_entry_counterfactual import _load_entry_events, _price_ready_plan
+    from src.tests.test_pipeline_event_logger import _reset_logger_state
+    from src.utils import pipeline_event_logger as logger
+    _reset_logger_state(monkeypatch)
+    monkeypatch.setattr(logger, 'DATA_DIR', tmp_path)
+    monkeypatch.setattr(split, 'DATA_DIR', tmp_path)
+    monkeypatch.setattr(logger, 'log_info', lambda *a,**k: None)
+    monkeypatch.setattr(logger, 'TRADING_RULES', SimpleNamespace(PIPELINE_EVENT_JSONL_ENABLED=True,
+        PIPELINE_EVENT_SCHEMA_VERSION=3, PIPELINE_EVENT_TEXT_INFO_LOG_ENABLED=False))
+    monkeypatch.setattr(handlers, 'emit_pipeline_event', logger.emit_pipeline_event)
+    monkeypatch.setattr(handlers, 'observe_candidate_transition_safe', lambda *a,**k: None)
+    monkeypatch.setattr(handlers, '_maybe_register_rising_missed_nxt_downstream_block_sampler', lambda *a,**k: None)
+    for name in capture_owner.GLOBALS:
+        monkeypatch.setattr(handlers,name,set() if name=='ALERTED_STOCKS' else {})
+    monkeypatch.setattr(handlers, '_is_any_simulated_position', lambda *a,**k: False)
+    monkeypatch.setattr(handlers, '_apply_general_entry_margin_budget_authority', lambda b,**k: b)
+    # Only external account source and market guard boundary are controlled.
+    # Sizing, price owner, atomic writer and frozen operating producer run normally.
+    requests=[]
+    def broker_capacity(code, price, fallback, **kwargs):
+        requests.append((code, price, fallback, kwargs))
+        return {'budget_base':500000,'cash_orderable_qty_cap':40,'kt00011_error':'',
+                'capacity_source_sha256':'9'*64}
+    monkeypatch.setattr(handlers, '_resolve_scalp_cash_budget_context', broker_capacity)
+    def guard(**kwargs):
+        kwargs['stock']['research_mutation'] = True
+        return {'allowed':guard_allowed,'reason':'fixture_guard_block','latency_state':'SAFE',
+            'orders':[{'qty':kwargs['planned_qty'],'price':10000,'order_type_code':'00'}]}
+    monkeypatch.setattr(handlers, 'evaluate_live_buy_entry', guard)
+    # Frozen policy snapshot is a source fixture, not an actual SELL receipt.
+    from src.tests.test_avg_down_policy_replay import exit_fixture
+    policy_observation, _ = exit_fixture()
+    policy_snapshot = deepcopy(policy_observation['policy_snapshot'])
+    day = datetime.now(sizing.KST).date().isoformat()
+    frozen_clock=datetime.fromisoformat(day+'T10:00:00+09:00')
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls,tz=None):
+            return frozen_clock.astimezone(tz) if tz else frozen_clock.replace(tzinfo=None)
+    monkeypatch.setattr(handlers.time,'time',lambda: frozen_clock.timestamp())
+    monkeypatch.setattr(logger,'datetime',FixedDatetime)
+    policy_snapshot['environment']['KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ACTIVE_DATE'] = day
+    policy_snapshot['files']={key.replace('2026-09-04',day):value for key,value in policy_snapshot['files'].items()}
+    monkeypatch.setattr(capture_owner, '_cached_policy', lambda *a: policy_snapshot)
+    stock={'name':'TEST','id':1,'strategy':'SCALPING','source_signature':'scanner-confirmed'}
+    before=deepcopy(stock)
+    ws={'curr':10020,'effective_route':'KRX','source_epoch':'epoch-1'}
+    exact={'current':{'price':10020},'session_bucket':'KRX_REGULAR',
+           'orderbook_top1':{'bid':{'price':10000},'ask':{'price':10010}}}
+    receipt={'evaluation_attempt_id':'pre-ai-live','scanner_promotion_id':'promotion-pre-ai',
+             'effective_venue':'KRX','session_bucket':'KRX_REGULAR'}
+    result=handlers._observe_entry_economics_before_ai(stock,'005930',ws,
+        exact_payload=exact,assessment={'action':'ENTER_NOW'},capture=receipt,bundle_sha256='a'*64)
+    assert stock == before
+    assert requests == [('005930',10020,0,{'source_only':True})]
+    logger.flush_pipeline_event_producer_summary()
+    day=datetime.now(sizing.KST).date().isoformat()
+    events, source_contract=split._bounded_execution_projection(day)
+    assert source_contract['producer_census']['identity_conservation_holds'] is True
+    assert len(events)==1
+    if guard_allowed:
+        assert result['entry_economic_source_status']=='recorded_source_only', result
+        event=_load_entry_events(day,rows=events)[0]
+        plan=_price_ready_plan(event)
+        assert plan['observation_only'] is True
+        seed=json.loads(event.fields['entry_opportunity_replay_seed'])
+        assert replay._entry_seed_valid(seed)
+        assert seed['operating_contract']['budget_krw'] > 0
+        assert seed['actual_order_submitted'] is False
+        assert events[0]['fields']['entry_ai_screen_pass']=='False'
+        # The actual source producer's frozen input reaches the existing full
+        # holding interpreter. Only account and native market sources are
+        # controlled; there is no manually fabricated operating-arm result.
+        from src.tests.test_strategy_owner_replay import entry_native_path
+        from src.utils.pipeline_event_logger import emit_pipeline_event
+        available_at = frozen_clock.isoformat()
+        emit_pipeline_event('ENTRY_PIPELINE','TEST','005930','entry_ai_economic_decision_available',
+            fields=dict(evaluation_attempt_id=receipt['evaluation_attempt_id'],
+                entry_economic_plan_sha256=result['entry_economic_plan_sha256'],
+                entry_economic_decision_available_at=available_at))
+        logger.flush_pipeline_event_producer_summary()
+        retained, _ = split._bounded_execution_projection(day)
+        def native_loader(day, root, symbols, anchors, manifest, canary, evaluated_at):
+            windows={}
+            for anchor in anchors:
+                depths,trades=entry_native_path({'observed_at':anchor['anchor_at']})
+                for frame in depths:
+                    at=datetime.fromisoformat(frame['exchange_timestamp']).timestamp()
+                    bid,ask=(9980,9990) if frame['source_sequence']<=1 else (9500,9510)
+                    frame.update(best_bid=bid,best_ask=ask,bid_levels=[[1,bid,1000]],ask_levels=[[1,ask,800]],
+                        ws_data=dict(curr=bid,best_bid=bid,best_ask=ask,best_bid_qty=1000,best_ask_qty=800,
+                            last_ws_update_ts=at,last_realtime_type_ts={'0D':at},quote_stale=False))
+                    capture_owner.record_main_market_regime('BULL', now_ts=at)
+                    frame['recorded_inputs']=capture_owner.recorded_market_inputs('005930',cutoff_ts=at)
+                windows[anchor['anchor_id']]=dict(raw_depth_rows=depths,raw_market_rows=trades)
+            return {'source_contract_ready':True},{},windows
+        computed=replay.build_entry_opportunity_replays(day,_load_entry_events(day,rows=retained),
+            source_stage='entry_ai_economic_plan_observed', micro_loader=native_loader,
+            evaluated_at=datetime.fromisoformat(available_at).timestamp()+250)
+        assert computed['counts']['unique_retained']==1
+        operating=next(iter(computed['rows'][0]['operating_arms'].values()))
+        assert operating['status']=='completed_source_only', operating['blocker']
+        assert operating['net_pnl_krw']<0
+        assert operating['stress_net_pnl_krw']<=operating['net_pnl_krw']
+        assert operating['capital_krw_minutes']>0 and operating['reserve_krw_minutes']>0
+        assert operating['actual_fill_evidence'] is False
+        # Public request/response storage, not a manually assembled evaluator
+        # input, joins the independently replayed source by exact attempt.
+        from src.tests.test_ai_decision_trace import _enable
+        from src.engine.scalping import ai_decision_trace as trace
+        from src.engine.scalping import compact_auxiliary_paired_replay as compact
+        from src.engine.scalping.mechanistic_entry_runtime_policy import AI_VERSION
+        _enable(monkeypatch,tmp_path)
+        monkeypatch.setattr(trace,'_now',lambda:frozen_clock)
+        request=trace.capture_ai_request(prompt='fixture risk screen',user_input=exact,
+            endpoint_name='analyze_target',symbol='005930',request_id='producer-risk-fixture',
+            model='gpt-5.4-nano',schema_name='entry_setup_risk_adjudication_v1',require_json=True,
+            metadata=dict(evaluation_attempt_id=receipt['evaluation_attempt_id'],
+                scanner_promotion_id=receipt['scanner_promotion_id'],effective_venue='KRX',session_bucket='KRX_REGULAR'))
+        stored=trace.record_ai_decision_trace({**request,**receipt,
+            'machine_bundle_sha256':'a'*64,'entry_mechanistic_action':'ENTER_NOW',
+            'semantic_validation_status':'pass','decision_quality_contract_status':'pass',
+            'entry_ai_risk_verdict':'PASS','action':'BUY','score':80,'provider_actual':'openai',
+            'ai_model_actual':'gpt-5.4-nano'},prompt_type='scalping_entry',prompt_version=AI_VERSION,
+            result_source='live',stock_code='005930',provider_called=True)
+        assert stored
+        compact.write(tmp_path/'report/entry_split_order_plan'/f'entry_split_order_plan_{day}.json',
+            {'input_summary':{'compact_pre_ai_execution_replay':computed}})
+        projection=compact.prepare(tmp_path,day)
+        assert len(projection['rows'])==1 and projection['rows'][0]['exclusion_reason'] is None
+        row=projection['rows'][0]
+        assert compact.owner_operating_arm(row['owner_replay'],row)['net_pnl_krw']==operating['net_pnl_krw']
+        candidate=compact.sealed({'candidate_response':{'risk_verdict':'VETO'},
+            'input_sha256':compact.input_identity(row),'validation_errors':[],
+            'runtime_inference_cost_delta_krw':0.})
+        comparison=compact.evaluate(projection['rows'],{row['evaluation_key']:candidate})
+        assert comparison['delta_net_ev_pct']>0
+        # Avoided modeled loss is not actual profit, and a single supported
+        # source still cannot satisfy the independent model/candidate floors.
+        assert compact.primary_input_blocker(row,{})[0]=='source_gap'
+    else:
+        assert result['entry_economic_source_blocker'].startswith('common_guard_block:')
+        assert events[0]['stage']=='entry_ai_economic_source_gap'
+    logger._flush_producer_summary_at_exit()
+    monkeypatch.setattr(logger,'_PRODUCER_COMPACTOR',None)
+
+
+def test_main_market_input_cache_is_action_neutral_and_cutoff_bound(monkeypatch):
+    from src.engine.scalping import avg_down_replay_capture as capture
+    monkeypatch.setattr(capture, '_MAIN_MARKET_REGIME', {})
+    monkeypatch.setattr(capture, '_MARKET_INPUTS', {})
+    capture.record_main_market_regime('BULL', now_ts=100.)
+    assert capture.recorded_market_inputs('005930',cutoff_ts=101.)['market_regime']['value']=='BULL'
+    assert capture.recorded_market_inputs('394800',cutoff_ts=101.)['market_regime']['value']=='BULL'
+    assert not capture.recorded_market_inputs('005930',cutoff_ts=99.)
+    assert not capture.recorded_market_inputs('005930',cutoff_ts=106.)

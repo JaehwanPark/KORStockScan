@@ -1340,7 +1340,8 @@ def replay_entry_opportunity(seed, depth_rows, trade_rows, *, source_ready, eval
     return result
 
 
-def build_entry_opportunity_replays(day, events, *, evaluated_at=None, micro_loader=None):
+def build_entry_opportunity_replays(day, events, *, evaluated_at=None, micro_loader=None,
+                                    source_stage="entry_execution_sizing_plan"):
     """Existing missed-entry report embeds exact plan/path replays, including submits.
 
     Reads the existing native collector via its canonical exclusion/parser owner.
@@ -1355,8 +1356,19 @@ def build_entry_opportunity_replays(day, events, *, evaluated_at=None, micro_loa
     output = dict(schema=ENTRY_REPLAY_SCHEMA, source_date=day, rows=[],
                   counts={}, quantity_leg_events=[], **AUTHORITY)
     candidates, rejected, conflicts, valid_counts = {}, Counter(), set(), Counter()
+    first_blockers = Counter()
+    availability, availability_conflicts = {}, set()
+    if source_stage == "entry_ai_economic_plan_observed":
+        for event in events:
+            if event.stage != "entry_ai_economic_decision_available":
+                continue
+            key = (event.fields.get("evaluation_attempt_id"), event.fields.get("entry_economic_plan_sha256"))
+            value = event.fields.get("entry_economic_decision_available_at")
+            if key in availability and availability[key] != value:
+                availability_conflicts.add(key)
+            availability[key] = value
     for event in events:
-        if event.stage != 'entry_execution_sizing_plan':
+        if event.stage != source_stage:
             continue
         plan, seed = _price_ready_plan(event), event.fields.get('entry_opportunity_replay_seed')
         try:
@@ -1371,6 +1383,17 @@ def build_entry_opportunity_replays(day, events, *, evaluated_at=None, micro_loa
                 or seed.get('stock_code') != event.code
                 or seed.get('evaluation_attempt_id') != plan['action_receipt_id']):
                 raise ValueError('original_plan_or_frozen_seed_missing_or_invalid')
+            if source_stage == "entry_ai_economic_plan_observed":
+                available_key = (seed['evaluation_attempt_id'], seed['plan_sha256'])
+                if available_key in availability_conflicts or available_key not in availability:
+                    raise ValueError('pre_ai_decision_availability_missing_or_conflicting')
+                available_at = _timestamp(availability[available_key], day)
+                if available_at < _timestamp(seed['observed_at'], day):
+                    raise ValueError('pre_ai_decision_availability_before_plan')
+                # Derived replay clock; preserve the original immutable seed/plan identity.
+                seed = {**seed, 'original_pre_ai_seed_sha256': seed['seed_sha256'],
+                        'plan_observed_at': seed['observed_at'], 'observed_at': available_at.isoformat()}
+                seed['seed_sha256'] = digest({k:v for k,v in seed.items() if k != 'seed_sha256'})
             key = digest([seed[k] for k in ('stock_code', 'scanner_promotion_id',
                 'evaluation_attempt_id', 'effective_venue', 'session_bucket', 'policy_bundle_sha256')])
             valid_counts[key] += 1
@@ -1381,7 +1404,8 @@ def build_entry_opportunity_replays(day, events, *, evaluated_at=None, micro_loa
                     rejected['duplicate_exact_plan'] += 1
             else:
                 candidates[key] = seed
-        except (TypeError, ValueError, KeyError, SyntaxError, RecursionError):
+        except (TypeError, ValueError, KeyError, SyntaxError, RecursionError) as exc:
+            first_blockers[str(exc)] += 1
             rejected['original_plan_or_frozen_seed_missing_or_invalid'] += 1
     rejected['conflicting_exact_plan'] += len(conflicts)
     # Raw-row and unique-attempt dispositions are separate conserved populations.
@@ -1479,8 +1503,8 @@ def build_entry_opportunity_replays(day, events, *, evaluated_at=None, micro_loa
             entry_quantity_leg_four_arm_evaluation=receipt))
     output['counts'] = dict(unique_retained=len(seeds), completed=len(completed),
         maturity_waiting=waiting, source_gap=len(ready) - len(completed), excluded=dict(rejected),
-        raw_plan_rows=sum(e.stage == 'entry_execution_sizing_plan' for e in events),
-        raw_row_disposition=row_disposition)
+        source_stage=source_stage, raw_plan_rows=sum(e.stage == source_stage for e in events),
+        raw_row_disposition=row_disposition, first_blocker_counts=dict(first_blockers))
     output['sha256'] = digest(output)
     return output
 
@@ -1694,7 +1718,16 @@ def freeze_entry_operating_context(handlers, stock, sizing_context, *, now_ts):
         if not _finite(budget, positive=True):
             return None
         snapshot = capture._cached_policy(handlers, now_ts)
+        from types import SimpleNamespace
+        from src.engine.sniper_execution_receipts import initial_scalp_preset_exit_fields
+        if not handlers.is_default_position_tag("SCALPING", stock.get("position_tag")):
+            return None
+        initial_exit = initial_scalp_preset_exit_fields(stock, rules=SimpleNamespace(**snapshot["rules"]))
         value = dict(schema=ENTRY_OPERATING_SCHEMA,
+            initial_fill_exit_contract_version="main_scalp_preset_initial_fill_v1",
+            initial_fill_exit_owner="sniper_execution_receipts.initial_scalp_preset_exit_fields",
+            initial_fill_exit_state=initial_exit,
+            initial_micro_estimator_state=capture.micro_state(handlers, stock.get('code', '')),
             frozen_at=datetime.fromtimestamp(now_ts, KST).isoformat(),
             policy_snapshot=snapshot, exit_policy_version=snapshot_version(snapshot),
             initial_policy_state=capture.holding_state(handlers, {k:v for k,v in stock.items() if k not in {"entry_split_initial_entry_seed","entry_split_initial_entry_lineage_conflict"}}),
@@ -1779,6 +1812,15 @@ def replay_operating_entry_arm(seed, arm, depth_rows, *, executor=None, trade_ro
         weighted = amount / qty
         state = copy.deepcopy(context['initial_policy_state'])
         stock = state['stock']
+        if "initial_fill_exit_state" in context:
+            from types import SimpleNamespace
+            from src.engine.sniper_execution_receipts import initial_scalp_preset_exit_fields
+            expected = initial_scalp_preset_exit_fields(stock, rules=SimpleNamespace(**context['policy_snapshot']['rules']))
+            if (context.get('initial_fill_exit_contract_version') != 'main_scalp_preset_initial_fill_v1'
+                or context.get('initial_fill_exit_owner') != 'sniper_execution_receipts.initial_scalp_preset_exit_fields'
+                or context['initial_fill_exit_state'] != expected):
+                raise ValueError('frozen_initial_fill_exit_transition_invalid')
+            stock.update(expected)
         # These are modeled inventory fields, never a receipt of a real fill.
         stock.update(code=seed['stock_code'], status='HOLDING', strategy='SCALPING',
             buy_price=weighted, buy_qty=qty, pending_add_order=None, pending_entry_orders=[],
@@ -1794,6 +1836,15 @@ def replay_operating_entry_arm(seed, arm, depth_rows, *, executor=None, trade_ro
             replay_max_frame_gap_sec=context['max_frame_gap_sec'], cost_rate=context['cost_rate'],
             entry_split_initial_only=True, effective_min_buy_pressure=1,
             route_replay={'ENTRY': dict(should_add=False, route_evaluation_complete=True)})
+        micro_store = None
+        if context.get('initial_micro_estimator_state') is not None:
+            from src.engine.scalping.micro_estimator_state import MicroEstimatorStore, MicroEstimatorConfig, SymbolMicroEstimatorState
+            micro = context['initial_micro_estimator_state']
+            if not isinstance(micro, dict) or not isinstance(micro.get('config'), dict):
+                raise ValueError('frozen_micro_estimator_contract_invalid')
+            micro_store = MicroEstimatorStore(MicroEstimatorConfig(**micro['config']))
+            if micro.get('state') is not None:
+                micro_store._states[seed['stock_code']] = SymbolMicroEstimatorState(**adapter.thaw(copy.deepcopy(micro['state'])))
         frames = []
         for row in depth_rows:
             clock = row.get('exchange_at') or row.get('observed_at') or row.get('emitted_at')
@@ -1824,6 +1875,12 @@ def replay_operating_entry_arm(seed, arm, depth_rows, *, executor=None, trade_ro
                 ws = dict(curr=max(tick_values)[1], best_bid=bid, best_ask=ask,
                     best_bid_qty=row['best_bid_qty'], best_ask_qty=row['best_ask_qty'],
                     last_ws_update_ts=parsed.timestamp(), last_realtime_type_ts={'0D':parsed.timestamp()},quote_stale=False)
+            micro_frame = row.get('micro_estimator_state')
+            if micro_store is not None:
+                micro_store.update_from_ws_quote(seed['stock_code'], ws, now_ts=parsed.timestamp(), tier='hot')
+                from dataclasses import asdict
+                micro_frame = dict(config=asdict(micro_store.config),
+                    state=asdict(micro_store._states[seed['stock_code']]))
             frames.append(dict(source_event_id='entry-frame-' + owner.digest(row),
                 source_observation_id=episode, scale_in_decision_id=episode,
                 position_episode_id=episode, stock_code=seed['stock_code'], venue=seed['effective_venue'],
@@ -1832,6 +1889,7 @@ def replay_operating_entry_arm(seed, arm, depth_rows, *, executor=None, trade_ro
                 emitted_at=parsed.isoformat(), market=dict(best_bid=bid, best_ask=ask,
                     best_bid_qty=row['best_bid_qty'], best_ask_qty=row['best_ask_qty'],
                     source_quality='fresh_conflict_free', ws_data=copy.deepcopy(ws),
+                    micro_estimator_state=micro_frame,
                     market_regime=row.get('market_regime'),market_regime_observed_at=row.get('market_regime_observed_at'),
                     recorded_inputs=row.get('recorded_inputs', {})),
                 full_policy_decisions=row.get('full_policy_decisions', {}), external_results=row.get('external_results', {})))
@@ -1893,6 +1951,11 @@ def entry_split_actual_economic_receipt(stock, *, buy_price, buy_qty, profit_rat
         and _finite(net) and _finite(profit_rate) and qty is not None and 0<qty<=seed['total_qty']
         and stock.get('entry_split_initial_entry_lineage_conflict') is not True
         and cost_version==context['cost_policy_version'])
+    decision=context.get('entry_decision_version_receipt') or {}
+    decision_valid=(decision.get('sha256')==split._canonical_sha256({k:v for k,v in decision.items() if k!='sha256'})
+        and decision.get('machine_bundle_sha256')==seed['policy_bundle_sha256']
+        and decision.get('evaluation_attempt_id')==seed['evaluation_attempt_id']
+        and all(decision.get(k) for k in ('machine_policy_version','compact_prompt_version','decision_trace_id','runtime_pid')))
     value=dict(episode_id=str(stock.get('position_episode_id') or seed['plan_sha256']),
         plan_sha256=seed['plan_sha256'],source_date=seed['source_date'],
         completion_date=completion_at.astimezone(KST).date().isoformat(),completed_at=completion_at.isoformat(),
@@ -1902,6 +1965,9 @@ def entry_split_actual_economic_receipt(stock, *, buy_price, buy_qty, profit_rat
         net_pnl_krw=net if _finite(net) else None,cost_complete=complete,exact_lineage=complete,
         cost_policy_version=cost_version,cost_provenance='completed_sell_execution_receipt_trade_profit_configuration',
         budget_krw=context['budget_krw'],capital_krw_minutes=None,reserve_krw_minutes=None,
+        entry_decision_version_receipt=decision if decision_valid else None,
+        entry_decision_pid_consumed=bool(decision_valid),
+        entry_decision_version_blocker=None if decision_valid else 'exact_submit_decision_version_receipt_missing_or_invalid',
         policy_version=stock.get('entry_split_order_policy_version'),
         policy_sha256=stock.get('entry_split_order_policy_sha256'),
         policy_applied=stock.get('entry_split_order_policy_applied') is True,

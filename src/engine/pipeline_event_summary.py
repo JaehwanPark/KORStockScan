@@ -107,7 +107,14 @@ SUMMARY_STAGES = frozenset(
         "blocked_swing_gap",
     }
 )
-PRODUCER_SUMMARY_STAGES = SUMMARY_STAGES | HIGH_VOLUME_OBSERVATION_STAGES
+EXECUTION_SUMMARY_STAGES = frozenset({
+    "entry_execution_sizing_plan", "entry_execution_sizing_plan_block",
+    "entry_ai_economic_plan_observed", "entry_ai_economic_source_gap",
+    "entry_ai_economic_decision_available",
+    "entry_quantity_leg_four_arm_evaluation", "order_leg_sent", "order_leg_fail",
+    "order_leg_no_response", "order_bundle_submitted", "order_bundle_failed",
+})
+PRODUCER_SUMMARY_STAGES = SUMMARY_STAGES | HIGH_VOLUME_OBSERVATION_STAGES | EXECUTION_SUMMARY_STAGES
 
 NUMERIC_FIELD_LIMIT = 64
 SAMPLE_HASH_LIMIT = 2
@@ -182,6 +189,7 @@ class SummaryEvent:
     raw_offset_start: int
     raw_offset_end: int
     evidence_hash: int = 0
+    execution_projection_hash: int = 0
 
 
 def _safe_str(value: Any) -> str:
@@ -441,6 +449,7 @@ class _SummaryAggregate:
         self.include_diagnostics = bool(include_diagnostics)
         self.event_count = 0
         self.evidence_hash_sum = 0
+        self.execution_projection_hash_sum = 0
         self.first_seen: datetime | None = None
         self.last_seen: datetime | None = None
         self.first_record_id = ""
@@ -456,6 +465,7 @@ class _SummaryAggregate:
 
     def add(self, event: SummaryEvent) -> None:
         self.event_count += 1
+        self.execution_projection_hash_sum = (self.execution_projection_hash_sum + event.execution_projection_hash) % IDENTITY_MODULUS
         self.evidence_hash_sum = (
             self.evidence_hash_sum + event.evidence_hash
         ) % IDENTITY_MODULUS
@@ -550,6 +560,9 @@ class _SummaryAggregate:
             "event_count": self.event_count,
             "identity_contract": IDENTITY_CONTRACT,
             "evidence_hash_sum": f"{self.evidence_hash_sum:064x}",
+            **({"execution_projection_identity_contract": "lossless_execution_projection_v1",
+                "execution_projection_hash_sum": f"{self.execution_projection_hash_sum:064x}"}
+               if self.stage in EXECUTION_SUMMARY_STAGES else {}),
             "first_seen": (self.first_seen.isoformat() if self.first_seen else None),
             "last_seen": (self.last_seen.isoformat() if self.last_seen else None),
             "metric_role": "ops_volume_diagnostic",
@@ -689,6 +702,8 @@ def _summary_event_from_payload(
         actual_order_submitted=actual_order_submitted,
         raw_offset_start=line_start,
         raw_offset_end=line_end,
+        execution_projection_hash=(int(execution_projection_identity(payload), 16)
+            if stage in EXECUTION_SUMMARY_STAGES else 0),
         evidence_hash=int.from_bytes(
             hashlib.sha256(
                 json.dumps(
@@ -698,6 +713,14 @@ def _summary_event_from_payload(
             "big",
         ),
     )
+
+
+def execution_projection_identity(payload):
+    """Same lossless economic envelope on raw and compact sides."""
+    keys = ("pipeline", "stage", "stock_name", "stock_code", "record_id", "fields", "emitted_at", "emitted_date")
+    value = {key: payload.get(key) for key in keys}
+    return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True,
+        separators=(",", ":"), allow_nan=False).encode("utf-8")).hexdigest()
 
 
 def summary_event_from_payload(

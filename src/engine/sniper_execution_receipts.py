@@ -9990,6 +9990,26 @@ def _submit_opening_rotation_profit_order(
     return True
 
 
+def initial_scalp_preset_exit_fields(target_stock, *, rules=None):
+    """Pure initial-fill state shared by the real receipt and frozen CF owner.
+
+    Does not refresh/cancel an order, mutate a position, or persist custody.
+    The caller owns the default-SCALPING role and exact loaded rule snapshot.
+    """
+    rules = TRADING_RULES if rules is None else rules
+    stop = float(getattr(rules, "SCALP_PRESET_HARD_STOP_PCT", -0.7) or -0.7)
+    fields = dict(exit_mode="SCALP_PRESET_TP", preset_tp_price=0,
+        hard_stop_pct=stop,
+        hard_stop_grace_sec=int(getattr(rules, "SCALP_PRESET_HARD_STOP_GRACE_SEC", 0) or 0),
+        hard_stop_emergency_pct=float(getattr(rules, "SCALP_PRESET_HARD_STOP_EMERGENCY_PCT",
+            min(stop - 0.5, -1.2)) or min(stop - 0.5, -1.2)),
+        protect_profit_pct=None, ai_review_done=False, ai_review_score=None,
+        ai_review_action=None, last_ai_reviewed_at=None)
+    if not target_stock.get("entry_lifecycle_conflict"):
+        fields.update(exit_requested=False, exit_order_type=None, exit_order_time=None)
+    return fields
+
+
 def _refresh_scalp_preset_exit_order(target_stock, code, total_qty):
     """
     Legacy compatibility hook for the removed SCALP preset TP route.
@@ -11686,32 +11706,7 @@ def _handle_entry_buy_execution(
         preset_tp_ord_no_before = str(
             target_stock.get("preset_tp_ord_no", "") or ""
         ).strip()
-        preset_hard_stop_pct = float(
-            getattr(TRADING_RULES, "SCALP_PRESET_HARD_STOP_PCT", -0.7) or -0.7
-        )
-        preset_hard_stop_grace_sec = int(
-            getattr(TRADING_RULES, "SCALP_PRESET_HARD_STOP_GRACE_SEC", 0) or 0
-        )
-        preset_hard_stop_emergency_pct = float(
-            getattr(
-                TRADING_RULES,
-                "SCALP_PRESET_HARD_STOP_EMERGENCY_PCT",
-                min(preset_hard_stop_pct - 0.5, -1.2),
-            )
-            or min(preset_hard_stop_pct - 0.5, -1.2)
-        )
-        target_stock["hard_stop_pct"] = preset_hard_stop_pct
-        target_stock["hard_stop_grace_sec"] = preset_hard_stop_grace_sec
-        target_stock["hard_stop_emergency_pct"] = preset_hard_stop_emergency_pct
-        target_stock["protect_profit_pct"] = None
-        target_stock["ai_review_done"] = False
-        target_stock["ai_review_score"] = None
-        target_stock["ai_review_action"] = None
-        target_stock["last_ai_reviewed_at"] = None
-        if not target_stock.get("entry_lifecycle_conflict"):
-            target_stock["exit_requested"] = False
-            target_stock["exit_order_type"] = None
-            target_stock["exit_order_time"] = None
+        target_stock.update(initial_scalp_preset_exit_fields(target_stock))
 
         sell_qty = int(target_stock.get("buy_qty") or exec_qty or 0)
         refreshed = _refresh_scalp_preset_exit_order(target_stock, code, sell_qty)

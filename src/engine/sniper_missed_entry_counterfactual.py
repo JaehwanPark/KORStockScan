@@ -67,7 +67,7 @@ _BUY_AVOIDED_CLOSE_PCT = -0.3
 _BUY_TP_PCT = 0.5
 _BUY_SL_PCT = -0.5
 _RISING_MISSED_STAGE = "rising_missed_one_share_entry"
-_EVENT_FIELD_PROJECTION_VERSION = "missed_entry_counterfactual_compact_v3"
+_EVENT_FIELD_PROJECTION_VERSION = "missed_entry_counterfactual_compact_v4"
 _PRICE_PLAN_FIELDS = frozenset({"entry_execution_sizing_plan", "entry_price_plan", "entry_opportunity_replay_seed"})
 _EVENT_FIELD_KEYS = frozenset(
     {
@@ -80,6 +80,9 @@ _EVENT_FIELD_KEYS = frozenset(
         "entry_price_plan",
         "entry_price_plan_sha256",
         "entry_opportunity_replay_seed",
+        "entry_economic_plan_sha256",
+        "entry_economic_decision_available_at",
+        "decision_trace_id",
         "microstructure_reaction_context_id",
         "microstructure_reaction_context_version",
         "microstructure_reaction_context_status",
@@ -594,7 +597,7 @@ def _load_entry_events(target_date: str, *, rows=None) -> list[EntryEvent]:
                 try:
                     if (
                         len(json.dumps(value, ensure_ascii=True, allow_nan=False))
-                        > 16_384
+                        > (2 * 1024 * 1024 if str(key) == "entry_opportunity_replay_seed" else 16_384)
                     ):
                         value = None
                 except (TypeError, ValueError):
@@ -704,7 +707,7 @@ def _build_candidates(target_date: str) -> list[dict]:
 
 def _price_ready_plan(event: EntryEvent) -> dict:
     """Consume the existing numeric owner's hash-bound plan, not a hypothetical BUY."""
-    if event.stage != "entry_execution_sizing_plan":
+    if event.stage not in {"entry_execution_sizing_plan", "entry_ai_economic_plan_observed"}:
         return {}
     try:
         emitted_at = datetime.fromisoformat(event.emitted_at.replace("Z", "+00:00"))
@@ -760,7 +763,10 @@ def _price_ready_plan(event: EntryEvent) -> dict:
         }
         price_sha = digest(price_body)
         if (
-            digest(plan) != event.fields.get("entry_execution_sizing_plan_sha256")
+            (event.stage == "entry_ai_economic_plan_observed" and
+             (plan.get("observation_only") is not True or plan.get("capture_stage") != "before_compact_ai"))
+            or (event.stage == "entry_execution_sizing_plan" and plan.get("observation_only") is True)
+            or digest(plan) != event.fields.get("entry_execution_sizing_plan_sha256")
             or price_sha != event.fields.get("entry_price_plan_sha256")
             or price_sha != price.get("price_plan_sha256")
             or price_sha != plan.get("price_plan_sha256")

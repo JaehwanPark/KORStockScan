@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from datetime import datetime
 from functools import lru_cache
 
@@ -67,8 +68,10 @@ def test_compact_no_notional_is_percentage_diagnostic_not_daily_profit():
 
 def test_compact_checkpoint_reuse_economics_rejoin_and_source_block(monkeypatch, tmp_path):
     import src.engine.scalping.entry_setup_evidence as evidence
-    row = compact_row()
-    projection = compact.sealed({"rows": [row], "screened_total": 1, "source_manifest_sha256": "d"*64,
+    row = operating_compact_row()
+    model = full_compact_proof()["owner_execution_model_validation"]
+    monkeypatch.setattr(compact, "runtime_inference_cost_receipt", lambda *_: full_compact_proof()["runtime_inference_cost_receipt"])
+    projection = compact.sealed({"owner_execution_model_validation":model,"rows": [row], "screened_total": 1, "source_manifest_sha256": "d"*64,
                                   "source_tuning_allowed": True, "exclusion_counts": {}, **compact.AUTHORITY})
     monkeypatch.setattr(compact, "prepare", lambda *_: projection)
     monkeypatch.setattr(evidence, "entry_risk_adjudication_openai_schema", lambda *_: {})
@@ -122,6 +125,7 @@ def operating_compact_row(day="2026-09-17", ordinal=0):
     arm = dict(schema=owner.ENTRY_OPERATING_SCHEMA,status="completed_source_only",actual_fill_evidence=False,
         requested_qty=seed["total_qty"],modeled_filled_qty=seed["total_qty"],fill_participation_rate=1.,
         budget_krw=context["budget_krw"],net_pnl_krw=600.,stress_net_pnl_krw=480.,
+        capital_krw_minutes=12000.,reserve_krw_minutes=1200.,
         net_return_pct=.5,stress_net_return_pct=.4,modeled_entry_at=seed["observed_at"],
         modeled_exit_at=replay["arms"][QUANTITY_LEG_FOUR_ARM_IDS[0]]["modeled_exit_at"],
         contract_sha256=context["sha256"],exit_policy_sha256=context["exit_policy_version"],
@@ -150,7 +154,17 @@ def _full_compact_proof():
         {"2026-09-08":10,"2026-09-09":10},target_date="2026-09-17")
     model_scope = validation["model_scopes"][0]
     assert model_scope["validated"]
+    from tempfile import mkdtemp
+    from src.tests.test_micro_reversion_provider_budget import _write_pricing_artifact
+    pricing_root = Path(mkdtemp(prefix="adq-reviewed-pricing-fixture-"))
+    pricing_path = _write_pricing_artifact(pricing_root / "policy/micro_reversion",
+        effective_to="2026-09-30", pricing_basis="operator_accounting_zero_cost",
+        prices=[dict(provider="openai",model="gpt-5.4-nano",input_usd_per_million_tokens="0",output_usd_per_million_tokens="0")])
+    pricing_path.rename(pricing_path.with_name("provider_pricing.json"))
+    inference_receipt = compact.runtime_inference_cost_receipt(pricing_root, "2026-09-17")
+    assert inference_receipt["status"] == "reviewed_operator_zero_cost"
     return compact.sealed({"schema": compact.SCHEMA, "target_date": "2026-09-17",
+        "runtime_inference_cost_receipt": inference_receipt,
         "incumbent_prompt_version": policy.AI_VERSION,
         "candidate_prompt_version": policy.ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION,
         "source_manifest_sha256": "d"*64, "promotion_contract_sha256": compact.digest(compact.CONTRACT),
@@ -1229,3 +1243,94 @@ def test_additive_label_revision_reuses_frozen_projection_without_raw_rescan(mon
     monkeypatch.setattr(compact, "prepare", lambda *_: calls.append(True) or projection)
     compact.run(data_root=tmp_path, day="2026-09-17", execute=False)
     assert calls == [True]
+
+
+def test_operating_comparison_error_envelope_exposure_and_capital_conflict():
+    from copy import deepcopy
+    from src.engine.scalping import entry_split_order_plan as split
+    proof = full_compact_proof()
+    pairs = proof['chronological_validation']['holdout_pairs']
+    model = proof['owner_execution_model_validation']
+    good = compact.operating_comparison_metrics(pairs, model)
+    assert good['status'] == 'supported_operating_comparison'
+    assert good['robust_paired_delta_ev_lower_bound_pct'] > 0
+    assert good['candidate']['net_pnl_krw'] > good['incumbent']['net_pnl_krw']
+    assert good['candidate']['capital_krw_minutes'] > 0
+    assert good['candidate']['reserve_krw_minutes'] > 0
+    inflated = deepcopy(model)
+    scope = inflated['validated_scopes'][0]
+    for r in scope['calibration_rows'] + scope['holdout_rows']:
+        r['net_error_budget_pct'] = 1.
+    scope['tolerance']['net_error_budget_pct'] = 1.
+    scope['optimistic_net_error_budget_pct'] = 1.
+    scope['actual_rows_sha256'] = split._canonical_sha256(scope['calibration_rows'] + scope['holdout_rows'])
+    scope['sha256'] = split._canonical_sha256({k:v for k,v in scope.items() if k != 'sha256'})
+    rejected = compact.operating_comparison_metrics(pairs, inflated)
+    assert rejected['status'] == 'supported_operating_comparison'
+    assert rejected['robust_paired_delta_ev_lower_bound_pct'] < 0
+    proof['owner_execution_model_validation'] = inflated
+    kwargs = dict(incumbent=proof['incumbent_prompt_version'], selected=proof['candidate_prompt_version'], source_manifest_sha256='d'*64)
+    assert not compact.promotion_valid(compact.sealed(proof), **kwargs)
+    # Signed but incomplete exposure is a source gap, not zero occupancy.
+    damaged = deepcopy(pairs[:1])
+    replay = damaged[0]['owner_replay']
+    arm = next(iter(replay['operating_arms'].values()))
+    arm.pop('reserve_krw_minutes')
+    arm['sha256'] = split._canonical_sha256({k:v for k,v in arm.items() if k != 'sha256'})
+    replay['replay_sha256'] = compact.digest({k:v for k,v in replay.items() if k != 'replay_sha256'})
+    assert compact.operating_comparison_metrics(damaged, model)['robust_paired_delta_ev_lower_bound_pct'] is None
+    overlapping = deepcopy(pairs[:1]) * 2
+    assert compact.operating_comparison_metrics(overlapping, model)['blocker'] == 'overlapping_owner_capital_allocation_unsupported'
+
+
+def test_source_contract_code_upgrade_preserves_exclusions_without_raw_rescan(monkeypatch, tmp_path):
+    day='2026-09-17'
+    row=compact_row()
+    row.update(input=None, owner_replay=None, exclusion_reason='exact_stop_distance_missing')
+    projection=compact.sealed(dict(rows=[row],screened_total=1,source_manifest_sha256='d'*64,
+        source_tuning_allowed=True, exclusion_counts={'exact_stop_distance_missing':1}, **compact.AUTHORITY))
+    monkeypatch.setattr(compact,'prepare',lambda *_: projection)
+    compact.run(data_root=tmp_path,day=day,execute=False)
+    path=compact.report_path(tmp_path,day).with_suffix('.source.json')
+    old=compact.read(path)
+    old.pop('source_projection_contract')
+    old['projection_contract_sha256']='e'*64
+    compact.write(path,compact.sealed(old))
+    monkeypatch.setattr(compact,'prepare',lambda *_: pytest.fail('code upgrade must not rescan frozen raw'))
+    result=compact.run(data_root=tmp_path,day=day,execute=False)
+    source=compact.read(path)
+    assert source['source_upgrade']['raw_not_read'] is True
+    assert source['rows'][0]['input'] is None
+    assert source['rows'][0]['exclusion_reason']=='exact_stop_distance_missing'
+    assert result['metrics']['delta_net_ev_pct'] is None
+    assert result['provider_calls_this_run']==0
+
+
+def test_compact_primary_source_gap_does_not_spend_provider_budget(monkeypatch,tmp_path):
+    row=compact_row()
+    projection=compact.sealed(dict(rows=[row],screened_total=1,source_manifest_sha256='d'*64,
+        source_tuning_allowed=True,exclusion_counts={},**compact.AUTHORITY))
+    monkeypatch.setattr(compact,'prepare',lambda *_:projection)
+    result=compact.run(data_root=tmp_path,day='2026-09-17',execute=True,
+        runner=lambda _:pytest.fail('diagnostic-only rows must not call the provider'))
+    assert result['provider_calls_this_run']==0
+    assert result['candidate_zero_disposition']['status']=='source_gap'
+    assert result['metrics']['delta_net_ev_pct'] is None
+
+
+def test_actual_decision_version_performance_reuses_completed_cost_owner():
+    receipt=dict(evaluation_attempt_id='attempt',machine_bundle_sha256='a'*64,
+        machine_policy_version='machine-v1',compact_prompt_version='compact-v1',decision_trace_id='trace',runtime_pid=123)
+    receipt['sha256']=compact.digest(receipt)
+    row=dict(episode_id='natural-episode',status='COMPLETED',origin='real',owner='main_scalping',
+        exact_lineage=True,cost_complete=True,entry_decision_pid_consumed=True,entry_decision_version_receipt=receipt,
+        scope_sha256='b'*64,fill_class='full',completion_date='2026-09-17',net_pnl_krw=200.,profit_rate=.2,
+        budget_krw=100000.,capital_krw_minutes=100.,reserve_krw_minutes=10.,net_error_budget_pct=.01)
+    report={'operating_economic_state':{'model_rows':[row,row,{**row,'episode_id':'simulation','origin':'sim'}]}}
+    value=compact.applied_decision_version_performance(report,day='2026-09-17')
+    assert value['groups'][0]['cumulative']['completed_episodes']==1
+    assert value['groups'][0]['rolling']['net_pnl_krw']==200.
+    assert value['groups'][0]['policy_version']=='machine-v1|compact-v1'
+    assert value['causal_profit_improvement'] is None
+    report['operating_economic_state']['model_rows'].append({**row,'net_pnl_krw':999.})
+    assert not compact.applied_decision_version_performance(report,day='2026-09-17')['groups']

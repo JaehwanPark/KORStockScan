@@ -27,7 +27,7 @@ AUTHORITY = dict(
     broker_order_forbidden=True,
 )
 CONTRACT = {
-    "schema": "compact_auxiliary_paired_promotion_v3",
+    "schema": "compact_auxiliary_paired_promotion_v4",
     "learning_episode_floor": 20,
     "holdout_episode_floor": 20,
     "holdout_source_day_floor": 2,
@@ -42,7 +42,9 @@ CONTRACT = {
     "validated_owner_operating_model_required": True,
     "operating_arm_and_scope_required": True,
     "model_holdout_precedes_prompt_learning": True,
+    "empirical_error_and_stress_lower_bound_required": True,
 }
+SOURCE_PROJECTION_CONTRACT = "compact_pre_ai_execution_source_v2"
 
 
 def digest(value):
@@ -198,8 +200,101 @@ def owner_model_scope_valid(model, pair):
                     and (r.get("completion_date") or r["source_date"]) <= proof["available_after_date"]
                     and r.get("episode_id") != seed.get("entry_plan_sha256") for r in rows)
         ):
+            dimensions = ("vwap_error_bps", "receipt_clock_error_sec", "quantity_error",
+                          "net_error_budget_pct", "capital_error_minutes", "reserve_error_minutes")
+            if not all(all(finite(r.get(k)) for k in dimensions)
+                       and r.get("false_fill") is False and r.get("missed_fill") is False
+                       and r.get("quantity_error") == 0 for r in rows):
+                continue
+            tolerance = {k: max(abs(r[k]) for r in cal) for k in dimensions}
+            if (proof.get("tolerance") != tolerance
+                or any(abs(r[k]) > tolerance[k] + 1e-12 for r in held for k in dimensions)
+                or proof.get("optimistic_net_error_budget_pct") != max([0.] + [r["net_error_budget_pct"] for r in held])):
+                continue
             return True
     return False
+
+
+def runtime_inference_cost_receipt(root, day):
+    """Use the existing reviewed accounting owner; never invent an FX rate.
+
+    The currently supported accounting contract is explicit operator zero
+    pricing. Nonzero USD pricing needs a reviewed KRW conversion owner and
+    measured token deltas, and is a contract gap rather than free inference.
+    """
+    from src.engine.scalping.micro_reversion.provider_budget import (
+        load_reviewed_pricing_artifact, OPERATOR_ZERO_COST_BASIS, ProviderBudgetError)
+    path = Path(root) / "policy/micro_reversion/provider_pricing.json"
+    try:
+        pricing = load_reviewed_pricing_artifact(path, as_of_date=date.fromisoformat(day))
+        price = pricing.price_for("openai", "gpt-5.4-nano")
+        if (pricing.pricing_basis != OPERATOR_ZERO_COST_BASIS
+            or price.input_usd_per_million_tokens != 0 or price.output_usd_per_million_tokens != 0):
+            raise ValueError("reviewed_nonzero_runtime_krw_conversion_and_token_delta_contract_required")
+        return dict(status="reviewed_operator_zero_cost", delta_krw=0.,
+            pricing_path=str(path), pricing_file_sha256=pricing.artifact_file_sha256,
+            pricing_content_sha256=pricing.artifact_content_sha256,
+            raw_source_sha256=pricing.raw_source_bytes_sha256,
+            effective_from=pricing.effective_from.isoformat(), effective_to=pricing.effective_to.isoformat(),
+            basis=pricing.pricing_basis, provider="openai", model="gpt-5.4-nano")
+    except (OSError, ValueError, ProviderBudgetError) as exc:
+        return dict(status="source_gap", delta_krw=None, blocker=str(exc),
+            owner="micro_reversion_reviewed_provider_pricing",
+            closure_test="effective_reviewed_zero_accounting_or_reviewed_measured_token_and_krw_conversion_contract")
+
+
+def operating_comparison_metrics(pairs, model):
+    """Both decision filters share frozen quantity, budget, and holding owner.
+
+    Reuse existing economic metrics and single-position reservations. The lower
+    bound is an observed error/stress envelope, not a confidence interval.
+    Unchanged decisions cancel model error; inference deltas still count.
+    """
+    from copy import deepcopy
+    from src.engine.scalping import entry_split_order_plan as split
+    empty = dict(status="source_gap", incumbent=None, candidate=None,
+        robust_paired_delta_ev_lower_bound_pct=None, model_error_penalty_pct=None,
+        blocker="validated_operating_scope_exposure_or_runtime_cost_missing",
+        owner="entry_execution_model_scope_and_reviewed_provider_pricing",
+        closure_test="independent_prior_model_holdout_exact_scope_and_complete_frozen_exposure_witnesses")
+    if not pairs:
+        return empty
+    old_rows, new_rows, lower, penalties = [], [], [], []
+    for pair in pairs:
+        replay = pair.get("owner_replay") or {}
+        arm = owner_operating_arm(replay, pair)
+        if not arm or not owner_model_scope_valid(model, pair):
+            return empty
+        cost = pair.get("runtime_inference_cost_delta_krw")
+        if not finite(cost) or any(not finite(arm.get(k)) or arm[k] < 0
+            for k in ("capital_krw_minutes", "reserve_krw_minutes")):
+            return empty
+        proof = next(p for p in model["validated_scopes"]
+                     if p["scope_sha256"] == split._entry_operating_scope(replay["seed"]))
+        changed = pair["candidate_verdict"] != pair["incumbent_verdict"]
+        error = 2 * max(proof["optimistic_net_error_budget_pct"], proof["tolerance"]["net_error_budget_pct"])
+        penalty = error if changed else 0.
+        penalties.append(penalty)
+        lower.append(min(pair["delta_net_pct"], pair["stress_delta_net_pct"]) - penalty
+                     - cost / arm["budget_krw"] * 100)
+        for verdict, rows, inference in ((pair["incumbent_verdict"], old_rows, 0.),
+                                          (pair["candidate_verdict"], new_rows, cost)):
+            selected = verdict == "PASS"
+            output = deepcopy(arm)
+            for k in ("net_pnl_krw", "capital_krw_minutes", "reserve_krw_minutes", "fill_participation_rate"):
+                output[k] *= int(selected)
+            output["net_pnl_krw"] -= inference
+            rows.append(dict(budget_krw=arm["budget_krw"], arms={"decision": output}))
+    portfolio = portfolio_metrics(pairs)
+    if portfolio["portfolio_daily_net_delta_krw"] is None:
+        return {**empty, "status": "unsupported_scope", "blocker": "overlapping_owner_capital_allocation_unsupported"}
+    return dict(status="supported_operating_comparison", blocker=None,
+        incumbent=split._economic_metrics(old_rows, "decision"),
+        candidate=split._economic_metrics(new_rows, "decision"),
+        robust_paired_delta_ev_lower_bound_pct=sum(lower) / len(lower),
+        model_error_penalty_pct=sum(penalties) / len(penalties),
+        lower_bound_method="mean_same_pair_minimum_base_stress_delta_minus_changed_decision_two_arm_empirical_error_and_inference_cost",
+        **portfolio)
 
 
 def prepare(data_root, day):
@@ -259,9 +354,10 @@ def prepare(data_root, day):
     split = read(
         root / "report/entry_split_order_plan" / f"entry_split_order_plan_{day}.json"
     )
-    owner_source = (
-        (split.get("input_summary") or {}).get("daily_diagnostic") or {}
-    ).get("entry_opportunity_executable_replay") or {}
+    summary = split.get("input_summary") or {}
+    owner_source = (summary.get("compact_pre_ai_execution_replay")
+        or summary.get("entry_opportunity_executable_replay_refresh")
+        or (summary.get("daily_diagnostic") or {}).get("entry_opportunity_executable_replay") or {})
     owner_rows = {
         r.get("seed", {}).get("evaluation_attempt_id"): r
         for r in owner_source.get("rows", [])
@@ -334,15 +430,22 @@ def prepare(data_root, day):
                 "issued_prompt_sha256": trace.get("prompt_sha256"),
                 "payload_sha256": trace.get("payload_sha256"),
                 "incumbent_verdict": verdict,
-                "input": raw if not reason else None,
+                # Preserve frozen source for a later owner-path evaluation;
+                # exclusion, not deletion of the payload, controls execution.
+                "input": raw if isinstance(raw, dict) and payload.get("replay_exact") is True
+                    and payload.get("redacted") is False else None,
                 "owner_replay": owner_replay if owner_valid else None,
                 "entry_quality_path": path,
                 "exclusion_reason": reason,
+                "natural_contract_evidence": {k: trace.get(k) for k in
+                    ("result_source", "model", "provider_actual", "semantic_validation_status",
+                     "decision_quality_contract_status", "decision_quality_contract_errors")},
             }
         )
     return sealed(
         {
             "schema": "compact_auxiliary_frozen_projection_v1",
+            "source_projection_contract": SOURCE_PROJECTION_CONTRACT,
             "target_date": day,
             "source_manifest_sha256": manifest.get("source_manifest_sha256"),
             "source_tuning_allowed": receipt.get("tuning_input_allowed") is True
@@ -543,7 +646,7 @@ def portfolio_metrics(pairs):
     }
 
 
-def promotion_valid(report, *, incumbent, selected, source_manifest_sha256):
+def promotion_valid(report, *, incumbent, selected, source_manifest_sha256, effective_date=None):
     """A percentage path alone cannot prove executable daily net-profit uplift."""
     if (
         not valid(report)
@@ -555,6 +658,17 @@ def promotion_valid(report, *, incumbent, selected, source_manifest_sha256):
         or report.get("promotion_contract_sha256") != digest(CONTRACT)
         or any(report.get(k) is not v for k, v in AUTHORITY.items())
     ):
+        return False
+    inference_receipt = report.get("runtime_inference_cost_receipt") or {}
+    try:
+        pricing_root = Path(inference_receipt["pricing_path"]).parents[2]
+        if (inference_receipt.get("status") != "reviewed_operator_zero_cost"
+            or inference_receipt != runtime_inference_cost_receipt(pricing_root, report["target_date"])):
+            return False
+        day = effective_date or report["target_date"]
+        if not inference_receipt["effective_from"] <= day <= inference_receipt["effective_to"]:
+            return False
+    except (KeyError, IndexError, TypeError):
         return False
     from src.engine.scalping.entry_split_order_plan import EXECUTION_MODEL_CONTRACT
     model = report.get("owner_execution_model_validation") or {}
@@ -656,6 +770,14 @@ def promotion_valid(report, *, incumbent, selected, source_manifest_sha256):
         daily = portfolio["portfolio_daily_net_delta_krw"]
         if not daily or sum(daily.values()) <= 0:
             return False
+        for half in (train, test):
+            economics = operating_comparison_metrics(half, model)
+            if (economics["status"] != "supported_operating_comparison"
+                or economics["robust_paired_delta_ev_lower_bound_pct"] <= 0
+                or economics["candidate"]["net_pnl_krw"] <= economics["incumbent"]["net_pnl_krw"]
+                or economics["candidate"]["worst"] < economics["incumbent"]["worst"]
+                or economics["candidate"]["es10"] < economics["incumbent"]["es10"]):
+                return False
     return proof.get("holdout_consumed") is False
 
 
@@ -676,6 +798,80 @@ def consume_holdout(proof, data_root):
             raise ValueError("compact_holdout_already_consumed")
         claims[key] = identity
     write(path, sealed({"claims": claims, **AUTHORITY}))
+
+
+def applied_decision_version_performance(split_report, *, day):
+    """Reuse the existing custody/capital and completed-cost performance owner.
+
+    A real initial-entry submit receipt proves this combined machine/compact
+    consumption. Split-policy application alone is not that witness. This
+    descriptive realized performance does not estimate causal improvement.
+    """
+    from src.engine.scalping import entry_split_order_plan as split
+    rows=[]; excluded=Counter()
+    for row in (split_report.get("operating_economic_state") or {}).get("model_rows") or []:
+        receipt=row.get("entry_decision_version_receipt") or {}
+        if (row.get("entry_decision_pid_consumed") is not True
+            or receipt.get("sha256") != split._canonical_sha256({k:v for k,v in receipt.items() if k != "sha256"})
+            or not all(receipt.get(k) for k in ("machine_policy_version","compact_prompt_version","decision_trace_id","runtime_pid"))):
+            excluded["exact_submit_decision_version_receipt_missing_or_invalid"]+=1
+            continue
+        rows.append({**row,"policy_version":receipt["machine_policy_version"]+"|"+receipt["compact_prompt_version"],
+            "policy_sha256":receipt.get("machine_bundle_sha256"),"policy_applied":True,
+            "pid_consumed":True,"runtime_pid":receipt["runtime_pid"]})
+    value=split.build_entry_split_post_apply_performance(rows,target_date=day)
+    return {**value,"axis":"joint_applied_machine_and_compact_version",
+        "source_owner":"entry_split_exact_initial_owner_custody_completed_cost_capital_join",
+        "excluded_counts":dict(excluded),"causal_profit_improvement":None}
+
+
+def primary_input_blocker(row, model):
+    """Keep research proxy diagnostics outside provider-funded primary search."""
+    reason = row.get("exclusion_reason")
+    if reason:
+        return ("unsupported_scope" if reason == "natural_contract_invalid" else "source_gap", reason)
+    replay = row.get("owner_replay") or {}
+    arm = owner_operating_arm(replay, row)
+    if not arm:
+        raw = next(iter((replay.get("operating_arms") or {}).values()), {})
+        disposition = {"unsupported_scope":"unsupported_scope", "terminal_pending":"pending"}.get(raw.get("status"), "source_gap")
+        return disposition, raw.get("blocker") or "independent_operating_arm_missing_or_invalid"
+    if not owner_model_scope_valid(model, row):
+        return "insufficient_sample" if model.get("status") == "insufficient_mature_sample" else "source_gap", "independent_prior_operating_model_scope_not_validated"
+    return None
+
+
+def candidate_zero_disposition(rows, blockers, report):
+    counts = dict(Counter(value[0] for value in blockers.values()))
+    if report.get("promotion_pass"):
+        status = "candidate_selected"
+    elif counts:
+        status = next(k for k in ("source_gap","unsupported_scope","pending","insufficient_sample") if counts.get(k))
+    elif report["metrics"]["paired_comparable_count"] < len(rows):
+        status = "pending"
+    else:
+        proof = report.get("chronological_validation") or {}
+        learning, held = proof.get("learning_pairs") or [], proof.get("holdout_pairs") or []
+        complete = (len({(p["source_date"],p["scanner_promotion_id"]) for p in learning}) >= CONTRACT["learning_episode_floor"]
+            and len({(p["source_date"],p["scanner_promotion_id"]) for p in held}) >= CONTRACT["holdout_episode_floor"]
+            and len({p["source_date"] for p in held}) >= CONTRACT["holdout_source_day_floor"])
+        keys=[p["evaluation_key"] for p in learning+held]
+        frozen=report.get("candidate_frozen_at") or ""
+        chronology=(len(keys)==len(set(keys)) and bool(frozen)
+            and all(p["source_date"]<=frozen[:10] for p in learning)
+            and all(p["source_date"]>frozen[:10] for p in held)
+            and proof.get("holdout_consumed") is False
+            and report["metrics"].get("response_coverage")==1.)
+        comparison = report["metrics"].get("operating_economic_comparison") or {}
+        status = ("valid_no_edge" if complete and chronology and comparison.get("status") == "supported_operating_comparison"
+            and comparison.get("robust_paired_delta_ev_lower_bound_pct") is not None
+            and comparison["robust_paired_delta_ev_lower_bound_pct"] <= 0 else "source_gap" if complete and not chronology else "insufficient_sample")
+    return dict(status=status, primary_input_disposition_counts=counts,
+        blockers=[dict(evaluation_key=key,disposition=value[0],blocker=value[1],
+                       owner="existing_main_execution_and_empirical_model_owners",
+                       closure_test="lossless_pre_ai_producer_full_operating_arm_prior_model_holdout_and_independent_candidate_holdout")
+                  for key,value in blockers.items()],
+        valid_no_edge=status == "valid_no_edge", model_delta_ev_is_actual_profit=False)
 
 
 def run(
@@ -741,7 +937,7 @@ def run(
         label_dependency = str(root / "report/ai_decision_outcome_labels" / f"ai_decision_outcome_labels_{day}.json")
         # An additive label contract revision does not require rereading large
         # frozen raw inputs. Changed diagnostic/economic paths still rebuild.
-        if valid(projection) and projection.get("projection_contract_sha256") == digest(CONTRACT):
+        if valid(projection):
             prior = projection.get("dependency_signatures") or {}
             if prior.get(label_dependency) != signatures.get(label_dependency) and all(
                     prior.get(k) == v for k, v in signatures.items() if k != label_dependency):
@@ -754,6 +950,46 @@ def run(
                     projection = sealed({**projection, "dependency_signatures": signatures,
                                          "source_label_report_sha256": digest(label_report)})
                     write(projection_path, projection)
+        # Code-only source contract upgrades and bounded owner/model refreshes
+        # must not rescan sealed raw trace/payload generations. An exclusion
+        # with no original frozen input stays excluded, even if an owner exists.
+        prior = projection.get("dependency_signatures") or {}
+        split_dependency = str(root / "report/entry_split_order_plan" / f"entry_split_order_plan_{day}.json")
+        unchanged_raw = (valid(projection) and prior.get(label_dependency) == signatures.get(label_dependency)
+            and all(prior.get(k) == v for k, v in signatures.items() if k not in (split_dependency, label_dependency)))
+        if unchanged_raw and (projection.get("source_projection_contract") != SOURCE_PROJECTION_CONTRACT
+            or projection.get("projection_contract_sha256") != digest(CONTRACT)
+            or prior.get(split_dependency) != signatures.get(split_dependency)):
+            labels = read(Path(label_dependency))
+            by_trace = {r.get("decision_trace_id"): r for r in labels.get("labels") or []}
+            split_report = read(Path(split_dependency))
+            summary = split_report.get("input_summary") or {}
+            owner_source = (summary.get("compact_pre_ai_execution_replay")
+                or summary.get("entry_opportunity_executable_replay_refresh")
+                or (summary.get("daily_diagnostic") or {}).get("entry_opportunity_executable_replay") or {})
+            owners = {r.get("seed", {}).get("evaluation_attempt_id"): r for r in owner_source.get("rows") or []}
+            rebound = []
+            for original in projection.get("rows") or []:
+                row = dict(original)
+                owner = owners.get(row.get("evaluation_attempt_id")) or {}
+                row["owner_replay"] = owner if owner_replay_valid(owner, row) else None
+                label = by_trace.get(row.get("evaluation_key")) or {}
+                row.setdefault("natural_contract_evidence", {k: label.get(k) for k in
+                    ("result_source", "model", "provider_actual", "semantic_validation_status",
+                     "decision_quality_contract_status", "decision_quality_contract_errors")})
+                if (row["owner_replay"] and isinstance(row.get("input"), dict)
+                    and row.get("exclusion_reason") in {"exact_stop_distance_missing", "exact_stop_distance_missing_or_invalid", "terminal_path_not_evaluable", "full_cost_or_terminal_missing"}):
+                    row["exclusion_reason"] = None
+                rebound.append(row)
+            write(path.parent / "compact_source_generations" / (projection["artifact_content_sha256"] + ".json"), projection)
+            projection = sealed({**projection, "rows": rebound,
+                "exclusion_counts": dict(Counter(r["exclusion_reason"] for r in rebound if r.get("exclusion_reason"))),
+                "owner_execution_model_validation": split_report.get("execution_model_validation") or {},
+                "dependency_signatures": signatures, "projection_contract_sha256": digest(CONTRACT),
+                "source_projection_contract": SOURCE_PROJECTION_CONTRACT,
+                "source_upgrade": {"original_projection_sha256": projection["artifact_content_sha256"],
+                    "raw_not_read": True, "original_missing_input_not_reconstructed": True}})
+            write(projection_path, projection)
         if (
             not valid(projection)
             or projection.get("dependency_signatures") != signatures
@@ -767,7 +1003,8 @@ def run(
                     projection,
                 )
             projection = sealed(
-                {**prepare(root, day), "dependency_signatures": signatures, "projection_contract_sha256": digest(CONTRACT)}
+                {**prepare(root, day), "dependency_signatures": signatures,
+                 "projection_contract_sha256": digest(CONTRACT), "source_projection_contract": SOURCE_PROJECTION_CONTRACT}
             )
             for dependency in dependency_paths:
                 actual = dependency if dependency.exists() else Path(str(dependency) + ".gz")
@@ -805,9 +1042,17 @@ def run(
         )
         ledger, calls = None, 0
         execution_errors = []
+        cost_receipt = runtime_inference_cost_receipt(root, day)
+        primary_blockers = {}
+        for row in projection["rows"]:
+            value = primary_input_blocker(row, projection.get("owner_execution_model_validation") or {})
+            if value is None and cost_receipt["delta_krw"] is None:
+                value = ("source_gap", cost_receipt["blocker"])
+            if value is not None:
+                primary_blockers[row["evaluation_key"]] = value
         for row in projection["rows"]:
             key = row["evaluation_key"]
-            if row["exclusion_reason"] or not projection["source_tuning_allowed"]:
+            if row["evaluation_key"] in primary_blockers or not projection["source_tuning_allowed"]:
                 continue
             if row["incumbent_prompt_version"] == candidate:
                 results[key] = sealed(
@@ -944,7 +1189,16 @@ def run(
             except Exception as exc:
                 execution_errors.append(type(exc).__name__)
                 break
-        metrics = evaluate(projection["rows"], results)
+        cost_receipt = runtime_inference_cost_receipt(root, day)
+        for key, result in list(results.items()):
+            if valid(result) and cost_receipt["status"] == "reviewed_operator_zero_cost":
+                results[key] = sealed({**result, "runtime_inference_cost_delta_krw": cost_receipt["delta_krw"],
+                                       "runtime_inference_cost_receipt": cost_receipt})
+        metrics = evaluate([
+            {**row,"exclusion_reason":row.get("exclusion_reason") or primary_blockers.get(row["evaluation_key"],(None,None))[1]}
+            for row in projection["rows"]], results)
+        metrics["operating_economic_comparison"] = operating_comparison_metrics(
+            metrics["pairs"], projection.get("owner_execution_model_validation") or {})
         versions = sorted({r["incumbent_prompt_version"] for r in projection["rows"]})
         status = (
             "source_contract_blocked"
@@ -1019,6 +1273,8 @@ def run(
                 "source_projection_sha256": projection["artifact_content_sha256"],
                 "source_label_report_sha256": projection.get("source_label_report_sha256"),
                 "owner_execution_model_validation": projection.get("owner_execution_model_validation") or {},
+                "post_apply_decision_version_performance": applied_decision_version_performance(
+                    read(root / "report/entry_split_order_plan" / f"entry_split_order_plan_{day}.json"),day=day),
                 "owner_execution_model_status": (projection.get("owner_execution_model_validation") or {}).get("status", "missing"),
                 "promotion_contract_sha256": digest(CONTRACT),
                 "promotion_contract": CONTRACT,
@@ -1033,8 +1289,9 @@ def run(
                     float(r.get("evaluation_provider_cost_usd") or 0)
                     for r in results.values()
                 ),
-                "runtime_inference_cost_delta_krw": None,
-                "runtime_inference_cost_status": "same_model_token_delta_and_reviewed_krw_conversion_required",
+                "runtime_inference_cost_delta_krw": cost_receipt["delta_krw"],
+                "runtime_inference_cost_status": cost_receipt["status"],
+                "runtime_inference_cost_receipt": cost_receipt,
                 "chronological_validation": {
                     "candidate_frozen_at": frozen_at,
                     "learning_pairs": [
@@ -1060,6 +1317,7 @@ def run(
         report["selection_disposition"] = (
             "candidate_selected" if report["promotion_pass"] else "incumbent_preserved"
         )
+        report["candidate_zero_disposition"] = candidate_zero_disposition(projection["rows"], primary_blockers, report)
         report = sealed(report)
         write(path, report)
         return report

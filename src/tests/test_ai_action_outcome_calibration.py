@@ -2426,8 +2426,11 @@ def test_report_common_refinement_uses_natural_population_and_current_parent(mon
     monkeypatch.setattr(calibration, "_compact_history_receipt", lambda root, day, observations, incumbent, receipt: receipt)
     report = calibration.build_report(target_date="2026-09-15", data_root=tmp_path)
     result = report["mechanistic_entry_refinement"]
-    assert result["promotion_pass"] is True
-    assert result["source_contract"]["accepted_lane_counts"] == {"natural": len(rows)}
+    # A producer cannot promote a proxy-only BLOCK population without the
+    # uncalled downstream AI and frozen operating owner contract.
+    assert result["promotion_pass"] is False
+    assert result["source_contract"]["accepted_lane_counts"] == {}
+    assert result["source_contract"]["row_exclusion_reason_counts"]["unsupported_machine_nonentry_downstream_ai_scope"] == len(rows)
     assert result["incumbent_machine_policy_sha256"] == calibration._canonical_sha256(parent)
 
 
@@ -4502,3 +4505,33 @@ def test_machine_microstructure_diagnostic_preserves_existing_auxiliary_gate():
     assert summary['cost_adjusted_outcome_count'] == 1
     assert summary['machine_tuning_input_allowed'] is True
     assert summary['auxiliary_tuning_input_allowed'] is False
+
+
+def test_current_machine_operating_filter_uses_same_downstream_ai_and_model():
+    from src.tests.test_entry_setup_paired_replay_batch import full_compact_proof
+    from src.engine.scalping import compact_auxiliary_paired_replay as compact
+    proof=full_compact_proof()
+    source=proof['chronological_validation']['holdout_pairs'][0]
+    # Current machine ENTER_NOW with an actual VETO remains no exposure even
+    # when a machine challenger retains that selection.
+    row=dict(decision_trace_id='machine-exact',comparison={'control_action':'BUY'},
+        operating_comparison_input=source,operating_model_validation=proof['owner_execution_model_validation'],
+        operating_runtime_cost_receipt={'delta_krw':0.})
+    unchanged=calibration._mechanistic_paired_population_metrics([row],[row])
+    assert unchanged['paired_terminal_proxy_delta_pct']==0.
+    assert unchanged['operating_economic_comparison']['status']=='supported_operating_comparison'
+    assert not unchanged['paired_terminal_contract_complete']
+    # Recompute a signed losing operating arm, never copy a real SELL outcome.
+    import copy
+    losing=copy.deepcopy(row)
+    s=losing['operating_comparison_input']
+    s['incumbent_verdict']='PASS'
+    replay=s['owner_replay']; arm=next(iter(replay['operating_arms'].values()))
+    for key in ('net_pnl_krw','stress_net_pnl_krw','net_return_pct','stress_net_return_pct'):
+        arm[key]=-abs(arm[key])
+    arm['sha256']=compact.digest({k:v for k,v in arm.items() if k!='sha256'})
+    replay['replay_sha256']=compact.digest({k:v for k,v in replay.items() if k!='replay_sha256'})
+    filtered=calibration._mechanistic_paired_population_metrics([losing],[])
+    assert filtered['operating_economic_comparison']['robust_paired_delta_ev_lower_bound_pct']>0
+    assert filtered['operating_economic_comparison']['candidate']['net_pnl_krw']==0.
+    assert filtered['paired_terminal_contract_complete']

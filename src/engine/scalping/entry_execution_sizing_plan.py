@@ -300,6 +300,7 @@ def compose_entry_execution_sizing_plan(
     quantity_policy_version: str | None,
     split_policy_version: str | None,
     replay_context: dict[str, Any] | None = None,
+    observation_only: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Validate and decorate an existing entry plan without changing it.
 
@@ -327,7 +328,7 @@ def compose_entry_execution_sizing_plan(
         blockers.append("entry_action_owner_invalid")
     if machine_action != "ENTER_NOW":
         blockers.append("entry_action_not_enter_now")
-    if not ai_screen_pass:
+    if not ai_screen_pass and not observation_only:
         blockers.append("auxiliary_ai_pass_missing")
     if expected_total_qty <= 0:
         blockers.append("expected_total_qty_invalid")
@@ -559,6 +560,9 @@ def compose_entry_execution_sizing_plan(
         "valid": not blockers,
         "blockers": blockers,
     }
+    if observation_only:
+        plan_core["observation_only"] = True
+        plan_core["capture_stage"] = "before_compact_ai"
     plan_id = f"entry-sizing-{_content_sha256(plan_core)[:24]}"
     common_fields = {
         "entry_execution_sizing_plan_schema": SCHEMA_VERSION,

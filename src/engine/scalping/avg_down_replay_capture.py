@@ -45,6 +45,7 @@ _SEEN: set[str] = set()
 _DAY = ""
 _DAILY_FRAME_BYTES = 0
 _MARKET_INPUTS: dict[str, dict] = {}
+_MAIN_MARKET_REGIME: dict = {}
 _IMPLEMENTATION: dict | None = None
 _POLICY_CACHE: dict = {}
 _AI_STATE: dict[str, dict] = {}
@@ -479,6 +480,19 @@ def record_market_inputs(code: str, *, now_ts: float, **values) -> None:
         pass
 
 
+def record_main_market_regime(value, *, now_ts: float) -> None:
+    """Copy the main loop's already resolved holding input, with its cutoff.
+
+    No refresh/request or action-dependent position state is introduced. The
+    existing in-process WS observer reads this same bounded source cache.
+    """
+    if not isinstance(value, str) or value in {"", "UNKNOWN"}:
+        return
+    with _LOCK:
+        _MAIN_MARKET_REGIME.clear()
+        _MAIN_MARKET_REGIME.update(observed_at=float(now_ts), value=value)
+
+
 def recorded_market_inputs(code: str, *, cutoff_ts: float) -> dict:
     """Freeze already observed owner inputs at the canonical depth cutoff.
 
@@ -486,6 +500,9 @@ def recorded_market_inputs(code: str, *, cutoff_ts: float) -> dict:
     """
     with _LOCK:
         values=deepcopy(_MARKET_INPUTS.get(str(code)[:6],{}))
+        regime=deepcopy(_MAIN_MARKET_REGIME)
+    if regime and ("market_regime" not in values or values["market_regime"].get("observed_at",0) < regime["observed_at"]):
+        values["market_regime"] = regime
     values={key:row for key,row in values.items()
         if isinstance(row,dict) and type(row.get("observed_at")) in (int,float)
         and 0 <= cutoff_ts-row["observed_at"] <= MAX_FRAME_GAP_SEC}

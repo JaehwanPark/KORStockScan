@@ -4923,6 +4923,12 @@ def _previous_operating_state(target_date):
 
 
 def _refresh_operating_economics(report,validation,replay,actual_outcomes,*,target_date,events=(),registry=()):
+    if events:
+        from src.engine.sniper_missed_entry_counterfactual import _load_entry_events
+        from src.engine.scalping.strategy_owner_replay import build_entry_opportunity_replays
+        report.setdefault("input_summary", {})["compact_pre_ai_execution_replay"] = build_entry_opportunity_replays(
+            target_date, _load_entry_events(target_date, rows=events),
+            source_stage="entry_ai_economic_plan_observed")
     predecessor=_previous_operating_state(target_date)
     previous=report.get("operating_economic_state") or predecessor
     if predecessor and previous.get("predecessor_sha256")!=predecessor.get("sha256") and previous is not predecessor:
@@ -4986,9 +4992,59 @@ def _refresh_operating_economics(report,validation,replay,actual_outcomes,*,targ
 EXECUTION_MODEL_CONTRACT = "entry_split_execution_model_validation_v1"
 EXECUTION_SOURCE_STAGES = frozenset({
     "entry_execution_sizing_plan", "entry_execution_sizing_plan_block",
+    "entry_ai_economic_plan_observed", "entry_ai_economic_source_gap",
+    "entry_ai_economic_decision_available",
     "entry_quantity_leg_four_arm_evaluation", "order_leg_sent", "order_leg_fail",
     "order_leg_no_response", "order_bundle_submitted", "order_bundle_failed",
 })
+
+
+def _execution_projection_census(target_date, events):
+    """Reconcile retained raw identities against the existing producer census."""
+    from src.engine.pipeline_event_summary import (producer_summary_paths,
+        EXECUTION_SUMMARY_STAGES, IDENTITY_CONTRACT, IDENTITY_MODULUS, execution_projection_identity)
+    directory = DATA_DIR / "pipeline_event_summaries"
+    path, manifest_path = producer_summary_paths(directory, target_date)
+    manifest = _load_json(manifest_path) or {}
+    if (not EXECUTION_SUMMARY_STAGES <= set(manifest.get("summary_stages") or [])
+        or manifest.get("identity_contract") != IDENTITY_CONTRACT or not path.is_file()):
+        return {"status": "source_gap", "reason": "execution_producer_census_missing",
+                "coverage_scope": "declared_execution_stage_producer_census"}
+    before = path.stat()
+    if path.is_symlink() or before.st_size > 64 * 1024 * 1024 or manifest.get("summary_storage_size_bytes") != before.st_size:
+        return {"status": "source_gap", "reason": "execution_producer_census_unsealed"}
+    expected = Counter(); expected_hash = Counter()
+    for row in iter_jsonl(path):
+        stage = row.get("stage")
+        if stage not in EXECUTION_SUMMARY_STAGES:
+            continue
+        if row.get("target_date") != target_date or row.get("identity_contract") != IDENTITY_CONTRACT:
+            raise ValueError("execution_producer_census_contract_invalid")
+        if row.get("execution_projection_identity_contract") != "lossless_execution_projection_v1":
+            raise ValueError("execution_producer_lossless_identity_missing")
+        expected[stage] += int(row["event_count"])
+        expected_hash[stage] = (expected_hash[stage] + int(row["execution_projection_hash_sum"], 16)) % IDENTITY_MODULUS
+    observed = Counter(); observed_hash = Counter(); missing = 0
+    for event in events:
+        stage = event["stage"]
+        observed[stage] += 1
+        value = event.get("execution_source_event_sha256")
+        if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
+            missing += 1
+        else:
+            if value != execution_projection_identity(event):
+                raise ValueError("execution_projection_content_identity_mismatch")
+            observed_hash[stage] = (observed_hash[stage] + int(value, 16)) % IDENTITY_MODULUS
+    after = path.stat()
+    if (before.st_ino, before.st_size, before.st_mtime_ns) != (after.st_ino, after.st_size, after.st_mtime_ns) or manifest != (_load_json(manifest_path) or {}):
+        raise ValueError("execution_producer_census_changed")
+    ready = not missing and expected == observed and expected_hash == observed_hash
+    return {"status": "ready" if ready else "source_gap",
+        "reason": None if ready else "execution_projection_census_mismatch",
+        "expected_stage_counts": dict(expected), "observed_stage_counts": dict(observed),
+        "missing_identity_count": missing, "identity_conservation_holds": ready,
+        "manifest_sha256": _canonical_sha256(manifest),
+        "coverage_scope": "declared_execution_stage_producer_census"}
 
 
 def _bounded_execution_projection(target_date: str):
@@ -5031,10 +5087,14 @@ def _bounded_execution_projection(target_date: str):
         sources.append({"path": str(path.resolve()), "sha256": hasher.hexdigest()})
     if sorted(directory.glob("part-*.jsonl*")) != partition_paths:
         raise ValueError("execution_partition_inventory_changed_during_read")
-    # A pre-contract compact partition is not a declaration of zero raw events.
-    return rows, {"status": "ready" if rows else "source_gap",
-        "reason": None if rows else "execution_compact_coverage_unproven",
-        "full_population_coverage_verified": False,
+    census = _execution_projection_census(target_date, rows)
+    ready = census["status"] == "ready"
+    # Pre-contract partitions never imply an empty raw opportunity population.
+    return rows, {"status": "ready" if ready else "source_gap",
+        "reason": None if ready else ("execution_compact_coverage_unproven" if not rows else census["reason"]),
+        "full_population_coverage_verified": ready,
+        "coverage_scope": "declared_execution_stage_producer_census",
+        "producer_census": census,
         "sources": sources, "retained_event_count": len(rows),
         "raw_not_read": True, "flat_compact_included": flat_available,
         "projection_contract": EXECUTION_MODEL_CONTRACT}
@@ -5282,7 +5342,12 @@ def _refresh_execution_model_only(target_date, *, prepared_effective_date=None, 
     if prepared_effective_date is not None:
         if date.fromisoformat(prepared_effective_date).isoformat() != prepared_effective_date or prepared_effective_date <= target_date:
             raise ValueError("entry_split_prepared_effective_date_invalid")
-    events, projection = _bounded_execution_projection(target_date)
+    try:
+        events, projection = _bounded_execution_projection(target_date)
+    except (ValueError, OSError, KeyError, TypeError) as exc:
+        events, projection = [], dict(status="source_gap",reason=str(exc),raw_not_read=True,
+            full_population_coverage_verified=False,owner="existing_execution_projection_and_producer_census",
+            closure_test="atomic_date_hash_census_conservation_before_model_or_policy_consumption")
     actual_outcomes, actual_source = _bounded_actual_entry_outcomes(target_date)
     registry, registry_contract = _execution_registry_snapshot()
     from src.engine.sniper_missed_entry_counterfactual import _load_entry_events
@@ -6618,6 +6683,7 @@ def apply_entry_split_order_policy(
     policy_file: str | None = None,
     now: datetime | None = None,
     operating_context: dict | None = None,
+    observation_only: bool = False,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     orders = [dict(item) for item in (planned_orders or []) if isinstance(item, dict)]
     latency_gate = latency_gate if isinstance(latency_gate, dict) else {}
@@ -6899,6 +6965,9 @@ def apply_entry_split_order_policy(
             if submit_ai_contract_trusted
             else {}
         )
+        if observation_only:
+            return [], {**fields, "entry_split_order_skip_reason":
+                        "unsupported_pre_ai_probe_reservation_scope"}
         bundle_id, reservation_reason = _reserve_probe_runtime_bundle(
             stock=stock,
             total_qty=total_qty,

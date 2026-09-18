@@ -798,6 +798,11 @@ def _mechanistic_terminal_proxy_pct(row: dict[str, Any]) -> float | None:
     exactly once.  This remains counterfactual path evidence, not realized PnL.
     """
 
+    if "operating_comparison_input" in row:
+        from src.engine.scalping import compact_auxiliary_paired_replay as compact
+        source = row["operating_comparison_input"]
+        arm = compact.owner_operating_arm(source.get("owner_replay") or {}, source)
+        return arm.get("net_return_pct") * int(source.get("incumbent_verdict") == "PASS") if arm else None
     comparison = row["comparison"]
     first_hit = str(comparison.get("entry_path_first_hit") or "")
     execution_cost = _number(comparison.get("conservative_execution_cost_pct"))
@@ -2216,6 +2221,7 @@ def _common_refinement_population(
     natural_conflicting_attempt_identity_count: int = 0,
     natural_conflicting_evaluation_keys: list[str] | None = None,
     cohort: tuple[str, str] = ("KRX", "KRX_REGULAR"),
+    operating_projection: dict | None = None,
 ) -> tuple[list[dict], dict]:
     """Union existing exact CF lanes before selection; no fills/AI required.
 
@@ -2273,6 +2279,25 @@ def _common_refinement_population(
     for lane, originals in (("paired", paired_rows), ("natural", natural_rows)):
         for original in originals:
             row = dict(original)
+            operating_source = None
+            if operating_projection is not None:
+                from src.engine.scalping import compact_auxiliary_paired_replay as compact
+                matches = [r for r in operating_projection.get("rows") or []
+                           if r.get("evaluation_attempt_id") == row.get("evaluation_attempt_id")]
+                if (lane != "natural" or not compact.valid(operating_projection) or len(matches) != 1
+                    or row.get("machine_action") != "ENTER_NOW"):
+                    excluded["unsupported_machine_nonentry_downstream_ai_scope"] += 1
+                    continue
+                operating_source = matches[0]
+                if (operating_source.get("exclusion_reason") or operating_source.get("incumbent_verdict") not in {"PASS", "VETO"}
+                    or any(operating_source.get(k) != row.get(k) for k in
+                           ("stock_code", "scanner_promotion_id", "effective_venue", "session_bucket", "source_date"))
+                    or not compact.owner_operating_arm(operating_source.get("owner_replay") or {}, operating_source)):
+                    excluded["machine_operating_owner_source_gap"] += 1
+                    continue
+                row["operating_comparison_input"] = operating_source
+                row["operating_model_validation"] = operating_projection.get("owner_execution_model_validation") or {}
+                row["operating_runtime_cost_receipt"] = operating_projection.get("runtime_inference_cost_receipt") or {}
             day = str(row.get("source_date") or "")
             evidence = _as_dict(row.get("setup_evidence"))
             parts = _as_dict(_as_dict(row.get("entry_group_observation")).get("key_parts"))
@@ -2316,12 +2341,12 @@ def _common_refinement_population(
                 excluded["conflicting_exact_attempt"] += 1
                 continue
             comparison = _as_dict(row.get("comparison"))
-            if row.get("entry_quality_contract_valid") is not True:
+            if operating_source is None and row.get("entry_quality_contract_valid") is not True:
                 excluded["outcome_contract_invalid"] += 1
                 continue
             cost = _as_dict(comparison.get("entry_cost_contract"))
             full_cost = _full_entry_cost_pct(cost, source_date=day)
-            if (
+            if operating_source is None and (
                 full_cost is None
                 or (cost.get("effective_venue"), cost.get("session_bucket")) != cohort
                 or _number(comparison.get("conservative_execution_cost_pct")) is None
@@ -2495,12 +2520,35 @@ def _mechanistic_paired_population_metrics(
             terminal_value if row["decision_trace_id"] in selected_trace_ids else 0.0
         )
         deltas.append(mechanistic_value - control_value)
+    operating = None
+    if population and all("operating_comparison_input" in r for r in population):
+        from src.engine.scalping import compact_auxiliary_paired_replay as compact
+        pairs = []
+        for row in population:
+            source = row["operating_comparison_input"]
+            arm = compact.owner_operating_arm(source.get("owner_replay") or {}, source)
+            old = source["incumbent_verdict"]
+            new = old if row["decision_trace_id"] in selected_trace_ids else "VETO"
+            change = int(new == "PASS") - int(old == "PASS")
+            pairs.append({**source, "incumbent_verdict": old, "candidate_verdict": new,
+                "delta_net_pct": arm["net_return_pct"] * change,
+                "stress_delta_net_pct": arm["stress_net_return_pct"] * change,
+                "runtime_inference_cost_delta_krw": row["operating_runtime_cost_receipt"].get("delta_krw")})
+        operating = compact.operating_comparison_metrics(pairs, population[0]["operating_model_validation"])
+    complete = len(deltas) == terminal_evaluable_count
+    if operating is not None:
+        complete &= (operating["status"] == "supported_operating_comparison"
+            and operating["robust_paired_delta_ev_lower_bound_pct"] > 0
+            and operating["candidate"]["net_pnl_krw"] > operating["incumbent"]["net_pnl_krw"]
+            and operating["candidate"]["es10"] >= operating["incumbent"]["es10"]
+            and operating["candidate"]["worst"] >= operating["incumbent"]["worst"])
     return {
         "population_count": len(population),
         "terminal_evaluable_count": terminal_evaluable_count,
         "paired_comparable_count": len(deltas),
         "paired_terminal_proxy_delta_pct": fmean(deltas) if deltas else None,
-        "paired_terminal_contract_complete": len(deltas) == terminal_evaluable_count,
+        "paired_terminal_contract_complete": complete,
+        **({"operating_economic_comparison": operating} if operating is not None else {}),
     }
 
 
@@ -2580,6 +2628,14 @@ def build_clean_baseline_mechanistic_refinement(
                     "minimum_fillability_score": minimum_fillability_score,
                     "maximum_top3_ask_to_bid_ratio": maximum_ratio,
                 }
+                # Exact current ENTER_NOW + actual downstream AI is the
+                # supported operating scope. A looser machine would require
+                # uncalled downstream AI, not a fabricated PASS.
+                if rows and "operating_comparison_input" in rows[0] and (
+                    maximum_spread_bp > parent["thresholds"]["maximum_spread_bp"]
+                    or minimum_fillability_score < parent["thresholds"]["minimum_fillability_score"]
+                    or maximum_ratio > parent["thresholds"]["maximum_top3_ask_to_bid_ratio"]):
+                    continue
                 selected = _mechanistic_policy_rows(calibration_rows, policy, parent_policy=parent)
                 selection_sha256 = _canonical_sha256(
                     [
@@ -7045,12 +7101,17 @@ def build_report(
         data_root,
         pipeline_prices_by_day=pipeline_prices_by_day,
     )
+    operating_projection = compact.read(compact.report_path(data_root, target_date).with_suffix(".source.json"))
+    if compact.valid(operating_projection):
+        operating_projection = compact.sealed({**operating_projection,
+            "runtime_inference_cost_receipt": compact.runtime_inference_cost_receipt(data_root, target_date)})
     refinement_rows, refinement_contract = _common_refinement_population(
         hierarchy_rows, machine_observations,
         target_date=target_date, source_receipt=machine_source_receipt,
         paired_contract=mechanistic_source_contract,
         natural_conflicting_attempt_identity_count=machine_decision_case_table["conflicting_attempt_identity_count"],
         natural_conflicting_evaluation_keys=machine_decision_case_table["conflicting_evaluation_keys"],
+        operating_projection=operating_projection,
     )
     mechanistic_refinement = build_clean_baseline_mechanistic_refinement(
         report_root / PAIRED_SUBDIR, target_date=target_date,

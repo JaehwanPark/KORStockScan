@@ -2648,3 +2648,24 @@ def test_actual_screen_trace_and_forward_label_preserve_same_common_health(monke
         assert row["input_feature_allowed"] is True
         assert row["input_feature_blockers"] == []
         assert row["actual_order_submitted"] is False
+
+
+def test_economic_observation_availability_binds_final_trace_clock(monkeypatch, tmp_path):
+    _enable(monkeypatch,tmp_path)
+    from src.utils import pipeline_event_logger as pipeline
+    events=[]
+    monkeypatch.setattr(pipeline,'emit_pipeline_event',lambda *args,**kw: events.append((args,kw)) or {'structured_append_succeeded':True})
+    result=trace.record_ai_decision_trace(dict(action='BUY',score=80,provider_actual='openai',
+        model='gpt-5.4-nano',evaluation_attempt_id='source-attempt',
+        entry_economic_plan_sha256='b'*64,entry_economic_source_status='recorded_source_only'),
+        prompt_type='scalping_entry',prompt_version='test-compact',result_source='live',
+        stock_code='005930',provider_called=True)
+    assert result
+    rows=_rows(trace._trace_path(trace._date_text()))
+    assert len(events)==1
+    args,kw=events[0]
+    assert args[3]=='entry_ai_economic_decision_available'
+    assert kw['fields']['evaluation_attempt_id']=='source-attempt'
+    assert kw['fields']['entry_economic_decision_available_at']==rows[0]['decision_ts']
+    assert kw['fields']['entry_economic_plan_sha256']=='b'*64
+    assert kw['fields']['actual_order_submitted'] is False

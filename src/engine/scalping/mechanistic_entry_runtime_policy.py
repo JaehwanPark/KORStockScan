@@ -406,7 +406,7 @@ def compact_economic_direction(economic: dict) -> str:
     return carry
 
 
-def _selected_compact_prompt_version(source: dict, previous: dict | None) -> str:
+def _selected_compact_prompt_version(source: dict, previous: dict | None, *, effective_date=None) -> str:
     """Consume exact-incumbent paired proof; natural errors guide research."""
 
     previous_version = str(
@@ -433,7 +433,7 @@ def _selected_compact_prompt_version(source: dict, previous: dict | None) -> str
             and (case_table.get("compact_auxiliary_policy_measurement") or {}).get("measurement_allowed") is True
             and paired.promotion_valid(proof, incumbent=previous_version,
                 selected=proof.get("candidate_prompt_version"),
-                source_manifest_sha256=source_receipt.get("source_manifest_sha256"))):
+                source_manifest_sha256=source_receipt.get("source_manifest_sha256"), effective_date=effective_date)):
         return previous_version
     selected = proof.get("candidate_prompt_version")
     return selected if selected in COMPACT_AI_VARIANTS else previous_version
@@ -500,7 +500,7 @@ def _publish_compact_scope(source: dict, *, data_root: Path, current: datetime) 
                    and compact_terminal_gate_allowed(receipt)
                    and (receipt.get("compact_auxiliary_policy_measurement") or {}).get("measurement_allowed") is True
                    and paired.promotion_valid(proof, incumbent=version, selected=selected,
-                       source_manifest_sha256=receipt.get("source_manifest_sha256")))
+                       source_manifest_sha256=receipt.get("source_manifest_sha256"), effective_date=target))
         if existing and existing["ai_policy"]["prompt_version"] != version:
             raise ValueError("compact_future_stage_owner_conflict")
         inherited = existing or previous
@@ -626,7 +626,7 @@ def publish(
             load_effective(data_root=data_root, target_date=source_date) or existing
         )
         selected_ai_version = _selected_compact_prompt_version(
-            source, evaluation_incumbent
+            source, evaluation_incumbent, effective_date=target
         )
         if (
             existing is not None
@@ -657,7 +657,7 @@ def publish(
             else None
         )
         selected_ai_version = _selected_compact_prompt_version(
-            source, evaluation_incumbent or previous
+            source, evaluation_incumbent or previous, effective_date=target
         )
         if previous is None and not bootstrap:
             raise ValueError("machine_policy_bootstrap_authority_missing")
