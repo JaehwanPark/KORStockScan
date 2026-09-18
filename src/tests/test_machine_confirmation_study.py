@@ -1352,3 +1352,119 @@ def test_widget_registry_terminal_is_bound_to_own_identity(monkeypatch):
     wrong = dict(order)
     project_widget_registry_terminal(SimpleNamespace(), wrong)
     assert "fill_price" not in wrong
+
+
+def test_original_native_date_roll_preserves_exact_terminal_for_actual_refresh(
+    tmp_path,
+):
+    from datetime import datetime
+    from src.tests.test_samsung_midday_one_share import _machine, FakeGateway
+    from src.engine.monitoring.machine_entry_confirmation_study import (
+        refresh_completed_operating_actuals,
+        _seal,
+    )
+
+    source, decisions, _, state = _native_terminal_case(
+        "2026-09-01", return_native=True
+    )
+    native = state["signal_features"]["timing_operating_native_state"]
+    for leg in native["legs"]:
+        leg["status"] = "COMPLETE"
+    state.update(
+        status="COMPLETE",
+        position_qty=0,
+        timing_operating_opportunities={
+            "root": dict(contract=source["contract"], native_state=native)
+        },
+    )
+    machine = _machine(tmp_path, FakeGateway())
+    machine._state = state
+    assert machine._roll_date(datetime.fromisoformat("2026-09-02T12:00:00+09:00"))
+    rolled = machine.snapshot()
+    assert source["contract"]["sha256"] in rolled["timing_operating_terminal_history"]
+    (tmp_path / "samsung_midday_one_share_state.json").write_text(json.dumps(rolled))
+    absent = _seal(source | dict(actual=None, actual_disposition="pending"))
+    after, errors = refresh_completed_operating_actuals(
+        [(absent, decisions)], target_date="2026-09-02", state_dir=tmp_path
+    )
+    assert (
+        after[0][0]["actual"]["net_pnl_krw"] == source["actual"]["net_pnl_krw"]
+        and not errors
+    )
+    assert after[0][0]["points"] == absent["points"]
+
+
+def test_existing_report_actual_history_survives_checkpoint_eviction_asof_and_conflict(
+    tmp_path,
+):
+    from src.engine.monitoring.machine_entry_confirmation_study import (
+        read_native_actual_history,
+        restore_native_actual_history,
+        _seal,
+    )
+
+    source, decisions, _ = _native_terminal_case("2026-09-01")
+    c, actual = source["contract"], source["actual"]
+    path = tmp_path / "machine_entry_timing_tuning_2026-09-01.json"
+    payload = dict(
+        schema="machine_entry_timing_tuning_report_v3",
+        target_date="2026-09-01",
+        native_actual_completion_history=_seal(
+            dict(
+                schema="native_actual_completion_history_v1",
+                completed_by_contract={c["sha256"]: actual},
+            )
+        ),
+    )
+    path.write_text(json.dumps(payload))
+    history, errors = read_native_actual_history(tmp_path, target_date="2026-09-02")
+    assert history and not errors
+    absent = _seal(source | dict(actual=None, actual_disposition="pending"))
+    restored = restore_native_actual_history(
+        [(absent, decisions)], history, target_date="2026-09-02"
+    )[0][0]
+    assert restored["actual"] == actual and restored["points"] == absent["points"]
+    later = _seal(
+        source | dict(actual=_seal(actual | dict(knowledge_date="2026-09-02")))
+    )
+    assert (
+        restore_native_actual_history(
+            [(later, decisions)], history, target_date="2026-09-02"
+        )[0][0]["actual"]
+        == actual
+    )
+    conflict = _seal(
+        source
+        | dict(actual=_seal(actual | dict(net_pnl_krw=actual["net_pnl_krw"] + 1)))
+    )
+    assert (
+        restore_native_actual_history(
+            [(conflict, decisions)], history, target_date="2026-09-02"
+        )[0][0]["actual"]
+        is None
+    )
+    future = {c["sha256"]: _seal(actual | dict(knowledge_date="2026-09-03"))}
+    assert (
+        restore_native_actual_history(
+            [(absent, decisions)], future, target_date="2026-09-02"
+        )[0][0]["actual"]
+        is None
+    )
+    payload["native_actual_completion_history"]["completed_by_contract"] = {}
+    path.write_text(json.dumps(payload))
+    assert read_native_actual_history(tmp_path, target_date="2026-09-02")[1]
+
+
+def test_actual_history_conflict_tombstone_cannot_reappear():
+    from src.engine.monitoring.machine_entry_confirmation_study import (
+        restore_native_actual_history,
+    )
+
+    source, decisions, _ = _native_terminal_case("2026-09-01")
+    result = restore_native_actual_history(
+        [(source, decisions)],
+        {source["contract"]["sha256"]: None},
+        target_date="2026-09-02",
+    )[0][0]
+    assert result["actual"] is None
+    assert result["actual_refresh_blocker"] == "native_actual_history_identity_conflict"

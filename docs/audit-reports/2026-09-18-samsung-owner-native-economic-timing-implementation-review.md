@@ -14,7 +14,7 @@ Source target: 2026-09-18. As-of: 2026-09-19 KST. [owning plan](../proposals/sam
 | SOR prearm plan/source 누락 | deferred opening-price resolver의 최초 실행 시점 CAP·raw bar identity 보존 | 원 morning producer/reload 회귀 |
 | 날짜별 native policy SHA로 모델 분열 | semantic native rule + quantity/cost/route/code/programme scope | dated receipt 동일 scope/target 변화 다른 scope 회귀 |
 | target-only 최초 모델에 영구 고정 | 새 action의 chronological calibration/holdout에 model prefix 갱신 | 실행 가능한 fit/clock source 계약 |
-| 늦게 완료한 carry의 actual 연결 | 원 checkpoint exact root/as-of actual refresh만 수행 | before/after as-of·중복·다른 계약 차단 회귀 |
+| 늦게 완료한 carry의 actual 연결 | 원 checkpoint exact root/as-of actual refresh, date-reset terminal 보존 및 기존 보고서 sealed completion history | before/after as-of·중복·다른 계약 차단 회귀 |
 | 과도한 observability 누적 | programme unchanged interval 압축·bounded path·terminal lookup reuse | 100 owner ticks→1 interval·cadence 보존 회귀 |
 
 원 Kiwoom request/response parser/API/WS registration은 수정하지 않았다. native guard·수량·quantity authority·budget/custody·operator veto·기존 stop/target/override·holdout은 유지한다. src/engine root Python module/새 producer/서비스/DB/collector를 추가하지 않았다.
@@ -27,7 +27,7 @@ S0–S6의 지원 full-fill 입력 계산·model/candidate holdout·native polic
 
 ## 검증 및 배포
 
-최종 영향 범위 회귀 **872 PASS**, 마지막 admission 재확인 및 own-registry identity 보완 회귀 **231 PASS**. 두 suite는 중복이 있으므로 합산 표본 수가 아니다. owned 16 Python compile, Ruff F821/F823/F811, diff whitespace, local links 및 print-only parser(기존 stable ID의 current OPEN owner 1개)가 통과했다. 통제 source writer→canonical→모델 검증→별도 후보 검증→dated loader의 활성/거절/fallback 상태를 포함한다. 자연 경제적 성과를 주장하지 않는다.
+최종 영향 범위 회귀 **872 PASS**, 마지막 admission 재확인 및 own-registry identity 보완 회귀 **231 PASS**. carry/date-reset 누적 연결 보완 회귀 **257 PASS**가 추가로 통과했다. 이 suite들은 중복이 있으므로 합산 표본 수가 아니다. owned 16 Python compile, Ruff F821/F823/F811, diff whitespace, local links 및 print-only parser(기존 stable ID의 current OPEN owner 1개)가 통과했다. 통제 source writer→canonical→모델 검증→별도 후보 검증→dated loader의 활성/거절/fallback 상태를 포함한다. 자연 경제적 성과를 주장하지 않는다.
 
 정규장 원 leg에 없는 route는 실제 native owner policy로 **사본에만** 결속한다. 위젯 KRX 판단 호가와 SOR execution depth를 분리하고, SOR 경로 부재를 KRX 호가로 대체하지 않는 회귀를 추가했다. 차단 후 real BUY가 허용된 recheck는 최초 허용 시각부터 admission을 갱신한다. 원 checkpoint identity 충돌은 실제 손익 평가에서 제외한다.
 
@@ -42,3 +42,5 @@ Evidence owner: `tmp/samsung-owner-economic-timing-20260918/`. 실행 중 배포
 3. 독립 model/calibration/candidate holdout의 chronological coverage/floors를 충족한 뒤에만 신규 후보를 평가. valid no-edge와 source gap/unsupported/pending/insufficient sample을 구분.
 4. 실제 다음 적용일 policy hash와 native scope/code/quantity/cost/programme pin을 PID/cwd/source provenance 및 실제 행동에 대사. selector·unit 설정 변경만으로 PID 소비를 주장하지 않음.
 5. 실제 완료 root를 버전별로 중복 제거하고 rolling/cumulative 비용 모델 순익·노출·tail·모델 오차를 확인. broker settlement 비용을 별도로 확보하기 전 frozen fee 순익을 settled cash net이라고 부르지 않음. 인과적 개선은 적합한 비교가 확보될 때까지 null.
+
+배포 후 추가 재리뷰 finding: date reset으로 늦게 완료한 원 root가 유실되는 경로를 발견하여 보완했다. original `_roll_date`의 native state는 그대로 초기화하되 research terminal history만 128개로 보존한다. 기존 timing 보고서의 sealed actual completion history를 한 번 bounded 읽어 checkpoint 교체 뒤에도 누적 평가에 연결한다. 새 ledger/DB/producer·raw rescan은 없다. exact cSHA/as-of/own terminal economic identity를 대사하고 충돌 tombstone은 이후에도 제외된다.

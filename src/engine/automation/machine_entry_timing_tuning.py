@@ -2509,6 +2509,17 @@ def build_report(
     cohorts: list[dict[str, Any]] = []
     ready: list[dict[str, Any]] = []
     dynamic_ready: list[dict[str, Any]] = []
+    from src.engine.monitoring.machine_entry_confirmation_study import (
+        read_native_actual_history,
+        restore_native_actual_history,
+        _seal,
+        _sealed,
+    )
+
+    actual_history, actual_history_errors = read_native_actual_history(
+        OUTPUT_DIR, target_date=target_date
+    )
+    completed_actuals = dict(actual_history)
     for key, rows in sorted(grouped.items()):
         owner, scope_id, symbol, session, entry_state = key
         alternatives = [
@@ -2559,6 +2570,18 @@ def build_report(
             cases, actual_refresh_errors = refresh_completed_operating_actuals(
                 cases, target_date=target_date, state_dir=DATA_DIR / "runtime"
             )
+            cases = restore_native_actual_history(
+                cases, actual_history, target_date=target_date
+            )
+            for source, _ in cases:
+                c, actual = source.get("contract") or {}, source.get("actual")
+                identity = c.get("sha256")
+                if source.get("actual_refresh_blocker"):
+                    if identity is not None:
+                        completed_actuals[identity] = None
+                elif _sealed(c) and _sealed(actual):
+                    completed_actuals[identity] = actual
+            actual_refresh_errors += actual_history_errors
             operating = operating_comparison(cases, target_date=target_date)
             primary = operating_policy_evidence(
                 operating,
@@ -2730,6 +2753,13 @@ def build_report(
     )
     return {
         "schema": REPORT_SCHEMA,
+        "native_actual_completion_history": _seal(
+            dict(
+                schema="native_actual_completion_history_v1",
+                as_of_source_date=target_date.isoformat(),
+                completed_by_contract=completed_actuals,
+            )
+        ),
         REBOUND_SECTION: build_rebound_evaluation(
             target_date=target_date,
             sources=[payload for _, _, payload in reports],

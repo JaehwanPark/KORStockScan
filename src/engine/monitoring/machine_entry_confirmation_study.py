@@ -3913,7 +3913,10 @@ def refresh_completed_operating_actuals(cases, *, target_date, state_dir):
             state = read_object(path, limit=16 * 1024 * 1024)
             states = [state, *((state.get("symbols") or {}).values())]
             for item in states:
-                for opp in (item.get("timing_operating_opportunities") or {}).values():
+                for opp in (
+                    *((item.get("timing_operating_opportunities") or {}).values()),
+                    *((item.get("timing_operating_terminal_history") or {}).values()),
+                ):
                     c = opp.get("contract") or {}
                     native = opp.get("native_state") or {}
                     if _sealed(c) and str(native.get("observed_at", ""))[:10] <= str(
@@ -4074,3 +4077,139 @@ def bounded_custody_terminal_lookup(owner, *, order_date, broker_order_no, fille
         cache.clear()
     cache[key] = (stamp, row)
     return row
+
+
+def retain_native_terminal_history(state):
+    """Compact bounded checkpoint history survives the original date reset.
+
+    This records original facts only. Native order state/guards are untouched;
+    the existing timing report persists mature exact-root actuals cumulatively.
+    """
+    from copy import deepcopy
+
+    history = dict(state.get("timing_operating_terminal_history") or {})
+    for opportunity in (state.get("timing_operating_opportunities") or {}).values():
+        c, native = (
+            opportunity.get("contract") or {},
+            opportunity.get("native_state") or {},
+        )
+        legs = native.get("legs") or []
+        if _sealed(c) and legs and all(l.get("status") == "COMPLETE" for l in legs):
+            history[c["sha256"]] = deepcopy(opportunity)
+    return dict(
+        sorted(
+            history.items(),
+            key=lambda item: str(
+                item[1].get("native_state", {}).get("observed_at", "")
+            ),
+        )[-128:]
+    )
+
+
+def read_native_actual_history(report_dir, *, target_date):
+    """Read one bounded existing report generation, never raw or another SELL."""
+    from pathlib import Path
+    from src.engine.monitoring.research_closed_loop import read_object
+
+    names = sorted(
+        Path(report_dir).glob("machine_entry_timing_tuning_????-??-??.json"),
+        reverse=True,
+    )
+    for path in names:
+        if path.stem[-10:] > str(target_date):
+            continue
+        try:
+            report = read_object(path, limit=64 * 1024 * 1024)
+            history = report.get("native_actual_completion_history")
+            if history is None:
+                return {}, []
+            if (
+                report.get("target_date") != path.stem[-10:]
+                or report.get("schema") != "machine_entry_timing_tuning_report_v3"
+                or not _sealed(history)
+                or history.get("schema") != "native_actual_completion_history_v1"
+            ):
+                raise ValueError("native_actual_history_integrity_invalid")
+            completed = history.get("completed_by_contract") or {}
+            if not isinstance(completed, dict):
+                raise ValueError("native_actual_history_mapping_invalid")
+            for identity, actual in completed.items():
+                if (
+                    not isinstance(identity, str)
+                    or len(identity) != 64
+                    or (
+                        actual is not None
+                        and (
+                            not _sealed(actual)
+                            or actual.get("contract_sha256") != identity
+                        )
+                    )
+                ):
+                    raise ValueError("native_actual_history_root_invalid")
+            return completed, []
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            return {}, ["native_actual_history:" + str(exc)]
+    return {}, []
+
+
+def restore_native_actual_history(cases, history, *, target_date):
+    """Restore sealed exact-root ACTUAL facts without touching CF source paths."""
+    restored = []
+    for source, decisions in cases:
+        c = source.get("contract") or {}
+        actual = history.get(c.get("sha256"))
+        if c.get("sha256") in history and actual is None and _sealed(source):
+            source = _seal(
+                source
+                | dict(
+                    actual=None,
+                    actual_disposition="source_gap",
+                    actual_refresh_blocker="native_actual_history_identity_conflict",
+                )
+            )
+        if (
+            _sealed(source)
+            and _sealed(c)
+            and _sealed(actual)
+            and actual.get("status") == "COMPLETED"
+            and actual.get("origin") == "real"
+            and actual.get("exact_lineage") is True
+            and actual.get("contract_sha256") == c["sha256"]
+            and actual.get("knowledge_date", "9999") <= str(target_date)
+            and not source.get("actual_refresh_blocker")
+        ):
+            current = source.get("actual")
+            economic_identity = (
+                "contract_sha256",
+                "quantity",
+                "filled_quantity",
+                "net_pnl_krw",
+                "capital_krw_minutes",
+                "reserve_krw_minutes",
+                "closed_at_ms",
+                "cost_provenance",
+            )
+            if _sealed(current) and any(
+                current.get(k) != actual.get(k) for k in economic_identity
+            ):
+                source = _seal(
+                    source
+                    | dict(
+                        actual=None,
+                        actual_disposition="source_gap",
+                        actual_refresh_blocker="native_actual_history_identity_conflict",
+                    )
+                )
+            elif current is None or actual["knowledge_date"] < current.get(
+                "knowledge_date", "9999"
+            ):
+                source = _seal(
+                    source
+                    | dict(
+                        actual=actual,
+                        actual_disposition="completed",
+                        actual_refresh_basis="sealed_exact_owner_completion_history_not_cf_exit",
+                    )
+                )
+        restored.append((source, decisions))
+    return restored

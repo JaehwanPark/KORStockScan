@@ -1283,7 +1283,19 @@ class SamsungRegularTwoLegMachine:
             self._record(now, "blocked_date_rollover")
             return False
         history = deepcopy(self._state.get("adaptive_exit_history", []))
+        terminal_history = None
+        if self.policy.symbol == "005930":
+            from src.engine.monitoring.machine_entry_confirmation_study import (
+                instrumentation_call,
+                retain_native_terminal_history,
+            )
+
+            terminal_history = instrumentation_call(
+                self._state, retain_native_terminal_history, self._state
+            )
         self._state = _fresh_state(now, self.schema)
+        if terminal_history:
+            self._state["timing_operating_terminal_history"] = terminal_history
         if history:
             self._state["adaptive_exit_history"] = history
         self._record(now, "daily_state_initialized")

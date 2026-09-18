@@ -60,7 +60,7 @@ candidate calibration에서 한 번 선택한 arm을 별도 마지막 chronologi
 
 ## S6. 실제 적용 버전별 평가와 closure
 
-native scope/code/cost/선택 programme 및 실제 confirmation policy hash별로 exact root를 중복 제거한다. rolling/cumulative native priced net·EV·tail·capital/reserve·참여율과 모델 오차를 연결한다. carry가 완료되면 기존 bounded owner checkpoint에서 **actual terminal만** 갱신한다. 늦게 관측한 actual을 이전 as-of로 앞당기거나 CF 시장 경로/SELL로 붙이지 않는다.
+native scope/code/cost/선택 programme 및 실제 confirmation policy hash별로 exact root를 중복 제거한다. rolling/cumulative native priced net·EV·tail·capital/reserve·참여율과 모델 오차를 연결한다. carry가 완료되면 기존 bounded owner checkpoint에서 **actual terminal만** 갱신한다. 원 date reset은 bounded terminal history를 보존하며, 검증된 exact-root actual은 기존 timing 보고서의 sealed completion history에 누적하여 checkpoint 교체 후에도 잃지 않는다. history의 미래 knowledge date·identity 충돌·tamper는 배제하고 CF path를 변경하지 않는다. 늦게 관측한 actual을 이전 as-of로 앞당기거나 CF 시장 경로/SELL로 붙이지 않는다.
 
 구현 closure는 원 producer/저장/projection/지원 입력 계산/독립 holdout/선정/dated 소비/fallback 회귀 증거다. OPEN은 미래 source 정상 생성, 독립 자연 표본 축적, 실제 적용 PID/행동, 원 주문 완료 가격 및 실제 broker 비용/settled cash net, 인과적 개선 확인이다. 모델 ΔEV, broker-price+frozen-cost 순익, settled 실제 순익, 인과적 개선을 분리한다.
 
