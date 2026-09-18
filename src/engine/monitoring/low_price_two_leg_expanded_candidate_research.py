@@ -57,6 +57,9 @@ from src.engine.monitoring.low_price_two_leg_entry_spot_research import (
     valid_existing_axis_economic_replay,
     paired_economics,
     ECONOMIC_REPLAY_CONTRACT,
+    ECONOMIC_EVALUATION_VERSION,
+    ECONOMIC_METRIC_CONTRACT,
+    policy_identity,
     fetch_sor_history,
     select_profile_spot,
     day_replay_scope,
@@ -76,7 +79,7 @@ from src.utils import kiwoom_utils
 from src.utils.constants import CONFIG_PATH, DATA_DIR, DEV_PATH, PROJECT_ROOT
 from src.utils.market_day import is_krx_trading_day
 
-REPORT_SCHEMA = "low_price_two_leg_expanded_candidate_research_v6"
+REPORT_SCHEMA = "low_price_two_leg_expanded_candidate_research_v7"
 LEGACY_REPORT_SCHEMA = "low_price_two_leg_expanded_candidate_research_v5"
 REPORT_TYPE = "low_price_two_leg_expanded_candidate_research"
 AUTHORITY = "lower_price_machine_candidate_recommendation_only"
@@ -91,7 +94,7 @@ REPORT_CACHE_MAX_BYTES = 128 * 1024 * 1024
 REPORT_CACHE_TERMINALS = frozenset(
     {"recommendations_ready", "no_qualified_candidate", "partial_source_quality"}
 )
-PROFILE_CHECKPOINT_SCHEMA = "low_price_two_leg_profile_selection_checkpoint_v1"
+PROFILE_CHECKPOINT_SCHEMA = "low_price_two_leg_profile_selection_checkpoint_v2"
 PROFILE_CHECKPOINT_MAX_BYTES = 16 * 1024 * 1024
 DEFAULT_DYNAMIC_UNIVERSE_PATH = DATA_DIR / "daily_recommendations_v2.csv"
 DEFAULT_DYNAMIC_UNIVERSE_DIAGNOSTIC_PATH = (
@@ -137,6 +140,7 @@ ACTIVE_SYMBOL_SESSIONS = frozenset(
 )
 
 METRIC_CONTRACT = {
+    "economic_evaluation_version": ECONOMIC_EVALUATION_VERSION,
     "metric_role": "lower_price_machine_candidate_recommendation",
     "decision_authority": AUTHORITY,
     "window_policy": (
@@ -145,12 +149,12 @@ METRIC_CONTRACT = {
     "sample_floor": {
         "calibration_signal_episodes": 6,
         "calibration_completed_legs": 8,
-        "each_calibration_half_completed_legs": 3,
         "holdout_signal_episodes": 3,
         "holdout_completed_legs": 4,
         "full_window_completed_legs": 10,
     },
     "primary_decision_metric": "notional_weighted_ev_pct",
+    "calibration_half_role": "robustness_diagnostic_not_standalone_veto",
     "source_quality_gate": [
         "official_ka10080_success",
         "requested_start_date_fully_bracketed",
@@ -683,7 +687,10 @@ def _recommendation_rows(
         holdout = (item.get("selected") or {}).get("holdout") or {}
         baseline_holdout = (item.get("baseline") or {}).get("holdout") or {}
         comparison = paired_economics(baseline_holdout, holdout)
-        if not comparison["net_profit_improved"]:
+        if not (comparison["economic_superiority_confirmed"] or (
+            profile.discovery_lane != "existing_symbol_logic_improvement"
+            and comparison["participation_net_profit_confirmed"]
+        )):
             continue
         candidate_ev = float(holdout.get("notional_weighted_ev_pct") or 0.0)
         held_rate = float(holdout.get("held_leg_rate_per_filled_leg", 0.0) or 0.0)
@@ -912,6 +919,7 @@ def _valid_profile_selection(result, profile, contexts, calibration_days):
         return False
     if (
         result.get("profile_id") != profile.profile_id
+        or result.get("economic_evaluation_version") != ECONOMIC_EVALUATION_VERSION
         or result.get("symbol") != profile.symbol
         or result.get("name") != profile.name
         or result.get("session") != profile.session
@@ -937,7 +945,19 @@ def _valid_profile_selection(result, profile, contexts, calibration_days):
         }
     ):
         return False
-    for owner in ("baseline", "selected"):
+    challenger = result.get("research_challenger")
+    if challenger is not None and not isinstance(challenger, dict):
+        return False
+    if challenger is not None and (
+        challenger.get("parameters") == baseline_candidate(profile).public()
+        or result.get("research_comparison") != paired_economics(
+            result["baseline"]["holdout"], challenger.get("holdout") or {}
+        )
+    ):
+        return False
+    for owner in ("baseline", "selected", "research_challenger"):
+        if owner == "research_challenger" and challenger is None:
+            continue
         for stage, window in (
             ("calibration", dates[:calibration_days]),
             ("holdout", dates[calibration_days:]),
@@ -946,6 +966,8 @@ def _valid_profile_selection(result, profile, contexts, calibration_days):
             outcome = (result.get(owner) or {}).get(stage) or {}
             if (
                 outcome.get("economic_replay_contract") != ECONOMIC_REPLAY_CONTRACT
+                or outcome.get("metric_contract") != ECONOMIC_METRIC_CONTRACT
+                or outcome.get("policy_identity") != policy_identity(result[owner]["parameters"])
                 or outcome.get("cost_pct") != COST_PCT
                 or outcome.get("observation_dates")
                 != [day.isoformat() for day in window]
@@ -2850,8 +2872,11 @@ class CandidateRecommendationNotifier:
                 or (
                     (row.get("paired_economics") or {}).get("economic_replay_contract")
                     == ECONOMIC_REPLAY_CONTRACT
-                    and (row.get("paired_economics") or {}).get("net_profit_improved")
-                    is True
+                    and (
+                        (row.get("paired_economics") or {}).get("economic_superiority_confirmed") is True
+                        or (row.get("discovery_lane") != "existing_symbol_logic_improvement"
+                            and (row.get("paired_economics") or {}).get("participation_net_profit_confirmed") is True)
+                    )
                     and row.get("paired_economics")
                     == paired_economics(
                         row.get("current_economic_outcome") or {},
@@ -3346,6 +3371,129 @@ def reusable_report(path: Path, *, target_date: date, fingerprint: str) -> dict 
     return report
 
 
+def build_existing_logic_review(previous: dict, *, source_cache_dir: Path,
+                                target_date: date, checkpoint_dir: Path) -> dict:
+    """Re-evaluate only the declared existing-logic lane from cached sources.
+
+    This successor is diagnostic: it cannot publish a policy or register a seed.
+    Already observed validation dates remain exploratory after selection repair.
+    """
+    if (previous.get("target_date") != target_date.isoformat()
+        or previous.get("schema") not in {REPORT_SCHEMA, "low_price_two_leg_expanded_candidate_research_v6"}
+        or previous.get("cost_pct") != COST_PCT) or any(
+        previous.get(key) is not value for key, value in {
+            "runtime_effect": False, "allowed_runtime_apply": False,
+            "actual_order_submitted": False, "broker_order_forbidden": True,
+        }.items()
+    ):
+        raise ResearchError("existing_logic_review_source_contract_invalid")
+    inventory = previous["research_profile_inventory"]
+    keys = sorted(key for key, item in inventory.items()
+                  if item["discovery_lane"] == "existing_symbol_logic_improvement")
+    if not keys or len(keys) > 64:
+        raise ResearchError("existing_logic_review_scope_outside_initial_64_profiles")
+    dates = clean_baseline_trading_dates(target_date)
+    manifest = {
+        "target_date": str(target_date), "selected_profiles": keys,
+        "maximum_distinct_challengers_per_profile": 1,
+        "economic_evaluation_version": ECONOMIC_EVALUATION_VERSION,
+        "validation_usage": "exploratory_previously_observed_holdout",
+        "new_api_calls": 0, "runtime_effect": False,
+        "cost_contract": canonical_cost_contract(),
+        "baseline_policy_hashes": {key: previous["profiles"][key].get("baseline_policy_hash")
+                                   for key in keys},
+    }
+    _atomic_write(checkpoint_dir / "review_manifest.json", json.dumps(manifest, sort_keys=True))
+    rows, stats = {}, {}
+    implementation_sha256 = _canonical_digest({
+        path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in (Path(__file__), Path(__file__).with_name("low_price_two_leg_entry_spot_research.py"))
+    })
+    active_symbol, contexts, meta = None, None, None
+    for key in sorted(keys, key=lambda key: (inventory[key]["symbol"], key)):
+        spec, old = inventory[key], previous["profiles"][key]
+        symbol = spec["symbol"]
+        if symbol != active_symbol:
+            source = _load_source_cache(
+                cache_dir=source_cache_dir, symbol=symbol,
+                start_date=CLEAN_BASELINE_DATE, end_date=target_date,
+                expected_trading_day_count=len(dates),
+            )
+            active_symbol = symbol
+            if source and source[1]["source_content_sha256"] != (
+                previous.get("source_meta", {}).get(symbol, {}).get("source_content_sha256")
+            ):
+                raise ResearchError("existing_logic_cached_source_identity_mismatch")
+            contexts, meta = (build_day_contexts(source[0]), source[1]) if source else (None, None)
+        if contexts is None or old.get("decision") == "source_quality_quarantined_no_evaluation":
+            rows[key] = {"symbol": symbol, "status": "source_or_session_excluded",
+                         "reason": old.get("source_quality_reason", "cached_source_missing_or_invalid")}
+            continue
+        parameters = old["baseline"]["parameters"]
+        spot = _spot_candidate_from_public(parameters)
+        profile = ResearchProfile(
+            key, symbol, spec["name"], spec["session"],
+            ResearchPolicy(time(spot.scan_start_minute // 60, spot.scan_start_minute % 60),
+                           time(spot.scan_end_minute // 60, spot.scan_end_minute % 60),
+                           spot.lookback_bars, spot.rolling_high_drawdown_pct,
+                           spot.rolling_low_proximity_pct, spot.entry_offsets_ticks,
+                           spot.entry_valid_completed_bars, spot.target_ticks),
+            "existing_symbol_logic_improvement",
+        )
+        contract = {"evaluation_version": ECONOMIC_EVALUATION_VERSION,
+                    "implementation_sha256": implementation_sha256,
+                    "source_sha256": meta["source_content_sha256"],
+                    "dates": [str(day) for day in dates],
+                    "profile": key, "baseline_parameters": parameters,
+                    "baseline_policy_hash": old.get("baseline_policy_hash"),
+                    "grid": [item.public() for item in candidate_grid(profile)],
+                    "cost_contract": canonical_cost_contract()}
+        result = _select_profile_checkpoint(
+            profile, contexts, calibration_days=len(dates) - HOLDOUT_DAYS,
+            cache_dir=checkpoint_dir, contract=contract, stats=stats,
+        )
+        result["baseline_policy_source"] = old.get("baseline_policy_source")
+        result["baseline_policy_hash"] = old.get("baseline_policy_hash")
+        challenger = result.get("research_challenger")
+        comparison = result.get("research_comparison")
+        both_samples = bool(challenger and all(
+            owner["holdout"]["signal_episodes"] >= 3
+            and owner["holdout"]["completed_legs"] >= 4
+            for owner in (result["baseline"], challenger)
+        ) and challenger["sample_floor_passed"])
+        mature = bool(both_samples and comparison["economic_comparison_status"]
+                      == "distinct_resolved_economic_pair")
+        rows[key] = {
+            "symbol": symbol, "name": spec["name"], "session": spec["session"],
+            "status": (
+                "no_distinct_eligible_challenger" if comparison is None
+                else comparison["economic_comparison_status"]
+                if comparison["economic_comparison_status"] != "distinct_resolved_economic_pair"
+                else "distinct_resolved_economic_pair" if mature
+                else "insufficient_mature_sample"
+            ),
+            "valid_mature_distinct_comparison": mature,
+            "both_holdout_sample_floors_passed": both_samples,
+            "model_joint_gain": bool(mature and comparison["economic_superiority_confirmed"]),
+            "result": result,
+        }
+        _atomic_write(checkpoint_dir / "progress.json", json.dumps(
+            {"completed_profiles": len(rows), "total_profiles": len(keys), "last_profile": key}, sort_keys=True))
+    from collections import Counter
+    return {
+        "schema": "low_price_existing_logic_full_comparison_v2",
+        **manifest, "cost_contract": canonical_cost_contract(),
+        "profile_count": len(rows), "profile_results": rows,
+        "status_counts": dict(Counter(row["status"] for row in rows.values())),
+        "valid_mature_distinct_comparison_count": sum(
+            row.get("valid_mature_distinct_comparison", False) for row in rows.values()),
+        "model_joint_gain_count": sum(row.get("model_joint_gain", False) for row in rows.values()),
+        "checkpoint_metrics": stats, "allowed_runtime_apply": False,
+        "actual_order_submitted": False, "broker_order_forbidden": True,
+        "economic_confirmation": "requires_unused_validation_and_actual_cost_outcomes",
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target-date")
@@ -3362,6 +3510,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--write", action="store_true")
     parser.add_argument("--notify", action="store_true")
     parser.add_argument("--print-summary", action="store_true")
+    parser.add_argument("--review-existing-logic-from", type=Path)
     args = parser.parse_args(argv)
     target_date = (
         date.fromisoformat(args.target_date)
@@ -3383,6 +3532,29 @@ def main(argv: list[str] | None = None) -> int:
     expected_trading_day_count = len(clean_baseline_trading_dates(end_date))
     if args.notify and not args.write:
         raise ValueError("telegram_notification_requires_written_report")
+    if args.review_existing_logic_from:
+        if args.notify or args.output_dir.resolve() == OUTPUT_DIR.resolve():
+            raise ValueError("existing_logic_review_requires_separate_output_no_notification")
+        started = time_module.monotonic()
+        with args.review_existing_logic_from.open("rb") as handle:
+            source_digest = hashlib.file_digest(handle, "sha256").hexdigest()
+        previous = read_report(args.review_existing_logic_from)
+        review = build_existing_logic_review(
+            previous, source_cache_dir=args.source_cache_dir, target_date=target_date,
+            checkpoint_dir=args.output_dir / "checkpoints",
+        )
+        review["source_report"] = str(args.review_existing_logic_from.resolve())
+        with args.review_existing_logic_from.open("rb") as handle:
+            if hashlib.file_digest(handle, "sha256").hexdigest() != source_digest:
+                raise ResearchError("existing_logic_source_report_changed")
+        review["source_report_sha256"] = source_digest
+        review["wall_seconds"] = round(time_module.monotonic() - started, 3)
+        if args.write:
+            _atomic_write(args.output_dir / f"low_price_existing_logic_full_comparison_{target_date}.json",
+                          json.dumps(review, ensure_ascii=True, sort_keys=True, allow_nan=False))
+        print(json.dumps({key: value for key, value in review.items()
+                          if key not in {"profile_results", "selected_profiles"}}, sort_keys=True))
+        return 0
     source_failure_details: dict[str, dict[str, Any]] = {}
     try:
         token = kiwoom_utils.get_cached_kiwoom_token()

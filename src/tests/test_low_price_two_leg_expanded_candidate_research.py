@@ -1415,6 +1415,10 @@ def _profile_result(
         },
         "selected": {
             "holdout": {
+                "metric_contract": expanded.ECONOMIC_METRIC_CONTRACT,
+                "policy_identity": "1" * 64,
+                "carry_in_held_legs": 0,
+                "custody_resolution_required": held_legs > 0,
                 "economic_replay_contract": expanded.ECONOMIC_REPLAY_CONTRACT,
                 "observation_dates": [f"2026-08-{day:02d}" for day in range(1, 17)],
                 "cost_pct": expanded.COST_PCT,
@@ -1433,6 +1437,12 @@ def _profile_result(
         },
         "baseline": {
             "holdout": {
+                "metric_contract": expanded.ECONOMIC_METRIC_CONTRACT,
+                "policy_identity": "2" * 64,
+                "carry_in_held_legs": 0,
+                "custody_resolution_required": False,
+                "held_legs": 0,
+                "completed_legs": 7,
                 "notional_weighted_ev_pct": baseline_ev,
                 "economic_replay_contract": expanded.ECONOMIC_REPLAY_CONTRACT,
                 "observation_dates": [f"2026-08-{day:02d}" for day in range(1, 17)],
@@ -1491,7 +1501,7 @@ def test_recommendations_rank_profiles_and_enforce_daily_price_cap():
     assert all(row["runtime_effect"] is False for row in rows)
 
 
-def test_recommendation_accepts_manageable_carry_and_rejects_excess_carry():
+def test_recommendation_keeps_manageable_carry_diagnostic_without_economic_superiority():
     manageable = _profile_result(
         symbol="017670",
         name="SK텔레콤",
@@ -1525,8 +1535,10 @@ def test_recommendation_accepts_manageable_carry_and_rejects_excess_carry():
         research_profiles=LEGACY_TEST_RESEARCH_PROFILES,
     )
 
-    assert [row["profile_id"] for row in rows] == ["candidate_017670_midday"]
-    assert rows[0]["holdout_held_leg_rate_per_filled_leg"] == pytest.approx(0.20)
+    assert rows == []
+    comparison = expanded.paired_economics(manageable["baseline"]["holdout"], manageable["selected"]["holdout"])
+    assert comparison["diagnostic_partial_realized_net_delta_krw_per_day"] > 0
+    assert comparison["economic_superiority_confirmed"] is False
 
 
 def test_target_date_logic_recommendation_requires_cumulative_candidate_and_rebound():
@@ -2115,15 +2127,39 @@ def test_logic_recommendation_keeps_missing_baseline_ev_and_research_handoff(car
     item["baseline"]["holdout"]["carry_in_held_legs"] = carry
     rows = expanded._recommendation_rows({profile.profile_id: item},
                                         {profile.symbol: {"latest_close_price": 5900}})
-    assert len(rows) == 1
-    row = rows[0]
-    assert row["notional_weighted_ev_pct"] == 0.28
-    assert row["baseline_notional_weighted_ev_pct"] is None
-    assert row["ev_uplift_pct_point"] is None
-    assert row["economic_comparison_status"] == expected
-    assert row["implementation_status"] == "source_only_existing_logic_review_required"
-    assert not bridge._valid_recommendation(row)
-    report = _notification_report(rows)
-    expanded.attach_recommendation_contract(report)
-    assert row["recommendation_consumer"] == "low_price_two_leg_expanded_candidate_research"
-    assert row["recommendation_identity_grants_authority"] is False
+    assert rows == []
+    comparison = expanded.paired_economics(item["baseline"]["holdout"], item["selected"]["holdout"])
+    assert comparison["ev_uplift_pct_point"] is None
+    assert comparison["economic_superiority_confirmed"] is False
+    assert comparison["diagnostic_partial_realized_net_delta_krw_per_day"] > 0
+
+
+def test_cached_existing_logic_review_never_uses_market_or_token_calls(tmp_path, monkeypatch):
+    previous = {
+        'schema': 'low_price_two_leg_expanded_candidate_research_v6',
+        'target_date': '2026-09-17', 'cost_pct': expanded.COST_PCT,
+        'runtime_effect': False, 'allowed_runtime_apply': False,
+        'actual_order_submitted': False, 'broker_order_forbidden': True,
+        'research_profile_inventory': {'logic_test': {
+            'symbol': '028670', 'name': 'Fan Ocean', 'session': 'morning',
+            'discovery_lane': 'existing_symbol_logic_improvement'}},
+        'profiles': {'logic_test': {'decision': 'source_quality_quarantined_no_evaluation',
+                                  'source_quality_reason': 'original_source_gap'}},
+    }
+    source = tmp_path / 'original.json'
+    source.write_text(json.dumps(previous))
+    monkeypatch.setattr(expanded, '_load_source_cache', lambda **kw: None)
+    monkeypatch.setattr(expanded.kiwoom_utils, 'get_cached_kiwoom_token',
+                        lambda: pytest.fail('cached-only review must not read tokens'))
+    monkeypatch.setattr(expanded, 'fetch_sor_history',
+                        lambda **kw: pytest.fail('cached-only review must not fetch'))
+    out = tmp_path / 'successor'
+    assert expanded.main(['--target-date', '2026-09-17', '--review-existing-logic-from',
+                          str(source), '--output-dir', str(out), '--write']) == 0
+    review = json.loads((out / 'low_price_existing_logic_full_comparison_2026-09-17.json').read_text())
+    assert review['profile_count'] == 1
+    assert review['status_counts'] == {'source_or_session_excluded': 1}
+    assert review['model_joint_gain_count'] == 0
+    assert review['new_api_calls'] == 0
+    assert review['allowed_runtime_apply'] is False
+    assert json.loads(source.read_text()) == previous

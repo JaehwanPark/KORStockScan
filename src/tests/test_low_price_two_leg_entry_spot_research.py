@@ -358,6 +358,7 @@ def _reference_evaluate(candidate, contexts, dates, *, include_episodes=False):
         {
             "economic_replay_contract": research.ECONOMIC_REPLAY_CONTRACT,
             "metric_contract": research.ECONOMIC_METRIC_CONTRACT,
+            "policy_identity": research.policy_identity(candidate.public()),
             "source_valid_observation_days": len(dates),
             "observation_dates": [day.isoformat() for day in sorted(dates)],
             "cost_pct": research.COST_PCT,
@@ -1403,3 +1404,69 @@ def test_cached_fill_outcomes_do_not_reuse_another_lookback_signal_features():
     assert second["observed_near_low_pct"] == 0.07
     assert first["legs"] == second["legs"]
     assert context.outcome_cache[0]["observed_drawdown_pct"] == 2.0
+
+
+def test_completed_ev_uses_executed_completed_notional_and_preserves_attempt_metric():
+    episode = _episode(date(2026, 6, 5), 15, net_profit_pct=0.5)
+    episode['legs'][1] = {'status': 'NO_FILL', 'entry_price': 20_000}
+    outcome = research._summary([episode])
+    assert outcome['notional_weighted_ev_pct'] == 0.5
+    assert outcome['attempted_notional_realized_return_pct'] == 0.25
+    assert outcome['realized_net_profit_krw'] == 100.0
+    assert outcome['leg_economics'][0]['realized_net_profit_krw'] == 100.0
+    assert outcome['leg_economics'][1]['no_fill_legs'] == 1
+
+
+def test_incumbent_calibration_winner_has_separate_frozen_distinct_challenger(monkeypatch):
+    profile = RESEARCH_PROFILES['candidate_007660_midday']
+    baseline = research.baseline_candidate(profile)
+    challenger = SpotCandidate(800, 809, 30, 1.50, 0.10)
+    monkeypatch.setattr(research, 'candidate_grid', lambda _: (baseline, challenger))
+    result = select_profile_spot(profile, _contexts(holdout_candidate_net=0.3, baseline_net=0.5))
+    assert result['calibration_winner']['parameters'] == baseline.public()
+    assert result['research_challenger']['parameters'] == challenger.public()
+    assert result['research_comparison']['is_distinct_policy'] is True
+    assert result['incumbent_retained'] is True
+    assert result['selected']['parameters'] == baseline.public()
+    assert result['distinct_calibration_eligible_policy_count'] == 1
+
+
+def test_self_comparison_is_not_an_independent_improvement():
+    candidate = SpotCandidate(800, 809, 30, 1.50, 0.10)
+    contexts = _contexts(holdout_candidate_net=0.2)
+    view = research.evaluate_candidate(candidate, contexts, sorted(contexts)[-16:])
+    result = research.paired_economics(view, view)
+    assert result['economic_comparison_status'] == 'incumbent_self_comparison'
+    assert result['diagnostic_partial_realized_net_delta_krw_per_day'] == 0
+    assert result['net_profit_uplift_krw_per_observation_day'] is None
+    assert result['net_profit_improved'] is False
+
+
+@pytest.mark.parametrize('carry', [0, 1])
+def test_flat_zero_and_carry_zero_have_different_economic_meaning(carry):
+    candidate = SpotCandidate(800, 809, 30, 1.50, 0.10)
+    contexts = _contexts(holdout_candidate_net=0.2)
+    dates = sorted(contexts)[-16:]
+    filled = research.evaluate_candidate(candidate, contexts, dates)
+    flat = research.evaluate_candidate(SpotCandidate(800, 809, 30, 9, 0.01), contexts, dates)
+    assert flat['realized_net_profit_krw'] == 0
+    assert flat['notional_weighted_ev_pct'] is None
+    flat.update(carry_in_held_legs=carry, custody_resolution_required=bool(carry))
+    comparison = research.paired_economics(flat, filled)
+    assert comparison['diagnostic_partial_realized_net_delta_krw_per_day'] > 0
+    assert comparison['ev_uplift_pct_point'] is None
+    if carry:
+        assert comparison['net_profit_uplift_krw_per_observation_day'] is None
+        assert comparison['net_profit_improved'] is False
+    else:
+        assert comparison['net_profit_uplift_krw_per_observation_day'] > 0
+        assert comparison['net_profit_improved'] is True
+    assert comparison['economic_superiority_confirmed'] is False
+
+
+@pytest.mark.parametrize('bad', [True, None, float('nan'), float('inf')])
+def test_unknown_or_nonfinite_completed_economics_is_never_zero(bad):
+    episode = _episode(date(2026, 6, 5), 15, net_profit_pct=0.5)
+    episode['legs'][0]['net_profit_pct'] = bad
+    with pytest.raises(research.ResearchError, match='leg_contract_invalid'):
+        research._summary([episode])

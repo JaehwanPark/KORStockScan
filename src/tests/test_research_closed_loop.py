@@ -550,7 +550,7 @@ def test_completed_study_fixed_point_publishes_valid_empty_and_blocks_changed_de
         result.pop("selected_policy", None)
         result.update(name="fixture", decision="hold_sample_insufficient_signal")
     peer = dict(
-        schema="low_price_two_leg_expanded_candidate_research_v6",
+        schema=episode.REPORT_SCHEMA,
         target_date=str(DAY),
         end_date=str(DAY),
         start_date="2026-06-05",
@@ -884,7 +884,7 @@ def test_new_unfilled_symbol_bootstraps_cf_validation_and_next_date_publication(
         },
     )
     peer = dict(
-        schema="low_price_two_leg_expanded_candidate_research_v6",
+        schema=episode.REPORT_SCHEMA,
         target_date=str(completed_day),
         end_date=str(completed_day),
         start_date="2026-06-05",
@@ -1377,6 +1377,8 @@ def test_episode_native_cf_publication_and_reader_recheck_summary(
         discovery_lane="new_symbol",
         recommended_spot=revision["parameters"],
         paired_economics=result["paired_economics"],
+        current_economic_outcome=result["baseline"]["holdout"],
+        candidate_economic_outcome=result["selected"]["holdout"],
     )
     for key in list(row):
         if key.startswith("recommendation_"):

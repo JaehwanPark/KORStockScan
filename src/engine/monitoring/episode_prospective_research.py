@@ -11,6 +11,7 @@ from src.engine.monitoring.low_price_two_leg_entry_spot_research import (
     _evaluate_candidate_windows,
     baseline_candidate,
     paired_economics,
+    policy_identity,
     _calibration_ready,
     _manageable_carry,
     _positive_ev,
@@ -43,6 +44,7 @@ def spot(parameters):
 
 
 def _promotion_ready(selected, baseline):
+    comparison = paired_economics(baseline["holdout"], selected["holdout"])
     return bool(
         _calibration_ready(
             selected["calibration"],
@@ -59,9 +61,8 @@ def _promotion_ready(selected, baseline):
         and _manageable_carry(selected["holdout"])
         and _manageable_carry(selected["full"])
         and _positive_ev(selected["holdout"])
-        and paired_economics(baseline["holdout"], selected["holdout"])[
-            "net_profit_improved"
-        ]
+        and (comparison["economic_superiority_confirmed"]
+             or comparison["participation_net_profit_confirmed"])
     )
 
 
@@ -87,6 +88,7 @@ def prospective_summary_valid(result, revision):
             ("baseline", "baseline_parameters"),
         ):
             output = result[arm]
+            parameters = revision[parameter_key]
             if output["parameters"] != revision[parameter_key]:
                 return False
             full = output["full"]["episodes"]
@@ -115,7 +117,6 @@ def prospective_summary_valid(result, revision):
                         return False
                     if len(row["legs"]) != 2 or len(terminal["legs"]) != 2:
                         return False
-                    parameters = revision[parameter_key]
                     if row.get("execution_plan") != {
                         key: parameters[key]
                         for key in (
@@ -176,6 +177,7 @@ def prospective_summary_valid(result, revision):
                             return False
                 derived = _summary(episodes)
                 derived.update(
+                    policy_identity=policy_identity(parameters),
                     observation_dates=dates,
                     source_valid_observation_days=len(dates),
                     cost_pct=COST_PCT,

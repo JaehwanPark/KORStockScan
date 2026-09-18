@@ -18,6 +18,7 @@ from copy import deepcopy
 from heapq import heappush, heapreplace
 from itertools import islice
 import json
+import hashlib
 import math
 import os
 import tempfile
@@ -36,9 +37,11 @@ from src.trading.order.tick_utils import clamp_price_to_tick, move_price_by_tick
 from src.utils import kiwoom_utils
 from src.utils.constants import DATA_DIR
 
-REPORT_SCHEMA = "low_price_two_leg_entry_spot_research_v3"
+REPORT_SCHEMA = "low_price_two_leg_entry_spot_research_v4"
 ECONOMIC_REPLAY_CONTRACT = "low_price_two_leg_continuous_custody_economics_v1"
+ECONOMIC_EVALUATION_VERSION = "distinct_terminal_completed_notional_v2"
 ECONOMIC_METRIC_CONTRACT = {
+    "version": ECONOMIC_EVALUATION_VERSION,
     "metric_role": "existing_axis_paired_economic_research",
     "decision_authority": "source_only_no_runtime_or_order_authority",
     "window_policy": "same_clean_prefix_custody_same_observation_dates",
@@ -789,6 +792,16 @@ def _episode(
 
 def _summary(episodes: list[dict[str, Any]]) -> dict[str, Any]:
     legs = [leg for episode in episodes for leg in episode["legs"]]
+    for leg in legs:
+        if (
+            leg.get("status") not in {"COMPLETE", "HELD", "NO_FILL"}
+            or type(leg.get("entry_price")) is not int or leg["entry_price"] <= 0
+            or (leg["status"] == "COMPLETE" and (
+                type(leg.get("net_profit_pct")) not in (int, float)
+                or not math.isfinite(leg["net_profit_pct"])
+            ))
+        ):
+            raise ResearchError("economic_replay_leg_contract_invalid")
     completed = [leg for leg in legs if leg["status"] == "COMPLETE"]
     filled = [leg for leg in legs if leg["status"] in {"COMPLETE", "HELD"}]
     held = [leg for leg in legs if leg["status"] == "HELD"]
@@ -797,7 +810,8 @@ def _summary(episodes: list[dict[str, Any]]) -> dict[str, Any]:
         int(leg["entry_price"]) * float(leg["net_profit_pct"]) / 100.0
         for leg in completed
     )
-    ev = realized_profit / attempted_notional * 100.0 if attempted_notional else None
+    completed_notional = sum(int(leg["entry_price"]) for leg in completed)
+    ev = realized_profit / completed_notional * 100.0 if completed_notional else None
     held_notional = sum(int(leg["entry_price"]) for leg in held)
     held_mark_value = sum(
         int(leg["entry_price"])
@@ -836,6 +850,34 @@ def _summary(episodes: list[dict[str, Any]]) -> dict[str, Any]:
             int(leg.get("holding_completed_bars", 0) or 0) for leg in filled
         ),
         "realized_net_profit_krw": round(realized_profit, 2),
+        "completed_notional_krw": completed_notional,
+        "attempted_notional_krw": attempted_notional,
+        "attempted_notional_realized_return_pct": (
+            round(realized_profit / attempted_notional * 100, 6)
+            if attempted_notional else None
+        ),
+        "leg_economics": [
+            {
+                "leg_index": index,
+                "completed_legs": len(selected),
+                "realized_net_profit_krw": round(sum(
+                    int(leg["entry_price"]) * float(leg["net_profit_pct"]) / 100
+                    for leg in selected
+                ), 2),
+                "held_legs": sum(
+                    episode["legs"][index]["status"] == "HELD"
+                    for episode in episodes if len(episode["legs"]) > index
+                ),
+                "no_fill_legs": sum(
+                    episode["legs"][index]["status"] == "NO_FILL"
+                    for episode in episodes if len(episode["legs"]) > index
+                ),
+            }
+            for index in range(2)
+            for selected in [[episode["legs"][index] for episode in episodes
+                              if len(episode["legs"]) > index
+                              and episode["legs"][index]["status"] == "COMPLETE"]]
+        ],
         "realized_net_profit_krw_per_episode": (
             round(realized_profit / len(episodes), 2) if episodes else None
         ),
@@ -963,6 +1005,7 @@ def _evaluate_candidate_windows(
                 {
                     "economic_replay_contract": ECONOMIC_REPLAY_CONTRACT,
                     "metric_contract": ECONOMIC_METRIC_CONTRACT,
+                    "policy_identity": policy_identity(candidate.public()),
                     "source_valid_observation_days": len(dates),
                     "observation_dates": [day.isoformat() for day in sorted(dates)],
                     "cost_pct": COST_PCT,
@@ -998,7 +1041,7 @@ def _evaluate_candidate_windows(
 
 def _positive_ev(summary: dict[str, Any]) -> bool:
     value = summary.get("notional_weighted_ev_pct")
-    return value is not None and float(value) > 0.0
+    return type(value) in (int, float) and math.isfinite(value) and value > 0.0
 
 
 def _calibration_ready(
@@ -1038,13 +1081,19 @@ def _robust_score(first: dict[str, Any], second: dict[str, Any]) -> float:
     return min(values)
 
 
+def policy_identity(parameters: dict) -> str:
+    """Hash effective policy values, independent of run/recommendation IDs."""
+    return hashlib.sha256(json.dumps(
+        parameters, sort_keys=True, separators=(",", ":"), allow_nan=False
+    ).encode("ascii")).hexdigest()
+
+
 def paired_economics(current: dict, candidate: dict) -> dict:
     """Compare the same observation window, not just profitable trade averages."""
     days = current.get("source_valid_observation_days")
     observed_dates = current.get("observation_dates")
     valid = bool(
-        isinstance(days, int)
-        and not isinstance(days, bool)
+        type(days) is int
         and days > 0
         and isinstance(observed_dates, list)
         and all(isinstance(day, str) for day in observed_dates)
@@ -1066,18 +1115,71 @@ def paired_economics(current: dict, candidate: dict) -> dict:
     try:
         uplift = (
             float(candidate_net) - float(current_net)
-            if valid and current_net is not None and candidate_net is not None
+            if valid and type(current_net) in (int, float)
+            and type(candidate_net) in (int, float)
+            and math.isfinite(current_net) and math.isfinite(candidate_net)
             else None
         )
     except (TypeError, ValueError, OverflowError):
         valid, uplift = False, None
     if uplift is None or not math.isfinite(uplift):
-        valid, uplift = False, None
+        uplift = None
+    try:
+        valid = valid and all(date.fromisoformat(day).isoformat() == day for day in observed_dates)
+    except (ValueError, TypeError):
+        valid = False
+    identities = [owner.get("policy_identity") for owner in (current, candidate)]
+    distinct = (
+        identities[0] != identities[1]
+        if all(isinstance(value, str) and len(value) == 64 for value in identities)
+        else None
+    )
+    def terminal(owner):
+        return bool(
+            owner.get("metric_contract") == ECONOMIC_METRIC_CONTRACT
+            and all(type(owner.get(key)) is int and owner[key] >= 0
+                    for key in ("held_legs", "carry_in_held_legs", "completed_legs"))
+            and owner["held_legs"] == owner["carry_in_held_legs"] == 0
+            and owner.get("custody_resolution_required") is False
+        )
+    resolved = terminal(current) and terminal(candidate)
+    economic_uplift = uplift if valid and resolved and distinct is True else None
+    evs = [owner.get("notional_weighted_ev_pct") for owner in (current, candidate)]
+    ev_uplift = (
+        evs[1] - evs[0]
+        if economic_uplift is not None
+        and all(type(value) in (int, float) and math.isfinite(value) for value in evs)
+        and current["completed_legs"] > 0 and candidate["completed_legs"] > 0
+        else None
+    )
+    status = (
+        "observation_or_cost_gap" if not valid or uplift is None
+        else "incumbent_self_comparison" if distinct is False
+        else "policy_identity_missing" if distinct is None
+        else "custody_censored_or_terminal_gap" if not resolved
+        else "flat_no_completed_outcome" if ev_uplift is None
+        else "distinct_resolved_economic_pair"
+    )
     return {
+        "economic_evaluation_version": ECONOMIC_EVALUATION_VERSION,
         "economic_replay_contract": ECONOMIC_REPLAY_CONTRACT,
         "comparable_observation_window": valid,
-        "net_profit_uplift_krw_per_observation_day": uplift,
-        "net_profit_improved": bool(uplift is not None and uplift > 1e-9),
+        "is_distinct_policy": distinct,
+        "comparable_terminal_economics": resolved,
+        "economic_comparison_status": status,
+        "diagnostic_partial_realized_net_delta_krw_per_day": uplift,
+        "net_profit_uplift_krw_per_observation_day": economic_uplift,
+        "ev_uplift_pct_point": ev_uplift,
+        "net_profit_improved": bool(economic_uplift is not None and economic_uplift > 1e-9),
+        "economic_superiority_confirmed": bool(
+            economic_uplift is not None and economic_uplift > 1e-9
+            and ev_uplift is not None and ev_uplift > 1e-9
+        ),
+        "participation_net_profit_confirmed": bool(
+            economic_uplift is not None and economic_uplift > 1e-9
+            and current["completed_legs"] == 0 and current_net == 0 and evs[0] is None
+            and type(evs[1]) in (int, float) and math.isfinite(evs[1]) and evs[1] > 0
+        ),
         "current_attempt_frequency": current.get(
             "attempted_episodes_per_source_valid_observation_day"
         ),
@@ -1243,6 +1345,9 @@ def select_profile_spot(
     first_half = calibration[: calibration_days // 2]
     second_half = calibration[calibration_days // 2 :]
     ranked_heap = []
+    distinct_heap = []
+    baseline = baseline_candidate(profile)
+    distinct_ready_count = 0
     diagnostic_heap = []
     calibration_ready_count = 0
     grid = candidate_grid(profile)
@@ -1303,6 +1408,14 @@ def select_profile_spot(
             ordinal,
             10,
         )
+        if candidate != baseline:
+            distinct_ready_count += 1
+            _retain_calibration_candidate(
+                distinct_heap,
+                (score, float(full["notional_weighted_ev_pct"]),
+                 int(full["completed_legs"]), candidate, evidence),
+                ordinal, 1,
+            )
 
     ranked = [
         item for _, item in sorted(ranked_heap, key=lambda row: row[0], reverse=True)
@@ -1332,6 +1445,10 @@ def select_profile_spot(
                 "holdout_trading_day_count": len(holdout),
             },
             "grid_candidate_count": len(grid),
+            "economic_evaluation_version": ECONOMIC_EVALUATION_VERSION,
+            "distinct_calibration_eligible_policy_count": 0,
+            "research_challenger": None,
+            "research_comparison": None,
             "calibration_ready_candidate_count": 0,
             "calibration_gate_counts": {
                 "sample_ready": sample_ready_count,
@@ -1349,7 +1466,10 @@ def select_profile_spot(
             "recommended_action": "do_not_activate_profile_from_this_evidence",
             "runtime_effect": False,
         }
-    score, _, _, candidate, calibration_evidence = ranked[0]
+    global_winner = ranked[0]
+    incumbent_won = global_winner[3] == baseline
+    challenger_item = distinct_heap[0][1] if distinct_heap else None
+    score, _, _, candidate, calibration_evidence = challenger_item or global_winner
     candidate_views = _evaluate_candidate_windows(
         candidate, contexts, [holdout, dates], include_episodes=True
     )
@@ -1371,9 +1491,9 @@ def select_profile_spot(
         and _positive_ev(candidate_holdout)
     )
     beats_baseline = bool(
-        holdout_ready
+        not incumbent_won and holdout_ready
         and paired_economics(baseline_results["holdout"], candidate_holdout)[
-            "net_profit_improved"
+            "economic_superiority_confirmed"
         ]
     )
     if beats_baseline:
@@ -1392,6 +1512,10 @@ def select_profile_spot(
         selected_parameters = baseline.public()
         selected_results = baseline_results
     top = [_ranked_item_public(item) for item in ranked[:10]]
+    scope = {"profile_id": profile.profile_id, "symbol": profile.symbol,
+             "session": profile.session, "route": "SOR", "stage": "initial_two_leg_entry",
+             "quantity_contract": "unit_per_leg_model_not_actual_order_quantity",
+             "replay_contract": ECONOMIC_REPLAY_CONTRACT, "cost_pct": COST_PCT}
     return {
         "profile_id": profile.profile_id,
         "symbol": profile.symbol,
@@ -1406,6 +1530,29 @@ def select_profile_spot(
             "holdout_trading_day_count": len(holdout),
         },
         "grid_candidate_count": len(grid),
+        "economic_evaluation_version": ECONOMIC_EVALUATION_VERSION,
+        "distinct_calibration_eligible_policy_count": distinct_ready_count,
+        "incumbent_retained": selected_parameters == baseline.public(),
+        "policy_scope": scope,
+        "is_distinct_policy": challenger_item is not None,
+        "baseline_policy_identity": policy_identity({"scope": scope, "parameters": baseline.public()}),
+        "challenger_policy_identity": (
+            policy_identity({"scope": scope, "parameters": candidate.public()}) if challenger_item else None
+        ),
+        "candidate_changed_fields": [
+            key for key, value in candidate.public().items()
+            if baseline.public()[key] != value
+        ],
+        "evaluated_candidate_basis": "calibration_best_distinct_policy"
+        if challenger_item else "incumbent_only_no_distinct_candidate",
+        "research_challenger": {
+            "parameters": candidate.public(), **candidate_results,
+            "validation_usage": "chronological_holdout_requires_unused_window_for_confirmation",
+            "sample_floor_passed": holdout_ready,
+        } if challenger_item else None,
+        "research_comparison": paired_economics(
+            baseline_results["holdout"], candidate_holdout
+        ) if challenger_item else None,
         "calibration_ready_candidate_count": calibration_ready_count,
         "calibration_gate_counts": {
             "sample_ready": sample_ready_count,
@@ -1427,9 +1574,9 @@ def select_profile_spot(
             "decision_authority": "robustness_diagnostic_not_standalone_veto",
         },
         "calibration_winner": {
-            "parameters": candidate.public(),
-            "robust_calibration_score": round(score, 6),
-            **candidate_results,
+            "parameters": global_winner[3].public(),
+            "robust_calibration_score": round(global_winner[0], 6),
+            **(baseline_results if incumbent_won else candidate_results),
         },
         "selected": {"parameters": selected_parameters, **selected_results},
         "recommended_spot": selected_parameters,

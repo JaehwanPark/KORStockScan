@@ -3480,6 +3480,7 @@ def _episode_inventory(
     expansion_schemas = (
         "low_price_two_leg_expanded_candidate_research_v5",
         "low_price_two_leg_expanded_candidate_research_v6",
+        "low_price_two_leg_expanded_candidate_research_v7",
     )
     samsung_schemas = tuple(
         f"samsung_machine_entry_tuning_report_v{version}" for version in range(2, 10)

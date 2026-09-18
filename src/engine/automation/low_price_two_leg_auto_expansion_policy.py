@@ -21,7 +21,7 @@ from src.utils.market_day import is_krx_trading_day
 SCHEMA = "low_price_two_leg_auto_expansion_policy_v1"
 CLOSED_LOOP_SCHEMA = "low_price_two_leg_auto_expansion_policy_v2"
 AUTHORITY = "automatic_exact_date_episode_expansion"
-REPORT_SCHEMA = "low_price_two_leg_expanded_candidate_research_v6"
+REPORT_SCHEMA = "low_price_two_leg_expanded_candidate_research_v7"
 REPORT_DIR = DATA_DIR / "report" / "low_price_two_leg_expanded_candidate_research"
 POLICY_DIR = DATA_DIR / "runtime" / "low_price_two_leg_auto_expansion"
 PROMOTABLE_LANES = frozenset({"new_symbol", "existing_symbol_time_extension"})
@@ -71,10 +71,18 @@ def _previous_profiles(
     return {key: dict(value) for key, value in payload["profiles"].items()}
 
 
-def _valid_recommendation(row: dict[str, Any]) -> bool:
+def _valid_recommendation(row: dict[str, Any], *, frozen_legacy: bool = False) -> bool:
     spot = row.get("recommended_spot")
     paired = row.get("paired_economics")
     try:
+        if not frozen_legacy:
+            from src.engine.monitoring.low_price_two_leg_entry_spot_research import paired_economics
+            reconstructed = paired_economics(
+                row.get("current_economic_outcome") or {},
+                row.get("candidate_economic_outcome") or {},
+            )
+            if paired != reconstructed:
+                return False
         return bool(
             row.get("discovery_lane") in PROMOTABLE_LANES
             and row.get("implementation_status")
@@ -95,9 +103,15 @@ def _valid_recommendation(row: dict[str, Any]) -> bool:
             and isinstance(paired, dict)
             and paired.get("comparable_observation_window") is True
             and paired.get("net_profit_improved") is True
+            and (frozen_legacy or (
+                (paired.get("economic_superiority_confirmed") is True
+                 or paired.get("participation_net_profit_confirmed") is True)
+                and paired.get("is_distinct_policy") is True
+                and paired.get("comparable_terminal_economics") is True
+            ))
             and paired.get("runtime_effect") is False
         )
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError, AttributeError):
         return False
 
 
@@ -430,7 +444,11 @@ def load_policy(day: date, *, policy_dir: Path = POLICY_DIR) -> dict[str, Any]:
                 ) or {}
                 revision = result.get("candidate_revision")
                 if (
-                    not _valid_recommendation(recommendation)
+                    not _valid_recommendation(
+                        recommendation,
+                        frozen_legacy=report.get("schema")
+                        == "low_price_two_leg_expanded_candidate_research_v6",
+                    )
                     or row["policy"] != recommendation.get("recommended_spot")
                     or row["symbol"] != recommendation.get("symbol")
                     or row["session"] != recommendation.get("session")
