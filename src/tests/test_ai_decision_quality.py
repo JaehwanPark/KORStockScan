@@ -14669,12 +14669,18 @@ def test_source_label_revision_reuse_cas_and_original_bytes(monkeypatch, tmp_pat
     labels = {"schema": quality.LABEL_REPORT_SCHEMA, "target_date": target, "labels": [], **quality.OFFLINE_CONTRACT}
     cpath.write_text(json.dumps(control)); lpath.write_text(json.dumps(labels, indent=2))
     raw = lpath.read_bytes()
+    control_raw = cpath.read_bytes()
     monkeypatch.setattr(quality, "_default_sources", lambda *_a, **_k: pytest.fail("unchanged frozen inputs cannot rescan"))
     assert quality.main(["--date", target, "--mode", "postclose", "--reuse-materialized-labels", "--write"]) == 0
     revisions = list((tmp_path / "revisions").glob("*.json"))
-    assert len(revisions) == 1 and revisions[0].read_bytes() == raw
+    assert len(revisions) == 2
+    assert {p.read_bytes() for p in revisions} == {raw, control_raw}
     assert quality.main(["--date", target, "--mode", "postclose", "--write"]) == 0
     assert "unchanged_source_labels_reused" in capsys.readouterr().out
+    before_rebind = lpath.read_bytes()
+    inputs["implementation_sha256"] = "new_reviewed_custody_code"
+    assert quality.main(["--date", target, "--mode", "postclose", "--reuse-materialized-labels", "--write"]) == 0
+    assert lpath.read_bytes() == before_rebind  # no diagnostic/label recalculation
     reports = {"control": quality._load_json(cpath), "mature": quality._load_json(lpath)}
     with pytest.raises(ValueError, match="predecessor_changed"):
         quality.write_source_label_materialization(target, reports, inputs=inputs, previous_label_sha256="b"*64)

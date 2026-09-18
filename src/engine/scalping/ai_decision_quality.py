@@ -27858,18 +27858,19 @@ def _write_source_label_materialization_unlocked(target_date: str, reports: dict
     if errors:
         raise ValueError(",".join(errors))
     path = label_report_path(target_date)
-    if path.exists():
-        raw = path.read_bytes()
-        if _sha256(_load_json(path)) != _sha256(labels):
-            revision = path.parent / "revisions" / f"{path.stem}_{hashlib.sha256(raw).hexdigest()}.json"
-            revision.parent.mkdir(parents=True, exist_ok=True, mode=0o750)
-            if revision.exists() and revision.read_bytes() != raw:
-                raise ValueError("immutable_label_revision_conflict")
-            if not revision.exists():
-                with os.fdopen(os.open(revision, os.O_WRONLY | os.O_CREAT | os.O_EXCL, path.stat().st_mode & 0o777), "wb") as stream:
-                    stream.write(raw)
-                    stream.flush()
-                    os.fsync(stream.fileno())
+    for previous_path, next_report in ((path, labels), (control_path(target_date), control)):
+        if previous_path.exists():
+            raw = previous_path.read_bytes()
+            if _sha256(_load_json(previous_path)) != _sha256(next_report):
+                revision = previous_path.parent / "revisions" / f"{previous_path.stem}_{hashlib.sha256(raw).hexdigest()}.json"
+                revision.parent.mkdir(parents=True, exist_ok=True, mode=0o750)
+                if revision.exists() and revision.read_bytes() != raw:
+                    raise ValueError("immutable_source_label_revision_conflict")
+                if not revision.exists():
+                    with os.fdopen(os.open(revision, os.O_WRONLY | os.O_CREAT | os.O_EXCL, previous_path.stat().st_mode & 0o777), "wb") as stream:
+                        stream.write(raw)
+                        stream.flush()
+                        os.fsync(stream.fileno())
     _atomic_write_json(path, labels)
     _atomic_write_json(control_path(target_date), control)
     errors = validate_daily_materialization_reports(target_date=target_date, reports={
@@ -27912,11 +27913,16 @@ def reuse_source_label_materialization(target_date: str, *, write: bool, migrate
     if type(inputs.get("source_trace_count")) is not int or type(inputs.get("source_outcome_count")) is not int or control.get("input_trace_count") != inputs["source_trace_count"] or len(labels.get("labels") or []) != inputs["source_outcome_count"]:
         raise ValueError("legacy_migration_source_census_mismatch")
     before = _sha256(labels)
-    labels = annotate_materialized_label_contract(labels)
+    current_errors = validate_daily_materialization_reports(target_date=target_date, reports={"control": control, "mature": labels})
+    if current_errors:
+        labels = annotate_materialized_label_contract(labels)
+    # A code-only custody repair can rebind readiness without recalculating
+    # already valid price labels, diagnostic timestamps, or economic witnesses.
+    original_hash = labels.get("original_label_report_sha256") or before
     control.update(materialization_schema=DAILY_MATERIALIZATION_SCHEMA,
                    materialization_role="source_labels_for_machine_and_compact_evaluators",
                    label_report_sha256=_sha256(labels), diagnostic_price_path_summary=labels["diagnostic_price_path_summary"],
-                   source_label_migration={"original_label_report_sha256": before,
+                   source_label_migration={"original_label_report_sha256": original_hash,
                        "status": "legacy_labels_preserved_not_revalidated", "new_price_provider_calls": 0,
                        "original_exclusions_preserved": True})
     control["control_manifest_sha256"] = _sha256({k: v for k, v in control.items() if k != "control_manifest_sha256"})
@@ -27925,7 +27931,7 @@ def reuse_source_label_materialization(target_date: str, *, write: bool, migrate
     return {"schema": DAILY_MATERIALIZATION_SCHEMA, "target_date": target_date,
             "status": "existing_source_labels_migrated", "label_report_sha256": _sha256(labels),
             "label_contract_status_counts": labels["label_contract_status_counts"],
-            "original_label_report_sha256": before, "source_manifest_sha256": inputs["source_manifest_sha256"],
+            "original_label_report_sha256": original_hash, "source_manifest_sha256": inputs["source_manifest_sha256"],
             "candidate_execution_performed": False, "price_provider_calls": 0, **OFFLINE_CONTRACT}
 
 
