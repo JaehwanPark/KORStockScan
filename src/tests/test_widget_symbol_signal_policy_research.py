@@ -1415,3 +1415,59 @@ def test_main_isolates_identifiable_source_failure_and_keeps_global_failures(
         assert "notional_weighted_ev_pct" not in written["symbols"]["001550"]
         assert written["source_meta"]["001550"]["source_quality_status"] == "FAIL"
         assert written["source_meta"]["001550"]["daily_source_coverage"]["status"] == "FAIL"
+        progress = json.loads((tmp_path / "source_waiting_2026-09-17.json").read_text())
+        assert progress["status"] == "complete" and progress["source_waiting"] == {}
+
+
+@pytest.mark.parametrize("case", ["partial_wait", "all_wait", "invalid_admission"])
+def test_main_retains_completed_checkpoints_without_publishing_deferred_population(
+    tmp_path, monkeypatch, case,
+):
+    from src.engine.monitoring.widget_symbol_runtime_policy import WidgetSymbolRuntimePolicyLoader
+    from src.engine.monitoring.research_closed_loop import AUTHORITY
+
+    universe = {"001550": "deferred source", "006800": "valid source"}
+    monkeypatch.setattr(research.signal, "signal", lambda *args: None)
+    monkeypatch.setattr(research, "load_symbol_universe", lambda **kwargs: (
+        universe, {symbol: "established_widget_symbol" for symbol in universe},
+    ))
+    monkeypatch.setattr(WidgetSymbolRuntimePolicyLoader, "resolve_all", lambda *a, **kw: {})
+    monkeypatch.setattr(research, "research_input_fingerprint", lambda **kw: "fixture-source")
+    seen = []
+
+    def load(**kwargs):
+        symbol = kwargs["symbol"]
+        seen.append(symbol)
+        if symbol == "001550" or case == "all_wait":
+            reason = (
+                "shared_read_rate_state_invalid" if case == "invalid_admission"
+                else "shared_read_rate_wait_budget_exhausted"
+            )
+            raise ResearchError("ka10080_shared_read_rate_deferred:" + reason)
+        return [], {"request_count": 0, "source_quality_status": "PASS"}
+
+    monkeypatch.setattr(research, "load_completed_symbol_source", load)
+    monkeypatch.setattr(research, "build_report", lambda **kw: dict(
+        schema=research.REPORT_SCHEMA, status="complete", end_date="2026-09-17",
+        symbols={"006800": {"decision": "no_candidate"}},
+        source_meta={"006800": {}}, execution_quality_by_symbol={"006800": {}},
+        passed_symbols=[], execution_mode="full_recompute", **AUTHORITY,
+    ))
+    monkeypatch.setattr(research, "write_report", lambda *a, **kw: pytest.fail("partial publication"))
+    argv = ["--end-date", "2026-09-17", "--output-dir", str(tmp_path), "--write"]
+    if case == "invalid_admission":
+        with pytest.raises(ResearchError, match="shared_read_rate_state_invalid"):
+            research.main(argv)
+        assert seen == ["001550"]
+        assert not list(tmp_path.glob("*.json"))
+        return
+    assert research.main(argv) == 3
+    assert seen == list(universe)
+    waiting = json.loads((tmp_path / "source_waiting_2026-09-17.json").read_text())
+    assert waiting["status"] == "waiting" and waiting["source_quarantine"] == {}
+    assert all(waiting[key] is value for key, value in AUTHORITY.items())
+    assert set(waiting["source_waiting"]) == (set(universe) if case == "all_wait" else {"001550"})
+    assert waiting["completed_economic_symbols"] == ([] if case == "all_wait" else ["006800"])
+    checkpoint = tmp_path / "checkpoints" / "2026-09-17_006800.json"
+    assert checkpoint.exists() is (case == "partial_wait")
+    assert not (tmp_path / "widget_symbol_signal_policy_research_2026-09-17.json").exists()

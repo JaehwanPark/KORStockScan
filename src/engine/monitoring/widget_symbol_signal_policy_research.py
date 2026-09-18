@@ -3038,6 +3038,7 @@ def main(argv: list[str] | None = None) -> int:
     from src.engine.monitoring.widget_symbol_runtime_policy import (
         WidgetSymbolRuntimePolicyLoader,
     )
+    from src.engine.monitoring.research_closed_loop import AUTHORITY
 
     applied_baselines = WidgetSymbolRuntimePolicyLoader().resolve_all(
         observed_date=end_date
@@ -3048,6 +3049,7 @@ def main(argv: list[str] | None = None) -> int:
     symbol_fingerprints = {}
     source_quarantine = {}
     failed_source_meta = {}
+    source_waiting = {}
     for index, (symbol, name) in enumerate(symbol_universe.items(), 1):
         started = time_module.monotonic()
         print(
@@ -3152,6 +3154,16 @@ def main(argv: list[str] | None = None) -> int:
             del bars, kwargs
         except ResearchError as exc:
             reason = str(exc)
+            if reason in {
+                "ka10080_shared_read_rate_deferred:shared_read_rate_wait_budget_exhausted",
+                "ka10080_shared_read_rate_deferred:shared_read_rate_server_cooldown",
+            }:
+                source_waiting[symbol] = reason
+                print(json.dumps({
+                    "stage": "symbol_deferred", "symbol": symbol,
+                    "progress": f"{index}/{len(symbol_universe)}", "reason": reason,
+                }, sort_keys=True), flush=True)
+                continue
             if reason not in {
                 f"{symbol}_daily_source_coverage_fail",
                 f"{symbol}_snapshot_coverage_incomplete",
@@ -3177,6 +3189,30 @@ def main(argv: list[str] | None = None) -> int:
                 "stage": "symbol_quarantined", "symbol": symbol,
                 "progress": f"{index}/{len(symbol_universe)}", "reason": reason,
             }, sort_keys=True), flush=True)
+    waiting = dict(
+        schema="widget_signal_research_source_waiting_v1",
+        status="waiting" if source_waiting else "complete",
+        end_date=end_date.isoformat(),
+        generated_at_kst=datetime.now(KST).isoformat(timespec="seconds"),
+        symbol_universe=symbol_universe, source_waiting=source_waiting,
+        source_quarantine=source_quarantine,
+        completed_economic_symbols=[
+            symbol for part in reports for symbol in part["symbols"]
+        ],
+        **AUTHORITY,
+    )
+    if source_waiting:
+        if args.write:
+            _atomic_write(
+                args.output_dir / f"source_waiting_{end_date.isoformat()}.json",
+                json.dumps(waiting, ensure_ascii=False, sort_keys=True),
+            )
+        print(json.dumps({
+            "stage": "source_waiting", "target_date": end_date.isoformat(),
+            "deferred_symbol_count": len(source_waiting),
+            "completed_symbol_count": len(waiting["completed_economic_symbols"]),
+        }, sort_keys=True), flush=True)
+        return 3
     if not reports:
         raise ResearchError("all_widget_symbols_source_quality_blocked")
     report = dict(reports[0])
@@ -3217,6 +3253,11 @@ def main(argv: list[str] | None = None) -> int:
     paths = (
         write_report(report, output_dir=args.output_dir) if args.write else (None, None)
     )
+    if args.write:
+        _atomic_write(
+            args.output_dir / f"source_waiting_{end_date.isoformat()}.json",
+            json.dumps(waiting, ensure_ascii=False, sort_keys=True),
+        )
     print(
         json.dumps(
             {
