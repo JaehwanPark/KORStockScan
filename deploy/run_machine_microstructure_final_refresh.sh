@@ -41,6 +41,13 @@ if (($# == 1)); then
   completed_target_date="$requested_target_date"
 fi
 
+# Capture dated account evidence before long research can cross midnight.
+research_closure_rc=0
+if [[ "$completed_target_date" > "2026-09-16" ]]; then
+  "$PYTHON_BIN" -m src.engine.monitoring.research_native_capacity_source \
+    --source-date "$completed_target_date" --write || research_closure_rc=$?
+fi
+
 expansion_rc=0
 "$PYTHON_BIN" -m src.engine.monitoring.widget_collector_expansion_recommendation \
   --target-date "$completed_target_date" \
@@ -73,10 +80,7 @@ else
   entry_timing_rc=0
 fi
 
-research_closure_rc=0
 if [[ "$completed_target_date" > "2026-09-16" ]]; then
-  "$PYTHON_BIN" -m src.engine.monitoring.research_native_capacity_source \
-    --source-date "$completed_target_date" --write || research_closure_rc=$?
   "$PYTHON_BIN" -m src.engine.automation.machine_research_closed_loop_refresh \
   --source-date "$completed_target_date" \
   --source-wait-sec 900 \

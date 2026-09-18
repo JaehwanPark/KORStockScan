@@ -33,6 +33,7 @@ from typing import Any, Callable, Collection, Iterable
 from zoneinfo import ZoneInfo
 
 import requests
+import re
 
 from src.trading.order.tick_utils import (
     clamp_price_to_tick,
@@ -2466,6 +2467,9 @@ def _external_evidence_generation(end_date, symbols):
             )
     generations = {}
     for path in paths:
+        dated = re.search(r"\d{4}-\d{2}-\d{2}", path.name)
+        if dated and dated.group() > end_date.isoformat():
+            continue
         try:
             stat = path.lstat()
             generations[str(path)] = [
@@ -3019,6 +3023,27 @@ def load_completed_symbol_source(
         }
 
 
+def assert_completed_source_waiting(study_path: Path, end_date: date, study: dict) -> None:
+    """A previous study must not hide a newer pending native invocation."""
+    from src.engine.monitoring import research_closed_loop as loop
+    path = study_path.parent / f"source_waiting_{end_date}.json"
+    if not path.exists():
+        return  # Legacy completed studies have no continuation receipt.
+    waiting = loop.read_object(path, limit=4 * 1024 * 1024)
+    if (waiting.get("schema") not in {"widget_signal_research_source_waiting_v1", "widget_signal_research_source_waiting_v2"}
+        or waiting.get("end_date") != str(end_date)
+        or any(waiting.get(key) is not value for key, value in loop.AUTHORITY.items())):
+        raise ValueError("widget_source_waiting_contract_invalid")
+    if waiting.get("status") != "complete" or waiting.get("source_waiting") != {}:
+        raise ValueError("widget_completed_study_source_still_waiting")
+    if waiting["schema"] == "widget_signal_research_source_waiting_v2":
+        if waiting.get("receipt_sha256") != _receipt_checksum(waiting):
+            raise ValueError("widget_source_waiting_contract_invalid")
+        fingerprint = hashlib.sha256(json.dumps(waiting["symbol_fingerprints"], sort_keys=True).encode()).hexdigest()
+        if study.get("source_input_fingerprint") != fingerprint:
+            raise ValueError("widget_completed_study_generation_mismatch")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--end-date")
@@ -3049,8 +3074,114 @@ def main(argv: list[str] | None = None) -> int:
     symbol_fingerprints = {}
     source_quarantine = {}
     failed_source_meta = {}
-    source_waiting = {}
-    for index, (symbol, name) in enumerate(symbol_universe.items(), 1):
+    source_snapshot_generations = {}
+    source_waiting = {symbol: "source_not_attempted" for symbol in symbol_universe}
+    waiting_path = args.output_dir / f"source_waiting_{end_date.isoformat()}.json"
+    from src.engine.monitoring.research_closed_loop import load_candidate
+    context = dict(
+        producer_sha256=research_contract_hash(),
+        source_parser_sha256=source_parser_contract_hash(),
+        cost_contract=comparison_cost_contract(end_date),
+        applied_baselines=applied_baselines,
+        symbol_origins=symbol_origins,
+        frozen_candidates={symbol: load_candidate(symbol) for symbol in symbol_universe},
+        external_evidence_generation=_external_evidence_generation(end_date, symbol_universe),
+        freeze_receipt=_freeze_receipt(end_date),
+        snapshot_dir=str(args.snapshot_dir.resolve()),
+    )
+
+    def snapshot_generation(symbol, meta):
+        generations = {}
+        for day in meta.get("retrieved_at_by_date", {}):
+            path = args.snapshot_dir / symbol / f"{day}.json"
+            stat = path.lstat()
+            generations[day] = [stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns]
+        return generations
+
+    selected = list(symbol_universe)
+    resumed = False
+    if args.write and waiting_path.exists():
+        if waiting_path.stat().st_size > 4 * 1024 * 1024:
+            raise ResearchError("widget_research_waiting_receipt_too_large")
+        previous = json.loads(waiting_path.read_text())
+        if previous.get("schema") == "widget_signal_research_source_waiting_v2" and previous.get("status") in {"waiting", "building"}:
+            if (previous.get("receipt_sha256") != _receipt_checksum(previous)
+                or previous.get("end_date") != end_date.isoformat()
+                or previous.get("symbol_universe") != symbol_universe
+                or previous.get("resume_context") != context
+                or any(previous.get(key) is not value for key, value in AUTHORITY.items())):
+                raise ResearchError("widget_research_resume_context_invalid")
+            completed = previous["completed_economic_symbols"]
+            quarantine = previous["source_quarantine"]
+            pending = previous["source_waiting"]
+            groups = [set(completed), set(quarantine), set(pending)]
+            if (len(completed) != len(groups[0]) or set.union(*groups) != set(symbol_universe)
+                or sum(map(len, groups)) != len(symbol_universe)):
+                raise ResearchError("widget_research_resume_partition_invalid")
+            symbol_fingerprints = previous["symbol_fingerprints"]
+            source_snapshot_generations = previous["source_snapshot_generations"]
+            if set(source_snapshot_generations) != groups[0]:
+                raise ResearchError("widget_research_resume_source_ledger_invalid")
+            source_quarantine = quarantine
+            failed_source_meta = previous["failed_source_meta"]
+            if set(symbol_fingerprints) != groups[0] | groups[1] or set(failed_source_meta) != groups[1]:
+                raise ResearchError("widget_research_resume_source_ledger_invalid")
+            for symbol in quarantine:
+                reason = quarantine[symbol]
+                meta = failed_source_meta[symbol]
+                if (reason not in {f"{symbol}_daily_source_coverage_fail", f"{symbol}_snapshot_coverage_incomplete", f"{symbol}_source_quality_not_pass", f"{symbol}_source_quality_fail"}
+                    or meta.get("source_quality_status") != "FAIL" or meta.get("source_quality_reason") != reason):
+                    raise ResearchError("widget_research_resume_source_ledger_invalid")
+            for symbol in completed:
+                checkpoint = args.output_dir / "checkpoints" / f"{end_date}_{symbol}.json"
+                if not checkpoint.is_file() or checkpoint.stat().st_size > 4 * 1024 * 1024:
+                    raise ResearchError("widget_research_resume_checkpoint_invalid")
+                part = reusable_report(checkpoint,
+                    end_date=end_date, fingerprint=symbol_fingerprints[symbol])
+                if (part is None or set(part.get("symbols", {})) != {symbol}
+                    or part.get("source_meta", {}).get(symbol, {}).get("source_quality_status") != "PASS"
+                    or any(part.get(key) is not value for key, value in AUTHORITY.items())):
+                    raise ResearchError("widget_research_resume_checkpoint_invalid")
+                try:
+                    unchanged = snapshot_generation(symbol, part["source_meta"][symbol]) == source_snapshot_generations[symbol]
+                except OSError:
+                    unchanged = False
+                if not unchanged:
+                    raise ResearchError("widget_research_resume_snapshot_changed")
+                part = {key: value for key, value in part.items() if key != "checkpoint_sha256"}
+                part["execution_quality_by_symbol"][symbol] = load_execution_incidents(symbol, target_date=end_date, session="KRX_REGULAR")
+                reports.append(part)
+            allowed_waiting = {"source_not_attempted", "ka10080_shared_read_rate_deferred:shared_read_rate_wait_budget_exhausted", "ka10080_shared_read_rate_deferred:shared_read_rate_server_cooldown"}
+            if any(reason not in allowed_waiting for reason in pending.values()):
+                raise ResearchError("widget_research_resume_waiting_reason_invalid")
+            source_waiting = pending
+            order = previous["pending_order"]
+            if len(order) != len(set(order)) or set(order) != set(pending):
+                raise ResearchError("widget_research_resume_queue_invalid")
+            selected = order[:10]
+            resumed = True
+
+    def progress(*, published=False):
+        waiting = dict(
+            schema="widget_signal_research_source_waiting_v2",
+            status="waiting" if source_waiting else "complete" if published else "building",
+            end_date=end_date.isoformat(), generated_at_kst=datetime.now(KST).isoformat(timespec="seconds"),
+            symbol_universe=symbol_universe, source_waiting=source_waiting,
+            source_quarantine=source_quarantine, failed_source_meta=failed_source_meta,
+            completed_economic_symbols=[symbol for part in reports for symbol in part["symbols"]],
+            symbol_fingerprints=symbol_fingerprints, resume_context=context,
+            source_snapshot_generations=source_snapshot_generations,
+            pending_order=[symbol for symbol in source_waiting if symbol not in selected] + [symbol for symbol in selected if symbol in source_waiting],
+            checkpoint_validation="recorded_native_inputs_in_unchanged_completed_date_context",
+            resumed_source_waiting=resumed, **AUTHORITY,
+        )
+        waiting["receipt_sha256"] = _receipt_checksum(waiting)
+        if args.write:
+            _atomic_write(waiting_path, json.dumps(waiting, ensure_ascii=False, sort_keys=True))
+        return waiting
+
+    for index, symbol in enumerate(selected, 1):
+        name = symbol_universe[symbol]
         started = time_module.monotonic()
         print(
             json.dumps(
@@ -3076,6 +3207,7 @@ def main(argv: list[str] | None = None) -> int:
                 max_pages=args.max_pages,
                 page_delay_sec=args.page_delay_sec,
             )
+            snapshot_before = snapshot_generation(symbol, meta)
             kwargs = dict(
                 sources={symbol: (bars, meta)},
                 end_date=end_date,
@@ -3134,8 +3266,13 @@ def main(argv: list[str] | None = None) -> int:
                 report["execution_quality_by_symbol"][symbol] = load_execution_incidents(
                     symbol, target_date=end_date, session="KRX_REGULAR"
                 )
+            if snapshot_generation(symbol, meta) != snapshot_before:
+                raise ResearchError("widget_research_source_snapshot_changed_during_evaluation")
+            source_snapshot_generations[symbol] = snapshot_before
             symbol_fingerprints[symbol] = fingerprint
             reports.append(report)
+            source_waiting.pop(symbol, None)
+            progress()
             print(
                 json.dumps(
                     {
@@ -3159,6 +3296,7 @@ def main(argv: list[str] | None = None) -> int:
                 "ka10080_shared_read_rate_deferred:shared_read_rate_server_cooldown",
             }:
                 source_waiting[symbol] = reason
+                progress()
                 print(json.dumps({
                     "stage": "symbol_deferred", "symbol": symbol,
                     "progress": f"{index}/{len(symbol_universe)}", "reason": reason,
@@ -3186,22 +3324,13 @@ def main(argv: list[str] | None = None) -> int:
             symbol_fingerprints[symbol] = fingerprint or hashlib.sha256(
                 json.dumps(failed_source_meta[symbol], sort_keys=True).encode()
             ).hexdigest()
+            source_waiting.pop(symbol, None)
+            progress()
             print(json.dumps({
                 "stage": "symbol_quarantined", "symbol": symbol,
                 "progress": f"{index}/{len(symbol_universe)}", "reason": reason,
             }, sort_keys=True), flush=True)
-    waiting = dict(
-        schema="widget_signal_research_source_waiting_v1",
-        status="waiting" if source_waiting else "complete",
-        end_date=end_date.isoformat(),
-        generated_at_kst=datetime.now(KST).isoformat(timespec="seconds"),
-        symbol_universe=symbol_universe, source_waiting=source_waiting,
-        source_quarantine=source_quarantine,
-        completed_economic_symbols=[
-            symbol for part in reports for symbol in part["symbols"]
-        ],
-        **AUTHORITY,
-    )
+    waiting = progress()
     if source_waiting:
         if args.write:
             _atomic_write(
@@ -3255,10 +3384,7 @@ def main(argv: list[str] | None = None) -> int:
         write_report(report, output_dir=args.output_dir) if args.write else (None, None)
     )
     if args.write:
-        _atomic_write(
-            args.output_dir / f"source_waiting_{end_date.isoformat()}.json",
-            json.dumps(waiting, ensure_ascii=False, sort_keys=True),
-        )
+        waiting = progress(published=True)
     print(
         json.dumps(
             {

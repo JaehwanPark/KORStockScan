@@ -1485,3 +1485,94 @@ def test_main_retains_completed_checkpoints_without_publishing_deferred_populati
     checkpoint = tmp_path / "checkpoints" / "2026-09-17_006800.json"
     assert checkpoint.exists() is (case == "partial_wait")
     assert not (tmp_path / "widget_symbol_signal_policy_research_2026-09-17.json").exists()
+
+
+@pytest.mark.parametrize('case', ['complete', 'repeat_wait', 'context_changed', 'checkpoint_tampered', 'snapshot_changed'])
+def test_main_resumes_only_pending_batch_and_validates_original_records(tmp_path, monkeypatch, case):
+    from src.engine.monitoring.widget_symbol_runtime_policy import WidgetSymbolRuntimePolicyLoader
+    from src.engine.monitoring.research_closed_loop import AUTHORITY
+    universe = {'006800': 'completed', '001550': 'quarantined', **{f'{i:06d}': 'pending' for i in range(100, 112)}}
+    monkeypatch.setattr(research.signal, 'signal', lambda *a: None)
+    monkeypatch.setattr(research, 'load_symbol_universe', lambda **kw: (universe, dict.fromkeys(universe, 'established_widget_symbol')))
+    monkeypatch.setattr(WidgetSymbolRuntimePolicyLoader, 'resolve_all', lambda *a, **kw: {})
+    monkeypatch.setattr(research, '_external_evidence_generation', lambda *a: {})
+    monkeypatch.setattr(research, '_freeze_receipt', lambda *a: None)
+    monkeypatch.setattr(research, 'research_input_fingerprint', lambda **kw: 'fixture-source')
+    monkeypatch.setattr(research, '_attach_population_evidence', lambda r: r)
+    monkeypatch.setattr(research, 'attach_recommendation_contract', lambda r: r)
+    monkeypatch.setattr(research, 'load_execution_incidents', lambda *a, **kw: {})
+    calls, published = [], []
+    snapshots = tmp_path/'sources'
+    (snapshots/'006800').mkdir(parents=True)
+    snapshot = snapshots/'006800'/'2026-09-17.json'
+    snapshot.write_text('{}')
+    turn = 0
+    def load(**kw):
+        symbol = kw['symbol']; calls.append(symbol)
+        if symbol == '001550':
+            raise ResearchError('001550_source_quality_fail')
+        if symbol != '006800' and (turn == 0 or case == 'repeat_wait'):
+            raise ResearchError('ka10080_shared_read_rate_deferred:shared_read_rate_wait_budget_exhausted')
+        return [], {'source_quality_status': 'PASS', 'request_count': 0, 'retrieved_at_by_date': {'2026-09-17': 'fixture'} if symbol == '006800' else {}}
+    monkeypatch.setattr(research, 'load_completed_symbol_source', load)
+    def build(**kw):
+        symbol = next(iter(kw['sources']))
+        return dict(schema=research.REPORT_SCHEMA, status='complete', end_date='2026-09-17',
+            source_input_fingerprint='fixture-source', symbols={symbol: {'decision': 'no_candidate'}},
+            source_meta={symbol: kw['sources'][symbol][1]}, execution_quality_by_symbol={symbol: {}},
+            passed_symbols=[], execution_mode='full_recompute', **AUTHORITY)
+    monkeypatch.setattr(research, 'build_report', build)
+    def write(r, **kw):
+        marker = json.loads((tmp_path/'source_waiting_2026-09-17.json').read_text())
+        assert marker['status'] == 'building'
+        with pytest.raises(ValueError, match='source_still_waiting'):
+            research.assert_completed_source_waiting(tmp_path/'report.json', date(2026,9,17), r)
+        published.append(r)
+        return tmp_path/'report.json', tmp_path/'report.md'
+    monkeypatch.setattr(research, 'write_report', write)
+    argv = ['--end-date', '2026-09-17', '--output-dir', str(tmp_path), '--snapshot-dir', str(snapshots), '--write']
+    assert research.main(argv) == 3
+    assert len(calls) == 14 and not published
+    calls.clear(); turn = 1
+    if case == 'context_changed':
+        monkeypatch.setattr(research, '_external_evidence_generation', lambda *a: {'changed': None})
+    elif case == 'checkpoint_tampered':
+        path = tmp_path/'checkpoints'/'2026-09-17_006800.json'
+        row = json.loads(path.read_text()); row['symbols']['006800']['decision'] = 'tampered'; path.write_text(json.dumps(row))
+    elif case == 'snapshot_changed':
+        snapshot.write_text('{"changed":true}')
+    if case in {'context_changed', 'checkpoint_tampered', 'snapshot_changed'}:
+        with pytest.raises(ResearchError, match='widget_research_resume_'):
+            research.main(argv)
+        assert calls == [] and not published
+        return
+    assert research.main(argv) == 3
+    assert calls == [f'{i:06d}' for i in range(100, 110)]
+    assert not published
+    progress = json.loads((tmp_path/'source_waiting_2026-09-17.json').read_text())
+    assert progress['pending_order'][:2] == ['000110', '000111']
+    calls.clear()
+    if case == 'repeat_wait':
+        assert research.main(argv) == 3
+        assert calls[:2] == ['000110', '000111'] and len(calls) == 10
+        assert not published
+    else:
+        assert research.main(argv) == 0 and calls == ['000110', '000111']
+        assert len(published) == 1 and set(published[0]['symbols']) == set(universe)
+        assert published[0]['source_quarantine'] == {'001550': '001550_source_quality_fail'}
+        assert published[0]['eligible_source_symbol_count'] == 13
+        research.assert_completed_source_waiting(tmp_path/'report.json', date(2026,9,17), published[0])
+        with pytest.raises(ValueError, match='generation_mismatch'):
+            research.assert_completed_source_waiting(tmp_path/'report.json', date(2026,9,17), {**published[0], 'source_input_fingerprint': 'old_generation'})
+
+
+def test_completed_date_evidence_generation_ignores_next_day_observations(tmp_path, monkeypatch):
+    from src.engine.monitoring import widget_symbol_runtime_contract as contract
+    monkeypatch.setattr(contract, 'DEFAULT_OBSERVATION_DIR', tmp_path)
+    current = tmp_path/'widget_symbol_advisory_006800_2026-09-17.jsonl'
+    future = tmp_path/'widget_symbol_advisory_006800_2026-09-18.jsonl'
+    current.write_text('{}\n'); future.write_text('{}\n')
+    before = research._external_evidence_generation(date(2026,9,17), {'006800'})
+    assert str(current) in before and str(future) not in before
+    future.write_text('{}\n{}\n')
+    assert research._external_evidence_generation(date(2026,9,17), {'006800'}) == before

@@ -110,6 +110,9 @@ def read_studies(day, *, report_root=DATA_DIR / "report"):
                 or any(value.get(k) is not v for k, v in loop.AUTHORITY.items())
             ):
                 raise ValueError("exact_study_contract_invalid")
+            if family == "widget":
+                from src.engine.monitoring.widget_symbol_signal_policy_research import assert_completed_source_waiting
+                assert_completed_source_waiting(path, day, value)
             studies[family] = value
         except (FileNotFoundError, ValueError):
             missing.append(family)

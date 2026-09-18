@@ -554,3 +554,16 @@ def test_verified_unchanged_incumbent_carry_does_not_require_new_proxy_receipt(
     )
     policy = runtime.build_policy(report)
     assert "006800" in policy["symbols"]
+
+
+def test_new_policy_generation_blocks_pending_successor_but_frozen_reader_stays_available(tmp_path):
+    from src.engine.monitoring import research_closed_loop as loop
+    report = _research()
+    evidence = tmp_path/'widget_symbol_signal_policy_research_2026-08-11.json'
+    loop.atomic_write(tmp_path/'source_waiting_2026-08-11.json', dict(
+        schema='widget_signal_research_source_waiting_v1', status='waiting', end_date='2026-08-11',
+        source_waiting={'006800': 'source_not_attempted'}, **loop.AUTHORITY))
+    with pytest.raises(ValueError, match='source_still_waiting'):
+        runtime.build_policy(report, evidence_report_path=evidence)
+    policy = runtime.build_policy(report, evidence_report_path=evidence, reader_validation=True)
+    assert '006800' in policy['symbols']

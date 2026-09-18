@@ -1192,6 +1192,7 @@ def _run_machine_microstructure_final_refresh(
     tmp_path,
     *,
     expansion_rc=0,
+    native_capacity_rc=0,
     attribution_rc=0,
     weakness_hysteresis_rc=0,
     entry_timing_rc=0,
@@ -1214,6 +1215,10 @@ def _run_machine_microstructure_final_refresh(
                 "esac",
                 'printf "%s\\n" "$*" >> "$FINAL_REFRESH_CALL_LOG"',
                 'case "$*" in',
+                '  *"research_native_capacity_source"*)',
+                '    exit "${FAKE_NATIVE_CAPACITY_RC:-0}" ;;',
+                '  *"machine_research_closed_loop_refresh"*)',
+                '    exit 0 ;;',
                 '  *"widget_collector_expansion_recommendation"*)',
                 '    exit "${FAKE_EXPANSION_RC:-0}" ;;',
                 '  *"machine_microstructure_attribution"*)',
@@ -1240,6 +1245,7 @@ def _run_machine_microstructure_final_refresh(
         "KORSTOCKSCAN_PYTHON_BIN": str(fake_python),
         "FINAL_REFRESH_CALL_LOG": str(call_log),
         "FAKE_EXPANSION_RC": str(expansion_rc),
+        "FAKE_NATIVE_CAPACITY_RC": str(native_capacity_rc),
         "FAKE_ATTRIBUTION_RC": str(attribution_rc),
         "FAKE_WEAKNESS_HYSTERESIS_RC": str(weakness_hysteresis_rc),
         "FAKE_ENTRY_TIMING_RC": str(entry_timing_rc),
@@ -4199,3 +4205,13 @@ def test_widget_phase_timeout_fails_with_target_and_preserves_prior_checkpoint(
     )
     assert "completed" not in result.stdout
     assert checkpoint.read_text() == '{"complete":true}'
+
+
+@pytest.mark.parametrize("native_capacity_rc", [0, 7])
+def test_machine_final_refresh_captures_dated_capital_before_long_research(tmp_path, native_capacity_rc):
+    result, calls = _run_machine_microstructure_final_refresh(tmp_path, completed_target_date="2026-09-17", native_capacity_rc=native_capacity_rc)
+    assert result.returncode == native_capacity_rc
+    assert "research_native_capacity_source --source-date 2026-09-17 --write" in calls[0]
+    assert "widget_collector_expansion_recommendation" in calls[1]
+    assert sum("research_native_capacity_source" in call for call in calls) == 1
+    assert next(i for i, call in enumerate(calls) if "machine_research_closed_loop_refresh" in call) > next(i for i, call in enumerate(calls) if "machine_entry_timing_tuning" in call)

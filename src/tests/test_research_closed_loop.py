@@ -1507,3 +1507,18 @@ def test_episode_scale_cli_defaults_are_bounded(tmp_path, monkeypatch):
 
     monkeypatch.setattr(benchmark, "run", bounded_run)
     assert benchmark.main(["--output", str(tmp_path / "receipt.json")]) == 0
+
+
+@pytest.mark.parametrize('captured_at', ['2026-09-17T20:04:59+09:00', '2026-09-18T20:05:00+09:00'])
+def test_native_capacity_rejects_wrong_clock_before_account_or_token_helpers(tmp_path, monkeypatch, captured_at):
+    from types import SimpleNamespace
+    from src.engine.monitoring import research_native_capacity_source as source
+    captured = datetime.fromisoformat(captured_at)
+    monkeypatch.setattr(source, 'datetime', SimpleNamespace(now=lambda tz: captured))
+    def forbidden(*a, **kw):
+        pytest.fail('account helper called before dated source preflight')
+    adapters = dict.fromkeys(('inventory', 'unfilled', 'deposit', 'deposit_meta', 'capacity'), forbidden)
+    result = source.acquire(date(2026,9,17), directory=tmp_path, token='fixture', adapters=adapters)
+    assert result['status'] == 'source_gap'
+    assert result['reason'] == 'native_source_requires_current_completed_date_after_20_05'
+    assert not (tmp_path/'native_capacity').exists()

@@ -422,6 +422,9 @@ def build_policy(
         or research.get("metric_contract") != RESEARCH_METRIC_CONTRACT
     ):
         raise ValueError("widget_symbol_research_contract_invalid")
+    if evidence_report_path is not None and not reader_validation:
+        from src.engine.monitoring.widget_symbol_signal_policy_research import assert_completed_source_waiting
+        assert_completed_source_waiting(evidence_report_path, date.fromisoformat(research["end_date"]), research)
     universe, origins = _research_universe(research)
     source_meta = research.get("source_meta")
     if not isinstance(source_meta, dict):

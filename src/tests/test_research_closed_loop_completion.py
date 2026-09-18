@@ -574,3 +574,21 @@ def test_refresh_reads_large_studies_and_preserves_contract_rejection(tmp_path):
     paths["episode"].write_text(json.dumps(payload))
     studies, _, missing = read_studies(day, report_root=tmp_path)
     assert set(studies) == {"widget"} and missing == ["episode"]
+
+
+@pytest.mark.parametrize('status', ['waiting', 'building', 'complete'])
+def test_refresh_does_not_consume_previous_study_while_native_successor_is_pending(tmp_path, status):
+    from src.engine.automation.machine_research_closed_loop_refresh import read_studies
+    day = date(2026,9,17)
+    widget_dir = tmp_path/'widget_symbol_signal_policy_research'
+    episode_dir = tmp_path/'low_price_two_leg_expanded_candidate_research'
+    widget_dir.mkdir(); episode_dir.mkdir()
+    payload = dict(target_date=str(day), closed_loop_contract=loop.SCHEMA, **loop.AUTHORITY)
+    loop.atomic_write(widget_dir/f'widget_symbol_signal_policy_research_{day}.json', payload)
+    loop.atomic_write(episode_dir/f'low_price_two_leg_expanded_candidate_research_{day}.json', payload)
+    loop.atomic_write(widget_dir/f'source_waiting_{day}.json', dict(
+        schema='widget_signal_research_source_waiting_v1', end_date=str(day), status=status,
+        source_waiting={} if status == 'complete' else {'000001': 'source_not_attempted'}, **loop.AUTHORITY))
+    studies, paths, missing = read_studies(day, report_root=tmp_path)
+    assert ('widget' in studies) is (status == 'complete')
+    assert missing == ([] if status == 'complete' else ['widget'])

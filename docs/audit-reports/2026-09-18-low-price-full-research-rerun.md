@@ -6,7 +6,37 @@
 - 선행 widget 전체199종목 producer는5종목 계산 뒤 외부응답 `ka10080_response_not_json`으로1차 중단했다. 원천/경제 체크포인트 보존 후1회 복구 실행 중이다. 완료 종목의 source/code/cost/applied incumbent fingerprint가 검증된 경우에만 native 경제 checkpoint를 재사용한다.
 - 공동 평가 직접 소비자의 초기 study intake/dependency hash/current receipt 검증에32MiB 제한이 남은 결함을 생산자의 기존128MiB stable no-follow reader로 통일했다. 다른 JSON dependency는기존32MiB를 유지한다. large full-study 소비와order-authority rejection회귀38PASS; nativeclosedloop 추가검증의 고정9/17 fixture가실제9/18 clock을사용하던 불일치를 fixture clock 고정으로 수리했고44PASS이다. production 날짜/자본 source guard는완화하지 않는다.
 - 현재9/17 allocator/native_capacity/capacity_source 원천은부재이다. `capacity_2026-09-17.json`은WS 구독 범위 receipt이며현금/보유/예약자본이 아니다. native source acquisition CLI는현재완료일20:05 이후만 허용하므로9/18 잔고를9/17로 재라벨링하지 않는다. 보존된 동등 과거증거가없으면 feasibility/공동 EV의미확정은수치로 대체하지 않는다.
-- 실행/회귀/원천scope receipt: `tmp/low-price-full-research-20260918/`. 이 문서는실행중기록이며전일 전체postclose DONE 또는경제성 PASS가아니다. 최종full study/source generation/비교/공동 EV 결과는후속 섹션에기록한다.
+- 실행/회귀/원천scope receipt: `tmp/low-price-full-research-20260918/`. 이 문서는source-only 결과 갱신 및 미종결 기록이며전일 전체postclose DONE 또는경제성 PASS가아니다. 최종full study/source generation/비교/공동 EV 결과는후속 섹션에기록한다.
+
+## 최신 판정 — 9/17 결과 갱신
+
+저가주 전체 1,020프로필의 native 경제 재계산과 기존 로직 64개 비교는 완료했다. 유효 원천197/원천격리7, 경제 checkpoint hit0/miss789이다. 같은 관측창·비용의 수치 비교13개 중 양측 완료 결과·holdout 3signal/4leg·미해결 custody 부재를 충족한 성숙 모델 비교는3개이고, EV 및 일별 순익 개선은0개다. 이는 유효 비교의 incumbent 유지 결과이며 실제 체결 수익이 아니다.
+
+[기계 판정 JSON](../../data/report/postclose_research_successor_20260917_20260918/low_price_full_research_result_review_2026-09-17.json), [기존 로직 비교](../../data/report/postclose_research_successor_20260917_20260918/low_price_existing_logic_full_comparison_2026-09-17.json). 선행 widget은 전체199 중 경제계산104/식별 원천격리52/미처리43으로 보존했다. 이번 추가10종목은3경제완료/2원천격리/5조회대기,140.31초였다. 전체 widget study는 아직 발행하지 않았다. native 공동 refresh의 실제 결과는 `waiting / required_completed_study_missing / widget`이다. 9/17 현금·보유·예약자본 및 same-stage timing 원천도 미확보이며 공동 EV·순익은 null이다. 현재 잔고나 모델 EV 합산으로 과거 공동 수익을 만들지 않는다. 전일 전체 장후 chain DONE이 아니다.
+
+## 이번 구조 보완과 운영 방식
+
+- 기존 생산자 안에서 v2 진행 receipt를 종목 처리마다 저장한다. 같은 완료일·universe/origin·code/parser·비용·적용 incumbent·동결 후보·날짜별 외부 입력·EOD freeze가 동일할 때 완료 checkpoint와 격리를 이어받고, 다음 invocation은 대기 목록의 최대10종목만 처리한다. 재대기 항목은 뒤로 보내 미조회 항목을 먼저 처리한다. 완료 입력 snapshot의 파일 generation 변경·checkpoint 변조·입력 계약 변경은 재사용 실패로 명시하고 전체를 자동 재계산하지 않는다.
+- 다음 날 advisory 파일이 전일 fingerprint를 바꾸는 날짜 연결 결손을 보완했다. 실제 전일 입력 변화는 여전히 무효화 사유이다. 조회 간격은 기존 기본0.2초이며 임시1초/5초 추가 재시도는 제거했다. 공유 read 전체5건/초·연구4건/초, native 요청/parser/continuation/retry·quantity·비용·grid·holdout·sample/promotion floor는 보존했다. 추가 scheduler/cron/service·생산 모듈·성능 guard·분석 grid 축소 없음.
+- 모든 symbol의 처리가 끝나도 정식 report write 전에는 `building`으로 남긴다. 공동 소비자와 새 widget policy 생성은 최신 receipt의 완료 및 study 입력 지문 일치를 확인한다. 이전 같은 날짜 보고서가 새 실행의 대기/중단을 가리는 결함을 닫았다. 기존 동결 정책 reader/실행 중 거래 서비스의 incumbent 사용은 보존한다.
+- 기존 machine final-refresh wrapper에서 native 현금/보유 수집을 긴 연구 앞에 배치했다. 직접 acquisition에서도 현재 완료일20:05 이후인지 계좌/token helper 호출 전에 확인한다. 다음 완료일에 적시 생산을 검증하는 수리이며9/17 결손을 복원한 것이 아니다.
+
+| 상태 | 현재 판단 | 다음 closure |
+| --- | --- | --- |
+| 성숙 모델 비교3개 | EV/일별 순익 개선0; 유효 유지 결과 | 새 유효 관측창에서 같은 비용·완료 기준 비교 |
+| 팬오션 점심·제주반도체 오전 수치 상승 | challenger 표본 부족; 승격 근거 아님 | 자연 유효 signal/완료leg 및 baseline 비교 확보 |
+| prospective580·calibration 부족135·holdout/full 부족56 | 미래 유효 유입이 있어야 성숙; ETA null | 선언 cohort/window와 실제 유입·완료 분모 검증 |
+| 고정일 source/session 미입증231프로필 | 당시 원천·session 결손; 시간만으로 복원되지 않음 | 동등 보존 원천 입증 또는 명시 격리 유지 |
+| widget 미처리43 | 공유 read 대기와 아직 추가 실행하지 않은 대상; EV0 아님 | 다음 턴은 해당 queue만 최대10개, 전체199 terminal 후 공동 재섭취 |
+| 9/17 공동 자본·same-stage 원천 부재 | 구조적 생산/수집 결손; 공동 수치 미산출 | 보존 원천 확인 또는 다음 완료일의 native 수집·allocator·공동 gate 검증 |
+
+## 리뷰·검증 및 배포 범위
+
+producer→진행 receipt/checkpoint→정식 writer→공동 refresh/새 policy 소비와 native-capacity 수집 순서를 review/fix/re-review했다. 마지막 보완은 report write 전 완료 marker 방지, 새 generation과 기존 보고서의 지문 결속, 원천 snapshot 변경 시 완료 checkpoint 재사용 금지이다. 변경된 경로의 최종 검증은 `tmp/low-price-full-research-20260918/closure-resume-final-validation.txt`, 기존 69PASS와 이번95/103/109PASS는 각 당시 diff의 검증이다.
+
+전체 영향5suite 실행은288PASS/3FAIL이었다. FAIL3개는 현행 다른 세션의 postclose wrapper 변경과 이전 checkpoint/scout 경로를 기대하는 테스트의 불일치이며 이번 연구 수리에서 퇴역 경로를 복원하지 않는다. 실패명과 실제 assert는 `closure-affected-suites-final.txt`에 보존한다. 영향 경로 최신 targeted 검증·compile·bash-n·diff·문서 parser 결과 및 최종 commit/push/배포는 `tmp/low-price-full-research-20260918/closure-validation.json`, `closure-deployment.json`을 따른다. 미해결 unrelated FAIL을 전체 suite PASS로 표시하지 않는다.
+
+새 managed release는 현행 원격 main의 PYRAMID/scout/drought 폐기 등을 합쳐 배포한다. 실행 중 다른 final-refresh worker의 immutable root/PID를 교체하거나 재시작하지 않는다. 저가주 동결9/18 policy/manifest 및 원본9/17 보고서 SHA는 보존한다. 최신 selector/다음 예약 실행 source와 실제 진행 중 PID 소비를 별도 기록한다. 연구 코드 보완·배포와 자연 매매 효과·경제성은 별개이고 `LowPriceExpandedResearchRepair0918`의 자연/공동 acceptance는 OPEN이다.
 
 ## 선행 producer 결함 보완
 
@@ -50,3 +80,9 @@
 - 최신producer+policy consumer69PASS(47+22)/compile/diff PASS. 재리뷰범위source品質의symbol scope→전체denominator→원천ledger→policy/catalog/closedloop, finding0. source-only실행만하며현재날짜동결policy를교체하지않는다.
 
 - Official reference 확인: upstream HEAD `953e5dbff123f437ab4d11a78a95191a685eb51f`, retrieval `2026-09-18T09:28:35.428171+09:00`; inspected `kiwoom/_data/kiwoom_api_spec.json`, `kiwoom/specs.py`, `kiwoom/core/errors.py`, `postman/kiwoom-openapi.postman_collection.json`. 현재tracked tree에는`kiwoom_docs`가없음을기록했고기존ka10080spec/Postman/SDK를교차확인했다. protocol의새의미를추정하거나API/auth/order contract를변경하지않는다. 증거:`tmp/low-price-full-research-20260918/official-kiwoom-source-quality-review.json`.
+
+## 최종 코드의 외부 응답 중단과 재개
+
+- `b0c2a0476` full native widget pass는114번째200350 조회에서 `ka10080_response_not_json`으로exit1이었다. 앞선113종목의결과는경제계산47/공유read대기47/개별원천격리19이며정식전체study는발행하지않았다. wall1,582.92초/userCPU983.48초/systemCPU49.86초/peakRSS235,052KiB. 이응답을source PASS·quarantine·EV0으로바꾸거나parser/provider/retryguard를완화하지않는다.
+- 동일검증코드로native CLI를재개했다(`widget-full-source-handoff-resume-1.log`). 계약이일치한종목은 `exact_symbol_checkpoint_reuse`를사용하며현재입력계약검증을통과하지못한checkpoint는재사용하지않고평가를갱신한다. 이경우에도native 날짜별kernel cache hit를확인했다. 006800의원천/API없이직접nativefingerprint와checkpointchecksum을검증했고현재fingerprint일치·reusable=true였다. 이전경제checkpoint의무조건재사용이아니다.
+- 대기가남으면별도waiting ledger/exit3이며정식전체보고서와공동후속은보류한다. 최종전체결과/원천격리/비교/공동경제성을확인할때까지이owner는OPEN이다.

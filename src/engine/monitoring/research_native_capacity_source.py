@@ -47,6 +47,9 @@ def _acquire(day, *, directory=loop.DIRECTORY, token=None, adapters=None):
         directory / f"capacity_source_{day}.json", {**body, "status": "running"}
     )
     try:
+        now = datetime.now(KST)
+        if now.date() != day or now.time() < time(20, 5):
+            raise ValueError("native_source_requires_current_completed_date_after_20_05")
         if adapters is None:
             from src.utils import kiwoom_utils as native
             from src.engine import kiwoom_orders as orders
