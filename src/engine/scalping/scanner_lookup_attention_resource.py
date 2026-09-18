@@ -636,7 +636,7 @@ def integrated_selection_evaluation(target, events_by_date, *, predecessor=None,
     from src.engine.monitoring.scanner_lookup_attention_tuning import (
         collect_lineage, load_completed_facts, join_completed_outcomes,
         _latest_symbol_master, _source_quality, _cohort_book, _resource_allocation_pair_book,
-        evaluate_post_apply, _latest_prior_policy, COST_CONTRACT, _resource_window_start, _conversion_diagnostics,
+        evaluate_post_apply, COST_CONTRACT, _resource_window_start, _conversion_diagnostics,
     )
     if migration is None and isinstance(predecessor, dict):
         migration = predecessor.get("historical_migration_diagnostics")
@@ -658,7 +658,9 @@ def integrated_selection_evaluation(target, events_by_date, *, predecessor=None,
     outcomes, exclusions = join_completed_outcomes(observations, facts, eligible_symbols=symbols)
     source_quality = _source_quality(target, {date.fromisoformat(row["rec_date"]) for row in outcomes}
                                     | {date.fromisoformat(row["observation_date"]) for row in rows if row.get("observation_date")})
-    prior_policy = _latest_prior_policy(target)
+    # No production read of the retired report/campaign. Current integrated
+    # publisher is zero-only; archive campaign helpers retain archive authority.
+    prior_policy = {}
     # Completion revisions and model/source version are in the final input hash.
     fingerprint = canonical_sha256({"contract": INTEGRATED_CONTRACT, "evaluator_revision": 1,
         "events": events_by_date, "facts": facts, "master": master,

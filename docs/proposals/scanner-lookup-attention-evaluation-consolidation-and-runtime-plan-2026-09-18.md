@@ -26,7 +26,7 @@
 
 현재 report/policy를 selected source로 read-only 검증하면 `economic_acceptance_not_reproducible`1건: 저장 `conversion_diagnostic_owner=buy_funnel_sentinel -> entry_recheck_drought_controller`, 기대 `buy_funnel_sentinel -> machine_entry_timing_tuning`. Source는 현행 담당자로 바뀌었으나 frozen 산출물 인계가 남았다. 퇴역 actor 복원 대신 successor/native metadata 인계로 정리한다. 현재 economic 수치를 새 적용 성과로 바꾸지 않는다.
 
-근거: [9/17 요약](../../data/report/scanner_lookup_attention_tuning/scanner_lookup_attention_tuning_2026-09-17.md), [9/17 policy](../../data/threshold_cycle/scanner_lookup_attention_policy/scanner_lookup_attention_policy_2026-09-17.json), [fact sync receipt](../../data/report/strategy_position_fact_sync/strategy_position_fact_sync_2026-09-17.status.json), wrapper PERF/ready 및 위 producer/consumer source. 삭제 완료 뒤 과거 원파일 링크는 §10의 보존 manifest/요약으로 대체한다.
+근거: [9/17 원분모·손익 보존 및 통합 successor](../audit-reports/2026-09-18-scanner-lookup-attention-consolidation-review.md), [9/17 policy](../../data/threshold_cycle/scanner_lookup_attention_policy/scanner_lookup_attention_policy_2026-09-17.json), [fact sync receipt](../../data/report/strategy_position_fact_sync/strategy_position_fact_sync_2026-09-17.status.json), wrapper PERF/ready 및 위 producer/consumer source. 삭제 완료 뒤 과거 원파일 링크는 §10의 보존 manifest/요약으로 대체한다.
 
 ## 3. 소유권·최소 변경 배치
 

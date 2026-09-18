@@ -8,6 +8,7 @@
 - 기존 finalize boundary가 전체 compiler를 호출하며 standalone CLI/publisher는 retired/fail closed다. 과거 pure math/decoding/library helpers는 archive contract tests 및 integrated math의 기존 caller 때문에 보존한다; historical ready pair는 현행 loader/PREOPEN에서 active authority를 얻지 못한다.
 - 기존 보고서 lookup section에만 generated_at/postclose phase를 주어 후속 갱신했다. 부모 monitor의9/17 19:45 intraday/as-of와 다른 분석을 장후 완료로 바꾸지 않았다. 현재 회계/비용/실제 거래 분모와 frozen 역사 분모는 분리한다. 기존110MB state/5.7GB raw를 다시 읽지 않았다.
 - Review에서 현행 숫자 전용 official master validator가 uppercase alphanumeric56개 때문에 master 전체를 차단하는 것을 확인했다. 해당 metadata identity 검증만 보완하고 official content/upstream hash·schema/census/effective date를 그대로 검증해 기존5 completed를 복구했다. API/FID/parser/protocol·stock universe/주문/guard 변경은 없다.
+- 삭제 전 후속 re-review에서 production decoder/prior campaign의 retired report 참조를 확인해 제거했다. 기존 exact immutable PREOPEN receipt로만 자연 bonus 기대값을 해석하고 receipt가 없으면 runtime과 동일한 bonus0으로 판정한다. Archive 검증용 decoder/math만 역사 계약을 유지하며 별도 test로 production의 old-path 조회0을 검증한다. 첫 배포를 편집하지 않는 후속 immutable release로 수리한다.
 - Date/hash/cache·source gap vs no-edge·positive proxy의 실행 EV 오인·legacy ready 재유입·immutable target-day<09:00 PREOPEN·same-budget scope·미확보 비용 null·mirror conflict·완료 revision·선행/후행 소비를 재검증했다. Provider/threshold/quantity/cap/custody/scale-in 소유권을 보존했다.
 
 ## 9/17 결과 갱신과9/21 준비
@@ -27,3 +28,6 @@ Frozen original report의 valid6,277/invalid209·12날짜·candidate298/control5
 ## 다음 조치·closure
 
 Executable owner는 당일 `ScannerLookupAttentionConsolidation0918` 하나이며 자연/경제성은 OPEN이다. 구조결손 owner는 existing `sniper_missed_entry_counterfactual`의 exact fill/exit/cost/quantity/capital replay 계약이다. Native original requested quantity/recipe/actual guards·ordered executable depth/exit/cost·full frozen capital을 양측 선택에 재현한 same-budget portfolio 결과와 독립 forward holdout이 있어야 positive activation evaluator/publisher/PREOPEN 계약을 보완할 수 있다. 현재 validation은 unsupported ready를 거부한다. 데이터 누적을 ETA로 제시하지 않으며 ETA=null이다.
+
+
+검증은 최초 관련 전체617 PASS 및 마지막 source 참조 수리 후 affected decoder/resource74 PASS다. Python compile/bash/diff/print-only parser·원분모 보존·actual fact 재결속·Daily/EV/summary/strict의 동일 section SHA 및9/21 inactive loader를 확인했다. Source commit과 최종 선택 release는 `deployment-final.json`을 따른다. 삭제 예정28개 standalone JSON/MD/reuse receipt는 source/reference/SHA와 compact preservation을 검사하고 `deleted-products.json`의 실제 unlink 결과만 최종 삭제 증거로 인정한다.
