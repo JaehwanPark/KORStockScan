@@ -1,5 +1,6 @@
 import json
 from datetime import datetime
+from functools import lru_cache
 
 import pytest
 
@@ -94,22 +95,76 @@ def test_compact_checkpoint_reuse_economics_rejoin_and_source_block(monkeypatch,
     assert report["status"] == "source_contract_blocked"
 
 
-def full_compact_proof():
+@lru_cache(maxsize=1)
+def operating_test_context():
+    from src.engine.scalping.strategy_owner_replay import ENTRY_OPERATING_SCHEMA, entry_operating_model_identity
+    from src.engine.lifecycle.avg_down_policy_replay import snapshot_version
+    snapshot = dict(rules={}, environment={}, implementation={})
+    return dict(schema=ENTRY_OPERATING_SCHEMA,policy_snapshot=snapshot,initial_policy_state={},
+        exit_policy_version=snapshot_version(snapshot),model_implementation_sha256=entry_operating_model_identity(),
+        budget_krw=120000.,cost_rate=.0023,cost_policy_version="trade_profit_net_realized_pnl:rate=0.0023",
+        cost_provenance="frozen_loaded_trade_profit_configuration_not_broker_settlement",**compact.AUTHORITY)
+
+
+def operating_compact_row(day="2026-09-17", ordinal=0):
+    """Synthetic operating receipt tests consumer wiring, not real profitability."""
+    from copy import deepcopy
+    from src.engine.scalping import strategy_owner_replay as owner
+    from src.engine.scalping.entry_split_order_plan import QUANTITY_LEG_FOUR_ARM_IDS, _canonical_sha256
+    row = compact_row(day, ordinal)
+    replay = row["owner_replay"]
+    seed = replay["seed"]
+    context = deepcopy(operating_test_context())
+    context["frozen_at"] = seed["observed_at"]
+    context["sha256"] = compact.digest({k: v for k, v in context.items() if k != "sha256"})
+    seed["operating_contract"] = context
+    seed["seed_sha256"] = compact.digest({k: v for k, v in seed.items() if k != "seed_sha256"})
+    arm = dict(schema=owner.ENTRY_OPERATING_SCHEMA,status="completed_source_only",actual_fill_evidence=False,
+        requested_qty=seed["total_qty"],modeled_filled_qty=seed["total_qty"],fill_participation_rate=1.,
+        budget_krw=context["budget_krw"],net_pnl_krw=600.,stress_net_pnl_krw=480.,
+        net_return_pct=.5,stress_net_return_pct=.4,modeled_entry_at=seed["observed_at"],
+        modeled_exit_at=replay["arms"][QUANTITY_LEG_FOUR_ARM_IDS[0]]["modeled_exit_at"],
+        contract_sha256=context["sha256"],exit_policy_sha256=context["exit_policy_version"],
+        cost_policy_version=context["cost_policy_version"],cost_provenance=context["cost_provenance"],
+        terminal_evidence_sha256="9"*64,**compact.AUTHORITY)
+    arm["sha256"] = _canonical_sha256(arm)
+    replay["operating_arms"] = {QUANTITY_LEG_FOUR_ARM_IDS[0]:arm}
+    replay["replay_sha256"] = compact.digest({k:v for k,v in replay.items() if k != "replay_sha256"})
+    return row
+
+
+@lru_cache(maxsize=1)
+def _full_compact_proof():
     from src.engine.scalping import mechanistic_entry_runtime_policy as policy
-    rows = [compact_row(day, i) for day in ["2026-09-14", "2026-09-16", "2026-09-17"] for i in range(20)]
+    rows = [operating_compact_row(day, i) for day in ["2026-09-14", "2026-09-16", "2026-09-17"] for i in range(20)]
     metrics = compact.evaluate(rows, {r["evaluation_key"]: compact_result(r) for r in rows})
     frozen = "2026-09-15T21:00:00+09:00"
+    from src.engine.scalping import entry_split_order_plan as split
+    from src.tests.test_entry_split_order_plan import _operating_economic_fixture
+    scope = split._entry_operating_scope(rows[0]["owner_replay"]["seed"])
+    _, actuals, _ = _operating_economic_fixture()
+    for actual in actuals:
+        actual["scope_sha256"] = scope
+    inputs = split._entry_operating_input_rows([rows[0]["owner_replay"]])
+    validation = split.evaluate_entry_split_operating_economics(inputs, actuals,
+        {"2026-09-08":10,"2026-09-09":10},target_date="2026-09-17")
+    model_scope = validation["model_scopes"][0]
+    assert model_scope["validated"]
     return compact.sealed({"schema": compact.SCHEMA, "target_date": "2026-09-17",
         "incumbent_prompt_version": policy.AI_VERSION,
         "candidate_prompt_version": policy.ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION,
         "source_manifest_sha256": "d"*64, "promotion_contract_sha256": compact.digest(compact.CONTRACT),
         "status": "comparison_complete", "candidate_frozen_at": frozen,
-        # Synthetic approved model tests wiring only; the current real owner is unsupported.
-        "owner_execution_model_validation": {"contract_version": "entry_split_execution_model_validation_v1", "source_date": "2026-09-17", "status": "validated_scope", "allowed_runtime_apply": True},
+        # Synthetic validated scope exercises wiring; it is not actual economic evidence.
+        "owner_execution_model_validation": {"contract_version": "entry_split_execution_model_validation_v1", "source_date": "2026-09-17", "status": "validated_scope", "allowed_runtime_apply": True, "validated_scopes": [model_scope]},
         "metrics": metrics, "candidate_improvement_proven": True, "selection_disposition": "candidate_selected",
         "chronological_validation": {"candidate_frozen_at": frozen, "learning_pairs": metrics["pairs"][:20],
                                      "holdout_pairs": metrics["pairs"][20:], "holdout_consumed": False}, **compact.AUTHORITY})
 
+
+def full_compact_proof():
+    from copy import deepcopy
+    return deepcopy(_full_compact_proof())
 
 def test_compact_signed_owner_cf_forward_holdout_positive_and_corruption():
     proof = full_compact_proof()
@@ -1078,3 +1133,47 @@ def test_empty_control_rejects_hash_and_cohort_mismatch():
         )
         is False
     )
+
+
+@pytest.mark.parametrize("defect", ["legacy_only", "wrong_scope", "late_model", "unsealed_model", "operating_net_corrupt", "missing_scope", "bad_model_date"])
+def test_compact_reused_model_requires_operating_outcome_and_prior_exact_scope(defect):
+    proof = full_compact_proof()
+    pair = proof["chronological_validation"]["learning_pairs"][0]
+    model = proof["owner_execution_model_validation"]["validated_scopes"][0]
+    if defect == "missing_scope":
+        proof["owner_execution_model_validation"]["validated_scopes"] = []
+    elif defect == "bad_model_date":
+        model["available_after_date"] = None
+        model["sha256"] = compact.digest({k:v for k,v in model.items() if k != "sha256"})
+    elif defect == "legacy_only":
+        pair["owner_replay"].pop("operating_arms")
+        pair["owner_replay"]["replay_sha256"] = compact.digest({k:v for k,v in pair["owner_replay"].items() if k != "replay_sha256"})
+    elif defect == "wrong_scope":
+        model["scope_sha256"] = "0" * 64
+    elif defect == "late_model":
+        model["available_after_date"] = pair["source_date"]
+        model["sha256"] = compact.digest({k:v for k,v in model.items() if k != "sha256"})
+    elif defect == "unsealed_model":
+        model["sha256"] = "0" * 64
+    else:
+        from src.engine.scalping.entry_split_order_plan import QUANTITY_LEG_FOUR_ARM_IDS
+        pair["owner_replay"]["operating_arms"][QUANTITY_LEG_FOUR_ARM_IDS[0]]["net_pnl_krw"] += 1
+    assert not compact.promotion_valid(compact.sealed(proof),incumbent=proof["incumbent_prompt_version"],selected=proof["candidate_prompt_version"],source_manifest_sha256="d"*64)
+
+
+def test_compact_operating_money_and_stress_do_not_use_legacy_research_arm():
+    row = operating_compact_row()
+    result = compact.evaluate([row], {row["evaluation_key"]:compact_result(row)})
+    assert result["delta_net_ev_pct"] == .5
+    assert result["portfolio_daily_net_delta_krw"] == {"2026-09-17":600.}
+    assert result["pairs"][0]["stress_delta_net_pct"] == .4
+    legacy = compact_row()
+    diagnostic = compact.evaluate([legacy], {legacy["evaluation_key"]:compact_result(legacy)})
+    assert diagnostic["portfolio_daily_net_delta_krw"] is None
+
+
+def test_compact_large_atomic_operating_generation_is_consumable(tmp_path):
+    path = tmp_path / "operating.json"
+    generation = {"frozen_inputs": "x" * (17 * 1024 * 1024)}
+    compact.write(path, generation)
+    assert compact.read(path) == generation

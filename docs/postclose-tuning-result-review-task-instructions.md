@@ -170,6 +170,8 @@ v4는 실제 incumbent control·관측 depth의 보수적 체결 모델·공통 
 
 `--finalize-compact`는 기존 calibration/optimizer/Main publisher/consumer와 Daily·EV·runtime approval·tower의 해당 section 및 적용일 checklist를 결속한다. `--publication-date`는 명시적인 successor 발행일이며 관측 source date를 바꾸지 않는다. 양수 independent holdout·동일 cohort·비용 후 EV와 공통 자금 일별 순익·tail/stress·미사용 holdout 증거 없이는 기존 정책을 carry한다. Runtime inference 비용 차이/원화 환산 결손도 승격 근거에서 제외한다. 초기 canary는 KRX regular/KRX route 한 cohort이며 다른 scope의 정책은 유지한다. PREOPEN 동결 이후 해당 날짜 generation은 덮어쓰지 않는다.
 
+Entry owner 재사용은 legacy 고정 기간 `arms`가 아니라 독립 운영 청산 `operating_arms`의 비용·budget·stress·terminal hash를 소비한다. 검증 모델 scope/구현 버전이 일치하고 actual model calibration/holdout의 완료 가용 시점이 compact 학습보다 앞서야 한다. 모델 미지원·버전 불일치·운영 청산 결손은 승격 근거에서 제외한다. 일별 순익의 한 포지션 예약은 최초 주문 관측부터 청산까지 적용하며, 정상 atomic 운영 JSON generation의 크기를 이유로 누락 입력으로 바꾸지 않는다.
+
 Family strict 명령 `src.engine.verify_threshold_cycle_postclose_chain --date SOURCE_DATE --compact-summary-only --require-summary-handoff`는 최종 parent/정책/summary/checklist generation을 검증한다. PASS는 이 family의 연결 closure이며 전체 native DONE·실제 PID·주문·경제성 개선의 증거가 아니다. native는 Daily 뒤 family finalize/strict, 기존 21:05 follower는 bounded compact batch→finalize→strict로 실행한다. Cron/retired selector를 복원하거나 전체 native를 재실행하지 않는다. [CP0–CP5 계획](proposals/compact-auxiliary-ai-paired-economic-tuning-and-consumer-closed-loop-improvement-plan-2026-09-18.md)을 따른다.
 
 ### 5.2 결손·결함과 달성 가능성

@@ -1014,6 +1014,7 @@ def _operating_entry_fixture():
     seed['legs'][0]['price']=10010
     seed['price_candidates']={}
     context=dict(order_leg_ttl_sec=[10]*len(seed['legs']),order_bundle_hard_ttl_sec=10,order_timeout_owner='explicit_fixture',schema=mod.ENTRY_OPERATING_SCHEMA,frozen_at=seed['observed_at'],
+        model_implementation_sha256=mod.entry_operating_model_identity(),
         policy_snapshot=observation['policy_snapshot'],initial_policy_state=observation['initial_policy_state'],
         exit_policy_version=observation['exit_policy_version'],budget_krw=120000.,cost_rate=.0023,
         cost_policy_version='trade_profit_net_realized_pnl:rate=0.0023',
@@ -1039,6 +1040,8 @@ def test_operating_entry_executes_existing_full_policy_and_cost_owner():
     assert result['status']=='completed_source_only',result
     assert result['net_pnl_krw']==calculate_net_realized_pnl(arm['modeled_entry_vwap'],9500,10,cost_rate=.0023)
     assert result['stress_net_pnl_krw']<=result['net_pnl_krw']
+    assert result['stress_net_return_pct'] == result['stress_net_pnl_krw'] / result['budget_krw'] * 100
+    assert result['modeled_entry_at'] == min(f['at'] for f in arm['modeled_fill_events'])
     assert result['capital_krw_minutes']>0 and result['reserve_krw_minutes']>0
     assert result['actual_fill_evidence'] is False and result['broker_order_forbidden'] is True
 
@@ -1068,3 +1071,27 @@ def test_operating_pending_entry_inventory_is_not_assumed_cancelled():
         result=mod.replay_operating_entry_arm(seed,candidate,depths)
         assert result['status']=='unsupported_scope' and reason in result['blocker']
         assert result['net_pnl_krw'] is None and result['closure_test']
+
+
+@pytest.mark.parametrize("field,value", [("symbol", "999999"), ("venue", "NXT"), ("session_bucket", "NXT_AFTERMARKET")])
+def test_operating_entry_rejects_native_frame_from_other_scope(field, value):
+    seed, arm, depths = _operating_entry_fixture()
+    for row in depths:
+        clock = datetime.fromisoformat(row["exchange_timestamp"]).timestamp()
+        row["ws_data"] = dict(curr=row["best_bid"],best_bid=row["best_bid"],best_ask=row["best_ask"],
+            best_bid_qty=row["best_bid_qty"],best_ask_qty=row["best_ask_qty"],last_ws_update_ts=clock,
+            last_realtime_type_ts={"0D":clock},quote_stale=False)
+    depths[-1][field] = value
+    result = mod.replay_operating_entry_arm(seed, arm, depths, executor=lambda *_: pytest.fail("foreign frame reached holding interpreter"))
+    assert result["status"] == "source_gap" and result["net_pnl_krw"] is None
+    assert result["blocker"] == "operating_native_frame_scope_mismatch"
+
+
+def test_operating_entry_rejects_frozen_model_version_mismatch():
+    seed, arm, depths = _operating_entry_fixture()
+    context = seed["operating_contract"]
+    context["model_implementation_sha256"] = "0" * 64
+    context["sha256"] = owner.digest({k: v for k, v in context.items() if k != "sha256"})
+    seed["seed_sha256"] = owner.digest({k: v for k, v in seed.items() if k != "seed_sha256"})
+    result = mod.replay_operating_entry_arm(seed, arm, depths, executor=lambda *_: pytest.fail("old model executed"))
+    assert result["status"] == "source_gap" and result["net_pnl_krw"] is None

@@ -27,7 +27,7 @@ AUTHORITY = dict(
     broker_order_forbidden=True,
 )
 CONTRACT = {
-    "schema": "compact_auxiliary_paired_promotion_v2",
+    "schema": "compact_auxiliary_paired_promotion_v3",
     "learning_episode_floor": 20,
     "holdout_episode_floor": 20,
     "holdout_source_day_floor": 2,
@@ -40,6 +40,8 @@ CONTRACT = {
     "stress_delta_must_be_positive": True,
     "runtime_inference_cost_delta_required": True,
     "validated_owner_operating_model_required": True,
+    "operating_arm_and_scope_required": True,
+    "model_holdout_precedes_prompt_learning": True,
 }
 
 
@@ -70,16 +72,11 @@ def valid(value):
 def read(path):
     try:
         actual = path if path.exists() else Path(str(path) + ".gz")
-        if actual.stat().st_size > 16 * 1024 * 1024:
-            return {}
-        if actual.suffix == ".gz":
-            with gzip.open(actual, "rt") as handle:
-                text = handle.read(16 * 1024 * 1024 + 1)
-            if len(text) > 16 * 1024 * 1024:
-                return {}
-        else:
-            text = actual.read_text()
-        value = json.loads(text)
+        # Producers publish atomic JSON generations; full frozen operating
+        # snapshots can legitimately exceed the old 16 MiB diagnostic limit.
+        opener = gzip.open if actual.suffix == ".gz" else open
+        with opener(actual, "rt") as handle:
+            value = json.load(handle)
         return value if isinstance(value, dict) else {}
     except (OSError, ValueError):
         return {}
@@ -131,6 +128,78 @@ def owner_replay_valid(replay, row):
         and seed.get("effective_venue") == row.get("effective_venue")
         and seed.get("session_bucket") == row.get("session_bucket")
     )
+
+
+def owner_operating_arm(replay, row):
+    """Use the independently closed holding outcome, never the research arm."""
+    from src.engine.scalping import entry_split_order_plan as split
+    from src.engine.scalping.strategy_owner_replay import (
+        ENTRY_OPERATING_SCHEMA, entry_operating_model_identity,
+    )
+    from src.engine.monitoring.research_closed_loop import digest as owner_digest
+    if not owner_replay_valid(replay, row):
+        return {}
+    seed = replay["seed"]
+    context = seed.get("operating_contract") or {}
+    arm = (replay.get("operating_arms") or {}).get(split.QUANTITY_LEG_FOUR_ARM_IDS[0]) or {}
+    if (
+        context.get("schema") != ENTRY_OPERATING_SCHEMA
+        or context.get("sha256") != owner_digest({k: v for k, v in context.items() if k != "sha256"})
+        or context.get("model_implementation_sha256") != entry_operating_model_identity()
+        or arm.get("schema") != ENTRY_OPERATING_SCHEMA
+        or arm.get("status") != "completed_source_only"
+        or arm.get("sha256") != split._canonical_sha256({k: v for k, v in arm.items() if k != "sha256"})
+        or arm.get("actual_fill_evidence") is not False
+        or any(arm.get(k) is not v for k, v in AUTHORITY.items())
+        or arm.get("requested_qty") != seed.get("total_qty")
+        or arm.get("modeled_filled_qty") != seed.get("total_qty")
+        or arm.get("fill_participation_rate") != 1
+        or arm.get("contract_sha256") != context.get("sha256")
+        or arm.get("exit_policy_sha256") != context.get("exit_policy_version")
+        or arm.get("cost_policy_version") != context.get("cost_policy_version")
+        or arm.get("cost_provenance") != "frozen_loaded_trade_profit_configuration_not_broker_settlement"
+        or arm.get("budget_krw") != context.get("budget_krw")
+        or not finite(arm.get("budget_krw")) or arm["budget_krw"] <= 0
+        or not split._valid_generation_id(arm.get("terminal_evidence_sha256"))
+        or any(not finite(arm.get(k)) for k in ("net_pnl_krw", "stress_net_pnl_krw", "net_return_pct", "stress_net_return_pct"))
+        or abs(arm["net_return_pct"] - arm["net_pnl_krw"] / arm["budget_krw"] * 100) > 1e-10
+        or abs(arm["stress_net_return_pct"] - arm["stress_net_pnl_krw"] / arm["budget_krw"] * 100) > 1e-10
+    ):
+        return {}
+    return arm
+
+
+def owner_model_scope_valid(model, pair):
+    from src.engine.scalping import entry_split_order_plan as split
+    from src.engine.scalping.strategy_owner_replay import ENTRY_MODEL_SELECTION
+    seed = pair["owner_replay"]["seed"]
+    scope = split._entry_operating_scope(seed)
+    for proof in model.get("validated_scopes") or []:
+        if not isinstance(proof, dict) or proof.get("scope_sha256") != scope:
+            continue
+        cal, held = proof.get("calibration_rows"), proof.get("holdout_rows")
+        if not isinstance(cal, list) or not isinstance(held, list):
+            continue
+        rows = cal + held
+        if (
+            proof.get("contract") == ENTRY_MODEL_SELECTION
+            and proof.get("validated") is True
+            and proof.get("sha256") == split._canonical_sha256({k: v for k, v in proof.items() if k != "sha256"})
+            and proof.get("actual_rows_sha256") == split._canonical_sha256(rows)
+            and proof.get("calibration_attempt_count") == len(proof.get("calibration_rows") or [])
+            and proof.get("holdout_attempt_count") == len(proof.get("holdout_rows") or [])
+            and len(rows) >= 20 and cal and held
+            and len({r.get("episode_id") for r in rows if isinstance(r, dict)}) == len(rows)
+            and isinstance(proof.get("available_after_date"), str)
+            and proof["available_after_date"] < pair["source_date"]
+            and all(isinstance(r, dict) and r.get("scope_sha256") == scope
+                    and isinstance(r.get("source_date"), str) and r["source_date"] < pair["source_date"]
+                    and isinstance(r.get("completion_date") or r["source_date"], str)
+                    and (r.get("completion_date") or r["source_date"]) <= proof["available_after_date"]
+                    and r.get("episode_id") != seed.get("entry_plan_sha256") for r in rows)
+        ):
+            return True
+    return False
 
 
 def prepare(data_root, day):
@@ -322,10 +391,8 @@ def evaluate(rows, results):
             reason = "candidate_response_missing_or_invalid"
         path = row.get("entry_quality_path") or {}
         owner_replay = row.get("owner_replay") or {}
-        owner_valid = owner_replay_valid(owner_replay, row)
-        from src.engine.scalping.entry_split_order_plan import QUANTITY_LEG_FOUR_ARM_IDS
-
-        arm = (owner_replay.get("arms") or {}).get(QUANTITY_LEG_FOUR_ARM_IDS[0]) or {}
+        arm = owner_operating_arm(owner_replay, row)
+        owner_valid = bool(arm)
         terminal = (
             path.get("gross_net_target_pct")
             if path.get("first_hit") == "net_target_first"
@@ -429,8 +496,6 @@ def evaluate(rows, results):
 
 def portfolio_metrics(pairs):
     """Reuse the owner's one-position reservation, independently for both arms."""
-    from src.engine.scalping.entry_split_order_plan import QUANTITY_LEG_FOUR_ARM_IDS
-
     empty = {
         "portfolio_daily_net_delta_krw": None,
         "net_profit_status": "not_available_without_owner_plan_and_portfolio_replay",
@@ -447,19 +512,10 @@ def portfolio_metrics(pairs):
     ):
         replay = pair.get("owner_replay") or {}
         seed = replay.get("seed") or {}
-        arm = (replay.get("arms") or {}).get(QUANTITY_LEG_FOUR_ARM_IDS[0]) or {}
+        arm = owner_operating_arm(replay, pair)
         if not seed or not finite(arm.get("net_pnl_krw")):
             return empty
-        # A producer-zeroed common reservation has lost the standalone outcome.
-        # Do not pretend it can be admitted after a changed earlier VETO.
-        if arm.get("modeled_outcome") == "modeled_no_exposure_common_reservation":
-            return empty
-        if arm.get("fill_participation_rate") == 0 and arm.get("net_pnl_krw") == 0:
-            days[pair["source_date"]]
-            if finite(pair.get("runtime_inference_cost_delta_krw")):
-                days[pair["source_date"]][1] -= pair["runtime_inference_cost_delta_krw"]
-            continue
-        start, end = arm.get("modeled_entry_at"), arm.get("modeled_exit_at")
+        start, end = seed.get("observed_at"), arm.get("modeled_exit_at")
         if not start or not end or end <= start:
             return empty
         for i, verdict in enumerate(
@@ -542,11 +598,9 @@ def promotion_valid(report, *, incumbent, selected, source_manifest_sha256):
                 p.get("owner_replay") or {}, p
             ):
                 return False
-            from src.engine.scalping.entry_split_order_plan import (
-                QUANTITY_LEG_FOUR_ARM_IDS,
-            )
-
-            arm = p["owner_replay"]["arms"][QUANTITY_LEG_FOUR_ARM_IDS[0]]
+            arm = owner_operating_arm(p["owner_replay"], p)
+            if not arm or not owner_model_scope_valid(model, p):
+                return False
             old, new = p.get("incumbent_verdict"), p.get("candidate_verdict")
             if not finite(p.get("runtime_inference_cost_delta_krw")):
                 return False

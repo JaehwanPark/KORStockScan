@@ -1729,6 +1729,7 @@ def replay_operating_entry_arm(seed, arm, depth_rows, *, executor=None, trade_ro
         if (not isinstance(context, dict) or context.get('schema') != ENTRY_OPERATING_SCHEMA
             or owner.digest({k: v for k, v in context.items() if k != 'sha256'}) != context.get('sha256')
             or context.get('exit_policy_version') != adapter.snapshot_version(context['policy_snapshot'])
+            or context.get('model_implementation_sha256') != entry_operating_model_identity()
             or any(context.get(k) is not v for k, v in AUTHORITY.items())
             or not _finite(context.get('cost_rate')) or not 0 <= context['cost_rate'] < 1
             or not _finite(context.get('stress_cost_rate_increment')) or context['stress_cost_rate_increment'] < 0
@@ -1799,6 +1800,9 @@ def replay_operating_entry_arm(seed, arm, depth_rows, *, executor=None, trade_ro
             # Native validation precedes this helper; exact policy/service values
             # remain bound to the recorded frame, never looked up from today's env.
             from src.engine.monitoring.machine_microstructure_attribution import _validate_depth_row
+            if (row.get('symbol') != seed['stock_code'] or row.get('venue') != seed['effective_venue']
+                or row.get('session_bucket') != seed['session_bucket']):
+                raise ValueError('operating_native_frame_scope_mismatch')
             valid, parsed, _, _, bid, ask = _validate_depth_row(row)
             if not valid or parsed is None or row.get('path_consumer_eligible') is False:
                 raise ValueError('operating_native_frame_invalid')
@@ -1863,6 +1867,8 @@ def replay_operating_entry_arm(seed, arm, depth_rows, *, executor=None, trade_ro
         reserved+=max(0.,outstanding)*max(0.,ttl-reserve_clock)/60
         result.update(status='completed_source_only', net_pnl_krw=net, stress_net_pnl_krw=stress,
             net_return_pct=net / context['budget_krw'] * 100,
+            stress_net_return_pct=stress / context['budget_krw'] * 100,
+            modeled_entry_at=datetime.fromtimestamp(first_at, KST).isoformat(),
             capital_krw_minutes=holding, reserve_krw_minutes=reserved,
             modeled_entry_notional_krw=amount, modeled_exit_at=outcome['exit_time'],
             terminal_evidence_sha256=exit_result['evidence_digest'], modeled_outcome='operating_terminal')
