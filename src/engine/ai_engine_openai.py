@@ -11254,7 +11254,8 @@ class GPTSniperEngine:
                         "ws": {key: value for key, value in ws_data.items()
                             if key not in {"quote_age_ms", "tick_latest_age_ms",
                                 "market_data_effective_quote_age_ms",
-                                "quote_consistency_ws_age_ms", "quote_consistency_rest_age_ms"}}}}),
+                                "quote_consistency_ws_age_ms", "quote_consistency_rest_age_ms",
+                                "market_data_health", "market_session_remaining"}}}}),
                 "machine_bundle_sha256": bundle["bundle_sha256"],
                 "machine_policy_version": assessment["policy_version"],
                 "machine_action": assessment["action"], "structure_phase_family": family,

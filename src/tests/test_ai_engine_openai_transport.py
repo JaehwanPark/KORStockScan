@@ -8445,7 +8445,9 @@ def test_shared_rebound_producer_uses_real_entry_core_and_never_provider(monkeyp
         assert later["source_signal_id"] == result["source_signal_id"]
 
         aged = engine.evaluate_main_rebound_entry(stock_code="005930",
-            ws_data={"quote_age_ms": 100, "market_data_effective_quote_age_ms": 100},
+            ws_data={"quote_age_ms": 100, "market_data_effective_quote_age_ms": 100,
+                "market_data_health": {"routes": {"KRX": {"quote_receive_age_ms": 100}}},
+                "market_session_remaining": 100},
             recent_ticks=[], recent_candles=[], candle_meta={}, now_ts=2001)
         assert aged["source_signal_id"] == result["source_signal_id"]
         new_bar = engine.evaluate_main_rebound_entry(stock_code="005930", ws_data={},
