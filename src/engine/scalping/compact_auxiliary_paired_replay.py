@@ -681,6 +681,7 @@ def run(
         if (
             not valid(projection)
             or projection.get("dependency_signatures") != signatures
+            or projection.get("projection_contract_sha256") != digest(CONTRACT)
         ):
             if valid(projection):
                 write(
@@ -690,7 +691,7 @@ def run(
                     projection,
                 )
             projection = sealed(
-                {**prepare(root, day), "dependency_signatures": signatures}
+                {**prepare(root, day), "dependency_signatures": signatures, "projection_contract_sha256": digest(CONTRACT)}
             )
             for dependency in dependency_paths:
                 actual = dependency if dependency.exists() else Path(str(dependency) + ".gz")
@@ -707,17 +708,11 @@ def run(
         previous = read(path)
         if valid(previous) and previous.get("candidate_prompt_version") != candidate:
             raise ValueError("frozen_candidate_selection_mismatch")
-        if (
-            valid(previous)
-            and previous.get("source_projection_sha256")
-            == projection["artifact_content_sha256"]
-            and previous.get("status")
-            in {"valid_empty", "comparison_complete", "incumbent_preserved"}
-            or valid(previous)
-            and previous.get("source_projection_sha256")
-            == projection["artifact_content_sha256"]
-            and previous.get("metrics", {}).get("economic_eligible_count") == 0
-        ):
+        if (valid(previous)
+                and previous.get("promotion_contract_sha256") == digest(CONTRACT)
+                and previous.get("source_projection_sha256") == projection["artifact_content_sha256"]
+                and (previous.get("status") in {"valid_empty", "comparison_complete", "incumbent_preserved"}
+                     or previous.get("metrics", {}).get("economic_eligible_count") == 0)):
             return previous
         checkpoint = read(path.with_suffix(".checkpoint.json"))
         if (
@@ -994,6 +989,14 @@ def run(
 
 
 def finalize(*, data_root, day, publication_day):
+    path = report_path(data_root, day)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.with_suffix(".lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return _finalize(data_root=data_root, day=day, publication_day=publication_day)
+
+
+def _finalize(*, data_root, day, publication_day):
     """Reuse calibration, optimizer, publisher and final consumer; no provider."""
     from src.engine.scalping import ai_action_outcome_calibration as calibration
     from src.engine.scalping.micro_reversion import (
@@ -1024,6 +1027,7 @@ def finalize(*, data_root, day, publication_day):
         target_date=publication_day,
         compact_auxiliary_evaluation=optimizer.compact_evaluation_plan(report),
         compact_scope_status="terminal_evaluation_policy_published",
+        compact_source_calibration_artifact_content_sha256=report["artifact_content_sha256"],
         **AUTHORITY,
     )
     write(optimizer_path, sealed(plan))
@@ -1120,6 +1124,7 @@ def refresh_summaries(root, day, view, consumer_path):
     """Update only one section; preserve canonical native terminal/other families."""
     sources = {}
     for path in summary_paths(root, day):
+        before = path.stat() if path.exists() else None
         value = read(path)
         if not value:
             if path.name.startswith("compact_auxiliary_control_tower_"):
@@ -1130,7 +1135,6 @@ def refresh_summaries(root, day, view, consumer_path):
                 }
             else:
                 raise ValueError("compact_last_summary_missing:" + str(path))
-        before = path.stat() if path.exists() else None
         value["compact_auxiliary_economic_tuning"] = view
         if before and (before.st_ino, before.st_size, before.st_mtime_ns) != (
             path.stat().st_ino,

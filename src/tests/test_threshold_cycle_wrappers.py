@@ -2469,6 +2469,15 @@ def test_entry_setup_paired_replay_has_separate_late_offline_cron():
     assert "tmux" not in runner
 
 
+def test_compact_native_execution_waits_for_label_and_owner_sources():
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
+    execution = script.index("--compact-only --execute-compact-candidate")
+    assert script.index("--ensure-economic-reference-only") < execution
+    assert script.index("ai_decision_quality_daily_materialization") < execution
+    assert script.index("src.engine.scalping.entry_split_order_plan") < execution
+    assert execution < script.index('    --require-policy-publication', execution)
+
+
 def test_entry_setup_runner_strict_handoff_failure_is_not_success(
     tmp_path: Path,
 ):

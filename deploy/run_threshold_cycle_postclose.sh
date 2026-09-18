@@ -1483,8 +1483,6 @@ PY
 # Collect the existing same-day full-cost source before long raw/research work.
 # Provider replay gates cannot suppress this diagnostic source prerequisite.
 if [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "true" ] || [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "1" ]; then
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.entry_setup_paired_replay_batch \
-    --date "$TARGET_DATE" --compact-only --execute-compact-candidate --write
   wait_for_postclose_resources "ai_decision_action_outcome_calibration"
   if run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.ai_action_outcome_calibration \
     --target-date "$TARGET_DATE" --write --ensure-economic-reference-only; then
@@ -2096,6 +2094,9 @@ if [ "$RUN_LIMIT_DOWN_WATCH_REPORT" = "true" ] || [ "$RUN_LIMIT_DOWN_WATCH_REPOR
 fi
 if [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "true" ] || [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "1" ]; then
   wait_for_postclose_resources "ai_decision_action_outcome_calibration"
+  wait_for_postclose_resources "compact_auxiliary_paired_replay"
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.entry_setup_paired_replay_batch \
+    --date "$TARGET_DATE" --compact-only --execute-compact-candidate --write
   run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.ai_action_outcome_calibration \
     --target-date "$TARGET_DATE" \
     --write \

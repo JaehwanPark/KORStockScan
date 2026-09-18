@@ -1697,7 +1697,7 @@ def verify_compact_handoff(data_root: Path, source_day: str) -> dict:
         calibration = compact.read(expected_parents["calibration_path"])
         optimizer = compact.read(expected_parents["optimizer_path"])
         bound = calibration["hierarchical_entry_quality"]["machine_decision_case_table"]["compact_auxiliary_screen_outcomes"]["paired_economic_evaluation"]
-        if paired != bound or paired.get("target_date") != source_day or calibration.get("target_date") != publication_day or optimizer.get("target_date") != publication_day:
+        if paired != bound or paired.get("target_date") != source_day or calibration.get("target_date") != publication_day or optimizer.get("target_date") != publication_day or optimizer.get("compact_source_calibration_artifact_content_sha256") != calibration.get("artifact_content_sha256"):
             issues.append("compact_calibration_pair_binding_invalid")
         if handoff.get("target_date") != publication_day or any(view.get(k) is not v for k,v in compact.AUTHORITY.items()):
             issues.append("compact_consumer_authority_date_invalid")
