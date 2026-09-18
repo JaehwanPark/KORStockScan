@@ -27,6 +27,9 @@
   - 추가 Closure: [전용 작업 폐기·통합 배포 review](../audit-reports/2026-09-18-microstructure-postclose-consolidation-review.md), `tmp/microstructure-consolidation-20260918/validation.json`, `deployment.json`, `result-refresh.json`. 현재 selected base의 미변경 live guard를 보존한 clean release로 관련 source만 배포한다. 전용 raw 재실행·현재 worker 재시작·정책/env/lock/provider 변경 없이 기존 cached 9/16·9/17 진단을 dated successor에 인계하고 9/17 일일 report의 해당 section만 갱신한다. scope strict handoff와 전체 chain DONE/정책 선정/실제 EV는 별개이며 자연/경제성 Acceptance는 OPEN이다.
 
 
+  - 최종 재리뷰 Closure: [진단 권한·지표 계약 보완 및 다음 단위 분석](../audit-reports/2026-09-18-microstructure-final-review-and-market-panic-breadth-analysis.md), `tmp/microstructure-final-review-20260918/validation.json`, `deployment.json`. 부모 schema/진단 권한과 기존 modern 보고서의 적용 권한 오염을 재검증하고 지표 window/sample/source-quality 계약을 명시했다. 관련11 PASS와 clean release source 선택을 확인한다. 자연 소비/경제성은 이 stable ID의 기존 Acceptance를 유지하며 OPEN이다. 다음 실제 작업 `market_panic_breadth_collector`는 유지 가치가 있는 공통 위험 수집기이나 별도 hysteresis 튜닝의 source gap/holdout 결손은 분석 보고서를 따른다.
+
+
 - [x] `[EntryRecheckDroughtRetirement0918] 전용 score/WAIT 복구 경로·장후/PREOPEN·산출물 폐기` (`Due: 2026-09-18`, `Slot: INTRADAY`, `TimeWindow: 10:50~12:00`, `Track: RuntimeStability`)
   - Source: [폐기 review와 검증 증거](../audit-reports/2026-09-18-entry-recheck-drought-retirement-review.md), `tmp/entry-recheck-retirement-20260918/deleted-products.json`, `src/engine/lifecycle/retirement.py`.
   - 사용자 지시: 관련 런타임·장후작업·산출물 삭제 후 반복 리뷰·보완·commit/push·배포 승인. 이전 전용 controller 파일선택 수리/전일 보고서 갱신 목표를 폐기로 대체한다.

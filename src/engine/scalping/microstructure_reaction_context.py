@@ -309,6 +309,12 @@ def refresh_machine_evaluation_link(source_path: Path, *, report_root: Path) -> 
             "summary": {}, "warnings": [], "runtime_effect": False,
             "allowed_runtime_apply": False,
         }
+    if report.get("runtime_effect") is not False or report.get("allowed_runtime_apply") is not False:
+        raise ValueError("existing_microstructure_diagnostic_authority_invalid")
+    report["metric_role"] = "machine_auxiliary_source_outcome_diagnostic"
+    report["window_policy"] = "existing_case_labeler_clean_baseline_through_exact_target_date"
+    report["sample_floor"] = {"diagnostic": "source_valid_existing_cases", "promotion": "existing_owner_gates_only"}
+    report["source_quality_gate"] = ["verified_capture_identity", "exact_date_parent_payload_and_hash", "full_cost_and_existing_path_cadence"]
     report["evaluation_mode"] = "machine_primary_auxiliary_only"
     report["decision_authority"] = "postclose_diagnostic_only"
     report["forbidden_uses"] = FORBIDDEN_USES
@@ -346,7 +352,7 @@ def microstructure_summary_contract(summary: dict) -> dict:
             valid = digest == modern.get("source_report_sha256") and (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) == (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
             expected = ((parent.get("hierarchical_entry_quality") or {}).get("machine_decision_case_table") or {}).get("microstructure_evaluation")
             observed = {k: v for k, v in modern.items() if k not in {"source_report_path", "source_report_sha256", "source_target_date"}}
-            valid = valid and parent.get("target_date") == modern.get("source_target_date") and path.name == f"ai_decision_action_outcome_calibration_{modern.get('source_target_date')}.json" and expected == observed
+            valid = valid and parent.get("target_date") == modern.get("source_target_date") and path.name == f"ai_decision_action_outcome_calibration_{modern.get('source_target_date')}.json" and expected == observed and parent.get("schema") == "ai_decision_action_outcome_calibration_v2" and parent.get("runtime_effect") is False and parent.get("allowed_runtime_apply") is False
         except (OSError, ValueError, TypeError, AttributeError):
             valid = False
         if not valid:
