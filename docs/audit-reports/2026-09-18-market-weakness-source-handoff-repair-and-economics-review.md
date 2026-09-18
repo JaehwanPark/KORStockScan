@@ -61,3 +61,9 @@ Model 기준 현행 CF EV−0.41349624%와 challenger calibration ΔEV0.0%p는 a
 | 전체 final-refresh의 native economic source/expansion/threshold EV 선행 결손 | 해당 별도 현행 owner가 해결; 이번 단위 성공으로 전역 DONE 처리하지 않음 | 전역 strict handoff/controller finalization은 별도 원천·날짜 계약 모두 충족 |
 
 Executable acceptance: [당일 checklist](../checklists/2026-09-18-stage2-todo-checklist.md)의 `MarketWeaknessSourceHandoffNaturalEconomics0918`. 코드 closure/배포와 자연 표본/후보/실제 성과 closure를 분리한다.
+
+## 자연 소비 재리뷰 보완
+
+13:22:01 자연 collector에서 `exact_date_applied_policy`, source_date9/17·target9/18·applied를 확인했다. Notifier는 기존 fallback과 source 문자열이 다르다는 이유로 `intraday_hysteresis_policy_mismatch`를 반환했다. Native source 복구에 실제 consumer까지 이어지는 추가 결함이다. 기존 notifier에서 fallback→검증된 dated carry의 policy hash·횟수·최소 간격이 모두 동일한 경우만 출처 인계를 허용한다. 새 threshold/promotion·역방향 fallback·hash 불일치는 기존 차단을 유지한다. 기존 latch/streak를 다시 만들지 않고 원래 자연 관측으로 계속 진행한다.
+
+Pending weak streak1→정상 두 번째 관측의 발동2, active latch→첫 recovery 후 release_pending/active 유지, 동일 횟수라도 carry가 아닌 promotion의 거부와 기존 threshold 변경 거부를 검증했다. Notifier/guard/dated publisher 계약66 PASS(1.85초), compile/diff/parser 및 병합 후 wrapper 계약을 확인한다. Source/선택 commit과 자연 최종 observer health는 `deployment-r2.json`, `natural-and-version-evaluation.json`을 따른다. Raw 재계산·수동 notifier 상태 변경·Main 재시작은 없다.

@@ -625,7 +625,20 @@ def _notify_market_weakness_from_report(
             and previous_policy_key[2:] in {(0, 0, 0), (2, 3, 60)}
             and current_policy_key[2:] == (2, 3, 60)
         )
-        if not legacy_baseline_state and previous_policy_key != current_policy_key:
+        # Restore dated source lineage without changing the effective policy
+        # or resetting a live latch. All threshold changes remain forbidden.
+        same_threshold_carry_handoff = bool(
+            previous_policy_key[0] == "bounded_baseline_fallback"
+            and current_policy_key[0] == "exact_date_applied_policy"
+            and previous_policy_key[1:] == current_policy_key[1:]
+            and current_policy.get("review_status")
+            == "current_policy_carry_forward_no_approved_candidate"
+        )
+        if (
+            not legacy_baseline_state
+            and not same_threshold_carry_handoff
+            and previous_policy_key != current_policy_key
+        ):
             return "intraday_hysteresis_policy_mismatch"
     now = time.time() if now_ts is None else now_ts
     if observation_id and observation_id == str(

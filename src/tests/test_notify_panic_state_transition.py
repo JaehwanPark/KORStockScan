@@ -1685,3 +1685,47 @@ def test_missing_config_does_not_send(tmp_path, monkeypatch):
     )
 
     assert status == "missing_config"
+
+
+@pytest.mark.parametrize("prior_count", [1, 2])
+@pytest.mark.parametrize("carry_forward", [True, False])
+def test_identical_carry_source_handoff_preserves_live_latch(tmp_path, prior_count, carry_forward):
+    report_path, state_path = tmp_path / "report.json", tmp_path / "state.json"
+    baseline = {
+        "schema": SCHEMA, "target_date": "2026-08-28", "source_date": None,
+        "source": "bounded_baseline_fallback", "status": "source_missing",
+        "policy_path": "/tmp/policy.json", "policy_hash": threshold_hash(activation=2, release=3),
+        "review_status": "not_applicable_baseline", "activation_unique_observations": 2,
+        "release_unique_observations": 3, "minimum_observation_spacing_sec": 60,
+        "runtime_effect": False, "axis": "market_weakness_hysteresis_consecutive_observation_counts",
+    }
+    for sequence in range(1, prior_count + 1):
+        report = _weakness_report("SINGLE_MARKET_WEAKNESS", sequence)
+        report["market_weakness_observation"]["hysteresis_policy"] = baseline
+        _refresh_weakness_identity(report)
+        report_path.write_text(json.dumps(report))
+        mod.notify_from_report(report_path, kind="market_weakness", state_file=state_path, send_enabled=False)
+    before = json.loads(state_path.read_text())["market_weakness"]
+    assert before["market_states"]["KOSPI"]["weak_streak"] == prior_count
+    report = _weakness_report("SINGLE_MARKET_WEAKNESS" if prior_count == 1 else "RECOVERY_EVIDENCE", prior_count + 1)
+    carry = {**baseline, "source_date": "2026-08-27", "source": "exact_date_applied_policy",
+             "status": "applied", "runtime_effect": True,
+             "review_status": "current_policy_carry_forward_no_approved_candidate" if carry_forward else "passed_out_of_sample_review"}
+    report["market_weakness_observation"]["hysteresis_policy"] = carry
+    _refresh_weakness_identity(report)
+    report_path.write_text(json.dumps(report))
+    result = mod.notify_from_report(report_path, kind="market_weakness", state_file=state_path, send_enabled=False)
+    after = json.loads(state_path.read_text())
+    if not carry_forward:
+        assert result == "intraday_hysteresis_policy_mismatch"
+        assert after["market_weakness"] == before
+        assert after["market_weakness_observer_health"]["ready"] is False
+        return
+    assert result == "state_updated_notify_disabled"
+    current = after["market_weakness"]
+    assert current["phase"] == ("active" if prior_count == 1 else "release_pending")
+    assert current["market_states"]["KOSPI"]["active"] is True
+    assert current["market_states"]["KOSPI"]["weak_streak"] == (2 if prior_count == 1 else 0)
+    assert current["market_states"]["KOSPI"]["recovery_streak"] == (1 if prior_count == 2 else 0)
+    assert current["hysteresis_policy"] == carry
+    assert after["market_weakness_observer_health"]["ready"] is True

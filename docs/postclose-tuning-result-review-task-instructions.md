@@ -138,6 +138,8 @@ bash deploy/run_runtime_release.sh finalize "$TARGET_DATE" --print-plan
 
 ### 5.1.2 Market weakness 원천·날짜 인계
 
+Notifier의 장중 threshold 변경 차단은 유지한다. 다만 fallback→검증된 dated carry에서 policy hash·발동/해제 횟수·최소 간격이 모두 동일한 경우는 출처 복구로 인계하고 기존 latch/streak를 보존한다. Candidate promotion·역방향 fallback·값/hash 변경에는 이 예외를 쓰지 않는다.
+
 `machine_microstructure_attribution`의 dated 원천→기존 hysteresis tuner→다음 정확 KRX 날짜의 immutable source snapshot/정책→collector/notifier 소비를 확인한다. 승인 후보가 없는2/3 carry와 baseline fallback은 hash가 같아도 source_date/source/status로 구분한다. Source-only scanner/research-watch/auto-discovery의 calibration admission은 live active owner 등록이 아니다. 기존 active execution owner의 모든 route는 보존하고 prospective budget4(상한8)은 독립 적용하되 전체200symbol/400item cap과 legacy v3 shared-budget 소비 계약을 유지한다. Integrated aftermarket는 명시된 `krx_nxt_integrated`/`KRX_NXT` 계약이 있을 때 SOR 관측 item으로 결속하며 실제 체결 venue를 추정하지 않는다.
 
 Dated collection manifest는 Main의 기존 publisher→WS0B/0D callback에서 자연 소비해야 하며 파일 생성/시장 관측 health를 continuous depth/H30 확보로 대신하지 않는다. Main/PREOPEN block은 기존 owner가 strict 계약으로 해소하고 수동 env 우회·새 collector/cron·표본용 주문은 금지한다. Prospective signal의 planned quantity를 후행 fill에서 추정하지 않는다. 기존 후보 grid/floor/holdout/비용/guard를 유지한다. 실제 적용 버전은 observation ID와 immutable policy/source identity→owner decision/lifecycle→COMPLETED+valid cost/profit로 결속하며 model ΔEV와 실제 EV/순익을 분리한다. Missing은 null이고 source gap은 no-edge가 아니다.
