@@ -38,7 +38,7 @@
   - 후속 사용자 지시 Closure: 장후 panic 재실행·전용flag/DONE·JSON/MD대기·strict 필수artifact를 제거하고 daily는 장중결과시각/결손/null경제성을 보존한optional진단으로 소비한다. 장중생산자/cron/observer·별도hysteresis튜닝·breadth는 유지한다. 이전진단완료는 이력이며현재장후owner가아니다. 최신검증/배포는 owning review 및 `tmp/postclose-panic-removal-20260918/` receipt.
 
   - 추가 재리뷰/삭제 Closure: 제거code SHA동등성으로기존44PASS/작업본3PASS검증재사용. 사용자승인으로과거panic standalone원본/사본1,958개·논리13,004,898bytes삭제·접근/사용/직전SHA/부재검증완료. 오늘장중2개·state/lock/동결policy보존. 기존삭제dated결과갱신의현재소비는 `tmp/panic-history-scale-analysis-20260918/result-refresh.json`이며원9/17생성물링크는삭제manifest참조.
-  - 최종 re-review Closure: 전체617 PASS·마지막 producer/decoder source 참조 수리74 PASS 및 compile/bash/diff/parser. Production의 old report/campaign 조회를 제거하고 exact PREOPEN 기대값만 사용한다. source/배포는 `deployment-final.json`, 실제 삭제는 `deleted-products.json`, 일자/비용/분모/consumer SHA/9/21 준비는 `result-refresh.json`을 따른다. positive executable CF/독립 holdout/PREOPEN/PID/실경제성은 기존 Acceptance로 OPEN이다.
+  - 최종 re-review Closure: 전체617 PASS·마지막 producer/decoder source 참조 수리74 PASS·bounded native export 보완75 PASS 및 compile/bash/diff/parser. Production의 old report/campaign 조회를 제거하고 exact PREOPEN 기대값만 사용한다. source/배포는 `deployment-final.json`, 실제 삭제는 `deleted-products.json`, 일자/비용/분모/consumer SHA/9/21 준비는 `result-refresh.json`을 따른다. positive executable CF/독립 holdout/PREOPEN/PID/실경제성은 기존 Acceptance로 OPEN이다.
 
 
 - [ ] `[MarketWeaknessSourceHandoffNaturalEconomics0918] Market weakness 원천·날짜 인계와 자연 표본·실제 버전 경제성 검증` (`Due: 2026-09-18`, `Slot: POSTCLOSE`, `TimeWindow: 20:05~21:55`, `Track: RuntimeStability`)

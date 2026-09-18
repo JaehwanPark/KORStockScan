@@ -557,3 +557,36 @@ def test_production_native_decoder_has_no_dependency_on_retired_reports(monkeypa
     assert section["lineage"]["valid_observation_count"] == 1
     assert section["lineage"]["invalid_runtime_policy_provenance_count"] == 0
     assert section["status"] == "source_gap"
+
+
+
+def test_final_native_resource_export_is_bounded_but_preserves_exact_receipts(monkeypatch):
+    tuning = integrated_fixture(monkeypatch)
+    target = date(2026, 9, 17)
+    _, lineage = tuning.collect_lineage(target, events_by_date={})
+    rows = pair_rows(day=target)
+    lineage["_resource_pair_rows"] = rows
+    lineage["resource_capture_diagnostics"] = {target.isoformat(): {"raw_row_count": 58_532}}
+    monkeypatch.setattr(tuning, "collect_lineage", lambda *args, **kwargs: ([], deepcopy(lineage)))
+    def event(generation, code="100000"):
+        return {"stage": "scalping_scanner_candidate_pruned", "emitted_date": target.isoformat(),
+                "stock_code": code, "fields": {"scanner_scan_generation_id": generation}}
+    proof = event(rows[0]["scan_generation_id"])
+    receipt = {"stage": "position_rebased_after_fill", "emitted_date": target.isoformat(), "fields": {}}
+    events = [event(f"unused-{index}") for index in range(200)] + [proof, receipt]
+    section = resource.integrated_selection_evaluation(target, {target.isoformat(): events})
+    assert section["native_events"] == [proof, receipt]
+    assert section["lineage"]["resource_capture_diagnostics"][target.isoformat()]["raw_row_count"] == 58_532
+    assert section["snapshot_proxy"]["pairs"] == book(rows)["pairs"]
+
+
+
+@pytest.mark.parametrize("field", ["baseline_budget_ev_pct", "candidate_net_pnl_krw", "tail", "model_error"])
+def test_source_gap_policy_rejects_self_hashed_zero_or_fabricated_primary_metrics(monkeypatch, tmp_path, field):
+    integrated_fixture(monkeypatch)
+    section = resource.integrated_selection_evaluation(date(2026, 9, 17), {})
+    section["primary_economics"][field] = 0
+    section["artifact_sha256"] = policy.canonical_sha256({k:v for k,v in section.items() if k != "artifact_sha256"})
+    report = {"target_date": "2026-09-17", "scanner_unique_funnel": {"economic_cohorts": {"lookup_attention_selection": section}}}
+    with pytest.raises(ValueError, match="integrated_disposition_invalid"):
+        policy.publish_integrated_policy(report, policy_dir=tmp_path)
