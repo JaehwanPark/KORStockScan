@@ -1861,10 +1861,7 @@ def native_actual_projection(contract, native_state, points):
                 else q * l["fill_price"] * (end - fill).total_seconds() / 60
             )
             reserve += q * l["entry_price"] * (fill - ack).total_seconds() / 60
-            submit_ms.append(
-                int((ack - start).total_seconds() * 1000)
-                - 1000 * int(native_state.get("confirmed_delay_sec", 0))
-            )
+            submit_ms.append(native_submit_model_latency(contract, native_state, ack))
             target_ms.append(int((target - fill).total_seconds() * 1000))
             ends.append(end)
         gaps = [
@@ -2912,9 +2909,7 @@ def widget_actual_projection(contract, native_state, points):
             )
             for o in cancels
         ]
-        latency = int((ack - start).total_seconds() * 1000) - 1000 * int(
-            native_state.get("confirmed_delay_sec", 0)
-        )
+        latency = native_submit_model_latency(contract, native_state, ack)
         if latency < 0 or any(v < 0 for v in cancel_ms):
             return None
         return _seal(
@@ -4213,3 +4208,20 @@ def restore_native_actual_history(cases, history, *, target_date):
                 )
         restored.append((source, decisions))
     return restored
+
+
+def native_submit_model_latency(contract, native, ack):
+    """Owner submit delay starts AFTER its confirmation/common guard barrier."""
+    from datetime import datetime, timedelta
+
+    start = datetime.fromisoformat(contract["decision_at"])
+    basis = start + timedelta(seconds=int(native.get("confirmed_delay_sec", 0)))
+    if contract.get("requires_native_guard_admission"):
+        admission = native.get("entry_admission") or {}
+        if admission.get("permitted") is not True:
+            raise ValueError("native_submit_admission_model_clock_missing")
+        admitted = datetime.fromisoformat(admission["at"])
+        if admitted.utcoffset() is None or not start <= admitted <= ack:
+            raise ValueError("native_submit_admission_model_clock_invalid")
+        basis = max(basis, admitted)
+    return int((ack - basis).total_seconds() * 1000)
