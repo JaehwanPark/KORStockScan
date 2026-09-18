@@ -144,7 +144,7 @@ Notifier의 장중 threshold 변경 차단은 유지한다. 다만 fallback→�
 
 Dated collection manifest는 Main의 기존 publisher→WS0B/0D callback에서 자연 소비해야 하며 파일 생성/시장 관측 health를 continuous depth/H30 확보로 대신하지 않는다. Main/PREOPEN block은 기존 owner가 strict 계약으로 해소하고 수동 env 우회·새 collector/cron·표본용 주문은 금지한다. Prospective signal의 planned quantity를 후행 fill에서 추정하지 않는다. 기존 후보 grid/floor/holdout/비용/guard를 유지한다. 실제 적용 버전은 observation ID와 immutable policy/source identity→owner decision/lifecycle→COMPLETED+valid cost/profit로 결속하며 model ΔEV와 실제 EV/순익을 분리한다. Missing은 null이고 source gap은 no-edge가 아니다.
 
-장후 `panic_sell_defense_report` 재실행은 제거됐다. 장후 wrapper의 호출·대기·전용 flag·DONE 필드 및 strict verifier의 panic 필수 산출물 요구가 없다. 일일 보고서는 동일 날짜에 남아 있는 장중 panic 결과를 선택적 진단으로 읽고 generated_at/as_of·analysis_status·원천 결손을 보존한다. 부재는 unavailable이며 정상 무거래·경제성0·장후 생성 성공으로 대체하지 않는다. 별도 장후 breadth 수집과 `machine_microstructure_attribution → market_weakness_entry_response → market_weakness_hysteresis_tuning` 경로는 유지한다.
+장후 `panic_sell_defense_report` 재실행은 제거됐다. 사용자 승인으로 과거 standalone panic 산출물·사본은 삭제됐으며 과거 생성물 부재를 복구/재생성 작업으로 열지 않는다. 장중 current-session 결과와 runtime state/정책은 보존한다. 장후 wrapper의 호출·대기·전용 flag·DONE 필드 및 strict verifier의 panic 필수 산출물 요구가 없다. 일일 보고서는 동일 날짜에 남아 있는 장중 panic 결과를 선택적 진단으로 읽고 generated_at/as_of·analysis_status·원천 결손을 보존한다. 부재는 unavailable이며 정상 무거래·경제성0·장후 생성 성공으로 대체하지 않는다. 별도 장후 breadth 수집과 `machine_microstructure_attribution → market_weakness_entry_response → market_weakness_hysteresis_tuning` 경로는 유지한다.
 
 장중 panic wrapper의 default scheduled 호출은 기존 strict selected-release 계약으로 reviewed source를 소비한다. Invalid selection은 작업본 fallback 없이 실패하며 명시된 PROJECT_DIR operator/test 경로와 cron은 보존한다.
 

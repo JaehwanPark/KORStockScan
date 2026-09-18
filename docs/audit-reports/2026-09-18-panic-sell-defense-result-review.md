@@ -10,7 +10,7 @@ Owner: `PanicSellDefenseSourceAcceptance0918`. 대상 장후 source date는9/17�
 
 ## 9/17 실행 결과와 의미
 
-근거: `logs/threshold_cycle_postclose_cron.log`의 대상일 terminal/PERF와 [원 panic JSON](../../data/report/panic_sell_defense/panic_sell_defense_2026-09-17.json). exit0, wall40.411836초, peak child RSS259,472KiB; as_of23:49:17, generated23:49:58, latest pipeline event19:50:17이다. PERF는 해당 실행 receipt이며 반복 benchmark가 아니다.
+근거: `logs/threshold_cycle_postclose_cron.log`의 대상일 terminal/PERF와 `../../data/report/panic_sell_defense/panic_sell_defense_2026-09-17.json`(사용자 승인으로 삭제; cleanup manifest 참조). exit0, wall40.411836초, peak child RSS259,472KiB; as_of23:49:17, generated23:49:58, latest pipeline event19:50:17이다. PERF는 해당 실행 receipt이며 반복 benchmark가 아니다.
 
 | 항목 | 원 보고서의 수치 | 판정 |
 | --- | ---: | --- |
@@ -55,7 +55,7 @@ active recovery는 sim/probe 수익 p75(평균 비교 threshold는 기존0.8% ca
 
 ## 제한 결과 갱신과 검증
 
-[9/17 장후 결과 판정 JSON](../../data/report/postclose_research_successor_20260917_20260918/panic_sell_defense_result_review_2026-09-17.json)은 원 execution·분모와 소스 보완 preview를 분리한다. 원 JSON/MD/breadth/동결policy는 보존했다. 작은 동일 날짜 state/source/feedback만 읽고 native detector는 원 보고서에 저장된 값으로 유지했다. **5,713,580,290bytes 원 JSONL의 stat 확인 후 재스캔/전체 보고서 재생성은 하지 않았다.** 원 streaming aggregate에 미래/다른 날짜 행이 없었다는 것을 새로 인증한 결과가 아니다.
+`../../data/report/postclose_research_successor_20260917_20260918/panic_sell_defense_result_review_2026-09-17.json`(사용자 승인으로 삭제; cleanup manifest 참조)은 원 execution·분모와 소스 보완 preview를 분리한다. 원 JSON/MD/breadth/동결policy는 보존했다. 작은 동일 날짜 state/source/feedback만 읽고 native detector는 원 보고서에 저장된 값으로 유지했다. **5,713,580,290bytes 원 JSONL의 stat 확인 후 재스캔/전체 보고서 재생성은 하지 않았다.** 원 streaming aggregate에 미래/다른 날짜 행이 없었다는 것을 새로 인증한 결과가 아니다.
 
 동일 원 active state의 updated_at을 대조한 preview는 observed3 → eligible0(9/6 state 제외), post-sell zero-trade baseline은 dynamic_quantile → insufficient_sample, 두 threshold sample_count0/readyfalse/dynamicnull이다. 이는 source/평가 유효성의 개선이며 recovered realized profit 또는 EV 개선이 아니다. 원 `NORMAL`을 경제성 성공이나 전일 전체 chain DONE으로 바꾸지 않는다.
 
@@ -116,3 +116,13 @@ Wrapper 관련 기존6개 및 selector 실패 선행검증1개, 합7PASS. bash-n
 최종 제거 범위 self-review→기존 시험 fixture의 잔여 panic 경로5건 수정→re-review 완료. 영향44PASS/528deselected(3.58초), py_compile/bash-n/diff/print-only parser PASS. 원천부재는 optional 진단으로 남고 strict 장후 필수 산출물에서 제외된다. Source selector 배포는 `tmp/postclose-panic-removal-20260918/deployment.json`, 판정 갱신은 `result-refresh.json`을 따른다. 전체 장후 DONE/정책 선정/EV 개선을 주장하지 않는다.
 
 제거 source `0394d32a0730aef1bfeeb7d2e174a5b3c11449fd` main/branch atomic push,13:37:03 KST `postclose-panic-retired-20260918` clean release selector 검증PASS. 작업본은 이번 source/test hunks만 반영해 별도변경을 보존했다. 장중 producer/notifier/wrapper 및 기존 시장약세 평가/발행 소스 SHA는 이전selected/작업본 모두보존PASS. 검토된 daily source reader에서13:36 장중 source 시각·pipeline missing·null경제성 인계와 strict 필수panic artifact부재를 확인했다. 원9/17 JSON/MD·동결policy SHA보존. 다음자연장후실행은 아직미관측이며 이를전체chainDONE으로보고하지않는다. 봇/worker/service/cron변경·수동raw/report/API/알림호출없음.
+
+## 재리뷰·과거 산출물 삭제
+
+사용자 추가 지시에 따라 제거 source0394d32a0의 장후 호출/flag/DONE/대기·strict 필수 artifact 제거와 daily optional source의 시각/부재 의미를 재리뷰했다. 코드 결함 추가0이며 앞선44PASS/작업본3PASS receipt는 해당 code SHA 동등성을 확인해 재사용한다. scale_in_split_order_plan 및 live consumer/PREOPEN 코드는 변경하지 않았다.
+
+공유 data·tmp/private data 사본·managed worktree/release에서 standalone panic 과거산출물을 전체 filename inventory했다. 9/18 이전 JSON/MD/gzip와9/17 전용 dated result-review를 원본/복사본 포함 **1,958개·논리13,004,898bytes 삭제**했다. 실제회수 disk bytes는측정하지않았다. sudo readonly inventory로 접근권한없는private디렉터리까지확인했으며 traversal error0/open-fd match0·삭제직전 inode/mtime/size/SHA 일치·삭제후부재를검증했다. 격리사본으로남기지않았다.
+
+오늘9/18 장중 JSON/MD2개·공통생산자/observer/알림상태/lock/cooldown·동결policy·원source와일일집계는보존한다. 과거 장후/장중출력이같은파일명을공유해생성경로를완전히분리할수없으므로 기존날짜별공유산출물의과거사본을함께제거한범위다. source/audit/docs/정책·다른일일보고서안의이미집계된panic진단은 standalone 과거산출물이아니며삭제하지않는다. 위과거수치는삭제전확인한기록이며현재원파일존재를암시하지않는다. 이번cleanup의과거원SHA는manifest에남는다.
+
+근거: `tmp/panic-history-scale-analysis-20260918/cleanup-manifest.json`, `before.json`, `result-refresh.json`, `closure.json`. 삭제한원보고서/전용datedreview링크를inline삭제경로로고쳤다. 장후EV개선/전체chainDONE을새로만들지않고장후panic작업상태는removed다. 다음개별단위는 [scale-in 실행·EV 분석](2026-09-18-scale-in-split-order-plan-result-analysis.md)이며분석만수행한다.

@@ -27,6 +27,8 @@
 
   - 후속 사용자 지시 Closure: 장후 panic 재실행·전용flag/DONE·JSON/MD대기·strict 필수artifact를 제거하고 daily는 장중결과시각/결손/null경제성을 보존한optional진단으로 소비한다. 장중생산자/cron/observer·별도hysteresis튜닝·breadth는 유지한다. 이전진단완료는 이력이며현재장후owner가아니다. 최신검증/배포는 owning review 및 `tmp/postclose-panic-removal-20260918/` receipt.
 
+  - 추가 재리뷰/삭제 Closure: 제거code SHA동등성으로기존44PASS/작업본3PASS검증재사용. 사용자승인으로과거panic standalone원본/사본1,958개·논리13,004,898bytes삭제·접근/사용/직전SHA/부재검증완료. 오늘장중2개·state/lock/동결policy보존. 기존삭제dated결과갱신의현재소비는 `tmp/panic-history-scale-analysis-20260918/result-refresh.json`이며원9/17생성물링크는삭제manifest참조.
+
 - [ ] `[MarketWeaknessSourceHandoffNaturalEconomics0918] Market weakness 원천·날짜 인계와 자연 표본·실제 버전 경제성 검증` (`Due: 2026-09-18`, `Slot: POSTCLOSE`, `TimeWindow: 20:05~21:55`, `Track: RuntimeStability`)
   - Source: [원천·날짜 인계 수리·경제성 재검증](../audit-reports/2026-09-18-market-weakness-source-handoff-repair-and-economics-review.md), [운영 계약](../postclose-tuning-result-review-task-instructions.md#512-market-weakness-원천날짜-인계), `tmp/market-weakness-source-handoff-20260918/validation.json`, `publication.json`, `natural-and-version-evaluation.json`, `deployment.json`.
   - 구현 Closure: 연구 admission194개를 prospective로 보존하고 native active coverage/독립 research budget4·총200symbol/400item·integrated SOR source contract·기존 schema 소비를 검증했다. 관련187 PASS; native9/17 source→dated 튜닝→effective9/18 기존2/3 carry 인계를 복구했다. 실행 중 worker 보존·기존 service의 미래 source pin 일치 여부는 deployment receipt를 따른다. 전역 장후 DONE/신규 정책/실현 이익이 아니다.
@@ -70,6 +72,8 @@
   - 관련 외부 blocker: 전일 native chain은 `tmp/postclose_stepwise_2026-09-17/control.json`의 `blocked_native_resource_guard`이다. 9/18 정기07:35 PREOPEN은 env/manifest를 생성했으나 `runtime_env_handoff_missing`으로 실패했다(integrated-entry handoff 결손); 이를 family source 수리/검증 성공이나 정상 PID 소비로 덮지 않는다. 최종 EV는 미완료다. 이 task에서 global resource guard·다른 family worker·cron 복원 권한을 확대하지 않는다. 해당 원 owner와 당일 PREOPEN status를 별도 확인한다.
 
 ## 저가주 확장 연구 보완·자연 경제성 검증
+
+  - 개별단위 분석(코드변경금지): [scale_in_split_order_plan 실행·EV](../audit-reports/2026-09-18-scale-in-split-order-plan-result-analysis.md).9/17exit0/22.392초·daily0/rolling4중market4·eligible/paired0·EV/netnull·applyfalse. 과거cached결손/market제외·동일표본grid검증·touch체결모델/atomic검사경계는시간대기와분리한다. source/PREOPEN/runtime코드·기존guard/quantity/grid변경없음. 기존Main자연원천/COMPLETED경제성Acceptance는OPEN이다.
 
 - [ ] `[LowPriceExpandedResearchRepair0918] 저가주 연구 입출력·해시·추천 handoff 보완과 배포·실소비 확인` (`Due: 2026-09-18`, `Slot: INTRADAY`, `TimeWindow: 08:00~20:30`, `Track: RuntimeStability`)
   - Source: [구현·검증 receipt](../audit-reports/2026-09-18-low-price-expanded-research-repair.md), `tmp/low-price-report-repair-20260918/cached-economic-refresh.json`, `tmp/low-price-report-repair-20260918/consumer-memory-check.json`.

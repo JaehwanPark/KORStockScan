@@ -96,3 +96,5 @@
 보고서의47추가 거래일은 현재 eligible yield를 신호 floor에 단순 외삽한 값이다. `attainability.status=collection_contract_gap`, KOSDAQ zero-yield, holdout0이므로 완료 ETA는 **미정(null)**이다. 현재 후보0은 유효 no-edge 판정이 아니라 **source gap + insufficient sample + 현재 관측 후보 ΔEV0**의 조합이다.
 
 권고 우선순위는 **수집기 유지 → exact-route/horizon 원천 수리 → late producer 날짜별 인계 확인 → 자연 유효 표본 → 기존 후보/holdout → 실제 버전별 경제성**이다. Collector0.664초의 성능 확대 점검이나 별도 튜너 신설은 우선순위가 아니다. 이번 분석에서는 관련 원천/guard/cron을 수정하거나 재실행하지 않았다.
+
+후속현재상태: 장후panic은제거및과거산출물삭제완료. 다음유지단위 [scale_in_split_order_plan 분석](2026-09-18-scale-in-split-order-plan-result-analysis.md)은9/17실행성공/경제성paired0·EVnull·구조결손을분리하며코드변경없다. 삭제범위/manifest는 [panic owning review](2026-09-18-panic-sell-defense-result-review.md#재리뷰과거-산출물-삭제)를따른다.
