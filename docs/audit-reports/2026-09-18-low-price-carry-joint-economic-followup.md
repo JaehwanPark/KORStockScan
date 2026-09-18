@@ -55,3 +55,5 @@ CF 가정의 broker recovery/queue/quantity/partial-fill·실제 terminal·비�
 대표 target2→4 비교는 완료 빈도가 유지돼도 노출이 증가했다. 롯데케미칼 holdout은 signal5·완료9를 유지하면서 entry-cohort exposure16→239bars, worst filled MAE−0.173913%→−1.391304%였다. 두산 auto 점심은 signal4·완료8 유지, exposure42→137bars, MAE−0.370828%→−1.173709%다. 순익 증가만으로 위험까지 개선됐다고 판단하지 않는다. source-quality와 원 family/custody/sample guard 및 미래 tail 검증은 유지한다.
 
 원격 main의 미시구조 통합·진단-only historical metadata 보존 source `53aecf746`을 구현 `e1b3591f1`과 병합해 다른 승인된 작업을 보존했다. CF 두 source helper의 bytes/hash는 분석 시작부터 종료·병합까지 같아 결과 lineage가 바뀌지 않았다. 병합 wrapper는 최초124PASS·5FAIL 후 비용 원천 선행 호출과 full calibration 호출을 구분하고 퇴역 raw study 부재를 검증하도록5개 oracle를 보완했다. 영향받은5개만 재검증한다. production wrapper/guard를 이전 계약으로 복원하지 않았다.
+
+병합 wrapper 재검증은3PASS 후 남은2개의 구 daily 단일 호출/퇴역 raw toggle 기대값을 full calibration1회·기존 진단-only refresh1회·raw producer 부재 계약으로 보완하여2PASS로 닫았다. 최초124PASS와 수정5개 각각의PASS를 확인했고 전체 suite를 무조건 반복하지 않았다. wrapper runtime/source를 추가 변경한 것은 없다.

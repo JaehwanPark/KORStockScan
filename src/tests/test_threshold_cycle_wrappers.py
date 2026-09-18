@@ -424,8 +424,10 @@ def test_postclose_materializes_current_lifecycle_before_single_daily_consumer()
     positions = [script.rindex(token) if token.endswith("ai_action_outcome_calibration")
                  else script.index(token) for token in tokens]
     assert positions == sorted(positions)
-    for token in tokens[2:6]:
+    for token in tokens[2:5]:
         assert script.count(token) == 1
+    assert script.count("--calibration-run-phase postclose") == 1
+    assert script.count("--refresh-machine-evaluation-only") == 1
 
 
 def test_postclose_wrapper_closes_lookup_attention_auto_promotion_after_fact_sync():
@@ -2210,10 +2212,7 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     assert "RUN_SCALP_ENTRY_ADM=false"
     assert 'ENTRY_AI_GATE_BACKTEST_SCHEDULE="on_demand"' in script
     assert "THRESHOLD_CYCLE_RUN_ENTRY_AI_GATE_BACKTEST:-weekly" not in script
-    assert (
-        'RUN_MICROSTRUCTURE_REACTION_CONTEXT="${THRESHOLD_CYCLE_RUN_MICROSTRUCTURE_REACTION_CONTEXT:-true}"'
-        in script
-    )
+    assert "RUN_MICROSTRUCTURE_REACTION_CONTEXT=" not in script
     assert "RUN_LIFECYCLE_DECISION_MATRIX=false" in script
     assert "RUN_LIFECYCLE_AI_CONTEXT=false" in script
     assert "RUN_LIFECYCLE_BUCKET_DISCOVERY=false" in script
@@ -2245,15 +2244,14 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         "swing_lifecycle_bucket_discovery=$RUN_SWING_LIFECYCLE_BUCKET_DISCOVERY"
         in script
     )
-    assert (
-        "microstructure_reaction_context=$RUN_MICROSTRUCTURE_REACTION_CONTEXT" in script
-    )
+    assert "microstructure_reaction_context=false" in script
+    assert "microstructure_machine_evaluation=$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" in script
     assert (
         "ai_decision_action_outcome_calibration="
         "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" in script
     )
-    assert "optional microstructure_reaction_context failed" in script
-    assert "optional microstructure_reaction_context artifact wait failed" in script
+    assert "optional microstructure_reaction_context failed" not in script
+    assert "optional microstructure_reaction_context artifact wait failed" not in script
 
 
 def test_postclose_wrapper_materializes_daily_exact_quality_chain_before_calibration():
