@@ -51,7 +51,7 @@ active recovery는 sim/probe 수익 p75(평균 비교 threshold는 기존0.8% ca
 5. 같은 attempt의 A/A/B 신호에서 앞 두 행만 선택하면 중복A가 B 손익을 밀어내는 결함을 수리했다. broker identity별 한 행을 보존하고 남은 receipt capacity에는 sparse 행만 연결한다. 시각 순서도 KST로 정렬한다. 실제 fill/cost를 만들어낸 수리는 아니다.
 6. risk-regime contract의 primary metric이 구현하지 않은 avoided-loss EV를 암시했다. 실제 상태 지표를 선언하고 economics를 `not_evaluated_context_report / null / null`, exit profit을 signal diagnostic으로 표시한다. source 불명/실현 미확정을 순익0으로 채우지 않는다.
 
-수정은 기존 생산자·기존 시험 파일2개 안에서 닫았다. API 요청/parser·WS/FID·broker/order·runtime threshold·grid·sample floor·quantity·cost·bot/provider·source schedule은 변경하지 않았다. 새 production module/service/cache/performance guard는 없다.
+첫 수리는 기존 생산자·기존 시험 파일2개 안에서 닫았고, 아래 소비 보완은 기존 daily/wrapper와 그 기존 시험 파일 안에서 이어 닫았다. API 요청/parser·WS/FID·broker/order·runtime threshold·grid·sample floor·quantity·cost·bot/provider·source schedule은 변경하지 않았다. 새 production module/service/cache/performance guard는 없다.
 
 ## 제한 결과 갱신과 검증
 
@@ -80,3 +80,17 @@ active recovery는 sim/probe 수익 p75(평균 비교 threshold는 기존0.8% ca
 ## 배포·소비 경계
 
 검토된 clean managed source와 실제 consumer를 별도 receipt로 기록한다. 공통 selector는 다음 invocation용이다. 기존 독립 widget/episode service pin·PID를 불필요하게 옮기지 않는다. 활성 intraday cron은 workspace wrapper를 사용하므로 selected release만으로 그 producer 소비를 주장하지 않는다. 해당 생산자 파일의 검토본 동등성/다음 자연 결과 여부를 따로 확인하고 schedule/notifier/guard/order authority는 보존한다. source 선택·direct reader·자연 writer·실제 경제성은 서로 다른 상태다.
+
+## 자연 실행에서 확인한 추가 결손·소비 보완
+
+13:13:50 KST 첫 source13e88d208을 main/review branch에 push·managed root `panic-defense-source-reviewed-20260918`로 배포했다. 기존3unit pin/PID·cron·원 JSON/MD/breadth·동결policy를 보존했다. 기존 잠금의 idle 구간에서 workspace의 기존 producer/test도 첫 검토본과 동등하게 반영했다. 기존 활성 cron의13:14 자연 실행은 신규 cutoff counter/economics=null을 산출했고 wrapper DONE13:14:04까지 확인했다. 수동 report/collector/notifier 호출은 없다.
+
+여기서 **9/18 pipeline 파일 자체가 부재**여서 scan0였다는 추가 구조 결손을 확인했다. 첫 버전은 이것을 단순0으로만 표시했다. source_exists/path/status와 analysis_status를 추가하여 missing·empty/no-valid-JSON·no-eligible-time·ready를 분리하고 기존 risk source blockers에 연결했다. missing pipeline을 시장 NORMAL·no-edge·정상 무거래로 인증하지 않는다. 정상 breadth 관측/market-weakness handoff를 막거나 synthetic pipeline 행을 만들지 않는다. 실제 usable micro/exit 유입은 아직 미입증이다.
+
+또한 daily consumer는 일부 reason 이름만 옮겨 새 날짜/quality blocker를 버릴 수 있어 기존 threshold contract의 blocker도 인계한다. source repair→직접 daily→runtime request의 연결 회귀까지 최종83PASS/276deselected다.
+
+**실제 튜너의 최신 상태도 갱신됐다.** 별도 기존 worker가13:12:51에9/17 attribution,13:13:10에 tuner/effective9/18 policy를 발행했다. 직전 breadth 문서의 “최신9/16·9/17 인계부재”는 당시12:56 확인 이력이고 현재의 부재 판정이 아니다. 당일 anchor85/eligible85, actual 비교0/confirmed weakness0; 누적unique1,323,30분 CF11(유효율0.831444%)/제외1,312, 관측날짜14·CF 날짜2·holdout0·KOSDAQ0·widget6/episode5다. 세 후보calibration ΔEV는 모두0, full/holdout ΔEV는 미평가null, 현행 모델 EV−0.41349624%, 선정없음/current_policy_carried_forward2/3. 누적 actual control 비교1건/1일·skip 가정 Δ−0.35014535%p는 이전과 같으며 새 정책 실제 손익이 아니다. projection50추가일은 source 계약결손/KOSDAQ zero-yield 때문에 완료 ETA가 아니다.
+
+실제 observer는 workspace validator에서 `market_weakness_policy_review_hash_invalid`로 동일2/3 baseline fallback을 사용했다. 비교한 결과 **원9/17 추천은 검토된 immutable validator에서 ready**였고, workspace의 기존 별도 변경은 calibration 선택 필드의 hash/검증 코드를 갖고 있지 않았다. 원 정책을 고치거나 hash gate를 완화하는 결함 수리를 하지 않는다. 기존 workspace 변경을 보존하면서 intraday entrypoint가 **기존 release router로 선택된 검토본을 한 번 resolve/re-exec**하도록 소스 경계를 보완했다. managed release로 진입한 worker는 후속 selector 변경에도 자기 source를 보존한다. collector/report/notifier/정책 validator가 같은 검토본에서 실행된다. 대상일/인자·log/lock/cooldown·schedule·resource guard·notifier/operator 권한은 보존한다. 기존 selector 없는 isolated wrapper test도 유지한다. selector 오류는 API 수집/알림 전에 실패한다.
+
+Wrapper 관련 기존6개 및 selector 실패 선행검증1개, 합7PASS. bash-n/compile/diff 및 print-only parser 검증. 이 routing은 기존 source clean/selector 계약을 재사용하며 새 service/module/성능 guard/threshold/정책을 추가하지 않는다. workspace의 별도 validator/daily 변경을 통째로 덮어쓰지 않는다. 마지막 소스 commit/배포/자연 결과 receipt는 아래 최종 기록을 따른다.

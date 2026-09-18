@@ -20,6 +20,7 @@
   - 사용자 승인: 반복 code review/fix/검증·commit/push·소스 배포·9/17 장후 결과 갱신. [개별단위 owning review](../audit-reports/2026-09-18-panic-sell-defense-result-review.md), `tmp/panic-defense-result-review-20260918/` receipt. breadth 다음 단위는 panic 보고서이며 다음은 조건부 scale-in plan이다. 기존 real/sim/probe/custody·정책·guard·수량·비용·schedule 보존.
   - 구현 Closure: KST target date/as_of 이전의 pipeline·mutable state/market/breadth·feedback만 해석, 실제0거래 반등 placeholder를 baseline에서 제외, 미구현 EV를 null/context로 선언. 주문identity별 중복 보존까지 기존2개 source/test 안에서최종82PASS·compile/diff/링크/print-only parser.5.7GB raw 재스캔·API/주문·전체chain 재실행 없음.
   - 현재9/17: 해당 단계exit0/40.41초/NORMAL, raw/real exit0·분위수표본0, evaluated3,005 중book missing2,468·insufficient537. 작은 source preview는 stale active3→eligible0, zero-trade rebound dynamic→insufficient. actual EV/일별순익null·전일chain미완료. 관측/현행owner coverage·horizon/full-cost/독립holdout 결손은 단순시간으로 복구하지 않음.
+  - 추가 소비 보완:13:14 첫 자연 writer에서9/18 pipeline파일부재를 확인해 missing/empty/no-eligible/ready 및 source blocker→daily handoff를 분리했다. workspace와 immutable 정책 validator hash 의미 차이는 정책변경 없이 기존 router를 통한 intraday resolve/re-exec로 source를 결속한다. 최종83PASS·wrapper7PASS. 별도worker의최신9/17 tuner발행은확인됐으나 CF11/holdout0/KOSDAQ0·선정없음/기존2/3 carry이며 EV 수락이아니다.
   - Acceptance: 검토본 common release/원본·동결SHA 보존, 활성intraday workspace producer와 reviewed source hash/날짜/cutoff 분모가 자연결과에서 일치하는지 확인. source repair를 positive EV 또는 broker natural action 조건으로 확대하지 않는다. native postclose cron 부재는 보존하며 source trigger 없음은 waiting ETA가아니다. 실제 closed-cost 경제성은 기존market-weakness tuner/attribution owner의 별도계약이다.
 
 

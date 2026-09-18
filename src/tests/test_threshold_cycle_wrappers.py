@@ -4133,3 +4133,23 @@ def test_machine_final_refresh_captures_dated_capital_before_long_research(tmp_p
     assert "widget_collector_expansion_recommendation" in calls[1]
     assert sum("research_native_capacity_source" in call for call in calls) == 1
     assert next(i for i, call in enumerate(calls) if "machine_research_closed_loop_refresh" in call) > next(i for i, call in enumerate(calls) if "machine_entry_timing_tuning" in call)
+
+
+def test_panic_workspace_selector_failure_precedes_collect_and_notify(tmp_path):
+    workspace = tmp_path / 'workspace'
+    (workspace / 'data/runtime').mkdir(parents=True)
+    (workspace / '.venv/bin').mkdir(parents=True)
+    (workspace / '.venv/bin/python').symlink_to(sys.executable)
+    (workspace / 'src/engine/infrastructure').mkdir(parents=True)
+    (workspace / 'src/engine/infrastructure/runtime_release_router.py').write_bytes(
+        Path('src/engine/infrastructure/runtime_release_router.py').read_bytes())
+    (workspace / 'data/runtime/runtime_release_selection.json').write_text(
+        json.dumps({'schema': 'invalid'}))
+    result = subprocess.run(
+        ['bash', str(Path('deploy/run_panic_sell_defense_intraday.sh').resolve()), '2026-06-05'],
+        env={**os.environ, 'PROJECT_DIR': str(workspace)},
+        capture_output=True, text=True, timeout=10)
+    assert result.returncode != 0
+    assert 'release_selection_schema_invalid' in result.stderr
+    assert '[START]' not in result.stdout
+    assert not (workspace / 'logs/run_panic_sell_defense.log').exists()

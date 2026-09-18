@@ -1012,3 +1012,14 @@ def test_repeated_first_order_does_not_displace_second_order_profit():
     assert metrics["real_exit_count"] == 2
     assert metrics["duplicate_real_exit_signal_count"] == 1
     assert metrics["avg_exit_profit_rate_pct"] == 0.5
+
+
+def test_missing_pipeline_is_source_unavailable_with_breadth_preserved(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    _write_market_panic_breadth(tmp_path, risk_off=False)
+    result = report_mod.build_panic_sell_defense_report(
+        TARGET_DATE, as_of=datetime.fromisoformat(f"{TARGET_DATE}T10:30:00"))
+    assert result["input_streaming"]["source_status"] == "missing"
+    assert result["analysis_status"] == "pipeline_source_unavailable"
+    assert "pipeline_source:missing" in result["risk_regime_gate"]["source_quality_blockers"]
+    assert result["market_weakness_observation"]["observation_id"] == "weakness-test-1"

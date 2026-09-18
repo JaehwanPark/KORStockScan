@@ -2633,6 +2633,7 @@ def test_calibration_source_bundle_includes_panic_sell_defense(monkeypatch, tmp_
                     },
                 },
                 "microstructure_market_context": {
+                    "threshold_contract": {"source_quality_blockers": ["pipeline_source:missing", "market_panic_breadth:source_after_as_of"]},
                     "market_risk_state": "NEUTRAL",
                     "market_confirms_risk_off": False,
                     "breadth_confirms_risk_off": False,
@@ -2656,6 +2657,8 @@ def test_calibration_source_bundle_includes_panic_sell_defense(monkeypatch, tmp_
     metrics = bundle["source_metrics"]["panic_sell_defense"]
 
     assert bundle["sources"]["panic_sell_defense"]["exists"] is True
+    assert "pipeline_source:missing" in metrics["source_quality_blockers"]
+    assert "market_panic_breadth:source_after_as_of" in metrics["source_quality_blockers"]
     assert metrics["panic_state"] == "RECOVERY_WATCH"
     assert metrics["panic_regime_mode"] == "STABILIZING"
     assert metrics["panic_regime_decision_authority"] == "source_quality_only"

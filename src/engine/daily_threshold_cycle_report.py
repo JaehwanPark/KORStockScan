@@ -3331,6 +3331,11 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
             "market_regime_snapshot_missing_or_unknown",
         }
     ]
+    micro_contract = microstructure_market_context.get("threshold_contract") or {}
+    micro_market_source_quality_blockers.extend(
+        str(blocker) for blocker in micro_contract.get("source_quality_blockers", [])
+        if blocker and str(blocker) not in micro_market_source_quality_blockers
+    )
     micro_market_followup_candidate = bool(
         microstructure_market_context.get("portfolio_local_risk_off_only")
         or "micro_evaluated_symbol_count_below_breadth_floor"

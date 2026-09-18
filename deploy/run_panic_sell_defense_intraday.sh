@@ -3,6 +3,22 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="${PROJECT_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+# Resolve once at the workspace entrypoint. An already running managed release
+# keeps its source even when a later selection is published.
+if [[ "$PROJECT_DIR" != *-runtime-releases/* && -f "$PROJECT_DIR/data/runtime/runtime_release_selection.json" ]]; then
+  PANIC_REVIEWED_RELEASE="$("$PROJECT_DIR/.venv/bin/python" -I - "$PROJECT_DIR" <<'PY'
+import importlib.util
+from pathlib import Path
+import sys
+workspace = Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location("release_router", workspace / "src/engine/infrastructure/runtime_release_router.py")
+router = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(router)
+print(router.selected_release(workspace)[0])
+PY
+  )"
+  exec env PROJECT_DIR="$PANIC_REVIEWED_RELEASE" /bin/bash "$PANIC_REVIEWED_RELEASE/deploy/run_panic_sell_defense_intraday.sh" "$@"
+fi
 VENV_PY="${PROJECT_DIR}/.venv/bin/python"
 TARGET_DATE="${1:-$(TZ=Asia/Seoul date +%F)}"
 # shellcheck source=cpu_affinity_profile.sh

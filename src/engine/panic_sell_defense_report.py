@@ -741,6 +741,14 @@ def _stream_pipeline_inputs(
             "provider_route_change",
         ],
         "memory_bounded_streaming": True,
+        "source_path": str(path),
+        "source_exists": path.is_file(),
+        "source_status": (
+            "missing" if not path.is_file() else
+            "empty_or_no_valid_json_rows" if not scanned_row_count else
+            "no_eligible_time_rows" if scanned_row_count == sum(excluded_time_counts.values()) else
+            "ready"
+        ),
         "scanned_row_count": scanned_row_count,
         "excluded_time_counts": dict(excluded_time_counts),
         "accepted_time_row_count": scanned_row_count - sum(excluded_time_counts.values()),
@@ -1692,6 +1700,9 @@ def build_panic_sell_defense_report(
     microstructure_market_context = _microstructure_market_context(
         microstructure_detector, source_summary
     )
+    if input_streaming["source_status"] != "ready":
+        microstructure_market_context["threshold_contract"]["source_quality_blockers"].append(
+            "pipeline_source:" + input_streaming["source_status"])
     panic_state, reasons = _resolve_panic_state(
         panic_metrics,
         active_recovery,
@@ -1713,6 +1724,10 @@ def build_panic_sell_defense_report(
             latest_dt.isoformat(timespec="seconds") if latest_dt else None
         ),
         "dry_run": bool(dry_run),
+        "analysis_status": (
+            "pipeline_source_unavailable" if input_streaming["source_status"] != "ready"
+            else "risk_context_only_no_economic_evaluation"
+        ),
         "policy": {
             "report_only": True,
             "runtime_effect": "report_only_no_mutation",
