@@ -241,17 +241,10 @@ def test_prior_report_merges_daily_rolling_mtd_and_blocks_child_conflict(tmp_pat
         if row["observable_prefix"]["source_signature"] == "OPEN_TOP,PRICE_JUMP_START"
     )
     assert feedback_prior["recommendation"] == "quality_risk"
-    assert feedback_prior["rising_missed_metrics"]["winner_count"] == 1
+    assert feedback_prior["rising_missed_metrics"]["winner_count"] == 0
     assert feedback_prior["rising_missed_metrics"]["initial_quality_fail_count"] == 1
     assert feedback_prior["rising_missed_metrics"]["avg_down_ge2_count"] == 1
 
-    loser_prior = next(
-        row
-        for row in report["priors"]
-        if row["observable_prefix"]["source_signature"]
-        == "OPEN_TOP,PRICE_JUMP_START_LOSS"
-    )
-    assert loser_prior["recommendation"] == "loss_filter"
     assert (
         report["summary"]["counterfactual_status"]
         == "counterfactual_source_unavailable"
@@ -329,21 +322,6 @@ def test_explicit_zero_join_cannot_fall_back_to_unjoined_sample():
     assert prior["recommendation"] == "hold_sample"
 
 
-def test_zero_profit_scout_outcome_is_preserved_as_loss_or_flat():
-    priors = {}
-
-    mod._merge_scout_metrics(
-        priors,
-        {
-            "loss_or_flat_forced_scout_examples": [
-                {"source_signature": "ZERO_RETURN", "profit_rate": 0.0}
-            ]
-        },
-    )
-
-    prior = next(iter(priors.values()))
-    assert prior["rising_missed_metrics"]["loser_count"] == 1
-    assert prior["rising_missed_metrics"]["avg_profit_rate"] == 0.0
 
 
 def test_write_outputs_renders_prior_report(tmp_path):

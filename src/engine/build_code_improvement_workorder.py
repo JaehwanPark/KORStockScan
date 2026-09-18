@@ -55,9 +55,7 @@ INTRADAY_ENTRY_BLOCKER_DIAGNOSTICS_DIR = (
 )
 INTRADAY_WS_FRESHNESS_MONITOR_DIR = REPORT_DIR / "intraday_ws_freshness_monitor"
 MARKET_OPPORTUNITY_CENSUS_DIR = REPORT_DIR / "market_opportunity_census"
-RISING_MISSED_SCOUT_WORKORDER_DIR = REPORT_DIR / "rising_missed_scout_workorder"
 RISING_MISSED_CLASSIFIER_PRIOR_DIR = REPORT_DIR / "rising_missed_classifier_prior"
-ONE_SHARE_THRESHOLD_OPPORTUNITY_DIR = REPORT_DIR / "one_share_threshold_opportunity"
 MICROSTRUCTURE_REACTION_CONTEXT_DIR = REPORT_DIR / "microstructure_reaction_context"
 CODE_IMPROVEMENT_WORKORDER_DIR = PROJECT_ROOT / "docs" / "code-improvement-workorders"
 CODE_IMPROVEMENT_WORKORDER_REPORT_DIR = REPORT_DIR / "code_improvement_workorder"
@@ -336,11 +334,6 @@ def entry_hurdle_backtest_report_path(target_date: str) -> Path:
     return ENTRY_HURDLE_BACKTEST_DIR / f"entry_hurdle_backtest_{target_date}.json"
 
 
-def rising_missed_scout_workorder_report_path(target_date: str) -> Path:
-    return (
-        RISING_MISSED_SCOUT_WORKORDER_DIR
-        / f"rising_missed_scout_workorder_{target_date}.json"
-    )
 
 
 def rising_missed_classifier_prior_report_path(target_date: str) -> Path:
@@ -350,11 +343,6 @@ def rising_missed_classifier_prior_report_path(target_date: str) -> Path:
     )
 
 
-def one_share_threshold_opportunity_report_path(target_date: str) -> Path:
-    return (
-        ONE_SHARE_THRESHOLD_OPPORTUNITY_DIR
-        / f"one_share_threshold_opportunity_{target_date}.json"
-    )
 
 
 def microstructure_reaction_context_report_path(target_date: str) -> Path:
@@ -1024,51 +1012,6 @@ def _entry_hurdle_backtest_followup_orders(
     return sanitized
 
 
-def _rising_missed_scout_followup_orders(
-    report: dict[str, Any],
-) -> list[dict[str, Any]]:
-    orders = report.get("code_improvement_orders")
-    if not isinstance(orders, list):
-        return []
-    sanitized: list[dict[str, Any]] = []
-    default_forbidden_uses = [
-        "runtime_threshold_mutation",
-        "stale_submit_bypass",
-        "broker_guard_bypass",
-        "order_guard_relaxation",
-        "provider_route_change",
-        "bot_restart",
-        "forced_one_share_success_counting",
-        "real_execution_quality_approval",
-    ]
-    for item in orders:
-        if not isinstance(item, dict):
-            continue
-        order = dict(item)
-        order["source_report_type"] = "rising_missed_scout_workorder"
-        order["runtime_effect"] = False
-        order["allowed_runtime_apply"] = False
-        order["actual_order_submitted"] = False
-        order["broker_order_forbidden"] = True
-        order["decision_authority"] = "source_only_operational_workorder"
-        provenance = order.get("implementation_provenance")
-        if not isinstance(provenance, dict):
-            provenance = {}
-        order["implementation_provenance"] = {
-            **provenance,
-            "runtime_effect": False,
-            "allowed_runtime_apply": False,
-            "actual_order_submitted": False,
-            "broker_order_forbidden": True,
-        }
-        existing_forbidden = order.get("forbidden_uses")
-        if not isinstance(existing_forbidden, list):
-            existing_forbidden = []
-        order["forbidden_uses"] = list(
-            dict.fromkeys([*existing_forbidden, *default_forbidden_uses])
-        )
-        sanitized.append(order)
-    return sanitized
 
 
 def _rising_missed_classifier_prior_followup_orders(
@@ -1121,42 +1064,6 @@ def _rising_missed_classifier_prior_followup_orders(
     return sanitized
 
 
-def _one_share_threshold_opportunity_followup_orders(
-    report: dict[str, Any],
-) -> list[dict[str, Any]]:
-    orders = report.get("code_improvement_orders")
-    if not isinstance(orders, list):
-        return []
-    default_forbidden_uses = [
-        "runtime_threshold_mutation",
-        "buy_score_threshold_relaxation_without_preopen_apply",
-        "stale_submit_bypass",
-        "broker_guard_bypass",
-        "order_guard_relaxation",
-        "provider_route_change",
-        "bot_restart",
-        "forced_one_share_success_counting",
-        "real_execution_quality_approval",
-    ]
-    sanitized: list[dict[str, Any]] = []
-    for item in orders:
-        if not isinstance(item, dict):
-            continue
-        order = dict(item)
-        order["source_report_type"] = "one_share_threshold_opportunity"
-        order["runtime_effect"] = False
-        order["allowed_runtime_apply"] = False
-        order["actual_order_submitted"] = False
-        order["broker_order_forbidden"] = True
-        order["decision_authority"] = "source_only_threshold_opportunity_audit"
-        existing_forbidden = order.get("forbidden_uses")
-        if not isinstance(existing_forbidden, list):
-            existing_forbidden = []
-        order["forbidden_uses"] = list(
-            dict.fromkeys([*existing_forbidden, *default_forbidden_uses])
-        )
-        sanitized.append(order)
-    return sanitized
 
 
 def _recent_workorder_reports(
@@ -1480,6 +1387,8 @@ def _escalate_repeated_structural_blockers(
         )
     }
     for item in classified:
+        if retired_owner(item.order.get("source_report_type")):
+            continue
         order_id = str(item.order.get("order_id") or "").strip()
         provenance = (
             item.order.get("implementation_provenance")
@@ -1677,6 +1586,8 @@ def _escalate_repeated_unresolved_orders(
         "defer_evidence",
     }
     for item in classified:
+        if retired_owner(item.order.get("source_report_type")):
+            continue
         order_id = str(item.order.get("order_id") or "").strip()
         signature = _repeat_unresolved_signature(item.order)
         repeat_keys = [order_id]
@@ -1740,19 +1651,6 @@ def _escalate_repeated_unresolved_orders(
             "rejected",
         }
         provenance = item.order.get("implementation_provenance") or {}
-        existing_one_share_evidence = (
-            item.decision == "attach_existing_family"
-            and item.order.get("source_report_type")
-            == "one_share_threshold_opportunity"
-            and item.order.get("improvement_type")
-            == "source_only_existing_family_evidence"
-            and isinstance(provenance, dict)
-            and provenance.get("workorder_intake_role")
-            == "attach_existing_family_evidence"
-            and provenance.get("source_audit_implementation_status") == "implemented"
-            and item.order.get("runtime_effect") is False
-            and item.order.get("allowed_runtime_apply") is False
-        )
         existing_recheck_natural_acceptance = (
             item.decision == "defer_evidence"
             and item.order.get("source_report_type")
@@ -1774,7 +1672,6 @@ def _escalate_repeated_unresolved_orders(
             and not pattern_lab_design_only
             and not pattern_lab_existing_family_evidence_only
             and not manual_review_only
-            and not existing_one_share_evidence
             and not existing_recheck_natural_acceptance
             and item.order.get("source_report_type") != "market_opportunity_census"
         ):
@@ -7068,25 +6965,11 @@ def _build_code_improvement_workorder(
         entry_hurdle_backtest_path,
         isolated_source_mode=isolated_source_mode,
     )
-    rising_missed_scout_workorder_path = rising_missed_scout_workorder_report_path(
-        target_date
-    )
-    rising_missed_scout_workorder = _load_source_json(
-        rising_missed_scout_workorder_path,
-        isolated_source_mode=isolated_source_mode,
-    )
     rising_missed_classifier_prior_path = rising_missed_classifier_prior_report_path(
         target_date
     )
     rising_missed_classifier_prior = _load_source_json(
         rising_missed_classifier_prior_path,
-        isolated_source_mode=isolated_source_mode,
-    )
-    one_share_threshold_opportunity_path = one_share_threshold_opportunity_report_path(
-        target_date
-    )
-    one_share_threshold_opportunity = _load_source_json(
-        one_share_threshold_opportunity_path,
         isolated_source_mode=isolated_source_mode,
     )
     microstructure_reaction_context_path = microstructure_reaction_context_report_path(
@@ -7128,9 +7011,7 @@ def _build_code_improvement_workorder(
         "intraday_ws_freshness_monitor": intraday_ws_freshness_path,
         "market_opportunity_census": market_census_path,
         "entry_hurdle_backtest": entry_hurdle_backtest_path,
-        "rising_missed_scout_workorder": rising_missed_scout_workorder_path,
         "rising_missed_classifier_prior": rising_missed_classifier_prior_path,
-        "one_share_threshold_opportunity": one_share_threshold_opportunity_path,
         "microstructure_reaction_context": microstructure_reaction_context_path,
     }
     if not include_swing:
@@ -7331,14 +7212,8 @@ def _build_code_improvement_workorder(
     entry_hurdle_backtest_orders = _entry_hurdle_backtest_followup_orders(
         entry_hurdle_backtest
     )
-    rising_missed_scout_orders = _rising_missed_scout_followup_orders(
-        rising_missed_scout_workorder
-    )
     rising_missed_classifier_prior_orders = (
         _rising_missed_classifier_prior_followup_orders(rising_missed_classifier_prior)
-    )
-    one_share_threshold_orders = _one_share_threshold_opportunity_followup_orders(
-        one_share_threshold_opportunity
     )
     microstructure_reaction_orders = [
         {
@@ -7467,9 +7342,7 @@ def _build_code_improvement_workorder(
         *intraday_ws_freshness_orders,
         *market_census_orders,
         *entry_hurdle_backtest_orders,
-        *rising_missed_scout_orders,
         *rising_missed_classifier_prior_orders,
-        *one_share_threshold_orders,
         *microstructure_reaction_orders,
         *lifecycle_entry_bucket_orders,
         *lifecycle_submit_bucket_orders,
@@ -7995,14 +7868,8 @@ def _build_code_improvement_workorder(
             ),
             "market_opportunity_census": source_ref("market_opportunity_census"),
             "entry_hurdle_backtest": source_ref("entry_hurdle_backtest"),
-            "rising_missed_scout_workorder": source_ref(
-                "rising_missed_scout_workorder"
-            ),
             "rising_missed_classifier_prior": source_ref(
                 "rising_missed_classifier_prior"
-            ),
-            "one_share_threshold_opportunity": source_ref(
-                "one_share_threshold_opportunity"
             ),
             "microstructure_reaction_context": source_ref(
                 "microstructure_reaction_context"
@@ -8073,12 +7940,8 @@ def _build_code_improvement_workorder(
             "entry_hurdle_backtest_source_order_count": len(
                 entry_hurdle_backtest_orders
             ),
-            "rising_missed_scout_source_order_count": len(rising_missed_scout_orders),
             "rising_missed_classifier_prior_source_order_count": len(
                 rising_missed_classifier_prior_orders
-            ),
-            "one_share_threshold_opportunity_source_order_count": len(
-                one_share_threshold_orders
             ),
             "microstructure_reaction_context_source_order_count": len(
                 microstructure_reaction_orders

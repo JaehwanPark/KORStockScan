@@ -4224,9 +4224,6 @@ def _artifact_paths(target_date: str) -> dict[str, Path]:
         "scalp_entry_action_decision_matrix": REPORT_DIR
         / "scalp_entry_action_decision_matrix"
         / f"scalp_entry_action_decision_matrix_{target_date}.json",
-        "one_share_threshold_opportunity": REPORT_DIR
-        / "one_share_threshold_opportunity"
-        / f"one_share_threshold_opportunity_{target_date}.json",
         "limit_down_watch": REPORT_DIR
         / "limit_down_watch"
         / f"limit_down_watch_{target_date}.json",
@@ -8020,15 +8017,6 @@ def build_threshold_cycle_postclose_verification(
         required_execution_flags = (*required_execution_flags, "producer_gap_discovery")
     if (
         done_line
-        and "one_share_threshold_opportunity" in execution_flags
-        and "one_share_threshold_opportunity" not in missing_execution_flags
-    ):
-        required_execution_flags = (
-            *required_execution_flags,
-            "one_share_threshold_opportunity",
-        )
-    if (
-        done_line
         and "stage_hook_workorder_discovery" in execution_flags
         and "stage_hook_workorder_discovery" not in missing_execution_flags
     ):
@@ -8109,7 +8097,6 @@ def build_threshold_cycle_postclose_verification(
             "pattern_lab_ai_review",
             "time_window_regime_counterfactual",
             "producer_gap_discovery",
-            "one_share_threshold_opportunity",
             "limit_down_watch_report",
             "stage_hook_workorder_discovery",
             "stage_hook_runtime_scaffold",
@@ -8162,9 +8149,6 @@ def build_threshold_cycle_postclose_verification(
             else ""
         ),
         (
-            "one_share_threshold_opportunity"
-            if "one_share_threshold_opportunity" in disabled_stage_flags
-            else ""
         ),
         (
             "stage_hook_workorder_discovery"
@@ -8274,8 +8258,6 @@ def build_threshold_cycle_postclose_verification(
         disabled_artifact_labels.add("time_window_regime_counterfactual")
     if execution_flags.get("producer_gap_discovery") is not True:
         disabled_artifact_labels.add("producer_gap_discovery")
-    if execution_flags.get("one_share_threshold_opportunity") is not True:
-        disabled_artifact_labels.add("one_share_threshold_opportunity")
     if not limit_down_watch_verification_enabled:
         disabled_artifact_labels.add("limit_down_watch")
         disabled_artifact_labels.add("limit_down_watch_markdown")

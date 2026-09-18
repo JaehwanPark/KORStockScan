@@ -723,7 +723,6 @@ def test_build_code_improvement_workorder_adds_rising_missed_scout_orders(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
     )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
-    monkeypatch.setattr(mod, "RISING_MISSED_SCOUT_WORKORDER_DIR", scout_dir)
     monkeypatch.setattr(mod, "RISING_MISSED_CLASSIFIER_PRIOR_DIR", prior_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
@@ -740,31 +739,16 @@ def test_build_code_improvement_workorder_adds_rising_missed_scout_orders(
         for item in report["orders"]
         if item["source_report_type"] == "rising_missed_classifier_prior"
     ]
-    assert report["summary"]["rising_missed_scout_source_order_count"] == 1
+    assert "rising_missed_scout_source_order_count" not in report["summary"]
     assert report["summary"]["rising_missed_classifier_prior_source_order_count"] == 1
-    assert len(scout_orders) == 1
+    assert scout_orders == []
     assert len(prior_orders) == 1
-    assert scout_orders[0]["decision"] == "attach_existing_family"
-    assert scout_orders[0]["runtime_effect"] is False
-    assert scout_orders[0]["allowed_runtime_apply"] is False
-    assert scout_orders[0]["actual_order_submitted"] is False
-    assert scout_orders[0]["broker_order_forbidden"] is True
-    assert scout_orders[0]["implementation_status"] == "implemented"
-    assert scout_orders[0]["implementation_provenance"]["runtime_effect"] is False
-    assert (
-        scout_orders[0]["implementation_provenance"]["actual_order_submitted"] is False
-    )
-    assert "forced_one_share_success_counting" in scout_orders[0]["forbidden_uses"]
-    assert "runtime_threshold_mutation" in scout_orders[0]["forbidden_uses"]
-    assert "broker_guard_bypass" in scout_orders[0]["forbidden_uses"]
     assert prior_orders[0]["decision"] == "attach_existing_family"
     assert prior_orders[0]["runtime_effect"] is False
     assert prior_orders[0]["allowed_runtime_apply"] is False
     assert prior_orders[0]["broker_order_forbidden"] is True
     assert "cap_release" in prior_orders[0]["forbidden_uses"]
-    assert report["source"]["rising_missed_scout_workorder"] == str(
-        scout_dir / "rising_missed_scout_workorder_2026-07-01.json"
-    )
+    assert "rising_missed_scout_workorder" not in report["source"]
     assert report["source"]["rising_missed_classifier_prior"] == str(
         prior_dir / "rising_missed_classifier_prior_2026-07-01.json"
     )
@@ -819,7 +803,6 @@ def test_build_code_improvement_workorder_adds_one_share_threshold_opportunity_o
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
     )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
-    monkeypatch.setattr(mod, "ONE_SHARE_THRESHOLD_OPPORTUNITY_DIR", source_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
 
@@ -830,23 +813,9 @@ def test_build_code_improvement_workorder_adds_one_share_threshold_opportunity_o
         for item in report["orders"]
         if item["source_report_type"] == "one_share_threshold_opportunity"
     ]
-    assert report["summary"]["one_share_threshold_opportunity_source_order_count"] == 1
-    assert len(orders) == 1
-    assert orders[0]["runtime_effect"] is False
-    assert orders[0]["allowed_runtime_apply"] is False
-    assert orders[0]["actual_order_submitted"] is False
-    assert orders[0]["broker_order_forbidden"] is True
-    assert orders[0]["decision"] == "attach_existing_family"
-    assert orders[0]["route"] == "existing_family"
-    assert orders[0]["implementation_status"] == "source_evidence_candidate"
-    assert (
-        orders[0]["implementation_provenance"]["target_hook_implementation_status"]
-        == "requires_independent_verification"
-    )
-    assert "broker_guard_bypass" in orders[0]["forbidden_uses"]
-    assert report["source"]["one_share_threshold_opportunity"] == str(
-        source_dir / "one_share_threshold_opportunity_2026-07-01.json"
-    )
+    assert "one_share_threshold_opportunity_source_order_count" not in report["summary"]
+    assert orders == []
+    assert "one_share_threshold_opportunity" not in report["source"]
 
 
 def test_build_code_improvement_workorder_adds_entry_hurdle_backtest_orders(
@@ -1397,10 +1366,8 @@ def test_repeated_one_share_evidence_is_not_a_new_code_defect(source_gap):
         [item],
         repeat_counts={"order_one_share_evidence": {"count": 3}},
     )
-    assert bool(ids) is source_gap
-    assert result[0].decision == (
-        "implement_now" if source_gap else "attach_existing_family"
-    )
+    assert ids == []
+    assert result == []
 
 
 def test_build_code_improvement_workorder_does_not_escalate_existing_family_only_repeat(

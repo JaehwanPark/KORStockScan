@@ -2839,12 +2839,8 @@ def test_latest_run_lines_prefers_repaired_full_done_marker_after_partial_marker
     assert mod._parse_bool_flags(done_line)["lifecycle_bucket_discovery"] is True
 
 
-def test_artifact_paths_include_one_share_threshold_opportunity():
-    path = mod._artifact_paths("2026-07-02")["one_share_threshold_opportunity"]
-
-    assert str(path).endswith(
-        "data/report/one_share_threshold_opportunity/one_share_threshold_opportunity_2026-07-02.json"
-    )
+def test_artifact_paths_exclude_retired_one_share_threshold_opportunity():
+    assert "one_share_threshold_opportunity" not in mod._artifact_paths("2026-09-18")
 
 
 def test_artifact_paths_include_smoothing_daily_and_cumulative_reports():
@@ -6537,7 +6533,6 @@ def test_build_threshold_cycle_postclose_verification_prefers_workorder_lineage(
     assert {
         "market_panic_breadth",
         "panic_sell_defense",
-        "one_share_threshold_opportunity",
     }.issubset(artifact_labels)
 
     log_path.write_text(

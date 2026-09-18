@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from src.engine.scalping.rising_missed_one_share_entry import (
+from src.engine.scalping.rising_missed_candidate import (
     SCOUT_AI_ATTRIBUTION_SCHEMA,
 )
 from src.engine.trade_profit import (

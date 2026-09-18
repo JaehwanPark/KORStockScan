@@ -403,3 +403,39 @@ def test_scale_in_retirement_preserves_avg_down_common_spread_guard():
     common = {"KORSTOCKSCAN_SCALPING_PYRAMID_PRICE_GUARD_ENABLED": "true",
               "KORSTOCKSCAN_SCALPING_PYRAMID_MAX_SPREAD_BPS": "80"}
     assert without_retired_env(common) == common
+
+
+def test_rising_missed_scout_retirement_cannot_be_overridden_by_old_env():
+    old = {"KORSTOCKSCAN_RISING_MISSED_ONE_SHARE_ENTRY_ENABLED": "true",
+           "KORSTOCKSCAN_RISING_MISSED_SCOUT_ENTRY_BUDGET_CAP_KRW": "999999",
+           "KORSTOCKSCAN_RISING_MISSED_NORMAL_BUY_BRIDGE_ENABLED": "true",
+           "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED": "true"}
+    clean = policy.without_retired_env(old)
+    assert "KORSTOCKSCAN_RISING_MISSED_ONE_SHARE_ENTRY_ENABLED" not in clean
+    assert "KORSTOCKSCAN_RISING_MISSED_SCOUT_ENTRY_BUDGET_CAP_KRW" not in clean
+    assert clean["KORSTOCKSCAN_RISING_MISSED_NORMAL_BUY_BRIDGE_ENABLED"] == "true"
+    assert clean["KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED"] == "true"
+    for name in policy.RISING_MISSED_SCOUT_RETIRED_REPORTS:
+        assert policy.retired_status(name)["retirement_id"] == policy.RISING_MISSED_SCOUT_RETIREMENT_ID
+
+
+@pytest.mark.parametrize("name", ["one_share_threshold_opportunity", "rising_missed_scout_workorder"])
+def test_rising_missed_scout_sources_are_not_read_by_current_consumers(name, monkeypatch):
+    from src.engine import build_code_improvement_workorder as workorder
+    from src.engine import build_next_stage2_checklist as checklist
+    def forbidden(*args, **kwargs):
+        pytest.fail("retired source was read")
+    monkeypatch.setattr(Path, "read_bytes", forbidden)
+    path = Path("data/report") / name / (name + "_2026-09-18.json")
+    assert workorder._load_json(path) == {}
+    assert checklist._load_json(path) == {}
+
+
+def test_retired_scout_orders_cannot_reenter_current_mixed_bundle():
+    active = {"source_report_type": "entry_recheck_drought_controller", "order_id": "ordinary"}
+    stale = [{"source_report_type": name, "order_id": "old", "runtime_effect": True}
+             for name in policy.RISING_MISSED_SCOUT_RETIRED_REPORTS]
+    raw = {"stage": "sell_completed", "record_id": 7, "profit_rate": 0.2}
+    cleaned = policy.current_report_view({"orders": stale + [active], "raw_rows": [raw]})
+    assert cleaned["orders"] == [active]
+    assert cleaned["raw_rows"] == [raw]

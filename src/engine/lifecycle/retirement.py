@@ -18,6 +18,8 @@ LATENCY_RECOMMENDATION_RETIREMENT_ID = "latency_recommendation_retirement_202609
 LATENCY_RECOMMENDATION_RETIRED_REPORTS = frozenset(
     {"latency_classifier_recommendation"}
 )
+RISING_MISSED_SCOUT_RETIREMENT_ID = "rising_missed_scout_retirement_20260918"
+RISING_MISSED_SCOUT_RETIRED_REPORTS = frozenset({"one_share_threshold_opportunity", "rising_missed_scout_workorder"})
 SCALE_IN_RETIREMENT_ID = "pyramid_retirement_avg_down_shared_rebound_20260918"
 SCALE_IN_RETIRED_REPORTS = frozenset({
     "scalping_pyramid_intraday_feedback", "scalping_pyramid_quality_calibration",
@@ -70,6 +72,7 @@ RETIRED_REPORTS = (
     | SCALP_OVERNIGHT_RETIRED_REPORTS
     | LATENCY_RECOMMENDATION_RETIRED_REPORTS
     | SCALE_IN_RETIRED_REPORTS
+    | RISING_MISSED_SCOUT_RETIRED_REPORTS
 )
 RETIRED_FAMILIES = (
     RETIRED_REPORTS
@@ -99,6 +102,11 @@ RETIRED_FAMILIES = (
     | SCALP_OVERNIGHT_RETIRED_FAMILIES
 )
 RETIRED_ENV_PREFIXES = (
+    "KORSTOCKSCAN_RISING_MISSED_ONE_SHARE_ENTRY_",
+    "KORSTOCKSCAN_RISING_MISSED_SCOUT_",
+    "KORSTOCKSCAN_ONE_SHARE_THRESHOLD_OPPORTUNITY_",
+    "THRESHOLD_CYCLE_RUN_ONE_SHARE_THRESHOLD_OPPORTUNITY",
+    "THRESHOLD_CYCLE_RUN_RISING_MISSED_SCOUT_WORKORDER",
     "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_PYRAMID_HANDOFF_",
     "KORSTOCKSCAN_SCALPING_ENABLE_PYRAMID",
     "KORSTOCKSCAN_SWING_ENABLE_PYRAMID",
@@ -137,6 +145,8 @@ RETIRED_OWNER_PREFIXES = tuple(
 )
 RETIRED_STAGE_FLAGS = frozenset(
     {
+        "one_share_threshold_opportunity",
+        "rising_missed_scout_workorder",
         "scalp_entry_adm",
         "lifecycle_decision_matrix",
         "lifecycle_ai_context",
@@ -152,7 +162,9 @@ RETIRED_STAGE_FLAGS = frozenset(
 def retired_status(report_type: str = "adm_ldm") -> dict[str, Any]:
     """Explicit terminal state; never a source-quality failure or retry request."""
     retirement_id = (
-        SCALE_IN_RETIREMENT_ID
+        RISING_MISSED_SCOUT_RETIREMENT_ID
+        if report_type in RISING_MISSED_SCOUT_RETIRED_REPORTS
+        else SCALE_IN_RETIREMENT_ID
         if report_type in SCALE_IN_RETIRED_REPORTS | SCALE_IN_RETIRED_CALIBRATION_FAMILIES
         else LATENCY_RECOMMENDATION_RETIREMENT_ID
         if report_type in LATENCY_RECOMMENDATION_RETIRED_REPORTS

@@ -52,7 +52,7 @@ from src.engine.scalping.main_lifecycle_journal import (
     pipeline_lifecycle_fields_safe,
     pipeline_lifecycle_stage_mapped,
 )
-from src.engine.scalping.rising_missed_one_share_entry import (
+from src.engine.scalping.rising_missed_candidate import (
     FORCED_ENTRY_REASON as RISING_MISSED_FORCED_ENTRY_REASON,
     scout_ai_execution_attribution_fields,
 )

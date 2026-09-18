@@ -48,7 +48,7 @@ PID·lock·progress·deadline·latest terminal을 실제 run 기준으로 확인
 | #6 | `sniper_post_sell_feedback`의 sim post-sell | 조건부 ON, source-only | 성숙/미완료·same-session 결과; actual 손익/승인으로 전환 금지 |
 | #7 | `monitoring.limit_down_watch_report` | 조건부 ON, 진단 | source-valid 급락/유동성 위험과 no-observation 직접 사유 → 기존 source/workorder |
 | #8 | `monitoring.rising_missed_intraday_feedback` | 조건부 ON, 진단/CF | exact opportunity·최초 blocker·후행 executable/proxy 분리 |
-| #9/#101 | `monitoring.rising_missed_scout_workorder` | 조건부 ON, handoff | missed/source gap→native disposition·직접 consumer. prior 후 refresh는 같은 작업 |
+| #9/#101 | `monitoring.rising_missed_scout_workorder` | RETIRED, 사용자 삭제 | 신규 scout runtime·전용 producer/consumer·산출물 삭제. prior 후 refresh도 제거; 과거 source gap은 복원 사유 아님 |
 | #10 | `monitoring.scalping_pyramid_intraday_feedback` | RETIRED | PYRAMID 런타임·튜닝 폐기; 과거 원장 archive-only, 신규 필수 입력/cron 없음 |
 | #11/#74 | `observation_source_quality_audit` preflight/final | ON/trigger-gated, 품질 | exact scope/clock/hash·row/window exclusion·machine/AI/operational gate·counts → 경제성 admission |
 | #12 | `monitoring.scalping_pyramid_quality_calibration` | RETIRED | 독립 grid/후보/PREOPEN 폐기; historical pending/체결/완료 정산 보존 |
@@ -56,7 +56,7 @@ PID·lock·progress·deadline·latest terminal을 실제 run 기준으로 확인
 | #14 | `monitoring.samsung_machine_entry_tuning` | 조건부 ON, actual 분석 | #74 후 한 번·actual policy/profile·실현/HELD/cost·유효 carry; timing 연구 별도 |
 | #15 | `monitoring.low_price_two_leg_tuning` | 조건부 ON, actual 분석 | #74 후 한 번·actual policy·leg/holding/terminal·missing cost=null |
 | #16 | `monitoring.low_price_two_leg_expanded_candidate_research` → `automation.low_price_two_leg_auto_expansion_policy` | 조건부 ON, 연구/발행 | 실제 state/catalog·candidate/calibration/holdout·checkpoint/resume·dated publication. bar touch≠broker fill |
-| #21 | `monitoring.one_share_threshold_opportunity` | 조건부 ON, 진단/CF | 원래 quantity 제한·primary blocker·source-only 기회비용; executable 근거 부족은 진단 |
+| #21 | `monitoring.one_share_threshold_opportunity` | RETIRED, 사용자 삭제 | 신규 scout runtime과 함께 전용 threshold/AI review·producer/consumer·산출물 삭제; 현행 필수 작업 아님 |
 | #23 | `scalping.entry_recheck_drought_controller` | 조건부 ON, 기존 family | 최근 동일 scope 유효 원천·attempt/cycle·조건부 recheck candidate→PREOPEN; 누적 backtest는 on-demand |
 | #27 | `scalping.microstructure_reaction_context` | 조건부 ON, feature 진단 | 원 receipt/required feature·delivery·동일 cutoff·missing/unproven → 기존 평가/감사 |
 | #45 | `market_panic_breadth_collector --report-only` | 조건부 ON, context | exact market/window·coverage·panic cohort; 직접 BUY/SELL authority 없음 |

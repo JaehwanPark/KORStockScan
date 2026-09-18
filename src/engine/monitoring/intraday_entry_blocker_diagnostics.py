@@ -9,7 +9,7 @@ from datetime import datetime, time as dt_time
 from pathlib import Path
 from typing import Any
 
-from src.engine.scalping.rising_missed_one_share_entry import (
+from src.engine.scalping.rising_missed_candidate import (
     BLOCK_ENTRY_AI_NOT_EVALUATED,
     RISING_MISSED_CLASS_ACTIONABLE_MAJOR,
     RISING_MISSED_CLASS_INTENDED_GUARD_PRESERVED,

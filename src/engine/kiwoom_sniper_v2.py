@@ -14455,20 +14455,6 @@ def run_sniper(is_test_mode=False):
                                                 ),
                                                 scanner_async_commit_phase=False,
                                             )
-                                    elif sniper_state_handlers.handle_scanner_async_rising_missed_commit(
-                                        stock,
-                                        code,
-                                        ws_data,
-                                        admin_id,
-                                        now_ts=time.time(),
-                                        now_dt=datetime.now(),
-                                        ai_engine=ai_engine,
-                                        scanner_async_eval_coordinator=(
-                                            async_coordinator
-                                        ),
-                                        scanner_async_generation=(scheduler_generation),
-                                    ):
-                                        pass
                                     else:
                                         handle_watching_state(
                                             stock,

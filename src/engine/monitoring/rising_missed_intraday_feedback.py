@@ -7110,12 +7110,11 @@ def build_report(
                 ],
                 "source_paths": [str(resolved_pipeline_path)],
                 "files_likely_touched": [
-                    "src/engine/scalping/rising_missed_one_share_entry.py",
+                    "src/engine/scalping/rising_missed_candidate.py",
                     "src/engine/monitoring/intraday_entry_blocker_diagnostics.py",
-                    "src/engine/monitoring/rising_missed_scout_workorder.py",
                 ],
                 "acceptance_tests": [
-                    "PYTHONPATH=. .venv/bin/pytest src/tests/test_rising_missed_intraday_feedback.py src/tests/test_rising_missed_scout_workorder.py src/tests/test_build_code_improvement_workorder.py",
+                    "PYTHONPATH=. .venv/bin/pytest src/tests/test_rising_missed_intraday_feedback.py src/tests/test_build_code_improvement_workorder.py",
                     "feedback loop remains source-only and does not mutate intraday runtime thresholds, broker/order guards, provider route, bot state, or scale-in quantity/caps",
                 ],
                 "forbidden_uses": FORBIDDEN_USES,
@@ -7247,7 +7246,7 @@ def build_report(
                     "src/engine/monitoring/rising_missed_intraday_feedback.py",
                 ],
                 "acceptance_tests": [
-                    "PYTHONPATH=. .venv/bin/python -m pytest src/tests/test_entry_turn_point_replay.py src/tests/test_rising_missed_scout_workorder.py",
+                    "PYTHONPATH=. .venv/bin/python -m pytest src/tests/test_entry_turn_point_replay.py",
                     "exact route/time/provenance defects and pending maturity remain distinct in source_readiness through scout/workorder consumers",
                     "diagnostic repair does not require positive EV, live fills or promotion floors",
                     "runtime_effect=false, allowed_runtime_apply=false, actual_order_submitted=false, broker_order_forbidden=true",
@@ -7713,7 +7712,6 @@ def build_report(
             },
             "code_improvement_order_count": len(code_improvement_orders),
             "consumer_readiness": {
-                "scout_workorder_input_ready": bool(forced),
                 "closed_first_touch_outcome_available": any(
                     item.get("final_profit_rate") is not None
                     for item in first_touch_rows

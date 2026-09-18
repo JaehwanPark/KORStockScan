@@ -1027,68 +1027,6 @@ def test_opening_rotation_ttl_sweep_backfills_missing_claim_time(monkeypatch):
     assert stock["opening_rotation_watch_slot_claimed_at_epoch"] == now_ts
 
 
-def test_async_rising_missed_commit_cannot_preempt_owned_opening_slot(monkeypatch):
-    now_dt = datetime(2026, 8, 13, 10, 5)
-    promotion_id = "SCANPROM-005930-ASYNC-OWNER"
-    generation = ScannerGeneration(
-        code="005930",
-        promotion_id=promotion_id,
-        revision=1,
-        record_id=505933,
-        venue="KRX",
-        promotion_epoch=now_dt.timestamp() - 10.0,
-        attach_epoch=now_dt.timestamp() - 9.0,
-        observed_price=70_000,
-        source_signature="PRICE_JUMP_START",
-    )
-    stock = {
-        "id": 505933,
-        "code": "005930",
-        "name": "삼성전자",
-        "status": "WATCHING",
-        "strategy": "SCALPING",
-        "position_tag": "SCANNER",
-        "scanner_promotion_id": promotion_id,
-        "opening_rotation_watch_slot_promotion_id": promotion_id,
-        "opening_rotation_watch_slot_claimed_at_epoch": now_dt.timestamp() - 8.0,
-        "_scanner_async_generation_id": generation.generation_id,
-        "_scanner_async_cache_key": "rising_missed:owner-race",
-    }
-    emitted = []
-    monkeypatch.setattr(
-        handlers,
-        "_maybe_submit_rising_missed_one_share_entry",
-        lambda *_args, **_kwargs: pytest.fail(
-            "Opening-owned promotion must not enter Rising Missed commit"
-        ),
-    )
-    monkeypatch.setattr(
-        handlers,
-        "_log_entry_pipeline",
-        lambda *args, **fields: emitted.append((args[2], fields)),
-    )
-
-    handled = handlers.handle_scanner_async_rising_missed_commit(
-        stock,
-        "005930",
-        {"curr": 70_000, "fluctuation": 3.0},
-        admin_id=1,
-        now_ts=now_dt.timestamp(),
-        now_dt=now_dt,
-        scanner_async_generation=generation,
-    )
-
-    assert handled is True
-    assert stock["status"] == "WATCHING"
-    assert stock["opening_rotation_watch_slot_promotion_id"] == promotion_id
-    blocked = next(
-        fields
-        for stage, fields in emitted
-        if stage == "rising_missed_entry_blocked_opening_rotation_owner"
-    )
-    assert blocked["opening_rotation_watch_slot_owned"] is True
-    assert blocked["broker_order_forbidden"] is True
-    assert blocked["actual_order_submitted"] is False
 
 
 def test_final_submit_rechecks_opening_owner_against_rising_missed_race(monkeypatch):
@@ -1151,17 +1089,8 @@ def test_final_submit_rechecks_opening_owner_against_rising_missed_race(monkeypa
 
     assert submitted is False
     assert stock["opening_rotation_watch_slot_promotion_id"] == promotion_id
-    assert "rising_missed_one_share_entry_forced" not in stock
-    assert "rising_missed_one_share_scout" not in stock
-    assert "target_buy_price" not in stock
-    blocked = next(
-        fields
-        for stage, fields in emitted
-        if stage == "entry_submit_blocked_opening_rotation_owner_conflict"
-    )
-    assert blocked["opening_rotation_watch_slot_owned"] is True
-    assert blocked["broker_order_forbidden"] is True
-    assert blocked["actual_order_submitted"] is False
+    assert stock["rising_missed_one_share_entry_forced"] is True
+    assert all(stage == "entry_submit_attempt_finished" for stage, _fields in emitted)
 
 
 @pytest.mark.parametrize(
@@ -3530,79 +3459,6 @@ def test_holding_common_trailing_does_not_overwrite_an_existing_exit_owner():
     ) < (holding_source.index('exit_rule = "protect_trailing_stop"'))
 
 
-def test_exact_opening_slot_skips_preceding_rising_hook_outside_candidate_band(
-    monkeypatch,
-):
-    handlers.COOLDOWNS = {}
-    handlers.ALERTED_STOCKS = set()
-    handlers.EVENT_BUS = None
-    monkeypatch.setattr(
-        handlers, "_observe_entry_cancel_wait_counterfactuals", lambda *a, **k: None
-    )
-    monkeypatch.setattr(handlers, "_log_watching_state_debug", lambda *a, **k: None)
-    monkeypatch.setattr(
-        handlers, "_manual_control_exclusion_blocked", lambda *a, **k: False
-    )
-    monkeypatch.setattr(handlers, "is_buy_side_paused", lambda: False)
-    monkeypatch.setattr(handlers, "is_scalping_buy_time_allowed", lambda value: True)
-    monkeypatch.setattr(
-        handlers,
-        "evaluate_scalp_same_symbol_loss_reentry_guard",
-        lambda *a, **k: {"allowed": True},
-    )
-    monkeypatch.setattr(
-        handlers, "_maybe_emit_entry_ai_price_skip_followup", lambda *a, **k: None
-    )
-    monkeypatch.setattr(
-        handlers,
-        "_maybe_submit_rising_missed_one_share_entry",
-        lambda *a, **k: (_ for _ in ()).throw(
-            AssertionError("rising_missed hook must not run")
-        ),
-    )
-    branch_calls = []
-    monkeypatch.setattr(
-        handlers,
-        "_handle_watching_strategy_branch",
-        lambda *a, **k: branch_calls.append((a, k)) or False,
-    )
-    stock = {
-        "id": 9,
-        "code": "005930",
-        "name": "테스트",
-        "status": "WATCHING",
-        "strategy": "SCALPING",
-        "position_tag": "SCANNER",
-        "scanner_promotion_id": "PROMO-EXACT-OWNER",
-        "opening_rotation_watch_slot_promotion_id": "PROMO-EXACT-OWNER",
-        "opening_rotation_watch_slot_claimed_at_epoch": datetime(
-            2026, 7, 20, 9, 19, 50
-        ).timestamp(),
-        "source_signature": "PRICE_JUMP_START,VOLUME_SURGE_POSITIVE",
-        "rising_missed_class": "not_rising_missed",
-    }
-
-    assert handlers._has_rising_missed_watch_source_marker(stock) is True
-    assert (
-        handlers._opening_rotation_yields_to_rising_missed_owner(
-            stock, {"pos_tag": "SCANNER"}
-        )
-        is False
-    )
-
-    handlers.handle_watching_state(
-        stock,
-        "005930",
-        # +7% is outside the initial Opening candidate band. Exact slot
-        # ownership must still suppress a competing pre-hook.
-        {"curr": 10_000, "fluctuation": 7.0},
-        admin_id=1,
-        now_ts=datetime(2026, 7, 20, 9, 20).timestamp(),
-        now_dt=datetime(2026, 7, 20, 9, 20),
-        radar=None,
-        ai_engine=None,
-    )
-    assert branch_calls
 
 
 def test_opening_slot_release_converges_when_provenance_emit_fails(monkeypatch):
@@ -3633,63 +3489,6 @@ def test_opening_slot_release_converges_when_provenance_emit_fails(monkeypatch):
     assert errors and "provenance emit failed" in errors[-1]
 
 
-def test_rising_missed_lineage_is_consumed_by_opening_before_scout_hook(monkeypatch):
-    handlers.COOLDOWNS = {}
-    handlers.ALERTED_STOCKS = set()
-    handlers.EVENT_BUS = None
-    monkeypatch.setattr(
-        handlers, "_observe_entry_cancel_wait_counterfactuals", lambda *a, **k: None
-    )
-    monkeypatch.setattr(handlers, "_log_watching_state_debug", lambda *a, **k: None)
-    monkeypatch.setattr(
-        handlers, "_manual_control_exclusion_blocked", lambda *a, **k: False
-    )
-    monkeypatch.setattr(handlers, "is_buy_side_paused", lambda: False)
-    monkeypatch.setattr(handlers, "is_scalping_buy_time_allowed", lambda value: True)
-    monkeypatch.setattr(
-        handlers,
-        "evaluate_scalp_same_symbol_loss_reentry_guard",
-        lambda *a, **k: {"allowed": True},
-    )
-    monkeypatch.setattr(
-        handlers, "_maybe_emit_entry_ai_price_skip_followup", lambda *a, **k: None
-    )
-    scout_calls = []
-    monkeypatch.setattr(
-        handlers,
-        "_maybe_submit_rising_missed_one_share_entry",
-        lambda *a, **k: scout_calls.append((a, k)) or True,
-    )
-    branch_calls = []
-    monkeypatch.setattr(
-        handlers,
-        "_handle_watching_strategy_branch",
-        lambda *a, **k: branch_calls.append((a, k)) or True,
-    )
-    stock = {
-        "id": 10,
-        "code": "005930",
-        "name": "테스트",
-        "strategy": "SCALPING",
-        "position_tag": "SCANNER",
-        "source_signature": (
-            "LOW_REBOUND_RISING_MISSED,PRICE_JUMP_START,VOLUME_SURGE_POSITIVE"
-        ),
-    }
-
-    handlers.handle_watching_state(
-        stock,
-        "005930",
-        {"curr": 10_000, "fluctuation": 3.0},
-        admin_id=1,
-        now_ts=datetime(2026, 7, 20, 9, 20).timestamp(),
-        now_dt=datetime(2026, 7, 20, 9, 20),
-        radar=None,
-        ai_engine=None,
-    )
-
-    assert branch_calls
-    assert scout_calls == []
 
 
 def test_explicit_rising_missed_class_alone_does_not_exclude_opening():

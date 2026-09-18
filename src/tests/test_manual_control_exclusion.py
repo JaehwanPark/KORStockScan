@@ -1274,55 +1274,6 @@ def test_open_loss_session_resolves_nxt_and_krx_windows(monkeypatch):
     )
 
 
-def test_open_loss_holding_auto_exclusion_ignores_non_open_window(
-    monkeypatch, tmp_path
-):
-    path = tmp_path / "manual_control_excluded_codes.txt"
-    stock = {
-        "id": 4,
-        "code": "005930",
-        "name": "SAMSUNG",
-        "status": "HOLDING",
-        "strategy": "KOSPI_ML",
-        "buy_price": 10000,
-    }
-    monkeypatch.delenv(manual_control_exclusion.EXCLUDED_CODES_ENV, raising=False)
-    monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_FILE_ENV, str(path))
-
-    called = {"reconcile": False}
-
-    def mark_reconcile(*args, **kwargs):
-        called["reconcile"] = True
-
-    monkeypatch.setattr(
-        sniper_state_handlers, "_reconcile_pending_entry_orders", mark_reconcile
-    )
-    monkeypatch.setattr(
-        sniper_state_handlers,
-        "_holding_ws_freshness_recover_or_block",
-        lambda *args, **kwargs: (args[2], False, {}),
-    )
-    monkeypatch.setattr(
-        sniper_state_handlers,
-        "_maybe_submit_rising_missed_scout_upgrade",
-        lambda *args, **kwargs: True,
-    )
-
-    sniper_state_handlers.handle_holding_state(
-        stock,
-        "005930",
-        {"curr": 9700},
-        admin_id="admin",
-        market_regime="BULL",
-        now_ts=2000.0,
-        now_dt=datetime(2026, 7, 2, 9, 10, 0),
-    )
-
-    assert called["reconcile"] is True
-    assert (
-        manual_control_exclusion.evaluate_manual_control_exclusion("005930").excluded
-        is False
-    )
 
 
 def test_hard_stop_manual_handoff_registers_and_blocks_real_sell(monkeypatch, tmp_path):

@@ -127,7 +127,6 @@ def source_paths(report_dir: Path, target_date: str, consumer: str) -> dict[str,
             "code_improvement_workorder",
             "runtime_apply_gap_audit",
             "automation_chain_trigger_decision",
-            "rising_missed_scout_workorder",
             "tuning_performance_control_tower",
             # Route/session/venue provenance is emitted by the lineage and
             # conversion-lane reports.  Bind both consumers to their hashes so a

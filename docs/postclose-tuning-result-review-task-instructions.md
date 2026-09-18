@@ -168,6 +168,8 @@ AVG_DOWN은 현재 Main holding bars와 WS tick/BBO로 공통 Main 기계 entry 
 
 실제 적용 code/machine 버전별 episode를 중복 제거하고 rolling/cumulative 비용 차감 EV·순익·tail·노출·모델 오차를 평가한다. 기존 Main entry 모델 ΔEV는 실제 AVG_DOWN 증분 이익과 별도이며 missing/censored 비용·결과는 null이다. policy/source/scope 결손·stop/pending/common guard 차단·유효 반등 부재·미성숙 결과를 구분한다. candidate0은 폐기한 독립 튜닝의 실패나 복원 사유가 아니다. 손절 직전 강제 추가매수·손절 유예를 반등 정책으로 복원하지 않는다. code/PREOPEN/selected release/PID/자연 행동/실경제성을 별도 판정하며 당일 기존 Acceptance owner를 따른다.
 
+`RISING_MISSED_ONE_SHARE_ENTRY` 신규 scout·upgrade 주문 및 scanner async commit adapter, 전용 `one_share_threshold_opportunity`·`rising_missed_scout_workorder` 장후 생산/소비는 9/18 사용자 지시로 폐기했다. 과거 env·보고서·workorder 반복 결함 처리에서 복원하지 않는다. 일반 BUY bridge와 그 TP1 안전 판정, 공통 sizing/주문/holding/exit 및 기존 체결 정산은 계속 사용한다. 전용 산출물 삭제·검증·선택 release는 [폐기 review](audit-reports/2026-09-18-rising-missed-scout-retirement-review.md)를 따른다.
+
 ### 8.2 DONE controller와 AI replay
 
 wrapper terminal, 21:05 follower lock/terminal과 calibration/optimizer/holding/consumer generation을 대사한다. Provider0 metadata closure와 실제 replay·current compact 연구를 분리하고 disabled 또는 legacy source를 현재 prompt 효과로 재라벨링하지 않는다. controller DONE이 latest strict summary closure를 포함하는지 확인한다.

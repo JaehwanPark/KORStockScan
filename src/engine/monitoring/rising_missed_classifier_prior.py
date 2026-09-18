@@ -21,7 +21,6 @@ LIFECYCLE_BUCKET_DISCOVERY_DIR = REPORT_DIR / "lifecycle_bucket_discovery"
 LIFECYCLE_DECISION_MATRIX_DIR = REPORT_DIR / "lifecycle_decision_matrix"
 KEY_LINEAGE_LEDGER_DIR = REPORT_DIR / "key_lineage_ledger"
 CONVERSION_LANE_DIR = REPORT_DIR / "conversion_lane"
-RISING_MISSED_SCOUT_WORKORDER_DIR = REPORT_DIR / "rising_missed_scout_workorder"
 RISING_MISSED_INTRADAY_FEEDBACK_DIR = REPORT_DIR / "rising_missed_intraday_feedback"
 MISSED_ENTRY_COUNTERFACTUAL_DIR = REPORT_DIR / "missed_entry_counterfactual"
 
@@ -132,8 +131,6 @@ def _default_source_paths(target_date: str) -> dict[str, Path]:
         "key_lineage_ledger": KEY_LINEAGE_LEDGER_DIR
         / f"key_lineage_ledger_{target_date}.json",
         "conversion_lane": CONVERSION_LANE_DIR / f"conversion_lane_{target_date}.json",
-        "rising_missed_scout_workorder": RISING_MISSED_SCOUT_WORKORDER_DIR
-        / f"rising_missed_scout_workorder_{target_date}.json",
         "rising_missed_intraday_feedback": RISING_MISSED_INTRADAY_FEEDBACK_DIR
         / f"rising_missed_intraday_feedback_{target_date}.json",
         "missed_entry_counterfactual": counterfactual_path,
@@ -380,38 +377,6 @@ def _add_profit(metrics: dict[str, Any], profit: float | None) -> None:
         metrics["avg_profit_rate"] = round(sum(profits) / len(profits), 4)
 
 
-def _merge_scout_metrics(
-    priors: dict[str, dict[str, Any]], report: dict[str, Any]
-) -> None:
-    for field, outcome in (
-        ("profitable_forced_scout_examples", "winner"),
-        ("loss_or_flat_forced_scout_examples", "loser"),
-        ("forced_scout_outcomes", "outcome"),
-    ):
-        for item in _as_list(report.get(field)):
-            if not isinstance(item, dict):
-                continue
-            signature = (
-                item.get("source_signature")
-                or item.get("scanner_promotion_reason")
-                or "unknown_source_signature"
-            )
-            prefix = _source_signature_prefix(signature)
-            prior = priors.setdefault(_prefix_key(prefix), _new_prior(prefix))
-            metrics = prior["rising_missed_metrics"]
-            metrics["forced_scout_count"] += 1
-            profit = _safe_float(item.get("profit_rate"), None)
-            if profit is None:
-                profit = _safe_float(item.get("profit_pct"), None)
-            if outcome == "winner" or (
-                outcome == "outcome" and profit is not None and profit > 0
-            ):
-                metrics["winner_count"] += 1
-            elif outcome == "loser" or (
-                outcome == "outcome" and profit is not None and profit <= 0
-            ):
-                metrics["loser_count"] += 1
-            _add_profit(metrics, profit)
 
 
 def _merge_intraday_feedback(
@@ -834,7 +799,6 @@ def build_report(
     }
     payloads = {label: _load_json(path) for label, path in paths.items()}
     priors: dict[str, dict[str, Any]] = {}
-    _merge_scout_metrics(priors, payloads.get("rising_missed_scout_workorder", {}))
     _merge_intraday_feedback(
         priors, payloads.get("rising_missed_intraday_feedback", {})
     )

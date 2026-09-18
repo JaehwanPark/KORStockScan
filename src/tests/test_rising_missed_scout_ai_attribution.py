@@ -4,7 +4,7 @@ from datetime import datetime
 from src.engine import sniper_execution_receipts as receipts
 from src.engine import sniper_state_handlers as handlers
 from src.engine.monitoring import scalping_pyramid_intraday_feedback as feedback
-from src.engine.scalping.rising_missed_one_share_entry import (
+from src.engine.scalping.rising_missed_candidate import (
     FORCED_ENTRY_REASON,
     freeze_scout_ai_parent_fields,
     scout_ai_execution_attribution_fields,
@@ -405,22 +405,5 @@ def test_feedback_report_consumes_attribution_from_every_lifecycle_stage(
         generated_at="2026-08-03T15:40:00+09:00",
     )
 
-    summary = report["summary"]
-    assert summary["scout_ai_attribution_closed_full_lifecycle_count"] == 1, "|".join(
-        report["one_share_pyramid_opportunity_rows"][0].get(
-            "scout_ai_attribution_lifecycle_stages"
-        )
-        or []
-    )
-    assert summary["scout_ai_attribution_closed_incomplete_lifecycle_count"] == 0
-    assert set(
-        report["one_share_pyramid_opportunity_rows"][0][
-            "scout_ai_attribution_lifecycle_stages"
-        ]
-    ) >= {
-        "probe_submitted",
-        "probe_filled",
-        "order_bundle_submitted",
-        "holding_started",
-        "sell_completed",
-    }
+    assert report["status"] == "retired"
+    assert report["allowed_runtime_apply"] is False

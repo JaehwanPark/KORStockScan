@@ -6416,18 +6416,15 @@ def test_async_heavy_eval_yield_skips_one_normal_polling_sleep():
     assert yield_idx < sleep_budget_idx < sleep_idx
 
 
-def test_async_commit_routes_rising_missed_before_generic_watching_handler():
+def test_async_commit_has_no_retired_rising_missed_adapter():
     source = inspect.getsource(kiwoom_sniper_v2.run_sniper)
     commit_idx = source.index("if scheduled_lane is ScannerLane.COMMIT:")
     opening_adapter_idx = source.index(
         "handle_scanner_async_opening_rotation_commit(", commit_idx
     )
-    rising_adapter_idx = source.index(
-        "handle_scanner_async_rising_missed_commit(", opening_adapter_idx
-    )
-    generic_handler_idx = source.index("handle_watching_state(", rising_adapter_idx)
-
-    assert commit_idx < opening_adapter_idx < rising_adapter_idx < generic_handler_idx
+    assert "handle_scanner_async_rising_missed_commit(" not in source
+    generic_handler_idx = source.index("handle_watching_state(", opening_adapter_idx)
+    assert commit_idx < opening_adapter_idx < generic_handler_idx
 
 
 def test_opening_rotation_ttl_sweep_is_independent_and_precedes_general_fifo():
@@ -12914,13 +12911,3 @@ def test_ws_prune_retains_nxt_post_block_sampler_subscription(monkeypatch):
     kiwoom_sniper_v2._prune_ws_subscriptions_for_inactive_targets([])
 
     assert published == []
-
-
-def test_main_dependency_binding_owns_scale_in_budget_source(monkeypatch):
-    calls = []
-    monkeypatch.setattr(kiwoom_sniper_v2, "_STATE_HANDLER_DEPS", {})
-    monkeypatch.setattr(kiwoom_sniper_v2, "bind_state_dependencies", lambda **kw: calls.append(kw))
-    kiwoom_sniper_v2._ensure_state_handler_deps()
-    assert len(calls) == 1
-    assert calls[0]["scale_in_budget_source_callback"] is (
-        kiwoom_sniper_v2.sniper_state_handlers._prepare_scale_in_budget_source)

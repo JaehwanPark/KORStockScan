@@ -60,7 +60,6 @@ def _patch_dirs(monkeypatch, tmp_path):
     monkeypatch.setattr(mod, "RUNTIME_APPLY_GAP_REPORT_DIR", runtime_gap)
     monkeypatch.setattr(mod, "TUNING_PERFORMANCE_REPORT_DIR", tuning_performance)
     monkeypatch.setattr(mod, "AUTOMATION_TRIGGER_DECISION_REPORT_DIR", trigger_decision)
-    monkeypatch.setattr(mod, "RISING_MISSED_SCOUT_WORKORDER_REPORT_DIR", rising_missed)
     monkeypatch.setattr(mod, "MAIN_AI_QUALITY_REPORT_DIR", main_ai_quality)
     monkeypatch.setattr(
         mod,
@@ -227,7 +226,7 @@ def test_build_next_stage2_checklist_generates_next_trading_day_and_tasks(
     docs, ev_dir, openai_dir, swing_dir, code_dir = _patch_dirs(monkeypatch, tmp_path)
     trigger_dir = mod.AUTOMATION_TRIGGER_DECISION_REPORT_DIR
     tuning_dir = mod.TUNING_PERFORMANCE_REPORT_DIR
-    rising_missed_dir = mod.RISING_MISSED_SCOUT_WORKORDER_REPORT_DIR
+    rising_missed_dir = tmp_path / "retired-rising-missed"
     _write_json(
         ev_dir / "threshold_cycle_ev_2026-05-08.json",
         {
@@ -286,15 +285,9 @@ def test_build_next_stage2_checklist_generates_next_trading_day_and_tasks(
     checklist = docs / "checklists" / "2026-05-11-stage2-todo-checklist.md"
     text = checklist.read_text(encoding="utf-8")
     assert "[ThresholdEnvAutoApplyPreopen0511]" in text
-    assert "[RisingMissedScoutRuntimePreopen0511]" in text
-    assert "rising_missed_scout_workorder_2026-05-08.json" in text
+    assert "RisingMissedScoutRuntimePreopen" not in text
+    assert "rising_missed_scout_workorder_2026-05-08.json" not in text
     assert "rising_missed_normal_buy_bridge_candidate_discovery" not in text
-    assert (
-        "source-only order는 별도 runtime family/env mapping과 guard 통과가 있을 때만 반영"
-        in text
-    )
-    assert "runtime_env_reflected_and_verified" in text
-    assert "stale submit bypass" in text
     assert "[SwingPreFinalAutoAndFinalApprovalPreopen0511]" in text
     assert "[RuntimeEnvIntradayObserve0511]" in text
     assert "candidate_selected_families=score65_74_recovery_probe" in text
@@ -435,7 +428,7 @@ def test_generated_checklist_is_parser_friendly(monkeypatch, tmp_path):
     titles = [task.title for task in tasks]
 
     assert any("ThresholdEnvAutoApplyPreopen0512" in title for title in titles)
-    assert any("RisingMissedScoutRuntimePreopen0512" in title for title in titles)
+    assert not any("RisingMissedScoutRuntimePreopen" in title for title in titles)
     assert any("RuntimeEnvIntradayObserve0512" in title for title in titles)
     assert any("AutomationTriggerDecisionSummary0512" in title for title in titles)
     assert all(task.due_date == "2026-05-12" for task in tasks)
@@ -473,14 +466,12 @@ def test_build_next_stage2_checklist_skips_optional_tasks_when_optional_artifact
     )
     assert summary["tasks"] == [
         "ThresholdEnvAutoApplyPreopen0526",
-        "RisingMissedScoutRuntimePreopen0526",
         "IntradaySourceQualityGateCheck0526",
         "ThresholdDailyEVReport0526",
         "HumanInterventionSummary0526",
         "MachineMicroPolicyApprovalSourceGap0526",
         "PostcloseSourceQualityGateReview0526",
     ]
-    assert "report_missing_or_unreadable" in text
     assert "source_status=missing" in text
     assert "CodeImprovementWorkorderReview0526" not in text
     assert "AutomationTriggerDecisionSummary0526" not in text
