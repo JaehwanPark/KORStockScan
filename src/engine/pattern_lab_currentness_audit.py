@@ -49,7 +49,6 @@ RETIRED_PATTERN_LABS = {
     }
 }
 
-SCALPING_REENTRY_TERMS = ("threshold_cycle_ev",)
 SWING_REENTRY_TERMS = (
     "threshold_cycle_ev",
     "swing_lifecycle_decision_matrix",
@@ -58,16 +57,6 @@ SWING_REENTRY_TERMS = (
 )
 
 FEEDBACK_SOURCE_CONTRACTS = {
-    "scalping": {
-        "terms": SCALPING_REENTRY_TERMS,
-        "artifact_dirs": {
-            "threshold_cycle_ev": ("threshold_cycle_ev", "threshold_cycle_ev"),
-            "runtime_approval_summary": (
-                "runtime_approval_summary",
-                "runtime_approval_summary",
-            ),
-        },
-    },
     "swing": {
         "terms": SWING_REENTRY_TERMS,
         "artifact_dirs": {
@@ -111,24 +100,6 @@ def _source_rel(path: Path) -> str:
 
 def _lab_paths() -> dict[str, dict[str, Any]]:
     return {
-        "claude_scalping": {
-            "lab_dir": PROJECT_ROOT / "analysis" / "claude_scalping_pattern_lab",
-            "analysis_result": PROJECT_ROOT
-            / "analysis"
-            / "claude_scalping_pattern_lab"
-            / "outputs"
-            / "ev_analysis_result.json",
-            "observability": PROJECT_ROOT
-            / "analysis"
-            / "claude_scalping_pattern_lab"
-            / "outputs"
-            / "tuning_observability_summary.json",
-            "manifest": PROJECT_ROOT
-            / "analysis"
-            / "claude_scalping_pattern_lab"
-            / "outputs"
-            / "run_manifest.json",
-        },
         "deepseek_swing": {
             "lab_dir": PROJECT_ROOT / "analysis" / "deepseek_swing_pattern_lab",
             "analysis_result": PROJECT_ROOT
@@ -362,24 +333,7 @@ def _feedback_source_status(
 ) -> dict[str, Any]:
     contract = FEEDBACK_SOURCE_CONTRACTS[domain]
     active_text = _active_source_text(source_paths)
-    # The scalp producer records what it actually parsed. A source mention is
-    # only wiring evidence; it is never a consumption receipt.
     receipts = []
-    if domain == "scalping":
-        for lab_dir in source_paths:
-            try:
-                output = lab_dir / "outputs"
-                content = (output / "claude_payload_summary.json").read_bytes()
-                manifest = _load_json(output / "run_manifest.json")
-                if (manifest.get("generation_sha256") or {}).get(
-                    "claude_payload_summary.json"
-                ) != hashlib.sha256(content).hexdigest():
-                    continue
-                payload = json.loads(content)
-                feedback = payload.get("feedback_sources") or {}
-                receipts.extend(feedback.get("consumed_feedback_sources") or [])
-            except (OSError, ValueError, TypeError, AttributeError):
-                continue
     consumed: list[dict[str, Any]] = []
     available: list[dict[str, Any]] = []
     missing: list[dict[str, Any]] = []
@@ -439,7 +393,7 @@ def _feedback_source_status(
             "runtime_effect": False,
         }
         valid = validation["validation_status"] == "valid"
-        wiring_ok = domain == "scalping" or mentioned
+        wiring_ok = mentioned
         if wiring_ok and valid:
             item["consumption_status"] = (
                 "verified_receipt"
@@ -449,7 +403,7 @@ def _feedback_source_status(
             available.append(item)
         # Swing is an explicitly enabled legacy/offline path; do not claim a
         # receipt there merely because its source file can be read.
-        if wiring_ok and valid and (consumed_ok or domain != "scalping"):
+        if wiring_ok and valid:
             if consumed_ok:
                 consumed.append(item)
         else:
@@ -460,8 +414,6 @@ def _feedback_source_status(
                 reason.append("same_day_artifact_missing")
             if not valid:
                 reason.append(validation.get("reason") or "source_invalid")
-            if domain == "scalping" and not consumed_ok:
-                reason.append("consumption_receipt_missing_or_invalid")
             missing.append({**item, "gap_type": "source_quality_gap", "reason": reason})
     return {
         "domain": domain,
@@ -528,6 +480,9 @@ def _manifest_covers_target(path: Path, target_date: str) -> bool:
 def build_pattern_lab_currentness_audit(
     target_date: str, *, include_swing: bool = True
 ) -> dict[str, Any]:
+    if not include_swing:
+        from src.engine.lifecycle.retirement import retired_status
+        return retired_status("claude_scalping_pattern_lab")
     target_date = str(target_date).strip()
     paths = _lab_paths()
     if not include_swing:
@@ -537,30 +492,6 @@ def build_pattern_lab_currentness_audit(
     for lab_name, lab in paths.items():
         analysis_path = lab["analysis_result"]
         analysis_payload = _load_json(analysis_path)
-        if lab_name == "claude_scalping" and target_date >= "2026-09-08":
-            from src.engine.scalping_pattern_lab_automation import _load_lab
-
-            try:
-                loaded = _load_lab("claude", lab["lab_dir"], target_date)
-                current = loaded["freshness"]["tuning_input_allowed"]
-            except (ValueError, TypeError, OSError, KeyError):
-                current = False
-            checks.append(
-                _check(
-                    check_id="claude_small_net_generation_contract",
-                    ok=current,
-                    finding="v3 exact-date generation hashes and isolated-source contract; economic sample count is not a repair gate.",
-                    source_paths=[analysis_path, lab["manifest"]],
-                    order_title="Claude small-net generation contract",
-                    files_likely_touched=[
-                        _source_rel(lab["lab_dir"]),
-                        "src/engine/scalping_pattern_lab_automation.py",
-                    ],
-                    acceptance_tests=[
-                        "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_claude_pattern_net_contract.py"
-                    ],
-                )
-            )
         checks.append(
             _check(
                 check_id=f"{lab_name}_metric_contract",
@@ -643,29 +574,7 @@ def build_pattern_lab_currentness_audit(
                 {_source_rel(hit["path"]) for hit in forbidden_hits[:20]}
             ),
             acceptance_tests=[
-                "rg -n \"shadow-only|canary-ready\" analysis/gemini_scalping_pattern_lab analysis/claude_scalping_pattern_lab analysis/deepseek_swing_pattern_lab -g '!**/outputs/**'"
-            ],
-        )
-    )
-
-    claude_prepare = paths["claude_scalping"]["lab_dir"] / "prepare_dataset.py"
-    claude_prepare_text = (
-        claude_prepare.read_text(encoding="utf-8") if claude_prepare.exists() else ""
-    )
-    checks.append(
-        _check(
-            check_id="claude_empty_trade_fact_overwrite_guard",
-            ok="TRADE_FACT_COLUMNS" in claude_prepare_text
-            and "DataFrame(columns=TRADE_FACT_COLUMNS)" in claude_prepare_text,
-            finding="Claude empty input must overwrite trade_fact.csv with header-only CSV to prevent stale reuse.",
-            source_paths=[claude_prepare],
-            severity="source_quality_blocker",
-            order_title="Guard Claude stale trade_fact reuse",
-            files_likely_touched=[
-                "analysis/claude_scalping_pattern_lab/prepare_dataset.py"
-            ],
-            acceptance_tests=[
-                "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_claude_scalping_pattern_lab_prepare_dataset.py"
+                "rg -n \"shadow-only|canary-ready\" analysis/deepseek_swing_pattern_lab -g '!**/outputs/**'"
             ],
         )
     )
@@ -695,43 +604,13 @@ def build_pattern_lab_currentness_audit(
             )
         )
 
-    scalping_lab_dirs = [paths["claude_scalping"]["lab_dir"]]
-    feedback_sources = {
-        "scalping": _feedback_source_status(
-            target_date=target_date,
-            domain="scalping",
-            source_paths=scalping_lab_dirs,
-        ),
-    }
+    feedback_sources = {}
     if include_swing:
         feedback_sources["swing"] = _feedback_source_status(
             target_date=target_date,
             domain="swing",
             source_paths=[paths["deepseek_swing"]["lab_dir"]],
         )
-    checks.append(
-        _check(
-            check_id="scalping_ldm_threshold_reentry_sources",
-            ok=not feedback_sources["scalping"]["missing_feedback_sources"],
-            finding=(
-                "Scalping pattern labs must consume threshold_cycle_ev as the current re-entry source; "
-                "retired ADM/LDM artifacts are archive-only and not required."
-            ),
-            source_paths=scalping_lab_dirs,
-            severity="automation_handoff_gap",
-            order_title="Verify active threshold feedback consumption in scalping pattern labs",
-            files_likely_touched=[
-                "analysis/claude_scalping_pattern_lab/prepare_dataset.py",
-                "analysis/claude_scalping_pattern_lab/build_claude_payload.py",
-                "src/engine/pattern_lab_currentness_audit.py",
-            ],
-            acceptance_tests=[
-                "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_pattern_lab_currentness_audit.py",
-                "pattern lab payloads bind active threshold feedback dates and hashes with runtime_effect=false",
-            ],
-        )
-    )
-
     if include_swing:
         checks.append(
             _check(
@@ -771,7 +650,6 @@ def build_pattern_lab_currentness_audit(
             ),
             source_paths=[
                 PROJECT_ROOT / "src" / "engine",
-                PROJECT_ROOT / "analysis" / "claude_scalping_pattern_lab",
                 *(
                     [PROJECT_ROOT / "analysis" / "deepseek_swing_pattern_lab"]
                     if include_swing
@@ -817,7 +695,7 @@ def build_pattern_lab_currentness_audit(
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "status": status,
         "runtime_effect": False,
-        "strategy_scope": "scalp_and_swing" if include_swing else "scalp_only",
+        "strategy_scope": "swing_only" if include_swing else "retired",
         "allowed_runtime_apply": False,
         "swing_sources_enabled": include_swing,
         "decision_authority": "source_quality_only",
@@ -892,6 +770,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--date", required=True)
     parser.add_argument("--exclude-swing", action="store_true")
     args = parser.parse_args(argv)
+    if args.exclude_swing:
+        from src.engine.lifecycle.retirement import retired_status
+        print(json.dumps(retired_status("claude_scalping_pattern_lab")))
+        return 0
     report = build_pattern_lab_currentness_audit(
         args.date, include_swing=not args.exclude_swing
     )

@@ -67,7 +67,6 @@ LEGACY_ENGINE_ROOT_PY_FILES = {
     "scalp_entry_adm_runtime.py",
     "scalp_sim_ev_midcheck.py",
     "scalping_feature_packet.py",
-    "scalping_pattern_lab_automation.py",
     "sentinel_event_cache.py",
     "signal_radar.py",
     "sniper_analysis.py",

@@ -342,9 +342,9 @@ def test_deep_audit_summary_separates_disabled_steps(tmp_path, monkeypatch):
 
     report = mod.build_report("2026-06-02", scope="deep_audits", env={})
 
-    assert report["summary"]["total_steps"] == 10
+    assert report["summary"]["total_steps"] == 7
     assert report["summary"]["disabled_count"] == 5
-    assert report["summary"]["source_missing_count"] == 5
+    assert report["summary"]["source_missing_count"] == 2
     disabled = {
         item["step_id"]
         for item in report["decisions"]

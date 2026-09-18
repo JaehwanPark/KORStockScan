@@ -149,7 +149,8 @@ def test_currentness_audit_passes_when_contracts_and_guards_exist(
     assert report["status"] == "pass"
     assert report["runtime_effect"] is False
     assert report["summary"]["missing_feedback_source_count"] == 0
-    assert report["feedback_sources"]["scalping"]["consumed_feedback_sources"]
+    assert "scalping" not in report["feedback_sources"]
+    assert report["feedback_sources"]["swing"]["available_feedback_sources"]
     assert report["code_improvement_orders"] == []
     assert (
         report_dir
@@ -177,13 +178,8 @@ def test_currentness_audit_excludes_disabled_swing_sources(tmp_path, monkeypatch
 
     report = mod.build_pattern_lab_currentness_audit(target_date, include_swing=False)
 
-    assert report["strategy_scope"] == "scalp_only"
-    assert report["swing_sources_enabled"] is False
-    assert not any(
-        "swing" in check["check_id"] or "deepseek" in check["check_id"]
-        for check in report["checks"]
-    )
-    assert "swing" not in report["feedback_sources"]
+    assert report["status"] == "retired"
+    assert not (report_dir / "pattern_lab_currentness_audit").exists()
 
 
 def test_currentness_audit_emits_runtime_false_orders_for_gaps(tmp_path, monkeypatch):
@@ -193,7 +189,7 @@ def test_currentness_audit_emits_runtime_false_orders_for_gaps(tmp_path, monkeyp
     _seed_labs(project_root, target_date)
 
     (
-        project_root / "analysis" / "claude_scalping_pattern_lab" / "README.md"
+        project_root / "analysis" / "deepseek_swing_pattern_lab" / "README.md"
     ).write_text(
         "legacy shadow-only wording\n",
         encoding="utf-8",
@@ -238,7 +234,7 @@ def test_currentness_audit_surfaces_pattern_lab_feedback_and_ai_review_gaps(
     _seed_labs(project_root, target_date)
 
     (
-        project_root / "analysis" / "claude_scalping_pattern_lab" / "README.md"
+        project_root / "analysis" / "deepseek_swing_pattern_lab" / "README.md"
     ).write_text(
         "report_only_observation\n",
         encoding="utf-8",
@@ -263,7 +259,7 @@ def test_currentness_audit_surfaces_pattern_lab_feedback_and_ai_review_gaps(
     assert report["status"] == "warning"
     order_ids = {order["order_id"] for order in report["code_improvement_orders"]}
     assert (
-        "order_pattern_lab_currentness_audit_scalping_ldm_threshold_reentry_sources"
+        "order_pattern_lab_currentness_audit_swing_ldm_threshold_reentry_sources"
         in order_ids
     )
     assert (
@@ -277,141 +273,3 @@ def test_currentness_audit_surfaces_pattern_lab_feedback_and_ai_review_gaps(
     assert all(
         order["runtime_effect"] is False for order in report["code_improvement_orders"]
     )
-
-
-def test_currentness_audit_accepts_latest_prior_feedback_artifacts(
-    tmp_path, monkeypatch
-):
-    project_root = tmp_path
-    report_dir = project_root / "data" / "report"
-    target_date = "2026-05-15"
-    prior_date = "2026-05-14"
-    _seed_labs(project_root, target_date)
-
-    for report_name, stem in (
-        ("threshold_cycle_ev", "threshold_cycle_ev"),
-        ("runtime_approval_summary", "runtime_approval_summary"),
-    ):
-        target_path = report_dir / report_name / f"{stem}_{target_date}.json"
-        if target_path.exists():
-            target_path.unlink()
-        _write_json(
-            report_dir / report_name / f"{stem}_{prior_date}.json",
-            {"date": prior_date, "runtime_effect": False},
-        )
-    _seed_receipts(project_root, target_date, prior_date)
-
-    monkeypatch.setattr(mod, "PROJECT_ROOT", project_root)
-    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
-
-    report = mod.build_pattern_lab_currentness_audit(target_date)
-
-    assert report["status"] == "pass"
-    assert report["summary"]["missing_feedback_source_count"] == 0
-    scalping_sources = report["feedback_sources"]["scalping"][
-        "consumed_feedback_sources"
-    ]
-    threshold_source = next(
-        item for item in scalping_sources if item["source_id"] == "threshold_cycle_ev"
-    )
-    assert threshold_source["source_date"] == prior_date
-    assert threshold_source["freshness"] == "latest_available_lte_target"
-    assert threshold_source["runtime_effect"] is False
-    assert threshold_source["decision_authority"] == "source_quality_only"
-
-
-def test_currentness_audit_rejects_window_suffix_and_pre_baseline_feedback_fallback(
-    tmp_path,
-    monkeypatch,
-):
-    project_root = tmp_path
-    report_dir = project_root / "data" / "report"
-    target_date = "2026-06-05"
-    _seed_labs(project_root, target_date)
-
-    target_path = (
-        report_dir / "threshold_cycle_ev" / f"threshold_cycle_ev_{target_date}.json"
-    )
-    target_path.unlink()
-    _write_json(
-        report_dir
-        / "threshold_cycle_ev"
-        / f"threshold_cycle_ev_{target_date}_rolling5d.json",
-        {"runtime_effect": False},
-    )
-    _write_json(
-        report_dir / "threshold_cycle_ev" / "threshold_cycle_ev_2026-06-03.json",
-        {"runtime_effect": False},
-    )
-
-    monkeypatch.setattr(mod, "PROJECT_ROOT", project_root)
-    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
-
-    report = mod.build_pattern_lab_currentness_audit(target_date)
-
-    scalping_sources = report["feedback_sources"]["scalping"]
-    threshold_missing = next(
-        item
-        for item in scalping_sources["missing_feedback_sources"]
-        if item["source_id"] == "threshold_cycle_ev"
-    )
-    assert threshold_missing["freshness"] == "missing"
-    assert threshold_missing["artifact_exists"] is False
-    assert report["summary"]["missing_feedback_source_count"] >= 1
-
-
-def test_currentness_audit_surfaces_observability_source_contract_orders(
-    tmp_path, monkeypatch
-):
-    project_root = tmp_path
-    report_dir = project_root / "data" / "report"
-    target_date = "2026-05-15"
-    _seed_labs(project_root, target_date)
-
-    embedded_order = {
-        "order_id": "order_tuning_observability_performance_tuning_missing_contract_gap",
-        "title": "Tuning observability performance_tuning missing contract gap",
-        "source_report_type": "producer_gap_discovery",
-        "target_subsystem": "pattern_lab",
-        "priority": 1,
-        "route": "implement_now",
-        "runtime_effect": True,
-        "allowed_runtime_apply": True,
-        "strategy_effect": True,
-        "data_quality_effect": False,
-    }
-    _write_json(
-        project_root
-        / "analysis"
-        / "claude_scalping_pattern_lab"
-        / "outputs"
-        / "tuning_observability_summary.json",
-        _observability_payload(source_contract_status="fail", orders=[embedded_order]),
-    )
-
-    monkeypatch.setattr(mod, "PROJECT_ROOT", project_root)
-    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
-
-    report = mod.build_pattern_lab_currentness_audit(target_date)
-
-    order_ids = {order["order_id"] for order in report["code_improvement_orders"]}
-    assert (
-        "order_pattern_lab_currentness_audit_claude_scalping_observability_source_contract"
-        in order_ids
-    )
-    assert (
-        "order_tuning_observability_performance_tuning_missing_contract_gap"
-        in order_ids
-    )
-    embedded = next(
-        order
-        for order in report["code_improvement_orders"]
-        if order["order_id"]
-        == "order_tuning_observability_performance_tuning_missing_contract_gap"
-    )
-    assert embedded["source_report_type"] == "tuning_observability_summary"
-    assert embedded["route"] == "source_contract_gap"
-    assert embedded["runtime_effect"] is False
-    assert embedded["allowed_runtime_apply"] is False
-    assert embedded["strategy_effect"] is False
-    assert embedded["data_quality_effect"] is True

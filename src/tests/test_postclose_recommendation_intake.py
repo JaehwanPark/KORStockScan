@@ -683,18 +683,11 @@ def test_current_producer_emits_complete_contract_and_render_failure_preserves_p
     from src.engine import build_code_improvement_workorder as producer
     from src.engine import verify_threshold_cycle_postclose_chain as verifier
 
-    monkeypatch.setattr(
-        producer, "PATTERN_LAB_AUTOMATION_DIR", tmp_path / "inputs/pattern"
-    )
     monkeypatch.setattr(producer, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "inputs/ev")
     monkeypatch.setattr(
         producer, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", tmp_path / "output"
     )
     monkeypatch.setattr(producer, "CODE_IMPROVEMENT_WORKORDER_DIR", tmp_path / "docs")
-    write(
-        producer.automation_report_path(DATE),
-        {"date": DATE, "code_improvement_orders": []},
-    )
     write(producer.threshold_ev_report_path(DATE), {"date": DATE})
     result = producer.build_code_improvement_workorder(DATE, include_swing=False)
     assert contract.contract_issues(result, DATE) == []

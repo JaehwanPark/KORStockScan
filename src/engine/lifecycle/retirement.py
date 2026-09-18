@@ -56,6 +56,8 @@ SCALP_OVERNIGHT_RETIRED_FAMILIES = (
     )
     | SCALP_OVERNIGHT_RETIRED_STAGES
 )
+CLAUDE_LAB_RETIREMENT_ID = "claude_scalping_pattern_lab_retirement_20260918"
+CLAUDE_LAB_RETIRED_REPORTS = frozenset({"claude_scalping_pattern_lab", "scalping_pattern_lab_automation", "pattern_lab_automation"})
 RETIRED_REPORTS = (
     frozenset(
         {
@@ -78,6 +80,7 @@ RETIRED_REPORTS = (
     | SCALE_IN_RETIRED_REPORTS
     | RISING_MISSED_SCOUT_RETIRED_REPORTS
     | ENTRY_RECHECK_RETIRED_REPORTS
+    | CLAUDE_LAB_RETIRED_REPORTS
 )
 RETIRED_FAMILIES = (
     RETIRED_REPORTS
@@ -153,6 +156,8 @@ RETIRED_OWNER_PREFIXES = tuple(
 ) + ("order_entry_recheck_",)
 RETIRED_STAGE_FLAGS = frozenset(
     {
+        "pattern_labs",
+        "scalping_pattern_lab_automation",
         "entry_recheck_drought_controller",
         "one_share_threshold_opportunity",
         "rising_missed_scout_workorder",
@@ -171,7 +176,9 @@ RETIRED_STAGE_FLAGS = frozenset(
 def retired_status(report_type: str = "adm_ldm") -> dict[str, Any]:
     """Explicit terminal state; never a source-quality failure or retry request."""
     retirement_id = (
-        ENTRY_RECHECK_RETIREMENT_ID
+        CLAUDE_LAB_RETIREMENT_ID
+        if report_type in CLAUDE_LAB_RETIRED_REPORTS
+        else ENTRY_RECHECK_RETIREMENT_ID
         if report_type in ENTRY_RECHECK_RETIRED_REPORTS | ENTRY_RECHECK_RETIRED_FAMILIES
         else RISING_MISSED_SCOUT_RETIREMENT_ID
         if report_type in RISING_MISSED_SCOUT_RETIRED_REPORTS

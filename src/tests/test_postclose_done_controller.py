@@ -720,8 +720,8 @@ def test_tail_repair_actions_preserve_wrapper_scope(monkeypatch):
         if action.command is not None
     }
 
-    assert "--exclude-swing" in commands["refresh_pattern_lab_currentness_audit"]
-    assert "--exclude-swing" in commands["refresh_pattern_lab_propagation_audit"]
+    assert "refresh_pattern_lab_currentness_audit" not in commands
+    assert "refresh_pattern_lab_propagation_audit" not in commands
     assert "--exclude-swing" in commands["refresh_code_improvement_workorder"]
     assert "--exclude-swing" in commands["refresh_threshold_cycle_ev"]
     assert "--disabled-source" in commands["refresh_threshold_cycle_ev"]
@@ -886,8 +886,6 @@ def test_postclose_done_controller_repairs_ev_workorder_stale_link_without_full_
         "sync_exact_trade_performance_facts",
         "refresh_daily_threshold_cycle_report",
         "refresh_threshold_cycle_ev",
-        "refresh_pattern_lab_currentness_audit",
-        "refresh_pattern_lab_propagation_audit",
         "refresh_code_improvement_workorder",
         "refresh_threshold_cycle_ev",
         "refresh_code_improvement_workorder_final",

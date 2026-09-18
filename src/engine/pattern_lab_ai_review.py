@@ -117,9 +117,6 @@ def _source_rel(path: Path) -> str:
 
 def _source_paths(target_date: str, *, include_swing: bool = True) -> dict[str, Path]:
     paths = {
-        "scalping_pattern_lab_automation": REPORT_DIR
-        / "scalping_pattern_lab_automation"
-        / f"scalping_pattern_lab_automation_{target_date}.json",
         "swing_pattern_lab_automation": REPORT_DIR
         / "swing_pattern_lab_automation"
         / f"swing_pattern_lab_automation_{target_date}.json",
@@ -2284,7 +2281,7 @@ def _build_input_context(
         "runtime_effect": False,
         "allowed_runtime_apply": False,
         "forbidden_uses": FORBIDDEN_USES,
-        "strategy_scope": "scalp_and_swing" if include_swing else "scalp_only",
+        "strategy_scope": "swing_only" if include_swing else "retired",
         "swing_sources_enabled": include_swing,
         "sources": sources,
         "feedback_handoff_summary": _feedback_handoff_summary(payloads),
@@ -2950,8 +2947,6 @@ def _order_from_conclusion(
         "files_likely_touched": [
             "src/engine/pattern_lab_ai_review.py",
             "src/engine/pattern_lab_currentness_audit.py",
-            "analysis/gemini_scalping_pattern_lab",
-            "analysis/claude_scalping_pattern_lab",
             "analysis/deepseek_swing_pattern_lab",
         ],
         "acceptance_tests": [
@@ -3021,73 +3016,6 @@ def _implementation_marker_for_conclusion(
     order_prefix = f"order_{REPORT_TYPE}_"
     if normalized_review_id.startswith(order_prefix):
         normalized_review_id = normalized_review_id[len(order_prefix) :]
-    if normalized_review_id in {
-        "scalp_entry_adm_sample_floor_below",
-        "scalp_entry_adm_source_quality_below_floor",
-    }:
-        source_summary = _source_summary(context, "scalping_pattern_lab_automation")
-        contracts = (
-            source_summary.get("source_quality_contracts")
-            if isinstance(source_summary.get("source_quality_contracts"), dict)
-            else {}
-        )
-        contract = (
-            contracts.get("scalp_entry_adm")
-            if isinstance(contracts.get("scalp_entry_adm"), dict)
-            else {}
-        )
-        sample_count = _safe_int(contract.get("sample_count"), 0)
-        sample_floor = _safe_int(contract.get("sample_floor"), 0)
-        blocked_reasons = (
-            contract.get("blocked_reasons")
-            if isinstance(contract.get("blocked_reasons"), list)
-            else []
-        )
-        if (
-            contract.get("source_contract_status") == "implemented"
-            and sample_floor > 0
-            and sample_count < sample_floor
-            and "joined_sample_below_sample_floor" in blocked_reasons
-        ):
-            return (
-                "implemented_but_waiting_sample",
-                {
-                    "implementation_type": (
-                        "pattern_lab_scalp_entry_adm_sample_floor_provenance"
-                    ),
-                    "implemented_scope": (
-                        "The Pattern Lab AI review workorder now preserves the ADM source "
-                        "contract, observed joined sample, sample floor, and deterministic "
-                        "block reason as source-only provenance."
-                    ),
-                    "source_report_type": "scalping_pattern_lab_automation",
-                    "review_id": review_id,
-                    "normalized_review_id": normalized_review_id,
-                    "source_contract_id": contract.get("contract_id"),
-                    "source_contract_version": contract.get("source_contract_version"),
-                    "source_contract_status": contract.get("source_contract_status"),
-                    "sample_count": sample_count,
-                    "sample_floor": sample_floor,
-                    "sample_floor_status": contract.get("sample_floor_status"),
-                    "blocked_reasons": blocked_reasons,
-                    "metric_role": contract.get("metric_role"),
-                    "primary_decision_metric": contract.get("primary_decision_metric"),
-                    "source_quality_gate": contract.get("source_quality_gate"),
-                    "window_policy": contract.get("window_policy"),
-                    "decision_authority": "pattern_lab_ai_review_source_only",
-                    "runtime_effect": False,
-                    "allowed_runtime_apply": False,
-                    "actual_order_submitted": False,
-                    "broker_order_forbidden": True,
-                    "requires_separate_runtime_apply_candidate": True,
-                    "runtime_mutation_allowed": False,
-                    "forbidden_uses": FORBIDDEN_USES,
-                    "source_paths": conclusion.get("source_paths") or [],
-                    "root_cause_closure_status_hint": (
-                        "handoff_closed_root_cause_open"
-                    ),
-                },
-            )
     if normalized_review_id == "sim_auto_nonpositive_ev_present":
         source_summary = _source_summary(context, "lifecycle_bucket_discovery")
         nested_summary = _nested_report_summary(source_summary)
@@ -3749,6 +3677,9 @@ def build_pattern_lab_ai_review_report(
     _publish: bool = True,
     _reserve_call=None,
 ) -> dict[str, Any]:
+    if not include_swing:
+        from src.engine.lifecycle.retirement import retired_status
+        return retired_status("claude_scalping_pattern_lab")
     target_date = str(target_date).strip()
     resolved_provider = (
         str(
@@ -3854,6 +3785,10 @@ def build_pattern_lab_ai_review_report(
         else:
             ai_status = "unavailable_deterministic_review"
     original_response = copy.deepcopy(ai_payload)
+    ai_payload["final_conclusions"] = [
+        item for item in ai_payload.get("final_conclusions", [])
+        if isinstance(item, dict) and item.get("domain") != "scalping"
+    ]
     # These fields are deterministic reconciler outputs, never provider
     # authority. Recompute them even when consuming a legacy saved response.
     for item in ai_payload.get("final_conclusions") or []:
@@ -4010,7 +3945,7 @@ def build_pattern_lab_ai_review_report(
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "report_type": REPORT_TYPE,
         "runtime_effect": False,
-        "strategy_scope": "scalp_and_swing" if include_swing else "scalp_only",
+        "strategy_scope": "swing_only" if include_swing else "retired",
         "swing_sources_enabled": include_swing,
         "allowed_runtime_apply": False,
         "runtime_mutation_allowed": False,
@@ -4105,6 +4040,9 @@ def refresh_pattern_lab_ai_review_source_provenance(
 ) -> dict[str, Any]:
     """Reconcile late-bound sources without issuing a second provider call."""
 
+    if not include_swing:
+        from src.engine.lifecycle.retirement import retired_status
+        return retired_status("claude_scalping_pattern_lab")
     json_path, md_path = report_paths(str(target_date).strip())
     # The saved provider response is immutable evidence, including retired
     # labels it may have incorrectly asserted. Never retirement-filter it.
@@ -4337,6 +4275,9 @@ def review_current_generation(target_date, *, provider="openai", include_swing=T
     the original primary/one-retry allowance. Metadata-only refresh remains a
     separate provider-free operation.
     """
+    if not include_swing:
+        from src.engine.lifecycle.retirement import retired_status
+        return retired_status("claude_scalping_pattern_lab")
     from datetime import date
 
     if date.fromisoformat(target_date).isoformat() != target_date:
@@ -4646,6 +4587,10 @@ def main(argv: list[str] | None = None) -> int:
         help="Reconcile and review new material within the original daily call budget.",
     )
     args = parser.parse_args(argv)
+    if args.exclude_swing:
+        from src.engine.lifecycle.retirement import retired_status
+        print(json.dumps(retired_status("claude_scalping_pattern_lab")))
+        return 0
     report = (
         refresh_pattern_lab_ai_review_source_provenance(
             args.date, include_swing=not args.exclude_swing

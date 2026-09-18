@@ -44,7 +44,7 @@ def test_new_operational_feature_must_declare_detector_coverage():
     assert "swing_daily_simulation_status" in REQUIRED_ARTIFACT_IDS
     assert "swing_daily_simulation_report" in REQUIRED_ARTIFACT_IDS
     assert "swing_pattern_lab_automation_report" in REQUIRED_ARTIFACT_IDS
-    assert "scalping_pattern_lab_automation_report" in REQUIRED_ARTIFACT_IDS
+    assert "scalping_pattern_lab_automation_report" not in REQUIRED_ARTIFACT_IDS
     assert "pattern_lab_currentness_audit_report" in REQUIRED_ARTIFACT_IDS
     assert "pattern_lab_propagation_audit_report" in REQUIRED_ARTIFACT_IDS
     assert "lifecycle_decision_matrix_report" not in REQUIRED_ARTIFACT_IDS

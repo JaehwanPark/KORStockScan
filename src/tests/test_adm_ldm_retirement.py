@@ -467,3 +467,71 @@ def test_retired_recheck_custody_events_cannot_recreate_threshold_partitions():
     assert threshold_family_for_stage("entry_opportunity_recheck_sell_completed") == ""
     assert threshold_family_for_stage("unknown", {"threshold_family": "entry_opportunity_recheck_runtime"}) == ""
     assert threshold_family_for_stage("budget_pass") == "entry_mechanical_momentum"
+
+
+def test_claude_lab_stale_orders_are_excluded_without_retiring_existing_families():
+    from src.engine.lifecycle.retirement import current_report_view, retired_artifact
+    old = {"orders": [
+        {"order_id": "shared_identity", "source_report_type": "scalping_pattern_lab_automation", "delta_ev": 100},
+        {"order_id": "shared_identity", "source_report_type": "entry_split_order_plan", "family": "score65_74_recovery_probe"},
+    ], "non_selected_orders": [{"source_report_type": "scalping_pattern_lab_automation"}]}
+    filtered = current_report_view(old)
+    assert len(filtered["orders"]) == 1
+    assert filtered["orders"][0]["source_report_type"] == "entry_split_order_plan"
+    assert filtered["non_selected_orders"] == []
+    assert retired_artifact("/archive/claude_scalping_pattern_lab/outputs/result.json")
+
+
+def test_main_shared_lab_clis_are_retired_before_any_provider_or_file_read(monkeypatch):
+    from src.engine import pattern_lab_ai_review as reviewer
+    from src.engine import pattern_lab_currentness_audit as currentness
+    from src.engine import pattern_lab_propagation_audit as propagation
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Retired Main Lab must not read or call provider")
+    monkeypatch.setattr(reviewer, "_build_input_context", forbidden)
+    monkeypatch.setattr(currentness, "_lab_paths", forbidden)
+    monkeypatch.setattr(propagation, "_load_json", forbidden)
+    assert reviewer.review_current_generation("2026-09-17", include_swing=False)["status"] == "retired"
+    assert currentness.build_pattern_lab_currentness_audit("2026-09-17", include_swing=False)["status"] == "retired"
+    assert propagation.build_pattern_lab_propagation_audit("2026-09-17", include_swing=False)["status"] == "retired"
+
+
+def test_main_legacy_lab_flags_and_warnings_cannot_restore_recovery():
+    from src.engine.automation.postclose_done_controller import _recovery_actions
+    verification = {"execution_profile": {"flags": {"pattern_labs": True, "pattern_lab_ai_review": True,
+        "pattern_lab_currentness_audit": True, "pattern_lab_propagation_audit": True}},
+        "stale_downstream_links": ["pattern_lab_ai_review_source_generation_stale"]}
+    actions = _recovery_actions("2026-09-17", verification, allow_wrapper_rerun=False)
+    assert not any("src.engine.pattern_lab_" in " ".join(a.command or []) for a in actions)
+
+
+def test_old_auto_checklist_lab_source_is_not_carried_forward():
+    from src.engine.build_next_stage2_checklist import _merge_preserved_auto_tasks, AUTO_START, AUTO_END
+    previous = AUTO_START + "\n## 장후\n- [ ] `[OldLabWork]` old lab\n  - Source: data/report/scalping_pattern_lab_automation/old.json\n- [ ] `[ActiveOwner]` independent source\n  - Source: data/report/entry_split_order_plan/current.json\n" + AUTO_END
+    result = _merge_preserved_auto_tasks(previous, AUTO_START + "\n## 장후\n" + AUTO_END)
+    assert "OldLabWork" not in result
+    assert "ActiveOwner" in result
+
+
+def test_main_reports_persist_the_same_retired_source_free_view(tmp_path, monkeypatch):
+    import importlib
+    import json
+    from pathlib import Path
+    for name, builder, output in (
+        ("threshold_cycle_ev_report", "build_threshold_cycle_ev_report", "ev_report_paths"),
+        ("runtime_approval_summary", "build_runtime_approval_summary", "summary_paths"),
+        ("build_code_improvement_workorder", "build_code_improvement_workorder", "code_improvement_workorder_paths"),
+    ):
+        module = importlib.import_module("src.engine." + name)
+        for key, value in list(vars(module).items()):
+            if isinstance(value, Path) and str(value).startswith("/home/ubuntu/KORStockScan"):
+                monkeypatch.setattr(module, key, tmp_path / name / key)
+        result = getattr(module, builder)("2026-05-15", include_swing=False)
+        path = getattr(module, output)("2026-05-15")[0]
+        stored = json.loads(path.read_text())
+        assert stored == result
+        assert all(key not in stored for key in (
+            "pattern_lab_automation", "pattern_lab_currentness_audit", "pattern_lab_ai_review", "pattern_lab_propagation_audit"
+        ))
+        assert all("pattern_lab_" not in key for key in stored.get("summary", {}))
+        assert all("scalping_pattern_lab_automation" not in str(value) for value in stored.get("sources", {}).values())

@@ -356,14 +356,6 @@ def test_build_threshold_cycle_ev_report_uses_existing_reports(
     )
     monkeypatch.setattr(
         mod,
-        "automation_report_paths",
-        lambda target_date: (
-            automation_dir / f"scalping_pattern_lab_automation_{target_date}.json",
-            automation_dir / f"scalping_pattern_lab_automation_{target_date}.md",
-        ),
-    )
-    monkeypatch.setattr(
-        mod,
         "code_improvement_workorder_paths",
         lambda target_date: (
             workorder_report_dir / f"code_improvement_workorder_{target_date}.json",
@@ -608,17 +600,12 @@ def test_build_threshold_cycle_ev_report_uses_existing_reports(
     assert (
         report["missed_probe_counterfactual"]["real_execution_quality_source"] == "none"
     )
-    assert report["pattern_lab_automation"]["consensus_count"] == 1
     assert report["scalp_entry_action_decision_matrix"]["available"] is False
     assert report["microstructure_reaction_context"]["available"] is False
     assert "microstructure_reaction_context_missing" not in report["warnings"]
     assert report["swing_runtime_approval"]["requested"] == 1
     assert "real_canary_policy" not in report["swing_runtime_approval"]
     assert report["swing_runtime_approval"]["requests"][0]["tradeoff_score"] == 0.72
-    assert (
-        report["pattern_lab_automation"]["top_consensus_findings"][0]["mapped_family"]
-        == "score65_74_recovery_probe"
-    )
     assert report["code_improvement_workorder"]["selected_order_count"] == 1
     assert (
         report["code_improvement_workorder"]["top_orders"][0]["order_id"]
@@ -1231,14 +1218,6 @@ def test_build_threshold_cycle_ev_report_warns_when_pattern_lab_artifact_missing
     )
     monkeypatch.setattr(
         mod,
-        "automation_report_paths",
-        lambda target_date: (
-            automation_dir / f"scalping_pattern_lab_automation_{target_date}.json",
-            automation_dir / f"scalping_pattern_lab_automation_{target_date}.md",
-        ),
-    )
-    monkeypatch.setattr(
-        mod,
         "code_improvement_workorder_paths",
         lambda target_date: (
             workorder_report_dir / f"code_improvement_workorder_{target_date}.json",
@@ -1264,8 +1243,7 @@ def test_build_threshold_cycle_ev_report_warns_when_pattern_lab_artifact_missing
 
     report = mod.build_threshold_cycle_ev_report("2026-05-08")
 
-    assert report["pattern_lab_automation"]["available"] is False
-    assert "pattern_lab_automation_missing" in report["warnings"]
+    assert "pattern_lab_automation_missing" not in report["warnings"]
     assert "code_improvement_workorder_missing" in report["warnings"]
     assert "codebase_performance_workorder_missing" in report["warnings"]
 
@@ -1295,16 +1273,6 @@ def test_build_threshold_cycle_ev_report_surfaces_source_parse_errors(
         mod,
         "apply_manifest_path",
         lambda target_date: apply_dir / f"threshold_apply_{target_date}.json",
-    )
-    monkeypatch.setattr(
-        mod,
-        "automation_report_paths",
-        lambda target_date: (
-            tmp_path
-            / "missing"
-            / f"scalping_pattern_lab_automation_{target_date}.json",
-            tmp_path / "missing" / f"scalping_pattern_lab_automation_{target_date}.md",
-        ),
     )
     monkeypatch.setattr(
         mod,
@@ -1375,18 +1343,6 @@ def test_threshold_cycle_ev_report_exposes_codebase_performance_source_as_ops_su
         mod,
         "apply_manifest_path",
         lambda target_date: apply_dir / f"threshold_apply_{target_date}.json",
-    )
-    monkeypatch.setattr(
-        mod,
-        "automation_report_paths",
-        lambda target_date: (
-            report_dir
-            / "missing"
-            / f"scalping_pattern_lab_automation_{target_date}.json",
-            report_dir
-            / "missing"
-            / f"scalping_pattern_lab_automation_{target_date}.md",
-        ),
     )
     monkeypatch.setattr(
         mod,
@@ -1640,16 +1596,6 @@ def test_threshold_cycle_ev_report_prefers_candidate_sample_counts_from_calibrat
     )
     monkeypatch.setattr(
         mod,
-        "automation_report_paths",
-        lambda target_date: (
-            tmp_path
-            / "missing"
-            / f"scalping_pattern_lab_automation_{target_date}.json",
-            tmp_path / "missing" / f"scalping_pattern_lab_automation_{target_date}.md",
-        ),
-    )
-    monkeypatch.setattr(
-        mod,
         "code_improvement_workorder_paths",
         lambda target_date: (
             workorder_report_dir / f"code_improvement_workorder_{target_date}.json",
@@ -1762,14 +1708,6 @@ def test_build_threshold_cycle_ev_report_renders_swing_pattern_lab_section(
         mod,
         "apply_manifest_path",
         lambda target_date: apply_dir / f"threshold_apply_{target_date}.json",
-    )
-    monkeypatch.setattr(
-        mod,
-        "automation_report_paths",
-        lambda target_date: (
-            automation_dir / f"scalping_pattern_lab_automation_{target_date}.json",
-            automation_dir / f"scalping_pattern_lab_automation_{target_date}.md",
-        ),
     )
     monkeypatch.setattr(
         mod,

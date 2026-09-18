@@ -5,7 +5,6 @@ from src.engine import build_code_improvement_workorder as workorder_mod
 from src.engine import pattern_lab_currentness_audit as currentness_mod
 from src.engine import pattern_lab_propagation_audit as mod
 from src.engine import runtime_approval_summary as runtime_mod
-from src.engine import scalping_pattern_lab_automation as scalping_mod
 from src.engine import swing_pattern_lab_automation as swing_mod
 from src.engine import threshold_cycle_ev_report as ev_mod
 
@@ -21,11 +20,6 @@ def _patch_dirs(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(mod, "PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     monkeypatch.setattr(currentness_mod, "REPORT_DIR", report_dir)
-    monkeypatch.setattr(
-        scalping_mod,
-        "PATTERN_LAB_AUTOMATION_DIR",
-        report_dir / "scalping_pattern_lab_automation",
-    )
     monkeypatch.setattr(
         swing_mod,
         "SWING_PATTERN_LAB_AUTOMATION_DIR",
@@ -198,36 +192,3 @@ def test_propagation_audit_fails_when_workorder_lineage_missing(tmp_path, monkey
     assert all(
         order["runtime_effect"] is False for order in report["code_improvement_orders"]
     )
-
-
-def test_propagation_audit_names_missing_krx_trading_dates(tmp_path, monkeypatch):
-    target_date = "2026-05-15"
-    report_dir = _patch_dirs(tmp_path, monkeypatch)
-    _seed_propagation_chain(tmp_path, report_dir, target_date)
-    _write_json(
-        report_dir
-        / "scalping_pattern_lab_automation"
-        / f"scalping_pattern_lab_automation_{target_date}.json",
-        {
-            "date": target_date,
-            "runtime_effect": False,
-            "runtime_change": False,
-            "ev_report_summary": {
-                "gemini_enabled": False,
-                "claude_fresh": True,
-                "claude_source_quality_usable": False,
-                "claude_missing_expected_trading_dates": ["2026-05-14"],
-            },
-        },
-    )
-
-    report = mod.build_pattern_lab_propagation_audit(target_date, include_swing=False)
-
-    check = next(
-        item
-        for item in report["checks"]
-        if item["check_id"] == "scalping_claude_source_quality_usable"
-    )
-    assert check["status"] == "warning"
-    assert "2026-05-14" in check["finding"]
-    assert report["runtime_effect"] is False

@@ -7,7 +7,6 @@ from datetime import date
 
 import pytest
 
-from analysis.claude_scalping_pattern_lab import build_claude_payload as lab
 from src.engine import pattern_lab_ai_review as ai
 from src.engine import pattern_lab_currentness_audit as currentness
 from src.engine.automation.pattern_lab_source_contract import read_feedback
@@ -19,10 +18,10 @@ DAY = "2026-09-08"
 def context():
     return {
         "date": DAY,
-        "strategy_scope": "scalp_only",
-        "swing_sources_enabled": False,
+        "strategy_scope": "swing_only",
+        "swing_sources_enabled": True,
         "sources": {
-            "scalping_pattern_lab_automation": {
+            "swing_pattern_lab_automation": {
                 "summary": {"economic_evidence": {"net": 1}}
             }
         },
@@ -39,7 +38,7 @@ def response(**changes):
         "final_conclusions": [
             {
                 "review_id": "net_research",
-                "domain": "scalping",
+                "domain": "swing",
                 "final_state": "source_only_keep_collecting",
                 "final_decision": "keep",
                 "reason": "Small net evidence is source-only.",
@@ -65,7 +64,7 @@ def isolated(tmp_path, monkeypatch):
 
 def build(raw=None):
     return ai.build_pattern_lab_ai_review_report(
-        DAY, provider="openai", ai_raw_response=raw or response(), include_swing=False
+        DAY, provider="openai", ai_raw_response=raw or response(), include_swing=True
     )
 
 
@@ -81,7 +80,7 @@ def test_quality_failure_is_material_and_cannot_keep_pass(isolated):
             "blocked_reason": "missing_required_cost",
         },
     }
-    r = ai.refresh_pattern_lab_ai_review_source_provenance(DAY, include_swing=False)
+    r = ai.refresh_pattern_lab_ai_review_source_provenance(DAY, include_swing=True)
     assert not r["material_review_current"]
     assert r["status"] == "warning"
     assert any(
@@ -125,30 +124,30 @@ def test_bounded_review_reentry_closes_new_material_and_stops_at_daily_cap(
         }
 
     monkeypatch.setattr(ai, "_call_openai_ai_review", provider)
-    first = ai.review_current_generation(DAY, include_swing=False)
+    first = ai.review_current_generation(DAY, include_swing=True)
     assert first["material_review_current"] and len(calls) == 1
-    isolated["sources"]["scalping_pattern_lab_automation"]["summary"][
+    isolated["sources"]["swing_pattern_lab_automation"]["summary"][
         "economic_evidence"
     ]["net"] = 2
     metadata = ai.refresh_pattern_lab_ai_review_source_provenance(
-        DAY, include_swing=False
+        DAY, include_swing=True
     )
     assert metadata["review_reentry"]["new_provider_calls"] == 0
     assert metadata["review_reentry"]["state"] == "pending"
     assert len(calls) == 1
-    second = ai.review_current_generation(DAY, include_swing=False)
+    second = ai.review_current_generation(DAY, include_swing=True)
     assert second["material_review_current"] and len(calls) == 2
     assert second["review_material_hash"] != first["review_material_hash"]
     assert (
         second["review_history"][0]["original_response_hash"]
         == first["ai_two_pass_review"]["original_response_hash"]
     )
-    again = ai.review_current_generation(DAY, include_swing=False)
+    again = ai.review_current_generation(DAY, include_swing=True)
     assert again["review_reentry"]["new_provider_calls"] == 0
-    isolated["sources"]["scalping_pattern_lab_automation"]["summary"][
+    isolated["sources"]["swing_pattern_lab_automation"]["summary"][
         "economic_evidence"
     ]["net"] = 3
-    exhausted = ai.review_current_generation(DAY, include_swing=False)
+    exhausted = ai.review_current_generation(DAY, include_swing=True)
     assert not exhausted["material_review_current"]
     assert exhausted["review_reentry"]["state"] == "budget_exhausted"
     assert exhausted["status"] == "warning" and len(calls) == 2
@@ -163,7 +162,7 @@ def test_bounded_review_reentry_closes_new_material_and_stops_at_daily_cap(
 def test_metadata_pending_is_a_trigger_even_when_file_is_newer(isolated):
     build()
     isolated["currentness_checks"] = [{"check_id": "new", "status": "fail"}]
-    r = ai.refresh_pattern_lab_ai_review_source_provenance(DAY, include_swing=False)
+    r = ai.refresh_pattern_lab_ai_review_source_provenance(DAY, include_swing=True)
     from src.engine.automation.automation_chain_trigger_decision import (
         _non_reusable_payload_reason,
     )
@@ -182,8 +181,8 @@ def test_review_reservation_survives_interruption_and_is_not_retried(
 
     monkeypatch.setattr(ai, "_call_openai_ai_review", interrupted)
     with pytest.raises(RuntimeError, match="interrupted provider"):
-        ai.review_current_generation(DAY, include_swing=False)
-    result = ai.review_current_generation(DAY, include_swing=False)
+        ai.review_current_generation(DAY, include_swing=True)
+    result = ai.review_current_generation(DAY, include_swing=True)
     assert len(calls) == 1
     assert result["review_reentry"]["state"] == "terminal_attempt_not_retried"
     assert not result["material_review_current"]
@@ -192,7 +191,7 @@ def test_review_reservation_survives_interruption_and_is_not_retried(
 def test_legacy_review_does_not_invent_unused_provider_budget(isolated):
     build()
     isolated["currentness_checks"] = [{"check_id": "new", "status": "fail"}]
-    result = ai.review_current_generation(DAY, include_swing=False)
+    result = ai.review_current_generation(DAY, include_swing=True)
     assert result["review_reentry"]["state"] == "budget_exhausted"
 
 
@@ -209,7 +208,7 @@ def test_controller_reconciles_only_enabled_pattern_owner():
     )
 
     assert not _pattern_review_recovery_actions(DAY, {})
-    active = {"execution_profile": {"flags": {"pattern_lab_ai_review": True}}}
+    active = {"execution_profile": {"flags": {"swing_lifecycle": True, "pattern_lab_ai_review": True}}}
     (action,) = _pattern_review_recovery_actions(DAY, active)
     assert "--review-current-generation" in action.command
     active["execution_profile"]["disabled_stage_flags"] = ["pattern_lab_ai_review"]
@@ -224,6 +223,7 @@ def test_pattern_only_recovery_does_not_rerun_daily_ai_or_preopen(monkeypatch):
         "stale_downstream_links": ["pattern_lab_ai_review_source_generation_stale"],
         "execution_profile": {
             "flags": {
+                "swing_lifecycle": True,
                 "pattern_lab_ai_review": True,
                 "tuning_performance_control_tower": True,
             }
@@ -250,13 +250,13 @@ def test_real_late_bound_producer_context_reaches_fixed_point(tmp_path, monkeypa
         return response(), {"provider": "openai", "model": "fixture"}
 
     monkeypatch.setattr(ai, "_call_openai_ai_review", provider)
-    paths = ai._source_paths(DAY, include_swing=False)
+    paths = ai._source_paths(DAY, include_swing=True)
 
     def write(name, payload):
         paths[name].parent.mkdir(parents=True, exist_ok=True)
         paths[name].write_text(json.dumps({"date": DAY, **payload}))
 
-    write("scalping_pattern_lab_automation", {"runtime_effect": False, "summary": {}})
+    write("swing_pattern_lab_automation", {"runtime_effect": False, "summary": {}})
     write(
         "pattern_lab_currentness_audit",
         {"status": "pass", "checks": [], "summary": {"fail_count": 0}},
@@ -265,18 +265,18 @@ def test_real_late_bound_producer_context_reaches_fixed_point(tmp_path, monkeypa
         "observation_source_quality_audit",
         {"status": "pass", "summary": {"tuning_input_allowed": True}},
     )
-    first = ai.review_current_generation(DAY, include_swing=False)
+    first = ai.review_current_generation(DAY, include_swing=True)
     assert len(calls) == 1
     ev = {"generated_at": "first", "daily_ev_summary": {"realized_pnl_krw": 123}}
     write("threshold_cycle_ev", ev)
-    second = ai.review_current_generation(DAY, include_swing=False)
+    second = ai.review_current_generation(DAY, include_swing=True)
     assert len(calls) == 2 and second["material_review_current"]
     assert first["review_material_hash"] != second["review_material_hash"]
     ev.update(
         generated_at="metadata refresh", pattern_lab_ai_review={"status": "warning"}
     )
     write("threshold_cycle_ev", ev)
-    final = ai.review_current_generation(DAY, include_swing=False)
+    final = ai.review_current_generation(DAY, include_swing=True)
     assert len(calls) == 2 and final["material_review_current"]
     assert ai.review_generation_matches(DAY, final, report_dir=tmp_path)
     write(
@@ -284,7 +284,7 @@ def test_real_late_bound_producer_context_reaches_fixed_point(tmp_path, monkeypa
         {"status": "fail", "summary": {"tuning_input_allowed": False}},
     )
     assert not ai.review_generation_matches(DAY, final, report_dir=tmp_path)
-    failed = ai.review_current_generation(DAY, include_swing=False)
+    failed = ai.review_current_generation(DAY, include_swing=True)
     assert not failed["material_review_current"] and failed["status"] == "warning"
     assert ai.review_generation_matches(DAY, failed, report_dir=tmp_path)
     assert len(calls) == 2
@@ -295,7 +295,7 @@ def test_review_mutex_prevents_concurrent_call(isolated):
     path.parent.mkdir(parents=True)
     with ai.json_artifact_generation_lock(path, exclusive=True, blocking=False):
         with pytest.raises(OSError, match="lock_busy"):
-            ai.review_current_generation(DAY, include_swing=False)
+            ai.review_current_generation(DAY, include_swing=True)
 
 
 def test_budget_corruption_is_not_reset(isolated):
@@ -311,7 +311,7 @@ def test_budget_corruption_is_not_reset(isolated):
         )
     )
     with pytest.raises(ValueError, match="budget_invalid"):
-        ai.review_current_generation(DAY, include_swing=False)
+        ai.review_current_generation(DAY, include_swing=True)
     assert not ai.report_paths(DAY)[0].exists()
 
 
@@ -327,11 +327,11 @@ def test_terminal_provider_failure_does_not_leave_an_actionable_pending_retry(
             {"provider": "openai", "status": "failed"},
         ),
     )
-    result = ai.review_current_generation(DAY, include_swing=False)
+    result = ai.review_current_generation(DAY, include_swing=True)
     used = len(calls)
     assert 1 <= used <= ai.REVIEW_ATTEMPT_LIMIT
     assert result["review_reentry"]["state"] == "terminal_attempt_not_retried"
-    ai.review_current_generation(DAY, include_swing=False)
+    ai.review_current_generation(DAY, include_swing=True)
     assert len(calls) == used
 
 
@@ -344,9 +344,9 @@ def test_new_target_date_gets_its_own_budget_without_approving_old_date(
         "_call_openai_ai_review",
         lambda *a, **k: (calls.append(1) or response(), {"provider": "openai"}),
     )
-    r = ai.review_current_generation(DAY, include_swing=False)
+    r = ai.review_current_generation(DAY, include_swing=True)
     isolated["date"] = "2026-09-09"
-    next_day = ai.review_current_generation("2026-09-09", include_swing=False)
+    next_day = ai.review_current_generation("2026-09-09", include_swing=True)
     assert len(calls) == 2
     assert next_day["review_reentry"]["attempts_used"] == 1
     assert (
@@ -408,19 +408,6 @@ def test_active_scalping_gap_survives_swing_mention(isolated):
     assert r["code_improvement_orders"][0]["review_id"] == "net_research"
 
 
-def test_disabled_swing_domain_does_not_create_repair(isolated):
-    raw = response()
-    raw["final_conclusions"].append(
-        {
-            **raw["final_conclusions"][0],
-            "review_id": "swing_a",
-            "domain": "swing",
-            "final_state": "source_quality_gap",
-        }
-    )
-    r = build(raw)
-    assert r["status"] == "pass"
-    assert len(r["ai_two_pass_review"]["final_conclusions"]) == 1
 
 
 @pytest.mark.parametrize("raw", ["[]", "null", '"text"', "42", "true", "{bad"])
@@ -437,7 +424,7 @@ def test_duplicate_native_review_id_rejected():
 def test_refresh_preserves_original_input_and_response(isolated):
     first = build()
     isolated["sources"]["threshold_cycle_ev"] = {"summary": {"status": "pass"}}
-    r = ai.refresh_pattern_lab_ai_review_source_provenance(DAY, include_swing=False)
+    r = ai.refresh_pattern_lab_ai_review_source_provenance(DAY, include_swing=True)
     assert r["material_review_current"] is True
     assert r["status"] == "pass"
     assert r["source_context_hash"] != first["source_context_hash"]
@@ -449,17 +436,17 @@ def test_refresh_preserves_original_input_and_response(isolated):
         r["ai_two_pass_review"]["original_response"]
         == first["ai_two_pass_review"]["original_response"]
     )
-    again = ai.refresh_pattern_lab_ai_review_source_provenance(DAY, include_swing=False)
+    again = ai.refresh_pattern_lab_ai_review_source_provenance(DAY, include_swing=True)
     assert again["review_material_hash"] == first["review_material_hash"]
     assert again["code_improvement_orders"] == r["code_improvement_orders"]
 
 
 def test_refresh_does_not_relabel_new_economics_as_reviewed(isolated):
     first = build()
-    isolated["sources"]["scalping_pattern_lab_automation"]["summary"][
+    isolated["sources"]["swing_pattern_lab_automation"]["summary"][
         "economic_evidence"
     ]["net"] = -5
-    r = ai.refresh_pattern_lab_ai_review_source_provenance(DAY, include_swing=False)
+    r = ai.refresh_pattern_lab_ai_review_source_provenance(DAY, include_swing=True)
     assert r["material_review_current"] is False
     assert r["status"] == "warning"
     assert (
@@ -471,7 +458,7 @@ def test_refresh_does_not_relabel_new_economics_as_reviewed(isolated):
         == first["ai_two_pass_review"]["input_context_hash"]
     )
     assert r["source_provenance_refresh"]["new_provider_call"] is False
-    again = ai.refresh_pattern_lab_ai_review_source_provenance(DAY, include_swing=False)
+    again = ai.refresh_pattern_lab_ai_review_source_provenance(DAY, include_swing=True)
     assert again["code_improvement_orders"] == r["code_improvement_orders"]
 
 
@@ -485,7 +472,7 @@ def test_new_currentness_failure_enforced_during_refresh(isolated):
             "finding": "New hash invalid",
         }
     ]
-    r = ai.refresh_pattern_lab_ai_review_source_provenance(DAY, include_swing=False)
+    r = ai.refresh_pattern_lab_ai_review_source_provenance(DAY, include_swing=True)
     assert r["status"] == "warning"
     assert any(
         o.get("review_id") == "currentness:claude_hash"
@@ -502,59 +489,10 @@ def test_feedback_rejects_malformed_wrong_date_or_failed(tmp_path, value):
     assert read_feedback(p, DAY, DAY)["validation_status"] == "invalid"
 
 
-def test_payload_produces_exact_read_receipts(tmp_path, monkeypatch):
-    monkeypatch.setattr(lab, "REPORT_DIR", tmp_path)
-    monkeypatch.setattr(lab, "ANALYSIS_END", date.fromisoformat(DAY))
-    for name in lab.SCALPING_FEEDBACK_SOURCES:
-        p = tmp_path / name / f"{name}_{DAY}.json"
-        p.parent.mkdir()
-        p.write_text(json.dumps({"date": DAY, "summary": {"status": "pass"}}))
-    r = lab._load_feedback_sources()
-    assert len(r["consumed_feedback_sources"]) == 2
-    assert not r["missing_feedback_sources"]
-    for item in r["consumed_feedback_sources"]:
-        p = tmp_path / item["source_id"] / f"{item['source_id']}_{DAY}.json"
-        assert item["sha256"] == hashlib.sha256(p.read_bytes()).hexdigest()
 
 
-def test_currentness_receipt_distinguishes_consumed_and_latest_generation(
-    tmp_path, monkeypatch
-):
-    _seed_labs(tmp_path, DAY)
-    monkeypatch.setattr(currentness, "REPORT_DIR", tmp_path / "data/report")
-    p = tmp_path / f"data/report/threshold_cycle_ev/threshold_cycle_ev_{DAY}.json"
-    p.write_text(json.dumps({"date": DAY, "summary": {"new_downstream": True}}))
-    result = currentness._feedback_source_status(
-        target_date=DAY,
-        domain="scalping",
-        source_paths=[tmp_path / "analysis/claude_scalping_pattern_lab"],
-    )
-    assert not result["missing_feedback_sources"]
-    item = next(
-        i
-        for i in result["consumed_feedback_sources"]
-        if i["source_id"] == "threshold_cycle_ev"
-    )
-    assert item["consumption_status"] == "verified_receipt"
-    assert item["current_generation_consumed"] is False
 
 
-def test_currentness_never_claims_consumption_from_file_existence(
-    tmp_path, monkeypatch
-):
-    _seed_labs(tmp_path, DAY)
-    monkeypatch.setattr(currentness, "REPORT_DIR", tmp_path / "data/report")
-    summary = (
-        tmp_path
-        / "analysis/claude_scalping_pattern_lab/outputs/claude_payload_summary.json"
-    )
-    summary.write_text("{}")
-    r = currentness._feedback_source_status(
-        target_date=DAY, domain="scalping", source_paths=[summary.parent.parent]
-    )
-    assert not r["consumed_feedback_sources"]
-    assert len(r["available_feedback_sources"]) == 2
-    assert len(r["missing_feedback_sources"]) == 2
 
 
 @pytest.mark.parametrize("schema", ["bad", True, None, [], {}])
@@ -573,7 +511,7 @@ def test_prompt_uses_active_owners_and_small_net_objective():
 def test_refresh_keeps_retired_words_in_original_response(isolated):
     raw = response(required_followup=["scalp_entry_adm", "lifecycle_decision_matrix"])
     first = build(raw)
-    r = ai.refresh_pattern_lab_ai_review_source_provenance(DAY, include_swing=False)
+    r = ai.refresh_pattern_lab_ai_review_source_provenance(DAY, include_swing=True)
     assert r["ai_two_pass_review"]["original_response"] == raw
     assert (
         r["ai_two_pass_review"]["original_response_hash"]
@@ -602,7 +540,7 @@ def test_refresh_tampered_response_does_not_overwrite_previous(isolated):
     path.write_text(json.dumps(r))
     before = path.read_bytes()
     with pytest.raises(RuntimeError, match="response_hash_mismatch"):
-        ai.refresh_pattern_lab_ai_review_source_provenance(DAY, include_swing=False)
+        ai.refresh_pattern_lab_ai_review_source_provenance(DAY, include_swing=True)
     assert path.read_bytes() == before
 
 
@@ -611,10 +549,10 @@ def test_material_review_pending_reaches_workorder_and_ev(isolated, monkeypatch)
     from src.engine import threshold_cycle_ev_report as ev
 
     first = build()
-    isolated["sources"]["scalping_pattern_lab_automation"]["summary"][
+    isolated["sources"]["swing_pattern_lab_automation"]["summary"][
         "economic_evidence"
     ] = {"net": -1}
-    r = ai.refresh_pattern_lab_ai_review_source_provenance(DAY, include_swing=False)
+    r = ai.refresh_pattern_lab_ai_review_source_provenance(DAY, include_swing=True)
     order = next(
         o for o in r["code_improvement_orders"] if o.get("material_review_pending")
     )
@@ -641,15 +579,15 @@ def test_trigger_tracks_primary_generation_and_contract_code():
 
     specs = {s.step_id: s for s in trigger._step_specs(DAY)}
     current = specs["pattern_lab_currentness_audit"].source_paths
-    assert "analysis/claude_scalping_pattern_lab/outputs/run_manifest.json" in current
+    assert all("claude_scalping_pattern_lab" not in path for path in current)
     assert "src/engine/automation/pattern_lab_source_contract.py" in current
     review = specs["pattern_lab_ai_review"].source_paths
     assert "src/engine/pattern_lab_ai_review.py" in review
-    assert any("scalping_pattern_lab_automation" in s for s in review)
+    assert any("swing_pattern_lab_automation" in s for s in review)
 
 
 def test_source_authority_violation_cannot_be_hidden_by_keep(isolated):
-    isolated["sources"]["scalping_pattern_lab_automation"]["summary"][
+    isolated["sources"]["swing_pattern_lab_automation"]["summary"][
         "allowed_runtime_apply"
     ] = True
     r = build()
@@ -684,11 +622,11 @@ def test_hidden_cohort_change_invalidates_material_fingerprint(monkeypatch):
     monkeypatch.setattr(
         ai,
         "_load_json",
-        lambda p: payload if "scalping_pattern_lab_automation" in str(p) else {},
+        lambda p: payload if "swing_pattern_lab_automation" in str(p) else {},
     )
-    first = ai._build_input_context(DAY, include_swing=False)
+    first = ai._build_input_context(DAY, include_swing=True)
     evidence["claude"]["windows"]["rolling"]["cohorts"][-1]["net"] = -5
-    second = ai._build_input_context(DAY, include_swing=False)
+    second = ai._build_input_context(DAY, include_swing=True)
     assert ai._material_context_hash(first) != ai._material_context_hash(second)
 
 
@@ -699,7 +637,7 @@ def test_wrong_date_refresh_preserves_previous_file(isolated):
     path.write_text(json.dumps(r))
     before = path.read_bytes()
     with pytest.raises(RuntimeError, match="date_mismatch"):
-        ai.refresh_pattern_lab_ai_review_source_provenance(DAY, include_swing=False)
+        ai.refresh_pattern_lab_ai_review_source_provenance(DAY, include_swing=True)
     assert path.read_bytes() == before
 
 
@@ -714,10 +652,10 @@ def test_old_model_patch_cannot_be_applied_to_new_generation(isolated):
     assert any(
         o.get("review_id") == "net_research" for o in first["code_improvement_orders"]
     )
-    isolated["sources"]["scalping_pattern_lab_automation"]["summary"][
+    isolated["sources"]["swing_pattern_lab_automation"]["summary"][
         "economic_evidence"
     ] = {"net": 3}
-    r = ai.refresh_pattern_lab_ai_review_source_provenance(DAY, include_swing=False)
+    r = ai.refresh_pattern_lab_ai_review_source_provenance(DAY, include_swing=True)
     assert not any(
         o.get("review_id") == "net_research" for o in r["code_improvement_orders"]
     )
@@ -738,7 +676,7 @@ def test_changed_reviewer_instructions_invalidate_old_material_hash(
     monkeypatch.setattr(
         ai, "_build_ai_review_instructions", lambda: "Changed review contract"
     )
-    r = ai.refresh_pattern_lab_ai_review_source_provenance(DAY, include_swing=False)
+    r = ai.refresh_pattern_lab_ai_review_source_provenance(DAY, include_swing=True)
     assert r["material_review_current"] is False
 
 

@@ -6544,7 +6544,7 @@ def test_build_threshold_cycle_postclose_verification_prefers_workorder_lineage(
         require_done_marker=False,
     )
 
-    assert pending_report["status"] == "pass_with_pending_done_marker"
+    assert pending_report["status"] == "pass_with_pending_done_marker", {k:v for k,v in pending_report.items() if k in ("warnings", "stale_downstream_links", "missing_required_artifacts", "source_currentness", "handoff_warnings")}
     assert pending_report["execution_profile"]["status"] == "pending_done_marker"
     assert pending_report["execution_profile"]["pending_done_marker"] is True
     assert (
@@ -6910,9 +6910,9 @@ def test_build_threshold_cycle_postclose_verification_warns_on_recovery_profile(
     assert report["execution_profile"]["status"] == "recovered_partial_profile"
     assert report["execution_profile"]["disabled_stage_flags"] == [
         "swing_lifecycle",
-        "pattern_labs",
         "deepseek_swing_lab",
         "pattern_lab_currentness_audit",
+        "pattern_lab_ai_review",
         "pattern_lab_propagation_audit",
     ]
     assert (
@@ -6942,6 +6942,9 @@ def test_build_threshold_cycle_postclose_verification_warns_on_recovery_profile(
         "swing_lifecycle_matrix",
         "swing_lifecycle_bucket_discovery",
         "deepseek_swing_lab",
+        "pattern_lab_currentness_audit",
+        "pattern_lab_ai_review",
+        "pattern_lab_propagation_audit",
     }
     assert "swing_daily_simulation" not in pending_report["missing_required_artifacts"]
     assert "swing_lifecycle_audit" not in pending_report["missing_required_artifacts"]

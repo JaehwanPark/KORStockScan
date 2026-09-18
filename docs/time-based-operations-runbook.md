@@ -719,14 +719,12 @@ POSTCLOSE `HumanInterventionSummaryYYYYMMDD`에는 `approval_id`, `family`, 후�
 
 ## 신규 Code Improvement Order 처리 절차
 
-`code_improvement_order`는 pattern lab과 postclose source들이 만든 machine-readable 작업지시다. 생성 자체는 runtime 효과가 없으며, runtime 변경 권한도 없다. postclose wrapper는 이를 Markdown 작업지시서로 자동 변환하지만, postclose DONE controller 이후 `codex_workorder_runner`를 자동 실행하지 않는다. safe-scope `implement_now` 항목의 Codex SDK 구현/검증/커밋은 사용자가 Codex 구현을 명시적으로 지시하거나 `POSTCLOSE_DONE_CONTROLLER_RUN_CODEX=true`로 수동 opt-in한 경우에만 별도 처리한다. 사람/operator가 남는 지점은 구현 지시 여부, SDK/auth/package gap, forbidden-use blocker, 또는 real runtime authority가 필요한 항목을 어떻게 처리할지 결정하는 단계다.
+`code_improvement_order`는 현재 postclose source들이 만든 machine-readable 작업지시다. 생성 자체는 runtime 효과가 없으며, runtime 변경 권한도 없다. postclose wrapper는 이를 Markdown 작업지시서로 자동 변환하지만, postclose DONE controller 이후 `codex_workorder_runner`를 자동 실행하지 않는다. safe-scope `implement_now` 항목의 Codex SDK 구현/검증/커밋은 사용자가 Codex 구현을 명시적으로 지시하거나 `POSTCLOSE_DONE_CONTROLLER_RUN_CODEX=true`로 수동 opt-in한 경우에만 별도 처리한다. 사람/operator가 남는 지점은 구현 지시 여부, SDK/auth/package gap, forbidden-use blocker, 또는 real runtime authority가 필요한 항목을 어떻게 처리할지 결정하는 단계다.
 
 ### 1. Intake
 
 입력 artifact:
 
-- `data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_YYYY-MM-DD.json`
-- `data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_YYYY-MM-DD.md`
 - `data/report/scalp_entry_action_decision_matrix/scalp_entry_action_decision_matrix_YYYY-MM-DD.json`
 - `data/report/scalp_entry_action_decision_matrix/scalp_entry_action_decision_matrix_YYYY-MM-DD.md`
 - `data/report/lifecycle_decision_matrix/lifecycle_decision_matrix_YYYY-MM-DD.json`
@@ -840,7 +838,7 @@ code_improvement_workorder_YYYY-MM-DD.md implement_now를 2-pass로 처리해줘
 
 ```markdown
 - [ ] `[OrderIdYYYYMMDD] 원본 order title 요약` (`Due: YYYY-MM-DD`, `Slot: POSTCLOSE`, `TimeWindow: HH:MM~HH:MM`, `Track: RuntimeStability`)
-  - Source: [scalping_pattern_lab_automation_YYYY-MM-DD.json](/home/ubuntu/KORStockScan/data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_YYYY-MM-DD.json)
+  - Source: [code_improvement_workorder_YYYY-MM-DD.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_YYYY-MM-DD.json)
   - 판정 기준: 원본 `order_id`, `target_subsystem`, `expected_ev_effect`, `acceptance_tests`를 구현 완료 조건으로 사용한다.
   - 범위: runtime 직접 변경 없음 또는 feature flag/auto_bounded_live guard 경유.
   - 다음 액션: 구현, 테스트, postclose EV report에서 metric 확인.
@@ -1042,3 +1040,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 ADM/LDM·bucket·greenfield는 2026-09-06 retired다. archived 보고서/lock의 존재는 활성 증거가 아니고 부재도 복구 대상이 아니다. PREOPEN의 OFF guards, PID의 no-op/비소비, 장후 verifier의 retired exclusion과 dedicated Entry AI gate/Samsung/AVG_DOWN/PYRAMID 보존을 확인한다.
 
 현재 판단 우선순위는 hard safety → account/order/broker 및 사용자 veto → 활성 dedicated owner의 승인된 policy/guard → 기존 baseline fallback이다. 이 설명은 새로운 우선순위 구현이나 기존 guard 완화 지시가 아니다. 완료된 폐기 구현과 자연 retirement acceptance는 분리하고 후자는 당일 checklist의 기존 OPEN owner를 따른다.
+
+## Claude Scalping Pattern Lab 폐기 경계
+
+2026-09-18 이후 Main/보조 tuning 장후 실행은 Claude Lab·scalping automation을 호출하지 않는다. 옛 true env·보고서 존재·stale/material 경고는 복구 권한이 아니다. 공유 currentness/AI review/propagation은 명시적 기존 Swing scope만 유지하며 Swing OFF를 바꾸지 않는다. `install_pattern_lab_cron.sh`는 옛 weekly marker를 제거하는 cleanup-only shim으로 새 job을 설치하지 않는다. 활성 주문/원천/정책·operator guard는 보존한다. [폐기 검증](audit-reports/2026-09-18-claude-scalping-pattern-lab-retirement-review.md)의 선택 배포와 PID/경제성 경계를 따른다.

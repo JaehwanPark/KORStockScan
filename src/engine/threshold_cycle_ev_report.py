@@ -39,7 +39,6 @@ from src.engine.scalping.entry_split_order_plan import (
     generation_policy_snapshot_path,
     runtime_apply_authority_contract_status,
 )
-from src.engine.scalping_pattern_lab_automation import automation_report_paths
 from src.engine.swing_lifecycle_bucket_discovery import (
     report_paths as swing_lifecycle_bucket_discovery_paths,
 )
@@ -802,84 +801,6 @@ def _approval_requests(calibration_report: dict[str, Any]) -> list[dict[str, Any
     return requests
 
 
-def _pattern_lab_automation_summary(
-    target_date: str,
-) -> tuple[dict[str, Any], str | None, list[str]]:
-    json_path, _ = automation_report_paths(target_date)
-    payload = _load_json(json_path)
-    if not payload:
-        return (
-            {
-                "available": False,
-                "artifact": None,
-                "gemini_fresh": False,
-                "claude_fresh": False,
-                "consensus_count": 0,
-                "auto_family_candidate_count": 0,
-                "code_improvement_order_count": 0,
-                "top_consensus_findings": [],
-                "top_code_improvement_orders": [],
-            },
-            None,
-            ["pattern_lab_automation_missing"],
-        )
-    summary = (
-        payload.get("ev_report_summary")
-        if isinstance(payload.get("ev_report_summary"), dict)
-        else {}
-    )
-    warnings: list[str] = []
-    gemini_enabled = bool(summary.get("gemini_enabled", True))
-    if gemini_enabled and not bool(summary.get("gemini_fresh")):
-        warnings.append("pattern_lab_gemini_stale")
-    if not bool(summary.get("claude_fresh")):
-        warnings.append("pattern_lab_claude_stale")
-    return (
-        {
-            "available": True,
-            "artifact": str(json_path),
-            "gemini_enabled": gemini_enabled,
-            "gemini_fresh": bool(summary.get("gemini_fresh")),
-            "gemini_retired_reason": summary.get("gemini_retired_reason"),
-            "accepted_source_finding_count": _safe_int(
-                summary.get("accepted_source_finding_count"), 0
-            ),
-            "economic_evidence_status": {
-                name: {
-                    "status": (evidence or {}).get("status"),
-                    "valid_source_days": len((evidence or {}).get("sources") or {}),
-                    "maintenance_review_due": (evidence or {}).get(
-                        "maintenance_review_due"
-                    ),
-                    "owner_evaluation_status": (
-                        (evidence or {}).get("owner_evaluation") or {}
-                    ).get("status"),
-                    "rolling_completed_count": (
-                        ((evidence or {}).get("windows") or {}).get("rolling_10d") or {}
-                    ).get("completed_count"),
-                    "runtime_effect": False,
-                    "allowed_runtime_apply": False,
-                }
-                for name, evidence in (payload.get("economic_evidence") or {}).items()
-            },
-            "claude_fresh": bool(summary.get("claude_fresh")),
-            "consensus_count": _safe_int(summary.get("consensus_count"), 0),
-            "auto_family_candidate_count": _safe_int(
-                summary.get("auto_family_candidate_count"), 0
-            ),
-            "code_improvement_order_count": _safe_int(
-                summary.get("code_improvement_order_count"), 0
-            ),
-            "top_consensus_findings": list(summary.get("top_consensus_findings") or [])[
-                :3
-            ],
-            "top_code_improvement_orders": list(
-                summary.get("top_code_improvement_orders") or []
-            )[:3],
-        },
-        str(json_path),
-        warnings,
-    )
 
 
 def _swing_pattern_lab_automation_summary(
@@ -2562,9 +2483,7 @@ def build_threshold_cycle_ev_report(
         if isinstance(completed_by_source.get("real"), dict)
         else {}
     )
-    pattern_lab_summary, pattern_lab_path, pattern_lab_warnings = (
-        _pattern_lab_automation_summary(target_date)
-    )
+    pattern_lab_warnings = []
     swing_lab_summary, swing_lab_path, swing_lab_warnings = (
         _swing_pattern_lab_automation_summary(target_date)
     )
@@ -2637,22 +2556,28 @@ def build_threshold_cycle_ev_report(
     codebase_perf_summary, codebase_perf_path, codebase_perf_warnings = (
         _codebase_performance_workorder_summary(target_date)
     )
-    currentness_audit_summary, currentness_audit_path, currentness_audit_warnings = (
-        _audit_summary(
-            target_date,
-            "pattern_lab_currentness_audit",
-            PATTERN_LAB_CURRENTNESS_AUDIT_DIR,
+    if include_swing:
+        currentness_audit_summary, currentness_audit_path, currentness_audit_warnings = (
+            _audit_summary(
+                target_date,
+                "pattern_lab_currentness_audit",
+                PATTERN_LAB_CURRENTNESS_AUDIT_DIR,
+            )
         )
-    )
-    (
-        pattern_lab_ai_review_summary,
-        pattern_lab_ai_review_path,
-        pattern_lab_ai_review_warnings,
-    ) = _audit_summary(
-        target_date,
-        "pattern_lab_ai_review",
-        PATTERN_LAB_AI_REVIEW_DIR,
-    )
+    else:
+        (currentness_audit_summary, currentness_audit_path, currentness_audit_warnings) = ({}, None, [])
+    if include_swing:
+        (
+            pattern_lab_ai_review_summary,
+            pattern_lab_ai_review_path,
+            pattern_lab_ai_review_warnings,
+        ) = _audit_summary(
+            target_date,
+            "pattern_lab_ai_review",
+            PATTERN_LAB_AI_REVIEW_DIR,
+        )
+    else:
+        (pattern_lab_ai_review_summary, pattern_lab_ai_review_path, pattern_lab_ai_review_warnings) = ({}, None, [])
     time_window_regime_summary, time_window_regime_path, time_window_regime_warnings = (
         _audit_summary(
             target_date,
@@ -2687,13 +2612,16 @@ def build_threshold_cycle_ev_report(
         "stage_hook_runtime_scaffold",
         STAGE_HOOK_RUNTIME_SCAFFOLD_DIR,
     )
-    propagation_audit_summary, propagation_audit_path, propagation_audit_warnings = (
-        _audit_summary(
-            target_date,
-            "pattern_lab_propagation_audit",
-            PATTERN_LAB_PROPAGATION_AUDIT_DIR,
+    if include_swing:
+        propagation_audit_summary, propagation_audit_path, propagation_audit_warnings = (
+            _audit_summary(
+                target_date,
+                "pattern_lab_propagation_audit",
+                PATTERN_LAB_PROPAGATION_AUDIT_DIR,
+            )
         )
-    )
+    else:
+        (propagation_audit_summary, propagation_audit_path, propagation_audit_warnings) = ({}, None, [])
     selected_families = _selected_families(apply_manifest)
     swing_runtime_approval = _swing_runtime_approval_summary(apply_manifest)
     trade_review_completed = _safe_int(trade_metrics.get("completed_trades"), 0)
@@ -2951,7 +2879,6 @@ def build_threshold_cycle_ev_report(
         },
         "approval_requests": _approval_requests(calibration),
         "swing_runtime_approval": swing_runtime_approval,
-        "pattern_lab_automation": pattern_lab_summary,
         "swing_pattern_lab_automation": swing_lab_summary,
         "scalp_entry_action_decision_matrix": scalp_entry_adm_summary,
         "buy_funnel_sentinel": buy_funnel_sentinel_summary,
@@ -2986,7 +2913,6 @@ def build_threshold_cycle_ev_report(
             ),
             "calibration": str(calibration_path) if calibration_path.exists() else None,
             "apply_manifest": str(apply_path) if apply_path.exists() else None,
-            "pattern_lab_automation": pattern_lab_path,
             "swing_pattern_lab_automation": swing_lab_path,
             "scalp_entry_action_decision_matrix": scalp_entry_adm_path,
             "buy_funnel_sentinel": buy_funnel_sentinel_path,
@@ -3027,6 +2953,10 @@ def build_threshold_cycle_ev_report(
     report["summary"] = _top_level_summary(report)
     report = apply_source_quality_preflight_block(report, source_quality_preflight_gate)
     report["summary"] = _top_level_summary(report)
+    if not include_swing:
+        for key in ("pattern_lab_currentness_audit", "pattern_lab_ai_review", "pattern_lab_propagation_audit"):
+            report.pop(key, None)
+            report.get("sources", {}).pop(key, None)
     EV_REPORT_DIR.mkdir(parents=True, exist_ok=True)
     json_path, md_path = ev_report_paths(target_date)
     json_path.write_text(
@@ -3066,11 +2996,6 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
     runtime = (
         report.get("runtime_apply")
         if isinstance(report.get("runtime_apply"), dict)
-        else {}
-    )
-    pattern_lab = (
-        report.get("pattern_lab_automation")
-        if isinstance(report.get("pattern_lab_automation"), dict)
         else {}
     )
     swing_lab = (
@@ -3324,11 +3249,6 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
         f"- source_mix: `{institutional_flow.get('source_mix') or {}}`",
         f"- top_net_buy: `{institutional_flow.get('top_net_buy') or []}`",
         "",
-        "## Pattern Lab Automation",
-        f"- artifact: `{pattern_lab.get('artifact') or '-'}`",
-        f"- fresh: gemini=`{pattern_lab.get('gemini_fresh')}` claude=`{pattern_lab.get('claude_fresh')}`",
-        f"- consensus/orders/family_candidates: `{pattern_lab.get('consensus_count')}` / `{pattern_lab.get('code_improvement_order_count')}` / `{pattern_lab.get('auto_family_candidate_count')}`",
-        "",
         "## Swing Pattern Lab Automation",
         f"- artifact: `{swing_lab.get('artifact') or '-'}`",
         f"- deepseek_lab_available: `{swing_lab.get('deepseek_lab_available')}`",
@@ -3442,19 +3362,6 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
                     f"- `{item.get('order_id')}` decision=`{item.get('decision')}` subsystem=`{item.get('target_subsystem')}`"
                 )
         lines.append("")
-    top_findings = (
-        pattern_lab.get("top_consensus_findings")
-        if isinstance(pattern_lab.get("top_consensus_findings"), list)
-        else []
-    )
-    if top_findings:
-        lines.extend(["## Pattern Lab Top Findings"])
-        for item in top_findings[:3]:
-            if isinstance(item, dict):
-                lines.append(
-                    f"- `{item.get('title')}` route=`{item.get('route')}` family=`{item.get('mapped_family') or '-'}`"
-                )
-        lines.append("")
     if decisions:
         for item in decisions:
             if not isinstance(item, dict):
@@ -3481,6 +3388,11 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
                 f"error=`{item.get('error') or item.get('type') or '-'}`"
             )
     lines.append("")
+    if not report.get("swing_sources_enabled", report.get("strategy_scope") == "scalp_and_swing"):
+        lines = [line for line in lines if not (
+            line == "## Pattern Lab Audits"
+            or line.startswith(("- currentness:", "- ai_review:", "- propagation:"))
+        )]
     return "\n".join(lines)
 
 

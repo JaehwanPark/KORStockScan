@@ -2261,8 +2261,8 @@ def build_runtime_approval_summary(
         else PATTERN_LAB_PROPAGATION_AUDIT_DIR
         / f"pattern_lab_propagation_audit_{target_date}.json"
     )
-    currentness_audit = _audit_summary(currentness_path)
-    pattern_lab_ai_review = _audit_summary(pattern_lab_ai_review_path)
+    currentness_audit = _audit_summary(currentness_path) if include_swing else {}
+    pattern_lab_ai_review = _audit_summary(pattern_lab_ai_review_path) if include_swing else {}
     producer_gap_discovery = (
         _audit_summary(producer_gap_discovery_path)
         if include_producer_gap
@@ -2273,7 +2273,7 @@ def build_runtime_approval_summary(
             "runtime_effect": False,
         }
     )
-    propagation_audit = _audit_summary(propagation_path)
+    propagation_audit = _audit_summary(propagation_path) if include_swing else {}
     scalping_rows = _scalping_rows(
         ev_report,
         calibration_report,
@@ -2401,11 +2401,11 @@ def build_runtime_approval_summary(
             "institutional_flow_context": institutional_flow_path,
             "microstructure_reaction_context": microstructure_reaction_path,
             "pattern_lab_currentness_audit": (
-                str(currentness_path) if currentness_path.exists() else None
+                str(currentness_path) if include_swing and currentness_path.exists() else None
             ),
             "pattern_lab_ai_review": (
                 str(pattern_lab_ai_review_path)
-                if pattern_lab_ai_review_path.exists()
+                if include_swing and pattern_lab_ai_review_path.exists()
                 else None
             ),
             "producer_gap_discovery": (
@@ -2414,7 +2414,7 @@ def build_runtime_approval_summary(
                 else None
             ),
             "pattern_lab_propagation_audit": (
-                str(propagation_path) if propagation_path.exists() else None
+                str(propagation_path) if include_swing and propagation_path.exists() else None
             ),
         },
         "source_load_diagnostics": _JSON_LOAD_DIAGNOSTICS.copy(),
@@ -2712,12 +2712,12 @@ def build_runtime_approval_summary(
                 ),
                 (
                     "pattern_lab_currentness_audit_missing"
-                    if not currentness_path.exists()
+                    if include_swing and not currentness_path.exists()
                     else ""
                 ),
                 (
                     "pattern_lab_ai_review_missing"
-                    if not pattern_lab_ai_review_path.exists()
+                    if include_swing and not pattern_lab_ai_review_path.exists()
                     else ""
                 ),
                 (
@@ -2727,7 +2727,7 @@ def build_runtime_approval_summary(
                 ),
                 (
                     "pattern_lab_propagation_audit_missing"
-                    if not propagation_path.exists()
+                    if include_swing and not propagation_path.exists()
                     else ""
                 ),
                 clean_policy_warning or "",
@@ -2758,6 +2758,14 @@ def build_runtime_approval_summary(
             ev_json.parent.parent, target_date, ev_report
         )
     report = apply_source_quality_preflight_block(report, source_quality_preflight_gate)
+    if not include_swing:
+        for key in ("pattern_lab_currentness_audit", "pattern_lab_ai_review", "pattern_lab_propagation_audit"):
+            report.pop(key, None)
+            for section in ("sources", "source"):
+                report.get(section, {}).pop(key, None)
+            for label in list(report.get("summary", {})):
+                if "pattern_lab" in label or label.startswith(("claude_", "gemini_", "scalping_source_order_count")):
+                    report["summary"].pop(label, None)
     SUMMARY_DIR.mkdir(parents=True, exist_ok=True)
     json_path, md_path = summary_paths(target_date)
     json_path.write_text(
@@ -3034,6 +3042,11 @@ def render_runtime_approval_summary_markdown(report: dict[str, Any]) -> str:
                 f"error=`{item.get('error') or item.get('type') or '-'}`"
             )
     lines.append("")
+    if not report.get("swing_sources_enabled", report.get("strategy_scope") == "scalp_and_swing"):
+        lines = [line for line in lines if not (
+            line == "## Pattern Lab Audits"
+            or line.startswith(("- currentness:", "- ai_review:", "- propagation:", "- pattern_lab_"))
+        )]
     return "\n".join(lines)
 
 

@@ -323,12 +323,9 @@ def build_tuning_observability_summary(
             "producer": "tuning_observability_summary",
             "consumers": [
                 "gemini_scalping_pattern_lab.outputs",
-                "claude_scalping_pattern_lab.outputs",
-                "pattern_lab_currentness_audit",
-                "build_code_improvement_workorder_via_currentness_audit",
             ],
             "direct_workorder_consumer": False,
-            "currentness_audit_handoff_required": True,
+            "currentness_audit_handoff_required": False,
             "runtime_effect": False,
             "allowed_runtime_apply": False,
         },

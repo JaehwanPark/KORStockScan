@@ -143,10 +143,6 @@ def _step_specs(target_date: str) -> list[StepSpec]:
                 target_date,
             ),
             (
-                "analysis/claude_scalping_pattern_lab/outputs/tuning_observability_summary.json",
-                "analysis/claude_scalping_pattern_lab/outputs/ev_analysis_result.json",
-                "analysis/claude_scalping_pattern_lab/outputs/run_manifest.json",
-                "analysis/claude_scalping_pattern_lab/outputs/claude_payload_summary.json",
                 "src/engine/pattern_lab_currentness_audit.py",
                 "src/engine/automation/pattern_lab_source_contract.py",
             ),
@@ -159,11 +155,7 @@ def _step_specs(target_date: str) -> list[StepSpec]:
                     "pattern_lab_currentness_audit",
                     target_date,
                 ),
-                *_pair(
-                    "scalping_pattern_lab_automation",
-                    "scalping_pattern_lab_automation",
-                    target_date,
-                ),
+                *_pair("swing_pattern_lab_automation", "swing_pattern_lab_automation", target_date),
                 "src/engine/pattern_lab_ai_review.py",
             ),
         ),
@@ -615,10 +607,13 @@ def build_report(
 ) -> dict[str, Any]:
     if scope not in SCOPES:
         raise ValueError(f"unsupported scope: {scope}")
+    effective_env = dict(os.environ if env is None else env)
+    swing_enabled = str(effective_env.get("THRESHOLD_CYCLE_RUN_SWING_POSTCLOSE", "false")).lower() in {"1", "true", "yes", "on"}
     decisions = [
         evaluate_step(spec, env=env)
         for spec in _step_specs(target_date)
-        if scope == "all" or spec.scope == scope
+        if (scope == "all" or spec.scope == scope)
+        and (swing_enabled or spec.step_id not in {"pattern_lab_currentness_audit", "pattern_lab_ai_review", "pattern_lab_propagation_audit"})
     ]
     return {
         "report_type": REPORT_TYPE,

@@ -15,9 +15,6 @@ from src.engine.pattern_lab_currentness_audit import (
     report_paths as currentness_report_paths,
 )
 from src.engine.runtime_approval_summary import summary_paths as runtime_summary_paths
-from src.engine.scalping_pattern_lab_automation import (
-    automation_report_paths as scalping_automation_report_paths,
-)
 from src.engine.swing_pattern_lab_automation import (
     swing_pattern_lab_automation_report_paths,
 )
@@ -181,14 +178,15 @@ def build_pattern_lab_propagation_audit(
     target_date: str, *, include_swing: bool = True
 ) -> dict[str, Any]:
     target_date = str(target_date).strip()
-    scalping_path, _ = scalping_automation_report_paths(target_date)
+    if not include_swing:
+        from src.engine.lifecycle.retirement import retired_status
+        return retired_status("claude_scalping_pattern_lab")
     swing_path, _ = swing_pattern_lab_automation_report_paths(target_date)
     currentness_path, _ = currentness_report_paths(target_date)
     workorder_path, _ = code_improvement_workorder_paths(target_date)
     ev_path, _ = ev_report_paths(target_date)
     runtime_path, _ = runtime_summary_paths(target_date)
 
-    scalping = _load_json(scalping_path)
     swing = _load_json(swing_path) if include_swing else {}
     currentness = _load_json(currentness_path)
     workorder = _load_json(workorder_path)
@@ -204,71 +202,6 @@ def build_pattern_lab_propagation_audit(
 
     checks: list[dict[str, Any]] = []
 
-    scalping_status, scalping_finding = _automation_fresh(
-        scalping, target_date, "gemini_fresh"
-    )
-    claude_status, claude_finding = _automation_fresh(
-        scalping, target_date, "claude_fresh"
-    )
-    checks.append(
-        _check(
-            "scalping_gemini_automation_retired",
-            status=scalping_status,
-            severity=(
-                "source_quality_blocker"
-                if scalping_status == "fail"
-                else "warning" if scalping_status == "warning" else "info"
-            ),
-            finding=scalping_finding,
-            source_paths=[scalping_path],
-        )
-    )
-    checks.append(
-        _check(
-            "scalping_claude_automation_fresh",
-            status=claude_status,
-            severity=(
-                "source_quality_blocker"
-                if claude_status == "fail"
-                else "warning" if claude_status == "warning" else "info"
-            ),
-            finding=claude_finding,
-            source_paths=[scalping_path],
-        )
-    )
-    scalping_summary = (
-        scalping.get("ev_report_summary")
-        if isinstance(scalping.get("ev_report_summary"), dict)
-        else {}
-    )
-    claude_quality_usable = scalping_summary.get(
-        "claude_source_quality_usable",
-        True if claude_status == "pass" else None,
-    )
-    claude_missing_trading_dates = [
-        str(item)
-        for item in (
-            scalping_summary.get("claude_missing_expected_trading_dates") or []
-        )
-        if str(item)
-    ]
-    checks.append(
-        _check(
-            "scalping_claude_source_quality_usable",
-            status=("pass" if claude_quality_usable is True else "warning"),
-            severity="info" if claude_quality_usable is True else "warning",
-            finding=(
-                "history coverage is usable for source-only findings"
-                if claude_quality_usable is True
-                else (
-                    "timing is fresh, but incomplete KRX trading-day coverage "
-                    f"missing={claude_missing_trading_dates or ['unresolved']} "
-                    "keeps findings source-quality blocked"
-                )
-            ),
-            source_paths=[scalping_path],
-        )
-    )
     if include_swing:
         swing_status, swing_finding = _automation_fresh(
             swing, target_date, "deepseek_lab_available"
@@ -523,7 +456,7 @@ def build_pattern_lab_propagation_audit(
         )
 
     runtime_violations = _runtime_effect_violations(
-        currentness, scalping, *([swing] if include_swing else []), workorder
+        currentness, *([swing] if include_swing else []), workorder
     )
     checks.append(
         _check(
@@ -536,14 +469,14 @@ def build_pattern_lab_propagation_audit(
                 if runtime_violations
                 else "No violations."
             ),
-            source_paths=[currentness_path, scalping_path, swing_path, workorder_path],
+            source_paths=[currentness_path, swing_path, workorder_path],
             recommended_order=(
                 None
                 if not runtime_violations
                 else _order(
                     "runtime_effect_false_contract",
                     "Reject runtime_effect=true pattern lab propagation",
-                    [currentness_path, scalping_path, swing_path, workorder_path],
+                    [currentness_path, swing_path, workorder_path],
                 )
             ),
         )
@@ -564,7 +497,7 @@ def build_pattern_lab_propagation_audit(
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "status": status,
         "runtime_effect": False,
-        "strategy_scope": "scalp_and_swing" if include_swing else "scalp_only",
+        "strategy_scope": "swing_only" if include_swing else "retired",
         "swing_sources_enabled": include_swing,
         "decision_authority": "source_quality_only",
         "forbidden_uses": FORBIDDEN_USES,
@@ -629,6 +562,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--date", required=True)
     parser.add_argument("--exclude-swing", action="store_true")
     args = parser.parse_args(argv)
+    if args.exclude_swing:
+        from src.engine.lifecycle.retirement import retired_status
+        print(json.dumps(retired_status("claude_scalping_pattern_lab")))
+        return 0
     report = build_pattern_lab_propagation_audit(
         args.date, include_swing=not args.exclude_swing
     )

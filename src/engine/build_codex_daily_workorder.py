@@ -743,7 +743,6 @@ def build_runbook_operational_checks(
                     f"data/report/swing_runtime_approval/swing_runtime_approval_{date_text}.json",
                     f"data/report/swing_model_retrain/status/swing_model_retrain_{date_text}.status.json",
                     f"data/report/swing_model_retrain/swing_model_retrain_{date_text}.json",
-                    f"data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_{date_text}.md",
                     f"data/report/runtime_approval_summary/runtime_approval_summary_{date_text}.md",
                     f"data/report/observation_source_quality_audit/observation_source_quality_audit_{date_text}.md",
                     f"data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_{date_text}.json",

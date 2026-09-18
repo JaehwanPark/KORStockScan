@@ -27,7 +27,6 @@ from src.engine.lifecycle.retirement import (
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 REPORT_DIR = PROJECT_ROOT / "data" / "report"
-PATTERN_LAB_AUTOMATION_DIR = REPORT_DIR / "scalping_pattern_lab_automation"
 SWING_IMPROVEMENT_AUTOMATION_DIR = REPORT_DIR / "swing_improvement_automation"
 SWING_PATTERN_LAB_AUTOMATION_DIR = REPORT_DIR / "swing_pattern_lab_automation"
 SWING_STRATEGY_DISCOVERY_EV_DIR = REPORT_DIR / "swing_strategy_discovery_ev"
@@ -1831,7 +1830,6 @@ def _is_relative_to(path: Path, parent: Path) -> bool:
 
 def _workorder_isolated_source_mode() -> bool:
     source_roots = [
-        PATTERN_LAB_AUTOMATION_DIR,
         SWING_IMPROVEMENT_AUTOMATION_DIR,
         SWING_PATTERN_LAB_AUTOMATION_DIR,
         SWING_STRATEGY_DISCOVERY_EV_DIR,
@@ -1855,6 +1853,8 @@ def _workorder_isolated_source_mode() -> bool:
 
 
 def _source_path_enabled(path: Path, *, isolated_source_mode: bool) -> bool:
+    if retired_artifact(path):
+        return False
     if not isolated_source_mode:
         return True
     return not _is_relative_to(path, REPORT_DIR)
@@ -1909,11 +1909,6 @@ def _load_market_census_source(
     )
 
 
-def automation_report_path(target_date: str) -> Path:
-    return (
-        PATTERN_LAB_AUTOMATION_DIR
-        / f"scalping_pattern_lab_automation_{target_date}.json"
-    )
 
 
 def swing_automation_report_path(target_date: str) -> Path:
@@ -3622,41 +3617,7 @@ def _classify_order(
             automation_reentry="Keep as rejected finding unless translated into report_only_calibration or bounded canary design.",
         )
 
-    if (
-        order.get("source_report_type") == "scalping_pattern_lab_automation"
-        and order.get("source_handoff_contract") == "single_active_lab_source_only_v2"
-        and order.get("decision_authority")
-        == "pattern_lab_analysis_workorder_source_only"
-        and order.get("runtime_effect") is False
-        and order.get("allowed_runtime_apply") is False
-        and route == "existing_family"
-        and mapped_family == "score65_74_recovery_probe"
-    ):
-        return ClassifiedOrder(
-            order=order,
-            decision="attach_existing_family",
-            mapped_family=mapped_family,
-            route=route,
-            confidence=confidence,
-            reason="Validated single-active-lab source handoff; consensus is not required for existing-owner research input.",
-            automation_reentry="Existing score-recovery owner evaluates rise/rebound, exact rolling costs and counterfactual increment; its PREOPEN/runtime guards remain authoritative.",
-        )
 
-    if (
-        order.get("source_report_type") == "scalping_pattern_lab_automation"
-        and route == "maintenance_review"
-        and order.get("runtime_effect") is False
-        and order.get("allowed_runtime_apply") is False
-    ):
-        return ClassifiedOrder(
-            order=order,
-            decision="design_family_candidate",
-            mapped_family=None,
-            route=route,
-            confidence=confidence,
-            reason="Bounded maintenance is due: review exact source or integrate/retire redundant research, not another sample wait.",
-            automation_reentry="Record retain_with_evidence / repair_source / integrate / retire against the stable maintenance ID; no live mutation authority.",
-        )
 
     if confidence == "solo":
         return ClassifiedOrder(
@@ -3666,7 +3627,7 @@ def _classify_order(
             mapped_family=mapped_family,
             route=route,
             confidence=confidence,
-            automation_reentry="Re-evaluate in the next postclose pattern lab automation and daily EV report.",
+            automation_reentry="Re-evaluate against the surviving strategy owner and daily EV report.",
         )
 
 
@@ -6781,10 +6742,7 @@ def _build_code_improvement_workorder(
     isolated_source_mode = _workorder_isolated_source_mode()
     json_path, md_path = code_improvement_workorder_paths(target_date)
     previous_report = _load_json(json_path)
-    source_path = automation_report_path(target_date)
-    automation = _load_source_json(
-        source_path, isolated_source_mode=isolated_source_mode
-    )
+    automation = {}
     swing_source_path = swing_automation_report_path(target_date)
     swing_automation = (
         _load_source_json(swing_source_path, isolated_source_mode=isolated_source_mode)
@@ -6873,11 +6831,11 @@ def _build_code_improvement_workorder(
     pattern_lab_currentness = _load_source_json(
         pattern_lab_currentness_path,
         isolated_source_mode=isolated_source_mode,
-    )
+    ) if include_swing else {}
     pattern_lab_ai_review_path = pattern_lab_ai_review_report_path(target_date)
     pattern_lab_ai_review = _load_source_json(
         pattern_lab_ai_review_path, isolated_source_mode=isolated_source_mode
-    )
+    ) if include_swing else {}
     producer_gap_discovery_path = producer_gap_discovery_report_path(target_date)
     producer_gap_discovery = _load_source_json(
         producer_gap_discovery_path, isolated_source_mode=isolated_source_mode
@@ -6950,7 +6908,6 @@ def _build_code_improvement_workorder(
     calibration_source_path = _calibration_report_path_from_ev(ev_report)
     calibration_report = _calibration_report_from_ev(ev_report)
     candidate_source_paths = {
-        "pattern_lab_automation": source_path,
         "swing_improvement_automation": swing_source_path,
         "swing_pattern_lab_automation": swing_lab_source_path,
         "swing_strategy_discovery_ev": swing_discovery_source_path,
@@ -6982,6 +6939,8 @@ def _build_code_improvement_workorder(
     }
     if not include_swing:
         for label in (
+            "pattern_lab_currentness_audit",
+            "pattern_lab_ai_review",
             "swing_improvement_automation",
             "swing_pattern_lab_automation",
             "swing_strategy_discovery_ev",
@@ -7081,7 +7040,7 @@ def _build_code_improvement_workorder(
         max_orders=effective_max_orders,
         include_swing=include_swing,
     )
-    finding_by_order_id, finding_by_title_slug = _finding_maps(automation)
+    finding_by_order_id, finding_by_title_slug = {}, {}
     swing_finding_by_order_id, swing_finding_by_title_slug = _finding_maps(
         swing_automation
     )
@@ -7093,15 +7052,10 @@ def _build_code_improvement_workorder(
     finding_by_title_slug.update(swing_finding_by_title_slug)
     finding_by_title_slug.update(swing_lab_finding_by_title_slug)
     auto_family_ids = (
-        _auto_family_order_ids(automation)
-        | _auto_family_order_ids(swing_automation)
+        _auto_family_order_ids(swing_automation)
         | _auto_family_order_ids(swing_lab_automation)
     )
-    scalping_orders = [
-        {**item, "source_report_type": "scalping_pattern_lab_automation"}
-        for item in (automation.get("code_improvement_orders") or [])
-        if isinstance(item, dict)
-    ]
+    scalping_orders = []
     swing_orders = [
         {**item, "source_report_type": "swing_improvement_automation"}
         for item in (swing_automation.get("code_improvement_orders") or [])
@@ -7780,7 +7734,6 @@ def _build_code_improvement_workorder(
         "strategy_scope": "scalp_and_swing" if include_swing else "scalp_only",
         "swing_sources_enabled": include_swing,
         "source": {
-            "pattern_lab_automation": source_ref("pattern_lab_automation"),
             "swing_improvement_automation": source_ref("swing_improvement_automation"),
             "swing_pattern_lab_automation": source_ref("swing_pattern_lab_automation"),
             "swing_strategy_discovery_ev": source_ref("swing_strategy_discovery_ev"),
@@ -8139,6 +8092,14 @@ def _build_code_improvement_workorder(
     report["summary"]["decision_changed_order_count"] = len(
         report["lineage"]["decision_changed_order_ids"]
     )
+    if not include_swing:
+        for key in ("pattern_lab_currentness_audit", "pattern_lab_ai_review", "pattern_lab_propagation_audit"):
+            report.pop(key, None)
+            for section in ("sources", "source"):
+                report.get(section, {}).pop(key, None)
+            for label in list(report.get("summary", {})):
+                if "pattern_lab" in label or label.startswith(("claude_", "gemini_", "scalping_source_order_count")):
+                    report["summary"].pop(label, None)
     json_text = json.dumps(report, ensure_ascii=False, indent=2)
     markdown_text = render_code_improvement_workorder_markdown(report)
     if _source_fingerprint(source_paths) != source_fingerprint:
@@ -8505,7 +8466,7 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
         [
             "## 자동화체인 재투입",
             "",
-            f"- 구현 결과는 `{next_date}` 이후 postclose `threshold_cycle`, `scalping_pattern_lab_automation`, `threshold_cycle_ev`가 자동으로 다시 읽는다.",
+            f"- 구현 결과는 `{next_date}` 이후 postclose `threshold_cycle`, `threshold_cycle_ev`가 자동으로 다시 읽는다.",
             "- 구현자가 수동으로 threshold 값을 바꾸는 것이 아니라, source/report/provenance를 닫아 다음 calibration이 판단하게 한다.",
             f"- 다음 Codex 세션 입력 문구: `{policy.get('user_intervention_point')}`",
             "",
@@ -8519,12 +8480,16 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
             "",
         ]
     )
+    if not report.get("swing_sources_enabled"):
+        lines = [line for line in lines if not line.startswith((
+            "- pattern_lab_", "- scalping_source_order_count:", "- claude_", "- gemini_", "- swing_pattern_lab_"
+        ))]
     return "\n".join(lines)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Build Codex code improvement workorder from pattern lab automation."
+        description="Build Codex code improvement workorder from current postclose sources."
     )
     parser.add_argument("--date", dest="target_date", default=date.today().isoformat())
     parser.add_argument("--max-orders", type=int, default=12)

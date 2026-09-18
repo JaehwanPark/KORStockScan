@@ -7199,9 +7199,12 @@ def build_threshold_cycle_postclose_verification(
     execution_contract_flags = _parse_bool_flags(execution_contract_line or "")
     execution_contract_flags.update(_parse_bool_flags(done_line or ""))
 
+    pattern_swing_enabled = any(execution_contract_flags.get(key) is True and key not in requested_disabled_stages for key in ("swing_lifecycle", "swing_strategy_discovery", "swing_lifecycle_matrix", "swing_lifecycle_bucket_discovery"))
+    if not pattern_swing_enabled:
+        explicit_execution_flags.update({stage: False for stage in ("pattern_lab_currentness_audit", "pattern_lab_ai_review", "pattern_lab_propagation_audit")})
     artifact_status = []
     for label, path in _artifact_paths(target_date).items():
-        if retired_artifact(path):
+        if retired_artifact(path) or (not pattern_swing_enabled and label in {"pattern_lab_currentness_audit", "pattern_lab_ai_review", "pattern_lab_propagation_audit"}):
             continue
         item = {
             "label": label,
@@ -7428,11 +7431,11 @@ def build_threshold_cycle_postclose_verification(
     swing_sim_policy_catalog = _load_json(paths["swing_sim_policy_catalog"])
     buy_funnel_report = _load_json(paths["buy_funnel_sentinel"])
     scalp_entry_adm_report = _load_json(paths["scalp_entry_action_decision_matrix"])
-    currentness_audit = _load_json(paths["pattern_lab_currentness_audit"])
-    pattern_lab_ai_review = _load_json(paths["pattern_lab_ai_review"])
+    currentness_audit = _load_json(paths["pattern_lab_currentness_audit"]) if pattern_swing_enabled else {}
+    pattern_lab_ai_review = _load_json(paths["pattern_lab_ai_review"]) if pattern_swing_enabled else {}
     producer_gap_discovery = _load_json(paths["producer_gap_discovery"])
     stage_hook_workorder_discovery = _load_json(paths["stage_hook_workorder_discovery"])
-    propagation_audit = _load_json(paths["pattern_lab_propagation_audit"])
+    propagation_audit = _load_json(paths["pattern_lab_propagation_audit"]) if pattern_swing_enabled else {}
     swing_strategy_discovery_sim = _load_json(paths["swing_strategy_discovery_sim"])
     ldm_report = _load_json(paths["lifecycle_decision_matrix"])
     discovery_report = _load_json(paths["lifecycle_bucket_discovery"])
@@ -7985,6 +7988,8 @@ def build_threshold_cycle_postclose_verification(
         "runtime_approval_summary",
         "next_stage2_checklist",
     )
+    if not pattern_swing_enabled:
+        required_execution_flags = tuple(key for key in required_execution_flags if key not in {"pattern_labs", "pattern_lab_currentness_audit", "pattern_lab_ai_review", "pattern_lab_propagation_audit"})
     if _limit_down_watch_report_required(target_date):
         required_execution_flags = (
             *required_execution_flags,
@@ -9007,7 +9012,12 @@ def build_threshold_cycle_postclose_verification(
         start_line and done_line is None and not require_done_marker
     )
     execution_profile_status = "full_profile"
-    if disabled_stage_flags:
+    active_disabled_stage_flags = [key for key in disabled_stage_flags if (
+        pattern_swing_enabled or key not in {
+            "pattern_lab_currentness_audit", "pattern_lab_ai_review", "pattern_lab_propagation_audit"
+        }
+    )]
+    if active_disabled_stage_flags:
         execution_profile_status = "recovered_partial_profile"
     elif done_line is None and start_line:
         execution_profile_status = (
@@ -9058,7 +9068,7 @@ def build_threshold_cycle_postclose_verification(
         status = "warning"
     elif predecessor_waits:
         status = "warning"
-    elif disabled_stage_flags:
+    elif active_disabled_stage_flags:
         status = "warning"
     elif pending_done_marker:
         status = "pass_with_pending_done_marker"

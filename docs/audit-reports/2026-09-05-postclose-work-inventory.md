@@ -72,10 +72,10 @@ PID·lock·progress·deadline·latest terminal을 실제 run 기준으로 확인
 
 | 기존 index | 작업/호출 owner | 상태·역할 | 의도한 출력·핵심 판정 |
 | --- | --- | --- | --- |
-| #67 | `analysis/claude_scalping_pattern_lab/run_all.sh` | 조건부 ON, source-only | 인과 feature/label·현재 유효 source·candidate evidence; 독립 Entry authority 없음 |
-| #69 | `scalping_pattern_lab_automation` | 조건부 ON, handoff | 현재 pattern source/metric/consumer·추천 decision; 퇴역 axis 활성화 금지 |
-| #71 | `pattern_lab_currentness_audit` | trigger-gated, 품질 | 최신 source generation·false reuse/결손 → source admission |
-| #72/#94/#108 | `pattern_lab_ai_review` 및 current-generation provenance refresh | 조건부 ON, 리뷰 | 동일 scope 원 evidence/prompt/hash·review decision·후행 consumer 정합성 |
+| #67 | Claude Scalping Pattern Lab | 영구 폐기 | 전용 코드/CLI/outputs 및 Main/보조 override 실행 제거; 번호 재사용 없음 |
+| #69 | scalping pattern lab automation | 영구 폐기 | 전용 producer·source intake·후보/작업지시/복구 제거 |
+| #71 | `pattern_lab_currentness_audit` | Main 폐기, Swing-only | 명시적 기존 Swing scope만; 현재 OFF·Main 필수 입력/재시도 없음 |
+| #72/#94/#108 | `pattern_lab_ai_review` 및 refresh | Main 폐기, Swing-only | Claude source/provider 재진입 제거; 기존 Swing 검토 예산·guard 보존 |
 | #73 | `pipeline_event_verbosity_report` | 조건/reuse, 운영 | exact-date terminal freshness·source hash; raw suppression 비활성·EV 증거 아님 |
 | #75 | `scalping.entry_split_order_plan` | 조건부 ON, 경제성/receipt | submitted/no-submit/no-fill·native quantity/leg 4-arm receipt·cost/exit·날짜 census → Daily |
 | #76 | `scalping.ai_decision_quality` materialization | 조건부 ON, source-label v2 | control·보존 revision labels 두 출력→현행 case table diagnostic/compact; legacy baseline/paired/canary write/wait 없음 |
@@ -88,7 +88,7 @@ PID·lock·progress·deadline·latest terminal을 실제 run 기준으로 확인
 | #89 | `monitoring.intraday_ws_freshness_monitor --finalize --monitor-only` | 조건부 ON, 품질 | type/route/epoch/원 clock·선언 scope/window·false invalid exclusion → #74/EV |
 | #90/#92/#95/#104/#109 | `threshold_cycle_ev_report` 여러 refresh | ON/의존별, 경제성 요약 | 원 family EV·net profit·raw/economic/count·selected/blocked/carry와 새 source hash; 반복 refresh는 새 표본 아님 |
 | #91/#103/#110 | `build_code_improvement_workorder` | 조건/후행 refresh, handoff | 의도한 defect/consumer/test·native ID/decision/authority·전수 disposition; 자동 repo 수정 아님 |
-| #93/#107 | `pattern_lab_propagation_audit` | trigger-gated, 품질/handoff | 기존 pattern→manifest/selection/consumption의 source date/hash |
+| #93/#107 | `pattern_lab_propagation_audit` | Main 폐기, Swing-only | 삭제 모듈 import/전파 요구 없음; Swing 독립 호출만 유지 |
 | #96/#105/#111 | `runtime_approval_summary` | ON/후행, 요약 | 전체 cohort/recommendation disposition·last consumer·기존 권한/경제성 gate; summary 성공≠live apply |
 | #97 | `runtime_apply_gap_audit` | trigger-gated, handoff | publisher→PREOPEN/loader/PID의 실제 결손·미완료 acceptance |
 | #98 | `automation.key_lineage_ledger` | ON, 품질 | source/report/candidate/selected/native ID/hash 보존·silent loss/conflict |
@@ -146,3 +146,5 @@ BUY/HOLD sentinels·market opportunity census/pruned BBO·rising-missed 관찰·
 먼저 due owner의 실제 실패/mandatory handoff, 다음 source/date/hash/count/cost 결손, 마지막 유효 비교의 EV/순익·tail·자본과 달성 가능성을 점검한다. main submit drought와 widget/episode 두 경로를 함께 우선하되 설치 producer 순서는 바꾸지 않는다.
 
 [결과 점검 §9](../postclose-tuning-result-review-task-instructions.md#9-최종-판정과-보고)에 따라 각 활성 논리 작업의 결과 행을 작성한다: 기계적 terminal, 실제 출력/primary metric, 분석 판정, 결손/영향 범위, 시간 경과/구조 차단 판정, 직접 consumer와 다음 closure. 오래된 완료 이력을 반복하지 않고 미관측을 PASS로 채우지 않는다. 불명 ETA=null이다. 이 목록의 현행화 자체는 producer·API/Provider·report 재생성·policy apply·restart를 실행하지 않는다.
+
+Claude 폐기 실행·검증·cleanup 및 선택 배포 증거는 [9/18 폐기 검증](2026-09-18-claude-scalping-pattern-lab-retirement-review.md)을 따른다. EV 개선 또는 자연 PID 소비를 삭제 완료로 대체하지 않는다.

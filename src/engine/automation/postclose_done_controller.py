@@ -174,8 +174,18 @@ def _runtime_approval_scope_args(verification: dict[str, Any]) -> list[str]:
     return args
 
 
+def _pattern_scope_actions(actions, verification):
+    flags = (verification.get("execution_profile") or {}).get("flags") or {}
+    if any(flags.get(key) is True for key in ("swing_lifecycle", "swing_strategy_discovery", "swing_lifecycle_matrix", "swing_lifecycle_bucket_discovery")):
+        return actions
+    modules = {"src.engine.pattern_lab_currentness_audit", "src.engine.pattern_lab_ai_review", "src.engine.pattern_lab_propagation_audit"}
+    return [action for action in actions if not modules.intersection(action.command or [])]
+
+
 def _pattern_review_recovery_actions(target_date, verification):
     profile = verification.get("execution_profile") or {}
+    if not any((profile.get("flags") or {}).get(key) is True for key in ("swing_lifecycle", "swing_strategy_discovery", "swing_lifecycle_matrix", "swing_lifecycle_bucket_discovery")):
+        return []
     if (profile.get("flags") or {}).get(
         "pattern_lab_ai_review"
     ) is not True or "pattern_lab_ai_review" in (
@@ -1046,7 +1056,7 @@ def _tail_stage_repair_actions(
         )
     )
     actions.append(_build_verify_action(target_date, verification))
-    return actions
+    return _pattern_scope_actions(actions, verification)
 
 
 def _tail_stage_from_actions(actions_done: list[dict[str, Any]]) -> str | None:
@@ -1271,6 +1281,16 @@ def _recovery_actions(
     target_date: str, verification: dict[str, Any], *, allow_wrapper_rerun: bool
 ) -> list[RecoveryAction]:
     issues = _flatten_issues(verification)
+    flags = (verification.get("execution_profile") or {}).get("flags") or {}
+    if not any(flags.get(key) is True for key in (
+        "swing_lifecycle", "swing_strategy_discovery", "swing_lifecycle_matrix", "swing_lifecycle_bucket_discovery"
+    )):
+        retired_pattern_issues = [issue for issue in issues if any(token in issue for token in (
+            "pattern_lab_currentness_audit", "pattern_lab_ai_review", "pattern_lab_propagation_audit",
+            "scalping_pattern_lab_automation", "claude_scalping_pattern_lab"
+        ))]
+        if retired_pattern_issues and set(issues) == set(retired_pattern_issues):
+            return []
     actions: list[RecoveryAction] = []
     issue_text = " ".join(issues)
     summary_issues = [
@@ -1338,7 +1358,7 @@ def _recovery_actions(
             )
         )
         actions.append(_build_verify_action(target_date, verification))
-        return actions
+        return _pattern_scope_actions(actions, verification)
     if summary_issues and not other_issues:
         if any(":tower:" in issue for issue in summary_issues):
             # The tower must not copy its own old summary-handoff failure back
@@ -1368,7 +1388,7 @@ def _recovery_actions(
                 )
             )
         actions.append(_build_verify_action(target_date, verification))
-        return actions
+        return _pattern_scope_actions(actions, verification)
     log_issues = (
         ((verification.get("predecessor_integrity") or {}).get("log_issues") or [])
         if isinstance(verification.get("predecessor_integrity"), dict)
@@ -1384,7 +1404,7 @@ def _recovery_actions(
                 "wrapper start marker missing",
             )
         )
-        return actions
+        return _pattern_scope_actions(actions, verification)
     if allow_wrapper_rerun and (
         verification.get("missing_required_artifacts")
         or _has_invalid_artifact_status(verification)
@@ -1396,7 +1416,7 @@ def _recovery_actions(
                 "required artifact missing or invalid",
             )
         )
-        return actions
+        return _pattern_scope_actions(actions, verification)
     if "postclose_fail_marker_present" in log_issue_set and failed_tail_stage:
         return _tail_stage_repair_actions(target_date, failed_tail_stage, verification)
     if log_issue_set & MARKER_RECONCILIATION_LOG_ISSUES and _can_reconcile_marker(
@@ -1408,7 +1428,7 @@ def _recovery_actions(
                 _build_verify_action(target_date, verification),
             ]
         )
-        return actions
+        return _pattern_scope_actions(actions, verification)
     if (
         "postclose_fail_marker_present" in log_issue_set
         and _can_attempt_failed_done_reconciliation(target_date, verification)
@@ -1420,7 +1440,7 @@ def _recovery_actions(
                 _build_verify_action(target_date, verification),
             ]
         )
-        return actions
+        return _pattern_scope_actions(actions, verification)
     if "active_sim_priority_handoff_missing" in issues:
         actions.extend(
             [
@@ -1431,7 +1451,7 @@ def _recovery_actions(
                 _build_verify_action(target_date, verification),
             ]
         )
-        return actions
+        return _pattern_scope_actions(actions, verification)
     runtime_gap_stale_issue = (
         "runtime_apply_gap_audit_stale_before_threshold_preopen_apply"
     )
@@ -1450,7 +1470,7 @@ def _recovery_actions(
                 _build_verify_action(target_date, verification),
             ]
         )
-        return actions
+        return _pattern_scope_actions(actions, verification)
     if EV_WORKORDER_STALE_ISSUES & set(issues):
         pattern_only = set(issues) - _done_acceptable_warning_issues(verification) == {
             "pattern_lab_ai_review_source_generation_stale"
@@ -1593,7 +1613,7 @@ def _recovery_actions(
                     _build_tuning_performance_control_tower_action(target_date)
                 )
             actions.extend([checklist, _build_verify_action(target_date, verification)])
-        return actions
+        return _pattern_scope_actions(actions, verification)
     if "runtime_apply_gap" in issue_text:
         actions.append(_build_runtime_apply_gap_audit_action(target_date, verification))
     workorder_refresh_required = bool(
@@ -1651,7 +1671,7 @@ def _recovery_actions(
                 "runtime summary source refresh after EV and workorder",
             )
         )
-    return actions
+    return _pattern_scope_actions(actions, verification)
 
 
 def _render_markdown(report: dict[str, Any]) -> str:

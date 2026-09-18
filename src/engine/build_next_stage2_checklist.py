@@ -1562,6 +1562,14 @@ def _preserved_auto_task_blocks(
 
 def _merge_preserved_auto_tasks(existing: str, auto_block: str) -> str:
     preserved = _preserved_auto_task_blocks(existing, _task_ids_from_text(auto_block))
+    preserved = {
+        slot: [block for block in blocks if not (
+            "claude_scalping_pattern_lab/" in block
+            or "scalping_pattern_lab_automation/" in block
+            or "src.engine.scalping_pattern_lab_automation" in block
+        )]
+        for slot, blocks in preserved.items()
+    }
     if not preserved:
         return auto_block
     lines: list[str] = []

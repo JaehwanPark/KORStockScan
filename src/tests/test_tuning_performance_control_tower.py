@@ -574,7 +574,7 @@ def test_tuning_performance_control_tower_separates_sim_progress_from_real_pnl(
         report["ev_authority"]["real_pnl_allowed_use"]
         == "diagnostic_only_until_post_apply_attribution_closes"
     )
-    assert report["workorder"]["pattern_lab_ai_review_source_order_count"] == 0
+    assert "pattern_lab_ai_review_source_order_count" not in report["workorder"]
     assert report["runtime_apply_gap_audit"]["status"] == "pass"
     assert report["summary"]["runtime_apply_gap_audit_codex_directive_count"] == 4
     markdown = (output_dir / f"tuning_performance_control_tower_{target}.md").read_text(

@@ -13,7 +13,7 @@ def test_static_parser_detects_repeated_ev_verifier_and_lifecycle_windows():
     # The wrapper keeps only the dependency-bearing core and post-propagation
     # EV generations; final summary ownership belongs to finalization.
     assert producers["src.engine.threshold_cycle_ev_report"] == 2
-    assert producers["src.engine.verify_threshold_cycle_postclose_chain"] == 2
+    assert producers["src.engine.verify_threshold_cycle_postclose_chain"] == 3
     assert producers["src.engine.monitoring.quote_consistency_report"] == 0
     assert producers["src.engine.lifecycle_ai_context"] == 0
     assert producers["src.engine.lifecycle_decision_matrix"] == 0
@@ -57,8 +57,8 @@ def test_static_parser_detects_repeated_ev_verifier_and_lifecycle_windows():
     )
     assert any(
         item["producer"] == "src.engine.pattern_lab_ai_review"
-        and item["classification"] == "triggered_deep_review_candidate"
-        for item in candidates
+        and item["default_enabled"] is False
+        for item in report["step_inventory"]
     )
 
 

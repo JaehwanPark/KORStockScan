@@ -888,56 +888,8 @@ def test_postclose_failed_run_reuses_only_valid_same_target_heavy_artifacts():
     assert 'provider_status.get("new_provider_call") is False' not in script
 
 
-def test_claude_pattern_lab_wrapper_requires_explicit_target_date():
-    env = dict(os.environ)
-    env.pop("ANALYSIS_START_DATE", None)
-    env.pop("ANALYSIS_END_DATE", None)
-    result = subprocess.run(
-        ["bash", "analysis/claude_scalping_pattern_lab/run_all.sh"],
-        cwd=".",
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-    assert result.returncode == 2
-    assert "target date is required" in result.stderr
 
 
-def test_postclose_wrapper_runs_pattern_labs_before_automation_and_ev_report():
-    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
-
-    claude_idx = script.index("analysis/claude_scalping_pattern_lab/run_all.sh")
-    automation_idx = script.index("src.engine.scalping_pattern_lab_automation")
-    currentness_idx = script.index("src.engine.pattern_lab_currentness_audit")
-    ai_review_idx = script.index("src.engine.pattern_lab_ai_review")
-    ev_idx = script.index('run_threshold_cycle_ev_and_wait "pre_workorder"')
-
-    assert (
-        'ANALYSIS_START_DATE="$PATTERN_LAB_START_DATE" ANALYSIS_END_DATE="$TARGET_DATE"'
-        in script
-    )
-    assert (
-        'PATTERN_LAB_START_DATE="${PATTERN_LAB_ANALYSIS_START_DATE:-${KORSTOCKSCAN_CLEAN_TUNING_BASELINE_DATE:-2026-06-05}}"'
-        in script
-    )
-    assert "analysis/gemini_scalping_pattern_lab/run.sh" not in script
-    assert "retired_from_automatic_execution" in script
-    assert claude_idx < automation_idx
-    assert automation_idx < currentness_idx < ai_review_idx < ev_idx
-    assert (
-        'RUN_PATTERN_LAB_CURRENTNESS_AUDIT="${THRESHOLD_CYCLE_RUN_PATTERN_LAB_CURRENTNESS_AUDIT:-true}"'
-        in script
-    )
-    assert (
-        'RUN_PATTERN_LAB_AI_REVIEW="${THRESHOLD_CYCLE_RUN_PATTERN_LAB_AI_REVIEW:-true}"'
-        in script
-    )
-    assert (
-        'PATTERN_LAB_AI_REVIEW_PROVIDER="${KORSTOCKSCAN_PATTERN_LAB_AI_REVIEW_PROVIDER:-openai}"'
-        in script
-    )
 
 
 def test_postclose_wrapper_runs_daily_low_price_candidate_recommendation_and_admin_notice():
@@ -2995,30 +2947,6 @@ def test_postclose_wrapper_cleans_up_snapshot_duplicates_with_retention():
     assert "removed_bytes={removed_bytes}" in script
 
 
-def test_tuning_monitoring_wrapper_skips_pattern_labs_by_default():
-    script = Path("deploy/run_tuning_monitoring_postclose.sh").read_text(
-        encoding="utf-8"
-    )
-
-    assert 'RUN_PATTERN_LABS="${TUNING_MONITORING_RUN_PATTERN_LABS:-false}"' in script
-    assert "canonical_runner=THRESHOLD_CYCLE_POSTCLOSE" in script
-    assert (
-        'if [[ "$RUN_PATTERN_LABS" == "1" || "$RUN_PATTERN_LABS" == "true" ]]' in script
-    )
-    assert "analysis/gemini_scalping_pattern_lab/run.sh" not in script
-    assert (
-        'record_step "gemini_scalping_pattern_lab" "skipped" 0 0 "retired_from_automatic_execution"'
-        in script
-    )
-    assert (
-        'RUN_VERIFIED_ARCHIVE="${TUNING_MONITORING_RUN_VERIFIED_ARCHIVE:-true}"'
-        in script
-    )
-    parquet_idx = script.index('"build_parquet_pipeline_events"')
-    archive_idx = script.index('"compress_verified_dashboard_sources"')
-    assert parquet_idx < archive_idx
-    assert "src.engine.compress_db_backfilled_files" in script
-    assert '--date "$TARGET_DATE"' in script
 
 
 def test_calibration_wrapper_retries_and_fails_unavailable_ai_correction():
@@ -3903,3 +3831,15 @@ def test_cleanup_wrapper_does_not_reenter_retired_ai_cycle_roots():
     cleanup = Path("deploy/run_logs_rotation_cleanup_cron.sh").read_text()
     for name in ["main_ai_quality_r0_r3", "micro_reversion_ai_quality_bridge", "ai_micro_reversion_materialized_replay_requests"]:
         assert f'--report-artifact-root "$PROJECT_DIR/data/report/{name}"' not in cleanup
+
+
+def test_claude_lab_retired_from_all_main_entrypoints():
+    root = Path(__file__).resolve().parents[2]
+    assert not (root / "analysis/claude_scalping_pattern_lab").exists()
+    assert not (root / "src/engine/scalping_pattern_lab_automation.py").exists()
+    for path in ("deploy/run_threshold_cycle_postclose.sh", "deploy/run_tuning_monitoring_postclose.sh"):
+        text = (root / path).read_text()
+        assert "claude_scalping_pattern_lab/run_all.sh" not in text
+        assert "-m src.engine.scalping_pattern_lab_automation" not in text
+        assert "THRESHOLD_CYCLE_RUN_PATTERN_LABS" not in text
+        assert "TUNING_MONITORING_RUN_PATTERN_LABS" not in text

@@ -551,7 +551,7 @@ def _selected_runtime(
 
 def _workorder_summary(code_workorder: dict[str, Any]) -> dict[str, Any]:
     summary = _summary(code_workorder)
-    return {
+    result = {
         "selected_order_count": _safe_int(summary.get("selected_order_count")),
         "selected_decision_counts": (
             summary.get("selected_decision_counts")
@@ -607,10 +607,14 @@ def _workorder_summary(code_workorder: dict[str, Any]) -> dict[str, Any]:
         "interpretation": "workorder_intake_only_not_automatic_repo_change",
     }
 
+    if not code_workorder.get("swing_sources_enabled", code_workorder.get("strategy_scope") == "scalp_and_swing"):
+        result = {key: value for key, value in result.items() if not key.startswith("pattern_lab_")}
+    return result
+
 
 def _runtime_summary(runtime_summary: dict[str, Any]) -> dict[str, Any]:
     summary = _summary(runtime_summary)
-    return {
+    result = {
         "runtime_mutation_allowed": _safe_bool(
             runtime_summary.get("runtime_mutation_allowed")
         ),
@@ -636,6 +640,10 @@ def _runtime_summary(runtime_summary: dict[str, Any]) -> dict[str, Any]:
             else []
         ),
     }
+
+    if not runtime_summary.get("swing_sources_enabled", runtime_summary.get("strategy_scope") == "scalp_and_swing"):
+        result = {key: value for key, value in result.items() if not key.startswith("pattern_lab_")}
+    return result
 
 
 def _runtime_gap_audit_summary(runtime_gap_audit: dict[str, Any]) -> dict[str, Any]:
@@ -1510,8 +1518,8 @@ def _markdown(report: dict[str, Any]) -> str:
         f"handoff_closed_root_cause_open `{workorder['handoff_closed_root_cause_open_count']}`, "
         f"root_cause_closed `{workorder['root_cause_closed_count']}`, "
         f"needs_followup `{workorder['needs_followup_workorder_count']}`.",
-        f"- pattern lab AI review source orders `{workorder['pattern_lab_ai_review_source_order_count']}`, "
-        f"pattern lab currentness source orders `{workorder['pattern_lab_currentness_source_order_count']}`.",
+        f"- pattern lab AI review source orders `{workorder.get('pattern_lab_ai_review_source_order_count')}`, "
+        f"pattern lab currentness source orders `{workorder.get('pattern_lab_currentness_source_order_count')}`.",
         "- 해석: `implement_now`는 실전 권한이 아닌 source-only intake다. "
         "명시적 구현 또는 장후 모니터링 지시의 허용 범위에서 review/fix 후 처리한다.",
         "",
@@ -1519,8 +1527,8 @@ def _markdown(report: dict[str, Any]) -> str:
         "",
         f"- runtime mutation allowed `{str(runtime['runtime_mutation_allowed']).lower()}`; "
         f"scalping selected auto-bounded-live `{runtime['scalping_selected_auto_bounded_live']}`.",
-        f"- pattern lab currentness `{runtime['pattern_lab_currentness_status']}`, "
-        f"AI review `{runtime['pattern_lab_ai_review_status']}`, propagation `{runtime['pattern_lab_propagation_status']}`, "
+        f"- pattern lab currentness `{runtime.get('pattern_lab_currentness_status')}`, "
+        f"AI review `{runtime.get('pattern_lab_ai_review_status')}`, propagation `{runtime.get('pattern_lab_propagation_status')}`, "
         f"producer gap `{runtime['producer_gap_discovery_status']}`.",
         "",
         "## Source",
@@ -1549,6 +1557,8 @@ def _markdown(report: dict[str, Any]) -> str:
             ]
         )
     lines.append("")
+    if "pattern_lab_ai_review_source_order_count" not in workorder:
+        lines = [line for line in lines if not line.startswith(("- pattern lab AI review", "- pattern lab currentness"))]
     return "\n".join(lines)
 
 

@@ -152,6 +152,8 @@ def _reconcile_update_kospi_master_difference(
 
 
 ARTIFACT_SCHEDULE_CONTRACTS: dict[str, dict[str, Any]] = {
+    "pattern_lab_currentness_audit_report": {"markers": ["THRESHOLD_CYCLE_POSTCLOSE"], "parent_env_key": "THRESHOLD_CYCLE_RUN_SWING_POSTCLOSE", "parent_default_enabled": False},
+    "pattern_lab_propagation_audit_report": {"markers": ["THRESHOLD_CYCLE_POSTCLOSE"], "parent_env_key": "THRESHOLD_CYCLE_RUN_SWING_POSTCLOSE", "parent_default_enabled": False},
     "codebase_performance_workorder_report": {
         "markers": ["THRESHOLD_CYCLE_POSTCLOSE"],
         "parent_env_key": "THRESHOLD_CYCLE_RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT",
@@ -538,15 +540,6 @@ ARTIFACT_REGISTRY: list[dict[str, Any]] = [
     {
         "id": "swing_runtime_approval_report",
         "path_template": "data/report/swing_runtime_approval/swing_runtime_approval_{date}.json",
-        "max_staleness_sec": 3600,
-        "critical": False,
-        "trading_day_only": True,
-        "window_start": (20, 10),
-        "window_end": (21, 40),
-    },
-    {
-        "id": "scalping_pattern_lab_automation_report",
-        "path_template": "data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_{date}.json",
         "max_staleness_sec": 3600,
         "critical": False,
         "trading_day_only": True,

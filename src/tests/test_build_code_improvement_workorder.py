@@ -227,12 +227,12 @@ def test_build_code_improvement_workorder_classifies_and_renders(tmp_path, monke
             },
         ],
     }
-    (automation_dir / "scalping_pattern_lab_automation_2026-05-08.json").write_text(
+    (automation_dir / "swing_pattern_lab_automation_2026-05-08.json").write_text(
         json.dumps(payload, ensure_ascii=False),
         encoding="utf-8",
     )
     (ev_dir / "threshold_cycle_ev_2026-05-08.json").write_text("{}", encoding="utf-8")
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
     )
@@ -319,11 +319,11 @@ def test_build_code_improvement_workorder_limits_selected_orders(tmp_path, monke
             for idx in range(5)
         ],
     }
-    (automation_dir / "scalping_pattern_lab_automation_2026-05-08.json").write_text(
+    (automation_dir / "swing_pattern_lab_automation_2026-05-08.json").write_text(
         json.dumps(payload),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
     )
@@ -432,7 +432,7 @@ def test_build_code_improvement_workorder_adds_intraday_entry_blocker_source_qua
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        mod, "PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-automation"
+        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-automation"
     )
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
@@ -517,7 +517,7 @@ def test_build_code_improvement_workorder_consumes_intraday_ws_directives(
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        mod, "PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-automation"
+        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-automation"
     )
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
@@ -698,7 +698,7 @@ def test_build_code_improvement_workorder_adds_rising_missed_scout_orders(
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        mod, "PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-automation"
+        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-automation"
     )
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
@@ -778,7 +778,7 @@ def test_build_code_improvement_workorder_adds_one_share_threshold_opportunity_o
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        mod, "PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-automation"
+        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-automation"
     )
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
@@ -808,7 +808,7 @@ def test_build_code_improvement_workorder_adds_entry_hurdle_backtest_orders(
     doc_dir = tmp_path / "docs"
     automation_dir.mkdir()
     source_dir.mkdir()
-    (automation_dir / "scalping_pattern_lab_automation_2026-07-01.json").write_text(
+    (automation_dir / "swing_pattern_lab_automation_2026-07-01.json").write_text(
         json.dumps(
             {
                 "date": "2026-07-01",
@@ -858,7 +858,7 @@ def test_build_code_improvement_workorder_adds_entry_hurdle_backtest_orders(
         json.dumps(payload, ensure_ascii=False),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
     )
@@ -877,7 +877,7 @@ def test_build_code_improvement_workorder_adds_entry_hurdle_backtest_orders(
     pattern_orders = [
         item
         for item in report["orders"]
-        if item["source_report_type"] == "scalping_pattern_lab_automation"
+        if item["source_report_type"] == "swing_pattern_lab_automation"
         and item["order_id"] == "order_overbought_gate_miss_ev_recovery"
     ]
     assert report["summary"]["entry_hurdle_backtest_source_order_count"] == 1
@@ -924,7 +924,7 @@ def test_build_code_improvement_workorder_adds_conversion_lane_orders(
     doc_dir = tmp_path / "docs"
     automation_dir.mkdir()
     conversion_dir.mkdir()
-    (automation_dir / "scalping_pattern_lab_automation_2026-05-08.json").write_text(
+    (automation_dir / "swing_pattern_lab_automation_2026-05-08.json").write_text(
         json.dumps({"date": "2026-05-08", "code_improvement_orders": []}),
         encoding="utf-8",
     )
@@ -945,7 +945,7 @@ def test_build_code_improvement_workorder_adds_conversion_lane_orders(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
     )
@@ -974,7 +974,7 @@ def test_conversion_lane_orders_are_required_handoff_beyond_max_orders(
     doc_dir = tmp_path / "docs"
     automation_dir.mkdir()
     conversion_dir.mkdir()
-    (automation_dir / "scalping_pattern_lab_automation_2026-05-08.json").write_text(
+    (automation_dir / "swing_pattern_lab_automation_2026-05-08.json").write_text(
         json.dumps({"date": "2026-05-08", "code_improvement_orders": []}),
         encoding="utf-8",
     )
@@ -1003,7 +1003,7 @@ def test_conversion_lane_orders_are_required_handoff_beyond_max_orders(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
     )
@@ -1032,7 +1032,7 @@ def test_conversion_lane_axis_instrumentation_marks_order_as_existing_implementa
     doc_dir = tmp_path / "docs"
     automation_dir.mkdir()
     conversion_dir.mkdir()
-    (automation_dir / "scalping_pattern_lab_automation_2026-05-08.json").write_text(
+    (automation_dir / "swing_pattern_lab_automation_2026-05-08.json").write_text(
         json.dumps({"date": "2026-05-08", "code_improvement_orders": []}),
         encoding="utf-8",
     )
@@ -1057,7 +1057,7 @@ def test_conversion_lane_axis_instrumentation_marks_order_as_existing_implementa
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
     )
@@ -1117,7 +1117,7 @@ def test_build_code_improvement_workorder_escalates_repeated_unresolved_attach(
         "auto_family_candidates": [],
         "code_improvement_orders": [repeated_order],
     }
-    (automation_dir / "scalping_pattern_lab_automation_2026-05-08.json").write_text(
+    (automation_dir / "swing_pattern_lab_automation_2026-05-08.json").write_text(
         json.dumps(payload),
         encoding="utf-8",
     )
@@ -1137,7 +1137,7 @@ def test_build_code_improvement_workorder_escalates_repeated_unresolved_attach(
             ),
             encoding="utf-8",
         )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
     )
@@ -1183,7 +1183,7 @@ def test_build_code_improvement_workorder_escalates_repeated_unresolved_signatur
     current_order = {
         "order_id": "order_source_gap_current_hash",
         "title": "Repeated hashed source gap",
-        "source_report_type": "scalping_pattern_lab_automation",
+        "source_report_type": "swing_pattern_lab_automation",
         "target_subsystem": "entry_funnel",
         "lifecycle_stage": "entry",
         "improvement_type": "source_quality_gap",
@@ -1193,7 +1193,7 @@ def test_build_code_improvement_workorder_escalates_repeated_unresolved_signatur
         "runtime_effect": False,
         "allowed_runtime_apply": False,
     }
-    (automation_dir / "scalping_pattern_lab_automation_2026-05-08.json").write_text(
+    (automation_dir / "swing_pattern_lab_automation_2026-05-08.json").write_text(
         json.dumps(
             {
                 "date": "2026-05-08",
@@ -1221,7 +1221,7 @@ def test_build_code_improvement_workorder_escalates_repeated_unresolved_signatur
             ),
             encoding="utf-8",
         )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
     )
@@ -1257,7 +1257,7 @@ def test_build_code_improvement_workorder_does_not_escalate_history_implemented_
     repeated_order = {
         "order_id": "order_source_gap_history_waiting_sample",
         "title": "Repeated source quality gap with waiting sample history",
-        "source_report_type": "scalping_pattern_lab_automation",
+        "source_report_type": "swing_pattern_lab_automation",
         "target_subsystem": "entry_funnel",
         "lifecycle_stage": "entry",
         "route": "existing_family",
@@ -1267,7 +1267,7 @@ def test_build_code_improvement_workorder_does_not_escalate_history_implemented_
         "runtime_effect": False,
         "allowed_runtime_apply": False,
     }
-    (automation_dir / "scalping_pattern_lab_automation_2026-05-08.json").write_text(
+    (automation_dir / "swing_pattern_lab_automation_2026-05-08.json").write_text(
         json.dumps(
             {
                 "date": "2026-05-08",
@@ -1296,7 +1296,7 @@ def test_build_code_improvement_workorder_does_not_escalate_history_implemented_
             ),
             encoding="utf-8",
         )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
     )
@@ -1369,7 +1369,7 @@ def test_build_code_improvement_workorder_does_not_escalate_existing_family_only
         "runtime_effect": False,
         "allowed_runtime_apply": False,
     }
-    (automation_dir / "scalping_pattern_lab_automation_2026-05-08.json").write_text(
+    (automation_dir / "swing_pattern_lab_automation_2026-05-08.json").write_text(
         json.dumps(
             {
                 "date": "2026-05-08",
@@ -1394,7 +1394,7 @@ def test_build_code_improvement_workorder_does_not_escalate_existing_family_only
             ),
             encoding="utf-8",
         )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
     )
@@ -1431,7 +1431,7 @@ def test_build_code_improvement_workorder_keeps_rollup_non_implement_but_marks_l
         "runtime_effect": False,
         "allowed_runtime_apply": False,
     }
-    (automation_dir / "scalping_pattern_lab_automation_2026-05-08.json").write_text(
+    (automation_dir / "swing_pattern_lab_automation_2026-05-08.json").write_text(
         json.dumps(
             {
                 "date": "2026-05-08",
@@ -1454,7 +1454,7 @@ def test_build_code_improvement_workorder_keeps_rollup_non_implement_but_marks_l
             ),
             encoding="utf-8",
         )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
     )
@@ -1494,7 +1494,7 @@ def test_build_code_improvement_workorder_escalates_repeated_implemented_submit_
         ),
         "evidence": ["submitted_to_ai_pct=1.5"],
     }
-    (automation_dir / "scalping_pattern_lab_automation_2026-05-08.json").write_text(
+    (automation_dir / "swing_pattern_lab_automation_2026-05-08.json").write_text(
         json.dumps(
             {
                 "date": "2026-05-08",
@@ -1517,7 +1517,7 @@ def test_build_code_improvement_workorder_escalates_repeated_implemented_submit_
             ),
             encoding="utf-8",
         )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
     )
@@ -1572,7 +1572,7 @@ def test_build_code_improvement_workorder_does_not_reescalate_closed_submit_drou
         ),
         "evidence": ["submitted_to_ai_pct=1.5"],
     }
-    (automation_dir / "scalping_pattern_lab_automation_2026-05-08.json").write_text(
+    (automation_dir / "swing_pattern_lab_automation_2026-05-08.json").write_text(
         json.dumps(
             {
                 "date": "2026-05-08",
@@ -1595,7 +1595,7 @@ def test_build_code_improvement_workorder_does_not_reescalate_closed_submit_drou
             ),
             encoding="utf-8",
         )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
     )
@@ -1638,7 +1638,7 @@ def test_build_code_improvement_workorder_does_not_escalate_repeated_explicit_no
             "recommended_resolution": "mark_not_applicable_explicitly"
         },
     }
-    (automation_dir / "scalping_pattern_lab_automation_2026-05-08.json").write_text(
+    (automation_dir / "swing_pattern_lab_automation_2026-05-08.json").write_text(
         json.dumps(
             {
                 "date": "2026-05-08",
@@ -1661,7 +1661,7 @@ def test_build_code_improvement_workorder_does_not_escalate_repeated_explicit_no
             ),
             encoding="utf-8",
         )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
     )
@@ -1721,7 +1721,7 @@ def test_build_code_improvement_workorder_does_not_double_escalate_summary_contr
         "auto_family_candidates": [],
         "code_improvement_orders": [summary_order, specific_order],
     }
-    (automation_dir / "scalping_pattern_lab_automation_2026-05-08.json").write_text(
+    (automation_dir / "swing_pattern_lab_automation_2026-05-08.json").write_text(
         json.dumps(payload),
         encoding="utf-8",
     )
@@ -1739,7 +1739,7 @@ def test_build_code_improvement_workorder_does_not_double_escalate_summary_contr
             ),
             encoding="utf-8",
         )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
     )
@@ -1800,7 +1800,7 @@ def test_build_code_improvement_workorder_does_not_escalate_current_implemented_
             "source_quality_status": "implemented_but_hold_sample",
         },
     }
-    (automation_dir / "scalping_pattern_lab_automation_2026-05-08.json").write_text(
+    (automation_dir / "swing_pattern_lab_automation_2026-05-08.json").write_text(
         json.dumps(
             {
                 "date": "2026-05-08",
@@ -1825,7 +1825,7 @@ def test_build_code_improvement_workorder_does_not_escalate_current_implemented_
             ),
             encoding="utf-8",
         )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
     )
@@ -1862,7 +1862,7 @@ def test_build_code_improvement_workorder_does_not_escalate_pattern_lab_design_o
         "runtime_effect": False,
         "allowed_runtime_apply": False,
     }
-    (automation_dir / "scalping_pattern_lab_automation_2026-05-08.json").write_text(
+    (automation_dir / "swing_pattern_lab_automation_2026-05-08.json").write_text(
         json.dumps(
             {
                 "date": "2026-05-08",
@@ -1887,7 +1887,7 @@ def test_build_code_improvement_workorder_does_not_escalate_pattern_lab_design_o
             ),
             encoding="utf-8",
         )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
     )
@@ -1949,7 +1949,7 @@ def test_build_code_improvement_workorder_does_not_close_swing_ai_contract_witho
             encoding="utf-8",
         )
     monkeypatch.setattr(
-        mod, "PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-scalping"
+        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-scalping"
     )
     monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", swing_dir)
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
@@ -2007,7 +2007,7 @@ def test_build_code_improvement_workorder_does_not_escalate_deferred_performance
             encoding="utf-8",
         )
     monkeypatch.setattr(
-        mod, "PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-scalping"
+        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-scalping"
     )
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
@@ -2036,7 +2036,7 @@ def test_build_code_improvement_workorder_does_not_escalate_solo_pattern_lab_exi
     repeated_order = {
         "order_id": "order_solo_existing_family_repeat",
         "title": "solo existing family repeat",
-        "source_report_type": "scalping_pattern_lab_automation",
+        "source_report_type": "swing_pattern_lab_automation",
         "target_subsystem": "entry_funnel",
         "route": "existing_family",
         "mapped_family": "score65_74_recovery_probe",
@@ -2046,7 +2046,7 @@ def test_build_code_improvement_workorder_does_not_escalate_solo_pattern_lab_exi
         "runtime_effect": False,
         "allowed_runtime_apply": False,
     }
-    (automation_dir / "scalping_pattern_lab_automation_2026-05-08.json").write_text(
+    (automation_dir / "swing_pattern_lab_automation_2026-05-08.json").write_text(
         json.dumps(
             {
                 "date": "2026-05-08",
@@ -2069,7 +2069,7 @@ def test_build_code_improvement_workorder_does_not_escalate_solo_pattern_lab_exi
             ),
             encoding="utf-8",
         )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
     )
@@ -2102,7 +2102,7 @@ def test_build_code_improvement_workorder_does_not_signature_escalate_sparse_ord
         "runtime_effect": False,
         "allowed_runtime_apply": False,
     }
-    (automation_dir / "scalping_pattern_lab_automation_2026-05-08.json").write_text(
+    (automation_dir / "swing_pattern_lab_automation_2026-05-08.json").write_text(
         json.dumps(
             {
                 "date": "2026-05-08",
@@ -2131,7 +2131,7 @@ def test_build_code_improvement_workorder_does_not_signature_escalate_sparse_ord
             ),
             encoding="utf-8",
         )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
     )
@@ -2159,7 +2159,7 @@ def test_build_code_improvement_workorder_does_not_escalate_rejudged_not_applica
     current_order = {
         "order_id": "order_not_applicable_repeat",
         "title": "Not applicable explicit repeat",
-        "source_report_type": "scalping_pattern_lab_automation",
+        "source_report_type": "swing_pattern_lab_automation",
         "target_subsystem": "entry_funnel",
         "lifecycle_stage": "entry",
         "improvement_type": "source_quality_gap",
@@ -2174,7 +2174,7 @@ def test_build_code_improvement_workorder_does_not_escalate_rejudged_not_applica
         "files_likely_touched": [],
         "acceptance_tests": [],
     }
-    (automation_dir / "scalping_pattern_lab_automation_2026-06-10.json").write_text(
+    (automation_dir / "swing_pattern_lab_automation_2026-06-10.json").write_text(
         json.dumps(
             {
                 "date": "2026-06-10",
@@ -2197,7 +2197,7 @@ def test_build_code_improvement_workorder_does_not_escalate_rejudged_not_applica
             ),
             encoding="utf-8",
         )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
     )
@@ -2230,7 +2230,7 @@ def test_build_code_improvement_workorder_marks_terminal_non_implement_items(
         {
             "order_id": "order_design_only",
             "title": "Design-only report candidate",
-            "source_report_type": "scalping_pattern_lab_automation",
+            "source_report_type": "swing_pattern_lab_automation",
             "target_subsystem": "entry_funnel",
             "route": "auto_family_candidate",
             "priority": 1,
@@ -2240,7 +2240,7 @@ def test_build_code_improvement_workorder_marks_terminal_non_implement_items(
         {
             "order_id": "order_defer_only",
             "title": "Defer evidence only",
-            "source_report_type": "scalping_pattern_lab_automation",
+            "source_report_type": "swing_pattern_lab_automation",
             "target_subsystem": "entry_funnel",
             "improvement_type": "pattern_lab_observation",
             "route": "attach_existing_family",
@@ -2252,7 +2252,7 @@ def test_build_code_improvement_workorder_marks_terminal_non_implement_items(
         {
             "order_id": "order_not_applicable_terminal",
             "title": "Not applicable explicit terminal",
-            "source_report_type": "scalping_pattern_lab_automation",
+            "source_report_type": "swing_pattern_lab_automation",
             "target_subsystem": "entry_funnel",
             "route": "existing_family",
             "mapped_family": "holding_flow_ofi_smoothing",
@@ -2265,7 +2265,7 @@ def test_build_code_improvement_workorder_marks_terminal_non_implement_items(
             },
         },
     ]
-    (automation_dir / "scalping_pattern_lab_automation_2026-06-10.json").write_text(
+    (automation_dir / "swing_pattern_lab_automation_2026-06-10.json").write_text(
         json.dumps(
             {
                 "date": "2026-06-10",
@@ -2277,7 +2277,7 @@ def test_build_code_improvement_workorder_marks_terminal_non_implement_items(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
     )
@@ -2320,14 +2320,14 @@ def test_build_code_improvement_workorder_does_not_escalate_terminal_non_impleme
     current_order = {
         "order_id": "order_terminal_history",
         "title": "Terminal history should not re-escalate",
-        "source_report_type": "scalping_pattern_lab_automation",
+        "source_report_type": "swing_pattern_lab_automation",
         "target_subsystem": "entry_funnel",
         "route": "auto_family_candidate",
         "priority": 1,
         "runtime_effect": False,
         "allowed_runtime_apply": False,
     }
-    (automation_dir / "scalping_pattern_lab_automation_2026-06-10.json").write_text(
+    (automation_dir / "swing_pattern_lab_automation_2026-06-10.json").write_text(
         json.dumps(
             {
                 "date": "2026-06-10",
@@ -2356,7 +2356,7 @@ def test_build_code_improvement_workorder_does_not_escalate_terminal_non_impleme
             ),
             encoding="utf-8",
         )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
     )
@@ -2427,7 +2427,7 @@ def test_build_code_improvement_workorder_marks_longstanding_actionable_existing
             ),
             encoding="utf-8",
         )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-scalp")
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-scalp")
     monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
@@ -2508,7 +2508,7 @@ def test_build_code_improvement_workorder_marks_lifecycle_logic_observation_as_a
             ),
             encoding="utf-8",
         )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-scalp")
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-scalp")
     monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
@@ -2540,7 +2540,7 @@ def test_build_code_improvement_workorder_force_selects_longstanding_action_requ
     selected_order = {
         "order_id": "order_selected_existing_family",
         "title": "Selected existing family",
-        "source_report_type": "scalping_pattern_lab_automation",
+        "source_report_type": "swing_pattern_lab_automation",
         "target_subsystem": "entry_funnel",
         "improvement_type": "threshold_family_input",
         "route": "existing_family",
@@ -2556,7 +2556,7 @@ def test_build_code_improvement_workorder_force_selects_longstanding_action_requ
     current_order = {
         "order_id": "order_non_selected_actionable_recheck",
         "title": "Non-selected actionable recheck",
-        "source_report_type": "scalping_pattern_lab_automation",
+        "source_report_type": "swing_pattern_lab_automation",
         "target_subsystem": "entry_funnel",
         "improvement_type": "threshold_family_input",
         "route": "existing_family",
@@ -2568,7 +2568,7 @@ def test_build_code_improvement_workorder_force_selects_longstanding_action_requ
         "runtime_effect": False,
         "allowed_runtime_apply": False,
     }
-    (automation_dir / "scalping_pattern_lab_automation_2026-06-10.json").write_text(
+    (automation_dir / "swing_pattern_lab_automation_2026-06-10.json").write_text(
         json.dumps(
             {
                 "date": "2026-06-10",
@@ -2598,7 +2598,7 @@ def test_build_code_improvement_workorder_force_selects_longstanding_action_requ
             ),
             encoding="utf-8",
         )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
     )
@@ -2680,7 +2680,7 @@ def test_build_code_improvement_workorder_does_not_mark_currently_implemented_as
             ),
             encoding="utf-8",
         )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-scalp")
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-scalp")
     monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
@@ -2761,7 +2761,7 @@ def test_build_code_improvement_workorder_does_not_escalate_rejudged_lifecycle_h
             encoding="utf-8",
         )
     monkeypatch.setattr(
-        mod, "PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-scalping"
+        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-scalping"
     )
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
@@ -2830,7 +2830,7 @@ def test_build_code_improvement_workorder_preserves_lifecycle_discovery_handoff_
     doc_dir = tmp_path / "docs"
     automation_dir.mkdir()
     discovery_dir.mkdir()
-    (automation_dir / "scalping_pattern_lab_automation_2026-05-22.json").write_text(
+    (automation_dir / "swing_pattern_lab_automation_2026-05-22.json").write_text(
         json.dumps({"date": "2026-05-22", "code_improvement_orders": []}),
         encoding="utf-8",
     )
@@ -2858,12 +2858,9 @@ def test_build_code_improvement_workorder_preserves_lifecycle_discovery_handoff_
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
-    )
-    monkeypatch.setattr(
-        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
     )
     monkeypatch.setattr(
         mod, "SWING_STRATEGY_DISCOVERY_EV_DIR", tmp_path / "missing-swing-discovery"
@@ -4018,7 +4015,7 @@ def test_build_code_improvement_workorder_consumes_pattern_lab_currentness_audit
     doc_dir = tmp_path / "docs"
     automation_dir.mkdir()
     currentness_dir.mkdir()
-    (automation_dir / "scalping_pattern_lab_automation_2026-05-15.json").write_text(
+    (automation_dir / "swing_pattern_lab_automation_2026-05-15.json").write_text(
         json.dumps({"date": "2026-05-15", "code_improvement_orders": []}),
         encoding="utf-8",
     )
@@ -4046,12 +4043,9 @@ def test_build_code_improvement_workorder_consumes_pattern_lab_currentness_audit
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
-    )
-    monkeypatch.setattr(
-        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
     )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(
@@ -4090,7 +4084,7 @@ def test_build_code_improvement_workorder_preserves_observability_order_source(
     doc_dir = tmp_path / "docs"
     automation_dir.mkdir()
     currentness_dir.mkdir()
-    (automation_dir / "scalping_pattern_lab_automation_2026-05-15.json").write_text(
+    (automation_dir / "swing_pattern_lab_automation_2026-05-15.json").write_text(
         json.dumps({"date": "2026-05-15", "code_improvement_orders": []}),
         encoding="utf-8",
     )
@@ -4115,12 +4109,9 @@ def test_build_code_improvement_workorder_preserves_observability_order_source(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
-    )
-    monkeypatch.setattr(
-        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
     )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(
@@ -4158,7 +4149,7 @@ def test_build_code_improvement_workorder_consumes_microstructure_reaction_conte
     automation_dir.mkdir()
     microstructure_dir.mkdir()
     target_date = "2026-05-16"
-    (automation_dir / f"scalping_pattern_lab_automation_{target_date}.json").write_text(
+    (automation_dir / f"swing_pattern_lab_automation_{target_date}.json").write_text(
         json.dumps({"date": target_date, "code_improvement_orders": []}),
         encoding="utf-8",
     )
@@ -4204,12 +4195,9 @@ def test_build_code_improvement_workorder_consumes_microstructure_reaction_conte
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
-    )
-    monkeypatch.setattr(
-        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
     )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(
@@ -4266,7 +4254,7 @@ def test_build_code_improvement_workorder_consumes_pattern_lab_ai_review(
     doc_dir = tmp_path / "docs"
     automation_dir.mkdir()
     ai_review_dir.mkdir()
-    (automation_dir / "scalping_pattern_lab_automation_2026-05-15.json").write_text(
+    (automation_dir / "swing_pattern_lab_automation_2026-05-15.json").write_text(
         json.dumps({"date": "2026-05-15", "code_improvement_orders": []}),
         encoding="utf-8",
     )
@@ -4294,12 +4282,9 @@ def test_build_code_improvement_workorder_consumes_pattern_lab_ai_review(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
-    )
-    monkeypatch.setattr(
-        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
     )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(
@@ -4381,8 +4366,8 @@ def test_pattern_lab_ai_review_generic_followup_is_review_evidence_not_implement
 
 def test_pattern_lab_ai_review_automation_handoff_gap_is_evidence_not_duplicate_implementation():
     order = {
-        "order_id": "order_pattern_lab_ai_review_scalping_pattern_lab_automation",
-        "title": "Pattern Lab AI review follow-up: scalping_pattern_lab_automation",
+        "order_id": "order_pattern_lab_ai_review_swing_pattern_lab_automation",
+        "title": "Pattern Lab AI review follow-up: swing_pattern_lab_automation",
         "source_report_type": "pattern_lab_ai_review",
         "target_subsystem": "pattern_lab",
         "improvement_type": "automation_handoff_gap",
@@ -4413,7 +4398,7 @@ def test_build_code_improvement_workorder_force_selects_producer_gap_orders(
     doc_dir = tmp_path / "docs"
     automation_dir.mkdir()
     producer_gap_dir.mkdir()
-    (automation_dir / "scalping_pattern_lab_automation_2026-05-26.json").write_text(
+    (automation_dir / "swing_pattern_lab_automation_2026-05-26.json").write_text(
         json.dumps(
             {
                 "date": "2026-05-26",
@@ -4452,12 +4437,9 @@ def test_build_code_improvement_workorder_force_selects_producer_gap_orders(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
-    )
-    monkeypatch.setattr(
-        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
     )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(
@@ -4515,7 +4497,7 @@ def test_build_code_improvement_workorder_exposes_non_selected_source_orders(
     report_dir = tmp_path / "report"
     doc_dir = tmp_path / "docs"
     automation_dir.mkdir()
-    (automation_dir / f"scalping_pattern_lab_automation_{target_date}.json").write_text(
+    (automation_dir / f"swing_pattern_lab_automation_{target_date}.json").write_text(
         json.dumps(
             {
                 "date": target_date,
@@ -4545,12 +4527,9 @@ def test_build_code_improvement_workorder_exposes_non_selected_source_orders(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
-    )
-    monkeypatch.setattr(
-        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
     )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(
@@ -4600,7 +4579,7 @@ def test_build_code_improvement_workorder_strips_producer_gap_runtime_hook_candi
     doc_dir = tmp_path / "docs"
     automation_dir.mkdir()
     producer_gap_dir.mkdir()
-    (automation_dir / "scalping_pattern_lab_automation_2026-05-26.json").write_text(
+    (automation_dir / "swing_pattern_lab_automation_2026-05-26.json").write_text(
         json.dumps({"date": "2026-05-26", "code_improvement_orders": []}),
         encoding="utf-8",
     )
@@ -4641,12 +4620,9 @@ def test_build_code_improvement_workorder_strips_producer_gap_runtime_hook_candi
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
-    )
-    monkeypatch.setattr(
-        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
     )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(
@@ -4693,7 +4669,7 @@ def test_build_code_improvement_workorder_consumes_stage_hook_workorders(
     automation_dir.mkdir()
     stage_hook_dir.mkdir()
     scaffold_dir.mkdir()
-    (automation_dir / "scalping_pattern_lab_automation_2026-05-26.json").write_text(
+    (automation_dir / "swing_pattern_lab_automation_2026-05-26.json").write_text(
         json.dumps({"date": "2026-05-26", "code_improvement_orders": []}),
         encoding="utf-8",
     )
@@ -4759,12 +4735,9 @@ def test_build_code_improvement_workorder_consumes_stage_hook_workorders(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
-    )
-    monkeypatch.setattr(
-        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
     )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(
@@ -4823,7 +4796,7 @@ def test_build_code_improvement_workorder_auto_selects_buy_funnel_submit_drought
     doc_dir = tmp_path / "docs"
     automation_dir.mkdir()
     sentinel_dir.mkdir()
-    (automation_dir / f"scalping_pattern_lab_automation_{target_date}.json").write_text(
+    (automation_dir / f"swing_pattern_lab_automation_{target_date}.json").write_text(
         json.dumps({"date": target_date, "code_improvement_orders": []}),
         encoding="utf-8",
     )
@@ -4857,12 +4830,9 @@ def test_build_code_improvement_workorder_auto_selects_buy_funnel_submit_drought
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
-    )
-    monkeypatch.setattr(
-        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
     )
     monkeypatch.setattr(
         mod, "SWING_STRATEGY_DISCOVERY_EV_DIR", tmp_path / "missing-swing-discovery"
@@ -4929,7 +4899,7 @@ def test_build_code_improvement_workorder_marks_submit_drought_artifact_regenera
     automation_dir.mkdir()
     sentinel_dir.mkdir()
     ldm_dir.mkdir()
-    (automation_dir / f"scalping_pattern_lab_automation_{target_date}.json").write_text(
+    (automation_dir / f"swing_pattern_lab_automation_{target_date}.json").write_text(
         json.dumps({"date": target_date, "code_improvement_orders": []}),
         encoding="utf-8",
     )
@@ -5015,12 +4985,9 @@ def test_build_code_improvement_workorder_marks_submit_drought_artifact_regenera
         json.dumps({"submit_bucket_attribution": {"summary": {"submit_rows": 1}}}),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
-    )
-    monkeypatch.setattr(
-        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
     )
     monkeypatch.setattr(
         mod, "SWING_STRATEGY_DISCOVERY_EV_DIR", tmp_path / "missing-swing-discovery"
@@ -5078,7 +5045,7 @@ def test_build_code_improvement_workorder_closes_submit_drought_when_root_cause_
     automation_dir.mkdir()
     sentinel_dir.mkdir()
     ldm_dir.mkdir()
-    (automation_dir / f"scalping_pattern_lab_automation_{target_date}.json").write_text(
+    (automation_dir / f"swing_pattern_lab_automation_{target_date}.json").write_text(
         json.dumps({"date": target_date, "code_improvement_orders": []}),
         encoding="utf-8",
     )
@@ -5179,12 +5146,9 @@ def test_build_code_improvement_workorder_closes_submit_drought_when_root_cause_
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
-    )
-    monkeypatch.setattr(
-        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
     )
     monkeypatch.setattr(
         mod, "SWING_STRATEGY_DISCOVERY_EV_DIR", tmp_path / "missing-swing-discovery"
@@ -5746,7 +5710,7 @@ def test_build_code_improvement_workorder_consumes_ldm_submit_bucket_workorders(
     doc_dir = tmp_path / "docs"
     automation_dir.mkdir()
     ldm_dir.mkdir()
-    (automation_dir / f"scalping_pattern_lab_automation_{target_date}.json").write_text(
+    (automation_dir / f"swing_pattern_lab_automation_{target_date}.json").write_text(
         json.dumps({"date": target_date, "code_improvement_orders": []}),
         encoding="utf-8",
     )
@@ -5796,13 +5760,10 @@ def test_build_code_improvement_workorder_consumes_ldm_submit_bucket_workorders(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(mod, "LIFECYCLE_DECISION_MATRIX_DIR", ldm_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
-    )
-    monkeypatch.setattr(
-        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
     )
     monkeypatch.setattr(
         mod, "SWING_STRATEGY_DISCOVERY_EV_DIR", tmp_path / "missing-swing-discovery"
@@ -5891,7 +5852,7 @@ def test_build_code_improvement_workorder_adds_entry_adm_gap_order(
         directory.mkdir()
     adm_path = adm_dir / "scalp_entry_action_decision_matrix_2026-05-18.json"
     adm_path.write_text(json.dumps({"status": "warning"}), encoding="utf-8")
-    (automation_dir / "scalping_pattern_lab_automation_2026-05-18.json").write_text(
+    (automation_dir / "swing_pattern_lab_automation_2026-05-18.json").write_text(
         json.dumps({"date": "2026-05-18", "code_improvement_orders": []}),
         encoding="utf-8",
     )
@@ -5926,12 +5887,9 @@ def test_build_code_improvement_workorder_adds_entry_adm_gap_order(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
-    )
-    monkeypatch.setattr(
-        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
     )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
     monkeypatch.setattr(
@@ -6004,7 +5962,7 @@ def test_build_code_improvement_workorder_adds_pipeline_event_verbosity_order(
     doc_dir = tmp_path / "docs"
     for directory in (automation_dir, ev_dir, verbosity_dir):
         directory.mkdir()
-    (automation_dir / "scalping_pattern_lab_automation_2026-05-14.json").write_text(
+    (automation_dir / "swing_pattern_lab_automation_2026-05-14.json").write_text(
         json.dumps({"date": "2026-05-14", "code_improvement_orders": []}),
         encoding="utf-8",
     )
@@ -6030,12 +5988,9 @@ def test_build_code_improvement_workorder_adds_pipeline_event_verbosity_order(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
-    )
-    monkeypatch.setattr(
-        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
     )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
     monkeypatch.setattr(mod, "PIPELINE_EVENT_VERBOSITY_DIR", verbosity_dir)
@@ -6070,7 +6025,7 @@ def test_build_code_improvement_workorder_adds_observation_source_quality_orders
     doc_dir = tmp_path / "docs"
     for directory in (automation_dir, ev_dir, audit_dir):
         directory.mkdir()
-    (automation_dir / "scalping_pattern_lab_automation_2026-05-15.json").write_text(
+    (automation_dir / "swing_pattern_lab_automation_2026-05-15.json").write_text(
         json.dumps({"date": "2026-05-15", "code_improvement_orders": []}),
         encoding="utf-8",
     )
@@ -6110,12 +6065,9 @@ def test_build_code_improvement_workorder_adds_observation_source_quality_orders
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
-    )
-    monkeypatch.setattr(
-        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
     )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
     monkeypatch.setattr(
@@ -6165,7 +6117,7 @@ def test_build_code_improvement_workorder_adds_source_quality_hard_block_order(
     doc_dir = tmp_path / "docs"
     for directory in (automation_dir, ev_dir, audit_dir):
         directory.mkdir()
-    (automation_dir / "scalping_pattern_lab_automation_2026-05-15.json").write_text(
+    (automation_dir / "swing_pattern_lab_automation_2026-05-15.json").write_text(
         json.dumps({"date": "2026-05-15", "code_improvement_orders": []}),
         encoding="utf-8",
     )
@@ -6204,12 +6156,9 @@ def test_build_code_improvement_workorder_adds_source_quality_hard_block_order(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
-    )
-    monkeypatch.setattr(
-        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
     )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
     monkeypatch.setattr(
@@ -6249,7 +6198,7 @@ def test_build_code_improvement_workorder_keeps_raw_row_exclusion_order_beyond_m
     doc_dir = tmp_path / "docs"
     automation_dir.mkdir()
     audit_dir.mkdir()
-    (automation_dir / "scalping_pattern_lab_automation_2026-05-15.json").write_text(
+    (automation_dir / "swing_pattern_lab_automation_2026-05-15.json").write_text(
         json.dumps({"date": "2026-05-15", "code_improvement_orders": []}),
         encoding="utf-8",
     )
@@ -6268,12 +6217,9 @@ def test_build_code_improvement_workorder_keeps_raw_row_exclusion_order_beyond_m
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
-    )
-    monkeypatch.setattr(
-        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
     )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(
@@ -6307,7 +6253,7 @@ def test_build_code_improvement_workorder_treats_implemented_report_order_as_exi
     doc_dir = tmp_path / "docs"
     automation_dir.mkdir()
     swing_lab_dir.mkdir()
-    (automation_dir / "scalping_pattern_lab_automation_2026-05-15.json").write_text(
+    (automation_dir / "swing_pattern_lab_automation_2026-05-15.json").write_text(
         json.dumps({"date": "2026-05-15", "code_improvement_orders": []}),
         encoding="utf-8",
     )
@@ -6352,11 +6298,10 @@ def test_build_code_improvement_workorder_treats_implemented_report_order_as_exi
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", swing_lab_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
     )
-    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", swing_lab_dir)
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(
         mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity"
@@ -6438,11 +6383,8 @@ def test_build_code_improvement_workorder_attaches_swing_improvement_implemented
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-pattern")
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-pattern")
     monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", swing_dir)
-    monkeypatch.setattr(
-        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
-    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(
         mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity"
@@ -6528,11 +6470,8 @@ def test_build_code_improvement_workorder_attaches_swing_ai_structured_output_ev
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-pattern")
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-pattern")
     monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", swing_dir)
-    monkeypatch.setattr(
-        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
-    )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(
         mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity"
@@ -6588,7 +6527,7 @@ def test_build_code_improvement_workorder_attaches_lifecycle_ai_context_instrume
     doc_dir = tmp_path / "docs"
     automation_dir.mkdir()
     ev_dir.mkdir()
-    (automation_dir / "scalping_pattern_lab_automation_2026-05-20.json").write_text(
+    (automation_dir / "swing_pattern_lab_automation_2026-05-20.json").write_text(
         json.dumps({"date": "2026-05-20", "code_improvement_orders": []}),
         encoding="utf-8",
     )
@@ -6616,12 +6555,9 @@ def test_build_code_improvement_workorder_attaches_lifecycle_ai_context_instrume
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
-    )
-    monkeypatch.setattr(
-        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
     )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
     monkeypatch.setattr(
@@ -6658,7 +6594,7 @@ def test_build_code_improvement_workorder_attaches_swing_discovery_source_qualit
     doc_dir = tmp_path / "docs"
     automation_dir.mkdir()
     swing_ev_dir.mkdir()
-    (automation_dir / "scalping_pattern_lab_automation_2026-05-20.json").write_text(
+    (automation_dir / "swing_pattern_lab_automation_2026-05-20.json").write_text(
         json.dumps({"date": "2026-05-20", "code_improvement_orders": []}),
         encoding="utf-8",
     )
@@ -6687,12 +6623,9 @@ def test_build_code_improvement_workorder_attaches_swing_discovery_source_qualit
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
-    )
-    monkeypatch.setattr(
-        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
     )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(mod, "SWING_STRATEGY_DISCOVERY_EV_DIR", swing_ev_dir)
@@ -6758,7 +6691,7 @@ def test_build_code_improvement_workorder_adds_window_policy_audit_order(
         ),
         encoding="utf-8",
     )
-    (automation_dir / "scalping_pattern_lab_automation_2026-05-14.json").write_text(
+    (automation_dir / "swing_pattern_lab_automation_2026-05-14.json").write_text(
         json.dumps({"date": "2026-05-14", "code_improvement_orders": []}),
         encoding="utf-8",
     )
@@ -6766,12 +6699,9 @@ def test_build_code_improvement_workorder_adds_window_policy_audit_order(
         json.dumps({"sources": {"calibration": str(calibration_path)}}),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
-    )
-    monkeypatch.setattr(
-        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
     )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
     monkeypatch.setattr(
@@ -6805,7 +6735,7 @@ def test_build_code_improvement_workorder_adds_codebase_performance_orders(
     doc_dir = tmp_path / "docs"
     for directory in (automation_dir, ev_dir, perf_dir):
         directory.mkdir()
-    (automation_dir / "scalping_pattern_lab_automation_2026-05-14.json").write_text(
+    (automation_dir / "swing_pattern_lab_automation_2026-05-14.json").write_text(
         json.dumps({"date": "2026-05-14", "code_improvement_orders": []}),
         encoding="utf-8",
     )
@@ -6873,12 +6803,9 @@ def test_build_code_improvement_workorder_adds_codebase_performance_orders(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
-    )
-    monkeypatch.setattr(
-        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
     )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
     monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", perf_dir)
@@ -6949,13 +6876,10 @@ def test_build_code_improvement_workorder_attaches_implemented_codebase_performa
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        mod, "PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-automation"
+        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-automation"
     )
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
-    )
-    monkeypatch.setattr(
-        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
     )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
     monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", perf_dir)
@@ -6983,7 +6907,7 @@ def test_build_code_improvement_workorder_merges_swing_automation(
     doc_dir = tmp_path / "docs"
     scalping_dir.mkdir()
     swing_dir.mkdir()
-    (scalping_dir / "scalping_pattern_lab_automation_2026-05-08.json").write_text(
+    (scalping_dir / "swing_pattern_lab_automation_2026-05-08.json").write_text(
         json.dumps(
             {
                 "date": "2026-05-08",
@@ -7035,7 +6959,7 @@ def test_build_code_improvement_workorder_merges_swing_automation(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", scalping_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", scalping_dir)
     monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", swing_dir)
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
@@ -7045,7 +6969,7 @@ def test_build_code_improvement_workorder_merges_swing_automation(
 
     decisions = {item["order_id"]: item["decision"] for item in report["orders"]}
     assert report["summary"]["source_order_count"] == 2
-    assert report["summary"]["scalping_source_order_count"] == 1
+    assert report["summary"]["swing_lab_source_order_count"] == 1
     assert report["summary"]["swing_source_order_count"] == 1
     assert report["summary"]["swing_threshold_ai_status"] == "parsed"
     assert (
@@ -7068,7 +6992,7 @@ def test_build_code_improvement_workorder_forces_swing_entry_bottleneck_selected
     doc_dir = tmp_path / "docs"
     scalping_dir.mkdir()
     swing_dir.mkdir()
-    (scalping_dir / "scalping_pattern_lab_automation_2026-05-22.json").write_text(
+    (scalping_dir / "swing_pattern_lab_automation_2026-05-22.json").write_text(
         json.dumps(
             {
                 "date": "2026-05-22",
@@ -7127,7 +7051,7 @@ def test_build_code_improvement_workorder_forces_swing_entry_bottleneck_selected
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", scalping_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", scalping_dir)
     monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", swing_dir)
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
@@ -7215,7 +7139,7 @@ def test_build_code_improvement_workorder_dedupes_duplicate_orders(
     doc_dir = tmp_path / "docs"
     for d in (scalping_dir, swing_dir, swing_lab_dir):
         d.mkdir()
-    (scalping_dir / "scalping_pattern_lab_automation_2026-05-08.json").write_text(
+    (scalping_dir / "swing_pattern_lab_automation_2026-05-08.json").write_text(
         json.dumps(
             {
                 "date": "2026-05-08",
@@ -7287,17 +7211,15 @@ def test_build_code_improvement_workorder_dedupes_duplicate_orders(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", scalping_dir)
-    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", swing_dir)
     monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", swing_lab_dir)
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", swing_dir)
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
 
     report = mod.build_code_improvement_workorder("2026-05-08", max_orders=5)
 
-    assert report["summary"]["source_order_count"] == 3
-    assert report["summary"]["scalping_source_order_count"] == 1
+    assert report["summary"]["source_order_count"] == 2
     assert report["summary"]["swing_source_order_count"] == 1
     assert report["summary"]["swing_lab_source_order_count"] == 2
     dup_warnings = report["summary"].get("duplicate_order_warnings") or []
@@ -7319,7 +7241,7 @@ def test_build_code_improvement_workorder_adds_threshold_ev_hold_no_edge_followu
     doc_dir = tmp_path / "docs"
     scalping_dir.mkdir()
     ev_dir.mkdir()
-    (scalping_dir / "scalping_pattern_lab_automation_2026-05-11.json").write_text(
+    (scalping_dir / "swing_pattern_lab_automation_2026-05-11.json").write_text(
         json.dumps(
             {
                 "date": "2026-05-11",
@@ -7357,12 +7279,9 @@ def test_build_code_improvement_workorder_adds_threshold_ev_hold_no_edge_followu
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", scalping_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", scalping_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
-    )
-    monkeypatch.setattr(
-        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
     )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
@@ -7382,7 +7301,7 @@ def test_build_code_improvement_workorder_skips_adm_followup_when_instrumentatio
     doc_dir = tmp_path / "docs"
     scalping_dir.mkdir()
     ev_dir.mkdir()
-    (scalping_dir / "scalping_pattern_lab_automation_2026-05-11.json").write_text(
+    (scalping_dir / "swing_pattern_lab_automation_2026-05-11.json").write_text(
         json.dumps(
             {
                 "date": "2026-05-11",
@@ -7418,12 +7337,9 @@ def test_build_code_improvement_workorder_skips_adm_followup_when_instrumentatio
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", scalping_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", scalping_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
-    )
-    monkeypatch.setattr(
-        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
     )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
@@ -7450,7 +7366,7 @@ def test_build_code_improvement_workorder_skips_adm_followup_when_matrix_contrac
     scalping_dir.mkdir()
     ev_dir.mkdir()
     matrix_dir.mkdir()
-    (scalping_dir / "scalping_pattern_lab_automation_2026-05-11.json").write_text(
+    (scalping_dir / "swing_pattern_lab_automation_2026-05-11.json").write_text(
         json.dumps(
             {
                 "date": "2026-05-11",
@@ -7522,12 +7438,9 @@ def test_build_code_improvement_workorder_skips_adm_followup_when_matrix_contrac
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", scalping_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", scalping_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
-    )
-    monkeypatch.setattr(
-        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
     )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
     monkeypatch.setattr(mod, "HOLDING_EXIT_DECISION_MATRIX_DIR", matrix_dir)
@@ -7587,7 +7500,7 @@ def test_build_code_improvement_workorder_consolidates_legacy_latency_into_buy_f
     doc_dir = tmp_path / "docs"
     automation_dir.mkdir()
     ev_dir.mkdir()
-    (automation_dir / "scalping_pattern_lab_automation_2026-05-11.json").write_text(
+    (automation_dir / "swing_pattern_lab_automation_2026-05-11.json").write_text(
         json.dumps(
             {
                 "date": "2026-05-11",
@@ -7638,12 +7551,9 @@ def test_build_code_improvement_workorder_consolidates_legacy_latency_into_buy_f
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
-    )
-    monkeypatch.setattr(
-        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
     )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
@@ -7704,12 +7614,9 @@ def test_build_code_improvement_workorder_does_not_route_dynamic_entry_normal_te
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-pattern")
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-pattern")
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
-    )
-    monkeypatch.setattr(
-        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
     )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
@@ -7766,12 +7673,9 @@ def test_build_code_improvement_workorder_routes_dynamic_entry_report_contract_g
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-pattern")
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-pattern")
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
-    )
-    monkeypatch.setattr(
-        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
     )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
@@ -7814,7 +7718,7 @@ def test_build_code_improvement_workorder_reports_previous_generation_diff(
         json.dumps(previous, ensure_ascii=False),
         encoding="utf-8",
     )
-    (automation_dir / "scalping_pattern_lab_automation_2026-05-08.json").write_text(
+    (automation_dir / "swing_pattern_lab_automation_2026-05-08.json").write_text(
         json.dumps(
             {
                 "date": "2026-05-08",
@@ -7841,12 +7745,9 @@ def test_build_code_improvement_workorder_reports_previous_generation_diff(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
-    )
-    monkeypatch.setattr(
-        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
     )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
@@ -7876,7 +7777,7 @@ def test_build_code_improvement_workorder_consumes_lifecycle_entry_bucket_workor
     doc_dir = tmp_path / "docs"
     for directory in (automation_dir, ev_dir, ldm_dir):
         directory.mkdir()
-    (automation_dir / "scalping_pattern_lab_automation_2026-05-21.json").write_text(
+    (automation_dir / "swing_pattern_lab_automation_2026-05-21.json").write_text(
         json.dumps({"date": "2026-05-21", "code_improvement_orders": []}),
         encoding="utf-8",
     )
@@ -7955,12 +7856,9 @@ def test_build_code_improvement_workorder_consumes_lifecycle_entry_bucket_workor
         json.dumps({"sources": {"lifecycle_decision_matrix": str(ldm_path)}}),
         encoding="utf-8",
     )
-    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", automation_dir)
     monkeypatch.setattr(
         mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing"
-    )
-    monkeypatch.setattr(
-        mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab"
     )
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
     monkeypatch.setattr(mod, "LIFECYCLE_DECISION_MATRIX_DIR", ldm_dir)
