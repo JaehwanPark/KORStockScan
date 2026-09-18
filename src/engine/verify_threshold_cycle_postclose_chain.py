@@ -7526,7 +7526,7 @@ def build_threshold_cycle_postclose_verification(
     if clean_baseline_analytics_residue.get("status") == "fail":
         log_issues.append("clean_baseline_analytics_residue_present")
     validated_source_quality = load_source_quality_preflight(
-        target_date, artifact_path=paths["observation_source_quality_audit"]
+        target_date, artifact_path=paths["observation_source_quality_audit"], require_final=target_date >= "2026-09-17"
     )
     if is_date_allowed(target_date, clean_policy) and not validated_source_quality.get(
         "artifact"

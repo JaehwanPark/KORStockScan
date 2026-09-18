@@ -8036,3 +8036,19 @@ def test_entry_ai_price_input_audit_uses_frozen_feature_packet(monkeypatch):
     assert fields["ai_input_source_quality_status"] == "complete"
     assert fields["quote_age_ms"] == 2800
     assert fields["quote_stale"] is False
+
+
+def test_terminal_no_budget_uses_call_local_ai_result_over_later_stock(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(handlers, "emit_pipeline_event", lambda *args, **kwargs: emitted.append(kwargs["fields"]))
+    lineage = {"entry_primary_decision_owner": "mechanistic_entry_adjudicator",
+        "entry_mechanistic_action": "ENTER_NOW", "evaluation_attempt_id": "original",
+        "scanner_promotion_id": "original-promotion", "policy_bundle_hash": "a" * 64,
+        "entry_ai_screen_status": "pass", "entry_ai_screen_pass": True,
+        "effective_venue": "KRX_NXT_INTEGRATED", "market_session_bucket": "KRX_NXT_AFTERMARKET"}
+    stock = {"id": 9, "last_watching_ai_machine_primary_fields": {**lineage, "evaluation_attempt_id": "later"}}
+    handlers._log_ai_confirmed_terminal_no_budget(stock, "031330",
+        terminal_reason="actual_guard_block", source_stage="first_ai_wait", ai_decision={**lineage, "action": "WAIT"})
+    assert emitted[-1]["evaluation_attempt_id"] == "original"
+    assert emitted[-1]["actual_order_submitted"] is False
+    assert emitted[-1]["allowed_runtime_apply"] is False

@@ -156,3 +156,28 @@ Claude 폐기 Closure: source `50cc737bc` main/review atomic push·immutable `cl
   - Pipeline 재리뷰/정리 및 다음 삼성 분석: [owning review](../audit-reports/2026-09-18-pipeline-rereview-cleanup-and-samsung-machine-entry-analysis.md), `tmp/pipeline-rereview-samsung-analysis-20260918/`. 중첩 schema 손상 fallback/strict OPEN을 수리·회귀 검증하고 불필요 과거 진단125개만 제거, 원 불일치/현재/rollback 보호. 삼성 source/정책/독립 service는 read-only이며 완료 pair0/source gap을 natural wait나 no-edge로 바꾸지 않음. 배포·후행 재인계 receipt와 자연 PID/parity OPEN을 분리한다.
   - Pipeline verbosity Source/Closure: [PV0–PV6 계획](../proposals/pipeline-event-verbosity-incremental-parity-and-consumer-cost-optimization-plan-2026-09-18.md), [owning review](../audit-reports/2026-09-18-pipeline-event-verbosity-incremental-review.md), `tmp/pipeline-verbosity-incremental-20260918/` receipts. 운영 producer/종료·handover·publication/증분·정정·missing/resource 및 실제 후행 소비 계약을 검증한다. 동일 `order_pipeline_event_compaction_v2_shadow`의 source/resource/자연 OPEN을 `defer_evidence`로 보존하고 반복 신규 구현/provider/full-wrapper recovery 또는 전체 chain/PREOPEN GREEN으로 바꾸지 않는다. raw·주문·정책·threshold/quantity/budget/custody/override·resource floor 및 실행 중 release는 보존한다.
   - Pipeline 자연 Acceptance: 다음 유효 source-day의 전체/완료창 parity·정상 종료/restart coverage·실제 Sentinel/execution census 소비 및 제한 비용을 확인한다. 과거9/15/16 손실의 raw fallback/원인 미확정과9/17 bootstrap을 자연 표본 대기로 숨기지 않는다. 실제 PID/주문/EV는 이 진단으로 승인하지 않는다. 해당 native owner는 이 기존 code-workorder 실행 ID를 재사용하며 별도 중복 작업/cron을 만들지 않는다.
+
+- [ ] `[PostcloseSourceQualityGateReview0918] 장후 source-quality gate 결과 및 튜닝 입력 허용/제외 확인` (`Due: 2026-09-18`, `Slot: POSTCLOSE`, `TimeWindow: 21:40~21:55`, `Track: RuntimeStability`)
+  - Source: [observation_source_quality_audit_2026-09-18.json](/home/ubuntu/KORStockScan/data/report/observation_source_quality_audit/observation_source_quality_audit_2026-09-18.json), [threshold_cycle_ev_2026-09-18.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-09-18.json), [code_improvement_workorder_2026-09-18.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-09-18.json), [threshold_cycle_postclose_verification_2026-09-18.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_2026-09-18.json)
+  - 판정 기준: postclose EV/report 소비 전후 `observation_source_quality_audit`의 hard block, row exclusion, clean baseline, unknown-token review warning을 확인한다. `hard_blocking_contract_gap_count>0`이면 결손 row/window 제외 또는 `source_quality_blocked` 산출 여부를 확인하고, `unknown_token_stage_count>0`이면 source-quality producer-fix workorder가 생성됐는지 확인한다.
+  - 금지: source-quality preflight missing/stale, row exclusion 실패, hard block candidate 생성, unknown-token workorder handoff 누락을 정상 postclose 완료로 처리하지 않는다. sim/combined EV, live-auto promotion, runtime approval, LDM, threshold apply candidate에 결손 row/window가 섞이면 fail로 닫는다.
+  - 다음 액션: `source_quality_gate_pass`, `defective_rows_excluded_and_ev_allowed`, `source_quality_blocked`, `unknown_warning_workorder_created`, `handoff_missing_fix_automation_first` 중 하나로 닫는다.
+
+<!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
+
+## R0–R3 독립 AI 연구 폐기
+
+사용자 지시로 `scalping.micro_reversion.ai_quality_cycle` 장후 실행기·R2/R3 인계·legacy/current-axis 전용 런타임 및 파생 산출물을 제거한다. 별도 OPEN 복구 작업을 만들지 않는다. 현행 compact·AI 원천/라벨·주문/체결·공유 경제성 owner는 보존한다. 구현·검증·삭제 증거는 [폐기 리뷰](../audit-reports/2026-09-18-ai-quality-cycle-retirement-review.md)를 따른다. 코드 선택·실제 PID 소비와 장후 전체 DONE은 별도다.
+
+후속 소비 경로 리뷰: 공용 consumer의 퇴역 입력·factorial 재생성 안내와 고아 standalone optimizer CLI를 제거했다. 전용 산출물 추가 생성/삭제 대상0개, 현행 compact 소비는 보존한다. 최신 검증·commit/push·선택 배포 증거는 같은 폐기 리뷰 및 `tmp/ai-quality-cycle-consumer-closure-20260918/` receipts를 따른다. 신규 OPEN 복원 owner·실제 PID/경제성 수락은 생성하지 않는다.
+
+## Claude Scalping Pattern Lab 영구 폐기
+
+사용자 승인으로 Claude Lab·scalping automation의 구현 제거, 반복 리뷰/보완/검증, 관련 commit/push 및 immutable 배포와 불필요 과거 산출물 삭제를 실행한다. [폐기 검증](../audit-reports/2026-09-18-claude-scalping-pattern-lab-retirement-review.md)이 PLR0–PLR6 closure와 보호/유예 목록을 소유한다. 퇴역 작업의 새 OPEN/일정·empty producer는 만들지 않는다. 공유 Swing OFF·독립 경제성 owner·현재 정책/원천·hard safety는 보존하며 선택 배포와 실제 PID/자연 경제성은 분리한다. 봇 재시작·주문·조기 PREOPEN 확정 권한은 없다.
+
+Claude 폐기 Closure: source `50cc737bc` main/review atomic push·immutable `claude-lab-retired-reviewed-20260918` 선택·1,135PASS 및 배포본223PASS·643개7,996,508bytes 삭제·정책/원천15SHA 불변. Lab 결함0/공용 source handoff current이며 full-chain 기존 FAIL(저가주·machine timing·Swing/실패 marker)은 그대로다. 상세와 증거는 위 owning 폐기 검증/`tmp/claude-lab-retirement-20260918/`을 따른다. 재시작/주문/조기 PREOPEN 확정·새 OPEN 복원은 없다.
+
+- Pattern Lab 폐기 후속 재리뷰 Closure: effective conclusion의 domain/owner/path 우회와 deterministic 재주입을 보완했다. 원본 AI response/hash·Swing OFF·독립 owner/정책/guard를 보존하며 영향 범위427 PASS다. 중복 병합 임시 사본44개6,044,845bytes만 추가 삭제하고 보호 SHA15개 불변을 검증했다. [Owning review](../audit-reports/2026-09-18-claude-scalping-pattern-lab-retirement-review.md#후속-재리뷰수정보완-및-중복-임시-산출물-정리)와 `tmp/claude-lab-retirement-20260918/followup-*.json` receipts를 따른다. 전체 native verifier/타 축 OPEN·자연 PREOPEN/PID/경제성 수락은 유지한다.
+
+
+  - 구현·제한 재생성 승인: [Q0–Q5 owning review](../audit-reports/2026-09-18-observation-source-quality-final-lineage-review.md). 원9/17 source→9/18 publication→9/21 effective를 분리한다. 미래 retry identity·ambiguous dispatch·same-call conflict·final binding 수리를 검증했다. 과거4개 gap은 원 terminal 부재로 보존하고 CF 입력과 운영 연결 및 비용 후 경제성을 구분한다. 새 정상 terminal/PREOPEN/PID/완료 비용 경제성은 기존 Acceptance로 OPEN이다.

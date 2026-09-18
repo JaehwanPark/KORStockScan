@@ -4825,12 +4825,18 @@ def test_pre_submit_entry_ai_authority_retry_refreshes_missing_ai(monkeypatch):
     logs = []
     snapshots = []
     ai_calls = []
+    machine_lineage = {"entry_primary_decision_owner": "mechanistic_entry_adjudicator",
+        "evaluation_attempt_id": "retry-machine-exact", "scanner_promotion_id": "SCANPROM-123456-retry",
+        "effective_venue": "KRX_NXT_INTEGRATED", "market_session_bucket": "KRX_NXT_AFTERMARKET",
+        "policy_bundle_hash": "a" * 64, "entry_mechanistic_action": "ENTER_NOW",
+        "entry_ai_screen_status": "pass", "entry_ai_screen_pass": True}
 
     class DummyAI:
         def analyze_target(self, *args, **kwargs):
             ai_calls.append((args, kwargs))
             clock["now"] = response_completed_at
             return {
+                **machine_lineage,
                 "action": "WAIT",
                 "score": 62.0,
                 "reason": "fresh pre-submit retry",
@@ -4985,6 +4991,10 @@ def test_pre_submit_entry_ai_authority_retry_refreshes_missing_ai(monkeypatch):
     )
     assert snapshots
 
+
+    assert stock["last_watching_ai_machine_primary_fields"]["evaluation_attempt_id"] == "retry-machine-exact"
+    assert retry["evaluation_attempt_id"] == "retry-machine-exact"
+    assert dict(logs)["ai_confirmed"]["evaluation_attempt_id"] == "retry-machine-exact"
 
 def test_machine_nonentry_closes_exact_attempt_without_changing_action(monkeypatch):
     calls = []

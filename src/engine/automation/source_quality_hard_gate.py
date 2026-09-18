@@ -141,7 +141,7 @@ def _archive_matches_source(archived: Path, source: dict, current: dict) -> bool
 
 
 def load_source_quality_preflight(
-    target_date: str, *, artifact_path: Path | None = None
+    target_date: str, *, artifact_path: Path | None = None, require_final: bool = False
 ) -> dict[str, Any]:
     path = (
         artifact_path
@@ -151,8 +151,18 @@ def load_source_quality_preflight(
     exists = path.exists() or Path(f"{path}.gz").exists()
     clean_baseline_enforced = is_date_allowed(target_date, clean_baseline_policy())
     load_error: str | None = None
+    stored_path = path if path.is_file() else Path(str(path) + ".gz")
+    def generation():
+        try:
+            value = stored_path.stat()
+            return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+        except OSError:
+            return None
+    publication_before = generation()
+    artifact_sha256 = None
     try:
         payload = read_json_object_strict(path)
+        artifact_sha256 = hashlib.sha256(stored_path.read_bytes()).hexdigest()
     except Exception as exc:
         load_error = type(exc).__name__
         payload = {}
@@ -182,6 +192,12 @@ def load_source_quality_preflight(
     has_machine_summary = bool(summary)
     explicit_allowed = summary.get("tuning_input_allowed")
     validation_errors: list[str] = []
+    if require_final:
+        from src.engine.observation_source_quality_audit import check_audit_reusable
+        if not check_audit_reusable(target_date, audit_phase="final", artifact_path=path)["reusable"]:
+            validation_errors.append("source_quality_final_dependency_binding_invalid")
+    if publication_before != generation():
+        validation_errors.append("source_quality_publication_changed_during_validation")
     if clean_baseline_enforced and has_machine_summary:
         if payload.get("target_date") != target_date:
             validation_errors.append("source_quality_preflight_target_date_mismatch")
@@ -277,7 +293,12 @@ def load_source_quality_preflight(
             blocked_reason = "blocked_contract_gap"
     return {
         "artifact": str(path) if exists else None,
+        "artifact_sha256": artifact_sha256,
         "target_date": target_date,
+        "audit_phase": payload.get("audit_phase"),
+        "metric_role": "source_input_validation_only",
+        "economic_comparison_eligible": False,
+        "require_final": require_final,
         "validation_errors": validation_errors,
         "status": status,
         "tuning_input_allowed": not fail_closed,

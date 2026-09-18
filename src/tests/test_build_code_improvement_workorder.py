@@ -8190,3 +8190,21 @@ def test_scale_in_conditioned_no_fill_is_normal_but_source_gap_is_actionable():
     assert _scale_in_split_order_plan_followup_orders({"scale_in_split_order_plan": summary}) == []
     summary.update(status="pending_filled_outcome", evaluation_state={"status": "pending_filled_outcome", "reason": "filled_outcome_receipt_price_or_lot_basis_incomplete"})
     assert _scale_in_split_order_plan_followup_orders({"scale_in_split_order_plan": summary})
+
+
+def test_unknown_provenance_handoff_keeps_native_id_and_field_scope():
+    report = {"target_date": "2026-09-17", "status": "warning", "summary": {"tuning_input_allowed": True},
+        "unknown_token_findings": [{"stage": "scalping_scanner_candidate_pruned", "event_count": 10,
+            "fields": [{"field": "actual_execution_venue", "count": 5, "rate": 0.5},
+                       {"field": "market_data_route", "count": 3, "rate": 0.3}]}]}
+    order = next(row for row in mod._observation_source_quality_followup_orders(report)
+        if row["order_id"] == "order_observation_source_quality_unknown_token_provenance_gap")
+    classified = mod._classify_order(order, finding_by_order_id={}, finding_by_title_slug={},
+        auto_family_order_ids=set(), closed_instrumentation_order_families={})
+    published = mod._serialize_classified_order(classified)
+    receipt = published["implementation_provenance"]
+    assert receipt["remaining_unknown_fields"] == ["market_data_route"]
+    assert receipt["source_target_date"] == "2026-09-17"
+    assert receipt["field_provenance_review"][0]["disposition"] == "reviewed_not_available_before_broker_execution"
+    assert receipt["field_provenance_review"][1]["producer"] == "src/scanners/scalping_scanner.py"
+    assert published["runtime_effect"] is False

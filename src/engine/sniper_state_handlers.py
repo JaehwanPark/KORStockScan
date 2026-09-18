@@ -11756,6 +11756,9 @@ def _canonicalize_rising_missed_venue_fields(
 
 _MACHINE_PRIMARY_LINEAGE_PIPELINE_STAGES = frozenset(
     {
+        "ai_confirmed_terminal_no_budget",
+        "rising_missed_tick_speed_entry_block",
+        "entry_submit_identity_reconciliation_blocked",
         "auth_zero_qty",
         "blocked_zero_qty",
         "budget_pass",
@@ -11769,6 +11772,7 @@ _MACHINE_PRIMARY_LINEAGE_PIPELINE_STAGES = frozenset(
         "pre_submit_price_guard_block",
         "pre_submit_entry_ai_authority_async_pending",
         "pre_submit_entry_ai_authority_guard_block",
+        "order_leg_owner_registry_reconciliation_required",
         "order_leg_no_response",
         "order_leg_fail",
         "order_leg_sent",
@@ -18563,7 +18567,10 @@ def _log_ai_confirmed_terminal_no_budget(
         ai_score=f"{score_value:.1f}",
         ai_action=action or "UNKNOWN",
         entry_score_threshold=f"{float(entry_score_threshold):.1f}",
-        **(extra_fields or {}),
+        **{
+            **_machine_primary_entry_provenance_fields(ai_decision),
+            **(extra_fields or {}),
+        },
     )
 
 
@@ -39779,6 +39786,11 @@ def _retry_entry_ai_submit_authority_before_block(
             else {}
         )
         if trusted_result:
+            # Freeze this retry result, not the previous watched evaluation.
+            machine_lineage = _machine_primary_entry_provenance_fields(ai_decision)
+            trusted_state_fields["last_watching_ai_machine_primary_fields"] = machine_lineage
+            bind_submit_attempt_machine_lineage(stock, code, machine_lineage, replace_existing=True)
+            fields.update(machine_lineage)
             exploration_terminal_fields = (
                 _entry_setup_exploration_terminal_state_fields(
                     ai_decision,

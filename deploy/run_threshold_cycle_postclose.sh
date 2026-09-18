@@ -1991,6 +1991,12 @@ if [ "$RUN_PIPELINE_EVENT_VERBOSITY_REPORT" = "true" ] || [ "$RUN_PIPELINE_EVENT
 fi
 if [ "$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT" = "true" ] || [ "$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT" = "1" ]; then
   automation_trigger_decision "observation_source_quality_audit"
+  # The wrapper snapshot can precede late terminal/provider publications.
+  # Recheck this owner at consumption time; a reuse miss is not CLI failure.
+  if [ "$AUTOMATION_TRIGGER_DECISION_RESULT" = "skip" ] && ! env PYTHONPATH=. "$VENV_PY" -m src.engine.observation_source_quality_audit --target-date "$TARGET_DATE" --audit-phase final --check-reusable >/dev/null; then
+    AUTOMATION_TRIGGER_DECISION_RESULT="run"
+    emit_postclose_marker "[INVALIDATE] observation_source_quality_audit target_date=$TARGET_DATE phase=final reason=dependency_binding_invalid"
+  fi
   if [ "$AUTOMATION_TRIGGER_DECISION_RESULT" = "skip" ]; then
     skip_triggered_step "observation_source_quality_audit" "fresh_outputs_no_trigger"
     wait_for_report_artifact \

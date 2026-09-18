@@ -564,6 +564,13 @@ def evaluate_step(spec: StepSpec, env: dict[str, str] | None = None) -> dict[str
     )
 
     reasons: list[str] = []
+    if spec.step_id == "observation_source_quality_audit":
+        from src.engine.observation_source_quality_audit import check_audit_reusable
+        audit_path = PROJECT_ROOT / spec.output_paths[0]
+        target_date = audit_path.stem.removeprefix("observation_source_quality_audit_")
+        reusable = check_audit_reusable(target_date, audit_phase="final", artifact_path=audit_path)
+        if not reusable["reusable"]:
+            reasons.append(reusable["reason"])
     if force:
         reasons.append("force_override")
     if output_missing:

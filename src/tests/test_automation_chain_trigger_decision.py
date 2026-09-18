@@ -385,3 +385,15 @@ def test_cli_step_prints_decision_and_writes_contract(tmp_path, monkeypatch, cap
     assert payload["runtime_effect"] is False
     assert payload["allowed_runtime_apply"] is False
     assert payload["decisions"][0]["forbidden_uses"]
+
+
+def test_audit_trigger_requires_final_binding_even_with_fresh_outputs(tmp_path, monkeypatch):
+    _patch_roots(tmp_path, monkeypatch)
+    day = "2026-09-17"
+    output = "data/report/observation_source_quality_audit/observation_source_quality_audit_" + day
+    _write_json(tmp_path / (output + ".json"), {"status": "warning", "audit_phase": "preflight"}, 200)
+    _write_text(tmp_path / (output + ".md"), "# audit", 200)
+    spec = mod.StepSpec("observation_source_quality_audit", "deep_audits", (output + ".json", output + ".md"), (), "FORCE", "audit")
+    result = mod.evaluate_step(spec, env={})
+    assert result["decision"] == "run"
+    assert "audit_phase_implementation_dependency_or_receipt_invalid" in result["trigger_reasons"]

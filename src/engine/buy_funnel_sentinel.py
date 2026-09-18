@@ -46,6 +46,10 @@ ENTRY_STAGES = {
     "entry_execution_sizing_plan",
     "entry_execution_sizing_plan_block",
     "order_bundle_submitted",
+    "order_leg_no_response",
+    "order_leg_fail",
+    "order_leg_sent",
+    "order_leg_owner_registry_reconciliation_required",
 }
 HOLDING_STAGES = {"holding_started"}
 SOURCE_HANDOFF_STAGES = {"prev_close_gainer_entry_ai_handoff"}
@@ -93,6 +97,7 @@ BLOCKER_STAGES = {
     "entry_armed_expired",
     "entry_armed_expired_after_wait",
     "entry_arm_expired",
+    "entry_submit_identity_reconciliation_blocked",
     *UPSTREAM_BLOCK_STAGES,
     *BUDGET_BLOCKER_STAGES,
     *PRICE_GUARD_STAGES,
@@ -110,8 +115,8 @@ SUBMIT_DROUGHT_MIN_BUDGET_UNIQUE = 3
 SUBMIT_TO_AI_CRITICAL_PCT = 20.0
 SUBMIT_TO_BUDGET_CRITICAL_PCT = 10.0
 REPORT_DIRNAME = "buy_funnel_sentinel"
-EVENT_CACHE_SCHEMA_VERSION = 10
-LOSSLESS_EVENT_CACHE_SCHEMA_VERSION = 12
+EVENT_CACHE_SCHEMA_VERSION = 11
+LOSSLESS_EVENT_CACHE_SCHEMA_VERSION = 13
 EVENT_CACHE_NAME = "buy_funnel_sentinel_events"
 FORBIDDEN_AUTOMATIONS = [
     "score_threshold_relaxation",
@@ -431,6 +436,31 @@ def _event_from_cache_row(row: dict[str, Any]) -> PipelineEvent | None:
     )
 
 
+def _previous_cache_schema_proof(target_date, raw_path, previous_schema):
+    """A native stage census can prove that newly retained stages were absent."""
+    from src.engine import observation_source_quality_audit as audit
+    if previous_schema not in {10, 12}:
+        return None
+    try:
+        path = _report_dir().parent / "observation_source_quality_audit" / f"observation_source_quality_audit_{target_date}.json"
+        raw_report = path.read_bytes()
+        payload = json.loads(raw_report)
+        source = payload["source"]
+        stages = {"order_leg_no_response", "order_leg_fail", "order_leg_sent",
+                  "order_leg_owner_registry_reconciliation_required", "entry_submit_identity_reconciliation_blocked"}
+        projection = audit._read_raw_contract_projection(target_date, source["contract_projection"]["key"])
+        if (payload["target_date"] != target_date or projection is None
+                or source["generation"] != audit._raw_generation(raw_path)
+                or source["invalid_json_line_count"] != 0
+                or any(source["audited_stage_counts"].get(stage, 0) for stage in stages)):
+            return None
+        return {"from_schema": previous_schema, "raw_generation": source["generation"],
+                "raw_audit_sha256": audit.hashlib.sha256(raw_report).hexdigest(),
+                "newly_admitted_stages": sorted(stages), "population_proof": "verified_zero_stage_census"}
+    except (OSError, KeyError, ValueError, TypeError):
+        return None
+
+
 def load_pipeline_events(
     target_date: str,
     *,
@@ -452,6 +482,8 @@ def load_pipeline_events(
             cache_name=EVENT_CACHE_NAME,
             target_date=target_date,
             schema_version=cache_schema_version,
+            verified_schema_migration=_previous_cache_schema_proof(
+                target_date, path, cache_schema_version - 1),
             parse_payload=lambda payload: _payload_to_cache_row(
                 payload,
                 exclude_summary_stages=exclude_summary_stages,
@@ -2845,6 +2877,31 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
             for row in broker_failure_rows
             if _submit_drought_axis_for_event(row) == "BROKER_RECEIPT"
         ]
+        def same_call(left, right):
+            left_id = _safe_str(left.fields.get("entry_submit_attempt_id"))
+            right_id = _safe_str(right.fields.get("entry_submit_attempt_id"))
+            return not (left_id and right_id and left_id != right_id)
+        terminal_conflict = any(same_call(left, right)
+            for left_rows, right_rows in ((submitted_rows, broker_rejected_rows + final_guard_block_rows),
+                                         (broker_rejected_rows, final_guard_block_rows))
+            for left in left_rows for right in right_rows)
+        def unresolved_dispatch(row):
+            if row.stage == "order_leg_owner_registry_reconciliation_required":
+                return True
+            if row.stage == "order_leg_fail":
+                return _safe_str(row.fields.get("broker_submission_reconciliation_required")).lower() == "true"
+            if row.stage != "order_leg_no_response":
+                return False
+            call = _safe_str(row.fields.get("entry_submit_attempt_id"))
+            tag = _safe_str(row.fields.get("tag"))
+            return not (call and tag and any(later.stage == "order_leg_sent"
+                and later.emitted_at > row.emitted_at
+                and _safe_str(later.fields.get("entry_submit_attempt_id")) == call
+                and _safe_str(later.fields.get("tag")) == tag
+                and _safe_str(later.fields.get("broker_order_no")) for later in rows))
+        ambiguous_dispatch = any(unresolved_dispatch(row) for row in rows)
+        call_exception = any(row.stage == "entry_submit_attempt_finished"
+            and row.fields.get("submit_call_return_outcome") == "raised" for row in rows)
         sizing_projection = _entry_execution_sizing_projection(rows)
         if conflict_reasons:
             final_state = "identity_or_contract_gap"
@@ -2864,12 +2921,18 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
             "not_evaluated_local",
         }:
             final_state = "ai_nonpass_no_exposure"
+        elif ambiguous_dispatch:
+            final_state = "pending_broker_reconciliation"
+        elif terminal_conflict:
+            final_state = "lineage_gap_conflicting_terminals"
         elif submitted_rows:
             final_state = "submit_pipeline_reached"
         elif broker_rejected_rows:
             final_state = "broker_rejected"
         elif final_guard_block_rows:
             final_state = "final_guard_blocked"
+        elif call_exception:
+            final_state = "pending_broker_reconciliation"
         elif screen == "pass":
             parts = key.removeprefix("machine:").split("|")
             parent = tuple(parts[index] for index in (2, 3, 4, 5))
@@ -2928,6 +2991,8 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
             # broker response.  This is a submission/identity receipt, not a
             # fill, terminal, or economic outcome.
             "broker_acceptance_observed": bool(broker_acceptance_rows),
+            "ambiguous_dispatch_observed": ambiguous_dispatch,
+            "submit_call_exception_observed": call_exception,
             "final_guard_blocked": bool(final_guard_block_rows),
             "broker_rejected": bool(broker_rejected_rows),
             "final_state": final_state,
@@ -3014,9 +3079,9 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
     ai_pass_broker_rejected = sum(
         row["final_state"] == "broker_rejected" for row in ai_pass_rows
     )
-    ai_pass_pending = sum(row["final_state"] == "pending" for row in ai_pass_rows)
+    ai_pass_pending = sum(row["final_state"] in {"pending", "pending_broker_reconciliation"} for row in ai_pass_rows)
     ai_pass_lineage_gap = sum(
-        row["final_state"] == "lineage_gap_superseded_without_terminal"
+        row["final_state"] in {"lineage_gap_superseded_without_terminal", "lineage_gap_conflicting_terminals"}
         for row in ai_pass_rows
     )
     sizing_chain_counts = Counter(row["sizing_chain_state"] for row in ai_pass_rows)

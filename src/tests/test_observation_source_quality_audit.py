@@ -452,7 +452,11 @@ def test_machine_terminal_tuning_gate_excludes_exact_unresolved_lineage(tmp_path
     assert gate["excluded_evaluation_keys"] == [key]
     assert gate["lineage_gap_excluded_count"] == 1
     assert gate["terminal_admitted_count"] == 2
-    assert gate["economic_tuning_input_allowed"] is True
+    assert gate["economic_tuning_input_allowed"] is False
+    assert gate["economic_comparison_eligible"] is False
+    assert gate["cost_adjusted_ev"] is None
+    assert gate["operational_terminal_input_allowed"] is False
+    assert gate["decision_counterfactual_tuning_input_allowed"] is False
     assert gate["missing_economics_imputed"] is False
 
 
@@ -695,12 +699,19 @@ def test_machine_ai_natural_source_audit_isolates_compact_prompt_measurement(
     ],
 )
 def test_avg_down_new_source_contracts_never_allow_runtime_authority(stage):
-    from src.tests.test_scalping_avg_down_recovery_calibration import _config_fields
-
+    # Preserve archive-contract coverage without importing a retired tuner.
+    config_fields = {
+        "runtime_config_schema": "avg_down_runtime_config_v1",
+        "configured_min_buy_pressure": 85, "effective_min_buy_pressure": 85,
+        "runtime_value_source": "runtime_rules_loaded_value", "runtime_value_raw": "not_set",
+        "runtime_pid_value_verified": True, "avg_down_policy_version": "policy-v2",
+        "sizing_policy_version": "sizing-v1", "cost_policy_version": "trade_profit_net_realized_pnl:rate=0.00230000",
+        "decision_authority": "source_only_runtime_config_observation", "runtime_effect": False,
+        "allowed_runtime_apply": False, "actual_order_submitted": False, "broker_order_forbidden": True}
     contract = audit.STAGE_CONTRACTS[stage]
     fields = {name: "present" for name in contract.required_fields}
     fields.update(
-        _config_fields(),
+        config_fields,
         decision_authority=contract.decision_authority,
         primary_decision_metric="source_quality_adjusted_ev_pct",
         sizing_replay=json.dumps(
@@ -10534,3 +10545,52 @@ def test_raw_contract_projection_optional_reader_failure_falls_back(
     else:
         assert final["source"]["contract_projection_reused"] is False
         assert final["summary"]["event_count"] == 1
+
+
+def test_final_publication_rejects_preflight_and_refreshes_changed_consumer(tmp_path, monkeypatch):
+    actual_census = audit._machine_ai_natural_source_consumption
+    raw, path, _, _ = _projection_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(audit, "_machine_ai_natural_source_consumption", lambda day: actual_census(day, data_root=tmp_path))
+    audit.write_report("2026-09-17", audit_phase="preflight")
+    assert audit.check_audit_reusable("2026-09-17")["reusable"] is False
+    final = audit.write_report("2026-09-17", audit_phase="final")
+    assert final["source"]["logical_raw_read_bytes_this_run"] == 0
+    assert audit.check_audit_reusable("2026-09-17")["reusable"] is True
+    archive = tmp_path / "ai_decision_requests" / "ai_decision_requests_2026-09-17.jsonl"
+    archive.parent.mkdir()
+    archive.write_text('{}\n')
+    assert audit.check_audit_reusable("2026-09-17")["reusable"] is False
+    refreshed = audit.write_report("2026-09-17", audit_phase="final")
+    assert refreshed["source"]["logical_raw_read_bytes_this_run"] == 0
+    assert audit.check_audit_reusable("2026-09-17")["reusable"] is True
+    path.with_suffix(".md").write_text("mixed publication")
+    assert audit.check_audit_reusable("2026-09-17")["reusable"] is False
+
+
+def test_raw_semantics_rejects_observed_contract_change_and_ignores_final_only(tmp_path):
+    original = Path(audit.__file__).read_text()
+    producer = tmp_path / "producer.py"
+    producer.write_text(original)
+    before = audit._raw_semantic_digest(producer)
+    producer.write_text(original.replace('"machine_ai_natural_source_consumption_v1"', '"machine_ai_natural_source_consumption_v2"'))
+    assert audit._raw_semantic_digest(producer) == before
+    producer.write_text(original.replace('"source_quality_raw_invalid_json"', '"raw_invalid_changed"'))
+    # Final status assembly is independent of raw validation.
+    assert audit._raw_semantic_digest(producer) == before
+    producer.write_text(original.replace('"source_quality_blocker_or_provenance_backfill"', '"changed_routing"'))
+    assert audit._raw_semantic_digest(producer) != before
+
+
+def test_native_large_funnel_reads_only_selected_section_and_keeps_full_hash(tmp_path):
+    import hashlib
+    payload = {"target_date": "2026-09-17", "unrelated_section": "x" * (1024 * 1024),
+        "entry_submit_drought_contract": {"machine_primary_entry_funnel": {
+            "ai_pass_terminal_conservation": {"ai_pass": 0}, "evaluation_ledger": []}}}
+    path = tmp_path / "funnel.json"
+    raw = json.dumps(payload, indent=2).encode()
+    path.write_bytes(raw)
+    selected, digest = audit._read_machine_funnel(path)
+    assert "unrelated_section" not in selected
+    assert selected["entry_submit_drought_contract"] == payload["entry_submit_drought_contract"]
+    assert selected["target_date"] == "2026-09-17"
+    assert digest == hashlib.sha256(raw).hexdigest()

@@ -4348,3 +4348,45 @@ def test_invalid_native_summary_keeps_authoritative_raw_fallback(monkeypatch, tm
     assert meta["summary_raw_suppression_enabled"] is False
     assert meta["fallback_to_raw_cache"] is True
     assert meta["summary_blocker"] == "raw_summary_checkpoint_digest_invalid"
+
+
+@pytest.mark.parametrize("stages,expected", [
+    (["order_leg_no_response"], "pending_broker_reconciliation"),
+    (["latency_block", "order_bundle_submitted"], "lineage_gap_conflicting_terminals"),
+    (["order_bundle_submitted", "order_bundle_submitted"], "submit_pipeline_reached"),
+])
+def test_machine_terminal_ambiguity_conflict_and_duplicate_conserve(stages, expected):
+    from datetime import datetime, timedelta
+    common = {"entry_primary_decision_owner": "mechanistic_entry_adjudicator",
+        "evaluation_attempt_id": "eval-original", "scanner_promotion_id": "promotion-original",
+        "effective_venue": "KRX_NXT_INTEGRATED", "market_session_bucket": "KRX_NXT_AFTERMARKET",
+        "policy_bundle_hash": "a" * 64, "entry_mechanistic_action": "ENTER_NOW", "entry_ai_screen_status": "pass"}
+    start = datetime(2026, 9, 17, 17)
+    rows = [sentinel.PipelineEvent(start + timedelta(seconds=index), "ENTRY_PIPELINE", stage,
+        "fixture", "031330", "9", dict(common)) for index, stage in enumerate(["ai_confirmed", *stages])]
+    result = sentinel._machine_primary_entry_funnel(rows)
+    assert result["evaluation_ledger"][0]["final_state"] == expected
+    assert result["ai_pass_terminal_conservation"]["ai_pass"] == 1
+    assert result["ai_pass_terminal_conservation"]["difference"] == 0
+
+
+def test_late_leg_ack_matches_original_call_and_tag():
+    from datetime import datetime, timedelta
+    common = {"entry_primary_decision_owner": "mechanistic_entry_adjudicator", "evaluation_attempt_id": "original",
+        "scanner_promotion_id": "original-promotion", "effective_venue": "KRX_NXT_INTEGRATED",
+        "market_session_bucket": "KRX_NXT_AFTERMARKET", "policy_bundle_hash": "a" * 64,
+        "entry_mechanistic_action": "ENTER_NOW", "entry_ai_screen_status": "pass",
+        "entry_submit_attempt_id": "call-original", "tag": "ENTRY-L1"}
+    start = datetime(2026, 9, 17, 17)
+    rows = [sentinel.PipelineEvent(start+timedelta(seconds=index), "ENTRY_PIPELINE", stage, "fixture", "031330", "9",
+        {**common, **extra}) for index, (stage, extra) in enumerate([
+            ("ai_confirmed", {}), ("order_leg_no_response", {}),
+            ("order_leg_sent", {"broker_order_no": "ack-original"}),
+            ("order_bundle_submitted", {"broker_order_no": "ack-original"})])]
+    result = sentinel._machine_primary_entry_funnel(rows)
+    assert result["evaluation_ledger"][0]["final_state"] == "submit_pipeline_reached"
+    assert result["evaluation_ledger"][0]["evaluation_attempt_id"] == "original"
+    assert result["ai_pass_terminal_conservation"]["difference"] == 0
+    rows[2].fields["entry_submit_attempt_id"] = "different-call"
+    result = sentinel._machine_primary_entry_funnel(rows)
+    assert result["evaluation_ledger"][0]["final_state"] == "pending_broker_reconciliation"

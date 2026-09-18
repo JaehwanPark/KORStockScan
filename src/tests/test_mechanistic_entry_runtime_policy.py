@@ -898,3 +898,11 @@ def test_invalid_source_does_not_destroy_previous_policy(tmp_path):
     with pytest.raises(ValueError, match="source_invalid"):
         policy.publish(path, data_root=tmp_path)
     assert policy.load(data_root=tmp_path, target_date="2026-09-14") == previous
+
+
+def test_terminal_count_is_not_decision_cf_authority_and_date_is_required():
+    from src.engine.scalping.mechanistic_entry_runtime_policy import compact_terminal_gate_allowed
+    assert compact_terminal_gate_allowed({"machine_terminal_tuning_gate": {"economic_tuning_input_allowed": True}}) is False
+    assert compact_terminal_gate_allowed({"target_date": "2026-09-17", "machine_terminal_tuning_gate": {"economic_tuning_input_allowed": True}}) is False
+    assert compact_terminal_gate_allowed({"target_date": "2026-09-17", "machine_terminal_tuning_gate": {
+        "decision_counterfactual_tuning_input_allowed": True, "lineage_gap_excluded_count": 4}}) is True

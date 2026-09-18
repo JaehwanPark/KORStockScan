@@ -272,11 +272,16 @@ def compact_terminal_gate_allowed(source_receipt: dict) -> bool:
     gate = source_receipt.get("machine_terminal_tuning_gate") or {}
     if not isinstance(gate, dict):
         return False
+    source_date = str(source_receipt.get("target_date") or "")
+    try:
+        date.fromisoformat(source_date)
+    except ValueError:
+        return False
+    if source_date < "2026-06-05":
+        return False
     return bool(
-        str(source_receipt.get("target_date") or "") < "2026-09-15"
+        source_date < "2026-09-15"
         or gate.get("decision_counterfactual_tuning_input_allowed") is True
-        or ("decision_counterfactual_tuning_input_allowed" not in gate
-            and gate.get("economic_tuning_input_allowed") is True)
     )
 
 

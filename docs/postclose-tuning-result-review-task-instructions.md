@@ -199,6 +199,12 @@ Family strict 명령 `src.engine.verify_threshold_cycle_postclose_chain --date S
 
 시간 경과로 성과가 날 가능성과 경제적 수익성을 분리한다. 유입률이 확인되면 남은 floor/관측 유입률로 **증거 확보 예상 구간**을 조건부 제시하고 owner 시간창·최대 유입 수·source 유효기간을 고려한다. 0유입·미설치·구조결손·계약불명은 ETA null+원인이다. 표본이 늘어도 비용 후 paired delta가 음수이거나 tail guard를 통과하지 못하면 `valid_carry_or_reject`이며 수익 개선 ETA를 약속하지 않는다.
 
+### Source-quality final 감사 재사용과 역할별 소비
+
+`observation_source_quality_audit` final skip은 pure `--audit-phase final --check-reusable`로 phase·구현·원 generation·machine/AI/provider/funnel content binding을 확인한다. Preflight 또는 metadata만으로 final을 대신하지 않는다. 원 raw contract aggregate와 final consumer census는 별도 계산이다. 검증된 이전 projection을 이관할 때만 `--verified-projection-source`의 원 receipt/code/관측 stage 의미를 검증하며, 실패는 blocker이고 수동 전체 raw bootstrap 근거가 아니다.
+
+Source input allowed, decision CF input allowed, operational terminal reconciled, cost-adjusted economic comparison eligible을 분리한다. Submitted/guard/reject는 운영 연결이며 COMPLETED 비용 손익이 아니다. Exact gap/pending만 운영 평가에서 제외하고 유효 BLOCK/RECHECK/VETO partition은 보존한다. 역사적 terminal 부재는 원 분모·null로 유지한다. Unknown provenance는 기존 native workorder ID에 field producer/disposition/closure test를 인계한다. 이 감사는 정책 생성기가 아니며 후행 검증에서 후보가 없으면 dated incumbent carry를 유지한다. [Q0–Q5 구현 계약](proposals/observation-source-quality-final-audit-terminal-lineage-and-economic-consumer-defect-remediation-plan-2026-09-18.md)을 따른다.
+
 ## 6. 실패 대응
 
 읽기 전용 점검에서는 최초 영향 producer, affected row/window/scope, downstream 소비·승격 영향, blocker owner/artifact, 필요한 조치와 closure test를 기록한다. identifiable bad row/window는 제외하는 계약이 기본이며 전체 block은 invalid/missing preflight·격리 실패·특정 불가능한 high-volume contract loss일 때만 인정한다.

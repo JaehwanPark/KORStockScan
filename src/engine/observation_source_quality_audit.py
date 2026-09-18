@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import fcntl
 import gzip
 import hashlib
@@ -75,6 +76,42 @@ def _raw_generation(path: Path) -> dict[str, Any]:
         return {}
 
 
+def _read_machine_funnel(path: Path) -> tuple[dict, str]:
+    """Read the native pretty-JSON section without materializing the full report."""
+    if path.stat().st_size <= 1024 * 1024:
+        raw = path.read_bytes()
+        return json.loads(raw), hashlib.sha256(raw).hexdigest()
+    digest = hashlib.sha256()
+    target_date = None
+    parent = False
+    collecting = False
+    sections = []
+    section = []
+    with path.open("rb") as handle:
+        for line in handle:
+            digest.update(line)
+            if line.startswith(b'  "target_date": '):
+                target_date = json.loads(line.split(b":", 1)[1].strip().rstrip(b","))
+            if line.startswith(b'  "entry_submit_drought_contract": {'):
+                parent = True
+            if parent and line.startswith(b'    "machine_primary_entry_funnel": {'):
+                if collecting or sections:
+                    raise ValueError("duplicate_machine_funnel_section")
+                collecting = True
+                section = [b"{" + line.strip()]
+                continue
+            if collecting:
+                section.append(line)
+                if line.startswith(b"    }"):
+                    sections.append(json.loads(b"".join(section).rstrip().rstrip(b",") + b"}"))
+                    collecting = False
+            if line.startswith(b"  }"):
+                parent = False
+    if collecting or len(sections) != 1:
+        raise ValueError("native_machine_funnel_section_missing_or_invalid")
+    return {"target_date": target_date, "entry_submit_drought_contract": sections[0]}, digest.hexdigest()
+
+
 def _machine_terminal_tuning_gate(
     target_date: str, *, data_root: Path = DATA_DIR
 ) -> dict[str, Any]:
@@ -89,6 +126,7 @@ def _machine_terminal_tuning_gate(
         "schema": MACHINE_TERMINAL_TUNING_GATE_SCHEMA,
         "source_path": str(path),
         "source_sha256": None,
+        "source_generation": {},
         "ai_pass_terminal_conservation": {},
         "excluded_evaluation_keys": [],
         "lineage_gap_excluded_count": 0,
@@ -96,6 +134,9 @@ def _machine_terminal_tuning_gate(
         "pending_maturity_count": 0,
         "denominator_preserved": False,
         "exclusion_applied": False,
+        "operational_terminal_reconciled": False,
+        "economic_comparison_eligible": False,
+        "cost_adjusted_ev": None,
         "economic_tuning_input_allowed": False,
         "decision_counterfactual_tuning_input_allowed": False,
         "reason": "buy_funnel_sentinel_missing_or_invalid",
@@ -104,8 +145,10 @@ def _machine_terminal_tuning_gate(
         "allowed_runtime_apply": False,
     }
     try:
-        raw = path.read_bytes()
-        payload = json.loads(raw)
+        generation_before = _raw_generation(path)
+        payload, source_sha256 = _read_machine_funnel(path)
+        if generation_before != _raw_generation(path):
+            return base
     except (OSError, ValueError, json.JSONDecodeError):
         return base
     funnel = (
@@ -126,7 +169,7 @@ def _machine_terminal_tuning_gate(
             str(row.get("evaluation_key") or "")
             for row in ledger
             if isinstance(row, dict)
-            and row.get("final_state") == "lineage_gap_superseded_without_terminal"
+            and row.get("final_state") in {"lineage_gap_superseded_without_terminal", "lineage_gap_conflicting_terminals"}
             and str(row.get("evaluation_key") or "")
         }
     )
@@ -164,7 +207,7 @@ def _machine_terminal_tuning_gate(
         {
             str(row.get("evaluation_key") or "")
             for row in ledger
-            if isinstance(row, dict) and row.get("final_state") == "pending"
+            if isinstance(row, dict) and row.get("final_state") in {"pending", "pending_broker_reconciliation"}
         }
     )
     pending_keys_complete = bool(
@@ -184,9 +227,20 @@ def _machine_terminal_tuning_gate(
     terminal_admitted = (
         values["submitted"] + values["final_guard_blocked"] + values["broker_rejected"]
     )
-    allowed = bool(denominator_preserved and exact_keys_complete and terminal_admitted)
+    input_valid = bool(
+        payload.get("target_date") == target_date
+        and all(name in conservation for name in values)
+        and denominator_preserved and exact_keys_complete and pending_keys_complete
+    )
+    operational_keys = {str(row.get("evaluation_key") or "") for row in ledger
+        if isinstance(row, dict) and row.get("final_state") in
+        {"submit_pipeline_reached", "final_guard_blocked", "broker_rejected"}}
+    operational_keys_complete = bool(len(operational_keys) == terminal_admitted
+        and all(exact_key_pattern.fullmatch(key) for key in operational_keys))
+    allowed = bool(input_valid and operational_keys_complete and terminal_admitted)
     base.update(
-        source_sha256=hashlib.sha256(raw).hexdigest(),
+        source_sha256=source_sha256,
+        source_generation=generation_before,
         ai_pass_terminal_conservation=values,
         excluded_evaluation_keys=gap_keys,
         pending_evaluation_keys=pending_keys,
@@ -195,19 +249,16 @@ def _machine_terminal_tuning_gate(
         pending_maturity_count=values["pending"],
         denominator_preserved=denominator_preserved,
         exclusion_applied=exact_keys_complete,
-        economic_tuning_input_allowed=allowed,
+        operational_terminal_reconciled=bool(input_valid and operational_keys_complete and not values["lineage_gap"] and not values["pending"]),
+        operational_terminal_input_allowed=allowed,
+        # This audit has no completed trade, exit or effective-cost evidence.
+        economic_tuning_input_allowed=False,
         # PASS downstream closure and action-neutral decision research have
         # different denominators. All-VETO (or all-BLOCK) is a valid empty
         # operational denominator, not a reason to suppress missed-opportunity
         # research. The consumer still enforces source/partition/path/cost gates
         # and excludes exact unresolved PASS lineage; no terminal is invented.
-        decision_counterfactual_tuning_input_allowed=bool(
-            payload.get("target_date") == target_date
-            and all(name in conservation for name in values)
-            and denominator_preserved
-            and exact_keys_complete
-            and pending_keys_complete
-        ),
+        decision_counterfactual_tuning_input_allowed=input_valid,
         reason=(
             "exact_lineage_gap_excluded_terminal_rows_admitted"
             if allowed
@@ -276,7 +327,29 @@ def _machine_ai_natural_source_consumption(
         path = existing_or_gzip_path(data_root / name / f"{name}_{target_date}.jsonl")
         receipt: dict[str, Any] = {"path": str(path), "exists": path.is_file()}
         before = _raw_generation(path)
-        parsed = list(_audited_jsonl(path, receipt)) if path.is_file() else []
+        parsed = []
+        for row in _audited_jsonl(path, receipt) if path.is_file() else ():
+            if name == "ai_decision_payloads":
+                source = row.get("source")
+                source = source if isinstance(source, dict) else {}
+                exact = source.get("exact_payload")
+                exact = exact if isinstance(exact, dict) else {}
+                row = {key: row.get(key) for key in ("schema", "bundle_sha256", "label_context")} | {
+                    "source": {"assessment": source.get("assessment"),
+                               "exact_payload": {"mechanistic_micro_window": exact.get("mechanistic_micro_window")}}
+                }
+            elif name == "ai_decision_trace":
+                row = {key: row.get(key) for key in (
+                    "schema", "decision_stage", "snapshot_id", "machine_bundle_sha256",
+                    "entry_mechanistic_action", "result_source", "machine_evaluation_expected",
+                    "machine_evaluation_status", "machine_source_invalid_receipt",
+                    "machine_required_feature_receipt", "provider_called", "entry_required_feature_blockers",
+                    "machine_capture_status", "machine_observation_sha256", "request_id",
+                    "decision_trace_id", "prompt_sha256", "prompt_version", "effective_venue",
+                    "session_bucket", "auxiliary_system_prompt_sha256", "entry_ai_prompt_variant",
+                    "market_data_health",
+                )}
+            parsed.append(row)
         after = _raw_generation(path)
         receipt["generation"] = after
         receipt["generation_stable"] = bool(before and before == after)
@@ -7880,6 +7953,58 @@ def _streaming_contract_audit(
     return event_count, stage_counts, contract_result, exclusions
 
 
+def _raw_semantic_digest(source_path: Path, observed_stages: set[str] | None = None,
+                         entry_points: tuple[str, ...] = ("_streaming_contract_audit", "STAGE_CONTRACTS", "SOURCE_LIKE_TOKENS")) -> str:
+    """Bind reachable raw validators, excluding the independent final census."""
+    tree = ast.parse(source_path.read_text(encoding="utf-8"))
+    if observed_stages is not None:
+        class ObservedStageScope(ast.NodeTransformer):
+            def visit_If(self, node):
+                test = node.test
+                if isinstance(test, ast.BoolOp) and isinstance(test.op, ast.And):
+                    test = next((part for part in test.values if isinstance(part, ast.Compare)
+                        and isinstance(part.left, ast.Name) and part.left.id == "stage"), test)
+                if (isinstance(test, ast.Compare) and isinstance(test.left, ast.Name)
+                        and test.left.id == "stage" and len(test.ops) == 1
+                        and isinstance(test.ops[0], ast.Eq) and isinstance(test.comparators[0], ast.Constant)
+                        and isinstance(test.comparators[0].value, str)
+                        and test.comparators[0].value not in observed_stages and not node.orelse):
+                    return None
+                return self.generic_visit(node)
+
+            def visit_AnnAssign(self, node):
+                if isinstance(node.target, ast.Name) and node.target.id == "STAGE_CONTRACTS":
+                    pairs = [(key, value) for key, value in zip(node.value.keys, node.value.values)
+                             if not isinstance(key, ast.Constant) or key.value in observed_stages]
+                    node.value.keys = [pair[0] for pair in pairs]
+                    node.value.values = [pair[1] for pair in pairs]
+                return self.generic_visit(node)
+        tree = ObservedStageScope().visit(tree)
+    nodes = {}
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+            names = [node.name]
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            names = [part.id for target in (node.targets if isinstance(node, ast.Assign) else [node.target])
+                     for part in ast.walk(target) if isinstance(part, ast.Name)]
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            names = [alias.asname or alias.name.split(".")[0] for alias in node.names]
+        else:
+            continue
+        for name in names:
+            nodes[name] = node
+    pending = list(entry_points)
+    selected = {}
+    while pending:
+        name = pending.pop()
+        if name in selected or name not in nodes:
+            continue
+        node = nodes[name]
+        selected[name] = ast.dump(node, include_attributes=False)
+        pending.extend(part.id for part in ast.walk(node) if isinstance(part, ast.Name))
+    return _canonical_digest(selected)
+
+
 def _raw_contract_projection_key(target_date, raw_path, generation):
     """Bind only the raw aggregate; external machine/AI receipts stay fresh."""
     try:
@@ -7888,7 +8013,6 @@ def _raw_contract_projection_key(target_date, raw_path, generation):
                 or not stat.S_ISDIR(parent.st_mode)):
             return None
         paths = {
-            Path(__file__),
             *(
                 Path(function.__globals__["__file__"])
                 for function in (
@@ -7905,8 +8029,9 @@ def _raw_contract_projection_key(target_date, raw_path, generation):
                 "raw_path": str(raw_path.absolute()),
                 "generation": generation,
                 "parent_identity": [parent.st_dev, parent.st_ino],
+                "raw_validator_semantics": _raw_semantic_digest(Path(__file__)),
                 "code": {
-                    str(path): hashlib.sha256(path.read_bytes()).hexdigest()
+                    path.name: hashlib.sha256(path.read_bytes()).hexdigest()
                     for path in sorted(paths)
                 },
                 "contracts": {
@@ -8004,15 +8129,144 @@ def _read_raw_contract_projection(target_date, key):
         return None
 
 
+def _verified_legacy_projection(target_date: str, raw_path: Path, generation: dict,
+                                producer_source: Path):
+    """Migrate only byte-verified original receipts with identical raw semantics."""
+    try:
+        path, _ = report_paths(target_date)
+        raw_report = path.read_bytes()
+        if len(raw_report) > 16 * 1024 * 1024:
+            return None
+        report = json.loads(raw_report)
+        receipt = json.loads(Path(str(path) + ".reuse-contract.json").read_bytes())
+        original_hash = receipt["aftermarket_contract_sha256s"]["src/engine/observation_source_quality_audit.py"]
+        if (receipt["target_date"] != target_date
+                or receipt["artifact_sha256"] != hashlib.sha256(raw_report).hexdigest()
+                or original_hash != hashlib.sha256(producer_source.read_bytes()).hexdigest()
+                or _raw_semantic_digest(producer_source, set(report["source"]["audited_stage_counts"]))
+                != _raw_semantic_digest(Path(__file__), set(report["source"]["audited_stage_counts"]))
+                or report["source"]["generation"] != generation):
+            return None
+        root = producer_source.parents[2]
+        code = {str(producer_source): original_hash}
+        for function in (normalize_flow_state_label, normalize_gatekeeper_action_key, runtime_config_valid):
+            current = Path(function.__globals__["__file__"])
+            original = root / current.relative_to(PROJECT_ROOT)
+            if _raw_semantic_digest(original, entry_points=(function.__name__,)) != _raw_semantic_digest(current, entry_points=(function.__name__,)):
+                return None
+            code[str(original)] = hashlib.sha256(original.read_bytes()).hexdigest()
+        original_tree = ast.parse(producer_source.read_text())
+        contract_node = next(node.value for node in original_tree.body
+            if isinstance(node, ast.AnnAssign) and getattr(node.target, "id", "") == "STAGE_CONTRACTS")
+        original_contracts = eval(compile(ast.Expression(contract_node), str(producer_source), "eval"), globals())
+        parent = raw_path.parent.lstat()
+        key = _canonical_digest({
+            "schema": RAW_CONTRACT_PROJECTION_SCHEMA, "target_date": target_date,
+            "raw_path": str(raw_path.absolute()), "generation": generation,
+            "parent_identity": [parent.st_dev, parent.st_ino], "code": code,
+            "contracts": {key: asdict(value) for key, value in original_contracts.items()},
+            "source_like_tokens": SOURCE_LIKE_TOKENS})
+        return _read_raw_contract_projection(target_date, key)
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def _final_implementation_digest() -> str:
+    return _canonical_digest({name: hashlib.sha256((PROJECT_ROOT / name).read_bytes()).hexdigest()
+        for name in ("src/engine/observation_source_quality_audit.py",
+                     "src/engine/buy_funnel_sentinel.py",
+                     "src/engine/sentinel_event_cache.py",
+                     "src/engine/automation/source_quality_hard_gate.py",
+                     "src/utils/jsonl_io.py",
+                     "src/engine/monitoring/entry_attempt_identity.py",
+                     "src/engine/sniper_state_handlers.py",
+                     "src/engine/ai_prompt_contracts.py",
+                     "src/engine/scalping/mechanistic_entry_runtime_policy.py")})
+
+
+def _logical_file_digest(path: Path) -> str:
+    digest = hashlib.sha256()
+    opener = gzip.open if path.suffix == ".gz" else open
+    with opener(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _final_dependencies(report: dict) -> list[dict]:
+    census = report["machine_ai_natural_source_consumption"]
+    dependencies = [{key: receipt.get(key) for key in
+        ("path", "exists", "generation", "logical_content_sha256")}
+        for receipt in census.get("sources", {}).values()]
+    gate = census.get("machine_terminal_tuning_gate") or {}
+    if gate.get("source_path"):
+        dependencies.append({"path": gate["source_path"], "exists": bool(gate.get("source_sha256")),
+            "generation": gate.get("source_generation"), "logical_content_sha256": gate.get("source_sha256")})
+    return dependencies
+
+
+def check_audit_reusable(target_date: str, *, audit_phase: str = "final", artifact_path: Path | None = None) -> dict:
+    """Pure phase/implementation/content check; never creates locks or reports."""
+    path = artifact_path or report_paths(target_date)[0]
+    try:
+        if path.stat().st_size > 16 * 1024 * 1024:
+            raise ValueError("audit_report_oversize")
+        publication_before = _raw_generation(path)
+        markdown_before = _raw_generation(path.with_suffix(".md"))
+        raw = path.read_bytes()
+        report = json.loads(raw)
+        binding_path = Path(str(path) + ".final-contract.json")
+        binding_before = _raw_generation(binding_path)
+        receipt = json.loads(binding_path.read_bytes())
+        if (report["target_date"] != target_date or report["audit_phase"] != audit_phase
+                or receipt["schema"] != "observation_source_quality_final_binding_v1"
+                or receipt["artifact_sha256"] != hashlib.sha256(raw).hexdigest()
+                or receipt["markdown_sha256"] != hashlib.sha256(path.with_suffix(".md").read_bytes()).hexdigest()
+                or receipt["implementation_sha256"] != report["consumer_implementation_sha256"]
+                or receipt["implementation_sha256"] != _final_implementation_digest()
+                or receipt["dependencies"] != _final_dependencies(report)
+                or report["summary"]["tuning_input_allowed"] is not True):
+            raise ValueError("audit_phase_implementation_or_publication_invalid")
+        source = report["source"]
+        if (source["generation"] != _raw_generation(Path(source["pipeline_events"]))
+                or source["contract_projection"]["key"] != _raw_contract_projection_key(
+                    target_date, Path(source["pipeline_events"]), source["generation"])
+                or _read_raw_contract_projection(target_date, source["contract_projection"]["key"]) is None):
+            raise ValueError("raw_contract_projection_invalid")
+        for dependency in receipt["dependencies"]:
+            dependency_path = Path(dependency["path"])
+            before = _raw_generation(dependency_path)
+            if dependency["exists"] is False and not before:
+                continue
+            if (before != dependency["generation"]
+                    or _logical_file_digest(dependency_path) != dependency["logical_content_sha256"]
+                    or before != _raw_generation(dependency_path)):
+                raise ValueError("final_dependency_content_changed:" + dependency_path.name)
+        if (publication_before != _raw_generation(path) or binding_before != _raw_generation(binding_path)
+                or markdown_before != _raw_generation(path.with_suffix(".md"))
+                or receipt["implementation_sha256"] != _final_implementation_digest()
+                or any(dependency["generation"] != _raw_generation(Path(dependency["path"]))
+                    for dependency in receipt["dependencies"])):
+            raise ValueError("final_publication_or_dependency_changed_during_check")
+        return {"reusable": True, "reason": "verified_final_dependency_binding", "raw_read_bytes": 0}
+    except (OSError, ValueError, KeyError, TypeError):
+        return {"reusable": False, "reason": "audit_phase_implementation_dependency_or_receipt_invalid", "raw_read_bytes": 0}
+
+
 def build_observation_source_quality_audit(
-    target_date: str, *, audit_phase: str = "manual"
+    target_date: str, *, audit_phase: str = "manual", verified_projection_source: Path | None = None
 ) -> dict[str, Any]:
+    consumer_implementation_before = _final_implementation_digest()
     raw_path = existing_or_gzip_path(_pipeline_events_path(target_date))
     generation_before = _raw_generation(raw_path)
     projection_key = _raw_contract_projection_key(
         target_date, raw_path, generation_before
     )
     projection = _read_raw_contract_projection(target_date, projection_key)
+    if projection is None and verified_projection_source is not None:
+        projection = _verified_legacy_projection(target_date, raw_path, generation_before, verified_projection_source)
+        if projection is None:
+            raise ValueError("verified_raw_projection_migration_failed_no_automatic_bootstrap")
     source_receipt: dict[str, Any] = {}
     audited_at = datetime.now().astimezone().isoformat(timespec="seconds")
     if projection is None:
@@ -8068,7 +8322,12 @@ def build_observation_source_quality_audit(
         hard_gate["tuning_input_allowed"] = False
         hard_gate["blocked_reason"] = source_block
     machine_ai_consumption = _machine_ai_natural_source_consumption(target_date)
+    if consumer_implementation_before != _final_implementation_digest():
+        status = "fail"
+        hard_gate["tuning_input_allowed"] = False
+        hard_gate["blocked_reason"] = "source_quality_consumer_implementation_changed_during_audit"
     return {
+        "consumer_implementation_sha256": consumer_implementation_before,
         "schema_version": AUDIT_SCHEMA_VERSION,
         "report_type": REPORT_DIRNAME,
         "target_date": target_date,
@@ -8168,6 +8427,14 @@ def build_observation_source_quality_audit(
         "hard_blocking_contract_gaps": hard_gate["hard_blocking_contract_gaps"],
         "hard_blocking_row_exclusions": row_exclusions,
         "machine_ai_natural_source_consumption": machine_ai_consumption,
+        "evaluation_roles": {
+            "source_input_allowed": hard_gate["tuning_input_allowed"],
+            "decision_counterfactual_input_allowed": bool(machine_ai_consumption.get("tuning_input_allowed")
+                and machine_ai_consumption.get("machine_terminal_tuning_gate", {}).get("decision_counterfactual_tuning_input_allowed")),
+            "decision_cf_measurable": None,
+            "operational_terminal_reconciled": machine_ai_consumption.get("machine_terminal_tuning_gate", {}).get("operational_terminal_reconciled", False),
+            "economic_comparison_eligible": False, "cost_adjusted_ev": None,
+            "economic_owner": "existing_paired_economic_evaluators_not_source_audit"},
         **contract_result,
     }
 
@@ -8942,10 +9209,10 @@ def _attach_raw_row_exclusion(
     summary["raw_row_exclusion_manifest"] = manifest.get("manifest_path")
 
 
-def write_report(target_date: str, *, audit_phase: str = "manual") -> dict[str, Any]:
+def write_report(target_date: str, *, audit_phase: str = "manual", verified_projection_source: Path | None = None) -> dict[str, Any]:
     previous_applied_exclusion = _existing_applied_raw_row_exclusion(target_date)
     report = build_observation_source_quality_audit(
-        target_date, audit_phase=audit_phase
+        target_date, audit_phase=audit_phase, verified_projection_source=verified_projection_source
     )
     raw_path = existing_or_gzip_path(_pipeline_events_path(target_date))
     writer_active = bool(
@@ -9006,6 +9273,13 @@ def write_report(target_date: str, *, audit_phase: str = "manual") -> dict[str, 
     json_path.parent.mkdir(parents=True, exist_ok=True)
     write_json_object_generation_safe(json_path, report)
     _write_markdown(report, md_path)
+    dependencies = _final_dependencies(report)
+    binding = {"schema": "observation_source_quality_final_binding_v1",
+        "target_date": target_date, "audit_phase": audit_phase,
+        "artifact_sha256": hashlib.sha256(json_path.read_bytes()).hexdigest(),
+        "markdown_sha256": hashlib.sha256(md_path.read_bytes()).hexdigest(),
+        "implementation_sha256": report["consumer_implementation_sha256"], "dependencies": dependencies}
+    write_json_object_generation_safe(Path(str(json_path) + ".final-contract.json"), binding)
     return report
 
 
@@ -9036,12 +9310,18 @@ def main() -> int:
     parser.add_argument("--start-date", default=DEFAULT_BACKFILL_START_DATE)
     parser.add_argument("--backfill", action="store_true")
     parser.add_argument("--write", action="store_true")
+    parser.add_argument("--check-reusable", action="store_true")
+    parser.add_argument("--verified-projection-source", type=Path)
     parser.add_argument(
         "--print-summary",
         action="store_true",
         help="Print only report identity and summary instead of the full audit payload.",
     )
     args = parser.parse_args()
+    if args.check_reusable:
+        result = check_audit_reusable(args.target_date, audit_phase=args.audit_phase)
+        print(json.dumps(result))
+        return 0 if result["reusable"] else 1
     lock_path = Path(
         os.getenv(
             "KORSTOCKSCAN_INTRADAY_HEAVY_ANALYSIS_LOCK_FILE",
@@ -9075,10 +9355,10 @@ def main() -> int:
             )
         else:
             report = (
-                write_report(args.target_date, audit_phase=args.audit_phase)
+                write_report(args.target_date, audit_phase=args.audit_phase, verified_projection_source=args.verified_projection_source)
                 if args.write
                 else build_observation_source_quality_audit(
-                    args.target_date, audit_phase=args.audit_phase
+                    args.target_date, audit_phase=args.audit_phase, verified_projection_source=args.verified_projection_source
                 )
             )
         stdout_payload = _stdout_report_payload(

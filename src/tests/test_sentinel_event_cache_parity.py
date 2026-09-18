@@ -270,3 +270,31 @@ def test_verified_day_facts_cold_warm_append_correction_partial_and_corruption(t
         assert checkpoint.read_bytes() == completed
     retry, status = load()
     assert retry == concurrent_rows and status["checkpoint_complete"] is True
+
+
+def test_verified_zero_stage_census_upgrades_cache_without_raw_bootstrap(tmp_path):
+    from src.engine.observation_source_quality_audit import _raw_generation
+    raw = _raw_path(tmp_path)
+    _write_lines(raw, [_event("10:00:00", "ai_confirmed")])
+    kwargs = dict(raw_path=raw, cache_dir=tmp_path / "cache", cache_name="proof",
+        target_date=TARGET_DATE, schema_version=12, parse_payload=lambda payload: payload)
+    original, _ = update_and_load_cached_event_rows(**kwargs)
+    proof = {"from_schema": 12, "raw_generation": _raw_generation(raw),
+             "population_proof": "verified_zero_stage_census", "raw_audit_sha256": "a" * 64}
+    refreshed, meta = update_and_load_cached_event_rows(**{**kwargs, "schema_version": 13}, verified_schema_migration=proof)
+    assert refreshed == original
+    assert meta["rebuilt"] is False
+    assert meta["appended_raw_lines"] == 0
+    assert meta["schema_version"] == 13
+    assert meta["schema_migration_receipt"] == proof
+    raw.write_text(raw.read_text() + '{}\n')
+    import pytest
+    with pytest.raises(ValueError, match="verified_cache_schema_source_changed"):
+        update_and_load_cached_event_rows(**{**kwargs, "schema_version": 13}, verified_schema_migration=proof)
+
+
+def test_lossless_funnel_preserves_broker_ambiguity_stage(tmp_path):
+    payload = _event("10:00:00", "order_leg_owner_registry_reconciliation_required", fields={"tag": "ENTRY-L1"})
+    row = buy._payload_to_cache_row(payload, exclude_summary_stages=True)
+    assert row is not None
+    assert row["stage"] == "order_leg_owner_registry_reconciliation_required"

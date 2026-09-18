@@ -97,7 +97,7 @@ def _promotion_id(stock):
     return "" if value.lower() in {"none", "null", "unknown", "-", "0"} else value
 
 
-def bind_submit_attempt_machine_lineage(stock, code, source):
+def bind_submit_attempt_machine_lineage(stock, code, source, *, replace_existing=False):
     """Bind trusted diagnostic lineage to the current submit invocation only.
 
     The binding is telemetry-only and cannot grant submit authority.  A caller
@@ -113,6 +113,11 @@ def bind_submit_attempt_machine_lineage(stock, code, source):
         or not isinstance(source, dict)
     ):
         return False
+    if replace_existing:
+        # A real in-call AI retry is a new evaluation. Incomplete retry
+        # provenance must never borrow the prior evaluation's terminal.
+        value = {**value, "machine_lineage": {}}
+        _ATTEMPT.set(value)
     lineage = {
         key: source[key]
         for key in _MACHINE_LINEAGE_FIELDS
@@ -134,7 +139,7 @@ def bind_submit_attempt_machine_lineage(stock, code, source):
     if (
         str(lineage["entry_primary_decision_owner"]) != "mechanistic_entry_adjudicator"
         or str(lineage["effective_venue"]).upper()
-        not in {"KRX", "NXT", "PREMARKET_KRX_LIKE"}
+        not in {"KRX", "NXT", "PREMARKET_KRX_LIKE", "KRX_NXT_INTEGRATED"}
         or ":" in str(lineage["market_session_bucket"])
         or str(lineage["entry_mechanistic_action"]).upper()
         not in {"ENTER_NOW", "RECHECK", "BLOCK", "SOURCE_INVALID"}
@@ -144,9 +149,8 @@ def bind_submit_attempt_machine_lineage(stock, code, source):
         )
     ):
         return False
-    if value.get("promotion_id") and str(lineage["scanner_promotion_id"]) != str(
-        value["promotion_id"]
-    ):
+    expected_parent = _promotion_id(stock) if replace_existing else value.get("promotion_id")
+    if expected_parent and str(lineage["scanner_promotion_id"]) != str(expected_parent):
         return False
     updated = {**value, "machine_lineage": lineage}
     if not updated.get("promotion_id"):

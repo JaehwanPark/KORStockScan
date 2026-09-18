@@ -4890,6 +4890,32 @@ def _observation_source_quality_followup_orders(
         )
     if unknown_token_findings:
         producer_fix_implemented = unknown_findings_covered_by_known_fix()
+        field_provenance = []
+        for finding in unknown_token_findings:
+            stage = str(finding.get("stage") or "")
+            for field in finding.get("fields") or []:
+                name = str(field.get("field") or "")
+                # Scanner observations precede execution; integrated route is
+                # not proof of which venue a broker subsequently filled.
+                unavailable = name == "actual_execution_venue" and stage.startswith("scalping_scanner_")
+                fixed = name in KNOWN_FIXED_UNKNOWN_TOKEN_FIELDS
+                field_provenance.append({"stage": stage, "field": name,
+                    "count": field.get("count"), "rate": field.get("rate"),
+                    "producer": ("src/trading/market/quote_consistency.py" if name.startswith("market_data_health")
+                        else "src/engine/scalping/entry_candle_context.py" if name.startswith("entry_candle_")
+                        else "src/scanners/scanner_source_census.py" if stage in {"scalping_scanner_source_fetch_census", "scalping_scanner_candidate_pool_census"}
+                        else "src/scanners/scalping_scanner.py" if name.startswith("scanner_market_gainer_") or name.startswith("lookup_attention_") or stage.startswith("scalping_scanner_")
+                        else "src/engine/scalp_entry_adm_runtime.py" if name.startswith("entry_adm_")
+                        else "src/engine/scalping/ai_market_snapshot.py" if name.startswith("ai_input_preflight_") or name.startswith("ai_market_snapshot_")
+                        else "src/engine/sniper_state_handlers.py" if stage in {"watching_runtime_skip", "ai_confirmed", "ai_confirmed_terminal_no_budget"}
+                        else None),
+                    "disposition": "reviewed_not_available_before_broker_execution" if unavailable
+                        else "implemented_waiting_new_postfix_raw" if fixed
+                        else "source_gap_requires_exact_producer_context",
+                    "closure_test": "exact_stage_field_provenance_or_reviewed_unavailable_in_new_natural_source",
+                    "runtime_apply": False, "eta": None})
+        remaining_fields = sorted({row["field"] for row in field_provenance
+            if row["disposition"] == "source_gap_requires_exact_producer_context"})
         unknown_evidence = [
             *evidence,
             "unknown_token_policy=warning_only_not_tuning_hard_block",
@@ -4958,6 +4984,10 @@ def _observation_source_quality_followup_orders(
                     else None
                 ),
                 "implementation_provenance": {
+                    "field_provenance_review": field_provenance,
+                    "remaining_unknown_fields": remaining_fields,
+                    "source_target_date": report.get("target_date"),
+                    "source_report_semantic_sha256": hashlib.sha256(json.dumps(report, sort_keys=True, ensure_ascii=True, separators=(",", ":")).encode()).hexdigest(),
                     "producer_fix_status": (
                         "implemented_waiting_new_postfix_raw"
                         if producer_fix_implemented

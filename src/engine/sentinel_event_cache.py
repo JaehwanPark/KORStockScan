@@ -51,6 +51,7 @@ def update_and_load_cached_event_rows(
     target_date: str,
     schema_version: int,
     parse_payload: PayloadParser,
+    verified_schema_migration: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Maintain a slim append-only cache for sentinel pipeline-event scans.
 
@@ -77,8 +78,16 @@ def update_and_load_cached_event_rows(
     meta = _read_json(meta_path)
     raw_offset = int(meta.get("raw_offset") or 0)
     raw_size = max(int(stat.st_size), raw_offset) if is_gzip_raw else int(stat.st_size)
+    migration = verified_schema_migration or {}
+    generation = {"device": stat.st_dev, "inode": stat.st_ino, "size_bytes": stat.st_size,
+                  "mtime_ns": stat.st_mtime_ns, "ctime_ns": stat.st_ctime_ns}
+    if migration and migration.get("raw_generation") != generation:
+        raise ValueError("verified_cache_schema_source_changed")
+    schema_migrated = bool(migration and migration.get("population_proof") == "verified_zero_stage_census"
+        and int(meta.get("schema_version") or 0) == migration.get("from_schema")
+        and raw_offset == raw_size and not is_gzip_raw)
     stale_cache = (
-        int(meta.get("schema_version") or 0) != schema_version
+        (int(meta.get("schema_version") or 0) != schema_version and not schema_migrated)
         or str(meta.get("raw_path") or "") != str(raw_path)
         or int(meta.get("raw_inode") or -1) != int(raw_inode or -1)
         or raw_offset > raw_size
@@ -137,6 +146,13 @@ def update_and_load_cached_event_rows(
                 if isinstance(row, dict):
                     rows.append(row)
 
+    if schema_migrated and len(rows) != meta.get("cache_event_count"):
+        raise ValueError("verified_cache_schema_population_changed")
+    if migration:
+        current = raw_path.stat()
+        if generation != {"device": current.st_dev, "inode": current.st_ino, "size_bytes": current.st_size,
+                          "mtime_ns": current.st_mtime_ns, "ctime_ns": current.st_ctime_ns}:
+            raise ValueError("verified_cache_schema_source_changed")
     final_stat_size = int(raw_path.stat().st_size) if raw_path.exists() else raw_size
     final_raw_size = (
         max(final_stat_size, last_good_offset) if is_gzip_raw else final_stat_size
@@ -153,6 +169,7 @@ def update_and_load_cached_event_rows(
         "appended_cache_rows": appended_cache_rows,
         "decode_errors": decode_errors,
         "rebuilt": stale_cache,
+        "schema_migration_receipt": migration if schema_migrated else meta.get("schema_migration_receipt"),
         "updated_at": datetime.now().isoformat(timespec="seconds"),
     }
     _write_json(meta_path, new_meta)

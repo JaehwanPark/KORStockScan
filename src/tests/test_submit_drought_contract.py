@@ -1273,3 +1273,26 @@ def test_upstream_terminals_always_survive_producer_suppression(stage):
     assert payload_has_lossless_authority(
         {"pipeline": "ENTRY_PIPELINE", "stage": stage, "fields": {}}
     )
+
+
+def test_integrated_submit_lineage_remains_frozen_across_watched_refresh():
+    from src.engine.monitoring.entry_attempt_identity import (
+        observe_submit_attempt, bind_submit_attempt_machine_lineage, submit_attempt_fields)
+    stock = {"id": 9, "scanner_promotion_id": "promotion-original"}
+    lineage = {"entry_primary_decision_owner": "mechanistic_entry_adjudicator",
+        "evaluation_attempt_id": "evaluation-original", "scanner_promotion_id": "promotion-original",
+        "effective_venue": "KRX_NXT_INTEGRATED", "market_session_bucket": "KRX_NXT_AFTERMARKET",
+        "policy_bundle_hash": "a" * 64, "entry_mechanistic_action": "ENTER_NOW",
+        "entry_ai_screen_status": "pass", "entry_ai_screen_pass": True}
+    captured = []
+    @observe_submit_attempt(on_finish=lambda stock, code, outcome: captured.append(submit_attempt_fields(stock, code)))
+    def run(stock, code):
+        assert bind_submit_attempt_machine_lineage(stock, code, lineage) is True
+        stock["last_watching_ai_machine_primary_fields"] = {**lineage, "evaluation_attempt_id": "later-evaluation"}
+        stock["scanner_promotion_id"] = "later-promotion"
+        return False
+    assert run(stock, "031330") is False
+    assert captured[0]["evaluation_attempt_id"] == "evaluation-original"
+    assert captured[0]["scanner_promotion_id"] == "promotion-original"
+    assert captured[0]["entry_submit_attempt_broker_accepted"] is False
+    assert submit_attempt_fields(stock, "031330") == {}

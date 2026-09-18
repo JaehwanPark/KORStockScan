@@ -148,7 +148,7 @@ def test_final_verifier_consumes_same_exact_artifact_validation(tmp_path, monkey
     monkeypatch.setattr(verifier, "_postclose_not_yet_due", lambda d: False)
     calls = []
 
-    def checked_load(day, *, artifact_path):
+    def checked_load(day, *, artifact_path, require_final=False):
         calls.append((day, artifact_path))
         return after
 
@@ -436,3 +436,18 @@ def test_filter_source_dates_by_preflight_excludes_each_blocked_date(monkeypatch
     ]
     assert excluded[0]["hard_blocking_contract_gap_count"] == 2
     assert excluded[1]["blocked_reason"] == "source_quality_preflight_missing"
+
+
+def test_source_permission_does_not_replace_final_consumer_binding(tmp_path):
+    raw = tmp_path / "pipeline.jsonl"
+    raw.write_text("")
+    path = tmp_path / "audit.json"
+    # Missing publication remains a final contract failure even when no raw
+    # hard gap or completed-trade claim is made.
+    path.write_text(json.dumps({"target_date": "2026-09-17", "status": "warning",
+        "audit_phase": "preflight", "source": {"exists": True},
+        "summary": {"tuning_input_allowed": True, "hard_blocking_contract_gap_count": 0}}))
+    gate = mod.load_source_quality_preflight("2026-09-17", artifact_path=path, require_final=True)
+    assert "source_quality_final_dependency_binding_invalid" in gate["validation_errors"]
+    assert gate["economic_comparison_eligible"] is False
+    assert gate["tuning_input_allowed"] is False
