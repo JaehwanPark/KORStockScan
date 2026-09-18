@@ -74,3 +74,5 @@ Daily 후속 native1023의 rolling real completed18/loss4·sim22 및 same-day pr
 ## 최종 증거·남은 수락
 
 Commit/push·selected immutable root/router와 source tests, 보호 SHA·현재 census/handoff는 `tmp/scale-in-final-review-20260918/{validation,deployment,cleanup,scope-verifier}.json`을 따른다. 추가 trading/provider suite·다음 단위 source 수정/재실행·원시5.7GB/537MB 전체 scan·전체 장후 재실행·service/Main restart·orders·수동 env/guard·외부 sync는 수행하지 않았다. 잔여 위험은 작은 실제 유입, unreconciled broker 비용, 과거 source 결손, 정상 PREOPEN/PID 및 자연 rolling/cumulative 경제성 미완료다.
+
+최종 source commit `54fe6399b2135706671d259788ade8d01bc5381f`를 원격 main/review branch에 atomic push하고 managed root `scale-in-final-reviewed-20260918`로 선택 배포했다. Router/9월21일 PREOPEN print-plan·현재 DB census/정책 및 Daily state PASS다. 검증 중 독립 microstructure approval의 후행 publication이 기존 tower SHA를 무효화해 native cached tower→owning checklist만 갱신했다. 마지막 현재 summary handoff PASS/issue0이며 scale/entry split 원본 report·policy SHA는 불변이다. 확인 시각은 scope-verifier.json의 as_of_kst이고 전체 strict/chain DONE·actual PID/경제성 수락을 대신하지 않는다. 추가 provider/raw replay·Main restart는0이다.
