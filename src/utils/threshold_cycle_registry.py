@@ -10,6 +10,13 @@ from __future__ import annotations
 from typing import Any
 
 THRESHOLD_STAGE_FAMILY_MAP = {
+    "entry_execution_sizing_plan": "dynamic_entry_price_resolver",
+    "entry_execution_sizing_plan_block": "dynamic_entry_price_resolver",
+    "entry_quantity_leg_four_arm_evaluation": "dynamic_entry_price_resolver",
+    "order_leg_sent": "dynamic_entry_price_resolver",
+    "order_leg_fail": "dynamic_entry_price_resolver",
+    "order_leg_no_response": "dynamic_entry_price_resolver",
+    "order_bundle_failed": "dynamic_entry_price_resolver",
     "budget_pass": "entry_mechanical_momentum",
     "order_bundle_submitted": "dynamic_entry_price_resolver",
     "order_leg_request": "dynamic_entry_price_resolver",

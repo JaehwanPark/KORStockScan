@@ -2299,6 +2299,16 @@ class OrderOwnerRegistry:
             entry_authority_hash=getattr(decision, "entry_authority_hash", ""),
         )
 
+    def verified_events_snapshot(self, *, max_bytes: int = 64 * 1024 * 1024):
+        """Read a bounded, hash-verified journal under the existing shared lock."""
+        if not self.path.is_file():
+            raise OwnerRegistryError("owner_registry_source_missing")
+        with self.lock_path.open("rb") as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_SH)
+            if self.path.stat().st_size > max_bytes:
+                raise OwnerRegistryError("owner_registry_bounded_projection_required")
+            return self._read_locked()
+
     def contains_event_hash(self, event_hash: str) -> bool:
         expected = str(event_hash or "").strip().lower()
         lock = self._locked()

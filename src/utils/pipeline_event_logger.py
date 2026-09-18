@@ -411,6 +411,12 @@ def _fields_hash(fields: dict[str, str]) -> str:
 def _project_fields_for_compact_stream(
     stage: str, fields: dict[str, str]
 ) -> dict[str, str]:
+    if stage in {"entry_execution_sizing_plan", "entry_execution_sizing_plan_block",
+                 "entry_quantity_leg_four_arm_evaluation", "order_leg_sent",
+                 "order_leg_fail", "order_leg_no_response",
+                 "order_bundle_failed"}:
+        # Exact source/quantity/price/attempt hashes must not be lost at 40 fields.
+        return fields
     high_volume = stage in HIGH_VOLUME_OBSERVATION_STAGES
     submit_stage = stage in _SUBMIT_STAGE_COMPACT_STREAMS
     if not high_volume and not submit_stage:
@@ -439,6 +445,12 @@ def _project_fields_for_compact_stream(
                 selected[key] = fields[key]
             if len(selected) >= field_limit:
                 break
+    if submit_stage:
+        # Preserve exact atomic contracts in addition to the normal compact view.
+        selected.update({key: value for key, value in fields.items()
+            if key.startswith(("entry_execution_sizing_", "entry_price_plan_",
+                               "entry_opportunity_", "entry_quantity_leg_"))
+            or key in {"broker_order_no", "ord_no", "effective_venue", "market_session_bucket"}})
     omitted_field_count = max(0, len(fields) - len(selected))
     if omitted_field_count <= 0:
         return fields

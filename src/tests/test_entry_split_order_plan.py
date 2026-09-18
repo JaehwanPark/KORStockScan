@@ -121,10 +121,11 @@ def test_four_arm_v2_publisher_preopen_and_runtime_recheck_selection(monkeypatch
 
     monkeypatch.setattr(daily_report, "POSITION_SIZING_POLICY_DIR", tmp_path)
     monkeypatch.setattr(daily_report, "ENTRY_EXECUTION_SIZING_POLICY_DIR", tmp_path)
+    # Preserve the frozen pre-model-gate legacy policy contract.
     events = _quantity_leg_four_arm_events()
     for index, event in enumerate(events):
         receipt = event["entry_quantity_leg_four_arm_evaluation"]
-        receipt["source_date"] = "2026-09-16" if index < 20 else "2026-09-17"
+        receipt["source_date"] = "2026-09-14" if index < 20 else "2026-09-15"
         receipt["candidate_quantity_policy_version"] = daily_report.SCALPING_SIZING_FORMULA_VERSION
         for arm in receipt["arms"].values():
             arm["terminal_observed_at"] = receipt["source_date"] + "T07:30:00+09:00"
@@ -134,7 +135,7 @@ def test_four_arm_v2_publisher_preopen_and_runtime_recheck_selection(monkeypatch
         evaluation["chronological_partitions"]["holdout"]["arms"][split_plan.QUANTITY_LEG_FOUR_ARM_IDS[-1]]["net_pnl_krw"] = -1
     split_path = tmp_path / "split.json"
     split_path.write_text(json.dumps({"schema_version": "entry_split_order_policy_v1",
-        "policy_version": "leg-candidate", "source_date": "2026-09-17", "runtime_apply_allowed": True}))
+        "policy_version": "leg-candidate", "source_date": "2026-09-15", "runtime_apply_allowed": True}))
     quantity = {"family": "position_sizing_dynamic_formula", "runtime_apply_eligible_now": True,
         "calibration_state": "retain_current", "sample_floor": 30, "recommended_values": {
             "formula_version": daily_report.SCALPING_SIZING_FORMULA_VERSION,
@@ -145,9 +146,9 @@ def test_four_arm_v2_publisher_preopen_and_runtime_recheck_selection(monkeypatch
             "policy_sha256": hashlib.sha256(split_path.read_bytes()).hexdigest()},
         "source_metrics": {"quantity_leg_four_arm_evaluation": evaluation}}
     report = {"calibration_candidates": [quantity, split]}
-    daily_report._materialize_position_sizing_policy(report, "2026-09-17")
-    daily_report._materialize_integrated_entry_execution_sizing_policy(report, "2026-09-17")
-    path = tmp_path / "entry_execution_sizing_policy_2026-09-17.json"
+    daily_report._materialize_position_sizing_policy(report, "2026-09-15")
+    daily_report._materialize_integrated_entry_execution_sizing_policy(report, "2026-09-15")
+    path = tmp_path / "entry_execution_sizing_policy_2026-09-15.json"
     assert path.exists() is (not forged_pass)
     if forged_pass:
         return
@@ -156,7 +157,7 @@ def test_four_arm_v2_publisher_preopen_and_runtime_recheck_selection(monkeypatch
     prefix = "KORSTOCKSCAN_ENTRY_EXECUTION_SIZING_POLICY_"
     effective_env = {prefix + key: value for key, value in {
         "ENABLED": "true", "FILE": str(path), "VERSION": policy["policy_version"],
-        "SOURCE_DATE": "2026-09-17", "ACTIVE_DATE": policy["active_date"],
+        "SOURCE_DATE": "2026-09-15", "ACTIVE_DATE": policy["active_date"],
         "SHA256": hashlib.sha256(path.read_bytes()).hexdigest()}.items()}
     for key, value in effective_env.items():
         monkeypatch.setenv(key, value)
@@ -2098,7 +2099,7 @@ def test_build_report_creates_bounded_equal_baseline_without_real_outcome(
     monkeypatch, tmp_path
 ):
     data_dir = _patch_dirs(monkeypatch, tmp_path)
-    target_date = datetime.now(timezone(timedelta(hours=9))).date().isoformat()
+    target_date = "2026-09-04"
     _write_jsonl(
         data_dir / "pipeline_events" / f"pipeline_events_{target_date}.jsonl",
         [
@@ -2162,7 +2163,7 @@ def test_build_report_creates_bounded_equal_baseline_without_real_outcome(
             "quote_stale": False,
             "order_price": 1000,
         },
-        now=datetime.now(timezone(timedelta(hours=9))),
+        now=datetime(2026, 9, 5, 8, tzinfo=timezone(timedelta(hours=9))),
     )
     assert fields["entry_split_order_policy_applied"] is True
     assert [item["qty"] for item in orders] == [1, 1]
@@ -5069,3 +5070,212 @@ def test_split_reader_reuses_owner_plan_without_second_pipeline_scan(monkeypatch
     assert report['cumulative_state']['entry_opportunity_replay_source_counts'] == {day: 1}
     assert len(report['cumulative_state']['quantity_leg_four_arm_events']) == 1
     assert '_entry_opportunity_plan_events' not in report['input_summary']['daily_diagnostic']
+
+
+@pytest.mark.parametrize("actual_qty,model_qty,state,expected", [
+    (2, 2, "ORDER_TERMINAL", "ready_for_validation"),
+    (0, 0, "ORDER_TERMINAL", "ready_for_validation"),
+    (0, 2, "ORDER_TERMINAL", "validation_failed"),
+    (2, 0, "ORDER_TERMINAL", "validation_failed"),
+    (1, 2, "ORDER_TERMINAL", "validation_failed"),
+    (2, 2, "ORDER_BOUND", "terminal_pending"),
+])
+def test_execution_model_actual_census_and_no_false_economic_pass(actual_qty, model_qty, state, expected):
+    at = "2026-09-17T10:00:00+09:00"
+    common = dict(owner_type="main_scalping", side="BUY", action="NEW", order_date="2026-09-17",
+        intent_id="intent", broker_order_no="007", account_key="account", symbol="123456", quantity=2)
+    events = [dict(stage="order_leg_sent", emitted_at=at, actual_order_submitted=True,
+        broker_order_no="007", effective_venue="KRX", market_session_bucket="regular", submitted_qty=2,
+        entry_execution_sizing_plan_id="parent", entry_execution_sizing_plan_sha256="a" * 64)]
+    actual = [dict(common, event="ORDER_BOUND", state="ORDER_BOUND"),
+        dict(common, event="FILL_RECORDED", state=state, filled_qty=actual_qty,
+            fill_amount=actual_qty * 1000, observed_at_kst=at)]
+    arm = dict(modeled_filled_qty=model_qty, modeled_entry_vwap=1000,
+        modeled_entry_at=at, modeled_last_fill_at=at)
+    replay = dict(status="completed_source_only", schema="model", seed=dict(plan_sha256="a" * 64,
+        total_qty=2, stock_code="123456", effective_venue="KRX", session_bucket="regular"),
+        incumbent_execution_arm=arm)
+    report = split_plan.build_execution_model_validation("2026-09-17", events, [replay], actual)
+    assert report["counts"] == {expected: 1}
+    assert report["census_conserved"] is True
+    assert report["allowed_runtime_apply"] is False
+    assert report["actual_net_ev_pct"] is None
+    if expected == "ready_for_validation":
+        assert report["rows"][0]["reason"] == "tolerance_contract_missing"
+    # Same order number on another day cannot join this frozen parent.
+    actual[0]["order_date"] = actual[1]["order_date"] = "2026-09-16"
+    other = split_plan.build_execution_model_validation("2026-09-17", events, [replay], actual)
+    assert other["counts"] == {"source_gap": 1}
+    assert other["unclassified_main_buy_parent_count"] == 1
+    # A replay conflict stays quarantined even if a third row repeats the first.
+    actual[0]["order_date"] = actual[1]["order_date"] = "2026-09-17"
+    conflict = {**replay, "schema": "conflicting_model"}
+    bad = split_plan.build_execution_model_validation("2026-09-17", events, [replay, conflict, replay], actual)
+    if state == "ORDER_TERMINAL":
+        assert bad["counts"] == {"source_gap": 1}
+
+
+def test_execution_model_policy_hash_and_supporting_exit_cannot_promote():
+    section = split_plan.build_execution_model_validation("2026-09-17", [], [], [])
+    policy = dict(source_date="2026-09-17", execution_model_validation_contract=split_plan.EXECUTION_MODEL_CONTRACT,
+        execution_model_validation_sha256=split_plan._canonical_sha256(section), runtime_apply_allowed=False)
+    report = dict(execution_model_validation=section)
+    assert split_plan.execution_model_policy_contract_status(report, policy)[0]
+    assert not split_plan.execution_model_policy_contract_status(report, {**policy, "runtime_apply_allowed": True})[0]
+    assert not split_plan.execution_model_policy_contract_status(report, {**policy, "source_date": "2026-09-18"})[0]
+    assert not split_plan.execution_model_policy_contract_status(report, {**policy, "execution_model_validation_sha256": "f" * 64})[0]
+
+
+def test_execution_projection_is_not_valid_empty_and_preserves_exact_contract(monkeypatch, tmp_path):
+    monkeypatch.setattr(split_plan, "DATA_DIR", tmp_path)
+    rows, source = split_plan._bounded_execution_projection("2026-09-17")
+    assert not rows and source["status"] == "source_gap"
+    part = tmp_path / "threshold_cycle/date=2026-09-17/family=dynamic_entry_price_resolver/part-000001.jsonl"
+    part.parent.mkdir(parents=True)
+    event = dict(stage="entry_execution_sizing_plan", emitted_date="2026-09-17",
+        fields={"entry_execution_sizing_plan": {"plan_sha256": "a" * 64}})
+    part.write_text(json.dumps(event) + "\n" + json.dumps(event) + "\n")
+    rows, source = split_plan._bounded_execution_projection("2026-09-17")
+    assert rows == [event] and source["full_population_coverage_verified"] is False
+    part.write_text(json.dumps({**event, "emitted_date": "2026-09-16"}) + "\n")
+    with pytest.raises(ValueError, match="date_mismatch"):
+        split_plan._bounded_execution_projection("2026-09-17")
+
+
+def test_bounded_refresh_reuses_revision_and_rejects_stale_policy(monkeypatch, tmp_path):
+    _patch_dirs(monkeypatch, tmp_path)
+    target = "2026-09-17"
+    path, _ = split_plan.report_paths(target)
+    original = dict(schema_version=split_plan.SCHEMA_VERSION, date=target,
+        generated_at="2026-09-18T00:14:34+09:00", cumulative_state={"preserved": "frozen"},
+        input_summary={"atomic_execution_sizing": {"plan_observed": 3, "invalid": 3}},
+        recommended_policy={"runtime_apply_allowed": False, "policy_version": "old",
+            "entry_execution_sizing_plan_schema": split_plan.ATOMIC_EXECUTION_SIZING_SCHEMA,
+            "entry_execution_sizing_policy": split_plan.ATOMIC_EXECUTION_SIZING_BASELINE_POLICY,
+            "entry_price_plan_schema": split_plan.ATOMIC_PRICE_PLAN_SCHEMA}, candidate_grid=[])
+    split_plan._write_json(path, original)
+    monkeypatch.setattr(split_plan, "_execution_registry_snapshot", lambda: ([], {"status": "verified", "tail_hash": "0" * 64}))
+    first = split_plan.refresh_execution_model_only(target, prepared_effective_date="2026-09-21")
+    assert first["generated_at"] == original["generated_at"]
+    assert first["cumulative_state"] == original["cumulative_state"]
+    assert first["recommended_policy"]["missing_bucket_action"] == "keep_original_order"
+    assert first["recommended_policy"]["runtime_apply_allowed"] is False
+    before = path.read_bytes()
+    second = split_plan.refresh_execution_model_only(target, prepared_effective_date="2026-09-21")
+    assert first == second and path.read_bytes() == before
+    policy = json.loads(split_plan.policy_path(target).read_text())
+    assert split_plan.validate_report_policy_generation(first, policy)[0]
+    # A source revision invalidates reuse without touching frozen original facts.
+    monkeypatch.setattr(split_plan, "_execution_registry_snapshot", lambda: ([], {"status": "verified", "tail_hash": "1" * 64}))
+    revised = split_plan.refresh_execution_model_only(target, prepared_effective_date="2026-09-21")
+    assert revised["artifact_generation_binding"] != first["artifact_generation_binding"]
+    assert revised["cumulative_state"] == original["cumulative_state"]
+    policy["execution_model_validation_sha256"] = "bad"
+    split_plan._write_json(split_plan.policy_path(target), policy)
+    with pytest.raises(ValueError, match="cached_generation_invalid"):
+        split_plan.refresh_execution_model_only(target, prepared_effective_date="2026-09-21")
+
+
+def test_entry_split_daily_refresh_keeps_other_session_candidate(monkeypatch, tmp_path):
+    _patch_dirs(monkeypatch, tmp_path)
+    target = "2026-09-17"
+    path, _ = split_plan.report_paths(target)
+    split_plan._write_json(path, dict(schema_version=split_plan.SCHEMA_VERSION, date=target,
+        generated_at="2026-09-18T00:14:34+09:00", cumulative_state={"preserved": True},
+        input_summary={}, source_quality={"tuning_input_allowed": True}, candidate_grid=[],
+        recommended_policy={"runtime_apply_allowed": False, "policy_version": "old",
+            "entry_execution_sizing_plan_schema": split_plan.ATOMIC_EXECUTION_SIZING_SCHEMA,
+            "entry_execution_sizing_policy": split_plan.ATOMIC_EXECUTION_SIZING_BASELINE_POLICY,
+            "entry_price_plan_schema": split_plan.ATOMIC_PRICE_PLAN_SCHEMA}))
+    monkeypatch.setattr(split_plan, "_execution_registry_snapshot", lambda: ([], {"status": "verified"}))
+    split_plan.refresh_execution_model_only(target, prepared_effective_date="2026-09-21")
+    daily_path = tmp_path / "daily.json"
+    other = {"family": "scale_in_split_order_plan", "priority": 10, "source_metrics": {"frozen": "other-session"}}
+    daily_path.write_text(json.dumps(dict(date=target, calibration_candidates=[other], calibration_source_bundle={})))
+    monkeypatch.setattr(daily_report, "report_path_for_date", lambda _: daily_path)
+    monkeypatch.setattr(daily_report, "ENTRY_SPLIT_ORDER_PLAN_DIR", split_plan.REPORT_DIR)
+    handoff = daily_report.refresh_entry_split_only(target)
+    report = json.loads(daily_path.read_text())
+    assert other in report["calibration_candidates"]
+    assert len([x for x in report["calibration_candidates"] if x["family"] == "entry_split_order_plan"]) == 1
+    candidate = next(x for x in report["calibration_candidates"] if x["family"] == "entry_split_order_plan")
+    assert candidate["calibration_state"] == "hold_runtime_scope"
+    assert candidate["runtime_apply_eligible_now"] is False
+    assert handoff["runtime_apply_allowed"] is False
+    assert handoff["prepared_effective_date"] == "2026-09-21"
+
+
+def test_real_atomic_producer_wire_compact_decoder_roundtrip(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from src.tests.test_strategy_owner_replay import entry_owner_event
+    from src.tests.test_pipeline_event_logger import _reset_logger_state
+    from src.utils import pipeline_event_logger as logger
+    from src.engine import sniper_state_handlers as handlers
+    from src.engine.sniper_missed_entry_counterfactual import _load_entry_events, _price_ready_plan
+    day = datetime.now(timezone(timedelta(hours=9))).date().isoformat()
+    original = entry_owner_event(day)
+    _reset_logger_state(monkeypatch)
+    monkeypatch.setattr(logger, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(split_plan, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(logger, "TRADING_RULES", SimpleNamespace(PIPELINE_EVENT_JSONL_ENABLED=True,
+        PIPELINE_EVENT_SCHEMA_VERSION=3, PIPELINE_EVENT_TEXT_INFO_LOG_ENABLED=False))
+    monkeypatch.setattr(logger, "log_info", lambda *a, **k: None)
+    monkeypatch.setattr(handlers, "emit_pipeline_event", logger.emit_pipeline_event)
+    monkeypatch.setattr(handlers, "observe_candidate_transition_safe", lambda *a, **k: None)
+    monkeypatch.setattr(handlers, "_maybe_register_rising_missed_nxt_downstream_block_sampler", lambda *a, **k: None)
+    payload = handlers._log_entry_pipeline({"name": "TEST", "id": 77, "strategy": "SCALPING"},
+        original.code, original.stage, **original.fields,
+        **{f"extra_{i}": str(i) for i in range(60)})
+    assert payload["structured_append_succeeded"] is True
+    rows, _ = split_plan._bounded_execution_projection(day)
+    assert len(rows) == 1
+    decoded = _load_entry_events(day, rows=rows)
+    assert len(decoded) == 1
+    assert _price_ready_plan(decoded[0]) == _price_ready_plan(original)
+    assert json.loads(decoded[0].fields["entry_opportunity_replay_seed"]) == original.fields["entry_opportunity_replay_seed"]
+    from src.tests.test_strategy_owner_replay import native_entry_loader
+    from src.engine.scalping.strategy_owner_replay import build_entry_opportunity_replays
+    replay = build_entry_opportunity_replays(day, decoded, micro_loader=native_entry_loader,
+        evaluated_at=datetime.fromisoformat(original.emitted_at).timestamp() + 180)
+    assert replay["counts"]["completed"] == 1
+    assert len(replay["quantity_leg_events"]) == 1
+    logger._flush_producer_summary_at_exit()
+    monkeypatch.setattr(logger, "_PRODUCER_COMPACTOR", None)
+
+
+def test_verified_owner_snapshot_preserves_bytes_and_rejects_corruption(tmp_path):
+    from src.trading.order.owner_custody_registry import OrderOwnerRegistry, OwnerRegistryError
+    registry = OrderOwnerRegistry(tmp_path / "owner.jsonl")
+    registry.lock_path.touch()
+    registry._append_locked([], {"event": "INTENT_RESERVED", "intent_id": "fixture"})
+    before = registry.path.read_bytes()
+    rows = registry.verified_events_snapshot()
+    assert len(rows) == 1 and registry.path.read_bytes() == before
+    with pytest.raises(OwnerRegistryError, match="bounded_projection_required"):
+        registry.verified_events_snapshot(max_bytes=1)
+    registry.path.write_bytes(before.replace(b"fixture", b"damaged"))
+    with pytest.raises(OwnerRegistryError, match="hash_invalid"):
+        registry.verified_events_snapshot()
+
+
+
+def test_atomic_quantity_leg_loader_cannot_bypass_missing_execution_model(tmp_path):
+    split = tmp_path / "split.json"
+    split.write_text(json.dumps(dict(source_date="2026-09-17", runtime_apply_allowed=True)))
+    policy = dict(source_date="2026-09-17", split_policy_file=str(split),
+        split_policy_sha256=hashlib.sha256(split.read_bytes()).hexdigest())
+    assert split_plan.quantity_leg_policy_selection_evidence_valid(policy) is False
+    split.write_text(json.dumps(dict(source_date="2026-09-17", runtime_apply_allowed=False)))
+    policy["split_policy_sha256"] = hashlib.sha256(split.read_bytes()).hexdigest()
+    assert split_plan.quantity_leg_policy_selection_evidence_valid(policy) is False
+
+
+
+def test_entry_replay_maturity_changes_reuse_identity_only_at_declared_boundary():
+    start = datetime.fromisoformat("2026-09-17T10:00:00+09:00").timestamp()
+    events = [dict(fields={"entry_opportunity_replay_seed": json.dumps(dict(
+        observed_at="2026-09-17T10:00:00+09:00", seed_sha256="a" * 64))})]
+    waiting = split_plan._entry_replay_maturity_revision(events, now=start + 179)
+    assert waiting == split_plan._entry_replay_maturity_revision(events, now=start + 179.5)
+    assert waiting != split_plan._entry_replay_maturity_revision(events, now=start + 180)
+    assert split_plan._entry_replay_maturity_revision(events, now=start + 180) == split_plan._entry_replay_maturity_revision(events, now=start + 181)

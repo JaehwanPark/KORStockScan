@@ -1384,3 +1384,14 @@ def test_emit_pipeline_event_keeps_id_in_submit_stage_text_payload(
     )
 
     assert "id=77" in payload["text_payload"]
+
+
+@pytest.mark.parametrize("stage", ["entry_execution_sizing_plan", "order_leg_sent", "order_bundle_submitted"])
+def test_compact_execution_contract_survives_large_field_count(stage):
+    fields = {f"extra_{i}": str(i) for i in range(80)}
+    fields.update(entry_execution_sizing_plan_id="parent", entry_execution_sizing_plan_sha256="a" * 64,
+        entry_price_plan_sha256="b" * 64, entry_opportunity_replay_seed="{frozen}", broker_order_no="007")
+    compact = logger_mod._project_fields_for_compact_stream(stage, fields)
+    for key in ("entry_execution_sizing_plan_id", "entry_execution_sizing_plan_sha256",
+                "entry_price_plan_sha256", "entry_opportunity_replay_seed", "broker_order_no"):
+        assert compact[key] == fields[key]

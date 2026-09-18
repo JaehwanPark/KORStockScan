@@ -1581,6 +1581,10 @@ def _materialize_integrated_entry_execution_sizing_policy(
         split_policy = json.loads(split_bytes)
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return
+    if source_date >= "2026-09-17":
+        from src.engine.scalping.entry_split_order_plan import policy_report_generation_contract_status
+        if not policy_report_generation_contract_status(split_policy)[0]:
+            return
     paired_identity = evaluation.get("paired_policy_identity") or {}
     if (
         not isinstance(quantity_policy, dict)
@@ -9784,6 +9788,10 @@ def _build_entry_split_order_plan_family(*, target_date: str | None = None) -> d
             for item in candidate_grid
         )
     )
+    model_validation = payload.get("execution_model_validation") or {}
+    if model_validation and model_validation.get("allowed_runtime_apply") is not True:
+        # A source/model gap is not a fresh negative-EV disable decision.
+        runtime_disable_recommended = False
     bounded_equal_baseline_count = sum(
         1
         for item in candidates
@@ -9943,6 +9951,7 @@ def _build_entry_split_order_plan_family(*, target_date: str | None = None) -> d
             "report_path": (
                 str(report_path) if report_path and report_path.exists() else None
             ),
+            "execution_model_validation": model_validation,
             "candidate_grid_count": len(candidate_grid),
             "recommended_policy_candidate_count": len(candidates),
             "bounded_equal_split_baseline_candidate_count": bounded_equal_baseline_count,
@@ -14500,6 +14509,10 @@ def _calibration_state_for_family(
                 "source_quality_blocked",
                 "entry_split_order_plan source-quality hard block present; exclude row/window and regenerate before policy use.",
             )
+        model = source_metrics.get("execution_model_validation") or {}
+        if model and model.get("allowed_runtime_apply") is not True:
+            return ("hold_runtime_scope", "entry split execution model is unsupported: "
+                    + ",".join(model.get("primary_blockers") or [model.get("status", "source_gap")]))
         if source_metrics.get("runtime_disable_recommended") is True:
             return (
                 "adjust_down",
@@ -15323,6 +15336,7 @@ def _build_calibration_candidates(
             )
             source_metrics = {
                 **source_metrics,
+                "execution_model_validation": family_sample.get("execution_model_validation") or {},
                 "report_loaded": bool(family_sample.get("report_loaded")),
                 "report_path": family_sample.get("report_path"),
                 "candidate_grid_count": _safe_int(
@@ -21078,6 +21092,61 @@ def merge_scalping_pyramid_quality_calibration_candidate(
     return report
 
 
+def refresh_entry_split_only(target_date: str) -> dict:
+    """Replace one dated candidate from its immutable producer generation."""
+    from src.engine.scalping.entry_split_order_plan import validate_report_policy_generation
+    path = report_path_for_date(target_date)
+    if path.stat().st_size > 64 * 1024 * 1024:
+        raise ValueError("bounded_daily_entry_split_handoff_required")
+    predecessor = path.read_bytes()
+    report = json.loads(predecessor)
+    source = _read_json_dict(_entry_split_order_plan_path(target_date))
+    policy_path = generation_policy_snapshot_path(source)
+    if report.get("date") != target_date or source.get("date") != target_date or policy_path is None:
+        raise ValueError("entry_split_daily_exact_generation_missing")
+    policy = _read_json_dict(policy_path)
+    valid, reason = validate_report_policy_generation(source, policy)
+    if not valid:
+        raise ValueError(reason)
+    family = _build_entry_split_order_plan_family(target_date=target_date)
+    candidates = _build_calibration_candidates([family], report.get("calibration_source_bundle") or {},
+        report.get("same_day_runtime_apply_observation") or {})
+    matches = [row for row in candidates if row.get("family") == "entry_split_order_plan"]
+    if len(matches) != 1:
+        raise ValueError("entry_split_daily_single_owner_missing")
+    candidate = matches[0]
+    candidate["source_report_content_sha256"] = _json_sha256(source)
+    candidate["entry_split_generation_binding"] = source["artifact_generation_binding"]
+    candidate["prepared_effective_date"] = policy.get("prepared_effective_date")
+    prior = report.get("calibration_candidates") or []
+    report["calibration_candidates"] = [row for row in prior if row.get("family") != "entry_split_order_plan"] + [candidate]
+    report["entry_split_execution_model_handoff"] = {
+        "source_date": target_date, "prepared_effective_date": policy.get("prepared_effective_date"),
+        "generation_binding": source["artifact_generation_binding"],
+        "policy_file": str(policy_path), "policy_sha256": hashlib.sha256(policy_path.read_bytes()).hexdigest(),
+        "model_sha256": policy.get("execution_model_validation_sha256"),
+        "disposition": policy.get("execution_model_disposition"),
+        "runtime_apply_allowed": policy.get("runtime_apply_allowed") is True,
+        "missing_bucket_action": policy.get("missing_bucket_action"),
+    }
+    # Reuse the existing derived packs; their other families keep the same inputs.
+    report["apply_candidate_list"] = _build_apply_candidate_list(report["calibration_candidates"])
+    report["post_apply_attribution"] = _build_post_apply_attribution(report["calibration_candidates"])
+    report["calibration_trigger_pack"] = _build_calibration_trigger_pack(report["calibration_candidates"])
+    report["safety_guard_pack"] = _build_safety_guard_pack(report["calibration_candidates"])
+    if _read_json_dict(_entry_split_order_plan_path(target_date)) != source:
+        raise ValueError("entry_split_source_changed_during_daily_handoff")
+    if path.read_bytes() != predecessor:
+        raise ValueError("daily_report_changed_during_entry_split_handoff")
+    temporary = path.with_name(path.name + f".{os.getpid()}.tmp")
+    try:
+        temporary.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return report["entry_split_execution_model_handoff"]
+
+
 def refresh_machine_evaluation_only(target_date: str) -> dict:
     """Refresh one diagnostic handoff without replay, calibration or policy writes."""
     from src.engine.scalping.microstructure_reaction_context import microstructure_summary_contract
@@ -21163,7 +21232,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--refresh-machine-evaluation-only", action="store_true",
                         help="Refresh only the existing daily microstructure diagnostic handoff.")
+    parser.add_argument("--refresh-entry-split-only", action="store_true",
+                        help="Refresh the existing Daily entry split candidate from its immutable generation.")
     args = parser.parse_args(argv)
+    if args.refresh_entry_split_only:
+        refresh_entry_split_only(args.target_date)
+        return 0
     if args.refresh_machine_evaluation_only:
         refresh_machine_evaluation_only(args.target_date)
         return 0

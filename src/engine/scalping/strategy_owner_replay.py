@@ -1278,7 +1278,9 @@ def replay_entry_opportunity(seed, depth_rows, trade_rows, *, source_ready, eval
                 net_pnl_krw=total_buy * net / 100,
                 capital_krw_minutes=sum(notional * (terminal[0] - at) / 60 for at, notional in filled_legs),
                 fill_participation_rate=fill_qty / quantity,
-                modeled_entry_at=datetime.fromtimestamp(entry_at, KST).isoformat(),
+                modeled_entry_vwap=entry_price,
+                modeled_last_fill_at=datetime.fromtimestamp(last_fill_at, KST).isoformat(),
+                modeled_entry_at=datetime.fromtimestamp(min(at for at, _ in filled_legs), KST).isoformat(),
                 modeled_exit_at=datetime.fromtimestamp(terminal[0], KST).isoformat(),
                 modeled_outcome='modeled_full_or_partial_filled_terminal', **common)
         prices = [x['price'] for x in seed['legs']]
@@ -1307,6 +1309,7 @@ def build_entry_opportunity_replays(day, events, *, evaluated_at=None, micro_loa
     from src.engine.monitoring import machine_microstructure_attribution as micro
     from src.engine.monitoring.research_closed_loop import digest
     from src.engine.sniper_missed_entry_counterfactual import _price_ready_plan
+    from src.engine.scalping.entry_split_order_plan import QUANTITY_LEG_FOUR_ARM_IDS
     output = dict(schema=ENTRY_REPLAY_SCHEMA, source_date=day, rows=[],
                   counts={}, quantity_leg_events=[], **AUTHORITY)
     candidates, rejected, conflicts, valid_counts = {}, Counter(), set(), Counter()
@@ -1407,6 +1410,7 @@ def build_entry_opportunity_replays(day, events, *, evaluated_at=None, micro_loa
         seed = row['seed']
         key = digest([seed[k] for k in ('stock_code', 'scanner_promotion_id',
             'evaluation_attempt_id', 'effective_venue', 'session_bucket', 'policy_bundle_sha256')])
+        row['incumbent_execution_arm'] = dict(row['arms'][QUANTITY_LEG_FOUR_ARM_IDS[0]])
         row['allocation_admitted'] = key in admitted
         if key not in admitted:
             for arm in row['arms'].values():
