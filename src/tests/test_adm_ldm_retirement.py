@@ -10,6 +10,27 @@ import pytest
 from src.engine.lifecycle import retirement as policy
 
 
+def test_limit_down_stale_candidates_and_env_cannot_regain_authority():
+    active = {"family": "samsung_machine_entry_policy"}
+    stale = {"family": "limit_down_watch", "selected": True, "allowed_runtime_apply": True}
+    raw = {"source_signature": "LIMIT_DOWN_LIVE_UNLOCK", "stage": "sell_completed"}
+    cleaned = policy.current_report_view({
+        "calibration_candidates": [stale, active],
+        "limit_down_watch": stale,
+        "raw_rows": [raw],
+    })
+    assert cleaned["calibration_candidates"] == [active]
+    assert "limit_down_watch" not in cleaned
+    assert cleaned["raw_rows"] == [raw]
+    assert policy.without_retired_env({
+        "KORSTOCKSCAN_LIMIT_DOWN_WATCH_ENABLED": "true",
+        "KORSTOCKSCAN_LIMIT_DOWN_LIVE_POLICY_FILE": "/tmp/stale.json",
+        "THRESHOLD_CYCLE_RUN_LIMIT_DOWN_WATCH_REPORT": "true",
+        "KORSTOCKSCAN_SCALPING_MAX_QTY": "25",
+    }) == {"KORSTOCKSCAN_SCALPING_MAX_QTY": "25"}
+    assert policy.retirement_env()["KORSTOCKSCAN_LIMIT_DOWN_WATCH_ENABLED"] == "false"
+
+
 @pytest.mark.parametrize("name", sorted(policy.RETIRED_FAMILIES))
 def test_retired_namespaces_cannot_be_current_sources(name):
     assert policy.retired_owner(name)
@@ -535,3 +556,22 @@ def test_main_reports_persist_the_same_retired_source_free_view(tmp_path, monkey
         ))
         assert all("pattern_lab_" not in key for key in stored.get("summary", {}))
         assert all("scalping_pattern_lab_automation" not in str(value) for value in stored.get("sources", {}).values())
+
+
+def test_retired_entry_scale_in_is_blocked_before_common_buy_guards(monkeypatch):
+    from src.engine import sniper_state_handlers as handlers
+
+    def unexpected_guard(*args, **kwargs):
+        pytest.fail("Retired entry source reached a common buy guard")
+
+    monkeypatch.setattr(handlers, "_scale_in_exit_authority_block_reason", unexpected_guard)
+    for key in ("source_signature", "scanner_source_signature"):
+        result = handlers.can_consider_scale_in(
+            {key: "PRICE_JUMP_START,LIMIT_DOWN_LIVE_UNLOCK"},
+            "005930", {}, "SCALPING", "NORMAL",
+            bypass_scalping_buy_window=True, bypass_scale_in_cooldown=True,
+        )
+        assert result == {
+            "allowed": False,
+            "reason": "retired_entry_source_scale_in_forbidden",
+        }

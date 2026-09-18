@@ -48125,7 +48125,7 @@ def _source_signature_tokens(source_signature: str | None) -> set[str]:
     }
 
 
-def _has_limit_down_live_source(stock: dict | None) -> bool:
+def _has_retired_entry_source(stock: dict | None) -> bool:
     stock = stock if isinstance(stock, dict) else {}
     source_signature = stock.get("source_signature") or stock.get(
         "scanner_source_signature"
@@ -48133,114 +48133,6 @@ def _has_limit_down_live_source(stock: dict | None) -> bool:
     return "LIMIT_DOWN_LIVE_UNLOCK" in _source_signature_tokens(source_signature)
 
 
-def _limit_down_live_pre_submit_guard(
-    stock: dict | None,
-    code: str,
-    ws_data: dict | None,
-    strategy: str,
-) -> tuple[dict, dict]:
-    """Fail closed if a bounded limit-down entry relocks before submission."""
-
-    stock = stock if isinstance(stock, dict) else {}
-    base = dict(ws_data or {})
-    if not _has_limit_down_live_source(stock):
-        return base, {
-            "allowed": True,
-            "applicable": False,
-            "reason": "not_limit_down_live_source",
-        }
-
-    refreshed, refresh_fields = _pre_submit_refresh_real_ws_snapshot(
-        code, base, strategy
-    )
-    trigger_type = str(stock.get("limit_down_live_trigger_type") or "exact_unlock")
-    lower_limit = _safe_int(stock.get("limit_down_lower_limit_price"), 0)
-    session_open = _safe_int(stock.get("limit_down_session_open_price"), 0)
-    session_low = _safe_int(stock.get("limit_down_session_low_price"), 0)
-    min_rebound_pct = _safe_float(stock.get("limit_down_min_rebound_from_low_pct"), 0.0)
-    max_spread_pct = _safe_float(stock.get("limit_down_max_entry_spread_pct"), 0.0)
-    current = _safe_int(refreshed.get("curr"), 0)
-    best_ask, best_bid = _get_best_levels_from_ws(refreshed)
-    last_ws_update_ts = _safe_float(refreshed.get("last_ws_update_ts"), 0.0)
-    quote_age_ms = (
-        max(0.0, (time.time() - last_ws_update_ts) * 1000.0)
-        if last_ws_update_ts > 0.0
-        else None
-    )
-    max_quote_age_ms = max(
-        1,
-        _safe_int(
-            os.getenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_AGE_MS"),
-            _safe_int(
-                getattr(
-                    TRADING_RULES, "SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_AGE_MS", 700
-                ),
-                700,
-            ),
-        ),
-    )
-    spread_pct = (
-        (best_ask - best_bid) / best_ask * 100.0
-        if best_ask > 0 and best_bid > 0 and best_ask >= best_bid
-        else None
-    )
-    contract_valid = bool(
-        stock.get("limit_down_live_policy_matched") is True
-        and _safe_int(stock.get("limit_down_live_policy_sample_count"), 0) >= 1
-        and _safe_int(stock.get("limit_down_risk_max_daily_entries"), 0) == 1
-        and stock.get("limit_down_scale_in_allowed") is False
-        and stock.get("limit_down_same_day_reentry_allowed") is False
-        and stock.get("limit_down_overnight_allowed") is False
-        and stock.get("limit_down_normal_scalping_guards_required") is True
-        and trigger_type in {"exact_unlock", "near_rebound"}
-        and (
-            stock.get("limit_down_unlock_confirmed") is True
-            if trigger_type == "exact_unlock"
-            else stock.get("limit_down_rebound_confirmed") is True
-        )
-        and (lower_limit > 0 if trigger_type == "exact_unlock" else True)
-        and (
-            session_open > 0 and session_low > 0 and 0.0 < min_rebound_pct <= 3.0
-            if trigger_type == "near_rebound"
-            else True
-        )
-        and 0.0 < max_spread_pct <= 1.5
-    )
-    reason = "limit_down_live_pre_submit_pass"
-    if not contract_valid:
-        reason = "limit_down_live_runtime_contract_invalid"
-    elif quote_age_ms is None or not 0 <= quote_age_ms <= max_quote_age_ms:
-        reason = "limit_down_live_pre_submit_quote_stale"
-    elif not (best_ask >= current > 0 and best_ask >= best_bid > 0):
-        reason = "limit_down_live_relocked_or_quote_invalid"
-    elif trigger_type == "exact_unlock" and current <= lower_limit:
-        reason = "limit_down_live_relocked_or_quote_invalid"
-    elif trigger_type == "near_rebound" and not (
-        current >= session_open
-        and current > session_low
-        and (current / session_low - 1.0) * 100.0 >= min_rebound_pct
-    ):
-        reason = "limit_down_live_rebound_lost"
-    elif spread_pct is None or spread_pct > max_spread_pct:
-        reason = "limit_down_live_pre_submit_spread_too_wide"
-    return refreshed, {
-        "allowed": reason == "limit_down_live_pre_submit_pass",
-        "applicable": True,
-        "reason": reason,
-        "current_price": current,
-        "trigger_type": trigger_type,
-        "lower_limit_price": lower_limit,
-        "session_open_price": session_open,
-        "session_low_price": session_low,
-        "min_rebound_from_low_pct": min_rebound_pct,
-        "best_ask": best_ask,
-        "best_bid": best_bid,
-        "quote_age_ms": None if quote_age_ms is None else round(quote_age_ms, 3),
-        "max_quote_age_ms": max_quote_age_ms,
-        "spread_pct": None if spread_pct is None else round(spread_pct, 6),
-        "max_spread_pct": max_spread_pct,
-        "refresh_reason": refresh_fields.get("pre_submit_ws_snapshot_refresh_reason"),
-    }
 
 
 def _source_signature_strong_bundle_pass(source_signature: str | None) -> bool:
@@ -69369,35 +69261,8 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 f"mode={pre_submit_price_guard_fields.get('pre_submit_price_guard_mode')}"
             )
             continue
-        ws_data, limit_down_live_submit_guard = _limit_down_live_pre_submit_guard(
-            stock, code, ws_data, strategy
-        )
-        if not limit_down_live_submit_guard.get("allowed", False):
-            _log_entry_pipeline(
-                stock,
-                code,
-                "limit_down_live_pre_submit_blocked",
-                metric_role="safety_veto",
-                decision_authority="limit_down_live_pre_submit_safety_veto",
-                window_policy="same_order_leg_latest_ws_quote",
-                sample_floor="not_applicable_runtime_safety_veto",
-                primary_decision_metric="limit_down_live_pre_submit_allowed",
-                source_quality_gate="fresh_ws_bbo_above_official_lower_limit",
-                runtime_effect=True,
-                allowed_runtime_apply=False,
-                actual_order_submitted=False,
-                broker_order_forbidden=True,
-                forbidden_uses=(
-                    "stale_quote_bypass|lower_limit_relock_bypass|spread_guard_bypass|"
-                    "broker_guard_bypass|provider_route_change|quantity_or_cap_change"
-                ),
-                limit_down_live_pre_submit_allowed=False,
-                **{
-                    f"limit_down_live_pre_submit_{key}": value
-                    for key, value in limit_down_live_submit_guard.items()
-                    if key != "allowed"
-                },
-            )
+        if _has_retired_entry_source(stock):
+            _log_entry_pipeline(stock, code, "order_leg_blocked", reason="retired_entry_source")
             break
         _log_entry_pipeline(
             stock,
@@ -87738,8 +87603,8 @@ def can_consider_scale_in(
     """추가매수 공통 게이트: 조건을 만족하는 경우에만 True."""
     _ = (code, ws_data)
 
-    if _has_limit_down_live_source(stock):
-        return {"allowed": False, "reason": "limit_down_live_scale_in_forbidden"}
+    if _has_retired_entry_source(stock):
+        return {"allowed": False, "reason": "retired_entry_source_scale_in_forbidden"}
 
     exit_authority_reason = _scale_in_exit_authority_block_reason(stock)
     if exit_authority_reason:

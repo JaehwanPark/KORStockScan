@@ -58,6 +58,13 @@ SCALP_OVERNIGHT_RETIRED_FAMILIES = (
 )
 CLAUDE_LAB_RETIREMENT_ID = "claude_scalping_pattern_lab_retirement_20260918"
 CLAUDE_LAB_RETIRED_REPORTS = frozenset({"claude_scalping_pattern_lab", "scalping_pattern_lab_automation", "pattern_lab_automation"})
+LIMIT_DOWN_RETIREMENT_ID = "limit_down_watch_retirement_20260919"
+LIMIT_DOWN_RETIRED_REPORTS = frozenset({
+    "limit_down_watch", "limit_down_watch_report", "limit_down_watch_candidate_source",
+    "limit_down_watch_counterfactual", "limit_down_watch_sim_policy_catalog",
+    "limit_down_watch_post_sim_attribution", "limit_down_watch_real_post_apply_attribution",
+    "limit_down_watch_bounded_live_candidate",
+})
 RETIRED_REPORTS = (
     frozenset(
         {
@@ -81,6 +88,7 @@ RETIRED_REPORTS = (
     | RISING_MISSED_SCOUT_RETIRED_REPORTS
     | ENTRY_RECHECK_RETIRED_REPORTS
     | CLAUDE_LAB_RETIRED_REPORTS
+    | LIMIT_DOWN_RETIRED_REPORTS
 )
 RETIRED_FAMILIES = (
     RETIRED_REPORTS
@@ -111,6 +119,8 @@ RETIRED_FAMILIES = (
     | SCALP_OVERNIGHT_RETIRED_FAMILIES
 )
 RETIRED_ENV_PREFIXES = (
+    "KORSTOCKSCAN_LIMIT_DOWN_",
+    "THRESHOLD_CYCLE_RUN_LIMIT_DOWN_WATCH_REPORT",
     "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_",
     "THRESHOLD_CYCLE_RUN_ENTRY_RECHECK_DROUGHT_CONTROLLER",
     "KORSTOCKSCAN_RISING_MISSED_ONE_SHARE_ENTRY_",
@@ -156,6 +166,7 @@ RETIRED_OWNER_PREFIXES = tuple(
 ) + ("order_entry_recheck_",)
 RETIRED_STAGE_FLAGS = frozenset(
     {
+        "limit_down_watch_report",
         "pattern_labs",
         "scalping_pattern_lab_automation",
         "entry_recheck_drought_controller",
@@ -176,7 +187,9 @@ RETIRED_STAGE_FLAGS = frozenset(
 def retired_status(report_type: str = "adm_ldm") -> dict[str, Any]:
     """Explicit terminal state; never a source-quality failure or retry request."""
     retirement_id = (
-        CLAUDE_LAB_RETIREMENT_ID
+        LIMIT_DOWN_RETIREMENT_ID
+        if report_type in LIMIT_DOWN_RETIRED_REPORTS
+        else CLAUDE_LAB_RETIREMENT_ID
         if report_type in CLAUDE_LAB_RETIRED_REPORTS
         else ENTRY_RECHECK_RETIREMENT_ID
         if report_type in ENTRY_RECHECK_RETIRED_REPORTS | ENTRY_RECHECK_RETIRED_FAMILIES
@@ -244,6 +257,9 @@ def retirement_env() -> dict[str, str]:
         )
     }
     result.update({
+        "KORSTOCKSCAN_LIMIT_DOWN_WATCH_ENABLED": "false",
+        "KORSTOCKSCAN_LIMIT_DOWN_SIM_POLICY_ENABLED": "false",
+        "KORSTOCKSCAN_LIMIT_DOWN_LIVE_POLICY_ENABLED": "false",
         "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED": "false",
         "KORSTOCKSCAN_SCALPING_ENABLE_PYRAMID": "false",
         "KORSTOCKSCAN_SWING_ENABLE_PYRAMID": "false",

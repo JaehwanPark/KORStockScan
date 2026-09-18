@@ -31,7 +31,6 @@ from src.engine.sniper_time import (
 from src.engine.scalping.micro_estimator_state import (
     DEFAULT_STORE as MICRO_ESTIMATOR_STORE,
 )
-from src.engine.scalping.limit_down_watch import observe_raw_market_data
 from src.engine.scalping.micro_reversion.contracts import (
     registration_item_market_data_identity,
 )
@@ -2450,19 +2449,6 @@ class KiwoomWSManager:
                 )
         if observation_only:
             return
-        if normalized_realtime_type in {"0B", "0D"}:
-            try:
-                observe_raw_market_data(
-                    code,
-                    data,
-                    time.time(),
-                    realtime_type=normalized_realtime_type,
-                )
-            except Exception as exc:
-                log_error(
-                    "[WS] limit-down raw market-data observation failed "
-                    f"({code}/{normalized_realtime_type}): {exc}"
-                )
         with self._tick_lock:
             self._pending_tick_events[code] = {"code": code, "data": data}
             if snapshot_target is not None:

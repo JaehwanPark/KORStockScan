@@ -1623,10 +1623,6 @@ def test_ws_producer_hook_isolates_collector_failure(monkeypatch) -> None:
 
     manager = KiwoomWSManager("test-token")
     manager._micro_reversion_forward_collector = BrokenCollector()
-    monkeypatch.setattr(
-        "src.engine.kiwoom_websocket.observe_raw_market_data",
-        lambda *_args, **_kwargs: None,
-    )
 
     manager._queue_tick_event("000001", _snapshot(), realtime_type="0B")
 
@@ -1649,10 +1645,6 @@ def test_ws_producer_hook_routes_0b_and_0d_without_cross_call(monkeypatch) -> No
     collector = RecordingCollector()
     manager = KiwoomWSManager("test-token")
     manager._micro_reversion_forward_collector = collector
-    monkeypatch.setattr(
-        "src.engine.kiwoom_websocket.observe_raw_market_data",
-        lambda *_args, **_kwargs: None,
-    )
 
     manager._queue_tick_event("000001", _snapshot(), realtime_type="0D")
     manager._queue_tick_event("000001", _snapshot(), realtime_type="0B")
@@ -1676,12 +1668,6 @@ def test_ws_source_only_collection_reaches_collector_not_trading_event(
     manager._micro_reversion_forward_collector = collector
     manager._micro_reversion_observation_items_by_code = {"000001": "000001_AL"}
     manager._micro_reversion_observation_only_codes.add("000001")
-    monkeypatch.setattr(
-        "src.engine.kiwoom_websocket.observe_raw_market_data",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("source-only data must not reach another observer")
-        ),
-    )
 
     manager._queue_tick_event("000001", _snapshot(), realtime_type="0B")
 

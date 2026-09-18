@@ -23,7 +23,6 @@ from src.core.event_bus import EventBus
 from src.engine.signal_radar import SniperRadar
 from src.engine.scalping.watch_budget import (
     GENERAL_SCALPING,
-    LIMIT_DOWN_ROTATION,
     MARKET_GAINER_SOURCE,
     OPENING_ROTATION,
     RISING_MISSED,
@@ -47,10 +46,7 @@ from src.engine.scalping.scanner_lookup_attention_policy import (
     canonical_sha256 as lookup_attention_sha256,
 )
 from src.engine.scalping.scanner_lookup_attention_resource import same_tier_key
-from src.engine.scalping.limit_down_watch import (  # noqa: E402
-    LIMIT_DOWN_LIVE_UNLOCK_SOURCE,
-    LimitDownWatchManager,
-)
+
 from src.engine.scalping.opening_rotation import (
     EntryConfig as OpeningRotationConfig,
     RETIRED as OPENING_ROTATION_RETIRED,
@@ -134,7 +130,6 @@ PRIMARY_RISING_START_SOURCES = {
     "VOLUME_SURGE_POSITIVE",
     "BID_IMBALANCE_SURGE",
     MARKET_GAINER_SOURCE,
-    LIMIT_DOWN_LIVE_UNLOCK_SOURCE,
 }
 LOW_REBOUND_BASE_SOURCES = {"VOLUME_SURGE_RAW", "VALUE_TOP", "REALTIME_RANK_START"}
 LOW_REBOUND_PREFETCH_EXCLUDED_NAME_KEYWORDS = (
@@ -831,45 +826,12 @@ def _active_scanner_watching_count(db):
         return 0
 
 
-def _daily_limit_down_live_promotion_count(db):
-    """Count immutable live-policy handoffs, including completed/expired rows."""
-
-    try:
-        with db.get_session() as session:
-            if hasattr(session, "query"):
-                return (
-                    session.query(RecommendationHistory)
-                    .filter(
-                        RecommendationHistory.rec_date == datetime.now().date(),
-                        RecommendationHistory.strategy == "SCALPING",
-                        RecommendationHistory.position_tag == "SCANNER",
-                        RecommendationHistory.scanner_source_signature.contains(
-                            LIMIT_DOWN_LIVE_UNLOCK_SOURCE
-                        ),
-                    )
-                    .count()
-                )
-            return sum(
-                1
-                for record in getattr(session, "records", [])
-                if getattr(record, "rec_date", datetime.now().date())
-                == datetime.now().date()
-                and getattr(record, "strategy", None) == "SCALPING"
-                and getattr(record, "position_tag", None) == "SCANNER"
-                and LIMIT_DOWN_LIVE_UNLOCK_SOURCE
-                in str(getattr(record, "scanner_source_signature", "") or "")
-            )
-    except Exception as exc:
-        # Fail closed: an unknown daily count must not open a second entry.
-        log_error(f"⚠️ [LIMIT_DOWN_LIVE_AUTO] 일일 promotion 수 확인 실패: {exc}")
-        return 1
 
 
 def _active_scanner_watching_owner_counts(db):
     counts = {
         GENERAL_SCALPING: 0,
         OPENING_ROTATION: 0,
-        LIMIT_DOWN_ROTATION: 0,
         RISING_MISSED: 0,
     }
     try:
@@ -1664,7 +1626,6 @@ def _format_strength_display(target):
 def _representative_source(source_set):
     sources = set(source_set or [])
     for source in (
-        LIMIT_DOWN_LIVE_UNLOCK_SOURCE,
         "REALTIME_RANK_START",
         "PRICE_JUMP_START",
         "VOLUME_SURGE_POSITIVE",
@@ -1725,14 +1686,6 @@ def _scanner_rate_from_field(target, field_name):
 def _scanner_flu_metric(target):
     source_set = set(_source_signature(target))
 
-    if LIMIT_DOWN_LIVE_UNLOCK_SOURCE in source_set:
-        rate, has_rate = _scanner_rate_from_field(target, "LimitDownUnlockFromLowerPct")
-        if has_rate:
-            return (
-                rate,
-                "unlock_from_current_lower_limit_pct",
-                LIMIT_DOWN_LIVE_UNLOCK_SOURCE,
-            )
 
     if LOW_REBOUND_RISING_MISSED_SOURCE in source_set:
         rate, has_rate = _scanner_rate_from_field(target, "LowReboundDisplayChangeRate")
@@ -1835,8 +1788,8 @@ def _rank_jump(target):
 
 def _scanner_candidate_role(target):
     source_set = set(_source_signature(target))
-    if LIMIT_DOWN_LIVE_UNLOCK_SOURCE in source_set:
-        return "limit_down_live_auto_candidate"
+    if "LIMIT_DOWN_LIVE_UNLOCK" in source_set:
+        return "retired_entry_source"
     if LOW_REBOUND_RISING_MISSED_SOURCE in source_set:
         return LOW_REBOUND_RISING_MISSED_ROLE
     if MARKET_GAINER_SOURCE in source_set:
@@ -1883,7 +1836,6 @@ def _scanner_candidate_role(target):
 def _rising_start_score(target):
     source_set = set(_source_signature(target))
     source_bias = {
-        LIMIT_DOWN_LIVE_UNLOCK_SOURCE: 760.0,
         "REALTIME_RANK_START": 720.0,
         "PRICE_JUMP_START": 690.0,
         "VOLUME_SURGE_POSITIVE": 650.0,
@@ -2188,13 +2140,9 @@ def _scanner_priority_profile(target, previous=None):
             MARKET_GAINER_SOURCE in source_set
         ),
         "scanner_priority_reserved_partition": (
-            "limit_down"
-            if LIMIT_DOWN_LIVE_UNLOCK_SOURCE in source_set
-            else (
                 "low_rebound"
                 if LOW_REBOUND_RISING_MISSED_SOURCE in source_set
                 else "general"
-            )
         ),
         "scanner_priority_reason": reason,
         "scanner_demoted_reason": demoted_reason,
@@ -2791,42 +2739,6 @@ def _merge_candidate(candidate_pool, raw_target, source):
             current["LowReboundDisplayChangeRate"] = _safe_float(
                 raw_target.get("LowReboundDisplayChangeRate")
             )
-    elif source == LIMIT_DOWN_LIVE_UNLOCK_SOURCE:
-        current["SourceFamily"] = "limit_down_live_auto_trigger_v2"
-        current["ScannerWatchBudgetOwner"] = LIMIT_DOWN_ROTATION
-        for field in (
-            "LimitDownLivePolicyKey",
-            "LimitDownLivePolicyMatched",
-            "LimitDownLivePolicySourceDate",
-            "LimitDownLivePolicyVersion",
-            "LimitDownLivePolicySampleCount",
-            "LimitDownLiveTriggerType",
-            "LimitDownUnlockConfirmed",
-            "LimitDownUnlockConfirmedEpoch",
-            "LimitDownReboundConfirmed",
-            "LimitDownReboundConfirmedEpoch",
-            "LimitDownLastTickEpoch",
-            "LimitDownLowerLimitPrice",
-            "LimitDownBestAsk",
-            "LimitDownBestBid",
-            "LimitDownEntrySpreadPct",
-            "LimitDownMaxEntrySpreadPct",
-            "LimitDownUnlockFromLowerPct",
-            "LimitDownSessionOpenPrice",
-            "LimitDownSessionLowPrice",
-            "LimitDownReboundFromLowPct",
-            "LimitDownMinReboundFromLowPct",
-            "LimitDownCohort",
-            "LimitDownPriceBand",
-            "LimitDownConsecutiveCount",
-            "LimitDownRiskMaxDailyEntries",
-            "LimitDownScaleInAllowed",
-            "LimitDownSameDayReentryAllowed",
-            "LimitDownOvernightAllowed",
-            "LimitDownNormalScalpingGuardsRequired",
-        ):
-            if field in raw_target:
-                current[field] = raw_target.get(field)
     elif source == "SUPERNOVA":
         if raw_flu_present:
             current["SupernovaFluRate"] = raw_flu_rate
@@ -2921,7 +2833,6 @@ def build_candidate_pool(
     vi_targets=None,
     low_rebound_targets=None,
     market_gainer_targets=None,
-    limit_down_live_targets=None,
 ):
     candidate_pool = {}
     for target in realtime_rank_targets or []:
@@ -2948,8 +2859,6 @@ def build_candidate_pool(
         _merge_candidate(candidate_pool, target, LOW_REBOUND_RISING_MISSED_SOURCE)
     for target in market_gainer_targets or []:
         _merge_candidate(candidate_pool, target, MARKET_GAINER_SOURCE)
-    for target in limit_down_live_targets or []:
-        _merge_candidate(candidate_pool, target, LIMIT_DOWN_LIVE_UNLOCK_SOURCE)
     return candidate_pool
 
 
@@ -2992,6 +2901,8 @@ def rank_candidates(candidate_pool):
 
 
 def _scanner_candidate_pre_filter_reason(target):
+    if "LIMIT_DOWN_LIVE_UNLOCK" in _source_signature(target):
+        return "retired_entry_source"
     price = _safe_positive_int(target.get("Price"))
     if price <= 0:
         return "invalid_or_stale_price"
@@ -3001,8 +2912,6 @@ def _scanner_candidate_pre_filter_reason(target):
     if max_prev_close_gain_pct >= SCANNER_MAX_PREV_CLOSE_GAIN_PCT:
         return "prev_close_gain_at_or_above_scanner_cap"
     source_set = set(_source_signature(target))
-    if LIMIT_DOWN_LIVE_UNLOCK_SOURCE in source_set:
-        return _limit_down_live_candidate_block_reason(target)
     if LOW_REBOUND_RISING_MISSED_SOURCE in source_set:
         low_rebound_pct = _safe_float(target.get("LowReboundPct"))
         intraday_low = _safe_positive_int(target.get("IntradayLowPrice"))
@@ -3033,75 +2942,6 @@ def _scanner_candidate_pre_filter_reason(target):
     return ""
 
 
-def _limit_down_live_candidate_block_reason(target, *, now_ts=None):
-    if target.get("LimitDownLivePolicyMatched") is not True:
-        return "limit_down_live_policy_not_matched"
-    trigger_type = str(target.get("LimitDownLiveTriggerType") or "exact_unlock")
-    if trigger_type == "exact_unlock":
-        if target.get("LimitDownUnlockConfirmed") is not True:
-            return "limit_down_unlock_not_confirmed"
-    elif trigger_type == "near_rebound":
-        if target.get("LimitDownReboundConfirmed") is not True:
-            return "limit_down_rebound_not_confirmed"
-    else:
-        return "limit_down_live_trigger_type_invalid"
-    policy_key = str(target.get("LimitDownLivePolicyKey") or "")
-    expected_key = f"{target.get('LimitDownCohort')}|{target.get('LimitDownPriceBand')}"
-    if not policy_key or policy_key != expected_key:
-        return "limit_down_live_policy_key_mismatch"
-    if _safe_positive_int(target.get("LimitDownLivePolicySampleCount")) < 1:
-        return "limit_down_live_verified_sample_missing"
-    try:
-        source_date = datetime.fromisoformat(
-            str(target.get("LimitDownLivePolicySourceDate") or "")
-        ).date()
-    except ValueError:
-        return "limit_down_live_policy_source_date_invalid"
-    reference_date = datetime.fromtimestamp(
-        time.time() if now_ts is None else float(now_ts)
-    ).date()
-    if source_date >= reference_date:
-        return "limit_down_live_policy_not_prior_date"
-    current = _safe_positive_int(target.get("Price"))
-    lower_limit = _safe_positive_int(target.get("LimitDownLowerLimitPrice"))
-    best_ask = _safe_positive_int(target.get("LimitDownBestAsk"))
-    best_bid = _safe_positive_int(target.get("LimitDownBestBid"))
-    spread_pct = _safe_float(target.get("LimitDownEntrySpreadPct"))
-    max_spread_pct = _safe_float(target.get("LimitDownMaxEntrySpreadPct"))
-    common_quote_valid = best_ask >= current > 0 and best_ask >= best_bid > 0
-    if trigger_type == "exact_unlock":
-        trigger_quote_valid = current > lower_limit > 0
-    else:
-        session_open = _safe_positive_int(target.get("LimitDownSessionOpenPrice"))
-        session_low = _safe_positive_int(target.get("LimitDownSessionLowPrice"))
-        rebound_pct = _safe_float(target.get("LimitDownReboundFromLowPct"))
-        min_rebound_pct = _safe_float(target.get("LimitDownMinReboundFromLowPct"))
-        trigger_quote_valid = bool(
-            current >= session_open > 0
-            and current > session_low > 0
-            and 0.0 < min_rebound_pct <= 3.0
-            and rebound_pct >= min_rebound_pct
-        )
-    if not (common_quote_valid and trigger_quote_valid):
-        return "limit_down_live_quote_contract_invalid"
-    if not 0.0 < max_spread_pct <= 1.5:
-        return "limit_down_live_spread_cap_invalid"
-    if spread_pct < 0.0 or spread_pct > max_spread_pct:
-        return "limit_down_live_spread_too_wide"
-    if _safe_positive_int(target.get("LimitDownRiskMaxDailyEntries")) != 1:
-        return "limit_down_live_daily_entry_cap_invalid"
-    if (
-        target.get("LimitDownScaleInAllowed") is not False
-        or target.get("LimitDownSameDayReentryAllowed") is not False
-        or target.get("LimitDownOvernightAllowed") is not False
-        or target.get("LimitDownNormalScalpingGuardsRequired") is not True
-    ):
-        return "limit_down_live_risk_contract_invalid"
-    if now_ts is not None:
-        last_tick = _safe_float(target.get("LimitDownLastTickEpoch"))
-        if last_tick <= 0.0 or not 0.0 <= float(now_ts) - last_tick <= 5.0:
-            return "limit_down_live_quote_stale"
-    return ""
 
 
 def _filter_picks_within_cooldown(recent_picks, now_ts, reentry_cooldown_sec):
@@ -3271,25 +3111,8 @@ def _should_promote_candidate(target, recent_picks, now_ts, reentry_cooldown_sec
 
 def _scanner_real_source_guard_decision(target, recent_picks, now_ts):
     source_signature = _source_signature(target)
-    if LIMIT_DOWN_LIVE_UNLOCK_SOURCE in set(source_signature):
-        block_reason = _limit_down_live_candidate_block_reason(target, now_ts=now_ts)
-        return {
-            "blocked": bool(block_reason),
-            "reason": block_reason
-            or "limit_down_live_auto_policy_and_unlock_confirmed",
-            "candidate_role": "limit_down_live_auto_candidate",
-            "source_signature": ",".join(source_signature),
-            "limit_down_live_policy_key": target.get("LimitDownLivePolicyKey"),
-            "limit_down_live_policy_source_date": target.get(
-                "LimitDownLivePolicySourceDate"
-            ),
-            "limit_down_live_policy_sample_count": target.get(
-                "LimitDownLivePolicySampleCount"
-            ),
-            "limit_down_entry_spread_pct": target.get("LimitDownEntrySpreadPct"),
-            "limit_down_max_entry_spread_pct": target.get("LimitDownMaxEntrySpreadPct"),
-            "limit_down_normal_scalping_guards_required": True,
-        }
+    if "LIMIT_DOWN_LIVE_UNLOCK" in source_signature:
+        return {"blocked": True, "reason": "retired_entry_source", "source_signature": ",".join(source_signature)}
     raw_previous = (recent_picks or {}).get(target.get("Code")) or {}
     anchor_reset = _scanner_anchor_reset_context(target, raw_previous)
     previous = {} if anchor_reset["reset"] else raw_previous
@@ -4009,64 +3832,6 @@ def _scanner_event_fields(target, source_guard=None):
         or GENERAL_SCALPING,
         "scanner_watch_budget_policy": watch_budget_policy_version(),
         "scanner_watch_budget_owner_source": "scanner_candidate_classification",
-        "limit_down_live_policy_key": target.get("LimitDownLivePolicyKey") or "",
-        "limit_down_live_policy_matched": target.get("LimitDownLivePolicyMatched"),
-        "limit_down_live_policy_source_date": target.get(
-            "LimitDownLivePolicySourceDate"
-        )
-        or "",
-        "limit_down_live_policy_version": target.get("LimitDownLivePolicyVersion")
-        or "",
-        "limit_down_live_policy_sample_count": _safe_positive_int(
-            target.get("LimitDownLivePolicySampleCount")
-        ),
-        "limit_down_live_trigger_type": target.get("LimitDownLiveTriggerType")
-        or "exact_unlock",
-        "limit_down_unlock_confirmed": target.get("LimitDownUnlockConfirmed"),
-        "limit_down_unlock_confirmed_epoch": _safe_float(
-            target.get("LimitDownUnlockConfirmedEpoch")
-        ),
-        "limit_down_rebound_confirmed": target.get("LimitDownReboundConfirmed"),
-        "limit_down_rebound_confirmed_epoch": _safe_float(
-            target.get("LimitDownReboundConfirmedEpoch")
-        ),
-        "limit_down_last_tick_epoch": _safe_float(target.get("LimitDownLastTickEpoch")),
-        "limit_down_lower_limit_price": _safe_positive_int(
-            target.get("LimitDownLowerLimitPrice")
-        ),
-        "limit_down_best_ask": _safe_positive_int(target.get("LimitDownBestAsk")),
-        "limit_down_best_bid": _safe_positive_int(target.get("LimitDownBestBid")),
-        "limit_down_entry_spread_pct": _safe_float(
-            target.get("LimitDownEntrySpreadPct")
-        ),
-        "limit_down_max_entry_spread_pct": _safe_float(
-            target.get("LimitDownMaxEntrySpreadPct")
-        ),
-        "limit_down_session_open_price": _safe_positive_int(
-            target.get("LimitDownSessionOpenPrice")
-        ),
-        "limit_down_session_low_price": _safe_positive_int(
-            target.get("LimitDownSessionLowPrice")
-        ),
-        "limit_down_rebound_from_low_pct": _safe_float(
-            target.get("LimitDownReboundFromLowPct")
-        ),
-        "limit_down_min_rebound_from_low_pct": _safe_float(
-            target.get("LimitDownMinReboundFromLowPct")
-        ),
-        "limit_down_cohort": target.get("LimitDownCohort") or "",
-        "limit_down_price_band": target.get("LimitDownPriceBand") or "",
-        "limit_down_risk_max_daily_entries": _safe_positive_int(
-            target.get("LimitDownRiskMaxDailyEntries")
-        ),
-        "limit_down_scale_in_allowed": target.get("LimitDownScaleInAllowed"),
-        "limit_down_same_day_reentry_allowed": target.get(
-            "LimitDownSameDayReentryAllowed"
-        ),
-        "limit_down_overnight_allowed": target.get("LimitDownOvernightAllowed"),
-        "limit_down_normal_scalping_guards_required": target.get(
-            "LimitDownNormalScalpingGuardsRequired"
-        ),
         "scanner_market_gainer_rank": _safe_positive_int(
             target.get("MarketGainerRank")
         ),
@@ -4686,40 +4451,6 @@ def _scanner_runtime_target_payload(
         "scanner_watch_budget_owner_source": fields.get(
             "scanner_watch_budget_owner_source"
         ),
-        "limit_down_live_policy_key": fields.get("limit_down_live_policy_key"),
-        "limit_down_live_policy_matched": fields.get("limit_down_live_policy_matched"),
-        "limit_down_live_policy_source_date": fields.get(
-            "limit_down_live_policy_source_date"
-        ),
-        "limit_down_live_policy_version": fields.get("limit_down_live_policy_version"),
-        "limit_down_live_policy_sample_count": fields.get(
-            "limit_down_live_policy_sample_count"
-        ),
-        "limit_down_unlock_confirmed": fields.get("limit_down_unlock_confirmed"),
-        "limit_down_unlock_confirmed_epoch": fields.get(
-            "limit_down_unlock_confirmed_epoch"
-        ),
-        "limit_down_last_tick_epoch": fields.get("limit_down_last_tick_epoch"),
-        "limit_down_lower_limit_price": fields.get("limit_down_lower_limit_price"),
-        "limit_down_best_ask": fields.get("limit_down_best_ask"),
-        "limit_down_best_bid": fields.get("limit_down_best_bid"),
-        "limit_down_entry_spread_pct": fields.get("limit_down_entry_spread_pct"),
-        "limit_down_max_entry_spread_pct": fields.get(
-            "limit_down_max_entry_spread_pct"
-        ),
-        "limit_down_cohort": fields.get("limit_down_cohort"),
-        "limit_down_price_band": fields.get("limit_down_price_band"),
-        "limit_down_risk_max_daily_entries": fields.get(
-            "limit_down_risk_max_daily_entries"
-        ),
-        "limit_down_scale_in_allowed": fields.get("limit_down_scale_in_allowed"),
-        "limit_down_same_day_reentry_allowed": fields.get(
-            "limit_down_same_day_reentry_allowed"
-        ),
-        "limit_down_overnight_allowed": fields.get("limit_down_overnight_allowed"),
-        "limit_down_normal_scalping_guards_required": fields.get(
-            "limit_down_normal_scalping_guards_required"
-        ),
         "scanner_market_gainer_rank": fields.get("scanner_market_gainer_rank"),
         "scanner_market_gainer_flu_rate": fields.get("scanner_market_gainer_flu_rate"),
         "scanner_market_gainer_stex_tp": fields.get("scanner_market_gainer_stex_tp"),
@@ -4932,7 +4663,6 @@ def promote_candidates(
     reentry_cooldown_sec,
     token=None,
     now_ts=None,
-    limit_down_manager=None,
 ):
     now_ts = time.time() if now_ts is None else now_ts
     candidate_venue_fields = scalping_session_venue_provenance(now_ts)
@@ -4985,7 +4715,6 @@ def promote_candidates(
         )
         target["ScannerWatchBudgetOwner"] = owner
     owner_priority = {
-        LIMIT_DOWN_ROTATION: 0,
         OPENING_ROTATION: 1,
         RISING_MISSED: 2,
         GENERAL_SCALPING: 3,
@@ -5004,18 +4733,6 @@ def promote_candidates(
     )
     _expire_after_buy_window_scanner_watching(db, now_ts)
     active_count = _active_scanner_watching_count(db)
-    observation_slots = (
-        limit_down_manager.active_slot_count() if limit_down_manager is not None else 0
-    )
-    transferable_limit_down_slot = (
-        1
-        if observation_slots > 0
-        and any(
-            LIMIT_DOWN_LIVE_UNLOCK_SOURCE in set(_source_signature(target))
-            for target in ranked_targets
-        )
-        else 0
-    )
     promotion_policy = watch_budget_limits(
         max_active,
         opening_window_active=True,
@@ -5083,10 +4800,6 @@ def promote_candidates(
             0,
             promotion_policy.opening_protected
             - owner_promoted_counts[OPENING_ROTATION],
-        )
-        + max(
-            0,
-            promotion_policy.limit_down_protected - observation_slots,
         ),
     )
     rising_owner_available = max(
@@ -5136,9 +4849,7 @@ def promote_candidates(
         available_open_slots=max(
             0,
             max_active
-            - active_count
-            - observation_slots
-            + transferable_limit_down_slot,
+            - active_count,
         ),
         owner_available=rising_owner_available,
     )
@@ -5175,9 +4886,7 @@ def promote_candidates(
         open_slots = max(
             0,
             max_active
-            - active_count
-            - observation_slots
-            + transferable_limit_down_slot,
+            - active_count,
         )
         replacement_needed = max(0, low_rebound_floor_shortfall - open_slots)
         replacement_needed = min(
@@ -5213,8 +4922,8 @@ def promote_candidates(
             )
     owner_promoted_counts = _active_scanner_watching_owner_counts(db)
     max_new_limit = max(0, int(max_new_codes or 0))
-    raw_open_slots = max(0, max_active - active_count - observation_slots)
-    open_slots = raw_open_slots + transferable_limit_down_slot
+    raw_open_slots = max(0, max_active - active_count)
+    open_slots = raw_open_slots
     rising_owner_available = max(
         0, rising_owner_limit - owner_promoted_counts[RISING_MISSED]
     )
@@ -5274,7 +4983,6 @@ def promote_candidates(
                     "scanner_active_watching_count": active_count,
                     "scanner_max_active": max_active,
                     "scanner_max_new_codes": max_new_limit,
-                    "scanner_observation_slot_count": observation_slots,
                 },
             )
         print(
@@ -5310,27 +5018,6 @@ def promote_candidates(
     for target in ranked_targets:
         processed_scan_ranks.add(target.get("ScannerScanRank"))
         code = target["Code"]
-        is_limit_down_live_target = LIMIT_DOWN_LIVE_UNLOCK_SOURCE in set(
-            _source_signature(target)
-        )
-        if (
-            not is_limit_down_live_target
-            and transferable_limit_down_slot > 0
-            and open_slot_promotions_remaining <= transferable_limit_down_slot
-        ):
-            _log_scanner_candidate_pruned(
-                target,
-                reason="reserved_limit_down_capacity",
-                scan_generation_id=scan_generation_id,
-                scan_rank=target.get("ScannerScanRank") or 0,
-                ranked_candidate_count=ranked_candidate_count,
-                venue_fields=candidate_venue_fields,
-                context={
-                    "scanner_transferable_limit_down_slot": transferable_limit_down_slot,
-                    "scanner_open_slot_promotions_remaining": open_slot_promotions_remaining,
-                },
-            )
-            continue
         if _has_active_non_scanner_scalping_watching_code(db, code):
             _log_scanner_candidate_pruned(
                 target,
@@ -5351,7 +5038,6 @@ def promote_candidates(
         )
         if (
             not uses_low_rebound_reserved_slot
-            and not is_limit_down_live_target
             and general_promoted_count >= general_slot_limit
         ):
             _log_scanner_candidate_pruned(
@@ -5403,8 +5089,6 @@ def promote_candidates(
             owner_limit = promotion_policy.general_max
         elif watch_owner == OPENING_ROTATION:
             owner_limit = promotion_policy.opening_protected
-        elif watch_owner == LIMIT_DOWN_ROTATION:
-            owner_limit = promotion_policy.limit_down_protected
         else:
             # The general slot is never borrowed.  Unused opening slots are
             # available to rising candidates after the opening-first pass.
@@ -5415,10 +5099,6 @@ def promote_candidates(
                     0,
                     promotion_policy.opening_protected
                     - owner_promoted_counts[OPENING_ROTATION],
-                )
-                + max(
-                    0,
-                    promotion_policy.limit_down_protected - observation_slots,
                 ),
             )
         market_gainer_cached = market_gainer_precheck.get(id(target))
@@ -5835,8 +5515,6 @@ def promote_candidates(
             )
         elif used_open_slot:
             open_slot_promotions_remaining = max(0, open_slot_promotions_remaining - 1)
-            if is_limit_down_live_target and transferable_limit_down_slot > 0:
-                transferable_limit_down_slot = 0
 
         if is_market_gainer_target:
             active_market_gainer_codes.add(code)
@@ -5876,9 +5554,7 @@ def promote_candidates(
         active_market_candidate_owner_by_code[code] = watch_owner
         if is_market_gainer_target:
             market_gainer_promoted_count += 1
-        if is_limit_down_live_target:
-            pass
-        elif uses_low_rebound_reserved_slot:
+        if uses_low_rebound_reserved_slot:
             low_rebound_promoted_count += 1
         else:
             general_promoted_count += 1
@@ -5892,11 +5568,6 @@ def promote_candidates(
             },
         )
         event_bus.publish("SCALPING_SCANNER_PROMOTED_TARGET", runtime_target_payload)
-        if limit_down_manager is not None:
-            # Keep the observation-only signal block until the synchronous
-            # normal-target attach handoff has completed.  The release keeps
-            # the existing WS item, so no intermediate REMOVE is emitted.
-            limit_down_manager.relinquish_for_trading(code)
 
         if len(new_codes_found) >= remaining_slots:
             break
@@ -6698,18 +6369,8 @@ def run_scalper_iteration(
     max_new_codes,
     open_top_limit,
     supernova_limit,
-    limit_down_manager=None,
     prewarm_only=False,
 ):
-    limit_down_live_targets = []
-    if limit_down_manager is not None and not prewarm_only:
-        limit_down_manager.reconcile(active_codes=_active_scalping_codes(db))
-        live_target = limit_down_manager.live_promotion_target(
-            now_epoch=time.time(),
-            daily_promotion_count=_daily_limit_down_live_promotion_count(db),
-        )
-        if live_target is not None:
-            limit_down_live_targets.append(live_target)
     market_gainer_targets = []
     if _market_gainer_source_enabled():
         market_gainer_stex_tp = _market_gainer_stex_tp()
@@ -6868,7 +6529,6 @@ def run_scalper_iteration(
         vi_targets=vi_targets,
         low_rebound_targets=low_rebound_targets,
         market_gainer_targets=market_gainer_targets,
-        limit_down_live_targets=limit_down_live_targets,
     )
     ranked_targets = rank_candidates(candidate_pool)
     if prewarm_only:
@@ -6886,7 +6546,6 @@ def run_scalper_iteration(
         max_new_codes=max_new_codes,
         reentry_cooldown_sec=reentry_cooldown_sec,
         token=token,
-        limit_down_manager=limit_down_manager,
     )
 
 
@@ -6938,7 +6597,6 @@ def run_scalper(is_test_mode=False):
     configure_pruned_candidate_bbo_collector(token)
 
     radar = SniperRadar(token)
-    limit_down_manager = LimitDownWatchManager(token, db, event_bus)
     previous_iteration_started_monotonic = None
 
     while True:
@@ -6985,7 +6643,6 @@ def run_scalper(is_test_mode=False):
                     max_new_codes=_scalping_watching_max_active(),
                     open_top_limit=open_top_limit,
                     supernova_limit=supernova_limit,
-                    limit_down_manager=None,
                     prewarm_only=True,
                 )
                 prewarm_codes_by_window[prewarm_key] = tuple(prewarm_codes)
@@ -7022,7 +6679,6 @@ def run_scalper(is_test_mode=False):
                 )
                 recent_picks = {}
                 last_outside_reset_key = reset_key
-            limit_down_manager.release(reason="session_ended")
             if time.time() - last_closed_msg_time > 3600:
                 print(
                     "🌙 신규 스캘핑 후보 발굴 시간이 아닙니다. "
@@ -7063,22 +6719,15 @@ def run_scalper(is_test_mode=False):
             max_new_codes=max_new_codes,
             open_top_limit=open_top_limit,
             supernova_limit=supernova_limit,
-            limit_down_manager=limit_down_manager,
         )
         if active_window:
             active_key = (now.date().isoformat(), int(active_window[0]))
             prewarm_codes = prewarm_codes_by_window.pop(active_key, ())
             if prewarm_codes:
-                limit_down_code = (
-                    str(getattr(limit_down_manager.active, "code", "") or "")
-                    if limit_down_manager.active is not None
-                    else ""
-                )
                 released_codes = _release_unused_prewarm_codes(
                     event_bus,
                     prewarm_codes,
                     active_codes=_active_scalping_codes(db),
-                    protected_codes=([limit_down_code] if limit_down_code else []),
                 )
                 log_info(
                     "[SCALPING_SCANNER_PREWARM_RELEASE] "

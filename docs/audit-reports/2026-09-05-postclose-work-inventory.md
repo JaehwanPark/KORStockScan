@@ -46,7 +46,6 @@ PID·lock·progress·deadline·latest terminal을 실제 run 기준으로 확인
 | #1–#4 | Bot stop / wrapper·pipeline immutable snapshot / snapshot retention | 정기 ON, 운영 | stop-only·고정 code/input hash·완료 snapshot만 cleanup. 운영 성공이며 EV 아님 |
 | #5 | `backfill_threshold_cycle_events` | 정기 ON, 입력 | exact-date compact·EOF/checkpoint·raw/retained/excluded 보존 → Daily/EV |
 | #6 | `sniper_post_sell_feedback`의 sim post-sell | 조건부 ON, source-only | 성숙/미완료·same-session 결과; actual 손익/승인으로 전환 금지 |
-| #7 | `monitoring.limit_down_watch_report` | 조건부 ON, 진단 | source-valid 급락/유동성 위험과 no-observation 직접 사유 → 기존 source/workorder |
 | #8 | `monitoring.rising_missed_intraday_feedback` | 조건부 ON, 진단/CF | exact opportunity·최초 blocker·후행 executable/proxy 분리 |
 | #9/#101 | `monitoring.rising_missed_scout_workorder` | RETIRED, 사용자 삭제 | 신규 scout runtime·전용 producer/consumer·산출물 삭제. prior 후 refresh도 제거; 과거 source gap은 복원 사유 아님 |
 | #10 | `monitoring.scalping_pyramid_intraday_feedback` | RETIRED | PYRAMID 런타임·튜닝 폐기; 과거 원장 archive-only, 신규 필수 입력/cron 없음 |
@@ -155,3 +154,7 @@ Claude 폐기 실행·검증·cleanup 및 선택 배포 증거는 [9/18 폐기 �
 기존 quality materialization의 control/labels는 최초 Daily 앞에서 생성·재사용하고 calibration prepare가 receipt를 결속한다. final source audit 뒤 evaluate만 후보 호출을 허용한다. WS 등 필수 입력 producer 뒤 finalize가 기존 machine/compact 검증과 단일 dated publisher를 소비하며 Daily refresh·최초 EV·runtime summary보다 앞에 실행한다. 이후 tail 요약 갱신은 handoff로 재결속하고 provider/publisher를 호출하지 않는다. 부분 compact CLI는 공통 finalize를 소비한다.
 
 동일 원천은 shared data 실체 경로로 재사용한다. source 변경 시 finalize가 재평가 요구로 차단되며 과거21 excluded/비교0을 EV0 또는 no-edge로 표시하지 않는다. 자연 model/prompt holdout·실제 PREOPEN/PID·완료 비용 성과는 기존 stable owner의 다음 거래일 acceptance다. [통합 계획](../proposals/compact-ai-postclose-source-paired-evaluation-and-preopen-consumer-integration-plan-2026-09-19.md).
+
+## Limit-down 축 폐기
+
+사용자 지시로 전용 관찰 슬롯·스캐너 승격·PREOPEN 정책·장후 평가/검증 요구를 제거했다. 공유 주문·체결·손익 원천과 역사적 보유분의 안전 처리만 보존한다. 폐기 범위·산출물 삭제·검증과 배포 구분은 [폐기 리뷰](2026-09-19-limit-down-watch-retirement-review.md)를 따른다.

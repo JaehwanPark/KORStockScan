@@ -3360,7 +3360,6 @@ def test_opening_rotation_duplicate_guard_bypass_is_wired_before_common_blocks()
     for hard_guard_call in (
         "_is_standard_stale_submit_block",
         "_evaluate_caution_stale_negative_micro_submit_block",
-        "_limit_down_live_pre_submit_guard",
         "_stage_broker_accepted_entry_order",
     ):
         assert hard_guard_call in submit_source

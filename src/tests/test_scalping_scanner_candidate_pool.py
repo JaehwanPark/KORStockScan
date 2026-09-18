@@ -6827,7 +6827,6 @@ def test_market_gainer_reservation_replaces_only_six_non_holding_rising_slots(
 ):
     promoted_event_fields = []
     monkeypatch.setenv("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE", "16")
-    monkeypatch.setenv("KORSTOCKSCAN_LIMIT_DOWN_WATCH_ENABLED", "false")
     monkeypatch.setenv("KORSTOCKSCAN_SCANNER_MARKET_GAINER_RESERVED_SLOTS", "6")
     monkeypatch.setattr(
         scalping_scanner,
@@ -7308,3 +7307,15 @@ def test_new_kiwoom_source_helpers_return_empty_list_on_fetch_failure(monkeypatc
     assert kiwoom_utils.get_realtime_item_rank_ka00198("TOKEN") == []
     assert kiwoom_utils.get_price_jump_ka10019("TOKEN") == []
     assert kiwoom_utils.get_bid_balance_surge_ka10021("TOKEN") == []
+
+
+def test_retired_limit_down_payload_cannot_enter_normal_scanner():
+    target = {
+        "Code": "005930", "Price": 60000, "Source": "LIMIT_DOWN_LIVE_UNLOCK",
+        "SourceSet": {"PRICE_JUMP_START", "LIMIT_DOWN_LIVE_UNLOCK"},
+        "LimitDownLivePolicyMatched": True,
+    }
+    assert scalping_scanner._scanner_candidate_pre_filter_reason(target) == "retired_entry_source"
+    decision = scalping_scanner._scanner_real_source_guard_decision(target, {}, 1000)
+    assert decision["blocked"] is True
+    assert decision["reason"] == "retired_entry_source"

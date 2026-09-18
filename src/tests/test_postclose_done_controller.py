@@ -2193,10 +2193,6 @@ def test_postclose_done_controller_accepts_report_only_followup_warnings(
                 "active_sim_priority_stale_seed_alias_consumed",
                 "lifecycle_bucket_discovery_mtd_parent_granularity_not_target",
                 "lifecycle_bucket_discovery_rolling5d_parent_granularity_not_target",
-                "limit_down_watch_candidate_source_invalid",
-                "limit_down_watch_candidate_source_quality_blocked",
-                "limit_down_watch_event_source_invalid",
-                "limit_down_watch_source_blocked",
                 "swing_active_arm_priority_preopen_handoff_pending",
                 "swing_active_arm_priority_runtime_observation_missing",
                 "swing_lifecycle_bucket_discovery:ai_two_pass_review_fail_closed_sim_auto_blocked",
@@ -2603,13 +2599,6 @@ def test_disabled_artifact_inventory_does_not_trigger_wrapper_rerun():
     assert mod._has_invalid_artifact_status(verification) is False
 
 
-def test_limit_down_no_observation_is_done_acceptable_warning():
-    assert {
-        "limit_down_watch_ordered_path_not_observed",
-        "limit_down_watch_observer_activation_not_observed",
-        "limit_down_watch_operator_live_conversion_approval_required",
-        "limit_down_watch_separate_preopen_apply_ready",
-    }.issubset(mod.DONE_ACCEPTABLE_WARNING_ISSUES)
 
 
 def test_postclose_done_controller_blocks_done_when_codex_runner_incomplete_is_required(

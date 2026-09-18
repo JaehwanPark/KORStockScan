@@ -76,14 +76,7 @@ from src.engine.scalping.position_sizing_allocator import (
 from src.engine.scalping.multi_timeframe_context import (
     PROMOTION_ARTIFACT_REQUIRED_FROM_DATE,
 )
-from src.engine.scalping.limit_down_watch import (
-    LIMIT_DOWN_LIVE_ENV_PREFIX,
-    LIMIT_DOWN_LIVE_POLICY_VERSION,
-    LIMIT_DOWN_SIM_ENV_PREFIX,
-    LIMIT_DOWN_SIM_POLICY_VERSION,
-    validate_limit_down_live_policy_payload,
-    validate_limit_down_sim_policy_payload,
-)
+
 from src.engine.automation.source_quality_hard_gate import (
     load_source_quality_preflight,
     source_quality_preflight_blocked,
@@ -160,10 +153,6 @@ RUNTIME_GAP_PROVENANCE_DIR = DATA_DIR / "threshold_cycle" / "runtime_gap_provena
 ENTRY_CANCEL_WAIT_TUNING_DIR = DATA_DIR / "report" / "entry_cancel_wait_tuning"
 ENTRY_CANCEL_WAIT_FAMILY = "entry_cancel_wait_runtime"
 ENTRY_CANCEL_WAIT_ACTIVATION_DATE = "2026-06-15"
-LIMIT_DOWN_WATCH_FAMILY = "limit_down_watch"
-LIMIT_DOWN_SIM_POLICY_DIR = DATA_DIR / "threshold_cycle" / "scalp_sim_policies"
-LIMIT_DOWN_LIVE_POLICY_DIR = DATA_DIR / "threshold_cycle" / "bounded_live_candidates"
-LIMIT_DOWN_PREOPEN_HANDOFF_REQUIRED_TARGET_DATE = "2026-09-04"
 RUNTIME_HANDOFF_CONTRACT_VERSION = 1
 RUNTIME_HANDOFF_CONTRACT_REQUIRED_TARGET_DATE = "2026-08-04"
 
@@ -3416,36 +3405,6 @@ def _entry_live_tuning_owner_family(*selected_groups: list[dict[str, Any]]) -> s
     return ""
 
 
-def _limit_down_watch_entry_live_owner_family(
-    *selected_groups: list[dict[str, Any]],
-) -> str:
-    """Resolve only verified-compatible entry controls away from Limit-down.
-
-    Unlike the general entry-owner resolver, this intentionally does not exempt
-    an unknown family merely because it is operator-locked.  New entry families
-    therefore remain a same-stage conflict until their manipulation point and
-    cohort separation are explicitly reviewed and allowlisted here.
-    """
-
-    compatible_entry_controls = {
-        LIMIT_DOWN_WATCH_FAMILY,
-        AGGRESSIVE_ENTRY_PRICE_OVERRIDE_FAMILY,
-        SCALPING_SCANNER_REAL_SOURCE_GUARD_FAMILY,
-        "score65_74_recovery_probe",
-        SCORE65_74_STRONG_MICRO_OVERRIDE_FAMILY,
-        EARLY_ACCEL_RECHECK_FAMILY,
-        AI_NUMERIC_CONSISTENCY_RECHECK_FAMILY,
-        PRE_SUBMIT_LIQUIDITY_RELIEF_FAMILY,
-        WEAK_CONTEXT_LATE_ENTRY_GUARD_FAMILY,
-    }
-    for group in selected_groups:
-        for item in group or []:
-            if not isinstance(item, dict) or str(item.get("stage") or "") != "entry":
-                continue
-            family = str(item.get("family") or "").strip()
-            if family and family not in compatible_entry_controls:
-                return family
-    return ""
 
 
 def _close_scalping_scanner_real_source_guard_for_live_owner(
@@ -4611,118 +4570,6 @@ def _persistent_operator_overrides_runtime_audit(
     }
 
 
-def _limit_down_watch_runtime_policy_audit(
-    target_date: str, effective_env: dict[str, str]
-) -> dict[str, Any]:
-    modes = (
-        (
-            "sim",
-            LIMIT_DOWN_SIM_ENV_PREFIX,
-            LIMIT_DOWN_SIM_POLICY_DIR,
-            LIMIT_DOWN_SIM_POLICY_VERSION,
-            validate_limit_down_sim_policy_payload,
-        ),
-        (
-            "live",
-            LIMIT_DOWN_LIVE_ENV_PREFIX,
-            LIMIT_DOWN_LIVE_POLICY_DIR,
-            LIMIT_DOWN_LIVE_POLICY_VERSION,
-            validate_limit_down_live_policy_payload,
-        ),
-    )
-    mode_audits: list[dict[str, Any]] = []
-    required_env_keys: list[str] = []
-    for mode, prefix, expected_dir, expected_version, validator in modes:
-        enabled_key = f"{prefix}ENABLED"
-        active_date_key = f"{prefix}ACTIVE_DATE"
-        enabled = _runtime_env_enabled(effective_env.get(enabled_key))
-        mode_audit: dict[str, Any] = {
-            "mode": mode,
-            "enabled": enabled,
-            "status": "disabled",
-            "reason": "policy_disabled",
-        }
-        if not enabled:
-            mode_audits.append(mode_audit)
-            continue
-        keys = [
-            enabled_key,
-            active_date_key,
-            f"{prefix}FILE",
-            f"{prefix}VERSION",
-            f"{prefix}SOURCE_DATE",
-            f"{prefix}SHA256",
-        ]
-        required_env_keys.extend(keys)
-        missing = [key for key in keys if not str(effective_env.get(key) or "").strip()]
-        active_date = str(effective_env.get(active_date_key) or "").strip()
-        source_date = str(effective_env.get(f"{prefix}SOURCE_DATE") or "").strip()
-        policy_path = Path(str(effective_env.get(f"{prefix}FILE") or ""))
-        try:
-            source_day = date.fromisoformat(source_date)
-            target_day = date.fromisoformat(target_date)
-            source_age_trading_days = count_krx_trading_days(source_day, target_day)
-        except ValueError:
-            source_age_trading_days = -1
-        mode_audit.update(
-            {
-                "required_env_keys": keys,
-                "missing_env_keys": missing,
-                "active_date": active_date or None,
-                "source_date": source_date or None,
-                "source_age_trading_days": source_age_trading_days,
-                "policy_file": str(policy_path) if str(policy_path) != "." else None,
-            }
-        )
-        if missing:
-            mode_audit.update(status="fail", reason="required_env_missing")
-        elif active_date != target_date:
-            mode_audit.update(status="fail", reason="policy_inactive_date")
-        elif source_age_trading_days != 1 or source_date >= target_date:
-            mode_audit.update(
-                status="fail", reason="source_not_immediately_prior_krx_trading_day"
-            )
-        elif policy_path.parent.resolve() != expected_dir.resolve():
-            mode_audit.update(status="fail", reason="policy_directory_invalid")
-        elif not policy_path.is_file():
-            mode_audit.update(status="fail", reason="policy_file_missing")
-        elif effective_env.get(f"{prefix}VERSION") != expected_version:
-            mode_audit.update(status="fail", reason="policy_version_env_invalid")
-        elif _file_sha256(policy_path) != effective_env.get(f"{prefix}SHA256"):
-            mode_audit.update(status="fail", reason="policy_sha256_mismatch")
-        else:
-            payload = _load_json(policy_path)
-            valid, issues = validator(payload, source_date)
-            preflight = load_source_quality_preflight(source_date)
-            if source_quality_preflight_blocked(preflight):
-                mode_audit.update(
-                    status="fail",
-                    reason="source_quality_preflight_blocked",
-                    source_quality_preflight_gate=preflight,
-                )
-            elif not valid:
-                mode_audit.update(
-                    status="fail",
-                    reason="policy_payload_invalid",
-                    policy_issues=issues,
-                )
-            else:
-                mode_audit.update(status="pass", reason="exact_date_policy_usable")
-        mode_audits.append(mode_audit)
-    enabled_audits = [item for item in mode_audits if item.get("enabled")]
-    failed = [item for item in enabled_audits if item.get("status") != "pass"]
-    return {
-        "family": LIMIT_DOWN_WATCH_FAMILY,
-        "enabled": bool(enabled_audits),
-        "status": "fail" if failed else "pass" if enabled_audits else "disabled",
-        "reason": (
-            "mode_policy_unusable"
-            if failed
-            else "exact_date_policy_usable" if enabled_audits else "policy_disabled"
-        ),
-        "required_env_keys": sorted(set(required_env_keys)),
-        "mode_audits": mode_audits,
-    }
 
 
 def _position_sizing_policy_authority_valid(policy: Mapping[str, Any]) -> bool:
@@ -5542,10 +5389,6 @@ def verify_runtime_env_handoff(
     }
     runtime_policy_audits = [
         *_split_runtime_policy_audits(target_date, effective_env_overrides),
-        _limit_down_watch_runtime_policy_audit(
-            target_date,
-            effective_env_overrides,
-        ),
         _holding_decision_context_runtime_audit(
             target_date,
             effective_env_overrides,
@@ -6615,11 +6458,6 @@ def _write_runtime_env(
             if (manifest.get("entry_cancel_wait_runtime") or {}).get("selected")
             else []
         ),
-        *(
-            [manifest.get("limit_down_watch")]
-            if (manifest.get("limit_down_watch") or {}).get("selected")
-            else []
-        ),
     ]
     selected_families: list[str] = []
     removed_selected_families: list[str] = []
@@ -6940,151 +6778,6 @@ def _entry_cancel_wait_standalone_decision(
     return decision, env_overrides
 
 
-def _limit_down_watch_standalone_decision(
-    source_date: str,
-    target_date: str,
-    *,
-    entry_live_owner_family: str = "",
-    include_families: set[str] | None = None,
-) -> tuple[dict[str, Any], dict[str, str]]:
-    """Create an exact-date PREOPEN handoff for limit-down sim/live policies.
-
-    The caller separates a true entry tuning owner from explicitly allowlisted
-    source guards and bounded rechecks.  Reuse that resolved owner here so
-    compatible controls do not make the limit-down candidate-source lane
-    permanently unreachable while unknown entry families still fail closed.
-    """
-
-    sim_path = (
-        LIMIT_DOWN_SIM_POLICY_DIR
-        / f"limit_down_watch_sim_policy_catalog_{source_date}.json"
-    )
-    live_path = (
-        LIMIT_DOWN_LIVE_POLICY_DIR
-        / f"limit_down_watch_bounded_live_candidate_{source_date}.json"
-    )
-    sim_payload = _load_json(sim_path) if sim_path.is_file() else {}
-    live_payload = _load_json(live_path) if live_path.is_file() else {}
-    sim_valid, sim_issues = validate_limit_down_sim_policy_payload(
-        sim_payload, source_date
-    )
-    live_valid, live_issues = validate_limit_down_live_policy_payload(
-        live_payload, source_date
-    )
-    preflight = load_source_quality_preflight(source_date)
-    preflight_blocked = source_quality_preflight_blocked(preflight)
-    try:
-        source_day = date.fromisoformat(source_date)
-        target_day = date.fromisoformat(target_date)
-        source_age_trading_days = count_krx_trading_days(source_day, target_day)
-    except ValueError:
-        source_age_trading_days = -1
-    source_fresh = source_age_trading_days == 1
-    rollout_active = target_date >= LIMIT_DOWN_PREOPEN_HANDOFF_REQUIRED_TARGET_DATE
-    family_included = rollout_active and (
-        include_families is None or LIMIT_DOWN_WATCH_FAMILY in include_families
-    )
-    resolved_entry_live_owner = str(entry_live_owner_family or "").strip()
-    entry_conflicts = (
-        [resolved_entry_live_owner]
-        if resolved_entry_live_owner
-        and resolved_entry_live_owner != LIMIT_DOWN_WATCH_FAMILY
-        else []
-    )
-    sim_selected = bool(
-        family_included and source_fresh and not preflight_blocked and sim_valid
-    )
-    live_selected = bool(
-        family_included
-        and source_fresh
-        and not preflight_blocked
-        and live_valid
-        and not entry_conflicts
-    )
-    env_overrides = (
-        {
-            f"{LIMIT_DOWN_SIM_ENV_PREFIX}ENABLED": _format_env_value(sim_selected),
-            f"{LIMIT_DOWN_SIM_ENV_PREFIX}ACTIVE_DATE": target_date,
-            f"{LIMIT_DOWN_LIVE_ENV_PREFIX}ENABLED": _format_env_value(live_selected),
-            f"{LIMIT_DOWN_LIVE_ENV_PREFIX}ACTIVE_DATE": target_date,
-        }
-        if rollout_active
-        else {}
-    )
-    if sim_selected:
-        env_overrides.update(
-            {
-                f"{LIMIT_DOWN_SIM_ENV_PREFIX}FILE": str(sim_path),
-                f"{LIMIT_DOWN_SIM_ENV_PREFIX}VERSION": LIMIT_DOWN_SIM_POLICY_VERSION,
-                f"{LIMIT_DOWN_SIM_ENV_PREFIX}SOURCE_DATE": source_date,
-                f"{LIMIT_DOWN_SIM_ENV_PREFIX}SHA256": _file_sha256(sim_path),
-            }
-        )
-    if live_selected:
-        env_overrides.update(
-            {
-                f"{LIMIT_DOWN_LIVE_ENV_PREFIX}FILE": str(live_path),
-                f"{LIMIT_DOWN_LIVE_ENV_PREFIX}VERSION": LIMIT_DOWN_LIVE_POLICY_VERSION,
-                f"{LIMIT_DOWN_LIVE_ENV_PREFIX}SOURCE_DATE": source_date,
-                f"{LIMIT_DOWN_LIVE_ENV_PREFIX}SHA256": _file_sha256(live_path),
-            }
-        )
-    blockers: list[str] = []
-    if not rollout_active:
-        blockers.append("preopen_handoff_not_rolled_out")
-    elif not family_included:
-        blockers.append("operator_family_filter_excluded")
-    if not source_fresh:
-        blockers.append("source_not_immediately_prior_krx_trading_day")
-    if preflight_blocked:
-        blockers.append("source_quality_preflight_blocked")
-    if not sim_valid:
-        blockers.extend(f"sim_policy:{issue}" for issue in sim_issues)
-    if not live_valid:
-        blockers.extend(f"live_policy:{issue}" for issue in live_issues)
-    if entry_conflicts:
-        blockers.append(f"same_stage_owner_conflict:{','.join(entry_conflicts)}")
-    return (
-        {
-            "family": LIMIT_DOWN_WATCH_FAMILY,
-            "stage": "entry",
-            "manipulation_point": "scalping_scanner_candidate_source_admission",
-            "cohort_tag": "limit_down_rotation",
-            "family_type": "bounded_live_with_sim_observation",
-            "selected": sim_selected or live_selected,
-            "sim_selected": sim_selected,
-            "live_selected": live_selected,
-            "decision_reason": (
-                "exact_date_preopen_policy_selected"
-                if sim_selected or live_selected
-                else "exact_date_preopen_policy_blocked"
-            ),
-            "decision_authority": (
-                "sim_observation_only_and_bounded_live_candidate"
-                if live_selected
-                else "sim_observation_only"
-            ),
-            "runtime_effect": live_selected,
-            "actual_order_submitted": False,
-            "source_date": source_date,
-            "target_date": target_date,
-            "source_age_trading_days": source_age_trading_days,
-            "required_from_target_date": (
-                LIMIT_DOWN_PREOPEN_HANDOFF_REQUIRED_TARGET_DATE
-            ),
-            "rollout_active": rollout_active,
-            "source_quality_preflight_gate": preflight,
-            "sim_policy_file": str(sim_path),
-            "sim_policy_sha256": _file_sha256(sim_path),
-            "live_policy_file": str(live_path),
-            "live_policy_sha256": _file_sha256(live_path),
-            "entry_live_owner_family": resolved_entry_live_owner or None,
-            "entry_stage_conflicts": entry_conflicts,
-            "blockers": list(dict.fromkeys(blockers)),
-            "env_overrides": env_overrides,
-        },
-        env_overrides,
-    )
 
 
 def build_preopen_apply_manifest(
@@ -7286,13 +6979,6 @@ def build_preopen_apply_manifest(
                 report_source_date, target_date, operator_runtime_env_locks
             )
         )
-        limit_down_watch_decision: dict[str, Any] = {
-            "family": LIMIT_DOWN_WATCH_FAMILY,
-            "selected": False,
-            "decision_reason": "auto_apply_not_requested",
-            "env_overrides": {},
-        }
-        limit_down_watch_env_overrides: dict[str, str] = {}
         aftermarket_sor_policy_decision: dict[str, Any] = {
             "family": AFTERMARKET_SOR_RUNTIME_POLICY_FAMILY,
             "selected": False,
@@ -7376,12 +7062,6 @@ def build_preopen_apply_manifest(
             entry_live_tuning_owner_family = _entry_live_tuning_owner_family(
                 selected,
                 runtime_bridge_selected,
-            )
-            limit_down_entry_live_owner_family = (
-                _limit_down_watch_entry_live_owner_family(
-                    selected,
-                    runtime_bridge_selected,
-                )
             )
             holding_exit_live_owner_family = _holding_exit_live_owner_family(
                 selected,
@@ -7477,19 +7157,9 @@ def build_preopen_apply_manifest(
                     owner_family=holding_exit_live_owner_family,
                 )
             )
-            (
-                limit_down_watch_decision,
-                limit_down_watch_env_overrides,
-            ) = _limit_down_watch_standalone_decision(
-                report_source_date,
-                target_date,
-                entry_live_owner_family=limit_down_entry_live_owner_family,
-                include_families=include_families,
-            )
             env_overrides = {
                 **env_overrides,
                 **entry_cancel_wait_env_overrides,
-                **limit_down_watch_env_overrides,
                 **lifecycle_context_env_overrides,
                 **swing_env_overrides,
                 **runtime_bridge_env_overrides,
@@ -7537,13 +7207,6 @@ def build_preopen_apply_manifest(
         env_overrides = {**without_retired_env(env_overrides), **retirement_env()}
         # A permanent OFF guard is not a newly approved tuning candidate.
         runtime_change_env_overrides = without_retired_env(env_overrides)
-        if not limit_down_watch_decision.get("selected"):
-            runtime_change_env_overrides = {
-                key: value
-                for key, value in runtime_change_env_overrides.items()
-                if not str(key).startswith(LIMIT_DOWN_SIM_ENV_PREFIX)
-                and not str(key).startswith(LIMIT_DOWN_LIVE_ENV_PREFIX)
-            }
         runtime_change = bool(auto_apply_requested and runtime_change_env_overrides)
         status = (
             "auto_bounded_live_ready"
@@ -7622,7 +7285,6 @@ def build_preopen_apply_manifest(
             "auto_apply_selected": selected,
             "auto_apply_decisions": decisions,
             "entry_cancel_wait_runtime": entry_cancel_wait_decision,
-            "limit_down_watch": limit_down_watch_decision,
             "aftermarket_sor_runtime_policy": aftermarket_sor_policy_decision,
             "lifecycle_ai_context_overlay": lifecycle_context_overlay,
             "operator_runtime_env_locks": operator_runtime_env_locks,

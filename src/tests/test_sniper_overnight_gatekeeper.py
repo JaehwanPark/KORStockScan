@@ -14,7 +14,7 @@ from src.engine.sniper_overnight_gatekeeper import (
     _eod_label,
     _format_order_error,
     _humanize_eod_action,
-    _limit_down_live_overnight_forbidden,
+    _retired_entry_overnight_forbidden,
     _overnight_gatekeeper_enabled,
     run_scalping_overnight_gatekeeper,
     _snapshot_record,
@@ -197,11 +197,11 @@ def test_shutdown_reconciliation_rejects_invalid_terminal_hold(hold_override):
     assert [row["code"] for row in rows] == ["005930"]
 
 
-def test_limit_down_live_source_forbids_overnight_hold():
-    assert _limit_down_live_overnight_forbidden(
+def test_retired_entry_source_preserves_legacy_overnight_custody_safety():
+    assert _retired_entry_overnight_forbidden(
         {"source_signature": "PRICE_JUMP_START,LIMIT_DOWN_LIVE_UNLOCK"}
     )
-    assert not _limit_down_live_overnight_forbidden(
+    assert not _retired_entry_overnight_forbidden(
         {"source_signature": "PRICE_JUMP_START"}
     )
 

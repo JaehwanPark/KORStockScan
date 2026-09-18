@@ -486,9 +486,6 @@ def test_micro_observer_receives_packet_clock_without_replacing_tick_clock(
         "_observe_micro_reversion_forward",
         lambda code, data, **kw: observed.append(data),
     )
-    monkeypatch.setattr(
-        kiwoom_websocket, "observe_raw_market_data", lambda *a, **k: None
-    )
     ingress = datetime.fromtimestamp(now - 2, tz=kiwoom_websocket.KST)
     monkeypatch.setattr(
         manager, "_micro_reversion_depth_capture_requested", lambda: True
@@ -547,9 +544,6 @@ def test_raw_observation_is_lossless_while_dispatch_keeps_full_latest_history(
         lambda code, data, *, realtime_type: observed.append(
             (realtime_type, data["curr"])
         ),
-    )
-    monkeypatch.setattr(
-        kiwoom_websocket, "observe_raw_market_data", lambda *a, **k: None
     )
     for kind, price in [("0B", 100), ("0D", 101), ("0B", 102)]:
         target["curr"] = price
@@ -3507,7 +3501,7 @@ def test_command_ws_reg_preserves_explicit_wire_realtime_types(monkeypatch):
     manager._handle_reg_event(
         {
             "codes": ["000001"],
-            "source": "limit_down_watch_observation",
+            "source": "explicit_observation_test",
             "required_realtime_types": ["0B", "0D"],
             "realtime_types": ["0B", "0D"],
         }

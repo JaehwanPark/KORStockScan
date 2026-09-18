@@ -49,9 +49,7 @@ from src.engine.lifecycle.retirement import (
     retired_artifact,
     retired_status,
 )
-from src.engine.monitoring.limit_down_watch_report import (
-    CONTRACT as LIMIT_DOWN_WATCH_CONTRACT,
-)
+
 from src.engine.scalping.micro_reversion import main_ai_prompt_optimizer
 from src.engine.threshold_cycle_preopen_apply import (
     AVG_DOWN_EVIDENCE_AUTHORITY,
@@ -3863,309 +3861,6 @@ def _is_real_primary_sample_book(value: Any) -> bool:
     return text == "real" or text.startswith("real_")
 
 
-def _limit_down_watch_report_status(
-    report: dict[str, Any],
-    *,
-    enabled: bool,
-    target_date: str,
-    markdown_text: str | None = None,
-) -> dict[str, Any]:
-    if not enabled:
-        return {
-            "status": "disabled",
-            "issues": [],
-            "warnings": [],
-            "sim_candidate_ready": False,
-            "real_trading_ready": False,
-        }
-    issues: list[str] = []
-    warnings: list[str] = []
-    readiness = (
-        report.get("evidence_readiness")
-        if isinstance(report.get("evidence_readiness"), dict)
-        else {}
-    )
-    conversion = (
-        report.get("conversion_readiness")
-        if isinstance(report.get("conversion_readiness"), dict)
-        else {}
-    )
-    observer_activation = (
-        report.get("observer_activation")
-        if isinstance(report.get("observer_activation"), dict)
-        else {}
-    )
-    if not report:
-        issues.append("limit_down_watch_report_missing")
-    else:
-        expected = {
-            "schema_version": 1,
-            "report_type": "limit_down_watch",
-            "target_date": target_date,
-            **LIMIT_DOWN_WATCH_CONTRACT,
-        }
-        for field, expected_value in expected.items():
-            if report.get(field) != expected_value:
-                issues.append(f"limit_down_watch_contract_mismatch:{field}")
-        generated_at = str(report.get("generated_at") or "").strip()
-        if not generated_at:
-            issues.append("limit_down_watch_generated_at_missing")
-        if markdown_text is not None and (
-            not markdown_text
-            or f"# Limit-Down Watch Report — {target_date}" not in markdown_text
-            or f"- generated_at: `{generated_at}`" not in markdown_text
-        ):
-            issues.append("limit_down_watch_markdown_generation_mismatch")
-        if report.get("status") not in {
-            "pass",
-            "no_observation",
-            "source_blocked",
-        }:
-            issues.append("limit_down_watch_status_invalid")
-        conversion_contract_required = False
-        try:
-            conversion_contract_required = date.fromisoformat(target_date) >= date(
-                2026, 8, 3
-            )
-        except ValueError:
-            pass
-        if readiness.get("stage") != "source_observation":
-            issues.append("limit_down_watch_readiness_stage_invalid")
-        expected_readiness_decision = (
-            "collect_source_and_auto_promote_eligible_type"
-            if conversion_contract_required
-            else "collect_source_then_build_sim_candidate"
-        )
-        if readiness.get("decision") != expected_readiness_decision:
-            issues.append("limit_down_watch_readiness_decision_invalid")
-        exact_runtime_contract_required = False
-        try:
-            exact_runtime_contract_required = date.fromisoformat(target_date) >= date(
-                2026, 9, 4
-            )
-        except ValueError:
-            pass
-        if conversion_contract_required:
-            if readiness.get("sim_candidate_ready") is not conversion.get(
-                "sim_policy_catalog_ready"
-            ):
-                issues.append("limit_down_watch_sim_readiness_mismatch")
-            if (
-                exact_runtime_contract_required
-                or "sim_policy_applied_to_runtime" in readiness
-                or "sim_policy_applied_to_runtime" in conversion
-            ) and readiness.get("sim_policy_applied_to_runtime") is not conversion.get(
-                "sim_policy_applied_to_runtime"
-            ):
-                issues.append("limit_down_watch_sim_runtime_apply_mismatch")
-            if readiness.get("real_trading_ready") is not conversion.get(
-                "real_trading_ready"
-            ):
-                issues.append("limit_down_watch_real_readiness_mismatch")
-        else:
-            if readiness.get("sim_candidate_ready") is not False:
-                issues.append("limit_down_watch_sim_authority_leak")
-            if readiness.get("sim_policy_applied_to_runtime") not in {None, False}:
-                issues.append("limit_down_watch_sim_runtime_authority_leak")
-            if readiness.get("real_trading_ready") is not False:
-                issues.append("limit_down_watch_real_authority_leak")
-        blockers = (
-            set(readiness.get("blockers"))
-            if isinstance(readiness.get("blockers"), list)
-            else set()
-        )
-        if conversion_contract_required:
-            expected_conversion = {
-                "schema_version": 1,
-                "observer_activation_expected": True,
-                "runtime_effect": False,
-                "actual_order_submitted": False,
-                "broker_order_forbidden": True,
-            }
-            if not conversion:
-                issues.append("limit_down_watch_conversion_readiness_missing")
-            for field, expected_value in expected_conversion.items():
-                if conversion.get(field) != expected_value:
-                    issues.append(
-                        f"limit_down_watch_conversion_contract_mismatch:{field}"
-                    )
-            if conversion.get("decision") not in {
-                "keep_observing_and_build_evidence",
-                "auto_live_policy_ready",
-                "auto_live_policy_ready_for_next_preopen",
-            }:
-                issues.append("limit_down_watch_conversion_decision_invalid")
-            conversion_blockers = (
-                set(conversion.get("blockers"))
-                if isinstance(conversion.get("blockers"), list)
-                else set()
-            )
-            blocker_requirements = {
-                "observer_activation_observed": {"observer_activation_not_observed"},
-                "daily_source_ready": {"daily_source_contract_not_ready"},
-                "bounded_live_candidate_ready": {
-                    "bounded_live_candidate_contract_missing"
-                },
-            }
-            if exact_runtime_contract_required:
-                blocker_requirements["real_runtime_policy_applied"] = {
-                    "current_real_runtime_policy_not_applied"
-                }
-            for field, required in blocker_requirements.items():
-                if conversion.get(field) is not True and not required.issubset(
-                    conversion_blockers
-                ):
-                    issues.append(
-                        f"limit_down_watch_conversion_blocker_missing:{field}"
-                    )
-            live_auto_ready = conversion.get("live_conversion_review_ready") is True
-            separate_ready = conversion.get("separate_preopen_apply_ready") is True
-            ready_decisions = (
-                {"auto_live_policy_ready_for_next_preopen"}
-                if exact_runtime_contract_required
-                else {
-                    "auto_live_policy_ready",
-                    "auto_live_policy_ready_for_next_preopen",
-                }
-            )
-            expected_decisions = (
-                ready_decisions
-                if live_auto_ready
-                else {"keep_observing_and_build_evidence"}
-            )
-            if conversion.get("decision") not in expected_decisions:
-                issues.append("limit_down_watch_conversion_decision_state_invalid")
-            if conversion.get("operator_approval_required") is not False:
-                issues.append("limit_down_watch_operator_approval_required_invalid")
-            if conversion.get("operator_approval_present") is not False:
-                issues.append("limit_down_watch_operator_approval_present_invalid")
-            if separate_ready != live_auto_ready:
-                issues.append("limit_down_watch_separate_preopen_apply_state_invalid")
-            real_runtime_applied = conversion.get("real_runtime_policy_applied") is True
-            if exact_runtime_contract_required and (
-                conversion.get("real_trading_ready") is not real_runtime_applied
-            ):
-                issues.append("limit_down_watch_real_trading_ready_invalid")
-            if conversion.get("allowed_runtime_apply") is not live_auto_ready:
-                issues.append("limit_down_watch_runtime_apply_readiness_invalid")
-            if (
-                conversion.get("automatic_live_conversion_scheduled")
-                is not live_auto_ready
-            ):
-                issues.append("limit_down_watch_auto_schedule_state_invalid")
-            if exact_runtime_contract_required:
-                if conversion.get("automatic_live_conversion_performed") is not (
-                    real_runtime_applied
-                ):
-                    issues.append("limit_down_watch_auto_apply_observation_invalid")
-            elif conversion.get("automatic_live_conversion_performed") is not False:
-                issues.append(
-                    "limit_down_watch_conversion_contract_mismatch:"
-                    "automatic_live_conversion_performed"
-                )
-            blocker_details = (
-                conversion.get("runtime_blocker_details")
-                if isinstance(conversion.get("runtime_blocker_details"), list)
-                else []
-            )
-            blocker_detail_codes = {
-                str(item.get("code") or "")
-                for item in blocker_details
-                if isinstance(item, dict)
-                and item.get("class")
-                and item.get("observed_evidence")
-                and item.get("next_repair_action")
-                and item.get("acceptance_test")
-            }
-            if exact_runtime_contract_required and not conversion_blockers.issubset(
-                blocker_detail_codes
-            ):
-                issues.append("limit_down_watch_runtime_blocker_taxonomy_incomplete")
-            readiness_blocker_details = (
-                readiness.get("runtime_blocker_details")
-                if isinstance(readiness.get("runtime_blocker_details"), list)
-                else []
-            )
-            readiness_detail_codes = {
-                str(item.get("code") or "")
-                for item in readiness_blocker_details
-                if isinstance(item, dict)
-                and item.get("class")
-                and item.get("observed_evidence")
-                and item.get("next_repair_action")
-                and item.get("acceptance_test")
-            }
-            if exact_runtime_contract_required and not blockers.issubset(
-                readiness_detail_codes
-            ):
-                issues.append("limit_down_watch_evidence_blocker_taxonomy_incomplete")
-            if conversion.get("decision") in {
-                "auto_live_policy_ready",
-                "auto_live_policy_ready_for_next_preopen",
-            }:
-                if not separate_ready:
-                    issues.append("limit_down_watch_preopen_apply_readiness_invalid")
-                else:
-                    warnings.append("limit_down_watch_auto_live_policy_ready")
-            if (
-                observer_activation.get("policy")
-                != "persistent_daily_source_observation"
-            ):
-                issues.append("limit_down_watch_activation_policy_invalid")
-            if observer_activation.get("expected_enabled") is not True:
-                issues.append("limit_down_watch_activation_expectation_invalid")
-            if observer_activation.get("observed_enabled") is not conversion.get(
-                "observer_activation_observed"
-            ):
-                issues.append("limit_down_watch_activation_observation_mismatch")
-            if conversion.get("observer_activation_observed") is not True:
-                warnings.append("limit_down_watch_observer_activation_not_observed")
-        else:
-            required_blockers = {
-                "multi_day_cohort_sample_floor_not_established",
-                "counterfactual_entry_exit_labels_missing",
-                "clean_baseline_rolling_ev_missing",
-                "sim_policy_catalog_handoff_missing",
-                "post_sim_attribution_missing",
-                "separate_live_conversion_approval_missing",
-            }
-            if not required_blockers.issubset(blockers):
-                issues.append("limit_down_watch_conversion_blockers_missing")
-        if readiness.get("candidate_source_valid") is not True:
-            warnings.append("limit_down_watch_candidate_source_invalid")
-        if readiness.get("event_source_valid") is not True:
-            warnings.append("limit_down_watch_event_source_invalid")
-        if readiness.get("source_quality_status") not in {
-            "pass",
-            "pass_with_exclusions",
-            "no_candidate",
-        }:
-            warnings.append("limit_down_watch_candidate_source_quality_blocked")
-        if report.get("status") == "source_blocked":
-            warnings.append("limit_down_watch_source_blocked")
-        elif report.get("status") == "no_observation":
-            warnings.append("limit_down_watch_ordered_path_not_observed")
-    return {
-        "status": "fail" if issues else "warning" if warnings else "pass",
-        "issues": issues,
-        "warnings": warnings,
-        "sim_candidate_ready": readiness.get("sim_candidate_ready", False),
-        "real_trading_ready": readiness.get("real_trading_ready", False),
-        "blockers": readiness.get("blockers") or [],
-        "conversion_decision": conversion.get("decision"),
-        "live_conversion_review_ready": conversion.get(
-            "live_conversion_review_ready", False
-        ),
-        "operator_approval_required": conversion.get(
-            "operator_approval_required", False
-        ),
-        "bounded_live_candidate_ready": conversion.get(
-            "bounded_live_candidate_ready", False
-        ),
-        "separate_preopen_apply_ready": conversion.get(
-            "separate_preopen_apply_ready", False
-        ),
-    }
 
 
 def _artifact_paths(target_date: str) -> dict[str, Path]:
@@ -4222,12 +3917,6 @@ def _artifact_paths(target_date: str) -> dict[str, Path]:
         "scalp_entry_action_decision_matrix": REPORT_DIR
         / "scalp_entry_action_decision_matrix"
         / f"scalp_entry_action_decision_matrix_{target_date}.json",
-        "limit_down_watch": REPORT_DIR
-        / "limit_down_watch"
-        / f"limit_down_watch_{target_date}.json",
-        "limit_down_watch_markdown": REPORT_DIR
-        / "limit_down_watch"
-        / f"limit_down_watch_{target_date}.md",
         "buy_funnel_sentinel": REPORT_DIR
         / "buy_funnel_sentinel"
         / f"buy_funnel_sentinel_{target_date}.json",
@@ -7080,11 +6769,6 @@ def _postclose_not_yet_due(target_date: str) -> bool:
     return parsed == now.date() and now.time() < dtime(16, 10)
 
 
-def _limit_down_watch_report_required(target_date: str) -> bool:
-    try:
-        return date.fromisoformat(target_date) >= date(2026, 7, 30)
-    except ValueError:
-        return False
 
 
 def _scanner_lookup_attention_required(target_date: str) -> bool:
@@ -7115,16 +6799,6 @@ def _scanner_lookup_attention_status(
             "runtime_effect": False, "actual_order_submitted": False, "broker_order_forbidden": True}
 
 
-def _limit_down_watch_verification_enabled(
-    target_date: str,
-    *,
-    execution_flags: dict[str, bool],
-    recovery_done: bool,
-) -> bool:
-    explicit = execution_flags.get("limit_down_watch_report")
-    if explicit is not None:
-        return explicit
-    return recovery_done and _limit_down_watch_report_required(target_date)
 
 
 def _pipeline_verbosity_operations_handoff(target_date, flags):
@@ -7457,8 +7131,6 @@ def build_threshold_cycle_postclose_verification(
     conversion_lane = _load_json(paths["conversion_lane"])
     bridge_report = _load_json(paths["runtime_apply_bridge"])
     entry_split_order_plan = _load_json(paths["entry_split_order_plan"])
-    limit_down_watch_report = _load_json(paths["limit_down_watch"])
-    limit_down_watch_markdown = _load_text(paths["limit_down_watch_markdown"])
     preopen_apply_current = _load_json(paths["threshold_preopen_apply_current"])
     preopen_apply_next = _load_json(paths["threshold_preopen_apply_next"])
     active_priority_preopen_apply = preopen_apply_current or preopen_apply_next
@@ -8010,11 +7682,6 @@ def build_threshold_cycle_postclose_verification(
     marker_reconciliation_done = recovery_action == "marker_reconciliation"
     execution_flags = dict(execution_contract_flags)
     execution_flags.update(explicit_execution_flags)
-    limit_down_watch_verification_enabled = _limit_down_watch_verification_enabled(
-        target_date,
-        execution_flags=execution_flags,
-        recovery_done=recovery_done,
-    )
     required_execution_flags = (
         "swing_lifecycle",
         "pattern_labs",
@@ -8030,11 +7697,6 @@ def build_threshold_cycle_postclose_verification(
     )
     if not pattern_swing_enabled:
         required_execution_flags = tuple(key for key in required_execution_flags if key not in {"pattern_labs", "pattern_lab_currentness_audit", "pattern_lab_ai_review", "pattern_lab_propagation_audit"})
-    if _limit_down_watch_report_required(target_date):
-        required_execution_flags = (
-            *required_execution_flags,
-            "limit_down_watch_report",
-        )
     if _scanner_lookup_attention_required(target_date):
         required_execution_flags = (
             *required_execution_flags,
@@ -8147,7 +7809,6 @@ def build_threshold_cycle_postclose_verification(
             "pattern_lab_ai_review",
             "time_window_regime_counterfactual",
             "producer_gap_discovery",
-            "limit_down_watch_report",
             "stage_hook_workorder_discovery",
             "stage_hook_runtime_scaffold",
             "pattern_lab_propagation_audit",
@@ -8308,9 +7969,6 @@ def build_threshold_cycle_postclose_verification(
         disabled_artifact_labels.add("time_window_regime_counterfactual")
     if execution_flags.get("producer_gap_discovery") is not True:
         disabled_artifact_labels.add("producer_gap_discovery")
-    if not limit_down_watch_verification_enabled:
-        disabled_artifact_labels.add("limit_down_watch")
-        disabled_artifact_labels.add("limit_down_watch_markdown")
     if not _scanner_lookup_attention_required(target_date):
         disabled_artifact_labels.add("scanner_lookup_attention_selection")
         disabled_artifact_labels.add("scanner_lookup_attention_policy")
@@ -8340,16 +7998,6 @@ def build_threshold_cycle_postclose_verification(
         and not paths["ldm_hypothesis_parent_refinement"].exists()
     ):
         missing_required_artifacts.append("ldm_hypothesis_parent_refinement")
-    limit_down_watch_status = _limit_down_watch_report_status(
-        limit_down_watch_report,
-        enabled=limit_down_watch_verification_enabled,
-        target_date=target_date,
-        markdown_text=limit_down_watch_markdown,
-    )
-    if limit_down_watch_status["status"] == "fail":
-        log_issues.extend(limit_down_watch_status["issues"])
-    elif limit_down_watch_status["status"] == "warning":
-        handoff_warnings.extend(limit_down_watch_status["warnings"])
     entry_split_grid = (
         entry_split_order_plan.get("candidate_grid")
         if isinstance(entry_split_order_plan.get("candidate_grid"), list)
@@ -9192,7 +8840,6 @@ def build_threshold_cycle_postclose_verification(
         "machine_entry_timing_postclose": machine_entry_timing_postclose,
         "entry_setup_replay_session_contract": entry_setup_replay_session_contract,
         "smoothing_source_only_path_journal": smoothing_source_only_path_journal,
-        "limit_down_watch": limit_down_watch_status,
         "microstructure_diagnostic_handoff": microstructure_handoff,
         "workorder_snapshot": {
             **workorder_snapshot,

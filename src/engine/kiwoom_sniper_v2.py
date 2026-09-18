@@ -66,7 +66,6 @@ from src.engine.risk.manual_control_exclusion import (
 )
 from src.engine.scalping.watch_budget import (
     GENERAL_SCALPING,
-    LIMIT_DOWN_ROTATION,
     OPENING_ROTATION,
     RISING_MISSED,
     classify_owner as classify_watch_budget_owner,
@@ -77,9 +76,7 @@ from src.engine.scalping.watch_budget import (
     slot_type as watch_budget_slot_type,
     policy_version as watch_budget_policy_version,
 )
-from src.engine.scalping.limit_down_watch import (  # noqa: E402
-    LIMIT_DOWN_OBSERVATION_REGISTRY,
-)
+
 from src.engine.scalping.market_data_enrichment import build_market_data_enrichment
 from src.trading.market.quote_consistency import build_market_data_health
 from src.engine.scalping.position_sizing_allocator import (
@@ -5625,7 +5622,6 @@ def _scalping_watch_budget_owner(target, now_ts=None):
     explicit = target.get("scanner_watch_budget_owner")
     if str(explicit or "").strip().lower() in {
         GENERAL_SCALPING,
-        LIMIT_DOWN_ROTATION,
         RISING_MISSED,
     }:
         return normalize_watch_budget_owner(explicit)
@@ -5657,25 +5653,9 @@ def _scalping_watch_budget_policy_fields(targets, now_ts):
     total = _scalping_fifo_max_active()
     opening_active = _scalping_watch_budget_opening_window_active(now_ts)
     policy = watch_budget_limits(total, opening_window_active=opening_active)
-    active_limit_down_observation_code = LIMIT_DOWN_OBSERVATION_REGISTRY.active_code()
-    observation_handoff_present = bool(
-        active_limit_down_observation_code
-        and any(
-            str((target or {}).get("code") or "").strip()[:6]
-            == active_limit_down_observation_code
-            and _scalping_watch_budget_owner(target, now_ts=now_ts)
-            == LIMIT_DOWN_ROTATION
-            for target in targets or []
-        )
-    )
     counts = {
         GENERAL_SCALPING: 0,
         OPENING_ROTATION: 0,
-        LIMIT_DOWN_ROTATION: (
-            1
-            if active_limit_down_observation_code and not observation_handoff_present
-            else 0
-        ),
         RISING_MISSED: 0,
     }
     for target in targets or []:
@@ -5692,7 +5672,6 @@ def _scalping_watch_budget_policy_fields(targets, now_ts):
         "scanner_watch_budget_opening_window_active": opening_active,
         "scanner_watch_budget_general_max": policy.general_max,
         "scanner_watch_budget_opening_protected": policy.opening_protected,
-        "scanner_watch_budget_limit_down_protected": policy.limit_down_protected,
         "scanner_watch_budget_rising_guaranteed": policy.rising_guaranteed,
         "scanner_watch_budget_rising_max_with_borrow": policy.rising_max_with_borrow,
         "scanner_watch_budget_owner_counts": counts,
@@ -5719,7 +5698,6 @@ def _scalping_watch_budget_overflow_candidates(targets, now_ts):
     for owner in (
         GENERAL_SCALPING,
         OPENING_ROTATION,
-        LIMIT_DOWN_ROTATION,
         RISING_MISSED,
     ):
         owner_targets = [
@@ -8336,33 +8314,6 @@ def _scanner_runtime_context_updates(payload):
         "late_confirmation_recheck_min_price_delta_pct",
         "late_confirmation_recheck_min_flu_delta_pct",
         "late_confirmation_recheck_rollback_env",
-        "limit_down_live_policy_key",
-        "limit_down_live_policy_matched",
-        "limit_down_live_policy_source_date",
-        "limit_down_live_policy_version",
-        "limit_down_live_policy_sample_count",
-        "limit_down_live_trigger_type",
-        "limit_down_unlock_confirmed",
-        "limit_down_unlock_confirmed_epoch",
-        "limit_down_rebound_confirmed",
-        "limit_down_rebound_confirmed_epoch",
-        "limit_down_last_tick_epoch",
-        "limit_down_lower_limit_price",
-        "limit_down_best_ask",
-        "limit_down_best_bid",
-        "limit_down_entry_spread_pct",
-        "limit_down_max_entry_spread_pct",
-        "limit_down_session_open_price",
-        "limit_down_session_low_price",
-        "limit_down_rebound_from_low_pct",
-        "limit_down_min_rebound_from_low_pct",
-        "limit_down_cohort",
-        "limit_down_price_band",
-        "limit_down_risk_max_daily_entries",
-        "limit_down_scale_in_allowed",
-        "limit_down_same_day_reentry_allowed",
-        "limit_down_overnight_allowed",
-        "limit_down_normal_scalping_guards_required",
     ):
         if key in SCANNER_LOOKUP_ATTENTION_CONTEXT_KEYS:
             if key in payload:

@@ -7,15 +7,13 @@ orders, cash budgets, quantities, providers, or entry/exit thresholds.
 from __future__ import annotations
 
 from dataclasses import dataclass
-import os
 from typing import Any
 
 GENERAL_SCALPING = "general_scalping"
 OPENING_ROTATION = "opening_rotation"
 RISING_MISSED = "rising_missed"
-LIMIT_DOWN_ROTATION = "limit_down_rotation"
 MARKET_GAINER_SOURCE = "PREV_CLOSE_GAINER"
-VALID_OWNERS = frozenset({GENERAL_SCALPING, LIMIT_DOWN_ROTATION, RISING_MISSED})
+VALID_OWNERS = frozenset({GENERAL_SCALPING, RISING_MISSED})
 
 PRIMARY_RISING_SOURCES = frozenset(
     {
@@ -234,63 +232,44 @@ class WatchBudgetLimits:
     total: int
     general_max: int
     opening_protected: int
-    limit_down_protected: int
     rising_guaranteed: int
     rising_max_with_borrow: int
 
 
-def _limit_down_enabled(value: bool | None = None) -> bool:
-    if value is not None:
-        return bool(value)
-    return str(
-        os.getenv("KORSTOCKSCAN_LIMIT_DOWN_WATCH_ENABLED", "false")
-    ).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
-def policy_version(limit_down_enabled: bool | None = None) -> str:
-    return (
-        "general1_limitdown1_rising_residual_opening_retired_v3"
-        if _limit_down_enabled(limit_down_enabled)
-        else "general1_rising_residual_opening_retired_v3"
-    )
+def policy_version() -> str:
+    return "general1_rising_residual_opening_retired_v3"
 
 
 def limits(
     total: int,
     *,
     opening_window_active: bool,
-    limit_down_enabled: bool | None = None,
 ) -> WatchBudgetLimits:
-    """Return legacy or limit-down-aware observation allocation."""
+    """Return the surviving general/rising observation allocation."""
 
     total = max(1, int(total or 1))
-    limit_enabled = _limit_down_enabled(limit_down_enabled)
     if total < 4:
         return WatchBudgetLimits(
             total=total,
             general_max=0,
             opening_protected=0,
-            limit_down_protected=0,
             rising_guaranteed=total,
             rising_max_with_borrow=total,
         )
     general_max = min(1, total)
     del opening_window_active
     opening_protected = 0
-    limit_down_protected = min(
-        1 if limit_enabled else 0,
-        max(0, total - general_max - opening_protected),
-    )
     rising_guaranteed = max(
-        0, total - general_max - opening_protected - limit_down_protected
+        0, total - general_max - opening_protected
     )
-    # Rising may borrow unused limit-down slots, never the general slot.
+    # The general slot is never borrowed.
     rising_max_with_borrow = max(0, total - general_max)
     return WatchBudgetLimits(
         total=total,
         general_max=general_max,
         opening_protected=opening_protected,
-        limit_down_protected=limit_down_protected,
         rising_guaranteed=rising_guaranteed,
         rising_max_with_borrow=rising_max_with_borrow,
     )
@@ -301,27 +280,19 @@ def owner_allowances(
     *,
     total: int,
     opening_window_active: bool,
-    limit_down_enabled: bool | None = None,
 ) -> dict[str, int]:
-    """Return caps after rising borrows unused opening/limit-down capacity."""
+    """Return caps after rising borrows unused retired capacity."""
 
     policy = limits(
         total,
         opening_window_active=opening_window_active,
-        limit_down_enabled=limit_down_enabled,
     )
-    limit_down_count = min(
-        max(0, int(owner_counts.get(LIMIT_DOWN_ROTATION, 0))),
-        policy.limit_down_protected,
-    )
-    unused_limit_down = max(0, policy.limit_down_protected - limit_down_count)
     return {
         GENERAL_SCALPING: policy.general_max,
         OPENING_ROTATION: policy.opening_protected,
-        LIMIT_DOWN_ROTATION: policy.limit_down_protected,
         RISING_MISSED: min(
             policy.rising_max_with_borrow,
-            policy.rising_guaranteed + unused_limit_down,
+            policy.rising_guaranteed,
         ),
     }
 
@@ -331,18 +302,16 @@ def rising_source_reservation(
     *,
     requested_slots: int,
     opening_window_active: bool,
-    limit_down_enabled: bool | None = None,
 ) -> int:
     """Clamp a source sub-allocation to the guaranteed rising budget.
 
     The reservation never expands the global WATCHING cap and never borrows
-    protected general/limit-down capacity.
+    protected general capacity.
     """
 
     policy = limits(
         total,
         opening_window_active=opening_window_active,
-        limit_down_enabled=limit_down_enabled,
     )
     return min(
         policy.rising_guaranteed,
@@ -356,25 +325,16 @@ def slot_type(
     *,
     total: int,
     opening_window_active: bool,
-    limit_down_enabled: bool | None = None,
 ) -> str:
-    raw_owner = str(owner or "").strip().lower()
-    if raw_owner == LIMIT_DOWN_ROTATION:
-        return "protected_limit_down_observation"
     owner = normalize_owner(owner)
     if owner != RISING_MISSED:
         return "bounded"
     policy = limits(
         total,
         opening_window_active=opening_window_active,
-        limit_down_enabled=limit_down_enabled,
     )
     return (
-        (
-            "borrowed_observation_slot"
-            if _limit_down_enabled(limit_down_enabled)
-            else "borrowed_retired_capacity_slot"
-        )
+        "borrowed_retired_capacity_slot"
         if int(owner_index) > policy.rising_guaranteed
         else "guaranteed"
     )
