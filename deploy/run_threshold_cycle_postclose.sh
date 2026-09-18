@@ -199,7 +199,10 @@ RUN_PIPELINE_EVENT_VERBOSITY_REPORT="${THRESHOLD_CYCLE_RUN_PIPELINE_EVENT_VERBOS
 RUN_OBSERVATION_SOURCE_QUALITY_AUDIT="${THRESHOLD_CYCLE_RUN_OBSERVATION_SOURCE_QUALITY_AUDIT:-true}"
 RUN_OPENING_ROTATION_PROFILE_TUNING="retired"
 RUN_AI_DECISION_QUALITY_DAILY_MATERIALIZATION="${THRESHOLD_CYCLE_RUN_AI_DECISION_QUALITY_DAILY_MATERIALIZATION:-true}"
-RUN_MAIN_AI_QUALITY_R0_R3="${THRESHOLD_CYCLE_RUN_MAIN_AI_QUALITY_R0_R3:-true}"
+
+# Legacy independent-selector research is opt-in; current compact finalization
+# below remains owned by RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION.
+RUN_MAIN_AI_QUALITY_R0_R3="${THRESHOLD_CYCLE_RUN_MAIN_AI_QUALITY_R0_R3:-false}"
 RUN_MAIN_AI_PROMPT_OPTIMIZER="${THRESHOLD_CYCLE_RUN_MAIN_AI_PROMPT_OPTIMIZER:-$RUN_MAIN_AI_QUALITY_R0_R3}"
 RUN_MAIN_AI_PROMPT_CONSUMER="${THRESHOLD_CYCLE_RUN_MAIN_AI_PROMPT_CONSUMER:-$RUN_MAIN_AI_PROMPT_OPTIMIZER}"
 RUN_INTRADAY_WS_FRESHNESS_FINALIZE="${THRESHOLD_CYCLE_RUN_INTRADAY_WS_FRESHNESS_FINALIZE:-true}"
@@ -1751,15 +1754,6 @@ if [ "$RUN_AI_DECISION_QUALITY_DAILY_MATERIALIZATION" = "true" ] || [ "$RUN_AI_D
   wait_for_json_artifact \
     "$PROJECT_DIR/data/report/ai_decision_outcome_labels/ai_decision_outcome_labels_${TARGET_DATE}.json" \
     "ai_decision_outcome_labels"
-  wait_for_json_artifact \
-    "$PROJECT_DIR/data/report/ai_decision_quality_baseline/ai_decision_quality_baseline_${TARGET_DATE}.json" \
-    "ai_decision_quality_baseline"
-  wait_for_json_artifact \
-    "$PROJECT_DIR/data/report/ai_prompt_paired_replay/ai_prompt_paired_replay_${TARGET_DATE}.json" \
-    "ai_prompt_paired_replay_preparation"
-  wait_for_json_artifact \
-    "$PROJECT_DIR/data/report/entry_candidate_lifecycle_state/entry_candidate_lifecycle_state_${TARGET_DATE}.json" \
-    "entry_candidate_lifecycle_state"
 fi
 if [ "$RUN_MAIN_AI_QUALITY_R0_R3" = "true" ] || [ "$RUN_MAIN_AI_QUALITY_R0_R3" = "1" ]; then
   main_ai_quality_args=(

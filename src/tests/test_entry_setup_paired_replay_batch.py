@@ -178,7 +178,7 @@ def test_compact_signed_owner_cf_forward_holdout_positive_and_corruption():
 
 
 @pytest.mark.parametrize("promote", [False, True])
-def test_compact_public_finalization_consumes_policy_and_all_summaries(tmp_path, promote):
+def test_compact_public_finalization_consumes_policy_and_all_summaries(tmp_path, promote, monkeypatch):
     from src.tests.test_mechanistic_entry_runtime_policy import initial
     from src.engine.scalping import mechanistic_entry_runtime_policy as policy
     from src.engine.scalping.main_ai_prompt_consumer import verify_compact_handoff
@@ -194,6 +194,23 @@ def test_compact_public_finalization_consumes_policy_and_all_summaries(tmp_path,
     receipt["source_manifest"] = {"source_manifest_sha256": "d"*64}
     receipt["compact_auxiliary_policy_measurement"] = {"measurement_allowed": True}
     compact.write(tmp_path / "report/observation_source_quality_audit/observation_source_quality_audit_2026-09-17.json", {"machine_ai_natural_source_consumption": receipt})
+    # The actual source materializer feeds diagnostics before the existing
+    # supported economic proof travels through dated publication and runtime.
+    from src.engine.scalping import ai_decision_quality as quality
+    from src.tests.test_ai_decision_quality import _trace, _payload, _pending
+    monkeypatch.setattr(quality, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(quality, "control_path", lambda day: tmp_path / "runtime" / f"ai_decision_quality_control_{day}.json")
+    monkeypatch.setattr(quality, "label_report_path", lambda day: tmp_path / "report/ai_decision_outcome_labels" / f"ai_decision_outcome_labels_{day}.json")
+    label = {**_pending(), "label_status": "mature", "source_quality_status": "pass",
+             "primary_cohort_eligible": True, "reason_codes": ["체결근거"], "horizon_metrics": {"10m": {"end_return_pct": .5}}}
+    report = {"schema": quality.LABEL_REPORT_SCHEMA, "target_date": "2026-09-17",
+              "outcome_as_of": "2026-09-17T21:00:00+09:00", "labels": [label], **quality.OFFLINE_CONTRACT}
+    generated = quality.build_daily_materialization_reports(target_date="2026-09-17", promotion={},
+        traces=[_trace()], payloads=[_payload()], labels=[label], label_report=report,
+        outcome_price_source="pipeline", outcome_price_source_requested="pipeline", price_source_provenance=[])
+    quality.write_source_label_materialization("2026-09-17", generated["reports"])
+    proof = compact.sealed({**proof, "source_label_report_sha256": compact.digest(compact.read(quality.label_report_path("2026-09-17")))})
+    compact.write(compact.report_path(tmp_path, "2026-09-17"), proof)
     for p in compact.summary_paths(tmp_path, "2026-09-17"):
         compact.write(p, {"date": "2026-09-17", "native_status": "blocked_resource_guard", "unrelated": 42})
     result = compact.finalize(data_root=tmp_path, day="2026-09-17", publication_day="2026-09-18")
@@ -201,7 +218,18 @@ def test_compact_public_finalization_consumes_policy_and_all_summaries(tmp_path,
     child = policy.load(data_root=tmp_path, target_date=result["effective_date"])
     assert child["machine_policy"] == parent["machine_policy"]
     assert child["ai_policy"]["prompt_version"] == (proof["candidate_prompt_version"] if promote else parent["ai_policy"]["prompt_version"])
+    from pathlib import Path
+    diagnostic_report = compact.read(Path(result["calibration_path"]))
+    diagnostics = diagnostic_report["hierarchical_entry_quality"]["machine_decision_case_table"]["ai_quality_diagnostics"]
+    assert diagnostics["status"] == "diagnostic_available"
+    assert diagnostics["diagnostic_price_path_summary"]["eligible_sample_count"] == 1
+    assert policy.load_effective(data_root=tmp_path, target_date=result["effective_date"])["bundle_sha256"] == child["bundle_sha256"]
     assert verify_compact_handoff(tmp_path, "2026-09-17")["status"] == "PASS"
+    label_path = quality.label_report_path("2026-09-17")
+    original_labels = compact.read(label_path)
+    compact.write(label_path, {**original_labels, "tampered": True})
+    assert "compact_source_label_revision_stale" in verify_compact_handoff(tmp_path, "2026-09-17")["issues"]
+    compact.write(label_path, original_labels)
     p = compact.summary_paths(tmp_path, "2026-09-17")[0]
     report = compact.read(p)
     assert report["native_status"] == "blocked_resource_guard" and report["unrelated"] == 42
@@ -1177,3 +1205,27 @@ def test_compact_large_atomic_operating_generation_is_consumable(tmp_path):
     generation = {"frozen_inputs": "x" * (17 * 1024 * 1024)}
     compact.write(path, generation)
     assert compact.read(path) == generation
+
+
+def test_additive_label_revision_reuses_frozen_projection_without_raw_rescan(monkeypatch, tmp_path):
+    row = compact_row()
+    projection = compact.sealed({"rows": [row], "screened_total": 1,
+        "source_manifest_sha256": "d"*64, "source_tuning_allowed": True, "exclusion_counts": {}, **compact.AUTHORITY})
+    monkeypatch.setattr(compact, "prepare", lambda *_: projection)
+    compact.run(data_root=tmp_path, day="2026-09-17", execute=False)
+    path = tmp_path / "report/ai_decision_outcome_labels/ai_decision_outcome_labels_2026-09-17.json"
+    report = {"target_date": "2026-09-17", "labels": [{"decision_trace_id": row["evaluation_key"],
+        "horizon_metrics": {"10m": {"entry_quality_path": row["entry_quality_path"]}},
+        "evaluation_label_contract": {"diagnostic": "additive_revision"}}]}
+    compact.write(path, report)
+    monkeypatch.setattr(compact, "prepare", lambda *_: pytest.fail("additive revision cannot rescan frozen raw"))
+    refreshed = compact.run(data_root=tmp_path, day="2026-09-17", execute=False)
+    assert refreshed["source_label_report_sha256"] == compact.digest(compact.read(path))
+    assert refreshed["metrics"]["screened_total"] == 1
+    # A real path revision must reach the original source producer.
+    report["labels"][0]["horizon_metrics"]["10m"]["entry_quality_path"]["gross_net_target_pct"] = .8
+    compact.write(path, report)
+    calls = []
+    monkeypatch.setattr(compact, "prepare", lambda *_: calls.append(True) or projection)
+    compact.run(data_root=tmp_path, day="2026-09-17", execute=False)
+    assert calls == [True]

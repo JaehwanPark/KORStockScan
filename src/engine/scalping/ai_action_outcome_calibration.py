@@ -7029,6 +7029,7 @@ def build_report(
         capture_census=machine_capture_census,
         source_receipt=machine_source_receipt,
     )
+    machine_decision_case_table["ai_quality_diagnostics"] = materialized_quality_diagnostics(data_root, target_date)
     from src.engine.scalping import compact_auxiliary_paired_replay as compact
     paired = compact.read(compact.report_path(data_root, target_date))
     if compact.valid(paired) and paired.get("source_manifest_sha256") == machine_source_receipt.get("source_manifest_sha256"):
@@ -7328,6 +7329,30 @@ def ensure_machine_economic_reference(*, data_root: Path, target_date: str) -> d
         return {"status": "source_gap_cost_prerequisite_failed", "reason": str(exc), "path": str(path)}
 
 
+def materialized_quality_diagnostics(data_root: Path, source_day: str) -> dict:
+    from src.engine.scalping import ai_decision_quality as quality
+    from src.engine.scalping.compact_auxiliary_paired_replay import digest
+    path = Path(data_root) / "report/ai_decision_outcome_labels" / f"ai_decision_outcome_labels_{source_day}.json"
+    control_path = Path(data_root) / "runtime" / f"ai_decision_quality_control_{source_day}.json"
+    labels, control = _load_json(path), _load_json(control_path)
+    errors = quality.validate_daily_materialization_reports(
+        target_date=source_day, reports={"control": control, "mature": labels})
+    return {
+        "schema": "ai_quality_materialized_diagnostics_v1", "source_date": source_day,
+        "status": "source_gap" if errors else "diagnostic_available",
+        "source_label_report_path": str(path), "source_label_report_sha256": digest(labels) if labels else None,
+        "source_label_quality_contract_sha256": quality._sha256(labels) if labels else None,
+        "original_label_report_sha256": labels.get("original_label_report_sha256"),
+        "source_manifest_sha256": (control.get("materialization_inputs") or {}).get("source_manifest_sha256"),
+        "diagnostic_price_path_summary": labels.get("diagnostic_price_path_summary") if not errors else None,
+        "label_contract_status_counts": labels.get("label_contract_status_counts") if not errors else None,
+        "source_label_migration": control.get("source_label_migration"),
+        "reasons": errors, "owner": "ai_decision_quality_source_label_materialization",
+        "closure_test": "current_source_label_contract_and_exact_content_hash_pass",
+        "economic_acceptance_eligible": False, "diagnostic_net_is_realized_profit": False,
+    }
+
+
 def build_compact_scope_report(data_root: Path, source_day: str, publication_day: str) -> dict:
     """Explicit successor; older observations retain their actual source day."""
     from src.engine.scalping import compact_auxiliary_paired_replay as compact
@@ -7347,6 +7372,7 @@ def build_compact_scope_report(data_root: Path, source_day: str, publication_day
         table = existing["hierarchical_entry_quality"]["machine_decision_case_table"]
         table.setdefault("compact_auxiliary_screen_outcomes", {})["paired_economic_evaluation"] = paired
         table["compact_auxiliary_evaluation_source_receipt"] = receipt
+        table["ai_quality_diagnostics"] = materialized_quality_diagnostics(data_root, source_day)
         existing.update(evaluation_source_date=source_day, report_scope="compact_auxiliary_only", noncompact_sections_refreshed=False)
         return _with_artifact_content_sha256(existing)
     return _with_artifact_content_sha256({
@@ -7355,6 +7381,7 @@ def build_compact_scope_report(data_root: Path, source_day: str, publication_day
         "status": "compact_terminal_evaluation", "clean_tuning_baseline_date": "2026-06-05",
         "hierarchical_entry_quality": {"machine_decision_case_table": {
             "machine_ai_natural_source_receipt": receipt,
+            "ai_quality_diagnostics": materialized_quality_diagnostics(data_root, source_day),
             "compact_auxiliary_policy_measurement": receipt.get("compact_auxiliary_policy_measurement"),
             "compact_auxiliary_screen_outcomes": {"paired_economic_evaluation": paired}}},
         "noncompact_sections_refreshed": False, **compact.AUTHORITY,

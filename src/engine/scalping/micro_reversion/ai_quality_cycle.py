@@ -7721,6 +7721,19 @@ def _write_control_driver(
     return artifact
 
 
+def ensure_legacy_paired_preparation(*, target_date, paired_path, custom_or_frozen, write, runner):
+    """Prepare only an absent default offline input; never replace checkpoint inputs."""
+    if custom_or_frozen or existing_or_gzip_path(paired_path).exists():
+        return None
+    if not write:
+        return {"name": "legacy_offline_paired_preparation", "returncode": 1,
+                "status": "source_gap_write_not_authorized"}
+    return _command_step(
+        name="legacy_offline_paired_preparation",
+        command=[sys.executable, "-m", "src.engine.scalping.ai_decision_quality",
+                 "--date", target_date, "--mode", "paired", "--write"], runner=runner)
+
+
 def _default_paths(target_date: str) -> dict[str, Path]:
     return {
         "source_audit": DATA_DIR
@@ -10228,6 +10241,16 @@ def run_cycle(
         blockers.append("economic_reference_artifact_missing")
 
     if not blockers and provider_bound_r0_generation is None:
+        # Generic preparation belongs to this explicit offline research boundary,
+        # not the current machine/compact daily source materializer. Overrides
+        # and already frozen/provider-bound generations keep their exact inputs.
+        preparation = ensure_legacy_paired_preparation(
+            target_date=target_date, paired_path=selected_paths["paired_report"],
+            custom_or_frozen="paired_report" in overrides, write=write, runner=command_runner)
+        if preparation is not None:
+            steps.append(preparation)
+            if preparation["returncode"] != 0:
+                blockers.append("legacy_offline_paired_preparation_failed_or_missing")
         try:
             paired_report, paired_source = _load_json_with_raw_artifact(
                 selected_paths["paired_report"]

@@ -759,63 +759,20 @@ def test_daily_materialization_builds_ordered_chain_without_candidate_execution(
         price_source_provenance=[],
     )
 
-    assert materialization["write_order"] == [
-        "control",
-        "mature",
-        "baseline",
-        "paired",
-        "candidate_lifecycle_state",
-    ]
+    assert materialization["write_order"] == ["control", "mature"]
     assert materialization["candidate_execution_performed"] is False
-    assert materialization["contract_validation"] == "pass"
-    assert materialization["decision_quality_objective"]["not_objective"] == (
-        "maximize_drop_wait_or_eliminate_all_risk"
-    )
-    assert (
-        materialization["decision_quality_objective"][
-            "artifact_generation_is_performance"
-        ]
-        is False
-    )
     assert materialization["runtime_effect"] is False
     assert materialization["reports"]["control"]["controls"]
-    assert materialization["reports"]["baseline"]["eligible_sample_count"] == 1
-    paired = materialization["reports"]["paired"]
-    assert paired["prepared_request_count"] == 1
-    assert paired["outcome_as_of"] == "2026-07-27T16:30:00+09:00"
-    assert (
-        materialization["reports"]["candidate_lifecycle_state"]["schema"]
-        == "entry_candidate_lifecycle_state_report_v1"
-    )
-    assert paired["request_count"] == 1
-    assert paired["status"] == ("paired_replay_requests_ready_candidate_not_executed")
-    assert paired["sample_floor_buckets"][0]["pass"] is True
-    assert (
-        paired["sample_floor_buckets"][0]["promotion_evidence_floor"]["pass"] is False
-    )
-    assert paired["candidate_execution_performed"] is False
-    assert paired["candidate_execution_authority"] == (
-        "explicit_offline_execute_candidate_only"
-    )
-    funnel = paired["entry_opportunity_funnel"]
-    assert funnel["candidate_execution_requested"] is False
-    assert funnel["cohorts"][0]["first_blocker_counts"] == {
-        "candidate_execution_not_requested": 1
-    }
-
-    invalid_reports = dict(materialization["reports"])
-    invalid_reports["paired"] = {
-        **paired,
-        "candidate_execution_performed": True,
-        "results": [{"status": "pass"}],
-    }
-    assert quality.validate_daily_materialization_reports(
-        target_date="2026-07-27",
-        reports=invalid_reports,
-    ) == [
-        "paired_candidate_execution_performed",
-        "paired_candidate_results_not_empty",
-    ]
+    diagnostic = materialization["reports"]["mature"]["diagnostic_price_path_summary"]
+    assert diagnostic["eligible_sample_count"] == 1
+    assert diagnostic["source_quality_adjusted_ev_pct"] == 0.0  # original WAIT diagnostic proxy
+    assert diagnostic["economic_acceptance_eligible"] is False
+    assert materialization["reports"]["mature"]["label_contract_status_counts"] == {"available": 1}
+    invalid = deepcopy(materialization["reports"])
+    invalid["mature"]["labels"][0]["horizon_metrics"]["10m"]["end_return_pct"] = 2.0
+    assert "label_report_hash_mismatch" in quality.validate_daily_materialization_reports(target_date="2026-07-27", reports=invalid)
+    invalid["paired"] = {}
+    assert "legacy_artifacts_in_current_materialization" in quality.validate_daily_materialization_reports(target_date="2026-07-27", reports=invalid)
 
 
 def _paired_outcome_recovery_report(*, outcome_return_pct=1.0):
@@ -1232,11 +1189,21 @@ def test_postclose_cli_writes_and_revalidates_all_daily_artifacts(
         == 0
     )
 
-    assert all(path.exists() for path in paths.values())
-    paired = quality._load_json(paths["paired"])
-    assert paired["candidate_execution_performed"] is False
-    assert paired["results"] == []
-    assert "daily_exact_quality_chain_prepared" in capsys.readouterr().out
+    assert paths["control"].exists() and paths["mature"].exists()
+    assert not any(paths[x].exists() for x in ("baseline", "paired", "candidate_lifecycle_state"))
+    assert "source_labels_materialized" in capsys.readouterr().out
+    from src.engine.scalping import ai_action_outcome_calibration as calibration
+    # Public producer outputs are consumed with exact hashes by the case table.
+    target = tmp_path / "data"
+    cpath = target / "runtime/ai_decision_quality_control_2026-07-27.json"
+    lpath = target / "report/ai_decision_outcome_labels/ai_decision_outcome_labels_2026-07-27.json"
+    for source, dest in ((paths["control"], cpath), (paths["mature"], lpath)):
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(source.read_bytes())
+    result = calibration.materialized_quality_diagnostics(target, "2026-07-27")
+    assert result["status"] == "diagnostic_available"
+    assert not result["economic_acceptance_eligible"]
+    assert result["diagnostic_price_path_summary"]["eligible_sample_count"] == 1
 
 
 def test_control_manifest_separates_approved_cache_redaction_supplemental():
@@ -14671,3 +14638,48 @@ def test_pipeline_lifecycle_keeps_promotion_on_trace_without_promotion_only_bloa
     assert len(lifecycle) == 1
     assert correlation["status"] == "exact_matched"
     assert correlation["scanner_promotion_ids"] == ["SCANPROM-005930-1"]
+
+
+@pytest.mark.parametrize("due,have,eligible,expected", [
+    (False, False, True, "pending"), (True, False, True, "source_gap"),
+    (True, True, True, "available"), (True, True, False, "source_gap")])
+def test_materialized_label_role_distinguishes_fixed_gap_from_maturity(due, have, eligible, expected):
+    label = {**_pending(), "decision_ts": "2026-09-17T10:00:00+09:00",
+             "source_quality_status": "pass", "primary_cohort_eligible": eligible,
+             "horizon_metrics": {"10m": {"end_return_pct": 0.5}} if have else {}}
+    report = {"target_date": "2026-09-17", "labels": [label],
+              "outcome_as_of": "2026-09-17T10:30:00+09:00" if due else "2026-09-17T10:05:00+09:00"}
+    result = quality.annotate_materialized_label_contract(report)
+    contract = result["labels"][0]["evaluation_label_contract"]
+    assert contract["diagnostic_price_path"]["status"] == expected
+    assert contract["economic_counterfactual"]["net_ev_pct"] is None
+    assert contract["actual_completed"]["net_profit_krw"] is None
+    assert report["labels"][0] == label  # input immutable
+
+
+def test_source_label_revision_reuse_cas_and_original_bytes(monkeypatch, tmp_path, capsys):
+    target = "2026-09-17"
+    cpath, lpath = tmp_path / "control.json", tmp_path / "labels.json"
+    monkeypatch.setattr(quality, "control_path", lambda _: cpath)
+    monkeypatch.setattr(quality, "label_report_path", lambda _: lpath)
+    inputs = {"generation_stable": True, "source_manifest_sha256": "a" * 64, "source_trace_count": 0, "source_outcome_count": 0}
+    monkeypatch.setattr(quality, "source_label_input_receipt", lambda _, **_kwargs: deepcopy(inputs))
+    control = {"schema": quality.CONTROL_SCHEMA, "target_date": target, "input_trace_count": 0, **quality.OFFLINE_CONTRACT}
+    control["control_manifest_sha256"] = quality._sha256(control)
+    labels = {"schema": quality.LABEL_REPORT_SCHEMA, "target_date": target, "labels": [], **quality.OFFLINE_CONTRACT}
+    cpath.write_text(json.dumps(control)); lpath.write_text(json.dumps(labels, indent=2))
+    raw = lpath.read_bytes()
+    monkeypatch.setattr(quality, "_default_sources", lambda *_a, **_k: pytest.fail("unchanged frozen inputs cannot rescan"))
+    assert quality.main(["--date", target, "--mode", "postclose", "--reuse-materialized-labels", "--write"]) == 0
+    revisions = list((tmp_path / "revisions").glob("*.json"))
+    assert len(revisions) == 1 and revisions[0].read_bytes() == raw
+    assert quality.main(["--date", target, "--mode", "postclose", "--write"]) == 0
+    assert "unchanged_source_labels_reused" in capsys.readouterr().out
+    reports = {"control": quality._load_json(cpath), "mature": quality._load_json(lpath)}
+    with pytest.raises(ValueError, match="predecessor_changed"):
+        quality.write_source_label_materialization(target, reports, inputs=inputs, previous_label_sha256="b"*64)
+    changed = deepcopy(inputs); changed["source_manifest_sha256"] = "c"*64
+    with pytest.raises(ValueError, match="generation_changed"):
+        quality.write_source_label_materialization(target, reports, inputs=changed)
+    reports["mature"]["labels"].append({"bad": True})
+    assert "label_report_hash_mismatch" in quality.validate_daily_materialization_reports(target_date=target, reports=reports)

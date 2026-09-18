@@ -7233,3 +7233,24 @@ def test_r3_manifest_rejects_candidate_inserted_into_historical_blocked_r2():
             manifest,
             source_rolling_artifact=rolling,
         )
+
+
+def test_explicit_legacy_boundary_prepares_missing_default_and_preserves_frozen_input(tmp_path):
+    paired = tmp_path / "paired.json"
+    calls = []
+    def runner(command):
+        calls.append(command)
+        assert command[command.index("--mode") + 1] == "paired"
+        assert "--execute-candidate" not in command
+        paired.write_text('{"prepared":"offline-only"}')
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+    kwargs = dict(target_date="2026-09-17", paired_path=paired, write=True, runner=runner)
+    assert cycle.ensure_legacy_paired_preparation(custom_or_frozen=False, **kwargs)["returncode"] == 0
+    original = paired.read_bytes()
+    assert cycle.ensure_legacy_paired_preparation(custom_or_frozen=False, **kwargs) is None
+    assert paired.read_bytes() == original and len(calls) == 1
+    paired.unlink()
+    assert cycle.ensure_legacy_paired_preparation(custom_or_frozen=True, **kwargs) is None
+    kwargs["write"] = False
+    assert cycle.ensure_legacy_paired_preparation(custom_or_frozen=False, **kwargs)["returncode"] == 1
+    assert len(calls) == 1

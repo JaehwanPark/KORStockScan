@@ -228,7 +228,7 @@ class _MicroReversionProviderReceiptRejected(RuntimeError):
 MICRO_REVERSION_ACTION_NEUTRAL_LABEL_SCHEMA = (
     "ai_micro_reversion_action_neutral_outcome_labels_v1"
 )
-DAILY_MATERIALIZATION_SCHEMA = "ai_decision_quality_daily_materialization_v1"
+DAILY_MATERIALIZATION_SCHEMA = "ai_decision_quality_source_label_materialization_v2"
 DETAILED_PAIRED_SCHEMA = "ai_prompt_detailed_paired_replay_v1"
 EXACT_PAYLOAD_ANALYSIS_SCHEMA = "exact_payload_analysis_v1"
 ANTICIPATORY_REVERSAL_ANALYSIS_SCHEMA = "anticipatory_reversal_analysis_v1"
@@ -27651,73 +27651,27 @@ def build_daily_materialization_reports(
         promotion_artifact_path=promotion_artifact_path,
         promotion_source_date=promotion_source_date,
     )
-    baseline = build_quality_baseline(target_date=target_date, labels=labels)
-    baseline["outcome_price_source"] = outcome_price_source
-    baseline["outcome_price_source_requested"] = outcome_price_source_requested
-    baseline["price_source_provenance"] = price_source_provenance
-
-    prepared_requests = prepare_paired_replay_requests(
-        control_manifest=control,
-        traces=traces,
-        payloads=payloads,
-        labels=labels,
+    label_report = annotate_materialized_label_contract(label_report)
+    diagnostics = label_report["diagnostic_price_path_summary"]
+    control.update(
+        materialization_schema=DAILY_MATERIALIZATION_SCHEMA,
+        materialization_role="source_labels_for_machine_and_compact_evaluators",
+        label_report_sha256=_sha256(label_report),
+        diagnostic_price_path_summary=diagnostics,
+        machine_ai_natural_source_consumption_receipt=source_consumption_receipt,
     )
-    accepted_requests = [
-        request
-        for request in prepared_requests
-        if (request.get("sample_floor") or {}).get("pass") is True
-    ]
-    paired = build_paired_replay_report(
-        target_date=target_date,
-        requests=accepted_requests,
-        results=[],
-        labels=labels,
-        prepared_requests=prepared_requests,
+    control["control_manifest_sha256"] = _sha256(
+        {k: v for k, v in control.items() if k != "control_manifest_sha256"}
     )
-    _attach_paired_preparation_metadata(
-        paired,
-        prepared_requests=prepared_requests,
-        accepted_requests=accepted_requests,
-        outcome_price_source=outcome_price_source,
-        outcome_price_source_requested=outcome_price_source_requested,
-        price_source_provenance=price_source_provenance,
-        outcome_as_of=(str(label_report.get("outcome_as_of") or "") or None),
-    )
-    paired["candidate_execution_performed"] = False
-    paired["candidate_execution_authority"] = "explicit_offline_execute_candidate_only"
-    paired["decision_quality_objective"] = dict(DECISION_QUALITY_OBJECTIVE)
-    candidate_lifecycle_state = materialize_candidate_states(
-        target_date,
-        write=False,
-    )
-
-    reports = {
-        "control": control,
-        "mature": label_report,
-        "baseline": baseline,
-        "paired": paired,
-        "candidate_lifecycle_state": candidate_lifecycle_state,
-    }
-    validation_errors = validate_daily_materialization_reports(
-        target_date=target_date,
-        reports=reports,
-    )
-    if validation_errors:
-        raise RuntimeError(
-            "daily_exact_quality_chain_contract_invalid:" + ",".join(validation_errors)
-        )
+    reports = {"control": control, "mature": label_report}
+    errors = validate_daily_materialization_reports(target_date=target_date, reports=reports)
+    if errors:
+        raise RuntimeError("daily_source_label_contract_invalid:" + ",".join(errors))
     return {
         "schema": DAILY_MATERIALIZATION_SCHEMA,
         "target_date": target_date,
-        "generated_at": datetime.now(KST).isoformat(),
-        "status": "daily_exact_quality_chain_prepared",
-        "write_order": [
-            "control",
-            "mature",
-            "baseline",
-            "paired",
-            "candidate_lifecycle_state",
-        ],
+        "status": "source_labels_materialized",
+        "write_order": ["control", "mature"],
         "candidate_execution_performed": False,
         "decision_quality_objective": dict(DECISION_QUALITY_OBJECTIVE),
         "machine_ai_natural_source_consumption_receipt": source_consumption_receipt,
@@ -27727,63 +27681,252 @@ def build_daily_materialization_reports(
             "control_status": control.get("status"),
             "label_status": label_report.get("status"),
             "label_counts": label_report.get("summary"),
-            "baseline_status": baseline.get("status"),
-            "baseline_eligible_sample_count": baseline.get("eligible_sample_count"),
-            "paired_status": paired.get("status"),
-            "paired_prepared_request_count": paired.get("prepared_request_count"),
-            "paired_accepted_request_count": paired.get("request_count"),
-            "candidate_lifecycle_state_count": candidate_lifecycle_state.get(
-                "candidate_state_count"
-            ),
-            "candidate_lifecycle_source_quality_pass_count": (
-                candidate_lifecycle_state.get("source_quality_pass_count")
-            ),
-            "machine_ai_natural_source_consumption_status": (
-                source_consumption_receipt["status"]
-            ),
+            "diagnostic_eligible_count": diagnostics["eligible_sample_count"],
+            "label_contract_status_counts": label_report["label_contract_status_counts"],
         },
         **OFFLINE_CONTRACT,
     }
 
 
-def validate_daily_materialization_reports(
-    *,
-    target_date: str,
-    reports: dict[str, dict[str, Any]],
-) -> list[str]:
-    """Validate daily artifact identity and report-only authority isolation."""
+def annotate_materialized_label_contract(report: dict[str, Any]) -> dict[str, Any]:
+    """Add diagnostic lineage without upgrading raw price paths to economics."""
+    from copy import deepcopy
 
-    expected_schemas = {
-        "control": CONTROL_SCHEMA,
-        "mature": LABEL_REPORT_SCHEMA,
-        "baseline": BASELINE_SCHEMA,
-        "paired": PAIRED_SCHEMA,
-        "candidate_lifecycle_state": "entry_candidate_lifecycle_state_report_v1",
-    }
-    errors: list[str] = []
-    for name, expected_schema in expected_schemas.items():
+    result = deepcopy(report)
+    original_hash = report.get("original_label_report_sha256") or _sha256(report)
+    states = Counter()
+    as_of = _parse_ts(report.get("outcome_as_of"))
+    provenance = report.get("price_source_provenance") or []
+    for label in result.get("labels") or []:
+        original = {k: v for k, v in label.items() if k != "evaluation_label_contract"}
+        metrics = label.get("horizon_metrics") or {}
+        required = PRIMARY_HORIZON_BY_STAGE.get(_stage(label.get("decision_stage")))
+        available = sorted(k for k, v in metrics.items() if isinstance(v, dict)
+                           and _number(v.get("end_return_pct")) is not None)
+        decision = _parse_ts(label.get("decision_ts"))
+        end = decision + timedelta(minutes=int(required[:-1])) if decision and required else None
+        reasons = list(label.get("primary_cohort_exclusion_reasons") or [])
+        reasons.extend(label.get("invalid_reasons") or [])
+        coverage = [row for row in provenance if isinstance(row, dict)
+                    and row.get("stock_code") == label.get("stock_code")
+                    and _venue(row.get("effective_venue")) == _venue(label.get("effective_venue"))
+                    and _session(row.get("session_bucket")) == _session(label.get("session_bucket"))]
+        if label.get("source_quality_status") != "pass" or label.get("primary_cohort_eligible") is not True:
+            status = "source_gap"
+            reasons = reasons or ["source_quality_or_primary_identity_invalid"]
+        elif required in available:
+            status = "available"
+        elif end and as_of and as_of < end:
+            status = "pending"
+            reasons = ["required_diagnostic_horizon_not_due"]
+        else:
+            status = "source_gap"
+            reasons = ["fixed_required_price_window_missing"]
+        states[status] += 1
+        label["evaluation_label_contract"] = {
+            "schema": "ai_quality_label_roles_v1",
+            "original_label_sha256": ((label.get("evaluation_label_contract") or {}).get("original_label_sha256") or _sha256(original)),
+            "diagnostic_price_path": {
+                "status": status, "required_horizon": required,
+                "available_horizons": available, "required_window_end": end.isoformat() if end else None,
+                "source_as_of": report.get("outcome_as_of"), "price_coverage": coverage,
+                "censored": required not in available, "reasons": sorted(set(reasons)),
+                "owner": "ai_decision_quality_original_price_and_context_source",
+                "closure_test": "exact_route_original_window_and_primary_identity_valid",
+                "economic_acceptance_eligible": False,
+            },
+            "economic_counterfactual": {
+                "status": "owner_evaluation_required", "net_ev_pct": None,
+                "owner": "compact_auxiliary_paired_replay_and_entry_owner_operating_model",
+                "closure_test": "validated_operating_arms_full_cost_and_independent_holdout",
+            },
+            "actual_completed": {
+                "status": "owner_evaluation_required", "net_profit_krw": None,
+                "owner": "main_owner_journal_completed_cost_and_applied_version",
+                "closure_test": "real_main_completed_valid_cost_exact_policy_pid_episode_receipt",
+            },
+        }
+    baseline = build_quality_baseline(target_date=result["target_date"], labels=result.get("labels") or [])
+    baseline.update(metric_role="diagnostic_price_path", primary_decision_metric=None,
+                    economic_acceptance_eligible=False, actual_completed_profit=False,
+                    source_label_sha256=_sha256([x.get("evaluation_label_contract") for x in result.get("labels") or []]))
+    result.update(materialization_schema=DAILY_MATERIALIZATION_SCHEMA,
+                  original_label_report_sha256=original_hash,
+                  diagnostic_price_path_summary=baseline,
+                  label_contract_status_counts=dict(states))
+    return result
+
+
+def validate_daily_materialization_reports(*, target_date: str, reports: dict[str, dict[str, Any]]) -> list[str]:
+    """The current native contract has two real artifacts, never legacy stubs."""
+    errors = []
+    for name, schema in (("control", CONTROL_SCHEMA), ("mature", LABEL_REPORT_SCHEMA)):
         report = reports.get(name)
         if not isinstance(report, dict):
             errors.append(f"{name}_missing")
             continue
-        if report.get("schema") != expected_schema:
+        if report.get("schema") != schema:
             errors.append(f"{name}_schema_invalid")
         if report.get("target_date") != target_date:
             errors.append(f"{name}_target_date_mismatch")
-        for field, expected in (
-            ("runtime_effect", False),
-            ("allowed_runtime_apply", False),
-            ("actual_order_submitted", False),
-            ("broker_order_forbidden", True),
-        ):
+        for field, expected in (("runtime_effect", False), ("allowed_runtime_apply", False),
+                                ("actual_order_submitted", False), ("broker_order_forbidden", True)):
             if report.get(field) is not expected:
                 errors.append(f"{name}_{field}_invalid")
-    paired = reports.get("paired") or {}
-    if paired.get("candidate_execution_performed") is not False:
-        errors.append("paired_candidate_execution_performed")
-    if paired.get("results"):
-        errors.append("paired_candidate_results_not_empty")
+        if report.get("materialization_schema") != DAILY_MATERIALIZATION_SCHEMA:
+            errors.append(f"{name}_materialization_schema_invalid")
+    control, labels = reports.get("control") or {}, reports.get("mature") or {}
+    if control.get("control_manifest_sha256") != _sha256({k: v for k, v in control.items() if k != "control_manifest_sha256"}):
+        errors.append("control_content_hash_invalid")
+    if control.get("label_report_sha256") != _sha256(labels):
+        errors.append("label_report_hash_mismatch")
+    diagnostic = labels.get("diagnostic_price_path_summary")
+    counts = labels.get("label_contract_status_counts")
+    if not isinstance(labels.get("labels"), list) or not isinstance(counts, dict) or any(
+            type(v) is not int or v < 0 for v in (counts or {}).values()) or sum((counts or {}).values()) != len(labels.get("labels") or []):
+        errors.append("label_census_invalid")
+    if not isinstance(diagnostic, dict) or diagnostic.get("schema") != BASELINE_SCHEMA or diagnostic.get("economic_acceptance_eligible") is not False:
+        errors.append("diagnostic_role_missing_or_invalid")
+    if set(reports) != {"control", "mature"}:
+        errors.append("legacy_artifacts_in_current_materialization")
     return errors
+
+
+def source_label_input_receipt(target_date: str, *, outcome_price_source_requested: str = "auto") -> dict[str, Any]:
+    """Cheap readiness over existing frozen manifests; no raw content rescan."""
+    paths = [TRACE_DIR / f"ai_decision_trace_{target_date}.jsonl",
+             PAYLOAD_DIR / f"ai_decision_payloads_{target_date}.jsonl",
+             OUTCOME_DIR / f"ai_decision_outcomes_{target_date}.jsonl",
+             PROMPT_DIR / f"ai_decision_prompts_{target_date}.jsonl",
+             DATA_DIR / "ai_decision_requests" / f"ai_decision_requests_{target_date}.jsonl"]
+    # Overnight labels may consume the existing forward-day pipeline window.
+    target = date.fromisoformat(target_date)
+    paths.extend(PIPELINE_DIR / f"pipeline_events_{(target + timedelta(days=n)).isoformat()}.jsonl"
+                 for n in range(PIPELINE_FORWARD_DAYS + 1))
+    signatures = {}
+    for path in paths:
+        actual = existing_or_gzip_path(path)
+        signatures[str(path)] = [actual.stat().st_size, actual.stat().st_mtime_ns] if actual.exists() else None
+    source_path = DATA_DIR / "report/observation_source_quality_audit" / f"observation_source_quality_audit_{target_date}.json"
+    source = _load_json(source_path) if source_path.exists() else {}
+    consumption = source.get("machine_ai_natural_source_consumption") or {}
+    manifest = consumption.get("source_manifest") or {}
+    generations_match = True
+    for name, row in (consumption.get("sources") or {}).items():
+        generation = row.get("generation") or {}
+        actual = DATA_DIR / name / f"{name}_{target_date}.jsonl"
+        try:
+            actual = existing_or_gzip_path(actual)
+            stat = actual.stat()
+            if any(generation.get(k) != v for k, v in (("device", stat.st_dev), ("inode", stat.st_ino),
+                    ("size_bytes", stat.st_size), ("mtime_ns", stat.st_mtime_ns))):
+                generations_match = False
+        except OSError:
+            # Compression/rotation needs a refreshed original source manifest.
+            generations_match = False
+    promotion, _, _ = load_promotion_for_target_date(target_date)
+    return {"outcome_price_source_requested": outcome_price_source_requested,
+            "source_manifest_sha256": manifest.get("source_manifest_sha256"),
+            "generation_stable": manifest.get("generation_stable") is True and generations_match,
+            "source_trace_count": (manifest.get("sources", {}).get("ai_decision_trace") or {}).get("nonempty_line_count"),
+            "source_outcome_count": (manifest.get("sources", {}).get("ai_decision_outcomes") or {}).get("nonempty_line_count"),
+            "source_audit_sha256": _sha256(consumption), "signatures": signatures,
+            "promotion_sha256": _sha256(promotion),
+            "implementation_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}
+
+
+def write_source_label_materialization(target_date: str, reports: dict[str, dict[str, Any]], *, inputs: dict | None = None, previous_label_sha256: str | None = None) -> None:
+    """Preserve original label bytes before publishing additive metadata."""
+    lock_path = control_path(target_date).with_suffix(".materialization.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if inputs is not None and inputs != source_label_input_receipt(target_date, outcome_price_source_requested=inputs.get("outcome_price_source_requested", "auto")):
+            raise ValueError("source_label_generation_changed_during_materialization")
+        path = label_report_path(target_date)
+        if previous_label_sha256 is not None and (not path.exists() or _sha256(_load_json(path)) != previous_label_sha256):
+            raise ValueError("source_label_predecessor_changed")
+        _write_source_label_materialization_unlocked(target_date, reports, inputs=inputs)
+
+
+def _write_source_label_materialization_unlocked(target_date: str, reports: dict, *, inputs: dict | None) -> None:
+    control, labels = reports["control"], reports["mature"]
+    if inputs is not None:
+        control["materialization_inputs"] = inputs
+        control["control_manifest_sha256"] = _sha256({k: v for k, v in control.items() if k != "control_manifest_sha256"})
+    errors = validate_daily_materialization_reports(target_date=target_date, reports=reports)
+    if errors:
+        raise ValueError(",".join(errors))
+    path = label_report_path(target_date)
+    if path.exists():
+        raw = path.read_bytes()
+        if _sha256(_load_json(path)) != _sha256(labels):
+            revision = path.parent / "revisions" / f"{path.stem}_{hashlib.sha256(raw).hexdigest()}.json"
+            revision.parent.mkdir(parents=True, exist_ok=True, mode=0o750)
+            if revision.exists() and revision.read_bytes() != raw:
+                raise ValueError("immutable_label_revision_conflict")
+            if not revision.exists():
+                with os.fdopen(os.open(revision, os.O_WRONLY | os.O_CREAT | os.O_EXCL, path.stat().st_mode & 0o777), "wb") as stream:
+                    stream.write(raw)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+    _atomic_write_json(path, labels)
+    _atomic_write_json(control_path(target_date), control)
+    errors = validate_daily_materialization_reports(target_date=target_date, reports={
+        "control": _load_json(control_path(target_date)), "mature": _load_json(path)})
+    if errors:
+        raise ValueError("source_label_written_contract_invalid:" + ",".join(errors))
+
+
+def reuse_source_label_materialization(target_date: str, *, write: bool, migrate: bool = False) -> dict | None:
+    """Explicit legacy migration preserves exclusions, not a new natural verdict."""
+    control, labels = _load_json(control_path(target_date)), _load_json(label_report_path(target_date))
+    if not control or not labels:
+        if migrate:
+            raise ValueError("materialized_source_labels_missing")
+        return None
+    if date.fromisoformat(target_date).isoformat() < "2026-06-05":
+        raise ValueError("source_label_target_before_clean_baseline")
+    inputs = source_label_input_receipt(target_date)
+    if not migrate:
+        if control.get("materialization_inputs") != inputs or validate_daily_materialization_reports(
+                target_date=target_date, reports={"control": control, "mature": labels}):
+            return None
+        as_of = datetime.now(KST)
+        if any((c := (x.get("evaluation_label_contract") or {}).get("diagnostic_price_path") or {}).get("status") == "pending"
+               and (end := _parse_ts(c.get("required_window_end"))) and as_of >= end for x in labels.get("labels") or []):
+            return None
+        return {"schema": DAILY_MATERIALIZATION_SCHEMA, "target_date": target_date,
+                "status": "unchanged_source_labels_reused", "candidate_execution_performed": False,
+                "artifact_paths": {"control": str(control_path(target_date)), "mature": str(label_report_path(target_date))},
+                **OFFLINE_CONTRACT}
+    for name, artifact, schema in (("control", control, CONTROL_SCHEMA), ("labels", labels, LABEL_REPORT_SCHEMA)):
+        if artifact.get("schema") != schema or artifact.get("target_date") != target_date or any(
+                artifact.get(k) is not v for k, v in (("runtime_effect", False), ("allowed_runtime_apply", False),
+                ("actual_order_submitted", False), ("broker_order_forbidden", True))):
+            raise ValueError(f"{name}_legacy_migration_contract_invalid")
+    if control.get("control_manifest_sha256") != _sha256({k: v for k, v in control.items() if k != "control_manifest_sha256"}):
+        raise ValueError("legacy_control_content_hash_invalid")
+    if not inputs["generation_stable"] or not inputs["source_manifest_sha256"]:
+        raise ValueError("legacy_migration_source_manifest_not_frozen")
+    if type(inputs.get("source_trace_count")) is not int or type(inputs.get("source_outcome_count")) is not int or control.get("input_trace_count") != inputs["source_trace_count"] or len(labels.get("labels") or []) != inputs["source_outcome_count"]:
+        raise ValueError("legacy_migration_source_census_mismatch")
+    before = _sha256(labels)
+    labels = annotate_materialized_label_contract(labels)
+    control.update(materialization_schema=DAILY_MATERIALIZATION_SCHEMA,
+                   materialization_role="source_labels_for_machine_and_compact_evaluators",
+                   label_report_sha256=_sha256(labels), diagnostic_price_path_summary=labels["diagnostic_price_path_summary"],
+                   source_label_migration={"original_label_report_sha256": before,
+                       "status": "legacy_labels_preserved_not_revalidated", "new_price_provider_calls": 0,
+                       "original_exclusions_preserved": True})
+    control["control_manifest_sha256"] = _sha256({k: v for k, v in control.items() if k != "control_manifest_sha256"})
+    if write:
+        write_source_label_materialization(target_date, {"control": control, "mature": labels}, inputs=inputs, previous_label_sha256=before)
+    return {"schema": DAILY_MATERIALIZATION_SCHEMA, "target_date": target_date,
+            "status": "existing_source_labels_migrated", "label_report_sha256": _sha256(labels),
+            "label_contract_status_counts": labels["label_contract_status_counts"],
+            "original_label_report_sha256": before, "source_manifest_sha256": inputs["source_manifest_sha256"],
+            "candidate_execution_performed": False, "price_provider_calls": 0, **OFFLINE_CONTRACT}
 
 
 def build_detailed_three_way_comparison(
@@ -30870,6 +31013,8 @@ def main(argv: list[str] | None = None) -> int:
         ),
         required=True,
     )
+    parser.add_argument("--reuse-materialized-labels", action="store_true",
+                        help="Migrate existing frozen source/label reports without raw or price/provider replay; exclusions preserved.")
     parser.add_argument("--as-of")
     parser.add_argument(
         "--outcome-price-source",
@@ -32471,6 +32616,17 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         return 0
+    if args.reuse_materialized_labels and args.mode != "postclose":
+        parser.error("--reuse-materialized-labels requires --mode postclose")
+    if args.mode == "postclose" and not args.as_of and args.outcome_price_source == "auto":
+        reused = reuse_source_label_materialization(args.date, write=args.write, migrate=args.reuse_materialized_labels)
+        if reused is not None:
+            print(json.dumps(reused, ensure_ascii=False))
+            return 0
+    elif args.reuse_materialized_labels:
+        parser.error("migration preserves original as-of/price source; do not override")
+    materialization_inputs = source_label_input_receipt(args.date, outcome_price_source_requested=args.outcome_price_source) if args.mode == "postclose" else None
+    previous_label = _load_json(label_report_path(args.date)) if args.mode == "postclose" else {}
     sources = _default_sources(
         args.date,
         # Pipeline lifecycle rows own decision-to-order/fill correlation even
@@ -32691,43 +32847,10 @@ def main(argv: list[str] | None = None) -> int:
             )
             if args.write:
                 reports = materialization["reports"]
-                _atomic_write_json(control_path(args.date), reports["control"])
-                _atomic_write_json(label_report_path(args.date), reports["mature"])
-                _atomic_write_json(baseline_path(args.date), reports["baseline"])
-                _atomic_write_json(paired_path(args.date), reports["paired"])
-                _atomic_write_json(
-                    candidate_lifecycle_report_path(args.date),
-                    reports["candidate_lifecycle_state"],
-                )
-                written_reports = {
-                    "control": _load_json(control_path(args.date)),
-                    "mature": _load_json(label_report_path(args.date)),
-                    "baseline": _load_json(baseline_path(args.date)),
-                    "paired": _load_json(paired_path(args.date)),
-                    "candidate_lifecycle_state": _load_json(
-                        candidate_lifecycle_report_path(args.date)
-                    ),
-                }
-                write_validation_errors = validate_daily_materialization_reports(
-                    target_date=args.date,
-                    reports=written_reports,
-                )
-                if write_validation_errors:
-                    raise RuntimeError(
-                        "daily_exact_quality_chain_write_validation_failed:"
-                        + ",".join(write_validation_errors)
-                    )
-            printable = {
-                key: value for key, value in materialization.items() if key != "reports"
-            }
+                write_source_label_materialization(args.date, reports, inputs=materialization_inputs, previous_label_sha256=_sha256(previous_label) if previous_label else None)
+            printable = {key: value for key, value in materialization.items() if key != "reports"}
             printable["artifact_paths"] = {
-                "control": str(control_path(args.date)),
-                "mature": str(label_report_path(args.date)),
-                "baseline": str(baseline_path(args.date)),
-                "paired": str(paired_path(args.date)),
-                "candidate_lifecycle_state": str(
-                    candidate_lifecycle_report_path(args.date)
-                ),
+                "control": str(control_path(args.date)), "mature": str(label_report_path(args.date)),
             }
             print(json.dumps(printable, ensure_ascii=False))
             return 0

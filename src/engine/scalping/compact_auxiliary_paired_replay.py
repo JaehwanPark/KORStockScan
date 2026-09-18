@@ -348,6 +348,7 @@ def prepare(data_root, day):
             "source_tuning_allowed": receipt.get("tuning_input_allowed") is True
             and isinstance(manifest.get("source_manifest_sha256"), str)
             and len(manifest["source_manifest_sha256"]) == 64,
+            "source_label_report_sha256": digest(labels),
             "owner_execution_model_validation": split.get("execution_model_validation") or {},
             "screened_total": len(rows),
             "exclusion_counts": dict(exclusions),
@@ -737,6 +738,22 @@ def run(
                 if actual.exists()
                 else None
             )
+        label_dependency = str(root / "report/ai_decision_outcome_labels" / f"ai_decision_outcome_labels_{day}.json")
+        # An additive label contract revision does not require rereading large
+        # frozen raw inputs. Changed diagnostic/economic paths still rebuild.
+        if valid(projection) and projection.get("projection_contract_sha256") == digest(CONTRACT):
+            prior = projection.get("dependency_signatures") or {}
+            if prior.get(label_dependency) != signatures.get(label_dependency) and all(
+                    prior.get(k) == v for k, v in signatures.items() if k != label_dependency):
+                label_report = read(Path(label_dependency))
+                label_index = {x.get("decision_trace_id"): x for x in label_report.get("labels") or [] if isinstance(x, dict)}
+                if label_report.get("target_date") == day and all(
+                        row.get("entry_quality_path") == (((label_index.get(row.get("evaluation_key")) or {}).get("horizon_metrics") or {}).get("10m") or {}).get("entry_quality_path", {})
+                        for row in projection.get("rows") or []):
+                    write(path.parent / "compact_source_generations" / (projection["artifact_content_sha256"] + ".json"), projection)
+                    projection = sealed({**projection, "dependency_signatures": signatures,
+                                         "source_label_report_sha256": digest(label_report)})
+                    write(projection_path, projection)
         if (
             not valid(projection)
             or projection.get("dependency_signatures") != signatures
@@ -1000,6 +1017,7 @@ def run(
                 "incumbent_prompt_version": versions[0] if len(versions) == 1 else None,
                 "source_manifest_sha256": projection["source_manifest_sha256"],
                 "source_projection_sha256": projection["artifact_content_sha256"],
+                "source_label_report_sha256": projection.get("source_label_report_sha256"),
                 "owner_execution_model_validation": projection.get("owner_execution_model_validation") or {},
                 "owner_execution_model_status": (projection.get("owner_execution_model_validation") or {}).get("status", "missing"),
                 "promotion_contract_sha256": digest(CONTRACT),

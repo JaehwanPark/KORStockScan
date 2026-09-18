@@ -1699,6 +1699,12 @@ def verify_compact_handoff(data_root: Path, source_day: str) -> dict:
         bound = calibration["hierarchical_entry_quality"]["machine_decision_case_table"]["compact_auxiliary_screen_outcomes"]["paired_economic_evaluation"]
         if paired != bound or paired.get("target_date") != source_day or calibration.get("target_date") != publication_day or optimizer.get("target_date") != publication_day or optimizer.get("compact_source_calibration_artifact_content_sha256") != calibration.get("artifact_content_sha256"):
             issues.append("compact_calibration_pair_binding_invalid")
+        label_hash = paired.get("source_label_report_sha256")
+        if label_hash is not None:
+            label_path = data_root / "report/ai_decision_outcome_labels" / f"ai_decision_outcome_labels_{source_day}.json"
+            diagnostic = calibration["hierarchical_entry_quality"]["machine_decision_case_table"].get("ai_quality_diagnostics") or {}
+            if compact.digest(compact.read(label_path)) != label_hash or diagnostic.get("source_label_report_sha256") != label_hash:
+                issues.append("compact_source_label_revision_stale")
         if handoff.get("target_date") != publication_day or any(view.get(k) is not v for k,v in compact.AUTHORITY.items()):
             issues.append("compact_consumer_authority_date_invalid")
         checklist_path = data_root.parent / "docs/checklists" / f"{view['effective_date']}-stage2-todo-checklist.md"

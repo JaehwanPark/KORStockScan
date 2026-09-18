@@ -174,6 +174,12 @@ Entry owner 재사용은 legacy 고정 기간 `arms`가 아니라 독립 운영 
 
 Family strict 명령 `src.engine.verify_threshold_cycle_postclose_chain --date SOURCE_DATE --compact-summary-only --require-summary-handoff`는 최종 parent/정책/summary/checklist generation을 검증한다. PASS는 이 family의 연결 closure이며 전체 native DONE·실제 PID·주문·경제성 개선의 증거가 아니다. native는 Daily 뒤 family finalize/strict, 기존 21:05 follower는 bounded compact batch→finalize→strict로 실행한다. Cron/retired selector를 복원하거나 전체 native를 재실행하지 않는다. [CP0–CP5 계획](proposals/compact-auxiliary-ai-paired-economic-tuning-and-consumer-closed-loop-improvement-plan-2026-09-18.md)을 따른다.
 
+### 5.1.6 AI quality source-label 통합
+
+`ai_decision_quality --mode postclose --write`의 v2 current 계약은 control·outcome labels 두 artifact다. Legacy generic baseline은 라벨의 diagnostic section 및 현행 calibration machine case table에서만 평가하며 가격 proxy·WAIT/DROP 비노출0을 비용 후 EV/실제 순익/승격 근거로 승계하지 않는다. Native standalone baseline/legacy paired preparation/retired canary lifecycle의 필수 write/wait는 없다. R0–R3 독립 selector 연구는 기본OFF이며 명시적 offline 경계에서만 absent default prepared input을 생성한다. Current compact finalization→dated policy→consumer→summary/family strict는 독립 실행을 유지한다.
+
+원 labels·pending/raw·원 비용·모델/후보 holdout·actual/order/custody/version evidence를 보호한다. Revision은 원 bytes/hash를 보존하고 label hash·source manifest·구현/config generation을 case table과 compact projection에 결속한다. 동일 입력은 기존 cache/checkpoint를 재사용하며 additive metadata 갱신만으로 대형 raw 재스캔/가격·provider 호출을 하지 않는다. 기존 frozen 보고서의 명시 migration은 `legacy_labels_preserved_not_revalidated`로 기록하며 원 exclusions/as-of를 보존한다. 유효 horizon 미도달은 pending, 이미 지난 고정 원 window 누락은 source gap·null·정확 owner/closure다. 잘못된 route/schema/response는 source gap이며 미래 가격/임의 stop·cost·SELL로 복구하지 않는다. 이 진단 section의 결손은 독립적으로 유효한 owner CF까지 전역 차단하지 않는다.9/21 dated 준비 policy는 검증 양수 후보가 없으면 incumbent carry다. 정규 PREOPEN·PID·자연 완료 비용 성과는 별도 OPEN이며 family strict PASS를 전체 native DONE/EV 개선으로 보고하지 않는다. [구현 review](audit-reports/2026-09-18-ai-quality-source-label-consolidation-review.md)의 exact-date receipt를 확인한다.
+
 ### 5.2 결손·결함과 달성 가능성
 
 | 판정 | 입증할 내용 | 다음 조치·closure |

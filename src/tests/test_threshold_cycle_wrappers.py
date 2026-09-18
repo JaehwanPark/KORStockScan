@@ -2259,11 +2259,11 @@ def test_postclose_wrapper_materializes_daily_exact_quality_chain_before_calibra
     for artifact in (
         "ai_decision_quality_control_${TARGET_DATE}.json",
         "ai_decision_outcome_labels_${TARGET_DATE}.json",
-        "ai_decision_quality_baseline_${TARGET_DATE}.json",
-        "ai_prompt_paired_replay_${TARGET_DATE}.json",
-        "entry_candidate_lifecycle_state_${TARGET_DATE}.json",
     ):
         assert artifact in materialization_block
+    current_block = materialization_block.split('if [ "$RUN_MAIN_AI_QUALITY_R0_R3"')[0]
+    for retired in ("ai_decision_quality_baseline_", "ai_prompt_paired_replay_", "entry_candidate_lifecycle_state_"):
+        assert retired not in current_block
     assert (
         "ai_decision_quality_daily_materialization="
         "$RUN_AI_DECISION_QUALITY_DAILY_MATERIALIZATION" in script
@@ -2274,7 +2274,7 @@ def test_postclose_wrapper_runs_bounded_main_ai_quality_r0_r3_after_exact_chain(
     script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
 
     assert (
-        'RUN_MAIN_AI_QUALITY_R0_R3="${THRESHOLD_CYCLE_RUN_MAIN_AI_QUALITY_R0_R3:-true}"'
+        'RUN_MAIN_AI_QUALITY_R0_R3="${THRESHOLD_CYCLE_RUN_MAIN_AI_QUALITY_R0_R3:-false}"'
         in script
     )
     assert (
