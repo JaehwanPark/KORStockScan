@@ -23,7 +23,7 @@
 
 `tmp/entry-recheck-retirement-20260918/deleted-products.json`에 경로·파일 크기·삭제 목록을 기록했다. workspace와 private worktree/release의 전용 보고서·sidecar/lock·threshold family 파생 partition·전용 budget·전용 override lock 및 이번 수리의 전용 보고서 사본을 삭제했다. 삭제 전 관련 producer/wrapper process와 열린 FD, advisory lock을 확인했다.
 
-- 삭제 파일: 최초659개 + 검증 후 전용 fixture 사본6개 = 총665개, 547,491,042 bytes (약 522MiB).
+- 삭제 파일: 최초659개 + 검증 후 전용 fixture 사본6개 + 최종 review pycache/과거 lock7개 = 총672개, 547,696,994 bytes (약 522MiB).
 - 보호: 공통 pipeline 원천·broker/custody/owner ledger·DB·실제 완료 손익 원천, mixed env/PREOPEN/verification 과거 receipt.
 - 보호: immutable release source와 runtime selector. 생성물 정리는 실제 source release 교체가 아니다.
 
@@ -38,3 +38,13 @@
 clean release 핵심 계약은 `clean-pytest-core.log`의 **563 passed**다. 정상 BUY/AI/PREOPEN/체결 회귀는 `clean-pytest-runtime.log`의 **1,970 passed / 3 failed**다. 실패 3개는 `release-preexisting-failures.log`에서 변경 전 main source로 모두 동일하게 재현했다: quote age float 정확 일치(49.999999999954525 vs 50), 기존 ADM feature projection 기대값, NXT 18:00 실제 receipt의 `nxt_aftermarket` vs 과거 `nxt_entry_window` 기대값. 자동화 소비/반복 workorder 회귀는 `clean-pytest-automation-final.log`의 **454 passed**이며 분리 과정에서 빠졌던 폐기 테스트를 포함해 재검증했다. 새로운 미해결 폐기 회귀는 없으며 전체 repository GREEN은 주장하지 않는다. clean source compile/bash/diff 및 print-only 문서 parser도 통과했다. workspace 기존 7개 실패와 clean baseline 3개는 입력 baseline이 달라 합산하지 않는다.
 
 commit/push·selector CAS·실제 PID 및 경로 검증 결과는 `tmp/entry-recheck-retirement-20260918/deployment.json`과 `release-validation.json`을 따른다. 이 승인에 따라 source release를 선택하되 기존 dated env·policy·hard safety를 보존한다. 실제 PID 소비·자연 행동·경제성은 source publication과 구분한다. 이번 요청의 다음 장후 단위 분석은 [microstructure 분석](2026-09-18-microstructure-reaction-context-result-review.md)에서 기록한다.
+
+## 승인 배포 receipt
+
+source commit **`d7b2d380761ab835c78acbf3180f8979d92f9a29`**을 main과 `review/entry-recheck-retirement-20260918`에 atomic push하고 remote SHA를 대사했다. 2026-09-18T11:34:53.634584+09:00에 clean managed root `entry-recheck-retired-reviewed-20260918`를 selector lock/CAS로 선택하고 readback의 root/HEAD/clean source/공유 경로 계약을 확인했다. 이전 selector는 `selection-before-retirement.json`에 hash-bound 보존했다. deploy JSON 및 routing-postclose/preopen JSON은 선택 source만 증명한다.
+
+현재 Main PID 없음, `actual_pid_consumed=false`. 새 source의 **readonly** PREOPEN verify는 기존 `runtime_env_handoff_missing`이며 integrated-axis unconfigured/policy-date/shared-policy-hash/bundle-hash4개 결손이다. 정책/env/lock·operator override·provider·주문·기동/재시작·전체 장후 재실행을 수행하지 않았다.
+
+전체9개 cron-target verifier는 `cron_target_missing_or_duplicate`를 반환했다. current checklist에 보존 대상으로 명시된 정지 장후 cron 때문이다. 현재 설치된 start/preopen/eod3개는 각각 단일 selector routing으로 대사했다. postclose/controller/finalization/replay/archive 등 누락 schedule을 복원하거나 배포했다고 주장하지 않는다. 현행 선택 source의 next-unit 분석은 상기 microstructure 문서를 따른다.
+
+최종 리뷰에서 추가 전용 pycache/과거 lock7개를 발견해 active producer/FD/lock 확인 후 삭제했다. `deleted-products-review.json`과 cumulative `deleted-products.json`에 반영했다. 공통 정산 원천·source/PID 증거와 다른 세션 작업본은 보존했다.
