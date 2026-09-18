@@ -248,3 +248,5 @@ half sign과 half3 선언의 정리는 과거 proxy selector의 diagnostic 계�
 ## 13. 재승인된 carry·선택 목적 후속 구현
 
 사용자는0건의 경제성 결손 보완·반복 리뷰/수정·검증과 완료 후 commit/push·배포·장후 결과 갱신을 재승인했다. [carry·공동 목적 후속 review](../audit-reports/2026-09-18-low-price-carry-joint-economic-followup.md)가 후속 구현·수치를 소유한다. 기존 일별 순익1차 순위는 이미 존재했으며 EV 중심이라는 대화 설명을 정정한다. calibration에서 EV·일별 순익 동시 개선 후보를 우선 고정하고, 명시적 original-target-continuation CF에서 carry 종료와 realization-date cashflow를 비교한다. native 실제 custody 청산을 합성하지 않으며 CF 모델은 live promotion/policy writer에 연결되지 않는다. 기존 native 모델의0건과 가정이 다른 CF 모델의 결과를 별도로 보고하고 미사용 미래·실제/joint acceptance는 OPEN이다.
+
+후속 구현·반복 review/fix·검증·제한 재평가 및 소스 배포 완료: source `ca30a3fa7`, 12:59 KST `low-price-carry-joint-economics-20260918`, 관련475PASS·후속17/승격차단1PASS·병합wrapper 수정5개/미시구조7PASS, 배포소스64 재구성/동결3 PASS. 조건부CF holdout12개 중calibration 일관10개이며 실제 수익 승인과 다르다. [owning 후속 review](../audit-reports/2026-09-18-low-price-carry-joint-economic-followup.md)의 receipt/잔여 closure를 따른다.
