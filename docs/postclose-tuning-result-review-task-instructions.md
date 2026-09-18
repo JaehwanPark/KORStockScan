@@ -158,6 +158,12 @@ Dated collection manifest는 Main의 기존 publisher→WS0B/0D callback에서 �
 
 Exact integrated section/date/hash를 Daily→EV/summary→strict와 단일 execution policy까지 결속한다. Full same-budget 실행/청산/요청량/guard/cost/자본 원천과 독립 검증이 없으면 primary EV/순익은 null/source_gap이며 가중치0 정책만 발행한다. Sampled BBO/snapshot 및 high/low COMPLETED 평균은 diagnostic으로 유지한다. 현행 existing CF owner의 exact replay 미구현은 시간만으로 해소되지 않으며 active promotion은 fail closed다. observed source date와 expected non-collection publication/next effective date를 분리하고 실제 target PREOPEN window 밖 receipt 발행은 금지한다. Parent monitor/전체 chain terminal과 lookup section 갱신은 별개다. Frozen 원본 hash/분모/비용/경제성 및 source-only successor provenance를 보존한 manifest 뒤 불필요 standalone 출력만 삭제한다.
 
+### 5.1.4 Scale-in 체결 실적 조건부 평가
+
+`scale_in_split_order_plan`은 exact trade fact-sync receipt 뒤, Daily/EV 앞에서 실행한다. 최근20 report date의 Main/default custody·AVG_DOWN·EXECUTED/receipt_confirmed 실제 체결 census를 먼저 확인한다. 새 full-fill COMPLETED outcome/revision과 유효 가격·lot·기존 WS quote provenance가 있을 때만 기존 grid를 평가한다. 무체결·비대상·미성숙·변경없음은 raw/replay/grid를 열지 않으며 missing catalog/source는 blocked/null이다. 기존 fact-sync의 원본 scan에서 actual ID projection을 함께 보존하고 새 수집기/API/고빈도 capture는 추가하지 않는다.
+
+v4는 실제 incumbent control·관측 depth의 보수적 체결 모델·공통 cohort·독립 날짜 calibration/미사용 holdout·단일 challenger 검증과 비용모델 표시를 요구한다. v3 outcome은 제외 근거 진단이며 자동 승격 근거가 아니다. 조건부 skip도 날짜별 기존 주문 보존 정책을 원 source/approval age와 함께 발행한다. `--preopen-date`는 적용 예정 개장일을 명시할 수 있으나 calendar/기존 PREOPEN·operator·hard safety를 대체하지 않는다. Report/policy hash·effective date를 확인하고 available dated unsplit와 split activation/PID/실제 경제성을 분리한다. [CS0–CS6 owner](proposals/scale-in-split-order-plan-fill-conditioned-economic-tuning-improvement-plan-2026-09-18.md)와 기존 checklist stable ID를 따른다.
+
 ### 5.2 결손·결함과 달성 가능성
 
 | 판정 | 입증할 내용 | 다음 조치·closure |

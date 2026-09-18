@@ -87,6 +87,7 @@
 ## 저가주 확장 연구 보완·자연 경제성 검증
 
   - 개별단위 분석(코드변경금지): [scale_in_split_order_plan 실행·EV](../audit-reports/2026-09-18-scale-in-split-order-plan-result-analysis.md).9/17exit0/22.392초·daily0/rolling4중market4·eligible/paired0·EV/netnull·applyfalse. 과거cached결손/market제외·동일표본grid검증·touch체결모델/atomic검사경계는시간대기와분리한다. source/PREOPEN/runtime코드·기존guard/quantity/grid변경없음. 기존Main자연원천/COMPLETED경제성Acceptance는OPEN이다.
+  - 조건부 튜닝 구현 Closure: [CS0–CS6 계획](../proposals/scale-in-split-order-plan-fill-conditioned-economic-tuning-improvement-plan-2026-09-18.md), [반복 리뷰·배포/재생성 receipt](../audit-reports/2026-09-18-scale-in-fill-conditioned-tuning-implementation-review.md). 사용자가 구현·commit/push·배포·제한 장후 재생성을 승인했다. fact-sync 뒤 actual fill census→새 ready outcome만 평가하는 v4와 incumbent/BBO/독립 holdout·Daily/EV/PREOPEN 계약을 구현·검증했다. 과거4건 시장가 계열, applicable0/EVnull이며 다음 사용자 예정9/21 날짜별 기존 비분할 주문 보존 정책과 신규 split 활성화를 구분한다. 기존 자연 체결·가격 원천·COMPLETED 실제 비용/EV Acceptance는 OPEN이다.
 
 - [ ] `[LowPriceExpandedResearchRepair0918] 저가주 연구 입출력·해시·추천 handoff 보완과 배포·실소비 확인` (`Due: 2026-09-18`, `Slot: INTRADAY`, `TimeWindow: 08:00~20:30`, `Track: RuntimeStability`)
   - Source: [구현·검증 receipt](../audit-reports/2026-09-18-low-price-expanded-research-repair.md), `tmp/low-price-report-repair-20260918/cached-economic-refresh.json`, `tmp/low-price-report-repair-20260918/consumer-memory-check.json`.

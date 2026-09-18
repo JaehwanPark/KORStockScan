@@ -107,7 +107,7 @@ def test_scale_in_split_order_summary_preserves_runtime_three_leg_count(
     (report_dir / f"scale_in_split_order_plan_{target_date}.json").write_text(
         json.dumps(
             {
-                "schema_version": "scale_in_split_order_plan_v3",
+                "schema_version": "scale_in_split_order_plan_v4",
                 "source_quality": {"status": "pass", "tuning_input_allowed": True},
                 "input_summary": {
                     "runtime_three_leg_candidate_count": 1,

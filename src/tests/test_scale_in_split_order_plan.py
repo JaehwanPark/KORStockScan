@@ -108,7 +108,7 @@ def test_postclose_report_consumes_atomic_avg_down_sizing_receipt(
         ],
     )
 
-    report = split_plan.build_report(target_date)
+    report = split_plan._build_report_from_events(target_date)
 
     atomic = report["input_summary"]["atomic_execution_sizing"]
     assert atomic["status"] == "pass"
@@ -142,7 +142,7 @@ def test_postclose_report_does_not_skip_atomic_avg_down_block_without_submit(
         ],
     )
 
-    report = split_plan.build_report(target_date)
+    report = split_plan._build_report_from_events(target_date)
 
     atomic = report["input_summary"]["atomic_execution_sizing"]
     assert atomic["status"] == "fail"
@@ -152,7 +152,7 @@ def test_postclose_report_does_not_skip_atomic_avg_down_block_without_submit(
 
 def _valid_runtime_refresh_evidence():
     return {
-        "economic_gate_version": "ttl_paired_fixed_control_v3",
+        "economic_gate_version": "filled_incumbent_bbo_holdout_v4",
         "paired_economic_sample_count": 3,
         "economic_source_dates": ["2026-07-06", "2026-07-07"],
         "economic_source_date_count": 2,
@@ -165,6 +165,11 @@ def _valid_runtime_refresh_evidence():
         "modeled_fill_participation": 1.0,
         "downside_p10_profit_rate": 0.05,
         "blockers": [],
+        "holdout_evidence": [{"runtime_apply_allowed": True, "runtime_apply_blockers": [], "blockers": [],
+            "paired_economic_sample_count": 3, "economic_source_dates": ["2026-07-08", "2026-07-09"],
+            "holdout_dates": ["2026-07-08", "2026-07-09"], "calibration_dates": ["2026-07-06", "2026-07-07"],
+            "source_quality_adjusted_ev_pct": 0.10, "average_daily_delta_net_pnl_krw": 10,
+            "price_join_coverage": 1.0, "modeled_fill_participation": 1.0, "downside_p10_profit_rate": 0.05}],
     }
 
 
@@ -176,11 +181,11 @@ def _economic_attempt_events(
     sell_price: int = 10050,
     requested_qty: int = 2,
 ):
-    minute = idx * 5
+    minute = (idx % 10) * 5
     code = f"{idx:06d}"
     record_id = idx
     order_no = f"BUY{idx}"
-    return [
+    events = [
         {
             "stage": "scale_in_order_submitted",
             "emitted_at": f"{target_date}T09:{minute:02d}:00+09:00",
@@ -240,6 +245,17 @@ def _economic_attempt_events(
             "broker_execution_provenance_complete": True,
         },
     ]
+    for sequence, event in enumerate(events):
+        event["broker_route"] = "KRX"
+        if "curr_price" in event:
+            stamp = datetime.fromisoformat(event["emitted_at"]).timestamp()
+            event.update(market_data_effective_best_ask=event["curr_price"], market_data_effective_best_ask_qty=requested_qty,
+                         market_data_effective_best_ask_qty_source_valid=True, market_data_effective_quote_reference_epoch=stamp,
+                         scale_in_quote_source_receipt={"source_type": "0D", "item": code, "observed_epoch": stamp,
+                                                        "transport_epoch": 1, "route_sequence": sequence})
+        if event["stage"] == "sell_completed":
+            event.update(sell_qty=requested_qty, profit_rate=0.1)
+    return events
 
 
 def _seed_prior_economic_report(data_dir, **kwargs):
@@ -248,8 +264,15 @@ def _seed_prior_economic_report(data_dir, **kwargs):
     _write_pipeline_events(
         data_dir, day, _economic_attempt_events(target_date=day, idx=4, **kwargs)
     )
-    split_plan.write_outputs(day, split_plan.build_report(day))
+    split_plan.write_outputs(day, split_plan._build_report_from_events(day))
 
+
+def _seed_independent_economic_reports(data_dir, **kwargs):
+    for day, indices in [("2026-07-02", (4, 5, 6)), ("2026-07-03", (7, 8, 9)), ("2026-07-06", (10, 11, 12))]:
+        _write_source_quality_pass(data_dir, day)
+        events = [event for idx in indices for event in _economic_attempt_events(target_date=day, idx=idx, **kwargs)]
+        _write_pipeline_events(data_dir, day, events)
+        split_plan.write_outputs(day, split_plan._build_report_from_events(day))
 
 def test_allocator_preserves_avg_down_qty_and_offsets(monkeypatch, tmp_path):
     target_date = "2026-07-07"
@@ -259,7 +282,7 @@ def test_allocator_preserves_avg_down_qty_and_offsets(monkeypatch, tmp_path):
     policy_file.write_text(
         json.dumps(
             {
-                "schema_version": "scale_in_split_order_policy_v3",
+                "schema_version": "scale_in_split_order_policy_v4",
                 "policy_version": "test-scale-in-split",
                 "generated_at": datetime.now(timezone(timedelta(hours=9))).isoformat(),
                 "runtime_apply_allowed": True,
@@ -325,7 +348,7 @@ def test_allocator_accepts_policy_across_krx_holiday_weekend(monkeypatch, tmp_pa
     policy_file.write_text(
         json.dumps(
             {
-                "schema_version": "scale_in_split_order_policy_v3",
+                "schema_version": "scale_in_split_order_policy_v4",
                 "policy_version": "scale-in-holiday-handoff",
                 "generated_at": "2026-07-16T20:28:37+09:00",
                 "runtime_apply_allowed": True,
@@ -381,7 +404,7 @@ def test_allocator_rejects_policy_after_three_krx_trading_days(monkeypatch, tmp_
     policy_file.write_text(
         json.dumps(
             {
-                "schema_version": "scale_in_split_order_policy_v3",
+                "schema_version": "scale_in_split_order_policy_v4",
                 "policy_version": "scale-in-stale-trading-days",
                 "generated_at": "2026-07-13T20:28:37+09:00",
                 "runtime_apply_allowed": True,
@@ -431,7 +454,7 @@ def test_allocator_skips_qty_one_pyramid_and_removed_market_split(
     policy_file.write_text(
         json.dumps(
             {
-                "schema_version": "scale_in_split_order_policy_v3",
+                "schema_version": "scale_in_split_order_policy_v4",
                 "policy_version": "test-scale-in-split-market",
                 "generated_at": datetime.now(timezone(timedelta(hours=9))).isoformat(),
                 "runtime_apply_allowed": True,
@@ -507,7 +530,7 @@ def test_allocator_rejects_diagnostic_three_leg_avg_down_policy(monkeypatch, tmp
     policy_file.write_text(
         json.dumps(
             {
-                "schema_version": "scale_in_split_order_policy_v3",
+                "schema_version": "scale_in_split_order_policy_v4",
                 "policy_version": "test-scale-in-split-three-leg",
                 "generated_at": datetime.now(timezone(timedelta(hours=9))).isoformat(),
                 "runtime_apply_allowed": True,
@@ -560,7 +583,7 @@ def test_allocator_fails_closed_when_policy_bucket_missing(monkeypatch, tmp_path
     policy_file.write_text(
         json.dumps(
             {
-                "schema_version": "scale_in_split_order_policy_v3",
+                "schema_version": "scale_in_split_order_policy_v4",
                 "policy_version": "scale_in_split_order_plan:test",
                 "generated_at": datetime.now(timezone(timedelta(hours=9))).isoformat(),
                 "runtime_apply_allowed": True,
@@ -603,7 +626,7 @@ def test_runtime_loader_rejects_legacy_policy_without_refresh_evidence(
     policy_file.write_text(
         json.dumps(
             {
-                "schema_version": "scale_in_split_order_policy_v3",
+                "schema_version": "scale_in_split_order_policy_v4",
                 "policy_version": "legacy-without-evidence",
                 "runtime_apply_allowed": True,
             }
@@ -623,7 +646,7 @@ def test_runtime_loader_rejects_env_policy_version_mismatch(monkeypatch, tmp_pat
     policy_file.write_text(
         json.dumps(
             {
-                "schema_version": "scale_in_split_order_policy_v3",
+                "schema_version": "scale_in_split_order_policy_v4",
                 "policy_version": "artifact-version",
                 "runtime_apply_allowed": True,
                 "runtime_refresh_evidence": _valid_runtime_refresh_evidence(),
@@ -674,7 +697,7 @@ def test_report_and_preopen_env_handoff(monkeypatch, tmp_path):
     (report_dir / f"scale_in_split_order_plan_{target_date}.json").write_text(
         json.dumps(
             {
-                "schema_version": "scale_in_split_order_plan_v3",
+                "schema_version": "scale_in_split_order_plan_v4",
                 "source_quality": {"status": "pass", "tuning_input_allowed": True},
                 "input_summary": {
                     "avg_down_observation_count": 9,
@@ -750,7 +773,7 @@ def test_daily_report_handoff_blocks_runtime_disallowed_policy(monkeypatch, tmp_
     (report_dir / f"scale_in_split_order_plan_{target_date}.json").write_text(
         json.dumps(
             {
-                "schema_version": "scale_in_split_order_plan_v3",
+                "schema_version": "scale_in_split_order_plan_v4",
                 "source_quality": {"status": "pass", "tuning_input_allowed": True},
                 "input_summary": {
                     "avg_down_observation_count": 9,
@@ -826,7 +849,7 @@ def test_report_selects_low_pct_touch_70_30_counterfactual(monkeypatch, tmp_path
         ],
     )
 
-    report = split_plan.build_report(target_date)
+    report = split_plan._build_report_from_events(target_date)
     candidate = report["recommended_policy"]["candidates"][0]
 
     assert candidate["price_offsets_ticks"] == [0, 1]
@@ -867,7 +890,7 @@ def test_report_selects_70_30_when_touch_low_or_missed_upside_high(
         ],
     )
 
-    report = split_plan.build_report(target_date)
+    report = split_plan._build_report_from_events(target_date)
     candidate = report["recommended_policy"]["candidates"][0]
 
     assert candidate["price_offsets_ticks"] == [0, 1]
@@ -903,7 +926,7 @@ def test_report_allows_source_quality_gap_when_rows_are_excluded(monkeypatch, tm
         ],
     )
 
-    report = split_plan.build_report(target_date)
+    report = split_plan._build_report_from_events(target_date)
 
     assert report["source_quality"]["tuning_input_allowed"] is True
     assert report["source_quality"]["raw_row_exclusion_applied"] is True
@@ -941,7 +964,7 @@ def test_report_selects_0_2tick_60_40_when_two_tick_touch_high(monkeypatch, tmp_
         ],
     )
 
-    report = split_plan.build_report(target_date)
+    report = split_plan._build_report_from_events(target_date)
     candidate = report["recommended_policy"]["candidates"][0]
     diagnostic = report["recommended_policy"]["diagnostic_candidates"][0]
 
@@ -989,7 +1012,7 @@ def test_report_keeps_three_leg_diagnostic_without_exact_economic_outcomes(
         )
     _write_pipeline_events(data_dir, target_date, events)
 
-    report = split_plan.build_report(target_date)
+    report = split_plan._build_report_from_events(target_date)
 
     assert report["input_summary"]["runtime_three_leg_candidate_count"] == 0
     assert report["input_summary"]["diagnostic_three_leg_candidate_count"] == 1
@@ -1003,21 +1026,21 @@ def test_report_keeps_three_leg_diagnostic_without_exact_economic_outcomes(
 def test_report_builds_reachable_exact_economic_gate(monkeypatch, tmp_path):
     target_date = "2026-07-07"
     data_dir = _patch_dirs(monkeypatch, tmp_path)
-    _seed_prior_economic_report(data_dir)
+    _seed_independent_economic_reports(data_dir)
     _write_source_quality_pass(data_dir, target_date)
     events = []
     for idx in range(1, 4):
         events.extend(_economic_attempt_events(target_date=target_date, idx=idx))
     _write_pipeline_events(data_dir, target_date, events)
 
-    report = split_plan.build_report(target_date)
+    report = split_plan._build_report_from_events(target_date)
     candidate = report["recommended_policy"]["candidates"][0]
     evidence = report["recommended_policy"]["runtime_refresh_evidence"]
 
     assert report["input_summary"]["daily_unique_attempt_count"] == 3
-    assert report["input_summary"]["rolling_eligible_runtime_attempt_count"] == 4
-    assert candidate["real_outcome_joined_sample"] == 4
-    assert candidate["additional_mfe_mae_joined_sample"] == 4
+    assert report["input_summary"]["rolling_eligible_runtime_attempt_count"] == 12
+    assert candidate["real_outcome_joined_sample"] == 6
+    assert candidate["additional_mfe_mae_joined_sample"] == 6
     assert candidate["source_quality_adjusted_ev_pct"] > 0
     assert candidate["modeled_fill_participation"] == 1.0
     assert candidate["runtime_apply_allowed"] is True
@@ -1047,7 +1070,7 @@ def test_report_selects_best_existing_two_leg_variant_by_cost_adjusted_ev(
 ):
     target_date = "2026-07-07"
     data_dir = _patch_dirs(monkeypatch, tmp_path)
-    _seed_prior_economic_report(data_dir, requested_qty=10)
+    _seed_independent_economic_reports(data_dir, requested_qty=10)
     _write_source_quality_pass(data_dir, target_date)
     events = []
     for idx in range(1, 4):
@@ -1060,7 +1083,7 @@ def test_report_selects_best_existing_two_leg_variant_by_cost_adjusted_ev(
         )
     _write_pipeline_events(data_dir, target_date, events)
 
-    report = split_plan.build_report(target_date)
+    report = split_plan._build_report_from_events(target_date)
     candidate = report["recommended_policy"]["candidates"][0]
 
     assert candidate["heuristic_selection_reason"] == (
@@ -1193,12 +1216,13 @@ def test_report_blocks_negative_cost_adjusted_split_economics(monkeypatch, tmp_p
         )
     _write_pipeline_events(data_dir, target_date, events)
 
-    report = split_plan.build_report(target_date)
+    report = split_plan._build_report_from_events(target_date)
     candidate = report["recommended_policy"]["candidates"][0]
 
-    assert candidate["source_quality_adjusted_ev_pct"] < 0
-    assert "cost_adjusted_ev_not_positive" in candidate["runtime_apply_blockers"]
-    assert "modeled_fill_participation_floor" in candidate["runtime_apply_blockers"]
+    economic = split_plan._evaluate_candidate_economics(report["daily_attempt_outcomes"], candidate)
+    assert economic["source_quality_adjusted_ev_pct"] < 0
+    assert "cost_adjusted_ev_not_positive" in economic["runtime_apply_blockers"]
+    assert "modeled_fill_participation_floor" in economic["runtime_apply_blockers"]
     assert candidate["runtime_apply_allowed"] is False
     assert report["recommended_policy"]["runtime_apply_allowed"] is False
     assert report["policy_artifact"]["buckets"] == {}
@@ -1218,7 +1242,7 @@ def test_report_rolls_unique_attempt_outcomes_across_dates(monkeypatch, tmp_path
             for event in _economic_attempt_events(target_date=first_date, idx=idx)
         ],
     )
-    split_plan.write_outputs(first_date, split_plan.build_report(first_date))
+    split_plan.write_outputs(first_date, split_plan._build_report_from_events(first_date))
     _write_source_quality_pass(data_dir, target_date)
     _write_pipeline_events(
         data_dir,
@@ -1226,12 +1250,13 @@ def test_report_rolls_unique_attempt_outcomes_across_dates(monkeypatch, tmp_path
         _economic_attempt_events(target_date=target_date, idx=3),
     )
 
-    report = split_plan.build_report(target_date)
+    report = split_plan._build_report_from_events(target_date)
 
     assert report["rolling_summary"]["historical_source_dates"] == [first_date]
     assert report["rolling_summary"]["current_unique_attempt_count"] == 1
     assert report["rolling_summary"]["rolling_unique_attempt_count"] == 3
-    assert report["recommended_policy"]["runtime_apply_allowed"] is True
+    assert report["recommended_policy"]["runtime_apply_allowed"] is False
+    assert "independent_calibration_sample_floor" in report["recommended_policy"]["candidates"][0]["holdout_evidence"]["blockers"]
 
 
 def test_three_leg_candidate_stays_diagnostic_when_missed_upside_is_high():
@@ -1273,7 +1298,7 @@ def test_report_keeps_market_avg_down_qty_split_only(monkeypatch, tmp_path):
         ],
     )
 
-    report = split_plan.build_report(target_date)
+    report = split_plan._build_report_from_events(target_date)
     candidate = report["recommended_policy"]["candidates"][0]
 
     assert candidate["policy_mode"] == "market_qty_split_only"
@@ -1328,7 +1353,7 @@ def test_report_reconstructs_submitted_anchor_from_execution_without_reason(
         ],
     )
 
-    report = split_plan.build_report(target_date)
+    report = split_plan._build_report_from_events(target_date)
     candidates = report["recommended_policy"]["candidates"]
 
     assert len(candidates) == 1
@@ -1373,7 +1398,7 @@ def test_report_falls_back_when_anchor_price_reconstruction_fails(
         ],
     )
 
-    report = split_plan.build_report(target_date)
+    report = split_plan._build_report_from_events(target_date)
     candidate = report["recommended_policy"]["candidates"][0]
 
     assert candidate["policy_mode"] == "bounded_equal_scale_in_split_baseline"
@@ -1420,7 +1445,7 @@ def test_report_streams_projected_events_without_retaining_large_payload(
         ],
     )
 
-    report = split_plan.build_report(target_date)
+    report = split_plan._build_report_from_events(target_date)
 
     contract = report["input_summary"]["source_read_contract"]
     assert contract["read_mode"] == "streaming_relevant_field_projection"
@@ -1459,7 +1484,7 @@ def test_report_skips_json_decode_when_no_eligible_real_avg_down_attempt(
         ],
     )
 
-    report = split_plan.build_report(target_date)
+    report = split_plan._build_report_from_events(target_date)
 
     contract = report["input_summary"]["source_read_contract"]
     assert contract["read_mode"] == "avg_down_attempt_presence_precheck"
@@ -1525,6 +1550,7 @@ def test_policy_artifact_repeats_runtime_refresh_gate():
                 "economic_source_dates": ["2026-07-06", "2026-07-07"],
                 "context_bucket": "scalping:late_loss_retry:normal",
                 "runtime_apply_allowed": True,
+                "holdout_evidence": _valid_runtime_refresh_evidence()["holdout_evidence"][0],
                 "real_outcome_joined_sample": 3,
                 "additional_mfe_mae_joined_sample": 3,
                 "price_observation_joined_sample": 4,
@@ -1542,6 +1568,7 @@ def test_policy_artifact_repeats_runtime_refresh_gate():
             {
                 "context_bucket": "scalping:late_loss_retry:normal",
                 "runtime_apply_allowed": True,
+                "holdout_evidence": _valid_runtime_refresh_evidence()["holdout_evidence"][0],
             }
         ],
         refresh_evidence=ready_evidence,
@@ -1630,6 +1657,13 @@ def test_current_scale_in_policy_requires_atomic_execution_sizing_contract():
 
 
 def _anchor_from_events(events):
+    events = deepcopy(events)
+    for sequence, event in enumerate(events):
+        if "curr_price" in event and "market_data_effective_best_ask" in event:
+            stamp = datetime.fromisoformat(event["emitted_at"]).timestamp()
+            event["market_data_effective_best_ask"] = event["curr_price"]
+            event["market_data_effective_quote_reference_epoch"] = stamp
+            event["scale_in_quote_source_receipt"].update(observed_epoch=stamp, route_sequence=sequence)
     events = sorted(events, key=split_plan._event_time)
     anchor = next(
         item for item in events if item["stage"] == "scale_in_order_submitted"
@@ -1665,7 +1699,8 @@ def test_terminal_sell_joins_lifecycle_not_buy_order_number():
 )
 def test_replay_uses_leg_ttl_not_180_second_minimum(touch_seconds, expected_fill):
     events = _economic_attempt_events(target_date="2026-07-07", idx=1, min_price=10000)
-    touch = {**events[2], "curr_price": 9970}
+    touch = deepcopy(events[2])
+    touch["curr_price"] = 9970
     touch["emitted_at"] = (
         split_plan._event_time(events[0]) + timedelta(seconds=touch_seconds)
     ).isoformat()
@@ -1730,22 +1765,21 @@ def test_economic_promotion_needs_two_dates_not_daily_only():
     assert result["runtime_apply_blockers"] == ["economic_source_date_floor"]
 
 
-def test_split_success_keeps_fixed_control_and_records_versioned_r6():
+def test_current_incumbent_self_comparison_preserves_policy_and_records_versioned_r6():
     anchors = _paired_anchors()
     before = split_plan._evaluate_candidate_economics(anchors, _equal_variant())
     for item in anchors:
         item.update(
             actual_split_applied=True,
+            incumbent_policy=_equal_variant(),
             actual_fill_price=9985,
             applied_policy_version="split:v3:test",
             applied_variant_id=split_plan.BASELINE_SPLIT_VARIANT_ID,
         )
     after = split_plan._evaluate_candidate_economics(anchors, _equal_variant())
-    assert (
-        after["source_quality_adjusted_ev_pct"]
-        == before["source_quality_adjusted_ev_pct"]
-    )
-    assert after["runtime_apply_allowed"] is True
+    assert before["source_quality_adjusted_ev_pct"] > 0
+    assert after["source_quality_adjusted_ev_pct"] == 0
+    assert after["runtime_apply_allowed"] is False
     attribution = split_plan._post_apply_attribution(anchors)
     result = attribution["policy_versions"][0]
     assert result["policy_version"] == "split:v3:test"
@@ -1948,9 +1982,10 @@ def test_daily_partition_cannot_supply_another_source_date(monkeypatch, tmp_path
     events = _economic_attempt_events(target_date=day, idx=1)
     events.extend(_economic_attempt_events(target_date="2026-07-06", idx=2))
     _write_pipeline_events(data_dir, day, events)
-    report = split_plan.build_report(day)
+    report = split_plan._build_report_from_events(day)
     evidence = report["recommended_policy"]["runtime_refresh_evidence"]
-    assert evidence["economic_source_dates"] == [day]
+    assert evidence["economic_source_dates"] == []
+    assert report["recommended_policy"]["runtime_apply_allowed"] is False
     assert report["input_summary"]["excluded_other_date_count"] == 5
     assert report["recommended_policy"]["runtime_apply_allowed"] is False
 
@@ -1975,3 +2010,184 @@ def test_unattributed_split_provenance_has_source_only_workorder():
     assert orders[0]["improvement_type"] == "post_apply_policy_provenance_gap"
     assert orders[0]["runtime_effect"] is False
     assert orders[0]["allowed_runtime_apply"] is False
+
+
+def _write_fact_catalog(data_dir, day, events=()):
+    rows = [split_plan._project_relevant_input_event(event, source_name="pipeline_events", event_date=day)
+            for event in events]
+    payload = {"schema_version": 1, "report_type": "strategy_position_fact_sync", "target_date": day, "status": "succeeded", "consumer_ready": True, "issues": [],
+               "scale_in_execution_projection": {"contract": "scale_in_execution_projection_v1",
+                                                   "target_date": day, "rows": [r for r in rows if r is not None]}}
+    payload["artifact_sha256"] = split_plan._semantic_digest(payload)
+    path = data_dir / "report/strategy_position_fact_sync" / f"strategy_position_fact_sync_{day}.status.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload))
+    return path
+
+
+def _actual_inventory(day, idx=1, status="COMPLETED", qty=2):
+    events = _economic_attempt_events(target_date=day, idx=idx, requested_qty=qty)
+    return {"history_id": idx, "record_id": str(idx), "code": f"{idx:06d}", "order_no": f"BUY{idx}",
+            "source_date": day, "fill_time": events[1]["emitted_at"], "request_qty": qty, "fill_qty": qty,
+            "fill_price": 10000, "request_price": 10000, "status": status,
+            "sell_time": events[-1]["emitted_at"] if status == "COMPLETED" else None,
+            "sell_price": 10050 if status == "COMPLETED" else None,
+            "profit_rate": 0.1 if status == "COMPLETED" else None}
+
+
+@pytest.mark.parametrize("inventory,status", [([], "skipped_no_actual_fill"),
+    ([_actual_inventory("2026-09-17", qty=1)], "skipped_no_applicable_fill"),
+    ([_actual_inventory("2026-09-17", status="HOLDING")], "pending_filled_outcome")])
+def test_public_trigger_skips_raw_and_grid_without_new_ready_fill(monkeypatch, tmp_path, inventory, status):
+    data = _patch_dirs(monkeypatch, tmp_path)
+    day = "2026-09-17"
+    _write_source_quality_pass(data, day)
+    _write_fact_catalog(data, day)
+    monkeypatch.setattr(split_plan, "_query_actual_fill_inventory", lambda _: inventory)
+    def forbidden(*args, **kwargs):
+        pytest.fail("no ready actual fill must not read raw or evaluate candidates")
+    monkeypatch.setattr(split_plan, "_iter_input_events", forbidden)
+    monkeypatch.setattr(split_plan, "_build_report_from_events", forbidden)
+    report = split_plan.build_report(day)
+    assert report["evaluation_state"]["status"] == status
+    assert report["evaluation_state"]["modeled_ev_pct"] is None
+    assert report["recommended_policy"]["runtime_apply_allowed"] is False
+
+
+def test_public_trigger_invalid_catalog_is_blocked_not_zero_fill(monkeypatch, tmp_path):
+    data = _patch_dirs(monkeypatch, tmp_path)
+    day = "2026-09-17"
+    _write_source_quality_pass(data, day)
+    path = _write_fact_catalog(data, day)
+    payload = json.loads(path.read_text())
+    payload["consumer_ready"] = False
+    path.write_text(json.dumps(payload))
+    monkeypatch.setattr(split_plan, "_query_actual_fill_inventory", lambda _: pytest.fail("invalid catalog"))
+    report = split_plan.build_report(day)
+    assert report["evaluation_state"]["status"] == "blocked_execution_source"
+    assert report["evaluation_state"]["modeled_ev_pct"] is None
+
+
+def test_public_filled_outcome_and_unchanged_revision_do_not_repeat_grid(monkeypatch, tmp_path):
+    data = _patch_dirs(monkeypatch, tmp_path)
+    day = "2026-07-07"
+    _seed_independent_economic_reports(data)
+    _write_source_quality_pass(data, day)
+    events = [e for idx in (1, 2, 3) for e in _economic_attempt_events(target_date=day, idx=idx)]
+    _write_fact_catalog(data, day, events)
+    monkeypatch.setattr(split_plan, "_query_actual_fill_inventory", lambda _: [_actual_inventory(day, idx) for idx in (1, 2, 3)])
+    report = split_plan.build_report(day)
+    assert report["evaluation_state"]["status"] == "evaluated"
+    assert report["recommended_policy"]["runtime_apply_allowed"] is True
+    split_plan.write_outputs(day, report)
+    monkeypatch.setattr(split_plan, "_build_report_from_events", lambda *a, **k: pytest.fail("unchanged outcome replayed"))
+    again = split_plan.build_report(day)
+    assert again["evaluation_state"]["status"] == "skipped_unchanged_filled_outcome"
+    assert again["evaluation_state"]["modeled_ev_pct"] is None
+    assert again["last_valid_evaluation"]["inventory_key"] == report["evaluation_state"]["inventory_key"]
+    assert len(again["outcome_revisions"]) == 6
+    assert len({r["attempt_id"] for r in again["outcome_revisions"]}) == 6
+
+
+def test_existing_fill_late_terminal_rejoins_original_date(monkeypatch, tmp_path):
+    data = _patch_dirs(monkeypatch, tmp_path)
+    origin, day = "2026-07-07", "2026-07-08"
+    old_events = _economic_attempt_events(target_date=origin, idx=1)[:-1]
+    _write_source_quality_pass(data, origin)
+    _write_pipeline_events(data, origin, old_events)
+    _write_fact_catalog(data, origin, old_events)
+    split_plan.write_outputs(origin, split_plan._build_report_from_events(origin))
+    terminal = _economic_attempt_events(target_date=day, idx=1)[-1]
+    _write_source_quality_pass(data, day)
+    _write_fact_catalog(data, day, [terminal])
+    inventory = _actual_inventory(origin)
+    inventory["sell_time"] = terminal["emitted_at"]
+    monkeypatch.setattr(split_plan, "_query_actual_fill_inventory", lambda _: [inventory])
+    report = split_plan.build_report(day)
+    assert report["evaluation_state"]["status"] == "evaluated"
+    assert len(report["daily_attempt_outcomes"]) == 1
+    outcome = report["daily_attempt_outcomes"][0]
+    assert outcome["source_date"] == origin
+    assert outcome["real_outcome_joined"] is True
+    assert outcome["outcome_available_at"].startswith(day)
+    assert report["recommended_policy"]["runtime_apply_allowed"] is False
+
+
+def test_missing_all_atomic_plans_is_detected_from_actual_submit(monkeypatch, tmp_path):
+    data = _patch_dirs(monkeypatch, tmp_path)
+    day = "2026-09-17"
+    _write_source_quality_pass(data, day)
+    _write_pipeline_events(data, day, _economic_attempt_events(target_date=day, idx=1))
+    report = split_plan._build_report_from_events(day)
+    atomic = report["input_summary"]["atomic_execution_sizing"]
+    assert atomic["post_contract_real_submit_missing_plan_count"] == 1
+    assert atomic["status"] == "fail"
+
+
+def test_touch_only_and_repeated_quote_cannot_manufacture_fills():
+    anchor = _paired_anchors()[0]
+    for sample in anchor["execution_price_samples"]:
+        sample["liquidity_source_valid"] = False
+    assert split_plan._replay_execution(anchor, _equal_variant()) is None
+    anchor = _paired_anchors()[0]
+    for sample in anchor["execution_price_samples"]:
+        sample["ask_qty"] = 1
+        sample["quote_sequence"] = 1
+    assert split_plan._replay_execution(anchor, _equal_variant()) is None
+
+
+def test_no_fill_main_generates_dated_base_order_policy_for_preopen(monkeypatch, tmp_path):
+    data = _patch_dirs(monkeypatch, tmp_path)
+    source, target = "2026-09-17", "2026-09-21"
+    _write_source_quality_pass(data, source)
+    _write_fact_catalog(data, source)
+    monkeypatch.setattr(split_plan, "_query_actual_fill_inventory", lambda _: [])
+    assert split_plan.main(["--date", source, "--preopen-date", target]) == 0
+    handoff = split_plan.preopen_policy_handoff(source, target)
+    assert handoff["available"] is True
+    assert handoff["split_enabled"] is False
+    assert handoff["effective_execution_policy"] == "incumbent_unsplit_base_order"
+    assert handoff["new_edge_claim"] is False
+    assert split_plan.preopen_policy_handoff(source, "2026-09-22")["available"] is False
+
+
+def test_old_market_order_does_not_exclude_later_limit_retry(monkeypatch, tmp_path):
+    data = _patch_dirs(monkeypatch, tmp_path)
+    day = "2026-09-17"
+    _write_source_quality_pass(data, day)
+    _write_fact_catalog(data, day)
+    old = {"source_quality": {"tuning_input_allowed": True}, "daily_attempt_outcomes": [{"record_id": "1", "attempt_id": f"{day}:000001:order:OLD", "market_like_order": True}]}
+    path = split_plan.report_paths(day)[0]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(old))
+    monkeypatch.setattr(split_plan, "_query_actual_fill_inventory", lambda _: [_actual_inventory(day, status="HOLDING")])
+    report = split_plan.build_report(day)
+    assert report["evaluation_state"]["status"] == "pending_filled_outcome"
+    assert report["evaluation_state"]["applicable_receipt_count"] == 1
+    assert report["evaluation_state"]["excluded_receipt_reasons"]["market_like_from_frozen_anchor"] == 0
+
+
+def test_actual_fill_inventory_keeps_main_scanner_and_excludes_other_custody(monkeypatch, tmp_path):
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    from src.database import db_manager
+    _patch_dirs(monkeypatch, tmp_path)
+    day = "2026-09-17"
+    pairs = []
+    for idx, tag in enumerate(("SCANNER", "SCALP_BASE", "WIDGET", "EPISODE", "MANUAL"), 1):
+        receipt = SimpleNamespace(id=idx, recommendation_id=idx, order_no=f"BUY{idx}",
+            event_time=datetime.fromisoformat(f"{day}T10:00:00"), executed_price=10000,
+            stock_code=f"{idx:06d}", request_qty=4, executed_qty=4, request_price=10000)
+        position = SimpleNamespace(strategy="SCALPING", position_tag=tag, sell_time=None)
+        pairs.append((receipt, position))
+    class Session:
+        def query(self, *args): return self
+        def outerjoin(self, *args): return self
+        def filter(self, *args): return self
+        def order_by(self, *args): return self
+        def all(self): return pairs
+    @contextmanager
+    def session(): yield Session()
+    monkeypatch.setattr(db_manager, "DBManager", lambda: SimpleNamespace(get_session=session))
+    result = split_plan._query_actual_fill_inventory(day)
+    assert [row["record_id"] for row in result] == ["1", "2"]

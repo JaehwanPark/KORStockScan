@@ -170,7 +170,7 @@ def test_aftermarket_sor_successor_policy_selects_exact_preopen_date(
 
 def _valid_scale_in_split_runtime_refresh_evidence():
     return {
-        "economic_gate_version": "ttl_paired_fixed_control_v3",
+        "economic_gate_version": "filled_incumbent_bbo_holdout_v4",
         "paired_economic_sample_count": 3,
         "economic_source_dates": ["2026-07-06", "2026-07-07"],
         "economic_source_date_count": 2,
@@ -183,6 +183,11 @@ def _valid_scale_in_split_runtime_refresh_evidence():
         "modeled_fill_participation": 1.0,
         "downside_p10_profit_rate": 0.05,
         "blockers": [],
+        "holdout_evidence": [{"runtime_apply_allowed": True, "runtime_apply_blockers": [], "blockers": [],
+            "paired_economic_sample_count": 3, "economic_source_dates": ["2026-07-08", "2026-07-09"],
+            "holdout_dates": ["2026-07-08", "2026-07-09"], "calibration_dates": ["2026-07-06", "2026-07-07"],
+            "source_quality_adjusted_ev_pct": 0.10, "average_daily_delta_net_pnl_krw": 10,
+            "price_join_coverage": 1.0, "modeled_fill_participation": 1.0, "downside_p10_profit_rate": 0.05}],
     }
 
 
@@ -7581,7 +7586,7 @@ def test_scale_in_split_policy_carries_only_on_low_sample(
     policy_file.write_text(
         json.dumps(
             {
-                "schema_version": "scale_in_split_order_policy_v3",
+                "schema_version": "scale_in_split_order_policy_v4",
                 "policy_version": "scale-split-validated",
                 "generated_at": "2026-06-10T20:30:00+09:00",
                 "runtime_apply_allowed": True,
@@ -8261,7 +8266,7 @@ def test_split_runtime_policy_audit_accepts_current_entry_and_scale_in_policies(
     scale_policy.write_text(
         json.dumps(
             {
-                "schema_version": "scale_in_split_order_policy_v3",
+                "schema_version": "scale_in_split_order_policy_v4",
                 "policy_version": "scale-current",
                 "generated_at": "2026-07-13T20:28:03+09:00",
                 "runtime_apply_allowed": True,
@@ -8490,7 +8495,7 @@ def test_split_runtime_policy_audit_rejects_unbounded_scale_in_bucket(tmp_path):
     scale_policy.write_text(
         json.dumps(
             {
-                "schema_version": "scale_in_split_order_policy_v3",
+                "schema_version": "scale_in_split_order_policy_v4",
                 "policy_version": "scale-unbounded",
                 "generated_at": "2026-07-13T20:28:03+09:00",
                 "runtime_apply_allowed": True,
@@ -8595,7 +8600,7 @@ def test_split_runtime_policy_audit_accepts_scale_in_policy_across_krx_holiday_w
     scale_policy.write_text(
         json.dumps(
             {
-                "schema_version": "scale_in_split_order_policy_v3",
+                "schema_version": "scale_in_split_order_policy_v4",
                 "policy_version": "scale-holiday-handoff",
                 "generated_at": "2026-07-16T20:28:37+09:00",
                 "runtime_apply_allowed": True,
@@ -8680,7 +8685,7 @@ def test_split_runtime_policy_audit_rejects_scale_policy_without_refresh_evidenc
     scale_policy.write_text(
         json.dumps(
             {
-                "schema_version": "scale_in_split_order_policy_v3",
+                "schema_version": "scale_in_split_order_policy_v4",
                 "policy_version": "scale-legacy",
                 "generated_at": "2026-07-16T20:28:37+09:00",
                 "runtime_apply_allowed": True,
@@ -8716,7 +8721,7 @@ def test_split_runtime_policy_audit_rejects_scale_in_policy_after_three_trading_
     scale_policy.write_text(
         json.dumps(
             {
-                "schema_version": "scale_in_split_order_policy_v3",
+                "schema_version": "scale_in_split_order_policy_v4",
                 "policy_version": "scale-stale-trading-days",
                 "generated_at": "2026-07-13T20:28:37+09:00",
                 "runtime_apply_allowed": True,
@@ -8756,7 +8761,7 @@ def test_preopen_drops_selected_scale_policy_when_source_file_version_changed(
     scale_policy.write_text(
         json.dumps(
             {
-                "schema_version": "scale_in_split_order_policy_v3",
+                "schema_version": "scale_in_split_order_policy_v4",
                 "policy_version": "regenerated-blocked-version",
                 "generated_at": "2026-08-05T08:00:00+09:00",
                 "runtime_apply_allowed": False,
