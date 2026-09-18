@@ -1,5 +1,7 @@
 # Microstructure 최종 재리뷰 및 다음 장후 단위 분석 — 2026-09-18
 
+현재 사용자 지시에 따라 **장후 panic 재집계 호출은 제거**한다. 장중 생산/시장약세 observer와 별도 장후 hysteresis 튜닝은 유지한다. 아래 panic 순서/필수 생성 설명은 당시 분석 이력이며 현행 제거 scope/receipt는 [owning review](2026-09-18-panic-sell-defense-result-review.md#사용자-지시-장후-재집계-완전-제거)를 따른다.
+
 후속 개별 단위: [panic_sell_defense_report 결과·입력 보완 review](2026-09-18-panic-sell-defense-result-review.md). breadth 다음 실제작업의9/17 결과·시간대기/구조결손·코드보완·배포 근거는 이 owning review를 따른다.
 
 ## 판단과 검증 범위

@@ -104,3 +104,13 @@ Wrapper 관련 기존6개 및 selector 실패 선행검증1개, 합7PASS. bash-n
 검토본 daily의 기존 source reader만 읽어 같은 pipeline_source:missing blocker 전달을 확인했다. 전체Daily/historical panic/raw/collector/notifier 재실행은 없다. 날짜·cutoff·zero-sample·원천부재를 경제성0으로 오인하지 않는 **진단 source Acceptance만 PASS**다. 실제 usable micro/exit/full-cost/holdout 경제성 Acceptance는 기존 `MarketWeaknessSourceHandoffNaturalEconomics0918`에 남는다. Main 미실행/오늘 pipeline·prospective30분 경로 미생성은 기다림만으로 닫히지 않는다.
 
 근거: `tmp/panic-defense-result-review-20260918/deployment-final.json`, `natural-consumption-final.json`, `daily-source-consumption-final.json` 및 갱신한9/17 dated result-review JSON. 원9/17 JSON/MD/breadth·low-price/market-weakness 동결policy SHA 보존PASS. cron·bot/service/PID·provider·threshold·guard·수량·비용 변경과 수동 알림 없음. 문서 close 이후 source가 동일한 별도 docs commit을 기록하며 실제 선택된 source와 구분한다.
+
+## 사용자 지시: 장후 재집계 완전 제거
+
+장중 공통 생산자를 삭제하는 것이 아니라 장후 재실행만 완전히 제거한다. 이전 source/진단 closure는 당시 이력이다. 현재 장후 wrapper의 panic 호출·JSON/MD 대기·전용 THRESHOLD_CYCLE_RUN_PANIC_SELL_DEFENSE_REPORT flag·DONE 필드와 strict verifier의 필수 artifact를 제거했다. 기존 breadth는 독립 flag로 유지하며 이어지는 조건부 scale-in plan은 변경하지 않는다.
+
+일일 보고서는 장중 동일 날짜 panic 결과를 optional diagnostic으로 읽고 원 source target_date/generated_at/as_of/analysis_status/economics를 전달한다. 파일이 없으면 unavailable blocker와 null 상태를 남기며 장후 실패나 경제성0을 만들지 않는다. 장중 cron/wrapper/공통 producer/observer·widget/episode guard·기존 hysteresis 평가/dated 정책 및 live 주문 안전은 보존한다. 과거 JSON/MD와 동결정책은 장중/감사 소비와 공유하므로 삭제하지 않는다.
+
+기존 wrapper 시험은 장후 호출·flag·대기 제거와 독립 breadth/장중 observer 보존을 검증한다. 기존 strict verifier 성공 시나리오에서 panic 파일 없이 pass를 검증하고, 기존 daily 시험에서 장중 생성 시각과 optional 파일 부재 전달을 검증한다. 신규 production/test 모듈·성능 guard·raw 재실행 없음. 최종 검증·commit/push·배포 receipt는 `tmp/postclose-panic-removal-20260918/`에 기록한다. 미래 source 선택과 다음 자연 장후 실행은 구분하며 과거9/17 실행 결과를 재라벨링하지 않는다.
+
+최종 제거 범위 self-review→기존 시험 fixture의 잔여 panic 경로5건 수정→re-review 완료. 영향44PASS/528deselected(3.58초), py_compile/bash-n/diff/print-only parser PASS. 원천부재는 optional 진단으로 남고 strict 장후 필수 산출물에서 제외된다. Source selector 배포는 `tmp/postclose-panic-removal-20260918/deployment.json`, 판정 갱신은 `result-refresh.json`을 따른다. 전체 장후 DONE/정책 선정/EV 개선을 주장하지 않는다.

@@ -4173,9 +4173,6 @@ def _artifact_paths(target_date: str) -> dict[str, Path]:
         "market_panic_breadth": REPORT_DIR
         / "market_panic_breadth"
         / f"market_panic_breadth_{target_date}.json",
-        "panic_sell_defense": REPORT_DIR
-        / "panic_sell_defense"
-        / f"panic_sell_defense_{target_date}.json",
         "threshold_cycle_ev": REPORT_DIR
         / "threshold_cycle_ev"
         / f"threshold_cycle_ev_{target_date}.json",

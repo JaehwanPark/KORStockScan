@@ -2644,18 +2644,26 @@ def test_postclose_wrapper_runs_stage_hook_scaffold_before_workorder_ev():
     assert stage_hook_idx < scaffold_idx < nonfatal_idx < artifact_idx < ev_idx
 
 
-def test_postclose_wrapper_refreshes_market_breadth_before_panic_sell_report():
+def test_postclose_wrapper_keeps_breadth_without_panic_report_regeneration():
     script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
 
     breadth_idx = script.index("src.engine.market_panic_breadth_collector")
     breadth_wait_idx = script.index("market_panic_breadth_postclose")
-    panic_sell_idx = script.index("src.engine.panic_sell_defense_report")
 
     assert (
         'RUN_MARKET_PANIC_BREADTH_REPORT="${THRESHOLD_CYCLE_RUN_MARKET_PANIC_BREADTH_REPORT:-true}"'
         in script
     )
-    assert breadth_idx < breadth_wait_idx < panic_sell_idx
+    assert breadth_idx < breadth_wait_idx
+    assert "src.engine.panic_sell_defense_report" not in script
+    assert "RUN_PANIC_SELL_DEFENSE_REPORT" not in script
+    assert "panic_sell_defense_postclose" not in script
+    assert "panic_sell_defense=$" not in script
+    breadth_condition = script[script.rfind("\nif ", 0, breadth_idx):breadth_idx]
+    assert "RUN_MARKET_PANIC_BREADTH_REPORT" in breadth_condition
+    intraday = Path("deploy/run_panic_sell_defense_intraday.sh").read_text()
+    assert "src.engine.panic_sell_defense_report" in intraday
+    assert "--kind market_weakness" in intraday
     assert "market_panic_breadth=$RUN_MARKET_PANIC_BREADTH_REPORT" in script
 
 

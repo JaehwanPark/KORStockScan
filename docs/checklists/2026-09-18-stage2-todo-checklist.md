@@ -25,6 +25,8 @@
 
   - 진단 Acceptance Closure: source0072bef45 main/branch atomic push 및13:24 최종배포.13:26 자연JSON/source missing·날짜blocker·null economics 및 기존daily source-reader blocker 전달PASS. 병행선택ebdbc613b의producer/daily/wrapper동등성PASS·dated2/3 carry정상인식. 원SHA/cron/worker보존. 실제Main/PID/usable micro/closed-cost EV는별도MarketWeaknessSourceHandoffNaturalEconomics0918 OPEN이며 source 진단완료로확대하지않음.
 
+  - 후속 사용자 지시 Closure: 장후 panic 재실행·전용flag/DONE·JSON/MD대기·strict 필수artifact를 제거하고 daily는 장중결과시각/결손/null경제성을 보존한optional진단으로 소비한다. 장중생산자/cron/observer·별도hysteresis튜닝·breadth는 유지한다. 이전진단완료는 이력이며현재장후owner가아니다. 최신검증/배포는 owning review 및 `tmp/postclose-panic-removal-20260918/` receipt.
+
 - [ ] `[MarketWeaknessSourceHandoffNaturalEconomics0918] Market weakness 원천·날짜 인계와 자연 표본·실제 버전 경제성 검증` (`Due: 2026-09-18`, `Slot: POSTCLOSE`, `TimeWindow: 20:05~21:55`, `Track: RuntimeStability`)
   - Source: [원천·날짜 인계 수리·경제성 재검증](../audit-reports/2026-09-18-market-weakness-source-handoff-repair-and-economics-review.md), [운영 계약](../postclose-tuning-result-review-task-instructions.md#512-market-weakness-원천날짜-인계), `tmp/market-weakness-source-handoff-20260918/validation.json`, `publication.json`, `natural-and-version-evaluation.json`, `deployment.json`.
   - 구현 Closure: 연구 admission194개를 prospective로 보존하고 native active coverage/독립 research budget4·총200symbol/400item·integrated SOR source contract·기존 schema 소비를 검증했다. 관련187 PASS; native9/17 source→dated 튜닝→effective9/18 기존2/3 carry 인계를 복구했다. 실행 중 worker 보존·기존 service의 미래 source pin 일치 여부는 deployment receipt를 따른다. 전역 장후 DONE/신규 정책/실현 이익이 아니다.

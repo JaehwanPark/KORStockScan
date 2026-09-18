@@ -2580,6 +2580,11 @@ def test_calibration_source_bundle_includes_panic_sell_defense(monkeypatch, tmp_
         json.dumps(
             {
                 "report_type": "panic_sell_defense",
+                "target_date": "2026-05-12",
+                "generated_at": "2026-05-12T15:28:02",
+                "as_of": "2026-05-12T15:28:01",
+                "analysis_status": "risk_context_only_no_economic_evaluation",
+                "economics": {"cost_adjusted_ev_pct": None},
                 "panic_state": "RECOVERY_WATCH",
                 "panic_regime_mode": "STABILIZING",
                 "panic_regime_contract": {
@@ -2688,6 +2693,21 @@ def test_calibration_source_bundle_includes_panic_sell_defense(monkeypatch, tmp_
     )
     assert "market_regime_not_risk_off" in metrics["source_quality_blockers"]
     assert metrics["allowed_runtime_apply"] is False
+
+
+    assert metrics["source_usage"] == "optional_intraday_diagnostic_no_postclose_regeneration"
+    assert metrics["source_loaded"] is True
+    assert metrics["source_generated_at"] == "2026-05-12T15:28:02"
+    assert metrics["source_as_of"] == "2026-05-12T15:28:01"
+    assert metrics["source_economics"]["cost_adjusted_ev_pct"] is None
+    panic_path.unlink()
+    absent = report_mod._summarize_calibration_report_sources("2026-05-12")
+    absent_metrics = absent["source_metrics"]["panic_sell_defense"]
+    assert absent_metrics["source_loaded"] is False
+    assert absent_metrics["panic_state"] is None
+    assert absent_metrics["source_economics"] is None
+    assert "optional_intraday_panic_source_unavailable" in absent_metrics["source_quality_blockers"]
+    assert absent_metrics["allowed_runtime_apply"] is False
 
 
 def test_calibration_source_bundle_audits_report_only_cleanup_candidates(

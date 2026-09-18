@@ -6348,7 +6348,6 @@ def test_build_threshold_cycle_postclose_verification_prefers_workorder_lineage(
     (report_dir / "pattern_lab_currentness_audit").mkdir(parents=True)
     (report_dir / "pattern_lab_propagation_audit").mkdir(parents=True)
     (report_dir / "market_panic_breadth").mkdir(parents=True)
-    (report_dir / "panic_sell_defense").mkdir(parents=True)
     (report_dir / "swing_daily_simulation").mkdir(parents=True)
     (report_dir / "swing_strategy_discovery_sim").mkdir(parents=True)
     (report_dir / "swing_lifecycle_audit").mkdir(parents=True)
@@ -6478,12 +6477,6 @@ def test_build_threshold_cycle_postclose_verification_prefers_workorder_lineage(
         encoding="utf-8",
     )
     (
-        report_dir / "panic_sell_defense" / "panic_sell_defense_2026-05-12.json"
-    ).write_text(
-        json.dumps({"report_type": "panic_sell_defense"}),
-        encoding="utf-8",
-    )
-    (
         report_dir / "swing_daily_simulation" / "swing_daily_simulation_2026-05-12.json"
     ).write_text("{}", encoding="utf-8")
     (
@@ -6528,11 +6521,11 @@ def test_build_threshold_cycle_postclose_verification_prefers_workorder_lineage(
         "threshold_cycle_ev_sources_pattern_lab_currentness_audit"
     ].endswith("pattern_lab_currentness_audit_2026-05-12.json")
     artifact_labels = {item["label"] for item in report["artifact_status"]}
+    assert "panic_sell_defense" not in artifact_labels
     assert "quote_consistency" not in artifact_labels
     assert "quote_consistency" not in report
     assert {
         "market_panic_breadth",
-        "panic_sell_defense",
     }.issubset(artifact_labels)
 
     log_path.write_text(
@@ -6664,7 +6657,6 @@ def test_build_threshold_cycle_postclose_verification_warns_on_predecessor_wait(
     (report_dir / "pattern_lab_currentness_audit").mkdir(parents=True)
     (report_dir / "pattern_lab_propagation_audit").mkdir(parents=True)
     (report_dir / "market_panic_breadth").mkdir(parents=True)
-    (report_dir / "panic_sell_defense").mkdir(parents=True)
     (report_dir / "swing_daily_simulation").mkdir(parents=True)
     (report_dir / "swing_strategy_discovery_sim").mkdir(parents=True)
     (report_dir / "swing_lifecycle_audit").mkdir(parents=True)
@@ -6690,7 +6682,6 @@ def test_build_threshold_cycle_postclose_verification_warns_on_predecessor_wait(
         "pattern_lab_currentness_audit/pattern_lab_currentness_audit_2026-05-12.json",
         "pattern_lab_propagation_audit/pattern_lab_propagation_audit_2026-05-12.json",
         "market_panic_breadth/market_panic_breadth_2026-05-12.json",
-        "panic_sell_defense/panic_sell_defense_2026-05-12.json",
         "swing_daily_simulation/swing_daily_simulation_2026-05-12.json",
         "swing_strategy_discovery_sim/swing_strategy_discovery_sim_2026-05-12.json",
         "swing_lifecycle_audit/swing_lifecycle_audit_2026-05-12.json",
@@ -6821,7 +6812,6 @@ def test_build_threshold_cycle_postclose_verification_warns_on_recovery_profile(
         "scalp_entry_action_decision_matrix",
         "lifecycle_decision_matrix",
         "market_panic_breadth",
-        "panic_sell_defense",
         "swing_daily_simulation",
         "swing_lifecycle_audit",
     ):
@@ -6844,7 +6834,6 @@ def test_build_threshold_cycle_postclose_verification_warns_on_recovery_profile(
         "runtime_approval_summary/runtime_approval_summary_2026-05-12.json",
         "scalp_entry_action_decision_matrix/scalp_entry_action_decision_matrix_2026-05-12.json",
         "market_panic_breadth/market_panic_breadth_2026-05-12.json",
-        "panic_sell_defense/panic_sell_defense_2026-05-12.json",
         "swing_daily_simulation/swing_daily_simulation_2026-05-12.json",
         "swing_lifecycle_audit/swing_lifecycle_audit_2026-05-12.json",
     ):
@@ -6986,7 +6975,6 @@ def test_build_threshold_cycle_postclose_verification_fails_on_unavailable_ai_co
         "pattern_lab_currentness_audit",
         "pattern_lab_propagation_audit",
         "market_panic_breadth",
-        "panic_sell_defense",
         "swing_daily_simulation",
         "swing_lifecycle_audit",
     ):
@@ -7060,7 +7048,6 @@ def test_build_threshold_cycle_postclose_verification_fails_on_unavailable_ai_co
         currentness_path,
         propagation_path,
         report_dir / "market_panic_breadth" / "market_panic_breadth_2026-05-12.json",
-        report_dir / "panic_sell_defense" / "panic_sell_defense_2026-05-12.json",
         report_dir
         / "swing_daily_simulation"
         / "swing_daily_simulation_2026-05-12.json",
@@ -7196,7 +7183,6 @@ def test_build_threshold_cycle_postclose_verification_fails_on_ldm_entry_bucket_
         "pattern_lab_currentness_audit",
         "pattern_lab_propagation_audit",
         "market_panic_breadth",
-        "panic_sell_defense",
         "swing_daily_simulation",
         "swing_lifecycle_audit",
     ):
@@ -7296,7 +7282,6 @@ def test_build_threshold_cycle_postclose_verification_fails_on_ldm_entry_bucket_
         currentness_path,
         propagation_path,
         report_dir / "market_panic_breadth" / "market_panic_breadth_2026-05-12.json",
-        report_dir / "panic_sell_defense" / "panic_sell_defense_2026-05-12.json",
         report_dir
         / "swing_daily_simulation"
         / "swing_daily_simulation_2026-05-12.json",
@@ -7336,7 +7321,6 @@ def test_build_threshold_cycle_postclose_verification_fails_on_ldm_scale_in_buck
         "pattern_lab_currentness_audit",
         "pattern_lab_propagation_audit",
         "market_panic_breadth",
-        "panic_sell_defense",
         "swing_daily_simulation",
         "swing_lifecycle_audit",
     ):
@@ -7437,7 +7421,6 @@ def test_build_threshold_cycle_postclose_verification_fails_on_ldm_scale_in_buck
         currentness_path,
         propagation_path,
         report_dir / "market_panic_breadth" / "market_panic_breadth_2026-05-12.json",
-        report_dir / "panic_sell_defense" / "panic_sell_defense_2026-05-12.json",
         report_dir
         / "swing_daily_simulation"
         / "swing_daily_simulation_2026-05-12.json",
@@ -7592,7 +7575,6 @@ def test_build_threshold_cycle_postclose_verification_fails_when_scale_in_source
         "pattern_lab_currentness_audit",
         "pattern_lab_propagation_audit",
         "market_panic_breadth",
-        "panic_sell_defense",
         "swing_daily_simulation",
         "swing_lifecycle_audit",
     ):
@@ -7679,7 +7661,6 @@ def test_build_threshold_cycle_postclose_verification_fails_when_scale_in_source
         currentness_path,
         propagation_path,
         report_dir / "market_panic_breadth" / "market_panic_breadth_2026-05-12.json",
-        report_dir / "panic_sell_defense" / "panic_sell_defense_2026-05-12.json",
         report_dir
         / "swing_daily_simulation"
         / "swing_daily_simulation_2026-05-12.json",

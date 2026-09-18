@@ -3331,6 +3331,8 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
             "market_regime_snapshot_missing_or_unknown",
         }
     ]
+    if not panic_sell_defense:
+        micro_market_source_quality_blockers.append("optional_intraday_panic_source_unavailable")
     micro_contract = microstructure_market_context.get("threshold_contract") or {}
     micro_market_source_quality_blockers.extend(
         str(blocker) for blocker in micro_contract.get("source_quality_blockers", [])
@@ -4033,6 +4035,13 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
             ),
         },
         "panic_sell_defense": {
+            "source_usage": "optional_intraday_diagnostic_no_postclose_regeneration",
+            "source_loaded": bool(panic_sell_defense),
+            "source_target_date": panic_sell_defense.get("target_date"),
+            "source_generated_at": panic_sell_defense.get("generated_at"),
+            "source_as_of": panic_sell_defense.get("as_of"),
+            "source_analysis_status": panic_sell_defense.get("analysis_status"),
+            "source_economics": panic_sell_defense.get("economics"),
             "panic_state": (
                 panic_sell_defense.get("panic_state")
                 if isinstance(panic_sell_defense, dict)
