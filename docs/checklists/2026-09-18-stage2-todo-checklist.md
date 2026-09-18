@@ -146,3 +146,5 @@
 ## Claude Scalping Pattern Lab 영구 폐기
 
 사용자 승인으로 Claude Lab·scalping automation의 구현 제거, 반복 리뷰/보완/검증, 관련 commit/push 및 immutable 배포와 불필요 과거 산출물 삭제를 실행한다. [폐기 검증](../audit-reports/2026-09-18-claude-scalping-pattern-lab-retirement-review.md)이 PLR0–PLR6 closure와 보호/유예 목록을 소유한다. 퇴역 작업의 새 OPEN/일정·empty producer는 만들지 않는다. 공유 Swing OFF·독립 경제성 owner·현재 정책/원천·hard safety는 보존하며 선택 배포와 실제 PID/자연 경제성은 분리한다. 봇 재시작·주문·조기 PREOPEN 확정 권한은 없다.
+
+Claude 폐기 Closure: source `50cc737bc` main/review atomic push·immutable `claude-lab-retired-reviewed-20260918` 선택·1,135PASS 및 배포본223PASS·643개7,996,508bytes 삭제·정책/원천15SHA 불변. Lab 결함0/공용 source handoff current이며 full-chain 기존 FAIL(저가주·machine timing·Swing/실패 marker)은 그대로다. 상세와 증거는 위 owning 폐기 검증/`tmp/claude-lab-retirement-20260918/`을 따른다. 재시작/주문/조기 PREOPEN 확정·새 OPEN 복원은 없다.

@@ -2,7 +2,7 @@
 
 작성일: 2026-09-18 KST
 
-상태: 사용자 후속 실행 승인. 구현·리뷰·검증과 선택 배포/cleanup의 실제 완료 여부는 [폐기 검증](../audit-reports/2026-09-18-claude-scalping-pattern-lab-retirement-review.md)의 receipt를 따른다. 계획 자체를 실행 증거로 세지 않는다.
+상태: PLR0–PLR6 구현·반복 리뷰/수정·검증·커밋/push·선택 배포·불필요 산출물 삭제 완료. [최종 검증](../audit-reports/2026-09-18-claude-scalping-pattern-lab-retirement-review.md)을 따른다. 장후 전체 chain FAIL·자연 PID/정책 적용·경제성 확인은 별도 기존 OPEN이며 폐기 완료로 대체하지 않는다.
 
 ## 1. 목적과 제거 후 상태
 
