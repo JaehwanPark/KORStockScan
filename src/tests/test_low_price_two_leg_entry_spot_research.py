@@ -505,9 +505,9 @@ def test_selection_final_views_share_prefix_without_changing_public_results(
     monkeypatch.setattr(research, "_evaluate_candidate_windows", counted)
     actual = select_profile_spot(profile, deepcopy(contexts))
     assert [lengths for _, lengths, _ in calls] == [
-        (15, 15, 30), (30, 16, 46), (16, 46)
+        (30,), (15, 15, 30), (30, 16, 46), (16, 46)
     ]
-    assert all(options == {"include_episodes": True} for _, _, options in calls[1:])
+    assert all(options == {"include_episodes": True} for _, _, options in calls[2:])
     for owner in ("baseline", "calibration_winner", "selected"):
         assert "episodes" not in actual[owner]["calibration"]
         assert "episodes" not in actual[owner]["holdout"]
@@ -660,10 +660,10 @@ def test_bounded_selection_counts_all_candidates_and_does_not_rank_on_holdout(
     profile = RESEARCH_PROFILES["candidate_007660_midday"]
     contexts = _contexts(holdout_candidate_net=holdout_net)
     actual = select_profile_spot(profile, deepcopy(contexts))
-    assert [item for item, _ in calls[:len(grid)]] == list(grid)
+    assert [item for item, _ in calls[1:1 + len(grid)]] == list(grid)
     assert all(
         max(max(w) for w in windows) < sorted(contexts)[30]
-        for _, windows in calls[: len(grid)]
+        for _, windows in calls[: 1 + len(grid)]
     )
     assert actual["calibration_ready_candidate_count"] == len(grid)
     assert actual["calibration_gate_counts"] == {
@@ -1470,3 +1470,159 @@ def test_unknown_or_nonfinite_completed_economics_is_never_zero(bad):
     episode['legs'][0]['net_profit_pct'] = bad
     with pytest.raises(research.ResearchError, match='leg_contract_invalid'):
         research._summary([episode])
+
+
+def _carry_context(day, highs):
+    bars = tuple(Bar(datetime.combine(day, time(9, index), KST), 1000,
+                     high, 995, 1000) for index, high in enumerate(highs))
+    return DayContext(day, bars, {30: ()})
+
+
+def test_original_target_carry_proxy_closes_legs_separately_and_releases_custody():
+    day = date(2026, 6, 8)
+    candidate = SpotCandidate(540, 550, 30, 1.0, 0.1, (0, -1), 5, 2)
+    entry_day = date(2026, 6, 5)
+    carried = {'date': str(entry_day), 'signal_at': f'{entry_day}T09:02:00+09:00',
+               'legs': [{'status': 'HELD', 'entry_price': price,
+                         'target_price': research.move_price_by_ticks(price, 2),
+                         'fill_at': f'{entry_day}T09:03:00+09:00'}
+                        for price in (1000, 999)]}
+    first_target = carried['legs'][0]['target_price']
+    output, episode = research._advance_carried_target_day(
+        candidate, _carry_context(day, [first_target - 1]), carried)
+    assert episode is None and output is carried
+    assert [leg['status'] for leg in carried['legs']] == ['HELD', 'COMPLETE']
+    output, episode = research._advance_carried_target_day(
+        candidate, _carry_context(date(2026, 6, 9), [first_target]), carried)
+    assert output is None and episode is None
+    assert all(leg['status'] == 'COMPLETE' for leg in carried['legs'])
+    assert all(leg['carry_exit_model'] == research.CARRY_TARGET_REPLAY_CONTRACT for leg in carried['legs'])
+
+
+def test_carry_cashflow_credits_only_the_exit_window_and_not_attempt_counts():
+    entry_day, exit_day = date(2026, 6, 5), date(2026, 6, 8)
+    event = {'signal_at': f'{entry_day}T09:02:00+09:00',
+             'legs': [{'status': 'COMPLETE', 'entry_price': 1000,
+                       'net_profit_pct': 0.5, 'target_at': f'{exit_day}T09:00:00+09:00'},
+                      {'status': 'NO_FILL', 'entry_price': 999}]}
+    result = research._summary([])
+    research._carry_window_cashflow(result, [(entry_day, event)], [exit_day])
+    assert result['signal_episodes'] == result['attempted_legs'] == 0
+    assert result['completed_legs'] == result['carry_in_completed_legs'] == 1
+    assert result['realized_net_profit_krw'] == 5.0
+    assert result['notional_weighted_ev_pct'] == 0.5
+    earlier = research._summary([])
+    research._carry_window_cashflow(earlier, [(entry_day, event)], [date(2026, 6, 9)])
+    assert earlier['realized_net_profit_krw'] == 0 and earlier['completed_legs'] == 0
+
+
+def test_carry_proxy_does_not_borrow_aftermarket_or_post_gap_target():
+    day = date(2026, 6, 8)
+    context = _carry_context(day, [1000, 1000, 1005])
+    context.bars = (context.bars[0], research.replace(context.bars[-1],
+                    timestamp=datetime.combine(day, time(16, 0), KST)))
+    candidate = SpotCandidate(540, 550, 30, 1.0, 0.1)
+    leg = {'status': 'HELD', 'entry_price': 1000,
+           'target_price': research.move_price_by_ticks(1000, 2)}
+    carried = {'date': '2026-06-05', 'legs': [leg]}
+    assert research._advance_carried_target_day(candidate, context, carried)[0] is carried
+    assert leg['status'] == 'HELD'
+    context.bars = (context.bars[0], _carry_context(day, [1000, 1000, 1005]).bars[-1])
+    research._advance_carried_target_day(candidate, context, carried)
+    assert leg['status'] == 'HELD'
+
+
+def test_calibration_joint_gain_challenger_is_preferred_without_reading_holdout(monkeypatch):
+    profile = RESEARCH_PROFILES['candidate_007660_midday']
+    baseline = research.baseline_candidate(profile)
+    high_profit_low_ev = research.replace(baseline, rolling_high_drawdown_pct=0.75)
+    joint_gain = research.replace(baseline, rolling_high_drawdown_pct=1.50)
+    monkeypatch.setattr(research, 'candidate_grid', lambda _: (baseline, high_profit_low_ev, joint_gain))
+    original = research._evaluate_candidate_windows
+    def evaluate(candidate, contexts, windows, **kwargs):
+        result = original(candidate, contexts, windows, **kwargs)
+        for outcome in result:
+            ev, daily = ((0.5, 5) if candidate == baseline else
+                         (0.4, 10) if candidate == high_profit_low_ev else (0.6, 8))
+            outcome.update(notional_weighted_ev_pct=ev,
+                cost_adjusted_net_profit_krw_per_source_valid_observation_day=daily)
+        return result
+    monkeypatch.setattr(research, '_evaluate_candidate_windows', evaluate)
+    result = select_profile_spot(profile, _contexts(holdout_candidate_net=0.3, baseline_net=0.3))
+    assert result['research_challenger']['parameters'] == joint_gain.public()
+    assert result['calibration_joint_gain_candidate_count'] == 1
+    assert result['challenger_selection_basis'] == 'calibration_joint_ev_daily_net_gain'
+
+
+def test_carry_replay_seals_windows_credits_cashflow_and_keeps_native_mode_separate():
+    days = [date(2026, 6, 5), date(2026, 6, 8), date(2026, 6, 9)]
+    contexts = {}
+    for index, day in enumerate(days):
+        ctx = _carry_context(day, [1004 if index == 1 else 1000,
+                                   1000, 1005 if index == 2 else 1000])
+        ctx.features[30] = (SignalFeature(0, ctx.bars[0].timestamp, 1000, 1.5, 0.1),)
+        contexts[day] = ctx
+    candidate = SpotCandidate(540, 540, 30, 1.0, 0.1, (0, -1), 5, 4)
+    with research.day_replay_scope(research._advance_carried_target_day):
+        early, cash, full = research._evaluate_candidate_windows(
+            candidate, contexts, [[days[0]], [days[1]], days], include_episodes=True)
+    assert early['held_legs'] == 2 and early['completed_legs'] == 0
+    assert all(leg['status'] == 'HELD' for leg in early['episodes'][0]['legs'])
+    assert cash['signal_episodes'] == cash['attempted_legs'] == 0
+    assert cash['carry_in_completed_legs'] == cash['completed_legs'] == 2
+    assert cash['carry_in_held_legs'] == 0 and cash['custody_resolution_required'] is False
+    assert len(cash['carry_in_completed_evidence']) == 2
+    assert full['signal_episodes'] == 2 and full['completed_legs'] == 4
+    native = research.evaluate_candidate(candidate, contexts, days)
+    assert native['held_legs'] == 2 and native['signal_episodes'] == 1
+    assert native['economic_replay_contract'] == research.ECONOMIC_REPLAY_CONTRACT
+    assert full['economic_replay_contract'] == research.CARRY_TARGET_REPLAY_CONTRACT
+    assert all('carry_exit_model' not in leg
+               for episode in contexts[days[0]].outcome_cache.values()
+               for leg in episode['legs'])
+
+
+def test_carry_proxy_joint_gain_cannot_pass_live_replay_support():
+    current = research.evaluate_candidate(SpotCandidate(800, 809, 30, 1.5, 0.1),
+                                         _contexts(holdout_candidate_net=0.2),
+                                         sorted(_contexts(holdout_candidate_net=0.2)))
+    candidate = deepcopy(current)
+    candidate['policy_identity'] = 'f' * 64
+    candidate['notional_weighted_ev_pct'] = current['notional_weighted_ev_pct'] + 0.1
+    candidate['cost_adjusted_net_profit_krw_per_source_valid_observation_day'] += 1
+    current['economic_replay_contract'] = candidate['economic_replay_contract'] = research.CARRY_TARGET_REPLAY_CONTRACT
+    comparison = research.paired_economics(current, candidate)
+    assert comparison['economic_superiority_confirmed'] is True
+    assert comparison['live_replay_supported'] is False
+    from src.engine.monitoring.episode_prospective_research import _promotion_ready
+    arm = dict(calibration=candidate, calibration_first_half=candidate,
+               calibration_second_half=candidate, full=candidate, holdout=candidate)
+    assert _promotion_ready(arm, dict(holdout=current)) is False
+    from src.engine.automation import low_price_two_leg_auto_expansion_policy as publisher
+    proposal = SpotCandidate(800, 809, 30, 1.5, 0.1).public()
+    row = dict(discovery_lane='new_symbol', runtime_effect=False,
+               recommendation_identity_grants_authority=False,
+               implementation_status='source_only_eligible_for_automatic_promotion',
+               recommended_spot=proposal, recommendation_proposal_sha256=publisher._digest(proposal),
+               notional_weighted_ev_pct=candidate['notional_weighted_ev_pct'],
+               holdout_signal_episodes=candidate['signal_episodes'],
+               holdout_completed_legs=candidate['completed_legs'], holdout_held_legs=0,
+               holdout_held_leg_rate_per_filled_leg=0,
+               holdout_realized_net_profit_krw_per_episode=candidate['realized_net_profit_krw_per_episode'],
+               current_economic_outcome=current, candidate_economic_outcome=candidate,
+               paired_economics=comparison)
+    assert publisher._valid_recommendation(row) is False
+    current['economic_replay_contract'] = candidate['economic_replay_contract'] = research.ECONOMIC_REPLAY_CONTRACT
+    row['paired_economics'] = research.paired_economics(current, candidate)
+    assert publisher._valid_recommendation(row) is True
+
+
+def test_carry_cashflow_ev_does_not_round_the_profit_numerator_before_weighting():
+    day = date(2026, 6, 5)
+    event = _episode(day, 15, net_profit_pct=0.123456)
+    for leg in event['legs']:
+        leg['target_at'] = f'{day}T14:00:00+09:00'
+    native = research._summary([event])
+    cf = deepcopy(native)
+    research._carry_window_cashflow(cf, [(day, event)], [day])
+    assert cf['notional_weighted_ev_pct'] == native['notional_weighted_ev_pct'] == 0.123456

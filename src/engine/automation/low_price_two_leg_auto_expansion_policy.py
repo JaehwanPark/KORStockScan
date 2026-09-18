@@ -104,7 +104,8 @@ def _valid_recommendation(row: dict[str, Any], *, frozen_legacy: bool = False) -
             and paired.get("comparable_observation_window") is True
             and paired.get("net_profit_improved") is True
             and (frozen_legacy or (
-                (paired.get("economic_superiority_confirmed") is True
+                paired.get("live_replay_supported") is True
+                and (paired.get("economic_superiority_confirmed") is True
                  or paired.get("participation_net_profit_confirmed") is True)
                 and paired.get("is_distinct_policy") is True
                 and paired.get("comparable_terminal_economics") is True

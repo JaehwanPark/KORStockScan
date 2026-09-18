@@ -8,6 +8,10 @@
 - 현재9/17 allocator/native_capacity/capacity_source 원천은부재이다. `capacity_2026-09-17.json`은WS 구독 범위 receipt이며현금/보유/예약자본이 아니다. native source acquisition CLI는현재완료일20:05 이후만 허용하므로9/18 잔고를9/17로 재라벨링하지 않는다. 보존된 동등 과거증거가없으면 feasibility/공동 EV의미확정은수치로 대체하지 않는다.
 - 실행/회귀/원천scope receipt: `tmp/low-price-full-research-20260918/`. 이 문서는source-only 결과 갱신 및 미종결 기록이며전일 전체postclose DONE 또는경제성 PASS가아니다. 최종full study/source generation/비교/공동 EV 결과는후속 섹션에기록한다.
 
+## 최신 후속 — carry 가정 아래의 조건부 비교
+
+[carry·공동목적 후속 review](2026-09-18-low-price-carry-joint-economic-followup.md)의 cached-only64개 재평가(392.461초/API0)는 동일 original-target-continuation CF 아래 성숙18개·holdout 동시개선12개·calibration까지 일관된10개·미확정27개·소표본19개다. 원 목표가가 다음 정규장에도 유효하다는 가정과 단위 price-touch 모델의 결과이며 실제 broker recovery/청산 증거가 아니다. 기존 native 모델의0건을 덮어쓰거나 actual 개선12건으로 바꾸지 않는다. 원 보고서/동결policy/ledger 보존·CF 승격차단·joint EV/net null·전체chain 미완료 경계는 유지한다. 최신 조건부 분석과 reader/deployment 근거는 위 owning 후속 review를 따른다.
+
 ## 최신 정정 — 서로 다른 정책 비교 수리
 
 [2026-09-18 distinct 경제성 review](2026-09-18-low-price-distinct-economic-review.md)가 아래 최초 집계의 성숙3건 판정을 정정한다. 해당3건은 baseline과 candidate 매개변수가 같은 자기 비교였으며 독립 개선 검증이 아니다. 기존 캐시/동일비용/native grid로 기존로직64개만156.6초 재평가한 최신 결과는 distinct 성숙2건·EV/일별 순익 동시개선0·미청산/terminal미확정55건이다. 팬오션 미청산 baseline의 부분 실현0 대비 상승은 경제적 우위로 확정하지 않는다. 원 보고서·동결policy·ledger는 보존했고 신규API/전체chain 재실행은 없었다. 아래 수치는 원 실행 이력이며 최신 비교 판단은 새 review를 따른다. 공동경제 source 결손·joint EV/net null과 전체chain 미완료 경계는 유지한다.

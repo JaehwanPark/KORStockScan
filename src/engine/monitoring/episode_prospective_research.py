@@ -46,7 +46,8 @@ def spot(parameters):
 def _promotion_ready(selected, baseline):
     comparison = paired_economics(baseline["holdout"], selected["holdout"])
     return bool(
-        _calibration_ready(
+        comparison["live_replay_supported"]
+        and _calibration_ready(
             selected["calibration"],
             selected["calibration_first_half"],
             selected["calibration_second_half"],

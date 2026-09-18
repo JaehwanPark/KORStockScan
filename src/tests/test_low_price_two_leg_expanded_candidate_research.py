@@ -2134,7 +2134,8 @@ def test_logic_recommendation_keeps_missing_baseline_ev_and_research_handoff(car
     assert comparison["diagnostic_partial_realized_net_delta_krw_per_day"] > 0
 
 
-def test_cached_existing_logic_review_never_uses_market_or_token_calls(tmp_path, monkeypatch):
+@pytest.mark.parametrize("carry_proxy", [False, True])
+def test_cached_existing_logic_review_never_uses_market_or_token_calls(tmp_path, monkeypatch, carry_proxy):
     previous = {
         'schema': 'low_price_two_leg_expanded_candidate_research_v6',
         'target_date': '2026-09-17', 'cost_pct': expanded.COST_PCT,
@@ -2155,8 +2156,10 @@ def test_cached_existing_logic_review_never_uses_market_or_token_calls(tmp_path,
                         lambda **kw: pytest.fail('cached-only review must not fetch'))
     out = tmp_path / 'successor'
     assert expanded.main(['--target-date', '2026-09-17', '--review-existing-logic-from',
-                          str(source), '--output-dir', str(out), '--write']) == 0
+                          str(source), '--output-dir', str(out), '--write']
+                         + (['--review-carry-target-continuation'] if carry_proxy else [])) == 0
     review = json.loads((out / 'low_price_existing_logic_full_comparison_2026-09-17.json').read_text())
+    assert review['carry_target_continuation_assumed'] is carry_proxy
     assert review['profile_count'] == 1
     assert review['status_counts'] == {'source_or_session_excluded': 1}
     assert review['model_joint_gain_count'] == 0

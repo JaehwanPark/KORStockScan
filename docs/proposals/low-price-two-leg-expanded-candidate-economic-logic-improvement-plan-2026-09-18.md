@@ -243,3 +243,8 @@ half sign과 half3 선언의 정리는 과거 proxy selector의 diagnostic 계�
 이번9/17 검증창은 이미 관찰했으므로 수치가 양수여도 탐색적 모델 결과다. 미래 독립 validation·실제 dated/PID consumption·정확한 완료 비용 손익과 joint 자본 입력은 별도 acceptance로 남긴다.
 
 구현 source `581b17cb1` atomic push·12:27 KST managed release/기존unit 다음 실행 source 선택을 마쳤다. 기존 캐시64개156.6초의 결과는 distinct 성숙2·동시개선0·custody/terminal미확정55이다. 실제 검증·배포·단위 모델 수치·잔여 결손은 [최신 owning review](../audit-reports/2026-09-18-low-price-distinct-economic-review.md)를 따른다. H1–H4 전 조합 인과 분석을 추가 반복하지 않고 native 전체 calibration grid의 distinct1개 선택과 다리별 경제성/노출 진단으로 분석 깊이를 제한했다. 모델이 설명하지 못하는 carry terminal·실제 partial fill과 joint 입력은 null/gap으로 명시했다.
+
+
+## 13. 재승인된 carry·선택 목적 후속 구현
+
+사용자는0건의 경제성 결손 보완·반복 리뷰/수정·검증과 완료 후 commit/push·배포·장후 결과 갱신을 재승인했다. [carry·공동 목적 후속 review](../audit-reports/2026-09-18-low-price-carry-joint-economic-followup.md)가 후속 구현·수치를 소유한다. 기존 일별 순익1차 순위는 이미 존재했으며 EV 중심이라는 대화 설명을 정정한다. calibration에서 EV·일별 순익 동시 개선 후보를 우선 고정하고, 명시적 original-target-continuation CF에서 carry 종료와 realization-date cashflow를 비교한다. native 실제 custody 청산을 합성하지 않으며 CF 모델은 live promotion/policy writer에 연결되지 않는다. 기존 native 모델의0건과 가정이 다른 CF 모델의 결과를 별도로 보고하고 미사용 미래·실제/joint acceptance는 OPEN이다.

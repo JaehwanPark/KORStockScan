@@ -9,6 +9,7 @@ machine, or mutate runtime policy.
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 from copy import deepcopy
 import hashlib
 import json
@@ -64,6 +65,10 @@ from src.engine.monitoring.low_price_two_leg_entry_spot_research import (
     select_profile_spot,
     day_replay_scope,
     _advance_candidate_day,
+    _advance_carried_target_day,
+    replay_contract,
+    CARRY_TARGET_REPLAY_CONTRACT,
+    CANDIDATE_SELECTION_OBJECTIVE,
 )
 from src.trading.low_price_two_leg.profiles import (
     PROFILES as LIVE_PROFILES,
@@ -920,6 +925,7 @@ def _valid_profile_selection(result, profile, contexts, calibration_days):
     if (
         result.get("profile_id") != profile.profile_id
         or result.get("economic_evaluation_version") != ECONOMIC_EVALUATION_VERSION
+        or result.get("candidate_selection_objective") != CANDIDATE_SELECTION_OBJECTIVE
         or result.get("symbol") != profile.symbol
         or result.get("name") != profile.name
         or result.get("session") != profile.session
@@ -965,7 +971,7 @@ def _valid_profile_selection(result, profile, contexts, calibration_days):
         ):
             outcome = (result.get(owner) or {}).get(stage) or {}
             if (
-                outcome.get("economic_replay_contract") != ECONOMIC_REPLAY_CONTRACT
+                outcome.get("economic_replay_contract") != replay_contract()
                 or outcome.get("metric_contract") != ECONOMIC_METRIC_CONTRACT
                 or outcome.get("policy_identity") != policy_identity(result[owner]["parameters"])
                 or outcome.get("cost_pct") != COST_PCT
@@ -1356,7 +1362,9 @@ def _select_profile_checkpoint(
             pass
     if stats is not None:
         stats["miss"] = stats.get("miss", 0) + 1
-    if cache_dir is None or contract is None:
+    if cache_dir is None or contract is None or replay_contract() == CARRY_TARGET_REPLAY_CONTRACT:
+        # Native day checkpoints encode mark-only HELD transitions. Keep the
+        # CF model in its own profile checkpoint; do not mix state semantics.
         result = select_profile_spot(
             profile,
             contexts,
@@ -3372,7 +3380,8 @@ def reusable_report(path: Path, *, target_date: date, fingerprint: str) -> dict 
 
 
 def build_existing_logic_review(previous: dict, *, source_cache_dir: Path,
-                                target_date: date, checkpoint_dir: Path) -> dict:
+                                target_date: date, checkpoint_dir: Path,
+                                carry_target_continuation: bool = False) -> dict:
     """Re-evaluate only the declared existing-logic lane from cached sources.
 
     This successor is diagnostic: it cannot publish a policy or register a seed.
@@ -3394,6 +3403,15 @@ def build_existing_logic_review(previous: dict, *, source_cache_dir: Path,
         raise ResearchError("existing_logic_review_scope_outside_initial_64_profiles")
     dates = clean_baseline_trading_dates(target_date)
     manifest = {
+        "review_semantics_version": "carry_cashflow_joint_selection_v1",
+        "economic_replay_contract": (CARRY_TARGET_REPLAY_CONTRACT if carry_target_continuation
+                                     else ECONOMIC_REPLAY_CONTRACT),
+        "carry_target_continuation_assumed": carry_target_continuation,
+        "carry_exit_is_actual_broker_evidence": False,
+        "carry_target_assumption": ("original_target_available_at_next_regular_open_no_queue_or_recovery_proof"
+                                    if carry_target_continuation else "native_mark_only_custody"),
+        "live_promotion_from_carry_model_forbidden": True,
+        "candidate_selection_objective": CANDIDATE_SELECTION_OBJECTIVE,
         "target_date": str(target_date), "selected_profiles": keys,
         "maximum_distinct_challengers_per_profile": 1,
         "economic_evaluation_version": ECONOMIC_EVALUATION_VERSION,
@@ -3440,7 +3458,10 @@ def build_existing_logic_review(previous: dict, *, source_cache_dir: Path,
                            spot.entry_valid_completed_bars, spot.target_ticks),
             "existing_symbol_logic_improvement",
         )
-        contract = {"evaluation_version": ECONOMIC_EVALUATION_VERSION,
+        contract = {"review_semantics_version": manifest["review_semantics_version"],
+                    "economic_replay_contract": manifest["economic_replay_contract"],
+                    "candidate_selection_objective": CANDIDATE_SELECTION_OBJECTIVE,
+                    "evaluation_version": ECONOMIC_EVALUATION_VERSION,
                     "implementation_sha256": implementation_sha256,
                     "source_sha256": meta["source_content_sha256"],
                     "dates": [str(day) for day in dates],
@@ -3448,10 +3469,12 @@ def build_existing_logic_review(previous: dict, *, source_cache_dir: Path,
                     "baseline_policy_hash": old.get("baseline_policy_hash"),
                     "grid": [item.public() for item in candidate_grid(profile)],
                     "cost_contract": canonical_cost_contract()}
-        result = _select_profile_checkpoint(
-            profile, contexts, calibration_days=len(dates) - HOLDOUT_DAYS,
-            cache_dir=checkpoint_dir, contract=contract, stats=stats,
-        )
+        with (day_replay_scope(_advance_carried_target_day)
+              if carry_target_continuation else nullcontext()):
+            result = _select_profile_checkpoint(
+                profile, contexts, calibration_days=len(dates) - HOLDOUT_DAYS,
+                cache_dir=checkpoint_dir, contract=contract, stats=stats,
+            )
         result["baseline_policy_source"] = old.get("baseline_policy_source")
         result["baseline_policy_hash"] = old.get("baseline_policy_hash")
         challenger = result.get("research_challenger")
@@ -3481,7 +3504,7 @@ def build_existing_logic_review(previous: dict, *, source_cache_dir: Path,
             {"completed_profiles": len(rows), "total_profiles": len(keys), "last_profile": key}, sort_keys=True))
     from collections import Counter
     return {
-        "schema": "low_price_existing_logic_full_comparison_v2",
+        "schema": "low_price_existing_logic_full_comparison_v3",
         **manifest, "cost_contract": canonical_cost_contract(),
         "profile_count": len(rows), "profile_results": rows,
         "status_counts": dict(Counter(row["status"] for row in rows.values())),
@@ -3496,6 +3519,8 @@ def build_existing_logic_review(previous: dict, *, source_cache_dir: Path,
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--review-carry-target-continuation", action="store_true",
+                        help="Research-only original target continuation proxy; requires cached review mode.")
     parser.add_argument("--target-date")
     parser.add_argument("--start-date")
     parser.add_argument("--end-date")
@@ -3532,6 +3557,8 @@ def main(argv: list[str] | None = None) -> int:
     expected_trading_day_count = len(clean_baseline_trading_dates(end_date))
     if args.notify and not args.write:
         raise ValueError("telegram_notification_requires_written_report")
+    if args.review_carry_target_continuation and not args.review_existing_logic_from:
+        raise ValueError("carry_target_continuation_requires_cached_review_mode")
     if args.review_existing_logic_from:
         if args.notify or args.output_dir.resolve() == OUTPUT_DIR.resolve():
             raise ValueError("existing_logic_review_requires_separate_output_no_notification")
@@ -3542,6 +3569,7 @@ def main(argv: list[str] | None = None) -> int:
         review = build_existing_logic_review(
             previous, source_cache_dir=args.source_cache_dir, target_date=target_date,
             checkpoint_dir=args.output_dir / "checkpoints",
+            carry_target_continuation=args.review_carry_target_continuation,
         )
         review["source_report"] = str(args.review_existing_logic_from.resolve())
         with args.review_existing_logic_from.open("rb") as handle:

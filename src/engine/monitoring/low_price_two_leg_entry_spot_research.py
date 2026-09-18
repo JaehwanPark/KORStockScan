@@ -39,6 +39,8 @@ from src.utils.constants import DATA_DIR
 
 REPORT_SCHEMA = "low_price_two_leg_entry_spot_research_v4"
 ECONOMIC_REPLAY_CONTRACT = "low_price_two_leg_continuous_custody_economics_v1"
+CARRY_TARGET_REPLAY_CONTRACT = "low_price_original_target_continuation_price_touch_cf_v1"
+CANDIDATE_SELECTION_OBJECTIVE = "calibration_joint_ev_daily_net_preference_then_daily_net_robust_ev"
 ECONOMIC_EVALUATION_VERSION = "distinct_terminal_completed_notional_v2"
 ECONOMIC_METRIC_CONTRACT = {
     "version": ECONOMIC_EVALUATION_VERSION,
@@ -80,7 +82,9 @@ def day_replay_scope(transition):
         yield
     finally:
         try:
-            transition.flush()
+            flush = getattr(transition, "flush", None)
+            if callable(flush):
+                flush()
         finally:
             _DAY_REPLAY.reset(token)
 
@@ -943,6 +947,103 @@ def _advance_candidate_day(candidate, context, carried):
     return None, episode
 
 
+def replay_contract() -> str:
+    return getattr(_DAY_REPLAY.get(), "replay_contract", ECONOMIC_REPLAY_CONTRACT)
+
+
+def _advance_carried_target_day(candidate, context, carried):
+    """Research CF only: retain the original target; never model a forced exit.
+
+    A carried limit target is assumed available at the next regular open. This
+    does not attest broker recovery, queue/quantity execution or actual custody.
+    The closing day remains blocked for entry, conservatively for both arms.
+    """
+    if carried is None:
+        return _advance_candidate_day(candidate, context, None)
+    cached = getattr(context, "_carry_regular_prefix", None)
+    if cached is None or cached[0] is not context.bars:
+        regular = tuple(bar for bar in context.bars
+                        if bar.timestamp.date() == context.trade_date
+                        and time(9, 0) <= bar.timestamp.time() < time(15, 30))
+        prefix = []
+        if regular and regular[0].timestamp.time() == time(9, 0):
+            for bar in regular:
+                if prefix and bar.timestamp - prefix[-1].timestamp != timedelta(minutes=1):
+                    break
+                prefix.append(bar)
+        cached = context._carry_regular_prefix = (context.bars, tuple(prefix))
+    bars = cached[1]
+    for leg in carried["legs"]:
+        if leg["status"] != "HELD":
+            continue
+        price, target = int(leg["entry_price"]), int(leg["target_price"])
+        if target != move_price_by_ticks(price, candidate.target_ticks):
+            raise ResearchError("carry_original_target_binding_invalid")
+        exit_bar = next((bar for bar in bars if bar.high_price >= target), None)
+        observed = tuple(bar for bar in bars
+                         if exit_bar is None or bar.timestamp <= exit_bar.timestamp)
+        if observed:
+            leg["holding_completed_bars"] = int(leg.get("holding_completed_bars", 0)) + len(observed)
+            leg["max_adverse_excursion_pct"] = min(
+                float(leg.get("max_adverse_excursion_pct", 0)),
+                (min(bar.low_price for bar in observed) / price - 1) * 100)
+            leg["max_favorable_excursion_pct"] = max(
+                float(leg.get("max_favorable_excursion_pct", 0)),
+                (max(bar.high_price for bar in observed) / price - 1) * 100)
+            leg["mark_price"] = observed[-1].close_price
+            leg["active_unrealized_pct"] = round((observed[-1].close_price / price - 1) * 100 - COST_PCT, 6)
+        if exit_bar is not None:
+            leg.update(status="COMPLETE", target_at=exit_bar.timestamp.isoformat(),
+                       net_profit_pct=round((target / price - 1) * 100 - COST_PCT, 6),
+                       carry_exit_model=CARRY_TARGET_REPLAY_CONTRACT)
+            leg.pop("active_unrealized_pct", None)
+            leg.pop("mark_price", None)
+    return (carried if any(leg["status"] == "HELD" for leg in carried["legs"]) else None), None
+
+
+_advance_carried_target_day.replay_contract = CARRY_TARGET_REPLAY_CONTRACT
+
+
+def _carry_window_cashflow(result, events, dates):
+    """Credit only pre-window entries realized inside this sealed window."""
+    wanted = {day.isoformat() for day in dates}
+    credits = [dict(entry_date=day.isoformat(), signal_at=episode["signal_at"],
+                    leg_index=index, leg=deepcopy(leg))
+               for day, episode in events if day < min(dates)
+               for index, leg in enumerate(episode["legs"])
+               if leg["status"] == "COMPLETE"
+               and leg["target_at"][:10] in wanted]
+    profit = sum(item["leg"]["entry_price"] * item["leg"]["net_profit_pct"] / 100
+                 for item in credits)
+    notional = sum(item["leg"]["entry_price"] for item in credits)
+    result["carry_in_completed_legs"] = len(credits)
+    result["carry_in_realized_net_profit_krw"] = round(profit, 2)
+    result["carry_in_completed_notional_krw"] = notional
+    result["completed_entry_cohort_legs"] = result["completed_legs"]
+    result["completed_legs"] += len(credits)
+    result["filled_legs"] += len(credits)
+    result["completed_notional_krw"] += notional
+    entry_profit = sum(leg["entry_price"] * leg["net_profit_pct"] / 100
+                       for day, episode in events if day.isoformat() in wanted
+                       for leg in episode["legs"] if leg["status"] == "COMPLETE")
+    result["realized_net_profit_krw"] = round(entry_profit + profit, 2)
+    result["realized_net_profit_krw_per_episode"] = (
+        round(entry_profit / result["signal_episodes"], 2) if result["signal_episodes"] else None)
+    result["notional_weighted_ev_pct"] = (
+        round((entry_profit + profit) / result["completed_notional_krw"] * 100, 6)
+        if result["completed_notional_krw"] else None)
+    result["held_leg_rate_per_filled_leg"] = (
+        round(result["held_legs"] / result["filled_legs"], 6) if result["filled_legs"] else 0)
+    for index, row in enumerate(result["leg_economics"]):
+        extra = [item["leg"] for item in credits if item["leg_index"] == index]
+        row["carry_in_completed_legs"] = len(extra)
+        row["completed_legs"] += len(extra)
+        row["realized_net_profit_krw"] = round(row["realized_net_profit_krw"] + sum(
+            leg["entry_price"] * leg["net_profit_pct"] / 100 for leg in extra), 2)
+    result["window_economic_attribution"] = "realization_date_cashflow_with_entry_cohort_attempts"
+    result["carry_in_completed_evidence"] = credits
+
+
 def _evaluate_candidate_windows(
     candidate: SpotCandidate,
     contexts: dict[date, DayContext],
@@ -989,21 +1090,24 @@ def _evaluate_candidate_windows(
             # Restore the alias between an original HELD event and its evolving
             # custody. Serialized checkpoints cannot preserve object identity.
             if previous is not None:
-                if carried is not previous:
-                    previous.clear()
-                    previous.update(carried)
-                carried = previous
+                if carried is not None:
+                    if carried is not previous:
+                        previous.clear()
+                        previous.update(carried)
+                    carried = previous
             elif carried is not None:
                 episode = carried
-        if episode is not None and trade_date in requested_union:
+        if episode is not None:
             events.append((trade_date, episode))
         for index in boundaries.get(trade_date, ()):
             dates = windows[index]
             episodes = [episode for day, episode in events if day in requested[index]]
             result = _summary(episodes)
+            if replay_contract() == CARRY_TARGET_REPLAY_CONTRACT:
+                _carry_window_cashflow(result, events, dates)
             result.update(
                 {
-                    "economic_replay_contract": ECONOMIC_REPLAY_CONTRACT,
+                    "economic_replay_contract": replay_contract(),
                     "metric_contract": ECONOMIC_METRIC_CONTRACT,
                     "policy_identity": policy_identity(candidate.public()),
                     "source_valid_observation_days": len(dates),
@@ -1104,7 +1208,7 @@ def paired_economics(current: dict, candidate: dict) -> dict:
         and current.get("cost_pct") == candidate.get("cost_pct") == COST_PCT
         and current.get("economic_replay_contract")
         == candidate.get("economic_replay_contract")
-        == ECONOMIC_REPLAY_CONTRACT
+        in {ECONOMIC_REPLAY_CONTRACT, CARRY_TARGET_REPLAY_CONTRACT}
     )
     current_net = current.get(
         "cost_adjusted_net_profit_krw_per_source_valid_observation_day"
@@ -1162,7 +1266,8 @@ def paired_economics(current: dict, candidate: dict) -> dict:
     )
     return {
         "economic_evaluation_version": ECONOMIC_EVALUATION_VERSION,
-        "economic_replay_contract": ECONOMIC_REPLAY_CONTRACT,
+        "economic_replay_contract": current.get("economic_replay_contract"),
+        "live_replay_supported": current.get("economic_replay_contract") == ECONOMIC_REPLAY_CONTRACT,
         "comparable_observation_window": valid,
         "is_distinct_policy": distinct,
         "comparable_terminal_economics": resolved,
@@ -1346,7 +1451,10 @@ def select_profile_spot(
     second_half = calibration[calibration_days // 2 :]
     ranked_heap = []
     distinct_heap = []
+    joint_heap = []
     baseline = baseline_candidate(profile)
+    baseline_calibration = _evaluate_candidate_windows(baseline, contexts, [calibration])[0]
+    joint_ready_count = 0
     distinct_ready_count = 0
     diagnostic_heap = []
     calibration_ready_count = 0
@@ -1416,6 +1524,11 @@ def select_profile_spot(
                  int(full["completed_legs"]), candidate, evidence),
                 ordinal, 1,
             )
+            if paired_economics(baseline_calibration, full)["economic_superiority_confirmed"]:
+                joint_ready_count += 1
+                _retain_calibration_candidate(
+                    joint_heap, (score, float(full["notional_weighted_ev_pct"]),
+                                 int(full["completed_legs"]), candidate, evidence), ordinal, 1)
 
     ranked = [
         item for _, item in sorted(ranked_heap, key=lambda row: row[0], reverse=True)
@@ -1446,6 +1559,9 @@ def select_profile_spot(
             },
             "grid_candidate_count": len(grid),
             "economic_evaluation_version": ECONOMIC_EVALUATION_VERSION,
+            "candidate_selection_objective": CANDIDATE_SELECTION_OBJECTIVE,
+            "calibration_joint_gain_candidate_count": 0,
+            "challenger_selection_basis": "no_distinct_eligible_candidate",
             "distinct_calibration_eligible_policy_count": 0,
             "research_challenger": None,
             "research_comparison": None,
@@ -1468,7 +1584,8 @@ def select_profile_spot(
         }
     global_winner = ranked[0]
     incumbent_won = global_winner[3] == baseline
-    challenger_item = distinct_heap[0][1] if distinct_heap else None
+    challenger_item = (joint_heap[0][1] if joint_heap else
+                       distinct_heap[0][1] if distinct_heap else None)
     score, _, _, candidate, calibration_evidence = challenger_item or global_winner
     candidate_views = _evaluate_candidate_windows(
         candidate, contexts, [holdout, dates], include_episodes=True
@@ -1515,7 +1632,7 @@ def select_profile_spot(
     scope = {"profile_id": profile.profile_id, "symbol": profile.symbol,
              "session": profile.session, "route": "SOR", "stage": "initial_two_leg_entry",
              "quantity_contract": "unit_per_leg_model_not_actual_order_quantity",
-             "replay_contract": ECONOMIC_REPLAY_CONTRACT, "cost_pct": COST_PCT}
+             "replay_contract": replay_contract(), "cost_pct": COST_PCT}
     return {
         "profile_id": profile.profile_id,
         "symbol": profile.symbol,
@@ -1531,6 +1648,10 @@ def select_profile_spot(
         },
         "grid_candidate_count": len(grid),
         "economic_evaluation_version": ECONOMIC_EVALUATION_VERSION,
+        "candidate_selection_objective": CANDIDATE_SELECTION_OBJECTIVE,
+        "calibration_joint_gain_candidate_count": joint_ready_count,
+        "challenger_selection_basis": ("calibration_joint_ev_daily_net_gain" if joint_heap
+                                      else "best_distinct_diagnostic_no_calibration_joint_gain"),
         "distinct_calibration_eligible_policy_count": distinct_ready_count,
         "incumbent_retained": selected_parameters == baseline.public(),
         "policy_scope": scope,
