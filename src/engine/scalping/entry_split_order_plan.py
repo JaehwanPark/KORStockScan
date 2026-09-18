@@ -4595,7 +4595,7 @@ def _entry_operating_scope(seed):
     snapshot=dict(context.get("policy_snapshot") or {})
     snapshot["environment"]={k:v for k,v in snapshot.get("environment",{}).items()
         if not k.startswith(("KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_","KORSTOCKSCAN_ENTRY_EXECUTION_SIZING_POLICY_"))}
-    return _canonical_sha256({"exit_cohort":context.get("exit_cohort_digest") or replay_policy_cohort_digest(snapshot),
+    return _canonical_sha256({"broker_route":context.get("broker_route"),"exit_cohort":context.get("exit_cohort_digest") or replay_policy_cohort_digest(snapshot),
         "cost_version":context.get("cost_policy_version"),"model":"native_full_depth_no_passive_queue_v1",
         "venue":seed.get("effective_venue"),"session":seed.get("session_bucket"),
         "order_types":sorted({x.get("order_type_code") for x in seed.get("legs",[])}),

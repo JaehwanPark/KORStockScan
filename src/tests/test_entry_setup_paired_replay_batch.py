@@ -103,7 +103,7 @@ def operating_test_context():
     from src.engine.scalping.strategy_owner_replay import ENTRY_OPERATING_SCHEMA, entry_operating_model_identity
     from src.engine.lifecycle.avg_down_policy_replay import snapshot_version
     snapshot = dict(rules={}, environment={}, implementation={})
-    return dict(schema=ENTRY_OPERATING_SCHEMA,policy_snapshot=snapshot,initial_policy_state={},
+    return dict(schema=ENTRY_OPERATING_SCHEMA,broker_route="KRX",policy_snapshot=snapshot,initial_policy_state={},
         exit_policy_version=snapshot_version(snapshot),model_implementation_sha256=entry_operating_model_identity(),
         budget_krw=120000.,cost_rate=.0023,cost_policy_version="trade_profit_net_realized_pnl:rate=0.0023",
         cost_provenance="frozen_loaded_trade_profit_configuration_not_broker_settlement",**compact.AUTHORITY)

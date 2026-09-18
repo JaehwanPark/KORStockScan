@@ -11818,6 +11818,11 @@ def _observe_entry_economics_before_ai(stock, code, ws_data, *, exact_payload,
         venue = identity["effective_venue"]
         if venue not in {"KRX", "NXT"}:
             raise ValueError("unsupported_pre_ai_execution_venue:" + str(venue))
+        broker_route=exact_payload.get("broker_route")
+        if not broker_route:
+            raise ValueError("exact_broker_route_missing")
+        if broker_route != venue:
+            raise ValueError("unsupported_pre_ai_broker_route_quote_venue_scope:"+str(broker_route)+"/"+str(venue))
         current = _safe_int((exact_payload.get("current") or {}).get("price"), 0)
         if current <= 0:
             raise ValueError("exact_reference_price_missing")
@@ -11865,7 +11870,7 @@ def _observe_entry_economics_before_ai(stock, code, ws_data, *, exact_payload,
             raise ValueError(split.get("entry_split_order_skip_reason") or "owner_split_plan_missing")
         orders = _decorate_entry_split_leg_ttls(orders, snapshot, "SCALPING")
         timeout = _resolve_buy_order_timeout_sec(snapshot, "SCALPING")
-        operating.update(order_leg_ttl_sec=[o.get("split_leg_ttl_sec") or timeout for o in orders],
+        operating.update(broker_route=broker_route,order_leg_ttl_sec=[o.get("split_leg_ttl_sec") or timeout for o in orders],
             order_bundle_hard_ttl_sec=max(o.get("split_bundle_hard_ttl_sec") or timeout for o in orders),
             order_timeout_owner="sniper_state_handlers._resolve_buy_order_timeout_sec/_decorate_entry_split_leg_ttls")
         from src.engine.scalping.entry_split_order_plan import _context_bucket
@@ -31377,6 +31382,7 @@ def _machine_primary_entry_provenance_fields(source: dict | None) -> dict:
         "entry_source_invalid_primary_category",
         "entry_source_invalid_primary_basis",
         "scanner_promotion_id",
+        "ai_trace_broker_route",
         "ai_prompt_version",
         "ai_prompt_sha256",
         "ai_decision_trace_id",

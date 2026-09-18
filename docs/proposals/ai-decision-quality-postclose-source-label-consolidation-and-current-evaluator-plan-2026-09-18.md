@@ -208,3 +208,5 @@ ADQ6 결과 closure는 승인된 bounded regeneration의 exact date/generation/�
 | unsupported scope | venue/session·partial/no-fill·uncalled downstream AI·겹친 자본 등의 모델 지원 계약 밖. null과 정확 owner/closure; 단순 표본 대기가 아니다. |
 | 자연 실증 대기 | 배포 코드의 지원 기회 관측/actual owner ledger/완료 비용 receipt 유입, 선행 독립 actual 모델 표본 축적, 이후 별도 후보 holdout,9/21 정규 PREOPEN/PID·자연 적용·적용 버전별 rolling/cumulative 완료 손익. 미래 원천 회귀가 PASS인 지원 scope에만 적용한다. |
 | valid no-edge | 모든 필수 source/model/coverage/independent holdout 계약이 유효한 비교에서 양수 조건 불충족. 모델 미검증 또는 null을 no-edge로 바꾸지 않는다. |
+
+후속 route 대사: 자연 KRX quote-view11의 `broker_route`는 SOR, 통합 애프터마켓10의 route는 NXT이다. 현행 직접 KRX 승격 cohort/단일 venue operating model을 유지하며 quote venue와 실제 broker route를 합치지 않는다. 미래 producer는 exact broker route를 요구하고 route/quote venue 불일치를 명시 unsupported로 기록한다. Frozen model scope에도 broker route를 포함한다. SOR routing/통합 venue 계약 확대는 기존 operating owner의 별도 source/model closure이며 단순 자연 표본 대기가 아니다. 직접 KRX/NXT 지원 입력의 producer·계산 회귀 통과를 현재 모든 자연 route의 승격 가능성으로 확대하지 않는다.

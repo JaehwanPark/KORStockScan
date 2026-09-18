@@ -146,6 +146,8 @@ def owner_operating_arm(replay, row):
     arm = (replay.get("operating_arms") or {}).get(split.QUANTITY_LEG_FOUR_ARM_IDS[0]) or {}
     if (
         context.get("schema") != ENTRY_OPERATING_SCHEMA
+        or context.get("broker_route") != row.get("broker_route")
+        or context.get("broker_route") != seed.get("effective_venue")
         or context.get("sha256") != owner_digest({k: v for k, v in context.items() if k != "sha256"})
         or context.get("model_implementation_sha256") != entry_operating_model_identity()
         or arm.get("schema") != ENTRY_OPERATING_SCHEMA
@@ -830,6 +832,8 @@ def primary_input_blocker(row, model):
     reason = row.get("exclusion_reason")
     if reason:
         return ("unsupported_scope" if reason == "natural_contract_invalid" else "source_gap", reason)
+    if row.get("broker_route") != row.get("effective_venue"):
+        return "unsupported_scope", "broker_route_quote_venue_scope_unsupported"
     replay = row.get("owner_replay") or {}
     arm = owner_operating_arm(replay, row)
     if not arm:
@@ -935,19 +939,20 @@ def run(
                 else None
             )
         label_dependency = str(root / "report/ai_decision_outcome_labels" / f"ai_decision_outcome_labels_{day}.json")
+        split_dependency = str(root / "report/entry_split_order_plan" / f"entry_split_order_plan_{day}.json")
         # An additive label contract revision does not require rereading large
         # frozen raw inputs. Changed diagnostic/economic paths still rebuild.
         if valid(projection):
             prior = projection.get("dependency_signatures") or {}
             if prior.get(label_dependency) != signatures.get(label_dependency) and all(
-                    prior.get(k) == v for k, v in signatures.items() if k != label_dependency):
+                    prior.get(k) == v for k, v in signatures.items() if k not in (label_dependency,split_dependency)):
                 label_report = read(Path(label_dependency))
                 label_index = {x.get("decision_trace_id"): x for x in label_report.get("labels") or [] if isinstance(x, dict)}
                 if label_report.get("target_date") == day and all(
                         row.get("entry_quality_path") == (((label_index.get(row.get("evaluation_key")) or {}).get("horizon_metrics") or {}).get("10m") or {}).get("entry_quality_path", {})
                         for row in projection.get("rows") or []):
                     write(path.parent / "compact_source_generations" / (projection["artifact_content_sha256"] + ".json"), projection)
-                    projection = sealed({**projection, "dependency_signatures": signatures,
+                    projection = sealed({**projection, "dependency_signatures": {**prior,label_dependency:signatures[label_dependency]},
                                          "source_label_report_sha256": digest(label_report)})
                     write(projection_path, projection)
         # Code-only source contract upgrades and bounded owner/model refreshes

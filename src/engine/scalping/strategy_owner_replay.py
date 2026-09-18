@@ -1723,7 +1723,9 @@ def freeze_entry_operating_context(handlers, stock, sizing_context, *, now_ts):
         if not handlers.is_default_position_tag("SCALPING", stock.get("position_tag")):
             return None
         initial_exit = initial_scalp_preset_exit_fields(stock, rules=SimpleNamespace(**snapshot["rules"]))
+        decision_source=stock.get("last_watching_ai_machine_primary_fields") or {}
         value = dict(schema=ENTRY_OPERATING_SCHEMA,
+            broker_route=decision_source.get("ai_trace_broker_route"),
             initial_fill_exit_contract_version="main_scalp_preset_initial_fill_v1",
             initial_fill_exit_owner="sniper_execution_receipts.initial_scalp_preset_exit_fields",
             initial_fill_exit_state=initial_exit,
@@ -1772,6 +1774,9 @@ def replay_operating_entry_arm(seed, arm, depth_rows, *, executor=None, trade_ro
             or _timestamp(context['frozen_at'], seed['source_date']) > _timestamp(seed['observed_at'], seed['source_date'])
             or not _entry_seed_valid(seed) or arm.get('requested_qty') != seed['total_qty']):
             raise ValueError('frozen_operating_contract_or_quantity_scope_invalid')
+        if context.get('broker_route') not in (None, seed['effective_venue']):
+            result.update(status='unsupported_scope',blocker='operating_broker_route_quote_venue_scope_unsupported')
+            return {**result,'sha256':economics_digest(result)}
         started = _timestamp(seed['observed_at'], seed['source_date']).timestamp()
         fills = arm.get('modeled_fill_events') or []
         qty = arm.get('modeled_filled_qty')
