@@ -9273,18 +9273,15 @@ class GPTSniperEngine:
                 from src.trading.market.micro_confirmation import (
                     load_live_dynamic_confirmation_source,
                 )
-                from src.trading.market.entry_adverse_flow import evaluate_snapshot
+                from src.trading.market.entry_adverse_flow import evaluate_machine_entry_payload
 
                 # Observe before first child adoption too: collection must not
                 # require the policy whose evidence it is meant to produce.
                 cutoff_ms = int(time.time() * 1000)
                 snapshot, snapshot_status = load_live_dynamic_confirmation_source()
                 machine_exact["mechanistic_micro_window"] = (
-                    evaluate_snapshot(
-                        snapshot=snapshot,
-                        symbol=machine_exact["stock_code"],
-                        route=machine_exact["effective_venue"],
-                        cutoff_ms=cutoff_ms,
+                    evaluate_machine_entry_payload(
+                        snapshot=snapshot, payload=machine_exact, cutoff_ms=cutoff_ms,
                     )
                     if snapshot is not None
                     else {
@@ -11186,7 +11183,7 @@ class GPTSniperEngine:
             resolve_entry_candle_venue,
         )
         from src.trading.market.micro_confirmation import load_live_dynamic_confirmation_source
-        from src.trading.market.entry_adverse_flow import evaluate_snapshot
+        from src.trading.market.entry_adverse_flow import evaluate_machine_entry_payload
 
         blocked = {"should_add": False, "reason": "shared_main_rebound_source_unavailable"}
         try:
@@ -11224,7 +11221,7 @@ class GPTSniperEngine:
             exact.update(stock_code=stock_code, effective_venue=venue, session_bucket=session)
             snapshot, status = load_live_dynamic_confirmation_source()
             exact["mechanistic_micro_window"] = (
-                evaluate_snapshot(snapshot=snapshot, symbol=stock_code, route=venue,
+                evaluate_machine_entry_payload(snapshot=snapshot, payload=exact,
                     cutoff_ms=int(now_ts * 1000))
                 if snapshot is not None else {"source_quality_status": "source_gap", "reason": status}
             )

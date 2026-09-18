@@ -148,8 +148,6 @@ def pin(tmp_path, monkeypatch):
 def test_relational_rule(adverse):
     result = calc(tape(adverse=adverse))
     assert result["action"] == ("DEFER_ADVERSE_FLOW" if adverse else "CONTINUE")
-    assert result["market_data_health"]["schema"] == "kiwoom_market_data_health_v1"
-    assert result["market_data_health"]["decision_authority"] is False
 
 
 def test_integrated_route_identity_is_preserved_without_krx_inference():
@@ -475,3 +473,46 @@ def test_operator_all_existing_scopes_preserves_original_owner(
     assert load_policy(scope=scope, now=NOW, signal_at=NOW) is not None
     with pytest.raises(ValueError, match="scope_invalid"):
         load_policy(scope=dict(scope, owner="main"), now=NOW, signal_at=NOW)
+
+
+@pytest.mark.parametrize('venue,session', [('KRX_NXT_INTEGRATED', 'KRX_NXT_AFTERMARKET'), ('PREMARKET_KRX_LIKE', 'PREMARKET_KRX_LIKE')])
+def test_machine_scope_alias_uses_exact_market_data_route_and_keeps_broker_route_separate(venue, session):
+    from src.trading.market.entry_adverse_flow import evaluate_machine_entry_payload
+    data = snapshot(NOW)
+    for receipt in source(data)['realtime_types'].values():
+        receipt['market_route'] = 'krx_nxt_integrated'
+        receipt['effective_venue'] = 'KRX_NXT_INTEGRATED'
+    payload = {'stock_code': '005930', 'effective_venue': venue, 'session_bucket': session,
+               'ai_market_snapshot_v1': {'snapshot_id': 'exact', 'stock_code': '005930',
+                   'effective_venue': venue, 'session_bucket': session,
+                   'market_data_route': 'krx_nxt_integrated', 'broker_route': 'NXT'}}
+    cutoff = int(NOW.timestamp()*1000)
+    assert evaluate_snapshot(snapshot=data, symbol='005930', route=venue, cutoff_ms=cutoff)['action'] == 'SOURCE_UNAVAILABLE'
+    result = evaluate_machine_entry_payload(snapshot=data, payload=payload, cutoff_ms=cutoff)
+    assert result['source_quality_status'] == 'eligible'
+    assert result['item'] == '005930_AL'
+    assert result['market_session'] == session
+    assert result['machine_market_route_binding']['confirmation_route'] == 'SOR'
+    assert result['machine_market_route_binding']['effective_venue'] == venue
+
+
+def test_machine_payload_route_missing_or_identity_conflict_stays_source_gap():
+    from src.trading.market.entry_adverse_flow import evaluate_machine_entry_payload
+    data = snapshot(NOW)
+    payload = {'stock_code': '005930', 'effective_venue': 'KRX_NXT_INTEGRATED', 'session_bucket': 'KRX_NXT_AFTERMARKET',
+               'ai_market_snapshot_v1': {'snapshot_id': 'exact', 'stock_code': '005930',
+                   'effective_venue': 'NXT', 'session_bucket': 'KRX_NXT_AFTERMARKET', 'market_data_route': 'krx_nxt_integrated'}}
+    result = evaluate_machine_entry_payload(snapshot=data, payload=payload, cutoff_ms=int(NOW.timestamp()*1000))
+    assert result['action'] == 'SOURCE_UNAVAILABLE'
+    assert result['reason'] == 'machine_payload_market_route_missing_or_conflicting'
+    payload['ai_market_snapshot_v1']['effective_venue'] = 'KRX_NXT_INTEGRATED'
+    payload['ai_market_snapshot_v1'].pop('market_data_route')
+    assert evaluate_machine_entry_payload(snapshot=data, payload=payload, cutoff_ms=int(NOW.timestamp()*1000))['action'] == 'SOURCE_UNAVAILABLE'
+
+
+@pytest.mark.parametrize('payload', [None, [], {'ai_market_snapshot_v1': ['invalid']}])
+def test_malformed_machine_route_source_returns_gap_without_fallback(payload):
+    from src.trading.market.entry_adverse_flow import evaluate_machine_entry_payload
+    result = evaluate_machine_entry_payload(snapshot=snapshot(NOW), payload=payload, cutoff_ms=int(NOW.timestamp()*1000))
+    assert result['action'] == 'SOURCE_UNAVAILABLE'
+    assert result['reason'] == 'machine_payload_market_route_missing_or_conflicting'

@@ -21061,6 +21061,39 @@ def merge_scalping_pyramid_quality_calibration_candidate(
     return report
 
 
+def refresh_machine_evaluation_only(target_date: str) -> dict:
+    """Refresh one diagnostic handoff without replay, calibration or policy writes."""
+    from src.engine.scalping.microstructure_reaction_context import microstructure_summary_contract
+
+    path = report_path_for_date(target_date)
+    generation = path.stat()
+    report = _read_json_dict(path)
+    source_path = REPORT_DIR / "microstructure_reaction_context" / f"microstructure_reaction_context_{target_date}.json"
+    source = _read_json_dict(source_path)
+    if report.get("date") != target_date or source.get("date") != target_date:
+        raise ValueError("machine_daily_handoff_exact_date_missing")
+    summary = microstructure_summary_contract(source.get("summary") or {})
+    bundle = report.setdefault("calibration_source_bundle", {})
+    bundle.setdefault("source_metrics", {})["microstructure_reaction_context"] = {
+        "available": True, "decision_authority": "postclose_diagnostic_only", **summary,
+    }
+    bundle.setdefault("sources", {})["microstructure_reaction_context"] = {
+        "path": str(source_path), "exists": True, "loaded": True,
+        "operating_status": "diagnostic_only", "top_keys": list(source),
+    }
+    report["microstructure_evaluation_refreshed_at"] = datetime.now().isoformat()
+    current = path.stat()
+    if (current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns) != (generation.st_dev, generation.st_ino, generation.st_size, generation.st_mtime_ns):
+        raise ValueError("daily_report_changed_during_machine_handoff")
+    temporary = path.with_name(path.name + f".{os.getpid()}.tmp")
+    try:
+        temporary.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return summary
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Build daily threshold cycle report.")
     parser.add_argument(
@@ -21109,7 +21142,12 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Read-only measurement of the exact CLI input path; no report writes or provider calls.",
     )
+    parser.add_argument("--refresh-machine-evaluation-only", action="store_true",
+                        help="Refresh only the existing daily microstructure diagnostic handoff.")
     args = parser.parse_args(argv)
+    if args.refresh_machine_evaluation_only:
+        refresh_machine_evaluation_only(args.target_date)
+        return 0
 
     benchmark_started = time.monotonic()
     if args.calibration_run_phase == "postclose" and not args.benchmark_inputs_only:

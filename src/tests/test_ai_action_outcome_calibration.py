@@ -4280,3 +4280,231 @@ def test_runtime_policy_publication_receipt_requires_exact_source_binding():
     assert calibration._runtime_policy_publication_errors(None, source) == [
         "mechanistic_entry_runtime_policy_not_published"
     ]
+
+
+def _bound_microstructure_case_row(index, *, bundle='a' * 64, action='BLOCK'):
+    from src.engine.ai_prompt_contracts import ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION
+
+    return {
+        'decision_trace_id': f'trace-{index}', 'evaluation_attempt_id': f'attempt-{index}',
+        'scanner_promotion_id': f'promotion-{index}', 'decision_snapshot_id': f'snapshot-{index}',
+        'decision_ts': '2026-09-17T10:00:00+09:00', 'source_date': '2026-09-17',
+        'stock_code': '005930', 'effective_venue': 'KRX_NXT_INTEGRATED',
+        'session_bucket': 'KRX_NXT_AFTERMARKET', 'bundle_sha256': bundle,
+        'machine_action': action,
+        'microstructure_evaluation_binding': {
+            'capture_sha256': 'b' * 64, 'snapshot_identity_matches': True,
+            'venue_session_matches': True, 'bundle_sha256': bundle,
+            'flow_source_quality_status': 'fresh_consistent',
+            'micro_recovery': {'source_usable': True},
+            'reaction_context': {'microstructure_reaction_context_status': 'ok'},
+            'micro_window': {'action': 'SOURCE_UNAVAILABLE', 'source_quality_status': 'source_gap'},
+        },
+        'entry_quality_path': {
+            'status': 'evaluable', 'entry_quality_label': 'CLEAN_FAST_PROFIT',
+            'cadence_complete': True,
+        },
+        'comparison': {'cost_evidence': {
+            'selected_economic_cost_pct': 0.5,
+            'selected_cost_basis': 'executable_estimated_cost_pct',
+            'cost_source_sha256': 'c' * 64, 'missing_cost_imputed': False,
+        }},
+        'outcome_horizon_metrics': {'3m': {'status': 'observed', 'end_return_pct': 1, 'mae_pct': -0.2}},
+        'ai_and_final_guard': {
+            'join_status': 'exact_snapshot_machine_action_join', 'provider_called': True,
+            'prompt_version': ENTRY_MACHINE_AUXILIARY_COMPACT_PROMPT_VERSION,
+            'ai_risk_verdict': 'PASS', 'decision_quality_contract_status': 'pass',
+        },
+    }
+
+
+def test_microstructure_full_denominator_precedes_export_limit_and_keeps_policy_partitions():
+    rows = [_bound_microstructure_case_row(i) for i in range(205)]
+    rows.append(_bound_microstructure_case_row(205, bundle='d' * 64, action='ENTER_NOW'))
+    rows.append(dict(rows[0]))
+    table = calibration.build_machine_decision_case_table(rows)
+    result = table['microstructure_evaluation']
+    assert len(table['rows']) == 200
+    assert table['duplicate_same_action_collapsed_count'] == 1
+    assert result['case_count'] == result['cost_adjusted_outcome_count'] == 206
+    assert result['denominator_preserved'] is True
+    assert result['machine_enter_ai_routing_counts'] == {'PASS': 1}
+    assert len(result['partitions']) == 2
+    assert result['source_binding_counts']['micro_window_source_gap'] == 206
+    assert result['actual_completed_ev_pct'] is None
+    assert result['causal_model_delta_ev_pct'] is None
+    assert all(p['cost_adjusted_3m_endpoint_cf']['mean_net_pct'] == 0.5 for p in result['partitions'])
+
+
+def test_microstructure_cost_identity_cadence_and_conflict_exclusions_are_not_zero_returns():
+    import copy
+
+    rows = [_bound_microstructure_case_row(i) for i in range(6)]
+    rows[1]['comparison']['cost_evidence']['selected_economic_cost_pct'] = None
+    rows[2]['microstructure_evaluation_binding']['venue_session_matches'] = False
+    rows[3]['entry_quality_path']['cadence_complete'] = False
+    conflict = copy.deepcopy(rows[4])
+    conflict['outcome_horizon_metrics']['3m']['end_return_pct'] = -2
+    rows.append(conflict)
+    table = calibration.build_machine_decision_case_table(rows)
+    result = table['microstructure_evaluation']
+    assert result['cost_adjusted_outcome_count'] == 2
+    assert result['exclusion_counts'] == {
+        'full_cost_contract_gap': 1, 'exact_identity_or_source_gap': 1,
+        'mature_cadence_outcome_gap': 1, 'conflicting_exact_attempt': 2,
+    }
+    assert result['denominator_preserved'] is True
+
+
+def test_machine_capture_binding_does_not_invent_venue_or_future_cutoff():
+    from src.engine.scalping.microstructure_reaction_context import bind_machine_microstructure_source
+    from datetime import datetime
+
+    captured = '2026-09-17T10:00:00+09:00'
+    epoch = datetime.fromisoformat(captured).timestamp() * 1000
+    capture = {
+        'captured_at': captured, 'machine_observation_sha256': 'a' * 64,
+        'bundle_sha256': 'b' * 64,
+        'label_context': {'snapshot_id': 's1', 'effective_venue': 'KRX', 'session_bucket': 'KRX_REGULAR'},
+        'source': {'exact_payload': {'ai_market_snapshot_v1': {
+            'snapshot_id': 's1', 'effective_venue': 'NXT', 'session_bucket': 'KRX_REGULAR'},
+            'mechanistic_micro_window': {'cutoff_ms': epoch + 1}}, 'setup_evidence': {}},
+    }
+    binding = bind_machine_microstructure_source(capture)
+    assert binding['venue_session_matches'] is False
+    assert binding['micro_window_cutoff_valid'] is False
+    assert binding['reaction_context'] == {}
+
+
+def test_machine_cost_prerequisite_preserves_valid_source_and_does_not_backdate(monkeypatch, tmp_path):
+    path = tmp_path / 'report/micro_reversion_economic_reference/micro_reversion_economic_reference_2026-09-17.json'
+    path.parent.mkdir(parents=True)
+    path.write_text('original-cost-proof')
+    monkeypatch.setattr(calibration, '_hierarchy_cost_profiles', lambda *a, **k: {'005930': {'verified': True}})
+    receipt = calibration.ensure_machine_economic_reference(data_root=tmp_path, target_date='2026-09-17')
+    assert receipt['status'] == 'existing_verified_sources_preserved'
+    assert path.read_text() == 'original-cost-proof'
+    monkeypatch.setattr(calibration, '_hierarchy_cost_profiles', lambda *a, **k: {})
+    receipt = calibration.ensure_machine_economic_reference(data_root=tmp_path, target_date='2026-06-05')
+    assert receipt['status'] == 'source_gap_historical_official_master_unavailable'
+    assert not (path.parent / 'micro_reversion_economic_reference_2026-06-05.json').exists()
+
+
+def test_capture_population_survives_cost_exclusion_and_collapses_same_capture():
+    from src.engine.scalping.microstructure_reaction_context import summarize_machine_capture_population
+    capture = {
+        'machine_observation_sha256': 'a' * 64, 'bundle_sha256': 'b' * 64,
+        'captured_at': '2026-09-17T10:00:00+09:00',
+        'label_context': {'snapshot_id': 's', 'effective_venue': 'KRX_NXT_INTEGRATED', 'session_bucket': 'krx_nxt_aftermarket'},
+        'source': {'assessment': {'action': 'BLOCK'}, 'exact_payload': {'ai_market_snapshot_v1': {
+            'snapshot_id': 's', 'effective_venue': 'KRX_NXT_INTEGRATED', 'session_bucket': 'krx_nxt_aftermarket'}}, 'setup_evidence': {}},
+    }
+    result = summarize_machine_capture_population([capture, capture])
+    assert result['verified_capture_count'] == 2
+    assert result['unique_verified_capture_count'] == 1
+    assert result['duplicate_capture_collapsed_count'] == 1
+    assert result['partitions'][0]['source_binding_counts'] == {'exact_bound': 1, 'micro_window_source_gap': 1}
+
+
+def test_machine_cost_prerequisite_uses_private_sources_not_live_provider_budget(monkeypatch, tmp_path):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from src.engine.scalping.micro_reversion import economic_reference as reference, economic_reference_owner as owner
+    import json
+
+    day = datetime.now(ZoneInfo('Asia/Seoul')).date().isoformat()
+    calls = []
+    def build_sources(**kwargs):
+        calls.append(kwargs)
+        root = kwargs['output_root']
+        root.mkdir(parents=True)
+        (root / 'provider_budget_policy.json').write_text('private-source-only')
+    monkeypatch.setattr(owner, 'build_daily_sources', build_sources)
+    monkeypatch.setattr(reference, 'build_daily_resolution', lambda **kwargs: {'verified': True, 'status': 'verified', 'target_date': day})
+    receipt = calibration.ensure_machine_economic_reference(data_root=tmp_path, target_date=day)
+    assert receipt['verified'] is True
+    assert calls[0]['output_root'] == tmp_path / 'report/micro_reversion_economic_reference/machine_source_inputs' / day
+    assert not (tmp_path / 'policy').exists()
+    assert json.loads((tmp_path / 'report/micro_reversion_economic_reference' / f'micro_reversion_economic_reference_{day}.json').read_text())['target_date'] == day
+
+
+def test_calibration_write_publishes_machine_link_before_policy_with_valid_parent_seal(monkeypatch, tmp_path):
+    from src.engine.scalping import mechanistic_entry_runtime_policy as policy
+    from src.engine.scalping.microstructure_reaction_context import microstructure_summary_contract
+    import json
+
+    table = calibration.build_machine_decision_case_table([_bound_microstructure_case_row(0)])
+    report = {'schema': calibration.SCHEMA, 'target_date': '2026-09-17',
+              'runtime_effect': False, 'allowed_runtime_apply': False,
+              'hierarchical_entry_quality': {'machine_decision_case_table': table}}
+    monkeypatch.setattr(calibration, 'build_report', lambda **kwargs: calibration._with_artifact_content_sha256(report))
+    monkeypatch.setattr(calibration, 'ensure_machine_economic_reference', lambda **kwargs: {'status': 'source_only_test'})
+    published = []
+    def publish(path, **kwargs):
+        parent = json.loads(path.read_text())
+        assert calibration._artifact_content_sha256_valid(parent)
+        linked_path = tmp_path / 'report/microstructure_reaction_context/microstructure_reaction_context_2026-09-17.json'
+        linked = microstructure_summary_contract(json.loads(linked_path.read_text())['summary'])['machine_primary_auxiliary_evaluation']
+        assert linked['cost_adjusted_outcome_count'] == 1
+        published.append(path)
+    monkeypatch.setattr(policy, 'publish', publish)
+    assert calibration.main(['--target-date', '2026-09-17', '--data-root', str(tmp_path), '--write']) == 0
+    assert len(published) == 1
+
+
+def test_integrated_and_premarket_cost_reference_requires_exact_broker_route_not_venue_guess():
+    import copy
+    capture = {'label_context': {'snapshot_id': 's', 'broker_route': 'NXT', 'market_data_route': 'krx_nxt_integrated'},
+               'source': {'exact_payload': {'ai_market_snapshot_v1': {'snapshot_id': 's', 'broker_route': 'NXT', 'market_data_route': 'krx_nxt_integrated'}}}}
+    for cohort in [('KRX_NXT_INTEGRATED', 'KRX_NXT_AFTERMARKET'), ('PREMARKET_KRX_LIKE', 'PREMARKET_KRX_LIKE')]:
+        assert calibration._machine_capture_cost_reference_venue(capture, cohort) == 'NXT'
+        missing = copy.deepcopy(capture)
+        missing['source']['exact_payload']['ai_market_snapshot_v1'].pop('broker_route')
+        assert calibration._machine_capture_cost_reference_venue(missing, cohort) is None
+        conflict = copy.deepcopy(capture)
+        conflict['source']['exact_payload']['ai_market_snapshot_v1']['broker_route'] = 'SOR'
+        assert calibration._machine_capture_cost_reference_venue(conflict, cohort) is None
+    assert calibration._machine_capture_cost_reference_venue({}, ('KRX', 'KRX_REGULAR')) == 'KRX'
+
+
+def test_machine_micro_window_is_bound_to_market_data_item_not_order_route():
+    from datetime import datetime
+    from src.engine.scalping.microstructure_reaction_context import bind_machine_microstructure_source
+    capture = {'captured_at': '2026-09-17T10:00:00+09:00',
+               'label_context': {'stock_code': '005930', 'broker_route': 'SOR', 'market_data_route': 'krx_only'},
+               'source': {'exact_payload': {'mechanistic_micro_window': {
+                   'item': '005930', 'cutoff_ms': int(datetime.fromisoformat('2026-09-17T10:00:00+09:00').timestamp()*1000)}}}}
+    assert bind_machine_microstructure_source(capture)['micro_window_item_matches'] is True
+    capture['source']['exact_payload']['mechanistic_micro_window']['item'] = '005930_AL'
+    assert bind_machine_microstructure_source(capture)['micro_window_item_matches'] is False
+
+
+def test_cost_prerequisite_only_never_builds_report_or_publishes_policy(monkeypatch, tmp_path):
+    from src.engine.scalping import mechanistic_entry_runtime_policy as policy
+    def forbidden(**kwargs):
+        raise AssertionError('unexpected report or policy work')
+    monkeypatch.setattr(calibration, 'build_report', forbidden)
+    monkeypatch.setattr(policy, 'publish', forbidden)
+    monkeypatch.setattr(calibration, 'ensure_machine_economic_reference', lambda **kwargs: {'status': 'verified', 'verified': True})
+    assert calibration.main(['--target-date', '2026-09-17', '--data-root', str(tmp_path), '--write', '--ensure-economic-reference-only']) == 0
+    monkeypatch.setattr(calibration, 'ensure_machine_economic_reference', lambda **kwargs: {'status': 'source_gap_historical_official_master_unavailable'})
+    assert calibration.main(['--target-date', '2026-09-17', '--write', '--ensure-economic-reference-only']) == 2
+
+
+def test_cost_prerequisite_wrapper_precedes_snapshot_and_lengthy_research():
+    from pathlib import Path
+    wrapper = Path('deploy/run_threshold_cycle_postclose.sh').read_text()
+    assert wrapper.index('--ensure-economic-reference-only') < wrapper.index('SOURCE_ARGS=()')
+    assert wrapper.index('--ensure-economic-reference-only') < wrapper.index('-m src.engine.scalping.micro_reversion.ai_quality_cycle')
+    assert 'missing economics remain excluded/null' in wrapper
+
+
+def test_machine_microstructure_diagnostic_preserves_existing_auxiliary_gate():
+    table = calibration.build_machine_decision_case_table([_bound_microstructure_case_row(1, action='ENTER_NOW')], source_receipt={
+        'tuning_input_allowed': True, 'machine_threshold_tuning_input_allowed': True,
+        'compact_auxiliary_policy_measurement': {'measurement_allowed': False},
+    })
+    summary = table['microstructure_evaluation']
+    assert summary['cost_adjusted_outcome_count'] == 1
+    assert summary['machine_tuning_input_allowed'] is True
+    assert summary['auxiliary_tuning_input_allowed'] is False

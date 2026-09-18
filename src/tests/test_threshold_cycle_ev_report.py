@@ -1968,9 +1968,8 @@ def test_microstructure_summary_propagates_clean_baseline_cumulative(
         summary["opportunity_exploration_funnel"]["unique_entry_opportunity_count"] == 2
     )
     cumulative = summary["clean_baseline_cumulative_opportunity_exploration"]
-    assert cumulative["included_date_count"] == 40
-    assert cumulative["source_quality_adjusted_ev_pct"] == 0.31
-    assert cumulative["runtime_apply_required"] is False
+    assert cumulative["status"] == "retired"
+    assert "source_quality_adjusted_ev_pct" not in cumulative
 
 
 def test_modeled_price_summary_preserves_zero_realized_sample():

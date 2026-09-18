@@ -5075,6 +5075,21 @@ def _microstructure_diagnostic_handoff_status(source, ev, runtime, workorder, da
             or summary.get("allowed_runtime_apply") is True
         ):
             issues.append(f"{name}_diagnostic_authority_violation")
+    if source.get("evaluation_mode") == "machine_primary_auxiliary_only":
+        from src.engine.scalping.microstructure_reaction_context import microstructure_summary_contract
+
+        modern = microstructure_summary_contract(source.get("summary") or {}).get(
+            "machine_primary_auxiliary_evaluation"
+        ) or {}
+        if not modern.get("source_report_sha256") or modern.get("source_target_date") != source.get("date"):
+            issues.append("modern_parent_identity_missing_or_conflicting")
+        if modern.get("status") == "source_gap_machine_evaluation_parent_hash_mismatch":
+            issues.append("modern_parent_hash_mismatch")
+        if modern.get("runtime_effect") is not False or modern.get("allowed_runtime_apply") is not False:
+            issues.append("modern_diagnostic_authority_invalid")
+        for name, summary in summaries.items():
+            if summary.get("machine_primary_auxiliary_evaluation") != modern:
+                issues.append(f"{name}_modern_evaluation_stale_or_missing")
     violations = (source.get("summary") or {}).get(
         "diagnostic_contract_violation_counts"
     ) or {}
@@ -7404,6 +7419,7 @@ def build_threshold_cycle_postclose_verification(
         )
         if microstructure_source
         or execution_contract_flags.get("microstructure_reaction_context") is True
+        or execution_contract_flags.get("microstructure_machine_evaluation") is True
         else {"status": "not_enabled", "issues": [], "runtime_effect": False}
     )
     if microstructure_handoff["status"] not in {"pass", "not_enabled"}:
