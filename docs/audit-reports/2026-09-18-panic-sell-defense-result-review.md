@@ -94,3 +94,13 @@ active recovery는 sim/probe 수익 p75(평균 비교 threshold는 기존0.8% ca
 실제 observer는 workspace validator에서 `market_weakness_policy_review_hash_invalid`로 동일2/3 baseline fallback을 사용했다. 비교한 결과 **원9/17 추천은 검토된 immutable validator에서 ready**였고, workspace의 기존 별도 변경은 calibration 선택 필드의 hash/검증 코드를 갖고 있지 않았다. 원 정책을 고치거나 hash gate를 완화하는 결함 수리를 하지 않는다. 기존 workspace 변경을 보존하면서 intraday entrypoint가 **기존 release router로 선택된 검토본을 한 번 resolve/re-exec**하도록 소스 경계를 보완했다. managed release로 진입한 worker는 후속 selector 변경에도 자기 source를 보존한다. collector/report/notifier/정책 validator가 같은 검토본에서 실행된다. 대상일/인자·log/lock/cooldown·schedule·resource guard·notifier/operator 권한은 보존한다. 기존 selector 없는 isolated wrapper test도 유지한다. selector 오류는 API 수집/알림 전에 실패한다.
 
 Wrapper 관련 기존6개 및 selector 실패 선행검증1개, 합7PASS. bash-n/compile/diff 및 print-only parser 검증. 이 routing은 기존 source clean/selector 계약을 재사용하며 새 service/module/성능 guard/threshold/정책을 추가하지 않는다. workspace의 별도 validator/daily 변경을 통째로 덮어쓰지 않는다. 마지막 소스 commit/배포/자연 결과 receipt는 아래 최종 기록을 따른다.
+
+## 최종 병합·배포·자연 소비 확인
+
+최종 panic source `0072bef45a92feee56d10255c8926d0e9f6a8be6`을 main/review branch에 atomic push했고13:24:15 KST `panic-defense-source-final-20260918`로 배포했다. 병행 승인된 시장약세 source-role 수리를 함께 보존했다. wrapper는 default workspace 진입만 기존 router로 resolve하며 explicit PROJECT_DIR와 이미 managed release에 들어간 worker는 보존한다. 중복 routing/중복 시험을 제거한 최종 검증은 producer/detector/notifier/daily/runtime **83PASS**, wrapper **8PASS**, 병합 source-role **3PASS**다. 앞의7PASS는 병합 전 검증 이력이다.
+
+13:25:47 별도 승인된 시장약세 latch 인계 수리 `ebdbc613b`가 선택됐고 panic producer/daily consumer/wrapper는0072와 세 파일 모두 동일하다. 최신 selector를 되돌리지 않았다. 13:26:02 자연 panic JSON과 wrapper DONE13:26:04에서 `analysis_status=pipeline_source_unavailable`, source_exists=false/source_status=missing/scan0, 날짜 불일치 cache 및 pipeline_source:missing blocker를 확인했다. 기본 경로 observer는 dated9/18 carry2/3·af75 hash를 정상 인식하며 source gate PASS였다. 이것은 Main PID 소비나 실제 주문/손익 검증이 아니다.
+
+검토본 daily의 기존 source reader만 읽어 같은 pipeline_source:missing blocker 전달을 확인했다. 전체Daily/historical panic/raw/collector/notifier 재실행은 없다. 날짜·cutoff·zero-sample·원천부재를 경제성0으로 오인하지 않는 **진단 source Acceptance만 PASS**다. 실제 usable micro/exit/full-cost/holdout 경제성 Acceptance는 기존 `MarketWeaknessSourceHandoffNaturalEconomics0918`에 남는다. Main 미실행/오늘 pipeline·prospective30분 경로 미생성은 기다림만으로 닫히지 않는다.
+
+근거: `tmp/panic-defense-result-review-20260918/deployment-final.json`, `natural-consumption-final.json`, `daily-source-consumption-final.json` 및 갱신한9/17 dated result-review JSON. 원9/17 JSON/MD/breadth·low-price/market-weakness 동결policy SHA 보존PASS. cron·bot/service/PID·provider·threshold·guard·수량·비용 변경과 수동 알림 없음. 문서 close 이후 source가 동일한 별도 docs commit을 기록하며 실제 선택된 source와 구분한다.
