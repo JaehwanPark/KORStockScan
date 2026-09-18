@@ -51,3 +51,7 @@ CF 가정의 broker recovery/queue/quantity/partial-fill·실제 terminal·비�
 위는 unit-per-leg CF 금액이며 실제10주 주문 순익으로 환산하지 않는다. 순수 target 변경2건은 비용 대비 target margin 보완(H1)을 추가 검증할 구체적 근거다. 실제 체결빈도·overnight target 재개·partial quantity·queue·비용 실현 입력 없이 매매에 적용하지 않는다. 여러 profile의 금액은 기회/자본이 겹치므로 합산하지 않는다. 원 native 모델의2비교/0개선은 역사 결과로 보존하며 CF 모델의18/12를 그 모델의 성과로 바꿔 쓰지 않는다.
 
 양측 정책의 최종 full episode에서 holdout 완료/carry-in ledger·순익·notional·EV·다리별 기여를 독립 재구성해64개 모두 일치했다. paired economics도64개 동일하며 live replay 지원false를 확인했다. [최신 장후 기계 판정](../../data/report/postclose_research_successor_20260917_20260918/carry_joint_economic_review_20260918/low_price_full_research_result_review_2026-09-17.json)은 native 원 판정과 조건부CF/10개 일관 개선을 구분한다. 원 보고서2개/동결policy SHA 불변이다. 같은 원천 재실행은 하지 않는다.
+
+대표 target2→4 비교는 완료 빈도가 유지돼도 노출이 증가했다. 롯데케미칼 holdout은 signal5·완료9를 유지하면서 entry-cohort exposure16→239bars, worst filled MAE−0.173913%→−1.391304%였다. 두산 auto 점심은 signal4·완료8 유지, exposure42→137bars, MAE−0.370828%→−1.173709%다. 순익 증가만으로 위험까지 개선됐다고 판단하지 않는다. source-quality와 원 family/custody/sample guard 및 미래 tail 검증은 유지한다.
+
+원격 main의 미시구조 통합·진단-only historical metadata 보존 source `53aecf746`을 구현 `e1b3591f1`과 병합해 다른 승인된 작업을 보존했다. CF 두 source helper의 bytes/hash는 분석 시작부터 종료·병합까지 같아 결과 lineage가 바뀌지 않았다. 병합 wrapper는 최초124PASS·5FAIL 후 비용 원천 선행 호출과 full calibration 호출을 구분하고 퇴역 raw study 부재를 검증하도록5개 oracle를 보완했다. 영향받은5개만 재검증한다. production wrapper/guard를 이전 계약으로 복원하지 않았다.

@@ -419,7 +419,10 @@ def test_postclose_materializes_current_lifecycle_before_single_daily_consumer()
         "src.engine.scalping.ai_action_outcome_calibration",
         'run_threshold_cycle_ev_and_wait "pre_workorder"',
     )
-    positions = [script.index(token) for token in tokens]
+    # The early economic-reference-only call collects costs, while the
+    # final call below still builds calibration after the daily materializer.
+    positions = [script.rindex(token) if token.endswith("ai_action_outcome_calibration")
+                 else script.index(token) for token in tokens]
     assert positions == sorted(positions)
     for token in tokens[2:6]:
         assert script.count(token) == 1
@@ -1104,7 +1107,7 @@ def test_postclose_wrapper_runs_continuous_main_ai_prompt_optimizer():
     optimizer_index = script.index(
         "-m src.engine.scalping.micro_reversion.main_ai_prompt_optimizer"
     )
-    action_outcome_index = script.index(
+    action_outcome_index = script.rindex(
         "-m src.engine.scalping.ai_action_outcome_calibration"
     )
     holding_consumer_index = script.index(
@@ -2069,9 +2072,9 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         "src.engine.monitoring.rising_missed_intraday_feedback"
     )
     assert "src.engine.scalping.entry_ai_gate_backtest" not in script
-    microstructure_idx = script.index(
-        "src.engine.scalping.microstructure_reaction_context"
-    )
+    assert "src.engine.scalping.microstructure_reaction_context" not in script
+    assert script.index("--ensure-economic-reference-only") < script.index(
+        "observation_source_quality_preflight")
     observation_preflight_idx = script.index("observation_source_quality_preflight")
     for retired in ("scalping_pyramid_intraday_feedback", "scalping_pyramid_quality_calibration", "scalping_avg_down_recovery_calibration"):
         assert "src.engine.monitoring." + retired not in script
@@ -2088,7 +2091,7 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         in script
     )
     perf_source_idx = script.index("src.engine.codebase_performance_workorder_report")
-    action_outcome_calibration_idx = script.index(
+    action_outcome_calibration_idx = script.rindex(
         "src.engine.scalping.ai_action_outcome_calibration"
     )
     time_window_idx = script.index(
@@ -2261,7 +2264,7 @@ def test_postclose_wrapper_materializes_daily_exact_quality_chain_before_calibra
         in script
     )
     materialization_idx = script.index("src.engine.scalping.ai_decision_quality")
-    calibration_idx = script.index("src.engine.scalping.ai_action_outcome_calibration")
+    calibration_idx = script.rindex("src.engine.scalping.ai_action_outcome_calibration")
     materialization_block = script[materialization_idx:calibration_idx]
 
     assert materialization_idx < calibration_idx
@@ -2311,7 +2314,7 @@ def test_postclose_wrapper_runs_bounded_main_ai_quality_r0_r3_after_exact_chain(
         "-m src.engine.scalping.micro_reversion.ai_quality_cycle"
     )
     runtime_family_index = script.index("[SKIP] main-ai-quality-runtime-family")
-    calibration_index = script.index(
+    calibration_index = script.rindex(
         "-m src.engine.scalping.ai_action_outcome_calibration"
     )
     optimizer_index = script.index(
