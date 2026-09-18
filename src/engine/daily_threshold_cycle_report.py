@@ -13865,6 +13865,11 @@ def economic_challenger_blocker(candidate: dict) -> str | None:
         or any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) for v in daily.values())
         or sum(daily.values()) <= 0 or not evidence.get("proof_sha256")):
         return "economic_improvement_contract_invalid"
+    if evidence.get("status") == "validated_improvement":
+        # A self hash detects accidental corruption, not a valid family proof.
+        fresh = _candidate_economic_evaluation({**candidate, "economic_evaluation": None}, evidence["source_date"])
+        if any(evidence.get(key) != fresh.get(key) for key in ("status", "metrics", "proof_sha256")):
+            return "economic_improvement_proof_mismatch"
     if evidence.get("status") != "validated_improvement":
         return "economic_evaluation:" + str(evidence.get("status"))
     return None
@@ -13901,7 +13906,8 @@ def _candidate_economic_evaluation(candidate: dict, source_date: str) -> dict:
         state, reason = "incumbent_preserved_identical_policy", "identical_policy_is_not_independent_validation"
     elif (_safe_int(candidate.get("sample_count"), 0) or 0) < (_safe_int(candidate.get("sample_floor"), 0) or 0):
         state, reason = "insufficient_sample", "existing_family_sample_floor_not_met"
-    if family == "dynamic_entry_price_resolver":
+    source_blocked = metrics.get("source_quality_blocked") is True or metrics.get("source_quality_passed") is False
+    if family == "dynamic_entry_price_resolver" and not source_blocked:
         selected = metrics.get("entry_price_profile_selected_candidate") or {}
         proof = selected.get("price_selection_evidence")
         if proof:
@@ -13931,7 +13937,7 @@ def _candidate_economic_evaluation(candidate: dict, source_date: str) -> dict:
                     state, reason = "source_gap", "price_proof_policy_identity_mismatch"
             else:
                 state, reason = "source_gap", "price_paired_proof_invalid"
-    elif family == "scale_in_split_order_plan":
+    elif family == "scale_in_split_order_plan" and not source_blocked:
         proof = metrics.get("runtime_refresh_evidence") or {}
         from src.engine.scalping.scale_in_split_order_plan import runtime_refresh_contract_error
         if (not runtime_refresh_contract_error(proof) and max(proof["economic_source_dates"]) <= source_date
