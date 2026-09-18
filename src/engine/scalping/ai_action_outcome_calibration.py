@@ -7029,6 +7029,10 @@ def build_report(
         capture_census=machine_capture_census,
         source_receipt=machine_source_receipt,
     )
+    from src.engine.scalping import compact_auxiliary_paired_replay as compact
+    paired = compact.read(compact.report_path(data_root, target_date))
+    if compact.valid(paired) and paired.get("source_manifest_sha256") == machine_source_receipt.get("source_manifest_sha256"):
+        machine_decision_case_table["compact_auxiliary_screen_outcomes"]["paired_economic_evaluation"] = paired
     all_scope_rows, all_scope_contract = _mechanistic_source_rows(
         report_root / PAIRED_SUBDIR, target_date=target_date, all_supported_cohorts=True
     )
@@ -7322,6 +7326,39 @@ def ensure_machine_economic_reference(*, data_root: Path, target_date: str) -> d
         return {"status": report.get("status"), "verified": report.get("verified"), "path": str(path)}
     except (OSError, ValueError, RuntimeError) as exc:
         return {"status": "source_gap_cost_prerequisite_failed", "reason": str(exc), "path": str(path)}
+
+
+def build_compact_scope_report(data_root: Path, source_day: str, publication_day: str) -> dict:
+    """Explicit successor; older observations retain their actual source day."""
+    from src.engine.scalping import compact_auxiliary_paired_replay as compact
+    paired = compact.read(compact.report_path(data_root, source_day))
+    receipt = _machine_ai_natural_source_receipt(data_root, source_day)
+    if not compact.valid(paired) or paired.get("target_date") != source_day:
+        raise ValueError("compact_terminal_evaluation_missing")
+    if paired.get("source_manifest_sha256") != receipt.get("source_manifest_sha256"):
+        raise ValueError("compact_source_generation_mismatch")
+    if not "2026-06-05" <= source_day <= publication_day:
+        raise ValueError("compact_successor_source_date_invalid")
+    existing_path = report_path(publication_day, data_root / "report")
+    existing = compact.read(existing_path)
+    if existing_path.exists() and (not _artifact_content_sha256_valid(existing) or existing.get("schema") != SCHEMA):
+        raise ValueError("compact_existing_calibration_invalid")
+    if _artifact_content_sha256_valid(existing) and existing.get("schema") == SCHEMA and existing.get("target_date") == publication_day:
+        table = existing["hierarchical_entry_quality"]["machine_decision_case_table"]
+        table.setdefault("compact_auxiliary_screen_outcomes", {})["paired_economic_evaluation"] = paired
+        table["compact_auxiliary_evaluation_source_receipt"] = receipt
+        existing.update(evaluation_source_date=source_day, report_scope="compact_auxiliary_only", noncompact_sections_refreshed=False)
+        return _with_artifact_content_sha256(existing)
+    return _with_artifact_content_sha256({
+        "schema": SCHEMA, "target_date": publication_day,
+        "evaluation_source_date": source_day, "report_scope": "compact_auxiliary_only",
+        "status": "compact_terminal_evaluation", "clean_tuning_baseline_date": "2026-06-05",
+        "hierarchical_entry_quality": {"machine_decision_case_table": {
+            "machine_ai_natural_source_receipt": receipt,
+            "compact_auxiliary_policy_measurement": receipt.get("compact_auxiliary_policy_measurement"),
+            "compact_auxiliary_screen_outcomes": {"paired_economic_evaluation": paired}}},
+        "noncompact_sections_refreshed": False, **compact.AUTHORITY,
+    })
 
 
 def main(argv: list[str] | None = None) -> int:

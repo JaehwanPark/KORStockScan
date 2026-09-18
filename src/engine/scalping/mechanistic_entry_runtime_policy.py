@@ -407,7 +407,7 @@ def compact_economic_direction(economic: dict) -> str:
 
 
 def _selected_compact_prompt_version(source: dict, previous: dict | None) -> str:
-    """Consume only #82's exact-incumbent bounded automatic selection."""
+    """Consume exact-incumbent paired proof; natural errors guide research."""
 
     previous_version = str(
         ((previous or {}).get("ai_policy") or {}).get("prompt_version") or ""
@@ -425,130 +425,18 @@ def _selected_compact_prompt_version(source: dict, previous: dict | None) -> str
         "machine_decision_case_table"
     ) or {}
     outcomes = case_table.get("compact_auxiliary_screen_outcomes") or {}
-    selection = outcomes.get("automatic_successor_selection") or {}
-    selected = str(selection.get("selected_prompt_version") or "")
-    economic = outcomes.get("economic_contract") or {}
-    router_contract = economic.get("schema") == "compact_auxiliary_router_economic_selection_v3"
+    from src.engine.scalping import compact_auxiliary_paired_replay as paired
+    proof = outcomes.get("paired_economic_evaluation") or {}
     source_receipt = case_table.get("machine_ai_natural_source_receipt") or {}
-    conflict_count = case_table.get("conflicting_attempt_identity_count", 0)
-    conflict_keys = case_table.get("conflicting_evaluation_keys")
-    # A localized exclusion can preserve other screens; an unresolved or
-    # malformed exclusion must never be turned into a positive publisher gate.
-    if type(conflict_count) is not int or conflict_count < 0:
+    if not (source_receipt.get("tuning_input_allowed") is True
+            and compact_terminal_gate_allowed(source_receipt)
+            and (case_table.get("compact_auxiliary_policy_measurement") or {}).get("measurement_allowed") is True
+            and paired.promotion_valid(proof, incumbent=previous_version,
+                selected=proof.get("candidate_prompt_version"),
+                source_manifest_sha256=source_receipt.get("source_manifest_sha256"))):
         return previous_version
-    if conflict_keys is not None:
-        if (
-            not isinstance(conflict_keys, list)
-            or any(not isinstance(key, str) or not key for key in conflict_keys)
-            or len(set(conflict_keys)) != conflict_count
-            or len(conflict_keys) != conflict_count
-            or case_table.get("conflict_locations_complete") is not True
-            or any(key in (case_table.get("policy_learning_exact_enter_keys") or [])
-                   for key in conflict_keys)
-        ):
-            return previous_version
-    elif conflict_count:
-        return previous_version
-    if not compact_outcome_counts_valid(economic):
-        return previous_version
-    # Publication precedes the final strict verifier. Validate the evidence
-    # here as well, before creating a future policy from malformed aggregates.
-    count_fields = (
-        "screened_total",
-        "economic_eligible_count",
-        "evaluable_veto_count",
-        "evaluable_pass_count",
-        "missed_profit_veto_count",
-        "dangerous_pass_count",
-        "material_tail_pass_count",
-    )
-    if any(
-        type(economic.get(key)) is not int or economic[key] < 0 for key in count_fields
-    ):
-        return previous_version
-    excluded = economic.get("exclusion_counts")
-    counts = economic.get("verdict_x_action_neutral_outcome_counts")
-    if any(
-        not isinstance(mapping, dict)
-        or any(type(value) is not int or value < 0 for value in mapping.values())
-        for mapping in (excluded, counts)
-    ):
-        return previous_version
-    veto = economic["evaluable_veto_count"]
-    passed = economic["evaluable_pass_count"]
-    if (
-        source_receipt.get("tuning_input_allowed") is not True
-        or not compact_terminal_gate_allowed(source_receipt)
-        or (case_table.get("compact_auxiliary_policy_measurement") or {}).get(
-            "measurement_allowed"
-        )
-        is not True
-        or economic.get("denominator_preserved") is not True
-        or economic["screened_total"]
-        != economic["economic_eligible_count"] + sum(excluded.values())
-        or sum(counts.values()) != economic["economic_eligible_count"]
-        or economic["missed_profit_veto_count"] > veto
-        or economic["dangerous_pass_count"] > passed
-        or economic["material_tail_pass_count"] > passed
-        or economic.get("missed_veto_rate")
-        != (economic["missed_profit_veto_count"] / veto if veto else None)
-        or economic.get("dangerous_pass_rate")
-        != (economic["dangerous_pass_count"] / passed if passed else None)
-    ):
-        return previous_version
-    try:
-        eligible_count = int(economic.get("economic_eligible_count") or 0)
-        veto_count = int(economic.get("evaluable_veto_count") or 0)
-        pass_count = int(economic.get("evaluable_pass_count") or 0)
-        material_tail_loss_pct = float(economic.get("material_tail_loss_pct"))
-        minimum_count = int(selection.get("minimum_economic_eligible_count") or 0)
-        minimum_error_count = int(selection.get("minimum_error_count") or 0)
-        minimum_denominator = int(selection.get("minimum_relevant_denominator") or 0)
-        minimum_error_rate = float(selection.get("minimum_error_rate"))
-    except (TypeError, ValueError):
-        return previous_version
-    expected = previous_version
-    economic_direction = compact_economic_direction(economic)
-    if economic_direction == "select_material_risk_specificity_variant":
-        expected = ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION
-    elif economic_direction == "select_opportunity_preservation_variant":
-        expected = ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION
-    if (
-        selection.get("eligible") is True
-        and selection.get("recommendation_id")
-        == "compact_auxiliary_prompt_automatic_successor_v2"
-        and selection.get("contract_version") == economic.get("schema")
-        and (not router_contract or selection.get("economic_direction_rule") == "cost_weighted_nonentry_router_feedback_v2")
-        and selection.get("runtime_effect") is True
-        and selection.get("allowed_runtime_apply") is True
-        and selection.get("selection_contract")
-        == "bounded_registered_variant_exact_incumbent_only_no_freeform_edit"
-        and economic.get("schema") in {"compact_auxiliary_economic_selection_v2", "compact_auxiliary_router_economic_selection_v3"}
-        and economic.get("counterfactual_not_realized_pnl") is True
-        and economic.get("missing_economics_imputed") is False
-        and material_tail_loss_pct == -1.0
-        and selection.get("source_manifest_sha256")
-        == source_receipt.get("source_manifest_sha256")
-        and selection.get("history_receipts_sha256")
-        == source_receipt.get("compact_history_receipts_sha256")
-        and isinstance(selection.get("source_manifest_sha256"), str)
-        and len(selection.get("source_manifest_sha256") or "") == 64
-        and selection.get("economic_outcome_counts_sha256")
-        == digest(economic.get("verdict_x_action_neutral_outcome_counts") or {})
-        and selection.get("economic_outcome_counts_sha256")
-        == economic.get("verdict_x_action_neutral_outcome_counts_sha256")
-        and eligible_count >= minimum_count
-        and minimum_count == 20
-        and minimum_error_count == 3
-        and minimum_denominator == 5
-        and minimum_error_rate == 0.25
-        and veto_count + pass_count + (economic.get("evaluable_caution_count", 0) if router_contract else 0) == eligible_count
-        and selection.get("incumbent_prompt_version") == previous_version
-        and selected == expected
-        and selected in COMPACT_AI_VARIANTS
-    ):
-        return selected
-    return previous_version if previous_version in COMPACT_AI_VARIANTS else AI_VERSION
+    selected = proof.get("candidate_prompt_version")
+    return selected if selected in COMPACT_AI_VARIANTS else previous_version
 
 
 def load(*, data_root: Path, target_date: str) -> dict | None:
@@ -583,6 +471,68 @@ def load_effective(*, data_root: Path, target_date: str) -> dict | None:
     return load(data_root=data_root, target_date=paths[-1].stem[7:]) if paths else None
 
 
+def _publish_compact_scope(source: dict, *, data_root: Path, current: datetime) -> dict:
+    """Refresh only AI evidence; preserve all inherited machine/scope policies."""
+    from src.engine.scalping import compact_auxiliary_paired_replay as paired
+    from src.engine.scalping import ai_action_outcome_calibration as calibration
+    source_day = source["target_date"]
+    if source_day > current.date().isoformat():
+        raise ValueError("compact_publication_date_in_future")
+    target = next_target(source_day)
+    previous = load_effective(data_root=data_root, target_date=source_day)
+    if previous is None:
+        raise ValueError("compact_incumbent_missing_no_implicit_bootstrap")
+    with (root(data_root) / "publisher.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        existing = load(data_root=data_root, target_date=target)
+        if existing and existing.get("source_artifact_sha256") == source["artifact_content_sha256"]:
+            return existing
+        if current >= datetime.fromisoformat(target + "T07:35:00").replace(tzinfo=KST):
+            if existing is None:
+                raise ValueError("compact_preopen_freeze_without_dated_policy")
+            return existing
+        table = source["hierarchical_entry_quality"]["machine_decision_case_table"]
+        proof = table["compact_auxiliary_screen_outcomes"]["paired_economic_evaluation"]
+        receipt = table.get("compact_auxiliary_evaluation_source_receipt") or table["machine_ai_natural_source_receipt"]
+        version = previous["ai_policy"]["prompt_version"]
+        selected = proof["candidate_prompt_version"]
+        promote = (receipt.get("tuning_input_allowed") is True
+                   and compact_terminal_gate_allowed(receipt)
+                   and (receipt.get("compact_auxiliary_policy_measurement") or {}).get("measurement_allowed") is True
+                   and paired.promotion_valid(proof, incumbent=version, selected=selected,
+                       source_manifest_sha256=receipt.get("source_manifest_sha256")))
+        if existing and existing["ai_policy"]["prompt_version"] != version:
+            raise ValueError("compact_future_stage_owner_conflict")
+        inherited = existing or previous
+        if existing:
+            calibration._atomic_write_json(root(data_root) / "generations" / f"{existing['bundle_sha256']}.json", existing)
+        bundle = copy.deepcopy(inherited)
+        bundle.pop("bundle_sha256", None)
+        if promote:
+            paired.consume_holdout(proof, data_root)
+            for ai, context in [(bundle["ai_policy"], bundle.get("historical_context"))] + [
+                    (s["ai_policy"], s["historical_context"]) for scope,s in (bundle.get("scope_policies") or {}).items() if scope == "|".join(COHORT)]:
+                ai.update(prompt_version=selected, variant=compact_prompt_variant(selected),
+                          system_prompt=compact_auxiliary_prompt(context, prompt_version=selected))
+                ai["system_prompt_sha256"] = digest(ai["system_prompt"])
+        source_hash = hashlib.sha256((json.dumps(source, ensure_ascii=False, indent=2) + "\n").encode()).hexdigest()
+        snapshot = root(data_root) / "sources" / f"{source_hash}.json"
+        calibration._atomic_write_json(snapshot, source)
+        bundle.update(target_date=target, source_date=source_day, source_file_sha256=source_hash,
+                      source_artifact_sha256=source["artifact_content_sha256"], generated_at=current.isoformat(),
+                      compact_evaluation_source_date=source["evaluation_source_date"],
+                      previous_bundle_sha256=inherited["bundle_sha256"],
+                      compact_inherited_bundle_sha256=inherited["bundle_sha256"],
+                      compact_inherited_source_date=inherited["source_date"],
+                      compact_paired_artifact_sha256=proof["artifact_content_sha256"],
+                      compact_prompt_disposition="compact_paired_candidate_selected" if promote else "compact_incumbent_carry")
+        bundle["bundle_sha256"] = digest(bundle)
+        validate(bundle, target_date=target)
+        calibration._atomic_write_json(root(data_root) / "generations" / f"{bundle['bundle_sha256']}.json", bundle)
+        calibration._atomic_write_json(root(data_root) / f"policy_{target}.json", bundle)
+        return load(data_root=data_root, target_date=target)
+
+
 def publish(
     source_path: Path,
     *,
@@ -615,6 +565,8 @@ def publish(
     ):
         raise ValueError("machine_policy_calibration_source_invalid")
     source_date = str(source["target_date"])
+    if source.get("report_scope") == "compact_auxiliary_only":
+        return _publish_compact_scope(source, data_root=data_root, current=(now or datetime.now(KST)).astimezone(KST))
     target = next_target(source_date)
     current = (now or datetime.now(KST)).astimezone(KST)
     if source_date < "2026-06-05" or source_date > current.date().isoformat():
@@ -896,16 +848,17 @@ def publish(
                         if isinstance(e, dict) and "id" in e
                     ],
                 }
+                scoped_ai_version = selected_ai_version if scope == "|".join(COHORT) or not old or old["ai_policy"]["prompt_version"] in {LEGACY_AI_VERSION, LEGACY_COMPACT_AI_VERSION, *FROZEN_COMPACT_V2_VARIANTS} else old["ai_policy"]["prompt_version"]
                 scoped_prompt = compact_auxiliary_prompt(
-                    scoped_context, prompt_version=selected_ai_version
+                    scoped_context, prompt_version=scoped_ai_version
                 )
                 scope_policies[scope] = {
                     "machine_policy": scoped_machine,
                     "machine_disposition": scoped_disposition,
                     "historical_context": scoped_context,
                     "ai_policy": {
-                        "prompt_version": selected_ai_version,
-                        "variant": compact_prompt_variant(selected_ai_version),
+                        "prompt_version": scoped_ai_version,
+                        "variant": compact_prompt_variant(scoped_ai_version),
                         "system_prompt": scoped_prompt,
                         "system_prompt_sha256": digest(scoped_prompt),
                     },
@@ -960,6 +913,12 @@ def publish(
                 {k: v for k, v in bundle.items() if k != "bundle_sha256"}
             )
         validate(bundle, target_date=target)
+        if selected_ai_version != previous_ai_version:
+            from src.engine.scalping import compact_auxiliary_paired_replay as paired
+            paired_table = (source.get("hierarchical_entry_quality") or {}).get("machine_decision_case_table") or {}
+            paired_proof = paired_table.get("compact_auxiliary_screen_outcomes") or {}
+            if paired_proof.get("paired_economic_evaluation"):
+                paired.consume_holdout(paired_proof["paired_economic_evaluation"], data_root)
         if existing is not None:
             calibration._atomic_write_json(
                 policy_root / "generations" / f"{existing['bundle_sha256']}.json",

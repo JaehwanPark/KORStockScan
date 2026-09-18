@@ -164,6 +164,14 @@ Exact integrated section/date/hash를 Daily→EV/summary→strict와 단일 exec
 
 v4는 실제 incumbent control·관측 depth의 보수적 체결 모델·공통 cohort·독립 날짜 calibration/미사용 holdout·단일 challenger 검증과 비용모델 표시를 요구한다. v3 outcome은 제외 근거 진단이며 자동 승격 근거가 아니다. 조건부 skip도 날짜별 기존 주문 보존 정책을 원 source/approval age와 함께 발행한다. `--preopen-date`는 적용 예정 개장일을 명시할 수 있으나 calendar/기존 PREOPEN·operator·hard safety를 대체하지 않는다. Report/policy hash·effective date를 확인하고 available dated unsplit와 split activation/PID/실제 경제성을 분리한다. [CS0–CS6 owner](proposals/scale-in-split-order-plan-fill-conditioned-economic-tuning-improvement-plan-2026-09-18.md)와 기존 checklist stable ID를 따른다.
 
+### 5.1.5 Compact auxiliary의 paired 경제성 평가·마지막 consumer
+
+등록된 current compact PASS/VETO 역할의 실제 `ENTER_NOW` screen을 기존 batch의 `--compact-only`로 평가한다. GPT-5.4 nano/provider 고정, 기존 source-quality·provider budget·등록 prompt를 유지하며 legacy BUY/WAIT/holding selector는 이 분기의 선행 조건이나 승격 근거가 아니다. `--execute-compact-candidate`는 유효 입력·비용·terminal이 있는 누락 응답만 기존 executor로 처리한다. 후보/입력 checkpoint가 같으면 응답은 재사용하고 경제성 원천만 다시 결속한다. 동일 verdict는 Δ0으로 공통 모집단에 포함하며 CAUTION 후속 routing 미확정·손절/owner plan/portfolio 결손은 null로 남긴다.
+
+`--finalize-compact`는 기존 calibration/optimizer/Main publisher/consumer와 Daily·EV·runtime approval·tower의 해당 section 및 적용일 checklist를 결속한다. `--publication-date`는 명시적인 successor 발행일이며 관측 source date를 바꾸지 않는다. 양수 independent holdout·동일 cohort·비용 후 EV와 공통 자금 일별 순익·tail/stress·미사용 holdout 증거 없이는 기존 정책을 carry한다. Runtime inference 비용 차이/원화 환산 결손도 승격 근거에서 제외한다. 초기 canary는 KRX regular/KRX route 한 cohort이며 다른 scope의 정책은 유지한다. PREOPEN 동결 이후 해당 날짜 generation은 덮어쓰지 않는다.
+
+Family strict 명령 `src.engine.verify_threshold_cycle_postclose_chain --date SOURCE_DATE --compact-summary-only --require-summary-handoff`는 최종 parent/정책/summary/checklist generation을 검증한다. PASS는 이 family의 연결 closure이며 전체 native DONE·실제 PID·주문·경제성 개선의 증거가 아니다. native는 Daily 뒤 family finalize/strict, 기존 21:05 follower는 bounded compact batch→finalize→strict로 실행한다. Cron/retired selector를 복원하거나 전체 native를 재실행하지 않는다. [CP0–CP5 계획](proposals/compact-auxiliary-ai-paired-economic-tuning-and-consumer-closed-loop-improvement-plan-2026-09-18.md)을 따른다.
+
 ### 5.2 결손·결함과 달성 가능성
 
 | 판정 | 입증할 내용 | 다음 조치·closure |

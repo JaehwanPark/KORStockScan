@@ -7335,12 +7335,17 @@ def build_threshold_cycle_postclose_verification(
         )
     entry_setup_replay_batch = _load_json(paths["ai_entry_setup_paired_replay_batch"])
     main_ai_prompt_consumer = _load_json(paths["main_ai_prompt_consumer"])
-    entry_setup_replay_session_contract = _entry_setup_replay_session_contract_status(
-        entry_setup_replay_batch,
-        main_ai_prompt_consumer,
-        target_date=target_date,
-        allow_pending=allow_pending_entry_replay,
-    )
+    if main_ai_prompt_consumer.get("compact_scope_status") == "connected_terminal_evaluation_and_dated_policy":
+        from src.engine.scalping.main_ai_prompt_consumer import verify_compact_handoff
+        scoped = verify_compact_handoff(REPORT_DIR.parent, target_date)
+        entry_setup_replay_session_contract = {**scoped, "status": "pass" if scoped["status"] == "PASS" else "fail"}
+    else:
+        entry_setup_replay_session_contract = _entry_setup_replay_session_contract_status(
+            entry_setup_replay_batch,
+            main_ai_prompt_consumer,
+            target_date=target_date,
+            allow_pending=allow_pending_entry_replay,
+        )
     if entry_setup_replay_session_contract["status"] == "fail":
         log_issues.extend(
             f"entry_setup_replay_{issue}"
@@ -9642,6 +9647,7 @@ def main() -> None:
     )
     parser.add_argument("--date", required=True)
     parser.add_argument("--require-summary-handoff", action="store_true")
+    parser.add_argument("--compact-summary-only", action="store_true", help="Verify only compact successor summary/policy handoff; never assert native DONE")
     parser.add_argument(
         "--allow-pending-done-marker",
         action="store_true",
@@ -9670,6 +9676,13 @@ def main() -> None:
         ),
     )
     args = parser.parse_args()
+    if args.compact_summary_only:
+        if not args.require_summary_handoff:
+            parser.error("compact scope requires --require-summary-handoff")
+        from src.engine.scalping.main_ai_prompt_consumer import verify_compact_handoff
+        report = verify_compact_handoff(REPORT_DIR.parent, args.date)
+        print(json.dumps(report, ensure_ascii=False))
+        raise SystemExit(0 if report["status"] == "PASS" else 2)
 
     report = build_threshold_cycle_postclose_verification(
         args.date,
