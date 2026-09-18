@@ -77,6 +77,14 @@ def test_scoped_policy_carry_preserves_common_override_and_off(tmp_path,monkeypa
     primary=dict(effective_venue='KRX',market_session_bucket='KRX_REGULAR',ai_trace_broker_route='KRX')
     assert runtime.resolve_scoped_timeout({'last_watching_ai_machine_primary_fields':primary},'standard',90,enabled=True,now_ts=at)==30
     assert runtime.resolve_scoped_timeout({**stock,'last_watching_ai_machine_primary_fields':{**primary,'effective_venue':'NXT'}},'standard',90,enabled=True,now_ts=at)==90
+    for conflict in (
+        {**stock, 'last_watching_ai_machine_primary_fields':{**primary, 'ai_trace_broker_route':'SOR'}},
+        {**stock, 'entry_execution_broker_route':'SOR'},
+        {**stock, 'last_watching_ai_machine_primary_fields':{**primary, 'market_session_bucket':'NXT_AFTERMARKET'}},
+        {**stock, 'market_session_bucket':'NXT_AFTERMARKET'},
+    ):
+        assert runtime.resolve_scoped_timeout(conflict,'standard',90,enabled=True,now_ts=at)==90
+        assert conflict['entry_cancel_wait_policy_receipt']['entry_cancel_wait_policy_status']=='cancel_wait_scope_context_conflict'
     assert runtime.resolve_scoped_timeout(stock,'standard',120,enabled=True,now_ts=at)==120
     assert runtime.resolve_scoped_timeout(stock,'standard',90,enabled=False,now_ts=at)==90
     assert runtime.resolve_scoped_timeout({**stock,'broker_route':'SOR'},'standard',90,enabled=True,now_ts=at)==90

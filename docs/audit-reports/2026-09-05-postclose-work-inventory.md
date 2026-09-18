@@ -66,7 +66,7 @@ PID·lock·progress·deadline·latest terminal을 실제 run 기준으로 확인
 | #49 | `monitoring.scanner_lookup_attention_tuning` | 조건부 ON, 경제성 | 독립 opportunity/actual arm·marginal CF·자본/자원 paired·baseline/holdout → existing candidate |
 | #50/#51/#54 | `daily_threshold_cycle_report` 및 기존 AI correction/cumulative 출력 | ON/conditional·embedded | inclusive source-day 분모·선정/탈락/carry·cost/EV·AI provenance·same-generation cumulative |
 | #50 내부 | 기존 mechanistic price / position sizing / atomic quantity·leg 정책 평가·발행 | embedded, 경제성/발행 | price-ready no-submit/no-fill·native executable replay·immutable signed source-date·chronological union/4-arm·paired/tail/capital → next-date publisher |
-| #55 | `automation.entry_cancel_wait_tuning` | 정기 ON, 진단/기존 family | 현재 touch/mark proxy는 executable fill/exit/cost가 없으면 diagnostic hold·incumbent 유지; 시간 경과만으로 결손 해소 불가 |
+| #55 | `automation.entry_cancel_wait_tuning` | 정기 ON, 진단/기존 family | 실제 제출 census·signed 주문·native exit/cost→독립 model/policy holdout→scoped 정책·PREOPEN; source gap은 null/incumbent 보존, touch/mark proxy는 진단 전용 |
 
 ### 4.2 AI·Pattern·EV와 최종 소비
 

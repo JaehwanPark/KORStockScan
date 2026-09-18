@@ -98,14 +98,19 @@ def resolve_scoped_timeout(stock, profile, baseline, *, enabled, now_ts=None):
         receipt.update(entry_cancel_wait_policy_sha256=sha, entry_cancel_wait_policy_version=policy["policy_version"],
                        entry_cancel_wait_policy_source_date=policy["source_date"])
         machine=stock.get('last_watching_ai_machine_primary_fields') or {}
-        venue=stock.get('effective_venue') or machine.get('effective_venue') or machine.get('entry_setup_live_policy_effective_venue')
-        session=stock.get('market_session_bucket') or stock.get('session_bucket') or machine.get('market_session_bucket') or machine.get('entry_setup_live_policy_session_bucket')
-        if (stock.get('effective_venue') and machine.get('effective_venue') and str(stock['effective_venue']).upper()!=str(machine['effective_venue']).upper()
-            or stock.get('market_session_bucket') and machine.get('market_session_bucket') and str(stock['market_session_bucket']).upper()!=str(machine['market_session_bucket']).upper()):
-            raise ValueError('cancel_wait_scope_context_conflict')
-        scope = (str(venue or "").upper(),str(session or "").upper(),
-                 str(stock.get("entry_execution_broker_route") or stock.get("broker_route") or
-                     machine.get('ai_trace_broker_route') or "").upper(), profile)
+        dimensions = (
+            ('effective_venue', 'entry_setup_live_policy_effective_venue'),
+            ('market_session_bucket', 'session_bucket', 'entry_setup_live_policy_session_bucket'),
+            ('entry_execution_broker_route', 'broker_route', 'ai_trace_broker_route'),
+        )
+        resolved = []
+        for keys in dimensions:
+            values = {str(context[key]).upper() for context in (stock, machine)
+                      for key in keys if context.get(key)}
+            if len(values) > 1:
+                raise ValueError('cancel_wait_scope_context_conflict')
+            resolved.append(next(iter(values), ''))
+        scope = (*resolved, profile)
         for row in policy.get("scope_overrides", []):
             if tuple(row["scope"]) == scope and row.get('base_timeout_sec',row["incumbent_timeout_sec"]) == baseline:
                 value = row["timeout_sec"]
