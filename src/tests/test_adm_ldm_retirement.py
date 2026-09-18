@@ -279,14 +279,8 @@ def test_wrapper_has_no_retired_producer_commands():
     assert "RUN_INSTITUTIONAL_FLOW_CONTEXT=false" in script
     assert "THRESHOLD_CYCLE_RUN_INSTITUTIONAL_FLOW_CONTEXT" not in script
     assert "-m src.engine.lifecycle.scale_in_incremental_counterfactual" not in script
-    assert (
-        '"$PROJECT_DIR/src/engine/lifecycle/scale_in_incremental_counterfactual.py"'
-        in script
-    )
-    avg_down_block = script.split(
-        'if [ "$RUN_SCALPING_AVG_DOWN_RECOVERY_CALIBRATION"', 1
-    )[1].split('if [ "$RUN_ONE_SHARE_THRESHOLD_OPPORTUNITY"', 1)[0]
-    assert "scale_in_incremental_counterfactual.py" in avg_down_block
+    for retired in policy.SCALE_IN_RETIRED_REPORTS:
+        assert f"-m src.engine.monitoring.{retired}" not in script
 
 
 def test_scale_in_counterfactual_report_is_archive_but_avg_down_math_survives():
@@ -384,3 +378,28 @@ def test_verifier_reports_retired_enabled_artifact_without_promoting_it(
     result = preopen.verify_runtime_env_handoff("2026-09-07")
     assert result["passed"] is False
     assert any(item["family"] == "adm_ldm_retired" for item in result["findings"])
+
+
+def test_shared_rebound_retirement_removes_only_independent_scale_in_authority():
+    families = ["scalping_pyramid_quality_gate", "scalping_avg_down_recovery_quality_gate", "post_probe_winner_recovery"]
+    assert policy.current_report_view({"calibration_candidates": [
+        *({"family": f} for f in families), {"family": "mechanistic_entry_runtime"}
+    ]})["calibration_candidates"] == [{"family": "mechanistic_entry_runtime"}]
+    env = policy.without_retired_env({
+        "KORSTOCKSCAN_SCALPING_PYRAMID_MIN_PROFIT_PCT": "0.1",
+        "KORSTOCKSCAN_AVG_DOWN_RUNTIME_EVIDENCE_DIGEST": "old",
+        "KORSTOCKSCAN_REAL_PYRAMID_SCALE_IN_QUALITY_GUARD_ENABLED": "true",
+        "KORSTOCKSCAN_ENABLE_SCALE_IN": "true",
+    })
+    assert len(env) == 2  # Shared safety and ADD enable are preserved.
+    assert policy.retirement_env()["KORSTOCKSCAN_SCALPING_ENABLE_PYRAMID"] == "false"
+    for report in policy.SCALE_IN_RETIRED_REPORTS:
+        assert policy.retired_artifact(Path("data/report") / report / "old.json")
+        assert policy.retired_status(report)["retirement_id"] == policy.SCALE_IN_RETIREMENT_ID
+
+
+def test_scale_in_retirement_preserves_avg_down_common_spread_guard():
+    from src.engine.lifecycle.retirement import without_retired_env
+    common = {"KORSTOCKSCAN_SCALPING_PYRAMID_PRICE_GUARD_ENABLED": "true",
+              "KORSTOCKSCAN_SCALPING_PYRAMID_MAX_SPREAD_BPS": "80"}
+    assert without_retired_env(common) == common

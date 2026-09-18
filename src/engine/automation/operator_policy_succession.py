@@ -16,6 +16,7 @@ import shlex
 from datetime import date
 from pathlib import Path
 
+from src.engine.lifecycle.retirement import SCALE_IN_RETIRED_CALIBRATION_FAMILIES
 from src.engine.scalping import strategy_owner_components as components
 
 SCHEMA = "operator_strategy_policy_succession_v1"
@@ -294,6 +295,8 @@ def prepare_locks(locks, candidates, previous, runtime_dir, lock_dir, target_dat
     prior_rows = (previous.get("operator_policy_succession") or {}).get("policies", [])
     for row in prior_rows:
         family = row["family"]
+        if family in SCALE_IN_RETIRED_CALIBRATION_FAMILIES:
+            continue
         env = {k: prior_values[k] for k in row["env_overrides"]}
         # Expiration of yesterday's date-scoped instruction is normal. A new
         # instruction for today is not silently hidden by the carried policy.
@@ -366,6 +369,8 @@ def succession_reason(
 ):
     """Additional ownership/baseline check; ordinary family gates run first."""
     family = candidate.get("family")
+    if family in SCALE_IN_RETIRED_CALIBRATION_FAMILIES:
+        return "independent_scale_in_strategy_retired_20260918"
     if target_date < EFFECTIVE_DATE:
         return "before_authorized_effective_date"
     if (
@@ -515,6 +520,8 @@ def validate_receipt(manifest, runtime_dir, lock_dir):
     values = {}
     for row in receipt.get("policies", []):
         family = row["family"]
+        if family in SCALE_IN_RETIRED_CALIBRATION_FAMILIES:
+            continue
         env = row["env_overrides"]
         if (
             row.get("stage") != POLICY_STAGES.get(family)
@@ -588,6 +595,8 @@ def validate_components(manifest, runtime_dir, lock_dir):
     values, seen = {}, set()
     for row in receipt["components"]:
         family = row["family"]
+        if family in SCALE_IN_RETIRED_CALIBRATION_FAMILIES:
+            continue
         env = row["env_overrides"]
         if (
             family in seen

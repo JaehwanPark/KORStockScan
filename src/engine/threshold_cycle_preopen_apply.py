@@ -273,7 +273,9 @@ HOLD_CARRY_FORWARD_BLOCK_REASON_KEYS: dict[str, frozenset[str]] = {
 RETIRED_RUNTIME_FAMILY_REASONS = {
     **{family: "retired_runtime_family:adm_ldm" for family in RETIRED_FAMILIES},
     **{
-        family: "retired_calibration_family:latency_recommendation"
+        family: ("retired_calibration_family:independent_scale_in"
+                 if family in {"scalping_pyramid_quality_gate", AVG_DOWN_RECOVERY_FAMILY, "post_probe_winner_recovery", "reversal_add", "shallow_avg_down_source_gap_recheck"}
+                 else "retired_calibration_family:latency_recommendation")
         for family in RETIRED_CALIBRATION_FAMILIES
     },
     "aggressive_entry_price_override_runtime": (
@@ -1497,239 +1499,7 @@ def _winner_recovery_auto_apply_candidate(
     *,
     target_date: str | None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
-    """Build the next-PREOPEN, venue-bounded one-share recovery candidate."""
-
-    observation = (
-        payload.get("winner_recovery_bounded_canary_observation")
-        if isinstance(payload.get("winner_recovery_bounded_canary_observation"), dict)
-        else {}
-    )
-    real_observation = (
-        payload.get("winner_recovery_real_execution_observation")
-        if isinstance(payload.get("winner_recovery_real_execution_observation"), dict)
-        else {}
-    )
-    status: dict[str, Any] = {
-        "state": "not_ready",
-        "target_date": target_date,
-        "eligible_venues": [],
-        "blocked_venues": {},
-        "counterfactual_state": observation.get("state"),
-        "real_execution_state": real_observation.get("state"),
-    }
-    if not target_date:
-        status["state"] = "missing_target_date"
-        return None, status
-
-    real_by_venue = {
-        str(row.get("entry_effective_venue") or "").strip().upper(): row
-        for row in (real_observation.get("by_entry_effective_venue") or [])
-        if isinstance(row, dict) and row.get("entry_effective_venue")
-    }
-    evidence_by_venue = {
-        str(row.get("effective_venue") or "").strip().upper(): row
-        for row in (observation.get("by_effective_venue") or [])
-        if isinstance(row, dict) and row.get("effective_venue")
-    }
-    eligible_venues: list[str] = []
-    central_sizing_venues: list[str] = []
-    blocked_venues: dict[str, list[str]] = {}
-    venue_evidence: dict[str, dict[str, Any]] = {}
-    for venue in POST_PROBE_WINNER_RECOVERY_VENUES:
-        evidence = evidence_by_venue.get(venue) or {}
-        blockers: list[str] = []
-        sample_count = _int_or_default(evidence.get("sample_count"), 0) or 0
-        sample_floor = _int_or_default(evidence.get("sample_floor"), 0) or 0
-        ev_eligible_count = (
-            _int_or_default(evidence.get("ev_eligible_sample_count"), 0) or 0
-        )
-        counterfactual_ev = _bridge_candidate_float(
-            evidence.get("notional_weighted_ev_pct")
-        )
-        if str(evidence.get("state") or "") != (POST_PROBE_WINNER_RECOVERY_READY_STATE):
-            blockers.append("counterfactual_state_not_ready")
-        if not bool(evidence.get("sample_floor_met")):
-            blockers.append("counterfactual_sample_floor_not_met")
-        if sample_floor <= 0 or sample_count < sample_floor:
-            blockers.append("counterfactual_sample_count_below_floor")
-        if ev_eligible_count < sample_floor:
-            blockers.append("counterfactual_ev_sample_count_below_floor")
-        if counterfactual_ev is None or counterfactual_ev <= 0:
-            blockers.append("counterfactual_ev_not_positive")
-
-        real = real_by_venue.get(venue) or {}
-        real_count = (
-            _int_or_default(real.get("source_quality_valid_closed_count"), 0) or 0
-        )
-        real_floor = _int_or_default(real_observation.get("sample_floor"), 0) or 0
-        real_ev = _bridge_candidate_float(real.get("source_quality_adjusted_ev_pct"))
-        real_promotion_ev_floor_met = bool(
-            real.get("promotion_ev_floor_met") is True
-            and _bridge_candidate_float(real.get("promotion_ev_floor_pct"))
-            == POST_PROBE_WINNER_RECOVERY_REAL_PROMOTION_MIN_EV_PCT
-        )
-        if (
-            real_floor > 0
-            and real_count >= real_floor
-            and (real_ev is None or real_ev <= 0)
-        ):
-            blockers.append("real_execution_ev_non_positive_rollback")
-        central_sizing_ready = bool(
-            real_floor == POST_PROBE_WINNER_RECOVERY_REAL_PROMOTION_SAMPLE_FLOOR
-            and real_count >= real_floor
-            and real_ev is not None
-            and real_ev >= POST_PROBE_WINNER_RECOVERY_REAL_PROMOTION_MIN_EV_PCT
-            and real_promotion_ev_floor_met
-        )
-
-        venue_evidence[venue] = {
-            "counterfactual_sample_count": sample_count,
-            "counterfactual_sample_floor": sample_floor,
-            "counterfactual_ev_eligible_sample_count": ev_eligible_count,
-            "counterfactual_notional_weighted_ev_pct": counterfactual_ev,
-            "real_execution_source_quality_valid_closed_count": real_count,
-            "real_execution_sample_floor": real_floor,
-            "real_execution_sample_floor_contract_valid": bool(
-                real_floor == POST_PROBE_WINNER_RECOVERY_REAL_PROMOTION_SAMPLE_FLOOR
-            ),
-            "real_execution_source_quality_adjusted_ev_pct": real_ev,
-            "central_sizing_promotion_ev_floor_pct": (
-                POST_PROBE_WINNER_RECOVERY_REAL_PROMOTION_MIN_EV_PCT
-            ),
-            "real_execution_promotion_ev_floor_contract_valid": (
-                real_promotion_ev_floor_met
-            ),
-            "central_sizing_promotion_ready": central_sizing_ready,
-            "blockers": blockers,
-        }
-        if blockers:
-            blocked_venues[venue] = blockers
-        else:
-            eligible_venues.append(venue)
-            if central_sizing_ready:
-                central_sizing_venues.append(venue)
-
-    status.update(
-        eligible_venues=eligible_venues,
-        blocked_venues=blocked_venues,
-        central_sizing_venues=central_sizing_venues,
-        venue_evidence=venue_evidence,
-    )
-    if not eligible_venues:
-        status["state"] = "no_eligible_venue"
-        return None, status
-
-    status["state"] = "next_preopen_auto_bounded_live_candidate"
-    recommended_values = {
-        "enabled": True,
-        "active_date": target_date,
-        "krx_enabled": "KRX" in eligible_venues,
-        "nxt_enabled": "NXT" in eligible_venues,
-        "premarket_enabled": "PREMARKET_KRX_LIKE" in eligible_venues,
-        "central_sizing_krx_enabled": "KRX" in central_sizing_venues,
-        "central_sizing_nxt_enabled": "NXT" in central_sizing_venues,
-        "central_sizing_premarket_enabled": (
-            "PREMARKET_KRX_LIKE" in central_sizing_venues
-        ),
-    }
-    candidate = {
-        "family": POST_PROBE_WINNER_RECOVERY_FAMILY,
-        "stage": POST_PROBE_WINNER_RECOVERY_STAGE,
-        "priority": 38,
-        "family_type": "bounded_tunable_post_probe_one_share_recovery",
-        "calibration_state": "adjust_up",
-        "calibration_reason": (
-            "positive_exact_blocker_ev_with_one_share_or_central_sizing_"
-            "venue_promotion"
-        ),
-        "threshold_version": (f"{POST_PROBE_WINNER_RECOVERY_FAMILY}:{target_date}:v2"),
-        "allowed_runtime_apply": True,
-        "safety_revert_required": False,
-        "post_apply_attribution_required": True,
-        "operator_action_required": False,
-        "operator_authorization_provenance": (
-            "explicit_operator_direction_2026-09-13_"
-            "winner_recovery_central_sizing_auto_promotion"
-        ),
-        "initial_real_qty_cap": 1,
-        "automatic_quantity_increase_above_one_share_allowed": bool(
-            central_sizing_venues
-        ),
-        "quantity_policy_owner": "position_sizing_dynamic_formula",
-        "sample_count": sum(
-            int(venue_evidence[venue]["counterfactual_sample_count"])
-            for venue in eligible_venues
-        ),
-        "sample_floor": int(observation.get("sample_floor") or 0),
-        "current_values": {
-            "enabled": False,
-            "active_date": "",
-            "krx_enabled": False,
-            "nxt_enabled": False,
-            "premarket_enabled": False,
-            "central_sizing_krx_enabled": False,
-            "central_sizing_nxt_enabled": False,
-            "central_sizing_premarket_enabled": False,
-        },
-        "recommended_values": recommended_values,
-        "target_env_keys": [
-            "SCALP_POST_PROBE_WINNER_RECOVERY_ENABLED",
-            "SCALP_POST_PROBE_WINNER_RECOVERY_ACTIVE_DATE",
-            "SCALP_POST_PROBE_WINNER_RECOVERY_KRX_ENABLED",
-            "SCALP_POST_PROBE_WINNER_RECOVERY_NXT_ENABLED",
-            "SCALP_POST_PROBE_WINNER_RECOVERY_PREMARKET_ENABLED",
-            "SCALP_POST_PROBE_WINNER_RECOVERY_CENTRAL_SIZING_KRX_ENABLED",
-            "SCALP_POST_PROBE_WINNER_RECOVERY_CENTRAL_SIZING_NXT_ENABLED",
-            "SCALP_POST_PROBE_WINNER_RECOVERY_CENTRAL_SIZING_PREMARKET_ENABLED",
-        ],
-        "source_quality_gate": "pass",
-        "source_quality_status": "pass",
-        "source_metrics": {
-            "source_quality_pass": True,
-            "provenance_present": True,
-            "eligible_venues": eligible_venues,
-            "central_sizing_venues": central_sizing_venues,
-            "blocked_venues": blocked_venues,
-            "venue_evidence": venue_evidence,
-        },
-        "runtime_handoff_contract": {
-            "decision_authority": "next_preopen_bounded_candidate_only",
-            "runtime_effect": False,
-            "same_stage_max_selected": 1,
-            "post_apply_attribution_required": True,
-            "preopen_selection_state": "pending_not_applied",
-            "manipulation_point": POST_PROBE_WINNER_RECOVERY_STAGE,
-            "rollback_guard": (
-                "source_quality_block_or_venue_ev_below_0_1_returns_to_one_share_"
-                "and_non_positive_ev_disables_venue"
-            ),
-            "quantity_policy_owner": "position_sizing_dynamic_formula",
-            "quantity_policy_missing_or_invalid_fallback": "one_share_canary",
-        },
-        "runtime_effect": False,
-        "actual_order_submitted": False,
-        "broker_order_forbidden": True,
-        "decision_authority": (
-            "postclose_deterministic_next_preopen_bounded_live_candidate"
-        ),
-        "metric_role": "bounded_tunable_post_probe_winner_recovery",
-        "window_policy": ("rolling_clean_baseline_exact_blocker_by_effective_venue"),
-        "primary_decision_metric": "notional_weighted_ev_pct",
-        "forbidden_uses": [
-            "intraday_runtime_apply",
-            "full_residual_submit",
-            "quantity_increase_without_valid_central_sizing_policy",
-            "cross_venue_promotion",
-            "hard_safety_relaxation",
-            "broker_guard_bypass",
-            "order_guard_relaxation",
-            "quantity_guard_relaxation",
-            "position_cap_release",
-            "provider_route_change",
-            "bot_restart",
-        ],
-    }
-    return candidate, status
+    return None
 
 
 def _load_scalping_pyramid_quality_calibration_candidates(
@@ -1737,132 +1507,13 @@ def _load_scalping_pyramid_quality_calibration_candidates(
     *,
     target_date: str | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    if not source_date:
-        return [], {"status": "missing_source_date", "path": None}
-    path = _scalping_pyramid_quality_calibration_path(source_date)
-    if not path.exists():
-        return [], {"status": "missing_report", "path": str(path)}
-    payload = _load_json(path)
-    candidates = payload.get("calibration_candidates")
-    if not isinstance(candidates, list):
-        candidate = payload.get("calibration_candidate")
-        candidates = [candidate] if isinstance(candidate, dict) else []
-    from src.engine.daily_threshold_cycle_report import _json_sha256
-    normalized = [{**item, "source_report_content_sha256": _json_sha256(payload)}
-                  for item in candidates if isinstance(item, dict)]
-    cumulative_contract_error = _cumulative_quality_update_contract_error(
-        payload,
-        normalized,
-        owner_family="scalping_pyramid_quality_gate",
-        owner_stage="scale_in",
-    )
-    from src.engine.lifecycle.avg_down_replay import economic_report_contract_errors
-    cumulative_contract_error = cumulative_contract_error or next(iter(economic_report_contract_errors(payload)), "")
-    if cumulative_contract_error:
-        normalized = [
-            {
-                **item,
-                "allowed_runtime_apply": False,
-                "calibration_state": "freeze",
-                "apply_block_reason": (
-                    f"single_cumulative_quality_contract:{cumulative_contract_error}"
-                ),
-            }
-            for item in normalized
-        ]
-    winner_recovery_candidate, winner_recovery_status = (
-        _winner_recovery_auto_apply_candidate(payload, target_date=target_date)
-    )
-    all_candidates = [*normalized]
-    if winner_recovery_candidate:
-        all_candidates.append(winner_recovery_candidate)
-    all_candidates, preflight_status = _block_candidates_by_source_quality_preflight(
-        all_candidates,
-        source_date,
-        source_report_type="scalping_pyramid_quality_calibration",
-    )
-    selected_candidate = all_candidates[0] if all_candidates else {}
-    return all_candidates, {
-        "status": "loaded",
-        "path": str(path),
-        "allowed_runtime_apply": selected_candidate.get("allowed_runtime_apply"),
-        "calibration_state": selected_candidate.get("calibration_state"),
-        "sample_count": selected_candidate.get("sample_count"),
-        "source_quality_preflight": preflight_status,
-        "source_quality_blocked": bool(preflight_status.get("blocked")),
-        "runtime_update_contract_error": cumulative_contract_error or None,
-        "winner_recovery_auto_apply": winner_recovery_status,
-    }
+    return [], retired_status("scalping_pyramid_quality_calibration")
 
 
 def _load_scalping_avg_down_recovery_calibration_candidates(
     source_date: str | None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    if not source_date:
-        return [], {"status": "missing_source_date", "path": None}
-    path = _scalping_avg_down_recovery_calibration_path(source_date)
-    if not path.exists():
-        return [], {"status": "missing_report", "path": str(path)}
-    payload = _load_json(path)
-    candidates = payload.get("calibration_candidates")
-    if not isinstance(candidates, list):
-        candidate = payload.get("calibration_candidate")
-        candidates = [candidate] if isinstance(candidate, dict) else []
-    from src.engine.daily_threshold_cycle_report import _json_sha256
-    normalized = [{**item, "source_report_content_sha256": _json_sha256(payload)}
-                  for item in candidates if isinstance(item, dict)]
-    report_schema_error = (
-        "avg_down_report_schema_version_invalid"
-        if payload.get("schema_version") != 2
-        else ""
-    )
-    cumulative_contract_error = _cumulative_quality_update_contract_error(
-        payload,
-        normalized,
-        owner_family="scalping_avg_down_recovery_quality_gate",
-        owner_stage="scale_in",
-    )
-    candidate_contract_errors = [
-        (
-            _avg_down_candidate_contract_error(item)
-            if bool(item.get("allowed_runtime_apply"))
-            else _avg_down_source_only_candidate_contract_error(item)
-        )
-        for item in normalized
-    ]
-    contract_error = (
-        report_schema_error
-        or cumulative_contract_error
-        or next((error for error in candidate_contract_errors if error), "")
-    )
-    from src.engine.lifecycle.avg_down_replay import economic_report_contract_errors
-    contract_error = contract_error or next(iter(economic_report_contract_errors(payload)), "")
-    if contract_error:
-        normalized = [
-            {
-                **item,
-                "allowed_runtime_apply": False,
-                "calibration_state": "freeze",
-                "apply_block_reason": f"avg_down_runtime_contract:{contract_error}",
-            }
-            for item in normalized
-        ]
-    normalized, preflight_status = _block_candidates_by_source_quality_preflight(
-        normalized,
-        source_date,
-        source_report_type="scalping_avg_down_recovery_calibration",
-    )
-    return normalized, {
-        "status": "loaded",
-        "path": str(path),
-        "candidate_count": len(normalized),
-        "allowed_runtime_apply_candidate_count": sum(
-            1 for item in normalized if bool(item.get("allowed_runtime_apply"))
-        ),
-        "source_quality_preflight": preflight_status,
-        "source_quality_blocked": bool(preflight_status.get("blocked")),
-        "runtime_update_contract_error": contract_error or None,
-    }
+    return [], retired_status("scalping_avg_down_recovery_calibration")
 
 
 def _entry_recheck_drought_controller_path(source_date: str) -> Path:
@@ -2727,6 +2378,8 @@ def _values_equal(left: Any, right: Any) -> bool:
 
 
 def _env_overrides_for_candidate(candidate: dict[str, Any]) -> dict[str, str]:
+    if str(candidate.get("family") or "") in RETIRED_RUNTIME_FAMILY_REASONS:
+        return {}
     recommended = (
         candidate.get("recommended_values")
         if isinstance(candidate.get("recommended_values"), dict)

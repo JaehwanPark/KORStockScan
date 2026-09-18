@@ -11172,6 +11172,95 @@ class GPTSniperEngine:
             input_contract_fields=contract_fields,
         )
 
+    def evaluate_main_rebound_entry(
+        self, *, stock_code, ws_data, recent_ticks, recent_candles, candle_meta, now_ts, position_tag=None,
+    ):
+        """Reuse Main entry policy/assessment on existing holding market input.
+
+        This pure signal producer never calls a provider, broker or history API.
+        Its output is a rebound timing signal, not order or quantity authority.
+        """
+        from src.engine.scalping import mechanistic_entry_runtime_policy as policy_owner
+        from src.engine.scalping.entry_candle_context import (
+            build_entry_candle_context, resolve_entry_candle_session,
+            resolve_entry_candle_venue,
+        )
+        from src.trading.market.micro_confirmation import load_live_dynamic_confirmation_source
+        from src.trading.market.entry_adverse_flow import evaluate_snapshot
+        from src.utils.constants import DATA_DIR
+
+        blocked = {"should_add": False, "reason": "shared_main_rebound_source_unavailable"}
+        try:
+            session = resolve_entry_candle_session(now_ts=now_ts)
+            venue = resolve_entry_candle_venue(ws_data, session=session)
+            cohort = (venue.upper(), session.upper())
+            # Resolve through the exact Main entry owner, including its
+            # activation, same-stage, position-tag and scope constraints.
+            live = resolve_live_prompt_policy(strategy="SCALPING",
+                configured_prompt_version=str(getattr(TRADING_RULES,
+                    "OPENAI_ANALYZE_TARGET_PROMPT_VERSION", "hot_v1")),
+                position_tag=position_tag or ws_data.get("position_tag"),
+                effective_venue=venue, session_bucket=session,
+                now=datetime.fromtimestamp(now_ts, tz=policy_owner.KST))
+            if (live.get("enabled") is not True or not live.get("machine_bundle_sha256")
+                    or not isinstance(live.get("mechanistic_threshold_policy"), dict)):
+                return {**blocked, "reason": "shared_main_entry_policy_scope_missing",
+                        "policy_status": live.get("status")}
+            bundle = {"bundle_sha256": live["machine_bundle_sha256"],
+                      "machine_policy": live["mechanistic_threshold_policy"]}
+            # Explicit list and auxiliary-fetch OFF prevent the neutral context
+            # builder from acquiring any extra source for ADD observations.
+            meta = dict(candle_meta or {})
+            meta["multi_timeframe_auxiliary_fetch"] = False
+            context = build_entry_candle_context(
+                None, stock_code, ws_data, venue, session, now_ts=now_ts,
+                recent_candles=list(recent_candles or []), source_meta=meta,
+                include_investor_source=False,
+            )
+            if not ai_input_preflight(context).get("allowed"):
+                return {**blocked, "reason": "shared_main_rebound_input_preflight_blocked"}
+            exact = self._build_entry_screen_hot_payload(
+                ws_data, recent_ticks, recent_candles, candle_context=context,
+            )
+            exact.update(stock_code=stock_code, effective_venue=venue, session_bucket=session)
+            snapshot, status = load_live_dynamic_confirmation_source()
+            exact["mechanistic_micro_window"] = (
+                evaluate_snapshot(snapshot=snapshot, symbol=stock_code, route=venue,
+                    cutoff_ms=int(now_ts * 1000))
+                if snapshot is not None else {"source_quality_status": "source_gap", "reason": status}
+            )
+            setup = build_entry_setup_evidence(
+                exact_payload=exact,
+                exact_analysis=build_exact_payload_analysis_v1(exact, stage="entry", live_entry=True),
+                recovery_analysis=build_v2_13_recovery_confirmation_analysis_v1(exact, stage="entry"),
+                entry_timing_context=exact.get("entry_timing_context"),
+                balanced_policy=live.get("selected_prompt_version") in AUXILIARY_ENTRY_RISK_PROMPT_VERSIONS,
+                timing_aware_policy=live.get("selected_prompt_version") not in {
+                    DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
+                    DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION},
+            )
+            assessment = mechanistic_entry_policy_decision(setup, policy=bundle["machine_policy"])
+            family = str(setup.get("setup_family") or "")
+            # Continuation alone cannot become an averaging-down signal. This
+            # uses the existing entry family classification without a new grid.
+            rebound = family in {"PULLBACK_RECOVERY", "RECOVERY_CONFIRMATION", "MICRO_RECOVERY"}
+            if not rebound or assessment["action"] != "ENTER_NOW":
+                return {"should_add": False, "reason": "shared_main_rebound_not_confirmed",
+                    "machine_action": assessment["action"], "structure_phase_family": family}
+            return {
+                "should_add": True,
+                "source_signal_id": policy_owner.digest({"symbol": stock_code,
+                    "cohort": cohort, "bundle": bundle["bundle_sha256"],
+                    "source": {"ticks": recent_ticks, "ws": ws_data}}),
+                "machine_bundle_sha256": bundle["bundle_sha256"],
+                "machine_policy_version": assessment["policy_version"],
+                "machine_action": assessment["action"], "structure_phase_family": family,
+                "effective_venue": venue, "session_bucket": session,
+            }
+        except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            return {**blocked, "reason": "shared_main_rebound_contract_invalid",
+                "error_type": type(exc).__name__}
+
     def evaluate_scalping_holding_score(
         self,
         stock_name,

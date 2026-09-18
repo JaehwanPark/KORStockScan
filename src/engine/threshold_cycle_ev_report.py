@@ -136,8 +136,8 @@ def _warning_contract(
     }
 
 
-def _load_json(path: Path) -> dict[str, Any]:
-    if retired_artifact(path):
+def _load_json(path: Path, *, archive_only: bool = False) -> dict[str, Any]:
+    if retired_artifact(path) and not archive_only:
         return {}
     actual_path = existing_or_gzip_path(path)
     try:
@@ -163,7 +163,7 @@ def _load_json(path: Path) -> dict[str, Any]:
             }
         )
         return {}
-    return current_report_view(payload) if isinstance(payload, dict) else {}
+    return payload if archive_only else current_report_view(payload)
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -2433,12 +2433,18 @@ def compact_scale_in_policy_attribution(attribution):
             for name, value in (attribution or {}).items() if isinstance(value, dict)}
 
 
-def _scale_in_economic_attribution(target_date):
-    """Report model deltas and exact actual receipts as separate populations."""
+def _scale_in_economic_attribution(target_date, *, include_retired_history=False):
+    """Retired by default; explicit archive audit retains historical actual receipts."""
+    if not include_retired_history:
+        from src.engine.lifecycle.retirement import retired_status
+        return {name: {**retired_status(name), "actual_economic_acceptance": False,
+                      "actual_completed_net_pnl_krw": None}
+                for name in ("scalping_pyramid_quality_calibration", "scalping_avg_down_recovery_calibration")}
+
     result = {}
     for name in ("scalping_pyramid_quality_calibration", "scalping_avg_down_recovery_calibration"):
         path = REPORT_DIR / name / f"{name}_{target_date}.json"
-        payload = _load_json(path)
+        payload = _load_json(path, archive_only=True)
         if payload.get("target_date") != target_date:
             result[name] = {"status": "missing_current_source", "actual_economic_acceptance": False}
             continue

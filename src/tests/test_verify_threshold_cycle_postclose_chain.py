@@ -120,7 +120,7 @@ def test_retired_latency_is_not_an_ai_candidate_or_an_exemption():
         "calibration_state": "adjust_up",
         "allowed_runtime_apply": True,
     }
-    active = {**stale, "family": "scalping_pyramid_quality_gate"}
+    active = {**stale, "family": "holding_flow_strategy_policy"}
     assert mod._runtime_candidates_requiring_ai(
         {"calibration_candidates": [stale, active]}
     ) == [active["family"]]
@@ -7711,124 +7711,8 @@ def test_build_threshold_cycle_postclose_verification_fails_when_scale_in_source
     assert report["missing_required_artifacts"] == []
 
 
-def test_avg_down_verifier_accepts_source_only_candidate_without_runtime_leak(
-    tmp_path, monkeypatch
-):
-    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path)
-    path = (
-        tmp_path
-        / "scalping_avg_down_recovery_calibration"
-        / "scalping_avg_down_recovery_calibration_2026-09-04.json"
-    )
-    path.parent.mkdir(parents=True)
-    candidate = {
-        "family": mod.AVG_DOWN_RECOVERY_FAMILY,
-        "calibration_state": "hold_runtime_scope",
-        "calibration_reason": "requires_paired_exit_replay",
-        "allowed_runtime_apply": False,
-        "quality_update_id": "avg-1",
-        "evidence_contract_version": mod.AVG_DOWN_EVIDENCE_CONTRACT_VERSION,
-        "evidence_digest": "a" * 64,
-        "evidence_authority": "fixed_observed_exit_source_only",
-        "evaluation_method": "fixed_observed_exit_counterfactual",
-        "source_date": "2026-09-04",
-        "target_date": "2026-09-04",
-        "target_env_key": "SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE",
-        "target_env_keys": [],
-        "changed_target_env_keys": [],
-        "current_value": 85.0,
-        "recommended_value": 85.0,
-        "current_values": {"shallow_min_buy_pressure": 85.0},
-        "recommended_values": {"shallow_min_buy_pressure": 85.0},
-        "recommended_values_changed": False,
-        "runtime_effect": False,
-        "actual_order_submitted": False,
-        "broker_order_forbidden": True,
-    }
-    path.write_text(
-        json.dumps(
-            {
-                "schema_version": 2,
-                "target_date": "2026-09-04",
-                "calibration_candidates": [candidate],
-                "runtime_update_contract": {
-                    "owner_family": mod.AVG_DOWN_RECOVERY_FAMILY,
-                    "owner_stage": "scale_in",
-                    "update_mode": "single_cumulative_quality_update",
-                    "runtime_apply_candidate_count": 1,
-                    "max_runtime_apply_count": 1,
-                    "quality_update_id": "avg-1",
-                    "evidence_contract_version": (
-                        mod.AVG_DOWN_EVIDENCE_CONTRACT_VERSION
-                    ),
-                    "evidence_digest": "a" * 64,
-                    "allowed_runtime_apply_count": 0,
-                    "runtime_effect": False,
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    status = mod._avg_down_calibration_contract_status("2026-09-04")
-
-    assert status["status"] == "pass"
-    assert status["runtime_candidate_present"] is False
-    assert status["evidence_authority"] == "fixed_observed_exit_source_only"
 
 
-def test_avg_down_verifier_rejects_source_only_runtime_authority_leak(
-    tmp_path, monkeypatch
-):
-    monkeypatch.setattr(mod, "REPORT_DIR", tmp_path)
-    path = (
-        tmp_path
-        / "scalping_avg_down_recovery_calibration"
-        / "scalping_avg_down_recovery_calibration_2026-09-04.json"
-    )
-    path.parent.mkdir(parents=True)
-    candidate = {
-        "family": mod.AVG_DOWN_RECOVERY_FAMILY,
-        "allowed_runtime_apply": True,
-        "quality_update_id": "avg-1",
-        "evidence_contract_version": mod.AVG_DOWN_EVIDENCE_CONTRACT_VERSION,
-        "evidence_digest": "a" * 64,
-        "evidence_authority": "fixed_observed_exit_source_only",
-        "source_date": "2026-09-04",
-        "target_date": "2026-09-04",
-        "runtime_effect": False,
-        "actual_order_submitted": False,
-        "broker_order_forbidden": True,
-    }
-    path.write_text(
-        json.dumps(
-            {
-                "schema_version": 2,
-                "target_date": "2026-09-04",
-                "calibration_candidates": [candidate],
-                "runtime_update_contract": {
-                    "owner_family": mod.AVG_DOWN_RECOVERY_FAMILY,
-                    "owner_stage": "scale_in",
-                    "update_mode": "single_cumulative_quality_update",
-                    "runtime_apply_candidate_count": 1,
-                    "max_runtime_apply_count": 1,
-                    "quality_update_id": "avg-1",
-                    "evidence_contract_version": (
-                        mod.AVG_DOWN_EVIDENCE_CONTRACT_VERSION
-                    ),
-                    "evidence_digest": "a" * 64,
-                    "allowed_runtime_apply_count": 1,
-                    "runtime_effect": False,
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    status = mod._avg_down_calibration_contract_status("2026-09-04")
-
-    assert status["status"] == "fail"
-    assert "avg_down_runtime_candidate_source_only_authority_leak" in status["issues"]
 
 
 def test_source_quality_blocked_workorder_requires_complete_followup_contract():
@@ -7907,3 +7791,10 @@ def test_swing_priority_handoff_preserves_selected_runtime_contract(monkeypatch)
     assert status["status"] == "pass"
     assert status["observed_swing_priority_policy_ids"] == ["swing-policy-1"]
     assert status["missing"] == []
+
+
+def test_retired_scale_in_artifacts_are_never_current_contract_or_apply_authority():
+    for check in (mod._pyramid_calibration_contract_status, mod._avg_down_calibration_contract_status):
+        status = check({"allowed_runtime_apply": True, "runtime_effect": True})
+        assert status["status"] == "retired"
+        assert status["runtime_candidate_present"] is False

@@ -8376,3 +8376,70 @@ def test_transport_trace_copy_preserves_generic_provider_response_id():
     assert target["provider"] == "bedrock"
     assert target["provider_response_id"] == "aws-request-1"
     assert target["bedrock_response_id"] == "aws-request-1"
+
+
+@pytest.mark.parametrize("case", ["rebound", "pullback", "continuation", "invalid", "wide_spread", "source_gap", "policy_gap"])
+def test_shared_rebound_producer_uses_real_entry_core_and_never_provider(monkeypatch, case):
+    from src.engine.scalping import mechanistic_entry_runtime_policy as policy
+    from src.engine.scalping import entry_candle_context as candles
+    from src.engine.scalping.entry_setup_evidence import MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1
+    from src.trading.market import micro_confirmation, entry_adverse_flow
+    import copy
+
+    engine = _build_engine()
+    monkeypatch.setattr(engine, "_call_openai_safe", lambda *a, **k: pytest.fail("pure signal cannot call provider"))
+    monkeypatch.setattr(candles, "resolve_entry_candle_session", lambda **k: "krx_regular")
+    monkeypatch.setattr(candles, "resolve_entry_candle_venue", lambda *a, **k: "KRX")
+    builds = []
+    def context(*a, **kw):
+        builds.append(kw)
+        assert kw["recent_candles"] == []
+        assert kw["source_meta"]["multi_timeframe_auxiliary_fetch"] is False
+        assert kw["include_investor_source"] is False
+        return _allowed_entry_candle_context()
+    monkeypatch.setattr(candles, "build_entry_candle_context", context)
+    bundle = {"machine_policy": copy.deepcopy(MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1),
+        "bundle_sha256": "b" * 64, "all_continuous_adopted": False}
+    scopes = []
+    def resolve(**kw):
+        scopes.append(kw)
+        return {"enabled": case != "policy_gap", "machine_bundle_sha256": "b" * 64,
+            "mechanistic_threshold_policy": bundle["machine_policy"],
+            "selected_prompt_version": next(iter(openai_module.AUXILIARY_ENTRY_RISK_PROMPT_VERSIONS))}
+    monkeypatch.setattr(openai_module, "resolve_live_prompt_policy", resolve)
+    monkeypatch.setattr(openai_module, "ai_input_preflight", lambda c: {"allowed": case != "source_gap"})
+    monkeypatch.setattr(micro_confirmation, "load_live_dynamic_confirmation_source", lambda: (None, "source_gap"))
+    monkeypatch.setattr(engine, "_build_entry_screen_hot_payload", lambda *a, **k: {
+        "current": {"price": 9950},
+        "features": {"tick_aggressor_pressure_usable": True, "tick_context_stale": False,
+            "quote_stale": False, "large_sell_print_detected": False,
+            "tick_aggressor_trusted_count": 10, "net_aggressive_delta_10t": 500,
+            "price_change_10t_pct": 0.1}})
+    monkeypatch.setattr(openai_module, "build_exact_payload_analysis_v1", lambda *a, **k: {
+        "schema": "exact_payload_analysis_v1",
+        "source_quality": {"status": "pass", "completed_bar_count": 20},
+        "completed_structure": {"phase": "pullback" if case == "pullback" else
+            "continuation" if case == "continuation" else "rebound_attempt"},
+        "executable_liquidity": {"execution_cost_state": "low", "spread_bp": 200 if case == "wide_spread" else 10,
+            "fillability_score": 90, "top3_ask_to_bid_ratio": 0.5},
+        "deterministic_contract_facts": {"trusted_supportive_trigger": True,
+            "orderly_pullback_recovery": case == "pullback", "blocking_overextension": case == "invalid"},
+    })
+    monkeypatch.setattr(openai_module, "build_v2_13_recovery_confirmation_analysis_v1", lambda *a, **k: {
+        "schema": "anticipatory_reversal_analysis_v1",
+        "source_mode": "fresh_dual", "hard_blockers": [],
+        "clean_continuation_probe": {"eligible": True},
+        "recovery_confirmation_probe": {"eligible": True}})
+    result = engine.evaluate_main_rebound_entry(stock_code="005930", ws_data={},
+        recent_ticks=[], recent_candles=[], candle_meta={"multi_timeframe_auxiliary_fetch": True}, now_ts=2000)
+    assert scopes[0]["strategy"] == "SCALPING"
+    assert scopes[0]["effective_venue"] == "KRX"
+    assert scopes[0]["session_bucket"] == "krx_regular"
+    assert result["should_add"] is (case in {"rebound", "pullback"}), result
+    if result["should_add"]:
+        assert result["machine_action"] == "ENTER_NOW"
+        assert result["machine_bundle_sha256"] == "b" * 64
+        assert len(result["source_signal_id"]) == 64
+        later = engine.evaluate_main_rebound_entry(stock_code="005930", ws_data={},
+            recent_ticks=[], recent_candles=[], candle_meta={}, now_ts=2001)
+        assert later["source_signal_id"] == result["source_signal_id"]

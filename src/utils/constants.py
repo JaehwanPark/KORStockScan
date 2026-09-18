@@ -143,7 +143,7 @@ class TradingConfig:
     # ==========================================
     # 3.2 추가매수(스캘핑) 설정
     # ==========================================
-    SCALPING_ENABLE_PYRAMID: bool = True
+    SCALPING_ENABLE_PYRAMID: bool = False
     SCALPING_MAX_AVG_DOWN_COUNT: int = (
         0  # DEPRECATED: reversal_add/AVG_DOWN receipt attribution only
     )
@@ -186,7 +186,7 @@ class TradingConfig:
     # ==========================================
     # 3.3 추가매수(스윙) 설정
     # ==========================================
-    SWING_ENABLE_PYRAMID: bool = True
+    SWING_ENABLE_PYRAMID: bool = False
     SWING_ENABLE_AVG_DOWN_SIMULATION: bool = True  # dry-run/probe 전용 물타기 후보 관찰
     SWING_MAX_AVG_DOWN_COUNT: int = (
         0  # DEPRECATED: historical AVG_DOWN receipt attribution only
@@ -5034,11 +5034,7 @@ def _build_trading_rules() -> TradingConfig:
     ):
         config = replace(
             config,
-            SCALPING_ENABLE_PYRAMID=(
-                env_scalping_enable_pyramid
-                if env_scalping_enable_pyramid is not None
-                else config.SCALPING_ENABLE_PYRAMID
-            ),
+            SCALPING_ENABLE_PYRAMID=False,
             INVEST_RATIO_SCALPING_MIN=(
                 env_invest_ratio_scalping_min
                 if env_invest_ratio_scalping_min is not None
@@ -5064,11 +5060,7 @@ def _build_trading_rules() -> TradingConfig:
                 if env_scalping_max_pyramid_count is not None
                 else config.SCALPING_MAX_PYRAMID_COUNT
             ),
-            SWING_ENABLE_PYRAMID=(
-                env_swing_enable_pyramid
-                if env_swing_enable_pyramid is not None
-                else config.SWING_ENABLE_PYRAMID
-            ),
+            SWING_ENABLE_PYRAMID=False,
             SWING_ENABLE_AVG_DOWN_SIMULATION=(
                 env_swing_enable_avg_down_simulation
                 if env_swing_enable_avg_down_simulation is not None

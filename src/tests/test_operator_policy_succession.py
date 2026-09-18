@@ -345,65 +345,6 @@ def test_same_stage_conflict_cannot_use_lock_to_approve_successor(scope):
     assert not d.get("operator_policy_succession")
 
 
-def test_pyramid_recomputes_existing_grid_before_succession(scope):
-    runtime, _, _ = scope
-    key = next(iter(mod.POLICY_KEYS[mod.PYRAMID]))
-    c = dict(
-        family=mod.PYRAMID,
-        stage="scale_in",
-        allowed_runtime_apply=True,
-        current_value=1.1,
-        recommended_value=1.0,
-        current_values={"min_profit_pct": 1.1},
-        recommended_values={"min_profit_pct": 1.0},
-        bounds={"min": 0.1, "max": 3.0},
-        max_step_per_day=0.2,
-        runtime_update_mode="single_cumulative_quality_update",
-        evidence_digest="evidence",
-        cumulative_quality_window={
-            "window_policy": "clean_baseline_cumulative",
-            "source_dates": ["2026-09-07", "2026-09-08"],
-            "end_date": "2026-09-08",
-        },
-        source_quality_gate="pass",
-        decision_evidence_gate="pass",
-        source_metrics={
-            "profit_threshold_grid": [
-                {
-                    "min_profit_pct": 1.1,
-                    "eligible_count": 20,
-                    "equal_weight_expected_net_profit_contribution_pct": 0.1,
-                },
-                {
-                    "min_profit_pct": 1.0,
-                    "eligible_count": 20,
-                    "equal_weight_expected_net_profit_contribution_pct": 0.2,
-                },
-            ]
-        },
-    )
-    lock = {
-        "family": mod.PYRAMID,
-        "stage": "scale_in",
-        "enabled": True,
-        "env_overrides": {key: "1.1"},
-    }
-
-    def reason():
-        return mod.succession_reason(
-            c,
-            lock,
-            {key: "1.0"},
-            mod.current_locked_values(lock, runtime, "2026-09-09"),
-            ordinary_allowed=True,
-            target_date="2026-09-09",
-        )
-
-    assert reason() == ""
-    c["source_metrics"]["profit_threshold_grid"][1][
-        "equal_weight_expected_net_profit_contribution_pct"
-    ] = -0.1
-    assert reason() == "family_economic_replay_not_ready"
 
 
 def test_runtime_summary_does_not_call_successor_original_operator_lock(scope):
@@ -491,58 +432,16 @@ def test_unsupported_owned_shell_expression_fails_closed(scope):
         mod.read_operator_env(path)
 
 
-def test_avg_down_approved_provenance_survives_family_owned_hold(scope):
-    from src.tests.test_threshold_cycle_preopen_apply import _valid_avg_down_candidate
 
+
+@pytest.mark.parametrize("family", [mod.PYRAMID, mod.AVG_DOWN])
+def test_retired_scale_in_succession_cannot_recompute_or_carry_policy(scope, family):
     runtime, locks, _ = scope
-    c = _valid_avg_down_candidate()
-    c["source_date"] = c["target_date"] = "2026-09-08"
-    c["cumulative_quality_window"].update(
-        end_date="2026-09-08", source_dates=["2026-09-08"]
-    )
-    key = "KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE"
-    lock = {
-        "family": mod.AVG_DOWN,
-        "stage": "scale_in",
-        "enabled": True,
-        "lock_id": "avg-lock",
-        "priority": 37,
-        "env_overrides": {key: "85"},
-    }
-    (locks / "avg.json").write_text(json.dumps(lock))
-    ai = {
-        "items_by_family": {
-            mod.AVG_DOWN: {
-                **c,
-                "guard_accepted": True,
-                "route_action": "threshold_candidate",
-            }
-        }
-    }
-    for day in ("2026-09-09", "2026-09-10"):
-        selected, decisions, env = preopen._select_auto_apply_candidates(
-            [c], ai_review=ai, require_ai=True, target_date=day, operator_locks=[lock]
-        )
-        manifest = {
-            "source_date": "2026-09-08",
-            "auto_apply_selected": selected,
-            "auto_apply_decisions": decisions,
-        }
-        preopen._write_runtime_env(day, manifest, env)
-        written = json.loads(
-            (runtime / f"threshold_runtime_env_{day}.json").read_text()
-        )
-        values = mod.validate_receipt(written, runtime, locks)
-        assert values[key] == "80"
-        assert (
-            values["KORSTOCKSCAN_AVG_DOWN_RUNTIME_QUALITY_UPDATE_ID"]
-            == "avg-down-quality-1"
-        )
-        c.update(
-            calibration_state="hold_runtime_scope",
-            allowed_runtime_apply=False,
-            current_value=80.0,
-            sample_floor_passed=False,
-            recommended_values_changed=False,
-        )
-    assert decisions[0]["selection_change_class"] == "policy_carried_forward"
+    c = {"family": family, "stage": "scale_in", "allowed_runtime_apply": True}
+    assert mod.succession_reason(c, {}, {}, {}, ordinary_allowed=True, target_date="2026-09-18") == "independent_scale_in_strategy_retired_20260918"
+    receipt = {"schema": mod.SCHEMA, "authority": mod.AUTHORITY, "target_date": "2026-09-18",
+               "policies": [{"family": family}]}
+    receipt["sha256"] = mod.digest(receipt)
+    previous = {"target_date": "2026-09-18", "operator_policy_succession": receipt}
+    assert mod.validate_receipt(previous, runtime, locks) == {}
+    assert mod.prepare_locks([], [c], previous, runtime, locks, "2026-09-18") == []

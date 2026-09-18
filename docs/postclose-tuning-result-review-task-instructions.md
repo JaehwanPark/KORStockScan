@@ -1,593 +1,209 @@
-# 장후작업 실행 모니터링·장애복구·추천구현 지시문
+# 장후작업 결과 점검 지시문
 
-현행 코드 기준: `2026-09-16 KST`. 공통 main/장후/PREOPEN의 권위 세대는 `data/runtime/runtime_release_selection.json`, 독립 widget/episode systemd의 구성 세대는 `data/runtime/unified_runtime_deployment.json`과 unit별 유효 drop-in에서 확인한다. 문서에 적힌 과거 release 이름·commit은 배포 이력일 뿐 현재 선택값이 아니다. selector·manifest 변경, 실제 PID 소비, 당일 자연 장후/PREOPEN 성공과 경제성은 각각 별도 receipt로 대사한다.
+역할: 활성 장후작업이 기계적으로 정상 종료했고, 비용 후 EV·순이익 개선에 필요한 의도한 분석결과를 만들었는지 판정하는 반복 점검 절차다. 문서 열람·편집은 점검 실행 요청이 아니다. 명시적인 결과 점검 요청은 기본적으로 읽기 전용이며, 단회 요청은 실제 as-of 상태를 보고하고 지속 요청은 지정된 종료조건까지 확인한다.
 
-문서 자동 현행화: [서버 스케줄·API·게시 검증](./monitoring-instruction-refresh.md). 이 자동화는 작업지시문만 정비하며 모니터링 자체를 실행하지 않는다.
+작업별로 **실행 정상성 / 분석 유효성 / 결손·결함 / 달성 가능성 / 직접 소비·다음 조치**를 따로 판정한다. exit 0·DONE·파일 생성·코드 존재·표본 증가를 경제성 성공으로 대체하지 않는다. 후보가 없어도 유효한 비교 끝에 incumbent carry가 나온 것은 의도한 분석결과일 수 있다.
 
-역할: 반복 운영 절차. 날짜별 완료·배포 기록과 OPEN ID는 현재 체크리스트 및 해당 감사 보고서에서 확인한다.
+현행 활성 목록은 [장후작업 목록](audit-reports/2026-09-05-postclose-work-inventory.md)이 소유한다. 설치 cron·systemd 유효 설정과 실제 실행 release/snapshot으로 목록을 대사한다. 과거 PID·commit·완료 이력을 지시문에 누적하지 않는다. 원칙·active/observe/OFF·rollback은 [Plan Rebase §1–§8](plan-korStockScanPerformanceOptimization.rebase.md), 실행 ID·Due·Acceptance는 현재 KST 체크리스트가 소유한다. [runbook](time-based-operations-runbook.md), [traceability](report-based-automation-traceability.md), [release routing](runtime-release-routing.md)은 필요한 해당 계약만 읽는다.
 
-명시적으로 이 지시문에 따른 모니터링을 요청받으면 도래한 체크리스트 실행·점검, 장후 장애의 허용 source-only 수리·검증·최소 재실행, terminal generation의 추천 전수 intake와 2-pass fixed-point 구현을 수행한다. 이미 허용된 보완은 별도 재지시를 기다리지 않는다. 문서 인용·열람·정비 또는 읽기 전용 점검은 이 실행 요청이 아니다. 단회/지속 요청의 종료조건을 보존한다.
-
-공동 최우선 목표는 **메인 submit drought**, **메인 기계 주판정·AI 보조 정책의 지속 개선**, **위젯·에피소드 진입판단 품질**이다. 실제 운영/source-quality 실패 복구를 선행하고, 메인의 scanner→기계 action→AI screen→latency/price→authority→broker 최초 병목과 독립 기계의 원 신호→micro 확인→실행을 분리한다. 반등/bid 지지·매도잔량 감소·실제 매수체결·refill의 결합을 비용 후 EV/순익·참여·회전으로 평가하며 잔량 감소만으로 BUY나 guard 완화를 승인하지 않는다. 기존 paired 연구/선정 consumer·추천 구현 가능성은 범위에 포함하되, 새 전략 grid·광범위한 성과 재연구·전체 adaptive-exit 활성화는 별도 요청을 따른다.
-
-원칙·active/observe/OFF·rollback은 [Plan Rebase §1–§8](./plan-korStockScanPerformanceOptimization.rebase.md), 실행 ID·Due·Acceptance는 현재 KST 체크리스트, 실행/복구 권한은 [runbook](./time-based-operations-runbook.md), producer 순서는 [traceability](./report-based-automation-traceability.md)의 해당 계약을 따른다. [Stable-index inventory](./audit-reports/2026-09-05-postclose-work-inventory.md)는 필요한 review 행만 읽으며 실행 권한으로 쓰지 않는다.
-
-**배포 경계:** main/장후/PREOPEN 예약은 `data/runtime/runtime_release_selection.json`, 독립 기계는 해당 deployment manifest와 실제 systemd drop-in/정책 pin을 따른다. 작업폴더·선택 배포본·현재 PID 코드·날짜별 정책을 구분한다. 시작 전 §3.1/§4.2, 수리 시 §6.5, 종료 시 §8.8을 확인한다. 선택 배포본 직접 수정이나 임의 workspace 실행으로 우회하지 않는다.
+문서 자동 현행화는 [게시 계약](monitoring-instruction-refresh.md)을 따른다. 자동 문서 정비가 장후 점검·거래 실행·추천 구현을 호출하지 않는다.
 
 ## 1. 완료 목표
 
-완료에는 대상 거래일의 필수 owner terminal·artifact·후행 handoff, 메인 기계·AI 사례의 성숙/결손 분류와 다음 거래일 dated policy 발행 또는 유효 incumbent carry, 권한 내 추천 fixed-point, 체크리스트 전수 대사와 다음 거래일 준비 handoff가 모두 필요하다. 예정 전/정상 대기는 실패가 아니지만 해당일 필수 작업이 running/waiting/recovering이면 최종 완료가 아니다. 전체 owner와 GREEN/YELLOW/RED 조건은 §3/§9를 따른다.
+대상 거래일의 활성 작업마다 실제 결과와 소비 경로를 확인하고 아래 다섯 질문에 답한다. 보고서 목적이 source-quality·funnel·운영 검증이면 EV는 `not_applicable`로 두고, 유효한 경제성 입력·직접 consumer에 기여했는지 점검한다.
 
-코드 검토·배포·자연 생성·PREOPEN 선택·PID 소비·비용 후 EV는 별도 상태다. exit 0만으로 필수 산출물/date/hash 성공을 인정하지 않고, candidate/표본 0만으로 구현 실패를 만들지 않는다. 완료된 수리는 새 결함·계약 변경·필수 handoff 실패가 있을 때만 재개한다. 현재 OPEN ID·이관/승인·source schema는 당일 checklist와 실제 receipt로 확인하며 과거 건수·PID·commit을 기대값으로 고정하지 않는다.
+| 질문 | 판정에 필요한 근거 |
+| --- | --- |
+| 기계적으로 정상 종료했는가? | 대상일 run/PID, 시작·종료·exit/status, 최신 terminal marker, 필수 artifact와 실제 단계별 실패·skip |
+| 의도한 유의미한 분석결과인가? | 작업의 primary metric·비교 모집단·비용/exit·incumbent/candidate·holdout·tail·선정/탈락 사유; 진단 작업은 자신의 입력/출력 계약 |
+| 결손·결함이 있는가? | 누락/제외/미성숙/상충·join/filter·hash/date·scope·silent fail·count 보존과 영향 범위 |
+| 시간이 지나면 결과를 얻을 수 있는가? | 유효 표본의 실제 유입·maturity/기한·남은 조건·가능 최대표본·다음 경계; 구조상 유입 불가능 여부 |
+| 결과가 의도한 소비자까지 전달됐는가? | producer→adapter→평가기→candidate/publisher→dated loader 또는 summary/checklist의 동일 generation receipt |
+
+점검 완료는 전수 행의 판정 완료다. 운영 성공·경제성 후보 선정·다음 거래일 정책/PID 소비·자연 실현성과는 각각 별도 상태로 남긴다. 읽기 전용 점검을 끝내기 위해 잔여 구현이나 미래 자연 표본을 완료로 바꾸지 않는다.
 
 ### 1.1 Submit drought 최우선 점검·개선 계약
 
-필수 실행 실패·원천 손상이 있으면 먼저 복구한다. 아래는 검토 순서이며 설치된 cron/producer 순서나 wrapper snapshot을 바꾸지 않는다. 보고서 진단·완료된 수리의 자연 확인은 진행 중에도 읽기 전용으로 할 수 있지만, 추천 구현은 §7의 terminal·generation 고정·native ID·비권한 gate를 따른다.
-
-1. **분모와 최초 병목 고정**: #119 `buy_funnel_sentinel`의 source date/as-of/hash, scope별 primary·threshold/sample floor, exact attempt/cycle·terminal/pending/submitted 보존식을 기록한다. `UPSTREAM_GATE`, `LATENCY_PRE_SUBMIT`, `ENTRY_AI_AUTHORITY_REVALIDATION`, `PRICE_REVALIDATION`, `BROKER_RECEIPT`를 분리하고 raw AI/budget/latency unique 수를 단일 인과 funnel로 연결하지 않는다. 뒤에서 회복된 veto·비차단 fallback을 terminal 차단으로 중복 집계하지 않는다.
-2. **탐색과 원천부터 검증**: 독립 market-wide benchmark와 #8/#9/#49로 scanner 밖 미관측·watch/promotion·post-promotion 소비를 분리한다. #11/#74의 row/window exclusion, #27 micro delivery와 #89 WS freshness를 소비하며, enqueue 이전 loss가 raw 감사 분모 밖이면 별도 blocker로 남긴다. 독립 모집단·official master·forward-exact/SLA가 없으면 `insufficient_evidence_scanner_recall`이지 정상 탐색이 아니다. 상세 정의는 [장중 지시문 §2.1](intraday-monitoring-task-instructions.md#21-메인-봇-매매기계)을 따른다.
-3. **AI·latency/price 경로 분리**: 같은 attempt의 AI request/response·trusted action·final authority, BBO age·refresh 결과와 다음 blocker를 연결한다. source/transport/schema/stale 결함은 개선 대상이지만 정상 WAIT/DROP·DANGER 차단의 경제적 최적성은 exact executable outcome으로 별도 검토한다. #76/#77/#78/#80/#82는 기존 offline 환류이며 provider0/control0이나 metadata terminal을 판단 개선으로 세지 않는다. #81 legacy OFF·독립 Entry live owner·holding cohort 경계를 유지한다.
-4. **기존 대응 owner 확인**: #21은 one-share source-only 진단, #23은 exact 최근3거래일·동일 scope의 daily recheck controller다. 누적 Entry AI gate backtest는 on-demand only이며 무표본 복구용 정기 실행이 아니다. #48 fact sync와 기존 #75/#76/#77 원천이 #50/#51/#54에 연결되는지 확인한다. recheck·Daily·lookup-attention은 각자의 승인 계약으로 판정하며 submit drought를 모든 family의 추가 양수-EV 승인 veto 또는 무조건 승인 사유로 만들지 않는다.
-5. **행동 가능한 후속 전달 검증**: `order_entry_submit_drought_auto_resolution` 및 source가 발급한 post-submit/broker receipt/fill quality/Telegram/source taxonomy 등의 native ID를 §7 ledger에 전수 분류한다. #91/#103/#110→EV→runtime summary/gap/lineage→tower→checklist→strict verifier의 같은 source generation과 `buy_funnel_sentinel_primary`, `entry_submit_drought_handoff_selected`를 확인한다. 메모리상 검증·이전 날짜 정상 보고서는 당일 canonical handoff를 대신하지 않는다. 결손은 `buy_funnel_submit_drought_handoff_missing` 등 실제 verifier contract로 처리하며 synthetic 완료 marker를 만들지 않는다.
-6. **실효성의 다음 단계 명시**: 허용 수리는 review/fix/validation 후 최초 producer부터 필요한 consumer만 재생성한다. 승인된 후보의 다음 PREOPEN 선택→PID receipt→동일 scope의 자연 submit/fill/terminal·비용 EV는 기존 OPEN owner에 남긴다. 정책 적용 없이 자연 제출이 생기면 관측 회복이지 코드 효과로 귀속하지 않는다. 정상 pre-submit 차단만 있고 accepted submit이 없을 때 #55 cancel-wait·#75 split·scale-in을 첫 해법으로 삼지 않는다. 다만 #75의 기존 Daily 선행 원천 실행은 유지한다.
-
-완료는 세 층으로 보고한다: **진단/코드 수리**, **장후 canonical handoff**, **실제 drought 해소·경제성**. 마지막 층은 선언된 동일 venue/session·관찰창에서 source-quality/원래 탐지 floor가 유효하고 기존 critical 조건을 벗어났는지, 실제 accepted submit 및 후속 전환이 확인되는지 함께 평가한다. 한 건 제출·분모 감소·표본 미달로 경보가 사라진 것을 해소로 확정하지 않으며, executable 기회 부재가 입증된 경우도 `기회 부재`로 별도 보고한다. submit 회복과 비용 차감 수익 개선은 독립 판정이다. 경제성 미관측 때문에 진단 수리 완료를 취소하거나, 수리를 닫기 위해 실주문·floor 하향을 요구하지 않는다.
-
-`SUBMIT_DROUGHT_CRITICAL`만으로 main wrapper 실패나 재기동 사유를 만들지 않는다. 필수 운영이 성공 terminal이고 handoff가 정상이어도 drought 원인/자연 효과가 남으면 종합 상태는 YELLOW다. 미래 작업·정상 대기가 남으면 §9의 `진행 중`, 필수 artifact·handoff 실패 또는 허용 actionable 수리 누락은 RED 기준을 따른다. main의 drought 분모에 위젯·에피소드·sim 주문을 합치지 않으며 독립 owner의 필수 실행·추천 전수 intake를 생략하지 않는다.
-
-#### 1.1.1 메인 기계·AI 진입정책의 장후 지속 갱신 계약
-
-20:10 main threshold-cycle의 기존 `ai_action_outcome_calibration`과 policy publisher를 이 경로의 단일 장후 owner로 사용한다. 별도 사례표 producer나 병렬 threshold tuner를 추가하지 않는다.
-
-1. **당일 사례 확정**: exact `promotion_id × evaluation attempt × venue × session × policy/bundle hash`별 `ENTER_NOW|RECHECK|BLOCK|source_invalid`를 배타적으로 보존한다. 최초 감시·기계판정·AI screen·submit/fill 시각과 gap, 당시 executable BBO·선택 rule/임계치·입력을 결속한다. `ENTER_NOW requiring AI screen = screen attempt = terminal classification`을 닫고 명시적 `PASS|VETO|CAUTION|INSUFFICIENT`, `entry_ai_screen_status=not_evaluated_transport|not_evaluated_local`, semantic rejection과 missing을 분리한다. 명시적 VETO만 거절로 보고 unavailable은 무노출 bounded recheck였는지 확인한다.
-2. **후행 label과 비용 결속**: 1/3/5/10/20/30/60분 target/adverse first-hit·MFE/MAE·fill feasibility와 terminal/censored를 action-neutral하게 결속한다. 아직 maturity 전인 행은 pending으로 남기고 0수익·오판으로 만들지 않는다. 특히 종료 직전 NXT/SOR 사례의 미성숙 60분 horizon 때문에 20:10 producer를 늦추거나 동일 날짜로 반복 실행하지 않는다. 20:10에는 계약상 성숙한 eligible 행만 후보 판정에 사용하고 나머지는 identity를 보존해 이후 누적 generation에서 성숙 후 소비한다. 실제 비용이 결속된 COMPLETED만 실현 경제성으로 사용하며 미체결·취소·결측 비용은 0으로 보간하지 않는다. `빠른 비용후 수익`, `늦은 진입`, `횡보/깊은 역행 후 익절`, `놓친 실행가능 기회`, `적정 차단`, `근거 미성숙/결손`을 구분한다.
-3. **후보·승인조건 검증**: 공통 부모, 유사 흐름 group, 종목 residual, 선택된 micro child를 각각 incumbent와 같은 scope/비용/exit 계약으로 비교한다. 비용 차감 primary EV `>= +0.10%`와 positive paired delta를 확인하되, 해당 family가 선언한 source-quality·최소 종목/독립일·chronological holdout·tail guard도 함께 적용한다. 이 조건을 진단 수리나 기존 부모 사용의 추가 gate로 붙이지 않는다. 그룹/종목 분할 때문에 모든 후보가 반복 0이 되면 단순 `hold_sample`로 끝내지 말고 실제 상위 모집단, shrinkage/fallback과 최초 고갈 단계를 확인하며 floor를 임의로 낮추지 않는다.
-4. **정책 발행 또는 carry**: canonical wrapper의 `ai_action_outcome_calibration --write --require-policy-publication`이 publisher를 호출하고, 거래 calendar로 계산한 `NEXT_TARGET_DATE`의 dated bundle을 원자적으로 발행한 뒤 target/source/artifact hash와 role contract를 재검증했는지 확인한다. challenger 채택 시 selected parent/child/rule·source hash·effective date·rollback을, 미채택 시 `incumbent_carried`와 직접 탈락 사유를 보존한다. 후보0·미성숙만으로 유효 부모 정책을 제거하거나 “정책 없음”으로 만들지 않는다. report exit 0만으로 발행 성공을 추정하지 않으며 발행 실패, 잘못된 날짜/hash, silent stale carry는 운영 결함이다.
-   - 기계 hierarchy 후보의 위 `+0.10%`/paired 조건을 compact AI 변형 선정에 복사하지 않는다. compact는 기존 publisher의 등록 version/hash·동일 machine/venue/session partition·경제적 유효 분모·비용/손실 크기/tail 및 source binding 계약으로 자동 선정한다. 상세 PASS/VETO outcome map과 eligible/pass/veto/missed-profit/dangerous subtotal을 직접 대사한다. 단순 PASS 비율·주문 빈도가 아니라 비용 차감 작은 순익과 놓친 기회·큰 손실을 함께 확인한다.
-   - source-date의 유효 incumbent를 평가 기준으로 사용한다. 늦은 새 source는 다음 날짜 후보를 갱신할 수 있지만 PREOPEN cutoff 뒤 동결된 bundle은 교체하지 않는다. compact 자연 표본이 없으면 legacy 성과로 compact를 튜닝하지 않고 유효 carry/근거 결손을 구분한다. 새 수동 승인이나 후보 적용 전 실체결을 추가 요구하지 않는다.
-5. **직접 consumer와 handoff**: 새 calibration/policy generation이 runtime summary/gap/lineage→tower→checklist→strict verifier에 같은 source hash로 반영됐는지 확인하고, 다음 07:35 PREOPEN의 intended loader와 07:55 이후 PID 확인 owner를 남긴다. 장후 발행은 다음날 선택이나 PID 소비가 아니므로 미래 기동 성공으로 보고하지 않는다. 반대로 기존 자동 계약의 guard 통과 policy에 매번 새 수동 승인 gate를 추가하지 않는다.
-6. **진입가·초기 수량·leg 원자성 분리**: `mechanistic_entry_price_resolver`만 numeric entry price를 소유하고 compact AI·Bedrock/OpenAI 비교는 가격 권한을 갖지 않는다. `position_sizing_dynamic_formula`가 허용한 최초 진입 총수량과 `entry_execution_sizing_plan`의 exact leg 수량·합계를 같은 attempt/policy hash로 결속해 `requested_total_qty = sum(leg_qty)`와 quantity conservation을 확인한다. 장후에는 기계 가격 후보와 초기진입 전용 수량·multi-leg 4-arm의 완성된 terminal/비용/source만 평가해 다음 거래일 `mechanistic_entry_price_policy`와 `entry_execution_sizing_policy`를 원자 발행하거나 유효 baseline을 carry한다. AVG_DOWN/PYRAMID의 action·price·execution sizing과 기존 position의 진입시점 policy snapshot은 별도 owner로 유지한다.
-
-장후 최종 판정은 **검증 challenger 발행**, **유효 incumbent carry**, **source/contract 차단**, **publisher/handoff 실패** 중 하나로 설명하고, 경제성은 **수용·거절·maturity 대기·근거 부족**을 별도로 기록한다. 이 문구를 producer의 새 canonical label로 합성하지 않고 실제 artifact 원값과 reason을 함께 인용한다. 운영 terminal이어도 사례 경제성이나 다음날 자연 소비가 남으면 YELLOW이며, 필수 publisher/handoff가 실패하면 RED다.
+#119 funnel의 exact attempt/cycle과 최초 병목을 scanner 관측→기계 `BLOCK|RECHECK|ENTER_NOW`→실제 compact AI→가격/수량 준비→최종 guard→submit/broker로 연결한다. 회복된 fallback과 terminal veto, raw event와 unique opportunity를 분리한다. 제출 0의 원인이 입력 손상·정상 정책 차단·집행 실패 중 무엇인지 확인하고, source-valid 미진입 기회의 실행가능 후행손익으로 판단한다. drought만으로 threshold·budget·guard 변경을 정당화하지 않는다.
 
 ### 1.2 위젯·에피소드 진입판단 공동 최우선 계약
 
-진입판단은 기존 signal 선정·공통 micro 계산 kernel·paired/4군 연구·정책 consumer를 확인한다. 코드 수리, 배포 process 범위, 자연 source/정책 소비와 경제성은 각각 대사하며 일부 service 반영을 main/WS/모든 episode로 확대하지 않는다.
-
-1. **세 판단 단계 분리**: 원래 entry signal/확인2·3회 선정, signal 이후 micro checkpoint0·1·3·5초, 주문 집행 품질을 각각 같은 owner/symbol/profile/venue/session·policy hash에 결속한다. signal·confirmation·target을 동시에 바꾼 개선을 단일 진입 효과로 세지 않는다. 위젯/에피소드는 별도 AI 호출을 새로 요구하지 않으며 main AI의 WAIT/DROP·submit 분모와 합치지 않는다.
-2. **장후/runtime 계산 일치**: `machine_confirmation_fixed_price_window_v1`을 양쪽 adapter가 실제 사용했는지 확인한다. 고정1초 창의 시작 호가 age·nominal cutoff·고정 ask 가격·중간 최소 잔량·그 최소점 이전 같은 가격 BUY·이후 refill·첫 trade·route/epoch/sequence를 대사한다. late 호출 뒤 자료·cross-epoch·UNKNOWN·누락된 level은 유효한1초 창으로 보간하지 않는다. 같은 입력/시점/정책의 metric/action parity는 진단 수용조건이며 양수 EV나 실주문을 요구하지 않는다. 기존120행/5호가 bounded 투영도 항상1초를 보장하지 않으므로 window completeness/truncation receipt와 실제 process 반영을 확인한다.
-3. **결합의 증분효과**: 기존 `cohorts[].feature_ablation_study`의 `baseline / bid·rebound / depletion·trade backing·refill / combined`를 동일 lifecycle·비용·exit 계약의 4군 모두 유효한 교집합과 chronological holdout으로 비교한다. 속도(qty/sec)는 실제 매수체결·설명되지 않은 감소·refill과 함께 해석한다. 현재 연구의 양의 depletion 사용을 최적 속도 임계값 선정 또는 live 입력 활성화로 보고하지 않는다. 4군은 기존 timing 안의 offline 연구이며 네 개의 새 live 축이 아니다.
-4. **전체 신호와 경제성 분모 보존**: actual `signal_decision_at`→checkpoint→submit/미제출→full/partial fill·확인된 미체결→HELD/terminal→비용의 최초 결손을 찾는다. raw 입력수·prospective anchor·4군 행수를 경제성 pair 수로 세지 않는다. 실제 즉시 full-fill control과 선택적 first-hit 진단을 분리하되 지연 ENTER의 executable/fill/exit 증거는 유지한다. CF·실현손익·정상 무노출·censored/결측을 분리하고 비용/손익 미대사는 null로 남긴다. 유입0·불가능한 join은 구조 결손/근거 결손이지 유한 ETA가 아니다. 비가역적 ingress loss는 격리하고 새 원천을 확인한다.
-5. **Widget 평가·#14/#15의 기존 선정 소비**: 삼성 paired 확인/target 평가는 같은 incumbent·최근20 KRX 거래일의 calibration과 독립 날짜 holdout, base/stress 비용 후 EV·순익/일·tail·자본시간·180초 내 양수 청산 빈도를 확인한다. 0.5% 진단 구간은 수익 상한/최소 목표가 아니며 양쪽 결과가 유효하게 끝난 뒤20분 전체 자료를 추가 gate로 요구하지 않는다. 미완료·부분체결·관측 공백은 제외/결손으로 보존한다. 정확한 scale-in trigger가 없으면 source-gap carry하고 BBO 대용으로 선정하지 않는다. 별도 symbol 연구는 기존 baseline 대비 signal-only 또는 exit-only의 한 축을 검증하며, 삼성 계약을 두산/한화의 event/source EXIT·최초 admission40일에 전용하지 않는다. #15 actual-policy semantic cohort·broker 실제금액/비용과 추정비용·#14 source-ready/경제성 상태를 분리한다.
-6. **선정→정책→실제 소비**: fixed20/dynamic8 등 각 mode의 실제 validator·관측일/lifecycle/coverage/holdout 조건과 report를 맞춘다. dynamic에 fixed5/10/20일 동시 gate를 복사하거나 진단 수리에 승격 floor를 붙이지 않는다. timing의 frozen evidence hash/path/date와 최신 same-stage veto, widget의 incumbent/study hash·소비자 재계산을 확인한다. 기존 승인된 guard 통과 후보의 exact-date 자동 발행·로딩에는 매번 별도 승인을 새로 요구하지 않는다. 다만 최초 코드 배포·기동 권한, 현재 PID receipt와 이후 자연 정책 소비는 별개다. scopes0/hold는 즉시진입 baseline carry일 수 있으며 강제 선택하지 않는다. 위젯 장중 catalog refresh나 active service의 timer start를 적용 정책 교체·코드 reload로 간주하지 않는다.
-7. **권한과 완료 구분**: 위젯 오류는 exact incident/parent/role별 retry·terminal·후행 복구로 확인하고 SELL 목표 실패를 BUY 실패나 신호 부재로 바꾸지 않는다. manual full-flat projection은 과거 custody 복구이며 자동 목표 성공/새 순익이 아니다. 수리·배포·자연 source/정책/consumer·비용 후 EV/순익/빈도/tail·자본점유를 독립 판정한다. 연구 결과가 있어도 실전 BUY/WAIT 계산·threshold·신호/target·주문 guard 변경은 일반 source-only 권한이 아니며, 검증된 기존 자동 계약 또는 별도 승인 범위를 확인한다.
+원래 signal→micro checkpoint→admission→주문/leg→holding/terminal과 incumbent reject의 CF를 같은 scope에서 대사한다. actual/source-only arm, raw-only/no-seed와 실제 무신호, 분봉 touch와 executable fill을 구분한다. 같은 기회 모집단·원래 quantity/cap/exit·동시자본 아래 일별 순익·paired delta·tail을 확인한다. 실제 보유가 필요한 timing/exit의 적정 조건은 유지한다.
 
 ### 1.3 적응형 청산의 별도 후속 경계
 
-승인 범위와 현재 배포는 `data/runtime/machine_profit_stagnation_deployment.json`, 연결된 additions/recommendations/수량 override manifest, 실제 service의 유효 drop-in·정책 pin 및 당일 checklist Source를 대사한다. 특정 과거 commit/PID나 drop-in 번호를 현재값으로 고정하지 않는다. main/장후 공통 selector와 독립 기계 배포는 별개다.
-
-- 별도 사용자 승인된 최소 `machine_profit_stagnation_v1`은 **9/11 신규 진입부터 이후 거래일에도 같은 설정을 유지**한다. 정체180초·변동0.15%p·고점개선0.10%p, 비용0.23%+slippage5bps, SELL TTL10초·관측공백12초다. 기존 보유는 자동 이관하지 않는다. 숫자는 승인된 최초값이지 경제적 최적값이나 실현비용이 아니다.
-- 기대 경로는 양수 추정 순이익·fresh 전량 bid depth·연속 정체 → 원 목표 취소확정 → 보호 지정가 → TTL/부분체결 잔량 원 목표 복원이다. 원래 위젯 EXIT 우선, episode 기본2×10주와 별도 승인 수량 override·기존 lot 및 단일 custody/order owner를 유지한다. 정상 동작 중의 보조 목표 전환을 무조건 무승인 target 변경으로 판정하지 않는다.
-- pin·유효기간·owner·신규 진입시각을 실제 loader로 대사한다. 지속 정책에 매일 새 envelope/PREOPEN 승인·새 실체결 표본을 요구하지 않는다. 기존 entry/profile의 exact-date 승인과 날짜 검증은 별개로 유지한다. 적용 전 무표본·빈 entry timestamp와 유효 신규 entry의 source 결손을 구분한다.
-- 위젯은 연속 가동하므로07:58 타이머의 start만으로 코드 reload됐다고 보지 않는다. 실제 시작일의 receipt/pin과 이후 거래일 자연 소비를 분리한다. 에피소드는 기존 timer/preflight를 따르며 설치 완료를 미래 기동/주문 성공으로 표시하지 않는다.
-- 모호한 예약·미종결 취소 child·익일 exact receipt 결손은 원장/직접 사유를 보존한다. 정책 철회 시 신규 후보는 닫되 진행 중인 successor의 복구 consumer는 유지해야 한다. terminal 또는 원 목표 복원 대사 전 이전 코드로 되돌리거나 원장을 지우지 않는다. 일반 장후 모니터링은 이 철회·재배포·매매 재기동을 실행할 권한이 없다.
-- [9/9 상세계획](proposals/widget-episode-adaptive-exit-implementation-plan-2026-09-09.md)의 전체 group/runner/부분 trailing·광범위한 enrollment/launcher 설계는 최소 보조청산의 추가 필수 gate나 현재 미완료 개발 목록이 아니다. 이미 생성되는 source-only attribution/replay child는 기존 producer/소비자 범위에서 확인하되 새 연구·전체 family 활성화를 재개하지 않는다.
-- 수량 terminal/원래 다음 신호 복귀와 실제 주문금액·비용/순이익 대사는 별개다. 결손은 null·직접 사유로 남기며 가짜0원·반복 같은 비용조회·새 next-entry 경제성 gate로 해결하지 않는다. 진입 개선·보조청산 전환·총 순이익/자본점유·불리한 결과를 별도 귀속한다. 기동/정책 소비와 장후 경제성은 현재 checklist의 각 acceptance owner로 추적한다.
+이미 승인된 지속 보조청산은 기존 `data/runtime/machine_profit_stagnation_deployment.json` 및 실제 loader의 policy pin·persistence/유효기간·신규 entry·custody·successor 복구와 정산 receipt를 확인한다. 지속 정책에 매일 새 승인 envelope를 요구하지 않는다. 기존 위젯/episode/manual 보유를 자동 이관하지 않는다. timing 연구 성공으로 새 exit family 활성화·target/수량 변경 권한을 만들지 않고, 미승인 전체 adaptive-exit 설계를 현재 필수 작업으로 복원하지 않는다. 운영 소비와 비용 후 자연 효과는 별도다.
 
 ## 2. 권한 경계
 
-### 2.1 허용 범위
+기본 결과 점검은 로그·status·report·manifest·systemd·process·lock·소스/consumer의 읽기 전용 대사와 점검 결과 기록이다. 실제 코드 수리·분석 worker 종료/재실행·보고서 재생성·추천 구현·commit/push·release 선택·서비스 기동은 별도 사용자 지시 및 기존 승인 범위를 확인한 경우에만 수행한다. 기존 승인은 그 대상·유효 범위 안에서 유지하며 후보별 재승인 gate를 추가하지 않는다.
 
-- 로그, process, lock, status JSON, systemd 상태와 artifact freshness의 읽기 전용 점검
-- 실패한 report/source-quality/parser/schema/instrumentation/automation wrapper의 최소 코드 보완
-- 문서·테스트·오류 detector contract 보완
-- `runtime_effect=false`, `allowed_runtime_apply=false`인 `implement_now` 코드 보완
-- 위젯·에피소드 추천 중 source collection, parser/schema, report, instrumentation, test, source-only candidate 생성과 자동화 handoff 보완
-- 수정 후 관련 producer와 필수 downstream만 순서대로 재실행
-- 명백히 중복되거나 멈춘 장후 분석 worker의 증거를 보존한 뒤 해당 장후 worker만 종료·재실행
-- 기존 승인된 exact-date PREOPEN 자동 적용 계약의 candidate/policy/handoff 생성 복구. 수동 env 작성은 금지한다.
+호출을 구분한다. `결과 점검`은 조회·판정이고, 별도로 명시한 `장후 운영 모니터링·복구·추천 구현`은 기존 Plan/runbook의 bounded source-only recovery와 §7 구현 계약을 따른다. 문서 정비는 두 실행을 모두 호출하지 않는다.
 
-기존 widget dated policy 발행/loader와 machine timing의 exact-date 자동 발행·소비는 각 기존 owner의 승인 계약을 따른다. 모든 정책을 main PREOPEN env 하나로 취급하거나 이미 승인된 일별 소비에 새 수동 승인을 요구하지 않는다. 반대로 새 adaptive-exit family 등록·승인 envelope 발명·실제 launcher 주입은 기존 timing handoff 복구가 아니다.
+매매 bot/widget/episode의 기동·종료·재기동, 수동 env/lock/provider/model/route/threshold 변경, 실주문·취소·가격·수량·cap·cooldown 변경과 hard/protect/emergency·stale/conflict·broker/account/order guard 우회는 결과 점검 권한에 포함되지 않는다. 설치된 `THRESHOLD_CYCLE_POSTCLOSE_BOT_ACTION=stop`은 기존 자동 owner의 동작이다. report 복구를 위해 main wrapper를 수동 실행하면 stop 부작용이 있으므로 단순 점검 권한으로 실행하지 않는다.
 
-### 2.2 금지 범위
-
-- 매매 bot, 위젯 매매 process 또는 에피소드 매매 process의 기동·종료·재기동
-- PREOPEN/live runtime env, operator lock, threshold, provider/model/route의 수동 변경
-- 실주문·취소, 주문가격·수량·cap·cooldown, broker/account/order guard 변경
-- stale/conflict, price freshness, hard/protect/emergency safety 완화
-- source-only·sim 결과의 실주문 권한 전환
-- 추천 artifact 없이 위젯 종목·machine profile·target·진입조건을 임의 변경
-- API 제한을 피하기 위한 호출량·retry 횟수·동시성 상향
-- 공통 release 선택 원장·cron·workspace 재기동 shim의 임의 재설치/변경, 선택 배포본의 source 수정·pull·checkout, 병행 미검토 코드의 일괄 배포
-
-금지영역이 실패 원인 또는 추천 구현조건이면 변경하지 않고 `user_authority` 또는 `external_dependency`로 보고한다. 이미 실행 중인 main wrapper는 P0 안전사고가 아닌 한 중단하지 않으며, 실행 시작 시의 immutable wrapper snapshot을 그 run의 계약으로 본다.
-
-과거의 `필요시 우아한 재기동`·별도 collector/trader 배포 승인을 새 문서 현행화나 다른 실행에 포괄 승계하지 않는다. 해당 실행에 별도 재기동 승인이 있을 때만 정확한 대상·검증 코드 세대·기존 주문/custody 보존·정상 종료/새 PID/정책/WS receipt를 대사한다. code generation이 검증 도중 바뀌면 이전 PASS로 기동하지 않는다. runbook/traceability/설치 trigger/실행 snapshot의 계약 충돌은 `contract_drift`로 fail-closed하며 mtime으로 우선순위를 정하지 않는다.
+OFF·퇴역 producer, 유효 frozen policy/checkpoint, 별도 custody/override·expiry를 보존한다. source-only/sim/CF를 실제 주문·실현손익으로 전환하지 않는다. 새 collector·service·timer·cron·DB·production module·운영 stage나 표본 확보용 polling을 만들지 않는다. package 설치/변경과 API retry·호출량·동시성 상향도 포함되지 않는다.
 
 ## 3. 현재 장후 실행 owner
 
-설치된 cron과 systemd `ExecStart`를 매 실행 시작 시 다시 확인한다. 아래 표와 실제 설치 상태가 다르면 한쪽을 임의로 정상으로 간주하지 않고 `contract_drift`로 분류한다.
+아래는 정기 실행 owner다. 상세 활성 producer·조건부 단계·embedded 출력·후행 소비는 [현행 목록 §4](audit-reports/2026-09-05-postclose-work-inventory.md#4-2010-main-wrapper-상세-목록)을 따른다. wrapper의 시작 예약과 내부 단계의 실제 완료 시각을 혼동하지 않는다.
 
-| 시각 | 필수 owner | 정상 terminal 근거 |
+| 예약 | 실행 owner | 기계적 결과와 직접 소비 확인 |
 | --- | --- | --- |
-| `20:05` | KOSPI EOD update | `update_kospi` status와 log의 대상일 최신 DONE |
-| `20:10` | main threshold-cycle postclose | postclose status `succeeded`, 기계·AI calibration, mechanistic entry price와 atomic entry execution sizing의 다음 거래일 policy 발행/carry receipt, 최신 wrapper DONE, final verifier terminal |
-| `20:10` | postclose DONE controller | controller JSON `done`과 controller cron log 최신 DONE |
-| `20:10` | tuning monitoring | status `success`, 단계별 exit code 0, 최신 DONE |
-| `20:10` | widget evaluation systemd service | unit `Result=success`; 네 producer가 같은 completed target date 사용 |
-| `20:50` | dashboard DB archive | 대상일 최신 DONE |
-| `21:05` | AI entry setup paired replay | 날짜별 batch terminal과 consumer terminal 또는 reviewed disabled |
-| `21:15` | machine final refresh systemd service | expansion, attribution, weakness hysteresis, entry timing, approval, checklist 결과와 unit `Result=success` |
-| `21:55` | postclose finalization | predecessor ready, cleanup DONE, final detector DONE |
-| `21:50`까지 및 finalization 후 | System Error Detector | 대상일 canonical run이 unresolved critical 없이 terminal |
-
-NXT 구간의 opportunity census, BUY/HOLD sentinels, rising-missed, pyramid, websocket freshness와 system metric sampler는 main postclose의 입력 owner다. 이 작업의 오류가 main source-quality 또는 verifier 실패로 이어질 때 장애복구 범위에 포함한다.
-
-Swing은 설치된 main postclose cron의 `THRESHOLD_CYCLE_RUN_SWING_POSTCLOSE=false`이면 정상 OFF다. 20:10 main wrapper 안의 machine microstructure/timing/approval 사본은 21:15 systemd가 단일 owner이면 정상 OFF다. OFF·retired 단계를 누락 또는 실패로 세지 않는다. ADM/LDM·bucket·greenfield·전용 institutional aggregate와 scalp-sim policy control-tower/prior refresh/overnight wrapper/scale-in window approval은 퇴역했으며, missing artifact나 미실행을 장애·복구 workorder로 만들지 않는다. 현행 base scalp simulator, candidate-window, AI budget, entry-price 관찰과 post-sell feedback은 별도 source-only owner로 유지하고 실주문·실현손익 근거로 사용하지 않는다. sim/Swing은 현재 우선 상세튜닝 대상이 아니다.
-
-진행표 #17~#20의 퇴역 표시는 20:10 중복 사본에 관한 것으로, 21:15 attribution/timing/approval 기능 전체의 퇴역이 아니다. 새 4군 timing 연구와 adaptive-exit 연구 child는 기존 producer 내부 소비이며 별도 병렬 정기 producer를 추가한 것으로 세지 않는다.
+| 20:05 | KOSPI EOD update | 대상일 status/log terminal·DB latest date/rows; widget 시장 연구의 EOD 선행 |
+| 20:10 | main threshold-cycle postclose | status `succeeded`·최신 DONE·단계 결과·final verifier; final strict closure는 후행 단계 |
+| 20:10 | DONE controller | predecessor/follower 대기·실패 reason·JSON `done`; 최신 verifier와 같은 generation |
+| 20:10 | tuning monitoring | predecessor 계약·단계 exit/status `success`·Parquet/DuckDB source hash/coverage |
+| 20:10 | widget evaluation systemd | advisory→auto policy→EOD wait→signal research→runtime policy의 같은 completed date·unit terminal |
+| 20:50 | dashboard DB archive | 최신 대상일 DONE·검증된 archive/source generation·보존 계약 |
+| 21:05 | AI entry setup paired replay follower | batch→calibration→optimizer/holding→consumer terminal 또는 근거 있는 disabled |
+| 21:15 | machine final refresh systemd | expansion→attribution→hysteresis/timing→native capacity/research closure→approval→checklist·각 rc와 unit terminal |
+| 21:55부터, bounded | postclose finalization | predecessor 확인→최신 summary/tower/checklist/strict closure→cleanup→final detector receipt |
+| 장후 정기 5분, 21:50까지 및 finalization 후 | System Error Detector | 해당 run/stage/target의 unresolved critical·최신 terminal; 단순 이전 PASS 재사용 금지 |
 
 ### 3.1 공통 배포 경로와 독립 서비스 경계
 
-배포 경로 계약은 [runtime release routing](runtime-release-routing.md)을 따른다. 매 실행에서 공통 selector와 독립 기계 manifest의 root/commit, 최종 systemd 설정, 실제 `/proc/<PID>/cwd`를 다시 읽는다. selector나 manifest의 `actual_pid_consumed` receipt는 그 PID의 release 소비 근거일 뿐 장후 terminal·다음 PREOPEN·경제성 수용 증거가 아니다. 이전 세대의 정상 가동·전환 대기 기록을 현재 PID 보증으로 쓰지 않는다.
+공통 cron은 `data/runtime/runtime_release_selection.json`과 `deploy/run_runtime_release.sh`, widget/episode는 deployment manifest와 유효 systemd `ExecStart/WorkingDirectory/drop-in`을 확인한다. 실제 worker/PID의 root·commit·시작 시 immutable snapshot·source hash를 기록한다. 새 selector나 문서에 적힌 release 이름으로 진행 중인 run을 재라벨링하지 않는다. 서로 다른 owner가 검증된 독립 release를 쓰는 사실만으로 결함으로 판정하지 않는다.
 
-| 실행 경로 | 코드 선택 owner | 주의사항 |
-| --- | --- | --- |
-| 20:05 EOD, 20:10 main/controller/tuning, 20:50 archive, 21:05 replay, 21:55 finalization | workspace의 `deploy/run_runtime_release.sh` → 선택 release | 서로 다른 시각에 시작하므로 chain 전체가 terminal이 되기 전에 선택값을 바꾸지 않음 |
-| 다음 거래일 07:35 PREOPEN·07:55 main 기동 | 같은 실행기·같은 선택 원장 | 전일 정책 복사가 아니라 다음 거래일 exact-date 생성·검증; 미래 기동 성공은 별도 |
-| 승인된 workspace `restart.sh` | 같은 실행기 → 선택 release의 원본 restart | 명령 경로 통일은 재기동 승인 자체가 아님; 현재 supervisor의 자체 자식 재시작은 기존 root 유지 |
-| 20:10 widget evaluation·21:15 machine final refresh | 실제 분석 systemd `ExecStart`/WorkingDirectory | 공통 cron9행·매매 service drop-in과 별개; 실제 source/schema 호환성 확인 |
-| widget·Samsung·low-price 매매/사전검증 service | machine 배포 manifest + 실제 유효 systemd drop-in | 별도 검토된 machine root와 지속 policy pin. main selector로 덮거나 작업폴더 코드로 되돌리지 않음 |
-| 다른 장중 observer/scanner cron | 기존 설치 owner | 공통 배포로 자동 이관됐다고 주장하지 않음; 소비되는 source의 schema/hash 호환성 확인 |
-
-선택 release는 `src/deploy/restart.sh` clean 검사와 HEAD 일치를 요구하며 `data/logs/tmp/.venv/docs/restart.flag`를 workspace와 공유한다. 따라서 **코드 고정은 데이터·정책·의존성 고정이 아니다**. 공유 docs의 의도된 symlink/type 차이를 source 오염으로 오판하지 않고, 전체 dirty 표시를 없애려고 reset/clean하지 않는다. 공유 원천·정책·quota·custody는 기존 producer/owner 계약으로만 변경하며 `.venv` 패키지 변경에는 별도 승인이 필요하다.
-
-설치된 20:10 `THRESHOLD_CYCLE_POSTCLOSE_BOT_ACTION=stop`과 07:30 tmux 종료 예약은 경로 통일로 변경되지 않았다. 이 종료를 custody-aware 우아한 재기동으로 표현하지 않는다. 특히 봇이 살아 있는 동안 main postclose를 수동 재실행하면 stop 부작용이 있으므로 단순 report 복구 권한만으로 실행하지 않는다.
+선택 release의 `src/deploy/restart.sh` clean·HEAD와 공유 `data/logs/tmp/.venv/docs/restart.flag` 실체를 확인한다. 코드 고정은 공유 원천·정책·의존성 고정이 아니다. 진행 중인 chain의 코드/입력을 교체하지 않고 배포본 직접 편집·임의 workspace 실행·reset/clean으로 우회하지 않는다. 실제 PID receipt는 코드 소비 근거이며 장후 성공·다음 PREOPEN·수익 근거가 아니다.
 
 ## 4. 모니터링 시작
 
-대상 거래일은 처음 한 번 정하고 자정이 지나도 바꾸지 않는다.
+`TARGET_DATE`는 점검할 장후 source 거래일로 한 번 고정하고 자정 이후에도 유지한다. `AS_OF_KST`는 실제 점검시각이다. 현재 체크리스트 목적·강제 규칙, 대상일 미종결 owner, 설치 trigger와 실제 run을 읽고 활성 목록의 기대 결과를 확정한다. 날짜·owner·실행 contract가 없거나 충돌하면 `missing_context|contract_drift`로 남긴다.
 
-먼저 다음 §4.1의 체크리스트와 §4.2의 배포 경로를 대사한 뒤 process·로그를 확인한다. `TARGET_DATE`는 원래 장후 source date, `AS_OF_KST`는 매 점검의 실제 현재 시각이며 둘을 혼합하지 않는다.
+조회는 canonical selector와 실제 release를 구분해 수행한다. command/status에는 private token·account 값이나 process 전체 환경을 출력하지 않는다.
 
 ```bash
-cd /home/ubuntu/KORStockScan
 TARGET_DATE="YYYY-MM-DD"
 AS_OF_KST="$(TZ=Asia/Seoul date --iso-8601=seconds)"
-
-git status --short
-crontab -l
-systemctl list-timers --all --no-pager | rg 'korstockscan|widget|machine|postclose'
-systemctl list-units --type=service --all --no-pager | rg 'korstockscan|widget|machine|postclose'
-ps -eo pid,ppid,lstart,stat,etime,%cpu,%mem,cmd --sort=pid | rg 'run_threshold_cycle_postclose|postclose_done|tuning_monitoring|widget|machine_microstructure|ai_entry_setup|postclose_finalization'
-lslocks -o COMMAND,PID,TYPE,MODE,PATH | rg 'KORStockScan|COMMAND'
+bash deploy/run_runtime_release.sh --check-cron
+bash deploy/run_runtime_release.sh postclose "$TARGET_DATE" --print-plan
+bash deploy/run_runtime_release.sh finalize "$TARGET_DATE" --print-plan
 ```
 
-다음 로그와 status artifact를 우선 확인한다.
+`--print-plan`은 조회 contract다. 이를 제거하거나 예약 작업을 앞당겨 실행하지 않는다. 설치 상태 조회도 실제 장후 성공으로 세지 않는다.
 
-```bash
-tail -n 240 logs/update_kospi.log
-tail -n 360 logs/threshold_cycle_postclose_cron.log
-tail -n 240 logs/postclose_done_controller_cron.log
-tail -n 240 logs/tuning_monitoring_postclose_cron.log
-tail -n 200 logs/ai_entry_setup_paired_replay_postclose.log
-tail -n 200 logs/dashboard_db_archive_cron.log
-tail -n 200 logs/postclose_finalization_cron.log
-tail -n 240 logs/run_error_detection_cron.log
+우선 읽을 근거는 `logs/update_kospi.log`, `logs/threshold_cycle_postclose_cron.log`, `logs/postclose_done_controller_cron.log`, `logs/tuning_monitoring_postclose_cron.log`, `logs/ai_entry_setup_paired_replay_postclose.log`, `logs/dashboard_db_archive_cron.log`, `logs/postclose_finalization_cron.log`, `logs/run_error_detection_cron.log`의 bounded 최신 구간과 해당 대상일 status/report다.
 
-jq . "data/report/threshold_cycle_postclose_status/threshold_cycle_postclose_${TARGET_DATE}.status.json"
-jq . "data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_${TARGET_DATE}.json"
-jq . "data/report/postclose_done_controller/postclose_done_controller_${TARGET_DATE}.json"
-jq . "data/report/tuning_monitoring/status/tuning_monitoring_postclose_${TARGET_DATE}.json"
-```
+- main status: `data/report/threshold_cycle_postclose_status/threshold_cycle_postclose_TARGET_DATE.status.json`
+- verifier: `data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_TARGET_DATE.json`
+- controller: `data/report/postclose_done_controller/postclose_done_controller_TARGET_DATE.json`
+- tuning: `data/report/tuning_monitoring/status/tuning_monitoring_postclose_TARGET_DATE.json`
+- 독립 분석: 두 systemd unit의 Result/ExecMainStatus·journal과 활성 목록에 적힌 producer 출력
 
-#11 source-quality preflight는 20:10 main wrapper의 해당 stage가 당일 자연 생성 owner다. 예약 전 없는 당일 파일을 실패 또는 현재 실매매 전체 차단으로 해석하지 않는다. 기존/수동 진단 artifact와 자연 산출물을 구분해 생성시각·run/source hash를 기록하고, #74 final audit 및 영향 row/window의 실제 consumer 판정을 확인한다.
-
-파일이 없으면 예정 시각과 process부터 확인한다. 실행시각 전이면 `not_yet_due`, predecessor를 정상 대기 중이면 `waiting`이며 실패로 처리하지 않는다.
+큰 원천은 stat 먼저 확인한다. 64MiB 초과 또는 증가 중이면 기존 manifest/요약·streaming index 또는 최대16MiB bounded tail을 사용하고 전체 raw를 반복 스캔하지 않는다. tail에 없는 사건을 모집단 0으로 판단하거나 bounded 관찰을 전체 EV 분모로 외삽하지 않는다. systemd 상태/journal은 bounded 재조회하고 terminal receipt의 실제 시각 순서를 확인한다.
 
 ### 4.1 모니터링 시점 체크리스트 실행·점검
 
-이 절의 시간·목록 대사 방식은 장중에도 공통으로 사용하되, **실행 권한은 호출한 장중/장후 지시문과 별도 사용자 승인 범위**를 따른다. 장중 점검에 장후 worker 복구·2-pass 권한을 자동 부여하지 않는다.
-
-1. 현재 KST 날짜의 체크리스트 상단 목적·강제 규칙과 OPEN 항목을 읽는다. 자정 이후 복구라면 원래 `TARGET_DATE` 체크리스트의 미종결 owner도 함께 대사하고, 현재 날짜 파일 안의 미래 Due 항목·과거 ID 이관을 구분한다. 파일명·ID 끝자리·섹션 제목 대신 각 항목의 실제 `Due/Slot/TimeWindow`, 본문 선행 조건·Source·Acceptance를 사용한다. 당일 파일 부재나 일정/owner 충돌은 `blocked_missing_evidence|contract_drift`로 남기고 날짜·권한을 추정해 실행하지 않는다.
-2. stable ID별로 `checklist path/ID, Due/Slot/TimeWindow, as_of, source date/hash, 실행 owner, 선행 조건, 권한, 최신 receipt, 현재 판정, 이번 실행/점검 결과, 남은 acceptance/다음 확인 시각`을 기록한다. 같은 ID의 이관·반복 관찰은 한 항목으로 대사하고 다른 owner의 주문·경제성은 합치지 않는다.
-3. 아래 표로 모든 OPEN을 분류한다. 요청 범위 밖 항목도 미분류로 버리지 말고 해당 owner에 handoff한다. `[x]`는 완료 당시 범위의 증거로만 참조하며 새 결함·필수 freshness/handoff 실패 없이 재실행하지 않는다.
-
-| 시점·상태 | 이번 모니터링에서 할 일 |
-| --- | --- |
-| 미래 Due 또는 window 시작 전 | `not_yet_due`; 다음 확인 시각을 기록하고 예약 실행을 앞당기지 않음 |
-| window 도래, 실행 가능한 권한·원천·선행 조건 충족 | 최신 유효 결과가 있으면 직접 consumer까지 점검. 미실행인 허용 작업은 정상 owner/명령으로 실행→결과 검증→기존 ID에 근거 기록 |
-| 이미 running/recovering 또는 정상 선행 대기 | PID/lock·progress·대기 사유와 bounded deadline 확인. 자동 retry나 동일 producer를 중복 실행하지 않음 |
-| window 종료 후 미확인·부분 확인 | `overdue_unresolved`로 잔여 조건부터 확인. 복구 가능한 허용 작업만 현재 시각으로 수행하고, 지나간 관측창·수집되지 않은 원천은 소급 성공/재실행으로 합성하지 않음 |
-| 선행 producer가 아직 예정 전이거나 정상 bounded wait 중 | consumer 확인 시각이 됐어도 producer를 강제 기동하지 않음. producer의 `not_yet_due`와 consumer의 `waiting`, 예정/완료 예상 근거를 분리 |
-| 권한·근거·외부 의존성 결손 | `user_authority|blocked_missing_evidence|external_dependency`; 직접 owner·필요 승인/근거·수용조건을 명시하고 가능한 읽기 전용 확인만 수행 |
-| 정상 OFF/retired/valid-empty 또는 이미 해당 acceptance 완료 | 근거가 있는 정상 skip/완료로 대사. 무표본을 만들기 위한 수리·재기동은 하지 않음 |
-
-4. `overdue_unresolved`는 체크리스트 확인 상태이지 process FAIL이 아니다. 당초 window에서 확인한 provenance와 through-close·다음 PREOPEN·경제성 등 남은 조건을 분리하고, 실제 producer deadline 초과·필수 artifact 결손일 때만 §5/§6 장애 대응으로 올린다. 불명확한 기한은 owner 계약을 확인해 기록하며 무제한 `waiting`으로 남기지 않는다.
-5. due 작업은 **실제 안전/필수 실행 장애 → source-quality·custody 정합성 → main submit drought 및 위젯·에피소드 진입판단의 공동 최우선 원인/handoff → 그 밖의 owner** 순으로 검토하되 producer 순서와 설치된 자동실행을 보존한다. 각 due/선행 조건에 따라 두 경로를 진행하며 메인 해소까지 기계 점검을 미루지 않는다. source-only 수리도 review gate 후 영향 consumer만 검증한다. custody/state 수정은 신규 진입 가능 상태를 바꿀 수 있으므로 일반 source-only 권한이 아니다. 별도 승인된 exact receipt 복구와 단순 점검을 구분한다.
-6. 기존 ID의 실행 근거에 실제 시각·명령/검사 범위·exit/receipt·원천 hash·남은 조건을 남긴다. 전체 Acceptance가 충족됐을 때만 `[x]`로 닫고, 부분 실행은 OPEN을 유지한다. 새 미래 작업만 `Due/Slot/TimeWindow/Track`으로 기록하며 같은 owner를 중복 생성하지 않는다. checklist 변경 후 print-only parser로 ID 유일성을 검증한다. 외부 sync는 실행하지 않는다.
-7. 매 관찰 재개·slot 경계·producer terminal 뒤 시각과 체크리스트 변경을 다시 읽어 대기열을 갱신한다. 단회 요청은 as-of 실행·점검 범위와 잔여를 보고하고, 지속 요청은 지정 종료조건까지 새 due 작업을 포함해 반복한다. 둘 모두 미해결 상태를 완료로 바꾸지 않는다.
-
-Source가 전일 보고서를 지정한 오후 점검은 당일 20:10 producer 조기 실행이 아니다. 미래 Due·producer와 consumer의 서로 다른 시간창은 실제 checklist 값으로 판정한다.
-
-### 4.2 배포 사전 점검 — 읽기 전용
-
-다음은 workspace에서 실행하는 **조회 명령**이다. `TARGET_DATE`는 앞에서 확정한 source date를 사용한다. `--print-plan`을 제거하면 실제 실행이므로 복사 실수로 작업을 기동하지 않는다.
-
-```bash
-jq '{schema, workspace, release_root, git_commit, selected_at_kst, actual_pid_consumed, actual_pid_consumption_status, deployment_repair, review_evidence}' data/runtime/runtime_release_selection.json
-jq '{release_root, git_commit}' data/runtime/unified_runtime_deployment.json
-jq '{release_root, git_commit, policy_path, policy_sha256, effective_from, persistence, units}' data/runtime/machine_profit_stagnation_deployment.json
-bash deploy/run_runtime_release.sh --check-cron
-bash deploy/run_runtime_release.sh postclose "$TARGET_DATE" --print-plan
-bash deploy/run_runtime_release.sh paired-replay "$TARGET_DATE" --print-plan
-bash deploy/run_runtime_release.sh controller "$TARGET_DATE" --print-plan
-bash deploy/run_runtime_release.sh tuning "$TARGET_DATE" --print-plan
-bash deploy/run_runtime_release.sh finalize "$TARGET_DATE" --print-plan
-bash restart.sh --print-plan
-```
-
-1. 선택 원장 path/hash, 전체 commit, plan의 root/command/cwd/target date, cron 검증 결과를 실행 증거에 고정한다. 예약 9개 경로의 시각·env·로그도 실제 crontab과 비교한다. `--check-cron`은 실행 경로를 검사하지만 모든 env 값·예약 시각·정책을 승인하지 않는다.
-2. 실제 worker PID/PPID/시작시각, `/proc/<PID>/cwd`, command와 필요한 `PROJECT_DIR/PYTHONPATH/VENV_PY`만 확인해 선택 코드와 일치하는지 대사한다. 전체 environ이나 자격증명은 출력하지 않는다. wrapper snapshot/hash·source generation도 따로 남기며 plan만으로 실제 실행을 주장하지 않는다.
-3. 선택 root/HEAD/clean/shared-path 검증이 실패하면 `deployment_route_blocked`, cron·실제 실행 세대가 예상과 다르면 `contract_drift`로 원인을 보고한다. 조회 실패를 무시하고 workspace `python -m`/직접 wrapper로 우회하거나 선택 hash·ignore 규칙을 바꿔 PASS를 만들지 않는다. 정상 실행 중인 기존 worker를 이 이유만으로 종료하지 않는다.
-4. 오래된 cron installer·다른 세션의 배포가 경로를 되돌리지 않았는지 확인한다. `--install-cron`, crontab 편집, 선택 원장 교체는 읽기 전용 검사가 아니므로 이번 실행의 별도 배포 권한이 없으면 실행하지 않는다. main에 commit/push/merge됐다는 사실만으로 선택 release가 갱신되지 않는다.
-5. 독립 widget/machine 서비스는 별도 manifest·실제 drop-in/WorkingDirectory/ExecStart·정책 파일 hash·PID의 startup pin과 소비 source schema/hash를 기록한다. manifest 파일 존재만으로 설치/현재 정책 소비를 인정하지 않는다. 장후 evaluation/final-refresh 분석 unit과 매매 service를 구분한다. 병행 수정 때문에 dirty workspace 전체를 새 main 배포로 만들지 않는다. 공통 source의 실제 비호환이 있으면 최초 producer/consumer 결손을 격리하며, 다른 root라는 이유만으로 전체 장후 입력을 차단하지 않는다.
-6. slot 경계와 각 producer terminal 뒤 선택 원장·실제 child 세대의 변화를 확인한다. 이미 시작한 프로세스는 선택값을 바꿔도 자동 reload되지 않는다. 서로 다른 code generation의 산출물을 무기록으로 한 run에 합치지 않는다.
+현재 OPEN ID의 `Due/Slot/TimeWindow/Track`, 선행 조건·Acceptance를 실제 as-of로 분류한다. 이 절의 기본 행동은 결과 확인이며 미실행 작업을 수동 기동하지 않는다. `[x]` 이력은 해당 완료 범위의 근거이고 현재 owner가 아니다. 이관된 ID는 한 owner로 대사하고 미래·범위 밖·별도 권한 작업도 사유를 남긴다.
 
 ## 5. 상태 판정과 지속 모니터링
 
-| 상태 | 판정 기준 | 조치 |
+각 작업에 다음 축을 독립 기록한다. 운영 FAIL, 경제적 부적합과 구조적 원천 결손을 한 색으로 합치지 않는다.
+
+| 축 | 상태와 의미 |
+| --- | --- |
+| 실행 | `not_yet_due`, `waiting`(유효 선행/기한), `running`(실제 progress), `succeeded`, `valid_skip`, `failed`, `unknown` |
+| 분석 | `valid_candidate`, `valid_carry_or_reject`, `valid_diagnostic`, `valid_empty`, `insufficient_mature_sample`, `invalid_source_or_analysis`, `not_applicable` |
+| 달성 가능성 | `ready`, `maturing`, `collecting`, `structurally_blocked`, `external_or_authority_blocked`, `unknown`, `not_applicable` |
+| 소비 | `verified`, `pending_predecessor`, `not_yet_due`, `missing_or_stale`, `not_applicable` |
+
+`valid_empty`에는 scope 관측·source-valid 분모·무신호/무기회/선정탈락 사유가 있어야 한다. raw missing·지원 scope 없음·early continue로 사라진 행은 정상 empty가 아니다. 단순 sample 0·candidate 0·all BLOCK/all VETO로 실패나 수익 부재를 단정하지 않는다. 반대로 결측 비용/손익/후행경로를 0으로 채우지 않는다.
+
+실행 정상성은 **최신 대상일 terminal + 필수 출력 schema/date/hash/count + intended consumer**를 함께 확인한다. 이전 DONE 뒤 최신 FAIL, unit exit 0 뒤 내부 stage 실패, stale checkpoint/summary, notifier/approval/checklist의 별도 rc, allowed pending verifier를 final strict PASS로 오인하는 사례를 점검한다.
+
+지속 점검은 실제 progress·predecessor/label maturity·owner deadline이 바뀌는 경계에서 재조회한다. 같은 입력을 반복 계산하거나 무제한 waiting으로 남기지 않는다. 단회 요청은 as-of 판정과 다음 조건을 보고하고 종료하며 필수 작업 미종결을 장후 완료로 표현하지 않는다.
+
+### 5.1 EV 관점의 분석 유효성
+
+1. 목적과 Metric Decision Contract의 `primary_decision_metric`, `metric_role`, source-quality/window/sample/cost/authority를 실제 함수·predicate와 대사한다. source-quality/count/운영 진단에는 양수 EV·실체결 floor를 새로 붙이지 않는다.
+2. raw→deduplicated→complete/maturity waiting/censored/source gap/role-not-applicable 보존식과 stage간 expected/consumed/excluded/unmatched를 닫는다. event·attempt·unique opportunity를 분리하고 owner/venue/session/epoch/policy/prompt generation을 exact key로 join한다.
+3. 실제 실현 headline은 `COMPLETED + valid profit_rate`와 확인된 비용만 쓴다. full/partial/no-fill/HELD, actual/sim/probe/CF를 분리한다. 실행가능한 fill·exit·effective cost·capital 모델이 없는 touch/MFE/분봉 proxy와 hindsight oracle은 진단이다.
+4. incumbent/challenger를 같은 frozen opportunity union과 원래 quantity/cap/exit·cooldown/동시자본으로 비교한다. no-submit/no-fill·정상 BLOCK/VETO의 놓친 이익과 회피한 손실을 대칭 평가한다. 기계 BLOCK에 실제 미호출 AI PASS를 가정하지 않는다.
+5. calibration에서 후보/family를 고정하고 chronological holdout·paired 개선·stress/tail·자본점유를 확인한다. 실패한 holdout을 다른 family 선택에 재사용하지 않는다. 참여 후보만의 평균·양수 날짜만의 평균·gross win rate를 선정 주근거로 쓰지 않는다.
+6. 원래 family의 sample floor·가격/수량·prompt/current policy guard를 evaluator→publisher→PREOPEN/dated loader까지 같은 contract로 대사한다. 일반5/10/20일 동시 floor나 사전 candidate 실체결을 새로 요구하지 않고, 불합리하거나 불가능한 gate는 근거와 소유자를 기록한다.
+7. `valid_carry_or_reject`는 유효 비교와 탈락 사유가 입증된 결과다. challenger 없음·coverage 미달·source invalid 때문에 carry된 경우는 그 부족 상태를 함께 남겨 의도한 경제성 분석 완료와 구분한다. CF 기대개선은 actual 일별 순익·R6·자연 정책 효과로 합산하지 않는다.
+
+### 5.2 결손·결함과 달성 가능성
+
+| 판정 | 입증할 내용 | 다음 조치·closure |
 | --- | --- | --- |
-| `not_yet_due` | 예정 시각 전 | 기다림 |
-| `waiting` | 정상 predecessor/resource/artifact bounded wait marker 존재 | wait 이유와 deadline 기록 |
-| `running` | PID가 있고 stage/log/artifact 중 하나가 계속 전진 | 계속 감시 |
-| `stalled_suspected` | 진행 marker와 artifact가 장시간 정지하고 CPU/I/O/child 변화도 없음 | process·lock·resource 증거 추가 수집 |
-| `failed` | 최신 terminal marker가 FAIL, non-zero exit, invalid/missing 필수 artifact | 최초 실패 단계 격리 |
-| `recovering` | controller, systemd restart 또는 승인된 최소 재실행 진행 중 | 원 run과 recovery run을 구분해 감시 |
-| `done_warning` | terminal 성공이나 허용 source-only warning 존재 | warning 영향과 비권한성 확인 |
-| `done` | 필수 terminal·artifact·후행 계약 모두 충족 | 다음 owner로 진행 |
+| 정상 maturity 대기 | source-valid label이 선언 exit/window의 cutoff까지 아직 미성숙; 남은 수·deadline | 해당 시각의 complete/censored receipt 확인. 모든 horizon 완료를 일괄 요구하지 않음 |
+| 정상 표본 축적 | producer/consumer ON·usable 유입 실제 관측·eligible floor와 denominator가 동일 | 유효 유입률·남은 표본·source day를 기록하고 다음 경계 재판정 |
+| 구조적 불가능 | 지원 scope/실제 signal 없음, 불가능 join, upstream에서 필요한 행 삭제, no-submit 연구에 actual fill 강제, 비용/exit 미정의, native menu/receipt 미발급, consumer 미설치, 절대0 유입 | 직접 owner·결함 함수/predicate·필요 source/adapter/contract와 closure test. 시간 대기로 해소된다고 보고하지 않음 |
+| 복구 불가 과거 결손 | 당시 packet/attempt/cost/window가 수집되지 않았고 입증 가능한 동등 원천 없음 | diagnostic/exclusion/null 보존. 새 원천으로 과거를 재라벨링하거나 동일 replay를 반복하지 않음 |
+| 권한/외부 차단 | 새 live/universe/provider/exit 권한 또는 외부 원천·서비스 필요 | 해당 필요조건과 owner 명시. 기존 승인된 bounded family에 후보별 재승인을 추가하지 않음 |
+| 판단 근거 부족 | 유입률·원천 보존·consumer/contract 중 미확인 항목 | `unknown`과 필요한 읽기 전용 확인. 무조건 내일·며칠 후 완료라는 ETA 금지 |
 
-일반 non-zero exit는 실패다. 단, R0–R3의 provider 미실행 source-only 모드처럼 producer가 명시적으로 `exit=2/source_only_blocked_or_deferred`를 정의한 경우에만 해당 모드·단계 결과·필수 artifact를 함께 확인해 source warning과 실행 결함을 구분한다. 이 예외를 strict verifier/controller 실패에 적용하거나 Provider 평가 완료·live 승격으로 해석하지 않는다.
-
-단순 elapsed time만으로 hang을 선언하지 않는다. 다음을 함께 확인한다.
-
-WS 무수신은 [장중 §4.2.1](intraday-monitoring-task-instructions.md#421-동시호가nxt-휴장-구간의-수신-기대)을 먼저 적용한다. 정상 평일08:50~09:00(확인된 NXT-only09:00:30까지)은 event/원 snapshot 시각·route 기준 `expected_market_quiet`이며 연속매매 무수신만으로 장애/recovery workorder를 만들지 않는다. 장후 현재 시각으로 과거 quiet를 stale로 바꾸지 않고, 개장 후 실제 결손·LOGIN/REG/연결/저장 실패·원천 제외·주문 freshness guard는 유지한다.
-
-- latest stage marker와 최근 log mtime
-- output artifact 또는 checkpoint의 size/mtime 증가
-- PID/child PID, process state, CPU·memory·I/O 변화
-- system metric sampler의 memory, swap, load, I/O wait
-- resource guard·availability guard·artifact wait의 현재 사유와 bounded deadline
-- 동일 target date producer의 중복 PID 여부
-
-진행 근거가 있으면 기다린다. 진행 근거가 없고 동일 stage가 반복 timeout하거나 bounded deadline을 넘겼을 때만 실패 또는 hang으로 확정한다.
-
-모니터링 중에는 사용자에게 상태가 변할 때마다 간단히 알린다. 장시간 같은 상태가 계속되면 최대 60초 간격으로 현재 단계, 대기 사유와 다음 확인 조건을 공유한다.
+시간 경과로 성과가 날 가능성과 경제적 수익성을 분리한다. 유입률이 확인되면 남은 floor/관측 유입률로 **증거 확보 예상 구간**을 조건부 제시하고 owner 시간창·최대 유입 수·source 유효기간을 고려한다. 0유입·미설치·구조결손·계약불명은 ETA null+원인이다. 표본이 늘어도 비용 후 paired delta가 음수이거나 tail guard를 통과하지 못하면 `valid_carry_or_reject`이며 수익 개선 ETA를 약속하지 않는다.
 
 ## 6. 실패 대응
 
-실패가 확인되면 다음 순서를 바꾸지 않는다.
+읽기 전용 점검에서는 최초 영향 producer, affected row/window/scope, downstream 소비·승격 영향, blocker owner/artifact, 필요한 조치와 closure test를 기록한다. identifiable bad row/window는 제외하는 계약이 기본이며 전체 block은 invalid/missing preflight·격리 실패·특정 불가능한 high-volume contract loss일 때만 인정한다.
 
-`최신 run 확정 → 최초 실패 단계 확인 → 원본 증거 보존 → 원인 분류 → 최소 보완 → review gate → targeted validation → 영향 producer부터 최소 재실행 → verifier/controller/finalization 재확인`
+수리·재실행이 이미 승인된 범위이면 `$korstockscan-review-gate`의 구현→review→finding 수리→re-review→targeted validation을 반복한다. 검증 후 **최초 영향 producer→직접 downstream→intended last consumer**만 같은 대상일/hash로 최소 재생성한다. stale해진 EV/summary/gap/lineage→tower→checklist→strict verifier `--require-summary-handoff`→controller/finalization을 해당 범위로 닫고, 이전 PASS로 최신 실패를 가리지 않는다.
 
-### 6.1 원인 분류
-
-| 원인 | 예 | 기본 대응 |
-| --- | --- | --- |
-| 정상 선행 대기 | EOD, main DONE, outcome label 대기 | deadline까지 감시; 중복 실행 금지 |
-| 일시적 resource pressure | memory/swap/I/O guard 대기 | sampler와 resource 회복 확인; guard 완화 금지 |
-| 외부 API rate limit | Kiwoom shared-read defer, HTTP 429 | 기존 bounded retry/cooldown 유지; 호출량 상향 금지 |
-| source late/missing | outcome label 또는 exact-date source 미도착 | source owner와 ETA 확인; 없는 값을 합성하지 않음 |
-| deterministic code defect | traceback, parser/schema 오류, 잘못된 경로·날짜 | 최소 코드 수정 후 review gate 수행 |
-| artifact contract defect | JSON invalid, target date/hash 불일치, downstream missing | producer 수정 후 영향 consumer만 재생성 |
-| stale 또는 실제 점유 lock | PID 종료 뒤 lock 점유, 중복 worker | `lslocks`와 PID 확인 후 소유 process 기준 처리 |
-| systemd timeout/hang | widget evaluation/machine final-refresh 분석 unit timeout | journal과 child tree 보존, review gate 후 해당 분석 service만1회 재실행. 매매 service/preflight는 별도 권한 필요 |
-| 권한 밖 변경 필요 | provider, bot, threshold, order guard | 변경하지 않고 `user_authority`로 보고 |
-
-### 6.2 Lock 처리
-
-`.lock` 파일 존재만으로 stale lock이라고 판단하지 않는다. 반드시 `lslocks`, PID와 process start time을 확인한다.
-
-- 실제 점유가 없으면 lock marker 파일은 그대로 둔다.
-- 실행 중인 정상 owner가 점유하면 기다린다.
-- 중복 owner가 있으면 target date·snapshot·stage·시작시각으로 authoritative run을 식별한다. 증거 보존 후 권한 내의 중복 장후 분석 worker만 처리하고, 정상 main wrapper나 매매 process는 중단하지 않는다.
-- lock 파일 삭제로 문제를 우회하지 않는다. 실행 mutex와 operator policy lock은 다른 계약이다. 오래됐거나 EV 재검증이 없다는 이유로 운영 override를 해제하지 않는다.
-- `run_with_owned_log.sh`의 lock은 로그 회전 보호이며 main wrapper 전체 실행 mutex가 아님을 전제로 중복 PID를 별도로 확인한다.
-
-### 6.3 코드 보완과 review gate
-
-장후 실패/추천의 코드·wrapper·문서 수정에는 `$korstockscan-review-gate`를 적용한다. 사용자 변경을 보존하고 §6.5의 별도 수리 worktree에서 최초 원인을 고친 뒤, 직접 producer/consumer/wrapper/verifier를 review→fix→재리뷰→targeted validation으로 미해결 finding 0까지 닫는다. 선택 release를 수정하지 않는다.
-
-Python은 관련 pytest/compile, shell은 `bash -n`/계약 테스트, 항상 `git diff --check`를 수행한다. 문서-only는 링크·owner·권한과 아래 parser로 검증하며 provider·비용 큰 report·무관한 trading 테스트를 요구하지 않는다.
-
-```bash
-PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project --print-backlog-only --limit 500
-```
-
-진단 수리는 causal/schema/consumer로 닫으며 별도 양수 EV·실체결·all-horizon·승격 floor를 요구하지 않는다. 미래 자연 확인은 기존 OPEN을 재사용하고 없는 항목만 당일 checklist에 `Due/Slot/TimeWindow/Track`으로 기록한다. 외부 Project/Calendar sync와 token 확인은 실행하지 않는다.
-
-### 6.4 최소 재실행
-
-- 동일 target date 작업이 실행 중이면 중복 실행하지 않는다.
-- controller 또는 systemd의 기존 bounded retry가 진행 중이면 그 결과를 먼저 기다린다.
-- 수정과 무관한 성공 단계를 다시 실행하지 않는다.
-- 실패 producer부터 그 결과를 소비하는 downstream까지만 순서대로 재실행한다.
-- 생성된 artifact의 target date, status, source hash/fingerprint와 completion time을 재확인한다.
-- main wrapper 전체 재실행은 controller/runbook이 허용하고 부분 재생성으로 닫을 수 없을 때만 사용한다.
-- AI Provider 호출은 검증된 checkpoint와 해당 producer의 resumable 상태만 재사용한다. terminal schema/provider/receipt rejection을 새 retry로 재개하지 않는다. 실제 실패 request도 기존 retry/capacity/ledger 계약이 허용할 때만 재시도한다.
-- 자정 이후 recovery도 최초 `TARGET_DATE`를 유지한다.
-- 이미 검증된 비가역적 과거 ingress/market/identity 결손은 원본을 합성하거나 동일 날짜를 반복 실행해 닫지 않는다. 격리·baseline carry를 유지하고 기존 OPEN acceptance에서 다음 exact-date 원천을 확인한다. 과거 손익 귀속 복원은 신규 수익 증가로 보고하지 않는다.
-- postclose worker 재실행 전 기존 PID와 실제 lock 점유가 0인지 확인한다.
-
-### 6.5 고정 배포를 보존하는 수리·재생성
-
-1. 허용된 결함은 원인 확인 후 별도 작업 branch/worktree에서 최소 수정·리뷰·테스트한다. 이미 실행 중이거나 다음 예약이 읽을 선택 release를 직접 patch/pull/checkout하지 않는다. 병행 변경을 포함한 전체 dirty 작업폴더를 복사하지 않는다.
-2. `code_review_closed`, `recovery_artifact_verified`, `selected_release_updated`, `actual_pid_consumed`를 별도로 기록한다. 코드가 고쳐졌다는 이유만으로 원래 배포본의 재실행에 수정이 포함됐다고 보고하지 않는다.
-3. 원 선택 코드로 가능한 재실행은 §6.4의 권한·lock·부작용 확인 후 공통 실행 경로를 사용한다. 부분 producer CLI에는 router의 임의 명령 전달 기능이 없으므로 검증된 root/cwd/PYTHONPATH/실행 파일과 기존 canonical publisher 계약을 명시한다. 공유 state가 있는 새 수리 worktree 테스트를 격리 테스트라고 오인하지 않는다.
-4. 수정 코드의 source-only 검증·재생성은 승인된 복구 범위에서 먼저 격리된 출력으로 수행한다. canonical 산출물 반영은 해당 writer/consumer가 실행 중이지 않고 기존 publisher의 generation/hash·재발행 계약이 허용할 때만 한다. 이미 발행된 정책의 source pin을 조용히 무효화하지 않는다. 수리 code root/commit과 output generation을 보존하고 영향받은 최종 consumer를 다시 검증한다.
-5. 선택 release 교체가 필요하면 현재 장후 chain과 독립 공유 consumer의 실행 상태, 검토 commit·변경 범위, exact-date 코드/source pin 영향, 다음 PREOPEN 영향과 rollback을 먼저 보고한다. 이번 실행의 유효한 배포 승인 없이는 선택 원장/cron/재기동 경로를 바꾸지 않는다. 승인된 경우에도 chain이 terminal이고 실행 중인 해당 consumer가 없는 안전한 구간에서만 교체하며, 예약 전이거나 producer 사이 공백이라는 이유로 실행 중 chain을 분리하지 않는다.
-6. 고정 배포 유지에 선택 release·이전 rollback release·공유 symlink·정책/source bundle·cron/선택 원장 백업이 필요하다. 장후 디스크 정리로 이를 삭제하거나 공유 quota·custody·restart.flag를 초기화하지 않는다. 복구 백업을 되돌릴 때에도 이후 다른 세션의 변경을 먼저 대사한다.
-
-여기서 전환 전 terminal은 성공만 뜻하지 않는다. 실패 run과 관련 자동 retry가 종료됐고 실행 중인 해당 consumer가 없으면, 승인 범위의 복구 전환을 검토할 수 있다. 실패를 고쳐야 성공할 수 있는데 성공 전에는 수리 배포를 금지하는 순환 조건을 만들지 않는다. 실패 증거와 원래 source date는 보존한다.
-
-수리는 별도 worktree에서 계속할 수 있지만 배포 승인이 없거나 안전한 전환 구간이 없으면 `code_review_closed / deployment_pending`으로 보고한다. 이것을 수리 미착수나 현재 runtime 적용 완료로 바꾸지 않는다. 미래 적용·추가 확인은 실행일 체크리스트의 기존 owner에 남긴다.
+진행 중 worker/lock은 실제 PID·시작/progress·owner deadline부터 확인한다. lock 파일 존재만으로 stale이라고 삭제하지 않는다. immutable 실행 세대·valid checkpoint·frozen published policy·원래 custody를 보존하고 끝나지 않은 HTTP/worker를 terminal로 가장하지 않는다. 매매 owner 변경이나 새 권한이 필요한 수리는 해당 근거를 보고하고 종속 mutation을 수행하지 않는다.
 
 ## 7. Implement-now 및 위젯·에피소드 추천 2-pass 구현
 
-운영 체인이 terminal이 되고 authoritative generation이 고정된 뒤 수행한다. 진행 중인 wrapper가 읽고 있는 코드나 산출물을 중간에 교체하지 않는다.
+이 절은 **추천 구현이 별도 지시된 경우의 계약**이다. 일반 결과 점검은 원래 native ID/decision·현재 disposition·intended consumer·acceptance·권한·source hash를 확인하며 코드를 구현하지 않는다. runbook의 구현 workflow에서 이 절을 참조할 때에만 아래 closure를 수행한다.
 
-### 7.1 Intake
-
-다음 source에서 구현 지시를 수집한다.
-
-- `data/report/code_improvement_workorder/code_improvement_workorder_TARGET_DATE.json`
-- `docs/code-improvement-workorders/code_improvement_workorder_TARGET_DATE.md`
-- `data/report/widget_collector_expansion_recommendation/`
-- `data/report/widget_advisory_calibration/` 및 `data/report/widget_auto_trade_policy_calibration/`의 기존 paired 선정·source/incident handoff
-- `data/report/widget_symbol_signal_policy_research/`
-- `data/report/widget_symbol_runtime_policy_apply/`
-- `data/report/samsung_machine_entry_tuning/`
-- `data/report/low_price_two_leg_tuning/`
-- `data/report/low_price_two_leg_expanded_candidate_research/`
-- `data/report/machine_microstructure_attribution/`
-- `data/report/machine_entry_timing_tuning/`
-- `data/report/machine_microstructure_policy_approval/`
-- 대상일 verifier, runtime apply-gap audit와 다음 checklist의 직접 handoff
-
-timing의 `feature_ablation_study`와 attribution의 adaptive-exit child도 원 producer·source hash·native 추천까지 연결해 누락 없이 점검한다. 비교 arm 이름, 설계 WP 번호, 리뷰 finding 번호는 native 구현 ID가 아니다. 연구 child와 상위 report에 같은 native ID가 투영됐으면 한 항목으로 대사하며, 별도 승인 구현 이력은 그 승인 범위의 successor disposition으로만 연결한다.
-
-위젯과 lower-price episode의 종목 수에는 인위적인 cardinality cap을 두지 않는다. 완료 marker와 행 수가 일치하는 `daily_recommendations_v2` 신규 종목은 research-watch 설정 바깥이어도 위젯 연구 universe에 자동 등록하고, source/execution-quality·양 calibration half·독립 holdout·비용차감 EV 기준을 모두 통과한 전 종목을 다음 거래일 exact-date 정책으로 자동 승격한다. Episode의 `new_symbol` 및 `existing_symbol_time_extension` 통과 추천도 별도 사용자 승인 없이 다음 거래일 exact-date auto-expansion 정책으로 누적 승격한다. 이는 수량, 소유권, 보유/미체결 custody, global BUY pause, liquidity, market-weakness, broker/hard-safety guard를 완화하지 않는다.
-
-장기 미성과 제거는 신규 진입·장후 연구 universe에만 적용한다. 최소 40개 유효 거래일 뒤 full/calibration과 holdout의 필수 episode/leg 표본이 모두 성숙하고 비용차감 EV가 모두 `<= 0`인 후보만 제거한다. 보유 또는 미체결 주문의 청산 custody는 제거하지 않으며, source 결손·미성숙·holdout 부재를 미성과로 간주하지 않는다. 제거·재등록과 다음날 exact-date 정책 결과를 source hash 및 profile/symbol ID로 남긴다.
-
-각 항목에 authoritative producer가 발급한 stable `order_id` 또는 `recommendation_id`가 있으면 그대로 사용한다. stable native ID가 없으면 자체 ID를 만들거나 추정 구현하지 않고 `invalid_or_missing_authority`로 차단한다. 다음 필드를 ledger에 기록한다.
-
-| 필드 | 내용 |
-| --- | --- |
-| ID | stable order/recommendation ID |
-| owner | main, widget symbol, Samsung machine, low-price machine 또는 공통 automation owner |
-| source | artifact path, target date, generation/hash |
-| decision | producer 원값 보존: `implement_now`, `code_patch_required`, `objective_followup_required`, `already_implemented`, `observe`, `keep_collecting`, `defer`, `reject` 등 |
-| authority | `runtime_effect`, `allowed_runtime_apply`, order/provider/bot/safety 영향 |
-| reason | 직접 결함 또는 기대 개선점 |
-| consumer | 수정 결과를 소비해야 하는 마지막 artifact/wrapper |
-| acceptance | 테스트, report 상태와 handoff 완료조건 |
-| final disposition | `already_implemented_verified`, `implemented_pass1`, `implemented_pass2`, `blocked_missing_evidence`, `blocked_external_dependency`, `user_authority`, `invalid_or_missing_authority`, `observed_no_patch`, `deferred`, `rejected`, `removed_or_superseded` |
-
-추천 문장만 있고 구현 위치·consumer·acceptance가 없으면 추정 구현하지 않고 `blocked_missing_evidence`로 둔다. 권한 필드가 없으면 직접 producer/schema에서 비권한 계약을 확인하며, 거기에도 없으면 `invalid_or_missing_authority`로 둔다.
-
-Pass 1 전에 현재 generation의 main/위젯/에피소드 추천 **전수**를 보존한다. 동일 owner의 같은 native ID가 JSON/Markdown에 중복되면 한 항목으로 대사하고, 원본 충돌은 intake 결함이다. ID 없는 row는 원본 경로·위치로 누락 여부만 추적하며 구현 ID를 발명하지 않는다.
-
-- `intake_total = implementation_requested_total + nonimplementation_total`
-- `implementation_requested_total = eligible_runtime_effect_false_total + user_authority_total + invalid_or_missing_authority_total`
-- `nonimplementation_total = already_implemented_verified_nonrequest + observed_no_patch + deferred + rejected + blocked_missing_evidence_nonrequest + blocked_external_dependency_nonrequest + invalid_or_missing_authority_nonrequest`
-- 각 pass 종료: `eligible_runtime_effect_false_total = already_implemented_verified_eligible + implemented_pass1 + implemented_pass2 + blocked_missing_evidence + blocked_external_dependency + eligible_actionable_open`
-- 최종 `eligible_actionable_open=0`, `implement_now_unaccounted_count=0`, `intake_unaccounted_count=0`
-
-`implementation_requested_total`에는 native `implement_now|code_patch_required`, §7.2 계약으로 채택된 `objective_followup_required`, 검증되지 않아 수리/증거 대기로 이관된 `already_implemented` 주장을 센다. 위 식의 클래스는 상호배타적이다. 구현이 불필요하다는 검증이 끝나지 않은 `already_implemented` 주장은 완료 계수에 넣지 않고 권한 확인 후 eligible 수리/증거 대기로 분류한다. 비구현 추천의 권한/근거 결손은 대응하는 `_nonrequest` 계수로 기록한다. 이는 집계상 구분이며 final disposition의 원래 사유를 바꾸지 않는다. `removed_or_superseded`는 이전 generation 이력에 남기고 현재 분모와 섞지 않는다.
-
-보존식, 동일 owner/native ID 유일성 또는 source generation 대사가 실패하면 `intake_contract_defect`로 Pass 1을 시작하지 않는다. 각 pass에서 동일한 분모/분류를 재계산하고 ledger의 현재 합계와 이전 generation 변경 이력을 분리한다.
-
-원본 canonical report를 보존한 채 producer가 native ID metadata projection을 발급한 경우 원본 path/row/hash → projection의 native ID → 별도 승인/구현 ledger를 대사한다. 원래 ID 없는 ledger를 덮어쓰거나 두 ledger를 독립 작업으로 합산하지 않는다. projection은 새 시세·경제성 재생성이 아니며 native ID 추가만으로 구현/live 권한이 생기지 않는다. 별도 승인으로 이미 구현된 축의 최신 disposition은 그 승인 ledger에서 검증하되, 미대사 항목은 완료 처리하지 않는다.
-
-### 7.2 구현 가능성 판정
-
-다음은 Pass 1 구현 대상이다.
-
-- `decision=implement_now|code_patch_required`
-- artifact 또는 직접 producer contract로 `runtime_effect=false`, `allowed_runtime_apply=false`, 실주문·provider·bot·safety authority 없음이 확인됨
-- source-quality, parser/schema, report, instrumentation, test, wrapper, notifier 또는 existing-policy handoff 결함
-- 위젯·에피소드 추천 중 기존 owner와 수량·target·safety 계약을 바꾸지 않는 관찰·후보생성·정합성 보완
-- 이미 코드가 존재하더라도 producer→consumer→acceptance 근거가 없어 완료로 입증되지 않은 항목
-
-`objective_followup_required`는 구현 위치, intended consumer, acceptance test와 비권한 계약이 artifact에 모두 있을 때만 구현 대상으로 올린다. 단순 정책값 추천, 후보 순위 또는 `observe|keep_collecting`은 코드 구현으로 바꾸지 않고 기존 candidate/policy handoff 상태만 확인한다.
-
-다음은 자동 구현하지 않는다.
-
-- 실주문 authority, 위젯/에피소드 매매 process 재기동, 종목 universe의 실전 확대
-- 수량, leg 수, target, entry threshold, cap, provider, broker 또는 hard-safety 변경
-- operator lock 해제·변경
-- source-only 추천을 수동 live policy나 env로 전환하는 작업
-
-기존 exact-date 자동 policy family의 후보가 정식 guard를 통과한 경우에는 candidate/policy/handoff producer를 복구할 수 있다. 최종 적용은 각 family의 기존 PREOPEN 또는 dated policy loader가 소유하며 수동 env를 작성하지 않는다. 공유 feature kernel의 변경이 현재 BUY/WAIT/REJECT나 SELL에 영향을 주면 단순 report 수리로 분류하지 않고 해당 runtime 변경 권한을 별도 확인한다.
-
-### 7.3 Pass 1
-
-1. authoritative generation의 모든 eligible `implement_now`와 위젯·에피소드 구현 추천을 ID별로 고정한다. 필수 source-quality/운영 장애를 먼저 닫고, 같은 eligible 집합 안에서는 §1.1 main submit drought와 §1.2 위젯·에피소드 진입판단의 최초 병목을 공동 최우선으로 다룬다. 완료된 수리는 최신 consumer/세대만 검증하며 그 밖의 owner도 전수 ledger에서 빠지면 안 된다. §1.3 별도 승인 구현과 일반 source-only 추천의 권한을 합치지 않는다.
-2. `already_implemented`는 관련 코드 존재만으로 닫지 않고 producer·consumer·test 근거로 검증한다.
-3. eligible 항목을 누락 없이 구현한다.
-4. 항목별로 직접 consumer, silent-fail, target-date, source-quality와 owner 분리를 리뷰한다.
-5. `$korstockscan-review-gate`를 finding 0까지 반복한다.
-6. targeted test, compile/shell syntax, parser validation과 `git diff --check`를 통과한다.
-
-### 7.4 영향 산출물 재생성
-
-Pass 1 검증 후 수정한 최초 producer부터 intended last consumer까지 필요한 범위만 재생성한다.
-
-승인된 구현/review workflow는 확인한 disposition을 `postclose_recommendation_dispositions` companion에 현재 native ID·row/source hash·review/test/direct-consumer 근거로 기록한다. 이 기록은 별도 live 승인이나 새 사용자 개입을 요구하는 단계가 아니라 현재 허용된 구현 pass의 결과 기록이다. upstream 재생성으로 source hash가 달라지면 새 원장의 동일 ID를 대사한 뒤 유효한 검증 근거만 재결속한다. companion을 근거 없이 만들거나 과거 원장의 완료를 일괄 복사하지 않는다. 운영 요약은 companion이 없어도 미검증/차단 상태를 명시할 수 있으며, 요약 성공과 구현 완료를 구분한다.
-
-- 재생성 전 old generation path/hash/status를 저장한다.
-- 중간 producer 실패 시 이전 정상 generation을 덮어쓰지 않는다.
-- AI 단계는 valid checkpoint를 재사용한다.
-- 위젯과 에피소드 산출물은 main owner와 order/custody를 혼합하지 않는다.
-- recommendation candidate 0건은 정상 empty일 수 있으므로 source funnel과 decision reason으로 판정한다.
-- 재생성된 workorder, recommendation, verifier와 checklist의 target date와 source hash를 확인한다.
-- timing의 frozen evidence/발행 정책과 widget의 incumbent/study receipt를 보존한다. canonical report 재생성만으로 이미 발행·소비된 정책 세대가 조용히 교체되거나 탈락하지 않는지 확인하며, 최신 same-stage veto와 명시적 invalidation 계약은 유지한다.
-- 새 산출물 때문에 기존 terminal consumer가 stale해지면 verifier → controller → finalization을 해당 target date로 다시 닫는다.
-
-### 7.5 Pass 2와 fixed-point
-
-1. 새 authoritative generation의 `implement_now`와 위젯·에피소드 추천 전수를 다시 intake한다.
-2. 각 ID를 `unchanged`, `new`, `removed`, `decision_changed`로 비교한다.
-3. `new|decision_changed` 중 eligible한 항목을 구현하고 동일 review/fix/validation을 반복한다.
-4. Pass 2 수정이 다시 추천을 만들면 재생성·diff·구현을 반복한다.
-5. 다음 조건을 모두 만족할 때 fixed-point다.
-
-- eligible `new|decision_changed implement_now=0`
-- `implement_now_unaccounted_count=0` 및 `intake_unaccounted_count=0`
-- `final_eligible_actionable_open_count=0` (현재 ledger의 `eligible_actionable_open`과 동일)
-- 위젯·에피소드 recommendation 미분류 건수 0
-- review P0~P2 finding 0
-- targeted validation 통과
-- verifier/controller/finalization의 최신 terminal 상태 확인
-
-`blocked_missing_evidence`, `blocked_external_dependency`, `user_authority`, `invalid_or_missing_authority`는 구현 완료가 아니다. owner, 필요한 근거와 acceptance condition을 남기고 최종 상태를 최대 YELLOW로 제한한다.
+1. terminal authoritative generation의 main/widget/episode 추천 전수를 intake한다. canonical/projection/approval ledger를 중복 합산하지 않고 `unchanged/new/removed/decision_changed`를 대사한다. 근거 없는 상충/중복과 미분류 행을 보존한다.
+2. 실제 `implement_now|code_patch_required` 및 구현 위치·consumer·test·비권한 계약이 있는 objective followup만 eligible하다. `runtime_effect=false`, `allowed_runtime_apply=false`를 artifact와 실제 영향에서 확인한다. 공유 runtime kernel의 BUY/WAIT/SELL 변화는 report-only 수리가 아니다.
+3. Pass 1 구현→finding0→targeted validation→최소 영향 재생성 후 Pass 2에서 새/변경 추천을 재대사한다. 반복은 횟수가 아니라 eligible new/changed0·intake/implement-now unaccounted0·eligible actionable open0·review finding0과 최신 필수 terminal로 닫는다.
+4. 검증한 disposition은 기존 companion에 native ID·row/source hash·review/test/직접 consumer 근거로 기록한다. 과거 완료 일괄 복사·합성 authority·신규 live/universe/quantity/target/provider/safety 권한 상속은 금지한다. evidence/external/user-authority 차단은 구현 완료가 아니다.
 
 ## 8. Owner별 필수 확인
 
+아래와 활성 목록의 작업별 항목을 모두 대사한다. 논리 작업이 같아도 source generation별 반복 출력은 actual callsite/receipt로 확인하며 stage 번호를 신규 실행 ID로 만들지 않는다.
+
 ### 8.1 Main threshold-cycle
 
-- wrapper는 source-quality preflight·trade-fact sync 뒤 기존 `Entry split → AI 원천 materialization → R0–R3 내부 lifecycle paired`를 Daily 앞에서 한 번 실행한다. `Daily/cumulative/AI correction → 후행 EV/요약`이 같은 장후 paired를 소비하는지 확인한다. OFF·deferred 또는 유효 빈 표본을 경제성 승인으로 오인하지 않고, 순서 보완을 이유로 lifecycle·Daily·Provider를 중복 실행하지 않는다. 세부 순서는 해당 실행의 snapshot과 traceability 계약으로 대사한다.
-- #14 Samsung/#15 low-price는 #74 final audit 뒤의 실제 wrapper 순서·동일 source hash로 한 번 소비되는지 확인한다. 진행표의 review ID 번호 순서를 실행 순서로 오인하거나 앞단에서 중복 실행하지 않는다. #15 실제 정책 cohort·broker-priced 분모/손익 null과 #14 source-ready/경제성을 따로 대사한다.
-- 동일 target date 최신 `[START]`, `[FAIL|DONE]`와 status JSON을 결속한다.
-- wrapper 시작 시 immutable snapshot과 pipeline snapshot/checkpoint를 확인한다.
-- 현재 stage와 마지막으로 완성된 artifact를 식별한다.
-- OFF·retired stage를 실패로 세지 않는다.
-- AI 필수 단계는 parsed/receipt 계약을, disabled 단계는 disabled provenance를 확인한다.
-- main wrapper의 종결 순서는 `pre-workorder EV → workorder → pattern propagation/AI review → post-propagation EV → runtime summary/gap/lineage → checklist → core verifier → DONE → final verifier`다. 늦은 widget/machine source가 아직 terminal이 아니므로 main에서 tower·최종 checklist·strict summary를 만들지 않는다. 모든 predecessor가 terminal인 뒤 finalization의 summary-handoff owner가 `일반 verifier → tower → checklist → strict verifier`를 한 번 생성한다.
-- finalization이 만든 `source_generation_contract`와 checklist `POSTCLOSE_SUMMARY_SOURCES`의 대상일·source SHA256을 실제 파일과 대조한다. main final verifier를 최종 요약 최신성으로 오인하지 않고, strict 실패 시 과거 PASS를 재사용하지 않는다. verifier/controller 자체 hash는 순환 방지를 위해 요약 source 계약에서 제외한다.
-- strict verifier 또는 recovery 명령이 실패하면 이전 성공 artifact를 근거로 DONE 처리하지 않는다. 마지막 bounded attempt에도 최종 strict 명령 성공이 필요하다. EV headline의 `realized_pnl_status`가 미대사이면 PnL null을 유지하며, 건수 일치만으로 exact 비용 검증 완료를 주장하지 않는다. source-only CF route 관찰은 identity/schema/권한 검증 후 actual ADD/NO_ADD와 분리하고 malformed authority는 계속 차단한다.
-- §1.1.1의 기계·AI 사례표는 별도 수기 표가 아니라 기존 `ai_action_outcome_calibration`의 exact snapshot/lifecycle join과 그 직접 report projection으로 확인한다. 당일 `ENTER_NOW/RECHECK/BLOCK/source_invalid` 보존식, 모든 기계 ENTER의 current/other/missing prompt routing, 최초 감시→기계→AI→submit/fill gap, 1/3/5/10/20/30/60분 observed/pending-or-source-gap 상태와 비용을 대사한다. machine attempt 보존식이 깨지면 기계 threshold 학습만 차단되고, 유효한 compact AI partition은 독립 판정되는지 확인한다. `CAUTION|INSUFFICIENT`는 유효 bounded 비진입 terminal, transport/local unavailable은 미평가로 유지되어 명시적 VETO/DROP으로 흡수되지 않아야 한다.
-- actual lifecycle의 entry trace는 `entry|entry_ai|entry_decision`과 submit/fill trace의 유일한 교집합을 우선한다. 종목·venue/session·route/epoch·decision timestamp·source bundle이 같은 fixed-price 1초 micro만 결속하고, 비용은 `broker reconciled > source-bound executable estimate > comparison-only`로 분리한다. comparison-only 비용은 실현 경제성 승인에 사용하지 않으며 결손 비용·feature는 null로 유지한다.
-- `daily_threshold_cycle_report`가 `mechanistic_entry_price_policy`와 `entry_execution_sizing_policy`를 같은 source date에서 만들었는지, policy schema/version/file/hash와 다음 거래일 target이 PREOPEN manifest에 결속됐는지 확인한다. 초기 수량의 exact requested total·각 leg quantity·합계와 quantity policy hash가 모두 맞아야 하며, arm·terminal·비용 결손은 0으로 보간하지 않는다. 정책 후보가 없으면 valid baseline carry와 직접 blocker를 남기되 main 기동을 임의 차단하거나 수동 env를 합성하지 않는다.
-- numeric price는 mechanistic owner, 최초 총수량은 `position_sizing_dynamic_formula`, leg shape/원자성은 `entry_execution_sizing_plan`으로 분리한다. compact AI와 provider/model 비교에는 action·price·quantity·leg authority가 없고, 최초 진입 결과를 AVG_DOWN/PYRAMID 정책 승격 분모로 합치지 않는다. 현재 PID의 policy file/hash/date와 실제 order plan receipt가 일치하기 전에는 장후 발행을 runtime 소비로 보고하지 않는다.
-- 같은 main wrapper generation에서 policy publisher의 target date가 거래 calendar의 다음 거래일인지, challenger 채택 또는 `incumbent_carried`가 명시됐는지, bundle/source hash가 calibration과 일치하는지 확인한다. 비용 차감 `+0.10%`만 충족했다고 source/holdout/tail guard를 생략하지 않고, 반대로 child 후보0·미성숙 때문에 유효 부모 정책을 제거하거나 부모 소비에 challenger floor를 중첩하지 않는다.
-- publisher 결과를 runtime summary/gap/lineage→tower→checklist→strict verifier와 다음 PREOPEN intended loader까지 대사한다. report exit 0인데 dated policy가 없거나 stale/잘못된 target/hash이고 정상 carry 사유도 없으면 `no_op_success|policy_publish_or_handoff_failed`로 실패 처리한다.
-- EV는 workorder 전과 pattern propagation 뒤의 두 generation만 허용하고 workorder는 한 번만 생성한다. conversion 뒤 EV/runtime summary 재실행과 main의 tower/strict summary를 반복하지 않는다. 마지막 producer 뒤 trigger-decision snapshot은 **실행 지시 없이** 갱신하고 core checklist/verifier가 같은 main generation을 읽는지 확인한다. 늦은 source를 포함한 최종 tower/checklist/strict는 finalization만 소유한다.
+입력 freeze/compact·#11/#74 품질·실제 기계/compact 사례→가격/수량·leg→Daily/calibration→EV/cumulative→candidate/publisher의 counts·비용·정책 결속을 확인한다. 기계 threshold, compact instruction, numeric price, 초기 quantity/leg와 AVG_DOWN의 공통 반등 신호 소비·holding/exit owner를 분리한다. `entry_cancel_wait_tuning`의 touch/mark proxy는 executable fill/exit/cost가 없으면 diagnostic hold이며 시간 축적으로 자동 경제성 자료가 되지 않는다.
+
+PYRAMID 판단·주문과 intraday feedback/quality calibration, AVG_DOWN 독립 recovery calibration·budget 계좌 수집·exit replay capture는 사용자 지시로 폐기했다. 과거 paired economics 보고서는 archive-only이며 현행 필수 산출물·후보·carry·승계·복원 업무가 아니다. wrapper/직접 CLI/과거 env·lock·report가 이를 재활성화하지 않는지 실제 consumer를 확인한다. 기존 pending/체결/완료 원장은 정산·감사에 보존한다.
+
+AVG_DOWN은 현재 Main holding bars와 WS tick/BBO로 공통 Main 기계 entry 정책의 같은 venue/session 반등 ENTER_NOW를 소비한다. 공통 entry 장후 학습/publisher→PREOPEN bundle→실제 PID→반등 source signal/version/hash·episode/decision→기존 AI/현금/수량/cap/pending/exit/가격 guard→자연 ADD/blocked→COMPLETED 비용 원장을 추적한다. 삼성/widget/episode 전용 rebound source나 sim/CF를 Main 실제 신호/이익으로 바꾸지 않는다. 별도 AVG_DOWN threshold 후보/승격을 요구하지 않는다.
+
+실제 적용 code/machine 버전별 episode를 중복 제거하고 rolling/cumulative 비용 차감 EV·순익·tail·노출·모델 오차를 평가한다. 기존 Main entry 모델 ΔEV는 실제 AVG_DOWN 증분 이익과 별도이며 missing/censored 비용·결과는 null이다. policy/source/scope 결손·stop/pending/common guard 차단·유효 반등 부재·미성숙 결과를 구분한다. candidate0은 폐기한 독립 튜닝의 실패나 복원 사유가 아니다. 손절 직전 강제 추가매수·손절 유예를 반등 정책으로 복원하지 않는다. code/PREOPEN/selected release/PID/자연 행동/실경제성을 별도 판정하며 당일 기존 Acceptance owner를 따른다.
 
 ### 8.2 DONE controller와 AI replay
 
-- compact AI는 기계 ENTER의 보조 심사이며 legacy 독립 선정·holding cohort와 분리한다. #76/#82의 AI 미호출 기계 평가와 실제 호출 분모, prompt/machine hash 및 후행 outcome을 대사한다. #77/#78/#80은 등록 compact system prompt·실제 입력·schema parity와 자연 평가 projection을 확인하며 과거 optimizer base prompt를 compact에 덧붙이지 않는다. legacy replay/Provider0 metadata 성공을 compact 평가·적용으로 바꾸지 않는다. 손상된 historical gzip은 날짜별 source gap으로 격리하고 전일 원천을 합성하지 않는다.
-- controller JSON `done`만으로 끝내지 않고 controller cron log의 최신 DONE을 확인한다.
-- fixed 21:05 runner와 controller follower가 날짜별 replay lock으로 중복되지 않았는지 확인한다.
-- active fixed runner의 lock이 해제된 직후에는 최신 batch/consumer terminal을 다시 검증한다. 대기 중 읽은 `retry_required`를 그대로 재사용해 이미 끝난 follower를 다시 실행하지 않으며, 재검증에서도 미완료인 경우에만 기존 bounded runner/lock 계약을 따른다.
-- batch는 `completed_offline_only`, consumer는 terminal path/hash 검증 상태여야 한다.
-- 21:05 follower는 `terminal detailed → #82 calibration v5 → #78 optimizer(당일 선택 고정) → provider0 batch metadata-only 재결속 → #79 holding manifest → #80 consumer` 순서와 같은 generation/hash를 확인한다. 정상 paired 행의 부분 성공 학습과 producer 전체 실패 terminal을 분리하며 학습 가능을 live promotion 성공으로 바꾸지 않는다.
-- 기존 reaction 실제 payload/전송·optional exact 비용 companion·무참여 연구 교체·단일 사례 prompt 초안이 #76/#82/#78/#80에 같은 parent/hash로 전달됐는지 확인한다. 비용 결손은 null이며 연구 proxy·초안 생성·Provider0 metadata는 실제 판단 개선/실주문 경제성이 아니다. 검증된 새 source가 없는데 동일 replay/Provider 호출을 반복하지 않는다.
-- #77 Main AI R0–R3는 지속적인 offline prompt/input 개선 경로다. #81 legacy runtime은 `LEGACY_RUNTIME_AUTHORITY_ENABLED=False`라 표본 누적만으로 활성화되지 않는다. 지원 KRX V2.14/V2.15의 별도 `entry_setup_live_policy` 승격·PREOPEN·receipt와 혼동하지 않는다.
-- 기본 OFF인 Codex workorder runner가 실행되지 않은 것을 실패로 보지 않는다.
+wrapper terminal, 21:05 follower lock/terminal과 calibration/optimizer/holding/consumer generation을 대사한다. Provider0 metadata closure와 실제 replay·current compact 연구를 분리하고 disabled 또는 legacy source를 현재 prompt 효과로 재라벨링하지 않는다. controller DONE이 latest strict summary closure를 포함하는지 확인한다.
 
 ### 8.3 Tuning monitoring과 archive
 
-- tuning monitoring은 main postclose DONE을 기다린 후 parquet 3종, verified archive와 shadow diff를 단계별로 확인한다.
-- pattern lab이 main wrapper 소유일 때 tuning monitoring의 pattern lab skip은 정상이다.
-- 20:50 archive와 tuning monitoring archive가 같은 파일을 처리할 때 검증·원자 publish·skip 계약을 지켜야 한다.
-- 미검증 raw를 정상 종료 목적으로 삭제하지 않는다.
+late-pass의 expected/consumed/excluded, raw/compact→Parquet/DuckDB partition/date/hash와 archive 보존·검증을 확인한다. 조회속도·중복 read 절약은 EV 개선 증거가 아니다. 정상 artifact reuse에는 source hash·cutoff·직접 consumer 검증이 필요하다.
 
 ### 8.4 Widget evaluation과 추천
 
-- systemd unit의 `ActiveState`, `SubState`, `Result`, `ExecMainStatus`와 journal을 확인한다.
-- advisory calibration, auto-trade policy calibration, symbol signal research, runtime policy의 네 producer와 중간 EOD 대기 gate가 같은 completed target date를 사용해야 한다. EOD gate를 다섯 번째 report producer로 세지 않는다.
-- Kiwoom shared-read budget이 소진되면 빈 source로 성공 처리하거나 API 호출량을 올리지 않는다.
-- 종목 확대·signal policy 추천은 exact source, sample floor, source-quality와 기존 owner guard를 확인한다.
-- §1.2의 확인2/3 paired 선정, 검증 incumbent 대비 signal-only/exit-only, source/incident 및 exact manual-flat projection을 네 producer의 직접 consumer까지 대사한다. recipe carry·source-gap·sample floor·holdout/경제성 미달·실행품질 veto를 분리하고, 신호 변경일에 target이나21:15 entry timing이 같은 stage를 중복 변경하지 않는지 확인한다.
-- 추천의 source-only 구현은 Pass 1/2에 포함한다. 실전 종목 확대 또는 매매조건 변경은 정식 policy candidate와 PREOPEN guard 없이는 `user_authority`다.
-- symbol 연구는 completed lifecycle/holdout·incumbent/policy·비용·source exclusion을 묶은 입력 fingerprint가 동일하면 heavy grid를 재계산하지 않는다. 재사용은 기존 exact-date 원본과 hash를 보존한 source-only 실행 최적화이며 신규 EV·승격·당일 자연 결과가 아니다. fingerprint 또는 producer code hash가 바뀌면 full recompute해야 한다.
-- 수정 또는 source 회복 뒤 evaluation service만 1회 재실행하고 unit `Result=success`와 네 단계 산출물을 확인한다.
+네 producer의 completed date와 EOD date/rows, raw/advisory seed·before-confirmation signal/BBO·incumbent rejects·census·CF union·holdout·capital·policy/carry를 대사한다. raw-only와 no opportunity, source-valid0과 candidate0를 구분한다. source-day/actual consume/version acknowledgement가 빠졌으면 코드/발행 성공을 whole-loop 완료로 표시하지 않는다.
 
 ### 8.5 Episode machine과 추천
 
-- Samsung과 low-price machine의 profile, episode, leg, order/custody owner를 main/widget과 분리한다.
-- 추천 artifact의 target date, source hash, decision, runtime effect와 acceptance test를 확인한다.
-- source/parser/report/instrumentation과 candidate handoff 보완은 Pass 1/2에 포함한다.
-- 기존 수량·leg·target·validity·safety 계약을 변경하는 추천은 자동 구현하지 않는다.
-- exact-date PREOPEN policy candidate는 기존 apply/verify consumer까지 handoff를 검증하되 수동 env로 적용하지 않는다.
-- 실제 signal/leg별 micro checkpoint·원 target/custody·수동 successor와 §1.3 승인된 최소 보조청산 successor를 분리한다. 신규 진입시각·정책 pin·원 주문→취소확정→후속 주문·수량 보존을 확인한다. 전일 보유 편입이나 전체 adaptive 연구 family에는 이 승인을 전용하지 않는다.
+Samsung actual-policy tuning·low-price actual/HELD·expanded study/catalog·timing research/approval을 각각 검증한다. 실제 signal anchor와 prospective diagnostic, 실제 체결과 minute proxy를 구분하고 동일 holdout family 재선택·actual gate의 CF lane 오적용을 점검한다. profile/target·원래 수량/leg·무손절·manual custody와 별도 approved override를 보존한다.
 
 ### 8.6 Machine final refresh
 
-- 21:15 단계는 `expansion → attribution → weakness hysteresis → entry timing → approval → checklist`다.
-- attribution 실패 때문에 weakness/timing이 실행되지 않은 경우 return code 0을 성공으로 해석하지 않는다.
-- 각 단계의 return code와 최종 unit `Result`를 함께 본다.
-- wrapper의 최종 exit 우선순위는 `checklist builder → policy → weakness hysteresis → entry timing → attribution → expansion`이므로 최종 exit code만으로 최초 실패를 추정하지 않는다.
-- source missing, timeout 또는 memory cap이 반복되면 동일 재시도를 반복하지 말고 최초 source/contract/resource 원인을 보완한다.
-- low-price expanded research와 machine attribution은 입력/source-generation fingerprint와 producer code hash가 동일한 exact-date 재호출만 재사용한다. source 디렉터리의 파일 추가·삭제·size/mtime 변경 또는 코드 hash 변경 시 full recompute하며, 재사용 marker를 새 경제성 표본이나 정책 후보로 세지 않는다.
-- attribution/timing/approval의 source-only 구현 추천을 Pass 1/2에 포함한다.
-- §1.2 공통 kernel/version·window completeness·actual signal census·4군 교집합/holdout·모드별 실제 floor·frozen evidence와 최신 owner veto를 같은 generation으로 대사한다. 과거 baseline carry·scopes0은 오늘 source나 다음 정책의 기대 건수가 아니다.
-- adaptive-exit child의 source/replay/study/native 후보는 기존 attribution 안의 별도 출구 연구다. timing study와 entry delay 정책 소비를 혼합하지 않으며, 연구 child 생성 성공을 최초 exit family 승인/실주문 활성화로 세지 않는다.
-- 보완 후 해당 service만 1회 재실행하고 정책 후보 유무와 관계없이 모든 필수 단계가 terminal인지 확인한다.
+expansion·attribution·hysteresis·timing·native capacity·research closed-loop·approval·checklist의 rc와 최신 artifacts를 전부 확인한다. 후행 성공으로 이전 producer 실패를 가리지 않는다. allocation/census·실제 decision/source/menu/cost/exit·next-date publication·actual consumer/version attribution의 미완료가 표본 대기인지 구조결손인지 각각 판정한다.
 
 ### 8.7 Finalization과 error detector
 
-- finalization은 main postclose, controller/follower, tuning monitoring, dashboard archive의 exact-date terminal을 기다린다.
-- 설치된 widget evaluation·machine final refresh unit의 당일 시작/성공 terminal도 확인한다. 실행 중이면 기존 bounded wait, 실패이면 cleanup 금지다. 명시적 masked-OFF는 `done_off_masked`로 분리하며 이전 날짜 성공이나 단순 timer disabled를 당일 성공으로 바꾸지 않는다.
-- 선행 terminal 뒤 기존 controller의 `--summary-handoff-only`가 최대2회 시도로 늦은21:15 source에 필요한 일반 verifier→tower→checklist→strict만 갱신한다. summary 단계는600초 process-group timeout/강제종료 grace10초이며 upstream producer·EV·Provider·Codex·매매 process·정책 변경은 allowlist 밖이다. 실패하면 cleanup을 생략하고 detector 후 FAIL로 닫는다. 원 controller wrapper/replay의 terminal 시각은 보존하고 finalization의 `summary_handoff_verified`와 갱신된 controller JSON/strict를 마지막 요약 closure 근거로 추가한다.
-- `recommendation_intake`는 selected/non-selected와 main/widget/episode의 native ID·원문 decision·현재 disposition·원천/행 hash를 전수 대사한다. 실제 본문 digest/보존식도 검증하므로 source marker만 남은 요약은 PASS가 아니다. 선택적 exact-generation disposition companion은 승인된 구현/review workflow가 발급하며 과거 frozen/별도승인 ledger를 덮어쓰지 않는다. 운영 DONE, 구현 fixed-point, 증거 차단, PREOPEN 계획/manifest 및 저장 PID receipt/현재 PID·경제성은 별도다. 형식·source 수리에 양수EV·실체결·추가 표본 floor를 요구하지 않는다.
-- predecessor fail/timeout이면 cleanup이 실행되지 않아야 한다.
-- predecessor가 모두 성공한 뒤 cleanup DONE → `[DONE] postclose_finalization ... detector_handoff=started` → `[DONE] postclose_final_detector`를 확인한다. 중간 finalization DONE은 detector self-audit 순환 방지 marker일 뿐 최종 성공이 아니며, 이후 detector 실패의 최신 FAIL이 우선한다.
-- 기본 predecessor wait 5100초/23:20 KST hard deadline과 cleanup·detector 각 600초 상한을 확인한다. predecessor 실패/timeout이면 cleanup은 건너뛰되 bounded detector를 실행하고 finalization FAIL로 닫는 현행 계약을 따른다.
-- finalization 실패 후 재실행은 선행 owner를 먼저 정상화한 뒤 수행한다.
-- error detector의 stale 과거 FAIL보다 최신 recovery DONE이 권위를 갖는지 확인한다.
-- 자정 이후 요약·source-only tail만 복구했고 cleanup/detector의 입력·종결 계약을 무효화하지 않았음이 확인된 경우, exact-date predecessor를 읽기 전용 재확인하고 기존 cleanup/detector receipt의 시각을 별도로 보고한다. 현재 날짜로 동작하는 detector를 전일 재실행 증거로 가장하지 않는다. 실제 선행 실패나 영향받은 detector 검사가 남은 경우에는 이 예외로 완료하지 않고 target-date 지원/권한 결손을 명시한다.
+main/controller/tuning/widget/replay/machine/archive의 predecessor terminal을 대사하고 최종 summary generation·tower/checklist·strict verifier/controller→cleanup→final detector 순서·hash를 확인한다. generic detector PASS와 `postclose_final_detector`를 구분한다. wrapper cleanup DONE·detector handoff 시작만으로 실제 detector terminal 성공을 가정하지 않는다.
 
 ### 8.8 다음 거래일 PREOPEN·07:55 기동 handoff
 
-장후 종료 시 **다음 거래일 준비 상태**를 확인하되, 다음 아침까지 모니터링을 자동 연장하거나 미래 기동을 미리 실행하지 않는다. `NEXT_TARGET_DATE`는 거래일 calendar/기존 producer 계약으로 확인하며 단순 `TARGET_DATE+1일`로 정하지 않는다. 자정 후에도 장후 원 source date는 유지한다.
-
-| 시점 | 필수 대사 | 미확인 시 판정 |
-| --- | --- | --- |
-| 장후 종료 | 선택 root/commit·cron/공유 경로, 당일 terminal/strict summary, 다음 거래일 후보/source hash·intended consumer·정책 blocker, 미배포 수리·rollback | 준비 완료/구체적 blocker. 다음날 PID 성공 아님 |
-| 다음 거래일 07:35 | 같은 선택 코드의 PREOPEN, source date와 effective date, selected candidate/env/activation·operator override·pin/dependency 검증 | 예정 전 `not_yet_due`; 실행 실패/거절의 정확한 원인. 전일 env 복사 금지 |
-| 다음 거래일 07:55 이후 | 실제 main PID root/commit/dirty·launcher·당일 runtime verify·선택 prompt/정책·owner별 broker/custody·WS/AI 첫 소비 | PID 전은 미확인, 무관한 과거 PASS 재사용 금지. 정책 거절과 process 장애 구분 |
-| 독립 기계의 다음 거래일 연속가동/예약 시각 | machine manifest·유효 drop-in·정책 pin, 위젯 실제 시작일 receipt와 당일 소비, episode timer/preflight·신규 entry·기존 보유 제외 | 현재 checklist의 별도 machine startup acceptance. 과거 시작 PID를 당일 신규 기동으로 재라벨링하지 않고 지속 정책의 일별 재발행을 요구하지 않음 |
-
-workspace에서 `bash deploy/run_runtime_release.sh preopen "$NEXT_TARGET_DATE" --print-plan` 및 `bash deploy/run_runtime_release.sh start "$NEXT_TARGET_DATE" --print-plan`으로 경로만 점검할 수 있다. 후자의 date 표시는 plan metadata이며 `start`는 실제 실행일의 launcher 날짜로 env를 읽는다. 미래 날짜 인수를 넣는 것으로 미래 기동을 시험했다고 주장하지 않는다.
-
-- 다음 거래일 기동 owner는 현재 checklist에서 확인하며 완료된 설치 ID를 자연 기동 완료로 재사용하지 않는다.
+각 active family의 next-trading-date candidate 또는 유효 incumbent carry·선정/탈락 사유·source/policy/hash·frozen generation을 PREOPEN resolver/독립 dated loader까지 확인한다. 아직 도래하지 않은 PREOPEN·기동·actual PID/R6·실현순익은 `not_yet_due`와 기존 Acceptance owner로 남긴다. 장후 발행 성공이나 경로 통일은 다음날 실제 기동·주문·경제성 성공이 아니다.
 
 ## 9. 최종 판정과 보고
 
-다음 표를 모두 채운다.
+활성 목록의 각 논리 작업에 한 행을 작성한다. 상위 owner 정상종료 표만으로 내부 분석 전수 점검을 대신하지 않는다. 반복 요약/EV 출력은 같은 작업 행에 generation별 마지막 소비 근거를 결속한다.
 
-| Owner | Target date | Latest state | First failure | Repair | Validation | Latest terminal |
-| --- | --- | --- | --- | --- | --- | --- |
-| EOD | | | | | | |
-| Main postclose | | | | | | |
-| Final verifier | | | | | | |
-| DONE controller/follower | | | | | | |
-| Tuning monitoring | | | | | | |
-| Dashboard archive | | | | | | |
-| Widget evaluation | | | | | | |
-| Episode recommendations | | | | | | |
-| Machine final refresh | | | | | | |
-| Finalization/error detector | | | | | | |
+| 작업/기존 index·owner | target/as-of·run/source hash | 실행/terminal | 의도한 결과·primary metric/paired 근거 | 분석 판정 | 결손·결함/영향 행 | 달성 가능성·다음 경계/ETA 근거 | 직접 소비·다음 조치/closure |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 활성 목록의 각 작업 | | | | | | | |
 
-최종 상태는 다음처럼 사용한다.
+보고의 첫 문장은 **운영 종결 / 분석 유효성 / 경제성 선정 / 구조 차단**을 각각 요약한다. 운영은 `진행 중|정상종결|실패|미확인`, 분석은 유효/부족/무효 행 수, 경제성은 선정/유효 carry·reject/증거 부족, 구조 차단은 직접 owner와 원인으로 제시한다. 정상 운영 종결과 수익 개선을 한 GREEN으로 합치지 않는다.
 
-- `진행 중`: 대상 거래일의 필수 운영 owner에 아직 예정 전 작업 또는 정상 running/waiting/recovering이 남으면 현재 상태만 보고하고 GREEN 완료로 종료하지 않는다. 정해진 기한 내 정상 대기를 RED 장애로 오판하지 않는다. 별도 다음 거래일 자연 관찰이나 장기 maintenance 예정은 당일 실행 중 상태와 구분하고 아래 YELLOW의 잔여 조건으로 보고한다.
-- `GREEN`: 대상일 마지막 필수 owner까지 due가 되었고 모든 due 필수 owner가 성공 terminal이고, eligible implement-now·추천 fixed-point와 해당 검토 범위 review finding 0까지 닫혔으며 unresolved failure와 실제 점유 stale lock이 없다. 아래 YELLOW의 미완료 조건도 없어야 하며 운영 GREEN 자체가 전략 수익 개선의 증명은 아니다.
-- `YELLOW`: 필수 실행은 정상 terminal이지만 source-only warning, 외부 dependency, user-authority 추천, 공동 최우선 경로의 원인/자연 효과·경제성 acceptance 또는 다음 거래일 관찰이 남아 있다. 최소 보조청산의 배포/정책 pin과 자연/경제성 수락을 구분한다. 미승인 전체 adaptive 연구 기능을 현재 필수 미완료로 복원하지 않는다.
-- `RED`: due 필수 owner의 실패·확정 hang·비정상 missing, deadline/실패 때문에 닫히지 못한 verifier/controller/finalization, 또는 완료를 선언하면서 누락한 허용 범위 actionable 구현이 있다.
-
-보고는 `판정 → 근거 → 다음 액션` 순서로 작성한다. 앞 절의 세부 계약을 반복 나열하지 말고 결과와 직접 근거를 연결한다.
-
-1. `Postclose Control State: 진행 중|GREEN|YELLOW|RED`, target date/as-of, 위 표의 owner별 최신 terminal·최초 실패·직접 원인.
-2. 수리 파일/범위·review finding/targeted validation·최소 재실행 generation·이전 FAIL보다 최신인 성공 근거와 남은 warning/권한/외부 차단.
-3. 추천 Pass 1/2: native ID와 원문 decision·현재 disposition·전수 보존식·fixed-point. 구현/증거 차단/별도 승인 ledger를 구분.
-4. Submit drought: scope/source hash·raw/causal 분모·최초 병목·후속 owner/native ID·canonical handoff/PREOPEN/PID, 실제 제출 회복과 비용 후 경제성을 분리.
-5. 메인 기계·AI·진입실행 정책: exact scope/bundle과 action/AI terminal 보존식, 좋은/늦은/횡보·역행 후 익절/놓친/적정 차단/미성숙 사례, 비용 후 EV·paired delta·holdout/tail 판정, 다음 거래일 challenger 발행 또는 incumbent carry와 직접 탈락 사유를 보고한다. mechanistic numeric price와 초기 총수량·exact leg 원자성, 두 dated policy의 file/hash/date·PREOPEN intended consumer를 분리하고, 장후 발행·다음날 PID 소비·자연 효과를 각각 판정한다.
-6. 위젯/에피소드: signal/확인 횟수와 micro checkpoint의 별도 분모·공통 계산/PID·4군 교집합/holdout/비용·선정/handoff·실체결 EV/순익/빈도/tail/자본점유. 최소 보조청산은 별도 manifest/pin·신규 진입·실제 successor/복구/정산·지속/rollback 경계로 보고.
-7. 체크리스트: ID·Due/window·이번 점검/실행·최신 receipt·완료/잔여/다음 조건, due 미실행·기한 경과·정상 대기·권한/외부·미래·범위 밖을 분류해 미분류 0 확인.
-8. 배포/다음 거래일: 선택 원장/hash·root/full commit·실제 worker/PID 세대·cron/독립 service·공유 source 호환성, 코드 수리/재생성/미배포·rollback·다음 candidate/env/activation blocker·기동 acceptance owner. 다음날 자연 소비/경제성은 별도.
-
-작업이 진행 중이면 운영 완료를 선언하지 않는다. 현재 stage, PID, 마지막 progress 근거, 기다리는 조건과 bounded deadline을 알린다. 명시적으로 요청받은 지속 모니터링은 지정 종료조건까지 계속하며, 단회 점검은 as-of 상태와 미완료 조건을 보고하고 닫되 이를 장후 완료로 표현하지 않는다.
+이어 확정 결함·source exclusion·구조적 blocker부터 `판정→직접 근거→다음 조치`로 보고한다. 자연 maturity/유입 대기에는 실제 수와 다음 경계를, 불가능하거나 불명인 경로에는 ETA null과 closure test를 남긴다. 이전 완료·PID·배포 이력, 일반 원칙 반복과 무관한 후보는 나열하지 않는다. 원래 OPEN ID를 재사용하고 전체 Acceptance를 만족한 행만 닫는다. 문서/checklist 기록을 바꿨으면 print-only parser·링크/owner·diff를 검증하고 외부 sync는 실행하지 않는다.

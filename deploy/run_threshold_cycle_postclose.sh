@@ -243,9 +243,9 @@ else
 fi
 RUN_RISING_MISSED_INTRADAY_FEEDBACK_POSTCLOSE="${THRESHOLD_CYCLE_RUN_RISING_MISSED_INTRADAY_FEEDBACK_POSTCLOSE:-true}"
 RUN_RISING_MISSED_SCOUT_WORKORDER="${THRESHOLD_CYCLE_RUN_RISING_MISSED_SCOUT_WORKORDER:-true}"
-RUN_SCALPING_PYRAMID_INTRADAY_FEEDBACK_POSTCLOSE="${THRESHOLD_CYCLE_RUN_SCALPING_PYRAMID_INTRADAY_FEEDBACK_POSTCLOSE:-true}"
-RUN_SCALPING_PYRAMID_QUALITY_CALIBRATION="${THRESHOLD_CYCLE_RUN_SCALPING_PYRAMID_QUALITY_CALIBRATION:-true}"
-RUN_SCALPING_AVG_DOWN_RECOVERY_CALIBRATION="${THRESHOLD_CYCLE_RUN_SCALPING_AVG_DOWN_RECOVERY_CALIBRATION:-true}"
+RUN_SCALPING_PYRAMID_INTRADAY_FEEDBACK_POSTCLOSE=false # permanently retired by operator 2026-09-18
+RUN_SCALPING_PYRAMID_QUALITY_CALIBRATION=false # permanently retired by operator 2026-09-18
+RUN_SCALPING_AVG_DOWN_RECOVERY_CALIBRATION=false # permanently retired by operator 2026-09-18
 RUN_RISING_MISSED_CLASSIFIER_PRIOR="${THRESHOLD_CYCLE_RUN_RISING_MISSED_CLASSIFIER_PRIOR:-true}"
 RUN_ONE_SHARE_THRESHOLD_OPPORTUNITY="${THRESHOLD_CYCLE_RUN_ONE_SHARE_THRESHOLD_OPPORTUNITY:-true}"
 RUN_SAMSUNG_MACHINE_ENTRY_TUNING="${THRESHOLD_CYCLE_RUN_SAMSUNG_MACHINE_ENTRY_TUNING:-true}"
@@ -1691,16 +1691,7 @@ if [ "$RUN_RISING_MISSED_SCOUT_WORKORDER" = "true" ] || [ "$RUN_RISING_MISSED_SC
     "$PROJECT_DIR/data/report/rising_missed_scout_workorder/rising_missed_scout_workorder_${TARGET_DATE}.md" \
     "rising_missed_scout_workorder"
 fi
-if [ "$RUN_SCALPING_PYRAMID_INTRADAY_FEEDBACK_POSTCLOSE" = "true" ] || [ "$RUN_SCALPING_PYRAMID_INTRADAY_FEEDBACK_POSTCLOSE" = "1" ]; then
-  wait_for_postclose_resources "scalping_pyramid_intraday_feedback_postclose"
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.monitoring.scalping_pyramid_intraday_feedback \
-    --target-date "$TARGET_DATE" \
-    --print-summary
-  wait_for_report_artifact \
-    "$PROJECT_DIR/data/report/scalping_pyramid_intraday_feedback/scalping_pyramid_intraday_feedback_${TARGET_DATE}.json" \
-    "$PROJECT_DIR/data/report/scalping_pyramid_intraday_feedback/scalping_pyramid_intraday_feedback_${TARGET_DATE}.md" \
-    "scalping_pyramid_intraday_feedback_postclose"
-fi
+# PYRAMID feedback/tuning and independent AVG_DOWN tuning retired 2026-09-18.
 if [ "$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT" = "true" ] || [ "$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT" = "1" ]; then
   wait_for_postclose_resources "observation_source_quality_preflight"
   run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.observation_source_quality_audit --target-date "$TARGET_DATE" --audit-phase preflight --write
@@ -1709,56 +1700,8 @@ if [ "$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT" = "true" ] || [ "$RUN_OBSERVATION_S
     "$PROJECT_DIR/data/report/observation_source_quality_audit/observation_source_quality_audit_${TARGET_DATE}.md" \
     "observation_source_quality_preflight"
 fi
-if [ "$RUN_SCALPING_PYRAMID_QUALITY_CALIBRATION" = "true" ] || [ "$RUN_SCALPING_PYRAMID_QUALITY_CALIBRATION" = "1" ]; then
-  wait_for_postclose_resources "scalping_pyramid_quality_calibration"
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.monitoring.scalping_pyramid_quality_calibration \
-    --target-date "$TARGET_DATE" \
-    --policy-replay-ai current \
-    --print-summary
-  wait_for_report_artifact \
-    "$PROJECT_DIR/data/report/scalping_pyramid_quality_calibration/scalping_pyramid_quality_calibration_${TARGET_DATE}.json" \
-    "$PROJECT_DIR/data/report/scalping_pyramid_quality_calibration/scalping_pyramid_quality_calibration_${TARGET_DATE}.md" \
-    "scalping_pyramid_quality_calibration"
-fi
-if [ "$RUN_SCALPING_AVG_DOWN_RECOVERY_CALIBRATION" = "true" ] || [ "$RUN_SCALPING_AVG_DOWN_RECOVERY_CALIBRATION" = "1" ]; then
-  avg_down_report_json="$PROJECT_DIR/data/report/scalping_avg_down_recovery_calibration/scalping_avg_down_recovery_calibration_${TARGET_DATE}.json"
-  avg_down_report_md="$PROJECT_DIR/data/report/scalping_avg_down_recovery_calibration/scalping_avg_down_recovery_calibration_${TARGET_DATE}.md"
-  if reusable_completed_artifact \
-    "$avg_down_report_json" \
-    "$avg_down_report_md" \
-    "scalping_avg_down_recovery_calibration" \
-    "$PROJECT_DIR/data/pipeline_events" \
-    "$PROJECT_DIR/src/engine/automation/source_quality_hard_gate.py" \
-    "$PROJECT_DIR/src/engine/lifecycle/scale_in_incremental_counterfactual.py" \
-    "$PROJECT_DIR/src/engine/lifecycle/avg_down_replay.py" \
-    "$PROJECT_DIR/src/engine/lifecycle/avg_down_policy_replay.py" \
-    "$PROJECT_DIR/src/engine/lifecycle/retirement.py" \
-    "$PROJECT_DIR/src/engine/lifecycle/greenfield_authority.py" \
-    "$PROJECT_DIR/src/engine/scalping/avg_down_replay_capture.py" \
-    "$PROJECT_DIR/src/engine/sniper_state_handlers.py" \
-    "$PROJECT_DIR/src/engine/sniper_execution_receipts.py" \
-    "$PROJECT_DIR/src/engine/sniper_scale_in.py" \
-    "$PROJECT_DIR/src/engine/ai_engine_openai.py" \
-    "$PROJECT_DIR/src/engine/holding_exit_matrix_runtime.py" \
-    "$PROJECT_DIR/src/engine/lifecycle_decision_matrix_runtime.py" \
-    "$PROJECT_DIR/src/engine/kiwoom_orders.py" \
-    "$PROJECT_DIR/src/engine/scalping/micro_estimator_state.py" \
-    "$PROJECT_DIR/src/engine/trade_profit.py" \
-    "$PROJECT_DIR/src/engine/sentinel_event_cache.py" \
-    "$PROJECT_DIR/src/engine/monitoring/scalping_avg_down_recovery_calibration.py"; then
-    emit_postclose_marker "[REUSE] scalping_avg_down_recovery_calibration target_date=$TARGET_DATE reason=completed_artifact_checkpoint"
-  else
-    wait_for_postclose_resources "scalping_avg_down_recovery_calibration"
-    run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.monitoring.scalping_avg_down_recovery_calibration \
-      --target-date "$TARGET_DATE" \
-      --policy-replay-ai current \
-      --print-summary
-  fi
-  wait_for_report_artifact \
-    "$avg_down_report_json" \
-    "$avg_down_report_md" \
-    "scalping_avg_down_recovery_calibration"
-fi
+
+
 if [ "$RUN_LOW_PRICE_TWO_LEG_CANDIDATE_RECOMMENDATION" = "true" ] || [ "$RUN_LOW_PRICE_TWO_LEG_CANDIDATE_RECOMMENDATION" = "1" ]; then
   candidate_recommendation_json="$PROJECT_DIR/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_${TARGET_DATE}.json"
   candidate_recommendation_md="$PROJECT_DIR/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_${TARGET_DATE}.md"

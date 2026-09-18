@@ -12,7 +12,7 @@ def test_ev_filters_retired_latency_decisions_and_approval_requests():
         "calibration_state": "approval_required",
         "human_approval_required": True,
     }
-    active = {**retired, "family": "scalping_pyramid_quality_gate"}
+    active = {**retired, "family": "scale_in_split_order_plan"}
     payload = {
         "date": "2026-09-04",
         "calibration_candidates": [retired, active],
@@ -2008,7 +2008,7 @@ def test_scale_in_actual_ledger_excludes_invalid_and_conflicting_receipts(tmp_pa
                    {"origin": "modeled_policy_delta"}))]
     payload = {"target_date": "2026-09-18", "actual_policy_outcomes": [valid, *invalid, valid]}
     path.write_text(json.dumps(payload))
-    summary = mod._scale_in_economic_attribution("2026-09-18")[name]
+    summary = mod._scale_in_economic_attribution("2026-09-18", include_retired_history=True)[name]
     assert summary["actual_completed_count"] == 1
     assert summary["actual_completed_net_pnl_krw"] == 100
     assert summary["actual_invalid_row_count"] == 8
@@ -2016,7 +2016,15 @@ def test_scale_in_actual_ledger_excludes_invalid_and_conflicting_receipts(tmp_pa
     assert summary["actual_economic_acceptance"] is False
     payload["actual_policy_outcomes"].append({**valid, "net_pnl_krw": 200})
     path.write_text(json.dumps(payload))
-    conflicting = mod._scale_in_economic_attribution("2026-09-18")[name]
+    conflicting = mod._scale_in_economic_attribution("2026-09-18", include_retired_history=True)[name]
     assert conflicting["actual_completed_count"] == 0
     assert conflicting["actual_completed_net_pnl_krw"] is None
     assert conflicting["actual_conflicting_episode_count"] == 1
+
+
+def test_retired_scale_in_economics_is_null_and_does_not_scan_archive(monkeypatch):
+    monkeypatch.setattr(mod, "_load_json", lambda *a, **k: pytest.fail("automatic EV read retired archive"))
+    for summary in mod._scale_in_economic_attribution("2026-09-18").values():
+        assert summary["status"] == "retired"
+        assert summary["actual_completed_net_pnl_krw"] is None
+        assert summary["actual_economic_acceptance"] is False

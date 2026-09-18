@@ -18,6 +18,7 @@ _STOP_LINE_TOUCH_MANDATORY_AVG_DOWN_REASON = "stop_line_touch_mandatory_avg_down
 _DEEP_RECOVERY_AVG_DOWN_REASON = "deep_recovery_avg_down"
 _SHALLOW_VOLATILITY_AVG_DOWN_REASON = "shallow_volatility_avg_down"
 _SCALPING_AVG_DOWN_SPECIAL_REASONS = {
+    "shared_main_rebound_entry",
     "reversal_add_ok",
     "late_loss_avg_down_retry",
     "aggressive_reversal_add_ok",
@@ -26,6 +27,10 @@ _SCALPING_AVG_DOWN_SPECIAL_REASONS = {
     _DEEP_RECOVERY_AVG_DOWN_REASON,
 }
 _SCALE_IN_RULES = {
+    ("SCALPING", "AVG_DOWN", "shared_main_rebound_entry"): {
+        "ratio_rule": "REVERSAL_ADD_SIZE_RATIO", "default_ratio": 0.33,
+        "floor_rule": "REVERSAL_ADD_MIN_QTY_FLOOR_ENABLED", "floor_default": True,
+    },
     ("SCALPING", "AVG_DOWN", "reversal_add_ok"): {
         "ratio_rule": "REVERSAL_ADD_SIZE_RATIO",
         "default_ratio": 0.33,
@@ -1119,211 +1124,13 @@ def evaluate_scalping_pyramid(
     runtime_prior_context=None,
     min_profit_override=None,
 ):
-    """
-    스캘핑 불타기(PYRAMID) 평가: 1차는 profit/peak 기반 단순 조건.
-    TODO: VWAP/RSI/ATR 기반 필터 추가
-    """
-    result = _base_result()
-
-    profit_rate = _safe_float(profit_rate, 0.0)
-    peak_profit = _safe_float(peak_profit, profit_rate)
-    base_min_profit = max(
-        0.0,
-        _safe_float(
-            min_profit_override if min_profit_override is not None else
-            getattr(TRADING_RULES, "SCALPING_PYRAMID_MIN_PROFIT_PCT", 1.5), 1.5
-        ),
-    )
-    drawdown_from_peak = max(0.0, float(peak_profit - profit_rate))
-    continuation_context = _scalping_pyramid_strong_continuation_context(
-        stock,
-        drawdown_from_peak,
-        is_new_high,
-        current_ai_score=current_ai_score,
-        min_profit_override=min_profit_override,
-    )
-    effective_min_profit = base_min_profit
-    profit_gate_mode = "base"
-    if profit_rate < base_min_profit:
-        strong_min_profit = _safe_float(
-            continuation_context.get("strong_continuation_min_profit_pct"),
-            base_min_profit,
-        )
-        if profit_rate >= strong_min_profit and continuation_context.get(
-            "strong_continuation_allowed"
-        ):
-            effective_min_profit = strong_min_profit
-            profit_gate_mode = "strong_continuation"
-        else:
-            quality_decision = _pyramid_quality_decision(continuation_context)
-            result.update(continuation_context)
-            result.update(
-                {
-                    "reason": "profit_not_enough",
-                    "profit_gate_mode": "base",
-                    "min_profit_pct": round(base_min_profit, 4),
-                    "configured_min_profit_pct": round(base_min_profit, 4),
-                    "effective_min_profit_pct": round(base_min_profit, 4),
-                    "pyramid_evaluation_schema": "pyramid_gate_observation_v2",
-                    "drawdown_from_peak": round(drawdown_from_peak, 4),
-                    "is_new_high": bool(is_new_high),
-                }
-            )
-            result["pyramid_quality_support_score"] = quality_decision["support_score"]
-            result["pyramid_quality_required_support_score"] = quality_decision[
-                "required_support_score"
-            ]
-            result["pyramid_quality_support_signals"] = (
-                ",".join(quality_decision["support_signals"]) or "-"
-            )
-            result["pyramid_quality_risk_signals"] = (
-                ",".join(quality_decision["risk_signals"]) or "-"
-            )
-            result["pyramid_quality_hard_blockers"] = (
-                ",".join(quality_decision["hard_blockers"]) or "-"
-            )
-            result = _merge_pyramid_score_prior_fields(result, quality_decision)
-            result = _apply_rising_missed_scout_pyramid_bridge(
-                result,
-                stock,
-                profit_rate,
-                continuation_context,
-                quality_decision,
-            )
-            return _apply_pyramid_runtime_prior_context(
-                result, runtime_prior_context, profit_rate
-            )
-
-    if profit_rate < effective_min_profit:
-        quality_decision = _pyramid_quality_decision(continuation_context)
-        result.update(continuation_context)
-        result["reason"] = "profit_not_enough"
-        result["profit_gate_mode"] = profit_gate_mode
-        result["min_profit_pct"] = round(effective_min_profit, 4)
-        result["configured_min_profit_pct"] = round(base_min_profit, 4)
-        result["effective_min_profit_pct"] = round(effective_min_profit, 4)
-        result["pyramid_evaluation_schema"] = "pyramid_gate_observation_v2"
-        result["drawdown_from_peak"] = round(drawdown_from_peak, 4)
-        result["is_new_high"] = bool(is_new_high)
-        result["pyramid_quality_support_score"] = quality_decision["support_score"]
-        result["pyramid_quality_required_support_score"] = quality_decision[
-            "required_support_score"
-        ]
-        result["pyramid_quality_support_signals"] = (
-            ",".join(quality_decision["support_signals"]) or "-"
-        )
-        result["pyramid_quality_risk_signals"] = (
-            ",".join(quality_decision["risk_signals"]) or "-"
-        )
-        result["pyramid_quality_hard_blockers"] = (
-            ",".join(quality_decision["hard_blockers"]) or "-"
-        )
-        result = _merge_pyramid_score_prior_fields(result, quality_decision)
-        result = _apply_rising_missed_scout_pyramid_bridge(
-            result,
-            stock,
-            profit_rate,
-            continuation_context,
-            quality_decision,
-        )
-        return _apply_pyramid_runtime_prior_context(
-            result, runtime_prior_context, profit_rate
-        )
-
-    if not (is_new_high or drawdown_from_peak <= 0.3):
-        result.update(continuation_context)
-        result["reason"] = "trend_not_strong"
-        result["profit_gate_mode"] = profit_gate_mode
-        result["min_profit_pct"] = round(effective_min_profit, 4)
-        result["configured_min_profit_pct"] = round(base_min_profit, 4)
-        result["effective_min_profit_pct"] = round(effective_min_profit, 4)
-        result["pyramid_evaluation_schema"] = "pyramid_gate_observation_v2"
-        result["drawdown_from_peak"] = round(drawdown_from_peak, 4)
-        result["is_new_high"] = bool(is_new_high)
-        return _apply_pyramid_runtime_prior_context(
-            result, runtime_prior_context, profit_rate
-        )
-
-    quality_decision = _pyramid_quality_decision(continuation_context)
-    if not quality_decision["allowed"]:
-        result.update(continuation_context)
-        result["reason"] = _pyramid_quality_reason(
-            continuation_context, quality_decision
-        )
-        result["profit_gate_mode"] = profit_gate_mode
-        result["min_profit_pct"] = round(effective_min_profit, 4)
-        result["configured_min_profit_pct"] = round(base_min_profit, 4)
-        result["effective_min_profit_pct"] = round(effective_min_profit, 4)
-        result["pyramid_evaluation_schema"] = "pyramid_gate_observation_v2"
-        result["drawdown_from_peak"] = round(drawdown_from_peak, 4)
-        result["is_new_high"] = bool(is_new_high)
-        result["pyramid_quality_support_score"] = quality_decision["support_score"]
-        result["pyramid_quality_required_support_score"] = quality_decision[
-            "required_support_score"
-        ]
-        result["pyramid_quality_support_signals"] = (
-            ",".join(quality_decision["support_signals"]) or "-"
-        )
-        result["pyramid_quality_risk_signals"] = (
-            ",".join(quality_decision["risk_signals"]) or "-"
-        )
-        result["pyramid_quality_hard_blockers"] = (
-            ",".join(quality_decision["hard_blockers"]) or "-"
-        )
-        result = _merge_pyramid_score_prior_fields(result, quality_decision)
-        return _apply_pyramid_runtime_prior_context(
-            result, runtime_prior_context, profit_rate
-        )
-
-    result.update(continuation_context)
-    result["should_add"] = True
-    result["add_type"] = "PYRAMID"
-    result["reason"] = "scalping_pyramid_ok"
-    result["profit_gate_mode"] = profit_gate_mode
-    result["min_profit_pct"] = round(effective_min_profit, 4)
-    result["configured_min_profit_pct"] = round(base_min_profit, 4)
-    result["effective_min_profit_pct"] = round(effective_min_profit, 4)
-    result["pyramid_evaluation_schema"] = "pyramid_gate_observation_v2"
-    result["drawdown_from_peak"] = round(drawdown_from_peak, 4)
-    result["is_new_high"] = bool(is_new_high)
-    result["pyramid_quality_support_score"] = quality_decision["support_score"]
-    result["pyramid_quality_required_support_score"] = quality_decision[
-        "required_support_score"
-    ]
-    result["pyramid_quality_support_signals"] = (
-        ",".join(quality_decision["support_signals"]) or "-"
-    )
-    result["pyramid_quality_risk_signals"] = (
-        ",".join(quality_decision["risk_signals"]) or "-"
-    )
-    result["pyramid_quality_hard_blockers"] = "-"
-    result = _merge_pyramid_score_prior_fields(result, quality_decision)
-    return _apply_pyramid_runtime_prior_context(
-        result, runtime_prior_context, profit_rate
-    )
+    """Historical import compatibility; PYRAMID has no executable decision path."""
+    return {**_base_result(), "reason": "pyramid_permanently_retired", "add_type": "PYRAMID"}
 
 
 def evaluate_swing_pyramid(stock, profit_rate, peak_profit):
-    """
-    스윙 불타기(PYRAMID) 평가: 1차는 profit/peak 기반 단순 조건.
-    TODO: VWAP/RSI/ATR 기반 필터 추가
-    """
-    result = _base_result()
-
-    min_profit = float(getattr(TRADING_RULES, "SWING_PYRAMID_MIN_PROFIT_PCT", 5.0))
-    if profit_rate < min_profit:
-        result["reason"] = "profit_not_enough"
-        return result
-
-    drawdown_from_peak = float(peak_profit - profit_rate)
-    if drawdown_from_peak > 1.0:
-        result["reason"] = "trend_not_strong"
-        return result
-
-    result["should_add"] = True
-    result["add_type"] = "PYRAMID"
-    result["reason"] = "swing_pyramid_ok"
-    return result
+    """Historical import compatibility; PYRAMID has no executable decision path."""
+    return {**_base_result(), "reason": "pyramid_permanently_retired", "add_type": "PYRAMID"}
 
 
 def evaluate_swing_avg_down(
@@ -1920,63 +1727,7 @@ def evaluate_scalping_reversal_add(
     shallow_min_buy_pressure_override=None,
     now_ts=None,
 ):
-    """
-    역전 확인 추가매수(reversal_add) 평가.
-    저점 미갱신 + AI 회복 + 수급 재개가 동시 확인될 때 1회 실행.
-    """
-    result = _base_result()
-    probe = _build_reversal_add_probe(stock, profit_rate, current_ai_score, held_sec)
-    result["probe"] = probe
-
-    if not getattr(TRADING_RULES, "REVERSAL_ADD_ENABLED", False):
-        result["reason"] = "reversal_add_disabled"
-        return result
-
-    reasons = (
-        _check_reversal_add_pnl_range(profit_rate),
-        _check_reversal_add_hold_sec(held_sec),
-        _check_reversal_add_low_floor(stock, profit_rate),
-        _check_reversal_add_supply(stock),
-        _check_reversal_add_ai_recovery(stock, current_ai_score),
-    )
-    for reason in reasons:
-        if reason:
-            shallow_reason, shallow_probe = _check_shallow_volatility_avg_down(
-                stock,
-                profit_rate,
-                held_sec,
-                min_buy_pressure_override=shallow_min_buy_pressure_override,
-                now_ts=now_ts,
-            )
-            result["shallow_volatility_probe"] = shallow_probe
-            if shallow_reason is None:
-                result["should_add"] = True
-                result["add_type"] = "AVG_DOWN"
-                result["reason"] = _SHALLOW_VOLATILITY_AVG_DOWN_REASON
-                result["blocked_standard_reason"] = reason
-                result["probe"] = {
-                    **probe,
-                    **{f"shallow_{key}": value for key, value in shallow_probe.items()},
-                }
-                return result
-            aggressive_reason = _check_aggressive_reversal_add(
-                stock, profit_rate, current_ai_score, held_sec
-            )
-            if aggressive_reason is None:
-                result["should_add"] = True
-                result["add_type"] = "AVG_DOWN"
-                result["reason"] = "aggressive_reversal_add_ok"
-                result["blocked_standard_reason"] = reason
-                return result
-            result["reason"] = reason
-            result["aggressive_blocked_reason"] = aggressive_reason
-            result["shallow_volatility_blocked_reason"] = shallow_reason
-            return result
-
-    result["should_add"] = True
-    result["add_type"] = "AVG_DOWN"
-    result["reason"] = "reversal_add_ok"
-    return result
+    return {**_base_result(), "reason": "avg_down_shared_main_rebound_only"}
 
 
 def resolve_scale_in_order_price(
@@ -2292,6 +2043,8 @@ def describe_scale_in_qty(
     stock, curr_price, deposit, add_type, strategy, add_reason=None
 ):
     """추가매수 수량과 zero_qty 원인을 함께 반환한다."""
+    if str(add_type or "").upper() == "PYRAMID":
+        return {**_zero_scale_in_details(), "qty_reason": "pyramid_permanently_retired"}
     if curr_price <= 0 or deposit <= 0:
         return _zero_scale_in_details()
 
@@ -2370,6 +2123,9 @@ def describe_dynamic_scale_in_qty(
     stage_qty_cap=None,
 ):
     """추가매수 수량을 safety guard와 position cap 안에서 결정하고 provenance를 남긴다."""
+    if str(add_type or "").upper() == "PYRAMID":
+        return {**_zero_scale_in_details(), "would_qty": 0, "effective_qty": 0,
+                "qty_reason": "pyramid_permanently_retired"}
     legacy = describe_scale_in_qty(
         stock=stock,
         curr_price=resolved_price,

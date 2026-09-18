@@ -1,0 +1,42 @@
+# 2026-09-18 Stage2 To-Do Checklist
+
+## 오늘 목적
+
+- 사용자 정정에 따라 PYRAMID 튜닝·런타임을 폐기하고 AVG_DOWN을 공통 Main 반등 신호 소비로 통합·검증하며 실제 적용을 구분한다.
+- 기존 자동 산출물에서 전체 기회→독립 경제성→후보→자연 행동→실제 완료 손익을 추적하고 미성숙/구조결손/유효 no-edge를 분리한다.
+
+## 오늘 강제 규칙
+
+- 원칙·active/observe/OFF·rollback은 [Plan Rebase §1–§8](../plan-korStockScanPerformanceOptimization.rebase.md)를 따른다. 별도 승인 override·expiry·custody는 당일 원 artifact로 확인하며 과거 PID/완료 기록을 현재 권한으로 쓰지 않는다.
+- clean tuning은 `2026-06-05T00:00:00+09:00` 이후 원천만 사용한다. 실제 PnL은 `COMPLETED + valid profit_rate/cost`이며 missing/partial/sim/probe/CF/model을 실제 순익0 또는 신규 실현 이익으로 바꾸지 않는다.
+- hard safety, stale/conflict·가격 freshness·broker/account/order/quantity/cooldown·provider/cap·main/widget/episode/manual custody와 operator veto를 유지한다. 신규 주문 테스트·임의 env/lock/threshold 완화는 하지 않는다.
+- 진행 중 wrapper/child의 source는 보존한다. 사용자 승인된 배포는 별도 clean managed release·기존 routing/시작·필요 시 graceful restart로 수행하며 코드 선택/env 발행/PID 소비/자연 행동/실경제성을 별도 기록한다.
+- source-quality 결손은 식별 가능한 row/window를 제외한다. missing/invalid global preflight·격리 실패·특정 불가능한 고량 결손 외에 날짜 전체를 임의 차단하지 않는다.
+- 본 문서 생성은 중단된9/17 장후 chain을 DONE으로 만드는 행위가 아니다. 전체 비싼 장후 재실행·resource guard 변경·외부 sync는 이번 배포에서 실행하지 않는다.
+
+## 배포·성과 검증
+
+- [ ] `[KiwoomCommonHealthOpportunityCostAcceptance0917] 공통 health 후속·PYRAMID 폐기·AVG_DOWN 공통 반등 소비·실제 성과 검증` (`Due: 2026-09-18`, `Slot: INTRADAY`, `TimeWindow: 07:00~20:30`, `Track: RuntimeStability`)
+  - Source: [현행 폐기·공통 반등 review](../audit-reports/2026-09-18-pyramid-retirement-avg-down-shared-rebound-review.md), [배포·성과 검증 receipt](../audit-reports/2026-09-18-scale-in-economic-tuning-deployment-and-performance-review.md), [상세계획 SI0–SI6](../proposals/scale-in-pyramid-avg-down-economic-tuning-implementation-plan-2026-09-17.md), [전일 동일 stable ID의 Acceptance/검증 이력](2026-09-17-stage2-todo-checklist.md), `data/runtime/runtime_release_selection.json`, `tmp/scale-in-economic-deployment-20260918/existing-artifact-economics.json`.
+  - 사용자 승인: 최종 재리뷰 커밋 배포와 기존 자동 산출물 기반 성과 검증. 기존 ID를 transfer하며 전일 common-health 미완료 Acceptance/History는 전일 Source에서 보존한다. 새로운 별도 order/quantity/provider/전략 승인 owner를 만들지 않는다.
+  - Acceptance: 9/18 사용자 정정이 이전 독립 scale-in 튜닝 Acceptance를 대체한다. PYRAMID 판단·수량·submit·feedback/tuning·PREOPEN/승계를 폐기하고 env/lock/report/direct call로 재활성화할 수 없다. AVG_DOWN은 별도 튜닝/수집을 제거하고 Main의 같은 venue/session 공통 기계 반등 ENTER_NOW와 기존 AI/주문/손절 guard를 소비한다. producer→consumer 회귀, review/fix/re-review, immutable selected root와 actual Main PID 소비를 분리하고 기존 common-health Acceptance/History를 보존한다.
+  - 현행 Closure: code 퇴역과 공통 신호의 source/basis/version/hash·episode/decision 결속, no extra source API/provider, 동일 신호 중복 차단, 부분 접수 pending 정산, stop SELL 우선과 공통 현금/수량/cap guard를 검증한다. 정상 Main PREOPEN/PID 이후 자연 공통 반등 신호→guard→ADD/blocked→actual COMPLETED 비용 원장을 추적한다. 실제 code/machine 적용 버전별 rolling/cumulative EV·순익·tail·노출·모델 오차는 표본이 없으면 null이며 자연/경제성은 OPEN이다. 이전 독립 grid의 후보0/source gap을 폐기한 family의 복원 업무로 만들지 않는다.
+  - 현재 판정: 9/18 현행 변경은 PYRAMID 폐기·AVG_DOWN 공통 Main 반등 신호 소비다. full runtime946PASS, 관련 장후/PREOPEN/EV 계약1,173PASS, 승계/routing91PASS와 최신 Main resolver58PASS. 배포 commit/selected root/실제 PID는 현행 review의 deployment receipt를 따른다. Main PID·자연 신호·실제 완료 표본이 없으면 실제 EV/순익/tail/노출/model-error는null이며 자연 경제성 Acceptance OPEN이다. 기존 독립 후보0/source gap 결과는 과거 이력이다.
+  - 이전 source-first 수리 이력(현행 독립 튜닝 복원 지시 아님): 구조적 source gap 수리를 성과평가보다 먼저 수행한다. 새 코드 추적에서 SI0 config emitter가 scalping HOLDING에 의존하고, SI1 frozen budget의 유일 producer가 실제 ADD submit 뒤 경로여서 앞선 blocked first-opportunity의 challenger sizing/capital이 자연 생성되지 않는 결함을 확인했다. 기존1,670 PASS를 이 producer attainability closure로 쓰지 않는다. 실제 source 경로 회귀·보완·재검증1,218 PASS를 완료하고 final successor `677ffa694decb0797a66e947bedc17ec4cac479d`를07:48 KST 별도 immutable root에 배포했다. Main의 무보유 config·최초 blocked 기회 budget source를 수리하고 private budget cache 주입 없는 실제 normalized producer→consumer 회귀를 수행한다. 자연 수집 이후 독립 경제성·후보 선정·실제 성과의 순서로 닫으며 fixture PASS를 자연 증거로 대체하지 않는다. 상세 closure/authority 경계는 위 receipt의 최신 follow-up을 따른다.
+  - 이전 SI0–SI6 Closure 이력(현행 복원 지시 아님): 새 코드의 첫 loaded config/최초 Main opportunity·실제 BUY anchor·당시 가격/수량/budget·연속 frame 및 cap/drop disposition을 검증한다. source-valid 독립 NO_ADD/current/challenger와 calibration/holdout·양시장/비용/tail/capital/stress/actual model guard를 모두 통과한 후보만 기존 stage 단일 owner의 PREOPEN으로 적용한다. 적용 version/hash에 결속된 실제 completed ledger와 사전 정의 post-apply 창이 없으면 성과 완료로 닫지 않는다.
+  - 관련 외부 blocker: 전일 native chain은 `tmp/postclose_stepwise_2026-09-17/control.json`의 `blocked_native_resource_guard`이다. 9/18 정기07:35 PREOPEN은 env/manifest를 생성했으나 `runtime_env_handoff_missing`으로 실패했다(integrated-entry handoff 결손); 이를 family source 수리/검증 성공이나 정상 PID 소비로 덮지 않는다. 최종 EV는 미완료다. 이 task에서 global resource guard·다른 family worker·cron 복원 권한을 확대하지 않는다. 해당 원 owner와 당일 PREOPEN status를 별도 확인한다.
+
+## 저가주 확장 연구 보완·자연 경제성 검증
+
+- [ ] `[LowPriceExpandedResearchRepair0918] 저가주 연구 입출력·해시·추천 handoff 보완과 배포·실소비 확인` (`Due: 2026-09-18`, `Slot: INTRADAY`, `TimeWindow: 08:00~20:30`, `Track: RuntimeStability`)
+  - Source: [구현·검증 receipt](../audit-reports/2026-09-18-low-price-expanded-research-repair.md), `tmp/low-price-report-repair-20260918/cached-economic-refresh.json`, `tmp/low-price-report-repair-20260918/consumer-memory-check.json`.
+  - 사용자 승인: 기존 경제/원천/승격/custody guard 보존한 결함 보완·리뷰·검증 후 commit/push·배포·기동. PYRAMID·AVG_DOWN 병행 변경은 보존한다.
+  - 현재 상태: 관련261PASS/compile/diff PASS. 원본·전profile 경제hash·추천ID 보존한 native successor 보고서 갱신40.31초, 비용 반영 팬오션 replay EV+0.280032%, baseline/EV uplift null 이유=미청산 이월. native publisher/load512MiB 검증PASS, 소비RSS431MiB. 실제 commit/push/selector/service PID/소비는 위 receipt 후속 기록으로 확인한다.
+  - Acceptance: source writer/reader·roundtrip hash·지원 lane/EV 결손 표현을 닫고 검증commit·immutable release·기존 프로필3 실제소비/PID를 확인한다. source-valid 미래 seed/BBO/quantity 유입·미청산 처리와 same-date widget joint peer/비용 차감 비교경제성은 별도 OPEN이며 표본 또는 후보0만으로 no-edge/완료 처리하지 않는다.
+  - 권한 경계: 새 profile/기존로직 live enrollment·주문 테스트·qty/비용/grid/승격 floor·operator veto/custody·provider·Main 재시작·resource guard/cron 복원 우회 없음. 전일 전체chain DONE과 별개이다.
+
+  - 배포 후속: code `cf8d573a6` push 및 immutable root 검증 완료. low-price unit PID41757 active/running, native consumer accepted3/신규 승격0/NRestarts0. 현재 날짜 정책 교체는 기존 동결 가드가 거부하여 원본 policy/manifest 유지. 구현·검증·배포·기동 단계 완료; 같은 날짜widget 입력/paired baseline EV/자연 수집 검증은 위 owner의 OPEN으로 유지한다. 상세: 위 owning audit의 배포 receipt와 잔여 결손 표.
+
+  - 추가 사용자 승인:9/17 전체 저가주 연구 재실행 및 유효한 비교·공동 EV 도출 후 전일 결과 갱신. 해당 두 연구의 선행 widget producer와 저가주 경제 재계산에 한정한다. 현재 selector/동결 정책·서비스·guard·정지cron은 보존한다. 실행 로그: `tmp/low-price-full-research-20260918/`; source successor: `data/report/postclose_research_successor_20260917_20260918/`. 전체chain 완료 권한/판정과 별개이며 미확보 과거 source를 현재 값으로 대체하지 않는다.
+
+  - 전체재실행 owning 결과: [9/17 연구 successor](../audit-reports/2026-09-18-low-price-full-research-rerun.md). 실행/선행복구/비교·공동 EV의 최종 판정은 이 결과의 최신 receipt를 따른다.

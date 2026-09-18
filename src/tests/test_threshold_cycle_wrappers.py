@@ -2084,15 +2084,6 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     rising_missed_scout_idx = script.index(
         "src.engine.monitoring.rising_missed_scout_workorder"
     )
-    scalping_pyramid_feedback_idx = script.index(
-        "src.engine.monitoring.scalping_pyramid_intraday_feedback"
-    )
-    scalping_pyramid_calibration_idx = script.index(
-        "src.engine.monitoring.scalping_pyramid_quality_calibration"
-    )
-    scalping_avg_down_recovery_idx = script.index(
-        "src.engine.monitoring.scalping_avg_down_recovery_calibration"
-    )
     one_share_threshold_idx = script.index(
         "-m src.engine.monitoring.one_share_threshold_opportunity"
     )
@@ -2104,20 +2095,9 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         "src.engine.scalping.microstructure_reaction_context"
     )
     observation_preflight_idx = script.index("observation_source_quality_preflight")
-    assert (
-        scalping_pyramid_feedback_idx
-        < observation_preflight_idx
-        < scalping_pyramid_calibration_idx
-        < scalping_avg_down_recovery_idx
-    )
-    assert (
-        rising_missed_feedback_idx
-        < rising_missed_scout_idx
-        < scalping_pyramid_feedback_idx
-        < scalping_pyramid_calibration_idx
-        < scalping_avg_down_recovery_idx
-        < one_share_threshold_idx
-    )
+    assert rising_missed_feedback_idx < rising_missed_scout_idx < observation_preflight_idx < one_share_threshold_idx
+    for retired in ("scalping_pyramid_intraday_feedback", "scalping_pyramid_quality_calibration", "scalping_avg_down_recovery_calibration"):
+        assert "src.engine.monitoring." + retired not in script
     verbosity_idx = script.index("src.engine.pipeline_event_verbosity_report")
     observation_audit_idx = script.index(
         "src.engine.observation_source_quality_audit", verbosity_idx
@@ -2182,10 +2162,7 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         sim_post_sell_idx
         < rising_missed_feedback_idx
         < rising_missed_scout_idx
-        < scalping_pyramid_feedback_idx
         < observation_preflight_idx
-        < scalping_pyramid_calibration_idx
-        < scalping_avg_down_recovery_idx
         < entry_recheck_controller_idx
         < microstructure_idx
         < verbosity_idx
@@ -2265,11 +2242,11 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         in script
     )
     assert (
-        'RUN_SCALPING_PYRAMID_INTRADAY_FEEDBACK_POSTCLOSE="${THRESHOLD_CYCLE_RUN_SCALPING_PYRAMID_INTRADAY_FEEDBACK_POSTCLOSE:-true}"'
+        'RUN_SCALPING_PYRAMID_INTRADAY_FEEDBACK_POSTCLOSE=false'
         in script
     )
     assert (
-        'RUN_SCALPING_PYRAMID_QUALITY_CALIBRATION="${THRESHOLD_CYCLE_RUN_SCALPING_PYRAMID_QUALITY_CALIBRATION:-true}"'
+        'RUN_SCALPING_PYRAMID_QUALITY_CALIBRATION=false'
         in script
     )
     assert (
@@ -2863,15 +2840,15 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
     )
     assert (
         '"$PROJECT_DIR/data/report/scalping_pyramid_intraday_feedback/scalping_pyramid_intraday_feedback_${TARGET_DATE}.json"'
-        in script
+        not in script
     )
     assert (
         '"$PROJECT_DIR/data/report/scalping_pyramid_quality_calibration/scalping_pyramid_quality_calibration_${TARGET_DATE}.json"'
-        in script
+        not in script
     )
     assert (
         '"$PROJECT_DIR/data/report/scalping_avg_down_recovery_calibration/scalping_avg_down_recovery_calibration_${TARGET_DATE}.json"'
-        in script
+        not in script
     )
     assert (
         '"$PROJECT_DIR/data/report/rising_missed_classifier_prior/rising_missed_classifier_prior_${TARGET_DATE}.json"'
@@ -3074,11 +3051,11 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
     assert "ai correction final unavailable" in script
 
 
-def test_stage2_ops_cron_installs_pyramid_intraday_feedback_5min():
+def test_stage2_ops_cron_removes_historical_pyramid_schedule():
     script = Path("deploy/install_stage2_ops_cron.sh").read_text(encoding="utf-8")
 
     assert "SCALPING_PYRAMID_INTRADAY_FEEDBACK_5MIN" in script
-    assert "deploy/run_scalping_pyramid_intraday_feedback.sh" in script
+    assert "deploy/run_scalping_pyramid_intraday_feedback.sh" not in script
     assert "!/SCALPING_PYRAMID_INTRADAY_FEEDBACK_5MIN/" in script
 
 
@@ -3188,10 +3165,6 @@ def test_growing_pipeline_wrappers_bound_cadence_and_cpu_affinity():
         "deploy/run_rising_missed_intraday_feedback.sh": (
             "RISING_MISSED_INTRADAY_FEEDBACK_COOLDOWN_SEC:-1500",
             "RISING_MISSED_INTRADAY_FEEDBACK_CPU_AFFINITY",
-        ),
-        "deploy/run_scalping_pyramid_intraday_feedback.sh": (
-            "SCALPING_PYRAMID_INTRADAY_FEEDBACK_COOLDOWN_SEC:-720",
-            "SCALPING_PYRAMID_INTRADAY_FEEDBACK_CPU_AFFINITY",
         ),
         "deploy/run_intraday_ws_freshness_monitor.sh": (
             "INTRADAY_WS_FRESHNESS_MONITOR_COOLDOWN_SEC:-720",

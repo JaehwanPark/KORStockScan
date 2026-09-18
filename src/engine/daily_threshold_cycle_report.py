@@ -985,29 +985,9 @@ CALIBRATION_FAMILY_METADATA = {
     "scale_in_price_guard": {
         "priority": 40,
         "source_family": "scale_in_price_guard",
-        "target_env_keys": [
-            "SCALPING_SCALE_IN_MAX_SPREAD_BPS",
-            "SCALPING_PYRAMID_MAX_MICRO_VWAP_BPS",
-            "SCALPING_PYRAMID_MIN_AI_SCORE",
-            "SCALPING_PYRAMID_MIN_BUY_PRESSURE",
-            "SCALPING_PYRAMID_MIN_TICK_ACCEL",
-        ],
-        "primary_key": "pyramid_max_micro_vwap_bps",
-        "bounds": {
-            "max_spread_bps": {"min": 40.0, "max": 100.0, "max_step_per_day": 5.0},
-            "pyramid_max_micro_vwap_bps": {
-                "min": 30.0,
-                "max": 80.0,
-                "max_step_per_day": 5.0,
-            },
-            "pyramid_min_ai_score": {"min": 65, "max": 80, "max_step_per_day": 2},
-            "pyramid_min_buy_pressure": {
-                "min": 55.0,
-                "max": 75.0,
-                "max_step_per_day": 2.5,
-            },
-            "pyramid_min_tick_accel": {"min": 0.3, "max": 1.0, "max_step_per_day": 0.1},
-        },
+        "target_env_keys": ["SCALPING_SCALE_IN_MAX_SPREAD_BPS"],
+        "primary_key": "max_spread_bps",
+        "bounds": {"max_spread_bps": {"min": 40.0, "max": 100.0, "max_step_per_day": 5.0}},
         "sample_floor": 20,
         "sample_window": "rolling_10d_or_cumulative_sparse",
         "window_policy": {
@@ -10824,146 +10804,10 @@ def _build_bad_entry_refined_canary_family(
 
 
 def _build_reversal_add_family(events: list[dict]) -> dict:
-    current = {
-        "pnl_min": float(
-            getattr(TRADING_RULES, "REVERSAL_ADD_PNL_MIN", -0.70) or -0.70
-        ),
-        "max_hold_sec": int(
-            getattr(TRADING_RULES, "REVERSAL_ADD_MAX_HOLD_SEC", 180) or 180
-        ),
-        "min_ai_score": int(
-            getattr(TRADING_RULES, "REVERSAL_ADD_MIN_AI_SCORE", 60) or 60
-        ),
-        "min_ai_recovery_delta": int(
-            getattr(TRADING_RULES, "REVERSAL_ADD_MIN_AI_RECOVERY_DELTA", 15) or 15
-        ),
-    }
-    blocked = [
-        event
-        for event in events
-        if str(event.get("stage") or "") == "reversal_add_blocked_reason"
-    ]
-    candidates = [
-        event
-        for event in events
-        if str(event.get("stage") or "") == "reversal_add_candidate"
-    ]
-    reason_counter = Counter(
-        str(
-            (event.get("fields") or {}).get("blocked_reason")
-            or (event.get("fields") or {}).get("reason")
-            or "-"
-        )
-        for event in blocked
-    )
-    predicate_names = (
-        "pnl_ok",
-        "hold_ok",
-        "low_floor_ok",
-        "ai_score_ok",
-        "ai_recover_ok",
-        "supply_ok",
-        "buy_pressure_ok",
-        "tick_accel_ok",
-        "large_sell_absent_ok",
-        "micro_vwap_ok",
-    )
-    predicate_pass_counts = {
-        name: sum(
-            1
-            for event in blocked
-            if str((event.get("fields") or {}).get(name) or "").lower() == "true"
-        )
-        for name in predicate_names
-    }
-    all_but_hold = sum(
-        1
-        for event in blocked
-        if str((event.get("fields") or {}).get("hold_ok") or "").lower() != "true"
-        and all(
-            str((event.get("fields") or {}).get(name) or "").lower() == "true"
-            for name in predicate_names
-            if name != "hold_ok"
-        )
-    )
-    all_but_ai_recovery = sum(
-        1
-        for event in blocked
-        if str((event.get("fields") or {}).get("ai_recover_ok") or "").lower() != "true"
-        and all(
-            str((event.get("fields") or {}).get(name) or "").lower() == "true"
-            for name in predicate_names
-            if name != "ai_recover_ok"
-        )
-    )
-    pnl_values = [
-        _safe_float((event.get("fields") or {}).get("profit_rate"), None)
-        for event in blocked + candidates
-    ]
-    hold_values = [
-        _safe_float((event.get("fields") or {}).get("held_sec"), None)
-        for event in blocked + candidates
-    ]
-    ai_values = [
-        _safe_float((event.get("fields") or {}).get("ai_score"), None)
-        for event in blocked + candidates
-    ]
-    recovery_values = [
-        _safe_float((event.get("fields") or {}).get("ai_recovery_delta"), None)
-        for event in blocked + candidates
-    ]
-    pnl_values = [v for v in pnl_values if v is not None]
-    hold_values = [v for v in hold_values if v is not None]
-    ai_values = [v for v in ai_values if v is not None]
-    recovery_values = [v for v in recovery_values if v is not None]
-    sample_ready = len(candidates) >= 20
-    recommended = {
-        "pnl_min": round(
-            _clamp(_percentile(pnl_values, 20, current["pnl_min"]), -1.3, -0.3), 2
-        ),
-        "max_hold_sec": int(
-            round(
-                _clamp(
-                    _percentile(hold_values, 80, current["max_hold_sec"]), 120.0, 900.0
-                )
-            )
-        ),
-        "min_ai_score": int(
-            round(
-                _clamp(_percentile(ai_values, 30, current["min_ai_score"]), 45.0, 75.0)
-            )
-        ),
-        "min_ai_recovery_delta": int(
-            round(
-                _clamp(
-                    _percentile(recovery_values, 30, current["min_ai_recovery_delta"]),
-                    5.0,
-                    30.0,
-                )
-            )
-        ),
-    }
-    return {
-        "family": "reversal_add",
-        "stage": "holding_exit",
-        "sample": {
-            "blocked": len(blocked),
-            "candidate": len(candidates),
-            "blocker_top": dict(reason_counter.most_common(5)),
-            "predicate_pass_counts": predicate_pass_counts,
-            "near_miss_all_but_hold": all_but_hold,
-            "near_miss_all_but_ai_recovery": all_but_ai_recovery,
-        },
-        "apply_ready": sample_ready,
-        "current": current,
-        "recommended": recommended,
-        "apply_mode": "next_preopen_single_owner" if sample_ready else "observe_only",
-        "notes": [
-            "first-fail 로그면 all-predicate 복원이 안 되므로 상한 추정치로만 본다.",
-            f"주요 blocker={dict(reason_counter.most_common(3))}",
-            "near_miss_all_but_*는 한 축만 열면 체결됐을 가능성이 있는 표본 수다. 0이면 복합조건 미충족으로 본다.",
-        ],
-    }
+    from src.engine.lifecycle.retirement import retired_status
+    return {**retired_status("reversal_add"), "family": "reversal_add",
+            "stage": "holding_exit", "sample": {}, "apply_ready": False,
+            "current": {}, "recommended": {}, "apply_mode": "retired", "notes": []}
 
 
 def _completed_valid_profit_index(events: list[dict]) -> dict[str, list[dict]]:
@@ -13225,18 +13069,6 @@ def _build_scale_in_price_guard_family(events: list[dict]) -> dict:
         "max_spread_bps": float(
             getattr(TRADING_RULES, "SCALPING_SCALE_IN_MAX_SPREAD_BPS", 80.0) or 80.0
         ),
-        "pyramid_max_micro_vwap_bps": float(
-            getattr(TRADING_RULES, "SCALPING_PYRAMID_MAX_MICRO_VWAP_BPS", 60.0) or 60.0
-        ),
-        "pyramid_min_ai_score": int(
-            getattr(TRADING_RULES, "SCALPING_PYRAMID_MIN_AI_SCORE", 70) or 70
-        ),
-        "pyramid_min_buy_pressure": float(
-            getattr(TRADING_RULES, "SCALPING_PYRAMID_MIN_BUY_PRESSURE", 60.0) or 60.0
-        ),
-        "pyramid_min_tick_accel": float(
-            getattr(TRADING_RULES, "SCALPING_PYRAMID_MIN_TICK_ACCEL", 0.5) or 0.5
-        ),
     }
     recommended = dict(current)
     if spread_values:
@@ -13245,7 +13077,7 @@ def _build_scale_in_price_guard_family(events: list[dict]) -> dict:
         )
     if micro_vwap_values:
         recommended["micro_vwap_bps_observed_p90"] = round(
-            _percentile(micro_vwap_values, 90, current["pyramid_max_micro_vwap_bps"]),
+            _percentile(micro_vwap_values, 90, 60.0),
             2,
         )
     return {
@@ -13289,7 +13121,7 @@ def _build_scale_in_price_guard_family(events: list[dict]) -> dict:
         "recommended": recommended,
         "apply_mode": "manifest_only" if sample_ready else "observe_only",
         "notes": [
-            "REVERSAL_ADD/PYRAMID 주문 직전 가격·수량 safety threshold 표본이다.",
+            "공통 AVG_DOWN 주문 직전 가격·수량 safety 진단 표본이며 독립 alpha 튜닝이 아니다.",
             "P1 resolver와 dynamic qty는 이미 live replacement지만 threshold-cycle은 추천값/분포를 report-only로만 남긴다.",
             "P2 scale_in_price_v1은 observe-only이며 action이 SKIP이어도 live 주문가/주문 여부를 바꾸지 않는다.",
             "ThresholdOpsTransition0506 전에는 runtime threshold mutation을 열지 않는다.",
@@ -21220,34 +21052,13 @@ def _merge_direct_scale_in_calibration_candidate(
 def merge_scalping_avg_down_recovery_calibration_candidate(
     report: dict[str, Any], target_date: str, *, source_path: Path | None = None
 ) -> dict[str, Any]:
-    return _merge_direct_scale_in_calibration_candidate(
-        report,
-        target_date,
-        source_path=source_path
-        or (
-            SCALPING_AVG_DOWN_RECOVERY_CALIBRATION_DIR
-            / f"scalping_avg_down_recovery_calibration_{target_date}.json"
-        ),
-        report_type="scalping_avg_down_recovery_calibration",
-        owner_family="scalping_avg_down_recovery_quality_gate",
-    )
+    return report
 
 
 def merge_scalping_pyramid_quality_calibration_candidate(
     report: dict[str, Any], target_date: str, *, source_path: Path | None = None
 ) -> dict[str, Any]:
-    return _merge_direct_scale_in_calibration_candidate(
-        report,
-        target_date,
-        source_path=source_path
-        or (
-            REPORT_DIR
-            / "scalping_pyramid_quality_calibration"
-            / f"scalping_pyramid_quality_calibration_{target_date}.json"
-        ),
-        report_type="scalping_pyramid_quality_calibration",
-        owner_family="scalping_pyramid_quality_gate",
-    )
+    return report
 
 
 def main(argv: list[str] | None = None) -> int:

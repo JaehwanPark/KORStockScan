@@ -2770,139 +2770,8 @@ def build_report(
     generated_at: str | None = None,
     policy_ai_enabled: bool = False,
 ) -> dict[str, Any]:
-    generated_at = generated_at or datetime.now(KST).isoformat(timespec="seconds")
-    intended_paths = (
-        input_paths
-        if input_paths is not None
-        else _iter_feedback_report_paths(target_date)
-    )
-    intended_dates = [
-        date_part
-        for path in intended_paths
-        if (date_part := _date_from_feedback_path(path))
-    ]
-    allowed_dates, source_quality_excluded_dates = filter_source_dates_by_preflight(
-        intended_dates,
-        preflight_loader=load_source_quality_preflight,
-    )
-    allowed_date_set = set(allowed_dates)
-    paths = [
-        path
-        for path in intended_paths
-        if _date_from_feedback_path(path) in allowed_date_set
-    ]
-    reports = [_load_json(path) for path in paths if path.exists()]
-    candidate = _calibration_candidate(
-        target_date=target_date,
-        reports=reports,
-        source_paths=paths,
-        source_quality_excluded_dates=source_quality_excluded_dates,
-    )
-    from src.engine.monitoring.scalping_avg_down_recovery_calibration import _load_replay_cache
-    replay_cache, prior_replies, replay_source_files, replay_implementation = _load_replay_cache(
-        paths, report_dir=OUTPUT_REPORT_DIR, report_type=REPORT_TYPE)
-    candidate, independent_replay, adapter_errors, actual_outcomes = _independent_lifecycle_candidate(
-        target_date, reports, candidate, policy_ai_enabled=policy_ai_enabled, replay_cache=replay_cache, prior_replies=prior_replies)
-    return {
-        "schema_version": 1,
-        "replay_source_files": replay_source_files,
-        "replay_engine_implementation": replay_implementation,
-        "independent_exit_replay": independent_replay,
-        "replay_adapter_errors": adapter_errors,
-        "actual_policy_outcomes": actual_outcomes,
-        "report_type": REPORT_TYPE,
-        "target_date": target_date,
-        "generated_at": generated_at,
-        "family": FAMILY,
-        "stage": STAGE,
-        "runtime_effect": False,
-        "allowed_runtime_apply": bool(candidate.get("allowed_runtime_apply")),
-        "decision_authority": "postclose_calibration_candidate_preopen_only",
-        "forbidden_uses": FORBIDDEN_USES,
-        "metric_contract": {
-            "metric_role": "bounded_tunable_calibration_candidate",
-            "decision_authority": "postclose_calibration_candidate_preopen_only",
-            "window_policy": (
-                "rolling_clean_baseline_timestamped_pyramid_gate_parent_episodes"
-            ),
-            "sample_floor": "rolling_replay_eligible_parent_episodes_ge_20",
-            "primary_decision_metric": "source_quality_adjusted_ev_pct",
-            "source_quality_gate": (
-                "row_isolatable_provenance_gaps_excluded_then_timestamped_gate_"
-                "context_conflict_free_owner_fresh_same_route_bbo_existing_price_"
-                "resolver_observation_later_terminal_sell_and_same_day_current_"
-                "min_profit_or_pid_verified_"
-                "exact_date_runtime_provenance"
-            ),
-            "forbidden_uses": FORBIDDEN_USES,
-        },
-        "condition_feasibility": candidate["condition_feasibility"],
-        "condition_feasibility_metric_contract": {
-            "metric_role": "threshold_candidate_feasibility_diagnostic",
-            "decision_authority": "source_only_threshold_feasibility_review",
-            "window_policy": (
-                "rolling_clean_baseline_timestamped_fixed_exit_gate_replay"
-            ),
-            "sample_floor": PROFIT_GRID_MIN_ELIGIBLE,
-            "primary_decision_metric": (
-                "positive_source_quality_adjusted_ev_and_bounded_step_reachability"
-            ),
-            "source_quality_gate": "same_as_calibration_candidate",
-            "forbidden_uses": FORBIDDEN_USES,
-        },
-        "normal_winner_expansion_observation": (
-            candidate["source_metrics"]["normal_winner_expansion_observation"]
-        ),
-        "winner_recovery_bounded_canary_observation": (
-            candidate["source_metrics"]["winner_recovery_bounded_canary_observation"]
-        ),
-        "winner_recovery_real_execution_observation": (
-            candidate["source_metrics"]["winner_recovery_real_execution_observation"]
-        ),
-        "winner_recovery_runtime_funnel_observation": (
-            candidate["source_metrics"]["winner_recovery_runtime_funnel_observation"]
-        ),
-        "post_probe_real_outcome_observation": (
-            candidate["source_metrics"]["post_probe_real_outcome_observation"]
-        ),
-        "post_probe_reprice_observation": (
-            candidate["source_metrics"]["post_probe_reprice_observation"]
-        ),
-        "source_quality": {
-            "status": candidate.get("input_source_quality_status"),
-            "decision_evidence_status": candidate.get("source_quality_status"),
-            "decision_evidence_gate": candidate.get("decision_evidence_gate"),
-            "decision_evidence_blockers": candidate.get("decision_evidence_blockers"),
-            "input_report_count": len(reports),
-            "intended_input_report_count": len(intended_paths),
-            "input_paths": [str(path) for path in paths],
-            "source_quality_excluded_dates": source_quality_excluded_dates,
-            "provenance_present": candidate["source_metrics"]["provenance_present"],
-            "excluded_row_count": candidate["source_metrics"].get(
-                "source_quality_excluded_row_count", 0
-            ),
-            "exclusion_reasons": candidate["source_metrics"].get(
-                "source_quality_exclusion_reasons", {}
-            ),
-        },
-        "runtime_update_contract": {
-            "update_mode": RUNTIME_UPDATE_MODE,
-            "owner_family": FAMILY,
-            "owner_stage": STAGE,
-            "max_runtime_apply_count": 1,
-            "runtime_apply_candidate_count": 1,
-            "allowed_runtime_apply_count": int(
-                bool(candidate.get("allowed_runtime_apply"))
-            ),
-            "quality_update_id": candidate.get("quality_update_id"),
-            "evidence_contract_version": candidate.get("evidence_contract_version"),
-            "evidence_digest": candidate.get("evidence_digest"),
-            "cumulative_quality_window": candidate.get("cumulative_quality_window"),
-            "post_apply_attribution_required": True,
-            "runtime_effect": False,
-        },
-        "calibration_candidates": [candidate],
-    }
+    from src.engine.lifecycle.retirement import retired_status
+    return {**retired_status("scalping_pyramid_quality_calibration"), "target_date": str(target_date), "calibration_candidates": []}
 
 
 def write_outputs(
@@ -3064,30 +2933,9 @@ def write_outputs(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description="Build scalping PYRAMID quality calibration candidate."
-    )
-    parser.add_argument("--target-date", default=datetime.now(KST).strftime("%Y-%m-%d"))
-    parser.add_argument("--output-json", type=Path)
-    parser.add_argument("--output-md", type=Path)
-    parser.add_argument("--print-summary", action="store_true")
-    parser.add_argument("--policy-replay-ai", choices=("off", "current"), default="off")
-    args = parser.parse_args(argv)
-    output_json, output_md = (
-        (args.output_json, args.output_md)
-        if args.output_json and args.output_md
-        else _default_output_paths(args.target_date)
-    )
-    report = build_report(args.target_date, policy_ai_enabled=args.policy_replay_ai == "current")
-    write_outputs(report, output_json=output_json, output_md=output_md)
-    if args.print_summary:
-        print(
-            json.dumps(
-                report.get("calibration_candidates", [{}])[0],
-                ensure_ascii=False,
-                sort_keys=True,
-            )
-        )
+    import json
+    from src.engine.lifecycle.retirement import retired_status
+    print(json.dumps(retired_status("scalping_pyramid_quality_calibration"), sort_keys=True))
     return 0
 
 

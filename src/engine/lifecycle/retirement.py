@@ -18,7 +18,19 @@ LATENCY_RECOMMENDATION_RETIREMENT_ID = "latency_recommendation_retirement_202609
 LATENCY_RECOMMENDATION_RETIRED_REPORTS = frozenset(
     {"latency_classifier_recommendation"}
 )
-RETIRED_CALIBRATION_FAMILIES = frozenset({"latency_classifier_runtime_profile"})
+SCALE_IN_RETIREMENT_ID = "pyramid_retirement_avg_down_shared_rebound_20260918"
+SCALE_IN_RETIRED_REPORTS = frozenset({
+    "scalping_pyramid_intraday_feedback", "scalping_pyramid_quality_calibration",
+    "scalping_avg_down_recovery_calibration",
+})
+SCALE_IN_RETIRED_CALIBRATION_FAMILIES = frozenset({
+    "scalping_pyramid_quality_gate", "scalping_avg_down_recovery_quality_gate",
+    "post_probe_winner_recovery", "reversal_add", "shallow_avg_down_source_gap_recheck",
+})
+RETIRED_CALIBRATION_FAMILIES = (
+    frozenset({"latency_classifier_runtime_profile"})
+    | SCALE_IN_RETIRED_CALIBRATION_FAMILIES
+)
 SCALP_OVERNIGHT_RETIRED_REPORTS = frozenset({"scalp_sim_overnight"})
 SCALP_OVERNIGHT_RETIRED_STAGES = frozenset(
     {
@@ -57,9 +69,11 @@ RETIRED_REPORTS = (
     )
     | SCALP_OVERNIGHT_RETIRED_REPORTS
     | LATENCY_RECOMMENDATION_RETIRED_REPORTS
+    | SCALE_IN_RETIRED_REPORTS
 )
 RETIRED_FAMILIES = (
     RETIRED_REPORTS
+    | SCALE_IN_RETIRED_CALIBRATION_FAMILIES
     | frozenset(
         {
             "scalp_entry_action_decision_matrix_advisory",
@@ -85,6 +99,26 @@ RETIRED_FAMILIES = (
     | SCALP_OVERNIGHT_RETIRED_FAMILIES
 )
 RETIRED_ENV_PREFIXES = (
+    "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_PYRAMID_HANDOFF_",
+    "KORSTOCKSCAN_SCALPING_ENABLE_PYRAMID",
+    "KORSTOCKSCAN_SWING_ENABLE_PYRAMID",
+    "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_",
+    "KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_",
+    "KORSTOCKSCAN_SCALPING_PYRAMID_RUNTIME_",
+    "KORSTOCKSCAN_SCALPING_PYRAMID_MIN_PROFIT_PCT",
+    "KORSTOCKSCAN_SCALPING_PYRAMID_STRONG_CONTINUATION_",
+    "KORSTOCKSCAN_SCALPING_PYRAMID_MIN_AI_SCORE",
+    "KORSTOCKSCAN_SCALPING_PYRAMID_MIN_BUY_PRESSURE",
+    "KORSTOCKSCAN_SCALPING_PYRAMID_MIN_TICK_ACCEL",
+    "KORSTOCKSCAN_SWING_PYRAMID_",
+    "KORSTOCKSCAN_RISING_MISSED_SCOUT_PYRAMID_",
+    "KORSTOCKSCAN_POST_PROBE_WINNER_RECOVERY_",
+    "KORSTOCKSCAN_AVG_DOWN_RUNTIME_",
+    "KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_",
+    "KORSTOCKSCAN_DEEP_RECOVERY_AVG_DOWN_",
+    "KORSTOCKSCAN_SCALP_LATE_LOSS_AVG_DOWN_",
+    "KORSTOCKSCAN_SCALP_STOP_LINE_TOUCH_AVG_DOWN_",
+
     "KORSTOCKSCAN_SCALP_ENTRY_ADM_",
     "KORSTOCKSCAN_HOLDING_EXIT_MATRIX_",
     "KORSTOCKSCAN_LIFECYCLE_DECISION_MATRIX_",
@@ -118,7 +152,9 @@ RETIRED_STAGE_FLAGS = frozenset(
 def retired_status(report_type: str = "adm_ldm") -> dict[str, Any]:
     """Explicit terminal state; never a source-quality failure or retry request."""
     retirement_id = (
-        LATENCY_RECOMMENDATION_RETIREMENT_ID
+        SCALE_IN_RETIREMENT_ID
+        if report_type in SCALE_IN_RETIRED_REPORTS | SCALE_IN_RETIRED_CALIBRATION_FAMILIES
+        else LATENCY_RECOMMENDATION_RETIREMENT_ID
         if report_type in LATENCY_RECOMMENDATION_RETIRED_REPORTS
         else (
             SCALP_OVERNIGHT_RETIREMENT_ID
@@ -150,7 +186,7 @@ def retired_artifact(path: Any) -> bool:
 
 def retirement_env() -> dict[str, str]:
     """Explicit OFF defeats inherited supervisors and old operator overrides."""
-    return {
+    result = {
         prefix + suffix: value
         for prefix, suffix, value in (
             ("KORSTOCKSCAN_SCALP_ENTRY_ADM_", "ADVISORY_ENABLED", "false"),
@@ -177,6 +213,11 @@ def retirement_env() -> dict[str, str]:
             ("KORSTOCKSCAN_OVERNIGHT_CONTEXT_", "ENABLED", "false"),
         )
     }
+    result.update({
+        "KORSTOCKSCAN_SCALPING_ENABLE_PYRAMID": "false",
+        "KORSTOCKSCAN_SWING_ENABLE_PYRAMID": "false",
+    })
+    return result
 
 
 def retirement_shell_commands(environ: Mapping[str, str] | None = None) -> str:

@@ -986,227 +986,15 @@ def test_preopen_apply_blocks_candidate_with_missing_order_provenance():
     assert selected == []
     assert env == {}
     assert decisions[0]["selected"] is False
-    assert "source_quality_blocked" in decisions[0]["decision_reason"]
+    assert "retired_calibration_family" in decisions[0]["decision_reason"]
 
 
-def test_scalping_pyramid_quality_gate_candidate_emits_runtime_env_overrides():
-    env = mod._env_overrides_for_candidate(
-        {
-            "family": "scalping_pyramid_quality_gate",
-            "calibration_state": "adjust_down",
-            "target_env_keys": [
-                "SCALPING_PYRAMID_MIN_PROFIT_PCT",
-                "SCALPING_PYRAMID_MIN_AI_SCORE",
-                "SCALPING_PYRAMID_MIN_BUY_PRESSURE",
-                "SCALPING_PYRAMID_MIN_TICK_ACCEL",
-                "SCALPING_PYRAMID_MAX_MICRO_VWAP_BPS",
-                "SCALPING_PYRAMID_MAX_SPREAD_BPS",
-                "SCALPING_PYRAMID_STRONG_CONTINUATION_ENABLED",
-                "SCALPING_PYRAMID_STRONG_CONTINUATION_MIN_PROFIT_PCT",
-                "SCALPING_PYRAMID_STRONG_CONTINUATION_MAX_DRAWDOWN_PCT",
-            ],
-            "current_values": {
-                "min_profit_pct": 1.5,
-                "min_ai_score": 70.0,
-                "min_buy_pressure": 60.0,
-                "min_tick_accel": 0.5,
-                "max_micro_vwap_bps": 60.0,
-                "max_spread_bps": 80.0,
-                "strong_continuation_enabled": False,
-                "strong_continuation_min_profit_pct": 0.9,
-                "strong_continuation_max_drawdown_pct": 0.2,
-            },
-            "recommended_values": {
-                "min_profit_pct": 1.3,
-                "min_ai_score": 65.0,
-                "min_buy_pressure": 55.0,
-                "min_tick_accel": 0.4,
-                "max_micro_vwap_bps": 70.0,
-                "max_spread_bps": 90.0,
-                "strong_continuation_enabled": True,
-                "strong_continuation_min_profit_pct": 0.8,
-                "strong_continuation_max_drawdown_pct": 0.3,
-            },
-        }
-    )
-
-    assert env == {
-        "KORSTOCKSCAN_SCALPING_PYRAMID_MAX_MICRO_VWAP_BPS": "70",
-        "KORSTOCKSCAN_SCALPING_PYRAMID_MAX_SPREAD_BPS": "90",
-        "KORSTOCKSCAN_SCALPING_PYRAMID_MIN_AI_SCORE": "65",
-        "KORSTOCKSCAN_SCALPING_PYRAMID_MIN_BUY_PRESSURE": "55",
-        "KORSTOCKSCAN_SCALPING_PYRAMID_MIN_PROFIT_PCT": "1.3",
-        "KORSTOCKSCAN_SCALPING_PYRAMID_MIN_TICK_ACCEL": "0.4",
-        "KORSTOCKSCAN_SCALPING_PYRAMID_STRONG_CONTINUATION_ENABLED": "true",
-        "KORSTOCKSCAN_SCALPING_PYRAMID_STRONG_CONTINUATION_MAX_DRAWDOWN_PCT": "0.3",
-        "KORSTOCKSCAN_SCALPING_PYRAMID_STRONG_CONTINUATION_MIN_PROFIT_PCT": "0.8",
-    }
 
 
-def test_post_probe_winner_recovery_auto_candidate_emits_dated_venue_env():
-    payload = {
-        "winner_recovery_bounded_canary_observation": {
-            "state": "bounded_one_share_canary_evidence_ready",
-            "sample_floor": 10,
-            "by_effective_venue": [
-                {
-                    "effective_venue": "KRX",
-                    "state": "bounded_one_share_canary_evidence_ready",
-                    "sample_count": 12,
-                    "ev_eligible_sample_count": 12,
-                    "sample_floor": 10,
-                    "sample_floor_met": True,
-                    "notional_weighted_ev_pct": 0.1142,
-                },
-                {
-                    "effective_venue": "NXT",
-                    "state": "hold_sample",
-                    "sample_count": 1,
-                    "ev_eligible_sample_count": 1,
-                    "sample_floor": 10,
-                    "sample_floor_met": False,
-                    "notional_weighted_ev_pct": 0.2898,
-                },
-            ],
-        },
-        "winner_recovery_real_execution_observation": {
-            "state": "first_planned_residual_leg_candidate_ready",
-            "sample_floor": 20,
-            "by_entry_effective_venue": [
-                {
-                    "entry_effective_venue": "KRX",
-                    "source_quality_valid_closed_count": 20,
-                    "source_quality_adjusted_ev_pct": 0.1,
-                    "promotion_ev_floor_pct": 0.1,
-                    "promotion_ev_floor_met": True,
-                }
-            ],
-        },
-    }
-
-    candidate, status = mod._winner_recovery_auto_apply_candidate(
-        payload,
-        target_date="2026-08-24",
-    )
-
-    assert candidate is not None
-    assert status["eligible_venues"] == ["KRX"]
-    assert candidate["operator_action_required"] is False
-    assert candidate["initial_real_qty_cap"] == 1
-    assert candidate["automatic_quantity_increase_above_one_share_allowed"] is True
-    assert status["central_sizing_venues"] == ["KRX"]
-    assert candidate["operator_authorization_provenance"].startswith(
-        "explicit_operator_direction_2026-09-13"
-    )
-    selected, decisions, env = mod._select_auto_apply_candidates(
-        [candidate],
-        ai_review={"items_by_family": {}},
-        require_ai=True,
-        target_date="2026-08-24",
-    )
-    assert [item["family"] for item in selected] == [
-        mod.POST_PROBE_WINNER_RECOVERY_FAMILY
-    ]
-    assert decisions[0]["decision_reason"] == "deterministic_policy_handoff"
-    assert env == {
-        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ENABLED": "true",
-        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ACTIVE_DATE": ("2026-08-24"),
-        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_KRX_ENABLED": "true",
-        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_NXT_ENABLED": "false",
-        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_PREMARKET_ENABLED": "false",
-        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_"
-        "CENTRAL_SIZING_KRX_ENABLED": "true",
-        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_"
-        "CENTRAL_SIZING_NXT_ENABLED": "false",
-        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_"
-        "CENTRAL_SIZING_PREMARKET_ENABLED": "false",
-    }
 
 
-def test_post_probe_winner_recovery_retains_one_share_below_promotion_ev_floor():
-    payload = {
-        "winner_recovery_bounded_canary_observation": {
-            "state": "bounded_one_share_canary_evidence_ready",
-            "sample_floor": 10,
-            "by_effective_venue": [
-                {
-                    "effective_venue": "KRX",
-                    "state": "bounded_one_share_canary_evidence_ready",
-                    "sample_count": 20,
-                    "ev_eligible_sample_count": 20,
-                    "sample_floor": 10,
-                    "sample_floor_met": True,
-                    "notional_weighted_ev_pct": 0.2,
-                }
-            ],
-        },
-        "winner_recovery_real_execution_observation": {
-            "state": "promotion_ev_floor_not_met",
-            "sample_floor": 20,
-            "by_entry_effective_venue": [
-                {
-                    "entry_effective_venue": "KRX",
-                    "source_quality_valid_closed_count": 20,
-                    "source_quality_adjusted_ev_pct": 0.0999,
-                    "promotion_ev_floor_pct": 0.1,
-                    "promotion_ev_floor_met": False,
-                }
-            ],
-        },
-    }
-
-    candidate, status = mod._winner_recovery_auto_apply_candidate(
-        payload,
-        target_date="2026-08-24",
-    )
-
-    assert candidate is not None
-    assert status["eligible_venues"] == ["KRX"]
-    assert status["central_sizing_venues"] == []
-    assert candidate["automatic_quantity_increase_above_one_share_allowed"] is False
-    assert candidate["recommended_values"]["central_sizing_krx_enabled"] is False
 
 
-def test_post_probe_winner_recovery_auto_candidate_rolls_back_non_positive_real_ev():
-    payload = {
-        "winner_recovery_bounded_canary_observation": {
-            "state": "bounded_one_share_canary_evidence_ready",
-            "sample_floor": 10,
-            "by_effective_venue": [
-                {
-                    "effective_venue": "KRX",
-                    "state": "bounded_one_share_canary_evidence_ready",
-                    "sample_count": 20,
-                    "ev_eligible_sample_count": 20,
-                    "sample_floor": 10,
-                    "sample_floor_met": True,
-                    "notional_weighted_ev_pct": 0.2,
-                }
-            ],
-        },
-        "winner_recovery_real_execution_observation": {
-            "state": "non_positive_ev_hold",
-            "sample_floor": 20,
-            "by_entry_effective_venue": [
-                {
-                    "entry_effective_venue": "KRX",
-                    "source_quality_valid_closed_count": 20,
-                    "source_quality_adjusted_ev_pct": -0.01,
-                }
-            ],
-        },
-    }
-
-    candidate, status = mod._winner_recovery_auto_apply_candidate(
-        payload,
-        target_date="2026-08-24",
-    )
-
-    assert candidate is None
-    assert status["state"] == "no_eligible_venue"
-    assert status["blocked_venues"]["KRX"] == [
-        "real_execution_ev_non_positive_rollback"
-    ]
 
 
 def test_entry_split_order_plan_allows_deterministic_ai_unavailable(
@@ -1474,40 +1262,6 @@ def test_cumulative_scale_in_quality_update_keeps_downstream_pyramid_guard(
     assert next_env == env
 
 
-def test_scalping_pyramid_quality_gate_candidate_ai_guard_reject_blocks_env(
-    monkeypatch, tmp_path
-):
-    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", tmp_path / "runtime_env")
-    candidate = {
-        "family": "scalping_pyramid_quality_gate",
-        "stage": "scale_in",
-        "priority": 39,
-        "calibration_state": "adjust_down",
-        "allowed_runtime_apply": True,
-        "safety_revert_required": False,
-        "target_env_keys": ["SCALPING_PYRAMID_MIN_AI_SCORE"],
-        "current_values": {"min_ai_score": 70.0},
-        "recommended_values": {"min_ai_score": 65.0},
-    }
-
-    selected, decisions, env = mod._select_auto_apply_candidates(
-        [candidate],
-        ai_review={
-            "items_by_family": {
-                "scalping_pyramid_quality_gate": {
-                    "guard_decision": "reject",
-                    "guard_reject_reason": "ai_guard_rejected_test",
-                }
-            }
-        },
-        require_ai=True,
-        target_date="2026-07-04",
-    )
-
-    assert selected == []
-    assert env == {}
-    assert decisions[0]["selected"] is False
-    assert "economic_evidence_contract_version_invalid" in decisions[0]["decision_reason"]
 
 
 def test_scalping_pyramid_ai_guard_rejects_different_replay_evidence_digest():
@@ -1564,126 +1318,6 @@ def test_scalping_pyramid_ai_guard_rejects_different_replay_evidence_version():
     assert reason == "pyramid_ai_evidence_contract_version_mismatch"
 
 
-def test_scale_in_selects_only_one_cumulative_quality_update_beside_split_plan(
-    monkeypatch, tmp_path
-):
-    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", tmp_path / "runtime_env")
-    split_candidate = {
-        "family": "scale_in_split_order_plan",
-        "stage": "scale_in",
-        "priority": 9,
-        "calibration_state": "adjust_up",
-        "allowed_runtime_apply": True,
-        "safety_revert_required": False,
-        "target_env_keys": ["SCALE_IN_SPLIT_ORDER_POLICY_ENABLED"],
-        "current_values": {"enabled": False},
-        "recommended_values": {"enabled": True},
-    }
-    cumulative_window = {
-        "window_policy": "clean_baseline_cumulative",
-        "clean_tuning_baseline_date": "2026-06-05",
-        "start_date": "2026-06-05",
-        "end_date": "2026-07-03",
-        "source_dates": ["2026-07-03"],
-        "source_date_count": 1,
-    }
-    pyramid_candidate = {
-        "family": "scalping_pyramid_quality_gate",
-        "stage": "scale_in",
-        "priority": 39,
-        "calibration_state": "adjust_down",
-        "allowed_runtime_apply": True,
-        "safety_revert_required": False,
-        "source_quality_gate": "pass",
-        "target_env_keys": ["SCALPING_PYRAMID_MIN_AI_SCORE"],
-        "current_values": {"min_ai_score": 70.0},
-        "recommended_values": {"min_ai_score": 65.0},
-        "quality_update_id": "pyramid-quality-1",
-        "runtime_update_mode": "single_cumulative_quality_update",
-        "max_runtime_apply_count": 1,
-        "cumulative_quality_window": cumulative_window,
-        "post_apply_attribution_required": True,
-        "runtime_effect": False,
-        "actual_order_submitted": False,
-        "broker_order_forbidden": True,
-    }
-    avg_down_candidate = {
-        "family": "scalping_avg_down_recovery_quality_gate",
-        "stage": "scale_in",
-        "priority": 37,
-        "calibration_state": "adjust_down",
-        "allowed_runtime_apply": True,
-        "safety_revert_required": False,
-        "source_quality_gate": "pass",
-        "target_env_key": "SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE",
-        "target_env_keys": ["SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE"],
-        "changed_target_env_keys": ["SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE"],
-        "current_value": 85.0,
-        "recommended_value": 80.0,
-        "current_value_source": "same_day_runtime_route_event",
-        "current_runtime_value_sources": ["runtime_rules_loaded_value"],
-        "current_values": {"shallow_min_buy_pressure": 85.0},
-        "recommended_values": {"shallow_min_buy_pressure": 80.0},
-        "quality_update_id": "avg-down-quality-1",
-        "evidence_contract_version": "avg_down_paired_economics_v3",
-        "evidence_digest": "a" * 64,
-        "evaluation_method": "paired_add_no_add_lifecycle_replay",
-        "evidence_authority": "paired_add_no_add_lifecycle_replay",
-        "runtime_update_mode": "single_cumulative_quality_update",
-        "max_runtime_apply_count": 1,
-        "cumulative_quality_window": cumulative_window,
-        "post_apply_attribution_required": True,
-        "sample_count": 10,
-        "bounds": {"min": 80.0, "max": 90.0, "unit": "buy_pressure_pct"},
-        "max_step_per_day": 5.0,
-        "rollback_value": 85.0,
-        "comparison_universe_hash": "b" * 64,
-        "cost_policy_version": "trade_profit_net_realized_pnl:rate=0.00100000",
-        "exit_policy_version": "existing-exit-policy-v1",
-        "sizing_policy_version": "recorded_existing_position_sizing_owner",
-        "recommended_values_changed": True,
-        "sample_floor_passed": True,
-        "condition_feasibility": {
-            "state": "bounded_candidate_ready",
-            "paired_exit_replay_ready": True,
-            "unique_complete_parent_episode_floor_passed": True,
-            "common_runtime_venue_scope_ready": True,
-            "runtime_current_value_provenance_ready": True,
-            "selected_exit_policy_version": "existing-exit-policy-v1",
-        },
-        "impact_scope": "common_runtime",
-        "venue_scope_authority": "common_or_all_active_venues",
-        "source_date": "2026-07-03",
-        "target_date": "2026-07-03",
-        "runtime_effect": False,
-        "actual_order_submitted": False,
-        "broker_order_forbidden": True,
-    }
-
-    _with_economic_proof(avg_down_candidate)
-    pyramid_candidate.update({"target_env_keys": ["SCALPING_PYRAMID_MIN_PROFIT_PCT"], "changed_target_env_keys": ["SCALPING_PYRAMID_MIN_PROFIT_PCT"],
-        "current_values": {"min_profit_pct": 1.5}, "recommended_values": {"min_profit_pct": 1.4},
-        "current_value": 1.5, "recommended_value": 1.4, "evidence_contract_version": "pyramid_paired_economics_v2"})
-    _with_economic_proof(pyramid_candidate)
-    selected, decisions, env = mod._select_auto_apply_candidates(
-        [split_candidate, pyramid_candidate, avg_down_candidate],
-        ai_review={},
-        require_ai=False,
-        target_date="2026-07-06",
-    )
-
-    assert [item["family"] for item in selected] == [
-        "scale_in_split_order_plan",
-        "scalping_avg_down_recovery_quality_gate",
-    ]
-    assert decisions[2]["selected"] is False
-    assert decisions[2]["decision_reason"] == (
-        "single_cumulative_quality_update_conflict:"
-        "scalping_avg_down_recovery_quality_gate"
-    )
-    assert env["KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_ENABLED"] == "true"
-    assert env["KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE"] == "80"
-    assert "KORSTOCKSCAN_SCALPING_PYRAMID_MIN_AI_SCORE" not in env
 
 
 def test_cumulative_quality_contract_rejects_quality_update_id_mismatch():
@@ -2408,124 +2042,6 @@ def test_entry_ai_gate_backtest_root_source_quality_blocks_runtime_env(
     assert decisions[0]["decision_reason"] == "runtime_apply_not_allowed"
 
 
-def test_direct_scale_in_calibration_loaders_block_source_quality_preflight(
-    tmp_path, monkeypatch
-):
-    monkeypatch.setattr(
-        mod,
-        "SCALPING_PYRAMID_QUALITY_CALIBRATION_DIR",
-        tmp_path / "scalping_pyramid_quality_calibration",
-    )
-    monkeypatch.setattr(
-        mod,
-        "SCALPING_AVG_DOWN_RECOVERY_CALIBRATION_DIR",
-        tmp_path / "scalping_avg_down_recovery_calibration",
-    )
-    monkeypatch.setattr(
-        mod,
-        "load_source_quality_preflight",
-        lambda source_date: {
-            "status": "fail",
-            "tuning_input_allowed": False,
-            "allowed_runtime_apply": False,
-            "source_quality_gate": "blocked_contract_gap",
-            "blocked_reason": "required_field_missing",
-            "hard_blocking_contract_gap_count": 2,
-            "clean_baseline_enforced": True,
-        },
-    )
-    monkeypatch.setattr(mod, "source_quality_preflight_blocked", lambda preflight: True)
-    pyramid_path = (
-        mod.SCALPING_PYRAMID_QUALITY_CALIBRATION_DIR
-        / "scalping_pyramid_quality_calibration_2026-07-03.json"
-    )
-    avg_down_path = (
-        mod.SCALPING_AVG_DOWN_RECOVERY_CALIBRATION_DIR
-        / "scalping_avg_down_recovery_calibration_2026-07-03.json"
-    )
-    pyramid_path.parent.mkdir(parents=True)
-    avg_down_path.parent.mkdir(parents=True)
-    pyramid_path.write_text(
-        json.dumps(
-            {
-                "calibration_candidates": [
-                    {
-                        "family": "scalping_pyramid_quality_gate",
-                        "stage": "scale_in",
-                        "calibration_state": "adjust_down",
-                        "allowed_runtime_apply": True,
-                        "sample_floor_passed": True,
-                        "source_quality_gate": "pass",
-                        "target_env_keys": ["SCALPING_PYRAMID_MIN_PROFIT_PCT"],
-                        "recommended_values": {"min_profit_pct": 1.1},
-                    }
-                ],
-                "winner_recovery_bounded_canary_observation": {
-                    "state": "bounded_one_share_canary_evidence_ready",
-                    "sample_floor": 10,
-                    "by_effective_venue": [
-                        {
-                            "effective_venue": "KRX",
-                            "state": "bounded_one_share_canary_evidence_ready",
-                            "sample_count": 12,
-                            "ev_eligible_sample_count": 12,
-                            "sample_floor": 10,
-                            "sample_floor_met": True,
-                            "notional_weighted_ev_pct": 0.2,
-                        }
-                    ],
-                },
-                "winner_recovery_real_execution_observation": {
-                    "state": "observe_one_share_canary",
-                    "sample_floor": 20,
-                    "by_entry_effective_venue": [],
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    avg_down_path.write_text(
-        json.dumps(
-            {
-                "calibration_candidates": [
-                    {
-                        "family": "scalping_avg_down_recovery_quality_gate",
-                        "stage": "scale_in",
-                        "calibration_state": "adjust_up",
-                        "allowed_runtime_apply": True,
-                        "sample_floor_passed": True,
-                        "source_quality_gate": "pass",
-                        "target_env_keys": [
-                            "SHALLOW_VOLATILITY_AVG_DOWN_MAX_PER_POSITION"
-                        ],
-                        "recommended_values": {"shallow_max_per_position": 2},
-                    }
-                ]
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    pyramid_candidates, pyramid_status = (
-        mod._load_scalping_pyramid_quality_calibration_candidates(
-            "2026-07-03",
-            target_date="2026-07-04",
-        )
-    )
-    avg_down_candidates, avg_down_status = (
-        mod._load_scalping_avg_down_recovery_calibration_candidates("2026-07-03")
-    )
-
-    assert pyramid_status["source_quality_blocked"] is True
-    assert avg_down_status["source_quality_blocked"] is True
-    assert len(pyramid_candidates) == 2
-    assert all(item["allowed_runtime_apply"] is False for item in pyramid_candidates)
-    assert avg_down_candidates[0]["allowed_runtime_apply"] is False
-    assert all(
-        item["source_quality_gate"] == "source_quality_blocked"
-        for item in pyramid_candidates
-    )
-    assert avg_down_candidates[0]["source_quality_gate"] == "source_quality_blocked"
 
 
 def test_scalping_avg_down_recovery_quality_gate_does_not_force_emit_legacy_multi_env():
@@ -2554,18 +2070,6 @@ def test_scalping_avg_down_recovery_quality_gate_does_not_force_emit_legacy_mult
     assert overrides == {}
 
 
-def test_scalping_avg_down_recovery_quality_gate_emits_only_changed_pressure_axis():
-    candidate = {
-        "family": "scalping_avg_down_recovery_quality_gate",
-        "calibration_state": "adjust_down",
-        "current_values": {"shallow_min_buy_pressure": 85.0},
-        "recommended_values": {"shallow_min_buy_pressure": 80.0},
-        "target_env_keys": ["SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE"],
-    }
-
-    assert mod._env_overrides_for_candidate(candidate) == {
-        "KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE": "80"
-    }
 
 
 @pytest.mark.parametrize(
@@ -2676,62 +2180,6 @@ def test_avg_down_ai_guard_binds_hash_key_values_and_dates():
     assert reason == "avg_down_ai_evidence_digest_mismatch"
 
 
-def test_avg_down_loader_preserves_valid_source_only_hold_state(tmp_path, monkeypatch):
-    report_dir = tmp_path / "avg_down"
-    report_dir.mkdir()
-    monkeypatch.setattr(mod, "SCALPING_AVG_DOWN_RECOVERY_CALIBRATION_DIR", report_dir)
-    monkeypatch.setattr(
-        mod,
-        "load_source_quality_preflight",
-        lambda source_date: {
-            "status": "pass",
-            "tuning_input_allowed": True,
-            "allowed_runtime_apply": True,
-            "source_quality_gate": "pass",
-        },
-    )
-    candidate = _valid_avg_down_candidate()
-    candidate.update(
-        {
-            "calibration_state": "hold_runtime_scope",
-            "calibration_reason": "requires_paired_exit_replay",
-            "allowed_runtime_apply": False,
-            "evaluation_method": "fixed_observed_exit_counterfactual",
-            "evidence_authority": "fixed_observed_exit_source_only",
-        }
-    )
-    (report_dir / "scalping_avg_down_recovery_calibration_2026-07-03.json").write_text(
-        json.dumps(
-            {
-                "schema_version": 2,
-                "target_date": "2026-07-03",
-                "calibration_candidates": [candidate],
-                "runtime_update_contract": {
-                    "update_mode": "single_cumulative_quality_update",
-                    "owner_family": mod.AVG_DOWN_RECOVERY_FAMILY,
-                    "owner_stage": "scale_in",
-                    "max_runtime_apply_count": 1,
-                    "runtime_apply_candidate_count": 1,
-                    "allowed_runtime_apply_count": 0,
-                    "quality_update_id": candidate["quality_update_id"],
-                    "evidence_contract_version": candidate["evidence_contract_version"],
-                    "evidence_digest": candidate["evidence_digest"],
-                    "cumulative_quality_window": candidate["cumulative_quality_window"],
-                    "post_apply_attribution_required": True,
-                    "runtime_effect": False,
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    candidates, status = mod._load_scalping_avg_down_recovery_calibration_candidates(
-        "2026-07-03"
-    )
-
-    assert status["runtime_update_contract_error"] is None
-    assert candidates[0]["calibration_state"] == "hold_runtime_scope"
-    assert candidates[0]["allowed_runtime_apply"] is False
 
 
 def test_avg_down_source_only_contract_rejects_target_identity_mismatch():
@@ -2785,119 +2233,10 @@ def _write_previous_avg_down_runtime_manifest(tmp_path, monkeypatch, env_overrid
     )
 
 
-def test_avg_down_hold_no_edge_preserves_last_accepted_single_axis(
-    tmp_path, monkeypatch
-):
-    _write_previous_avg_down_runtime_manifest(
-        tmp_path,
-        monkeypatch,
-        {"KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE": "80"},
-    )
-    candidate = {
-        "family": mod.AVG_DOWN_RECOVERY_FAMILY,
-        "stage": "scale_in",
-        "priority": 37,
-        "calibration_state": "hold_no_edge",
-        "calibration_reason": "economic_hypothesis_rejected",
-        "allowed_runtime_apply": False,
-        "safety_revert_required": False,
-        "source_quality_gate": "pass",
-        "current_value": 80.0,
-        "current_value_source": "same_day_runtime_route_event",
-        "runtime_update_mode": "single_cumulative_quality_update",
-    }
-
-    selected, decisions, env = mod._select_auto_apply_candidates(
-        [candidate],
-        ai_review={},
-        require_ai=False,
-        target_date="2026-07-11",
-    )
-
-    assert [item["family"] for item in selected] == [mod.AVG_DOWN_RECOVERY_FAMILY]
-    assert env == {"KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE": "80"}
-    assert decisions[0]["selection_change_class"] == "carried_forward_unchanged"
-    assert (
-        decisions[0]["hold_carry_forward"]["migration_state"]
-        == "v2_single_axis_preserved"
-    )
 
 
-def test_avg_down_missing_candidate_preserves_legacy_env_without_new_authority(
-    tmp_path, monkeypatch
-):
-    previous_env = {
-        "KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MAX_PER_POSITION": "2",
-        "KORSTOCKSCAN_DEEP_RECOVERY_AVG_DOWN_PNL_MIN": "-4",
-    }
-    _write_previous_avg_down_runtime_manifest(tmp_path, monkeypatch, previous_env)
-
-    selected, decisions, env = mod._select_auto_apply_candidates(
-        [],
-        ai_review={},
-        require_ai=False,
-        target_date="2026-07-11",
-    )
-
-    assert [item["family"] for item in selected] == [mod.AVG_DOWN_RECOVERY_FAMILY]
-    assert env == previous_env
-    carry = decisions[0]["hold_carry_forward"]
-    assert carry["trigger"] == "current_postclose_candidate_missing"
-    assert (
-        carry["migration_state"]
-        == "legacy_avg_down_env_preserved_without_new_authority"
-    )
 
 
-@pytest.mark.parametrize(
-    ("candidate_update", "expected_reason"),
-    [
-        (
-            {"source_quality_blocked": "required_field_missing"},
-            "source_quality_hard_block",
-        ),
-        (
-            {
-                "current_value": 85.0,
-                "current_value_source": "same_day_runtime_route_event",
-            },
-            "avg_down_previous_runtime_value_conflict",
-        ),
-    ],
-)
-def test_avg_down_hold_does_not_carry_on_quality_or_runtime_value_conflict(
-    tmp_path, monkeypatch, candidate_update, expected_reason
-):
-    _write_previous_avg_down_runtime_manifest(
-        tmp_path,
-        monkeypatch,
-        {"KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE": "80"},
-    )
-    candidate = {
-        "family": mod.AVG_DOWN_RECOVERY_FAMILY,
-        "stage": "scale_in",
-        "priority": 37,
-        "calibration_state": "hold_runtime_scope",
-        "calibration_reason": "requires_paired_exit_replay",
-        "allowed_runtime_apply": False,
-        "safety_revert_required": False,
-        "source_quality_gate": "pass",
-        "current_value": 80.0,
-        "current_value_source": "same_day_runtime_route_event",
-        "runtime_update_mode": "single_cumulative_quality_update",
-        **candidate_update,
-    }
-
-    selected, decisions, env = mod._select_auto_apply_candidates(
-        [candidate],
-        ai_review={},
-        require_ai=False,
-        target_date="2026-07-11",
-    )
-
-    assert selected == []
-    assert env == {}
-    assert expected_reason in decisions[0]["decision_reason"]
 
 
 def test_entry_ai_gate_loader_blocks_source_quality_preflight(tmp_path, monkeypatch):
@@ -8286,50 +7625,6 @@ def test_build_preopen_apply_manifest_reports_missing_source(tmp_path, monkeypat
     assert manifest["candidates"] == []
 
 
-def test_missing_source_report_preserves_previous_avg_down_runtime_env(
-    tmp_path, monkeypatch
-):
-    report_dir = tmp_path / "report"
-    runtime_dir = tmp_path / "runtime_env"
-    lock_dir = tmp_path / "operator_runtime_env_locks"
-    runtime_dir.mkdir(parents=True)
-    lock_dir.mkdir(parents=True)
-    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
-    monkeypatch.setattr(mod, "CALIBRATION_REPORT_DIR", report_dir / "calibration")
-    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", tmp_path / "apply_plans")
-    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
-    monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
-    (runtime_dir / "threshold_runtime_env_2026-07-10.json").write_text(
-        json.dumps(
-            {
-                "target_date": "2026-07-10",
-                "selected_families": [mod.AVG_DOWN_RECOVERY_FAMILY],
-                "env_overrides": {
-                    "KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE": "80"
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    manifest = mod.build_preopen_apply_manifest(
-        "2026-07-11",
-        source_date="2026-07-10",
-        apply_mode="auto_bounded_live",
-        auto_apply=True,
-        require_ai=True,
-    )
-
-    assert manifest["status"] == "carry_forward_ready_missing_source_report"
-    assert manifest["runtime_change"] is True
-    assert manifest["runtime_env_overrides"] == {
-        "KORSTOCKSCAN_SHALLOW_VOLATILITY_AVG_DOWN_MIN_BUY_PRESSURE": "80"
-    }
-    assert (
-        manifest["auto_apply_decisions"][0]["hold_carry_forward"]["trigger"]
-        == "current_postclose_candidate_missing"
-    )
-    assert manifest["runtime_env_handoff_verification"]["status"] == "pass"
 
 
 def test_runtime_apply_bridge_blocks_source_quality_blocked_live_candidate(
@@ -9057,91 +8352,6 @@ def test_hold_carry_forward_previously_enabled_no_blockers(tmp_path, monkeypatch
     ] == ["soft_stop_whipsaw_confirmation"]
 
 
-def test_pyramid_ev_hold_preserves_explicit_operator_lock(tmp_path, monkeypatch):
-    report_dir = tmp_path / "report"
-    apply_dir = tmp_path / "apply_plans"
-    runtime_dir = tmp_path / "runtime_env"
-    latency_dir = tmp_path / "missing_latency_classifier_recommendation"
-    lock_dir = tmp_path / "operator_runtime_env_locks"
-    report_dir.mkdir(parents=True)
-    runtime_dir.mkdir(parents=True)
-    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
-    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
-    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
-    monkeypatch.setattr(mod, "OPERATOR_RUNTIME_ENV_LOCK_DIR", lock_dir)
-    monkeypatch.setattr(mod, "LATENCY_CLASSIFIER_RECOMMENDATION_DIR", latency_dir)
-
-    lock_dir.mkdir(parents=True)
-    (lock_dir / "scalping_pyramid_min_profit.json").write_text(
-        json.dumps(
-            {
-                "lock_id": "scalping_pyramid_min_profit_explicit_lock",
-                "enabled": True,
-                "family": "scalping_pyramid_quality_gate",
-                "stage": "scale_in",
-                "active_from_date": "2026-08-20",
-                "explicit_close_required": True,
-                "env_overrides": {
-                    "KORSTOCKSCAN_SCALPING_PYRAMID_MIN_PROFIT_PCT": "1.1",
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    (report_dir / "threshold_cycle_2026-08-20.json").write_text(
-        json.dumps(
-            {
-                "date": "2026-08-20",
-                "calibration_candidates": [
-                    {
-                        "family": "scalping_pyramid_quality_gate",
-                        "stage": "scale_in",
-                        "priority": 39,
-                        "allowed_runtime_apply": False,
-                        "safety_revert_required": False,
-                        "calibration_state": "hold",
-                        "calibration_reason": (
-                            "normal_winner_expansion_non_positive_ev_hold"
-                        ),
-                        "source_quality_gate": "pass_with_row_exclusions",
-                        "source_quality_blocked": None,
-                        "target_env_keys": [],
-                        "recommended_values": {"min_profit_pct": 1.5},
-                        "current_values": {"min_profit_pct": 1.5},
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    manifest = mod.build_preopen_apply_manifest(
-        "2026-08-21",
-        source_date="2026-08-20",
-        apply_mode="auto_bounded_live",
-        auto_apply=True,
-        require_ai=False,
-    )
-    decision = next(
-        item
-        for item in manifest["auto_apply_decisions"]
-        if item["family"] == "scalping_pyramid_quality_gate"
-    )
-
-    assert decision["selected"] is True
-    assert decision["selection_change_class"] == "operator_lock_preserved"
-    assert decision["decision_reason"].startswith(
-        "operator_runtime_env_lock_preserved:"
-    )
-    assert decision["env_overrides"] == {
-        "KORSTOCKSCAN_SCALPING_PYRAMID_MIN_PROFIT_PCT": "1.1"
-    }
-    assert (
-        manifest["runtime_env_overrides"][
-            "KORSTOCKSCAN_SCALPING_PYRAMID_MIN_PROFIT_PCT"
-        ]
-        == "1.1"
-    )
 
 
 def test_previous_runtime_env_uses_latest_manifest_across_calendar_gap(
@@ -9946,29 +9156,6 @@ def test_retired_audit_history_does_not_block_baseline_latency_keys(
     assert mod.verify_runtime_env_handoff("2026-09-07")["status"] == "pass"
 
 
-def test_verify_runtime_env_handoff_verifies_selected_pyramid_quality_gate(
-    tmp_path, monkeypatch
-):
-    runtime_dir = tmp_path / "runtime_env"
-    runtime_dir.mkdir(parents=True)
-    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
-    (runtime_dir / "threshold_runtime_env_2026-07-20.json").write_text(
-        json.dumps(
-            {
-                "target_date": "2026-07-20",
-                "selected_families": ["scalping_pyramid_quality_gate"],
-                "env_overrides": {
-                    "KORSTOCKSCAN_SCALPING_PYRAMID_MIN_PROFIT_PCT": "1.1"
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    result = mod.verify_runtime_env_handoff("2026-07-20")
-
-    assert result["status"] == "pass"
-    assert result["unverified_selected_families"] == []
 
 
 def test_write_runtime_env_strips_all_retired_runtime_keys(tmp_path, monkeypatch):
@@ -12020,3 +11207,28 @@ def _with_economic_proof(candidate):
     candidate["economic_validation"] = proof
     candidate.setdefault("source_metrics", {})["paired_runtime_candidate_economics"] = economics
     return candidate
+
+
+@pytest.mark.parametrize("family", ["scalping_pyramid_quality_gate", "scalping_avg_down_recovery_quality_gate", "post_probe_winner_recovery", "reversal_add", "shallow_avg_down_source_gap_recheck"])
+@pytest.mark.parametrize("state", ["adjust_up", "adjust_down", "hold", "approval_required"])
+def test_retired_independent_scale_in_cannot_write_or_select_policy(family, state):
+    candidate = {"family": family, "calibration_state": state,
+        "allowed_runtime_apply": True, "runtime_apply_eligible_now": True,
+        "target_env_keys": ["SCALPING_PYRAMID_MIN_PROFIT_PCT", "SHALLOW_VOLATILITY_AVG_DOWN_MIN_TICK_ACCEL"],
+        "recommended_values": {"min_profit_pct": 1.3, "min_tick_accel": 0.5},
+        "source_metrics": {"source_quality_pass": True}}
+    assert mod._env_overrides_for_candidate(candidate) == {}
+    selected, decisions, env = mod._select_auto_apply_candidates([candidate],
+        ai_review={"items_by_family": {}}, require_ai=False, target_date="2026-09-18")
+    assert selected == [] and env == {}
+    assert decisions[0]["selected"] is False
+    assert "retired" in decisions[0]["decision_reason"]
+
+
+def test_retired_scale_in_loaders_ignore_legacy_files_and_source_quality(monkeypatch):
+    monkeypatch.setattr(mod, "_load_json", lambda *a, **k: pytest.fail("retired loader read archive"))
+    for loader in (mod._load_scalping_pyramid_quality_calibration_candidates,
+                   mod._load_scalping_avg_down_recovery_calibration_candidates):
+        candidates, status = loader("2026-09-17")
+        assert candidates == [] and status["status"] == "retired"
+    assert mod._winner_recovery_auto_apply_candidate({}, target_date="2026-09-18") is None
