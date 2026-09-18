@@ -2165,3 +2165,29 @@ def test_old_market_order_does_not_exclude_later_limit_retry(monkeypatch, tmp_pa
     assert report["evaluation_state"]["status"] == "pending_filled_outcome"
     assert report["evaluation_state"]["applicable_receipt_count"] == 1
     assert report["evaluation_state"]["excluded_receipt_reasons"]["market_like_from_frozen_anchor"] == 0
+
+
+def test_actual_fill_inventory_keeps_main_scanner_and_excludes_other_custody(monkeypatch, tmp_path):
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    from src.database import db_manager
+    _patch_dirs(monkeypatch, tmp_path)
+    day = "2026-09-17"
+    pairs = []
+    for idx, tag in enumerate(("SCANNER", "SCALP_BASE", "WIDGET", "EPISODE", "MANUAL"), 1):
+        receipt = SimpleNamespace(id=idx, recommendation_id=idx, order_no=f"BUY{idx}",
+            event_time=datetime.fromisoformat(f"{day}T10:00:00"), executed_price=10000,
+            stock_code=f"{idx:06d}", request_qty=4, executed_qty=4, request_price=10000)
+        position = SimpleNamespace(strategy="SCALPING", position_tag=tag, sell_time=None)
+        pairs.append((receipt, position))
+    class Session:
+        def query(self, *args): return self
+        def outerjoin(self, *args): return self
+        def filter(self, *args): return self
+        def order_by(self, *args): return self
+        def all(self): return pairs
+    @contextmanager
+    def session(): yield Session()
+    monkeypatch.setattr(db_manager, "DBManager", lambda: SimpleNamespace(get_session=session))
+    result = split_plan._query_actual_fill_inventory(day)
+    assert [row["record_id"] for row in result] == ["1", "2"]

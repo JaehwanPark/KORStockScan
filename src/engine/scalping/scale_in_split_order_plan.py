@@ -2522,7 +2522,7 @@ def _query_actual_fill_inventory(target_date: str) -> list[dict[str, Any]]:
     """Read receipt-confirmed DB history; never write facts or call a provider."""
     from src.database.db_manager import DBManager
     from src.database.models import HoldingAddHistory, RecommendationHistory
-    from src.engine.sniper_position_tags import is_default_position_tag
+    from src.engine.sniper_position_tags import is_default_position_tag, normalize_position_tag
 
     days = sorted(p.stem.removeprefix(f"{REPORT_TYPE}_") for p in REPORT_DIR.glob(f"{REPORT_TYPE}_*.json")
                   if len(p.stem.removeprefix(f"{REPORT_TYPE}_")) == 10
@@ -2543,7 +2543,8 @@ def _query_actual_fill_inventory(target_date: str) -> list[dict[str, Any]]:
         for receipt, position in pairs:
             if position is None:
                 raise ValueError("filled_position_identity_missing")
-            if not is_default_position_tag(position.strategy, position.position_tag):
+            if (not is_default_position_tag(position.strategy, position.position_tag)
+                    and normalize_position_tag(position.strategy, position.position_tag) != "SCANNER"):
                 continue
             if not receipt.order_no or not receipt.event_time or not receipt.executed_price or receipt.executed_price <= 0:
                 raise ValueError("actual_execution_history_contract_invalid")
