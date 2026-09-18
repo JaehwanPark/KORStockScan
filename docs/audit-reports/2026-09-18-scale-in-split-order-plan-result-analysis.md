@@ -51,3 +51,5 @@ Live 연결은 `sniper_state_handlers`의 AVG_DOWN 주문 구성→`apply_scale_
 경제성 ETA는null이다. 20개 report가 쌓이거나 기다려 기존cached4건이 window 밖으로 빠지는 것은 EV 개선이 아니다. 이번 작업에서 source grid/floor/holdout/비용/주문·quantity/PREOPEN/bot 코드를 변경하거나 비싼 raw/producer를 재실행하지 않았다. 구조 결손을 기록하며 runtime safeguard와 검증 임계값을 완화하지 않는다.
 
 근거: [원9/17 JSON](../../data/report/scale_in_split_order_plan/scale_in_split_order_plan_2026-09-17.json), [policy](../../data/threshold_cycle/scale_in_split_order_policy/scale_in_split_order_policy_2026-09-17.json), `logs/threshold_cycle_postclose_cron.log`의 target_date/PERF/ready, `src/engine/scalping/scale_in_split_order_plan.py`의 presence precheck/rolling loader/replay/경제성gate/runtime allocator, `tmp/panic-history-scale-analysis-20260918/scale-analysis.json` 및 before/closure source SHA. 과거 독립PYRAMID/AVG_DOWN튜닝폐기와 공유AVG_DOWN운영은 [현행 review](2026-09-18-pyramid-retirement-avg-down-shared-rebound-review.md)를 따른다.
+
+분석 closure: 위commit의문서배포와별개로scale src/deploy/PREOPEN/live consumer코드및원9/17JSON/MD/policy SHA보존PASS. 구조결손은관측된경계로기록하고수정하지않았다. raw replay/producer/API/주문/봇실행/외부sync없음.

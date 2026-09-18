@@ -126,3 +126,5 @@ Wrapper 관련 기존6개 및 selector 실패 선행검증1개, 합7PASS. bash-n
 오늘9/18 장중 JSON/MD2개·공통생산자/observer/알림상태/lock/cooldown·동결policy·원source와일일집계는보존한다. 과거 장후/장중출력이같은파일명을공유해생성경로를완전히분리할수없으므로 기존날짜별공유산출물의과거사본을함께제거한범위다. source/audit/docs/정책·다른일일보고서안의이미집계된panic진단은 standalone 과거산출물이아니며삭제하지않는다. 위과거수치는삭제전확인한기록이며현재원파일존재를암시하지않는다. 이번cleanup의과거원SHA는manifest에남는다.
 
 근거: `tmp/panic-history-scale-analysis-20260918/cleanup-manifest.json`, `before.json`, `result-refresh.json`, `closure.json`. 삭제한원보고서/전용datedreview링크를inline삭제경로로고쳤다. 장후EV개선/전체chainDONE을새로만들지않고장후panic작업상태는removed다. 다음개별단위는 [scale-in 실행·EV 분석](2026-09-18-scale-in-split-order-plan-result-analysis.md)이며분석만수행한다.
+
+이번재리뷰/분석commit `a6f20b2b742b7634cdaa1035c43885f8af0d05f8` main/branch push 및13:44:51KST `panic-history-scale-analysis-reviewed-20260918` 선택배포PASS. 이전검토source0394d32a0 대비src/deploy전체diff0이며scale관련code와원9/17report/policy SHA보존. 새코드·테스트추가/임계값·runtime 변경없음. 검증재사용은동일source계약에한정하며scale구조결손이해결됐다는뜻이아니다. cleanup재조회과거0/오늘2및삭제후13:42자연writer확인. receipt는 `tmp/panic-history-scale-analysis-20260918/deployment.json`, `cleanup-rescan.json`, `validation.json`, `result-refresh.json`, `closure.json`이다.
