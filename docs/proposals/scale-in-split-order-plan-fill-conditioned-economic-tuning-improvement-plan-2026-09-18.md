@@ -4,7 +4,7 @@
 
 **실제 체결 실적이 있을 때만 조건부 평가한다.** 장후마다 전체 pipeline을 읽어 후보0을 반복 생성하는 운영을 끝내고, 새로운 평가 가능 체결 outcome 또는 기존 체결의 유효한 후행 outcome 변경이 있을 때만 경제성 평가를 수행한다. 조건부 trigger 판정은 기존 장후 호출에서 가볍게 수행한다. 별도 cron·상시 worker·새 수집기는 만들지 않는다.
 
-상태는 **CS0–CS5 구현·반복 리뷰와 영향 계약 검증 완료**다. 사용자가 구현·commit/push·배포와 제한 장후 재생성을 승인했다. CS6 배포·결과 receipt는 [구현 review](../audit-reports/2026-09-18-scale-in-fill-conditioned-tuning-implementation-review.md)를 따른다. 실제 정책 선택·PID·자연 체결/COMPLETED 경제성은 별도이며 기존 실행 owner의 Acceptance는 OPEN이다.
+상태는 **CS0–CS6 구현·반복 리뷰·검증·commit/push·managed source 배포·제한 장후 재생성 완료**다. 자연 PID/체결/경제성 Acceptance와 전체 chain 선행 차단은 OPEN이다. 사용자가 구현·commit/push·배포와 제한 장후 재생성을 승인했다. CS6 배포·결과 receipt는 [구현 review](../audit-reports/2026-09-18-scale-in-fill-conditioned-tuning-implementation-review.md)를 따른다. 실제 정책 선택·PID·자연 체결/COMPLETED 경제성은 별도이며 기존 실행 owner의 Acceptance는 OPEN이다.
 
 - 대상: Main scalping의 실제 AVG_DOWN 추가매수 주문 분할 비율·가격 간격. 총수량·총허용예산·기존 TTL을 고정한다.
 - 상위 반등/ADD 판단은 현행 Main 공통 기계 판정과 기존 AI/주문/손절 guard가 소유한다. 독립 AVG_DOWN 반등 threshold·PYRAMID·초기진입·widget/episode/manual·Swing 튜닝을 복원하지 않는다.
