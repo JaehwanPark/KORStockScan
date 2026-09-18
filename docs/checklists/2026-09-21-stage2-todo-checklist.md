@@ -27,12 +27,12 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 ```
 
 <!-- compact_auxiliary_handoff:start -->
-<!-- compact_auxiliary_handoff_sha256:3a76e3ef4a10ef10498d804af32ee70ed01fa1a32a40e1f35a81824740817982 -->
+<!-- compact_auxiliary_handoff_sha256:6c20d49f505a096c4551527bf53762c9553458e10de1471cd861857f4bef5b13 -->
 
 ## Compact auxiliary 장후 handoff
 
-- 평가 원천 2026-09-17; 발행 2026-09-18; 적용 2026-09-21. 선정 상태 `incumbent_preserved`, 평가 상태 `source_contract_blocked`.
-- 정책 bundle `4d4bce68f1e27fe50afab4b24645406d469d701326a7bc86b91d2a121d737332`; consumer generation `5472169d13176fd6529071ec2667062379453f0e98dab6082eafc19dc2cf0698`. 실제 PID 소비 및 자연 비용 후 성과는 미확인이다.
+- 평가 원천 2026-09-17; 발행 2026-09-19; 적용 2026-09-21. 선정 상태 `incumbent_preserved`, 평가 상태 `source_contract_blocked`.
+- 정책 bundle `833053c38872f05269cf1d0fd24c2d777d3133eb2f2a07163fa304633344f07b`; consumer generation `dc2c4ffd7a3730e968bd09dbe4f1a903af24ca61588ed0c3baef16c8bca4e521`. 실제 PID 소비 및 자연 비용 후 성과는 미확인이다.
 - 기존 owner `KiwoomCommonHealthOpportunityCostAcceptance0917`; 다음 확인 `existing_main_owner_execution_cf_and_portfolio_replay` / `full_cost_stop_owner_plan_portfolio_and_forward_holdout_receipts`. 결손 net은 null이며 이 기록은 주문·guard·provider 변경 승인이 아니다.
 
 <!-- compact_auxiliary_handoff:end -->

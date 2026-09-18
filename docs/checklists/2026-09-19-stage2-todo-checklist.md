@@ -12,10 +12,12 @@
 
 ## 승인된 통합 구현
 
-- [ ] `[CompactAIPostcloseIntegration0919] Compact AI 장후 공통 조정·날짜별 정책·최종 handoff 구현` (`Due: 2026-09-19`, `Slot: POSTCLOSE`, `TimeWindow: 00:00~23:59`, `Track: AIPrompt`)
+- [x] `[CompactAIPostcloseIntegration0919] Compact AI 장후 공통 조정·날짜별 정책·최종 handoff 구현` (`Due: 2026-09-19`, `Slot: POSTCLOSE`, `TimeWindow: 00:00~23:59`, `Track: AIPrompt`)
   - Review: [구현 리뷰](../audit-reports/2026-09-19-compact-ai-postclose-integration-implementation-review.md).
   - Source: [통합 계획](../proposals/compact-ai-postclose-source-paired-evaluation-and-preopen-consumer-integration-plan-2026-09-19.md).
   - Acceptance: CI0–CI4 code review/fix/re-review·영향 검증·immutable 배포·source9/17의 명시 publication successor→effective9/21 정책·scoped strict 소비 해시 확인. 유효 비교0은 경제성 closure가 아니며 CI5 자연 수용은9/21의 기존 `KiwoomCommonHealthOpportunityCostAcceptance0917`로 인계한다. 전체 chain DONE·PID·양수EV를 fixture/배포로 대체하지 않는다.
+
+  - Code/인계 Closure: source `0e86f5d20` main/review push, selected `compact-ai-integrated-reviewed-20260919`, source9/17→publication9/19→effective9/21 정책·consumer·scoped strict PASS. 기존 machine/AI9scope 보존·provider 호출0·보호 raw 변경0. Receipt: `tmp/compact-ai-integration-20260919/`. 비교0·EV/일별 순익null·모델 holdout missing과 실제 PID 미소비는 미완료 자연 owner로 인계하며 전체 chain DONE/경제 개선 완료가 아니다.
 
 ## Limit-down 폐기 배포 완료
 
