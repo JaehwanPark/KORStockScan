@@ -32,7 +32,7 @@ Q0 exact 원천 대사, Q1 미래 terminal/retry capture·reconciliation, Q2 fin
 
 최종 source regression251 PASS, tower18 PASS(동일 날짜 전달/타 날짜 거절 포함), 이전488 source/wrapper126 및 actual retry·late·ambiguous 추가 회귀를 통과했다. Broad trading/provider suites는 해당 수정에 필요하지 않아 실행하지 않았다. Parser/compile/bash/diff는 receipt를 따른다.
 
-Final audit SHA `38d263dc2f1259e95f9087864f3543fef72c3be0b257d4fd01afa79e96621a68`: phase=final, warning, source input allowed=true, decision CF input allowed=true, operational reconciled=false, economic eligible=false, EV=null. 원337300/87 stage·unknown28와 PASS4/gap4를 보존한다. Verified raw projection body는 원 SHA와 동일하고 5.7GB raw 재독0이며 최종 census/content binding을 별도로 갱신했다. Original funnel은 as-of 원 보고서로 보존하며 population 증명 없이 전체 보고서를 최신으로 재봉인하지 않았다.
+첫 verified migration final은 원 body SHA를 보존했다. 마지막 Q2 bootstrap 경계 보완 후 final audit SHA `c36104a27ff607a053c294e16d57c9520a52d134f24aa9dba3eff72a4ba98dd2`: phase=final, warning, source input allowed=true, decision CF input allowed=true, operational reconciled=false, economic eligible=false, EV=null. 원337300/87 stage·unknown28와 PASS4/gap4를 보존한다. Verified raw projection body는 원 SHA와 동일하고 5.7GB raw 재독0이며 최종 census/content binding을 별도로 갱신했다. Original funnel은 as-of 원 보고서로 보존하며 population 증명 없이 전체 보고서를 최신으로 재봉인하지 않았다.
 
 EV/runtime summary는 동일 final artifact SHA를 소비했다. Unknown field review는 `order_observation_source_quality_unknown_token_provenance_gap`에 전달됐고 tower/checklist의 source generation handoff는 PASS이다. Compact strict는 PASS이며 next-date loader가9/21 bundle `e1cd459fb0082708658f37fe68fc4d21be7024dc17c8fbdce7641acf5df0588a`를 읽는다. 선정은 incumbent_preserved, 경제 평가 source_contract_blocked다. Execution model/exposure·exact stop·natural contract·full cost terminal 부족은 null이며 양수 EV로 포장하지 않는다.
 
@@ -41,3 +41,9 @@ EV/runtime summary는 동일 final artifact SHA를 소비했다. Unknown field r
 Full strict/controller는 새 final source binding을 검증한 뒤 기존 선행 실패·AI correction·저가주 native source·machine timing policy·Swing 및 research loop 결손을 별도로 보존한다. 이 감사 수리의 closure와 전체 native DONE=false를 분리한다. 다음 정규 PREOPEN/PID 및 신규 정상 PASS의 terminal capture/완료 비용 성과는 기존 owner Acceptance로 OPEN이다. 새 코드/정책 선택은 future invocation only이며 bot restart/orders/early PREOPEN은 하지 않는다.
 
 최종 Q2 재리뷰: final에서 projection 검증 실패가 기존 raw bootstrap으로 넘어갈 수 있는 경로를 막았다. Final은 verified aggregate 또는 원 receipt 기반 명시적 이관만 허용하며 missing/invalid aggregate는 실행 blocker다. Native preflight/manual의 기존 원천 감사 역할과 provider/order guard는 보존한다. 캐시 결손 final이 raw를 열지 않는 회귀로 확인한다.
+
+최종 code source `35947abb64e8c920424c56670544e4fab19ffe5e`는 main push를 완료했다. Bootstrap 경계 포함 감사213 PASS, native tower18 PASS와 앞선 관련488/126/251 회귀를 확인했다(중복 실행 건수는 합산하지 않는다). `closure-bound-consumer-verification.json`은 audit/EV/runtime의 동일 SHA, summary/drought/compact handoff PASS,9/21 dated loader bundle 일치를 검증한다. Code 변경 없는 문서 receipt 마무리는 동일 source content를 유지한다.
+
+`existing-funnel-final-exact-scope-parity.json`은 원 source/cache generation 및 새 stage0 census를 검증한 뒤 original cutoff19:40:05·통합 aftermarket scope에서 current reconciler의 분모와 exact4 gap key 일치를 확인한다. 전체 scope11 PASS는 원 selected scope4 PASS와 다른 분모이며 최초 조사 비교는 `receipt-index.json`에 superseded로 표시했다. Historical funnel은 원본 그대로다.
+
+최종 strict의 source-quality final binding·native unknown workorder·workorder fingerprint·summary generation·drought·cancel-wait·compact 소비는 정상이다. Whole strict는 기존 외부25 issue(선행 FAIL/marker, AI correction, 저가주 native artifact, machine timing, Swing, machine research loop)로 FAIL이며 controller는 `summary_handoff_only_requires_upstream_repair`, DONE=false다. 이 외부 owner의 재실행/정책 변경은 이번 감사 수리로 확대하지 않았다. 현행 raw/signed ledger/funnel SHA 보호·immutable source 선택 및 PREOPEN print-only routing은 `protected-source-after.json`, `deployment.json`, `preopen-router-print-plan.txt`을 따른다. 실제 PID 소비·자연 terminal/비용 EV는 미확인이다.

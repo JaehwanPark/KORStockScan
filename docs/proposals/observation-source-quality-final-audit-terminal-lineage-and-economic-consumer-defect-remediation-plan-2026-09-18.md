@@ -2,7 +2,7 @@
 
 작성일: 2026-09-18 KST
 
-상태: 후속 사용자가 Q0–Q5 구현·반복 리뷰/수정·검증·commit/push·배포 및 제한 재생성을 승인했다. [Owning review](../audit-reports/2026-09-18-observation-source-quality-final-lineage-review.md)에서 코드 closure와 원천/후행 소비/배포/자연 경제성을 분리한다. 병행 verbosity/AI decision quality 수리는 해당 세션 소유이며 이번 변경에 보존한다.
+상태: 후속 사용자 승인에 따라 Q0–Q5 구현·반복 리뷰/수정·제한 검증/재생성 및 main push를 종결했다. [Owning review](../audit-reports/2026-09-18-observation-source-quality-final-lineage-review.md)와 receipt는 final/date/hash/후행 소비·9/21 incumbent carry를 확인하며 immutable source 선택·실제 PID·자연 경제성을 분리한다. 외부 whole-native FAIL 및 과거 source gap은 보존한다.
 
 ## 1. 목적과 우선순위
 
