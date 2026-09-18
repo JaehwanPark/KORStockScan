@@ -65612,9 +65612,22 @@ def _observe_entry_submit_finished(stock, code, outcome):
 
 @observe_submit_attempt(on_finish=_observe_entry_submit_finished)
 def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
-    if runtime.get("scout_upgrade_entry") or runtime.get("rising_missed_one_share_entry_forced") or str(runtime.get("forced_entry_reason") or "") == RISING_MISSED_FORCED_ENTRY_REASON:
-        return False
-    if stock.get("rising_missed_one_share_entry_forced") and str(stock.get("status") or "").upper() in {"WATCHING", "WATCHING_AI"}:
+    retired_scout_intent = any(
+        _truthy_field(source.get(key))
+        for source in (runtime, stock)
+        for key in (
+            "scout_upgrade_entry",
+            "rising_missed_one_share_entry_forced",
+            "rising_missed_one_share_scout",
+            "rising_missed_scout_upgrade_pending",
+            "rising_missed_scout_upgrade_order_pending",
+        )
+    ) or any(
+        str(source.get("forced_entry_reason") or "").strip().lower()
+        == RISING_MISSED_FORCED_ENTRY_REASON
+        for source in (runtime, stock)
+    )
+    if retired_scout_intent:
         return False
     bind_submit_attempt_machine_lineage(
         stock,
@@ -65728,19 +65741,9 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             ),
         )
         return False
-    scout_upgrade_entry = bool(
-        runtime.get("scout_upgrade_entry")
-    ) and _is_rising_missed_one_share_scout_holding(
-        stock,
-        strategy=strategy,
-        pos_tag=runtime.get("pos_tag") or stock.get("position_tag"),
-    )
+    scout_upgrade_entry = False
     forced_rising_missed_one_share = False
-    forced_rising_missed_scout_qty = (
-        _rising_missed_forced_scout_qty(stock, runtime)
-        if forced_rising_missed_one_share
-        else 0
-    )
+    forced_rising_missed_scout_qty = 0
     opening_owner_fields = _opening_rotation_watch_slot_owner_fields(
         stock, now_ts=_safe_float(now_ts, time.time())
     )
@@ -65808,100 +65811,8 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         )
         return False
 
-    cooldown_until = (
-        _safe_float(cooldowns.get(code), 0.0) if isinstance(cooldowns, dict) else 0.0
-    )
-    if forced_rising_missed_one_share and cooldown_until > _safe_float(now_ts, 0.0):
-        cooldown_remaining_sec = max(0, int(cooldown_until - _safe_float(now_ts, 0.0)))
-        _mutate_stock_state(
-            stock,
-            pop_fields=[
-                "rising_missed_one_share_entry_forced",
-                "rising_missed_one_share_scout",
-                "rising_missed_scout_upgrade_pending",
-                "forced_entry_qty",
-                "forced_entry_reason",
-                "target_buy_price",
-            ],
-        )
-        clear_signal_reference(stock)
-        _log_entry_pipeline(
-            stock,
-            code,
-            "rising_missed_one_share_entry_submit_blocked",
-            block_reason="entry_cooldown_active",
-            forced_entry_reason=RISING_MISSED_FORCED_ENTRY_REASON,
-            forced_entry_qty=forced_rising_missed_scout_qty,
-            cooldown_remaining_sec=cooldown_remaining_sec,
-            metric_role="safety_veto",
-            decision_authority="rising_missed_one_share_entry_cooldown_guard",
-            window_policy="same_day_intraday_runtime_state",
-            sample_floor="not_applicable_safety_veto",
-            primary_decision_metric="cooldown_remaining_sec",
-            source_quality_gate="runtime_cooldown_state_present",
-            runtime_effect=True,
-            allowed_runtime_apply=False,
-            actual_order_submitted=False,
-            broker_order_forbidden=True,
-            forbidden_uses=TRADE_QUALITY_RUNTIME_FORBIDDEN_USES,
-        )
-        return False
 
-    if forced_rising_missed_one_share and (
-        _has_open_pending_entry_orders(stock) or _already_holding_entry_position(stock)
-    ):
-        block_reason = (
-            RISING_MISSED_BLOCK_OPEN_PENDING
-            if _has_open_pending_entry_orders(stock)
-            else RISING_MISSED_BLOCK_ALREADY_HOLDING
-        )
-        _log_entry_pipeline(
-            stock,
-            code,
-            "rising_missed_one_share_entry_submit_blocked",
-            block_reason=block_reason,
-            forced_entry_reason=RISING_MISSED_FORCED_ENTRY_REASON,
-            forced_entry_qty=forced_rising_missed_scout_qty,
-            actual_order_submitted=False,
-            broker_order_forbidden=True,
-            runtime_effect=False,
-        )
-        return False
 
-    if forced_rising_missed_one_share:
-        price_cap = _rising_missed_one_share_entry_max_price_krw()
-        forced_entry_price = (
-            _safe_int(curr_price, 0)
-            or _safe_int((ws_data or {}).get("curr"), 0)
-            or _safe_int(stock.get("target_buy_price"), 0)
-            or _safe_int(stock.get("curr_price"), 0)
-        )
-        if price_cap > 0 and forced_entry_price > price_cap:
-            _mutate_stock_state(
-                stock,
-                pop_fields=[
-                    "rising_missed_one_share_entry_forced",
-                    "rising_missed_one_share_scout",
-                    "rising_missed_scout_upgrade_pending",
-                    "forced_entry_qty",
-                    "forced_entry_reason",
-                    "target_buy_price",
-                ],
-            )
-            _log_entry_pipeline(
-                stock,
-                code,
-                "rising_missed_one_share_entry_submit_blocked",
-                block_reason=RISING_MISSED_BLOCK_PRICE_ABOVE_CAP,
-                forced_entry_reason=RISING_MISSED_FORCED_ENTRY_REASON,
-                forced_entry_qty=forced_rising_missed_scout_qty,
-                rising_missed_one_share_entry_price=forced_entry_price,
-                rising_missed_one_share_entry_price_cap_krw=price_cap,
-                actual_order_submitted=False,
-                broker_order_forbidden=True,
-                runtime_effect=True,
-            )
-            return False
 
     upper_limit_block = _upper_limit_entry_block_fields(
         strategy=strategy,
@@ -65910,28 +65821,12 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         runtime=runtime,
     )
     if upper_limit_block.get("blocked"):
-        if forced_rising_missed_one_share:
-            _mutate_stock_state(
-                stock,
-                pop_fields=[
-                    "rising_missed_one_share_entry_forced",
-                    "rising_missed_one_share_scout",
-                    "rising_missed_scout_upgrade_pending",
-                    "forced_entry_qty",
-                    "forced_entry_reason",
-                    "target_buy_price",
-                ],
-            )
         clear_signal_reference(stock)
         _log_entry_pipeline(
             stock,
             code,
             "upper_limit_entry_proximity_block",
-            forced_entry_reason=(
-                RISING_MISSED_FORCED_ENTRY_REASON
-                if forced_rising_missed_one_share
-                else "-"
-            ),
+            forced_entry_reason="-",
             forced_entry_qty=forced_rising_missed_scout_qty,
             actual_order_submitted=False,
             broker_order_forbidden=True,
@@ -66004,28 +65899,10 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             sizing_venue_resolution,
         ) = _resolve_entry_sizing_effective_venue(stock, runtime)
         allocation_stage = (
-            "rising_missed_scout_initial"
-            if forced_rising_missed_one_share
-            else (
-                "rising_missed_scout_upgrade"
-                if scout_upgrade_entry
-                else (
-                    "opening_rotation_initial"
-                    if opening_rotation_active
-                    else "initial_entry"
-                )
-            )
+            "opening_rotation_initial" if opening_rotation_active else "initial_entry"
         )
-        initial_tier = (
-            _safe_int(stock.get("scalping_sizing_tier"), 0)
-            if scout_upgrade_entry
-            else None
-        )
-        initial_formula_version = (
-            str(stock.get("scalping_sizing_formula_version") or "")
-            if scout_upgrade_entry
-            else None
-        )
+        initial_tier = None
+        initial_formula_version = None
         sizing_context = ScalpingSizingContext(
             allocation_stage=allocation_stage,
             reference_time=sizing_reference_time,
@@ -66105,18 +65982,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         used_safety_ratio = sizing_decision.safety_ratio
         runtime["ratio"] = ratio
         runtime["scalping_sizing_decision"] = sizing_fields
-        if forced_rising_missed_one_share and real_buy_qty > 0:
-            _mutate_stock_state(
-                stock,
-                set_fields={
-                    "forced_entry_qty": real_buy_qty,
-                    "rising_missed_scout_sizing_mode": (
-                        SCALPING_SIZING_FORMULA_VERSION
-                    ),
-                },
-            )
-            runtime["forced_entry_qty"] = real_buy_qty
-            forced_rising_missed_scout_qty = real_buy_qty
     else:
         target_budget, safe_budget, real_buy_qty, used_safety_ratio = (
             kiwoom_orders.describe_buy_capacity(
@@ -66215,11 +66080,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             min_one_share_floor_enabled=min_one_share_floor_enabled,
             min_one_share_floor_applied=False,
             rising_missed_one_share_entry_forced=forced_rising_missed_one_share,
-            forced_entry_reason=(
-                RISING_MISSED_FORCED_ENTRY_REASON
-                if forced_rising_missed_one_share
-                else "-"
-            ),
+            forced_entry_reason="-",
             forced_entry_qty=forced_rising_missed_scout_qty,
             auth_return_code=(auth_failure or {}).get("return_code", "-"),
             auth_return_msg=(auth_failure or {}).get("return_msg", "-"),
@@ -66295,9 +66156,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         min_one_share_floor_enabled=min_one_share_floor_enabled,
         min_one_share_floor_applied=min_one_share_floor_applied,
         rising_missed_one_share_entry_forced=forced_rising_missed_one_share,
-        forced_entry_reason=(
-            RISING_MISSED_FORCED_ENTRY_REASON if forced_rising_missed_one_share else "-"
-        ),
+        forced_entry_reason="-",
         forced_entry_qty=forced_rising_missed_scout_qty,
         deposit_source=deposit_meta.get("source", "-"),
         deposit_age_sec=deposit_meta.get("age_sec", "-"),
@@ -66397,13 +66256,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             real_buy_qty = sizing_decision.effective_qty
             used_safety_ratio = sizing_decision.safety_ratio
             runtime["scalping_sizing_decision"] = sizing_fields
-            if forced_rising_missed_one_share:
-                forced_rising_missed_scout_qty = real_buy_qty
-                runtime["forced_entry_qty"] = real_buy_qty
-                _mutate_stock_state(
-                    stock,
-                    set_fields={"forced_entry_qty": real_buy_qty},
-                )
             _log_entry_pipeline(
                 stock,
                 code,
@@ -67257,11 +67109,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 stock,
                 code,
                 "entry_mechanistic_price_contract_block",
-                forced_entry_reason=(
-                    RISING_MISSED_FORCED_ENTRY_REASON
-                    if forced_rising_missed_one_share
-                    else "-"
-                ),
+                forced_entry_reason="-",
                 forced_entry_qty=forced_rising_missed_scout_qty,
                 block_reason=block_reason,
                 decision_authority="mechanistic_entry_price_contract_fail_closed",
@@ -67415,11 +67263,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             stock,
             code,
             "pre_submit_micro_unavailable_block",
-            forced_entry_reason=(
-                RISING_MISSED_FORCED_ENTRY_REASON
-                if forced_rising_missed_one_share
-                else "-"
-            ),
+            forced_entry_reason="-",
             forced_entry_qty=forced_rising_missed_scout_qty,
             **_merge_entry_pipeline_field_groups(
                 latency_price_snapshot,
@@ -67472,11 +67316,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             stock,
             code,
             "rising_missed_tp1_source_gap_relief_applied",
-            forced_entry_reason=(
-                RISING_MISSED_FORCED_ENTRY_REASON
-                if forced_rising_missed_one_share
-                else "-"
-            ),
+            forced_entry_reason="-",
             forced_entry_qty=forced_rising_missed_scout_qty,
             **weak_ai_micro_entry_block,
         )
@@ -67555,11 +67395,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             stock,
             code,
             "real_weak_ai_micro_entry_block",
-            forced_entry_reason=(
-                RISING_MISSED_FORCED_ENTRY_REASON
-                if forced_rising_missed_one_share
-                else "-"
-            ),
+            forced_entry_reason="-",
             forced_entry_qty=forced_rising_missed_scout_qty,
             **_merge_entry_pipeline_field_groups(
                 latency_price_snapshot,
@@ -67595,60 +67431,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             now_ts=now_ts,
         )
     )
-    if forced_rising_missed_one_share and weak_micro_reentry_block.get("blocked"):
-        weak_micro_reentry_backoff_fields = _record_rising_missed_submit_safety_backoff(
-            stock,
-            code,
-            weak_micro_reentry_block.get("block_reason") or "weak_micro",
-            now_ts=now_ts,
-            source_stage="rising_missed_same_symbol_weak_micro_reentry_blocked",
-            runtime=runtime,
-        )
-        log_info(
-            f"[RISING_MISSED_WEAK_MICRO_REENTRY_BLOCK] {stock.get('name')}({code}) "
-            f"prior={weak_micro_reentry_block.get('prior_record_id')} "
-            f"qi={weak_micro_reentry_block.get('orderbook_micro_qi')} "
-            f"reason={weak_micro_reentry_block.get('block_reason')}"
-        )
-        _mutate_stock_state(
-            stock,
-            pop_fields=[
-                "rising_missed_one_share_entry_forced",
-                "rising_missed_one_share_scout",
-                "rising_missed_scout_upgrade_pending",
-                "forced_entry_qty",
-                "forced_entry_reason",
-                "target_buy_price",
-            ],
-        )
-        clear_signal_reference(stock)
-        _log_entry_pipeline(
-            stock,
-            code,
-            "rising_missed_same_symbol_weak_micro_reentry_blocked",
-            forced_entry_reason=RISING_MISSED_FORCED_ENTRY_REASON,
-            forced_entry_qty=forced_rising_missed_scout_qty,
-            **_merge_entry_pipeline_field_groups(
-                latency_price_snapshot,
-                entry_orderbook_micro_fields,
-                weak_micro_reentry_block,
-                weak_micro_reentry_backoff_fields,
-            ),
-        )
-        _emit_scalp_entry_adm_snapshot(
-            stock,
-            code,
-            "rising_missed_same_symbol_weak_micro_reentry_blocked",
-            ai_score=latency_signal_score,
-            chosen_action="WAIT_REQUOTE",
-            latency_gate=latency_gate,
-            price_snapshot=latency_price_snapshot,
-            orderbook_fields=entry_orderbook_micro_fields,
-            actual_order_submitted=False,
-            broker_order_forbidden=True,
-            extra_fields=weak_micro_reentry_block,
-        )
-        return False
     rising_missed_tick_speed_guard = _evaluate_rising_missed_tick_speed_entry_guard(
         stock=stock,
         runtime=runtime,
@@ -67756,11 +67538,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             stock,
             code,
             "rising_missed_tick_speed_entry_block",
-            forced_entry_reason=(
-                RISING_MISSED_FORCED_ENTRY_REASON
-                if forced_rising_missed_one_share
-                else "-"
-            ),
+            forced_entry_reason="-",
             forced_entry_qty=forced_rising_missed_scout_qty,
             **_merge_entry_pipeline_field_groups(
                 latency_price_snapshot,
@@ -67791,11 +67569,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             stock,
             code,
             "rising_missed_tick_absolute_throughput_relief_applied",
-            forced_entry_reason=(
-                RISING_MISSED_FORCED_ENTRY_REASON
-                if forced_rising_missed_one_share
-                else "-"
-            ),
+            forced_entry_reason="-",
             forced_entry_qty=forced_rising_missed_scout_qty,
             **_merge_entry_pipeline_field_groups(
                 latency_price_snapshot,
@@ -67861,11 +67635,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             stock,
             code,
             "rising_missed_reversal_pre_submit_block",
-            forced_entry_reason=(
-                RISING_MISSED_FORCED_ENTRY_REASON
-                if forced_rising_missed_one_share
-                else "-"
-            ),
+            forced_entry_reason="-",
             forced_entry_qty=forced_rising_missed_scout_qty,
             **_merge_entry_pipeline_field_groups(
                 latency_price_snapshot,
@@ -67889,25 +67659,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             extra_fields=rising_missed_reversal_pre_submit_guard,
         )
         return False
-    if forced_rising_missed_one_share:
-        # Rising-missed is a selection lineage.  Keep the common probe-first /
-        # multi-leg plan and never collapse the allocator's total quantity.
-        _log_entry_pipeline(
-            stock,
-            code,
-            "rising_missed_scout_allocator_order_plan",
-            forced_entry_reason=RISING_MISSED_FORCED_ENTRY_REASON,
-            forced_entry_qty=requested_qty,
-            planned_order_count=len(planned_orders),
-            planned_order_total_qty=sum(
-                max(0, _safe_int(order.get("qty"), 0)) for order in planned_orders
-            ),
-            planned_order_price=(
-                planned_orders[0].get("price", 0) if planned_orders else 0
-            ),
-            actual_order_submitted=False,
-            broker_order_forbidden=False,
-        )
     observed_mark_gap_fields = _build_observed_mark_gap_guard_fields(
         ws_data,
         latency_gate,
@@ -69585,10 +69336,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             runtime["scalping_sizing_decision"] = sizing_fields
         requested_qty = _entry_planned_total_qty(planned_orders)
         latency_gate["orders"] = planned_orders
-        if forced_rising_missed_one_share:
-            forced_rising_missed_scout_qty = requested_qty
-            runtime["forced_entry_qty"] = requested_qty
-            _mutate_stock_state(stock, set_fields={"forced_entry_qty": requested_qty})
         _log_entry_pipeline(
             stock,
             code,
@@ -71165,11 +70912,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 ),
                 **_entry_price_ai_trace_fields(submit_revalidation_fields),
                 **(
-                    freeze_scout_ai_parent_fields(stock)
-                    if forced_rising_missed_one_share
-                    else {}
-                ),
-                **(
                     {
                         "ai_score": 0.0,
                         "mechanical_signal_strength": latency_signal_strength,
@@ -71463,16 +71205,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
     # as a failed submit.
     mark_submit_attempt_broker_accepted(stock, code)
     _mutate_stock_state(stock, set_fields={"entry_mode": entry_mode})
-    if scout_upgrade_entry:
-        _mutate_stock_state(
-            stock,
-            set_fields={
-                "rising_missed_scout_upgrade_order_pending": True,
-                "rising_missed_scout_upgrade_pending": False,
-                "rising_missed_scout_upgrade_submitted_at": now_ts,
-                "rising_missed_scout_upgrade_reason": "normal_buy_signal",
-            },
-        )
     _finalize_buy_order_submission(
         stock=stock,
         code=code,
@@ -72362,37 +72094,6 @@ def _already_holding_entry_position(stock) -> bool:
     )
 
 
-def _is_rising_missed_one_share_scout_holding(
-    stock, *, strategy: str, pos_tag: str
-) -> bool:
-    """Return whether the legacy rising-missed scout target is fully held.
-
-    ``one_share`` is a legacy identifier, not a quantity contract.  The scout
-    owns the dynamically sized total entry quantity; probe-first separately
-    owns the one-share market execution leg.
-    """
-    if not isinstance(stock, dict):
-        return False
-    if normalize_strategy(strategy) != "SCALPING":
-        return False
-    if normalize_position_tag(strategy, pos_tag) != "SCANNER":
-        return False
-    if str(stock.get("status") or "").strip().upper() != "HOLDING":
-        return False
-    if not bool(stock.get("rising_missed_one_share_scout")):
-        return False
-    if bool(stock.get("rising_missed_scout_upgraded")):
-        return False
-    scout_qty = _rising_missed_forced_scout_qty(stock, {})
-    if _safe_int(stock.get("buy_qty"), 0) != scout_qty:
-        return False
-    if _safe_int(stock.get("entry_filled_qty"), 0) > scout_qty:
-        return False
-    if bool(stock.get("rising_missed_scout_upgrade_order_pending")):
-        return False
-    if _has_open_pending_entry_orders(stock):
-        return False
-    return True
 
 
 

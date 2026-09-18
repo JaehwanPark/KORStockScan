@@ -24,3 +24,14 @@
 - 실제 전용 생산자0/Main PID0 확인, 전용 산출물4,987개 삭제 및 exclusive stale enabled operator override1block 제거. 다른 세션 source와 다른 override·프로세스·정책은 유지했다.
 - 승인된 기존 commit/push/deploy 권한 내 immutable `rising-missed-scout-retired-20260918` release 선택에 사용할 source는 이 review를 포함한 commit이다. 정확한 SHA·원격·selector CAS·actual Main PID 상태는 `tmp/rising-missed-scout-retirement-20260918/deployment.json`에서 확인한다. 공유 data mount와 역사적 selected source는 혼동하지 않는다.
 - 실제 주문/provider/API 호출·전체 장후 재생성·성능 확장·Main restart 및 외부 sync는 생략했다. 기존 PREOPEN integrated-entry handoff 결손은 폐기 작업의 해소 대상이 아니며 Main 기동/PID 증거로 대체하지 않는다.
+
+## 추가 사용자 승인 후 최종 재리뷰
+
+사용자가 코드리뷰·수리 반복 및 commit/push·배포·기동을 승인하고 과거 전용 산출물 모두 삭제를 재지시했다. 이전 선택 source는 `2559e30240cd16839cd3ceb2e0b33bfcf49dfa81`; 아래는 후속 검증이며 Main 기동 성공이나 신규 경제성 증명이 아니다.
+
+- 공통 submit의 과거 강제 진입/upgrade 실행 분기·표현식25개와 upgrade 전용 holding predicate를 제거했다. 이미 퇴역한 actor를 재도입하지 않고 공통 sizing/주문/safety와 별도 체결 정산을 유지한다.
+- runtime 또는 stock에 남은 forced/scout/upgrade intent를 모든 status에서 lineage/budget/broker 접근 전에 차단한다. 이유 토큰의 대소문자/공백도 정규화하며 `"false"`/`"0"` 플래그는 일반 진입을 차단하지 않는다. 과거 pending/order/보유량은 변경하지 않는다. 4개 status×5개 intent20건 및 false flag2건 회귀를 추가했다.
+- 최종 runtime/producer/consumer 회귀 **2,298 PASS**, Python compile·wrapper/launcher bash syntax·diff PASS. 검증 중 source formatting 변경과 겹친 inspect source 조회2건은 안정화된 source 전체 재검증에서 통과했다. 이 실패 로그를 최종 PASS로 재사용하지 않았다.
+- 전용 과거 산출물 삭제96 roots/4,987 files/38,521,941 bytes의 manifest를 유지하고 프로젝트·worktree·release의 data/logs/tmp 13,474개 디렉터리를 metadata로 추가 검색했다. 남은 전용 보고서/복사본0; 혼합 실제 주문·정산·COMPLETED 원장과 일반 missed-entry 연구는 유지한다.
+- 후속 receipt는 `tmp/rising-missed-scout-final-review-20260918/validation.json`, `workspace-integration.json`, `additional-artifact-scan.json`, `deployment.json`, `startup.json`을 따른다. 불변 release `rising-missed-scout-final-reviewed-20260918` 선택과 Main PID 소비를 분리한다. 승인된 canonical start는 strict dated handoff를 그대로 통과해야 한다.
+- 사전 readonly PREOPEN 확인은 `runtime_env_handoff_missing`이다. 동일 날짜 integrated Main entry 자동 publisher/PREOPEN의 유효 policy/projection/manifest/date/hash→strict verify PASS→canonical start→실제 child/PID attestation이 기존 owner의 closure다. 이전 정책 날짜 변경/복사나 guard·수량·provider 우회는 수행하지 않는다. 전체 비싼 장후 재실행과 성능 확장은 이 재리뷰에서 수행하지 않는다.

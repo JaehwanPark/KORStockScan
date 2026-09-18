@@ -2781,35 +2781,6 @@ def test_upper_limit_submit_hard_block_keeps_default_27_pct_boundary(monkeypatch
 
 
 
-def test_rising_missed_scout_holding_accepts_capped_forced_qty():
-    stock = {
-        "status": "HOLDING",
-        "strategy": "SCALPING",
-        "position_tag": "SCANNER",
-        "rising_missed_one_share_scout": True,
-        "rising_missed_one_share_entry_forced": True,
-        "forced_entry_qty": 5,
-        "forced_entry_reason": FORCED_ENTRY_REASON,
-        "buy_qty": 5,
-        "entry_filled_qty": 5,
-    }
-
-    assert (
-        state_handlers._is_rising_missed_one_share_scout_holding(
-            stock,
-            strategy="SCALPING",
-            pos_tag="SCANNER",
-        )
-        is True
-    )
-    assert (
-        state_handlers._is_rising_missed_one_share_scout_holding(
-            {**stock, "buy_qty": 6},
-            strategy="SCALPING",
-            pos_tag="SCANNER",
-        )
-        is False
-    )
 
 
 
@@ -42432,3 +42403,36 @@ def test_retired_rising_missed_restored_watching_intent_cannot_submit(monkeypatc
     monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", forbidden)
     stock = {"status": "WATCHING", "rising_missed_one_share_entry_forced": True}
     assert state_handlers._submit_watching_triggered_entry(stock, "005930", {}, None, {}) is False
+
+
+@pytest.mark.parametrize("status", ["WATCHING", "WATCHING_AI", "HOLDING", "BUY_ORDERED"])
+@pytest.mark.parametrize("intent", [
+    {"rising_missed_one_share_entry_forced": "true"},
+    {"rising_missed_one_share_scout": True},
+    {"rising_missed_scout_upgrade_pending": True},
+    {"rising_missed_scout_upgrade_order_pending": True},
+    {"forced_entry_reason": " RISING_MISSED_ONE_SHARE_ENTRY "},
+])
+def test_retired_scout_restored_state_never_mints_new_entry(status, intent, monkeypatch):
+    def forbidden(*args, **kwargs):
+        pytest.fail("retired scout reached shared entry lineage or broker budget")
+    monkeypatch.setattr(state_handlers, "bind_submit_attempt_machine_lineage", forbidden)
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", forbidden)
+    pending = [{"order_id": "historical", "status": "PARTIAL", "filled_qty": 1}]
+    stock = {"status": status, "buy_qty": 1, "pending_entry_orders": pending, **intent}
+    assert state_handlers._submit_watching_triggered_entry(stock, "005930", {}, None, {}) is False
+    assert stock["status"] == status
+    assert stock["buy_qty"] == 1
+    assert stock["pending_entry_orders"] == pending
+
+
+@pytest.mark.parametrize("source", ["runtime", "stock"])
+def test_retired_scout_false_flags_keep_ordinary_submit_path(source, monkeypatch):
+    def ordinary(*args, **kwargs):
+        raise RuntimeError("ordinary_entry_reached")
+    monkeypatch.setattr(state_handlers, "bind_submit_attempt_machine_lineage", ordinary)
+    flags = {"rising_missed_one_share_entry_forced": "false", "scout_upgrade_entry": "0"}
+    stock = flags if source == "stock" else {}
+    runtime = flags if source == "runtime" else {}
+    with pytest.raises(RuntimeError, match="ordinary_entry_reached"):
+        state_handlers._submit_watching_triggered_entry(stock, "005930", {}, None, runtime)
