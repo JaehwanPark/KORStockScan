@@ -31,3 +31,6 @@ Executable owner는 당일 `ScannerLookupAttentionConsolidation0918` 하나이�
 
 
 검증은 최초 관련 전체617 PASS 및 마지막 source 참조 수리 후 affected decoder/resource74 PASS다. Python compile/bash/diff/print-only parser·원분모 보존·actual fact 재결속·Daily/EV/summary/strict의 동일 section SHA 및9/21 inactive loader를 확인했다. Source commit과 최종 선택 release는 `deployment-final.json`을 따른다. 삭제 예정28개 standalone JSON/MD/reuse receipt는 source/reference/SHA와 compact preservation을 검사하고 `deleted-products.json`의 실제 unlink 결과만 최종 삭제 증거로 인정한다.
+
+
+최종 bounded export 보완: 원분모 기준 일별 resource 관측은 최대58,532행이다. 현재 일자는 existing incremental state에서 수집하지만 historical report에는 이미 평가가 선택한 complete partition/후행 label proof와 exact entry/fill/conversion receipt만 내보내고 raw census는 lineage·원본에 보존한다. Report/state의 중복 저장을 무심코 history giant-state 조회로 확대하지 않는다. 기존 sampling/전체 live universe/partition/quantity/guard는 동일하며 snapshot economics 보존·필요 receipt 보존·축약 export를 기존 test에서 검증했다. 최종 관련 decoder/resource75 PASS·compile/diff와 문서 print-only parser를 완료했다. 최종 source/PREOPEN/consumer SHA와 실제삭제28개·26,377,207bytes는 owning receipts를 따른다.

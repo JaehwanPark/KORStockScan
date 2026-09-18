@@ -662,7 +662,7 @@ def integrated_selection_evaluation(target, events_by_date, *, predecessor=None,
     # publisher is zero-only; archive campaign helpers retain archive authority.
     prior_policy = {}
     # Completion revisions and model/source version are in the final input hash.
-    fingerprint = canonical_sha256({"contract": INTEGRATED_CONTRACT, "evaluator_revision": 1,
+    fingerprint = canonical_sha256({"contract": INTEGRATED_CONTRACT, "evaluator_revision": 2,
         "events": events_by_date, "facts": facts, "master": master,
         "source_quality": source_quality, "migration": migration, "cost_contract": COST_CONTRACT,
         "prior_policy": prior_policy})
@@ -685,6 +685,13 @@ def integrated_selection_evaluation(target, events_by_date, *, predecessor=None,
     gaps = ["original_unselected_entry_recipe_quantity_guard_missing",
             "exact_fill_exit_cost_counterfactual_replay_missing",
             "same_budget_portfolio_capital_path_missing"]
+    # Historical report inputs must stay compact. Daily native resource census
+    # reaches 58k rows; serialize only the already selected complete proof keys.
+    # Exact entry/fill/conversion receipts and raw census diagnostics survive.
+    proof_keys = {(row["observation_date"], row["scan_generation_id"], row["stock_code"]) for row in rows}
+    native_events = [event for event in events_by_date.get(target.isoformat(), [])
+        if event.get("stage") not in {"scalping_scanner_candidate_promoted", "scalping_scanner_candidate_pruned"}
+        or (event.get("emitted_date"), (event.get("fields") or {}).get("scanner_scan_generation_id"), event.get("stock_code")) in proof_keys]
     result = {"contract_version": INTEGRATED_CONTRACT, "target_date": target.isoformat(),
         "input_sha256": fingerprint, "status": "source_gap", "metric_role": "primary_ev",
         "evaluation_phase": "postclose_final", "generated_at": datetime.now(ZoneInfo("Asia/Seoul")).isoformat(),
@@ -696,7 +703,8 @@ def integrated_selection_evaluation(target, events_by_date, *, predecessor=None,
         "sample_floor": {"real_total": 20, "real_dates": 5, "real_cohort": 10, "real_cohort_dates": 3,
                          "paired": 3, "paired_dates": 2},
         "forbidden_uses": ["snapshot_as_execution_ev", "cohort_mean_as_causal_uplift", "source_gap_as_zero_or_no_edge"],
-        "native_events": events_by_date.get(target.isoformat(), []),
+        "native_events": native_events,
+        "native_resource_export_scope": "bounded_complete_partition_label_proofs;raw_census_in_lineage_and_original_pipeline",
         "historical_migration_diagnostics": migration,
         "lineage": lineage, "source_quality": source_quality, "official_symbol_master": master,
         "exclusions": exclusions, "resource_pair_rows": rows,
