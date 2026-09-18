@@ -56,8 +56,8 @@ def test_unobserved_symbols_become_bounded_next_trading_day_targets():
     )
 
     assert payload["effective_date"] == "2026-08-18"
-    assert payload["budget"]["selected_symbol_count"] == 2
-    assert payload["budget"]["overflow_symbol_count"] == 1
+    assert payload["budget"]["selected_symbol_count"] == 3
+    assert payload["budget"]["overflow_symbol_count"] == 0
     assert payload["selected_targets"][0]["symbol"] == "111111"
     assert payload["selected_targets"][0]["registration_item"] == "111111_AL"
     assert all(
@@ -437,7 +437,7 @@ def test_single_symbol_budget_keeps_active_owner_ahead_of_prospective_owner():
         max_symbols=1,
     )
 
-    assert [row["symbol"] for row in payload["selected_targets"]] == ["111111"]
+    assert [row["symbol"] for row in payload["selected_targets"]] == ["111111", "222222"]
 
 
 def test_active_owner_full_coverage_precedes_prospective_rotation_budget():
@@ -469,14 +469,16 @@ def test_active_owner_full_coverage_precedes_prospective_rotation_budget():
         "111111",
         "222222",
         "333333",
+        "444444",
     ]
-    assert all(row["active_owner"] for row in payload["selected_targets"])
-    assert payload["budget"]["prospective_reserve_applied"] == 0
+    assert all(row["active_owner"] for row in payload["selected_targets"][:3])
+    assert payload["selected_targets"][3]["active_owner"] is False
+    assert payload["budget"]["prospective_reserve_applied"] == 1
     assert payload["budget"]["active_owner_candidate_count"] == 3
     assert payload["budget"]["selected_active_owner_count"] == 3
     assert payload["budget"]["active_owner_overflow_count"] == 0
     assert payload["budget"]["active_owner_exact_route_full_coverage"] is True
-    assert [row["symbol"] for row in payload["overflow_targets"]] == ["444444"]
+    assert payload["overflow_targets"] == []
 
 
 def test_actual_widget_execution_priority_does_not_drop_other_active_owner():
@@ -546,6 +548,9 @@ def test_loader_rejects_active_owner_hidden_in_prospective_overflow(tmp_path):
                     "symbol": "111111",
                     "expected_venues": ["SOR"],
                     "gap_class": "micro_symbol_not_observed",
+                },
+                {
+                    "owner": "widget", "scope_id": "extra_research", "scope_kind": "prospective_widget_research", "symbol": "333333", "expected_venues": ["KRX"], "gap_class": "micro_symbol_not_observed",
                 },
                 {
                     "owner": "widget",
@@ -690,3 +695,44 @@ def test_loader_remains_compatible_with_exact_date_v1_artifact(tmp_path):
 
     assert loaded["status"] == "loaded"
     assert loaded["registration_items"] == ["555555"]
+
+
+def test_independent_prospective_budget_round_trip_and_legacy_contract(tmp_path):
+    report = _report([
+        {"owner": "episode", "scope_id": "active", "scope_kind": "active_episode_owner", "symbol": "111111", "expected_venues": ["SOR"], "gap_class": "micro_symbol_not_observed"},
+        {"owner": "widget", "scope_id": "research", "scope_kind": "prospective_widget_research", "symbol": "222222", "expected_venues": ["KRX"], "gap_class": "micro_symbol_not_observed"},
+    ])
+    payload = build_collection_targets(report, max_symbols=1)
+    write_collection_targets(payload, root=tmp_path)
+    assert load_exact_date_collection_targets(payload["effective_date"], root=tmp_path)["status"] == "loaded"
+    assert payload["budget"]["selected_prospective_owner_count"] == 1
+    # Previously published shared-budget v3 artifacts still validate unchanged.
+    prospective = payload["selected_targets"].pop()
+    payload["overflow_targets"] = [prospective]
+    budget = payload["budget"]
+    budget.pop("prospective_budget_policy")
+    budget.update(max_symbols=1, selected_symbol_count=1, selected_registration_item_count=1,
+                  overflow_symbol_count=1, selected_prospective_owner_count=0, prospective_overflow_count=1, prospective_reserve_applied=0)
+    write_collection_targets(payload, root=tmp_path)
+    assert load_exact_date_collection_targets(payload["effective_date"], root=tmp_path)["status"] == "loaded"
+
+
+def test_prospective_budget_respects_remaining_registration_capacity(tmp_path):
+    gaps = [
+        {"owner": "episode", "scope_id": f"active_{index}",
+         "scope_kind": "active_episode_owner", "symbol": f"{index:06d}",
+         "expected_venues": ["KRX", "NXT", "SOR"],
+         "gap_class": "micro_symbol_not_observed"}
+        for index in range(1, 134)
+    ] + [
+        {"owner": "widget", "scope_id": f"research_{index}",
+         "scope_kind": "prospective_widget_research", "symbol": f"{index:06d}",
+         "expected_venues": ["KRX"], "gap_class": "micro_symbol_not_observed"}
+        for index in (222222, 333333)
+    ]
+    payload = build_collection_targets(_report(gaps))
+    assert payload["budget"]["selected_registration_item_count"] == 400
+    assert payload["budget"]["selected_prospective_owner_count"] == 1
+    assert payload["budget"]["prospective_overflow_count"] == 1
+    write_collection_targets(payload, root=tmp_path)
+    assert load_exact_date_collection_targets(payload["effective_date"], root=tmp_path)["status"] == "loaded"
