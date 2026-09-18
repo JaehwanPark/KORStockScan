@@ -34,9 +34,16 @@
 
 producer→진행 receipt/checkpoint→정식 writer→공동 refresh/새 policy 소비와 native-capacity 수집 순서를 review/fix/re-review했다. 마지막 보완은 report write 전 완료 marker 방지, 새 generation과 기존 보고서의 지문 결속, 원천 snapshot 변경 시 완료 checkpoint 재사용 금지이다. 변경된 경로의 최종 검증은 `tmp/low-price-full-research-20260918/closure-resume-final-validation.txt`, 기존 69PASS와 이번95/103/109PASS는 각 당시 diff의 검증이다.
 
-전체 영향5suite 실행은288PASS/3FAIL이었다. FAIL3개는 현행 다른 세션의 postclose wrapper 변경과 이전 checkpoint/scout 경로를 기대하는 테스트의 불일치이며 이번 연구 수리에서 퇴역 경로를 복원하지 않는다. 실패명과 실제 assert는 `closure-affected-suites-final.txt`에 보존한다. 영향 경로 최신 targeted 검증·compile·bash-n·diff·문서 parser 결과 및 최종 commit/push/배포는 `tmp/low-price-full-research-20260918/closure-validation.json`, `closure-deployment.json`을 따른다. 미해결 unrelated FAIL을 전체 suite PASS로 표시하지 않는다.
+원격 main 병합 전 영향5suite 실행은288PASS/3FAIL이었다. FAIL3개는 postclose wrapper와 이전 checkpoint/scout 경로를 기대하는 테스트의 불일치였다. 현행 다른 세션의 퇴역 변경·테스트 수정을 병합한 뒤 해당3개를 재검증해3PASS이며, 병합 후 영향wrapper19PASS·최종관련112PASS·최종재개21PASS이다. 당시 실패명/assert와 병합 후3PASS는 `closure-affected-suites-final.txt`, `closure-inherited-failures-after-merge.txt`에 보존한다. 퇴역 경로를 복원하지 않았다. 영향 경로 최신 targeted 검증·compile·bash-n·diff·문서 parser 결과 및 최종 commit/push/배포는 `tmp/low-price-full-research-20260918/closure-validation.json`, `closure-deployment.json`을 따른다. 병합 후 전체5suite를 반복하지 않았으며, 이전288PASS와해소된3개만으로 새전체suite실행PASS를합성하지 않는다.
 
 새 managed release는 현행 원격 main의 PYRAMID/scout/drought 폐기 등을 합쳐 배포한다. 실행 중 다른 final-refresh worker의 immutable root/PID를 교체하거나 재시작하지 않는다. 저가주 동결9/18 policy/manifest 및 원본9/17 보고서 SHA는 보존한다. 최신 selector/다음 예약 실행 source와 실제 진행 중 PID 소비를 별도 기록한다. 연구 코드 보완·배포와 자연 매매 효과·경제성은 별개이고 `LowPriceExpandedResearchRepair0918`의 자연/공동 acceptance는 OPEN이다.
+
+## 실제 커밋·푸시·배포
+
+- 구현 `3b4a6d12d`, 현행 main 병합 source `2a1388c6929e3c4cd037d507140939fb4c0bb513`. 원격 main 및 `fix/low-price-postclose-closure-20260918`에 atomic fast-forward push 완료. 동시 작업의 PYRAMID/scout/drought 폐기 source·문서·테스트를 보존한다.
+- 11:40:47 KST managed root `/home/ubuntu/KORStockScan-runtime-releases/low-price-postclose-source-resume-20260918`를 선택했다. 기존 삼성/widget evaluation 및 machine final-refresh의 다음 invocation source pin을 같은 root로 배포했고 daemon reload 후 WorkingDirectory/ExecStart를 검증했다. 새 timer/cron/service 생성·설치 스케줄 활성화·Main/거래 서비스 restart는 없다. 배포 시 해당 두 장후 unit MainPID0; 앞서 진행 중이던 외부worker를 중단하지 않았다. next source 배포와 actual worker/PID consumption은 별개이고 자연 수집/EV acceptance는 OPEN이다.
+- 원본9/17 보고서와 동결9/18 policy/manifest의3개 SHA 불변을 검증했다. source parser contract는기존 `6deba150c7c0336881a3b168988cfaf9cdb97572b5cc361e4fb9864c15e3e1b2`를보존한다. official upstream HEAD `953e5dbff123f437ab4d11a78a95191a685eb51f` 현재일치·관련5 API metadata 및기존spec/error/Postman 확인 receipt는 `closure-official-reference-review.json`이다. 요청/parser/continuation/auth/account/order helper 변경0.
+- 현재 실행/경제 결과는 위 최신판정과기계판정 JSON을따른다. 남은43종목은기존 native code/inputs와terminal receipt를보존한queue-only 추가실행대상이다. 새producer code변경만을이유로이번완료104종목의경제계산을다시돌리지않는다. 향후정기는새v2 receipt의동일입력·snapshot·checksum검증으로재개한다. 추가source/공동원천미확보를완료·EV0으로처리하지않는다.
 
 ## 선행 producer 결함 보완
 
