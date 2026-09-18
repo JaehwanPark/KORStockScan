@@ -1,6 +1,6 @@
 # 저가주 2차 진입 확장 후보 연구 — EV·일별 순익 개선 상세계획
 
-작성: 2026-09-18 KST. 상태: **구현·반복 리뷰/보완·검증 및 제한 재평가 완료; commit/push·소스 배포 마감 중. 미래·실제·joint 경제성 acceptance는 OPEN**.
+작성: 2026-09-18 KST. 상태: **구현·반복 리뷰/보완·검증·제한 재평가·commit/push·소스 배포 및 장후 결과 갱신 완료. 미래·실제·joint 경제성 acceptance는 OPEN**.
 
 ## 1. 목적·현재 결정·소유권
 
@@ -241,3 +241,5 @@ rollback은 기존 severe loss·order failure·provenance/custody 손상·동일
 half sign과 half3 선언의 정리는 과거 proxy selector의 diagnostic 계약에 한정한다. 별도 등록 prospective owner의 기존 각 학습 절반3완료leg·full10·holdout3signal/4leg guard는 그대로 유지한다. 이 scope 구분으로 기존 floor를 완화하거나 과거 승인/격리 profile을 재활성화하지 않는다. HELD carry는 관찰 자료만으로 청산을 합성하지 않는 원 계약을 유지하고 구조적으로 지원되지 않는 종료를 명시한다.
 
 이번9/17 검증창은 이미 관찰했으므로 수치가 양수여도 탐색적 모델 결과다. 미래 독립 validation·실제 dated/PID consumption·정확한 완료 비용 손익과 joint 자본 입력은 별도 acceptance로 남긴다.
+
+구현 source `581b17cb1` atomic push·12:27 KST managed release/기존unit 다음 실행 source 선택을 마쳤다. 기존 캐시64개156.6초의 결과는 distinct 성숙2·동시개선0·custody/terminal미확정55이다. 실제 검증·배포·단위 모델 수치·잔여 결손은 [최신 owning review](../audit-reports/2026-09-18-low-price-distinct-economic-review.md)를 따른다. H1–H4 전 조합 인과 분석을 추가 반복하지 않고 native 전체 calibration grid의 distinct1개 선택과 다리별 경제성/노출 진단으로 분석 깊이를 제한했다. 모델이 설명하지 못하는 carry terminal·실제 partial fill과 joint 입력은 null/gap으로 명시했다.

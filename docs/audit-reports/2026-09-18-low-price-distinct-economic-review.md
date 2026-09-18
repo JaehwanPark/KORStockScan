@@ -57,3 +57,9 @@ Owner: `LowPriceExpandedResearchRepair0918`. 사용자 승인: [LP0–LP6 상세
 ## 커밋·푸시·배포 receipt
 
 검증된 source를 immutable managed release로 선택하고 영향받는 기존 service의 다음 실행 source pin을 갱신한다. 실행 중 거래/PID를 재시작하거나 현재 동결 정책을 재발행하지 않는다. 최종 commit·selector·unit 설정·보호 hash receipt는 `tmp/low-price-economic-comparison-20260918/deployment.json`에 기록하며 실제 PID 소비와 별개다.
+
+실제 구현 commit `581b17cb12a72b0782846f2221317f25b4f2ecf5`를 원격 main/review branch에 atomic push했다. 12:27 KST selector는 `/home/ubuntu/KORStockScan-runtime-releases/low-price-distinct-economics-20260918`을 선택했다. 기존 low-price auto-expansion/widget evaluation/machine final-refresh unit의 다음 실행 `ExecStart/WorkingDirectory`만 source pin으로 갱신하고 `daemon-reload` 후 원 환경파일·resource/restart/보안 설정 불변을 확인했다. 서비스 restart0, 거래 PID41757/NRestarts0 및 당시 final-refresh PID195934/NRestarts9는 배포 전후 같았다. 이 final-refresh의 기존 자연 retry 이력은 이번 수리의 재실행이 아니다. 해당 진행 중 PID는 이전 root를 유지한다.
+
+새 release의 readonly 소비에서 기존 동결3개·policy hash 불변과 distinct 결과62개 재구성 PASS를 확인했다. selector/router/source clean·보호 원본/동결 SHA PASS. 이것은 분석 reader 검증이며 새 거래 PID 또는 자연 주문/비용 경제성 증거가 아니다. deployment 후condition 검증에서 없는 optional `EnvironmentFiles` key를 비교하던 일회성 receipt 스크립트 오류를 수정해 검증만 완료했으며 selector/unit mutation을 반복하지 않았다.
+
+[갱신된 장후 기계 판정 JSON](../../data/report/postclose_research_successor_20260917_20260918/distinct_economic_review_20260918/low_price_full_research_result_review_2026-09-17.json)은 실행·분석·결손·달성가능성·소비를 분리한다. 기존3건 자기 비교를 대체한 새로운 결과 generation이며 기존 판정 JSON/원 보고서를 덮어쓰지 않는다. 자연 acceptance는 현재 checklist의 동일 OPEN owner로 남겼다. 추가 재실행은 미확보 과거 입력을 반복하는 것이 아니라 유효 미래 원천/terminal이 새로 확보됐을 때만 필요하다.
