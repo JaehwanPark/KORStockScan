@@ -44,7 +44,7 @@ CONTRACT = {
     "model_holdout_precedes_prompt_learning": True,
     "empirical_error_and_stress_lower_bound_required": True,
 }
-SOURCE_PROJECTION_CONTRACT = "compact_pre_ai_execution_source_v2"
+SOURCE_PROJECTION_CONTRACT = "compact_pre_ai_execution_source_v3"
 
 
 def digest(value):
@@ -385,6 +385,8 @@ def prepare(data_root, day):
         }
         owner_replay = owner_rows.get(trace.get("evaluation_attempt_id")) or {}
         owner_valid = owner_replay_valid(owner_replay, row_identity)
+        label_identity_reasons = [r for r in by_trace.get(key,{}).get("primary_cohort_exclusion_reasons") or []
+            if r in {"payload_trace_venue_mismatch","payload_trace_session_mismatch","canonical_context_venue_session_mismatch"}]
         reason = None
         if key in conflicts or payload_key in payload_conflicts:
             reason = "conflicting_exact_input"
@@ -407,6 +409,8 @@ def prepare(data_root, day):
             or payload.get("prompt_sha256") != trace.get("prompt_sha256")
         ):
             reason = "frozen_payload_missing_or_invalid"
+        elif label_identity_reasons:
+            reason = "source_label_identity_contract_invalid:" + label_identity_reasons[0]
         elif not owner_valid and path.get("status") != "evaluable":
             reason = path.get("label_reason") or "terminal_path_not_evaluable"
         elif not owner_valid and (
@@ -438,6 +442,7 @@ def prepare(data_root, day):
                     and payload.get("redacted") is False else None,
                 "owner_replay": owner_replay if owner_valid else None,
                 "entry_quality_path": path,
+                "source_label_identity_reasons": label_identity_reasons,
                 "exclusion_reason": reason,
                 "natural_contract_evidence": {k: trace.get(k) for k in
                     ("result_source", "model", "provider_actual", "semantic_validation_status",
@@ -832,6 +837,8 @@ def primary_input_blocker(row, model):
     reason = row.get("exclusion_reason")
     if reason:
         return ("unsupported_scope" if reason == "natural_contract_invalid" else "source_gap", reason)
+    if row.get("source_label_identity_reasons"):
+        return "source_gap", "source_label_identity_contract_invalid:"+row["source_label_identity_reasons"][0]
     if row.get("broker_route") != row.get("effective_venue"):
         return "unsupported_scope", "broker_route_quote_venue_scope_unsupported"
     replay = row.get("owner_replay") or {}
@@ -979,6 +986,8 @@ def run(
                 owner = owners.get(row.get("evaluation_attempt_id")) or {}
                 row["owner_replay"] = owner if owner_replay_valid(owner, row) else None
                 label = by_trace.get(row.get("evaluation_key")) or {}
+                row["source_label_identity_reasons"]=[r for r in label.get("primary_cohort_exclusion_reasons") or []
+                    if r in {"payload_trace_venue_mismatch","payload_trace_session_mismatch","canonical_context_venue_session_mismatch"}]
                 row.setdefault("natural_contract_evidence", {k: label.get(k) for k in
                     ("result_source", "model", "provider_actual", "semantic_validation_status",
                      "decision_quality_contract_status", "decision_quality_contract_errors")})

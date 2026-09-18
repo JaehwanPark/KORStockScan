@@ -12,7 +12,7 @@
 |---|---|---|
 | 손절 결손11 | compact exact hot payload에 fixed research stop이 없고 실행 plan은 AI_PASS 이후 생성. 원천의 최초 생성 경계 결손 | 기존 5 live analyze_target caller에서 pre-AI source-only owner plan/context를 생성. 당시 stop/cost/TTL/qty/budget를 loaded 운영 owner로 기록. 과거 삭제된 input/stop은 추정 복원하지 않음. |
 | 자연 계약 불충족9 | materialized label 기준 timeout8, semantic rejection1. 정확 attempt `analyze_target:394800:1789632325868:cf98178b`, `entry_risk_pass_residual_risk_not_considered` | 모두 실제 부적격. false exclusion으로 바꾸지 않고 보존. timeout을 자연 AI 판단으로 간주하지 않음. |
-| 경로 평가 불가1 |098460 10:38 판단 이후 필요한 window가10:51부터 존재 | 과거 window는 누적으로 복구되지 않음. 새 source는 existing native path cutoff/continuous full-depth 검증, gap은 null/blocker. |
+| 경로 평가 불가1 |27221013:09:09 판단의 canonical context venue=KRX_NXT_INTEGRATED, trace venue=KRX, route_equivalence_proven=false.10m label 없음/partial(1m·30m만 존재) | 과거 window는 누적으로 복구되지 않음. 새 source는 existing native path cutoff/continuous full-depth 검증, gap은 null/blocker. |
 | 운영 모델 source gap | 원 report retained execution0, invalid3 plans, original completed-cost outcome 부재, validated scope0 | lossless seed2MiB + execution family partition + producer stage count/identity census; pre-AI population과 actual model calibration 분리; AI 응답 availability 이후만 CF 실행. |
 | initial holding 상태 | WATCHING에는 실제 BUY fill owner의 exit_mode/stop가 없음; micro estimator 상태 없는 interpreter는 차단 | 실제 receipt의 기존 필드 설정을 pure helper로 공유. frozen loaded rules/initial micro state/native quote updates 재현. Main의 이미 확보한 시장 국면은 기존 cache/동일 process WS depth cutoff에서 관측. 외부 서비스 미기록 경로는 명시 unsupported. |
 
@@ -43,3 +43,5 @@ Provider 비용은 기존 operator-reviewed zero-accounting artifact의 모델·
 후속 route 대사: 자연 KRX quote-view11의 `broker_route`는 SOR, 통합 애프터마켓10의 route는 NXT이다. 현행 직접 KRX 승격 cohort/단일 venue operating model을 유지하며 quote venue와 실제 broker route를 합치지 않는다. 미래 producer는 exact broker route를 요구하고 route/quote venue 불일치를 명시 unsupported로 기록한다. Frozen model scope에도 broker route를 포함한다. SOR routing/통합 venue 계약 확대는 기존 operating owner의 별도 source/model closure이며 단순 자연 표본 대기가 아니다. 직접 KRX/NXT 지원 입력의 producer·계산 회귀 통과를 현재 모든 자연 route의 승격 가능성으로 확대하지 않는다.
 
 검증 제외의 근거: origin/main에도 `test_production_string_fields_roundtrip_through_logger_and_report`는 이미 제거된 `_route_arm` fixture를 참조하고 `test_runtime_capture_uses_only_matching_bbo_quantity`는 폐기된 `observe_avg_down_exit_replay_cycle`(항상0)의 관측을 요구한다. 이 둘의 최초 suite 실패는 별도 log에 보존하며 현행 full holding interpreter 테스트 및 새 production writer→paired 계산 회귀로 영향 범위를 검증한다. 퇴역 producer를 테스트 통과용으로 복원하지 않는다. 현행 observer의 실제 enabled/config/PID·자연 source receipt는 다음 정규 기동의 acceptance이고 기본OFF 관측자를 임의로 켜지 않는다.
+
+최종 source-label identity 검토: 운영 CF가 유효하더라도 원 label의 payload/trace venue·session 또는 canonical-context venue/session 충돌은 해제하지 않는다. source projection v3에 이 사유를 보존하고 기존 primary source quality 경계를 승계한다. 자연 path 제외1건은 정확 attempt `analyze_target:272210:1789618146665:381de9ad`의 canonical venue/session mismatch이며, 다른 098460 사례와 혼동하지 않는다.

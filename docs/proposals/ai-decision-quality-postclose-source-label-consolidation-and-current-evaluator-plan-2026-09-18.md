@@ -176,7 +176,7 @@ ADQ6 결과 closure는 승인된 bounded regeneration의 exact date/generation/�
 - 자연 compact21의 배타적 첫 blocker는 `exact_stop_distance_missing_or_invalid`11, `natural_contract_invalid`9, `terminal_path_not_evaluable`1이다. 이는 valid no-edge가 아니다.
 - stop11: 현행 compact hot payload는 과거 fixed first-hit 연구가 요구하는 exact stop 필드를 생성하지 않았다. 주문 뒤에만 작성되던 atomic execution plan도 AI VETO의 pre-AI 계약이 될 수 없었다. retired `hard_stop_price`/TTL, 사후 고저가 또는 다른 보유 경로 SELL로 복구하지 않는다. 미래에는 당시 loaded holding policy/state·비용·수량·자본·owner TTL을 기존 atomic plan producer가 pre-AI 관측으로 고정하고 기존 full holding interpreter가 독립 청산을 계산한다. fixed-window label은 진단으로 보존한다.
 - contract9: materialized labels와 한 건의 exact 원 raw 대조 결과 timeout8, live PASS의 실제 `entry_risk_pass_residual_risk_not_considered` semantic reject1이다. false exclusion 근거가 없어 그대로 제외한다. transport 실패를 PASS로 바꾸거나 semantic guard를 완화하지 않는다.
-- path1: 098460의10:38:37 판단에 가격 원천이10:51부터 있으므로 고정 과거 window 결손이다. 미래 정상 수집과 구분하며 현재 가격으로 채우지 않는다.
+- path1: 27221013:09:09 판단의 canonical context는 통합 venue, trace는 KRX이며 route_equivalence_proven=false이다.10m label은 없고 partial1m/30m만 있다. 원 계약 정합성을 누적으로 복구할 수 없으며 현재 가격이나 추정 venue로 채우지 않는다.
 - 운영 모델: 기존 empty execution projection은 실제 Main 주문0의 근거가 아니었다. 기존 producer census에 stage별 lossless identity와 기존 threshold family partition을 결속한다. 원 broker/order/fill/terminal과 original post-sell completed-cost receipt가 없는 과거 모델 행은 제외한다. 기존 모델 검증 코드와 완료 손익 producer/consumer는 재사용한다.
 
 ### 8.2 최소 구현 순서와 계약
@@ -210,3 +210,5 @@ ADQ6 결과 closure는 승인된 bounded regeneration의 exact date/generation/�
 | valid no-edge | 모든 필수 source/model/coverage/independent holdout 계약이 유효한 비교에서 양수 조건 불충족. 모델 미검증 또는 null을 no-edge로 바꾸지 않는다. |
 
 후속 route 대사: 자연 KRX quote-view11의 `broker_route`는 SOR, 통합 애프터마켓10의 route는 NXT이다. 현행 직접 KRX 승격 cohort/단일 venue operating model을 유지하며 quote venue와 실제 broker route를 합치지 않는다. 미래 producer는 exact broker route를 요구하고 route/quote venue 불일치를 명시 unsupported로 기록한다. Frozen model scope에도 broker route를 포함한다. SOR routing/통합 venue 계약 확대는 기존 operating owner의 별도 source/model closure이며 단순 자연 표본 대기가 아니다. 직접 KRX/NXT 지원 입력의 producer·계산 회귀 통과를 현재 모든 자연 route의 승격 가능성으로 확대하지 않는다.
+
+최종 source-label identity 검토: 운영 CF가 유효하더라도 원 label의 payload/trace venue·session 또는 canonical-context venue/session 충돌은 해제하지 않는다. source projection v3에 이 사유를 보존하고 기존 primary source quality 경계를 승계한다. 자연 path 제외1건은 정확 attempt `analyze_target:272210:1789618146665:381de9ad`의 canonical venue/session mismatch이며, 다른 098460 사례와 혼동하지 않는다.

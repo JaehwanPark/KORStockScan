@@ -1334,3 +1334,10 @@ def test_actual_decision_version_performance_reuses_completed_cost_owner():
     assert value['causal_profit_improvement'] is None
     report['operating_economic_state']['model_rows'].append({**row,'net_pnl_krw':999.})
     assert not compact.applied_decision_version_performance(report,day='2026-09-17')['groups']
+
+
+def test_supported_operating_owner_cannot_override_source_label_venue_conflict():
+    row=operating_compact_row()
+    row['source_label_identity_reasons']=['canonical_context_venue_session_mismatch']
+    blocker=compact.primary_input_blocker(row,full_compact_proof()['owner_execution_model_validation'])
+    assert blocker==('source_gap','source_label_identity_contract_invalid:canonical_context_venue_session_mismatch')
