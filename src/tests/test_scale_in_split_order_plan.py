@@ -2178,7 +2178,7 @@ def test_actual_fill_inventory_keeps_main_scanner_and_excludes_other_custody(mon
         receipt = SimpleNamespace(id=idx, recommendation_id=idx, order_no=f"BUY{idx}",
             event_time=datetime.fromisoformat(f"{day}T10:00:00"), executed_price=10000,
             stock_code=f"{idx:06d}", request_qty=4, executed_qty=4, request_price=10000)
-        position = SimpleNamespace(strategy="SCALPING", position_tag=tag, sell_time=None)
+        position = SimpleNamespace(strategy="SCALPING", position_tag=tag, sell_time=None, status="COMPLETED" if tag == "SCANNER" else "HOLDING", sell_price=None, profit_rate=None)
         pairs.append((receipt, position))
     class Session:
         def query(self, *args): return self
@@ -2191,3 +2191,5 @@ def test_actual_fill_inventory_keeps_main_scanner_and_excludes_other_custody(mon
     monkeypatch.setattr(db_manager, "DBManager", lambda: SimpleNamespace(get_session=session))
     result = split_plan._query_actual_fill_inventory(day)
     assert [row["record_id"] for row in result] == ["1", "2"]
+    assert result[0]["status"] == "COMPLETED"
+    assert result[0]["outcome_timing_status"] == "missing_completed_terminal_clock"
