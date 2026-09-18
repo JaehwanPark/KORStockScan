@@ -1277,7 +1277,9 @@ def test_thin_touch_depth_blocks_widget_entry_without_order_and_is_not_requeried
     assert recorder.events[-1]["actual_order_submitted"] is False
 
 
-def test_widget_velocity_wait_cannot_renew_original_liquidity_clock(tmp_path, monkeypatch):
+def test_widget_velocity_wait_cannot_renew_original_liquidity_clock(
+    tmp_path, monkeypatch
+):
     import src.trading.order.entry_liquidity_guard as guard
 
     now = _at(10)
@@ -1300,7 +1302,10 @@ def test_widget_velocity_wait_cannot_renew_original_liquidity_clock(tmp_path, mo
     trader.run_once(now)
     assert gateway.buy_calls == []
     assert len(gateway.liquidity_calls) == len(gateway.execution_velocity_calls) == 1
-    assert recorder.events[-1]["entry_liquidity_reason"] == "entry_liquidity_snapshot_stale"
+    assert (
+        recorder.events[-1]["entry_liquidity_reason"]
+        == "entry_liquidity_snapshot_stale"
+    )
     assert recorder.events[-1]["actual_order_submitted"] is False
 
 
@@ -1455,6 +1460,13 @@ def test_samsung_equal_share_policy_cancels_targets_adds_two_and_reprices(
     state = trader._state["symbols"]["005930"]
     assert state["take_profit_bps"] == 50
     assert state["take_profit_basis_fill_price"] == 99_500
+    opportunity = state["timing_operating_opportunities"]["ENTRY-1"]
+    assert opportunity["contract"]["total_quantity"] == 30
+    assert opportunity["contract"]["market_data_venue"] == "KRX"
+    assert any(
+        row["permitted"] is True for row in opportunity["native_state"]["scale_ticks"]
+    )
+    assert len(opportunity["native_state"]["orders"]) == 6
 
 
 def test_samsung_equal_share_policy_observes_source_exit_without_forced_sell(

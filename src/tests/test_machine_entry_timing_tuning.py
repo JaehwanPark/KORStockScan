@@ -401,7 +401,7 @@ def _samsung_rising_entry_row(source_date: date, index: int) -> dict:
     return row
 
 
-def test_samsung_rising_candidate_survives_sparse_days_and_loads_exact_recipe(
+def test_samsung_legacy_horizon_candidate_requires_native_operating_proof(
     tmp_path: Path,
 ) -> None:
     target_date = date(2026, 8, 27)
@@ -434,39 +434,17 @@ def test_samsung_rising_candidate_survives_sparse_days_and_loads_exact_recipe(
         widget_policy_dir=tmp_path / "widget",
     )
     assert report["winner"] is None
-    assert report["decision"] == "select_one_next_session_dynamic_entry_confirmation"
+    assert report["runtime_winner"] is None
+    assert report["decision"] == "baseline_immediate_entry_carry_forward"
+    cohort = report["cohorts"][0]
+    assert cohort["native_operating_economics"]["status"] == "source_gap"
     report_path = tmp_path / f"machine_entry_timing_tuning_{target_date}.json"
     report_path.write_text(json.dumps(report))
     applied = build_applied_policy(report, source_report_path=report_path)
-    effective_date = date.fromisoformat(applied["target_date"])
-    assert validate_applied_policy(applied, target_date=effective_date) == (
-        True,
-        "ready",
-    )
-    scope = next(iter(applied["scopes"].values()))
-    assert (
-        scope["dynamic_confirmation"]["policy_id"]
-        == SAMSUNG_RISE_REBOUND_POLICY.policy_id
-    )
-    assert (
-        scope["dynamic_confirmation"]["source_gap_action"] == "reject_unconfirmed_entry"
-    )
-    policy_dir = tmp_path / "policy"
-    policy_dir.mkdir()
-    (policy_dir / f"machine_entry_timing_policy_{effective_date}.json").write_text(
-        json.dumps(applied)
-    )
-    resolved = resolve_entry_confirmation_policy(
-        target_date=effective_date,
-        owner="episode",
-        scope_id="midday",
-        symbol="005930",
-        session="KRX_REGULAR",
-        entry_state="UNSPECIFIED",
-        policy_dir=policy_dir,
-        source_report_dir=tmp_path,
-    )
-    assert resolved["mode"] == DYNAMIC_MODE, resolved
+    assert applied["scopes"] == {}
+    assert validate_applied_policy(
+        applied, target_date=date.fromisoformat(applied["target_date"])
+    ) == (True, "ready")
 
 
 def test_samsung_flat_legacy_replay_is_not_confirmation_evidence() -> None:
@@ -475,9 +453,9 @@ def test_samsung_flat_legacy_replay_is_not_confirmation_evidence() -> None:
     for index, source_date in enumerate(_trading_dates(target_date, 12)):
         row = _entry_row(source_date, index)
         row["scope_id"] = row["entry_timing_scope_id"] = "midday"
-        row["dynamic_confirmation_source_only_replay"]["signal_binding"]["scope_id"] = (
-            "midday"
-        )
+        row["dynamic_confirmation_source_only_replay"]["signal_binding"][
+            "scope_id"
+        ] = "midday"
         row["source_date"] = source_date.isoformat()
         rows.append((source_date, row))
     evaluated = _evaluate_dynamic_cohort(cohort_rows=rows, target_date=target_date)
@@ -545,9 +523,8 @@ def test_cumulative_tuning_selects_one_exact_scope_and_runtime_loads_it(
     assert dynamic["allowed_runtime_apply"] is False
     assert dynamic["selected_source_only_candidate"]["owner"] == "episode"
     dynamic_evaluation = dynamic["selected_source_only_candidate"]["evaluation"]
-    assert (
-        dynamic_evaluation["notional_weighted_ev_pct"]
-        > (dynamic_evaluation["baseline_notional_weighted_ev_pct"])
+    assert dynamic_evaluation["notional_weighted_ev_pct"] > (
+        dynamic_evaluation["baseline_notional_weighted_ev_pct"]
     )
     assert dynamic_evaluation["modeled_net_profit_uplift_krw"] > 0
     assert dynamic_evaluation["net_profit_per_capital_minute_pct"] > 0
@@ -731,9 +708,9 @@ def test_dynamic_reject_counts_zero_exposure_without_dropping_loss() -> None:
 def test_dynamic_confirmation_rejects_cross_signal_binding() -> None:
     source_date = date(2026, 8, 27)
     row = _entry_row(source_date, 1)
-    row["dynamic_confirmation_source_only_replay"]["signal_binding"]["lifecycle_id"] = (
-        "another-lifecycle"
-    )
+    row["dynamic_confirmation_source_only_replay"]["signal_binding"][
+        "lifecycle_id"
+    ] = "another-lifecycle"
 
     result = _evaluate_dynamic_cohort(
         cohort_rows=[(source_date, row)], target_date=source_date
@@ -810,7 +787,7 @@ def test_dynamic_confirmation_rejects_unfillable_timeout_evidence() -> None:
     row = _entry_row(source_date, 1)
     row["dynamic_confirmation_first_hit_outcomes"]["checkpoint_outcomes"]["1"][
         "timeout_available_bid_quantity"
-    ] = row["owner_requested_quantity"] - 1
+    ] = (row["owner_requested_quantity"] - 1)
 
     result = _evaluate_dynamic_cohort(
         cohort_rows=[(source_date, row)], target_date=source_date

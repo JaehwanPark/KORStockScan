@@ -2449,7 +2449,11 @@ def build_report(
     low_price_candidate_dir: Path = LOW_PRICE_CANDIDATE_DIR,
     samsung_candidate_dir: Path = SAMSUNG_CANDIDATE_DIR,
     widget_policy_dir: Path = WIDGET_POLICY_DIR,
+    effective_date: date | None = None,
 ) -> dict[str, Any]:
+    effective_date = effective_date or _next_trading_date(target_date)
+    if effective_date != _next_trading_date(target_date):
+        raise ValueError("effective_date_must_be_next_registered_trading_day")
     reports, rejected = _source_reports(target_date=target_date, source_dir=source_dir)
     source_report_dates = {source_date for source_date, _, _ in reports}
     target_source_ready = any(
@@ -2505,6 +2509,17 @@ def build_report(
     cohorts: list[dict[str, Any]] = []
     ready: list[dict[str, Any]] = []
     dynamic_ready: list[dict[str, Any]] = []
+    from src.engine.monitoring.machine_entry_confirmation_study import (
+        read_native_actual_history,
+        restore_native_actual_history,
+        _seal,
+        _sealed,
+    )
+
+    actual_history, actual_history_errors = read_native_actual_history(
+        OUTPUT_DIR, target_date=target_date
+    )
+    completed_actuals = dict(actual_history)
     for key, rows in sorted(grouped.items()):
         owner, scope_id, symbol, session, entry_state = key
         alternatives = [
@@ -2537,6 +2552,54 @@ def build_report(
             source_report_dates=source_report_dates,
             global_duplicate_anchor_keys=global_duplicate_anchor_keys,
         )
+        operating = None
+        native_scope = symbol == "005930" and (
+            owner == "widget"
+            or scope_id in {"morning", "morning_sor_reentry", "midday", "afternoon"}
+        )
+        if native_scope:
+            from src.engine.monitoring.machine_entry_confirmation_study import (
+                operating_cases,
+                operating_comparison,
+                operating_policy_evidence,
+                applied_operating_performance,
+                refresh_completed_operating_actuals,
+            )
+
+            cases = operating_cases(rows)
+            cases, actual_refresh_errors = refresh_completed_operating_actuals(
+                cases, target_date=target_date, state_dir=DATA_DIR / "runtime"
+            )
+            cases = restore_native_actual_history(
+                cases, actual_history, target_date=target_date
+            )
+            for source, _ in cases:
+                c, actual = source.get("contract") or {}, source.get("actual")
+                identity = c.get("sha256")
+                if source.get("actual_refresh_blocker"):
+                    if identity is not None:
+                        completed_actuals[identity] = None
+                elif _sealed(c) and _sealed(actual):
+                    completed_actuals[identity] = actual
+            actual_refresh_errors += actual_history_errors
+            operating = operating_comparison(cases, target_date=target_date)
+            primary = operating_policy_evidence(
+                operating,
+                target_date=target_date,
+                effective_date=effective_date,
+                owner=owner,
+                scope_id=scope_id,
+                symbol=symbol,
+            )
+            # Diagnostic common-horizon results cannot select a Samsung policy.
+            dynamic_confirmation = dict(
+                dynamic_confirmation,
+                source_only_candidate_ready=False,
+                operating_economics=operating,
+            )
+            selected = None
+            if primary is not None:
+                dynamic_confirmation = primary
         cohort = {
             "owner": owner,
             "scope_id": scope_id,
@@ -2544,6 +2607,17 @@ def build_report(
             "session": session,
             "entry_state": entry_state,
             "alternatives": alternatives,
+            "native_operating_economics": operating,
+            "actual_checkpoint_refresh_errors": (
+                actual_refresh_errors if native_scope else []
+            ),
+            "applied_version_performance": (
+                applied_operating_performance(
+                    cases, model_validation=operating.get("model_validation")
+                )
+                if native_scope
+                else None
+            ),
             "selected": selected,
             "per_signal_dynamic_confirmation_source_only": dynamic_confirmation,
             "feature_ablation_study": build_study(
@@ -2679,6 +2753,13 @@ def build_report(
     )
     return {
         "schema": REPORT_SCHEMA,
+        "native_actual_completion_history": _seal(
+            dict(
+                schema="native_actual_completion_history_v1",
+                as_of_source_date=target_date.isoformat(),
+                completed_by_contract=completed_actuals,
+            )
+        ),
         REBOUND_SECTION: build_rebound_evaluation(
             target_date=target_date,
             sources=[payload for _, _, payload in reports],
@@ -2699,7 +2780,7 @@ def build_report(
             else "baseline_immediate_entry_carry_forward"
         ),
         "target_date": target_date.isoformat(),
-        "effective_date": _next_trading_date(target_date).isoformat(),
+        "effective_date": effective_date.isoformat(),
         "generated_at_kst": datetime.now(tz=KST).isoformat(timespec="seconds"),
         "clean_tuning_baseline_date": CLEAN_BASELINE_DATE.isoformat(),
         "source_artifacts": source_artifacts,
@@ -2816,6 +2897,7 @@ def build_applied_policy(
                 owner=winner["owner"],
                 scope_id=winner["scope_id"],
                 symbol=winner["symbol"],
+                feature_arm=selected.get("feature_arm", "combined"),
             )
             scope_payload["dynamic_confirmation"] = {
                 "feature_version": FEATURE_VERSION,
@@ -2827,7 +2909,8 @@ def build_applied_policy(
                 "exact_route_required": True,
                 "source_gap_action": (
                     "reject_unconfirmed_entry"
-                    if confirmation_policy == SAMSUNG_RISE_REBOUND_POLICY
+                    if confirmation_policy.policy_id
+                    == SAMSUNG_RISE_REBOUND_POLICY.policy_id
                     else "baseline_owner_guard_revalidation"
                 ),
                 "source_gap_is_adverse_signal": False,
@@ -3189,6 +3272,10 @@ def apply_rebound_preopen(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target-date", required=True)
+    parser.add_argument(
+        "--effective-date",
+        help="Explicit next registered trading day; postclose staging only",
+    )
     parser.add_argument("--write", action="store_true")
     parser.add_argument(
         "--phase", choices=("postclose", "preopen"), default="postclose"
@@ -3198,6 +3285,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     target_date = date.fromisoformat(args.target_date)
     if args.phase == "preopen":
+        if args.effective_date is not None:
+            parser.error("--effective-date is postclose-only")
         if args.report_only_dir is not None:
             parser.error("--report-only-dir is postclose-only")
         result = apply_rebound_preopen(target_date=target_date, write=args.write)
@@ -3212,7 +3301,12 @@ def main(argv: list[str] | None = None) -> int:
         and args.report_only_dir.resolve() == OUTPUT_DIR.resolve()
     ):
         parser.error("report-only output must not overwrite production source reports")
-    report = build_report(target_date=target_date)
+    report = build_report(
+        target_date=target_date,
+        effective_date=(
+            date.fromisoformat(args.effective_date) if args.effective_date else None
+        ),
+    )
     publication = policy_publication_gate(report)
     if args.report_only_dir is not None:
         publication = {

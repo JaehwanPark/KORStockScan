@@ -1531,6 +1531,10 @@ def extract_machine_row(
         "attempted": attempted,
         "no_signal": not attempted and state_status == "NO_TRADE",
         "signal_features": signal_features,
+        "timing_operating_opportunities": state.get(
+            "timing_operating_opportunities", {}
+        ),
+        "timing_operating_source_gap": state.get("timing_operating_source_gap"),
         "legs": legs,
         "summary": summary,
     }

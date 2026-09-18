@@ -35,7 +35,9 @@ def _isolate_market_weakness_counterfactual_writer(tmp_path, monkeypatch):
     from src.trading.config import symbol_owner_policy
 
     # Current-date fixtures must not load the operator's live owner policy.
-    monkeypatch.setattr(symbol_owner_policy, "DEFAULT_POLICY_DIR", tmp_path / "policies")
+    monkeypatch.setattr(
+        symbol_owner_policy, "DEFAULT_POLICY_DIR", tmp_path / "policies"
+    )
     monkeypatch.delenv(symbol_owner_policy.POLICY_FILE_ENV, raising=False)
     monkeypatch.setenv(
         "KORSTOCKSCAN_ORDER_OWNER_REGISTRY_PATH", str(tmp_path / "owner_registry.jsonl")
@@ -455,10 +457,15 @@ def test_prearmed_adverse_clock_starts_once_when_opening_price_arrives(
     machine = _machine(tmp_path, gateway)
     reserved_at = _at(11, 8, 30)
     waiting = machine.run_once(reserved_at)
-    assert waiting["signal_features"]["signal_clock_basis"] == "prearmed_before_route_open"
+    assert (
+        waiting["signal_features"]["signal_clock_basis"] == "prearmed_before_route_open"
+    )
     gateway.opens["SOR"] = None
     machine.run_once(_at(11, 9))
-    assert machine.snapshot()["signal_features"]["signal_decision_at"] == reserved_at.isoformat()
+    assert (
+        machine.snapshot()["signal_features"]["signal_decision_at"]
+        == reserved_at.isoformat()
+    )
     observed = []
 
     def prepare(owner, leg, now):
@@ -473,10 +480,19 @@ def test_prearmed_adverse_clock_starts_once_when_opening_price_arrives(
     machine.run_once(actual_signal + timedelta(seconds=10))
     assert len(observed) == 4
     assert all(x["signal_decision_at"] == actual_signal.isoformat() for x in observed)
-    assert all(x["prearmed_signal_decision_at"] == reserved_at.isoformat() for x in observed)
+    assert all(
+        x["prearmed_signal_decision_at"] == reserved_at.isoformat() for x in observed
+    )
     assert all(x["signal_bar"] == "20260811080000" for x in observed)
     assert len({x["source_entry_event_id"] for x in observed}) == 1
     assert gateway.buy_calls == []
+    opportunities = machine.snapshot()["timing_operating_opportunities"]
+    assert len(opportunities) == 1
+    frozen = next(iter(opportunities.values()))["contract"]
+    assert frozen.get("status") != "source_gap", frozen
+    assert frozen["decision_at"] == actual_signal.isoformat()
+    assert frozen["signal_bar"] == "20260811080000"
+    assert all(plan["route"] == "SOR" for plan in frozen["plan"])
 
 
 def test_expired_prearmed_window_does_not_create_fresh_signal(tmp_path):
@@ -485,7 +501,9 @@ def test_expired_prearmed_window_does_not_create_fresh_signal(tmp_path):
     machine.run_once(_at(11, 8, 30))
     state = machine.run_once(_at(11, 9, 31))
     assert not gateway.buy_calls
-    assert state["signal_features"]["signal_clock_basis"] == "prearmed_before_route_open"
+    assert (
+        state["signal_features"]["signal_clock_basis"] == "prearmed_before_route_open"
+    )
     assert all(leg["status"] == "NO_FILL" for leg in state["legs"])
 
 

@@ -52,13 +52,15 @@ def widget_buy_proven_not_sent(order):
         and order.get("order_no") == ""
         and type(order.get("filled_qty")) is int
         and order["filled_qty"] == 0
-        and "fill_price" in order and order["fill_price"] is None
+        and "fill_price" in order
+        and order["fill_price"] is None
         and order.get("fill_amount") in (None, 0)
         and order.get("fill_amount_krw") in (None, 0)
         and not order.get("ambiguous")
         and not order.get("owner_registry_bind_confirmed")
         and not any(
-            value for key, value in order.items()
+            value
+            for key, value in order.items()
             if key.endswith("owner_registry_reconciliation_required")
             or key.endswith("owner_registry_error")
         )
@@ -71,17 +73,18 @@ def widget_position_buys(state):
     if not isinstance(signal, str) or not signal.strip():
         return []
     return [
-        order for order in state.get("orders", [])
+        order
+        for order in state.get("orders", [])
         if order.get("side") == "BUY"
-        and (order.get("signal_id") == signal
-             or order.get("parent_entry_signal_id") == signal)
+        and (
+            order.get("signal_id") == signal
+            or order.get("parent_entry_signal_id") == signal
+        )
         and not widget_buy_proven_not_sent(order)
     ]
 
 
-def _original_target_fill_facts(
-    registry, order, filled, *, owner_id, symbol
-):
+def _original_target_fill_facts(registry, order, filled, *, owner_id, symbol):
     """Return exact registry-backed price/time for the original target fill.
 
     The profit-exit reducer intentionally tracks quantities only.  Shared WS
@@ -124,6 +127,7 @@ def _original_target_fill_facts(
 
 def active_widget(state):
     from src.trading.order.target_ratchet import KEY as RATCHET_KEY
+
     return KEY in state or RATCHET_KEY in state
 
 
@@ -190,6 +194,18 @@ def _drive(owner, state, *, adapter, symbol, now, authorized, write_guard, persi
     def durable(payload):
         # A failed fsync/rename must not be treated as an ordinary source gap.
         try:
+            if symbol == "005930":
+                from src.engine.monitoring.machine_entry_confirmation_study import (
+                    instrumentation_call,
+                    record_programme_transition,
+                )
+
+                instrumentation_call(
+                    owner._state,
+                    record_programme_transition,
+                    payload,
+                    clock=adapter.now_ms,
+                )
             persist(payload)
         except BaseException:
             owner._profit_exit_reload_required = True
@@ -229,6 +245,7 @@ def _drive(owner, state, *, adapter, symbol, now, authorized, write_guard, persi
 def episode_leg(machine, leg, now):
     """True means normal target reconciliation must not also touch this leg."""
     from src.trading.order.target_ratchet import episode
+
     if episode(machine, leg, now):
         return True
     if getattr(machine, "_profit_exit_reload_required", False):
@@ -354,6 +371,7 @@ def widget_symbol(trader, state, now, *, allow_new_target_ratchet=False):
     no supplementary SELL or unconfirmed cancellation remains.
     """
     from src.trading.order.target_ratchet import widget
+
     if widget(trader, state, now, allow_new=allow_new_target_ratchet):
         return True
     if getattr(trader, "_profit_exit_reload_required", False):

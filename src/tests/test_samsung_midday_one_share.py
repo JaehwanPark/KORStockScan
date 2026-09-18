@@ -240,6 +240,11 @@ def test_latest_completed_signal_submits_two_independent_sor_buys_once(tmp_path)
     assert state["attempt_consumed"] is True
     assert gateway.buy_calls == [98_100, 98_000]
     assert [leg["quantity"] for leg in state["legs"]] == [10, 10]
+    opportunity = next(iter(state["timing_operating_opportunities"].values()))
+    assert opportunity["contract"].get("status") != "source_gap"
+    assert opportunity["contract"]["total_quantity"] == 20
+    assert opportunity["actual_order_submitted"] is True
+    assert len(opportunity["native_state"]["order_clocks"]) == 2
     machine.run_once(_scan_at(12, 2))
     assert gateway.buy_calls == [98_100, 98_000]
 
@@ -857,15 +862,20 @@ def test_operator_one_day_new_legs_submit_and_reload_with_owned_quantity(
     assert buy_quantities == [quantity, quantity]
 
 
-
 def test_operator_one_day_keeps_previous_ten_share_owned_targets(tmp_path):
     from dataclasses import replace
+
     gateway = FakeGateway()
-    gateway.bars = tuple(replace(bar, timestamp=bar.timestamp.replace(month=9, day=10)) for bar in gateway.bars)
+    gateway.bars = tuple(
+        replace(bar, timestamp=bar.timestamp.replace(month=9, day=10))
+        for bar in gateway.bars
+    )
     now = _scan_at(12, 1).replace(month=9, day=10)
     state = _machine(tmp_path, gateway).run_once(now)
     for index, leg in enumerate(state["legs"], 1):
-        gateway.snapshots[f"B{index}"] = ExecutionSnapshot(True, True, 10, 0, 10, leg["entry_price"])
+        gateway.snapshots[f"B{index}"] = ExecutionSnapshot(
+            True, True, 10, 0, 10, leg["entry_price"]
+        )
     _machine(tmp_path, gateway).run_once(now + timedelta(seconds=1))
     state = _machine(tmp_path, gateway).run_once(now + timedelta(days=1))
     assert state["position_qty"] == 20
