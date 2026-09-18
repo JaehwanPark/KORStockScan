@@ -12,7 +12,7 @@ Calibration과 최신 미사용 독립2일 holdout을 outcome 확인 전에 분�
 
 실제 첫 재생성에서 기본 태그 전용 필터가 Main `SCANNER` 실제4건을 체결0으로 누락한 결함을 발견했다. 해당 결과를 superseded로 기록하고 기존 Main SCANNER/default custody를 포함하며 widget/episode/manual을 제외하도록 수리했다. 실제 inventory custody 회귀를 추가하고 수정 release에서 재생성한다. 최근20 report date DB census는5건(8/21 qty1 추가)이며9월 기존4건과 분모를 분리한다. 현재 DB의 COMPLETED2건은 sell_time가 결손이므로 HOLDING/시간대기로 바꾸지 않고 terminal-clock source gap으로 표시한다.
 
-재리뷰에서 음수 스트레스 표본 누락, 동일 포지션의 과거 시장가로 후속 지정가 재시도를 제외할 가능성, projection target-date 덮어쓰기, cursor의 source-gap 은폐, 날짜별 정책 적용일/영수증/hash 검증을 보완했다. 정상 conditional skip에서 불필요한 코드 workorder를 만들지 않고 구조적 source gap은 남긴다. Report/policy 원자적 기록·source lock·immutable evaluation snapshot을 사용한다.
+재리뷰에서 음수 스트레스 표본 누락, 동일 포지션의 과거 시장가로 후속 지정가 재시도를 제외할 가능성, projection target-date 덮어쓰기, cursor의 source-gap 은폐, 날짜별 정책 적용일/영수증/hash 검증을 보완했다. 마지막 재리뷰에서 독립 holdout의 날짜 역전과 formal policy 승인 원천보다 미래인 증거 수락을 차단하고 실제 calibration/holdout 순서에 맞게 fixture를 정정했다. 정상 conditional skip에서 불필요한 코드 workorder를 만들지 않고 구조적 source gap은 남긴다. Report/policy 원자적 기록·source lock·immutable evaluation snapshot을 사용한다.
 
 ## 검증·배포 경계
 
@@ -23,3 +23,13 @@ Calibration과 최신 미사용 독립2일 holdout을 outcome 확인 전에 분�
 Read-only history census의 실제 AVG_DOWN EXECUTED/receipt_confirmed4건은 frozen anchor의 주문번호로 확인된 market-like이고3건은 요청량1이다. 현재 applicable/paired0이며 EV·일별 Δ순익은 null이다. 보유 미성숙과 시장가/qty1·가격/모델 원천의 구조 결손을 구분한다. 표본 확보 주문/수량 증대는 하지 않는다.
 
 다음 사용자 예정9/21 정책은 원 source9/17의 incumbent unsplit base-order 보존 정책으로 준비한다. Available 날짜별 정책은 신규 split 활성화/positive edge/전체 PREOPEN 허용이 아니다. 전체 integrated-entry handoff·native resource guard 중단·Main PID/자연 소비는 별도 owner이며 과거 PASS로 최신 실패를 덮지 않는다. Executable owner는 `KiwoomCommonHealthOpportunityCostAcceptance0917` 하나를 유지한다. 유효 지정가 full-fill·기존 가격/lot/비용 원천과 미사용 독립 날짜가 확보될 때 평가한다. 경제성 ETA=null이다.
+
+## 결과 갱신·최종 closure receipt
+
+Source9/17→사용자 예정 effective9/21의 v4 policy를 재생성했다. 최근20 report date Main actual fill census5/COMPLETED5, qty1 제외4·frozen-order market-like 제외4(중복), applicable0/paired0, modeled EV와 일별 Δ순익null이다. COMPLETED2건 sell_time 결손은 terminal-clock source gap이며 시간대기/HOLDING/순익0으로 바꾸지 않았다. 핵심 조건부 단계는 약0.6초이며 raw/replay/grid0이다. 모델/정책 활성화 경제성 평가가 실행되지 않은 정상 비대상 skip이다.
+
+`consumer-refresh.json`의 cached Daily/calibration→EV/workorder→approval summary→tower→checklist 갱신은15.097초이며 다른18개 calibration 후보의 내용 SHA를 보존했다. 최신 EV 뒤 workorder fingerprint를 확정하여 초회 strict의 EV source SHA/size 불일치를 수정했다. EV의 workorder section은 기존 계약상 diagnostic previous-generation이고 freshness authority가 아니다. `scope-verifier.json`은 actual census·candidate state/source content SHA·EV 경고0·불필요 scale followup0·dated policy SHA/effective/unsplit 비활성 계약 PASS다.
+
+최신 `--require-summary-handoff`는 summary handoff PASS지만 전체 strict FAIL26항목이다. 저가주 schema/authority/hash/date/profile, machine timing 정책 파일 부재·closed-loop 미완료, pattern propagation, native postclose FAIL와 retired Swing 요구가 기존 선행 차단이다. 전체 controller는 blocked이고 finalization/cleanup/최종 detector 성공을 발행하지 않았다. Gap/lineage/conversion 산출물은 원 chain이 그 단계 전 중단해 부재이며 부재를 valid-empty/재생성 성공으로 바꾸지 않았다. 별도 AI/provider/broad replay를 복원하여 이를 메우지 않는다. 추천 intake의 다른 단위 OPEN도 이 scope의 fixed-point/경제성 완료로 세지 않는다.
+
+현재07:35 PREOPEN/07:55 Main cron은 기존 selector route를 유지한다. Nine-route 전체 `--check-cron`은 기존 OFF 장후 route의 missing/duplicate 상태로 blocked이며 cron을 복원하지 않았다. PREOPEN9/21 print-plan은 selected managed source PASS다. Deployment/current source·actual PID·next-day immutable PREOPEN와 자연 COMPLETED 경제성은 분리하며 마지막은 OPEN이다. `deployment.json`과 `validation.json`, `result-refresh.json`의 exact commit/root/selector/policy SHA를 따른다. 독립 market weakness owner의 동시 정책 revision1건은 보존하고 이번 scope의 쓰기로 집계하지 않았다.

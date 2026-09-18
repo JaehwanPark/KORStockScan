@@ -2376,6 +2376,12 @@ def runtime_refresh_contract_error(evidence: Any) -> str:
     for holdout in holdouts:
         if not isinstance(holdout, dict) or holdout.get("runtime_apply_allowed") is not True or holdout.get("runtime_apply_blockers") or holdout.get("blockers"):
             return "runtime_refresh_independent_holdout_blocked"
+        calibration_dates, holdout_dates = holdout.get("calibration_dates"), holdout.get("holdout_dates")
+        if (not isinstance(calibration_dates, list) or not calibration_dates or not isinstance(holdout_dates, list) or not holdout_dates
+                or any(not isinstance(day, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day) or not is_date_allowed(day, clean_baseline_policy())
+                       for day in calibration_dates + holdout_dates)
+                or max(calibration_dates) >= min(holdout_dates)):
+            return "runtime_refresh_holdout_chronology_invalid"
         if ((_safe_float(holdout.get("price_join_coverage"), 0) or 0) < 0.8 or (_safe_float(holdout.get("modeled_fill_participation"), 0) or 0) < 0.7
                 or _safe_float(holdout.get("downside_p10_profit_rate"), None) is None or holdout["downside_p10_profit_rate"] < -0.3
                 or set(holdout.get("calibration_dates") or []).intersection(holdout.get("holdout_dates") or [])
@@ -3392,6 +3398,10 @@ def policy_runtime_contract_error(policy: Any) -> str:
         policy_version,
     )
     source_date = source_match.group(1) if source_match else ""
+    if source_date and any(day > source_date for holdout in policy["runtime_refresh_evidence"]["holdout_evidence"]
+                           for day in holdout["calibration_dates"] + holdout["holdout_dates"]):
+        return "runtime_refresh_holdout_after_approval_source_date"
+
     if source_date >= ATOMIC_EXECUTION_SIZING_REQUIRED_FROM:
         if policy.get("scale_in_execution_sizing_plan_schema") != (
             ATOMIC_EXECUTION_SIZING_SCHEMA

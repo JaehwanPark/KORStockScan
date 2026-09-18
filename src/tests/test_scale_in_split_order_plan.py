@@ -166,8 +166,8 @@ def _valid_runtime_refresh_evidence():
         "downside_p10_profit_rate": 0.05,
         "blockers": [],
         "holdout_evidence": [{"runtime_apply_allowed": True, "runtime_apply_blockers": [], "blockers": [],
-            "paired_economic_sample_count": 3, "economic_source_dates": ["2026-07-08", "2026-07-09"],
-            "holdout_dates": ["2026-07-08", "2026-07-09"], "calibration_dates": ["2026-07-06", "2026-07-07"],
+            "paired_economic_sample_count": 3, "economic_source_dates": ["2026-07-06", "2026-07-07"],
+            "holdout_dates": ["2026-07-06", "2026-07-07"], "calibration_dates": ["2026-07-02", "2026-07-03"],
             "source_quality_adjusted_ev_pct": 0.10, "average_daily_delta_net_pnl_krw": 10,
             "price_join_coverage": 1.0, "modeled_fill_participation": 1.0, "downside_p10_profit_rate": 0.05}],
     }
@@ -2193,3 +2193,12 @@ def test_actual_fill_inventory_keeps_main_scanner_and_excludes_other_custody(mon
     assert [row["record_id"] for row in result] == ["1", "2"]
     assert result[0]["status"] == "COMPLETED"
     assert result[0]["outcome_timing_status"] == "missing_completed_terminal_clock"
+
+
+def test_runtime_refresh_rejects_reversed_holdout_and_future_approval_dates():
+    evidence = _valid_runtime_refresh_evidence()
+    evidence["holdout_evidence"][0]["calibration_dates"] = ["2026-07-08", "2026-07-09"]
+    assert split_plan.runtime_refresh_contract_error(evidence) == "runtime_refresh_holdout_chronology_invalid"
+    policy = {"runtime_refresh_evidence": _valid_runtime_refresh_evidence(),
+              "policy_version": "scale_in_split_order_plan:2026-07-03:untrusted"}
+    assert split_plan.policy_runtime_contract_error(policy) == "runtime_refresh_holdout_after_approval_source_date"
