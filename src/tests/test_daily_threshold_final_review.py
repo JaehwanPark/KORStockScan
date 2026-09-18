@@ -480,6 +480,9 @@ def test_exact_owner_price_pair_exposes_ev_and_daily_profit_and_binds_policy():
     row["economic_evaluation"]["metrics"]["daily_delta_net_pnl_krw"]["2026-09-14"] += 100
     row["economic_evaluation"]["artifact_content_sha256"] = daily._json_sha256({k:v for k,v in row["economic_evaluation"].items() if k != "artifact_content_sha256"})
     assert daily.economic_challenger_blocker(row) == "economic_improvement_proof_mismatch"
+    row["runtime_apply_eligible_now"] = False
+    report["economic_evaluation"] = daily.economic_evaluation_summary([row], report["date"])
+    assert "economic_improvement_proof_invalid:dynamic_entry_price_resolver" in daily.economic_report_contract_errors(report)
     row["economic_evaluation"] = saved
     row["source_metrics"]["source_quality_blocked"] = True
     daily._attach_economic_evaluation(report)

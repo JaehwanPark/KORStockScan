@@ -14003,6 +14003,8 @@ def economic_report_contract_errors(report: dict) -> list[str]:
     if summary != economic_evaluation_summary(rows, day):
         errors.append("economic_summary_generation_mismatch")
     for row in rows:
+        if (row.get("economic_evaluation") or {}).get("status") == "validated_improvement" and economic_challenger_blocker(row):
+            errors.append("economic_improvement_proof_invalid:"+str(row.get("family")))
         if row.get("runtime_apply_eligible_now") is True and economic_challenger_blocker(row):
             errors.append("economic_ineligible_challenger:"+str(row.get("family")))
     return errors

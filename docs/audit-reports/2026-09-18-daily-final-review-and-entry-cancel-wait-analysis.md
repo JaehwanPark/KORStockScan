@@ -4,7 +4,7 @@
 
 ## 1. Daily 리뷰·보완·정리
 
-리뷰에서 두 결함을 재현했다. 첫째, versioned evidence가 self-hash를 재계산해 양수 cash 값으로 변조됐을 때 원 family proof와 재검증하지 않는 경로였다. 둘째, 명시적 source-quality 차단이 있어도 유효 가격/scale-in proof adapter가 validated 상태로 덮어쓸 수 있었다. 기존 family evaluator로 증거 status/metrics/proof SHA를 다시 확인하고 명시적 원천 차단을 우선하도록 보완했다. 기존 valid price fixture에 변조/차단 회귀를 추가했다. 새 replay engine·threshold·주문·provider·root module·cron은 추가하지 않는다.
+리뷰에서 두 결함을 재현했다. 첫째, versioned evidence가 self-hash를 재계산해 양수 cash 값으로 변조됐을 때 원 family proof와 재검증하지 않는 경로였다. 둘째, 명시적 source-quality 차단이 있어도 유효 가격/scale-in proof adapter가 validated 상태로 덮어쓸 수 있었다. 기존 family evaluator로 증거 status/metrics/proof SHA를 다시 확인하고 명시적 원천 차단을 우선하도록 보완했다. 기존 valid price fixture에 변조/차단 회귀를 추가했다. 적용 대상false인 행의 변조된 양수 증거도 strict 계약 오류로 처리하여 잘못된 개선 집계 승계를 막았다. 새 replay engine·threshold·주문·provider·root module·cron은 추가하지 않는다.
 
 Daily/source/PREOPEN505PASS와 EV/runtime/strict264PASS, compile/diff/print-only parser 및 final release contract/기존 compact strict를 확인한다. 정책·family currentness는 코드 revision이 변경됐으므로 기존 bounded refresh/후행 소비만 재생성한다. 원천 gap을0/no-edge로 대체하거나 별도 경제성 floor를 완화하지 않는다.
 
