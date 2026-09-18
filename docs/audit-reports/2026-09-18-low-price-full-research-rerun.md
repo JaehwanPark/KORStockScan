@@ -28,3 +28,25 @@
 - 기존 widget main에서 두 정상적인 admission 대기(`shared_read_rate_wait_budget_exhausted`, `shared_read_rate_server_cooldown`)만 별도 `source_waiting`으로 기록하고 다른 종목의 source 검증/경제 계산/체크포인트를 이어간다. 해당 종목은 quarantine/EV0/완료 분모로 처리하지 않는다. 대기가 남으면 별도 ledger와exit3을 기록하며 정식 study 보고서를 생성하지 않아 공동 평가/정책 단계로 넘어가지 않는다. 모두 처리한 성공 실행에서 ledger도complete/대기0으로 갱신한다.
 - 새로운 retry loop·성능 guard·모듈·grid 축소 없음. 요청/parser/continuation/auth/API read quota와각 요청의bounded wait/retry 계약 변경0. 알 수 없는admission 계약 손실이나provider 오류는글로벌 실패를유지한다. 저가주 재계산 중인b091ef83f worktree를보존하고별도 worktree `widget-deferred-source-repair-20260918`에서보완/검증한다.
 - self review 보완: 성공 후 이전 waiting ledger가남지않도록 완료writer 이후progress receipt를갱신했다. 재리뷰범위producer source intake→symbol checkpoint→full population writer→closedloop intake, finding0. 부분/전체대기·잘못된admission의분리 및완료체크포인트 보존/부분보고서 미발행 포함 관련46PASS/compile/diff PASS이다. nativefullworker는검증commit 후새code root에서재개하며selected trading release/PID는변경하지않는다.
+
+## 저가주 전체 경제 재계산 완료
+
+- native full grid 완료:204종목 inventory/유효원천197/원천quarantine7/전체1,020프로필. 경제 checkpoint hit0/miss789이며나머지231프로필은원천 또는integrated-aftermarket 전체범위증거 결손으로계산에포함하지않는다. wall1,625.95초(27분06초), userCPU1,584.71초, systemCPU9.93초, peakRSS657,508KiB이다. 성능수치의범위는이번원천검증+native full build/write invocation이며전체장후chain 시간이아니다.
+- [원천 보고서](../../data/report/postclose_research_successor_20260917_20260918/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-17.json), [기존로직 전체 비교](../../data/report/postclose_research_successor_20260917_20260918/low_price_existing_logic_full_comparison_2026-09-17.json). 기존로직64개를실제 calibration winner와비교했다. native같은관측창/비용계약의수치비교13개이며양측완료결과·holdout표본(3signal/4completed)·미청산부재를충족한모델비교는3개다. 유효성숙비교의EV개선0/일별순익개선0이다. 실제주문/실현수익/자본가능공동EV가아니다.
+
+| 프로필 | baseline EV% | challenger EV% | EV 차이pp | 완료leg baseline/challenger |
+|---|---:|---:|---:|---:|
+| 두산에너빌리티 늦은오전 | 0.168286 | 0.168286 | 0 | 8/8 |
+| 팬오션 늦은오전 | 0.382903 | 0.382903 | 0 | 10/10 |
+| SK텔레콤 오전 | 0.092564 | 0.092564 | 0 | 8/8 |
+
+- 소표본수치상EV상승2개는승격근거가아니다. 팬오션점심 0.070402→0.222456%, +0.152054pp이나challenger1signal/1completed이며시도빈도0.375→0.0625/유효관측일로감소해일별단위모델순익은-1.3525KRW/일이다. 제주반도체오전은challenger2signal/1completed에불과하며baseline EV0의완료표본이없어성숙완료EV비교로인정하지않는다. 단위모델금액을실제10주매매수익이나공동자본수익으로환산하지않는다.
+- 전체native결정: prospective580, source/session quarantine231, robust calibration 부적격147, holdout실패57, positive_not_better3, early source-only holdout pass2. native지원추천1은팬오션오전이며그자체가새live종목승격이아니다. baseline EV/paired uplift가미확정인early후보와미래prospective의자연표본 검증은OPEN이다.
+
+## 실제 원천 실패 연결 및 부분 모집단 소비 보완
+
+- 첫deferred-aware native pass는51종목까지진행(29경제완료/17공유read대기/5daily source격리)한후042040에서종료했다. 생산자의실제오류이름은`042040_source_quality_fail`인데consumer catch는`source_quality_not_pass`만포함해식별 가능한종목실패가다시전체를중단한것이다. 실제fetch함수를사용하는회귀를추가하고기존main의정확한native FAIL이름1개만연결했다. 요청/parser/continuation/원천·경제범위/샘플·quality조건은그대로이며원천snapshot parser hash를보존한다. nativeFAIL상세meta는fetch가반환하지않으므로widget ledger에확인하지못한bar/date/SHA를만들어넣지않는다. 저가주AL실패metadata를KRX원천으로오용하지않는다.
+- 직접정책/관측catalog consumer가모든199종목에PASS를요구해producer의식별된부분quarantine을글로벌실패로오인하는연결결손도보완했다. strictledger(count/type/universe/정확한native이유/FAILmeta/비평가행/authority false/승격리스트 제외)를검증한격리행만새승격·관측등록에서제외하고나머지종목의기존KRX출처/비용/표본/실행·joint guard를유지한다. 잘못된ledger/미식별FAIL/all-invalid는실패한다. 기존검증된incumbent carry·퇴역/incident/custodyguard는변경하지않는다.
+- 최신producer+policy consumer69PASS(47+22)/compile/diff PASS. 재리뷰범위source品質의symbol scope→전체denominator→원천ledger→policy/catalog/closedloop, finding0. source-only실행만하며현재날짜동결policy를교체하지않는다.
+
+- Official reference 확인: upstream HEAD `953e5dbff123f437ab4d11a78a95191a685eb51f`, retrieval `2026-09-18T09:28:35.428171+09:00`; inspected `kiwoom/_data/kiwoom_api_spec.json`, `kiwoom/specs.py`, `kiwoom/core/errors.py`, `postman/kiwoom-openapi.postman_collection.json`. 현재tracked tree에는`kiwoom_docs`가없음을기록했고기존ka10080spec/Postman/SDK를교차확인했다. protocol의새의미를추정하거나API/auth/order contract를변경하지않는다. 증거:`tmp/low-price-full-research-20260918/official-kiwoom-source-quality-review.json`.
