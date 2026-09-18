@@ -1542,38 +1542,8 @@ def test_holding_sell_exchange_resolution_preserves_missing_nxt_provenance(
     assert decision["reason"] == "holding_sell_route_authority_missing"
 
 
-def test_entry_opportunity_recheck_outcome_mark_updates_runtime_state(monkeypatch):
-    state = state_handlers.EntryOpportunityRecheckState(trade_date="2026-07-02")
-    monkeypatch.setattr(state_handlers, "_ENTRY_OPPORTUNITY_RECHECK_STATE", state)
-
-    marked = state_handlers._mark_entry_opportunity_recheck_outcome(
-        {"entry_opportunity_recheck_armed": True, "status": "HOLDING"},
-        "001260",
-        profit_rate=0.24,
-        peak_profit=0.51,
-        now_ts=1_234.0,
-    )
-
-    assert marked is True
-    assert state.recovery_marks["001260"]["profit_rate"] == 0.24
-    assert state.recovery_marks["001260"]["peak_profit"] == 0.51
-    assert state.recovery_marks["001260"]["status"] == "HOLDING"
 
 
-def test_entry_opportunity_recheck_outcome_mark_skips_unarmed_position(monkeypatch):
-    state = state_handlers.EntryOpportunityRecheckState(trade_date="2026-07-02")
-    monkeypatch.setattr(state_handlers, "_ENTRY_OPPORTUNITY_RECHECK_STATE", state)
-
-    marked = state_handlers._mark_entry_opportunity_recheck_outcome(
-        {"status": "HOLDING"},
-        "001260",
-        profit_rate=0.24,
-        peak_profit=0.51,
-        now_ts=1_234.0,
-    )
-
-    assert marked is False
-    assert state.recovery_marks == {}
 
 
 def test_entry_opportunity_recheck_submission_binds_only_first_broker_order():
@@ -4985,7 +4955,7 @@ def test_pre_submit_entry_ai_authority_retry_refreshes_missing_ai(monkeypatch):
     assert stock["last_watching_ai_attempt_trusted"] is True
     assert stock["last_watching_ai_attempt_contract_status"] == "pass"
     assert stock["entry_setup_live_policy_mode"] == "one_share_exploration"
-    assert stock["entry_opportunity_recheck_exploration_probe_only"] is True
+    assert "entry_opportunity_recheck_exploration_probe_only" not in stock
     assert stock["entry_setup_bounded_exploration_probe_only"] is True
     assert (
         stock["entry_setup_prompt_quantity_owner"] == "position_sizing_dynamic_formula"
@@ -35593,11 +35563,6 @@ def test_broker_accepted_non_split_exploration_order_commits_durable_cap(monkeyp
         lambda **kwargs: calls.append(kwargs) or 2,
     )
     monkeypatch.setattr(
-        state_handlers._ENTRY_OPPORTUNITY_RECHECK_STATE,
-        "sync_exploration_probe_submit_count",
-        lambda count: synced.append(count),
-    )
-    monkeypatch.setattr(
         state_handlers,
         "_log_entry_pipeline",
         lambda stock, code, stage, **fields: logs.append((stage, fields)),
@@ -35618,7 +35583,6 @@ def test_broker_accepted_non_split_exploration_order_commits_durable_cap(monkeyp
             "broker_order_no": "0026339",
         }
     ]
-    assert synced == [2]
     assert logs == [
         (
             "entry_setup_exploration_probe_cap_committed",
@@ -35661,11 +35625,6 @@ def test_broker_accepted_exploration_order_ledger_failure_fails_closed(monkeypat
         "mark_exploration_probe_cap_fail_closed",
         lambda **kwargs: failures.append(kwargs),
     )
-    monkeypatch.setattr(
-        state_handlers._ENTRY_OPPORTUNITY_RECHECK_STATE,
-        "sync_exploration_probe_submit_count",
-        lambda count: synced.append(count),
-    )
     monkeypatch.setattr(state_handlers, "log_error", lambda *_args: None)
     monkeypatch.setattr(
         state_handlers,
@@ -35682,7 +35641,6 @@ def test_broker_accepted_exploration_order_ledger_failure_fails_closed(monkeypat
 
     assert committed is False
     assert failures == [{"trade_date": "2026-08-27", "reason": "disk unavailable"}]
-    assert synced == [3]
     assert logs[0][0] == "entry_setup_exploration_probe_cap_fail_closed"
     assert logs[0][1]["entry_setup_exploration_cap_ledger_ok"] is False
     assert logs[0][1]["entry_setup_exploration_daily_probe_count"] == 3
@@ -42436,3 +42394,15 @@ def test_retired_scout_false_flags_keep_ordinary_submit_path(source, monkeypatch
     runtime = flags if source == "runtime" else {}
     with pytest.raises(RuntimeError, match="ordinary_entry_reached"):
         state_handlers._submit_watching_triggered_entry(stock, "005930", {}, None, runtime)
+
+
+def test_normal_exploration_cap_does_not_need_retired_actor_flag(monkeypatch):
+    stock = {"entry_setup_bounded_exploration_probe_only": True, "entry_setup_live_policy_max_daily_exploration_probes": 3}
+    monkeypatch.setattr(state_handlers, "read_exploration_probe_submit_count", lambda day: 3)
+    result = state_handlers._entry_setup_exploration_submit_cap_guard(stock, qty=1, now_ts=1000)
+    assert result["allowed"] is False
+    calls = []
+    monkeypatch.setattr(state_handlers, "record_exploration_probe_submission", lambda **kw: calls.append(kw) or 3)
+    monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda *a, **kw: None)
+    assert state_handlers._commit_entry_setup_exploration_probe_cap(stock, "005930", "accepted-order", now_ts=1000)
+    assert len(calls) == 1

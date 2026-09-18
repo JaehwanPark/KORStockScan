@@ -1283,7 +1283,7 @@ def _recovery_actions(
     )
     drought = verification.get("drought_canonical_handoff") or {}
     drought_issues = set(drought.get("issues") or [])
-    # A changed controller also invalidates its workorder fingerprint. Both are
+    # A changed normal-path source also invalidates its workorder fingerprint. Both are
     # repaired in this same producer -> workorder -> summary sequence.
     workorder_source_issues = set(
         (verification.get("code_improvement_workorder_source_fingerprint") or {}).get(
@@ -1294,29 +1294,11 @@ def _recovery_actions(
     if drought_issues and not (other_issues - drought_issues - workorder_source_issues):
         # The EV workorder snapshot is deliberately previous-generation. Repair
         # the final canonical receipt without rerunning EV/AI or applying an env.
-        if (
-            drought.get("controller_validation_error")
-            and drought.get("controller_required") is True
-        ):
-            actions.append(
-                RecoveryAction(
-                    "refresh_entry_recheck_drought_controller",
-                    [
-                        _python_bin(),
-                        "-m",
-                        "src.engine.scalping.entry_recheck_drought_controller",
-                        "--target-date",
-                        target_date,
-                        "--write",
-                    ],
-                    "restore the exact-date controller source and PREOPEN contract",
-                )
-            )
         actions.append(
             RecoveryAction(
                 "refresh_code_improvement_workorder_final",
                 _workorder_command(target_date, verification),
-                "restore canonical per-ID drought dispositions after controller repair",
+                "restore canonical per-ID drought dispositions from the normal submit-path evidence",
             )
         )
         actions.append(

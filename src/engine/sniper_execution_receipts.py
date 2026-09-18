@@ -32,7 +32,7 @@ from src.engine.scalping.entry_candidate_lifecycle_state import (
     CONTEXT_KEY as ENTRY_CANDIDATE_LIFECYCLE_CONTEXT_KEY,
     observe_candidate_transition_safe,
 )
-from src.engine.scalping.entry_opportunity_recheck import (
+from src.engine.scalping.entry_recheck_economics import (
     ATTRIBUTION_KEYS as ENTRY_OPPORTUNITY_RECHECK_ATTRIBUTION_KEYS,
     attribution_fields as entry_opportunity_recheck_attribution_fields,
 )

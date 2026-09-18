@@ -125,10 +125,6 @@ SCALPING_PYRAMID_QUALITY_CALIBRATION_DIR = (
 SCALPING_AVG_DOWN_RECOVERY_CALIBRATION_DIR = (
     DATA_DIR / "report" / "scalping_avg_down_recovery_calibration"
 )
-ENTRY_RECHECK_DROUGHT_CONTROLLER_DIR = (
-    DATA_DIR / "report" / "entry_recheck_drought_controller"
-)
-ENTRY_AI_GATE_DROUGHT_RUNTIME_UPDATE_MODE = "drought_triggered_bounded_live"
 CUMULATIVE_QUALITY_RUNTIME_UPDATE_MODE = "single_cumulative_quality_update"
 AVG_DOWN_RECOVERY_FAMILY = "scalping_avg_down_recovery_quality_gate"
 AVG_DOWN_EVIDENCE_CONTRACT_VERSION = "avg_down_paired_economics_v3"
@@ -244,6 +240,7 @@ REMOVED_TARGET_ENV_KEYS = {
     key.removeprefix("KORSTOCKSCAN_") for key in REMOVED_RUNTIME_ENV_KEYS
 }
 REMOVED_CALIBRATION_FAMILIES = {
+    "entry_opportunity_recheck_runtime",
     "position_sizing_cap_release",
     "preset_tp_soft_stop_runtime",
 } | RETIRED_CALIBRATION_FAMILIES
@@ -271,6 +268,7 @@ HOLD_CARRY_FORWARD_BLOCK_REASON_KEYS: dict[str, frozenset[str]] = {
     "same_stage_owner_conflict": frozenset({"same_stage_owner_conflict"}),
 }
 RETIRED_RUNTIME_FAMILY_REASONS = {
+    "entry_opportunity_recheck_runtime": "entry_recheck_permanently_retired",
     **{family: "retired_runtime_family:adm_ldm" for family in RETIRED_FAMILIES},
     **{
         family: ("retired_calibration_family:independent_scale_in"
@@ -386,21 +384,6 @@ TARGET_ENV_VALUE_KEYS = {
     "REVERSAL_ADD_MIN_BUY_PRESSURE": "reversal_add_min_buy_pressure",
     "REVERSAL_ADD_MIN_TICK_ACCEL": "reversal_add_min_tick_accel",
     "SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED": "enabled",
-    "ENTRY_OPPORTUNITY_RECHECK_ENABLED": "enabled",
-    "ENTRY_OPPORTUNITY_RECHECK_MIN_AI_SCORE": "min_ai_score",
-    "ENTRY_OPPORTUNITY_RECHECK_MAX_AI_SCORE": "max_ai_score",
-    "ENTRY_OPPORTUNITY_RECHECK_MAX_RECHECK_PER_SYMBOL": "max_recheck_per_symbol",
-    "ENTRY_OPPORTUNITY_RECHECK_MAX_DAILY_RECHECK": "max_daily_recheck",
-    "ENTRY_OPPORTUNITY_RECHECK_MAX_DAILY_BUY_RECOVERY": "max_daily_buy_recovery",
-    "ENTRY_OPPORTUNITY_RECHECK_MAX_WS_AGE_MS": "max_ws_age_ms",
-    "ENTRY_OPPORTUNITY_RECHECK_FORBID_DANGER": "forbid_danger",
-    "ENTRY_OPPORTUNITY_RECHECK_REQUIRE_FRESH_QUOTE": "require_fresh_quote",
-    "ENTRY_OPPORTUNITY_RECHECK_REQUIRE_EXPLICIT_BUY_ACTION": "require_explicit_buy_action",
-    "ENTRY_OPPORTUNITY_RECHECK_ALLOW_WAIT_PROBE_INTENT": "allow_wait_probe_intent",
-    "ENTRY_OPPORTUNITY_RECHECK_REQUIRE_PROBE_FIRST_CONTRACT": "require_probe_first_contract",
-    "ENTRY_OPPORTUNITY_RECHECK_INTRADAY_ESCALATION_ENABLED": "intraday_escalation_enabled",
-    "ENTRY_OPPORTUNITY_RECHECK_INTRADAY_ESCALATION_SCOPES": "intraday_escalation_scopes",
-    "ENTRY_OPPORTUNITY_RECHECK_ALLOWED_SCOPES": "allowed_scopes",
     "SCALP_BAD_ENTRY_REFINED_MIN_HOLD_SEC": "min_hold_sec",
     "SCALP_BAD_ENTRY_REFINED_MIN_LOSS_PCT": "min_loss_pct",
     "SCALP_BAD_ENTRY_REFINED_MAX_PEAK_PROFIT_PCT": "max_peak_profit_pct",
@@ -533,7 +516,6 @@ EARLY_ACCEL_RECHECK_FAMILY = "early_accel_recheck_runtime"
 AI_NUMERIC_CONSISTENCY_RECHECK_FAMILY = "ai_numeric_consistency_recheck_runtime"
 PRE_SUBMIT_LIQUIDITY_RELIEF_FAMILY = "pre_submit_liquidity_relief_runtime"
 WEAK_CONTEXT_LATE_ENTRY_GUARD_FAMILY = "weak_context_late_entry_guard_runtime"
-ENTRY_OPPORTUNITY_RECHECK_FAMILY = "entry_opportunity_recheck_runtime"
 SCORE65_74_STRONG_MICRO_OVERRIDE_FAMILY = (
     "score65_74_recovery_probe_strong_micro_override_runtime"
 )
@@ -1322,9 +1304,6 @@ def _candidate_apply_contract_blockers(
     avg_down_contract_error = _avg_down_candidate_contract_error(candidate)
     if avg_down_contract_error:
         blockers.append(avg_down_contract_error)
-    drought_contract_error = _entry_recheck_drought_candidate_contract_error(candidate)
-    if drought_contract_error:
-        blockers.append(drought_contract_error)
     if _candidate_source_quality_contract_blocked(candidate):
         blockers.append("source_quality_blocked")
     if (
@@ -1516,426 +1495,16 @@ def _load_scalping_avg_down_recovery_calibration_candidates(
     return [], retired_status("scalping_avg_down_recovery_calibration")
 
 
-def _entry_recheck_drought_controller_path(source_date: str) -> Path:
-    return ENTRY_RECHECK_DROUGHT_CONTROLLER_DIR / (
-        f"entry_recheck_drought_controller_{source_date}.json"
-    )
 
 
-def _entry_ai_gate_payload_source_quality_blocked(
-    payload: dict[str, Any],
-) -> bool:
-    if not isinstance(payload, dict):
-        return False
-    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
-    if payload.get("source_quality_blocked") or payload.get("source_quality_blocker"):
-        return True
-    if summary.get("source_quality_blocked") or summary.get("source_quality_blocker"):
-        return True
-    blockers = payload.get("source_quality_blockers") or summary.get(
-        "source_quality_blockers"
-    )
-    if isinstance(blockers, list) and blockers:
-        return True
-    for value in (
-        payload.get("source_quality_gate"),
-        payload.get("source_quality_status"),
-        summary.get("source_quality_gate"),
-        summary.get("source_quality_status"),
-    ):
-        text = str(value or "").strip().lower()
-        if text and text not in {"pass", "ok", "clean", "source_quality_pass"}:
-            return True
-    status_text = (
-        str(summary.get("status") or payload.get("status") or "").strip().lower()
-    )
-    return "source_quality_blocked" in status_text or "hard_block" in status_text
 
 
-_ENTRY_RECHECK_DROUGHT_VALUE_KEYS = {
-    "allowed_scopes",
-    "enabled",
-    "min_ai_score",
-    "max_ai_score",
-    "max_recheck_per_symbol",
-    "max_daily_recheck",
-    "max_daily_buy_recovery",
-    "max_ws_age_ms",
-    "forbid_danger",
-    "require_fresh_quote",
-    "require_explicit_buy_action",
-    "allow_wait_probe_intent",
-    "require_probe_first_contract",
-    "intraday_escalation_enabled",
-    "intraday_escalation_scopes",
-}
 
 
-def _entry_recheck_drought_candidate_contract_error(candidate: dict[str, Any]) -> str:
-    if str(candidate.get("family") or "") != ENTRY_OPPORTUNITY_RECHECK_FAMILY:
-        return ""
-    from src.engine.scalping.entry_recheck_policy import (
-        BOUNDED_PROFILE,
-        POLICY_VERSION,
-        PROFILE_VERSION,
-        controller_decision,
-        scope_summary,
-    )
-
-    if (
-        candidate.get("runtime_update_mode")
-        != ENTRY_AI_GATE_DROUGHT_RUNTIME_UPDATE_MODE
-    ):
-        return "drought_runtime_update_mode_invalid"
-    if (
-        candidate.get("decision_authority")
-        != "buy_funnel_drought_conditional_preopen_policy"
-    ):
-        return "drought_decision_authority_invalid"
-    if candidate.get("same_stage_owner_claim") is not False:
-        return "drought_candidate_must_not_claim_entry_stage"
-    if (
-        candidate.get("manipulation_point") != "blocked_ai_score_near_buy_recheck"
-        or candidate.get("same_stage_coexistence_contract")
-        != "blocked_ai_score_recheck_disjoint_from_normal_entry_owner_v1"
-    ):
-        return "drought_candidate_coexistence_contract_invalid"
-    current, recommended = (
-        candidate.get("current_values") or {},
-        candidate.get("recommended_values") or {},
-    )
-    if (
-        not isinstance(current, dict)
-        or not isinstance(recommended, dict)
-        or set(current) != _ENTRY_RECHECK_DROUGHT_VALUE_KEYS
-        or set(recommended) != _ENTRY_RECHECK_DROUGHT_VALUE_KEYS
-    ):
-        return "drought_runtime_value_contract_incomplete"
-    if {
-        TARGET_ENV_VALUE_KEYS.get(str(k), "")
-        for k in candidate.get("target_env_keys") or []
-    } != _ENTRY_RECHECK_DROUGHT_VALUE_KEYS:
-        return "drought_target_env_contract_incomplete"
-    if candidate.get("bounded_profile_version") != PROFILE_VERSION:
-        return "drought_bounded_profile_version_invalid"
-    for key, value in BOUNDED_PROFILE.items():
-        actual = recommended.get(key)
-        if isinstance(value, bool):
-            if actual is not value:
-                return "drought_bounded_wait_probe_safety_contract_invalid"
-        elif isinstance(actual, bool) or _bridge_candidate_float(actual) != value:
-            return "drought_fixed_bounded_values_invalid"
-    if not isinstance(candidate.get("source_metrics"), dict):
-        return "drought_policy_contract_invalid"
-    policy = candidate["source_metrics"].get("drought_conditional_policy") or {}
-    window = candidate.get("cumulative_quality_window") or {}
-    if not isinstance(policy, dict) or not isinstance(window, dict):
-        return "drought_policy_contract_invalid"
-    if policy.get("policy_version") != POLICY_VERSION:
-        return "drought_policy_version_invalid"
-    history = policy.get("history")
-    if (
-        not isinstance(history, list)
-        or len(history) != 3
-        or not all(isinstance(d, dict) for d in history)
-    ):
-        return "drought_policy_history_contract_invalid"
-    # Recompute denominator/causal checks inside each scope, never trust flags.
-    from src.engine.automation.submit_drought_contract import validate_scope_evidence
-
-    normalized = []
-    for day in history:
-        rows = day.get("eligible_scopes")
-        if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
-            return "drought_scope_contract_invalid"
-        if not all(isinstance(row.get("scope"), str) for row in rows):
-            return "drought_scope_contract_invalid"
-        for row in rows:
-            evidence = row.get("sentinel_evidence")
-            if not validate_scope_evidence(
-                evidence, source_date=day.get("source_date", ""), scope=row["scope"]
-            ):
-                return "drought_sentinel_exact_contract_invalid"
-            expected_row = scope_summary(
-                row["scope"], {**evidence["contract"], "sentinel_evidence": evidence}
-            )
-            if row != expected_row:
-                return "drought_sentinel_scope_binding_mismatch"
-        rebuilt = [
-            scope_summary(
-                row.get("scope", ""),
-                {
-                    **row,
-                    "primary": (
-                        "SUBMIT_DROUGHT_CRITICAL" if row.get("critical") else "NORMAL"
-                    ),
-                },
-            )
-            for row in rows
-        ]
-        if rebuilt != rows or len({r["scope"] for r in rebuilt}) != len(rebuilt):
-            return "drought_scope_decision_mismatch"
-        if (
-            bool(day.get("denominator_floor_passed")) != bool(rebuilt)
-            or bool(day.get("critical")) != any(r["critical"] for r in rebuilt)
-            or bool(day.get("addressable")) != any(r["addressable"] for r in rebuilt)
-        ):
-            return "drought_day_decision_mismatch"
-        normalized.append(day)
-    try:
-        if not isinstance(policy.get("exact_post_apply_attribution"), dict):
-            return "drought_policy_contract_invalid"
-        expected = controller_decision(
-            history=normalized,
-            exact=policy.get("exact_post_apply_attribution") or {},
-            previous=policy.get("previous_controller_state") or {},
-            target_date=window.get("end_date", ""),
-            baseline=window.get("clean_tuning_baseline_date", ""),
-            current_enabled=current.get("enabled") is True,
-        )
-    except (ValueError, TypeError, KeyError, OverflowError):
-        return "drought_policy_contract_invalid"
-    if not expected["history_complete"] or expected[
-        "expected_source_dates"
-    ] != window.get("source_dates"):
-        return "drought_policy_history_contract_invalid"
-    for key, value in expected.items():
-        if policy.get(key) != value:
-            return f"drought_decision_mismatch:{key}"
-    if recommended.get("enabled") is not expected["desired_enabled"]:
-        return "drought_enabled_decision_mismatch"
-    if (
-        recommended.get("intraday_escalation_enabled")
-        is not expected["intraday_escalation_allowed"]
-    ):
-        return "drought_escalation_runtime_mismatch"
-    if recommended.get("intraday_escalation_scopes") != ",".join(
-        expected["intraday_escalation_scopes"]
-    ):
-        return "drought_escalation_scope_runtime_mismatch"
-    if recommended.get("allowed_scopes") != ",".join(expected["allowed_scopes"]):
-        return "drought_runtime_scope_mismatch"
-    if candidate.get("runtime_disable_family") is not (not expected["desired_enabled"]):
-        return "drought_runtime_disable_flag_mismatch"
-    return ""
 
 
-def _entry_recheck_drought_controller_contract_error(
-    payload: dict[str, Any], candidates: list[dict[str, Any]]
-) -> str:
-    contract = (
-        payload.get("runtime_update_contract")
-        if isinstance(payload.get("runtime_update_contract"), dict)
-        else {}
-    )
-    if not contract:
-        return "missing_runtime_update_contract"
-    update_mode = str(contract.get("update_mode") or "")
-    if update_mode != ENTRY_AI_GATE_DROUGHT_RUNTIME_UPDATE_MODE:
-        return "invalid_runtime_update_mode"
-    if str(contract.get("owner_family") or "") != ENTRY_OPPORTUNITY_RECHECK_FAMILY:
-        return "invalid_runtime_update_owner_family"
-    try:
-        max_apply_count = int(contract.get("max_runtime_apply_count") or 0)
-        declared_candidate_count = int(
-            contract.get("runtime_apply_candidate_count") or 0
-        )
-        declared_allowed_count = int(contract.get("allowed_runtime_apply_count") or 0)
-    except (TypeError, ValueError):
-        return "invalid_runtime_update_counts"
-    if max_apply_count != 1:
-        return "invalid_max_runtime_apply_count"
-    if bool(contract.get("runtime_effect")):
-        return "runtime_update_contract_runtime_effect_leak"
-    actual_allowed_count = sum(
-        1 for item in candidates if bool(item.get("allowed_runtime_apply"))
-    )
-    if len(candidates) > 1 or actual_allowed_count > 1:
-        return "multiple_runtime_update_candidates"
-    if payload.get("diagnostic_apply_ready") is not False:
-        return "controller_diagnostic_apply_semantics_invalid"
-    if payload.get("runtime_candidate_ready") is not (actual_allowed_count == 1):
-        return "controller_runtime_candidate_ready_mismatch"
-    if payload.get("allowed_runtime_apply") is not (actual_allowed_count == 1):
-        return "controller_allowed_runtime_apply_mismatch"
-    if declared_candidate_count != len(candidates):
-        return "runtime_update_candidate_count_mismatch"
-    if declared_allowed_count != actual_allowed_count:
-        return "allowed_runtime_update_count_mismatch"
-    quality_window = (
-        contract.get("cumulative_quality_window")
-        if isinstance(contract.get("cumulative_quality_window"), dict)
-        else {}
-    )
-    expected_window_policy = "rolling_3_trading_days"
-    if str(quality_window.get("window_policy") or "") != expected_window_policy:
-        return "invalid_cumulative_window_policy"
-    window_start = str(quality_window.get("start_date") or "")
-    window_end = str(quality_window.get("end_date") or "")
-    clean_baseline_date = str(quality_window.get("clean_tuning_baseline_date") or "")
-    if not window_start or not window_end or not clean_baseline_date:
-        return "missing_cumulative_window_bounds"
-    if window_start < clean_baseline_date or window_end < window_start:
-        return "invalid_cumulative_window_bounds"
-    if window_end != str(payload.get("target_date") or ""):
-        return "cumulative_window_target_date_mismatch"
-    source_dates = quality_window.get("source_dates")
-    if not isinstance(source_dates, list):
-        return "cumulative_source_dates_missing"
-    try:
-        source_date_count = int(quality_window.get("source_date_count") or 0)
-    except (TypeError, ValueError):
-        return "cumulative_source_date_count_invalid"
-    if source_date_count != len(source_dates):
-        return "cumulative_source_date_count_mismatch"
-    if (
-        any(not isinstance(day, str) for day in source_dates)
-        or len(set(source_dates)) != len(source_dates)
-        or source_dates != sorted(source_dates)
-        or any(
-            not isinstance(day, str) or day < window_start or day > window_end
-            for day in source_dates
-        )
-    ):
-        return "cumulative_source_date_out_of_window"
-    if (
-        update_mode == ENTRY_AI_GATE_DROUGHT_RUNTIME_UPDATE_MODE
-        and source_date_count != 3
-    ):
-        return "drought_window_must_have_three_trading_dates"
-    if candidates and source_date_count <= 0:
-        return "candidate_without_cumulative_source_dates"
-    if not bool(contract.get("post_apply_attribution_required")):
-        return "runtime_update_post_apply_attribution_missing"
-    for item in candidates:
-        drought_contract_error = _entry_recheck_drought_candidate_contract_error(item)
-        if drought_contract_error:
-            return drought_contract_error
-        if str(item.get("family") or "") != ENTRY_OPPORTUNITY_RECHECK_FAMILY:
-            return "candidate_owner_family_mismatch"
-        if str(item.get("stage") or "") != "entry":
-            return "candidate_stage_mismatch"
-        if str(item.get("runtime_update_mode") or "") != update_mode:
-            return "candidate_runtime_update_mode_mismatch"
-        try:
-            candidate_max_apply_count = int(item.get("max_runtime_apply_count") or 0)
-        except (TypeError, ValueError):
-            return "candidate_max_runtime_apply_count_invalid"
-        if candidate_max_apply_count != 1:
-            return "candidate_max_runtime_apply_count_mismatch"
-        if not str(item.get("quality_update_id") or ""):
-            return "candidate_quality_update_id_missing"
-        if item.get("cumulative_quality_window") != quality_window:
-            return "candidate_cumulative_window_mismatch"
-        if not bool(item.get("post_apply_attribution_required")):
-            return "candidate_post_apply_attribution_missing"
-        if bool(item.get("runtime_effect")):
-            return "candidate_runtime_effect_leak"
-        if bool(item.get("actual_order_submitted")):
-            return "candidate_actual_order_submitted_leak"
-        if item.get("broker_order_forbidden") is not True:
-            return "candidate_broker_order_forbidden_missing"
-    if actual_allowed_count == 1 and str(
-        contract.get("quality_update_id") or ""
-    ) != str(candidates[0].get("quality_update_id") or ""):
-        return "quality_update_id_mismatch"
-    return ""
 
 
-def _load_entry_recheck_drought_controller_candidates(
-    source_date: str | None,
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    if not source_date:
-        return [], {"status": "missing_source_date", "path": None}
-    path = _entry_recheck_drought_controller_path(source_date)
-    if not path.exists():
-        return [], {"status": "missing_report", "path": str(path)}
-    payload = _load_json(path)
-    candidates = payload.get("calibration_candidates")
-    if not isinstance(candidates, list):
-        candidates = []
-    normalized = [item for item in candidates if isinstance(item, dict)]
-    try:
-        cumulative_contract_error = _entry_recheck_drought_controller_contract_error(
-            payload, normalized
-        )
-    except (TypeError, ValueError, KeyError, AttributeError, OverflowError):
-        cumulative_contract_error = "entry_recheck_controller_contract_invalid"
-    if payload.get("schema_version") != 1:
-        cumulative_contract_error = "entry_recheck_controller_schema_version_mismatch"
-    elif payload.get("report_type") != "entry_recheck_drought_controller":
-        cumulative_contract_error = "entry_recheck_controller_report_type_mismatch"
-    elif payload.get("target_date") != source_date:
-        cumulative_contract_error = "entry_recheck_controller_target_date_mismatch"
-    if not cumulative_contract_error:
-        from src.engine.automation.drought_handoff import controller_source_error
-
-        cumulative_contract_error = controller_source_error(
-            payload, path.parent.parent, source_date
-        )
-    if cumulative_contract_error:
-        normalized = [
-            {
-                **item,
-                "allowed_runtime_apply": False,
-                "calibration_state": "freeze",
-                "apply_block_reason": (
-                    f"single_cumulative_quality_contract:{cumulative_contract_error}"
-                ),
-            }
-            for item in normalized
-        ]
-    source_quality_blocked = _entry_ai_gate_payload_source_quality_blocked(payload)
-    preflight_status = _source_quality_preflight_status(source_date)
-    if source_quality_blocked or preflight_status.get("blocked"):
-        preflight_reason = str(
-            preflight_status.get("reason") or "source_quality_blocked"
-        )
-        block_reason = (
-            "entry_recheck_drought_controller_root_source_quality_blocked"
-            if source_quality_blocked
-            else f"entry_recheck_drought_controller_source_quality_preflight_blocked:{preflight_reason}"
-        )
-        normalized = [
-            {
-                **item,
-                "allowed_runtime_apply": False,
-                "source_quality_gate": "source_quality_blocked",
-                "source_quality_blocked": str(
-                    item.get("source_quality_blocked") or block_reason
-                ),
-                "apply_block_reason": "source_quality_blocked",
-            }
-            for item in normalized
-        ]
-        source_quality_blocked = True
-    selected_candidate = next(
-        (item for item in normalized if bool(item.get("allowed_runtime_apply"))),
-        normalized[0] if normalized else {},
-    )
-    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
-    return normalized, {
-        "status": "loaded",
-        "path": str(path),
-        "allowed_runtime_apply": selected_candidate.get(
-            "allowed_runtime_apply", payload.get("allowed_runtime_apply")
-        ),
-        "calibration_state": selected_candidate.get(
-            "calibration_state", payload.get("calibration_state")
-        ),
-        "candidate_count": len(normalized),
-        "allowed_runtime_apply_candidate_count": sum(
-            1 for item in normalized if bool(item.get("allowed_runtime_apply"))
-        ),
-        "runtime_acceptance_state": summary.get("runtime_acceptance_state"),
-        "top_evaluation_reason": summary.get("top_evaluation_reason"),
-        "intraday_escalation_scopes": summary.get("intraday_escalation_scopes") or [],
-        "runtime_update_contract": payload.get("runtime_update_contract") or {},
-        "runtime_update_contract_blocked": bool(cumulative_contract_error),
-        "runtime_update_contract_error": cumulative_contract_error or None,
-        "source_quality_blocked": source_quality_blocked,
-        "source_quality_preflight": preflight_status,
-    }
 
 
 def _runtime_env_name(target_env_key: str) -> str:
@@ -2163,7 +1732,6 @@ _FAMILY_ENV_KEY_PREFIXES: dict[str, str] = {
     "deep_recovery_avg_down_quality_gate": "KORSTOCKSCAN_DEEP_RECOVERY_AVG_DOWN_",
     SCORE65_74_STRONG_MICRO_OVERRIDE_FAMILY: "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_STRONG_MICRO_",
     PRE_SUBMIT_LIQUIDITY_RELIEF_FAMILY: "KORSTOCKSCAN_PRE_SUBMIT_LIQUIDITY_RELIEF_",
-    ENTRY_OPPORTUNITY_RECHECK_FAMILY: "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_",
     "scalp_sim_candidate_window_expansion": "KORSTOCKSCAN_SCALP_SIM_CANDIDATE_WINDOW_",
     "scalp_sim_ai_budget_manager": "KORSTOCKSCAN_SCALP_SIM_AI_",
     "lifecycle_decision_matrix_runtime": "KORSTOCKSCAN_LIFECYCLE_DECISION_MATRIX_",
@@ -2241,43 +1809,6 @@ def _previous_runtime_env_overrides_for_family(
     return {}
 
 
-def _entry_recheck_contract_carry_overrides(
-    candidate: dict[str, Any], previous_env: dict[str, str]
-) -> dict[str, str]:
-    """Preserve only the already-active recheck dependency contract.
-
-    This is not a new recheck-policy selection: the persistent operator layer
-    still owns enablement, scopes, and caps. It prevents a non-selected
-    calibration candidate from orphaning the three structural values that an
-    active operator policy already requires.
-    """
-
-    recommended = (
-        candidate.get("recommended_values")
-        if isinstance(candidate.get("recommended_values"), dict)
-        else {}
-    )
-    expected = {
-        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOW_WAIT_PROBE_INTENT": "true",
-        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_PROBE_FIRST_CONTRACT": "true",
-        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_EXPLICIT_BUY_ACTION": "false",
-    }
-    recommended_fields = {
-        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOW_WAIT_PROBE_INTENT": "allow_wait_probe_intent",
-        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_PROBE_FIRST_CONTRACT": "require_probe_first_contract",
-        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_EXPLICIT_BUY_ACTION": "require_explicit_buy_action",
-    }
-    if any(
-        _format_env_value(recommended.get(field)) != expected[key]
-        for key, field in recommended_fields.items()
-    ):
-        return {}
-    if any(
-        str(previous_env.get(key) or "").strip() != value
-        for key, value in expected.items()
-    ):
-        return {}
-    return expected
 
 
 def _lock_env_overrides(lock: dict[str, Any]) -> dict[str, str]:
@@ -2396,7 +1927,6 @@ def _env_overrides_for_candidate(candidate: dict[str, Any]) -> dict[str, str]:
         "position_sizing_dynamic_formula",
         "score65_74_recovery_probe",
         "lifecycle_decision_matrix_runtime",
-        ENTRY_OPPORTUNITY_RECHECK_FAMILY,
         SCALE_IN_BRIDGE_FAMILY,
         *DETERMINISTIC_POLICY_HANDOFF_FAMILIES,
         "lifecycle_bucket_discovery_sim_auto_approval",
@@ -3036,14 +2566,6 @@ def _ai_guard_allows_candidate(
     candidate: dict[str, Any], ai_review: dict[str, Any], *, require_ai: bool
 ) -> tuple[bool, str]:
     family = str(candidate.get("family") or "")
-    if (
-        family == ENTRY_OPPORTUNITY_RECHECK_FAMILY
-        and str(candidate.get("runtime_update_mode") or "")
-        == ENTRY_AI_GATE_DROUGHT_RUNTIME_UPDATE_MODE
-        and str(candidate.get("decision_authority") or "")
-        == "buy_funnel_drought_conditional_preopen_policy"
-    ):
-        return (True, "deterministic_drought_conditional_preopen_policy")
     if family in DETERMINISTIC_POLICY_HANDOFF_FAMILIES:
         return (True, "deterministic_policy_handoff")
     items_by_family = (
@@ -3195,7 +2717,6 @@ def _additive_entry_operator_lock_stage_coexist(
         AI_NUMERIC_CONSISTENCY_RECHECK_FAMILY,
         PRE_SUBMIT_LIQUIDITY_RELIEF_FAMILY,
         WEAK_CONTEXT_LATE_ENTRY_GUARD_FAMILY,
-        ENTRY_OPPORTUNITY_RECHECK_FAMILY,
     }
     if family not in additive_entry_lock_families or stage not in selected_by_stage:
         return False
@@ -3407,10 +2928,7 @@ def _select_auto_apply_candidates(
             == CUMULATIVE_QUALITY_RUNTIME_UPDATE_MODE
         )
         runtime_disable_family = bool(candidate.get("runtime_disable_family"))
-        claims_stage_owner = not runtime_disable_family and not (
-            family == ENTRY_OPPORTUNITY_RECHECK_FAMILY
-            and candidate.get("same_stage_owner_claim") is False
-        )
+        claims_stage_owner = not runtime_disable_family
         reject_reason = ""
         hold_carry_forward = False
         hold_carry_forward_blockers: list[str] = []
@@ -3735,19 +3253,6 @@ def _select_auto_apply_candidates(
         decision["selection_change_class"] = selection_change_class
         decision["previous_selected"] = family in previous_selected_families
         decision["previous_env_overrides"] = previous_family_env
-        if (
-            family == ENTRY_OPPORTUNITY_RECHECK_FAMILY
-            and reject_reason == "runtime_apply_not_allowed"
-            and family in previous_selected_families
-        ):
-            carried_contract = _entry_recheck_contract_carry_overrides(
-                candidate, previous_family_env
-            )
-            if carried_contract:
-                decision["contract_dependency_carry"] = {
-                    "reason": "existing_operator_recheck_dependency_contract",
-                    "env_overrides": carried_contract,
-                }
         if candidate.get("quality_update_id"):
             decision["quality_update_id"] = candidate.get("quality_update_id")
             decision["evidence_contract_version"] = candidate.get(
@@ -3916,7 +3421,6 @@ def _limit_down_watch_entry_live_owner_family(
         "score65_74_recovery_probe",
         SCORE65_74_STRONG_MICRO_OVERRIDE_FAMILY,
         EARLY_ACCEL_RECHECK_FAMILY,
-        ENTRY_OPPORTUNITY_RECHECK_FAMILY,
         AI_NUMERIC_CONSISTENCY_RECHECK_FAMILY,
         PRE_SUBMIT_LIQUIDITY_RELIEF_FAMILY,
         WEAK_CONTEXT_LATE_ENTRY_GUARD_FAMILY,
@@ -4653,13 +4157,6 @@ SELECTED_FAMILY_REQUIRED_ENV_KEYS: dict[str, list[str]] = {
     ],
     "pre_submit_liquidity_relief_runtime": [
         "KORSTOCKSCAN_PRE_SUBMIT_LIQUIDITY_RELIEF_ENABLED",
-    ],
-    "entry_opportunity_recheck_runtime": [
-        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED",
-        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_EXPLICIT_BUY_ACTION",
-        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOW_WAIT_PROBE_INTENT",
-        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_PROBE_FIRST_CONTRACT",
-        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_INTRADAY_ESCALATION_SCOPES",
     ],
     "weak_context_late_entry_guard_runtime": [
         "KORSTOCKSCAN_WEAK_CONTEXT_LATE_ENTRY_GUARD_ENABLED",
@@ -6226,87 +5723,6 @@ def verify_runtime_env_handoff(
                 "policy_reason": "post_probe_resolver_probe_first_dependency_disabled",
             }
         )
-    entry_recheck_enabled_key = "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED"
-    entry_recheck_wait_probe_key = (
-        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOW_WAIT_PROBE_INTENT"
-    )
-    entry_recheck_legacy_buy_key = (
-        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_EXPLICIT_BUY_ACTION"
-    )
-    entry_recheck_probe_contract_key = (
-        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_PROBE_FIRST_CONTRACT"
-    )
-    entry_recheck_escalation_enabled_key = (
-        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_INTRADAY_ESCALATION_ENABLED"
-    )
-    entry_recheck_escalation_scopes_key = (
-        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_INTRADAY_ESCALATION_SCOPES"
-    )
-    if _runtime_env_enabled(effective_env_overrides.get(entry_recheck_enabled_key)):
-        recheck_contract_failures: list[str] = []
-        from src.engine.scalping.entry_recheck_policy import SCOPES as recheck_scopes
-
-        scope_key = "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOWED_SCOPES"
-        selected_scopes = [
-            scope.strip()
-            for scope in str(effective_env_overrides.get(scope_key) or "").split(",")
-            if scope.strip()
-        ]
-        if not selected_scopes or any(
-            scope not in recheck_scopes for scope in selected_scopes
-        ):
-            recheck_contract_failures.append(scope_key)
-        if not _runtime_env_enabled(
-            effective_env_overrides.get(entry_recheck_wait_probe_key)
-        ):
-            recheck_contract_failures.append(entry_recheck_wait_probe_key)
-        if _runtime_env_enabled(
-            effective_env_overrides.get(entry_recheck_legacy_buy_key)
-        ):
-            recheck_contract_failures.append(entry_recheck_legacy_buy_key)
-        if not _runtime_env_enabled(
-            effective_env_overrides.get(entry_recheck_probe_contract_key)
-        ):
-            recheck_contract_failures.append(entry_recheck_probe_contract_key)
-        if not _runtime_env_enabled(
-            effective_env_overrides.get(probe_first_enabled_key)
-        ):
-            recheck_contract_failures.append(probe_first_enabled_key)
-        if not _runtime_env_enabled(
-            effective_env_overrides.get(post_probe_resolver_enabled_key)
-        ):
-            recheck_contract_failures.append(post_probe_resolver_enabled_key)
-        escalation_scopes = [
-            scope.strip()
-            for scope in str(
-                effective_env_overrides.get(entry_recheck_escalation_scopes_key) or ""
-            ).split(",")
-            if scope.strip()
-        ]
-        escalation_enabled = _runtime_env_enabled(
-            effective_env_overrides.get(entry_recheck_escalation_enabled_key)
-        )
-        if (
-            any(scope not in recheck_scopes for scope in escalation_scopes)
-            or not set(escalation_scopes).issubset(selected_scopes)
-            or escalation_enabled != bool(escalation_scopes)
-        ):
-            recheck_contract_failures.append(entry_recheck_escalation_scopes_key)
-        if recheck_contract_failures:
-            findings.append(
-                {
-                    "family": ENTRY_OPPORTUNITY_RECHECK_FAMILY,
-                    "missing_env_keys": sorted(set(recheck_contract_failures)),
-                    "severity": "runtime_policy_unusable",
-                    "detail": (
-                        "entry opportunity recheck requires canonical WAIT probe "
-                        "intent, an active probe-first contract, and post-probe resolver"
-                    ),
-                    "policy_reason": (
-                        "entry_recheck_probe_dependency_contract_invalid"
-                    ),
-                }
-            )
     audited_runtime_families = {
         str(audit.get("family") or "")
         for audit in runtime_policy_audits
@@ -7134,21 +6550,6 @@ def _write_runtime_env(
         for policy in succession_receipt["policies"]:
             env_overrides.update(policy["env_overrides"])
         manifest["operator_policy_succession"] = succession_receipt
-    entry_recheck_contract_carry = next(
-        (
-            item.get("contract_dependency_carry")
-            for item in (manifest.get("auto_apply_decisions") or [])
-            if isinstance(item, dict)
-            and str(item.get("family") or "") == ENTRY_OPPORTUNITY_RECHECK_FAMILY
-            and isinstance(item.get("contract_dependency_carry"), dict)
-        ),
-        None,
-    )
-    if entry_recheck_contract_carry:
-        env_overrides.update(entry_recheck_contract_carry["env_overrides"])
-        manifest["entry_opportunity_recheck_contract_carry"] = (
-            entry_recheck_contract_carry
-        )
     env_overrides = {**without_retired_env(env_overrides), **retirement_env()}
     env_overrides = {
         key: value
@@ -7785,14 +7186,6 @@ def build_preopen_apply_manifest(
                 *calibration_candidates,
                 *scalping_avg_down_recovery_candidates,
             ]
-        entry_recheck_candidates, entry_recheck_drought_controller = (
-            _load_entry_recheck_drought_controller_candidates(report_source_date)
-        )
-        if entry_recheck_candidates:
-            calibration_candidates = [
-                *calibration_candidates,
-                *entry_recheck_candidates,
-            ]
         calibration_candidates = _dedupe_calibration_candidates(calibration_candidates)
         calibration_candidates = _scrub_removed_contracts(calibration_candidates) or []
         candidates = _scrub_removed_contracts(candidates) or []
@@ -8172,7 +7565,6 @@ def build_preopen_apply_manifest(
             "latency_classifier_recommendation": latency_recommendation,
             "scalping_pyramid_quality_calibration": scalping_pyramid_quality_calibration,
             "scalping_avg_down_recovery_calibration": scalping_avg_down_recovery_calibration,
-            "entry_recheck_drought_controller": entry_recheck_drought_controller,
             "auto_apply_selected": selected,
             "auto_apply_decisions": decisions,
             "entry_cancel_wait_runtime": entry_cancel_wait_decision,

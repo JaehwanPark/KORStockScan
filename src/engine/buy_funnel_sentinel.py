@@ -30,8 +30,7 @@ from src.engine.automation.submit_drought_contract import (
 )
 from src.engine.scalping.ai_market_snapshot import classify_ai_input_blocker
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
-from src.engine.scalping.entry_recheck_policy import (
-    canonical_wait_probe_contract,
+from src.engine.automation.submit_drought_contract import (
     finite_number,
 )
 
@@ -3787,94 +3786,6 @@ def _terminal_attempt_diagnostics(exact, events_by_key):
                     },
                 }
             )
-        if event.stage in addressable_stages:
-            machine_primary = _is_machine_primary_event(event)
-            machine_action = _safe_str(fields.get("entry_mechanistic_action")).upper()
-            machine_screen = _safe_str(fields.get("entry_ai_screen_status")).lower()
-            # Only one coherent input namespace; never mix retry and selected AI.
-            prefix = "entry_opportunity_recheck_ai_"
-            if prefix + "contract_status" not in fields:
-                prefix = "entry_recheck_"
-            action = (
-                fields.get(prefix + "action")
-                if prefix.startswith("entry_opportunity")
-                else fields.get("ai_decision_model_action")
-            )
-            candidate = canonical_wait_probe_contract(
-                action=action,
-                contract_status=fields.get(prefix + "contract_status"),
-                edge_state=fields.get(prefix + "edge_state"),
-                probe_intent=fields.get(prefix + "probe_intent"),
-                probe_intent_status=fields.get(prefix + "probe_intent_status"),
-                recovery_trigger=fields.get(prefix + "recovery_trigger"),
-            )
-            ai_category = (
-                _ai_authority_diagnostic(event)["category"]
-                if event.stage in ENTRY_AI_AUTHORITY_GUARD_STAGES
-                else ""
-            )
-            contract = _safe_str(fields.get(prefix + "contract_status")).lower()
-            source_gap = fields.get("entry_recheck_source_usable") in {
-                False,
-                "False",
-                "false",
-            }
-            if not candidate and contract not in {"pass", "semantic_rejected"}:
-                candidate = None
-            if ai_category in {"fresh_wait_veto", "fresh_drop_veto"}:
-                # These are explicit final vetoes, not missing eligibility data.
-                candidate = False
-            if machine_primary:
-                # Machine RECHECK is scanner-loop observation, and a machine
-                # ENTER screened by AI is not the legacy score/WAIT probe.  A
-                # shared terminal stage must never let either one widen #23.
-                candidate = False
-            if candidate:
-                category = "canonical_probe_candidate"
-            elif machine_primary and machine_action == "RECHECK":
-                category = "machine_recheck_observation"
-            elif machine_primary and machine_action == "BLOCK":
-                category = "machine_block_point_drop"
-            elif machine_primary and machine_screen == "veto":
-                category = "machine_ai_veto_point_drop"
-            elif machine_primary:
-                category = "machine_ai_nonpass_no_exposure"
-            elif ai_category in {"fresh_wait_veto", "fresh_drop_veto"}:
-                category = "normal_veto"
-            elif ai_category or source_gap or contract == "semantic_rejected":
-                category = "input_gap"
-            elif contract == "pass" and str(action).upper() in {
-                "DROP",
-                "WAIT",
-                "WAIT_REQUOTE",
-            }:
-                category = "normal_veto"
-            else:
-                category = "not_evaluated"
-            probe_rows.append(
-                {
-                    **identity,
-                    "category": category,
-                    "canonical_probe_candidate": candidate,
-                    "machine_primary": machine_primary,
-                    "machine_action": machine_action or "not_reported",
-                    "machine_ai_screen_status": machine_screen or "not_reported",
-                    "runtime_eligibility": "not_evaluated",
-                    "runtime_policy_state": (
-                        "off"
-                        if fields.get("entry_opportunity_recheck_reason") == "disabled"
-                        else "not_reported"
-                    ),
-                    "runtime_reason": fields.get(
-                        "entry_opportunity_recheck_reason", "not_reported"
-                    ),
-                    "owner": (
-                        "entry_opportunity_recheck_runtime"
-                        if candidate
-                        else "ai_decision_quality/entry_ai_contract_source_quality"
-                    ),
-                }
-            )
 
     def bundle(rows):
         return {
@@ -3892,25 +3803,7 @@ def _terminal_attempt_diagnostics(exact, events_by_key):
     return {
         "entry_ai_authority_diagnostics": bundle(ai_rows),
         "zero_qty_diagnostics": bundle(cash_rows),
-        "recheck_input_diagnostics": {
-            **bundle(probe_rows),
-            "axis_addressable_attempt_count": len(probe_rows),
-            "canonical_probe_candidate_count": sum(
-                r["canonical_probe_candidate"] is True for r in probe_rows
-            ),
-            "canonical_probe_candidate_unknown_count": sum(
-                r["canonical_probe_candidate"] is None for r in probe_rows
-            ),
-            "legacy_runtime_addressable_attempt_count": sum(
-                r["canonical_probe_candidate"] is True and r["machine_primary"] is False
-                for r in probe_rows
-            ),
-            "machine_primary_excluded_attempt_count": sum(
-                r["machine_primary"] is True for r in probe_rows
-            ),
-            "candidate_count_basis": "confirmed_inputs_only_unknown_is_not_zero_opportunity",
-            "activation_gate_changed": False,
-        },
+
     }
 
 
@@ -4593,7 +4486,6 @@ def _entry_submit_drought_contract(
             for key in (
                 "entry_ai_authority_diagnostics",
                 "zero_qty_diagnostics",
-                "recheck_input_diagnostics",
                 "machine_primary_entry_funnel",
             )
         },
@@ -4739,9 +4631,6 @@ def _entry_submit_drought_observation_breakdown(
             "observed_count": int(session_summary.get("upstream_block_unique", 0) or 0),
             "evidence": {
                 "zero_qty_diagnostics": session_summary.get("zero_qty_diagnostics", {}),
-                "recheck_input_diagnostics": session_summary.get(
-                    "recheck_input_diagnostics", {}
-                ),
                 "upstream_blocker_top": (
                     upstream_blockers if isinstance(upstream_blockers, list) else []
                 ),
@@ -5354,7 +5243,6 @@ def build_markdown(report: dict[str, Any]) -> str:
         f"- refresh transitions (overlapping exact attempt sets): `{quote_freshness.get('refresh_transition_diagnostics') or {}}`",
         f"- AI authority subcauses: `{(session.get('entry_ai_authority_diagnostics') or {}).get('category_counts', {})}`",
         f"- zero-qty subcauses: `{(session.get('zero_qty_diagnostics') or {}).get('category_counts', {})}`",
-        f"- recheck input classes (not runtime eligibility): `{(session.get('recheck_input_diagnostics') or {}).get('category_counts', {})}`",
         "",
         "## 금지된 자동변경",
         "",

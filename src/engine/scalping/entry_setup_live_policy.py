@@ -176,22 +176,6 @@ def _source_exploration_limit_valid(
     )
 
 
-def expanded_exploration_budget_errors(env: dict[str, str] | None = None) -> list[str]:
-    expected = {
-        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOWED_SCOPES": "KRX|KRX_REGULAR",
-        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_DAILY_RECHECK": "100",
-        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_DAILY_BUY_RECOVERY": "100",
-        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_INTRADAY_ESCALATION_ENABLED": "false",
-    }
-    current = os.environ if env is None else env
-    return (
-        ["expanded_exploration_budget_env_mismatch"]
-        if any(
-            str(current.get(key, "")).strip() != value
-            for key, value in expected.items()
-        )
-        else []
-    )
 
 
 EXPLORATION_CONTINUATION_MIN_EXPOSURES = 10
@@ -507,6 +491,9 @@ def _enabled_by_operator(
 ) -> bool:
     if cohort == DUAL_OBSERVE_ONLY_COHORT and not auto_scope_authorized:
         return False
+    process_veto = os.getenv(_cohort_env_key(cohort))
+    if process_veto and process_veto.strip().lower() in {"0", "false", "no", "n", "off"}:
+        return False
     raw = _env_value(_cohort_env_key(cohort), env)
     if raw is None and env is not None:
         # The kill switch may be supplied by the cron/supervisor environment,
@@ -532,7 +519,7 @@ def _runtime_probe_contract_errors(
     cohort: tuple[str, str] = DEFAULT_COHORT,
     now: datetime | None = None,
 ) -> list[str]:
-    """Verify that setup-risk canaries reach their recheck owner.
+    """Verify normal setup-risk rollout, date and execution contracts.
 
     The entry-split policy may still choose a probe-first order shape, but its
     leg quantity is not a prompt-policy invariant.  Central position sizing
@@ -541,35 +528,29 @@ def _runtime_probe_contract_errors(
 
     errors: list[str] = []
     required_true = (
-        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED",
-        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOW_WAIT_PROBE_INTENT",
-        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_PROBE_FIRST_CONTRACT",
         "KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED",
         "KORSTOCKSCAN_DYNAMIC_ENTRY_PRICE_RESOLVER_POST_PROBE_ENABLED",
     )
     for key in required_true:
         if not _env_bool(key, False, env):
             errors.append(f"runtime_contract_disabled:{key}")
-    # ON alone is not a reachable handoff: the existing recheck owner also
-    # requires an exact allowed scope. Match its comma-separated, case-sensitive
-    # contract rather than promoting an inactive or NXT-only configuration.
+    # Exact scope authority remains owned by the normal prompt rollout.
     allowed_scopes = {
-        value.strip()
-        for value in str(
-            _env_value("KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOWED_SCOPES", env)
-            or ""
-        ).split(",")
+        f"{venue}|{session}"
+        for venue, session in SUPPORTED_LIVE_COHORTS
+        if (venue, session) != DUAL_OBSERVE_ONLY_COHORT
+        and _env_bool(_cohort_env_key((venue, session)), False, env)
     }
     from src.engine.scalping.entry_setup_scalping_rollout import authorized_scopes
 
     allowed_scopes.update(authorized_scopes(env=env, now=now))
-    from src.engine.scalping.entry_recheck_policy import runtime_scope
+    from src.engine.scalping.entry_setup_scalping_rollout import runtime_scope
 
     if runtime_scope(*cohort) not in allowed_scopes:
         errors.append(
-            "runtime_contract_krx_recheck_scope_missing"
+            "runtime_contract_krx_rollout_scope_missing"
             if cohort == DEFAULT_COHORT
-            else "runtime_contract_exact_recheck_scope_missing"
+            else "runtime_contract_exact_rollout_scope_missing"
         )
     if not _env_bool("KORSTOCKSCAN_THRESHOLD_RUNTIME_AUTO_APPLY_ENABLED", False, env):
         errors.append("runtime_contract_threshold_auto_apply_disabled")
@@ -583,12 +564,6 @@ def _runtime_probe_contract_errors(
     ).strip()
     if configured_prompt != DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION:
         errors.append("runtime_contract_configured_v2_13_owner_missing")
-    if _env_bool(
-        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_EXPLICIT_BUY_ACTION",
-        True,
-        env,
-    ):
-        errors.append("runtime_contract_wait_probe_handoff_disabled")
     active_date = str(
         _env_value("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ACTIVE_DATE", env) or ""
     ).strip()
@@ -681,11 +656,6 @@ def load_preopen_runtime_env(
                         "KORSTOCKSCAN_THRESHOLD_RUNTIME_AUTO_APPLY_ENABLED",
                         "KORSTOCKSCAN_THRESHOLD_RUNTIME_APPLY_DATE",
                         "KORSTOCKSCAN_OPENAI_ANALYZE_TARGET_PROMPT_VERSION",
-                        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED",
-                        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOWED_SCOPES",
-                        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOW_WAIT_PROBE_INTENT",
-                        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_PROBE_FIRST_CONTRACT",
-                        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_EXPLICIT_BUY_ACTION",
                         "KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED",
                         "KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ACTIVE_DATE",
                         "KORSTOCKSCAN_ENTRY_SPLIT_PROBE_QTY",
@@ -1788,10 +1758,6 @@ def _validate_candidate_artifact(
             cohort=cohort,
         )
     )
-    if (candidate.get("risk_contract") or {}).get(
-        "maximum_daily_exploration_probes"
-    ) == KRX_EXPLORATION_MAX_DAILY_PROBES:
-        errors.extend(expanded_exploration_budget_errors(runtime_env))
     return list(dict.fromkeys(errors))
 
 
@@ -2197,10 +2163,6 @@ def resolve_live_prompt_policy(
         errors = _runtime_probe_contract_errors(
             target_date=target_date, cohort=cohort, now=current
         )
-        # The approved global cap is shared by all scopes; never reset by tag or venue.
-        for key in ("MAX_DAILY_RECHECK", "MAX_DAILY_BUY_RECOVERY"):
-            if os.getenv("KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_" + key) != "100":
-                errors.append("operator_rollout_daily_cap_env_mismatch")
         if errors:
             result.update(
                 status="fallback_probe_first_runtime_contract_invalid",
@@ -2517,8 +2479,6 @@ def resolve_live_prompt_policy(
         )
         if limit != activation_contract.get("maximum_daily_exploration_probes"):
             candidate_errors.append("runtime_candidate_exploration_limit_mismatch")
-        if limit == KRX_EXPLORATION_MAX_DAILY_PROBES:
-            candidate_errors.extend(expanded_exploration_budget_errors())
     if candidate.get("entry_setup_evidence_version") != activation.get(
         "entry_setup_evidence_version"
     ):

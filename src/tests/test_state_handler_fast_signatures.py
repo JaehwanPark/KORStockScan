@@ -301,19 +301,6 @@ def test_caution_micro_block_log_deduplicates_explicit_block_reason():
     assert "block_reason=block_reason" in block_source
 
 
-def test_entry_opportunity_recheck_cap_block_deduplicates_authority_kwargs():
-    source = inspect.getsource(handlers._handle_watching_strategy_branch)
-    start = source.index('"entry_opportunity_recheck_exploration_cap_block"')
-    end = source.index("elif entry_opportunity_recheck.allowed:", start)
-    block_source = source[start:end]
-
-    assert "**_without_entry_pipeline_fields(" in block_source
-    assert '"actual_order_submitted",' in block_source
-    assert '"broker_order_forbidden",' in block_source
-    assert '"runtime_effect",' in block_source
-    assert "actual_order_submitted=False" in block_source
-    assert "broker_order_forbidden=True" in block_source
-    assert "runtime_effect=True" in block_source
 
 
 def _fresh_spread_latency_gate(**overrides):
@@ -6331,222 +6318,16 @@ def test_first_ai_big_bite_wait_does_not_block_strong_buy():
     )
 
 
-def test_canonical_wait_probe_handoff_precedes_legacy_first_ai_wait(monkeypatch):
-    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED", "true")
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOW_WAIT_PROBE_INTENT", "true"
-    )
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_EXPLICIT_BUY_ACTION", "false"
-    )
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_PROBE_FIRST_CONTRACT", "true"
-    )
-    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED", "true")
-    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ACTIVE_DATE", "DAILY")
-    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_QTY", "1")
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_DYNAMIC_ENTRY_PRICE_RESOLVER_POST_PROBE_ENABLED", "true"
-    )
-    decision = {
-        "action": "WAIT",
-        "decision_quality_contract_status": "pass",
-        "edge_state": "EDGE",
-        "entry_probe_intent": True,
-        "entry_probe_intent_status": "eligible_wait_probe",
-        "evidence": {"trigger": "recovery_required"},
-    }
-
-    assert handlers._canonical_wait_probe_handoff_active(decision)
-    assert handlers._canonical_wait_probe_handoff_active(
-        {
-            **decision,
-            "edge_state": None,
-            "decision_quality_model_edge_state": "EDGE",
-        }
-    )
-    assert not handlers._canonical_wait_probe_handoff_active(
-        {**decision, "entry_probe_intent": False}
-    )
-    assert not handlers._canonical_wait_probe_handoff_active(
-        {**decision, "decision_quality_contract_status": "semantic_rejected"}
-    )
-    assert not handlers._canonical_wait_probe_handoff_active(
-        {**decision, "edge_state": "NO_EDGE"}
-    )
-    assert not handlers._canonical_wait_probe_handoff_active(
-        {**decision, "action": "DROP"}
-    )
-    assert not handlers._canonical_wait_probe_handoff_active(
-        {**decision, "evidence": {"trigger": "hold"}}
-    )
-    assert not handlers._canonical_wait_probe_handoff_active(
-        {
-            **decision,
-            "evidence": {
-                "trigger": "recovery_required",
-                "adverse_risk": "blocking",
-            },
-        }
-    )
-    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED", "false")
-    assert not handlers._canonical_wait_probe_handoff_active(decision)
 
 
-@pytest.mark.parametrize(
-    "reason,active,expected",
-    [
-        ("strong_micro_confirmation_missing", True, "waiting_for_recovery_micro"),
-        ("strong_micro_confirmation_missing", False, "recovery_micro_pending_expired"),
-        (
-            "recheck_submit_budget_bootstrap_pending",
-            True,
-            "waiting_for_submit_budget_bootstrap",
-        ),
-        (
-            "recheck_submit_budget_bootstrap_pending",
-            False,
-            "submit_budget_bootstrap_pending_expired",
-        ),
-    ],
-)
-def test_recheck_pending_expiry_preserves_actual_blocking_owner(
-    reason, active, expected
-):
-    assert (
-        handlers._entry_opportunity_recheck_pending_status(reason, active=active)
-        == expected
-    )
 
 
-def test_recheck_pending_expiry_consumers_use_actual_owner_status():
-    source = inspect.getsource(handlers._handle_watching_strategy_branch)
-    early_expiry = source.split('if not pending_window.get("pending_active"):')[
-        1
-    ].split("pending_recheck_after =", 1)[0]
-    assert "_entry_opportunity_recheck_pending_status(" in early_expiry
-    assert 'stock.get("entry_opportunity_recheck_pending_reason")' in "".join(
-        early_expiry.split()
-    )
-    assert '"recovery_micro_pending_expired"' not in early_expiry
-    assert early_expiry.count("pending_expired_status") == 3
-    assert '"submit_budget_bootstrap_pending_expired"' in source
 
 
-@pytest.mark.parametrize(
-    "pending_reason",
-    ["strong_micro_confirmation_missing", "recheck_submit_budget_bootstrap_pending"],
-)
-def test_canonical_wait_probe_micro_pending_has_no_submit_authority(
-    monkeypatch, pending_reason
-):
-    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED", "true")
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOW_WAIT_PROBE_INTENT", "true"
-    )
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_EXPLICIT_BUY_ACTION",
-        "false",
-    )
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_PROBE_FIRST_CONTRACT",
-        "true",
-    )
-    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED", "true")
-    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ACTIVE_DATE", "DAILY")
-    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_QTY", "1")
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_DYNAMIC_ENTRY_PRICE_RESOLVER_POST_PROBE_ENABLED", "true"
-    )
-    decision = {
-        "action": "WAIT",
-        "decision_quality_contract_status": "pass",
-        "edge_state": "EDGE",
-        "entry_probe_intent": True,
-        "entry_probe_intent_status": "eligible_wait_probe",
-        "evidence": {
-            "trigger": "recovery_required",
-            "adverse_risk": "non_blocking",
-        },
-    }
-    recheck = type(
-        "Recheck",
-        (),
-        {
-            "allowed": False,
-            "reason": pending_reason,
-        },
-    )()
-
-    assert handlers._canonical_wait_probe_recheck_pending(
-        recheck,
-        decision,
-        ai_action="WAIT",
-        now_ts=1_785_737_300.0,
-    )
-    recheck.allowed = True
-    assert not handlers._canonical_wait_probe_recheck_pending(
-        recheck,
-        decision,
-        ai_action="WAIT",
-        now_ts=1_785_737_300.0,
-    )
 
 
-def test_entry_opportunity_recheck_pending_window_is_bounded(monkeypatch):
-    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_PENDING_TTL_SEC", "15")
-
-    active = handlers._entry_opportunity_recheck_pending_window(
-        {
-            "entry_opportunity_recheck_pending": True,
-            "entry_opportunity_recheck_pending_since": 100.0,
-        },
-        now_ts=114.9,
-    )
-    expired = handlers._entry_opportunity_recheck_pending_window(
-        {
-            "entry_opportunity_recheck_pending": True,
-            "entry_opportunity_recheck_pending_since": 100.0,
-        },
-        now_ts=115.0,
-    )
-
-    assert active["pending_active"] is True
-    assert expired["pending_active"] is False
-    assert expired["pending_ttl_sec"] == 15.0
-
-    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_PENDING_TTL_SEC", "999")
-    clamped = handlers._entry_opportunity_recheck_pending_window({}, now_ts=200.0)
-    assert clamped["pending_ttl_sec"] == 30.0
 
 
-def test_watching_handler_consumes_pending_with_bounded_fresh_ai_recheck():
-    source = inspect.getsource(handlers._handle_watching_strategy_branch)
-    pending_slice = source[
-        source.index("pending_recheck_requested") : source.index(
-            "ai_wait_rebound_recheck_pending"
-        )
-    ]
-
-    assert 'stock.get("entry_opportunity_recheck_pending")' in pending_slice
-    assert '"entry_opportunity_recheck_pending_fresh_ai"' in pending_slice
-    assert '"entry_opportunity_recheck_pending_fresh_ai_requested"' in pending_slice
-    assert '"entry_opportunity_recheck_pending_parent_snapshot_id"' in pending_slice
-    assert '"entry_opportunity_recheck_pending_recheck_after_epoch"' in pending_slice
-    assert '"entry_opportunity_recheck_pending_expired"' in pending_slice
-    assert "cooldowns[code] = now_ts + cooldown_time" in pending_slice
-    assert "actual_order_submitted=False" in pending_slice
-    assert "broker_order_forbidden=True" in pending_slice
-
-    reset = handlers._entry_opportunity_recheck_pending_window(
-        {
-            "entry_opportunity_recheck_pending": False,
-            "entry_opportunity_recheck_pending_since": 100.0,
-        },
-        now_ts=200.0,
-    )
-    assert reset["pending_since"] == 200.0
-    assert reset["pending_active"] is True
 
 
 def test_first_ai_big_bite_wait_arms_rebound_anchor_for_score_band(monkeypatch):
@@ -6896,58 +6677,6 @@ def test_score65_74_recovery_probe_cannot_reopen_semantic_rejection(monkeypatch)
     }
 
 
-def test_score65_74_probe_delegates_canonical_wait_probe_to_recheck_owner(
-    monkeypatch,
-):
-    rules = replace(
-        TRADING_RULES,
-        AI_SCORE65_74_RECOVERY_PROBE_ENABLED=True,
-    )
-    monkeypatch.setattr("src.engine.sniper_state_handlers.TRADING_RULES", rules)
-    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED", "true")
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOW_WAIT_PROBE_INTENT", "true"
-    )
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_EXPLICIT_BUY_ACTION",
-        "false",
-    )
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_PROBE_FIRST_CONTRACT",
-        "true",
-    )
-    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED", "true")
-    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ACTIVE_DATE", "DAILY")
-    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_QTY", "1")
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_DYNAMIC_ENTRY_PRICE_RESOLVER_POST_PROBE_ENABLED", "true"
-    )
-
-    decision = _score65_74_recovery_probe_decision(
-        {
-            "action": "WAIT",
-            "decision_quality_contract_status": "pass",
-            "entry_probe_intent": True,
-            "entry_probe_intent_status": "eligible_wait_probe",
-            "evidence": {
-                "adverse_risk": "high",
-                "trigger": "recovery_required",
-            },
-        },
-        68,
-        {"latency_state": "SAFE"},
-        [],
-        [],
-        None,
-    )
-
-    assert decision == {
-        "allowed": False,
-        "evaluated": False,
-        "score65_74_recovery_probe_skip_reason": (
-            "delegated_to_entry_opportunity_recheck_runtime"
-        ),
-    }
 
 
 def test_score65_74_recovery_probe_enforces_micro_context_hard_gate(monkeypatch):

@@ -5,33 +5,14 @@ from src.engine import build_code_improvement_workorder as mod
 from src.engine import lifecycle_decision_matrix as ldm_mod
 
 
-def test_recheck_natural_acceptance_repetition_does_not_invent_implementation():
-    from src.engine import build_code_improvement_workorder as mod
-
-    for status, expected in (
-        ("natural_acceptance_pending", []),
-        ("source_gap", ["recheck"]),
-    ):
-        item = mod.ClassifiedOrder(
-            order={
-                "order_id": "recheck",
-                "source_report_type": "entry_recheck_drought_controller",
-                "implementation_status": status,
-                "runtime_effect": False,
-                "allowed_runtime_apply": False,
-            },
-            decision="defer_evidence",
-            reason="exact source review",
-            mapped_family="entry_opportunity_recheck_runtime",
-            route="maintenance_review",
-            confidence="exact_source_diagnostic",
-            automation_reentry="existing owner",
-        )
-        result, ids = mod._escalate_repeated_unresolved_orders(
-            [item], repeat_counts={"recheck": {"count": 3}}
-        )
-        assert ids == expected
-        assert result[0].decision == ("implement_now" if expected else "defer_evidence")
+def test_retired_recheck_order_repetition_cannot_restore_implementation():
+    item = mod.ClassifiedOrder(
+        order={"order_id": "order_entry_recheck_source_repair", "source_report_type": "entry_recheck_drought_controller", "implementation_status": "source_gap", "runtime_effect": False, "allowed_runtime_apply": False},
+        decision="defer_evidence", reason="historical", mapped_family="entry_opportunity_recheck_runtime", route="maintenance_review", confidence="historical", automation_reentry="retired",
+    )
+    result, ids = mod._escalate_repeated_unresolved_orders([item], repeat_counts={"order_entry_recheck_source_repair": {"count": 3}})
+    assert ids == []
+    assert result == []
 
 
 def test_scanner_source_repair_emits_its_actual_downstream_contract():

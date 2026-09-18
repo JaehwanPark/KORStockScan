@@ -1651,15 +1651,6 @@ def _escalate_repeated_unresolved_orders(
             "rejected",
         }
         provenance = item.order.get("implementation_provenance") or {}
-        existing_recheck_natural_acceptance = (
-            item.decision == "defer_evidence"
-            and item.order.get("source_report_type")
-            == "entry_recheck_drought_controller"
-            and status == "natural_acceptance_pending"
-            and item.route == "maintenance_review"
-            and item.order.get("runtime_effect") is False
-            and item.order.get("allowed_runtime_apply") is False
-        )
         if (
             order_id
             and repeat_count >= repeat_floor
@@ -1672,7 +1663,6 @@ def _escalate_repeated_unresolved_orders(
             and not pattern_lab_design_only
             and not pattern_lab_existing_family_evidence_only
             and not manual_review_only
-            and not existing_recheck_natural_acceptance
             and item.order.get("source_report_type") != "market_opportunity_census"
         ):
             escalated_order = dict(item.order)
@@ -3679,21 +3669,6 @@ def _classify_order(
             automation_reentry="Re-evaluate in the next postclose pattern lab automation and daily EV report.",
         )
 
-    if (
-        order.get("source_report_type") == "entry_recheck_drought_controller"
-        and order.get("implementation_status") == "natural_acceptance_pending"
-        and order.get("runtime_effect") is False
-        and order.get("allowed_runtime_apply") is False
-    ):
-        return ClassifiedOrder(
-            order=order,
-            decision="defer_evidence",
-            reason="Source transition and finite maintenance remain with the existing natural-acceptance owner; no fabricated implementation or live authority.",
-            mapped_family="entry_opportunity_recheck_runtime",
-            route="maintenance_review",
-            confidence="exact_source_diagnostic",
-            automation_reentry="Investigate the declared first depleted stage immediately. At the review bound decide repair, merge or retire; require new source or consumption evidence before another wait.",
-        )
 
     if subsystem == "runtime_instrumentation" or route == "instrumentation_order":
         return ClassifiedOrder(
@@ -6922,22 +6897,6 @@ def _build_code_improvement_workorder(
     )
     if buy_funnel_sentinel:
         buy_funnel_sentinel = {**buy_funnel_sentinel, "_decision_date": target_date}
-    from src.engine.automation.drought_handoff import (
-        CONTROLLER,
-        EFFECTIVE_DATE,
-        report_path,
-    )
-
-    drought_controller_path = report_path(
-        buy_funnel_sentinel_path.parent.parent, CONTROLLER, target_date
-    )
-    drought_controller = (
-        _load_source_json(
-            drought_controller_path, isolated_source_mode=isolated_source_mode
-        )
-        if target_date >= EFFECTIVE_DATE
-        else {}
-    )
     conversion_lane_path = conversion_lane_report_path(target_date)
     conversion_lane = _load_source_json(
         conversion_lane_path, isolated_source_mode=isolated_source_mode
@@ -7005,7 +6964,6 @@ def _build_code_improvement_workorder(
         "stage_hook_workorder_discovery": stage_hook_workorder_discovery_path,
         "stage_hook_runtime_scaffold": stage_hook_runtime_scaffold_path,
         "buy_funnel_sentinel": buy_funnel_sentinel_path,
-        "entry_recheck_drought_controller": drought_controller_path,
         "conversion_lane": conversion_lane_path,
         "intraday_entry_blocker_diagnostics": intraday_entry_blocker_path,
         "intraday_ws_freshness_monitor": intraday_ws_freshness_path,
@@ -7245,12 +7203,10 @@ def _build_code_improvement_workorder(
         buy_funnel_sentinel,
         lifecycle_report=lifecycle_report,
     )
-    from src.engine.scalping.entry_recheck_review import intake_review_orders
     from src.engine.scalping.main_ai_prompt_consumer import (
         prompt_revision_review_workorders,
     )
 
-    drought_review_orders = intake_review_orders(drought_controller, target_date)
     buy_funnel_sentinel_order_ids = {
         str(order.get("order_id"))
         for order in buy_funnel_sentinel_orders
@@ -7299,7 +7255,6 @@ def _build_code_improvement_workorder(
         *observation_source_quality_orders,
         *_codebase_performance_followup_orders(codebase_performance),
         *buy_funnel_sentinel_orders,
-        *drought_review_orders,
         *prompt_revision_review_workorders(
             prompt_optimizer,
             target_date,
@@ -7562,7 +7517,7 @@ def _build_code_improvement_workorder(
     )
     required_handoff_order_ids.update(
         str(order.get("order_id"))
-        for order in [*buy_funnel_sentinel_orders, *drought_review_orders]
+        for order in buy_funnel_sentinel_orders
         if order.get("order_id")
     )
     required_handoff_order_ids.update(
@@ -7856,9 +7811,6 @@ def _build_code_improvement_workorder(
             ),
             "stage_hook_runtime_scaffold": source_ref("stage_hook_runtime_scaffold"),
             "buy_funnel_sentinel": source_ref("buy_funnel_sentinel"),
-            "entry_recheck_drought_controller": source_ref(
-                "entry_recheck_drought_controller"
-            ),
             "conversion_lane": source_ref("conversion_lane"),
             "intraday_entry_blocker_diagnostics": source_ref(
                 "intraday_entry_blocker_diagnostics"

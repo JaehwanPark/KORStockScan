@@ -8719,10 +8719,6 @@ def build_threshold_cycle_postclose_verification(
                 target_date,
                 ev=ev_report,
                 summary=runtime_summary,
-                require_controller=execution_flags.get(
-                    "entry_recheck_drought_controller"
-                )
-                is not False,
             )
             missing_downstream_links.extend(drought_canonical_handoff["issues"])
 

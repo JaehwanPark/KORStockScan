@@ -2188,7 +2188,7 @@ def _economic_acceptance(
             )
             result["blocking_stage"] = "candidate_to_full_completed_conversion_unproven"
         result["conversion_diagnostic_owner"] = (
-            "buy_funnel_sentinel -> entry_recheck_drought_controller"
+            "buy_funnel_sentinel -> machine_entry_timing_tuning"
         )
     if legacy_v1:
         # Reproduce frozen diagnostic metadata without imposing new fields on
@@ -2267,7 +2267,7 @@ def _conversion_diagnostics(observations):
             Counter(r["first_unobserved_stage"] for r in rows)
         ),
         "intended_consumer": "scanner_lookup_attention_tuning_markdown",
-        "next_review_owner": "buy_funnel_sentinel -> entry_recheck_drought_controller",
+        "next_review_owner": "buy_funnel_sentinel -> machine_entry_timing_tuning",
         "controller_policy_input": False,
         "rows": rows,
     }

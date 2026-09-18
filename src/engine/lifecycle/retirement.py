@@ -29,8 +29,12 @@ SCALE_IN_RETIRED_CALIBRATION_FAMILIES = frozenset({
     "scalping_pyramid_quality_gate", "scalping_avg_down_recovery_quality_gate",
     "post_probe_winner_recovery", "reversal_add", "shallow_avg_down_source_gap_recheck",
 })
+ENTRY_RECHECK_RETIREMENT_ID = "entry_recheck_drought_retirement_20260918"
+ENTRY_RECHECK_RETIRED_REPORTS = frozenset({"entry_recheck_drought_controller"})
+ENTRY_RECHECK_RETIRED_FAMILIES = frozenset({"entry_opportunity_recheck_runtime"})
 RETIRED_CALIBRATION_FAMILIES = (
-    frozenset({"latency_classifier_runtime_profile"})
+    ENTRY_RECHECK_RETIRED_FAMILIES
+    | frozenset({"latency_classifier_runtime_profile"})
     | SCALE_IN_RETIRED_CALIBRATION_FAMILIES
 )
 SCALP_OVERNIGHT_RETIRED_REPORTS = frozenset({"scalp_sim_overnight"})
@@ -73,9 +77,11 @@ RETIRED_REPORTS = (
     | LATENCY_RECOMMENDATION_RETIRED_REPORTS
     | SCALE_IN_RETIRED_REPORTS
     | RISING_MISSED_SCOUT_RETIRED_REPORTS
+    | ENTRY_RECHECK_RETIRED_REPORTS
 )
 RETIRED_FAMILIES = (
     RETIRED_REPORTS
+    | ENTRY_RECHECK_RETIRED_FAMILIES
     | SCALE_IN_RETIRED_CALIBRATION_FAMILIES
     | frozenset(
         {
@@ -102,6 +108,8 @@ RETIRED_FAMILIES = (
     | SCALP_OVERNIGHT_RETIRED_FAMILIES
 )
 RETIRED_ENV_PREFIXES = (
+    "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_",
+    "THRESHOLD_CYCLE_RUN_ENTRY_RECHECK_DROUGHT_CONTROLLER",
     "KORSTOCKSCAN_RISING_MISSED_ONE_SHARE_ENTRY_",
     "KORSTOCKSCAN_RISING_MISSED_SCOUT_",
     "KORSTOCKSCAN_ONE_SHARE_THRESHOLD_OPPORTUNITY_",
@@ -142,9 +150,10 @@ RETIRED_ENV_PREFIXES = (
 )
 RETIRED_OWNER_PREFIXES = tuple(
     owner + separator for owner in RETIRED_FAMILIES for separator in (":", "_", ".")
-)
+) + ("order_entry_recheck_",)
 RETIRED_STAGE_FLAGS = frozenset(
     {
+        "entry_recheck_drought_controller",
         "one_share_threshold_opportunity",
         "rising_missed_scout_workorder",
         "scalp_entry_adm",
@@ -162,7 +171,9 @@ RETIRED_STAGE_FLAGS = frozenset(
 def retired_status(report_type: str = "adm_ldm") -> dict[str, Any]:
     """Explicit terminal state; never a source-quality failure or retry request."""
     retirement_id = (
-        RISING_MISSED_SCOUT_RETIREMENT_ID
+        ENTRY_RECHECK_RETIREMENT_ID
+        if report_type in ENTRY_RECHECK_RETIRED_REPORTS | ENTRY_RECHECK_RETIRED_FAMILIES
+        else RISING_MISSED_SCOUT_RETIREMENT_ID
         if report_type in RISING_MISSED_SCOUT_RETIRED_REPORTS
         else SCALE_IN_RETIREMENT_ID
         if report_type in SCALE_IN_RETIRED_REPORTS | SCALE_IN_RETIRED_CALIBRATION_FAMILIES
@@ -226,6 +237,7 @@ def retirement_env() -> dict[str, str]:
         )
     }
     result.update({
+        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED": "false",
         "KORSTOCKSCAN_SCALPING_ENABLE_PYRAMID": "false",
         "KORSTOCKSCAN_SWING_ENABLE_PYRAMID": "false",
     })
@@ -299,6 +311,7 @@ def current_report_view(payload: Any) -> Any:
                 and any(
                     retired_owner(item.get(key))
                     for key in (
+                        "order_id",
                         "family",
                         "mapped_family",
                         "target_subsystem",

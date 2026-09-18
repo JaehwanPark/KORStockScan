@@ -38,6 +38,7 @@ def _configure_paths(monkeypatch, tmp_path):
 
 
 def _enable_probe_contract(monkeypatch):
+    monkeypatch.setenv(policy.CANARY_ENV_KEY, "true")
     monkeypatch.setenv(
         "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOWED_SCOPES", "KRX|KRX_REGULAR"
     )
@@ -261,9 +262,9 @@ def test_nxt_exact_candidate_preopen_and_runtime_are_isolated(monkeypatch, tmp_p
         policy.live_candidate_path(SOURCE_DATE, cohort=cohort), candidate
     )
     blocked = policy.build_preopen_activation(target_date=TARGET_DATE, cohort=cohort)
-    assert "runtime_contract_exact_recheck_scope_missing" in blocked["blocking_reasons"]
+    assert "runtime_contract_exact_rollout_scope_missing" in blocked["blocking_reasons"]
     monkeypatch.setenv(
-        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOWED_SCOPES", "NXT|NXT_AFTERMARKET"
+        policy._cohort_env_key(("NXT", "NXT_AFTERMARKET")), "true"
     )
     activation = policy.write_preopen_activation(target_date=TARGET_DATE, cohort=cohort)
     assert activation["status"] == "active_bounded_canary"
@@ -518,7 +519,7 @@ def _valid_runtime_env():
         "KORSTOCKSCAN_OPENAI_ANALYZE_TARGET_PROMPT_VERSION": (
             DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
         ),
-        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED": "true",
+        policy.CANARY_ENV_KEY: "true",
         "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOWED_SCOPES": "KRX|KRX_REGULAR",
         "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOW_WAIT_PROBE_INTENT": "true",
         "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_PROBE_FIRST_CONTRACT": "true",
@@ -549,19 +550,19 @@ def _write_ready_chain(monkeypatch, tmp_path):
 
 
 def test_setup_canary_requires_reachable_exact_krx_recheck_scope(monkeypatch):
-    key = "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOWED_SCOPES"
+    key = policy.CANARY_ENV_KEY
     monkeypatch.setenv(key, "KRX|KRX_REGULAR")
-    for scopes in (None, "", "NXT|NXT_REGULAR", "krx|krx_regular", "KRX"):
+    for scopes in (None, "", "false", "0"):
         env = _valid_runtime_env()
         if scopes is None:
             env.pop(key)
         else:
             env[key] = scopes
-        assert "runtime_contract_krx_recheck_scope_missing" in (
+        assert "runtime_contract_krx_rollout_scope_missing" in (
             policy._runtime_probe_contract_errors(target_date=TARGET_DATE, env=env)
         )
     env = _valid_runtime_env()
-    env[key] = " NXT|NXT_REGULAR, KRX|KRX_REGULAR "
+    env[key] = "true"
     assert policy._runtime_probe_contract_errors(target_date=TARGET_DATE, env=env) == []
 
 
@@ -570,7 +571,7 @@ def test_active_setup_falls_back_if_runtime_loses_krx_recheck_scope(
 ):
     _, activation = _write_ready_chain(monkeypatch, tmp_path)
     assert activation["status"] == "active_bounded_canary"
-    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOWED_SCOPES", "")
+    monkeypatch.setenv(policy.CANARY_ENV_KEY, "false")
     resolved = policy.resolve_live_prompt_policy(
         configured_prompt_version=DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
         effective_venue="KRX",
@@ -579,10 +580,7 @@ def test_active_setup_falls_back_if_runtime_loses_krx_recheck_scope(
         now=datetime(2026, 8, 7, 9, 10, tzinfo=policy.KST),
     )
     assert resolved["enabled"] is False
-    assert resolved["status"] == "fallback_probe_first_runtime_contract_invalid"
-    assert resolved["runtime_contract_errors"] == [
-        "runtime_contract_krx_recheck_scope_missing"
-    ]
+    assert resolved["status"] == "fallback_operator_disabled"
 
 
 def test_passed_postclose_candidate_activates_only_next_day_krx(monkeypatch, tmp_path):

@@ -45,8 +45,6 @@ def _budget_errors(limit: int, env: dict[str, str] | None = None) -> list[str]:
         return ["intraday_exploration_budget_unsupported"]
     if limit == policy.EXPLORATION_MAX_DAILY_PROBES:
         return []
-    if policy.expanded_exploration_budget_errors(env):
-        return ["intraday_exploration_budget_env_mismatch"]
     return []
 
 
