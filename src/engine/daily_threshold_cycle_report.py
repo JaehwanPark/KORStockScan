@@ -23,6 +23,8 @@ from src.engine.lifecycle.retirement import (
     RETIRED_REPORTS,
     SCALP_OVERNIGHT_RETIRED_STAGES,
     current_report_view,
+    current_calibration_rows,
+    RETIRED_CALIBRATION_FAMILIES,
     retired_artifact,
 )
 from src.engine.scalping.entry_split_order_plan import (
@@ -1253,9 +1255,11 @@ def save_threshold_calibration_report(
         or (report.get("meta") or {}).get("calibration_run_phase")
         or "postclose"
     )
+    _attach_economic_evaluation(report)
     _materialize_position_sizing_policy(report, target_date)
     _materialize_mechanistic_entry_price_policy(report, target_date)
     _materialize_integrated_entry_execution_sizing_policy(report, target_date)
+    _attach_economic_evaluation(report)
     path = calibration_report_path_for_date(target_date, phase)
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -1284,6 +1288,7 @@ def save_threshold_calibration_report(
         "safety_guard_pack": report.get("safety_guard_pack") or [],
         "calibration_trigger_pack": report.get("calibration_trigger_pack") or [],
         "warnings": report.get("warnings") or [],
+        "economic_evaluation": report.get("economic_evaluation"),
     }
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     aftermarket_policy = _materialize_aftermarket_sor_runtime_policy(
@@ -1317,6 +1322,8 @@ def _materialize_position_sizing_policy(report: dict, source_date: str) -> None:
         None,
     )
     if not isinstance(candidate, dict):
+        return
+    if economic_challenger_blocker(candidate):
         return
     effective_date = _next_krx_trading_date(source_date)
     policy_version = f"position_sizing_dynamic_formula:{source_date}"
@@ -1432,6 +1439,8 @@ def _materialize_mechanistic_entry_price_policy(report: dict, source_date: str) 
         None,
     )
     if not isinstance(candidate, dict):
+        return
+    if economic_challenger_blocker(candidate):
         return
     metrics = candidate.get("source_metrics") or {}
     selected = metrics.get("entry_price_profile_selected_candidate") or {}
@@ -13806,15 +13815,222 @@ def _build_family_readiness_list(families: list[dict]) -> list[dict]:
     return candidates
 
 
+
+ECONOMIC_EVALUATION_CONTRACT = "daily_paired_economic_evaluation_v1"
+
+
+def _economic_input_sha(candidate: dict, source_date: str) -> str:
+    # Source metrics contain the frozen model/cost/holdout and policy proof.
+    return _json_sha256({"contract": ECONOMIC_EVALUATION_CONTRACT,
+        "implementation_sha256": {str(path.relative_to(Path(__file__).parent)): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in (Path(__file__), Path(__file__).parent / "scalping/strategy_owner_replay.py",
+                         Path(__file__).parent / "scalping/scale_in_split_order_plan.py")},
+        "source_date": source_date, "family": candidate.get("family"),
+        "stage": candidate.get("stage"), "source_metrics": candidate.get("source_metrics") or {},
+        "current_values": candidate.get("current_values") or {},
+        "recommended_values": candidate.get("recommended_values") or {}})
+
+
+def economic_evaluation_valid(candidate: dict, source_date: str | None = None) -> bool:
+    evidence = candidate.get("economic_evaluation")
+    if not isinstance(evidence, dict) or evidence.get("contract_version") != ECONOMIC_EVALUATION_CONTRACT:
+        return False
+    if candidate.get("economic_contract_version") != ECONOMIC_EVALUATION_CONTRACT:
+        return False
+    day = evidence.get("source_date")
+    return bool(isinstance(day, str) and day >= CLEAN_TUNING_BASELINE_DATE
+        and (source_date is None or day == source_date)
+        and evidence.get("input_sha256") == _economic_input_sha(candidate, day)
+        and evidence.get("artifact_content_sha256") == _json_sha256(
+            {k: v for k, v in evidence.items() if k != "artifact_content_sha256"}))
+
+
+def economic_challenger_blocker(candidate: dict) -> str | None:
+    # Versioned rows opt into this contract. Independently approved baseline,
+    # operator and negative continuation dispositions retain their owner gates.
+    if candidate.get("economic_contract_version") != ECONOMIC_EVALUATION_CONTRACT:
+        return None
+    if not economic_evaluation_valid(candidate):
+        return "economic_evaluation_missing_or_stale"
+    evidence = candidate["economic_evaluation"]
+    if evidence.get("disposition") == "preserve_existing_authority" and (candidate.get("runtime_disable_family") is True or (candidate.get("source_metrics") or {}).get("runtime_apply_authority") in {"bounded_equal_split_baseline", "behavior_equivalent_baseline", "post_apply_continuation_disable"}):
+        return None
+    values = evidence.get("metrics") or {}
+    daily = values.get("daily_delta_net_pnl_krw")
+    delta = values.get("delta_net_ev_pct")
+    if evidence.get("status") == "validated_improvement" and (
+        candidate.get("family") not in {"dynamic_entry_price_resolver", "scale_in_split_order_plan"}
+        or isinstance(delta, bool) or not isinstance(delta, (int, float)) or not math.isfinite(delta) or delta <= 0
+        or not isinstance(daily, dict) or not daily
+        or any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) for v in daily.values())
+        or sum(daily.values()) <= 0 or not evidence.get("proof_sha256")):
+        return "economic_improvement_contract_invalid"
+    if evidence.get("status") != "validated_improvement":
+        return "economic_evaluation:" + str(evidence.get("status"))
+    return None
+
+
+def _candidate_economic_evaluation(candidate: dict, source_date: str) -> dict:
+    fingerprint = _economic_input_sha(candidate, source_date)
+    previous = candidate.get("economic_evaluation")
+    if economic_evaluation_valid(candidate, source_date):
+        return previous
+    metrics = candidate.get("source_metrics") or {}
+    state = "source_gap"
+    reason = "paired_execution_cost_capital_and_holdout_proof_missing"
+    values = {"incumbent_net_ev_pct": None, "candidate_net_ev_pct": None,
+        "delta_net_ev_pct": None, "daily_delta_net_pnl_krw": None,
+        "average_daily_delta_net_pnl_krw": None, "paired_comparable_count": 0}
+    proof_sha = None
+    family = str(candidate.get("family") or "")
+    authority = "bounded_challenger" if candidate.get("allowed_runtime_apply") is True else "observe_only"
+    disposition = "incumbent_preserved"
+    authority_class = metrics.get("runtime_apply_authority")
+    if candidate.get("runtime_disable_family") is True or authority_class in {
+        "bounded_equal_split_baseline", "behavior_equivalent_baseline", "post_apply_continuation_disable"}:
+        disposition = "preserve_existing_authority"
+    if family in RETIRED_CALIBRATION_FAMILIES:
+        state, reason = "retired", "retired_family_has_no_current_authority"
+    elif metrics.get("source_quality_blocked") is True or metrics.get("source_quality_passed") is False:
+        state, reason = "source_gap", "source_quality_contract_not_ready"
+    elif metrics.get("pending_post_sell_evaluation_count", 0):
+        state, reason = "pending_maturity", "valid_source_awaiting_terminal_cost"
+    elif (metrics.get("evaluation_state") or {}).get("status") == "skipped_no_applicable_fill":
+        state, reason = "skipped_no_applicable_fill", "actual_fill_census_has_no_supported_split_scope"
+    elif candidate.get("current_values") and candidate.get("current_values") == candidate.get("recommended_values"):
+        state, reason = "incumbent_preserved_identical_policy", "identical_policy_is_not_independent_validation"
+    elif (_safe_int(candidate.get("sample_count"), 0) or 0) < (_safe_int(candidate.get("sample_floor"), 0) or 0):
+        state, reason = "insufficient_sample", "existing_family_sample_floor_not_met"
+    if family == "dynamic_entry_price_resolver":
+        selected = metrics.get("entry_price_profile_selected_candidate") or {}
+        proof = selected.get("price_selection_evidence")
+        if proof:
+            from src.engine.scalping.strategy_owner_replay import entry_price_selection_evidence_valid, entry_price_comparison_metrics
+            if entry_price_selection_evidence_valid(proof) and max(proof["holdout_dates"]) <= source_date:
+                c, i = proof["metrics"], proof["incumbent_metrics"]
+                group = (proof["profile"], proof["target_value_key"], proof["incumbent_bps"], *proof["scope_parent"])
+                daily = {}
+                for day in sorted({r["seed"]["source_date"] for r in proof["paired_rows"]}):
+                    rows = [r for r in proof["paired_rows"] if r["seed"]["source_date"] == day]
+                    daily[day] = (entry_price_comparison_metrics(rows, proof["selected_bps"], group)["modeled_net_profit_krw"]
+                        - entry_price_comparison_metrics(rows, None, group)["modeled_net_profit_krw"])
+                values.update(incumbent_net_ev_pct=i["source_quality_adjusted_ev_pct"],
+                    candidate_net_ev_pct=c["source_quality_adjusted_ev_pct"],
+                    delta_net_ev_pct=c["source_quality_adjusted_ev_pct"]-i["source_quality_adjusted_ev_pct"],
+                    daily_delta_net_pnl_krw=daily, average_daily_delta_net_pnl_krw=sum(daily.values())/len(daily),
+                    paired_comparable_count=c["paired_sample_count"])
+                values["incumbent_supporting_metrics"] = i
+                values["candidate_supporting_metrics"] = c
+                proof_sha = proof["evidence_sha256"]
+                target = proof["target_value_key"]
+                if not math.isclose(sum(daily.values()), c["modeled_net_profit_krw"] - i["modeled_net_profit_krw"], abs_tol=1e-6):
+                    state, reason = "source_gap", "daily_capital_allocation_conservation_mismatch"
+                elif (candidate.get("recommended_values") or {}).get(target) == proof["selected_bps"] and (candidate.get("current_values") or {}).get(target) == proof["incumbent_bps"]:
+                    state, reason = "validated_improvement", None
+                else:
+                    state, reason = "source_gap", "price_proof_policy_identity_mismatch"
+            else:
+                state, reason = "source_gap", "price_paired_proof_invalid"
+    elif family == "scale_in_split_order_plan":
+        proof = metrics.get("runtime_refresh_evidence") or {}
+        from src.engine.scalping.scale_in_split_order_plan import runtime_refresh_contract_error
+        if (not runtime_refresh_contract_error(proof) and max(proof["economic_source_dates"]) <= source_date
+            and proof.get("holdout_evidence")
+            and all(isinstance(h.get("daily_delta_net_pnl_krw"), dict) and h["daily_delta_net_pnl_krw"]
+                and all(isinstance(d, str) and d <= source_date and type(v) in (int, float) and math.isfinite(v)
+                    for d, v in h["daily_delta_net_pnl_krw"].items()) for h in proof["holdout_evidence"])):
+            holds = proof["holdout_evidence"]
+            daily = {}
+            for hold in holds:
+                for day, value in hold["daily_delta_net_pnl_krw"].items():
+                    daily[day] = daily.get(day, 0.0) + value
+            values.update(delta_net_ev_pct=proof["source_quality_adjusted_ev_pct"],
+                daily_delta_net_pnl_krw=daily, average_daily_delta_net_pnl_krw=sum(daily.values())/len(daily),
+                paired_comparable_count=proof["paired_economic_sample_count"])
+            proof_sha = _json_sha256(proof)
+            state, reason = "validated_improvement", None
+    evidence = {"contract_version": ECONOMIC_EVALUATION_CONTRACT,
+        "source_date": source_date, "family": family, "stage": candidate.get("stage"),
+        "operating_status": authority, "status": state, "blocking_reason": reason,
+        "disposition": disposition, "metrics": values, "proof_sha256": proof_sha,
+        "metric_role": "sim_probe_ev", "actual_net_profit_improvement": None,
+        "decision_authority": "existing_family_guarded_next_preopen_only",
+        "window_policy": "existing_family_chronological_holdout",
+        "sample_floor": candidate.get("sample_floor"),
+        "primary_decision_metric": "delta_net_ev_pct_and_same_capital_daily_net_pnl",
+        "source_quality_gate": "existing_family_execution_cost_capital_holdout_proof",
+        "forbidden_uses": ["actual_realized_profit", "direct_orders", "guard_or_provider_changes"],
+        "incumbent_policy_sha256": _json_sha256(candidate.get("current_values") or {}),
+        "candidate_policy_sha256": _json_sha256(candidate.get("recommended_values") or {}),
+        "input_sha256": fingerprint, "evaluated_at": datetime.now().astimezone().isoformat(),
+        "next_owner": candidate.get("source_family") or family,
+        "closure_test": "exact_family_paired_execution_cost_capital_and_independent_holdout",
+        "eta": None, "runtime_effect": False}
+    evidence["artifact_content_sha256"] = _json_sha256(evidence)
+    return evidence
+
+
+def economic_evaluation_summary(candidates: list[dict], source_date: str) -> dict:
+    rows = current_calibration_rows(candidates)
+    states = Counter((r.get("economic_evaluation") or {}).get("status", "unversioned") for r in rows)
+    return {"contract_version": ECONOMIC_EVALUATION_CONTRACT, "source_date": source_date,
+        "status_counts": dict(sorted(states.items())), "family_count": len(rows),
+        "validated_improvement_count": states.get("validated_improvement", 0),
+        "paired_count_role": "sum_of_family_comparisons_not_unique_population",
+        "paired_comparable_count": sum((r.get("economic_evaluation") or {}).get("metrics", {}).get("paired_comparable_count", 0) for r in rows),
+        "row_evidence_sha256": {r["family"]: (r.get("economic_evaluation") or {}).get("artifact_content_sha256") for r in rows},
+        "actual_net_profit_improvement": None, "runtime_effect": False}
+
+
+
+def economic_report_contract_errors(report: dict) -> list[str]:
+    summary = report.get("economic_evaluation")
+    if not isinstance(summary, dict) or summary.get("contract_version") != ECONOMIC_EVALUATION_CONTRACT:
+        return (["economic_summary_missing_or_invalid"] if any(
+            r.get("economic_contract_version") == ECONOMIC_EVALUATION_CONTRACT
+            for r in report.get("calibration_candidates") or []) else [])
+    day = str(report.get("date") or "")
+    rows = current_calibration_rows(report.get("calibration_candidates") or [])
+    errors = ["economic_row_invalid:"+str(r.get("family")) for r in rows if not economic_evaluation_valid(r, day)]
+    if len({r.get("family") for r in rows}) != len(rows):
+        errors.append("economic_family_identity_duplicate")
+    if summary != economic_evaluation_summary(rows, day):
+        errors.append("economic_summary_generation_mismatch")
+    for row in rows:
+        if row.get("runtime_apply_eligible_now") is True and economic_challenger_blocker(row):
+            errors.append("economic_ineligible_challenger:"+str(row.get("family")))
+    return errors
+
+
+def _attach_economic_evaluation(report: dict) -> None:
+    if not isinstance(report.get("calibration_candidates"), list):
+        return
+    day = str(report.get("date") or "")
+    if day < CLEAN_TUNING_BASELINE_DATE:
+        return
+    rows = current_calibration_rows(report["calibration_candidates"])
+    report["calibration_candidates"] = rows
+    for row in rows:
+        row["economic_contract_version"] = ECONOMIC_EVALUATION_CONTRACT
+        row["economic_evaluation"] = _candidate_economic_evaluation(row, day)
+        blocker = economic_challenger_blocker(row)
+        if blocker:
+            row["runtime_apply_eligible_now"] = False
+            row["runtime_apply_block_reason"] = row.get("runtime_apply_block_reason") or blocker
+            row["economic_apply_block_reason"] = blocker
+    report["economic_evaluation"] = economic_evaluation_summary(rows, day)
+
+
 def _build_apply_candidate_list(calibration_candidates: list[dict]) -> list[dict]:
     """Return only candidates that can be selected by the next PREOPEN pass now."""
 
     eligible = [
         candidate
-        for candidate in calibration_candidates
+        for candidate in current_calibration_rows(calibration_candidates)
         if isinstance(candidate, dict)
         and candidate.get("pre_baseline_archive_only") is not True
         and candidate.get("runtime_apply_eligible_now") is True
+        and economic_challenger_blocker(candidate) is None
         and str(candidate.get("calibration_state") or "")
         in {"adjust_up", "adjust_down"}
         and str(candidate.get("apply_mode") or "")
@@ -13862,6 +14078,7 @@ def _enforce_clean_tuning_baseline_gate(report: dict) -> dict:
         source_flags["clean_tuning_decision_input_eligible"] = decision_input_eligible
     candidates = report.get("calibration_candidates")
     if decision_input_eligible:
+        _attach_economic_evaluation(report)
         if isinstance(candidates, list):
             for candidate in candidates:
                 if not isinstance(candidate, dict):
@@ -16110,7 +16327,7 @@ def _build_safety_guard_pack(calibration_candidates: list[dict]) -> list[dict]:
             "safety_guard": candidate.get("safety_guard") or CALIBRATION_SAFETY_GUARDS,
             "revert_policy": "safety breach only",
         }
-        for candidate in calibration_candidates
+        for candidate in current_calibration_rows(calibration_candidates)
         if bool(candidate.get("allowed_runtime_apply"))
     ]
 
@@ -16124,7 +16341,7 @@ def _build_calibration_trigger_pack(calibration_candidates: list[dict]) -> list[
             "next_manifest_action": "step_adjust_or_hold_or_freeze",
             "rollback_policy": "not_a_rollback_trigger",
         }
-        for candidate in calibration_candidates
+        for candidate in current_calibration_rows(calibration_candidates)
     ]
 
 
@@ -16161,9 +16378,10 @@ def _build_post_apply_attribution(calibration_candidates: list[dict]) -> dict:
                 "sample_floor": candidate.get("sample_floor"),
                 "sample_floor_status": candidate.get("sample_floor_status"),
                 "source_metrics": candidate.get("source_metrics") or {},
+                "economic_evaluation": candidate.get("economic_evaluation"),
                 "safety_revert_required": candidate.get("safety_revert_required"),
             }
-            for candidate in calibration_candidates
+            for candidate in current_calibration_rows(calibration_candidates)
         ],
     }
 
@@ -21184,6 +21402,94 @@ def refresh_machine_evaluation_only(target_date: str) -> dict:
     return summary
 
 
+
+def refresh_economic_evaluation_only(target_date: str) -> dict:
+    """Bounded current projection with immutable predecessor and CAS writes."""
+    import fcntl
+    path = report_path_for_date(target_date)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.with_suffix(".economic.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        predecessor = path.read_bytes()
+        report = json.loads(predecessor)
+        if report.get("date") != target_date or target_date < CLEAN_TUNING_BASELINE_DATE:
+            raise ValueError("daily_economic_exact_clean_date_required")
+        # Read the existing latest family generation, not shared raw inputs.
+        signatures = {}
+        for family_name, producer, builder in (
+            ("entry_split_order_plan", _entry_split_order_plan_path(target_date), _build_entry_split_order_plan_family),
+            ("scale_in_split_order_plan", REPORT_DIR / "scale_in_split_order_plan" / f"scale_in_split_order_plan_{target_date}.json", _build_scale_in_split_order_plan_family)):
+            if producer.is_file():
+                signatures[producer] = hashlib.sha256(producer.read_bytes()).hexdigest()
+                family = builder(target_date=target_date)
+                new = _build_calibration_candidates([family], report.get("calibration_source_bundle") or {},
+                    report.get("same_day_runtime_apply_observation") or {})
+                for row in new:
+                    row["source_metrics"]["producer_artifact_sha256"] = signatures[producer]
+                prior = report.get("calibration_candidates") or []
+                previous = next((r for r in prior if r.get("family") == family_name), {})
+                for row in new:
+                    row["economic_evaluation"] = previous.get("economic_evaluation")
+                report["calibration_candidates"] = [r for r in prior if r.get("family") != family_name] + new
+        split_source = _entry_split_order_plan_path(target_date)
+        for index, row in enumerate(report.get("calibration_candidates") or []):
+            if row.get("family") != "dynamic_entry_price_resolver" or split_source not in signatures:
+                continue
+            old_metrics = row.get("source_metrics") or {}
+            if old_metrics.get("producer_artifact_sha256") == signatures[split_source]:
+                continue
+            current = row.get("current_values") or {}
+            grid = _entry_price_opportunity_candidate_grid(target_date, current)
+            selected = grid.get("selected_candidate") or {}
+            proof = selected.get("price_selection_evidence")
+            recommended = dict(current)
+            if proof:
+                recommended[proof["target_value_key"]] = proof["selected_bps"]
+            metrics = {**old_metrics, "producer_artifact_sha256": signatures[split_source],
+                "entry_price_profile_candidate_grid": grid["candidate_grid"],
+                "entry_price_profile_selected_candidate": selected or None,
+                "entry_price_profile_eligible_exact_candidate_count": grid["eligible_exact_candidate_count"],
+                "price_selection_blocker": grid.get("blocker"),
+                "canonical_split_source_sha256": grid.get("canonical_split_source_sha256"),
+                "entry_opportunity_replay_counts": grid.get("entry_opportunity_replay_counts", {}),
+                "primary_sample_book": "executable_opportunity_replay" if proof else "unverified",
+                "recommended_values": recommended if proof else {},
+                "recommended_values_decision_scope": "executable_opportunity_replay" if proof else ""}
+            family = {"family": row["family"], "stage": "entry", "sample": metrics,
+                "current": current, "recommended": recommended,
+                "apply_ready": bool(proof), "candidate_grid": grid["candidate_grid"],
+                "apply_mode": "next_preopen_single_owner" if proof else "observe_only"}
+            candidates = _build_calibration_candidates([family], report.get("calibration_source_bundle") or {},
+                report.get("same_day_runtime_apply_observation") or {})
+            replacement = next(r for r in candidates if r["family"] == row["family"])
+            replacement["economic_evaluation"] = row.get("economic_evaluation")
+            report["calibration_candidates"][index] = replacement
+        _attach_economic_evaluation(report)
+        report["apply_candidate_list"] = _build_apply_candidate_list(report["calibration_candidates"])
+        report["post_apply_attribution"] = _build_post_apply_attribution(report["calibration_candidates"])
+        report["calibration_trigger_pack"] = _build_calibration_trigger_pack(report["calibration_candidates"])
+        report["safety_guard_pack"] = _build_safety_guard_pack(report["calibration_candidates"])
+        for producer, digest in signatures.items():
+            if hashlib.sha256(producer.read_bytes()).hexdigest() != digest:
+                raise ValueError("family_source_changed_during_economic_refresh")
+        encoded = json.dumps(report, ensure_ascii=False, indent=2).encode()
+        if json.loads(predecessor) == report:
+            return {"status": "reused_unchanged_economic_evaluation", **report["economic_evaluation"]}
+        if path.read_bytes() != predecessor:
+            raise ValueError("daily_report_changed_during_economic_refresh")
+        archive = path.parent / "daily_economic_predecessors" / (hashlib.sha256(predecessor).hexdigest()+".json")
+        archive.parent.mkdir(parents=True, exist_ok=True)
+        if not archive.exists():
+            archive.write_bytes(predecessor)
+        temporary = path.with_name(path.name + f".{os.getpid()}.economic.tmp")
+        try:
+            temporary.write_bytes(encoded)
+            temporary.replace(path)
+        finally:
+            temporary.unlink(missing_ok=True)
+        return {"status": "refreshed_current_economic_evaluation", **report["economic_evaluation"]}
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Build daily threshold cycle report.")
     parser.add_argument(
@@ -21236,7 +21542,12 @@ def main(argv: list[str] | None = None) -> int:
                         help="Refresh only the existing daily microstructure diagnostic handoff.")
     parser.add_argument("--refresh-entry-split-only", action="store_true",
                         help="Refresh the existing Daily entry split candidate from its immutable generation.")
+    parser.add_argument("--refresh-economic-evaluation-only", action="store_true",
+                        help="Refresh only current family economics from existing producer generations; no raw replay or provider.")
     args = parser.parse_args(argv)
+    if args.refresh_economic_evaluation_only:
+        print(json.dumps(refresh_economic_evaluation_only(args.target_date), ensure_ascii=False))
+        return 0
     if args.refresh_entry_split_only:
         refresh_entry_split_only(args.target_date)
         return 0

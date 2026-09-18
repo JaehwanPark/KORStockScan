@@ -34,6 +34,8 @@ from src.engine.approval_contracts import annotate_approval_request
 from src.engine.lifecycle.avg_down_replay import cost_rate_from_version
 from src.engine.daily_threshold_cycle_report import (
     REPORT_DIR,
+    economic_challenger_blocker,
+    economic_report_contract_errors,
     THRESHOLD_AI_DETERMINISTIC_HANDOFF_FAMILIES,
 )
 from src.engine.runtime_apply_bridge import (
@@ -3005,6 +3007,8 @@ def _select_auto_apply_candidates(
             and candidate.get("runtime_apply_eligible_now") is not True
         ):
             reject_reason = "runtime_apply_not_currently_eligible"
+        elif lock is None and economic_challenger_blocker(candidate):
+            reject_reason = economic_challenger_blocker(candidate)
         elif contract_blockers:
             reject_reason = ",".join(contract_blockers)
         elif state in AUTO_APPLY_BLOCK_STATES or (
@@ -7136,6 +7140,9 @@ def build_preopen_apply_manifest(
             if isinstance(report.get("apply_candidate_list"), list)
             else []
         )
+        errors = economic_report_contract_errors(report)
+        if errors:
+            raise ValueError("invalid_daily_economic_handoff:"+",".join(errors))
         calibration_candidates = (
             report.get("calibration_candidates")
             if isinstance(report.get("calibration_candidates"), list)

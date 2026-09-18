@@ -2634,6 +2634,7 @@ def build_runtime_approval_summary(
                 "ok_count"
             ),
         },
+        "economic_evaluation": calibration_report.get("economic_evaluation"),
         "application_timing": _application_timing(target_date, ev_report),
         "entry_replay_observe_only": entry_replay_observe_only,
         "entry_evaluation_roles": entry_evaluation_roles,

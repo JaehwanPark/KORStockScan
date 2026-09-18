@@ -38,6 +38,7 @@ from src.engine.build_code_improvement_workorder import (
 )
 from src.engine.daily_threshold_cycle_report import (
     REPORT_DIR,
+    economic_report_contract_errors,
     THRESHOLD_AI_DETERMINISTIC_HANDOFF_FAMILIES,
 )
 from src.engine.lifecycle.retirement import (
@@ -6807,8 +6808,10 @@ def _ai_correction_status(target_date: str) -> dict[str, Any]:
         "ai_provider_status"
     )
     parse_warnings = ai_review.get("parse_warnings")
+    economic_errors = economic_report_contract_errors(calibration_report)
     if not isinstance(parse_warnings, list):
         parse_warnings = []
+    parse_warnings = [*parse_warnings, *economic_errors]
     coverage = (
         ai_review.get("ai_coverage")
         if isinstance(ai_review.get("ai_coverage"), dict)
@@ -6910,6 +6913,9 @@ def _ai_correction_status(target_date: str) -> dict[str, Any]:
         status = "warning"
     else:
         status = "missing"
+
+    if economic_errors:
+        status = "fail"
 
     return {
         "status": status,

@@ -742,6 +742,7 @@ def _cohort_decisions(calibration_report: dict[str, Any]) -> list[dict[str, Any]
                     or source.get("calibration_reason"),
                     "runtime_apply_block_reason": item.get("runtime_apply_block_reason")
                     or source.get("runtime_apply_block_reason"),
+                    "economic_evaluation": source.get("economic_evaluation"),
                     "source_metrics": (
                         item.get("source_metrics")
                         if isinstance(item.get("source_metrics"), dict)
@@ -2939,6 +2940,7 @@ def build_threshold_cycle_ev_report(
         },
         "scalp_simulator": scalp_simulator,
         "missed_probe_counterfactual": wait6579_counterfactual,
+        "economic_evaluation": calibration.get("economic_evaluation"),
         "calibration_outcome": {
             "calibration_report": (
                 str(calibration_path) if calibration_path.exists() else None

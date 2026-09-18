@@ -1524,6 +1524,55 @@ def build_entry_opportunity_replays(day, events, *, evaluated_at=None, micro_loa
     return output
 
 
+def entry_price_comparison_metrics(sample, bps, target_group):
+    def group_key(seed):
+        return tuple(seed.get(k) for k in ('profile', 'target_value_key', 'incumbent_bps',
+            'effective_venue', 'session_bucket', 'policy_bundle_sha256', 'entry_price_policy_sha256'))
+    if not sample:
+        raise ValueError("latest_source_partition_missing_outcomes")
+    ordered = sorted(sample, key=lambda r: (r['seed']['observed_at'], r['seed']['seed_sha256']))
+    arms, reserved_until, promotions = [], -math.inf, set()
+    for r in ordered:
+        seed = r['seed']
+        at = _timestamp(seed['observed_at'], seed['source_date']).timestamp()
+        promotion = (seed['source_date'], seed['stock_code'], seed['scanner_promotion_id'])
+        if r.get('allocation_admitted') is False or at < reserved_until or promotion in promotions:
+            # Explicit modeled no exposure from the SAME allocation rule for both policies.
+            arms.append(dict(net_return_pct=0., stress_net_return_pct=0., net_pnl_krw=0.,
+                capital_krw_minutes=0., fill_participation_rate=0., cost_complete=True,
+                counterfactual_executable=True))
+        else:
+            if bps is not None and group_key(seed) == target_group:
+                arms.append(r['price_arms'][str(bps)])
+            elif seed.get('price_candidates'):
+                arms.append(r['price_arms'][str(seed['incumbent_bps'])])
+            else:
+                # Other price branches stay on their original owner-issued plan.
+                from src.engine.scalping.entry_split_order_plan import QUANTITY_LEG_FOUR_ARM_IDS
+                arms.append(r['arms'][QUANTITY_LEG_FOUR_ARM_IDS[0]])
+            reserved_until = at + ENTRY_REPLAY_ALLOCATION['reservation_sec']
+            promotions.add(promotion)
+    for a in arms:
+        if (not all(_finite(a.get(k)) for k in ('net_return_pct', 'stress_net_return_pct',
+                'net_pnl_krw', 'capital_krw_minutes', 'fill_participation_rate'))
+            or a['capital_krw_minutes'] < 0 or not 0 <= a['fill_participation_rate'] <= 1
+            or a.get('cost_complete') is not True or a.get('counterfactual_executable') is not True):
+            raise ValueError('paired_arm_invalid')
+    net = [a['net_return_pct'] for a in arms]
+    pnl = sum(a['net_pnl_krw'] for a in arms)
+    capital = sum(a['capital_krw_minutes'] for a in arms)
+    dates = {r['seed']['source_date'] for r in sample}
+    return dict(source_quality_adjusted_ev_pct=sum(net) / len(net),
+        stress_ev_pct=sum(a['stress_net_return_pct'] for a in arms) / len(arms),
+        modeled_net_profit_krw=pnl, modeled_net_profit_per_source_day=pnl / len(dates),
+        downside_p10_net_pct=sorted(net)[max(0, math.ceil(len(net) * .1) - 1)],
+        positive_terminal_frequency=sum(n > 0 for n in net) / len(net),
+        fill_participation_rate=sum(a['fill_participation_rate'] for a in arms) / len(arms),
+        modeled_capital_krw_minutes=capital,
+        modeled_net_profit_per_capital_minute=pnl / capital if capital > 0 else 0.0,
+        paired_sample_count=len(arms), qualified_source_day_count=len(dates))
+
+
 def select_entry_price_replay(rows, *, eligible_count=None, source_counts=None):
     """Choose on calibration ONLY, test that frozen choice once on latest day.
 
@@ -1577,50 +1626,7 @@ def select_entry_price_replay(rows, *, eligible_count=None, source_counts=None):
             continue
         group = group_key(seed)
         groups[group].append(row)
-    def metrics(sample, bps, target_group):
-        if not sample:
-            raise ValueError("latest_source_partition_missing_outcomes")
-        ordered = sorted(sample, key=lambda r: (r['seed']['observed_at'], r['seed']['seed_sha256']))
-        arms, reserved_until, promotions = [], -math.inf, set()
-        for r in ordered:
-            seed = r['seed']
-            at = _timestamp(seed['observed_at'], seed['source_date']).timestamp()
-            promotion = (seed['source_date'], seed['stock_code'], seed['scanner_promotion_id'])
-            if r.get('allocation_admitted') is False or at < reserved_until or promotion in promotions:
-                # Explicit modeled no exposure from the SAME allocation rule for both policies.
-                arms.append(dict(net_return_pct=0., stress_net_return_pct=0., net_pnl_krw=0.,
-                    capital_krw_minutes=0., fill_participation_rate=0., cost_complete=True,
-                    counterfactual_executable=True))
-            else:
-                if bps is not None and group_key(seed) == target_group:
-                    arms.append(r['price_arms'][str(bps)])
-                elif seed.get('price_candidates'):
-                    arms.append(r['price_arms'][str(seed['incumbent_bps'])])
-                else:
-                    # Other price branches stay on their original owner-issued plan.
-                    from src.engine.scalping.entry_split_order_plan import QUANTITY_LEG_FOUR_ARM_IDS
-                    arms.append(r['arms'][QUANTITY_LEG_FOUR_ARM_IDS[0]])
-                reserved_until = at + ENTRY_REPLAY_ALLOCATION['reservation_sec']
-                promotions.add(promotion)
-        for a in arms:
-            if (not all(_finite(a.get(k)) for k in ('net_return_pct', 'stress_net_return_pct',
-                    'net_pnl_krw', 'capital_krw_minutes', 'fill_participation_rate'))
-                or a['capital_krw_minutes'] < 0 or not 0 <= a['fill_participation_rate'] <= 1
-                or a.get('cost_complete') is not True or a.get('counterfactual_executable') is not True):
-                raise ValueError('paired_arm_invalid')
-        net = [a['net_return_pct'] for a in arms]
-        pnl = sum(a['net_pnl_krw'] for a in arms)
-        capital = sum(a['capital_krw_minutes'] for a in arms)
-        dates = {r['seed']['source_date'] for r in sample}
-        return dict(source_quality_adjusted_ev_pct=sum(net) / len(net),
-            stress_ev_pct=sum(a['stress_net_return_pct'] for a in arms) / len(arms),
-            modeled_net_profit_krw=pnl, modeled_net_profit_per_source_day=pnl / len(dates),
-            downside_p10_net_pct=sorted(net)[max(0, math.ceil(len(net) * .1) - 1)],
-            positive_terminal_frequency=sum(n > 0 for n in net) / len(net),
-            fill_participation_rate=sum(a['fill_participation_rate'] for a in arms) / len(arms),
-            modeled_capital_krw_minutes=capital,
-            modeled_net_profit_per_capital_minute=pnl / capital if capital > 0 else 0.0,
-            paired_sample_count=len(arms), qualified_source_day_count=len(dates))
+    metrics = entry_price_comparison_metrics
     def improved(c, i):
         return bool(c['source_quality_adjusted_ev_pct'] > 0 and c['stress_ev_pct'] > 0
             and c['source_quality_adjusted_ev_pct'] > i['source_quality_adjusted_ev_pct']

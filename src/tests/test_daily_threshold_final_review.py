@@ -403,3 +403,114 @@ def test_benchmark_uses_regular_source_loader_without_saves_or_provider(
     result = json.loads(capsys.readouterr().out)
     assert result["source_windows"] == ["rolling_5d"]
     assert result["provider_call_count"] == result["report_write_count"] == 0
+
+
+def economic_row(**changes):
+    row = {"family": "position_sizing_dynamic_formula", "stage": "entry",
+           "sample_count": 30, "sample_floor": 30, "source_metrics": {},
+           "current_values": {"ratio": 0.1}, "recommended_values": {"ratio": 0.2},
+           "allowed_runtime_apply": True, "runtime_apply_eligible_now": True,
+           "calibration_state": "adjust_up", "apply_mode": "auto_bounded_live"}
+    row.update(changes)
+    return row
+
+
+def test_direction_is_not_paired_economic_validation_and_first_blocker_preserved():
+    report = {"date": "2026-09-17", "calibration_candidates": [economic_row(runtime_apply_block_reason="atomic_plan_missing")]}
+    daily._attach_economic_evaluation(report)
+    row = report["calibration_candidates"][0]
+    assert row["economic_evaluation"]["status"] == "source_gap"
+    assert row["economic_evaluation"]["metrics"]["delta_net_ev_pct"] is None
+    assert row["runtime_apply_block_reason"] == "atomic_plan_missing"
+    assert daily._build_apply_candidate_list([row]) == []
+    assert daily.economic_report_contract_errors(report) == []
+
+
+@pytest.mark.parametrize("changes,status", [
+    ({"sample_count": 0}, "insufficient_sample"),
+    ({"recommended_values": {"ratio": 0.1}}, "incumbent_preserved_identical_policy"),
+    ({"source_metrics": {"source_quality_blocked": True}}, "source_gap"),
+    ({"source_metrics": {"pending_post_sell_evaluation_count": 2}}, "pending_maturity"),
+])
+def test_economic_census_distinguishes_missing_pending_and_identical(changes, status):
+    report = {"date": "2026-09-17", "calibration_candidates": [economic_row(**changes)]}
+    daily._attach_economic_evaluation(report)
+    assert report["economic_evaluation"]["status_counts"] == {status: 1}
+    assert report["economic_evaluation"]["validated_improvement_count"] == 0
+    assert report["economic_evaluation"]["actual_net_profit_improvement"] is None
+
+
+def test_same_revision_reuses_asof_but_late_cost_invalidates_evaluation():
+    report = {"date": "2026-09-17", "calibration_candidates": [economic_row()]}
+    daily._attach_economic_evaluation(report)
+    prior = copy.deepcopy(report["calibration_candidates"][0]["economic_evaluation"])
+    daily._attach_economic_evaluation(report)
+    assert report["calibration_candidates"][0]["economic_evaluation"] == prior
+    report["calibration_candidates"][0]["source_metrics"]["cost_revision"] = "late_actual_v2"
+    assert daily.economic_report_contract_errors(report)
+    daily._attach_economic_evaluation(report)
+    assert report["calibration_candidates"][0]["economic_evaluation"]["input_sha256"] != prior["input_sha256"]
+    assert daily.economic_report_contract_errors(report) == []
+
+
+def test_exact_owner_price_pair_exposes_ev_and_daily_profit_and_binds_policy():
+    from src.tests.test_strategy_owner_replay import entry_seed, entry_replay
+    from src.engine.scalping.strategy_owner_replay import select_entry_price_replay
+    rows = [entry_replay(entry_seed(day, i)) for day in ["2026-09-14", "2026-09-15"] for i in range(10)]
+    proof = select_entry_price_replay(rows, eligible_count=20, source_counts={"2026-09-14":10,"2026-09-15":10})[0]
+    key = proof["target_value_key"]
+    row = economic_row(family="dynamic_entry_price_resolver", sample_count=20, sample_floor=20,
+        current_values={key: proof["incumbent_bps"]}, recommended_values={key: proof["selected_bps"]},
+        source_metrics={"entry_price_profile_selected_candidate":{"price_selection_evidence":proof}})
+    report = {"date":"2026-09-15", "calibration_candidates":[row]}
+    daily._attach_economic_evaluation(report)
+    metrics = row["economic_evaluation"]["metrics"]
+    assert row["economic_evaluation"]["status"] == "validated_improvement"
+    assert metrics["delta_net_ev_pct"] > 0
+    assert sum(metrics["daily_delta_net_pnl_krw"].values()) > 0
+    assert metrics["paired_comparable_count"] == 20
+    assert daily.economic_challenger_blocker(row) is None
+    row["recommended_values"][key] += 1
+    assert daily.economic_challenger_blocker(row) == "economic_evaluation_missing_or_stale"
+    daily._attach_economic_evaluation(report)
+    assert row["economic_evaluation"]["status"] == "source_gap"
+
+
+def test_economic_summary_missing_row_and_retired_current_projection():
+    report = {"date":"2026-09-17", "calibration_candidates":[economic_row(), economic_row(family="scalping_pyramid_quality_gate")]}
+    daily._attach_economic_evaluation(report)
+    assert len(report["calibration_candidates"]) == 1
+    report["calibration_candidates"][0].pop("economic_evaluation")
+    assert daily.economic_report_contract_errors(report)
+
+
+def test_positive_ev_without_daily_capital_is_not_promotable_even_self_hashed():
+    report = {"date":"2026-09-17", "calibration_candidates":[economic_row(family="dynamic_entry_price_resolver")]}
+    daily._attach_economic_evaluation(report)
+    row = report["calibration_candidates"][0]
+    proof = row["economic_evaluation"]
+    proof.update(status="validated_improvement", proof_sha256="fake")
+    proof["metrics"]["delta_net_ev_pct"] = 1.0
+    proof["artifact_content_sha256"] = daily._json_sha256({k:v for k,v in proof.items() if k != "artifact_content_sha256"})
+    assert daily.economic_challenger_blocker(row) == "economic_improvement_contract_invalid"
+
+
+def test_bounded_refresh_reuses_exact_result_without_raw_or_provider(monkeypatch, tmp_path):
+    monkeypatch.setattr(daily, "REPORT_DIR", tmp_path)
+    path = tmp_path / "threshold_cycle_2026-09-17.json"
+    path.write_text(json.dumps({"date":"2026-09-17", "calibration_candidates":[economic_row()]}))
+    first = daily.refresh_economic_evaluation_only("2026-09-17")
+    frozen = path.read_bytes()
+    second = daily.refresh_economic_evaluation_only("2026-09-17")
+    assert first["status"] == "refreshed_current_economic_evaluation"
+    assert second["status"] == "reused_unchanged_economic_evaluation"
+    assert path.read_bytes() == frozen
+    assert len(list((tmp_path / "daily_economic_predecessors").glob("*.json"))) == 1
+
+
+def test_versioned_economic_rows_require_parent_summary():
+    from src.engine import daily_threshold_cycle_report as daily
+    report = {"date": "2026-09-17", "calibration_candidates": [economic_row()]}
+    daily._attach_economic_evaluation(report)
+    report.pop("economic_evaluation")
+    assert daily.economic_report_contract_errors(report) == ["economic_summary_missing_or_invalid"]
