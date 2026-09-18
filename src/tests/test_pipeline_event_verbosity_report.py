@@ -1029,9 +1029,17 @@ def test_malformed_producer_rollup_returns_explicit_source_blocker(monkeypatch, 
     checkpoint.write_text(json.dumps(payload))
     blocked = report_mod.build_pipeline_event_verbosity_report(day)
     assert blocked["state"] == "producer_summary_invalid"
-    assert blocked["producer_summary"]["decode_error"] == "producer_rollup_contract_invalid"
+    assert "producer_rollup_contract_invalid" in blocked["producer_summary"]["decode_error"]
     assert blocked["parity"]["ok"] is False
     assert blocked["policy"]["allowed_runtime_apply"] is False
+    import sys
+    monkeypatch.setattr(sys, "argv", ["pipeline_report", "--date", day, "--allow-bootstrap"])
+    assert report_mod.main() == 0
+    repaired = json.loads(report_mod.report_paths(day)[0].read_text())
+    assert repaired["parity"]["ok"] is True
+    assert repaired["evaluation"]["raw_bytes_processed"] == 0
+    assert repaired["evaluation"]["producer_bytes_processed"] == report_mod.Path(repaired["producer_summary"]["path"]).stat().st_size
+    assert report_mod.report_is_reusable(day)
 
 
 @pytest.mark.parametrize("field", ["policy", "parity"])

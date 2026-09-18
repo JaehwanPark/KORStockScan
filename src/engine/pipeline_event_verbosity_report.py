@@ -280,7 +280,7 @@ def write_resource_deferred(target_date: str, reason: str) -> dict[str, Any]:
     return write_diagnostic_blocked(target_date, "resource_deferred", reason)
 
 
-def _producer_rows_incremental(path, checkpoint):
+def _producer_rows_incremental(path, checkpoint, *, allow_bootstrap=False):
     """Reuse native compact multiset, parse only committed append rows.
 
     Supported prefix contract is the existing generation-locked append owner;
@@ -294,7 +294,9 @@ def _producer_rows_incremental(path, checkpoint):
     stamp = [st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns]
     previous = checkpoint.get("producer_rollup") or {}
     if not isinstance(previous, dict):
-        raise ValueError("producer_rollup_contract_invalid")
+        if not allow_bootstrap:
+            raise ValueError("producer_rollup_contract_invalid; scoped --allow-bootstrap rebuilds only the producer rollup")
+        previous = {}
     if previous.get("stamp") == stamp:
         return previous["rows"], previous, 0
     append = (actual.suffix != ".gz" and previous.get("stamp") and
@@ -581,7 +583,7 @@ def build_pipeline_event_verbosity_report(
 ) -> dict[str, Any]:
     target_date = str(target_date).strip()
     datetime.strptime(target_date, "%Y-%m-%d")
-    if as_of is None and report_is_reusable(target_date):
+    if as_of is None and not allow_bootstrap and report_is_reusable(target_date):
         return _read_json(report_paths(target_date)[0])
     now = _as_kst((as_of or datetime.now(KST)).isoformat())
     external_before = _external_binding(target_date)
@@ -626,7 +628,7 @@ def build_pipeline_event_verbosity_report(
     producer_checkpoint, producer_bytes_processed = {}, 0
     try:
         producer_rows, producer_checkpoint, producer_bytes_processed = _producer_rows_incremental(
-            producer_path, raw_summary_meta)
+            producer_path, raw_summary_meta, allow_bootstrap=allow_bootstrap)
     except (ValueError, TypeError, KeyError, OSError, EOFError) as exc:
         producer_rows = []
         producer_decode_error = str(exc)
@@ -1068,7 +1070,7 @@ def main() -> int:
         return 0 if report_is_reusable(args.target_date) else 1
     if args.resource_deferred:
         report = write_resource_deferred(args.target_date, args.resource_deferred)
-    elif report_is_reusable(args.target_date):
+    elif not args.allow_bootstrap and report_is_reusable(args.target_date):
         report = _read_json(report_paths(args.target_date)[0])
     else:
         report = build_pipeline_event_verbosity_report(args.target_date, allow_bootstrap=args.allow_bootstrap)

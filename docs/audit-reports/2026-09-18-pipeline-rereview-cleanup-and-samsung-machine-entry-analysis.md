@@ -6,7 +6,7 @@
 
 기존 PV0–PV6 구현·검증은 [owning review](2026-09-18-pipeline-event-verbosity-incremental-review.md)와 그 receipts를 확인했다. 이번 새 결함은 중첩 schema가 손상된 경우다. policy가 list/scalar면 reusable check가 AttributeError로 끝났고, checkpoint producer_rollup이 list면 explicit source blocker 대신 예외가 났다. strict reader도 policy/parity가 list일 때 OPEN을 출력하지 못했다.
 
-기존 report/strict reader에 shape 검사만 보완했다. 잘못된 policy는 cache miss 후 기존 정상 checkpoint로 실제 계산·parity PASS/fallback을 복구한다. 잘못된 producer rollup은 producer_summary_invalid와 producer_rollup_contract_invalid를 출력한다. 잘못된 policy/parity의 strict 인계는 report_contract_invalid·같은 native owner의 OPEN이다. 정상 지원 입력을 모두 inactive로 만드는 수정이 아니다. 새 producer/service/module은 없다.
+기존 report/strict reader에 shape 검사만 보완했다. 잘못된 policy는 cache miss 후 기존 정상 checkpoint로 실제 계산·parity PASS/fallback을 복구한다. 잘못된 producer rollup은 producer_summary_invalid와 producer_rollup_contract_invalid를 출력한다. 기존 --allow-bootstrap의 명시적 단일 날짜 복구는 손상된 producer rollup만 다시 읽어 정상 count/identity/PASS·재사용을 회복하고 정상 raw checkpoint를 재스캔하지 않는다. 이 복구 flag는 cached invalid terminal 재사용보다 우선하며 실제 CLI 회귀로 확인했다. 잘못된 policy/parity의 strict 인계는 report_contract_invalid·같은 native owner의 OPEN이다. 정상 지원 입력을 모두 inactive로 만드는 수정이 아니다. 새 producer/service/module은 없다.
 
 최종 report/strict/controller 영향 회귀326PASS, logger/summary/Sentinel/strict/handoff 회귀400PASS다. 앞선 report56PASS는 추가 strict 보완 전 중간 검증이며 최종 수에 합산하지 않는다. compile·diff·링크·parser 및 selected root/공유경로/router·선택 CAS는 최종 validation/deployment receipts를 따른다. 실행 중 immutable 소스와 다른 세션의 canonical dirty 변경은 보존한다.
 
@@ -74,3 +74,8 @@ clean window는72개 거래일 중 본 report 관측26개이고46개는 coverage
 | PID/service authority 경계 | 정상 거래일 준비 여부 확인 필요, 자동 변경 금지 | 기존 preflight/독립 service owner: 정확한 적용일 policy/hash·override·new-BUY authority·immutable pin→PID 소비→자연 행동 receipt. 현 휴장 차단은 보존 |
 
 판정: 실제 성과·손실·custody·정책 lineage를 보존하는 이 작업은 유지 가치가 있다. **별도 신규 alpha 탐색을 여기로 되살릴 가치는 없으며 현행 timing/기계 evaluator에 집중해야 한다.** morning의 손실을 숨기지 않고 same-capital confirmation 후보를 검증할 수 있게 만드는 원천/실행경로 수리가 먼저다. 표본 준비 숫자와 양수 afternoon 실제 거래 평균은 그 수리/독립 검증을 대체하지 않는다. 삼성의 코드는 변경하지 않았고 원 report/candidate/policy/service 상태도 변경하지 않았다. [read-only 분석 receipt](../../tmp/pipeline-rereview-samsung-analysis-20260918/samsung-analysis.json)와 bounded service/journal evidence를 따른다.
+
+
+## 실행 receipt 및 최종 상태
+
+초기 재리뷰 commit2c70e096d의 clean immutable successor를 선택한 뒤 복구 경계의 추가 리뷰·CLI 회귀를 완료했다. 최종 source SHA/root는 [배포 receipt](../../tmp/pipeline-rereview-samsung-analysis-20260918/deployment.json), [validation](../../tmp/pipeline-rereview-samsung-analysis-20260918/validation.json)을 따른다. 첫 작은9/17 진단 갱신은0.970초·raw/producer 처리bytes0·전후 source generation 동일이고 parity FAIL을 유지했다. 최종 같은 날짜 인계의 [regeneration](../../tmp/pipeline-rereview-samsung-analysis-20260918/regeneration.json), [consumer closure](../../tmp/pipeline-rereview-samsung-analysis-20260918/consumer-closure.json)은 native workorder1/defer_evidence와 summary handoff PASS·전체 strict FAIL·controller DONE=false를 분리한다. 원 low-price/timing/source/FAIL marker 등 다른 축을 고치거나 old PASS로 덮어쓰지 않았다. 삼성 report/candidate/source SHA 보존은 [read-only 검증](../../tmp/pipeline-rereview-samsung-analysis-20260918/Samsung-read-only-preservation.json)에서 확인한다. 실제 PID·다음 자연 parity·새 양수 후보·실제 비용 정산/EV 개선은 OPEN이며 본 작업이 승인하지 않는다.
