@@ -4332,3 +4332,19 @@ def test_cash_exclusion_preserves_other_calls_on_same_record():
         "cash_shortfall_exclusion_retained_lineage_mismatch"
         in result["structural_issues"]
     )
+
+
+def test_invalid_native_summary_keeps_authoritative_raw_fallback(monkeypatch, tmp_path):
+    day = "2026-09-18"
+    _write_events(tmp_path, day, [_event(day, "10:00:00", "blocked_strength_momentum")])
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    def invalid(*args, **kwargs):
+        raise ValueError("raw_summary_checkpoint_digest_invalid")
+    monkeypatch.setattr(sentinel, "load_pipeline_event_summaries", invalid)
+    events, summaries, meta = sentinel._load_event_sources(day, use_cache=False, use_summary=True)
+    assert len(events) == 1 and events[0].stage == "blocked_strength_momentum"
+    assert summaries == []
+    assert meta["summary_status"] == "invalid"
+    assert meta["summary_raw_suppression_enabled"] is False
+    assert meta["fallback_to_raw_cache"] is True
+    assert meta["summary_blocker"] == "raw_summary_checkpoint_digest_invalid"

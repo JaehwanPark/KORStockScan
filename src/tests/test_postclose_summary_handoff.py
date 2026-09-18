@@ -139,3 +139,16 @@ def test_concurrent_source_change_prevents_publish(tmp_path):
     path.write_text("{}")
     with pytest.raises(RuntimeError, match="changed_during_render"):
         mod.assert_sources_unchanged(receipt, paths)
+
+
+def test_pipeline_diagnostic_arrival_invalidates_both_exact_consumers(tmp_path):
+    reports = tmp_path / "report"
+    day = "2026-09-17"
+    before = {consumer: mod.source_receipt(mod.source_paths(reports, day, consumer), day)
+              for consumer in ("tower", "checklist")}
+    path = mod.source_paths(reports, day, "tower")["pipeline_event_verbosity"]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('{"target_date":"2026-09-17","state":"resource_deferred"}')
+    for consumer in ("tower", "checklist"):
+        after = mod.source_receipt(mod.source_paths(reports, day, consumer), day)
+        assert after != before[consumer]

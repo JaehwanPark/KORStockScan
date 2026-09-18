@@ -3843,3 +3843,30 @@ def test_claude_lab_retired_from_all_main_entrypoints():
         assert "-m src.engine.scalping_pattern_lab_automation" not in text
         assert "THRESHOLD_CYCLE_RUN_PATTERN_LABS" not in text
         assert "TUNING_MONITORING_RUN_PATTERN_LABS" not in text
+
+
+def test_pipeline_resource_timeout_runs_scoped_defer_branch_only(tmp_path):
+    import os
+    import shlex
+    import subprocess
+    import sys
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text()
+    start = script.index('    if wait_for_postclose_resources "pipeline_event_verbosity"; then')
+    end = script.index('\n  fi\n  wait_for_report_artifact', start)
+    fragment = script[start:end]
+    fixture = tmp_path / "data"
+    program = "from pathlib import Path; import os,sys; from src.engine import pipeline_event_verbosity_report as m; m.DATA_DIR=Path(os.environ['PV_FIXTURE_DATA']); sys.exit(m.main())"
+    shell = f'''
+set -euo pipefail
+TARGET_DATE=2026-09-18
+VENV_PY={shlex.quote(sys.executable)}
+wait_for_postclose_resources() {{ return 1; }}
+run_postclose_cmd() {{ "${{@:3:1}}" -c {shlex.quote(program)} "${{@:6}}"; }}
+{fragment}
+'''
+    result = subprocess.run(["bash", "-c", shell], cwd=Path.cwd(), env={**os.environ, "PV_FIXTURE_DATA": str(fixture), "PYTHONPATH": "."}, capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0, result.stderr
+    report = json.loads((fixture / "report/pipeline_event_verbosity/pipeline_event_verbosity_2026-09-18.json").read_text())
+    assert report["state"] == "resource_deferred"
+    assert report["parity"]["ok"] is None
+    assert not list(fixture.glob("pipeline_events/*.jsonl"))

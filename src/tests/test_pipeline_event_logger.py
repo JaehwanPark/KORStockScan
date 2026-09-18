@@ -1434,3 +1434,95 @@ def test_execution_producer_family_projection_has_reconciled_census(monkeypatch,
     assert bad['status'] == 'source_gap'
     logger_mod._flush_producer_summary_at_exit()
     monkeypatch.setattr(logger_mod,'_PRODUCER_COMPACTOR',None)
+
+
+def test_graceful_sigterm_drain_preserves_admitted_rows(tmp_path):
+    """Controlled child only; no trading process, signal handler or orders."""
+    import subprocess
+    import sys
+    from pathlib import Path
+    for drained in (False, True):
+        directory = tmp_path / str(drained)
+        script = f'''
+import os, signal
+from pathlib import Path
+from src.utils import pipeline_event_logger as logger
+logger.DATA_DIR = Path({str(directory)!r})
+os.environ["PIPELINE_EVENT_HIGH_VOLUME_COMPACTION_MODE"] = "shadow"
+os.environ["PIPELINE_EVENT_COMPACTION_FLUSH_SEC"] = "3600"
+logger.emit_pipeline_event("ENTRY_PIPELINE", "TEST", "005930", "scalping_scanner_fast_precheck", record_id=1)
+if {drained!r}:
+    logger.drain_pipeline_event_summary_before_termination()
+os.kill(os.getpid(), signal.SIGTERM)
+'''
+        result = subprocess.run([sys.executable, "-c", script], cwd=Path(__file__).parents[2], capture_output=True, timeout=15)
+        assert result.returncode == -15
+        assert sum(len(p.read_text().splitlines()) for p in directory.glob("pipeline_events/*.jsonl")) == 1
+        paths = list(directory.glob("pipeline_event_summaries/pipeline_event_producer_summary_*.jsonl"))
+        assert bool(paths) is drained
+        if drained:
+            assert sum(json.loads(line)["event_count"] for p in paths for line in p.read_text().splitlines()) == 1
+    # All existing graceful self-termination calls must first reach the owner drain.
+    import ast
+    for relative in ("src/bot_main.py", "src/engine/kiwoom_sniper_v2.py"):
+        tree = ast.parse((Path(__file__).parents[2] / relative).read_text())
+        for parent in ast.walk(tree):
+            for _, children in ast.iter_fields(parent):
+                if not isinstance(children, list):
+                    continue
+                for index, child in enumerate(children):
+                    if isinstance(child, ast.Expr) and isinstance(child.value, ast.Call) and ast.unparse(child.value).startswith("os.kill(os.getpid(), signal.SIGTERM"):
+                        assert index > 0 and "drain_pipeline_event_summary_before_termination()" in ast.unparse(children[index - 1])
+
+
+def test_mode_handover_keeps_old_compactor_for_shutdown_drain(monkeypatch, tmp_path):
+    import threading
+    _reset_logger_state(monkeypatch)
+    monkeypatch.setattr(logger_mod, "_RETIRING_COMPACTORS", [])
+    monkeypatch.setattr(logger_mod, "DATA_DIR", tmp_path)
+    monkeypatch.setenv("PIPELINE_EVENT_HIGH_VOLUME_COMPACTION_MODE", "shadow")
+    monkeypatch.setenv("PIPELINE_EVENT_COMPACTION_FLUSH_SEC", "3600")
+    old = logger_mod._get_producer_compactor()
+    entered, release = threading.Event(), threading.Event()
+    publish = old._publish
+    def delayed(*args):
+        entered.set()
+        assert release.wait(3)
+        return publish(*args)
+    monkeypatch.setattr(old, "_publish", delayed)
+    payload = logger_mod.emit_pipeline_event("ENTRY_PIPELINE", "TEST", "005930", "scalping_scanner_fast_precheck", record_id=1)
+    monkeypatch.setenv("PIPELINE_EVENT_HIGH_VOLUME_COMPACTION_MODE", "off")
+    try:
+        assert logger_mod._get_producer_compactor() is None
+        assert entered.wait(1)
+        assert old in logger_mod._RETIRING_COMPACTORS
+    finally:
+        release.set()
+        logger_mod.drain_pipeline_event_summary_before_termination()
+    assert logger_mod._RETIRING_COMPACTORS == []
+    paths = list((tmp_path / "pipeline_event_summaries").glob("pipeline_event_producer_summary_*.jsonl"))
+    assert sum(json.loads(line)["event_count"] for path in paths for line in path.read_text().splitlines()) == 1
+
+
+def test_repeated_failed_handover_has_two_bounded_owners(monkeypatch, tmp_path):
+    _reset_logger_state(monkeypatch)
+    monkeypatch.setattr(logger_mod, "_RETIRING_COMPACTORS", [])
+    monkeypatch.setattr(logger_mod, "DATA_DIR", tmp_path)
+    monkeypatch.setenv("PIPELINE_EVENT_HIGH_VOLUME_COMPACTION_MODE", "shadow")
+    monkeypatch.setenv("PIPELINE_EVENT_COMPACTION_FLUSH_SEC", "3600")
+    old = logger_mod._get_producer_compactor()
+    logger_mod.emit_pipeline_event("ENTRY_PIPELINE", "TEST", "005930", "scalping_scanner_fast_precheck", record_id=1)
+    with monkeypatch.context() as patch:
+        # Hold actual admitted buffers across asynchronous handover failure.
+        patch.setattr(old, "close", lambda **kwargs: None)
+        patch.setenv("PIPELINE_EVENT_HIGH_VOLUME_COMPACTION_MODE", "suppress")
+        current = logger_mod._get_producer_compactor()
+        logger_mod.emit_pipeline_event("ENTRY_PIPELINE", "TEST", "005930", "scalping_scanner_fast_precheck", record_id=2)
+        patch.setattr(current, "close", lambda **kwargs: None)
+        for mode in ("off", "shadow", "off", "shadow"):
+            patch.setenv("PIPELINE_EVENT_HIGH_VOLUME_COMPACTION_MODE", mode)
+            assert logger_mod._get_producer_compactor() is None
+            assert logger_mod._RETIRING_COMPACTORS == [old]
+            assert logger_mod._PRODUCER_COMPACTOR is current
+    logger_mod.drain_pipeline_event_summary_before_termination()
+    assert not old._groups and not current._groups

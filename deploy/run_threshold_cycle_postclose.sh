@@ -1976,8 +1976,13 @@ if [ "$RUN_PIPELINE_EVENT_VERBOSITY_REPORT" = "true" ] || [ "$RUN_PIPELINE_EVENT
   if [ "$pipeline_verbosity_refresh_decision" = "skip" ]; then
     skip_triggered_step "pipeline_event_verbosity" "verified_artifacts_fresher_than_inputs"
   else
-    wait_for_postclose_resources "pipeline_event_verbosity"
-    run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.pipeline_event_verbosity_report --date "$TARGET_DATE"
+    if wait_for_postclose_resources "pipeline_event_verbosity"; then
+      run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.pipeline_event_verbosity_report --date "$TARGET_DATE"
+    else
+      # This diagnostic owns no independent economics input. Preserve the global
+      # guard for every following expensive step; do not synthesize a PASS.
+      run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.pipeline_event_verbosity_report --date "$TARGET_DATE" --resource-deferred "postclose_resource_guard_timeout"
+    fi
   fi
   wait_for_report_artifact \
     "$pipeline_verbosity_json" \

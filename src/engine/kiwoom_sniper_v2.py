@@ -12240,6 +12240,8 @@ def run_sniper(is_test_mode=False):
                     },
                 )
                 _sn_whb("sniper_engine", alive=False)
+                from src.utils.pipeline_event_logger import drain_pipeline_event_summary_before_termination
+                drain_pipeline_event_summary_before_termination()
                 os.kill(os.getpid(), signal.SIGTERM)
                 break
 

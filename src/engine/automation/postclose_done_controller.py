@@ -382,6 +382,8 @@ def _flatten_issues(verification: dict[str, Any]) -> list[str]:
         "handoff_warnings",
     ):
         issues.extend(str(item) for item in verification.get(key) or [] if str(item))
+    pipeline_operations = verification.get("pipeline_verbosity_operations_handoff") or {}
+    issues.extend(str(item) for item in pipeline_operations.get("issues") or [])
     runtime_gap = verification.get("runtime_apply_gap_audit")
     if isinstance(runtime_gap, dict):
         issues.extend(
@@ -1281,6 +1283,9 @@ def _recovery_actions(
     target_date: str, verification: dict[str, Any], *, allow_wrapper_rerun: bool
 ) -> list[RecoveryAction]:
     issues = _flatten_issues(verification)
+    pipeline_operations_issues = set((verification.get("pipeline_verbosity_operations_handoff") or {}).get("issues") or [])
+    if issues and set(issues).issubset(pipeline_operations_issues):
+        return []  # One existing operations owner; no unchanged full-wrapper/provider retry.
     flags = (verification.get("execution_profile") or {}).get("flags") or {}
     if not any(flags.get(key) is True for key in (
         "swing_lifecycle", "swing_strategy_discovery", "swing_lifecycle_matrix", "swing_lifecycle_bucket_discovery"

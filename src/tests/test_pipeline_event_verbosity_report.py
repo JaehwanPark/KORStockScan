@@ -270,6 +270,14 @@ def test_only_stable_exact_date_schema_can_be_reused(
         },
     }
     path.write_text(json.dumps(payload))
+    assert report_mod.report_is_reusable(day) is False  # Legacy unbound body.
+    logical = report_mod._pipeline_events_path(day)
+    logical.parent.mkdir(parents=True, exist_ok=True)
+    logical.with_name(f".{logical.name}.partition.lock").touch()
+    payload["source_binding"] = report_mod._source_binding(day)
+    payload["report_digest"] = report_mod._report_digest(payload)
+    path.write_text(json.dumps(payload))
+    report_mod.report_paths(day)[1].write_text(report_mod.render_markdown(payload))
     assert report_mod.report_is_reusable(day) is reusable
     payload["target_date"] = "2026-09-07"
     path.write_text(json.dumps(payload))
@@ -747,3 +755,240 @@ def test_pipeline_event_verbosity_report_separates_partial_day_coverage(
     assert report["parity"]["producer_start_complete"] is False
     assert report["parity"]["producer_pending_flush"] is False
     assert report["parity"]["suppress_eligibility"] is False
+
+
+def test_operating_producer_incremental_and_consumers(monkeypatch, tmp_path):
+    """Actual logger admission/storage/flush, not manually completed summary rows."""
+    from concurrent.futures import ThreadPoolExecutor
+    from pathlib import Path
+    from types import SimpleNamespace
+    from src.utils import pipeline_event_logger as logger
+    from src.engine import pipeline_event_summary as summary
+    from src.engine import threshold_cycle_ev_report as ev
+    from src.engine import build_code_improvement_workorder as workorder
+    from src.engine import verify_threshold_cycle_postclose_chain as verifier
+    from src.engine.automation import postclose_done_controller as controller
+
+    logger._flush_producer_summary_at_exit()
+    monkeypatch.setattr(logger, "_PRODUCER_COMPACTOR", None)
+    monkeypatch.setattr(logger, "_RETIRING_COMPACTORS", [])
+    monkeypatch.setattr(logger, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(logger, "TRADING_RULES", SimpleNamespace(PIPELINE_EVENT_JSONL_ENABLED=True))
+    monkeypatch.setenv("PIPELINE_EVENT_HIGH_VOLUME_COMPACTION_MODE", "suppress")
+    monkeypatch.setenv("PIPELINE_EVENT_COMPACTION_FLUSH_SEC", "3600")
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(ev, "REPORT_DIR", tmp_path / "report")
+    monkeypatch.setattr(verifier, "REPORT_DIR", tmp_path / "report")
+    day = datetime.now().date().isoformat()
+
+    def emit(i):
+        return logger.emit_pipeline_event("ENTRY_PIPELINE", "TEST", "005930", "scalping_scanner_fast_precheck", record_id=i,
+                                         fields={"source_quality_gate": "pass", "effective_venue": "KRX_NXT_INTEGRATED", "broker_route": "SOR"})
+    try:
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            list(pool.map(emit, range(12)))
+        logger.flush_pipeline_event_producer_summary(day)
+        first = report_mod.build_pipeline_event_verbosity_report(day)
+        assert first["parity"]["ok"] is True
+        assert first["parity"]["raw_derived_event_count"] == 12
+        assert first["policy"]["raw_suppression_enabled"] is False
+        raw = report_mod._pipeline_events_path(day)
+        size_before = raw.stat().st_size
+        # Both public builder and CLI cache check must bypass all source bodies.
+        with monkeypatch.context() as patch:
+            patch.setattr(summary, "_load_summary_rows", lambda *a, **kw: pytest.fail("full summary scan"))
+            patch.setattr(report_mod, "_producer_rows_incremental", lambda *a, **kw: pytest.fail("producer body scan"))
+            patch.setattr(report_mod, "update_and_load_pipeline_event_summaries", lambda **kw: pytest.fail("raw scan"))
+            assert report_mod.report_is_reusable(day)
+            assert report_mod.build_pipeline_event_verbosity_report(day) == first
+        emit(13)
+        logger.flush_pipeline_event_producer_summary(day)
+        assert not report_mod.report_is_reusable(day)
+        with monkeypatch.context() as patch:
+            patch.setattr(summary, "_load_summary_rows", lambda *a, **kw: pytest.fail("raw-derived prefix scan"))
+            patch.setattr(report_mod, "load_summary_rows", lambda *a, **kw: pytest.fail("producer prefix scan"))
+            second = report_mod.build_pipeline_event_verbosity_report(day)
+        assert second["parity"]["ok"] is True
+        assert second["parity"]["raw_derived_event_count"] == 13
+        assert second["evaluation"]["raw_bytes_processed"] == raw.stat().st_size - size_before
+        assert second["evaluation"]["producer_bytes_processed"] < second["producer_summary"]["manifest_payload"]["summary_storage_size_bytes"]
+        full_volume = report_mod._line_count_and_stage_bytes(raw, day)
+        for key in ("raw_size_bytes", "raw_line_count", "high_volume_line_count", "high_volume_bytes", "potential_suppressible_bytes"):
+            assert second["raw_stream"][key] == full_volume[key]
+        cached_manifest = Path(second["raw_derived_summary"]["manifest"])
+        saved = json.loads(cached_manifest.read_text())
+        producer_body = summary.load_summary_rows(Path(second["producer_summary"]["path"]), include_samples=False)
+        assert report_mod._identity_counts(saved["producer_rollup"]["rows"]) == report_mod._identity_counts(producer_body)
+        ev_section, _, warnings = ev._pipeline_event_verbosity_summary(day)
+        assert ev_section["parity_ok"] is True and not warnings
+        assert not workorder._pipeline_event_verbosity_followup_orders(second)
+        assert verifier._pipeline_verbosity_operations_handoff(day, {"pipeline_event_verbosity": True})["status"] == "pass"
+        deferred = report_mod.write_resource_deferred(day, "postclose_resource_guard_timeout")
+        assert deferred["parity"]["ok"] is None
+        assert not report_mod.report_is_reusable(day)
+        ev_section, _, warnings = ev._pipeline_event_verbosity_summary(day)
+        assert ev_section["state"] == "resource_deferred" and warnings
+        orders = workorder._pipeline_event_verbosity_followup_orders(deferred)
+        assert len(orders) == 1
+        classified = workorder._classify_order(orders[0], finding_by_order_id={}, finding_by_title_slug={}, auto_family_order_ids=set(), closed_instrumentation_order_families={})
+        assert classified.decision == "defer_evidence"
+        history = {orders[0]["order_id"]: {"count": 100}}
+        assert workorder._escalate_repeated_unresolved_orders([classified], repeat_counts=history)[1] == []
+        assert workorder._escalate_repeated_structural_blockers([classified], repeat_counts=history)[1] == []
+        handoff = verifier._pipeline_verbosity_operations_handoff(day, {"pipeline_event_verbosity": True})
+        check = {"status": "warning", "pipeline_verbosity_operations_handoff": handoff}
+        assert handoff["status"] == "open"
+        assert controller._flatten_issues(check)
+        assert controller._recovery_actions(day, check, allow_wrapper_rerun=True) == []
+        assert controller._is_done_verifier_status(day, check, controller._flatten_issues(check)) is False
+    finally:
+        logger._flush_producer_summary_at_exit()
+
+
+def _declare_managed_raw(tmp_path, day):
+    logical = report_mod._pipeline_events_path(day)
+    logical.with_name(f".{logical.name}.partition.lock").touch()
+
+
+def test_partial_tail_late_append_matches_full_rebuild(monkeypatch, tmp_path):
+    from pathlib import Path
+    from src.engine import pipeline_event_summary as summary
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    day = "2026-09-18"
+    rows = [_event(day, "10:01:00", "scalping_scanner_fast_precheck", record_id=1),
+            _event(day, "10:00:00", "scalping_scanner_fast_precheck", record_id=2)]
+    _write_raw(tmp_path, day, rows[:1])
+    _declare_managed_raw(tmp_path, day)
+    _write_producer_summary(tmp_path, day, rows[:1])
+    first = report_mod.build_pipeline_event_verbosity_report(day)
+    raw = report_mod._pipeline_events_path(day)
+    line = (json.dumps(rows[1]) + "\n").encode()
+    with raw.open("ab") as f:
+        f.write(line[:30])
+    partial = report_mod.build_pipeline_event_verbosity_report(day)
+    assert partial["raw_stream"]["incomplete_tail"] is True
+    assert partial["parity"]["ok"] is False
+    with raw.open("ab") as f:
+        f.write(line[30:])
+    _write_producer_summary(tmp_path, day, rows[1:])
+    appended = report_mod.build_pipeline_event_verbosity_report(day)
+    assert appended["parity"]["ok"] is True
+    assert appended["parity"]["comparison_raw_derived_event_count"] == 1
+    assert appended["evaluation"]["raw_bytes_processed"] == len(line)
+    manifest = Path(appended["raw_derived_summary"]["manifest"])
+    data = json.loads(manifest.read_text())
+    incremental_identity = report_mod._identity_counts(data["identity_rollup"])
+    # Explicit bounded fixture rebuild; never a production lookback scan.
+    manifest.unlink()
+    full = report_mod.build_pipeline_event_verbosity_report(day, as_of=datetime(2026, 9, 18, 11))
+    assert full["raw_stream"] == appended["raw_stream"]
+    assert report_mod._identity_counts(json.loads(manifest.read_text())["identity_rollup"]) == incremental_identity
+
+
+@pytest.mark.parametrize("changed", ["same_size_mtime", "replacement", "truncate", "report_digest", "markdown", "checkpoint_digest"])
+def test_generation_correction_or_corruption_never_reuses_pass(monkeypatch, tmp_path, changed):
+    import os
+    from pathlib import Path
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    day = "2026-09-18"
+    rows = [_event(day, "10:00:00", "scalping_scanner_fast_precheck", record_id=1)]
+    _write_raw(tmp_path, day, rows)
+    _declare_managed_raw(tmp_path, day)
+    _write_producer_summary(tmp_path, day, rows)
+    first = report_mod.build_pipeline_event_verbosity_report(day)
+    assert report_mod.report_is_reusable(day)
+    raw = report_mod._pipeline_events_path(day)
+    if changed == "same_size_mtime":
+        old = raw.stat()
+        raw.write_bytes(raw.read_bytes().replace(b'"record_id": 1', b'"record_id": 2'))
+        os.utime(raw, ns=(old.st_atime_ns, old.st_mtime_ns))
+    elif changed == "replacement":
+        new = raw.with_suffix(".replacement")
+        new.write_bytes(raw.read_bytes().replace(b'"record_id": 1', b'"record_id": 2'))
+        new.replace(raw)
+    elif changed == "truncate":
+        raw.write_bytes(b"")
+    elif changed == "markdown":
+        report_mod.report_paths(day)[1].write_text("incomplete old generation")
+    elif changed == "report_digest":
+        path = report_mod.report_paths(day)[0]
+        data = json.loads(path.read_text()); data["parity"]["raw_derived_event_count"] = 999
+        path.write_text(json.dumps(data))
+    else:
+        path = Path(first["raw_derived_summary"]["manifest"])
+        data = json.loads(path.read_text()); data["raw_volume"]["high_volume_line_count"] = 999
+        path.write_text(json.dumps(data))
+    assert not report_mod.report_is_reusable(day)
+    result = report_mod.build_pipeline_event_verbosity_report(day)
+    if changed in {"report_digest", "markdown"}:
+        assert result["parity"]["ok"] is True  # Valid source recomputes, broken PASS is not reused.
+    else:
+        assert result["parity"]["ok"] is not True
+        if changed == "checkpoint_digest":
+            assert result["state"] == "raw_summary_invalid"
+            assert result["parity"]["ok"] is None
+
+
+def test_unmanaged_mutable_source_supports_streaming_but_not_zero_read_receipt(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    day = "2026-09-18"
+    rows = [_event(day, "10:00:00", "scalping_scanner_fast_precheck", record_id=1)]
+    _write_raw(tmp_path, day, rows)
+    _write_producer_summary(tmp_path, day, rows)
+    result = report_mod.build_pipeline_event_verbosity_report(day)
+    assert result["parity"]["ok"] is True
+    assert result["evaluation"]["fast_path_supported"] is False
+    assert not report_mod.report_is_reusable(day)
+
+
+def test_kst_partition_normalizes_utc_emission_without_route_exclusions(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    day = "2026-09-18"
+    event = _event(day, "00:01:00", "scalping_scanner_fast_precheck", record_id=1)
+    event["emitted_at"] = "2026-09-17T15:01:00+00:00"
+    event["fields"]["broker_route"] = "SOR"
+    _write_raw(tmp_path, day, [event])
+    _write_producer_summary(tmp_path, day, [event])
+    result = report_mod.build_pipeline_event_verbosity_report(day)
+    assert result["parity"]["ok"] is True
+    assert result["parity"]["raw_derived_event_count"] == 1
+
+
+def test_archived_generation_requires_scoped_repair_then_supports_reuse(monkeypatch, tmp_path):
+    from pathlib import Path
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    day = "2026-09-18"
+    rows = [_event(day, "10:00:00", "scalping_scanner_fast_precheck", record_id=1)]
+    _write_raw(tmp_path, day, rows)
+    _declare_managed_raw(tmp_path, day)
+    _write_producer_summary(tmp_path, day, rows)
+    first = report_mod.build_pipeline_event_verbosity_report(day)
+    for path in (report_mod._pipeline_events_path(day), Path(first["raw_derived_summary"]["path"]), Path(first["producer_summary"]["path"])):
+        with gzip.open(str(path) + ".gz", "wb") as handle:
+            handle.write(path.read_bytes())
+        path.unlink()
+    blocked = report_mod.build_pipeline_event_verbosity_report(day)
+    assert blocked["state"] == "raw_summary_invalid" and blocked["parity"]["ok"] is None
+    repaired = report_mod.build_pipeline_event_verbosity_report(day, allow_bootstrap=True)
+    assert repaired["parity"]["ok"] is True
+    assert repaired["raw_stream"]["raw_size_bytes"] > repaired["raw_stream"]["raw_storage_size_bytes"]
+    assert report_mod.report_is_reusable(day)
+
+
+def test_corrupt_checkpoint_has_executable_scoped_repair(monkeypatch, tmp_path):
+    from pathlib import Path
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    day = "2026-09-18"
+    rows = [_event(day, "10:00:00", "scalping_scanner_fast_precheck", record_id=1)]
+    _write_raw(tmp_path, day, rows)
+    _declare_managed_raw(tmp_path, day)
+    _write_producer_summary(tmp_path, day, rows)
+    first = report_mod.build_pipeline_event_verbosity_report(day)
+    manifest = Path(first["raw_derived_summary"]["manifest"])
+    manifest.write_text("[]")
+    blocked = report_mod.build_pipeline_event_verbosity_report(day)
+    assert blocked["state"] == "raw_summary_invalid"
+    assert blocked["parity"]["ok"] is None
+    repaired = report_mod.build_pipeline_event_verbosity_report(day, allow_bootstrap=True)
+    assert repaired["parity"]["ok"] is True
+    assert report_mod.report_is_reusable(day)

@@ -527,9 +527,13 @@ def _load_event_sources(
     }
     exclude_summary_stages = False
     if use_summary:
-        loaded_summary_rows, loaded_summary_meta = load_pipeline_event_summaries(
-            target_date
-        )
+        try:
+            loaded_summary_rows, loaded_summary_meta = load_pipeline_event_summaries(target_date)
+        except (ValueError, OSError) as exc:
+            loaded_summary_rows = []
+            loaded_summary_meta = {"enabled": True, "status": "invalid", "blocker": str(exc),
+                                   "owner": "order_pipeline_event_compaction_v2_shadow", "raw_suppression_enabled": False}
+            # Retained raw is authoritative when the optional native summary fails.
         summary_meta = loaded_summary_meta
         if loaded_summary_meta.get("status") == "ok":
             summary_rows = loaded_summary_rows
@@ -540,8 +544,8 @@ def _load_event_sources(
         use_cache=use_cache,
         exclude_summary_stages=exclude_summary_stages,
     )
-    # The producer can suppress raw high-volume rows. A raw-derived summary
-    # alone cannot reveal that loss. Read terminal producer totals even in the
+    # Historical producer modes could suppress raw high-volume rows. Current
+    # raw preservation does not restore missing historical rows. Read terminal producer totals even in the
     # raw-only mode; they are exclusion evidence, never reconstructed attempts.
     producer_path = existing_or_gzip_path(
         _event_summary_dir() / f"pipeline_event_producer_summary_{target_date}.jsonl"
@@ -571,6 +575,8 @@ def _load_event_sources(
             ),
             "summary_enabled": bool(use_summary),
             "summary_status": summary_meta.get("status"),
+            "summary_blocker": summary_meta.get("blocker"),
+            "summary_owner": summary_meta.get("owner"),
             "summary_schema_version": SUMMARY_SCHEMA_VERSION if use_summary else None,
             "summary_target_stages": sorted(SUMMARY_STAGES) if use_summary else [],
             "summary_row_count": summary_meta.get("summary_row_count"),

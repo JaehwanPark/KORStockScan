@@ -1645,12 +1645,16 @@ def _pipeline_event_verbosity_summary(
         / f"pipeline_event_verbosity_{target_date}.json"
     )
     payload = _load_json(json_path)
+    if payload and payload.get("target_date") != target_date:
+        payload = {}
     if not payload:
         return (
             {
                 "available": False,
                 "artifact": None,
-                "state": "missing",
+                "state": "missing_report",
+                "owner": "order_pipeline_event_compaction_v2_shadow",
+                "economics": "not_applicable",
                 "recommended_workorder_state": "missing",
             },
             None,
@@ -1665,6 +1669,11 @@ def _pipeline_event_verbosity_summary(
             "available": True,
             "artifact": str(json_path),
             "state": payload.get("state"),
+            "evaluation": payload.get("evaluation"),
+            "blocker": payload.get("blocker"),
+            "owner": payload.get("owner") or "order_pipeline_event_compaction_v2_shadow",
+            "closure_test": payload.get("closure_test"),
+            "economics": "not_applicable",
             "recommended_workorder_state": payload.get("recommended_workorder_state"),
             "raw_size_bytes": raw.get("raw_size_bytes"),
             "high_volume_line_count": raw.get("high_volume_line_count"),
@@ -1678,7 +1687,8 @@ def _pipeline_event_verbosity_summary(
             ),
         },
         str(json_path),
-        [],
+        ([f"pipeline_event_verbosity_open:{payload.get('state')}"]
+         if payload.get("state") in {"resource_deferred", "bootstrap_required", "raw_summary_invalid", "source_snapshot_changed"} else []),
     )
 
 

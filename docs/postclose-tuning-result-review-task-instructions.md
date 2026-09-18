@@ -277,3 +277,10 @@ main/controller/tuning/widget/replay/machine/archive의 predecessor terminal을 
 ### Daily paired 경제성 bounded 갱신
 
 사용자가 해당 구현/갱신을 승인했고 affected review와 targeted 검증이 끝난 경우에만 기존 `src.engine.daily_threshold_cycle_report --date SOURCE_DATE --refresh-economic-evaluation-only`를 사용한다. 이 경로는 최신 entry/scale-in producer·가격 frozen proof와 기존 family row를 소비하고 raw/DB/provider를 다시 조회하지 않는다. 입력·정책·모델/비용·holdout·평가기 코드 SHA가 같으면 이전 평가 SHA/as-of를 재사용하며 Daily predecessor를 byte SHA로 보존한다. Calibration 저장과 EV/runtime 요약, 기존 compact finalize→strict handoff를 같은 원 source date로 연결한다. 동일 정책/비대상 체결/미성숙/결손을 개선 검증으로 집계하지 않는다. 다음 trading effective 정책의 기존 baseline 보존은 신규 challenger 개선이나 실제 PID 소비가 아니다. 개별 family closure는 전체 native DONE을 대신하지 않는다.
+
+
+### Pipeline event verbosity 운영 진단 인계
+
+`pipeline_event_verbosity_report`는 retained raw와 producer summary의 exact-date count/stage/blocker/전체 payload·partition hash 및 완료 watermark를 검증하는 운영 진단이다. raw suppression·threshold/provider/order/bot 권한과 매매 EV를 만들지 않는다. unchanged managed append/archive source는 integrity-bound terminal을 재사용하고 append는 last-good offset 이후 완전한 행만 처리한다. 원천 owner가 없는 mutable 입력은 streaming 계산이며 zero-read acceptance 대상이 아니다. 과거 volume checkpoint가 없으면 자동 lookback/full raw backfill을 하지 않고 `bootstrap_required`와 동일 native owner의 scoped source-day closure를 남긴다.
+
+해당 단계의 resource wait timeout은 `resource_deferred`·null parity·원 source generation으로 기록하며 독립 후행 계산은 각자의 기존 global guard를 계속 적용한다. EV→workorder→tower/checklist→strict verifier/controller가 동일 `order_pipeline_event_compaction_v2_shadow` OPEN을 보존한다. missing/deferred/parity failure는 신규 매매 후보0/no-edge나 full-chain DONE/PREOPEN GREEN으로 바꾸지 않는다. unchanged gap 하나 때문에 provider/full-wrapper를 반복 recovery하지 않는다. BUY Funnel의 optional native summary 실패는 raw fallback이며 entry-split의 mandatory execution census 검사는 그대로 유지한다. 자연 유입·다음 완료창 parity 및 실제 consumer 비용은 구현 회귀와 별도다. [지원 범위·owning review](audit-reports/2026-09-18-pipeline-event-verbosity-incremental-review.md)를 따른다.

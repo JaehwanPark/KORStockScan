@@ -3,6 +3,9 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import hashlib
+import inspect
+import uuid
 from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -23,7 +26,13 @@ from src.engine.pipeline_event_summary import (
     payload_has_lossless_authority,
     default_reason_label,
     load_summary_rows,
+    merge_identity_rows,
+    partition_hash_sum,
+    ROLLUP_BUCKET_FIELDS,
+    checkpoint_digest,
     producer_summary_paths,
+    _summary_paths,
+    _write_json,
     update_and_load_pipeline_event_summaries,
 )
 
@@ -111,11 +120,11 @@ def _as_kst(value: str) -> datetime | None:
 
 
 def _pipeline_events_path(target_date: str) -> Path:
-    return DATA_DIR / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"
+    return (DATA_DIR / "pipeline_events" / f"pipeline_events_{target_date}.jsonl").resolve()
 
 
 def _summary_dir() -> Path:
-    return DATA_DIR / "pipeline_event_summaries"
+    return (DATA_DIR / "pipeline_event_summaries").resolve()
 
 
 def report_paths(target_date: str) -> tuple[Path, Path]:
@@ -126,33 +135,204 @@ def report_paths(target_date: str) -> tuple[Path, Path]:
     )
 
 
+def _report_digest(report: dict[str, Any]) -> str:
+    return hashlib.sha256(json.dumps(
+        {k: v for k, v in report.items() if k != "report_digest"},
+        sort_keys=True, ensure_ascii=False, allow_nan=False,
+    ).encode()).hexdigest()
+
+
+def _source_binding(target_date: str) -> dict[str, Any]:
+    raw = existing_or_gzip_path(_pipeline_events_path(target_date))
+    summary, manifest = _summary_paths(_summary_dir(), target_date, profile="producer_parity")
+    producer, producer_manifest = producer_summary_paths(_summary_dir(), target_date)
+    receipt = _read_json(producer_manifest)
+    paths = [raw, existing_or_gzip_path(summary), manifest,
+             existing_or_gzip_path(producer), producer_manifest]
+    if type(receipt.get("last_writer_pid")) is int:
+        paths.append(producer_health_path(_summary_dir(), target_date, receipt["last_writer_pid"]))
+    bindings = {}
+    for path in paths:
+        if path.exists():
+            st = path.stat()
+            bindings[str(path)] = [st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns]
+        else:
+            bindings[str(path)] = None
+    code = [Path(__file__), Path(__file__).with_name("pipeline_event_summary.py"),
+            Path(__file__).parents[1] / "utils/pipeline_event_logger.py",
+            Path(__file__).parents[1] / "utils/threshold_cycle_registry.py"]
+    logical_raw = _pipeline_events_path(target_date)
+    managed = logical_raw.with_name(f".{logical_raw.name}.partition.lock").is_file()
+    return {"files": bindings,
+            "checkpoint_hashes": {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in (manifest, producer_manifest) if p.is_file()},
+            "fast_path_supported": managed or raw.suffix == ".gz", "code": [hashlib.sha256(p.read_bytes()).hexdigest() for p in code],
+            "scope": "managed_append_files_with_ctime_change_detection; not hostile_metadata_restoration"}
+
+
+def _external_binding(target_date):
+    binding = _source_binding(target_date)
+    summary, manifest = _summary_paths(_summary_dir(), target_date, profile="producer_parity")
+    ignored = {str(summary), str(summary) + ".gz", str(manifest)}
+    return {"files": {k: v for k, v in binding["files"].items() if k not in ignored},
+            "manifest_hashes": {k: v for k, v in binding["checkpoint_hashes"].items() if k not in ignored}}
+
+
 def report_is_reusable(target_date: str) -> bool:
     report = _read_json(report_paths(target_date)[0])
     policy = report.get("policy") or {}
-    return bool(
-        report.get("schema_version") == 2
-        and report.get("report_type") == "pipeline_event_verbosity"
-        and report.get("target_date") == target_date
-        and report.get("state")
-        in {
-            "blocked",
-            "source_quality_blocked",
-            "v2_shadow_no_eligible_events",
-            "v2_shadow_missing",
-            "producer_manifest_invalid",
-            "producer_summary_invalid",
-            "v2_shadow_partial_coverage",
-            "v2_shadow_parity_fail",
-            "v2_shadow_flush_timeout",
-            "legacy_identity_evidence_missing",
-            "no_suppressible_events",
-            "v2_shadow_parity_pass",
-        }
-        and isinstance(policy, dict)
-        and policy.get("runtime_effect") is False
-        and policy.get("allowed_runtime_apply") is False
-        and policy.get("raw_suppression_enabled") is False
-    )
+    try:
+        return bool(
+            report.get("schema_version") == 2
+            and report.get("target_date") == target_date
+            and report.get("report_type") == "pipeline_event_verbosity"
+            and report.get("report_digest") == _report_digest(report)
+            and report_paths(target_date)[1].read_text(encoding="utf-8") == render_markdown(report)
+            and report.get("source_binding") == _source_binding(target_date)
+            and report.get("source_binding", {}).get("fast_path_supported") is True
+            and report.get("state") in {
+                "no_suppressible_events", "v2_shadow_parity_pass", "v2_shadow_no_eligible_events",
+                "v2_shadow_parity_fail", "v2_shadow_flush_timeout", "v2_shadow_partial_coverage",
+                "producer_manifest_invalid", "producer_summary_invalid", "legacy_identity_evidence_missing",
+            }
+            and policy.get("runtime_effect") is False
+            and policy.get("allowed_runtime_apply") is False
+            and policy.get("raw_suppression_enabled") is False
+        )
+    except (TypeError, ValueError, OSError):
+        return False
+
+
+def _observe_volume(state: dict[str, Any], raw: bytes, payload: Any, target_date: str) -> None:
+    state["raw_size_bytes"] = state.get("raw_size_bytes", 0) + len(raw)
+    if not raw.strip():
+        return
+    state["raw_line_count"] = state.get("raw_line_count", 0) + 1
+    if not isinstance(payload, dict):
+        state["invalid_source_line_count"] = state.get("invalid_source_line_count", 0) + 1
+        return
+    if payload.get("event_type") != "pipeline_event":
+        return
+    at = _safe_str(payload.get("emitted_at"))
+    dt = _as_kst(at)
+    if dt is None:
+        state["invalid_source_line_count"] = state.get("invalid_source_line_count", 0) + 1
+        return
+    at = dt.isoformat()
+    state["latest_pipeline_event_at"] = max(state.get("latest_pipeline_event_at") or "", at)
+    stage = _safe_str(payload.get("stage"))
+    if stage not in PRODUCER_SUMMARY_STAGES:
+        return
+    if dt.date().isoformat() != target_date:
+        state["invalid_source_line_count"] = state.get("invalid_source_line_count", 0) + 1
+        return
+    state["high_volume_line_count"] = state.get("high_volume_line_count", 0) + 1
+    state["high_volume_bytes"] = state.get("high_volume_bytes", 0) + len(raw)
+    for key, amount in (("high_volume_stage_counts", 1), ("high_volume_stage_bytes", len(raw))):
+        values = state.setdefault(key, {})
+        values[stage] = values.get(stage, 0) + amount
+    state["earliest_eligible_event_at"] = min(state.get("earliest_eligible_event_at") or at, at)
+    state["latest_eligible_event_at"] = max(state.get("latest_eligible_event_at") or "", at)
+    if not payload_has_lossless_authority(payload, threshold_family_for_stage(stage, payload.get("fields"))):
+        state["potential_suppressible_event_count"] = state.get("potential_suppressible_event_count", 0) + 1
+        state["potential_suppressible_bytes"] = state.get("potential_suppressible_bytes", 0) + len(raw)
+
+
+def _volume_result(state, raw_path, meta):
+    result = {k: state.get(k, 0) for k in (
+        "raw_line_count", "raw_size_bytes", "high_volume_line_count", "high_volume_bytes",
+        "potential_suppressible_event_count", "potential_suppressible_bytes", "invalid_source_line_count",
+    )}
+    result.update({k: state.get(k) for k in (
+        "latest_pipeline_event_at", "earliest_eligible_event_at", "latest_eligible_event_at",
+    )})
+    result.update({k: state.get(k, {}) for k in ("high_volume_stage_counts", "high_volume_stage_bytes")})
+    result["exists"] = raw_path.exists()
+    result["raw_storage_size_bytes"] = raw_path.stat().st_size if raw_path.exists() else 0
+    result["incomplete_tail"] = bool(meta.get("incomplete_tail"))
+    if result["incomplete_tail"]:
+        result["raw_size_bytes"] += meta.get("incomplete_tail_bytes", 0)
+        result["raw_line_count"] += 1
+    result["lossless_preserved_event_count"] = result["high_volume_line_count"] - result["potential_suppressible_event_count"]
+    result["high_volume_line_share_pct"] = round(100 * result["high_volume_line_count"] / result["raw_line_count"], 2) if result["raw_line_count"] else 0.0
+    result["high_volume_byte_share_pct"] = round(100 * result["high_volume_bytes"] / result["raw_size_bytes"], 2) if result["raw_size_bytes"] else 0.0
+    return result
+
+
+def write_diagnostic_blocked(target_date: str, state: str, reason: str) -> dict[str, Any]:
+    datetime.strptime(target_date, "%Y-%m-%d")
+    report = {"schema_version": 2, "report_type": "pipeline_event_verbosity", "target_date": target_date, "implementation_status": "implemented",
+              "generated_at": datetime.now(KST).isoformat(), "state": state,
+              "recommended_workorder_state": "await_resource_for_scoped_diagnostic" if state == "resource_deferred" else "repair_source_contract",
+              "policy": {"runtime_effect": False, "allowed_runtime_apply": False, "raw_suppression_enabled": False},
+              "blocker": reason, "owner": "order_pipeline_event_compaction_v2_shadow",
+              "closure_test": "Run approved scoped diagnostic under unchanged resource guard and verify exact-date count/stage/blocker/identity.",
+              "evaluation": {"execution_state": "deferred" if state == "resource_deferred" else "blocked",
+                             "analysis_state": state, "raw_bytes_processed": 0 if state == "resource_deferred" else None, "economics": "not_applicable"},
+              "source_binding": _source_binding(target_date), "parity": {"ok": None},
+              "optimization": {"economic_effect": "not_measured", "runtime_latency_improvement": None}}
+    _publish(report)
+    return report
+
+
+def write_resource_deferred(target_date: str, reason: str) -> dict[str, Any]:
+    return write_diagnostic_blocked(target_date, "resource_deferred", reason)
+
+
+def _producer_rows_incremental(path, checkpoint):
+    """Reuse native compact multiset, parse only committed append rows.
+
+    Supported prefix contract is the existing generation-locked append owner;
+    ctime detects ordinary in-place corrections, not hostile metadata restoration.
+    Compressed archives bootstrap by streaming once, never constant-cost gzip seek.
+    """
+    actual = existing_or_gzip_path(path)
+    if not actual.exists():
+        return [], {}, 0
+    st = actual.stat()
+    stamp = [st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns]
+    previous = checkpoint.get("producer_rollup") or {}
+    if previous.get("stamp") == stamp:
+        return previous["rows"], previous, 0
+    append = (actual.suffix != ".gz" and previous.get("stamp") and
+              previous["stamp"][0] == st.st_ino and previous["stamp"][1] < st.st_size)
+    offset = previous["stamp"][1] if append else 0
+    if actual.suffix == ".gz":
+        appended = load_summary_rows(actual, include_samples=False, strict=True)
+        processed = st.st_size
+    else:
+        appended = []
+        with actual.open("rb") as handle:
+            handle.seek(offset)
+            for line in handle:
+                row = json.loads(line)
+                if (not line.endswith(b"\n") or not isinstance(row, dict) or
+                    type(row.get("event_count")) is not int or row["event_count"] <= 0 or
+                    _as_kst(row.get("bucket_start")) is None or _as_kst(row.get("bucket_end")) is None):
+                    raise ValueError("invalid producer summary row")
+                appended.append({k: v for k, v in row.items() if k not in {"sample_events", "numeric_stats", "field_presence_counts", "second_counts"}})
+        processed = st.st_size - offset
+    # Invalid/legacy identity rows need their original validation verdict. Do not
+    # merge them into apparently valid hashes or silently discard them.
+    _, invalid = _identity_counts(appended)
+    if invalid:
+        rows = (previous.get("rows", []) if append else []) + appended
+    else:
+        rows = merge_identity_rows(previous.get("rows", []) if append else [], appended)
+    result = {"stamp": stamp, "rows": rows, "source_rows": (previous.get("source_rows", 0) if append else 0) + len(appended)}
+    return rows, result, processed
+
+
+def _publish(report):
+    report["report_digest"] = _report_digest(report)
+    path, markdown = report_paths(report["target_date"])
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _write_json(path, report)
+    temporary_md = markdown.with_name(f"{markdown.name}.tmp.{uuid.uuid4().hex}")
+    try:
+        temporary_md.write_text(render_markdown(report), encoding="utf-8")
+        temporary_md.replace(markdown)
+    finally:
+        temporary_md.unlink(missing_ok=True)
 
 
 def _safe_str(value: Any) -> str:
@@ -310,9 +490,9 @@ def _diff_counter(left: Counter[str], right: Counter[str]) -> dict[str, dict[str
 
 def _identity_counts(
     rows: list[dict[str, Any]],
-) -> tuple[dict[str, tuple[int, int]], int]:
+) -> tuple[dict[str, tuple[int, int, int]], int]:
     """Partition/order-independent multiset evidence; counts alone are not parity."""
-    values: dict[str, tuple[int, int]] = {}
+    values: dict[str, tuple[int, int, int]] = {}
     invalid = 0
     for row in rows:
         try:
@@ -329,28 +509,13 @@ def _identity_counts(
             hashed = int(digest, 16)
             if not 0 <= hashed < IDENTITY_MODULUS:
                 raise ValueError("invalid digest")
-            key = json.dumps(
-                [
-                    row.get(name)
-                    for name in (
-                        "target_date",
-                        "bucket_start",
-                        "bucket_end",
-                        "pipeline",
-                        "stage",
-                        "stock_code",
-                        "stock_name",
-                        "strategy",
-                        "market",
-                        "reason_label",
-                        "actual_order_submitted",
-                    )
-                ],
-                ensure_ascii=False,
-                separators=(",", ":"),
-            )
-            old_count, old_hash = values.get(key, (0, 0))
-            values[key] = (old_count + count, (old_hash + hashed) % IDENTITY_MODULUS)
+            partition = partition_hash_sum(row)
+            if not 0 <= partition < IDENTITY_MODULUS:
+                raise ValueError("invalid partition digest")
+            key = json.dumps([row.get(name) for name in ROLLUP_BUCKET_FIELDS], ensure_ascii=False, separators=(",", ":"))
+            old_count, old_hash, old_partition = values.get(key, (0, 0, 0))
+            values[key] = (old_count + count, (old_hash + hashed) % IDENTITY_MODULUS,
+                           (old_partition + partition) % IDENTITY_MODULUS)
         except (KeyError, TypeError, ValueError):
             invalid += 1
     return values, invalid
@@ -375,7 +540,8 @@ def _producer_coverage(
             if _safe_str(row.get("last_seen"))
         ]
         last_event_at = max(last_values) if last_values else ""
-    return first_event_at, last_event_at
+    return ((_as_kst(first_event_at).isoformat() if _as_kst(first_event_at) else ""),
+            (_as_kst(last_event_at).isoformat() if _as_kst(last_event_at) else ""))
 
 
 def _common_completed_minute_watermark(*coverage_ends: str) -> str:
@@ -407,27 +573,41 @@ def _rows_through_watermark(
 
 
 def build_pipeline_event_verbosity_report(
-    target_date: str, *, as_of: datetime | None = None
+    target_date: str, *, as_of: datetime | None = None, allow_bootstrap: bool = False
 ) -> dict[str, Any]:
     target_date = str(target_date).strip()
     datetime.strptime(target_date, "%Y-%m-%d")
+    if as_of is None and report_is_reusable(target_date):
+        return _read_json(report_paths(target_date)[0])
     now = _as_kst((as_of or datetime.now(KST)).isoformat())
+    external_before = _external_binding(target_date)
     raw_path = existing_or_gzip_path(_pipeline_events_path(target_date))
     raw_stamp_before = (
         (raw_path.stat().st_size, raw_path.stat().st_mtime_ns)
         if raw_path.exists()
         else None
     )
-    raw_stats = _line_count_and_stage_bytes(raw_path, target_date)
-    raw_summary_rows, raw_summary_meta = update_and_load_pipeline_event_summaries(
-        raw_path=raw_path,
-        summary_dir=_summary_dir(),
-        target_date=target_date,
-        reason_labeler=default_reason_label,
-        include_samples=False,
-        summary_stages=PRODUCER_SUMMARY_STAGES,
-        summary_profile="producer_parity",
-    )
+    volume = {}
+    try:
+        raw_summary_rows, raw_summary_meta = update_and_load_pipeline_event_summaries(
+            raw_path=raw_path,
+            summary_dir=_summary_dir(),
+            target_date=target_date,
+            reason_labeler=default_reason_label,
+            include_samples=False,
+            summary_stages=PRODUCER_SUMMARY_STAGES,
+            summary_profile="producer_parity",
+            raw_observer=lambda raw, payload: _observe_volume(volume, raw, payload, target_date),
+            observer_state=volume,
+            incremental_rollup=True,
+            allow_bootstrap=allow_bootstrap,
+            observer_contract=hashlib.sha256((inspect.getsource(_observe_volume) + inspect.getsource(_as_kst) +
+                (Path(__file__).parents[1] / "utils/threshold_cycle_registry.py").read_text()).encode()).hexdigest(),
+        )
+    except (ValueError, OSError, EOFError) as exc:
+        state = "bootstrap_required" if "bootstrap_required" in str(exc) else "raw_summary_invalid"
+        return write_diagnostic_blocked(target_date, state, str(exc))
+    raw_stats = _volume_result(volume, raw_path, raw_summary_meta)
     producer_path, producer_manifest_path = producer_summary_paths(
         _summary_dir(), target_date
     )
@@ -439,11 +619,11 @@ def build_pipeline_event_verbosity_report(
     )
     producer_manifest = _read_json(producer_manifest_path)
     producer_decode_error = None
+    producer_checkpoint, producer_bytes_processed = {}, 0
     try:
-        producer_rows = load_summary_rows(
-            producer_path, include_samples=False, strict=True
-        )
-    except ValueError as exc:
+        producer_rows, producer_checkpoint, producer_bytes_processed = _producer_rows_incremental(
+            producer_path, raw_summary_meta)
+    except (ValueError, TypeError, KeyError, OSError, EOFError) as exc:
         producer_rows = []
         producer_decode_error = str(exc)
     raw_identity, raw_identity_invalid = _identity_counts(raw_summary_rows)
@@ -469,6 +649,8 @@ def build_pipeline_event_verbosity_report(
         bool(producer_manifest)
         and type(producer_manifest.get("summary_event_count")) is int
         and producer_manifest["summary_event_count"] == producer_total
+        and (producer_actual_path.suffix == ".gz" or
+             producer_manifest.get("summary_storage_size_bytes") == (producer_actual_path.stat().st_size if producer_actual_path.exists() else 0))
     )
     interval = producer_manifest.get("flush_interval_sec", 60)
     interval_valid = type(interval) is int and 0 <= interval <= PRODUCER_MAX_FLUSH_SEC
@@ -612,6 +794,10 @@ def build_pipeline_event_verbosity_report(
     elif not producer_exists or not manifest_exists:
         state = "v2_shadow_missing"
         recommended = "open_shadow_order"
+    elif raw_identity_invalid or producer_identity_invalid > legacy_identity_rows:
+        state, recommended = "producer_summary_invalid", "repair_source_contract"
+    elif producer_identity_invalid:
+        state, recommended = "legacy_identity_evidence_missing", "collect_after_contract_upgrade"
     elif not manifest_valid:
         state, recommended = "producer_manifest_invalid", "repair_source_contract"
     elif not producer_start_complete:
@@ -624,13 +810,6 @@ def build_pipeline_event_verbosity_report(
     elif producer_pending_flush:
         state = "v2_shadow_pending_flush"
         recommended = "observe_pending_next_flush"
-    elif raw_identity_invalid or producer_identity_invalid > legacy_identity_rows:
-        state, recommended = "producer_summary_invalid", "repair_source_contract"
-    elif producer_identity_invalid:
-        state, recommended = (
-            "legacy_identity_evidence_missing",
-            "collect_after_contract_upgrade",
-        )
     elif not parity_ok:
         state = "v2_shadow_parity_fail"
         recommended = "block_suppress_and_fix_shadow"
@@ -680,7 +859,7 @@ def build_pipeline_event_verbosity_report(
             "manifest_valid": manifest_valid,
             "decode_error": producer_decode_error,
             "manifest_mode": producer_manifest.get("mode"),
-            "row_count": len(producer_rows),
+            "row_count": producer_checkpoint.get("source_rows", len(producer_rows)),
             "event_count": producer_total,
             "stage_counts": dict(sorted(producer_stage.items())),
             "blocker_top": dict(producer_blocker.most_common(10)),
@@ -689,6 +868,7 @@ def build_pipeline_event_verbosity_report(
         "parity": {
             "ok": parity_ok,
             "identity_contract": IDENTITY_CONTRACT,
+            "partition_identity_contract": "full_bucket_dimensions_sha256_sum_v1",
             "identity_ok": identity_ok,
             "identity_invalid_rows": raw_identity_invalid + producer_identity_invalid,
             "common_identity_ok": common_identity_ok,
@@ -714,6 +894,11 @@ def build_pipeline_event_verbosity_report(
             "no_eligible_events": no_eligible_events,
             "producer_updated_at": producer_updated_at or None,
             "latest_pipeline_event_at": raw_stats.get("latest_pipeline_event_at"),
+            "identity_mismatch_preview": [
+                {"bucket_key": key, "raw_count": raw_identity.get(key, (0, 0))[0], "producer_count": producer_identity.get(key, (0, 0))[0]}
+                for key in sorted(set(raw_identity) | set(producer_identity))
+                if raw_identity.get(key) != producer_identity.get(key)
+            ][:20],
             "comparison_scope": "completed_common_minute",
             "comparison_watermark": comparison_watermark or None,
             "common_watermark_ok": common_watermark_ok,
@@ -758,12 +943,43 @@ def build_pipeline_event_verbosity_report(
             ),
         },
     }
-    json_path, md_path = report_paths(target_date)
-    json_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(
-        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    md_path.write_text(render_markdown(report), encoding="utf-8")
+    if producer_checkpoint and not source_changing and not producer_decode_error:
+        manifest_path = Path(raw_summary_meta["manifest_path"])
+        with manifest_path.with_suffix(".lock").open("a") as lock:
+            import fcntl
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            current = _read_json(manifest_path)
+            if current.get("checkpoint_digest") == raw_summary_meta.get("checkpoint_digest"):
+                current["producer_rollup"] = producer_checkpoint
+                current["checkpoint_digest"] = checkpoint_digest(current)
+                _write_json(manifest_path, current)
+            else:
+                source_changing = True
+                report["state"] = state = "source_snapshot_changed"
+                report["parity"]["ok"] = False
+    if external_before != _external_binding(target_date):
+        report["state"] = state = "source_snapshot_changed"
+        report["recommended_workorder_state"] = "retry_stable_source_snapshot"
+        report["parity"]["ok"] = parity_ok = False
+        report["parity"]["source_snapshot_changed"] = True
+    report["source_binding"] = _source_binding(target_date)
+    report["implementation_status"] = "implemented"
+    report["owner"] = "order_pipeline_event_compaction_v2_shadow"
+    report["blocker"] = None if parity_ok else state
+    if not raw_path.exists():
+        report["parity"]["ok"] = None
+    report["closure_test"] = "Equal count/stage/blocker/identity on the same completed window; preserve raw fallback and verify next naturally generated day."
+    report["evaluation"] = {"execution_state": "completed",
+                            "analysis_state": "invalid_source" if state in {"blocked", "source_quality_blocked"} else state,
+                            "source_valid": raw_stats.get("exists") and not raw_stats.get("invalid_source_line_count") and not raw_stats.get("incomplete_tail"),
+                            "economics": "not_applicable",
+                            "producer_bytes_processed": producer_bytes_processed,
+                            "fast_path_scope": report["source_binding"]["scope"],
+                            "fast_path_supported": report["source_binding"]["fast_path_supported"],
+                            "owner": "order_pipeline_event_compaction_v2_shadow",
+                            "raw_bytes_processed": raw_summary_meta.get("raw_offset", 0) if raw_summary_meta.get("rebuilt") else raw_summary_meta.get("raw_offset", 0) - raw_summary_meta.get("start_raw_offset", 0),
+                            "closure_test": "Equal stage/blocker/count/identity on the same completed source window; raw remains authoritative."}
+    _publish(report)
     return report
 
 
@@ -782,6 +998,9 @@ def render_markdown(report: dict[str, Any]) -> str:
             "## 판정",
             "",
             f"- state: `{report.get('state')}`",
+            f"- evaluation: `{json.dumps(report.get('evaluation', {}), ensure_ascii=False)}`",
+            f"- blocker / owner: `{report.get('blocker')}` / `{report.get('owner')}`",
+            f"- closure_test: {report.get('closure_test')}",
             f"- recommended_workorder_state: `{report.get('recommended_workorder_state')}`",
             f"- runtime_effect: `{report.get('policy', {}).get('runtime_effect')}`",
             f"- raw_suppression_enabled: `{report.get('policy', {}).get('raw_suppression_enabled')}`",
@@ -829,6 +1048,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--date", dest="target_date", default=datetime.now().strftime("%Y-%m-%d")
     )
     parser.add_argument("--print-json", action="store_true")
+    parser.add_argument("--resource-deferred", metavar="REASON")
+    parser.add_argument("--allow-bootstrap", action="store_true", help="Approve one exact source-day streaming bootstrap; no lookback.")
     parser.add_argument(
         "--check-reusable",
         action="store_true",
@@ -841,7 +1062,12 @@ def main() -> int:
     args = build_parser().parse_args()
     if args.check_reusable:
         return 0 if report_is_reusable(args.target_date) else 1
-    report = build_pipeline_event_verbosity_report(args.target_date)
+    if args.resource_deferred:
+        report = write_resource_deferred(args.target_date, args.resource_deferred)
+    elif report_is_reusable(args.target_date):
+        report = _read_json(report_paths(args.target_date)[0])
+    else:
+        report = build_pipeline_event_verbosity_report(args.target_date, allow_bootstrap=args.allow_bootstrap)
     result = {
         "status": "success",
         "target_date": args.target_date,

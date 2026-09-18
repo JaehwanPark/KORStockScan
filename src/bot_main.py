@@ -555,6 +555,8 @@ if __name__ == "__main__":
                     },
                 )
                 time.sleep(65)  # 23:51분으로 넘겨서 무한 재시작 방지
+                from src.utils.pipeline_event_logger import drain_pipeline_event_summary_before_termination
+                drain_pipeline_event_summary_before_termination()
                 os.kill(os.getpid(), signal.SIGTERM)
 
             # [스케줄러 3] 관리자의 우아한 재시작(restart.flag) 감지
@@ -578,6 +580,8 @@ if __name__ == "__main__":
                     f"request={restart_request or 'source=unknown_legacy_touch'}"
                 )
                 time.sleep(3)  # 다른 쓰레드들이 종료될 시간을 잠시 부여
+                from src.utils.pipeline_event_logger import drain_pipeline_event_summary_before_termination
+                drain_pipeline_event_summary_before_termination()
                 os.kill(os.getpid(), signal.SIGTERM)
 
             # 메인 루프 부하 방지

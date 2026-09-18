@@ -1225,6 +1225,7 @@ def _build_tasks(
                 ),
                 lines=(
                     f"판정 기준: selected_order_count={_code_workorder_count(ev_report, code_report)}와 `implement_now`, `attach_existing_family`, `design_family_candidate`, `reject` 분류를 확인하고, 비-implement 반복 항목이 `terminal_non_implement_longstanding`, `repeat_unresolved_structural_blocker`, `keep_visible_by_design` 중 무엇으로 닫혀야 하는지 분리한다.",
+                    f"운영 진단: pipeline_event_verbosity={(ev_report.get('pipeline_event_verbosity') or {}).get('state')}; order_pipeline_event_compaction_v2_shadow의 exact-date source/resource/parity OPEN은 동일 owner의 defer_evidence로 유지하며 반복 구현/provider/full-wrapper recovery 또는 PREOPEN GREEN 근거로 바꾸지 않는다.",
                     "금지: code-improvement workorder를 자동 repo 수정으로 취급하지 않는다. 사용자가 Codex 구현을 지시한 경우에만 실행한다.",
                     "다음 액션: `implement_now`, `terminal_non_implement_longstanding`, `repeat_unresolved_structural_blocker`, `keep_visible_by_design`, `already_implemented`, `defer_design`, `reject` 중 하나로 닫는다.",
                 ),

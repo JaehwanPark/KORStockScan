@@ -523,6 +523,7 @@ def test_producer_parity_profile_rebuilds_legacy_full_detail_manifest(tmp_path):
     manifest_path = Path(first_meta["manifest_path"])
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest.pop("summary_detail_level")
+    manifest.pop("checkpoint_digest")  # Simulate the pre-receipt legacy generation.
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
     rows, rebuilt_meta = update_and_load_pipeline_event_summaries(
@@ -604,3 +605,53 @@ def test_producer_summary_flushes_previous_date_before_new_date_event(tmp_path):
     assert [row["target_date"] for row in august_rows] == ["2026-08-01"]
     assert sum(row["event_count"] for row in july_rows) == 1
     assert sum(row["event_count"] for row in august_rows) == 1
+
+
+def test_uncommitted_producer_suffix_is_explicit_and_never_double_counted(tmp_path):
+    from src.engine import pipeline_event_summary as mod
+    compactor = ProducerSummaryCompactor(summary_dir=tmp_path, mode="shadow", flush_sec=3600)
+    compactor.submit(_review_event(1))
+    compactor.flush()
+    path, manifest = mod.producer_summary_paths(tmp_path, "2026-09-08")
+    previous = manifest.read_bytes()
+    # Simulate process death after append, before the canonical manifest commit.
+    with path.open("ab") as handle:
+        handle.write(path.read_bytes())
+    compactor.submit(_review_event(2))
+    with pytest.raises(ValueError, match="uncommitted_or_corrupt_generation"):
+        compactor.flush()
+    assert manifest.read_bytes() == previous
+    assert compactor._pending_batch is not None
+    assert len(path.read_text().splitlines()) == 2
+
+
+def test_failed_rebuild_preserves_previous_generation(tmp_path, monkeypatch):
+    from pathlib import Path
+    from src.engine import pipeline_event_summary as mod
+    day = "2026-09-08"
+    raw = tmp_path / "raw.jsonl"
+    raw.write_text(json.dumps(_review_event(1)) + "\n")
+    options = dict(raw_path=raw, summary_dir=tmp_path / "summaries", target_date=day,
+                   reason_labeler=mod.default_reason_label, summary_stages=mod.PRODUCER_SUMMARY_STAGES,
+                   summary_profile="producer_parity")
+    _, meta = mod.update_and_load_pipeline_event_summaries(**options)
+    summary = Path(meta["summary_path"])
+    previous = summary.read_bytes()
+    raw.write_text(json.dumps(_review_event(2)) + "\n")
+    original = mod._write_json
+    attempts = 0
+    def fail_once(path, payload):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise OSError("manifest commit failed")
+        original(path, payload)
+    with monkeypatch.context() as patch:
+        patch.setattr(mod, "_write_json", fail_once)
+        with pytest.raises(OSError, match="commit failed"):
+            mod.update_and_load_pipeline_event_summaries(**options)
+    assert summary.read_bytes() == previous
+    rows, repaired = mod.update_and_load_pipeline_event_summaries(**options)
+    assert repaired["rebuilt"] is True
+    assert sum(row["event_count"] for row in rows) == 1
+    assert summary.read_bytes() != previous

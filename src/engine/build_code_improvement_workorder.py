@@ -1388,6 +1388,9 @@ def _escalate_repeated_structural_blockers(
     for item in classified:
         if retired_owner(item.order.get("source_report_type")):
             continue
+        if item.order.get("source_report_type") == "pipeline_event_verbosity" and item.decision == "defer_evidence":
+            escalated.append(item)
+            continue  # Same native diagnostic source gap is not a new code/provider order.
         order_id = str(item.order.get("order_id") or "").strip()
         provenance = (
             item.order.get("implementation_provenance")
@@ -1587,6 +1590,9 @@ def _escalate_repeated_unresolved_orders(
     for item in classified:
         if retired_owner(item.order.get("source_report_type")):
             continue
+        if item.order.get("source_report_type") == "pipeline_event_verbosity" and item.decision == "defer_evidence":
+            escalated.append(item)
+            continue  # Same native diagnostic source gap is not a new code/provider order.
         order_id = str(item.order.get("order_id") or "").strip()
         signature = _repeat_unresolved_signature(item.order)
         repeat_keys = [order_id]
@@ -3001,6 +3007,24 @@ def _classify_order(
             confidence=confidence,
             automation_reentry="Next BUY Funnel postclose diagnostics retain block/pass reasons and source quality; no independent sample/join gate or runtime mutation.",
         )
+    if order.get("source_report_type") == "pipeline_event_verbosity" and not bool(order.get("runtime_effect")) and order.get("allowed_runtime_apply") is not True:
+        if order.get("diagnostic_state") in {"missing_report", "resource_deferred", "bootstrap_required", "source_snapshot_changed", "v2_shadow_pending_flush"} or order.get("implementation_status") == "implemented":
+            return ClassifiedOrder(
+                order=order, decision="defer_evidence",
+                reason="Existing native diagnostic owner remains OPEN; scoped source/resource/natural closure is required, not duplicate implementation or trading promotion.",
+                mapped_family=mapped_family, route="instrumentation_order", confidence=confidence,
+                automation_reentry=str(order.get("closure_test") or "Verify exact-date source and completed-window parity under the unchanged resource guard."),
+            )
+        return ClassifiedOrder(
+            order=order,
+            decision="implement_now",
+            reason="pipeline event compaction V2 is report-only instrumentation; shadow means producer-summary observe mode, not trading shadow",
+            mapped_family=mapped_family,
+            route=route or "instrumentation_order",
+            confidence=confidence,
+            automation_reentry="Next postclose pipeline_event_verbosity report must show producer summary freshness and parity status.",
+        )
+
     if closed_family:
         return ClassifiedOrder(
             order=order,
@@ -3120,17 +3144,6 @@ def _classify_order(
             route="instrumentation_order",
             confidence="source_only_scoped_diagnostic",
             automation_reentry="Next exact-date census preserves native ID, scope, exclusions and hash; no changes to scanner or order guards.",
-        )
-
-    if order.get("source_report_type") == "pipeline_event_verbosity":
-        return ClassifiedOrder(
-            order=order,
-            decision="implement_now",
-            reason="pipeline event compaction V2 is report-only instrumentation; shadow means producer-summary observe mode, not trading shadow",
-            mapped_family=mapped_family,
-            route=route or "instrumentation_order",
-            confidence=confidence,
-            automation_reentry="Next postclose pipeline_event_verbosity report must show producer summary freshness and parity status.",
         )
 
     if order.get("source_report_type") == "codebase_performance_workorder":
@@ -4238,6 +4251,10 @@ def _pipeline_event_verbosity_followup_orders(
     ]
     base = {
         "source_report_type": "pipeline_event_verbosity",
+        "diagnostic_state": state,
+        "source_date": report.get("target_date"),
+        "implementation_status": report.get("implementation_status"),
+        "closure_test": report.get("closure_test") or "Produce and verify the exact-date scoped diagnostic; no full wrapper or provider retry for unchanged evidence.",
         "required_downstream": [
             "pipeline_event_verbosity",
             "code_improvement_workorder",
@@ -4257,6 +4274,11 @@ def _pipeline_event_verbosity_followup_orders(
         "open_shadow_order",
         "block_suppress_and_fix_shadow",
         "repair_source_contract",
+        "await_exact_date_report",
+        "raw_missing",
+        "await_resource_for_scoped_diagnostic",
+        "retry_stable_source_snapshot",
+        "observe_pending_next_flush",
     }:
         return [
             {
@@ -6803,6 +6825,10 @@ def _build_code_improvement_workorder(
     pipeline_event_verbosity = _load_source_json(
         pipeline_event_verbosity_path, isolated_source_mode=isolated_source_mode
     )
+    if pipeline_event_verbosity.get("target_date") not in {None, target_date}:
+        pipeline_event_verbosity = {}
+    if not pipeline_event_verbosity and not isolated_source_mode and target_date >= "2026-06-05":
+        pipeline_event_verbosity = {"target_date": target_date, "state": "missing_report", "recommended_workorder_state": "await_exact_date_report"}
     observation_source_quality_path = _observation_source_quality_audit_path(
         target_date
     )

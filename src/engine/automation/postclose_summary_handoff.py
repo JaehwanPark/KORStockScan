@@ -176,6 +176,7 @@ def source_paths(report_dir: Path, target_date: str, consumer: str) -> dict[str,
             / f"threshold_runtime_env_verify_{target_date}.json"
         )
     if target_date >= "2026-09-17":
+        paths["pipeline_event_verbosity"] = report_dir / "pipeline_event_verbosity" / f"pipeline_event_verbosity_{target_date}.json"
         paths['entry_cancel_wait_tuning'] = report_dir / 'entry_cancel_wait_tuning' / f'entry_cancel_wait_tuning_{target_date}.json'
         paths['entry_cancel_wait_policy'] = report_dir / 'entry_cancel_wait_tuning' / f'entry_cancel_wait_policy_{target_date}.json'
         from src.engine.automation.machine_research_closed_loop_refresh import (

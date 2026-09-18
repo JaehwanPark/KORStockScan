@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import fcntl
 import gzip
 import json
@@ -13,7 +14,9 @@ from collections import Counter, deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 from functools import wraps
+from itertools import chain
 from typing import Any, Callable
 
 from src.utils.jsonl_io import existing_or_gzip_path, open_text_auto
@@ -203,17 +206,85 @@ def _safe_str(value: Any) -> str:
 
 def _read_json(path: Path) -> dict[str, Any]:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return payload if isinstance(payload, dict) else {}
     except Exception:
         return {}
 
 
+def checkpoint_digest(payload: dict[str, Any]) -> str:
+    return hashlib.sha256(json.dumps(
+        {k: v for k, v in payload.items() if k != "checkpoint_digest"},
+        sort_keys=True, ensure_ascii=False, allow_nan=False,
+    ).encode()).hexdigest()
+
+
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    tmp_path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    tmp_path.replace(path)
+    tmp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}.{threading.get_ident()}")
+    try:
+        with tmp_path.open("w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        tmp_path.replace(path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+ROLLUP_KEY_FIELDS = (
+    "target_date", "bucket_start", "bucket_end", "pipeline", "stage", "stock_code",
+    "stock_name", "strategy", "market", "reason_label", "actual_order_submitted",
+)
+
+
+ROLLUP_BUCKET_FIELDS = (
+    "target_date", "bucket_start", "bucket_end", "pipeline", "stage", "reason_label", "actual_order_submitted",
+)
+ROLLUP_CONTRACT = "bucket_stage_full_payload_and_partition_multiset_v1"
+
+
+def partition_hash_sum(row):
+    if row.get("rollup_contract") == ROLLUP_CONTRACT:
+        return int(row["partition_hash_sum"], 16)
+    key = json.dumps([row.get(name) for name in ROLLUP_KEY_FIELDS], ensure_ascii=False, separators=(",", ":"))
+    return (int(hashlib.sha256(key.encode()).hexdigest(), 16) * row["event_count"]) % IDENTITY_MODULUS
+
+
+def merge_identity_rows(previous, appended):
+    """Compact full hash multisets, preserving original partition dimensions.
+
+    This is a report checkpoint only. It never replaces diagnostic samples,
+    execution projections or raw custody. Payload and partition hashes are
+    independently reconciled; coalescing is not sampling.
+    """
+    groups = {}
+    for row in chain(previous, appended):
+        key = tuple(row.get(name) for name in ROLLUP_BUCKET_FIELDS)
+        partition = partition_hash_sum(row)
+        if key not in groups:
+            groups[key] = {name: row.get(name) for name in ROLLUP_BUCKET_FIELDS}
+            groups[key].update(event_count=0, evidence_hash_sum="0" * 64,
+                               partition_hash_sum="0" * 64, rollup_contract=ROLLUP_CONTRACT,
+                               identity_contract=IDENTITY_CONTRACT, first_seen=row.get("first_seen"), last_seen=row.get("last_seen"))
+        old = groups[key]
+        old["event_count"] += row["event_count"]
+        old["evidence_hash_sum"] = f"{(int(old['evidence_hash_sum'], 16) + int(row['evidence_hash_sum'], 16)) % IDENTITY_MODULUS:064x}"
+        old["partition_hash_sum"] = f"{(int(old['partition_hash_sum'], 16) + partition) % IDENTITY_MODULUS:064x}"
+        old["first_seen"] = min(old.get("first_seen") or "", row.get("first_seen") or "")
+        old["last_seen"] = max(old.get("last_seen") or "", row.get("last_seen") or "")
+    return list(groups.values())
+
+
+def _with_summary_generation_lock(method):
+    @wraps(method)
+    def locked(*args, **kwargs):
+        summary_dir = kwargs["summary_dir"]
+        summary_dir.mkdir(parents=True, exist_ok=True)
+        _, manifest = _summary_paths(summary_dir, kwargs["target_date"], profile=kwargs.get("summary_profile", "default"))
+        with manifest.with_suffix(".lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            return method(*args, **kwargs)
+    return locked
 
 
 def _summary_paths(
@@ -679,6 +750,8 @@ def _summary_event_from_payload(
     emitted_at = _parse_iso_datetime(_safe_str(payload.get("emitted_at")))
     if emitted_at is None:
         return None
+    if emitted_at.tzinfo is not None:
+        emitted_at = emitted_at.astimezone(ZoneInfo("Asia/Seoul"))
     raw_fields = payload.get("fields") or {}
     full_fields = (
         {str(k): _safe_str(v) for k, v in raw_fields.items()}
@@ -876,6 +949,7 @@ def _slim_summary_row(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+@_with_summary_generation_lock
 def update_and_load_pipeline_event_summaries(
     *,
     raw_path: Path,
@@ -886,9 +960,15 @@ def update_and_load_pipeline_event_summaries(
     include_samples: bool = True,
     summary_stages: frozenset[str] = SUMMARY_STAGES,
     summary_profile: str = "default",
+    raw_observer: Callable[[bytes, Any], None] | None = None,
+    observer_state: dict[str, Any] | None = None,
+    incremental_rollup: bool = False,
+    allow_bootstrap: bool = False,
+    observer_contract: str | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     summary_profile = _safe_str(summary_profile) or "default"
-    raw_path = existing_or_gzip_path(raw_path)
+    raw_path = existing_or_gzip_path(raw_path).resolve()
+    summary_dir = summary_dir.resolve()
     if not raw_path.exists():
         return [], {
             "enabled": True,
@@ -910,33 +990,74 @@ def update_and_load_pipeline_event_summaries(
         if summary_profile == "producer_parity"
         else DEFAULT_SUMMARY_DETAIL_LEVEL
     )
+    force_rebuild = False
+    invalid_checkpoint = manifest_path.exists() and (not manifest or
+        ("checkpoint_digest" in manifest and manifest["checkpoint_digest"] != checkpoint_digest(manifest)))
+    if invalid_checkpoint:
+        if not allow_bootstrap:
+            raise ValueError("raw_summary_checkpoint_digest_invalid")
+        force_rebuild = True
+    actual_summary = existing_or_gzip_path(summary_path)
+    summary_stamp = manifest.get("summary_stamp")
+    if actual_summary.exists() and summary_stamp and summary_stamp != [
+        actual_summary.stat().st_ino, actual_summary.stat().st_size,
+        actual_summary.stat().st_mtime_ns, actual_summary.stat().st_ctime_ns,
+    ]:
+        if not allow_bootstrap:
+            raise ValueError("raw_summary_generation_invalid; --allow-bootstrap permits explicit scoped repair")
+        force_rebuild = True
+    if raw_observer is not None and manifest and "raw_volume" not in manifest and max(stat.st_size, int(manifest.get("raw_offset") or 0)) > 64 * 1024 * 1024 and not allow_bootstrap:
+        raise ValueError("volume_bootstrap_required; approved source-day streaming required")
+    callback_sources = []
+    for callback in (reason_labeler, ignore_payload):
+        if callback is None:
+            continue
+        try:
+            callback_sources.append(inspect.getsource(callback))
+            owner_file = inspect.getsourcefile(callback)
+            if owner_file:
+                callback_sources.append(hashlib.sha256(Path(owner_file).read_bytes()).hexdigest())
+            if getattr(callback, "__closure__", None):
+                force_rebuild = True  # Unbound captured state has no append-prefix authority.
+        except (OSError, TypeError):
+            force_rebuild = True  # Still support normal streaming calculation.
+    callback_contract = hashlib.sha256("\n".join(callback_sources).encode()).hexdigest()
     raw_offset = int(manifest.get("raw_offset") or 0)
     raw_size = max(int(stat.st_size), raw_offset) if is_gzip_raw else int(stat.st_size)
     archived_summary_path = Path(f"{summary_path}.gz")
     summary_exists = summary_path.exists() or archived_summary_path.exists()
     stale_summary = (
-        int(manifest.get("schema_version") or 0) != SUMMARY_SCHEMA_VERSION
+        force_rebuild
+        or int(manifest.get("schema_version") or 0) != SUMMARY_SCHEMA_VERSION
         or str(manifest.get("raw_path") or "") != str(raw_path)
         or int(manifest.get("raw_inode") or -1) != int(raw_inode or -1)
         or set(manifest.get("summary_stages") or ()) != set(summary_stages)
         or str(manifest.get("summary_detail_level") or "") != summary_detail_level
-        or (raw_offset == raw_size and manifest.get("raw_mtime_ns") != stat.st_mtime_ns)
+        or (int(manifest.get("raw_size") or 0) == raw_size and (manifest.get("raw_mtime_ns") != stat.st_mtime_ns
+            or manifest.get("raw_ctime_ns", stat.st_ctime_ns) != stat.st_ctime_ns))
+        or (raw_observer is not None and "raw_volume" not in manifest)
+        or (raw_observer is not None and manifest.get("observer_contract") != observer_contract)
+        or (manifest.get("callback_contract") and manifest["callback_contract"] != callback_contract)
+        or (manifest.get("parser_contract") and manifest["parser_contract"] != hashlib.sha256(Path(__file__).read_bytes()).hexdigest())
         or raw_offset > raw_size
         or not summary_exists
+        or (incremental_rollup and not is_gzip_raw and not raw_path.with_name(f".{raw_path.name}.partition.lock").is_file())
     )
     if stale_summary:
-        summary_path.unlink(missing_ok=True)
-        archived_summary_path.unlink(missing_ok=True)
-        manifest_path.unlink(missing_ok=True)
         raw_offset = 0
     if not summary_path.exists() and not archived_summary_path.exists():
         summary_path.touch(exist_ok=True)
 
+    if observer_state is not None:
+        observer_state.clear()
+        observer_state.update({} if stale_summary else manifest.get("raw_volume") or {})
     groups: dict[tuple[str, ...], _SummaryAggregate] = {}
     appended_raw_lines = 0
     appended_source_events = 0
     decode_errors = 0
     last_good_offset = raw_offset
+    incomplete_tail = False
+    incomplete_tail_bytes = 0
     raw_opener = gzip.open if is_gzip_raw else open
     with raw_opener(raw_path, "rb") as raw_handle:
         raw_handle.seek(raw_offset)
@@ -947,15 +1068,21 @@ def update_and_load_pipeline_event_summaries(
                 break
             appended_raw_lines += 1
             if not raw_bytes.endswith(b"\n"):
+                incomplete_tail = True
+                incomplete_tail_bytes = len(raw_bytes)
                 break
             line_end = raw_handle.tell()
             raw_line = raw_bytes.decode("utf-8", errors="replace")
             try:
                 payload = json.loads(raw_line)
             except json.JSONDecodeError:
+                if raw_observer is not None:
+                    raw_observer(raw_bytes, None)
                 decode_errors += 1
                 last_good_offset = line_end
                 continue
+            if raw_observer is not None:
+                raw_observer(raw_bytes, payload)
             if isinstance(payload, dict):
                 event = _summary_event_from_payload(
                     payload,
@@ -979,22 +1106,39 @@ def update_and_load_pipeline_event_summaries(
             if last_good_offset <= line_start:
                 break
 
-    appended_summary_rows = 0
-    if groups:
+    new_rows = [groups[key].to_row(target_date=target_date, summary_detail_level=summary_detail_level)
+                for key in sorted(groups)]
+    appended_summary_rows = len(new_rows)
+    # Build successors off to the side; do not delete the valid generation before
+    # a rebuild succeeds. An interrupted two-file publication is detected by stamp.
+    publish_path = summary_path.with_name(f"{summary_path.name}.rebuild.{os.getpid()}") if stale_summary else summary_path
+    if not stale_summary:
         _rehydrate_summary_for_append(summary_path)
-        with summary_path.open("a", encoding="utf-8") as summary_handle:
-            for key in sorted(groups):
-                row = groups[key].to_row(
-                    target_date=target_date,
-                    summary_detail_level=summary_detail_level,
-                )
-                summary_handle.write(
-                    json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n"
-                )
-                appended_summary_rows += 1
-
-    rows = _load_summary_rows(summary_path, include_samples=include_samples)
-    final_stat_size = int(raw_path.stat().st_size) if raw_path.exists() else raw_size
+    initial_size = publish_path.stat().st_size if publish_path.exists() else 0
+    with publish_path.open("w" if stale_summary else "a", encoding="utf-8") as summary_handle:
+        for row in new_rows:
+            summary_handle.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
+        summary_handle.flush()
+        os.fsync(summary_handle.fileno())
+    if incremental_rollup:
+        previous = [] if stale_summary else manifest.get("identity_rollup")
+        if previous is None:
+            previous = _load_summary_rows(summary_path, include_samples=False)
+            # This legacy bootstrap already includes the new append.
+            rows = merge_identity_rows([], previous)
+        else:
+            rows = merge_identity_rows(previous, new_rows)
+    else:
+        rows = _load_summary_rows(publish_path, include_samples=include_samples)
+    backup_path = summary_path.with_name(f"{summary_path.name}.previous.{os.getpid()}")
+    if stale_summary:
+        if summary_path.exists():
+            backup_path.unlink(missing_ok=True)
+            os.link(summary_path, backup_path)
+        publish_path.replace(summary_path)
+    actual_summary = existing_or_gzip_path(summary_path)
+    final_stat = raw_path.stat()
+    final_stat_size = int(final_stat.st_size)
     final_raw_size = (
         max(final_stat_size, last_good_offset) if is_gzip_raw else final_stat_size
     )
@@ -1002,14 +1146,18 @@ def update_and_load_pipeline_event_summaries(
         "schema_version": SUMMARY_SCHEMA_VERSION,
         "raw_path": str(raw_path),
         "raw_inode": raw_inode,
-        "raw_mtime_ns": stat.st_mtime_ns,
+        "raw_mtime_ns": final_stat.st_mtime_ns,
+        "raw_ctime_ns": final_stat.st_ctime_ns,
         "raw_offset": last_good_offset,
+        "start_raw_offset": raw_offset,
         "raw_size": final_raw_size,
         "summary_path": str(summary_path),
         "manifest_path": str(manifest_path),
         "summary_profile": summary_profile,
         "summary_detail_level": summary_detail_level,
-        "summary_row_count": len(rows),
+        "summary_row_count": appended_summary_rows + (0 if stale_summary else int(manifest.get("summary_row_count") or 0)),
+        "incomplete_tail": incomplete_tail,
+        "incomplete_tail_bytes": incomplete_tail_bytes,
         "appended_raw_lines": appended_raw_lines,
         "appended_source_events": appended_source_events,
         "appended_summary_rows": appended_summary_rows,
@@ -1023,7 +1171,41 @@ def update_and_load_pipeline_event_summaries(
         "runtime_effect": False,
         "raw_suppression_enabled": False,
     }
-    _write_json(manifest_path, new_manifest)
+    if observer_state is not None:
+        new_manifest["raw_volume"] = observer_state
+    if incremental_rollup:
+        new_manifest["identity_rollup"] = rows
+    if not stale_summary and "producer_rollup" in manifest:
+        new_manifest["producer_rollup"] = manifest["producer_rollup"]
+    st = actual_summary.stat()
+    new_manifest["summary_stamp"] = [st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns]
+    new_manifest["callback_contract"] = callback_contract
+    new_manifest["observer_contract"] = observer_contract
+    new_manifest["parser_contract"] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+    new_manifest["checkpoint_digest"] = checkpoint_digest(new_manifest)
+    try:
+        _write_json(manifest_path, new_manifest)
+    except Exception:
+        if stale_summary and backup_path.exists():
+            backup_path.replace(summary_path)
+            if manifest:
+                st = summary_path.stat()
+                manifest["summary_stamp"] = [st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns]
+                manifest["checkpoint_digest"] = checkpoint_digest(manifest)
+                _write_json(manifest_path, manifest)
+        if not stale_summary:
+            with summary_path.open("r+b") as handle:
+                handle.truncate(initial_size)
+            # Rollback changes metadata; retain a matching receipt for the old
+            # valid offset if publication failed before the commit.
+            if manifest:
+                st = summary_path.stat()
+                manifest["summary_stamp"] = [st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns]
+                manifest["checkpoint_digest"] = checkpoint_digest(manifest)
+                _write_json(manifest_path, manifest)
+        raise
+    backup_path.unlink(missing_ok=True)
+    archived_summary_path.unlink(missing_ok=True)
     return rows, {
         "enabled": True,
         "status": "ok",
@@ -1134,6 +1316,8 @@ class ProducerSummaryCompactor:
             self._worker.join(timeout=5)
             if self._worker.is_alive():
                 raise TimeoutError("producer summary shutdown drain exceeded 5 seconds")
+            if self._pending_batch is not None or self._groups:
+                self.flush()
 
     @property
     def enabled(self) -> bool:
@@ -1381,6 +1565,12 @@ class ProducerSummaryCompactor:
         )
         if not isinstance(existing, dict):
             raise ValueError("invalid producer manifest")
+        if existing and not summary_path.exists() and existing.get("summary_event_count"):
+            raise ValueError("producer_summary_committed_body_missing; raw retained")
+        if existing and summary_path.exists() and existing.get("summary_storage_size_bytes") != summary_path.stat().st_size:
+            raise ValueError("producer_summary_uncommitted_or_corrupt_generation; raw retained")
+        if not existing and summary_path.exists() and summary_path.stat().st_size:
+            raise ValueError("producer_summary_missing_commit_receipt; raw retained")
         previous_rows = int(existing.get("summary_row_count") or 0)
         previous_events = int(existing.get("summary_event_count") or 0)
         existing_first_event_at = _safe_str(existing.get("coverage_first_event_at"))
@@ -1431,6 +1621,7 @@ class ProducerSummaryCompactor:
             try:
                 handle.write(serialized)
                 handle.flush()
+                os.fsync(handle.fileno())
                 manifest["last_flush_bytes"] = len(serialized)
                 manifest["summary_storage_size_bytes"] = handle.tell()
                 _write_json(manifest_path, manifest)

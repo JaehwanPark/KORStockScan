@@ -27,6 +27,7 @@ from src.engine.pipeline_event_summary import (
 _WRITE_LOCK = threading.RLock()
 _COMPACTOR_LOCK = threading.RLock()
 _PRODUCER_COMPACTOR: ProducerSummaryCompactor | None = None
+_RETIRING_COMPACTORS: list[ProducerSummaryCompactor] = []
 
 _TEXT_INFO_STAGE_KEYWORDS = (
     "order_submitted",
@@ -308,12 +309,23 @@ def _get_producer_compactor() -> ProducerSummaryCompactor | None:
     global _PRODUCER_COMPACTOR
     mode = _compaction_mode()
     with _COMPACTOR_LOCK:
+        _RETIRING_COMPACTORS[:] = [c for c in _RETIRING_COMPACTORS if c._pending_batch is not None or c._groups or (c._worker and c._worker.is_alive())]
         if (
             _PRODUCER_COMPACTOR is not None
             and _PRODUCER_COMPACTOR.requested_mode != mode
         ):
-            _PRODUCER_COMPACTOR.close(wait=False)
-            _PRODUCER_COMPACTOR = None
+            if _RETIRING_COMPACTORS:
+                # At most one retiring and one current bounded buffer. Keep both
+                # references on repeated handover failure; raw remains available.
+                _PRODUCER_COMPACTOR.close(wait=False)
+                if (_PRODUCER_COMPACTOR._pending_batch is not None or _PRODUCER_COMPACTOR._groups or
+                        (_PRODUCER_COMPACTOR._worker and _PRODUCER_COMPACTOR._worker.is_alive())):
+                    return None
+                _PRODUCER_COMPACTOR = None
+            else:
+                _PRODUCER_COMPACTOR.close(wait=False)
+                _RETIRING_COMPACTORS.append(_PRODUCER_COMPACTOR)
+                _PRODUCER_COMPACTOR = None
         if mode == "off":
             return None
         if _PRODUCER_COMPACTOR is None:
@@ -334,11 +346,24 @@ def flush_pipeline_event_producer_summary(target_date: str | None = None) -> dic
 
 
 def _flush_producer_summary_at_exit() -> None:
-    try:
+    with _COMPACTOR_LOCK:
+        compactors = list(_RETIRING_COMPACTORS)
         if _PRODUCER_COMPACTOR is not None:
-            _PRODUCER_COMPACTOR.close()
-    except Exception as exc:
-        log_error(f"[PIPELINE_EVENT] producer summary atexit flush failed: {exc}")
+            compactors.append(_PRODUCER_COMPACTOR)
+    failed = []
+    for compactor in compactors:
+        try:
+            compactor.close()
+        except Exception as exc:
+            failed.append(compactor)
+            log_error(f"[PIPELINE_EVENT] producer summary shutdown drain failed; raw retained: {exc}")
+    with _COMPACTOR_LOCK:
+        _RETIRING_COMPACTORS[:] = [c for c in failed if c is not _PRODUCER_COMPACTOR]
+
+
+def drain_pipeline_event_summary_before_termination() -> None:
+    """Bounded drain for existing graceful self-SIGTERM paths; no signal changes."""
+    _flush_producer_summary_at_exit()
 
 
 atexit.register(_flush_producer_summary_at_exit)

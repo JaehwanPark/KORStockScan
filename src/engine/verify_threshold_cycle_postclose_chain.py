@@ -7127,6 +7127,30 @@ def _limit_down_watch_verification_enabled(
     return recovery_done and _limit_down_watch_report_required(target_date)
 
 
+def _pipeline_verbosity_operations_handoff(target_date, flags):
+    """Exact-date diagnostic OPEN cannot issue full-chain DONE/PREOPEN GREEN."""
+    if not flags.get("pipeline_event_verbosity"):
+        return {"status": "disabled", "issues": []}
+    from src.engine import pipeline_event_verbosity_report as diagnostic
+    path = REPORT_DIR / "pipeline_event_verbosity" / f"pipeline_event_verbosity_{target_date}.json"
+    report = _load_json(path)
+    state = report.get("state") if report.get("target_date") == target_date else "missing_report"
+    good = state in {"no_suppressible_events", "v2_shadow_parity_pass", "v2_shadow_no_eligible_events"} and (report.get("parity") or {}).get("ok") is True
+    integrity = False
+    try:
+        integrity = (report.get("report_digest") == diagnostic._report_digest(report)
+                     and report.get("source_binding") == diagnostic._source_binding(target_date)
+                     and all((report.get("policy") or {}).get(k) is False for k in ("runtime_effect", "allowed_runtime_apply", "raw_suppression_enabled")))
+    except (ValueError, TypeError, OSError):
+        pass
+    if good and not integrity:
+        state, good = "report_integrity_invalid", False
+    return {"status": "pass" if good else "open", "state": state,
+            "issues": [] if good else [f"pipeline_verbosity_operations_open:{state}"],
+            "owner": "order_pipeline_event_compaction_v2_shadow", "runtime_effect": False,
+            "closure_test": report.get("closure_test") or "Regenerate the scoped exact-date diagnostic under the existing guard and verify its source and identity."}
+
+
 def build_threshold_cycle_postclose_verification(
     target_date: str,
     *,
@@ -9025,6 +9049,7 @@ def build_threshold_cycle_postclose_verification(
         )
 
     status = "pass"
+    pipeline_operations = _pipeline_verbosity_operations_handoff(target_date, execution_flags)
     strict_log_issues = list(log_issues)
     if not require_done_marker:
         strict_log_issues = [
@@ -9079,11 +9104,14 @@ def build_threshold_cycle_postclose_verification(
         from src.engine.automation.entry_cancel_wait_tuning import verify_handoff
         cancel_wait_handoff = verify_handoff(target_date, require_summary=False)
         if cancel_wait_handoff['status'] != 'PASS':status='fail'
+    if pipeline_operations.get("status") == "open" and status in {"pass", "pass_with_pending_done_marker"}:
+        status = "warning"
     return {
         "date": target_date,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "report_type": "threshold_cycle_postclose_verification",
         "entry_cancel_wait_policy_handoff":cancel_wait_handoff,
+        "pipeline_verbosity_operations_handoff": pipeline_operations,
         "status": status,
         "log_path": str(LOG_PATH),
         "latest_start_marker": start_line,

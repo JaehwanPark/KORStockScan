@@ -604,6 +604,11 @@ def _workorder_summary(code_workorder: dict[str, Any]) -> dict[str, Any]:
             if isinstance(summary.get("root_cause_open_top"), list)
             else []
         ),
+        "pipeline_verbosity_dispositions": [
+            {key: order.get(key) for key in ("order_id", "decision", "diagnostic_state", "source_date", "closure_test")}
+            for order in [*(code_workorder.get("orders") or []), *(code_workorder.get("non_selected_orders") or [])]
+            if order.get("order_id") == "order_pipeline_event_compaction_v2_shadow"
+        ],
         "interpretation": "workorder_intake_only_not_automatic_repo_change",
     }
 
@@ -1137,6 +1142,7 @@ def _postclose_verifier_summary(
     )
     return {
         "status": verifier_report.get("status"),
+        "pipeline_verbosity_operations_handoff": verifier_report.get("pipeline_verbosity_operations_handoff"),
         "handoff_warnings": (
             verifier_report.get("handoff_warnings")
             if isinstance(verifier_report.get("handoff_warnings"), list)
@@ -1670,6 +1676,8 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
         payloads["threshold_cycle_postclose_verification"],
         sources["threshold_cycle_postclose_verification"],
     )
+    pipeline_operations = verifier.get("pipeline_verbosity_operations_handoff") or {}
+    warnings.extend(str(issue) for issue in pipeline_operations.get("issues") or [])
     workorder = _workorder_summary(payloads["code_improvement_workorder"])
     source_freshness = _source_freshness(
         payloads, payloads["threshold_cycle_postclose_verification"]
