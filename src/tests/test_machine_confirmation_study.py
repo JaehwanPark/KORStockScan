@@ -1468,3 +1468,34 @@ def test_actual_history_conflict_tombstone_cannot_reappear():
     )[0][0]
     assert result["actual"] is None
     assert result["actual_refresh_blocker"] == "native_actual_history_identity_conflict"
+
+
+def test_submit_model_clock_never_double_counts_original_guard_wait():
+    from datetime import datetime, timedelta
+    from src.engine.monitoring.machine_entry_confirmation_study import (
+        native_submit_model_latency,
+    )
+
+    source, _, _ = _native_terminal_case("2026-09-01")
+    c = source["contract"]
+    at = datetime.fromisoformat(c["decision_at"])
+    native = dict(
+        confirmed_delay_sec=0,
+        entry_admission=dict(
+            at=(at + timedelta(seconds=3)).isoformat(), permitted=True
+        ),
+    )
+    assert native_submit_model_latency(c, native, at + timedelta(seconds=3)) == 0
+    assert (
+        native_submit_model_latency(
+            c, native, at + timedelta(seconds=3, milliseconds=200)
+        )
+        == 200
+    )
+    native["confirmed_delay_sec"] = 5
+    assert (
+        native_submit_model_latency(
+            c, native, at + timedelta(seconds=5, milliseconds=200)
+        )
+        == 200
+    )
