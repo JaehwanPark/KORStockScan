@@ -2511,8 +2511,9 @@ def _partition_outcomes(rows: list[dict[str, Any]]) -> tuple[list, list, dict]:
     holdout = [r for r in ready if r.get("source_date") in holdout_days]
     consumed = {day for path in REPORT_DIR.glob(f"{REPORT_TYPE}_*.json")
                 if len(path.stem.removeprefix(f"{REPORT_TYPE}_")) == 10
-                and path.stem.removeprefix(f"{REPORT_TYPE}_") <= (max(days) if days else "")
                 for day in _load_json(path).get("consumed_holdout_dates", [])}
+    # A late evaluation ledger can be newer than its fill dates. Consumption
+    # remains permanent even when an earlier cohort is revised or replayed.
     blockers = []
     if len({r.get("source_date") for r in calibration}) < 2 or len(calibration) < 3:
         blockers.append("independent_calibration_sample_floor")

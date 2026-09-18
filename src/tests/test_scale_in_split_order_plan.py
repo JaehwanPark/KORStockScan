@@ -2089,6 +2089,23 @@ def test_public_filled_outcome_and_unchanged_revision_do_not_repeat_grid(monkeyp
     assert len({r["attempt_id"] for r in again["outcome_revisions"]}) == 6
 
 
+def test_late_evaluation_cannot_reuse_consumed_earlier_fill_dates(monkeypatch, tmp_path):
+    _patch_dirs(monkeypatch, tmp_path)
+    rows = [
+        {"record_id": f"{day}:{idx}", "source_date": day,
+         "real_outcome_joined": True, "additional_mfe_mae_joined": True,
+         "outcome_available_at": f"{day}T15:00:00+09:00"}
+        for day in ("2026-07-02", "2026-07-03", "2026-07-06", "2026-07-07")
+        for idx in range(2)
+    ]
+    split_plan.REPORT_DIR.mkdir(parents=True)
+    ledger = split_plan.report_paths("2026-07-08")[0]
+    ledger.write_text(json.dumps({"consumed_holdout_dates": ["2026-07-06", "2026-07-07"]}))
+    _, _, partition = split_plan._partition_outcomes(rows)
+    assert partition["holdout_dates"] == ["2026-07-06", "2026-07-07"]
+    assert "holdout_already_consumed" in partition["blockers"]
+
+
 def test_existing_fill_late_terminal_rejoins_original_date(monkeypatch, tmp_path):
     data = _patch_dirs(monkeypatch, tmp_path)
     origin, day = "2026-07-07", "2026-07-08"
