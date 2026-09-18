@@ -36,3 +36,13 @@
 삭제 전 해당 파일의 열린 FD와 전용 실행 프로세스를 확인했다. 전용 report/candidate/CF/post-sim/real-attribution, sim/bounded-live 정책, runtime 상태, 전용 approval의 누적 파일 **279개·1,410,662 bytes**와 bytecode 3개를 삭제했다. 다른 전략의 공유 보고서/원천이나 immutable release는 삭제하지 않았다. 삭제 파일별 경로·크기·SHA는 [cleanup manifest](../../tmp/limit-down-retirement-20260919/cleanup.json)에 있다.
 
 후속 배포는 검증된 코드 commit으로 새 immutable release를 생성하고 공통 router의 미래 호출 선택만 교체한다. 기존 선택 배포본·독립 systemd source pin·실행 프로세스는 수정하거나 재시작하지 않는다. 선택·route·PID 소비의 최종 증거는 배포 후 아래에 기록한다. 폐기된 보고서를 복구·재생성하지 않는다.
+
+## 최종 커밋·배포 증거
+
+- 코드 commit/pushed main: `fcfd7b8e54bb5d286708fbb375958376d714ebf4`. 다른 세션의 compact 통합 commit을 포함한 fast-forward successor다.
+- 선택 release: `/home/ubuntu/KORStockScan-runtime-releases/limit-down-retirement-reviewed-20260919-fcfd7b8e5`; 선택 시각 `2026-09-19T07:52:58.025068+09:00`. 이전 선택 `/home/ubuntu/KORStockScan-runtime-releases/compact-ai-integrated-reviewed-20260919`는 보존했다.
+- 물리적 release 핵심 회귀 **6 passed**([배포 경로 검증](../../tmp/limit-down-retirement-20260919/tests-physical-release.log)); 검증 작업본과 배포 source hash 일치·tracked `src/deploy` clean·선택 reader PASS.
+- `postclose 9/17`, `preopen/start 9/21 --print-plan`의 root/commit 일치. 실제 wrapper·PREOPEN·기동 실행 아님. [선택/route/process receipt](../../tmp/limit-down-retirement-20260919/deployment.json).
+- 독립 삼성·저가주 unit의 확인한 source pin/ExecStart/MainPID는 변경 전후 동일하다. 선택 당시 main bot/scanner/postclose/PREOPEN 실행 consumer0, `actual_pid_consumed=false`다. 봇 재시작·주문·보고서 재생성·조기 PREOPEN은 수행하지 않았다.
+- cron 전체 `--check-cron`은 `cron_target_missing_or_duplicate`로 exit2다. 기존 Main 정기작업 제거에 따라 archive/controller/finalize/paired-replay/postclose/tuning target이 없고, predecessor/successor router source는 동일하다. 스케줄은 수정하지 않았으며 배포 선택을 정기 실행 보장으로 표시하지 않는다.
+- 전용 누적 산출물 재확인 **0개**: 선행 삭제279개·1,410,662 bytes/bytecode3개를 다시 생성하지 않았다. 공유 raw/DB/주문/체결/custody·rollback release는 보존한다. 폐기는 경제성 개선이나 자연 성과를 증명하지 않는다.
