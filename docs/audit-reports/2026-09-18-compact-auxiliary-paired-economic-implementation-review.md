@@ -26,3 +26,14 @@
 
 
 실제 제한 재생성에서 비교0건의 빈 portfolio가 `{}`/평가됨으로 표시되는 추가 결함을 발견했다. 빈 비교는 null/미평가로 수정하고, 정상 no-fill은 해당 날짜의 비용 차이를 포함한0과 구분한다. 새 계약 generation으로 최종 검증·immutable successor 배포·재생성을 수행한다. 최초 generation의 PASS를 최종 source의 증거로 재사용하지 않는다.
+
+
+## 최종 closure record
+
+- Source review/수정/재검증: **645 PASS**, compile·affected Ruff F/E9·두 wrapper bash-n·diff check·print-only parser PASS. Selected immutable source의 public compact orchestration8 PASS(32 deselected). 검증 원문은 `tmp/compact-auxiliary-paired-20260918/compact-final-tests.txt`, `pytest-selected-compact.txt`, `validation.json`을 따른다.
+- Atomic push: source `89cfb622f3c337d6ab156567aca24b50b8530703`를 origin/main 및 `review/compact-paired-economic-20260918`에 push했다. Selected managed root는 `/home/ubuntu/KORStockScan-runtime-releases/compact-auxiliary-paired-final-reviewed-20260918`; clean source/shared6·selector CAS·router print plan을 확인했다. 실제 Main restart/PID 전환은 실행하지 않았으며 actual_pid_consumed=false다. 배포 receipt는 `deployment.json`이다.
+- 제한 재생성: 실제 source **2026-09-17**, publication **2026-09-18**, effective **2026-09-21**. 자료21건을 대사했고 비교 가능0건, provider calls0, 판정은 `source_contract_blocked`/`incumbent_preserved`다. 제외는 손절 거리 결손11·자연 응답 계약 불일치9·후행 경로 미확정1이다. ΔEV·portfolio 일별 순익은 모두 **null**, 유효 비교 후 no-edge0건과 구분한다.
+- 다음 적용 정책: [9/21 Main policy](/home/ubuntu/KORStockScan/data/runtime/mechanistic_entry_policy/policy_2026-09-21.json), bundle `4d4bce68f1e27fe50afab4b24645406d469d701326a7bc86b91d2a121d737332`, `entry_machine_auxiliary_compact_v3` 보존. 기존 machine/AI 및9 scope가 유효 incumbent과 동일함을 확인했다. 신규 경제성 후보 승격0이며 dated carry 생성은 양수 EV 실적이 아니다.
+- 마지막 소비: calibration→optimizer→consumer→policy→Daily·EV·runtime approval·tower section→9/21 checklist→family strict의 동일 최종 generation을 확인했다. Family strict **PASS/issues0**, whole native DONE=false. 기존 summary의 unrelated 값과 원 status/generated_at, entry split의 원 보고서 SHA를 보존했다(`regeneration.json`). 9/17 원 native/resource 실패·다른 family·다음 PREOPEN/실제 PID는 closure로 위장하지 않는다.
+
+잔여 경제성 acceptance는 원 물리적 stop/plan/quote 계약, existing owner의 운영 청산·실제 비용·자본/독립 model 검증, reviewed runtime inference 원화 차이, current compact forward holdout과 적용 버전 자연 COMPLETED 비용 후 원장이다. Owner 모델 미지원은 시간이나 단순 표본 증가로 해소되지 않는다. ETA=null. 전체 legacy/holding 연구·native chain/PREOPEN·performance sweep·주문·외부 sync를 실행하지 않았다.
