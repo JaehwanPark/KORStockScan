@@ -540,3 +540,20 @@ def test_daily_and_strict_consume_same_section_without_touching_other_families(m
     consumed["scanner_lookup_attention_selection"]["source_section_sha256"] = "0" * 64
     (root / "threshold_cycle_2026-09-17.json").write_text(json.dumps(consumed))
     assert verifier._scanner_lookup_attention_status(report, payload, target_date="2026-09-17")["status"] == "fail"
+
+
+
+def test_production_native_decoder_has_no_dependency_on_retired_reports(monkeypatch, tmp_path):
+    from src.tests.test_scanner_lookup_attention_tuning import _observation_event
+    tuning = integrated_fixture(monkeypatch)
+    monkeypatch.setattr(tuning, "PREOPEN_DIR", tmp_path / "applied")
+    monkeypatch.setattr(tuning, "_latest_prior_policy", lambda *args: pytest.fail("retired campaign read"))
+    original = tuning._load_json
+    def no_retired_report(path):
+        assert "scanner_lookup_attention_tuning_" not in str(path)
+        return original(path)
+    monkeypatch.setattr(tuning, "_load_json", no_retired_report)
+    section = resource.integrated_selection_evaluation(date(2026, 9, 2), {"2026-09-02": [_observation_event()]})
+    assert section["lineage"]["valid_observation_count"] == 1
+    assert section["lineage"]["invalid_runtime_policy_provenance_count"] == 0
+    assert section["status"] == "source_gap"

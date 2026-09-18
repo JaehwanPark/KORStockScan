@@ -320,7 +320,7 @@ def _previous_krx_trading_date(value: date) -> date:
     raise ValueError("previous_krx_trading_date_unresolved")
 
 
-def _runtime_policy_expectation(observation_date: date) -> dict[str, Any]:
+def _runtime_policy_expectation(observation_date: date, *, receipt_only=False) -> dict[str, Any]:
     """Resolve whether the exact previous trading-day artifact required live use."""
 
     receipt_path = (
@@ -342,6 +342,9 @@ def _runtime_policy_expectation(observation_date: date) -> dict[str, Any]:
             "artifact_sha256": selected.get("policy_artifact_sha256"),
             "preopen_artifact_sha256": selected.get("preopen_artifact_sha256"),
         }
+
+    if receipt_only:
+        return {"state": "inactive", "reason": "immutable_preopen_missing_runtime_bonus_zero"}
 
     try:
         source_date = _previous_krx_trading_date(observation_date)
@@ -588,7 +591,7 @@ def collect_lineage(target: date, *, events_by_date=None) -> tuple[list[dict[str
                 runtime_policy_provenance_invalid = False
                 expectation = runtime_policy_expectation_cache.get(event_date)
                 if expectation is None:
-                    expectation = _runtime_policy_expectation(event_date)
+                    expectation = _runtime_policy_expectation(event_date, receipt_only=events_by_date is not None)
                     runtime_policy_expectation_cache[event_date] = expectation
                 if expectation.get("state") == "invalid" and event_in_policy_scope:
                     runtime_policy_provenance_invalid = True
