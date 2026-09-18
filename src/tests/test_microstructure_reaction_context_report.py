@@ -139,10 +139,12 @@ def test_daily_refresh_changes_only_modern_handoff_without_policy_replay(tmp_pat
     original = {'date': '2026-09-17', 'summary': {'real_pnl': None},
                 'apply_candidate_list': [{'family': 'existing_owner', 'hash': 'frozen'}],
                 'calibration_source_bundle': {'source_metrics': {'other_owner': {'valid': True}}}}
+    original['meta'] = {'pipeline_load': {'2026-09-17': {'event_family_projection': ['holding_flow_ofi_smoothing', 'scale_in_counterfactual', 'statistical_action_weight']}}}
     path.write_text(json.dumps(original))
     monkeypatch.setattr(daily, 'REPORT_DIR', tmp_path)
     daily.refresh_machine_evaluation_only('2026-09-17')
     actual = json.loads(path.read_text())
+    assert actual['meta'] == original['meta']
     assert actual['summary'] == original['summary']
     assert actual['apply_candidate_list'] == original['apply_candidate_list']
     assert actual['calibration_source_bundle']['source_metrics']['other_owner'] == {'valid': True}

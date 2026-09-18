@@ -31,6 +31,12 @@
 
 같은 성공 검증을 무조건 반복하거나 trading 전체 suite/성능 benchmark를 추가하지 않았다. 실제 broker/provider/알림·주문·full postclose/grid·과거 rollup 복원은 실행하지 않는다. scope gate 통과는 자연 정책 소비/실현 성과 acceptance가 아니다.
 
+## 제한 갱신 중 발견한 추가 결손과 수리
+
+처음 제한 갱신의 원본 보존 검사에서 `_read_json_dict`가 `current_report_view`를 적용하여 microstructure 외 historical pipeline metadata까지 정리하는 결손을 검출했다. canonical daily는 보존한 원 byte로 복구했고 후보/정책 발행은 없었다. 진단-only 경로만 plain JSON read로 바꿔 다른 section/meta를 그대로 보존하도록 수정했다. 실제 retired projection metadata fixture를 추가해6 PASS이며, 새 immutable 보완 릴리스에서 갱신한다. 증거: `daily-refresh-defect.json`, `preserve-metadata-tests.log`.
+
+사전 cron 검사는 장후 target 미등록으로 실패했다. PREOPEN은 routed 등록 상태지만 postclose/controller/finalize/tuning 대상은 이번 범위에서 복원하지 않는다. 따라서 이후 자연 장후 acceptance는 schedule 결손이 먼저 해소되어야 하며 단순 대기 ETA는 없다. 현재 승인 범위는 source 선택 배포와 직접 제한 진단 갱신이다.
+
 ## 배포와 결과 갱신 receipt
 
 검증 후 관련 source를 fast-forward 커밋·푸시하고 clean managed release로 선택한다. 실행 중 worker는 기존 root로 계속 수행한다. 전용 작업은 다음 정상 routed postclose에서 제거되며 별도 machine attribution 서비스는 중단하지 않는다. 구 선택과 release root는 rollback 증거로 보존한다. 실제 선택 commit/root/router·push·원천 보호·PID 상태는 `deployment.json`에 기록한다. 현재 worker 또는 trading bot 재시작, cron 복원, dated policy/env/lock 재발행은 수행하지 않는다.

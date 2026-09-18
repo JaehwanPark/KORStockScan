@@ -21067,9 +21067,9 @@ def refresh_machine_evaluation_only(target_date: str) -> dict:
 
     path = report_path_for_date(target_date)
     generation = path.stat()
-    report = _read_json_dict(path)
+    report = json.loads(path.read_text(encoding="utf-8"))
     source_path = REPORT_DIR / "microstructure_reaction_context" / f"microstructure_reaction_context_{target_date}.json"
-    source = _read_json_dict(source_path)
+    source = json.loads(source_path.read_text(encoding="utf-8"))
     if report.get("date") != target_date or source.get("date") != target_date:
         raise ValueError("machine_daily_handoff_exact_date_missing")
     summary = microstructure_summary_contract(source.get("summary") or {})
