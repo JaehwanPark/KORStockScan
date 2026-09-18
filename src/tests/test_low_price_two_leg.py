@@ -5366,3 +5366,36 @@ def test_paired_handoff_binds_declared_schema_and_preserves_research_on_carry(tm
     candidate["source_report_schema"] = "foreign_schema"
     atomic_write_json(cp, candidate)
     assert tuner.paired_search_handoff(target, output_dir=tmp_path, candidate_dir=tmp_path)["status"] == "source_gap"
+
+
+def test_calibration_full_gain_without_half_stability_never_freezes_candidate(tmp_path, monkeypatch):
+    from src.engine.monitoring import low_price_two_leg_tuning as tuner, low_price_two_leg_entry_spot_research as spot, episode_prospective_research as prospective
+    from src.trading.low_price_two_leg import policy_runtime as runtime
+    pid, source = "youngone_morning", date(2026, 9, 17)
+    policies = runtime.baseline_policies_for_target_date(source)
+    report = {"target_date": str(source), "source_runtime_policy_binding": {"status": "ready", "policies": policies},
+        "source_quality_preflight": {"tuning_input_allowed": True}, "daily": {"profiles": {pid: {"source_quality": "pass"}}},
+        "windows": {tuner.POST_APPLY_WINDOW_NAME: {pid: {"rows": [{"source_quality": "pass", "legs": [{"completed": True,
+            "contract_valid": True, "profit_price_source": "broker_target_fill_price", "net_profit_pct": .1}]}],
+            "summary": {"broker_priced_completed_legs": 6, "source_valid_observation_days": 19, "held_or_unresolved_legs": 0}}}}}
+    calls = []
+    def evaluate(candidate, contexts, windows, **kwargs):
+        is_baseline = not calls
+        calls.append(candidate)
+        return [{"policy_identity": spot.policy_identity(candidate.public()), "source_valid_observation_days": len(days),
+            "observation_dates": [str(day) for day in days], "cost_pct": spot.COST_PCT,
+            "economic_replay_contract": spot.ECONOMIC_REPLAY_CONTRACT, "metric_contract": spot.ECONOMIC_METRIC_CONTRACT,
+            "held_legs": 0, "carry_in_held_legs": 0, "custody_resolution_required": False,
+            "completed_legs": 8 if index == 0 else 4, "signal_episodes": 6,
+            "notional_weighted_ev_pct": .1 if is_baseline else .2 if index == 0 else .05,
+            "cost_adjusted_net_profit_krw_per_source_valid_observation_day": 1. if is_baseline else 2. if index == 0 else .5}
+            for index, days in enumerate(windows)]
+    monkeypatch.setattr(spot, "_evaluate_candidate_windows", evaluate)
+    monkeypatch.setattr(prospective, "frozen_research", lambda *args, **kwargs: pytest.fail("unstable calibration must not freeze"))
+    from datetime import timedelta
+    contexts = {source-timedelta(days=n): object() for n in range(60)}
+    search = tuner._paired_economic_search(report, context_loader=lambda *args: (contexts, "a"*64), selection_dir=tmp_path)
+    diagnostics = search["profiles"][pid]["calibration_diagnostics"]
+    assert diagnostics and all(d["comparison"]["economic_superiority_confirmed"] for d in diagnostics)
+    assert all(not d["calibration_stability_passed"] for d in diagnostics)
+    assert search["frozen_selection"] is None and search["selected_profile"] is None

@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | A0–A1 | native dated state/history·actual cost/cohort·final byte/dependency admission, absent historical profile row 수리 | 61profile 대사; exact/fixed 비용과 held/manual 구분 |
 | A2 | 이미 조회한 completed bars/state/order transition의 공개 pipeline lossless stage, native final stage 선언; 기존 등록 actual seed→이미 받은 호가 writer 연결 | 과거 없는 durable 관측을 복원하지 않음; 신규 호가 subscription/API 없음 |
-| A3 | actual5일/8broker 완료leg 조건부, 기존 두 축 bound·calibration만 최대2대안, profile/axis1개 고정 미래30/16일; 양측 native BBO/일별 자본 및 실제 terminal 대사 | eligible0으로 이번 paired replay0; 미래 실제 source 유입 필요 |
+| A3 | actual5일/8broker 완료leg 조건부, 기존 두 축 bound·calibration만 최대2대안, profile/axis1개 고정 미래30/16일; 양측 native BBO/일별 자본 및 실제 terminal 대사 | Kakao actual floor 통과·기존 distinct calibration1개; 모델 carry/native proof로 최종 승격 보류 |
 | A4 | v4 검증·actual row/summary/baseline hash 재대사·native promotion proof 재계산; legacy v3 subset retired 유지 | 선언 ready/CF price touch로 real 승격 불가; synthetic positive component와 forged rejection 구분 |
 | A5 | 공통 PREOPEN 한 번·CLI 공통 lock·atomic/idempotent frozen file·profile fallback·기존 loader, same-stage guard·소비된 candidate 재봉인 차단 | prepared9/21 보존 loader PASS; 정상7:35 PREOPEN 이후 service/preflight 소비 |
 | A6 | EV/runtime/Daily brief·tower/checklist generation·strict/controller bounded handoff, 기존 post-apply hash/cohort·rollback carry 재사용 | whole DONE 외부 실패 보존; 자연 applied/PID/주문/경제성 별도 OPEN |
@@ -64,3 +64,9 @@ Source commit `8ff8634a45fea435539fd04866abd3ab898c48d5`를 remote main/review b
 Clean release 최종 strict는18issue FAIL(`strict-release-final.json`)이며 actual candidate/EV/runtime·tower/checklist source generation mismatch 및 drought stale receipt는0이다. 외부 AI correction/calibration·expanded contract·기존 entry policy/research closed loop·전역 predecessor/fail marker·OFF swing/strategy scope가 남는다. Controller blocked 상태를 보존한다. Source equivalence상 이번 signal-policy 검사는 mutation 승격 전용이고 현재 mutation0 native 인계에는 영향이 없어 이18issue receipt를 재사용한다. 후속 bound source의 동일 handoff/준비 policy/loader 검증과 selected release/template 경로는 `deployment.json`의 최종 source_commit을 따른다.
 
 최종 future root: `/home/ubuntu/KORStockScan-runtime-releases/low-price-actual-paired-bound-reviewed-20260919`. 초기8ff source 및 selector 백업을 보존하고 재리뷰 보완source로 미래 호출만 갱신한다. 자연 실행/정책 적용/실제 EV 개선 Acceptance는 동일 stable ID9/21 OPEN이다.
+
+## LP-B 재대사에 따른 기존 경제 설명 정정
+
+위의 “모든 profile 최대6leg·eligible0·replay0”는 잘못된 해석이다. Frozen v9에서 kakao_late_morning은 실제8leg/20일/epoch unresolved0이며 distinct calibration1개가 있었다. 모델 custody disposition을 actual held로 오인했다. 이후 applied 수동 journal을 과거 actual 행에 연결한 v10에서는 연구2profile·distinct3개를 계산했고, 보조 원래 목표 carry CF3개에서도 순익/day가 개선되지 않았다. Actual floor와 최종 promotion을 구분한다.
+
+13역사행/20leg의 receipt projection으로 카카오 오전·정오의 미청산 표시를 바로잡았으며 수동 청산 손실도 복원했다. 역사 late-morning8/18의 미확정2leg는 exact closing source가 없어 현재 flat/epoch0과 별도로 남긴다. 최신 근거·연결·source release는 [후속 종결 리뷰](2026-09-19-low-price-exploration-manual-close-implementation-review.md)를 따른다. 기존 receipt는 원본과 이전 판단의 이력으로 보존한다.

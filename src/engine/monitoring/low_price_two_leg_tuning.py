@@ -2286,6 +2286,10 @@ def _paired_economic_search(report, *, context_loader=None, selection_dir=CANDID
                 "evidence_role": "CF_calibration_unit_quantity_one_not_actual_PnL", "native_per_leg_quantity": 10,
                 "calibration_sample_passed": _calibration_ready(*outcome),
                 "calibration_dates": [str(day) for day in cal], "validation_usage": "calibration_only_no_holdout_read"}
+            diagnostic["calibration_stability_comparisons"] = [paired_economics(before, after) for before, after in zip(current[1:], outcome[1:])]
+            diagnostic["calibration_stability_passed"] = all(
+                item["economic_superiority_confirmed"] and half["completed_legs"] >= 3
+                for item, half in zip(diagnostic["calibration_stability_comparisons"], outcome[1:]))
             proof["calibration_diagnostics"].append(diagnostic)
             if comparison.get("economic_comparison_status") != "distinct_resolved_economic_pair":
                 # Existing original-target carry model is a separate price-touch
@@ -2297,7 +2301,7 @@ def _paired_economic_search(report, *, context_loader=None, selection_dir=CANDID
                     "challenger": _economic_brief(carry_challenger), "comparison": paired_economics(carry_baseline, carry_challenger),
                     "evidence_role": "original_target_continuation_price_touch_CF_report_only",
                     "ranking_usage": False, "runtime_effect": False}
-            if comparison["economic_superiority_confirmed"] and comparison["ev_uplift_pct_point"] >= MIN_NOTIONAL_EV_UPLIFT_PCT and _calibration_ready(*outcome):
+            if comparison["economic_superiority_confirmed"] and comparison["ev_uplift_pct_point"] >= MIN_NOTIONAL_EV_UPLIFT_PCT and _calibration_ready(*outcome) and diagnostic["calibration_stability_passed"]:
                 ranked.append((comparison["net_profit_uplift_krw_per_observation_day"], pid, axis, challenger.public(), baseline.public(), content_sha))
         comparisons = [item["comparison"] for item in proof["calibration_diagnostics"]]
         proof["disposition"] = ("self_comparison" if not comparisons else "measured_no_edge" if all(item.get("economic_comparison_status") == "distinct_resolved_economic_pair" for item in comparisons) else "hold_inventory_custody")
@@ -2672,6 +2676,7 @@ def render_markdown(report: dict, candidate: dict) -> str:
     text = _render_actual_markdown(report, candidate)
     lines = ["", "## Actual-conditioned paired economic search", "",
         f"Selection: {candidate.get('selection_status', candidate.get('decision'))}; source={report['target_date']}; effective={candidate.get('effective_date')}",
+        "Actual counts below belong to the applied-policy epoch. Historical unresolved rows in cumulative audit do not prove current inventory. Model custody is separate from actual custody.",
         f"Stages: {report.get('paired_economic_search', {}).get('stage_counts', {})}",
         "", "| Profile | Research / Promotion | Actual completed legs / days / held | Calibration distinct comparisons |", "|---|---|---|---|"]
     for pid, proof in (report.get("paired_economic_search") or {}).get("profiles", {}).items():

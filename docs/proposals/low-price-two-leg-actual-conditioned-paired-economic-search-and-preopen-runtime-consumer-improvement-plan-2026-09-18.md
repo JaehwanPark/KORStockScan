@@ -172,6 +172,10 @@ Future 구현 closure에는 선택 commit/release, targeted receipts, source dat
 
 LP-A0–A7은 기존 모듈과 두 wrapper에서 구현했다. Actual report v9/candidate v4, 실제 applied baseline, 조건부 두 축 calibration, 사전 고정 미래30/16일 독립 window, 양측 execution·일별 native capital·실제 broker terminal 재현·기존 family authority 재검산, lossless native observation과 등록된 실제 profile seed의 기존 호가 소비, 단일 lock/atomic/freeze PREOPEN 발행 및 후행 brief 결속을 닫았다. V3 subset 승격·수량/target 변경·재고 재계산은 허용하지 않는다.
 
-9/17 native 61profile은 hold_sample24/valid_empty_no_fill19/source_gap9/hold_inventory_custody9로 대사된다. Eligible0이므로 추가 CF replay0이며 검증된 개선0을 no-edge로 해석하지 않는다. Source9/17·publication9/18·effective9/21의 mutation0 보존 candidate와 격리된 prepared applied/loader를 검증했다. 실제9/21 applied 파일 발행은 정상 PREOPEN에 맡긴다. 자세한 검사·선택 commit/release·service pin·전체 chain 외부 blocker는 owning closure를 따른다.
+9/17 native 61profile은 hold_sample24/valid_empty_no_fill19/source_gap9/hold_inventory_custody9로 대사된다. Frozen v9의 카카오 actual8leg/20일/epoch unresolved0과 distinct calibration1개를 재확인했다. 기존 eligible0/replay0 해석은 모델 carry와 actual floor를 혼동한 것으로 정정한다. 최종 승격0이며 no-edge로 일반화하지 않는다. Source9/17·publication9/18·effective9/21의 mutation0 보존 candidate와 격리된 prepared applied/loader를 검증했다. 실제9/21 applied 파일 발행은 정상 PREOPEN에 맡긴다. 자세한 검사·선택 commit/release·service pin·전체 chain 외부 blocker는 owning closure를 따른다.
 
 9/19 KST checklist는 존재하지 않는다. 주말 임시 owner를 신설하지 않고 사용자 명시 승인과 기존 LowPriceExpandedResearchRepair0918의 Acceptance를 보존한다. [9/21 자연 PREOPEN/PID/체결/완료 비용 경제성](../checklists/2026-09-21-stage2-todo-checklist.md)은 동일 ID로 이관했으며 새 구현 완료로 계산하지 않는다.
+
+## 13. 후속 경제 탐색 및 수동 청산 정정
+
+[LP-B0–B6](low-price-two-leg-exploration-promotion-gate-separation-and-economic-evidence-completion-plan-2026-09-19.md)을 구현하고 bounded native 재생성을 마쳤다. Applied manual receipt를 역사 actual 행에 결속하고 research/promotion·actual/model custody를 분리했다. 자세한 수치와 미래 배포는 [종결 리뷰](../audit-reports/2026-09-19-low-price-exploration-manual-close-implementation-review.md)를 따른다. 자연 경제성 Acceptance는 같은 stable ID로 남는다.
