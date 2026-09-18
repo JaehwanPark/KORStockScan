@@ -20848,6 +20848,20 @@ def render_cumulative_threshold_cycle_markdown(report: dict) -> str:
 
 
 def save_cumulative_threshold_cycle_report(report: dict) -> tuple[Path, Path]:
+    # Carry the current family assessment without turning model deltas into
+    # cumulative actual PnL or rescanning the historical input windows.
+    source = report_path_for_date(str(report.get("date")))
+    if source.is_file():
+        raw = source.read_bytes()
+        daily = json.loads(raw)
+        if (daily.get("economic_evaluation") or {}).get("contract_version") == ECONOMIC_EVALUATION_CONTRACT:
+            errors = economic_report_contract_errors(daily)
+            if errors:
+                raise ValueError("cumulative_economic_source_invalid:" + ",".join(errors))
+            report["economic_evaluation"] = daily["economic_evaluation"]
+            report["economic_source_binding"] = {"path": str(source),
+                "source_date": daily["date"], "sha256": hashlib.sha256(raw).hexdigest(),
+                "role": "current_family_model_assessment_not_cumulative_actual_pnl"}
     json_path, md_path = cumulative_threshold_report_paths(str(report.get("date")))
     json_path.parent.mkdir(parents=True, exist_ok=True)
     json_path.write_text(

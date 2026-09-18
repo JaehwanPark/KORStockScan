@@ -267,3 +267,7 @@ main/controller/tuning/widget/replay/machine/archive의 predecessor terminal을 
 보고의 첫 문장은 **운영 종결 / 분석 유효성 / 경제성 선정 / 구조 차단**을 각각 요약한다. 운영은 `진행 중|정상종결|실패|미확인`, 분석은 유효/부족/무효 행 수, 경제성은 선정/유효 carry·reject/증거 부족, 구조 차단은 직접 owner와 원인으로 제시한다. 정상 운영 종결과 수익 개선을 한 GREEN으로 합치지 않는다.
 
 이어 확정 결함·source exclusion·구조적 blocker부터 `판정→직접 근거→다음 조치`로 보고한다. 자연 maturity/유입 대기에는 실제 수와 다음 경계를, 불가능하거나 불명인 경로에는 ETA null과 closure test를 남긴다. 이전 완료·PID·배포 이력, 일반 원칙 반복과 무관한 후보는 나열하지 않는다. 원래 OPEN ID를 재사용하고 전체 Acceptance를 만족한 행만 닫는다. 문서/checklist 기록을 바꿨으면 print-only parser·링크/owner·diff를 검증하고 외부 sync는 실행하지 않는다.
+
+### Daily paired 경제성 bounded 갱신
+
+사용자가 해당 구현/갱신을 승인했고 affected review와 targeted 검증이 끝난 경우에만 기존 `src.engine.daily_threshold_cycle_report --date SOURCE_DATE --refresh-economic-evaluation-only`를 사용한다. 이 경로는 최신 entry/scale-in producer·가격 frozen proof와 기존 family row를 소비하고 raw/DB/provider를 다시 조회하지 않는다. 입력·정책·모델/비용·holdout·평가기 코드 SHA가 같으면 이전 평가 SHA/as-of를 재사용하며 Daily predecessor를 byte SHA로 보존한다. Calibration 저장과 EV/runtime 요약, 기존 compact finalize→strict handoff를 같은 원 source date로 연결한다. 동일 정책/비대상 체결/미성숙/결손을 개선 검증으로 집계하지 않는다. 다음 trading effective 정책의 기존 baseline 보존은 신규 challenger 개선이나 실제 PID 소비가 아니다. 개별 family closure는 전체 native DONE을 대신하지 않는다.

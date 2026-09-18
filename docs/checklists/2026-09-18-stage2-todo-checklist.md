@@ -129,3 +129,14 @@
 사용자 지시로 `scalping.micro_reversion.ai_quality_cycle` 장후 실행기·R2/R3 인계·legacy/current-axis 전용 런타임 및 파생 산출물을 제거한다. 별도 OPEN 복구 작업을 만들지 않는다. 현행 compact·AI 원천/라벨·주문/체결·공유 경제성 owner는 보존한다. 구현·검증·삭제 증거는 [폐기 리뷰](../audit-reports/2026-09-18-ai-quality-cycle-retirement-review.md)를 따른다. 코드 선택·실제 PID 소비와 장후 전체 DONE은 별도다.
 
 후속 소비 경로 리뷰: 공용 consumer의 퇴역 입력·factorial 재생성 안내와 고아 standalone optimizer CLI를 제거했다. 전용 산출물 추가 생성/삭제 대상0개, 현행 compact 소비는 보존한다. 최신 검증·commit/push·선택 배포 증거는 같은 폐기 리뷰 및 `tmp/ai-quality-cycle-consumer-closure-20260918/` receipts를 따른다. 신규 OPEN 복원 owner·실제 PID/경제성 수락은 생성하지 않는다.
+
+## Daily threshold 경제성 검증
+
+- [ ] `[ThresholdDailyEVReport0918] daily EV real/sim/combined split 및 자동 반영 결과 확인` (`Due: 2026-09-18`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~16:45`, `Track: RuntimeStability`)
+  - Source: [tuning_performance_control_tower_2026-09-17.json](/home/ubuntu/KORStockScan/data/report/tuning_performance_control_tower/tuning_performance_control_tower_2026-09-17.json), [threshold_cycle_ev_2026-09-17.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-09-17.json)
+  - 판정 기준: tuning performance control tower를 먼저 보고 `live_auto_apply_ready`, `sim_auto_approved`, post-apply attribution, EV authority를 분리해 확인한다.
+  - 금지: sim/combined EV만으로 broker execution 품질이나 live 전환을 확정하지 않는다.
+  - 다음 액션: 다음 장전 apply 입력으로 쓸 수 있는 항목과 hold_sample/freeze 항목을 분리한다.
+
+
+  - Daily paired 구현 Closure: [D0–D6 계획](../proposals/daily-threshold-cycle-report-paired-economic-search-and-consumer-improvement-plan-2026-09-18.md), [owning review](../audit-reports/2026-09-18-daily-paired-economic-implementation-review.md), `tmp/daily-paired-economic-20260918/`. 사용자 구현·반복 리뷰/보완·commit/push·배포·제한 장후 재생성 승인에 따라 방향/경제성/권한·동일 정책·미성숙/원천 결손을 분리하고 기존 paired proof·fingerprint 재사용·Daily/calibration→EV/summary→PREOPEN/strict를 연결했다. Source9/17→publication9/18→next trading9/21 정책과 자연 적용은 별도다. 원천 불변이면 grid/provider 재실행 없이 원 as-of/SHA를 보존한다. 기존 baseline/operator/hard safety 유지; 경제성 미준비는 null/기존 정책 보존이다. PREOPEN/PID/실제 cost-adjusted 개선 Acceptance는 OPEN이며 기존 stable ID/History를 보존한다.
