@@ -1030,6 +1030,33 @@ def _operating_entry_fixture():
     return seed,arm,depths
 
 
+def test_cancel_wait_verified_no_fill_and_forged_terminal_rejected():
+    seed,arm,depths=_operating_entry_fixture()
+    seed['legs'][0]['price']=10000
+    context=seed['operating_contract'];context['cancel_wait_profile']='standard'
+    context['sha256']=owner.digest({k:v for k,v in context.items() if k!='sha256'})
+    seed['seed_sha256']=owner.digest({k:v for k,v in seed.items() if k!='seed_sha256'})
+    _,trades=entry_native_path(seed)
+    start=datetime.fromisoformat(seed['observed_at'])
+    leg=dict(quantity=10,submitted_price=10000,submitted_at=seed['observed_at'],
+             terminal_at=(start+timedelta(seconds=10)).isoformat(),fills=[],terminal_reconciled=True)
+    result=mod.replay_cancel_wait_arm(seed,5,[leg],depths,trades,incumbent_timeout=10,
+        cancel_model=dict(validated=True,cancel_ack_delay_sec=1.,late_fill_window_sec=0.))
+    assert result['status']=='completed_source_only',result
+    assert result['net_pnl_krw']==0. and result['reserve_krw_minutes']>0
+    race={**leg,'fills':[dict(observed_at_kst=(start+timedelta(seconds=5.5)).isoformat(),filled_qty=1,fill_amount=10000)]}
+    rejected_race=mod.replay_cancel_wait_arm(seed,5,[race],depths,trades,incumbent_timeout=10,
+        cancel_model=dict(validated=True,cancel_ack_delay_sec=1.,late_fill_window_sec=0.))
+    assert rejected_race['blocker']=='cancel_wait_ack_late_fill_race_unproven'
+    forged={**arm,'modeled_filled_qty':0,'modeled_fill_events':[],
+            'cancel_wait_terminal':result['cancel_wait_terminal']}
+    rejected=mod.replay_operating_entry_arm(seed,forged,depths)
+    assert rejected['status']=='unsupported_scope'
+    broken=deepcopy(depths);broken[3]['sequence_epoch']=2
+    assert mod.replay_cancel_wait_arm(seed,5,[leg],broken,trades,incumbent_timeout=10,
+        cancel_model=dict(validated=True,cancel_ack_delay_sec=1.,late_fill_window_sec=0.))['status']=='unsupported_scope'
+
+
 def test_operating_entry_executes_existing_full_policy_and_cost_owner():
     from src.engine.trade_profit import calculate_net_realized_pnl
     seed,arm,depths=_operating_entry_fixture()

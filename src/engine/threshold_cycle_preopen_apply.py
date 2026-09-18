@@ -6819,14 +6819,46 @@ def _entry_cancel_wait_standalone_decision(
     report_path = (
         ENTRY_CANCEL_WAIT_TUNING_DIR / f"entry_cancel_wait_tuning_{source_date}.json"
     )
-    report = _load_json(report_path) if report_path.exists() else {}
-    tuning_allowed = source_date < "2026-09-17" or (
-        report.get("economic_tuning_input_allowed") is True
-        and report.get("source_quality_status") == "pass"
-    )
+    report = _load_json(report_path, sanitize=False) if report_path.exists() else {}
+    policy_path=ENTRY_CANCEL_WAIT_TUNING_DIR / f"entry_cancel_wait_policy_{source_date}.json"
+    if not report and target_date >= "2026-09-17":
+        # A bounded delayed publication keeps its original evaluation date.
+        candidates=[]
+        for path in ENTRY_CANCEL_WAIT_TUNING_DIR.glob('entry_cancel_wait_policy_????-??-??.json'):
+            if path.is_symlink():continue
+            candidate=_load_json(path,sanitize=False)
+            if candidate.get('publication_date')==source_date and candidate.get('effective_date')==target_date:
+                candidates.append((path,candidate))
+        if len(candidates)==1:
+            policy_path,candidate=candidates[0]
+            report_path=ENTRY_CANCEL_WAIT_TUNING_DIR / f"entry_cancel_wait_tuning_{candidate['source_date']}.json"
+            report=_load_json(report_path,sanitize=False)
+    tuning_allowed = source_date < "2026-09-17" and target_date < "2026-09-17"
+    policy_env = {}
+    cancel_wait_handoff = {"available":False,"reason":"executable_policy_missing"}
+    if target_date >= "2026-09-17" and report.get("schema_version") == 2:
+        from src.engine.automation import entry_cancel_wait_tuning as tuner
+        try:
+            valid,reason=tuner.verify_report(report)
+            policy=json.loads(policy_path.read_text())
+            if (not valid or policy_path.is_symlink() or policy.get('source_date')!=report.get('date')
+                or policy.get('publication_date',policy.get('source_date'))!=source_date
+                or policy.get('effective_date')!=target_date or policy.get('report_proof_sha256')!=report.get('proof_sha256')
+                or policy.get('sha256')!=tuner._digest({k:v for k,v in policy.items() if k!='sha256'})
+                or policy.get('scope_overrides')!=report.get('scope_overrides')
+                or policy.get('previous_thresholds')!=report.get('previous_thresholds')):
+                raise ValueError(reason or 'cancel_wait_policy_date_proof_or_scope_invalid')
+            tuning_allowed=report.get('economic_tuning_input_allowed') is True and report.get('source_quality_status')=='pass'
+            policy_env=dict(KORSTOCKSCAN_ENTRY_CANCEL_WAIT_POLICY_FILE=str(policy_path.resolve()),
+                KORSTOCKSCAN_ENTRY_CANCEL_WAIT_POLICY_SHA256=hashlib.sha256(policy_path.read_bytes()).hexdigest())
+            cancel_wait_handoff=dict(available=True,source_date=report['date'],publication_date=source_date,target_date=target_date,
+                policy_file=str(policy_path),policy_sha256=policy_env['KORSTOCKSCAN_ENTRY_CANCEL_WAIT_POLICY_SHA256'],
+                disposition=policy['disposition'],scope_overrides=policy['scope_overrides'],actual_pid_consumed=False)
+        except (OSError,ValueError,TypeError,KeyError) as exc:
+            cancel_wait_handoff['reason']=str(exc)
     values = (
         report.get("recommended_thresholds")
-        if tuning_allowed and isinstance(report.get("recommended_thresholds"), dict)
+        if tuning_allowed and target_date < "2026-09-17" and isinstance(report.get("recommended_thresholds"), dict)
         else {}
     )
     _previous_families, previous_manifest = (
@@ -6870,6 +6902,7 @@ def _entry_cancel_wait_standalone_decision(
         "KORSTOCKSCAN_ENTRY_CANCEL_WAIT_ATTRIBUTION_REAL_MIN_SEC": "60",
         "KORSTOCKSCAN_ENTRY_CANCEL_WAIT_ATTRIBUTION_STALE_MAX_SEC": "30",
         **{env_keys[profile]: str(value) for profile, value in selected_values.items()},
+        **(policy_env if not explicit_off else {}),
     }
     decision = {
         "family": ENTRY_CANCEL_WAIT_FAMILY,
@@ -6894,6 +6927,7 @@ def _entry_cancel_wait_standalone_decision(
         "economic_tuning_input_allowed": tuning_allowed,
         "economic_source_gap": report.get("economic_source_gap") if not tuning_allowed else None,
         "selected_thresholds": selected_values,
+        "entry_cancel_wait_policy_handoff": cancel_wait_handoff,
         "env_overrides": env_overrides,
         "excluded_consumers": [
             "ADM",

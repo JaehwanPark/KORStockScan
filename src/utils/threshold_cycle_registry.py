@@ -17,6 +17,7 @@ THRESHOLD_STAGE_FAMILY_MAP = {
     "entry_execution_sizing_plan_block": "dynamic_entry_price_resolver",
     "entry_quantity_leg_four_arm_evaluation": "dynamic_entry_price_resolver",
     "order_leg_sent": "dynamic_entry_price_resolver",
+    "entry_cancel_wait_submission": "dynamic_entry_price_resolver",
     "order_leg_fail": "dynamic_entry_price_resolver",
     "order_leg_no_response": "dynamic_entry_price_resolver",
     "order_bundle_failed": "dynamic_entry_price_resolver",

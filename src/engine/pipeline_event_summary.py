@@ -114,7 +114,12 @@ EXECUTION_SUMMARY_STAGES = frozenset({
     "entry_quantity_leg_four_arm_evaluation", "order_leg_sent", "order_leg_fail",
     "order_leg_no_response", "order_bundle_submitted", "order_bundle_failed",
 })
-PRODUCER_SUMMARY_STAGES = SUMMARY_STAGES | HIGH_VOLUME_OBSERVATION_STAGES | EXECUTION_SUMMARY_STAGES
+CANCEL_WAIT_SUMMARY_STAGES = frozenset({
+    "entry_cancel_wait_submission", "entry_order_cancel_requested",
+    "entry_order_cancel_confirmed", "entry_order_cancel_failed",
+})
+LOSSLESS_ORDER_STAGES = EXECUTION_SUMMARY_STAGES | CANCEL_WAIT_SUMMARY_STAGES
+PRODUCER_SUMMARY_STAGES = SUMMARY_STAGES | HIGH_VOLUME_OBSERVATION_STAGES | LOSSLESS_ORDER_STAGES
 
 NUMERIC_FIELD_LIMIT = 64
 SAMPLE_HASH_LIMIT = 2
@@ -562,7 +567,7 @@ class _SummaryAggregate:
             "evidence_hash_sum": f"{self.evidence_hash_sum:064x}",
             **({"execution_projection_identity_contract": "lossless_execution_projection_v1",
                 "execution_projection_hash_sum": f"{self.execution_projection_hash_sum:064x}"}
-               if self.stage in EXECUTION_SUMMARY_STAGES else {}),
+               if self.stage in LOSSLESS_ORDER_STAGES else {}),
             "first_seen": (self.first_seen.isoformat() if self.first_seen else None),
             "last_seen": (self.last_seen.isoformat() if self.last_seen else None),
             "metric_role": "ops_volume_diagnostic",
@@ -703,7 +708,7 @@ def _summary_event_from_payload(
         raw_offset_start=line_start,
         raw_offset_end=line_end,
         execution_projection_hash=(int(execution_projection_identity(payload), 16)
-            if stage in EXECUTION_SUMMARY_STAGES else 0),
+            if stage in LOSSLESS_ORDER_STAGES else 0),
         evidence_hash=int.from_bytes(
             hashlib.sha256(
                 json.dumps(

@@ -1790,6 +1790,12 @@ wait_for_report_artifact \
   "$PROJECT_DIR/data/report/entry_cancel_wait_tuning/entry_cancel_wait_tuning_${TARGET_DATE}.json" \
   "$PROJECT_DIR/data/report/entry_cancel_wait_tuning/entry_cancel_wait_tuning_${TARGET_DATE}.md" \
   "entry_cancel_wait_tuning"
+if [[ "$TARGET_DATE" > "2026-09-16" ]]; then
+  wait_for_report_artifact \
+    "$PROJECT_DIR/data/report/entry_cancel_wait_tuning/entry_cancel_wait_policy_${TARGET_DATE}.json" \
+    "$PROJECT_DIR/data/report/entry_cancel_wait_tuning/entry_cancel_wait_tuning_${TARGET_DATE}.md" \
+    "entry_cancel_wait_policy"
+fi
 wait_for_report_artifact \
   "$PROJECT_DIR/data/report/threshold_cycle_cumulative/threshold_cycle_cumulative_${TARGET_DATE}.json" \
   "$PROJECT_DIR/data/report/threshold_cycle_cumulative/threshold_cycle_cumulative_${TARGET_DATE}.md" \

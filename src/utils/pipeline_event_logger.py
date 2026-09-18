@@ -18,7 +18,7 @@ from src.utils.logger import log_error, log_info
 from src.utils.threshold_cycle_registry import threshold_family_for_stage
 from src.engine.pipeline_event_summary import (
     HIGH_VOLUME_OBSERVATION_STAGES,
-    EXECUTION_SUMMARY_STAGES,
+    LOSSLESS_ORDER_STAGES,
     execution_projection_identity,
     HIGH_VOLUME_SUMMARY_FIELD_PRIORITY,
     ProducerSummaryCompactor,
@@ -413,6 +413,8 @@ def _fields_hash(fields: dict[str, str]) -> str:
 def _project_fields_for_compact_stream(
     stage: str, fields: dict[str, str]
 ) -> dict[str, str]:
+    if stage in LOSSLESS_ORDER_STAGES:
+        return fields
     if stage in {"entry_ai_economic_plan_observed", "entry_ai_economic_source_gap",
                  "entry_ai_economic_decision_available",
                  "entry_execution_sizing_plan", "entry_execution_sizing_plan_block",
@@ -799,7 +801,7 @@ def emit_pipeline_event(
             "emitted_at": event_payload["emitted_at"],
             "emitted_date": event_payload["emitted_date"],
         }
-        if safe_stage in EXECUTION_SUMMARY_STAGES:
+        if safe_stage in LOSSLESS_ORDER_STAGES:
             compact_payload["execution_source_event_sha256"] = execution_projection_identity(event_payload)
         compact_line = (
             json.dumps(
@@ -830,7 +832,7 @@ def emit_pipeline_event(
                     _threshold_cycle_event_path(event_payload["emitted_date"]),
                     compact_line,
                 )
-                if safe_stage in EXECUTION_SUMMARY_STAGES:
+                if safe_stage in LOSSLESS_ORDER_STAGES:
                     # The existing family projection receives exact low-volume
                     # owner inputs directly; it no longer requires a raw backfill.
                     family_dir = _threshold_cycle_dir() / ("date=" + emitted_date) / ("family=" + threshold_family)

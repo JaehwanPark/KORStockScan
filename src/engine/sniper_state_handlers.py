@@ -11903,6 +11903,10 @@ def _observe_entry_economics_before_ai(stock, code, ws_data, *, exact_payload,
 
 
 def _log_entry_pipeline(stock, code, stage, **fields):
+    if stage in {"order_leg_sent", "order_leg_fail", "order_leg_no_response",
+                 "entry_order_cancel_requested", "entry_order_cancel_confirmed",
+                 "entry_order_cancel_failed"} and isinstance(stock, dict):
+        fields = {**(stock.get("entry_cancel_wait_policy_receipt") or {}), **fields}
     if stage in {"latency_block", "latency_pass", "order_bundle_submitted",
                  "entry_execution_sizing_plan", "entry_execution_sizing_plan_block",
                  "entry_ai_economic_plan_observed", "entry_ai_economic_source_gap"}:
@@ -41830,9 +41834,12 @@ def _resolve_buy_order_timeout_sec(stock, strategy):
     if attribution_enabled:
         stored_result = (stock or {}).get("entry_cancel_wait_attribution_result")
         if isinstance(stored_result, dict) and stored_result.get("cancel_wait_sec"):
-            return max(
+            base_sec = max(
                 5, min(1200, int(stored_result.get("cancel_wait_sec", 90) or 90))
             )
+            from src.engine.scalping.entry_cancel_wait_runtime import resolve_scoped_timeout
+            profile = resolve_entry_cancel_wait_profile((stock or {}).get("position_tag"), (stock or {}).get("entry_mode"))
+            return resolve_scoped_timeout(stock, profile, base_sec, enabled=True)
 
     profile = (
         str(
@@ -41855,7 +41862,9 @@ def _resolve_buy_order_timeout_sec(stock, strategy):
     else:
         base_sec = _rule_int("SCALPING_ENTRY_TIMEOUT_SEC", 90)
 
-    return base_sec
+    from src.engine.scalping.entry_cancel_wait_runtime import resolve_scoped_timeout
+    return resolve_scoped_timeout(stock, resolve_entry_cancel_wait_profile(pos_tag, profile),
+                                  base_sec, enabled=attribution_enabled)
 
 
 def _entry_cancel_wait_profile_base_sec(stock) -> tuple[str, int]:
@@ -68524,6 +68533,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             )
             return False
 
+    entry_execution_sizing_fields = {}
     if strategy == "SCALPING" and not opening_rotation_active:
         from src.engine.scalping.strategy_owner_replay import freeze_entry_operating_context
         operating_context = freeze_entry_operating_context(sys.modules[__name__], stock, sizing_context, now_ts=time.time())
@@ -69577,6 +69587,17 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             )
             break
         broker_submit_attempt_count += 1
+        wait_submission = {}
+        if strategy == "SCALPING":
+            try:
+                from src.engine.scalping.entry_cancel_wait_runtime import submission_fields
+                wait_submission = submission_fields({**stock, "code":code}, planned_order,
+                    seed=entry_execution_sizing_fields.get("entry_opportunity_replay_seed"),
+                    qty=qty, price=price, route=submit_dmst_stex_tp,
+                    timeout_sec=_resolve_buy_order_timeout_sec(stock, strategy), now_ts=time.time())
+            except Exception:
+                # Observation loss is an economic source gap, never an order veto.
+                wait_submission = {"cancel_wait_source_gap":"submission_context_capture_failed"}
         res = kiwoom_orders.send_buy_order(
             code,
             qty,
@@ -69592,6 +69613,14 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 ordinal=f"{request['tag']}:{broker_submit_attempt_count}",
             ),
         )
+        if strategy == "SCALPING":
+            try:
+                from src.engine.scalping.entry_cancel_wait_runtime import submission_response_fields
+                _log_entry_pipeline(stock, code, "entry_cancel_wait_submission",
+                    **wait_submission, **submission_response_fields(res))
+            except Exception:
+                # Durable order-owner reconciliation remains authoritative.
+                pass
         if not isinstance(res, dict):
             _log_entry_pipeline(
                 stock,

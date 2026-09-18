@@ -1773,7 +1773,7 @@ def freeze_entry_operating_context(handlers, stock, sizing_context, *, now_ts):
         return None
 
 
-def replay_operating_entry_arm(seed, arm, depth_rows, *, executor=None, trade_rows=()):
+def replay_operating_entry_arm(seed, arm, depth_rows, *, executor=None, trade_rows=(), cancel_wait_validator=None):
     """Independent CF holding path, original reserve and conservative full exit.
 
     Default executor is the existing no-network/no-write disposable interpreter.
@@ -1828,17 +1828,41 @@ def replay_operating_entry_arm(seed, arm, depth_rows, *, executor=None, trade_ro
         if (not isinstance(ttls,list) or len(ttls)!=len(seed['legs']) or any(not _finite(t,positive=True) for t in ttls)
             or not _finite(context.get('order_bundle_hard_ttl_sec'),positive=True) or not context.get('order_timeout_owner')):
             raise ValueError('frozen_operating_order_timeout_contract_missing')
-        if 0 < qty < seed['total_qty']:
+        cancel = arm.get('cancel_wait_terminal') or {}
+        cancel_valid = (cancel_wait_validator is not None and cancel_wait_validator(cancel)
+            and cancel.get('schema') == 'entry_cancel_wait_terminal_v1'
+            and cancel.get('sha256') == owner.digest({k:v for k,v in cancel.items() if k != 'sha256'})
+            and cancel.get('seed_sha256') == seed.get('seed_sha256')
+            and cancel.get('filled_qty') == qty and cancel.get('model_identity') == entry_operating_model_identity()
+            and cancel.get('cancel_ack_and_late_fill_resolved') is True)
+        if 0 < qty < seed['total_qty'] and not cancel_valid:
             result.update(status='unsupported_scope',blocker='counterfactual_partial_pending_entry_cancel_and_late_fill_inventory_unproven')
             return {**result,'sha256':economics_digest(result)}
-        if not qty:
+        if not qty and not cancel_valid:
             result.update(status='unsupported_scope',blocker='counterfactual_zero_fill_cancel_ack_and_late_fill_window_unproven')
+            return {**result,'sha256':economics_digest(result)}
+        if not qty:
+            ended = _timestamp(cancel['terminal_at'], seed['source_date']).timestamp()
+            if ended < started:
+                raise ValueError('cancel_wait_terminal_before_submit')
+            result.update(status='completed_source_only', net_pnl_krw=0., stress_net_pnl_krw=0.,
+                net_return_pct=0., stress_net_return_pct=0., capital_krw_minutes=0.,
+                reserve_krw_minutes=reserve * (ended-started)/60,
+                modeled_exit_at=cancel['terminal_at'], modeled_entry_at=seed['observed_at'],
+                modeled_outcome='operating_verified_no_fill', terminal_evidence_sha256=cancel['sha256'])
             return {**result,'sha256':economics_digest(result)}
         if any(type(x['qty']) is not int or x['qty'] <= 0 or not _finite(x['price'], positive=True)
                or _timestamp(x['at'], seed['source_date']).timestamp() < started for x in fills):
             raise ValueError('operating_entry_fill_clock_or_price_invalid')
         last_at = max(_timestamp(x['at'], seed['source_date']).timestamp() for x in fills)
         first_at=min(_timestamp(x['at'],seed['source_date']).timestamp() for x in fills)
+        if qty < seed['total_qty']:
+            # No invented pending->holding decisions. Only an ACK before the
+            # first subsequent policy frame supports the existing interpreter.
+            ack_at = _timestamp(cancel['terminal_at'], seed['source_date']).timestamp()
+            if any(last_at < _timestamp(r.get('exchange_timestamp') or r.get('exchange_at') or r.get('observed_at') or r.get('emitted_at'), seed['source_date']).timestamp() <= ack_at for r in depth_rows):
+                result.update(status='unsupported_scope', blocker='pending_partial_holding_policy_frames_unmodeled')
+                return {**result,'sha256':economics_digest(result)}
         from src.engine.monitoring.machine_microstructure_attribution import _validate_depth_row
         if any(valid and clock is not None and first_at < clock.timestamp() < last_at
             for valid,clock,*_ in (_validate_depth_row(row) for row in depth_rows)):
@@ -1992,6 +2016,117 @@ def replay_operating_entry_arm(seed, arm, depth_rows, *, executor=None, trade_ro
     except (ValueError, TypeError, KeyError, OverflowError) as exc:
         result['blocker'] = str(exc)
     return {**result, 'sha256': economics_digest(result)}
+
+
+def replay_cancel_wait_arm(seed, timeout, journal_legs, depth_rows, trade_rows, *,
+                           incumbent_timeout, cancel_model=None, executor=None):
+    """Matched actual fills are causal witnesses, never actual-exit substitutes.
+
+    A shorter wait can prove no-fill on a continuous native no-touch window.
+    Unknown passive queues, pending holding transitions and cancel races stay
+    unsupported. Longer waits cannot manufacture fills after the real cancel.
+    """
+    from src.engine.monitoring.machine_microstructure_attribution import _validate_depth_row, _validate_stream_row
+    from src.engine.scalping.entry_cancel_wait_runtime import bounded_candidates
+    gap = dict(status='unsupported_scope', net_pnl_krw=None, blocker=None, **AUTHORITY)
+    try:
+        if not _entry_seed_valid(seed) or not journal_legs or type(timeout) is not int:
+            raise ValueError('cancel_wait_frozen_seed_or_journal_missing')
+        context = copy.deepcopy(seed['operating_contract'])
+        profile = context['cancel_wait_profile']
+        if timeout not in bounded_candidates(profile, incumbent_timeout):
+            raise ValueError('cancel_wait_unevaluated_timeout')
+        original = context['order_leg_ttl_sec']
+        cap = {'standard':300, 'breakout':300, 'pullback':600, 'reserve':1200}[profile]
+        ttls = [max(5, min(cap, round(t * timeout / incumbent_timeout))) for t in original]
+        if len(ttls) != len(journal_legs) or len(ttls) != len(seed['legs']):
+            raise ValueError('cancel_wait_actual_child_union_incomplete')
+        start = _timestamp(seed['observed_at'], seed['source_date']).timestamp()
+        fills, deadlines, terminals = [], [], []
+        for index, (leg, planned, ttl) in enumerate(zip(journal_legs, seed['legs'], ttls)):
+            fill_start = len(fills)
+            if (leg['quantity'] != planned['qty'] or leg['submitted_price'] != planned['price']
+                or leg.get('terminal_reconciled') is not True):
+                raise ValueError('cancel_wait_signed_inventory_terminal_missing')
+            sent = _timestamp(leg['submitted_at'], seed['source_date']).timestamp()
+            deadline = sent + ttl
+            deadlines.append(deadline)
+            actual_end = _timestamp(leg['terminal_at'], seed['source_date']).timestamp()
+            if timeout == incumbent_timeout:
+                ended = actual_end
+            elif cancel_model and cancel_model.get('validated') is True:
+                ended = deadline + cancel_model['cancel_ack_delay_sec'] + cancel_model['late_fill_window_sec']
+            else:
+                raise ValueError('cancel_wait_independent_cancel_model_missing')
+            terminals.append(ended)
+            previous = 0; amount = 0.; prior_at = sent
+            for fill in sorted(leg['fills'], key=lambda x:x['observed_at_kst']):
+                at = _timestamp(fill['observed_at_kst'], seed['source_date']).timestamp()
+                q, value = fill['filled_qty'], fill['fill_amount']
+                if type(q) is not int or not previous <= q <= planned['qty'] or value < amount or at < prior_at:
+                    raise ValueError('cancel_wait_cumulative_fill_conflict')
+                if q > previous and (at <= deadline or timeout == incumbent_timeout and at <= actual_end):
+                    fills.append(dict(at=fill['observed_at_kst'], qty=q-previous,
+                        price=(value-amount)/(q-previous), reserved_price=planned['price']))
+                elif q > previous and at <= ended and timeout != incumbent_timeout:
+                    raise ValueError('cancel_wait_ack_late_fill_race_unproven')
+                previous, amount, prior_at = q, value, at
+            if sum(f['qty'] for f in fills) > seed['total_qty']:
+                raise ValueError('cancel_wait_fill_quantity_conflict')
+            # A passive touch is never a fill or a proven zero. Native clocks,
+            # identities, continuous series and scope must cover the whole wait.
+            retained = sum(f['qty'] for f in fills[fill_start:])
+            if previous < planned['qty'] or timeout != incumbent_timeout and retained < planned['qty']:
+                quotes, trades = [], []
+                for row in depth_rows:
+                    valid, at, *rest = _validate_depth_row(row)
+                    if not valid or at is None:raise ValueError('cancel_wait_native_quote_invalid')
+                    if sent-1.5 <= at.timestamp() <= ended+1.5:
+                        if (row.get('symbol') != seed['stock_code'] or row.get('venue') != entry_native_market_venue(seed['effective_venue'])
+                            or row.get('session_bucket') != seed['session_bucket'] or row.get('path_consumer_eligible') is False):
+                            raise ValueError('cancel_wait_quote_scope_conflict')
+                        quotes.append((at.timestamp(), rest[-1], row['sequence_epoch'], row['source_sequence'], row['series_sequence']))
+                quotes.sort()
+                if (not quotes or quotes[0][0] > sent or ended-quotes[-1][0] > 1.5
+                    or len({r[2] for r in quotes}) != 1
+                    or any(b[0]-a[0] > 1.5 or b[3] <= a[3] or b[4] != a[4]+1 for a,b in zip(quotes,quotes[1:]))):
+                    raise ValueError('cancel_wait_continuous_quote_window_missing')
+                for row in trade_rows:
+                    valid, eligible, at, price, *_ = _validate_stream_row(row)
+                    if not valid or not eligible or at is None:raise ValueError('cancel_wait_native_trade_invalid')
+                    if sent <= at.timestamp() <= ended:
+                        if (row.get('symbol') != seed['stock_code'] or row.get('venue') != entry_native_market_venue(seed['effective_venue'])
+                            or row.get('session_bucket') != seed['session_bucket'] or row.get('sequence_epoch') != quotes[0][2]):
+                            raise ValueError('cancel_wait_trade_scope_conflict')
+                        trades.append((at.timestamp(), price, row['series_sequence']))
+                trades.sort()
+                if (not trades or trades[0][0]-sent > 1.5 or ended-trades[-1][0] > 1.5
+                    or any(b[2] != a[2]+1 or b[0]-a[0] > 1.5 for a,b in zip(trades,trades[1:]))):
+                    raise ValueError('cancel_wait_continuous_trade_window_missing')
+                # Exclude actual witnessed fill clocks. All remaining pending
+                # intervals must prove no touch; no queue model is invented.
+                last_fill = max([sent]+[_timestamp(f['at'],seed['source_date']).timestamp() for f in fills[fill_start:]])
+                if any(q[1] <= planned['price'] for q in quotes if last_fill < q[0] <= ended) or any(t[1] <= planned['price'] for t in trades if last_fill < t[0] <= ended):
+                    raise ValueError('cancel_wait_unwitnessed_passive_fill_or_late_inventory')
+        context.update(order_leg_ttl_sec=ttls, order_bundle_hard_ttl_sec=max(ttls))
+        context['sha256'] = owner.digest({k:v for k,v in context.items() if k!='sha256'})
+        derived = {**seed, 'operating_contract':context}
+        derived['seed_sha256'] = owner.digest({k:v for k,v in derived.items() if k!='seed_sha256'})
+        qty = sum(f['qty'] for f in fills)
+        cancel = dict(schema='entry_cancel_wait_terminal_v1', seed_sha256=derived['seed_sha256'],
+            model_identity=entry_operating_model_identity(), filled_qty=qty,
+            terminal_at=datetime.fromtimestamp(max(terminals),KST).isoformat(),
+            cancel_ack_and_late_fill_resolved=True,
+            source_journal_sha256=owner.digest(journal_legs), native_path_sha256=owner.digest([depth_rows,trade_rows]))
+        cancel['sha256'] = owner.digest(cancel)
+        arm = dict(requested_qty=seed['total_qty'], modeled_filled_qty=qty, modeled_fill_events=fills,
+            modeled_reserved_notional_krw=sum(l['qty']*l['price'] for l in seed['legs']), cancel_wait_terminal=cancel)
+        result = replay_operating_entry_arm(derived, arm, depth_rows, trade_rows=trade_rows, executor=executor,
+            cancel_wait_validator=lambda witness: witness == cancel)
+        return {**result, 'cancel_wait_terminal':cancel, 'timeout_sec':timeout,
+                'behavior_sha256':owner.digest([fills, max(terminals) if qty < seed['total_qty'] else None])}
+    except (KeyError,ValueError,TypeError,OverflowError) as exc:
+        return {**gap, 'blocker':str(exc), 'timeout_sec':timeout}
 
 def entry_split_actual_economic_receipt(stock, *, buy_price, buy_qty, profit_rate, completion_at):
     """Observe the existing completed sell receipt; missing fields remain null."""

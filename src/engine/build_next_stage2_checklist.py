@@ -1753,6 +1753,15 @@ def _build_next_stage2_checklist_locked(
         content = _render_new_document(target_date, auto_block)
         created = True
 
+    if source_date >= '2026-09-17':
+        from src.engine.automation.entry_cancel_wait_tuning import load_handoff_view,checklist_handoff
+        view=load_handoff_view(source_date,EV_REPORT_DIR.parent)
+        if view is not None and view['effective_date']==target_date:
+            start,end='<!-- entry_cancel_wait_handoff:start -->','<!-- entry_cancel_wait_handoff:end -->'
+            if start in content:
+                a,b=content.index(start),content.index(end)+len(end)
+                content=content[:a]+checklist_handoff(view)+content[b:]
+            else:content=content.rstrip()+'\n\n'+checklist_handoff(view)+'\n'
     assert_sources_unchanged(handoff_receipt, handoff_paths)
     _atomic_write_checklist(target_path, content)
     tasks = _build_tasks(

@@ -4999,14 +4999,15 @@ EXECUTION_SOURCE_STAGES = frozenset({
 })
 
 
-def _execution_projection_census(target_date, events):
+def _execution_projection_census(target_date, events, *, stages=None):
     """Reconcile retained raw identities against the existing producer census."""
     from src.engine.pipeline_event_summary import (producer_summary_paths,
         EXECUTION_SUMMARY_STAGES, IDENTITY_CONTRACT, IDENTITY_MODULUS, execution_projection_identity)
+    stages = EXECUTION_SUMMARY_STAGES if stages is None else stages
     directory = DATA_DIR / "pipeline_event_summaries"
     path, manifest_path = producer_summary_paths(directory, target_date)
     manifest = _load_json(manifest_path) or {}
-    if (not EXECUTION_SUMMARY_STAGES <= set(manifest.get("summary_stages") or [])
+    if (not stages <= set(manifest.get("summary_stages") or [])
         or manifest.get("identity_contract") != IDENTITY_CONTRACT or not path.is_file()):
         return {"status": "source_gap", "reason": "execution_producer_census_missing",
                 "coverage_scope": "declared_execution_stage_producer_census"}
@@ -5016,7 +5017,7 @@ def _execution_projection_census(target_date, events):
     expected = Counter(); expected_hash = Counter()
     for row in iter_jsonl(path):
         stage = row.get("stage")
-        if stage not in EXECUTION_SUMMARY_STAGES:
+        if stage not in stages:
             continue
         if row.get("target_date") != target_date or row.get("identity_contract") != IDENTITY_CONTRACT:
             raise ValueError("execution_producer_census_contract_invalid")
@@ -5047,10 +5048,12 @@ def _execution_projection_census(target_date, events):
         "coverage_scope": "declared_execution_stage_producer_census"}
 
 
-def _bounded_execution_projection(target_date: str):
+def _bounded_execution_projection(target_date: str, *, stages=None, families=None):
     """Use the existing compact family; never silently scan a multi-GB day."""
-    directory = DATA_DIR / "threshold_cycle" / f"date={target_date}" / "family=dynamic_entry_price_resolver"
-    partition_paths = sorted(directory.glob("part-*.jsonl*"))
+    stages = EXECUTION_SOURCE_STAGES if stages is None else stages
+    families = families or ("dynamic_entry_price_resolver",)
+    directories = [DATA_DIR / "threshold_cycle" / f"date={target_date}" / f"family={f}" for f in families]
+    partition_paths = sorted(p for d in directories for p in d.glob("part-*.jsonl*"))
     flat_path = existing_or_gzip_path(_threshold_events_path(target_date))
     flat_available = flat_path.is_file() and flat_path.stat().st_size <= 64 * 1024 * 1024
     paths = ([flat_path] if flat_available else []) + partition_paths
@@ -5072,7 +5075,7 @@ def _bounded_execution_projection(target_date: str):
                 if not line.endswith("\n"):
                     raise ValueError("execution_partition_incomplete_line")
                 event = json.loads(line)
-                if event.get("stage") not in EXECUTION_SOURCE_STAGES:
+                if event.get("stage") not in stages:
                     continue
                 if event.get("emitted_date") != target_date:
                     raise ValueError("execution_partition_date_mismatch")
@@ -5085,9 +5088,9 @@ def _bounded_execution_projection(target_date: str):
         if (before.st_ino, before.st_size, before.st_mtime_ns) != (after.st_ino, after.st_size, after.st_mtime_ns):
             raise ValueError("execution_partition_changed_during_read")
         sources.append({"path": str(path.resolve()), "sha256": hasher.hexdigest()})
-    if sorted(directory.glob("part-*.jsonl*")) != partition_paths:
+    if sorted(p for d in directories for p in d.glob("part-*.jsonl*")) != partition_paths:
         raise ValueError("execution_partition_inventory_changed_during_read")
-    census = _execution_projection_census(target_date, rows)
+    census = _execution_projection_census(target_date, rows, stages=stages)
     ready = census["status"] == "ready"
     # Pre-contract partitions never imply an empty raw opportunity population.
     return rows, {"status": "ready" if ready else "source_gap",

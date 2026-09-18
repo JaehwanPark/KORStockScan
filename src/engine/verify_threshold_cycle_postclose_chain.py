@@ -9073,10 +9073,17 @@ def build_threshold_cycle_postclose_verification(
     elif pending_done_marker:
         status = "pass_with_pending_done_marker"
 
+    cancel_wait_handoff = {'status':'legacy_diagnostic_not_economic'}
+    cancel_path = REPORT_DIR / 'entry_cancel_wait_tuning' / f'entry_cancel_wait_tuning_{target_date}.json'
+    if cancel_path.is_file() and _load_json(cancel_path).get('schema_version') == 2:
+        from src.engine.automation.entry_cancel_wait_tuning import verify_handoff
+        cancel_wait_handoff = verify_handoff(target_date, require_summary=False)
+        if cancel_wait_handoff['status'] != 'PASS':status='fail'
     return {
         "date": target_date,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "report_type": "threshold_cycle_postclose_verification",
+        "entry_cancel_wait_policy_handoff":cancel_wait_handoff,
         "status": status,
         "log_path": str(LOG_PATH),
         "latest_start_marker": start_line,
@@ -9664,6 +9671,7 @@ def main() -> None:
     parser.add_argument("--date", required=True)
     parser.add_argument("--require-summary-handoff", action="store_true")
     parser.add_argument("--compact-summary-only", action="store_true", help="Verify only compact successor summary/policy handoff; never assert native DONE")
+    parser.add_argument('--entry-cancel-wait-summary-only',action='store_true',help='Verify standalone cancel-wait policy and exact summary handoff; never assert native DONE')
     parser.add_argument(
         "--allow-pending-done-marker",
         action="store_true",
@@ -9692,6 +9700,13 @@ def main() -> None:
         ),
     )
     args = parser.parse_args()
+    if args.entry_cancel_wait_summary_only:
+        if not args.require_summary_handoff or args.compact_summary_only:
+            parser.error('cancel-wait scope requires --require-summary-handoff and one verification scope')
+        from src.engine.automation.entry_cancel_wait_tuning import verify_handoff
+        report=verify_handoff(args.date)
+        print(json.dumps(report,ensure_ascii=False))
+        raise SystemExit(0 if report['status']=='PASS' else 2)
     if args.compact_summary_only:
         if not args.require_summary_handoff:
             parser.error("compact scope requires --require-summary-handoff")

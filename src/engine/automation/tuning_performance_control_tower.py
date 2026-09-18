@@ -1981,6 +1981,10 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
         if not validate_current_receipt(closure, target_date):
             warnings.append("machine_research_closed_loop_incomplete")
     report["source_generation_contract"] = handoff_receipt
+    if target_date >= "2026-09-17":
+        from src.engine.automation.entry_cancel_wait_tuning import load_handoff_view
+        cancel_view=load_handoff_view(target_date,REPORT_ROOT_DIR)
+        if cancel_view is not None:report['entry_cancel_wait_economic_tuning']=cancel_view
     json_text = json.dumps(
         report, ensure_ascii=False, indent=2, sort_keys=True, default=str
     )

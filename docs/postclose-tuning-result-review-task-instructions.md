@@ -180,6 +180,12 @@ Family strict 명령 `src.engine.verify_threshold_cycle_postclose_chain --date S
 
 원 labels·pending/raw·원 비용·모델/후보 holdout·actual/order/custody/version evidence를 보호한다. Revision은 원 bytes/hash를 보존하고 label hash·source manifest·구현/config generation을 case table과 compact projection에 결속한다. 동일 입력은 기존 cache/checkpoint를 재사용하며 additive metadata 갱신만으로 대형 raw 재스캔/가격·provider 호출을 하지 않는다. 기존 frozen 보고서의 명시 migration은 `legacy_labels_preserved_not_revalidated`로 기록하며 원 exclusions/as-of를 보존한다. 유효 horizon 미도달은 pending, 이미 지난 고정 원 window 누락은 source gap·null·정확 owner/closure다. 잘못된 route/schema/response는 source gap이며 미래 가격/임의 stop·cost·SELL로 복구하지 않는다. 이 진단 section의 결손은 독립적으로 유효한 owner CF까지 전역 차단하지 않는다.9/21 dated 준비 policy는 검증 양수 후보가 없으면 incumbent carry다. 정규 PREOPEN·PID·자연 완료 비용 성과는 별도 OPEN이며 family strict PASS를 전체 native DONE/EV 개선으로 보고하지 않는다. [구현 review](audit-reports/2026-09-18-ai-quality-source-label-consolidation-review.md)의 exact-date receipt를 확인한다.
 
+### 5.1.7 Entry cancel-wait 실제 제출 조건부 평가
+
+독립 `entry_cancel_wait_runtime`의 기존 CLI 위치를 유지하며 lossless 제출/cancel projection census와 durable Main BUY 원장을 함께 확인한다. census 결손을 제출0으로, 미해결 이전 custody를 무노출 순익0으로 간주하지 않는다. 실제 제출이 있으면 frozen timeout/profile/route·native quote/trade·cancel ACK/late inventory·운영 exit/cost를 기존 entry owner에서 비교하며 미지원 상태는 null이다. 고정 제출 notional EV와 같은 자본 평균 일별 net의 보수적 하한을 함께 통과한 학습 후보 하나만 미사용 policy holdout에서 평가한다.
+
+새 schema report 및 dated scope policy를 tower/checklist source generation에 결속하고 standalone PREOPEN과 `_resolve_buy_order_timeout_sec`에서 검증한 scope만 소비한다. 공통 timeout·명시 OFF/override·order/guard/provider 권한은 보존한다. 원 평가일을 유지한 지연 발행은 publication date/다음 거래일을 명시한다. 사용자 승인과 closed review 이후 필요한 해당 CLI만 재생성하며 `--entry-cancel-wait-summary-only --require-summary-handoff`의 PASS는 전체 native DONE·PID 소비·자연 경제성 수락이 아니다.
+
 ### 5.2 결손·결함과 달성 가능성
 
 | 판정 | 입증할 내용 | 다음 조치·closure |

@@ -1386,7 +1386,8 @@ def test_emit_pipeline_event_keeps_id_in_submit_stage_text_payload(
     assert "id=77" in payload["text_payload"]
 
 
-@pytest.mark.parametrize("stage", ["entry_execution_sizing_plan", "order_leg_sent", "order_bundle_submitted"])
+@pytest.mark.parametrize("stage", ["entry_execution_sizing_plan", "order_leg_sent", "order_bundle_submitted",
+    "entry_cancel_wait_submission","entry_order_cancel_confirmed"])
 def test_compact_execution_contract_survives_large_field_count(stage):
     fields = {f"extra_{i}": str(i) for i in range(80)}
     fields.update(entry_execution_sizing_plan_id="parent", entry_execution_sizing_plan_sha256="a" * 64,
