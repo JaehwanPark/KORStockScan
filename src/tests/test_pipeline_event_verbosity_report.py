@@ -992,3 +992,63 @@ def test_corrupt_checkpoint_has_executable_scoped_repair(monkeypatch, tmp_path):
     repaired = report_mod.build_pipeline_event_verbosity_report(day, allow_bootstrap=True)
     assert repaired["parity"]["ok"] is True
     assert report_mod.report_is_reusable(day)
+
+
+@pytest.mark.parametrize("policy", [["invalid"], 1, "invalid"])
+def test_malformed_policy_receipt_falls_back_without_crashing(monkeypatch, tmp_path, policy):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    day = "2026-09-18"
+    rows = [_event(day, "10:00:00", "scalping_scanner_fast_precheck", record_id=1)]
+    _write_raw(tmp_path, day, rows)
+    _declare_managed_raw(tmp_path, day)
+    _write_producer_summary(tmp_path, day, rows)
+    first = report_mod.build_pipeline_event_verbosity_report(day)
+    first["policy"] = policy
+    # A valid receipt digest must still validate nested policy shape.
+    first["report_digest"] = report_mod._report_digest(first)
+    report_mod.report_paths(day)[0].write_text(json.dumps(first))
+    assert report_mod.report_is_reusable(day) is False
+    rebuilt = report_mod.build_pipeline_event_verbosity_report(day)
+    assert rebuilt["parity"]["ok"] is True
+    assert rebuilt["policy"]["raw_suppression_enabled"] is False
+    assert rebuilt["evaluation"]["raw_bytes_processed"] == 0
+
+
+def test_malformed_producer_rollup_returns_explicit_source_blocker(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    day = "2026-09-18"
+    rows = [_event(day, "10:00:00", "scalping_scanner_fast_precheck", record_id=1)]
+    _write_raw(tmp_path, day, rows)
+    _declare_managed_raw(tmp_path, day)
+    _write_producer_summary(tmp_path, day, rows)
+    first = report_mod.build_pipeline_event_verbosity_report(day)
+    checkpoint = report_mod.Path(first["raw_derived_summary"]["manifest"])
+    payload = json.loads(checkpoint.read_text())
+    payload["producer_rollup"] = ["invalid"]
+    payload["checkpoint_digest"] = report_mod.checkpoint_digest(payload)
+    checkpoint.write_text(json.dumps(payload))
+    blocked = report_mod.build_pipeline_event_verbosity_report(day)
+    assert blocked["state"] == "producer_summary_invalid"
+    assert blocked["producer_summary"]["decode_error"] == "producer_rollup_contract_invalid"
+    assert blocked["parity"]["ok"] is False
+    assert blocked["policy"]["allowed_runtime_apply"] is False
+
+
+@pytest.mark.parametrize("field", ["policy", "parity"])
+def test_strict_handoff_blocks_malformed_nested_receipt(monkeypatch, tmp_path, field):
+    from src.engine import verify_threshold_cycle_postclose_chain as verifier
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(verifier, "REPORT_DIR", tmp_path / "report")
+    day = "2026-09-18"
+    rows = [_event(day, "10:00:00", "scalping_scanner_fast_precheck", record_id=1)]
+    _write_raw(tmp_path, day, rows)
+    _declare_managed_raw(tmp_path, day)
+    _write_producer_summary(tmp_path, day, rows)
+    first = report_mod.build_pipeline_event_verbosity_report(day)
+    first[field] = ["invalid"]
+    first["report_digest"] = report_mod._report_digest(first)
+    report_mod.report_paths(day)[0].write_text(json.dumps(first))
+    handoff = verifier._pipeline_verbosity_operations_handoff(day, {"pipeline_event_verbosity": True})
+    assert handoff["status"] == "open"
+    assert handoff["state"] == "report_contract_invalid"
+    assert handoff["runtime_effect"] is False

@@ -7135,12 +7135,17 @@ def _pipeline_verbosity_operations_handoff(target_date, flags):
     path = REPORT_DIR / "pipeline_event_verbosity" / f"pipeline_event_verbosity_{target_date}.json"
     report = _load_json(path)
     state = report.get("state") if report.get("target_date") == target_date else "missing_report"
-    good = state in {"no_suppressible_events", "v2_shadow_parity_pass", "v2_shadow_no_eligible_events"} and (report.get("parity") or {}).get("ok") is True
+    parity, policy = report.get("parity"), report.get("policy")
+    if not isinstance(parity, dict) or not isinstance(policy, dict):
+        if state != "missing_report":
+            state = "report_contract_invalid"
+        parity, policy = {}, {}
+    good = state in {"no_suppressible_events", "v2_shadow_parity_pass", "v2_shadow_no_eligible_events"} and parity.get("ok") is True
     integrity = False
     try:
         integrity = (report.get("report_digest") == diagnostic._report_digest(report)
                      and report.get("source_binding") == diagnostic._source_binding(target_date)
-                     and all((report.get("policy") or {}).get(k) is False for k in ("runtime_effect", "allowed_runtime_apply", "raw_suppression_enabled")))
+                     and all(policy.get(k) is False for k in ("runtime_effect", "allowed_runtime_apply", "raw_suppression_enabled")))
     except (ValueError, TypeError, OSError):
         pass
     if good and not integrity:

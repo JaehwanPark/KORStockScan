@@ -180,6 +180,8 @@ def _external_binding(target_date):
 def report_is_reusable(target_date: str) -> bool:
     report = _read_json(report_paths(target_date)[0])
     policy = report.get("policy") or {}
+    if not isinstance(policy, dict):
+        return False
     try:
         return bool(
             report.get("schema_version") == 2
@@ -291,6 +293,8 @@ def _producer_rows_incremental(path, checkpoint):
     st = actual.stat()
     stamp = [st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns]
     previous = checkpoint.get("producer_rollup") or {}
+    if not isinstance(previous, dict):
+        raise ValueError("producer_rollup_contract_invalid")
     if previous.get("stamp") == stamp:
         return previous["rows"], previous, 0
     append = (actual.suffix != ".gz" and previous.get("stamp") and
