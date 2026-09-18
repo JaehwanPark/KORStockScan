@@ -1043,7 +1043,8 @@ def test_malformed_producer_rollup_returns_explicit_source_blocker(monkeypatch, 
 
 
 @pytest.mark.parametrize("field", ["policy", "parity"])
-def test_strict_handoff_blocks_malformed_nested_receipt(monkeypatch, tmp_path, field):
+@pytest.mark.parametrize("declared", [True, None])
+def test_strict_handoff_blocks_malformed_nested_receipt(monkeypatch, tmp_path, field, declared):
     from src.engine import verify_threshold_cycle_postclose_chain as verifier
     monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
     monkeypatch.setattr(verifier, "REPORT_DIR", tmp_path / "report")
@@ -1056,7 +1057,15 @@ def test_strict_handoff_blocks_malformed_nested_receipt(monkeypatch, tmp_path, f
     first[field] = ["invalid"]
     first["report_digest"] = report_mod._report_digest(first)
     report_mod.report_paths(day)[0].write_text(json.dumps(first))
-    handoff = verifier._pipeline_verbosity_operations_handoff(day, {"pipeline_event_verbosity": True})
+    handoff = verifier._pipeline_verbosity_operations_handoff(day, {} if declared is None else {"pipeline_event_verbosity": declared})
     assert handoff["status"] == "open"
     assert handoff["state"] == "report_contract_invalid"
     assert handoff["runtime_effect"] is False
+
+
+def test_strict_preserves_explicit_off_and_distinguishes_missing_declaration(monkeypatch, tmp_path):
+    from src.engine import verify_threshold_cycle_postclose_chain as verifier
+    monkeypatch.setattr(verifier, "REPORT_DIR", tmp_path / "report")
+    day = "2026-09-18"
+    assert verifier._pipeline_verbosity_operations_handoff(day, {})["status"] == "not_declared"
+    assert verifier._pipeline_verbosity_operations_handoff(day, {"pipeline_event_verbosity": False})["status"] == "disabled"

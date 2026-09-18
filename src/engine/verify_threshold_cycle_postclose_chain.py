@@ -7129,10 +7129,15 @@ def _limit_down_watch_verification_enabled(
 
 def _pipeline_verbosity_operations_handoff(target_date, flags):
     """Exact-date diagnostic OPEN cannot issue full-chain DONE/PREOPEN GREEN."""
-    if not flags.get("pipeline_event_verbosity"):
-        return {"status": "disabled", "issues": []}
-    from src.engine import pipeline_event_verbosity_report as diagnostic
     path = REPORT_DIR / "pipeline_event_verbosity" / f"pipeline_event_verbosity_{target_date}.json"
+    declared = flags.get("pipeline_event_verbosity")
+    if declared is False:
+        return {"status": "disabled", "issues": []}
+    if declared is not True and not path.is_file():
+        return {"status": "not_declared", "issues": []}
+    # A failed wrapper can have no DONE flags. Its exact-date diagnostic must
+    # still be consumed; an absent declaration does not make it operator OFF.
+    from src.engine import pipeline_event_verbosity_report as diagnostic
     report = _load_json(path)
     state = report.get("state") if report.get("target_date") == target_date else "missing_report"
     parity, policy = report.get("parity"), report.get("policy")
