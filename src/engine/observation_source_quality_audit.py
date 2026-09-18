@@ -8267,6 +8267,8 @@ def build_observation_source_quality_audit(
         projection = _verified_legacy_projection(target_date, raw_path, generation_before, verified_projection_source)
         if projection is None:
             raise ValueError("verified_raw_projection_migration_failed_no_automatic_bootstrap")
+    if audit_phase == "final" and projection is None:
+        raise ValueError("final_verified_raw_projection_required_no_automatic_bootstrap")
     source_receipt: dict[str, Any] = {}
     audited_at = datetime.now().astimezone().isoformat(timespec="seconds")
     if projection is None:

@@ -39,3 +39,5 @@ EV/runtime summary는 동일 final artifact SHA를 소비했다. Unknown field r
 감사 hash 변경으로 cancel-wait revalidation이 invalidated되어 기존 bounded owner로9/17→9/18→9/21 재-intake했다. raw_read0/source_gap/incumbent carry를 보존했다. 삼성/저가주 native tuner의9/17 artifact는 현재 source로 존재하지 않아 새 hash로 승격하거나 과거 policy/holdout을 재평가하지 않았다. 별도 low-price expanded 연구는 원 bar/source admission 계약이며 이번 machine terminal gate를 경제성 증거로 쓰지 않는다.
 
 Full strict/controller는 새 final source binding을 검증한 뒤 기존 선행 실패·AI correction·저가주 native source·machine timing policy·Swing 및 research loop 결손을 별도로 보존한다. 이 감사 수리의 closure와 전체 native DONE=false를 분리한다. 다음 정규 PREOPEN/PID 및 신규 정상 PASS의 terminal capture/완료 비용 성과는 기존 owner Acceptance로 OPEN이다. 새 코드/정책 선택은 future invocation only이며 bot restart/orders/early PREOPEN은 하지 않는다.
+
+최종 Q2 재리뷰: final에서 projection 검증 실패가 기존 raw bootstrap으로 넘어갈 수 있는 경로를 막았다. Final은 verified aggregate 또는 원 receipt 기반 명시적 이관만 허용하며 missing/invalid aggregate는 실행 blocker다. Native preflight/manual의 기존 원천 감사 역할과 provider/order guard는 보존한다. 캐시 결손 final이 raw를 열지 않는 회귀로 확인한다.

@@ -201,7 +201,7 @@ Family strict 명령 `src.engine.verify_threshold_cycle_postclose_chain --date S
 
 ### Source-quality final 감사 재사용과 역할별 소비
 
-`observation_source_quality_audit` final skip은 pure `--audit-phase final --check-reusable`로 phase·구현·원 generation·machine/AI/provider/funnel content binding을 확인한다. Preflight 또는 metadata만으로 final을 대신하지 않는다. 원 raw contract aggregate와 final consumer census는 별도 계산이다. 검증된 이전 projection을 이관할 때만 `--verified-projection-source`의 원 receipt/code/관측 stage 의미를 검증하며, 실패는 blocker이고 수동 전체 raw bootstrap 근거가 아니다.
+`observation_source_quality_audit` final skip은 pure `--audit-phase final --check-reusable`로 phase·구현·원 generation·machine/AI/provider/funnel content binding을 확인한다. Preflight 또는 metadata만으로 final을 대신하지 않는다. 원 raw contract aggregate와 final consumer census는 별도 계산이다. 검증된 이전 projection을 이관할 때만 `--verified-projection-source`의 원 receipt/code/관측 stage 의미를 검증하며, 실패는 blocker이고 수동 전체 raw bootstrap 근거가 아니다. Final에서 verified aggregate가 없으면 raw를 열지 않고 실패한다. 원천 contract aggregate 생성은 기존 preflight/manual owner의 별도 실행이며 final skip 해제와 혼동하지 않는다.
 
 Source input allowed, decision CF input allowed, operational terminal reconciled, cost-adjusted economic comparison eligible을 분리한다. Submitted/guard/reject는 운영 연결이며 COMPLETED 비용 손익이 아니다. Exact gap/pending만 운영 평가에서 제외하고 유효 BLOCK/RECHECK/VETO partition은 보존한다. 역사적 terminal 부재는 원 분모·null로 유지한다. Unknown provenance는 기존 native workorder ID에 field producer/disposition/closure test를 인계한다. 이 감사는 정책 생성기가 아니며 후행 검증에서 후보가 없으면 dated incumbent carry를 유지한다. [Q0–Q5 구현 계약](proposals/observation-source-quality-final-audit-terminal-lineage-and-economic-consumer-defect-remediation-plan-2026-09-18.md)을 따른다.
 

@@ -10594,3 +10594,11 @@ def test_native_large_funnel_reads_only_selected_section_and_keeps_full_hash(tmp
     assert selected["entry_submit_drought_contract"] == payload["entry_submit_drought_contract"]
     assert selected["target_date"] == "2026-09-17"
     assert digest == hashlib.sha256(raw).hexdigest()
+
+
+def test_final_without_verified_projection_never_bootstraps_raw(tmp_path, monkeypatch):
+    _, _, _, _ = _projection_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(audit, "_read_raw_contract_projection", lambda *args: None)
+    monkeypatch.setattr(audit, "_streaming_contract_audit", lambda *args, **kwargs: pytest.fail("unauthorized final raw bootstrap"))
+    with pytest.raises(ValueError, match="final_verified_raw_projection_required_no_automatic_bootstrap"):
+        audit.build_observation_source_quality_audit("2026-09-17", audit_phase="final")
