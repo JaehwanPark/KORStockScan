@@ -2,23 +2,24 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_DIR="${PROJECT_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
-# Resolve once at the workspace entrypoint. An already running managed release
-# keeps its source even when a later selection is published.
-if [[ "$PROJECT_DIR" != *-runtime-releases/* && -f "$PROJECT_DIR/data/runtime/runtime_release_selection.json" ]]; then
-  PANIC_REVIEWED_RELEASE="$("$PROJECT_DIR/.venv/bin/python" -I - "$PROJECT_DIR" <<'PY'
-import importlib.util
-from pathlib import Path
+# Default scheduled calls consume the selected reviewed source. Explicit
+# PROJECT_DIR remains the existing operator/test boundary; release calls share
+# workspace state and do not redirect recursively.
+WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+if [[ -z "${PROJECT_DIR:-}" && ! -L "$WORKSPACE_ROOT/data" && -f "$WORKSPACE_ROOT/data/runtime/runtime_release_selection.json" ]]; then
+  REVIEWED_ROOT="$("$WORKSPACE_ROOT/.venv/bin/python" -I - "$WORKSPACE_ROOT" <<'PYTHON'
+import runpy
 import sys
+from pathlib import Path
 workspace = Path(sys.argv[1])
-spec = importlib.util.spec_from_file_location("release_router", workspace / "src/engine/infrastructure/runtime_release_router.py")
-router = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(router)
-print(router.selected_release(workspace)[0])
-PY
+router = runpy.run_path(str(workspace / "src/engine/infrastructure/runtime_release_router.py"))
+root, _ = router["selected_release"](workspace)
+print(root)
+PYTHON
   )"
-  exec env PROJECT_DIR="$PANIC_REVIEWED_RELEASE" /bin/bash "$PANIC_REVIEWED_RELEASE/deploy/run_panic_sell_defense_intraday.sh" "$@"
+  exec bash "$REVIEWED_ROOT/deploy/run_panic_sell_defense_intraday.sh" "$@"
 fi
+PROJECT_DIR="${PROJECT_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 VENV_PY="${PROJECT_DIR}/.venv/bin/python"
 TARGET_DATE="${1:-$(TZ=Asia/Seoul date +%F)}"
 # shellcheck source=cpu_affinity_profile.sh

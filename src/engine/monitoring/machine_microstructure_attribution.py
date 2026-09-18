@@ -2598,6 +2598,13 @@ def _widget_inventory(
     symbols: dict[str, dict[str, Any]] = {}
     anchors: list[dict[str, Any]] = []
 
+    # Collection/replay admission is not enrollment in a live widget owner.
+    collection_origins = (calibration or {}).get("market_collection_origins") or {}
+    research_origins = {
+        "causal_scanner_research_admission",
+        "operator_enrolled_research_watch",
+        "completed_daily_recommendation_auto_discovery",
+    }
     report_symbols = (calibration or {}).get("symbols") or {}
     if isinstance(report_symbols, dict):
         for symbol, payload in report_symbols.items():
@@ -2622,8 +2629,14 @@ def _widget_inventory(
             row.setdefault("owner_scope_kinds", {})
             row.setdefault("owner_scope_expected_venues", {})
             row.setdefault("owner_anchor_contract_gaps", [])
-            if "active_widget_owner" not in row["scopes"]:
-                row["scopes"].append("active_widget_owner")
+            collection_origin = collection_origins.get(str(symbol)) if isinstance(collection_origins, dict) else None
+            scope_kind = (
+                "prospective_widget_research"
+                if isinstance(collection_origin, str) and collection_origin in research_origins
+                else "active_widget_owner"
+            )
+            if scope_kind not in row["scopes"]:
+                row["scopes"].append(scope_kind)
             sessions = payload.get("sessions") or {}
             if not isinstance(sessions, dict):
                 continue
@@ -2631,10 +2644,17 @@ def _widget_inventory(
                 if not isinstance(session_payload, dict):
                     continue
                 venue = str(session).split("_", 1)[0].upper()
+                if str(session).startswith(DUAL_AFTERMARKET_SESSION_PREFIX):
+                    # Integrated market-data scope is the SOR registration item,
+                    # not proof of a KRX execution venue from a string prefix.
+                    if session_payload.get("market_data_route") != "krx_nxt_integrated" or session_payload.get("market_venue") != "KRX_NXT":
+                        row["owner_anchor_contract_gaps"].append({"scope_id": f"{symbol}:{session}", "reason": "integrated_aftermarket_market_data_identity_missing"})
+                        continue
+                    venue = "SOR"
                 scope_id = f"{symbol}:{session}"
                 if scope_id not in row["owner_scope_ids"]:
                     row["owner_scope_ids"].append(scope_id)
-                row["owner_scope_kinds"][scope_id] = "active_widget_owner"
+                row["owner_scope_kinds"][scope_id] = scope_kind
                 row["owner_scope_expected_venues"][scope_id] = [venue]
                 if (
                     venue in {"KRX", "NXT", "SOR"}
@@ -2740,7 +2760,7 @@ def _widget_inventory(
                             "scope_id": f"{symbol}:{session}",
                             "symbol": str(symbol),
                             "session": str(session),
-                            "expected_venues": [str(session).split("_", 1)[0]],
+                            "expected_venues": [venue],
                             "expected_session_buckets": [str(session)],
                             "anchor_at": entry_at.isoformat(),
                             "anchor_price": entry_price,
@@ -2784,7 +2804,7 @@ def _widget_inventory(
                                 "scope_id": f"{symbol}:{session}",
                                 "symbol": str(symbol),
                                 "session": str(session),
-                                "expected_venues": [str(session).split("_", 1)[0]],
+                                "expected_venues": [venue],
                                 "expected_session_buckets": [str(session)],
                                 "anchor_at": exit_at.isoformat(),
                                 "anchor_price": exit_price,

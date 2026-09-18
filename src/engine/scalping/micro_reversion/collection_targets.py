@@ -324,7 +324,11 @@ def build_collection_targets(
     # permanently remove its entry/stop/target microstructure evidence. The
     # bounded daily budget now applies only to prospective research symbols.
     prospective_budget = min(
-        len(prospective_rows), max(0, research_budget - len(active_rows))
+        len(prospective_rows), research_budget,
+        max(0, MAX_COLLECTION_TARGET_ACTIVE_SYMBOLS - len(active_rows)),
+        max(0, MAX_COLLECTION_TARGET_ACTIVE_ITEMS - sum(
+            len(row["_expected_venues"]) for row in active_rows
+        )),
     )
     active_candidates = _priority_round_robin(
         active_rows,
@@ -407,7 +411,8 @@ def build_collection_targets(
         "budget": {
             # Compatibility field: this is the effective selected-universe
             # ceiling, not the prospective research budget in schemas v2/v3.
-            "max_symbols": max(len(active_rows), research_budget),
+            "max_symbols": min(MAX_COLLECTION_TARGET_ACTIVE_SYMBOLS, len(active_rows) + research_budget),
+            "prospective_budget_policy": "independent_of_active_owner_coverage",
             "research_symbol_budget": research_budget,
             "selected_symbol_count": len(selected),
             "selected_registration_item_count": selected_item_count,
@@ -595,6 +600,16 @@ def load_exact_date_collection_targets(
         declared_selected_items = -1
         active_candidate_items = -1
         selected_active_items = -1
+    # Existing v3 manifests retain their original shared-budget contract.
+    independent_budget = (budget or {}).get("prospective_budget_policy") == "independent_of_active_owner_coverage"
+    prospective_limit = (
+        min(research_budget, max(0, MAX_COLLECTION_TARGET_ACTIVE_SYMBOLS - selected_active))
+        if independent_budget else max(0, research_budget - selected_active)
+    )
+    expected_max = (
+        min(MAX_COLLECTION_TARGET_ACTIVE_SYMBOLS, active_candidates + research_budget)
+        if independent_budget else max(active_candidates, research_budget)
+    )
     v3_budget_valid = bool(
         schema == COLLECTION_TARGET_SCHEMA
         and isinstance(selected_targets, list)
@@ -616,9 +631,10 @@ def load_exact_date_collection_targets(
         and active_candidate_items == selected_active_items
         and 0 <= selected_active_items <= declared_selected_items
         and declared_selected == selected_active + selected_prospective
-        and selected_prospective <= max(0, research_budget - selected_active)
+        and 0 <= selected_prospective <= prospective_limit
         and prospective_overflow == len(overflow_targets)
-        and declared_max == max(active_candidates, research_budget)
+        and declared_max == expected_max
+        and budget.get("prospective_budget_policy") in (None, "independent_of_active_owner_coverage")
     )
     if not isinstance(budget, dict) or not (
         legacy_budget_valid or v2_budget_valid or v3_budget_valid

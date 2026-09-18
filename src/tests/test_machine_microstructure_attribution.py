@@ -1529,7 +1529,7 @@ def test_new_episode_symbol_without_micro_is_explicit_gap_not_zero_return(tmp_pa
         report["collection_feedback"]["selected_symbol_count"]
         >= report["collection_feedback"]["active_owner_candidate_count"]
     )
-    assert report["collection_feedback"]["overflow_symbol_count"] > 0
+    assert report["collection_feedback"]["policy_sample_selected_symbol_count"] > 0
     assert report["collection_feedback"]["manual_control_exclusion_applied"] is False
     assert report["policy_change_readiness"]["policy_change_allowed"] is False
 
@@ -6108,3 +6108,24 @@ def test_exact_date_attribution_reuse_invalidates_when_source_directory_changes(
         )
         is None
     )
+
+
+def test_research_calibration_admission_is_not_active_owner_enrollment(tmp_path):
+    target_date = "2026-09-17"
+    symbols = {f"{i:06d}": {"sessions": {"KRX_REGULAR": {"selected_trades": []}}} for i in range(1, 202)}
+    symbols["005930"] = {"sessions": {"KRX_REGULAR": {"selected_trades": []}}}
+    symbols["000001"] = {"sessions": {"KRX_NXT_AFTERMARKET": {"selected_trades": [], "market_data_route": "krx_nxt_integrated", "market_venue": "KRX_NXT"}}}
+    path = tmp_path / "widget_auto_trade_policy_calibration" / f"widget_auto_trade_policy_calibration_{target_date}.json"
+    path.parent.mkdir()
+    path.write_text(json.dumps({"schema": "widget_auto_trade_policy_calibration_report_v1", "target_date": target_date,
+        "market_collection_origins": {symbol: "causal_scanner_research_admission" for symbol in symbols if symbol != "005930"},
+        "symbols": symbols}))
+    inventory, anchors, _ = _widget_inventory(target_date, tmp_path, widget_state_path=tmp_path / "no_state.json")
+    assert not anchors
+    assert inventory["005930"]["scopes"] == ["active_widget_owner"]
+    assert inventory["000001"]["owner_scope_kinds"]["000001:KRX_NXT_AFTERMARKET"] == "prospective_widget_research"
+    payload = build_collection_targets({"target_date": target_date, "consumers": {"widget_postclose_tuning": {"symbols": inventory}}})
+    assert payload["budget"]["active_owner_candidate_count"] == 1
+    assert payload["budget"]["selected_prospective_owner_count"] == 4
+    assert len(payload["selected_targets"]) == 5
+    assert inventory["000001"]["owner_scope_expected_venues"]["000001:KRX_NXT_AFTERMARKET"] == ["SOR"]

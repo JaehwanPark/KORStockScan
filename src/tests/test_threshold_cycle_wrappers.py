@@ -4135,21 +4135,40 @@ def test_machine_final_refresh_captures_dated_capital_before_long_research(tmp_p
     assert next(i for i, call in enumerate(calls) if "machine_research_closed_loop_refresh" in call) > next(i for i, call in enumerate(calls) if "machine_entry_timing_tuning" in call)
 
 
-def test_panic_workspace_selector_failure_precedes_collect_and_notify(tmp_path):
-    workspace = tmp_path / 'workspace'
-    (workspace / 'data/runtime').mkdir(parents=True)
-    (workspace / '.venv/bin').mkdir(parents=True)
-    (workspace / '.venv/bin/python').symlink_to(sys.executable)
-    (workspace / 'src/engine/infrastructure').mkdir(parents=True)
-    (workspace / 'src/engine/infrastructure/runtime_release_router.py').write_bytes(
-        Path('src/engine/infrastructure/runtime_release_router.py').read_bytes())
-    (workspace / 'data/runtime/runtime_release_selection.json').write_text(
-        json.dumps({'schema': 'invalid'}))
-    result = subprocess.run(
-        ['bash', str(Path('deploy/run_panic_sell_defense_intraday.sh').resolve()), '2026-06-05'],
-        env={**os.environ, 'PROJECT_DIR': str(workspace)},
-        capture_output=True, text=True, timeout=10)
-    assert result.returncode != 0
-    assert 'release_selection_schema_invalid' in result.stderr
-    assert '[START]' not in result.stdout
-    assert not (workspace / 'logs/run_panic_sell_defense.log').exists()
+@pytest.mark.parametrize("valid_selection", [True, False])
+def test_panic_default_call_uses_reviewed_release_or_fails_closed(tmp_path, valid_selection):
+    workspace = tmp_path / "project"
+    release = tmp_path / "project-runtime-releases/reviewed"
+    (workspace / "deploy").mkdir(parents=True)
+    (workspace / "src/engine/infrastructure").mkdir(parents=True)
+    for name in ("data", "logs", "tmp", ".venv", "docs"):
+        (workspace / name).mkdir()
+    (workspace / "data/runtime").mkdir()
+    (workspace / ".venv/bin").mkdir()
+    (workspace / ".venv/bin/python").symlink_to(sys.executable)
+    script = Path("deploy/run_panic_sell_defense_intraday.sh")
+    (workspace / "deploy" / script.name).write_bytes(script.read_bytes())
+    router_path = Path("src/engine/infrastructure/runtime_release_router.py")
+    (workspace / router_path).write_bytes(router_path.read_bytes())
+    (release / "deploy").mkdir(parents=True)
+    selected_script = release / "deploy" / script.name
+    selected_script.write_text('printf "reviewed:%s\\n" "$1"\n')
+    for name in ("data", "logs", "tmp", ".venv", "docs", "restart.flag"):
+        (release / name).symlink_to(workspace / name)
+    subprocess.run(["git", "init", "-q", str(release)], check=True)
+    subprocess.run(["git", "-C", str(release), "add", "deploy"], check=True)
+    subprocess.run(["git", "-C", str(release), "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "fixture"], check=True)
+    commit = subprocess.check_output(["git", "-C", str(release), "rev-parse", "HEAD"], text=True).strip()
+    selection = {"schema": "runtime_release_selection_v1", "workspace": str(workspace),
+                 "release_root": str(release), "git_commit": commit if valid_selection else "0" * 40}
+    (workspace / "data/runtime/runtime_release_selection.json").write_text(json.dumps(selection))
+    env = dict(os.environ)
+    env.pop("PROJECT_DIR", None)
+    result = subprocess.run(["bash", str(workspace / "deploy" / script.name), "2026-09-18"], env=env, capture_output=True, text=True, timeout=10)
+    if valid_selection:
+        assert result.returncode == 0, result.stderr
+        assert result.stdout == "reviewed:2026-09-18\n"
+    else:
+        assert result.returncode != 0
+        assert "release_commit_mismatch" in result.stderr
+        assert "reviewed:" not in result.stdout
