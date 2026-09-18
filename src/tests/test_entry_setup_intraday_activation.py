@@ -127,12 +127,7 @@ def test_scope_time_and_owner_are_not_expanded(ready, monkeypatch, tmp_path, ove
     "key,value",
     [
         (policy.CANARY_ENV_KEY, "false"),
-        ("KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOWED_SCOPES", ""),
         ("KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED", "false"),
-        (
-            "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_REQUIRE_PROBE_FIRST_CONTRACT",
-            "false",
-        ),
         ("KORSTOCKSCAN_THRESHOLD_RUNTIME_APPLY_DATE", "2026-08-06"),
     ],
 )
@@ -226,7 +221,6 @@ def test_hundred_budget_carries_prior_orders_and_reaches_final_guards(
     ready, monkeypatch, tmp_path
 ):
     from src.engine import sniper_state_handlers as handlers
-    from src.engine.scalping.entry_opportunity_recheck import config_from_env
 
     _enable_hundred_budget(monkeypatch)
     original = ready.read_bytes()
@@ -244,8 +238,6 @@ def test_hundred_budget_carries_prior_orders_and_reaches_final_guards(
     assert approval["source_maximum_daily_exploration_probes"] == 3
     assert ready.read_bytes() == original
     assert policy.exploration_probe_cap_path(TARGET_DATE).read_bytes() == ledger
-    assert config_from_env().max_daily_recheck == 100
-    assert config_from_env().max_daily_buy_recovery == 100
     stock = {
         "entry_opportunity_recheck_exploration_probe_only": True,
         "entry_setup_live_policy_max_daily_exploration_probes": 100,
@@ -259,24 +251,6 @@ def test_hundred_budget_carries_prior_orders_and_reaches_final_guards(
     assert handlers._entry_setup_exploration_submit_cap_guard(
         stock, qty=2, now_ts=NOW.timestamp()
     )["allowed"]
-    from src.engine.scalping.entry_opportunity_recheck import (
-        EntryOpportunityRecheckState,
-    )
-
-    monkeypatch.setattr(
-        handlers, "_ENTRY_OPPORTUNITY_RECHECK_STATE", EntryOpportunityRecheckState()
-    )
-    captured = {}
-
-    def reserve(**kwargs):
-        captured.update(kwargs)
-        return {"allowed": True}
-
-    monkeypatch.setattr(handlers.entry_recheck_submit_budget, "reserve", reserve)
-    assert handlers._reserve_entry_recheck_submit_budget(stock, "005930", qty=1)[
-        "allowed"
-    ]
-    assert captured["limit"] == 100
     for index in range(3, 100):
         policy.record_exploration_probe_submission(
             trade_date=TARGET_DATE,
@@ -294,21 +268,13 @@ def test_unsupported_budget_cannot_be_approved(ready, limit):
         _approve(ready, maximum_daily_exploration_probes=limit)
 
 
-def test_hundred_budget_cannot_bypass_lower_recheck_or_expand_scope(
-    ready, monkeypatch, tmp_path
-):
-    with pytest.raises(ValueError, match="budget_env_mismatch"):
-        _approve(ready, maximum_daily_exploration_probes=100)
-    _enable_hundred_budget(monkeypatch)
+def test_retired_recheck_budget_does_not_control_normal_exploration(ready, monkeypatch, tmp_path):
     _pin(monkeypatch, tmp_path, _approve(ready, maximum_daily_exploration_probes=100))
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_DAILY_BUY_RECOVERY", "3"
-    )
-    assert not _resolve()["enabled"]
-    _enable_hundred_budget(monkeypatch)
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOWED_SCOPES", "NXT|NXT_AFTERMARKET"
-    )
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_DAILY_BUY_RECOVERY", "3")
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ALLOWED_SCOPES", "NXT|NXT_AFTERMARKET")
+    assert _resolve()["enabled"]
+    assert _resolve()["maximum_daily_exploration_probes"] == 100
+    monkeypatch.setenv(policy.CANARY_ENV_KEY, "false")
     assert not _resolve()["enabled"]
 
 
@@ -352,7 +318,7 @@ def test_future_daily_krx_candidate_preopen_and_runtime_keep_hundred_budget(
     monkeypatch.setenv(
         "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_DAILY_BUY_RECOVERY", "3"
     )
-    assert not _resolve(now=generated.replace(hour=9))["enabled"]
+    assert _resolve(now=generated.replace(hour=9))["enabled"]
 
 
 @pytest.mark.parametrize(

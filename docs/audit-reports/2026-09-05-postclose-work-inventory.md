@@ -57,7 +57,7 @@ PID·lock·progress·deadline·latest terminal을 실제 run 기준으로 확인
 | #15 | `monitoring.low_price_two_leg_tuning` | 조건부 ON, actual 분석 | #74 후 한 번·actual policy·leg/holding/terminal·missing cost=null |
 | #16 | `monitoring.low_price_two_leg_expanded_candidate_research` → `automation.low_price_two_leg_auto_expansion_policy` | 조건부 ON, 연구/발행 | 실제 state/catalog·candidate/calibration/holdout·checkpoint/resume·dated publication. bar touch≠broker fill |
 | #21 | `monitoring.one_share_threshold_opportunity` | RETIRED, 사용자 삭제 | 신규 scout runtime과 함께 전용 threshold/AI review·producer/consumer·산출물 삭제; 현행 필수 작업 아님 |
-| #23 | `scalping.entry_recheck_drought_controller` | 조건부 ON, 기존 family | 최근 동일 scope 유효 원천·attempt/cycle·조건부 recheck candidate→PREOPEN; 누적 backtest는 on-demand |
+| #23 | `scalping.entry_recheck_drought_controller` | RETIRED, 사용자 삭제 | 전용 score/WAIT 복구 runtime·budget·장후/PREOPEN·maintenance·산출물 삭제. 정상 machine RECHECK·보조 AI와 공통 제출병목 진단은 기존 owner를 사용; [폐기 검증](2026-09-18-entry-recheck-drought-retirement-review.md) |
 | #27 | `scalping.microstructure_reaction_context` | 조건부 ON, feature 진단 | 원 receipt/required feature·delivery·동일 cutoff·missing/unproven → 기존 평가/감사 |
 | #45 | `market_panic_breadth_collector --report-only` | 조건부 ON, context | exact market/window·coverage·panic cohort; 직접 BUY/SELL authority 없음 |
 | #46 | `panic_sell_defense_report` | 조건부 ON, context | panic risk/holding source·실제 action과 진단 분리 |

@@ -36,17 +36,6 @@ THRESHOLD_STAGE_FAMILY_MAP = {
     "entry_order_cancel_confirmed": "entry_price_execution_quality",
     "entry_order_cancel_failed": "entry_price_execution_quality",
     "entry_cancel_wait_attribution": "entry_cancel_wait_attribution",
-    "entry_opportunity_recheck_enqueued": "entry_opportunity_recheck_runtime",
-    "entry_opportunity_recheck_refresh_attempted": "entry_opportunity_recheck_runtime",
-    "entry_opportunity_recheck_evaluated": "entry_opportunity_recheck_runtime",
-    "entry_opportunity_recheck_fresh_pass": "entry_opportunity_recheck_runtime",
-    "entry_opportunity_recheck_normal_buy_reentered": "entry_opportunity_recheck_runtime",
-    "entry_opportunity_recheck_probe_armed": "entry_opportunity_recheck_runtime",
-    "entry_opportunity_recheck_blocked": "entry_opportunity_recheck_runtime",
-    "entry_opportunity_recheck_submit_observed": "entry_opportunity_recheck_runtime",
-    "entry_opportunity_recheck_direct_submitted": "entry_opportunity_recheck_runtime",
-    "entry_opportunity_recheck_filled": "entry_opportunity_recheck_runtime",
-    "entry_opportunity_recheck_sell_completed": "entry_opportunity_recheck_runtime",
     "entry_ai_price_ofi_skip_demoted": "entry_ofi_ai_smoothing",
     "holding_flow_ofi_smoothing_applied": "holding_flow_ofi_smoothing",
     "holding_flow_override_force_exit": "holding_flow_ofi_smoothing",
@@ -151,6 +140,12 @@ def _clean_family(value: Any) -> str:
 
 def threshold_family_for_stage(stage: str, fields: dict | None = None) -> str:
     normalized_stage = str(stage or "").strip()
+    if normalized_stage.startswith("entry_opportunity_recheck_") or (
+        isinstance(fields, dict)
+        and _clean_family(fields.get("threshold_family")) == "entry_opportunity_recheck_runtime"
+    ):
+        # Original pipeline/custody receipts survive; no retired tuning partition.
+        return ""
     if normalized_stage in SMOOTHING_SOURCE_ONLY_PATH_STAGES:
         journal_family = _clean_family(
             fields.get("journal_family") if isinstance(fields, dict) else None

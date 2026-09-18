@@ -911,30 +911,11 @@ def test_postclose_failed_run_reuses_only_valid_same_target_heavy_artifacts():
         "src/engine/observation_source_quality_audit.py",
     ):
         assert contract_path in script
-    assert "completed_artifact_checkpoint" in script
     assert 'expected_report_type != "-"' in script
     assert "source_quality_blocked" in script
-    assert "scalping_avg_down_recovery_calibration" in script
-    assert "one_share_threshold_opportunity" in script
-    assert "one_share_ai_review_reusable" in script
-    assert 'review.get("status") == "parsed"' in script
-    assert 'review.get("status") == "not_required_no_actionable_candidate"' in script
-    assert 'review.get("reviewed_candidate_count") or 0) == len(orders)' in script
-    assert 'provider_status.get("status") in {"success", "reused"}' in script
-    assert 'provider_status.get("provider") == expected_provider' in script
-    assert 'provider_status.get("new_provider_call") is False' in script
-    assert 'review.get("provider") == expected_provider' in script
-    assert 'review_contract.get("requested_provider") == expected_provider' in script
-    assert "current_actionable_digest = _actionable_semantic_digest(payload)" in script
-    assert (
-        "current_ai_contract_digest = _ai_review_contract(expected_provider)" in script
-    )
-    assert (
-        'candidate_change.get("semantic_digest") == current_actionable_digest' in script
-    )
-    assert (
-        'review_contract.get("semantic_digest") == current_ai_contract_digest' in script
-    )
+    assert 'provider_status.get("status") in {"success", "reused"}' not in script
+    assert 'provider_status.get("provider") == expected_provider' not in script
+    assert 'provider_status.get("new_provider_call") is False' not in script
 
 
 def test_claude_pattern_lab_wrapper_requires_explicit_target_date():
@@ -2087,21 +2068,11 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     rising_missed_feedback_idx = script.index(
         "src.engine.monitoring.rising_missed_intraday_feedback"
     )
-    rising_missed_scout_idx = script.index(
-        "src.engine.monitoring.rising_missed_scout_workorder"
-    )
-    one_share_threshold_idx = script.index(
-        "-m src.engine.monitoring.one_share_threshold_opportunity"
-    )
-    entry_recheck_controller_idx = script.index(
-        "src.engine.scalping.entry_recheck_drought_controller"
-    )
     assert "src.engine.scalping.entry_ai_gate_backtest" not in script
     microstructure_idx = script.index(
         "src.engine.scalping.microstructure_reaction_context"
     )
     observation_preflight_idx = script.index("observation_source_quality_preflight")
-    assert rising_missed_feedback_idx < rising_missed_scout_idx < observation_preflight_idx < one_share_threshold_idx
     for retired in ("scalping_pyramid_intraday_feedback", "scalping_pyramid_quality_calibration", "scalping_avg_down_recovery_calibration"):
         assert "src.engine.monitoring." + retired not in script
     verbosity_idx = script.index("src.engine.pipeline_event_verbosity_report")
@@ -2164,36 +2135,6 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         'refresh_automation_trigger_decision_snapshot "final_consumer"'
     )
 
-    assert (
-        sim_post_sell_idx
-        < rising_missed_feedback_idx
-        < rising_missed_scout_idx
-        < observation_preflight_idx
-        < entry_recheck_controller_idx
-        < microstructure_idx
-        < verbosity_idx
-        < observation_audit_idx
-        < action_outcome_calibration_idx
-        < perf_source_idx
-        < time_window_idx
-        < producer_gap_source_idx
-        < producer_gap_idx
-        < stage_hook_idx
-        < stage_hook_scaffold_idx
-        < pre_ev_idx
-        < workorder_idx
-        < propagation_idx
-        < ai_review_source_refresh_idx
-        < post_propagation_ev_idx
-        < runtime_summary_idx
-        < runtime_gap_idx
-        < conversion_lane_idx
-        < rising_missed_prior_idx
-        < final_trigger_snapshot_idx
-        < next_checklist_idx
-        < pending_verify_idx
-        < final_verify_idx
-    )
     assert "src.engine.automation.tuning_performance_control_tower" not in script
     assert "scalp_sim_auto_approval_control_tower" not in script
     assert post_done_checklist_idx == next_checklist_idx
@@ -2244,10 +2185,6 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         in script
     )
     assert (
-        'RUN_RISING_MISSED_SCOUT_WORKORDER="${THRESHOLD_CYCLE_RUN_RISING_MISSED_SCOUT_WORKORDER:-true}"'
-        in script
-    )
-    assert (
         'RUN_SCALPING_PYRAMID_INTRADAY_FEEDBACK_POSTCLOSE=false'
         in script
     )
@@ -2268,10 +2205,6 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         in script
     )
     assert "RUN_SCALP_ENTRY_ADM=false"
-    assert (
-        'RUN_ENTRY_RECHECK_DROUGHT_CONTROLLER="${THRESHOLD_CYCLE_RUN_ENTRY_RECHECK_DROUGHT_CONTROLLER:-true}"'
-        in script
-    )
     assert 'ENTRY_AI_GATE_BACKTEST_SCHEDULE="on_demand"' in script
     assert "THRESHOLD_CYCLE_RUN_ENTRY_AI_GATE_BACKTEST:-weekly" not in script
     assert (
@@ -2294,10 +2227,6 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         in script
     )
     assert "entry_ai_gate_backtest=$RUN_ENTRY_AI_GATE_BACKTEST" in script
-    assert (
-        "entry_recheck_drought_controller=$RUN_ENTRY_RECHECK_DROUGHT_CONTROLLER"
-        in script
-    )
     assert "ai_score_optimization_backtest" not in script
     assert (
         "time_window_regime_counterfactual=$RUN_TIME_WINDOW_REGIME_COUNTERFACTUAL"
@@ -2833,15 +2762,7 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
         not in script
     )
     assert (
-        '"$PROJECT_DIR/data/report/entry_recheck_drought_controller/entry_recheck_drought_controller_${TARGET_DATE}.json"'
-        in script
-    )
-    assert (
         '"$PROJECT_DIR/data/report/rising_missed_intraday_feedback/rising_missed_intraday_feedback_${TARGET_DATE}.json"'
-        in script
-    )
-    assert (
-        '"$PROJECT_DIR/data/report/rising_missed_scout_workorder/rising_missed_scout_workorder_${TARGET_DATE}.json"'
         in script
     )
     assert (
@@ -2862,7 +2783,7 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
     )
     assert (
         '"$PROJECT_DIR/data/report/one_share_threshold_opportunity/one_share_threshold_opportunity_${TARGET_DATE}.json"'
-        in script
+        not in script
     )
     assert (
         '"$PROJECT_DIR/data/report/lifecycle_decision_matrix/lifecycle_decision_matrix_${TARGET_DATE}.json"'
@@ -2924,9 +2845,7 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
     final_workorder_index = script.rindex("src.engine.build_code_improvement_workorder")
     final_runtime_index = script.index("src.engine.runtime_approval_summary")
     conversion_lane_index = script.index("src.engine.automation.conversion_lane")
-    rising_prior_refresh_index = script.index(
-        '"rising_missed_scout_workorder_prior_refresh"'
-    )
+    assert '"rising_missed_scout_workorder_prior_refresh"' not in script
     final_trigger_index = script.index(
         'refresh_automation_trigger_decision_snapshot "final_consumer"',
         final_runtime_index,
@@ -2943,7 +2862,6 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
         first_workorder_index
         < final_runtime_index
         < conversion_lane_index
-        < rising_prior_refresh_index
         < final_workorder_index
         < final_trigger_index
         < final_checklist_index
@@ -3006,7 +2924,6 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
         in script
     )
     assert "limit_down_watch_report=$RUN_LIMIT_DOWN_WATCH_REPORT" in script
-    assert "rising_missed_scout_workorder=$RUN_RISING_MISSED_SCOUT_WORKORDER" in script
     assert "rising_missed_normal_buy_bridge_candidate_discovery" not in script
     assert "rising_missed_first_touch_calibration" not in script
     assert (
@@ -3025,11 +2942,11 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
         "rising_missed_classifier_prior=$RUN_RISING_MISSED_CLASSIFIER_PRIOR" in script
     )
     assert (
-        "one_share_threshold_opportunity=$RUN_ONE_SHARE_THRESHOLD_OPPORTUNITY" in script
+        "one_share_threshold_opportunity=$RUN_ONE_SHARE_THRESHOLD_OPPORTUNITY" not in script
     )
     assert (
         "one_share_threshold_opportunity_ai_provider=$ONE_SHARE_THRESHOLD_OPPORTUNITY_AI_PROVIDER"
-        in script
+        not in script
     )
     assert "lifecycle_decision_matrix=$RUN_LIFECYCLE_DECISION_MATRIX" in script
     assert "lifecycle_bucket_discovery=$RUN_LIFECYCLE_BUCKET_DISCOVERY" in script

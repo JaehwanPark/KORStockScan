@@ -9,6 +9,7 @@ import hashlib
 import json
 import math
 from datetime import date, datetime, timedelta, timezone
+import math
 from typing import Any
 
 CURRENT_SCHEMA_VERSION = 6
@@ -807,3 +808,13 @@ def validate_scope_evidence(evidence: Any, *, source_date: str, scope: str) -> b
         return result["status"] in {"pass", "source_quality_blocked"}
     except (ValueError, TypeError, AttributeError):
         return False
+
+
+def finite_number(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        result = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return result if math.isfinite(result) else None

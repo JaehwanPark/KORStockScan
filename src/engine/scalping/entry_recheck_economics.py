@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from src.engine.scalping.entry_recheck_policy import count, finite_number
+import math
 
 LEDGER_KEY = "entry_opportunity_recheck_buy_receipts"
 SCHEMA = "entry_recheck_position_economics_v1"
@@ -241,4 +241,139 @@ def terminal_economics(
             PREFIX + "buy_order_count": len(orders),
         }
     )
+    return result
+
+
+# Historical receipt lineage only. No attempt minting or entry authority.
+def finite_number(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        result = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return result if math.isfinite(result) else None
+
+
+def count(value: Any) -> int:
+    number = finite_number(value)
+    return (
+        int(number)
+        if number is not None and number >= 0 and number.is_integer()
+        else -1
+    )
+
+
+ATTRIBUTION_VERSION = "entry_opportunity_recheck_exact_attempt_v3"
+RUNTIME_FAMILY = "entry_opportunity_recheck_runtime"
+DIRECT_SUBMIT_MAX_DELAY_SEC = 120.0
+
+
+ATTRIBUTION_KEYS = (
+    "entry_opportunity_recheck_attempt_id",
+    "entry_opportunity_recheck_armed",
+    "entry_opportunity_recheck_armed_at",
+    "entry_opportunity_recheck_source_stage",
+    "entry_opportunity_recheck_score",
+    "entry_opportunity_recheck_reason",
+    "entry_opportunity_recheck_ai_action",
+    "entry_opportunity_recheck_probe_only",
+    "entry_opportunity_recheck_probe_intent",
+    "entry_opportunity_recheck_submit_observed",
+    "entry_opportunity_recheck_submitted_at",
+    "entry_opportunity_recheck_submit_delay_sec",
+    "entry_opportunity_recheck_direct_submit",
+    "entry_opportunity_recheck_broker_order_no",
+    "entry_opportunity_recheck_requested_qty",
+    "entry_opportunity_recheck_fill_observed",
+    "entry_opportunity_recheck_filled_at",
+    "entry_opportunity_recheck_fill_order_no",
+    "entry_opportunity_recheck_fill_price",
+    "entry_opportunity_recheck_fill_qty",
+    "entry_opportunity_recheck_scope",
+    "entry_opportunity_recheck_attribution_schema",
+    "entry_opportunity_recheck_exploration_probe_only",
+    LEDGER_KEY,
+)
+
+
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def attribution_fields(
+    stock: Mapping[str, Any] | None,
+    *,
+    stage: str = "",
+    event_fields: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Copy immutable recheck lineage and terminal economics to an event."""
+
+    if not isinstance(stock, Mapping):
+        return {}
+    fields = event_fields if isinstance(event_fields, Mapping) else {}
+    # Evaluation is a new attempt, not a snapshot of the previous order's
+    # custody. Never copy old arm/submit/fill state into that event, even if
+    # the new decision is rejected. Existing stock custody remains untouched.
+    if stage == "entry_opportunity_recheck_evaluated":
+        return {}
+    attempt_id = str(stock.get("entry_opportunity_recheck_attempt_id") or "").strip()
+    if not attempt_id:
+        return {}
+    event_attempt = str(
+        fields.get("entry_opportunity_recheck_attempt_id") or ""
+    ).strip()
+    if event_attempt and event_attempt != attempt_id:
+        return {}
+    result = {
+        key: stock.get(key)
+        for key in ATTRIBUTION_KEYS
+        if key != LEDGER_KEY and stock.get(key) not in (None, "", "-")
+    }
+    result.update(
+        {
+            "entry_opportunity_recheck_attempt_id": attempt_id,
+            "entry_opportunity_recheck_attribution_schema": (
+                stock.get("entry_opportunity_recheck_attribution_schema")
+                or "entry_opportunity_recheck_exact_attempt_v1"
+            ),
+            "entry_opportunity_recheck_runtime_family": RUNTIME_FAMILY,
+        }
+    )
+    if stage in {"sell_completed", "entry_opportunity_recheck_sell_completed"}:
+        if (
+            LEDGER_KEY in stock
+            or stock.get("entry_opportunity_recheck_attribution_schema")
+            == ATTRIBUTION_VERSION
+        ):
+            result.update(terminal_economics(stock, fields))
+            result["entry_opportunity_recheck_terminal_outcome"] = "sell_completed"
+            return result
+        profit_rate = fields.get(
+            "entry_opportunity_recheck_cost_adjusted_profit_pct",
+            fields.get("profit_rate"),
+        )
+        realized_pnl = fields.get("realized_pnl_krw")
+        if realized_pnl in (None, "", "-"):
+            realized_pnl = fields.get("main_lifecycle_realized_net_pnl_krw")
+        result.update(
+            {
+                "entry_opportunity_recheck_terminal_outcome": "sell_completed",
+                "entry_opportunity_recheck_cost_adjusted_profit_pct": profit_rate,
+                "entry_opportunity_recheck_realized_net_pnl_krw": realized_pnl,
+                "entry_opportunity_recheck_economics_complete": (
+                    _truthy(fields.get("sell_execution_receipt_economics_complete"))
+                    and finite_number(fields.get("cumulative_sell_qty")) == 1
+                ),
+                "entry_opportunity_recheck_economics_source": (
+                    "broker_sell_completed_receipt"
+                ),
+            }
+        )
     return result

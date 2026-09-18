@@ -11,7 +11,6 @@ from src.engine.automation.submit_drought_contract import (
     validate_submit_drought_contract,
 )
 from src.engine.scalping import entry_ai_gate_backtest as controller
-from src.engine.scalping.entry_recheck_policy import scope_summary
 from src.tests.submit_drought_fixtures import make_report
 
 
@@ -1069,45 +1068,8 @@ def test_shared_validator_rejects_decision_or_census_drift(mutation):
     assert validate_submit_drought_contract(report, contract)["status"] == "invalid"
 
 
-def test_runtime_history_excludes_bad_scope_and_keeps_valid_survivor(
-    monkeypatch, tmp_path
-):
-    report = make_report()
-    by_scope = report["entry_submit_drought_contract"]["by_venue_session"]
-    by_scope["NXT|NXT_AFTERMARKET"] = deepcopy(by_scope["KRX|KRX_REGULAR"])
-    by_scope["NXT|NXT_AFTERMARKET"].pop("exact_attempt_contract")
-    path = tmp_path / "buy_funnel_sentinel_2026-09-07.json"
-    path.write_text(json.dumps(report))
-    monkeypatch.setattr(
-        controller,
-        "load_source_quality_preflight",
-        lambda day: {"status": "pass", "tuning_input_allowed": True},
-    )
-    day = controller._drought_day_summary(path)
-    assert day["source_quality_pass"] is True
-    assert [r["scope"] for r in day["eligible_scopes"]] == ["KRX|KRX_REGULAR"]
-    assert day["excluded_sentinel_scopes"] == ["NXT|NXT_AFTERMARKET"]
-    by_scope["KRX|KRX_REGULAR"].pop("exact_attempt_contract")
-    path.write_text(json.dumps(report))
-    day = controller._drought_day_summary(path)
-    assert day["source_quality_pass"] is False
-    assert day["addressable"] is False
 
 
-def test_preopen_requires_bound_exact_evidence_not_just_flags():
-    from src.engine import threshold_cycle_preopen_apply as preopen
-    from src.tests.test_threshold_cycle_preopen_apply import (
-        _valid_entry_recheck_candidate,
-    )
-
-    candidate = _valid_entry_recheck_candidate()
-    assert preopen._entry_recheck_drought_candidate_contract_error(candidate) == ""
-    day = candidate["source_metrics"]["drought_conditional_policy"]["history"][0]
-    day["eligible_scopes"][0].pop("sentinel_evidence")
-    assert (
-        preopen._entry_recheck_drought_candidate_contract_error(candidate)
-        == "drought_sentinel_exact_contract_invalid"
-    )
 
 
 def test_scope_evidence_rejects_date_scope_and_payload_drift():
@@ -1124,47 +1086,6 @@ def test_scope_evidence_rejects_date_scope_and_payload_drift():
     assert not validate_scope_evidence(evidence, source_date="2026-09-07", scope=scope)
 
 
-def test_preopen_scrub_preserves_nullable_hash_bound_evidence():
-    from src.engine import threshold_cycle_preopen_apply as preopen
-    from src.tests.test_threshold_cycle_preopen_apply import (
-        _valid_entry_recheck_candidate,
-    )
-
-    candidate = _valid_entry_recheck_candidate()
-    for day in candidate["source_metrics"]["drought_conditional_policy"]["history"]:
-        for index, row in enumerate(day["eligible_scopes"]):
-            evidence = row["sentinel_evidence"]
-            contract = deepcopy(evidence["contract"])
-            contract["optional_diagnostic"] = {"unknown": None, "values": [None]}
-            evidence = make_scope_evidence(
-                {
-                    "schema_version": evidence["report_schema_version"],
-                    "target_date": evidence["target_date"],
-                    "as_of": evidence["as_of"],
-                },
-                row["scope"],
-                contract,
-            )
-            day["eligible_scopes"][index] = scope_summary(
-                row["scope"], {**contract, "sentinel_evidence": evidence}
-            )
-    original = deepcopy(candidate)
-    assert preopen._entry_recheck_drought_candidate_contract_error(candidate) == ""
-    scrubbed = preopen._scrub_removed_contracts(candidate)
-    assert candidate == original
-    assert preopen._entry_recheck_drought_candidate_contract_error(scrubbed) == ""
-    old_rows = original["source_metrics"]["drought_conditional_policy"]["history"]
-    new_rows = scrubbed["source_metrics"]["drought_conditional_policy"]["history"]
-    for old_day, new_day in zip(old_rows, new_rows):
-        for old, new in zip(old_day["eligible_scopes"], new_day["eligible_scopes"]):
-            assert new["sentinel_evidence"] == old["sentinel_evidence"]
-            assert new["sentinel_evidence"] is not old["sentinel_evidence"]
-    new_rows[0]["eligible_scopes"][0]["sentinel_evidence"]["contract"][
-        "optional_diagnostic"
-    ]["unknown"] = 0
-    assert preopen._entry_recheck_drought_candidate_contract_error(scrubbed) == (
-        "drought_sentinel_exact_contract_invalid"
-    )
 
 
 def test_preopen_evidence_preservation_does_not_restore_retired_authority():
@@ -1174,7 +1095,7 @@ def test_preopen_evidence_preservation_does_not_restore_retired_authority():
     evidence = {"contract": {"family": family, "unknown": None}, "sha256": "bad"}
     rows = [
         {"family": family, "sentinel_evidence": evidence},
-        {"family": "entry_opportunity_recheck_runtime", "sentinel_evidence": evidence},
+        {"family": "samsung_machine_entry_policy", "sentinel_evidence": evidence},
     ]
     scrubbed = preopen._scrub_removed_contracts(rows)
     assert len(scrubbed) == 1
@@ -1186,16 +1107,6 @@ def test_preopen_evidence_preservation_does_not_restore_retired_authority():
     )
 
 
-@pytest.mark.parametrize(
-    "stage", ["blocked_liquidity", "blocked_zero_qty", "entry_armed_expired"]
-)
-def test_wider_upstream_diagnostics_do_not_widen_recheck_authority(stage):
-    report = make_report(terminal_stage=stage)
-    contract = report["entry_submit_drought_contract"]
-    assert contract["causal_bottleneck_axes"] == ["UPSTREAM_GATE"]
-    row = scope_summary("KRX|KRX_REGULAR", contract)
-    assert row["critical"] is True
-    assert row["addressable"] is False
 
 
 def test_interleaved_explicit_attempts_keep_their_own_stages():

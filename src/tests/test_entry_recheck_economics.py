@@ -11,8 +11,8 @@ from src.engine.scalping.entry_recheck_economics import (
     recovered_fill_fields,
     terminal_economics,
 )
-from src.engine.scalping.entry_opportunity_recheck import attribution_fields
-from src.engine.scalping.entry_recheck_policy import ATTRIBUTION_VERSION
+from src.engine.scalping.entry_recheck_economics import attribution_fields
+from src.engine.scalping.entry_recheck_economics import ATTRIBUTION_VERSION
 
 
 def stock_and_receipt():

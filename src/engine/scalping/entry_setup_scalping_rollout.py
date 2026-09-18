@@ -190,7 +190,6 @@ def authorized_scopes(
 ) -> frozenset[str]:
     rollout = load_rollout(env=env, now=now)
     auto_promotion = load_auto_promotion(env=env, now=now)
-    from src.engine.scalping.entry_recheck_policy import runtime_scope
 
     scopes = set(SCOPES) if rollout and rollout.get("valid") is True else set()
     if auto_promotion and auto_promotion.get("valid") is True:
@@ -307,3 +306,10 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+def runtime_scope(venue: object, session: object) -> str:
+    venue, session = str(venue or "").upper(), str(session or "").upper()
+    if venue == "NXT" and session in {"KRX_REGULAR", "NXT_REGULAR_OVERLAP"}:
+        session = "NXT_REGULAR"
+    return f"{venue}|{session}"

@@ -40,54 +40,8 @@ def _ws(at, *, price=10000):
     }
 
 
-@pytest.mark.parametrize("age", [0.753, 1.044, 1.065, 1.234])
-def test_recheck_acquisition_uses_own_limit_but_submit_stays_stricter(monkeypatch, age):
-    monkeypatch.setattr(handlers.time, "time", lambda: NOW)
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_ENABLED", "true")
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_MAX_AGE_MS", "700")
-    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_WS_AGE_MS", "1500")
-    latest = _ws(NOW - age, price=10020)
-    original = _ws(NOW - 5)
-    monkeypatch.setattr(
-        handlers, "WS_MANAGER", SimpleNamespace(get_latest_data=lambda _: latest)
-    )
-    ws, ticks, fields = handlers._refresh_entry_opportunity_recheck_inputs(
-        "123456", "SCALPING", original, original["recent_trade_ticks"]
-    )
-    assert fields["entry_opportunity_recheck_quote_refresh_applied"] is True
-    assert fields["entry_opportunity_recheck_quote_refresh_max_age_ms"] == 1500
-    assert ws["last_ws_update_ts"] == latest["last_ws_update_ts"]
-    assert ticks == latest["recent_trade_ticks"]
-    assert original["curr"] == 10000
-    _, final = handlers._pre_submit_refresh_real_ws_snapshot("123456", ws, "SCALPING")
-    assert final["pre_submit_ws_snapshot_refresh_applied"] is False
-    assert final["pre_submit_ws_snapshot_refresh_reason"] == "latest_snapshot_stale"
-    assert final["pre_submit_ws_snapshot_refresh_max_age_ms"] == 700
-    _, handoff = handlers._consume_entry_opportunity_recheck_ws_handoff(
-        {"entry_opportunity_recheck_armed": True},
-        _ws(NOW),
-        {
-            "strategy": "SCALPING",
-            "_entry_opportunity_recheck_ws_handoff": {"snapshot": ws},
-        },
-    )
-    assert handoff["entry_opportunity_recheck_ws_handoff_applied"] is False
-    assert handoff["entry_opportunity_recheck_ws_handoff_reason"] == "snapshot_stale"
 
 
-@pytest.mark.parametrize("age", [1.6, -0.1, float("nan"), float("inf")])
-def test_recheck_does_not_accept_stale_future_or_nonfinite_receipts(monkeypatch, age):
-    monkeypatch.setattr(handlers.time, "time", lambda: NOW)
-    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_ENABLED", "true")
-    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_WS_AGE_MS", "1500")
-    latest = _ws(NOW - age)
-    monkeypatch.setattr(
-        handlers, "WS_MANAGER", SimpleNamespace(get_latest_data=lambda _: latest)
-    )
-    _, _, fields = handlers._refresh_entry_opportunity_recheck_inputs(
-        "123456", "SCALPING", _ws(NOW - 5), []
-    )
-    assert fields["entry_opportunity_recheck_quote_refresh_applied"] is False
 
 
 def _context():

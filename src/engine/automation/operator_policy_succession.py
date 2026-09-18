@@ -60,7 +60,6 @@ STRATEGY_FAMILIES = frozenset(
         PYRAMID,
         AVG_DOWN,
         "early_accel_recheck_runtime",
-        "entry_opportunity_recheck_runtime",
         "entry_price_gap_profile_runtime",
         "pre_submit_liquidity_relief_runtime",
         "profit_stagnation_exit_runtime",

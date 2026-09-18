@@ -16,6 +16,12 @@
 
 ## 배포·성과 검증
 
+- [x] `[EntryRecheckDroughtRetirement0918] 전용 score/WAIT 복구 경로·장후/PREOPEN·산출물 폐기` (`Due: 2026-09-18`, `Slot: INTRADAY`, `TimeWindow: 10:50~12:00`, `Track: RuntimeStability`)
+  - Source: [폐기 review와 검증 증거](../audit-reports/2026-09-18-entry-recheck-drought-retirement-review.md), `tmp/entry-recheck-retirement-20260918/deleted-products.json`, `src/engine/lifecycle/retirement.py`.
+  - 사용자 지시: 관련 런타임·장후작업·산출물 삭제 후 반복 리뷰·보완·commit/push·배포 승인. 이전 전용 controller 파일선택 수리/전일 보고서 갱신 목표를 폐기로 대체한다.
+  - Acceptance: 전용 actor/controller/policy/maintenance/budget 모듈과 생산/소비 제거; 과거 env·lock·후보·workorder·복원 상태·backfill로 재활성화/재생성 불가. 정상 machine RECHECK·보조 AI와 공통 broker/sizing/cap/stop/custody 및 실제 체결·손익 정산 보존. source review/fix/re-review 및 영향 회귀 검증 증거는 Source에 기록한다.
+  - 배포 receipt: clean source `d7b2d3807`을 main/review에 atomic push, managed root `entry-recheck-retired-reviewed-20260918`를 selector CAS로 배포했다(`tmp/entry-recheck-retirement-20260918/deployment.json`). Main PID 없음/actual_pid_consumed=false; readonly PREOPEN은 기존 integrated Entry 설정·일자·해시4개 결손으로 `runtime_env_handoff_missing` fail. 기존 정지 postclose cron은 보존하고 설치된 start/preopen/eod3개 selector route만 확인했다. dated env 발행·기동·cron 복원·hard safety 완화는 수행하지 않았다. 폐기한 family의 후보0·source gap·미성숙을 복원 owner로 생성하지 않는다.
+
 - [ ] `[KiwoomCommonHealthOpportunityCostAcceptance0917] 공통 health 후속·PYRAMID 폐기·AVG_DOWN 공통 반등 소비·실제 성과 검증` (`Due: 2026-09-18`, `Slot: INTRADAY`, `TimeWindow: 07:00~20:30`, `Track: RuntimeStability`)
   - Source: [현행 폐기·공통 반등 review](../audit-reports/2026-09-18-pyramid-retirement-avg-down-shared-rebound-review.md), [배포·성과 검증 receipt](../audit-reports/2026-09-18-scale-in-economic-tuning-deployment-and-performance-review.md), [상세계획 SI0–SI6](../proposals/scale-in-pyramid-avg-down-economic-tuning-implementation-plan-2026-09-17.md), [전일 동일 stable ID의 Acceptance/검증 이력](2026-09-17-stage2-todo-checklist.md), `data/runtime/runtime_release_selection.json`, `tmp/scale-in-economic-deployment-20260918/existing-artifact-economics.json`.
   - 사용자 승인: 최종 재리뷰 커밋 배포와 기존 자동 산출물 기반 성과 검증. 기존 ID를 transfer하며 전일 common-health 미완료 Acceptance/History는 전일 Source에서 보존한다. 새로운 별도 order/quantity/provider/전략 승인 owner를 만들지 않는다.

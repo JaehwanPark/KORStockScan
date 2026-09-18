@@ -212,61 +212,6 @@ def test_rollout_never_uses_invalid_pin_or_bypasses_guard(
     assert result["enabled"] is False
 
 
-@pytest.mark.parametrize("scope", rollout.SCOPES)
-def test_rollout_reaches_existing_recheck_with_safety_guards(
-    monkeypatch, tmp_path, scope
-):
-    from src.tests.test_entry_opportunity_recheck import _decision, _enabled_config
-    from src.engine.scalping.entry_recheck_policy import runtime_scope
-
-    path = pin(monkeypatch, tmp_path)
-    monkeypatch.setattr(
-        rollout,
-        "datetime",
-        type(
-            "Clock",
-            (),
-            {
-                "now": staticmethod(lambda *a: NOW),
-                "fromisoformat": datetime.fromisoformat,
-            },
-        ),
-    )
-    venue, session = scope.split("|")
-    config = _enabled_config(
-        allowed_scopes=frozenset({runtime_scope(venue, session)}),
-        probe_first_active_date="DAILY",
-        max_daily_recheck=100,
-        max_daily_buy_recovery=100,
-    )
-    args = dict(
-        config=config,
-        position_tag="SCALP_BASE",
-        effective_venue=venue,
-        market_session_bucket=session,
-        today="2026-09-11",
-        entry_setup_policy_decision={
-            "entry_setup_live_policy_scope_authority": "operator_all_scalping_rollout",
-            "entry_setup_live_policy_runtime_effect": True,
-            "entry_setup_live_policy_target_date": "2026-09-11",
-            "entry_setup_live_policy_activation_sha256": hashlib.sha256(
-                path.read_bytes()
-            ).hexdigest(),
-            "entry_setup_live_policy_effective_venue": venue,
-            "entry_setup_live_policy_session_bucket": session,
-        },
-    )
-    assert _decision(**args).allowed
-    assert not _decision(**args, latency_state="DANGER").allowed
-    assert not _decision(**args, ws_age_ms=1501).allowed
-    assert not _decision(**args, source_reason="broker_guard_blocked").allowed
-
-    stale = dict(
-        args["entry_setup_policy_decision"],
-        entry_setup_live_policy_activation_sha256="0" * 64,
-    )
-    assert not _decision(**{**args, "entry_setup_policy_decision": stale}).allowed
-    assert not _decision(**{**args, "entry_setup_policy_decision": None}).allowed
 
 
 def test_scope_change_never_resets_existing_accepted_order_ledger(

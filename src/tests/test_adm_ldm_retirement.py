@@ -270,7 +270,7 @@ def test_wrapper_has_no_retired_producer_commands():
     script = Path("deploy/run_threshold_cycle_postclose.sh").read_text()
     for name in policy.RETIRED_REPORTS:
         assert "-m src.engine." + name + " " not in script
-    assert "-m src.engine.scalping.entry_recheck_drought_controller" in script
+    assert "entry_recheck_drought_controller" not in script
     assert "-m src.engine.scalping.entry_ai_gate_backtest" not in script
     assert 'ENTRY_AI_GATE_BACKTEST_SCHEDULE="on_demand"' in script
     assert "RUN_ENTRY_AI_GATE_BACKTEST=false" in script
@@ -432,10 +432,38 @@ def test_rising_missed_scout_sources_are_not_read_by_current_consumers(name, mon
 
 
 def test_retired_scout_orders_cannot_reenter_current_mixed_bundle():
-    active = {"source_report_type": "entry_recheck_drought_controller", "order_id": "ordinary"}
+    active = {"source_report_type": "buy_funnel_sentinel", "order_id": "ordinary"}
     stale = [{"source_report_type": name, "order_id": "old", "runtime_effect": True}
              for name in policy.RISING_MISSED_SCOUT_RETIRED_REPORTS]
     raw = {"stage": "sell_completed", "record_id": 7, "profit_rate": 0.2}
     cleaned = policy.current_report_view({"orders": stale + [active], "raw_rows": [raw]})
     assert cleaned["orders"] == [active]
     assert cleaned["raw_rows"] == [raw]
+
+
+@pytest.mark.parametrize("key", ["entry_opportunity_recheck_armed", "entry_opportunity_recheck_pending"])
+@pytest.mark.parametrize("where", ["stock", "runtime"])
+def test_retired_recheck_intent_cannot_reach_buy_submission(monkeypatch, key, where):
+    from src.engine import sniper_state_handlers as handlers
+    stock, runtime = {"record_id": 71}, {}
+    (stock if where == "stock" else runtime)[key] = True
+    monkeypatch.setenv("KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED", "true")
+    monkeypatch.setattr(handlers.kiwoom_orders, "send_buy_order", lambda *a, **k: pytest.fail("retired broker submit"))
+    assert handlers._submit_watching_triggered_entry(stock, "005930", {}, "test", runtime) is False
+
+
+def test_retired_recheck_policy_env_and_workorder_are_filtered():
+    stale = {"family": "entry_opportunity_recheck_runtime", "allowed_runtime_apply": True}
+    active = {"family": "samsung_machine_entry_policy"}
+    assert policy.current_calibration_rows([stale, active]) == [active]
+    assert policy.current_report_view({"orders": [{"order_id": "order_entry_recheck_repair", "runtime_effect": True}, {"order_id": "order_entry_submit_drought_auto_resolution"}]})["orders"] == [{"order_id": "order_entry_submit_drought_auto_resolution"}]
+    assert policy.without_retired_env({"KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED": "true", "KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_MAX_DAILY_RECHECK": "100", "COMMON": "keep"}) == {"COMMON": "keep"}
+    assert policy.retirement_env()["KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED"] == "false"
+
+
+def test_retired_recheck_custody_events_cannot_recreate_threshold_partitions():
+    from src.utils.threshold_cycle_registry import threshold_family_for_stage
+    assert threshold_family_for_stage("entry_opportunity_recheck_filled") == ""
+    assert threshold_family_for_stage("entry_opportunity_recheck_sell_completed") == ""
+    assert threshold_family_for_stage("unknown", {"threshold_family": "entry_opportunity_recheck_runtime"}) == ""
+    assert threshold_family_for_stage("budget_pass") == "entry_mechanical_momentum"
