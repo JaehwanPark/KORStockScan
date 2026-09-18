@@ -35,3 +35,11 @@
 - 전용 과거 산출물 삭제96 roots/4,987 files/38,521,941 bytes의 manifest를 유지하고 프로젝트·worktree·release의 data/logs/tmp 13,474개 디렉터리를 metadata로 추가 검색했다. 남은 전용 보고서/복사본0; 혼합 실제 주문·정산·COMPLETED 원장과 일반 missed-entry 연구는 유지한다.
 - 후속 receipt는 `tmp/rising-missed-scout-final-review-20260918/validation.json`, `workspace-integration.json`, `additional-artifact-scan.json`, `deployment.json`, `startup.json`을 따른다. 불변 release `rising-missed-scout-final-reviewed-20260918` 선택과 Main PID 소비를 분리한다. 승인된 canonical start는 strict dated handoff를 그대로 통과해야 한다.
 - 사전 readonly PREOPEN 확인은 `runtime_env_handoff_missing`이다. 동일 날짜 integrated Main entry 자동 publisher/PREOPEN의 유효 policy/projection/manifest/date/hash→strict verify PASS→canonical start→실제 child/PID attestation이 기존 owner의 closure다. 이전 정책 날짜 변경/복사나 guard·수량·provider 우회는 수행하지 않는다. 전체 비싼 장후 재실행과 성능 확장은 이 재리뷰에서 수행하지 않는다.
+
+## 후속 배포·기동 실제 결과
+
+- 검증 source `4a5d9a06eaed4c3981ad29f998b7ae81a548f07c`를 remote main/review branch에 atomic push했다. `rising-missed-scout-final-reviewed-20260918` 불변 release source clean 및 전용 actor/producer 파일 부재를 확인하고 selector CAS로 선택했다. source commit 이후 이 기록의 변경은 문서 증거뿐이다.
+- 최종2,298PASS(25.18초), 병합된 작업본 restored intent·일반 WATCHING·partial pending 정산29PASS, compile/bash/diff/문서 parser PASS. 기존 다른 세션 source/doc 변경은 병합·Git baseline 정렬에서 byte 보존한다.
+- 승인된 canonical start1회를 실행했다. tmux 생성 부모rc0이지만 child가 strict gate에서 종료했고 Main PID0/소비false다. selected-release readonly verify rc1/`runtime_env_handoff_missing`, `integrated_axis_unconfigured`, policy date/bundle/shared hash mismatch4건이다. Pane/pipe 및 독립 verifier의 증거는 `tmp/rising-missed-scout-final-review-20260918/startup.json`과 companion logs에 보존한다. 실제 기동 성공으로 판정하지 않는다.
+- 구조적 기동 blocker owner는 현행 checklist `KiwoomCommonHealthOpportunityCostAcceptance0917` 아래 기존 integrated-entry dated publisher/PREOPEN이다. 다음 조치는 유효한 자동 dated Main entry policy/projection/manifest/date/hash를 산출하는 원 owner에서 수행한다. Closure test는 같은 target date strict verify PASS→canonical start→실제 child/PID receipt다. 현재 의뢰에서 날짜 변경·policy 복사·lock/provider/quantity/safety 우회나 전체 비싼 장후 재실행은 수행하지 않는다.
+- 과거 전용 산출물 삭제4,987개 및 추가 metadata 검색0개를 확인했다. 혼합 실제 주문·정산 원장은 보존한다. 전용 runtime·장후 폐기는 완료됐으며 Main 기동은 위 외부 handoff가 차단한다.
