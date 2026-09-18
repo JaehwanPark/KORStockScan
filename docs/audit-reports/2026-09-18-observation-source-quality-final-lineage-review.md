@@ -47,3 +47,7 @@ Full strict/controller는 새 final source binding을 검증한 뒤 기존 선�
 `existing-funnel-final-exact-scope-parity.json`은 원 source/cache generation 및 새 stage0 census를 검증한 뒤 original cutoff19:40:05·통합 aftermarket scope에서 current reconciler의 분모와 exact4 gap key 일치를 확인한다. 전체 scope11 PASS는 원 selected scope4 PASS와 다른 분모이며 최초 조사 비교는 `receipt-index.json`에 superseded로 표시했다. Historical funnel은 원본 그대로다.
 
 최종 strict의 source-quality final binding·native unknown workorder·workorder fingerprint·summary generation·drought·cancel-wait·compact 소비는 정상이다. Whole strict는 기존 외부25 issue(선행 FAIL/marker, AI correction, 저가주 native artifact, machine timing, Swing, machine research loop)로 FAIL이며 controller는 `summary_handoff_only_requires_upstream_repair`, DONE=false다. 이 외부 owner의 재실행/정책 변경은 이번 감사 수리로 확대하지 않았다. 현행 raw/signed ledger/funnel SHA 보호·immutable source 선택 및 PREOPEN print-only routing은 `protected-source-after.json`, `deployment.json`, `preopen-router-print-plan.txt`을 따른다. 실제 PID 소비·자연 terminal/비용 EV는 미확인이다.
+
+## 사용자 후속 재리뷰·불필요 영수증 정리
+
+[Final 재리뷰 및 low-price 읽기 전용 분석](2026-09-18-observation-final-rereview-and-low-price-two-leg-tuning-analysis.md)에 후속 요청을 종결했다. 변경된 source/consumer 계약 없이4개 phase/bootstrap/projection 회귀 PASS, 현재 final/summary/compact 소비 재확인 및 superseded generic reuse 영수증1개/1,268 bytes 삭제를 기록한다. Current/history/rollback/source/policy 증거는 보존했고 source/deploy 코드는 변경하지 않았다. Whole DONE·신규 EV·자연 PID 소비는 종전 Acceptance와 별개다.
