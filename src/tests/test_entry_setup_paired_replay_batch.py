@@ -6,6 +6,201 @@ import pytest
 from src.engine.scalping import ai_decision_quality as quality
 from src.engine.scalping import entry_setup_paired_replay_batch as batch
 from src.engine.scalping.micro_reversion import main_ai_prompt_optimizer as optimizer
+from src.engine.scalping import compact_auxiliary_paired_replay as compact
+
+
+def compact_row(day="2026-09-17", ordinal=0, verdict="VETO", net=0.5):
+    from src.tests.test_strategy_owner_replay import entry_seed, entry_native_path
+    from src.engine.scalping.strategy_owner_replay import replay_entry_opportunity
+    from src.engine.scalping import mechanistic_entry_runtime_policy as policy
+    seed = entry_seed(day, ordinal)
+    depths, trades = entry_native_path(seed)
+    for d in depths[:30]:
+        d.update(best_bid=9990, best_ask=10000, bid_levels=[[1,9990,1000]], ask_levels=[[1,10000,800]])
+    for t in trades:
+        t["trade_price"] = 10000
+    replay = replay_entry_opportunity(seed, depths, trades, source_ready=True, evaluated_at=datetime.fromisoformat(seed["observed_at"]).timestamp()+181)
+    return {"evaluation_key": f"compact-{day}-{ordinal}", "source_date": day,
+            "evaluation_attempt_id": seed["evaluation_attempt_id"],
+            "scanner_promotion_id": seed["scanner_promotion_id"],
+            "stock_code": seed["stock_code"], "effective_venue": "KRX",
+            "session_bucket": "KRX_REGULAR", "broker_route": "KRX",
+            "incumbent_prompt_version": policy.AI_VERSION,
+            "incumbent_verdict": verdict, "input": {"entry_setup_evidence_v1": {}},
+            "payload_sha256": "a"*64, "issued_prompt_sha256": "b"*64,
+            "entry_quality_path": {"status": "evaluable", "first_hit": "net_target_first",
+                                   "gross_net_target_pct": net+0.23,
+                                   "conservative_execution_cost_pct": 0.23},
+            "owner_replay": replay, "exclusion_reason": None}
+
+
+def compact_result(row, verdict="PASS"):
+    return compact.sealed({"candidate_response": {"risk_verdict": verdict},
+                           "input_sha256": compact.input_identity(row), "validation_errors": [], "runtime_inference_cost_delta_krw": 0.0})
+
+
+def test_compact_whole_population_zero_same_verdict_and_unresolved_caution():
+    rows = [compact_row(ordinal=i, verdict=v) for i,v in enumerate(["PASS", "VETO", "CAUTION"])]
+    results = {r["evaluation_key"]: compact_result(r, "PASS" if i == 0 else "VETO") for i,r in enumerate(rows)}
+    metrics = compact.evaluate(rows, results)
+    assert metrics["paired_comparable_count"] == 2
+    assert metrics["delta_net_ev_pct"] == 0
+    assert metrics["exclusion_counts"] == {"caution_followup_terminal_missing": 1}
+    assert metrics["denominator_preserved"]
+
+
+def test_compact_no_notional_is_percentage_diagnostic_not_daily_profit():
+    empty = compact.evaluate([], {})
+    assert empty["portfolio_daily_net_delta_krw"] is None
+    assert empty["net_profit_status"] == "not_available_without_owner_plan_and_portfolio_replay"
+    row = compact_row()
+    row["owner_replay"] = None
+    metrics = compact.evaluate([row], {row["evaluation_key"]: compact_result(row)})
+    assert metrics["delta_net_ev_pct"] == 0.5
+    assert metrics["portfolio_daily_net_delta_krw"] is None
+    row["exclusion_reason"] = "exact_stop_distance_missing_or_invalid"
+    metrics = compact.evaluate([row], {})
+    assert metrics["delta_net_ev_pct"] is None
+    assert metrics["paired_comparable_count"] == 0
+
+
+def test_compact_checkpoint_reuse_economics_rejoin_and_source_block(monkeypatch, tmp_path):
+    import src.engine.scalping.entry_setup_evidence as evidence
+    row = compact_row()
+    projection = compact.sealed({"rows": [row], "screened_total": 1, "source_manifest_sha256": "d"*64,
+                                  "source_tuning_allowed": True, "exclusion_counts": {}, **compact.AUTHORITY})
+    monkeypatch.setattr(compact, "prepare", lambda *_: projection)
+    monkeypatch.setattr(evidence, "entry_risk_adjudication_openai_schema", lambda *_: {})
+    monkeypatch.setattr(evidence, "validate_entry_risk_adjudication", lambda *_args, **_kwargs: [])
+    calls = []
+    def runner(request):
+        calls.append(request)
+        return {"candidate_response": {"risk_verdict": "PASS"}}
+    first = compact.run(data_root=tmp_path, day="2026-09-17", execute=True, runner=runner)
+    second = compact.run(data_root=tmp_path, day="2026-09-17", execute=True, runner=runner)
+    assert len(calls) == 1
+    assert first == second
+    assert first["metrics"]["delta_net_ev_pct"] > 0
+    assert not first["promotion_pass"]
+    identity = compact.input_identity(row)
+    row["entry_quality_path"]["gross_net_target_pct"] = 0.9
+    assert compact.input_identity(row) == identity
+    row["payload_sha256"] = "e"*64
+    assert compact.input_identity(row) != identity
+    blocked = tmp_path / "blocked"
+    projection["source_tuning_allowed"] = False
+    projection = compact.sealed(projection)
+    report = compact.run(data_root=blocked, day="2026-09-17", execute=True, runner=lambda _: pytest.fail("blocked source cannot call provider"))
+    assert report["status"] == "source_contract_blocked"
+
+
+def full_compact_proof():
+    from src.engine.scalping import mechanistic_entry_runtime_policy as policy
+    rows = [compact_row(day, i) for day in ["2026-09-14", "2026-09-16", "2026-09-17"] for i in range(20)]
+    metrics = compact.evaluate(rows, {r["evaluation_key"]: compact_result(r) for r in rows})
+    frozen = "2026-09-15T21:00:00+09:00"
+    return compact.sealed({"schema": compact.SCHEMA, "target_date": "2026-09-17",
+        "incumbent_prompt_version": policy.AI_VERSION,
+        "candidate_prompt_version": policy.ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION,
+        "source_manifest_sha256": "d"*64, "promotion_contract_sha256": compact.digest(compact.CONTRACT),
+        "status": "comparison_complete", "candidate_frozen_at": frozen,
+        # Synthetic approved model tests wiring only; the current real owner is unsupported.
+        "owner_execution_model_validation": {"contract_version": "entry_split_execution_model_validation_v1", "source_date": "2026-09-17", "status": "validated_scope", "allowed_runtime_apply": True},
+        "metrics": metrics, "candidate_improvement_proven": True, "selection_disposition": "candidate_selected",
+        "chronological_validation": {"candidate_frozen_at": frozen, "learning_pairs": metrics["pairs"][:20],
+                                     "holdout_pairs": metrics["pairs"][20:], "holdout_consumed": False}, **compact.AUTHORITY})
+
+
+def test_compact_signed_owner_cf_forward_holdout_positive_and_corruption():
+    proof = full_compact_proof()
+    kwargs = dict(incumbent=proof["incumbent_prompt_version"], selected=proof["candidate_prompt_version"], source_manifest_sha256="d"*64)
+    assert compact.promotion_valid(proof, **kwargs)
+    proof["chronological_validation"]["holdout_consumed"] = True
+    assert not compact.promotion_valid(compact.sealed(proof), **kwargs)
+    proof["chronological_validation"]["holdout_consumed"] = False
+    proof["metrics"]["response_coverage"] = 0.9
+    assert not compact.promotion_valid(compact.sealed(proof), **kwargs)
+
+
+@pytest.mark.parametrize("promote", [False, True])
+def test_compact_public_finalization_consumes_policy_and_all_summaries(tmp_path, promote):
+    from src.tests.test_mechanistic_entry_runtime_policy import initial
+    from src.engine.scalping import mechanistic_entry_runtime_policy as policy
+    from src.engine.scalping.main_ai_prompt_consumer import verify_compact_handoff
+    from src.tests.test_ai_action_outcome_calibration import _compact_router_case_table
+    parent = initial(tmp_path)
+    proof = full_compact_proof()
+    if not promote:
+        proof["chronological_validation"]["holdout_pairs"] = []
+        proof["candidate_improvement_proven"] = False
+        proof = compact.sealed(proof)
+    compact.write(compact.report_path(tmp_path, "2026-09-17"), proof)
+    receipt = _compact_router_case_table()["machine_ai_natural_source_receipt"]
+    receipt["source_manifest"] = {"source_manifest_sha256": "d"*64}
+    receipt["compact_auxiliary_policy_measurement"] = {"measurement_allowed": True}
+    compact.write(tmp_path / "report/observation_source_quality_audit/observation_source_quality_audit_2026-09-17.json", {"machine_ai_natural_source_consumption": receipt})
+    for p in compact.summary_paths(tmp_path, "2026-09-17"):
+        compact.write(p, {"date": "2026-09-17", "native_status": "blocked_resource_guard", "unrelated": 42})
+    result = compact.finalize(data_root=tmp_path, day="2026-09-17", publication_day="2026-09-18")
+    assert result["effective_date"] == "2026-09-21"
+    child = policy.load(data_root=tmp_path, target_date=result["effective_date"])
+    assert child["machine_policy"] == parent["machine_policy"]
+    assert child["ai_policy"]["prompt_version"] == (proof["candidate_prompt_version"] if promote else parent["ai_policy"]["prompt_version"])
+    assert verify_compact_handoff(tmp_path, "2026-09-17")["status"] == "PASS"
+    p = compact.summary_paths(tmp_path, "2026-09-17")[0]
+    report = compact.read(p)
+    assert report["native_status"] == "blocked_resource_guard" and report["unrelated"] == 42
+    report["compact_auxiliary_economic_tuning"]["policy_bundle_sha256"] = "f"*64
+    compact.write(p, report)
+    assert verify_compact_handoff(tmp_path, "2026-09-17")["status"] == "FAIL"
+
+
+def test_compact_json_string_semantics_and_repeated_input_envelopes(tmp_path):
+    import hashlib
+    from src.engine.scalping.ai_decision_trace import _json_bytes
+    from src.engine.scalping.mechanistic_entry_runtime_policy import AI_VERSION
+    day = "2026-09-17"
+    raw = {"entry_setup_evidence_v1": {}}
+    original_sha = hashlib.sha256(json.dumps(raw, indent=2).encode()).hexdigest()
+    semantic_sha = hashlib.sha256(_json_bytes(raw)).hexdigest()
+    traces, payloads, labels = [], [], []
+    for i in range(2):
+        trace = {"decision_trace_id": f"req-{i}", "decision_stage": "entry_screen", "prompt_version": AI_VERSION,
+                 "provider_called": True, "provider_actual": "openai", "model": "gpt-5.4-nano",
+                 "entry_mechanistic_action": "ENTER_NOW", "semantic_validation_status": "pass",
+                 "decision_quality_contract_status": "pass", "entry_ai_risk_verdict": "PASS",
+                 "payload_sha256": original_sha, "prompt_sha256": f"prompt-{i}", "request_envelope_sha256": f"env-{i}"}
+        traces.append(trace)
+        payloads.append({k: trace[k] for k in ["payload_sha256", "prompt_sha256", "request_envelope_sha256"]} | {
+            "input_format": "json_string", "redacted": False, "replay_exact": True,
+            "sanitized_user_input": raw, "sanitized_user_input_sha256": semantic_sha})
+        labels.append({"decision_trace_id": f"req-{i}", "horizon_metrics": {"10m": {"entry_quality_path": compact_row()["entry_quality_path"]}}})
+    for folder, name, rows in [("ai_decision_trace", "ai_decision_trace", traces), ("ai_decision_payloads", "ai_decision_payloads", payloads)]:
+        path = tmp_path / folder / f"{name}_{day}.jsonl"
+        path.parent.mkdir(parents=True)
+        path.write_text("".join(json.dumps(r)+"\n" for r in rows))
+    compact.write(tmp_path / "report/ai_decision_outcome_labels" / f"ai_decision_outcome_labels_{day}.json", {"labels": labels})
+    result = compact.prepare(tmp_path, day)
+    assert result["screened_total"] == 2
+    assert result["exclusion_counts"] == {}
+
+
+def test_compact_recomputed_owner_economics_and_consumed_holdout(tmp_path):
+    proof = full_compact_proof()
+    kwargs = dict(incumbent=proof["incumbent_prompt_version"], selected=proof["candidate_prompt_version"], source_manifest_sha256="d"*64)
+    assert compact.promotion_valid(proof, **kwargs)
+    missing_model = dict(proof, owner_execution_model_validation={})
+    assert not compact.promotion_valid(compact.sealed(missing_model), **kwargs)
+    compact.consume_holdout(proof, tmp_path)
+    compact.consume_holdout(proof, tmp_path)
+    proof["chronological_validation"]["holdout_pairs"][0]["delta_net_pct"] += 1
+    changed = compact.sealed(proof)
+    assert not compact.promotion_valid(changed, **kwargs)
+    with pytest.raises(ValueError, match="already_consumed"):
+        compact.consume_holdout(changed, tmp_path)
+    proof = full_compact_proof()
+    proof["chronological_validation"]["holdout_pairs"][0]["runtime_inference_cost_delta_krw"] = None
+    assert not compact.promotion_valid(compact.sealed(proof), **kwargs)
 
 
 def test_refresh_rebinds_only_metadata_without_provider_or_runtime_evidence_change(

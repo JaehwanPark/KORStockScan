@@ -2094,6 +2094,9 @@ if [ "$RUN_LIMIT_DOWN_WATCH_REPORT" = "true" ] || [ "$RUN_LIMIT_DOWN_WATCH_REPOR
 fi
 if [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "true" ] || [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "1" ]; then
   wait_for_postclose_resources "ai_decision_action_outcome_calibration"
+  wait_for_postclose_resources "compact_auxiliary_paired_replay"
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.entry_setup_paired_replay_batch \
+    --date "$TARGET_DATE" --compact-only --execute-compact-candidate --write
   run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.ai_action_outcome_calibration \
     --target-date "$TARGET_DATE" \
     --write \
@@ -2427,6 +2430,12 @@ if [[ "$RUN_DEEPSEEK_SWING_LAB" != "true" && "$RUN_DEEPSEEK_SWING_LAB" != "1" ]]
 fi
 wait_for_postclose_resources "automation_trigger_decision_final_refresh"
 refresh_automation_trigger_decision_snapshot "final_consumer"
+if [[ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" == "true" || "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" == "1" ]]; then
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.entry_setup_paired_replay_batch \
+    --date "$TARGET_DATE" --compact-only --write --finalize-compact
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.verify_threshold_cycle_postclose_chain \
+    --date "$TARGET_DATE" --compact-summary-only --require-summary-handoff
+fi
 wait_for_postclose_resources "build_next_stage2_checklist_final_refresh"
 run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.build_next_stage2_checklist --source-date "$TARGET_DATE"
 wait_for_file_artifact "$(next_stage2_checklist_path)" "next_stage2_checklist_final_refresh"

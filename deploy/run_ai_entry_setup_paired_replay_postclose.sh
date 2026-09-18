@@ -1,112 +1,21 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="${PROJECT_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 VENV_PY="${VENV_PY:-$PROJECT_DIR/.venv/bin/python}"
 TARGET_DATE="${1:-$(TZ=Asia/Seoul date +%F)}"
 MAX_NEW_PER_COHORT="${AI_ENTRY_SETUP_REPLAY_MAX_NEW_PER_COHORT:-30}"
-HOLDING_MAX_NEW_TOTAL="${AI_HOLDING_PROMPT_REPLAY_MAX_NEW_TOTAL:-10}"
-CANDIDATE_WORKERS="${AI_ENTRY_SETUP_REPLAY_WORKERS:-2}"
-PREDECESSOR_WAIT_SEC="${AI_ENTRY_SETUP_REPLAY_PREDECESSOR_WAIT_SEC:-43200}"
-MAX_ATTEMPTS="${AI_ENTRY_SETUP_REPLAY_MAX_ATTEMPTS:-3}"
-LOCK_PATH="$PROJECT_DIR/tmp/ai_entry_setup_paired_replay_${TARGET_DATE}.lock"
-
-mkdir -p "$PROJECT_DIR/tmp" "$PROJECT_DIR/logs"
+mkdir -p "$PROJECT_DIR/tmp"
 cd "$PROJECT_DIR"
-
-exec 9>"$LOCK_PATH"
+exec 9>"$PROJECT_DIR/tmp/ai_entry_setup_paired_replay_${TARGET_DATE}.lock"
 if ! flock -n 9; then
-  echo "[SKIP] ai entry setup replay already running target_date=$TARGET_DATE"
+  echo "[SKIP] compact paired replay already running target_date=$TARGET_DATE"
   exit 0
 fi
-
-if ! [[ "$MAX_ATTEMPTS" =~ ^[1-9][0-9]*$ ]]; then
-  echo "[ERROR] AI_ENTRY_SETUP_REPLAY_MAX_ATTEMPTS must be a positive integer"
-  exit 2
-fi
-
-run_entry_batch() {
-  nice -n 10 ionice -c 2 -n 7 -t \
-    "$VENV_PY" -m src.engine.scalping.entry_setup_paired_replay_batch \
-    --date "$TARGET_DATE" \
-    --max-new-requests-per-cohort "$MAX_NEW_PER_COHORT" \
-    --candidate-workers "$CANDIDATE_WORKERS" \
-    --predecessor-wait-sec "$PREDECESSOR_WAIT_SEC" \
-    --write
-}
-
-refresh_main_ai_consumer() {
-  # Finalize calibration from the terminal detailed generation. Keep today's
-  # executed candidates fixed and rebind metadata without provider replay or
-  # live-candidate republication; new choices belong to the next daily plan.
-  nice -n 10 ionice -c 2 -n 7 -t \
-    "$VENV_PY" -m src.engine.scalping.ai_action_outcome_calibration \
-    --target-date "$TARGET_DATE" --write --require-policy-publication --print-summary && \
-  nice -n 10 ionice -c 2 -n 7 -t \
-    "$VENV_PY" -m src.engine.scalping.micro_reversion.main_ai_prompt_optimizer \
-    --target-date "$TARGET_DATE" \
-    --write \
-    --preserve-entry-batch-selection \
-    --require-action-outcome-calibration \
-    --print-summary && \
-  nice -n 10 ionice -c 2 -n 7 -t \
-    "$VENV_PY" -m src.engine.scalping.entry_setup_paired_replay_batch \
-    --date "$TARGET_DATE" --refresh-optimizer-binding-only --write && \
-  nice -n 10 ionice -c 2 -n 7 -t \
-    "$VENV_PY" -m src.engine.scalping.main_ai_holding_base_replay_batch \
-    --date "$TARGET_DATE" \
-    --write \
-    --print-summary && \
-  nice -n 10 ionice -c 2 -n 7 -t \
-    "$VENV_PY" -m src.engine.scalping.holding_prompt_live_policy \
-    --phase postclose \
-    --target-date "$TARGET_DATE" \
-    --execute-candidate \
-    --max-new-total "$HOLDING_MAX_NEW_TOTAL" \
-    --candidate-workers "$CANDIDATE_WORKERS" \
-    --write && \
-  nice -n 10 ionice -c 2 -n 7 -t \
-    "$VENV_PY" -m src.engine.scalping.main_ai_prompt_consumer \
-    --target-date "$TARGET_DATE" \
-    --write \
-    --require-entry-terminal \
-    --print-summary
-}
-
-for ((attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1)); do
-  batch_rc=0
-  failure_stage="entry_batch"
-  if run_entry_batch; then
-    if refresh_main_ai_consumer; then
-      exit 0
-    else
-      batch_rc=$?
-      failure_stage="consumer_refresh"
-      echo "[WARN] main AI source-only consumer refresh failed attempt=$attempt"
-    fi
-  else
-    batch_rc=$?
-  fi
-  if [ "$failure_stage" = "entry_batch" ] && [ "$batch_rc" -eq 3 ]; then
-    echo "[ERROR] offline candidate batch predecessor bounded wait exhausted target_date=$TARGET_DATE"
-    exit 1
-  fi
-  if ((attempt < MAX_ATTEMPTS)); then
-    echo "[WARN] offline candidate batch failed; retrying valid-result checkpoint attempt=$attempt"
-    sleep 15
-  fi
-done
-
-# Preserve valid pairs from a terminal partial batch, but never turn an
-# exhausted retry into success or rebind an incomplete optimizer generation.
-if [ "$failure_stage" = "entry_batch" ]; then
-  if ! nice -n 10 ionice -c 2 -n 7 -t \
-    "$VENV_PY" -m src.engine.scalping.ai_action_outcome_calibration \
-    --target-date "$TARGET_DATE" --write --require-policy-publication --print-summary; then
-    echo "[WARN] partial-batch calibration refresh failed target_date=$TARGET_DATE"
-  fi
-fi
-
-echo "[ERROR] offline candidate batch exhausted attempts=$MAX_ATTEMPTS"
-exit 1
+# Same source-day inputs; no global-DONE predecessor cycle or unrelated legacy
+# selector/holding research. Source exclusions are terminal dispositions.
+"$VENV_PY" -m src.engine.scalping.entry_setup_paired_replay_batch \
+  --date "$TARGET_DATE" --compact-only --execute-compact-candidate \
+  --max-new-requests-per-cohort "$MAX_NEW_PER_COHORT" --write --finalize-compact
+"$VENV_PY" -m src.engine.verify_threshold_cycle_postclose_chain \
+  --date "$TARGET_DATE" --compact-summary-only --require-summary-handoff

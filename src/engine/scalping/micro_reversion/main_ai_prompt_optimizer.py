@@ -101,10 +101,13 @@ def compact_evaluation_plan(calibration: Mapping[str, Any]) -> dict[str, Any]:
     ) or {}
     outcomes = table.get("compact_auxiliary_screen_outcomes") or {}
     source = table.get("machine_ai_natural_source_receipt") or {}
+    paired = outcomes.get("paired_economic_evaluation") or {}
     return {
+        "paired_economic_evaluation": paired,
+        "paired_artifact_content_sha256": paired.get("artifact_content_sha256"),
         "schema": "compact_auxiliary_optimizer_evaluation_v1",
         "role": "machine_enter_post_selection_risk_adjudication",
-        "evaluation_mode": "recorded_natural_outcomes_no_synthetic_provider_replay",
+        "evaluation_mode": "recorded_natural_outcomes_with_exact_compact_paired_replay" if paired else "recorded_natural_outcomes_no_synthetic_provider_replay",
         "calibration_artifact_content_sha256": calibration.get(
             "artifact_content_sha256"
         ),
@@ -129,9 +132,9 @@ def compact_evaluation_plan(calibration: Mapping[str, Any]) -> dict[str, Any]:
             "fixed_provider_and_model": True,
             "provider_model_auto_selection_forbidden": True,
         },
-        "candidate_improvement_proven": False,
+        "candidate_improvement_proven": paired.get("candidate_improvement_proven") is True,
         "legacy_replay_may_tune_compact": False,
-        "provider_calls": 0,
+        "provider_calls": sum(not r.get("self_comparison", False) for r in (paired.get("results") or {}).values()),
         "runtime_effect": False,
         "allowed_runtime_apply": False,
     }

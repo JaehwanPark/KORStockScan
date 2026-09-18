@@ -304,7 +304,7 @@ def test_frozen_compact_citations_migrate_only_next_date(
         "detailed_counts",
     ],
 )
-def test_postclose_automatically_selects_bounded_compact_successor(
+def test_natural_direction_without_paired_proof_preserves_compact(
     tmp_path, corruption
 ):
     previous = initial(tmp_path)
@@ -414,12 +414,12 @@ def test_postclose_automatically_selects_bounded_compact_successor(
         )
         return
     assert successor["ai_policy"]["prompt_version"] == (
-        policy.ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION
+        policy.AI_VERSION
     )
     assert successor["ai_policy"]["variant"] == policy.compact_prompt_variant(
         successor["ai_policy"]["prompt_version"]
     )
-    assert "Calibration emphasis" in successor["ai_policy"]["system_prompt"]
+    assert successor["ai_policy"]["system_prompt"] == policy.compact_auxiliary_prompt(successor["historical_context"], prompt_version=policy.AI_VERSION)
     # A later source still evaluates the policy used today, not tomorrow's
     # unlaunched opportunity candidate. It must be able to replace that draft.
     economic["material_tail_pass_count"] = 1
@@ -437,7 +437,7 @@ def test_postclose_automatically_selects_bounded_compact_successor(
     )
     assert (
         revised["ai_policy"]["prompt_version"]
-        == policy.ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION
+        == policy.AI_VERSION
     )
     assert (
         policy.load(data_root=tmp_path, target_date="2026-09-14")["bundle_sha256"]
@@ -445,7 +445,7 @@ def test_postclose_automatically_selects_bounded_compact_successor(
     )
     economic["material_tail_pass_count"] = 0
     selection["selected_prompt_version"] = (
-        policy.ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION
+        policy.AI_VERSION
     )
     calibration._atomic_write_json(
         path, calibration._with_artifact_content_sha256(report)
@@ -514,7 +514,7 @@ def test_next_preopen_publish_replaces_legacy_prompt_without_threshold_change(tm
 
 
 @pytest.mark.parametrize("corruption", [None, "count", "contract_version", "partition", "nan_amount", "terminal_gate"])
-def test_router_caution_successor_publishes_flag_free_with_exact_contract(tmp_path, corruption):
+def test_router_caution_without_paired_proof_preserves_compact(tmp_path, corruption):
     from src.tests.test_ai_action_outcome_calibration import _compact_router_case_table
     previous = initial(tmp_path)
     path = source(tmp_path, "2026-09-15")
@@ -536,13 +536,13 @@ def test_router_caution_successor_publishes_flag_free_with_exact_contract(tmp_pa
     calibration._atomic_write_json(path, calibration._with_artifact_content_sha256(report))
     successor = policy.publish(path, data_root=tmp_path, now=datetime(2026, 9, 15, 21, tzinfo=policy.KST))
     assert successor["machine_policy"] == previous["machine_policy"]
-    assert successor["ai_policy"]["prompt_version"] == (policy.ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION if corruption is None else policy.AI_VERSION)
+    assert successor["ai_policy"]["prompt_version"] == (policy.AI_VERSION)
     assert "model" not in successor["ai_policy"]
     assert "provider" not in successor["ai_policy"]
 
 
 @pytest.mark.parametrize("corruption", [None, "unlocated", "duplicate", "missing", "learned", "count_bool"])
-def test_localized_conflict_retains_flag_free_automatic_compact_publication(tmp_path, corruption):
+def test_localized_conflict_does_not_replace_missing_paired_proof(tmp_path, corruption):
     from src.tests.test_ai_action_outcome_calibration import _compact_conflict_case_table
 
     previous = initial(tmp_path)
@@ -567,8 +567,7 @@ def test_localized_conflict_retains_flag_free_automatic_compact_publication(tmp_
     )
     assert successor["machine_policy"] == previous["machine_policy"]
     assert successor["ai_policy"]["prompt_version"] == (
-        policy.ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION
-        if corruption is None else policy.AI_VERSION
+        policy.AI_VERSION
     )
     assert "model" not in successor["ai_policy"]
     assert "provider" not in successor["ai_policy"]

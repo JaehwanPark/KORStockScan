@@ -847,7 +847,28 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-require-predecessor", action="store_true")
     parser.add_argument("--write", action="store_true")
     parser.add_argument("--refresh-optimizer-binding-only", action="store_true")
+    parser.add_argument("--compact-only", action="store_true")
+    parser.add_argument("--execute-compact-candidate", action="store_true")
+    parser.add_argument("--compact-candidate-version")
+    parser.add_argument("--finalize-compact", action="store_true")
+    parser.add_argument("--publication-date")
+    parser.add_argument("--data-root", type=Path, default=quality.DATA_DIR)
     args = parser.parse_args(argv)
+    if args.compact_only:
+        if not args.write or args.refresh_optimizer_binding_only:
+            parser.error("compact batch requires durable write and its own frozen selection")
+        from src.engine.scalping import compact_auxiliary_paired_replay as compact
+        report = compact.run(data_root=args.data_root, day=args.date, candidate_version=args.compact_candidate_version, execute=args.execute_compact_candidate, max_new=args.max_new_requests_per_cohort, timeout_sec=args.candidate_timeout_sec)
+        execution_failed = report.get("status") == "execution_failed"
+        if args.finalize_compact:
+            report = compact.finalize(data_root=args.data_root, day=args.date, publication_day=args.publication_date or args.date)
+        summary = {k:v for k,v in report.items() if k not in {"results", "chronological_validation", "strict_family_verification"}}
+        if "metrics" in summary:
+            summary["metrics"] = {k:v for k,v in summary["metrics"].items() if k != "pairs"}
+        print(json.dumps(summary, ensure_ascii=False))
+        return 1 if execution_failed else 0
+    if args.execute_compact_candidate or args.finalize_compact or args.publication_date or args.compact_candidate_version:
+        parser.error("compact options require --compact-only")
     if args.refresh_optimizer_binding_only:
         report = refresh_optimizer_binding(target_date=args.date, write=args.write)
         print(json.dumps(report, ensure_ascii=False))

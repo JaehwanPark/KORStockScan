@@ -2129,7 +2129,7 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     assert "src.engine.automation.tuning_performance_control_tower" not in script
     assert "scalp_sim_auto_approval_control_tower" not in script
     assert post_done_checklist_idx == next_checklist_idx
-    assert "--require-summary-handoff" not in script
+    assert "--compact-summary-only --require-summary-handoff" in script
     assert script.count("src.engine.pattern_lab_propagation_audit") == 1
     assert script.count("--review-current-generation") == 1
     assert script.count("src.engine.build_code_improvement_workorder") == 2
@@ -2459,42 +2459,26 @@ def test_entry_setup_paired_replay_has_separate_late_offline_cron():
     assert "AI_ENTRY_SETUP_PAIRED_REPLAY_POSTCLOSE" in installer
     assert "run_ai_entry_setup_paired_replay_postclose.sh" in installer
     assert "src.engine.scalping.entry_setup_paired_replay_batch" in runner
-    assert "src.engine.scalping.micro_reversion.main_ai_prompt_optimizer" in runner
-    assert "src.engine.scalping.main_ai_holding_base_replay_batch" in runner
-    assert "src.engine.scalping.main_ai_prompt_consumer" in runner
-    assert "refresh_main_ai_consumer" in runner
-    assert "run_entry_batch" in runner
-    optimizer_refresh_index = runner.index(
-        "-m src.engine.scalping.micro_reversion.main_ai_prompt_optimizer"
-    )
-    rebound_batch_index = runner.index(
-        "--refresh-optimizer-binding-only", optimizer_refresh_index
-    )
-    calibration_index = runner.index(
-        "-m src.engine.scalping.ai_action_outcome_calibration"
-    )
-    assert calibration_index < optimizer_refresh_index < rebound_batch_index
-    assert "--require-policy-publication" in runner
-    assert "--preserve-entry-batch-selection" in runner
-    holding_manifest_index = runner.index(
-        "-m src.engine.scalping.main_ai_holding_base_replay_batch"
-    )
-    assert optimizer_refresh_index < rebound_batch_index < holding_manifest_index
-    assert "--max-new-requests-per-cohort" in runner
-    assert "--candidate-workers" in runner
-    assert "--write" in runner
-    assert "AI_ENTRY_SETUP_REPLAY_MAX_ATTEMPTS" in runner
-    assert 'MAX_ATTEMPTS="${AI_ENTRY_SETUP_REPLAY_MAX_ATTEMPTS:-3}"' in runner
-    assert 'if [ "$failure_stage" = "entry_batch" ] && [ "$batch_rc" -eq 3 ]' in runner
-    assert 'failure_stage="consumer_refresh"' in runner
-    assert "AI_ENTRY_SETUP_REPLAY_PREDECESSOR_WAIT_SEC:-43200" in runner
-    assert "predecessor bounded wait exhausted" in runner
-    assert "sleep 15" in runner
+    assert "--compact-only --execute-compact-candidate" in runner
+    assert "--write --finalize-compact" in runner
+    assert "--compact-summary-only --require-summary-handoff" in runner
+    assert runner.index("--finalize-compact") < runner.index("--compact-summary-only")
+    assert "main_ai_holding_base_replay_batch" not in runner
+    assert "sleep 15" not in runner
     assert "run_bot.sh" not in runner
     assert "tmux" not in runner
 
 
-def test_entry_setup_runner_retries_consumer_nonterminal_without_mislabeling_predecessor(
+def test_compact_native_execution_waits_for_label_and_owner_sources():
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
+    execution = script.index("--compact-only --execute-compact-candidate")
+    assert script.index("--ensure-economic-reference-only") < execution
+    assert script.index("ai_decision_quality_daily_materialization") < execution
+    assert script.index("src.engine.scalping.entry_split_order_plan") < execution
+    assert execution < script.index('    --require-policy-publication', execution)
+
+
+def test_entry_setup_runner_strict_handoff_failure_is_not_success(
     tmp_path: Path,
 ):
     fake_bin = tmp_path / "bin"
@@ -2505,7 +2489,7 @@ def test_entry_setup_runner_retries_consumer_nonterminal_without_mislabeling_pre
         "#!/usr/bin/env bash\n"
         "set -eu\n"
         'case " $* " in\n'
-        '  *" src.engine.scalping.main_ai_prompt_consumer "*)\n'
+        '  *" src.engine.verify_threshold_cycle_postclose_chain "*)\n'
         f"    count_file={count_path!s}\n"
         "    count=0\n"
         '    if [ -f "$count_file" ]; then count=$(tr -d \'\\n\' < "$count_file"); fi\n'
@@ -2538,9 +2522,8 @@ def test_entry_setup_runner_retries_consumer_nonterminal_without_mislabeling_pre
         check=False,
     )
 
-    assert result.returncode == 0
-    assert count_path.read_text(encoding="utf-8").strip() == "2"
-    assert "consumer refresh failed attempt=1" in result.stdout
+    assert result.returncode == 3
+    assert count_path.read_text(encoding="utf-8").strip() == "1"
     assert "predecessor bounded wait exhausted" not in result.stdout
 
 
@@ -2570,11 +2553,12 @@ def test_entry_batch_failure_preserves_partial_learning_without_success(tmp_path
     )
     assert result.returncode == 1
     calls = (tmp_path / "calls").read_text()
-    assert calls.count("-m src.engine.scalping.ai_action_outcome_calibration") == 1
+    assert calls.count("-m src.engine.scalping.entry_setup_paired_replay_batch") == 1
+    assert "src.engine.verify_threshold_cycle_postclose_chain" not in calls
     assert (
         "-m src.engine.scalping.micro_reversion.main_ai_prompt_optimizer" not in calls
     )
-    assert "exhausted attempts=1" in result.stdout
+    assert "--finalize-compact" in calls
 
 
 def test_postclose_wrapper_treats_producer_gap_fail_closed_as_report_artifact():
