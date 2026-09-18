@@ -1342,3 +1342,13 @@ def test_action_outcome_advisory_rejects_ambiguous_same_version_cohorts() -> Non
     )
 
     assert advisory is None
+
+
+def test_removed_standalone_optimizer_cannot_overwrite_compact_reports(monkeypatch):
+    import runpy
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Retired standalone optimizer must not read or write artifacts")
+    monkeypatch.setattr(optimizer.Path, "read_text", forbidden)
+    monkeypatch.setattr(optimizer.Path, "write_text", forbidden)
+    namespace = runpy.run_path(optimizer.__file__, run_name="__main__")
+    assert "_main" not in namespace

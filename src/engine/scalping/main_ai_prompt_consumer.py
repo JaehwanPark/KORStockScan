@@ -1,10 +1,10 @@
 """Close Main AI optimizer request paths with exact, source-only bindings.
 
 The optimizer decides what should be compared.  This consumer proves where
-each Entry/Holding base request and optional prompt/input factorial cell goes:
-an exact connected path, an explicit blocker with owner/acceptance test, or an
-existing R0-R3 duplicate.  It performs no provider call and has no runtime or
-order authority.
+each Entry/Holding base request goes: an exact connected path or an explicit
+blocker with owner/acceptance test. The former micro-input factorial path is
+retired and never requests regeneration of its removed producer. It performs
+no provider call and has no runtime or order authority.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ import gzip
 import json
 import os
 import tempfile
-from collections import Counter, defaultdict
+from collections import Counter
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -23,7 +23,6 @@ from src.engine.scalping import ai_decision_quality as quality
 from src.engine.scalping import entry_setup_paired_replay_batch as entry_batch
 from src.engine.scalping import main_ai_holding_base_replay_batch as holding_batch
 from src.engine.scalping.micro_reversion import main_ai_prompt_optimizer as optimizer
-from src.engine.scalping.micro_reversion import replay_ablation_contract as ablation
 
 SCHEMA = "main_ai_prompt_consumer_v1"
 REPORT_DIR = quality.DATA_DIR / "report" / "main_ai_prompt_consumer"
@@ -31,7 +30,8 @@ REPORT_DIR = quality.DATA_DIR / "report" / "main_ai_prompt_consumer"
 CONNECTED = "connected_and_hash_bound"
 BLOCKED = "intentionally_blocked_with_owner_and_acceptance_test"
 R0_DUPLICATE = "retired_as_duplicate_of_existing_r0_r3"
-VALID_PATH_STATUSES = frozenset({CONNECTED, BLOCKED, R0_DUPLICATE})
+RETIRED = "retired_ai_quality_cycle"
+VALID_PATH_STATUSES = frozenset({CONNECTED, BLOCKED, R0_DUPLICATE, RETIRED})
 
 SOURCE_ONLY_CONTRACT = {
     "metric_role": "main_ai_prompt_and_input_consumer_closure",
@@ -650,271 +650,10 @@ def _holding_base_paths(
     return paths, request_index
 
 
-def _request_prompt_identity(request: Mapping[str, Any]) -> tuple[str, str]:
-    candidate = request.get("candidate")
-    candidate = candidate if isinstance(candidate, Mapping) else {}
-    return (
-        str(candidate.get("prompt_version") or "").removesuffix("_entry"),
-        str(candidate.get("system_prompt_sha256") or ""),
-    )
 
 
-def _base_request_input_sha(request: Mapping[str, Any]) -> str:
-    return str(
-        request.get("candidate_input_sha256")
-        or request.get("candidate_input_hash")
-        or ""
-    )
 
 
-def _factorial_cells(
-    *,
-    optimizer_report: Mapping[str, Any],
-    prepared: Mapping[str, Any],
-    bridge: Mapping[str, Any],
-    materialized: Mapping[str, Any],
-    execution: Mapping[str, Any],
-    entry_request_index: Mapping[tuple[str, str, str], Mapping[str, Any]],
-    holding_request_index: Mapping[tuple[str, str, str], Mapping[str, Any]],
-) -> list[dict[str, Any]]:
-    prepared_rows = [
-        row
-        for row in prepared.get("prepared_requests") or []
-        if isinstance(row, Mapping)
-    ]
-    enriched = optimizer._enriched_trace_ids_by_stage(bridge)
-    materialized_by_trace: dict[str, dict[str, Mapping[str, Any]]] = defaultdict(dict)
-    for request in materialized.get("requests") or []:
-        if not isinstance(request, Mapping):
-            continue
-        trace_id = str(request.get("decision_trace_id") or "")
-        arm = str(request.get("micro_reversion_replay_arm") or "")
-        if trace_id and arm:
-            materialized_by_trace[trace_id][arm] = request
-    passed_ids = {
-        str(row.get("paired_replay_id") or "")
-        for row in execution.get("results") or []
-        if isinstance(row, Mapping) and row.get("status") == "pass"
-    }
-
-    cells: list[dict[str, Any]] = []
-    stage_optimizers = optimizer_report.get("stage_optimizers") or {}
-    for stage in ("entry", "holding"):
-        stage_optimizer = stage_optimizers.get(stage) or {}
-        base_index = entry_request_index if stage == "entry" else holding_request_index
-        for cohort in stage_optimizer.get("cohort_optimizers") or []:
-            if not isinstance(cohort, Mapping):
-                continue
-            venue, session = _cohort_key(cohort)
-            selected_version, selected_sha = _desired_prompt_identity(
-                stage=stage, cohort=cohort
-            )
-            champion = cohort.get("champion")
-            champion = champion if isinstance(champion, Mapping) else {}
-            champion_version = str(champion.get("prompt_version") or "")
-            champion_sha = str(champion.get("prompt_sha256") or "")
-            cohort_trace_ids = {
-                str(row.get("decision_trace_id") or "")
-                for row in prepared_rows
-                if str(row.get("stage") or "").lower() == stage
-                and str(row.get("effective_venue") or "").upper() == venue
-                and str(row.get("session_bucket") or "").upper() == session
-                and row.get("decision_trace_id")
-            }
-            for trace_id in sorted(cohort_trace_ids & enriched.get(stage, set())):
-                r0 = materialized_by_trace.get(trace_id, {})
-                p0d0 = r0.get(ablation.CURRENT_BASE_CONTROL_ARM)
-                p0d0_input_sha = _base_request_input_sha(p0d0 or {})
-                arm_specs = (
-                    (
-                        "P0D0_champion_base_input",
-                        ablation.CURRENT_BASE_CONTROL_ARM,
-                        champion_version,
-                        champion_sha,
-                    ),
-                    (
-                        "P0D1_champion_enriched_micro_input",
-                        ablation.CURRENT_ASK_CONTROL_ARM,
-                        champion_version,
-                        champion_sha,
-                    ),
-                    (
-                        "P1D1_challenger_enriched_micro_input",
-                        ablation.CURRENT_ASK_CANDIDATE_ARM,
-                        selected_version,
-                        selected_sha,
-                    ),
-                )
-                for cell_name, arm, expected_version, expected_sha in arm_specs:
-                    request = r0.get(arm)
-                    common = {
-                        "stage": stage,
-                        "effective_venue": venue,
-                        "session_bucket": session,
-                        "decision_trace_id": trace_id,
-                        "cell": cell_name,
-                        "expected_prompt_version": expected_version,
-                        "expected_prompt_sha256": expected_sha or None,
-                        "existing_owner": "main_ai_quality_r0_r3",
-                    }
-                    if request is None:
-                        cells.append(
-                            {
-                                **common,
-                                **_blocked(
-                                    reason="r0_r3_parent_not_materialized",
-                                    owner="MainAIQualityR0R3Materializer",
-                                    acceptance_test=(
-                                        "materialize the exact common parent only "
-                                        "after the existing R0 provider floor passes"
-                                    ),
-                                ),
-                                "execution_state": "not_materialized",
-                            }
-                        )
-                        continue
-                    observed_version, observed_sha = _request_prompt_identity(request)
-                    request_id = str(request.get("paired_replay_id") or "")
-                    if (
-                        not expected_version
-                        or not expected_sha
-                        or observed_version != expected_version
-                        or observed_sha != expected_sha
-                        or not _base_request_input_sha(request)
-                    ):
-                        cells.append(
-                            {
-                                **common,
-                                **_blocked(
-                                    reason="existing_r0_r3_cell_prompt_or_input_mismatch",
-                                    owner="MainAIQualityR0R3Materializer",
-                                    acceptance_test=(
-                                        "re-materialize a new immutable generation "
-                                        "whose prompt/input hashes equal the optimizer"
-                                    ),
-                                ),
-                                "observed_prompt_version": observed_version,
-                                "observed_prompt_sha256": observed_sha or None,
-                                "request_id": request_id,
-                                "execution_state": (
-                                    "pass_reusable"
-                                    if request_id in passed_ids
-                                    else "existing_r0_r3_pending"
-                                ),
-                            }
-                        )
-                        continue
-                    cells.append(
-                        {
-                            **common,
-                            "path_status": R0_DUPLICATE,
-                            "blocking_reason": None,
-                            "owner": "MainAIQualityR0R3Materializer",
-                            "acceptance_test": "passed_exact_existing_r0_r3_cell_binding",
-                            "request_id": request_id,
-                            "candidate_input_sha256": _base_request_input_sha(request),
-                            "execution_state": (
-                                "pass_reusable"
-                                if request_id in passed_ids
-                                else "existing_r0_r3_pending"
-                            ),
-                        }
-                    )
-
-                base_request = base_index.get((venue, session, trace_id))
-                base_common = {
-                    "stage": stage,
-                    "effective_venue": venue,
-                    "session_bucket": session,
-                    "decision_trace_id": trace_id,
-                    "cell": "P1D0_challenger_base_input",
-                    "expected_prompt_version": selected_version,
-                    "expected_prompt_sha256": selected_sha or None,
-                    "existing_owner": (
-                        "ai_entry_setup_paired_replay_batch"
-                        if stage == "entry"
-                        else "main_ai_holding_base_replay_batch"
-                    ),
-                }
-                if base_request is None:
-                    cells.append(
-                        {
-                            **base_common,
-                            **_blocked(
-                                reason="challenger_base_cell_not_prepared",
-                                owner=(
-                                    "AIEntrySetupPairedReplayBatch"
-                                    if stage == "entry"
-                                    else "MainAIHoldingBaseReplayConsumer"
-                                ),
-                                acceptance_test=(
-                                    "prepare the selected challenger on the exact "
-                                    "same P0D0 input hash for this common parent"
-                                ),
-                            ),
-                            "execution_state": "not_prepared",
-                        }
-                    )
-                    continue
-                if stage == "entry":
-                    base_version, base_prompt_sha = _request_prompt_identity(
-                        base_request
-                    )
-                else:
-                    base_version = str(
-                        base_request.get("candidate_prompt_version") or ""
-                    )
-                    base_prompt_sha = str(
-                        base_request.get("candidate_prompt_sha256") or ""
-                    )
-                base_input_sha = _base_request_input_sha(base_request)
-                if (
-                    base_version != selected_version
-                    or base_prompt_sha != selected_sha
-                    or not p0d0_input_sha
-                    or base_input_sha != p0d0_input_sha
-                ):
-                    cells.append(
-                        {
-                            **base_common,
-                            **_blocked(
-                                reason="challenger_base_cell_exact_input_mismatch",
-                                owner=(
-                                    "AIEntrySetupPairedReplayBatch"
-                                    if stage == "entry"
-                                    else "MainAIHoldingBaseReplayConsumer"
-                                ),
-                                acceptance_test=(
-                                    "P1D0 must use the exact P0D0 input SHA and the "
-                                    "optimizer-selected challenger prompt SHA"
-                                ),
-                            ),
-                            "observed_prompt_version": base_version,
-                            "observed_prompt_sha256": base_prompt_sha or None,
-                            "observed_input_sha256": base_input_sha or None,
-                            "expected_input_sha256": p0d0_input_sha or None,
-                            "execution_state": (
-                                "existing_base_result_or_manifest_not_causally_reusable"
-                            ),
-                        }
-                    )
-                    continue
-                cells.append(
-                    {
-                        **base_common,
-                        "path_status": CONNECTED,
-                        "blocking_reason": None,
-                        "owner": base_common["existing_owner"],
-                        "acceptance_test": "passed_exact_p1d0_prompt_and_input_binding",
-                        "candidate_input_sha256": base_input_sha,
-                        "execution_state": (
-                            "existing_entry_result_reusable"
-                            if stage == "entry"
-                            else "provider_execution_budget_checkpoint_pending"
-                        ),
-                    }
-                )
-    return cells
 
 
 
@@ -1156,14 +895,6 @@ def build_report(target_date: str, *, write: bool = False) -> dict[str, Any]:
 
     optimizer_path, _ = optimizer.report_paths(target_date)
     optimizer_report = _read_json(optimizer_path)
-    prepared_path = quality.micro_reversion_prepared_request_path(target_date)
-    bridge_path = quality.micro_reversion_bridge_report_path(target_date)
-    materialized_path = quality.micro_reversion_materialized_request_path(target_date)
-    execution_path = quality.micro_reversion_execution_result_path(target_date)
-    prepared = _read_json(prepared_path)
-    bridge = _read_json(bridge_path)
-    materialized = _read_json(materialized_path)
-    execution = _read_json(execution_path)
     blockers: list[str] = []
     optional_input_blockers: list[str] = []
     if not (
@@ -1174,23 +905,6 @@ def build_report(target_date: str, *, write: bool = False) -> dict[str, Any]:
         and _valid_self_hash(optimizer_report)
     ):
         blockers.append("optimizer_artifact_missing_or_invalid")
-    if not (
-        prepared.get("schema") == "main_ai_quality_micro_prepared_requests_v1"
-        and prepared.get("target_date") == target_date
-        and prepared.get("status") == "prepared_requests_ready"
-        and optimizer._embedded_content_sha256_valid(
-            prepared, "artifact_content_sha256"
-        )
-        and _valid_source_only(prepared)
-    ):
-        blockers.append("prepared_request_artifact_missing_or_invalid")
-    if not (
-        bridge.get("schema") == "micro_reversion_ai_quality_bridge_v1"
-        and bridge.get("target_date") == target_date
-        and bridge.get("status") == "pass"
-        and _valid_source_only(bridge)
-    ):
-        optional_input_blockers.append("micro_bridge_artifact_missing_or_invalid")
     optimizer_sources = optimizer_report.get("source_bindings")
     optimizer_sources = (
         optimizer_sources if isinstance(optimizer_sources, Mapping) else {}
@@ -1276,54 +990,10 @@ def build_report(target_date: str, *, write: bool = False) -> dict[str, Any]:
     ) != optimizer.compact_evaluation_plan(calibration):
         blockers.append("compact_auxiliary_optimizer_evaluation_binding_mismatch")
         compact_contract_connected = False
-    if prepared and optimizer_sources.get("prepared_request_sha256") != (
-        optimizer._canonical_sha256(prepared)
-    ):
-        blockers.append("optimizer_prepared_request_hash_binding_mismatch")
-    if bridge and optimizer_sources.get("micro_bridge_sha256") != (
-        optimizer._canonical_sha256(bridge)
-    ):
-        optional_input_blockers.append("optimizer_micro_bridge_hash_binding_mismatch")
-    if materialized and not (
-        materialized.get("schema")
-        == quality.MICRO_REVERSION_MATERIALIZED_REQUEST_SCHEMA
-        and materialized.get("target_date") == target_date
-        and _valid_source_only(materialized)
-        and materialized.get("provider_call_performed") is False
-    ):
-        optional_input_blockers.append("r0_r3_materialized_artifact_invalid")
-    if (
-        materialized
-        and "r0_r3_materialized_artifact_invalid" not in optional_input_blockers
-    ):
-        try:
-            quality._validate_micro_reversion_materialized_report(materialized)
-        except (TypeError, ValueError):
-            optional_input_blockers.append("r0_r3_materialized_deep_contract_invalid")
-    if execution and not (
-        execution.get("schema") == quality.MICRO_REVERSION_EXECUTION_RESULT_SCHEMA
-        and execution.get("target_date") == target_date
-        and _valid_source_only(execution)
-        and execution.get("report_content_sha256")
-        == quality._sha256(
-            {
-                key: value
-                for key, value in execution.items()
-                if key != "report_content_sha256"
-            }
-        )
-    ):
-        optional_input_blockers.append("r0_r3_execution_artifact_invalid")
-
     entry_paths: list[dict[str, Any]] = []
     holding_paths: list[dict[str, Any]] = []
-    entry_index: dict[tuple[str, str, str], dict[str, Any]] = {}
-    holding_index: dict[tuple[str, str, str], dict[str, Any]] = {}
-    cells: list[dict[str, Any]] = []
     routing_blockers = {
         "optimizer_artifact_missing_or_invalid",
-        "prepared_request_artifact_missing_or_invalid",
-        "optimizer_prepared_request_hash_binding_mismatch",
     }
     if not routing_blockers.intersection(blockers):
         # A late calibration generation can invalidate optimizer economics
@@ -1331,41 +1001,15 @@ def build_report(target_date: str, *, write: bool = False) -> dict[str, Any]:
         # explicit per-cohort blocked/connected routes while the report stays
         # globally blocked; otherwise the verifier loses the failed cohort's
         # owner and acceptance condition behind a synthetic coverage gap.
-        entry_paths, entry_index = _entry_base_paths(
+        entry_paths, _ = _entry_base_paths(
             target_date, optimizer_report=optimizer_report
         )
-        holding_paths, holding_index = _holding_base_paths(
+        holding_paths, _ = _holding_base_paths(
             target_date, optimizer_report=optimizer_report
         )
-        if optional_input_blockers:
-            cells = [
-                _blocked(
-                    reason=reason,
-                    owner="MainAIMicroReversionSourceContract",
-                    acceptance_test=(
-                        "regenerate the exact-date optional micro-reversion source "
-                        "artifact with a valid source-only contract"
-                    ),
-                    cell="optional_micro_source_contract",
-                    stage="optional_micro_enriched_2x2",
-                )
-                for reason in sorted(set(optional_input_blockers))
-            ]
-        else:
-            cells = _factorial_cells(
-                optimizer_report=optimizer_report,
-                prepared=prepared,
-                bridge=bridge,
-                materialized=materialized,
-                execution=execution,
-                entry_request_index=entry_index,
-                holding_request_index=holding_index,
-            )
-
     all_terminal_rows: list[Mapping[str, Any]] = [
         *entry_paths,
         *holding_paths,
-        *cells,
     ]
     unclassified = sum(
         str(row.get("path_status") or "") not in VALID_PATH_STATUSES
@@ -1381,7 +1025,6 @@ def build_report(target_date: str, *, write: bool = False) -> dict[str, Any]:
         blockers.append("unclassified_request_path")
     if terminal_contract_invalid_count:
         blockers.append("terminal_request_path_contract_invalid")
-    cell_counts = Counter(str(row.get("path_status") or "") for row in cells)
     optimizer_feasibility = optimizer_report.get("result_feasibility") or {}
     profit_demonstrated = bool(
         optimizer_feasibility.get("profit_improving_candidate_currently_demonstrated")
@@ -1452,22 +1095,6 @@ def build_report(target_date: str, *, write: bool = False) -> dict[str, Any]:
                 if isinstance(entry_cohort_contract, Mapping)
                 else None
             ),
-            "prepared_request_path": str(prepared_path),
-            "prepared_request_artifact_content_sha256": prepared.get(
-                "artifact_content_sha256"
-            ),
-            "micro_bridge_path": str(bridge_path),
-            "micro_bridge_canonical_sha256": (
-                optimizer._canonical_sha256(bridge) if bridge else None
-            ),
-            "r0_r3_materialized_path": str(materialized_path),
-            "r0_r3_materialized_canonical_sha256": (
-                optimizer._canonical_sha256(materialized) if materialized else None
-            ),
-            "r0_r3_execution_path": str(execution_path),
-            "r0_r3_execution_canonical_sha256": (
-                optimizer._canonical_sha256(execution) if execution else None
-            ),
             "compact_auxiliary_calibration_artifact_content_sha256": (
                 calibration.get("artifact_content_sha256")
                 if compact_contract_connected
@@ -1510,27 +1137,15 @@ def build_report(target_date: str, *, write: bool = False) -> dict[str, Any]:
             "entry_base": _path_summary(entry_paths),
             "holding_base": _path_summary(holding_paths),
             "optional_micro_enriched_2x2": {
-                "path_status": BLOCKED if cell_counts.get(BLOCKED, 0) else CONNECTED,
-                "blocking_reason": (
-                    "one_or_more_factorial_cells_intentionally_blocked"
-                    if cell_counts.get(BLOCKED, 0)
-                    else None
-                ),
-                "owner": "MainAIPromptFactorialCellRouter",
-                "acceptance_test": (
-                    "every cell is exact-hash connected, explicitly blocked, or "
-                    "retired as an existing R0-R3 duplicate"
-                ),
-                "design_version": optimizer.FACTORIAL_DESIGN_VERSION,
-                "cell_count": len(cells),
-                "cell_path_status_counts": dict(sorted(cell_counts.items())),
-                "cells_sha256": optimizer._canonical_sha256(cells),
-                "cells": cells,
-                "provider_execution_policy": (
-                    "existing R0-R3 exact cells are never queued here; only an "
-                    "exact missing/changed cell may proceed after its owner and "
-                    "shared budget/checkpoint acceptance test close"
-                ),
+                "path_status": RETIRED,
+                "blocking_reason": None,
+                "owner": "MainAIPromptConsumer",
+                "acceptance_test": "retired_producer_not_loaded_or_queued",
+                "cell_count": 0,
+                "cell_path_status_counts": {},
+                "cells_sha256": optimizer._canonical_sha256([]),
+                "cells": [],
+                "provider_execution_policy": "retired_no_provider_execution",
             },
         },
         "path_status_contract": sorted(VALID_PATH_STATUSES),
@@ -1550,7 +1165,6 @@ def build_report(target_date: str, *, write: bool = False) -> dict[str, Any]:
             "all_requested_evaluation_results_generation_ready": bool(
                 connected_entry_count
                 and holding_provider_ready_count == len(holding_paths)
-                and cell_counts.get(BLOCKED, 0) == 0
             ),
             "profit_improvement_demonstrated": profit_demonstrated,
             "runtime_prompt_update_allowed": False,
@@ -1562,7 +1176,7 @@ def build_report(target_date: str, *, write: bool = False) -> dict[str, Any]:
                 "evidence_supported"
                 if profit_demonstrated
                 else (
-                    "partial_entry_only_plausible_holding_and_factorial_provider_blocked"
+                    "partial_entry_only_plausible_holding_provider_blocked"
                     if connected_entry_count
                     else (
                         "blocked_pending_entry_hash_refresh_and_holding_provider_checkpoint"
@@ -1570,8 +1184,8 @@ def build_report(target_date: str, *, write: bool = False) -> dict[str, Any]:
                 )
             ),
             "interpretation": (
-                "Request generation and duplicate suppression are now testable. "
-                "Holding and missing factorial result generation remain blocked by "
+                "Base request generation and source binding are testable. "
+                "Holding result generation remains blocked by "
                 "the shared provider-budget/checkpoint acceptance test, and "
                 "profitability remains unproven until mature economic outcomes "
                 "close every rolling and tail-risk guard."

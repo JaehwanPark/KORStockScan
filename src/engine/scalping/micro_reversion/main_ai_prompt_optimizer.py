@@ -1,15 +1,12 @@
 """Build a continuous, source-only Main AI prompt optimization plan.
 
-The existing micro-reversion R0-R3 artifacts retain their historical three-arm
-identity.  This producer removes micro applicability as a global prompt-search
-gate by planning a base prompt comparison for every exact prepared parent and
-an optional 2x2 prompt/input factorial comparison where enriched market data is
-available.  It has no provider, runtime, threshold, quantity, or order authority.
+Shared planning and contract helpers serve the current compact finalizer.
+The standalone CLI that consumed retired R0-R3 inputs has been removed.
+Historical offline build helpers have no provider, runtime, or order authority.
 """
 
 from __future__ import annotations
 
-import argparse
 import hashlib
 import json
 import os
@@ -1834,40 +1831,3 @@ def _render_markdown(report: Mapping[str, Any]) -> str:
     lines.extend(["", "## Runtime Bridge Gaps"])
     lines.extend(f"- `{gap}`" for gap in feasibility.get("runtime_bridge_gaps") or [])
     return "\n".join(lines) + "\n"
-
-
-def _main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--target-date", required=True)
-    parser.add_argument("--write", action="store_true")
-    parser.add_argument("--print-summary", action="store_true")
-    parser.add_argument("--preserve-entry-batch-selection", action="store_true")
-    parser.add_argument("--require-action-outcome-calibration", action="store_true")
-    args = parser.parse_args()
-    report = build_report(
-        args.target_date,
-        write=args.write,
-        preserve_entry_batch_selection=args.preserve_entry_batch_selection,
-        require_action_outcome_calibration=args.require_action_outcome_calibration,
-    )
-    if args.print_summary:
-        feasibility = report["result_feasibility"]
-        print(
-            json.dumps(
-                {
-                    "target_date": report["target_date"],
-                    "status": report["status"],
-                    "decision": report["decision"],
-                    "candidate_generation_feasible": feasibility[
-                        "candidate_generation_feasible"
-                    ],
-                    "runtime_bridge_ready": feasibility["runtime_bridge_ready"],
-                },
-                ensure_ascii=False,
-            )
-        )
-    return 0 if report["status"] != "blocked" else 2
-
-
-if __name__ == "__main__":
-    raise SystemExit(_main())

@@ -523,75 +523,6 @@ def test_holding_base_manifest_rejects_missing_optimizer_cohort_with_requests(
     assert report["blockers"] == ["holding_optimizer_cohort_missing"]
 
 
-def test_factorial_router_retires_exact_r0_cells_and_connects_only_p1d0():
-    trace_id = "holding-trace"
-    optimizer_report = _optimizer_report("2026-09-03")
-    prepared = {
-        "prepared_requests": [
-            {
-                "stage": "holding",
-                "effective_venue": "KRX",
-                "session_bucket": "KRX_REGULAR",
-                "decision_trace_id": trace_id,
-            }
-        ]
-    }
-    bridge = {
-        "rows": [
-            {
-                "decision_trace_id": trace_id,
-                "decision_stage": "holding_score",
-                "ask_depletion_sidecar_status": (
-                    "eligible_source_only_feature_ablation"
-                ),
-            }
-        ]
-    }
-    input_sha = "c" * 64
-    arm_prompt = {
-        ablation.CURRENT_BASE_CONTROL_ARM: ("holding_score_v2", "a" * 64),
-        ablation.CURRENT_ASK_CONTROL_ARM: ("holding_score_v2", "a" * 64),
-        ablation.CURRENT_ASK_CANDIDATE_ARM: (
-            "decision_quality_holding_v2_3",
-            "b" * 64,
-        ),
-    }
-    materialized_requests = []
-    for arm, (version, prompt_sha) in arm_prompt.items():
-        materialized_requests.append(
-            {
-                "decision_trace_id": trace_id,
-                "micro_reversion_replay_arm": arm,
-                "paired_replay_id": f"request-{arm}",
-                "candidate_input_sha256": input_sha,
-                "candidate": {
-                    "prompt_version": version,
-                    "system_prompt_sha256": prompt_sha,
-                },
-            }
-        )
-    holding_base = {
-        "decision_trace_id": trace_id,
-        "candidate_input_sha256": input_sha,
-        "candidate_prompt_version": "decision_quality_holding_v2_3",
-        "candidate_prompt_sha256": "b" * 64,
-    }
-
-    cells = consumer._factorial_cells(
-        optimizer_report=optimizer_report,
-        prepared=prepared,
-        bridge=bridge,
-        materialized={"requests": materialized_requests},
-        execution={"results": []},
-        entry_request_index={},
-        holding_request_index={("KRX", "KRX_REGULAR", trace_id): holding_base},
-    )
-
-    assert len(cells) == 4
-    assert [row["path_status"] for row in cells].count(consumer.R0_DUPLICATE) == 3
-    p1d0 = next(row for row in cells if row["cell"].startswith("P1D0"))
-    assert p1d0["path_status"] == consumer.CONNECTED
-    assert p1d0["execution_state"] == "provider_execution_budget_checkpoint_pending"
 
 
 def test_consumer_report_keeps_runtime_blocked_and_detects_unclassified(
@@ -664,19 +595,6 @@ def test_consumer_report_keeps_runtime_blocked_and_detects_unclassified(
     monkeypatch.setattr(
         consumer, "_holding_base_paths", lambda *_args, **_kwargs: ([connected], {})
     )
-    monkeypatch.setattr(
-        consumer,
-        "_factorial_cells",
-        lambda **_kwargs: [
-            {
-                "path_status": consumer.BLOCKED,
-                "blocking_reason": "missing_cell",
-                "owner": "owner",
-                "acceptance_test": "test",
-            }
-        ],
-    )
-
     report = consumer.build_report(target_date)
 
     assert report["status"] == "ready_source_only_consumer_closure"
@@ -688,102 +606,14 @@ def test_consumer_report_keeps_runtime_blocked_and_detects_unclassified(
     assert report["performance_evidence"]["profit_improvement_demonstrated"] is False
     assert (
         report["performance_evidence"]["future_profit_improving_output_likelihood"]
-        == "partial_entry_only_plausible_holding_and_factorial_provider_blocked"
+        == "partial_entry_only_plausible_holding_provider_blocked"
     )
     assert (
         report["request_paths"]["optional_micro_enriched_2x2"]["path_status"]
-        == consumer.BLOCKED
+        == consumer.RETIRED
     )
 
 
-def test_consumer_isolates_optional_micro_contract_from_base_paths(
-    monkeypatch, tmp_path: Path
-):
-    target_date = "2026-09-04"
-    paths = {
-        "optimizer": tmp_path / "optimizer.json",
-        "prepared": tmp_path / "prepared.json",
-        "bridge": tmp_path / "bridge.json",
-        "materialized": tmp_path / "materialized.json",
-        "execution": tmp_path / "execution.json",
-    }
-    prepared = _prepared_report(target_date)
-    bridge = {
-        "schema": "micro_reversion_ai_quality_bridge_v1",
-        "target_date": target_date,
-        "status": "warning",
-        "rows": [],
-        **_source_only(),
-    }
-    optimizer_report = _optimizer_report(
-        target_date,
-        source_bindings={
-            "prepared_request_sha256": optimizer._canonical_sha256(prepared),
-            "micro_bridge_sha256": optimizer._canonical_sha256(bridge),
-        },
-    )
-    paths["optimizer"].write_text(json.dumps(optimizer_report))
-    paths["prepared"].write_text(json.dumps(prepared))
-    paths["bridge"].write_text(json.dumps(bridge))
-    monkeypatch.setattr(
-        optimizer,
-        "report_paths",
-        lambda _date: (paths["optimizer"], tmp_path / "optimizer.md"),
-    )
-    monkeypatch.setattr(
-        consumer.quality,
-        "micro_reversion_prepared_request_path",
-        lambda _date: paths["prepared"],
-    )
-    monkeypatch.setattr(
-        consumer.quality,
-        "micro_reversion_bridge_report_path",
-        lambda _date: paths["bridge"],
-    )
-    monkeypatch.setattr(
-        consumer.quality,
-        "micro_reversion_materialized_request_path",
-        lambda _date: paths["materialized"],
-    )
-    monkeypatch.setattr(
-        consumer.quality,
-        "micro_reversion_execution_result_path",
-        lambda _date: paths["execution"],
-    )
-    connected = {
-        "path_status": consumer.CONNECTED,
-        "effective_venue": "KRX",
-        "session_bucket": "KRX_REGULAR",
-        "owner": "test-owner",
-        "acceptance_test": "test-pass",
-    }
-    monkeypatch.setattr(
-        consumer, "_entry_base_paths", lambda *_args, **_kwargs: ([connected], {})
-    )
-    monkeypatch.setattr(
-        consumer, "_holding_base_paths", lambda *_args, **_kwargs: ([], {})
-    )
-    monkeypatch.setattr(
-        consumer,
-        "_factorial_cells",
-        lambda **_kwargs: (_ for _ in ()).throw(
-            AssertionError("invalid optional input must not enter factorial routing")
-        ),
-    )
-
-    report = consumer.build_report(target_date)
-
-    assert report["status"] == "ready_source_only_consumer_closure"
-    assert report["entry_followup_terminal_ready"] is True
-    assert report["blockers"] == []
-    assert report["optional_input_blockers"] == [
-        "micro_bridge_artifact_missing_or_invalid"
-    ]
-    optional_path = report["request_paths"]["optional_micro_enriched_2x2"]
-    assert optional_path["path_status"] == consumer.BLOCKED
-    assert optional_path["cell_count"] == 1
-    assert optional_path["cells"][0]["owner"] == ("MainAIMicroReversionSourceContract")
-    assert report["runtime_effect"] is False
 
 
 @pytest.mark.parametrize("bound", [True, False])
@@ -932,3 +762,25 @@ def test_completed_batch_without_optimizer_cohort_does_not_gain_connection(monke
     assert len(rows) == 1 and rows[0]["path_status"] == consumer.BLOCKED
     assert rows[0]["terminality"] == "requires_retry_or_owner_closure"
     assert requests == {}
+
+
+def test_retired_micro_inputs_are_never_loaded_or_repaired(monkeypatch, tmp_path):
+    day = "2026-09-17"
+    optimizer_path = tmp_path / "optimizer.json"
+    optimizer_path.write_text(json.dumps(_optimizer_report(day)))
+    monkeypatch.setattr(optimizer, "report_paths", lambda _: (optimizer_path, tmp_path / "optimizer.md"))
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Retired cycle input must not be read")
+    for name in ("micro_reversion_prepared_request_path", "micro_reversion_bridge_report_path", "micro_reversion_materialized_request_path", "micro_reversion_execution_result_path"):
+        monkeypatch.setattr(consumer.quality, name, forbidden)
+    monkeypatch.setattr(consumer, "_entry_base_paths", lambda *args, **kwargs: ([], {}))
+    monkeypatch.setattr(consumer, "_holding_base_paths", lambda *args, **kwargs: ([], {}))
+    report = consumer.build_report(day)
+    assert report["blockers"] == []
+    assert report["optional_input_blockers"] == []
+    retired = report["request_paths"]["optional_micro_enriched_2x2"]
+    assert retired["path_status"] == consumer.RETIRED
+    assert retired["cells"] == []
+    assert not any("r0_r3" in key or "micro_bridge" in key or "prepared_request" in key for key in report["source_bindings"])
+    assert report["provider_call_performed"] is False
+    assert report["runtime_effect"] is False

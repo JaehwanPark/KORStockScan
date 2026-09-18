@@ -22,3 +22,11 @@ Implementation→self review→보완→re-review: 폐기 코드 import, 직접 
 Commit/push·선택 배포·실제 PID 및 artifact 삭제의 실제 결과는 owning `deployment.json`/`cleanup.json`을 따른다. 새 bot restart·주문·provider/guard/env/cron 변경·장후 전체 재실행·early PREOPEN·외부 sync는 없다. 기존 immutable release/rollback과 source 원장은 삭제 대상이 아니다. 폐기만으로 전일 전체 장후 chain DONE이나 EV 개선을 주장하지 않는다.
 
 실제 삭제: 전용 파생 파일722개·444,154,086bytes(약423.6MiB), 보호한 원천/compact hash 불변. 삭제 후 기존 compact 인계 PASS. Bridge/cleanup 경계141 PASS, workspace7 PASS, compile/bash/diff/print-only parser PASS. 기존 baseline 실패2건은 별도이며 범위 내 잔여 finding0이다.
+
+## 후속 소비 경로 리뷰
+
+추가 사용자 승인에 따라 selected `1a7b4ea95` 이후 소비 경로를 재리뷰했다. 공용 consumer가 퇴역 prepared/bridge/materialized/execution 파일을 계속 읽고 R0–R3 재생성 acceptance를 발행하는 잔여 결함을 확인했다. 해당 입력·hash 의존성과 factorial router를 제거하고 optional 경로는 `retired_ai_quality_cycle`로 종결한다. 공용 optimizer의 고아 standalone CLI도 제거하여 현행 compact 보고서를 폐기 입력 기반 보고서로 덮어쓰지 않게 했다. 현행 compact finalizer·정책·인계 및 공용 순수 계약 함수는 보존한다.
+
+전용7개 roots 및 지정 step1022 산출물의 재생성 여부를 확인했으며 추가 삭제 대상은0개다. 이전 삭제722개 manifest와 원본/공유 증거·immutable rollback은 보존한다. 후속 targeted pytest·compact 인계·parser/compile/diff, commit/push 및 선택 배포 receipt는 `tmp/ai-quality-cycle-consumer-closure-20260918/`를 따른다. 기존 baseline 실패2건은 변경 없는 별도 범위이며 이번에 광역 성능 테스트를 반복하지 않는다. 배포는 후속 invocation 선택이며 실제 PID/PREOPEN·자연 행동·양수 EV 수락은 별도다.
+
+후속 최종 검증: consumer/optimizer/strict verifier236 PASS, 미사용 helper 정리 후 consumer15 PASS, compile/diff·worktree/workspace print-only parser PASS, 기존9/17 compact 인계 PASS. 범위 내 미해결 finding0. 전용 파생 산출물 추가0개. 신규 Python module 및 광역 재실행·provider 호출은 없다.

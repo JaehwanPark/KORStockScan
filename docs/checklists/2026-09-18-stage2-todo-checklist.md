@@ -125,3 +125,5 @@
 ## R0–R3 독립 AI 연구 폐기
 
 사용자 지시로 `scalping.micro_reversion.ai_quality_cycle` 장후 실행기·R2/R3 인계·legacy/current-axis 전용 런타임 및 파생 산출물을 제거한다. 별도 OPEN 복구 작업을 만들지 않는다. 현행 compact·AI 원천/라벨·주문/체결·공유 경제성 owner는 보존한다. 구현·검증·삭제 증거는 [폐기 리뷰](../audit-reports/2026-09-18-ai-quality-cycle-retirement-review.md)를 따른다. 코드 선택·실제 PID 소비와 장후 전체 DONE은 별도다.
+
+후속 소비 경로 리뷰: 공용 consumer의 퇴역 입력·factorial 재생성 안내와 고아 standalone optimizer CLI를 제거했다. 전용 산출물 추가 생성/삭제 대상0개, 현행 compact 소비는 보존한다. 최신 검증·commit/push·선택 배포 증거는 같은 폐기 리뷰 및 `tmp/ai-quality-cycle-consumer-closure-20260918/` receipts를 따른다. 신규 OPEN 복원 owner·실제 PID/경제성 수락은 생성하지 않는다.
