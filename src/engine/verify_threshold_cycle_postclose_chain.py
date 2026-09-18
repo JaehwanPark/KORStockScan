@@ -2773,7 +2773,7 @@ def _entry_setup_replay_session_contract_status(
         compact_status = compact_role.get("status")
         if (
             legacy_role.get("role")
-            != "offline_independent_selector_prompt_research_only"
+            not in {"offline_independent_selector_prompt_research_only", "retired_ai_quality_cycle"}
             or legacy_role.get("may_tune_compact_auxiliary") is not False
             or compact_role.get("schema") != "compact_auxiliary_consumer_handoff_v1"
             or compact_role.get("role")

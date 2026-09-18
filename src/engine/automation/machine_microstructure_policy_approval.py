@@ -184,72 +184,10 @@ DECISION_ALLOWED_STATES = {
     },
 }
 
-# Candidate producers cannot grant runtime authority to their own output.
-# This first entry is source-owned and names a concrete PREOPEN consumer,
-# rollback, apply-receipt, and post-apply-attribution implementation.  Its
-# bounded contract changes only the entry prompt from the exact hot-v1 hash to
-# the reviewed V2.6 hash for KRX regular; all broker/safety/provider/quantity
-# authority remains outside the family.
+# Keep the old family identity only to reject historical receipts. Candidate
+# producers cannot restore its retired consumer or grant runtime authority.
 MAIN_AI_QUALITY_RUNTIME_FAMILY = "main_ai_quality_entry_prompt_contract_v1"
-MAIN_AI_QUALITY_BOUNDED_CONTRACT = {
-    "schema": "main_ai_quality_entry_prompt_bounded_contract_v1",
-    "stage": "entry",
-    "axis": "prompt_contract_effect",
-    "effective_venue": "KRX",
-    "session_bucket": "KRX_REGULAR",
-    "instrument_scope": "effective_date_official_kospi_kosdaq_common_stock_only",
-    "current_prompt_version": "hot_v1",
-    "recommended_prompt_version": "decision_quality_v2_6",
-    "apply_timing": "next_krx_trading_date_preopen_before_0800_kst",
-    "rollback": "automatic_configured_prompt_fallback_on_any_contract_gap",
-    "forbidden_changes": [
-        "provider_or_model",
-        "order_price_or_quantity",
-        "threshold_or_cap",
-        "bot_process_state",
-        "broker_account_order_cooldown_guard",
-        "hard_protect_or_emergency_safety",
-    ],
-}
-MAIN_AI_QUALITY_BOUNDED_CONTRACT_SHA256 = hashlib.sha256(
-    json.dumps(
-        MAIN_AI_QUALITY_BOUNDED_CONTRACT,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-).hexdigest()
-TRUSTED_RUNTIME_FAMILY_REGISTRY: Mapping[str, Mapping[str, Any]] = {
-    MAIN_AI_QUALITY_RUNTIME_FAMILY: {
-        "enabled": True,
-        "stage": "entry",
-        "axis": "prompt_contract_effect",
-        "bounded_contract_sha256": MAIN_AI_QUALITY_BOUNDED_CONTRACT_SHA256,
-        "preopen_consumer": (
-            "src.engine.automation.main_ai_quality_runtime_family.preopen_apply"
-        ),
-        "apply_receipt_owner": "main_ai_quality_runtime_family_preopen_apply",
-        "post_apply_attribution_owner": (
-            "main_ai_quality_runtime_family_post_apply_attribution"
-        ),
-        "effective_venue": "KRX",
-        "session_bucket": "KRX_REGULAR",
-        "bounded_values": {
-            "current": (
-                "922c6ccebe50be668c195acbe8f3a795aec9dacf3e4be09adc4174547d1be10e"
-            ),
-            "recommended": (
-                "ca3b73e0ce857929d8fb0d0e667223163f8cb358c2054bedac7f62a0f1f3b0d0"
-            ),
-        },
-        "direct_order_authority": False,
-        "provider_route_authority": False,
-        "quantity_authority": False,
-        "hard_safety_authority": False,
-        "receipt_content_sha256_required": True,
-        "requires_post_apply_attribution_before_auto_chain": True,
-    }
-}
+TRUSTED_RUNTIME_FAMILY_REGISTRY: Mapping[str, Mapping[str, Any]] = {}
 
 METRIC_CONTRACT = {
     "metric_role": "operator_approval_control_plane",
@@ -2077,49 +2015,7 @@ def _apply_family_receipts(
             continue
         family = str(design.get("runtime_family") or "")
         if family == MAIN_AI_QUALITY_RUNTIME_FAMILY:
-            suffix = "applied" if status == "applied_guard_passed" else "post_apply"
-            canonical = receipt_dir / (
-                f"{str(receipt.get('target_date') or '')}_"
-                f"{str(entry.get('candidate_sha256') or '')}_{suffix}.json"
-            )
-            if path.absolute() != canonical.absolute():
-                continue
-            try:
-                from src.engine.automation import (
-                    main_ai_quality_runtime_family as main_ai_runtime,
-                )
-                from src.engine.scalping import main_ai_quality_live_policy
-
-                if status == "applied_guard_passed":
-                    activation_path = Path(
-                        str(receipt.get("activation_artifact_path") or "")
-                    )
-                    activation = _load_json(activation_path) or {}
-                    if main_ai_runtime.apply_receipt_errors(
-                        receipt,
-                        activation=activation,
-                    ) or main_ai_quality_live_policy.activation_errors(
-                        activation,
-                        target_date=str(receipt.get("target_date") or ""),
-                        selected_path=activation_path,
-                        receipt=receipt,
-                    ):
-                        continue
-                else:
-                    rolling = _load_json(
-                        Path(str(receipt.get("source_rolling_artifact_path") or ""))
-                    )
-                    if rolling is None:
-                        continue
-                    main_ai_runtime.validate_post_apply_attribution_receipt(
-                        entry=entry,
-                        attribution=receipt,
-                        attribution_path=path,
-                        rolling=rolling,
-                        target_date=str(receipt.get("target_date") or ""),
-                    )
-            except (OSError, TypeError, ValueError):
-                continue
+            continue
         expected_state = (
             STATE_PREOPEN_SCHEDULED
             if status == "applied_guard_passed"
@@ -2304,34 +2200,7 @@ def _validated_existing_enrollments(
         ):
             continue
         if str(family) == MAIN_AI_QUALITY_RUNTIME_FAMILY:
-            expected_apply_path = receipt_dir / (
-                f"{str(receipt.get('target_date') or '')}_"
-                f"{str(entry.get('candidate_sha256') or '')}_applied.json"
-            )
-            if receipt_path.absolute() != expected_apply_path.absolute():
-                continue
-            try:
-                from src.engine.automation import (
-                    main_ai_quality_runtime_family as main_ai_runtime,
-                )
-                from src.engine.scalping import main_ai_quality_live_policy
-
-                activation_path = Path(
-                    str(receipt.get("activation_artifact_path") or "")
-                )
-                activation = _load_json(activation_path) or {}
-                if main_ai_runtime.apply_receipt_errors(
-                    receipt,
-                    activation=activation,
-                ) or main_ai_quality_live_policy.activation_errors(
-                    activation,
-                    target_date=str(receipt.get("target_date") or ""),
-                    selected_path=activation_path,
-                    receipt=receipt,
-                ):
-                    continue
-            except (OSError, TypeError, ValueError):
-                continue
+            continue
         if requires_post_apply:
             if raw.get("enrolled_after_post_apply_attribution") is not True:
                 continue
@@ -2369,27 +2238,7 @@ def _validated_existing_enrollments(
             ):
                 continue
             if str(family) == MAIN_AI_QUALITY_RUNTIME_FAMILY:
-                expected_attribution_path = receipt_dir / (
-                    f"{str(attribution.get('target_date') or '')}_"
-                    f"{str(entry.get('candidate_sha256') or '')}_post_apply.json"
-                )
-                if attribution_path.absolute() != expected_attribution_path.absolute():
-                    continue
-                try:
-                    rolling = _load_json(
-                        Path(str(attribution.get("source_rolling_artifact_path") or ""))
-                    )
-                    if rolling is None:
-                        continue
-                    main_ai_runtime.validate_post_apply_attribution_receipt(
-                        entry=entry,
-                        attribution=attribution,
-                        attribution_path=attribution_path,
-                        rolling=rolling,
-                        target_date=str(attribution.get("target_date") or ""),
-                    )
-                except (OSError, TypeError, ValueError):
-                    continue
+                continue
         validated[str(family)] = dict(raw)
     return validated
 
@@ -2894,21 +2743,9 @@ def schedule_preopen_handoffs(
         design = candidate["runtime_design"]
         family = str(design.get("runtime_family") or "")
         if family == MAIN_AI_QUALITY_RUNTIME_FAMILY:
-            # This registry entry is retained for archive/receipt compatibility,
-            # but its legacy prompt runtime authority is explicitly retired.
-            # The generic scheduler must not publish a positive apply handoff
-            # that a downstream consumer later has to reject.
-            from src.engine.scalping import main_ai_quality_live_policy
-
-            if not main_ai_quality_live_policy.LEGACY_RUNTIME_AUTHORITY_ENABLED:
-                entry["state"] = STATE_DESIGN_REQUIRED
-                entry["state_reason"] = (
-                    "preopen_blocked_runtime_family_authority_disabled"
-                )
-                entry["runtime_design_errors"] = [
-                    "legacy_main_ai_quality_runtime_authority_disabled"
-                ]
-                continue
+            entry["state"] = STATE_DESIGN_REQUIRED
+            entry["state_reason"] = "retired_main_ai_quality_cycle"
+            continue
         registry_digest = _registry_entry_sha256(
             _trusted_registry_entry(family, runtime_registry)
         )

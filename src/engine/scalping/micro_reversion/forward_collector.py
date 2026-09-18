@@ -579,13 +579,7 @@ class ForwardObservationCollector:
         self._producer_0b_callback_latency_ms: deque[float] = deque(maxlen=4_096)
         self._producer_0d_callback_latency_ms: deque[float] = deque(maxlen=4_096)
         # Read-only current-axis handoff. Never enables capture or subscriptions.
-        from .current_axis_source import CurrentAxisSourceBuffer
 
-        self._current_axis_buffer = (
-            CurrentAxisSourceBuffer()
-            if os.getenv("MAIN_AI_CURRENT_AXIS_ENABLED", "").strip().lower() == "true"
-            else None
-        )
 
     def start(self) -> None:
         with self._state_lock:
@@ -613,54 +607,8 @@ class ForwardObservationCollector:
                     daemon=True,
                 )
                 self._depth_thread.start()
-        if self._current_axis_buffer is not None:
-            from .current_axis_source import register_collector
 
-            register_collector(self)
 
-    def current_axis_source(self, symbol: str, *, captured_at_ms: int) -> dict:
-        """Copy an exact normalized scope only across a completed worker barrier."""
-        with self._transport_epoch_lock:
-            with self._state_lock:
-                if (
-                    self._current_axis_buffer is None
-                    or not self._accepting
-                    or self._lifecycle is not CollectorLifecycle.RUNNING
-                    or self._active_callbacks
-                    or not self.flags.depth_capture_active
-                ):
-                    raise ValueError("current_axis_collector_not_ready")
-                key = (symbol, "KRX", "KRX_REGULAR")
-                scope = (*key, self._sequence_epoch)
-                market_sequence = self._source_sequences.get(key, 0)
-                depth_sequence = self._depth_source_sequences.get(key, 0)
-            # Do not hold the producer callback lock while copying rows.
-            result = self._current_axis_buffer.snapshot(
-                scope,
-                captured_at_ms=captured_at_ms,
-                market_sequence=market_sequence,
-                depth_sequence=depth_sequence,
-            )
-            with self._state_lock:
-                if (
-                    self._active_callbacks
-                    or self._source_sequences.get(key, 0) != market_sequence
-                    or self._depth_source_sequences.get(key, 0) != depth_sequence
-                    or self._current_axis_buffer.generation != result["generation"]
-                    or self._current_axis_buffer.scope_invalid(scope)
-                ):
-                    raise ValueError("current_axis_source_changed_during_barrier")
-            return result
-
-    def _copy_current_axis_row(self, kind: str, row: dict) -> None:
-        buffer = self._current_axis_buffer
-        if buffer is None:
-            return
-        try:
-            buffer.add(kind, row)
-        except Exception:
-            # A new consumer cannot disrupt the original observation worker.
-            buffer.invalidate()
 
     def begin_transport_epoch(self) -> int:
         """Atomically detach queued/path state from a completed WS transport.
@@ -691,8 +639,6 @@ class ForwardObservationCollector:
             self._detector.reset()
             self._ring.reset_transport_epoch()
             self._coalescer.reset_transport_epoch()
-            if self._current_axis_buffer is not None:
-                self._current_axis_buffer.invalidate()
             return sequence_epoch
 
     def close(self, *, timeout_sec: float = 10.0) -> None:
@@ -1206,8 +1152,6 @@ class ForwardObservationCollector:
         *,
         packet_snapshot: dict[str, Any] | None = None,
     ) -> None:
-        if self._current_axis_buffer is not None:
-            self._current_axis_buffer.invalidate_scope(normalize_symbol(symbol), venue)
         # No I/O or unbounded per-symbol maps on the producer callback. This
         # tail is diagnostic only; it cannot reconstruct all rejected rows.
         checked_at_ms = time.time_ns() // 1_000_000
@@ -1639,8 +1583,6 @@ class ForwardObservationCollector:
                         self._increment("_depth_dropped")
                     else:
                         self._increment("_depth_worker_processed")
-                        if self._current_axis_buffer is not None:
-                            self._copy_current_axis_row("depth", point.as_dict())
             except Exception:
                 self._increment("_depth_worker_errors")
             finally:
@@ -1734,15 +1676,6 @@ class ForwardObservationCollector:
         self._ring.add(envelope)
         self._coalescer.active_segments_for(envelope)
         self._increment("_worker_processed")
-        if self._current_axis_buffer is not None:
-            self._copy_current_axis_row(
-                "market",
-                to_market_stream_point(
-                    envelope,
-                    path_order_status=order_status,
-                    exchange_timestamp_regression_ms=order_assessment.exchange_timestamp_regression_ms,
-                ).as_dict(),
-            )
         if registrations:
             self._add("_shock_events", len(registrations))
 
@@ -2048,8 +1981,6 @@ class ForwardObservationCollector:
             self._increment("_reference_errors")
         else:
             self._increment("_reference_persisted")
-            if self._current_axis_buffer is not None:
-                self._copy_current_axis_row("references", reference.as_dict())
         finally:
             with self._metrics_lock:
                 self._reference_write_latency_ms.append(
@@ -2058,21 +1989,6 @@ class ForwardObservationCollector:
 
     def _increment(self, attribute: str) -> None:
         self._add(attribute, 1)
-        if self._current_axis_buffer is not None and attribute in {
-            "_snapshot_blocks",
-            "_depth_snapshot_blocks",
-            "_venue_blocks",
-            "_missing_0b_items",
-            "_missing_0d_items",
-            "_depth_queue_full",
-            "_depth_dropped",
-            "_worker_errors",
-            "_depth_worker_errors",
-            "_path_dropped",
-            "_reference_errors",
-            "_event_symbol_mismatches",
-        }:
-            self._current_axis_buffer.invalidate()
 
     def _record_producer_callback_latency(
         self, realtime_type: str, value: float

@@ -141,9 +141,6 @@ def source_paths(report_dir: Path, target_date: str, consumer: str) -> dict[str,
     if consumer == "checklist":
         paths.update(
             {
-                "main_ai_quality_r0_r3": report_dir
-                / "main_ai_quality_r0_r3"
-                / f"main_ai_quality_r0_r3_cycle_{target_date}.json",
                 "machine_microstructure_policy_approval": report_dir
                 / "machine_microstructure_policy_approval"
                 / f"machine_microstructure_policy_approval_postclose_{target_date}.json",

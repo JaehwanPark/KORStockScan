@@ -408,27 +408,6 @@ def test_postclose_wrapper_syncs_exact_trade_facts_before_daily_calibration():
     assert "validate_fact_sync_receipt" in sync_block
 
 
-def test_postclose_materializes_current_lifecycle_before_single_daily_consumer():
-    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
-    tokens = (
-        'wait_for_postclose_resources "observation_source_quality_preflight"',
-        "src.engine.strategy_position_performance_report",
-        "src.engine.scalping.entry_split_order_plan",
-        "src.engine.scalping.ai_decision_quality ",
-        "src.engine.scalping.micro_reversion.ai_quality_cycle",
-        "src.engine.daily_threshold_cycle_report",
-        "src.engine.scalping.ai_action_outcome_calibration",
-        'run_threshold_cycle_ev_and_wait "pre_workorder"',
-    )
-    # The early economic-reference-only call collects costs, while the
-    # final call below still builds calibration after the daily materializer.
-    positions = [script.rindex(token) if token.endswith("ai_action_outcome_calibration")
-                 else script.index(token) for token in tokens]
-    assert positions == sorted(positions)
-    for token in tokens[2:5]:
-        assert script.count(token) == 1
-    assert script.count("--calibration-run-phase postclose") == 1
-    assert script.count("--refresh-machine-evaluation-only") == 1
 
 
 def test_postclose_wrapper_integrates_lookup_evaluation_at_existing_final_boundary():
@@ -1084,80 +1063,6 @@ def test_postclose_wrapper_excludes_machine_microstructure_duplicate_path():
     assert 'cmp -s "$UNIT_SOURCE_DIR/$NEW_BASE.service"' in installer
 
 
-def test_postclose_wrapper_runs_continuous_main_ai_prompt_optimizer():
-    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
-
-    assert (
-        'RUN_MAIN_AI_PROMPT_OPTIMIZER="${THRESHOLD_CYCLE_RUN_MAIN_AI_PROMPT_OPTIMIZER:-$RUN_MAIN_AI_QUALITY_R0_R3}"'
-        in script
-    )
-    r0_index = script.index("-m src.engine.scalping.micro_reversion.ai_quality_cycle")
-    optimizer_index = script.index(
-        "-m src.engine.scalping.micro_reversion.main_ai_prompt_optimizer"
-    )
-    action_outcome_index = script.rindex(
-        "-m src.engine.scalping.ai_action_outcome_calibration"
-    )
-    holding_consumer_index = script.index(
-        "-m src.engine.scalping.main_ai_holding_base_replay_batch"
-    )
-    prompt_consumer_index = script.index(
-        "-m src.engine.scalping.main_ai_prompt_consumer"
-    )
-    runtime_family_index = script.index("[SKIP] main-ai-quality-runtime-family")
-    assert (
-        r0_index
-        < action_outcome_index
-        < optimizer_index
-        < holding_consumer_index
-        < prompt_consumer_index
-        < runtime_family_index
-    )
-    assert "main_ai_prompt_optimizer_${TARGET_DATE}.json" in script
-    assert "main_ai_prompt_optimizer=$RUN_MAIN_AI_PROMPT_OPTIMIZER" in script
-    assert (
-        'RUN_MAIN_AI_PROMPT_CONSUMER="${THRESHOLD_CYCLE_RUN_MAIN_AI_PROMPT_CONSUMER:-$RUN_MAIN_AI_PROMPT_OPTIMIZER}"'
-        in script
-    )
-    assert "main_ai_prompt_consumer_${TARGET_DATE}.json" in script
-    assert "main_ai_prompt_consumer=$RUN_MAIN_AI_PROMPT_CONSUMER" in script
-
-    final_refresh = Path(
-        "deploy/run_machine_microstructure_final_refresh.sh"
-    ).read_text(encoding="utf-8")
-    # Match the child commands, not the earlier Python import used only to
-    # resolve the completed-machine target date.
-    expansion_refresh_idx = final_refresh.index(
-        '"$PYTHON_BIN" -m '
-        "src.engine.monitoring.widget_collector_expansion_recommendation"
-    )
-    attribution_refresh_idx = final_refresh.index(
-        '"$PYTHON_BIN" -m src.engine.monitoring.machine_microstructure_attribution'
-    )
-    weakness_hysteresis_refresh_idx = final_refresh.index(
-        '"$PYTHON_BIN" -m src.engine.automation.market_weakness_hysteresis_tuning'
-    )
-    entry_timing_refresh_idx = final_refresh.index(
-        '"$PYTHON_BIN" -m src.engine.automation.machine_entry_timing_tuning'
-    )
-    approval_refresh_idx = final_refresh.index(
-        '"$PYTHON_BIN" -m src.engine.automation.machine_microstructure_policy_approval'
-    )
-    checklist_refresh_idx = final_refresh.index(
-        '"$PYTHON_BIN" -m src.engine.build_next_stage2_checklist'
-    )
-    assert (
-        expansion_refresh_idx
-        < attribution_refresh_idx
-        < weakness_hysteresis_refresh_idx
-        < entry_timing_refresh_idx
-        < approval_refresh_idx
-        < checklist_refresh_idx
-    )
-    assert "--source-wait-sec 900" in final_refresh
-    assert "--source-poll-sec 30" in final_refresh
-    assert "--notify-objective-followups" in final_refresh
-    assert "--completed-machine-source-date" in final_refresh
 
 
 def _run_machine_microstructure_final_refresh(
@@ -2270,181 +2175,10 @@ def test_postclose_wrapper_materializes_daily_exact_quality_chain_before_calibra
     )
 
 
-def test_postclose_wrapper_runs_bounded_main_ai_quality_r0_r3_after_exact_chain():
-    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
-
-    assert (
-        'RUN_MAIN_AI_QUALITY_R0_R3="${THRESHOLD_CYCLE_RUN_MAIN_AI_QUALITY_R0_R3:-false}"'
-        in script
-    )
-    assert (
-        'MAIN_AI_QUALITY_EXECUTE_PROVIDER_REPLAY="${THRESHOLD_CYCLE_MAIN_AI_QUALITY_EXECUTE_PROVIDER_REPLAY:-true}"'
-        in script
-    )
-    assert (
-        'MAIN_AI_QUALITY_DAILY_ATTEMPT_CAP="${THRESHOLD_CYCLE_MAIN_AI_QUALITY_DAILY_ATTEMPT_CAP:-390}"'
-        in script
-    )
-    assert (
-        'MAIN_AI_QUALITY_PARENT_CAP="${THRESHOLD_CYCLE_MAIN_AI_QUALITY_PARENT_CAP:-130}"'
-        in script
-    )
-    assert (
-        'MAIN_AI_QUALITY_DAILY_USD_CAP="${THRESHOLD_CYCLE_MAIN_AI_QUALITY_DAILY_USD_CAP:-1.0}"'
-        in script
-    )
-    exact_index = script.index("-m src.engine.scalping.ai_decision_quality")
-    cycle_index = script.index(
-        "-m src.engine.scalping.micro_reversion.ai_quality_cycle"
-    )
-    runtime_family_index = script.index("[SKIP] main-ai-quality-runtime-family")
-    calibration_index = script.rindex(
-        "-m src.engine.scalping.ai_action_outcome_calibration"
-    )
-    optimizer_index = script.index(
-        "-m src.engine.scalping.micro_reversion.main_ai_prompt_optimizer"
-    )
-    assert (
-        exact_index
-        < cycle_index
-        < calibration_index
-        < optimizer_index
-        < runtime_family_index
-    )
-    assert "-m src.engine.automation.main_ai_quality_runtime_family" not in script
-    runtime_family_block = script[
-        runtime_family_index : script.index(
-            'if [ "$RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT" = "true" ]',
-            runtime_family_index,
-        )
-    ]
-    assert "status=retired_disabled" in runtime_family_block
-    assert "runtime_effect=false actual_order_submitted=false" in runtime_family_block
-    cycle_block_start = script.rindex(
-        'if [ "$RUN_MAIN_AI_QUALITY_R0_R3" = "true" ]',
-        0,
-        cycle_index,
-    )
-    cycle_block_end = script.index(
-        'if [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "true" ]',
-        cycle_index,
-    )
-    cycle_block = script[cycle_block_start:cycle_block_end]
-    assert "--execute-provider-replay" in cycle_block
-    assert "--daily-attempt-cap" in cycle_block
-    assert "--daily-usd-cap" in cycle_block
-    assert "--parent-cap" in cycle_block
-    assert "main_ai_quality_rc=0" in cycle_block
-    assert "runtime_effect=false actual_order_submitted=false" in cycle_block
-    assert "if ! wait_for_json_artifact" in cycle_block
-    assert 'main_ai_quality_failure_reason="artifact_missing_or_invalid"' in cycle_block
 
 
-@pytest.mark.parametrize(
-    (
-        "resource_rc",
-        "command_rc",
-        "artifact_rc",
-        "expected_reason",
-        "expect_cycle_call",
-        "expect_artifact_wait",
-    ),
-    [
-        (17, 0, 0, "resource_wait_failed", False, False),
-        (0, 23, 0, "cycle_command_failed_or_deferred", True, False),
-        (0, 0, 1, "artifact_missing_or_invalid", True, True),
-    ],
-)
-def test_postclose_wrapper_isolates_main_ai_quality_failures(
-    resource_rc,
-    command_rc,
-    artifact_rc,
-    expected_reason,
-    expect_cycle_call,
-    expect_artifact_wait,
-):
-    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
-    start = script.index('if [ "$RUN_MAIN_AI_QUALITY_R0_R3" = "true" ]')
-    end = script.index(
-        'ai_review_json="$PROJECT_DIR/data/report/threshold_cycle_ai_review/', start
-    )
-    cycle_block = script[start:end]
-    harness = "\n".join(
-        [
-            """
-set -Eeuo pipefail
-RUN_MAIN_AI_QUALITY_R0_R3=true
-RUN_MAIN_AI_PROMPT_OPTIMIZER=false
-MAIN_AI_QUALITY_EXECUTE_PROVIDER_REPLAY=true
-MAIN_AI_QUALITY_DAILY_ATTEMPT_CAP=12
-MAIN_AI_QUALITY_DAILY_USD_CAP=1
-MAIN_AI_QUALITY_PARENT_CAP=1
-TARGET_DATE=2026-08-14
-PROJECT_DIR=/tmp/korstockscan-wrapper-test
-VENV_PY=/tmp/unused-python
-""",
-            f"RESOURCE_RC={resource_rc}",
-            f"COMMAND_RC={command_rc}",
-            f"ARTIFACT_RC={artifact_rc}",
-            """
-wait_for_postclose_resources() { return "$RESOURCE_RC"; }
-run_postclose_cmd() { echo cycle_called; return "$COMMAND_RC"; }
-wait_for_json_artifact() { echo artifact_waited; return "$ARTIFACT_RC"; }
-emit_postclose_marker() { echo "$1"; }
-""",
-            cycle_block,
-            """
-echo unrelated_postclose_continues
-""",
-        ]
-    )
-
-    result = subprocess.run(
-        ["bash", "-c", harness],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-
-    assert result.returncode == 0
-    assert f"reason={expected_reason}" in result.stdout
-    assert "unrelated_postclose_continues" in result.stdout
-    assert ("cycle_called" in result.stdout) is expect_cycle_call
-    assert ("artifact_waited" in result.stdout) is expect_artifact_wait
 
 
-def test_postclose_wrapper_never_calls_disabled_runtime_family() -> None:
-    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
-    start = script.index('emit_postclose_marker "[SKIP] main-ai-quality-runtime-family')
-    end = script.index(
-        'if [ "$RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT" = "true" ]', start
-    )
-    family_block = script[start:end]
-    harness = "\n".join(
-        [
-            """
-set -Eeuo pipefail
-RUN_MAIN_AI_QUALITY_RUNTIME_FAMILY=true
-THRESHOLD_CYCLE_RUN_MAIN_AI_QUALITY_RUNTIME_FAMILY=true
-TARGET_DATE=2026-08-14
-VENV_PY=/tmp/unused-python
-run_postclose_cmd() { echo family_called; return 31; }
-emit_postclose_marker() { echo "$1"; }
-""",
-            family_block,
-            "echo unrelated_postclose_continues",
-        ]
-    )
-
-    result = subprocess.run(
-        ["bash", "-c", harness], text=True, capture_output=True, check=False
-    )
-
-    assert result.returncode == 0
-    assert "family_called" not in result.stdout
-    assert "status=retired_disabled" in result.stdout
-    assert "runtime_effect=false actual_order_submitted=false" in result.stdout
-    assert "unrelated_postclose_continues" in result.stdout
 
 
 def test_entry_setup_paired_replay_has_separate_late_offline_cron():
@@ -4150,3 +3884,22 @@ def test_panic_default_call_uses_reviewed_release_or_fails_closed(tmp_path, vali
         assert result.returncode != 0
         assert "release_commit_mismatch" in result.stderr
         assert "reviewed:" not in result.stdout
+
+
+def test_retired_ai_cycle_has_no_wrapper_or_preopen_restore_path():
+    postclose = Path("deploy/run_threshold_cycle_postclose.sh").read_text()
+    preopen = Path("deploy/run_threshold_cycle_preopen.sh").read_text()
+    assert "src.engine.scalping.micro_reversion.ai_quality_cycle" not in postclose
+    assert "THRESHOLD_CYCLE_RUN_MAIN_AI_QUALITY_R0_R3" not in postclose
+    assert "THRESHOLD_CYCLE_MAIN_AI_QUALITY_" not in postclose
+    assert "src.engine.automation.main_ai_current_axis" not in postclose + preopen
+    assert "main_ai_quality_r0_r3=" not in postclose
+    assert "THRESHOLD_CYCLE_RUN_MAIN_AI_PROMPT_OPTIMIZER" not in postclose
+    assert "THRESHOLD_CYCLE_RUN_MAIN_AI_PROMPT_CONSUMER" not in postclose
+    assert "--ensure-economic-reference-only" in postclose
+
+
+def test_cleanup_wrapper_does_not_reenter_retired_ai_cycle_roots():
+    cleanup = Path("deploy/run_logs_rotation_cleanup_cron.sh").read_text()
+    for name in ["main_ai_quality_r0_r3", "micro_reversion_ai_quality_bridge", "ai_micro_reversion_materialized_replay_requests"]:
+        assert f'--report-artifact-root "$PROJECT_DIR/data/report/{name}"' not in cleanup

@@ -3273,15 +3273,7 @@ def test_pipeline_source_materializes_only_strict_explicit_identity_rows(
     assert clean_row["bbo_coverage_pct"] == pytest.approx(100)
     assert clean_row["depth_coverage_pct"] == pytest.approx(100)
 
-    from src.engine.scalping.micro_reversion import ai_quality_cycle
 
-    assert (
-        ai_quality_cycle._lifecycle_report_contract_findings(
-            report,
-            rows=report["rows"],
-        )
-        == []
-    )
 
 
 def test_official_broker_execution_native_contract_is_strict_and_source_only() -> None:

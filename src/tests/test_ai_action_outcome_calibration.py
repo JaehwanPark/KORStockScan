@@ -4491,12 +4491,6 @@ def test_cost_prerequisite_only_never_builds_report_or_publishes_policy(monkeypa
     assert calibration.main(['--target-date', '2026-09-17', '--write', '--ensure-economic-reference-only']) == 2
 
 
-def test_cost_prerequisite_wrapper_precedes_snapshot_and_lengthy_research():
-    from pathlib import Path
-    wrapper = Path('deploy/run_threshold_cycle_postclose.sh').read_text()
-    assert wrapper.index('--ensure-economic-reference-only') < wrapper.index('SOURCE_ARGS=()')
-    assert wrapper.index('--ensure-economic-reference-only') < wrapper.index('-m src.engine.scalping.micro_reversion.ai_quality_cycle')
-    assert 'missing economics remain excluded/null' in wrapper
 
 
 def test_machine_microstructure_diagnostic_preserves_existing_auxiliary_gate():

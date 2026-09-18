@@ -245,16 +245,6 @@ PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.holding_prompt_live_policy \
   --phase preopen \
   --target-date "$TARGET_DATE" \
   --write
-current_axis_preopen_args=(--phase preopen --target-date "$TARGET_DATE")
-if { [ "$AUTO_APPLY" = "true" ] || [ "$AUTO_APPLY" = "1" ]; } && [ "$APPLY_MODE" = "auto_bounded_live" ]; then
-  current_axis_preopen_args+=(--write)
-fi
-if [[ "$TARGET_DATE" > "2026-09-07" ]]; then
-  if ! PYTHONPATH=. "$VENV_PY" -m src.engine.automation.main_ai_current_axis "${current_axis_preopen_args[@]}"; then
-    echo "[FAIL] main-ai-current-axis PREOPEN contract target_date=$TARGET_DATE baseline_preserved=true"
-    mark_preopen_failed 1
-  fi
-fi
 finished_at="$(TZ=Asia/Seoul date +%FT%T%z)"
 preopen_reason="completed"
 if "$VENV_PY" - "$MANIFEST_CAPTURE_FILE" <<'PY'

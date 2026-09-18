@@ -11,9 +11,6 @@ from src.engine.automation import machine_microstructure_policy_approval as mod
 from src.engine.monitoring import machine_microstructure_attribution as attribution_mod
 
 KST = ZoneInfo("Asia/Seoul")
-MAIN_AI_QUALITY_REGISTRY_ENTRY = dict(
-    mod.TRUSTED_RUNTIME_FAMILY_REGISTRY[mod.MAIN_AI_QUALITY_RUNTIME_FAMILY]
-)
 
 
 def _runtime_registry() -> dict:
@@ -603,78 +600,6 @@ def test_operator_approval_then_preopen_writes_authorization_handoff_only(
     assert unchanged["candidates"][0]["preopen_target_date"] == "2026-08-18"
 
 
-def test_retired_main_ai_quality_family_never_publishes_positive_handoff(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    family = mod.MAIN_AI_QUALITY_RUNTIME_FAMILY
-    registry = {family: dict(MAIN_AI_QUALITY_REGISTRY_ENTRY)}
-    monkeypatch.setattr(mod, "TRUSTED_RUNTIME_FAMILY_REGISTRY", registry)
-    registry_entry = registry[family]
-    candidate = _candidate(
-        candidate_id="main-ai-quality:entry:legacy-prompt-contract",
-        source_date="2026-08-25",
-    )
-    candidate["runtime_design"] = {
-        "runtime_family": family,
-        "stage": registry_entry["stage"],
-        "axis": registry_entry["axis"],
-        "mapping_status": "registered",
-        "runtime_registry_verified": True,
-        "same_stage_owner_conflict_free": True,
-        "preopen_consumer": registry_entry["preopen_consumer"],
-        "effective_venue": registry_entry["effective_venue"],
-        "session_bucket": registry_entry["session_bucket"],
-        "bounded_values": dict(registry_entry["bounded_values"]),
-        "bounded_contract_sha256": registry_entry["bounded_contract_sha256"],
-        "rollback": {
-            "trigger": "any_contract_gap",
-            "value": registry_entry["bounded_values"]["current"],
-        },
-        "post_apply_attribution": {
-            "owner": registry_entry["post_apply_attribution_owner"],
-            "window": "5d_10d_20d",
-        },
-        "forbidden_uses": ["runtime_or_order_authority_publication"],
-    }
-    postclose = datetime(2026, 8, 25, 20, 30, tzinfo=KST)
-    queue, rejections = mod.sync_queue(
-        mod._empty_queue(now=postclose),
-        source_candidates=[candidate],
-        source_path=Path("legacy-r3.json"),
-        as_of_date=postclose.date(),
-        now=postclose,
-        apply_receipt_dir=Path("/__no_receipts__"),
-        runtime_registry=registry,
-    )
-    assert rejections == []
-    entry = queue["candidates"][0]
-    approved, _ = mod.record_operator_decision(
-        queue,
-        candidate_id=entry["candidate_id"],
-        expected_candidate_sha256=entry["candidate_sha256"],
-        decision="approve",
-        operator_authorization_id="standing-main-ai-quality-20260825",
-        operator_instruction="Approve only when the family owns runtime authority.",
-        approval_dir=tmp_path / "approvals",
-        now=postclose,
-        runtime_registry=registry,
-    )
-
-    scheduled, handoffs = mod.schedule_preopen_handoffs(
-        approved,
-        target_date=date(2026, 8, 26),
-        handoff_dir=tmp_path / "handoffs",
-        now=datetime(2026, 8, 26, 7, 35, tzinfo=KST),
-        runtime_registry=registry,
-    )
-
-    assert handoffs == []
-    row = scheduled["candidates"][0]
-    assert row["state"] == mod.STATE_DESIGN_REQUIRED
-    assert row["state_reason"] == ("preopen_blocked_runtime_family_authority_disabled")
-    assert row["candidate"]["allowed_runtime_apply"] is False
-    assert not list((tmp_path / "handoffs").rglob("*.json"))
 
 
 def test_invalid_source_report_is_not_silently_treated_as_no_candidate(
@@ -3328,3 +3253,11 @@ def test_readiness_rejects_thin_or_drifted_rolling_paired_counts() -> None:
     drifted_errors = mod.evidence_readiness_errors(drifted)
 
     assert "rolling_paired_lifecycle_floor_contract_invalid" in drifted_errors
+
+
+def test_retired_ai_quality_family_cannot_use_old_registry_receipts():
+    candidate = _candidate()
+    candidate["runtime_design"]["runtime_family"] = mod.MAIN_AI_QUALITY_RUNTIME_FAMILY
+    errors = mod.runtime_design_errors(candidate)
+    assert errors
+    assert any("runtime_family" in error or "registry" in error for error in errors)

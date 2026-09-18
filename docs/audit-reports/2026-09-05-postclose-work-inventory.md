@@ -79,7 +79,7 @@ PID·lock·progress·deadline·latest terminal을 실제 run 기준으로 확인
 | #73 | `pipeline_event_verbosity_report` | 조건/reuse, 운영 | exact-date terminal freshness·source hash; raw suppression 비활성·EV 증거 아님 |
 | #75 | `scalping.entry_split_order_plan` | 조건부 ON, 경제성/receipt | submitted/no-submit/no-fill·native quantity/leg 4-arm receipt·cost/exit·날짜 census → Daily |
 | #76 | `scalping.ai_decision_quality` materialization | 조건부 ON, source-label v2 | control·보존 revision labels 두 출력→현행 case table diagnostic/compact; legacy baseline/paired/canary write/wait 없음 |
-| #77 | `scalping.micro_reversion.ai_quality_cycle` | 기본OFF, 명시적 offline 연구만 | R0–R3 prepared/current-compatible paired·Provider 실제 실행/예산/checkpoint·비용; Provider0은 모델 비교 완료 아님 |
+| #77 | `scalping.micro_reversion.ai_quality_cycle` | 완전 폐기 | 실행기·R2/R3 인계·전용 PREOPEN/live adapter 및 파생 산출물 제거. 환경 플래그로 복원 불가; 현행 compact 경로는 별도 보존 |
 | #78 | `scalping.micro_reversion.main_ai_prompt_optimizer` | 조건/후행 refresh, 선정 | calibration 후보 고정·holdout·same-date freeze·현재 compact/legacy 분리 → publisher/consumer |
 | #79 | `scalping.main_ai_holding_base_replay_batch` | 조건부 ON, holding 연구 | 원 holding stage/context·full-cost outcome·manifest; 초기 entry 분모와 분리 |
 | #80 | `scalping.main_ai_prompt_consumer` | 조건부 ON, handoff | frozen evidence/current-role hash·trusted consumption → 기존 dated owner |

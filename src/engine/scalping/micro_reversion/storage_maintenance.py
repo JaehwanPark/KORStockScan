@@ -840,46 +840,6 @@ def _validate_immutable_source_artifact(
     return payload, raw_sha256
 
 
-def _validate_current_r2_r3_pair(
-    payloads: dict[Path, dict[str, object]],
-    *,
-    trade_date: date,
-) -> None:
-    """Require every current R3 manifest to bind one exact validated R2 file."""
-
-    if trade_date < date.fromisoformat(CURRENT_DESIGN_ACTIVATION_DATE):
-        return
-    rolling_name = f"main_ai_quality_rolling_paired_{trade_date}.json"
-    manifest_name = f"main_ai_quality_r3_source_candidates_{trade_date}.json"
-    rolling = [
-        payload for path, payload in payloads.items() if path.name == rolling_name
-    ]
-    manifests = [
-        payload for path, payload in payloads.items() if path.name == manifest_name
-    ]
-    if not manifests:
-        return
-    if len(manifests) != 1 or len(rolling) != 1:
-        raise ValueError("current_r2_r3_artifact_pair_census_invalid")
-    rolling_sha256 = _validated_sha256_field(
-        rolling[0],
-        field="artifact_content_sha256",
-    )
-    manifest_source_sha256 = _validated_sha256_field(
-        manifests[0],
-        field="source_rolling_artifact_sha256",
-    )
-    if manifest_source_sha256 != rolling_sha256:
-        raise ValueError("current_r2_r3_exact_artifact_binding_invalid")
-    # Local import avoids the cycle module's compatibility import of this
-    # storage owner while making semantic candidate projection part of archive
-    # validity rather than trusting self-consistent hashes alone.
-    from .ai_quality_cycle import validate_r3_source_only_manifest
-
-    validate_r3_source_only_manifest(
-        manifests[0],
-        source_rolling_artifact=rolling[0],
-    )
 
 
 def _checkpoint_paths(record_dir: Path) -> tuple[Path, Path]:
@@ -2669,10 +2629,6 @@ def maintain_report_artifact_storage(
                     if previous_sha256 is not None and previous_sha256 != raw_sha256:
                         raise OSError("report_artifact_changed_during_set_validation")
                     validated_source_sha256s[path] = raw_sha256
-                _validate_current_r2_r3_pair(
-                    validated_source_payloads,
-                    trade_date=trade_date,
-                )
                 validation_complete = True
                 artifact_set_census["set_count"] += 1
                 artifact_set_census["set_bytes"] += physical_bytes

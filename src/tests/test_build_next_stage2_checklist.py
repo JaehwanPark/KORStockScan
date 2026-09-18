@@ -60,7 +60,6 @@ def _patch_dirs(monkeypatch, tmp_path):
     monkeypatch.setattr(mod, "RUNTIME_APPLY_GAP_REPORT_DIR", runtime_gap)
     monkeypatch.setattr(mod, "TUNING_PERFORMANCE_REPORT_DIR", tuning_performance)
     monkeypatch.setattr(mod, "AUTOMATION_TRIGGER_DECISION_REPORT_DIR", trigger_decision)
-    monkeypatch.setattr(mod, "MAIN_AI_QUALITY_REPORT_DIR", main_ai_quality)
     monkeypatch.setattr(
         mod,
         "MACHINE_MICROSTRUCTURE_POLICY_APPROVAL_REPORT_DIR",
@@ -79,48 +78,6 @@ def _write_json(path: Path, payload: dict):
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def _main_ai_quality_report(source_date: str, owners: list[str]) -> dict:
-    workorders = []
-    for owner in owners:
-        content = {
-            "target_date": source_date,
-            "owner": owner,
-            "reason_codes": [f"{owner}=1"],
-            "acceptance_test": f"{owner} acceptance closes",
-            "runtime_effect": False,
-            "allowed_runtime_apply": False,
-            "actual_order_submitted": False,
-            "broker_order_forbidden": True,
-        }
-        workorders.append(
-            {
-                "schema": "main_ai_quality_source_only_gap_workorder_v1",
-                "workorder_id": f"main-ai-gap-{mod._canonical_sha256(content)[:24]}",
-                "status": "open_source_producer_repair",
-                **content,
-            }
-        )
-    body = {
-        "schema": "main_ai_quality_postclose_r0_r3_cycle_v1",
-        "target_date": source_date,
-        "decision_authority": "postclose_source_only_ai_quality_research",
-        "source_gap_diagnostics": {
-            "schema": "main_ai_quality_source_only_gap_diagnostics_v1",
-            "target_date": source_date,
-            "contract_findings": [],
-            "workorders": workorders,
-            "runtime_effect": False,
-            "allowed_runtime_apply": False,
-            "actual_order_submitted": False,
-            "broker_order_forbidden": True,
-        },
-        "source_only_gap_workorders": workorders,
-        "runtime_effect": False,
-        "allowed_runtime_apply": False,
-        "actual_order_submitted": False,
-        "broker_order_forbidden": True,
-    }
-    return {**body, "artifact_content_sha256": mod._canonical_sha256(body)}
 
 
 def _write_machine_micro_approval_report(path: Path, payload: dict) -> None:
@@ -1643,325 +1600,33 @@ def test_build_next_stage2_checklist_preserves_unknown_tasks_inside_auto_block(
     assert text.index("[CustomPostclose0526]") > text.index("## 장후 체크리스트")
 
 
-def test_build_next_stage2_checklist_hands_off_main_ai_source_gap_workorders(
-    monkeypatch, tmp_path
-) -> None:
-    _docs, ev_dir, _openai_dir, _swing_dir, _code_dir = _patch_dirs(
-        monkeypatch, tmp_path
-    )
-    source_date = "2026-08-21"
-    _write_json(
-        ev_dir / f"threshold_cycle_ev_{source_date}.json",
-        {"runtime_apply": {"runtime_change": False}},
-    )
-    report_path = (
-        mod.MAIN_AI_QUALITY_REPORT_DIR
-        / f"main_ai_quality_r0_r3_cycle_{source_date}.json"
-    )
-    _write_json(
-        report_path,
-        _main_ai_quality_report(
-            source_date,
-            [
-                "MicroReversionForwardCollectorContinuity",
-                "RuntimeExecutionReceiptCustodyRepair",
-                "MainAIQualityMaterializedCompanionBindingRepair",
-            ],
-        ),
-    )
-
-    summary = mod.build_next_stage2_checklist(source_date)
-
-    text = Path(summary["path"]).read_text(encoding="utf-8")
-    assert (
-        "[MainAIQualitySourceGapMicroReversionForwardCollectorContinuity0824]" in text
-    )
-    assert "[MainAIQualitySourceGapRuntimeExecutionReceiptCustodyRepair0824]" in text
-    assert (
-        "[MainAIQualitySourceGapMainAIQualityMaterializedCompanionBindingRepair0824]"
-        in text
-    )
-    assert "closed-date verified compression" in text
-    assert "공식 raw execution envelope" in text
-    assert "materialized request/response companion의 exact hash" in text
-    assert "runtime env, 실주문·취소" in text
-    monkeypatch.setenv("DOC_CHECKLIST_PATH", summary["path"])
-    parsed = parse_checklist_tasks()
-    parsed_titles = {task.title for task in parsed}
-    assert any(
-        "MainAIQualitySourceGapMicroReversionForwardCollectorContinuity0824" in title
-        for title in parsed_titles
-    )
-    assert any(
-        "MainAIQualitySourceGapRuntimeExecutionReceiptCustodyRepair0824" in title
-        for title in parsed_titles
-    )
-    assert any(
-        "MainAIQualitySourceGapMainAIQualityMaterializedCompanionBindingRepair0824"
-        in title
-        for title in parsed_titles
-    )
 
 
-@pytest.mark.parametrize(
-    "owner",
-    [
-        "MainAIMicroExactEconomicIntersectionRepair",
-        "MicroReversionDepthRouteContractRepair",
-        "MainAIAllocatorSubmittedTraceCustodyRepair",
-        "UnknownFutureOwner",
-    ],
-)
-@pytest.mark.parametrize("authority_tampered", [False, True])
-def test_main_ai_new_source_owners_keep_exact_contract_and_fail_closed(
-    monkeypatch, tmp_path, owner, authority_tampered
-) -> None:
-    _docs, ev_dir, *_rest = _patch_dirs(monkeypatch, tmp_path)
-    source_date = "2026-09-09"
-    _write_json(
-        ev_dir / f"threshold_cycle_ev_{source_date}.json",
-        {"runtime_apply": {"runtime_change": False}},
-    )
-    report = _main_ai_quality_report(source_date, [owner])
-    if authority_tampered:
-        report["source_only_gap_workorders"][0]["order_authority"] = True
-        report["source_gap_diagnostics"]["workorders"] = report[
-            "source_only_gap_workorders"
-        ]
-    report["artifact_content_sha256"] = mod._canonical_sha256(
-        {k: v for k, v in report.items() if k != "artifact_content_sha256"}
-    )
-    _write_json(
-        mod.MAIN_AI_QUALITY_REPORT_DIR
-        / f"main_ai_quality_r0_r3_cycle_{source_date}.json",
-        report,
-    )
-    summary = mod.build_next_stage2_checklist(source_date)
-    text = Path(summary["path"]).read_text(encoding="utf-8")
-    if authority_tampered or owner == "UnknownFutureOwner":
-        assert "[MainAIQualitySourceGapArtifactContract0910]" in text
-        assert f"[MainAIQualitySourceGap{owner}0910]" not in text
-    else:
-        assert f"[MainAIQualitySourceGap{owner}0910]" in text
-        assert "[MainAIQualitySourceGapArtifactContract0910]" not in text
-        assert report["source_only_gap_workorders"][0]["acceptance_test"] in text
-        assert "quantity/cap" in text
-        assert "공식 raw execution envelope" not in text
-        monkeypatch.setenv("DOC_CHECKLIST_PATH", summary["path"])
-        # Exercise the parser only on this generated fixture, not host docs
-        # or both the absolute and relative spelling of the same file.
-        monkeypatch.setattr(
-            backlog_sync, "_checklist_doc_candidates", lambda: [Path(summary["path"])]
-        )
-        assert (
-            sum(
-                f"MainAIQualitySourceGap{owner}0910" in task.title
-                for task in parse_checklist_tasks()
-            )
-            == 1
-        )
 
 
-def test_build_next_stage2_checklist_preserves_full_main_ai_acceptance_contract(
-    monkeypatch, tmp_path
-) -> None:
-    _docs, ev_dir, _openai_dir, _swing_dir, _code_dir = _patch_dirs(
-        monkeypatch, tmp_path
-    )
-    source_date = "2026-08-21"
-    _write_json(
-        ev_dir / f"threshold_cycle_ev_{source_date}.json",
-        {"runtime_apply": {"runtime_change": False}},
-    )
-    report = _main_ai_quality_report(
-        source_date, ["RuntimeExecutionReceiptCustodyRepair"]
-    )
-    acceptance = (
-        "official raw execution envelope/order/execution identity is complete for "
-        "at least one reconciled lifecycle; materialized execution companions bind "
-        "to their exact request census; custody and order authority remain unchanged"
-    )
-    workorder = dict(report["source_only_gap_workorders"][0])
-    workorder["acceptance_test"] = acceptance
-    workorder_content = {
-        key: value
-        for key, value in workorder.items()
-        if key not in {"schema", "workorder_id", "status"}
-    }
-    workorder["workorder_id"] = (
-        f"main-ai-gap-{mod._canonical_sha256(workorder_content)[:24]}"
-    )
-    report["source_only_gap_workorders"] = [workorder]
-    report["source_gap_diagnostics"]["workorders"] = [workorder]
-    report["artifact_content_sha256"] = mod._canonical_sha256(
-        {
-            key: value
-            for key, value in report.items()
-            if key != "artifact_content_sha256"
-        }
-    )
-    _write_json(
-        mod.MAIN_AI_QUALITY_REPORT_DIR
-        / f"main_ai_quality_r0_r3_cycle_{source_date}.json",
-        report,
-    )
-
-    summary = mod.build_next_stage2_checklist(source_date)
-
-    text = Path(summary["path"]).read_text(encoding="utf-8")
-    assert f"완료 조건: {acceptance}" in text
 
 
-def test_build_next_stage2_checklist_rejects_tampered_main_ai_workorder_report(
-    monkeypatch, tmp_path
-) -> None:
-    _docs, ev_dir, _openai_dir, _swing_dir, _code_dir = _patch_dirs(
-        monkeypatch, tmp_path
-    )
-    source_date = "2026-08-21"
-    _write_json(
-        ev_dir / f"threshold_cycle_ev_{source_date}.json",
-        {"runtime_apply": {"runtime_change": False}},
-    )
-    report = _main_ai_quality_report(
-        source_date, ["RuntimeExecutionReceiptCustodyRepair"]
-    )
-    report["source_only_gap_workorders"][0]["runtime_effect"] = True
-    report["artifact_content_sha256"] = mod._canonical_sha256(
-        {
-            key: value
-            for key, value in report.items()
-            if key != "artifact_content_sha256"
-        }
-    )
-    _write_json(
-        mod.MAIN_AI_QUALITY_REPORT_DIR
-        / f"main_ai_quality_r0_r3_cycle_{source_date}.json",
-        report,
-    )
-
-    summary = mod.build_next_stage2_checklist(source_date)
-
-    text = Path(summary["path"]).read_text(encoding="utf-8")
-    assert "[MainAIQualitySourceGapArtifactContract0824]" in text
-    assert (
-        "[MainAIQualitySourceGapRuntimeExecutionReceiptCustodyRepair0824]" not in text
-    )
-    assert "source_status=`invalid_workorder_authority`" in text
 
 
-@pytest.mark.parametrize(
-    ("target", "field", "expected_status"),
-    [
-        ("report", "provider_authority", "invalid_authority"),
-        ("diagnostics", "runtime_authority", "invalid_workorder_authority"),
-        ("workorder", "order_authority", "invalid_workorder_authority"),
-    ],
-)
-def test_build_next_stage2_checklist_rejects_main_ai_optional_authority_tamper(
-    monkeypatch,
-    tmp_path,
-    target: str,
-    field: str,
-    expected_status: str,
-) -> None:
-    _docs, ev_dir, _openai_dir, _swing_dir, _code_dir = _patch_dirs(
-        monkeypatch, tmp_path
-    )
-    source_date = "2026-08-21"
-    _write_json(
-        ev_dir / f"threshold_cycle_ev_{source_date}.json",
-        {"runtime_apply": {"runtime_change": False}},
-    )
-    report = _main_ai_quality_report(
-        source_date, ["RuntimeExecutionReceiptCustodyRepair"]
-    )
-    if target == "report":
-        report[field] = True
-    elif target == "diagnostics":
-        report["source_gap_diagnostics"][field] = True
-    else:
-        report["source_only_gap_workorders"][0][field] = True
-        report["source_gap_diagnostics"]["workorders"] = report[
-            "source_only_gap_workorders"
-        ]
-    report["artifact_content_sha256"] = mod._canonical_sha256(
-        {
-            key: value
-            for key, value in report.items()
-            if key != "artifact_content_sha256"
-        }
-    )
-    _write_json(
-        mod.MAIN_AI_QUALITY_REPORT_DIR
-        / f"main_ai_quality_r0_r3_cycle_{source_date}.json",
-        report,
-    )
-
-    summary = mod.build_next_stage2_checklist(source_date)
-
-    text = Path(summary["path"]).read_text(encoding="utf-8")
-    assert "[MainAIQualitySourceGapArtifactContract0824]" in text
-    assert f"source_status=`{expected_status}`" in text
-    assert (
-        "[MainAIQualitySourceGapRuntimeExecutionReceiptCustodyRepair0824]" not in text
-    )
 
 
-def test_build_next_stage2_checklist_rejects_main_ai_diagnostic_contract_findings(
-    monkeypatch, tmp_path
-) -> None:
-    _docs, ev_dir, _openai_dir, _swing_dir, _code_dir = _patch_dirs(
-        monkeypatch, tmp_path
-    )
-    source_date = "2026-08-21"
-    _write_json(
-        ev_dir / f"threshold_cycle_ev_{source_date}.json",
-        {"runtime_apply": {"runtime_change": False}},
-    )
-    report = _main_ai_quality_report(
-        source_date, ["RuntimeExecutionReceiptCustodyRepair"]
-    )
-    report["source_gap_diagnostics"]["contract_findings"] = [
-        "lifecycle_content_hash_invalid"
-    ]
-    report["artifact_content_sha256"] = mod._canonical_sha256(
-        {
-            key: value
-            for key, value in report.items()
-            if key != "artifact_content_sha256"
-        }
-    )
-    _write_json(
-        mod.MAIN_AI_QUALITY_REPORT_DIR
-        / f"main_ai_quality_r0_r3_cycle_{source_date}.json",
-        report,
-    )
-
-    summary = mod.build_next_stage2_checklist(source_date)
-
-    text = Path(summary["path"]).read_text(encoding="utf-8")
-    assert "[MainAIQualitySourceGapArtifactContract0824]" in text
-    assert "source_status=`invalid_workorders`" in text
-    assert (
-        "[MainAIQualitySourceGapRuntimeExecutionReceiptCustodyRepair0824]" not in text
-    )
 
 
-def test_build_next_stage2_checklist_surfaces_missing_main_ai_report_after_contract_start(
-    monkeypatch, tmp_path
-) -> None:
-    _docs, ev_dir, _openai_dir, _swing_dir, _code_dir = _patch_dirs(
-        monkeypatch, tmp_path
-    )
-    source_date = "2026-08-21"
-    _write_json(
-        ev_dir / f"threshold_cycle_ev_{source_date}.json",
-        {"runtime_apply": {"runtime_change": False}},
-    )
 
-    summary = mod.build_next_stage2_checklist(source_date)
 
-    text = Path(summary["path"]).read_text(encoding="utf-8")
-    assert "[MainAIQualitySourceGapArtifactContract0824]" in text
-    assert "source_status=`missing_artifact`" in text
+def test_retired_ai_cycle_reports_and_prior_workorders_do_not_reopen(monkeypatch, tmp_path):
+    docs, ev_dir, *_ = _patch_dirs(monkeypatch, tmp_path)
+    day = "2026-09-17"
+    _write_json(ev_dir / f"threshold_cycle_ev_{day}.json", {"runtime_apply": {"runtime_change": False}})
+    legacy = tmp_path / "data/report/main_ai_quality_r0_r3" / f"main_ai_quality_r0_r3_cycle_{day}.json"
+    _write_json(legacy, {"schema": "main_ai_quality_postclose_r0_r3_cycle_v1", "source_only_gap_workorders": [{"owner": "MicroReversionForwardCollectorContinuity"}]})
+    result = mod.build_next_stage2_checklist(day)
+    path = Path(result["path"])
+    text = path.read_text()
+    # A previously generated OPEN workorder must also disappear on the next build.
+    text = text.replace("## 장후 체크리스트", "## 장후 체크리스트\n\n- [ ] `[MainAIQualitySourceGapOld0918] retired repair` (Due: 2026-09-18, Slot: POSTCLOSE, TimeWindow: 21:40~21:50, Track: RuntimeStability)\n")
+    path.write_text(text)
+    mod.build_next_stage2_checklist(day)
+    text = path.read_text()
+    assert "MainAIQualitySourceGap" not in text
+    assert "main_ai_quality_r0_r3" not in text

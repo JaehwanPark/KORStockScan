@@ -10,10 +10,6 @@ from typing import Any
 
 import pytest
 
-from src.engine.scalping.micro_reversion.ai_quality_cycle import (
-    _economic_outputs,
-    _validate_economic_owner_report,
-)
 from src.engine.scalping.micro_reversion.economic_reference import (
     build_daily_resolution,
     content_sha256,
@@ -208,130 +204,10 @@ def test_repository_policy_is_effective_on_requested_start_date() -> None:
     assert raw == policy_path.read_bytes()
 
 
-def test_owner_builds_only_official_kospi_kosdaq_common_stocks(
-    tmp_path: Path,
-) -> None:
-    policy_path = _write_policy(tmp_path)
-    archives = {
-        KIS_KOSPI_MASTER_URL: _archive("KOSPI"),
-        KIS_KOSDAQ_MASTER_URL: _archive("KOSDAQ"),
-    }
-
-    report = build_daily_sources(
-        target_date="2026-08-18",
-        policy_path=policy_path,
-        output_root=tmp_path / "output",
-        fetcher=archives.__getitem__,
-        generated_at=datetime.fromisoformat("2026-08-18T18:30:00+09:00"),
-    )
-    resolution = build_daily_resolution(
-        target_date="2026-08-18",
-        source_manifest_path=Path(report["economic_manifest_path"]),
-        generated_at=datetime.fromisoformat("2026-08-18T18:31:00+09:00"),
-    )
-    pricing = load_reviewed_pricing_artifact(
-        Path(report["provider_pricing_path"]),
-        as_of_date=date(2026, 8, 18),
-    )
-    cost_payload, symbol_payload = _economic_outputs(resolution)
-    _validate_economic_owner_report(
-        report,
-        target_date="2026-08-18",
-        policy_path=policy_path,
-        manifest_path=Path(report["economic_manifest_path"]),
-        pricing_path=Path(report["provider_pricing_path"]),
-    )
-
-    assert report["eligible_common_stock_count"] == 2
-    assert len(cost_payload["profiles"]) == 6
-    assert len(symbol_payload["records"]) == 2
-    assert report["eligible_kospi_count"] == 1
-    assert report["eligible_kosdaq_count"] == 1
-    assert resolution["status"] == "pass"
-    assert resolution["summary"]["symbol_master_record_count"] == 2
-    assert {
-        row["symbol"]
-        for row in resolution["canonical_symbol_master_payload"]["records"]
-    } == {"000250", "005930"}
-    assert all(
-        profile["buy_fee_bps"] == 1.5
-        and profile["sell_fee_bps"] == 1.5
-        and profile["statutory_sell_tax_bps"] == 20.0
-        and profile["uncertainty_buffer_bps"] == 0.0
-        for profile in resolution["canonical_reviewed_cost_payload"]["profiles"]
-    )
-    assert pricing.pricing_basis == OPERATOR_ZERO_COST_BASIS
-    assert all(
-        row.input_usd_per_million_tokens == 0 and row.output_usd_per_million_tokens == 0
-        for row in pricing.prices
-    )
-    assert report["runtime_effect"] is False
-    assert report["actual_order_submitted"] is False
 
 
-def test_cycle_owner_receipt_rejects_manifest_changed_after_owner(
-    tmp_path: Path,
-) -> None:
-    policy_path = _write_policy(tmp_path)
-    archives = {
-        KIS_KOSPI_MASTER_URL: _archive("KOSPI"),
-        KIS_KOSDAQ_MASTER_URL: _archive("KOSDAQ"),
-    }
-    report = build_daily_sources(
-        target_date="2026-08-18",
-        policy_path=policy_path,
-        output_root=tmp_path / "output",
-        fetcher=archives.__getitem__,
-        generated_at=datetime.fromisoformat("2026-08-18T18:30:00+09:00"),
-    )
-    manifest_path = Path(report["economic_manifest_path"])
-    manifest_path.write_bytes(manifest_path.read_bytes() + b" ")
-
-    with pytest.raises(ValueError, match="owner_report_hash_mismatch"):
-        _validate_economic_owner_report(
-            report,
-            target_date="2026-08-18",
-            policy_path=policy_path,
-            manifest_path=manifest_path,
-            pricing_path=Path(report["provider_pricing_path"]),
-        )
 
 
-def test_cycle_rejects_self_rehashed_nonreviewed_fee(tmp_path: Path) -> None:
-    policy_path = _write_policy(tmp_path)
-    archives = {
-        KIS_KOSPI_MASTER_URL: _archive("KOSPI"),
-        KIS_KOSDAQ_MASTER_URL: _archive("KOSDAQ"),
-    }
-    report = build_daily_sources(
-        target_date="2026-08-18",
-        policy_path=policy_path,
-        output_root=tmp_path / "output",
-        fetcher=archives.__getitem__,
-        generated_at=datetime.fromisoformat("2026-08-18T18:30:00+09:00"),
-    )
-    resolution = build_daily_resolution(
-        target_date="2026-08-18",
-        source_manifest_path=Path(report["economic_manifest_path"]),
-        generated_at=datetime.fromisoformat("2026-08-18T18:31:00+09:00"),
-    )
-    tampered = deepcopy(resolution)
-    cost = tampered["canonical_reviewed_cost_payload"]
-    cost["profiles"][0]["buy_fee_bps"] = 1.6
-    cost["content_sha256"] = content_sha256(
-        {key: value for key, value in cost.items() if key != "content_sha256"}
-    )
-    tampered["canonical_reviewed_cost_payload_sha256"] = content_sha256(cost)
-    tampered["artifact_content_sha256"] = content_sha256(
-        {
-            key: value
-            for key, value in tampered.items()
-            if key != "artifact_content_sha256"
-        }
-    )
-
-    with pytest.raises(ValueError, match="cost_policy_mismatch"):
-        _economic_outputs(tampered)
 
 
 def test_owner_blocks_before_effective_date_without_fetching(tmp_path: Path) -> None:

@@ -102,10 +102,6 @@ from src.engine.scalping.entry_setup_evidence import (  # noqa: E402
 from src.engine.scalping.entry_setup_live_policy import (  # noqa: E402
     resolve_live_prompt_policy,
 )
-from src.engine.scalping.main_ai_quality_live_policy import (  # noqa: E402
-    resolve_main_ai_quality_live_policy,
-)
-from src.engine.scalping import main_ai_current_axis_runtime  # noqa: E402
 from src.engine.scalping.entry_price_live_policy import (  # noqa: E402
     resolve_entry_price_live_policy,
 )
@@ -1924,23 +1920,6 @@ class GPTSniperEngine:
             if transport_meta:
                 payload.update(transport_meta)
         settle_scalping_feature_delivery(payload, cache_hit=cache_hit)
-        current_axis_raw = payload.get("main_ai_current_axis_receipt")
-        if current_axis_raw:
-            try:
-                current_axis_receipt = json.loads(current_axis_raw)
-            except (TypeError, ValueError):
-                current_axis_receipt = {}
-            if (
-                isinstance(current_axis_receipt, dict)
-                and current_axis_receipt.get("runtime_effect") is True
-                and current_axis_receipt.get("selected_prompt_version")
-                and current_axis_receipt.get("input_sha256")
-            ):
-                prompt_version = current_axis_receipt["selected_prompt_version"]
-                payload["ai_prompt_version"] = prompt_version
-                payload["ai_input_payload_sha256"] = current_axis_receipt[
-                    "input_sha256"
-                ]
         payload.update(
             record_ai_decision_trace(
                 payload,
@@ -4986,66 +4965,6 @@ class GPTSniperEngine:
                 and entry_setup_schema_evidence
             ),
         }
-        baseline_request = request
-        current_axis_receipt: dict[str, Any] = {}
-        if compact_auxiliary_call:
-            current_axis_receipt = {
-                "runtime_effect": False,
-                "selection_skipped": True,
-                "reason": "compact_auxiliary_fixed_openai_nano_contract",
-                "provider": "openai",
-                "model": "gpt-5.4-nano",
-            }
-        else:
-            request, current_axis_receipt = main_ai_current_axis_runtime.select_request(
-                request,
-                metadata=metadata,
-                execution={
-                    "provider": (
-                        "unapproved_route"
-                        if self._uses_openai_primary_bedrock_fallback(request)
-                        or (
-                            request.model_name == "gpt-5.4-mini"
-                            and os.getenv(
-                                "KORSTOCKSCAN_BEDROCK_NOVA_LITE_ROUTE_MODE", "off"
-                            ).lower()
-                            != "off"
-                        )
-                        else "openai"
-                    ),
-                    "model": request.model_name,
-                    "temperature": request.temperature,
-                    "reasoning_effort": request.reasoning_effort,
-                    "transport": (
-                        "responses_ws"
-                        if self._should_use_responses_ws(
-                            request, transport_mode_override=transport_mode_override
-                        )
-                        else "responses_http"
-                    ),
-                    "schema_name": request.schema_name,
-                    "require_json": request.require_json,
-                    "max_output_tokens": request.max_output_tokens,
-                    "response_schema_mode": transport_meta[
-                        "openai_response_schema_mode"
-                    ],
-                    "response_schema_application": (
-                        "provider_enforced_openai"
-                        if response_schema_registry_used
-                        else "provider_json_object_openai"
-                    ),
-                    "response_schema_registry_used": response_schema_registry_used,
-                    "response_schema_sha256": response_schema_sha256,
-                    "semantic_validator_version": _expected_semantic_contract_version(
-                        request.schema_name
-                    ),
-                },
-            )
-        transport_meta["main_ai_current_axis_receipt"] = (
-            json.dumps(current_axis_receipt, sort_keys=True)
-            if current_axis_receipt
-            else None
-        )
 
         def capture_request(selected_request):
             return capture_ai_request(
@@ -5065,32 +4984,6 @@ class GPTSniperEngine:
             )
 
         capture_meta = capture_request(request)
-        if current_axis_receipt.get("runtime_effect") is True and (
-            capture_meta.get("ai_prompt_sha256")
-            != current_axis_receipt.get("prompt_sha256")
-            or capture_meta.get("ai_input_payload_sha256")
-            != current_axis_receipt.get("input_sha256")
-            or capture_meta.get("ai_prompt_replay_exact") is not True
-            or capture_meta.get("ai_input_payload_replay_exact") is not True
-        ):
-            # Optional enrichment cannot proceed without exact custody. Reuse
-            # the baseline with a new unsent identity, not a second provider
-            # call or a new entry veto. Partial preparation stays non-delivered.
-            request = replace(baseline_request, request_id=uuid.uuid4().hex)
-            current_axis_receipt = {
-                **current_axis_receipt,
-                "request_id": request.request_id,
-                "failed_preparation_request_id": baseline_request.request_id,
-                "status": "not_applied",
-                "runtime_effect": False,
-                "provider_delivery_confirmed": False,
-                "reason": "exact_candidate_request_capture_unavailable",
-            }
-            transport_meta["openai_request_id"] = request.request_id
-            transport_meta["main_ai_current_axis_receipt"] = json.dumps(
-                current_axis_receipt, sort_keys=True
-            )
-            capture_meta = capture_request(request)
         transport_meta.update(capture_meta)
         bedrock_primary_payload = (
             None
@@ -5278,22 +5171,6 @@ class GPTSniperEngine:
             if response_schema_registry_used
             else "provider_json_object_openai"
         )
-        if current_axis_receipt:
-            current_axis_receipt = main_ai_current_axis_runtime.settle_response(
-                current_axis_receipt,
-                provider_transport=transport_meta.get("openai_transport_mode"),
-            )
-            transport_meta["main_ai_current_axis_receipt"] = json.dumps(
-                current_axis_receipt, sort_keys=True
-            )
-            if current_axis_receipt.get("decision_usable") is False:
-                self._set_last_transport_meta(transport_meta)
-                return {
-                    "action": "WAIT",
-                    "score": 0,
-                    "reason": "current_axis_revoked_while_in_flight",
-                    "ai_decision_outcome_eligible": False,
-                }
         self._set_last_transport_meta(transport_meta)
         if isinstance(result.payload, dict):
             return result.payload
@@ -8524,7 +8401,6 @@ class GPTSniperEngine:
         entry_adm_runtime = None
         lifecycle_ai_runtime = None
         entry_setup_live_policy = {}
-        main_ai_quality_live_policy = {}
         entry_setup_evidence = None
         replay_context = None
         if strategy in ["KOSPI_ML", "KOSDAQ_ML"]:
@@ -8589,73 +8465,10 @@ class GPTSniperEngine:
                     or (ws_data.get("session") if isinstance(ws_data, dict) else None)
                 ),
             )
-            main_ai_quality_live_policy = resolve_main_ai_quality_live_policy(
-                configured_prompt_version=configured_entry_prompt_version,
-                stock_code=(
-                    pre_prompt_snapshot.get("stock_code")
-                    or (
-                        candle_context.get("stock_code")
-                        if isinstance(candle_context, dict)
-                        else None
-                    )
-                    or (
-                        ws_data.get("stock_code") if isinstance(ws_data, dict) else None
-                    )
-                    or (ws_data.get("code") if isinstance(ws_data, dict) else None)
-                ),
-                effective_venue=(
-                    pre_prompt_snapshot.get("effective_venue")
-                    or (
-                        candle_context.get("venue")
-                        if isinstance(candle_context, dict)
-                        else None
-                    )
-                    or (
-                        ws_data.get("effective_venue")
-                        if isinstance(ws_data, dict)
-                        else None
-                    )
-                    or (ws_data.get("venue") if isinstance(ws_data, dict) else None)
-                ),
-                session_bucket=(
-                    pre_prompt_snapshot.get("session_bucket")
-                    or (
-                        candle_context.get("session")
-                        if isinstance(candle_context, dict)
-                        else None
-                    )
-                    or (
-                        ws_data.get("session_bucket")
-                        if isinstance(ws_data, dict)
-                        else None
-                    )
-                    or (ws_data.get("session") if isinstance(ws_data, dict) else None)
-                ),
-            )
-            if (
-                entry_setup_live_policy.get("enabled") is True
-                and main_ai_quality_live_policy.get("enabled") is True
-            ):
-                entry_setup_live_policy = {
-                    **entry_setup_live_policy,
-                    "enabled": False,
-                    "status": "fallback_same_stage_owner_conflict",
-                    "runtime_effect": False,
-                }
-                main_ai_quality_live_policy = {
-                    **main_ai_quality_live_policy,
-                    "enabled": False,
-                    "status": "fallback_same_stage_owner_conflict",
-                    "runtime_effect": False,
-                }
             selected_runtime_prompt_version = (
-                main_ai_quality_live_policy.get("selected_prompt_version")
-                if main_ai_quality_live_policy.get("enabled") is True
-                else (
-                    entry_setup_live_policy.get("selected_prompt_version")
-                    if entry_setup_live_policy.get("enabled") is True
-                    else None
-                )
+                entry_setup_live_policy.get("selected_prompt_version")
+                if entry_setup_live_policy.get("enabled") is True
+                else None
             )
             prompt, prompt_type, prompt_version, normalized_profile = (
                 self._resolve_scalping_prompt(
@@ -9405,12 +9218,6 @@ class GPTSniperEngine:
             cache_profile=cache_profile,
             candle_context=candle_context,
         )
-        if is_scalping_entry_call:
-            cache_key = (
-                cache_key,
-                "main_ai_current_axis",
-                main_ai_current_axis_runtime.cache_token(),
-            )
         cached_result = (
             None
             if machine_first_context is not None
@@ -9845,32 +9652,9 @@ class GPTSniperEngine:
                 {
                     "ai_trace_strategy": strategy,
                     "ai_trace_prompt_type": prompt_type,
-                    "main_ai_current_axis_baseline_prompt_version": prompt_version,
                 }
             )
-            if main_ai_quality_live_policy.get("enabled") is True:
-                trace_metadata_extra.update(
-                    {
-                        "main_ai_quality_live_policy_status": (
-                            main_ai_quality_live_policy.get("status")
-                        ),
-                        "main_ai_quality_live_policy_target_date": (
-                            main_ai_quality_live_policy.get("target_date")
-                        ),
-                        "main_ai_quality_live_policy_candidate_id": (
-                            main_ai_quality_live_policy.get("candidate_id")
-                        ),
-                        "main_ai_quality_live_policy_candidate_sha256": (
-                            main_ai_quality_live_policy.get("candidate_sha256")
-                        ),
-                        "main_ai_quality_live_policy_activation_sha256": (
-                            main_ai_quality_live_policy.get(
-                                "activation_artifact_sha256"
-                            )
-                        ),
-                        "main_ai_quality_live_policy_runtime_effect": True,
-                    }
-                )
+
             if decision_quality_v2_14_selected:
                 trace_metadata_extra.update(
                     {

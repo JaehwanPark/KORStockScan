@@ -42,26 +42,6 @@ TUNING_PERFORMANCE_REPORT_DIR = (
 AUTOMATION_TRIGGER_DECISION_REPORT_DIR = (
     PROJECT_ROOT / "data" / "report" / "automation_chain_trigger_decision"
 )
-MAIN_AI_QUALITY_REPORT_DIR = PROJECT_ROOT / "data" / "report" / "main_ai_quality_r0_r3"
-MAIN_AI_QUALITY_REPORT_SCHEMA = "main_ai_quality_postclose_r0_r3_cycle_v1"
-MAIN_AI_QUALITY_WORKORDER_SCHEMA = "main_ai_quality_source_only_gap_workorder_v1"
-MAIN_AI_QUALITY_CHECKLIST_CONTRACT_START_DATE = "2026-08-18"
-MAIN_AI_QUALITY_SOURCE_GAP_OWNERS = frozenset(
-    {
-        "MicroReversionForwardCollectorContinuity",
-        "MicroReversionIntegratedRouteProof",
-        "RuntimeExecutionReceiptCustodyRepair",
-        "MainAIQualityMaterializedCompanionBindingRepair",
-        "MainAIMicroExactEconomicIntersectionRepair",
-        "MicroReversionDepthRouteContractRepair",
-        "MainAIAllocatorSubmittedTraceCustodyRepair",
-    }
-)
-MAIN_AI_QUALITY_OPTIONAL_NO_AUTHORITY_FIELDS = (
-    "runtime_authority",
-    "order_authority",
-    "provider_authority",
-)
 MACHINE_MICROSTRUCTURE_POLICY_APPROVAL_REPORT_DIR = (
     PROJECT_ROOT / "data" / "report" / "machine_microstructure_policy_approval"
 )
@@ -144,120 +124,6 @@ def _canonical_sha256(value: Any) -> str:
     ).hexdigest()
 
 
-def _load_main_ai_quality_workorders(
-    path: Path, *, source_date: str
-) -> tuple[list[dict[str, Any]], str]:
-    """Load hash-bound source-only workorders without granting runtime authority."""
-
-    if not path.is_file():
-        return (
-            [],
-            (
-                "missing_artifact"
-                if source_date >= MAIN_AI_QUALITY_CHECKLIST_CONTRACT_START_DATE
-                else "not_available"
-            ),
-        )
-    try:
-        raw = path.read_bytes()
-        payload = json.loads(raw)
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return [], "invalid_artifact"
-    if not isinstance(payload, dict):
-        return [], "invalid_artifact"
-    declared_hash = payload.get("artifact_content_sha256")
-    actual_hash = _canonical_sha256(
-        {
-            key: value
-            for key, value in payload.items()
-            if key != "artifact_content_sha256"
-        }
-    )
-    if (
-        payload.get("schema") != MAIN_AI_QUALITY_REPORT_SCHEMA
-        or payload.get("target_date") != source_date
-        or declared_hash != actual_hash
-        or payload.get("decision_authority")
-        != "postclose_source_only_ai_quality_research"
-    ):
-        return [], "invalid_artifact"
-    for key, expected in MACHINE_MICROSTRUCTURE_NON_RUNTIME_AUTHORITY.items():
-        if payload.get(key) is not expected:
-            return [], "invalid_authority"
-    if any(
-        key in payload and payload.get(key) is not False
-        for key in MAIN_AI_QUALITY_OPTIONAL_NO_AUTHORITY_FIELDS
-    ):
-        return [], "invalid_authority"
-
-    workorders = payload.get("source_only_gap_workorders")
-    diagnostics = payload.get("source_gap_diagnostics")
-    if not isinstance(workorders, list) or not isinstance(diagnostics, dict):
-        return [], "invalid_workorders"
-    if (
-        diagnostics.get("schema") != "main_ai_quality_source_only_gap_diagnostics_v1"
-        or diagnostics.get("target_date") != source_date
-        or diagnostics.get("contract_findings") != []
-    ):
-        return [], "invalid_workorders"
-    for key, expected in MACHINE_MICROSTRUCTURE_NON_RUNTIME_AUTHORITY.items():
-        if diagnostics.get(key) is not expected:
-            return [], "invalid_workorder_authority"
-    if any(
-        key in diagnostics and diagnostics.get(key) is not False
-        for key in MAIN_AI_QUALITY_OPTIONAL_NO_AUTHORITY_FIELDS
-    ):
-        return [], "invalid_workorder_authority"
-    if diagnostics.get("workorders") != workorders:
-        return [], "invalid_workorders"
-
-    validated: list[dict[str, Any]] = []
-    seen_ids: set[str] = set()
-    for row in workorders:
-        if not isinstance(row, dict):
-            return [], "invalid_workorders"
-        if (
-            row.get("schema") != MAIN_AI_QUALITY_WORKORDER_SCHEMA
-            or row.get("status") != "open_source_producer_repair"
-            or row.get("target_date") != source_date
-        ):
-            return [], "invalid_workorders"
-        for key, expected in MACHINE_MICROSTRUCTURE_NON_RUNTIME_AUTHORITY.items():
-            if row.get(key) is not expected:
-                return [], "invalid_workorder_authority"
-        if any(
-            key in row and row.get(key) is not False
-            for key in MAIN_AI_QUALITY_OPTIONAL_NO_AUTHORITY_FIELDS
-        ):
-            return [], "invalid_workorder_authority"
-        reasons = row.get("reason_codes")
-        if (
-            not isinstance(row.get("owner"), str)
-            or not str(row.get("owner") or "").strip()
-            or row.get("owner") not in MAIN_AI_QUALITY_SOURCE_GAP_OWNERS
-            or not isinstance(reasons, list)
-            or not reasons
-            or any(
-                not isinstance(reason, str) or not reason.strip() for reason in reasons
-            )
-            or not isinstance(row.get("acceptance_test"), str)
-            or not str(row.get("acceptance_test") or "").strip()
-        ):
-            return [], "invalid_workorders"
-        identity_body = {
-            "target_date": row["target_date"],
-            "owner": row["owner"],
-            "reason_codes": reasons,
-            "acceptance_test": row["acceptance_test"],
-            **MACHINE_MICROSTRUCTURE_NON_RUNTIME_AUTHORITY,
-        }
-        expected_id = f"main-ai-gap-{_canonical_sha256(identity_body)[:24]}"
-        workorder_id = str(row.get("workorder_id") or "")
-        if workorder_id != expected_id or workorder_id in seen_ids:
-            return [], "invalid_workorders"
-        seen_ids.add(workorder_id)
-        validated.append(dict(row))
-    return validated, "loaded"
 
 
 def _machine_microstructure_predecessor_errors(
@@ -1057,8 +923,6 @@ def _build_tasks(
     trigger_report: dict[str, Any],
     machine_micro_approval_report: dict[str, Any],
     machine_micro_approval_source_status: str,
-    main_ai_quality_workorders: list[dict[str, Any]],
-    main_ai_quality_source_status: str,
 ) -> list[GeneratedTask]:
     mmdd = _compact_mmdd(target_date)
     ev_path = EV_REPORT_DIR / f"threshold_cycle_ev_{source_date}.json"
@@ -1090,9 +954,6 @@ def _build_tasks(
         _machine_microstructure_objective_followup_summary(
             machine_micro_approval_report
         )
-    )
-    main_ai_quality_path = (
-        MAIN_AI_QUALITY_REPORT_DIR / f"main_ai_quality_r0_r3_cycle_{source_date}.json"
     )
     tuning_sources = f"[threshold_cycle_ev_{source_date}.json](/home/ubuntu/KORStockScan/{_rel(ev_path)})"
     tuning_decision_line = "판정 기준: threshold cycle EV를 보고 `live_auto_apply_ready`, `sim_auto_approved`, post-apply attribution, EV authority를 분리해 확인한다."
@@ -1223,118 +1084,6 @@ def _build_tasks(
                     f"`source_status={source_status}`이므로 schema/phase/target-date/non-runtime authority와 generated-at/source hash·mtime predecessor 계약을 복구하고 checklist를 재생성한다.",
                     "완료 조건: 동일 source date의 approval report가 현재 attribution source hash·mtime 이후의 exact contract로 재생성되고, 미완료 objective는 별도 POSTCLOSE followup task로 이월되며 closed objective는 제거되어야 한다.",
                     "권한 경계: source gap 복구는 report/checklist 제어면 작업이며 runtime env, 실주문, threshold, provider/bot, hard safety 또는 broker guard 변경 권한이 없다.",
-                ),
-            )
-        )
-    for workorder in main_ai_quality_workorders:
-        owner = str(workorder.get("owner") or "UnknownOwner").strip()
-        owner_token = re.sub(r"[^A-Za-z0-9]", "", owner) or "UnknownOwner"
-        reason_codes = ", ".join(
-            _compact_inline_value(reason)
-            for reason in workorder.get("reason_codes") or []
-        )
-        # Acceptance is an executable contract, not a display-only summary.
-        # Preserve it in full so the next-day task never ends with a truncated
-        # or semantically incomplete condition.
-        acceptance = _compact_inline_value(
-            workorder.get("acceptance_test"),
-            max_length=None,
-        )
-        if owner == "MicroReversionForwardCollectorContinuity":
-            slot = "PREOPEN"
-            time_window = "08:40~08:45"
-            title = "micro observer 저장공간·연속수집 source gap 복구 확인"
-            owner_action = (
-                "장전 free bytes가 writer low-disk watermark를 충분히 상회하는지 "
-                "확인하고, 부족하면 실주문과 무관한 closed-date verified compression만 "
-                "실행한 뒤 observer canary를 재검증한다."
-            )
-        elif owner == "MicroReversionIntegratedRouteProof":
-            slot = "POSTCLOSE"
-            time_window = "17:40~18:00"
-            title = "micro integrated-route exact proof source gap 복구 확인"
-            owner_action = (
-                "동일 request의 explicit route item과 raw venue/session proof를 대사하고, "
-                "ambiguous SOR row는 거래소를 추정하지 않은 채 exact window에서 제외한다."
-            )
-        elif owner == "MainAIQualityMaterializedCompanionBindingRepair":
-            slot = "POSTCLOSE"
-            time_window = "18:00~18:20"
-            title = "main AI materialized companion exact-hash 결속 복구 확인"
-            owner_action = (
-                "reason_codes에 명시된 source date별 execution report와 materialized "
-                "request/response companion의 exact hash를 재검증하고, 불변 원천에 "
-                "결속할 수 없는 historical row는 합성 없이 제외한다."
-            )
-        elif owner == "MainAIMicroExactEconomicIntersectionRepair":
-            slot = "POSTCLOSE"
-            time_window = "18:00~18:20"
-            title = "main AI micro exact 경제성 교집합 source gap 복구 확인"
-            owner_action = (
-                "동일 primary trace의 paired/mature/sidecar/net-economic 교집합과 "
-                "bridge/source-bundle parent census를 대사한다. 비용·원천 결손을 "
-                "0 또는 대체 parent로 보간하지 않는다."
-            )
-        elif owner == "MicroReversionDepthRouteContractRepair":
-            slot = "POSTCLOSE"
-            time_window = "18:00~18:20"
-            title = "micro depth route별 source 계약 복구 확인"
-            owner_action = (
-                "plain KRX/NXT와 SOR의 원래 route별 depth 합계 계약을 구분하고 "
-                "SOR의 exact component 대사와 invalid row 제외를 유지한다. "
-                "프로토콜 변경은 공식 Kiwoom reference gate를 별도로 따른다."
-            )
-        elif owner == "MainAIAllocatorSubmittedTraceCustodyRepair":
-            slot = "POSTCLOSE"
-            time_window = "18:00~18:20"
-            title = "main AI allocator submitted trace source 결속 복구 확인"
-            owner_action = (
-                "submitted trace와 immutable receipt의 exact join 또는 source-quality "
-                "제외를 확인한다. non-submitted는 not-applicable이며 실제 custody "
-                "원장·주문을 수정할 권한은 없다."
-            )
-        else:
-            slot = "POSTCLOSE"
-            time_window = "18:00~18:20"
-            title = f"{owner} main lifecycle source gap 복구 확인"
-            owner_action = (
-                "공식 raw execution envelope의 order/execution identity를 합성 없이 "
-                "검증하고 결손 lifecycle만 제외한 뒤 paired producer를 재검증한다."
-            )
-        tasks.append(
-            GeneratedTask(
-                task_id=f"MainAIQualitySourceGap{owner_token}{mmdd}",
-                title=title,
-                slot=slot,
-                time_window=time_window,
-                track="RuntimeStability" if slot == "PREOPEN" else "ScalpingLogic",
-                source=(
-                    f"[main_ai_quality_r0_r3_cycle_{source_date}.json]"
-                    f"(/home/ubuntu/KORStockScan/{_rel(main_ai_quality_path)})"
-                ),
-                lines=(
-                    f"판정 기준: workorder `{workorder.get('workorder_id')}`의 owner=`{owner}`, reason_codes=`{reason_codes}`를 source-only producer 보완으로 닫는다. {owner_action}",
-                    f"완료 조건: {acceptance}",
-                    "권한 경계: 이 항목은 source-quality/instrumentation 복구 전용이며 runtime env, 실주문·취소, threshold, provider/bot, quantity/cap, hard safety 또는 broker guard 변경 권한이 없다.",
-                ),
-            )
-        )
-    if main_ai_quality_source_status not in {"loaded", "not_available"}:
-        tasks.append(
-            GeneratedTask(
-                task_id=f"MainAIQualitySourceGapArtifactContract{mmdd}",
-                title="main AI R0→R3 source-gap workorder artifact 계약 복구",
-                slot="POSTCLOSE",
-                time_window="21:40~21:50",
-                track="RuntimeStability",
-                source=(
-                    f"[main_ai_quality_r0_r3_cycle_{source_date}.json]"
-                    f"(/home/ubuntu/KORStockScan/{_rel(main_ai_quality_path)})"
-                ),
-                lines=(
-                    f"판정 기준: source_status=`{main_ai_quality_source_status}`인 exact-date cycle report의 schema/content hash/non-runtime authority/workorder identity를 복구하고 checklist를 재생성한다.",
-                    "금지: invalid report의 workorder 문구를 신뢰하거나 source gap을 runtime/order/provider 변경으로 우회하지 않는다.",
-                    "완료 조건: report와 nested diagnostics의 hash-bound workorder 목록이 일치하고 각 open workorder가 owner별 checklist 항목으로 생성되어야 한다.",
                 ),
             )
         )
@@ -1585,8 +1334,6 @@ def _render_auto_block(
     trigger_report: dict[str, Any],
     machine_micro_approval_report: dict[str, Any],
     machine_micro_approval_source_status: str,
-    main_ai_quality_workorders: list[dict[str, Any]],
-    main_ai_quality_source_status: str,
     exclude_task_ids: set[str] | None = None,
 ) -> str:
     tasks = _build_tasks(
@@ -1599,8 +1346,6 @@ def _render_auto_block(
         trigger_report=trigger_report,
         machine_micro_approval_report=machine_micro_approval_report,
         machine_micro_approval_source_status=machine_micro_approval_source_status,
-        main_ai_quality_workorders=main_ai_quality_workorders,
-        main_ai_quality_source_status=main_ai_quality_source_status,
     )
     exclude_task_ids = exclude_task_ids or set()
     tasks = [task for task in tasks if task.task_id not in exclude_task_ids]
@@ -1960,13 +1705,6 @@ def _build_next_stage2_checklist_locked(
             approval_not_before=machine_micro_approval_not_before,
         )
     )
-    main_ai_quality_workorders, main_ai_quality_source_status = (
-        _load_main_ai_quality_workorders(
-            MAIN_AI_QUALITY_REPORT_DIR
-            / f"main_ai_quality_r0_r3_cycle_{source_date}.json",
-            source_date=source_date,
-        )
-    )
     existing = target_path.read_text(encoding="utf-8") if target_path.exists() else ""
     exclude_task_ids = _existing_manual_task_ids(existing) if existing else set()
     auto_block = _render_auto_block(
@@ -1979,8 +1717,6 @@ def _build_next_stage2_checklist_locked(
         trigger_report=trigger_report,
         machine_micro_approval_report=machine_micro_approval_report,
         machine_micro_approval_source_status=machine_micro_approval_source_status,
-        main_ai_quality_workorders=main_ai_quality_workorders,
-        main_ai_quality_source_status=main_ai_quality_source_status,
         exclude_task_ids=exclude_task_ids,
     )
     if existing:
@@ -2021,8 +1757,6 @@ def _build_next_stage2_checklist_locked(
         trigger_report=trigger_report,
         machine_micro_approval_report=machine_micro_approval_report,
         machine_micro_approval_source_status=machine_micro_approval_source_status,
-        main_ai_quality_workorders=main_ai_quality_workorders,
-        main_ai_quality_source_status=main_ai_quality_source_status,
     )
     tasks = [task for task in tasks if task.task_id not in exclude_task_ids]
     tasks.sort(key=_task_sort_key)

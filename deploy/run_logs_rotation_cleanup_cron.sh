@@ -650,9 +650,6 @@ run_micro_reversion_storage_maintenance() {
       --root "$MICRO_REVERSION_STORAGE_ROOT"
       --as-of-date "$TARGET_DATE"
       --apply
-      --report-artifact-root "$PROJECT_DIR/data/report/ai_micro_reversion_materialized_replay_requests"
-      --report-artifact-root "$PROJECT_DIR/data/report/micro_reversion_ai_quality_bridge"
-      --report-artifact-root "$PROJECT_DIR/data/report/main_ai_quality_r0_r3"
       --report-artifact-root "$PROJECT_DIR/data/report/micro_reversion_storage_capacity"
       --report-artifact-root "$PROJECT_DIR/data/report/ai_prompt_paired_replay"
       --report-artifact-root "$PROJECT_DIR/data/report/micro_reversion_economic_reference"
