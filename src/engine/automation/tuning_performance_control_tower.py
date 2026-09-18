@@ -1989,6 +1989,10 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
         if not validate_current_receipt(closure, target_date):
             warnings.append("machine_research_closed_loop_incomplete")
     report["source_generation_contract"] = handoff_receipt
+    from src.engine.scalping.scanner_lookup_attention_resource import selection_handoff
+    selection = selection_handoff(REPORT_ROOT_DIR, target_date)
+    if selection.get("source_section_sha256"):
+        report["scanner_lookup_attention_selection"] = selection
     compact_view = threshold_ev.get("compact_auxiliary_economic_tuning")
     if isinstance(compact_view, dict) and compact_view.get("source_date") == target_date:
         # The exact EV source is already bound above; family strict validates its

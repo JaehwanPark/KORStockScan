@@ -2,7 +2,7 @@
 
 ## 오늘 목적
 
-- Compact AI 장후 원천·평가·정책·최종 소비를 기존 owner로 통합하고 승인된 source9/17의 다음 장전 정책을 생성한다.
+- Compact AI 통합을 보존하며 WS 품질 마감·scanner 선택 실행 경제성·다음 장전 정책 소비의 구조 결손을 기존 owner로 닫는다.
 
 ## 오늘 강제 규칙
 
@@ -24,3 +24,10 @@
 - Limit-down 후속 리뷰·관련 커밋/푸시·immutable 배포: `fcfd7b8e5`. 검토 범위 결함0·통합1,531 passed(기존 wrapper 실패5/제외1은 baseline 재현)·물리 release6 passed·전용 산출물 잔여0. [최종 증거](../audit-reports/2026-09-19-limit-down-watch-retirement-review.md). main 정기 cron target 부재는 기존 상태이며 선택/route 검증과 분리한다. 독립 unit pin·공유 원천/guard 보존; 기동/주문/조기 PREOPEN 미실행·PID 소비 미확인.
 
 - Compact 후속 경제성 리뷰: label hash-only cache의 admission stale 결함 보완·cohort 격리,244+최종7 targeted PASS. 실제21건 label 불일치0/비교0/EV null 및9/21 carry 보존. [후속 리뷰·다음 WS 분석](../audit-reports/2026-09-19-compact-ai-postclose-integration-implementation-review.md). 미래 자연 owner·거래 권한 변경 없음.
+
+## WS 품질·조건부 경제성 통합 구현
+
+- [x] `[CodeImprovementWorkorderReview0918] WS 품질 마감·scanner 선택 실행 경제성·장전 정책 소비 구조 보완` (`Due: 2026-09-19`, `Slot: POSTCLOSE`, `TimeWindow: 00:00~23:59`, `Track: ScalpingLogic`)
+  - Source: [구현 계획](../proposals/ws-freshness-postclose-quality-consolidation-and-conditional-economic-policy-consumer-improvement-plan-2026-09-19.md), [구현 리뷰](../audit-reports/2026-09-19-ws-freshness-conditional-economics-implementation-review.md).
+  - Acceptance: WS0–WS5 code review/fix/re-review·scoped source9/17 재생성·source17/publication19/policy18/effective21 정책·Daily/EV/runtime/tower/checklist/scoped strict 동일 hash·immutable future release. 실제 비교0/null은 경제성 closure가 아니며 WS6는 9/21의 기존 `KiwoomCommonHealthOpportunityCostAcceptance0917` 하나로 인계한다.
+  - 권한: source-only CF와 same-tier bounded bonus뿐이다. 새 주문·재기동·조기 PREOPEN·provider/quantity/cap/tier/slot/quota/hard guard 변경 없음. fixture 양수값은 구현 검증이며 자연 EV가 아니다.

@@ -5924,20 +5924,48 @@ def _render_workorder_markdown(report: dict[str, Any]) -> str:
 
 
 def write_report(
-    report: dict[str, Any], *, monitor_only: bool = False
+    report: dict[str, Any], *, monitor_only: bool = False, publication=None
 ) -> tuple[Path, Path, Path | None, Path | None]:
     target_date = str(report.get("target_date") or date.today().isoformat())
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
     monitor_json = REPORT_DIR / f"{REPORT_TYPE}_{target_date}.json"
     monitor_md = REPORT_DIR / f"{REPORT_TYPE}_{target_date}.md"
 
-    write_json_object_generation_safe(
-        monitor_json, report, sort_keys=True, trailing_newline=True
-    )
-    monitor_md.write_text(_render_monitor_markdown(report), encoding="utf-8")
-    if report.get("scanner_unique_funnel", {}).get("economic_cohorts", {}).get("lookup_attention_selection", {}).get("evaluation_phase") == "postclose_final":
-        from src.engine.scalping.scanner_lookup_attention_policy import publish_integrated_policy
-        publish_integrated_policy(report)
+    from src.utils.jsonl_io import json_artifact_generation_lock
+    with json_artifact_generation_lock(monitor_json) as generation:
+        previous = _read_json(monitor_json)
+        old = previous.get("scanner_unique_funnel", {}).get("economic_cohorts", {}).get("lookup_attention_selection", {})
+        cohorts = report.setdefault("scanner_unique_funnel", {}).setdefault("economic_cohorts", {})
+        current = cohorts.get("lookup_attention_selection") or {}
+        if old.get("evaluation_phase") == "postclose_final" and current.get("evaluation_phase") != "postclose_final":
+            # Late intraday capture may update quality, but cannot erase a final
+            # economic proof. New capture waits for the next final evaluation.
+            cohorts["lookup_attention_selection"] = old
+            current = old
+        binding = publication or previous.get("scanner_lookup_attention_publication") or {}
+        if current.get("evaluation_phase") == "postclose_final":
+            from src.engine.scalping.scanner_lookup_attention_policy import publish_integrated_policy
+            payload = publish_integrated_policy(report,
+                publication_date=binding.get("publication_date"), policy_date=binding.get("policy_date"),
+                effective_date=binding.get("effective_date"))
+            report["postclose_quality_handoff"] = {
+                "source_evaluation_date": target_date,
+                "source_only": True, "allowed_runtime_apply": False,
+                "parent_quality_phase": report.get("evaluation_phase"),
+                "parent_generated_at": report.get("generated_at"),
+                "parent_quality_final_claimed": report.get("evaluation_phase") == "postclose_final",
+                "quality_audit_receipts": current.get("source_quality", {}).get("audits", []),
+                "economic_section_sha256": current.get("artifact_sha256"),
+                "analysis_mode": current.get("analysis_mode"),
+            }
+            report["scanner_lookup_attention_publication"] = {
+                "publication_date": payload["publication_date"], "policy_date": payload["target_date"],
+                "effective_date": payload["prepared_effective_date"],
+                "source_evaluation_date": payload["source_evaluation_date"],
+                "policy_artifact_sha256": payload["artifact_sha256"]}
+        write_json_object_generation_safe(monitor_json, report, sort_keys=True,
+            trailing_newline=True, generation=generation)
+        monitor_md.write_text(_render_monitor_markdown(report), encoding="utf-8")
     if monitor_only:
         return monitor_json, monitor_md, None, None
 
@@ -5980,7 +6008,9 @@ def _run_once(args: argparse.Namespace) -> dict[str, Any]:
             migration=_read_json(Path(args.lookup_migration_receipt)) if args.lookup_migration_receipt else migration)
         cohorts["lookup_attention_selection"] = section
         if args.write:
-            write_report(report, monitor_only=True)
+            write_report(report, monitor_only=True, publication={
+                "publication_date": args.lookup_publication_date, "policy_date": args.lookup_policy_date,
+                "effective_date": args.lookup_effective_date} if args.lookup_publication_date else None)
         print(json.dumps({"status": section["status"], "artifact_sha256": section["artifact_sha256"]}))
         return report
     snapshot_path = (
@@ -6034,6 +6064,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--monitor-only", action="store_true")
     parser.add_argument("--refresh-lookup-selection-only", action="store_true")
     parser.add_argument("--lookup-migration-receipt")
+    parser.add_argument("--lookup-publication-date")
+    parser.add_argument("--lookup-policy-date")
+    parser.add_argument("--lookup-effective-date")
     parser.add_argument(
         "--finalize",
         action="store_true",
@@ -6043,6 +6076,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--interval-sec", type=float, default=60.0)
     args = parser.parse_args(argv)
 
+    if any((args.lookup_publication_date, args.lookup_policy_date, args.lookup_effective_date)) and (
+            not args.refresh_lookup_selection_only or not all((args.lookup_publication_date, args.lookup_policy_date, args.lookup_effective_date))):
+        parser.error("lookup publication requires scoped refresh and all three dates")
     iterations = max(1, int(args.watch_iterations or 1))
     for idx in range(iterations):
         _run_once(args)

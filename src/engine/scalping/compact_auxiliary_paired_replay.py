@@ -272,7 +272,8 @@ def operating_comparison_metrics(pairs, model):
             for k in ("capital_krw_minutes", "reserve_krw_minutes")):
             return empty
         proof = next(p for p in model["validated_scopes"]
-                     if p["scope_sha256"] == split._entry_operating_scope(replay["seed"]))
+                     if p["scope_sha256"] == split._entry_operating_scope(replay["seed"])
+                     and owner_model_scope_valid({"validated_scopes": [p]}, pair))
         changed = pair["candidate_verdict"] != pair["incumbent_verdict"]
         error = 2 * max(proof["optimistic_net_error_budget_pct"], proof["tolerance"]["net_error_budget_pct"])
         penalty = error if changed else 0.
@@ -295,6 +296,7 @@ def operating_comparison_metrics(pairs, model):
         candidate=split._economic_metrics(new_rows, "decision"),
         robust_paired_delta_ev_lower_bound_pct=sum(lower) / len(lower),
         model_error_penalty_pct=sum(penalties) / len(penalties),
+        pair_lower_bounds_pct=lower, pair_error_penalties_pct=penalties,
         lower_bound_method="mean_same_pair_minimum_base_stress_delta_minus_changed_decision_two_arm_empirical_error_and_inference_cost",
         **portfolio)
 
@@ -1680,6 +1682,8 @@ def summary_paths(root, day):
 
 def refresh_summaries(root, day, view, consumer_path):
     """Update only one section; preserve canonical native terminal/other families."""
+    from src.engine.scalping.scanner_lookup_attention_resource import selection_handoff
+    selection = selection_handoff(Path(root) / "report", day)
     sources = {}
     for path in summary_paths(root, day):
         before = path.stat() if path.exists() else None
@@ -1694,6 +1698,8 @@ def refresh_summaries(root, day, view, consumer_path):
             else:
                 raise ValueError("compact_last_summary_missing:" + str(path))
         value["compact_auxiliary_economic_tuning"] = view
+        if selection.get("source_section_sha256"):
+            value["scanner_lookup_attention_selection"] = selection
         if before and (before.st_ino, before.st_size, before.st_mtime_ns) != (
             path.stat().st_ino,
             path.stat().st_size,
@@ -1733,6 +1739,11 @@ def refresh_summaries(root, day, view, consumer_path):
             end,
         ]
     )
+    if selection.get("source_section_sha256"):
+        block = block.replace(end, "\n".join([
+            f"<!-- scanner_lookup_attention_handoff_sha256:{digest(selection)} -->",
+            f"- Scanner lookup source {day}; policy {selection['policy_date']}; publication {selection['publication_date']}; effective {selection['effective_date']}: `{selection['status']}`. Primary EV delta `{selection['primary_economics']['paired_delta_ev_pct']}`; source gaps `{selection['primary_economics']['source_gaps']}`. Existing owner `KiwoomCommonHealthOpportunityCostAcceptance0917`; natural PREOPEN/PID/full-cost outcomes remain OPEN.",
+            end]))
     with _checklist_write_lock(checklist_path):
         text = (
             checklist_path.read_text(encoding="utf-8")

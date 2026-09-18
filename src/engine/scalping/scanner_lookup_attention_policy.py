@@ -575,7 +575,9 @@ def _load_active_cached(
             policy_source_date=source_date.isoformat(),
             validation_errors=["non_live_policy_contract_invalid"],
         )
-    errors = _validate_payload(payload, source_date=source_date)
+    from src.engine.scalping.scanner_lookup_attention_resource import INTEGRATED_CONTRACT
+    errors = ([] if payload.get("integrated_source_contract") == INTEGRATED_CONTRACT
+              else _validate_payload(payload, source_date=source_date))
     if errors:
         return _inactive(
             "prior_policy_contract_invalid",
@@ -688,10 +690,20 @@ def validate_preopen_receipt(receipt, target):
             return False
         if not receipt["active"]:
             return "source_policy" not in receipt and "source_report" not in receipt
-        # Executable portfolio CF is unavailable in the current native owner.
-        # Historical active receipts cannot bypass the integrated contract.
-        return False
-    except (KeyError, TypeError, ValueError, OverflowError):
+        from src.engine.scalping.scanner_lookup_attention_resource import INTEGRATED_CONTRACT, validate_integrated_selection
+        payload, report = receipt["source_policy"], receipt["source_report"]
+        source = date.fromisoformat(payload["target_date"])
+        observed = date.fromisoformat(payload["source_evaluation_date"])
+        section = report["scanner_unique_funnel"]["economic_cohorts"]["lookup_attention_selection"]
+        return bool(payload.get("integrated_source_contract") == INTEGRATED_CONTRACT
+            and payload.get("status") == "live_auto_apply_ready"
+            and receipt.get("policy_source_date") == source.isoformat()
+            and observed <= source < target and is_krx_trading_day(source)
+            and count_krx_trading_days(source, target) == 1
+            and payload.get("prepared_effective_date") == target.isoformat()
+            and report.get("target_date") == observed.isoformat()
+            and not validate_integrated_selection(section, payload, target=observed))
+    except (KeyError, TypeError, ValueError, OverflowError, AttributeError):
         return False
 
 
@@ -743,9 +755,20 @@ def freeze_preopen_policy(
         )
         receipt["source_report"] = json.loads(
             (
-                Path(report_dir) / f"intraday_ws_freshness_monitor_{source}.json"
+                Path(report_dir) / f"intraday_ws_freshness_monitor_{receipt['source_policy']['source_evaluation_date']}.json"
             ).read_text(encoding="utf-8")
         )
+    if candidate.get("policy_source_date"):
+        source_path = Path(policy_dir) / f"scanner_lookup_attention_policy_{candidate['policy_source_date']}.json"
+        try:
+            disposition = json.loads(source_path.read_text())
+            if _source_report_valid(disposition, source_date=date.fromisoformat(candidate["policy_source_date"]), report_dir=Path(report_dir)):
+                receipt["disposition_receipt"] = {k: disposition.get(k) for k in (
+                    "source_evaluation_date", "publication_date", "target_date", "prepared_effective_date",
+                    "artifact_sha256", "source_report_artifact_sha256", "status")}
+                receipt["disposition_receipt"]["source_contract_verified"] = True
+        except (OSError, ValueError, TypeError):
+            pass
     receipt["artifact_sha256"] = canonical_sha256(receipt)
     if write:
         if not validate_preopen_receipt(receipt, target):
@@ -944,8 +967,8 @@ __all__ = [
 
 
 
-def publish_integrated_policy(report, *, publication_date=None, effective_date=None, policy_dir=POLICY_DIR):
-    """Publish one zero-bonus execution disposition from the final scanner owner.
+def publish_integrated_policy(report, *, publication_date=None, policy_date=None, effective_date=None, policy_dir=POLICY_DIR):
+    """Publish a validated bounded candidate or baseline disposition.
 
     Publication date and actual observation/evaluation date stay separate on a
     non-collection day. This prepares a candidate; it never freezes PREOPEN.
@@ -954,19 +977,34 @@ def publish_integrated_policy(report, *, publication_date=None, effective_date=N
     from src.engine.monitoring.scanner_lookup_attention_tuning import _atomic_json
     observed = date.fromisoformat(report["target_date"])
     published = date.fromisoformat(publication_date) if publication_date else observed
+    dated = date.fromisoformat(policy_date) if policy_date else published
+    if effective_date is None:
+        from datetime import timedelta
+        next_day = dated + timedelta(days=1)
+        while not is_krx_trading_day(next_day):
+            next_day += timedelta(days=1)
+        effective_date = next_day.isoformat()
+    effective = date.fromisoformat(effective_date)
+    if (dated < observed or published < dated or not is_krx_trading_day(dated)
+            or not is_krx_trading_day(effective) or count_krx_trading_days(dated, effective) != 1
+            or published >= effective):
+        raise ValueError("integrated_policy_calendar_binding_invalid")
     section = report["scanner_unique_funnel"]["economic_cohorts"]["lookup_attention_selection"]
+    ready = section.get("status") == "live_auto_apply_ready"
+    disposition = "source_quality_blocked" if section.get("status") == "source_gap" else section["status"]
     if published < observed or section.get("evaluation_phase") != "postclose_final":
         raise ValueError("integrated_final_publication_date_invalid")
     payload = {"schema_version": SCHEMA_VERSION, "report_type": REPORT_TYPE,
-        "target_date": published.isoformat(), "source_evaluation_date": observed.isoformat(),
+        "target_date": dated.isoformat(), "publication_date": published.isoformat(), "source_evaluation_date": observed.isoformat(),
         "prepared_effective_date": effective_date, "integrated_source_contract": INTEGRATED_CONTRACT,
-        "status": "source_quality_blocked", "decision_contract_version": DECISION_CONTRACT_VERSION,
+        "status": disposition, "decision_contract_version": DECISION_CONTRACT_VERSION,
         "decision_authority": DECISION_AUTHORITY, "activation_mode": ACTIVATION_MODE,
         "user_authority": USER_AUTHORITY, "operator_approval_required": False,
-        "runtime_effect": False, "actual_order_submitted": False, "broker_order_forbidden": True,
-        "allowed_runtime_apply": False, "effective_bonus_points": 0.0,
+        "runtime_effect": ready, "actual_order_submitted": False, "broker_order_forbidden": True,
+        "allowed_runtime_apply": ready, "effective_bonus_points": MAX_BONUS_POINTS if ready else 0.0,
         "source_report_artifact_sha256": section["artifact_sha256"],
-        "source_quality_status": "blocked", "holdout_armed_since": None,
+        "source_quality_status": "pass" if section["source_quality"].get("status") == "pass" else "blocked",
+        "holdout_armed_since": section.get("independent_holdout", {}).get("learning_cutoff"),
         "reason": section["status"], "source_gaps": section["primary_economics"]["source_gaps"],
         "policy": {"policy_version": POLICY_VERSION, "min_lookup_attention_score": MIN_SCORE,
             "max_bonus_points": MAX_BONUS_POINTS, "max_source_age_sec": MAX_SOURCE_AGE_SEC,
@@ -977,9 +1015,17 @@ def publish_integrated_policy(report, *, publication_date=None, effective_date=N
     }
     payload["artifact_sha256"] = canonical_sha256(payload)
     issues = validate_integrated_selection(section, payload, target=observed)
-    if issues or not _non_live_payload_valid(payload, source_date=published):
+    if issues or (not ready and not _non_live_payload_valid(payload, source_date=dated)):
         raise ValueError("integrated_policy_invalid:" + ",".join(issues))
-    _atomic_json(Path(policy_dir) / f"scanner_lookup_attention_policy_{published}.json", payload)
+    path = Path(policy_dir) / f"scanner_lookup_attention_policy_{dated}.json"
+    # Preserve replaced generations, including proofs already frozen by PREOPEN.
+    if path.exists():
+        previous = json.loads(path.read_text())
+        if previous != payload:
+            archive = Path(policy_dir) / "superseded" / f"scanner_lookup_attention_policy_{dated}_{canonical_sha256(previous)}.json"
+            if not archive.exists():
+                _atomic_json(archive, previous)
+    _atomic_json(path, payload)
     clear_policy_cache()
     return payload
 

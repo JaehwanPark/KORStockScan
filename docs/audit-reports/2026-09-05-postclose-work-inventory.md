@@ -84,7 +84,7 @@ PID·lock·progress·deadline·latest terminal을 실제 run 기준으로 확인
 | #80 | `scalping.main_ai_prompt_consumer` | 조건부 ON, handoff | frozen evidence/current-role hash·trusted consumption → 기존 dated owner |
 | #82 | `scalping.ai_action_outcome_calibration --postclose-phase` | 조건부, 공통 조정 | quality source 준비 뒤 prepare→final 감사 뒤 evaluate→WS 입력 뒤 finalize/단일 날짜 정책→late handoff; 기존 machine·scope/route 검증 보존 |
 | 별도 기존 호출 | `automation.main_ai_current_axis` | 조건부 ON, manifest | 기존 current-axis source/metric/prompt partition·guard·consumer; legacy #81 live 복원 아님 |
-| #89 | `monitoring.intraday_ws_freshness_monitor --finalize --monitor-only` | 조건부 ON, 품질 | type/route/epoch/원 clock·선언 scope/window·false invalid exclusion → #74/EV |
+| #89 | `monitoring.intraday_ws_freshness_monitor --finalize --monitor-only` | 조건부 ON, 품질/경제성 | 변경분 quality 마감→complete same-tier selection·기존 owner replay의 조건부 비용 EV/일별 순익→dated scanner policy; 결손은 null, ready만 기존 PREOPEN/scanner가 소비 → #74/Daily/EV/summary/strict |
 | #90/#92/#95/#104/#109 | `threshold_cycle_ev_report` 여러 refresh | ON/의존별, 경제성 요약 | 원 family EV·net profit·raw/economic/count·selected/blocked/carry와 새 source hash; 반복 refresh는 새 표본 아님 |
 | #91/#103/#110 | `build_code_improvement_workorder` | 조건/후행 refresh, handoff | 의도한 defect/consumer/test·native ID/decision/authority·전수 disposition; 자동 repo 수정 아님 |
 | #93/#107 | `pattern_lab_propagation_audit` | Main 폐기, Swing-only | 삭제 모듈 import/전파 요구 없음; Swing 독립 호출만 유지 |

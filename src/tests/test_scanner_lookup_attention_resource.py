@@ -590,3 +590,226 @@ def test_source_gap_policy_rejects_self_hashed_zero_or_fabricated_primary_metric
     report = {"target_date": "2026-09-17", "scanner_unique_funnel": {"economic_cohorts": {"lookup_attention_selection": section}}}
     with pytest.raises(ValueError, match="integrated_disposition_invalid"):
         policy.publish_integrated_policy(report, policy_dir=tmp_path)
+
+
+def execution_frame(day, ordinal=0, *, outgoing=.2, incoming=1.):
+    """Existing synthetic owner witnesses; no market or economic acceptance."""
+    from src.tests.test_entry_setup_paired_replay_batch import operating_compact_row, full_compact_proof
+    from src.engine.scalping import compact_auxiliary_paired_replay as compact
+    proof = full_compact_proof()
+    inputs, rows = {}, []
+    source = operating_compact_row(day, ordinal)
+    epoch = datetime.fromisoformat(source["owner_replay"]["seed"]["observed_at"]).timestamp()
+    for index, rate in enumerate((outgoing, incoming)):
+        row = deepcopy(source)
+        row.update(stock_code=f"00593{index}", incumbent_verdict="PASS",
+            scanner_promotion_id=source["scanner_promotion_id"] + f"-{index}",
+            evaluation_attempt_id=source["evaluation_attempt_id"] + f"-{index}",
+            natural_contract_evidence=dict(model="gpt-5.4-nano",provider_actual="openai",
+                semantic_validation_status="pass",decision_quality_contract_status="pass"))
+        replay = row["owner_replay"]
+        seed = replay["seed"]
+        seed.update({k: row[k] for k in ("stock_code", "scanner_promotion_id", "evaluation_attempt_id")})
+        seed["seed_sha256"] = compact.digest({k:v for k,v in seed.items() if k != "seed_sha256"})
+        for arm in replay["operating_arms"].values():
+            arm.update(net_return_pct=rate, stress_net_return_pct=rate-.05,
+                net_pnl_krw=rate / 100 * arm["budget_krw"],stress_net_pnl_krw=(rate-.05) / 100 * arm["budget_krw"])
+            arm["sha256"] = compact.digest({k:v for k,v in arm.items() if k != "sha256"})
+        replay["replay_sha256"] = compact.digest({k:v for k,v in replay.items() if k != "replay_sha256"})
+        assert compact.owner_operating_arm(replay, row)
+        assert compact.owner_model_scope_valid(proof["owner_execution_model_validation"], row)
+        native = pair_rows(date.fromisoformat(day))[:2][index]
+        native.update(stock_code=row["stock_code"],scanner_promotion_id=row["scanner_promotion_id"],
+            observation_date=day,scan_generation_id=f"SCANGEN-{day}-{ordinal}",
+            observed_epoch=epoch,price_observed_epoch=epoch-1,
+            partition_codes_sha256=policy.canonical_sha256(["005930", "005931"]))
+        rows.append(native)
+        inputs[(day,row["scanner_promotion_id"],row["stock_code"])] = dict(row=row,
+            model=proof["owner_execution_model_validation"],source_projection_sha256="a"*64,
+            pricing=proof["runtime_inference_cost_receipt"])
+    return rows, inputs
+
+
+def execution_population(days):
+    rows, inputs = [], {}
+    for day, ordinal in days:
+        frame, values = execution_frame(day, ordinal)
+        rows += frame
+        inputs.update(values)
+    return rows, inputs
+
+
+def test_supported_small_sample_measures_same_frozen_budget_and_holds(monkeypatch):
+    integrated_fixture(monkeypatch)
+    rows, inputs = execution_frame("2026-09-17")
+    monkeypatch.setattr(resource, "execution_inputs", lambda *args: inputs)
+    section = resource.integrated_selection_evaluation(date(2026,9,17),{},migration={"resource_pair_rows":rows})
+    assert section["status"] == "hold_sample"
+    book = section["primary_economics"]
+    assert book["baseline_budget_ev_pct"] == pytest.approx(.2)
+    assert book["candidate_budget_ev_pct"] == pytest.approx(1.)
+    assert book["paired_delta_ev_pct"] == pytest.approx(.8)
+    assert book["daily_net_delta_krw"] == {"2026-09-17":pytest.approx(960.)}
+    assert book["exposure"]["budget_krw"] == 120000.
+    assert book["counterfactual_not_realized_pnl"] is True
+    assert all(p["filter_role"] == "scanner_selection_not_ai" for p in book["pairs"])
+
+
+def test_no_effect_skips_execution_and_missing_changed_arm_stays_null():
+    rows, inputs = execution_frame("2026-09-17")
+    broken = resource.selection_execution_book(rows, {next(iter(inputs)):next(iter(inputs.values()))})
+    assert broken["status"] == "source_gap"
+    assert broken["paired_delta_ev_pct"] is None
+    for row in rows:
+        row.update(candidate_priority_score=row["base_priority_score"],counterfactual_bonus_points=0.,lookup_attention_snapshot_score=0.)
+    same = resource.selection_execution_book(rows,{})
+    assert same["status"] == "no_effect" and same["paired_delta_ev_pct"] == 0.
+    assert same["baseline_budget_ev_pct"] is None
+
+
+def test_ready_native_proof_publication_source_date_preopen_and_scanner_bonus(monkeypatch,tmp_path):
+    import json
+    from src.tests.test_scanner_lookup_attention_tuning import _passing_rows
+    tuning = integrated_fixture(monkeypatch)
+    rows, inputs = execution_population([("2026-09-14",0),("2026-09-14",2),("2026-09-16",0)])
+    monkeypatch.setattr(resource,"execution_inputs",lambda *args: inputs)
+    outcomes = _passing_rows(date(2026,9,14))
+    monkeypatch.setattr(tuning,"join_completed_outcomes",lambda *args,**kwargs: (outcomes,{}))
+    learning = resource.integrated_selection_evaluation(date(2026,9,18),{},migration={"resource_pair_rows":rows})
+    assert learning["status"] == "forward_holdout_armed"
+    assert learning["independent_holdout"]["learning_cutoff"] >= datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat()
+    assert resource.integrated_selection_evaluation(date(2026,9,18),{},predecessor=learning,
+        migration={"resource_pair_rows":rows}) is learning
+    future, values = execution_population([("2026-09-21",0),("2026-09-21",2),("2026-09-22",0)])
+    rows += future
+    inputs.update(values)
+    outcomes += _passing_rows(date(2026,9,21),id_start=10000)
+    ready = resource.integrated_selection_evaluation(date(2026,9,29),{},predecessor=learning,migration={"resource_pair_rows":rows})
+    assert ready["status"] == "live_auto_apply_ready"
+    report = {"target_date":"2026-09-29","evaluation_phase":"intraday",
+        "scanner_unique_funnel":{"economic_cohorts":{"lookup_attention_selection":ready}}}
+    published = policy.publish_integrated_policy(report,publication_date="2026-09-30",policy_date="2026-09-30",
+        effective_date="2026-10-01",policy_dir=tmp_path / "policies")
+    assert resource.validate_integrated_selection(ready,published,target=date(2026,9,29)) == []
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    source = reports / "intraday_ws_freshness_monitor_2026-09-29.json"
+    source.write_text(json.dumps(report))
+    receipt = policy.freeze_preopen_policy("2026-10-01",write=True,
+        now=datetime(2026,10,1,8,tzinfo=ZoneInfo("Asia/Seoul")),policy_dir=tmp_path / "policies",
+        report_dir=reports,applied_dir=tmp_path / "applied")
+    assert receipt["active"]
+    loaded = policy.load_active_policy("2026-10-01",applied_dir=tmp_path / "applied")
+    assert policy.bounded_bonus(.9,loaded)["bonus_points"] == 150.
+    source.write_text("{}")
+    policy.clear_policy_cache()
+    assert policy.load_active_policy("2026-10-01",applied_dir=tmp_path / "applied") == loaded
+    forged = deepcopy(receipt)
+    forged["source_report"]["scanner_unique_funnel"]["economic_cohorts"]["lookup_attention_selection"]["primary_economics"]["paired_delta_ev_pct"] = 100.
+    section = forged["source_report"]["scanner_unique_funnel"]["economic_cohorts"]["lookup_attention_selection"]
+    section["artifact_sha256"] = policy.canonical_sha256({k:v for k,v in section.items() if k != "artifact_sha256"})
+    forged["source_policy"]["source_report_artifact_sha256"] = section["artifact_sha256"]
+    forged["source_policy"]["artifact_sha256"] = policy.canonical_sha256({k:v for k,v in forged["source_policy"].items() if k != "artifact_sha256"})
+    forged["artifact_sha256"] = policy.canonical_sha256({k:v for k,v in forged.items() if k != "artifact_sha256"})
+    assert not policy.validate_preopen_receipt(forged,date(2026,10,1))
+
+
+@pytest.mark.parametrize("defect", ["partial_fill", "natural_contract", "pricing_expiry", "future_model"])
+def test_execution_preflight_does_not_impute_unsupported_inputs(defect):
+    from src.engine.scalping import compact_auxiliary_paired_replay as compact
+    rows, inputs = execution_frame("2026-09-17")
+    value = list(inputs.values())[1]
+    if defect == "partial_fill":
+        replay = value["row"]["owner_replay"]
+        for arm in replay["operating_arms"].values():
+            arm["modeled_filled_qty"] -= 1
+            arm["sha256"] = compact.digest({k:v for k,v in arm.items() if k != "sha256"})
+        replay["replay_sha256"] = compact.digest({k:v for k,v in replay.items() if k != "replay_sha256"})
+    elif defect == "natural_contract":
+        value["row"]["natural_contract_evidence"]["semantic_validation_status"] = "fail"
+    elif defect == "pricing_expiry":
+        value["pricing"]["effective_to"] = "2026-09-16"
+    else:
+        proof = value["model"]["validated_scopes"][0]
+        proof["available_after_date"] = "2026-09-17"
+        proof["sha256"] = compact.digest({k:v for k,v in proof.items() if k != "sha256"})
+    result = resource.selection_execution_book(rows, inputs)
+    assert result["paired_delta_ev_pct"] is None
+    assert result["status"] == "source_gap"
+
+
+def test_overlapping_capital_and_incomplete_partition_cannot_promote():
+    rows, inputs = execution_frame("2026-09-17")
+    duplicate = deepcopy(rows)
+    for row in duplicate:
+        row["scan_generation_id"] += "-overlap"
+    assert "overlapping_owner_capital_allocation_unsupported" in resource.selection_execution_book(rows+duplicate,inputs)["source_gaps"]
+    supported = resource.selection_execution_book(rows, inputs)
+    broken = deepcopy(rows)
+    for index, row in enumerate(broken):
+        row["scan_generation_id"] += f"-incomplete-{index}"
+    result = resource.selection_execution_book(rows+broken, inputs)
+    assert result["status"] == "supported_operating_comparison"
+    assert result["paired_delta_ev_pct"] == supported["paired_delta_ev_pct"]
+    assert result["complete_coverage"] is False
+    assert not resource.selection_edge_passes(result)
+
+
+def test_prior_model_lookup_uses_independently_valid_proof_for_each_pair():
+    from src.engine.scalping import compact_auxiliary_paired_replay as compact
+    rows, inputs = execution_frame("2026-09-17")
+    baseline = resource.selection_execution_book(rows, inputs)
+    for value in inputs.values():
+        model = value["model"]
+        future = deepcopy(model["validated_scopes"][0])
+        future["available_after_date"] = "2026-09-17"
+        future["optimistic_net_error_budget_pct"] = 100.
+        future["sha256"] = compact.digest({k:v for k,v in future.items() if k != "sha256"})
+        model["validated_scopes"].insert(0,future)
+    assert resource.selection_execution_book(rows,inputs)["robust_delta_ev_lower_bound_pct"] == baseline["robust_delta_ev_lower_bound_pct"]
+
+
+def test_late_intraday_writer_preserves_final_economics_and_publication(monkeypatch,tmp_path):
+    import json
+    from src.engine.monitoring import intraday_ws_freshness_monitor as monitor
+    integrated_fixture(monkeypatch)
+    section = resource.integrated_selection_evaluation(date(2026,9,17),{})
+    report = {"target_date":"2026-09-17","evaluation_phase":"intraday", "summary":{"quality_revision":1},
+        "scanner_unique_funnel":{"economic_cohorts":{"lookup_attention_selection":section}}}
+    monkeypatch.setattr(monitor,"REPORT_DIR",tmp_path / "report")
+    monkeypatch.setattr(monitor,"_render_monitor_markdown",lambda *args: "fixture")
+    publish = policy.publish_integrated_policy
+    monkeypatch.setattr(policy,"publish_integrated_policy",lambda report,**kwargs:publish(report,policy_dir=tmp_path / "policies",**kwargs))
+    monitor.write_report(report,monitor_only=True,publication={"publication_date":"2026-09-19","policy_date":"2026-09-18","effective_date":"2026-09-21"})
+    initial = deepcopy(report["scanner_lookup_attention_publication"])
+    late = deepcopy(report)
+    late["scanner_unique_funnel"]["economic_cohorts"]["lookup_attention_selection"] = {"status":"intraday_capture_only"}
+    late["summary"]["quality_revision"] = 2
+    monitor.write_report(late,monitor_only=True)
+    stored = json.loads((tmp_path / "report/intraday_ws_freshness_monitor_2026-09-17.json").read_text())
+    assert stored["scanner_unique_funnel"]["economic_cohorts"]["lookup_attention_selection"] == section
+    assert stored["scanner_lookup_attention_publication"] == initial
+    assert stored["summary"]["quality_revision"] == 2
+    assert stored["evaluation_phase"] == "intraday"
+
+
+def test_post_apply_requires_exact_immutable_policy_receipt_hash(monkeypatch):
+    from src.engine.monitoring.scanner_lookup_attention_tuning import _cohort_book
+    from src.tests.test_scanner_lookup_attention_tuning import _passing_rows
+    rows = _passing_rows(date(2026,9,14))
+    for row in rows:
+        row.update(lookup_attention_weight_runtime_policy_eligible=True,
+            lookup_attention_weight_policy_artifact_sha256="b"*64,
+            lookup_attention_weight_policy_version=policy.POLICY_VERSION,
+            lookup_attention_weight_policy_source_date="2026-09-11")
+    monkeypatch.setattr(policy,"load_active_policy",lambda *args: {"active":False})
+    assert resource.post_apply_inputs(date(2026,9,18),rows)[1] == []
+    monkeypatch.setattr(policy,"load_active_policy",lambda *args: dict(active=True,policy_source_date="2026-09-11",
+        policy_artifact_sha256="a"*64,preopen_artifact_sha256="c"*64,policy_version=policy.POLICY_VERSION))
+    assert resource.post_apply_inputs(date(2026,9,18),rows)[1] == []
+    for row in rows:
+        row["lookup_attention_weight_policy_artifact_sha256"] = "a"*64
+    incumbent, selected, receipts = resource.post_apply_inputs(date(2026,9,18),rows)
+    assert incumbent["status"] == "live_auto_apply_ready"
+    assert len(selected) == 20 and len(receipts) == 5
+    assert _cohort_book(selected)["all"]["notional_weighted_ev_pct"] == .3

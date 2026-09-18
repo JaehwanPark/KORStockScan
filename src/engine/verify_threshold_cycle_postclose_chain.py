@@ -4041,6 +4041,14 @@ def _artifact_paths(target_date: str) -> dict[str, Path]:
         / "checklists"
         / f"{next_day}-stage2-todo-checklist.md",
     }
+    source = _load_json(paths["scanner_lookup_attention_selection"])
+    binding = source.get("scanner_lookup_attention_publication") or {}
+    if binding.get("policy_date"):
+        try:
+            policy_day = date.fromisoformat(binding["policy_date"]).isoformat()
+            paths["scanner_lookup_attention_policy"] = PROJECT_ROOT / "data/threshold_cycle/scanner_lookup_attention_policy" / f"scanner_lookup_attention_policy_{policy_day}.json"
+        except (TypeError, ValueError):
+            pass  # Shared validation reports the invalid publication binding.
     return paths
 
 
@@ -6779,9 +6787,9 @@ def _scanner_lookup_attention_required(target_date: str) -> bool:
 
 
 def _scanner_lookup_attention_status(
-    report: dict[str, Any], policy: dict[str, Any], *, target_date: str
+    report: dict[str, Any], policy: dict[str, Any], *, target_date: str, require_summary=False
 ) -> dict[str, Any]:
-    from src.engine.scalping.scanner_lookup_attention_resource import validate_integrated_selection
+    from src.engine.scalping.scanner_lookup_attention_resource import validate_integrated_selection, selection_handoff, canonical_sha256
     try:
         parsed = date.fromisoformat(target_date)
         section = report["scanner_unique_funnel"]["economic_cohorts"]["lookup_attention_selection"]
@@ -6792,6 +6800,24 @@ def _scanner_lookup_attention_status(
     handoff = daily.get("scanner_lookup_attention_selection") or {}
     if handoff.get("source_section_sha256") != section.get("artifact_sha256"):
         issues.append("scanner_daily_section_hash_handoff_missing")
+    expected = selection_handoff(REPORT_DIR, target_date)
+    if expected.get("source_section_sha256") != section.get("artifact_sha256") or expected.get("policy_artifact_sha256") != policy.get("artifact_sha256"):
+        issues.append("scanner_publication_binding_invalid")
+    if handoff.get("policy_artifact_sha256") != policy.get("artifact_sha256"):
+        issues.append("scanner_daily_policy_hash_handoff_missing")
+    if require_summary:
+        from src.engine.scalping.compact_auxiliary_paired_replay import summary_paths
+        for path in summary_paths(REPORT_DIR.parent, target_date):
+            if _load_json(path).get("scanner_lookup_attention_selection") != expected:
+                issues.append("scanner_final_consumer_stale:" + str(path))
+        effective = policy.get("prepared_effective_date")
+        checklist = PROJECT_ROOT / "docs/checklists" / f"{effective}-stage2-todo-checklist.md"
+        try:
+            marker = f"<!-- scanner_lookup_attention_handoff_sha256:{canonical_sha256(expected)} -->"
+            if marker not in checklist.read_text():
+                issues.append("scanner_checklist_handoff_missing")
+        except OSError:
+            issues.append("scanner_checklist_missing")
     if report.get("target_date") != target_date or section.get("evaluation_phase") != "postclose_final":
         issues.append("integrated_final_date_missing")
     return {"status": "fail" if issues else "pass", "issues": issues,
@@ -6936,7 +6962,7 @@ def build_threshold_cycle_postclose_verification(
         _scanner_lookup_attention_status(
             scanner_lookup_attention_selection,
             scanner_lookup_attention_policy,
-            target_date=target_date,
+            target_date=target_date, require_summary=require_summary_handoff,
         )
         if _scanner_lookup_attention_required(target_date)
         else {
@@ -9361,6 +9387,7 @@ def main() -> None:
     )
     parser.add_argument("--date", required=True)
     parser.add_argument("--require-summary-handoff", action="store_true")
+    parser.add_argument("--scanner-lookup-summary-only", action="store_true", help="Verify only scanner selection/policy/consumer hashes; never assert native DONE")
     parser.add_argument("--compact-summary-only", action="store_true", help="Verify only compact successor summary/policy handoff; never assert native DONE")
     parser.add_argument('--entry-cancel-wait-summary-only',action='store_true',help='Verify standalone cancel-wait policy and exact summary handoff; never assert native DONE')
     parser.add_argument(
@@ -9391,6 +9418,15 @@ def main() -> None:
         ),
     )
     args = parser.parse_args()
+    if args.scanner_lookup_summary_only:
+        if not args.require_summary_handoff or args.compact_summary_only or args.entry_cancel_wait_summary_only:
+            parser.error("scanner scope requires summary handoff and one verification scope")
+        paths = _artifact_paths(args.date)
+        report = _scanner_lookup_attention_status(_load_json(paths["scanner_lookup_attention_selection"]),
+            _load_json(paths["scanner_lookup_attention_policy"]), target_date=args.date, require_summary=True)
+        report.update(scope="scanner_lookup_attention_only", whole_native_chain_done_claimed=False)
+        print(json.dumps(report,ensure_ascii=False))
+        raise SystemExit(0 if report["status"] == "pass" else 2)
     if args.entry_cancel_wait_summary_only:
         if not args.require_summary_handoff or args.compact_summary_only:
             parser.error('cancel-wait scope requires --require-summary-handoff and one verification scope')
