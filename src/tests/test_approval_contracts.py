@@ -25,14 +25,14 @@ def test_approval_contract_registry_marks_runtime_apply_bridge_contract_states()
     assert retired_entry["approval_live_ready"] is False
     assert "approval_contract_registry_entry" in retired_entry["missing_components"]
     assert retired_entry["approval_artifact_consumer"] is None
-    assert scale["approval_contract_status"] == "ready"
-    assert scale["approval_live_ready"] is True
+    assert scale["approval_contract_status"] == "retired_common_consumer"
+    assert scale["approval_live_ready"] is False
     assert scale["approval_artifact_path"].endswith(
         "ldm_scale_in_runtime_bridge_2026-05-21.json"
     )
     assert scale["missing_components"] == []
-    assert greenfield["approval_contract_status"] == "ready"
-    assert greenfield["approval_live_ready"] is True
+    assert greenfield["approval_contract_status"] == "retired_common_consumer"
+    assert greenfield["approval_live_ready"] is False
     assert greenfield["approval_artifact_path"].endswith(
         "greenfield_real_env_policy_2026-05-21.json"
     )
@@ -70,4 +70,4 @@ def test_approval_contract_registry_marks_dynamic_formula_as_dated_preopen_guard
         "position_sizing_dynamic_formula_2026-06-10.json"
     )
     assert request["approval_contract_missing_components"] == []
-    assert request["approval_artifact_consumer"] == "threshold_cycle_preopen_apply"
+    assert request["approval_artifact_consumer"] == "position_sizing_allocator.dated_policy_loader"

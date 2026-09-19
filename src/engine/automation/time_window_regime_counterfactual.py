@@ -16,7 +16,9 @@ from src.engine.automation.source_quality_clean_baseline import (
     clean_baseline_policy,
     filter_allowed_dates,
 )
-from src.engine.daily_threshold_cycle_report import REPORT_DIR
+from src.utils.constants import DATA_DIR
+
+REPORT_DIR = DATA_DIR / "report"
 from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 

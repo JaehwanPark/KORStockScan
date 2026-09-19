@@ -134,7 +134,7 @@ def _call_openai_review(
     try:
         from openai import OpenAI, RateLimitError
         from src.engine.ai_response_contracts import build_openai_response_text_format
-        from src.engine.daily_threshold_cycle_report import (
+        from src.engine.ai.postclose_structured_review_provider import (
             _extract_openai_response_text,
             _load_threshold_ai_openai_keys,
             _threshold_ai_openai_model_sequence,

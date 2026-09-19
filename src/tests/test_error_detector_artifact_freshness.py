@@ -292,13 +292,10 @@ class TestArtifactFreshnessDetector:
         preopen_artifacts = {
             artifact["id"]: artifact
             for artifact in ARTIFACT_REGISTRY
-            if artifact["id"] in {"threshold_runtime_env", "threshold_apply_plan"}
+            if artifact["id"] == "runtime_policy_bootstrap"
         }
 
-        assert set(preopen_artifacts) == {
-            "threshold_runtime_env",
-            "threshold_apply_plan",
-        }
+        assert set(preopen_artifacts) == {"runtime_policy_bootstrap"}
         assert all(
             artifact["window_start"] == (7, 35)
             and artifact["window_grace_sec"] == 300

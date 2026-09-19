@@ -6,60 +6,6 @@ import subprocess
 from src.engine.automation import automation_chain_slimming_audit as mod
 
 
-def test_static_parser_detects_repeated_ev_verifier_and_lifecycle_windows():
-    report = mod.build_report("2026-06-02")
-
-    producers = Counter(item["producer"] for item in report["step_inventory"])
-    # The wrapper keeps only the dependency-bearing core and post-propagation
-    # EV generations; final summary ownership belongs to finalization.
-    assert producers["src.engine.threshold_cycle_ev_report"] == 2
-    assert producers["src.engine.verify_threshold_cycle_postclose_chain"] == 3
-    assert producers["src.engine.monitoring.quote_consistency_report"] == 0
-    assert producers["src.engine.lifecycle_ai_context"] == 0
-    assert producers["src.engine.lifecycle_decision_matrix"] == 0
-    assert producers["src.engine.lifecycle_bucket_discovery"] == 0
-
-    candidates = report["slimming_candidates"]
-    assert not any(
-        item["producer"] == "src.engine.threshold_cycle_ev_report"
-        and item["classification"] == "duplicate_refresh_candidate"
-        for item in candidates
-    )
-    assert any(
-        item["producer"] == "src.engine.swing_strategy_discovery_sim"
-        and item["classification"] == "mutually_exclusive_static_duplicate"
-        for item in report["step_inventory"]
-    )
-    assert not any(
-        item["producer"] == "src.engine.swing_strategy_discovery_sim"
-        and item["classification"] == "duplicate_refresh_candidate"
-        for item in candidates
-    )
-    assert any(
-        item["producer"] == "src.engine.verify_threshold_cycle_postclose_chain"
-        and item["classification"] == "duplicate_refresh_candidate"
-        for item in candidates
-    )
-    assert any(
-        item["producer"] == "src.engine.verify_threshold_cycle_postclose_chain"
-        and item["classification"] == "core_daily"
-        and item["classification_reason"] == "final_fail_closed_postclose_verifier"
-        for item in report["step_inventory"]
-    )
-    assert not any(
-        item["producer"]
-        in {
-            "src.engine.lifecycle_decision_matrix",
-            "src.engine.lifecycle_ai_context",
-            "src.engine.lifecycle_bucket_discovery",
-        }
-        for item in candidates
-    )
-    assert any(
-        item["producer"] == "src.engine.pattern_lab_ai_review"
-        and item["default_enabled"] is False
-        for item in report["step_inventory"]
-    )
 
 
 def test_slimming_candidates_and_workorders_are_report_only():
@@ -73,7 +19,7 @@ def test_slimming_candidates_and_workorders_are_report_only():
         report["summary"]["true_duplicate_refresh_candidates"]
         == report["summary"]["duplicate_refresh_candidates"]
     )
-    assert report["summary"]["dependent_refresh_steps"] == 1
+    assert report["summary"]["dependent_refresh_steps"] == 0
     assert report["summary"]["mutually_exclusive_static_duplicates"] >= 1
     assert "deprecated_candidate" in report["summary"]["classification_group_counts"]
     assert report["protected_refreshes"]
@@ -110,35 +56,6 @@ def test_aggressive_profile_deep_audit_candidates_move_to_manual_or_weekly():
     )
 
 
-def test_dependency_defaults_can_create_deprecated_candidate_and_ev_function_calls_are_expanded():
-    script = """
-RUN_PARENT="${THRESHOLD_CYCLE_RUN_PARENT:-false}"
-RUN_LIFECYCLE_AI_CONTEXT="${THRESHOLD_CYCLE_RUN_LIFECYCLE_AI_CONTEXT:-$RUN_PARENT}"
-run_threshold_cycle_ev_and_wait() {
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.threshold_cycle_ev_report --date "$TARGET_DATE"
-  wait_for_artifacts "$PROJECT_DIR/data/report/threshold_cycle_ev/threshold_cycle_ev_${TARGET_DATE}.json"
-}
-if [ "$RUN_LIFECYCLE_AI_CONTEXT" = "true" ]; then
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.lifecycle_ai_context --date "$TARGET_DATE" --mode context
-fi
-run_threshold_cycle_ev_and_wait "pre_workorder"
-run_threshold_cycle_ev_and_wait "post_workorder_refresh"
-"""
-    defaults = mod._resolve_run_defaults(mod._extract_run_defaults(script))
-    calls = mod._extract_module_calls(script, "postclose", "2026-06-02")
-    inventory, candidates = mod._build_inventory(calls, defaults, "standard")
-
-    producers = Counter(item["producer"] for item in inventory)
-    assert producers["src.engine.threshold_cycle_ev_report"] == 2
-
-    lifecycle_context_step = next(
-        item
-        for item in inventory
-        if item["producer"] == "src.engine.lifecycle_ai_context"
-    )
-    assert lifecycle_context_step["default_flag"] == "RUN_LIFECYCLE_AI_CONTEXT"
-    assert lifecycle_context_step["default_enabled"] is False
-    assert lifecycle_context_step["classification"] == "deprecated_candidate"
 
 
 def test_nested_guard_defaults_are_not_flattened_as_or_conditions():
@@ -226,46 +143,7 @@ def _extract_shell_function(script: str, name: str) -> str:
     raise AssertionError(f"missing shell function end: {name}")
 
 
-def _run_refresh_decision(tmp_path: Path, force: str, source_mode: str) -> str:
-    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
-    function_text = _extract_shell_function(
-        script, "threshold_cycle_ev_refresh_decision"
-    )
-    json_path = tmp_path / "threshold_cycle_ev.json"
-    md_path = tmp_path / "threshold_cycle_ev.md"
-    source_path = tmp_path / "source.json"
-    json_path.write_text("{}", encoding="utf-8")
-    md_path.write_text("# report\n", encoding="utf-8")
-    os.utime(json_path, (200, 200))
-    os.utime(md_path, (200, 200))
-    args = [str(json_path), str(md_path), force]
-    if source_mode == "older":
-        source_path.write_text("{}", encoding="utf-8")
-        os.utime(source_path, (100, 100))
-        args.append(str(source_path))
-    elif source_mode == "newer":
-        source_path.write_text("{}", encoding="utf-8")
-        os.utime(source_path, (300, 300))
-        args.append(str(source_path))
-    elif source_mode == "missing":
-        args.append(str(source_path))
-
-    proc = subprocess.run(
-        [
-            "bash",
-            "-c",
-            f'{function_text}\nthreshold_cycle_ev_refresh_decision "$@"',
-            "bash",
-            *args,
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return proc.stdout.strip()
-
-
-def test_postclose_wrapper_duplicate_refresh_skip_contract_is_static():
+def test_postclose_wrapper_common_threshold_tuning_is_retired():
     script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
 
     assert (
@@ -281,7 +159,7 @@ def test_postclose_wrapper_duplicate_refresh_skip_contract_is_static():
         'FORCE_WORKORDER_BRANCH="${THRESHOLD_CYCLE_FORCE_WORKORDER_BRANCH:-false}"'
         in script
     )
-    assert "threshold_cycle_ev_refresh_decision()" in script
+    assert "threshold_cycle_ev_refresh_decision()" not in script
     assert "automation_trigger_decision()" in script
     assert "write_automation_trigger_decision_snapshot()" in script
     assert "refresh_automation_trigger_decision_snapshot()" in script
@@ -306,11 +184,13 @@ def test_postclose_wrapper_duplicate_refresh_skip_contract_is_static():
     assert "automation_trigger_source()" in script
     assert "trigger_reason=$trigger_reason" in script
     assert "trigger_source=$trigger_source" in script
-    assert "duplicate_refresh_fresh" in script
+    assert "duplicate_refresh_fresh" not in script
     assert "lifecycle_window_${lifecycle_bucket_window}" not in script
     assert "fresh_outputs_no_trigger" in script
-    assert 'run_threshold_cycle_ev_and_wait "pre_workorder"' in script
-    assert "code_improvement_workorder_${TARGET_DATE}.json" in script
+    assert "run_threshold_cycle_ev_and_wait" not in script
+    assert "src.engine.daily_threshold_cycle_report" not in script
+    assert "src.engine.threshold_cycle_ev_report" not in script
+    assert "src.engine.threshold_cycle_preopen_apply" not in script
     assert "pattern_lab_propagation_audit_${TARGET_DATE}.json" in script
     assert "src.engine.verify_threshold_cycle_postclose_chain" in script
     assert "--allow-pending-done-marker" in script
@@ -387,16 +267,6 @@ printf '%s|%s|%s|%s|%s\\n' "$first" "$second" "$reason" "$source" "$(cat "$WRITE
         proc.stdout.strip()
         == "skip|skip|fresh_outputs_no_trigger|cached_trigger_snapshot|1"
     )
-
-
-def test_postclose_wrapper_duplicate_refresh_decision_executes_timestamp_cases(
-    tmp_path,
-):
-    assert _run_refresh_decision(tmp_path, "false", "older") == "skip"
-    assert _run_refresh_decision(tmp_path, "false", "newer") == "run"
-    assert _run_refresh_decision(tmp_path, "false", "missing") == "run"
-    assert _run_refresh_decision(tmp_path, "true", "older") == "run"
-    assert _run_refresh_decision(tmp_path, "false", "none") == "run"
 
 
 def test_dependent_refresh_requires_context_not_only_module_name():

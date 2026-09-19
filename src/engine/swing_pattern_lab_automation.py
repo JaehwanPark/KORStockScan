@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import argparse
 import json
-from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
-from src.engine.daily_threshold_cycle_report import REPORT_DIR
+from src.utils.constants import DATA_DIR
+
+REPORT_DIR = DATA_DIR / "report"
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEEPSEEK_SWING_LAB_DIR = PROJECT_ROOT / "analysis" / "deepseek_swing_pattern_lab"

@@ -18,7 +18,9 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from src.engine.daily_threshold_cycle_report import REPORT_DIR
+from src.utils.constants import DATA_DIR
+
+REPORT_DIR = DATA_DIR / "report"
 from src.utils import kiwoom_utils
 from src.utils.jsonl_io import iter_jsonl
 

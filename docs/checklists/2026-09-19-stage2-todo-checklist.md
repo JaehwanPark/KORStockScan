@@ -3,6 +3,7 @@
 ## 오늘 목적
 
 - Compact AI 통합을 보존하며 WS 품질 마감·scanner 선택 실행 경제성·다음 장전 정책 소비의 구조 결손을 기존 owner로 닫는다.
+- 공통 Daily/EV 튜닝을 퇴역하고 family 직접 평가·정책 소비와 최소 runtime bootstrap으로 런타임 소유권을 분리한다.
 
 ## 오늘 강제 규칙
 
@@ -11,6 +12,11 @@
 - 기존 frozen raw·checkpoint·정책·custody와 다른 세션 변경을 보존한다. 원천 결손21건을 개선 실패 또는 정상 무거래0으로 표시하지 않는다.
 
 ## 승인된 통합 구현
+
+- [x] `[DailyThresholdCycleRetirement0919] 공통 Daily/EV 튜닝 퇴역 및 runtime owner 분리` (`Due: 2026-09-19`, `Slot: POSTCLOSE`, `TimeWindow: 00:00~23:59`, `Track: RuntimeStability`)
+  - Source: [퇴역·분리 계획](../proposals/daily-threshold-cycle-tuning-retirement-and-runtime-owner-separation-plan-2026-09-19.md).
+  - 구현: `daily_threshold_cycle_report`, `threshold_cycle_ev_report`, generic PREOPEN selector와 calibration wrapper를 제거하고, family publisher→`runtime_policy_bootstrap`→기존 장중 consumer 경로로 전환한다. Bootstrap은 검증된 incumbent·operator lock·명시 OFF만 합성하며 EV 후보를 만들지 않는다.
+  - Acceptance: old CLI/import/wrapper 호출 0, exact-date env/manifest/self hash·source receipt hash·lock 유효기간·retired OFF 검증, direct-family summary/verifier/controller 전환, 관련 테스트·compile·wrapper syntax·print-only parser PASS, immutable release 선택. 실제 PID 소비·자연 decision/fill·비용 후 EV는 별도 자연 acceptance다.
 
 - [x] `[CompactAIPostcloseIntegration0919] Compact AI 장후 공통 조정·날짜별 정책·최종 handoff 구현` (`Due: 2026-09-19`, `Slot: POSTCLOSE`, `TimeWindow: 00:00~23:59`, `Track: AIPrompt`)
   - Review: [구현 리뷰](../audit-reports/2026-09-19-compact-ai-postclose-integration-implementation-review.md).
@@ -40,4 +46,4 @@
   - 제한 재생성: section `c1942a8fa18e38249f128dd4dff1a642d57f1964e2cd585bf771a0a29d1651a5`, policy `254d5ab28a6b2089c4d6d036222aedb45dbc353dcd0d5429abd04c755bc9e010`. 비용 후 opportunity EV `-2.38954987%`/3pair/3일로 `hold_no_edge`, bonus0·apply false다. 원화 일별 순익과 실제 paired EV는 미선정 arm 수량·체결 부재로 null이며 후행 summary/checklist/scoped strict는 동일 hash PASS다.
   - 권한: source-only CF와 same-tier bounded bonus뿐이다. 새 주문·재기동·조기 PREOPEN·provider/quantity/cap/tier/slot/quota/hard guard 변경 없음. fixture 양수값은 구현 검증이며 자연 EV가 아니다.
   - finalize monitor-only 재리뷰: producer→wrapper→JSON 정책 소비자→reuse contract를 재확인했고 새 코드 결함은 없었다. 기계 JSON·reuse contract·9/11 이후 Markdown은 보존하고, 소비되지 않는 9/11 이전 Markdown 42개와 비활성 lock 3개(6,529,982 bytes)만 정리했다. source section/policy hash와 9/21 baseline-hold consumer는 불변이며 대상 회귀 285 PASS다.
-  - 현행 직접 소비 경로: compact/WS finalize 뒤 EV가 exact-date microstructure·scanner 원천을 직접 읽고 runtime summary·strict verifier가 동일 부모/권한을 대조한다. Daily에는 두 handoff를 복제하지 않는다. microstructure·WS producer, 전체 Daily 생성, 정책·주문 권한은 유지한다.
+  - 현행 직접 소비 경로: compact/WS finalize 뒤 family evaluator가 exact-date microstructure·scanner 원천을 직접 읽고 runtime summary·strict verifier가 동일 부모/권한을 대조한다. 공통 Daily/EV 계층은 퇴역했으며 microstructure·WS producer와 family 정책·주문 안전 경계는 유지한다.

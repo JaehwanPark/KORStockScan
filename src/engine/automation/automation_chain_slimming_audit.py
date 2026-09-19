@@ -35,13 +35,10 @@ FORBIDDEN_USES = [
 ]
 
 CORE_MODULES = {
-    "src.engine.backfill_threshold_cycle_events",
-    "src.engine.daily_threshold_cycle_report",
-    "src.engine.threshold_cycle_preopen_apply",
-    "src.engine.threshold_cycle_ev_report",
-    "src.engine.lifecycle_decision_matrix",
-    "src.engine.lifecycle_bucket_discovery",
-    "src.engine.runtime_apply_bridge",
+    "src.engine.automation.runtime_policy_bootstrap",
+    "src.engine.automation.entry_cancel_wait_tuning",
+    "src.engine.scalping.entry_split_order_plan",
+    "src.engine.scalping.scale_in_split_order_plan",
     "src.engine.runtime_approval_summary",
     "src.engine.verify_threshold_cycle_postclose_chain",
 }
@@ -248,40 +245,18 @@ def _guard_context_by_line(lines: list[str]) -> dict[int, dict[str, Any]]:
     return contexts
 
 
-def _function_ranges(lines: list[str], function_name: str) -> list[range]:
-    ranges: list[range] = []
-    start: int | None = None
-    for index, line in enumerate(lines):
-        if re.match(rf"^{re.escape(function_name)}\(\)\s*\{{", line):
-            start = index
-            continue
-        if start is not None and line == "}":
-            ranges.append(range(start, index + 1))
-            start = None
-    return ranges
-
-
-def _line_in_ranges(index: int, ranges: list[range]) -> bool:
-    return any(index in item for item in ranges)
-
-
 def _extract_module_calls(
     script_text: str, wrapper: str, target_date: str
 ) -> list[dict[str, Any]]:
     lines = script_text.splitlines()
     calls: list[dict[str, Any]] = []
     module_counts: Counter[str] = Counter()
-    ev_function_ranges = _function_ranges(lines, "run_threshold_cycle_ev_and_wait")
     guard_contexts = _guard_context_by_line(lines)
     for index, line in enumerate(lines):
         match = re.search(r"-m\s+(src\.[A-Za-z0-9_.]+)", line)
         if not match:
             continue
         module = match.group(1)
-        if module == "src.engine.threshold_cycle_ev_report" and _line_in_ranges(
-            index, ev_function_ranges
-        ):
-            continue
         module_counts[module] += 1
         occurrence = module_counts[module]
         nearby = "\n".join(lines[max(0, index - 5) : min(len(lines), index + 12)])
@@ -318,43 +293,9 @@ def _extract_module_calls(
                 "allow_pending_done_marker": "--allow-pending-done-marker" in nearby,
                 "runtime_authority": (
                     "preopen_runtime_env_apply_only"
-                    if module == "src.engine.threshold_cycle_preopen_apply"
+                    if module == "src.engine.automation.runtime_policy_bootstrap"
                     else "report_only"
                 ),
-            }
-        )
-    for index, line in enumerate(lines):
-        if not re.search(r"^\s*run_threshold_cycle_ev_and_wait\b", line):
-            continue
-        if re.search(r"^\s*run_threshold_cycle_ev_and_wait\(\)", line):
-            continue
-        invocation = "\n".join(lines[index : min(len(lines), index + 8)])
-        match = re.search(r'"([^"]+)"', invocation)
-        if not match:
-            continue
-        module = "src.engine.threshold_cycle_ev_report"
-        module_counts[module] += 1
-        occurrence = module_counts[module]
-        pass_label = match.group(1)
-        calls.append(
-            {
-                "step_id": f"{wrapper}:threshold_cycle_ev_report:{occurrence}",
-                "wrapper": wrapper,
-                "line_no": index + 1,
-                "producer": module,
-                "module": module,
-                "command_line": line.strip(),
-                "occurrence": occurrence,
-                "default_flag": None,
-                "required_artifacts": [
-                    "data/report/threshold_cycle_ev/threshold_cycle_ev_{date}.json",
-                    "data/report/threshold_cycle_ev/threshold_cycle_ev_{date}.md",
-                ],
-                "ai_dependency": False,
-                "window_policy": "daily",
-                "allow_pending_done_marker": False,
-                "runtime_authority": "report_only",
-                "function_pass_label": pass_label,
             }
         )
     return calls
@@ -389,17 +330,6 @@ def _classify_call(
                 "interim_verifier_duplicates_final_verifier",
             )
         return "core_daily", "core_daily", "final_fail_closed_postclose_verifier"
-    if module == "src.engine.threshold_cycle_ev_report":
-        pass_label = str(call.get("function_pass_label") or "")
-        if pass_label in {
-            "post_propagation_audit_refresh",
-            "final_consumer_refresh",
-        }:
-            return (
-                "dependent_refresh",
-                "no_change",
-                "required_generation_after_changed_consumers",
-            )
     if module_total_counts[module] > 1 and occurrence > 1:
         if _is_mutually_exclusive_static_duplicate(call):
             return (
@@ -503,14 +433,14 @@ def _stable_group_counts(counter: Counter[str]) -> dict[str, int]:
 
 
 def _step_consumer(module: str) -> str:
-    if module == "src.engine.threshold_cycle_preopen_apply":
+    if module == "src.engine.automation.runtime_policy_bootstrap":
         return "src/run_bot.sh"
     if module == "src.engine.verify_threshold_cycle_postclose_chain":
         return "postclose health gate"
     if module == "src.engine.build_code_improvement_workorder":
         return "Codex implementation intake"
     if "lifecycle" in module or "runtime_apply" in module:
-        return "threshold_cycle_ev/runtime_approval_summary/preopen_apply"
+        return "family_evaluator/runtime_approval_summary/runtime_policy_bootstrap"
     return "postclose summary consumers"
 
 
@@ -643,9 +573,8 @@ def _must_keep_daily(inventory: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for step in inventory:
         producer = str(step.get("producer") or "")
         if step.get("classification") == "core_daily" and (
-            "preopen_apply" in producer
+            "runtime_policy_bootstrap" in producer
             or "verify_threshold_cycle_postclose_chain" in producer
-            or "threshold_cycle_ev_report" in producer
             or "runtime_approval_summary" in producer
             or "lifecycle" in producer
             or "runtime_apply_bridge" in producer
@@ -684,8 +613,8 @@ def _protected_refreshes(inventory: list[dict[str, Any]]) -> list[dict[str, Any]
 def _blocked_reductions() -> list[dict[str, Any]]:
     return [
         {
-            "area": "preopen_apply_runtime_env",
-            "reason": "direct PREOPEN runtime env apply boundary and bot startup source",
+            "area": "runtime_policy_bootstrap",
+            "reason": "direct PREOPEN bootstrap and bot startup source",
             "forbidden_reduction": "do_not_skip_or_trigger_only_without_replacement_guard",
         },
         {

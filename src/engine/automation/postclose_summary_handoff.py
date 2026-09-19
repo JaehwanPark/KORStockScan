@@ -112,6 +112,24 @@ def installed_producer_terminal_states(
 
 
 def source_paths(report_dir: Path, target_date: str, consumer: str) -> dict[str, Path]:
+    if target_date >= "2026-09-19":
+        data_dir = report_dir.parent
+        return {
+            "runtime_approval_summary": report_dir
+            / "runtime_approval_summary"
+            / f"runtime_approval_summary_{target_date}.json",
+            "postclose_verifier": report_dir
+            / "threshold_cycle_postclose_verification"
+            / f"threshold_cycle_postclose_verification_{target_date}.json",
+            "runtime_policy_bootstrap": data_dir
+            / "runtime"
+            / "policy_bootstrap"
+            / f"runtime_policy_bootstrap_{target_date}.json",
+            "runtime_policy_bootstrap_verify": data_dir
+            / "runtime"
+            / "policy_bootstrap"
+            / f"runtime_policy_bootstrap_verify_{target_date}.json",
+        }
     labels = {
         "tower": (
             "threshold_cycle_ev",

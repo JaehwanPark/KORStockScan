@@ -11,7 +11,9 @@ from pathlib import Path
 from typing import Any
 
 from src.engine import system_metric_sampler
-from src.engine.daily_threshold_cycle_report import THRESHOLD_CYCLE_DIR
+from src.utils.constants import DATA_DIR
+
+THRESHOLD_CYCLE_DIR = DATA_DIR / "threshold_cycle"
 from src.utils.constants import DATA_DIR
 from src.utils.threshold_cycle_registry import (
     SMOOTHING_SOURCE_ONLY_FAMILIES,

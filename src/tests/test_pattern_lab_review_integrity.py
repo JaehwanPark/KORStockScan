@@ -1,16 +1,13 @@
 """Pattern audit repair acceptance: no provider, runtime or economic floor."""
 
 import copy
-import hashlib
 import json
-from datetime import date
 
 import pytest
 
 from src.engine import pattern_lab_ai_review as ai
 from src.engine import pattern_lab_currentness_audit as currentness
 from src.engine.automation.pattern_lab_source_contract import read_feedback
-from src.tests.test_pattern_lab_currentness_audit import _seed_labs
 
 DAY = "2026-09-08"
 
@@ -200,45 +197,6 @@ def test_verifier_detects_unreconciled_primary_generation(isolated):
     assert ai.review_generation_matches(DAY, r)
     isolated["currentness_checks"] = [{"check_id": "changed", "status": "fail"}]
     assert not ai.review_generation_matches(DAY, r)
-
-
-def test_controller_reconciles_only_enabled_pattern_owner():
-    from src.engine.automation.postclose_done_controller import (
-        _pattern_review_recovery_actions,
-    )
-
-    assert not _pattern_review_recovery_actions(DAY, {})
-    active = {"execution_profile": {"flags": {"swing_lifecycle": True, "pattern_lab_ai_review": True}}}
-    (action,) = _pattern_review_recovery_actions(DAY, active)
-    assert "--review-current-generation" in action.command
-    active["execution_profile"]["disabled_stage_flags"] = ["pattern_lab_ai_review"]
-    assert not _pattern_review_recovery_actions(DAY, active)
-
-
-def test_pattern_only_recovery_does_not_rerun_daily_ai_or_preopen(monkeypatch):
-    from src.engine.automation import postclose_done_controller as controller
-
-    monkeypatch.setattr(controller, "_latest_failed_tail_stage", lambda target: None)
-    report = {
-        "stale_downstream_links": ["pattern_lab_ai_review_source_generation_stale"],
-        "execution_profile": {
-            "flags": {
-                "swing_lifecycle": True,
-                "pattern_lab_ai_review": True,
-                "tuning_performance_control_tower": True,
-            }
-        },
-    }
-    actions = controller._recovery_actions(DAY, report, allow_wrapper_rerun=False)
-    names = [a.action for a in actions]
-    assert "refresh_pattern_lab_ai_review_generation" in names
-    assert "refresh_daily_threshold_cycle_report" not in names
-    assert "sync_exact_trade_performance_facts" not in names
-    assert "refresh_next_preopen_apply" not in names
-    assert names[-1] == "verify_postclose_chain"
-    assert names.index("refresh_runtime_approval_summary") < names.index(
-        "refresh_next_stage2_checklist"
-    )
 
 
 def test_real_late_bound_producer_context_reaches_fixed_point(tmp_path, monkeypatch):
@@ -544,34 +502,6 @@ def test_refresh_tampered_response_does_not_overwrite_previous(isolated):
     assert path.read_bytes() == before
 
 
-def test_material_review_pending_reaches_workorder_and_ev(isolated, monkeypatch):
-    from src.engine import build_code_improvement_workorder as workorder
-    from src.engine import threshold_cycle_ev_report as ev
-
-    first = build()
-    isolated["sources"]["swing_pattern_lab_automation"]["summary"][
-        "economic_evidence"
-    ] = {"net": -1}
-    r = ai.refresh_pattern_lab_ai_review_source_provenance(DAY, include_swing=True)
-    order = next(
-        o for o in r["code_improvement_orders"] if o.get("material_review_pending")
-    )
-    classified = workorder._classify_order(
-        order,
-        finding_by_order_id={},
-        finding_by_title_slug={},
-        auto_family_order_ids=set(),
-        closed_instrumentation_order_families={},
-    )
-    assert classified.decision == "defer_evidence"
-    assert "fresh exact-generation" in classified.reason
-    summary, _, warnings = ev._audit_summary(
-        DAY, ai.REPORT_TYPE, ai.REPORT_DIR / ai.REPORT_TYPE
-    )
-    assert summary["status"] == "warning"
-    assert summary["ai_review_followup_required"] is True
-    assert warnings
-    assert first["runtime_effect"] is False and r["runtime_effect"] is False
 
 
 def test_trigger_tracks_primary_generation_and_contract_code():

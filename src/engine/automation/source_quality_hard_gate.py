@@ -13,7 +13,9 @@ from src.engine.automation.source_quality_clean_baseline import (
     clean_baseline_policy,
     is_date_allowed,
 )
-from src.engine.daily_threshold_cycle_report import REPORT_DIR
+from src.utils.constants import DATA_DIR
+
+REPORT_DIR = DATA_DIR / "report"
 from src.utils.jsonl_io import read_json_object_strict
 
 BLOCKED_STATUS = "source_quality_blocked"

@@ -8,7 +8,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from src.engine.daily_threshold_cycle_report import REPORT_DIR
+from src.utils.constants import DATA_DIR
+
+REPORT_DIR = DATA_DIR / "report"
 
 REPORT_TYPE = "stage_hook_runtime_scaffold"
 SCHEMA_VERSION = 1

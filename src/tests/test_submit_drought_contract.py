@@ -1,4 +1,3 @@
-from copy import deepcopy
 from datetime import datetime, timedelta
 import json
 
@@ -10,7 +9,6 @@ from src.engine.automation.submit_drought_contract import (
     validate_scope_evidence,
     validate_submit_drought_contract,
 )
-from src.engine.scalping import entry_ai_gate_backtest as controller
 from src.tests.submit_drought_fixtures import make_report
 
 
@@ -1088,23 +1086,6 @@ def test_scope_evidence_rejects_date_scope_and_payload_drift():
 
 
 
-def test_preopen_evidence_preservation_does_not_restore_retired_authority():
-    from src.engine import threshold_cycle_preopen_apply as preopen
-
-    family = sorted(preopen.REMOVED_CALIBRATION_FAMILIES)[0]
-    evidence = {"contract": {"family": family, "unknown": None}, "sha256": "bad"}
-    rows = [
-        {"family": family, "sentinel_evidence": evidence},
-        {"family": "samsung_machine_entry_policy", "sentinel_evidence": evidence},
-    ]
-    scrubbed = preopen._scrub_removed_contracts(rows)
-    assert len(scrubbed) == 1
-    assert scrubbed[0]["sentinel_evidence"] == evidence
-    assert not validate_scope_evidence(
-        scrubbed[0]["sentinel_evidence"],
-        source_date="2026-09-09",
-        scope="KRX|KRX_REGULAR",
-    )
 
 
 
@@ -1161,48 +1142,6 @@ def test_conversion_does_not_accept_current_date_schema_downgrade():
     report = make_report()
     report["schema_version"] = 3
     assert conversion_lane._submit_drought_causal_axes(report) == []
-
-
-def test_verifier_checks_downstream_exact_generation_copy():
-    from src.engine import verify_threshold_cycle_postclose_chain as verifier
-
-    report = make_report()
-    report["followup"] = {"route": "entry_submit_drought_auto_workorder"}
-    contract = report["entry_submit_drought_contract"]
-    summary = {
-        "primary": "SUBMIT_DROUGHT_CRITICAL",
-        "entry_submit_drought_contract": contract,
-    }
-    ev = {
-        "buy_funnel_sentinel": summary,
-        "entry_funnel": {"entry_submit_drought_handoff_selected": True},
-    }
-    runtime = {
-        "buy_funnel_sentinel": deepcopy(summary),
-        "summary": {"entry_submit_drought_handoff_selected": True},
-    }
-    workorder = {
-        "orders": [
-            {"order_id": key}
-            for key in verifier.ENTRY_SUBMIT_DROUGHT_REQUIRED_ORDER_IDS
-        ]
-    }
-    before = verifier._buy_funnel_submit_drought_handoff_status(
-        report, {}, ev, runtime, workorder
-    )
-    assert before["status"] == "pass", before
-    runtime["buy_funnel_sentinel"]["entry_submit_drought_contract"]["stage_unique"][
-        "ai_confirmed"
-    ] = 999
-    after = verifier._buy_funnel_submit_drought_handoff_status(
-        report, {}, ev, runtime, workorder
-    )
-    assert after["status"] == "fail"
-    assert after["root_cause_closure_status"] == "artifact_regeneration_required"
-    assert after["unresolved_root_cause_present"] is True
-    assert "runtime_approval_summary_sentinel_contract_generation_mismatch" in str(
-        after
-    )
 
 
 @pytest.mark.parametrize("use_summary", [False, True])

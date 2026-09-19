@@ -267,48 +267,8 @@ def test_run_compresses_manifested_producer_summary_and_consumer_reads_gzip(
     assert consumer._load_summary_rows(raw_path) == [row]
 
 
-def test_run_compresses_only_completed_old_threshold_partitions(tmp_path, monkeypatch):
-    from src.engine import daily_threshold_cycle_report as consumer
-
-    threshold_dir = tmp_path / "threshold_cycle"
-    family_dir = threshold_dir / "date=2026-04-22" / "family=sample"
-    checkpoint_dir = threshold_dir / "checkpoints"
-    family_dir.mkdir(parents=True)
-    checkpoint_dir.mkdir(parents=True)
-    raw_path = family_dir / "part-000001.jsonl"
-    row = {"family": "sample", "stage": "budget_pass", "fields": {}}
-    raw_path.write_text(json.dumps(row) + "\n", encoding="utf-8")
-    (checkpoint_dir / "2026-04-22.json").write_text(
-        json.dumps({"completed": True, "partitions": {"sample": {"line_count": 1}}}),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(archive, "THRESHOLD_CYCLE_DIR", threshold_dir)
-    monkeypatch.setattr(archive, "THRESHOLD_SNAPSHOT_DIR", threshold_dir / "snapshots")
-    monkeypatch.setattr(consumer, "THRESHOLD_CYCLE_DIR", threshold_dir)
-
-    stats = archive.run(retention_days=1, today=date(2026, 5, 23), dry_run=False)
-
-    gzip_path = raw_path.with_suffix(".jsonl.gz")
-    assert stats["threshold_partitions"]["compressed"] == 1
-    assert consumer._partition_paths_for_date("2026-04-22") == [gzip_path]
-    loaded = consumer._read_threshold_jsonl(gzip_path)
-    assert len(loaded) == 1
-    assert loaded[0]["stage"] == "budget_pass"
 
 
-def test_partition_consumer_ignores_atomic_gzip_temp_file(tmp_path, monkeypatch):
-    from src.engine import daily_threshold_cycle_report as consumer
-
-    threshold_dir = tmp_path / "threshold_cycle"
-    family_dir = threshold_dir / "date=2026-04-22" / "family=sample"
-    family_dir.mkdir(parents=True)
-    plain_path = family_dir / "part-000001.jsonl"
-    temp_path = family_dir / "part-000001.jsonl.gz.tmp"
-    plain_path.write_text('{"family":"sample"}\n', encoding="utf-8")
-    temp_path.write_bytes(b"incomplete gzip")
-    monkeypatch.setattr(consumer, "THRESHOLD_CYCLE_DIR", threshold_dir)
-
-    assert consumer._partition_paths_for_date("2026-04-22") == [plain_path]
 
 
 def test_run_keeps_incomplete_threshold_partition_plain(tmp_path, monkeypatch):

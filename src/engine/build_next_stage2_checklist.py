@@ -1389,9 +1389,9 @@ def _render_new_document(target_date: str, auto_block: str) -> str:
             "",
             "## 오늘 목적",
             "",
-            "- 전일 postclose 자동화가 만든 장전 apply 후보와 사용자 개입 요구사항을 산출물 기준으로 확인한다.",
+            "- 전일 family별 원천·경제성·정책·런타임 직접 소비 결과와 사용자 개입 요구사항을 산출물 기준으로 확인한다.",
             "- 실주문, threshold, provider, sim/probe 관련 변경은 approval artifact와 checklist 기준 없이 열지 않는다.",
-            "- code-improvement workorder는 자동 repo 수정이 아니라 사용자가 Codex에 구현을 지시한 경우에만 실행한다.",
+            "- 공통 Daily/EV 튜닝 및 generic workorder는 퇴역 상태를 유지하고 family owner의 직접 근거만 사용한다.",
             "",
             "## 오늘 강제 규칙",
             "",
@@ -1658,12 +1658,75 @@ def build_next_stage2_checklist(
     target_date = _next_krx_trading_day(source_date)
     target_path = stage2_checklist_path(target_date)
     with _checklist_write_lock(target_path):
+        if source_date >= "2026-09-19":
+            return _build_direct_family_checklist(
+                source_date=source_date,
+                target_date=target_date,
+                target_path=target_path,
+            )
         return _build_next_stage2_checklist_locked(
             source_date=source_date,
             target_date=target_date,
             target_path=target_path,
             machine_micro_approval_not_before=machine_micro_approval_not_before,
         )
+
+
+def _build_direct_family_checklist(
+    *, source_date: str, target_date: str, target_path: Path
+) -> dict[str, Any]:
+    summary_path = (
+        PROJECT_ROOT
+        / "data"
+        / "report"
+        / "runtime_approval_summary"
+        / f"runtime_approval_summary_{source_date}.json"
+    )
+    summary = _load_json(summary_path)
+    blockers = [str(value) for value in summary.get("blocking_reasons") or []]
+    lines = [
+        AUTO_START,
+        "",
+        "## Family 직접 증거 후속",
+        "",
+    ]
+    tasks: list[str] = []
+    if blockers:
+        task_id = f"DirectFamilyEvidenceGap{source_date.replace('-', '')}"
+        tasks.append(task_id)
+        lines.extend(
+            [
+                f"- [ ] `{task_id}` family 직접 증거 결손 점검",
+                f"  - Due: `{target_date}`",
+                "  - Slot: `PREOPEN`",
+                "  - TimeWindow: `07:30-08:50 KST`",
+                "  - Track: `source-quality`",
+                f"  - Source: [{summary_path.name}](/home/ubuntu/KORStockScan/{_rel(summary_path)})",
+                f"  - 결손: `{blockers}`",
+                "  - 완료 기준: 원천·비용 반영 EV·family policy·장중 consumer 결과의 날짜와 해시를 직접 대조하고, 결손을 0 또는 개선으로 간주하지 않는다.",
+            ]
+        )
+    else:
+        lines.append("- 신규 공통 튜닝 작업 없음. family별 직접 owner와 기존 승인 정책을 유지한다.")
+    lines.extend(["", AUTO_END])
+    auto_block = "\n".join(lines) + "\n"
+    existing = target_path.read_text(encoding="utf-8") if target_path.exists() else ""
+    content = (
+        _upsert_auto_block(existing, auto_block)
+        if existing
+        else _render_new_document(target_date, auto_block)
+    )
+    _atomic_write_checklist(target_path, content)
+    return {
+        "source_date": source_date,
+        "target_date": target_date,
+        "path": str(target_path),
+        "created": not bool(existing),
+        "task_count": len(tasks),
+        "tasks": tasks,
+        "source_owner": "runtime_approval_summary_direct_family",
+        "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+    }
 
 
 def _build_next_stage2_checklist_locked(

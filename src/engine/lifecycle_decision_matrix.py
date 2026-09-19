@@ -17,7 +17,9 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable
 
-from src.engine.daily_threshold_cycle_report import REPORT_DIR
+from src.utils.constants import DATA_DIR
+
+REPORT_DIR = DATA_DIR / "report"
 from src.engine.automation.source_quality_clean_baseline import (
     clean_baseline_policy,
     report_generated_before_clean_baseline,

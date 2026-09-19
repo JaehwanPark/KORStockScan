@@ -5,237 +5,89 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="${PROJECT_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 VENV_PY="${VENV_PY:-$PROJECT_DIR/.venv/bin/python}"
 TARGET_DATE="${1:-$(TZ=Asia/Seoul date +%F)}"
-SOURCE_DATE="${THRESHOLD_CYCLE_SOURCE_DATE:-}"
-APPLY_MODE="${THRESHOLD_CYCLE_APPLY_MODE:-auto_bounded_live}"
-AUTO_APPLY="${THRESHOLD_CYCLE_AUTO_APPLY:-true}"
-REQUIRE_AI="${THRESHOLD_CYCLE_AUTO_APPLY_REQUIRE_AI:-true}"
 STATUS_DIR="$PROJECT_DIR/data/report/threshold_cycle_preopen_status"
 STATUS_FILE="$STATUS_DIR/threshold_cycle_preopen_${TARGET_DATE}.status.json"
-MANIFEST_CAPTURE_FILE="$STATUS_DIR/threshold_cycle_preopen_${TARGET_DATE}.manifest.json"
+BOOTSTRAP_ENV="$PROJECT_DIR/data/runtime/policy_bootstrap/runtime_policy_bootstrap_${TARGET_DATE}.env"
 
 mkdir -p "$PROJECT_DIR/logs" "$STATUS_DIR"
 
-write_preopen_status() {
-  local status="$1"
-  local reason="${2:-}"
-  local exit_code="${3:-0}"
-  local finished="${4:-0}"
-  "$VENV_PY" - "$STATUS_FILE" "$TARGET_DATE" "$APPLY_MODE" "$AUTO_APPLY" "$REQUIRE_AI" "$status" "$reason" "$exit_code" "$finished" <<'PY'
+write_status() {
+  local status="$1" reason="${2:-}" exit_code="${3:-0}"
+  "$VENV_PY" - "$STATUS_FILE" "$TARGET_DATE" "$status" "$reason" "$exit_code" "$BOOTSTRAP_ENV" <<'PY'
 import json
 import sys
 from datetime import datetime
 from pathlib import Path
 
 path = Path(sys.argv[1])
-target_date, apply_mode, auto_apply, require_ai, status, reason, exit_code, finished = sys.argv[2:10]
-project_dir = path.parents[3]
-apply_plan_path = project_dir / "data" / "threshold_cycle" / "apply_plans" / f"threshold_apply_{target_date}.json"
-runtime_env_path = project_dir / "data" / "threshold_cycle" / "runtime_env" / f"threshold_runtime_env_{target_date}.env"
-runtime_env_manifest_path = project_dir / "data" / "threshold_cycle" / "runtime_env" / f"threshold_runtime_env_{target_date}.json"
-entry_setup_activation_path = project_dir / "data" / "runtime" / "entry_setup_v2_14_live_policy" / f"entry_setup_v2_14_live_policy_{target_date}.json"
-entry_setup_activation = {}
-if entry_setup_activation_path.exists():
-    try:
-        entry_setup_activation = json.loads(
-            entry_setup_activation_path.read_text(encoding="utf-8")
-        )
-    except Exception:
-        entry_setup_activation = {"status": "malformed"}
-payload = {}
-if path.exists():
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        payload = {}
-payload.update(
-    {
-        "schema_version": 1,
-        "report_type": "threshold_cycle_preopen_status",
-        "target_date": target_date,
-        "apply_mode": apply_mode,
-        "auto_apply": auto_apply,
-        "require_ai": require_ai,
-        "status": status,
-        "reason": reason or None,
-        "exit_code": int(exit_code or 0),
-        "updated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
-        "runtime_effect": "preopen_runtime_env_apply_only",
-        "apply_plan_path": str(apply_plan_path),
-        "runtime_env_path": str(runtime_env_path),
-        "runtime_env_manifest_path": str(runtime_env_manifest_path),
-        "apply_plan_exists": apply_plan_path.exists(),
-        "runtime_env_exists": runtime_env_path.exists(),
-        "runtime_env_manifest_exists": runtime_env_manifest_path.exists(),
-        "entry_setup_live_policy_path": str(entry_setup_activation_path),
-        "entry_setup_live_policy_exists": entry_setup_activation_path.exists(),
-        "entry_setup_live_policy_status": entry_setup_activation.get("status"),
-        "entry_setup_live_policy_runtime_effect": entry_setup_activation.get(
-            "runtime_effect"
-        ),
-        "entry_setup_live_policy_blocking_reasons": entry_setup_activation.get(
-            "blocking_reasons"
-        ) or [],
-    }
-)
-if status == "running":
-    payload["started_at"] = payload["updated_at"]
-    payload.pop("finished_at", None)
-else:
-    payload.setdefault("started_at", payload["updated_at"])
-if finished == "1":
-    payload["finished_at"] = payload["updated_at"]
-path.parent.mkdir(parents=True, exist_ok=True)
-path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+target_date, status, reason, exit_code, env_file = sys.argv[2:7]
+payload = {
+    "schema_version": 2,
+    "report_type": "runtime_policy_preopen_status",
+    "target_date": target_date,
+    "status": status,
+    "reason": reason or None,
+    "exit_code": int(exit_code),
+    "updated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+    "runtime_effect": "approved_policy_bootstrap_only",
+    "runtime_env_path": env_file,
+    "runtime_env_exists": Path(env_file).exists(),
+}
+path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 PY
 }
 
-handle_preopen_apply_result() {
-  local manifest_file="$1"
-  local exit_code="$2"
-  "$VENV_PY" - "$manifest_file" "$exit_code" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-manifest_path = Path(sys.argv[1])
-exit_code = int(sys.argv[2])
-if not manifest_path.exists():
-    raise SystemExit(exit_code)
-
-manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-status = str(manifest.get("status") or "")
-runtime_change = bool(manifest.get("runtime_change"))
-runtime_env_file = manifest.get("runtime_env_file")
-runtime_env_ready = bool(runtime_env_file and Path(runtime_env_file).exists())
-
-if (
-    exit_code == 2
-    and status == "operator_runtime_env_lock_ready_missing_source_report"
-    and runtime_change
-    and runtime_env_ready
-    and str(
-        (manifest.get("runtime_env_handoff_verification") or {}).get("status") or ""
-    )
-    == "pass"
-):
-    raise SystemExit(0)
-
-raise SystemExit(exit_code)
-PY
-}
-
-extract_manifest_json() {
-  "$VENV_PY" -c '
-import json
-import sys
-
-for line in reversed(sys.stdin.read().splitlines()):
-    try:
-        payload = json.loads(line)
-    except json.JSONDecodeError:
-        continue
-    if isinstance(payload, dict):
-        print(json.dumps(payload, ensure_ascii=False))
-        raise SystemExit(0)
-raise SystemExit("preopen_manifest_json_not_found")
-'
-}
-
-mark_preopen_failed() {
+failed() {
   local rc="${1:-1}"
-  local failed_at
   trap - ERR
-  failed_at="$(TZ=Asia/Seoul date +%FT%T%z)"
-  write_preopen_status failed command_failed "$rc" 1 || true
-  echo "[FAIL] threshold-cycle preopen target_date=$TARGET_DATE reason=command_failed exit_code=$rc failed_at=$failed_at"
+  write_status failed command_failed "$rc" || true
+  echo "[FAIL] runtime-policy preopen target_date=$TARGET_DATE exit_code=$rc"
   exit "$rc"
 }
 
-trap 'mark_preopen_failed "$?"' ERR
-write_preopen_status running started 0 0
-LOCK_FILE="$PROJECT_DIR/logs/threshold_cycle_preopen.lock"
-exec 9>"$LOCK_FILE"
-if command -v flock >/dev/null 2>&1; then
-  if ! flock -n 9; then
-    echo "[SKIP] threshold-cycle preopen already running target_date=$TARGET_DATE lock_file=$LOCK_FILE"
-    write_preopen_status skipped lock_busy 0 1
-    exit 0
-  fi
+trap 'failed "$?"' ERR
+write_status running started 0
+exec 9>"$PROJECT_DIR/logs/runtime_policy_preopen.lock"
+if command -v flock >/dev/null 2>&1 && ! flock -n 9; then
+  write_status skipped lock_busy 0
+  echo "[SKIP] runtime-policy preopen already running target_date=$TARGET_DATE"
+  exit 0
 fi
 cd "$PROJECT_DIR"
 
-echo "[START] threshold-cycle preopen target_date=$TARGET_DATE apply_mode=$APPLY_MODE auto_apply=$AUTO_APPLY require_ai=$REQUIRE_AI"
+echo "[START] runtime-policy preopen target_date=$TARGET_DATE"
 
-# Publish one frozen global episode policy before individual profile preflights.
-# The native writer shares policy_apply.lock with those idempotent fallbacks.
-if { [ "$AUTO_APPLY" = "true" ] || [ "$AUTO_APPLY" = "1" ]; } && [ "$APPLY_MODE" = "auto_bounded_live" ]; then
-  PYTHONPATH=. "$VENV_PY" -m src.engine.automation.low_price_two_leg_policy_apply \
-    --target-date "$TARGET_DATE" --write
+# Family publishers retain their own evidence and apply contracts. Failures do
+# not manufacture a replacement candidate in the common bootstrap.
+if ! PYTHONPATH=. "$VENV_PY" -m src.engine.automation.low_price_two_leg_policy_apply \
+  --target-date "$TARGET_DATE" --write; then
+  echo "[WARN] low-price family publisher failed; approved incumbent preserved"
 fi
+if ! PYTHONPATH=. "$VENV_PY" -m src.engine.automation.machine_microstructure_policy_approval \
+  --phase preopen --target-date "$TARGET_DATE" --write --notify; then
+  echo "[WARN] machine microstructure family publisher failed; approved incumbent preserved"
+fi
+if ! PYTHONPATH=. "$VENV_PY" -m src.engine.automation.machine_entry_timing_tuning \
+  --phase preopen --target-date "$TARGET_DATE" --write; then
+  echo "[WARN] machine entry-timing family publisher failed; approved incumbent preserved"
+fi
+PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.scanner_lookup_attention_policy \
+  --target-date "$TARGET_DATE" --write
 
-# The microstructure approval ledger is a supplemental control plane.  It may
-# remind the operator and emit a family-owned PREOPEN authorization handoff,
-# but it cannot mutate this wrapper's threshold env.  A ledger incident is
-# therefore surfaced without blocking unrelated, already-approved families.
-if ! PYTHONPATH=. "$VENV_PY" \
-  -m src.engine.automation.machine_microstructure_policy_approval \
-  --phase preopen \
-  --target-date "$TARGET_DATE" \
-  --write \
-  --notify; then
-  echo "[WARN] machine microstructure policy approval ledger failed target_date=$TARGET_DATE runtime_apply_unchanged=true"
-fi
-rebound_preopen_args=(--phase preopen --target-date "$TARGET_DATE")
-if { [ "$AUTO_APPLY" = "true" ] || [ "$AUTO_APPLY" = "1" ]; } && [ "$APPLY_MODE" = "auto_bounded_live" ]; then
-  rebound_preopen_args+=(--write)
-fi
-if ! PYTHONPATH=. "$VENV_PY" \
-  -m src.engine.automation.machine_entry_timing_tuning \
-  "${rebound_preopen_args[@]}"; then
-  echo "[WARN] machine rebound reentry preopen failed target_date=$TARGET_DATE family_baseline_preserved=true"
-fi
-# Legacy Main AI runtime remains disabled; the current axis has separate consent.
-echo "[SKIP] main-ai-quality-runtime-family target_date=$TARGET_DATE status=retired_disabled runtime_effect=false actual_order_submitted=false"
+bootstrap_args=(
+  --date "$TARGET_DATE"
+  --write
+  --receipt "$PROJECT_DIR/data/threshold_cycle/low_price_two_leg/applied/low_price_two_leg_policy_${TARGET_DATE}.json"
+  --receipt "$PROJECT_DIR/data/report/machine_microstructure_policy_approval/machine_microstructure_policy_approval_preopen_${TARGET_DATE}.json"
+  --receipt "$PROJECT_DIR/data/report/machine_entry_timing_tuning/machine_entry_timing_tuning_${TARGET_DATE}.json"
+  --receipt "$PROJECT_DIR/data/threshold_cycle/scanner_lookup_attention_preopen/scanner_lookup_attention_preopen_${TARGET_DATE}.json"
+)
+PYTHONPATH=. "$VENV_PY" -m src.engine.automation.runtime_policy_bootstrap "${bootstrap_args[@]}"
 
-args=(--date "$TARGET_DATE" --apply-mode "$APPLY_MODE")
-if { [ "$AUTO_APPLY" = "true" ] || [ "$AUTO_APPLY" = "1" ]; } && [ "$APPLY_MODE" = "auto_bounded_live" ] && [[ "$TARGET_DATE" > "2026-09-07" ]]; then
-  if ! PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.scanner_lookup_attention_policy \
-    --target-date "$TARGET_DATE" --write; then
-    echo "[FAIL] scanner lookup-attention immutable PREOPEN selection target_date=$TARGET_DATE"
-    mark_preopen_failed 1
-  fi
-fi
-if [ -n "$SOURCE_DATE" ]; then
-  args+=(--source-date "$SOURCE_DATE")
-fi
-if [ "$AUTO_APPLY" = "true" ] || [ "$AUTO_APPLY" = "1" ]; then
-  args+=(--auto-apply)
-fi
-if [ "$REQUIRE_AI" = "false" ] || [ "$REQUIRE_AI" = "0" ]; then
-  args+=(--allow-deterministic-without-ai)
-fi
-
-manifest_output="$(
-  set +e
-  PYTHONPATH=. "$VENV_PY" -m src.engine.threshold_cycle_preopen_apply "${args[@]}"
-  echo "__THRESHOLD_PREOPEN_EXIT_CODE__:$?"
-)"
-manifest_exit_code="$(printf '%s\n' "$manifest_output" | awk -F: '/__THRESHOLD_PREOPEN_EXIT_CODE__:/ {print $2}' | tail -n1)"
-manifest_payload="$(printf '%s\n' "$manifest_output" | sed '/__THRESHOLD_PREOPEN_EXIT_CODE__:/d')"
-printf '%s\n' "$manifest_payload"
-manifest_json="$(printf '%s\n' "$manifest_payload" | extract_manifest_json)"
-printf '%s\n' "$manifest_json" > "$MANIFEST_CAPTURE_FILE"
-preopen_apply_result_rc=0
-handle_preopen_apply_result \
-  "$MANIFEST_CAPTURE_FILE" \
-  "${manifest_exit_code:-1}" || preopen_apply_result_rc=$?
-if [ "$preopen_apply_result_rc" -ne 0 ]; then
-  mark_preopen_failed "$preopen_apply_result_rc"
-fi
 entry_setup_args=(
   --all-cohorts
   --target-date "$TARGET_DATE"
-  --runtime-env-file "$PROJECT_DIR/data/threshold_cycle/runtime_env/threshold_runtime_env_${TARGET_DATE}.env"
+  --runtime-env-file "$BOOTSTRAP_ENV"
   --operator-env-file "$PROJECT_DIR/data/threshold_cycle/runtime_env/operator_runtime_overrides.env"
   --dated-operator-env-file "$PROJECT_DIR/data/threshold_cycle/runtime_env/operator_runtime_overrides_${TARGET_DATE}.env"
   --write
@@ -243,31 +95,9 @@ entry_setup_args=(
 if [[ "$TARGET_DATE" > "2026-09-14" ]]; then
   entry_setup_args+=(--require-machine-primary)
 fi
-if ! PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.entry_setup_live_policy \
-  "${entry_setup_args[@]}"; then
-  echo "[FAIL] entry machine-primary PREOPEN resolver target_date=$TARGET_DATE"
-  mark_preopen_failed 1
-fi
+PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.entry_setup_live_policy "${entry_setup_args[@]}"
 PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.holding_prompt_live_policy \
-  --phase preopen \
-  --target-date "$TARGET_DATE" \
-  --write
-finished_at="$(TZ=Asia/Seoul date +%FT%T%z)"
-preopen_reason="completed"
-if "$VENV_PY" - "$MANIFEST_CAPTURE_FILE" <<'PY'
-import json
-import sys
-from pathlib import Path
+  --phase preopen --target-date "$TARGET_DATE" --write
 
-manifest = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-raise SystemExit(
-    0
-    if str(manifest.get("status") or "") == "operator_runtime_env_lock_ready_missing_source_report"
-    else 1
-)
-PY
-then
-  preopen_reason="operator_runtime_env_lock_preserved_missing_source_report"
-fi
-write_preopen_status succeeded "$preopen_reason" 0 1
-echo "[DONE] threshold-cycle preopen target_date=$TARGET_DATE finished_at=$finished_at"
+write_status succeeded completed 0
+echo "[DONE] runtime-policy preopen target_date=$TARGET_DATE"

@@ -282,7 +282,7 @@ main/controller/tuning/widget/replay/machine/archive의 predecessor terminal을 
 
 ### Daily paired 경제성 bounded 갱신
 
-사용자가 해당 구현/갱신을 승인했고 affected review와 targeted 검증이 끝난 경우에만 기존 `src.engine.daily_threshold_cycle_report --date SOURCE_DATE --refresh-economic-evaluation-only`를 사용한다. 이 경로는 최신 entry/scale-in producer·가격 frozen proof와 기존 family row를 소비하고 raw/DB/provider를 다시 조회하지 않는다. 입력·정책·모델/비용·holdout·평가기 코드 SHA가 같으면 이전 평가 SHA/as-of를 재사용하며 Daily predecessor를 byte SHA로 보존한다. Calibration 저장과 EV/runtime 요약, 기존 compact finalize→strict handoff를 같은 원 source date로 연결한다. 동일 정책/비대상 체결/미성숙/결손을 개선 검증으로 집계하지 않는다. 다음 trading effective 정책의 기존 baseline 보존은 신규 challenger 개선이나 실제 PID 소비가 아니다. 개별 family closure는 전체 native DONE을 대신하지 않는다.
+공통 `daily_threshold_cycle_report`·`threshold_cycle_ev_report`·generic PREOPEN selector는 2026-09-19부터 퇴역했다. 재평가가 승인된 경우에도 해당 CLI를 복구하거나 호출하지 않고, entry/scale-in/compact/WS/machine/low-price 등 family 소유 evaluator와 dated publisher만 제한 실행한다. `runtime_policy_bootstrap`은 검증된 incumbent·operator lock·명시 OFF와 family receipt 해시를 합성할 뿐 EV 후보를 만들지 않는다. 동일 정책/비대상 체결/미성숙/결손을 개선 검증으로 집계하지 않으며, 다음 trading date의 baseline 보존은 신규 challenger 개선이나 실제 PID 소비가 아니다. 개별 family closure는 전체 native DONE을 대신하지 않는다.
 
 
 ### Pipeline event verbosity 운영 진단 인계

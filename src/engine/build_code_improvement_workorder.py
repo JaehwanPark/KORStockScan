@@ -34,6 +34,7 @@ SWING_LIFECYCLE_DECISION_MATRIX_DIR = REPORT_DIR / "swing_lifecycle_decision_mat
 SWING_LIFECYCLE_BUCKET_DISCOVERY_DIR = REPORT_DIR / "swing_lifecycle_bucket_discovery"
 PATTERN_LAB_AI_REVIEW_DIR = REPORT_DIR / "pattern_lab_ai_review"
 THRESHOLD_CYCLE_EV_DIR = REPORT_DIR / "threshold_cycle_ev"
+COMMON_THRESHOLD_TUNING_RETIRED_FROM = "2026-09-19"
 HOLDING_EXIT_DECISION_MATRIX_DIR = REPORT_DIR / "holding_exit_decision_matrix"
 LIFECYCLE_DECISION_MATRIX_DIR = REPORT_DIR / "lifecycle_decision_matrix"
 PIPELINE_EVENT_VERBOSITY_DIR = REPORT_DIR / "pipeline_event_verbosity"
@@ -2292,7 +2293,6 @@ def _entry_submit_drought_implementation_marker(
     )
     if not {
         "code_improvement_workorder",
-        "threshold_cycle_ev_report",
         "runtime_approval_summary",
         "postclose_verifier",
     }.issubset({str(item) for item in required}):
@@ -6790,6 +6790,9 @@ def _build_code_improvement_workorder(
     target_date: str, *, max_orders: int = 12, include_swing: bool = True
 ) -> dict[str, Any]:
     target_date = str(target_date).strip()
+    common_threshold_tuning_retired = (
+        target_date >= COMMON_THRESHOLD_TUNING_RETIRED_FROM
+    )
     effective_max_orders = max(1, int(max_orders))
     isolated_source_mode = _workorder_isolated_source_mode()
     json_path, md_path = code_improvement_workorder_paths(target_date)
@@ -6839,7 +6842,11 @@ def _build_code_improvement_workorder(
         else {}
     )
     ev_path = threshold_ev_report_path(target_date)
-    ev_report = _load_source_json(ev_path, isolated_source_mode=isolated_source_mode)
+    ev_report = (
+        {}
+        if common_threshold_tuning_retired
+        else _load_source_json(ev_path, isolated_source_mode=isolated_source_mode)
+    )
     lifecycle_source_path = lifecycle_decision_matrix_report_path(target_date)
     lifecycle_report = _load_source_json(
         lifecycle_source_path, isolated_source_mode=isolated_source_mode
@@ -6969,7 +6976,6 @@ def _build_code_improvement_workorder(
         "swing_strategy_discovery_ev": swing_discovery_source_path,
         "swing_lifecycle_decision_matrix": swing_lifecycle_matrix_path,
         "swing_lifecycle_bucket_discovery": swing_lifecycle_bucket_discovery_path,
-        "threshold_cycle_ev": ev_path,
         "lifecycle_decision_matrix": lifecycle_source_path,
         "lifecycle_bucket_discovery": lifecycle_bucket_discovery_path,
         "pipeline_event_verbosity": pipeline_event_verbosity_path,
@@ -6993,6 +6999,8 @@ def _build_code_improvement_workorder(
         "rising_missed_classifier_prior": rising_missed_classifier_prior_path,
         "microstructure_reaction_context": microstructure_reaction_context_path,
     }
+    if not common_threshold_tuning_retired:
+        candidate_source_paths["threshold_cycle_ev"] = ev_path
     if not include_swing:
         for label in (
             "pattern_lab_currentness_audit",
@@ -7256,19 +7264,22 @@ def _build_code_improvement_workorder(
     observation_source_quality_orders = _observation_source_quality_followup_orders(
         observation_source_quality
     )
-    sim_fill_match_orders = _sim_fill_and_match_report_contract_orders(
-        ev_report, observation_source_quality
-    )
-    threshold_ev_orders = [
-        *_threshold_ev_followup_orders(ev_report, target_date=target_date),
-        *_entry_adm_followup_orders(ev_report),
-        *_lifecycle_ai_context_followup_orders(ev_report),
-        *_window_policy_audit_followup_orders(calibration_report),
-        *_dynamic_entry_price_report_contract_orders(ev_report),
-        *_entry_split_order_plan_followup_orders(ev_report),
-        *_scale_in_split_order_plan_followup_orders(ev_report),
-        *sim_fill_match_orders,
-        *_panic_lifecycle_followup_orders(calibration_report),
+    common_threshold_orders = []
+    if not common_threshold_tuning_retired:
+        common_threshold_orders = [
+            *_threshold_ev_followup_orders(ev_report, target_date=target_date),
+            *_entry_adm_followup_orders(ev_report),
+            *_lifecycle_ai_context_followup_orders(ev_report),
+            *_window_policy_audit_followup_orders(calibration_report),
+            *_dynamic_entry_price_report_contract_orders(ev_report),
+            *_entry_split_order_plan_followup_orders(ev_report),
+            *_scale_in_split_order_plan_followup_orders(ev_report),
+            *_sim_fill_and_match_report_contract_orders(
+                ev_report, observation_source_quality
+            ),
+            *_panic_lifecycle_followup_orders(calibration_report),
+        ]
+    direct_source_orders = [
         *_pipeline_event_verbosity_followup_orders(pipeline_event_verbosity),
         *observation_source_quality_orders,
         *_codebase_performance_followup_orders(codebase_performance),
@@ -7324,7 +7335,8 @@ def _build_code_improvement_workorder(
         *lifecycle_scale_in_bucket_orders,
         *lifecycle_overnight_bucket_orders,
         *lifecycle_bucket_discovery_orders,
-        *threshold_ev_orders,
+        *common_threshold_orders,
+        *direct_source_orders,
     ]
     if not include_swing:
         orders = [order for order in orders if not _is_swing_scoped_order(order)]
@@ -7849,7 +7861,11 @@ def _build_code_improvement_workorder(
         "policy": {
             "runtime_patch_automation": "source_only_intake_not_runtime_authority",
             "user_intervention_point": "explicit_implementation_or_authorized_monitoring_invocation",
-            "post_implementation_reentry": "postclose reports and daily EV consume the updated source metrics automatically",
+            "post_implementation_reentry": (
+                "family-owned postclose evaluators and direct consumers re-evaluate updated source metrics"
+                if common_threshold_tuning_retired
+                else "postclose reports and daily EV consume the updated source metrics automatically"
+            ),
             "recommended_operator_instruction": (
                 "Preserve every native ID and authority; implement eligible source-only orders only "
                 "under explicit implementation or authorized monitoring scope. Review, fix, validate "
@@ -7938,7 +7954,7 @@ def _build_code_improvement_workorder(
                     in {"critical", "high"}
                 }.issubset(selected_order_ids)
             ),
-            "threshold_ev_source_order_count": len(threshold_ev_orders),
+            "threshold_ev_source_order_count": len(common_threshold_orders),
             "lifecycle_entry_bucket_source_order_count": len(
                 lifecycle_entry_bucket_orders
             ),
@@ -7971,6 +7987,8 @@ def _build_code_improvement_workorder(
             ),
             "panic_lifecycle_source_order_count": len(
                 _panic_lifecycle_followup_orders(calibration_report)
+                if not common_threshold_tuning_retired
+                else []
             ),
             "selected_order_count": len(selected),
             "non_selected_order_count": len(non_selected),
@@ -8121,6 +8139,7 @@ def _build_code_improvement_workorder(
                 )
             ),
             "daily_ev_available": bool(ev_report),
+            "common_threshold_tuning_retired": common_threshold_tuning_retired,
             "duplicate_order_warnings": collision_warnings,
         },
         "orders": serialized_orders,
@@ -8136,6 +8155,9 @@ def _build_code_improvement_workorder(
     from src.engine.automation.postclose_workorder_contract import inventory
 
     report["inventory_contract"] = inventory(report)
+    if common_threshold_tuning_retired:
+        report["source"].pop("threshold_cycle_ev", None)
+        report["source"].pop("threshold_cycle_calibration", None)
     report["lineage"] = _previous_workorder_lineage(
         previous_report, report["orders"], report["non_selected_orders"]
     )
@@ -8343,11 +8365,11 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
             "git diff --check",
             "```",
             "",
-            "threshold/postclose 체인 영향 시 추가 검증:",
+            "runtime bootstrap/postclose 체인 영향 시 추가 검증:",
             "",
             "```bash",
-            "bash -n deploy/run_threshold_cycle_preopen.sh deploy/run_threshold_cycle_calibration.sh deploy/run_threshold_cycle_postclose.sh",
-            "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_threshold_cycle_ev_report.py",
+            "bash -n deploy/run_threshold_cycle_preopen.sh deploy/run_threshold_cycle_postclose.sh src/run_bot.sh",
+            "PYTHONPATH=. .venv/bin/pytest -q src/tests/test_runtime_policy_bootstrap.py src/tests/test_runtime_approval_summary.py src/tests/test_verify_threshold_cycle_postclose_chain.py src/tests/test_threshold_cycle_wrappers.py",
             "```",
             "",
             "## Implementation Orders",

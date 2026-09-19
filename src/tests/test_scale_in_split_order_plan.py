@@ -7,8 +7,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
-from src.engine import daily_threshold_cycle_report as daily_report
-from src.engine import threshold_cycle_preopen_apply as preopen_apply
 from src.engine.scalping import scale_in_split_order_plan as split_plan
 
 
@@ -681,145 +679,8 @@ def test_runtime_bucket_contract_rejects_unbounded_offset():
     assert status == "context_bucket_price_offsets_invalid"
 
 
-def test_report_and_preopen_env_handoff(monkeypatch, tmp_path):
-    target_date = "2026-07-07"
-    report_dir = tmp_path / "report" / "scale_in_split_order_plan"
-    policy_file = (
-        tmp_path
-        / "threshold_cycle"
-        / "scale_in_split_order_policy"
-        / f"scale_in_split_order_policy_{target_date}.json"
-    )
-    report_dir.mkdir(parents=True, exist_ok=True)
-    policy_file.parent.mkdir(parents=True, exist_ok=True)
-    policy_file.write_text("{}", encoding="utf-8")
-    monkeypatch.setattr(daily_report, "SCALE_IN_SPLIT_ORDER_PLAN_DIR", report_dir)
-    (report_dir / f"scale_in_split_order_plan_{target_date}.json").write_text(
-        json.dumps(
-            {
-                "schema_version": "scale_in_split_order_plan_v4",
-                "source_quality": {"status": "pass", "tuning_input_allowed": True},
-                "input_summary": {
-                    "avg_down_observation_count": 9,
-                    "daily_unique_attempt_count": 3,
-                    "rolling_unique_attempt_count": 3,
-                    "rolling_eligible_runtime_attempt_count": 3,
-                },
-                "rolling_summary": {
-                    "rolling_unique_attempt_count": 3,
-                    "rolling_eligible_runtime_attempt_count": 3,
-                    "rolling_real_outcome_joined_sample": 3,
-                    "rolling_additional_mfe_mae_joined_sample": 3,
-                },
-                "candidate_grid": [
-                    {
-                        "context_bucket": "scalping:late_loss_retry:normal",
-                        "real_sample_count": 1,
-                        "sim_sample_count": 2,
-                        "policy_mode": "bounded_equal_scale_in_split_baseline",
-                    }
-                ],
-                "recommended_policy": {
-                    "runtime_apply_allowed": True,
-                    "runtime_refresh_evidence": _valid_runtime_refresh_evidence(),
-                    "policy_file": str(policy_file),
-                    "policy_version": "scale_in_split_order_plan:test",
-                    "candidates": [
-                        {
-                            "context_bucket": "scalping:late_loss_retry:normal",
-                            "policy_mode": "bounded_equal_scale_in_split_baseline",
-                        }
-                    ],
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    family = daily_report._build_scale_in_split_order_plan_family(
-        target_date=target_date
-    )
-    candidates = daily_report._build_calibration_candidates([family], {})
-    candidate = next(
-        item for item in candidates if item["family"] == "scale_in_split_order_plan"
-    )
-
-    assert candidate["calibration_state"] == "adjust_up"
-    assert candidate["recommended_values"]["enabled"] is True
-    overrides = preopen_apply._env_overrides_for_candidate(candidate)
-    assert overrides["KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_ENABLED"] == "true"
-    assert overrides["KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_FILE"] == str(
-        policy_file
-    )
-    assert (
-        overrides["KORSTOCKSCAN_SCALE_IN_SPLIT_ORDER_POLICY_VERSION"]
-        == "scale_in_split_order_plan:test"
-    )
 
 
-def test_daily_report_handoff_blocks_runtime_disallowed_policy(monkeypatch, tmp_path):
-    target_date = "2026-07-07"
-    report_dir = tmp_path / "report" / "scale_in_split_order_plan"
-    policy_file = (
-        tmp_path
-        / "threshold_cycle"
-        / "scale_in_split_order_policy"
-        / f"scale_in_split_order_policy_{target_date}.json"
-    )
-    report_dir.mkdir(parents=True, exist_ok=True)
-    policy_file.parent.mkdir(parents=True, exist_ok=True)
-    policy_file.write_text("{}", encoding="utf-8")
-    monkeypatch.setattr(daily_report, "SCALE_IN_SPLIT_ORDER_PLAN_DIR", report_dir)
-    (report_dir / f"scale_in_split_order_plan_{target_date}.json").write_text(
-        json.dumps(
-            {
-                "schema_version": "scale_in_split_order_plan_v4",
-                "source_quality": {"status": "pass", "tuning_input_allowed": True},
-                "input_summary": {
-                    "avg_down_observation_count": 9,
-                    "rolling_eligible_runtime_attempt_count": 3,
-                },
-                "rolling_summary": {
-                    "rolling_unique_attempt_count": 3,
-                    "rolling_eligible_runtime_attempt_count": 3,
-                },
-                "candidate_grid": [
-                    {
-                        "context_bucket": "scalping:late_loss_retry:normal",
-                        "real_sample_count": 1,
-                        "sim_sample_count": 2,
-                        "policy_mode": "bounded_equal_scale_in_split_baseline",
-                    }
-                ],
-                "recommended_policy": {
-                    "runtime_apply_allowed": False,
-                    "policy_file": str(policy_file),
-                    "policy_version": "scale_in_split_order_plan:runtime-blocked",
-                    "candidates": [
-                        {
-                            "context_bucket": "scalping:late_loss_retry:normal",
-                            "policy_mode": "bounded_equal_scale_in_split_baseline",
-                        }
-                    ],
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    family = daily_report._build_scale_in_split_order_plan_family(
-        target_date=target_date
-    )
-    candidate = next(
-        item
-        for item in daily_report._build_calibration_candidates([family], {})
-        if item["family"] == "scale_in_split_order_plan"
-    )
-
-    assert family["recommended"]["enabled"] is False
-    assert family["sample"]["runtime_apply_allowed"] is False
-    assert candidate["recommended_value"] is False
-    assert candidate["calibration_state"] == "hold_sample"
 
 
 def test_report_selects_low_pct_touch_70_30_counterfactual(monkeypatch, tmp_path):
@@ -1797,25 +1658,6 @@ def test_current_incumbent_self_comparison_preserves_policy_and_records_versione
     )
 
 
-def test_no_sample_does_not_fabricate_adverse_evidence_for_carry():
-    evidence = split_plan._runtime_refresh_evidence(
-        [split_plan._evaluate_candidate_economics([], _equal_variant())]
-    )
-    assert evidence["source_quality_adjusted_ev_pct"] is None
-    assert (
-        not set(evidence["blockers"])
-        & preopen_apply.SCALE_IN_SPLIT_NEGATIVE_ECONOMIC_BLOCKERS
-    )
-    assert (
-        preopen_apply._scale_in_split_hold_carry_forward_blockers(
-            {"source_metrics": {"runtime_refresh_evidence": evidence}}
-        )
-        == []
-    )
-    evidence["blockers"].append("post_apply_negative_economic_evidence")
-    assert preopen_apply._scale_in_split_hold_carry_forward_blockers(
-        {"source_metrics": {"runtime_refresh_evidence": evidence}}
-    )
 
 
 @pytest.mark.parametrize("flag", [False, "false", 0, None])
@@ -1902,36 +1744,6 @@ def test_partial_execution_r6_is_not_pooled_with_full_fill_ev():
     assert result["negative_economic_evidence"] is False
 
 
-@pytest.mark.parametrize(
-    "paired,dates,blockers,expected",
-    [
-        (0, 0, [], "hold_sample"),
-        (2, 2, ["paired_economic_sample_floor"], "hold_sample"),
-        (3, 1, ["economic_source_date_floor"], "hold_sample"),
-        (2, 2, ["cost_adjusted_ev_not_positive"], "hold_no_edge"),
-        (3, 2, ["post_apply_negative_economic_evidence"], "hold_no_edge"),
-    ],
-)
-def test_daily_state_uses_paired_samples_and_measured_adversity(
-    paired, dates, blockers, expected
-):
-    metrics = {
-        "report_loaded": True,
-        "rolling_eligible_runtime_attempt_count": 30,
-        "paired_economic_sample_count": paired,
-        "economic_source_date_count": dates,
-        "runtime_refresh_evidence": {"blockers": blockers},
-    }
-    state, _ = daily_report._calibration_state_for_family(
-        "scale_in_split_order_plan", {}, {"sample_floor": 3}, source_metrics=metrics
-    )
-    assert state == expected
-    assert (
-        daily_report._source_sample_count_for_family(
-            "scale_in_split_order_plan", metrics
-        )
-        == paired
-    )
 
 
 def test_runtime_ttl_decorator_and_submission_provenance_contract():

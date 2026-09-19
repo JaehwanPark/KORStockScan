@@ -78,80 +78,6 @@ def _price_ready_row(
     }
 
 
-def test_price_ready_plan_reaches_existing_cf_and_daily_without_assuming_fill(
-    monkeypatch, tmp_path
-):
-    from src.engine import daily_threshold_cycle_report as daily
-
-    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
-    monkeypatch.setattr(daily, "REPORT_DIR", tmp_path / "report")
-    row = _price_ready_row(monkeypatch)
-    _write_pipeline_events(tmp_path, "2026-09-17", [row])
-    events = report_mod._load_entry_events("2026-09-17")
-    attempts = report_mod._build_buy_attempts("2026-09-17", events=events)
-    assert len(attempts) == 1
-    assert attempts[0]["buy_intent_source"] == "mechanistic_price_ready_plan"
-    assert attempts[0]["signal_price"] == 10000
-    assert attempts[0]["evaluation_attempt_id"] == "eval-1"
-    assert attempts[0]["target_qty"] == 10
-    fake = types.SimpleNamespace(
-        get_minute_candles_ka10080=lambda *_a, **_k: [
-            _make_candle(f"10:{minute:02}:00", 10000, 10200, 9990, 10100)
-            for minute in range(1, 17)
-        ]
-    )
-    import src.utils as utils_pkg
-
-    monkeypatch.setattr(utils_pkg, "kiwoom_utils", fake, raising=False)
-    monkeypatch.setitem(sys.modules, "src.utils.kiwoom_utils", fake)
-    monkeypatch.setattr(
-        report_mod,
-        "_sim_virtual_qty",
-        lambda *_a, **_k: pytest.fail("owner quantity must not be recalculated"),
-    )
-    report = report_mod.build_missed_entry_counterfactual_report(
-        "2026-09-17", token="dummy"
-    )
-    cf_row = report["full_rows"][0]
-    assert cf_row["price_ready_source"]["economic_pair_eligible"] is False
-    assert cf_row["estimated_counterfactual_pnl_10m_krw"] is None
-    assert cf_row["counterfactual_qty"] == 10
-    assert cf_row["counterfactual_notional_krw"] is None
-    assert cf_row["price_ready_source"]["planned_notional_krw"] == 100000
-    assert (
-        report["watch_cycle_participation_ledger"]["summary"][
-            "unsubmitted_ev_eligible_cycle_count"
-        ]
-        == 0
-    )
-    assert report["meta"]["input_streaming"]["price_ready_attempt_count"] == 1
-    path = (
-        tmp_path
-        / "report"
-        / "monitor_snapshots"
-        / "missed_entry_counterfactual_2026-09-17.json"
-    )
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"rows": [cf_row]}))
-    compact = daily._compact_threshold_cycle_event(row)
-    assert "entry_execution_sizing_plan" not in compact["fields"]
-    assert compact["fields"]["evaluation_attempt_id"] == "eval-1"
-    diagnostics = daily._dynamic_entry_price_counterfactual_join_diagnostics(
-        [compact], target_date="2026-09-17"
-    )
-    assert diagnostics["joined_sample"] == 1
-    assert (
-        diagnostics["join_semantics"]
-        == "identity_lineage_diagnostic_only_not_economic_pair"
-    )
-    cf_row["effective_venue"] = "NXT"
-    path.write_text(json.dumps({"rows": [cf_row]}))
-    assert (
-        daily._dynamic_entry_price_counterfactual_join_diagnostics(
-            [compact], target_date="2026-09-17"
-        )["joined_sample"]
-        == 0
-    )
 
 
 @pytest.mark.parametrize(
@@ -323,55 +249,6 @@ def test_price_ready_kst_anchor_and_bad_clock_row_isolation(monkeypatch, tmp_pat
     assert attempts[0]["signal_time"] == "10:00:00"
 
 
-@pytest.mark.parametrize("encoding", ["native_dict", "json_string"])
-def test_actual_pipeline_emitter_representation_reaches_cf_and_daily(
-    monkeypatch, tmp_path, encoding
-):
-    from datetime import datetime
-    from src.utils import pipeline_event_logger as emitter
-    from src.engine import daily_threshold_cycle_report as daily
-
-    class FixedDateTime(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            return cls(2026, 9, 17, 10, 0, 0)
-
-    row = _price_ready_row(monkeypatch)
-    fields = row["fields"]
-    if encoding == "json_string":
-        for key in ("entry_execution_sizing_plan", "entry_price_plan"):
-            fields[key] = json.dumps(fields[key])
-    monkeypatch.setattr(emitter, "DATA_DIR", tmp_path)
-    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
-    monkeypatch.setattr(emitter, "datetime", FixedDateTime)
-    monkeypatch.setattr(emitter, "_get_producer_compactor", lambda: None)
-    monkeypatch.setattr(emitter, "log_info", lambda *_a, **_k: None)
-    monkeypatch.setattr(
-        emitter,
-        "TRADING_RULES",
-        types.SimpleNamespace(PIPELINE_EVENT_JSONL_ENABLED=True),
-    )
-    emitted = emitter.emit_pipeline_event(
-        "ENTRY_PIPELINE",
-        "Samsung",
-        "005930",
-        "entry_execution_sizing_plan",
-        record_id=1,
-        fields=fields,
-    )
-    assert emitted["structured_append_succeeded"] is True
-    assert emitted["emitted_at"] == "2026-09-17T10:00:00"
-    assert isinstance(emitted["fields"]["entry_execution_sizing_plan"], str)
-    attempts = report_mod._build_buy_attempts(
-        "2026-09-17", events=report_mod._load_entry_events("2026-09-17")
-    )
-    assert len(attempts) == 1
-    assert attempts[0]["signal_price"] == 10000
-    assert attempts[0]["price_ready_source"]["economic_pair_eligible"] is False
-    assert (
-        daily._compact_threshold_cycle_event(emitted)["fields"]["evaluation_attempt_id"]
-        == "eval-1"
-    )
 
 
 def test_price_plan_repr_parser_does_not_execute_expressions(monkeypatch, tmp_path):

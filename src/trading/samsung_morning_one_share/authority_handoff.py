@@ -19,7 +19,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
-from src.engine.threshold_cycle_preopen_apply import verify_runtime_env_handoff
+from src.engine.automation.runtime_policy_bootstrap import verify_bootstrap as verify_runtime_env_handoff
 from src.trading.samsung_morning_one_share.machine import DEFAULT_STATE_PATH, KST
 from src.trading.samsung_morning_one_share.preflight import (
     DEFAULT_AUTHORITY_PATH,
@@ -177,9 +177,9 @@ def _process_started_at(pid: int, *, proc_root: Path = Path("/proc")) -> datetim
 def _runtime_verify_artifact_path(target_date: str) -> Path:
     return (
         DATA_DIR
-        / "threshold_cycle"
-        / "runtime_env"
-        / f"threshold_runtime_env_verify_{target_date}.json"
+        / "runtime"
+        / "policy_bootstrap"
+        / f"runtime_policy_bootstrap_verify_{target_date}.json"
     )
 
 

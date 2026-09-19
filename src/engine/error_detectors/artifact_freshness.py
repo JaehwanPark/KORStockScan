@@ -273,8 +273,8 @@ ARTIFACT_REGISTRY: list[dict[str, Any]] = [
         },
     },
     {
-        "id": "threshold_runtime_env",
-        "path_template": "data/threshold_cycle/runtime_env/threshold_runtime_env_{date}.json",
+        "id": "runtime_policy_bootstrap",
+        "path_template": "data/runtime/policy_bootstrap/runtime_policy_bootstrap_{date}.json",
         "max_staleness_sec": 900,
         "critical": True,
         "window_start": (7, 35),
@@ -282,16 +282,6 @@ ARTIFACT_REGISTRY: list[dict[str, Any]] = [
         # The producer and the full detector are both installed at 07:35.
         # Allow one detector interval for the producer to replace the previous
         # evening's target-date handoff before treating it as stale.
-        "window_grace_sec": 300,
-        "trading_day_only": True,
-    },
-    {
-        "id": "threshold_apply_plan",
-        "path_template": "data/threshold_cycle/apply_plans/threshold_apply_{date}.json",
-        "max_staleness_sec": 900,
-        "critical": True,
-        "window_start": (7, 35),
-        "window_end": (7, 50),
         "window_grace_sec": 300,
         "trading_day_only": True,
     },

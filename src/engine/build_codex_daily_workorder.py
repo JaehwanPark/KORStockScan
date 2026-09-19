@@ -676,15 +676,15 @@ def build_runbook_operational_checks(
                     "data/daily_recommendations_v2.csv",
                     "data/daily_recommendations_v2_diagnostics.json",
                     "logs/threshold_cycle_preopen_cron.log",
-                    f"data/threshold_cycle/apply_plans/threshold_apply_{date_text}.json",
-                    f"data/threshold_cycle/runtime_env/threshold_runtime_env_{date_text}.json",
-                    "threshold_apply swing_runtime_approval requested/approved/blocked",
+                    f"data/runtime/policy_bootstrap/runtime_policy_bootstrap_{date_text}.json",
+                    f"data/runtime/policy_bootstrap/runtime_policy_bootstrap_verify_{date_text}.json",
+                    "family publisher receipt selected/retained/disabled/rejected",
                     "tmux bot session / src/run_bot.sh runtime env source 여부",
                 ),
                 decision_rule=(
                     "pass|warning|fail|not_yet_due 중 하나로 판정. preopen apply와 final scanner의 당일 [DONE] marker, "
-                    "final scanner 추천/empty/fallback diagnostic 분리, apply plan selected/blocked family, "
-                    "AI guard, same-stage owner 충돌, runtime env 생성 여부, "
+                    "final scanner 추천/empty/fallback diagnostic 분리, bootstrap selected/blocked family, "
+                    "AI guard, same-stage owner 충돌, runtime bootstrap 생성 여부, "
                     "스윙 approval request/approved/blocked 및 dry-run 강제 여부 확인."
                 ),
                 forbidden="실패해도 수동 env override, final approval artifact 없는 스윙 env 반영, removed phase0 real-canary 재개, 스윙 dry-run 해제, 장전 수동 enable/hold 판정 금지.",

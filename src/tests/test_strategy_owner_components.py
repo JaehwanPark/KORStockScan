@@ -6,9 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.engine import threshold_cycle_preopen_apply as preopen
 from src.engine.scalping import strategy_owner_components as mod
-from src.engine.automation import operator_policy_succession as succession
 from src.tests.test_score_recovery_net_approval import signed_report, sign
 
 
@@ -131,35 +129,6 @@ def test_reviewed_logging_controls_do_not_invalidate_strategy_context():
     assert mod.context_fingerprint(rules) != before
 
 
-def test_rolling_component_book_survives_canonical_and_calibration_handoff(monkeypatch):
-    from unittest.mock import MagicMock
-    from src.engine import daily_threshold_cycle_report as daily
-
-    one = mod.evidence_book(economic_report("2026-09-08"), "2026-09-08")
-    rolling = book()
-    report = {
-        "date": "2026-09-08",
-        "calibration_candidates": [],
-        "strategy_owner_component_economics": one,
-    }
-    cumulative = {
-        "calibration_source_bundle_by_window": {
-            mod.SOURCE_WINDOW: {
-                "source_metrics": {
-                    "buy_score65_74": {"strategy_owner_component_economics": rolling}
-                }
-            }
-        }
-    }
-    daily.apply_window_policy_registry_to_report(report, cumulative)
-    assert report["strategy_owner_component_economics"] == rolling
-    assert report["strategy_owner_component_source_window"] == mod.SOURCE_WINDOW
-    path = MagicMock()
-    monkeypatch.setattr(daily, "calibration_report_path_for_date", lambda *args: path)
-    daily.save_threshold_calibration_report(report)
-    payload = json.loads(path.write_text.call_args.args[0])
-    assert payload["strategy_owner_component_economics"] == rolling
-    assert len(payload["strategy_owner_component_economics"]["sources"]) == 2
 
 
 def test_disjoint_context_policies_are_not_erased():
@@ -170,104 +139,6 @@ def test_disjoint_context_policies_are_not_erased():
         source["rows"][identity + "-context2"] = second
     result = mod.evaluate(source, mod.WEAK, profiles()[mod.WEAK], "2026-09-09")
     assert len(result["policies"]) == 2
-
-
-@pytest.fixture
-def scope(tmp_path, monkeypatch):
-    runtime, locks = tmp_path / "runtime", tmp_path / "locks"
-    runtime.mkdir()
-    locks.mkdir()
-    monkeypatch.setattr(preopen, "RUNTIME_ENV_DIR", runtime)
-    monkeypatch.setattr(preopen, "OPERATOR_RUNTIME_ENV_LOCK_DIR", locks)
-    rows = []
-    for family, values in profiles().items():
-        row = {
-            "family": family,
-            "stage": "entry_pre_submit" if family == mod.WEAK else "holding_exit",
-            "enabled": True,
-            "lock_id": family + ":original",
-            "priority": 12,
-            "explicit_close_required": True,
-            "lock_until_explicit_close": True,
-            "env_overrides": {
-                mod.PREFIX + k: str(v).lower() for k, v in values.items()
-            },
-        }
-        (locks / (family + ".json")).write_text(json.dumps(row))
-        rows.append(row)
-    return runtime, locks, rows
-
-
-def publish(scope, target="2026-09-09"):
-    runtime, locks, rows = scope
-    selected, decisions, env = preopen._select_auto_apply_candidates(
-        [], ai_review={}, require_ai=True, target_date=target, operator_locks=rows
-    )
-    manifest = {
-        "source_date": "2026-09-08",
-        "auto_apply_selected": selected,
-        "auto_apply_decisions": decisions,
-    }
-    preopen._write_runtime_env(target, manifest, env)
-    return (
-        json.loads((runtime / f"threshold_runtime_env_{target}.json").read_text()),
-        decisions,
-    )
-
-
-def test_behavior_preserving_migration_needs_no_economic_floor(scope):
-    runtime, locks, rows = scope
-    originals = {p.name: p.read_bytes() for p in locks.glob("*.json")}
-    manifest, decisions = publish(scope)
-    assert not manifest["selected_families"]  # No new independent tuning owner.
-    assert len(decisions) == 2
-    assert all(not d["same_stage_owner_claim"] for d in decisions)
-    actual = succession.validate_receipt(manifest, runtime, locks)
-    for row in rows:
-        assert all(actual[k] == v for k, v in row["env_overrides"].items())
-    assert originals == {p.name: p.read_bytes() for p in locks.glob("*.json")}
-    assert {
-        r["owner"] for r in manifest["strategy_owner_components"]["components"]
-    } == {"entry_gate_recheck", "holding_exit"}
-
-
-def test_next_day_carry_and_same_day_freeze(scope):
-    first, _ = publish(scope)
-    second, _ = publish(scope)
-    third, _ = publish(scope, "2026-09-10")
-    assert first["env_overrides"] == second["env_overrides"]
-    for row in third["strategy_owner_components"]["components"]:
-        assert row["state"] == "last_verified_policy_carried"
-
-
-def test_missing_or_corrupt_component_receipt_fails_verification(scope):
-    runtime, locks, _ = scope
-    manifest, _ = publish(scope)
-    del manifest["strategy_owner_components"]
-    with pytest.raises(ValueError, match="receipt_missing"):
-        succession.validate_receipt(manifest, runtime, locks)
-
-
-def test_operator_change_and_actual_env_mismatch_fail_closed(scope):
-    runtime, locks, _ = scope
-    manifest, _ = publish(scope)
-    path = runtime / "threshold_runtime_env_2026-09-09.env"
-    path.write_text(
-        path.read_text().replace("MIN_SPREAD_TICKS=5.0", "MIN_SPREAD_TICKS=8")
-    )
-    with pytest.raises(ValueError, match="env_mismatch"):
-        succession.validate_receipt(manifest, runtime, locks)
-
-
-@pytest.mark.parametrize("flag", ["manual_veto", "safety_veto"])
-def test_explicit_veto_not_adopted(scope, flag):
-    runtime, locks, rows = scope
-    rows[0][flag] = True
-    kept, decisions, _ = succession.prepare_components(
-        rows, {}, runtime, locks, "2026-09-09"
-    )
-    assert kept == [rows[0]]
-    assert len(decisions) == 1
 
 
 @pytest.mark.parametrize("family", [mod.WEAK, mod.PROFIT])
@@ -398,79 +269,8 @@ def test_runtime_requires_exact_date_context_venue_and_real_scope():
     assert run()["status"] == "baseline"
 
 
-def test_postclose_book_to_preopen_receipt_and_launcher_exports(
-    scope, tmp_path, monkeypatch
-):
-    runtime, locks, rows = scope
-    reports = tmp_path / "report"
-    producer = reports / "main_scalping_lifecycle_paired"
-    producer.mkdir(parents=True)
-    for day in ("2026-09-07", "2026-09-08"):
-        (producer / f"main_scalping_lifecycle_paired_{day}.json").write_text(
-            json.dumps(economic_report(day))
-        )
-    monkeypatch.setattr(preopen, "REPORT_DIR", reports)
-    selected, decisions, env = preopen._select_auto_apply_candidates(
-        [],
-        ai_review={},
-        require_ai=True,
-        target_date="2026-09-09",
-        operator_locks=rows,
-        strategy_owner_component_economics=book(),
-    )
-    weak = next(
-        d["strategy_owner_component"] for d in decisions if d["family"] == mod.WEAK
-    )
-    assert weak["policies"]
-    manifest = {
-        "source_date": "2026-09-08",
-        "auto_apply_selected": selected,
-        "auto_apply_decisions": decisions,
-    }
-    preopen._write_runtime_env("2026-09-09", manifest, env)
-    published = json.loads(
-        (runtime / "threshold_runtime_env_2026-09-09.json").read_text()
-    )
-    exports = succession.validate_receipt(published, runtime, locks)
-    assert json.loads(exports[mod.ENV_KEY])["components"][0]["policies"]
-    carried, _ = publish(scope, "2026-09-10")
-    assert (
-        carried["strategy_owner_components"]["components"][0]["policies"]
-        == weak["policies"]
-    )
 
 
-def test_malformed_book_does_not_prevent_baseline_migration(scope):
-    _, _, rows = scope
-    _, decisions, _ = preopen._select_auto_apply_candidates(
-        [],
-        ai_review={},
-        require_ai=True,
-        target_date="2026-09-09",
-        operator_locks=rows,
-        strategy_owner_component_economics={"schema": "invalid"},
-    )
-    assert len(decisions) == 2
-    assert all(
-        d["economic_source_blocker"] == "owner_component_economic_source_invalid"
-        for d in decisions
-    )
-    assert all(not d["strategy_owner_component"]["policies"] for d in decisions)
-
-
-def test_pre_authorization_and_off_veto_do_not_migrate(scope):
-    runtime, locks, rows = scope
-    kept, decisions, _ = succession.prepare_components(
-        rows, {}, runtime, locks, "2026-09-08"
-    )
-    assert kept == rows and not decisions
-    rows[0]["env_overrides"][
-        mod.PREFIX + "SCALP_REAL_WEAK_PULLBACK_ENTRY_BLOCK_ENABLED"
-    ] = "false"
-    kept, decisions, _ = succession.prepare_components(
-        rows, {}, runtime, locks, "2026-09-09"
-    )
-    assert kept == [rows[0]]
 
 
 def test_component_source_and_policy_runtime_projections_are_journal_compatible():
@@ -541,15 +341,6 @@ def test_baseline_only_is_not_reported_as_future_automatic_first_use():
     )
 
 
-def test_safety_revert_retains_existing_veto_path(scope):
-    runtime, locks, rows = scope
-    remaining, decisions, _ = succession.prepare_components(
-        rows, {}, runtime, locks, "2026-09-09", safety_reverts={mod.WEAK}
-    )
-    assert remaining == [rows[0]]
-    assert {d["family"] for d in decisions} == {mod.PROFIT}
-
-
 def test_changed_scope_dates_do_not_create_frequency_uplift():
     source = book()
     for row in source["rows"].values():
@@ -561,49 +352,6 @@ def test_changed_scope_dates_do_not_create_frequency_uplift():
     ]
 
 
-def test_daily_rolling_merge_preserves_exact_component_books():
-    from src.engine import daily_threshold_cycle_report as daily
-
-    daily_books = [
-        mod.evidence_book(economic_report(day), day)
-        for day in ("2026-09-07", "2026-09-08")
-    ]
-    result = daily._aggregate_metric_dicts(
-        [
-            {"buy_score65_74": {"strategy_owner_component_economics": b}}
-            for b in daily_books
-        ]
-    )
-    merged = result["buy_score65_74"]["strategy_owner_component_economics"]
-    assert merged == mod.merge_books(daily_books)
-
-
-def test_runtime_summary_separates_managed_component_from_independent_selection(
-    tmp_path,
-):
-    from src.engine.runtime_approval_summary import _runtime_selection_by_family
-
-    path = tmp_path / "apply.json"
-    component = {
-        "family": mod.WEAK,
-        "owner": mod.OWNERS[mod.WEAK],
-        "policies": [],
-        "state": "baseline_migrated",
-    }
-    path.write_text(
-        json.dumps(
-            {
-                "target_date": "2026-09-09",
-                "auto_apply_decisions": [{"strategy_owner_component": component}],
-            }
-        )
-    )
-    result = _runtime_selection_by_family(
-        {"date": "2026-09-09", "runtime_apply": {"apply_manifest": str(path)}}
-    )
-    assert result[mod.WEAK]["managed_by_existing_owner"] is True
-    assert result[mod.WEAK]["selected"] is False
-    assert result[mod.WEAK]["pid_consumption_verified"] is False
 
 
 def test_nonfinite_diagnostic_context_does_not_raise_in_live_logger():

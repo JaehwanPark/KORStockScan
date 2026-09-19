@@ -295,11 +295,15 @@ def _incumbent(target_date):
     keys = ('SCALPING_ENTRY_TIMEOUT_SEC','SCALPING_BREAKOUT_ENTRY_TIMEOUT_SEC',
             'SCALPING_PULLBACK_ENTRY_TIMEOUT_SEC','SCALPING_RESERVE_ENTRY_TIMEOUT_SEC')
     values = dict(DEFAULT_THRESHOLDS)
-    for path in sorted((DATA_DIR/'threshold_cycle'/'runtime_env').glob('threshold_runtime_env_????-??-??.json'),reverse=True):
+    runtime_dir=DATA_DIR/'runtime'/'policy_bootstrap'
+    for path in sorted(runtime_dir.glob('runtime_policy_bootstrap_????-??-??.json'),reverse=True):
+        if 'verify' in path.stem:continue
         day=path.stem[-10:]
         if day > target_date or day < '2026-06-05' or path.is_symlink():continue
         payload=json.loads(path.read_text())
         if str(payload.get('date') or payload.get('target_date') or '') != day:continue
+        verify=runtime_dir/f'runtime_policy_bootstrap_verify_{day}.json'
+        if not verify.exists() or json.loads(verify.read_text()).get('status')!='pass':continue
         env=payload.get('env_overrides') or {}
         for profile,key in zip(values,keys):
             value=int(env.get('KORSTOCKSCAN_'+key,values[profile]))

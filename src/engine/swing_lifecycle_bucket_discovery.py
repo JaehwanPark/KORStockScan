@@ -7,7 +7,7 @@ import hashlib
 import json
 import os
 import re
-from collections import Counter, defaultdict
+from collections import defaultdict
 from dataclasses import replace
 from datetime import date, datetime
 from pathlib import Path
@@ -20,7 +20,6 @@ from src.engine.ai.postclose_review_config import (
 )
 from src.engine.automation.dual_candidate_review import (
     evidence_authority_contract,
-    REQUIRED_METRIC_CONTRACT_FIELDS,
     has_evidence_authority_violation,
     has_forbidden_runtime_leak,
     missing_metric_contract_fields,
@@ -456,7 +455,6 @@ def _ai_review_followup_workorder(
             "ai_audit_status": audit.get("status"),
             "root_cause_closure_status_hint": "root_cause_closed",
             "required_downstream": [
-                "threshold_cycle_ev_report",
                 "runtime_approval_summary",
                 "code_improvement_workorder",
                 "postclose_verifier",

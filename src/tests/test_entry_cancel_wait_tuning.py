@@ -16,52 +16,6 @@ def test_hold_preserves_thresholds_without_samples(tmp_path, monkeypatch):
     assert all(item["calibration_state"] == "hold_sample" for item in payload["profiles"].values())
 
 
-def test_real_producer_census_zero_and_dated_consumer(tmp_path,monkeypatch):
-    from types import SimpleNamespace
-    from src.utils import pipeline_event_logger as logger
-    from src.engine.scalping import entry_split_order_plan as entry
-    from src.engine import threshold_cycle_preopen_apply as preopen
-    from src.engine.scalping import entry_cancel_wait_runtime as runtime
-    from src.engine.automation.machine_entry_timing_tuning import _next_trading_date
-    from datetime import date,datetime
-    import hashlib
-    logger._flush_producer_summary_at_exit();monkeypatch.setattr(logger,'_PRODUCER_COMPACTOR',None)
-    for module in (logger,entry,mod):monkeypatch.setattr(module,'DATA_DIR',tmp_path)
-    monkeypatch.setattr(mod,'REPORT_DIR',tmp_path/'report'/'entry_cancel_wait_tuning')
-    monkeypatch.setattr(preopen,'ENTRY_CANCEL_WAIT_TUNING_DIR',mod.REPORT_DIR)
-    monkeypatch.setattr(logger,'TRADING_RULES',SimpleNamespace(PIPELINE_EVENT_JSONL_ENABLED=True,PIPELINE_EVENT_SCHEMA_VERSION=3,PIPELINE_EVENT_TEXT_INFO_LOG_ENABLED=False))
-    monkeypatch.setattr(logger,'log_info',lambda *a,**k:None)
-    emitted=logger.emit_pipeline_event('ENTRY_PIPELINE','TEST','005930','blocked_strength_momentum',fields={})
-    day=emitted['emitted_date'];logger.flush_pipeline_event_producer_summary(day)
-    monkeypatch.setattr(entry,'_execution_registry_snapshot',lambda:([],{'status':'verified','tail_hash':'0'*64}))
-    monkeypatch.setattr(entry,'_source_quality_summary',lambda d:{'tuning_input_allowed':True,'status':'pass'})
-    monkeypatch.setattr(mod,'_iter_events',lambda d:(_ for _ in ()).throw(AssertionError('raw scan forbidden')))
-    payload=mod.write_report(day)
-    assert payload['evidence_summary']['state']=='no_submitted_orders'
-    assert payload['submission_census']['zero_is_verified'] is True
-    target=_next_trading_date(date.fromisoformat(day)).isoformat()
-    monkeypatch.setattr(preopen,'_load_previous_runtime_env_selected_families',lambda d:([],{}))
-    decision,env=preopen._entry_cancel_wait_standalone_decision(day,target,[])
-    assert decision['entry_cancel_wait_policy_handoff']['available'] is True, decision['entry_cancel_wait_policy_handoff']
-    for key,value in env.items():monkeypatch.setenv(key,value)
-    stock={'effective_venue':'KRX','market_session_bucket':'KRX_REGULAR','broker_route':'KRX'}
-    at=datetime.fromisoformat(target+'T10:00:00+09:00').timestamp()
-    assert runtime.resolve_scoped_timeout(stock,'standard',60,enabled=True,now_ts=at)==60
-    assert stock['entry_cancel_wait_policy_receipt']['entry_cancel_wait_policy_applied'] is False
-    assert stock['entry_cancel_wait_policy_receipt']['entry_cancel_wait_policy_sha256']==env['KORSTOCKSCAN_ENTRY_CANCEL_WAIT_POLICY_SHA256']
-    # Self resealing does not turn the exact verified zero into a candidate.
-    payload['economic_tuning_input_allowed']=True
-    payload['scope_overrides']=[{'scope':['KRX','KRX_REGULAR','KRX','standard'],'timeout_sec':90,'incumbent_timeout_sec':60}]
-    payload['proof_sha256']=mod._digest({k:v for k,v in payload.items() if k not in ('generated_at','proof_sha256')})
-    assert mod.verify_report(payload)[0] is False
-    # Delayed publication selects the original evaluated source, not a date alias.
-    mod.report_paths(day)[0].unlink()
-    (mod.REPORT_DIR/f'entry_cancel_wait_policy_{day}.json').unlink()
-    mod.write_report('2026-09-17',publication_date=day)
-    decision,_=preopen._entry_cancel_wait_standalone_decision(day,target,[])
-    assert decision['entry_cancel_wait_policy_handoff']['source_date']=='2026-09-17'
-    assert decision['entry_cancel_wait_policy_handoff']['available'] is True
-    logger._flush_producer_summary_at_exit();monkeypatch.setattr(logger,'_PRODUCER_COMPACTOR',None)
 
 
 def test_registry_only_attempt_cannot_be_verified_zero():
@@ -81,13 +35,13 @@ def test_prior_custody_cannot_supply_a_zero_profit_day():
 
 def test_incumbent_uses_runtime_manifest_not_verifier_receipt(tmp_path,monkeypatch):
     monkeypatch.setattr(mod,'DATA_DIR',tmp_path)
-    directory=tmp_path/'threshold_cycle/runtime_env';directory.mkdir(parents=True)
-    (directory/'threshold_runtime_env_2026-09-17.json').write_text(json.dumps(dict(target_date='2026-09-17',
+    directory=tmp_path/'runtime/policy_bootstrap';directory.mkdir(parents=True)
+    (directory/'runtime_policy_bootstrap_2026-09-17.json').write_text(json.dumps(dict(target_date='2026-09-17',
         env_overrides={'KORSTOCKSCAN_SCALPING_ENTRY_TIMEOUT_SEC':'90'})))
-    (directory/'threshold_runtime_env_verify_2026-09-17.json').write_text(json.dumps(dict(target_date='2026-09-17',status='pass')))
+    (directory/'runtime_policy_bootstrap_verify_2026-09-17.json').write_text(json.dumps(dict(target_date='2026-09-17',status='pass')))
     values,receipt=mod._incumbent('2026-09-17')
     assert values['standard']==90
-    assert Path(receipt['path']).name=='threshold_runtime_env_2026-09-17.json'
+    assert Path(receipt['path']).name=='runtime_policy_bootstrap_2026-09-17.json'
 
 
 def test_actual_cancel_state_model_requires_independent_clock_holdout():

@@ -16,13 +16,82 @@ from src.engine.ai_response_contracts import (
     build_openai_response_text_format,
 )
 from src.engine.bedrock_nova_provider import load_bedrock_api_keys_from_config
-from src.engine.daily_threshold_cycle_report import (
-    _extract_openai_response_text,
-    _load_threshold_ai_gemini_keys,
-    _load_threshold_ai_openai_keys,
-)
+from src.utils.constants import CONFIG_PATH, DEV_PATH, TRADING_RULES
 
 ContractValidator = Callable[[str], tuple[bool, str] | bool]
+
+
+def _key_sort_key(name: str, prefix: str) -> tuple[int, str]:
+    suffix = name.replace(prefix, "", 1).lstrip("_")
+    if not suffix:
+        return 1, name
+    try:
+        return int(suffix), name
+    except ValueError:
+        return 999, name
+
+
+def _load_provider_keys(prefix: str) -> list[tuple[str, str]]:
+    target_path = CONFIG_PATH if CONFIG_PATH.exists() else DEV_PATH
+    try:
+        payload = json.loads(target_path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    if not isinstance(payload, dict):
+        return []
+    return [
+        (str(name), str(value))
+        for name, value in sorted(
+            payload.items(), key=lambda item: _key_sort_key(str(item[0]), prefix)
+        )
+        if str(name).startswith(prefix) and value not in (None, "", "-")
+    ]
+
+
+def _load_threshold_ai_gemini_keys() -> list[tuple[str, str]]:
+    return _load_provider_keys("GEMINI_API_KEY")
+
+
+def _load_threshold_ai_openai_keys() -> list[tuple[str, str]]:
+    return _load_provider_keys("OPENAI_API_KEY")
+
+
+def _threshold_ai_openai_model_sequence() -> list[str]:
+    primary = str(
+        getattr(TRADING_RULES, "GPT_THRESHOLD_CORRECTION_MODEL", "") or "gpt-5.5"
+    ).strip()
+    fallback = getattr(
+        TRADING_RULES,
+        "GPT_THRESHOLD_CORRECTION_FALLBACK_MODELS",
+        ("gpt-5.4", "gpt-5.4-mini"),
+    )
+    fallback_models = (
+        [item.strip() for item in fallback.split(",") if item.strip()]
+        if isinstance(fallback, str)
+        else [str(item).strip() for item in (fallback or ()) if str(item).strip()]
+    )
+    result: list[str] = []
+    for model in [primary, *fallback_models]:
+        if model and model not in result:
+            result.append(model)
+    return result or ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini"]
+
+
+def _extract_openai_response_text(response: Any) -> str:
+    raw_text = str(getattr(response, "output_text", "") or "").strip()
+    if raw_text:
+        return raw_text
+    fragments: list[str] = []
+    for item in list(getattr(response, "output", []) or []):
+        content_items = item.get("content", []) if isinstance(item, dict) else getattr(item, "content", [])
+        for content in list(content_items or []):
+            if isinstance(content, dict):
+                value = content.get("text") or content.get("value")
+            else:
+                value = getattr(content, "text", None) or getattr(content, "value", None)
+            if value:
+                fragments.append(str(value))
+    return "\n".join(value.strip() for value in fragments if value.strip()).strip()
 
 
 def _prompt_text(context: dict[str, Any], *, ensure_ascii: bool) -> str:

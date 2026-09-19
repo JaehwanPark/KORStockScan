@@ -1,5 +1,4 @@
 import json
-from types import SimpleNamespace
 
 from src.engine import lifecycle_bucket_discovery as mod
 from src.engine import lifecycle_decision_matrix as ldm_mod
@@ -2762,53 +2761,6 @@ def test_submit_bucket_rows_emit_ev_and_diagnostic_fields():
     assert "diagnostic_win_rate" in report["buckets"][0]
 
 
-def test_lifecycle_bucket_discovery_openai_review_uses_tier2_schema_and_english_prompt(
-    monkeypatch,
-):
-    captured = {}
-    monkeypatch.setenv(
-        "KORSTOCKSCAN_LIFECYCLE_BUCKET_DISCOVERY_SOURCE_ONLY_AI_PRIMARY_PROVIDER",
-        "openai",
-    )
-
-    class _FakeResponses:
-        def create(self, **kwargs):
-            captured.update(kwargs)
-            return SimpleNamespace(
-                output_text=json.dumps(_ai_keep_response()), usage=SimpleNamespace()
-            )
-
-    class _FakeOpenAI:
-        def __init__(self, api_key, timeout=None):
-            captured["client_timeout"] = timeout
-            self.api_key = api_key
-            self.timeout = timeout
-            self.responses = _FakeResponses()
-
-    monkeypatch.setattr(
-        "src.engine.daily_threshold_cycle_report._load_threshold_ai_openai_keys",
-        lambda: [("OPENAI_API_KEY", "key")],
-    )
-    monkeypatch.setattr("openai.OpenAI", _FakeOpenAI)
-
-    raw, status = mod._call_openai_ai_review(
-        {"surfaced_candidates": [{"label": "수급"}]},
-        shard_id="sim_policy_review",
-    )
-
-    assert json.loads(raw)["schema_version"] == 1
-    assert status["model"] == mod.AI_REVIEW_SOURCE_ONLY_MODEL
-    assert status["reasoning_effort"] == mod.AI_REVIEW_SOURCE_ONLY_REASONING_EFFORT
-    assert captured["model"] == mod.AI_REVIEW_SOURCE_ONLY_MODEL
-    assert captured["reasoning"]["effort"] == mod.AI_REVIEW_SOURCE_ONLY_REASONING_EFFORT
-    assert captured["client_timeout"] == mod.AI_REVIEW_TIMEOUT_SEC
-    assert captured["timeout"] == mod.AI_REVIEW_TIMEOUT_SEC
-    assert captured["text"]["format"]["name"] == mod.AI_REVIEW_SCHEMA_NAME
-    assert captured["text"]["format"]["strict"] is True
-    assert "AI Tier2" in captured["instructions"]
-    assert "\\uc218\\uae09" in captured["input"]
-    assert not any("\uac00" <= char <= "\ud7a3" for char in captured["instructions"])
-    assert not any("\uac00" <= char <= "\ud7a3" for char in captured["input"])
 
 
 def test_lifecycle_bucket_discovery_ai_context_is_bounded():

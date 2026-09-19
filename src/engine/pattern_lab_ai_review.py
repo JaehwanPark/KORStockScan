@@ -19,7 +19,9 @@ from src.engine.ai.postclose_review_config import (
     parsed_review_followup_reasons,
     resolve_postclose_ai_review_config,
 )
-from src.engine.daily_threshold_cycle_report import REPORT_DIR
+from src.utils.constants import DATA_DIR
+
+REPORT_DIR = DATA_DIR / "report"
 from src.engine.lifecycle.retirement import (
     CLAUDE_LAB_RETIRED_REPORTS,
     current_report_view,

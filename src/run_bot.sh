@@ -58,208 +58,11 @@ wait_for_threshold_runtime_env() {
     return 0
 }
 
-korstockscan_env_true() {
-    case "${1,,}" in
-        1|true|yes|on)
-            return 0
-            ;;
-        *)
-            return 1
-            ;;
-    esac
-}
-
-DATED_RUNTIME_AUTO_RENEW_SPECS=(
-    "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED:KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE"
-    "KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ENABLED:KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ACTIVE_DATE"
-    "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_ENABLED:KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_ACTIVE_DATE"
-    "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_EXTENDED_SPREAD_ENABLED:KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_EXTENDED_SPREAD_ACTIVE_DATE"
-    "KORSTOCKSCAN_LATENCY_TRUE_OFI_NXT_PROBABILITY_BAND_ENABLED:KORSTOCKSCAN_LATENCY_TRUE_OFI_NXT_PROBABILITY_BAND_ACTIVE_DATE"
-    "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ENABLED:KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ACTIVE_DATE"
-    "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_REST_FALLBACK_ENABLED:KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_REST_FALLBACK_ACTIVE_DATE"
-    "KORSTOCKSCAN_RISING_MISSED_NXT_PRICE_JUMP_RECOVERY_ENABLED:KORSTOCKSCAN_RISING_MISSED_NXT_PRICE_JUMP_RECOVERY_ACTIVE_DATE"
-    "KORSTOCKSCAN_NXT_RISING_MISSED_TP1_PARTIAL_RUNNER_ENABLED:KORSTOCKSCAN_NXT_RISING_MISSED_TP1_PARTIAL_RUNNER_ACTIVE_DATE"
-    "KORSTOCKSCAN_NXT_RISING_MISSED_PARTIAL_FILL_REPRICE_ENABLED:KORSTOCKSCAN_NXT_RISING_MISSED_PARTIAL_FILL_REPRICE_ACTIVE_DATE"
-    "KORSTOCKSCAN_NXT_RISING_MISSED_TP1_CONTEXT_REFRESH_ENABLED:KORSTOCKSCAN_NXT_RISING_MISSED_TP1_CONTEXT_REFRESH_ACTIVE_DATE"
-    "KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_ENABLED:KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_ACTIVE_DATE"
-    "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_ENABLED:KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_ACTIVE_DATE"
-    "KORSTOCKSCAN_SCALP_NXT_TRAILING_BID_GUARD_ENABLED:KORSTOCKSCAN_SCALP_NXT_TRAILING_BID_GUARD_ACTIVE_DATE"
-    "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_DYNAMIC_AGE_BAND_ENABLED:KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_DYNAMIC_AGE_BAND_ACTIVE_DATE"
-    "KORSTOCKSCAN_RISING_MISSED_POST_AI_HARD_NEGATIVE_BLOCK_ENABLED:KORSTOCKSCAN_RISING_MISSED_POST_AI_HARD_NEGATIVE_BLOCK_ACTIVE_DATE"
-    "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_ENABLED:KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_ACTIVE_DATE"
-    "KORSTOCKSCAN_RISING_MISSED_TP1_STRONG_MICRO_SOURCE_GAP_RELIEF_ENABLED:KORSTOCKSCAN_RISING_MISSED_TP1_STRONG_MICRO_SOURCE_GAP_RELIEF_ACTIVE_DATE"
-    "KORSTOCKSCAN_RISING_MISSED_TICK_ABSOLUTE_THROUGHPUT_RELIEF_ENABLED:KORSTOCKSCAN_RISING_MISSED_TICK_ABSOLUTE_THROUGHPUT_RELIEF_ACTIVE_DATE"
-    "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_LOW_REBOUND_RECOVERY_ENABLED:KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_LOW_REBOUND_RECOVERY_ACTIVE_DATE"
-    "KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ENABLED:KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ACTIVE_DATE"
-    "KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ENABLED:KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ACTIVE_DATE"
-)
-
-renew_enabled_dated_runtime_overrides() {
-    local target_date="$1"
-    local spec enabled_key active_date_key enabled_value active_date
-    local renewed_keys="" renewal_records=""
-
-    export KORSTOCKSCAN_DATED_RUNTIME_AUTO_RENEW_RENEWED_KEYS=""
-    export KORSTOCKSCAN_DATED_RUNTIME_AUTO_RENEW_RENEWAL_RECORDS=""
-
-    if ! korstockscan_env_true "${KORSTOCKSCAN_DATED_RUNTIME_AUTO_RENEW_ENABLED:-}"; then
-        return 0
-    fi
-
-    for spec in "${DATED_RUNTIME_AUTO_RENEW_SPECS[@]}"; do
-        IFS=: read -r enabled_key active_date_key <<< "$spec"
-        enabled_value="${!enabled_key:-}"
-        if ! korstockscan_env_true "$enabled_value"; then
-            continue
-        fi
-        active_date="${!active_date_key:-}"
-        if [ "$active_date" = "$target_date" ]; then
-            continue
-        fi
-        printf -v "$active_date_key" '%s' "$target_date"
-        export "$active_date_key"
-        if [ -n "$renewed_keys" ]; then
-            renewed_keys="${renewed_keys},"
-            renewal_records="${renewal_records},"
-        fi
-        renewed_keys="${renewed_keys}${enabled_key}"
-        renewal_records="${renewal_records}${enabled_key}:previous=${active_date:-not_persisted_by_contract}:effective=${target_date}:source=launcher_auto_renew"
-        echo "🔁 enabled dated runtime 자동연장: ${enabled_key} previous_active_date=${active_date:-not_persisted_by_contract} effective_active_date=${target_date} provenance=launcher_auto_renew"
-    done
-    export KORSTOCKSCAN_DATED_RUNTIME_AUTO_RENEW_RENEWED_KEYS="$renewed_keys"
-    export KORSTOCKSCAN_DATED_RUNTIME_AUTO_RENEW_RENEWAL_RECORDS="$renewal_records"
-}
-
-record_enabled_dated_runtime_provenance() {
-    local target_date="$1"
-    local spec enabled_key active_date_key enabled_value active_date
-    local active_keys="" active_count=0 active_date_provenance="" active_date_source
-
-    for spec in "${DATED_RUNTIME_AUTO_RENEW_SPECS[@]}"; do
-        IFS=: read -r enabled_key active_date_key <<< "$spec"
-        enabled_value="${!enabled_key:-}"
-        active_date="${!active_date_key:-}"
-        if ! korstockscan_env_true "$enabled_value" || [ "$active_date" != "$target_date" ]; then
-            continue
-        fi
-        if [ -n "$active_keys" ]; then
-            active_keys="${active_keys},"
-        fi
-        active_keys="${active_keys}${enabled_key}"
-        case ",${KORSTOCKSCAN_DATED_RUNTIME_AUTO_RENEW_RENEWED_KEYS:-}," in
-            *,"${enabled_key}",*)
-                active_date_source="launcher_auto_renew"
-                ;;
-            *)
-                active_date_source="preexisting_same_day_active_date"
-                ;;
-        esac
-        if [ -n "$active_date_provenance" ]; then
-            active_date_provenance="${active_date_provenance},"
-        fi
-        active_date_provenance="${active_date_provenance}${enabled_key}:${active_date}:source=${active_date_source}"
-        active_count=$((active_count + 1))
-    done
-    export KORSTOCKSCAN_DATED_RUNTIME_AUTO_RENEW_POLICY_VERSION="dated_runtime_auto_renew_v2"
-    export KORSTOCKSCAN_DATED_RUNTIME_AUTO_RENEW_TARGET_DATE="$target_date"
-    export KORSTOCKSCAN_DATED_RUNTIME_AUTO_RENEW_ACTIVE_KEYS="$active_keys"
-    export KORSTOCKSCAN_DATED_RUNTIME_AUTO_RENEW_ACTIVE_COUNT="$active_count"
-    export KORSTOCKSCAN_DATED_RUNTIME_AUTO_RENEW_ACTIVE_DATE_PROVENANCE="$active_date_provenance"
-    echo "📌 dated runtime 자동연장 provenance: target_date=${target_date} active_count=${active_count} active_dates=${active_date_provenance:-none}"
-}
-
-entry_split_daily_contract_allows_override() {
-    local enabled_key="$1"
-    local active_date="$2"
-    local baseline_policy_file="${KORSTOCKSCAN_ENTRY_SPLIT_DAILY_BASELINE_POLICY_FILE:-}"
-
-    if ! korstockscan_env_true "${KORSTOCKSCAN_ENTRY_SPLIT_DAILY_OPERATOR_CONTRACT_ENABLED:-}"; then
-        return 1
-    fi
-    if [ "${KORSTOCKSCAN_ENTRY_SPLIT_DAILY_BASELINE_ACTIVE_DATE:-}" != "DAILY" ]; then
-        return 1
-    fi
-    if [ -z "$baseline_policy_file" ] || [ ! -f "$baseline_policy_file" ]; then
-        return 1
-    fi
-    case "$enabled_key" in
-        KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED)
-            [ -z "$active_date" ] || [ "$active_date" = "DAILY" ]
-            ;;
-        KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED)
-            [ "$active_date" = "DAILY" ]
-            ;;
-        *)
-            return 1
-            ;;
-    esac
-}
-
-disable_expired_dated_runtime_overrides() {
-    local target_date="$1"
-    local spec enabled_key active_date_key dependency_enabled_key enabled_value active_date dependency_value
-    local dated_override_specs=(
-        "KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED:KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ACTIVE_DATE:"
-        "KORSTOCKSCAN_ENTRY_SPLIT_OPERATOR_FALLBACK_ENABLED:KORSTOCKSCAN_ENTRY_SPLIT_OPERATOR_FALLBACK_ACTIVE_DATE:"
-        "KORSTOCKSCAN_ENTRY_SPLIT_MARKET_FIRST_LEG_ENABLED:KORSTOCKSCAN_ENTRY_SPLIT_MARKET_FIRST_LEG_ACTIVE_DATE:"
-        "KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ENABLED:KORSTOCKSCAN_ENTRY_SPLIT_PROBE_FIRST_ACTIVE_DATE:KORSTOCKSCAN_ENTRY_SPLIT_ORDER_POLICY_ENABLED"
-        "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED:KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE:"
-        "KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ENABLED:KORSTOCKSCAN_RISING_MISSED_TP1_SOURCE_GAP_RELIEF_ACTIVE_DATE:KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED"
-        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_ENABLED:KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_ACTIVE_DATE:"
-        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_EXTENDED_SPREAD_ENABLED:KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_EXTENDED_SPREAD_ACTIVE_DATE:KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_ENABLED"
-        "KORSTOCKSCAN_LATENCY_TRUE_OFI_NXT_PROBABILITY_BAND_ENABLED:KORSTOCKSCAN_LATENCY_TRUE_OFI_NXT_PROBABILITY_BAND_ACTIVE_DATE:KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_ENABLED"
-        "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ENABLED:KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ACTIVE_DATE:"
-        "KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_REST_FALLBACK_ENABLED:KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_REST_FALLBACK_ACTIVE_DATE:KORSTOCKSCAN_RISING_MISSED_NXT_POST_BLOCK_SAMPLER_ENABLED"
-        "KORSTOCKSCAN_RISING_MISSED_NXT_PRICE_JUMP_RECOVERY_ENABLED:KORSTOCKSCAN_RISING_MISSED_NXT_PRICE_JUMP_RECOVERY_ACTIVE_DATE:KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED"
-        "KORSTOCKSCAN_NXT_RISING_MISSED_TP1_PARTIAL_RUNNER_ENABLED:KORSTOCKSCAN_NXT_RISING_MISSED_TP1_PARTIAL_RUNNER_ACTIVE_DATE:"
-        "KORSTOCKSCAN_NXT_RISING_MISSED_PARTIAL_FILL_REPRICE_ENABLED:KORSTOCKSCAN_NXT_RISING_MISSED_PARTIAL_FILL_REPRICE_ACTIVE_DATE:"
-        "KORSTOCKSCAN_NXT_RISING_MISSED_TP1_CONTEXT_REFRESH_ENABLED:KORSTOCKSCAN_NXT_RISING_MISSED_TP1_CONTEXT_REFRESH_ACTIVE_DATE:KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED"
-        "KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_ENABLED:KORSTOCKSCAN_SHALLOW_SOURCE_GAP_RECHECK_ACTIVE_DATE:"
-        "KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_ENABLED:KORSTOCKSCAN_SCALP_TRAILING_CONTINUATION_RECHECK_ACTIVE_DATE:"
-        "KORSTOCKSCAN_SCALP_NXT_TRAILING_BID_GUARD_ENABLED:KORSTOCKSCAN_SCALP_NXT_TRAILING_BID_GUARD_ACTIVE_DATE:"
-        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_DYNAMIC_AGE_BAND_ENABLED:KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_DYNAMIC_AGE_BAND_ACTIVE_DATE:"
-        "KORSTOCKSCAN_RISING_MISSED_POST_AI_HARD_NEGATIVE_BLOCK_ENABLED:KORSTOCKSCAN_RISING_MISSED_POST_AI_HARD_NEGATIVE_BLOCK_ACTIVE_DATE:"
-        "KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_ENABLED:KORSTOCKSCAN_SCALP_TRAILING_LOSS_CONVERSION_RECHECK_ACTIVE_DATE:"
-        "KORSTOCKSCAN_RISING_MISSED_TP1_STRONG_MICRO_SOURCE_GAP_RELIEF_ENABLED:KORSTOCKSCAN_RISING_MISSED_TP1_STRONG_MICRO_SOURCE_GAP_RELIEF_ACTIVE_DATE:"
-        "KORSTOCKSCAN_RISING_MISSED_TICK_ABSOLUTE_THROUGHPUT_RELIEF_ENABLED:KORSTOCKSCAN_RISING_MISSED_TICK_ABSOLUTE_THROUGHPUT_RELIEF_ACTIVE_DATE:"
-        "KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_LOW_REBOUND_RECOVERY_ENABLED:KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_LOW_REBOUND_RECOVERY_ACTIVE_DATE:KORSTOCKSCAN_LATENCY_TRUE_OFI_DIRECT_CANARY_ENABLED"
-        "KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ENABLED:KORSTOCKSCAN_RISING_MISSED_AI_ACTION_GUARD_ACTIVE_DATE:"
-        "KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ENABLED:KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ACTIVE_DATE:"
-        "KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ENABLED:KORSTOCKSCAN_SCALP_POST_PROBE_WINNER_RECOVERY_ACTIVE_DATE:"
-        "KORSTOCKSCAN_KRX_AFTERMARKET_SOR_POLICY_ENABLED:KORSTOCKSCAN_KRX_AFTERMARKET_SOR_POLICY_ACTIVE_DATE:"
-    )
-
-    for spec in "${dated_override_specs[@]}"; do
-        IFS=: read -r enabled_key active_date_key dependency_enabled_key <<< "$spec"
-        enabled_value="${!enabled_key:-}"
-        if ! korstockscan_env_true "$enabled_value"; then
-            continue
-        fi
-        active_date="${!active_date_key:-}"
-        if [ "$active_date" != "$target_date" ] && \
-            ! entry_split_daily_contract_allows_override "$enabled_key" "$active_date"; then
-            printf -v "$enabled_key" '%s' "false"
-            export "$enabled_key"
-            echo "⏳ dated operator runtime override 만료 처리: ${enabled_key} active_date=${active_date:-missing} target_date=${target_date}"
-            continue
-        fi
-        if [ -n "$dependency_enabled_key" ]; then
-            dependency_value="${!dependency_enabled_key:-}"
-            if ! korstockscan_env_true "$dependency_value" && \
-                ! entry_split_daily_contract_allows_override "$dependency_enabled_key" ""; then
-                printf -v "$enabled_key" '%s' "false"
-                export "$enabled_key"
-                echo "⏳ dated operator runtime override dependency 비활성 처리: ${enabled_key} dependency=${dependency_enabled_key}"
-            fi
-        fi
-    done
-}
-
 verify_threshold_runtime_env_handoff() {
     local target_date="$1"
     local verify_output
     if ! verify_output="$(
-        PYTHONPATH=.. ../.venv/bin/python -m src.engine.threshold_cycle_preopen_apply \
+        PYTHONPATH=.. ../.venv/bin/python -m src.engine.automation.runtime_policy_bootstrap \
             --verify --target-date "$target_date" 2>&1
     )"; then
         echo "❌ threshold runtime env handoff 검증 실패: target_date=$target_date"
@@ -280,20 +83,6 @@ apply_retired_runtime_policy_env() {
     fi
     eval "$retirement_commands"
     echo "📌 retired runtime namespace OFF 재적용 완료"
-}
-
-apply_verified_operator_policy_successions() {
-    local target_date="$1"
-    local policy_commands
-    if ! policy_commands="$(
-        PYTHONPATH=.. ../.venv/bin/python \
-            -m src.engine.automation.operator_policy_succession \
-            --target-date "$target_date"
-    )"; then
-        echo "❌ verified strategy policy succession failed: target_date=$target_date"
-        return 1
-    fi
-    eval "$policy_commands"
 }
 
 apply_authoritative_ai_context_promotion() {
@@ -471,7 +260,7 @@ while true; do
     export KORSTOCKSCAN_SWING_INTRADAY_PROBE_MAX_DAILY=30
     export KORSTOCKSCAN_SWING_INTRADAY_PROBE_MAX_PER_SYMBOL=1
 
-    THRESHOLD_RUNTIME_ENV="../data/threshold_cycle/runtime_env/threshold_runtime_env_$(TZ=Asia/Seoul date +%F).env"
+    THRESHOLD_RUNTIME_ENV="../data/runtime/policy_bootstrap/runtime_policy_bootstrap_$(TZ=Asia/Seoul date +%F).env"
     wait_for_threshold_runtime_env "$THRESHOLD_RUNTIME_ENV" || exit 1
     reset_runtime_policy_env_before_handoff
     if [ -f "$THRESHOLD_RUNTIME_ENV" ]; then
@@ -481,27 +270,7 @@ while true; do
         . "$THRESHOLD_RUNTIME_ENV"
         set +a
     fi
-    OPERATOR_RUNTIME_OVERRIDES="../data/threshold_cycle/runtime_env/operator_runtime_overrides.env"
-    if [ -f "$OPERATOR_RUNTIME_OVERRIDES" ]; then
-        echo "📌 operator runtime override 적용: $OPERATOR_RUNTIME_OVERRIDES"
-        set -a
-        # shellcheck source=/dev/null
-        . "$OPERATOR_RUNTIME_OVERRIDES"
-        set +a
-    fi
     RUNTIME_TARGET_DATE="$(TZ=Asia/Seoul date +%F)"
-    DATED_OPERATOR_RUNTIME_OVERRIDES="../data/threshold_cycle/runtime_env/operator_runtime_overrides_${RUNTIME_TARGET_DATE}.env"
-    if [ -f "$DATED_OPERATOR_RUNTIME_OVERRIDES" ]; then
-        echo "📌 dated operator runtime override 적용: $DATED_OPERATOR_RUNTIME_OVERRIDES"
-        set -a
-        # shellcheck source=/dev/null
-        . "$DATED_OPERATOR_RUNTIME_OVERRIDES"
-        set +a
-    fi
-    apply_verified_operator_policy_successions "$RUNTIME_TARGET_DATE" || exit 1
-    renew_enabled_dated_runtime_overrides "$RUNTIME_TARGET_DATE"
-    disable_expired_dated_runtime_overrides "$RUNTIME_TARGET_DATE"
-    record_enabled_dated_runtime_provenance "$RUNTIME_TARGET_DATE"
     apply_authoritative_ai_context_promotion "$RUNTIME_TARGET_DATE" || exit 1
     # Load custody identity after every general runtime/operator layer so none
     # can silently replace the account/registry bound by the apply receipt.

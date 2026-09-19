@@ -11,12 +11,9 @@ import pytest
 from src.engine.scalping import strategy_owner_replay as mod
 from src.engine.scalping import strategy_owner_components as owner
 from src.engine.lifecycle import avg_down_policy_replay as adapter
-from src.engine.automation import operator_policy_succession as succession
-from src.engine import threshold_cycle_preopen_apply as preopen
 from src.tests.test_strategy_owner_components import (
     profiles,
     economic_report,
-    scope as scope,
 )
 from src.tests.test_score_recovery_net_approval import sign
 
@@ -281,116 +278,6 @@ def test_replay_alone_or_small_daily_real_sample_cannot_start_canary():
     )
 
 
-def test_exact_book_preopen_export_canary_consumption_expiry_and_no_rearm(
-    scope, tmp_path, monkeypatch
-):
-    runtime, locks, lock_rows = scope
-    reports = tmp_path / "reports"
-    book = source_book(reports)
-    assert (
-        owner.verify_research(book, reports, "2026-09-14")["replays"] == book["replays"]
-    )
-    monkeypatch.setattr(preopen, "REPORT_DIR", reports)
-
-    def publish(day):
-        selected, decisions, env = preopen._select_auto_apply_candidates(
-            [],
-            ai_review={},
-            require_ai=True,
-            target_date=day,
-            operator_locks=lock_rows,
-            strategy_owner_component_economics=book,
-        )
-        preopen._write_runtime_env(
-            day,
-            {
-                "source_date": "2026-09-11",
-                "auto_apply_selected": selected,
-                "auto_apply_decisions": decisions,
-            },
-            env,
-        )
-        manifest = json.loads(
-            (runtime / f"threshold_runtime_env_{day}.json").read_text()
-        )
-        return manifest, succession.validate_receipt(manifest, runtime, locks)
-
-    manifest, exports = publish("2026-09-14")
-    profit = next(
-        r
-        for r in manifest["strategy_owner_components"]["components"]
-        if r["family"] == owner.PROFIT
-    )
-    assert (
-        profit["state"] == "first_use_bounded_canary"
-        and len(profit["trial_history"]) == 1
-    )
-    rules = SimpleNamespace(**seed()["policy_snapshot"]["rules"])
-    state = owner.runtime_state(
-        rules,
-        venue="KRX",
-        session="krx_regular",
-        environment=exports,
-        today="2026-09-14",
-    )
-    assert state["status"] == "first_use_bounded_canary" and state[
-        "applied_families"
-    ] == [owner.PROFIT]
-    assert (
-        state["profiles"][owner.PROFIT]["SCALP_LOW_PROFIT_STAGNATION_MIN_HOLD_SEC"]
-        == 1500
-    )
-    repeated, _ = publish("2026-09-14")
-    for before, after in zip(
-        manifest["strategy_owner_components"]["components"],
-        repeated["strategy_owner_components"]["components"],
-    ):
-        assert before["policies"] == after["policies"]
-        assert before["trial_history"] == after["trial_history"]
-    carried, _ = publish("2026-09-17")
-    assert any(
-        r["policies"] for r in carried["strategy_owner_components"]["components"]
-    )
-    expired, env = publish("2026-09-21")
-    assert not any(
-        r["policies"] for r in expired["strategy_owner_components"]["components"]
-    )
-    assert (
-        owner.runtime_state(
-            rules,
-            venue="KRX",
-            session="krx_regular",
-            environment=env,
-            today="2026-09-21",
-        )["status"]
-        == "baseline"
-    )
-    renewed, _ = publish("2026-09-22")
-    assert not any(
-        r["policies"] for r in renewed["strategy_owner_components"]["components"]
-    )
-
-
-def test_two_first_use_candidates_cannot_invalidate_each_others_context(scope):
-    runtime, locks, lock_rows = scope
-    _, decisions, _ = succession.prepare_components(
-        lock_rows,
-        {},
-        runtime,
-        locks,
-        "2026-09-14",
-        source_book(families=(owner.WEAK, owner.PROFIT)),
-    )
-    assert all(d["strategy_owner_component"]["policies"] for d in decisions)
-    succession.reconcile_component_changes(decisions)
-    rows = {d["family"]: d["strategy_owner_component"] for d in decisions}
-    assert rows[owner.WEAK]["policies"]
-    assert (
-        not rows[owner.PROFIT]["policies"] and not rows[owner.PROFIT]["trial_history"]
-    )
-    assert rows[owner.PROFIT]["state"] == "other_component_change_deferred"
-
-
 def test_changed_replay_generation_cannot_be_reused_by_preopen(tmp_path):
     book = source_book(tmp_path)
     value = mod.load(tmp_path, "2026-09-08")
@@ -570,68 +457,8 @@ def test_current_score_cohort_is_required_for_canary_and_real_research():
     )
 
 
-def test_real_no_edge_terminates_canary_before_expiry(scope):
-    runtime, locks, lock_rows = scope
-    book = source_book()
-    _, decisions, env = succession.prepare_components(
-        lock_rows, {}, runtime, locks, "2026-09-14", book
-    )
-    preopen._write_runtime_env(
-        "2026-09-14",
-        {
-            "source_date": "2026-09-11",
-            "auto_apply_selected": [],
-            "auto_apply_decisions": decisions,
-        },
-        env,
-    )
-    previous = json.loads(
-        (runtime / "threshold_runtime_env_2026-09-14.json").read_text()
-    )
-    for day in ("2026-09-14", "2026-09-15"):
-        book["sources"][day] = "a" * 64
-        for i in range(12):
-            actual = deepcopy(next(iter(book["rows"].values())))
-            actual["date"] = day
-            actual["profiles"][owner.PROFIT] = mod.proposal(
-                owner.PROFIT, profiles()[owner.PROFIT]
-            )
-            actual["net"] = -10
-            book["rows"][day + str(i)] = actual
-    _, decisions, _ = succession.prepare_components(
-        lock_rows, previous, runtime, locks, "2026-09-16", book
-    )
-    profit = next(
-        d["strategy_owner_component"] for d in decisions if d["family"] == owner.PROFIT
-    )
-    assert not profit["policies"] and not profit["previous_policies"]
-    assert len(profit["trial_history"]) == 1
-    assert profit["state"] == "first_use_canary_terminal_baseline_retained"
 
 
-def test_lost_pinned_replay_source_cannot_carry_first_use_canary(scope):
-    runtime, locks, lock_rows = scope
-    book = source_book()
-    _, decisions, env = succession.prepare_components(
-        lock_rows, {}, runtime, locks, "2026-09-14", book
-    )
-    preopen._write_runtime_env(
-        "2026-09-14",
-        {
-            "source_date": "2026-09-11",
-            "auto_apply_selected": [],
-            "auto_apply_decisions": decisions,
-        },
-        env,
-    )
-    previous = json.loads(
-        (runtime / "threshold_runtime_env_2026-09-14.json").read_text()
-    )
-    book["replay_sources"].clear()
-    _, decisions, _ = succession.prepare_components(
-        lock_rows, previous, runtime, locks, "2026-09-15", book
-    )
-    assert not any(d["strategy_owner_component"]["policies"] for d in decisions)
 
 
 def test_crash_reservation_precedes_executor_and_prevents_duplicate_request():

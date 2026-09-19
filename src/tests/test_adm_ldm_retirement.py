@@ -235,24 +235,6 @@ def test_live_adapters_are_noops_even_with_advisory_true(monkeypatch):
     )
 
 
-@pytest.mark.parametrize(
-    "selector",
-    [
-        "_select_runtime_apply_bridge_approval",
-        "_select_lifecycle_bucket_sim_auto_approval",
-    ],
-)
-def test_preopen_retired_selectors_ignore_approved_archive(selector):
-    from src.engine import threshold_cycle_preopen_apply as preopen
-    import inspect
-
-    fn = getattr(preopen, selector)
-    args = {
-        name: {}
-        for name, param in inspect.signature(fn).parameters.items()
-        if param.default is inspect.Parameter.empty
-    }
-    assert fn(**args) == ([], [], {})
 
 
 def test_source_adapter_uses_raw_normalization_without_matrix_or_sim_outcomes(
@@ -334,21 +316,6 @@ def test_scale_in_counterfactual_report_is_archive_but_avg_down_math_survives():
     assert economics["runtime_authority_ready"] is False
 
 
-def test_current_summaries_expose_institutional_retirement_without_artifact_read():
-    from src.engine import runtime_approval_summary as runtime_summary
-    from src.engine import threshold_cycle_ev_report as ev_summary
-
-    ev, path, warnings = ev_summary._institutional_flow_context_summary("2026-09-04")
-    runtime = runtime_summary._institutional_flow_context_summary(
-        {"institutional_flow_context": {"available": True, "runtime_effect": True}}
-    )
-
-    assert ev["status"] == "retired"
-    assert ev["replacement_source"] == ("exact_ai_context_investor_and_program_flow")
-    assert path is None
-    assert warnings == []
-    assert runtime["status"] == "retired"
-    assert runtime["runtime_effect"] is False
 
 
 @pytest.mark.parametrize("invalid", [None, True, "invalid", {}])
@@ -379,26 +346,6 @@ def test_greenfield_env_cannot_reactivate_retired_gate(monkeypatch):
     )  # No additional veto; existing order guards still own submit.
 
 
-def test_verifier_reports_retired_enabled_artifact_without_promoting_it(
-    tmp_path, monkeypatch
-):
-    import json
-    from src.engine import threshold_cycle_preopen_apply as preopen
-
-    monkeypatch.setattr(preopen, "RUNTIME_ENV_DIR", tmp_path)
-    path = preopen.runtime_env_manifest_path("2026-09-07")
-    path.write_text(
-        json.dumps(
-            {
-                "target_date": "2026-09-07",
-                "selected_families": [],
-                "env_overrides": {"KORSTOCKSCAN_LIFECYCLE_AI_CONTEXT_ENABLED": "true"},
-            }
-        )
-    )
-    result = preopen.verify_runtime_env_handoff("2026-09-07")
-    assert result["passed"] is False
-    assert any(item["family"] == "adm_ldm_retired" for item in result["findings"])
 
 
 def test_shared_rebound_retirement_removes_only_independent_scale_in_authority():
@@ -517,15 +464,6 @@ def test_main_shared_lab_clis_are_retired_before_any_provider_or_file_read(monke
     assert propagation.build_pattern_lab_propagation_audit("2026-09-17", include_swing=False)["status"] == "retired"
 
 
-def test_main_legacy_lab_flags_and_warnings_cannot_restore_recovery():
-    from src.engine.automation.postclose_done_controller import _recovery_actions
-    verification = {"execution_profile": {"flags": {"pattern_labs": True, "pattern_lab_ai_review": True,
-        "pattern_lab_currentness_audit": True, "pattern_lab_propagation_audit": True}},
-        "stale_downstream_links": ["pattern_lab_ai_review_source_generation_stale"]}
-    actions = _recovery_actions("2026-09-17", verification, allow_wrapper_rerun=False)
-    assert not any("src.engine.pattern_lab_" in " ".join(a.command or []) for a in actions)
-
-
 def test_old_auto_checklist_lab_source_is_not_carried_forward():
     from src.engine.build_next_stage2_checklist import _merge_preserved_auto_tasks, AUTO_START, AUTO_END
     previous = AUTO_START + "\n## 장후\n- [ ] `[OldLabWork]` old lab\n  - Source: data/report/scalping_pattern_lab_automation/old.json\n- [ ] `[ActiveOwner]` independent source\n  - Source: data/report/entry_split_order_plan/current.json\n" + AUTO_END
@@ -534,28 +472,6 @@ def test_old_auto_checklist_lab_source_is_not_carried_forward():
     assert "ActiveOwner" in result
 
 
-def test_main_reports_persist_the_same_retired_source_free_view(tmp_path, monkeypatch):
-    import importlib
-    import json
-    from pathlib import Path
-    for name, builder, output in (
-        ("threshold_cycle_ev_report", "build_threshold_cycle_ev_report", "ev_report_paths"),
-        ("runtime_approval_summary", "build_runtime_approval_summary", "summary_paths"),
-        ("build_code_improvement_workorder", "build_code_improvement_workorder", "code_improvement_workorder_paths"),
-    ):
-        module = importlib.import_module("src.engine." + name)
-        for key, value in list(vars(module).items()):
-            if isinstance(value, Path) and str(value).startswith("/home/ubuntu/KORStockScan"):
-                monkeypatch.setattr(module, key, tmp_path / name / key)
-        result = getattr(module, builder)("2026-05-15", include_swing=False)
-        path = getattr(module, output)("2026-05-15")[0]
-        stored = json.loads(path.read_text())
-        assert stored == result
-        assert all(key not in stored for key in (
-            "pattern_lab_automation", "pattern_lab_currentness_audit", "pattern_lab_ai_review", "pattern_lab_propagation_audit"
-        ))
-        assert all("pattern_lab_" not in key for key in stored.get("summary", {}))
-        assert all("scalping_pattern_lab_automation" not in str(value) for value in stored.get("sources", {}).values())
 
 
 def test_retired_entry_scale_in_is_blocked_before_common_buy_guards(monkeypatch):

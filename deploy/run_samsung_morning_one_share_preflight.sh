@@ -96,7 +96,7 @@ while true; do
     verify_output=""
     if verify_output="$(
       PYTHONPATH="$PROJECT_DIR" "$PYTHON_BIN" -m \
-        src.engine.threshold_cycle_preopen_apply \
+        src.engine.automation.runtime_policy_bootstrap \
         --verify \
         --target-date "$TARGET_DATE" \
         --pid "$bot_pid" 2>&1
@@ -108,7 +108,7 @@ while true; do
       verify_commit_output=""
       if verify_commit_output="$(
         PYTHONPATH="$PROJECT_DIR" "$PYTHON_BIN" -m \
-          src.engine.threshold_cycle_preopen_apply \
+          src.engine.automation.runtime_policy_bootstrap \
           --verify \
           --target-date "$TARGET_DATE" \
           --pid "$bot_pid" \

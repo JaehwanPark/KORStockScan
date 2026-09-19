@@ -13,7 +13,7 @@ from pathlib import Path
 from src.engine.risk.manual_control_exclusion import (
     independent_machine_ownership_source,
 )
-from src.engine.threshold_cycle_preopen_apply import verify_runtime_env_handoff
+from src.engine.automation.runtime_policy_bootstrap import verify_bootstrap as verify_runtime_env_handoff
 from src.trading.order.episode_quantity import EPISODE_TOTAL_QUANTITY
 from src.trading.order.samsung_entry_policy import (
     effective_target_ticks,

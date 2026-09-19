@@ -22,8 +22,7 @@ from src.engine.ai.postclose_review_config import (
 from src.engine.ai.postclose_structured_review_provider import (
     call_postclose_structured_review,
 )
-from src.engine.daily_threshold_cycle_report import REPORT_DIR as BASE_REPORT_DIR
-from src.engine.daily_threshold_cycle_report import (
+from src.engine.ai.postclose_structured_review_provider import (
     _extract_openai_response_text,
     _load_threshold_ai_openai_keys,
 )
@@ -34,7 +33,8 @@ from src.engine.runtime_apply_bridge import (
 from src.utils.constants import DATA_DIR
 
 REPORT_SCHEMA_VERSION = 1
-REPORT_DIR = DATA_DIR / "report" / "runtime_apply_gap_audit"
+BASE_REPORT_DIR = DATA_DIR / "report"
+REPORT_DIR = BASE_REPORT_DIR / "runtime_apply_gap_audit"
 APPLY_PLAN_DIR = DATA_DIR / "threshold_cycle" / "apply_plans"
 POSITION_SIZING_APPROVAL_DIR = DATA_DIR / "threshold_cycle" / "approvals"
 AI_REVIEW_SCHEMA_NAME = "runtime_apply_gap_ai_review_v1"
@@ -1268,7 +1268,7 @@ def _dedicated_policy_ledger(
                 "sample": sample,
                 "primary_ev": primary_ev,
                 "source_quality_gate": source_quality_gate,
-                "recommended_route": "threshold_cycle_preopen_apply",
+                "recommended_route": "family_owned_preopen_publisher",
                 "actual_route": "direct_preopen_apply",
                 "bridge_state": "not_required_direct_preopen_owner",
                 "preopen_apply_state": (

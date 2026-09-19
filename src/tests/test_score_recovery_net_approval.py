@@ -7,8 +7,6 @@ from datetime import date, timedelta
 import pytest
 
 from src.engine.scalping import score_recovery_economics as econ
-from src.engine import daily_threshold_cycle_report as daily
-from src.engine import threshold_cycle_preopen_apply as preopen
 
 PROFILE = dict(
     min_score=69,
@@ -109,21 +107,6 @@ def candidate(metrics=None):
     )
 
 
-def test_small_real_net_without_ten_minute_or_drought_qualifies():
-    metrics = real_metrics()
-    metrics.update(
-        submitted_to_budget_unique_pct=80,
-        score60_74_avg_close_10m_pct=-1,
-        score60_74_avg_mfe_10m_pct=0.1,
-    )
-    decision = econ.evaluate(metrics)
-    assert decision["ready"]
-    assert decision["cohorts"][0]["mean_net_pct"] == pytest.approx(0.06)
-    assert decision["cohorts"][0]["net_krw"] == 600
-    assert daily._score65_74_entry_unlock_probe_ready(
-        metrics, sample_count=20, sample_floor=20
-    )
-    assert preopen._score65_74_entry_unlock_candidate(candidate(metrics))
 
 
 @pytest.mark.parametrize("net", [0, -1])
@@ -194,16 +177,6 @@ def test_duplicate_retry_and_conflicting_generation_do_not_inflate_sample():
     assert not econ.merge_books([book, other])["observations"]
 
 
-def test_cf_only_and_policy_changes_cannot_be_promoted():
-    metrics = dict(
-        score60_74_cost_adjusted_sample_count=1000,
-        score60_74_avg_cost_adjusted_expected_ev_pct=10,
-        score60_74_cost_contract_complete=True,
-    )
-    assert not preopen._score65_74_entry_unlock_candidate(candidate(metrics))
-    c = candidate()
-    c["recommended_values"]["min_score"] = 60
-    assert not preopen._score65_74_entry_unlock_candidate(c)
 
 
 def test_profile_venue_dates_and_runtime_scope_are_separate():
@@ -232,15 +205,6 @@ def test_profile_venue_dates_and_runtime_scope_are_separate():
     )
 
 
-def test_daily_book_merge_preserves_full_census_and_current_profile():
-    metrics = real_metrics()
-    merged = daily._aggregate_metric_dicts([metrics, metrics])
-    merged["score_recovery_current_profile"] = PROFILE
-    assert len(merged["score_recovery_real_economics"]["observations"]) == 20
-    assert econ.evaluate(merged)["ready"]
-    assert (
-        daily._source_sample_count_for_family("score65_74_recovery_probe", merged) == 20
-    )
 
 
 def test_real_producer_preserves_profile_and_reconciles_actual_price_pnl(tmp_path):
@@ -381,25 +345,6 @@ def frequent_small_net_metrics(*, capital_multiplier=0.5, holdout_net=70):
     }
 
 
-def test_smaller_net_more_frequently_can_improve_same_capital_time():
-    metrics = frequent_small_net_metrics()
-    d = econ.evaluate_policy(metrics)
-    assert d["ready"]
-    assert d["profile"]["min_buy_pressure"] == 60
-    assert d["policy_search"]["status"] == "selected_observed_profile"
-    comparison = next(
-        e for e in d["policy_search"]["candidate_ledger"] if e["comparisons"]
-    )["comparisons"][0]
-    assert comparison["baseline"]["net_per_source_day"] == 500
-    assert comparison["candidate"]["net_per_source_day"] == 700
-    assert comparison["candidate"]["net_ev_pct"] < comparison["baseline"]["net_ev_pct"]
-    assert (
-        comparison["candidate"]["capital_time_krw_hours"]
-        == comparison["baseline"]["capital_time_krw_hours"]
-    )
-    c = candidate(metrics)
-    c["recommended_values"].update(d["profile"])
-    assert preopen._score65_74_entry_unlock_candidate(c, target_date="2026-09-08")
 
 
 def test_more_profit_from_disproportionate_capital_is_not_selected():
@@ -438,21 +383,6 @@ def test_frequency_cannot_hide_negative_holdout_net():
     assert d["policy_search"]["status"] == "holdout_not_improved"
 
 
-def test_observed_bounded_profile_reselection_and_preopen_recompute():
-    metrics = real_comparison_metrics()
-    selected = econ.evaluate_policy(metrics)
-    assert selected["ready"]
-    assert selected["profile"]["min_tick_accel"] == 1.3
-    assert selected["policy_search"]["selected_profile"] == selected["profile"]
-    c = candidate(metrics)
-    # Old parameters must not inherit the alternative's approval version.
-    assert not preopen._score65_74_entry_unlock_candidate(c)
-    c["recommended_values"].update(selected["profile"])
-    assert preopen._score65_74_entry_unlock_candidate(c, target_date="2026-09-08")
-    version = econ.approval_version(metrics)
-    assert econ.digest(selected["profile"]) in version
-    c["recommended_values"]["min_tick_accel"] = 1.4
-    assert not preopen._score65_74_entry_unlock_candidate(c)
 
 
 def test_failed_holdout_keeps_baseline_without_searching_a_runner_up():
@@ -531,73 +461,8 @@ def test_legacy_raw_micro_zero_is_normalized_before_profile_comparison():
     assert econ._bounded_profile_change(current, {**current, "min_tick_accel": 1.3})
 
 
-def test_daily_refresh_emits_changed_profile_and_preopen_consumes_it(
-    tmp_path, monkeypatch
-):
-    metrics = real_comparison_metrics()
-    c = candidate(metrics)
-    c.update(
-        stage="entry",
-        priority=10,
-        allowed_runtime_apply=True,
-        calibration_state="hold_sample",
-        sample_floor_status="hold_sample",
-        target_env_keys=daily.CALIBRATION_FAMILY_METADATA[c["family"]][
-            "target_env_keys"
-        ],
-    )
-    daily._refresh_candidate_from_primary_window(
-        c,
-        primary_snapshot={},
-        primary_source_metrics=metrics,
-        primary_sample_count=20,
-        primary_ready=True,
-        primary_window="rolling_20d",
-    )
-    assert c["recommended_values"]["min_tick_accel"] == 1.3
-    assert c["current_values"]["min_tick_accel"] == 1.2
-    monkeypatch.setattr(preopen, "RUNTIME_ENV_DIR", tmp_path)
-    _, decisions, env = preopen._select_auto_apply_candidates(
-        [c], ai_review={}, require_ai=False, target_date="2026-09-08", operator_locks=[]
-    )
-    assert decisions[0]["selected"], decisions
-    assert env["KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MIN_TICK_ACCEL"] == "1.3"
 
 
-def test_changed_profile_ai_receipt_is_bound_and_no_old_instrumentation_exception():
-    metrics = real_comparison_metrics()
-    c = candidate(metrics)
-    c["recommended_values"].update(econ.evaluate_policy(metrics)["profile"])
-    c.update(
-        allowed_runtime_apply=True,
-        calibration_state="adjust_up",
-        sample_floor_status="ready",
-        runtime_apply_eligible_now=True,
-    )
-    report = daily.build_threshold_cycle_ai_correction_report(
-        {"date": "2026-09-07", "run_phase": "postclose", "calibration_candidates": [c]}
-    )
-    receipt = report["items"][0]
-    assert receipt["reviewed_recommended_profile"]["min_tick_accel"] == 1.3
-    assert receipt["reviewed_policy_search_sha256"] == econ.policy_search_digest(
-        metrics
-    )
-    # Synthetic parsed receipt only: this test calls no provider.
-    receipt.update(
-        guard_accepted=True,
-        ai_anomaly_route="threshold_candidate",
-        route_action="allow",
-    )
-    bundle = {"items_by_family": {c["family"]: receipt}}
-    assert preopen._ai_guard_allows_candidate(c, bundle, require_ai=True)[0]
-    receipt["reviewed_policy_search_sha256"] = "stale"
-    assert not preopen._ai_guard_allows_candidate(c, bundle, require_ai=True)[0]
-    receipt["reviewed_policy_search_sha256"] = econ.policy_search_digest(metrics)
-    receipt.update(
-        route_action="exclude_from_threshold_candidate_review",
-        guard_decision={"anomaly_route": "instrumentation_gap"},
-    )
-    assert not preopen._ai_guard_allows_candidate(c, bundle, require_ai=True)[0]
 
 
 @pytest.mark.parametrize("value", [None, [], {"score_recovery_real_economics": []}])
@@ -652,143 +517,16 @@ def test_new_pipeline_stage_preserves_scalar_profile_and_old_stage_is_not_remapp
     assert ("ENTRY_PIPELINE", "score65_74_recovery_probe") not in PIPELINE_STAGE_MAP
 
 
-def test_preopen_emits_complete_existing_profile_and_scoped_version(
-    tmp_path, monkeypatch
-):
-    monkeypatch.setattr(preopen, "RUNTIME_ENV_DIR", tmp_path)
-    c = candidate()
-    c.update(
-        stage="entry",
-        priority=10,
-        allowed_runtime_apply=True,
-        calibration_state="adjust_up",
-        sample_floor_status="ready",
-        target_env_keys=daily.CALIBRATION_FAMILY_METADATA[c["family"]][
-            "target_env_keys"
-        ],
-    )
-    selected, decisions, env = preopen._select_auto_apply_candidates(
-        [c], ai_review={}, require_ai=False, target_date="2026-09-08", operator_locks=[]
-    )
-    assert decisions[0]["selected"] is True, decisions
-    assert selected
-    assert env["KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED"] == "true"
-    assert env["KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MIN_SCORE"] == "69"
-    version = env["KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_THRESHOLD_VERSION"]
-    assert version == econ.approval_version(c["source_metrics"])
-    assert decisions[0]["threshold_version"] == version
-    assert not any(k.startswith("AI_SCORE") for k in env)
-    assert not preopen._score65_74_entry_unlock_candidate(c, target_date="2026-09-07")
 
 
-def test_daily_primary_window_uses_real_book_not_broad_snapshot_volume():
-    c = candidate()
-    c.update(
-        stage="entry",
-        priority=10,
-        allowed_runtime_apply=True,
-        calibration_state="hold_sample",
-        sample_floor_status="hold_sample",
-        window_policy={"primary": "rolling_20d"},
-        source_sample_count=0,
-    )
-    metrics = real_metrics()
-    daily._refresh_candidate_from_primary_window(
-        c,
-        primary_snapshot={"current": {**PROFILE, "min_score": 60}, "recommended": {}},
-        primary_source_metrics=metrics,
-        primary_sample_count=20,
-        primary_ready=True,
-        primary_window="rolling_20d",
-    )
-    assert c["calibration_state"] == "adjust_up"
-    assert c["recommended_values"]["min_score"] == 69
-    assert c["recommended_values"]["enabled"] is True
-    assert preopen._score65_74_entry_unlock_candidate(c)
 
 
-def test_loader_consumes_exact_paired_source_without_wait_cf(tmp_path, monkeypatch):
-    monkeypatch.setattr(daily, "REPORT_DIR", tmp_path)
-    path = (
-        tmp_path
-        / "main_scalping_lifecycle_paired"
-        / "main_scalping_lifecycle_paired_2026-09-07.json"
-    )
-    path.parent.mkdir()
-    path.write_text(json.dumps(signed_report()), encoding="utf-8")
-    result = daily._summarize_holding_exit_report_sources("2026-09-07")
-    metrics = result["source_metrics"]["buy_score65_74"]
-    assert len(metrics["score_recovery_real_economics"]["observations"]) == 10
-    assert result["sources"]["main_scalping_lifecycle_paired"]["loaded"] is True
 
 
-def test_verified_preopen_profile_is_used_instead_of_postclose_defaults(
-    tmp_path, monkeypatch
-):
-    monkeypatch.setattr(daily, "THRESHOLD_APPLY_PLAN_DIR", tmp_path)
-    env = {
-        "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_" + k.upper(): str(v)
-        for k, v in PROFILE.items()
-    }
-    env["KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP"] = "0"
-    env["KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_EFFECTIVE_MIN_MICRO_VWAP_FLOOR_BP"] = (
-        "10"
-    )
-    payload = {
-        "target_date": "2026-09-08",
-        "runtime_env_overrides": env,
-        "runtime_env_handoff_verification": {
-            "status": "pass",
-            "passed": True,
-            "target_date": "2026-09-08",
-            "selected_families": ["score65_74_recovery_probe"],
-        },
-        "auto_apply_decisions": [
-            {"family": "score65_74_recovery_probe", "selected": True}
-        ],
-    }
-    (tmp_path / "threshold_apply_2026-09-08.json").write_text(json.dumps(payload))
-    observation = daily._load_same_day_runtime_apply_observation("2026-09-08")
-    assert (
-        observation["families"]["score65_74_recovery_probe"]["current_profile"]
-        == PROFILE
-    )
-    report = daily.build_daily_threshold_cycle_report(
-        "2026-09-08",
-        pipeline_loader=lambda day: [],
-        report_source_loader=lambda day: {
-            "source_metrics": {"buy_score65_74": real_metrics()}
-        },
-        completed_rows_loader=lambda start, end: [],
-        runtime_apply_observation=observation,
-    )
-    c = next(
-        c
-        for c in report["calibration_candidates"]
-        if c["family"] == "score65_74_recovery_probe"
-    )
-    assert c["current_values"]["min_score"] == 69
-    assert c["calibration_state"] == "adjust_up"
-    assert (
-        c["source_metrics"]["current_profile_source"] == "verified_same_day_preopen_env"
-    )
 
 
-@pytest.mark.parametrize(
-    "bad", [None, [], "invalid", 1, {"schema": econ.SCHEMA, "observations": []}]
-)
-def test_malformed_book_cannot_crash_or_approve(bad):
-    metrics = real_metrics()
-    metrics["score_recovery_real_economics"] = bad
-    assert not econ.evaluate(metrics)["ready"]
-    assert not preopen._score65_74_entry_unlock_candidate(candidate(metrics))
-    econ.merge_books([bad])
 
 
-def test_none_parent_isolated_when_aggregating_real_book():
-    result = daily._aggregate_metric_dicts([None, real_metrics()])
-    result["score_recovery_current_profile"] = PROFILE
-    assert econ.evaluate(result)["ready"]
 
 
 def test_sub_won_reconciliation_tolerance_cannot_invent_positive_net():

@@ -28,6 +28,8 @@ MODEL_MULTI_TIMEFRAME_BAR_LIMIT = 20
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PROMOTION_DIR = DATA_DIR / "runtime"
 RUNTIME_ENV_DIR = DATA_DIR / "threshold_cycle" / "runtime_env"
+RUNTIME_BOOTSTRAP_DIR = DATA_DIR / "runtime" / "policy_bootstrap"
+RUNTIME_BOOTSTRAP_CUTOVER_DATE = "2026-09-19"
 PROMOTION_SCHEMA = "ai_multi_timeframe_context_promotion_v1"
 PROMOTION_AUTHORITY_ID = "operator_full_market_context_promotion_2026-07-27"
 OPERATOR_DIRECTED_PROMOTION_MODE = "operator_directed_full_promotion"
@@ -258,10 +260,18 @@ def promotion_activation_state(captured_at: datetime) -> dict[str, Any]:
         PROMOTION_DIR
         / f"ai_multi_timeframe_context_promotion_{promotion_target_date}.json"
     )
-    env_path = RUNTIME_ENV_DIR / f"threshold_runtime_env_{promotion_target_date}.env"
-    manifest_path = (
-        RUNTIME_ENV_DIR / f"threshold_runtime_env_{promotion_target_date}.json"
-    )
+    if promotion_target_date >= RUNTIME_BOOTSTRAP_CUTOVER_DATE:
+        env_path = RUNTIME_BOOTSTRAP_DIR / (
+            f"runtime_policy_bootstrap_{promotion_target_date}.env"
+        )
+        manifest_path = RUNTIME_BOOTSTRAP_DIR / (
+            f"runtime_policy_bootstrap_{promotion_target_date}.json"
+        )
+    else:
+        env_path = RUNTIME_ENV_DIR / f"threshold_runtime_env_{promotion_target_date}.env"
+        manifest_path = (
+            RUNTIME_ENV_DIR / f"threshold_runtime_env_{promotion_target_date}.json"
+        )
     if artifact.get("runtime_env_path") not in (None, str(env_path)) or artifact.get(
         "runtime_manifest_path"
     ) not in (None, str(manifest_path)):

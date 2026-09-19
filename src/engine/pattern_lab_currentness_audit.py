@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import re
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
-from src.engine.daily_threshold_cycle_report import REPORT_DIR
+from src.utils.constants import DATA_DIR
+
+REPORT_DIR = DATA_DIR / "report"
 from src.engine.automation.pattern_lab_source_contract import (
     RECEIPT_SCHEMA,
     read_feedback,
@@ -661,7 +662,6 @@ def build_pattern_lab_currentness_audit(
             files_likely_touched=[
                 "src/engine/pattern_lab_ai_review.py",
                 "deploy/run_threshold_cycle_postclose.sh",
-                "src/engine/threshold_cycle_ev_report.py",
                 "src/engine/runtime_approval_summary.py",
                 "src/engine/build_code_improvement_workorder.py",
                 "src/engine/pattern_lab_currentness_audit.py",

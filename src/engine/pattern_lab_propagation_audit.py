@@ -9,7 +9,9 @@ from pathlib import Path
 from typing import Any
 
 from src.engine.build_code_improvement_workorder import code_improvement_workorder_paths
-from src.engine.daily_threshold_cycle_report import REPORT_DIR
+from src.utils.constants import DATA_DIR
+
+REPORT_DIR = DATA_DIR / "report"
 from src.engine.lifecycle.retirement import current_report_view, retired_artifact
 from src.engine.pattern_lab_currentness_audit import (
     report_paths as currentness_report_paths,
@@ -18,7 +20,6 @@ from src.engine.runtime_approval_summary import summary_paths as runtime_summary
 from src.engine.swing_pattern_lab_automation import (
     swing_pattern_lab_automation_report_paths,
 )
-from src.engine.threshold_cycle_ev_report import ev_report_paths
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 REPORT_TYPE = "pattern_lab_propagation_audit"
@@ -105,7 +106,6 @@ def _order(check_id: str, title: str, source_paths: list[Path]) -> dict[str, Any
         "evidence": [_path_text(path) for path in source_paths],
         "files_likely_touched": [
             "deploy/run_threshold_cycle_postclose.sh",
-            "src/engine/threshold_cycle_ev_report.py",
             "src/engine/runtime_approval_summary.py",
             "src/engine/build_code_improvement_workorder.py",
         ],
@@ -184,21 +184,14 @@ def build_pattern_lab_propagation_audit(
     swing_path, _ = swing_pattern_lab_automation_report_paths(target_date)
     currentness_path, _ = currentness_report_paths(target_date)
     workorder_path, _ = code_improvement_workorder_paths(target_date)
-    ev_path, _ = ev_report_paths(target_date)
     runtime_path, _ = runtime_summary_paths(target_date)
 
     swing = _load_json(swing_path) if include_swing else {}
     currentness = _load_json(currentness_path)
     workorder = _load_json(workorder_path)
-    ev_report = _load_json(ev_path)
     runtime_summary = _load_json(runtime_path)
-    ev_source = _source_dict(ev_report)
-    ldm_path = (
-        Path(str(ev_source.get("lifecycle_decision_matrix")))
-        if ev_source.get("lifecycle_decision_matrix")
-        else None
-    )
-    lifecycle_report = _load_json(ldm_path) if ldm_path else {}
+    ldm_path = None
+    lifecycle_report = {}
 
     checks: list[dict[str, Any]] = []
 
@@ -299,71 +292,14 @@ def build_pattern_lab_propagation_audit(
         )
     )
 
-    ev_currentness_ok = bool(ev_report) and _has_source(
-        ev_source, "pattern_lab_currentness_audit"
-    )
-    ev_propagation_ok = bool(ev_report) and _has_source(
-        ev_source, "pattern_lab_propagation_audit"
-    )
+    runtime_ok = bool(runtime_summary) and runtime_summary.get("status") in {"pass", "incomplete_direct_evidence"}
     checks.append(
         _check(
-            "threshold_cycle_ev_currentness_source_link",
-            status="pass" if ev_currentness_ok else "fail",
-            severity="info" if ev_currentness_ok else "source_quality_blocker",
-            finding="threshold_cycle_ev must expose pattern_lab_currentness_audit source link.",
-            source_paths=[ev_path, currentness_path],
-            recommended_order=(
-                None
-                if ev_currentness_ok
-                else _order(
-                    "threshold_cycle_ev_currentness_source_link",
-                    "Expose currentness audit in threshold_cycle_ev",
-                    [ev_path, currentness_path],
-                )
-            ),
-        )
-    )
-    checks.append(
-        _check(
-            "threshold_cycle_ev_propagation_source_link",
-            status="pass" if ev_propagation_ok else "warning",
-            severity=(
-                "info" if ev_propagation_ok else "post_propagation_ev_refresh_pending"
-            ),
-            finding="threshold_cycle_ev must expose pattern_lab_propagation_audit after the post-propagation EV refresh.",
-            source_paths=[ev_path, report_paths(target_date)[0]],
-        )
-    )
-
-    runtime_source = _source_dict(runtime_summary)
-    if not runtime_summary:
-        runtime_status = "warning"
-        runtime_severity = "runtime_summary_pending"
-    else:
-        runtime_status = (
-            "pass"
-            if _has_source(runtime_source, "pattern_lab_propagation_audit")
-            else "fail"
-        )
-        runtime_severity = (
-            "info" if runtime_status == "pass" else "source_quality_blocker"
-        )
-    checks.append(
-        _check(
-            "runtime_summary_propagation_source_link",
-            status=runtime_status,
-            severity=runtime_severity,
-            finding="runtime_approval_summary must expose pattern_lab_propagation_audit source link when generated after this audit.",
-            source_paths=[runtime_path, report_paths(target_date)[0]],
-            recommended_order=(
-                None
-                if runtime_status != "fail"
-                else _order(
-                    "runtime_summary_propagation_source_link",
-                    "Expose propagation audit in runtime approval summary",
-                    [runtime_path],
-                )
-            ),
+            "runtime_summary_direct_family_handoff",
+            status="pass" if runtime_ok else "warning",
+            severity="info" if runtime_ok else "runtime_summary_pending",
+            finding="runtime approval summary is sourced from family-owned direct evidence; the retired EV layer is not required.",
+            source_paths=[runtime_path],
         )
     )
 
@@ -373,7 +309,7 @@ def build_pattern_lab_propagation_audit(
             status="pass",
             severity="info",
             finding="retired/not-applicable: scalping ADM/LDM workorder lineage is archive-only and must not be regenerated.",
-            source_paths=[workorder_path, ldm_path or ev_path],
+            source_paths=[workorder_path, ldm_path or runtime_path],
             recommended_order=None,
         )
     )
@@ -413,14 +349,14 @@ def build_pattern_lab_propagation_audit(
                 "code_improvement_workorder must count LDM entry/scale-in/overnight bucket workorders. "
                 f"expected={expected_bucket_counts}, actual={actual_bucket_counts}"
             ),
-            source_paths=[workorder_path, ldm_path or ev_path],
+            source_paths=[workorder_path, ldm_path or runtime_path],
             recommended_order=(
                 None
                 if bucket_counts_ok
                 else _order(
                     "workorder_lifecycle_bucket_order_counts",
                     "Consume all LDM lifecycle bucket workorders",
-                    [workorder_path, ldm_path or ev_path],
+                    [workorder_path, ldm_path or runtime_path],
                 )
             ),
         )

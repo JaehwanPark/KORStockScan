@@ -6,7 +6,6 @@ from src.engine import pattern_lab_currentness_audit as currentness_mod
 from src.engine import pattern_lab_propagation_audit as mod
 from src.engine import runtime_approval_summary as runtime_mod
 from src.engine import swing_pattern_lab_automation as swing_mod
-from src.engine import threshold_cycle_ev_report as ev_mod
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -31,9 +30,8 @@ def _patch_dirs(tmp_path: Path, monkeypatch):
         report_dir / "code_improvement_workorder",
     )
     monkeypatch.setattr(workorder_mod, "CODE_IMPROVEMENT_WORKORDER_DIR", docs_dir)
-    monkeypatch.setattr(ev_mod, "EV_REPORT_DIR", report_dir / "threshold_cycle_ev")
     monkeypatch.setattr(
-        runtime_mod, "SUMMARY_DIR", report_dir / "runtime_approval_summary"
+        runtime_mod, "REPORT_DIR", report_dir / "runtime_approval_summary"
     )
     return report_dir
 
@@ -58,9 +56,6 @@ def _seed_propagation_chain(tmp_path: Path, report_dir: Path, target_date: str) 
         report_dir
         / "code_improvement_workorder"
         / f"code_improvement_workorder_{target_date}.json"
-    )
-    ev_path = (
-        report_dir / "threshold_cycle_ev" / f"threshold_cycle_ev_{target_date}.json"
     )
     runtime_path = (
         report_dir
@@ -121,17 +116,6 @@ def _seed_propagation_chain(tmp_path: Path, report_dir: Path, target_date: str) 
         },
     )
     _write_json(
-        ev_path,
-        {
-            "runtime_apply": {"runtime_change": False},
-            "sources": {
-                "pattern_lab_currentness_audit": str(currentness_path),
-                "pattern_lab_propagation_audit": str(propagation_path),
-                "lifecycle_decision_matrix": str(ldm_path),
-            },
-        },
-    )
-    _write_json(
         ldm_path,
         {
             "entry_bucket_attribution": {"code_improvement_workorders": []},
@@ -141,7 +125,7 @@ def _seed_propagation_chain(tmp_path: Path, report_dir: Path, target_date: str) 
     )
     _write_json(
         runtime_path,
-        {"sources": {"pattern_lab_propagation_audit": str(propagation_path)}},
+        {"status": "pass", "sources": {"pattern_lab_propagation_audit": str(propagation_path)}},
     )
     _write_json(
         tmp_path

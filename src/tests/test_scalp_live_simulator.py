@@ -9,7 +9,6 @@ import src.engine.kiwoom_sniper_v2 as sniper_runtime
 import src.engine.sniper_performance_tuning_report as perf_report
 import src.engine.sniper_scale_in as scale_in
 import src.engine.sniper_state_handlers as state_handlers
-from src.engine.daily_threshold_cycle_report import build_daily_threshold_cycle_report
 from src.utils.constants import TRADING_RULES as CONFIG
 from src.utils.threshold_cycle_registry import threshold_family_for_stage
 
@@ -5093,65 +5092,6 @@ def test_runtime_heartbeat_classifies_scalp_sim_as_non_real_holding():
     )
 
 
-def test_daily_threshold_cycle_report_keeps_scalp_sim_completed_rows_diagnostic_only():
-    target_date = "2026-05-11"
-
-    def pipeline_loader(day):
-        if day != target_date:
-            return []
-        return [
-            {
-                "event_type": "pipeline_event",
-                "pipeline": "HOLDING_PIPELINE",
-                "stage": "scalp_sim_sell_order_assumed_filled",
-                "stock_name": "SIM",
-                "stock_code": "000002",
-                "record_id": None,
-                "emitted_date": target_date,
-                "fields": {
-                    "simulation_book": "scalp_ai_buy_all",
-                    "sim_record_id": "SIM-1",
-                    "profit_rate": "+0.50",
-                    "qty": "1",
-                    "buy_price": "10000",
-                    "assumed_fill_price": "10050",
-                    "actual_order_submitted": "False",
-                },
-            }
-        ]
-
-    def completed_rows_loader(start_date, end_date):
-        return [
-            {
-                "rec_date": target_date,
-                "stock_code": "000001",
-                "stock_name": "REAL",
-                "status": "COMPLETED",
-                "strategy": "SCALPING",
-                "profit_rate": 0.2,
-                "add_count": 0,
-                "avg_down_count": 0,
-                "pyramid_count": 0,
-            }
-        ]
-
-    report = build_daily_threshold_cycle_report(
-        target_date,
-        pipeline_loader=pipeline_loader,
-        report_source_loader=lambda _: {},
-        completed_rows_loader=completed_rows_loader,
-    )
-
-    assert report["summary"]["real_completed_valid_rolling_7d"] == 1
-    assert report["summary"]["sim_completed_valid_rolling_7d"] == 1
-    assert report["summary"]["completed_valid_rolling_7d"] == 1
-    assert report["completed_by_source"]["combined"]["sample"] == 2
-    assert report["completed_by_source"]["sim"]["sample"] == 1
-    assert (
-        report["completed_by_source"]["combined_authority"]
-        == "diagnostic_only_not_family_candidate_input"
-    )
-    assert report["scalp_simulator"]["sell_completed"] == 1
 
 
 def test_performance_tuning_source_split_combines_real_and_scalp_sim():

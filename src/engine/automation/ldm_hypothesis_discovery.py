@@ -13,7 +13,9 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable
 
-from src.engine.daily_threshold_cycle_report import REPORT_DIR
+from src.utils.constants import DATA_DIR
+
+REPORT_DIR = DATA_DIR / "report"
 from src.utils.jsonl_io import iter_jsonl
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]

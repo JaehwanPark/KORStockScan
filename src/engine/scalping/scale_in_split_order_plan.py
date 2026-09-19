@@ -2604,10 +2604,22 @@ def _conditioned_source_events(target_date: str, receipt: dict, records: set[str
 
 def _validated_incumbent(target_date: str) -> dict[str, Any] | None:
     # Only an existing selected runtime manifest may authorize a split carry.
-    paths = sorted(p for p in (DATA_DIR / "threshold_cycle/runtime_env").glob("threshold_runtime_env_*.json")
-                   if len(p.stem.removeprefix("threshold_runtime_env_")) == 10
-                   and p.stem.removeprefix("threshold_runtime_env_") <= target_date)
+    runtime_dir = DATA_DIR / "runtime" / "policy_bootstrap"
+    paths = sorted(
+        p
+        for p in runtime_dir.glob("runtime_policy_bootstrap_*.json")
+        if "verify" not in p.stem
+        and len(p.stem.removeprefix("runtime_policy_bootstrap_")) == 10
+        and p.stem.removeprefix("runtime_policy_bootstrap_") <= target_date
+    )
     manifest = _load_json(paths[-1]) if paths else {}
+    if paths:
+        day = paths[-1].stem.removeprefix("runtime_policy_bootstrap_")
+        verification = _load_json(
+            runtime_dir / f"runtime_policy_bootstrap_verify_{day}.json"
+        )
+        if verification.get("status") != "pass":
+            return None
     if RUNTIME_FAMILY not in (manifest.get("selected_families") or []):
         return None
     overrides = manifest.get("env_overrides") or {}

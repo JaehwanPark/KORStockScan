@@ -4521,7 +4521,6 @@ def _entry_submit_drought_contract(
         "broker_order_submit_allowed": False,
         "required_downstream": [
             "code_improvement_workorder",
-            "threshold_cycle_ev_report",
             "runtime_approval_summary",
             "postclose_verifier",
         ],
