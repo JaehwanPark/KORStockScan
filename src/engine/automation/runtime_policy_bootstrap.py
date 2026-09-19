@@ -124,7 +124,51 @@ def _manifest_candidates(target_date: str) -> list[Path]:
     return [row[2] for row in sorted(rows, reverse=True)]
 
 
-def _load_incumbent(target_date: str) -> tuple[dict[str, Any], Path]:
+def _legacy_common_handoff_migration_allowed(
+    payload: dict[str, Any], verification: dict[str, Any], source_date: str
+) -> bool:
+    """Allow the one-time Daily/EV cutover when family policy checks passed.
+
+    The retired common handoff could mark the legacy verification as failed
+    even though every selected family and dated override was verified.  Do not
+    generalize that state into an accepted failure: only the known unselected
+    integrated-axis handoff findings are eligible.
+    """
+
+    if verification.get("target_date") not in (None, source_date):
+        return False
+    if verification.get("status") != "fail" or verification.get("passed") is not False:
+        return False
+    if verification.get("fail_reason") != "runtime_env_handoff_missing":
+        return False
+    for key in (
+        "runtime_policy_fail_count",
+        "dated_runtime_override_fail_count",
+        "unverified_selected_family_count",
+        "missing_family_count",
+    ):
+        if verification.get(key) != 0:
+            return False
+    if set(verification.get("selected_families") or []) != set(
+        payload.get("selected_families") or []
+    ):
+        return False
+    allowed_details = {
+        "integrated_axis_unconfigured",
+        "integrated_axis_policy_date_mismatch",
+        "integrated_axis_shared_policy_hash_mismatch",
+    }
+    findings = verification.get("findings")
+    return bool(findings) and all(
+        isinstance(row, dict)
+        and row.get("family") == "integrated_entry_axis_bundle"
+        and row.get("severity") == "runtime_policy_unusable"
+        and row.get("detail") in allowed_details
+        for row in findings
+    )
+
+
+def _load_incumbent(target_date: str) -> tuple[dict[str, Any], Path, str]:
     for path in _manifest_candidates(target_date):
         try:
             payload = _load_json(path)
@@ -146,6 +190,7 @@ def _load_incumbent(target_date: str) -> tuple[dict[str, Any], Path]:
                 verification.get("status") == "pass"
                 and payload.get("manifest_sha256") == _digest_json(unsigned)
             )
+            verification_basis = "bootstrap_self_hash_and_verify_pass"
         else:
             try:
                 verification = _load_json(
@@ -153,9 +198,16 @@ def _load_incumbent(target_date: str) -> tuple[dict[str, Any], Path]:
                 )
             except (OSError, ValueError, json.JSONDecodeError):
                 verification = {}
-            verified = verification.get("status") == "pass"
+            if verification.get("status") == "pass":
+                verified = True
+                verification_basis = "legacy_verification_pass"
+            else:
+                verified = _legacy_common_handoff_migration_allowed(
+                    payload, verification, source_date
+                )
+                verification_basis = "legacy_common_handoff_migration"
         if verified and isinstance(values, dict) and values:
-            return payload, path
+            return payload, path, verification_basis
     raise ValueError("approved_incumbent_runtime_env_missing")
 
 
@@ -426,7 +478,9 @@ def build_manifest(
     target_date: str, *, receipt_paths: Iterable[Path] = ()
 ) -> dict[str, Any]:
     date.fromisoformat(target_date)
-    incumbent, incumbent_path = _load_incumbent(target_date)
+    incumbent, incumbent_path, incumbent_verification_basis = _load_incumbent(
+        target_date
+    )
     incumbent_values = {
         str(key): str(value)
         for key, value in (incumbent.get("env_overrides") or {}).items()
@@ -490,6 +544,7 @@ def build_manifest(
         "producer_code_sha": _git_sha(),
         "selected_release_sha": _git_sha(),
         "source_incumbent": _file_receipt(incumbent_path),
+        "source_incumbent_verification_basis": incumbent_verification_basis,
         "source_incumbent_target_date": incumbent.get("target_date"),
         "rollback_env_overrides": dict(
             sorted(without_retired_env(incumbent_values).items())

@@ -385,4 +385,6 @@ source 20일에서 2,861개 paired 행을 구성했다. 인과적으로 결정 �
 
 effective date `2026-09-21`에는 challenger를 발행하지 않고 `incumbent_preserved` receipt를 생성한다. 이 receipt의 runtime env override는 비어 있어 기존 임계값과 주문 권한을 바꾸지 않는다. validated edge가 생긴 경우에만 allowlist와 범위 검증을 통과한 단일축 값을 shared bootstrap이 기존 TP1 selector에 전달한다. 실제 PID 소비, 자연 TP1 decision, fill, `COMPLETED + valid profit_rate`와 비용 후 post-apply EV는 다음 정상 PREOPEN 이후 확인할 별도 acceptance이며 이 구현 결과에 포함하지 않는다.
 
+배포 전 PREOPEN 사전 조립에서 9월 18일 legacy manifest의 선택 family·dated override 검증 실패 수는 모두 0이지만 퇴역 공통 handoff의 `runtime_env_handoff_missing` 때문에 전체 verify만 fail인 cutover 결함을 발견했다. shared bootstrap은 이 정확한 legacy 상태에서만 최초 incumbent seed를 허용하도록 보완했다. 허용 finding은 미선택 `integrated_entry_axis_bundle`의 기존 세 handoff finding으로 제한하며, active runtime policy 실패·미검증 selected family·missing family·dated override 실패가 하나라도 있으면 기존대로 fail-closed다.
+
 9월 17일 raw pipeline은 약 5.71GB다. 이미 성숙한 target/adverse 비교가 명확한 음수인 상태에서 과거 censored `no_hit` 40건을 채우기 위해 전체 raw를 재주사하지 않는다. 이는 계산 생략으로 양수 결론을 만드는 조치가 아니라, 결손 행을 계속 제외하고 향후 자연 producer에서 계약을 닫는 선택이다.

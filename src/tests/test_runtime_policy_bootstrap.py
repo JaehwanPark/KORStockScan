@@ -268,6 +268,60 @@ def test_bootstrap_accepts_hash_bound_incumbent_preserved_receipt(monkeypatch, t
     assert manifest["env_overrides"]["BASE"] == "1"
 
 
+def test_bootstrap_seeds_from_legacy_common_handoff_only_when_family_checks_pass(
+    monkeypatch, tmp_path
+):
+    legacy_dir = tmp_path / "threshold_cycle" / "runtime_env"
+    monkeypatch.setattr(bootstrap, "BOOTSTRAP_DIR", tmp_path / "bootstrap")
+    monkeypatch.setattr(bootstrap, "LEGACY_RUNTIME_DIR", legacy_dir)
+    monkeypatch.setattr(bootstrap, "OPERATOR_LOCK_DIR", tmp_path / "locks")
+    manifest_path = legacy_dir / "threshold_runtime_env_2026-09-18.json"
+    verify_path = legacy_dir / "threshold_runtime_env_verify_2026-09-18.json"
+    _write(
+        manifest_path,
+        {
+            "target_date": "2026-09-18",
+            "env_overrides": {"KORSTOCKSCAN_ACTIVE_POLICY": "true"},
+            "selected_families": ["active_policy"],
+        },
+    )
+    verification = {
+        "target_date": "2026-09-18",
+        "status": "fail",
+        "passed": False,
+        "fail_reason": "runtime_env_handoff_missing",
+        "runtime_policy_fail_count": 0,
+        "dated_runtime_override_fail_count": 0,
+        "unverified_selected_family_count": 0,
+        "missing_family_count": 0,
+        "selected_families": ["active_policy"],
+        "findings": [
+            {
+                "family": "integrated_entry_axis_bundle",
+                "severity": "runtime_policy_unusable",
+                "detail": "integrated_axis_unconfigured",
+            }
+        ],
+    }
+    _write(verify_path, verification)
+
+    manifest = bootstrap.build_manifest("2026-09-21")
+
+    assert manifest["env_overrides"]["KORSTOCKSCAN_ACTIVE_POLICY"] == "true"
+    assert manifest["source_incumbent_verification_basis"] == (
+        "legacy_common_handoff_migration"
+    )
+
+    verification["runtime_policy_fail_count"] = 1
+    _write(verify_path, verification)
+    try:
+        bootstrap.build_manifest("2026-09-21")
+    except ValueError as exc:
+        assert str(exc) == "approved_incumbent_runtime_env_missing"
+    else:
+        raise AssertionError("active family verification failure must stay blocked")
+
+
 def test_direct_summary_and_verifier_do_not_require_retired_common_reports(monkeypatch, tmp_path):
     data_dir = tmp_path / "data"
     monkeypatch.setattr(summary_mod, "DATA_DIR", data_dir)
