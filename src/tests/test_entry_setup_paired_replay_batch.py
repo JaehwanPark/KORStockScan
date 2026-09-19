@@ -1727,7 +1727,9 @@ def test_integrated_wrapper_preserves_initial_daily_and_final_consumers():
     assert source.index('"ai_decision_outcome_labels"', source.index('"ai_decision_quality_daily_materialization"')) < prepare
     assert prepare < source.index('wait_for_postclose_resources "daily_threshold_cycle_report"') < evaluate
     assert evaluate < source.index('wait_for_postclose_resources "intraday_ws_freshness_finalize"') < finalize
-    assert finalize < source.index('--refresh-machine-evaluation-only') < source.index('run_threshold_cycle_ev_and_wait "pre_workorder"')
+    assert finalize < source.index('run_threshold_cycle_ev_and_wait "pre_workorder"')
+    assert '--refresh-machine-evaluation-only' not in source
+    assert 'daily_machine_evaluation_handoff' not in source
     assert finalize < source.index('wait_for_postclose_resources "runtime_approval_summary"') < handoff
     assert handoff < source.index('wait_for_postclose_resources "build_next_stage2_checklist_final_refresh"')
     assert "--compact-only --execute-compact-candidate" not in source

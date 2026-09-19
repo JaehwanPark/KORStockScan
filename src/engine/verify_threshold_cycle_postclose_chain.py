@@ -4724,7 +4724,7 @@ def _submit_bucket_handoff_status(
     return {**retired_status(), "missing": []}
 
 
-def _microstructure_diagnostic_handoff_status(source, ev, runtime, workorder, daily):
+def _microstructure_diagnostic_handoff_status(source, ev, runtime, workorder):
     """Optional diagnostic failures stay in this branch, never grant live authority."""
     if not source:
         return {
@@ -4751,10 +4751,6 @@ def _microstructure_diagnostic_handoff_status(source, ev, runtime, workorder, da
     summaries = {
         "ev": ev.get("microstructure_reaction_context") or {},
         "runtime": runtime.get("microstructure_reaction_context") or {},
-        "daily": (
-            (daily.get("calibration_source_bundle") or {}).get("source_metrics") or {}
-        ).get("microstructure_reaction_context")
-        or {},
     }
     issues = [f"workorder_missing:{key}" for key in sorted(expected - actual)]
     if (
@@ -6796,15 +6792,9 @@ def _scanner_lookup_attention_status(
     except (ValueError, KeyError, TypeError):
         return {"status": "fail", "issues": ["integrated_scanner_section_missing"]}
     issues = validate_integrated_selection(section, policy, target=parsed)
-    daily = _load_json(REPORT_DIR / f"threshold_cycle_{target_date}.json")
-    handoff = daily.get("scanner_lookup_attention_selection") or {}
-    if handoff.get("source_section_sha256") != section.get("artifact_sha256"):
-        issues.append("scanner_daily_section_hash_handoff_missing")
     expected = selection_handoff(REPORT_DIR, target_date)
     if expected.get("source_section_sha256") != section.get("artifact_sha256") or expected.get("policy_artifact_sha256") != policy.get("artifact_sha256"):
         issues.append("scanner_publication_binding_invalid")
-    if handoff.get("policy_artifact_sha256") != policy.get("artifact_sha256"):
-        issues.append("scanner_daily_policy_hash_handoff_missing")
     if require_summary:
         from src.engine.scalping.compact_auxiliary_paired_replay import summary_paths
         for path in summary_paths(REPORT_DIR.parent, target_date):
@@ -7141,7 +7131,6 @@ def build_threshold_cycle_postclose_verification(
             ev_report,
             runtime_summary,
             workorder,
-            threshold_cycle_daily,
         )
         if microstructure_source
         or execution_contract_flags.get("microstructure_reaction_context") is True

@@ -623,19 +623,13 @@ def test_identical_final_input_reuses_result_and_cost_revision_invalidates(monke
     assert resource.integrated_selection_evaluation(date(2026, 9, 17), {}, predecessor=section) is section
 
 
-def test_daily_and_strict_consume_same_section_without_touching_other_families(monkeypatch, tmp_path):
+def test_strict_uses_native_section_and_policy_without_daily_copy(monkeypatch, tmp_path):
     import json
-    from src.engine import daily_threshold_cycle_report as daily
     from src.engine import verify_threshold_cycle_postclose_chain as verifier
     integrated_fixture(monkeypatch)
     root = tmp_path / "data" / "report"
     root.mkdir(parents=True)
-    monkeypatch.setattr(daily, "REPORT_DIR", root)
     monkeypatch.setattr(verifier, "REPORT_DIR", root)
-    (root / "threshold_cycle_2026-09-17.json").write_text(json.dumps({"date": "2026-09-17", "unrelated_family": [1, 2]}))
-    micro = root / "microstructure_reaction_context"
-    micro.mkdir()
-    (micro / "microstructure_reaction_context_2026-09-17.json").write_text(json.dumps({"date": "2026-09-17", "summary": {}}))
     section = resource.integrated_selection_evaluation(date(2026, 9, 17), {})
     report = {"target_date": "2026-09-17", "evaluation_phase": "intraday",
               "scanner_unique_funnel": {"economic_cohorts": {"lookup_attention_selection": section}}}
@@ -643,13 +637,8 @@ def test_daily_and_strict_consume_same_section_without_touching_other_families(m
     monitor.mkdir()
     (monitor / "intraday_ws_freshness_monitor_2026-09-17.json").write_text(json.dumps(report))
     payload = policy.publish_integrated_policy(report, policy_dir=root.parent / "threshold_cycle" / "scanner_lookup_attention_policy")
-    daily.refresh_machine_evaluation_only("2026-09-17")
-    consumed = json.loads((root / "threshold_cycle_2026-09-17.json").read_text())
-    assert consumed["unrelated_family"] == [1, 2]
-    assert consumed["scanner_lookup_attention_selection"]["source_section_sha256"] == section["artifact_sha256"]
     assert verifier._scanner_lookup_attention_status(report, payload, target_date="2026-09-17")["status"] == "pass"
-    consumed["scanner_lookup_attention_selection"]["source_section_sha256"] = "0" * 64
-    (root / "threshold_cycle_2026-09-17.json").write_text(json.dumps(consumed))
+    payload["artifact_sha256"] = "0" * 64
     assert verifier._scanner_lookup_attention_status(report, payload, target_date="2026-09-17")["status"] == "fail"
 
 

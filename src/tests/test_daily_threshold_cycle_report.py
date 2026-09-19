@@ -2710,6 +2710,28 @@ def test_calibration_source_bundle_includes_panic_sell_defense(monkeypatch, tmp_
     assert absent_metrics["allowed_runtime_apply"] is False
 
 
+def test_calibration_source_bundle_excludes_microstructure_direct_consumer_source(
+    monkeypatch, tmp_path
+):
+    report_root = tmp_path / "report"
+    monkeypatch.setattr(report_mod, "REPORT_DIR", report_root)
+    source = (
+        report_root
+        / "microstructure_reaction_context"
+        / "microstructure_reaction_context_2026-09-17.json"
+    )
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        json.dumps({"date": "2026-09-17", "summary": {"row_count": 1}}),
+        encoding="utf-8",
+    )
+
+    bundle = report_mod._summarize_calibration_report_sources("2026-09-17")
+
+    assert "microstructure_reaction_context" not in bundle["sources"]
+    assert "microstructure_reaction_context" not in bundle["source_metrics"]
+
+
 def test_calibration_source_bundle_audits_report_only_cleanup_candidates(
     monkeypatch, tmp_path
 ):

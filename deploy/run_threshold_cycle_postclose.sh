@@ -2177,16 +2177,10 @@ if [ "$RUN_INTRADAY_WS_FRESHNESS_FINALIZE" = "true" ] || [ "$RUN_INTRADAY_WS_FRE
     "$PROJECT_DIR/data/report/intraday_ws_freshness_monitor/intraday_ws_freshness_monitor_${TARGET_DATE}.md" \
     "intraday_ws_freshness_finalize"
 fi
-# Refresh the existing daily consumer once after the late machine parent changes.
 # Finalize after the compact/machine input producers and before their consumers.
 if [[ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" == "true" || "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" == "1" ]]; then
   run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.ai_action_outcome_calibration \
     --target-date "$TARGET_DATE" --data-root "$PROJECT_DIR/data" --postclose-phase finalize --write
-fi
-if [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "true" ] || [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "1" ] || [ "$RUN_INTRADAY_WS_FRESHNESS_FINALIZE" = "true" ] || [ "$RUN_INTRADAY_WS_FRESHNESS_FINALIZE" = "1" ]; then
-  wait_for_postclose_resources "daily_machine_evaluation_handoff"
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.daily_threshold_cycle_report \
-    --date "$TARGET_DATE" --refresh-machine-evaluation-only
 fi
 run_threshold_cycle_ev_and_wait "pre_workorder" \
   "$PROJECT_DIR/data/report/microstructure_reaction_context/microstructure_reaction_context_${TARGET_DATE}.json"

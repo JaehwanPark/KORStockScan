@@ -2631,11 +2631,6 @@ def _calibration_report_source_paths(target_date: str) -> dict[str, Path]:
             / "statistical_action_weight"
             / f"statistical_action_weight_{target_date}.json"
         ),
-        "microstructure_reaction_context": (
-            REPORT_DIR
-            / "microstructure_reaction_context"
-            / f"microstructure_reaction_context_{target_date}.json"
-        ),
         "market_regime_daily_report": REPORT_DIR / f"report_{target_date}.json",
     }
 
@@ -3027,9 +3022,6 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
     panic_sell_defense = _read_json_dict(source_paths["panic_sell_defense"])
     decision_matrix = _read_json_dict(source_paths["holding_exit_decision_matrix"])
     stat_action = _read_json_dict(source_paths["statistical_action_weight"])
-    microstructure_reaction_context = _read_json_dict(
-        source_paths["microstructure_reaction_context"]
-    )
     market_regime_continuous = _summarize_market_regime_continuous_sources(target_date)
     cumulative_dynamic_entry = (
         (
@@ -3208,15 +3200,6 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
         or perf_latency_section.get("instrumentation_status") == "missing_contract"
     ):
         latency_diagnostic_gap = "source_contract_gap"
-    microstructure_reaction_summary = (
-        microstructure_reaction_context.get("summary")
-        if isinstance(microstructure_reaction_context.get("summary"), dict)
-        else {}
-    )
-    from src.engine.scalping.microstructure_reaction_context import (
-        microstructure_summary_contract,
-    )
-
     soft_stop = (
         holding_exit_observation.get("soft_stop_rebound")
         if isinstance(holding_exit_observation, dict)
@@ -4368,257 +4351,6 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
             or 0,
             "sell_order_sent": _safe_int(stage_events.get("sell_order_sent"), 0) or 0,
             "sell_completed": _safe_int(stage_events.get("sell_completed"), 0) or 0,
-        },
-        "microstructure_reaction_context": {
-            "available": bool(microstructure_reaction_summary.get("available")),
-            "row_count": _safe_int(microstructure_reaction_summary.get("row_count"), 0)
-            or 0,
-            "ok_count": _safe_int(microstructure_reaction_summary.get("ok_count"), 0)
-            or 0,
-            "missing_or_unusable_count": _safe_int(
-                microstructure_reaction_summary.get("missing_or_unusable_count"), 0
-            )
-            or 0,
-            "real_submitted_count": _safe_int(
-                microstructure_reaction_summary.get("real_submitted_count"), 0
-            )
-            or 0,
-            "usable_coverage_pct": _safe_float(
-                microstructure_reaction_summary.get("usable_coverage_pct"), None
-            ),
-            "delivery_telemetry_v2_count": _safe_int(
-                microstructure_reaction_summary.get("delivery_telemetry_v2_count"),
-                0,
-            )
-            or 0,
-            "delivery_telemetry_legacy_unverifiable_count": _safe_int(
-                microstructure_reaction_summary.get(
-                    "delivery_telemetry_legacy_unverifiable_count"
-                ),
-                0,
-            )
-            or 0,
-            "context_computed_count": _safe_int(
-                microstructure_reaction_summary.get("context_computed_count"), 0
-            )
-            or 0,
-            "context_sent_count": _safe_int(
-                microstructure_reaction_summary.get("context_sent_count"), 0
-            )
-            or 0,
-            "context_consumed_count": _safe_int(
-                microstructure_reaction_summary.get("context_consumed_count"), 0
-            )
-            or 0,
-            "context_delivery_state_counts": (
-                microstructure_reaction_summary.get("context_delivery_state_counts")
-                if isinstance(
-                    microstructure_reaction_summary.get(
-                        "context_delivery_state_counts"
-                    ),
-                    dict,
-                )
-                else {}
-            ),
-            "context_consumer_counts": (
-                microstructure_reaction_summary.get("context_consumer_counts")
-                if isinstance(
-                    microstructure_reaction_summary.get("context_consumer_counts"),
-                    dict,
-                )
-                else {}
-            ),
-            "status_counts": (
-                microstructure_reaction_summary.get("status_counts")
-                if isinstance(
-                    microstructure_reaction_summary.get("status_counts"), dict
-                )
-                else {}
-            ),
-            "entry_reaction_quality_counts": (
-                microstructure_reaction_summary.get("entry_reaction_quality_counts")
-                if isinstance(
-                    microstructure_reaction_summary.get(
-                        "entry_reaction_quality_counts"
-                    ),
-                    dict,
-                )
-                else {}
-            ),
-            "source_quality_counts": (
-                microstructure_reaction_summary.get("source_quality_counts")
-                if isinstance(
-                    microstructure_reaction_summary.get("source_quality_counts"), dict
-                )
-                else {}
-            ),
-            "opportunity_exploration_funnel": (
-                microstructure_reaction_summary.get("opportunity_exploration_funnel")
-                if isinstance(
-                    microstructure_reaction_summary.get(
-                        "opportunity_exploration_funnel"
-                    ),
-                    dict,
-                )
-                else {}
-            ),
-            "clean_baseline_cumulative_opportunity_exploration": (
-                microstructure_reaction_summary.get(
-                    "clean_baseline_cumulative_opportunity_exploration"
-                )
-                if isinstance(
-                    microstructure_reaction_summary.get(
-                        "clean_baseline_cumulative_opportunity_exploration"
-                    ),
-                    dict,
-                )
-                else {}
-            ),
-            "v_pw_source_counts": (
-                microstructure_reaction_summary.get("v_pw_source_counts")
-                if isinstance(
-                    microstructure_reaction_summary.get("v_pw_source_counts"), dict
-                )
-                else {}
-            ),
-            "v_pw_rest_fallback_rate_pct": _safe_float(
-                microstructure_reaction_summary.get("v_pw_rest_fallback_rate_pct"),
-                None,
-            ),
-            "ka10046_strength_runtime_effect_true_count": _safe_int(
-                microstructure_reaction_summary.get(
-                    "ka10046_strength_runtime_effect_true_count"
-                ),
-                0,
-            )
-            or 0,
-            "ka10046_strength_missing_received_ts_count": _safe_int(
-                microstructure_reaction_summary.get(
-                    "ka10046_strength_missing_received_ts_count"
-                ),
-                0,
-            )
-            or 0,
-            "market_data_signed_tape_state_counts": (
-                microstructure_reaction_summary.get(
-                    "market_data_signed_tape_state_counts"
-                )
-                if isinstance(
-                    microstructure_reaction_summary.get(
-                        "market_data_signed_tape_state_counts"
-                    ),
-                    dict,
-                )
-                else {}
-            ),
-            "market_data_rest_signed_tape_pressure_usable_true_count": _safe_int(
-                microstructure_reaction_summary.get(
-                    "market_data_rest_signed_tape_pressure_usable_true_count"
-                ),
-                0,
-            )
-            or 0,
-            "rest_signed_trade_ticks_row_count": _safe_int(
-                microstructure_reaction_summary.get(
-                    "rest_signed_trade_ticks_row_count"
-                ),
-                0,
-            )
-            or 0,
-            "rest_signed_trade_ticks_source_counts": (
-                microstructure_reaction_summary.get(
-                    "rest_signed_trade_ticks_source_counts"
-                )
-                if isinstance(
-                    microstructure_reaction_summary.get(
-                        "rest_signed_trade_ticks_source_counts"
-                    ),
-                    dict,
-                )
-                else {}
-            ),
-            "ka10003_buy_dominance_observation_source_counts": (
-                microstructure_reaction_summary.get(
-                    "ka10003_buy_dominance_observation_source_counts"
-                )
-                if isinstance(
-                    microstructure_reaction_summary.get(
-                        "ka10003_buy_dominance_observation_source_counts"
-                    ),
-                    dict,
-                )
-                else {}
-            ),
-            "ka10003_buy_dominance_observation_trade_value_source_counts": (
-                microstructure_reaction_summary.get(
-                    "ka10003_buy_dominance_observation_trade_value_source_counts"
-                )
-                if isinstance(
-                    microstructure_reaction_summary.get(
-                        "ka10003_buy_dominance_observation_trade_value_source_counts"
-                    ),
-                    dict,
-                )
-                else {}
-            ),
-            "ka10003_buy_dominance_observation_inside_spread_count": _safe_int(
-                microstructure_reaction_summary.get(
-                    "ka10003_buy_dominance_observation_inside_spread_count"
-                ),
-                0,
-            )
-            or 0,
-            "ka10003_buy_dominance_observation_split_vs_15_mismatch_rate_pct": _safe_float(
-                microstructure_reaction_summary.get(
-                    "ka10003_buy_dominance_observation_split_vs_15_mismatch_rate_pct"
-                ),
-                None,
-            ),
-            "code_improvement_order_count": _safe_int(
-                microstructure_reaction_summary.get("code_improvement_order_count"),
-                0,
-            )
-            or 0,
-            "top_code_improvement_orders": (
-                microstructure_reaction_summary.get("top_code_improvement_orders")
-                if isinstance(
-                    microstructure_reaction_summary.get("top_code_improvement_orders"),
-                    list,
-                )
-                else []
-            ),
-            "avg_ask_sweep_score": _safe_float(
-                microstructure_reaction_summary.get("avg_ask_sweep_score"), None
-            ),
-            "avg_post_sweep_hold_score": _safe_float(
-                microstructure_reaction_summary.get("avg_post_sweep_hold_score"), None
-            ),
-            "avg_bid_replenishment_score": _safe_float(
-                microstructure_reaction_summary.get("avg_bid_replenishment_score"), None
-            ),
-            "max_vi_proximity_risk": _safe_int(
-                microstructure_reaction_summary.get("max_vi_proximity_risk"), 0
-            )
-            or 0,
-            "decision_authority": str(
-                microstructure_reaction_context.get("decision_authority")
-                or "diagnostic_source_only_with_fail_closed_holding_quality_consumer"
-            ),
-            "runtime_consumer_effect": str(
-                microstructure_reaction_context.get("runtime_consumer_effect")
-                or "holding_score_source_quality_fail_closed_only"
-            ),
-            **microstructure_summary_contract(microstructure_reaction_summary),
-            "runtime_effect": bool(
-                microstructure_reaction_context.get("runtime_effect", False)
-            ),
-            "forbidden_uses": (
-                microstructure_reaction_context.get("forbidden_uses")
-                if isinstance(
-                    microstructure_reaction_context.get("forbidden_uses"), list
-                )
-                else []
-            ),
         },
     }
     if cumulative_dynamic_sample:
@@ -21389,42 +21121,6 @@ def refresh_entry_split_only(target_date: str) -> dict:
     return report["entry_split_execution_model_handoff"]
 
 
-def refresh_machine_evaluation_only(target_date: str) -> dict:
-    """Refresh one diagnostic handoff without replay, calibration or policy writes."""
-    from src.engine.scalping.microstructure_reaction_context import microstructure_summary_contract
-
-    path = report_path_for_date(target_date)
-    generation = path.stat()
-    report = json.loads(path.read_text(encoding="utf-8"))
-    source_path = REPORT_DIR / "microstructure_reaction_context" / f"microstructure_reaction_context_{target_date}.json"
-    source = json.loads(source_path.read_text(encoding="utf-8"))
-    if report.get("date") != target_date or source.get("date") != target_date:
-        raise ValueError("machine_daily_handoff_exact_date_missing")
-    summary = microstructure_summary_contract(source.get("summary") or {})
-    bundle = report.setdefault("calibration_source_bundle", {})
-    bundle.setdefault("source_metrics", {})["microstructure_reaction_context"] = {
-        "available": True, "decision_authority": "postclose_diagnostic_only", **summary,
-    }
-    bundle.setdefault("sources", {})["microstructure_reaction_context"] = {
-        "path": str(source_path), "exists": True, "loaded": True,
-        "operating_status": "diagnostic_only", "top_keys": list(source),
-    }
-    from src.engine.scalping.scanner_lookup_attention_resource import selection_handoff
-    report["scanner_lookup_attention_selection"] = selection_handoff(REPORT_DIR, target_date)
-    report["microstructure_evaluation_refreshed_at"] = datetime.now().isoformat()
-    current = path.stat()
-    if (current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns) != (generation.st_dev, generation.st_ino, generation.st_size, generation.st_mtime_ns):
-        raise ValueError("daily_report_changed_during_machine_handoff")
-    temporary = path.with_name(path.name + f".{os.getpid()}.tmp")
-    try:
-        temporary.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-        temporary.replace(path)
-    finally:
-        temporary.unlink(missing_ok=True)
-    return summary
-
-
-
 def refresh_economic_evaluation_only(target_date: str) -> dict:
     """Bounded current projection with immutable predecessor and CAS writes."""
     import fcntl
@@ -21563,8 +21259,6 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Read-only measurement of the exact CLI input path; no report writes or provider calls.",
     )
-    parser.add_argument("--refresh-machine-evaluation-only", action="store_true",
-                        help="Refresh only the existing daily microstructure diagnostic handoff.")
     parser.add_argument("--refresh-entry-split-only", action="store_true",
                         help="Refresh the existing Daily entry split candidate from its immutable generation.")
     parser.add_argument("--refresh-economic-evaluation-only", action="store_true",
@@ -21576,10 +21270,6 @@ def main(argv: list[str] | None = None) -> int:
     if args.refresh_entry_split_only:
         refresh_entry_split_only(args.target_date)
         return 0
-    if args.refresh_machine_evaluation_only:
-        refresh_machine_evaluation_only(args.target_date)
-        return 0
-
     benchmark_started = time.monotonic()
     if args.calibration_run_phase == "postclose" and not args.benchmark_inputs_only:
         from src.engine.scalping.strategy_owner_replay import materialize

@@ -151,7 +151,7 @@ Claude 폐기 실행·검증·cleanup 및 선택 배포 증거는 [9/18 폐기 �
 
 ## Compact AI 공통 실행·소비 계약 (2026-09-19)
 
-기존 quality materialization의 control/labels는 최초 Daily 앞에서 생성·재사용하고 calibration prepare가 receipt를 결속한다. final source audit 뒤 evaluate만 후보 호출을 허용한다. WS 등 필수 입력 producer 뒤 finalize가 기존 machine/compact 검증과 단일 dated publisher를 소비하며 Daily refresh·최초 EV·runtime summary보다 앞에 실행한다. 이후 tail 요약 갱신은 handoff로 재결속하고 provider/publisher를 호출하지 않는다. 부분 compact CLI는 공통 finalize를 소비한다.
+기존 quality materialization의 control/labels는 최초 Daily 앞에서 생성·재사용하고 calibration prepare가 receipt를 결속한다. final source audit 뒤 evaluate만 후보 호출을 허용한다. WS 등 필수 입력 producer 뒤 finalize가 기존 machine/compact 검증과 단일 dated publisher를 소비하며 최초 EV·runtime summary보다 앞에 실행한다. 이후 tail 요약 갱신은 handoff로 재결속하고 provider/publisher를 호출하지 않는다. 부분 compact CLI는 공통 finalize를 소비한다.
 
 동일 원천은 shared data 실체 경로로 재사용한다. source 변경 시 finalize가 재평가 요구로 차단되며 과거21 excluded/비교0을 EV0 또는 no-edge로 표시하지 않는다. 자연 model/prompt holdout·실제 PREOPEN/PID·완료 비용 성과는 기존 stable owner의 다음 거래일 acceptance다. [통합 계획](../proposals/compact-ai-postclose-source-paired-evaluation-and-preopen-consumer-integration-plan-2026-09-19.md).
 
@@ -161,8 +161,8 @@ Claude 폐기 실행·검증·cleanup 및 선택 배포 증거는 [9/18 폐기 �
 
 ### Compact 후속 순서 확인 (2026-09-19)
 
-통합 evaluate 뒤 기본 OFF인 performance/regime/producer-gap/stage-hook 분기를 지나 다음 활성 producer는 #89 WS finalize/monitor-only다. 그 다음 compact finalize→Daily refresh→EV/workorder 소비다. [후속 구조 리뷰·기존 결과·모델 한계](2026-09-19-compact-ai-postclose-integration-implementation-review.md#다음-활성-장후작업-ws-최종화-코드-변경-없는-분석)를 참조한다.9/17·18 intraday 보고서를 postclose final로 집계하지 않는다.
+통합 evaluate 뒤 기본 OFF인 performance/regime/producer-gap/stage-hook 분기를 지나 다음 활성 producer는 #89 WS finalize/monitor-only다. 그 다음 compact finalize→EV/workorder 직접 소비다. [후속 구조 리뷰·기존 결과·모델 한계](2026-09-19-compact-ai-postclose-integration-implementation-review.md#다음-활성-장후작업-ws-최종화-코드-변경-없는-분석)를 참조한다.9/17·18 intraday 보고서를 postclose final로 집계하지 않는다.
 
-### WS 종결 정정과 Daily machine refresh (2026-09-19)
+### WS 종결 정정과 직접 consumer 경로 (2026-09-19)
 
-WS evaluator·fail-closed policy·consumer 전달은 배포됐지만 capacity-pruned incoming 후보가 compact/entry 실행 입력을 생산하지 않아 구조적 경제성 루프는 OPEN이다. `daily_threshold_cycle_report --refresh-machine-evaluation-only`는 기존 microstructure diagnostic과 scanner selection handoff만 갱신하며 EV를 재계산하거나 정책을 승격하지 않는다. 현재 Daily 17개 family의 validated improvement와 paired comparable은 모두0이고, microstructure 3,342 capture는 full round-trip cost 결손으로 cost-adjusted outcome0이다. 시간 경과 가능 항목과 구조 결손, cleanup·배포 경계는 [정정·분석 보고서](2026-09-19-ws-closure-correction-and-daily-machine-refresh-analysis.md)를 따른다.
+WS evaluator·fail-closed policy·consumer 전달은 배포됐지만 capacity-pruned incoming 후보가 compact/entry 실행 입력을 생산하지 않아 구조적 경제성 루프는 OPEN이다. 현행 wrapper는 compact/WS finalize 뒤 EV가 exact-date 원천을 직접 읽고 runtime summary와 strict verifier가 같은 계약을 대조한다. Daily는 microstructure·scanner handoff를 보유하지 않는다. 현재 Daily 17개 family의 validated improvement와 paired comparable은 모두0이고, microstructure 3,342 capture는 full round-trip cost 결손으로 cost-adjusted outcome0이다. 시간 경과 가능 항목과 구조 결손의 근거는 [결과 분석](2026-09-19-ws-closure-correction-and-daily-machine-refresh-analysis.md)을 따른다.

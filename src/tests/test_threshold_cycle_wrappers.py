@@ -416,7 +416,11 @@ def test_postclose_wrapper_integrates_lookup_evaluation_at_existing_final_bounda
     assert "RUN_SCANNER_LOOKUP_ATTENTION_TUNING" not in script
     assert "scanner_lookup_attention_tuning=$" not in script
     assert script.index("src.engine.strategy_position_performance_report") < script.index('wait_for_postclose_resources "intraday_ws_freshness_finalize"')
-    assert script.index('wait_for_postclose_resources "intraday_ws_freshness_finalize"') < script.index("--refresh-machine-evaluation-only")
+    finalize_idx = script.index('wait_for_postclose_resources "intraday_ws_freshness_finalize"')
+    ev_idx = script.index('run_threshold_cycle_ev_and_wait "pre_workorder"', finalize_idx)
+    assert finalize_idx < ev_idx
+    assert "--refresh-machine-evaluation-only" not in script
+    assert "daily_machine_evaluation_handoff" not in script
     assert "intraday_ws_freshness_finalize=$RUN_INTRADAY_WS_FRESHNESS_FINALIZE" in script
 
 
@@ -2089,9 +2093,12 @@ def test_postclose_wrapper_materializes_daily_exact_quality_chain_before_calibra
     assert materialization_idx < calibration_idx
     for phase in ("prepare", "evaluate", "finalize", "handoff"):
         assert f"--postclose-phase {phase}" in script[calibration_idx:]
-    assert script.index("--postclose-phase finalize") < script.index(
-        "daily_machine_evaluation_handoff"
+    finalize_idx = script.index("--postclose-phase finalize")
+    assert finalize_idx < script.index(
+        'run_threshold_cycle_ev_and_wait "pre_workorder"', finalize_idx
     )
+    assert "daily_machine_evaluation_handoff" not in script
+    assert "--refresh-machine-evaluation-only" not in script
     assert "--mode postclose" in materialization_block
     assert "--write" in materialization_block
     assert "--execute-candidate" not in materialization_block

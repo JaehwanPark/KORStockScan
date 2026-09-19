@@ -96,14 +96,13 @@ def test_modern_only_handoff_preserves_legacy_and_rejects_stale_consumers(tmp_pa
     assert summary['row_count'] is None
     assert summary['clean_baseline_cumulative_opportunity_exploration']['status'] == 'retired'
     ev = {'microstructure_reaction_context': summary}
-    daily = {'calibration_source_bundle': {'source_metrics': {'microstructure_reaction_context': summary}}}
-    check = _microstructure_diagnostic_handoff_status(report, ev, ev, {}, daily)
+    check = _microstructure_diagnostic_handoff_status(report, ev, ev, {})
     assert check['status'] == 'pass'  # Cost gap is reported, not a fabricated no-edge or handoff failure.
     stale = {'microstructure_reaction_context': {**summary, 'machine_primary_auxiliary_evaluation': {}}}
-    check = _microstructure_diagnostic_handoff_status(report, stale, ev, {}, daily)
+    check = _microstructure_diagnostic_handoff_status(report, stale, ev, {})
     assert 'ev_modern_evaluation_stale_or_missing' in check['issues']
     source.write_text(source.read_text() + '\n')
-    check = _microstructure_diagnostic_handoff_status(report, ev, ev, {}, daily)
+    check = _microstructure_diagnostic_handoff_status(report, ev, ev, {})
     assert 'modern_parent_hash_mismatch' in check['issues']
     assert report['summary']['machine_primary_auxiliary_evaluation']['source_report_sha256'] != hashlib.sha256(source.read_bytes()).hexdigest()
 
@@ -119,37 +118,10 @@ def test_retired_raw_job_cannot_be_reenabled_by_environment():
     assert 'build_microstructure_reaction_context_report' not in names
     assert 'backfill_clean_baseline_opportunity_rollups' not in names
     finalize = script.index('--postclose-phase finalize')
-    assert script.index('daily_machine_evaluation_handoff') > finalize
-
-
-def test_daily_refresh_changes_only_modern_handoff_without_policy_replay(tmp_path, monkeypatch):
-    import json
-    from src.engine import daily_threshold_cycle_report as daily
-    from src.engine.scalping.microstructure_reaction_context import MACHINE_EVALUATION_SCHEMA, refresh_machine_evaluation_link
-    parent = tmp_path / 'ai_decision_action_outcome_calibration_2026-09-17.json'
-    parent.write_text(json.dumps({
-        'schema': 'ai_decision_action_outcome_calibration_v2', 'target_date': '2026-09-17',
-        'runtime_effect': False, 'allowed_runtime_apply': False,
-        'hierarchical_entry_quality': {'machine_decision_case_table': {'microstructure_evaluation': {
-            'schema': MACHINE_EVALUATION_SCHEMA, 'partitions': [],
-            'runtime_effect': False, 'allowed_runtime_apply': False,
-        }}},
-    }))
-    refresh_machine_evaluation_link(parent, report_root=tmp_path)
-    path = tmp_path / 'threshold_cycle_2026-09-17.json'
-    original = {'date': '2026-09-17', 'summary': {'real_pnl': None},
-                'apply_candidate_list': [{'family': 'existing_owner', 'hash': 'frozen'}],
-                'calibration_source_bundle': {'source_metrics': {'other_owner': {'valid': True}}}}
-    original['meta'] = {'pipeline_load': {'2026-09-17': {'event_family_projection': ['holding_flow_ofi_smoothing', 'scale_in_counterfactual', 'statistical_action_weight']}}}
-    path.write_text(json.dumps(original))
-    monkeypatch.setattr(daily, 'REPORT_DIR', tmp_path)
-    daily.refresh_machine_evaluation_only('2026-09-17')
-    actual = json.loads(path.read_text())
-    assert actual['meta'] == original['meta']
-    assert actual['summary'] == original['summary']
-    assert actual['apply_candidate_list'] == original['apply_candidate_list']
-    assert actual['calibration_source_bundle']['source_metrics']['other_owner'] == {'valid': True}
-    assert actual['calibration_source_bundle']['source_metrics']['microstructure_reaction_context']['legacy_study_status'] == 'retired'
+    ev = script.index('run_threshold_cycle_ev_and_wait "pre_workorder"', finalize)
+    assert finalize < ev
+    assert 'daily_machine_evaluation_handoff' not in script
+    assert '--refresh-machine-evaluation-only' not in script
 
 
 def test_machine_parent_authority_and_report_metric_contract(tmp_path):
