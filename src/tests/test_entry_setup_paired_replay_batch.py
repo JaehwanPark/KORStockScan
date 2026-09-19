@@ -24,6 +24,7 @@ def compact_row(day="2026-09-17", ordinal=0, verdict="VETO", net=0.5):
     replay = replay_entry_opportunity(seed, depths, trades, source_ready=True, evaluated_at=datetime.fromisoformat(seed["observed_at"]).timestamp()+181)
     return {"evaluation_key": f"compact-{day}-{ordinal}", "source_date": day,
             "evaluation_attempt_id": seed["evaluation_attempt_id"],
+            "entry_economic_plan_sha256": seed["plan_sha256"],
             "scanner_promotion_id": seed["scanner_promotion_id"],
             "stock_code": seed["stock_code"], "effective_venue": "KRX",
             "session_bucket": "KRX_REGULAR", "broker_route": "KRX",
@@ -39,6 +40,24 @@ def compact_row(day="2026-09-17", ordinal=0, verdict="VETO", net=0.5):
 def compact_result(row, verdict="PASS"):
     return compact.sealed({"candidate_response": {"risk_verdict": verdict},
                            "input_sha256": compact.input_identity(row), "validation_errors": [], "runtime_inference_cost_delta_krw": 0.0})
+
+
+def test_compact_owner_replay_is_bound_to_exact_attempt_and_plan_hash():
+    from copy import deepcopy
+
+    row = compact_row()
+    replay = row["owner_replay"]
+    assert compact.owner_replay_valid(replay, row)
+
+    wrong_plan = {**row, "entry_economic_plan_sha256": "f" * 64}
+    assert not compact.owner_replay_valid(replay, wrong_plan)
+
+    conflicting = deepcopy(replay)
+    conflicting["blocker"] = "conflicting-generation"
+    indexed, conflicts = compact.index_owner_replays([replay, conflicting])
+    key = (row["evaluation_attempt_id"], row["entry_economic_plan_sha256"])
+    assert indexed[key] == replay
+    assert conflicts == {key}
 
 
 def test_compact_whole_population_zero_same_verdict_and_unresolved_caution():
@@ -1413,6 +1432,7 @@ def test_source_contract_code_upgrade_preserves_exclusions_without_raw_rescan(mo
     day='2026-09-17'
     row=compact_row()
     row.update(input=None, owner_replay=None, exclusion_reason='exact_stop_distance_missing')
+    row.pop("entry_economic_plan_sha256")
     projection=compact.sealed(dict(rows=[row],screened_total=1,source_manifest_sha256='d'*64,
         source_tuning_allowed=True, exclusion_counts={'exact_stop_distance_missing':1}, **compact.AUTHORITY))
     monkeypatch.setattr(compact,'prepare',lambda *_: projection)

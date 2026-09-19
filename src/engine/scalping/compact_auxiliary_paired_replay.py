@@ -44,7 +44,7 @@ CONTRACT = {
     "model_holdout_precedes_prompt_learning": True,
     "empirical_error_and_stress_lower_bound_required": True,
 }
-SOURCE_PROJECTION_CONTRACT = "compact_pre_ai_execution_source_v6"
+SOURCE_PROJECTION_CONTRACT = "compact_pre_ai_execution_source_v7"
 
 
 def digest(value):
@@ -109,6 +109,29 @@ def finite(value):
     return type(value) in (int, float) and math.isfinite(value)
 
 
+def sha256_hex(value):
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
+def index_owner_replays(rows):
+    """Index exact pre-AI plans without collapsing conflicting generations."""
+    indexed, conflicts = {}, set()
+    for replay in rows:
+        seed = replay.get("seed") or {}
+        key = (seed.get("evaluation_attempt_id"), seed.get("plan_sha256"))
+        if not key[0] or not sha256_hex(key[1]):
+            continue
+        if key in indexed and indexed[key] != replay:
+            conflicts.add(key)
+        else:
+            indexed[key] = replay
+    return indexed, conflicts
+
+
 def owner_replay_valid(replay, row):
     from src.engine.scalping.strategy_owner_replay import (
         _entry_seed_valid,
@@ -125,6 +148,8 @@ def owner_replay_valid(replay, row):
         and _entry_seed_valid(seed)
         and seed.get("source_date") == row.get("source_date")
         and seed.get("evaluation_attempt_id") == row.get("evaluation_attempt_id")
+        and sha256_hex(row.get("entry_economic_plan_sha256"))
+        and seed.get("plan_sha256") == row.get("entry_economic_plan_sha256")
         and seed.get("scanner_promotion_id") == row.get("scanner_promotion_id")
         and seed.get("stock_code") == row.get("stock_code")
         and seed.get("effective_venue") == row.get("effective_venue")
@@ -384,10 +409,7 @@ def prepare(data_root, day):
     owner_source = (summary.get("compact_pre_ai_execution_replay")
         or summary.get("entry_opportunity_executable_replay_refresh")
         or (summary.get("daily_diagnostic") or {}).get("entry_opportunity_executable_replay") or {})
-    owner_rows = {
-        r.get("seed", {}).get("evaluation_attempt_id"): r
-        for r in owner_source.get("rows", [])
-    }
+    owner_rows, owner_conflicts = index_owner_replays(owner_source.get("rows", []))
     rows, exclusions = [], Counter()
     for key, trace in sorted(traces.items()):
         payload_key = (
@@ -402,18 +424,27 @@ def prepare(data_root, day):
         row_identity = {
             "source_date": day,
             "evaluation_attempt_id": trace.get("evaluation_attempt_id"),
+            "entry_economic_plan_sha256": trace.get(
+                "entry_economic_plan_sha256"
+            ),
             "scanner_promotion_id": trace.get("scanner_promotion_id"),
             "stock_code": trace.get("stock_code"),
             "effective_venue": trace.get("effective_venue"),
             "session_bucket": trace.get("session_bucket"),
         }
-        owner_replay = owner_rows.get(trace.get("evaluation_attempt_id")) or {}
+        owner_key = (
+            trace.get("evaluation_attempt_id"),
+            trace.get("entry_economic_plan_sha256"),
+        )
+        owner_replay = owner_rows.get(owner_key) or {}
         owner_valid = owner_replay_valid(owner_replay, row_identity)
         label_identity_reasons = [r for r in by_trace.get(key,{}).get("primary_cohort_exclusion_reasons") or []
             if r in {"payload_trace_venue_mismatch","payload_trace_session_mismatch","canonical_context_venue_session_mismatch"}]
         reason = None
         if key in conflicts or payload_key in payload_conflicts:
             reason = "conflicting_exact_input"
+        elif owner_key in owner_conflicts:
+            reason = "conflicting_exact_owner_replay"
         elif (contract_exclusion := natural_response_contract_exclusion(trace)):
             reason = contract_exclusion
         elif (
@@ -430,6 +461,8 @@ def prepare(data_root, day):
             reason = "frozen_payload_missing_or_invalid"
         elif label_identity_reasons:
             reason = "source_label_identity_contract_invalid:" + label_identity_reasons[0]
+        elif sha256_hex(trace.get("entry_economic_plan_sha256")) and not owner_valid:
+            reason = "exact_owner_replay_missing_or_invalid"
         elif not owner_valid and path.get("status") != "evaluable":
             reason = path.get("label_reason") or "terminal_path_not_evaluable"
         elif not owner_valid and (
@@ -571,6 +604,7 @@ def evaluate(rows, results):
                     "broker_route",
                     "incumbent_prompt_version",
                     "evaluation_attempt_id",
+                    "entry_economic_plan_sha256",
                     "scanner_promotion_id",
                     "stock_code",
                 )
@@ -1232,11 +1266,15 @@ def run(
             owner_source = (summary.get("compact_pre_ai_execution_replay")
                 or summary.get("entry_opportunity_executable_replay_refresh")
                 or (summary.get("daily_diagnostic") or {}).get("entry_opportunity_executable_replay") or {})
-            owners = {r.get("seed", {}).get("evaluation_attempt_id"): r for r in owner_source.get("rows") or []}
+            owners, owner_conflicts = index_owner_replays(owner_source.get("rows") or [])
             rebound = []
             for original in projection.get("rows") or []:
                 row = dict(original)
-                owner = owners.get(row.get("evaluation_attempt_id")) or {}
+                owner_key = (
+                    row.get("evaluation_attempt_id"),
+                    row.get("entry_economic_plan_sha256"),
+                )
+                owner = owners.get(owner_key) or {}
                 row["owner_replay"] = owner if owner_replay_valid(owner, row) else None
                 label = by_trace.get(row.get("evaluation_key")) or {}
                 row["source_label_identity_reasons"]=[r for r in label.get("primary_cohort_exclusion_reasons") or []
@@ -1253,6 +1291,19 @@ def run(
                 if (row["owner_replay"] and isinstance(row.get("input"), dict)
                     and row.get("exclusion_reason") in {"exact_stop_distance_missing", "exact_stop_distance_missing_or_invalid", "terminal_path_not_evaluable", "full_cost_or_terminal_missing"}):
                     row["exclusion_reason"] = None
+                elif owner_key in owner_conflicts:
+                    row["owner_replay"] = None
+                    row["exclusion_reason"] = "conflicting_exact_owner_replay"
+                elif (sha256_hex(row.get("entry_economic_plan_sha256"))
+                      and not row["owner_replay"]
+                      and row.get("exclusion_reason") in {
+                          None,
+                          "exact_stop_distance_missing",
+                          "exact_stop_distance_missing_or_invalid",
+                          "terminal_path_not_evaluable",
+                          "full_cost_or_terminal_missing",
+                      }):
+                    row["exclusion_reason"] = "exact_owner_replay_missing_or_invalid"
                 rebound.append(row)
             write(path.parent / "compact_source_generations" / (projection["artifact_content_sha256"] + ".json"), projection)
             projection = sealed({**projection, "rows": rebound,

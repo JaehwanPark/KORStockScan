@@ -870,6 +870,7 @@ def test_runtime_pre_ai_producer_freezes_owner_inputs_without_submit(monkeypatch
                 scanner_promotion_id=receipt['scanner_promotion_id'],effective_venue=venue,session_bucket=session,broker_route=broker_route))
         stored=trace.record_ai_decision_trace({**request,**receipt,
             'machine_bundle_sha256':'a'*64,'entry_mechanistic_action':'ENTER_NOW',
+            'entry_economic_plan_sha256':result['entry_economic_plan_sha256'],
             'semantic_validation_status':'pass','decision_quality_contract_status':'pass',
             'entry_ai_risk_verdict':'PASS','action':'BUY','score':80,'provider_actual':'openai',
             'ai_model_actual':'gpt-5.4-nano'},prompt_type='scalping_entry',prompt_version=AI_VERSION,
