@@ -1843,7 +1843,8 @@ def test_direct_family_checklist_opens_only_structural_economic_blockers(
     parsed = [
         task
         for task in parse_checklist_tasks()
-        if "DirectFamilySourceRepairEntrySplit" in task.title
+        if task.source == result["path"]
+        and "DirectFamilySourceRepairEntrySplit" in task.title
     ]
     assert len(parsed) == 1
 
