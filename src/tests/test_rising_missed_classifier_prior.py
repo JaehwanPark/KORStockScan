@@ -69,7 +69,11 @@ def test_direct_paired_evaluator_measures_negative_support_relaxation(monkeypatc
     assert support["calibration_sample_floor_met"] is True
     assert support["holdout_sample_floor_met"] is True
     assert support["calibration"]["paired_delta_ev_pct"] == -0.9
-    assert support["holdout"]["paired_delta_daily_net_profit_krw"] < 0
+    assert support["holdout"]["paired_delta_daily_net_profit_krw"] is None
+    assert support["holdout"]["paired_delta_daily_return_sum_pct"] < 0
+    assert support["holdout"]["daily_net_profit_authority"] == (
+        "unavailable_quantity_and_capital_constraints_missing"
+    )
     assert support["disposition"] == "measured_no_edge"
     assert all(row["disposition"] == "identical_policy" for row in report["economic_evaluation"]["candidates"][1:])
     assert report["code_improvement_orders"] == []
@@ -98,11 +102,15 @@ def test_source_loader_fails_closed_on_malformed_input(tmp_path):
     report = mod.build_report("2026-09-16", source_paths=[path], generated_at="fixed")
 
     assert report["status"] == "structurally_blocked"
+    assert report["decision"] == "hold_structural_gap"
+    assert report["economic_evaluation"]["first_blocker"] == "source:malformed_json"
     assert report["source_quality"]["tuning_input_allowed"] is False
     assert report["source_receipts"][0]["state"] == "malformed_json"
 
 
-def test_validated_edge_publishes_bounded_dated_policy(monkeypatch, tmp_path):
+def test_positive_ev_without_quantity_or_capital_does_not_publish_policy(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(mod, "comparison_cost_contract", _cost)
     paths = []
     for day in ("2026-09-10", "2026-09-11", "2026-09-14", "2026-09-15", "2026-09-16"):
@@ -118,11 +126,45 @@ def test_validated_edge_publishes_bounded_dated_policy(monkeypatch, tmp_path):
     )
 
     policy = result["policy"]
-    assert report["status"] == "validated_edge"
-    assert policy["status"] == "validated_edge"
-    assert policy["runtime_env_overrides"]["KORSTOCKSCAN_RISING_MISSED_TP1_POSITIVE_SUPPORT_MIN"] == "1"
-    assert policy["runtime_env_overrides"]["KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE"] == "2026-09-17"
+    assert report["status"] == "structurally_blocked"
+    assert report["decision"] == "hold_structural_gap"
+    assert report["economic_evaluation"]["first_blocker"] == (
+        "counterfactual_quantity_or_capital_constraints_missing"
+    )
+    assert report["economic_evaluation"]["candidates"][0]["blocker"] == (
+        "counterfactual_quantity_or_capital_constraints_missing"
+    )
+    assert policy["status"] == "incumbent_preserved"
+    assert policy["runtime_env_overrides"] == {}
     assert len(policy["policy_sha256"]) == 64
+
+
+def test_source_loader_rejects_schema_mismatch_and_future_explicit_source(tmp_path):
+    schema_path = _feedback(
+        tmp_path / "rising_missed_intraday_feedback_2026-09-16.json",
+        "2026-09-16",
+        [("adverse_stop_first", None)],
+    )
+    payload = json.loads(schema_path.read_text(encoding="utf-8"))
+    payload["schema_version"] = 2
+    schema_path.write_text(json.dumps(payload), encoding="utf-8")
+    future_path = _feedback(
+        tmp_path / "rising_missed_intraday_feedback_2026-09-17.json",
+        "2026-09-17",
+        [("adverse_stop_first", None)],
+    )
+
+    schema_report = mod.build_report(
+        "2026-09-16", source_paths=[schema_path], generated_at="fixed"
+    )
+    future_report = mod.build_report(
+        "2026-09-16", source_paths=[schema_path, future_path], generated_at="fixed"
+    )
+
+    assert schema_report["status"] == "structurally_blocked"
+    assert schema_report["source_receipts"][0]["state"] == "schema_version_mismatch"
+    assert future_report["status"] == "structurally_blocked"
+    assert future_report["source_receipts"][1]["state"] == "blocked_future_source"
 
 
 def test_no_edge_policy_receipt_preserves_incumbent_without_env_mutation(monkeypatch, tmp_path):

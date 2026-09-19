@@ -10,6 +10,8 @@
 2. dated receipt의 self hash가 env 안의 자기 hash와 순환할 수 있었다. canonical digest에서 self field를 제외하고 publisher, bootstrap, runtime summary가 같은 계산을 사용하도록 통일했다.
 3. `measured_no_edge` receipt에도 선택하지 않은 최선의 distinct 후보 calibration·holdout EV와 일별 순익 근거가 남도록 보완했다. env override는 비어 있으므로 다음 장전에서 임계값을 바꾸지 않는다.
 4. 실제 9월 21일 PREOPEN 사전 조립에서 legacy selected family 검증 실패는 0건인데 퇴역 공통 handoff만 fail이라 최초 bootstrap incumbent가 없었다. 정확한 `runtime_env_handoff_missing` cutover 상태만 migration seed로 허용하고, runtime policy·dated override·selected/missing family 실패가 1건이라도 있거나 finding 종류가 다르면 차단하는 회귀를 추가했다.
+5. counterfactual에 실제 수량·자본 제약이 없는데 100만원 고정 notional을 원화 일별 순익으로 표시하던 계획 위반을 발견했다. 원화 순익·최악일 원화 손익은 null로 수정하고 일별 비용 후 수익률 합계만 진단으로 남겼다. 양수 EV라도 수량·자본 계약이 없으면 `structurally_blocked`다.
+6. 명시 입력에서 schema version 불일치와 target 이후 미래 source가 admission을 통과할 수 있던 경로를 fail-closed로 보완했다.
 
 재리뷰에서 unresolved in-scope defect는 없다.
 
@@ -18,18 +20,18 @@
 - clean-baseline source: 20일, 모두 date/schema/authority/hash admission 통과
 - paired rows: 2,861; cost-adjusted usable 2,432; censored 429
 - distinct candidate: `positive_support_min 2→1`, decision change 342
-- calibration: 252건/12일, paired delta EV `-0.76333333%`, 100만원 고정 모형 일평균 `-160,300원`, 최악일 `-285,500원`
-- untouched holdout: 50건/4일, paired delta EV `-0.85%`, 100만원 고정 모형 일평균 `-106,250원`, 최악일 `-296,200원`
+- calibration: 252건/12일, paired delta EV `-0.76333333%`; 원화 일별 순익·최악일은 수량·자본 계약 부재로 null
+- untouched holdout: 50건/4일, paired delta EV `-0.85%`; 원화 일별 순익·최악일은 수량·자본 계약 부재로 null
 - disposition: `measured_no_edge`; remaining five candidates are `identical_policy`
 - effective 2026-09-21 receipt: `incumbent_preserved`, runtime env override 없음
 
-100만원 값은 counterfactual 고정 notional 모형이며 실제 실현 순익이 아니다. 실제 PID 소비와 natural decision/fill/COMPLETED 비용 결과는 다음 정상 PREOPEN 이후 별도 acceptance다.
+실제 PID 소비와 natural decision/fill/COMPLETED 비용 결과는 다음 정상 PREOPEN 이후 별도 acceptance다.
 
 ## 검증
 
 - affected pytest: 1,013 passed, 3 deselected
 - clean baseline에서 deselected 3건은 동일하게 현재 시각의 `scalping_cutoff` 선행으로 실패해 이번 diff와 무관함을 재현
-- 추가 focused pytest: 191 passed 및 31 passed/72 deselected, TP1 consumer 20 passed/891 deselected; PREOPEN cutover 보완 뒤 영향 회귀 362 passed
+- 추가 focused pytest: 191 passed 및 31 passed/72 deselected, TP1 consumer 20 passed/891 deselected; PREOPEN cutover 보완 뒤 영향 회귀 362 passed; 원화 권한·source gate 재리뷰 뒤 363 passed
 - Python compile, affected ruff, `bash -n`, `git diff --check`: PASS
 - print-only backlog parser: PASS; external Project/Calendar sync 미실행
 - 실제 legacy 9월 18일 manifest를 사용한 9월 21일 bootstrap dry build: migration basis 확인, Rising `incumbent_preserved` receipt 수용, 신규 threshold override 0

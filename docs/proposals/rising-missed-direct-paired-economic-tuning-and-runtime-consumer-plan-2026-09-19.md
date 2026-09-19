@@ -381,10 +381,12 @@ Rollback은 기존 값으로의 원자적 복귀만 허용한다. source stale/h
 
 RM0–RM9의 코드 경로를 기존 owner 안에서 구현했다. `rising_missed_classifier_prior`는 퇴역 lifecycle·key-lineage·conversion 입력과 건수 기반 primary 판정, 완료된 bridge workorder 반복 생성을 제거하고 최근 최대 20개 feedback의 exact evaluation ID를 직접 비교한다. producer는 이후 생성분부터 각 horizon의 마지막 실행가능 bid 시각·수익률·source를 기록한다. 과거 `no_hit` 중 이 필드가 없는 행은 0으로 바꾸지 않고 censored다.
 
-source 20일에서 2,861개 paired 행을 구성했다. 인과적으로 결정 변화가 확인된 후보는 `positive_support_min 2→1` 한 개였고 342건이었다. 비용 후 calibration은 252건/12일, EV `-0.76333333%`; untouched holdout은 50건/4일, EV `-0.85%`; 100만원 고정 모형 holdout 일평균은 `-106,250원`, 최악일은 `-296,200원`이다. 따라서 상태는 `measured_no_edge`다. `positive_support_min=3`, spread 두 값, chase 두 값은 관측된 차단 population에서 결정 변화가 없어 `identical_policy`로 제외했다.
+source 20일에서 2,861개 paired 행을 구성했다. 인과적으로 결정 변화가 확인된 후보는 `positive_support_min 2→1` 한 개였고 342건이었다. 비용 후 calibration은 252건/12일, EV `-0.76333333%`; untouched holdout은 50건/4일, EV `-0.85%`다. counterfactual에는 실제 수량·자본 제약이 없으므로 원화 일별 순익과 최악일 원화 손익은 null로 유지한다. EV 자체가 calibration과 holdout 모두 음수이므로 상태는 `measured_no_edge`다. `positive_support_min=3`, spread 두 값, chase 두 값은 관측된 차단 population에서 결정 변화가 없어 `identical_policy`로 제외했다.
 
 effective date `2026-09-21`에는 challenger를 발행하지 않고 `incumbent_preserved` receipt를 생성한다. 이 receipt의 runtime env override는 비어 있어 기존 임계값과 주문 권한을 바꾸지 않는다. validated edge가 생긴 경우에만 allowlist와 범위 검증을 통과한 단일축 값을 shared bootstrap이 기존 TP1 selector에 전달한다. 실제 PID 소비, 자연 TP1 decision, fill, `COMPLETED + valid profit_rate`와 비용 후 post-apply EV는 다음 정상 PREOPEN 이후 확인할 별도 acceptance이며 이 구현 결과에 포함하지 않는다.
 
 배포 전 PREOPEN 사전 조립에서 9월 18일 legacy manifest의 선택 family·dated override 검증 실패 수는 모두 0이지만 퇴역 공통 handoff의 `runtime_env_handoff_missing` 때문에 전체 verify만 fail인 cutover 결함을 발견했다. shared bootstrap은 이 정확한 legacy 상태에서만 최초 incumbent seed를 허용하도록 보완했다. 허용 finding은 미선택 `integrated_entry_axis_bundle`의 기존 세 handoff finding으로 제한하며, active runtime policy 실패·미검증 selected family·missing family·dated override 실패가 하나라도 있으면 기존대로 fail-closed다.
+
+재리뷰에서는 실제 수량·자본 제약이 없는 counterfactual에 100만원 고정 notional을 넣어 원화 일별 순익을 표시하던 계획 위반을 수정했다. 원화 필드는 null이고 일별 비용 후 수익률 합계만 진단으로 남긴다. 양수 EV가 나오더라도 수량·자본 계약이 없으면 `structurally_blocked`로 승격을 차단한다. 또한 schema version 불일치와 explicit 미래 날짜 source를 fail-closed로 보완했다.
 
 9월 17일 raw pipeline은 약 5.71GB다. 이미 성숙한 target/adverse 비교가 명확한 음수인 상태에서 과거 censored `no_hit` 40건을 채우기 위해 전체 raw를 재주사하지 않는다. 이는 계산 생략으로 양수 결론을 만드는 조치가 아니라, 결손 행을 계속 제외하고 향후 자연 producer에서 계약을 닫는 선택이다.

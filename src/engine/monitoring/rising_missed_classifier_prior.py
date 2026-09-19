@@ -31,7 +31,6 @@ CALIBRATION_SAMPLE_FLOOR = 30
 CALIBRATION_DAY_FLOOR = 3
 HOLDOUT_SAMPLE_FLOOR = 20
 HOLDOUT_DAY_FLOOR = 2
-MODEL_NOTIONAL_KRW = 1_000_000.0
 BASELINE_POLICY = {
     "positive_support_min": 2,
     "spread_caution_ratio": 0.002,
@@ -129,7 +128,9 @@ def _source_paths(target_date: str, explicit: Iterable[Path] = ()) -> list[Path]
     return [path for _, path in sorted(rows)[-MAX_SOURCE_DAYS:]]
 
 
-def _read_source(path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+def _read_source(
+    path: Path, *, maximum_date: date
+) -> tuple[dict[str, Any], dict[str, Any]]:
     receipt: dict[str, Any] = {
         "path": str(path.resolve()),
         "exists": False,
@@ -174,6 +175,9 @@ def _read_source(path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
         target_date=payload.get("target_date"),
         authority=payload.get("decision_authority"),
     )
+    if payload.get("schema_version") != 1:
+        receipt["state"] = "schema_version_mismatch"
+        return {}, receipt
     if payload.get("report_type") != "rising_missed_intraday_feedback":
         receipt["state"] = "schema_mismatch"
         return {}, receipt
@@ -184,7 +188,19 @@ def _read_source(path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     ):
         receipt["state"] = "authority_contract_invalid"
         return {}, receipt
-    if str(payload.get("target_date") or "") not in path.name:
+    source_date_text = str(payload.get("target_date") or "")
+    try:
+        source_date = date.fromisoformat(source_date_text)
+    except ValueError:
+        receipt["state"] = "source_date_invalid"
+        return {}, receipt
+    if source_date < CLEAN_BASELINE_DATE:
+        receipt["state"] = "blocked_before_clean_baseline"
+        return {}, receipt
+    if source_date > maximum_date:
+        receipt["state"] = "blocked_future_source"
+        return {}, receipt
+    if path.stem.rsplit("_", 1)[-1] != source_date_text:
         receipt["state"] = "date_identity_mismatch"
         return {}, receipt
     rows = payload.get("rising_missed_tp1_counterfactual_first_hit_label_rows")
@@ -325,9 +341,9 @@ def _metrics(rows: list[dict[str, Any]], dates: set[str]) -> dict[str, Any]:
     selected = [row for row in rows if row["source_date"] in dates]
     usable = [row for row in selected if row.get("net_return_pct") is not None]
     returns = [float(row["net_return_pct"]) for row in usable]
-    daily: dict[str, float] = defaultdict(float)
+    daily_return_sum_pct: dict[str, float] = defaultdict(float)
     for row in usable:
-        daily[row["source_date"]] += float(row["net_return_pct"]) * MODEL_NOTIONAL_KRW / 100.0
+        daily_return_sum_pct[row["source_date"]] += float(row["net_return_pct"])
     return {
         "paired_sample_count": len(usable),
         "distinct_day_count": len({row["source_date"] for row in usable}),
@@ -336,12 +352,22 @@ def _metrics(rows: list[dict[str, Any]], dates: set[str]) -> dict[str, Any]:
         "baseline_cost_adjusted_ev_pct": 0.0 if usable else None,
         "challenger_cost_adjusted_ev_pct": round(sum(returns) / len(returns), 8) if returns else None,
         "paired_delta_ev_pct": round(sum(returns) / len(returns), 8) if returns else None,
-        "baseline_daily_net_profit_krw": 0.0 if daily else None,
-        "challenger_daily_net_profit_krw": round(sum(daily.values()) / len(daily), 2) if daily else None,
-        "paired_delta_daily_net_profit_krw": round(sum(daily.values()) / len(daily), 2) if daily else None,
-        "worst_day_net_profit_krw": round(min(daily.values()), 2) if daily else None,
-        "model_notional_per_attempt_krw": MODEL_NOTIONAL_KRW,
-        "daily_net_profit_authority": "counterfactual_fixed_notional_model_not_actual_profit",
+        "baseline_daily_net_profit_krw": None,
+        "challenger_daily_net_profit_krw": None,
+        "paired_delta_daily_net_profit_krw": None,
+        "worst_day_net_profit_krw": None,
+        "paired_delta_daily_return_sum_pct": (
+            round(sum(daily_return_sum_pct.values()) / len(daily_return_sum_pct), 8)
+            if daily_return_sum_pct
+            else None
+        ),
+        "worst_day_return_sum_pct": (
+            round(min(daily_return_sum_pct.values()), 8)
+            if daily_return_sum_pct
+            else None
+        ),
+        "model_notional_per_attempt_krw": None,
+        "daily_net_profit_authority": "unavailable_quantity_and_capital_constraints_missing",
     }
 
 
@@ -367,14 +393,22 @@ def _evaluate_candidate(rows: list[dict[str, Any]], axis: str, value: float | in
     elif not calibration_floor or not holdout_floor:
         disposition = "insufficient_mature_sample"
         blocker = "calibration_or_holdout_sample_floor"
+    elif (calibration["paired_delta_ev_pct"] or 0.0) <= 0.0 or (
+        holdout["paired_delta_ev_pct"] or 0.0
+    ) <= 0.0:
+        disposition = "measured_no_edge"
+        blocker = "cost_adjusted_ev_not_improved"
+    elif calibration["paired_delta_daily_net_profit_krw"] is None or holdout[
+        "paired_delta_daily_net_profit_krw"
+    ] is None:
+        disposition = "structurally_blocked"
+        blocker = "counterfactual_quantity_or_capital_constraints_missing"
     elif (
-        (calibration["paired_delta_ev_pct"] or 0.0) <= 0.0
-        or (holdout["paired_delta_ev_pct"] or 0.0) <= 0.0
-        or (calibration["paired_delta_daily_net_profit_krw"] or 0.0) <= 0.0
-        or (holdout["paired_delta_daily_net_profit_krw"] or 0.0) <= 0.0
+        calibration["paired_delta_daily_net_profit_krw"] <= 0.0
+        or holdout["paired_delta_daily_net_profit_krw"] <= 0.0
     ):
         disposition = "measured_no_edge"
-        blocker = "cost_adjusted_ev_or_daily_net_not_improved"
+        blocker = "daily_net_profit_not_improved"
     elif (holdout["worst_day_net_profit_krw"] or 0.0) < 0.0:
         disposition = "measured_no_edge"
         blocker = "holdout_worst_day_tail_worse_than_no_trade_baseline"
@@ -489,15 +523,31 @@ def build_report(
 ) -> dict[str, Any]:
     date.fromisoformat(target_date)
     sources = _source_paths(target_date, source_paths)
-    loaded = [_read_source(path) for path in sources]
+    maximum_date = date.fromisoformat(target_date)
+    loaded = [_read_source(path, maximum_date=maximum_date) for path in sources]
     rows, exclusions = _joined_rows(loaded)
     candidates = [_evaluate_candidate(rows, axis, value) for axis, value in CANDIDATES]
     viable = [row for row in candidates if row["disposition"] == "validated_edge"]
     measured = [row for row in candidates if row["disposition"] == "measured_no_edge"]
+    structurally_blocked = [
+        row for row in candidates if row["disposition"] == "structurally_blocked"
+    ]
     source_states = Counter(receipt["state"] for _, receipt in loaded)
     exact_target = [
         receipt for _, receipt in loaded if receipt.get("target_date") == target_date
     ]
+    source_blocker = next(
+        (
+            f"source:{receipt['state']}"
+            for _, receipt in loaded
+            if receipt["state"] not in {"loaded", "valid_empty"}
+        ),
+        None,
+    )
+    if not loaded:
+        source_blocker = "source:missing"
+    elif not exact_target and source_blocker is None:
+        source_blocker = "source:exact_target_missing"
     if not loaded or not exact_target or any(
         receipt["state"] not in {"loaded", "valid_empty"} for _, receipt in loaded
     ):
@@ -510,6 +560,8 @@ def build_report(
         status = "validated_edge"
     elif measured:
         status = "measured_no_edge"
+    elif structurally_blocked:
+        status = "structurally_blocked"
     else:
         status = "insufficient_mature_sample"
     report: dict[str, Any] = {
@@ -518,11 +570,12 @@ def build_report(
         "target_date": target_date,
         "generated_at": generated_at or _now(),
         "status": status,
-        "decision": (
-            "publish_single_validated_edge"
-            if status == "validated_edge"
-            else "hold_no_edge"
-        ),
+        "decision": {
+            "validated_edge": "publish_single_validated_edge",
+            "structurally_blocked": "hold_structural_gap",
+            "insufficient_mature_sample": "hold_maturity",
+            "valid_empty": "hold_valid_empty",
+        }.get(status, "hold_no_edge"),
         "source_quality": {
             "clean_tuning_baseline_date": CLEAN_BASELINE_DATE.isoformat(),
             "tuning_input_allowed": bool(loaded) and all(
@@ -558,10 +611,19 @@ def build_report(
                 "row_count": len(rows),
                 "usable_outcome_count": sum(row["net_return_pct"] is not None for row in rows),
                 "censored_outcome_count": sum(row["net_return_pct"] is None for row in rows),
-                "daily_net_profit_authority": "fixed_notional_model_not_actual_profit",
+                "daily_net_profit_authority": "unavailable_quantity_and_capital_constraints_missing",
             },
             "first_blocker": (
-                None if viable else "all_distinct_candidates_no_edge_or_immature"
+                None
+                if viable
+                else (
+                    source_blocker
+                    or (
+                        structurally_blocked[0]["blocker"]
+                        if structurally_blocked
+                        else "all_distinct_candidates_no_edge_or_immature"
+                    )
+                )
             ),
             "closure_test": "calibration_30x3_and_holdout_20x2_cost_adjusted_ev_daily_net_tail",
             "allowed_runtime_apply": status == "validated_edge",
