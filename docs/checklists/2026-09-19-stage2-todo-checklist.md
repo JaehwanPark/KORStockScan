@@ -27,7 +27,7 @@
 - [x] `[CompactAIEconomicOptimization0919] Compact 응답 blocker·bounded projection migration·경제성 연구값·phase 상태 보완` (`Due: 2026-09-19`, `Slot: POSTCLOSE`, `TimeWindow: 00:00~23:59`, `Track: AIPrompt`)
   - Source: [통합 계획 §11–§19](../proposals/compact-ai-postclose-source-paired-evaluation-and-preopen-consumer-integration-plan-2026-09-19.md). Review: [구현·배포 리뷰](../audit-reports/2026-09-19-compact-economic-optimization-implementation-review.md).
   - Acceptance: commit `411ec0efdf993ec11e36b3fc79b78a5a7a36a6e1`, immutable release 선택·route print-plan·영향/물리 release 회귀 PASS. source9/17 제한 재생성은 source gap21(stop10/transport8/semantic1/identity2), provider0/raw rescan0, 비교0·EV null·승격0이다. effective9/21 bundle `fb4870b8ab479897c7580d79a92acb2595889c2d7c95b75087bcef6cfb6f74c5` incumbent carry·machine/비compact scope 보존·scoped strict PASS. 실제 PID/완료 손익은 기존 자연 owner OPEN이며 양수EV 주장이 아니다.
-  - 후속 재리뷰: 영향333 PASS, 현재 consumer handoff를 Git checklist에 재결속. 미참조 generation·중복 임시물25개/411,256 bytes 삭제 후 scoped strict·consumer PASS. 원천·정책·직계 v4–v6 lineage·rollback/검증 증거는 보존했다.
+  - 후속 재리뷰: 영향333 PASS, 현재 consumer handoff를 Git checklist에 재결속. 미참조 generation·중복 임시물25개/411,256 bytes 삭제 후 scoped strict·consumer PASS. commit `8143121b6`, immutable release `compact-economic-cleanup-reviewed-20260919-8143121b6` 선택·route PASS. 원천·정책·직계 v4–v6 lineage·rollback/검증 증거는 보존했다.
 
 ## WS 품질·조건부 경제성 통합 구현
 

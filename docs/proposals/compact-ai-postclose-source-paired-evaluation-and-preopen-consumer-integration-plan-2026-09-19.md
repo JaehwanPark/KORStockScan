@@ -285,4 +285,4 @@ O0–O5의 실행 가능한 구현·검증·배포·제한 재생성은 완료�
 
 ## 19. 후속 재리뷰·산출물 정리
 
-후속 재리뷰에서 계산·승격 코드의 새 결함은 없었다. 실제 consumer와 Git checklist 사이의 이전 bundle handoff만 현재 `fb4870b8…`로 재결속했다. 현재 v6가 직접 가리키는 v5·v4 generation, 원천·정책·consumer·rollback·검증 증거를 보존하고 미참조 generation 및 중복 임시 로그 25개를 삭제했다. 삭제 뒤 영향 범위 333건과 compact scoped strict/consumer 검증을 통과했다. 상세 목록과 hash는 [구현 리뷰](../audit-reports/2026-09-19-compact-economic-optimization-implementation-review.md) 및 `tmp/compact-artifact-cleanup-20260919/manifest.json`이 소유한다.
+후속 재리뷰에서 계산·승격 코드의 새 결함은 없었다. 실제 consumer와 Git checklist 사이의 이전 bundle handoff만 현재 `fb4870b8…`로 재결속했다. 현재 v6가 직접 가리키는 v5·v4 generation, 원천·정책·consumer·rollback·검증 증거를 보존하고 미참조 generation 및 중복 임시 로그 25개를 삭제했다. 삭제 뒤 영향 범위 333건과 compact scoped strict/consumer 검증을 통과했다. commit `8143121b6005b908520fc3c8dca5160f82c50d2f`, immutable release `compact-economic-cleanup-reviewed-20260919-8143121b6`를 future invocation으로 선택했다. 상세 목록과 hash는 [구현 리뷰](../audit-reports/2026-09-19-compact-economic-optimization-implementation-review.md) 및 `tmp/compact-artifact-cleanup-20260919/manifest.json`, `deployment.json`이 소유한다.

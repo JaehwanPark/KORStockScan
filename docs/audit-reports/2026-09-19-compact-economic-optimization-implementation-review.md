@@ -58,3 +58,5 @@
 writer·postclose process와 lock holder가 없음을 확인한 뒤, 현재 v6 projection이 직접 가리키는 v5 `71b27cb2…`와 그 원본 v4 `c7ee6dd0…`를 보존하고 참조되지 않는 구 generation 8개를 삭제했다. 중복 prepare/evaluate/finalize 출력·중복 parser/test 로그와 최종 selector가 참조하지 않는 중간 selection backup 17개도 삭제했다. 총 25개, 411,256 bytes다. 현재 projection/report·원 trace/payload·정책·consumer·직계 migration lineage·selected/previous release rollback·배포/재생성/strict 영수증은 보존했다. 삭제 목록과 보호 hash는 `tmp/compact-artifact-cleanup-20260919/manifest.json`에 기록했다.
 
 영향 범위 333건 PASS 후 정리했으며, 삭제 뒤 compact scoped strict verifier와 consumer handoff 검증이 다시 PASS했다. `whole_native_chain_done_claimed=false`, 실제 PID 소비 false, ΔEV·실제 순익 null은 변하지 않는다.
+
+정리·handoff commit `8143121b6005b908520fc3c8dca5160f82c50d2f`을 main에 push하고 immutable release `compact-economic-cleanup-reviewed-20260919-8143121b6`를 선택했다. 물리 release 6건, compile·wrapper syntax, POSTCLOSE9/19·PREOPEN9/21 route print-plan과 배포 후 scoped strict/consumer 검증을 통과했다. 영수증은 `tmp/compact-artifact-cleanup-20260919/deployment.json`이다. future invocation만 전환했으며 bot 재기동·주문·조기 PREOPEN은 없다.
