@@ -1,13 +1,15 @@
 # Compact AI 장후 원천·paired 평가·장전 소비 통합 구현계획
 
-작성일·후속 보완일: 2026-09-19 KST. 이번 요청의 범위는 상세 개선계획 수정이다. 이전 승인으로 수행된 통합 구현은 §10의 기록이며, 이번 계획 작성에서는 코드 변경·후보 호출·장후 재생성·배포·PREOPEN 실행을 수행하지 않는다. §11–§17은 기존 evaluator의 후속 최적화 계획이며 별도 producer나 중복 계획을 신설하지 않는다.
+작성일·후속 보완일·현행 재설계일: 2026-09-19 KST. 이번 요청의 범위는 상세 개선계획 수정이다. 이전 승인으로 수행된 통합 구현은 §10·§18·§19의 완료 기록이며, 이번 계획 작성에서는 코드 변경·후보 호출·장후 재생성·배포·PREOPEN 실행을 수행하지 않는다. §20 이후의 현행 단일-owner 계획이 앞선 coordinator 유지 방침과 충돌할 때 우선한다.
 
 목표는 구조적 원천 결손을 해결하고 실제 compact 보조판정 기회에서 비용 반영 EV·일별 순익 차이를 도출한 뒤, 검증된 정책 또는 기존 정책 보존 결정을 다음 거래일의 기존 장전 소비 경로까지 연결하는 것이다. 우선순위는 구조 결손 → 경제성 비교 → 소비 연결 → 중복 실행 감소다.
+
+현행 결론은 `compact_auxiliary_paired_replay`를 유일한 compact AI 경제성 evaluator로 두는 것이다. `ai_action_outcome_calibration --postclose-phase prepare|evaluate|finalize|handoff`는 독립 튜닝축이 아니라 다른 owner를 재호출하는 조정 표면이며, Daily/EV 공통 튜닝 퇴역 뒤 `handoff`가 삭제된 요약과 제거된 section을 계속 요구한다. 따라서 단계 CLI·wrapper 호출·전용 summary 복제를 퇴역하고, 원천 생산자 → compact evaluator → 단일 dated publisher → 장중 loader → 직접 증거 verifier 흐름으로 축소한다. `ai_action_outcome_calibration`의 기계 action/outcome 진단과 기존 원천 schema는 필요한 범위에서 보존하되 후보 실행·정책 발행·최종 handoff owner가 되지 않는다.
 
 ## 1. 근거와 현재 상태
 
 - 원칙: [Plan Rebase §1–§8](../plan-korStockScanPerformanceOptimization.rebase.md). `main-only`, `normal_only`, `post_fallback_deprecation`, clean baseline `2026-06-05T00:00:00+09:00` 및 기존 hard safety를 유지한다.
-- 순서: [장후 작업 목록](../audit-reports/2026-09-05-postclose-work-inventory.md). 원천 준비·최초 Daily·final 품질 감사·compact 평가·최종화의 선후 관계를 보존한다.
+- 순서: [장후 작업 목록](../audit-reports/2026-09-05-postclose-work-inventory.md). 구현 시 현행 wrapper와 설치 schedule를 다시 대조하고, 원천 준비·final 품질 감사·compact 평가·단일 최종화·직접 검증의 선후 관계로 작업목록을 갱신한다.
 - 기존 기능: [compact 경제성 계획](compact-auxiliary-ai-paired-economic-tuning-and-consumer-closed-loop-improvement-plan-2026-09-18.md), [AI 원천·라벨 통합 계획](ai-decision-quality-postclose-source-label-consolidation-and-current-evaluator-plan-2026-09-18.md). 완료된 기능은 재구현하지 않는다. 이 계획은 공통 실행 순서·generation·최종 소비를 정비하는 통합 변경이다.
 - 최초 계획의 분석 release는 `988baa142c9338bad9085f56f257b3422392b3b2`였다. 이번 후속 보완의 선택 release는 `compact-ai-label-admission-reviewed-20260919`, source SHA `9f814e30cbc08806750616e94f7ab099d5aa58d1`이다. 선택은 future invocations only이며 actual PID 소비는 확인되지 않았다. 작업 디렉터리와 선택 release의 코드가 다르고 다른 세션 변경도 있으므로 구현 착수 때 다시 대조한다.
 - 현재 [9/19 체크리스트](../checklists/2026-09-19-stage2-todo-checklist.md)가 존재하며 통합 구현의 완료 기록을 소유한다. [9/21 체크리스트](../checklists/2026-09-21-stage2-todo-checklist.md)의 기존 stable ID `KiwoomCommonHealthOpportunityCostAcceptance0917`는 자연 수용의 현재 실행 owner다. 후속 코드 결함이 재현되면 실제 실행일 체크리스트에서 완료 기록과 분리해 보완 범위를 연결한다. 자연 표본 부족만으로 완료된 구현 전체를 재개하거나 자연 owner를 복제하지 않는다.
@@ -29,33 +31,33 @@
 | `ai_decision_quality` | control·labels·원천 revision 준비 | 기존 materialization/reuse 함수 재사용; 후보 호출·정책 발행 책임 추가 없음 |
 | `entry_split_order_plan`, `strategy_owner_replay`, 기존 pipeline writer/compactor | 당시 계획·수량·비용·exit·원천 coverage·독립 운영 CF 및 실제 실적 기반 모델 검증 | 확인된 잔여 결손만 수정; 다른 세션의 완료 기능 재구현 금지 |
 | `compact_auxiliary_paired_replay` | admission·기존/후보 비교·checkpoint·scope별 학습/holdout | 기존 v6 검증 재사용; 공통 generation과 재개 계약 보완 |
-| `ai_action_outcome_calibration` | 준비/평가/최종화의 공통 조정, 기존 machine 평가 및 최종 정책 발행 | 기존 CLI/함수 안에서 단계 선택·receipt 연결; 새 coordinator 모듈 없음 |
+| `ai_action_outcome_calibration` | 기존 machine action/outcome 진단·canonical report schema | compact 후보 실행·정책 발행·summary handoff 책임 제거. 진단은 직접 원천을 읽고 runtime 권한을 갖지 않음 |
 | `mechanistic_entry_runtime_policy` | 다음 거래일 단일 정책 publisher | compact 전용 publisher 추가 금지; machine·다른 scope와 기존 정책 보존 |
-| 기존 optimizer·consumer·Daily·EV·tower·checklist·verifier | 동일 최종 generation의 소비·closure | 평가를 재실행하지 않고 기존 결과를 참조 |
+| 기존 optimizer·consumer·runtime summary·tower·checklist·verifier | 동일 최종 generation의 직접 소비·closure | 평가를 재실행하거나 Daily/EV 복제 section을 요구하지 않고 canonical paired/policy/loader receipt를 참조 |
 | `entry_setup_live_policy`, `ai_engine_openai`, 기존 PREOPEN | 정확한 날짜·scope 정책 해석, 실제 발행 프롬프트 사용·추적 | 기존 loader 재사용; 주문·provider·수량·cap·안전 권한 변경 없음 |
 
-기존 `entry_setup_paired_replay_batch --compact-only`는 부분 실행·재개용 진입점으로 남긴다. 정상 main wrapper의 독립 compact execute/finalize 호출은 공통 조정 경로로 대체한다. 독립 paired wrapper도 같은 조정 함수를 사용하며 별도 예약을 신설하지 않는다. 조정 함수는 기능 함수만 호출하고 상대 CLI/main을 다시 호출하지 않는다. 공통 lock과 내부 artifact lock의 획득 순서를 고정해 재귀·이중 잠금 대기를 피한다.
+기존 `entry_setup_paired_replay_batch --compact-only`는 부분 실행·재개용 진입점으로 남긴다. 정상 main wrapper와 독립 paired wrapper는 같은 `compact_auxiliary_paired_replay` 평가·최종화 함수를 직접 사용한다. 별도 coordinator CLI나 예약을 신설하지 않는다. source-day lock과 publisher lock의 획득 순서를 고정해 재귀·이중 잠금 대기를 피한다.
 
-통합 구현 후 기존 calibration CLI의 단계 인자는 `--postclose-phase prepare|evaluate|finalize|handoff`다. 후속 보완은 이 진입점과 기존 함수·lock을 재사용하며 새 coordinator를 만들지 않는다.
+기존 calibration CLI의 `--postclose-phase prepare|evaluate|finalize|handoff`는 호환 호출·wrapper·테스트와 함께 퇴역 대상이다. 평가와 발행은 compact owner의 기존 함수·lock을 재사용한다. 구형 단계 인자를 무동작 alias로 장기간 남기지 않으며 실제 호출자를 먼저 제거한 뒤 CLI를 삭제한다.
 
 ## 3. 작업 전후·생산자 소비자 순서
 
 | 단계 | 선행 입력 | 수행·출력 | 필수 후행 소비 |
 | --- | --- | --- | --- |
 | P0 경제성 reference | 원천일·기존 full-cost owner | 기존 reference-only 확보 | label·운영 replay; missing을 0으로 대체하지 않음 |
-| P1 준비 | performance fact·entry split·trace/payload·sealed snapshot | 기존 control·labels materialization/reuse, 원천 receipt | 최초 Daily; 기존 앞단 위치 보존 |
-| P2 admission/평가 | final source audit·P1 labels·owner operating CF·선행 model proof | 유효 scope에서만 후보 호출·paired 결과·학습/holdout, machine 기존 평가 | 잠정 calibration/후행 보고서; 확정 정책과 구분 |
-| P3 최종화 | 필요한 tail 생산자 완료·현재 의존 hash | 변경된 라벨/메타데이터만 재결속, 평가 reuse, calibration·정책·optimizer·consumer 확정 | 최종 Daily/EV/runtime summary/workorder/tower/checklist |
-| P4 검증 | P3 최종 generation 및 필수 handoff | 기존 strict verifier → controller DONE | 다음 거래일 기존 PREOPEN |
+| P1 준비 | performance fact·entry split·trace/payload·sealed snapshot | 기존 control·labels materialization/reuse, 원천 receipt | compact admission; source producer 위치 보존 |
+| P2 admission/평가 | final source audit·P1 labels·owner operating CF·선행 model proof | 유효 scope에서만 후보 호출·paired 결과·학습/holdout | canonical paired report; 확정 정책과 구분 |
+| P3 최종화 | 필요한 tail 생산자 완료·현재 의존 hash | 평가 reuse, optimizer·단일 dated 정책·consumer 확정 | runtime summary/tower/checklist의 직접 소비 |
+| P4 검증 | P3 최종 generation 및 직접 소비 receipt | direct family verifier → controller DONE | 다음 거래일 기존 PREOPEN |
 | P5 자연 소비 | effective-date 정책·정규 PREOPEN | loader 해석·bundle/version·실제 PID/trace receipt | 완료 실적 기반 joint applied-version 성과 |
 
-현재 main은 앞단 quality materialization, final 감사 후 compact execute/calibration, 뒤쪽 compact finalize를 호출한다. 이를 P1/P2/P3의 한 실행 계약으로 바꾼다. **최초 Daily가 필요한 labels를 final 감사 뒤로 옮기지 않는다.** 초기 labels는 provisional 원천이며 final 감사·tail 변경 후 authoritative generation을 재확인한다.
+현재 main의 앞단 quality materialization과 final 감사 뒤 compact 평가 순서는 유지한다. compact evaluator의 P2/P3만 단일 owner로 연결한다. 초기 labels는 provisional 원천이며 final 감사·tail 변경 후 authoritative generation을 재확인한다.
 
 P2는 후보 평가의 유일한 정상 provider 실행 지점이다. P3는 provider를 호출하지 않는다. P3에서 새로운 원천이 발견되면 `evaluation_deferred`와 next owner를 기록하고 해당 scope 후보를 보존/차단한다. 최종화 안에서 묵시적으로 새 평가를 시작하지 않는다. machine와 compact는 각자의 proof로 독립 판단하되 최종 날짜별 정책은 하나의 publisher가 한 번 확정한다. 미지원 compact가 검증된 다른 scope/owner 결과를 지우지 않는다.
 
-단일 최종 발행으로 전환하기 전에 P2 이후 `--require-policy-publication`·policy 파일 대기·이전 bundle 참조를 가진 consumer를 식별한다. 최종 policy 의존 consumer는 P3 뒤로 이동하고, P2 결과만 필요한 consumer는 명시적으로 provisional report를 받는다. 이미 동결된 PREOPEN 정책은 같은 날짜의 재생성으로 덮어쓰지 않고 기존 freeze/승계 계약을 따른다. 이전 파일이 있다는 이유로 새 generation 대기를 통과시키지 않는다.
+단일 최종 발행으로 전환하기 전에 policy 파일 대기·이전 bundle 참조를 가진 consumer를 식별한다. 최종 policy 의존 consumer는 P3 뒤로 이동하고, P2 결과만 필요한 consumer는 명시적으로 canonical paired report를 받는다. 이미 동결된 PREOPEN 정책은 같은 날짜의 재생성으로 덮어쓰지 않고 기존 freeze/승계 계약을 따른다. 이전 파일이 있다는 이유로 새 generation 대기를 통과시키지 않는다.
 
-최종화는 필요한 선행 완료 후, 해당 family를 포함하는 최종 summary·workorder·tower·checklist·verifier보다 앞에 둔다. 이미 생성한 후행 요약은 해당 section/hash만 제한 갱신한다. verifier/controller 자신의 hash는 summary 입력에 넣지 않는다.
+최종화는 필요한 선행 완료 후 runtime summary·tower·checklist·verifier보다 앞에 둔다. 후행 요약은 canonical family artifact를 직접 읽고 별도 section을 복제하지 않는다. verifier/controller 자신의 hash는 summary 입력에 넣지 않는다.
 
 ## 4. 최우선 구조적 결손 보완
 
@@ -117,14 +119,15 @@ P3는 calibration·paired·optimizer·consumer·bundle 해시가 같은 최종 �
 
 | 순서 | 최소 변경 | 필수 증거 |
 | --- | --- | --- |
-| CI0 계약 확정 | 선택 release/다른 세션 producer 변경 대조, P1/P2/P3 호출·lock·후행 위치 확인 | 구현돼 있는 v6/model/labels 기능 재사용, 각 결손의 owner·test 확정 |
+| CI0 계약 확정 | 선택 release/다른 세션 producer 변경 대조, 실제 호출자·lock·후행 위치 확인 | 구현돼 있는 v6/model/labels 기능 재사용, 각 결손의 owner·test 확정 |
 | CI1 구조 결손 | §4의 실제 잔여 producer/consumer 결손만 보완 | 자연 writer → compact partition → seed/replay/model admission의 lossless lineage; historical loss 제외 유지 |
-| CI2 공통 조정 | 기존 calibration의 단계 조정, main/paired wrapper와 부분 CLI 연결 | 초기 Daily inputs 유지, 후보 한 번 호출, finalize provider 0, 재개·동시 호출·부분 실패 회귀 |
+| CI2 단일 evaluator | calibration phase coordinator와 wrapper 호출 제거, main/paired wrapper를 compact evaluator에 직접 연결 | 후보 한 번 호출, finalize provider0, 동일 fingerprint 재사용·동시 호출·부분 실패 회귀 |
 | CI3 경제성/발행 | 기존 v6 평가·model proof·publisher·loader의 동일 generation 연결 | supported/unsupported·0/null·CAUTION·route/scope·모델 변경·holdout 오염·carry/positive fixture의 정확한 결과 |
-| CI4 제한 재생성 | 리뷰·검증 후 승인된 원천일/family만 재생성, 필수 요약·strict 갱신 | 기존 원천 보존, provider 사용 근거, native EV/일별 순익 값 또는 첫 blocker, 최종 해시·정책·handoff |
-| CI5 자연 수용 | 정규 PREOPEN 및 이후 자연 입력/실적 확인 | 실제 PID/issued prompt 소비·model holdout·prompt holdout·joint-version 완료 비용 후 성과 |
+| CI4 직접 인계 | runtime summary·tower·checklist·verifier를 canonical paired/policy receipt에 연결 | Daily/EV 부재 허용, stale/hash/date/scope 오류 차단, 복제 section 없음 |
+| CI5 제한 재생성 | 리뷰·검증 후 승인된 새 유효 원천일/family만 재생성 | 기존 원천 보존, provider 사용 근거, EV/일별 순익 값 또는 첫 blocker, 최종 해시·정책·직접 소비 receipt |
+| CI6 자연 수용 | 정규 PREOPEN 및 이후 자연 입력/실적 확인 | 실제 PID/issued prompt 소비·model holdout·prompt holdout·joint-version 완료 비용 후 성과 |
 
-CI4에서 원천이 모두 결손이면 반복 재생성을 중단하고 CI1의 생산자 공급과 CI5의 자연 증거를 남긴다. 코드 통합 closure와 경제성 자연 수용 closure는 분리해 보고한다. 유효 운영 비교가 확보되면 양수 개선 또는 측정된 no-edge 모두 유의미한 결과다. 표본이나 실제 결과가 없는 상태에서 양수 개선을 보장하지 않는다.
+CI5에서 원천이 모두 결손이면 반복 재생성을 중단하고 CI1의 생산자 공급과 CI6의 자연 증거를 남긴다. 코드 통합 closure와 경제성 자연 수용 closure는 분리해 보고한다. 유효 운영 비교가 확보되면 양수 개선 또는 측정된 no-edge 모두 유의미한 결과다. 표본이나 실제 결과가 없는 상태에서 양수 개선을 보장하지 않는다.
 
 검증은 기존 `src/tests`의 quality/entry split/strategy replay/compact batch/calibration/optimizer/consumer/policy/live resolver/wrapper/summary handoff/strict verifier 테스트 중 영향을 받는 계약만 보완한다. 합성 positive fixture는 승격 경로 검증이고 자연 EV 증거가 아니다. Python compile·해당 pytest, wrapper `bash -n`, diff check를 수행한다. 신규 root module·collector·test family·report family는 기본 금지다.
 
@@ -137,16 +140,16 @@ CI4에서 원천이 모두 결손이면 반복 재생성을 중단하고 CI1의 
 - 지원되는 자연 입력이 경제 평가로 들어가며 운영 모델·표본·승격 결손이 각자의 상태로 드러난다.
 - 같은 예산·비용·terminal·모델 오차 기준 EV와 일별 금액 차이가 산출된다. 비교 0/source_gap은 이를 충족하지 않는다.
 - 다음 거래일 검증된 후보 또는 유효 incumbent carry가 생성되고 loader가 해석한다. 실제 PID·자연 적용·실현 성과는 해당 영수증으로만 확인한다.
-- final source → policy/consumer → Daily/EV/workorder/runtime summary/tower/checklist → strict verifier → controller closure를 같은 generation으로 확인한다. scoped PASS를 전체 native DONE으로 주장하지 않는다.
+- final source → policy/consumer → runtime summary/tower/checklist → direct strict verifier → controller closure를 같은 generation으로 확인한다. scoped PASS를 전체 native DONE으로 주장하지 않는다.
 
 ## 9. 이번 계획 검증 범위
 
 이번 변경은 계획 문서 한 개다. 링크·책임·선후 순서·0/null·권한·기존 stable ID 인계 기준을 review/fix/re-review하고 `git diff --check` 및 print-only backlog parser로 검증한다. runtime/source 수정, trading 테스트, AI 호출, 재생성, 외부 sync는 수행하지 않는다.
 
 
-## 10. 승인된 구현 조정
+## 10. 과거 승인 구현 기록
 
-- 사용자 후속 지시가 구현·리뷰·커밋푸시·배포·제한 재생성을 승인했다. §9의 문서-only 범위는 최초 계획 작성 당시 기록이며 현재 승인 범위를 제한하지 않는다.
+- 당시 사용자 후속 지시가 구현·리뷰·커밋푸시·배포·제한 재생성을 승인했다. 아래 단계 coordinator 기록은 그 구현 시점의 증거이며, Daily/EV 퇴역 뒤 확인된 중복 owner·stale handoff의 현행 설계는 §20–§28이 대체한다.
 - 단계 인자는 기존 calibration의 `--postclose-phase prepare|evaluate|finalize|handoff`다. 앞단 quality producer의 기존 materialization을 유지하고 prepare는 그 원천을 검증·결속한다. 새 raw reader나 collector를 만들지 않는다.
 - finalize는 source 변경 시 재평가 요구로 실패하며 provider 호출·raw 재스캔을 하지 않는다. 기존 정책을 덮어 새 완료로 만들지 않는다. 정상 finalize 뒤 tail 소비 재결속은 handoff 단계로 분리하며 provider와 publisher 모두 호출하지 않는다.
 - 준비/평가 단계는 provisional 보고서만 작성한다. 정상 machine+compact 발행은 필수 WS 입력 후·최초 Daily refresh/EV/runtime summary 전에 단일 확정하고, 부분 연구 재생성은 `--compact-scope-only`로 다른 machine/owner 정책을 보존한다.
@@ -286,3 +289,242 @@ O0–O5의 실행 가능한 구현·검증·배포·제한 재생성은 완료�
 ## 19. 후속 재리뷰·산출물 정리
 
 후속 재리뷰에서 계산·승격 코드의 새 결함은 없었다. 실제 consumer와 Git checklist 사이의 이전 bundle handoff만 현재 `fb4870b8…`로 재결속했다. 현재 v6가 직접 가리키는 v5·v4 generation, 원천·정책·consumer·rollback·검증 증거를 보존하고 미참조 generation 및 중복 임시 로그 25개를 삭제했다. 삭제 뒤 영향 범위 333건과 compact scoped strict/consumer 검증을 통과했다. commit `8143121b6005b908520fc3c8dca5160f82c50d2f`, immutable release `compact-economic-cleanup-reviewed-20260919-8143121b6`를 future invocation으로 선택했다. 상세 목록과 hash는 [구현 리뷰](../audit-reports/2026-09-19-compact-economic-optimization-implementation-review.md) 및 `tmp/compact-artifact-cleanup-20260919/manifest.json`, `deployment.json`이 소유한다.
+
+## 20. 현행 재설계 판단과 기준선
+
+현재 선택 영수증 기준 release는 `rising-missed-economic-authority-20260919-8dea83503`, source commit `8dea83503d7a18659af34212e61784c5e95593db`다. 실제 PID 소비는 다음 정상 기동 대기 상태다. 작업공간은 다른 세션 변경이 누적돼 있으므로 구현은 선택 release와 `origin/main`의 실제 호출자를 기준으로 별도 worktree에서 시작한다.
+
+2026-09-17 원천의 현행 compact 결과는 screen21·source 제외21·경제성 적격0·paired 비교0·provider 호출0·EV/일별 순익 차이 null·incumbent 보존이다. 가격경로 진단14건의 source-quality-adjusted return `-0.25559409535%`는 `diagnostic_price_path`이며 실제 비용 후 paired EV가 아니다.
+
+과거 `handoff` receipt는 존재하지만 현재 scoped verifier는 네 final summary를 stale로 판정한다. 구형 `threshold_cycle_2026-09-17.json`과 `threshold_cycle_ev_2026-09-17.json`은 없고, 현행 `runtime_approval_summary`와 control tower에는 복제 section `compact_auxiliary_economic_tuning`이 없다. 이는 기다리면 채워질 표본 문제가 아니라 Daily/EV 공통 튜닝 퇴역 뒤 coordinator·verifier가 옛 소비 계약을 유지한 구조 결함이다. 과거 PASS를 현재 closure로 재사용하지 않는다.
+
+재설계 결정은 다음과 같다.
+
+1. compact AI 경제성 탐색 owner는 `compact_auxiliary_paired_replay` 하나다.
+2. `ai_decision_quality`는 source label producer이며 후보 선택 권한이 없다.
+3. `ai_action_outcome_calibration`은 필요한 기계 action/outcome 진단과 비용 reference 기능만 보존한다.
+4. `--postclose-phase` 네 단계와 `compact_summary_handoff` 복제 계약은 퇴역한다.
+5. 정책 발행은 기존 `mechanistic_entry_runtime_policy` 한 곳, 장중 소비는 기존 `entry_setup_live_policy` 한 곳을 유지한다.
+6. runtime summary·tower·checklist·verifier는 canonical paired report·dated policy·PREOPEN/PID receipt를 직접 읽는다.
+7. 구조 원천이 닫히기 전에는 candidate provider 호출을 하지 않는다.
+
+## 21. 목표 흐름과 단일 책임
+
+```text
+ai_decision_trace/payload + atomic plan/stop + owner execution facts
+                              │
+                              ▼
+                    ai_decision_quality
+                  (label/source receipt only)
+                              │
+                    admission state machine
+                              │ eligible generation changed
+                              ▼
+              compact_auxiliary_paired_replay
+         (only prompt candidate evaluator and selector)
+                              │
+             ┌────────────────┴────────────────┐
+             │ gap/pending/no-edge             │ validated edge
+             ▼                                 ▼
+       incumbent carry             mechanistic_entry_runtime_policy
+             └────────────────┬────────────────┘
+                              ▼
+                 PREOPEN/bootstrap exact-date check
+                              ▼
+                    entry_setup_live_policy
+                              ▼
+             issued prompt/PID/order/fill/cost outcome
+                              │
+                              ▼
+       runtime_approval_summary/tower/checklist/verifier
+                    (direct receipt projection)
+```
+
+| Owner | 단일 책임 | 금지 책임 |
+| --- | --- | --- |
+| trace·quality producer | exact input/response/identity/label 보존 | 후보 생성·경제성 승인 |
+| plan·execution producer | 당시 stop·수량·비용·route·attempt/order/fill/terminal 보존 | 결손을 현재값 또는 0으로 합성 |
+| compact evaluator | 동일 frozen input의 incumbent/candidate paired 계산·chronology·선정 | runtime env·주문·PID 권한 |
+| dated publisher | 통과 scope만 발행하고 나머지 incumbent 보존 | EV 재계산·표본 기준 변경 |
+| live loader | exact effective date·scope·bundle·prompt 검증과 issued-version trace | 장후 후보 선택 |
+| direct summaries/verifier | 원 결과·정책·소비 receipt 대조 | section 복제·후보 재평가·공통 정책 생성 |
+
+## 22. 구조 원천 보완 순서
+
+구조 수리는 provider 탐색보다 먼저 수행한다. 과거 2026-09-17 결손21건은 고정 제외하고 미래 writer 계약만 보완한다.
+
+| 우선순위 | 결손과 현재 수량 | 최소 producer 보완 | closure test |
+| --- | --- | --- | --- |
+| S0 | exact stop/plan 결손10 | pre-AI 시점의 loaded holding/exit policy, stop distance, 진입가, 수량, 예산, owner, route와 atomic seed/hash를 기존 plan writer에 함께 기록 | 한 자연 screen이 writer→projection→owner replay→paired cost 계산까지 같은 seed/hash로 도달 |
+| S1 | transport invalid8·semantic invalid1 | 실제 provider request/response receipt, timeout 지점·elapsed, schema/version, parse disposition을 lossless trace에 보존 | 정상 응답은 admission되고 실패 응답은 정확한 reason으로 제외되며 PASS/VETO로 합성되지 않음 |
+| S2 | venue/session identity 충돌2 | canonical context·trace·label·owner seed의 code/venue/session/route key를 일대일 결속 | 중복·충돌 negative와 정상 KRX/NXT positive join 모두 통과 |
+| S3 | execution projection coverage 미입증 | initial owner parent→attempt→broker order→full/partial/no-fill→terminal의 retained/excluded census와 원자 plan receipt 보존 | source_gap과 실제 zero opportunity를 구분하고 census conservation PASS |
+| S4 | 선행 운영 모델 holdout 없음 | 실제 제출·체결·COMPLETED valid cost/profit에서 scope별 model calibration과 독립 holdout 생성 | prompt learning보다 이른 model version·holdout·오차/tolerance·tail receipt가 유효 |
+
+S0–S4 중 필요한 필드가 이미 생산되는데 중간 projection에서 손실되는지 먼저 확인한다. 기존 writer 보완으로 끝낼 수 있으면 새 collector·DB·report family를 만들지 않는다. Kiwoom 요청·응답 자체를 바꿔야 하는 결함이 발견된 경우에만 공식 API reference gate를 별도 적용한다.
+
+## 23. EV 탐색 로직 최적화
+
+탐색은 넓은 grid가 아니라 경제적 의사결정 차이를 만드는 등록 후보에 집중한다.
+
+### 23.1 탐색 전 admission
+
+provider 호출 전 다음 조건을 모두 확인한다.
+
+- exact natural machine `ENTER_NOW` screen이며 AI 비호출 BLOCK/RECHECK가 아님
+- source label·input/prompt/schema·venue/session/route·plan/stop·cost hash 유효
+- incumbent issued response가 transport/semantic contract를 통과
+- 운영 execution model이 해당 scope와 exit/cost/capital 계약을 지원
+- 같은 evaluation key·prompt·model·cost generation의 기존 결과가 없음
+
+하나라도 실패하면 candidate를 호출하지 않고 최초 blocker와 owner를 기록한다. 현재처럼 경제성 적격0이면 provider0이 정상 결과다.
+
+### 23.2 후보 생성과 예산 집중
+
+- 후보는 기존 optimizer registry에 등록된 distinct prompt revision만 사용한다.
+- incumbent와 byte-identical하거나 판단이 항상 같은 self-comparison은 후보 예산에서 제외한다.
+- scope별 한 번에 하나의 challenger만 동결한다. 같은 scope에서 병렬 후보를 늘리지 않는다.
+- deterministic schema·prompt rendering·기존 response cache 검증을 먼저 하고, 실제 판단 차이가 가능한 row에만 provider budget을 사용한다.
+- 새 eligible generation·candidate hash·model hash·cost hash가 없으면 평가를 재사용한다.
+- 기존 `max_new`, timeout, retry, provider budget을 유지한다. 속도를 이유로 source/holdout/cost gate를 완화하지 않는다.
+
+### 23.3 비교 분모와 목적함수
+
+동일 frozen row에서 incumbent와 challenger의 PASS/VETO를 비교한다. 동일 판정은 Δ0으로 분모에 남기고 판단이 달라진 row만 별도 효과 분해를 제공한다. partial·custody censored·unsupported exit·source gap은 0손익으로 넣지 않는다.
+
+연구 표시는 다음을 모두 제공한다.
+
+- incumbent/candidate cost-adjusted paired EV와 ΔEV
+- robust paired ΔEV lower bound와 model-error penalty
+- 동일 자본·수량 계약의 관측일별 순익 차이와 worst-day 차이
+- fill participation·capital exposure/reserve 차이
+- tail/severe-loss/stress 차이
+- runtime inference cost 차이
+- learning/holdout별 표본·source-day·response coverage
+
+KRW 일별 순익은 수량·자본·동시 노출 계약이 있을 때만 계산한다. 없으면 수익률 진단과 `null + reason`을 보존한다. 승격 primary는 기존 `robust_paired_delta_ev_lower_bound_pct`를 유지하며 양수 paired EV·양수 일별 순익·tail/stress 비악화·독립 holdout·운영 모델 검증을 모두 요구한다.
+
+### 23.4 중단 규칙
+
+- source/model gap: 즉시 평가 중단, producer owner로 반환
+- eligible은 있으나 learning/holdout 미달: `insufficient_sample`, 추가 자연 입력 대기
+- 독립 holdout에서 lower bound≤0 또는 tail 악화: `measured_no_edge`, incumbent 보존 후 같은 후보 재호출 중단
+- validated edge: 해당 scope만 dated publisher로 전달
+- 후보가 판단 차이를 만들지 않음: `no_decision_delta`, 새 가설 전까지 휴면
+
+## 24. 이벤트 기반 실행과 상태 계약
+
+정기 wrapper가 매일 후보 탐색을 강제하지 않는다. 저비용 source/label materialization은 유지하고, evaluator는 다음 fingerprint가 바뀔 때만 실행한다.
+
+`source_generation + eligible_population_hash + incumbent_prompt_hash + candidate_prompt_hash + execution_model_hash + cost_contract_hash + promotion_contract_hash`
+
+상태는 다음 다섯 단계로 제한한다.
+
+| 상태 | 의미 | 허용 동작 |
+| --- | --- | --- |
+| `blocked_source` | exact plan/response/identity/census 결손 | producer receipt 갱신만; provider 금지 |
+| `waiting_model_or_sample` | source는 유효하지만 model proof·maturity·표본 미달 | 자연 누적·terminal 갱신; 후보 재호출 금지 |
+| `ready_to_evaluate` | 새 독립 eligible generation과 동결 후보 존재 | bounded candidate evaluation 한 번 |
+| `evaluated_hold` | no-edge/risk/no-decision-delta | incumbent 유지, 같은 fingerprint 재실행 금지 |
+| `validated_edge` | 모든 승격 gate 통과 | 해당 scope 정책 발행·다음 PREOPEN 인계 |
+
+부분 실패는 기존 atomic checkpoint를 사용한다. 성공한 pair를 중복 호출하지 않고 실패 key만 다음 허용 실행에서 재개한다. source generation이 바뀌면 기존 learning cutoff와 consumed holdout을 이동하지 않는다.
+
+## 25. 정책·장중 소비·최종 인계 단순화
+
+`compact_auxiliary_paired_replay.finalize`는 평가 결과를 다시 계산하지 않고 canonical paired artifact를 검증한 뒤 기존 optimizer·`mechanistic_entry_runtime_policy`·consumer를 한 번 호출한다. 정책은 `data/runtime/mechanistic_entry_policy/policy_<effective_date>.json` 한 곳에 발행한다.
+
+- `validated_edge`: 통과 scope만 후보 prompt로 변경
+- `evaluated_hold`·`waiting_model_or_sample`·`blocked_source`: 유효 incumbent carry
+- incumbent도 무효: publication/apply 차단
+
+incumbent carry는 새 EV 개선이나 runtime mutation으로 집계하지 않는다. PREOPEN/bootstrap은 effective date·source hash·bundle·scope·prompt hash를 검증하고, 장중 loader는 실제 issued prompt/version/bundle/PID를 trace에 남긴다. 실제 성과는 이 issued version을 기준으로 COMPLETED valid cost/profit에 귀속한다.
+
+별도 `--postclose-phase handoff`와 `compact_summary_handoff_<source-date>.json` 신규 생성은 제거한다. runtime approval summary와 control tower는 canonical paired artifact·dated policy·PREOPEN/PID receipt를 직접 읽고 자신의 schema 안에서 상태만 투영한다. verifier는 원 artifact의 content hash와 직접 소비 receipt를 대조하며 삭제된 Daily/EV 파일이나 복제 section을 요구하지 않는다. verifier는 어떠한 summary도 수정하지 않는다.
+
+## 26. 구현 패키지와 리뷰 순서
+
+| 패키지 | 변경 범위 | 핵심 검증 |
+| --- | --- | --- |
+| T0 기준선 | 선택 release, 실제 wrapper 호출자, artifact consumer, 현행 FAIL 재현 | 현재 네 stale summary issue와 전체 terminal 결손을 별도 기록 |
+| T1 owner 통합 | wrapper의 네 `--postclose-phase` 호출과 CLI/phase coordinator 제거; 비용 reference·기계 진단 보존 | 호출 잔여0, retired alias 복원 불가, source label 순서 유지 |
+| T2 direct finalize | paired evaluator의 조건부 run/finalize를 유일 진입점으로 연결 | provider는 evaluation에서만, finalize provider0, 동일 fingerprint 재사용 |
+| T3 direct handoff | runtime summary·tower·checklist·verifier를 canonical paired/policy/consumer receipt로 축소 | Daily/EV 부재 정상, stale/잘못된 hash/date/scope/PID negative 차단 |
+| T4 source closure | S0–S4의 실제 첫 손실 경계만 보완 | 자연 writer→projection→model→paired lossless positive/negative |
+| T5 economic selection | §23 admission·목적함수·상태·중단 규칙 연결 | source gap/표본/no-edge/edge·same decision·tail·cost·holdout 회귀 |
+| T6 runtime consumer | dated policy·PREOPEN·loader·issued trace 결속 | active/carry/invalid incumbent, scope별 변경, 실제 PID 미소비 분리 |
+| T7 제한 재생성 | 별도 승인 후 새 유효 generation과 직접 summaries만 갱신 | 보호 원천 불변, 과거21 재실행0, provider 사용량·최종 hash·정책 명시 |
+
+각 패키지는 구현 → self review → finding 보완 → re-review → targeted validation을 수행한다. T1–T3을 먼저 닫아 중복 실행과 깨진 handoff를 제거한 뒤 T4–T6을 진행한다. 원천 결손을 닫기 전에 후보·grid·병렬화·horizon 확대를 하지 않는다.
+
+영향 테스트는 기존 quality/trace, plan·entry split·owner replay, compact evaluator, optimizer/publisher/consumer/live loader, wrapper, runtime summary/tower/checklist/verifier 테스트를 재사용한다. 새 테스트 family·root module·report family는 만들지 않는다. Python compile, targeted pytest, wrapper `bash -n`, `git diff --check`, 문서 print-only parser를 수행한다. provider·broker·주문·bot restart·조기 PREOPEN은 테스트하지 않는다.
+
+## 27. 완료 기준과 자연 수용
+
+### 27.1 코드·계약 closure
+
+- postclose phase CLI와 wrapper 호출 잔여0
+- compact evaluator 하나만 candidate provider를 호출
+- Daily/EV 복제 section과 `compact_summary_handoff` 요구 잔여0
+- source gap 상태에서 provider0·정책 mutation0
+- 같은 fingerprint 재실행에서 pair/provider/policy 중복0
+- valid edge fixture에서 해당 scope만 정책 변경, 다른9개 scope·machine policy·hard safety 보존
+- direct verifier가 paired→policy→consumer→checklist를 동일 날짜·hash로 PASS
+
+### 27.2 경제성 연구 closure
+
+- 경제성 적격 paired count>0
+- incumbent/candidate EV·ΔEV와 일별 순익 또는 명시적 null reason 산출
+- learning과 forward holdout 및 source-day 분리
+- 모델 오차·tail·stress·추론비용 포함
+- no-edge와 source gap·표본 부족을 구분
+
+### 27.3 자연 runtime acceptance
+
+- 정상 PREOPEN exact-date 정책 선택
+- 실제 PID가 선택 release·bundle을 소비
+- 실제 issued prompt/version trace
+- 적용 버전별 주문·체결·COMPLETED valid cost/profit
+- rolling/cumulative 또는 post-apply window에서 비용 후 성과 확인
+
+코드 closure, 연구 비교, 정책 발행, PID 소비, 자연 EV 개선은 각각 별도 상태다. validated edge가 없으면 incumbent 보존이 정상 결과이며 양수 후보를 만들기 위해 기준을 완화하지 않는다.
+
+## 28. 작업목록·산출물 정리 계획
+
+구현 시 [장후 작업목록](../audit-reports/2026-09-05-postclose-work-inventory.md)의 prepare/evaluate/finalize/handoff 네 행을 다음 실제 순서로 축소한다.
+
+1. `ai_decision_quality` source/label materialization
+2. `compact_auxiliary_paired_replay` 조건부 평가와 단일 finalize
+3. `runtime_approval_summary` 직접 증거 요약
+4. direct family verifier
+5. 다음 checklist 및 전체 controller/finalization
+
+`ai_action_outcome_calibration`의 남은 진단·경제성 reference 호출은 실제 호출 위치와 소비자가 있을 때만 별도 기재한다. 코드만 남고 wrapper·schedule·consumer가 없으면 활성 작업이 아니라 잔여 코드 표로 이동한다.
+
+코드·소비자 제거와 검증이 끝난 뒤에만 regenerable `compact_summary_handoff` receipt와 미참조 provisional generation을 삭제한다. dated policy, source/paired report, optimizer/consumer lineage, PREOPEN/PID, rollback, 실제 주문·체결·custody·비용 증거는 보존한다. 삭제된 작업은 활성 목록에 이력을 남기지 않고 구현 리뷰가 삭제 manifest를 소유한다.
+
+이번 계획 수정은 문서 변경만 수행한다. 코드·wrapper·테스트·산출물·작업목록·runtime selection은 변경하지 않으며, T0–T7 실행에는 별도 구현 지시가 필요하다.
+
+## 29. 2026-09-20 구현·제한 재생성 결과
+
+후속 사용자 승인으로 T0–T7의 코드·계약 구현을 완료했다. compact 후보 평가 owner를 `compact_auxiliary_paired_replay` 하나로 통합하고, main wrapper의 `prepare/evaluate/finalize/handoff` coordinator와 CLI, 복제 `compact_summary_handoff`, 21:05 전용 schedule, DONE-controller follower를 제거했다. 수동 호환 wrapper도 같은 단일 evaluator/finalizer만 호출한다. canonical paired artifact는 기존 mechanistic dated publisher, main consumer, 다음 거래일 checklist와 직접 결속되고 runtime summary·tower·scoped verifier는 이 직접 증거를 읽는다.
+
+S0–S4는 기존 plan writer·owner replay·route admission·execution model/holdout 계약을 재사용했다. 지원 필드가 projection에서 손실되거나 정상 route가 일괄 제외되는 새 결함은 회귀에서 재현되지 않아 새 collector나 report family를 만들지 않았다. 과거 2026-09-17의 21건은 원천을 합성하지 않고 그대로 보존했다. 새 fingerprint와 `blocked_source|waiting_model_or_sample|ready_to_evaluate|evaluated_hold|validated_edge` 상태, source/model gap의 provider 0, 동일 fingerprint 재사용, scope별 승격·incumbent 보존을 evaluator와 publisher에 결속했다. 기존 live loader는 exact-date bundle/prompt/scope 검증을 유지하며 direct policy 회귀를 통과했다.
+
+제한 재생성 결과는 다음과 같다.
+
+| 구분 | 결과 |
+| --- | --- |
+| source/publication/effective | `2026-09-17` / `2026-09-20` / `2026-09-21` |
+| evaluator | `blocked_source`, fingerprint `13b6f9396704900921eb6a174b93835e3ff7b17bbe20b91b92321d5ae269db67` |
+| 분모 | screen21, source 제외21, 경제성 적격0, paired0 |
+| 최초 blocker | exact stop/plan10, transport8, venue/session identity2, semantic response1 |
+| 경제성 | incumbent/candidate/ΔEV와 일별 순익 모두 `null`; `not_available_without_owner_plan_and_portfolio_replay` |
+| provider | candidate 요청0, 평가 provider 비용 USD0 |
+| 정책 | 9/21 incumbent carry, 승격 scope0, bundle `6b44aaaed394f3f1835be78b2bbed828278caf0e975b1187a0812a45c88f3717` |
+| 직접 소비 | paired→policy→consumer→checklist scoped verifier `PASS`; runtime summary direct evidence complete; tower pass |
+| 자연 수용 | 실제 PID 소비·issued prompt·주문/체결·COMPLETED 비용 손익 미확인 |
+
+따라서 구조적 coordinator·복제 handoff·중복 schedule 결함과 다음 장전용 정책 생성은 닫혔다. 유효 비교나 양수 EV는 도출되지 않았으며, 이는 측정된 no-edge가 아니라 과거 원천 결손이다. 양수 결과를 만들기 위해 비용·holdout·tail·표본 기준을 완화하지 않았다. 미래 자연 writer가 동일 plan/stop/response/identity와 선행 운영 model holdout을 생성한 뒤 경제성 적격 paired 분모가 생기는지는 기존 `KiwoomCommonHealthOpportunityCostAcceptance0917` owner에서 확인한다.
+
+검증은 관련 quality/plan/owner replay/evaluator/publisher/consumer/live loader/wrapper/summary/tower/checklist/verifier 1,015건 PASS, 별도 live-loader 경계 73건 PASS, Python compile, wrapper `bash -n`, `git diff --check`, print-only backlog parser를 통과했다. 보호 원천 `.source.json`은 재생성 전후 동일했다. 재생성 전 manifest와 결과 receipt는 `tmp/compact-ai-single-owner-20260920/before-regeneration/manifest.json`, `tmp/compact-ai-single-owner-20260920/regeneration.json`이 소유한다. 배포 commit·불변 release·선택 영수증은 최종 deployment receipt에 기록한다.

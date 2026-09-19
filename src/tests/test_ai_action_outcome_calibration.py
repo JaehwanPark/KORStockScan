@@ -145,11 +145,7 @@ def test_conflict_exclusion_does_not_poison_remaining_clean_cohort(tmp_path):
     assert candidate["review_ready_for_prompt_candidate"] is True
 
 
-def test_two_thin_candidates_pass_central_handoff_verification(tmp_path):
-    from src.engine.verify_threshold_cycle_postclose_chain import (
-        _ai_decision_action_outcome_calibration_status,
-    )
-
+def test_two_thin_candidates_remain_diagnostic_without_runtime_handoff(tmp_path):
     folder = tmp_path / "report" / calibration.PAIRED_SUBDIR
     for i, ev in enumerate((0.1, 0.5)):
         _write_json(
@@ -162,7 +158,9 @@ def test_two_thin_candidates_pass_central_handoff_verification(tmp_path):
         )
     report = build_report(target_date="2026-09-07", data_root=tmp_path)
     assert report["thin_positive_review_candidate_count"] == 2
-    assert _ai_decision_action_outcome_calibration_status(report)["status"] == "pass"
+    assert calibration._artifact_content_sha256_valid(report)
+    assert report["runtime_effect"] is False
+    assert report["allowed_runtime_apply"] is False
 
 
 def test_runtime_review_route_never_reactivates_legacy_family():
@@ -1049,8 +1047,9 @@ def test_compact_caution_avoided_losses_prevent_one_sided_relaxation():
 
 
 @pytest.mark.parametrize("corruption", [None, "count", "nan_amount", "terminal_gate"])
-def test_router_economic_contract_is_rechecked_by_central_verifier(tmp_path, corruption):
-    from src.engine import verify_threshold_cycle_postclose_chain as verifier
+def test_router_economic_contract_is_rechecked_by_its_owner(tmp_path, corruption):
+    from src.engine.scalping import mechanistic_entry_runtime_policy as policy
+
     report = calibration.build_report(target_date="2026-09-15", data_root=tmp_path)
     table = _compact_router_case_table(decision_gate=corruption != "terminal_gate")
     economic = table["compact_auxiliary_screen_outcomes"]["economic_contract"]
@@ -1058,10 +1057,9 @@ def test_router_economic_contract_is_rechecked_by_central_verifier(tmp_path, cor
         economic["evaluable_caution_count"] -= 1
     elif corruption == "nan_amount":
         economic["missed_profit_caution_net_sum_pct"] = float("nan")
-    report["hierarchical_entry_quality"]["machine_decision_case_table"] = table
-    report = calibration._with_artifact_content_sha256(report)
-    status = verifier._ai_decision_action_outcome_calibration_status(report)
-    assert ("compact_auxiliary_economic_selection_contract_invalid" in status["contract_errors"]) is (corruption in {"count", "nan_amount"})
+    assert (not policy.compact_outcome_counts_valid(economic)) is (
+        corruption in {"count", "nan_amount"}
+    )
 
 
 def test_compact_machine_horizons_preserve_pending_or_source_gap():

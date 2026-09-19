@@ -11,7 +11,9 @@ import copy
 import fcntl
 import hashlib
 import json
+import os
 import re
+import tempfile
 from datetime import date, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
@@ -103,6 +105,23 @@ def _read(path: Path) -> dict:
     if not isinstance(value, dict):
         raise ValueError("policy_object_required")
     return value
+
+
+def _atomic_write_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary_name, 0o600)
+        os.replace(temporary_name, path)
+    finally:
+        Path(temporary_name).unlink(missing_ok=True)
 
 
 @lru_cache(maxsize=32)
@@ -476,84 +495,164 @@ def load_effective(*, data_root: Path, target_date: str) -> dict | None:
     return load(data_root=data_root, target_date=paths[-1].stem[7:]) if paths else None
 
 
-def _publish_compact_scope(source: dict, *, data_root: Path, current: datetime) -> dict:
-    """Refresh only AI evidence; preserve all inherited machine/scope policies."""
+def publish_compact_evaluation(
+    source: dict,
+    *,
+    source_receipt: dict,
+    publication_day: str,
+    data_root: Path,
+    now: datetime | None = None,
+) -> dict:
+    """Publish one canonical paired result without a copied calibration owner."""
     from src.engine.scalping import compact_auxiliary_paired_replay as paired
-    from src.engine.scalping import ai_action_outcome_calibration as calibration
-    source_day = source["target_date"]
-    if source_day > current.date().isoformat():
-        raise ValueError("compact_publication_date_in_future")
-    target = next_target(source_day)
-    previous = load_effective(data_root=data_root, target_date=source_day)
+
+    current = (now or datetime.now(KST)).astimezone(KST)
+    source_day = str(source.get("target_date") or "")
+    manifest_sha = source_receipt.get("source_manifest_sha256") or (
+        source_receipt.get("source_manifest") or {}
+    ).get("source_manifest_sha256")
+    if (
+        not paired.valid(source)
+        or source.get("schema") != paired.SCHEMA
+        or source_day < "2026-06-05"
+        or not source_day <= publication_day <= current.date().isoformat()
+        or source.get("source_manifest_sha256") != manifest_sha
+    ):
+        raise ValueError("compact_direct_evaluation_source_invalid")
+    target = next_target(publication_day)
+    previous = load_effective(data_root=data_root, target_date=publication_day)
     if previous is None:
         raise ValueError("compact_incumbent_missing_no_implicit_bootstrap")
-    with (root(data_root) / "publisher.lock").open("a") as lock:
+    policy_root = root(data_root)
+    policy_root.mkdir(parents=True, exist_ok=True)
+    with (policy_root / "publisher.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         existing = load(data_root=data_root, target_date=target)
-        if existing and existing.get("source_artifact_sha256") == source["artifact_content_sha256"]:
+        if (
+            existing
+            and existing.get("source_artifact_sha256")
+            == source["artifact_content_sha256"]
+            and existing.get("compact_evaluation_source_date") == source_day
+        ):
             return existing
         if current >= datetime.fromisoformat(target + "T07:35:00").replace(tzinfo=KST):
             if existing is None:
                 raise ValueError("compact_preopen_freeze_without_dated_policy")
             return existing
-        table = source["hierarchical_entry_quality"]["machine_decision_case_table"]
-        proof = table["compact_auxiliary_screen_outcomes"]["paired_economic_evaluation"]
-        receipt = table.get("compact_auxiliary_evaluation_source_receipt") or table["machine_ai_natural_source_receipt"]
         version = previous["ai_policy"]["prompt_version"]
-        selected = proof["candidate_prompt_version"]
-        measurement_allowed = (receipt.get("tuning_input_allowed") is True
-                   and compact_terminal_gate_allowed(receipt)
-                   and (receipt.get("compact_auxiliary_policy_measurement") or {}).get("measurement_allowed") is True)
+        selected = source["candidate_prompt_version"]
+        measurement_allowed = (
+            source_receipt.get("tuning_input_allowed") is True
+            and compact_terminal_gate_allowed(source_receipt)
+            and (source_receipt.get("compact_auxiliary_policy_measurement") or {}).get(
+                "measurement_allowed"
+            )
+            is True
+        )
         scope_keys = list((previous.get("scope_policies") or {})) or ["|".join(COHORT)]
         promoted_scopes = []
         for scope_key in scope_keys:
-            old_ai = (previous.get("scope_policies") or {}).get(scope_key, previous)["ai_policy"]
-            if measurement_allowed and paired.promotion_valid(proof,
-                    incumbent=old_ai["prompt_version"], selected=selected,
-                    source_manifest_sha256=receipt.get("source_manifest_sha256"), effective_date=target,
-                    scope=tuple(scope_key.split("|"))):
+            old_ai = (previous.get("scope_policies") or {}).get(
+                scope_key, previous
+            )["ai_policy"]
+            if measurement_allowed and paired.promotion_valid(
+                source,
+                incumbent=old_ai["prompt_version"],
+                selected=selected,
+                source_manifest_sha256=manifest_sha,
+                effective_date=target,
+                scope=tuple(scope_key.split("|")),
+            ):
                 promoted_scopes.append(scope_key)
-        promote = bool(promoted_scopes)
         if existing and existing["ai_policy"]["prompt_version"] != version:
             raise ValueError("compact_future_stage_owner_conflict")
         for scope_key in promoted_scopes:
-            old_ai = (previous.get("scope_policies") or {}).get(scope_key, previous)["ai_policy"]
-            current_ai = ((existing or {}).get("scope_policies") or {}).get(scope_key, existing or previous)["ai_policy"]
+            old_ai = (previous.get("scope_policies") or {}).get(
+                scope_key, previous
+            )["ai_policy"]
+            current_ai = ((existing or {}).get("scope_policies") or {}).get(
+                scope_key, existing or previous
+            )["ai_policy"]
             if current_ai["prompt_version"] != old_ai["prompt_version"]:
                 raise ValueError("compact_future_stage_owner_conflict:" + scope_key)
         inherited = existing or previous
         if existing:
-            calibration._atomic_write_json(root(data_root) / "generations" / f"{existing['bundle_sha256']}.json", existing)
+            _atomic_write_json(
+                policy_root / "generations" / f"{existing['bundle_sha256']}.json",
+                existing,
+            )
         bundle = copy.deepcopy(inherited)
         bundle.pop("bundle_sha256", None)
-        if promote:
-            paired.consume_holdout(proof, data_root, scopes=promoted_scopes)
-            selected_policies = [(s["ai_policy"], s["historical_context"]) for scope,s in
-                                 (bundle.get("scope_policies") or {}).items() if scope in promoted_scopes]
+        if promoted_scopes:
+            paired.consume_holdout(source, data_root, scopes=promoted_scopes)
+            selected_policies = [
+                (value["ai_policy"], value["historical_context"])
+                for scope, value in (bundle.get("scope_policies") or {}).items()
+                if scope in promoted_scopes
+            ]
             if "|".join(COHORT) in promoted_scopes:
-                selected_policies.append((bundle["ai_policy"], bundle.get("historical_context")))
-            for ai, context in selected_policies:
-                ai.update(prompt_version=selected, variant=compact_prompt_variant(selected),
-                          system_prompt=compact_auxiliary_prompt(context, prompt_version=selected))
-                ai["system_prompt_sha256"] = digest(ai["system_prompt"])
-        source_hash = hashlib.sha256((json.dumps(source, ensure_ascii=False, indent=2) + "\n").encode()).hexdigest()
-        snapshot = root(data_root) / "sources" / f"{source_hash}.json"
-        calibration._atomic_write_json(snapshot, source)
-        bundle.update(target_date=target, source_date=source_day, source_file_sha256=source_hash,
-                      source_artifact_sha256=source["artifact_content_sha256"], generated_at=current.isoformat(),
-                      compact_evaluation_source_date=source["evaluation_source_date"],
-                      previous_bundle_sha256=inherited["bundle_sha256"],
-                      compact_inherited_bundle_sha256=inherited["bundle_sha256"],
-                      compact_inherited_source_date=inherited["source_date"],
-                      compact_paired_artifact_sha256=proof["artifact_content_sha256"],
-                      compact_prompt_disposition="compact_paired_candidate_selected" if promote else "compact_incumbent_carry",
-                      compact_promoted_scopes=promoted_scopes)
+                selected_policies.append(
+                    (bundle["ai_policy"], bundle.get("historical_context"))
+                )
+            for ai_policy, context in selected_policies:
+                ai_policy.update(
+                    prompt_version=selected,
+                    variant=compact_prompt_variant(selected),
+                    system_prompt=compact_auxiliary_prompt(
+                        context, prompt_version=selected
+                    ),
+                )
+                ai_policy["system_prompt_sha256"] = digest(
+                    ai_policy["system_prompt"]
+                )
+        encoded_source = (
+            json.dumps(source, ensure_ascii=False, indent=2) + "\n"
+        ).encode()
+        source_hash = hashlib.sha256(encoded_source).hexdigest()
+        _atomic_write_json(policy_root / "sources" / f"{source_hash}.json", source)
+        bundle.update(
+            target_date=target,
+            source_date=publication_day,
+            publication_date=publication_day,
+            source_file_sha256=source_hash,
+            source_artifact_sha256=source["artifact_content_sha256"],
+            generated_at=current.isoformat(),
+            compact_evaluation_source_date=source_day,
+            previous_bundle_sha256=inherited["bundle_sha256"],
+            compact_inherited_bundle_sha256=inherited["bundle_sha256"],
+            compact_inherited_source_date=inherited["source_date"],
+            compact_paired_artifact_sha256=source["artifact_content_sha256"],
+            compact_evaluation_fingerprint=source.get("evaluation_fingerprint"),
+            compact_prompt_disposition=(
+                "compact_paired_candidate_selected"
+                if promoted_scopes
+                else "compact_incumbent_carry"
+            ),
+            compact_promoted_scopes=promoted_scopes,
+        )
         bundle["bundle_sha256"] = digest(bundle)
         validate(bundle, target_date=target)
-        calibration._atomic_write_json(root(data_root) / "generations" / f"{bundle['bundle_sha256']}.json", bundle)
-        calibration._atomic_write_json(root(data_root) / f"policy_{target}.json", bundle)
+        _atomic_write_json(
+            policy_root / "generations" / f"{bundle['bundle_sha256']}.json", bundle
+        )
+        _atomic_write_json(policy_root / f"policy_{target}.json", bundle)
         return load(data_root=data_root, target_date=target)
 
+
+def _publish_compact_scope(source: dict, *, data_root: Path, current: datetime) -> dict:
+    """Compatibility reader for an older calibration source; publish the pair."""
+    table = source["hierarchical_entry_quality"]["machine_decision_case_table"]
+    proof = table["compact_auxiliary_screen_outcomes"]["paired_economic_evaluation"]
+    receipt = table.get("compact_auxiliary_evaluation_source_receipt") or table[
+        "machine_ai_natural_source_receipt"
+    ]
+    return publish_compact_evaluation(
+        proof,
+        source_receipt=receipt,
+        publication_day=source["target_date"],
+        data_root=data_root,
+        now=current,
+    )
 
 def publish(
     source_path: Path,
@@ -690,7 +789,7 @@ def publish(
         ).hexdigest()
         snapshot = policy_root / "sources" / f"{source_hash}.json"
         if not snapshot.is_file():
-            calibration._atomic_write_json(snapshot, source)
+            _atomic_write_json(snapshot, source)
         if _source_hash(str(snapshot), _signature(snapshot)) != source_hash:
             raise ValueError("machine_policy_source_snapshot_corrupt")
         projection, errors = _mechanistic_primary_activation_projection(
@@ -942,14 +1041,14 @@ def publish(
             if paired_proof.get("paired_economic_evaluation"):
                 paired.consume_holdout(paired_proof["paired_economic_evaluation"], data_root)
         if existing is not None:
-            calibration._atomic_write_json(
+            _atomic_write_json(
                 policy_root / "generations" / f"{existing['bundle_sha256']}.json",
                 existing,
             )
-        calibration._atomic_write_json(
+        _atomic_write_json(
             policy_root / "generations" / f"{bundle['bundle_sha256']}.json", bundle
         )
-        calibration._atomic_write_json(policy_root / f"policy_{target}.json", bundle)
+        _atomic_write_json(policy_root / f"policy_{target}.json", bundle)
         return load(data_root=data_root, target_date=target)
 
 

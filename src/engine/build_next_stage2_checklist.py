@@ -93,6 +93,7 @@ DIRECT_OWNER_TASK_LABEL = {
     "low_price_expansion": "LowPriceExpansion",
     "ws_freshness": "WsFreshness",
     "ai_outcome": "AiOutcome",
+    "compact_auxiliary": "CompactAuxiliary",
     "rising_missed": "RisingMissed",
 }
 DIRECT_TERMINAL_STATES = {

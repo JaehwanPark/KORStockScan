@@ -147,7 +147,7 @@ def test_runtime_requires_exact_activation_and_unchanged_candidate(
     assert fallback["reason"] == "holding_prompt_candidate_contract_invalid"
 
 
-def test_wrapper_paths_are_natural_postclose_and_preopen_only():
+def test_holding_prompt_is_preopen_only_after_dedicated_postclose_retirement():
     postclose = policy.Path(
         "deploy/run_ai_entry_setup_paired_replay_postclose.sh"
     ).read_text(encoding="utf-8")
@@ -155,8 +155,7 @@ def test_wrapper_paths_are_natural_postclose_and_preopen_only():
         encoding="utf-8"
     )
 
-    assert "holding_prompt_live_policy" in postclose
-    assert "--phase postclose" in postclose
-    assert "--max-new-total" in postclose
+    assert "holding_prompt_live_policy" not in postclose
+    assert "--phase postclose" not in postclose
     assert "holding_prompt_live_policy" in preopen
     assert "--phase preopen" in preopen

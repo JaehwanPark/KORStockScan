@@ -91,6 +91,8 @@ def test_compact_checkpoint_reuse_economics_rejoin_and_source_block(monkeypatch,
     assert first["metrics"]["economic_research_status"] == "supported_cost_adjusted_comparison"
     assert first["metrics"]["promotion_primary_decision_metric"] == "robust_paired_delta_ev_lower_bound_pct"
     assert first["metrics"]["model_delta_ev_is_actual_profit"] is False
+    assert len(first["evaluation_fingerprint"]) == 64
+    assert first["evaluation_state"] in {"evaluated_hold", "waiting_model_or_sample"}
     assert not first["promotion_pass"]
     identity = compact.input_identity(row)
     row["entry_quality_path"]["gross_net_target_pct"] = 0.9
@@ -102,6 +104,7 @@ def test_compact_checkpoint_reuse_economics_rejoin_and_source_block(monkeypatch,
     projection = compact.sealed(projection)
     report = compact.run(data_root=blocked, day="2026-09-17", execute=True, runner=lambda _: pytest.fail("blocked source cannot call provider"))
     assert report["status"] == "source_contract_blocked"
+    assert report["evaluation_state"] == "blocked_source"
 
 
 @lru_cache(maxsize=1)
@@ -198,97 +201,143 @@ def test_compact_signed_owner_cf_forward_holdout_positive_and_corruption():
 
 
 @pytest.mark.parametrize("promote", [False, True])
-@pytest.mark.parametrize("integrated", [False, True])
-def test_compact_public_finalization_consumes_policy_and_all_summaries(tmp_path, promote, monkeypatch, integrated):
+def test_compact_public_finalization_uses_direct_pair_policy_consumer(tmp_path, promote, monkeypatch):
     from src.tests.test_mechanistic_entry_runtime_policy import initial
     from src.engine.scalping import mechanistic_entry_runtime_policy as policy
     from src.engine.scalping.main_ai_prompt_consumer import verify_compact_handoff
     from src.tests.test_ai_action_outcome_calibration import _compact_router_case_table
+
     parent = initial(tmp_path)
     proof = full_compact_proof()
     if not promote:
         proof["chronological_validation"]["holdout_pairs"] = []
         proof["candidate_improvement_proven"] = False
-        proof = compact.sealed(proof)
+        proof["promotion_pass"] = False
+        proof["promotion_scopes"] = []
+    else:
+        proof["promotion_pass"] = True
+        proof["promotion_scopes"] = ["KRX|KRX_REGULAR"]
+    proof["evaluation_fingerprint"] = compact.digest(["direct", promote])
+    proof["evaluation_state"] = "validated_edge" if promote else "evaluated_hold"
+    proof["comparison_dependency_signatures"] = compact._comparison_signatures(
+        compact.report_path(tmp_path, "2026-09-17").parent,
+        "2026-09-17",
+        proof["candidate_prompt_version"],
+    )
+    proof = compact.sealed(proof)
     compact.write(compact.report_path(tmp_path, "2026-09-17"), proof)
     receipt = _compact_router_case_table()["machine_ai_natural_source_receipt"]
-    receipt["source_manifest"] = {"source_manifest_sha256": "d"*64}
+    receipt["source_manifest"] = {"source_manifest_sha256": "d" * 64}
+    receipt["source_manifest_sha256"] = "d" * 64
     receipt["compact_auxiliary_policy_measurement"] = {"measurement_allowed": True}
-    compact.write(tmp_path / "report/observation_source_quality_audit/observation_source_quality_audit_2026-09-17.json", {"machine_ai_natural_source_consumption": receipt})
-    # The actual source materializer feeds diagnostics before the existing
-    # supported economic proof travels through dated publication and runtime.
+    compact.write(
+        tmp_path
+        / "report/observation_source_quality_audit"
+        / "observation_source_quality_audit_2026-09-17.json",
+        {"machine_ai_natural_source_consumption": receipt},
+    )
     from src.engine.scalping import ai_decision_quality as quality
     from src.tests.test_ai_decision_quality import _trace, _payload, _pending
+
     monkeypatch.setattr(quality, "DATA_DIR", tmp_path)
-    monkeypatch.setattr(quality, "control_path", lambda day: tmp_path / "runtime" / f"ai_decision_quality_control_{day}.json")
-    monkeypatch.setattr(quality, "label_report_path", lambda day: tmp_path / "report/ai_decision_outcome_labels" / f"ai_decision_outcome_labels_{day}.json")
-    label = {**_pending(), "label_status": "mature", "source_quality_status": "pass",
-             "primary_cohort_eligible": True, "reason_codes": ["체결근거"], "horizon_metrics": {"10m": {"end_return_pct": .5}}}
-    report = {"schema": quality.LABEL_REPORT_SCHEMA, "target_date": "2026-09-17",
-              "outcome_as_of": "2026-09-17T21:00:00+09:00", "labels": [label], **quality.OFFLINE_CONTRACT}
-    generated = quality.build_daily_materialization_reports(target_date="2026-09-17", promotion={},
-        traces=[_trace()], payloads=[_payload()], labels=[label], label_report=report,
-        outcome_price_source="pipeline", outcome_price_source_requested="pipeline", price_source_provenance=[])
+    monkeypatch.setattr(
+        quality,
+        "control_path",
+        lambda day: tmp_path / "runtime" / f"ai_decision_quality_control_{day}.json",
+    )
+    monkeypatch.setattr(
+        quality,
+        "label_report_path",
+        lambda day: tmp_path
+        / "report/ai_decision_outcome_labels"
+        / f"ai_decision_outcome_labels_{day}.json",
+    )
+    label = {
+        **_pending(),
+        "label_status": "mature",
+        "source_quality_status": "pass",
+        "primary_cohort_eligible": True,
+        "reason_codes": ["체결근거"],
+        "horizon_metrics": {"10m": {"end_return_pct": 0.5}},
+    }
+    report = {
+        "schema": quality.LABEL_REPORT_SCHEMA,
+        "target_date": "2026-09-17",
+        "outcome_as_of": "2026-09-17T21:00:00+09:00",
+        "labels": [label],
+        **quality.OFFLINE_CONTRACT,
+    }
+    generated = quality.build_daily_materialization_reports(
+        target_date="2026-09-17",
+        promotion={},
+        traces=[_trace()],
+        payloads=[_payload()],
+        labels=[label],
+        label_report=report,
+        outcome_price_source="pipeline",
+        outcome_price_source_requested="pipeline",
+        price_source_provenance=[],
+    )
     quality.write_source_label_materialization("2026-09-17", generated["reports"])
-    proof = compact.sealed({**proof, "source_label_report_sha256": compact.digest(compact.read(quality.label_report_path("2026-09-17")))})
+    proof = compact.sealed(
+        {
+            **proof,
+            "source_label_report_sha256": compact.digest(
+                compact.read(quality.label_report_path("2026-09-17"))
+            ),
+        }
+    )
     compact.write(compact.report_path(tmp_path, "2026-09-17"), proof)
-    for p in compact.summary_paths(tmp_path, "2026-09-17"):
-        compact.write(p, {"date": "2026-09-17", "native_status": "blocked_resource_guard", "unrelated": 42})
-    if integrated:
-        from src.engine.scalping import ai_action_outcome_calibration as calibration
-        phase_calls = []
-        def reuse_run(**kwargs):
-            phase_calls.append((kwargs["execute"], kwargs["allow_source_rebuild"]))
-            return compact.read(compact.report_path(tmp_path, "2026-09-17"))
-        monkeypatch.setattr(compact, "run", reuse_run)
-        kwargs = dict(data_root=tmp_path, source_day="2026-09-17", publication_day="2026-09-18", compact_scope_only=True)
-        calibration.run_postclose_phase(**kwargs, phase="prepare")
-        for _ in range(2):
-            evaluated = calibration.run_postclose_phase(**kwargs, phase="evaluate", execute=True)
-            assert evaluated["provider_calls_this_run"] == 0
-            assert evaluated["policy_publication"] == "not_requested_provisional"
-            assert policy.load(data_root=tmp_path, target_date="2026-09-21") is None
-        result = calibration.run_postclose_phase(**kwargs, phase="finalize")
-        assert phase_calls == [(True, True), (True, True), (False, False)]
-        assert set(result["postclose_integration"]["phases"]) == {"prepare", "evaluate", "finalize"}
-        finalized = compact.read(calibration.report_path("2026-09-18", tmp_path / "report"))
-        assert finalized["status"] == "postclose_finalize_ready"
-        assert finalized["postclose_integration"]["economic_status"] == proof["status"]
-        # A late parent rewrite needs summary binding, not another publication.
-        summary_path = compact.summary_paths(tmp_path, "2026-09-17")[0]
-        value = compact.read(summary_path)
-        value.pop("compact_auxiliary_economic_tuning")
-        compact.write(summary_path, value)
-        monkeypatch.setattr(policy, "publish", lambda *a, **k: pytest.fail("handoff must not publish"))
-        rebound = calibration.run_postclose_phase(**kwargs, phase="handoff")
-        assert rebound["policy_bundle_sha256"] == result["policy_bundle_sha256"]
-        assert compact.read(summary_path)["unrelated"] == 42
-        assert rebound["status"] == "compact_scope_policy_and_summary_handoff_complete"
-    else:
-        result = compact.finalize(data_root=tmp_path, day="2026-09-17", publication_day="2026-09-18")
+    checklist = tmp_path / "docs/checklists/2026-09-21-stage2-todo-checklist.md"
+    checklist.parent.mkdir(parents=True)
+    checklist.write_text(
+        "# Next\n\n"
+        "<!-- compact_auxiliary_handoff:start -->\n"
+        "old compact copy\n"
+        "<!-- scanner_lookup_attention_handoff_sha256:abc -->\n"
+        "- Scanner lookup source preserved\n"
+        "<!-- compact_auxiliary_handoff:end -->\n",
+        encoding="utf-8",
+    )
+
+    result = compact.finalize(
+        data_root=tmp_path, day="2026-09-17", publication_day="2026-09-18"
+    )
+    assert result["status"] == "compact_direct_policy_and_consumer_complete"
     assert result["effective_date"] == "2026-09-21"
     child = policy.load(data_root=tmp_path, target_date=result["effective_date"])
     assert child["machine_policy"] == parent["machine_policy"]
-    assert child["ai_policy"]["prompt_version"] == (proof["candidate_prompt_version"] if promote else parent["ai_policy"]["prompt_version"])
-    from pathlib import Path
-    diagnostic_report = compact.read(Path(result["calibration_path"]))
-    diagnostics = diagnostic_report["hierarchical_entry_quality"]["machine_decision_case_table"]["ai_quality_diagnostics"]
-    assert diagnostics["status"] == "diagnostic_available"
-    assert diagnostics["diagnostic_price_path_summary"]["eligible_sample_count"] == 1
-    assert policy.load_effective(data_root=tmp_path, target_date=result["effective_date"])["bundle_sha256"] == child["bundle_sha256"]
+    assert child["source_artifact_sha256"] == proof["artifact_content_sha256"]
+    assert child["compact_evaluation_fingerprint"] == proof["evaluation_fingerprint"]
+    assert child["ai_policy"]["prompt_version"] == (
+        proof["candidate_prompt_version"]
+        if promote
+        else parent["ai_policy"]["prompt_version"]
+    )
     assert verify_compact_handoff(tmp_path, "2026-09-17")["status"] == "PASS"
+    assert not list(
+        (tmp_path / "report/main_ai_prompt_consumer").glob(
+            "compact_summary_handoff_*.json"
+        )
+    )
+    checklist_text = checklist.read_text(encoding="utf-8")
+    assert "old compact copy" not in checklist_text
+    assert "Scanner lookup source preserved" in checklist_text
+    assert "compact_auxiliary_direct_sha256" in checklist_text
     label_path = quality.label_report_path("2026-09-17")
     original_labels = compact.read(label_path)
     compact.write(label_path, {**original_labels, "tampered": True})
-    assert "compact_source_label_revision_stale" in verify_compact_handoff(tmp_path, "2026-09-17")["issues"]
+    assert "compact_source_label_revision_stale" in verify_compact_handoff(
+        tmp_path, "2026-09-17"
+    )["issues"]
     compact.write(label_path, original_labels)
-    p = compact.summary_paths(tmp_path, "2026-09-17")[0]
-    report = compact.read(p)
-    assert report["native_status"] == "blocked_resource_guard" and report["unrelated"] == 42
-    report["compact_auxiliary_economic_tuning"]["policy_bundle_sha256"] = "f"*64
-    compact.write(p, report)
-    assert verify_compact_handoff(tmp_path, "2026-09-17")["status"] == "FAIL"
-
+    consumer_path = Path(result["consumer_path"])
+    consumer = compact.read(consumer_path)
+    consumer["compact_auxiliary"]["policy_bundle_sha256"] = "f" * 64
+    compact.write(consumer_path, compact.sealed(consumer))
+    assert "compact_direct_consumer_invalid" in verify_compact_handoff(
+        tmp_path, "2026-09-17"
+    )["issues"]
 
 def test_compact_json_string_semantics_and_repeated_input_envelopes(tmp_path):
     import hashlib
@@ -1644,12 +1693,13 @@ def test_natural_response_contract_preserves_first_failure_boundary(patch, expec
     assert compact.natural_response_contract_exclusion(trace) == expected
 
 
-@pytest.mark.parametrize("phase", ["prepare", "finalize", "handoff"])
-def test_postclose_integration_provider_authority_is_evaluate_only(tmp_path, phase):
-    from src.engine.scalping.ai_action_outcome_calibration import run_postclose_phase
-    with pytest.raises(ValueError, match="integration_arguments_invalid"):
-        run_postclose_phase(data_root=tmp_path, source_day="2026-09-17", phase=phase, execute=True)
-    assert not list(tmp_path.iterdir())
+def test_calibration_cli_has_no_compact_postclose_phase():
+    from src.engine.scalping import ai_action_outcome_calibration as calibration
+
+    with pytest.raises(SystemExit):
+        calibration.main(
+            ["--target-date", "2026-09-17", "--postclose-phase", "evaluate"]
+        )
 
 
 @pytest.mark.parametrize("changed_contract", ["prompt", "schema", "pricing"])
@@ -1716,29 +1766,3 @@ def test_compact_shared_data_mount_reuses_snapshot_and_finalization_never_rescan
     with pytest.raises(ValueError, match="finalize_requires_evaluation"):
         compact.run(data_root=alias, day="2026-09-17", allow_source_rebuild=False)
     assert len(prepared) == len(calls) == 1
-
-
-
-
-@pytest.mark.parametrize("defect", ["paired", "labels", "source"])
-def test_integrated_finalize_rejects_generation_change_before_publisher(monkeypatch, tmp_path, defect):
-    from src.engine.scalping import ai_action_outcome_calibration as calibration
-    from src.engine.scalping import mechanistic_entry_runtime_policy as policy
-    proof = full_compact_proof()
-    expected = dict(paired_artifact_content_sha256=proof["artifact_content_sha256"])
-    integration = dict(phase="finalize", source_label_report_sha256="b"*64,
-                       phases={"finalize": expected},
-                       dependency_signatures=compact.source_dependency_signatures(tmp_path, "2026-09-17"))
-    report = dict(postclose_integration=integration, hierarchical_entry_quality={"machine_decision_case_table": {
-        "ai_quality_diagnostics": {"source_label_report_sha256": "b"*64},
-        "compact_auxiliary_screen_outcomes": {"paired_economic_evaluation": proof}}})
-    if defect == "paired":
-        expected["paired_artifact_content_sha256"] = "0"*64
-    elif defect == "labels":
-        integration["source_label_report_sha256"] = "0"*64
-    else:
-        integration["dependency_signatures"] = {}
-    monkeypatch.setattr(calibration, "build_compact_scope_report", lambda *a, **k: report)
-    monkeypatch.setattr(policy, "publish", lambda *a, **k: pytest.fail("stale source cannot publish"))
-    with pytest.raises(ValueError, match="source_changed_before_publication"):
-        compact.finalize(data_root=tmp_path, day="2026-09-17", publication_day="2026-09-18")

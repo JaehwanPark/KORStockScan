@@ -863,10 +863,13 @@ def main(argv: list[str] | None = None) -> int:
             report = compact.run(data_root=args.data_root, day=args.date, candidate_version=args.compact_candidate_version, execute=args.execute_compact_candidate, max_new=args.max_new_requests_per_cohort, timeout_sec=args.candidate_timeout_sec)
         execution_failed = (report or {}).get("status") == "execution_failed"
         if args.finalize_compact:
-            from src.engine.scalping.ai_action_outcome_calibration import run_postclose_phase
-            report = run_postclose_phase(data_root=args.data_root, source_day=args.date,
-                publication_day=args.publication_date, phase="finalize", compact_scope_only=True,
-                max_new=args.max_new_requests_per_cohort, timeout_sec=args.candidate_timeout_sec)
+            report = compact.finalize(
+                data_root=args.data_root,
+                day=args.date,
+                publication_day=(
+                    args.publication_date or datetime.now(quality.KST).date().isoformat()
+                ),
+            )
         summary = {k:v for k,v in report.items() if k not in {"results", "chronological_validation", "strict_family_verification"}}
         if "metrics" in summary:
             summary["metrics"] = {k:v for k,v in summary["metrics"].items() if k != "pairs"}

@@ -1099,6 +1099,53 @@ def source_dependency_signatures(data_root, day):
     return signatures
 
 
+def evaluation_fingerprint(*, projection, candidate_prompt, candidate_contract, cost_receipt):
+    """Identify one economically distinct evaluation generation."""
+    rows = projection.get("rows") or []
+    return digest(
+        {
+            "source_generation": projection.get("artifact_content_sha256"),
+            "eligible_population_hash": digest(
+                [
+                    [row.get("evaluation_key"), input_identity(row), row.get("exclusion_reason")]
+                    for row in rows
+                ]
+            ),
+            "incumbent_prompt_hash": digest(
+                sorted({str(row.get("issued_prompt_sha256") or "") for row in rows})
+            ),
+            "candidate_prompt_hash": digest(candidate_prompt),
+            "candidate_contract_hash": candidate_contract,
+            "execution_model_hash": digest(
+                projection.get("owner_execution_model_validation") or {}
+            ),
+            "cost_contract_hash": digest(cost_receipt),
+            "promotion_contract_hash": digest(CONTRACT),
+        }
+    )
+
+
+def evaluation_state(report):
+    """Return the event-driven state without converting gaps into no-edge."""
+    if report.get("promotion_pass") is True:
+        return "validated_edge"
+    disposition = (report.get("candidate_zero_disposition") or {}).get("status")
+    if report.get("status") == "source_contract_blocked" or disposition in {
+        "source_gap",
+        "unsupported_scope",
+    }:
+        return "blocked_source"
+    metrics = report.get("metrics") or {}
+    if report.get("status") in {"execution_deferred", "execution_failed"}:
+        return "ready_to_evaluate"
+    if disposition in {"pending", "insufficient_sample"} or (
+        metrics.get("paired_comparable_count", 0) == 0
+        and metrics.get("economic_eligible_count", 0) > 0
+    ):
+        return "waiting_model_or_sample"
+    return "evaluated_hold"
+
+
 def run(
     *,
     data_root,
@@ -1251,19 +1298,22 @@ def run(
             r["evaluation_key"]: digest(entry_risk_adjudication_openai_schema(r["input"]["entry_setup_evidence_v1"]))
             for r in projection["rows"] if not r.get("exclusion_reason") and isinstance(r.get("input"), dict)
         }])
+        cost_receipt = runtime_inference_cost_receipt(root, day)
+        fingerprint = evaluation_fingerprint(
+            projection=projection,
+            candidate_prompt=candidate_prompt,
+            candidate_contract=candidate_contract,
+            cost_receipt=cost_receipt,
+        )
         frozen_plan = read(path.parent / f"compact_candidate_plan_{candidate}.json")
         if (frozen_plan.get("scope_candidates") and frozen_plan.get("candidate_prompt_sha256")
                 and frozen_plan["candidate_prompt_sha256"] != digest(candidate_prompt)):
             raise ValueError("frozen_candidate_prompt_or_schema_changed")
-        cost_receipt = runtime_inference_cost_receipt(root, day)
         previous = read(path)
         if valid(previous) and previous.get("candidate_prompt_version") != candidate:
             raise ValueError("frozen_candidate_selection_mismatch")
         if (valid(previous)
-                and previous.get("candidate_contract_sha256") == candidate_contract
-                and previous.get("runtime_inference_cost_receipt") == cost_receipt
-                and previous.get("promotion_contract_sha256") == digest(CONTRACT)
-                and previous.get("source_projection_sha256") == projection["artifact_content_sha256"]
+                and previous.get("evaluation_fingerprint") == fingerprint
                 and previous.get("comparison_dependency_signatures") == _comparison_signatures(path.parent, day, candidate)
                 and (previous.get("status") in {"valid_empty", "comparison_complete", "incumbent_preserved"}
                      or previous.get("metrics", {}).get("economic_eligible_count") == 0)):
@@ -1531,6 +1581,7 @@ def run(
                 "candidate_frozen_at": frozen_at,
                 "candidate_prompt_version": candidate,
                 "candidate_contract_sha256": candidate_contract,
+                "evaluation_fingerprint": fingerprint,
                 "incumbent_prompt_version": versions[0] if len(versions) == 1 else None,
                 "source_manifest_sha256": projection["source_manifest_sha256"],
                 "source_projection_sha256": projection["artifact_content_sha256"],
@@ -1573,91 +1624,143 @@ def run(
             "candidate_selected" if report["promotion_pass"] else "incumbent_preserved"
         )
         report["candidate_zero_disposition"] = candidate_zero_disposition(projection["rows"], primary_blockers, report)
+        report["evaluation_state"] = evaluation_state(report)
         report = sealed(report)
         write(path, report)
         return report
 
 
 def finalize(*, data_root, day, publication_day, preserve_noncompact_scope=False):
+    """Publish and verify the canonical paired generation without provider work."""
+    if preserve_noncompact_scope:
+        raise ValueError("compact_finalize_noncompact_scope_retired")
     path = report_path(data_root, day)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.with_suffix(".lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        return _finalize(data_root=data_root, day=day, publication_day=publication_day,
-                         preserve_noncompact_scope=preserve_noncompact_scope)
+        return _finalize(data_root=data_root, day=day, publication_day=publication_day)
 
 
-def _finalize(*, data_root, day, publication_day, preserve_noncompact_scope=False):
-    """Reuse calibration, optimizer, publisher and final consumer; no provider."""
-    from src.engine.scalping import ai_action_outcome_calibration as calibration
-    from src.engine.scalping.micro_reversion import (
-        main_ai_prompt_optimizer as optimizer,
+def _write_checklist_projection(root, view, consumer_path):
+    from src.engine.build_next_stage2_checklist import (
+        _atomic_write_checklist,
+        _checklist_write_lock,
+        _render_new_document,
     )
+
+    data_root = Path(root)
+    project_root = data_root.parent if data_root.name == "data" else data_root
+    checklist_path = (
+        project_root
+        / "docs/checklists"
+        / f"{view['effective_date']}-stage2-todo-checklist.md"
+    )
+    start = "<!-- compact_auxiliary_direct:start -->"
+    end = "<!-- compact_auxiliary_direct:end -->"
+    block = "\n".join(
+        [
+            start,
+            f"<!-- compact_auxiliary_direct_sha256:{digest(view)} -->",
+            "",
+            "## Compact auxiliary 직접 증거",
+            "",
+            f"- 평가 원천 {view['source_date']}; 발행 {view['publication_date']}; 적용 {view['effective_date']}. 평가 상태 `{view['evaluation_state']}`, 선정 상태 `{view['selection_disposition']}`.",
+            f"- paired `{view['paired_artifact_content_sha256']}`; 정책 bundle `{view['policy_bundle_sha256']}`; consumer `{read(consumer_path)['artifact_content_sha256']}`.",
+            f"- 다음 확인 `{view['next_owner']}` / `{view['closure_test']}`. 실제 PID 소비와 비용 후 자연 성과는 별도 수용 조건이다.",
+            "",
+            end,
+        ]
+    )
+    with _checklist_write_lock(checklist_path):
+        text = (
+            checklist_path.read_text(encoding="utf-8")
+            if checklist_path.exists()
+            else _render_new_document(view["effective_date"], "")
+        )
+        legacy_start = "<!-- compact_auxiliary_handoff:start -->"
+        legacy_end = "<!-- compact_auxiliary_handoff:end -->"
+        preserved_lines = []
+        if legacy_start in text and legacy_end in text:
+            legacy = text[
+                text.index(legacy_start) : text.index(legacy_end) + len(legacy_end)
+            ]
+            preserved_lines = [
+                line
+                for line in legacy.splitlines()
+                if "scanner_lookup_attention_handoff_sha256" in line
+                or line.startswith("- Scanner lookup source ")
+            ]
+        for left, right in ((legacy_start, legacy_end), (start, end)):
+            if left in text and right in text:
+                a, b = text.index(left), text.index(right) + len(right)
+                text = text[:a] + text[b:]
+        preserved = "\n".join(preserved_lines)
+        text = text.rstrip() + "\n\n"
+        if preserved:
+            text += preserved + "\n\n"
+        text += block + "\n"
+        _atomic_write_checklist(checklist_path, text)
+    return checklist_path
+
+
+def _finalize(*, data_root, day, publication_day):
     from src.engine.scalping import mechanistic_entry_runtime_policy as policy
     from src.engine.scalping import main_ai_prompt_consumer as consumer
 
-    root = Path(data_root)
-    if publication_day > datetime.now(KST).date().isoformat():
-        raise ValueError("compact_publication_date_in_future")
-    report = calibration.build_compact_scope_report(root, day, publication_day,
-                                                    preserve_noncompact_scope=preserve_noncompact_scope)
-    integration = report.get("postclose_integration") or {}
-    if integration.get("phase") == "finalize":
-        expected = (integration.get("phases") or {}).get("finalize") or {}
-        paired = report["hierarchical_entry_quality"]["machine_decision_case_table"]["compact_auxiliary_screen_outcomes"]["paired_economic_evaluation"]
-        if (expected.get("paired_artifact_content_sha256") != paired["artifact_content_sha256"]
-                or integration.get("source_label_report_sha256") != report["hierarchical_entry_quality"]["machine_decision_case_table"]["ai_quality_diagnostics"]["source_label_report_sha256"]
-                or (integration.get("dependency_signatures") is not None
-                    and integration["dependency_signatures"] != source_dependency_signatures(root, day))):
-            raise ValueError("postclose_finalize_source_changed_before_publication")
-    calibration_path = calibration.report_path(publication_day, root / "report")
-    calibration._atomic_write_json(calibration_path, report)
-    table = report["hierarchical_entry_quality"]["machine_decision_case_table"]
-    if preserve_noncompact_scope and table.get("microstructure_evaluation") is not None:
-        from src.engine.scalping.microstructure_reaction_context import refresh_machine_evaluation_link
-        refresh_machine_evaluation_link(calibration_path, report_root=root / "report")
-    bundle = policy.publish(calibration_path, data_root=root)
-    if bundle is None:
-        raise ValueError("compact_dated_policy_not_published")
-    optimizer_path = (
+    root = Path(data_root).resolve()
+    if not isinstance(publication_day, str) or publication_day > datetime.now(KST).date().isoformat():
+        raise ValueError("compact_publication_date_invalid")
+    paired = read(report_path(root, day))
+    if not valid(paired) or paired.get("target_date") != day:
+        raise ValueError("compact_terminal_evaluation_missing")
+    if paired.get("evaluation_state") is None:
+        paired = sealed({**paired, "evaluation_state": evaluation_state(paired)})
+        write(report_path(root, day), paired)
+    if paired.get("comparison_dependency_signatures") != _comparison_signatures(
+        report_path(root, day).parent,
+        day,
+        paired["candidate_prompt_version"],
+    ):
+        raise ValueError("compact_finalize_comparison_source_changed")
+    source_report = read(
         root
-        / "report/main_ai_prompt_optimizer"
-        / f"main_ai_prompt_optimizer_{publication_day}.json"
+        / "report/observation_source_quality_audit"
+        / f"observation_source_quality_audit_{day}.json"
     )
-    plan = read(optimizer_path)
-    if optimizer_path.exists() and not valid(plan):
-        raise ValueError("compact_optimizer_existing_hash_invalid")
-    plan.update(
-        schema=optimizer.SCHEMA,
-        target_date=publication_day,
-        compact_auxiliary_evaluation=optimizer.compact_evaluation_plan(report),
-        compact_scope_status="terminal_evaluation_policy_published",
-        compact_source_calibration_artifact_content_sha256=report["artifact_content_sha256"],
-        **AUTHORITY,
+    receipt = source_report.get("machine_ai_natural_source_consumption") or {}
+    manifest_sha = receipt.get("source_manifest_sha256") or (
+        receipt.get("source_manifest") or {}
+    ).get("source_manifest_sha256")
+    receipt = {**receipt, "source_manifest_sha256": manifest_sha}
+    bundle = policy.publish_compact_evaluation(
+        paired,
+        source_receipt=receipt,
+        publication_day=publication_day,
+        data_root=root,
     )
-    write(optimizer_path, sealed(plan))
-    paired = report["hierarchical_entry_quality"]["machine_decision_case_table"][
-        "compact_auxiliary_screen_outcomes"
-    ]["paired_economic_evaluation"]
     view = {
-        "schema": "compact_auxiliary_consumer_handoff_v2",
+        "schema": "compact_auxiliary_consumer_handoff_v3",
         "source_date": day,
         "publication_date": publication_day,
         "effective_date": bundle["target_date"],
-        "paired_artifact_content_sha256": paired["artifact_content_sha256"],
-        "calibration_artifact_content_sha256": report["artifact_content_sha256"],
-        "optimizer_artifact_content_sha256": read(optimizer_path)[
-            "artifact_content_sha256"
-        ],
-        "policy_bundle_sha256": bundle["bundle_sha256"],
-        "calibration_path": str(calibration_path.resolve()),
-        "optimizer_path": str(optimizer_path.resolve()),
         "paired_path": str(report_path(root, day).resolve()),
+        "paired_artifact_content_sha256": paired["artifact_content_sha256"],
+        "evaluation_fingerprint": paired.get("evaluation_fingerprint"),
+        "evaluation_state": paired["evaluation_state"],
         "evaluation_status": paired["status"],
-        "selection_disposition": "candidate_selected"
-        if bundle.get("compact_promoted_scopes") or (bundle["ai_policy"]["prompt_version"] == paired["candidate_prompt_version"]
-        and paired["candidate_prompt_version"] != paired["incumbent_prompt_version"])
-        else "incumbent_preserved",
+        "policy_path": str(
+            (
+                root
+                / "runtime/mechanistic_entry_policy"
+                / f"policy_{bundle['target_date']}.json"
+            ).resolve()
+        ),
+        "policy_bundle_sha256": bundle["bundle_sha256"],
+        "selection_disposition": (
+            "candidate_selected"
+            if bundle.get("compact_promoted_scopes")
+            else "incumbent_preserved"
+        ),
         "next_owner": paired.get(
             "next_owner", "existing_main_owner_execution_cf_and_portfolio_replay"
         ),
@@ -1666,7 +1769,6 @@ def _finalize(*, data_root, day, publication_day, preserve_noncompact_scope=Fals
             "full_cost_stop_owner_plan_portfolio_and_forward_holdout_receipts",
         ),
         "candidate_improvement_proven": paired["candidate_improvement_proven"],
-        "postclose_integration": report.get("postclose_integration"),
         "metrics": {k: v for k, v in paired["metrics"].items() if k != "pairs"},
         "actual_pid_consumed": False,
         "actual_net_profit_improvement": None,
@@ -1684,170 +1786,21 @@ def _finalize(*, data_root, day, publication_day, preserve_noncompact_scope=Fals
         schema=consumer.SCHEMA,
         target_date=publication_day,
         compact_auxiliary=view,
-        compact_scope_status="connected_terminal_evaluation_and_dated_policy",
+        compact_scope_status="direct_paired_evaluation_and_dated_policy",
         **AUTHORITY,
     )
     write(consumer_path, sealed(handoff))
-    refresh_summaries(root, day, view, consumer_path)
+    checklist_path = _write_checklist_projection(root, view, consumer_path)
     verified = consumer.verify_compact_handoff(root, day)
     if verified["status"] != "PASS":
         raise ValueError(
-            "compact_last_consumer_handoff_failed:" + ",".join(verified["issues"])
+            "compact_direct_consumer_verification_failed:"
+            + ",".join(verified["issues"])
         )
     return {
-        "status": "compact_scope_policy_and_summary_handoff_complete",
+        "status": "compact_direct_policy_and_consumer_complete",
         **view,
+        "consumer_path": str(consumer_path),
+        "checklist_path": str(checklist_path),
         "strict_family_verification": verified,
     }
-
-
-def refresh_handoff(*, data_root, day, publication_day):
-    """Rebind late summaries without candidate execution or policy publication."""
-    from src.engine.scalping import main_ai_prompt_consumer as consumer
-    from src.engine.scalping import mechanistic_entry_runtime_policy as policy
-    root = Path(data_root).resolve()
-    path = report_path(root, day)
-    with path.with_suffix(".lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        consumer_path = root / "report/main_ai_prompt_consumer" / f"main_ai_prompt_consumer_{publication_day}.json"
-        handoff = read(consumer_path)
-        view = handoff.get("compact_auxiliary") or {}
-        paired = read(path)
-        bundle = policy.load(data_root=root, target_date=view.get("effective_date", ""))
-        if (not valid(handoff) or not valid(paired) or view.get("source_date") != day
-                or view.get("publication_date") != publication_day
-                or view.get("paired_artifact_content_sha256") != paired.get("artifact_content_sha256")
-                or bundle is None or bundle["bundle_sha256"] != view.get("policy_bundle_sha256")):
-            raise ValueError("compact_existing_handoff_generation_invalid")
-        refresh_summaries(root, day, view, consumer_path)
-        verified = consumer.verify_compact_handoff(root, day)
-        if verified["status"] != "PASS":
-            raise ValueError("compact_last_consumer_handoff_failed:" + ",".join(verified["issues"]))
-        return {"status": "compact_scope_policy_and_summary_handoff_complete", **view,
-                "strict_family_verification": verified}
-
-
-def source_is_compact(report):
-    return report.get("report_scope") == "compact_auxiliary_only"
-
-
-def summary_paths(root, day):
-    root = Path(root) / "report"
-    tower = (
-        root
-        / "tuning_performance_control_tower"
-        / f"tuning_performance_control_tower_{day}.json"
-    )
-    if not tower.exists():
-        tower = (
-            root
-            / "tuning_performance_control_tower"
-            / f"compact_auxiliary_control_tower_{day}.json"
-        )
-    return [
-        root / f"threshold_cycle_{day}.json",
-        root / "threshold_cycle_ev" / f"threshold_cycle_ev_{day}.json",
-        root / "runtime_approval_summary" / f"runtime_approval_summary_{day}.json",
-        tower,
-    ]
-
-
-def refresh_summaries(root, day, view, consumer_path):
-    """Update only one section; preserve canonical native terminal/other families."""
-    from src.engine.scalping.scanner_lookup_attention_resource import selection_handoff
-    selection = selection_handoff(Path(root) / "report", day)
-    sources = {}
-    for path in summary_paths(root, day):
-        before = path.stat() if path.exists() else None
-        value = read(path)
-        if not value:
-            if path.name.startswith("compact_auxiliary_control_tower_"):
-                value = {
-                    "schema": "compact_auxiliary_scoped_control_tower_v1",
-                    "source_date": day,
-                    "whole_native_chain_done_claimed": False,
-                }
-            else:
-                raise ValueError("compact_last_summary_missing:" + str(path))
-        value["compact_auxiliary_economic_tuning"] = view
-        if selection.get("source_section_sha256"):
-            value["scanner_lookup_attention_selection"] = selection
-        if before and (before.st_ino, before.st_size, before.st_mtime_ns) != (
-            path.stat().st_ino,
-            path.stat().st_size,
-            path.stat().st_mtime_ns,
-        ):
-            raise ValueError("compact_summary_changed_during_refresh")
-        if "artifact_content_sha256" in value:
-            value = sealed(value)
-        write(path, value)
-        sources[str(path.resolve())] = digest(view)
-    from src.engine.build_next_stage2_checklist import (
-        _checklist_write_lock,
-        _atomic_write_checklist,
-        _render_new_document,
-    )
-
-    checklist_path = (
-        Path(root).parent
-        / "docs/checklists"
-        / f"{view['effective_date']}-stage2-todo-checklist.md"
-    )
-    start, end = (
-        "<!-- compact_auxiliary_handoff:start -->",
-        "<!-- compact_auxiliary_handoff:end -->",
-    )
-    block = "\n".join(
-        [
-            start,
-            f"<!-- compact_auxiliary_handoff_sha256:{digest(view)} -->",
-            "",
-            "## Compact auxiliary 장후 handoff",
-            "",
-            f"- 평가 원천 {day}; 발행 {view['publication_date']}; 적용 {view['effective_date']}. 선정 상태 `{view['selection_disposition']}`, 평가 상태 `{view['evaluation_status']}`.",
-            f"- 정책 bundle `{view['policy_bundle_sha256']}`; consumer generation `{read(consumer_path)['artifact_content_sha256']}`. 실제 PID 소비 및 자연 비용 후 성과는 미확인이다.",
-            f"- 기존 owner `KiwoomCommonHealthOpportunityCostAcceptance0917`; 다음 확인 `{view['next_owner']}` / `{view['closure_test']}`. 결손 net은 null이며 이 기록은 주문·guard·provider 변경 승인이 아니다.",
-            "",
-            end,
-        ]
-    )
-    if selection.get("source_section_sha256"):
-        block = block.replace(end, "\n".join([
-            f"<!-- scanner_lookup_attention_handoff_sha256:{digest(selection)} -->",
-            f"- Scanner lookup source {day}; policy {selection['policy_date']}; publication {selection['publication_date']}; effective {selection['effective_date']}: `{selection['status']}`. Primary EV delta `{selection['primary_economics']['paired_delta_ev_pct']}`; source gaps `{selection['primary_economics']['source_gaps']}`. Existing owner `KiwoomCommonHealthOpportunityCostAcceptance0917`; natural PREOPEN/PID/full-cost outcomes remain OPEN.",
-            end]))
-    with _checklist_write_lock(checklist_path):
-        text = (
-            checklist_path.read_text(encoding="utf-8")
-            if checklist_path.exists()
-            else _render_new_document(view["effective_date"], "")
-        )
-        if start in text:
-            a, b = text.index(start), text.index(end) + len(end)
-            text = text[:a] + block + text[b:]
-        else:
-            text = text.rstrip() + "\n\n" + block + "\n"
-        _atomic_write_checklist(checklist_path, text)
-    receipt_path = (
-        Path(root)
-        / "report/main_ai_prompt_consumer"
-        / f"compact_summary_handoff_{day}.json"
-    )
-    write(
-        receipt_path,
-        sealed(
-            {
-                "schema": "compact_summary_handoff_v1",
-                "source_date": day,
-                "consumer_path": str(consumer_path.resolve()),
-                "consumer_artifact_content_sha256": read(consumer_path)[
-                    "artifact_content_sha256"
-                ],
-                "summary_section_hashes": sources,
-                "checklist_path": str(checklist_path.resolve()),
-                "checklist_section_sha256": digest(view),
-                "whole_native_chain_done_claimed": False,
-                **AUTHORITY,
-            }
-        ),
-    )

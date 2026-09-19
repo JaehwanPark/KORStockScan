@@ -15,7 +15,7 @@ def test_postclose_wrapper_retires_common_daily_ev_and_generic_workorder():
     assert "src.engine.build_code_improvement_workorder" not in script
     assert "src.engine.runtime_approval_summary" in script
     assert "src.engine.verify_threshold_cycle_postclose_chain" in script
-    assert script.count("--require-summary-handoff") >= 3
+    assert script.count("--require-summary-handoff") >= 2
 
 
 def test_postclose_status_records_direct_owner_producer_flags():
@@ -79,3 +79,18 @@ def test_deleted_common_modules_have_no_wrapper_calls():
         "refresh-machine-evaluation-only",
     ):
         assert name not in scripts
+
+
+def test_compact_postclose_has_one_direct_evaluator_and_no_phase_coordinator():
+    main = _text("deploy/run_threshold_cycle_postclose.sh")
+    dedicated = _text("deploy/run_ai_entry_setup_paired_replay_postclose.sh")
+    assert "--postclose-phase" not in main + dedicated
+    assert "compact_summary_handoff" not in main + dedicated
+    for script in (main, dedicated):
+        assert script.count("--execute-compact-candidate") == 1
+        assert script.count("--finalize-compact") == 1
+        assert "src.engine.scalping.entry_setup_paired_replay_batch" in script
+    installer = _text("deploy/install_threshold_cycle_cron.sh")
+    controller = _text("deploy/run_postclose_done_controller.sh")
+    assert "run_ai_entry_setup_paired_replay_postclose.sh" not in installer
+    assert "run_ai_entry_setup_paired_replay_postclose.sh" not in controller

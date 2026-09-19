@@ -138,6 +138,7 @@ def _direct_summary(
             "low_price_expansion",
             "ws_freshness",
             "ai_outcome",
+            "compact_auxiliary",
             "rising_missed",
         )
     }

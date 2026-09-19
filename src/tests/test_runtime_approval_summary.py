@@ -241,6 +241,67 @@ def test_validated_edge_without_dated_policy_receipt_is_source_gap(monkeypatch, 
     assert report["validated_edge_count"] == 0
 
 
+def test_compact_direct_policy_receipt_is_bound_to_paired_evaluation(monkeypatch, tmp_path):
+    from src.engine.scalping import compact_auxiliary_paired_replay as compact
+    from src.engine.scalping import mechanistic_entry_runtime_policy as policy
+
+    data = _patch(monkeypatch, tmp_path)
+    target = "2026-09-19"
+    _seed_required(target)
+    paired = compact.sealed(
+        {
+            "schema": compact.SCHEMA,
+            "target_date": target,
+            "status": "complete",
+            "evaluation_state": "evaluated_hold",
+            "evaluation_fingerprint": "f" * 64,
+            "promotion_pass": False,
+            "candidate_improvement_proven": False,
+            "candidate_zero_disposition": {
+                "status": "measured_no_edge",
+                "blockers": [{"blocker": "non_positive_paired_delta"}],
+            },
+            "metrics": {
+                "paired_comparable_count": 12,
+                "delta_net_ev_pct": -0.03,
+                "operating_economic_comparison": {
+                    "incumbent": {"ev_pct": 0.11, "es10": -0.4, "fill_participation": 0.5},
+                    "candidate": {"ev_pct": 0.08, "es10": -0.42, "fill_participation": 0.5},
+                    "robust_paired_delta_ev_lower_bound_pct": -0.08,
+                    "portfolio_daily_net_delta_krw": -1200,
+                    "portfolio_capital_delta_krw_minutes": 0,
+                },
+            },
+            "chronological_validation": {"learning_pairs": [], "holdout_consumed": True},
+            "owner_execution_model_status": "validated",
+            "closure_test": "forward_holdout_receipt",
+            **compact.AUTHORITY,
+        }
+    )
+    _write(mod._paths(target)["compact_auxiliary"], paired)
+    bundle = {
+        "schema": policy.SCHEMA,
+        "source_date": "2026-09-20",
+        "target_date": "2026-09-21",
+        "compact_evaluation_source_date": target,
+        "source_artifact_sha256": paired["artifact_content_sha256"],
+        "compact_paired_artifact_sha256": paired["artifact_content_sha256"],
+        "compact_evaluation_fingerprint": paired["evaluation_fingerprint"],
+    }
+    bundle["bundle_sha256"] = policy.digest(bundle)
+    _write(
+        data / "runtime/mechanistic_entry_policy/policy_2026-09-21.json",
+        bundle,
+    )
+
+    report = mod.build_runtime_approval_summary(target)
+    source = report["sources"]["compact_auxiliary"]
+
+    assert source["policy_receipt"]["valid"] is True
+    assert source["economic_evidence"]["comparison_status"] == "measured_no_edge"
+    assert source["economic_evidence"]["policy_handoff_state"] == "incumbent_preserved"
+
+
 def test_next_effective_date_is_pending_until_preopen_verification(monkeypatch, tmp_path):
     data = _patch(monkeypatch, tmp_path)
     target = "2026-09-19"

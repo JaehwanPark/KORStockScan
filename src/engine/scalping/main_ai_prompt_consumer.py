@@ -1203,61 +1203,116 @@ def build_report(target_date: str, *, write: bool = False) -> dict[str, Any]:
 
 
 def verify_compact_handoff(data_root: Path, source_day: str) -> dict:
-    """Strict scope verification, independently of unrelated legacy blockers."""
+    """Verify paired evidence, dated policy, consumer and checklist directly."""
     from src.engine.scalping import compact_auxiliary_paired_replay as compact
     from src.engine.scalping import mechanistic_entry_runtime_policy as policy
-    issues = []
-    receipt = compact.read(data_root / "report/main_ai_prompt_consumer" / f"compact_summary_handoff_{source_day}.json")
-    handoff = compact.read(Path(receipt.get("consumer_path") or "/nonexistent"))
-    view = handoff.get("compact_auxiliary") or {}
-    if not compact.valid(receipt) or receipt.get("source_date") != source_day or not compact.valid(handoff) or handoff.get("artifact_content_sha256") != receipt.get("consumer_artifact_content_sha256"):
-        issues.append("compact_consumer_receipt_invalid")
-    for field, hash_field in [("paired_path", "paired_artifact_content_sha256"), ("calibration_path", "calibration_artifact_content_sha256"), ("optimizer_path", "optimizer_artifact_content_sha256")]:
-        parent = compact.read(Path(view.get(field) or "/nonexistent"))
-        if not compact.valid(parent) or parent.get("artifact_content_sha256") != view.get(hash_field):
-            issues.append("compact_parent_invalid:" + field)
-    try:
-        from src.engine.scalping.ai_action_outcome_calibration import report_path as calibration_path
-        publication_day = view["publication_date"]
-        expected_parents = {"paired_path": compact.report_path(data_root, source_day), "calibration_path": calibration_path(publication_day, data_root / "report"), "optimizer_path": data_root / "report/main_ai_prompt_optimizer" / f"main_ai_prompt_optimizer_{publication_day}.json"}
-        if view.get("source_date") != source_day or any(Path(view.get(k) or "/nonexistent").resolve() != p.resolve() for k,p in expected_parents.items()):
-            issues.append("compact_parent_date_path_invalid")
-        paired = compact.read(expected_parents["paired_path"])
-        calibration = compact.read(expected_parents["calibration_path"])
-        optimizer = compact.read(expected_parents["optimizer_path"])
-        bound = calibration["hierarchical_entry_quality"]["machine_decision_case_table"]["compact_auxiliary_screen_outcomes"]["paired_economic_evaluation"]
-        if paired != bound or paired.get("target_date") != source_day or calibration.get("target_date") != publication_day or optimizer.get("target_date") != publication_day or optimizer.get("compact_source_calibration_artifact_content_sha256") != calibration.get("artifact_content_sha256"):
-            issues.append("compact_calibration_pair_binding_invalid")
-        label_hash = paired.get("source_label_report_sha256")
-        if label_hash is not None:
-            label_path = data_root / "report/ai_decision_outcome_labels" / f"ai_decision_outcome_labels_{source_day}.json"
-            diagnostic = calibration["hierarchical_entry_quality"]["machine_decision_case_table"].get("ai_quality_diagnostics") or {}
-            if compact.digest(compact.read(label_path)) != label_hash or diagnostic.get("source_label_report_sha256") != label_hash:
-                issues.append("compact_source_label_revision_stale")
-        if handoff.get("target_date") != publication_day or any(view.get(k) is not v for k,v in compact.AUTHORITY.items()):
-            issues.append("compact_consumer_authority_date_invalid")
-        checklist_path = data_root.parent / "docs/checklists" / f"{view['effective_date']}-stage2-todo-checklist.md"
-        marker = f"<!-- compact_auxiliary_handoff_sha256:{compact.digest(view)} -->"
-        if Path(receipt.get("checklist_path") or "/nonexistent").resolve() != checklist_path.resolve() or receipt.get("checklist_section_sha256") != compact.digest(view) or marker not in checklist_path.read_text(encoding="utf-8"):
-            issues.append("compact_checklist_handoff_invalid")
-    except (OSError, KeyError, ValueError, TypeError):
-        issues.append("compact_scope_binding_missing")
-    expected_paths = {str(p.resolve()) for p in compact.summary_paths(data_root, source_day)}
-    hashes = receipt.get("summary_section_hashes") or {}
-    if set(hashes) != expected_paths:
-        issues.append("compact_last_summary_set_incomplete")
-    for path, expected in hashes.items():
-        section = compact.read(Path(path)).get("compact_auxiliary_economic_tuning")
-        if section != view or compact.digest(section) != expected:
-            issues.append("compact_last_summary_stale:" + path)
-    try:
-        bundle = policy.load(data_root=data_root, target_date=str(view.get("effective_date") or ""))
-        if not bundle or bundle["bundle_sha256"] != view.get("policy_bundle_sha256") or bundle["source_artifact_sha256"] != view.get("calibration_artifact_content_sha256"):
-            issues.append("compact_dated_policy_binding_invalid")
-    except (OSError, ValueError, KeyError):
-        issues.append("compact_dated_policy_invalid")
-    return {"status": "FAIL" if issues else "PASS", "scope": "compact_auxiliary_only", "source_date": source_day, "issues": issues, "whole_native_chain_done_claimed": False}
 
+    issues = []
+    paired_path = compact.report_path(data_root, source_day)
+    paired = compact.read(paired_path)
+    if (
+        not compact.valid(paired)
+        or paired.get("schema") != compact.SCHEMA
+        or paired.get("target_date") != source_day
+        or paired.get("evaluation_state")
+        not in {
+            "blocked_source",
+            "waiting_model_or_sample",
+            "ready_to_evaluate",
+            "evaluated_hold",
+            "validated_edge",
+        }
+    ):
+        issues.append("compact_paired_evaluation_invalid")
+    policies = []
+    for path in sorted(
+        (data_root / "runtime/mechanistic_entry_policy").glob(
+            "policy_????-??-??.json"
+        )
+    ):
+        value = compact.read(path)
+        if (
+            value.get("compact_evaluation_source_date") == source_day
+            and value.get("source_artifact_sha256")
+            == paired.get("artifact_content_sha256")
+        ):
+            policies.append((path, value))
+    if len(policies) != 1:
+        issues.append("compact_dated_policy_direct_binding_invalid")
+        policy_path, bundle = Path("/nonexistent"), {}
+    else:
+        policy_path, bundle = policies[0]
+        try:
+            if (
+                policy.load(data_root=data_root, target_date=bundle["target_date"])
+                != bundle
+                or bundle.get("compact_paired_artifact_sha256")
+                != paired.get("artifact_content_sha256")
+                or bundle.get("compact_evaluation_fingerprint")
+                != paired.get("evaluation_fingerprint")
+            ):
+                issues.append("compact_dated_policy_direct_binding_invalid")
+        except (OSError, ValueError, KeyError):
+            issues.append("compact_dated_policy_invalid")
+    publication_day = str(bundle.get("publication_date") or "")
+    consumer_path = (
+        data_root
+        / "report/main_ai_prompt_consumer"
+        / f"main_ai_prompt_consumer_{publication_day}.json"
+    )
+    consumer_report = compact.read(consumer_path)
+    view = consumer_report.get("compact_auxiliary") or {}
+    expected_view = {
+        "source_date": source_day,
+        "publication_date": publication_day,
+        "effective_date": bundle.get("target_date"),
+        "paired_path": str(paired_path.resolve()),
+        "paired_artifact_content_sha256": paired.get("artifact_content_sha256"),
+        "evaluation_fingerprint": paired.get("evaluation_fingerprint"),
+        "evaluation_state": paired.get("evaluation_state"),
+        "policy_path": str(policy_path.resolve()),
+        "policy_bundle_sha256": bundle.get("bundle_sha256"),
+    }
+    if (
+        not compact.valid(consumer_report)
+        or consumer_report.get("target_date") != publication_day
+        or view.get("schema") != "compact_auxiliary_consumer_handoff_v3"
+        or any(view.get(key) != value for key, value in expected_view.items())
+        or any(view.get(key) is not value for key, value in compact.AUTHORITY.items())
+    ):
+        issues.append("compact_direct_consumer_invalid")
+    label_hash = paired.get("source_label_report_sha256")
+    if label_hash is not None:
+        label_path = (
+            data_root
+            / "report/ai_decision_outcome_labels"
+            / f"ai_decision_outcome_labels_{source_day}.json"
+        )
+        if compact.digest(compact.read(label_path)) != label_hash:
+            issues.append("compact_source_label_revision_stale")
+    project_root = data_root.parent if data_root.name == "data" else data_root
+    checklist_path = (
+        project_root
+        / "docs/checklists"
+        / f"{bundle.get('target_date')}-stage2-todo-checklist.md"
+    )
+    marker = f"<!-- compact_auxiliary_direct_sha256:{compact.digest(view)} -->"
+    try:
+        if marker not in checklist_path.read_text(encoding="utf-8"):
+            issues.append("compact_direct_checklist_projection_invalid")
+    except OSError:
+        issues.append("compact_direct_checklist_projection_invalid")
+    return {
+        "status": "FAIL" if issues else "PASS",
+        "scope": "compact_auxiliary_only",
+        "source_date": source_day,
+        "issues": issues,
+        "paired_path": str(paired_path),
+        "policy_path": str(policy_path),
+        "consumer_path": str(consumer_path),
+        "checklist_path": str(checklist_path),
+        "whole_native_chain_done_claimed": False,
+    }
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)

@@ -26,18 +26,7 @@
 PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTHONPATH=. .venv/bin/python -m src.engine.sync_github_project_calendar
 ```
 
-<!-- compact_auxiliary_handoff:start -->
-<!-- compact_auxiliary_handoff_sha256:267649ed160d6d4e1c845947bb4b8be3c58dba9054c9ff9da9ba35d63c64e64b -->
 
-## Compact auxiliary 장후 handoff
-
-- 평가 원천 2026-09-17; 발행 2026-09-19; 적용 2026-09-21. 선정 상태 `incumbent_preserved`, 평가 상태 `source_contract_blocked`.
-- 정책 bundle `fb4870b8ab479897c7580d79a92acb2595889c2d7c95b75087bcef6cfb6f74c5`; consumer generation `cf34905b8b0a87798328e8c15531c95779c3728578a3bb17c45ecf9207187159`. 실제 PID 소비 및 자연 비용 후 성과는 미확인이다.
-- 기존 owner `KiwoomCommonHealthOpportunityCostAcceptance0917`; 다음 확인 `existing_main_owner_execution_cf_and_portfolio_replay` / `full_cost_stop_owner_plan_portfolio_and_forward_holdout_receipts`. 결손 net은 null이며 이 기록은 주문·guard·provider 변경 승인이 아니다.
-
-<!-- scanner_lookup_attention_handoff_sha256:5d6ce1fd7f5626f666edffbab2cc71f83b3e16d2f3a3c4b81894ccc44037570a -->
-- Scanner lookup source 2026-09-17; policy 2026-09-18; publication 2026-09-19; effective 2026-09-21: `hold_no_edge`. Opportunity EV `-2.38954987%`/3pair/3일, primary actual paired EV `None`; source gaps `['complete_partition_or_actual_selection_missing', 'original_unselected_entry_recipe_quantity_guard_missing']`. Baseline bonus0을 유지하며 자연 pair/PREOPEN/PID/full-cost outcomes는 기존 owner `KiwoomCommonHealthOpportunityCostAcceptance0917`에서 계속 확인한다.
-<!-- compact_auxiliary_handoff:end -->
 
 ## R0–R3 독립 AI 연구 폐기
 
@@ -86,3 +75,17 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 - [폐기 리뷰](../audit-reports/2026-09-19-limit-down-watch-retirement-review.md)에서 검증·삭제 증거와 선택 배포본 구분을 확인한다. 이 기록은 봇 재시작·주문·조기 PREOPEN 승인이 아니다.
 
 - Limit-down 후속 리뷰·관련 커밋/푸시·immutable 배포: `fcfd7b8e5`. 검토 범위 결함0·통합1,531 passed(기존 wrapper 실패5/제외1은 baseline 재현)·물리 release6 passed·전용 산출물 잔여0. [최종 증거](../audit-reports/2026-09-19-limit-down-watch-retirement-review.md). main 정기 cron target 부재는 기존 상태이며 선택/route 검증과 분리한다. 독립 unit pin·공유 원천/guard 보존; 기동/주문/조기 PREOPEN 미실행·PID 소비 미확인.
+
+<!-- scanner_lookup_attention_handoff_sha256:5d6ce1fd7f5626f666edffbab2cc71f83b3e16d2f3a3c4b81894ccc44037570a -->
+- Scanner lookup source 2026-09-17; policy 2026-09-18; publication 2026-09-19; effective 2026-09-21: `hold_no_edge`. Opportunity EV `-2.38954987%`/3pair/3일, primary actual paired EV `None`; source gaps `['complete_partition_or_actual_selection_missing', 'original_unselected_entry_recipe_quantity_guard_missing']`. Baseline bonus0을 유지하며 자연 pair/PREOPEN/PID/full-cost outcomes는 기존 owner `KiwoomCommonHealthOpportunityCostAcceptance0917`에서 계속 확인한다.
+
+<!-- compact_auxiliary_direct:start -->
+<!-- compact_auxiliary_direct_sha256:f35231fe2b53d4082819bb44adc3e463bb4eaab39460250b528549d1810a5bcb -->
+
+## Compact auxiliary 직접 증거
+
+- 평가 원천 2026-09-17; 발행 2026-09-20; 적용 2026-09-21. 평가 상태 `blocked_source`, 선정 상태 `incumbent_preserved`.
+- paired `d333501dc0a952ad6e9a4a2e59d00b26c2b780cae2767058fec854455c1a90e0`; 정책 bundle `6b44aaaed394f3f1835be78b2bbed828278caf0e975b1187a0812a45c88f3717`; consumer `5fe14c0daf642e98e119507e2b916195914cc0d387255edd242ba36f7941b972`.
+- 다음 확인 `existing_main_owner_execution_cf_and_portfolio_replay` / `full_cost_stop_owner_plan_portfolio_and_forward_holdout_receipts`. 실제 PID 소비와 비용 후 자연 성과는 별도 수용 조건이다.
+
+<!-- compact_auxiliary_direct:end -->

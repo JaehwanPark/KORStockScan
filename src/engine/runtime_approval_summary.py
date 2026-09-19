@@ -34,6 +34,7 @@ PRIMARY_DIRECT_OWNERS = (
     "low_price_expansion",
     "ws_freshness",
     "ai_outcome",
+    "compact_auxiliary",
     "rising_missed",
 )
 REQUIRED_DIRECT_OWNERS = frozenset(PRIMARY_DIRECT_OWNERS)
@@ -47,6 +48,7 @@ PRODUCER_FLAG_BY_OWNER = {
     "low_price_expansion": "low_price_two_leg_candidate_recommendation",
     "ws_freshness": "intraday_ws_freshness_finalize",
     "ai_outcome": "ai_decision_action_outcome_calibration",
+    "compact_auxiliary": "ai_decision_action_outcome_calibration",
     "rising_missed": "rising_missed_classifier_prior",
 }
 
@@ -58,6 +60,7 @@ POLICY_OWNER_BY_SOURCE = {
     "low_price_two_leg": "low_price_candidate",
     "low_price_expansion": "low_price_expansion_policy",
     "rising_missed": "rising_missed_policy",
+    "compact_auxiliary": "compact_policy",
 }
 
 DEFAULT_CLOSURE_OWNER = {
@@ -70,6 +73,7 @@ DEFAULT_CLOSURE_OWNER = {
     "low_price_expansion": "low_price_two_leg_expanded_candidate_research",
     "ws_freshness": "intraday_ws_freshness_monitor",
     "ai_outcome": "ai_decision_action_outcome_calibration",
+    "compact_auxiliary": "compact_auxiliary_paired_replay",
     "rising_missed": "rising_missed_classifier_prior",
 }
 
@@ -82,6 +86,21 @@ def summary_paths(target_date: str) -> tuple[Path, Path]:
 def _paths(target_date: str) -> dict[str, Path]:
     report = DATA_DIR / "report"
     threshold = DATA_DIR / "threshold_cycle"
+    compact_policies = []
+    for candidate in sorted(
+        (DATA_DIR / "runtime/mechanistic_entry_policy").glob("policy_????-??-??.json")
+    ):
+        try:
+            payload = json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if payload.get("compact_evaluation_source_date") == target_date:
+            compact_policies.append(candidate)
+    compact_policy = (
+        compact_policies[-1]
+        if compact_policies
+        else DATA_DIR / "runtime/mechanistic_entry_policy" / "policy_missing.json"
+    )
     return {
         "source_quality": report / "observation_source_quality_audit" / f"observation_source_quality_audit_{target_date}.json",
         "entry_cancel_wait": report / "entry_cancel_wait_tuning" / f"entry_cancel_wait_tuning_{target_date}.json",
@@ -98,6 +117,8 @@ def _paths(target_date: str) -> dict[str, Path]:
         "low_price_expansion_policy": DATA_DIR / "runtime" / "low_price_two_leg_auto_expansion" / f"low_price_two_leg_auto_expansion_{target_date}.json",
         "ws_freshness": report / "intraday_ws_freshness_monitor" / f"intraday_ws_freshness_monitor_{target_date}.json",
         "ai_outcome": report / "ai_decision_action_outcome_calibration" / f"ai_decision_action_outcome_calibration_{target_date}.json",
+        "compact_auxiliary": report / "ai_entry_setup_paired_replay_batch" / f"compact_auxiliary_paired_economic_{target_date}.json",
+        "compact_policy": compact_policy,
         "rising_missed": report / "rising_missed_classifier_prior" / f"rising_missed_classifier_prior_{target_date}.json",
         "rising_missed_policy": report / "rising_missed_classifier_prior" / f"rising_missed_tp1_policy_source_{target_date}.json",
         "runtime_bootstrap": DATA_DIR / "runtime" / "policy_bootstrap" / f"runtime_policy_bootstrap_{target_date}.json",
@@ -307,6 +328,68 @@ def _economic_section(owner: str, payload: dict[str, Any]) -> dict[str, Any]:
         return _dict_value(payload, "postclose_quality_handoff")
     if owner == "ai_outcome":
         return _dict_value(payload, "hierarchical_entry_quality", "machine_decision_case_table", "ai_quality_diagnostics", "diagnostic_price_path_summary")
+    if owner == "compact_auxiliary":
+        metrics = _dict_value(payload, "metrics")
+        operating = _dict_value(metrics, "operating_economic_comparison")
+        incumbent = _dict_value(operating, "incumbent")
+        candidate = _dict_value(operating, "candidate")
+        zero = _dict_value(payload, "candidate_zero_disposition")
+        blockers = zero.get("blockers") if isinstance(zero.get("blockers"), list) else []
+        return {
+            "status": (
+                "validated_edge"
+                if payload.get("promotion_pass") is True
+                else zero.get("status") or payload.get("evaluation_state") or payload.get("status")
+            ),
+            "blocker": (
+                (blockers[0] or {}).get("blocker")
+                if blockers and isinstance(blockers[0], dict)
+                else operating.get("blocker")
+            ),
+            "incumbent_ev_pct": incumbent.get("ev_pct"),
+            "candidate_ev_pct": candidate.get("ev_pct"),
+            "delta_ev_pct": metrics.get("delta_net_ev_pct"),
+            "robust_paired_delta_ev_lower_bound_pct": operating.get(
+                "robust_paired_delta_ev_lower_bound_pct"
+            ),
+            "net_profit_uplift_krw_per_observation_day": operating.get(
+                "portfolio_daily_net_delta_krw"
+            ),
+            "paired_tail_delta_pct": (
+                candidate.get("es10") - incumbent.get("es10")
+                if isinstance(candidate.get("es10"), (int, float))
+                and isinstance(incumbent.get("es10"), (int, float))
+                else None
+            ),
+            "capital_exposure_delta": operating.get("portfolio_capital_delta_krw_minutes"),
+            "fill_participation_delta_pct": (
+                candidate.get("fill_participation")
+                - incumbent.get("fill_participation")
+                if isinstance(candidate.get("fill_participation"), (int, float))
+                and isinstance(incumbent.get("fill_participation"), (int, float))
+                else None
+            ),
+            "model_holdout_status": payload.get("owner_execution_model_status"),
+            "candidate_holdout_status": (
+                "consumed"
+                if _dict_value(payload, "chronological_validation").get("holdout_consumed")
+                else "preserved"
+            ),
+            "paired_sample_count": metrics.get("paired_comparable_count"),
+            "source_date_count": len(
+                {
+                    row.get("source_date")
+                    for row in _dict_value(payload, "chronological_validation").get(
+                        "learning_pairs", []
+                    )
+                    if isinstance(row, dict) and row.get("source_date")
+                }
+            ),
+            "candidate_count": 1,
+            "allowed_runtime_apply": payload.get("promotion_pass") is True,
+            "metric_role": "primary_ev",
+            "closure_test": payload.get("closure_test"),
+        }
     return _dict_value(payload, "economic_evaluation")
 
 
@@ -315,6 +398,7 @@ def _status_texts(owner: str, payload: dict[str, Any]) -> list[str]:
     values = [
         economic.get("comparison_status"), economic.get("status"), economic.get("decision"), economic.get("disposition"),
         payload.get("comparison_status"), payload.get("selection_status"), payload.get("decision"), payload.get("status"), payload.get("conclusion"),
+        payload.get("evaluation_state"),
     ]
     if owner == "low_price_two_leg":
         for row in (_dict_value(payload, "paired_economic_search").get("profiles") or {}).values():
@@ -398,6 +482,7 @@ def _economic_projection(owner: str, payload: dict[str, Any]) -> dict[str, Any]:
     policy_allowed = _first_nonempty(*policy_allowed_values)
     candidate_count = _first_nonempty(
         recommended.get("candidate_count"), recommended.get("runtime_candidate_count"),
+        economic.get("candidate_count"),
         len(economic.get("candidates") or []) if isinstance(economic.get("candidates"), list) else None,
     )
     paired_sample_count = _first_nonempty(
@@ -568,6 +653,10 @@ def build_runtime_approval_summary(
                 read_mode = "bounded_terminal_companion"
         exact_name_date = path.stem.endswith(target_date)
         target_date_matches = _date_matches(payload, target_date) if payload else exact_name_date
+        if owner == "compact_policy" and payload:
+            target_date_matches = (
+                payload.get("compact_evaluation_source_date") == target_date
+            )
         required = required_by_owner.get(owner, False)
         applicability = "active_required" if required else ("not_applicable_disabled_by_wrapper" if owner in PRIMARY_DIRECT_OWNERS else "optional_handoff")
         row = {
@@ -626,6 +715,31 @@ def build_runtime_approval_summary(
                     str(policy_payload.get("effective_date") or ""),
                 )
                 is None
+            )
+        if owner == "compact_auxiliary" and policy_receipt_valid:
+            from src.engine.scalping import compact_auxiliary_paired_replay as compact
+            from src.engine.scalping import mechanistic_entry_runtime_policy as compact_policy
+
+            policy_payload = _load_json(Path(str(policy.get("path") or "")))
+            source_payload = _load_json(Path(str(row.get("path") or "")))
+            policy_receipt_valid = bool(
+                compact.valid(source_payload)
+                and policy_payload.get("bundle_sha256")
+                == compact_policy.digest(
+                    {
+                        key: value
+                        for key, value in policy_payload.items()
+                        if key != "bundle_sha256"
+                    }
+                )
+                and policy_payload.get("compact_evaluation_source_date")
+                == target_date
+                and policy_payload.get("source_artifact_sha256")
+                == source_payload.get("artifact_content_sha256")
+                and policy_payload.get("compact_paired_artifact_sha256")
+                == source_payload.get("artifact_content_sha256")
+                and policy_payload.get("compact_evaluation_fingerprint")
+                == source_payload.get("evaluation_fingerprint")
             )
         row["policy_receipt"] = {
             "owner": policy_owner,

@@ -1,6 +1,6 @@
 # 장후작업 현행 활성 목록
 
-## 0. 현행 기준 — 2026-09-19 KST
+## 0. 현행 기준 — 2026-09-20 KST
 
 이 문서는 설치 schedule, 활성 wrapper 내부 호출, PREOPEN 소비자, 코드만 남은 비활성 작업을 구분한다. 실행 이력과 이미 삭제된 작업은 싣지 않는다. 결과 판정은 [장후 결과 점검 지시문](../postclose-tuning-result-review-task-instructions.md)을 따른다.
 
@@ -32,24 +32,22 @@
 | 7 | `strategy_position_performance_report --sync` | real/sim·full/partial·COMPLETED valid profit·비용 fact. |
 | 8 | `scale_in_split_order_plan` | 실제 ADD 원자성·paired cost EV·정책 receipt. |
 | 9 | `entry_split_order_plan` | submitted/no-submit/no-fill·4-arm 비용 EV·정책 receipt. |
-| 10 | `ai_decision_quality` → `ai_action_outcome_calibration --postclose-phase prepare` | source label과 compact/machine 경제성 준비. |
+| 10 | `ai_decision_quality` | source label과 원천 receipt를 materialize한다. 후보 선택·경제성 승격 권한은 없다. |
 | 11 | `automation.entry_cancel_wait_tuning` | 실제 제출·취소·native exit/cost 기반 독립 정책. |
 | 12 | Swing 계열 | 기본 OFF. `THRESHOLD_CYCLE_RUN_SWING_POSTCLOSE=true`일 때만 실행한다. |
 | 13 | `pipeline_event_verbosity_report` | 운영 진단. EV 근거가 아니다. |
 | 14 | `observation_source_quality_audit --audit-phase final` | 최종 원천 품질과 경제성 admission. |
 | 15 | `samsung_machine_entry_tuning` | actual machine entry 분석과 candidate receipt. |
 | 16 | `low_price_two_leg_tuning` | actual/HELD/terminal/cost 기반 family 평가. |
-| 17 | `ai_action_outcome_calibration --postclose-phase evaluate` | 준비된 동일 generation만 평가. |
+| 17 | `entry_setup_paired_replay_batch --compact-only --execute-compact-candidate --finalize-compact` | `compact_auxiliary_paired_replay`가 새 fingerprint일 때만 bounded 평가하고 canonical paired→dated policy→consumer를 한 번에 결속한다. source/model gap은 provider 0과 incumbent carry로 닫는다. |
 | 18 | 성능/regime/producer-gap/stage-hook 분기 | 기본 OFF. 활성 flag가 있을 때만 실행하며 현재 필수 owner가 아니다. |
 | 19 | `intraday_ws_freshness_monitor --finalize --monitor-only` | WS 품질 마감과 scanner family 입력. |
-| 20 | `ai_action_outcome_calibration --postclose-phase finalize` | compact/machine 직접 publisher handoff. |
-| 21 | Swing propagation/review | Swing가 활성일 때만 실행한다. |
-| 22 | `rising_missed_classifier_prior` | 최근 20개 feedback의 동일 attempt를 비용 후 paired 평가하고 다음 장전용 dated receipt를 발행한다. 검증된 edge가 없으면 임계값을 바꾸지 않는다. |
-| 23 | `runtime_approval_summary` | 위 family 원천·정책·runtime receipt의 날짜·해시를 직접 요약한다. 공통 후보를 만들지 않는다. |
-| 24 | `ai_action_outcome_calibration --postclose-phase handoff` | final consumer receipt. |
-| 25 | `verify_threshold_cycle_postclose_chain` | compact scoped 검증 뒤 직접 family source·hash·terminal 검증. |
-| 26 | `build_next_stage2_checklist` | 직접 증거 결손만 stable task로 생성한다. |
-| 27 | print-only backlog parser → pending/final verifier → status/DONE | 외부 동기화, 재기동, 주문을 실행하지 않는다. |
+| 20 | Swing propagation/review | Swing가 활성일 때만 실행한다. |
+| 21 | `rising_missed_classifier_prior` | 최근 20개 feedback의 동일 attempt를 비용 후 paired 평가하고 다음 장전용 dated receipt를 발행한다. 검증된 edge가 없으면 임계값을 바꾸지 않는다. |
+| 22 | `runtime_approval_summary` | compact를 포함한 family 원천·정책·runtime receipt의 날짜·해시를 직접 요약한다. 공통 후보를 만들지 않는다. |
+| 23 | `build_next_stage2_checklist` | 직접 증거 결손과 compact direct receipt를 다음 거래일 checklist에 투영한다. |
+| 24 | `verify_threshold_cycle_postclose_chain` | canonical compact paired→policy→consumer→checklist를 직접 대조한 뒤 전체 family source·hash·terminal을 검증한다. |
+| 25 | print-only backlog parser → pending/final verifier → status/DONE | 외부 동기화, 재기동, 주문을 실행하지 않는다. |
 
 ## 3. PREOPEN 및 장중 소비 순서
 
@@ -69,6 +67,7 @@
 | `runtime_apply_gap_audit`, `key_lineage_ledger`, `conversion_lane` | 비활성 진단. 직접 family 검증의 완료 조건이 아니다. |
 | `build_code_improvement_workorder` | main wrapper 기본 OFF. 공통 튜닝 입력으로 자동 생성하지 않는다. |
 | `tuning_performance_control_tower`, `postclose_summary_handoff` | 수동/호환 요약. runtime authority가 없고 직접 family summary만 참조해야 한다. |
+| `run_ai_entry_setup_paired_replay_postclose.sh` | 수동 호환 wrapper. 설치 schedule와 DONE controller 호출자는 없고, 실행 시에도 main wrapper와 같은 단일 compact evaluator/finalizer만 호출한다. |
 | Swing discovery/lifecycle/pattern modules | 기본 OFF. 명시적 Swing scope에서만 실행한다. |
 | performance/regime/producer-gap/stage-hook modules | 기본 OFF. 코드 존재를 설치 또는 당일 결손으로 해석하지 않는다. |
 

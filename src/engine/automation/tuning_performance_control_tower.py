@@ -84,6 +84,20 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
         "postclose_verifier": {"path": str(verifier_path), "sha256": _sha(verifier_path)},
     }
     handoff_paths = source_paths(REPORT_ROOT_DIR, target_date, "tower")
+    runtime_root = DATA_DIR / "runtime" / "policy_bootstrap"
+    observed_runtime_paths = {
+        "runtime_policy_bootstrap": runtime_root
+        / f"runtime_policy_bootstrap_{runtime_apply_date}.json",
+        "runtime_policy_bootstrap_verify": runtime_root
+        / f"runtime_policy_bootstrap_verify_{runtime_apply_date}.json",
+    }
+    handoff_paths.update(
+        {
+            label: path
+            for label, path in observed_runtime_paths.items()
+            if path.exists()
+        }
+    )
     handoff_receipt = source_receipt(handoff_paths, target_date)
     report = {
         "schema_version": 2,

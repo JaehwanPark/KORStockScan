@@ -12,17 +12,11 @@ if ! flock -n 9; then
   echo "[SKIP] compact paired replay already running target_date=$TARGET_DATE"
   exit 0
 fi
-# Same source-day inputs; no global-DONE predecessor cycle or unrelated legacy
-# selector/holding research. Source exclusions are terminal dispositions.
-for phase in prepare evaluate finalize; do
-  PHASE_ARGS=()
-  if [[ "$phase" == "evaluate" ]]; then
-    PHASE_ARGS+=(--execute-compact-candidate)
-  fi
-  "$VENV_PY" -m src.engine.scalping.ai_action_outcome_calibration \
-    --target-date "$TARGET_DATE" --data-root "$PROJECT_DIR/data" \
-    --postclose-phase "$phase" --compact-scope-only "${PHASE_ARGS[@]}" \
-    --max-new-requests-per-cohort "$MAX_NEW_PER_COHORT" --write
-done
+# One fingerprinted evaluator owns candidate execution and provider-free
+# finalization. Source/model gaps stop before a candidate provider call.
+"$VENV_PY" -m src.engine.scalping.entry_setup_paired_replay_batch \
+  --date "$TARGET_DATE" --data-root "$PROJECT_DIR/data" --compact-only \
+  --execute-compact-candidate --finalize-compact \
+  --max-new-requests-per-cohort "$MAX_NEW_PER_COHORT" --write
 "$VENV_PY" -m src.engine.verify_threshold_cycle_postclose_chain \
-  --date "$TARGET_DATE" --compact-summary-only --require-summary-handoff
+  --date "$TARGET_DATE" --compact-summary-only

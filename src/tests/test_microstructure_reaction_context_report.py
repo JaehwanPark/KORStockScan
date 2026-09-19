@@ -64,14 +64,12 @@ def test_machine_parent_access_time_change_is_not_a_new_source_generation(tmp_pa
     assert result['status'] == 'evaluable_descriptive_counterfactual'
 
 
-def test_modern_only_handoff_preserves_legacy_and_rejects_stale_consumers(tmp_path):
+def test_modern_only_report_preserves_legacy_and_rejects_stale_parent(tmp_path):
     import hashlib
     import json
     from src.engine.scalping.microstructure_reaction_context import (
         MACHINE_EVALUATION_SCHEMA, refresh_machine_evaluation_link, microstructure_summary_contract,
     )
-    from src.engine.verify_threshold_cycle_postclose_chain import _microstructure_diagnostic_handoff_status
-
     source = tmp_path / 'ai_decision_action_outcome_calibration_2026-09-17.json'
     source.write_text(json.dumps({
         'schema': 'ai_decision_action_outcome_calibration_v2', 'target_date': '2026-09-17',
@@ -95,15 +93,11 @@ def test_modern_only_handoff_preserves_legacy_and_rejects_stale_consumers(tmp_pa
     summary = microstructure_summary_contract(report['summary'])
     assert summary['row_count'] is None
     assert summary['clean_baseline_cumulative_opportunity_exploration']['status'] == 'retired'
-    ev = {'microstructure_reaction_context': summary}
-    check = _microstructure_diagnostic_handoff_status(report, ev, ev, {})
-    assert check['status'] == 'pass'  # Cost gap is reported, not a fabricated no-edge or handoff failure.
-    stale = {'microstructure_reaction_context': {**summary, 'machine_primary_auxiliary_evaluation': {}}}
-    check = _microstructure_diagnostic_handoff_status(report, stale, ev, {})
-    assert 'ev_modern_evaluation_stale_or_missing' in check['issues']
     source.write_text(source.read_text() + '\n')
-    check = _microstructure_diagnostic_handoff_status(report, ev, ev, {})
-    assert 'modern_parent_hash_mismatch' in check['issues']
+    refreshed = microstructure_summary_contract(report['summary'])
+    assert refreshed['machine_primary_auxiliary_evaluation']['status'] == (
+        'source_gap_machine_evaluation_parent_hash_mismatch'
+    )
     assert report['summary']['machine_primary_auxiliary_evaluation']['source_report_sha256'] != hashlib.sha256(source.read_bytes()).hexdigest()
 
 
@@ -117,9 +111,10 @@ def test_retired_raw_job_cannot_be_reenabled_by_environment():
     names = {node.name for node in tree.body if isinstance(node, ast.FunctionDef)}
     assert 'build_microstructure_reaction_context_report' not in names
     assert 'backfill_clean_baseline_opportunity_rollups' not in names
-    finalize = script.index('--postclose-phase finalize')
-    ev = script.index('run_threshold_cycle_ev_and_wait "pre_workorder"', finalize)
-    assert finalize < ev
+    compact = script.index('--execute-compact-candidate --finalize-compact')
+    direct_summary = script.index('src.engine.runtime_approval_summary', compact)
+    assert compact < direct_summary
+    assert '--postclose-phase' not in script
     assert 'daily_machine_evaluation_handoff' not in script
     assert '--refresh-machine-evaluation-only' not in script
 
