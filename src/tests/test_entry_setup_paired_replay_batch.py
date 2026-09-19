@@ -1383,6 +1383,32 @@ def test_source_contract_code_upgrade_preserves_exclusions_without_raw_rescan(mo
     assert result['provider_calls_this_run']==0
 
 
+def test_source_contract_upgrade_reclassifies_historical_response_failure_without_raw_rescan(monkeypatch, tmp_path):
+    day = "2026-09-17"
+    row = compact_row()
+    row.update(input=None, owner_replay=None, exclusion_reason="natural_contract_invalid",
+        natural_contract_evidence={"model": "gpt-5.4-nano", "provider_actual": "openai",
+            "semantic_validation_status": "not_evaluated_transport",
+            "decision_quality_contract_status": "not_evaluated_transport",
+            "result_source": "transport_error"})
+    projection = compact.sealed(dict(rows=[row], screened_total=1,
+        source_manifest_sha256="d"*64, source_tuning_allowed=True,
+        exclusion_counts={"natural_contract_invalid": 1}, **compact.AUTHORITY))
+    monkeypatch.setattr(compact, "prepare", lambda *_: projection)
+    compact.run(data_root=tmp_path, day=day, execute=False)
+    path = compact.report_path(tmp_path, day).with_suffix(".source.json")
+    old = compact.read(path)
+    old["source_projection_contract"] = "compact_pre_ai_execution_source_v4"
+    old["projection_contract_sha256"] = "e"*64
+    compact.write(path, compact.sealed(old))
+    monkeypatch.setattr(compact, "prepare", lambda *_: pytest.fail("upgrade must use frozen evidence"))
+    report = compact.run(data_root=tmp_path, day=day, execute=False)
+    upgraded = compact.read(path)
+    assert upgraded["source_upgrade"]["raw_not_read"] is True
+    assert upgraded["rows"][0]["exclusion_reason"] == "natural_response_transport_invalid"
+    assert report["candidate_zero_disposition"]["primary_input_disposition_counts"] == {"source_gap": 1}
+
+
 def test_compact_primary_source_gap_does_not_spend_provider_budget(monkeypatch,tmp_path):
     row=compact_row()
     projection=compact.sealed(dict(rows=[row],screened_total=1,source_manifest_sha256='d'*64,
