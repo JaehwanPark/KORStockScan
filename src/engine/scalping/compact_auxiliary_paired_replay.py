@@ -301,6 +301,26 @@ def operating_comparison_metrics(pairs, model):
         **portfolio)
 
 
+def natural_response_contract_exclusion(trace):
+    """Classify provider/response defects without inventing market scope loss."""
+    if (
+        trace.get("model") != "gpt-5.4-nano"
+        or trace.get("provider_actual") != "openai"
+    ):
+        return "natural_provider_or_model_contract_invalid"
+    if trace.get("semantic_validation_status") != "pass":
+        semantic_status = str(trace.get("semantic_validation_status") or "")
+        result_source = str(trace.get("result_source") or "")
+        return (
+            "natural_response_transport_invalid"
+            if "transport" in semantic_status or "transport" in result_source
+            else "natural_response_semantic_invalid"
+        )
+    if trace.get("decision_quality_contract_status") != "pass":
+        return "natural_response_semantic_invalid"
+    return None
+
+
 def prepare(data_root, day):
     """Use actual compact screens, never fabricated AI for machine BLOCK rows."""
     from src.utils.jsonl_io import iter_jsonl, existing_or_gzip_path
@@ -392,13 +412,8 @@ def prepare(data_root, day):
         reason = None
         if key in conflicts or payload_key in payload_conflicts:
             reason = "conflicting_exact_input"
-        elif (
-            trace.get("model") != "gpt-5.4-nano"
-            or trace.get("provider_actual") != "openai"
-            or trace.get("semantic_validation_status") != "pass"
-            or trace.get("decision_quality_contract_status") != "pass"
-        ):
-            reason = "natural_contract_invalid"
+        elif (contract_exclusion := natural_response_contract_exclusion(trace)):
+            reason = contract_exclusion
         elif (
             payload.get("redacted") is not False
             or payload.get("replay_exact") is not True
@@ -598,6 +613,11 @@ def evaluate(rows, results):
         "response_coverage": n / eligible if eligible else None,
         "exclusion_counts": dict(exclusions),
         "verdict_transitions": dict(transitions),
+        "decision_changed_count": sum(not p["same_verdict"] for p in pairs),
+        "decision_unchanged_count": sum(p["same_verdict"] for p in pairs),
+        "decision_change_rate": (
+            sum(not p["same_verdict"] for p in pairs) / n if n else None
+        ),
         "incumbent_net_ev_pct": sum(p["incumbent_net_pct"] for p in pairs) / n
         if n
         else None,
@@ -933,7 +953,11 @@ def primary_input_blocker(row, model):
     """Keep research proxy diagnostics outside provider-funded primary search."""
     reason = row.get("exclusion_reason")
     if reason:
-        return ("unsupported_scope" if reason == "natural_contract_invalid" else "source_gap", reason)
+        # Provider transport/semantic failures are missing comparable responses,
+        # not evidence that the venue/session/order route is unsupported.  Keep
+        # the historical aggregate label source-blocked as well; only the
+        # explicit route/model checks below may classify unsupported scope.
+        return "source_gap", reason
     if row.get("source_label_identity_reasons"):
         return "source_gap", "source_label_identity_contract_invalid:"+row["source_label_identity_reasons"][0]
     from src.engine.scalping.strategy_owner_replay import entry_operating_route_supported
@@ -948,6 +972,37 @@ def primary_input_blocker(row, model):
     if not owner_model_scope_valid(model, row):
         return "insufficient_sample" if model.get("status") == "insufficient_mature_sample" else "source_gap", "independent_prior_operating_model_scope_not_validated"
     return None
+
+
+def blocker_accountability(disposition, blocker):
+    """Point a blocker at its first repair owner without changing authority."""
+    blocker = str(blocker or "unknown_input_blocker")
+    if blocker.startswith("natural_response_") or blocker in {
+        "natural_contract_invalid", "natural_provider_or_model_contract_invalid"
+    }:
+        return {
+            "owner": "ai_decision_trace_and_quality_response_contract",
+            "closure_test": "normal_natural_response_preserved_through_compact_admission",
+        }
+    if blocker.startswith("source_label_identity_contract_invalid"):
+        return {
+            "owner": "ai_decision_outcome_label_identity_materialization",
+            "closure_test": "exact_trace_payload_label_identity_one_to_one",
+        }
+    if blocker == "session_market_route_contract_invalid":
+        return {
+            "owner": "strategy_owner_replay_route_scope_contract",
+            "closure_test": "registered_venue_session_and_exact_broker_route_supported",
+        }
+    if blocker == "independent_prior_operating_model_scope_not_validated":
+        return {
+            "owner": "entry_split_execution_model_validation",
+            "closure_test": "prior_chronological_actual_model_holdout_validated_for_exact_scope",
+        }
+    return {
+        "owner": "entry_execution_sizing_plan_and_owner_replay",
+        "closure_test": "lossless_pre_ai_plan_stop_cost_census_and_operating_arm",
+    }
 
 
 def candidate_zero_disposition(rows, blockers, report):
@@ -1022,8 +1077,7 @@ def candidate_zero_disposition(rows, blockers, report):
             and comparison["robust_paired_delta_ev_lower_bound_pct"] <= 0 else "source_gap" if complete and not chronology else "insufficient_sample")
     return dict(status=status, primary_input_disposition_counts=counts, scope_dispositions=scope_dispositions,
         blockers=[dict(evaluation_key=key,disposition=value[0],blocker=value[1],
-                       owner="existing_main_execution_and_empirical_model_owners",
-                       closure_test="lossless_pre_ai_producer_full_operating_arm_prior_model_holdout_and_independent_candidate_holdout")
+                       **blocker_accountability(value[0], value[1]))
                   for key,value in blockers.items()],
         valid_no_edge=status == "valid_no_edge", model_delta_ev_is_actual_profit=False)
 
@@ -1372,6 +1426,16 @@ def run(
             for row in projection["rows"]], results)
         metrics["operating_economic_comparison"] = operating_comparison_metrics(
             metrics["pairs"], projection.get("owner_execution_model_validation") or {})
+        comparison = metrics["operating_economic_comparison"]
+        metrics["economic_research_status"] = (
+            "supported_cost_adjusted_comparison"
+            if comparison.get("status") == "supported_operating_comparison"
+            else comparison.get("status") or "source_gap"
+        )
+        metrics["promotion_primary_decision_metric"] = (
+            "robust_paired_delta_ev_lower_bound_pct"
+        )
+        metrics["model_delta_ev_is_actual_profit"] = False
         versions = sorted({r["incumbent_prompt_version"] for r in projection["rows"]})
         status = (
             "source_contract_blocked"

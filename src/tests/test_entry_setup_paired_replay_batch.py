@@ -49,6 +49,9 @@ def test_compact_whole_population_zero_same_verdict_and_unresolved_caution():
     assert metrics["delta_net_ev_pct"] == 0
     assert metrics["exclusion_counts"] == {"caution_followup_terminal_missing": 1}
     assert metrics["denominator_preserved"]
+    assert metrics["decision_changed_count"] == 0
+    assert metrics["decision_unchanged_count"] == 2
+    assert metrics["decision_change_rate"] == 0
 
 
 def test_compact_no_notional_is_percentage_diagnostic_not_daily_profit():
@@ -85,6 +88,9 @@ def test_compact_checkpoint_reuse_economics_rejoin_and_source_block(monkeypatch,
     assert len(calls) == 1
     assert first == second
     assert first["metrics"]["delta_net_ev_pct"] > 0
+    assert first["metrics"]["economic_research_status"] == "supported_cost_adjusted_comparison"
+    assert first["metrics"]["promotion_primary_decision_metric"] == "robust_paired_delta_ev_lower_bound_pct"
+    assert first["metrics"]["model_delta_ev_is_actual_profit"] is False
     assert not first["promotion_pass"]
     identity = compact.input_identity(row)
     row["entry_quality_path"]["gross_net_target_pct"] = 0.9
@@ -245,6 +251,9 @@ def test_compact_public_finalization_consumes_policy_and_all_summaries(tmp_path,
         result = calibration.run_postclose_phase(**kwargs, phase="finalize")
         assert phase_calls == [(True, True), (True, True), (False, False)]
         assert set(result["postclose_integration"]["phases"]) == {"prepare", "evaluate", "finalize"}
+        finalized = compact.read(calibration.report_path("2026-09-18", tmp_path / "report"))
+        assert finalized["status"] == "postclose_finalize_ready"
+        assert finalized["postclose_integration"]["economic_status"] == proof["status"]
         # A late parent rewrite needs summary binding, not another publication.
         summary_path = compact.summary_paths(tmp_path, "2026-09-17")[0]
         value = compact.read(summary_path)
@@ -254,6 +263,7 @@ def test_compact_public_finalization_consumes_policy_and_all_summaries(tmp_path,
         rebound = calibration.run_postclose_phase(**kwargs, phase="handoff")
         assert rebound["policy_bundle_sha256"] == result["policy_bundle_sha256"]
         assert compact.read(summary_path)["unrelated"] == 42
+        assert rebound["status"] == "compact_scope_policy_and_summary_handoff_complete"
     else:
         result = compact.finalize(data_root=tmp_path, day="2026-09-17", publication_day="2026-09-18")
     assert result["effective_date"] == "2026-09-21"
@@ -1570,6 +1580,38 @@ def test_public_compact_run_preserves_prior_unanswered_holdout_and_recovers(monk
 def test_operating_market_route_contract_rejects_real_mismatch(venue,session,route):
     from src.engine.scalping.strategy_owner_replay import entry_operating_route_supported
     assert not entry_operating_route_supported(venue,session,route)
+
+
+@pytest.mark.parametrize("reason", [
+    "natural_contract_invalid",
+    "natural_response_transport_invalid",
+    "natural_response_semantic_invalid",
+    "natural_provider_or_model_contract_invalid",
+])
+def test_natural_response_failures_are_source_gaps_not_market_scope(reason):
+    row = compact_row()
+    row["exclusion_reason"] = reason
+    disposition, blocker = compact.primary_input_blocker(row, {})
+    assert (disposition, blocker) == ("source_gap", reason)
+    accountability = compact.blocker_accountability(disposition, blocker)
+    assert accountability["owner"] == "ai_decision_trace_and_quality_response_contract"
+
+
+@pytest.mark.parametrize("patch,expected", [
+    ({"semantic_validation_status": "not_evaluated_transport", "result_source": "timeout"},
+     "natural_response_transport_invalid"),
+    ({"semantic_validation_status": "semantic_rejected"},
+     "natural_response_semantic_invalid"),
+    ({"decision_quality_contract_status": "fail"},
+     "natural_response_semantic_invalid"),
+    ({"provider_actual": "other"},
+     "natural_provider_or_model_contract_invalid"),
+])
+def test_natural_response_contract_preserves_first_failure_boundary(patch, expected):
+    trace = {"model": "gpt-5.4-nano", "provider_actual": "openai",
+             "semantic_validation_status": "pass",
+             "decision_quality_contract_status": "pass", **patch}
+    assert compact.natural_response_contract_exclusion(trace) == expected
 
 
 @pytest.mark.parametrize("phase", ["prepare", "finalize", "handoff"])

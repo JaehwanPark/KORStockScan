@@ -7523,15 +7523,28 @@ def run_postclose_phase(*, data_root: Path, source_day: str, phase: str,
         else:
             report = build_compact_scope_report(root, source_day, publication_day,
                                                preserve_noncompact_scope=not compact_scope_only)
-        phases[phase] = dict(binding, provider_calls_this_run=provider_calls, status="source_prepared" if paired is None else paired["status"],
+        economic_status = "not_evaluated" if paired is None else paired["status"]
+        artifact_status = {
+            "prepare": "postclose_prepare_complete",
+            "evaluate": "postclose_evaluate_complete",
+            # The publisher/last-consumer functions complete after this sealed
+            # calibration source is written.  Their returned receipts own the
+            # terminal success claim; the source artifact truthfully stays ready.
+            "finalize": "postclose_finalize_ready",
+            "handoff": "postclose_handoff_ready",
+        }[phase]
+        phases[phase] = dict(binding, provider_calls_this_run=provider_calls, status=artifact_status,
+                             economic_status=economic_status,
                              paired_artifact_content_sha256=paired.get("artifact_content_sha256") if paired else None)
         report["postclose_integration"] = dict(binding, phase=phase, phases=phases,
+            execution_status=artifact_status, economic_status=economic_status,
             provider_execution_phase="evaluate_only", economic_comparison_complete=bool(
                 paired and paired["metrics"].get("paired_comparable_count", 0) > 0
                 and paired["metrics"]["paired_comparable_count"] == paired["metrics"].get("economic_eligible_count")
                 and paired.get("candidate_prompt_version") != paired.get("incumbent_prompt_version")
                 and (paired["metrics"].get("operating_economic_comparison") or {}).get("status")
                 == "supported_operating_comparison"))
+        report["status"] = artifact_status
         report = _with_artifact_content_sha256(report)
         _atomic_write_json(path, report)
         if refresh_link:
