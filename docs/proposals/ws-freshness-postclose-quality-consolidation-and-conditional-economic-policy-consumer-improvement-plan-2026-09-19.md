@@ -150,3 +150,90 @@ publisher는 source evaluation/publication/policy/effective date를 분리하고
 완료 범위는 기존 입력이 있을 때의 evaluator·fail-closed policy·PREOPEN/후행 hash 전달과 배포까지다. WS1 공급 보완, WS3 실제 비교값, WS5의 경제성 있는 재생성은 OPEN이다. 역사 결손을 합성하거나 탈락 후보를 장중 provider에 추가 호출하지 않는다. 기존 `CodeImprovementWorkorderReview0918`가 prospective 탈락 후보의 source-only 실행 계약을 설계·검증하고, `KiwoomCommonHealthOpportunityCostAcceptance0917`는 그 계약이 생성된 뒤 정상 PREOPEN/PID와 COMPLETED full-cost 성과만 소유한다.
 
 배포와 source9/17 제한 재생성은 [구현 리뷰](../audit-reports/2026-09-19-ws-freshness-conditional-economics-implementation-review.md)에 기록했다. WS 경제 subsection `02afcf30577e8fa290e00fe9d62e1e624adcb8ce2217dbfaec418a010ece49d2`와 다음 장전용 policy `5cb82631ef6674c80a5154737ccdca70b6d6ac75fad0194d2cc883e5ef45bf51`가 기존 consumer에 결속됐지만, 현재 상태는 `source_gap/source_contract_blocked`, bonus0이고 실제 EV·일별 순익은 null이다. 이는 안전한 보존·차단 배포 receipt이며 구조적 경제성 구현 종결이 아니다.
+
+## 12. 결손 재점검과 실행 가능한 종결 설계 (2026-09-19)
+
+### 12.1 재점검 결론
+
+기존 계획의 남은 결손은 단순 source writer 누락이 아니다. capacity에서 탈락한 후보는 의도상 `WATCHING` 승격 전이므로 자연 `scanner_promotion_id`, compact AI 판정, entry plan·요청 수량, 주문 guard와 체결 terminal이 없다. 같은 scan generation의 탈락 후보에 이 값을 사후 부여하면 실제 런타임이 수행하지 않은 판정과 체결을 합성하게 된다. 따라서 §2·§5·§6·§8·§11에서 **변경 선택의 양쪽에 자연 실행 입력이 생겨야만 최초 경제값을 낸다**고 둔 종결 조건은 아래 단계별 계약으로 대체한다. §6의 full-ready 정책과 아래 bounded experiment 정책은 서로 다른 disposition이며 full-live 승격 조건은 완화하지 않는다.
+
+| 결손 | 해소 가능성 | 판정과 처리 |
+| --- | --- | --- |
+| source9/17 탈락 후보의 원 compact 입력·plan·terminal | 복구 불가 | `irrecoverable_historical_source_gap`으로 고정한다. 재실행·ID 추가·미래 값 대입 금지 |
+| 한 scan에서 선택되지 않은 반대편의 실제 손익 | 원리상 관측 불가 | 양쪽 실제 손익을 같은 generation에서 요구하지 않는다. 실제 정책 효과는 미래 사전 배정 표본의 intention-to-treat 비교로 측정 |
+| 미래 탈락 후보의 시장 경로·기회손익 | 해소 가능 | 기존 prune BBO collector에 marginal pair identity와 고정 horizon/cost를 결속해 source-only 기회 EV를 산출 |
+| 미래 정책의 compact→plan→guard→fill→exit 실제 손익 | 해소 가능 | research gate 통과 뒤 기존 슬롯 하나의 baseline/challenger를 다음 장전 정책에서 사전 배정. 선택된 한쪽만 기존 자연 런타임을 그대로 통과 |
+| 양쪽의 동일 시점 실제 체결을 이용한 exact paired EV | 해소 불가 | 반사실 실제 체결을 주장하지 않는다. 반복되는 동질 stratum의 사전 배정 정책 효과와 별도 model CF만 보고 |
+| 양수 EV 보장 | 불가 | non-null no-edge·손실·위험 악화도 유효 결과다. 양수는 관측된 경우에만 승격 근거로 사용 |
+
+이 구분으로 구조 결손은 종결할 수 있다. 역사적 사실을 복원하는 방식은 불가능하지만, 미래 source와 사전 배정 결과로 **scanner 선택 정책의 비용 후 EV·일별 순익 효과를 측정하는 경로**는 구현 가능하다. 기존 `execution_inputs()`는 이미 자연 승격된 후보의 모델 진단에 계속 사용하되, 최초 연구값을 내기 위한 불가능한 양팔 자연입력 gate로 사용하지 않는다.
+
+### 12.2 측정값을 세 층으로 분리
+
+1. `selection_opportunity_ev`: 선택 직전 baseline/challenger marginal pair의 실제 이후 BBO 경로로 계산하는 source-only 연구값이다. 고정 horizon, 동일 명목예산, 기존 수수료·세금·보수적 slippage를 적용한다. touch를 체결로 확정하지 않고 source coverage·censoring·venue ambiguity를 함께 표시한다. complete pair 한 건부터 값은 표시하되 승격에는 사용하지 않는다.
+2. `modeled_execution_ev`: 기존 실제 승격 후보의 compact/plan/fill/exit 자료로 독립 검증된 모델이 지원하는 stratum에만 계산하는 보조값이다. overlap 밖 후보·partial/carry/취소 race 미지원은 null이다. 새 장중 AI 호출이나 탈락 후보의 가짜 PASS를 만들지 않는다.
+3. `post_apply_actual_ev`: 사전 배정된 canary의 자연 compact 판정·plan·주문·terminal을 이용한 intention-to-treat 정책 효과다. 완료 거래 손익 book은 `COMPLETED + valid profit_rate`만 포함한다. 별도 policy-budget EV는 source-valid no-entry/no-fill terminal을 노출0·수익0으로 두되 이를 완료 거래 PnL 행으로 만들지 않는다. source/terminal 미완료는 null/censored로 남긴다. 정책 승격·롤백 판단은 두 book의 rolling/cumulative·일별 순익·tail·자본 결과가 함께 닫힌 경우에만 수행한다.
+
+세 값을 합치거나 proxy를 실제 EV로 승격하지 않는다. `selection_opportunity_ev`가 음수이거나 source-quality gate를 통과하지 못하면 canary를 만들지 않고 baseline을 유지한다. model 값은 canary 우선순위와 위험 envelope에만 사용한다.
+
+### 12.3 최소 생산자 계약
+
+새 service·DB·collector·report family·cron을 만들지 않고 기존 scanner event, prune BBO collector, integrated WS subsection과 scanner policy family를 확장한다.
+
+1. scanner가 capacity prune을 실행하기 직전에 simple-capacity partition의 baseline/candidate top-k를 모두 계산한다. 실제 순서·slot 계산은 바꾸지 않는다.
+2. 선택이 다른 incoming/outgoing에 `scanner_selection_pair_id`, `selection_arm`, scan generation, tier·slot·budget, 양쪽 score/rank, source signature, venue/session, policy/source hash와 관측 epoch를 동결한다. 탈락 arm에는 `scanner_promotion_id`를 만들지 않는다.
+3. 기존 `scalping_scanner_candidate_pruned`와 `scalping_scanner_candidate_promoted`에 같은 pair identity를 싣는다. 기존 prune BBO collector는 허용된 capacity reason의 incoming arm만 현재 bounded schedule로 관측한다. outgoing arm은 같은 horizon 계약으로 자연 market-data outcome을 결속한다.
+4. 기존 WS final subsection은 pair conservation, 양팔 관측 시계, quote provenance, 고정 horizon terminal, 비용 계약과 censoring을 검증해 `selection_opportunity_book`을 만든다. 한쪽 누락은 pair 전체 null이며0으로 대체하지 않는다.
+5. prewarm subscription을 늘리거나 탈락 후보를 `WATCHING`으로 저장하지 않는다. 현재 sparse BBO가 필요한 horizon의 source-quality floor를 충족하지 못하면 collector를 전수화하지 않고 그 pair를 censored 처리한다. coverage가 지속적으로 부족하면 canary 진입을 차단하고 별도 실시간 shadow watch를 자동 추가하지 않는다.
+
+`scanner_selection_pair_id`는 연구 lineage이며 주문·provider·승격 권한이 없다. 실제로 선정된 arm이 기존 runtime target을 만들 때만 별도의 자연 `scanner_promotion_id`가 생긴다.
+
+### 12.4 실제 EV를 만드는 bounded canary
+
+opportunity book이 기존 clean-baseline/source-quality/tail 조건을 통과하고 후보 formula가 동결된 뒤, 기존 policy family가 다음 장전용 `experiment_hold` 또는 `experiment_ready` disposition을 낸다.
+
+`experiment_ready` 전에는 같은 scanner-selection stage의 다른 live canary가 없는지 확인하고, opportunity Δ가 비용·stress 반영 후 양수이며 실행 모델의 지원 범위와 arm별 provenance·배정·rollback이 닫혀 있어야 한다. 이 근거는 canary 진입에만 쓰며 real execution quality 승인이나 full-live 승격으로 해석하지 않는다.
+
+- `experiment_hold`: baseline bonus0을 자연 소비한다. opportunity/model 표본이 아직 부족하거나 음수·불명확할 때의 기본값이다.
+- `experiment_ready`: 기존 simple-capacity KRX regular partition의 marginal slot 최대1개만 baseline/challenger에 사전 배정한다. PREOPEN artifact에 결과와 독립인 `allocation_seed_sha256`를 먼저 동결하고 pair identity와 결합해 arm을50:50 균형 배정하며 날짜·tier별 불균형을 제한한다. 동일 code/pair의 반복 scan은 첫 eligible buy-window assignment만 표본으로 삼고, 공통 pre-selection eligibility·동일 예산을 통과하지 못하거나 자본·custody가 중첩되는 pair는 제외한다. 배정 후에도 tier·slot·quota·budget·compact AI·가격·수량·broker·cooldown·cap·hard guard는 기존 경로가 다시 결정한다.
+- 선택된 arm이 AI VETO, guard block, 정상 no-fill이면 그 terminal 자체가 정책 결과다. 반대 arm의 손익을 합성하지 않는다. source/terminal이 끝나지 않은 날은 censored이며 일별 순익0으로 넣지 않는다.
+- 기존 실제 비용·provider 비용·자본 점유시간을 포함해 arm별 intention-to-treat policy-budget EV와 `COMPLETED` 거래 전용 EV·날짜별 실현 순익을 나란히 계산한다. 동일 stratum의 baseline/challenger가 기존 paired/sample/forward floor를 충족한 뒤에만 ready bonus 또는 incumbent rollback을 발행한다.
+- 손실/tail/source 경계 위반은 다음 정상 PREOPEN에서 bonus0 rollback을 발행한다. intraday 중 임의 재배정, 주문 취소, threshold 완화는 하지 않는다.
+
+이 canary는 양쪽을 동시에 주문하는 실험이 아니다. 한정된 기존 관심 슬롯의 순서 정책을 사전에 배정하고, 선정된 한쪽이 평소 런타임을 통과하도록 하는 정책 비교다. 따라서 실제 비용 후 효과를 얻으면서 주문·AI·수량·hard guard의 기존 권한을 보존한다.
+
+### 12.5 장후→장전→장중 폐쇄 루프
+
+| 단계 | 기존 owner와 출력 | 다음 소비자·종결 조건 |
+| --- | --- | --- |
+| R0 pair seed | scanner pipeline event의 pair identity·동결 selection inputs | prune/promote 합계와 top-k 재현, ID 충돌0 |
+| R1 opportunity outcome | 기존 prune BBO/market outcome의 양팔 고정 horizon terminal | complete/censored 분리, 비용 후 opportunity EV·일별 book non-null 또는 명시 censored |
+| R2 장후 판정 | 기존 WS integrated subsection의 opportunity/model/canary 세 book | source gap과 no-edge 분리, 입력 hash 재실행 시 결과 재사용 |
+| R3 dated policy | 기존 scanner lookup policy의 baseline hold/experiment/ready/rollback | source/publication/policy/effective date와 evidence hash 결속 |
+| R4 정규 PREOPEN | 기존 freeze→shared validator→immutable receipt | 다음 거래일 loader가 같은 generation을 소비; 조기 수동 freeze 금지 |
+| R5 장중 자연 실행 | scanner가 experiment arm을 선정한 경우 기존 compact→plan→guard→order 경로 | 자연 promotion ID·terminal·실제 비용 receipt. 미선정 arm 합성0 |
+| R6 post-apply | 기존 Daily/EV/runtime/tower/checklist/strict | arm별 actual EV·일별 순익·tail·자본과 rollback/승격, exact policy hash 일치 |
+
+최초 R1 complete pair는 구조 producer 도달성 종결이고 경제 연구값 확보다. R3의 baseline hold policy가 생성·소비되는 것은 안전한 다음 장전 인계 종결이다. R5/R6 표본과 gate가 닫혀야 실제 EV 개선 판단이 종결된다. 이 세 완료 상태를 하나로 표시하지 않는다.
+
+### 12.6 구현 패키지와 acceptance
+
+| 패키지 | 수정 범위 | 필수 회귀·완료 기준 |
+| --- | --- | --- |
+| WR0 identity | `scalping_scanner.py`의 기존 ranking/prune event | same-tier simple-capacity fixture에서 pair 보존·결정론 hash·탈락 arm promotion ID 없음 |
+| WR1 outcome | 기존 `pruned_candidate_bbo_collector.py`, WS acceptance helper | 양팔 clock/horizon/cost 결속, one-side missing·venue mismatch·censored를 null로 유지 |
+| WR2 evaluator | 기존 `scanner_lookup_attention_resource.py` | opportunity/model/actual book 분리, 과거9/17 irrecoverable 유지, 같은 선택 delta0과 실제 비교0 구분 |
+| WR3 policy | 기존 `scanner_lookup_attention_policy.py` | hold→experiment→ready/rollback state, source/effective hash 검증, forged/legacy active 차단 |
+| WR4 consumer | 기존 PREOPEN freeze/loader와 scanner priority consumer | experiment 최대1 marginal slot, 기존 tier/slot/quantity/AI/order/hard guard 불변 |
+| WR5 handoff | 기존 Daily/EV/runtime/tower/checklist/strict | 세 metric role과 코드/deploy/PREOPEN/natural/economic 상태를 동일 generation으로 소비 |
+
+구현 검증은 기존 scanner/pruned BBO/WS/resource/policy/PREOPEN/strict 테스트에 추가한다. provider/API 호출, 봇 재기동, 주문, 장후 전체 raw 재실행은 단위·통합 검증에 필요하지 않다. Kiwoom request/parser/WS 등록을 수정하지 않는 설계이며, 이후 그 경계를 바꿔야 하면 공식 Kiwoom reference gate를 먼저 수행한다.
+
+구조 결손 완료 조건은 다음 네 가지다.
+
+1. 미래 natural scan에서 pair seed와 양팔 source outcome이 같은 identity로 도달한다.
+2. 장후에 `selection_opportunity_ev`와 날짜별 값이 null이 아닌 complete pair가 최소1건 생성되거나, source-quality 사유로 정확히 censored된다.
+3. 그 결과로 다음 거래일용 baseline hold 또는 gate를 통과한 experiment policy가 생성되고 정상 PREOPEN consumer가 동일 hash를 동결한다.
+4. experiment가 시작된 경우 선택된 arm의 자연 compact/plan/guard/terminal이 post-apply owner에 귀속된다.
+
+실제 경제 개선 완료는 별도다. 기존 표본·forward holdout·비용·tail gate를 충족한 `post_apply_actual_ev`와 일별 순익 비교가 나온 뒤에만 ready 또는 reject로 닫는다. 그 전의 null은 다시 완료로 표시하지 않는다.
