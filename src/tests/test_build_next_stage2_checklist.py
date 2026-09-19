@@ -1728,6 +1728,7 @@ def test_schema_v3_regeneration_uses_direct_path_for_pre_retirement_source_date(
             "status": "direct_evidence_complete",
             "blocking_reasons": [],
             "economic_blockers": [],
+            "preopen_consumption_receipt": {"apply_date": "2026-09-21"},
         },
     )
 
@@ -1735,5 +1736,7 @@ def test_schema_v3_regeneration_uses_direct_path_for_pre_retirement_source_date(
     text = Path(result["path"]).read_text(encoding="utf-8")
 
     assert result["source_owner"] == "runtime_approval_summary_direct_family"
+    assert result["target_date"] == "2026-09-21"
+    assert Path(result["path"]).name == "2026-09-21-stage2-todo-checklist.md"
     assert "신규 공통 튜닝 작업 없음" in text
     assert "threshold_cycle_ev" not in text

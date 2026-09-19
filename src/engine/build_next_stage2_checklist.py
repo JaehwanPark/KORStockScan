@@ -1656,7 +1656,6 @@ def build_next_stage2_checklist(
         raise ValueError("source_date is required")
     date.fromisoformat(source_date)
     target_date = _next_krx_trading_day(source_date)
-    target_path = stage2_checklist_path(target_date)
     direct_summary = _load_json(
         PROJECT_ROOT
         / "data"
@@ -1664,6 +1663,24 @@ def build_next_stage2_checklist(
         / "runtime_approval_summary"
         / f"runtime_approval_summary_{source_date}.json"
     )
+    if direct_summary.get("schema_version") == 3:
+        preopen_receipt = direct_summary.get("preopen_consumption_receipt")
+        if isinstance(preopen_receipt, dict) and preopen_receipt.get("apply_date"):
+            apply_date = str(preopen_receipt["apply_date"]).strip()
+            try:
+                parsed_apply_date = date.fromisoformat(apply_date)
+            except ValueError as exc:
+                raise RuntimeError(
+                    "runtime approval summary preopen apply_date is invalid: "
+                    f"{apply_date!r}"
+                ) from exc
+            if parsed_apply_date <= date.fromisoformat(source_date):
+                raise RuntimeError(
+                    "runtime approval summary preopen apply_date must be after "
+                    f"source_date: {apply_date} <= {source_date}"
+                )
+            target_date = apply_date
+    target_path = stage2_checklist_path(target_date)
     with _checklist_write_lock(target_path):
         if source_date >= "2026-09-19" or direct_summary.get("schema_version") == 3:
             return _build_direct_family_checklist(
