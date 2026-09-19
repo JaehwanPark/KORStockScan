@@ -292,7 +292,10 @@ def build_pattern_lab_propagation_audit(
         )
     )
 
-    runtime_ok = bool(runtime_summary) and runtime_summary.get("status") in {"pass", "incomplete_direct_evidence"}
+    runtime_statuses = {"direct_evidence_complete", "direct_evidence_incomplete"}
+    if target_date < "2026-09-19":
+        runtime_statuses.add("pass")
+    runtime_ok = bool(runtime_summary) and runtime_summary.get("status") in runtime_statuses
     checks.append(
         _check(
             "runtime_summary_direct_family_handoff",

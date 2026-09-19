@@ -1690,7 +1690,13 @@ def _build_direct_family_checklist(
         / f"runtime_approval_summary_{source_date}.json"
     )
     summary = _load_json(summary_path)
-    blockers = [str(value) for value in summary.get("blocking_reasons") or []]
+    direct_blockers = [str(value) for value in summary.get("blocking_reasons") or []]
+    economic_blockers = [
+        value for value in summary.get("economic_blockers") or []
+        if isinstance(value, dict)
+        and value.get("comparison_status") in {"source_gap", "unsupported_scope", "mixed"}
+    ]
+    blockers: list[Any] = direct_blockers + economic_blockers
     handoff_paths = source_paths(summary_path.parents[1], source_date, "checklist")
     handoff_receipt = source_receipt(handoff_paths, source_date)
     lines = [
@@ -1712,7 +1718,8 @@ def _build_direct_family_checklist(
                 "  - TimeWindow: `07:30-08:50 KST`",
                 "  - Track: `source-quality`",
                 f"  - Source: [{summary_path.name}](/home/ubuntu/KORStockScan/{_rel(summary_path)})",
-                f"  - 결손: `{blockers}`",
+                f"  - 직접 증거 결손: `{direct_blockers}`",
+                f"  - 구조적 경제성 결손: `{economic_blockers}`",
                 "  - 완료 기준: 원천·비용 반영 EV·family policy·장중 consumer 결과의 날짜와 해시를 직접 대조하고, 결손을 0 또는 개선으로 간주하지 않는다.",
             ]
         )

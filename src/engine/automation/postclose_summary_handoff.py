@@ -20,6 +20,14 @@ MARKER = "POSTCLOSE_SUMMARY_SOURCES"
 COMMON_THRESHOLD_TUNING_RETIRED_FROM = "2026-09-19"
 
 
+def _load_json(path: Path) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
 def installed_producer_terminal_states(
     target_date: str, *, runner=None, report_dir: Path | None = None
 ) -> dict[str, str]:
@@ -115,18 +123,28 @@ def installed_producer_terminal_states(
 def source_paths(report_dir: Path, target_date: str, consumer: str) -> dict[str, Path]:
     if target_date >= COMMON_THRESHOLD_TUNING_RETIRED_FROM:
         data_dir = report_dir.parent
-        return {
-            "runtime_approval_summary": report_dir
+        summary_path = (
+            report_dir
             / "runtime_approval_summary"
-            / f"runtime_approval_summary_{target_date}.json",
+            / f"runtime_approval_summary_{target_date}.json"
+        )
+        summary = _load_json(summary_path)
+        preopen = summary.get("preopen_consumption_receipt") or {}
+        apply_date = (
+            str(preopen.get("apply_date"))
+            if isinstance(preopen, dict) and preopen.get("apply_date")
+            else target_date
+        )
+        return {
+            "runtime_approval_summary": summary_path,
             "runtime_policy_bootstrap": data_dir
             / "runtime"
             / "policy_bootstrap"
-            / f"runtime_policy_bootstrap_{target_date}.json",
+            / f"runtime_policy_bootstrap_{apply_date}.json",
             "runtime_policy_bootstrap_verify": data_dir
             / "runtime"
             / "policy_bootstrap"
-            / f"runtime_policy_bootstrap_verify_{target_date}.json",
+            / f"runtime_policy_bootstrap_verify_{apply_date}.json",
         }
     labels = {
         "tower": (

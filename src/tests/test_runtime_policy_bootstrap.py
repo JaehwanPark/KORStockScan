@@ -182,7 +182,7 @@ def test_direct_summary_and_verifier_do_not_require_retired_common_reports(monke
             continue
         _write(path, {"report_type": owner, "target_date": target, "status": "pass"})
     summary = summary_mod.build_runtime_approval_summary(target)
-    assert summary["status"] == "pass"
+    assert summary["status"] == summary_mod.DIRECT_EVIDENCE_COMPLETE
     assert summary["daily_threshold_cycle_retired"] is True
     assert summary["threshold_cycle_ev_retired"] is True
 

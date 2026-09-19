@@ -17,6 +17,21 @@ def test_postclose_wrapper_retires_common_daily_ev_and_generic_workorder():
     assert "src.engine.verify_threshold_cycle_postclose_chain" in script
 
 
+def test_postclose_status_records_direct_owner_producer_flags():
+    script = _text("deploy/run_threshold_cycle_postclose.sh")
+    for flag in (
+        "observation_source_quality_audit",
+        "entry_split_order_plan",
+        "scale_in_split_order_plan",
+        "samsung_machine_entry_tuning",
+        "low_price_two_leg_tuning",
+        "low_price_two_leg_candidate_recommendation",
+        "intraday_ws_freshness_finalize",
+        "ai_decision_action_outcome_calibration",
+    ):
+        assert f'"{flag}"' in script
+
+
 def test_preopen_orders_direct_publishers_before_bootstrap_and_consumers():
     script = _text("deploy/run_threshold_cycle_preopen.sh")
     publishers = [

@@ -42,9 +42,10 @@ def test_control_tower_binds_direct_generation_without_verifier_cycle(
 ):
     data_dir, report_root = _patch_dirs(monkeypatch, tmp_path)
     day = "2026-09-19"
+    apply_day = "2026-09-21"
     _write(
         report_root / "runtime_approval_summary" / f"runtime_approval_summary_{day}.json",
-        {"date": day, "status": "pass", "blocking_reasons": []},
+        {"date": day, "status": "direct_evidence_complete", "direct_evidence_state": "complete", "blocking_reasons": [], "economic_state": "measured_no_edge", "economic_state_counts": {"measured_no_edge": 1}, "validated_edge_count": 0, "policy_candidate_count": 0, "preopen_consumption_state": "verified", "natural_acceptance_state": "pending", "preopen_consumption_receipt": {"apply_date": apply_day}},
     )
     _write(
         report_root
@@ -53,9 +54,9 @@ def test_control_tower_binds_direct_generation_without_verifier_cycle(
         {"date": day, "status": "pass", "issues": []},
     )
     _write(
-        data_dir / "runtime" / "policy_bootstrap" / f"runtime_policy_bootstrap_{day}.json",
+        data_dir / "runtime" / "policy_bootstrap" / f"runtime_policy_bootstrap_{apply_day}.json",
         {
-            "target_date": day,
+            "target_date": apply_day,
             "selected_families": ["entry_cancel_wait"],
             "selection_changes": [
                 {"family": "entry_cancel_wait", "change_class": "retained_approved"}
@@ -66,14 +67,15 @@ def test_control_tower_binds_direct_generation_without_verifier_cycle(
         data_dir
         / "runtime"
         / "policy_bootstrap"
-        / f"runtime_policy_bootstrap_verify_{day}.json",
-        {"target_date": day, "status": "pass", "pid": 123, "pid_passed": True},
+        / f"runtime_policy_bootstrap_verify_{apply_day}.json",
+        {"target_date": apply_day, "status": "pass", "pid": 123, "pid_passed": True},
     )
 
     report = mod.build_tuning_performance_control_tower(day)
 
     assert report["status"] == "pass"
     assert report["selected_runtime"]["selected_families"] == ["entry_cancel_wait"]
+    assert report["selected_runtime"]["target_date"] == apply_day
     sources = report["source_generation_contract"]["sources"]
     assert set(sources) == {
         "runtime_approval_summary",

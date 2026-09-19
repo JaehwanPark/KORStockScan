@@ -17,7 +17,11 @@ def test_controller_never_reruns_common_tuning_or_wrapper(monkeypatch, tmp_path)
         data / "report" / "threshold_cycle_postclose_status" / "threshold_cycle_postclose_2026-09-19.status.json",
         {"status": "succeeded"},
     )
-    monkeypatch.setattr(mod, "build_runtime_approval_summary", lambda date: {"status": "pass"})
+    monkeypatch.setattr(
+        mod,
+        "build_runtime_approval_summary",
+        lambda date: {"status": "direct_evidence_complete"},
+    )
     monkeypatch.setattr(
         mod,
         "build_threshold_cycle_postclose_verification",

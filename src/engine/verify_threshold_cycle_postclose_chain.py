@@ -64,11 +64,24 @@ def _direct_source_checks(summary: dict[str, Any]) -> tuple[list[dict[str, Any]]
             "target_date_matches": source.get("target_date_matches") is True,
             "sha256": source.get("sha256"),
             "status": source.get("status"),
+            "error": source.get("error"),
+            "applicability": source.get("applicability"),
+            "economic_evidence": source.get("economic_evidence"),
             "required": source.get("required") is True,
             "current_sha256": _sha(Path(str(source.get("path") or ""))),
         }
         checks.append(check)
-        if check["exists"] and check["current_sha256"] != check["sha256"]:
+        evidence = check["economic_evidence"] if isinstance(check["economic_evidence"], dict) else {}
+        comparison_status = evidence.get("comparison_status")
+        if comparison_status in {"source_gap", "unsupported_scope", "mixed"} and evidence.get("policy_apply_allowed") is True:
+            issues.append(f"blocked_economic_source_marked_applyable:{owner}")
+        if comparison_status == "validated_edge":
+            policy_receipt = source.get("policy_receipt") if isinstance(source.get("policy_receipt"), dict) else {}
+            if evidence.get("policy_handoff_state") != "candidate_published" or policy_receipt.get("valid") is not True:
+                issues.append(f"validated_edge_policy_handoff_missing:{owner}")
+        if check["required"] and check["error"]:
+            issues.append(f"direct_source_contract_error:{owner}:{check['error']}")
+        elif check["exists"] and check["current_sha256"] != check["sha256"]:
             issues.append(f"direct_source_hash_mismatch:{owner}")
         elif not check["exists"] and check["required"]:
             issues.append(f"direct_source_missing:{owner}")
@@ -93,8 +106,14 @@ def build_threshold_cycle_postclose_verification(
     checks, issues = _direct_source_checks(summary)
     if summary.get("date") != target_date:
         issues.append("runtime_summary_date_mismatch")
-    if summary.get("status") != "pass":
+    if summary.get("status") != "direct_evidence_complete":
         issues.append("runtime_summary_incomplete")
+    if summary.get("direct_evidence_state") != "complete":
+        issues.append("runtime_summary_direct_evidence_state_incomplete")
+    if summary.get("runtime_effect") is not False:
+        issues.append("runtime_summary_authority_invalid")
+    if summary.get("allowed_runtime_apply") is not False:
+        issues.append("runtime_summary_apply_authority_invalid")
     if summary.get("daily_threshold_cycle_retired") is not True:
         issues.append("daily_retirement_contract_missing")
     if summary.get("threshold_cycle_ev_retired") is not True:

@@ -73,6 +73,12 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
     verifier_path = REPORT_ROOT_DIR / "threshold_cycle_postclose_verification" / f"threshold_cycle_postclose_verification_{target_date}.json"
     summary = _load_json(summary_path)
     verifier = _load_json(verifier_path)
+    preopen_receipt = (
+        summary.get("preopen_consumption_receipt")
+        if isinstance(summary.get("preopen_consumption_receipt"), dict)
+        else {}
+    )
+    runtime_apply_date = str(preopen_receipt.get("apply_date") or target_date)
     sources = {
         "runtime_approval_summary": {"path": str(summary_path), "sha256": _sha(summary_path)},
         "postclose_verifier": {"path": str(verifier_path), "sha256": _sha(verifier_path)},
@@ -84,14 +90,19 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
         "report_type": REPORT_TYPE,
         "date": target_date,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
-        "status": "pass" if summary.get("status") == "pass" and verifier.get("status") == "pass" else "direct_evidence_pending",
+        "status": "pass" if summary.get("direct_evidence_state") == "complete" and verifier.get("status") == "pass" else "direct_evidence_pending",
         "summary": {
-            "direct_source_status": summary.get("status") or "missing",
+            "direct_source_status": summary.get("direct_evidence_state") or "missing",
             "postclose_verifier_status": verifier.get("status") or "missing",
-            "validated_improvement_count": 0,
+            "economic_state": summary.get("economic_state") or "not_available",
+            "economic_state_counts": summary.get("economic_state_counts") or {},
+            "validated_improvement_count": summary.get("validated_edge_count") or 0,
+            "policy_candidate_count": summary.get("policy_candidate_count") or 0,
+            "preopen_consumption_state": summary.get("preopen_consumption_state") or "not_available",
+            "natural_acceptance_state": summary.get("natural_acceptance_state") or "not_available",
             "common_tuning_search_retired": True,
         },
-        "selected_runtime": _selected_runtime(target_date=target_date),
+        "selected_runtime": _selected_runtime(target_date=runtime_apply_date),
         "runtime_approval": summary,
         "postclose_verifier_summary": {
             "status": verifier.get("status"),
@@ -102,7 +113,15 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
         "runtime_effect": False,
         "allowed_runtime_apply": False,
         "actual_order_submitted": False,
-        "warnings": list(summary.get("blocking_reasons") or []) + list(verifier.get("issues") or []),
+        "warnings": (
+            list(summary.get("blocking_reasons") or [])
+            + [
+                f"{row.get('owner')}:{row.get('comparison_status')}:{row.get('first_blocker')}"
+                for row in summary.get("economic_blockers") or []
+                if isinstance(row, dict)
+            ]
+            + list(verifier.get("issues") or [])
+        ),
     }
     json_path, md_path = report_paths(target_date)
     assert_sources_unchanged(handoff_receipt, handoff_paths)

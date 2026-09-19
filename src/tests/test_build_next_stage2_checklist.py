@@ -1645,7 +1645,16 @@ def test_direct_family_checklist_publishes_current_generation_marker(
         / "runtime_approval_summary"
         / f"runtime_approval_summary_{day}.json"
     )
-    _write_json(summary, {"date": day, "status": "pass", "blocking_reasons": []})
+    _write_json(
+        summary,
+        {
+            "date": day,
+            "status": "direct_evidence_complete",
+            "direct_evidence_state": "complete",
+            "blocking_reasons": [],
+            "economic_blockers": [],
+        },
+    )
 
     result = mod.build_next_stage2_checklist(day)
     text = Path(result["path"]).read_text(encoding="utf-8")
@@ -1654,3 +1663,44 @@ def test_direct_family_checklist_publishes_current_generation_marker(
     assert "threshold_cycle_ev" not in text
     assert "threshold_cycle_preopen_apply" not in text
     assert "신규 공통 튜닝 작업 없음" in text
+
+
+def test_direct_family_checklist_opens_only_structural_economic_blockers(
+    monkeypatch, tmp_path
+):
+    _patch_dirs(monkeypatch, tmp_path)
+    monkeypatch.setattr(mod, "PROJECT_ROOT", tmp_path)
+    day = "2026-09-19"
+    summary = (
+        tmp_path
+        / "data"
+        / "report"
+        / "runtime_approval_summary"
+        / f"runtime_approval_summary_{day}.json"
+    )
+    _write_json(
+        summary,
+        {
+            "date": day,
+            "status": "direct_evidence_complete",
+            "direct_evidence_state": "complete",
+            "blocking_reasons": [],
+            "economic_blockers": [
+                {
+                    "owner": "entry_split",
+                    "comparison_status": "source_gap",
+                    "first_blocker": "operating_paired_source_missing",
+                    "closure_owner": "entry_split_order_plan",
+                    "closure_test": "future producer emits paired operating evidence",
+                }
+            ],
+        },
+    )
+
+    result = mod.build_next_stage2_checklist(day)
+    text = Path(result["path"]).read_text(encoding="utf-8")
+
+    assert result["task_count"] == 1
+    assert "DirectFamilyEvidenceGap20260919" in text
+    assert "operating_paired_source_missing" in text
+    assert "구조적 경제성 결손" in text

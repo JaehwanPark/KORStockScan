@@ -74,3 +74,17 @@ def test_missing_postclose_terminal_fails_closed(monkeypatch, tmp_path):
 
     assert report["status"] == "fail"
     assert "postclose_terminal_status_missing" in report["issues"]
+
+
+def test_verifier_rejects_source_gap_marked_runtime_applyable(monkeypatch, tmp_path):
+    target = "2026-09-19"
+    summary = _seed(monkeypatch, tmp_path, target)
+    summary["sources"]["entry_split"]["economic_evidence"].update(
+        comparison_status="source_gap", policy_apply_allowed=True
+    )
+    _write(mod._artifact_paths(target)["runtime_summary"], summary)
+
+    report = mod.build_threshold_cycle_postclose_verification(target)
+
+    assert report["status"] == "fail"
+    assert "blocked_economic_source_marked_applyable:entry_split" in report["issues"]

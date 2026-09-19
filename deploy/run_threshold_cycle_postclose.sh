@@ -267,7 +267,11 @@ write_postclose_status() {
   local exit_code="${3:-0}"
   local finished="${4:-0}"
   local failure_artifact="${POSTCLOSE_FAILURE_ARTIFACT:-}"
-  "$VENV_PY" - "$STATUS_FILE" "$TARGET_DATE" "$status" "$reason" "$exit_code" "$finished" "$failure_artifact" <<'PY'
+  "$VENV_PY" - "$STATUS_FILE" "$TARGET_DATE" "$status" "$reason" "$exit_code" "$finished" "$failure_artifact" \
+    "$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT" "$RUN_ENTRY_SPLIT_ORDER_PLAN" \
+    "$RUN_SCALE_IN_SPLIT_ORDER_PLAN" "$RUN_SAMSUNG_MACHINE_ENTRY_TUNING" \
+    "$RUN_LOW_PRICE_TWO_LEG_TUNING" "$RUN_LOW_PRICE_TWO_LEG_CANDIDATE_RECOMMENDATION" \
+    "$RUN_INTRADAY_WS_FRESHNESS_FINALIZE" "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" <<'PY'
 import json
 import os
 import sys
@@ -275,7 +279,22 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 path = Path(sys.argv[1])
-target_date, status, reason, exit_code, finished, failure_artifact = sys.argv[2:9]
+(
+    target_date,
+    status,
+    reason,
+    exit_code,
+    finished,
+    failure_artifact,
+    source_quality,
+    entry_split,
+    scale_in_split,
+    machine_entry,
+    low_price,
+    low_price_expansion,
+    ws_freshness,
+    ai_outcome,
+) = sys.argv[2:17]
 payload = {}
 if path.exists():
     try:
@@ -291,6 +310,14 @@ payload.update(
         "reason": reason or None,
         "exit_code": int(exit_code or 0),
         "producer_flags": {
+            "observation_source_quality_audit": source_quality,
+            "entry_split_order_plan": entry_split,
+            "scale_in_split_order_plan": scale_in_split,
+            "samsung_machine_entry_tuning": machine_entry,
+            "low_price_two_leg_tuning": low_price,
+            "low_price_two_leg_candidate_recommendation": low_price_expansion,
+            "intraday_ws_freshness_finalize": ws_freshness,
+            "ai_decision_action_outcome_calibration": ai_outcome,
             "entry_ai_gate_backtest": os.environ.get("RUN_ENTRY_AI_GATE_BACKTEST"),
             "entry_ai_gate_backtest_schedule": os.environ.get(
                 "ENTRY_AI_GATE_BACKTEST_SCHEDULE"
