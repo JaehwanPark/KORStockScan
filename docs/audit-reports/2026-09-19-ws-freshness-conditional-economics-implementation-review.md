@@ -56,3 +56,10 @@ WS6의 다음 자연 generation 원 plan/quantity/guard, 독립 model, 정규9/2
 - complete pair3건·3일의 비용 후 opportunity EV는 `-2.38954987%`다. 날짜별 delta는 9/8 `-0.43517204%`, 9/9 `-5.79902111%`, 9/17 `-0.93445645%`다. incoming 절대 비용 후 snapshot EV는 `-1.155944%`다. 따라서 source/policy 상태는 `hold_no_edge`, bonus0, `allowed_runtime_apply=false`이며 experiment는 발행하지 않았다.
 - 기존 실제 완료5건의 관찰 EV는 `+0.26099759%`, 비용 후 순익은 `+575.12765원`이지만 selection 정책 인과값은 아니다. 미선정 arm의 실제 수량·체결이 없어 primary paired EV와 원화 일별 순익은 null이다. 이 null은 future experiment의 사전 배정 arm·정확한 PREOPEN hash·자연 COMPLETED 결과로만 채운다.
 - Daily·EV·runtime approval·control tower·9/21 checklist를 동일 section/policy hash로 갱신했고 scanner-only strict는 PASS다. 구현·기회 EV 측정·baseline 정책 생성은 종결됐으며, 정상 PREOPEN/PID와 미래 실제 arm 표본의 비용 후 EV 개선 여부는 기존 9/21 acceptance에 남는다.
+
+## `--finalize --monitor-only` 재리뷰와 과거 산출물 정리
+
+- producer, postclose wrapper, JSON 정책 소비자, reuse contract를 다시 추적했다. 기계 JSON은 rolling 평가와 정확한 과거 source-policy 검증에서 소비되고, 현재 날짜 Markdown은 postclose wrapper의 완료 산출물이므로 보존했다. 이 범위에서 새 코드 결함은 확인되지 않아 기능 코드를 늘리지 않았다.
+- 코드 소비가 없고 현재 완료 체인·reuse contract에 속하지 않는 2026-09-11 이전 렌더링 Markdown 42개와 비활성 0바이트 generation lock 3개를 삭제했다. 총 45개·6,529,982 bytes이며 삭제 전 경로·크기·SHA-256은 `/home/ubuntu/KORStockScan/tmp/intraday-ws-freshness-cleanup-20260919/cleanup.json`에 남겼다.
+- 모든 기계 JSON, reuse contract, 2026-09-11 이후 Markdown, 현재 정책·runtime·checklist 근거는 보존했다. 정리 후 source9/17 section `c1942a8fa18e38249f128dd4dff1a642d57f1964e2cd585bf771a0a29d1651a5`와 policy9/18 `254d5ab28a6b2089c4d6d036222aedb45dbc353dcd0d5429abd04c755bc9e010`의 자체 해시 및 9/21 baseline-hold consumer 검증이 그대로 통과했다.
+- 대상 회귀는 285 passed, warning1이며 compileall, 변경 없는 wrapper 2개의 `bash -n`, `git diff --check`를 통과했다. warning은 기존 `pandas_ta` deprecation이다. 보고서 전체 재생성, provider 호출, 봇 재기동, 주문, 조기 PREOPEN은 수행하지 않았다.
