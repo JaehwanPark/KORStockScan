@@ -134,6 +134,15 @@ DECISION_RANK = {
     "reject": 4,
 }
 
+_RETIRED_COMMON_TUNING_TOKENS = (
+    "daily_threshold_cycle_report",
+    "threshold_cycle_ev_report",
+    "threshold_cycle_preopen_apply",
+    "test_daily_threshold_cycle_report",
+    "test_threshold_cycle_ev_report",
+    "test_threshold_cycle_preopen_apply",
+)
+
 
 @dataclass(frozen=True)
 class ClassifiedOrder:
@@ -154,6 +163,50 @@ _SOURCE_READS: ContextVar[dict[str, str | None] | None] = ContextVar(
 
 class WorkorderSourceChanged(RuntimeError):
     pass
+
+
+def _direct_family_order(order: dict[str, Any]) -> dict[str, Any] | None:
+    """Remove retired common-tuning ownership from a manual direct-family order."""
+    ownership = " ".join(
+        str(order.get(key) or "")
+        for key in (
+            "source_report_type",
+            "target_subsystem",
+            "mapped_family",
+            "threshold_family",
+        )
+    )
+    if any(token in ownership for token in _RETIRED_COMMON_TUNING_TOKENS):
+        return None
+    sanitized = dict(order)
+    sanitized["files_likely_touched"] = [
+        path
+        for path in order.get("files_likely_touched") or []
+        if not any(token in str(path) for token in _RETIRED_COMMON_TUNING_TOKENS)
+    ]
+    sanitized["acceptance_tests"] = [
+        command
+        for command in order.get("acceptance_tests") or []
+        if not any(token in str(command) for token in _RETIRED_COMMON_TUNING_TOKENS)
+    ]
+    sanitized["required_downstream"] = [
+        owner
+        for owner in order.get("required_downstream") or []
+        if not any(token in str(owner) for token in _RETIRED_COMMON_TUNING_TOKENS)
+    ]
+    provenance = order.get("implementation_provenance")
+    if isinstance(provenance, dict):
+        provenance = dict(provenance)
+        if "required_downstream" in provenance:
+            provenance["required_downstream"] = [
+                owner
+                for owner in provenance.get("required_downstream") or []
+                if not any(
+                    token in str(owner) for token in _RETIRED_COMMON_TUNING_TOKENS
+                )
+            ]
+        sanitized["implementation_provenance"] = provenance
+    return sanitized
 
 
 def _read_source_bytes(path: Path) -> bytes:
@@ -226,7 +279,11 @@ def _source_fingerprint(source_paths: dict[str, Path]) -> dict[str, Any]:
 
 
 def _generation_fingerprint(
-    source_hash: str, *, max_orders: int, include_swing: bool
+    source_hash: str,
+    *,
+    max_orders: int,
+    include_swing: bool,
+    direct_family_only: bool,
 ) -> dict[str, Any]:
     inputs = {
         "source_hash": source_hash,
@@ -234,6 +291,7 @@ def _generation_fingerprint(
         "producer_contract_version": WORKORDER_PRODUCER_CONTRACT_VERSION,
         "max_orders": max(1, int(max_orders)),
         "include_swing": bool(include_swing),
+        "direct_family_only": bool(direct_family_only),
     }
     generation_hash = hashlib.sha256(
         json.dumps(
@@ -773,6 +831,17 @@ def _intraday_ws_freshness_followup_orders(
             implementation_status = implemented_state_statuses.get(
                 implementation_state, ""
             )
+        if (
+            raw.get("order_id")
+            == "order_ws_subscription_stale_repair_observability"
+            and not implementation_status
+        ):
+            implementation_status = (
+                "implemented_source_quality_contract_waiting_sample"
+            )
+            implementation_state = (
+                "remove_reg_cooldown_receipts_implemented_waiting_natural_pid"
+            )
         source_provenance = (
             raw.get("implementation_provenance")
             if isinstance(raw.get("implementation_provenance"), dict)
@@ -830,6 +899,36 @@ def _intraday_ws_freshness_followup_orders(
                 "handoff coverage, terminal outcomes, and executable-BBO source-quality status."
             ),
         }
+        if implementation_status:
+            order.update(
+                {
+                    "action_priority_class": "P3",
+                    "resolution_mode": "natural_maturity",
+                    "economic_eligibility": "pending_maturity",
+                    "first_blocker": "future_natural_source_or_terminal_receipt",
+                    "closure_owner": "intraday_ws_freshness_monitor",
+                    "closure_test": order["next_postclose_metric"],
+                    "eta": None,
+                }
+            )
+        else:
+            order.update(
+                {
+                    "action_priority_class": "P2",
+                    "resolution_mode": "producer_repair",
+                    "economic_eligibility": "blocked_structural",
+                    "first_blocker": (
+                        "scanner_source_capture_or_ws_repair_provenance_missing"
+                    ),
+                    "closure_owner": "intraday_ws_freshness_monitor",
+                    "closure_test": (
+                        (raw.get("acceptance_tests") or [None])[0]
+                        if isinstance(raw.get("acceptance_tests"), list)
+                        else None
+                    ),
+                    "eta": None,
+                }
+            )
         forbidden = raw.get("forbidden_uses")
         order["forbidden_uses"] = (
             list(forbidden)
@@ -838,6 +937,139 @@ def _intraday_ws_freshness_followup_orders(
         )
         orders.append(order)
     return orders
+
+
+def _scanner_lookup_attention_economic_evidence(
+    report: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Project family-owned economics without recomputing or promoting them."""
+    funnel = report.get("scanner_unique_funnel")
+    cohorts = funnel.get("economic_cohorts") if isinstance(funnel, dict) else None
+    selection = (
+        cohorts.get("lookup_attention_selection")
+        if isinstance(cohorts, dict)
+        else None
+    )
+    if not isinstance(selection, dict):
+        return None
+    opportunity = selection.get("selection_opportunity_economics")
+    primary = selection.get("primary_economics")
+    actual = selection.get("actual_completed")
+    opportunity = opportunity if isinstance(opportunity, dict) else {}
+    primary = primary if isinstance(primary, dict) else {}
+    actual = actual if isinstance(actual, dict) else {}
+    if not any((opportunity, primary, actual)):
+        return None
+
+    opportunity_status = str(opportunity.get("status") or "").strip()
+    comparison_status = (
+        "measured_no_edge"
+        if opportunity_status == "hold_no_edge"
+        else "validated_edge"
+        if opportunity_status in {"validated_edge", "economic_improvement_validated"}
+        else "source_gap"
+        if opportunity_status.startswith("source_")
+        else "pending_maturity"
+    )
+    primary_gaps = [
+        str(value)
+        for value in (primary.get("source_gaps") or [])
+        if str(value).strip()
+    ]
+    historical_unrecoverable = (
+        "original_unselected_entry_recipe_quantity_guard_missing" in primary_gaps
+    )
+    publication = report.get("scanner_lookup_attention_publication")
+    publication = publication if isinstance(publication, dict) else {}
+    quality_handoff = report.get("postclose_quality_handoff")
+    quality_handoff = quality_handoff if isinstance(quality_handoff, dict) else {}
+    evidence = {
+        "family": "scanner_lookup_attention",
+        "source_report_type": "intraday_ws_freshness_monitor",
+        "source_date": report.get("target_date"),
+        "economic_artifact_sha256": selection.get("artifact_sha256")
+        or quality_handoff.get("economic_section_sha256"),
+        "opportunity": {
+            "comparison_status": comparison_status,
+            "metric_role": opportunity.get("metric_role"),
+            "baseline_cost_adjusted_ev_pct": opportunity.get(
+                "outgoing_snapshot_ev_pct"
+            ),
+            "candidate_cost_adjusted_ev_pct": opportunity.get(
+                "incoming_snapshot_ev_pct"
+            ),
+            "paired_delta_ev_pct": opportunity.get("selection_opportunity_ev_pct"),
+            "daily_delta_pct": opportunity.get("daily_incremental_opportunity_pct")
+            or {},
+            "daily_net_profit_krw": opportunity.get("daily_net_profit_krw"),
+            "daily_net_profit_reason": opportunity.get("daily_net_profit_reason"),
+            "paired_sample_count": opportunity.get("resolved_pair_count"),
+            "paired_date_count": opportunity.get("resolved_date_count"),
+            "cost_contract": selection.get("cost_contract"),
+            "tail": None,
+            "capital": None,
+            "source_quality_gate": opportunity.get("source_quality_gate"),
+            "resolution_mode": (
+                "measured_no_edge"
+                if comparison_status == "measured_no_edge"
+                else "natural_maturity"
+            ),
+            "economic_eligibility": "eligible",
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        },
+        "actual_policy_comparison": {
+            "comparison_status": (
+                "source_gap" if primary_gaps else "pending_maturity"
+            ),
+            "metric_role": "realized",
+            "baseline_cost_adjusted_ev_pct": primary.get("baseline_budget_ev_pct"),
+            "candidate_cost_adjusted_ev_pct": primary.get("candidate_budget_ev_pct"),
+            "paired_delta_ev_pct": primary.get("paired_delta_ev_pct"),
+            "baseline_daily_net_profit_krw": primary.get("baseline_net_pnl_krw"),
+            "candidate_daily_net_profit_krw": primary.get("candidate_net_pnl_krw"),
+            "source_gaps": primary_gaps,
+            "first_blocker": primary_gaps[0] if primary_gaps else None,
+            "resolution_mode": (
+                "historical_unrecoverable"
+                if historical_unrecoverable
+                else "natural_maturity"
+            ),
+            "economic_eligibility": (
+                "blocked_structural" if primary_gaps else "pending_maturity"
+            ),
+            "closure_owner": "KiwoomCommonHealthOpportunityCostAcceptance0917",
+            "closure_test": selection.get("closure_test"),
+            "eta": selection.get("eta"),
+        },
+        "observational_completed": {
+            "comparison_status": "diagnostic_only",
+            "metric_role": actual.get("metric_role"),
+            "causal_uplift": actual.get("causal_uplift"),
+            "book": actual.get("book"),
+        },
+        "policy_handoff": {
+            "disposition": (
+                "incumbent_preserved"
+                if comparison_status == "measured_no_edge"
+                else "apply_blocked"
+            ),
+            "source_evaluation_date": publication.get("source_evaluation_date"),
+            "publication_date": publication.get("publication_date"),
+            "effective_date": publication.get("effective_date"),
+            "policy_artifact_sha256": publication.get("policy_artifact_sha256"),
+        },
+    }
+    evidence["semantic_sha256"] = hashlib.sha256(
+        json.dumps(
+            evidence,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+    return evidence
 
 
 def _market_census_followup_orders(report, target_date):
@@ -1398,6 +1630,13 @@ def _escalate_repeated_structural_blockers(
             if isinstance(item.order.get("implementation_provenance"), dict)
             else {}
         )
+        if _is_implemented_status(item.order.get("implementation_status")) and (
+            item.order.get("resolution_mode") == "natural_maturity"
+            or provenance.get("root_cause_closure_status_hint")
+            in {"implementation_done", "root_cause_closed"}
+        ):
+            escalated.append(item)
+            continue
         if (
             str(provenance.get("root_cause_closure_status_hint") or "").strip()
             == "root_cause_closed"
@@ -2338,6 +2577,32 @@ def _entry_submit_drought_implementation_marker(
 
     exact_validation = validate_submit_drought_contract(report, contract)
     exact_attempt_contract_invalid = exact_validation["status"] == "invalid"
+    attempt_ledger = (
+        exact_attempt_contract.get("attempt_ledger")
+        if isinstance(exact_attempt_contract.get("attempt_ledger"), list)
+        else []
+    )
+    unclassified_attempts = [
+        row
+        for row in attempt_ledger
+        if isinstance(row, dict) and row.get("state") == "unclassified"
+    ]
+    # Before the call-local submit observer existed, a new scanner promotion
+    # could supersede an AI-confirmed row without a terminal receipt.  Those
+    # rows cannot be repaired retrospectively.  The current producer closes
+    # every submit invocation with entry_submit_attempt_finished, so this
+    # historical shape waits for a new natural receipt instead of repeatedly
+    # generating the same P0 implementation order.
+    historical_superseded_only = bool(unclassified_attempts) and all(
+        row.get("lineage_gap_reason")
+        == "new_evaluation_without_previous_terminal"
+        and not str(row.get("producer_attempt_id") or "").strip()
+        for row in unclassified_attempts
+    ) and _safe_int(
+        exact_attempt_contract.get("missing_exact_attempt_key_event_count"), 0
+    ) == 0 and _safe_int(
+        exact_attempt_contract.get("stage_order_violation_event_count"), 0
+    ) == 0
     refresh_attempted_count = _safe_int(
         quote_freshness.get("refresh_attempted_count"), 0
     )
@@ -2360,7 +2625,9 @@ def _entry_submit_drought_implementation_marker(
         or (refresh_attempted_count > 0 and not ldm_quote_freshness_present)
     )
     exact_attempt_source_quality_open = bool(
-        exact_attempt_contract and exact_attempt_contract.get("status") != "pass"
+        exact_attempt_contract
+        and exact_attempt_contract.get("status") != "pass"
+        and not historical_superseded_only
     )
     if quote_freshness_inconsistent or exact_attempt_contract_invalid:
         root_cause_closure_status = "artifact_regeneration_required"
@@ -2370,16 +2637,42 @@ def _entry_submit_drought_implementation_marker(
         root_cause_closure_status = "handoff_closed_root_cause_open"
     else:
         root_cause_closure_status = "root_cause_closed"
-    return {
-        "implementation_status": (
+    natural_receipt_pending = bool(
+        historical_superseded_only
+        and not quote_freshness_inconsistent
+        and not exact_attempt_contract_invalid
+        and not root_cause_open
+    )
+    implementation_status = (
+        "implemented_source_quality_contract_waiting_sample"
+        if natural_receipt_pending
+        else (
             "implemented_source_quality_gap_open"
             if exact_attempt_source_quality_open or exact_attempt_contract_invalid
             else "implemented"
+        )
+    )
+    return {
+        **(
+            {
+                "action_priority_class": "P3",
+                "resolution_mode": "natural_maturity",
+                "economic_eligibility": "pending_maturity",
+                "first_blocker": "future_call_local_submit_terminal_receipt",
+                "closure_owner": "sniper_state_handlers._submit_watching_triggered_entry",
+                "closure_test": (
+                    "a new natural submit invocation carries call_local_submit_attempt_v1 "
+                    "and finishes as submitted or one exact terminal block/reject"
+                ),
+            }
+            if natural_receipt_pending
+            else {}
         ),
+        "implementation_status": implementation_status,
         "implementation_checks": [
             "buy_funnel_sentinel emits entry_submit_drought_contract",
             "code_improvement_workorder selects drought and weak-contract follow-ups",
-            "required_downstream includes workorder, EV, runtime summary, and verifier consumers",
+            "required_downstream includes workorder intake, runtime summary, and verifier consumers",
             "runtime_effect=false",
             "allowed_runtime_apply=false",
         ],
@@ -2399,7 +2692,6 @@ def _entry_submit_drought_implementation_marker(
                 )
                 for axis, axis_payload in observation_axes.items()
             },
-            "root_cause_closure_status_hint": root_cause_closure_status,
             "root_cause_signal": current_primary or None,
             "root_cause_counts": latency_root_cause_counts,
             "quote_freshness_refresh_attempted_count": refresh_attempted_count,
@@ -2412,6 +2704,23 @@ def _entry_submit_drought_implementation_marker(
             ),
             "exact_attempt_contract_invalid": exact_attempt_contract_invalid,
             "exact_attempt_source_quality_open": exact_attempt_source_quality_open,
+            "historical_superseded_attempt_count": (
+                len(unclassified_attempts) if historical_superseded_only else 0
+            ),
+            "historical_superseded_only": historical_superseded_only,
+            "current_terminal_capture": (
+                "entry_submit_attempt_finished_call_local_submit_attempt_v1"
+            ),
+            "sample_status": (
+                "waiting_new_call_local_submit_terminal_receipt"
+                if natural_receipt_pending
+                else None
+            ),
+            "root_cause_closure_status_hint": (
+                "implementation_done"
+                if natural_receipt_pending
+                else root_cause_closure_status
+            ),
             "runtime_effect": contract.get("runtime_effect"),
             "allowed_runtime_apply": contract.get("allowed_runtime_apply"),
             "broker_order_submit_allowed": contract.get("broker_order_submit_allowed"),
@@ -2637,6 +2946,32 @@ def _serialize_classified_order(item: ClassifiedOrder) -> dict[str, Any]:
     implementation_status = _terminal_non_implement_status(item) or item.order.get(
         "implementation_status"
     )
+    resolution_mode = item.order.get("resolution_mode")
+    economic_eligibility = item.order.get("economic_eligibility")
+    action_priority_class = item.order.get("action_priority_class")
+    if not resolution_mode:
+        if _is_implemented_status(implementation_status):
+            resolution_mode = "natural_maturity"
+            economic_eligibility = economic_eligibility or "pending_maturity"
+            action_priority_class = action_priority_class or "P3"
+        elif item.decision in {"implement_now", "design_family_candidate"}:
+            resolution_mode = "producer_repair"
+            economic_eligibility = economic_eligibility or "blocked_structural"
+            action_priority_class = action_priority_class or "P2"
+        else:
+            resolution_mode = "retired_or_not_applicable"
+            economic_eligibility = economic_eligibility or "not_applicable"
+            action_priority_class = action_priority_class or "P4"
+    acceptance_tests = item.order.get("acceptance_tests") or []
+    closure_test = item.order.get("closure_test")
+    if not closure_test and acceptance_tests:
+        closure_test = acceptance_tests[0]
+    first_blocker = item.order.get("first_blocker")
+    if not first_blocker and economic_eligibility == "blocked_structural":
+        first_blocker = (
+            f"{item.order.get('source_report_type') or 'unknown'}:"
+            f"{item.order.get('order_id') or 'unknown'}"
+        )
     serialized = {
         "order_id": item.order.get("order_id"),
         "title": item.order.get("title"),
@@ -2661,12 +2996,22 @@ def _serialize_classified_order(item: ClassifiedOrder) -> dict[str, Any]:
         "confidence": item.confidence,
         "intent": item.order.get("intent"),
         "expected_ev_effect": item.order.get("expected_ev_effect"),
+        "action_priority_class": action_priority_class,
+        "resolution_mode": resolution_mode,
+        "economic_eligibility": economic_eligibility,
+        "first_blocker": first_blocker,
+        "closure_owner": item.order.get("closure_owner")
+        or item.mapped_family
+        or item.order.get("source_report_type"),
+        "closure_test": closure_test,
+        "eta": item.order.get("eta"),
+        "economic_evidence_ref": item.order.get("economic_evidence_ref"),
         "evidence": item.order.get("evidence") or [],
         "required_downstream": item.order.get("required_downstream") or [],
         "weak_contract_matches": item.order.get("weak_contract_matches") or [],
         "next_postclose_metric": item.order.get("next_postclose_metric"),
         "files_likely_touched": item.order.get("files_likely_touched") or [],
-        "acceptance_tests": item.order.get("acceptance_tests") or [],
+        "acceptance_tests": acceptance_tests,
         "forbidden_uses": item.order.get("forbidden_uses") or [],
         "decision_authority": item.order.get("decision_authority"),
         "source_handoff_contract": item.order.get("source_handoff_contract"),
@@ -3586,6 +3931,22 @@ def _classify_order(
         )
 
     if order.get("improvement_type") == "source_quality_unknown_token_provenance_gap":
+        if order.get("economic_eligibility") == "not_applicable":
+            return ClassifiedOrder(
+                order=order,
+                decision="attach_existing_family",
+                reason=(
+                    "unknown-token rows are warning-only reviewed provenance and the owning audit still "
+                    "allows tuning input; keep them visible without creating a false EV-blocking repair"
+                ),
+                mapped_family=mapped_family or "observation_source_quality_audit",
+                route="existing_family",
+                confidence=confidence or "audit",
+                automation_reentry=(
+                    "Reopen only if the owning audit marks tuning_input_allowed=false or identifies an "
+                    "exact economic denominator field blocked by the unknown token."
+                ),
+            )
         return ClassifiedOrder(
             order=order,
             decision="implement_now",
@@ -3689,9 +4050,25 @@ def _classify_order(
 
 
 def _sort_classified(items: list[ClassifiedOrder]) -> list[ClassifiedOrder]:
+    action_rank = {"P0": 0, "P1": 1, "P2": 2, "P3": 3, "P4": 4}
+
+    def priority_class(item: ClassifiedOrder) -> str:
+        explicit = str(item.order.get("action_priority_class") or "")
+        if explicit:
+            return explicit
+        if _is_implemented_status(
+            _terminal_non_implement_status(item)
+            or item.order.get("implementation_status")
+        ):
+            return "P3"
+        if item.decision in {"implement_now", "design_family_candidate"}:
+            return "P2"
+        return "P4"
+
     return sorted(
         items,
         key=lambda item: (
+            action_rank.get(priority_class(item), 99),
             DECISION_RANK.get(item.decision, 99),
             _safe_int(item.order.get("priority"), 999),
             str(item.order.get("order_id") or ""),
@@ -4890,6 +5267,7 @@ def _observation_source_quality_followup_orders(
         )
     if unknown_token_findings:
         producer_fix_implemented = unknown_findings_covered_by_known_fix()
+        unknown_blocks_tuning = summary.get("tuning_input_allowed") is False
         field_provenance = []
         for finding in unknown_token_findings:
             stage = str(finding.get("stage") or "")
@@ -4983,6 +5361,29 @@ def _observation_source_quality_followup_orders(
                     if producer_fix_implemented
                     else None
                 ),
+                "action_priority_class": (
+                    "P2" if unknown_blocks_tuning else "P4"
+                ),
+                "resolution_mode": (
+                    "producer_repair"
+                    if unknown_blocks_tuning
+                    else "retired_or_not_applicable"
+                ),
+                "economic_eligibility": (
+                    "blocked_structural"
+                    if unknown_blocks_tuning
+                    else "not_applicable"
+                ),
+                "first_blocker": (
+                    "unknown_token_blocks_tuning_input"
+                    if unknown_blocks_tuning
+                    else None
+                ),
+                "closure_owner": "observation_source_quality_audit",
+                "closure_test": (
+                    "reopen only when tuning_input_allowed=false and the exact affected economic field is named"
+                ),
+                "eta": None,
                 "implementation_provenance": {
                     "field_provenance_review": field_provenance,
                     "remaining_unknown_fields": remaining_fields,
@@ -4995,6 +5396,7 @@ def _observation_source_quality_followup_orders(
                     ),
                     "fixed_unknown_fields": sorted(KNOWN_FIXED_UNKNOWN_TOKEN_FIELDS),
                     "current_raw_contains_pre_fix_rows": producer_fix_implemented,
+                    "unknown_token_blocks_tuning": unknown_blocks_tuning,
                 },
             }
         )
@@ -5593,6 +5995,15 @@ def _buy_funnel_sentinel_followup_orders(
             "mapped_family": "entry_submit_drought_attribution",
             "threshold_family": "entry_submit_drought_attribution",
             "priority": 0,
+            "action_priority_class": "P0",
+            "resolution_mode": "producer_repair",
+            "economic_eligibility": "blocked_structural",
+            "first_blocker": "normal_submit_path_terminal_conservation_missing",
+            "closure_owner": "buy_funnel_sentinel",
+            "closure_test": (
+                "same attempt identity reaches submitted or one exact terminal block/reject"
+            ),
+            "eta": None,
             "runtime_effect": False,
             "allowed_runtime_apply": False,
             **implementation_marker,
@@ -5615,7 +6026,6 @@ def _buy_funnel_sentinel_followup_orders(
                 if isinstance(contract.get("required_downstream"), list)
                 else [
                     "code_improvement_workorder",
-                    "threshold_cycle_ev_report",
                     "runtime_approval_summary",
                     "postclose_verifier",
                 ]
@@ -5624,8 +6034,6 @@ def _buy_funnel_sentinel_followup_orders(
             "files_likely_touched": [
                 "src/engine/buy_funnel_sentinel.py",
                 "src/engine/build_code_improvement_workorder.py",
-                "src/engine/threshold_cycle_ev_report.py",
-                "src/engine/automation/conversion_lane.py",
                 "src/engine/verify_threshold_cycle_postclose_chain.py",
             ],
             "acceptance_tests": [
@@ -5634,8 +6042,12 @@ def _buy_funnel_sentinel_followup_orders(
                 "src/tests/test_runtime_approval_summary.py",
             ],
             "next_postclose_metric": (
-                "SUBMIT_DROUGHT_CRITICAL must produce a selected implement_now workorder and the next "
-                "postclose Sentinel/runtime summary must show submit blocker attribution."
+                implementation_marker.get("closure_test")
+                if implementation_marker.get("resolution_mode") == "natural_maturity"
+                else (
+                    "SUBMIT_DROUGHT_CRITICAL must produce a selected implement_now workorder and the next "
+                    "postclose Sentinel/runtime summary must show submit blocker attribution."
+                )
             ),
         }
     ]
@@ -6775,23 +7187,34 @@ def _is_swing_scoped_order(order: dict[str, Any]) -> bool:
 
 
 def build_code_improvement_workorder(
-    target_date: str, *, max_orders: int = 12, include_swing: bool = True
+    target_date: str,
+    *,
+    max_orders: int = 12,
+    include_swing: bool = True,
+    direct_family_only: bool = False,
 ) -> dict[str, Any]:
     token = _SOURCE_READS.set({})
     try:
         return _build_code_improvement_workorder(
-            target_date, max_orders=max_orders, include_swing=include_swing
+            target_date,
+            max_orders=max_orders,
+            include_swing=include_swing,
+            direct_family_only=direct_family_only,
         )
     finally:
         _SOURCE_READS.reset(token)
 
 
 def _build_code_improvement_workorder(
-    target_date: str, *, max_orders: int = 12, include_swing: bool = True
+    target_date: str,
+    *,
+    max_orders: int = 12,
+    include_swing: bool = True,
+    direct_family_only: bool = False,
 ) -> dict[str, Any]:
     target_date = str(target_date).strip()
     common_threshold_tuning_retired = (
-        target_date >= COMMON_THRESHOLD_TUNING_RETIRED_FROM
+        direct_family_only or target_date >= COMMON_THRESHOLD_TUNING_RETIRED_FROM
     )
     effective_max_orders = max(1, int(max_orders))
     isolated_source_mode = _workorder_isolated_source_mode()
@@ -7103,6 +7526,7 @@ def _build_code_improvement_workorder(
         source_fingerprint["source_hash"],
         max_orders=effective_max_orders,
         include_swing=include_swing,
+        direct_family_only=direct_family_only,
     )
     finding_by_order_id, finding_by_title_slug = {}, {}
     swing_finding_by_order_id, swing_finding_by_title_slug = _finding_maps(
@@ -7192,6 +7616,24 @@ def _build_code_improvement_workorder(
     intraday_ws_freshness_orders = _intraday_ws_freshness_followup_orders(
         intraday_ws_freshness
     )
+    scanner_economic_evidence = _scanner_lookup_attention_economic_evidence(
+        intraday_ws_freshness
+    )
+    if scanner_economic_evidence:
+        evidence_ref = {
+            "family": scanner_economic_evidence["family"],
+            "semantic_sha256": scanner_economic_evidence["semantic_sha256"],
+            "opportunity_comparison_status": scanner_economic_evidence["opportunity"][
+                "comparison_status"
+            ],
+            "actual_comparison_status": scanner_economic_evidence[
+                "actual_policy_comparison"
+            ]["comparison_status"],
+        }
+        intraday_ws_freshness_orders = [
+            {**order, "economic_evidence_ref": evidence_ref}
+            for order in intraday_ws_freshness_orders
+        ]
     market_census_orders = _market_census_followup_orders(market_census, target_date)
     entry_hurdle_backtest_orders = _entry_hurdle_backtest_followup_orders(
         entry_hurdle_backtest
@@ -7340,6 +7782,12 @@ def _build_code_improvement_workorder(
     ]
     if not include_swing:
         orders = [order for order in orders if not _is_swing_scoped_order(order)]
+    if common_threshold_tuning_retired:
+        orders = [
+            sanitized
+            for order in orders
+            if (sanitized := _direct_family_order(order)) is not None
+        ]
     if conversion_rank:
         orders = [
             _annotate_order_conversion_fields(order, conversion_rank)
@@ -7798,6 +8246,9 @@ def _build_code_improvement_workorder(
         "generation_hash": generation_fingerprint["generation_hash"],
         "generation_inputs": generation_fingerprint["inputs"],
         "source_hash": source_fingerprint["source_hash"],
+        "generation_phase": "manual_final_direct_family",
+        "semantic_source_hash": source_fingerprint["source_hash"],
+        "consumer_generation_required": ["postclose_recommendation_intake"],
         "purpose": "codex_code_improvement_workorder_from_postclose_automation",
         "strategy_scope": "scalp_and_swing" if include_swing else "scalp_only",
         "swing_sources_enabled": include_swing,
@@ -7872,6 +8323,9 @@ def _build_code_improvement_workorder(
                 "and re-intake new or changed orders. Existing policy consumers own guarded runtime apply."
             ),
         },
+        "family_economic_evidence": (
+            [scanner_economic_evidence] if scanner_economic_evidence else []
+        ),
         "summary": {
             "source_order_count": len(orders),
             "scalping_source_order_count": len(scalping_orders),
@@ -8140,6 +8594,25 @@ def _build_code_improvement_workorder(
             ),
             "daily_ev_available": bool(ev_report),
             "common_threshold_tuning_retired": common_threshold_tuning_retired,
+            "family_economic_evidence_count": (
+                1 if scanner_economic_evidence else 0
+            ),
+            "measured_no_edge_family_count": (
+                1
+                if scanner_economic_evidence
+                and scanner_economic_evidence["opportunity"]["comparison_status"]
+                == "measured_no_edge"
+                else 0
+            ),
+            "actual_policy_comparison_source_gap_count": (
+                1
+                if scanner_economic_evidence
+                and scanner_economic_evidence["actual_policy_comparison"][
+                    "comparison_status"
+                ]
+                == "source_gap"
+                else 0
+            ),
             "duplicate_order_warnings": collision_warnings,
         },
         "orders": serialized_orders,
@@ -8209,7 +8682,7 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
         "- Postclose 자동화가 생성한 `code_improvement_order`를 Codex 실행용 작업지시서로 변환한다.",
         "- 입력은 scalping pattern lab automation, swing lifecycle improvement automation, swing pattern lab automation을 함께 포함할 수 있다.",
         "- 이 문서는 repo/runtime을 직접 변경하지 않는다. 명시적 구현 또는 장후 모니터링 지시의 허용된 source-only 구현 범위에서 실행한다.",
-        "- 구현 후 자동화체인 재투입은 다음 postclose report, threshold calibration, daily EV report가 담당한다.",
+        "- 구현 후 재평가는 family-owned postclose evaluator와 direct consumer가 담당한다. 공통 Daily/EV selector는 퇴역 상태다.",
         "",
         "## Source",
         "",
@@ -8237,6 +8710,8 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
         f"- generation_id: `{report.get('generation_id')}`",
         f"- generation_hash: `{report.get('generation_hash')}`",
         f"- source_hash: `{report.get('source_hash')}`",
+        f"- generation_phase: `{report.get('generation_phase')}`",
+        f"- semantic_source_hash: `{report.get('semantic_source_hash')}`",
         f"- producer_contract_version: `{report.get('producer_contract_version')}`",
         "",
         "## 운영 원칙",
@@ -8245,13 +8720,33 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
         "- fallback 재개, shadow 재개, safety guard 우회는 구현하지 않는다.",
         "- runtime 영향이 생길 수 있는 변경은 feature flag, threshold family metadata, provenance, safety guard를 같이 닫는다.",
         "- 새 family의 구현/테스트는 실전 등록·승인을 대신하지 않는다. 기존 family별 자동 적용 계약 또는 별도 명시적 권한이 필요하다.",
-        "- 구현 후에는 관련 테스트와 parser 검증을 실행하고, 다음 postclose daily EV에서 metric을 확인한다.",
+        "- 구현 후에는 관련 테스트와 parser 검증을 실행하고, 해당 family의 다음 postclose metric을 확인한다.",
         "- 같은 날짜 workorder를 재생성하면 `generation_id`와 `lineage` diff로 신규/삭제/판정변경 order를 먼저 확인한다.",
+        "",
+        "## Family Economic Evidence",
+        "",
+    ]
+    for evidence in report.get("family_economic_evidence") or []:
+        opportunity = evidence.get("opportunity") or {}
+        actual = evidence.get("actual_policy_comparison") or {}
+        handoff = evidence.get("policy_handoff") or {}
+        lines.extend(
+            [
+                f"- family: `{evidence.get('family')}`",
+                f"  - opportunity: `{opportunity.get('comparison_status')}`; paired EV delta: `{opportunity.get('paired_delta_ev_pct')}`; daily net profit: `{opportunity.get('daily_net_profit_krw')}`",
+                f"  - actual policy comparison: `{actual.get('comparison_status')}`; resolution: `{actual.get('resolution_mode')}`; first blocker: `{actual.get('first_blocker')}`",
+                f"  - policy handoff: `{handoff.get('disposition')}`; effective date: `{handoff.get('effective_date')}`; policy SHA256: `{handoff.get('policy_artifact_sha256')}`",
+                f"  - semantic SHA256: `{evidence.get('semantic_sha256')}`",
+            ]
+        )
+    if not report.get("family_economic_evidence"):
+        lines.append("- no family-native economic evidence available")
+    lines += [
         "",
         "## 2-Pass 실행 기준",
         "",
         "- Pass 1: `implement_now` 중 instrumentation/report/provenance 구현만 먼저 수행한다.",
-        "- Regeneration: 관련 postclose report와 이 workorder를 재생성하고 `lineage` diff를 확인한다.",
+        "- Regeneration: 관련 family postclose report와 이 workorder를 재생성하고 `lineage` diff를 확인한다.",
         "- Pass 2: 전체 selected/non-selected native ID의 new/decision_changed/contract_changed를 재판정하고 허용된 source-only 항목을 추가 구현한다.",
         "- Final freeze: `generation_id`, `source_hash`, 신규/삭제/판정변경 order를 최종 보고에 남긴다.",
         f"- 권장 지시문: `{policy.get('recommended_operator_instruction')}`",
@@ -8572,11 +9067,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--date", dest="target_date", default=date.today().isoformat())
     parser.add_argument("--max-orders", type=int, default=12)
     parser.add_argument("--exclude-swing", action="store_true")
+    parser.add_argument(
+        "--direct-family-only",
+        action="store_true",
+        help="Ignore retired common Daily/EV sources even for a historical source date.",
+    )
     args = parser.parse_args(argv)
     report = build_code_improvement_workorder(
         args.target_date,
         max_orders=args.max_orders,
         include_swing=not args.exclude_swing,
+        direct_family_only=args.direct_family_only,
     )
     print(json.dumps(report, ensure_ascii=False))
     return 0

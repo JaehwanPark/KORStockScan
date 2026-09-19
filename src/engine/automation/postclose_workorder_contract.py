@@ -188,6 +188,10 @@ def contract_issues(report: dict[str, Any], target_date: str) -> list[str]:
             or type(inputs.get("max_orders")) is not int
             or inputs["max_orders"] < 1
             or type(inputs.get("include_swing")) is not bool
+            or (
+                "direct_family_only" in inputs
+                and type(inputs.get("direct_family_only")) is not bool
+            )
         ):
             issues.append("generation_inputs_invalid")
         expected_hash = digest(inputs)
@@ -205,4 +209,74 @@ def contract_issues(report: dict[str, Any], target_date: str) -> list[str]:
         ):
             if not exact_equal(report.get("inventory_contract"), inventory(report)):
                 issues.append("inventory_contract_mismatch")
+    if "generation_phase" in report or "family_economic_evidence" in report:
+        if report.get("generation_phase") != "manual_final_direct_family":
+            issues.append("generation_phase_invalid")
+        if report.get("semantic_source_hash") != report.get("source_hash"):
+            issues.append("semantic_source_hash_mismatch")
+        if report.get("consumer_generation_required") != [
+            "postclose_recommendation_intake"
+        ]:
+            issues.append("consumer_generation_contract_invalid")
+        evidence_rows = report.get("family_economic_evidence")
+        if not isinstance(evidence_rows, list):
+            issues.append("family_economic_evidence_invalid")
+        else:
+            for row in evidence_rows:
+                if not isinstance(row, dict):
+                    issues.append("family_economic_evidence_invalid")
+                    continue
+                opportunity = row.get("opportunity")
+                if not isinstance(opportunity, dict):
+                    issues.append("family_economic_evidence_invalid")
+                    continue
+                semantic_sha = row.get("semantic_sha256")
+                semantic_input = {
+                    key: value for key, value in row.items() if key != "semantic_sha256"
+                }
+                try:
+                    expected_sha = digest(semantic_input)
+                except (ValueError, TypeError, OverflowError):
+                    expected_sha = None
+                if (
+                    not isinstance(row.get("family"), str)
+                    or not row["family"]
+                    or semantic_sha != expected_sha
+                    or opportunity.get("runtime_effect") is not False
+                    or opportunity.get("allowed_runtime_apply") is not False
+                ):
+                    issues.append("family_economic_evidence_invalid")
+        for row in rows:
+            if (
+                row.get("action_priority_class")
+                not in {"P0", "P1", "P2", "P3", "P4"}
+                or row.get("resolution_mode")
+                not in {
+                    "producer_repair",
+                    "consumer_rebind",
+                    "natural_maturity",
+                    "historical_unrecoverable",
+                    "measured_no_edge",
+                    "retired_or_not_applicable",
+                }
+                or row.get("economic_eligibility")
+                not in {
+                    "eligible",
+                    "pending_maturity",
+                    "blocked_structural",
+                    "not_applicable",
+                }
+                or not isinstance(row.get("closure_owner"), str)
+                or not row["closure_owner"].strip()
+            ):
+                issues.append("order_resolution_contract_invalid")
+            if (
+                row.get("economic_eligibility") == "blocked_structural"
+                and (
+                    not isinstance(row.get("first_blocker"), str)
+                    or not row["first_blocker"].strip()
+                    or not row.get("closure_test")
+                )
+            ):
+                issues.append("order_resolution_contract_invalid")
     return sorted(set(issues))

@@ -38,6 +38,206 @@ def test_scanner_source_repair_emits_its_actual_downstream_contract():
     ]
     assert rows[0]["runtime_effect"] is False
     assert rows[0]["allowed_runtime_apply"] is False
+    assert rows[0]["resolution_mode"] == "producer_repair"
+    assert rows[0]["economic_eligibility"] == "blocked_structural"
+    assert rows[0]["action_priority_class"] == "P2"
+
+
+def test_ws_subscription_stale_observability_uses_existing_repair_receipts():
+    rows = mod._intraday_ws_freshness_followup_orders(
+        {
+            "workorder_directives": [
+                {
+                    "order_id": "order_ws_subscription_stale_repair_observability",
+                    "decision": "implement_now",
+                    "evidence": [
+                        "pipeline_subscription_stale_count=971",
+                        "snapshot_repair_recommended_count=0",
+                    ],
+                }
+            ]
+        }
+    )
+
+    assert rows[0]["implementation_status"] == (
+        "implemented_source_quality_contract_waiting_sample"
+    )
+    assert rows[0]["resolution_mode"] == "natural_maturity"
+    assert rows[0]["economic_eligibility"] == "pending_maturity"
+    classified = mod._classify_order(
+        rows[0],
+        finding_by_order_id={},
+        finding_by_title_slug={},
+        auto_family_order_ids=set(),
+        closed_instrumentation_order_families={},
+    )
+    assert classified.decision == "attach_existing_family"
+
+
+def test_scanner_economics_preserves_measured_no_edge_and_actual_source_gap():
+    evidence = mod._scanner_lookup_attention_economic_evidence(
+        {
+            "target_date": "2026-09-17",
+            "scanner_lookup_attention_publication": {
+                "source_evaluation_date": "2026-09-17",
+                "publication_date": "2026-09-19",
+                "effective_date": "2026-09-21",
+                "policy_artifact_sha256": "policy-sha",
+            },
+            "scanner_unique_funnel": {
+                "economic_cohorts": {
+                    "lookup_attention_selection": {
+                        "artifact_sha256": "economic-sha",
+                        "closure_test": "future_assigned_arm_completed",
+                        "eta": None,
+                        "selection_opportunity_economics": {
+                            "status": "hold_no_edge",
+                            "metric_role": "sim_probe_ev",
+                            "selection_opportunity_ev_pct": -2.38954987,
+                            "daily_incremental_opportunity_pct": {
+                                "2026-09-17": -0.93445645
+                            },
+                            "daily_net_profit_krw": None,
+                            "daily_net_profit_reason": (
+                                "entry_quantity_and_actual_fill_not_observed_for_unselected_arm"
+                            ),
+                            "resolved_pair_count": 3,
+                            "resolved_date_count": 3,
+                            "runtime_effect": False,
+                            "allowed_runtime_apply": False,
+                        },
+                        "primary_economics": {
+                            "status": "source_gap",
+                            "baseline_budget_ev_pct": None,
+                            "candidate_budget_ev_pct": None,
+                            "paired_delta_ev_pct": None,
+                            "source_gaps": [
+                                "complete_partition_or_actual_selection_missing",
+                                "original_unselected_entry_recipe_quantity_guard_missing",
+                            ],
+                        },
+                        "actual_completed": {
+                            "metric_role": "observational_completed_net",
+                            "causal_uplift": None,
+                            "book": {"candidate_control_ev_uplift_pct": 0.02},
+                        },
+                    }
+                }
+            },
+        }
+    )
+
+    assert evidence["opportunity"]["comparison_status"] == "measured_no_edge"
+    assert evidence["opportunity"]["paired_delta_ev_pct"] == -2.38954987
+    assert evidence["opportunity"]["daily_net_profit_krw"] is None
+    assert (
+        evidence["actual_policy_comparison"]["resolution_mode"]
+        == "historical_unrecoverable"
+    )
+    assert evidence["policy_handoff"]["disposition"] == "incumbent_preserved"
+    semantic = dict(evidence)
+    semantic.pop("semantic_sha256")
+    from src.engine.automation.postclose_workorder_contract import digest
+
+    assert evidence["semantic_sha256"] == digest(semantic)
+
+
+def test_structural_priority_precedes_non_actionable_no_edge():
+    p0 = mod.ClassifiedOrder(
+        order={
+            "order_id": "p0",
+            "priority": 9,
+            "action_priority_class": "P0",
+        },
+        decision="implement_now",
+        reason="fixture",
+        mapped_family=None,
+        route=None,
+        confidence=None,
+        automation_reentry="fixture",
+    )
+    p1 = mod.ClassifiedOrder(
+        order={
+            "order_id": "p1",
+            "priority": 0,
+            "action_priority_class": "P1",
+        },
+        decision="implement_now",
+        reason="fixture",
+        mapped_family=None,
+        route=None,
+        confidence=None,
+        automation_reentry="fixture",
+    )
+    assert [row.order["order_id"] for row in mod._sort_classified([p1, p0])] == [
+        "p0",
+        "p1",
+    ]
+
+
+def test_direct_family_mode_drops_retired_owner_and_stale_file_references():
+    assert (
+        mod._direct_family_order(
+            {
+                "source_report_type": "observation_source_quality_audit",
+                "target_subsystem": "daily_threshold_cycle_report",
+            }
+        )
+        is None
+    )
+    sanitized = mod._direct_family_order(
+        {
+            "source_report_type": "buy_funnel_sentinel",
+            "target_subsystem": "runtime_instrumentation",
+            "files_likely_touched": [
+                "src/engine/buy_funnel_sentinel.py",
+                "src/engine/threshold_cycle_ev_report.py",
+            ],
+            "acceptance_tests": [
+                "pytest src/tests/test_buy_funnel_sentinel.py",
+                "pytest src/tests/test_threshold_cycle_ev_report.py",
+            ],
+            "required_downstream": [
+                "runtime_approval_summary",
+                "threshold_cycle_ev_report",
+            ],
+            "implementation_provenance": {
+                "required_downstream": [
+                    "runtime_approval_summary",
+                    "threshold_cycle_ev_report",
+                ]
+            },
+        }
+    )
+    assert sanitized["files_likely_touched"] == [
+        "src/engine/buy_funnel_sentinel.py"
+    ]
+    assert sanitized["acceptance_tests"] == [
+        "pytest src/tests/test_buy_funnel_sentinel.py"
+    ]
+    assert sanitized["required_downstream"] == ["runtime_approval_summary"]
+    assert sanitized["implementation_provenance"]["required_downstream"] == [
+        "runtime_approval_summary"
+    ]
+
+
+def test_generation_identity_binds_direct_family_mode():
+    source_hash = "a" * 64
+    legacy = mod._generation_fingerprint(
+        source_hash,
+        max_orders=12,
+        include_swing=True,
+        direct_family_only=False,
+    )
+    direct = mod._generation_fingerprint(
+        source_hash,
+        max_orders=12,
+        include_swing=True,
+        direct_family_only=True,
+    )
+
+    assert legacy["generation_hash"] != direct["generation_hash"]
+    assert direct["inputs"]["direct_family_only"] is True
 
 
 def test_panic_report_only_provenance_is_explicit_at_native_row_boundary():
@@ -134,16 +334,19 @@ def test_generation_fingerprint_binds_producer_contract_and_selection_scope():
         source_hash,
         max_orders=12,
         include_swing=False,
+        direct_family_only=False,
     )
     different_limit = mod._generation_fingerprint(
         source_hash,
         max_orders=13,
         include_swing=False,
+        direct_family_only=False,
     )
     different_scope = mod._generation_fingerprint(
         source_hash,
         max_orders=12,
         include_swing=True,
+        direct_family_only=False,
     )
 
     assert len(base["generation_hash"]) == 64
@@ -2942,11 +3145,13 @@ def test_observation_source_quality_unknown_token_findings_create_implement_orde
         auto_family_order_ids=set(),
         closed_instrumentation_order_families={},
     )
-    assert classified.decision == "implement_now"
-    assert classified.route == "source_quality_warning_producer_fix"
+    assert classified.decision == "attach_existing_family"
+    assert classified.route == "existing_family"
     serialized = mod._serialize_classified_order(classified)
     assert serialized["forbidden_uses"]
-    assert codex_workorder_runner.is_safe_implement_now(serialized)
+    assert serialized["economic_eligibility"] == "not_applicable"
+    assert serialized["action_priority_class"] == "P4"
+    assert not codex_workorder_runner.is_safe_implement_now(serialized)
     _, unsupported = codex_workorder_runner._acceptance_commands([serialized])
     assert unsupported == []
 
@@ -2999,8 +3204,9 @@ def test_observation_source_quality_arbitrary_unknown_token_routes_to_workorder(
     ]
 
     assert len(unknown_orders) == 1
-    assert unknown_orders[0]["decision"] == "implement_now"
-    assert codex_workorder_runner.is_safe_implement_now(unknown_orders[0])
+    assert unknown_orders[0]["decision"] == "attach_existing_family"
+    assert unknown_orders[0]["economic_eligibility"] == "not_applicable"
+    assert not codex_workorder_runner.is_safe_implement_now(unknown_orders[0])
     assert any(
         "custom_context_state:1:0.01" in item for item in unknown_orders[0]["evidence"]
     )
@@ -4708,6 +4914,60 @@ def test_submit_drought_marker_keeps_exact_source_quality_gap_open():
     assert (
         marker["implementation_provenance"]["exact_attempt_source_quality_open"] is True
     )
+
+
+def test_submit_drought_marker_routes_legacy_superseded_rows_to_natural_receipt():
+    from datetime import datetime, timedelta
+
+    from src.engine.buy_funnel_sentinel import PipelineEvent
+    from src.tests.submit_drought_fixtures import make_report
+
+    started = datetime(2026, 9, 7, 10)
+    events = [
+        PipelineEvent(
+            started,
+            "ENTRY_PIPELINE",
+            "ai_confirmed",
+            "fixture",
+            "000001",
+            "1",
+            {"scanner_promotion_id": "SCANPROM-A"},
+        ),
+        PipelineEvent(
+            started + timedelta(seconds=1),
+            "ENTRY_PIPELINE",
+            "ai_confirmed",
+            "fixture",
+            "000001",
+            "1",
+            {"scanner_promotion_id": "SCANPROM-B"},
+        ),
+        PipelineEvent(
+            started + timedelta(seconds=2),
+            "ENTRY_PIPELINE",
+            "blocked_ai_score",
+            "fixture",
+            "000001",
+            "1",
+            {"scanner_promotion_id": "SCANPROM-B"},
+        ),
+    ]
+    report = make_report(events=events)
+
+    marker = mod._entry_submit_drought_implementation_marker(
+        report, report["entry_submit_drought_contract"]
+    )
+
+    assert marker["implementation_status"] == (
+        "implemented_source_quality_contract_waiting_sample"
+    )
+    assert marker["action_priority_class"] == "P3"
+    assert marker["resolution_mode"] == "natural_maturity"
+    assert marker["economic_eligibility"] == "pending_maturity"
+    assert marker["implementation_provenance"]["historical_superseded_only"] is True
+    assert marker["implementation_provenance"][
+        "root_cause_closure_status_hint"
+    ] == "implementation_done"
 
 
 

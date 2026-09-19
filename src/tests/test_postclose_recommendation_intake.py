@@ -450,15 +450,16 @@ def test_equal_plan_manifest_counts_are_not_equal_selection():
         "source_date": "2026-09-08",
         "selected_families": ["cancel_wait"],
     }
-    result = _selected_runtime(plan, {}, manifest)
-    assert result["planned_family_count"] == result["selected_family_count"] == 1
-    assert result["planned_only_families"] == ["recheck"]
-    assert result["manifest_only_families"] == ["cancel_wait"]
-    assert result["selection_evidence"] == "manifest_selection_receipt_consistent"
-    assert result["pid_consumption"] == "not_verified_by_apply_plan"
-    assert _selected_runtime(plan, {})["selected_family_count"] is None
+    result = _selected_runtime(plan, {}, manifest, target_date=DATE)
+    assert result["owner"] == "runtime_policy_bootstrap"
+    assert result["selected_families"] == ["cancel_wait"]
+    assert result["common_candidate_selection_retired"] is True
+    assert _selected_runtime(plan, {}, target_date=DATE)["selected_families"] == []
     manifest["target_date"] = "2026-09-08"
-    assert _selected_runtime(plan, {}, manifest)["selected_family_count"] is None
+    assert (
+        _selected_runtime(plan, {}, manifest, target_date=DATE)["target_date"]
+        == "2026-09-08"
+    )
 
 
 def test_empty_versus_missing_and_nonfinite_sources(tmp_path):
@@ -606,83 +607,44 @@ def test_existing_pid_receipt_is_reported_without_current_process_claim():
         "pid_env_available": True,
     }
     result = _selected_runtime({}, {}, manifest, target_date=DATE, pid_receipt=pid)
-    assert (
-        result["historical_pid_receipt"]["status"]
-        == "reported_pass_matching_date_and_families"
-    )
-    assert result["historical_pid_receipt"]["as_of"] is None
-    assert (
-        result["historical_pid_receipt"]["current_process_identity_revalidated"]
-        is False
-    )
-    assert result["pid_consumption"] == "not_verified_by_apply_plan"
+    assert result["verification_status"] == "not_generated"
+    assert result["pid"] == 12
+    assert result["pid_passed"] is True
+    assert result["common_candidate_selection_retired"] is True
     pid["target_date"] = "2026-09-08"
-    assert (
-        _selected_runtime({}, {}, manifest, target_date=DATE, pid_receipt=pid)[
-            "historical_pid_receipt"
-        ]["status"]
-        == "unmatched_or_failed"
-    )
+    assert _selected_runtime(
+        {}, {}, manifest, target_date=DATE, pid_receipt=pid
+    )["verification_status"] == "not_generated"
 
 
-def test_real_builders_close_new_date_handoff_and_preserve_manual_tasks(
-    tmp_path, monkeypatch
-):
-    from src.engine import build_next_stage2_checklist as checklist_builder
+def test_direct_tower_reads_summary_and_verifier(tmp_path, monkeypatch):
     from src.engine.automation import tuning_performance_control_tower as tower_builder
-    from src.tests.test_build_next_stage2_checklist import _patch_dirs as checklist_dirs
-    from src.tests.test_tuning_performance_control_tower import (
-        _patch_dirs as tower_dirs,
-    )
-
-    checklist_dirs(monkeypatch, tmp_path)
-    tower_dirs(monkeypatch, tmp_path)
-    reports, paths = sources(tmp_path, [order()], [order("nonselected", "observe")])
-    write(
-        reports / f"threshold_cycle_ev/threshold_cycle_ev_{DATE}.json", {"date": DATE}
-    )
-    target = tmp_path / "docs/checklists/2026-09-10-stage2-todo-checklist.md"
-    target.parent.mkdir(parents=True, exist_ok=True)
-    manual = "- [ ] `[ManualOwner] preserve` (`Due: 2026-09-10`, `Slot: PREOPEN`, `TimeWindow: 08:30~08:40`, `Track: RuntimeStability`)"
-    target.write_text("# Existing checklist\n\n" + manual + "\n")
-    tower_builder.build_tuning_performance_control_tower(DATE)
-    for _ in range(2):
-        checklist_builder.build_next_stage2_checklist(DATE)
-    text = target.read_text()
-    assert text.count(mod.SECTION_START) == text.count(mod.SECTION_END) == 1
-    assert text.count(manual) == 1
-    assert (
-        handoff.verify_summary_handoff(DATE, report_dir=reports, checklist_path=target)[
-            "status"
-        ]
-        == "pass"
+    reports = tmp_path / "data/report"
+    monkeypatch.setattr(tower_builder, "REPORT_ROOT_DIR", reports)
+    monkeypatch.setattr(
+        tower_builder, "REPORT_DIR", reports / "tuning_performance_control_tower"
     )
     write(
-        paths["machine_entry_timing_tuning"],
-        {"target_date": DATE, "recommendations": [recommendation("machine")]},
+        reports
+        / "runtime_approval_summary"
+        / f"runtime_approval_summary_{DATE}.json",
+        {"status": "pass"},
     )
-    assert (
-        handoff.verify_summary_handoff(DATE, report_dir=reports, checklist_path=target)[
-            "status"
-        ]
-        == "fail"
+    write(
+        reports
+        / "threshold_cycle_postclose_verification"
+        / f"threshold_cycle_postclose_verification_{DATE}.json",
+        {"status": "pass", "issues": []},
     )
-    tower_builder.build_tuning_performance_control_tower(DATE)
-    checklist_builder.build_next_stage2_checklist(DATE)
-    assert (
-        handoff.verify_summary_handoff(DATE, report_dir=reports, checklist_path=target)[
-            "status"
-        ]
-        == "pass"
-    )
+    result = tower_builder.build_tuning_performance_control_tower(DATE)
+    assert result["status"] == "pass"
+    assert result["summary"]["common_tuning_search_retired"] is True
 
 
 def test_current_producer_emits_complete_contract_and_render_failure_preserves_prior(
     tmp_path, monkeypatch
 ):
     from src.engine import build_code_improvement_workorder as producer
-    from src.engine import verify_threshold_cycle_postclose_chain as verifier
-
     monkeypatch.setattr(producer, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "inputs/ev")
     monkeypatch.setattr(
         producer, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", tmp_path / "output"
@@ -691,13 +653,8 @@ def test_current_producer_emits_complete_contract_and_render_failure_preserves_p
     write(producer.threshold_ev_report_path(DATE), {"date": DATE})
     result = producer.build_code_improvement_workorder(DATE, include_swing=False)
     assert contract.contract_issues(result, DATE) == []
-    assert (
-        verifier._code_improvement_workorder_contract_status(result, target_date=DATE)[
-            "status"
-        ]
-        == "pass"
-    )
-    assert verifier._workorder_source_fingerprint_issues(result) == []
+    assert result["generation_phase"] == "manual_final_direct_family"
+    assert result["semantic_source_hash"] == result["source_hash"]
     json_path, md_path = producer.code_improvement_workorder_paths(DATE)
     original = (json_path.read_bytes(), md_path.read_bytes())
 
