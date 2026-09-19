@@ -271,7 +271,8 @@ write_postclose_status() {
     "$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT" "$RUN_ENTRY_SPLIT_ORDER_PLAN" \
     "$RUN_SCALE_IN_SPLIT_ORDER_PLAN" "$RUN_SAMSUNG_MACHINE_ENTRY_TUNING" \
     "$RUN_LOW_PRICE_TWO_LEG_TUNING" "$RUN_LOW_PRICE_TWO_LEG_CANDIDATE_RECOMMENDATION" \
-    "$RUN_INTRADAY_WS_FRESHNESS_FINALIZE" "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" <<'PY'
+    "$RUN_INTRADAY_WS_FRESHNESS_FINALIZE" "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" \
+    "$RUN_RISING_MISSED_CLASSIFIER_PRIOR" <<'PY'
 import json
 import os
 import sys
@@ -294,7 +295,8 @@ path = Path(sys.argv[1])
     low_price_expansion,
     ws_freshness,
     ai_outcome,
-) = sys.argv[2:17]
+    rising_missed,
+) = sys.argv[2:18]
 payload = {}
 if path.exists():
     try:
@@ -318,6 +320,7 @@ payload.update(
             "low_price_two_leg_candidate_recommendation": low_price_expansion,
             "intraday_ws_freshness_finalize": ws_freshness,
             "ai_decision_action_outcome_calibration": ai_outcome,
+            "rising_missed_classifier_prior": rising_missed,
             "entry_ai_gate_backtest": os.environ.get("RUN_ENTRY_AI_GATE_BACKTEST"),
             "entry_ai_gate_backtest_schedule": os.environ.get(
                 "ENTRY_AI_GATE_BACKTEST_SCHEDULE"
@@ -1957,6 +1960,15 @@ if [ "$RUN_PATTERN_LAB_PROPAGATION_AUDIT" = "true" ] || [ "$RUN_PATTERN_LAB_PROP
       "pattern_lab_ai_review_source_provenance_refresh"
   fi
 fi
+if [ "$RUN_RISING_MISSED_CLASSIFIER_PRIOR" = "true" ] || [ "$RUN_RISING_MISSED_CLASSIFIER_PRIOR" = "1" ]; then
+  wait_for_postclose_resources "rising_missed_classifier_prior"
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.monitoring.rising_missed_classifier_prior \
+    --target-date "$TARGET_DATE"
+  wait_for_report_artifact \
+    "$PROJECT_DIR/data/report/rising_missed_classifier_prior/rising_missed_classifier_prior_${TARGET_DATE}.json" \
+    "$PROJECT_DIR/data/report/rising_missed_classifier_prior/rising_missed_classifier_prior_${TARGET_DATE}.md" \
+    "rising_missed_classifier_prior"
+fi
 wait_for_postclose_resources "runtime_approval_summary"
 RUNTIME_APPROVAL_SCOPE_ARGS=("${POSTCLOSE_SWING_SCOPE_ARGS[@]}")
 if [[ "$RUN_PRODUCER_GAP_DISCOVERY" != "true" && "$RUN_PRODUCER_GAP_DISCOVERY" != "1" ]]; then
@@ -1968,16 +1980,6 @@ wait_for_report_artifact \
   "$PROJECT_DIR/data/report/runtime_approval_summary/runtime_approval_summary_${TARGET_DATE}.json" \
   "$PROJECT_DIR/data/report/runtime_approval_summary/runtime_approval_summary_${TARGET_DATE}.md" \
   "runtime_approval_summary"
-if [ "$RUN_RISING_MISSED_CLASSIFIER_PRIOR" = "true" ] || [ "$RUN_RISING_MISSED_CLASSIFIER_PRIOR" = "1" ]; then
-  wait_for_postclose_resources "rising_missed_classifier_prior"
-  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.monitoring.rising_missed_classifier_prior \
-    --target-date "$TARGET_DATE"
-  wait_for_report_artifact \
-    "$PROJECT_DIR/data/report/rising_missed_classifier_prior/rising_missed_classifier_prior_${TARGET_DATE}.json" \
-    "$PROJECT_DIR/data/report/rising_missed_classifier_prior/rising_missed_classifier_prior_${TARGET_DATE}.md" \
-    "rising_missed_classifier_prior"
-
-fi
 VERIFY_DISABLED_STAGE_ARGS=()
 if [[ "$RUN_SWING_LIFECYCLE_AUDIT" != "true" && "$RUN_SWING_LIFECYCLE_AUDIT" != "1" ]]; then
   VERIFY_DISABLED_STAGE_ARGS+=(--disabled-stage swing_lifecycle)

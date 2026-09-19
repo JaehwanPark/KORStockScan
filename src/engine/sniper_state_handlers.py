@@ -70959,6 +70959,42 @@ def _rising_missed_tp1_selector_active_date() -> str:
     ).strip()
 
 
+def _rising_missed_tp1_positive_support_min() -> int:
+    return min(
+        3,
+        max(
+            1,
+            _env_int(
+                "KORSTOCKSCAN_RISING_MISSED_TP1_POSITIVE_SUPPORT_MIN",
+                2,
+            ),
+        ),
+    )
+
+
+def _rising_missed_tp1_spread_caution_ratio() -> float:
+    return min(
+        0.0025,
+        max(
+            0.0015,
+            _env_float(
+                "KORSTOCKSCAN_RISING_MISSED_TP1_SPREAD_CAUTION_RATIO",
+                0.002,
+            ),
+        ),
+    )
+
+
+def _rising_missed_tp1_chase_delta_pct() -> float:
+    return min(
+        3.5,
+        max(
+            2.5,
+            _env_float("KORSTOCKSCAN_RISING_MISSED_TP1_CHASE_DELTA_PCT", 3.0),
+        ),
+    )
+
+
 def _rising_missed_tp1_selector_current_date(runtime: dict | None) -> str:
     runtime = runtime if isinstance(runtime, dict) else {}
     now_ts = _safe_float(runtime.get("now_ts"), time.time())
@@ -72440,6 +72476,12 @@ def _evaluate_rising_missed_normal_buy_bridge(
                 "KORSTOCKSCAN_RISING_MISSED_NXT_PRICE_JUMP_RECOVERY_ENABLED",
                 False,
             ),
+            positive_support_min=_rising_missed_tp1_positive_support_min(),
+            spread_caution_ratio=_rising_missed_tp1_spread_caution_ratio(),
+            chase_delta_pct=_rising_missed_tp1_chase_delta_pct(),
+            policy_sha256=str(
+                os.getenv("KORSTOCKSCAN_RISING_MISSED_TP1_POLICY_SHA256", "")
+            ).strip(),
             nxt_price_jump_recovery_active_date=str(
                 os.getenv(
                     "KORSTOCKSCAN_RISING_MISSED_NXT_PRICE_JUMP_RECOVERY_ACTIVE_DATE",

@@ -44,8 +44,8 @@
 | 19 | `intraday_ws_freshness_monitor --finalize --monitor-only` | WS 품질 마감과 scanner family 입력. |
 | 20 | `ai_action_outcome_calibration --postclose-phase finalize` | compact/machine 직접 publisher handoff. |
 | 21 | Swing propagation/review | Swing가 활성일 때만 실행한다. |
-| 22 | `runtime_approval_summary` | 위 family 원천·정책·runtime receipt의 날짜·해시를 직접 요약한다. 공통 후보를 만들지 않는다. |
-| 23 | `rising_missed_classifier_prior` | source-only prior. BUY 권한 없음. |
+| 22 | `rising_missed_classifier_prior` | 최근 20개 feedback의 동일 attempt를 비용 후 paired 평가하고 다음 장전용 dated receipt를 발행한다. 검증된 edge가 없으면 임계값을 바꾸지 않는다. |
+| 23 | `runtime_approval_summary` | 위 family 원천·정책·runtime receipt의 날짜·해시를 직접 요약한다. 공통 후보를 만들지 않는다. |
 | 24 | `ai_action_outcome_calibration --postclose-phase handoff` | final consumer receipt. |
 | 25 | `verify_threshold_cycle_postclose_chain` | compact scoped 검증 뒤 직접 family source·hash·terminal 검증. |
 | 26 | `build_next_stage2_checklist` | 직접 증거 결손만 stable task로 생성한다. |
@@ -53,8 +53,8 @@
 
 ## 3. PREOPEN 및 장중 소비 순서
 
-1. low-price, machine microstructure, machine entry timing, scanner lookup-attention의 기존 family publisher를 실행한다.
-2. `automation.runtime_policy_bootstrap`이 마지막 검증된 incumbent, operator override/lock, explicit retirement OFF를 합성한다.
+1. low-price, machine microstructure, machine entry timing, scanner lookup-attention의 기존 family publisher를 실행하고, 존재하는 rising-missed TP1 dated receipt를 수집한다.
+2. `automation.runtime_policy_bootstrap`이 마지막 검증된 incumbent, allowlist를 통과한 rising-missed 단일축 정책, operator lock, explicit retirement OFF를 합성한다. Rising-missed `incumbent_preserved` receipt는 환경을 바꾸지 않는다.
 3. bootstrap은 EV를 계산하거나 후보를 만들지 않는다. manifest/env 날짜·원천 해시·self hash가 틀리면 기동을 차단한다.
 4. entry setup과 holding policy는 family별 dated artifact를 직접 검증한다.
 5. `src/run_bot.sh`는 exact-date bootstrap env를 source하고 handoff를 검증한 뒤 정상 기동 경로로 간다. 기존 실행 PID에 hot reload하지 않는다.

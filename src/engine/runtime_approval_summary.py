@@ -30,6 +30,7 @@ PRIMARY_DIRECT_OWNERS = (
     "low_price_expansion",
     "ws_freshness",
     "ai_outcome",
+    "rising_missed",
 )
 REQUIRED_DIRECT_OWNERS = frozenset(PRIMARY_DIRECT_OWNERS)
 
@@ -42,6 +43,7 @@ PRODUCER_FLAG_BY_OWNER = {
     "low_price_expansion": "low_price_two_leg_candidate_recommendation",
     "ws_freshness": "intraday_ws_freshness_finalize",
     "ai_outcome": "ai_decision_action_outcome_calibration",
+    "rising_missed": "rising_missed_classifier_prior",
 }
 
 POLICY_OWNER_BY_SOURCE = {
@@ -51,6 +53,7 @@ POLICY_OWNER_BY_SOURCE = {
     "machine_entry": "machine_entry_candidate",
     "low_price_two_leg": "low_price_candidate",
     "low_price_expansion": "low_price_expansion_policy",
+    "rising_missed": "rising_missed_policy",
 }
 
 DEFAULT_CLOSURE_OWNER = {
@@ -63,6 +66,7 @@ DEFAULT_CLOSURE_OWNER = {
     "low_price_expansion": "low_price_two_leg_expanded_candidate_research",
     "ws_freshness": "intraday_ws_freshness_monitor",
     "ai_outcome": "ai_decision_action_outcome_calibration",
+    "rising_missed": "rising_missed_classifier_prior",
 }
 
 
@@ -90,6 +94,8 @@ def _paths(target_date: str) -> dict[str, Path]:
         "low_price_expansion_policy": DATA_DIR / "runtime" / "low_price_two_leg_auto_expansion" / f"low_price_two_leg_auto_expansion_{target_date}.json",
         "ws_freshness": report / "intraday_ws_freshness_monitor" / f"intraday_ws_freshness_monitor_{target_date}.json",
         "ai_outcome": report / "ai_decision_action_outcome_calibration" / f"ai_decision_action_outcome_calibration_{target_date}.json",
+        "rising_missed": report / "rising_missed_classifier_prior" / f"rising_missed_classifier_prior_{target_date}.json",
+        "rising_missed_policy": report / "rising_missed_classifier_prior" / f"rising_missed_tp1_policy_source_{target_date}.json",
         "runtime_bootstrap": DATA_DIR / "runtime" / "policy_bootstrap" / f"runtime_policy_bootstrap_{target_date}.json",
         "runtime_bootstrap_verify": DATA_DIR / "runtime" / "policy_bootstrap" / f"runtime_policy_bootstrap_verify_{target_date}.json",
     }
@@ -159,6 +165,21 @@ def _sha(path: Path) -> str | None:
         return digest.hexdigest()
     except OSError:
         return None
+
+
+def _policy_semantic_sha(payload: dict[str, Any]) -> str:
+    canonical = {key: value for key, value in payload.items() if key != "policy_sha256"}
+    env = dict(canonical.get("runtime_env_overrides") or {})
+    env.pop("KORSTOCKSCAN_RISING_MISSED_TP1_POLICY_SHA256", None)
+    canonical["runtime_env_overrides"] = env
+    return hashlib.sha256(
+        json.dumps(
+            canonical,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
 
 
 def _date_matches(payload: dict[str, Any], target_date: str) -> bool:
@@ -538,6 +559,10 @@ def build_runtime_approval_summary(
             "allowed_runtime_apply": payload.get("allowed_runtime_apply"), "actual_order_submitted": payload.get("actual_order_submitted"),
             "error": error, "read_mode": read_mode, "required": required, "applicability": applicability,
             "producer_flag": PRODUCER_FLAG_BY_OWNER.get(owner), "semantic_companion": companion,
+            "artifact_semantic_sha256": payload.get("artifact_sha256"),
+            "policy_sha256": payload.get("policy_sha256"),
+            "source_report_sha256": payload.get("source_report_sha256"),
+            "consumer_schema": payload.get("consumer_schema"),
         }
         if owner in PRIMARY_DIRECT_OWNERS:
             projection = _economic_projection(owner, payload)
@@ -564,6 +589,16 @@ def build_runtime_approval_summary(
             policy.get("exists") and policy.get("target_date_matches")
             and policy.get("sha256") and not policy.get("error")
         )
+        if owner == "rising_missed" and policy_receipt_valid:
+            policy_payload = _load_json(Path(str(policy.get("path") or "")))
+            policy_receipt_valid = bool(
+                policy.get("source_report_sha256")
+                == row.get("artifact_semantic_sha256")
+                and policy.get("consumer_schema")
+                == "rising_missed_tp1_selector_bounded_env_v1"
+                and policy.get("policy_sha256")
+                == _policy_semantic_sha(policy_payload)
+            )
         row["policy_receipt"] = {
             "owner": policy_owner,
             "path": policy.get("path"),

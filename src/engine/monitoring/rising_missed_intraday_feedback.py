@@ -3205,6 +3205,9 @@ def _tp1_post_block_horizon_measurements(
             "first_hit_price_source": None,
             "max_move_pct": None,
             "min_move_pct": None,
+            "terminal_executable_ts": None,
+            "terminal_executable_move_pct": None,
+            "terminal_executable_price_source": None,
             "sampler_completion_mfe_pct": None,
             "sampler_completion_mae_pct": None,
             "sampler_completion_label": None,
@@ -3311,6 +3314,9 @@ def _tp1_post_block_horizon_measurements(
                 if measurement["min_move_pct"] is None
                 else min(float(measurement["min_move_pct"]), move_pct)
             )
+            measurement["terminal_executable_ts"] = _event_ts(subsequent)
+            measurement["terminal_executable_move_pct"] = move_pct
+            measurement["terminal_executable_price_source"] = price_source
             if measurement["first_hit_label"] is None:
                 if move_pct >= TP1_GROSS_TARGET_PCT:
                     measurement["first_hit_label"] = "gross_target_first"
@@ -3405,6 +3411,15 @@ def _tp1_post_block_horizon_measurements(
                     if measurement["min_move_pct"] is not None
                     else None
                 ),
+                "terminal_executable_ts": measurement["terminal_executable_ts"],
+                "terminal_executable_move_pct": (
+                    round(float(measurement["terminal_executable_move_pct"]), 4)
+                    if measurement["terminal_executable_move_pct"] is not None
+                    else None
+                ),
+                "terminal_executable_price_source": measurement[
+                    "terminal_executable_price_source"
+                ],
             }
         )
 

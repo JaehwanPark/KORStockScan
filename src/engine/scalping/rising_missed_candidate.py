@@ -855,10 +855,19 @@ def evaluate_rising_missed_tp1_candidate(
     nxt_price_jump_recovery_enabled: bool = False,
     nxt_price_jump_recovery_active_date: str = "",
     nxt_price_jump_recovery_configured: bool | None = None,
+    positive_support_min: int = TP1_SELECTOR_MIN_POSITIVE_SUPPORT_FAMILIES,
+    spread_caution_ratio: float = TP1_SELECTOR_SPREAD_CAUTION_RATIO,
+    chase_delta_pct: float = TP1_SELECTOR_CHASE_DELTA_PCT,
+    policy_sha256: str = "",
 ) -> RisingMissedTP1CandidateDecision:
     """Return candidate eligibility only; broker submit safety remains downstream."""
     stock = stock if isinstance(stock, dict) else {}
     decision_input = decision_input if isinstance(decision_input, dict) else {}
+    positive_support_min = min(3, max(1, _safe_int(positive_support_min, 2)))
+    spread_caution_ratio = min(
+        0.0025, max(0.0015, _safe_float(spread_caution_ratio, 0.002))
+    )
+    chase_delta_pct = min(3.5, max(2.5, _safe_float(chase_delta_pct, 3.0)))
     active = bool(selector_enabled and active_date and active_date == current_date)
     source_count = _source_family_count(stock)
     low_rebound_pct = _safe_float(
@@ -970,7 +979,7 @@ def evaluate_rising_missed_tp1_candidate(
         and source_count >= 2
         and input_ready
         and effective_quote_age_ms <= 1000.0
-        and spread_ratio <= TP1_SELECTOR_SPREAD_CAUTION_RATIO
+        and spread_ratio <= spread_caution_ratio
         and micro_confidence >= 0.80
         and true_ofi_ewma > 0.0
         and pressure_ewma >= 70.0
@@ -1009,7 +1018,7 @@ def evaluate_rising_missed_tp1_candidate(
         price_jump_recovery_block_reasons.append("input_not_ready")
     if effective_quote_age_ms > 1000.0:
         price_jump_recovery_block_reasons.append("effective_quote_stale")
-    if spread_ratio > TP1_SELECTOR_SPREAD_CAUTION_RATIO:
+    if spread_ratio > spread_caution_ratio:
         price_jump_recovery_block_reasons.append("spread_above_caution")
     if micro_confidence < 0.80:
         price_jump_recovery_block_reasons.append("micro_confidence_below_floor")
@@ -1021,6 +1030,9 @@ def evaluate_rising_missed_tp1_candidate(
         lane = "nxt_price_jump_recovery"
     support_reversal_lane = bool(
         lane == "none"
+        # The dated policy tunes the evidence floor inside an already eligible
+        # identity lane.  It must not create a new support-reversal lane that
+        # was absent from the paired blocked population.
         and len(positive_supports) >= TP1_SELECTOR_MIN_POSITIVE_SUPPORT_FAMILIES
     )
     if support_reversal_lane:
@@ -1033,7 +1045,7 @@ def evaluate_rising_missed_tp1_candidate(
     if signed_tape_state == "sell_dominated":
         hard_negative_reasons.append("fresh_sell_dominated_tape")
     counterfactual_risks = []
-    if spread_ratio > TP1_SELECTOR_SPREAD_CAUTION_RATIO:
+    if spread_ratio > spread_caution_ratio:
         counterfactual_risks.append("spread_above_candidate_caution")
     if not micro_trusted:
         counterfactual_risks.append("micro_confidence_below_prior")
@@ -1050,7 +1062,7 @@ def evaluate_rising_missed_tp1_candidate(
         and not bid_imbalance_surge
     ):
         counterfactual_risks.append("wait_without_bid_imbalance")
-    if watch_delta_available and watch_delta_pct > TP1_SELECTOR_CHASE_DELTA_PCT:
+    if watch_delta_available and watch_delta_pct > chase_delta_pct:
         counterfactual_risks.append("acceleration_above_chase_prior")
     counterfactual_action = (
         "INPUT_DEFER_EXPECTED"
@@ -1124,7 +1136,7 @@ def evaluate_rising_missed_tp1_candidate(
             else (
                 1
                 if nxt_price_jump_recovery_lane
-                else TP1_SELECTOR_MIN_POSITIVE_SUPPORT_FAMILIES
+                else positive_support_min
             )
         ),
         "rising_missed_tp1_positive_support_families": ",".join(positive_supports)
@@ -1133,15 +1145,16 @@ def evaluate_rising_missed_tp1_candidate(
         "rising_missed_tp1_support_order_flow": support_families["order_flow"],
         "rising_missed_tp1_support_depth": support_families["depth"],
         "rising_missed_tp1_support_momentum": support_families["momentum"],
-        "rising_missed_tp1_spread_caution_ratio": TP1_SELECTOR_SPREAD_CAUTION_RATIO,
+        "rising_missed_tp1_spread_caution_ratio": spread_caution_ratio,
         "rising_missed_tp1_spread_penalty_applied": bool(
-            spread_ratio > TP1_SELECTOR_SPREAD_CAUTION_RATIO
+            spread_ratio > spread_caution_ratio
         ),
         "rising_missed_tp1_spread_hard_blocked": False,
-        "rising_missed_tp1_chase_prior_pct": TP1_SELECTOR_CHASE_DELTA_PCT,
+        "rising_missed_tp1_chase_prior_pct": chase_delta_pct,
         "rising_missed_tp1_chase_recheck_required": bool(
-            watch_delta_available and watch_delta_pct > TP1_SELECTOR_CHASE_DELTA_PCT
+            watch_delta_available and watch_delta_pct > chase_delta_pct
         ),
+        "rising_missed_tp1_policy_sha256": policy_sha256 or "-",
         "rising_missed_tp1_hard_negative_reasons": (
             ",".join(hard_negative_reasons) if hard_negative_reasons else "-"
         ),
@@ -1178,7 +1191,7 @@ def evaluate_rising_missed_tp1_candidate(
         "sample_floor": (
             "nxt_low_rebound_price_jump_one_positive_order_flow_support"
             if nxt_price_jump_recovery_lane
-            else "identity_lane_or_two_independent_positive_support_families"
+            else f"identity_lane_or_{positive_support_min}_independent_positive_support_families"
         ),
         "primary_decision_metric": "gross_1_30_before_adverse_0_70_within_20m",
         "source_quality_gate": "freshness_envelope_and_trusted_ws_micro_required",
@@ -1297,7 +1310,7 @@ def evaluate_rising_missed_tp1_candidate(
         else (
             1
             if nxt_price_jump_recovery_lane
-            else (TP1_SELECTOR_MIN_POSITIVE_SUPPORT_FAMILIES)
+            else positive_support_min
         )
     )
     if len(positive_supports) < required_positive_supports:

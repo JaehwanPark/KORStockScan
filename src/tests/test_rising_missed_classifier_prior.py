@@ -1,462 +1,142 @@
 import json
+from pathlib import Path
 
 from src.engine.monitoring import rising_missed_classifier_prior as mod
 
 
-def _write(path, payload):
-    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+def _feedback(path: Path, day: str, outcomes: list[tuple[str, float | None]]) -> Path:
+    submit = []
+    labels = []
+    for index, (label, terminal) in enumerate(outcomes):
+        evaluation_id = f"{day}-{index}"
+        submit.append(
+            {
+                "evaluation_id": evaluation_id,
+                "positive_support_count": 1,
+                "positive_support_families": "depth",
+            }
+        )
+        horizon = {
+            "horizon_min": 20,
+            "outcome_label": label,
+            "source_quality_state": "pass",
+            "terminal_executable_move_pct": terminal,
+        }
+        labels.append(
+            {
+                "evaluation_id": evaluation_id,
+                "candidate_ts": f"{day}T10:00:00+09:00",
+                "stock_code": f"{index:06d}",
+                "entry_executable_bbo_state": "pass",
+                "selector_reason": "rising_missed_tp1_insufficient_positive_support",
+                "gross_first_hit_label": label,
+                "gross_target_pct": 1.3,
+                "adverse_stop_pct": -0.7,
+                "post_block_horizon_measurements": [horizon],
+                "effective_venue": "KRX",
+                "market_session_bucket": "krx_regular",
+            }
+        )
+    payload = {
+        "schema_version": 1,
+        "report_type": "rising_missed_intraday_feedback",
+        "target_date": day,
+        "decision_authority": "source_only_intraday_feedback_no_runtime_mutation",
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "rising_missed_tp1_counterfactual_submit_safety_rows": submit,
+        "rising_missed_tp1_counterfactual_first_hit_label_rows": labels,
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
     return path
 
 
-def test_blocker_outcome_prior_routes_positive_thin_sample_to_source_only_probe():
-    report = {
-        "summary": {
-            "rising_missed_nxt_post_block_rolling_blocker_outcome_attribution": [
-                {
-                    "source_block_stage": "rising_missed_tick_speed_entry_block",
-                    "source_block_reason": "tick_acceleration_ratio_lt_1",
-                    "completed_sample_count": 2,
-                    "gross_target_first_count": 1,
-                    "adverse_stop_first_count": 0,
-                    "no_hit_within_20m_count": 1,
-                    "gross_first_hit_payoff_proxy_pct": 0.65,
-                    "equal_weight_avg_mfe_after_block_pct": 1.31,
-                    "equal_weight_avg_mae_after_block_pct": -0.33,
-                    "source_dates": ["2026-07-29", "2026-08-03"],
-                    "clean_tuning_baseline_date": "2026-06-05",
-                    "sample_floor": "10_source_quality_pass_completed_samplers_per_blocker",
-                    "sample_floor_met": False,
-                    "decision_authority": "source_only_no_runtime_mutation",
-                    "runtime_effect": False,
-                    "allowed_runtime_apply": False,
-                    "window_policy": "clean_baseline_rolling_latest_20_report_artifacts",
-                    "source_quality_gate": "completed_sampler_source_quality_pass",
-                },
-                {
-                    "source_block_stage": "tp1_selector",
-                    "source_block_reason": "rising_missed_tp1_hard_negative_evidence",
-                    "completed_sample_count": 5,
-                    "gross_target_first_count": 0,
-                    "adverse_stop_first_count": 3,
-                    "no_hit_within_20m_count": 2,
-                    "gross_first_hit_payoff_proxy_pct": -0.42,
-                    "equal_weight_avg_mfe_after_block_pct": 0.23,
-                    "equal_weight_avg_mae_after_block_pct": -0.91,
-                    "source_dates": ["2026-07-29", "2026-07-31"],
-                    "clean_tuning_baseline_date": "2026-06-05",
-                    "decision_authority": "source_only_no_runtime_mutation",
-                    "runtime_effect": False,
-                    "allowed_runtime_apply": False,
-                    "source_quality_gate": "completed_sampler_source_quality_pass",
-                },
-            ]
-        }
-    }
-
-    rows = mod._build_blocker_outcome_priors(report)
-
-    assert rows[0]["source_block_reason"] == "tick_acceleration_ratio_lt_1"
-    assert rows[0]["exploration_assessment"] == "bounded_probe_exploration_candidate"
-    assert rows[0]["sample_floor_met"] is False
-    assert rows[0]["raw_adverse_first_is_standalone_veto"] is False
-    assert rows[0]["metric_role"] == "source_quality_gated_blocker_outcome_attribution"
-    assert (
-        rows[0]["net_ev_state"] == "unavailable_fee_tax_and_no_hit_exit_outcome_missing"
-    )
-    assert rows[0]["runtime_effect"] is False
-    assert rows[0]["allowed_runtime_apply"] is False
-    assert rows[0]["actual_order_submitted"] is False
-    assert rows[0]["broker_order_forbidden"] is True
-    assert rows[1]["exploration_assessment"] == "hold_loss_dominant"
+def _cost(_stamp):
+    return {"round_trip_cost_pct": 0.2, "policy_id": "test-cost"}
 
 
-def test_blocker_outcome_prior_rejects_runtime_authority_leak():
-    rows = mod._build_blocker_outcome_priors(
-        {
-            "summary": {
-                "rising_missed_nxt_post_block_rolling_blocker_outcome_attribution": [
-                    {
-                        "source_block_stage": "tp1_selector",
-                        "source_block_reason": "unsafe_row",
-                        "completed_sample_count": 12,
-                        "gross_target_first_count": 10,
-                        "adverse_stop_first_count": 0,
-                        "gross_first_hit_payoff_proxy_pct": 1.0,
-                        "equal_weight_avg_mfe_after_block_pct": 2.0,
-                        "equal_weight_avg_mae_after_block_pct": -0.1,
-                        "source_dates": ["2026-08-03"],
-                        "clean_tuning_baseline_date": "2026-06-05",
-                        "decision_authority": "live_runtime",
-                        "runtime_effect": True,
-                        "allowed_runtime_apply": True,
-                        "source_quality_gate": "completed_sampler_source_quality_pass",
-                    }
-                ]
-            }
-        }
+def test_direct_paired_evaluator_measures_negative_support_relaxation(monkeypatch, tmp_path):
+    monkeypatch.setattr(mod, "comparison_cost_contract", _cost)
+    paths = []
+    for day in ("2026-09-10", "2026-09-11", "2026-09-14", "2026-09-15", "2026-09-16"):
+        paths.append(_feedback(tmp_path / f"rising_missed_intraday_feedback_{day}.json", day, [("adverse_stop_first", None)] * 12))
+
+    report = mod.build_report("2026-09-16", source_paths=paths, generated_at="2026-09-16T21:00:00+09:00")
+
+    support = report["economic_evaluation"]["candidates"][0]
+    assert report["status"] == "measured_no_edge"
+    assert support["decision_change_count"] == 60
+    assert support["calibration_sample_floor_met"] is True
+    assert support["holdout_sample_floor_met"] is True
+    assert support["calibration"]["paired_delta_ev_pct"] == -0.9
+    assert support["holdout"]["paired_delta_daily_net_profit_krw"] < 0
+    assert support["disposition"] == "measured_no_edge"
+    assert all(row["disposition"] == "identical_policy" for row in report["economic_evaluation"]["candidates"][1:])
+    assert report["code_improvement_orders"] == []
+
+
+def test_no_hit_requires_terminal_executable_exit(monkeypatch, tmp_path):
+    monkeypatch.setattr(mod, "comparison_cost_contract", _cost)
+    path = _feedback(
+        tmp_path / "rising_missed_intraday_feedback_2026-09-16.json",
+        "2026-09-16",
+        [("no_hit_within_20m", 0.5), ("no_hit_within_20m", None)],
     )
 
-    assert rows[0]["exploration_assessment"] == "source_quality_blocked"
-    assert rows[0]["runtime_effect"] is False
-    assert rows[0]["allowed_runtime_apply"] is False
+    report = mod.build_report("2026-09-16", source_paths=[path], generated_at="fixed")
+
+    states = [row["outcome_state"] for row in report["paired_rows"]]
+    assert states == ["paired_cost_adjusted", "censored_no_hit_terminal_exit_missing"]
+    assert report["paired_rows"][0]["net_return_pct"] == 0.3
+    assert report["paired_rows"][1]["net_return_pct"] is None
 
 
-def test_blocker_outcome_prior_rejects_string_false_authority_flags():
-    rows = mod._build_blocker_outcome_priors(
-        {
-            "summary": {
-                "rising_missed_nxt_post_block_rolling_blocker_outcome_attribution": [
-                    {
-                        "source_block_stage": "tp1_selector",
-                        "source_block_reason": "string_flags",
-                        "completed_sample_count": 12,
-                        "gross_target_first_count": 10,
-                        "adverse_stop_first_count": 0,
-                        "gross_first_hit_payoff_proxy_pct": 1.0,
-                        "equal_weight_avg_mfe_after_block_pct": 2.0,
-                        "equal_weight_avg_mae_after_block_pct": -0.1,
-                        "source_dates": ["2026-08-03"],
-                        "clean_tuning_baseline_date": "2026-06-05",
-                        "decision_authority": "source_only_no_runtime_mutation",
-                        "runtime_effect": "false",
-                        "allowed_runtime_apply": "false",
-                        "source_quality_gate": "completed_sampler_source_quality_pass",
-                    }
-                ]
-            }
-        }
+def test_source_loader_fails_closed_on_malformed_input(tmp_path):
+    path = tmp_path / "rising_missed_intraday_feedback_2026-09-16.json"
+    path.write_text("{", encoding="utf-8")
+
+    report = mod.build_report("2026-09-16", source_paths=[path], generated_at="fixed")
+
+    assert report["status"] == "structurally_blocked"
+    assert report["source_quality"]["tuning_input_allowed"] is False
+    assert report["source_receipts"][0]["state"] == "malformed_json"
+
+
+def test_validated_edge_publishes_bounded_dated_policy(monkeypatch, tmp_path):
+    monkeypatch.setattr(mod, "comparison_cost_contract", _cost)
+    paths = []
+    for day in ("2026-09-10", "2026-09-11", "2026-09-14", "2026-09-15", "2026-09-16"):
+        paths.append(_feedback(tmp_path / f"rising_missed_intraday_feedback_{day}.json", day, [("gross_target_first", None)] * 12))
+    report = mod.build_report("2026-09-16", source_paths=paths, generated_at="2026-09-16T21:00:00+09:00")
+    monkeypatch.setattr(mod, "OUTPUT_DIR", tmp_path / "out")
+
+    result = mod.write_outputs(
+        report,
+        output_json=tmp_path / "report.json",
+        output_md=tmp_path / "report.md",
+        effective_date="2026-09-17",
     )
 
-    assert rows[0]["exploration_assessment"] == "source_quality_blocked"
+    policy = result["policy"]
+    assert report["status"] == "validated_edge"
+    assert policy["status"] == "validated_edge"
+    assert policy["runtime_env_overrides"]["KORSTOCKSCAN_RISING_MISSED_TP1_POSITIVE_SUPPORT_MIN"] == "1"
+    assert policy["runtime_env_overrides"]["KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE"] == "2026-09-17"
+    assert len(policy["policy_sha256"]) == 64
 
 
-def test_prior_report_merges_daily_rolling_mtd_and_blocks_child_conflict(tmp_path):
-    daily = _write(
-        tmp_path / "daily.json",
-        {
-            "summary": {
-                "sim_auto_positive_ev_top": [
-                    {
-                        "bucket_id": "entry_wait6579_ev_cohort",
-                        "joined_sample": 3,
-                        "source_quality_adjusted_ev_pct": 0.7,
-                    }
-                ]
-            }
-        },
-    )
-    rolling5d = _write(
-        tmp_path / "rolling5d.json",
-        {
-            "parent_bucket_summaries": [
-                {
-                    "bucket_id": "entry_wait6579_ev_cohort",
-                    "joined_sample": 10,
-                    "source_quality_adjusted_ev_pct": 1.1,
-                }
-            ]
-        },
-    )
-    rolling10d = _write(
-        tmp_path / "rolling10d.json",
-        {
-            "sim_auto_positive_ev_top": [
-                {
-                    "bucket_id": "entry_wait6579_ev_cohort",
-                    "joined_sample": 18,
-                    "source_quality_adjusted_ev_pct": 1.4,
-                },
-                {
-                    "bucket_id": "entry_wait6579_ev_cohort_liquidity_high",
-                    "joined_sample": 8,
-                    "source_quality_adjusted_ev_pct": 1.8,
-                    "child_conflict_warning": True,
-                },
-            ]
-        },
-    )
-    mtd = _write(
-        tmp_path / "mtd.json",
-        {
-            "bucket_summaries": [
-                {
-                    "bucket_id": "entry_wait6579_ev_cohort",
-                    "joined_sample": 21,
-                    "equal_weight_avg_profit_pct": 0.9,
-                }
-            ]
-        },
-    )
-    scout = _write(
-        tmp_path / "scout.json",
-        {
-            "profitable_forced_scout_examples": [
-                {
-                    "source_signature": "OPEN_TOP,PRICE_JUMP_START",
-                    "profit_rate": 1.2,
-                }
-            ],
-            "loss_or_flat_forced_scout_examples": [
-                {
-                    "source_signature": "OPEN_TOP,PRICE_JUMP_START_LOSS",
-                    "profit_rate": -0.4,
-                }
-            ],
-        },
-    )
-    feedback = _write(
-        tmp_path / "feedback.json",
-        {
-            "records": [
-                {
-                    "source_signature": "OPEN_TOP,PRICE_JUMP_START",
-                    "feedback_label": "rising_missed_initial_quality_fail",
-                    "avg_down_ge2_seen": True,
-                }
-            ]
-        },
-    )
+def test_no_edge_policy_receipt_preserves_incumbent_without_env_mutation(monkeypatch, tmp_path):
+    monkeypatch.setattr(mod, "comparison_cost_contract", _cost)
+    path = _feedback(tmp_path / "rising_missed_intraday_feedback_2026-09-16.json", "2026-09-16", [("adverse_stop_first", None)] * 2)
+    report = mod.build_report("2026-09-16", source_paths=[path], generated_at="2026-09-16T21:00:00+09:00")
+    monkeypatch.setattr(mod, "OUTPUT_DIR", tmp_path / "out")
 
-    report = mod.build_report(
-        "2026-07-02",
-        source_paths={
-            "lifecycle_bucket_discovery_daily": daily,
-            "lifecycle_bucket_discovery_rolling5d": rolling5d,
-            "lifecycle_bucket_discovery_rolling10d": rolling10d,
-            "lifecycle_bucket_discovery_mtd": mtd,
-            "lifecycle_decision_matrix": tmp_path / "missing_ldm.json",
-            "key_lineage_ledger": tmp_path / "missing_lineage.json",
-            "conversion_lane": tmp_path / "missing_conversion.json",
-            "rising_missed_scout_workorder": scout,
-            "rising_missed_intraday_feedback": feedback,
-            "missed_entry_counterfactual": tmp_path / "missing_counterfactual.json",
-        },
-        generated_at="fixed",
-    )
+    result = mod.write_outputs(report, output_json=tmp_path / "report.json", output_md=tmp_path / "report.md", effective_date="2026-09-17")
 
-    assert report["summary"]["lifecycle_source_count"] == 0
-    feedback_prior = next(
-        row
-        for row in report["priors"]
-        if row["observable_prefix"]["source_signature"] == "OPEN_TOP,PRICE_JUMP_START"
-    )
-    assert feedback_prior["recommendation"] == "quality_risk"
-    assert feedback_prior["rising_missed_metrics"]["winner_count"] == 0
-    assert feedback_prior["rising_missed_metrics"]["initial_quality_fail_count"] == 1
-    assert feedback_prior["rising_missed_metrics"]["avg_down_ge2_count"] == 1
-
-    assert (
-        report["summary"]["counterfactual_status"]
-        == "counterfactual_source_unavailable"
-    )
-    assert report["runtime_effect"] is False
-    assert report["allowed_runtime_apply"] is False
-    assert report["actual_order_submitted"] is False
-    assert report["broker_order_forbidden"] is True
-
-
-def test_thin_or_fallback_positive_prior_is_sim_recheck_not_confirmed_positive():
-    prior = mod._new_prior(mod._empty_prefix())
-    prior["lineage_status"] = {"lineage_blockers": {}}
-    prior["window_metrics"] = {
-        "rolling10d": {
-            "joined_sample": 1,
-            "ev_pct": 2.0,
-            "ev_metric": "source_quality_adjusted_ev_pct",
-        },
-        "rolling5d": {
-            "joined_sample": 15,
-            "ev_pct": 1.0,
-            "ev_metric": "equal_weight_avg_profit_pct_fallback",
-        },
-    }
-
-    mod._classify_prior(prior)
-
-    assert prior["selected_window"] == "rolling10d"
-    assert prior["recommendation"] == "recheck_prior"
-    assert prior["confidence"] == "low"
-    assert prior["selected_window_sample_floor_met"] is False
-    assert prior["selected_ev_metric_authoritative"] is True
-
-
-def test_mature_authoritative_shorter_window_beats_thin_long_window():
-    prior = mod._new_prior(mod._empty_prefix())
-    prior["lineage_status"] = {"lineage_blockers": {}}
-    prior["window_metrics"] = {
-        "rolling10d": {
-            "joined_sample": 1,
-            "ev_pct": 2.0,
-            "ev_metric": "source_quality_adjusted_ev_pct",
-        },
-        "rolling5d": {
-            "joined_sample": 10,
-            "ev_pct": 0.8,
-            "ev_metric": "source_quality_adjusted_ev_pct",
-        },
-    }
-
-    mod._classify_prior(prior)
-
-    assert prior["selected_window"] == "rolling5d"
-    assert prior["recommendation"] == "positive_prior"
-    assert prior["selected_window_sample_floor_met"] is True
-
-
-def test_explicit_zero_join_cannot_fall_back_to_unjoined_sample():
-    metric = mod._bucket_metric(
-        {
-            "sample": 20,
-            "joined_sample": 0,
-            "source_quality_adjusted_ev_pct": 1.2,
-        }
-    )
-    prior = mod._new_prior(mod._empty_prefix())
-    prior["lineage_status"] = {"lineage_blockers": {}}
-    prior["window_metrics"] = {"rolling10d": metric}
-
-    mod._classify_prior(prior)
-
-    assert metric["joined_sample"] == 0
-    assert prior["selected_window"] is None
-    assert prior["recommendation"] == "hold_sample"
-
-
-
-
-def test_write_outputs_renders_prior_report(tmp_path):
-    report = {
-        "target_date": "2026-07-02",
-        "generated_at": "fixed",
-        "summary": {
-            "counterfactual_status": "counterfactual_source_unavailable",
-            "prior_count": 1,
-            "recommendation_counts": {"positive_prior": 1},
-        },
-        "priors": [
-            {
-                "prior_key": "entry_source_parent=entry_source_wait6579",
-                "recommendation": "positive_prior",
-                "confidence": "high",
-                "selected_window": "rolling10d",
-                "reason": "rolling10d_positive_ev_prior",
-            }
-        ],
-        "code_improvement_orders": [
-            {
-                "order_id": "order_rising_missed_classifier_prior_bridge",
-                "runtime_effect": False,
-                "allowed_runtime_apply": False,
-            }
-        ],
-    }
-
-    output_json = tmp_path / "prior.json"
-    output_md = tmp_path / "prior.md"
-    mod.write_outputs(report, output_json=output_json, output_md=output_md)
-
-    assert (
-        json.loads(output_json.read_text(encoding="utf-8"))["summary"]["prior_count"]
-        == 1
-    )
-    markdown = output_md.read_text(encoding="utf-8")
-    assert "order_rising_missed_classifier_prior_bridge" in markdown
-    assert "runtime_effect: false" in markdown
-
-
-def test_prior_report_ingests_missed_entry_counterfactual_when_available(tmp_path):
-    counterfactual = _write(
-        tmp_path / "counterfactual.json",
-        {
-            "rows": [
-                {
-                    "source_signature": "OPEN_TOP,PRICE_JUMP_START",
-                    "outcome": "MISSED_WINNER",
-                },
-                {
-                    "source_signature": "OPEN_TOP,PRICE_JUMP_START",
-                    "outcome": "AVOIDED_LOSER",
-                },
-                {
-                    "source_signature": "OPEN_TOP,PRICE_JUMP_START",
-                    "outcome": "MISSED_WINNER",
-                },
-            ]
-        },
-    )
-
-    report = mod.build_report(
-        "2026-07-02",
-        source_paths={
-            "lifecycle_bucket_discovery_daily": tmp_path / "missing_daily.json",
-            "lifecycle_bucket_discovery_rolling5d": tmp_path / "missing_rolling5d.json",
-            "lifecycle_bucket_discovery_rolling10d": tmp_path
-            / "missing_rolling10d.json",
-            "lifecycle_bucket_discovery_mtd": tmp_path / "missing_mtd.json",
-            "lifecycle_decision_matrix": tmp_path / "missing_ldm.json",
-            "key_lineage_ledger": tmp_path / "missing_lineage.json",
-            "conversion_lane": tmp_path / "missing_conversion.json",
-            "rising_missed_scout_workorder": tmp_path / "missing_scout.json",
-            "rising_missed_intraday_feedback": tmp_path / "missing_feedback.json",
-            "missed_entry_counterfactual": counterfactual,
-        },
-        generated_at="fixed",
-    )
-
-    prior = next(
-        row
-        for row in report["priors"]
-        if row["observable_prefix"]["source_signature"] == "OPEN_TOP,PRICE_JUMP_START"
-    )
-    assert report["summary"]["counterfactual_status"] == "available"
-    assert report["summary"]["counterfactual_missed_winner_count"] == 2
-    assert report["summary"]["counterfactual_avoided_loser_count"] == 1
-    assert prior["rising_missed_metrics"]["counterfactual_missed_winner_count"] == 2
-    assert prior["rising_missed_metrics"]["counterfactual_avoided_loser_count"] == 1
-    assert prior["recommendation"] == "hold_sample"
-    assert (
-        prior["reason"] == "counterfactual_missed_winner_waiting_rolling_confirmation"
-    )
-
-
-def test_counterfactual_rows_do_not_double_count_top_examples(tmp_path):
-    counterfactual = _write(
-        tmp_path / "counterfactual.json",
-        {
-            "rows": [
-                {
-                    "candidate_id": "A",
-                    "source_signature": "OPEN_TOP,PRICE_JUMP_START",
-                    "outcome": "MISSED_WINNER",
-                }
-            ],
-            "top_missed_winners": [
-                {
-                    "candidate_id": "A",
-                    "source_signature": "OPEN_TOP,PRICE_JUMP_START",
-                    "outcome": "MISSED_WINNER",
-                }
-            ],
-        },
-    )
-
-    report = mod.build_report(
-        "2026-07-02",
-        source_paths={
-            "lifecycle_bucket_discovery_daily": tmp_path / "missing_daily.json",
-            "lifecycle_bucket_discovery_rolling5d": tmp_path / "missing_rolling5d.json",
-            "lifecycle_bucket_discovery_rolling10d": tmp_path
-            / "missing_rolling10d.json",
-            "lifecycle_bucket_discovery_mtd": tmp_path / "missing_mtd.json",
-            "lifecycle_decision_matrix": tmp_path / "missing_ldm.json",
-            "key_lineage_ledger": tmp_path / "missing_lineage.json",
-            "conversion_lane": tmp_path / "missing_conversion.json",
-            "rising_missed_scout_workorder": tmp_path / "missing_scout.json",
-            "rising_missed_intraday_feedback": tmp_path / "missing_feedback.json",
-            "missed_entry_counterfactual": counterfactual,
-        },
-        generated_at="fixed",
-    )
-
-    assert report["summary"]["counterfactual_row_count"] == 1
-    assert report["summary"]["counterfactual_missed_winner_count"] == 1
+    assert result["policy"]["status"] == "incumbent_preserved"
+    assert result["policy"]["runtime_env_overrides"] == {}
+    assert result["policy"]["runtime_effect"] is False
+    assert result["policy"]["economic_disposition"] == "insufficient_mature_sample"
+    assert result["policy"]["evaluated_axis"] == "positive_support_min"
+    assert result["policy"]["calibration"]["paired_sample_count"] == 0
+    assert Path(result["effective_policy"]).exists()

@@ -2441,6 +2441,25 @@ def test_rising_missed_tp1_support_reversal_lane_requires_two_independent_suppor
         current_date="2026-07-14",
         current_ai_action="WAIT",
     )
+    tuned_one_support = evaluate_rising_missed_tp1_candidate(
+        {
+            "source_signature": (
+                "LOW_REBOUND_RISING_MISSED,PRICE_JUMP_START,VOLUME_SURGE_POSITIVE"
+            ),
+            "low_rebound_pct": 1.2,
+        },
+        {
+            **common_input,
+            "rising_missed_tp1_depth_imbalance_ewma": -0.2,
+            "rising_missed_tp1_top_depth_ratio": 0.7,
+        },
+        selector_enabled=True,
+        active_date="2026-07-14",
+        current_date="2026-07-14",
+        current_ai_action="WAIT",
+        positive_support_min=1,
+        policy_sha256="a" * 64,
+    )
 
     assert two_supports.allowed is True
     assert two_supports.lane == "support_reversal"
@@ -2448,6 +2467,10 @@ def test_rising_missed_tp1_support_reversal_lane_requires_two_independent_suppor
     assert one_support.allowed is False
     assert one_support.lane == "none"
     assert one_support.reason == "rising_missed_tp1_lane_not_eligible"
+    assert tuned_one_support.allowed is True
+    assert tuned_one_support.lane == "low_rebound"
+    assert tuned_one_support.log_fields["rising_missed_tp1_positive_support_min"] == 1
+    assert tuned_one_support.log_fields["rising_missed_tp1_policy_sha256"] == "a" * 64
 
 
 def test_rising_missed_tp1_probe_intent_bypasses_only_nonhard_candidate_filters():

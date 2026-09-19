@@ -285,3 +285,42 @@ def test_pending_maturity_requires_verified_future_generation_contract(monkeypat
     )
     pending = mod.build_runtime_approval_summary(target)
     assert pending["sources"]["entry_cancel_wait"]["economic_evidence"]["comparison_status"] == "pending_maturity"
+
+
+def test_rising_missed_policy_receipt_is_semantically_bound(monkeypatch, tmp_path):
+    _patch(monkeypatch, tmp_path)
+    target = "2026-09-19"
+    _seed_required(target)
+    semantic_sha = "c" * 64
+    _write(
+        mod._paths(target)["rising_missed"],
+        {
+            "report_type": "rising_missed_classifier_prior",
+            "target_date": target,
+            "status": "measured_no_edge",
+            "artifact_sha256": semantic_sha,
+            "economic_evaluation": {
+                "comparison_status": "measured_no_edge",
+                "paired_sample_count": 50,
+                "candidate_count": 6,
+            },
+        },
+    )
+    policy = {
+        "report_type": "rising_missed_tp1_policy",
+        "source_date": target,
+        "effective_date": "2026-09-21",
+        "status": "incumbent_preserved",
+        "source_report_sha256": semantic_sha,
+        "consumer_schema": "rising_missed_tp1_selector_bounded_env_v1",
+        "runtime_env_overrides": {},
+    }
+    policy["policy_sha256"] = mod._policy_semantic_sha(policy)
+    _write(mod._paths(target)["rising_missed_policy"], policy)
+
+    report = mod.build_runtime_approval_summary(target)
+
+    source = report["sources"]["rising_missed"]
+    assert source["economic_evidence"]["comparison_status"] == "measured_no_edge"
+    assert source["policy_receipt"]["valid"] is True
+    assert source["economic_evidence"]["policy_handoff_state"] == "incumbent_preserved"

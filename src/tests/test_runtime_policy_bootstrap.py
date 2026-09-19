@@ -172,6 +172,102 @@ def test_bootstrap_rejects_report_only_receipt(monkeypatch, tmp_path):
     )
 
 
+def test_bootstrap_applies_bounded_rising_missed_policy_before_operator_locks(
+    monkeypatch, tmp_path
+):
+    legacy_dir = tmp_path / "threshold_cycle" / "runtime_env"
+    lock_dir = tmp_path / "threshold_cycle" / "operator_runtime_env_locks"
+    monkeypatch.setattr(bootstrap, "BOOTSTRAP_DIR", tmp_path / "bootstrap")
+    monkeypatch.setattr(bootstrap, "LEGACY_RUNTIME_DIR", legacy_dir)
+    monkeypatch.setattr(bootstrap, "OPERATOR_LOCK_DIR", lock_dir)
+    _write(
+        legacy_dir / "threshold_runtime_env_2026-09-18.json",
+        {"target_date": "2026-09-18", "env_overrides": {"BASE": "1"}},
+    )
+    _write(
+        legacy_dir / "threshold_runtime_env_verify_2026-09-18.json",
+        {"status": "pass"},
+    )
+    receipt = tmp_path / "rising.json"
+    policy = {
+            "report_type": "rising_missed_tp1_policy",
+            "runtime_family": "rising_missed_tp1_selector",
+            "effective_date": "2026-09-19",
+            "allowed_runtime_apply": True,
+            "runtime_effect": True,
+            "runtime_env_overrides": {
+                "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED": "true",
+                "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE": "2026-09-19",
+                "KORSTOCKSCAN_RISING_MISSED_TP1_POSITIVE_SUPPORT_MIN": "1",
+            },
+        }
+    policy["policy_sha256"] = bootstrap._direct_policy_digest(policy)
+    policy["runtime_env_overrides"][
+        "KORSTOCKSCAN_RISING_MISSED_TP1_POLICY_SHA256"
+    ] = policy["policy_sha256"]
+    _write(receipt, policy)
+
+    manifest = bootstrap.build_manifest("2026-09-19", receipt_paths=[receipt])
+
+    assert manifest["env_overrides"]["KORSTOCKSCAN_RISING_MISSED_TP1_POSITIVE_SUPPORT_MIN"] == "1"
+    assert manifest["env_key_owners"]["KORSTOCKSCAN_RISING_MISSED_TP1_POSITIVE_SUPPORT_MIN"] == "direct_policy:rising_missed_tp1_selector"
+    assert manifest["direct_family_receipts"][0]["family"] == "rising_missed_tp1_selector"
+
+
+def test_bootstrap_rejects_out_of_bounds_rising_missed_policy(monkeypatch, tmp_path):
+    legacy_dir = tmp_path / "threshold_cycle" / "runtime_env"
+    monkeypatch.setattr(bootstrap, "BOOTSTRAP_DIR", tmp_path / "bootstrap")
+    monkeypatch.setattr(bootstrap, "LEGACY_RUNTIME_DIR", legacy_dir)
+    monkeypatch.setattr(bootstrap, "OPERATOR_LOCK_DIR", tmp_path / "locks")
+    _write(legacy_dir / "threshold_runtime_env_2026-09-18.json", {"target_date": "2026-09-18", "env_overrides": {"BASE": "1"}})
+    _write(legacy_dir / "threshold_runtime_env_verify_2026-09-18.json", {"status": "pass"})
+    receipt = tmp_path / "rising.json"
+    _write(receipt, {
+        "report_type": "rising_missed_tp1_policy",
+        "runtime_family": "rising_missed_tp1_selector",
+        "effective_date": "2026-09-19",
+        "allowed_runtime_apply": True,
+        "runtime_env_overrides": {
+            "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED": "true",
+            "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE": "2026-09-19",
+            "KORSTOCKSCAN_RISING_MISSED_TP1_POSITIVE_SUPPORT_MIN": "0",
+            "KORSTOCKSCAN_RISING_MISSED_TP1_POLICY_SHA256": "b" * 64,
+        },
+    })
+
+    manifest = bootstrap.build_manifest("2026-09-19", receipt_paths=[receipt])
+
+    assert manifest["direct_family_receipts"] == []
+    assert manifest["direct_family_receipts_rejected"][0]["reason"] == "runtime_env_value_out_of_bounds"
+
+
+def test_bootstrap_accepts_hash_bound_incumbent_preserved_receipt(monkeypatch, tmp_path):
+    legacy_dir = tmp_path / "threshold_cycle" / "runtime_env"
+    monkeypatch.setattr(bootstrap, "BOOTSTRAP_DIR", tmp_path / "bootstrap")
+    monkeypatch.setattr(bootstrap, "LEGACY_RUNTIME_DIR", legacy_dir)
+    monkeypatch.setattr(bootstrap, "OPERATOR_LOCK_DIR", tmp_path / "locks")
+    _write(legacy_dir / "threshold_runtime_env_2026-09-18.json", {"target_date": "2026-09-18", "env_overrides": {"BASE": "1"}})
+    _write(legacy_dir / "threshold_runtime_env_verify_2026-09-18.json", {"status": "pass"})
+    receipt = tmp_path / "rising.json"
+    policy = {
+        "report_type": "rising_missed_tp1_policy",
+        "runtime_family": "rising_missed_tp1_selector",
+        "effective_date": "2026-09-19",
+        "status": "incumbent_preserved",
+        "allowed_runtime_apply": True,
+        "runtime_effect": False,
+        "runtime_env_overrides": {},
+    }
+    policy["policy_sha256"] = bootstrap._direct_policy_digest(policy)
+    _write(receipt, policy)
+
+    manifest = bootstrap.build_manifest("2026-09-19", receipt_paths=[receipt])
+
+    assert len(manifest["direct_family_receipts"]) == 1
+    assert manifest["direct_family_receipts"][0]["runtime_env_overrides"] == {}
+    assert manifest["env_overrides"]["BASE"] == "1"
+
+
 def test_direct_summary_and_verifier_do_not_require_retired_common_reports(monkeypatch, tmp_path):
     data_dir = tmp_path / "data"
     monkeypatch.setattr(summary_mod, "DATA_DIR", data_dir)

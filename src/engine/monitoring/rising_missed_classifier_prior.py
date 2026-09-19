@@ -1,1004 +1,651 @@
-"""Build source-only cumulative priors for rising-missed classification."""
+"""Evaluate rising-missed TP1 policy alternatives with direct paired economics.
+
+The historical module name remains the CLI compatibility surface.  The report no
+longer builds classifier priors from retired lifecycle artifacts.
+"""
 
 from __future__ import annotations
 
-from src.engine.lifecycle.retirement import retired_owner
-
-from src.engine.lifecycle.retirement import retired_artifact, current_report_view
-
 import argparse
-import gzip
+import hashlib
 import json
-from collections import Counter
-from datetime import datetime, timedelta, timezone
+import os
+import tempfile
+from collections import Counter, defaultdict
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
-REPORT_DIR = PROJECT_ROOT / "data" / "report"
-OUTPUT_DIR = REPORT_DIR / "rising_missed_classifier_prior"
-LIFECYCLE_BUCKET_DISCOVERY_DIR = REPORT_DIR / "lifecycle_bucket_discovery"
-LIFECYCLE_DECISION_MATRIX_DIR = REPORT_DIR / "lifecycle_decision_matrix"
-KEY_LINEAGE_LEDGER_DIR = REPORT_DIR / "key_lineage_ledger"
-CONVERSION_LANE_DIR = REPORT_DIR / "conversion_lane"
-RISING_MISSED_INTRADAY_FEEDBACK_DIR = REPORT_DIR / "rising_missed_intraday_feedback"
-MISSED_ENTRY_COUNTERFACTUAL_DIR = REPORT_DIR / "missed_entry_counterfactual"
+from src.engine.monitoring.widget_comparison_cost import comparison_cost_contract
+from src.utils.constants import DATA_DIR
+from src.utils.market_day import is_krx_trading_day
 
 KST = timezone(timedelta(hours=9))
-CLEAN_BASELINE_TS_KST = "2026-06-05T00:00:00+09:00"
-PREFIX_KEYS = (
-    "entry_score_parent",
-    "entry_source_parent",
-    "source_signature",
-    "liquidity_bucket",
-    "strength_bucket",
-    "overbought_bucket",
-    "chosen_action",
+REPORT_DIR = DATA_DIR / "report"
+OUTPUT_DIR = REPORT_DIR / "rising_missed_classifier_prior"
+FEEDBACK_DIR = REPORT_DIR / "rising_missed_intraday_feedback"
+CLEAN_BASELINE_DATE = date(2026, 6, 5)
+MAX_SOURCE_BYTES = 64 * 1024 * 1024
+MAX_SOURCE_DAYS = 20
+CALIBRATION_SAMPLE_FLOOR = 30
+CALIBRATION_DAY_FLOOR = 3
+HOLDOUT_SAMPLE_FLOOR = 20
+HOLDOUT_DAY_FLOOR = 2
+MODEL_NOTIONAL_KRW = 1_000_000.0
+BASELINE_POLICY = {
+    "positive_support_min": 2,
+    "spread_caution_ratio": 0.002,
+    "chase_delta_pct": 3.0,
+}
+CANDIDATES = (
+    ("positive_support_min", 1),
+    ("positive_support_min", 3),
+    ("spread_caution_ratio", 0.0015),
+    ("spread_caution_ratio", 0.0025),
+    ("chase_delta_pct", 2.5),
+    ("chase_delta_pct", 3.5),
 )
-WINDOW_PRIORITY = ("rolling10d", "rolling5d", "mtd", "daily")
-CONFIRMATION_WINDOWS = frozenset({"rolling10d", "rolling5d", "mtd"})
-CONFIRMED_PRIOR_MIN_JOINED_SAMPLE = 10
-CONFIRMED_PRIOR_EV_METRIC = "source_quality_adjusted_ev_pct"
+RUNTIME_ENV_KEYS = {
+    "positive_support_min": "KORSTOCKSCAN_RISING_MISSED_TP1_POSITIVE_SUPPORT_MIN",
+    "spread_caution_ratio": "KORSTOCKSCAN_RISING_MISSED_TP1_SPREAD_CAUTION_RATIO",
+    "chase_delta_pct": "KORSTOCKSCAN_RISING_MISSED_TP1_CHASE_DELTA_PCT",
+}
 FORBIDDEN_USES = [
     "real_order_submission",
-    "runtime_threshold_mutation",
-    "stale_submit_bypass",
     "broker_guard_bypass",
     "order_guard_relaxation",
     "quantity_guard_relaxation",
     "provider_route_change",
     "bot_restart",
-    "cap_release",
     "hard_safety_relaxation",
-    "forced_one_share_success_counting",
 ]
 
 
-def _now_kst_iso() -> str:
-    return datetime.now(tz=KST).isoformat(timespec="seconds")
+def _now() -> str:
+    return datetime.now(KST).isoformat(timespec="seconds")
 
 
-def _safe_int(value: Any, default: int = 0) -> int:
+def _sha_bytes(raw: bytes) -> str:
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _sha_json(value: Any) -> str:
+    return _sha_bytes(
+        json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode()
+    )
+
+
+def _float(value: Any) -> float | None:
     try:
-        if value is None or value == "":
-            return int(default)
+        if value in (None, "", "-"):
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _int(value: Any) -> int:
+    try:
         return int(float(value))
-    except Exception:
-        return int(default)
+    except (TypeError, ValueError):
+        return 0
 
 
-def _safe_float(value: Any, default: float | None = None) -> float | None:
+def _atomic_write(path: Path, body: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", delete=False
+    ) as handle:
+        temporary = Path(handle.name)
+        handle.write(body)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary, path)
+
+
+def _next_trading_date(source_date: str) -> str:
+    current = date.fromisoformat(source_date)
+    for _ in range(14):
+        current += timedelta(days=1)
+        if is_krx_trading_day(current):
+            return current.isoformat()
+    raise ValueError(f"next_krx_trading_date_unavailable:{source_date}")
+
+
+def _source_paths(target_date: str, explicit: Iterable[Path] = ()) -> list[Path]:
+    explicit_paths = [Path(path) for path in explicit]
+    if explicit_paths:
+        return explicit_paths
+    maximum = date.fromisoformat(target_date)
+    rows: list[tuple[date, Path]] = []
+    for path in FEEDBACK_DIR.glob("rising_missed_intraday_feedback_*.json"):
+        suffix = path.stem.rsplit("_", 1)[-1]
+        try:
+            report_date = date.fromisoformat(suffix)
+        except ValueError:
+            continue
+        if CLEAN_BASELINE_DATE <= report_date <= maximum:
+            rows.append((report_date, path))
+    return [path for _, path in sorted(rows)[-MAX_SOURCE_DAYS:]]
+
+
+def _read_source(path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+    receipt: dict[str, Any] = {
+        "path": str(path.resolve()),
+        "exists": False,
+        "state": "missing",
+        "size_bytes": None,
+        "mtime_ns": None,
+        "sha256": None,
+        "schema": None,
+        "target_date": None,
+        "authority": None,
+    }
     try:
-        if value is None or value == "":
-            return default
-        result = float(value)
-    except Exception:
-        return default
-    return result
-
-
-def _load_json(path: Path) -> dict[str, Any]:
-    if retired_artifact(path):
-        return {}
+        stat_before = path.stat()
+        receipt.update(
+            exists=True, size_bytes=stat_before.st_size, mtime_ns=stat_before.st_mtime_ns
+        )
+        if stat_before.st_size > MAX_SOURCE_BYTES:
+            receipt["state"] = "blocked_oversized"
+            return {}, receipt
+        raw = path.read_bytes()
+        stat_after = path.stat()
+    except OSError as exc:
+        receipt["state"] = f"unreadable:{type(exc).__name__}"
+        return {}, receipt
+    receipt["sha256"] = _sha_bytes(raw)
+    if (stat_before.st_size, stat_before.st_mtime_ns) != (
+        stat_after.st_size,
+        stat_after.st_mtime_ns,
+    ):
+        receipt["state"] = "blocked_source_changed_during_read"
+        return {}, receipt
     try:
-        if path.suffix == ".gz":
-            with gzip.open(path, "rt", encoding="utf-8") as handle:
-                payload = json.load(handle)
-        else:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-    return current_report_view(payload) if isinstance(payload, dict) else {}
-
-
-def _as_list(value: Any) -> list[Any]:
-    return value if isinstance(value, list) else []
-
-
-def _as_dict(value: Any) -> dict[str, Any]:
-    return value if isinstance(value, dict) else {}
-
-
-def _norm(value: Any) -> str:
-    text = str(value or "").strip()
-    return text if text else "-"
-
-
-def _default_source_paths(target_date: str) -> dict[str, Path]:
-    counterfactual_path = (
-        MISSED_ENTRY_COUNTERFACTUAL_DIR
-        / f"missed_entry_counterfactual_{target_date}.json"
+        payload = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        receipt["state"] = "malformed_json"
+        return {}, receipt
+    if not isinstance(payload, dict):
+        receipt["state"] = "malformed_object_required"
+        return {}, receipt
+    receipt.update(
+        schema=payload.get("schema_version"),
+        target_date=payload.get("target_date"),
+        authority=payload.get("decision_authority"),
     )
-    if not counterfactual_path.exists():
-        gzip_path = (
-            REPORT_DIR
-            / "monitor_snapshots"
-            / f"missed_entry_counterfactual_{target_date}.json.gz"
-        )
-        if gzip_path.exists():
-            counterfactual_path = gzip_path
-    return {
-        "lifecycle_bucket_discovery_daily": LIFECYCLE_BUCKET_DISCOVERY_DIR
-        / f"lifecycle_bucket_discovery_{target_date}.json",
-        "lifecycle_bucket_discovery_rolling5d": LIFECYCLE_BUCKET_DISCOVERY_DIR
-        / f"lifecycle_bucket_discovery_{target_date}_rolling5d.json",
-        "lifecycle_bucket_discovery_rolling10d": LIFECYCLE_BUCKET_DISCOVERY_DIR
-        / f"lifecycle_bucket_discovery_{target_date}_rolling10d.json",
-        "lifecycle_bucket_discovery_mtd": LIFECYCLE_BUCKET_DISCOVERY_DIR
-        / f"lifecycle_bucket_discovery_{target_date}_mtd.json",
-        "lifecycle_decision_matrix": LIFECYCLE_DECISION_MATRIX_DIR
-        / f"lifecycle_decision_matrix_{target_date}.json",
-        "key_lineage_ledger": KEY_LINEAGE_LEDGER_DIR
-        / f"key_lineage_ledger_{target_date}.json",
-        "conversion_lane": CONVERSION_LANE_DIR / f"conversion_lane_{target_date}.json",
-        "rising_missed_intraday_feedback": RISING_MISSED_INTRADAY_FEEDBACK_DIR
-        / f"rising_missed_intraday_feedback_{target_date}.json",
-        "missed_entry_counterfactual": counterfactual_path,
-    }
-
-
-def _default_output_paths(target_date: str) -> tuple[Path, Path]:
-    return (
-        OUTPUT_DIR / f"rising_missed_classifier_prior_{target_date}.json",
-        OUTPUT_DIR / f"rising_missed_classifier_prior_{target_date}.md",
-    )
-
-
-def _source_ref(path: Path) -> dict[str, Any]:
-    return {
-        "path": str(path),
-        "exists": path.exists(),
-        "runtime_effect": False,
-        "allowed_runtime_apply": False,
-    }
-
-
-def _prefix_key(prefix: dict[str, Any]) -> str:
-    return "|".join(f"{key}={_norm(prefix.get(key))}" for key in PREFIX_KEYS)
-
-
-def _empty_prefix() -> dict[str, str]:
-    return {key: "-" for key in PREFIX_KEYS}
-
-
-def _candidate_prefix(item: dict[str, Any]) -> dict[str, str]:
-    prefix = _empty_prefix()
-    for field in (
-        "observable_prefix",
-        "dimension_filters",
-        "lifecycle_flow_parent_dimensions",
-        "normalized_dimensions",
-        "source_dimensions",
-    ):
-        source = item.get(field)
-        if not isinstance(source, dict):
-            continue
-        for key in PREFIX_KEYS:
-            if prefix[key] == "-" and source.get(key) not in (None, ""):
-                prefix[key] = _norm(source.get(key))
-
-    bucket_id = str(item.get("bucket_id") or item.get("parent_bucket_id") or "").lower()
-    source_stage = str(
-        item.get("source_stage") or item.get("bucket_type") or ""
-    ).lower()
-    action = str(
-        item.get("chosen_action") or item.get("action") or item.get("decision") or ""
-    ).lower()
-    if "wait6579" in bucket_id or "wait6579" in source_stage:
-        prefix["entry_source_parent"] = "entry_source_wait6579"
-    if "liquidity_high" in bucket_id:
-        prefix["liquidity_bucket"] = "liquidity_high"
-    if "strong_strength_momentum" in bucket_id:
-        prefix["strength_bucket"] = "strong_strength_momentum"
-    if "overbought_normal" in bucket_id:
-        prefix["overbought_bucket"] = "overbought_normal"
-    if "wait_requote" in bucket_id or "wait_requote" in action:
-        prefix["chosen_action"] = "wait_requote"
-    if item.get("source_signature") not in (None, ""):
-        prefix["source_signature"] = _norm(item.get("source_signature"))
-    if item.get("entry_score_parent") not in (None, ""):
-        prefix["entry_score_parent"] = _norm(item.get("entry_score_parent"))
-    return prefix
-
-
-def _first_float(item: dict[str, Any], keys: tuple[str, ...]) -> float | None:
-    for key in keys:
-        result = _safe_float(item.get(key), None)
-        if result is not None:
-            return result
-    return None
-
-
-def _bucket_metric(item: dict[str, Any]) -> dict[str, Any]:
-    ev_pct = _first_float(
-        item,
-        (
-            "source_quality_adjusted_ev_pct",
-            "parent_source_quality_adjusted_ev_pct",
-            "equal_weight_avg_profit_pct",
-            "parent_equal_weight_avg_profit_pct",
-            "parent_ev_pct",
-            "ev_pct",
-        ),
-    )
-    sample = _safe_int(
-        item.get("sample")
-        or item.get("sample_count")
-        or item.get("parent_sample")
-        or item.get("joined_sample")
-        or item.get("parent_joined_sample")
-    )
-    joined_raw = None
-    for key in ("joined_sample", "parent_joined_sample"):
-        if key in item and item.get(key) not in (None, ""):
-            joined_raw = item.get(key)
-            break
-    joined_sample = _safe_int(joined_raw) if joined_raw is not None else sample
-    return {
-        "sample": sample,
-        "joined_sample": joined_sample,
-        "ev_pct": ev_pct,
-        "ev_metric": (
-            "source_quality_adjusted_ev_pct"
-            if _safe_float(item.get("source_quality_adjusted_ev_pct"), None) is not None
-            else "equal_weight_avg_profit_pct_fallback"
-        ),
-        "complete_flow_count": _safe_int(
-            item.get("complete_flow_count") or item.get("parent_complete_flow_count")
-        ),
-        "bucket_id": _norm(item.get("bucket_id") or item.get("parent_bucket_id")),
-        "source_quality_gate": _norm(
-            item.get("source_quality_gate") or item.get("source_quality_status")
-        ),
-        "child_conflict_warning": bool(
-            item.get("child_conflict_warning") or item.get("child_conflict")
-        ),
-        "exclusion_dimension_candidate": bool(
-            item.get("exclusion_dimension_candidate")
-        ),
-        "source_dimension_gap": bool(item.get("source_dimension_gap")),
-    }
-
-
-def _iter_bucket_candidates(report: dict[str, Any]) -> list[dict[str, Any]]:
-    summary = _as_dict(report.get("summary"))
-    candidates: list[dict[str, Any]] = []
-    for field in (
-        "sim_auto_positive_ev_top",
-        "sim_auto_approved_candidates",
-        "parent_bucket_summaries",
-        "bucket_summaries",
-        "source_only_blockers",
-    ):
-        candidates.extend(
-            item for item in _as_list(report.get(field)) if isinstance(item, dict)
-        )
-        candidates.extend(
-            item for item in _as_list(summary.get(field)) if isinstance(item, dict)
-        )
-    return candidates
-
-
-def _new_prior(prefix: dict[str, str]) -> dict[str, Any]:
-    return {
-        "prior_key": _prefix_key(prefix),
-        "observable_prefix": dict(prefix),
-        "window_metrics": {},
-        "rising_missed_metrics": {
-            "forced_scout_count": 0,
-            "winner_count": 0,
-            "loser_count": 0,
-            "avg_profit_rate": None,
-            "initial_quality_fail_count": 0,
-            "avg_down_ge2_count": 0,
-            "counterfactual_missed_winner_count": 0,
-            "counterfactual_avoided_loser_count": 0,
-            "counterfactual_neutral_count": 0,
-        },
-        "lineage_status": {},
-        "conflict_status": {
-            "child_conflict": False,
-            "exclusion_dimension_candidate": False,
-            "source_dimension_gap": False,
-            "source_quality_blocked": False,
-        },
-        "recommendation": "hold_sample",
-        "confidence": "low",
-        "selected_window": None,
-        "reason": "waiting_for_rolling_prior",
-        "runtime_effect": False,
-        "allowed_runtime_apply": False,
-    }
-
-
-def _merge_window_metric(
-    prior: dict[str, Any], window: str, metric: dict[str, Any]
-) -> None:
-    current = prior["window_metrics"].get(window)
-    if current:
-        current_ev = _safe_float(current.get("ev_pct"), None)
-        next_ev = _safe_float(metric.get("ev_pct"), None)
-        current_rank = (
-            _safe_int(current.get("joined_sample")),
-            current_ev if current_ev is not None else -9999.0,
-        )
-        next_rank = (
-            _safe_int(metric.get("joined_sample")),
-            next_ev if next_ev is not None else -9999.0,
-        )
-        if current_rank >= next_rank:
-            return
-    prior["window_metrics"][window] = metric
-    conflicts = prior["conflict_status"]
-    conflicts["child_conflict"] = conflicts["child_conflict"] or bool(
-        metric.get("child_conflict_warning")
-    )
-    conflicts["exclusion_dimension_candidate"] = conflicts[
-        "exclusion_dimension_candidate"
-    ] or bool(metric.get("exclusion_dimension_candidate"))
-    conflicts["source_dimension_gap"] = conflicts["source_dimension_gap"] or bool(
-        metric.get("source_dimension_gap")
-    )
-    gate = str(metric.get("source_quality_gate") or "").lower()
-    conflicts["source_quality_blocked"] = (
-        conflicts["source_quality_blocked"] or "block" in gate or "fail" in gate
-    )
-
-
-def _merge_lifecycle_windows(
-    priors: dict[str, dict[str, Any]], source_payloads: dict[str, dict[str, Any]]
-) -> None:
-    label_to_window = {
-        "lifecycle_bucket_discovery_daily": "daily",
-        "lifecycle_bucket_discovery_rolling5d": "rolling5d",
-        "lifecycle_bucket_discovery_rolling10d": "rolling10d",
-        "lifecycle_bucket_discovery_mtd": "mtd",
-    }
-    for label, window in label_to_window.items():
-        for item in _iter_bucket_candidates(source_payloads.get(label, {})):
-            prefix = _candidate_prefix(item)
-            key = _prefix_key(prefix)
-            prior = priors.setdefault(key, _new_prior(prefix))
-            _merge_window_metric(prior, window, _bucket_metric(item))
-
-
-def _source_signature_prefix(signature: Any) -> dict[str, str]:
-    prefix = _empty_prefix()
-    prefix["source_signature"] = _norm(signature)
-    return prefix
-
-
-def _add_profit(metrics: dict[str, Any], profit: float | None) -> None:
-    if profit is None:
-        return
-    profits = metrics.setdefault("_profits", [])
-    if isinstance(profits, list):
-        profits.append(profit)
-        metrics["avg_profit_rate"] = round(sum(profits) / len(profits), 4)
-
-
-
-
-def _merge_intraday_feedback(
-    priors: dict[str, dict[str, Any]], report: dict[str, Any]
-) -> None:
-    records = _as_list(report.get("records"))
-    for item in records:
-        if not isinstance(item, dict):
-            continue
-        signature = (
-            item.get("source_signature")
-            or item.get("scanner_promotion_reason")
-            or "unknown_source_signature"
-        )
-        prefix = _source_signature_prefix(signature)
-        prior = priors.setdefault(_prefix_key(prefix), _new_prior(prefix))
-        metrics = prior["rising_missed_metrics"]
-        label = str(item.get("feedback_label") or "").lower()
-        if "initial_quality_fail" in label or bool(item.get("initial_quality_fail")):
-            metrics["initial_quality_fail_count"] += 1
-        if (
-            bool(item.get("avg_down_ge2_seen"))
-            or _safe_int(item.get("avg_down_ge2_count")) > 0
-        ):
-            metrics["avg_down_ge2_count"] += 1
-    summary = _as_dict(report.get("summary"))
-    if records or not summary:
-        return
-    if _safe_int(summary.get("initial_quality_fail_count")) or _safe_int(
-        summary.get("rising_missed_avg_down_ge2_count")
-    ):
-        prefix = _source_signature_prefix("summary_only_feedback")
-        prior = priors.setdefault(_prefix_key(prefix), _new_prior(prefix))
-        prior["rising_missed_metrics"]["initial_quality_fail_count"] += _safe_int(
-            summary.get("initial_quality_fail_count")
-        )
-        prior["rising_missed_metrics"]["avg_down_ge2_count"] += _safe_int(
-            summary.get("rising_missed_avg_down_ge2_count")
-        )
-
-
-def _build_blocker_outcome_priors(report: dict[str, Any]) -> list[dict[str, Any]]:
-    """Preserve promising blocker outcomes as source-only exploration evidence.
-
-    These rows deliberately do not join the live classifier prefix table.  A
-    target-first observation can justify further bounded-probe simulation, but
-    it cannot identify a live entry cohort without executable costs, sample
-    maturity, and the downstream stale/broker/order guards.
-    """
-
-    summary = _as_dict(report.get("summary"))
-    source_rows = _as_list(
-        summary.get("rising_missed_nxt_post_block_rolling_blocker_outcome_attribution")
-    )
-    rows: list[dict[str, Any]] = []
-    for item in source_rows:
-        if not isinstance(item, dict):
-            continue
-        sample_count = _safe_int(item.get("completed_sample_count"))
-        if sample_count <= 0:
-            continue
-        target_count = _safe_int(item.get("gross_target_first_count"))
-        adverse_count = _safe_int(item.get("adverse_stop_first_count"))
-        no_hit_count = _safe_int(item.get("no_hit_within_20m_count"))
-        payoff_proxy = _safe_float(item.get("gross_first_hit_payoff_proxy_pct"))
-        avg_mfe = _safe_float(item.get("equal_weight_avg_mfe_after_block_pct"))
-        avg_mae = _safe_float(item.get("equal_weight_avg_mae_after_block_pct"))
-        source_dates = [str(value) for value in _as_list(item.get("source_dates"))]
-        source_quality_valid = (
-            str(item.get("decision_authority") or "")
-            == "source_only_no_runtime_mutation"
-            and item.get("runtime_effect") is False
-            and item.get("allowed_runtime_apply") is False
-            and str(item.get("clean_tuning_baseline_date") or "") == "2026-06-05"
-            and bool(source_dates)
-            and all(value >= "2026-06-05" for value in source_dates)
-            and bool(str(item.get("source_quality_gate") or "").strip())
-        )
-        positive_path = bool(
-            source_quality_valid
-            and target_count > 0
-            and payoff_proxy is not None
-            and payoff_proxy > 0.0
-            and avg_mfe is not None
-            and avg_mae is not None
-            and avg_mfe > abs(avg_mae)
-        )
-        if not source_quality_valid:
-            assessment = "source_quality_blocked"
-        elif positive_path:
-            assessment = "bounded_probe_exploration_candidate"
-        elif (
-            adverse_count > target_count
-            and payoff_proxy is not None
-            and payoff_proxy <= 0
-        ):
-            assessment = "hold_loss_dominant"
-        elif target_count > 0:
-            assessment = "accumulate_mixed_recovery"
-        else:
-            assessment = "hold_sample"
-        rows.append(
-            {
-                "blocker_prior_key": "|".join(
-                    (
-                        str(item.get("source_block_stage") or "missing"),
-                        str(item.get("source_block_reason") or "missing"),
-                    )
-                ),
-                "source_block_stage": item.get("source_block_stage"),
-                "source_block_reason": item.get("source_block_reason"),
-                "completed_sample_count": sample_count,
-                "gross_target_first_count": target_count,
-                "adverse_stop_first_count": adverse_count,
-                "no_hit_within_20m_count": no_hit_count,
-                "gross_first_hit_payoff_proxy_pct": payoff_proxy,
-                "equal_weight_avg_mfe_after_block_pct": avg_mfe,
-                "equal_weight_avg_mae_after_block_pct": avg_mae,
-                "source_dates": source_dates,
-                "sample_floor": item.get("sample_floor"),
-                "sample_floor_met": bool(item.get("sample_floor_met")),
-                "exploration_assessment": assessment,
-                "raw_adverse_first_is_standalone_veto": False,
-                "cost_adjusted_ev_required_before_runtime_apply": True,
-                "net_ev_state": "unavailable_fee_tax_and_no_hit_exit_outcome_missing",
-                "downstream_submit_guards_required": True,
-                "metric_role": "source_quality_gated_blocker_outcome_attribution",
-                "decision_authority": "source_only_bounded_probe_exploration",
-                "window_policy": item.get("window_policy")
-                or "clean_baseline_rolling_latest_20_report_artifacts",
-                "primary_decision_metric": (
-                    "gross_first_hit_payoff_proxy_pct_with_equal_weight_mfe_mae"
-                ),
-                "source_quality_gate": item.get("source_quality_gate"),
-                "runtime_effect": False,
-                "allowed_runtime_apply": False,
-                "actual_order_submitted": False,
-                "broker_order_forbidden": True,
-                "forbidden_uses": list(FORBIDDEN_USES),
-            }
-        )
-    return sorted(
-        rows,
-        key=lambda row: (
-            row["exploration_assessment"] != "bounded_probe_exploration_candidate",
-            -_safe_int(row.get("completed_sample_count")),
-            str(row.get("blocker_prior_key")),
-        ),
-    )
-
-
-def _counterfactual_rows(report: dict[str, Any]) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    primary_rows = _as_list(report.get("rows")) or _as_list(report.get("evaluations"))
-    if primary_rows:
-        rows.extend(item for item in primary_rows if isinstance(item, dict))
-    else:
-        for field in ("top_missed_winners", "top_avoided_losers"):
-            rows.extend(
-                item for item in _as_list(report.get(field)) if isinstance(item, dict)
-            )
-    metrics = _as_dict(report.get("metrics"))
-    refinement = _as_dict(metrics.get("rising_missed_refinement"))
-    for field in ("by_source_signature", "by_scanner_promotion_reason"):
-        for item in _as_list(refinement.get(field)):
-            if isinstance(item, dict):
-                rows.append(item)
-    return rows
-
-
-def _merge_counterfactual_metrics(
-    priors: dict[str, dict[str, Any]], report: dict[str, Any]
-) -> dict[str, Any]:
-    rows = _counterfactual_rows(report)
-    summary_counts = Counter()
-    keyed_rows = 0
-    for item in rows:
-        outcome = str(item.get("outcome") or "").strip().upper()
-        if not outcome:
-            missed_count = _safe_int(item.get("missed_winner_count"))
-            avoided_count = _safe_int(item.get("avoided_loser_count"))
-            neutral_count = _safe_int(item.get("neutral_count"))
-        else:
-            missed_count = 1 if outcome == "MISSED_WINNER" else 0
-            avoided_count = 1 if outcome == "AVOIDED_LOSER" else 0
-            neutral_count = 1 if outcome == "NEUTRAL" else 0
-        summary_counts["missed_winner"] += missed_count
-        summary_counts["avoided_loser"] += avoided_count
-        summary_counts["neutral"] += neutral_count
-        signature = (
-            item.get("source_signature")
-            or item.get("key")
-            or item.get("scanner_promotion_reason")
-        )
-        if not signature:
-            continue
-        prefix = _source_signature_prefix(signature)
-        prior = priors.setdefault(_prefix_key(prefix), _new_prior(prefix))
-        metrics = prior["rising_missed_metrics"]
-        metrics["counterfactual_missed_winner_count"] += missed_count
-        metrics["counterfactual_avoided_loser_count"] += avoided_count
-        metrics["counterfactual_neutral_count"] += neutral_count
-        keyed_rows += 1
-    return {
-        "counterfactual_row_count": len(rows),
-        "counterfactual_keyed_row_count": keyed_rows,
-        "counterfactual_missed_winner_count": summary_counts["missed_winner"],
-        "counterfactual_avoided_loser_count": summary_counts["avoided_loser"],
-        "counterfactual_neutral_count": summary_counts["neutral"],
-    }
-
-
-def _lineage_status(source_payloads: dict[str, dict[str, Any]]) -> dict[str, Any]:
-    key_lineage = source_payloads.get("key_lineage_ledger", {})
-    conversion = source_payloads.get("conversion_lane", {})
-    lineage_summary = _as_dict(key_lineage.get("summary"))
-    conversion_summary = _as_dict(conversion.get("summary"))
-    blockers = _as_list(conversion.get("conversion_blocker_rank"))
-    blocker_counts = Counter(
-        str(item.get("blocker_class") or "unknown")
-        for item in blockers
-        if isinstance(item, dict)
-    )
-    lineage_blockers = {
-        "preopen_missing": _safe_int(lineage_summary.get("preopen_missing_count")),
-        "catalog_missing": _safe_int(lineage_summary.get("catalog_missing_count")),
-        "natural_match_0": _safe_int(lineage_summary.get("natural_match_0_count")),
-        "followup_missing_parent_seed_id": _safe_int(
-            lineage_summary.get("followup_missing_parent_seed_id_count")
-        ),
-    }
-    return {
-        "catalog_connected": lineage_blockers["catalog_missing"] == 0,
-        "preopen_connected": lineage_blockers["preopen_missing"] == 0,
-        "runtime_connected": _safe_int(
-            conversion_summary.get("runtime_candidate_count")
-        )
-        > 0,
-        "postclose_connected": bool(key_lineage or conversion),
-        "lineage_blockers": lineage_blockers,
-        "conversion_blocker_counts": dict(sorted(blocker_counts.items())),
-    }
-
-
-def _select_window(prior: dict[str, Any]) -> tuple[str | None, dict[str, Any] | None]:
-    # A thin long window must not mask a mature shorter rolling/MTD window.
-    for window in WINDOW_PRIORITY:
-        metric = prior["window_metrics"].get(window)
-        if (
-            window in CONFIRMATION_WINDOWS
-            and isinstance(metric, dict)
-            and _safe_int(metric.get("joined_sample"))
-            >= CONFIRMED_PRIOR_MIN_JOINED_SAMPLE
-            and metric.get("ev_metric") == CONFIRMED_PRIOR_EV_METRIC
-        ):
-            return window, metric
-    for window in WINDOW_PRIORITY:
-        metric = prior["window_metrics"].get(window)
-        if isinstance(metric, dict) and _safe_int(metric.get("joined_sample")) > 0:
-            return window, metric
-    return None, None
-
-
-def _classify_prior(prior: dict[str, Any]) -> None:
-    selected_window, metric = _select_window(prior)
-    conflicts = prior["conflict_status"]
-    metrics = prior["rising_missed_metrics"]
-    ev_pct = _safe_float((metric or {}).get("ev_pct"), None)
-    selected_sample = _safe_int((metric or {}).get("joined_sample"))
-    authoritative_ev_metric = bool(
-        (metric or {}).get("ev_metric") == CONFIRMED_PRIOR_EV_METRIC
-    )
-    selected_sample_floor_met = bool(
-        selected_window in CONFIRMATION_WINDOWS
-        and selected_sample >= CONFIRMED_PRIOR_MIN_JOINED_SAMPLE
-        and authoritative_ev_metric
-    )
-    confirmed_positive = selected_sample_floor_met and ev_pct is not None and ev_pct > 0
-    exploratory_positive = (
-        selected_window in CONFIRMATION_WINDOWS
-        and not selected_sample_floor_met
-        and ev_pct is not None
-        and ev_pct > 0
-    )
-    daily_only_positive = (
-        selected_window == "daily" and ev_pct is not None and ev_pct > 0
-    )
-    lineage_blocked = any(
-        _safe_int(value) > 0
-        for value in prior["lineage_status"].get("lineage_blockers", {}).values()
-    )
-    counterfactual_missed = _safe_int(metrics.get("counterfactual_missed_winner_count"))
-    counterfactual_avoided = _safe_int(
-        metrics.get("counterfactual_avoided_loser_count")
-    )
-
-    if any(conflicts.values()):
-        recommendation = "source_quality_blocked"
-        reason = "child_conflict_or_source_quality_gap"
-        confidence = "blocked"
-    elif counterfactual_avoided > 0 and counterfactual_avoided > counterfactual_missed:
-        recommendation = "loss_filter"
-        reason = "counterfactual_avoided_loser_exceeds_missed_winner"
-        confidence = "medium"
-    elif (
-        _safe_int(metrics.get("loser_count")) > 0
-        and _safe_int(metrics.get("winner_count")) == 0
-    ):
-        recommendation = "loss_filter"
-        reason = "rising_missed_forced_scout_loser_without_winner"
-        confidence = "medium"
-    elif _safe_int(metrics.get("initial_quality_fail_count")) > 0:
-        recommendation = "quality_risk"
-        reason = "intraday_initial_quality_fail_feedback"
-        confidence = "medium"
-    elif daily_only_positive:
-        recommendation = "hold_sample"
-        reason = "daily_positive_without_rolling_confirmation"
-        confidence = "low"
-    elif (
-        confirmed_positive
-        and prior["observable_prefix"].get("chosen_action") == "wait_requote"
-    ):
-        recommendation = "recheck_prior"
-        reason = f"{selected_window}_positive_wait_requote_prior"
-        confidence = "medium" if lineage_blocked else "high"
-    elif confirmed_positive:
-        recommendation = "positive_prior"
-        reason = f"{selected_window}_positive_ev_prior"
-        confidence = "medium" if lineage_blocked else "high"
-    elif exploratory_positive:
-        recommendation = "recheck_prior"
-        reason = f"{selected_window}_positive_thin_or_fallback_sim_recheck"
-        confidence = "low"
-    elif counterfactual_missed > counterfactual_avoided:
-        recommendation = "hold_sample"
-        reason = "counterfactual_missed_winner_waiting_rolling_confirmation"
-        confidence = "low"
-    else:
-        recommendation = "hold_sample"
-        reason = "insufficient_positive_rolling_prior"
-        confidence = "low"
-
-    prior["recommendation"] = recommendation
-    prior["confidence"] = confidence
-    prior["selected_window"] = selected_window
-    prior["selected_window_joined_sample"] = selected_sample
-    prior["selected_window_sample_floor_met"] = selected_sample_floor_met
-    prior["selected_ev_metric_authoritative"] = authoritative_ev_metric
-    prior["reason"] = reason
-    prior["runtime_effect"] = False
-    prior["allowed_runtime_apply"] = False
-    prior["actual_order_submitted"] = False
-    prior["broker_order_forbidden"] = True
-
-
-def _strip_private_metrics(prior: dict[str, Any]) -> dict[str, Any]:
-    clean = dict(prior)
-    metrics = dict(clean.get("rising_missed_metrics") or {})
-    metrics.pop("_profits", None)
-    clean["rising_missed_metrics"] = metrics
-    return clean
-
-
-def _build_code_improvement_orders(summary: dict[str, Any]) -> list[dict[str, Any]]:
+    if payload.get("report_type") != "rising_missed_intraday_feedback":
+        receipt["state"] = "schema_mismatch"
+        return {}, receipt
     if (
-        _safe_int(summary.get("prior_count")) <= 0
-        and _safe_int(summary.get("bounded_probe_exploration_candidate_count")) <= 0
+        not str(payload.get("decision_authority") or "").startswith("source_only")
+        or payload.get("runtime_effect") is not False
+        or payload.get("allowed_runtime_apply") is not False
     ):
-        return []
-    return [
-        {
-            "order_id": "order_rising_missed_classifier_prior_bridge",
-            "title": "Attach cumulative source-lineage prior lookup to rising-missed classifier reports",
-            "target_subsystem": "rising_missed_entry_classifier",
-            "route": "instrumentation_order",
-            "mapped_family": "rising_missed_classifier_prior_bridge",
-            "threshold_family": "rising_missed_classifier_prior_bridge",
-            "lifecycle_stage": "entry",
-            "priority": 3,
-            "runtime_effect": False,
-            "allowed_runtime_apply": False,
-            "actual_order_submitted": False,
-            "broker_order_forbidden": True,
-            "implementation_status": "implemented",
-            "implementation_provenance": {
-                "implementation_type": "rising_missed_classifier_prior_source_only",
-                "runtime_effect": False,
-                "allowed_runtime_apply": False,
-                "actual_order_submitted": False,
-                "broker_order_forbidden": True,
-                "root_cause_closure_status_hint": "implementation_done",
-            },
-            "evidence": [
-                f"prior_count={_safe_int(summary.get('prior_count'))}",
-                f"positive_prior_count={_safe_int(summary.get('positive_prior_count'))}",
-                f"source_quality_blocked_count={_safe_int(summary.get('source_quality_blocked_count'))}",
-                "bounded_probe_exploration_candidate_count="
-                + str(
-                    _safe_int(summary.get("bounded_probe_exploration_candidate_count"))
-                ),
-                "raw_adverse_first_is_standalone_veto=false",
-                "runtime_effect=false",
-            ],
-            "forbidden_uses": list(FORBIDDEN_USES),
+        receipt["state"] = "authority_contract_invalid"
+        return {}, receipt
+    if str(payload.get("target_date") or "") not in path.name:
+        receipt["state"] = "date_identity_mismatch"
+        return {}, receipt
+    rows = payload.get("rising_missed_tp1_counterfactual_first_hit_label_rows")
+    receipt["state"] = "valid_empty" if rows == [] else "loaded"
+    if not isinstance(rows, list):
+        receipt["state"] = "rows_missing_or_invalid"
+        return {}, receipt
+    return payload, receipt
+
+
+def _primary_horizon(row: dict[str, Any]) -> dict[str, Any]:
+    for item in row.get("post_block_horizon_measurements") or []:
+        if isinstance(item, dict) and _int(item.get("horizon_min")) == 20:
+            return item
+    return {}
+
+
+def _cost_pct(candidate_ts: Any) -> tuple[float | None, dict[str, Any]]:
+    try:
+        stamp = datetime.fromisoformat(str(candidate_ts))
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=KST)
+        contract = comparison_cost_contract(stamp)
+        return float(contract["round_trip_cost_pct"]), {
+            "status": "verified",
+            "policy_id": contract.get("policy_id"),
+            "sha256": contract.get("artifact_sha256") or contract.get("sha256"),
         }
-    ]
+    except (TypeError, ValueError, KeyError):
+        return None, {"status": "unavailable"}
+
+
+def _outcome_return(row: dict[str, Any]) -> tuple[float | None, str, dict[str, Any]]:
+    label = str(row.get("gross_first_hit_label") or "")
+    cost_pct, cost = _cost_pct(row.get("candidate_ts"))
+    if cost_pct is None:
+        return None, "censored_cost_contract_unavailable", cost
+    if label == "gross_target_first":
+        gross = _float(row.get("gross_target_pct"))
+    elif label == "adverse_stop_first":
+        gross = _float(row.get("adverse_stop_pct"))
+    elif label == "no_hit_within_20m":
+        gross = _float(_primary_horizon(row).get("terminal_executable_move_pct"))
+        if gross is None:
+            return None, "censored_no_hit_terminal_exit_missing", cost
+    else:
+        return None, f"censored_{label or 'outcome_missing'}", cost
+    if gross is None:
+        return None, "censored_gross_outcome_missing", cost
+    return round(gross - cost_pct, 8), "paired_cost_adjusted", cost
+
+
+def _joined_rows(payloads: list[tuple[dict[str, Any], dict[str, Any]]]) -> tuple[list[dict[str, Any]], Counter[str]]:
+    rows: list[dict[str, Any]] = []
+    exclusions: Counter[str] = Counter()
+    seen: set[tuple[str, str]] = set()
+    for payload, receipt in payloads:
+        if receipt.get("state") not in {"loaded", "valid_empty"}:
+            continue
+        source_date = str(payload.get("target_date") or "")
+        support_by_id = {
+            str(item.get("evaluation_id")): item
+            for item in payload.get("rising_missed_tp1_counterfactual_submit_safety_rows") or []
+            if isinstance(item, dict) and item.get("evaluation_id")
+        }
+        for label in payload.get("rising_missed_tp1_counterfactual_first_hit_label_rows") or []:
+            if not isinstance(label, dict):
+                exclusions["invalid_label_row"] += 1
+                continue
+            evaluation_id = str(label.get("evaluation_id") or "").strip()
+            identity = (source_date, evaluation_id)
+            if not evaluation_id:
+                exclusions["evaluation_id_missing"] += 1
+                continue
+            if identity in seen:
+                exclusions["duplicate_attempt"] += 1
+                continue
+            seen.add(identity)
+            support = support_by_id.get(evaluation_id)
+            if not support:
+                exclusions["decision_context_missing"] += 1
+                continue
+            if label.get("entry_executable_bbo_state") != "pass":
+                exclusions["entry_executable_bbo_missing"] += 1
+                continue
+            net_return, outcome_state, cost = _outcome_return(label)
+            rows.append(
+                {
+                    "source_date": source_date,
+                    "evaluation_id": evaluation_id,
+                    "stock_code": label.get("stock_code"),
+                    "candidate_ts": label.get("candidate_ts"),
+                    "effective_venue": label.get("effective_venue"),
+                    "market_session_bucket": label.get("market_session_bucket"),
+                    "selector_reason": label.get("selector_reason"),
+                    "positive_support_count": _int(support.get("positive_support_count")),
+                    "spread_ratio": _float(label.get("spread_ratio")),
+                    "watch_delta_pct": _float(label.get("watch_delta_pct")),
+                    "outcome_label": label.get("gross_first_hit_label"),
+                    "net_return_pct": net_return,
+                    "outcome_state": outcome_state,
+                    "cost_contract": cost,
+                    "evidence_mode": "counterfactual",
+                }
+            )
+    rows.sort(key=lambda row: (row["source_date"], str(row["candidate_ts"]), row["evaluation_id"]))
+    return rows, exclusions
+
+
+def _candidate_selected(row: dict[str, Any], axis: str, value: float | int) -> bool:
+    # Only the support relaxation has a causally identified blocked population.
+    # The other axes either tighten an unexported allowed population or alter a
+    # diagnostic recheck field without changing the selector decision.
+    return bool(
+        axis == "positive_support_min"
+        and int(value) < int(BASELINE_POLICY[axis])
+        and row.get("selector_reason") == "rising_missed_tp1_insufficient_positive_support"
+        and _int(row.get("positive_support_count")) >= int(value)
+    )
+
+
+def _split_dates(rows: list[dict[str, Any]]) -> tuple[set[str], set[str]]:
+    by_date: dict[str, int] = Counter(
+        row["source_date"] for row in rows if row.get("net_return_pct") is not None
+    )
+    holdout: set[str] = set()
+    holdout_samples = 0
+    for source_date in sorted(by_date, reverse=True):
+        holdout.add(source_date)
+        holdout_samples += by_date[source_date]
+        if holdout_samples >= HOLDOUT_SAMPLE_FLOOR and len(holdout) >= HOLDOUT_DAY_FLOOR:
+            break
+    calibration = set(by_date) - holdout
+    return calibration, holdout
+
+
+def _metrics(rows: list[dict[str, Any]], dates: set[str]) -> dict[str, Any]:
+    selected = [row for row in rows if row["source_date"] in dates]
+    usable = [row for row in selected if row.get("net_return_pct") is not None]
+    returns = [float(row["net_return_pct"]) for row in usable]
+    daily: dict[str, float] = defaultdict(float)
+    for row in usable:
+        daily[row["source_date"]] += float(row["net_return_pct"]) * MODEL_NOTIONAL_KRW / 100.0
+    return {
+        "paired_sample_count": len(usable),
+        "distinct_day_count": len({row["source_date"] for row in usable}),
+        "censored_count": len(selected) - len(usable),
+        "outcome_counts": dict(sorted(Counter(str(row["outcome_label"]) for row in selected).items())),
+        "baseline_cost_adjusted_ev_pct": 0.0 if usable else None,
+        "challenger_cost_adjusted_ev_pct": round(sum(returns) / len(returns), 8) if returns else None,
+        "paired_delta_ev_pct": round(sum(returns) / len(returns), 8) if returns else None,
+        "baseline_daily_net_profit_krw": 0.0 if daily else None,
+        "challenger_daily_net_profit_krw": round(sum(daily.values()) / len(daily), 2) if daily else None,
+        "paired_delta_daily_net_profit_krw": round(sum(daily.values()) / len(daily), 2) if daily else None,
+        "worst_day_net_profit_krw": round(min(daily.values()), 2) if daily else None,
+        "model_notional_per_attempt_krw": MODEL_NOTIONAL_KRW,
+        "daily_net_profit_authority": "counterfactual_fixed_notional_model_not_actual_profit",
+    }
+
+
+def _evaluate_candidate(rows: list[dict[str, Any]], axis: str, value: float | int) -> dict[str, Any]:
+    policy = dict(BASELINE_POLICY)
+    policy[axis] = value
+    selected = [row for row in rows if _candidate_selected(row, axis, value)]
+    calibration_dates, holdout_dates = _split_dates(selected)
+    calibration = _metrics(selected, calibration_dates)
+    holdout = _metrics(selected, holdout_dates)
+    distinct = bool(selected)
+    calibration_floor = bool(
+        calibration["paired_sample_count"] >= CALIBRATION_SAMPLE_FLOOR
+        and calibration["distinct_day_count"] >= CALIBRATION_DAY_FLOOR
+    )
+    holdout_floor = bool(
+        holdout["paired_sample_count"] >= HOLDOUT_SAMPLE_FLOOR
+        and holdout["distinct_day_count"] >= HOLDOUT_DAY_FLOOR
+    )
+    if not distinct:
+        disposition = "identical_policy"
+        blocker = "no_causally_identified_decision_change"
+    elif not calibration_floor or not holdout_floor:
+        disposition = "insufficient_mature_sample"
+        blocker = "calibration_or_holdout_sample_floor"
+    elif (
+        (calibration["paired_delta_ev_pct"] or 0.0) <= 0.0
+        or (holdout["paired_delta_ev_pct"] or 0.0) <= 0.0
+        or (calibration["paired_delta_daily_net_profit_krw"] or 0.0) <= 0.0
+        or (holdout["paired_delta_daily_net_profit_krw"] or 0.0) <= 0.0
+    ):
+        disposition = "measured_no_edge"
+        blocker = "cost_adjusted_ev_or_daily_net_not_improved"
+    elif (holdout["worst_day_net_profit_krw"] or 0.0) < 0.0:
+        disposition = "measured_no_edge"
+        blocker = "holdout_worst_day_tail_worse_than_no_trade_baseline"
+    else:
+        disposition = "validated_edge"
+        blocker = None
+    return {
+        "candidate_id": f"{axis}={value}",
+        "axis": axis,
+        "baseline_value": BASELINE_POLICY[axis],
+        "challenger_value": value,
+        "baseline_policy": dict(BASELINE_POLICY),
+        "challenger_policy": policy,
+        "baseline_policy_sha256": _sha_json(BASELINE_POLICY),
+        "challenger_policy_sha256": _sha_json(policy),
+        "decision_change_count": len(selected),
+        "calibration_dates": sorted(calibration_dates),
+        "holdout_dates": sorted(holdout_dates),
+        "calibration": calibration,
+        "holdout": holdout,
+        "calibration_sample_floor_met": calibration_floor,
+        "holdout_sample_floor_met": holdout_floor,
+        "disposition": disposition,
+        "blocker": blocker,
+        "runtime_apply_allowed": disposition == "validated_edge",
+    }
+
+
+def policy_paths(source_date: str, effective_date: str) -> tuple[Path, Path]:
+    return (
+        OUTPUT_DIR / f"rising_missed_tp1_policy_source_{source_date}.json",
+        OUTPUT_DIR / f"rising_missed_tp1_policy_{effective_date}.json",
+    )
+
+
+def _policy_receipt(report: dict[str, Any], effective_date: str) -> dict[str, Any]:
+    evaluated = next(
+        (
+            row
+            for row in report["economic_evaluation"]["candidates"]
+            if row.get("decision_change_count")
+        ),
+        None,
+    )
+    selected = (
+        next(
+            (
+                row
+                for row in report["economic_evaluation"]["candidates"]
+                if row["disposition"] == "validated_edge"
+            ),
+            None,
+        )
+        if report.get("status") == "validated_edge"
+        else None
+    )
+    env: dict[str, str] = {}
+    if selected:
+        axis = str(selected["axis"])
+        env = {
+            "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED": "true",
+            "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE": effective_date,
+            RUNTIME_ENV_KEYS[axis]: str(selected["challenger_value"]),
+        }
+    receipt = {
+        "schema_version": 1,
+        "report_type": "rising_missed_tp1_policy",
+        "runtime_family": "rising_missed_tp1_selector",
+        "source_date": report["target_date"],
+        "publication_date": report["generated_at"][:10],
+        "effective_date": effective_date,
+        "status": "validated_edge" if selected else "incumbent_preserved",
+        "decision": "publish_challenger" if selected else "hold_no_edge",
+        "selected_axis": selected.get("axis") if selected else None,
+        "evaluated_axis": evaluated.get("axis") if evaluated else None,
+        "evaluated_before_value": evaluated.get("baseline_value") if evaluated else None,
+        "evaluated_after_value": evaluated.get("challenger_value") if evaluated else None,
+        "economic_disposition": evaluated.get("disposition") if evaluated else report.get("status"),
+        "baseline_policy": dict(BASELINE_POLICY),
+        "challenger_policy": selected.get("challenger_policy") if selected else None,
+        "baseline_policy_sha256": _sha_json(BASELINE_POLICY),
+        "challenger_policy_sha256": selected.get("challenger_policy_sha256") if selected else None,
+        "source_report_sha256": report["artifact_sha256"],
+        "calibration": evaluated.get("calibration") if evaluated else None,
+        "holdout": evaluated.get("holdout") if evaluated else None,
+        "runtime_env_overrides": env,
+        "consumer_schema": "rising_missed_tp1_selector_bounded_env_v1",
+        "apply_scope": "next_preopen_single_axis_tp1_selector",
+        "rollback_policy": dict(BASELINE_POLICY),
+        "rollback_triggers": [
+            "source_stale_or_hash_conflict",
+            "consumer_contract_failure",
+            "cost_adjusted_delta_turns_negative",
+            "worst_day_tail_degrades",
+        ],
+        "allowed_runtime_apply": True,
+        "runtime_effect": bool(selected),
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+    }
+    receipt["policy_sha256"] = _sha_json({key: value for key, value in receipt.items() if key != "policy_sha256"})
+    if selected:
+        receipt["runtime_env_overrides"]["KORSTOCKSCAN_RISING_MISSED_TP1_POLICY_SHA256"] = receipt["policy_sha256"]
+    return receipt
 
 
 def build_report(
     target_date: str,
     *,
-    source_paths: dict[str, Path] | None = None,
+    source_paths: Iterable[Path] = (),
     generated_at: str | None = None,
 ) -> dict[str, Any]:
-    paths = {
-        label: path
-        for label, path in (source_paths or _default_source_paths(target_date)).items()
-        if not retired_owner(label) and not retired_artifact(path)
-    }
-    payloads = {label: _load_json(path) for label, path in paths.items()}
-    priors: dict[str, dict[str, Any]] = {}
-    _merge_intraday_feedback(
-        priors, payloads.get("rising_missed_intraday_feedback", {})
-    )
-    blocker_outcome_priors = _build_blocker_outcome_priors(
-        payloads.get("rising_missed_intraday_feedback", {})
-    )
-    counterfactual_metrics = _merge_counterfactual_metrics(
-        priors,
-        payloads.get("missed_entry_counterfactual", {}),
-    )
-    lineage = _lineage_status(payloads)
-    for prior in priors.values():
-        prior["lineage_status"] = dict(lineage)
-        _classify_prior(prior)
-
-    prior_rows = sorted(
-        (_strip_private_metrics(prior) for prior in priors.values()),
-        key=lambda row: row["prior_key"],
-    )
-    recommendation_counts = Counter(row["recommendation"] for row in prior_rows)
-    counterfactual_path = paths.get("missed_entry_counterfactual")
-    counterfactual_status = (
-        "available"
-        if counterfactual_path and counterfactual_path.exists()
-        else "counterfactual_source_unavailable"
-    )
-    source_quality = {
-        "clean_tuning_baseline_ts_kst": CLEAN_BASELINE_TS_KST,
-        "tuning_input_allowed": True,
-        "runtime_effect": False,
-        "allowed_runtime_apply": False,
-        "counterfactual_status": counterfactual_status,
-        "missing_required_sources": [
-            label
-            for label, path in paths.items()
-            if label != "missed_entry_counterfactual" and not path.exists()
-        ],
-    }
-    summary = {
-        "prior_count": len(prior_rows),
-        "recommendation_counts": dict(sorted(recommendation_counts.items())),
-        "positive_prior_count": recommendation_counts.get("positive_prior", 0),
-        "recheck_prior_count": recommendation_counts.get("recheck_prior", 0),
-        "quality_risk_count": recommendation_counts.get("quality_risk", 0),
-        "loss_filter_count": recommendation_counts.get("loss_filter", 0),
-        "hold_sample_count": recommendation_counts.get("hold_sample", 0),
-        "source_quality_blocked_count": recommendation_counts.get(
-            "source_quality_blocked", 0
-        ),
-        "blocker_outcome_prior_count": len(blocker_outcome_priors),
-        "bounded_probe_exploration_candidate_count": sum(
-            row.get("exploration_assessment") == "bounded_probe_exploration_candidate"
-            for row in blocker_outcome_priors
-        ),
-        "raw_adverse_first_is_standalone_veto": False,
-        "window_priority": list(WINDOW_PRIORITY),
-        "counterfactual_status": counterfactual_status,
-        "lifecycle_source_count": sum(
-            1
-            for label in paths
-            if label.startswith("lifecycle_bucket_discovery") and paths[label].exists()
-        ),
-        "rising_missed_feedback_record_count": sum(
-            _safe_int(row["rising_missed_metrics"].get("initial_quality_fail_count"))
-            + _safe_int(row["rising_missed_metrics"].get("avg_down_ge2_count"))
-            for row in prior_rows
-        ),
-        **counterfactual_metrics,
-        "lineage_blocker_count": sum(
-            _safe_int(value) for value in lineage.get("lineage_blockers", {}).values()
-        ),
-        "runtime_effect": False,
-        "allowed_runtime_apply": False,
-    }
-    orders = _build_code_improvement_orders(summary)
-    return {
-        "schema_version": 1,
+    date.fromisoformat(target_date)
+    sources = _source_paths(target_date, source_paths)
+    loaded = [_read_source(path) for path in sources]
+    rows, exclusions = _joined_rows(loaded)
+    candidates = [_evaluate_candidate(rows, axis, value) for axis, value in CANDIDATES]
+    viable = [row for row in candidates if row["disposition"] == "validated_edge"]
+    measured = [row for row in candidates if row["disposition"] == "measured_no_edge"]
+    source_states = Counter(receipt["state"] for _, receipt in loaded)
+    exact_target = [
+        receipt for _, receipt in loaded if receipt.get("target_date") == target_date
+    ]
+    if not loaded or not exact_target or any(
+        receipt["state"] not in {"loaded", "valid_empty"} for _, receipt in loaded
+    ):
+        status = "structurally_blocked"
+    elif any(receipt["state"] == "valid_empty" for receipt in exact_target):
+        status = "valid_empty"
+    elif not rows:
+        status = "valid_empty"
+    elif viable:
+        status = "validated_edge"
+    elif measured:
+        status = "measured_no_edge"
+    else:
+        status = "insufficient_mature_sample"
+    report: dict[str, Any] = {
+        "schema_version": 2,
         "report_type": "rising_missed_classifier_prior",
         "target_date": target_date,
-        "generated_at": generated_at or _now_kst_iso(),
-        "clean_tuning_baseline": {
-            "clean_tuning_baseline_date": "2026-06-05",
-            "clean_tuning_baseline_ts_kst": CLEAN_BASELINE_TS_KST,
+        "generated_at": generated_at or _now(),
+        "status": status,
+        "decision": (
+            "publish_single_validated_edge"
+            if status == "validated_edge"
+            else "hold_no_edge"
+        ),
+        "source_quality": {
+            "clean_tuning_baseline_date": CLEAN_BASELINE_DATE.isoformat(),
+            "tuning_input_allowed": bool(loaded) and all(
+                receipt["state"] in {"loaded", "valid_empty"} for _, receipt in loaded
+            ) and bool(exact_target),
+            "source_state_counts": dict(sorted(source_states.items())),
+            "exclusion_counts": dict(sorted(exclusions.items())),
         },
-        "metric_contracts": {
-            "rising_missed_classifier_prior": {
-                "metric_role": "source_only_classifier_prior",
-                "decision_authority": "rising_missed_classifier_prior_source_only",
-                "window_policy": "rolling10d_gt_rolling5d_gt_mtd_gt_daily",
-                "sample_floor": (
-                    "10_joined_samples_with_source_quality_adjusted_ev_in_"
-                    "rolling10d_or_rolling5d_or_mtd_for_confirmed_positive_prior;_"
-                    "thin_or_fallback_positive_is_sim_recheck_only"
-                ),
-                "primary_decision_metric": "source_quality_adjusted_ev_pct",
-                "source_quality_gate": "clean_baseline_after_2026_06_04_and_contract_quality",
-                "forbidden_uses": list(FORBIDDEN_USES),
+        "source_receipts": [receipt for _, receipt in loaded],
+        "paired_rows": rows,
+        "economic_evaluation": {
+            "metric_role": "direct_same_attempt_cost_adjusted_counterfactual",
+            "comparison_status": status,
+            "paired_sample_count": sum(
+                row["calibration"]["paired_sample_count"] + row["holdout"]["paired_sample_count"]
+                for row in candidates if row["decision_change_count"]
+            ),
+            "source_date_count": len({row["source_date"] for row in rows}),
+            "candidate_count": len(candidates),
+            "validated_candidate_count": len(viable),
+            "candidates": candidates,
+            "actual": {
+                "status": "post_apply_pending",
+                "cost_adjusted_ev_pct": None,
+                "daily_net_profit_krw": None,
+                "reason": "no_new_policy_actual_completed_receipts_yet",
             },
-            "rising_missed_blocker_outcome_prior": {
-                "metric_role": "source_quality_gated_blocker_outcome_attribution",
-                "decision_authority": "source_only_bounded_probe_exploration",
-                "window_policy": "clean_baseline_rolling_latest_20_report_artifacts",
-                "sample_floor": "10_source_quality_pass_completed_samplers_per_blocker",
-                "primary_decision_metric": (
-                    "gross_first_hit_payoff_proxy_pct_with_equal_weight_mfe_mae"
-                ),
-                "source_quality_gate": (
-                    "daily_completed_sampler_source_quality_pass_and_explicit_nxt_venue"
-                ),
-                "forbidden_uses": list(FORBIDDEN_USES),
+            "simulation": {
+                "status": "not_mixed_with_counterfactual",
+                "cost_adjusted_ev_pct": None,
             },
+            "counterfactual": {
+                "row_count": len(rows),
+                "usable_outcome_count": sum(row["net_return_pct"] is not None for row in rows),
+                "censored_outcome_count": sum(row["net_return_pct"] is None for row in rows),
+                "daily_net_profit_authority": "fixed_notional_model_not_actual_profit",
+            },
+            "first_blocker": (
+                None if viable else "all_distinct_candidates_no_edge_or_immature"
+            ),
+            "closure_test": "calibration_30x3_and_holdout_20x2_cost_adjusted_ev_daily_net_tail",
+            "allowed_runtime_apply": status == "validated_edge",
         },
-        "source_paths": {
-            label: _source_ref(path) for label, path in sorted(paths.items())
-        },
-        "source_quality": source_quality,
-        "summary": summary,
-        "priors": prior_rows,
-        "blocker_outcome_priors": blocker_outcome_priors,
-        "code_improvement_orders": orders,
+        "baseline_policy": dict(BASELINE_POLICY),
         "runtime_effect": False,
         "allowed_runtime_apply": False,
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
-        "decision_authority": "rising_missed_classifier_prior_source_only",
-        "forbidden_uses": list(FORBIDDEN_USES),
+        "decision_authority": "postclose_direct_paired_economic_evaluator",
+        "forbidden_uses": FORBIDDEN_USES,
+        "code_improvement_orders": [],
     }
+    report["artifact_sha256"] = _sha_json(
+        {key: value for key, value in report.items() if key != "artifact_sha256"}
+    )
+    return report
 
 
 def write_outputs(
-    report: dict[str, Any], *, output_json: Path, output_md: Path
-) -> None:
-    output_json.parent.mkdir(parents=True, exist_ok=True)
-    output_md.parent.mkdir(parents=True, exist_ok=True)
-    output_json.write_text(
-        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    report: dict[str, Any], *, output_json: Path, output_md: Path, effective_date: str | None = None
+) -> dict[str, Any]:
+    effective_date = effective_date or _next_trading_date(str(report["target_date"]))
+    policy = _policy_receipt(report, effective_date)
+    source_policy_path, effective_policy_path = policy_paths(str(report["target_date"]), effective_date)
+    body = json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    _atomic_write(output_json, body)
     lines = [
-        f"# Rising Missed Classifier Prior - {report.get('target_date')}",
+        f"# Rising-missed direct paired economics - {report['target_date']}",
         "",
-        f"- generated_at: {report.get('generated_at')}",
-        "- runtime_effect: false",
-        "- allowed_runtime_apply: false",
-        f"- counterfactual_status: {report.get('summary', {}).get('counterfactual_status')}",
-        f"- prior_count: {report.get('summary', {}).get('prior_count')}",
-        f"- blocker_outcome_prior_count: {report.get('summary', {}).get('blocker_outcome_prior_count')}",
-        f"- bounded_probe_exploration_candidate_count: {report.get('summary', {}).get('bounded_probe_exploration_candidate_count')}",
-        f"- recommendation_counts: {json.dumps(report.get('summary', {}).get('recommendation_counts', {}), ensure_ascii=False, sort_keys=True)}",
+        f"- status: `{report['status']}`",
+        f"- decision: `{report['decision']}`",
+        f"- paired rows: `{len(report['paired_rows'])}`",
+        f"- effective policy date: `{effective_date}`",
+        f"- policy status: `{policy['status']}`",
         "",
-        "## Top Priors",
+        "## Candidates",
         "",
+        "| Candidate | Decision changes | Calibration EV | Holdout EV | Disposition | Blocker |",
+        "|---|---:|---:|---:|---|---|",
     ]
-    for row in _as_list(report.get("priors"))[:20]:
+    for row in report["economic_evaluation"]["candidates"]:
         lines.append(
-            "- "
-            + str(row.get("prior_key"))
-            + f" | recommendation={row.get('recommendation')}"
-            + f" | confidence={row.get('confidence')}"
-            + f" | window={row.get('selected_window')}"
-            + f" | reason={row.get('reason')}"
+            f"| `{row['candidate_id']}` | {row['decision_change_count']} | "
+            f"{row['calibration']['paired_delta_ev_pct']} | {row['holdout']['paired_delta_ev_pct']} | "
+            f"`{row['disposition']}` | `{row['blocker'] or '-'}` |"
         )
-    if not _as_list(report.get("priors")):
-        lines.append("- no prior rows")
-    lines.extend(["", "## Blocker Outcome Priors", ""])
-    for row in _as_list(report.get("blocker_outcome_priors"))[:20]:
-        lines.append(
-            "- "
-            + str(row.get("blocker_prior_key"))
-            + f" | assessment={row.get('exploration_assessment')}"
-            + f" | sample={row.get('completed_sample_count')}"
-            + f" | target_first={row.get('gross_target_first_count')}"
-            + f" | adverse_first={row.get('adverse_stop_first_count')}"
-            + f" | payoff_proxy={row.get('gross_first_hit_payoff_proxy_pct')}"
-        )
-    if not _as_list(report.get("blocker_outcome_priors")):
-        lines.append("- no blocker outcome prior rows")
-    lines.extend(["", "## Code Improvement Orders", ""])
-    for order in _as_list(report.get("code_improvement_orders")):
-        lines.append(
-            f"- {order.get('order_id')} | runtime_effect: false | allowed_runtime_apply: false"
-        )
-    if not _as_list(report.get("code_improvement_orders")):
-        lines.append("- none")
-    output_md.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    _atomic_write(output_md, "\n".join(lines) + "\n")
+    policy_body = json.dumps(policy, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    _atomic_write(source_policy_path, policy_body)
+    _atomic_write(effective_policy_path, policy_body)
+    return {
+        "report_json": str(output_json),
+        "report_md": str(output_md),
+        "source_policy": str(source_policy_path),
+        "effective_policy": str(effective_policy_path),
+        "policy": policy,
+    }
+
+
+def _default_outputs(target_date: str) -> tuple[Path, Path]:
+    base = OUTPUT_DIR / f"rising_missed_classifier_prior_{target_date}"
+    return base.with_suffix(".json"), base.with_suffix(".md")
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target-date", required=True)
-    parser.add_argument("--output-json")
-    parser.add_argument("--output-md")
+    parser.add_argument("--effective-date")
+    parser.add_argument("--source", action="append", type=Path, default=[])
+    parser.add_argument("--output-json", type=Path)
+    parser.add_argument("--output-md", type=Path)
+    parser.add_argument("--print-summary", action="store_true")
     args = parser.parse_args(argv)
-    output_json, output_md = _default_output_paths(args.target_date)
-    if args.output_json:
-        output_json = Path(args.output_json)
-    if args.output_md:
-        output_md = Path(args.output_md)
-    report = build_report(args.target_date)
-    write_outputs(report, output_json=output_json, output_md=output_md)
+    output_json, output_md = _default_outputs(args.target_date)
+    report = build_report(args.target_date, source_paths=args.source)
+    result = write_outputs(
+        report,
+        output_json=args.output_json or output_json,
+        output_md=args.output_md or output_md,
+        effective_date=args.effective_date,
+    )
+    if args.print_summary:
+        print(json.dumps({"status": report["status"], **result}, ensure_ascii=False))
     return 0
 
 

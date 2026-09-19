@@ -82,6 +82,10 @@ bootstrap_args=(
   --receipt "$PROJECT_DIR/data/report/machine_entry_timing_tuning/machine_entry_timing_tuning_${TARGET_DATE}.json"
   --receipt "$PROJECT_DIR/data/threshold_cycle/scanner_lookup_attention_preopen/scanner_lookup_attention_preopen_${TARGET_DATE}.json"
 )
+rising_missed_policy="$PROJECT_DIR/data/report/rising_missed_classifier_prior/rising_missed_tp1_policy_${TARGET_DATE}.json"
+if [[ -s "$rising_missed_policy" ]]; then
+  bootstrap_args+=(--receipt "$rising_missed_policy")
+fi
 PYTHONPATH=. "$VENV_PY" -m src.engine.automation.runtime_policy_bootstrap "${bootstrap_args[@]}"
 
 entry_setup_args=(

@@ -2343,6 +2343,9 @@ def test_tp1_counterfactual_multi_horizon_marks_late_recovery_after_adverse(
     }
     assert measurements[20]["outcome_label"] == "adverse_stop_first"
     assert measurements[20]["source_quality_state"] == "pass"
+    assert measurements[20]["terminal_executable_ts"] == "2026-07-14T09:05:00+09:00"
+    assert measurements[20]["terminal_executable_move_pct"] == 0.0
+    assert measurements[20]["terminal_executable_price_source"].endswith(":best_bid")
     assert measurements[30]["outcome_label"] == "adverse_stop_first"
     assert measurements[30]["max_move_pct"] == 1.3
     assert label["post_block_late_recovery_after_adverse"] == {

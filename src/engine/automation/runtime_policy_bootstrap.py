@@ -278,6 +278,70 @@ def _receipt_runtime_apply_allowed(payload: dict[str, Any]) -> bool:
     return False
 
 
+def _direct_policy_digest(payload: dict[str, Any]) -> str:
+    canonical = {key: value for key, value in payload.items() if key != "policy_sha256"}
+    canonical_env = dict(canonical.get("runtime_env_overrides") or {})
+    canonical_env.pop("KORSTOCKSCAN_RISING_MISSED_TP1_POLICY_SHA256", None)
+    canonical["runtime_env_overrides"] = canonical_env
+    return _digest_json(canonical)
+
+
+def _direct_runtime_env(
+    family: str, payload: dict[str, Any], target_date: str
+) -> tuple[dict[str, str], str | None]:
+    raw = payload.get("runtime_env_overrides")
+    if raw in (None, {}):
+        if family == "rising_missed_tp1_selector" and payload.get(
+            "policy_sha256"
+        ) != _direct_policy_digest(payload):
+            return {}, "policy_sha256_mismatch"
+        return {}, None
+    if not isinstance(raw, dict):
+        return {}, "runtime_env_overrides_invalid"
+    if family != "rising_missed_tp1_selector":
+        return {}, "runtime_env_overrides_family_not_allowlisted"
+    allowed = {
+        "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED",
+        "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE",
+        "KORSTOCKSCAN_RISING_MISSED_TP1_POSITIVE_SUPPORT_MIN",
+        "KORSTOCKSCAN_RISING_MISSED_TP1_SPREAD_CAUTION_RATIO",
+        "KORSTOCKSCAN_RISING_MISSED_TP1_CHASE_DELTA_PCT",
+        "KORSTOCKSCAN_RISING_MISSED_TP1_POLICY_SHA256",
+    }
+    if set(raw) - allowed:
+        return {}, "runtime_env_key_not_allowlisted"
+    values = {str(key): str(value) for key, value in raw.items()}
+    if values.get("KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED") != "true":
+        return {}, "selector_enabled_value_invalid"
+    if values.get("KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE") != target_date:
+        return {}, "selector_active_date_invalid"
+    try:
+        if "KORSTOCKSCAN_RISING_MISSED_TP1_POSITIVE_SUPPORT_MIN" in values and not (
+            1 <= int(values["KORSTOCKSCAN_RISING_MISSED_TP1_POSITIVE_SUPPORT_MIN"]) <= 3
+        ):
+            raise ValueError
+        if "KORSTOCKSCAN_RISING_MISSED_TP1_SPREAD_CAUTION_RATIO" in values and not (
+            0.0015
+            <= float(values["KORSTOCKSCAN_RISING_MISSED_TP1_SPREAD_CAUTION_RATIO"])
+            <= 0.0025
+        ):
+            raise ValueError
+        if "KORSTOCKSCAN_RISING_MISSED_TP1_CHASE_DELTA_PCT" in values and not (
+            2.5 <= float(values["KORSTOCKSCAN_RISING_MISSED_TP1_CHASE_DELTA_PCT"]) <= 3.5
+        ):
+            raise ValueError
+    except ValueError:
+        return {}, "runtime_env_value_out_of_bounds"
+    digest = values.get("KORSTOCKSCAN_RISING_MISSED_TP1_POLICY_SHA256", "")
+    if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
+        return {}, "policy_sha256_invalid"
+    if payload.get("policy_sha256") != _direct_policy_digest(payload) or digest != payload.get(
+        "policy_sha256"
+    ):
+        return {}, "policy_sha256_mismatch"
+    return values, None
+
+
 def _load_direct_receipts(
     target_date: str, receipt_paths: Iterable[Path]
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -299,6 +363,9 @@ def _load_direct_receipts(
         valid_date, date_basis = _receipt_date_state(payload, target_date)
         family = _receipt_family(payload, path)
         runtime_apply_allowed = _receipt_runtime_apply_allowed(payload)
+        runtime_env, runtime_env_error = _direct_runtime_env(
+            family, payload, target_date
+        )
         row = {
             "family": family,
             "source_receipt": _file_receipt(path),
@@ -312,6 +379,7 @@ def _load_direct_receipts(
             or payload.get("selection_status"),
             "allowed_runtime_apply": runtime_apply_allowed,
             "runtime_effect": payload.get("runtime_effect"),
+            "runtime_env_overrides": runtime_env,
         }
         if not family:
             rejected.append({**row, "reason": "family_identity_missing"})
@@ -319,6 +387,8 @@ def _load_direct_receipts(
             rejected.append({**row, "reason": f"date_invalid:{date_basis}"})
         elif not runtime_apply_allowed:
             rejected.append({**row, "reason": "runtime_apply_not_authorized"})
+        elif runtime_env_error:
+            rejected.append({**row, "reason": runtime_env_error})
         else:
             accepted.append(row)
     return accepted, rejected
@@ -364,11 +434,18 @@ def build_manifest(
     values = without_retired_env(incumbent_values)
     operator_values, operator_sources = _operator_overrides(target_date)
     values.update(operator_values)
+    direct_receipts, rejected_receipts = _load_direct_receipts(
+        target_date, receipt_paths
+    )
     locks, invalid_locks = _load_locks(target_date)
     applied_locks: list[dict[str, Any]] = []
     rejected_locks: list[dict[str, Any]] = list(invalid_locks)
     env_owners = {key: "approved_incumbent" for key in values}
     env_owners.update({key: "operator_runtime_override" for key in operator_values})
+    for receipt in direct_receipts:
+        for key, value in receipt.get("runtime_env_overrides", {}).items():
+            values[key] = str(value)
+            env_owners[key] = f"direct_policy:{receipt['family']}"
     for lock in locks:
         classification = operator_policy_succession.classify(lock)
         row = {
@@ -404,9 +481,6 @@ def build_manifest(
         str(item)
         for item in incumbent.get("selected_families") or []
         if str(item) not in RETIRED_FAMILIES
-    )
-    direct_receipts, rejected_receipts = _load_direct_receipts(
-        target_date, receipt_paths
     )
     return {
         "schema_version": SCHEMA_VERSION,

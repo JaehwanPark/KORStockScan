@@ -13,6 +13,11 @@
 
 ## 승인된 통합 구현
 
+- [x] `[RisingMissedDirectPairedEconomics0919] TP1 직접 paired 경제평가·장전 소비 구조 종결` (`Due: 2026-09-19`, `Slot: POSTCLOSE`, `TimeWindow: 00:00~23:59`, `Track: ScalpingLogic`)
+  - Source: [구현 계획](../proposals/rising-missed-direct-paired-economic-tuning-and-runtime-consumer-plan-2026-09-19.md), [구현 리뷰](../audit-reports/2026-09-19-rising-missed-direct-paired-economics-implementation-review.md).
+  - 구현: 퇴역 lifecycle·건수 prior·반복 workorder를 제거하고, 최근 20개 feedback의 exact evaluation ID·비용·terminal을 동일 attempt에서 비교한다. `no_hit`은 실행가능 종료가격이 없으면 censored이며 향후 producer가 20분 종료값을 남긴다. 단일축 validated edge만 bounded env로 전달하고 PREOPEN bootstrap·기존 TP1 selector·runtime summary·strict verifier가 날짜와 해시를 대조한다.
+  - Result: source 20일/paired 2,861건. `positive_support_min 2→1` 결정 변화 342건 중 calibration 252건/12일 EV `-0.76333333%`, holdout 50건/4일 EV `-0.85%`, 100만원 고정 모형 holdout 일평균 `-106,250원`, 최악일 `-296,200원`으로 `measured_no_edge`; 나머지 5개 후보는 결정 변화 0의 identical policy다. effective `2026-09-21` 정책은 임계값 변경 없는 `incumbent_preserved`다. 실제 PID 소비·자연 decision/fill·COMPLETED 비용 성과는 다음 정상 PREOPEN 이후 별도 확인한다.
+
 - [x] `[DailyThresholdCycleRetirement0919] 공통 Daily/EV 튜닝 퇴역 및 runtime owner 분리` (`Due: 2026-09-19`, `Slot: POSTCLOSE`, `TimeWindow: 00:00~23:59`, `Track: RuntimeStability`)
   - Source: [퇴역·분리 계획](../proposals/daily-threshold-cycle-tuning-retirement-and-runtime-owner-separation-plan-2026-09-19.md).
   - 구현: `daily_threshold_cycle_report`, `threshold_cycle_ev_report`, generic PREOPEN selector와 calibration wrapper를 제거하고, family publisher→`runtime_policy_bootstrap`→기존 장중 consumer 경로로 전환한다. Bootstrap은 검증된 incumbent·operator lock·명시 OFF만 합성하며 EV 후보를 만들지 않는다.
