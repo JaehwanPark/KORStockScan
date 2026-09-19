@@ -1398,8 +1398,9 @@ def test_source_contract_upgrade_reclassifies_historical_response_failure_withou
     compact.run(data_root=tmp_path, day=day, execute=False)
     path = compact.report_path(tmp_path, day).with_suffix(".source.json")
     old = compact.read(path)
-    old["source_projection_contract"] = "compact_pre_ai_execution_source_v4"
+    old["source_projection_contract"] = "compact_pre_ai_execution_source_v5"
     old["projection_contract_sha256"] = "e"*64
+    old["rows"][0]["exclusion_reason"] = "natural_response_semantic_invalid"
     compact.write(path, compact.sealed(old))
     monkeypatch.setattr(compact, "prepare", lambda *_: pytest.fail("upgrade must use frozen evidence"))
     report = compact.run(data_root=tmp_path, day=day, execute=False)

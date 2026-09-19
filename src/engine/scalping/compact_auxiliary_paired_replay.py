@@ -44,7 +44,7 @@ CONTRACT = {
     "model_holdout_precedes_prompt_learning": True,
     "empirical_error_and_stress_lower_bound_required": True,
 }
-SOURCE_PROJECTION_CONTRACT = "compact_pre_ai_execution_source_v5"
+SOURCE_PROJECTION_CONTRACT = "compact_pre_ai_execution_source_v6"
 
 
 def digest(value):
@@ -1196,7 +1196,8 @@ def run(
                 row.setdefault("natural_contract_evidence", {k: label.get(k) for k in
                     ("result_source", "model", "provider_actual", "semantic_validation_status",
                      "decision_quality_contract_status", "decision_quality_contract_errors")})
-                if row.get("exclusion_reason") == "natural_contract_invalid":
+                if (row.get("exclusion_reason") == "natural_contract_invalid"
+                    or str(row.get("exclusion_reason") or "").startswith("natural_response_")):
                     row["exclusion_reason"] = (
                         natural_response_contract_exclusion(row["natural_contract_evidence"])
                         or "natural_contract_invalid"
