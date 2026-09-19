@@ -9046,12 +9046,21 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
                     "",
                 ]
             )
+    if report.get("generation_phase") == "manual_final_direct_family":
+        reentry_lines = [
+            "- 구현 결과는 해당 family의 postclose evaluator가 다시 읽고, 검증된 disposition만 기존 publisher와 runtime bootstrap으로 전달한다.",
+            "- 이 workorder와 recommendation intake는 source-only이며 정책 선택, PREOPEN 동결 또는 runtime 변경 권한이 없다.",
+        ]
+    else:
+        reentry_lines = [
+            f"- 구현 결과는 `{next_date}` 이후 기존 postclose consumer가 다시 읽는다.",
+            "- 구현자가 수동으로 threshold 값을 바꾸지 않고 기존 정책 consumer가 검증된 source를 판단한다.",
+        ]
     lines.extend(
         [
             "## 자동화체인 재투입",
             "",
-            f"- 구현 결과는 `{next_date}` 이후 postclose `threshold_cycle`, `threshold_cycle_ev`가 자동으로 다시 읽는다.",
-            "- 구현자가 수동으로 threshold 값을 바꾸는 것이 아니라, source/report/provenance를 닫아 다음 calibration이 판단하게 한다.",
+            *reentry_lines,
             f"- 다음 Codex 세션 입력 문구: `{policy.get('user_intervention_point')}`",
             "",
             "## Project/Calendar 동기화",

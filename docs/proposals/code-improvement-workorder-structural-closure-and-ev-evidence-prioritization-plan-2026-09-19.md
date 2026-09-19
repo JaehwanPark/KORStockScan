@@ -244,6 +244,7 @@ workorder decision과 runtime policy decision을 분리한다.
 
 제한 재생성 결과는 다음과 같다.
 
+- 최종 재리뷰에서 생성 Markdown이 폐기된 공통 `threshold_cycle/threshold_cycle_ev`를 후행 소비자로 안내하던 잔여 결함을 제거했다. direct-family 문서는 현행 family evaluator→publisher→runtime bootstrap 경계와 source-only 권한을 명시한다.
 - WS opportunity order는 `-2.38954987% / hold_no_edge / incumbent_preserved`로 재분류된다.
 - actual scanner paired EV와 원화 일별 순익은 미래 arm 전까지 null이며 `historical_unrecoverable + prospective owner`가 붙는다.
 - submit drought의 현행 종료 capture는 구현 완료이고 과거51건은 소급 불가라 P3 자연 receipt 대기로 닫혔다.

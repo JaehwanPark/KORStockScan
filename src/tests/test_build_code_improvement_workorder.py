@@ -241,6 +241,28 @@ def test_generation_identity_binds_direct_family_mode():
     assert direct["inputs"]["source_hash_contract"] == "logical_source_content_v2"
 
 
+def test_direct_family_markdown_names_current_consumers_not_retired_common_cycle():
+    report = {
+        "date": "2026-09-17",
+        "generation_phase": "manual_final_direct_family",
+        "source": {},
+        "summary": {},
+        "policy": {"user_intervention_point": "explicit implementation"},
+        "lineage": {},
+        "orders": [],
+        "non_selected_orders": [],
+        "family_economic_evidence": [],
+        "swing_sources_enabled": True,
+    }
+
+    rendered = mod.render_code_improvement_workorder_markdown(report)
+
+    assert "family의 postclose evaluator" in rendered
+    assert "기존 publisher와 runtime bootstrap" in rendered
+    assert "정책 선택, PREOPEN 동결 또는 runtime 변경 권한이 없다" in rendered
+    assert "postclose `threshold_cycle`, `threshold_cycle_ev`" not in rendered
+
+
 def test_source_hash_ignores_managed_release_root_alias(tmp_path):
     source = tmp_path / "canonical" / "source.json"
     source.parent.mkdir()
