@@ -29,13 +29,13 @@ OWNED = {
 TAGS = {
     "THRESHOLD_CYCLE_PREOPEN": "preopen",
     "THRESHOLD_CYCLE_POSTCLOSE": "postclose",
-    "AI_ENTRY_SETUP_PAIRED_REPLAY_POSTCLOSE": "paired-replay",
     "POSTCLOSE_DONE_CONTROLLER": "controller",
     "TUNING_MONITORING_POSTCLOSE": "tuning",
     "POSTCLOSE_FINALIZATION_2155": "finalize",
     "UPDATE_KOSPI_EOD_2005": "eod",
     "DASHBOARD_DB_ARCHIVE_2050": "archive",
 }
+CRON_TARGETS = frozenset({"start", *TAGS.values()})
 OPERATIONS = ("start", "restart", *OWNED, "paired-replay", "eod", "archive")
 
 
@@ -229,7 +229,7 @@ def make_plan(
 
 
 def render_crontab(original: str, workspace: Path) -> str:
-    """Replace only nine known command prefixes, preserving schedules/env/tails.
+    """Replace only eight installed command prefixes, preserving schedules/env/tails.
 
     Missing, duplicate or unfamiliar entrypoints fail closed. Other services,
     machine timers and intraday observers are deliberately outside this router.
@@ -308,8 +308,7 @@ def render_crontab(original: str, workspace: Path) -> str:
             raise ValueError("cron_start_marker_unrecognized")
         line = schedule + prefix + desired + tail
         result.append(line)
-    expected = {"start", *TAGS.values()}
-    if set(seen) != expected or len(seen) != len(expected):
+    if set(seen) != CRON_TARGETS or len(seen) != len(CRON_TARGETS):
         raise ValueError("cron_target_missing_or_duplicate")
     return "\n".join(result) + "\n"
 
@@ -319,7 +318,7 @@ def manage_cron(workspace: Path, install: bool) -> None:
         old = subprocess.check_output(["crontab", "-l"], text=True)
         if render_crontab(old, workspace) != old:
             raise ValueError("cron_release_routing_not_installed")
-        print(json.dumps({"cron_routing_verified": True, "targets": 9}))
+        print(json.dumps({"cron_routing_verified": True, "targets": len(CRON_TARGETS)}))
         return
     # Serialize router installs. Re-read just before writing to avoid clobbering
     # an unrelated session's edits observed during validation.
@@ -339,7 +338,7 @@ def manage_cron(workspace: Path, install: bool) -> None:
             if subprocess.check_output(["crontab", "-l"], text=True) != new:
                 raise ValueError("cron_install_readback_mismatch")
             print(json.dumps({"cron_backup": str(backup_dir)}))
-        print(json.dumps({"cron_routing_verified": True, "targets": 9}))
+        print(json.dumps({"cron_routing_verified": True, "targets": len(CRON_TARGETS)}))
 
 
 def main() -> int:

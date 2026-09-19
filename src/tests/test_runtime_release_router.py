@@ -198,10 +198,11 @@ def test_cron_preserves_unrelated_env_schedule_date_and_logs(tmp_path):
     before = original_cron(tmp_path)
     after = router.render_crontab(before, tmp_path)
     assert after.splitlines()[:3] == before.splitlines()[:3]
-    assert after.count("run_runtime_release.sh") == 9
-    assert after.count("KEEP_POLICY_ENV=true") == 8
-    assert after.count("$(TZ=Asia/Seoul date +\\%F)") == 6
-    assert after.count(">> /preserved.log 2>&1") == 8
+    assert after.count("run_runtime_release.sh") == len(router.CRON_TARGETS)
+    assert "AI_ENTRY_SETUP_PAIRED_REPLAY_POSTCLOSE" not in after
+    assert after.count("KEEP_POLICY_ENV=true") == len(router.TAGS)
+    assert after.count("$(TZ=Asia/Seoul date +\\%F)") == len(router.OWNED)
+    assert after.count(">> /preserved.log 2>&1") == len(router.TAGS)
     assert router.render_crontab(after, tmp_path) == after
 
 
