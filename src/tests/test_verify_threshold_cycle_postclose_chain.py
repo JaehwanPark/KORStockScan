@@ -3,6 +3,7 @@ from pathlib import Path
 
 from src.engine import runtime_approval_summary as summary_mod
 from src.engine import verify_threshold_cycle_postclose_chain as mod
+from src.engine import build_next_stage2_checklist as checklist_mod
 
 
 def _write(path: Path, payload: dict) -> None:
@@ -25,6 +26,15 @@ def _seed(monkeypatch, tmp_path: Path, target: str):
     status_path = report / "threshold_cycle_postclose_status" / f"threshold_cycle_postclose_{target}.status.json"
     _write(status_path, {"target_date": target, "status": "succeeded"})
     return summary
+
+
+def _build_direct_checklist(monkeypatch, tmp_path: Path, target: str) -> Path:
+    monkeypatch.setattr(checklist_mod, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(checklist_mod, "DOCS_DIR", tmp_path / "docs")
+    monkeypatch.setattr(checklist_mod, "CHECKLIST_DIR", tmp_path / "docs" / "checklists")
+    monkeypatch.setattr(checklist_mod, "CHECKLIST_LOCK_DIR", tmp_path / "locks")
+    result = checklist_mod.build_next_stage2_checklist(target)
+    return Path(result["path"])
 
 
 def test_verifier_passes_without_retired_daily_ev_or_generic_preopen(monkeypatch, tmp_path):
@@ -104,3 +114,45 @@ def test_verifier_rejects_source_gap_marked_runtime_applyable(monkeypatch, tmp_p
 
     assert report["status"] == "fail"
     assert "blocked_economic_source_marked_applyable:entry_split" in report["issues"]
+
+
+def test_required_summary_handoff_verifies_marker_and_task_projection(
+    monkeypatch, tmp_path
+):
+    target = "2026-09-19"
+    _seed(monkeypatch, tmp_path, target)
+    checklist = _build_direct_checklist(monkeypatch, tmp_path, target)
+
+    report = mod.build_threshold_cycle_postclose_verification(
+        target, require_summary_handoff=True
+    )
+
+    assert report["status"] == "pass"
+    assert report["checklist_handoff"]["status"] == "pass"
+    assert report["checklist_handoff"]["path"] == str(checklist)
+    assert (
+        report["checklist_handoff"]["expected_task_ids"]
+        == report["checklist_handoff"]["actual_task_ids"]
+    )
+
+
+def test_required_summary_handoff_rejects_task_projection_drift(
+    monkeypatch, tmp_path
+):
+    target = "2026-09-19"
+    _seed(monkeypatch, tmp_path, target)
+    checklist = _build_direct_checklist(monkeypatch, tmp_path, target)
+    checklist.write_text(
+        checklist.read_text(encoding="utf-8")
+        + "\n- [ ] `[DirectFamilySourceRepairEntrySplit] stale task` "
+        "(`Due: 2026-09-21`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~21:40`, "
+        "`Track: RuntimeStability`)\n",
+        encoding="utf-8",
+    )
+
+    report = mod.build_threshold_cycle_postclose_verification(
+        target, require_summary_handoff=True
+    )
+
+    assert report["status"] == "fail"
+    assert "direct_checklist_task_projection_mismatch" in report["issues"]

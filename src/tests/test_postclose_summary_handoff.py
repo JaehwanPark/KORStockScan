@@ -159,35 +159,41 @@ def test_retired_common_layer_handoff_uses_direct_sources_without_cycle(tmp_path
     day = "2026-09-19"
     paths = mod.source_paths(reports, day, "tower")
 
-    assert set(paths) == {
-        "runtime_approval_summary",
-        "runtime_policy_bootstrap",
-        "runtime_policy_bootstrap_verify",
-    }
+    assert set(paths) == {"runtime_approval_summary"}
     assert "postclose_verifier" not in paths
     assert "threshold_cycle_ev" not in paths
     assert "preopen_apply_plan" not in paths
 
 
-def test_retired_handoff_binds_bootstrap_for_summary_effective_date(tmp_path):
+def test_retired_handoff_records_future_bootstrap_without_hashing_it(tmp_path):
     reports = tmp_path / "data" / "report"
     day = "2026-09-19"
     summary = reports / "runtime_approval_summary" / f"runtime_approval_summary_{day}.json"
     summary.parent.mkdir(parents=True)
-    summary.write_text(
-        json.dumps(
-            {
-                "date": day,
-                "preopen_consumption_receipt": {"apply_date": "2026-09-21"},
-            }
-        ),
-        encoding="utf-8",
-    )
+    payload = {
+        "date": day,
+        "preopen_consumption_state": "pending",
+        "preopen_consumption_receipt": {
+            "apply_date": "2026-09-21",
+            "manifest_path": "/runtime/runtime_policy_bootstrap_2026-09-21.json",
+            "verification_path": "/runtime/runtime_policy_bootstrap_verify_2026-09-21.json",
+        },
+        "sources": {},
+    }
+    summary.write_text(json.dumps(payload), encoding="utf-8")
 
     paths = mod.source_paths(reports, day, "tower")
+    before = mod.source_receipt(paths, day)
+    bootstrap = reports.parent / "runtime" / "policy_bootstrap" / "runtime_policy_bootstrap_2026-09-21.json"
+    bootstrap.parent.mkdir(parents=True)
+    bootstrap.write_text('{"status":"ready"}', encoding="utf-8")
+    after = mod.source_receipt(paths, day)
 
-    assert paths["runtime_policy_bootstrap"].name == "runtime_policy_bootstrap_2026-09-21.json"
-    assert paths["runtime_policy_bootstrap_verify"].name == "runtime_policy_bootstrap_verify_2026-09-21.json"
+    assert set(paths) == {"runtime_approval_summary"}
+    assert before == after
+    assert mod.direct_future_handoff(payload, day)["manifest_path"].endswith(
+        "runtime_policy_bootstrap_2026-09-21.json"
+    )
 
 
 def test_schema_v3_pre_retirement_source_uses_direct_handoff(tmp_path):
@@ -208,23 +214,31 @@ def test_schema_v3_pre_retirement_source_uses_direct_handoff(tmp_path):
 
     paths = mod.source_paths(reports, day, "checklist")
 
-    assert set(paths) == {
-        "runtime_approval_summary",
-        "runtime_policy_bootstrap",
-        "runtime_policy_bootstrap_verify",
-    }
-    assert paths["runtime_policy_bootstrap"].name == "runtime_policy_bootstrap_2026-09-21.json"
+    assert set(paths) == {"runtime_approval_summary"}
 
 
 def test_retired_common_layer_handoff_skips_legacy_intake(monkeypatch, tmp_path):
     reports = tmp_path / "data" / "report"
     day = "2026-09-19"
+    summary = {
+        "date": day,
+        "preopen_consumption_state": "not_due",
+        "preopen_consumption_receipt": {},
+        "sources": {},
+    }
+    summary_path = reports / "runtime_approval_summary" / f"runtime_approval_summary_{day}.json"
+    summary_path.parent.mkdir(parents=True)
+    summary_path.write_text(json.dumps(summary), encoding="utf-8")
     receipt = mod.source_receipt(mod.source_paths(reports, day, "tower"), day)
     tower = reports / "tuning_performance_control_tower" / f"tuning_performance_control_tower_{day}.json"
     tower.parent.mkdir(parents=True)
     tower.write_text(json.dumps({"date": day, "source_generation_contract": receipt}))
     checklist = tmp_path / "checklist.md"
-    checklist.write_text(mod.checklist_marker(receipt))
+    checklist.write_text(
+        mod.checklist_marker(receipt)
+        + "\n"
+        + mod.direct_future_handoff_marker(mod.direct_future_handoff(summary, day))
+    )
     monkeypatch.setattr(
         "src.engine.automation.postclose_recommendation_intake.build_intake",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(

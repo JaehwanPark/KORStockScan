@@ -15,6 +15,7 @@ def test_postclose_wrapper_retires_common_daily_ev_and_generic_workorder():
     assert "src.engine.build_code_improvement_workorder" not in script
     assert "src.engine.runtime_approval_summary" in script
     assert "src.engine.verify_threshold_cycle_postclose_chain" in script
+    assert script.count("--require-summary-handoff") >= 3
 
 
 def test_postclose_status_records_direct_owner_producer_flags():

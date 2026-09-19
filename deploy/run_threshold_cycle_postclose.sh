@@ -1366,12 +1366,22 @@ skip_triggered_step() {
 
 next_stage2_checklist_path() {
   SOURCE_DATE="$TARGET_DATE" PYTHONPATH=. "$VENV_PY" - <<'PY'
+import json
 import os
+from pathlib import Path
 
 from src.engine.build_next_stage2_checklist import _next_krx_trading_day, stage2_checklist_path
 
 source_date = os.environ["SOURCE_DATE"]
 target_date = _next_krx_trading_day(source_date)
+summary_path = Path("data/report/runtime_approval_summary") / f"runtime_approval_summary_{source_date}.json"
+try:
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError):
+    summary = {}
+receipt = summary.get("preopen_consumption_receipt")
+if isinstance(receipt, dict) and receipt.get("apply_date"):
+    target_date = str(receipt["apply_date"])
 print(stage2_checklist_path(target_date))
 PY
 }
@@ -2012,6 +2022,7 @@ POSTCLOSE_FAILURE_REASON="verify_threshold_cycle_postclose_chain_failed"
 POSTCLOSE_FAILURE_ARTIFACT="$PROJECT_DIR/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_${TARGET_DATE}.json"
 run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.verify_threshold_cycle_postclose_chain \
   --date "$TARGET_DATE" \
+  --require-summary-handoff \
   --allow-pending-done-marker \
   --allow-pending-entry-replay \
   "${VERIFY_DISABLED_STAGE_ARGS[@]}"
@@ -2031,6 +2042,7 @@ POSTCLOSE_FAILURE_REASON="verify_threshold_cycle_postclose_chain_final_failed"
 POSTCLOSE_FAILURE_ARTIFACT="$PROJECT_DIR/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_${TARGET_DATE}.json"
 run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.verify_threshold_cycle_postclose_chain \
   --date "$TARGET_DATE" \
+  --require-summary-handoff \
   --allow-pending-entry-replay \
   "${VERIFY_DISABLED_STAGE_ARGS[@]}"
 POSTCLOSE_FAILURE_REASON=""

@@ -80,6 +80,36 @@ MACHINE_MICROSTRUCTURE_NON_RUNTIME_AUTHORITY = {
     "actual_order_submitted": False,
     "broker_order_forbidden": True,
 }
+DIRECT_SUMMARY_SCHEMA_VERSION = 3
+DIRECT_SUMMARY_REPORT_TYPE = "runtime_approval_summary"
+DIRECT_SUMMARY_AUTHORITY = "family_owned_direct_evidence_summary_only"
+DIRECT_OWNER_TASK_LABEL = {
+    "source_quality": "SourceQuality",
+    "entry_cancel_wait": "EntryCancelWait",
+    "entry_split": "EntrySplit",
+    "scale_in_split": "ScaleInSplit",
+    "machine_entry": "MachineEntry",
+    "low_price_two_leg": "LowPriceTwoLeg",
+    "low_price_expansion": "LowPriceExpansion",
+    "ws_freshness": "WsFreshness",
+    "ai_outcome": "AiOutcome",
+    "rising_missed": "RisingMissed",
+}
+DIRECT_TERMINAL_STATES = {
+    "identical_policy",
+    "measured_no_edge",
+    "not_applicable",
+    "retired",
+    "valid_empty",
+}
+DIRECT_COMPARISON_STATES = DIRECT_TERMINAL_STATES | {
+    "insufficient_sample",
+    "mixed",
+    "pending_maturity",
+    "source_gap",
+    "unsupported_scope",
+    "validated_edge",
+}
 
 AUTO_START = "<!-- AUTO_NEXT_STAGE2_CHECKLIST_START -->"
 AUTO_END = "<!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->"
@@ -490,6 +520,205 @@ def _rel(path: Path) -> str:
 
 def stage2_checklist_path(target_date: str) -> Path:
     return CHECKLIST_DIR / f"{target_date}-stage2-todo-checklist.md"
+
+
+def _direct_summary_path(source_date: str) -> Path:
+    return (
+        PROJECT_ROOT
+        / "data"
+        / "report"
+        / "runtime_approval_summary"
+        / f"runtime_approval_summary_{source_date}.json"
+    )
+
+
+def _load_direct_summary(source_date: str) -> dict[str, Any]:
+    path = _direct_summary_path(source_date)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"direct runtime summary missing: {path}") from exc
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        raise RuntimeError(f"direct runtime summary unreadable: {path}") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("direct runtime summary object required")
+    checks = {
+        "schema_version": payload.get("schema_version")
+        == DIRECT_SUMMARY_SCHEMA_VERSION,
+        "report_type": payload.get("report_type") == DIRECT_SUMMARY_REPORT_TYPE,
+        "date": payload.get("date") == source_date,
+        "decision_authority": payload.get("decision_authority")
+        == DIRECT_SUMMARY_AUTHORITY,
+        "daily_threshold_cycle_retired": payload.get("daily_threshold_cycle_retired")
+        is True,
+        "threshold_cycle_ev_retired": payload.get("threshold_cycle_ev_retired")
+        is True,
+        "runtime_effect": payload.get("runtime_effect") is False,
+        "allowed_runtime_apply": payload.get("allowed_runtime_apply") is False,
+        "actual_order_submitted": payload.get("actual_order_submitted") is False,
+        "direct_evidence_state": payload.get("direct_evidence_state")
+        in {"complete", "incomplete"},
+        "status": payload.get("status")
+        in {"direct_evidence_complete", "direct_evidence_incomplete"},
+        "sources": isinstance(payload.get("sources"), dict),
+        "blocking_reasons": isinstance(payload.get("blocking_reasons"), list),
+        "economic_blockers": isinstance(payload.get("economic_blockers"), list),
+    }
+    invalid = [key for key, valid in checks.items() if not valid]
+    for key in (
+        "required_source_count",
+        "available_required_source_count",
+        "validated_edge_count",
+        "policy_candidate_count",
+    ):
+        value = payload.get(key)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            invalid.append(key)
+    if payload.get("available_required_source_count", 0) > payload.get(
+        "required_source_count", 0
+    ):
+        invalid.append("required_source_count_order")
+    if invalid:
+        raise RuntimeError(
+            "direct runtime summary contract invalid: " + ",".join(sorted(set(invalid)))
+        )
+    required_rows = [
+        row
+        for row in payload["sources"].values()
+        if isinstance(row, dict) and row.get("required") is True
+    ]
+    if len(required_rows) != payload["required_source_count"]:
+        raise RuntimeError("direct runtime summary required source census mismatch")
+    missing_primary_owners = sorted(
+        set(DIRECT_OWNER_TASK_LABEL) - set(payload["sources"])
+    )
+    if missing_primary_owners:
+        raise RuntimeError(
+            "direct runtime summary primary source census incomplete: "
+            + ",".join(missing_primary_owners)
+        )
+    available_rows = 0
+    validated_edge_count = 0
+    policy_candidate_count = 0
+    for owner, row in payload["sources"].items():
+        if not isinstance(owner, str) or not isinstance(row, dict):
+            raise RuntimeError("direct runtime summary source row invalid")
+        if row.get("required") is not True:
+            continue
+        if owner not in DIRECT_OWNER_TASK_LABEL:
+            raise RuntimeError(
+                f"direct runtime summary required owner unsupported: {owner}"
+            )
+        for boolean_field in ("exists", "target_date_matches"):
+            if not isinstance(row.get(boolean_field), bool):
+                raise RuntimeError(
+                    f"direct runtime summary source {boolean_field} invalid: {owner}"
+                )
+        digest = row.get("sha256")
+        if digest is not None and (
+            not isinstance(digest, str)
+            or len(digest) != 64
+            or any(character not in "0123456789abcdef" for character in digest.lower())
+        ):
+            raise RuntimeError(
+                f"direct runtime summary source sha256 invalid: {owner}"
+            )
+        evidence = row.get("economic_evidence")
+        if not isinstance(evidence, dict):
+            raise RuntimeError(
+                f"direct runtime summary economic evidence missing: {owner}"
+            )
+        if evidence.get("comparison_status") not in DIRECT_COMPARISON_STATES:
+            raise RuntimeError(
+                f"direct runtime summary comparison status invalid: {owner}"
+            )
+        if not isinstance(evidence.get("resolution_mode"), str):
+            raise RuntimeError(
+                f"direct runtime summary resolution mode invalid: {owner}"
+            )
+        if not isinstance(evidence.get("closure_owner"), str):
+            raise RuntimeError(
+                f"direct runtime summary closure owner invalid: {owner}"
+            )
+        if evidence.get("comparison_status") == "validated_edge":
+            validated_edge_count += 1
+        if evidence.get("policy_handoff_state") == "candidate_published":
+            policy_candidate_count += 1
+        if (
+            row["exists"]
+            and row["target_date_matches"]
+            and digest
+            and not row.get("error")
+        ):
+            available_rows += 1
+    if available_rows != payload["available_required_source_count"]:
+        raise RuntimeError("direct runtime summary available source census mismatch")
+    if validated_edge_count != payload["validated_edge_count"]:
+        raise RuntimeError("direct runtime summary validated edge census mismatch")
+    if policy_candidate_count != payload["policy_candidate_count"]:
+        raise RuntimeError("direct runtime summary policy candidate census mismatch")
+    expected_state = (
+        "complete"
+        if available_rows == payload["required_source_count"]
+        else "incomplete"
+    )
+    if payload["direct_evidence_state"] != expected_state or payload["status"] != (
+        "direct_evidence_complete"
+        if expected_state == "complete"
+        else "direct_evidence_incomplete"
+    ):
+        raise RuntimeError("direct runtime summary completion state mismatch")
+    if payload.get("preopen_consumption_state") not in {
+        "not_due",
+        "pending",
+        "rejected",
+        "verified",
+    }:
+        raise RuntimeError("direct runtime summary preopen state invalid")
+    if payload.get("natural_acceptance_state") not in {
+        "not_applicable",
+        "not_due",
+        "pending",
+        "verified",
+    }:
+        raise RuntimeError("direct runtime summary natural acceptance state invalid")
+    preopen = payload.get("preopen_consumption_receipt")
+    if not isinstance(preopen, dict):
+        raise RuntimeError("direct runtime summary preopen receipt invalid")
+    if preopen.get("source_date") != source_date:
+        raise RuntimeError("direct runtime summary preopen source date mismatch")
+    if not isinstance(preopen.get("effective_dates"), list):
+        raise RuntimeError("direct runtime summary preopen effective dates invalid")
+    if preopen.get("apply_date"):
+        apply_date = str(preopen["apply_date"]).strip()
+        try:
+            parsed_apply = date.fromisoformat(apply_date)
+        except ValueError as exc:
+            raise RuntimeError(
+                f"runtime approval summary preopen apply_date is invalid: {apply_date!r}"
+            ) from exc
+        if parsed_apply <= date.fromisoformat(source_date):
+            raise RuntimeError(
+                "runtime approval summary preopen apply_date must be after "
+                f"source_date: {apply_date} <= {source_date}"
+            )
+        trading_day, _ = get_krx_trading_day_status(parsed_apply)
+        if not trading_day:
+            raise RuntimeError(
+                f"runtime approval summary preopen apply_date is not a KRX trading day: {apply_date}"
+            )
+        effective_dates = preopen["effective_dates"]
+        if effective_dates and apply_date not in {
+            str(value) for value in effective_dates
+        }:
+            raise RuntimeError(
+                "runtime approval summary apply_date/effective_dates mismatch"
+            )
+        if not preopen.get("manifest_path") or not preopen.get("verification_path"):
+            raise RuntimeError("direct runtime summary preopen path contract invalid")
+    elif payload.get("preopen_consumption_state") != "not_due":
+        raise RuntimeError("direct runtime summary pending preopen apply date missing")
+    return payload
 
 
 def _list_selected_families(ev_report: dict[str, Any]) -> list[str]:
@@ -1474,6 +1703,17 @@ def _existing_manual_task_ids(existing: str) -> set[str]:
     return {match.group(1) for match in re.finditer(r"`\[([A-Za-z0-9_:-]+)\]", text)}
 
 
+def _remove_direct_generation_markers(existing: str) -> str:
+    from src.engine.automation.postclose_summary_handoff import (
+        FUTURE_HANDOFF_MARKER,
+        MARKER,
+    )
+
+    for marker in (MARKER, FUTURE_HANDOFF_MARKER):
+        existing = re.sub(rf"^<!-- {marker} .+? -->\s*$\n?", "", existing, flags=re.MULTILINE)
+    return existing
+
+
 def _task_ids_from_text(text: str) -> set[str]:
     return {
         match.group(1)
@@ -1656,37 +1896,25 @@ def build_next_stage2_checklist(
         raise ValueError("source_date is required")
     date.fromisoformat(source_date)
     target_date = _next_krx_trading_day(source_date)
-    direct_summary = _load_json(
-        PROJECT_ROOT
-        / "data"
-        / "report"
-        / "runtime_approval_summary"
-        / f"runtime_approval_summary_{source_date}.json"
+    direct_hint = _load_json(_direct_summary_path(source_date))
+    use_direct = (
+        source_date >= "2026-09-19"
+        or direct_hint.get("schema_version") == DIRECT_SUMMARY_SCHEMA_VERSION
+        or direct_hint.get("daily_threshold_cycle_retired") is True
     )
-    if direct_summary.get("schema_version") == 3:
+    direct_summary = _load_direct_summary(source_date) if use_direct else {}
+    if use_direct:
         preopen_receipt = direct_summary.get("preopen_consumption_receipt")
         if isinstance(preopen_receipt, dict) and preopen_receipt.get("apply_date"):
-            apply_date = str(preopen_receipt["apply_date"]).strip()
-            try:
-                parsed_apply_date = date.fromisoformat(apply_date)
-            except ValueError as exc:
-                raise RuntimeError(
-                    "runtime approval summary preopen apply_date is invalid: "
-                    f"{apply_date!r}"
-                ) from exc
-            if parsed_apply_date <= date.fromisoformat(source_date):
-                raise RuntimeError(
-                    "runtime approval summary preopen apply_date must be after "
-                    f"source_date: {apply_date} <= {source_date}"
-                )
-            target_date = apply_date
+            target_date = str(preopen_receipt["apply_date"]).strip()
     target_path = stage2_checklist_path(target_date)
     with _checklist_write_lock(target_path):
-        if source_date >= "2026-09-19" or direct_summary.get("schema_version") == 3:
+        if use_direct:
             return _build_direct_family_checklist(
                 source_date=source_date,
                 target_date=target_date,
                 target_path=target_path,
+                summary=direct_summary,
             )
         return _build_next_stage2_checklist_locked(
             source_date=source_date,
@@ -1696,56 +1924,313 @@ def build_next_stage2_checklist(
         )
 
 
+def _direct_task(
+    *,
+    owner: str,
+    role: str,
+    source_date: str,
+    summary_path: Path,
+    source: dict[str, Any],
+    summary_sha256: str,
+) -> GeneratedTask:
+    label = DIRECT_OWNER_TASK_LABEL.get(owner)
+    if label is None:
+        label = "".join(part.capitalize() for part in re.split(r"[^A-Za-z0-9]+", owner))
+    evidence = (
+        source.get("economic_evidence")
+        if isinstance(source.get("economic_evidence"), dict)
+        else {}
+    )
+    role_contract = {
+        "SourceRepair": (
+            "직접 family 원천·경제성 계약 수리",
+            "POSTCLOSE",
+            "16:30~21:40",
+            "producer_contract_repair",
+        ),
+        "ScopeDecision": (
+            "직접 family 지원 범위 계약 확정",
+            "POSTCLOSE",
+            "16:30~21:40",
+            "scope_contract_decision",
+        ),
+        "NaturalEvidence": (
+            "직접 family 자연 표본·독립 검증 확인",
+            "POSTCLOSE",
+            "16:30~21:40",
+            "natural_evidence_wait",
+        ),
+        "PolicyHandoff": (
+            "직접 family 정책 handoff 수리",
+            "PREOPEN",
+            "08:45~08:55",
+            "policy_handoff_repair",
+        ),
+    }
+    title, slot, time_window, disposition = role_contract[role]
+    blocker = _compact_inline_value(
+        evidence.get("first_blocker") or source.get("error"),
+        fallback="contract_state_requires_followup",
+    )
+    closure_owner = _compact_inline_value(
+        evidence.get("closure_owner"), fallback=owner
+    )
+    closure_test = _compact_inline_value(
+        evidence.get("closure_test"), fallback="missing", max_length=240
+    )
+    receipt = (
+        source.get("policy_receipt")
+        if isinstance(source.get("policy_receipt"), dict)
+        else {}
+    )
+    return GeneratedTask(
+        task_id=f"DirectFamily{role}{label}",
+        title=f"{owner} {title}",
+        slot=slot,
+        time_window=time_window,
+        track="RuntimeStability" if role != "NaturalEvidence" else "ScalpingLogic",
+        source=(
+            f"[{summary_path.name}](/home/ubuntu/KORStockScan/{_rel(summary_path)})"
+        ),
+        lines=(
+            f"증거: runtime_summary_sha256=`{summary_sha256}`, source_artifact=`{source.get('path') or '-'}`.",
+            "상태: "
+            f"family=`{owner}`, task_role=`{disposition}`, "
+            f"comparison_status=`{evidence.get('comparison_status') or '-'}`, "
+            f"resolution_mode=`{evidence.get('resolution_mode') or '-'}`, "
+            f"first_blocker=`{blocker}`.",
+            "완료 기준: "
+            f"closure_owner=`{closure_owner}`, closure_test=`{closure_test}`. "
+            f"policy_receipt_valid=`{receipt.get('valid') is True}`, source_date=`{source_date}`의 "
+            "원천·비용 EV·정책·consumer 날짜와 해시를 다시 대조한다.",
+            "권한 경계: null을 0/no-edge로 바꾸거나 threshold·provider·주문·수량·cap·custody·operator lock·hard safety를 우회하지 않는다.",
+        ),
+    )
+
+
+def _project_direct_tasks(
+    *,
+    summary: dict[str, Any],
+    source_date: str,
+    target_date: str,
+    summary_path: Path,
+    summary_sha256: str,
+) -> tuple[list[GeneratedTask], dict[str, str]]:
+    tasks_by_owner: dict[str, GeneratedTask] = {}
+    action_by_owner: dict[str, str] = {}
+    sources = summary["sources"]
+    for owner, source in sources.items():
+        if not isinstance(source, dict) or source.get("required") is not True:
+            continue
+        source_contract_gap = (
+            source.get("exists") is not True
+            or bool(source.get("error"))
+            or source.get("target_date_matches") is not True
+            or not source.get("sha256")
+        )
+        evidence = (
+            source.get("economic_evidence")
+            if isinstance(source.get("economic_evidence"), dict)
+            else {}
+        )
+        status = str(evidence.get("comparison_status") or "")
+        resolution = str(evidence.get("resolution_mode") or "")
+        role: str | None = None
+        if source_contract_gap:
+            role = "SourceRepair"
+        elif status == "source_gap":
+            role = (
+                "ScopeDecision"
+                if resolution == "historical_unrecoverable"
+                else "SourceRepair"
+            )
+        elif status == "unsupported_scope":
+            role = "ScopeDecision"
+        elif status == "mixed":
+            role = (
+                "NaturalEvidence"
+                if resolution == "natural_maturity"
+                else "SourceRepair"
+            )
+        elif status in {"pending_maturity", "insufficient_sample"}:
+            role = (
+                "NaturalEvidence"
+                if resolution == "natural_maturity"
+                else "SourceRepair"
+            )
+        elif status == "validated_edge":
+            receipt = source.get("policy_receipt")
+            if not isinstance(receipt, dict) or receipt.get("valid") is not True:
+                role = "PolicyHandoff"
+            else:
+                action_by_owner[owner] = "preopen_policy_handoff"
+        elif status in DIRECT_TERMINAL_STATES:
+            action_by_owner[owner] = (
+                "terminal_not_applicable"
+                if status in {"not_applicable", "retired"}
+                else "terminal_incumbent"
+            )
+        else:
+            action_by_owner[owner] = "diagnostic_only"
+        if role is not None:
+            task = _direct_task(
+                owner=owner,
+                role=role,
+                source_date=source_date,
+                summary_path=summary_path,
+                source=source,
+                summary_sha256=summary_sha256,
+            )
+            tasks_by_owner[owner] = task
+            action_by_owner[owner] = {
+                "SourceRepair": "producer_contract_repair",
+                "ScopeDecision": "scope_contract_decision",
+                "NaturalEvidence": "natural_evidence_wait",
+                "PolicyHandoff": "policy_handoff_repair",
+            }[role]
+
+    preopen = (
+        summary.get("preopen_consumption_receipt")
+        if isinstance(summary.get("preopen_consumption_receipt"), dict)
+        else {}
+    )
+    preopen_state = summary.get("preopen_consumption_state")
+    if preopen_state in {"pending", "rejected"} and preopen.get(
+        "apply_date"
+    ) == target_date:
+        due: list[str] = []
+        for owner, source in sorted(sources.items()):
+            if not isinstance(source, dict) or source.get("required") is not True:
+                continue
+            receipt = source.get("policy_receipt")
+            if isinstance(receipt, dict) and receipt.get("path"):
+                evidence = (
+                    source.get("economic_evidence")
+                    if isinstance(source.get("economic_evidence"), dict)
+                    else {}
+                )
+                due.append(
+                    f"{owner}(valid={receipt.get('valid') is True}, "
+                    f"handoff={evidence.get('policy_handoff_state')})"
+                )
+        tasks_by_owner["__preopen__"] = GeneratedTask(
+            task_id="DirectFamilyPreopenPolicyHandoff",
+            title="direct family 날짜별 정책·bootstrap 장전 소비 확인",
+            slot="PREOPEN",
+            time_window="08:45~08:55",
+            track="RuntimeStability",
+            source=(
+                f"[{summary_path.name}](/home/ubuntu/KORStockScan/{_rel(summary_path)})"
+            ),
+            lines=(
+                f"판정 기준: source_date=`{source_date}`, apply_date=`{target_date}`, preopen_state=`{preopen_state}`, due_policy_receipts=`{'; '.join(due) or '-'}`의 schema·semantic hash·scope와 bootstrap accepted/rejected 결과를 확인한다.",
+                "incumbent 정책은 runtime override가 0이어야 하고 validated edge는 단일축 allowlist·operator lock·retired OFF·same-stage guard를 통과해야 한다.",
+                "금지: bootstrap 생성·선택을 실제 PID 소비, 자연 행동 또는 비용 후 EV 개선으로 보고하지 않는다.",
+            ),
+        )
+    if summary.get("natural_acceptance_state") == "pending" and (
+        summary.get("runtime_effect") is True
+        or int(summary.get("validated_edge_count") or 0) > 0
+    ):
+        tasks_by_owner["__post_apply__"] = GeneratedTask(
+            task_id="DirectFamilyPostApplyAcceptance",
+            title="direct family 실제 적용 버전별 자연 성과 확인",
+            slot="POSTCLOSE",
+            time_window="16:30~21:40",
+            track="ScalpingLogic",
+            source=(
+                f"[{summary_path.name}](/home/ubuntu/KORStockScan/{_rel(summary_path)})"
+            ),
+            lines=(
+                "판정 기준: 실제 PID가 소비한 정책 version별 episode를 중복 제거하고 COMPLETED+valid profit_rate의 비용 차감 rolling/cumulative EV·순익·tail·노출·fill participation을 확인한다.",
+                "모델 delta와 실제 완료 이익을 분리하며 partial/no-fill/held/custody-censored/source-gap을 0으로 대체하지 않는다.",
+                "금지: 배포·bootstrap PASS·정책 파일 존재를 자연 적용 또는 경제 개선으로 대체하지 않는다.",
+            ),
+        )
+    tasks = sorted(tasks_by_owner.values(), key=_task_sort_key)
+    return tasks, action_by_owner
+
+
 def _build_direct_family_checklist(
-    *, source_date: str, target_date: str, target_path: Path
+    *,
+    source_date: str,
+    target_date: str,
+    target_path: Path,
+    summary: dict[str, Any],
 ) -> dict[str, Any]:
     from src.engine.automation.postclose_summary_handoff import (
         assert_sources_unchanged,
         checklist_marker,
+        direct_future_handoff,
+        direct_future_handoff_marker,
         source_paths,
         source_receipt,
     )
 
-    summary_path = (
-        PROJECT_ROOT
-        / "data"
-        / "report"
-        / "runtime_approval_summary"
-        / f"runtime_approval_summary_{source_date}.json"
-    )
-    summary = _load_json(summary_path)
-    direct_blockers = [str(value) for value in summary.get("blocking_reasons") or []]
-    economic_blockers = [
-        value for value in summary.get("economic_blockers") or []
-        if isinstance(value, dict)
-        and value.get("comparison_status") in {"source_gap", "unsupported_scope", "mixed"}
-    ]
-    blockers: list[Any] = direct_blockers + economic_blockers
+    summary_path = _direct_summary_path(source_date)
     handoff_paths = source_paths(summary_path.parents[1], source_date, "checklist")
     handoff_receipt = source_receipt(handoff_paths, source_date)
+    summary_sha256 = str(
+        handoff_receipt.get("sources", {})
+        .get("runtime_approval_summary", {})
+        .get("sha256")
+        or "missing"
+    )
+    projected_tasks, action_by_owner = _project_direct_tasks(
+        summary=summary,
+        source_date=source_date,
+        target_date=target_date,
+        summary_path=summary_path,
+        summary_sha256=summary_sha256,
+    )
+    existing = target_path.read_text(encoding="utf-8") if target_path.exists() else ""
+    existing = _remove_direct_generation_markers(existing)
+    manual_ids = _existing_manual_task_ids(existing) if existing else set()
+    tasks_to_render = [
+        task for task in projected_tasks if task.task_id not in manual_ids
+    ]
     lines = [
         AUTO_START,
         checklist_marker(handoff_receipt),
+        direct_future_handoff_marker(direct_future_handoff(summary, source_date)),
         "",
-        "## Family 직접 증거 후속",
+        "## Family 직접 증거 상태",
         "",
+        f"- source date: `{source_date}`; next apply date: `{target_date}`.",
+        f"- direct source: `{summary['available_required_source_count']}/{summary['required_source_count']}`; direct state: `{summary['direct_evidence_state']}`.",
+        f"- economic state: `{summary.get('economic_state')}`; validated edge: `{summary.get('validated_edge_count') or 0}`; policy candidate: `{summary.get('policy_candidate_count') or 0}`.",
+        f"- PREOPEN: `{summary.get('preopen_consumption_state')}`; natural acceptance: `{summary.get('natural_acceptance_state')}`.",
+        "",
+        "| family | economic state | policy handoff | checklist action |",
+        "| --- | --- | --- | --- |",
     ]
-    tasks: list[str] = []
-    if blockers:
-        lines.extend(
-            [
-                "- 구조적 결손은 기존 `[CodeImprovementWorkorderReview0918]` owner에 인계한다. 새 checkbox·stable ID를 만들지 않는다.",
-                f"  - Source: [{summary_path.name}](/home/ubuntu/KORStockScan/{_rel(summary_path)})",
-                f"  - 직접 증거 결손: `{direct_blockers}`",
-                f"  - 구조적 경제성 결손: `{economic_blockers}`",
-                "  - 완료 기준: 원천·비용 반영 EV·family policy·장중 consumer 결과의 날짜와 해시를 직접 대조하고, 결손을 0 또는 개선으로 간주하지 않는다.",
-            ]
+    for owner, source in summary["sources"].items():
+        if not isinstance(source, dict) or source.get("required") is not True:
+            continue
+        evidence = (
+            source.get("economic_evidence")
+            if isinstance(source.get("economic_evidence"), dict)
+            else {}
         )
+        lines.append(
+            f"| `{owner}` | `{evidence.get('comparison_status') or '-'}` | "
+            f"`{evidence.get('policy_handoff_state') or '-'}` | "
+            f"`{action_by_owner.get(owner, 'diagnostic_only')}` |"
+        )
+    lines.extend(["", "## 실행 항목", ""])
+    if tasks_to_render:
+        for task in tasks_to_render:
+            lines.extend(_render_task(task, target_date))
+    elif projected_tasks:
+        lines.append(
+            "- 자동 블록 신규 실행 항목 없음. 동일 stable ID의 manual OPEN task를 재사용한다."
+        )
+        lines.append("")
     else:
-        lines.append("- 신규 공통 튜닝 작업 없음. family별 직접 owner와 기존 승인 정책을 유지한다.")
-    lines.extend(["", AUTO_END])
+        lines.append("- 신규 실행 항목 없음. terminal family 상태와 incumbent를 유지한다.")
+        lines.append("")
+    lines.append(AUTO_END)
     auto_block = "\n".join(lines) + "\n"
-    existing = target_path.read_text(encoding="utf-8") if target_path.exists() else ""
     content = (
         _upsert_auto_block(existing, auto_block)
         if existing
@@ -1758,8 +2243,10 @@ def _build_direct_family_checklist(
         "target_date": target_date,
         "path": str(target_path),
         "created": not bool(existing),
-        "task_count": len(tasks),
-        "tasks": tasks,
+        "task_count": len(projected_tasks),
+        "tasks": [task.task_id for task in projected_tasks],
+        "generated_task_count": len(tasks_to_render),
+        "manual_task_reuse_count": len(projected_tasks) - len(tasks_to_render),
         "source_owner": "runtime_approval_summary_direct_family",
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
     }
@@ -1861,7 +2348,8 @@ def _build_next_stage2_checklist_locked(
             if start in content:
                 a,b=content.index(start),content.index(end)+len(end)
                 content=content[:a]+checklist_handoff(view)+content[b:]
-            else:content=content.rstrip()+'\n\n'+checklist_handoff(view)+'\n'
+            else:
+                content = content.rstrip() + "\n\n" + checklist_handoff(view) + "\n"
     assert_sources_unchanged(handoff_receipt, handoff_paths)
     _atomic_write_checklist(target_path, content)
     tasks = _build_tasks(

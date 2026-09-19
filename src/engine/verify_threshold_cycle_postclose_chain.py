@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -92,6 +93,64 @@ def _direct_source_checks(summary: dict[str, Any]) -> tuple[list[dict[str, Any]]
     return checks, issues
 
 
+def _direct_checklist_checks(
+    target_date: str, summary: dict[str, Any], summary_path: Path
+) -> tuple[dict[str, Any], list[str]]:
+    from src.engine.automation.postclose_summary_handoff import verify_summary_handoff
+    from src.engine.build_next_stage2_checklist import (
+        _next_krx_trading_day,
+        _project_direct_tasks,
+        stage2_checklist_path,
+    )
+
+    preopen = (
+        summary.get("preopen_consumption_receipt")
+        if isinstance(summary.get("preopen_consumption_receipt"), dict)
+        else {}
+    )
+    apply_date = str(preopen.get("apply_date") or _next_krx_trading_day(target_date))
+    checklist_path = stage2_checklist_path(apply_date)
+    handoff = verify_summary_handoff(
+        target_date,
+        report_dir=REPORT_DIR,
+        checklist_path=checklist_path,
+        require_tower=False,
+        require_checklist=True,
+    )
+    issues = list(handoff.get("issues") or [])
+    summary_sha256 = _sha(summary_path) or "missing"
+    expected_tasks, _ = _project_direct_tasks(
+        summary=summary,
+        source_date=target_date,
+        target_date=apply_date,
+        summary_path=summary_path,
+        summary_sha256=summary_sha256,
+    )
+    expected_ids = sorted(task.task_id for task in expected_tasks)
+    try:
+        checklist_text = checklist_path.read_text(encoding="utf-8")
+    except OSError:
+        checklist_text = ""
+    actual_ids = sorted(
+        match.group(1)
+        for match in re.finditer(
+            r"^- \[[ xX]\] `\[(DirectFamily[A-Za-z0-9_:-]+)\]",
+            checklist_text,
+            re.MULTILINE,
+        )
+    )
+    if actual_ids != expected_ids:
+        issues.append("direct_checklist_task_projection_mismatch")
+    return {
+        "status": "pass" if not issues else "fail",
+        "path": str(checklist_path),
+        "apply_date": apply_date,
+        "expected_task_ids": expected_ids,
+        "actual_task_ids": actual_ids,
+        "handoff": handoff,
+    }, issues
+
+
 def build_threshold_cycle_postclose_verification(
     target_date: str,
     *,
@@ -122,6 +181,17 @@ def build_threshold_cycle_postclose_verification(
         issues.append("postclose_terminal_status_missing")
     if require_summary_handoff and not paths["runtime_summary"].exists():
         issues.append("summary_handoff_missing")
+    checklist_handoff: dict[str, Any] = {
+        "status": "not_required",
+        "path": None,
+        "expected_task_ids": [],
+        "actual_task_ids": [],
+    }
+    if require_summary_handoff and paths["runtime_summary"].exists():
+        checklist_handoff, checklist_issues = _direct_checklist_checks(
+            target_date, summary, paths["runtime_summary"]
+        )
+        issues.extend(checklist_issues)
     status = "pass" if not issues else "fail"
     return {
         "schema_version": 2,
@@ -138,6 +208,7 @@ def build_threshold_cycle_postclose_verification(
             "sha256": _sha(paths["runtime_summary"]),
             "recommendation_intake": "family_owned_direct_only",
         },
+        "checklist_handoff": checklist_handoff,
         "retired_common_layers": [
             "daily_threshold_cycle_report", "threshold_cycle_ev_report", "threshold_cycle_preopen_apply"
         ],

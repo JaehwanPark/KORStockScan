@@ -24,6 +24,11 @@ def test_controller_never_reruns_common_tuning_or_wrapper(monkeypatch, tmp_path)
     )
     monkeypatch.setattr(
         mod,
+        "build_next_stage2_checklist",
+        lambda date: {"task_count": 0},
+    )
+    monkeypatch.setattr(
+        mod,
         "build_threshold_cycle_postclose_verification",
         lambda *args, **kwargs: {"status": "pass", "issues": []},
     )
@@ -36,6 +41,7 @@ def test_controller_never_reruns_common_tuning_or_wrapper(monkeypatch, tmp_path)
     assert report["common_tuning_recovery_retired"] is True
     assert report["actions"] == [
         "runtime_approval_summary_refreshed",
+        "next_stage2_checklist_refreshed",
         "direct_postclose_verification_refreshed",
     ]
 

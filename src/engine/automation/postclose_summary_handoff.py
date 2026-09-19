@@ -17,6 +17,8 @@ from src.engine.automation.postclose_workorder_contract import exact_equal
 
 SCHEMA = "postclose_summary_sources_v1"
 MARKER = "POSTCLOSE_SUMMARY_SOURCES"
+FUTURE_HANDOFF_SCHEMA = "direct_family_future_handoff_v1"
+FUTURE_HANDOFF_MARKER = "DIRECT_FAMILY_FUTURE_HANDOFF"
 COMMON_THRESHOLD_TUNING_RETIRED_FROM = "2026-09-19"
 
 
@@ -131,24 +133,10 @@ def source_paths(report_dir: Path, target_date: str, consumer: str) -> dict[str,
         target_date >= COMMON_THRESHOLD_TUNING_RETIRED_FROM
         or summary.get("schema_version") == 3
     ):
-        data_dir = report_dir.parent
-        preopen = summary.get("preopen_consumption_receipt") or {}
-        apply_date = (
-            str(preopen.get("apply_date"))
-            if isinstance(preopen, dict) and preopen.get("apply_date")
-            else target_date
-        )
-        return {
-            "runtime_approval_summary": summary_path,
-            "runtime_policy_bootstrap": data_dir
-            / "runtime"
-            / "policy_bootstrap"
-            / f"runtime_policy_bootstrap_{apply_date}.json",
-            "runtime_policy_bootstrap_verify": data_dir
-            / "runtime"
-            / "policy_bootstrap"
-            / f"runtime_policy_bootstrap_verify_{apply_date}.json",
-        }
+        # PREOPEN artifacts are expected future outputs at postclose time.  A
+        # later normal bootstrap must not invalidate the immutable postclose
+        # generation receipt merely because its previously absent file arrived.
+        return {"runtime_approval_summary": summary_path}
     labels = {
         "tower": (
             "threshold_cycle_ev",
@@ -254,6 +242,51 @@ def checklist_marker(receipt: dict[str, Any]) -> str:
     return f"<!-- {MARKER} {json.dumps(receipt, sort_keys=True)} -->"
 
 
+def direct_future_handoff(summary: dict[str, Any], source_date: str) -> dict[str, Any]:
+    preopen = (
+        summary.get("preopen_consumption_receipt")
+        if isinstance(summary.get("preopen_consumption_receipt"), dict)
+        else {}
+    )
+    policies: list[dict[str, Any]] = []
+    sources = summary.get("sources") if isinstance(summary.get("sources"), dict) else {}
+    for owner, source in sorted(sources.items()):
+        if not isinstance(source, dict):
+            continue
+        receipt = source.get("policy_receipt")
+        if not isinstance(receipt, dict) or not receipt.get("path"):
+            continue
+        policies.append(
+            {
+                "owner": owner,
+                "policy_owner": receipt.get("owner"),
+                "policy_sha256": receipt.get("sha256"),
+                "valid": receipt.get("valid") is True,
+            }
+        )
+    return {
+        "schema": FUTURE_HANDOFF_SCHEMA,
+        "source_date": source_date,
+        "apply_date": preopen.get("apply_date"),
+        "expected_state": (
+            "future_due"
+            if preopen.get("apply_date")
+            and summary.get("preopen_consumption_state") == "pending"
+            else summary.get("preopen_consumption_state")
+        ),
+        "source_preopen_state": summary.get("preopen_consumption_state"),
+        "manifest_path": preopen.get("manifest_path"),
+        "verification_path": preopen.get("verification_path"),
+        "policy_receipts": policies,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+    }
+
+
+def direct_future_handoff_marker(payload: dict[str, Any]) -> str:
+    return f"<!-- {FUTURE_HANDOFF_MARKER} {json.dumps(payload, sort_keys=True)} -->"
+
+
 def verify_summary_handoff(
     target_date: str,
     *,
@@ -272,9 +305,20 @@ def verify_summary_handoff(
         markdown_section,
     )
 
+    summary_path = (
+        report_dir
+        / "runtime_approval_summary"
+        / f"runtime_approval_summary_{target_date}.json"
+    )
+    summary = _load_json(summary_path)
+    direct_mode = (
+        target_date >= COMMON_THRESHOLD_TUNING_RETIRED_FROM
+        or summary.get("schema_version") == 3
+    )
     intake = (
         build_intake(report_dir, target_date)
         if EFFECTIVE_DATE <= target_date < COMMON_THRESHOLD_TUNING_RETIRED_FROM
+        and not direct_mode
         else None
     )
     for consumer, required in (
@@ -308,6 +352,24 @@ def verify_summary_handoff(
                 issues.append(
                     f"postclose_summary_handoff:{consumer}:source_generation_mismatch"
                 )
+            if consumer == "checklist" and direct_mode:
+                future_matches = re.findall(
+                    rf"<!-- {FUTURE_HANDOFF_MARKER} (.+?) -->", text
+                )
+                if len(future_matches) != 1:
+                    issues.append(
+                        "postclose_summary_handoff:checklist:"
+                        "future_handoff_marker_missing_or_duplicate"
+                    )
+                else:
+                    if not exact_equal(
+                        json.loads(future_matches[0]),
+                        direct_future_handoff(summary, target_date),
+                    ):
+                        issues.append(
+                            "postclose_summary_handoff:checklist:"
+                            "future_handoff_semantics_mismatch"
+                        )
             if intake is not None:
                 if consumer == "tower":
                     if not exact_equal(payload.get("recommendation_intake"), intake):
@@ -315,16 +377,16 @@ def verify_summary_handoff(
                             "postclose_summary_handoff:tower:intake_semantics_mismatch"
                         )
                     from src.engine.automation.tuning_performance_control_tower import (
-                        _load_json,
+                        _load_json as _tower_load_json,
                         _selected_runtime,
                     )
 
                     paths = source_paths(report_dir, target_date, consumer)
                     selected = _selected_runtime(
-                        _load_json(paths["preopen_apply_plan"]),
-                        _load_json(paths["threshold_cycle_ev"]),
-                        _load_json(paths["preopen_runtime_manifest"]),
-                        pid_receipt=_load_json(paths["preopen_pid_verification"]),
+                        _tower_load_json(paths["preopen_apply_plan"]),
+                        _tower_load_json(paths["threshold_cycle_ev"]),
+                        _tower_load_json(paths["preopen_runtime_manifest"]),
+                        pid_receipt=_tower_load_json(paths["preopen_pid_verification"]),
                         target_date=target_date,
                     )
                     if not exact_equal(payload.get("selected_runtime"), selected):

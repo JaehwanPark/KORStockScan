@@ -10,7 +10,6 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from src.engine import build_next_stage2_checklist as mod
-from src.engine import sync_docs_backlog_to_project as backlog_sync
 from src.engine.sync_docs_backlog_to_project import parse_checklist_tasks
 
 
@@ -76,6 +75,132 @@ def _patch_dirs(monkeypatch, tmp_path):
 def _write_json(path: Path, payload: dict):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _direct_source(
+    owner: str,
+    *,
+    comparison_status: str = "measured_no_edge",
+    resolution_mode: str = "measured_no_edge",
+    policy_handoff_state: str = "incumbent_preserved",
+    first_blocker: str | None = None,
+    closure_test: str | None = "direct closure test",
+    policy_valid: bool | None = None,
+) -> dict:
+    row = {
+        "required": True,
+        "path": f"/evidence/{owner}.json",
+        "exists": True,
+        "target_date_matches": True,
+        "sha256": hashlib.sha256(owner.encode()).hexdigest(),
+        "status": "pass",
+        "error": None,
+        "applicability": "applicable",
+        "economic_evidence": {
+            "comparison_status": comparison_status,
+            "resolution_mode": resolution_mode,
+            "policy_handoff_state": policy_handoff_state,
+            "policy_apply_allowed": comparison_status == "validated_edge",
+            "first_blocker": first_blocker,
+            "closure_owner": owner,
+            "closure_test": closure_test,
+        },
+    }
+    if policy_valid is not None:
+        row["policy_receipt"] = {
+            "owner": f"{owner}_policy",
+            "path": f"/policy/{owner}.json",
+            "sha256": hashlib.sha256(f"policy:{owner}".encode()).hexdigest(),
+            "target_date_matches": policy_valid,
+            "valid": policy_valid,
+        }
+    return row
+
+
+def _direct_summary(
+    day: str,
+    *,
+    sources: dict[str, dict] | None = None,
+    apply_date: str | None = None,
+    preopen_state: str = "not_due",
+    natural_state: str = "not_applicable",
+) -> dict:
+    rows = {
+        owner: _direct_source(owner)
+        for owner in (
+            "source_quality",
+            "entry_cancel_wait",
+            "entry_split",
+            "scale_in_split",
+            "machine_entry",
+            "low_price_two_leg",
+            "low_price_expansion",
+            "ws_freshness",
+            "ai_outcome",
+            "rising_missed",
+        )
+    }
+    rows.update(sources or {})
+    available = sum(
+        1
+        for row in rows.values()
+        if row.get("required") is True
+        and row.get("exists") is True
+        and row.get("target_date_matches") is True
+        and row.get("sha256")
+        and not row.get("error")
+    )
+    required = sum(1 for row in rows.values() if row.get("required") is True)
+    validated = sum(
+        1
+        for row in rows.values()
+        if (row.get("economic_evidence") or {}).get("comparison_status")
+        == "validated_edge"
+    )
+    candidates = sum(
+        1
+        for row in rows.values()
+        if (row.get("economic_evidence") or {}).get("policy_handoff_state")
+        == "candidate_published"
+    )
+    return {
+        "schema_version": 3,
+        "report_type": "runtime_approval_summary",
+        "date": day,
+        "status": "direct_evidence_complete",
+        "direct_evidence_state": "complete",
+        "decision_authority": "family_owned_direct_evidence_summary_only",
+        "daily_threshold_cycle_retired": True,
+        "threshold_cycle_ev_retired": True,
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "actual_order_submitted": False,
+        "required_source_count": required,
+        "available_required_source_count": available,
+        "sources": rows,
+        "blocking_reasons": [],
+        "economic_blockers": [],
+        "economic_state": "validated_edge" if validated else "measured_no_edge",
+        "validated_edge_count": validated,
+        "policy_candidate_count": candidates,
+        "preopen_consumption_state": preopen_state,
+        "natural_acceptance_state": natural_state,
+        "preopen_consumption_receipt": {
+            "source_date": day,
+            "effective_dates": [apply_date] if apply_date else [],
+            "apply_date": apply_date,
+            "manifest_path": (
+                f"/runtime/runtime_policy_bootstrap_{apply_date}.json"
+                if apply_date
+                else None
+            ),
+            "verification_path": (
+                f"/runtime/runtime_policy_bootstrap_verify_{apply_date}.json"
+                if apply_date
+                else None
+            ),
+        },
+    }
 
 
 
@@ -1647,22 +1772,17 @@ def test_direct_family_checklist_publishes_current_generation_marker(
     )
     _write_json(
         summary,
-        {
-            "date": day,
-            "status": "direct_evidence_complete",
-            "direct_evidence_state": "complete",
-            "blocking_reasons": [],
-            "economic_blockers": [],
-        },
+        _direct_summary(day),
     )
 
     result = mod.build_next_stage2_checklist(day)
     text = Path(result["path"]).read_text(encoding="utf-8")
 
     assert text.count("POSTCLOSE_SUMMARY_SOURCES") == 1
+    assert text.count("DIRECT_FAMILY_FUTURE_HANDOFF") == 1
     assert "threshold_cycle_ev" not in text
     assert "threshold_cycle_preopen_apply" not in text
-    assert "신규 공통 튜닝 작업 없음" in text
+    assert "신규 실행 항목 없음" in text
 
 
 def test_direct_family_checklist_opens_only_structural_economic_blockers(
@@ -1680,31 +1800,37 @@ def test_direct_family_checklist_opens_only_structural_economic_blockers(
     )
     _write_json(
         summary,
-        {
-            "date": day,
-            "status": "direct_evidence_complete",
-            "direct_evidence_state": "complete",
-            "blocking_reasons": [],
-            "economic_blockers": [
-                {
-                    "owner": "entry_split",
-                    "comparison_status": "source_gap",
-                    "first_blocker": "operating_paired_source_missing",
-                    "closure_owner": "entry_split_order_plan",
-                    "closure_test": "future producer emits paired operating evidence",
-                }
-            ],
-        },
+        _direct_summary(
+            day,
+            sources={
+                "entry_split": _direct_source(
+                    "entry_split",
+                    comparison_status="source_gap",
+                    resolution_mode="producer_repair",
+                    policy_handoff_state="blocked",
+                    first_blocker="operating_paired_source_missing",
+                    closure_test="future producer emits paired operating evidence",
+                )
+            },
+        ),
     )
 
     result = mod.build_next_stage2_checklist(day)
     text = Path(result["path"]).read_text(encoding="utf-8")
 
-    assert result["task_count"] == 0
-    assert "DirectFamilyEvidenceGap20260919" not in text
-    assert "CodeImprovementWorkorderReview0918" in text
+    assert result["task_count"] == 1
+    assert result["tasks"] == ["DirectFamilySourceRepairEntrySplit"]
+    assert "[DirectFamilySourceRepairEntrySplit]" in text
+    assert "CodeImprovementWorkorderReview0918" not in text
     assert "operating_paired_source_missing" in text
-    assert "구조적 경제성 결손" in text
+    assert "직접 family 원천·경제성 계약 수리" in text
+    monkeypatch.setenv("DOC_CHECKLIST_PATH", result["path"])
+    parsed = [
+        task
+        for task in parse_checklist_tasks()
+        if "DirectFamilySourceRepairEntrySplit" in task.title
+    ]
+    assert len(parsed) == 1
 
 
 def test_schema_v3_regeneration_uses_direct_path_for_pre_retirement_source_date(
@@ -1722,14 +1848,11 @@ def test_schema_v3_regeneration_uses_direct_path_for_pre_retirement_source_date(
     )
     _write_json(
         summary,
-        {
-            "schema_version": 3,
-            "date": day,
-            "status": "direct_evidence_complete",
-            "blocking_reasons": [],
-            "economic_blockers": [],
-            "preopen_consumption_receipt": {"apply_date": "2026-09-21"},
-        },
+        _direct_summary(
+            day,
+            apply_date="2026-09-21",
+            preopen_state="pending",
+        ),
     )
 
     result = mod.build_next_stage2_checklist(day)
@@ -1738,5 +1861,164 @@ def test_schema_v3_regeneration_uses_direct_path_for_pre_retirement_source_date(
     assert result["source_owner"] == "runtime_approval_summary_direct_family"
     assert result["target_date"] == "2026-09-21"
     assert Path(result["path"]).name == "2026-09-21-stage2-todo-checklist.md"
-    assert "신규 공통 튜닝 작업 없음" in text
+    assert result["tasks"] == ["DirectFamilyPreopenPolicyHandoff"]
+    assert "[DirectFamilyPreopenPolicyHandoff]" in text
     assert "threshold_cycle_ev" not in text
+
+
+def test_direct_family_missing_summary_fails_without_overwriting_checklist(
+    monkeypatch, tmp_path
+):
+    docs, *_ = _patch_dirs(monkeypatch, tmp_path)
+    monkeypatch.setattr(mod, "PROJECT_ROOT", tmp_path)
+    target = docs / "checklists" / "2026-09-21-stage2-todo-checklist.md"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("manual content\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="direct runtime summary missing"):
+        mod.build_next_stage2_checklist("2026-09-19")
+
+    assert target.read_text(encoding="utf-8") == "manual content\n"
+
+
+def test_direct_family_projection_separates_maturity_no_edge_and_policy_repair(
+    monkeypatch, tmp_path
+):
+    _patch_dirs(monkeypatch, tmp_path)
+    monkeypatch.setattr(mod, "PROJECT_ROOT", tmp_path)
+    day = "2026-09-19"
+    _write_json(
+        mod._direct_summary_path(day),
+        _direct_summary(
+            day,
+            sources={
+                "scale_in_split": _direct_source(
+                    "scale_in_split",
+                    comparison_status="insufficient_sample",
+                    resolution_mode="natural_maturity",
+                    closure_test=None,
+                ),
+                "rising_missed": _direct_source("rising_missed"),
+                "entry_split": _direct_source(
+                    "entry_split",
+                    comparison_status="validated_edge",
+                    resolution_mode="validated_edge",
+                    policy_handoff_state="candidate_published",
+                    policy_valid=False,
+                ),
+            },
+        ),
+    )
+
+    result = mod.build_next_stage2_checklist(day)
+    text = Path(result["path"]).read_text(encoding="utf-8")
+
+    assert set(result["tasks"]) == {
+        "DirectFamilyNaturalEvidenceScaleInSplit",
+        "DirectFamilyPolicyHandoffEntrySplit",
+    }
+    assert "DirectFamilySourceRepairScaleInSplit" not in text
+    assert "DirectFamilyNaturalEvidenceRisingMissed" not in text
+    assert "closure_test=`missing`" in text
+
+
+def test_direct_family_manual_stable_task_is_not_duplicated(monkeypatch, tmp_path):
+    docs, *_ = _patch_dirs(monkeypatch, tmp_path)
+    monkeypatch.setattr(mod, "PROJECT_ROOT", tmp_path)
+    day = "2026-09-19"
+    target = docs / "checklists" / "2026-09-21-stage2-todo-checklist.md"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        "# Manual\n\n"
+        "- [ ] `[DirectFamilySourceRepairEntrySplit] manual owner` "
+        "(`Due: 2026-09-21`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~21:40`, "
+        "`Track: RuntimeStability`)\n",
+        encoding="utf-8",
+    )
+    _write_json(
+        mod._direct_summary_path(day),
+        _direct_summary(
+            day,
+            sources={
+                "entry_split": _direct_source(
+                    "entry_split",
+                    comparison_status="source_gap",
+                    resolution_mode="producer_repair",
+                )
+            },
+        ),
+    )
+
+    result = mod.build_next_stage2_checklist(day)
+    text = target.read_text(encoding="utf-8")
+
+    assert result["task_count"] == 1
+    assert result["generated_task_count"] == 0
+    assert result["manual_task_reuse_count"] == 1
+    assert text.count("[DirectFamilySourceRepairEntrySplit]") == 1
+
+
+def test_direct_family_removes_stale_generation_marker_outside_auto_block(
+    monkeypatch, tmp_path
+):
+    docs, *_ = _patch_dirs(monkeypatch, tmp_path)
+    monkeypatch.setattr(mod, "PROJECT_ROOT", tmp_path)
+    day = "2026-09-19"
+    target = docs / "checklists" / "2026-09-21-stage2-todo-checklist.md"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        "# Existing\n\n"
+        "<!-- POSTCLOSE_SUMMARY_SOURCES {\"schema\": \"stale\"} -->\n\n"
+        "manual content\n",
+        encoding="utf-8",
+    )
+    _write_json(mod._direct_summary_path(day), _direct_summary(day))
+
+    mod.build_next_stage2_checklist(day)
+    text = target.read_text(encoding="utf-8")
+
+    assert text.count("POSTCLOSE_SUMMARY_SOURCES") == 1
+    assert "manual content" in text
+
+
+def test_direct_family_rejected_preopen_remains_actionable(monkeypatch, tmp_path):
+    _patch_dirs(monkeypatch, tmp_path)
+    monkeypatch.setattr(mod, "PROJECT_ROOT", tmp_path)
+    day = "2026-09-19"
+    _write_json(
+        mod._direct_summary_path(day),
+        _direct_summary(
+            day,
+            apply_date="2026-09-21",
+            preopen_state="rejected",
+        ),
+    )
+
+    result = mod.build_next_stage2_checklist(day)
+    text = Path(result["path"]).read_text(encoding="utf-8")
+
+    assert "DirectFamilyPreopenPolicyHandoff" in result["tasks"]
+    assert "preopen_state=`rejected`" in text
+
+
+def test_direct_family_source_change_keeps_existing_checklist(
+    monkeypatch, tmp_path
+):
+    docs, *_ = _patch_dirs(monkeypatch, tmp_path)
+    monkeypatch.setattr(mod, "PROJECT_ROOT", tmp_path)
+    day = "2026-09-19"
+    target = docs / "checklists" / "2026-09-21-stage2-todo-checklist.md"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("original\n", encoding="utf-8")
+    _write_json(mod._direct_summary_path(day), _direct_summary(day))
+
+    monkeypatch.setattr(
+        "src.engine.automation.postclose_summary_handoff.assert_sources_unchanged",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("source_generation_changed_during_render")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="changed_during_render"):
+        mod.build_next_stage2_checklist(day)
+    assert target.read_text(encoding="utf-8") == "original\n"

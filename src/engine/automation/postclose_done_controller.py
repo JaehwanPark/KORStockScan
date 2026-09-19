@@ -9,6 +9,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
+from src.engine.build_next_stage2_checklist import build_next_stage2_checklist
 from src.engine.runtime_approval_summary import build_runtime_approval_summary
 from src.engine.verify_threshold_cycle_postclose_chain import (
     build_threshold_cycle_postclose_verification,
@@ -61,6 +62,8 @@ def build_postclose_done_controller(
     else:
         build_runtime_approval_summary(target_date)
         actions.append("runtime_approval_summary_refreshed")
+        build_next_stage2_checklist(target_date)
+        actions.append("next_stage2_checklist_refreshed")
         verifier = build_threshold_cycle_postclose_verification(
             target_date,
             require_done_marker=not summary_handoff_only,

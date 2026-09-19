@@ -397,9 +397,11 @@ def test_semantics_not_just_hash_markers_and_late_machine_generation(tmp_path):
     reports, paths = sources(tmp_path, [order()])
     checklist = tmp_path / "checklist.md"
     tower = publish_summaries(reports, checklist)
-    verify = lambda: handoff.verify_summary_handoff(
-        DATE, report_dir=reports, checklist_path=checklist
-    )
+
+    def verify():
+        return handoff.verify_summary_handoff(
+            DATE, report_dir=reports, checklist_path=checklist
+        )
     assert (
         verify()["status"] == "pass"
     )  # Operational handoff, not implementation completion.
@@ -525,11 +527,12 @@ def test_successful_unit_cannot_hide_missing_or_previous_date_source(
         path.unlink()
     else:
         write(path, bad_source)
-    runner = lambda *a, **kw: SimpleNamespace(
-        returncode=0,
-        stdout="LoadState=loaded\nUnitFileState=static\nActiveState=inactive\n"
-        f"Result=success\nExecMainStartTimestamp={DATE} 21:15:00 KST\n",
-    )
+    def runner(*_args, **_kwargs):
+        return SimpleNamespace(
+            returncode=0,
+            stdout="LoadState=loaded\nUnitFileState=static\nActiveState=inactive\n"
+            f"Result=success\nExecMainStartTimestamp={DATE} 21:15:00 KST\n",
+        )
     result = handoff.installed_producer_terminal_states(
         DATE, runner=runner, report_dir=reports
     )
@@ -646,7 +649,7 @@ def test_direct_tower_reads_summary_and_verifier(tmp_path, monkeypatch):
         reports
         / "runtime_approval_summary"
         / f"runtime_approval_summary_{DATE}.json",
-        {"status": "pass"},
+        {"status": "direct_evidence_complete", "direct_evidence_state": "complete"},
     )
     write(
         reports
