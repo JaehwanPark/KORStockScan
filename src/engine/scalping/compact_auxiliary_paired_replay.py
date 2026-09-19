@@ -934,7 +934,8 @@ def applied_decision_version_performance(split_report, *, day):
     descriptive realized performance does not estimate causal improvement.
     """
     from src.engine.scalping import entry_split_order_plan as split
-    rows=[]; excluded=Counter()
+    rows = []
+    excluded = Counter()
     for row in (split_report.get("operating_economic_state") or {}).get("model_rows") or []:
         receipt=row.get("entry_decision_version_receipt") or {}
         if (row.get("entry_decision_pid_consumed") is not True
