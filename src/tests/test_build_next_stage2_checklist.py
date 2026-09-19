@@ -1757,6 +1757,7 @@ def test_build_next_stage2_checklist_preserves_unknown_tasks_inside_auto_block(
 
 def test_retired_ai_cycle_reports_and_prior_workorders_do_not_reopen(monkeypatch, tmp_path):
     docs, ev_dir, *_ = _patch_dirs(monkeypatch, tmp_path)
+    monkeypatch.setattr(mod, "PROJECT_ROOT", tmp_path)
     day = "2026-09-17"
     _write_json(ev_dir / f"threshold_cycle_ev_{day}.json", {"runtime_apply": {"runtime_change": False}})
     legacy = tmp_path / "data/report/main_ai_quality_r0_r3" / f"main_ai_quality_r0_r3_cycle_{day}.json"
