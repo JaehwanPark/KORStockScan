@@ -50,3 +50,11 @@
 `KiwoomCommonHealthOpportunityCostAcceptance0917`가 다음 정상 producer 입력의 plan/stop/cost/census, scope별 actual calibration과 선행 model holdout, 독립 candidate holdout, 정규 PREOPEN/PID issued prompt, joint-version 완료 비용 손익을 확인한다. 현재 과거21건은 재평가 대상으로 반복하지 않는다. 다음 입력에서 지원 경제값이 나오면 표본 미달 연구값도 표시되며, 승격은 기존 독립 검증을 모두 통과할 때만 발생한다.
 
 운영 증거: `tmp/compact-economic-optimization-20260919/deployment.json`, `regeneration.json`, `before-regeneration/manifest.json`. selector와 consumer 모두 actual PID false다.
+
+## 후속 재리뷰와 과거 산출물 정리
+
+후속 코드리뷰에서 compact 계산·분류·승격·fallback 코드의 새 결함은 발견하지 않았다. 다만 Git의 9/21 checklist handoff가 이전 bundle `833053c3…`에 머문 반면 실제 정책·consumer와 shared checklist는 `fb4870b8…`를 소비하고 있었다. 현재 consumer에서 생성된 compact handoff 블록만 Git 문서에 다시 결속했으며 다른 자동 생성 구간은 가져오지 않았다.
+
+writer·postclose process와 lock holder가 없음을 확인한 뒤, 현재 v6 projection이 직접 가리키는 v5 `71b27cb2…`와 그 원본 v4 `c7ee6dd0…`를 보존하고 참조되지 않는 구 generation 8개를 삭제했다. 중복 prepare/evaluate/finalize 출력·중복 parser/test 로그와 최종 selector가 참조하지 않는 중간 selection backup 17개도 삭제했다. 총 25개, 411,256 bytes다. 현재 projection/report·원 trace/payload·정책·consumer·직계 migration lineage·selected/previous release rollback·배포/재생성/strict 영수증은 보존했다. 삭제 목록과 보호 hash는 `tmp/compact-artifact-cleanup-20260919/manifest.json`에 기록했다.
+
+영향 범위 333건 PASS 후 정리했으며, 삭제 뒤 compact scoped strict verifier와 consumer handoff 검증이 다시 PASS했다. `whole_native_chain_done_claimed=false`, 실제 PID 소비 false, ΔEV·실제 순익 null은 변하지 않는다.

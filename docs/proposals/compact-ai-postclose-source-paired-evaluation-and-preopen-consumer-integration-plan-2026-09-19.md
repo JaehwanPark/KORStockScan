@@ -282,3 +282,7 @@ source9/17→publication9/19→effective9/21의 제한 재생성 결과는 scree
 O0–O5의 실행 가능한 구현·검증·배포·제한 재생성은 완료했다. O6은 기존 stable owner `KiwoomCommonHealthOpportunityCostAcceptance0917`에 남긴다. 남은 사실은 다음 영업일의 정상 plan/stop/cost/census 생성, 실제 scope의 선행 운영 model holdout, 독립 prompt 표본, 정규 PREOPEN/PID issued version, joint-version COMPLETED valid cost/profit다. 과거21건을 반복 실행하지 않으며 미래 정상 입력이 들어오면 기존 evaluator가 비용 후 연구값을 먼저 산출한다.
 
 증거는 [구현 리뷰](../audit-reports/2026-09-19-compact-economic-optimization-implementation-review.md), `tmp/compact-economic-optimization-20260919/deployment.json`, `regeneration.json`, `before-regeneration/manifest.json`이다. 배포·scoped PASS·carry 정책은 양수 EV나 실제 이익을 증명하지 않는다.
+
+## 19. 후속 재리뷰·산출물 정리
+
+후속 재리뷰에서 계산·승격 코드의 새 결함은 없었다. 실제 consumer와 Git checklist 사이의 이전 bundle handoff만 현재 `fb4870b8…`로 재결속했다. 현재 v6가 직접 가리키는 v5·v4 generation, 원천·정책·consumer·rollback·검증 증거를 보존하고 미참조 generation 및 중복 임시 로그 25개를 삭제했다. 삭제 뒤 영향 범위 333건과 compact scoped strict/consumer 검증을 통과했다. 상세 목록과 hash는 [구현 리뷰](../audit-reports/2026-09-19-compact-economic-optimization-implementation-review.md) 및 `tmp/compact-artifact-cleanup-20260919/manifest.json`이 소유한다.
