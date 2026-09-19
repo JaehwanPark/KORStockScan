@@ -24,6 +24,9 @@
 - Limit-down 후속 리뷰·관련 커밋/푸시·immutable 배포: `fcfd7b8e5`. 검토 범위 결함0·통합1,531 passed(기존 wrapper 실패5/제외1은 baseline 재현)·물리 release6 passed·전용 산출물 잔여0. [최종 증거](../audit-reports/2026-09-19-limit-down-watch-retirement-review.md). main 정기 cron target 부재는 기존 상태이며 선택/route 검증과 분리한다. 독립 unit pin·공유 원천/guard 보존; 기동/주문/조기 PREOPEN 미실행·PID 소비 미확인.
 
 - Compact 후속 경제성 리뷰: label hash-only cache의 admission stale 결함 보완·cohort 격리,244+최종7 targeted PASS. 실제21건 label 불일치0/비교0/EV null 및9/21 carry 보존. [후속 리뷰·다음 WS 분석](../audit-reports/2026-09-19-compact-ai-postclose-integration-implementation-review.md). 미래 자연 owner·거래 권한 변경 없음.
+- [x] `[CompactAIEconomicOptimization0919] Compact 응답 blocker·bounded projection migration·경제성 연구값·phase 상태 보완` (`Due: 2026-09-19`, `Slot: POSTCLOSE`, `TimeWindow: 00:00~23:59`, `Track: AIPrompt`)
+  - Source: [통합 계획 §11–§18](../proposals/compact-ai-postclose-source-paired-evaluation-and-preopen-consumer-integration-plan-2026-09-19.md). Review: [구현·배포 리뷰](../audit-reports/2026-09-19-compact-economic-optimization-implementation-review.md).
+  - Acceptance: commit `411ec0efdf993ec11e36b3fc79b78a5a7a36a6e1`, immutable release 선택·route print-plan·영향/물리 release 회귀 PASS. source9/17 제한 재생성은 source gap21(stop10/transport8/semantic1/identity2), provider0/raw rescan0, 비교0·EV null·승격0이다. effective9/21 bundle `fb4870b8ab479897c7580d79a92acb2595889c2d7c95b75087bcef6cfb6f74c5` incumbent carry·machine/비compact scope 보존·scoped strict PASS. 실제 PID/완료 손익은 기존 자연 owner OPEN이며 양수EV 주장이 아니다.
 
 ## WS 품질·조건부 경제성 통합 구현
 

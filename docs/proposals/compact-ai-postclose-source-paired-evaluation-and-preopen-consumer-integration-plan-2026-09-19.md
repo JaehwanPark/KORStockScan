@@ -263,3 +263,22 @@ O1–O4는 데이터가 없는 휴장에도 통제 회귀로 닫아야 한다. �
 장후 산출물 정리는 구현·소비 검증 이후 별도 승인 범위에서 한다. 현재 reference/model/holdout·정책/PREOPEN·실제 버전 손익·raw/custody·rollback 증거는 보존한다. 현재 consumer가 읽지 않고 regeneration lineage에서도 필요하지 않은 중복 provisional/실패 임시물만 path/hash 목록을 확인해 삭제한다. 본 계획 변경에서는 산출물을 삭제하지 않는다.
 
 이번 수정의 검증 범위는 문서 link/owner/권한·계산/승격 분리·날짜/원천 근거 review/fix/re-review와 print-only parser·diff check다. 코드 테스트·provider 호출·재생성·배포·외부 sync는 수행하지 않는다.
+
+## 18. 후속 구현·배포·제한 재생성 결과
+
+사용자의 후속 구현 승인에 따라 §11–§17의 실행 가능한 항목을 기존 모듈에서 종결했다. 최종 코드 commit은 `411ec0efdf993ec11e36b3fc79b78a5a7a36a6e1`, 선택 release는 `compact-economic-optimized-reviewed-20260919-411ec0efd`다. 이 release는 앞서 배포된 WS 경제성 보완 commit을 포함한다. selector 전환은 future invocations only이며 bot 재기동·주문·조기 PREOPEN은 수행하지 않았다.
+
+- `natural_contract_invalid`를 시장 scope 결손으로 분류하던 오류를 수리했다. 미래 정상 producer는 provider/model·transport·semantic first blocker를 보존하고, 과거 v4/v5 projection은 frozen `natural_contract_evidence`만 사용해 v6로 제한 migration한다. raw trace/payload를 다시 읽거나 과거 응답을 복원하지 않는다.
+- 후보 비교는 전체 paired 분모의 changed/unchanged count·rate를 표시하고, 독립 운영 모델이 지원되는 경우 표본 미달이어도 비용 차감 연구 비교와 보수적 ΔEV 하한을 표시한다. 승격 primary는 기존 `robust_paired_delta_ev_lower_bound_pct`이며 모델 ΔEV가 실제 이익이 아님을 명시한다.
+- prepare/evaluate/finalize artifact state와 경제 상태를 분리했다. 최종 calibration headline은 `postclose_finalize_ready`, 경제 상태는 `source_contract_blocked`다. terminal handoff 성공은 consumer receipt가 소유한다.
+- blocker별 첫 owner/closure를 response contract, label identity, route scope, execution model, sizing/owner replay로 분리했다. SOR 자체는 지원 route이며 이번 결과에 route unsupported가 없다.
+
+검증은 운영 pre-AI producer→pipeline census→owner replay→compact projection/비용 비교, 독립 model/candidate holdout, active/carry policy와 loader, stale/hash/scope failure를 포함한 영향 범위 590건 PASS를 기준으로 했다. 다른 세션의 후속 commit을 재배치한 뒤 관련 295건 PASS, 최종 분류·migration·물리 release 반복 검증도 PASS했다. Python compile, wrapper syntax와 diff check를 통과했다. 합성 fixture는 경로 검증이며 자연 수익 증거가 아니다.
+
+source9/17→publication9/19→effective9/21의 제한 재생성 결과는 screen21, source gap21, eligible0, comparable0, provider 호출0이다. 배타적 first blocker는 stop10·transport8·semantic1·label identity2다. projection v6 migration은 `raw_not_read=true`이며 보호 raw의 size/mtime은 불변이다. 후보0 상태는 `source_gap`; ΔEV·일별 순익·보수적 하한·실제 이익은 null이고 승격 scope는 없다.
+
+9/21 dated policy는 `entry_machine_auxiliary_compact_v3` incumbent carry다. machine 정책과 비compact scope9를 보존했고 bundle은 `fb4870b8ab479897c7580d79a92acb2595889c2d7c95b75087bcef6cfb6f74c5`다. consumer는 같은 bundle/effective date를 연결했고 compact scoped strict verifier는 PASS, whole native chain DONE은 false다.
+
+O0–O5의 실행 가능한 구현·검증·배포·제한 재생성은 완료했다. O6은 기존 stable owner `KiwoomCommonHealthOpportunityCostAcceptance0917`에 남긴다. 남은 사실은 다음 영업일의 정상 plan/stop/cost/census 생성, 실제 scope의 선행 운영 model holdout, 독립 prompt 표본, 정규 PREOPEN/PID issued version, joint-version COMPLETED valid cost/profit다. 과거21건을 반복 실행하지 않으며 미래 정상 입력이 들어오면 기존 evaluator가 비용 후 연구값을 먼저 산출한다.
+
+증거는 [구현 리뷰](../audit-reports/2026-09-19-compact-economic-optimization-implementation-review.md), `tmp/compact-economic-optimization-20260919/deployment.json`, `regeneration.json`, `before-regeneration/manifest.json`이다. 배포·scoped PASS·carry 정책은 양수 EV나 실제 이익을 증명하지 않는다.
