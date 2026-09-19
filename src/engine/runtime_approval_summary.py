@@ -12,6 +12,10 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
+from src.engine.automation.runtime_policy_bootstrap import (
+    direct_policy_digest,
+    validate_rising_missed_policy_receipt,
+)
 from src.utils.constants import DATA_DIR
 
 REPORT_DIR = DATA_DIR / "report" / "runtime_approval_summary"
@@ -165,21 +169,6 @@ def _sha(path: Path) -> str | None:
         return digest.hexdigest()
     except OSError:
         return None
-
-
-def _policy_semantic_sha(payload: dict[str, Any]) -> str:
-    canonical = {key: value for key, value in payload.items() if key != "policy_sha256"}
-    env = dict(canonical.get("runtime_env_overrides") or {})
-    env.pop("KORSTOCKSCAN_RISING_MISSED_TP1_POLICY_SHA256", None)
-    canonical["runtime_env_overrides"] = env
-    return hashlib.sha256(
-        json.dumps(
-            canonical,
-            ensure_ascii=True,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    ).hexdigest()
 
 
 def _date_matches(payload: dict[str, Any], target_date: str) -> bool:
@@ -391,10 +380,22 @@ def _economic_projection(owner: str, payload: dict[str, Any]) -> dict[str, Any]:
     economic = _economic_section(owner, payload)
     status = _comparison_status(owner, payload)
     recommended = _dict_value(payload, "recommended_policy")
-    policy_allowed = _first_nonempty(
-        recommended.get("runtime_apply_allowed"), recommended.get("ev_validated_runtime_apply_allowed"),
-        payload.get("allowed_runtime_apply"), economic.get("allowed_runtime_apply"),
+    policy_allowed_values = (
+        (
+            recommended.get("runtime_apply_allowed"),
+            recommended.get("ev_validated_runtime_apply_allowed"),
+            economic.get("allowed_runtime_apply"),
+            payload.get("allowed_runtime_apply"),
+        )
+        if owner == "rising_missed"
+        else (
+            recommended.get("runtime_apply_allowed"),
+            recommended.get("ev_validated_runtime_apply_allowed"),
+            payload.get("allowed_runtime_apply"),
+            economic.get("allowed_runtime_apply"),
+        )
     )
+    policy_allowed = _first_nonempty(*policy_allowed_values)
     candidate_count = _first_nonempty(
         recommended.get("candidate_count"), recommended.get("runtime_candidate_count"),
         len(economic.get("candidates") or []) if isinstance(economic.get("candidates"), list) else None,
@@ -591,13 +592,20 @@ def build_runtime_approval_summary(
         )
         if owner == "rising_missed" and policy_receipt_valid:
             policy_payload = _load_json(Path(str(policy.get("path") or "")))
+            source_payload = _load_json(Path(str(row.get("path") or "")))
             policy_receipt_valid = bool(
                 policy.get("source_report_sha256")
                 == row.get("artifact_semantic_sha256")
                 and policy.get("consumer_schema")
                 == "rising_missed_tp1_selector_bounded_env_v1"
                 and policy.get("policy_sha256")
-                == _policy_semantic_sha(policy_payload)
+                == direct_policy_digest(policy_payload)
+                and validate_rising_missed_policy_receipt(
+                    policy_payload,
+                    source_payload,
+                    str(policy_payload.get("effective_date") or ""),
+                )
+                is None
             )
         row["policy_receipt"] = {
             "owner": policy_owner,

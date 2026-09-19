@@ -10,6 +10,19 @@ def _write(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
+def _with_artifact_sha(payload: dict) -> dict:
+    value = dict(payload)
+    value["artifact_sha256"] = hashlib.sha256(
+        json.dumps(
+            value,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return value
+
+
 def _patch(monkeypatch, tmp_path: Path) -> Path:
     data = tmp_path / "data"
     monkeypatch.setattr(mod, "DATA_DIR", data)
@@ -291,31 +304,36 @@ def test_rising_missed_policy_receipt_is_semantically_bound(monkeypatch, tmp_pat
     _patch(monkeypatch, tmp_path)
     target = "2026-09-19"
     _seed_required(target)
-    semantic_sha = "c" * 64
-    _write(
-        mod._paths(target)["rising_missed"],
+    source_payload = _with_artifact_sha(
         {
+            "schema_version": 2,
             "report_type": "rising_missed_classifier_prior",
             "target_date": target,
             "status": "measured_no_edge",
-            "artifact_sha256": semantic_sha,
             "economic_evaluation": {
                 "comparison_status": "measured_no_edge",
                 "paired_sample_count": 50,
-                "candidate_count": 6,
+                "candidates": [{"disposition": "measured_no_edge"}],
+                "allowed_runtime_apply": False,
             },
-        },
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        }
     )
+    _write(mod._paths(target)["rising_missed"], source_payload)
     policy = {
         "report_type": "rising_missed_tp1_policy",
+        "runtime_family": "rising_missed_tp1_selector",
         "source_date": target,
         "effective_date": "2026-09-21",
         "status": "incumbent_preserved",
-        "source_report_sha256": semantic_sha,
+        "allowed_runtime_apply": True,
+        "runtime_effect": False,
+        "source_report_sha256": source_payload["artifact_sha256"],
         "consumer_schema": "rising_missed_tp1_selector_bounded_env_v1",
         "runtime_env_overrides": {},
     }
-    policy["policy_sha256"] = mod._policy_semantic_sha(policy)
+    policy["policy_sha256"] = mod.direct_policy_digest(policy)
     _write(mod._paths(target)["rising_missed_policy"], policy)
 
     report = mod.build_runtime_approval_summary(target)
@@ -324,3 +342,111 @@ def test_rising_missed_policy_receipt_is_semantically_bound(monkeypatch, tmp_pat
     assert source["economic_evidence"]["comparison_status"] == "measured_no_edge"
     assert source["policy_receipt"]["valid"] is True
     assert source["economic_evidence"]["policy_handoff_state"] == "incumbent_preserved"
+
+
+def test_rising_validated_edge_uses_economic_authority_and_bound_policy(
+    monkeypatch, tmp_path
+):
+    _patch(monkeypatch, tmp_path)
+    target = "2026-09-19"
+    _seed_required(target)
+    source_payload = _with_artifact_sha(
+        {
+            "schema_version": 2,
+            "report_type": "rising_missed_classifier_prior",
+            "target_date": target,
+            "status": "validated_edge",
+            "economic_evaluation": {
+                "comparison_status": "validated_edge",
+                "paired_sample_count": 50,
+                "candidates": [{"disposition": "validated_edge"}],
+                "allowed_runtime_apply": True,
+                "validated_candidate_count": 1,
+            },
+            # The report itself never has direct runtime authority.
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        }
+    )
+    _write(mod._paths(target)["rising_missed"], source_payload)
+    policy = {
+        "report_type": "rising_missed_tp1_policy",
+        "runtime_family": "rising_missed_tp1_selector",
+        "source_date": target,
+        "effective_date": "2026-09-21",
+        "status": "validated_edge",
+        "selected_axis": "positive_support_min",
+        "allowed_runtime_apply": True,
+        "runtime_effect": True,
+        "source_report_sha256": source_payload["artifact_sha256"],
+        "consumer_schema": "rising_missed_tp1_selector_bounded_env_v1",
+        "runtime_env_overrides": {
+            "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED": "true",
+            "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE": "2026-09-21",
+            "KORSTOCKSCAN_RISING_MISSED_TP1_POSITIVE_SUPPORT_MIN": "1",
+        },
+    }
+    policy["policy_sha256"] = mod.direct_policy_digest(policy)
+    policy["runtime_env_overrides"][
+        "KORSTOCKSCAN_RISING_MISSED_TP1_POLICY_SHA256"
+    ] = policy["policy_sha256"]
+    _write(mod._paths(target)["rising_missed_policy"], policy)
+
+    report = mod.build_runtime_approval_summary(target)
+
+    source = report["sources"]["rising_missed"]
+    assert source["economic_evidence"]["comparison_status"] == "validated_edge"
+    assert source["economic_evidence"]["policy_apply_allowed"] is True
+    assert source["policy_receipt"]["valid"] is True
+
+
+def test_rising_policy_receipt_rejects_multiple_runtime_axes(monkeypatch, tmp_path):
+    _patch(monkeypatch, tmp_path)
+    target = "2026-09-19"
+    _seed_required(target)
+    source_payload = _with_artifact_sha(
+        {
+            "schema_version": 2,
+            "report_type": "rising_missed_classifier_prior",
+            "target_date": target,
+            "status": "validated_edge",
+            "economic_evaluation": {
+                "comparison_status": "validated_edge",
+                "candidates": [{"disposition": "validated_edge"}],
+                "allowed_runtime_apply": True,
+                "validated_candidate_count": 1,
+            },
+            "runtime_effect": False,
+            "allowed_runtime_apply": False,
+        }
+    )
+    _write(mod._paths(target)["rising_missed"], source_payload)
+    policy = {
+        "report_type": "rising_missed_tp1_policy",
+        "runtime_family": "rising_missed_tp1_selector",
+        "source_date": target,
+        "effective_date": "2026-09-21",
+        "status": "validated_edge",
+        "selected_axis": "positive_support_min",
+        "allowed_runtime_apply": True,
+        "runtime_effect": True,
+        "source_report_sha256": source_payload["artifact_sha256"],
+        "consumer_schema": "rising_missed_tp1_selector_bounded_env_v1",
+        "runtime_env_overrides": {
+            "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ENABLED": "true",
+            "KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE": "2026-09-21",
+            "KORSTOCKSCAN_RISING_MISSED_TP1_POSITIVE_SUPPORT_MIN": "1",
+            "KORSTOCKSCAN_RISING_MISSED_TP1_SPREAD_CAUTION_RATIO": "0.0015",
+        },
+    }
+    policy["policy_sha256"] = mod.direct_policy_digest(policy)
+    policy["runtime_env_overrides"][
+        "KORSTOCKSCAN_RISING_MISSED_TP1_POLICY_SHA256"
+    ] = policy["policy_sha256"]
+    _write(mod._paths(target)["rising_missed_policy"], policy)
+
+    report = mod.build_runtime_approval_summary(target)
+
+    source = report["sources"]["rising_missed"]
+    assert source["policy_receipt"]["valid"] is False
+    assert source["economic_evidence"]["comparison_status"] == "source_gap"

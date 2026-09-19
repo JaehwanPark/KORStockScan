@@ -31,6 +31,12 @@ REPORT_TYPE = "runtime_policy_bootstrap"
 BOOTSTRAP_DIR = DATA_DIR / "runtime" / "policy_bootstrap"
 LEGACY_RUNTIME_DIR = DATA_DIR / "threshold_cycle" / "runtime_env"
 OPERATOR_LOCK_DIR = DATA_DIR / "threshold_cycle" / "operator_runtime_env_locks"
+RISING_MISSED_REPORT_DIR = DATA_DIR / "report" / "rising_missed_classifier_prior"
+RISING_MISSED_ENV_BY_AXIS = {
+    "positive_support_min": "KORSTOCKSCAN_RISING_MISSED_TP1_POSITIVE_SUPPORT_MIN",
+    "spread_caution_ratio": "KORSTOCKSCAN_RISING_MISSED_TP1_SPREAD_CAUTION_RATIO",
+    "chase_delta_pct": "KORSTOCKSCAN_RISING_MISSED_TP1_CHASE_DELTA_PCT",
+}
 
 
 def env_path(target_date: str) -> Path:
@@ -330,12 +336,66 @@ def _receipt_runtime_apply_allowed(payload: dict[str, Any]) -> bool:
     return False
 
 
-def _direct_policy_digest(payload: dict[str, Any]) -> str:
+def direct_policy_digest(payload: dict[str, Any]) -> str:
     canonical = {key: value for key, value in payload.items() if key != "policy_sha256"}
     canonical_env = dict(canonical.get("runtime_env_overrides") or {})
     canonical_env.pop("KORSTOCKSCAN_RISING_MISSED_TP1_POLICY_SHA256", None)
     canonical["runtime_env_overrides"] = canonical_env
     return _digest_json(canonical)
+
+
+def validate_rising_missed_policy_binding(
+    policy: dict[str, Any], source_report: dict[str, Any]
+) -> str | None:
+    source_date = str(policy.get("source_date") or "").strip()
+    if (
+        source_report.get("schema_version") != 2
+        or source_report.get("report_type") != "rising_missed_classifier_prior"
+        or str(source_report.get("target_date") or "") != source_date
+    ):
+        return "source_report_contract_invalid"
+    report_semantic_sha = _digest_json(
+        {
+            key: value
+            for key, value in source_report.items()
+            if key != "artifact_sha256"
+        }
+    )
+    if (
+        source_report.get("artifact_sha256") != report_semantic_sha
+        or policy.get("source_report_sha256") != report_semantic_sha
+    ):
+        return "source_report_sha256_mismatch"
+    if policy.get("consumer_schema") != "rising_missed_tp1_selector_bounded_env_v1":
+        return "consumer_schema_invalid"
+    status = str(policy.get("status") or "")
+    runtime_env = policy.get("runtime_env_overrides")
+    economic = (
+        source_report.get("economic_evaluation")
+        if isinstance(source_report.get("economic_evaluation"), dict)
+        else {}
+    )
+    if status == "validated_edge":
+        if (
+            source_report.get("status") != "validated_edge"
+            or economic.get("comparison_status") != "validated_edge"
+            or economic.get("allowed_runtime_apply") is not True
+            or int(economic.get("validated_candidate_count") or 0) != 1
+            or policy.get("runtime_effect") is not True
+            or not isinstance(runtime_env, dict)
+            or not runtime_env
+        ):
+            return "validated_edge_source_state_mismatch"
+    elif status == "incumbent_preserved":
+        if (
+            source_report.get("status") == "validated_edge"
+            or policy.get("runtime_effect") is not False
+            or runtime_env not in ({}, None)
+        ):
+            return "incumbent_source_state_mismatch"
+    else:
+        return "policy_status_invalid"
+    return None
 
 
 def _direct_runtime_env(
@@ -345,7 +405,7 @@ def _direct_runtime_env(
     if raw in (None, {}):
         if family == "rising_missed_tp1_selector" and payload.get(
             "policy_sha256"
-        ) != _direct_policy_digest(payload):
+        ) != direct_policy_digest(payload):
             return {}, "policy_sha256_mismatch"
         return {}, None
     if not isinstance(raw, dict):
@@ -367,6 +427,12 @@ def _direct_runtime_env(
         return {}, "selector_enabled_value_invalid"
     if values.get("KORSTOCKSCAN_RISING_MISSED_TP1_SELECTOR_ACTIVE_DATE") != target_date:
         return {}, "selector_active_date_invalid"
+    tuned_keys = set(values).intersection(RISING_MISSED_ENV_BY_AXIS.values())
+    if len(tuned_keys) != 1:
+        return {}, "runtime_env_single_axis_required"
+    selected_axis = str(payload.get("selected_axis") or "")
+    if RISING_MISSED_ENV_BY_AXIS.get(selected_axis) not in tuned_keys:
+        return {}, "selected_axis_env_mismatch"
     try:
         if "KORSTOCKSCAN_RISING_MISSED_TP1_POSITIVE_SUPPORT_MIN" in values and not (
             1 <= int(values["KORSTOCKSCAN_RISING_MISSED_TP1_POSITIVE_SUPPORT_MIN"]) <= 3
@@ -387,11 +453,23 @@ def _direct_runtime_env(
     digest = values.get("KORSTOCKSCAN_RISING_MISSED_TP1_POLICY_SHA256", "")
     if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
         return {}, "policy_sha256_invalid"
-    if payload.get("policy_sha256") != _direct_policy_digest(payload) or digest != payload.get(
+    if payload.get("policy_sha256") != direct_policy_digest(payload) or digest != payload.get(
         "policy_sha256"
     ):
         return {}, "policy_sha256_mismatch"
     return values, None
+
+
+def validate_rising_missed_policy_receipt(
+    policy: dict[str, Any], source_report: dict[str, Any], effective_date: str
+) -> str | None:
+    """Apply the same semantic checks used by the PREOPEN consumer."""
+    _, runtime_env_error = _direct_runtime_env(
+        "rising_missed_tp1_selector", policy, effective_date
+    )
+    if runtime_env_error:
+        return runtime_env_error
+    return validate_rising_missed_policy_binding(policy, source_report)
 
 
 def _load_direct_receipts(
@@ -418,6 +496,20 @@ def _load_direct_receipts(
         runtime_env, runtime_env_error = _direct_runtime_env(
             family, payload, target_date
         )
+        source_binding_error = None
+        if family == "rising_missed_tp1_selector" and runtime_env_error is None:
+            source_date = str(payload.get("source_date") or "").strip()
+            try:
+                source_report = _load_json(
+                    RISING_MISSED_REPORT_DIR
+                    / f"rising_missed_classifier_prior_{source_date}.json"
+                )
+            except (OSError, ValueError, json.JSONDecodeError):
+                source_binding_error = "source_report_unreadable"
+            else:
+                source_binding_error = validate_rising_missed_policy_receipt(
+                    payload, source_report, target_date
+                )
         row = {
             "family": family,
             "source_receipt": _file_receipt(path),
@@ -441,6 +533,8 @@ def _load_direct_receipts(
             rejected.append({**row, "reason": "runtime_apply_not_authorized"})
         elif runtime_env_error:
             rejected.append({**row, "reason": runtime_env_error})
+        elif source_binding_error:
+            rejected.append({**row, "reason": source_binding_error})
         else:
             accepted.append(row)
     return accepted, rejected
