@@ -124,6 +124,7 @@ def _direct_summary(
     apply_date: str | None = None,
     preopen_state: str = "not_due",
     natural_state: str = "not_applicable",
+    actual_pid_consumed: bool = False,
 ) -> dict:
     rows = {
         owner: _direct_source(owner)
@@ -194,11 +195,25 @@ def _direct_summary(
                 if apply_date
                 else None
             ),
+            "manifest_sha256": (
+                hashlib.sha256(f"manifest:{apply_date}".encode()).hexdigest()
+                if apply_date and preopen_state == "verified"
+                else None
+            ),
             "verification_path": (
                 f"/runtime/runtime_policy_bootstrap_verify_{apply_date}.json"
                 if apply_date
                 else None
             ),
+            "verification_sha256": (
+                hashlib.sha256(f"verification:{apply_date}".encode()).hexdigest()
+                if apply_date and preopen_state == "verified"
+                else None
+            ),
+            "runtime_pid": 4321 if actual_pid_consumed else None,
+            "pid_passed": True if actual_pid_consumed else None,
+            "pid_env_available": True if actual_pid_consumed else None,
+            "actual_pid_consumed": actual_pid_consumed,
         },
     }
 
@@ -1999,6 +2014,67 @@ def test_direct_family_rejected_preopen_remains_actionable(monkeypatch, tmp_path
 
     assert "DirectFamilyPreopenPolicyHandoff" in result["tasks"]
     assert "preopen_state=`rejected`" in text
+
+
+def test_direct_family_natural_acceptance_requires_actual_pid_receipt(
+    monkeypatch, tmp_path
+):
+    _patch_dirs(monkeypatch, tmp_path)
+    monkeypatch.setattr(mod, "PROJECT_ROOT", tmp_path)
+    day = "2026-09-19"
+    source = _direct_source(
+        "entry_split",
+        comparison_status="validated_edge",
+        resolution_mode="validated_economic_action",
+        policy_handoff_state="candidate_published",
+        policy_valid=True,
+    )
+    missing_pid = _direct_summary(
+        day,
+        sources={"entry_split": source},
+        apply_date="2026-09-21",
+        preopen_state="verified",
+        natural_state="pending",
+    )
+    _write_json(mod._direct_summary_path(day), missing_pid)
+
+    with pytest.raises(
+        RuntimeError, match="natural acceptance lacks PID receipt"
+    ):
+        mod.build_next_stage2_checklist(day)
+
+    _write_json(
+        mod._direct_summary_path(day),
+        _direct_summary(
+            day,
+            sources={"entry_split": source},
+            apply_date="2026-09-21",
+            preopen_state="verified",
+            natural_state="pending",
+            actual_pid_consumed=True,
+        ),
+    )
+    result = mod.build_next_stage2_checklist(day)
+
+    assert "DirectFamilyPostApplyAcceptance" in result["tasks"]
+
+
+def test_direct_family_rejects_contradictory_non_edge_apply_authority(
+    monkeypatch, tmp_path
+):
+    _patch_dirs(monkeypatch, tmp_path)
+    monkeypatch.setattr(mod, "PROJECT_ROOT", tmp_path)
+    day = "2026-09-19"
+    source = _direct_source("entry_split")
+    source["economic_evidence"]["policy_handoff_state"] = "candidate_published"
+    source["economic_evidence"]["policy_apply_allowed"] = True
+    _write_json(
+        mod._direct_summary_path(day),
+        _direct_summary(day, sources={"entry_split": source}),
+    )
+
+    with pytest.raises(RuntimeError, match="non-edge apply contract invalid"):
+        mod.build_next_stage2_checklist(day)
 
 
 def test_direct_family_source_change_keeps_existing_checklist(

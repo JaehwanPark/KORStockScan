@@ -62,6 +62,11 @@ def test_launcher_fails_closed_on_bootstrap_and_verifies_before_bot():
     assert "src.engine.automation.runtime_policy_bootstrap" in script
     assert script.index("wait_for_threshold_runtime_env") < script.index("bot_main.py")
     assert script.index("verify_threshold_runtime_env_handoff") < script.index("bot_main.py")
+    assert "record_threshold_runtime_env_pid_handoff" in script
+    assert script.index(
+        'record_threshold_runtime_env_pid_handoff "$RUNTIME_TARGET_DATE" "$BOT_PID"'
+    ) > script.index("BOT_PID=$!")
+    assert '--verify --target-date "$target_date" --pid "$bot_pid"' in script
     assert "threshold_cycle_preopen_apply" not in script
 
 

@@ -263,12 +263,38 @@ def test_next_effective_date_is_pending_until_preopen_verification(monkeypatch, 
     )
     _write(
         data / "runtime" / "policy_bootstrap" / "runtime_policy_bootstrap_verify_2026-09-21.json",
-        {"target_date": "2026-09-21", "status": "pass"},
+        {
+            "target_date": "2026-09-21",
+            "status": "pass",
+            "passed": True,
+            "pid": None,
+            "pid_passed": None,
+            "pid_env_available": True,
+        },
     )
     verified = mod.build_runtime_approval_summary(target)
 
     assert verified["preopen_consumption_state"] == "verified"
-    assert verified["natural_acceptance_state"] == "pending"
+    assert verified["natural_acceptance_state"] == "not_due"
+    assert verified["preopen_consumption_receipt"]["actual_pid_consumed"] is False
+
+    _write(
+        data / "runtime" / "policy_bootstrap" / "runtime_policy_bootstrap_verify_2026-09-21.json",
+        {
+            "target_date": "2026-09-21",
+            "status": "pass",
+            "passed": True,
+            "pid": 4321,
+            "pid_passed": True,
+            "pid_env_available": True,
+        },
+    )
+    consumed = mod.build_runtime_approval_summary(target)
+
+    assert consumed["preopen_consumption_state"] == "verified"
+    assert consumed["natural_acceptance_state"] == "pending"
+    assert consumed["preopen_consumption_receipt"]["actual_pid_consumed"] is True
+    assert consumed["preopen_consumption_receipt"]["runtime_pid"] == 4321
 
 
 def test_pending_maturity_requires_verified_future_generation_contract(monkeypatch, tmp_path):

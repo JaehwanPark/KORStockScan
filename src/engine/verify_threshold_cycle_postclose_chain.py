@@ -163,6 +163,15 @@ def build_threshold_cycle_postclose_verification(
     summary = _load(paths["runtime_summary"])
     postclose = _load(paths["postclose_status"])
     checks, issues = _direct_source_checks(summary)
+    summary_contract_valid = False
+    if paths["runtime_summary"].exists():
+        try:
+            from src.engine.build_next_stage2_checklist import _validate_direct_summary
+
+            _validate_direct_summary(summary, target_date)
+            summary_contract_valid = True
+        except (OSError, RuntimeError, ValueError) as exc:
+            issues.append(f"runtime_summary_contract_invalid:{exc}")
     if summary.get("date") != target_date:
         issues.append("runtime_summary_date_mismatch")
     if summary.get("status") != "direct_evidence_complete":
@@ -187,11 +196,17 @@ def build_threshold_cycle_postclose_verification(
         "expected_task_ids": [],
         "actual_task_ids": [],
     }
-    if require_summary_handoff and paths["runtime_summary"].exists():
+    if (
+        require_summary_handoff
+        and paths["runtime_summary"].exists()
+        and summary_contract_valid
+    ):
         checklist_handoff, checklist_issues = _direct_checklist_checks(
             target_date, summary, paths["runtime_summary"]
         )
         issues.extend(checklist_issues)
+    elif require_summary_handoff and paths["runtime_summary"].exists():
+        checklist_handoff["status"] = "blocked_invalid_summary"
     status = "pass" if not issues else "fail"
     return {
         "schema_version": 2,

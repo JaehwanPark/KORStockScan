@@ -540,6 +540,12 @@ def _load_direct_summary(source_date: str) -> dict[str, Any]:
         raise RuntimeError(f"direct runtime summary missing: {path}") from exc
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         raise RuntimeError(f"direct runtime summary unreadable: {path}") from exc
+    return _validate_direct_summary(payload, source_date)
+
+
+def _validate_direct_summary(
+    payload: dict[str, Any], source_date: str
+) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise RuntimeError("direct runtime summary object required")
     checks = {
@@ -640,6 +646,57 @@ def _load_direct_summary(source_date: str) -> dict[str, Any]:
             raise RuntimeError(
                 f"direct runtime summary closure owner invalid: {owner}"
             )
+        if not isinstance(row.get("applicability"), str) or not row[
+            "applicability"
+        ].strip():
+            raise RuntimeError(
+                f"direct runtime summary source applicability invalid: {owner}"
+            )
+        if row.get("error") is not None and not isinstance(row.get("error"), str):
+            raise RuntimeError(
+                f"direct runtime summary source error invalid: {owner}"
+            )
+        handoff_state = evidence.get("policy_handoff_state")
+        if handoff_state not in {
+            "blocked",
+            "candidate_published",
+            "incumbent_preserved",
+            "not_applicable",
+        }:
+            raise RuntimeError(
+                f"direct runtime summary policy handoff state invalid: {owner}"
+            )
+        if not isinstance(evidence.get("policy_apply_allowed"), bool):
+            raise RuntimeError(
+                f"direct runtime summary policy apply authority invalid: {owner}"
+            )
+        receipt = row.get("policy_receipt")
+        if receipt is not None:
+            if not isinstance(receipt, dict):
+                raise RuntimeError(
+                    f"direct runtime summary policy receipt invalid: {owner}"
+                )
+            for receipt_bool in ("target_date_matches", "valid"):
+                if not isinstance(receipt.get(receipt_bool), bool):
+                    raise RuntimeError(
+                        "direct runtime summary policy receipt "
+                        f"{receipt_bool} invalid: {owner}"
+                    )
+        if evidence.get("comparison_status") == "validated_edge":
+            if (
+                handoff_state != "candidate_published"
+                or evidence.get("policy_apply_allowed") is not True
+                or not isinstance(receipt, dict)
+            ):
+                raise RuntimeError(
+                    f"direct runtime summary validated edge contract invalid: {owner}"
+                )
+        elif handoff_state == "candidate_published" or evidence.get(
+            "policy_apply_allowed"
+        ) is True:
+            raise RuntimeError(
+                f"direct runtime summary non-edge apply contract invalid: {owner}"
+            )
         if evidence.get("comparison_status") == "validated_edge":
             validated_edge_count += 1
         if evidence.get("policy_handoff_state") == "candidate_published":
@@ -689,6 +746,35 @@ def _load_direct_summary(source_date: str) -> dict[str, Any]:
         raise RuntimeError("direct runtime summary preopen source date mismatch")
     if not isinstance(preopen.get("effective_dates"), list):
         raise RuntimeError("direct runtime summary preopen effective dates invalid")
+    if not isinstance(preopen.get("actual_pid_consumed"), bool):
+        raise RuntimeError("direct runtime summary PID consumption state invalid")
+    runtime_pid = preopen.get("runtime_pid")
+    if runtime_pid is not None and (
+        isinstance(runtime_pid, bool)
+        or not isinstance(runtime_pid, int)
+        or runtime_pid <= 0
+    ):
+        raise RuntimeError("direct runtime summary runtime PID invalid")
+    for pid_field in ("pid_passed", "pid_env_available"):
+        if preopen.get(pid_field) is not None and not isinstance(
+            preopen.get(pid_field), bool
+        ):
+            raise RuntimeError(
+                f"direct runtime summary {pid_field} invalid"
+            )
+    if preopen["actual_pid_consumed"] and (
+        payload.get("preopen_consumption_state") != "verified"
+        or payload.get("natural_acceptance_state") != "pending"
+        or runtime_pid is None
+        or preopen.get("pid_passed") is not True
+        or preopen.get("pid_env_available") is not True
+    ):
+        raise RuntimeError("direct runtime summary PID receipt contract invalid")
+    if (
+        payload.get("natural_acceptance_state") == "pending"
+        and preopen["actual_pid_consumed"] is not True
+    ):
+        raise RuntimeError("direct runtime summary natural acceptance lacks PID receipt")
     if preopen.get("apply_date"):
         apply_date = str(preopen["apply_date"]).strip()
         try:
@@ -716,6 +802,26 @@ def _load_direct_summary(source_date: str) -> dict[str, Any]:
             )
         if not preopen.get("manifest_path") or not preopen.get("verification_path"):
             raise RuntimeError("direct runtime summary preopen path contract invalid")
+        for digest_field in ("manifest_sha256", "verification_sha256"):
+            digest = preopen.get(digest_field)
+            if digest is not None and (
+                not isinstance(digest, str)
+                or len(digest) != 64
+                or any(
+                    character not in "0123456789abcdef"
+                    for character in digest.lower()
+                )
+            ):
+                raise RuntimeError(
+                    f"direct runtime summary preopen {digest_field} invalid"
+                )
+        if payload.get("preopen_consumption_state") == "verified" and (
+            not preopen.get("manifest_sha256")
+            or not preopen.get("verification_sha256")
+        ):
+            raise RuntimeError(
+                "direct runtime summary verified PREOPEN hashes missing"
+            )
     elif payload.get("preopen_consumption_state") != "not_due":
         raise RuntimeError("direct runtime summary pending preopen apply date missing")
     return payload
@@ -2128,9 +2234,13 @@ def _project_direct_tasks(
                 "금지: bootstrap 생성·선택을 실제 PID 소비, 자연 행동 또는 비용 후 EV 개선으로 보고하지 않는다.",
             ),
         )
-    if summary.get("natural_acceptance_state") == "pending" and (
-        summary.get("runtime_effect") is True
-        or int(summary.get("validated_edge_count") or 0) > 0
+    if (
+        summary.get("natural_acceptance_state") == "pending"
+        and preopen.get("actual_pid_consumed") is True
+        and (
+            summary.get("runtime_effect") is True
+            or int(summary.get("validated_edge_count") or 0) > 0
+        )
     ):
         tasks_by_owner["__post_apply__"] = GeneratedTask(
             task_id="DirectFamilyPostApplyAcceptance",

@@ -503,6 +503,21 @@ def _runtime_consumption_state(
     verification_path = runtime_dir / f"runtime_policy_bootstrap_verify_{apply_date}.json"
     manifest = _load_json(manifest_path)
     verification = _load_json(verification_path)
+    runtime_pid = verification.get("pid")
+    receipt_runtime_pid = (
+        runtime_pid
+        if isinstance(runtime_pid, int)
+        and not isinstance(runtime_pid, bool)
+        and runtime_pid > 0
+        else None
+    )
+    actual_pid_consumed = bool(
+        receipt_runtime_pid is not None
+        and verification.get("status") == "pass"
+        and verification.get("passed") is True
+        and verification.get("pid_passed") is True
+        and verification.get("pid_env_available") is True
+    )
     receipt = {
         "source_date": target_date,
         "effective_dates": effective_dates,
@@ -511,15 +526,20 @@ def _runtime_consumption_state(
         "manifest_sha256": _sha(manifest_path),
         "verification_path": str(verification_path),
         "verification_sha256": _sha(verification_path),
+        "runtime_pid": receipt_runtime_pid,
+        "pid_passed": verification.get("pid_passed"),
+        "pid_env_available": verification.get("pid_env_available"),
+        "actual_pid_consumed": actual_pid_consumed,
     }
     if not effective_dates:
         return "not_due", "not_applicable", receipt
     if (
         manifest.get("target_date") == apply_date
         and verification.get("status") == "pass"
+        and verification.get("passed") is True
         and verification.get("target_date") == apply_date
     ):
-        return "verified", "pending", receipt
+        return "verified", ("pending" if actual_pid_consumed else "not_due"), receipt
     if verification_path.exists():
         return "rejected", "not_due", receipt
     if manifest_path.exists():

@@ -188,6 +188,8 @@ ID 규칙은 `owner + task_role`의 allowlist 기반 PascalCase이며 raw blocke
 
 실제 runtime effect가 있는 validated policy만 PID·자연 decision 확인 task를 만든다. incumbent 유지나 measured no-edge를 장중 성과 task로 부풀리지 않는다.
 
+정상 launcher는 bootstrap을 기동 전에 검증한 뒤 실제 bot child PID가 생성되면 같은 verifier를 `--pid`로 다시 실행한다. `runtime_approval_summary`는 양수 PID·`pid_passed=true`·`pid_env_available=true`가 함께 확인된 receipt만 실제 PID 소비로 기록한다. 파일 검증만 통과한 상태는 PREOPEN verified일 수 있지만 자연 성과 대기를 열지 않는다.
+
 ### 적용 후 성과
 
 정책 version이 실제 PID에서 소비된 뒤에만 post-apply task를 활성화한다.

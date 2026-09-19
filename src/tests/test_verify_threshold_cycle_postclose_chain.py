@@ -116,6 +116,24 @@ def test_verifier_rejects_source_gap_marked_runtime_applyable(monkeypatch, tmp_p
     assert "blocked_economic_source_marked_applyable:entry_split" in report["issues"]
 
 
+def test_verifier_rejects_natural_acceptance_without_pid_receipt(
+    monkeypatch, tmp_path
+):
+    target = "2026-09-19"
+    summary = _seed(monkeypatch, tmp_path, target)
+    summary["natural_acceptance_state"] = "pending"
+    _write(mod._artifact_paths(target)["runtime_summary"], summary)
+
+    report = mod.build_threshold_cycle_postclose_verification(target)
+
+    assert report["status"] == "fail"
+    assert any(
+        issue.startswith("runtime_summary_contract_invalid:")
+        and "natural acceptance lacks PID receipt" in issue
+        for issue in report["issues"]
+    )
+
+
 def test_required_summary_handoff_verifies_marker_and_task_projection(
     monkeypatch, tmp_path
 ):

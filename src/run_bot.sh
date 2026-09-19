@@ -72,6 +72,21 @@ verify_threshold_runtime_env_handoff() {
     echo "✅ threshold runtime env handoff 검증 통과: target_date=$target_date"
 }
 
+record_threshold_runtime_env_pid_handoff() {
+    local target_date="$1"
+    local bot_pid="$2"
+    local verify_output
+    if ! verify_output="$(
+        PYTHONPATH=.. ../.venv/bin/python -m src.engine.automation.runtime_policy_bootstrap \
+            --verify --target-date "$target_date" --pid "$bot_pid" 2>&1
+    )"; then
+        echo "⚠️ threshold runtime env PID 소비 receipt 기록 실패: target_date=$target_date pid=$bot_pid"
+        printf '%s\n' "$verify_output"
+        return 1
+    fi
+    echo "✅ threshold runtime env PID 소비 receipt 기록: target_date=$target_date pid=$bot_pid"
+}
+
 apply_retired_runtime_policy_env() {
     local retirement_commands
     if ! retirement_commands="$(
@@ -302,6 +317,10 @@ while true; do
     fi
     "${cmd[@]}" &
     BOT_PID=$!
+    # The pre-start verifier proves the frozen bootstrap.  Re-run the same
+    # verifier against the actual child so later postclose acceptance cannot
+    # confuse a generated policy file with PID consumption.
+    record_threshold_runtime_env_pid_handoff "$RUNTIME_TARGET_DATE" "$BOT_PID" || true
     # The tmux supervisor is not the trading process.  Attest the actual bot
     # child only after it has inherited this selected release's src cwd.  A
     # receipt failure is observable but must not turn a provenance write into
