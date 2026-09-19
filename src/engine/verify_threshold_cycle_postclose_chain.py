@@ -85,9 +85,9 @@ def _direct_source_checks(summary: dict[str, Any]) -> tuple[list[dict[str, Any]]
             issues.append(f"direct_source_hash_mismatch:{owner}")
         elif not check["exists"] and check["required"]:
             issues.append(f"direct_source_missing:{owner}")
-        elif check["exists"] and not check["target_date_matches"]:
+        elif check["required"] and check["exists"] and not check["target_date_matches"]:
             issues.append(f"direct_source_date_mismatch:{owner}")
-        elif check["exists"] and not check["sha256"]:
+        elif check["required"] and check["exists"] and not check["sha256"]:
             issues.append(f"direct_source_hash_missing:{owner}")
     return checks, issues
 

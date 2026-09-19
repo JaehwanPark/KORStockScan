@@ -454,7 +454,7 @@ def _economic_projection(owner: str, payload: dict[str, Any]) -> dict[str, Any]:
         "paired_sample_count": paired_sample_count,
         "source_day_count": source_day_count,
         "candidate_count": candidate_count or 0,
-        "policy_apply_allowed": policy_allowed is True,
+        "policy_apply_allowed": policy_allowed is True and status == "validated_edge",
         "policy_handoff_state": handoff,
         "resolution_mode": resolution_mode,
         "first_blocker": first_blocker,

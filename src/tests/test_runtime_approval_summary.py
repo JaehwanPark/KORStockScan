@@ -166,7 +166,11 @@ def test_economic_states_keep_source_gap_no_edge_and_validated_edge_distinct(mon
     _seed_required(target)
     _write(
         mod._paths(target)["entry_cancel_wait"],
-        {"target_date": target, "economic_evaluation": {"status": "source_gap", "blocker": "missing_fill_lineage"}},
+        {
+            "target_date": target,
+            "allowed_runtime_apply": True,
+            "economic_evaluation": {"status": "source_gap", "blocker": "missing_fill_lineage"},
+        },
     )
     _write(
         mod._paths(target)["entry_split"],
@@ -190,6 +194,7 @@ def test_economic_states_keep_source_gap_no_edge_and_validated_edge_distinct(mon
     report = mod.build_runtime_approval_summary(target)
 
     assert report["sources"]["entry_cancel_wait"]["economic_evidence"]["comparison_status"] == "source_gap"
+    assert report["sources"]["entry_cancel_wait"]["economic_evidence"]["policy_apply_allowed"] is False
     assert report["sources"]["entry_split"]["economic_evidence"]["comparison_status"] == "measured_no_edge"
     scale = report["sources"]["scale_in_split"]["economic_evidence"]
     assert scale["comparison_status"] == "validated_edge"

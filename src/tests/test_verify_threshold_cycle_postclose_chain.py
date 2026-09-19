@@ -65,6 +65,22 @@ def test_optional_direct_receipt_may_be_absent(monkeypatch, tmp_path):
     assert report["status"] == "pass"
 
 
+def test_stale_optional_policy_blocks_only_family_handoff(monkeypatch, tmp_path):
+    target = "2026-09-19"
+    _seed(monkeypatch, tmp_path, target)
+    _write(
+        summary_mod._paths(target)["low_price_expansion_policy"],
+        {"source_date": "2026-09-18", "allowed_runtime_apply": True},
+    )
+    summary = summary_mod.build_runtime_approval_summary(target)
+
+    report = mod.build_threshold_cycle_postclose_verification(target)
+
+    assert summary["sources"]["low_price_expansion"]["economic_evidence"]["policy_handoff_state"] == "blocked"
+    assert report["status"] == "pass"
+    assert "direct_source_date_mismatch:low_price_expansion_policy" not in report["issues"]
+
+
 def test_missing_postclose_terminal_fails_closed(monkeypatch, tmp_path):
     target = "2026-09-19"
     _seed(monkeypatch, tmp_path, target)
