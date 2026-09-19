@@ -556,6 +556,24 @@ def test_workorder_source_race_never_binds_new_hash_to_old_input(tmp_path):
         producer._SOURCE_READS.reset(token)
 
 
+def test_new_source_hash_contract_preserves_path_as_nonidentity_provenance():
+    report = workorder([order()])
+    report["source_hash_contract"] = contract.SOURCE_HASH_CONTRACT
+    identity = [
+        {key: value for key, value in entry.items() if key != "path"}
+        for entry in report["source_fingerprint"]
+    ]
+    report["source_hash"] = contract.digest(identity)
+    report["generation_inputs"]["source_hash"] = report["source_hash"]
+    report["generation_inputs"]["source_hash_contract"] = contract.SOURCE_HASH_CONTRACT
+    report["generation_hash"] = contract.digest(report["generation_inputs"])
+    report["generation_id"] = f"{DATE}-{report['generation_hash'][:12]}"
+
+    assert contract.contract_issues(report, DATE) == []
+    report["source_fingerprint"][0]["path"] = "/another/release/source.json"
+    assert contract.contract_issues(report, DATE) == []
+
+
 def test_permission_error_is_not_a_zero_byte_source(monkeypatch, tmp_path):
     from src.engine import build_code_improvement_workorder as producer
     from pathlib import Path

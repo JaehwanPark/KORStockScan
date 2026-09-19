@@ -61,6 +61,7 @@ CODE_IMPROVEMENT_WORKORDER_DIR = PROJECT_ROOT / "docs" / "code-improvement-worko
 CODE_IMPROVEMENT_WORKORDER_REPORT_DIR = REPORT_DIR / "code_improvement_workorder"
 WORKORDER_SCHEMA_VERSION = 2
 WORKORDER_PRODUCER_CONTRACT_VERSION = "code_improvement_workorder_producer_v8"
+SOURCE_HASH_CONTRACT = "logical_source_content_v2"
 IMPLEMENTED_STATUSES = {
     "implemented",
     "implemented_but_hold_sample",
@@ -267,8 +268,16 @@ def _source_fingerprint(source_paths: dict[str, Path]) -> dict[str, Any]:
             raise WorkorderSourceChanged(
                 f"workorder_source_changed_after_read:{entry['label']}"
             )
+    # Absolute release roots are deployment provenance, not source identity.
+    # Managed releases share the same canonical files through different root
+    # aliases, so binding the alias would create a new generation for identical
+    # bytes and metadata.
+    identity_files = [
+        {key: value for key, value in entry.items() if key != "path"}
+        for entry in files
+    ]
     hash_input = json.dumps(
-        files, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        identity_files, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
     source_hash = hashlib.sha256(hash_input).hexdigest()
     return {
@@ -292,6 +301,7 @@ def _generation_fingerprint(
         "max_orders": max(1, int(max_orders)),
         "include_swing": bool(include_swing),
         "direct_family_only": bool(direct_family_only),
+        "source_hash_contract": SOURCE_HASH_CONTRACT,
     }
     generation_hash = hashlib.sha256(
         json.dumps(
@@ -8246,6 +8256,7 @@ def _build_code_improvement_workorder(
         "generation_hash": generation_fingerprint["generation_hash"],
         "generation_inputs": generation_fingerprint["inputs"],
         "source_hash": source_fingerprint["source_hash"],
+        "source_hash_contract": SOURCE_HASH_CONTRACT,
         "generation_phase": "manual_final_direct_family",
         "semantic_source_hash": source_fingerprint["source_hash"],
         "consumer_generation_required": ["postclose_recommendation_intake"],

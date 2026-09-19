@@ -41,7 +41,7 @@
 
 | 항목 | 현재 값·판정 |
 | --- | --- |
-| final generation | `2026-09-17-37f1a42d3b7c`, source/semantic hash `315464ab68fa2659d64a8a05c390cffc5342df025ca44ad865ff245823945906`; generation input에 `direct_family_only=true` 결속 |
+| final generation | `2026-09-17-5aa459cacc82`, source/semantic hash `dcb36465f419973150280e44146de970374f578ec8f60e94aaf4955ea86d4039`; generation input에 `direct_family_only=true`, `source_hash_contract=logical_source_content_v2` 결속 |
 | generation 계약 | `manual_final_direct_family`, consumer는 `postclose_recommendation_intake` 1개, contract issue 0 |
 | 현재 inventory | source order23, selected12, non-selected11, implement_now0, attach_existing_family14, defer_evidence9 |
 | 권한 | 전체23건 `runtime_effect=false`, `allowed_runtime_apply=false` |
@@ -109,6 +109,7 @@ Workorder는 다음을 기록한다.
 - `generation_phase=manual_final_direct_family`
 - 모든 exact source file의 byte fingerprint와 `source_hash`
 - `semantic_source_hash`: 현재 direct input set의 exact hash. family 경제 section은 별도 `semantic_sha256`으로 결속
+- source fingerprint의 절대 경로는 provenance로 보존하되 source identity hash에서는 제외한다. 같은 canonical input을 가리키는 immutable release alias가 generation을 바꾸지 않는다.
 - `consumer_generation_required=['postclose_recommendation_intake']`
 - selected/non-selected 전체 inventory와 이전 generation lineage
 

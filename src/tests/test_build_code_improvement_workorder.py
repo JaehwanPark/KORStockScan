@@ -238,6 +238,25 @@ def test_generation_identity_binds_direct_family_mode():
 
     assert legacy["generation_hash"] != direct["generation_hash"]
     assert direct["inputs"]["direct_family_only"] is True
+    assert direct["inputs"]["source_hash_contract"] == "logical_source_content_v2"
+
+
+def test_source_hash_ignores_managed_release_root_alias(tmp_path):
+    source = tmp_path / "canonical" / "source.json"
+    source.parent.mkdir()
+    source.write_text('{"value":1}')
+    first = tmp_path / "release-a.json"
+    second = tmp_path / "release-b.json"
+    first.symlink_to(source)
+    second.symlink_to(source)
+
+    first_fingerprint = mod._source_fingerprint({"source": first})
+    second_fingerprint = mod._source_fingerprint({"source": second})
+
+    assert first_fingerprint["files"][0]["path"] != second_fingerprint["files"][0][
+        "path"
+    ]
+    assert first_fingerprint["source_hash"] == second_fingerprint["source_hash"]
 
 
 def test_panic_report_only_provenance_is_explicit_at_native_row_boundary():

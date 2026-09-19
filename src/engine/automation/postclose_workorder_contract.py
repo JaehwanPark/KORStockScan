@@ -25,6 +25,7 @@ AUTHORITY_FLAGS = (
     "runtime_registry_mutation_allowed",
     "provider_budget_increase_allowed",
 )
+SOURCE_HASH_CONTRACT = "logical_source_content_v2"
 
 
 def digest(value: Any) -> str:
@@ -172,7 +173,20 @@ def contract_issues(report: dict[str, Any], target_date: str) -> list[str]:
             issues.append("source_labels_missing_or_duplicate")
         if any(type(e.get("exists")) is not bool for e in entries):
             issues.append("source_exists_not_boolean")
-        if report.get("source_hash") != digest(entries):
+        source_hash_contract = report.get("source_hash_contract")
+        if source_hash_contract is None:
+            expected_source_hash = digest(entries)
+        elif source_hash_contract == SOURCE_HASH_CONTRACT:
+            expected_source_hash = digest(
+                [
+                    {key: value for key, value in entry.items() if key != "path"}
+                    for entry in entries
+                ]
+            )
+        else:
+            expected_source_hash = None
+            issues.append("source_hash_contract_invalid")
+        if report.get("source_hash") != expected_source_hash:
             issues.append("source_hash_mismatch")
     inputs = report.get("generation_inputs")
     if not isinstance(inputs, dict):
@@ -188,6 +202,11 @@ def contract_issues(report: dict[str, Any], target_date: str) -> list[str]:
             or type(inputs.get("max_orders")) is not int
             or inputs["max_orders"] < 1
             or type(inputs.get("include_swing")) is not bool
+            or (
+                "source_hash_contract" in report
+                and inputs.get("source_hash_contract")
+                != report.get("source_hash_contract")
+            )
             or (
                 "direct_family_only" in inputs
                 and type(inputs.get("direct_family_only")) is not bool
