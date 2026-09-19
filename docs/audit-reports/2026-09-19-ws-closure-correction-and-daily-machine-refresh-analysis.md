@@ -60,4 +60,4 @@ active 관련 프로세스가 없음을 확인한 뒤 WS 재생성 임시 디렉
 
 ## 배포 상태
 
-선택 release는 `compact-economic-optimized-reviewed-20260919-411ec0efd`, commit `411ec0efdf993ec11e36b3fc79b78a5a7a36a6e1`이며 WS evaluator 구현 commit을 포함한다. `actual_pid_consumed=false`이고 bot 재기동·조기 PREOPEN·주문은 없었다. 새 runtime code를 만들지 않았으므로 이번 정정으로 별도 release를 중복 생성하지 않는다. 배포 receipt는 evaluator와 fail-closed consumer 경로의 배포만 증명하며 구조적 경제성 종결을 증명하지 않는다.
+현재 선택 release는 `compact-economic-cleanup-reviewed-20260919-8143121b6`, commit `8143121b6005b908520fc3c8dca5160f82c50d2f`이며 WS evaluator 구현 commit `842edf766a52eb609755478e1dee7346c69771b5`을 포함한다. `actual_pid_consumed=false`이고 bot 재기동·조기 PREOPEN·주문은 없었다. 새 runtime code를 만들지 않았으므로 이번 정정으로 별도 release를 중복 생성하지 않는다. 배포 receipt는 evaluator와 fail-closed consumer 경로의 배포만 증명하며 구조적 경제성 종결을 증명하지 않는다.

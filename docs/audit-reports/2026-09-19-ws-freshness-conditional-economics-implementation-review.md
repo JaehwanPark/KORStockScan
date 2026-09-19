@@ -28,7 +28,7 @@ WS6의 다음 자연 generation 원 plan/quantity/guard, 독립 model, 정규9/2
 
 ## 배포·제한 재생성 결과
 
-- 구현 commit `842edf766a52eb609755478e1dee7346c69771b5`은 `origin/main`에 반영됐다. 현재 선택된 불변 release는 후속 compact 보완까지 포함한 `compact-economic-optimized-reviewed-20260919-411ec0efd`, commit `411ec0efdf993ec11e36b3fc79b78a5a7a36a6e1`이다. bot 재기동과 조기 PREOPEN은 수행하지 않았고 `actual_pid_consumed=false`다.
+- 구현 commit `842edf766a52eb609755478e1dee7346c69771b5`은 `origin/main`에 반영됐다. 최초 WS 선택 release는 `compact-economic-optimized-reviewed-20260919-411ec0efd`였고, 현재 선택된 불변 release는 이를 포함한 `compact-economic-cleanup-reviewed-20260919-8143121b6`, commit `8143121b6005b908520fc3c8dca5160f82c50d2f`이다. bot 재기동과 조기 PREOPEN은 수행하지 않았고 `actual_pid_consumed=false`다.
 - 광범위 영향 검증은 `662 passed, 1 warning`, 최종 선택 release의 scanner/compact 회귀는 `136 passed, 1 warning`이다. compileall, 변경 wrapper `bash -n`, `git diff --check`, scanner-only strict를 통과했다. warning은 `pandas_ta`의 pandas copy-on-write deprecation 1건이다.
 - source9/17 제한 재생성은 raw 전수 재조회와 provider 호출 없이 완료됐다. 최종 WS 경제 subsection hash는 `02afcf30577e8fa290e00fe9d62e1e624adcb8ce2217dbfaec418a010ece49d2`, 발행 policy hash는 `5cb82631ef6674c80a5154737ccdca70b6d6ac75fad0194d2cc883e5ef45bf51`이다. source/publication/policy/effective date는 각각 `2026-09-17/19/18/21`이다.
 - 실제 결과는 `source_gap`이며 policy는 `source_contract_blocked`, bonus `0`, `allowed_runtime_apply=false`다. source quality 자체는 pass다. complete snapshot partition15건·8일·선택 변경6쌍은 supporting proxy이고 incoming snapshot EV `-1.155944%`만 존재한다. outgoing 실행 EV가 없어 primary baseline/candidate EV·paired delta·순익·일별 순익 차이는 모두 null이다.
