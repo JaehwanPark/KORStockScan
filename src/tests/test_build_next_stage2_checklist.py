@@ -1630,3 +1630,27 @@ def test_retired_ai_cycle_reports_and_prior_workorders_do_not_reopen(monkeypatch
     text = path.read_text()
     assert "MainAIQualitySourceGap" not in text
     assert "main_ai_quality_r0_r3" not in text
+
+
+def test_direct_family_checklist_publishes_current_generation_marker(
+    monkeypatch, tmp_path
+):
+    _patch_dirs(monkeypatch, tmp_path)
+    monkeypatch.setattr(mod, "PROJECT_ROOT", tmp_path)
+    day = "2026-09-19"
+    summary = (
+        tmp_path
+        / "data"
+        / "report"
+        / "runtime_approval_summary"
+        / f"runtime_approval_summary_{day}.json"
+    )
+    _write_json(summary, {"date": day, "status": "pass", "blocking_reasons": []})
+
+    result = mod.build_next_stage2_checklist(day)
+    text = Path(result["path"]).read_text(encoding="utf-8")
+
+    assert text.count("POSTCLOSE_SUMMARY_SOURCES") == 1
+    assert "threshold_cycle_ev" not in text
+    assert "threshold_cycle_preopen_apply" not in text
+    assert "신규 공통 튜닝 작업 없음" in text

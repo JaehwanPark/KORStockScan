@@ -1428,7 +1428,7 @@ def test_preopen_runtime_env_loader_matches_launcher_override_order(tmp_path):
     assert merged["KORSTOCKSCAN_ENTRY_OPPORTUNITY_RECHECK_ENABLED"] == "true"
     assert merged["KORSTOCKSCAN_ENTRY_SPLIT_PROBE_QTY"] == "1"
     assert provenance["load_order"] == [
-        "threshold_runtime_env",
+        "runtime_policy_bootstrap",
         "operator_runtime_overrides",
         "dated_operator_runtime_overrides",
     ]

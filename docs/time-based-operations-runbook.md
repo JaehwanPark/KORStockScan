@@ -322,7 +322,7 @@ ls -l data/report/error_detection/error_detection_$(TZ=Asia/Seoul date +%F).json
 | `cron_completion` | 필수 cron log의 당일 DONE 누락 또는 FAIL 최신 marker. 거래일 전용 cron은 KRX 비거래일에 `skip_non_trading_day`로 닫는다 | 해당 cron log와 산출물 재확인 후 같은 date 재실행 여부 판단 | 실패를 threshold 성과로 해석 |
 | `log_scanner` | error log burst 또는 신규 error pattern. `ERROR`/`CRITICAL`/traceback/exception/에러/오류/실패 같은 에러 후보 라인만 분류하며, `_error.log`에 섞인 INFO/WARNING성 DB 성공·업로드 로그는 운영 incident에서 제외한다. `TEST`, `123456`, `_DummySession`, `bus fail`처럼 pytest fixture signature가 붙은 라인도 제외한다. memory/OOM 분류는 `MemoryError`, 독립 단어 `memory`/`oom`, `out of memory`, `cannot allocate memory`만 인정하고 `kiwoom_*` 같은 logger/module 이름 내부 문자열은 OOM으로 보지 않는다 | stack trace/source artifact 확인 후 incident 또는 code workorder로 분리. fixture noise나 INFO성 운영 로그가 runtime error log에 섞이면 test/log sink 분리 또는 scanner ignore rule 보강으로 닫는다 | 에러만 보고 live guard 완화 |
 | `kiwoom_auth_8005_restart` | fresh runtime log에서 `8005 Token이 유효하지 않습니다` 계열 인증 실패 감지. 기존 offset 이전 로그, pytest fixture signature, `run_error_detection*` meta log는 제외한다. graceful PID handoff 뒤 발견된 timestamp가 새 PID 시작보다 앞선 행은 이전 PID 종료 구간으로 귀속해 소비한다. 같은 runtime scan window에서 timestamped 8005 뒤 same-request retry 성공 token handoff가 있고 그 뒤 8005/recovery failure가 없으면 `recovered_without_restart`로 소비한다. timestamp가 없거나 handoff 뒤 재발한 행은 계속 actionable이다 | live-engine 시작은 KST 당일 발급 shared token만 재사용하고 전일/미상 발급 cache는 binding 전에 1회 갱신한다. actionable 8005는 `restart.flag` 기반 graceful restart 후 새 PID, WS 수신, REST 시세/잔고 응답 회복을 확인한다. 하루 3회까지 restart 복구를 허용하고 이후에는 fail artifact/Telegram으로 operator 확인을 요구한다. REST/account/order 호출 지점은 8005 응답에 한해 force-refresh, same-request 1회 retry를 수행하며 성공 handoff를 process-local replacement map에 등록한다 | threshold/spread/order guard 변경, provider route 변경, retry loop 확장 |
-| `artifact_freshness` | 시간창 기준 필수 report/artifact stale/누락 또는 JSON status 값 비정상. 장중 `pipeline_events`는 09:00~09:05 startup grace를 두고, `threshold_events` compact stream은 sparse stream이라 stale을 warning으로 본다. 07:35에 producer와 detector가 동시에 실행되는 `runtime_policy_bootstrap`은 첫 detector 주기 300초 동안 이전 장후 target-date handoff의 stale을 `startup_grace`로 처리하되, 유예 이후에도 갱신되지 않으면 기존 critical fail을 유지한다. `threshold_cycle_ev`와 `swing_daily_simulation` 같은 one-shot postclose artifact는 완료 후 age만으로 재실행하지 않는다. `daily_recommendations_v2.csv`와 diagnostics는 장전 입력 특성상 mtime만 보지 않고 내부 `date`/`latest_date`, row/count 계약이 통과하면 `pass_content_date`로 닫는다 | window, startup grace, trading_day skip, upstream cron 실패, status JSON의 `failed_steps`/`recovered_steps`, content date/count 확인 | 누락 artifact를 수동 값으로 대체 |
+| `artifact_freshness` | 시간창 기준 필수 report/artifact stale/누락 또는 JSON status 값 비정상. 장중 `pipeline_events`는 09:00~09:05 startup grace를 두고, `threshold_events` compact stream은 sparse stream이라 stale을 warning으로 본다. 07:35에 producer와 detector가 동시에 실행되는 `runtime_policy_bootstrap`은 첫 detector 주기 300초 동안 이전 장후 target-date handoff의 stale을 `startup_grace`로 처리하되, 유예 이후에도 갱신되지 않으면 기존 critical fail을 유지한다. `runtime_approval_summary`와 `swing_daily_simulation` 같은 one-shot postclose artifact는 완료 후 age만으로 재실행하지 않는다. `daily_recommendations_v2.csv`와 diagnostics는 장전 입력 특성상 mtime만 보지 않고 내부 `date`/`latest_date`, row/count 계약이 통과하면 `pass_content_date`로 닫는다 | window, startup grace, trading_day skip, upstream cron 실패, status JSON의 `failed_steps`/`recovered_steps`, content date/count 확인 | 누락 artifact를 수동 값으로 대체 |
 | `resource_usage` | CPU/memory/swap/load/disk threshold 위반, sampler stale. CPU busy fail 기준은 `ERROR_DETECTOR_CPU_BUSY_MAX_PCT=95.0`이며 90% 구간부터 warning으로 본다. KRX 비거래일에는 system metric sampler stale만 `skip_non_trading_day`로 제외하고 disk/memory/load 같은 host resource check는 유지한다 | resource pressure 원인 확인. disk-low면 log rotate 결과와 cooldown state 확인. swap만 높고 `mem_available`이 충분한 경우는 즉시 장애보다 reclaim/캐시 잔존 가능성을 먼저 본다 | 전략 runtime parameter 변경 |
 | `stale_lock` | 오래된 lock 발견 또는 cleanup 실패 | active lock인지 확인. 반복되면 wrapper lock lifecycle 보강 | 실행 중인 process lock 강제 삭제 |
 
@@ -593,7 +593,7 @@ ls -l data/daily_recommendations_v2.csv data/daily_recommendations_v2_diagnostic
 
 ## real / sim / combined 판정 기준
 
-`threshold_cycle_ev`, threshold calibration, performance tuning 리포트는 성과 source를 아래처럼 나눈다.
+Family-owned evaluator와 직접 runtime 요약은 성과 source를 아래처럼 나눈다. 공통 Daily/EV 집계기는 이 판정의 현행 owner가 아니다.
 
 | 구분 | 포함 대상 | 사용 목적 | 금지 |
 | --- | --- | --- | --- |
@@ -646,8 +646,8 @@ ls -l data/daily_recommendations_v2.csv data/daily_recommendations_v2_diagnostic
 확인 입력:
 
 - `data/report/swing_runtime_approval/swing_runtime_approval_YYYY-MM-DD.{json,md}`
-- `data/report/threshold_cycle_ev/threshold_cycle_ev_YYYY-MM-DD.{json,md}`
 - `data/report/runtime_approval_summary/runtime_approval_summary_YYYY-MM-DD.{json,md}`
+- `data/runtime/policy_bootstrap/runtime_policy_bootstrap_YYYY-MM-DD.json`
 - `data/runtime/policy_bootstrap/runtime_policy_bootstrap_YYYY-MM-DD.json`
 - `docs/checklists/YYYY-MM-DD-stage2-todo-checklist.md`
 
@@ -733,7 +733,6 @@ POSTCLOSE `HumanInterventionSummaryYYYYMMDD`에는 `approval_id`, `family`, 후�
 - `data/report/swing_threshold_ai_review/swing_threshold_ai_review_YYYY-MM-DD.md`
 - `data/report/swing_improvement_automation/swing_improvement_automation_YYYY-MM-DD.json`
 - `data/report/swing_runtime_approval/swing_runtime_approval_YYYY-MM-DD.json`
-- `data/report/threshold_cycle_ev/threshold_cycle_ev_YYYY-MM-DD.md`
 - `data/report/runtime_approval_summary/runtime_approval_summary_YYYY-MM-DD.md`
 - `data/report/code_improvement_workorder/code_improvement_workorder_YYYY-MM-DD.json`
 - `docs/code-improvement-workorders/code_improvement_workorder_YYYY-MM-DD.md`
@@ -796,7 +795,7 @@ code_improvement_workorder_YYYY-MM-DD.md implement_now를 2-pass로 처리해줘
 
 | 판정 | 사람이 다시 보는 시점 | 확인할 것 | 닫는 방식 |
 | --- | --- | --- | --- |
-| `attach_existing_family` | 다음 영업일 POSTCLOSE code-improvement triage | 기존 threshold family의 report/calibration 입력으로 흡수됐는지, 다음 `threshold_cycle_ev`/family report에 source metric이 보이는지 | `attached_to_existing_family`, `needs_codex_instrumentation`, `stale_no_action` 중 하나 |
+| `attach_existing_family` | 다음 영업일 POSTCLOSE code-improvement triage | 기존 family evaluator·policy receipt에 흡수됐는지, 다음 family report와 `runtime_approval_summary`에 source metric·hash가 보이는지 | `attached_to_existing_family`, `needs_codex_instrumentation`, `stale_no_action` 중 하나 |
 | `design_family_candidate` | 다음 영업일 POSTCLOSE code-improvement triage | 새 family 설계가 필요한 반복 패턴인지, `allowed_runtime_apply=false`, sample floor, safety guard, env key, rollback guard가 정의됐는지 | `design_backlog_required`, `merge_into_existing_family`, `reject_or_defer` 중 하나 |
 | `defer_evidence` | 다음 영업일 POSTCLOSE code-improvement triage | 새 표본이 추가되어 `implement_now` 또는 `attach_existing_family`로 승격됐는지, 여전히 stale/sample 부족인지 | `promoted`, `continue_defer`, `drop_stale` 중 하나 |
 

@@ -76,9 +76,11 @@ def test_removed_panic_buying_execution_surfaces_do_not_exist():
     )
 
 
-def test_threshold_postclose_report_has_startup_grace_for_long_postclose_chain():
+def test_runtime_approval_summary_has_startup_grace_for_long_postclose_chain():
     artifact = next(
-        item for item in ARTIFACT_REGISTRY if item["id"] == "threshold_postclose_report"
+        item
+        for item in ARTIFACT_REGISTRY
+        if item["id"] == "runtime_approval_summary_report"
     )
 
     assert artifact["one_shot"] is True

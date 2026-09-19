@@ -1322,7 +1322,7 @@ def test_latency_drought_when_budget_pass_exists_but_no_submitted(
     assert report["classification"]["primary"] == "SUBMIT_DROUGHT_CRITICAL"
     assert "LATENCY_DROUGHT" in report["classification"]["secondary"]
     assert report["followup"]["route"] == "entry_submit_drought_auto_workorder"
-    assert report["followup"]["owner"] == "postclose_threshold_cycle"
+    assert report["followup"]["owner"] == "entry_submit_drought_attribution"
     assert report["followup"]["next_artifact"] == "code_improvement_workorder"
     assert report["followup"]["operator_action_required"] is False
     contract = report["entry_submit_drought_contract"]
@@ -1338,6 +1338,8 @@ def test_latency_drought_when_budget_pass_exists_but_no_submitted(
     breakdown = contract["observation_breakdown"]
     assert breakdown["decision_authority"] == "submit_drought_attribution_only"
     assert breakdown["runtime_effect"] is False
+
+
     assert breakdown["allowed_runtime_apply"] is False
     assert breakdown["broker_order_submit_allowed"] is False
     assert breakdown["axis_order"] == [
@@ -1388,6 +1390,26 @@ def test_latency_drought_when_budget_pass_exists_but_no_submitted(
         "joined_budget_events=5, joined_budget_unique=5, budget_missing_key=0, "
         "latency_missing_key=0`" in markdown
     )
+
+
+def test_followup_routes_use_family_native_owners_after_common_tuning_retirement():
+    price_guard = sentinel._followup_route({"primary": "PRICE_GUARD_DROUGHT"})
+    latency = sentinel._followup_route({"primary": "LATENCY_DROUGHT"})
+
+    assert price_guard == {
+        "route": "pre_submit_price_guard_review",
+        "owner": "pre_submit_price_guard",
+        "operator_action_required": False,
+        "runtime_effect": "report_only_no_mutation",
+        "next_artifact": "observation_source_quality_audit",
+    }
+    assert latency == {
+        "route": "latency_quote_quality_review",
+        "owner": "entry_latency_attribution",
+        "operator_action_required": False,
+        "runtime_effect": "report_only_no_mutation",
+        "next_artifact": "observation_source_quality_audit",
+    }
 
 
 def test_submit_drought_without_latency_block_does_not_claim_latency_drought(

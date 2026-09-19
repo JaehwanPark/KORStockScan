@@ -152,3 +152,41 @@ def test_pipeline_diagnostic_arrival_invalidates_both_exact_consumers(tmp_path):
     for consumer in ("tower", "checklist"):
         after = mod.source_receipt(mod.source_paths(reports, day, consumer), day)
         assert after != before[consumer]
+
+
+def test_retired_common_layer_handoff_uses_direct_sources_without_cycle(tmp_path):
+    reports = tmp_path / "data" / "report"
+    day = "2026-09-19"
+    paths = mod.source_paths(reports, day, "tower")
+
+    assert set(paths) == {
+        "runtime_approval_summary",
+        "runtime_policy_bootstrap",
+        "runtime_policy_bootstrap_verify",
+    }
+    assert "postclose_verifier" not in paths
+    assert "threshold_cycle_ev" not in paths
+    assert "preopen_apply_plan" not in paths
+
+
+def test_retired_common_layer_handoff_skips_legacy_intake(monkeypatch, tmp_path):
+    reports = tmp_path / "data" / "report"
+    day = "2026-09-19"
+    receipt = mod.source_receipt(mod.source_paths(reports, day, "tower"), day)
+    tower = reports / "tuning_performance_control_tower" / f"tuning_performance_control_tower_{day}.json"
+    tower.parent.mkdir(parents=True)
+    tower.write_text(json.dumps({"date": day, "source_generation_contract": receipt}))
+    checklist = tmp_path / "checklist.md"
+    checklist.write_text(mod.checklist_marker(receipt))
+    monkeypatch.setattr(
+        "src.engine.automation.postclose_recommendation_intake.build_intake",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("retired intake must not run")
+        ),
+    )
+
+    result = mod.verify_summary_handoff(
+        day, report_dir=reports, checklist_path=checklist
+    )
+
+    assert result["status"] == "pass"

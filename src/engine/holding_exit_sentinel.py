@@ -1062,7 +1062,7 @@ def _followup_route(classification: dict[str, Any]) -> dict[str, Any]:
     if primary == "HOLD_DEFER_DANGER":
         return {
             "route": "holding_flow_defer_cost_review",
-            "owner": "postclose_threshold_cycle",
+            "owner": "holding_exit_observation",
             "operator_action_required": False,
             "runtime_effect": "report_only_no_mutation",
             "next_artifact": "holding_exit_observation",
@@ -1078,18 +1078,18 @@ def _followup_route(classification: dict[str, Any]) -> dict[str, Any]:
     if primary == "SOFT_STOP_WHIPSAW":
         return {
             "route": "soft_stop_whipsaw_calibration_review",
-            "owner": "postclose_threshold_cycle",
+            "owner": "soft_stop_whipsaw_confirmation",
             "operator_action_required": False,
             "runtime_effect": "report_only_no_mutation",
-            "next_artifact": "threshold_cycle_calibration_source_bundle",
+            "next_artifact": "observation_source_quality_audit",
         }
     if primary == "TRAILING_EARLY_EXIT":
         return {
             "route": "trailing_continuation_report_only_review",
-            "owner": "postclose_threshold_cycle",
+            "owner": "scalp_trailing_continuation_recheck",
             "operator_action_required": False,
             "runtime_effect": "report_only_no_mutation",
-            "next_artifact": "threshold_cycle_calibration_source_bundle",
+            "next_artifact": "holding_exit_observation",
         }
     return {
         "route": "normal_no_action",

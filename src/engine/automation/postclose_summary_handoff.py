@@ -17,6 +17,7 @@ from src.engine.automation.postclose_workorder_contract import exact_equal
 
 SCHEMA = "postclose_summary_sources_v1"
 MARKER = "POSTCLOSE_SUMMARY_SOURCES"
+COMMON_THRESHOLD_TUNING_RETIRED_FROM = "2026-09-19"
 
 
 def installed_producer_terminal_states(
@@ -112,15 +113,12 @@ def installed_producer_terminal_states(
 
 
 def source_paths(report_dir: Path, target_date: str, consumer: str) -> dict[str, Path]:
-    if target_date >= "2026-09-19":
+    if target_date >= COMMON_THRESHOLD_TUNING_RETIRED_FROM:
         data_dir = report_dir.parent
         return {
             "runtime_approval_summary": report_dir
             / "runtime_approval_summary"
             / f"runtime_approval_summary_{target_date}.json",
-            "postclose_verifier": report_dir
-            / "threshold_cycle_postclose_verification"
-            / f"threshold_cycle_postclose_verification_{target_date}.json",
             "runtime_policy_bootstrap": data_dir
             / "runtime"
             / "policy_bootstrap"
@@ -254,7 +252,9 @@ def verify_summary_handoff(
     )
 
     intake = (
-        build_intake(report_dir, target_date) if target_date >= EFFECTIVE_DATE else None
+        build_intake(report_dir, target_date)
+        if EFFECTIVE_DATE <= target_date < COMMON_THRESHOLD_TUNING_RETIRED_FROM
+        else None
     )
     for consumer, required in (
         ("tower", require_tower),

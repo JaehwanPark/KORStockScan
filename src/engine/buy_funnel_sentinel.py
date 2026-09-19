@@ -4403,15 +4403,15 @@ def _followup_route(classification: dict[str, Any]) -> dict[str, Any]:
     if primary == "PRICE_GUARD_DROUGHT":
         return {
             "route": "pre_submit_price_guard_review",
-            "owner": "postclose_threshold_cycle",
+            "owner": "pre_submit_price_guard",
             "operator_action_required": False,
             "runtime_effect": "report_only_no_mutation",
-            "next_artifact": "threshold_cycle_calibration_source_bundle",
+            "next_artifact": "observation_source_quality_audit",
         }
     if primary == "SUBMIT_DROUGHT_CRITICAL":
         return {
             "route": "entry_submit_drought_auto_workorder",
-            "owner": "postclose_threshold_cycle",
+            "owner": "entry_submit_drought_attribution",
             "operator_action_required": False,
             "runtime_effect": "auto_workorder_no_intraday_mutation",
             "next_artifact": "code_improvement_workorder",
@@ -4419,7 +4419,7 @@ def _followup_route(classification: dict[str, Any]) -> dict[str, Any]:
     if primary == "UPSTREAM_AI_THRESHOLD":
         return {
             "route": "score65_74_counterfactual_review",
-            "owner": "postclose_threshold_cycle",
+            "owner": "score65_74_counterfactual_review",
             "operator_action_required": False,
             "runtime_effect": "report_only_no_mutation",
             "next_artifact": "wait6579_ev_cohort_and_missed_probe_counterfactual",
@@ -4427,10 +4427,10 @@ def _followup_route(classification: dict[str, Any]) -> dict[str, Any]:
     if primary == "LATENCY_DROUGHT":
         return {
             "route": "latency_quote_quality_review",
-            "owner": "postclose_threshold_cycle",
+            "owner": "entry_latency_attribution",
             "operator_action_required": False,
             "runtime_effect": "report_only_no_mutation",
-            "next_artifact": "threshold_cycle_calibration_source_bundle",
+            "next_artifact": "observation_source_quality_audit",
         }
     return {
         "route": "normal_no_action",

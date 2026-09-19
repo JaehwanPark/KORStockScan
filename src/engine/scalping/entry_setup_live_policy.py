@@ -618,7 +618,7 @@ def load_preopen_runtime_env(
     errors: list[str] = []
     sources: list[dict[str, Any]] = []
     for path, required, role in (
-        (runtime_env_file, True, "threshold_runtime_env"),
+        (runtime_env_file, True, "runtime_policy_bootstrap"),
         (operator_env_file, True, "operator_runtime_overrides"),
         (dated_operator_env_file, False, "dated_operator_runtime_overrides"),
     ):

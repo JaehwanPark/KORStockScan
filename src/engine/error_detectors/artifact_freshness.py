@@ -344,8 +344,8 @@ ARTIFACT_REGISTRY: list[dict[str, Any]] = [
         "window_end": (15, 30),
     },
     {
-        "id": "threshold_postclose_report",
-        "path_template": "data/report/threshold_cycle_ev/threshold_cycle_ev_{date}.json",
+        "id": "runtime_approval_summary_report",
+        "path_template": "data/report/runtime_approval_summary/runtime_approval_summary_{date}.json",
         "max_staleness_sec": 1800,
         "critical": True,
         "one_shot": True,

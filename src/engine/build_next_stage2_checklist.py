@@ -1675,6 +1675,13 @@ def build_next_stage2_checklist(
 def _build_direct_family_checklist(
     *, source_date: str, target_date: str, target_path: Path
 ) -> dict[str, Any]:
+    from src.engine.automation.postclose_summary_handoff import (
+        assert_sources_unchanged,
+        checklist_marker,
+        source_paths,
+        source_receipt,
+    )
+
     summary_path = (
         PROJECT_ROOT
         / "data"
@@ -1684,8 +1691,11 @@ def _build_direct_family_checklist(
     )
     summary = _load_json(summary_path)
     blockers = [str(value) for value in summary.get("blocking_reasons") or []]
+    handoff_paths = source_paths(summary_path.parents[1], source_date, "checklist")
+    handoff_receipt = source_receipt(handoff_paths, source_date)
     lines = [
         AUTO_START,
+        checklist_marker(handoff_receipt),
         "",
         "## Family 직접 증거 후속",
         "",
@@ -1716,6 +1726,7 @@ def _build_direct_family_checklist(
         if existing
         else _render_new_document(target_date, auto_block)
     )
+    assert_sources_unchanged(handoff_receipt, handoff_paths)
     _atomic_write_checklist(target_path, content)
     return {
         "source_date": source_date,

@@ -132,8 +132,13 @@ def test_build_runbook_operational_checks_for_slot(monkeypatch):
     assert checks[0].slot == "PREOPEN"
     assert "logs/ensemble_scanner.log" in checks[0].artifact_checks
     assert "data/daily_recommendations_v2.csv" in checks[0].artifact_checks
-    assert "threshold_apply_2026-05-11.json" in "\n".join(checks[0].artifact_checks)
-    assert "swing_runtime_approval" in "\n".join(checks[0].artifact_checks)
+    assert "runtime_policy_bootstrap_2026-05-11.json" in "\n".join(
+        checks[0].artifact_checks
+    )
+    assert "threshold_apply_2026-05-11.json" not in "\n".join(
+        checks[0].artifact_checks
+    )
+    assert "family publisher receipt" in "\n".join(checks[0].artifact_checks)
     assert "수동 env override" in checks[0].forbidden
     assert "final approval artifact 없는 스윙 env 반영" in checks[0].forbidden
     assert "스윙 dry-run 해제" in checks[0].forbidden
@@ -170,7 +175,8 @@ def test_build_runbook_operational_checks_for_slot(monkeypatch):
     )
     assert "tuning monitoring" in postclose.decision_rule
     assert "swing model retrain" in postclose.decision_rule
-    assert "real/sim/combined" in postclose.decision_rule
+    assert "family 직접 원천" in postclose.decision_rule
+    assert "runtime bootstrap" in postclose.decision_rule
     assert "Tuning Chain Control State" in postclose.decision_rule
     assert (
         "blocked_stage=input_health|chain_completion|decision_integrity"

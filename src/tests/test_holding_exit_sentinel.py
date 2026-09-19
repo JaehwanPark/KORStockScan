@@ -311,6 +311,27 @@ def test_observation_flags_soft_stop_and_trailing(monkeypatch, tmp_path):
 
     assert report["classification"]["primary"] == "SOFT_STOP_WHIPSAW"
     assert "TRAILING_EARLY_EXIT" in report["classification"]["secondary"]
+    assert report["followup"] == {
+        "route": "soft_stop_whipsaw_calibration_review",
+        "owner": "soft_stop_whipsaw_confirmation",
+        "operator_action_required": False,
+        "runtime_effect": "report_only_no_mutation",
+        "next_artifact": "observation_source_quality_audit",
+    }
+
+
+def test_trailing_followup_uses_native_observation_owner():
+    followup = sentinel._followup_route(
+        {"primary": "TRAILING_EARLY_EXIT", "sell_execution_scope": {}}
+    )
+
+    assert followup == {
+        "route": "trailing_continuation_report_only_review",
+        "owner": "scalp_trailing_continuation_recheck",
+        "operator_action_required": False,
+        "runtime_effect": "report_only_no_mutation",
+        "next_artifact": "holding_exit_observation",
+    }
 
 
 def test_stale_after_all_positions_completed_is_not_runtime_ops(monkeypatch, tmp_path):

@@ -63,6 +63,12 @@ def _selected_runtime(
 
 
 def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
+    from src.engine.automation.postclose_summary_handoff import (
+        assert_sources_unchanged,
+        source_paths,
+        source_receipt,
+    )
+
     summary_path = REPORT_ROOT_DIR / "runtime_approval_summary" / f"runtime_approval_summary_{target_date}.json"
     verifier_path = REPORT_ROOT_DIR / "threshold_cycle_postclose_verification" / f"threshold_cycle_postclose_verification_{target_date}.json"
     summary = _load_json(summary_path)
@@ -71,6 +77,8 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
         "runtime_approval_summary": {"path": str(summary_path), "sha256": _sha(summary_path)},
         "postclose_verifier": {"path": str(verifier_path), "sha256": _sha(verifier_path)},
     }
+    handoff_paths = source_paths(REPORT_ROOT_DIR, target_date, "tower")
+    handoff_receipt = source_receipt(handoff_paths, target_date)
     report = {
         "schema_version": 2,
         "report_type": REPORT_TYPE,
@@ -90,12 +98,14 @@ def build_tuning_performance_control_tower(target_date: str) -> dict[str, Any]:
             "issues": verifier.get("issues") or [],
         },
         "sources": sources,
+        "source_generation_contract": handoff_receipt,
         "runtime_effect": False,
         "allowed_runtime_apply": False,
         "actual_order_submitted": False,
         "warnings": list(summary.get("blocking_reasons") or []) + list(verifier.get("issues") or []),
     }
     json_path, md_path = report_paths(target_date)
+    assert_sources_unchanged(handoff_receipt, handoff_paths)
     json_path.parent.mkdir(parents=True, exist_ok=True)
     json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     md_path.write_text(

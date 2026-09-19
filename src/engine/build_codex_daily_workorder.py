@@ -735,7 +735,7 @@ def build_runbook_operational_checks(
                     f"data/report/monitoring_instruction_refresh/{date_text}/intraday/status.json",
                     "logs/swing_model_retrain_cron.log",
                     "logs/tuning_monitoring_postclose_cron.log",
-                    f"data/report/threshold_cycle_ev/threshold_cycle_ev_{date_text}.md",
+                    f"data/report/runtime_approval_summary/runtime_approval_summary_{date_text}.md",
                     f"data/report/swing_selection_funnel/swing_selection_funnel_{date_text}.md",
                     f"data/report/swing_lifecycle_audit/swing_lifecycle_audit_{date_text}.md",
                     f"data/report/swing_threshold_ai_review/swing_threshold_ai_review_{date_text}.md",
@@ -750,8 +750,8 @@ def build_runbook_operational_checks(
                     f"data/report/error_detection/error_detection_{date_text}.json",
                 ),
                 decision_rule=(
-                    "pass|warning|fail|not_yet_due 중 하나로 판정. daily EV 제출물, postclose AI correction, "
-                    "real/sim/combined split, swing lifecycle automation, swing runtime approval, pattern lab automation, "
+                    "pass|warning|fail|not_yet_due 중 하나로 판정. family 직접 원천·비용 후 EV·정책 handoff, "
+                    "runtime bootstrap, swing lifecycle automation, swing runtime approval, pattern lab automation, "
                     "swing model retrain status/promotion guard, tuning monitoring의 threshold postclose predecessor DONE 확인, "
                     "code improvement workorder 생성 여부 확인. "
                     "문서 현행화 19:30 결과(19:59까지 최대 2시도)와 실제 장후 완료 후 intraday 결과를 분리하고 완료 전은 not_yet_due. "

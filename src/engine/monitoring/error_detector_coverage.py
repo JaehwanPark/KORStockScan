@@ -36,7 +36,7 @@ REQUIRED_ARTIFACT_IDS: set[str] = {
     "holding_exit_sentinel_report",
     "panic_sell_defense_report",
     "market_panic_breadth_report",
-    "threshold_postclose_report",
+    "runtime_approval_summary_report",
     "postclose_done_controller_report",
     "codex_workorder_runner_report",
     "code_improvement_workorder",

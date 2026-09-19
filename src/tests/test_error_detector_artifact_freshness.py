@@ -738,7 +738,7 @@ class TestArtifactFreshnessDetector:
             f"[START] threshold-cycle postclose target_date={today}\n", encoding="utf-8"
         )
         artifact = {
-            "id": "threshold_postclose_report",
+            "id": "runtime_approval_summary_report",
             "path_template": str(tmp_path / "missing_threshold_ev.json"),
             "max_staleness_sec": 600,
             "critical": True,
@@ -759,9 +759,9 @@ class TestArtifactFreshnessDetector:
             detector = ArtifactFreshnessDetector()
             result = detector.check()
             assert result.severity == "warning"
-            assert result.details.get("threshold_postclose_report_status") == "warning"
+            assert result.details.get("runtime_approval_summary_report_status") == "warning"
             assert (
-                result.details.get("threshold_postclose_report_upstream_status")
+                result.details.get("runtime_approval_summary_report_upstream_status")
                 == "in_progress"
             )
 
@@ -770,7 +770,7 @@ class TestArtifactFreshnessDetector:
     ):
         now = datetime.now()
         artifact = {
-            "id": "threshold_postclose_report",
+            "id": "runtime_approval_summary_report",
             "path_template": str(tmp_path / "missing_threshold_ev.json"),
             "max_staleness_sec": 600,
             "critical": True,
@@ -797,9 +797,9 @@ class TestArtifactFreshnessDetector:
             detector = ArtifactFreshnessDetector()
             result = detector.check()
             assert result.severity == "warning"
-            assert result.details.get("threshold_postclose_report_status") == "warning"
+            assert result.details.get("runtime_approval_summary_report_status") == "warning"
             assert (
-                result.details.get("threshold_postclose_report_upstream_status")
+                result.details.get("runtime_approval_summary_report_upstream_status")
                 == "in_progress"
             )
 
@@ -887,7 +887,7 @@ class TestArtifactFreshnessDetector:
             f"[START] threshold-cycle postclose target_date={today}\n", encoding="utf-8"
         )
         artifact = {
-            "id": "threshold_postclose_report",
+            "id": "runtime_approval_summary_report",
             "path_template": str(tmp_path / "missing_threshold_ev.json"),
             "max_staleness_sec": 600,
             "critical": True,
@@ -909,9 +909,9 @@ class TestArtifactFreshnessDetector:
             detector = ArtifactFreshnessDetector()
             result = detector.check()
             assert result.severity == "warning"
-            assert result.details.get("threshold_postclose_report_status") == "warning"
+            assert result.details.get("runtime_approval_summary_report_status") == "warning"
             assert (
-                result.details.get("threshold_postclose_report_upstream_status")
+                result.details.get("runtime_approval_summary_report_upstream_status")
                 == "in_progress_after_window"
             )
 
@@ -995,7 +995,7 @@ class TestArtifactFreshnessDetector:
         os.utime(report_file, (stale_ts, stale_ts))
         now = datetime.now()
         artifact = {
-            "id": "threshold_postclose_report",
+            "id": "runtime_approval_summary_report",
             "path_template": str(report_file),
             "max_staleness_sec": 1800,
             "critical": True,
@@ -1014,10 +1014,10 @@ class TestArtifactFreshnessDetector:
             result = detector.check()
             assert result.severity == "pass"
             assert (
-                result.details.get("threshold_postclose_report_status")
+                result.details.get("runtime_approval_summary_report_status")
                 == "pass_one_shot"
             )
-            assert result.details.get("threshold_postclose_report_age_sec", 0) > 1800
+            assert result.details.get("runtime_approval_summary_report_age_sec", 0) > 1800
 
     def test_threshold_postclose_status_succeeded_is_one_shot_completion(
         self, tmp_path
@@ -1298,7 +1298,7 @@ class TestArtifactFreshnessDetector:
         assert registry["threshold_events"]["critical"] is False
         assert registry["threshold_events"]["window_grace_sec"] == 300
         assert "partitioned_compact" in registry["threshold_events"]
-        assert registry["threshold_postclose_report"]["one_shot"] is True
+        assert registry["runtime_approval_summary_report"]["one_shot"] is True
 
     def test_partitioned_threshold_events_checkpoint_passes_when_legacy_file_missing(
         self, tmp_path
