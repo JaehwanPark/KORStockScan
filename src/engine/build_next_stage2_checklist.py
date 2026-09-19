@@ -1708,15 +1708,9 @@ def _build_direct_family_checklist(
     ]
     tasks: list[str] = []
     if blockers:
-        task_id = f"DirectFamilyEvidenceGap{source_date.replace('-', '')}"
-        tasks.append(task_id)
         lines.extend(
             [
-                f"- [ ] `{task_id}` family 직접 증거 결손 점검",
-                f"  - Due: `{target_date}`",
-                "  - Slot: `PREOPEN`",
-                "  - TimeWindow: `07:30-08:50 KST`",
-                "  - Track: `source-quality`",
+                "- 구조적 결손은 기존 `[CodeImprovementWorkorderReview0918]` owner에 인계한다. 새 checkbox·stable ID를 만들지 않는다.",
                 f"  - Source: [{summary_path.name}](/home/ubuntu/KORStockScan/{_rel(summary_path)})",
                 f"  - 직접 증거 결손: `{direct_blockers}`",
                 f"  - 구조적 경제성 결손: `{economic_blockers}`",

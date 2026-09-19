@@ -1700,7 +1700,8 @@ def test_direct_family_checklist_opens_only_structural_economic_blockers(
     result = mod.build_next_stage2_checklist(day)
     text = Path(result["path"]).read_text(encoding="utf-8")
 
-    assert result["task_count"] == 1
-    assert "DirectFamilyEvidenceGap20260919" in text
+    assert result["task_count"] == 0
+    assert "DirectFamilyEvidenceGap20260919" not in text
+    assert "CodeImprovementWorkorderReview0918" in text
     assert "operating_paired_source_missing" in text
     assert "구조적 경제성 결손" in text
