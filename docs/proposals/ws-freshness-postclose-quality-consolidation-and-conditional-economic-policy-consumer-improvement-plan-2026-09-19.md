@@ -139,12 +139,14 @@ main 설치 trigger 부재는 코드 최적화 문제가 아니다. 기존 운�
 
 최종 목표는 **지원되는 원천의 비용 후 EV·일별 순익 비교값과 위험을 산출하고, 검증된 후보 또는 보존 정책을 다음 장전에서 자동 소비하는 것**이다. 양수 결과는 보장하지 않는다. source/model gap과 null만 남았다면 코드/보존 인계 범위만 닫으며 경제성 목표는 미종결이다. 구조 공급·모델 또는 실제 scheduler 지원이 최소 보완 범위를 넘으면 해당 owner/미지원 계약을 명시하고 추가 엔진 개발로 범위를 확대하지 않는다.
 
-## 11. 구현 종결 기록 (2026-09-19)
+## 11. 구현 상태 및 종결 판정 정정 (2026-09-19)
 
-사용자의 후속 구현 지시로 WS0–WS5를 기존 owner 안에서 구현했다. `scanner_promotion_id` 보존, complete same-tier 선택과 기존 owner 실행 replay의 동일 budget 비교, 비용·tail·자본·독립 model/learning/forward holdout, 실제 동결 시점 cutoff, 입력 지문 재사용, post-apply exact PREOPEN policy hash 귀속을 하나의 통합 계약으로 닫았다. 선택이 같으면 경제 평가를 실행하지 않고 delta0/no_effect로 남기며 절대 EV는 null이다. 변경 선택인데 원 plan·terminal·reviewed pricing·독립 모델 중 하나라도 없으면 primary는 null/source_gap이다.
+사용자의 후속 구현 지시로 complete 입력이 이미 존재하는 경우의 same-tier 선택, 기존 owner replay, 비용·tail·자본·독립 model/learning/forward holdout, 실제 동결 시점 cutoff, 입력 지문 재사용, post-apply exact PREOPEN policy hash 귀속 경로를 구현했다. 선택이 같으면 delta0/no_effect로 남기며 절대 EV는 null이고, 변경 선택인데 원 plan·terminal·reviewed pricing·독립 모델 중 하나라도 없으면 primary는 null/source_gap이다.
 
 publisher는 source evaluation/publication/policy/effective date를 분리하고 v2 ready 또는 zero-bonus hold/gap을 같은 기존 policy family에 발행한다. PREOPEN은 v2 shared proof만 동결하며 legacy active·위조 self-hash·날짜/hash 불일치를 거부한다. 실제 효과는 기존 same-tier score bonus뿐이며 tier/slot/quota/수량/AI/주문/안전 guard는 바꾸지 않는다. late intraday writer는 final subsection을 지우지 못하고, Daily·EV·runtime summary·control tower·checklist·scoped strict가 동일 section/policy hash를 소비한다.
 
-코드 경로 종결과 자연 경제성 종결은 분리한다. 현재 source9/17은 compact21건의 독립 실행 모델 status가 source_gap이고 WS native section 자체에는 native event0건만 남아 있어 지원되는 선택 실행 비교를 만들 수 없다. 이는 시간 경과만으로 자동 해소되지 않는다. 다음 자연 generation에서 탈락 후보의 원 plan/quantity/guards와 실제 prior model proof가 모두 존재하는 scope만 비교 가능하며, missing 값은 합성하지 않는다. WS6의 정상 PREOPEN/PID/order 변화/COMPLETED full-cost 성과는 기존 `KiwoomCommonHealthOpportunityCostAcceptance0917`가 소유한다.
+재검토 결과 이전의 WS0–WS5 종결 표시는 잘못이었다. `execution_inputs()`는 compact source projection에 이미 존재하는 `scanner_promotion_id`별 자연 compact 판정·owner replay만 읽는다. 그러나 순위 변경으로 candidate에 들어오는 capacity-pruned 후보는 compact AI, entry recipe, 요청 수량, guard와 terminal을 생산하는 장중 경로를 통과하지 않는다. 따라서 현재 producer 계약에서는 다음 자연 generation을 기다려도 변경 선택의 양측 실행 입력이 자동으로 완성되지 않는다. fixture의 양수 경로는 evaluator 동작 검증일 뿐 producer 도달 가능성 증거가 아니다.
 
-최종 배포와 source9/17 제한 재생성은 [구현 리뷰](../audit-reports/2026-09-19-ws-freshness-conditional-economics-implementation-review.md)에 기록했다. WS 경제 subsection `02afcf30577e8fa290e00fe9d62e1e624adcb8ce2217dbfaec418a010ece49d2`와 다음 장전용 policy `5cb82631ef6674c80a5154737ccdca70b6d6ac75fad0194d2cc883e5ef45bf51`가 모든 기존 consumer에 결속됐다. 현재 상태는 `source_gap/source_contract_blocked`, bonus0이며 실제 EV·일별 순익은 null이다. 이는 WS0–WS5 구현 종결과 WS6 자연 경제성 OPEN을 구분하는 최종 상태다.
+완료 범위는 기존 입력이 있을 때의 evaluator·fail-closed policy·PREOPEN/후행 hash 전달과 배포까지다. WS1 공급 보완, WS3 실제 비교값, WS5의 경제성 있는 재생성은 OPEN이다. 역사 결손을 합성하거나 탈락 후보를 장중 provider에 추가 호출하지 않는다. 기존 `CodeImprovementWorkorderReview0918`가 prospective 탈락 후보의 source-only 실행 계약을 설계·검증하고, `KiwoomCommonHealthOpportunityCostAcceptance0917`는 그 계약이 생성된 뒤 정상 PREOPEN/PID와 COMPLETED full-cost 성과만 소유한다.
+
+배포와 source9/17 제한 재생성은 [구현 리뷰](../audit-reports/2026-09-19-ws-freshness-conditional-economics-implementation-review.md)에 기록했다. WS 경제 subsection `02afcf30577e8fa290e00fe9d62e1e624adcb8ce2217dbfaec418a010ece49d2`와 다음 장전용 policy `5cb82631ef6674c80a5154737ccdca70b6d6ac75fad0194d2cc883e5ef45bf51`가 기존 consumer에 결속됐지만, 현재 상태는 `source_gap/source_contract_blocked`, bonus0이고 실제 EV·일별 순익은 null이다. 이는 안전한 보존·차단 배포 receipt이며 구조적 경제성 구현 종결이 아니다.

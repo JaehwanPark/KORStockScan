@@ -162,3 +162,7 @@ Claude 폐기 실행·검증·cleanup 및 선택 배포 증거는 [9/18 폐기 �
 ### Compact 후속 순서 확인 (2026-09-19)
 
 통합 evaluate 뒤 기본 OFF인 performance/regime/producer-gap/stage-hook 분기를 지나 다음 활성 producer는 #89 WS finalize/monitor-only다. 그 다음 compact finalize→Daily refresh→EV/workorder 소비다. [후속 구조 리뷰·기존 결과·모델 한계](2026-09-19-compact-ai-postclose-integration-implementation-review.md#다음-활성-장후작업-ws-최종화-코드-변경-없는-분석)를 참조한다.9/17·18 intraday 보고서를 postclose final로 집계하지 않는다.
+
+### WS 종결 정정과 Daily machine refresh (2026-09-19)
+
+WS evaluator·fail-closed policy·consumer 전달은 배포됐지만 capacity-pruned incoming 후보가 compact/entry 실행 입력을 생산하지 않아 구조적 경제성 루프는 OPEN이다. `daily_threshold_cycle_report --refresh-machine-evaluation-only`는 기존 microstructure diagnostic과 scanner selection handoff만 갱신하며 EV를 재계산하거나 정책을 승격하지 않는다. 현재 Daily 17개 family의 validated improvement와 paired comparable은 모두0이고, microstructure 3,342 capture는 full round-trip cost 결손으로 cost-adjusted outcome0이다. 시간 경과 가능 항목과 구조 결손, cleanup·배포 경계는 [정정·분석 보고서](2026-09-19-ws-closure-correction-and-daily-machine-refresh-analysis.md)를 따른다.

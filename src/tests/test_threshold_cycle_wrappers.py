@@ -1936,9 +1936,7 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
         in script
     )
     perf_source_idx = script.index("src.engine.codebase_performance_workorder_report")
-    action_outcome_calibration_idx = script.rindex(
-        "src.engine.scalping.ai_action_outcome_calibration"
-    )
+    action_outcome_calibration_idx = script.index("--postclose-phase evaluate")
     time_window_idx = script.index(
         "src.engine.automation.time_window_regime_counterfactual"
     )
@@ -2085,11 +2083,15 @@ def test_postclose_wrapper_materializes_daily_exact_quality_chain_before_calibra
         in script
     )
     materialization_idx = script.index("src.engine.scalping.ai_decision_quality")
-    calibration_idx = script.rindex("src.engine.scalping.ai_action_outcome_calibration")
+    calibration_idx = script.index("--postclose-phase prepare", materialization_idx)
     materialization_block = script[materialization_idx:calibration_idx]
 
     assert materialization_idx < calibration_idx
-    assert "--require-policy-publication" in script[calibration_idx:]
+    for phase in ("prepare", "evaluate", "finalize", "handoff"):
+        assert f"--postclose-phase {phase}" in script[calibration_idx:]
+    assert script.index("--postclose-phase finalize") < script.index(
+        "daily_machine_evaluation_handoff"
+    )
     assert "--mode postclose" in materialization_block
     assert "--write" in materialization_block
     assert "--execute-candidate" not in materialization_block
@@ -2124,11 +2126,13 @@ def test_entry_setup_paired_replay_has_separate_late_offline_cron():
     assert "5 21 * * 1-5" in installer
     assert "AI_ENTRY_SETUP_PAIRED_REPLAY_POSTCLOSE" in installer
     assert "run_ai_entry_setup_paired_replay_postclose.sh" in installer
-    assert "src.engine.scalping.entry_setup_paired_replay_batch" in runner
-    assert "--compact-only --execute-compact-candidate" in runner
-    assert "--write --finalize-compact" in runner
+    assert "src.engine.scalping.ai_action_outcome_calibration" in runner
+    assert "--postclose-phase \"$phase\" --compact-scope-only" in runner
+    assert "PHASE_ARGS+=(--execute-compact-candidate)" in runner
     assert "--compact-summary-only --require-summary-handoff" in runner
-    assert runner.index("--finalize-compact") < runner.index("--compact-summary-only")
+    assert runner.index("--postclose-phase \"$phase\"") < runner.index(
+        "--compact-summary-only"
+    )
     assert "main_ai_holding_base_replay_batch" not in runner
     assert "sleep 15" not in runner
     assert "run_bot.sh" not in runner
@@ -2137,11 +2141,12 @@ def test_entry_setup_paired_replay_has_separate_late_offline_cron():
 
 def test_compact_native_execution_waits_for_label_and_owner_sources():
     script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
-    execution = script.index("--compact-only --execute-compact-candidate")
+    execution = script.index("--postclose-phase evaluate")
     assert script.index("--ensure-economic-reference-only") < execution
     assert script.index("ai_decision_quality_daily_materialization") < execution
     assert script.index("src.engine.scalping.entry_split_order_plan") < execution
-    assert execution < script.index('    --require-policy-publication', execution)
+    assert "--execute-compact-candidate" in script[execution:]
+    assert execution < script.index("--postclose-phase finalize", execution)
 
 
 def test_entry_setup_runner_strict_handoff_failure_is_not_success(
@@ -2199,7 +2204,7 @@ def test_entry_batch_failure_preserves_partial_learning_without_success(tmp_path
         "#!/usr/bin/env bash\n"
         'echo "$*" >> "$PROJECT_DIR/calls"\n'
         'case " $* " in\n'
-        '  *" src.engine.scalping.entry_setup_paired_replay_batch "*) exit 1 ;;\n'
+        '  *" --postclose-phase evaluate "*) exit 1 ;;\n'
         "esac\nexit 0\n",
         encoding="utf-8",
     )
@@ -2219,12 +2224,15 @@ def test_entry_batch_failure_preserves_partial_learning_without_success(tmp_path
     )
     assert result.returncode == 1
     calls = (tmp_path / "calls").read_text()
-    assert calls.count("-m src.engine.scalping.entry_setup_paired_replay_batch") == 1
+    assert calls.count("-m src.engine.scalping.ai_action_outcome_calibration") == 2
+    assert "--postclose-phase prepare" in calls
+    assert "--postclose-phase evaluate" in calls
+    assert "--postclose-phase finalize" not in calls
     assert "src.engine.verify_threshold_cycle_postclose_chain" not in calls
     assert (
         "-m src.engine.scalping.micro_reversion.main_ai_prompt_optimizer" not in calls
     )
-    assert "--finalize-compact" in calls
+    assert "--compact-scope-only" in calls
 
 
 def test_postclose_wrapper_treats_producer_gap_fail_closed_as_report_artifact():
@@ -3528,13 +3536,19 @@ def test_preopen_wrapper_smoke_allows_operator_lock_runtime_env_without_source_r
     runtime_dir = project / "data/threshold_cycle/runtime_env"
     engine_dir = project / "src/engine"
     scalping_dir = engine_dir / "scalping"
+    automation_dir = engine_dir / "automation"
     apply_dir.mkdir(parents=True)
     runtime_dir.mkdir(parents=True)
     engine_dir.mkdir(parents=True)
     scalping_dir.mkdir(parents=True)
+    automation_dir.mkdir(parents=True)
     (project / "src/__init__.py").write_text("", encoding="utf-8")
     (engine_dir / "__init__.py").write_text("", encoding="utf-8")
     (scalping_dir / "__init__.py").write_text("", encoding="utf-8")
+    (automation_dir / "__init__.py").write_text("", encoding="utf-8")
+    (automation_dir / "low_price_two_leg_policy_apply.py").write_text(
+        "raise SystemExit(0)\n", encoding="utf-8"
+    )
     (scalping_dir / "entry_setup_live_policy.py").write_text(
         "import json\n"
         "import sys\n"

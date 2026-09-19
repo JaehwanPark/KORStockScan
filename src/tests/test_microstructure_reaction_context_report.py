@@ -118,7 +118,8 @@ def test_retired_raw_job_cannot_be_reenabled_by_environment():
     names = {node.name for node in tree.body if isinstance(node, ast.FunctionDef)}
     assert 'build_microstructure_reaction_context_report' not in names
     assert 'backfill_clean_baseline_opportunity_rollups' not in names
-    assert script.index('daily_machine_evaluation_handoff') > script.index('--require-policy-publication')
+    finalize = script.index('--postclose-phase finalize')
+    assert script.index('daily_machine_evaluation_handoff') > finalize
 
 
 def test_daily_refresh_changes_only_modern_handoff_without_policy_replay(tmp_path, monkeypatch):

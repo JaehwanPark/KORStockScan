@@ -1,6 +1,6 @@
 # WS 품질·조건부 경제성 통합 구현 리뷰
 
-작성일: 2026-09-19 KST. 범위는 `intraday_ws_freshness_monitor`의 장후 scanner 선택 경제성 subsection에서 다음 장전 정책·기존 consumer까지다. 구현·리뷰·수정보완·검증은 완료했으며 자연 PREOPEN/PID와 실제 성과는 완료로 세지 않는다.
+작성일: 2026-09-19 KST. 범위는 `intraday_ws_freshness_monitor`의 장후 scanner 선택 경제성 subsection에서 다음 장전 정책·기존 consumer까지다. evaluator·차단 정책·consumer 전달 구현과 배포는 완료했으나, 2026-09-19 재검토에서 탈락 후보의 실행 입력 producer가 없어 구조적 경제성 루프는 미완료로 정정했다.
 
 ## 결정과 구현
 
@@ -35,4 +35,8 @@ WS6의 다음 자연 generation 원 plan/quantity/guard, 독립 model, 정규9/2
 - 직접 결손은 `complete_partition_or_actual_selection_missing` 5건과 `original_unselected_entry_recipe_quantity_guard_missing` 1건이다. 실행 입력0건이므로 현재 자료에서 양수/음수 경제 비교를 합성하지 않았다. label·final source-quality audit·entry split·reviewed pricing 원천은 재생성 전후 동일했고, compact source revision은 병행 compact 보완이 먼저 갱신한 최신 입력을 소비했다.
 - Daily·EV·runtime summary·tower·다음 checklist가 위 두 hash를 동일하게 소비하고 scanner-only strict는 `PASS`다. 설치된 9/21 07:35 KST PREOPEN은 managed release router→기존 publisher/freeze→loader 경로를 사용한다. 전체 9-target cron validator는 다른 태그 결손으로 `cron_target_missing_or_duplicate`지만 이 family의 PREOPEN 항목은 설치돼 있다.
 
-따라서 코드·배포·보존 정책·후행 소비 루프인 WS0–WS5는 닫혔다. 비용 후 EV 개선값은 아직 도출되지 않았으며, 시간만 지나면 회복되는 표본 부족이 아니라 원 선택/수량/guard와 양측 실행 terminal이 없는 구조 결손이다. WS6는 다음 자연 source generation과 정상 PREOPEN/PID 뒤에만 평가한다.
+## 종결 판정 정정
+
+이전의 “WS0–WS5가 닫혔다”는 결론을 철회한다. 현재 `execution_inputs()`는 sealed compact projection에 이미 존재하는 자연 compact 판정·owner replay를 읽지만, capacity로 탈락한 incoming 후보는 compact AI와 entry recipe·요청 수량·guard·terminal을 자연 생산하지 않는다. 다음 source generation을 기다리는 것만으로 이 입력이 생기지 않으므로, 비용 후 EV와 일별 순익 null은 표본 성숙 문제가 아니라 producer reachability 결손이다. positive fixture는 evaluator 검증이며 자연 producer 증거가 아니다.
+
+완료된 것은 입력이 존재할 때의 비교기, 결손 시 fail-closed 보존 정책, hash 소비와 불변 release 배포다. WS1 prospective source 공급, WS3 실제 양측 비교, WS5 경제성 재생성은 기존 `CodeImprovementWorkorderReview0918`에서 OPEN으로 유지한다. 역사 값을 합성하거나 탈락 후보에 장중 AI/provider 호출을 추가하지 않는다. WS6 자연 PREOPEN/PID/성과 acceptance는 producer 계약이 먼저 닫힌 뒤 평가한다.
