@@ -237,3 +237,11 @@ opportunity book이 기존 clean-baseline/source-quality/tail 조건을 통과�
 4. experiment가 시작된 경우 선택된 arm의 자연 compact/plan/guard/terminal이 post-apply owner에 귀속된다.
 
 실제 경제 개선 완료는 별도다. 기존 표본·forward holdout·비용·tail gate를 충족한 `post_apply_actual_ev`와 일별 순익 비교가 나온 뒤에만 ready 또는 reject로 닫는다. 그 전의 null은 다시 완료로 표시하지 않는다.
+
+## 13. 구현 종결 범위 (2026-09-19)
+
+WR0–WR5의 코드 경로를 기존 모듈 안에서 구현했다. scanner는 simple-capacity/general partition에서 달라지는 marginal pair 하나만 결정론 ID로 묶고, prune/promote·BBO observation·runtime target에 같은 ID와 사전 배정 arm을 전달한다. 한쪽 ID·role·assignment가 빠지거나 충돌한 pair는 opportunity book에서 제외한다. 탈락 arm의 promotion ID, AI 판정, 주문·체결은 만들지 않는다.
+
+장후 evaluator는 실제 양팔 실행 입력이 없는 경우에도 고정 horizon 비용 후 `selection_opportunity_ev_pct`와 날짜별 opportunity 값을 별도 `sim_probe_ev`로 산출한다. 실제 체결수량이 없는 opportunity book의 원화 일별 순익은 null과 원인을 유지한다. 양수·표본·실제 completed base gate를 통과한 경우에만 `experiment_ready`를 발행하고, 다음 거래일 policy가 baseline/candidate arm과 marginal slot1개를 미리 동결한다. scanner는 candidate arm에서만 그 pair의 순서를 바꾸며 기존 eligibility·compact AI·가격·수량·broker·cooldown·cap·hard guard를 그대로 다시 적용한다.
+
+post-apply는 attention score cohort 대신 사전 배정된 pair arm을 intention-to-treat cohort로 사용한다. exact PREOPEN policy hash가 일치하는 자연 `COMPLETED + valid profit_rate`만 실제 arm EV·일별 순익·tail에 포함한다. baseline hold/opportunity 확보, experiment 자연 실행, 실제 경제성 표본 충족은 서로 다른 완료 상태로 남긴다. 2026-09-17 제한 재생성 결과와 배포 hash는 [구현 리뷰](../audit-reports/2026-09-19-ws-freshness-conditional-economics-implementation-review.md)에 기록한다.

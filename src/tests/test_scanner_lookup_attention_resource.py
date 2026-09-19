@@ -131,6 +131,37 @@ def test_bad_partition_does_not_block_other_valid_pairs():
     assert result["excluded_partition_counts"]["invalid_partition"] == 1
 
 
+def test_malformed_natural_pair_identity_quarantines_its_partition():
+    rows = pair_rows()
+    rows[0].update(
+        scanner_selection_pair_id="bad",
+        scanner_selection_pair_contract_version=(
+            "scanner_lookup_attention_selection_pair_v1"
+        ),
+        scanner_selection_pair_role="outgoing",
+        scanner_selection_pair_assignment="baseline",
+    )
+    result = book(rows)
+    assert result["resolved_pair_count"] == 0
+    assert result["excluded_partition_counts"]["invalid_partition"] == 1
+
+
+def test_partial_natural_pair_identity_is_not_treated_as_a_complete_pair():
+    rows = pair_rows()
+    pair_id = "a" * 64
+    rows[0].update(
+        scanner_selection_pair_id=pair_id,
+        scanner_selection_pair_contract_version=(
+            "scanner_lookup_attention_selection_pair_v1"
+        ),
+        scanner_selection_pair_role="incoming",
+        scanner_selection_pair_assignment="baseline",
+    )
+    result = book(rows)
+    assert result["resolved_pair_count"] == 0
+    assert result["excluded_partition_counts"]["selection_pair_identity_conflict"] == 1
+
+
 def test_labels_are_not_synthesized_or_taken_from_different_generations():
     rows = pair_rows()
     rows[3]["scan_generation_id"] += "-other"
@@ -320,6 +351,64 @@ def test_source_only_eligibility_failure_and_zero_bonus_do_not_raise(monkeypatch
     )
 
 
+@pytest.mark.parametrize(
+    ("arm", "expected_codes", "runtime_effect"),
+    [
+        ("baseline", ["100000", "200000"], False),
+        ("candidate", ["200000", "100000"], True),
+    ],
+)
+def test_marginal_experiment_binds_one_pair_without_promotion_id(
+    arm, expected_codes, runtime_effect
+):
+    from src.scanners import scalping_scanner as scanner
+
+    seed = "a" * 64
+
+    def target(code, base, candidate, score):
+        profile = {
+            "scanner_priority_rank_partition": 0,
+            "scanner_priority_tier": "tier_b_price_jump_candidate",
+            "scanner_priority_source_rank": 1,
+            "scanner_priority_flu_rate": 2.0,
+            "scanner_priority_market_gainer_partition": False,
+            "scanner_priority_reserved_partition": "general",
+            "scanner_priority_score_without_lookup_attention": base,
+            "scanner_priority_score_with_lookup_attention": candidate,
+            "lookup_attention_counterfactual_bonus_points": candidate - base,
+            "lookup_attention_weight_experiment_mode": True,
+            "lookup_attention_weight_experiment_arm": arm,
+            "lookup_attention_weight_experiment_allocation_seed_sha256": seed,
+            "lookup_attention_weight_experiment_max_marginal_slots": 1,
+        }
+        return {
+            "Code": code,
+            "Source": "PRICE_JUMP_START",
+            "FluRate": 2.0,
+            "ScannerScanRank": 1 if code == "100000" else 2,
+            "ScannerWatchBudgetOwner": scanner.GENERAL_SCALPING,
+            "_ScannerRankPriorityProfile": profile,
+            "_LookupResourceEvidence": {
+                "lookup_attention_resource_eligibility_pass": True,
+                "lookup_attention_resource_actual_score": base,
+            },
+        }
+
+    targets = [target("100000", 1000.0, 1000.0, 0.0), target("200000", 990.0, 1190.0, 0.9)]
+    result = scanner._prepare_lookup_selection_pair(
+        targets,
+        scan_generation_id="SCANGEN-fixture",
+        general_slot_limit=1,
+        simple_capacity=True,
+    )
+    assert [row["Code"] for row in result] == expected_codes
+    incoming = next(row for row in targets if row["Code"] == "200000")
+    outgoing = next(row for row in targets if row["Code"] == "100000")
+    assert incoming["_LookupSelectionPairEvidence"]["scanner_selection_pair_id"] == outgoing["_LookupSelectionPairEvidence"]["scanner_selection_pair_id"]
+    assert incoming["_LookupSelectionPairEvidence"]["scanner_selection_pair_runtime_effect"] is runtime_effect
+    assert "scanner_promotion_id" not in incoming["_LookupSelectionPairEvidence"]
+
+
 def test_preopen_hash_survives_scanner_event_to_runtime_payload(monkeypatch):
     from src.scanners import scalping_scanner as scanner
 
@@ -470,14 +559,36 @@ def test_positive_snapshot_and_completed_cohorts_never_replace_executable_portfo
     assert section["snapshot_proxy"]["diagnostic_snapshot_gate_pass"]
     assert section["actual_completed"]["book"]["candidate_control_ev_uplift_pct"] > 0
     assert section["primary_economics"]["paired_delta_ev_pct"] is None
-    assert section["status"] == "source_gap"
+    assert section["selection_opportunity_economics"]["selection_opportunity_ev_pct"] > 0
+    assert section["selection_opportunity_economics"]["daily_net_profit_krw"] is None
+    assert section["status"] == "experiment_ready"
     report = {"target_date": "2026-09-17", "evaluation_phase": "postclose_final",
               "scanner_unique_funnel": {"economic_cohorts": {"lookup_attention_selection": section}}}
-    payload = policy.publish_integrated_policy(report, policy_dir=tmp_path)
+    policies = tmp_path / "policies"
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    (reports / "intraday_ws_freshness_monitor_2026-09-17.json").write_text(
+        __import__("json").dumps(report)
+    )
+    payload = policy.publish_integrated_policy(report, policy_dir=policies)
     assert not resource.validate_integrated_selection(section, payload, target=date(2026, 9, 17))
-    fabricated = {**payload, "allowed_runtime_apply": True, "status": "live_auto_apply_ready"}
+    receipt = policy.freeze_preopen_policy(
+        "2026-09-18",
+        write=True,
+        now=datetime(2026, 9, 18, 8, tzinfo=ZoneInfo("Asia/Seoul")),
+        policy_dir=policies,
+        report_dir=reports,
+        applied_dir=tmp_path / "applied",
+    )
+    assert receipt["active"]
+    loaded = policy.load_active_policy(
+        "2026-09-18", applied_dir=tmp_path / "applied"
+    )
+    assert loaded["active"] and loaded["experiment_mode"]
+    assert policy.bounded_bonus(0.9, loaded)["bonus_points"] == 0.0
+    fabricated = {**payload, "status": "live_auto_apply_ready"}
     fabricated["artifact_sha256"] = policy.canonical_sha256({k:v for k,v in fabricated.items() if k != "artifact_sha256"})
-    assert "unsupported_execution_authority" in resource.validate_integrated_selection(section, fabricated, target=date(2026, 9, 17))
+    assert "integrated_disposition_invalid" in resource.validate_integrated_selection(section, fabricated, target=date(2026, 9, 17))
 
 
 def test_integrated_zero_policy_next_open_source_dates_cache_and_preopen_window(monkeypatch, tmp_path):
@@ -813,3 +924,10 @@ def test_post_apply_requires_exact_immutable_policy_receipt_hash(monkeypatch):
     assert incumbent["status"] == "live_auto_apply_ready"
     assert len(selected) == 20 and len(receipts) == 5
     assert _cohort_book(selected)["all"]["notional_weighted_ev_pct"] == .3
+
+    monkeypatch.setattr(policy,"load_active_policy",lambda *args: dict(active=True,policy_source_date="2026-09-11",
+        policy_artifact_sha256="a"*64,preopen_artifact_sha256="c"*64,policy_version=policy.POLICY_VERSION,
+        experiment_mode=True,experiment_arm="baseline"))
+    incumbent, selected, _ = resource.post_apply_inputs(date(2026,9,18),rows)
+    assert incumbent["status"] == "experiment_ready"
+    assert len(selected) == 20

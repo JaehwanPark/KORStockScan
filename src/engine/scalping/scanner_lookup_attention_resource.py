@@ -73,6 +73,18 @@ def event_row(event):
         "scan_generation_id": str(fields.get("scanner_scan_generation_id") or ""),
         "stock_code": str(event.get("stock_code") or ""),
         "scanner_promotion_id": str(fields.get("scanner_promotion_id") or ""),
+        "scanner_selection_pair_id": str(
+            fields.get("scanner_selection_pair_id") or ""
+        ),
+        "scanner_selection_pair_role": str(
+            fields.get("scanner_selection_pair_role") or ""
+        ),
+        "scanner_selection_pair_assignment": str(
+            fields.get("scanner_selection_pair_assignment") or ""
+        ),
+        "scanner_selection_pair_contract_version": str(
+            fields.get("scanner_selection_pair_contract_version") or ""
+        ),
         "scan_rank": _integer(fields.get("scanner_scan_rank")),
         "ranked_candidate_count": _integer(
             fields.get("scanner_ranked_candidate_count")
@@ -145,8 +157,23 @@ def valid_row(row):
     try:
         score = row["lookup_attention_snapshot_score"]
         bonus = bonus_points_for_score(score)
+        pair_id = row.get("scanner_selection_pair_id") or ""
+        pair_valid = bool(
+            not pair_id
+            or (
+                len(pair_id) == 64
+                and all(character in "0123456789abcdef" for character in pair_id)
+                and row.get("scanner_selection_pair_contract_version")
+                == "scanner_lookup_attention_selection_pair_v1"
+                and row.get("scanner_selection_pair_role")
+                in {"incoming", "outgoing"}
+                and row.get("scanner_selection_pair_assignment")
+                in {"observe_only", "baseline", "candidate"}
+            )
+        )
         return bool(
-            row["eligible_source"] is True
+            pair_valid
+            and row["eligible_source"] is True
             and row["effective_venue"] == "KRX"
             and row["market_session_bucket"] == "krx_regular"
             and row["contract_version"] == RESOURCE_PAIR_CONTRACT_VERSION
@@ -371,8 +398,41 @@ def allocation_book(
 
         in_return = net(incoming, in_snap[generation])
         out_return = net(outgoing, out_snap[generation])
+        producer_pair_ids = {
+            row.get("scanner_selection_pair_id")
+            for row in (incoming, outgoing)
+            if row.get("scanner_selection_pair_id")
+        }
+        if producer_pair_ids:
+            natural_pair_valid = bool(
+                len(producer_pair_ids) == 1
+                and all(row.get("scanner_selection_pair_id") for row in (incoming, outgoing))
+                and incoming.get("scanner_selection_pair_role") == "incoming"
+                and outgoing.get("scanner_selection_pair_role") == "outgoing"
+                and incoming.get("scanner_selection_pair_assignment")
+                == outgoing.get("scanner_selection_pair_assignment")
+            )
+            if not natural_pair_valid:
+                excluded["selection_pair_identity_conflict"] += 1
+                continue
+        pair_id = next(iter(producer_pair_ids), "") or canonical_sha256(
+            {
+                "contract": "scanner_lookup_attention_selection_pair_v1",
+                "observation_date": key[0],
+                "scan_generation_id": key[1],
+                "partition": list(key[2]),
+                "incoming_code": incoming["stock_code"],
+                "outgoing_code": outgoing["stock_code"],
+            }
+        )
         resolved.append(
             {
+                "scanner_selection_pair_id": pair_id,
+                "scanner_selection_pair_identity_source": (
+                    "natural_scanner_event"
+                    if producer_pair_ids
+                    else "historical_deterministic_derivation"
+                ),
                 "observation_date": key[0],
                 "scan_generation_id": key[1],
                 "incoming_code": incoming["stock_code"],
@@ -398,6 +458,18 @@ def allocation_book(
     )
     mature = len(resolved) >= MIN_RESOLVED_PAIRS and len(dates) >= MIN_RESOLVED_DATES
     ready = bool(mature and ev > 0 and in_ev > 0)
+    daily = {
+        day: round(
+            sum(
+                row["incremental_snapshot_return_pct"]
+                for row in resolved
+                if row["observation_date"] == day
+            )
+            / sum(row["observation_date"] == day for row in resolved),
+            8,
+        )
+        for day in sorted(dates)
+    }
     status = (
         "not_observed"
         if not rows
@@ -466,7 +538,11 @@ def allocation_book(
         "unobserved_pair_count": missing,
         "selected_anchor_pair_count": sum(selected_per_date.values()),
         "source_quality_adjusted_ev_pct": round(ev, 8) if ev is not None else None,
+        "selection_opportunity_ev_pct": round(ev, 8) if ev is not None else None,
         "incoming_snapshot_ev_pct": round(in_ev, 8) if in_ev is not None else None,
+        "daily_incremental_opportunity_pct": daily,
+        "daily_net_profit_krw": None,
+        "daily_net_profit_reason": "entry_quantity_and_actual_fill_not_observed_for_unselected_arm",
         "pairs": resolved,
         "retention_review": (
             "review_merge_into_scanner_diagnostics"
@@ -552,6 +628,10 @@ NATIVE_FIELDS = (
     'lookup_attention_weight_effective_venue',
     'lookup_attention_weight_eligible_session_buckets',
     'lookup_attention_weight_eligible_venues',
+    'lookup_attention_weight_experiment_allocation_seed_sha256',
+    'lookup_attention_weight_experiment_arm',
+    'lookup_attention_weight_experiment_max_marginal_slots',
+    'lookup_attention_weight_experiment_mode',
     'lookup_attention_weight_forbidden_uses',
     'lookup_attention_weight_market_session_bucket',
     'lookup_attention_weight_max_source_age_sec',
@@ -584,6 +664,10 @@ NATIVE_FIELDS = (
     'receipt_quantity_contract_complete',
     'runtime_record_id',
     'scanner_promotion_id',
+    'scanner_selection_pair_assignment',
+    'scanner_selection_pair_contract_version',
+    'scanner_selection_pair_id',
+    'scanner_selection_pair_role',
     'scanner_prune_reason',
     'scanner_rank_priority_flu_rate',
     'scanner_rank_priority_market_gainer_partition',
@@ -880,6 +964,56 @@ def selection_validation(book, rows, inputs, outcomes, predecessor, target, *, f
         "holdout_consumed": False, "historical_dates_not_fresh_holdout": True}
 
 
+def selection_policy_status(
+    book, opportunity, rows, inputs, outcomes, predecessor, target, *, frozen_at=None
+):
+    """Choose an economic disposition without fabricating the unselected arm.
+
+    Full executable replay keeps its existing promotion authority.  When that
+    replay is structurally unavailable, complete prospective market-path pairs
+    can close the research metric and arm a bounded experiment only after the
+    independent real completed model population is mature.
+    """
+    status, proof = selection_validation(
+        book, rows, inputs, outcomes, predecessor, target, frozen_at=frozen_at
+    )
+    if status != "source_gap":
+        return status, proof
+    proxy_status = str((opportunity or {}).get("status") or "not_observed")
+    opportunity_proof = {
+        "status": "not_armed",
+        "opportunity_status": proxy_status,
+        "opportunity_artifact_sha256": canonical_sha256(opportunity or {}),
+        "selection_opportunity_ev_pct": (opportunity or {}).get(
+            "selection_opportunity_ev_pct"
+        ),
+        "historical_execution_inputs_irrecoverable": True,
+    }
+    if proxy_status in {"not_observed", "contract_invalid"}:
+        return "source_gap", opportunity_proof
+    if proxy_status in {"hold_no_effect", "no_capacity_competition", "hold_no_edge"}:
+        return "hold_no_edge", opportunity_proof
+    if proxy_status != "ready" or not (opportunity or {}).get("ready_for_live_gate"):
+        return "hold_sample", opportunity_proof
+    from src.engine.monitoring.scanner_lookup_attention_tuning import (
+        _cohort_book,
+        _sample_floor_passes,
+    )
+
+    completed_book = _cohort_book(outcomes)
+    if not _sample_floor_passes(completed_book):
+        return "hold_sample", {
+            **opportunity_proof,
+            "real_completed_base_support": "insufficient_real_completed_sample",
+        }
+    return "experiment_ready", {
+        **opportunity_proof,
+        "status": "experiment_ready",
+        "real_completed_base_support": "independent_real_completed_population_mature",
+        "experiment_scope": "one_marginal_simple_capacity_slot_krx_regular",
+    }
+
+
 def post_apply_inputs(target, outcomes):
     """Exact immutable selection receipts, never standalone legacy campaign."""
     from src.engine.scalping.scanner_lookup_attention_policy import load_active_policy, POLICY_VERSION
@@ -888,11 +1022,19 @@ def post_apply_inputs(target, outcomes):
         active = load_active_policy(day)
         if active.get("active"):
             states[day] = {k:active.get(k) for k in (
-                "policy_source_date", "policy_artifact_sha256", "preopen_artifact_sha256", "policy_version")}
+                "policy_source_date", "policy_artifact_sha256", "preopen_artifact_sha256",
+                "policy_version", "experiment_mode", "experiment_arm")}
     selected = [r for r in outcomes if r["rec_date"] in states and r.get("lookup_attention_weight_runtime_policy_eligible") is True
         and r.get("lookup_attention_weight_policy_artifact_sha256") == states.get(r["rec_date"],{}).get("policy_artifact_sha256")
         and r.get("lookup_attention_weight_policy_version") == POLICY_VERSION]
-    incumbent = {"status": "live_auto_apply_ready", "holdout_armed_since": min(s["policy_source_date"] for s in states.values())} if states else {}
+    incumbent = ({
+        "status": (
+            "experiment_ready"
+            if any(state.get("experiment_mode") is True for state in states.values())
+            else "live_auto_apply_ready"
+        ),
+        "holdout_armed_since": min(s["policy_source_date"] for s in states.values()),
+    } if states else {})
     return incumbent, selected, states
 
 
@@ -971,7 +1113,7 @@ def integrated_selection_evaluation(target, events_by_date, *, predecessor=None,
     import hashlib
     from pathlib import Path
     implementation_sha = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
-    fingerprint = canonical_sha256({"contract": INTEGRATED_CONTRACT, "evaluator_revision": 3, "evaluator_implementation_sha256": implementation_sha, "execution_source_receipts": execution_receipts, "execution_inputs": list(inputs.values()),
+    fingerprint = canonical_sha256({"contract": INTEGRATED_CONTRACT, "evaluator_revision": 4, "evaluator_implementation_sha256": implementation_sha, "execution_source_receipts": execution_receipts, "execution_inputs": list(inputs.values()),
         "events": events_by_date, "facts": facts, "master": master,
         "source_quality": source_quality, "migration": migration, "cost_contract": COST_CONTRACT,
         "prior_policy": prior_policy, "applied_receipts": applied_receipts})
@@ -980,6 +1122,12 @@ def integrated_selection_evaluation(target, events_by_date, *, predecessor=None,
             and predecessor.get("artifact_sha256") == canonical_sha256({k:v for k,v in predecessor.items() if k != "artifact_sha256"})):
         return predecessor
     proxy = _resource_allocation_pair_book(rows, invalid_row_count=lineage["invalid_resource_pair_count"])
+    opportunity_economics = {
+        **proxy,
+        "metric_role": "sim_probe_ev",
+        "decision_authority": "research_screen_then_bounded_experiment_only",
+        "ready_for_full_live": False,
+    }
     conversion = _conversion_diagnostics(observations)
     conversion["intended_consumer"] = "intraday_ws_freshness_monitor.lookup_attention_selection"
     conversion["scope"] = "known_exact_observations;historical_full_census_in_migration_receipt"
@@ -993,7 +1141,16 @@ def integrated_selection_evaluation(target, events_by_date, *, predecessor=None,
     if applied["status"] == "not_applicable_before_live_apply":
         applied.pop("book", None)
     primary = selection_execution_book(rows, inputs)
-    status, holdout = selection_validation(primary, rows, inputs, outcomes, learning_predecessor, target, frozen_at=generated_at)
+    status, holdout = selection_policy_status(
+        primary,
+        opportunity_economics,
+        rows,
+        inputs,
+        outcomes,
+        learning_predecessor,
+        target,
+        frozen_at=generated_at,
+    )
     if source_quality.get("status") != "pass" or master.get("status") != "pass":
         status = "source_gap"
         holdout = {"status": "source_quality_blocked"}
@@ -1009,7 +1166,13 @@ def integrated_selection_evaluation(target, events_by_date, *, predecessor=None,
         or (event.get("emitted_date"), (event.get("fields") or {}).get("scanner_scan_generation_id"), event.get("stock_code")) in proof_keys]
     result = {"contract_version": INTEGRATED_CONTRACT, "target_date": target.isoformat(),
         "input_sha256": fingerprint, "status": status, "metric_role": "primary_ev",
-        "analysis_mode": "evaluated_existing_execution_owner" if primary["pairs"] else "skipped_" + primary["status"],
+        "analysis_mode": (
+            "evaluated_existing_execution_owner"
+            if primary["pairs"]
+            else "evaluated_selection_opportunity_owner"
+            if proxy.get("resolved_pair_count")
+            else "skipped_" + primary["status"]
+        ),
         "quality_finalization": "parent_phase_preserved_by_partial_refresh",
         "execution_inputs": list(inputs.values()), "execution_source_receipts": execution_receipts,
         "evaluation_phase": "postclose_final", "generated_at": generated_at,
@@ -1029,6 +1192,7 @@ def integrated_selection_evaluation(target, events_by_date, *, predecessor=None,
         "exclusions": exclusions, "resource_pair_rows": rows,
         "snapshot_proxy": {**proxy, "metric_role": "supporting_proxy",
                            "ready_for_live_gate": False, "diagnostic_snapshot_gate_pass": proxy["ready_for_live_gate"]},
+        "selection_opportunity_economics": opportunity_economics,
         "actual_completed": {"metric_role": "observational_completed_net", "book": actual_book,
                              "outcomes": outcomes, "causal_uplift": None,
                              "cost_basis": "fixed_fee_tax_comparison_actual_fill_prices_not_broker_reconciled"},
@@ -1041,8 +1205,8 @@ def integrated_selection_evaluation(target, events_by_date, *, predecessor=None,
             "hold_no_effect" if not proxy["reordered_generation_count"] else "changed_selection"),
         "primary_economics": primary,
         "independent_holdout": holdout, "learning_generation_sha256": learning_generation(holdout),
-        "source_gap_owner": "scanner_original_entry_plan_and_compact_existing_owner_execution_model",
-        "closure_test": "native original requested quantity/recipe/guards plus ordered fill/exit/cost and full frozen capital path reproduce both selections before independent forward holdout",
+        "source_gap_owner": "scanner_selection_pair_source_then_natural_assigned_arm_execution",
+        "closure_test": "future pair identity reaches opportunity outcome and dated policy; only assigned arm produces natural compact plan guard terminal for post_apply actual economics",
         "eta": None, "first_blocker": gaps[0] if gaps else None,
     }
     from copy import deepcopy
@@ -1075,30 +1239,83 @@ def validate_integrated_selection(section, policy, *, target):
             issues.append("unsupported_execution_authority")
     if section.get("contract_version") == INTEGRATED_CONTRACT:
         from src.engine.scalping import scanner_lookup_attention_policy as owner
-        from src.engine.monitoring.scanner_lookup_attention_tuning import COST_CONTRACT, evaluate_post_apply
+        from src.engine.monitoring.scanner_lookup_attention_tuning import (
+            COST_CONTRACT,
+            _resource_allocation_pair_book,
+            evaluate_post_apply,
+        )
         try:
             inputs = {(v["row"]["source_date"], v["row"]["scanner_promotion_id"], v["row"]["stock_code"]): v
                       for v in section.get("execution_inputs", []) if v}
             rows = section["resource_pair_rows"]
             book = selection_execution_book(rows, inputs)
+            expected_opportunity = _resource_allocation_pair_book(
+                rows,
+                invalid_row_count=(section.get("lineage") or {}).get(
+                    "invalid_resource_pair_count", 0
+                ),
+            )
             proof = section.get("independent_holdout") or {}
-            status, holdout = selection_validation(book, rows, inputs,
-                section["actual_completed"]["outcomes"], {"independent_holdout": proof}, target)
+            opportunity = section.get("selection_opportunity_economics") or {}
+            status, holdout = selection_policy_status(
+                book,
+                opportunity,
+                rows,
+                inputs,
+                section["actual_completed"]["outcomes"],
+                {"independent_holdout": proof},
+                target,
+            )
             # An armed report validates the original freeze rather than treating
             # its own freeze as an already collected future holdout.
             if section["status"] == "forward_holdout_armed":
-                status, holdout = selection_validation(book, rows, inputs,
-                    section["actual_completed"]["outcomes"], None, target, frozen_at=section["generated_at"])
+                status, holdout = selection_policy_status(
+                    book,
+                    opportunity,
+                    rows,
+                    inputs,
+                    section["actual_completed"]["outcomes"],
+                    None,
+                    target,
+                    frozen_at=section["generated_at"],
+                )
             quality = section["source_quality"].get("status") == "pass" and section["official_symbol_master"].get("status") == "pass"
             if not quality:
                 status, holdout = "source_gap", {"status": "source_quality_blocked"}
             applied = evaluate_post_apply(section.get("post_apply_incumbent") or {},section.get("post_apply_completed_outcomes") or [])
             if applied["rollback_triggered"] and status != "source_gap":
                 status, holdout = "hold_no_edge", {**holdout,"status":"post_apply_rollback"}
-            ready = status == "live_auto_apply_ready"
+            ready = status in {"live_auto_apply_ready", "experiment_ready"}
             published = date.fromisoformat(policy.get("publication_date") or policy["target_date"])
             dated = date.fromisoformat(policy["target_date"])
             effective = date.fromisoformat(policy["prepared_effective_date"])
+            experiment = policy.get("experiment") or {}
+            expected_experiment = {}
+            if status == "experiment_ready":
+                expected_experiment = {
+                    "contract_version": "scanner_lookup_attention_experiment_v1",
+                    "allocation_seed_sha256": canonical_sha256(
+                        {
+                            "contract": "scanner_lookup_attention_experiment_allocation_v1",
+                            "source_report_artifact_sha256": section[
+                                "artifact_sha256"
+                            ],
+                            "effective_date": effective.isoformat(),
+                        }
+                    ),
+                    "assigned_arm": (
+                        "candidate"
+                        if owner.count_krx_trading_days(
+                            date(2026, 6, 5), effective
+                        )
+                        % 2
+                        else "baseline"
+                    ),
+                    "max_marginal_slots": 1,
+                    "eligible_venue": "KRX",
+                    "eligible_session_bucket": "krx_regular",
+                    "same_stage_canary_exclusive": True,
+                }
             if (not target <= dated <= published < effective or not owner.is_krx_trading_day(dated)
                     or not owner.is_krx_trading_day(effective) or owner.count_krx_trading_days(dated,effective) != 1):
                 issues.append("integrated_policy_calendar_binding_invalid")
@@ -1108,7 +1325,15 @@ def validate_integrated_selection(section, policy, *, target):
             issues = [i for i in issues if i != "unsupported_execution_authority"]
             if (section.get("runtime_effect") is not False or section.get("allowed_runtime_apply") is not False
                     or any(p.get("actual_order_submitted") is not False or p.get("broker_order_forbidden") is not True for p in (section,policy))
-                    or policy.get("runtime_effect") is not ready or policy.get("allowed_runtime_apply") is not ready):
+                    or policy.get("allowed_runtime_apply") is not ready
+                    or policy.get("runtime_effect") is not (
+                        ready
+                        and (
+                            status == "live_auto_apply_ready"
+                            or (policy.get("experiment") or {}).get("assigned_arm")
+                            == "candidate"
+                        )
+                    )):
                 issues.append("unsupported_execution_authority")
             # Reuse the exact existing weight contract without legacy observational evidence.
             zero = {**policy, "status": "source_quality_blocked", "runtime_effect": False, "allowed_runtime_apply": False}
@@ -1116,10 +1341,28 @@ def validate_integrated_selection(section, policy, *, target):
             if (section.get("evaluation_phase") != "postclose_final"
                     or section.get("cost_contract") != COST_CONTRACT
                     or policy.get("integrated_source_contract") != INTEGRATED_CONTRACT
+                    or experiment != expected_experiment
                     or policy.get("source_report_artifact_sha256") != section.get("artifact_sha256")
                     or book != section.get("primary_economics") or status != section.get("status")
+                    or opportunity
+                    != {
+                        **expected_opportunity,
+                        "metric_role": "sim_probe_ev",
+                        "decision_authority": "research_screen_then_bounded_experiment_only",
+                        "ready_for_full_live": False,
+                    }
                     or holdout != proof or policy.get("status") != expected_status
-                    or policy.get("effective_bonus_points") != (owner.MAX_BONUS_POINTS if ready else 0.)
+                    or policy.get("effective_bonus_points")
+                    != (
+                        owner.MAX_BONUS_POINTS
+                        if status == "live_auto_apply_ready"
+                        or (
+                            status == "experiment_ready"
+                            and (policy.get("experiment") or {}).get("assigned_arm")
+                            == "candidate"
+                        )
+                        else 0.0
+                    )
                     or not owner._non_live_payload_valid(zero, source_date=date.fromisoformat(policy["target_date"]))):
                 issues.append("integrated_disposition_invalid")
         except (KeyError, TypeError, ValueError, StopIteration, OverflowError, AttributeError):

@@ -2205,6 +2205,22 @@ def _scanner_priority_profile(target, previous=None):
         "lookup_attention_weight_actual_order_submitted": False,
         "lookup_attention_weight_broker_order_forbidden": True,
         "lookup_attention_weight_rollback_bonus_points": 0.0,
+        "lookup_attention_weight_experiment_mode": bool(
+            lookup_policy_for_candidate.get("experiment_mode")
+        ),
+        "lookup_attention_weight_experiment_arm": str(
+            lookup_policy_for_candidate.get("experiment_arm") or ""
+        ),
+        "lookup_attention_weight_experiment_allocation_seed_sha256": str(
+            lookup_policy_for_candidate.get(
+                "experiment_allocation_seed_sha256"
+            )
+            or ""
+        ),
+        "lookup_attention_weight_experiment_max_marginal_slots": int(
+            lookup_policy_for_candidate.get("experiment_max_marginal_slots")
+            or 0
+        ),
         "lookup_attention_weight_forbidden_uses": (
             "priority_tier_or_slot_ownership_change,"
             "candidate_pool_or_source_eligibility_change,"
@@ -4040,6 +4056,18 @@ def _scanner_event_fields(target, source_guard=None):
         "lookup_attention_weight_rollback_bonus_points": priority_value(
             "lookup_attention_weight_rollback_bonus_points"
         ),
+        "lookup_attention_weight_experiment_mode": bool(
+            priority_value("lookup_attention_weight_experiment_mode")
+        ),
+        "lookup_attention_weight_experiment_arm": priority_value(
+            "lookup_attention_weight_experiment_arm"
+        ),
+        "lookup_attention_weight_experiment_allocation_seed_sha256": priority_value(
+            "lookup_attention_weight_experiment_allocation_seed_sha256"
+        ),
+        "lookup_attention_weight_experiment_max_marginal_slots": priority_value(
+            "lookup_attention_weight_experiment_max_marginal_slots"
+        ),
         "lookup_attention_weight_forbidden_uses": priority_value(
             "lookup_attention_weight_forbidden_uses"
         ),
@@ -4111,6 +4139,7 @@ def _scanner_event_fields(target, source_guard=None):
             target, source_guard, current_flu, source_guard_context
         ),
         **dict(target.get("_LookupResourceEvidence") or {}),
+        **dict(target.get("_LookupSelectionPairEvidence") or {}),
         "lookup_attention_weight_preopen_artifact_sha256": priority_value(
             "lookup_attention_weight_preopen_artifact_sha256"
         ),
@@ -4441,6 +4470,28 @@ def _scanner_runtime_target_payload(
         "lookup_attention_weight_rollback_bonus_points": fields.get(
             "lookup_attention_weight_rollback_bonus_points"
         ),
+        "lookup_attention_weight_experiment_mode": bool(
+            fields.get("lookup_attention_weight_experiment_mode")
+        ),
+        "lookup_attention_weight_experiment_arm": fields.get(
+            "lookup_attention_weight_experiment_arm"
+        ),
+        "lookup_attention_weight_experiment_allocation_seed_sha256": fields.get(
+            "lookup_attention_weight_experiment_allocation_seed_sha256"
+        ),
+        "lookup_attention_weight_experiment_max_marginal_slots": fields.get(
+            "lookup_attention_weight_experiment_max_marginal_slots"
+        ),
+        "scanner_selection_pair_id": fields.get("scanner_selection_pair_id", ""),
+        "scanner_selection_pair_role": fields.get(
+            "scanner_selection_pair_role", ""
+        ),
+        "scanner_selection_pair_assignment": fields.get(
+            "scanner_selection_pair_assignment", ""
+        ),
+        "scanner_selection_pair_allocation_seed_sha256": fields.get(
+            "scanner_selection_pair_allocation_seed_sha256", ""
+        ),
         "lookup_attention_weight_forbidden_uses": fields.get(
             "lookup_attention_weight_forbidden_uses"
         ),
@@ -4651,6 +4702,212 @@ def _prepare_lookup_resource_evidence(
                 ),
                 "lookup_attention_resource_price_role": "scanner_snapshot_not_executable_quote",
             }
+
+
+def _prepare_lookup_selection_pair(
+    targets,
+    *,
+    scan_generation_id,
+    general_slot_limit,
+    simple_capacity,
+):
+    """Bind at most one auditable marginal pair and apply its frozen arm.
+
+    The pair changes scanner ordering only for a PREOPEN-frozen experiment.
+    It never promotes a failed guard, creates a promotion id, or submits an
+    order. Normal downstream admission and broker guards still run unchanged.
+    """
+    targets = list(targets or [])
+    for target in targets:
+        target.pop("_LookupSelectionPairEvidence", None)
+    if not simple_capacity or int(general_slot_limit or 0) <= 0:
+        return targets
+    source_eligible = [
+        target
+        for target in targets
+        if (target.get("_LookupResourceEvidence") or {}).get(
+            "lookup_attention_resource_eligibility_pass"
+        )
+        is True
+    ]
+    if any(
+        target.get("ScannerWatchBudgetOwner") != GENERAL_SCALPING
+        or (target.get("_ScannerRankPriorityProfile") or {}).get(
+            "scanner_priority_market_gainer_partition"
+        )
+        or (target.get("_ScannerRankPriorityProfile") or {}).get(
+            "scanner_priority_reserved_partition"
+        )
+        != "general"
+        for target in source_eligible
+    ):
+        return targets
+    eligible = source_eligible
+    k = min(int(general_slot_limit), len(eligible))
+    if not 0 < k < len(eligible):
+        return targets
+
+    tier_order = {
+        "tier_a_acceleration_confirmed": 0,
+        "tier_b_price_jump_candidate": 1,
+        "tier_c_volume_confirmation": 2,
+        "tier_d_late_rank_only": 3,
+        "tier_z_source_only": 9,
+    }
+
+    def ordered(field):
+        return sorted(
+            eligible,
+            key=lambda target: (
+                int(
+                    (target.get("_ScannerRankPriorityProfile") or {}).get(
+                        "scanner_priority_rank_partition"
+                    )
+                    or 0
+                ),
+                tier_order.get(
+                    (target.get("_ScannerRankPriorityProfile") or {}).get(
+                        "scanner_priority_tier"
+                    ),
+                    8,
+                ),
+                *same_tier_key(
+                    (target.get("_ScannerRankPriorityProfile") or {}).get(
+                        field, 0.0
+                    ),
+                    _source_priority(target.get("Source")),
+                    _safe_float(target.get("FluRate")),
+                    target.get("ScannerScanRank") or 0,
+                ),
+            ),
+        )
+
+    baseline = ordered("scanner_priority_score_without_lookup_attention")[:k]
+    candidate = ordered("scanner_priority_score_with_lookup_attention")[:k]
+    baseline_by_code = {str(target.get("Code") or ""): target for target in baseline}
+    candidate_by_code = {
+        str(target.get("Code") or ""): target for target in candidate
+    }
+    incoming_codes = sorted(candidate_by_code.keys() - baseline_by_code.keys())
+    outgoing_codes = sorted(baseline_by_code.keys() - candidate_by_code.keys())
+    if len(incoming_codes) != 1 or len(outgoing_codes) != 1:
+        return targets
+    incoming = candidate_by_code[incoming_codes[0]]
+    outgoing = baseline_by_code[outgoing_codes[0]]
+    incoming_profile = incoming.get("_ScannerRankPriorityProfile") or {}
+    outgoing_profile = outgoing.get("_ScannerRankPriorityProfile") or {}
+    if (
+        incoming_profile.get("scanner_priority_tier")
+        != outgoing_profile.get("scanner_priority_tier")
+        or incoming_profile.get("scanner_priority_rank_partition")
+        != outgoing_profile.get("scanner_priority_rank_partition")
+    ):
+        return targets
+    allocation_seed = str(
+        incoming_profile.get(
+            "lookup_attention_weight_experiment_allocation_seed_sha256"
+        )
+        or ""
+    )
+    experiment_mode = bool(
+        incoming_profile.get("lookup_attention_weight_experiment_mode")
+    )
+    assigned_arm = str(
+        incoming_profile.get("lookup_attention_weight_experiment_arm") or ""
+    )
+    if experiment_mode and (
+        assigned_arm not in {"baseline", "candidate"}
+        or len(allocation_seed) != 64
+        or int(
+            incoming_profile.get(
+                "lookup_attention_weight_experiment_max_marginal_slots"
+            )
+            or 0
+        )
+        != 1
+    ):
+        return targets
+    pair_id = lookup_attention_sha256(
+        {
+            "contract": "scanner_lookup_attention_selection_pair_v1",
+            "scan_generation_id": str(scan_generation_id),
+            "incoming_code": incoming_codes[0],
+            "outgoing_code": outgoing_codes[0],
+            "priority_tier": incoming_profile.get("scanner_priority_tier"),
+            "rank_partition": incoming_profile.get(
+                "scanner_priority_rank_partition"
+            ),
+            "allocation_seed_sha256": allocation_seed,
+        }
+    )
+    assignment = assigned_arm if experiment_mode else "observe_only"
+    common = {
+        "scanner_selection_pair_id": pair_id,
+        "scanner_selection_pair_contract_version": (
+            "scanner_lookup_attention_selection_pair_v1"
+        ),
+        "scanner_selection_pair_assignment": assignment,
+        "scanner_selection_pair_experiment": experiment_mode,
+        "scanner_selection_pair_allocation_seed_sha256": allocation_seed,
+        "scanner_selection_pair_max_marginal_slots": 1,
+        "scanner_selection_pair_runtime_effect": bool(
+            experiment_mode and assigned_arm == "candidate"
+        ),
+        "scanner_selection_pair_actual_order_submitted": False,
+        "scanner_selection_pair_broker_order_forbidden": True,
+    }
+    def arm_weight_fields(target):
+        profile = target.get("_ScannerRankPriorityProfile") or {}
+        if not experiment_mode:
+            return {}
+        bonus = (
+            _safe_float(
+                profile.get("lookup_attention_counterfactual_bonus_points")
+            )
+            if experiment_mode and assigned_arm == "candidate"
+            else 0.0
+        )
+        applied = bonus > 0.0
+        return {
+            "lookup_attention_weight_policy_state": (
+                f"experiment_{assigned_arm}_arm"
+                if experiment_mode
+                else profile.get("lookup_attention_weight_policy_state")
+            ),
+            "lookup_attention_weight_policy_reason": (
+                f"marginal_pair_{assigned_arm}_assignment"
+                if experiment_mode
+                else profile.get("lookup_attention_weight_policy_reason")
+            ),
+            "lookup_attention_weight_bonus_points": round(bonus, 6),
+            "lookup_attention_weight_policy_applied": applied,
+            "lookup_attention_weight_runtime_effect": applied,
+        }
+    incoming["_LookupSelectionPairEvidence"] = {
+        **common,
+        **arm_weight_fields(incoming),
+        "scanner_selection_pair_role": "incoming",
+        "scanner_selection_pair_peer_code": outgoing_codes[0],
+    }
+    outgoing["_LookupSelectionPairEvidence"] = {
+        **common,
+        **arm_weight_fields(outgoing),
+        "scanner_selection_pair_role": "outgoing",
+        "scanner_selection_pair_peer_code": incoming_codes[0],
+    }
+    if experiment_mode and assigned_arm == "candidate":
+        incoming_index, outgoing_index = targets.index(incoming), targets.index(outgoing)
+        targets[incoming_index], targets[outgoing_index] = (
+            targets[outgoing_index],
+            targets[incoming_index],
+        )
+        for target in eligible:
+            profile = target.get("_ScannerRankPriorityProfile") or {}
+            evidence = target.get("_LookupResourceEvidence") or {}
+            evidence["lookup_attention_resource_actual_score"] = profile.get(
+                "scanner_priority_score_with_lookup_attention"
+            )
+    return targets
 
 
 def promote_candidates(
@@ -5014,6 +5271,17 @@ def promote_candidates(
             and not market_gainer_replacement_codes
             and not source_upgrade_capacity
         )
+    ranked_targets = _prepare_lookup_selection_pair(
+        ranked_targets,
+        scan_generation_id=scan_generation_id,
+        general_slot_limit=general_slot_limit,
+        simple_capacity=bool(
+            not replacement_probe_mode
+            and not market_gainer_replacement_codes
+            and not source_upgrade_capacity
+            and low_rebound_reserved_slots == 0
+        ),
+    )
 
     for target in ranked_targets:
         processed_scan_ranks.add(target.get("ScannerScanRank"))

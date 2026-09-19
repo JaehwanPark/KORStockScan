@@ -352,6 +352,9 @@ class PrunedCandidateBBOCollector:
         )
         route = _request_route(code, effective_venue) if code else None
         now_epoch = float(self._clock() if observed_epoch is None else observed_epoch)
+        selection_pair_evidence = dict(
+            target.get("_LookupSelectionPairEvidence") or {}
+        )
         base = {
             "eligible": True,
             "scanner_prune_observer_schedule_status": "source_quality_blocked",
@@ -454,6 +457,7 @@ class PrunedCandidateBBOCollector:
                         "scanner_prune_observer_scheduled_sample_count": len(
                             previous.get("scheduled_offsets_sec") or []
                         ),
+                        **dict(previous.get("selection_pair_evidence") or {}),
                         **self._budget_fields_locked(),
                     }
 
@@ -521,6 +525,7 @@ class PrunedCandidateBBOCollector:
                         ),
                         "anchor_epoch": anchor_epoch,
                         "last_seen_epoch": now_epoch,
+                        "selection_pair_evidence": selection_pair_evidence,
                     }
                 deferred_episode["state"] = "deferred"
                 deferred_episode["last_deferred_status"] = status
@@ -594,6 +599,7 @@ class PrunedCandidateBBOCollector:
                 "anchor_to_schedule_delay_sec": anchor_to_schedule_delay_sec,
                 "session_end_epoch": session_end_epoch,
                 "last_seen_epoch": now_epoch,
+                "selection_pair_evidence": selection_pair_evidence,
                 "scheduled_offsets_sec": list(offsets),
                 "completed_sample_count": 0,
             }
@@ -687,6 +693,7 @@ class PrunedCandidateBBOCollector:
             episode.get("scheduled_offsets_sec") or []
         )
         fallback_receipt = {
+            **dict(episode.get("selection_pair_evidence") or {}),
             "scanner_prune_observer_episode_id": episode_id,
             "scanner_prune_observer_anchor_generation_id": episode.get(
                 "anchor_generation_id"
@@ -921,6 +928,7 @@ class PrunedCandidateBBOCollector:
             episode.get("scheduled_offsets_sec") or []
         )
         fields = {
+            **dict(episode.get("selection_pair_evidence") or {}),
             "scanner_prune_observer_episode_id": episode_id,
             "scanner_prune_observer_anchor_generation_id": episode.get(
                 "anchor_generation_id"

@@ -66,6 +66,7 @@ NON_LIVE_STATUSES = {
     "source_contract_blocked",
     "forward_holdout_armed",
 }
+ACTIVE_STATUSES = {"live_auto_apply_ready", "experiment_ready"}
 
 
 def canonical_sha256(value: Any) -> str:
@@ -563,7 +564,7 @@ def _load_active_cached(
         )
     if payload.get("prepared_effective_date") and payload["prepared_effective_date"] != target.isoformat():
         return _inactive("prepared_policy_effective_date_mismatch")
-    if payload.get("status") != "live_auto_apply_ready":
+    if payload.get("status") not in ACTIVE_STATUSES:
         if (_non_live_payload_valid(payload, source_date=source_date)
                 and _source_report_valid(payload, source_date=source_date, report_dir=Path(report_dir_text))):
             return _inactive(
@@ -593,10 +594,20 @@ def _load_active_cached(
             policy_source_date=source_date.isoformat(),
         )
     policy = payload["policy"]
+    experiment = payload.get("experiment") or {}
+    experiment_mode = payload.get("status") == "experiment_ready"
     return {
         "active": True,
-        "state": "live_auto_applied",
-        "reason": "latest_prior_trading_date_policy_valid",
+        "state": (
+            f"experiment_{experiment.get('assigned_arm')}_arm"
+            if experiment_mode
+            else "live_auto_applied"
+        ),
+        "reason": (
+            "latest_prior_trading_date_experiment_valid"
+            if experiment_mode
+            else "latest_prior_trading_date_policy_valid"
+        ),
         "policy_version": policy["policy_version"],
         "policy_source_date": source_date.isoformat(),
         "policy_artifact_sha256": payload["artifact_sha256"],
@@ -606,6 +617,14 @@ def _load_active_cached(
         "max_source_age_sec": float(policy["max_source_age_sec"]),
         "same_priority_tier_only": True,
         "allowed_runtime_apply": True,
+        "experiment_mode": experiment_mode,
+        "experiment_arm": experiment.get("assigned_arm", ""),
+        "experiment_allocation_seed_sha256": experiment.get(
+            "allocation_seed_sha256", ""
+        ),
+        "experiment_max_marginal_slots": experiment.get(
+            "max_marginal_slots", 0
+        ),
     }
 
 
@@ -697,7 +716,7 @@ def validate_preopen_receipt(receipt, target):
         observed = date.fromisoformat(payload["source_evaluation_date"])
         section = report["scanner_unique_funnel"]["economic_cohorts"]["lookup_attention_selection"]
         return bool(payload.get("integrated_source_contract") == INTEGRATED_CONTRACT
-            and payload.get("status") == "live_auto_apply_ready"
+            and payload.get("status") in ACTIVE_STATUSES
             and receipt.get("policy_source_date") == source.isoformat()
             and observed <= source < target and is_krx_trading_day(source)
             and count_krx_trading_days(source, target) == 1
@@ -810,10 +829,20 @@ def _load_preopen_cached(target_iso, path_text, mtime_ns, size):
             preopen_artifact_sha256=receipt["artifact_sha256"],
         )
     payload = receipt["source_policy"]
+    experiment = payload.get("experiment") or {}
+    experiment_mode = payload.get("status") == "experiment_ready"
     return {
         "active": True,
-        "state": "live_auto_applied",
-        "reason": "immutable_preopen_policy_valid",
+        "state": (
+            f"experiment_{experiment.get('assigned_arm')}_arm"
+            if experiment_mode
+            else "live_auto_applied"
+        ),
+        "reason": (
+            "immutable_preopen_experiment_policy_valid"
+            if experiment_mode
+            else "immutable_preopen_policy_valid"
+        ),
         "policy_version": POLICY_VERSION,
         "policy_source_date": payload["target_date"],
         "policy_artifact_sha256": payload["artifact_sha256"],
@@ -825,6 +854,14 @@ def _load_preopen_cached(target_iso, path_text, mtime_ns, size):
         "max_source_age_sec": MAX_SOURCE_AGE_SEC,
         "same_priority_tier_only": True,
         "allowed_runtime_apply": True,
+        "experiment_mode": experiment_mode,
+        "experiment_arm": experiment.get("assigned_arm", ""),
+        "experiment_allocation_seed_sha256": experiment.get(
+            "allocation_seed_sha256", ""
+        ),
+        "experiment_max_marginal_slots": experiment.get(
+            "max_marginal_slots", 0
+        ),
     }
 
 
@@ -903,6 +940,13 @@ def bounded_bonus(
     }
     if policy_state.get("active") is not True:
         return base
+    if policy_state.get("experiment_mode") is True:
+        arm = str(policy_state.get("experiment_arm") or "")
+        return {
+            **base,
+            "state": f"experiment_{arm}_arm",
+            "reason": "marginal_pair_assignment_deferred_to_capacity_boundary",
+        }
     score = _finite_number(lookup_attention_score)
     if score is None or not 0.0 <= score <= 1.0:
         return {**base, "state": "source_quality_blocked", "reason": "score_invalid"}
@@ -991,20 +1035,55 @@ def publish_integrated_policy(report, *, publication_date=None, policy_date=None
             or published >= effective):
         raise ValueError("integrated_policy_calendar_binding_invalid")
     section = report["scanner_unique_funnel"]["economic_cohorts"]["lookup_attention_selection"]
-    ready = section.get("status") == "live_auto_apply_ready"
+    ready = section.get("status") in ACTIVE_STATUSES
+    experiment_ready = section.get("status") == "experiment_ready"
     disposition = ("source_quality_blocked" if section.get("status") == "source_gap"
         and (section.get("source_quality",{}).get("status") != "pass" or section.get("official_symbol_master",{}).get("status") != "pass")
         else "source_contract_blocked" if section.get("status") == "source_gap" else section["status"])
     if published < observed or section.get("evaluation_phase") != "postclose_final":
         raise ValueError("integrated_final_publication_date_invalid")
+    experiment = {}
+    if experiment_ready:
+        allocation_seed = canonical_sha256(
+            {
+                "contract": "scanner_lookup_attention_experiment_allocation_v1",
+                "source_report_artifact_sha256": section["artifact_sha256"],
+                "effective_date": effective.isoformat(),
+            }
+        )
+        # Freeze the arm before its market outcome exists. Alternating the
+        # effective trading-day index keeps the allocation auditable and
+        # balanced without a runtime RNG or mutable state.
+        assigned_arm = (
+            "candidate"
+            if count_krx_trading_days(date(2026, 6, 5), effective) % 2
+            else "baseline"
+        )
+        experiment = {
+            "contract_version": "scanner_lookup_attention_experiment_v1",
+            "allocation_seed_sha256": allocation_seed,
+            "assigned_arm": assigned_arm,
+            "max_marginal_slots": 1,
+            "eligible_venue": "KRX",
+            "eligible_session_bucket": "krx_regular",
+            "same_stage_canary_exclusive": True,
+        }
+    runtime_effect = bool(
+        ready
+        and (
+            not experiment_ready
+            or experiment.get("assigned_arm") == "candidate"
+        )
+    )
+    effective_bonus = MAX_BONUS_POINTS if runtime_effect else 0.0
     payload = {"schema_version": SCHEMA_VERSION, "report_type": REPORT_TYPE,
         "target_date": dated.isoformat(), "publication_date": published.isoformat(), "source_evaluation_date": observed.isoformat(),
         "prepared_effective_date": effective_date, "integrated_source_contract": INTEGRATED_CONTRACT,
         "status": disposition, "decision_contract_version": DECISION_CONTRACT_VERSION,
         "decision_authority": DECISION_AUTHORITY, "activation_mode": ACTIVATION_MODE,
         "user_authority": USER_AUTHORITY, "operator_approval_required": False,
-        "runtime_effect": ready, "actual_order_submitted": False, "broker_order_forbidden": True,
-        "allowed_runtime_apply": ready, "effective_bonus_points": MAX_BONUS_POINTS if ready else 0.0,
+        "runtime_effect": runtime_effect, "actual_order_submitted": False, "broker_order_forbidden": True,
+        "allowed_runtime_apply": ready, "effective_bonus_points": effective_bonus,
         "source_report_artifact_sha256": section["artifact_sha256"],
         "source_quality_status": "pass" if section["source_quality"].get("status") == "pass" else "blocked",
         "holdout_armed_since": section.get("independent_holdout", {}).get("learning_cutoff"),
@@ -1016,6 +1095,8 @@ def publish_integrated_policy(report, *, publication_date=None, policy_date=None
             "weight_formula": "linear_above_min_score_capped_at_max_bonus",
             "eligible_venues": ELIGIBLE_VENUES, "eligible_session_buckets": ELIGIBLE_SESSION_BUCKETS},
     }
+    if experiment:
+        payload["experiment"] = experiment
     payload["artifact_sha256"] = canonical_sha256(payload)
     issues = validate_integrated_selection(section, payload, target=observed)
     if issues or (not ready and not _non_live_payload_valid(payload, source_date=dated)):

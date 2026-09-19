@@ -571,6 +571,21 @@ def collect_lineage(target: date, *, events_by_date=None) -> tuple[list[dict[str
                 policy_runtime_effect = _bool(
                     fields.get("lookup_attention_weight_runtime_effect")
                 )
+                experiment_mode = _bool(
+                    fields.get("lookup_attention_weight_experiment_mode")
+                )
+                experiment_arm = str(
+                    fields.get("lookup_attention_weight_experiment_arm") or ""
+                ).strip()
+                experiment_seed = str(
+                    fields.get(
+                        "lookup_attention_weight_experiment_allocation_seed_sha256"
+                    )
+                    or ""
+                ).strip()
+                selection_pair_id = str(
+                    fields.get("scanner_selection_pair_id") or ""
+                ).strip()
                 policy_bonus = _finite(
                     fields.get("lookup_attention_weight_bonus_points")
                 )
@@ -652,34 +667,51 @@ def collect_lineage(target: date, *, events_by_date=None) -> tuple[list[dict[str
                             fields.get("lookup_attention_weight_market_session_bucket")
                             or ""
                         ).strip()
-                        expected_bonus = round(
-                            max(
-                                0.0,
-                                MAX_BONUS_POINTS
-                                * (float(score) - MIN_SCORE)
-                                / max(1e-9, 1.0 - MIN_SCORE),
+                        formula_bonus = round(
+                            min(
+                                MAX_BONUS_POINTS,
+                                max(
+                                    0.0,
+                                    MAX_BONUS_POINTS
+                                    * (float(score) - MIN_SCORE)
+                                    / max(1e-9, 1.0 - MIN_SCORE),
+                                ),
                             ),
                             6,
                         )
-                        expected_bonus = min(MAX_BONUS_POINTS, expected_bonus)
-                        expected_policy_state = (
-                            "applied_same_priority_tier"
-                            if expected_bonus > 0.0
-                            else (
-                                "loaded_at_floor"
-                                if float(score) == MIN_SCORE
-                                else "loaded_below_threshold"
+                        if experiment_mode is True:
+                            expected_bonus = (
+                                formula_bonus
+                                if experiment_arm == "candidate"
+                                and selection_pair_id
+                                else 0.0
                             )
-                        )
-                        expected_policy_reason = (
-                            "bounded_linear_bonus"
-                            if expected_bonus > 0.0
-                            else (
-                                "policy_floor_zero_bonus"
-                                if float(score) == MIN_SCORE
-                                else "lookup_attention_score_below_policy_minimum"
+                            expected_policy_state = f"experiment_{experiment_arm}_arm"
+                            expected_policy_reason = (
+                                f"marginal_pair_{experiment_arm}_assignment"
+                                if selection_pair_id
+                                else "marginal_pair_assignment_deferred_to_capacity_boundary"
                             )
-                        )
+                        else:
+                            expected_bonus = formula_bonus
+                            expected_policy_state = (
+                                "applied_same_priority_tier"
+                                if expected_bonus > 0.0
+                                else (
+                                    "loaded_at_floor"
+                                    if float(score) == MIN_SCORE
+                                    else "loaded_below_threshold"
+                                )
+                            )
+                            expected_policy_reason = (
+                                "bounded_linear_bonus"
+                                if expected_bonus > 0.0
+                                else (
+                                    "policy_floor_zero_bonus"
+                                    if float(score) == MIN_SCORE
+                                    else "lookup_attention_score_below_policy_minimum"
+                                )
+                            )
                         runtime_forbidden_uses = {
                             item.strip()
                             for item in str(
@@ -688,7 +720,7 @@ def collect_lineage(target: date, *, events_by_date=None) -> tuple[list[dict[str
                             ).split(",")
                             if item.strip()
                         }
-                        runtime_policy_eligible = bool(
+                        runtime_policy_contract_valid = bool(
                             is_krx_trading_day(parsed_policy_source_date)
                             and is_krx_trading_day(observation_date)
                             and count_krx_trading_days(
@@ -709,6 +741,20 @@ def collect_lineage(target: date, *, events_by_date=None) -> tuple[list[dict[str
                             == policy_artifact_sha256
                             and fields.get("lookup_attention_weight_policy_version")
                             == POLICY_VERSION
+                            and (
+                                experiment_mode is not True
+                                or (
+                                    experiment_arm in {"baseline", "candidate"}
+                                    and re.fullmatch(r"[0-9a-f]{64}", experiment_seed)
+                                    is not None
+                                    and _finite(
+                                        fields.get(
+                                            "lookup_attention_weight_experiment_max_marginal_slots"
+                                        )
+                                    )
+                                    == 1.0
+                                )
+                            )
                             and fields.get("lookup_attention_weight_decision_authority")
                             == DECISION_AUTHORITY
                             and policy_same_tier_only is True
@@ -766,9 +812,19 @@ def collect_lineage(target: date, *, events_by_date=None) -> tuple[list[dict[str
                             and policy_applied is (policy_bonus > 0.0)
                             and policy_runtime_effect is policy_applied
                         )
+                        runtime_policy_eligible = bool(
+                            runtime_policy_contract_valid
+                            and (
+                                experiment_mode is not True
+                                or re.fullmatch(
+                                    r"[0-9a-f]{64}", selection_pair_id
+                                )
+                                is not None
+                            )
+                        )
                         runtime_policy_provenance_invalid = bool(
                             runtime_policy_provenance_invalid
-                            or not runtime_policy_eligible
+                            or not runtime_policy_contract_valid
                         )
                 elif policy_applied is True or policy_runtime_effect is True:
                     runtime_policy_provenance_invalid = True
@@ -812,6 +868,18 @@ def collect_lineage(target: date, *, events_by_date=None) -> tuple[list[dict[str
                     ),
                     "lookup_attention_weight_runtime_policy_provenance_invalid": (
                         runtime_policy_provenance_invalid
+                    ),
+                    "lookup_attention_weight_experiment_mode": experiment_mode,
+                    "lookup_attention_weight_experiment_arm": experiment_arm,
+                    "lookup_attention_weight_experiment_allocation_seed_sha256": (
+                        experiment_seed
+                    ),
+                    "scanner_selection_pair_id": selection_pair_id,
+                    "scanner_selection_pair_role": str(
+                        fields.get("scanner_selection_pair_role") or ""
+                    ),
+                    "scanner_selection_pair_assignment": str(
+                        fields.get("scanner_selection_pair_assignment") or ""
                     ),
                 }
                 if key in conflicted_observation_keys:
@@ -1863,13 +1931,29 @@ def evaluate_post_apply(
             except ValueError:
                 continue
             if policy_source_date >= campaign_start:
-                rows.append(row)
+                assignment = str(
+                    row.get("scanner_selection_pair_assignment") or ""
+                ).strip()
+                rows.append(
+                    {
+                        **row,
+                        # Experiment economics is intention-to-treat by the arm
+                        # frozen before market outcomes, not by attention score.
+                        "cohort": (
+                            "control"
+                            if assignment == "baseline"
+                            else "candidate"
+                            if assignment == "candidate"
+                            else row["cohort"]
+                        ),
+                    }
+                )
     book = _cohort_book(rows)
     mature = _sample_floor_passes(book)
     passed, reasons = _book_passes(book)
     candidate_worst = book["candidate"]["worst_net_return_pct"]
     live_predecessor = (
-        prior_policy.get("status") == "live_auto_apply_ready"
+        prior_policy.get("status") in {"live_auto_apply_ready", "experiment_ready"}
         or prior_policy.get("campaign_live_started") is True
     )
     emergency_rollback = bool(

@@ -40,3 +40,11 @@ WS6의 다음 자연 generation 원 plan/quantity/guard, 독립 model, 정규9/2
 이전의 “WS0–WS5가 닫혔다”는 결론을 철회한다. 현재 `execution_inputs()`는 sealed compact projection에 이미 존재하는 자연 compact 판정·owner replay를 읽지만, capacity로 탈락한 incoming 후보는 compact AI와 entry recipe·요청 수량·guard·terminal을 자연 생산하지 않는다. 다음 source generation을 기다리는 것만으로 이 입력이 생기지 않으므로, 비용 후 EV와 일별 순익 null은 표본 성숙 문제가 아니라 producer reachability 결손이다. positive fixture는 evaluator 검증이며 자연 producer 증거가 아니다.
 
 완료된 것은 입력이 존재할 때의 비교기, 결손 시 fail-closed 보존 정책, hash 소비와 불변 release 배포다. WS1 prospective source 공급, WS3 실제 양측 비교, WS5 경제성 재생성은 기존 `CodeImprovementWorkorderReview0918`에서 OPEN으로 유지한다. 역사 값을 합성하거나 탈락 후보에 장중 AI/provider 호출을 추가하지 않는다. WS6 자연 PREOPEN/PID/성과 acceptance는 producer 계약이 먼저 닫힌 뒤 평가한다.
+
+## Prospective pair·experiment 후속 구현
+
+재점검 계획 §12의 WR0–WR5를 기존 모듈에 구현했다. general/simple-capacity marginal pair 하나만 결정론 ID로 묶어 promote/prune, 기존 BBO collector와 runtime target에 전달한다. 자연 ID는 양쪽 role·assignment가 모두 일치해야 하며 부분·충돌 pair는 제외한다. 역사 row는 원 자료를 바꾸지 않고 기존 complete partition에서만 별도 deterministic lineage를 파생한다.
+
+장후에는 실제 실행 EV와 `selection_opportunity_ev`를 분리한다. opportunity는 동일 180–360초 market path와 기존 비용 계약으로 계산하며 체결수량 부재 때문에 원화 일별 순익은 null과 원인을 보존한다. opportunity/표본/실제 completed base가 gate를 통과할 때만 다음 거래일 정책이 baseline/candidate arm을 사전 배정한다. candidate arm은 동일 tier의 marginal slot1개 순서만 바꾸고 이후 compact AI·수량·broker·hard guard를 그대로 통과한다. post-apply 완료손익은 score cohort가 아니라 사전 배정 arm으로 집계한다.
+
+코드 리뷰 중 partial pair가 단일 자연 ID만으로 유효 처리될 수 있던 문제와 post-apply가 실험 arm 대신 기존 score cohort를 사용하던 문제를 수정했다. 대상 회귀는 433 passed, warning1이고 compileall·`git diff --check`를 통과했다. warning은 기존 `pandas_ta` deprecation이다. 최종 commit/release와 source9/17 제한 재생성 값은 배포 후 이 절에 갱신한다. 미래 pair 자연 생성, 정규 PREOPEN/PID 소비와 실제 비용 후 개선 판정은 9/21 OPEN acceptance다.

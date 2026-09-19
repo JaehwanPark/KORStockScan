@@ -138,8 +138,13 @@ def test_collector_uses_exact_route_and_emits_source_only_bbo_receipt() -> None:
         clock=clock,
         autostart=False,
     )
+    target = _target()
+    target["_LookupSelectionPairEvidence"] = {
+        "scanner_selection_pair_id": "a" * 64,
+        "scanner_selection_pair_role": "incoming",
+    }
     schedule = collector.offer(
-        _target(),
+        target,
         reason="general_slot_limit",
         scan_generation_id="SCANGEN-1",
         scan_rank=3,
@@ -175,6 +180,8 @@ def test_collector_uses_exact_route_and_emits_source_only_bbo_receipt() -> None:
     assert event["fields"]["scanner_prune_observer_best_bid_qty"] == 200
     assert event["fields"]["scanner_prune_observer_best_ask_qty"] == 180
     assert event["fields"]["scanner_prune_observer_schedule_lag_sec"] == 0.0
+    assert event["fields"]["scanner_selection_pair_id"] == "a" * 64
+    assert event["fields"]["scanner_selection_pair_role"] == "incoming"
     assert event["fields"]["decision_authority"] == (
         "scanner_prune_bbo_observation_only"
     )

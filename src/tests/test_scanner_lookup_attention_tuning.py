@@ -548,6 +548,28 @@ def test_post_apply_excludes_prior_campaign_rows():
     assert attribution["rollback_triggered"] is False
 
 
+def test_post_apply_experiment_uses_frozen_arm_instead_of_score_cohort():
+    baseline = _outcome(date(2026, 9, 9), candidate=True, index=4_100)
+    candidate = _outcome(date(2026, 9, 10), candidate=False, index=4_101)
+    for row, assignment in ((baseline, "baseline"), (candidate, "candidate")):
+        row.update(
+            lookup_attention_weight_runtime_policy_eligible=True,
+            lookup_attention_weight_policy_source_date="2026-09-08",
+            scanner_selection_pair_assignment=assignment,
+        )
+
+    attribution = tuning.evaluate_post_apply(
+        {"status": "experiment_ready", "holdout_armed_since": "2026-09-08"},
+        [baseline, candidate],
+    )
+
+    assert attribution["status"] == "collecting"
+    assert attribution["book"]["control"]["completed_outcome_count"] == 1
+    assert attribution["book"]["candidate"]["completed_outcome_count"] == 1
+    assert attribution["book"]["control"]["net_pnl_krw"] == 500.0
+    assert attribution["book"]["candidate"]["net_pnl_krw"] == 100.0
+
+
 def test_join_keeps_full_fill_separate_from_partial_and_scale_in():
     observations = [
         {
