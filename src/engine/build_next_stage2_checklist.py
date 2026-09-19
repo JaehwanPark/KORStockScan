@@ -1657,8 +1657,15 @@ def build_next_stage2_checklist(
     date.fromisoformat(source_date)
     target_date = _next_krx_trading_day(source_date)
     target_path = stage2_checklist_path(target_date)
+    direct_summary = _load_json(
+        PROJECT_ROOT
+        / "data"
+        / "report"
+        / "runtime_approval_summary"
+        / f"runtime_approval_summary_{source_date}.json"
+    )
     with _checklist_write_lock(target_path):
-        if source_date >= "2026-09-19":
+        if source_date >= "2026-09-19" or direct_summary.get("schema_version") == 3:
             return _build_direct_family_checklist(
                 source_date=source_date,
                 target_date=target_date,

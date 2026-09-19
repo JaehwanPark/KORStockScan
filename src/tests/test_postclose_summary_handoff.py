@@ -190,6 +190,32 @@ def test_retired_handoff_binds_bootstrap_for_summary_effective_date(tmp_path):
     assert paths["runtime_policy_bootstrap_verify"].name == "runtime_policy_bootstrap_verify_2026-09-21.json"
 
 
+def test_schema_v3_pre_retirement_source_uses_direct_handoff(tmp_path):
+    reports = tmp_path / "data" / "report"
+    day = "2026-09-17"
+    summary = reports / "runtime_approval_summary" / f"runtime_approval_summary_{day}.json"
+    summary.parent.mkdir(parents=True)
+    summary.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "date": day,
+                "preopen_consumption_receipt": {"apply_date": "2026-09-21"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    paths = mod.source_paths(reports, day, "checklist")
+
+    assert set(paths) == {
+        "runtime_approval_summary",
+        "runtime_policy_bootstrap",
+        "runtime_policy_bootstrap_verify",
+    }
+    assert paths["runtime_policy_bootstrap"].name == "runtime_policy_bootstrap_2026-09-21.json"
+
+
 def test_retired_common_layer_handoff_skips_legacy_intake(monkeypatch, tmp_path):
     reports = tmp_path / "data" / "report"
     day = "2026-09-19"

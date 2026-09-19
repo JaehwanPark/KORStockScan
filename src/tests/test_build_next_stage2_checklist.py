@@ -1705,3 +1705,35 @@ def test_direct_family_checklist_opens_only_structural_economic_blockers(
     assert "CodeImprovementWorkorderReview0918" in text
     assert "operating_paired_source_missing" in text
     assert "구조적 경제성 결손" in text
+
+
+def test_schema_v3_regeneration_uses_direct_path_for_pre_retirement_source_date(
+    monkeypatch, tmp_path
+):
+    _patch_dirs(monkeypatch, tmp_path)
+    monkeypatch.setattr(mod, "PROJECT_ROOT", tmp_path)
+    day = "2026-09-17"
+    summary = (
+        tmp_path
+        / "data"
+        / "report"
+        / "runtime_approval_summary"
+        / f"runtime_approval_summary_{day}.json"
+    )
+    _write_json(
+        summary,
+        {
+            "schema_version": 3,
+            "date": day,
+            "status": "direct_evidence_complete",
+            "blocking_reasons": [],
+            "economic_blockers": [],
+        },
+    )
+
+    result = mod.build_next_stage2_checklist(day)
+    text = Path(result["path"]).read_text(encoding="utf-8")
+
+    assert result["source_owner"] == "runtime_approval_summary_direct_family"
+    assert "신규 공통 튜닝 작업 없음" in text
+    assert "threshold_cycle_ev" not in text

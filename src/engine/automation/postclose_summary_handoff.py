@@ -121,14 +121,17 @@ def installed_producer_terminal_states(
 
 
 def source_paths(report_dir: Path, target_date: str, consumer: str) -> dict[str, Path]:
-    if target_date >= COMMON_THRESHOLD_TUNING_RETIRED_FROM:
+    summary_path = (
+        report_dir
+        / "runtime_approval_summary"
+        / f"runtime_approval_summary_{target_date}.json"
+    )
+    summary = _load_json(summary_path)
+    if (
+        target_date >= COMMON_THRESHOLD_TUNING_RETIRED_FROM
+        or summary.get("schema_version") == 3
+    ):
         data_dir = report_dir.parent
-        summary_path = (
-            report_dir
-            / "runtime_approval_summary"
-            / f"runtime_approval_summary_{target_date}.json"
-        )
-        summary = _load_json(summary_path)
         preopen = summary.get("preopen_consumption_receipt") or {}
         apply_date = (
             str(preopen.get("apply_date"))
