@@ -623,13 +623,11 @@ def test_identical_final_input_reuses_result_and_cost_revision_invalidates(monke
     assert resource.integrated_selection_evaluation(date(2026, 9, 17), {}, predecessor=section) is section
 
 
-def test_strict_uses_native_section_and_policy_without_daily_copy(monkeypatch, tmp_path):
+def test_native_validator_uses_section_and_policy_without_daily_copy(monkeypatch, tmp_path):
     import json
-    from src.engine import verify_threshold_cycle_postclose_chain as verifier
     integrated_fixture(monkeypatch)
     root = tmp_path / "data" / "report"
     root.mkdir(parents=True)
-    monkeypatch.setattr(verifier, "REPORT_DIR", root)
     section = resource.integrated_selection_evaluation(date(2026, 9, 17), {})
     report = {"target_date": "2026-09-17", "evaluation_phase": "intraday",
               "scanner_unique_funnel": {"economic_cohorts": {"lookup_attention_selection": section}}}
@@ -637,9 +635,13 @@ def test_strict_uses_native_section_and_policy_without_daily_copy(monkeypatch, t
     monitor.mkdir()
     (monitor / "intraday_ws_freshness_monitor_2026-09-17.json").write_text(json.dumps(report))
     payload = policy.publish_integrated_policy(report, policy_dir=root.parent / "threshold_cycle" / "scanner_lookup_attention_policy")
-    assert verifier._scanner_lookup_attention_status(report, payload, target_date="2026-09-17")["status"] == "pass"
+    assert resource.validate_integrated_selection(
+        section, payload, target=date(2026, 9, 17)
+    ) == []
     payload["artifact_sha256"] = "0" * 64
-    assert verifier._scanner_lookup_attention_status(report, payload, target_date="2026-09-17")["status"] == "fail"
+    assert "integrated_artifact_hash_mismatch" in resource.validate_integrated_selection(
+        section, payload, target=date(2026, 9, 17)
+    )
 
 
 
