@@ -1102,7 +1102,8 @@ def validate_integrated_selection(section, policy, *, target):
             if (not target <= dated <= published < effective or not owner.is_krx_trading_day(dated)
                     or not owner.is_krx_trading_day(effective) or owner.count_krx_trading_days(dated,effective) != 1):
                 issues.append("integrated_policy_calendar_binding_invalid")
-            expected_status = "source_quality_blocked" if status == "source_gap" else status
+            expected_status = ("source_quality_blocked" if status == "source_gap" and not quality
+                else "source_contract_blocked" if status == "source_gap" else status)
             # Policy owns only sorting permission; source report never owns it.
             issues = [i for i in issues if i != "unsupported_execution_authority"]
             if (section.get("runtime_effect") is not False or section.get("allowed_runtime_apply") is not False

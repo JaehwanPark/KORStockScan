@@ -63,6 +63,7 @@ NON_LIVE_STATUSES = {
     "hold_sample",
     "hold_no_edge",
     "source_quality_blocked",
+    "source_contract_blocked",
     "forward_holdout_armed",
 }
 
@@ -991,7 +992,9 @@ def publish_integrated_policy(report, *, publication_date=None, policy_date=None
         raise ValueError("integrated_policy_calendar_binding_invalid")
     section = report["scanner_unique_funnel"]["economic_cohorts"]["lookup_attention_selection"]
     ready = section.get("status") == "live_auto_apply_ready"
-    disposition = "source_quality_blocked" if section.get("status") == "source_gap" else section["status"]
+    disposition = ("source_quality_blocked" if section.get("status") == "source_gap"
+        and (section.get("source_quality",{}).get("status") != "pass" or section.get("official_symbol_master",{}).get("status") != "pass")
+        else "source_contract_blocked" if section.get("status") == "source_gap" else section["status"])
     if published < observed or section.get("evaluation_phase") != "postclose_final":
         raise ValueError("integrated_final_publication_date_invalid")
     payload = {"schema_version": SCHEMA_VERSION, "report_type": REPORT_TYPE,
