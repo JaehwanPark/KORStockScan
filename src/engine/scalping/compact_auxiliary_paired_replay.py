@@ -311,9 +311,11 @@ def natural_response_contract_exclusion(trace):
     if trace.get("semantic_validation_status") != "pass":
         semantic_status = str(trace.get("semantic_validation_status") or "")
         result_source = str(trace.get("result_source") or "")
+        quality_status = str(trace.get("decision_quality_contract_status") or "")
         return (
             "natural_response_transport_invalid"
-            if "transport" in semantic_status or "transport" in result_source
+            if ("transport" in semantic_status or "transport" in result_source
+                or "transport" in quality_status or result_source == "timeout")
             else "natural_response_semantic_invalid"
         )
     if trace.get("decision_quality_contract_status") != "pass":

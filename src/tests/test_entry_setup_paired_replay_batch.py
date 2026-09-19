@@ -1626,6 +1626,9 @@ def test_natural_response_failures_are_source_gaps_not_market_scope(reason):
 @pytest.mark.parametrize("patch,expected", [
     ({"semantic_validation_status": "not_evaluated_transport", "result_source": "timeout"},
      "natural_response_transport_invalid"),
+    ({"semantic_validation_status": None, "result_source": "timeout",
+      "decision_quality_contract_status": "not_evaluated_transport"},
+     "natural_response_transport_invalid"),
     ({"semantic_validation_status": "semantic_rejected"},
      "natural_response_semantic_invalid"),
     ({"decision_quality_contract_status": "fail"},
