@@ -35,8 +35,8 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 - 정책 bundle `fb4870b8ab479897c7580d79a92acb2595889c2d7c95b75087bcef6cfb6f74c5`; consumer generation `cf34905b8b0a87798328e8c15531c95779c3728578a3bb17c45ecf9207187159`. 실제 PID 소비 및 자연 비용 후 성과는 미확인이다.
 - 기존 owner `KiwoomCommonHealthOpportunityCostAcceptance0917`; 다음 확인 `existing_main_owner_execution_cf_and_portfolio_replay` / `full_cost_stop_owner_plan_portfolio_and_forward_holdout_receipts`. 결손 net은 null이며 이 기록은 주문·guard·provider 변경 승인이 아니다.
 
-<!-- scanner_lookup_attention_handoff_sha256:3fc495dec5a5dae5ecc15cf2180884f5a276a3752b6ea2bb8bbdc704e762e7af -->
-- Scanner lookup source 2026-09-17; policy 2026-09-18; publication 2026-09-19; effective 2026-09-21: `source_gap`. Primary EV delta `None`; source gaps `['complete_partition_or_actual_selection_missing', 'original_unselected_entry_recipe_quantity_guard_missing']`. Existing owner `KiwoomCommonHealthOpportunityCostAcceptance0917`; natural PREOPEN/PID/full-cost outcomes remain OPEN.
+<!-- scanner_lookup_attention_handoff_sha256:5d6ce1fd7f5626f666edffbab2cc71f83b3e16d2f3a3c4b81894ccc44037570a -->
+- Scanner lookup source 2026-09-17; policy 2026-09-18; publication 2026-09-19; effective 2026-09-21: `hold_no_edge`. Opportunity EV `-2.38954987%`/3pair/3일, primary actual paired EV `None`; source gaps `['complete_partition_or_actual_selection_missing', 'original_unselected_entry_recipe_quantity_guard_missing']`. Baseline bonus0을 유지하며 자연 pair/PREOPEN/PID/full-cost outcomes는 기존 owner `KiwoomCommonHealthOpportunityCostAcceptance0917`에서 계속 확인한다.
 <!-- compact_auxiliary_handoff:end -->
 
 ## R0–R3 독립 AI 연구 폐기

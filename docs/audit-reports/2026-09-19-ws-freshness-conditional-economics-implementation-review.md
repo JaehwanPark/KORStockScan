@@ -48,3 +48,11 @@ WS6의 다음 자연 generation 원 plan/quantity/guard, 독립 model, 정규9/2
 장후에는 실제 실행 EV와 `selection_opportunity_ev`를 분리한다. opportunity는 동일 180–360초 market path와 기존 비용 계약으로 계산하며 체결수량 부재 때문에 원화 일별 순익은 null과 원인을 보존한다. opportunity/표본/실제 completed base가 gate를 통과할 때만 다음 거래일 정책이 baseline/candidate arm을 사전 배정한다. candidate arm은 동일 tier의 marginal slot1개 순서만 바꾸고 이후 compact AI·수량·broker·hard guard를 그대로 통과한다. post-apply 완료손익은 score cohort가 아니라 사전 배정 arm으로 집계한다.
 
 코드 리뷰 중 partial pair가 단일 자연 ID만으로 유효 처리될 수 있던 문제와 post-apply가 실험 arm 대신 기존 score cohort를 사용하던 문제를 수정했다. 대상 회귀는 433 passed, warning1이고 compileall·`git diff --check`를 통과했다. warning은 기존 `pandas_ta` deprecation이다. 최종 commit/release와 source9/17 제한 재생성 값은 배포 후 이 절에 갱신한다. 미래 pair 자연 생성, 정규 PREOPEN/PID 소비와 실제 비용 후 개선 판정은 9/21 OPEN acceptance다.
+
+## 최종 배포·재생성 결과
+
+- 구현 commit `27fdb576a0f3452cef8068b933d54e691d1eb715`을 `origin/main`과 구현 branch에 atomic push했다. 불변 release `ws-selection-opportunity-reviewed-20260919-27fdb576a`의 물리 회귀 165건과 route POSTCLOSE9/19·PREOPEN9/21 print-plan이 통과했다. 실행 중 bot은 재기동하지 않았고 실제 PID 소비·주문·조기 PREOPEN은 수행하지 않았다.
+- source9/17 부분 재생성은 provider 호출·raw 전수 재실행 없이 완료됐다. section hash는 `c1942a8fa18e38249f128dd4dff1a642d57f1964e2cd585bf771a0a29d1651a5`, policy hash는 `254d5ab28a6b2089c4d6d036222aedb45dbc353dcd0d5429abd04c755bc9e010`이다.
+- complete pair3건·3일의 비용 후 opportunity EV는 `-2.38954987%`다. 날짜별 delta는 9/8 `-0.43517204%`, 9/9 `-5.79902111%`, 9/17 `-0.93445645%`다. incoming 절대 비용 후 snapshot EV는 `-1.155944%`다. 따라서 source/policy 상태는 `hold_no_edge`, bonus0, `allowed_runtime_apply=false`이며 experiment는 발행하지 않았다.
+- 기존 실제 완료5건의 관찰 EV는 `+0.26099759%`, 비용 후 순익은 `+575.12765원`이지만 selection 정책 인과값은 아니다. 미선정 arm의 실제 수량·체결이 없어 primary paired EV와 원화 일별 순익은 null이다. 이 null은 future experiment의 사전 배정 arm·정확한 PREOPEN hash·자연 COMPLETED 결과로만 채운다.
+- Daily·EV·runtime approval·control tower·9/21 checklist를 동일 section/policy hash로 갱신했고 scanner-only strict는 PASS다. 구현·기회 EV 측정·baseline 정책 생성은 종결됐으며, 정상 PREOPEN/PID와 미래 실제 arm 표본의 비용 후 EV 개선 여부는 기존 9/21 acceptance에 남는다.
