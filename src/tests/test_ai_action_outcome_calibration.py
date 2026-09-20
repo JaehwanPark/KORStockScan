@@ -4832,3 +4832,17 @@ def test_machine_identity_does_not_manufacture_daily_currency_without_operating_
     assert result['paired_terminal_proxy_delta_pct'] == 0.
     assert result['daily_net_profit_delta_krw'] is None
     assert result['downstream_operating_evidence_complete'] is False
+
+
+def test_hierarchy_already_priced_rows_do_not_rescan_pipeline(monkeypatch, tmp_path):
+    from src.engine.scalping import ai_decision_quality as quality
+    rows, _ = _natural_refinement_fixture()
+    row = rows[0]
+    row['label_context'] = {'reference_price_type': 'executable_ask'}
+    assert calibration._full_entry_cost_pct(row['comparison']['entry_cost_contract'], source_date=row['source_date']) is not None
+    monkeypatch.setattr(calibration, '_hierarchy_cost_profiles', lambda *a: {row['stock_code']: {}})
+    def unexpected_read(*a, **kw):
+        raise AssertionError('already full-cost labeled path must not reread raw')
+    monkeypatch.setattr(quality, 'load_pipeline_price_and_lifecycle_rows', unexpected_read)
+    repriced, _ = calibration.relabel_hierarchy_source_rows([row], tmp_path)
+    assert repriced == [row]

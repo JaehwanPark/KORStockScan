@@ -29,3 +29,6 @@
 ## 실행 receipt
 
 대상 원천일 2026-09-17, 발행일 2026-09-20, 예정 effective date 2026-09-21. 결과와 정책·후행 검증 hash는 아래에 실제 실행 후 기록한다. 작업본 base는 `a198c3b9bb3e0d78bff3feebe05b3d394a467973`이며 다른 세션의 compact 증거 분리 보완을 포함한다. 현재 날짜 9/20 checklist는 없고 9/21은 미래 owner다.
+
+
+재생성 중 기존 relabel 함수가 이미 full-cost 계약을 가진 행도 먼저 pipeline을 읽는 문제와 scope별 반복 읽기를 확인했다. 최초 실행은 보고서 교체 전에 중단했으며 원 보고서 byte hash가 backup과 같은 것을 확인했다. 기존 날짜별 캐시를 scope 사이에 공유하고 이미 검증된 비용/결과 행은 재조회하지 않도록 수정했다. 원천일·표본·cost/holdout/gate 축소는 없다.

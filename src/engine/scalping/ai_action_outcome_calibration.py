@@ -3738,6 +3738,9 @@ def relabel_hierarchy_source_rows(
             counts["executable_reference_missing"] += len(rows)
             result.extend(rows)
             continue
+        if all(_full_entry_cost_pct(r["comparison"].get("entry_cost_contract"), source_date=day) is not None for r in rows):
+            result.extend(rows)
+            continue
         if pipeline_prices_by_day is None:
             pipeline = existing_or_gzip_path(
                 data_root / "pipeline_events" / f"pipeline_events_{day}.jsonl"
@@ -7526,6 +7529,17 @@ def build_main_mechanistic_report(
                 if frozen and frozen.get("economic_contract") == "machine_operating_daily_net_v1":
                     previous_hierarchy[scope] = frozen
     scope_evaluations, extensions = {}, {}
+    # Reuse the existing cross-scope cache, only for paths that actually need
+    # cost relabeling. Already priced or unsupported historical rows need no
+    # second full pipeline scan.
+    repricing_rows = [r for r in paired_rows if
+        _full_entry_cost_pct(r["comparison"].get("entry_cost_contract"), source_date=r["source_date"]) is None
+        and (r.get("label_context") or {}).get("reference_price_type") == "executable_ask"]
+    repricing_profiles = {(day, venue): _hierarchy_cost_profiles(data_root, day, venue)
+        for day, venue in {(r["source_date"], r["entry_group_observation"]["key_parts"]["venue"]) for r in repricing_rows}}
+    repricing_rows = [r for r in repricing_rows
+        if r["stock_code"] in repricing_profiles[(r["source_date"], r["entry_group_observation"]["key_parts"]["venue"])]]
+    price_cache = _hierarchy_pipeline_price_cache(repricing_rows, data_root) if repricing_rows else {}
     for scope in AUTO_PROMOTION_SCOPES:
         cohort = tuple(scope.split("|"))
         scoped_incumbent = for_cohort(incumbent, cohort) if incumbent else None
@@ -7533,7 +7547,8 @@ def build_main_mechanistic_report(
         scoped_paired = [r for r in paired_rows if tuple(
             _as_dict(_as_dict(r.get("entry_group_observation")).get("key_parts")).get(k)
             for k in ("venue", "session_bucket")) == cohort]
-        repriced, cost_census = relabel_hierarchy_source_rows(scoped_paired, data_root, cohort=cohort)
+        repriced, cost_census = relabel_hierarchy_source_rows(
+            scoped_paired, data_root, cohort=cohort, pipeline_prices_by_day=price_cache)
         population, contract = _common_refinement_population(
             repriced, machine_rows, target_date=target_date,
             source_receipt=source_receipt, paired_contract=paired_contract,
