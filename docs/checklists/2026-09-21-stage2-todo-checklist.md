@@ -37,7 +37,7 @@
 **9/20 최종 정정:** 아래 AUTO 블록은 재생성된 직접 원천11/11의 최신 투영이다. main terminal proxy는 운영 비용 EV와 분리됐으며 미래 계약 증거 없는 natural maturity 추론을 제거했다. cancel/split의 역사 source gap은 지원 producer 회귀 실패를 뜻하지 않는다. 기존 메인 ME8/ME9/ME10 경제성 구조적 OPEN은 해당 owner에 남고, 장전 시간창은 실제07:35 PREOPEN/07:55~07:58 기동에 맞췄다.
 
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_START -->
-<!-- POSTCLOSE_SUMMARY_SOURCES {"allowed_runtime_apply": false, "runtime_effect": false, "schema": "postclose_summary_sources_v1", "source_date": "2026-09-17", "sources": {"independent_machine_terminal": {"sha256": "9e4f4300396e265b946ebe4dac435b856cc0d9e253bd31c15ab4d35c38cd8149"}, "independent_widget_terminal": {"sha256": "7ddb5a614204a1bcc4554a2bac1b7d4e4966c335b07dcdb82402300a930b0a8d"}, "runtime_approval_summary": {"sha256": "03ce0a1a359bf351f1bc29a8a822c98a6ec93352822d5d8848c08f8eefe02a95"}}} -->
+<!-- POSTCLOSE_SUMMARY_SOURCES {"allowed_runtime_apply": false, "runtime_effect": false, "schema": "postclose_summary_sources_v1", "source_date": "2026-09-17", "sources": {"independent_machine_terminal": {"sha256": "9e4f4300396e265b946ebe4dac435b856cc0d9e253bd31c15ab4d35c38cd8149"}, "independent_widget_terminal": {"sha256": "7ddb5a614204a1bcc4554a2bac1b7d4e4966c335b07dcdb82402300a930b0a8d"}, "runtime_approval_summary": {"sha256": "aa06d205e5e79f3b9921cc0a69cd8d5184e39e211fb62d840fddb607f2113332"}}} -->
 <!-- DIRECT_FAMILY_FUTURE_HANDOFF {"allowed_runtime_apply": false, "apply_date": "2026-09-21", "expected_state": "future_due", "manifest_path": "/home/ubuntu/KORStockScan/data/runtime/policy_bootstrap/runtime_policy_bootstrap_2026-09-21.json", "policy_receipts": [{"owner": "compact_auxiliary", "policy_owner": "compact_policy", "policy_sha256": "746d8386d02a7f1736d14b3ef6b3a4f37e84aee9958fed56ce041371f24dd7fc", "valid": true}, {"owner": "entry_cancel_wait", "policy_owner": "entry_cancel_wait_policy", "policy_sha256": "ab2aebb66b496b82c842e71948f1d621359160c9552bc0105753ea6232baac6c", "valid": true}, {"owner": "entry_split", "policy_owner": "entry_split_policy", "policy_sha256": "878cd9c0e58f002b3e73de1d7ef88f1482e0878f1bf7279fcb601de0e8fdd484", "valid": true}, {"owner": "low_price_expansion", "policy_owner": "low_price_expansion_policy", "policy_sha256": "e6eb934aa5c94ef0dc13768a03201101f17770e39440700acdc77c1453cd3c96", "valid": true}, {"owner": "low_price_two_leg", "policy_owner": "low_price_candidate", "policy_sha256": "d8c1ddd7788bd10c5421e6c0baa5857b279779697b0f64b49f39f45d6c47af2c", "valid": true}, {"owner": "machine_entry", "policy_owner": "machine_entry_candidate", "policy_sha256": "afe0de10123f3a50b52cdccc3b65f3037f3ef96f80bb07221f08db13897fec66", "valid": true}, {"owner": "main_mechanistic_entry", "policy_owner": "main_mechanistic_policy", "policy_sha256": "746d8386d02a7f1736d14b3ef6b3a4f37e84aee9958fed56ce041371f24dd7fc", "valid": true}, {"owner": "rising_missed", "policy_owner": "rising_missed_policy", "policy_sha256": "08aeca97da9b50e906812284b40afab3e5506cb4f220ae45ecf51c6d71b09c84", "valid": true}, {"owner": "scale_in_split", "policy_owner": "scale_in_split_policy", "policy_sha256": "78455dc26512a907571b62df1c11320d62c66e5d8bec7068df0422d241de33af", "valid": true}], "runtime_effect": false, "schema": "direct_family_future_handoff_v1", "source_date": "2026-09-17", "source_preopen_state": "pending", "verification_path": "/home/ubuntu/KORStockScan/data/runtime/policy_bootstrap/runtime_policy_bootstrap_verify_2026-09-21.json"} -->
 
 ## Family 직접 증거 상태
@@ -71,49 +71,49 @@
 
 - [ ] `[DirectFamilySourceRepairCompactAuxiliary] compact_auxiliary 직접 family 원천·경제성 계약 수리` (`Due: 2026-09-21`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~21:40`, `Track: RuntimeStability`)
   - Source: [runtime_approval_summary_2026-09-17.json](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-09-17.json)
-  - 증거: runtime_summary_sha256=`03ce0a1a359bf351f1bc29a8a822c98a6ec93352822d5d8848c08f8eefe02a95`, source_artifact=`/home/ubuntu/KORStockScan/data/report/ai_entry_setup_paired_replay_batch/compact_auxiliary_paired_economic_2026-09-17.json`.
+  - 증거: runtime_summary_sha256=`aa06d205e5e79f3b9921cc0a69cd8d5184e39e211fb62d840fddb607f2113332`, source_artifact=`/home/ubuntu/KORStockScan/data/report/ai_entry_setup_paired_replay_batch/compact_auxiliary_paired_economic_2026-09-17.json`.
   - 상태: family=`compact_auxiliary`, task_role=`producer_contract_repair`, comparison_status=`source_gap`, resolution_mode=`producer_repair`, prospective_resolution_mode=`-`, first_blocker=`exact_stop_distance_missing_or_invalid`.
   - 완료 기준: closure_owner=`compact_auxiliary_paired_replay`, closure_test=`full_cost_stop_owner_plan_portfolio_and_forward_holdout_receipts`. policy_receipt_valid=`True`, source_date=`2026-09-17`의 원천·비용 EV·정책·consumer 날짜와 해시를 다시 대조한다.
   - 권한 경계: null을 0/no-edge로 바꾸거나 threshold·provider·주문·수량·cap·custody·operator lock·hard safety를 우회하지 않는다.
 
 - [ ] `[DirectFamilySourceRepairEntryCancelWait] entry_cancel_wait 직접 family 원천·경제성 계약 수리` (`Due: 2026-09-21`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~21:40`, `Track: RuntimeStability`)
   - Source: [runtime_approval_summary_2026-09-17.json](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-09-17.json)
-  - 증거: runtime_summary_sha256=`03ce0a1a359bf351f1bc29a8a822c98a6ec93352822d5d8848c08f8eefe02a95`, source_artifact=`/home/ubuntu/KORStockScan/data/report/entry_cancel_wait_tuning/entry_cancel_wait_tuning_2026-09-17.json`.
+  - 증거: runtime_summary_sha256=`aa06d205e5e79f3b9921cc0a69cd8d5184e39e211fb62d840fddb607f2113332`, source_artifact=`/home/ubuntu/KORStockScan/data/report/entry_cancel_wait_tuning/entry_cancel_wait_tuning_2026-09-17.json`.
   - 상태: family=`entry_cancel_wait`, task_role=`producer_contract_repair`, comparison_status=`source_gap`, resolution_mode=`producer_repair`, prospective_resolution_mode=`-`, first_blocker=`execution_compact_coverage_unproven`.
   - 완료 기준: closure_owner=`entry_cancel_wait_tuning`, closure_test=`native_execution_census_cancel_terminal_cost_and_independent_holdouts`. policy_receipt_valid=`True`, source_date=`2026-09-17`의 원천·비용 EV·정책·consumer 날짜와 해시를 다시 대조한다.
   - 권한 경계: null을 0/no-edge로 바꾸거나 threshold·provider·주문·수량·cap·custody·operator lock·hard safety를 우회하지 않는다.
 
 - [ ] `[DirectFamilySourceRepairEntrySplit] entry_split 직접 family 원천·경제성 계약 수리` (`Due: 2026-09-21`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~21:40`, `Track: RuntimeStability`)
   - Source: [runtime_approval_summary_2026-09-17.json](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-09-17.json)
-  - 증거: runtime_summary_sha256=`03ce0a1a359bf351f1bc29a8a822c98a6ec93352822d5d8848c08f8eefe02a95`, source_artifact=`/home/ubuntu/KORStockScan/data/report/entry_split_order_plan/entry_split_order_plan_2026-09-17.json`.
+  - 증거: runtime_summary_sha256=`aa06d205e5e79f3b9921cc0a69cd8d5184e39e211fb62d840fddb607f2113332`, source_artifact=`/home/ubuntu/KORStockScan/data/report/entry_split_order_plan/entry_split_order_plan_2026-09-17.json`.
   - 상태: family=`entry_split`, task_role=`producer_contract_repair`, comparison_status=`source_gap`, resolution_mode=`producer_repair`, prospective_resolution_mode=`-`, first_blocker=`operating_paired_source_missing`.
   - 완료 기준: closure_owner=`entry_split_order_plan`, closure_test=`same frozen submitted-order scope; independent completed-cost model calibration/holdout followed by complete paired candidate calibration/holdout`. policy_receipt_valid=`True`, source_date=`2026-09-17`의 원천·비용 EV·정책·consumer 날짜와 해시를 다시 대조한다.
   - 권한 경계: null을 0/no-edge로 바꾸거나 threshold·provider·주문·수량·cap·custody·operator lock·hard safety를 우회하지 않는다.
 
 - [ ] `[DirectFamilySourceRepairLowPriceExpansion] low_price_expansion 직접 family 원천·경제성 계약 수리` (`Due: 2026-09-21`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~21:40`, `Track: RuntimeStability`)
   - Source: [runtime_approval_summary_2026-09-17.json](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-09-17.json)
-  - 증거: runtime_summary_sha256=`03ce0a1a359bf351f1bc29a8a822c98a6ec93352822d5d8848c08f8eefe02a95`, source_artifact=`/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-17.json`.
+  - 증거: runtime_summary_sha256=`aa06d205e5e79f3b9921cc0a69cd8d5184e39e211fb62d840fddb607f2113332`, source_artifact=`/home/ubuntu/KORStockScan/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_2026-09-17.json`.
   - 상태: family=`low_price_expansion`, task_role=`producer_contract_repair`, comparison_status=`source_gap`, resolution_mode=`producer_repair`, prospective_resolution_mode=`-`, first_blocker=`allocator_snapshot_contract_invalid`.
   - 완료 기준: closure_owner=`low_price_two_leg_expanded_candidate_research`, closure_test=`retained_source_isolation_frozen_allocator_independent_holdout_and_dated_consumer`. policy_receipt_valid=`True`, source_date=`2026-09-17`의 원천·비용 EV·정책·consumer 날짜와 해시를 다시 대조한다.
   - 권한 경계: null을 0/no-edge로 바꾸거나 threshold·provider·주문·수량·cap·custody·operator lock·hard safety를 우회하지 않는다.
 
 - [ ] `[DirectFamilySourceRepairLowPriceTwoLeg] low_price_two_leg 직접 family 원천·경제성 계약 수리` (`Due: 2026-09-21`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~21:40`, `Track: RuntimeStability`)
   - Source: [runtime_approval_summary_2026-09-17.json](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-09-17.json)
-  - 증거: runtime_summary_sha256=`03ce0a1a359bf351f1bc29a8a822c98a6ec93352822d5d8848c08f8eefe02a95`, source_artifact=`/home/ubuntu/KORStockScan/data/report/low_price_two_leg_tuning/low_price_two_leg_tuning_2026-09-17.json`.
+  - 증거: runtime_summary_sha256=`aa06d205e5e79f3b9921cc0a69cd8d5184e39e211fb62d840fddb607f2113332`, source_artifact=`/home/ubuntu/KORStockScan/data/report/low_price_two_leg_tuning/low_price_two_leg_tuning_2026-09-17.json`.
   - 상태: family=`low_price_two_leg`, task_role=`producer_contract_repair`, comparison_status=`mixed`, resolution_mode=`producer_repair`, prospective_resolution_mode=`-`, first_blocker=`actual_sample_floor`.
   - 완료 기준: closure_owner=`low_price_two_leg_tuning`, closure_test=`profile_leg_durable_denominator_custody_cost_and_dated_consumer`. policy_receipt_valid=`True`, source_date=`2026-09-17`의 원천·비용 EV·정책·consumer 날짜와 해시를 다시 대조한다.
   - 권한 경계: null을 0/no-edge로 바꾸거나 threshold·provider·주문·수량·cap·custody·operator lock·hard safety를 우회하지 않는다.
 
 - [ ] `[DirectFamilySourceRepairMainMechanisticEntry] main_mechanistic_entry 직접 family 원천·경제성 계약 수리` (`Due: 2026-09-21`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~21:40`, `Track: RuntimeStability`)
   - Source: [runtime_approval_summary_2026-09-17.json](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-09-17.json)
-  - 증거: runtime_summary_sha256=`03ce0a1a359bf351f1bc29a8a822c98a6ec93352822d5d8848c08f8eefe02a95`, source_artifact=`/home/ubuntu/KORStockScan/data/report/ai_decision_action_outcome_calibration/ai_decision_action_outcome_calibration_2026-09-17.json`.
+  - 증거: runtime_summary_sha256=`aa06d205e5e79f3b9921cc0a69cd8d5184e39e211fb62d840fddb607f2113332`, source_artifact=`/home/ubuntu/KORStockScan/data/report/ai_decision_action_outcome_calibration/ai_decision_action_outcome_calibration_2026-09-17.json`.
   - 상태: family=`main_mechanistic_entry`, task_role=`producer_contract_repair`, comparison_status=`source_gap`, resolution_mode=`producer_repair`, prospective_resolution_mode=`-`, first_blocker=`machine_operating_population_unbound`.
   - 완료 기준: closure_owner=`ai_decision_action_outcome_calibration`, closure_test=`future_exact_changed_decision_owner_replay_and_completed_profit_rate`. policy_receipt_valid=`True`, source_date=`2026-09-17`의 원천·비용 EV·정책·consumer 날짜와 해시를 다시 대조한다.
   - 권한 경계: null을 0/no-edge로 바꾸거나 threshold·provider·주문·수량·cap·custody·operator lock·hard safety를 우회하지 않는다.
 
 - [ ] `[DirectFamilySourceRepairScaleInSplit] scale_in_split 직접 family 원천·경제성 계약 수리` (`Due: 2026-09-21`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~21:40`, `Track: RuntimeStability`)
   - Source: [runtime_approval_summary_2026-09-17.json](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-09-17.json)
-  - 증거: runtime_summary_sha256=`03ce0a1a359bf351f1bc29a8a822c98a6ec93352822d5d8848c08f8eefe02a95`, source_artifact=`/home/ubuntu/KORStockScan/data/report/scale_in_split_order_plan/scale_in_split_order_plan_2026-09-17.json`.
+  - 증거: runtime_summary_sha256=`aa06d205e5e79f3b9921cc0a69cd8d5184e39e211fb62d840fddb607f2113332`, source_artifact=`/home/ubuntu/KORStockScan/data/report/scale_in_split_order_plan/scale_in_split_order_plan_2026-09-17.json`.
   - 상태: family=`scale_in_split`, task_role=`producer_contract_repair`, comparison_status=`insufficient_sample`, resolution_mode=`producer_contract_review`, prospective_resolution_mode=`-`, first_blocker=`contract_state_requires_followup`.
   - 완료 기준: closure_owner=`scale_in_split_order_plan`, closure_test=`eligible_add_fill_terminal_clock_cost_and_independent_paired_holdout`. policy_receipt_valid=`True`, source_date=`2026-09-17`의 원천·비용 EV·정책·consumer 날짜와 해시를 다시 대조한다.
   - 권한 경계: null을 0/no-edge로 바꾸거나 threshold·provider·주문·수량·cap·custody·operator lock·hard safety를 우회하지 않는다.
@@ -205,6 +205,15 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 <!-- scanner_lookup_attention_handoff_sha256:c37a4406d71da14478ef113d145684caae7faa5437634763c816ea0cfcea3621 -->
 - Scanner lookup source 2026-09-17; policy 2026-09-18; publication 2026-09-19; effective 2026-09-21: `hold_no_edge`. Opportunity EV `-2.38954987%`/3pair/3일, primary actual paired EV `None`; source gaps `['complete_partition_or_actual_selection_missing', 'original_unselected_entry_recipe_quantity_guard_missing']`. Baseline bonus0을 유지하며 자연 pair/PREOPEN/PID/full-cost outcomes는 기존 owner `KiwoomCommonHealthOpportunityCostAcceptance0917`에서 계속 확인한다.
 
+
+
+## 제출병목 지속 감시
+
+- [ ] `[SubmissionBottleneckMonitorNatural0921] 기존 Sentinel의 제출병목 지속 감시·통보 자연 소비 확인` (`Due: 2026-09-21`, `Slot: INTRADAY`, `TimeWindow: 08:00~19:55`, `Track: RuntimeStability`)
+  - Source: [제출병목 한정 감시 계획](../proposals/intraday-semantic-entry-monitoring-and-telegram-alert-feasibility-plan-2026-09-20.md), [배포·검증 리뷰](../audit-reports/2026-09-20-main-machine-operating-evidence-closure-review.md#11-제출병목-한정-감시와-후속-재리뷰-920).
+  - Acceptance: 선택 release의 기존 Sentinel→작은 submission source→최근30분 exact 분모/지속 상태가 자연 갱신됨. 실제 지속 incident 발생 시 Telegram 발송 receipt, 미발생은 정상 관찰로 구분. mock 통과를 자연 통보/EV로 보고하지 않음.
+  - Boundary: 메인 제출병목·원천/identity 결손만 알림. 위젯/에피소드·예외 에러 detector는 별도 owner. 자동 수정·주문·추가 AI/계좌 조회·재기동·조기 PREOPEN 금지. 정상 guard/분모0/창 이탈은 결함·복구로 단정하지 않음.
+
 <!-- compact_auxiliary_direct:start -->
 <!-- compact_auxiliary_direct_sha256:e04d550ada76bd04b67bf0b48d9853f9b816d38d29be8e234f7c35958947f3f5 -->
 
@@ -215,10 +224,3 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 - 다음 확인 `existing_main_owner_execution_cf_and_portfolio_replay` / `full_cost_stop_owner_plan_portfolio_and_forward_holdout_receipts`. 실제 PID 소비와 비용 후 자연 성과는 별도 수용 조건이다.
 
 <!-- compact_auxiliary_direct:end -->
-
-## 제출병목 지속 감시
-
-- [ ] `[SubmissionBottleneckMonitorNatural0921] 기존 Sentinel의 제출병목 지속 감시·통보 자연 소비 확인` (`Due: 2026-09-21`, `Slot: INTRADAY`, `TimeWindow: 08:00~19:55`, `Track: RuntimeStability`)
-  - Source: [제출병목 한정 감시 계획](../proposals/intraday-semantic-entry-monitoring-and-telegram-alert-feasibility-plan-2026-09-20.md), [배포·검증 리뷰](../audit-reports/2026-09-20-main-machine-operating-evidence-closure-review.md#11-제출병목-한정-감시와-후속-재리뷰-920).
-  - Acceptance: 선택 release의 기존 Sentinel→작은 submission source→최근30분 exact 분모/지속 상태가 자연 갱신됨. 실제 지속 incident 발생 시 Telegram 발송 receipt, 미발생은 정상 관찰로 구분. mock 통과를 자연 통보/EV로 보고하지 않음.
-  - Boundary: 메인 제출병목·원천/identity 결손만 알림. 위젯/에피소드·예외 에러 detector는 별도 owner. 자동 수정·주문·추가 AI/계좌 조회·재기동·조기 PREOPEN 금지. 정상 guard/분모0/창 이탈은 결함·복구로 단정하지 않음.

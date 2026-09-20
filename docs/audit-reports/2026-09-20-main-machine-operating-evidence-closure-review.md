@@ -171,3 +171,12 @@ ME8의 과거 미대사 2건을 찾았다. 9/14 `187660`의 paired trace `analyz
 후속 재리뷰에서 canonical 작업본의 정상 `ai_confirmed_terminal_no_budget` 보완을 확인했다. 실제 producer의 알려진 terminal_reason/source_stage 두 조합과 주문 금지 세 필드가 맞을 때만 final guard로 처리하는 변경을 통합했다. 나머지 canonical 차이는 덮어쓰지 않았다. 영향 회귀 **283개 PASS**, compile·bash -n·문서 parser·diff 검증 PASS. 증거: `tmp/submission-bottleneck-review-20260920/implementation-review.json`, `tests.log`. 합성 회귀이며 실제 Telegram 발송/자연 수익 증거는 아니다.
 
 배포 뒤 최종 인계 리뷰에서 기술 감시의 도입일 계약을 추가 보완했다. 새 submission monitor 산출물은 9/21부터 필수이며 9/17 복구에서 존재를 요구하지 않는다. 설치 전 missing을 새 구조 결함으로 오인하지 않되, 9/21 운영 중 missing/stale/통보 실패는 기존 error detector가 실패로 표시한다. 날짜 경계 회귀를 추가하고 후속 불변 배포본으로 반영한다.
+
+
+최종 배포/인계: 코드 `8ddbee7e0` → 날짜 도입 경계 보완 `3f67a4ef7` push 완료. 선택 release `submission-bottleneck-reviewed-20260920-3f67a4ef7`; 9개 서비스 정의/129개 인스턴스는 PID0/inactive 유지. Sentinel cron5개를08–19시5분1개로 대체하고 선택 release router 연결을 확인했으며 다른 cron은 byte 비교로 보존했다. Telegram token/destination 존재, 실제 시험 발송0.
+
+source9/17→publication9/20→effective9/21 후속 run `5953a93cf56c4fd39be8280faa8d530c`: summary/checklist/scoped/strict/seal/controller 8개 후행 명령 exit0, main succeeded/controller done/strict pass. 경제성 코드와34개 입력 stat이 동일하여 main 자연 결과는 원 run `f7e6be607be944b8a45fa8f5775494a8`의 code/as-of/hash를 가진 재사용 receipt로 보존했다. 앞선 `a27ccd1fabd94f04bef82bc8bdae02be`에서 compact 정책 finalize도 완료했다. 전체 raw·AI 호출·전체 장후 반복 없음.
+
+9/21 bundle `15c063637359bd4cbd5a567760abecdf6229aee1f44d1e9d6a7cbc2dc7e97eb7`은 incumbent_carried이며 모든 main scope/compact policy body를 보존한다. 자연 main 모집단1,712·compact21, 승격0, 운영 EV/추가 실제 순익 null, main first blocker `machine_operating_population_unbound`. 기존 과거 결손/별도 미지원 운영 계약을 제거하거나 자연 대기로 이름만 바꾸지 않았다. 정상 PREOPEN/PID·장중 실제 incident 통보·독립 표본/COMPLETED 비용 손익은 OPEN이다.
+
+증거: `tmp/submission-bottleneck-review-20260920/`의 최초283개 회귀·정책 finalize·cron 설치 receipt, `tmp/submission-bottleneck-final-review-20260920/`의 날짜 경계71개 회귀(중복), `final-review.json`, `final-reconciliation.json`, `source-reuse-code-review.json`, `service-binding-3f67a4ef7.json`, `limited-recovery-5953a93cf56c4fd39be8280faa8d530c.json`. 배포와 상태 인계는 경제적 개선 증거가 아니다.
