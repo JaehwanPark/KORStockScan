@@ -71,3 +71,9 @@ widget/machine 독립 wrapper의 exact-date terminal/source hash를 최종 summa
 - 재생성된 9/17 report가 9/18 기존 정책의 source SHA와 달라 incumbent 검증이 실패했다. 기존 정책/manifest를 수정하거나 hash를 바꾸지 않는다. 사전 백업의 exact SHA가 일치하는 원 보고서를 `source_snapshots/<sha>.json`으로 보존하고 reader가 그 불변 세대만 허용한다.
 - CLI와 machine closed-loop 두 실제 publisher 모두 정책 발행 전 원천 스냅샷을 저장한다. 동시 변경·잘못된 snapshot hash·symlink는 거부하며 기존 candidate/holdout/parent reconstruction 검증을 유지한다.
 - 53회 관련 회귀 통과. 후속 native publication 회귀와 실제 carry 변환을 추가 확인한다. 과거 정책은 기존 버전이며 신규 성과로 집계하지 않는다.
+
+## 압축 라벨 predecessor 복구
+
+- ADQ는 기존 라벨을 `.json.gz`에서 정상 읽은 뒤, 저장 CAS가 `.json` 존재만 검사하여 `source_label_predecessor_changed`로 실패했다. 실제 동시 writer나 라벨 변조의 증거는 없고, gzip 단독 세대를 잘못 제외한 결함이다.
+- logical JSON의 기존 plain/gzip 동등성·충돌 검사를 유지하며 CAS와 원 revision 저장을 실제 보관 경로에 맞췄다. 원 gzip 바이트를 보존하고 기존 generation-safe writer로 새 세대를 발행한다.
+- source-label/migration/CAS 회귀6개, native postclose CLI와 gzip 입력 회귀2개를 확인한다. 기존 label as-of와 새 재평가를 분리하며 원천 또는 완료 손익을 추정하지 않는다.

@@ -13583,7 +13583,8 @@ def test_materialized_label_role_distinguishes_fixed_gap_from_maturity(due, have
     assert report["labels"][0] == label  # input immutable
 
 
-def test_source_label_revision_reuse_cas_and_original_bytes(monkeypatch, tmp_path, capsys):
+@pytest.mark.parametrize("compressed", [False, True])
+def test_source_label_revision_reuse_cas_and_original_bytes(monkeypatch, tmp_path, capsys, compressed):
     target = "2026-09-17"
     cpath, lpath = tmp_path / "control.json", tmp_path / "labels.json"
     monkeypatch.setattr(quality, "control_path", lambda _: cpath)
@@ -13594,11 +13595,16 @@ def test_source_label_revision_reuse_cas_and_original_bytes(monkeypatch, tmp_pat
     control["control_manifest_sha256"] = quality._sha256(control)
     labels = {"schema": quality.LABEL_REPORT_SCHEMA, "target_date": target, "labels": [], **quality.OFFLINE_CONTRACT}
     cpath.write_text(json.dumps(control)); lpath.write_text(json.dumps(labels, indent=2))
-    raw = lpath.read_bytes()
+    if compressed:
+        import gzip
+        compressed_path = lpath.with_suffix(".json.gz")
+        compressed_path.write_bytes(gzip.compress(lpath.read_bytes(), mtime=0))
+        lpath.unlink()
+    raw = quality.existing_or_gzip_path(lpath).read_bytes()
     control_raw = cpath.read_bytes()
     monkeypatch.setattr(quality, "_default_sources", lambda *_a, **_k: pytest.fail("unchanged frozen inputs cannot rescan"))
     assert quality.main(["--date", target, "--mode", "postclose", "--reuse-materialized-labels", "--write"]) == 0
-    revisions = list((tmp_path / "revisions").glob("*.json"))
+    revisions = list((tmp_path / "revisions").glob("*.json*"))
     assert len(revisions) == 2
     assert {p.read_bytes() for p in revisions} == {raw, control_raw}
     assert quality.main(["--date", target, "--mode", "postclose", "--write"]) == 0

@@ -27844,7 +27844,7 @@ def write_source_label_materialization(target_date: str, reports: dict[str, dict
         if inputs is not None and inputs != source_label_input_receipt(target_date, outcome_price_source_requested=inputs.get("outcome_price_source_requested", "auto")):
             raise ValueError("source_label_generation_changed_during_materialization")
         path = label_report_path(target_date)
-        if previous_label_sha256 is not None and (not path.exists() or _sha256(_load_json(path)) != previous_label_sha256):
+        if previous_label_sha256 is not None and (not existing_or_gzip_path(path).exists() or _sha256(_load_json(path)) != previous_label_sha256):
             raise ValueError("source_label_predecessor_changed")
         _write_source_label_materialization_unlocked(target_date, reports, inputs=inputs)
 
@@ -27859,15 +27859,17 @@ def _write_source_label_materialization_unlocked(target_date: str, reports: dict
         raise ValueError(",".join(errors))
     path = label_report_path(target_date)
     for previous_path, next_report in ((path, labels), (control_path(target_date), control)):
-        if previous_path.exists():
-            raw = previous_path.read_bytes()
+        stored_path = existing_or_gzip_path(previous_path)
+        if stored_path.exists():
+            raw = stored_path.read_bytes()
             if _sha256(_load_json(previous_path)) != _sha256(next_report):
-                revision = previous_path.parent / "revisions" / f"{previous_path.stem}_{hashlib.sha256(raw).hexdigest()}.json"
+                suffix = ".json.gz" if stored_path.suffix == ".gz" else ".json"
+                revision = previous_path.parent / "revisions" / f"{previous_path.stem}_{hashlib.sha256(raw).hexdigest()}{suffix}"
                 revision.parent.mkdir(parents=True, exist_ok=True, mode=0o750)
                 if revision.exists() and revision.read_bytes() != raw:
                     raise ValueError("immutable_source_label_revision_conflict")
                 if not revision.exists():
-                    with os.fdopen(os.open(revision, os.O_WRONLY | os.O_CREAT | os.O_EXCL, previous_path.stat().st_mode & 0o777), "wb") as stream:
+                    with os.fdopen(os.open(revision, os.O_WRONLY | os.O_CREAT | os.O_EXCL, stored_path.stat().st_mode & 0o777), "wb") as stream:
                         stream.write(raw)
                         stream.flush()
                         os.fsync(stream.fileno())
