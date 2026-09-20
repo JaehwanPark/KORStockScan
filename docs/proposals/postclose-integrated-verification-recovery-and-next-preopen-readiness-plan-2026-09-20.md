@@ -211,3 +211,5 @@ Python compile, shell `bash -n`, affected pytest, `git diff --check`, 문서 lin
 - R5/R6: 기존 지원 입력 producer/evaluator 회귀와 dated reader를 검증한다. 새로운 양수 후보를 강제하거나 과거 결손을 0으로 채우지 않는다. 9/18 봇 관측 미적재는 그대로 유지한다. 서비스 source/env 불일치만 승인 범위에서 정렬하며 timer 시각/주문 인자/수량/guard는 유지한다.
 
 전체 준비 판정은 실행 후 감사 기록의 owner별 receipt와 9/21 loader 검증에 따른다. 이 절의 구현 설명 자체는 A–H 실행 완료·자연 PREOPEN/PID 소비·EV 개선의 증거가 아니다.
+
+최종 실행 증거: [9/20 통합 복구 리뷰의 최종 결과](../audit-reports/2026-09-20-postclose-integrated-recovery-review.md#최종-복구-결과--2026-09-20-152654-kst). A–H 실행/검증 재사용과9/21 carry/fallback 준비는15:26:54 마감했다. R5의 기존 메인 운영 경제성 구조적 OPEN은 분리 보존하며 자연 PREOPEN/PID/완료 손익은 미확인이다.

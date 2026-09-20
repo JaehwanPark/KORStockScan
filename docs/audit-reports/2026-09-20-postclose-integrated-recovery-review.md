@@ -105,3 +105,67 @@ main proxy 모집단1715/대리 비교1710을 비용 차감 운영 paired 표본
 cleanup의 실제 차단은 PREOPEN log22,531,453 bytes의 writer-owned rollover 누적 대기였다. active fd 부재·원본 SHA를 검증하는 기존 run_owned_log_rotation owner로 압축 보존했다. 원 SHA d1e40efcb49eaca02752f244df979c306fbabc0ad2c2c6d7ab3ed4cde4197780, 보관 SHA7e476722f1614cfb124e70819255d50ac864568da27673bcfb4be7f5d1b4d524. PREOPEN 실행이나 process restart 없이 해결했으며 실패 cleanup 이력은 유지한다.
 
 최종 dispatcher 회귀에서 log scanner에 recovery source date가 전달되지 않는 누락을 추가 수리했다. 실제 ErrorDetectionEngine→LogScanner로 옛 파일 제외와 현재 변경 오류 fail, scan state 무변경을 함께 검증했다. 관련49개 회귀 통과. 앞선 detector 실패 receipt는 보존하며 현재 오류를 일괄 무시하지 않는다.
+
+## 최종 복구 결과 — 2026-09-20 15:26:54 KST
+
+**통합 실행·정책 인계·기동 전 준비는 완료했다. 신규 경제성 승격 및 메인 운영 경제성 계약 전체 완료를 뜻하지 않는다.** 원천일9/17, 실제 발행일9/20, 준비 적용일9/21이다. 9/18은 봇 중지에 따른 관측 미적재이며 정상0/휴장 표본으로 추가하지 않았다. 9/20 daily checklist 파일은 없어 미래 실행 owner인9/21 checklist를 사용했다.
+
+최종 코드 `5bd73a8d2`는 feature와 origin/main에 push하고 immutable release `postclose-integrated-recovery-20260920-5bd73a8d2`로 선택했다. 최종 source pin9개 정의/129개 인스턴스를 비활성·PID0 상태로 재검증했다. 기존 거래 시각·주문 인자·수량·guard는 보존했다. 고정 청산 정책3개의 동일 SHA 파일과 기존 전문 서비스의 호환 source root를 유지했다. daemon-reload만 했으며 봇 시작/재시작·주문·조기 PREOPEN·외부 sync는 실행하지 않았다.
+
+### R0–R6 구현·검증 대사
+
+| 묶음 | 판정 | 증거 및 한계 |
+|---|---|---|
+| R0 | 완료 | 선택 release/병행 main 리뷰 기준 분리 worktree. 원 실패와 입력·원 정책 snapshot 보존. 다른 세션 변경 보존 |
+| R1 | 완료 | source/publication/effective·scope·summary/checklist 결속, main/compact scoped rc0. 잘못된 날짜/hash/holdout·미래 freeze 거부 회귀 |
+| R2 | 완료 | producers_completed→strict→main succeeded→DONE. 실제 UUID attempt, run/code/clock/exit/proof 검증. final detector 이후에만 전체 DONE |
+| R3 | 완료 | 독립 widget/machine terminal과 허용된 late enrichment 검증. 퇴역 장후 작업 의존 제거, 설치된21:55 finalizer 인계 |
+| R4 | 완료 | 과거9/17 복구와9/20 발행·9/21 reader 검증. 저장 원천만 사용하며 현 계좌/가격/비용/SELL로 과거를 채우지 않음 |
+| R5 | 통합·분류 수리 완료; 기존 main 경제성 OPEN 보존 | 기존 지원 producer/consumer·양수/holdout/fallback 회귀 통합. main terminal proxy를 비용 후 EV/paired로 오표시하지 않음. ME8 일부·ME9/ME10 운영 모델/자본 검증 미완료는 아래 별도 구조적 OPEN |
+| R6 | 준비 완료 | main/compact·timing·weakness actual loader, widget 기존 정책, episode61개 개별 reader 검사. PREOPEN/PID 자연 소비는 아직 미실행 |
+
+### A–H 실행 및 재사용
+
+| 단계 | 실행/재사용 결과 |
+|---|---|
+| A 원천 | 보존9/17 원천·원장·비용·source-quality preflight 검증. 결손 분모 보존,9/18 미적재 제외 |
+| B 초기 main | economic reference 진단 rc2는 native wrapper의 허용된 비승격 진단. sim post-sell/rising feedback/expanded 원 성공 metric과 코드·입력·결과 SHA를 검증 재사용. auto-expansion/breadth/position fact는 실제 rc0 |
+| C execution | scale-in split, entry split, ADQ, cancel-wait, verbosity, source-quality final, Samsung, low-price actual 실제 rc0. 과거 결손은 결과 상태로 남음 |
+| D main/compact | full main803.72초, paired batch2.50/0.90초, WS129.81초, rising prior2.14초. 모두 rc0. 원 producer run `ca51eb738e934f34b51e1e0cae51d356`의 마지막 verifier 실패는 보존하고 후행만 수리 |
+| E widget | run `27a0ca2cbfd345348aaca262c4e8c62b` succeeded. advisory/auto prefix 검증 재사용, retained study197개→관측 catalog58개. 연구552초/publisher35초, 외부 원천 조회0. 신규 거래 승격0 |
+| F machine | expansion→attribution→weakness→timing 실제 성공. 큰 dependency receipt 결함 수리 후 native closed-loop 재검증, approval/checklist만 재개. 최종 run `ab84a2c94c2b4f13a417cf5e1b5d8ac9` succeeded |
+| G 최종 인계 | 원 main producer 재실행 없이 run `b379f2eead8642f4ba87709506b814b4`로 원 run/code/hash를 연결해 최종 summary/checklist/scoped/strict/parser 재검증. main terminal succeeded. 최종 controller whole_native_chain_done_claimed=true |
+| H 마감 | cleanup 완료 후 full read-only detector run `cron-20260920T152652-577724`,7개 초기화/검사, fail0·warning3·pass4·운영 mutation0. 15:26:54에 finalization/final_detector DONE 기록 |
+
+최종 detector 경고는 과거 intraday panic 보고서 부재/시장 상태 completed_with_warnings, 자신의 부모 finalizer가 아직 detector를 기다리는 정상 `pending_self_audit`, 변경 없는 과거 오류 로그다. 과거 오류가 해결됐다고 주장하지 않는다. 부모 DONE은 detector 반환 후의 로그로 대사했다. 원 main/machine 실패, cleanup/후행 detector 실패와 각 재시도 receipt는 삭제하거나 성공으로 덮지 않았다.
+
+### 준비 정책과 경제성
+
+| 소비자 |9/21 오프라인 검증 결과 |
+|---|---|
+| 메인/compact | source9/17/pub9/20/target9/21 bundle valid. `incumbent_carried` / `compact_incumbent_carry`; promoted scopes0; hard guards unchanged. bundle SHA `5dd839d8058e364b92671985d2387b23f2143079a0dde198ef91e00128ef6821` |
+| widget | 기존9/18 정책을9/21 관측 시점에서 loader가 소비 가능함을 확인. 삼성 KRX 정규/NXT 프리 및 기존 고정 종목.9/21 새 symbol catalog58개는 observation-only |
+| episode 정적 owner | 승인된61개를9/21 임시 정책 payload로 actual reader 검증:58 ready,3개는 비용 재검증 비양수 quarantine. 실제 PREOPEN publish는 하지 않음 |
+| episode 확장 |9/21 정책3개는 `retired_entry_exit_custody_only`, 모두 신규 진입 불가. 정적61개/관측58개와 합쳐 새 진입 정책으로 세지 않음 |
+| timing/weakness | actual dated loader에서9/21 ready, source9/17. timing baseline immediate carry, weakness activation2/release3 유지 |
+| 공통 bootstrap | 승인 incumbent9/18과 operator lock으로 manifest를 메모리에서 검증,477키·rejected0.9/21 canonical PREOPEN env/manifest/verify 및 PID receipt는 생성하지 않음 |
+
+필수 직접 원천11/11, summary `direct_evidence_complete`, **검증된 edge0·새 승격 후보0**이다. economic state는 source_gap5, insufficient_sample1, measured_no_edge1, mixed1, not_applicable3이며 실행 성공과 별개다. rising 연구의 탐색 후보6개/302쌍17일은 승격 후보0과 다른 분모다.
+
+main1715 모집단/1710 비교의 기존 대리값은 양쪽 -0.0054462573%, 대리 Δ0이다. 이를 비용 차감 운영 EV로 쓰지 않고 diagnostic_terminal_proxy에만 보존했다. main의 운영 비용 후 EV·순익/일은 null이다. compact 과거 source 계약 결손과 source/candidate/model holdout 미충족도 승격하지 않는다. 양수 정책·실제 이익·인과적 개선을 새로 확인한 바 없다.
+
+### 잔여 OPEN과 다음 확인
+
+- **구조적/구현 검증 OPEN:** 기존 메인 owner의 ME8 일부 alias·ME9/ME10 operating population/운영 청산·비용·공유 자본 계약. 이번 인계 수리나 모집단 수로 해소를 주장하지 않는다. owner는 [메인 operating evidence 리뷰](2026-09-20-main-machine-operating-evidence-closure-review.md) 및 기존 메인 계획 §14. closure는 지원 producer→동일 자본 CF 운영 계산→독립 검증→정책 소비의 실제 계산·회귀다. 단순 시간 경과로 닫히지 않는다.
+- **과거 원천/지원 범위:** cancel-wait execution census와 entry split의 당시 terminal/cost 결손, 확장 allocator snapshot, microstructure 원천 결속 결손은 과거 복구 가능성과 미래 생성 검증을 구분한다. native report별 blocker/owner/closure를 유지한다. 지원 producer 회귀 통과를 과거 원천 복구로 해석하지 않는다.
+- **자연 OPEN:**9/21 정상07:35 PREOPEN→07:55 main→07:57 episode→07:58 widget의 실제 날짜/hash/guard 및 PID 소비, 독립 자연 표본·완료 비용 손익. 기존 `DirectFamilyPreopenPolicyHandoff`와 family stable owner를 유지한다. 오늘 새 실행 권한이나 조기 실행은 만들지 않는다.
+
+### 검증·원본 증거
+
+최초 영향498개, 이후 원인별 집중 회귀를 수행했다. 마지막 날짜/관측118개 및 실제 dispatcher49개 통과. 서로 겹치므로 합산하지 않는다. Python compile, 변경 shell bash -n, git diff --check, print-only 문서 parser 통과. 합성 fixture는 자연 표본/EV 증거가 아니다.
+
+- [최종 대사 JSON](/home/ubuntu/KORStockScan/tmp/postclose-integrated-recovery-20260920/final-reconciliation-20260920.json): 원 실행/재사용·terminal·검증 attempt·현 정책 및 증거 SHA.
+- [controller](/home/ubuntu/KORStockScan/data/report/postclose_done_controller/postclose_done_controller_2026-09-17.json), [불변 최종 strict](/home/ubuntu/KORStockScan/data/report/threshold_cycle_postclose_verification/attempts/2026-09-17/73ffc93c1c534af1a5a310249ad71fc6.json), [detector](/home/ubuntu/KORStockScan/data/report/error_detection/error_detection_2026-09-17.json).
+- [선택 release actual reader](/home/ubuntu/KORStockScan/tmp/postclose-integrated-recovery-20260920/selected-release-final-dated-readers.json), [widget/episode/bootstrap](/home/ubuntu/KORStockScan/tmp/postclose-integrated-recovery-20260920/startup-offline-readers.json), [서비스129개](/home/ubuntu/KORStockScan/tmp/postclose-integrated-recovery-20260920/service-binding-5bd73a8d2.json).
+
+초기 실행 중 기록은 당시 상태를 보존한 것이며 현재 실행 종결은 이 절과 불변 receipt를 기준으로 판단한다. **기동 전 준비 완료와 전체 경제성 보완 완료를 구분한다.**
