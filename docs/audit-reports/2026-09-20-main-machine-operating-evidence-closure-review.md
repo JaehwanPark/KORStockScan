@@ -169,3 +169,5 @@ ME8의 과거 미대사 2건을 찾았다. 9/14 `187660`의 paired trace `analyz
 메인 §15의 conditional capital envelope, prior cancel model scope/hash/date, native 잔여 미접촉/sequence, cash reserve→holding→확정 cancel/exit 보존, sequence 공통 자본/holdout 경계를 재리뷰했다. 이번 감시는 모델/evaluator/publisher를 변경하지 않는다. 직전 708개 및 최종87개(중복) 검증과 자연 f7e6be607be944b8a45fa8f5775494a8의 경제성 결과는 그대로 재사용할 대상이며 새로운 자연 검증으로 합산하지 않는다. 기존 별도 운영 계약 및 EV null을 이 감시 구현으로 해소했다고 주장하지 않는다.
 
 후속 재리뷰에서 canonical 작업본의 정상 `ai_confirmed_terminal_no_budget` 보완을 확인했다. 실제 producer의 알려진 terminal_reason/source_stage 두 조합과 주문 금지 세 필드가 맞을 때만 final guard로 처리하는 변경을 통합했다. 나머지 canonical 차이는 덮어쓰지 않았다. 영향 회귀 **283개 PASS**, compile·bash -n·문서 parser·diff 검증 PASS. 증거: `tmp/submission-bottleneck-review-20260920/implementation-review.json`, `tests.log`. 합성 회귀이며 실제 Telegram 발송/자연 수익 증거는 아니다.
+
+배포 뒤 최종 인계 리뷰에서 기술 감시의 도입일 계약을 추가 보완했다. 새 submission monitor 산출물은 9/21부터 필수이며 9/17 복구에서 존재를 요구하지 않는다. 설치 전 missing을 새 구조 결함으로 오인하지 않되, 9/21 운영 중 missing/stale/통보 실패는 기존 error detector가 실패로 표시한다. 날짜 경계 회귀를 추가하고 후속 불변 배포본으로 반영한다.

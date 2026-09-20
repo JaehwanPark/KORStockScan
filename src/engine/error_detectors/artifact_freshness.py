@@ -298,6 +298,7 @@ ARTIFACT_REGISTRY: list[dict[str, Any]] = [
     },
     {
         "id": "submission_bottleneck_monitor",
+        "first_required_date": "2026-09-21",
         "path_template": "data/report/buy_funnel_sentinel/submission_bottleneck_monitor_{date}.json",
         "max_staleness_sec": 600,
         "critical": True,
@@ -691,6 +692,9 @@ class ArtifactFreshnessDetector(BaseDetector):
 
         for artifact in ARTIFACT_REGISTRY:
             aid = artifact["id"]
+            if today < artifact.get("first_required_date", "0001-01-01"):
+                details[f"{aid}_status"] = "not_required_before_introduction"
+                continue
             artifact_day = today
             artifact_now_total = now_total
             artifact_past_source_day = past_source_day

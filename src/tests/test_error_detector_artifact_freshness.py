@@ -1417,3 +1417,20 @@ def test_historical_bootstrap_uses_prepared_day_without_early_preopen(tmp_path, 
     assert result.severity == 'fail'
     monkeypatch.delenv('POSTCLOSE_PREPARED_EFFECTIVE_DATE')
     assert detector.check().severity == 'fail'
+
+
+def test_submission_monitor_does_not_require_artifacts_before_installation(tmp_path, monkeypatch):
+    import src.engine.error_detectors.artifact_freshness as mod
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 9, 21, 10, 0)
+    monkeypatch.setattr(mod, 'datetime', Clock)
+    monkeypatch.setattr(mod, 'PROJECT_ROOT', tmp_path)
+    monkeypatch.setattr(mod, 'ARTIFACT_REGISTRY', [r for r in ARTIFACT_REGISTRY if r['id']=='submission_bottleneck_monitor'])
+    monkeypatch.setattr(mod, 'load_installed_crontab', lambda: '')
+    detector = mod.ArtifactFreshnessDetector(dry_run=True)
+    detector.postclose_source_date = '2026-09-17'
+    assert detector.check().details['submission_bottleneck_monitor_status'] == 'not_required_before_introduction'
+    detector.postclose_source_date = '2026-09-21'
+    assert detector.check().severity == 'fail'  # future normal producer must exist
