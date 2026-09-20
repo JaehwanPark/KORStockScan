@@ -425,3 +425,41 @@ def test_postclose_recovery_rejects_future_and_prebaseline_dates():
         ErrorDetectionEngine(
             mode="health_only", postclose_source_date=today.isoformat()
         )
+
+
+def test_recovery_dispatcher_passes_scope_to_real_log_scanner(tmp_path, monkeypatch):
+    import os
+    import time
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+    import src.engine.error_detector as engine_module
+    import src.engine.error_detectors.log_scanner as scanner_module
+
+    class QuietDetector(BaseDetector):
+        category = "system"
+
+        def check(self):
+            return DetectionResult(self.id, self.category, "pass", "checked")
+
+    registered = {
+        key: type("Quiet" + key, (QuietDetector,), {"id": key})
+        for key in engine_module.REQUIRED_DETECTOR_IDS
+    }
+    registered["log_scanner"] = scanner_module.LogScanner
+    monkeypatch.setattr(engine_module, "get_registered_detectors", lambda: registered)
+    log = tmp_path / "owner_error.log"
+    log.write_text("[ERROR] execution failed\n" * 1000)
+    monkeypatch.setattr(scanner_module, "_get_error_log_files", lambda: [log])
+    monkeypatch.setattr(scanner_module, "SCAN_STATE_PATH", tmp_path / "state.json")
+    os.utime(log, (time.time() - 3 * 86400, time.time() - 3 * 86400))
+    source = (datetime.now(ZoneInfo("Asia/Seoul")).date() - timedelta(days=3)).isoformat()
+    engine = ErrorDetectionEngine(postclose_source_date=source)
+    result = next(r for r in engine.run_all() if r.detector_id == "log_scanner")
+    assert result.severity == "warning"
+    assert log.name in result.details["historical_unchanged_logs_not_current_burst"]
+    assert result.details["postclose_source_date"] == source
+    os.utime(log, None)
+    result = next(r for r in engine.run_all() if r.detector_id == "log_scanner")
+    assert result.severity == "fail"
+    assert result.details["file_new_errors"][log.name] == 1000
+    assert not scanner_module.SCAN_STATE_PATH.exists()

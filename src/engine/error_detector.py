@@ -112,6 +112,7 @@ class ErrorDetectionEngine:
                 if self.postclose_source_date and detector_id in {
                     "cron_completion",
                     "artifact_freshness",
+                    "log_scanner",
                 }:
                     detector.postclose_source_date = self.postclose_source_date
                 self.detectors.append(detector)

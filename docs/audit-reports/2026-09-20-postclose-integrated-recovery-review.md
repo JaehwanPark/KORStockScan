@@ -103,3 +103,5 @@ main proxy 모집단1715/대리 비교1710을 비용 차감 운영 paired 표본
 복구 final detector가 과거9/17에 존재하지 않은 새 bootstrap 파일을 요구했다. 명시 prepared9/21의 정상 PREOPEN 시간창으로 검사하며 미래는 future_due, 이미 지난 준비일의 필수 파일 누락은 계속 실패한다. 조기 PREOPEN 파일을 만들지 않는다. 마지막 변경이9/16~17인 기존 error 로그를 현재 폭증4214건으로 재집계하던 recovery 관측을 분리했다. 오래된 로그는 원본/크기/mtime를 보존한 historical evidence warning이고, 현재 변경 로그의 오류 burst와 모든 일반 모드 검사는 그대로 유지한다. 읽기 전용 recovery는 scan state도 갱신하지 않는다. 관련118개 회귀 통과.
 
 cleanup의 실제 차단은 PREOPEN log22,531,453 bytes의 writer-owned rollover 누적 대기였다. active fd 부재·원본 SHA를 검증하는 기존 run_owned_log_rotation owner로 압축 보존했다. 원 SHA d1e40efcb49eaca02752f244df979c306fbabc0ad2c2c6d7ab3ed4cde4197780, 보관 SHA7e476722f1614cfb124e70819255d50ac864568da27673bcfb4be7f5d1b4d524. PREOPEN 실행이나 process restart 없이 해결했으며 실패 cleanup 이력은 유지한다.
+
+최종 dispatcher 회귀에서 log scanner에 recovery source date가 전달되지 않는 누락을 추가 수리했다. 실제 ErrorDetectionEngine→LogScanner로 옛 파일 제외와 현재 변경 오류 fail, scan state 무변경을 함께 검증했다. 관련49개 회귀 통과. 앞선 detector 실패 receipt는 보존하며 현재 오류를 일괄 무시하지 않는다.
