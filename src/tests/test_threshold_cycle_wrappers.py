@@ -157,6 +157,24 @@ def test_main_retry_adoption_preserves_origin_and_rejects_changed_bytes(tmp_path
     result=subprocess.run(args,input=body,text=True,capture_output=True,env=env)
     assert result.returncode==0,result.stderr
     assert json.loads(path.read_text())["reused_steps_receipt"]["origin_run_id"]=="original"
+    retry = json.loads(path.read_text())
+    retry['status'] = 'failed'
+    path.write_text(json.dumps(retry))
+    low = 'src.engine.monitoring.low_price_two_leg_expanded_candidate_research'
+    inherited = dict(receipt, origin_run_id='retry', origin_code_commit='b'*40,
+                     inherited_receipt_sha256=hashlib.sha256(proof.read_bytes()).hexdigest(),
+                     reused_modules=modules+[low], command_receipts=receipt['command_receipts']+[
+                         dict(producer_module=low,run_id='retry',exit_code=0,target_date=day,code_commit='b'*40,measurement_complete=True)])
+    next_proof = tmp_path/'reuse-next.json'; next_proof.write_text(json.dumps(inherited))
+    next_env = dict(env, POSTCLOSE_REUSE_RECEIPT=str(next_proof),POSTCLOSE_RUN_ID='third')
+    result=subprocess.run(args,input=body,text=True,capture_output=True,env=next_env)
+    assert result.returncode == 0, result.stderr
+    function = 'verified_reused_module() {' + _text('deploy/run_threshold_cycle_postclose.sh').split('verified_reused_module() {',1)[1].split('reusable_completed_artifact() {',1)[0]
+    check_env=dict(os.environ, VENV_PY=sys.executable, STATUS_FILE=str(path))
+    command=function+'\nverified_reused_module '+low
+    assert subprocess.run(['bash','-c',command],env=check_env,capture_output=True).returncode == 0
+    next_proof.write_text('{}')
+    assert subprocess.run(['bash','-c',command],env=check_env,capture_output=True).returncode == 2
     path.write_text(json.dumps(origin));source.write_text('{"value":2}')
     result=subprocess.run(args,input=body,text=True,capture_output=True,env=env)
     assert result.returncode!=0 and json.loads(path.read_text())==origin

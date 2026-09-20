@@ -239,3 +239,33 @@ def test_recovery_publication_preserves_source_and_rebinds_apply_day(tmp_path):
     with pytest.raises(ValueError):
         expansion.build_policy(source_date=date(2026, 9, 15),
             publication_date=date(2026, 9, 14), report_dir=reports, policy_dir=policies)
+
+
+def test_isolated_partial_source_emits_disabled_policy_without_erasing_gap(tmp_path):
+    from src.tests.test_low_price_two_leg_expanded_candidate_research import _notification_report
+    report = _notification_report()
+    report['status'] = 'partial_source_quality'
+    symbol = next(iter(report['source_meta']))
+    report['source_meta'].pop(symbol)
+    report['source_quarantine'][symbol] = 'historical_retained_source_missing'
+    report['eligible_source_symbol_count'] -= 1
+    report['quarantined_source_symbol_count'] += 1
+    directory = tmp_path / 'reports'
+    directory.mkdir()
+    source = directory / 'low_price_two_leg_expanded_candidate_research_2026-08-24.json'
+    source.write_text(json.dumps(report))
+    payload = expansion.build_policy(source_date=date(2026, 8, 24), report_dir=directory,
+                                     publication_date=date(2026, 9, 20), policy_dir=tmp_path / 'policies')
+    assert payload['effective_date'] == '2026-09-21'
+    assert payload['newly_promoted_profile_ids'] == [] and payload['profiles'] == {}
+    assert payload['allowed_runtime_apply'] is False
+    assert payload['source_disposition'] == 'isolated_source_gap_incumbent_or_disabled_only'
+    policy_dir = tmp_path / 'policies'
+    policy_dir.mkdir()
+    expansion.policy_path(date(2026, 9, 21), policy_dir=policy_dir).write_text(json.dumps(payload))
+    assert expansion.load_policy(date(2026, 9, 21), policy_dir=policy_dir)['allowed_runtime_apply'] is False
+    report['quarantined_source_symbol_count'] += 1
+    source.write_text(json.dumps(report))
+    with pytest.raises(ValueError, match='source_contract_invalid'):
+        expansion.build_policy(source_date=date(2026, 8, 24), report_dir=directory,
+                               publication_date=date(2026, 9, 20), policy_dir=tmp_path / 'policies')

@@ -40,3 +40,9 @@ widget/machine 독립 wrapper의 exact-date terminal/source hash를 최종 summa
 현재 main/machine/최종 인계와 준비 종결은 진행 중이다. 위 완료된 부분을 전체 terminal 또는 EV 개선으로 해석하지 않는다.
 
 후행 machine writer가 widget 연구/적용 보고서를 정상 보강하는 경우, machine 시작 시 원 widget terminal hash를 고정하고 완료 시 native closed-loop 재구성·출력 hash를 확인한다. widget 원 run/receipt는 덮지 않으며 최종 인계는 명시된 두 산출물의 검증된 변경만 수용한다. 임의 후속 drift·advisory/auto 원천 변경·불완전 machine 결과는 계속 차단한다. 관련 handoff/episode/bootstrap38개 회귀를 추가 확인했다.
+
+## 기동 경로 추가 결함과 부분 원천 인계
+
+삭제된 과거 release를 참조하는 고정 청산 정책 경로를 확인했다. 승인된 SHA `aa2d4794… / 1536dfab… / d455951e…`와 동일한 tracked JSON을 검증하고 경로만 수정했다. 관련 서비스 정의9개·인스턴스129개가 비활성 상태이며 나머지 env/수량/guard는 변하지 않았다. 저가주 live/preflight 템플릿2개도 삭제된 source root를 참조했다. 이전 검토 commit5dcf237ad와 해당 runtime/apply/wrapper 코드가 동일함을 검증해 경로를 복구했고122개 인스턴스의 주문 인자 보존을 대사했다. 최종134개 기동 source/policy 경로 검사에서 missing0이다. 증거 `fixed-policy-path-repair-installed.json`, `low-price-template-source-restored.json`, `all-startup-source-path-audit-after.json`은 기존 실행 증거 폴더에 있다. 서비스 시작/주문은0이다.
+
+확장 연구의 `partial_source_quality`는 producer에서 격리된 분모를 보존하는 정상 완료 형식이지만 publisher가 전부 거부했다. 원천 모집단·격리·비용 계약 검증을 통과하고 신규 추천0인 경우에만 기존 정책/disabled 인계를 허용하며 source gap 표기를 보존한다. 부분 원천으로 새 후보를 승격하지 않는다. 재시도는 원 성공 native metric·산출물/코드 hash·입력 generation을 보존한 prefix 인계로 완료된 확장 연구를 다시 계산하지 않을 수 있다. 이전 재사용 원장은 hash로 연결하며 새 run/commit으로 원 metric을 위조하지 않는다. 관련 회귀21개 통과.

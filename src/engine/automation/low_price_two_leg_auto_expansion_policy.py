@@ -197,12 +197,24 @@ def build_policy(
         report = read_report(report_path)
     except (OSError, ValueError) as exc:
         raise ValueError("episode_auto_expansion_source_unreadable") from exc
+    isolated_partial = False
+    if isinstance(report, dict) and report.get("status") == "partial_source_quality":
+        from src.engine.monitoring.low_price_two_leg_expanded_candidate_research import CandidateRecommendationNotifier
+        # Preserve the producer's lossless quarantine contract. Partial coverage
+        # permits incumbent/disabled handoff only, never a new promotion.
+        isolated_partial = bool(
+            report.get("source_quarantine")
+            and report.get("eligible_source_symbol_count", 0) > 0
+            and report.get("recommendations") == []
+            and report.get("recommendation_count") == 0
+            and CandidateRecommendationNotifier._valid_report(report)
+        )
     if (
         not isinstance(report, dict)
         or report.get("schema") != REPORT_SCHEMA
         or report.get("target_date") != source_date.isoformat()
-        or report.get("status")
-        not in {"recommendations_ready", "no_qualified_candidate"}
+        or (report.get("status") not in {"recommendations_ready", "no_qualified_candidate"}
+            and not isolated_partial)
         or report.get("source_quality_status", "PASS") != "PASS"
         or report.get("runtime_effect") is not False
         or report.get("allowed_runtime_apply") is not False
@@ -313,6 +325,9 @@ def build_policy(
         ),
         "authority": AUTHORITY,
         "source_date": source_date.isoformat(),
+        **({"source_disposition": "isolated_source_gap_incumbent_or_disabled_only",
+            "source_quarantined_symbol_count": report["quarantined_source_symbol_count"]}
+           if isolated_partial else {}),
         **({"publication_date": publication.isoformat()} if publication_date else {}),
         "effective_date": effective_date.isoformat(),
         "generated_at_kst": datetime.now(KST).isoformat(timespec="seconds"),

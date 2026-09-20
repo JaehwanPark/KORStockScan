@@ -328,12 +328,19 @@ if status == "running" and os.environ.get("POSTCLOSE_REUSE_RECEIPT"):
     assert receipt["origin_run_id"] == payload.get("run_id")
     assert receipt["origin_code_commit"] == payload.get("code_commit")
     assert payload.get("status") == "failed"
-    assert set(receipt["reused_modules"]) == {"src.engine.sniper_post_sell_feedback", "src.engine.monitoring.rising_missed_intraday_feedback"}
+    allowed = {"src.engine.sniper_post_sell_feedback", "src.engine.monitoring.rising_missed_intraday_feedback", "src.engine.monitoring.low_price_two_leg_expanded_candidate_research"}
+    assert receipt["reused_modules"] and set(receipt["reused_modules"]) <= allowed
+    inherited = []
+    if receipt.get("inherited_receipt_sha256"):
+        prior = payload.get("reused_steps_receipt") or {}
+        prior_bytes = Path(prior["path"]).read_bytes()
+        assert hashlib.sha256(prior_bytes).hexdigest() == prior["sha256"] == receipt["inherited_receipt_sha256"]
+        inherited = json.loads(prior_bytes)["command_receipts"]
     assert receipt["artifacts"] and receipt["code_dependencies"] and receipt["source_generations"]
     for metric in receipt["command_receipts"]:
-        assert metric["run_id"] == receipt["origin_run_id"]
+        assert metric in inherited or (metric["run_id"] == receipt["origin_run_id"] and metric["code_commit"] == receipt["origin_code_commit"])
         assert type(metric["exit_code"]) is int and metric["exit_code"] == 0
-        assert metric["target_date"] == target_date and metric["code_commit"] == receipt["origin_code_commit"]
+        assert metric["target_date"] == target_date
         assert metric["measurement_complete"] is True
     assert {m["producer_module"] for m in receipt["command_receipts"]} == set(receipt["reused_modules"])
     for row in receipt["artifacts"] + receipt["code_dependencies"]:
@@ -762,6 +769,29 @@ started_at="$(TZ=Asia/Seoul date +%FT%T%z)"
 write_postclose_status running started 0 0
 emit_postclose_marker "[START] threshold-cycle postclose target_date=$TARGET_DATE recovery_reuse=$POSTCLOSE_RECOVERY_REUSE_MODE started_at=$started_at"
 stop_postclose_bot_if_requested
+
+verified_reused_module() {
+  local reuse_rc=0
+  "$VENV_PY" - "$STATUS_FILE" "$1" <<'PYREUSE' || reuse_rc=$?
+import hashlib, json, sys
+from pathlib import Path
+status = json.loads(Path(sys.argv[1]).read_text())
+binding = status.get("reused_steps_receipt") or {}
+if not binding:
+    raise SystemExit(1)
+try:
+    raw = Path(binding["path"]).read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == binding["sha256"]
+    modules = json.loads(raw)["reused_modules"]
+except (OSError, ValueError, KeyError, AssertionError):
+    print("adopted_reuse_receipt_changed", file=sys.stderr)
+    raise SystemExit(2)
+raise SystemExit(0 if sys.argv[2] in modules else 1)
+PYREUSE
+  if [ "$reuse_rc" -gt 1 ]; then exit "$reuse_rc"; fi
+  return "$reuse_rc"
+}
+
 
 reusable_completed_artifact() {
   local json_path="$1"
@@ -1482,12 +1512,12 @@ fi
 if [ "$RUN_LOW_PRICE_TWO_LEG_CANDIDATE_RECOMMENDATION" = "true" ] || [ "$RUN_LOW_PRICE_TWO_LEG_CANDIDATE_RECOMMENDATION" = "1" ]; then
   candidate_recommendation_json="$PROJECT_DIR/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_${TARGET_DATE}.json"
   candidate_recommendation_md="$PROJECT_DIR/data/report/low_price_two_leg_expanded_candidate_research/low_price_two_leg_expanded_candidate_research_${TARGET_DATE}.md"
-  if reusable_completed_artifact \
+  if verified_reused_module "src.engine.monitoring.low_price_two_leg_expanded_candidate_research" || { reusable_completed_artifact \
     "$candidate_recommendation_json" \
     "$candidate_recommendation_md" \
     "low_price_two_leg_expanded_candidate_research" \
     "$PROJECT_DIR/src/engine/monitoring/low_price_two_leg_expanded_candidate_research.py" \
-    && low_price_candidate_recommendation_reusable "$candidate_recommendation_json"
+    && low_price_candidate_recommendation_reusable "$candidate_recommendation_json"; }
   then
     echo "[threshold-cycle] reuse completed low-price machine candidate recommendation date=$TARGET_DATE"
   else
