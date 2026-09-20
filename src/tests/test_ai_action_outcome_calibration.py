@@ -5047,3 +5047,20 @@ def test_invalid_source_repricing_preserves_census_without_reading_pipeline(monk
     result, counts = calibration.relabel_hierarchy_source_rows([row], tmp_path)
     assert result == [row]
     assert counts['source_contract_invalid_no_reprice'] == 1
+
+
+def test_common_refinement_exact_ai_trace_alias_uses_natural_machine_boundary():
+    import copy
+    rows, receipt = _natural_refinement_fixture()
+    natural = rows[0]
+    natural['ai_decision_trace_id'] = 'analyze_target:exact-alias'
+    paired = copy.deepcopy(natural)
+    paired['decision_trace_id'] = natural['ai_decision_trace_id']
+    paired['comparison']['entry_path_target_pct'] += .1
+    normalized, contract = calibration._common_refinement_population(
+        [paired], rows, target_date='2026-09-15', source_receipt=receipt, paired_contract={})
+    assert len(normalized) == len(rows)
+    assert all(r['refinement_source_lane'] == 'natural' for r in normalized)
+    assert contract['row_exclusion_reason_counts']['paired_alias_of_natural_machine_attempt'] == 1
+    assert next(r for r in normalized if r['decision_trace_id'] == natural['decision_trace_id'])['comparison'] == natural['comparison']
+    assert contract['input_row_disposition_complete'] is True

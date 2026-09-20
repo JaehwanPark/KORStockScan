@@ -2496,6 +2496,17 @@ def _common_refinement_population(
                 micro_recovery_observed=isinstance(evidence.get("micro_recovery_observation"), dict),
             )
             accepted[key] = row
+    # The provider trace is an explicit alias of the pre-AI machine attempt,
+    # not a second opportunity. Prefer the exact natural machine boundary;
+    # never transplant the paired SELL/AI result onto its operating path.
+    natural_aliases = {(r.get("source_date"), r.get("stock_code"), r.get("ai_decision_trace_id"))
+        for r in accepted.values() if r.get("refinement_source_lane") == "natural"
+        and r.get("ai_decision_trace_id")}
+    for key, row in list(accepted.items()):
+        if (row.get("refinement_source_lane") == "paired"
+            and (row["source_date"], row["stock_code"], row["decision_trace_id"]) in natural_aliases):
+            del accepted[key]
+            excluded["paired_alias_of_natural_machine_attempt"] += 1
     result = sorted(accepted.values(), key=lambda r: (r["source_date"], r["decision_trace_id"]))
     sequence_groups = defaultdict(list)
     for row in result:
