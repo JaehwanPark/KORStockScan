@@ -77,3 +77,9 @@ widget/machine 독립 wrapper의 exact-date terminal/source hash를 최종 summa
 - ADQ는 기존 라벨을 `.json.gz`에서 정상 읽은 뒤, 저장 CAS가 `.json` 존재만 검사하여 `source_label_predecessor_changed`로 실패했다. 실제 동시 writer나 라벨 변조의 증거는 없고, gzip 단독 세대를 잘못 제외한 결함이다.
 - logical JSON의 기존 plain/gzip 동등성·충돌 검사를 유지하며 CAS와 원 revision 저장을 실제 보관 경로에 맞췄다. 원 gzip 바이트를 보존하고 기존 generation-safe writer로 새 세대를 발행한다.
 - source-label/migration/CAS 회귀6개, native postclose CLI와 gzip 입력 회귀2개를 확인한다. 기존 label as-of와 새 재평가를 분리하며 원천 또는 완료 손익을 추정하지 않는다.
+
+## 장전 source 선택 및 pipeline wrapper 추가 수리
+
+- PREOPEN rebound reader는 직전 영업일만 추측하지 않고 이미 발행된 exact-date timing policy의 검증된 source 날짜를 사용한다. recovery source9/17→effective9/21 baseline을 제어 입력으로 확인했고 실제 조기 PREOPEN은 실행하지 않았다. timing/rebound 회귀93개 통과.
+- main의 pipeline verbosity 입력 배열에 정의되지 않은 RAW_SOURCE 참조가 남아 있었다. exact-date pipeline plain/gzip 경로를 지역 변수로 결정한다. wrapper 회귀13개와 bash syntax 통과.
+- ADQ source-label 및 cancel-wait producer는 12c20644f 실행에서 rc0로 통과했다. 이후 wrapper 실패는 별도 원 run에 보존하며 실행 terminal 완료로 표시하지 않는다.

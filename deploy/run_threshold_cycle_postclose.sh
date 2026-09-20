@@ -1782,8 +1782,12 @@ fi
 if [ "$RUN_PIPELINE_EVENT_VERBOSITY_REPORT" = "true" ] || [ "$RUN_PIPELINE_EVENT_VERBOSITY_REPORT" = "1" ]; then
   pipeline_verbosity_json="$PROJECT_DIR/data/report/pipeline_event_verbosity/pipeline_event_verbosity_${TARGET_DATE}.json"
   pipeline_verbosity_md="$PROJECT_DIR/data/report/pipeline_event_verbosity/pipeline_event_verbosity_${TARGET_DATE}.md"
+  pipeline_raw_source="$PROJECT_DIR/data/pipeline_events/pipeline_events_${TARGET_DATE}.jsonl"
+  if [ ! -f "$pipeline_raw_source" ] && [ -f "${pipeline_raw_source}.gz" ]; then
+    pipeline_raw_source="${pipeline_raw_source}.gz"
+  fi
   pipeline_verbosity_inputs=(
-    "$RAW_SOURCE"
+    "$pipeline_raw_source"
     "$PROJECT_DIR/src/engine/pipeline_event_verbosity_report.py"
     "$PROJECT_DIR/src/engine/pipeline_event_summary.py"
     "$PROJECT_DIR/src/utils/pipeline_event_logger.py"

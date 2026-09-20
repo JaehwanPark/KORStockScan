@@ -199,3 +199,19 @@ if true; then exit {exit_code}; fi
         result = subprocess.run(['bash', '-c', body], capture_output=True, text=True)
         assert result.returncode == exit_code
         assert result.stdout == expected
+
+
+def test_verbosity_source_binding_is_defined_for_plain_and_compressed(tmp_path):
+    import os
+    import subprocess
+    script = _text('deploy/run_threshold_cycle_postclose.sh')
+    block = script[script.index('  pipeline_raw_source='):script.index('  pipeline_producer_summary=')]
+    folder = tmp_path/'data/pipeline_events'; folder.mkdir(parents=True)
+    source = folder/'pipeline_events_2026-09-17.jsonl'
+    for compressed in (False, True):
+        path = source.with_suffix('.jsonl.gz') if compressed else source
+        path.write_bytes(b'fixture')
+        result = subprocess.run(['bash','-c', 'set -u\n' + block + '\nprintf "%s" "${pipeline_verbosity_inputs[0]}"'],
+                                env={**os.environ,'PROJECT_DIR':str(tmp_path),'TARGET_DATE':'2026-09-17'}, capture_output=True,text=True)
+        assert result.returncode == 0 and result.stdout == str(path)
+        path.unlink()

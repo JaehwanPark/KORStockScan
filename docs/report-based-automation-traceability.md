@@ -1058,3 +1058,5 @@ Verifier의 micro diagnostic warning은 required workorder ID와 issues0·runtim
 배포된 source binding은 서비스별 ExecStart/조건·cwd·PYTHONPATH·PROJECT_DIR/PYTHON_BIN만 정렬한다. 거래 시각·주문 인자·수량·고정 안전 정책은 보존한다. 21:55 finalizer만 추가 설치하며 퇴역 controller/tuning/archive cron은 복원하지 않는다. daemon-reload 자체는 서비스 시작 승인이 아니다.
 
 고정 청산 JSON을 참조하던 삭제된 release 경로는 승인 SHA와 byte가 같은 보존 파일 경로로만 복구한다. 저가주 template의 삭제된 source root도 기존 runtime 코드·주문 인자가 동일한 reviewed successor로 교체한다. 과거 연구의 격리된 부분 원천은 신규 승격 권한을 주지 않으며, 검증된 기존 정책 또는 disabled 처분을 명시한다.
+
+복구 시 pipeline verbosity는 해당 원천일의 plain/gzip 경로를 직접 선택한다. timing PREOPEN은 검증된 exact-date 준비 정책에 결속된 source를 소비하며 직전 영업일 파일로 임의 대체하지 않는다.

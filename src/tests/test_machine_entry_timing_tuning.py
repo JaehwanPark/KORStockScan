@@ -2181,6 +2181,11 @@ def test_historical_timing_recovery_publishes_bound_baseline_and_consumer(tmp_pa
     stored = json.loads(paths[2].read_text())
     loaded, reason = load_applied_policy(target_date=date(2026, 9, 21), policy_dir=tmp_path/'policy', source_report_dir=tmp_path/'report')
     assert reason == 'ready' and loaded == stored
+    from src.engine.automation.machine_entry_timing_tuning import apply_rebound_preopen
+    result = apply_rebound_preopen(target_date=date(2026,9,21), now=datetime.fromisoformat('2026-09-21T07:40:00+09:00'),
+                                  write=False, report_dir=tmp_path/'report', timing_policy_dir=tmp_path/'policy', policy_dir=tmp_path/'rebound')
+    assert result['status'] == 'baseline_no_candidate' and result['source_date'] == str(source)
+    assert not (tmp_path/'rebound').exists()
     assert not validate_applied_policy({**stored, 'publication_date':'2026-09-21'}, target_date=date(2026, 9, 21))[0]
     with pytest.raises(ValueError):
         build_report(target_date=source, publication_date=date(2026, 9, 20), effective_date=date(2026, 9, 18))

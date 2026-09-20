@@ -3116,6 +3116,7 @@ def apply_rebound_preopen(
     low_price_candidate_dir: Path = LOW_PRICE_CANDIDATE_DIR,
     samsung_candidate_dir: Path = SAMSUNG_CANDIDATE_DIR,
     widget_policy_dir: Path = WIDGET_POLICY_DIR,
+    timing_policy_dir: Path = DEFAULT_POLICY_DIR,
 ) -> dict[str, Any]:
     """Revalidate the fixed experiment before issuing an exact-date receipt.
 
@@ -3166,6 +3167,16 @@ def apply_rebound_preopen(
             _atomic_write_json(path, result)
         return result
 
+    # A reviewed recovery publication can bind an older completed source.
+    # Resolve it through the actual timing reader, never a latest-file guess.
+    if policy_path(target_date, policy_dir=timing_policy_dir).exists():
+        from src.trading.config.machine_entry_timing_policy import load_applied_policy
+        staged, reason = load_applied_policy(
+            target_date=target_date, policy_dir=timing_policy_dir, source_report_dir=report_dir
+        )
+        if staged is None:
+            return baseline("blocked_source_report", "staged_timing_policy_invalid:" + reason)
+        source_date = date.fromisoformat(staged["source_date"])
     report_path = (
         report_dir / f"machine_entry_timing_tuning_{source_date.isoformat()}.json"
     )
@@ -3204,6 +3215,7 @@ def apply_rebound_preopen(
             low_price_candidate_dir=low_price_candidate_dir,
             samsung_candidate_dir=samsung_candidate_dir,
             widget_policy_dir=widget_policy_dir,
+            effective_date=target_date,
         )
         sources, rejected = _source_reports(
             target_date=source_date, source_dir=source_dir
