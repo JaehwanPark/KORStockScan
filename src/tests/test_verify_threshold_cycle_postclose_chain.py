@@ -174,3 +174,37 @@ def test_required_summary_handoff_rejects_task_projection_drift(
 
     assert report["status"] == "fail"
     assert "direct_checklist_task_projection_mismatch" in report["issues"]
+
+
+def test_main_mechanistic_scope_rejects_compact_only_report(
+    monkeypatch, tmp_path
+):
+    from src.engine.scalping import ai_action_outcome_calibration as calibration
+
+    target = "2026-09-17"
+    data = tmp_path / "data"
+    report_root = data / "report"
+    monkeypatch.setattr(mod, "DATA_DIR", data)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_root)
+    source = calibration._with_artifact_content_sha256(
+        {
+            "schema": calibration.SCHEMA,
+            "target_date": target,
+            "report_scope": "compact_auxiliary_only",
+            "noncompact_sections_refreshed": False,
+            "machine_full_evaluation": {},
+        }
+    )
+    _write(
+        report_root
+        / "ai_decision_action_outcome_calibration"
+        / f"ai_decision_action_outcome_calibration_{target}.json",
+        source,
+    )
+
+    result = mod._main_mechanistic_scope(target)
+
+    assert result["status"] == "fail"
+    assert "main_machine_report_scope_invalid" in result["issues"]
+    assert "main_machine_noncompact_refresh_missing" in result["issues"]
+    assert "main_machine_future_policy_missing" in result["issues"]

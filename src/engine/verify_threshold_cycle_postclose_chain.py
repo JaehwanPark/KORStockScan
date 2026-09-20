@@ -308,6 +308,23 @@ def _main_mechanistic_scope(target_date: str) -> dict[str, Any]:
     if source.get("noncompact_sections_refreshed") is not True:
         issues.append("main_machine_noncompact_refresh_missing")
     terminal = source.get("machine_full_evaluation") or {}
+    refinement = source.get("mechanistic_entry_refinement") or {}
+    source_contract = refinement.get("source_contract") or {}
+    hierarchy = source.get("hierarchical_entry_quality") or {}
+    if (
+        refinement.get("schema") != calibration.MECHANISTIC_REFINEMENT_SCHEMA
+        or refinement.get("target_date") != target_date
+        or source_contract.get("schema")
+        != "machine_common_refinement_population_v1"
+        or terminal.get("full_population_count")
+        != source_contract.get("accepted_unique_trace_count")
+    ):
+        issues.append("main_machine_refinement_contract_invalid")
+    if (
+        not isinstance(hierarchy.get("runtime_extensions_by_scope"), dict)
+        or not isinstance(hierarchy.get("machine_decision_case_table"), dict)
+    ):
+        issues.append("main_machine_hierarchy_or_case_table_missing")
     if terminal.get("state") not in {
         "source_gap",
         "insufficient_mature_sample",
@@ -329,9 +346,21 @@ def _main_mechanistic_scope(target_date: str) -> dict[str, Any]:
         _, bundle = matching[-1]
         machine_source = bundle.get("machine_evaluation_source") or {}
         try:
-            policy.validate(bundle, target_date=str(bundle.get("target_date") or ""))
-        except ValueError:
+            loaded = policy.load(
+                data_root=DATA_DIR,
+                target_date=str(bundle.get("target_date") or ""),
+            )
+            if not loaded or loaded.get("bundle_sha256") != bundle.get(
+                "bundle_sha256"
+            ):
+                raise ValueError("main_machine_loaded_bundle_mismatch")
+        except (OSError, ValueError):
             issues.append("main_machine_future_policy_invalid")
+        if (
+            machine_source.get("report_scope") != "main_mechanistic_entry"
+            or machine_source.get("noncompact_sections_refreshed") is not True
+        ):
+            issues.append("main_machine_policy_source_scope_invalid")
         if machine_source.get("artifact_content_sha256") != source.get(
             "artifact_content_sha256"
         ):
