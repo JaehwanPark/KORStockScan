@@ -5036,3 +5036,14 @@ def test_recheck_to_block_is_not_an_unchanged_machine_action(monkeypatch):
     assert metrics['changed_decision_count'] == 1
     assert metrics['baseline_preserved'] is False
     assert metrics['daily_net_profit_delta_krw'] is None
+
+
+def test_invalid_source_repricing_preserves_census_without_reading_pipeline(monkeypatch, tmp_path):
+    rows, _ = _natural_refinement_fixture()
+    row = rows[0]
+    row['source_provenance_verified'] = False
+    row['comparison'].pop('entry_cost_contract', None)
+    monkeypatch.setattr(calibration, '_hierarchy_cost_profiles', lambda *a: (_ for _ in ()).throw(AssertionError('invalid source must not read cost or price')))
+    result, counts = calibration.relabel_hierarchy_source_rows([row], tmp_path)
+    assert result == [row]
+    assert counts['source_contract_invalid_no_reprice'] == 1

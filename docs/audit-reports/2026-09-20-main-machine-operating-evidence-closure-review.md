@@ -75,3 +75,5 @@
 재리뷰에서 full-population 후보와 소비자가 운영 replay가 아닌 terminal proxy EV를 1차 경제성으로 검사하던 경계를 수리했다. 기존 10bp·sample·tail·독립 holdout 기준은 유지하며 실제 operating EV와 paired Δ를 사용한다. 미검증 모델을 flag만으로 우회하는 후보는 소비자가 거절한다.
 
 검증: 영향 범위 843개 및 WATCHING owner 2개 통과 후, 실제 지표 선택과 RECHECK→BLOCK 변경 판정 수정을 추가하여 관련 calibration/publisher/loader 306개를 재검증했다. 로그는 `tmp/main-machine-operating-completion-20260920/{final-affected-tests,watch-owner-tests,metric-basis-tests-v2}.log`이다. producer→저장/projection→계산과 실제 TTL 종결 회귀, 동일 자본 충돌·중복, joint holdout/hash/subset 차단을 포함한다. 통제 입력의 일별 +600원 결과는 회귀 증거이며 자연 성과가 아니다.
+
+실행 점검 추가 수리: 최초 main 재생성은 provenance 부적격 과거 paired rows까지 가격 재라벨링에 보내 8월 raw를 읽는 것을 발견하여 중단했다. 새 성공으로 기록하지 않았으며 중단 로그를 보존한다. 기존 source-contract 검사와 동일한 사전 필터를 추가하고 부적격 행은 분모/제외 사유를 보존한다. 관련 307개 회귀 통과. 자연 관측 loader 두 함수는 원 캐시 생성 커밋 `d9e2cdae3`와 AST가 동일하고 9/14–17 원천 stat은 캐시 생성 이후 변경되지 않았다. 기존 2,330건 materialization hash와 입력 stat을 `materialization-reuse.json`에 기록하여 재사용한다.

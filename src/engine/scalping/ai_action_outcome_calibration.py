@@ -2297,6 +2297,24 @@ def build_mechanistic_flow_group_study(
     }
 
 
+def _machine_source_contract_valid(row):
+    evidence = _as_dict(row.get("setup_evidence"))
+    return not (
+        row.get("source_provenance_verified") is not True
+        or evidence.get("schema") != "entry_setup_evidence_v1"
+        or not (row.get("source_report_hash_verified") is True
+                or row.get("machine_observation_hash_verified") is True)
+        or evidence.get("evidence_sha256") != _canonical_sha256({
+            k: v for k, v in evidence.items() if k != "evidence_sha256"
+        })
+        or _as_dict(evidence.get("source_quality")).get("status") != "fresh_consistent"
+        or any(evidence.get(k) is not expected for k, expected in (
+            ("runtime_effect", False), ("allowed_runtime_apply", False),
+            ("actual_order_submitted", False), ("broker_order_forbidden", True),
+        ))
+    )
+
+
 def _common_refinement_population(
     paired_rows: list[dict], natural_rows: list[dict], *,
     target_date: str, source_receipt: dict, paired_contract: dict,
@@ -2413,20 +2431,7 @@ def _common_refinement_population(
             ):
                 excluded["decision_date_invalid"] += 1
                 continue
-            if (
-                row.get("source_provenance_verified") is not True
-                or evidence.get("schema") != "entry_setup_evidence_v1"
-                or not (row.get("source_report_hash_verified") is True
-                        or row.get("machine_observation_hash_verified") is True)
-                or evidence.get("evidence_sha256") != _canonical_sha256({
-                    k: v for k, v in evidence.items() if k != "evidence_sha256"
-                })
-                or _as_dict(evidence.get("source_quality")).get("status") != "fresh_consistent"
-                or any(evidence.get(k) is not expected for k, expected in (
-                    ("runtime_effect", False), ("allowed_runtime_apply", False),
-                    ("actual_order_submitted", False), ("broker_order_forbidden", True),
-                ))
-            ):
+            if not _machine_source_contract_valid(row):
                 excluded["source_contract_invalid"] += 1
                 continue
             if lane == "natural" and (
@@ -3866,6 +3871,10 @@ def relabel_hierarchy_source_rows(
 
     result, counts, by_day = [], Counter(), defaultdict(list)
     for row in source_rows:
+        if row.get("source_provenance_verified") is not None and not _machine_source_contract_valid(row):
+            counts["source_contract_invalid_no_reprice"] += 1
+            result.append(row)
+            continue
         by_day[row["source_date"]].append(row)
     for day, rows in sorted(by_day.items()):
         profiles = _hierarchy_cost_profiles(data_root, day, cohort[0])
@@ -7817,8 +7826,8 @@ def build_main_mechanistic_report(
     # Reuse the existing cross-scope cache, only for paths that actually need
     # cost relabeling. Already priced or unsupported historical rows need no
     # second full pipeline scan.
-    repricing_rows = [r for r in paired_rows if
-        _full_entry_cost_pct(r["comparison"].get("entry_cost_contract"), source_date=r["source_date"]) is None
+    repricing_rows = [r for r in paired_rows if _machine_source_contract_valid(r)
+        and _full_entry_cost_pct(r["comparison"].get("entry_cost_contract"), source_date=r["source_date"]) is None
         and (r.get("label_context") or {}).get("reference_price_type") == "executable_ask"]
     repricing_profiles = {(day, venue): _hierarchy_cost_profiles(data_root, day, venue)
         for day, venue in {(r["source_date"], r["entry_group_observation"]["key_parts"]["venue"]) for r in repricing_rows}}
