@@ -7921,11 +7921,12 @@ def _runtime_policy_publication_errors(
     )
     if published_policy.get("target_date") != expected_target:
         errors.append("mechanistic_entry_runtime_policy_target_date_mismatch")
-    if published_policy.get("source_date") != source_report.get("target_date"):
-        errors.append("mechanistic_entry_runtime_policy_source_date_mismatch")
     machine_source = published_policy.get("machine_evaluation_source") or {
+        "source_date": published_policy.get("source_date"),
         "artifact_content_sha256": published_policy.get("source_artifact_sha256")
     }
+    if machine_source.get("source_date") != source_report.get("target_date"):
+        errors.append("mechanistic_entry_runtime_policy_source_date_mismatch")
     if machine_source.get("artifact_content_sha256") != source_report.get(
         "artifact_content_sha256"
     ):

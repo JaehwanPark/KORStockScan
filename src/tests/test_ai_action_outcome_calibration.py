@@ -4363,6 +4363,30 @@ def test_runtime_policy_publication_receipt_requires_exact_source_binding():
     }
 
     assert calibration._runtime_policy_publication_errors(published, source) == []
+    mixed_successor = {
+        **published,
+        "target_date": "2026-09-21",
+        "source_date": "2026-09-20",
+        "publication_date": "2026-09-20",
+        "machine_evaluation_source": {
+            "source_date": "2026-09-14",
+            "artifact_content_sha256": "a" * 64,
+        },
+    }
+    assert calibration._runtime_policy_publication_errors(
+        mixed_successor, source, publication_date="2026-09-20"
+    ) == []
+    assert calibration._runtime_policy_publication_errors(
+        {
+            **mixed_successor,
+            "machine_evaluation_source": {
+                **mixed_successor["machine_evaluation_source"],
+                "source_date": "2026-09-13",
+            },
+        },
+        source,
+        publication_date="2026-09-20",
+    ) == ["mechanistic_entry_runtime_policy_source_date_mismatch"]
     assert calibration._runtime_policy_publication_errors(
         {**published, "source_artifact_sha256": "b" * 64}, source
     ) == ["mechanistic_entry_runtime_policy_source_hash_mismatch"]
