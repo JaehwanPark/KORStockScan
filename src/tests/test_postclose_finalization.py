@@ -56,7 +56,7 @@ def _write_ready_predecessors(
     for path in (threshold_dir, controller_dir, tuning_dir, log_dir):
         path.mkdir(parents=True, exist_ok=True)
     (threshold_dir / f"threshold_cycle_postclose_{TARGET_DATE}.status.json").write_text(
-        json.dumps({"target_date": TARGET_DATE, "status": "succeeded", "exit_code": 0}),
+        json.dumps({"target_date": TARGET_DATE, "status": "running" if final_threshold_marker == "START" else "succeeded", "exit_code": 0}),
         encoding="utf-8",
     )
     (controller_dir / f"postclose_done_controller_{TARGET_DATE}.json").write_text(
@@ -157,7 +157,7 @@ def test_finalization_waits_for_exact_terminal_chain_then_cleans_and_detects(tmp
 
 @pytest.mark.parametrize("prior_failure", [True, False])
 @pytest.mark.parametrize("controller_failed", [True, False])
-def test_explicit_recovery_requires_failure_and_retains_source_date(
+def test_explicit_recovery_requires_source_terminal_and_retains_source_date(
     tmp_path, prior_failure, controller_failed
 ):
     from datetime import datetime, timedelta
@@ -180,6 +180,10 @@ def test_explicit_recovery_requires_failure_and_retains_source_date(
         ),
         encoding="utf-8",
     )
+    if prior_failure:
+        terminal = project / "data/report/threshold_cycle_postclose_status" / f"threshold_cycle_postclose_{day}.status.json"
+        terminal.parent.mkdir(parents=True)
+        terminal.write_text(json.dumps({"target_date": day, "status": "failed" if controller_failed else "running", "exit_code": 1 if controller_failed else 0}))
     detector = project / "detector.sh"
     cleanup = project / "cleanup.sh"
     _write_executable(detector, 'printf "%s\\n" "$@" > "$PROJECT_DIR/detector-args"\n')
@@ -208,7 +212,7 @@ def test_explicit_recovery_requires_failure_and_retains_source_date(
         assert f"reason={reason}" in result.stdout
         assert (project / "detector-args").read_text().splitlines() == ["full", day]
     else:
-        assert "recovery_requires_prior_failure" in result.stdout
+        assert "recovery_requires_retained_source_terminal" in result.stdout
         assert not (project / "detector-args").exists()
 
 
@@ -225,34 +229,23 @@ def test_finalization_rejects_start_after_done_as_nonterminal(tmp_path):
 
     assert result.returncode == 1
     assert order == ["detector"]
-    assert "threshold_log" in result.stdout
+    assert "threshold_artifact" in result.stdout
 
 
-def test_finalization_treats_prefixed_controller_block_as_terminal_failure(tmp_path):
-    result, order = _run(
-        tmp_path,
-        ready=True,
-        controller_status="blocked_structural_contract_gap",
-    )
-
-    assert result.returncode == 1
-    assert order == ["detector"]
-    assert "reason=predecessor_terminal_failure" in result.stdout
-    assert "controller_artifact" in result.stdout
-    assert "reason=predecessor_timeout" not in result.stdout
+def test_retired_controller_status_is_not_a_required_predecessor(tmp_path):
+    result, order = _run(tmp_path, ready=True, controller_status="blocked_structural_contract_gap")
+    assert result.returncode == 0
+    assert order == ["cleanup", "detector"]
 
 
-def test_final_detector_failure_overrides_pre_detector_done_marker(tmp_path):
+def test_final_detector_failure_never_exposes_done_marker(tmp_path):
     result, order = _run(tmp_path, ready=True, detector_exit_code=7)
 
     assert result.returncode == 1
     assert order == ["cleanup", "detector"]
-    assert "[DONE] postclose_finalization" in result.stdout
+    assert "[DONE] postclose_finalization" not in result.stdout
     assert "[FAIL] postclose_finalization" in result.stdout
     assert "[DONE] postclose_final_detector" not in result.stdout
-    assert result.stdout.rindex("[FAIL] postclose_finalization") > result.stdout.index(
-        "[DONE] postclose_finalization"
-    )
 
 
 def test_cleanup_failure_preserves_detector_handoff_but_not_success_marker(tmp_path):
@@ -304,7 +297,7 @@ def test_late_summary_refresh_precedes_cleanup_and_failure_cannot_reuse_done(
         python,
         'if [[ "${1:-}" == "-m" ]]; then\n'
         '  [[ "$2" == "src.engine.automation.postclose_done_controller" ]]\n'
-        '  [[ " $* " == *" --summary-handoff-only "* ]]\n'
+        '  [[ " $* " == *" --require-independent-producers "* ]]\n'
         '  printf "summary\\n" >> "$PROJECT_DIR/order.txt"\n'
         f'  exit {refresh_rc}\nfi\nexec "$REAL_PY" "$@"\n',
     )

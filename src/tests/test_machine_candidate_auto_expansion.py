@@ -58,9 +58,9 @@ def _report() -> dict:
         "target_ticks": 2,
     }
     row = {
-        "profile_id": "existing_111770_late_morning",
-        "symbol": "111770",
-        "name": "영원무역",
+        "profile_id": "existing_123457_late_morning",
+        "symbol": "123457",
+        "name": "fixture symbol",
         "session": "late_morning",
         "discovery_lane": "existing_symbol_time_extension",
         "recommended_spot": spot,
@@ -78,10 +78,22 @@ def _report() -> dict:
         },
         "runtime_effect": False,
     }
+    from src.engine.monitoring import low_price_two_leg_entry_spot_research as economics
+    current = dict(source_valid_observation_days=1, observation_dates=["2026-09-15"],
+                   cost_pct=economics.COST_PCT, economic_replay_contract=economics.ECONOMIC_REPLAY_CONTRACT,
+                   metric_contract=economics.ECONOMIC_METRIC_CONTRACT, policy_identity="a" * 64,
+                   cost_adjusted_net_profit_krw_per_source_valid_observation_day=1.0,
+                   held_legs=0, carry_in_held_legs=0, completed_legs=4,
+                   custody_resolution_required=False, notional_weighted_ev_pct=0.01)
+    candidate = dict(current, policy_identity="b" * 64,
+                     cost_adjusted_net_profit_krw_per_source_valid_observation_day=2.0,
+                     notional_weighted_ev_pct=0.03)
+    row.update(current_economic_outcome=current, candidate_economic_outcome=candidate,
+               paired_economics=economics.paired_economics(current, candidate))
     bind_recommendation(
         row,
         producer="low_price_two_leg_expanded_candidate_research",
-        scope="111770/late_morning/existing_111770_late_morning",
+        scope="123457/late_morning/existing_123457_late_morning",
         axis="profile_policy",
         proposal=spot,
         consumer="low_price_two_leg_policy_apply",
@@ -122,12 +134,12 @@ def test_episode_recommendation_promotes_without_user_approval_and_round_trips(
 
     loaded = expansion.load_policy(date(2026, 9, 16), policy_dir=policy_dir)
     profile = _profile(
-        loaded["profiles"]["auto_111770_late_morning"],
+        loaded["profiles"]["auto_123457_late_morning"],
         authority_hash=loaded["policy_hash"],
     )
 
     assert loaded["cardinality_cap"] is None
-    assert loaded["newly_promoted_profile_ids"] == ["auto_111770_late_morning"]
+    assert loaded["newly_promoted_profile_ids"] == ["auto_123457_late_morning"]
     assert profile.policy.dynamic_authority_hash == loaded["policy_hash"]
     assert profile.policy.scan_last_bar.isoformat() == "10:59:00"
 
@@ -153,7 +165,7 @@ def test_episode_policy_accepts_complete_source_above_legacy_32mib_bound(tmp_pat
         source_date=date(2026, 9, 15), report_dir=report_dir,
         policy_dir=tmp_path / "policies",
     )
-    assert payload["newly_promoted_profile_ids"] == ["auto_111770_late_morning"]
+    assert payload["newly_promoted_profile_ids"] == ["auto_123457_late_morning"]
     assert payload["actual_order_submitted"] is False
     assert payload["hard_safety_preserved"] is True
 
@@ -188,9 +200,9 @@ def test_episode_policy_preserves_source_and_authority_rejection(
 
 def test_integrated_aftermarket_episode_profile_is_runtime_compilable():
     row = {
-        "profile_id": "auto_111770_integrated_aftermarket",
-        "symbol": "111770",
-        "name": "영원무역",
+        "profile_id": "auto_123457_integrated_aftermarket",
+        "symbol": "123457",
+        "name": "fixture symbol",
         "session": "integrated_aftermarket",
         "policy": {
             "scan_start": "16:30",
@@ -209,3 +221,21 @@ def test_integrated_aftermarket_episode_profile_is_runtime_compilable():
     assert profile.session == "integrated_aftermarket"
     assert profile.policy.scan_start.isoformat() == "16:30:00"
     assert profile.policy.scan_last_bar.isoformat() == "19:20:00"
+
+
+def test_recovery_publication_preserves_source_and_rebinds_apply_day(tmp_path):
+    reports, policies = tmp_path / "reports", tmp_path / "policies"
+    reports.mkdir()
+    policies.mkdir()
+    path = reports / "low_price_two_leg_expanded_candidate_research_2026-09-15.json"
+    path.write_text(json.dumps(_report()))
+    payload = expansion.build_policy(source_date=date(2026, 9, 15),
+        publication_date=date(2026, 9, 20), report_dir=reports, policy_dir=policies)
+    assert payload["source_date"] == "2026-09-15"
+    assert payload["publication_date"] == "2026-09-20"
+    assert payload["effective_date"] == "2026-09-21"
+    expansion.policy_path(date(2026, 9, 21), policy_dir=policies).write_text(json.dumps(payload))
+    assert expansion.load_policy(date(2026, 9, 21), policy_dir=policies) == payload
+    with pytest.raises(ValueError):
+        expansion.build_policy(source_date=date(2026, 9, 15),
+            publication_date=date(2026, 9, 14), report_dir=reports, policy_dir=policies)

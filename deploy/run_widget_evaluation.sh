@@ -16,6 +16,26 @@ completed_target_date="$(
   "$PYTHON_BIN" -c 'from src.engine.monitoring.widget_auto_trade_policy_calibration import resolve_completed_policy_target_date; print(resolve_completed_policy_target_date().isoformat())' \
     | tail -n 1
 )"
+RECOVERY_MODE=false
+if [[ $# -eq 2 && "$2" == "--recover-closed-target" ]]; then
+  completed_target_date="$1"
+  RECOVERY_MODE=true
+elif [[ $# -ne 0 ]]; then
+  echo "usage: $0 [YYYY-MM-DD --recover-closed-target]" >&2
+  exit 2
+fi
+"$PYTHON_BIN" - "$completed_target_date" <<'PYDATE'
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
+import sys
+day = date.fromisoformat(sys.argv[1])
+assert day.isoformat() == sys.argv[1] and day <= datetime.now(ZoneInfo("Asia/Seoul")).date()
+PYDATE
+mkdir -p "$PROJECT_DIR/tmp"
+exec 9>"$PROJECT_DIR/tmp/widget_evaluation_${completed_target_date}.lock"
+flock -n 9 || exit 75
+"$PYTHON_BIN" -m src.engine.automation.postclose_summary_handoff --owner widget --date "$completed_target_date" --phase started
+trap 'rc=$?; "$PYTHON_BIN" -m src.engine.automation.postclose_summary_handoff --owner widget --date "$completed_target_date" --phase finished --exit-code "$rc" || rc=1; exit "$rc"' EXIT
 if [[ ! "$completed_target_date" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
   printf '[WIDGET_EVALUATION] invalid completed target date=%s\n' \
     "${completed_target_date:-missing}" >&2

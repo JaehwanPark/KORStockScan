@@ -66,6 +66,14 @@ def installed_producer_terminal_states(
         ),
     }
     for unit, labels in owner_sources.items():
+        owner = "widget" if "widget-evaluation" in unit else "machine"
+        receipt_path = producer_receipt_path(report_dir, target_date, owner)
+        if receipt_path.exists():
+            receipt = _load_json(receipt_path)
+            problems = producer_receipt_issues(report_dir, target_date, owner)
+            result[unit] = ("waiting_running" if receipt.get("status") == "running" else
+                            ("failed_receipt:" + ",".join(problems) if problems else "done"))
+            continue
         try:
             command = runner(
                 [
@@ -136,7 +144,12 @@ def source_paths(report_dir: Path, target_date: str, consumer: str) -> dict[str,
         # PREOPEN artifacts are expected future outputs at postclose time.  A
         # later normal bootstrap must not invalidate the immutable postclose
         # generation receipt merely because its previously absent file arrived.
-        return {"runtime_approval_summary": summary_path}
+        paths = {"runtime_approval_summary": summary_path}
+        for owner in ("widget", "machine"):
+            path = producer_receipt_path(report_dir, target_date, owner)
+            if path.exists():
+                paths[f"independent_{owner}_terminal"] = path
+        return paths
     labels = {
         "tower": (
             "threshold_cycle_ev",
@@ -432,3 +445,88 @@ def verify_summary_handoff(
             else {"status": "legacy_not_required"}
         ),
     }
+
+
+# Independent producer receipts survive manual historical recovery and do not
+# depend on systemd's most recent (possibly different-date) invocation.
+INDEPENDENT_SOURCES = {
+    "widget": ("widget_advisory_calibration", "widget_auto_trade_policy_calibration",
+               "widget_symbol_signal_policy_research", "widget_symbol_runtime_policy_apply"),
+    "machine": ("widget_collector_expansion_recommendation", "machine_microstructure_attribution",
+                "machine_entry_timing_tuning", "machine_microstructure_policy_approval",
+                "market_weakness_hysteresis_tuning", "machine_research_closed_loop"),
+}
+
+
+def producer_receipt_path(report_dir: Path, day: str, owner: str) -> Path:
+    return report_dir / "postclose_producer_terminal" / f"{owner}_{day}.json"
+
+
+def producer_receipt_issues(report_dir: Path, day: str, owner: str) -> list[str]:
+    from src.engine.verify_threshold_cycle_postclose_chain import _sha
+    value = _load_json(producer_receipt_path(report_dir, day, owner))
+    if (value.get("status") != "succeeded" or value.get("target_date") != day
+        or value.get("owner") != owner or type(value.get("exit_code")) is not int
+        or value.get("exit_code") != 0 or not value.get("run_id")
+        or not re.fullmatch(r"[0-9a-f]{40}", str(value.get("code_commit") or ""))):
+        return [f"{owner}:terminal_missing_or_invalid"]
+    sources = value.get("sources") or {}
+    issues = []
+    for label in INDEPENDENT_SOURCES[owner]:
+        row = sources.get(label) or {}
+        if not row.get("sha256") or _sha(Path(row.get("path") or "")) != row["sha256"]:
+            issues.append(f"{owner}:source_hash_invalid:{label}")
+    return issues
+
+
+def _producer_main(argv=None) -> int:
+    import argparse
+    import os
+    import uuid
+    from datetime import date, datetime
+    from zoneinfo import ZoneInfo
+    from src.utils.constants import DATA_DIR, PROJECT_ROOT
+    from src.engine.verify_threshold_cycle_postclose_chain import _atomic_write, _sha
+    from src.engine.automation.postclose_recommendation_intake import source_paths, _report_date
+    parser = argparse.ArgumentParser(description="Record existing independent postclose owner execution")
+    parser.add_argument("--owner", choices=sorted(INDEPENDENT_SOURCES), required=True)
+    parser.add_argument("--date", required=True, type=date.fromisoformat)
+    parser.add_argument("--phase", choices=("started", "finished"), required=True)
+    parser.add_argument("--exit-code", type=int, default=0)
+    args = parser.parse_args(argv)
+    day = args.date.isoformat()
+    if args.date > datetime.now(ZoneInfo("Asia/Seoul")).date():
+        parser.error("future source date is not supported")
+    report_dir = DATA_DIR / "report"
+    path = producer_receipt_path(report_dir, day, args.owner)
+    value = _load_json(path)
+    now = datetime.now(ZoneInfo("Asia/Seoul")).isoformat()
+    if args.phase == "started":
+        if value:
+            old = path.parent / "attempts" / f"{args.owner}_{day}_{uuid.uuid4().hex}.json"
+            _atomic_write(old, json.dumps(value, indent=2) + "\n")
+        value = dict(schema="postclose_producer_terminal_v1", owner=args.owner,
+                     target_date=day, status="running", run_id=uuid.uuid4().hex,
+                     started_at=now, code_root=str(PROJECT_ROOT),
+                     code_commit=subprocess.check_output(["git", "-C", str(PROJECT_ROOT), "rev-parse", "HEAD"], text=True).strip(),
+                     wrapper_pid=os.getppid(), runtime_effect=False)
+    else:
+        if value.get("status") != "running" or value.get("wrapper_pid") != os.getppid():
+            raise RuntimeError("producer_run_identity_mismatch")
+        paths = source_paths(report_dir, day)
+        sources, issues = {}, []
+        for label in INDEPENDENT_SOURCES[args.owner]:
+            source = paths.get(label, report_dir / label / f"{label}_{day}.json")
+            payload = _load_json(source)
+            sources[label] = dict(path=str(source.resolve()), sha256=_sha(source))
+            if not sources[label]["sha256"] or _report_date(payload) != day:
+                issues.append(f"source_missing_or_date_invalid:{label}")
+        value.update(status="succeeded" if args.exit_code == 0 and not issues else "failed",
+                     exit_code=args.exit_code if args.exit_code else (1 if issues else 0),
+                     sources=sources, issues=issues, finished_at=now)
+    _atomic_write(path, json.dumps(value, indent=2) + "\n")
+    return 0 if value["status"] != "failed" else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(_producer_main())

@@ -23,6 +23,26 @@ from src.engine.error_detectors.schedule_contract import (
 )
 
 
+def _finalization_self_audit(day: str) -> bool:
+    """Only the live finalizer ancestor may defer its own terminal audit."""
+    try:
+        expected = int(os.environ.get("POSTCLOSE_FINALIZATION_DETECTOR_PARENT_PID", "0"))
+        if expected <= 1 or os.environ.get("POSTCLOSE_FINALIZATION_DETECTOR_DATE") != day:
+            return False
+        pid = os.getppid()
+        for _ in range(12):
+            if pid == expected:
+                argv = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+                return any(arg.endswith(b"/run_postclose_finalization.sh") for arg in argv)
+            if pid <= 1:
+                break
+            state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+            pid = int(state[1])
+    except (OSError, ValueError, IndexError):
+        pass
+    return False
+
+
 def _today_kst() -> str:
     return date.today().isoformat()
 
@@ -285,6 +305,10 @@ class CronCompletionDetector(BaseDetector):
             jid = job["id"]
             critical = job.get("critical", False)
             today_str = source_day or _today_kst()
+            if jid == "postclose_finalization" and _finalization_self_audit(today_str):
+                details[f"{jid}_status"] = "pending_self_audit"
+                warnings.append("postclose_finalization: live ancestor awaits this detector; no terminal PASS claimed")
+                continue
             artifact_status = self._status_artifact_terminal(job, today_str)
             if jid in _disabled_job_ids():
                 details[f"{jid}_status"] = "disabled_by_env"

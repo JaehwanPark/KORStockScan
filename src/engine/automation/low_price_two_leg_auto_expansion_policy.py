@@ -184,6 +184,7 @@ def build_policy(
     source_date: date,
     report_dir: Path = REPORT_DIR,
     policy_dir: Path = POLICY_DIR,
+    publication_date: date | None = None,
 ) -> dict[str, Any]:
     report_path = report_dir / (
         f"low_price_two_leg_expanded_candidate_research_{source_date.isoformat()}.json"
@@ -220,7 +221,12 @@ def build_policy(
     )
     if closed_loop and joint != report.get("joint_allocation_gate"):
         raise ValueError("episode_joint_allocation_reconstruction_mismatch")
-    effective_date = _next_trading_date(source_date)
+    publication = publication_date or source_date
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    if not source_date <= publication <= datetime.now(ZoneInfo("Asia/Seoul")).date():
+        raise ValueError("episode_publication_date_invalid")
+    effective_date = _next_trading_date(publication)
     profiles = _previous_profiles(effective_date, policy_dir=policy_dir)
     retired_nonperforming_profile_ids = _mature_nonperforming_profile_ids(report)
     static_symbol_sessions = {
@@ -308,6 +314,7 @@ def build_policy(
         ),
         "authority": AUTHORITY,
         "source_date": source_date.isoformat(),
+        **({"publication_date": publication.isoformat()} if publication_date else {}),
         "effective_date": effective_date.isoformat(),
         "generated_at_kst": datetime.now(KST).isoformat(timespec="seconds"),
         "source_report": str(report_path.resolve()),
@@ -331,6 +338,10 @@ def build_policy(
 def validate_policy(payload: Any, *, effective_date: date) -> None:
     if not isinstance(payload, dict):
         raise ValueError("episode_auto_expansion_policy_invalid")
+    source = date.fromisoformat(payload["source_date"])
+    publication = date.fromisoformat(payload.get("publication_date") or source.isoformat())
+    if not source <= publication < effective_date or _next_trading_date(publication) != effective_date:
+        raise ValueError("episode_auto_expansion_publication_date_invalid")
     canonical = {key: value for key, value in payload.items() if key != "policy_hash"}
     profiles = payload.get("profiles")
     if (
@@ -419,7 +430,7 @@ def load_policy(day: date, *, policy_dir: Path = POLICY_DIR) -> dict[str, Any]:
         source_date = date.fromisoformat(payload["source_date"])
         if (
             report.get("target_date") != str(source_date)
-            or _next_trading_date(source_date) != day
+            or _next_trading_date(date.fromisoformat(payload.get("publication_date") or source_date.isoformat())) != day
         ):
             raise ValueError("episode_policy_source_date_invalid")
         recommendation_inventory(report)
@@ -506,6 +517,7 @@ def _atomic_write(path: Path, payload: dict[str, Any]) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-date", required=True)
+    parser.add_argument("--publication-date", type=date.fromisoformat)
     parser.add_argument("--report-dir", type=Path, default=REPORT_DIR)
     parser.add_argument("--policy-dir", type=Path, default=POLICY_DIR)
     parser.add_argument("--write", action="store_true")
@@ -514,6 +526,7 @@ def main(argv: list[str] | None = None) -> int:
         source_date=date.fromisoformat(args.source_date),
         report_dir=args.report_dir,
         policy_dir=args.policy_dir,
+        publication_date=args.publication_date,
     )
     output = policy_path(
         date.fromisoformat(payload["effective_date"]), policy_dir=args.policy_dir

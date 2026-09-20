@@ -43,7 +43,7 @@
 
 ## 실행 항목
 
-- [ ] `[DirectFamilyPreopenPolicyHandoff] direct family 날짜별 정책·bootstrap 장전 소비 확인` (`Due: 2026-09-21`, `Slot: PREOPEN`, `TimeWindow: 08:45~08:55`, `Track: RuntimeStability`)
+- [ ] `[DirectFamilyPreopenPolicyHandoff] direct family 날짜별 정책·bootstrap 장전 소비 확인` (`Due: 2026-09-21`, `Slot: PREOPEN`, `TimeWindow: 07:35~08:05`, `Track: RuntimeStability`)
   - Source: [runtime_approval_summary_2026-09-17.json](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-09-17.json)
   - 판정 기준: source_date=`2026-09-17`, apply_date=`2026-09-21`, preopen_state=`pending`, due_policy_receipts=`compact_auxiliary(valid=True, handoff=incumbent_preserved); entry_cancel_wait(valid=True, handoff=blocked); entry_split(valid=True, handoff=blocked); low_price_expansion(valid=False, handoff=blocked); low_price_two_leg(valid=True, handoff=blocked); machine_entry(valid=True, handoff=not_applicable); main_mechanistic_entry(valid=True, handoff=blocked); rising_missed(valid=True, handoff=incumbent_preserved); scale_in_split(valid=True, handoff=incumbent_preserved)`의 schema·semantic hash·scope와 bootstrap accepted/rejected 결과를 확인한다.
   - incumbent 정책은 runtime override가 0이어야 하고 validated edge는 단일축 allowlist·operator lock·retired OFF·same-stage guard를 통과해야 한다.
@@ -169,3 +169,6 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 - 다음 확인 `existing_main_owner_execution_cf_and_portfolio_replay` / `full_cost_stop_owner_plan_portfolio_and_forward_holdout_receipts`. 실제 PID 소비와 비용 후 자연 성과는 별도 수용 조건이다.
 
 <!-- compact_auxiliary_direct:end -->
+
+- [ ] `[PostcloseLateSourceFinalHandoffAudit0920] 장후 25–29 검증·전체 복구·다음 PREOPEN 기동 준비` (`Due: 2026-09-21`, `Slot: PREOPEN`, `TimeWindow: 07:00~07:20`, `Track: RuntimeStability`)
+  - Source: [통합 보완·전체 재생성 상세계획](../proposals/postclose-integrated-verification-recovery-and-next-preopen-readiness-plan-2026-09-20.md), [장후작업 현행 활성 목록](../audit-reports/2026-09-05-postclose-work-inventory.md).

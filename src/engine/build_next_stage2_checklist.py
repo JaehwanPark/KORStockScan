@@ -2085,7 +2085,7 @@ def _direct_task(
         "PolicyHandoff": (
             "직접 family 정책 handoff 수리",
             "PREOPEN",
-            "08:45~08:55",
+            "07:35~08:05",
             "policy_handoff_repair",
         ),
     }
@@ -2249,7 +2249,7 @@ def _project_direct_tasks(
             task_id="DirectFamilyPreopenPolicyHandoff",
             title="direct family 날짜별 정책·bootstrap 장전 소비 확인",
             slot="PREOPEN",
-            time_window="08:45~08:55",
+            time_window="07:35~08:05",
             track="RuntimeStability",
             source=(
                 f"[{summary_path.name}](/home/ubuntu/KORStockScan/{_rel(summary_path)})"

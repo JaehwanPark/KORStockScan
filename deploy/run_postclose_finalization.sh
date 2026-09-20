@@ -41,10 +41,10 @@ from zoneinfo import ZoneInfo
 import sys
 day = datetime.strptime(sys.argv[1], "%Y-%m-%d").date()
 assert day.isoformat() == sys.argv[1]
-assert 0 <= (datetime.now(ZoneInfo("Asia/Seoul")).date() - day).days <= 1
+assert datetime.strptime("2026-06-05", "%Y-%m-%d").date() <= day <= datetime.now(ZoneInfo("Asia/Seoul")).date()
 PY
-  if ! rg -q "\\[FAIL\\] postclose_finalization .*target_date=${TARGET_DATE}\\b" "$PROJECT_DIR/logs/postclose_finalization_cron.log"; then
-    echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} reason=recovery_requires_prior_failure"
+  if [[ ! -s "$PROJECT_DIR/data/report/threshold_cycle_postclose_status/threshold_cycle_postclose_${TARGET_DATE}.status.json" ]]; then
+    echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} reason=recovery_requires_retained_source_terminal"
     exit 2
   fi
   WAIT_TIMEOUT_SEC=0
@@ -129,53 +129,6 @@ elif terminal_failure_status(threshold.get("status")):
 else:
     checks["threshold_artifact"] = "waiting"
 
-controller = load(
-    project
-    / "data/report/postclose_done_controller"
-    / f"postclose_done_controller_{target_date}.json"
-)
-if controller is None:
-    checks["controller_artifact"] = "waiting"
-elif str(controller.get("date") or controller.get("target_date") or "") != target_date:
-    checks["controller_artifact"] = "failed_target_date"
-elif str(controller.get("status") or "").lower() == "done":
-    checks["controller_artifact"] = "done"
-elif terminal_failure_status(controller.get("status")):
-    checks["controller_artifact"] = "failed"
-else:
-    checks["controller_artifact"] = "waiting"
-
-tuning = load(
-    project
-    / "data/report/tuning_monitoring/status"
-    / f"tuning_monitoring_postclose_{target_date}.json"
-)
-if tuning is None:
-    checks["tuning_artifact"] = "waiting"
-elif str(tuning.get("target_date") or "") != target_date:
-    checks["tuning_artifact"] = "failed_target_date"
-elif str(tuning.get("status") or "").lower() in {
-    "succeeded", "success", "completed", "pass", "passed"
-} and safe_int(tuning.get("exit_code") or 0) == 0:
-    checks["tuning_artifact"] = "done"
-elif terminal_failure_status(tuning.get("status")):
-    checks["tuning_artifact"] = "failed"
-else:
-    checks["tuning_artifact"] = "waiting"
-
-checks["threshold_log"] = latest_marker(
-    project / "logs/threshold_cycle_postclose_cron.log", "threshold-cycle postclose"
-)
-checks["controller_log"] = latest_marker(
-    project / "logs/postclose_done_controller_cron.log", "postclose_done_controller"
-)
-checks["tuning_log"] = latest_marker(
-    project / "logs/tuning_monitoring_postclose_cron.log", "tuning_monitoring_postclose"
-)
-checks["dashboard_log"] = latest_marker(
-    project / "logs/dashboard_db_archive_cron.log", "dashboard_db_archive"
-)
-
 if target_date >= "2026-09-09":
     from src.engine.automation.postclose_summary_handoff import installed_producer_terminal_states
     checks.update(installed_producer_terminal_states(target_date, report_dir=project / "data/report"))
@@ -202,6 +155,7 @@ run_final_detector() {
   timeout --foreground "${DETECTOR_TIMEOUT_SEC}s" bash "$OWNED_LOG_RUNNER" \
     --owner error_detection_cron \
     --log "$PROJECT_DIR/logs/run_error_detection_cron.log" \
+    env POSTCLOSE_FINALIZATION_DETECTOR_PARENT_PID="$$" POSTCLOSE_FINALIZATION_DETECTOR_DATE="$TARGET_DATE" \
     bash "$ERROR_DETECTION_RUNNER" "${detector_args[@]}"
 }
 
@@ -251,12 +205,12 @@ done
 
 if [[ "$TARGET_DATE" > "2026-09-08" ]]; then
   # Independent 20:10/21:15 producers may finish after main's original DONE.
-  # Reuse the controller with an explicit summary-only action allowlist. No EV,
+  # Reuse the controller after exact independent terminal validation. No EV,
   # provider, workorder producer, live apply, or whole-wrapper recovery here.
   if ! timeout --kill-after=10s "${SUMMARY_TIMEOUT_SEC}s" env PYTHONPATH=. \
     POSTCLOSE_DONE_CONTROLLER_REQUIRE_CODEX_COMPLETED=false "$VENV_PY" \
     -m src.engine.automation.postclose_done_controller --date "$TARGET_DATE" \
-    --summary-handoff-only --max-attempts 2 --predecessor-timeout-sec 0; then
+    --require-independent-producers --max-attempts 2 --predecessor-timeout-sec 0; then
     echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} reason=summary_handoff_refresh_failed"
     run_final_detector || true
     exit 1
@@ -274,16 +228,12 @@ if ! timeout --foreground "${CLEANUP_TIMEOUT_SEC}s" bash "$OWNED_LOG_RUNNER" \
 fi
 echo "[INFO] postclose_finalization cleanup_done target_date=${TARGET_DATE}"
 
-# The final detector audits this wrapper through the cron-completion registry.
-# Publish the predecessor+cleanup terminal marker synchronously before handing
-# off to that detector, otherwise the detector can only observe its own parent
-# as in-progress. A detector execution failure appends a later FAIL marker, so
-# the latest-terminal contract remains fail-closed.
-finalization_finished_at="$(TZ=Asia/Seoul date +%FT%T%z)"
-echo "[DONE] postclose_finalization target_date=${TARGET_DATE} cleanup=done detector_handoff=started finished_at=${finalization_finished_at}"
+# The child detector reports its live ancestor as pending, never as PASS.
+echo "[INFO] postclose_finalization target_date=${TARGET_DATE} cleanup=done detector_handoff=started"
 if ! run_final_detector; then
   echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} reason=final_detector_failed"
   exit 1
 fi
 detector_finished_at="$(TZ=Asia/Seoul date +%FT%T%z)"
+echo "[DONE] postclose_finalization target_date=${TARGET_DATE} cleanup=done detector=done finished_at=${detector_finished_at}"
 echo "[DONE] postclose_final_detector target_date=${TARGET_DATE} finalization=done detector=done finished_at=${detector_finished_at}"

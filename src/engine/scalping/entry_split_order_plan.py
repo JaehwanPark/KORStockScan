@@ -7212,6 +7212,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="Refresh the existing exact-date model section without raw/grid replay.")
     parser.add_argument("--prepared-effective-date", default=None)
     args = parser.parse_args(argv)
+    if args.no_write and args.prepared_effective_date and not args.refresh_execution_model_only:
+        parser.error("--prepared-effective-date requires persisted report or --refresh-execution-model-only")
     if args.refresh_execution_model_only:
         report = refresh_execution_model_only(args.target_date,
             prepared_effective_date=args.prepared_effective_date, write=not args.no_write)
@@ -7221,6 +7223,9 @@ def main(argv: list[str] | None = None) -> int:
             "generation": report["artifact_generation_binding"]["generation_id"]}))
     else:
         build_report(args.target_date, write=not args.no_write)
+        if args.prepared_effective_date:
+            refresh_execution_model_only(args.target_date,
+                prepared_effective_date=args.prepared_effective_date, write=not args.no_write)
     return 0
 
 

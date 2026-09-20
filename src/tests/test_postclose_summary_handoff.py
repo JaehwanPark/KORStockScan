@@ -251,3 +251,31 @@ def test_retired_common_layer_handoff_skips_legacy_intake(monkeypatch, tmp_path)
     )
 
     assert result["status"] == "pass"
+
+
+def test_independent_producer_roundtrip_and_post_terminal_source_drift(monkeypatch, tmp_path):
+    from src.engine.automation import postclose_summary_handoff as handoff
+    from src.engine.automation.postclose_recommendation_intake import source_paths
+    from src.utils import constants
+    from pathlib import Path
+    import json
+    data = tmp_path / "data"
+    monkeypatch.setattr(constants, "DATA_DIR", data)
+    monkeypatch.setattr(constants, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(handoff.subprocess, "check_output", lambda *a, **k: "a" * 40)
+    day = "2026-09-17"
+    paths = source_paths(data / "report", day)
+    for label in handoff.INDEPENDENT_SOURCES["widget"]:
+        path = paths[label]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"target_date": day}))
+    assert handoff._producer_main(["--owner", "widget", "--date", day, "--phase", "started"]) == 0
+    assert handoff.producer_receipt_issues(data / "report", day, "widget")
+    assert handoff._producer_main(["--owner", "widget", "--date", day, "--phase", "finished"]) == 0
+    assert handoff.producer_receipt_issues(data / "report", day, "widget") == []
+    paths[handoff.INDEPENDENT_SOURCES["widget"][0]].write_text("{}")
+    assert handoff.producer_receipt_issues(data / "report", day, "widget")
+    old = handoff.producer_receipt_path(data / "report", day, "widget").read_bytes()
+    assert handoff._producer_main(["--owner", "widget", "--date", day, "--phase", "started"]) == 0
+    assert any(p.read_bytes() == old for p in (data / "report/postclose_producer_terminal/attempts").glob("*.json"))
+    assert handoff._producer_main(["--owner", "widget", "--date", day, "--phase", "finished", "--exit-code", "17"]) == 1

@@ -567,3 +567,22 @@ def test_new_policy_generation_blocks_pending_successor_but_frozen_reader_stays_
         runtime.build_policy(report, evidence_report_path=evidence)
     policy = runtime.build_policy(report, evidence_report_path=evidence, reader_validation=True)
     assert '006800' in policy['symbols']
+
+
+def test_republication_keeps_source_and_loader_uses_recorded_publication(monkeypatch, tmp_path):
+    research = _research()
+    research_path = tmp_path / "research.json"
+    research_path.write_text(json.dumps(research))
+    monkeypatch.setenv("POSTCLOSE_POLICY_PUBLICATION_DATE", "2026-08-13")
+    path, _, report = runtime.write_outputs(research, policy_dir=tmp_path / "policy",
+        apply_report_dir=tmp_path / "report", evidence_report_path=research_path)
+    payload = json.loads(path.read_text())
+    assert payload["source_target_date"] == "2026-08-11"
+    assert payload["publication_date"] == "2026-08-13"
+    assert payload["effective_date"] == "2026-08-14"
+    monkeypatch.delenv("POSTCLOSE_POLICY_PUBLICATION_DATE")
+    loader = runtime.WidgetSymbolRuntimePolicyLoader(tmp_path / "policy")
+    assert set(loader.resolve_all(observed_date=date(2026, 8, 14))) == {"006800"}
+    payload["publication_date"] = "invalid"
+    path.write_text(json.dumps(payload))
+    assert loader.resolve_all(observed_date=date(2026, 8, 14)) == {}

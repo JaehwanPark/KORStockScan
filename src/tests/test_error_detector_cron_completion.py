@@ -431,6 +431,7 @@ class TestCronCompletionDetector:
     ):
         import json
         import src.engine.error_detectors.cron_completion as cc
+        monkeypatch.setattr(cc, "load_installed_crontab", lambda: "10 20 * * 1-5 POSTCLOSE_DONE_CONTROLLER_ENABLED=true TUNING_MONITORING_POSTCLOSE_ENABLED=true")
 
         logs_dir = tmp_path / "logs"
         status_dir = tmp_path / "data" / "report" / "tuning_monitoring" / "status"
@@ -485,6 +486,7 @@ class TestCronCompletionDetector:
     ):
         import json
         import src.engine.error_detectors.cron_completion as cc
+        monkeypatch.setattr(cc, "load_installed_crontab", lambda: "10 20 * * 1-5 POSTCLOSE_DONE_CONTROLLER_ENABLED=true TUNING_MONITORING_POSTCLOSE_ENABLED=true")
 
         logs_dir = tmp_path / "logs"
         status_dir = tmp_path / "data" / "report" / "postclose_done_controller"
@@ -536,6 +538,7 @@ class TestCronCompletionDetector:
     ):
         import json
         import src.engine.error_detectors.cron_completion as cc
+        monkeypatch.setattr(cc, "load_installed_crontab", lambda: "10 20 * * 1-5 POSTCLOSE_DONE_CONTROLLER_ENABLED=true TUNING_MONITORING_POSTCLOSE_ENABLED=true")
 
         logs_dir = tmp_path / "logs"
         status_dir = tmp_path / "data" / "report" / "tuning_monitoring" / "status"
@@ -810,3 +813,12 @@ def test_once_marker_census_rejects_embedded_json_receipts(tmp_path):
     text = CronCompletionDetector._read_once_markers(path, "2026-09-07")
     assert "[START]" in text
     assert "[DONE]" not in text
+
+
+def test_self_audit_cannot_be_claimed_by_dead_or_unrelated_parent(monkeypatch):
+    import os
+    from src.engine.error_detectors import cron_completion as cc
+    monkeypatch.setenv("POSTCLOSE_FINALIZATION_DETECTOR_DATE", "2026-09-17")
+    monkeypatch.setenv("POSTCLOSE_FINALIZATION_DETECTOR_PARENT_PID", str(os.getpid()))
+    assert cc._finalization_self_audit("2026-09-17") is False
+    assert cc._finalization_self_audit("2026-09-18") is False

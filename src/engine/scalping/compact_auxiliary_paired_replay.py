@@ -2170,6 +2170,25 @@ def finalize(*, data_root, day, publication_day, preserve_noncompact_scope=False
         return _finalize(data_root=data_root, day=day, publication_day=publication_day)
 
 
+def checklist_projection_block(view, consumer_path):
+    start = "<!-- compact_auxiliary_direct:start -->"
+    end = "<!-- compact_auxiliary_direct:end -->"
+    return "\n".join(
+        [
+            start,
+            f"<!-- compact_auxiliary_direct_sha256:{digest(view)} -->",
+            "",
+            "## Compact auxiliary 직접 증거",
+            "",
+            f"- 평가 원천 {view['source_date']}; 발행 {view['publication_date']}; 적용 {view['effective_date']}. 평가 상태 `{view['evaluation_state']}`, 선정 상태 `{view['selection_disposition']}`.",
+            f"- paired `{view['paired_artifact_content_sha256']}`; 정책 bundle `{view['policy_bundle_sha256']}`; consumer `{read(consumer_path)['artifact_content_sha256']}`.",
+            f"- 다음 확인 `{view['next_owner']}` / `{view['closure_test']}`. 실제 PID 소비와 비용 후 자연 성과는 별도 수용 조건이다.",
+            "",
+            end,
+        ]
+    )
+
+
 def _write_checklist_projection(root, view, consumer_path):
     from src.engine.build_next_stage2_checklist import (
         _atomic_write_checklist,
@@ -2186,20 +2205,7 @@ def _write_checklist_projection(root, view, consumer_path):
     )
     start = "<!-- compact_auxiliary_direct:start -->"
     end = "<!-- compact_auxiliary_direct:end -->"
-    block = "\n".join(
-        [
-            start,
-            f"<!-- compact_auxiliary_direct_sha256:{digest(view)} -->",
-            "",
-            "## Compact auxiliary 직접 증거",
-            "",
-            f"- 평가 원천 {view['source_date']}; 발행 {view['publication_date']}; 적용 {view['effective_date']}. 평가 상태 `{view['evaluation_state']}`, 선정 상태 `{view['selection_disposition']}`.",
-            f"- paired `{view['paired_artifact_content_sha256']}`; 정책 bundle `{view['policy_bundle_sha256']}`; consumer `{read(consumer_path)['artifact_content_sha256']}`.",
-            f"- 다음 확인 `{view['next_owner']}` / `{view['closure_test']}`. 실제 PID 소비와 비용 후 자연 성과는 별도 수용 조건이다.",
-            "",
-            end,
-        ]
-    )
+    block = checklist_projection_block(view, consumer_path)
     with _checklist_write_lock(checklist_path):
         text = (
             checklist_path.read_text(encoding="utf-8")

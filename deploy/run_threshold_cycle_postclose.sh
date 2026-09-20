@@ -126,6 +126,9 @@ PROJECT_DIR="${PROJECT_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 VENV_PY="${VENV_PY:-$PROJECT_DIR/.venv/bin/python}"
 TARGET_DATE="${1:-$(TZ=Asia/Seoul date +%F)}"
 POLICY_PUBLICATION_DATE="${THRESHOLD_CYCLE_POLICY_PUBLICATION_DATE:-$TARGET_DATE}"
+export POSTCLOSE_POLICY_PUBLICATION_DATE="$POLICY_PUBLICATION_DATE"
+PREPARED_EFFECTIVE_DATE="$(cd "$PROJECT_DIR" && PYTHONPATH=. "$VENV_PY" -c 'import sys; from src.engine.build_next_stage2_checklist import _next_krx_trading_day; print(_next_krx_trading_day(sys.argv[1]))' "$POLICY_PUBLICATION_DATE")"
+export POSTCLOSE_PREPARED_EFFECTIVE_DATE="$PREPARED_EFFECTIVE_DATE"
 # shellcheck source=cpu_affinity_profile.sh
 . "$SCRIPT_DIR/cpu_affinity_profile.sh"
 MAX_CPU_BUSY_PCT="${THRESHOLD_CYCLE_MAX_CPU_BUSY_PCT:-95}"
@@ -257,11 +260,18 @@ AUTOMATION_TRIGGER_DECISION_CACHE_MARKER="$PROJECT_DIR/tmp/automation_trigger_de
 AUTOMATION_TRIGGER_DECISION_OUTPUT_TEMP="$PROJECT_DIR/tmp/automation_trigger_decision_${TARGET_DATE}_$$.out"
 POSTCLOSE_FAILURE_REASON=""
 POSTCLOSE_FAILURE_ARTIFACT=""
+POSTCLOSE_NOTIFY_ARGS=(--notify)
+if [[ "${POSTCLOSE_NOTIFICATIONS:-true}" != "true" ]]; then
+  POSTCLOSE_NOTIFY_ARGS=()
+fi
 
 mkdir -p "$PROJECT_DIR/logs" "$STATUS_DIR" "$PROJECT_DIR/tmp"
 rm -f "$AUTOMATION_TRIGGER_DECISION_CACHE_MARKER"
 cd "$PROJECT_DIR"
 
+POSTCLOSE_RUN_ID="$("$VENV_PY" -c 'import uuid; print(uuid.uuid4().hex)')"
+POSTCLOSE_CODE_COMMIT="$(git -C "$PROJECT_DIR" rev-parse HEAD)"
+export POSTCLOSE_RUN_ID POSTCLOSE_CODE_COMMIT
 write_postclose_status() {
   local status="$1"
   local reason="${2:-}"
@@ -304,9 +314,18 @@ if path.exists():
         payload = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         payload = {}
+if status == "running":
+    if payload:
+        history = path.parent / "attempts" / target_date
+        history.mkdir(parents=True, exist_ok=True)
+        import uuid
+        (history / f"{uuid.uuid4().hex}.json").write_text(json.dumps(payload), encoding="utf-8")
+    payload = {}
 payload.update(
     {
-        "schema_version": 1,
+        "schema_version": 2,
+        "run_id": os.environ["POSTCLOSE_RUN_ID"],
+        "code_commit": os.environ["POSTCLOSE_CODE_COMMIT"],
         "report_type": "threshold_cycle_postclose_status",
         "target_date": target_date,
         "status": status,
@@ -367,7 +386,9 @@ if finished == "1":
 else:
     payload.pop("finished_at", None)
 path.parent.mkdir(parents=True, exist_ok=True)
-path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+temporary = path.with_suffix(f".{os.getpid()}.tmp")
+temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+os.replace(temporary, path)
 PY
 }
 
@@ -609,6 +630,8 @@ def emit_metrics(returncode, complete):
         "schema": "postclose_command_metrics_v1",
         "target_date": sys.argv[1],
         "phase": sys.argv[2],
+        "run_id": os.environ.get("POSTCLOSE_RUN_ID"),
+        "code_commit": os.environ.get("POSTCLOSE_CODE_COMMIT"),
         "producer_module": module,
         "wall_sec": None if started is None else time.monotonic() - started,
         "child_user_cpu_sec": None if usage is None else usage.ru_utime,
@@ -1446,7 +1469,7 @@ if [ "$RUN_LOW_PRICE_TWO_LEG_CANDIDATE_RECOMMENDATION" = "true" ] || [ "$RUN_LOW
         -m src.engine.monitoring.low_price_two_leg_expanded_candidate_research \
         --target-date "$TARGET_DATE" \
         --write \
-        --notify \
+        "${POSTCLOSE_NOTIFY_ARGS[@]}" \
         --print-summary
       then
         break
@@ -1467,7 +1490,7 @@ if [ "$RUN_LOW_PRICE_TWO_LEG_CANDIDATE_RECOMMENDATION" = "true" ] || [ "$RUN_LOW
     "low_price_two_leg_candidate_recommendation"
   run_postclose_cmd env PYTHONPATH=. "$VENV_PY" \
     -m src.engine.automation.low_price_two_leg_auto_expansion_policy \
-    --source-date "$TARGET_DATE" \
+    --publication-date "$POLICY_PUBLICATION_DATE" --source-date "$TARGET_DATE" \
     --write
 fi
 # Rising Missed scout entry and dedicated studies retired 2026-09-18.
@@ -1500,7 +1523,7 @@ fi
 
 if [ "$RUN_SCALE_IN_SPLIT_ORDER_PLAN" = "true" ] || [ "$RUN_SCALE_IN_SPLIT_ORDER_PLAN" = "1" ]; then
   run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.scale_in_split_order_plan \
-    --date "$TARGET_DATE"
+    --preopen-date "$PREPARED_EFFECTIVE_DATE" --date "$TARGET_DATE"
   wait_for_json_artifact \
     "$PROJECT_DIR/data/report/scale_in_split_order_plan/scale_in_split_order_plan_${TARGET_DATE}.json" \
     "scale_in_split_order_plan"
@@ -1517,7 +1540,7 @@ fi
 if [ "$RUN_ENTRY_SPLIT_ORDER_PLAN" = "true" ] || [ "$RUN_ENTRY_SPLIT_ORDER_PLAN" = "1" ]; then
   wait_for_postclose_resources "entry_split_order_plan"
   run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.entry_split_order_plan \
-    --date "$TARGET_DATE"
+    --prepared-effective-date "$PREPARED_EFFECTIVE_DATE" --date "$TARGET_DATE"
   wait_for_report_artifact \
     "$PROJECT_DIR/data/report/entry_split_order_plan/entry_split_order_plan_${TARGET_DATE}.json" \
     "$PROJECT_DIR/data/report/entry_split_order_plan/entry_split_order_plan_${TARGET_DATE}.md" \
@@ -1540,7 +1563,7 @@ if [ "$RUN_AI_DECISION_QUALITY_DAILY_MATERIALIZATION" = "true" ] || [ "$RUN_AI_D
     "ai_decision_outcome_labels"
 fi
 run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.automation.entry_cancel_wait_tuning \
-  --date "$TARGET_DATE"
+  --publication-date "$POLICY_PUBLICATION_DATE" --effective-date "$PREPARED_EFFECTIVE_DATE" --date "$TARGET_DATE"
 wait_for_report_artifact \
   "$PROJECT_DIR/data/report/entry_cancel_wait_tuning/entry_cancel_wait_tuning_${TARGET_DATE}.json" \
   "$PROJECT_DIR/data/report/entry_cancel_wait_tuning/entry_cancel_wait_tuning_${TARGET_DATE}.md" \
@@ -2018,9 +2041,9 @@ run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.build_next_stage2_ch
 wait_for_file_artifact "$(next_stage2_checklist_path)" "next_stage2_checklist_final_refresh"
 if [[ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" == "true" || "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" == "1" ]]; then
   run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.verify_threshold_cycle_postclose_chain \
-    --date "$TARGET_DATE" --main-mechanistic-summary-only
+    --date "$TARGET_DATE" --main-mechanistic-summary-only --require-summary-handoff --effective-date "$PREPARED_EFFECTIVE_DATE" --publication-date "$POLICY_PUBLICATION_DATE"
   run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.verify_threshold_cycle_postclose_chain \
-    --date "$TARGET_DATE" --compact-summary-only
+    --date "$TARGET_DATE" --compact-summary-only --require-summary-handoff --effective-date "$PREPARED_EFFECTIVE_DATE" --publication-date "$POLICY_PUBLICATION_DATE"
 fi
 wait_for_postclose_resources "verify_threshold_cycle_postclose_chain"
 POSTCLOSE_FAILURE_REASON="verify_threshold_cycle_postclose_chain_failed"
@@ -2029,7 +2052,6 @@ run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.verify_threshold_cyc
   --date "$TARGET_DATE" \
   --require-summary-handoff \
   --allow-pending-done-marker \
-  --allow-pending-entry-replay \
   "${VERIFY_DISABLED_STAGE_ARGS[@]}"
 POSTCLOSE_FAILURE_REASON=""
 POSTCLOSE_FAILURE_ARTIFACT=""
@@ -2037,18 +2059,16 @@ wait_for_report_artifact \
   "$PROJECT_DIR/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_${TARGET_DATE}.json" \
   "$PROJECT_DIR/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_${TARGET_DATE}.md" \
   "threshold_cycle_postclose_verification"
-run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.sync_docs_backlog_to_project --print-backlog-only --limit 500 >/dev/null
+run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.sync_docs_backlog_to_project --print-backlog-only --limit 500 >"$PROJECT_DIR/tmp/postclose_backlog_${TARGET_DATE}_${POSTCLOSE_RUN_ID}.json"
 finished_at="$(TZ=Asia/Seoul date +%FT%T%z)"
-write_postclose_status succeeded completed 0 1
+write_postclose_status producers_completed awaiting_final_verification 0 1
 emit_postclose_marker "[STATUS] intraday_ws_freshness_finalize target_date=$TARGET_DATE enabled=$RUN_INTRADAY_WS_FRESHNESS_FINALIZE runtime_effect=false"
-emit_postclose_marker "[DONE] threshold-cycle postclose target_date=$TARGET_DATE market_panic_breadth=$RUN_MARKET_PANIC_BREADTH_REPORT pipeline_event_verbosity=$RUN_PIPELINE_EVENT_VERBOSITY_REPORT observation_source_quality_audit=$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT intraday_ws_freshness_finalize=$RUN_INTRADAY_WS_FRESHNESS_FINALIZE opening_rotation_profile_tuning=$RUN_OPENING_ROTATION_PROFILE_TUNING ai_decision_quality_daily_materialization=$RUN_AI_DECISION_QUALITY_DAILY_MATERIALIZATION ai_decision_action_outcome_calibration=$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION codebase_performance_workorder=$RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT pattern_lab_currentness_audit=$RUN_PATTERN_LAB_CURRENTNESS_AUDIT pattern_lab_ai_review=$RUN_PATTERN_LAB_AI_REVIEW time_window_regime_counterfactual=$RUN_TIME_WINDOW_REGIME_COUNTERFACTUAL producer_gap_discovery=$RUN_PRODUCER_GAP_DISCOVERY stage_hook_workorder_discovery=$RUN_STAGE_HOOK_WORKORDER_DISCOVERY stage_hook_runtime_scaffold=$RUN_STAGE_HOOK_RUNTIME_SCAFFOLD pattern_lab_propagation_audit=$RUN_PATTERN_LAB_PROPAGATION_AUDIT scalp_entry_adm=$RUN_SCALP_ENTRY_ADM entry_split_order_plan=$RUN_ENTRY_SPLIT_ORDER_PLAN scale_in_split_order_plan=$RUN_SCALE_IN_SPLIT_ORDER_PLAN entry_ai_gate_backtest=$RUN_ENTRY_AI_GATE_BACKTEST entry_ai_gate_backtest_schedule=$ENTRY_AI_GATE_BACKTEST_SCHEDULE rising_missed_intraday_feedback_postclose=$RUN_RISING_MISSED_INTRADAY_FEEDBACK_POSTCLOSE scalping_pyramid_intraday_feedback_postclose=$RUN_SCALPING_PYRAMID_INTRADAY_FEEDBACK_POSTCLOSE scalping_pyramid_quality_calibration=$RUN_SCALPING_PYRAMID_QUALITY_CALIBRATION scalping_avg_down_recovery_calibration=$RUN_SCALPING_AVG_DOWN_RECOVERY_CALIBRATION rising_missed_classifier_prior=$RUN_RISING_MISSED_CLASSIFIER_PRIOR samsung_machine_entry_tuning=$RUN_SAMSUNG_MACHINE_ENTRY_TUNING low_price_two_leg_tuning=$RUN_LOW_PRICE_TWO_LEG_TUNING low_price_two_leg_candidate_recommendation=$RUN_LOW_PRICE_TWO_LEG_CANDIDATE_RECOMMENDATION institutional_flow_context=$RUN_INSTITUTIONAL_FLOW_CONTEXT microstructure_reaction_context=false microstructure_machine_evaluation=$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION lifecycle_decision_matrix=$RUN_LIFECYCLE_DECISION_MATRIX lifecycle_ai_context=$RUN_LIFECYCLE_AI_CONTEXT ldm_hypothesis_parent_refinement=$RUN_LDM_HYPOTHESIS_PARENT_REFINEMENT lifecycle_bucket_discovery=$RUN_LIFECYCLE_BUCKET_DISCOVERY lifecycle_bucket_windows=$RUN_LIFECYCLE_BUCKET_WINDOWS lifecycle_bucket_window_list=$LIFECYCLE_BUCKET_WINDOWS lifecycle_bucket_promotion_window=$LIFECYCLE_BUCKET_PROMOTION_WINDOW force_lifecycle_bucket_windows=$FORCE_LIFECYCLE_BUCKET_WINDOWS force_deep_audits=$FORCE_DEEP_AUDITS force_workorder_branch=$FORCE_WORKORDER_BRANCH runtime_apply_bridge=$RUN_RUNTIME_APPLY_BRIDGE latency_classifier_recommendation=$RUN_LATENCY_CLASSIFIER_RECOMMENDATION swing_lifecycle=$RUN_SWING_LIFECYCLE_AUDIT swing_strategy_discovery=$RUN_SWING_STRATEGY_DISCOVERY swing_lifecycle_matrix=$RUN_SWING_LIFECYCLE_MATRIX swing_lifecycle_bucket_discovery=$RUN_SWING_LIFECYCLE_BUCKET_DISCOVERY swing_ai_review_provider=$SWING_THRESHOLD_AI_REVIEW_PROVIDER swing_lifecycle_bucket_discovery_ai_provider=$SWING_LIFECYCLE_BUCKET_DISCOVERY_AI_PROVIDER pattern_lab_ai_review_provider=$PATTERN_LAB_AI_REVIEW_PROVIDER producer_gap_discovery_ai_provider=$PRODUCER_GAP_DISCOVERY_AI_PROVIDER stage_hook_workorder_discovery_ai_provider=$STAGE_HOOK_WORKORDER_DISCOVERY_AI_PROVIDER deepseek_swing_lab=$RUN_DEEPSEEK_SWING_LAB runtime_approval_summary=true next_stage2_checklist=true finished_at=$finished_at"
 wait_for_postclose_resources "verify_threshold_cycle_postclose_chain_final"
 POSTCLOSE_FAILURE_REASON="verify_threshold_cycle_postclose_chain_final_failed"
 POSTCLOSE_FAILURE_ARTIFACT="$PROJECT_DIR/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_${TARGET_DATE}.json"
 run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.verify_threshold_cycle_postclose_chain \
   --date "$TARGET_DATE" \
-  --require-summary-handoff \
-  --allow-pending-entry-replay \
+  --require-summary-handoff --seal-main-run --expected-run-id "$POSTCLOSE_RUN_ID" \
   "${VERIFY_DISABLED_STAGE_ARGS[@]}"
 POSTCLOSE_FAILURE_REASON=""
 POSTCLOSE_FAILURE_ARTIFACT=""
@@ -2056,6 +2076,7 @@ wait_for_report_artifact \
   "$PROJECT_DIR/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_${TARGET_DATE}.json" \
   "$PROJECT_DIR/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_${TARGET_DATE}.md" \
   "threshold_cycle_postclose_verification_final"
+emit_postclose_marker "[DONE] threshold-cycle postclose target_date=$TARGET_DATE market_panic_breadth=$RUN_MARKET_PANIC_BREADTH_REPORT pipeline_event_verbosity=$RUN_PIPELINE_EVENT_VERBOSITY_REPORT observation_source_quality_audit=$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT intraday_ws_freshness_finalize=$RUN_INTRADAY_WS_FRESHNESS_FINALIZE opening_rotation_profile_tuning=$RUN_OPENING_ROTATION_PROFILE_TUNING ai_decision_quality_daily_materialization=$RUN_AI_DECISION_QUALITY_DAILY_MATERIALIZATION ai_decision_action_outcome_calibration=$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION codebase_performance_workorder=$RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT pattern_lab_currentness_audit=$RUN_PATTERN_LAB_CURRENTNESS_AUDIT pattern_lab_ai_review=$RUN_PATTERN_LAB_AI_REVIEW time_window_regime_counterfactual=$RUN_TIME_WINDOW_REGIME_COUNTERFACTUAL producer_gap_discovery=$RUN_PRODUCER_GAP_DISCOVERY stage_hook_workorder_discovery=$RUN_STAGE_HOOK_WORKORDER_DISCOVERY stage_hook_runtime_scaffold=$RUN_STAGE_HOOK_RUNTIME_SCAFFOLD pattern_lab_propagation_audit=$RUN_PATTERN_LAB_PROPAGATION_AUDIT scalp_entry_adm=$RUN_SCALP_ENTRY_ADM entry_split_order_plan=$RUN_ENTRY_SPLIT_ORDER_PLAN scale_in_split_order_plan=$RUN_SCALE_IN_SPLIT_ORDER_PLAN entry_ai_gate_backtest=$RUN_ENTRY_AI_GATE_BACKTEST entry_ai_gate_backtest_schedule=$ENTRY_AI_GATE_BACKTEST_SCHEDULE rising_missed_intraday_feedback_postclose=$RUN_RISING_MISSED_INTRADAY_FEEDBACK_POSTCLOSE scalping_pyramid_intraday_feedback_postclose=$RUN_SCALPING_PYRAMID_INTRADAY_FEEDBACK_POSTCLOSE scalping_pyramid_quality_calibration=$RUN_SCALPING_PYRAMID_QUALITY_CALIBRATION scalping_avg_down_recovery_calibration=$RUN_SCALPING_AVG_DOWN_RECOVERY_CALIBRATION rising_missed_classifier_prior=$RUN_RISING_MISSED_CLASSIFIER_PRIOR samsung_machine_entry_tuning=$RUN_SAMSUNG_MACHINE_ENTRY_TUNING low_price_two_leg_tuning=$RUN_LOW_PRICE_TWO_LEG_TUNING low_price_two_leg_candidate_recommendation=$RUN_LOW_PRICE_TWO_LEG_CANDIDATE_RECOMMENDATION institutional_flow_context=$RUN_INSTITUTIONAL_FLOW_CONTEXT microstructure_reaction_context=false microstructure_machine_evaluation=$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION lifecycle_decision_matrix=$RUN_LIFECYCLE_DECISION_MATRIX lifecycle_ai_context=$RUN_LIFECYCLE_AI_CONTEXT ldm_hypothesis_parent_refinement=$RUN_LDM_HYPOTHESIS_PARENT_REFINEMENT lifecycle_bucket_discovery=$RUN_LIFECYCLE_BUCKET_DISCOVERY lifecycle_bucket_windows=$RUN_LIFECYCLE_BUCKET_WINDOWS lifecycle_bucket_window_list=$LIFECYCLE_BUCKET_WINDOWS lifecycle_bucket_promotion_window=$LIFECYCLE_BUCKET_PROMOTION_WINDOW force_lifecycle_bucket_windows=$FORCE_LIFECYCLE_BUCKET_WINDOWS force_deep_audits=$FORCE_DEEP_AUDITS force_workorder_branch=$FORCE_WORKORDER_BRANCH runtime_apply_bridge=$RUN_RUNTIME_APPLY_BRIDGE latency_classifier_recommendation=$RUN_LATENCY_CLASSIFIER_RECOMMENDATION swing_lifecycle=$RUN_SWING_LIFECYCLE_AUDIT swing_strategy_discovery=$RUN_SWING_STRATEGY_DISCOVERY swing_lifecycle_matrix=$RUN_SWING_LIFECYCLE_MATRIX swing_lifecycle_bucket_discovery=$RUN_SWING_LIFECYCLE_BUCKET_DISCOVERY swing_ai_review_provider=$SWING_THRESHOLD_AI_REVIEW_PROVIDER swing_lifecycle_bucket_discovery_ai_provider=$SWING_LIFECYCLE_BUCKET_DISCOVERY_AI_PROVIDER pattern_lab_ai_review_provider=$PATTERN_LAB_AI_REVIEW_PROVIDER producer_gap_discovery_ai_provider=$PRODUCER_GAP_DISCOVERY_AI_PROVIDER stage_hook_workorder_discovery_ai_provider=$STAGE_HOOK_WORKORDER_DISCOVERY_AI_PROVIDER deepseek_swing_lab=$RUN_DEEPSEEK_SWING_LAB runtime_approval_summary=true next_stage2_checklist=true finished_at=$finished_at"
 # Late widget/machine sources are not terminal here.  Finalization owns the
 # single tower -> checklist -> strict summary-handoff generation after all
 # predecessors complete.

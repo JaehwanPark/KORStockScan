@@ -408,6 +408,7 @@ def build_policy(
     legacy_observation_enrollment: bool = False,
     reader_validation: bool = False,
     incumbent_policy_dir: Path | None = None,
+    publication_date: date | None = None,
 ) -> dict[str, Any]:
     if (
         research.get("schema") not in SUPPORTED_RESEARCH_SCHEMAS
@@ -468,7 +469,10 @@ def build_policy(
     ):
         raise ValueError("widget_symbol_research_krx_source_provenance_invalid")
     source_date = date.fromisoformat(str(research.get("end_date") or ""))
-    effective_date = next_krx_trading_date(source_date)
+    publication = publication_date or source_date
+    if not source_date <= publication <= datetime.now(KST).date():
+        raise ValueError("widget_policy_publication_date_invalid")
+    effective_date = next_krx_trading_date(publication)
     evidence_path = evidence_report_path or (
         DEFAULT_RESEARCH_DIR
         / f"widget_symbol_signal_policy_research_{source_date.isoformat()}.json"
@@ -781,6 +785,7 @@ def build_policy(
             f"widget_symbol_runtime_policy_{effective_date.isoformat()}_"
             f"from_{source_date.isoformat()}"
         ),
+        **({"publication_date": publication.isoformat()} if publication_date else {}),
         "source_target_date": source_date.isoformat(),
         "effective_date": effective_date.isoformat(),
         "clean_tuning_baseline_date": CLEAN_BASELINE_DATE.isoformat(),
@@ -821,12 +826,14 @@ def build_observation_catalog(
     evidence_report_path: Path | None = None,
     reader_validation: bool = False,
     incumbent_policy_dir: Path | None = None,
+    publication_date: date | None = None,
 ) -> dict[str, Any]:
     expanded = build_policy(
         research,
         evidence_report_path=evidence_report_path,
         reader_validation=reader_validation,
         incumbent_policy_dir=incumbent_policy_dir,
+        publication_date=publication_date,
     )
     execution = build_policy(
         research,
@@ -834,6 +841,7 @@ def build_observation_catalog(
         legacy_observation_enrollment=True,
         reader_validation=reader_validation,
         incumbent_policy_dir=incumbent_policy_dir,
+        publication_date=publication_date,
     )
     return {
         **expanded,
@@ -886,11 +894,13 @@ class WidgetSymbolRuntimePolicyLoader:
             source_date = date.fromisoformat(
                 str(payload.get("source_target_date") or "")
             )
-        except ValueError:
+            publication = date.fromisoformat(payload.get("publication_date") or source_date.isoformat())
+        except (ValueError, TypeError):
             return {}
         if (
             source_date >= observed_date
-            or next_krx_trading_date(source_date) != observed_date
+            or not source_date <= publication < observed_date
+            or next_krx_trading_date(publication) != observed_date
         ):
             return {}
         evidence_path = Path(str(payload.get("evidence_report_path") or ""))
@@ -918,6 +928,7 @@ class WidgetSymbolRuntimePolicyLoader:
                 )
             reconstructed = build_policy(
                 evidence,
+                publication_date=date.fromisoformat(payload["publication_date"]) if payload.get("publication_date") else None,
                 reader_validation=payload.get("schema") == CLOSED_LOOP_POLICY_SCHEMA,
                 incumbent_policy_dir=self.policy_dir,
                 evidence_report_path=evidence_path,
@@ -1076,11 +1087,13 @@ class WidgetSymbolRuntimePolicyLoader:
             source_date = date.fromisoformat(
                 str(payload.get("source_target_date") or "")
             )
-        except (OSError, ValueError):
+            publication = date.fromisoformat(payload.get("publication_date") or source_date.isoformat())
+        except (OSError, ValueError, TypeError):
             return {}
         if (
             source_date >= observed_date
-            or next_krx_trading_date(source_date) != observed_date
+            or not source_date <= publication < observed_date
+            or next_krx_trading_date(publication) != observed_date
             or _payload_sha256(evidence)
             != str(payload.get("evidence_report_sha256") or "")
         ):
@@ -1089,6 +1102,7 @@ class WidgetSymbolRuntimePolicyLoader:
             reconstructed = (
                 build_observation_catalog(
                     evidence,
+                    publication_date=date.fromisoformat(payload["publication_date"]) if payload.get("publication_date") else None,
                     evidence_report_path=evidence_path,
                     reader_validation=bool(payload.get("closed_loop_contract")),
                     incumbent_policy_dir=self.policy_dir,
@@ -1096,6 +1110,7 @@ class WidgetSymbolRuntimePolicyLoader:
                 if is_catalog
                 else build_policy(
                     evidence,
+                    publication_date=date.fromisoformat(payload["publication_date"]) if payload.get("publication_date") else None,
                     evidence_report_path=evidence_path,
                     legacy_observation_enrollment=payload.get(
                         "observation_catalog_version"
@@ -1185,16 +1200,21 @@ def write_outputs(
     apply_report_dir: Path = DEFAULT_APPLY_REPORT_DIR,
     evidence_report_path: Path | None = None,
 ) -> tuple[Path, Path, dict[str, Any]]:
+    import os
+    publication_text = os.environ.get("POSTCLOSE_POLICY_PUBLICATION_DATE")
+    publication = date.fromisoformat(publication_text) if publication_text else None
     policy = build_policy(
         research,
         evidence_report_path=evidence_report_path,
         legacy_observation_enrollment=True,
         incumbent_policy_dir=policy_dir,
+        publication_date=publication,
     )
     catalog = build_observation_catalog(
         research,
         evidence_report_path=evidence_report_path,
         incumbent_policy_dir=policy_dir,
+        publication_date=publication,
     )
     effective_date = date.fromisoformat(policy["effective_date"])
     policy_path = policy_dir / f"{POLICY_PREFIX}_{effective_date.isoformat()}.json"
@@ -1323,7 +1343,9 @@ def main(argv: list[str] | None = None) -> int:
         / f"widget_symbol_signal_policy_research_{source_date.isoformat()}.json"
     )
     research = json.loads(research_path.read_text(encoding="utf-8"))
-    policy = build_policy(research, evidence_report_path=research_path)
+    policy = build_policy(research, evidence_report_path=research_path,
+        publication_date=date.fromisoformat(os.environ["POSTCLOSE_POLICY_PUBLICATION_DATE"])
+        if os.environ.get("POSTCLOSE_POLICY_PUBLICATION_DATE") else None)
     result: dict[str, Any] = {
         "source_target_date": policy["source_target_date"],
         "effective_date": policy["effective_date"],

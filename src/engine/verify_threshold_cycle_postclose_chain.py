@@ -8,7 +8,8 @@ import json
 import os
 import re
 import tempfile
-from datetime import datetime
+import uuid
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -100,6 +101,7 @@ def _direct_checklist_checks(
     from src.engine.build_next_stage2_checklist import (
         _next_krx_trading_day,
         _project_direct_tasks,
+        _render_task,
         stage2_checklist_path,
     )
 
@@ -141,6 +143,9 @@ def _direct_checklist_checks(
     )
     if actual_ids != expected_ids:
         issues.append("direct_checklist_task_projection_mismatch")
+    normalized = checklist_text.replace("- [x]", "- [ ]").replace("- [X]", "- [ ]")
+    if any(_render_task(task, apply_date)[0] not in normalized for task in expected_tasks):
+        issues.append("direct_checklist_schedule_contract_mismatch")
     return {
         "status": "pass" if not issues else "fail",
         "path": str(checklist_path),
@@ -151,6 +156,51 @@ def _direct_checklist_checks(
     }, issues
 
 
+def _terminal_issues(target_date: str, terminal: dict, *, seal: bool = False,
+                     expected_run_id: str | None = None) -> list[str]:
+    issues = []
+    expected_status = "producers_completed" if seal else "succeeded"
+    if terminal.get("status") != expected_status:
+        issues.append("postclose_terminal_status_missing")
+    if terminal.get("target_date") != target_date:
+        issues.append("postclose_terminal_date_mismatch")
+    if type(terminal.get("exit_code")) is not int or terminal["exit_code"] != 0:
+        issues.append("postclose_terminal_exit_code_invalid")
+    if not terminal.get("run_id") or (expected_run_id and terminal.get("run_id") != expected_run_id):
+        issues.append("postclose_terminal_run_mismatch")
+    if not re.fullmatch(r"[0-9a-f]{40}", str(terminal.get("code_commit") or "")):
+        issues.append("postclose_terminal_code_missing")
+    if not terminal.get("started_at") or not terminal.get("finished_at"):
+        issues.append("postclose_terminal_clock_missing")
+    try:
+        started = datetime.fromisoformat(terminal.get("started_at") or "")
+        finished = datetime.fromisoformat(terminal.get("finished_at") or "")
+        if started.tzinfo is None or finished.tzinfo is None or finished < started:
+            raise ValueError("invalid terminal clock")
+    except (ValueError, TypeError):
+        issues.append("postclose_terminal_clock_invalid")
+    if not seal:
+        receipt = terminal.get("verification_receipt") or {}
+        path = Path(str(receipt.get("path") or ""))
+        proof = _load(path)
+        if (not receipt.get("sha256") or _sha(path) != receipt.get("sha256")
+            or proof.get("status") != "pass"
+            or proof.get("verification_scope") != "main_precommit"
+            or proof.get("date") != target_date
+            or proof.get("run_id") != terminal.get("run_id")
+            or proof.get("code_commit") != terminal.get("code_commit")):
+            issues.append("postclose_terminal_verification_binding_invalid")
+    return issues
+
+
+def _effective_date(target_date: str, explicit: str | None = None) -> str | None:
+    if explicit:
+        date.fromisoformat(explicit)
+        return explicit
+    summary = _load(_artifact_paths(target_date)["runtime_summary"])
+    return (summary.get("preopen_consumption_receipt") or {}).get("apply_date")
+
+
 def build_threshold_cycle_postclose_verification(
     target_date: str,
     *,
@@ -158,6 +208,9 @@ def build_threshold_cycle_postclose_verification(
     disabled_stages: set[str] | None = None,
     require_summary_handoff: bool = False,
     allow_pending_entry_replay: bool = False,
+    seal_main_run: bool = False,
+    expected_run_id: str | None = None,
+    effective_date: str | None = None,
 ) -> dict[str, Any]:
     paths = _artifact_paths(target_date)
     summary = _load(paths["runtime_summary"])
@@ -186,8 +239,13 @@ def build_threshold_cycle_postclose_verification(
         issues.append("daily_retirement_contract_missing")
     if summary.get("threshold_cycle_ev_retired") is not True:
         issues.append("ev_retirement_contract_missing")
-    if require_done_marker and postclose.get("status") != "succeeded":
-        issues.append("postclose_terminal_status_missing")
+    if require_done_marker or seal_main_run:
+        issues.extend(_terminal_issues(target_date, postclose, seal=seal_main_run,
+                                      expected_run_id=expected_run_id))
+    for stage in sorted((disabled_stages or set()) - EXPLICIT_DISABLED_STAGE_ALLOWLIST):
+        issues.append(f"disabled_stage_not_allowed:{stage}")
+    if effective_date and (summary.get("preopen_consumption_receipt") or {}).get("apply_date") != effective_date:
+        issues.append("runtime_summary_effective_date_mismatch")
     if require_summary_handoff and not paths["runtime_summary"].exists():
         issues.append("summary_handoff_missing")
     checklist_handoff: dict[str, Any] = {
@@ -209,8 +267,13 @@ def build_threshold_cycle_postclose_verification(
         checklist_handoff["status"] = "blocked_invalid_summary"
     status = "pass" if not issues else "fail"
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "report_type": "threshold_cycle_postclose_verification",
+        "verification_scope": "main_precommit" if seal_main_run else ("main_terminal" if require_done_marker else "preterminal"),
+        "whole_native_chain_done_claimed": False,
+        "run_id": postclose.get("run_id"),
+        "code_commit": postclose.get("code_commit"),
+        "completion_state": "failed" if issues else ("preterminal_verified" if not require_done_marker else "main_verified"),
         "date": target_date,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "status": status,
@@ -265,10 +328,11 @@ def _write_verification_receipts(
 ) -> tuple[dict[str, Any], Path, Path, Path]:
     json_path = OUTPUT_DIR / f"threshold_cycle_postclose_verification_{target_date}.json"
     md_path = OUTPUT_DIR / f"threshold_cycle_postclose_verification_{target_date}.md"
-    attempt_path = OUTPUT_DIR / f"threshold_cycle_postclose_verification_attempt_{target_date}.json"
+    attempt_path = OUTPUT_DIR / "attempts" / target_date / f"{uuid.uuid4().hex}.json"
     report = dict(report)
     report["verification_attempt"] = {
         "immutable": True,
+        "path": str(attempt_path.resolve()),
         "invocation": invocation,
         "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
     }
@@ -278,9 +342,13 @@ def _write_verification_receipts(
             "created_at": report["verification_attempt"]["created_at"],
         }
     body = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
+    attempt_path.parent.mkdir(parents=True, exist_ok=True)
+    with attempt_path.open("x", encoding="utf-8") as handle:
+        handle.write(body)
+        handle.flush()
+        os.fsync(handle.fileno())
     _atomic_write(json_path, body)
     _atomic_write(md_path, _render(report))
-    _atomic_write(attempt_path, body)
     return report, json_path, md_path, attempt_path
 
 
@@ -290,7 +358,7 @@ def _scanner_scope(target_date: str) -> dict[str, Any]:
     return {"status": "pass" if not issues else "fail", "scope": "scanner_lookup_attention_only", "issues": issues, "whole_native_chain_done_claimed": False}
 
 
-def _main_mechanistic_scope(target_date: str) -> dict[str, Any]:
+def _main_mechanistic_scope(target_date: str, effective_date: str | None = None, publication_date: str | None = None) -> dict[str, Any]:
     from src.engine.scalping import ai_action_outcome_calibration as calibration
     from src.engine.scalping import mechanistic_entry_runtime_policy as policy
 
@@ -338,10 +406,12 @@ def _main_mechanistic_scope(target_date: str) -> dict[str, Any]:
     ):
         bundle = _load(candidate)
         machine_source = bundle.get("machine_evaluation_source") or {}
-        if machine_source.get("source_date") == target_date:
+        if (machine_source.get("source_date") == target_date
+            and (not effective_date or bundle.get("target_date") == effective_date)
+            and (not publication_date or bundle.get("publication_date") == publication_date)):
             matching.append((candidate, bundle))
-    if not matching:
-        issues.append("main_machine_future_policy_missing")
+    if len(matching) != 1:
+        issues.append("main_machine_future_policy_missing_or_ambiguous")
     else:
         _, bundle = matching[-1]
         machine_source = bundle.get("machine_evaluation_source") or {}
@@ -392,6 +462,10 @@ def _main_mechanistic_scope(target_date: str) -> dict[str, Any]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--date", required=True)
+    parser.add_argument("--effective-date")
+    parser.add_argument("--publication-date")
+    parser.add_argument("--seal-main-run", action="store_true")
+    parser.add_argument("--expected-run-id")
     parser.add_argument("--require-summary-handoff", action="store_true")
     parser.add_argument("--scanner-lookup-summary-only", action="store_true")
     parser.add_argument("--compact-summary-only", action="store_true")
@@ -401,6 +475,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--allow-pending-entry-replay", action="store_true")
     parser.add_argument("--disabled-stage", action="append", default=[])
     args = parser.parse_args(argv)
+    if args.seal_main_run and (not args.expected_run_id or args.allow_pending_done_marker
+        or not args.require_summary_handoff):
+        parser.error("seal requires expected run identity and strict summary handoff")
     if args.scanner_lookup_summary_only:
         report = _scanner_scope(args.date)
         print(json.dumps(report, ensure_ascii=False))
@@ -410,21 +487,40 @@ def main(argv: list[str] | None = None) -> int:
         report = verify_handoff(args.date)
         print(json.dumps(report, ensure_ascii=False))
         return 0 if report.get("status") == "PASS" else 2
-    if args.compact_summary_only:
-        from src.engine.scalping.main_ai_prompt_consumer import verify_compact_handoff
-        report = verify_compact_handoff(DATA_DIR, args.date)
+    if args.compact_summary_only or args.main_mechanistic_summary_only:
+        effective = _effective_date(args.date, args.effective_date)
+        if args.compact_summary_only:
+            from src.engine.scalping.main_ai_prompt_consumer import verify_compact_handoff
+            report = verify_compact_handoff(DATA_DIR, args.date, effective_date=effective,
+                                            publication_date=args.publication_date)
+        else:
+            report = _main_mechanistic_scope(args.date, effective, args.publication_date)
+        if args.require_summary_handoff:
+            handoff = build_threshold_cycle_postclose_verification(
+                args.date, require_done_marker=False, require_summary_handoff=True,
+                effective_date=effective)
+            report["issues"].extend(handoff["issues"])
+            report["summary_handoff"] = handoff["checklist_handoff"]
+        report.update(status="fail" if report["issues"] else "pass", date=args.date,
+                      direct_source_checks=[], effective_date=effective,
+                      failure_summary={"issues": report["issues"]})
+        original_output = globals()["OUTPUT_DIR"]
+        try:
+            globals()["OUTPUT_DIR"] = original_output / "scoped" / report["scope"]
+            report, *_ = _write_verification_receipts(args.date, report, invocation=vars(args))
+        finally:
+            globals()["OUTPUT_DIR"] = original_output
         print(json.dumps(report, ensure_ascii=False))
-        return 0 if report.get("status") == "PASS" else 2
-    if args.main_mechanistic_summary_only:
-        report = _main_mechanistic_scope(args.date)
-        print(json.dumps(report, ensure_ascii=False))
-        return 0 if report.get("status") == "pass" else 2
+        return 0 if report["status"] == "pass" else 2
     report = build_threshold_cycle_postclose_verification(
         args.date,
         require_done_marker=not args.allow_pending_done_marker,
         disabled_stages=set(args.disabled_stage),
         require_summary_handoff=args.require_summary_handoff,
         allow_pending_entry_replay=args.allow_pending_entry_replay,
+        seal_main_run=args.seal_main_run,
+        expected_run_id=args.expected_run_id,
+        effective_date=args.effective_date,
     )
     report, json_path, md_path, attempt_path = _write_verification_receipts(
         args.date, report,
@@ -434,6 +530,14 @@ def main(argv: list[str] | None = None) -> int:
             "disabled_stages": sorted(set(args.disabled_stage)),
         },
     )
+    if args.seal_main_run and report["status"] == "pass":
+        status_path = _artifact_paths(args.date)["postclose_status"]
+        terminal = _load(status_path)
+        if _terminal_issues(args.date, terminal, seal=True, expected_run_id=report["run_id"]):
+            raise RuntimeError("postclose_terminal_changed_during_seal")
+        terminal.update(status="succeeded", reason="verified_main_completed",
+                        verification_receipt={"path": str(attempt_path.resolve()), "sha256": _sha(attempt_path)})
+        _atomic_write(status_path, json.dumps(terminal, ensure_ascii=False, indent=2) + "\n")
     print(json.dumps({"status": report["status"], "json": str(json_path), "md": str(md_path), "attempt_json": str(attempt_path), "failure_summary": report["failure_summary"]}, ensure_ascii=False))
     return 0 if report["status"] == "pass" else 1
 

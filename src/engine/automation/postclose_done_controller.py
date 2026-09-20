@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import uuid
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,7 @@ from src.engine.runtime_approval_summary import build_runtime_approval_summary
 from src.engine.verify_threshold_cycle_postclose_chain import (
     build_threshold_cycle_postclose_verification,
     _write_verification_receipts,
+    _atomic_write,
 )
 from src.utils.constants import DATA_DIR
 
@@ -49,16 +51,25 @@ def build_postclose_done_controller(
     require_codex_completed: bool = False,
     dry_run: bool = False,
     summary_handoff_only: bool = False,
+    require_independent_producers: bool = False,
 ) -> dict[str, Any]:
     date.fromisoformat(target_date)
     predecessor = _load(_status_path(target_date))
     actions: list[str] = []
+    independent_issues = []
+    if require_independent_producers:
+        from src.engine.automation.postclose_summary_handoff import producer_receipt_issues
+        for owner in ("widget", "machine"):
+            independent_issues.extend(producer_receipt_issues(DATA_DIR / "report", target_date, owner))
     if dry_run:
         status = "dry_run_planned"
         verifier = {"status": "not_run", "issues": []}
     elif predecessor.get("status") != "succeeded" and not summary_handoff_only:
         status = "blocked_predecessor_not_succeeded"
         verifier = {"status": "not_run", "issues": ["postclose_terminal_status_missing"]}
+    elif independent_issues:
+        status = "blocked_independent_producer"
+        verifier = {"status": "not_run", "issues": independent_issues}
     else:
         build_runtime_approval_summary(target_date)
         actions.append("runtime_approval_summary_refreshed")
@@ -79,7 +90,7 @@ def build_postclose_done_controller(
             },
         )
         actions.append("direct_postclose_verification_refreshed")
-        status = "done" if verifier.get("status") == "pass" else "blocked_direct_evidence_gap"
+        status = ("summary_verified" if summary_handoff_only else "done") if verifier.get("status") == "pass" else "blocked_direct_evidence_gap"
     report = {
         "schema_version": 2,
         "report_type": "postclose_done_controller",
@@ -88,6 +99,9 @@ def build_postclose_done_controller(
         "status": status,
         "dry_run": dry_run,
         "summary_handoff_only": summary_handoff_only,
+        "whole_native_chain_done_claimed": status == "done" and require_independent_producers,
+        "require_independent_producers": require_independent_producers,
+        "wait_owner": "calling_wrapper",
         "allow_wrapper_rerun": allow_wrapper_rerun,
         "full_wrapper_rerun_used": False,
         "common_tuning_recovery_retired": True,
@@ -104,8 +118,14 @@ def build_postclose_done_controller(
     }
     json_path, md_path = _control_paths(target_date)
     json_path.parent.mkdir(parents=True, exist_ok=True)
-    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    md_path.write_text(
+    attempt = json_path.parent / "attempts" / f"{target_date}_{uuid.uuid4().hex}.json"
+    report["attempt_path"] = str(attempt)
+    report["main_run_id"] = predecessor.get("run_id")
+    report["verification_attempt_path"] = (verifier.get("verification_attempt") or {}).get("path")
+    serialized = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
+    _atomic_write(attempt, serialized)
+    _atomic_write(json_path, serialized)
+    _atomic_write(md_path,
         "\n".join([
             f"# Postclose done controller - {target_date}", "",
             f"- status: `{status}`",
@@ -114,7 +134,6 @@ def build_postclose_done_controller(
             "- common Daily/EV rerun: `retired`",
             f"- blockers: `{report['blocked_reasons']}`", "",
         ]),
-        encoding="utf-8",
     )
     return report
 
@@ -127,6 +146,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--predecessor-timeout-sec", type=float, default=float(os.environ.get("POSTCLOSE_DONE_CONTROLLER_PREDECESSOR_TIMEOUT_SEC", "43200")))
     parser.add_argument("--allow-wrapper-rerun", action="store_true")
     parser.add_argument("--summary-handoff-only", action="store_true")
+    parser.add_argument("--require-independent-producers", action="store_true")
     parser.add_argument("--require-codex-completed", action="store_true", default=False)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
@@ -139,9 +159,10 @@ def main(argv: list[str] | None = None) -> int:
         require_codex_completed=args.require_codex_completed,
         dry_run=args.dry_run,
         summary_handoff_only=args.summary_handoff_only,
+        require_independent_producers=args.require_independent_producers,
     )
     print(json.dumps({"status": report["status"], "date": report["date"]}, ensure_ascii=False))
-    return 0 if report["status"] in {"done", "dry_run_planned"} else 1
+    return 0 if report["status"] in {"done", "summary_verified", "dry_run_planned"} else 1
 
 
 if __name__ == "__main__":

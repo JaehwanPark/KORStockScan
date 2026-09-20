@@ -1046,3 +1046,12 @@ Verifier의 micro diagnostic warning은 required workorder ID와 issues0·runtim
 [승인 구현·배포](audit-reports/2026-09-11-widget-episode-approved-deployment.md): source9/10 native 추천5개 중 기존 gate를 통과한3개를9/11 profile revision으로 연결한다. `profiles → dated baseline/bounds → candidate carry → policy apply → exact preflight → live wrapper`와 `PROFILE_FIRST_OPERATIONAL_DATES → 장후 report`가 같은61개/과거59개 날짜 경계를 소비한다.07:32 standing authority는9/11 successor로LX세미콘 episode scope를 포함하고, broker/custody skip은 유지한다. 기존 저가주 template에90 drop-in과 신규4개/변경2개 timer만 설치하며 widget·Samsung80 release와 지속 추가기능 pin은 유지한다. 향후 자연 기동은9/11 체크리스트 기존 owner에 남긴다.
 
 `limit_down_watch` 전용 producer·관찰/스캐너·PREOPEN consumer·정책/보고서는 사용자 지시로 폐기했다. 기존 raw 주문·체결·terminal provenance와 과거 보유분 안전 차단은 보존하며 새 진입 권한을 부여하지 않는다. [폐기 리뷰](audit-reports/2026-09-19-limit-down-watch-retirement-review.md).
+
+
+### 통합 복구 terminal 및 직접 인계 (2026-09-20)
+
+운영 계약은 [통합 복구 계획](proposals/postclose-integrated-verification-recovery-and-next-preopen-readiness-plan-2026-09-20.md)의 R0–R6/A–H다. main wrapper는 `run_id/code_commit`와 원 실패를 보존하며 `producers_completed → strict precommit receipt → succeeded/DONE` 순서다. scoped/preterminal/summary-only는 전체 완료가 아니다. main 및 compact verifier는 명시 source/publication/effective와 summary/checklist를 대조한다.
+
+독립 widget/machine wrapper의 `data/report/postclose_producer_terminal/{owner}_{date}.json`은 단계 rc와 exact-date 산출물 hash를 결속한다. 전체 finalizer/controller는 두 owner의 terminal을 확인한 뒤 마지막 직접 summary/checklist/strict를 만든다. 비설치 controller/tuning/archive는 필수 선행조건이 아니다. final detector의 자기 부모는 살아 있는 ancestor가 확인된 동안 `pending_self_audit`; detector 성공 전에 전체 DONE을 쓰지 않는다.
+
+역사 재생성은 widget/machine/finalizer의 `YYYY-MM-DD --recover-closed-target`와 실제 `POSTCLOSE_POLICY_PUBLICATION_DATE`, `POSTCLOSE_PREPARED_EFFECTIVE_DATE`를 사용한다. main은 기존 `THRESHOLD_CYCLE_POLICY_PUBLICATION_DATE`를 사용한다. 복구 실행은 `POSTCLOSE_NOTIFICATIONS=false`로 알림을 생략하고 machine의 fresh capacity/cost 조회를 하지 않는다. 정상 거래 기동/PREOPEN은 설치된 다음 일정의 별도 acceptance다.

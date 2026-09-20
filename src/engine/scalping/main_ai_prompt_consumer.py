@@ -1202,7 +1202,7 @@ def build_report(target_date: str, *, write: bool = False) -> dict[str, Any]:
     return report
 
 
-def verify_compact_handoff(data_root: Path, source_day: str) -> dict:
+def verify_compact_handoff(data_root: Path, source_day: str, *, effective_date: str | None = None, publication_date: str | None = None) -> dict:
     """Verify paired evidence, dated policy, consumer and checklist directly."""
     from src.engine.scalping import compact_auxiliary_paired_replay as compact
     from src.engine.scalping import mechanistic_entry_runtime_policy as policy
@@ -1232,7 +1232,9 @@ def verify_compact_handoff(data_root: Path, source_day: str) -> dict:
     ):
         value = compact.read(path)
         if (
-            value.get("compact_evaluation_source_date") == source_day
+            (not effective_date or value.get("target_date") == effective_date)
+            and (not publication_date or value.get("publication_date") == publication_date)
+            and value.get("compact_evaluation_source_date") == source_day
             and value.get("compact_paired_artifact_sha256")
             == paired.get("artifact_content_sha256")
         ):
@@ -1298,9 +1300,10 @@ def verify_compact_handoff(data_root: Path, source_day: str) -> dict:
     )
     marker = f"<!-- compact_auxiliary_direct_sha256:{compact.digest(view)} -->"
     try:
-        if marker not in checklist_path.read_text(encoding="utf-8"):
+        text = checklist_path.read_text(encoding="utf-8")
+        if marker not in text or compact.checklist_projection_block(view, consumer_path) not in text:
             issues.append("compact_direct_checklist_projection_invalid")
-    except OSError:
+    except (OSError, KeyError, TypeError):
         issues.append("compact_direct_checklist_projection_invalid")
     return {
         "status": "FAIL" if issues else "PASS",

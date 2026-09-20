@@ -24,7 +24,13 @@ def _seed(monkeypatch, tmp_path: Path, target: str):
             _write(path, {"report_type": owner, "target_date": target, "status": "pass"})
     summary = summary_mod.build_runtime_approval_summary(target)
     status_path = report / "threshold_cycle_postclose_status" / f"threshold_cycle_postclose_{target}.status.json"
-    _write(status_path, {"target_date": target, "status": "succeeded"})
+    proof = report / "proof.json"
+    _write(proof, {"date": target, "status": "pass", "verification_scope": "main_precommit",
+                   "run_id": "run-1", "code_commit": "a" * 40})
+    _write(status_path, {"target_date": target, "status": "succeeded", "exit_code": 0,
+                        "run_id": "run-1", "code_commit": "a" * 40,
+                        "started_at": "2026-09-19T20:10:00+09:00", "finished_at": "2026-09-19T21:00:00+09:00",
+                        "verification_receipt": {"path": str(proof), "sha256": mod._sha(proof)}})
     return summary
 
 
@@ -207,4 +213,53 @@ def test_main_mechanistic_scope_rejects_compact_only_report(
     assert result["status"] == "fail"
     assert "main_machine_report_scope_invalid" in result["issues"]
     assert "main_machine_noncompact_refresh_missing" in result["issues"]
-    assert "main_machine_future_policy_missing" in result["issues"]
+    assert "main_machine_future_policy_missing_or_ambiguous" in result["issues"]
+
+
+def test_terminal_rejects_wrong_date_nonzero_exit_missing_identity_and_stale_proof(monkeypatch, tmp_path):
+    target = "2026-09-19"
+    _seed(monkeypatch, tmp_path, target)
+    path = mod._artifact_paths(target)["postclose_status"]
+    original = mod._load(path)
+    for change, issue in [({"target_date": "2000-01-01"}, "postclose_terminal_date_mismatch"),
+                          ({"exit_code": 17}, "postclose_terminal_exit_code_invalid"),
+                          ({"run_id": "new-run"}, "postclose_terminal_verification_binding_invalid"),
+                          ({"code_commit": None}, "postclose_terminal_code_missing"),
+                          ({"verification_receipt": {}}, "postclose_terminal_verification_binding_invalid")]:
+        _write(path, {**original, **change})
+        result = mod.build_threshold_cycle_postclose_verification(target)
+        assert result["status"] == "fail" and issue in result["issues"]
+
+
+def test_attempts_never_overwrite_failure_and_preterminal_is_not_done(monkeypatch, tmp_path):
+    target = "2026-09-19"
+    _seed(monkeypatch, tmp_path, target)
+    report = mod.build_threshold_cycle_postclose_verification(target, require_done_marker=False)
+    assert report["completion_state"] == "preterminal_verified"
+    assert report["whole_native_chain_done_claimed"] is False
+    failed = {**report, "status": "fail", "issues": ["first_failure"]}
+    _, _, _, first = mod._write_verification_receipts(target, failed, invocation={})
+    original = first.read_bytes()
+    _, _, _, second = mod._write_verification_receipts(target, report, invocation={})
+    assert first != second and first.read_bytes() == original
+    assert mod._load(first)["issues"] == ["first_failure"]
+
+
+def test_cli_seals_only_current_precommit_after_checklist_verification(monkeypatch, tmp_path):
+    target = "2026-09-19"
+    _seed(monkeypatch, tmp_path, target)
+    _build_direct_checklist(monkeypatch, tmp_path, target)
+    path = mod._artifact_paths(target)["postclose_status"]
+    before = mod._load(path)
+    _write(path, {**before, "status": "producers_completed", "verification_receipt": None})
+    assert mod.main(["--date", target, "--seal-main-run", "--expected-run-id", "other", "--require-summary-handoff"]) == 1
+    assert mod._load(path)["status"] == "producers_completed"
+    assert mod.main(["--date", target, "--seal-main-run", "--expected-run-id", "run-1", "--require-summary-handoff"]) == 0
+    assert mod._load(path)["status"] == "succeeded"
+    assert mod.build_threshold_cycle_postclose_verification(target, require_summary_handoff=True)["status"] == "pass"
+
+
+def test_disabled_active_stage_is_not_an_escape_hatch(monkeypatch, tmp_path):
+    _seed(monkeypatch, tmp_path, "2026-09-19")
+    result = mod.build_threshold_cycle_postclose_verification("2026-09-19", disabled_stages={"entry_split"})
+    assert "disabled_stage_not_allowed:entry_split" in result["issues"]

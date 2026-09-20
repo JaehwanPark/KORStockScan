@@ -121,7 +121,9 @@ PY
         if command -v taskset >/dev/null 2>&1 && [[ -n "$CPU_AFFINITY" ]] && [[ "$(korstockscan_nproc)" -gt 1 ]]; then
             notify_cmd=(taskset -c "$CPU_AFFINITY" "${notify_cmd[@]}")
         fi
-        "${notify_cmd[@]}" 2>&1 | tee -a "$LOG_FILE" || true
+        if [[ "${POSTCLOSE_NOTIFICATIONS:-true}" == "true" ]]; then
+            "${notify_cmd[@]}" 2>&1 | tee -a "$LOG_FILE" || true
+        fi
         finished_at="$(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S')"
         echo "[DONE] error detection mode=${MODE} run_id=${RUN_ID} finished_at=${finished_at}" | tee -a "$LOG_FILE"
     else

@@ -341,6 +341,7 @@ def _refresh(
                 / "widget_symbol_runtime_policy_apply",
             )
             policy = episode_policy.build_policy(
+                publication_date=date.fromisoformat(os.environ["POSTCLOSE_POLICY_PUBLICATION_DATE"]) if os.environ.get("POSTCLOSE_POLICY_PUBLICATION_DATE") else None,
                 source_date=day,
                 report_dir=paths["episode"].parent,
                 policy_dir=Path(directory).parent / "low_price_two_leg_auto_expansion",

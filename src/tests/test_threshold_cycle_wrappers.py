@@ -112,3 +112,26 @@ def test_main_machine_evaluation_precedes_compact_and_final_consumers():
     strict = script.index("--main-mechanistic-summary-only", checklist)
     assert full < compact_execute < compact_finalize < summary < checklist < strict
     assert "--require-policy-publication" in script[full:compact_execute]
+
+
+def test_final_done_follows_bound_seal_and_no_retired_finalizer_dependencies():
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[2]
+    main = (root / "deploy/run_threshold_cycle_postclose.sh").read_text()
+    assert main.index("write_postclose_status producers_completed") < main.index("--seal-main-run") < main.index('[DONE] threshold-cycle postclose')
+    finalizer = (root / "deploy/run_postclose_finalization.sh").read_text()
+    assert "--require-independent-producers" in finalizer
+    assert 'checks["tuning_artifact"]' not in finalizer
+    assert 'checks["controller_artifact"]' not in finalizer
+    assert 'checks["dashboard_log"]' not in finalizer
+    assert "days <= 1" not in finalizer
+
+
+def test_historical_machine_recovery_disables_current_account_cost_and_notifications():
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[2]
+    script = (root / "deploy/run_machine_microstructure_final_refresh.sh").read_text()
+    assert '"$RECOVERY_MODE" != "true" ]]; then\n  "$PYTHON_BIN" -m src.engine.monitoring.research_native_capacity_source' in script
+    for setting in ('notify_args=()', 'policy_notify_args=()', 'cost_args=()'):
+        assert setting in script
+    assert '--phase finished --exit-code "$rc"' in script

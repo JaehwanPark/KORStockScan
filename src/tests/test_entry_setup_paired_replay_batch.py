@@ -567,6 +567,15 @@ def test_compact_public_finalization_uses_direct_pair_policy_consumer(tmp_path, 
     assert "old compact copy" not in checklist_text
     assert "Scanner lookup source preserved" in checklist_text
     assert "compact_auxiliary_direct_sha256" in checklist_text
+    assert verify_compact_handoff(tmp_path, "2026-09-17", effective_date="2026-09-21")["status"] == "PASS"
+    other_policy = Path(result["policy_path"]).with_name("policy_2026-09-22.json")
+    compact.write(other_policy, {**repaired, "target_date": "2026-09-22"})
+    assert verify_compact_handoff(tmp_path, "2026-09-17", effective_date="2026-09-21")["status"] == "PASS"
+    assert verify_compact_handoff(tmp_path, "2026-09-17")["status"] != "PASS"
+    other_policy.unlink()
+    checklist.write_text(checklist_text.replace("compact_auxiliary_direct_sha256", "tampered_projection"))
+    assert verify_compact_handoff(tmp_path, "2026-09-17")["status"] != "PASS"
+    checklist.write_text(checklist_text)
     label_path = quality.label_report_path("2026-09-17")
     original_labels = compact.read(label_path)
     compact.write(label_path, {**original_labels, "tampered": True})

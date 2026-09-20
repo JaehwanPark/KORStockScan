@@ -9,7 +9,10 @@ PYTHON_BIN="${KORSTOCKSCAN_PYTHON_BIN:-$PROJECT_DIR/.venv/bin/python}"
 cd "$PROJECT_DIR" || exit 1
 export PYTHONPATH="$PROJECT_DIR"
 
-if (($# > 1)); then
+RECOVERY_MODE=false
+if [[ $# -eq 2 && "$2" == "--recover-closed-target" ]]; then
+  RECOVERY_MODE=true
+elif (($# > 1)); then
   printf 'usage: %s [YYYY-MM-DD]\n' "$0" >&2
   exit 2
 fi
@@ -25,7 +28,7 @@ if ((completed_target_date_rc != 0)); then
   exit "$completed_target_date_rc"
 fi
 completed_target_date="$resolved_target_date"
-if (($# == 1)); then
+if (($# >= 1)); then
   requested_target_date="$1"
   normalized_target_date="$(date -d "$requested_target_date 00:00:00" +%F 2>/dev/null)" || completed_target_date_rc=2
   if ((completed_target_date_rc != 0)) || [[ "$normalized_target_date" != "$requested_target_date" ]]; then
@@ -33,7 +36,7 @@ if (($# == 1)); then
       "$requested_target_date" >&2
     exit 2
   fi
-  if [[ "$requested_target_date" != "$resolved_target_date" ]]; then
+  if [[ "$requested_target_date" > "$resolved_target_date" || ( "$requested_target_date" != "$resolved_target_date" && "$RECOVERY_MODE" != "true" ) ]]; then
     printf '[MACHINE_MICRO_FINAL_REFRESH] target_date=%s target_date_rc=2 reason=explicit_target_date_not_current_completed resolved_target_date=%s\n' \
       "$requested_target_date" "$resolved_target_date" >&2
     exit 2
@@ -41,9 +44,22 @@ if (($# == 1)); then
   completed_target_date="$requested_target_date"
 fi
 
+mkdir -p "$PROJECT_DIR/tmp"
+exec 9>"$PROJECT_DIR/tmp/machine_final_refresh_${completed_target_date}.lock"
+flock -n 9 || exit 75
+"$PYTHON_BIN" -m src.engine.automation.postclose_summary_handoff --owner machine --date "$completed_target_date" --phase started || exit $?
+trap 'rc=$?; "$PYTHON_BIN" -m src.engine.automation.postclose_summary_handoff --owner machine --date "$completed_target_date" --phase finished --exit-code "$rc" || rc=1; exit "$rc"' EXIT
+notify_args=(--notify)
+policy_notify_args=(--notify --notify-objective-followups)
+cost_args=(--collect-costs)
+if [[ "$RECOVERY_MODE" == "true" ]]; then
+  notify_args=()
+  policy_notify_args=()
+  cost_args=()
+fi
 # Capture dated account evidence before long research can cross midnight.
 research_closure_rc=0
-if [[ "$completed_target_date" > "2026-09-16" ]]; then
+if [[ "$completed_target_date" > "2026-09-16" && "$RECOVERY_MODE" != "true" ]]; then
   "$PYTHON_BIN" -m src.engine.monitoring.research_native_capacity_source \
     --source-date "$completed_target_date" --write || research_closure_rc=$?
 fi
@@ -52,7 +68,7 @@ expansion_rc=0
 "$PYTHON_BIN" -m src.engine.monitoring.widget_collector_expansion_recommendation \
   --target-date "$completed_target_date" \
   --write \
-  --notify \
+  "${notify_args[@]}" \
   --source-wait-sec 900 \
   --source-poll-sec 30 || expansion_rc=$?
 
@@ -85,7 +101,7 @@ if [[ "$completed_target_date" > "2026-09-16" ]]; then
   --source-date "$completed_target_date" \
   --source-wait-sec 900 \
   --write \
-  --collect-costs || research_closure_rc=$?
+  "${cost_args[@]}" || { rc=$?; research_closure_rc=$rc; }
 fi
 
 policy_rc=0
@@ -93,8 +109,7 @@ policy_rc=0
   --phase postclose \
   --target-date "$completed_target_date" \
   --write \
-  --notify \
-  --notify-objective-followups || policy_rc=$?
+  "${policy_notify_args[@]}" || policy_rc=$?
 
 # The checklist is the durable fallback for every upstream producer or
 # notification failure. Always refresh it from the completed KRX machine date.

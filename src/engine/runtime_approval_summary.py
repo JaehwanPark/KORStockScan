@@ -85,6 +85,9 @@ def summary_paths(target_date: str) -> tuple[Path, Path]:
 
 
 def _paths(target_date: str) -> dict[str, Path]:
+    requested_effective = os.environ.get("POSTCLOSE_PREPARED_EFFECTIVE_DATE")
+    if requested_effective:
+        date.fromisoformat(requested_effective)
     report = DATA_DIR / "report"
     threshold = DATA_DIR / "threshold_cycle"
     compact_policies = []
@@ -95,6 +98,8 @@ def _paths(target_date: str) -> dict[str, Path]:
         try:
             payload = json.loads(candidate.read_text(encoding="utf-8"))
         except (OSError, ValueError):
+            continue
+        if requested_effective and payload.get("target_date") != requested_effective:
             continue
         if payload.get("compact_evaluation_source_date") == target_date:
             compact_policies.append(candidate)
@@ -110,6 +115,11 @@ def _paths(target_date: str) -> dict[str, Path]:
         if machine_policies
         else DATA_DIR / "runtime/mechanistic_entry_policy" / "policy_missing.json"
     )
+    expansion_policies = []
+    for candidate in sorted((DATA_DIR / "runtime/low_price_two_leg_auto_expansion").glob("low_price_two_leg_auto_expansion_????-??-??.json")):
+        payload = _load_json(candidate)
+        if payload.get("source_date") == target_date and (not requested_effective or payload.get("effective_date") == requested_effective):
+            expansion_policies.append(candidate)
     return {
         "source_quality": report / "observation_source_quality_audit" / f"observation_source_quality_audit_{target_date}.json",
         "entry_cancel_wait": report / "entry_cancel_wait_tuning" / f"entry_cancel_wait_tuning_{target_date}.json",
@@ -123,7 +133,7 @@ def _paths(target_date: str) -> dict[str, Path]:
         "low_price_two_leg": report / "low_price_two_leg_tuning" / f"low_price_two_leg_tuning_{target_date}.json",
         "low_price_candidate": threshold / "low_price_two_leg" / "candidates" / f"low_price_two_leg_policy_candidate_{target_date}.json",
         "low_price_expansion": report / "low_price_two_leg_expanded_candidate_research" / f"low_price_two_leg_expanded_candidate_research_{target_date}.json",
-        "low_price_expansion_policy": DATA_DIR / "runtime" / "low_price_two_leg_auto_expansion" / f"low_price_two_leg_auto_expansion_{target_date}.json",
+        "low_price_expansion_policy": expansion_policies[-1] if expansion_policies else DATA_DIR / "runtime/low_price_two_leg_auto_expansion" / "policy_missing.json",
         "ws_freshness": report / "intraday_ws_freshness_monitor" / f"intraday_ws_freshness_monitor_{target_date}.json",
         "main_mechanistic_entry": report / "ai_decision_action_outcome_calibration" / f"ai_decision_action_outcome_calibration_{target_date}.json",
         "main_mechanistic_policy": machine_policy,
@@ -638,7 +648,12 @@ def _economic_projection(owner: str, payload: dict[str, Any]) -> dict[str, Any]:
         "prospective_resolution_mode": prospective_resolution_mode,
         "first_blocker": first_blocker,
         "closure_owner": DEFAULT_CLOSURE_OWNER.get(owner),
-        "closure_test": economic.get("closure_test"),
+        "closure_test": economic.get("closure_test") or {
+            "entry_cancel_wait": "native_execution_census_cancel_terminal_cost_and_independent_holdouts",
+            "entry_split": "submitted_order_frozen_plan_model_holdout_paired_candidate_and_loader",
+            "scale_in_split": "eligible_add_fill_terminal_clock_cost_and_independent_paired_holdout",
+            "low_price_two_leg": "profile_leg_durable_denominator_custody_cost_and_dated_consumer",
+        }.get(owner),
         "model_delta_ev_is_actual_profit": False,
     }
 
