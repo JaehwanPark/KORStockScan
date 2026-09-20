@@ -937,7 +937,8 @@ def test_terminal_count_is_not_decision_cf_authority_and_date_is_required():
         "decision_counterfactual_tuning_input_allowed": True, "lineage_gap_excluded_count": 4}}) is True
 
 
-def test_scoped_common_candidate_uses_own_incumbent_when_krx_has_no_candidate(tmp_path, monkeypatch):
+@pytest.mark.parametrize("joint", [False, True])
+def test_scoped_common_candidate_uses_own_incumbent_when_krx_has_no_candidate(tmp_path, monkeypatch, joint):
     from src.engine.scalping import entry_setup_live_policy as activation
     previous = policy.publish(source(tmp_path), data_root=tmp_path, bootstrap=True,
         adopt_all_continuous=True, now=datetime(2026, 9, 13, 20, tzinfo=policy.KST))
@@ -951,10 +952,18 @@ def test_scoped_common_candidate_uses_own_incumbent_when_krx_has_no_candidate(tm
         return {"threshold_policy": successor,
                 "incumbent_machine_policy_sha256": policy.digest(parent)}, []
     monkeypatch.setattr(activation, "_mechanistic_primary_activation_projection", projection)
-    result = policy.publish(source(tmp_path, "2026-09-14"), data_root=tmp_path,
+    path = source(tmp_path, "2026-09-14")
+    if joint:
+        report = json.loads(path.read_text())
+        report.pop("artifact_content_sha256")
+        report.update(report_scope="main_mechanistic_entry", mechanistic_refinements_by_scope={
+            k: {"policy_candidate": {"fixture": "projection_mocked_above"}} for k in (scope, "NXT|NXT_PREMARKET")})
+        calibration._atomic_write_json(path, calibration._with_artifact_content_sha256(report))
+    result = policy.publish(path, data_root=tmp_path,
         now=datetime(2026, 9, 14, 21, tzinfo=policy.KST))
     assert result["machine_policy"] == previous["machine_policy"]
-    assert result["scope_policies"][scope]["machine_policy"] == successor
-    assert result["scope_policies"][scope]["machine_disposition"] == "evidence_qualified_exact_scope_common_update"
+    assert result["scope_policies"][scope]["machine_policy"] == (parent if joint else successor)
+    assert result["scope_policies"][scope]["machine_disposition"] == (
+        "joint_scope_capital_replay_required_incumbent_carried" if joint else "evidence_qualified_exact_scope_common_update")
     assert result["scope_policies"][scope]["ai_policy"]["prompt_version"] == previous["scope_policies"][scope]["ai_policy"]["prompt_version"]
     assert policy.load(data_root=tmp_path, target_date="2026-09-15") == result

@@ -12,10 +12,10 @@
 - 현재 기계가 막지만 당시 고정 보조판정과 실행 모델이 있는 사례는 후보 ENTER를 기존 owner arm과 비교할 수 있다. 이를 자연 Provider 호출이나 broker fill로 다시 기록하지 않는다.
 - 전체 모집단의 실행·비용 근거가 일부만 있으면 원화/day를 null로 유지한다. 동일 promotion 반복과 미종결 RECHECK의 순차 재생이 없으면 포트폴리오 합산을 금지한다. 동일 정책의 대리 Δ=0은 원화 순익 0의 근거가 아니다.
 - 실행 지원 후보의 일별 순익·보수적 paired EV를 먼저 비교한다. 기존 0.10%·표본·tail 계약은 유지한다. calibration에서 후보를 동결하고 동결 이후 source-day만 독립 승격 holdout으로 수용한다. hierarchy의 holdout 통과 규칙만 사후 골라 묶는 경로를 제거했다.
-- 새 기계 정책 변경과 새 AI prompt의 미검증 동시 변경을 막는다. source hash/현재 parent/날짜별 loader 검증을 유지한다.
+- 새 기계 정책 변경과 새 AI prompt의 미검증 동시 변경을 막는다. 여러 scope의 독립 이익만으로 공통 계좌 자본의 동시 승격을 증명하지 않으며, joint replay 없는 다중 scope 후보는 명시적 incumbent carry다. source hash/현재 parent/날짜별 loader 검증을 유지한다.
 - summary에서 report 실행 플래그를 미래 writer 검증으로 오인하던 판단을 제거했다. owner replay 없음 자체를 역사적 복원 불가로 선언하지 않는다. 미확정은 `source_gap`이며 기존 checklist의 producer 수리 역할로 전달한다.
 
-리뷰→수정→재리뷰→관련 pytest **459 passed**. 기존 테스트 파일에 signed owner proof, 신규 진입/비진입, 부분 coverage, 반복 promotion, RECHECK, incumbent 동률, 동결 전 holdout 금지, scope별 발행·부모 정책 결속을 검증했다. Python compile 및 diff check 통과. Provider/브로커 호출·주문·봇 재기동은 이 검증에 사용하지 않았다.
+리뷰→수정→재리뷰→관련 pytest **459 passed** 및 추가 공통 자본·발행 회귀 **124 passed**(중복 포함; 합산하지 않음). 기존 테스트 파일에 signed owner proof, 신규 진입/비진입, 부분 coverage, 반복 promotion, RECHECK, incumbent 동률, 동결 전 holdout 금지, scope별 발행·부모 정책 결속을 검증했다. Python compile 및 diff check 통과. Provider/브로커 호출·주문·봇 재기동은 이 검증에 사용하지 않았다.
 
 ## 아직 닫히지 않은 경제성 경계
 

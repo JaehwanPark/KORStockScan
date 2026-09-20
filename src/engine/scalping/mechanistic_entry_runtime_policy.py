@@ -931,6 +931,18 @@ def publish(
         )
         if errors:
             raise ValueError("machine_policy_challenger_invalid:" + ",".join(errors))
+        scoped_refinements = source.get("mechanistic_refinements_by_scope") or {}
+        scoped_extensions = (source.get("hierarchical_entry_quality") or {}).get("runtime_extensions_by_scope") or {}
+        qualified_scopes = {scope for scope, evidence in scoped_refinements.items()
+                            if evidence.get("policy_candidate") is not None}
+        qualified_scopes.update(scope for scope, evidence in scoped_extensions.items()
+                                if evidence.get("policy_candidate") is not None)
+        if projection is not None or ((source.get("hierarchical_entry_quality") or {}).get("runtime_extension") or {}).get("policy_candidate") is not None:
+            qualified_scopes.add("KRX|KRX_REGULAR")
+        # Independent scope profits do not validate their shared account capital.
+        # Keep the incumbent until an existing owner supplies joint allocation
+        # proof; never select a winning subset using the scopes' holdouts.
+        joint_scope_unproven = source.get("report_scope") == "main_mechanistic_entry" and len(qualified_scopes) > 1
         machine = copy.deepcopy(
             previous["machine_policy"]
             if previous
@@ -946,7 +958,9 @@ def publish(
             and existing.get("role_contract") != MECHANISTIC_PRIMARY_ROLE_CONTRACT
         ):
             disposition = "initial_role_corrected_not_performance_promotion"
-        if projection is not None:
+        if joint_scope_unproven:
+            disposition = "joint_scope_capital_replay_required_incumbent_carried"
+        elif projection is not None:
             parent_hash = projection.get("incumbent_machine_policy_sha256")
             if parent_hash is not None and parent_hash != digest(machine):
                 disposition = "candidate_parent_changed_revalidation_required"
@@ -979,8 +993,8 @@ def publish(
             )
         )
         machine_economic_gate_pass = (
-            source.get("report_scope") != "main_mechanistic_entry"
-            or (child or {}).get("operating_contract_version") == "machine_operating_daily_net_v1"
+            not joint_scope_unproven and (source.get("report_scope") != "main_mechanistic_entry"
+            or (child or {}).get("operating_contract_version") == "machine_operating_daily_net_v1")
         )
         if hierarchy_adopted and child is not None and not machine_economic_gate_pass:
             hierarchy_disposition = "diagnostic_child_parent_economic_gate_not_passed"
@@ -1075,6 +1089,8 @@ def publish(
                         copy.deepcopy(machine),
                         disposition,
                     )
+                elif joint_scope_unproven:
+                    scoped_disposition = "joint_scope_capital_replay_required_incumbent_carried"
                 elif scope_projection is not None:
                     if scope_projection.get("incumbent_machine_policy_sha256") == digest(scoped_machine):
                         scoped_machine = copy.deepcopy(scope_projection["threshold_policy"])
