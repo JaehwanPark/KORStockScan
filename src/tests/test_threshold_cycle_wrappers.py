@@ -94,3 +94,18 @@ def test_compact_postclose_has_one_direct_evaluator_and_no_phase_coordinator():
     controller = _text("deploy/run_postclose_done_controller.sh")
     assert "run_ai_entry_setup_paired_replay_postclose.sh" not in installer
     assert "run_ai_entry_setup_paired_replay_postclose.sh" not in controller
+
+
+def test_main_machine_evaluation_precedes_compact_and_final_consumers():
+    script = _text("deploy/run_threshold_cycle_postclose.sh")
+    publication = script.index('--publication-date "$POLICY_PUBLICATION_DATE"')
+    full = script.rfind(
+        "src.engine.scalping.ai_action_outcome_calibration", 0, publication
+    )
+    compact_execute = script.index("--execute-compact-candidate --write", full)
+    compact_finalize = script.index("--finalize-compact --publication-date", compact_execute)
+    summary = script.index("src.engine.runtime_approval_summary", compact_finalize)
+    checklist = script.index("src.engine.build_next_stage2_checklist", summary)
+    strict = script.index("--main-mechanistic-summary-only", checklist)
+    assert full < compact_execute < compact_finalize < summary < checklist < strict
+    assert "--require-policy-publication" in script[full:compact_execute]

@@ -2049,6 +2049,13 @@ def run(
                 "incumbent_prompt_version": versions[0] if len(versions) == 1 else None,
                 "source_manifest_sha256": projection["source_manifest_sha256"],
                 "source_projection_sha256": projection["artifact_content_sha256"],
+                "machine_parent_bundle_sha256s": sorted(
+                    {
+                        row.get("machine_bundle_sha256")
+                        for row in projection["rows"]
+                        if row.get("machine_bundle_sha256")
+                    }
+                ),
                 "source_label_report_sha256": projection.get("source_label_report_sha256"),
                 "owner_execution_model_validation": projection.get("owner_execution_model_validation") or {},
                 "post_apply_decision_version_performance": applied_decision_version_performance(

@@ -64,6 +64,9 @@ HIERARCHICAL_ENTRY_QUALITY_SCHEMA = "hierarchical_entry_quality_walk_forward_v1"
 ENTRY_GROUP_OBSERVATION_SCHEMA = "entry_predecision_group_observation_v1"
 ENTRY_QUALITY_PATH_SCHEMA = "entry_quality_path_v1"
 MACHINE_DECISION_CASE_TABLE_SCHEMA = "mechanistic_entry_decision_case_table_v1"
+MAIN_MECHANISTIC_EVALUATION_CONTRACT_VERSION = (
+    "main_mechanistic_full_population_cost_adjusted_v3"
+)
 MARKET_PATH_OPPORTUNITY_ANCHOR_SCHEMA = "market_path_opportunity_anchor_study_v1"
 MECHANISTIC_FLOW_GROUP_STUDY_SCHEMA = "mechanistic_entry_flow_group_study_v1"
 MECHANISTIC_FLOW_BOUNDARY_FREEZE_DATE = "2026-09-11"
@@ -291,6 +294,61 @@ def report_path(target_date: str, report_root: Path = Path("data/report")) -> Pa
         / REPORT_SUBDIR
         / f"ai_decision_action_outcome_calibration_{target_date}.json"
     )
+
+
+def _main_mechanistic_input_fingerprint(
+    data_root: Path, target_date: str
+) -> str:
+    """Cheap retry fingerprint; large immutable JSONL inputs are never reread."""
+    from src.engine.scalping.mechanistic_entry_runtime_policy import digest, load_effective
+
+    def generation(path: Path) -> dict[str, Any]:
+        stat = path.stat()
+        return {
+            "path": str(path.resolve()),
+            "device": stat.st_dev,
+            "inode": stat.st_ino,
+            "size_bytes": stat.st_size,
+            "mtime_ns": stat.st_mtime_ns,
+            "ctime_ns": stat.st_ctime_ns,
+        }
+
+    candidates: set[Path] = set()
+    patterns = (
+        "ai_decision_payloads/*.jsonl*",
+        "ai_decision_trace/*.jsonl*",
+        "pipeline_events/pipeline_events_*.jsonl*",
+        "report/ai_prompt_detailed_paired_replay/*.json",
+        "report/micro_reversion_economic_reference/*.json*",
+        "report/observation_source_quality_audit/*.json",
+        "report/ai_entry_setup_paired_replay_batch/*.source.json",
+    )
+    for pattern in patterns:
+        for path in data_root.glob(pattern):
+            match = re.search(r"(\d{4}-\d{2}-\d{2})", path.name)
+            if match and CLEAN_BASELINE_DATE <= match.group(1) <= target_date:
+                candidates.add(path)
+    incumbent = load_effective(data_root=data_root, target_date=target_date)
+    code_paths = [
+        Path(__file__),
+        Path(__file__).with_name("ai_decision_quality.py"),
+        Path(__file__).with_name("entry_setup_evidence.py"),
+    ]
+    body = {
+        "contract_version": MAIN_MECHANISTIC_EVALUATION_CONTRACT_VERSION,
+        "target_date": target_date,
+        "source_generations": [generation(path) for path in sorted(candidates)],
+        "code_sha256": {
+            path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in code_paths
+        },
+        "incumbent_machine_policy_sha256": (
+            digest(incumbent["machine_policy"]) if incumbent else None
+        ),
+        "common_grid": MECHANISTIC_COMMON_FEATURE_GRID,
+        "refinement_gate": MECHANISTIC_REFINEMENT_GATE,
+    }
+    return _canonical_sha256(body)
 
 
 def _report_date(path: Path, report: dict[str, Any]) -> str:
@@ -2285,20 +2343,45 @@ def _common_refinement_population(
                 from src.engine.scalping import compact_auxiliary_paired_replay as compact
                 matches = [r for r in operating_projection.get("rows") or []
                            if r.get("evaluation_attempt_id") == row.get("evaluation_attempt_id")]
-                if (lane != "natural" or not compact.valid(operating_projection) or len(matches) != 1
-                    or row.get("machine_action") != "ENTER_NOW"):
-                    excluded["unsupported_machine_nonentry_downstream_ai_scope"] += 1
-                    continue
-                operating_source = matches[0]
-                if (operating_source.get("exclusion_reason") or operating_source.get("incumbent_verdict") not in {"PASS", "VETO"}
-                    or any(operating_source.get(k) != row.get(k) for k in
-                           ("stock_code", "scanner_promotion_id", "effective_venue", "session_bucket", "source_date"))
-                    or not compact.owner_operating_arm(operating_source.get("owner_replay") or {}, operating_source)):
-                    excluded["machine_operating_owner_source_gap"] += 1
-                    continue
-                row["operating_comparison_input"] = operating_source
-                row["operating_model_validation"] = operating_projection.get("owner_execution_model_validation") or {}
-                row["operating_runtime_cost_receipt"] = operating_projection.get("runtime_inference_cost_receipt") or {}
+                # Compact replay is an optional downstream-economic enrichment.
+                # It must never redefine the machine counterfactual population:
+                # BLOCK/RECHECK and paired lanes are valid machine research rows
+                # even though no compact provider call was made for them.
+                if (
+                    lane == "natural"
+                    and compact.valid(operating_projection)
+                    and len(matches) == 1
+                    and row.get("machine_action") == "ENTER_NOW"
+                ):
+                    candidate_source = matches[0]
+                    if (
+                        not candidate_source.get("exclusion_reason")
+                        and candidate_source.get("incumbent_verdict") in {"PASS", "VETO"}
+                        and all(
+                            candidate_source.get(k) == row.get(k)
+                            for k in (
+                                "stock_code",
+                                "scanner_promotion_id",
+                                "effective_venue",
+                                "session_bucket",
+                                "source_date",
+                            )
+                        )
+                        and compact.owner_operating_arm(
+                            candidate_source.get("owner_replay") or {},
+                            candidate_source,
+                        )
+                    ):
+                        operating_source = candidate_source
+                        row["operating_comparison_input"] = operating_source
+                        row["operating_model_validation"] = (
+                            operating_projection.get("owner_execution_model_validation")
+                            or {}
+                        )
+                        row["operating_runtime_cost_receipt"] = (
+                            operating_projection.get("runtime_inference_cost_receipt")
+                            or {}
+                        )
             day = str(row.get("source_date") or "")
             evidence = _as_dict(row.get("setup_evidence"))
             parts = _as_dict(_as_dict(row.get("entry_group_observation")).get("key_parts"))
@@ -2406,6 +2489,10 @@ def _common_refinement_population(
             for r in result
         ]),
         "row_exclusion_reason_counts": dict(excluded),
+        "operating_economic_enrichment_count": sum(
+            "operating_comparison_input" in row for row in result
+        ),
+        "machine_population_independent_of_compact_projection": True,
         "input_row_disposition_complete": (
             len(result) + sum(excluded.values()) == len(paired_rows) + len(natural_rows)
         ),
@@ -2506,6 +2593,8 @@ def _mechanistic_paired_population_metrics(
 ) -> dict[str, Any]:
     selected_trace_ids = {row["decision_trace_id"] for row in selected}
     deltas = []
+    candidate_values = []
+    incumbent_values = []
     terminal_evaluable_count = 0
     for row in population:
         terminal_value = _mechanistic_terminal_proxy_pct(row)
@@ -2520,12 +2609,26 @@ def _mechanistic_paired_population_metrics(
         mechanistic_value = (
             terminal_value if row["decision_trace_id"] in selected_trace_ids else 0.0
         )
+        candidate_values.append(mechanistic_value)
+        incumbent_values.append(control_value)
         deltas.append(mechanistic_value - control_value)
+    changed = [
+        row
+        for row in population
+        if ((row["decision_trace_id"] in selected_trace_ids)
+            != (row["comparison"].get("control_action") == "BUY"))
+    ]
+    unsupported_changed = [
+        row for row in changed if "operating_comparison_input" not in row
+    ]
     operating = None
-    if population and all("operating_comparison_input" in r for r in population):
+    operating_rows = [
+        row for row in population if "operating_comparison_input" in row
+    ]
+    if operating_rows:
         from src.engine.scalping import compact_auxiliary_paired_replay as compact
         pairs = []
-        for row in population:
+        for row in operating_rows:
             source = row["operating_comparison_input"]
             arm = compact.owner_operating_arm(source.get("owner_replay") or {}, source)
             old = source["incumbent_verdict"]
@@ -2535,20 +2638,83 @@ def _mechanistic_paired_population_metrics(
                 "delta_net_pct": arm["net_return_pct"] * change,
                 "stress_delta_net_pct": arm["stress_net_return_pct"] * change,
                 "runtime_inference_cost_delta_krw": row["operating_runtime_cost_receipt"].get("delta_krw")})
-        operating = compact.operating_comparison_metrics(pairs, population[0]["operating_model_validation"])
+        operating = compact.operating_comparison_metrics(
+            pairs, operating_rows[0]["operating_model_validation"]
+        )
+        portfolio = compact.portfolio_metrics(pairs)
+        daily = portfolio.get("portfolio_daily_net_delta_krw")
+        all_dates = sorted(
+            {
+                row.get("source_date")
+                or (row.get("operating_comparison_input") or {}).get("source_date")
+                for row in population
+                if row.get("source_date")
+                or (row.get("operating_comparison_input") or {}).get("source_date")
+            }
+        )
+        if isinstance(daily, dict) and not unsupported_changed and all_dates:
+            daily = {day: float(daily.get(day, 0.0)) for day in all_dates}
+            operating["portfolio_daily_net_delta_krw"] = daily
+            operating["daily_net_profit_delta_krw"] = sum(daily.values()) / len(all_dates)
+            operating["daily_net_profit_status"] = "supported_owner_replay_all_changed_decisions"
+        else:
+            operating["portfolio_daily_net_delta_krw"] = None
+            operating["daily_net_profit_delta_krw"] = None
+            operating["daily_net_profit_status"] = (
+                "unsupported_changed_machine_decision"
+                if unsupported_changed
+                else portfolio.get("net_profit_status")
+            )
     complete = len(deltas) == terminal_evaluable_count
-    if operating is not None:
-        complete &= (operating["status"] == "supported_operating_comparison"
-            and operating["robust_paired_delta_ev_lower_bound_pct"] > 0
-            and operating["candidate"]["net_pnl_krw"] > operating["incumbent"]["net_pnl_krw"]
-            and operating["candidate"]["es10"] >= operating["incumbent"]["es10"]
-            and operating["candidate"]["worst"] >= operating["incumbent"]["worst"])
+    downstream_complete = not unsupported_changed and (
+        not changed
+        or (
+            operating is not None
+            and operating.get("status") == "supported_operating_comparison"
+            and operating.get("daily_net_profit_delta_krw") is not None
+        )
+    )
+    operating_promotion_pass = (
+        operating is not None
+        and operating.get("status") == "supported_operating_comparison"
+        and operating.get("robust_paired_delta_ev_lower_bound_pct") is not None
+        and operating["robust_paired_delta_ev_lower_bound_pct"] > 0
+        and operating["candidate"]["net_pnl_krw"]
+        > operating["incumbent"]["net_pnl_krw"]
+        and operating["candidate"]["es10"] >= operating["incumbent"]["es10"]
+        and operating["candidate"]["worst"] >= operating["incumbent"]["worst"]
+    )
+    baseline_preserved = bool(complete and deltas and not changed)
     return {
         "population_count": len(population),
         "terminal_evaluable_count": terminal_evaluable_count,
         "paired_comparable_count": len(deltas),
         "paired_terminal_proxy_delta_pct": fmean(deltas) if deltas else None,
+        "candidate_opportunity_ev_pct": (
+            fmean(candidate_values) if candidate_values else None
+        ),
+        "incumbent_opportunity_ev_pct": (
+            fmean(incumbent_values) if incumbent_values else None
+        ),
         "paired_terminal_contract_complete": complete,
+        "changed_decision_count": len(changed),
+        "unsupported_changed_decision_count": len(unsupported_changed),
+        "downstream_operating_evidence_complete": downstream_complete,
+        "operating_economic_promotion_pass": operating_promotion_pass,
+        "independent_policy_comparison": bool(changed),
+        "baseline_preserved": baseline_preserved,
+        "daily_net_profit_delta_krw": 0.0 if baseline_preserved else (
+            operating.get("daily_net_profit_delta_krw")
+            if operating is not None
+            else None
+        ),
+        "daily_net_profit_status": (
+            "baseline_preserved_no_independent_policy_change"
+            if baseline_preserved
+            else operating.get("daily_net_profit_status")
+            if operating is not None
+            else "not_available_without_exact_changed_decision_owner_replay"
+        ),
         **({"operating_economic_comparison": operating} if operating is not None else {}),
     }
 
@@ -2580,7 +2746,9 @@ def build_clean_baseline_mechanistic_refinement(
     if full_population and parent_policy is None:
         raise ValueError("full_population_refinement_incumbent_missing")
     policy_version = MECHANISTIC_FULL_POPULATION_POLICY_VERSION if full_population else MECHANISTIC_REFINEMENT_POLICY_VERSION
-    ev_floor = 0.0 if full_population else MECHANISTIC_REFINEMENT_GATE["minimum_cost_adjusted_ev_pct"]
+    # The approved live-promotion floor remains the Plan Rebase 10bp gate.
+    # Research metrics are still emitted below this floor.
+    ev_floor = MECHANISTIC_REFINEMENT_GATE["minimum_cost_adjusted_ev_pct"]
     parent = json.loads(json.dumps(parent_policy or MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1))
     if validate_mechanistic_entry_threshold_policy(parent):
         raise ValueError("mechanistic_refinement_parent_invalid")
@@ -2629,14 +2797,6 @@ def build_clean_baseline_mechanistic_refinement(
                     "minimum_fillability_score": minimum_fillability_score,
                     "maximum_top3_ask_to_bid_ratio": maximum_ratio,
                 }
-                # Exact current ENTER_NOW + actual downstream AI is the
-                # supported operating scope. A looser machine would require
-                # uncalled downstream AI, not a fabricated PASS.
-                if rows and "operating_comparison_input" in rows[0] and (
-                    maximum_spread_bp > parent["thresholds"]["maximum_spread_bp"]
-                    or minimum_fillability_score < parent["thresholds"]["minimum_fillability_score"]
-                    or maximum_ratio > parent["thresholds"]["maximum_top3_ask_to_bid_ratio"]):
-                    continue
                 selected = _mechanistic_policy_rows(calibration_rows, policy, parent_policy=parent)
                 selection_sha256 = _canonical_sha256(
                     [
@@ -2654,48 +2814,97 @@ def build_clean_baseline_mechanistic_refinement(
                 paired_population = _mechanistic_paired_population_metrics(
                     calibration_rows, selected
                 )
-                gate_pass = (
-                    metrics["exposure_count"]
-                    >= MECHANISTIC_REFINEMENT_GATE["minimum_calibration_exposure_count"]
-                    and metrics["unique_symbol_count"]
-                    >= MECHANISTIC_REFINEMENT_GATE["minimum_calibration_symbol_count"]
-                    and metrics["independent_source_date_count"]
+                gate_checks = {
+                    "minimum_exposure_count": metrics["exposure_count"]
+                    >= MECHANISTIC_REFINEMENT_GATE[
+                        "minimum_calibration_exposure_count"
+                    ],
+                    "minimum_unique_symbol_count": metrics["unique_symbol_count"]
+                    >= MECHANISTIC_REFINEMENT_GATE[
+                        "minimum_calibration_symbol_count"
+                    ],
+                    "minimum_independent_source_date_count": metrics[
+                        "independent_source_date_count"
+                    ]
                     >= MECHANISTIC_REFINEMENT_GATE[
                         "minimum_calibration_source_date_count"
+                    ],
+                    "minimum_terminal_evaluable_count": metrics[
+                        "terminal_evaluable_count"
                     ]
-                    and metrics["terminal_evaluable_count"]
                     >= MECHANISTIC_REFINEMENT_GATE[
                         "minimum_calibration_terminal_evaluable_count"
+                    ],
+                    "paired_terminal_delta_complete": metrics[
+                        "paired_terminal_proxy_delta_count"
                     ]
-                    and metrics["paired_terminal_proxy_delta_count"]
-                    == metrics["terminal_evaluable_count"]
+                    == metrics["terminal_evaluable_count"],
+                    "independent_policy_comparison": paired_population[
+                        "independent_policy_comparison"
+                    ]
+                    is True,
+                }
+                # Keep every distinct policy evaluation. Sample floors govern
+                # promotion, not whether already-computable EV is reported.
+                candidates.append(
+                    {
+                        "policy": policy,
+                        "selection_sha256": selection_sha256,
+                        "calibration": metrics,
+                        "calibration_paired_population": paired_population,
+                        "calibration_gate_checks": gate_checks,
+                        "calibration_gate_pass": all(gate_checks.values()),
+                    }
                 )
-                if gate_pass:
-                    candidates.append(
-                        {
-                            "policy": policy,
-                            "selection_sha256": selection_sha256,
-                            "calibration": metrics,
-                            "calibration_paired_population": paired_population,
-                        }
-                    )
 
     calibration_floor = ev_floor
+    calibration_gate_candidates = [
+        row for row in candidates if row["calibration_gate_pass"] is True
+    ]
     calibration_passers = [
         row
-        for row in candidates
-        if row["calibration"]["cost_adjusted_terminal_proxy_ev_pct"]
+        for row in calibration_gate_candidates
+        if row["calibration"]["cost_adjusted_terminal_proxy_ev_pct"] is not None
+        and row["calibration"]["cost_adjusted_terminal_proxy_ev_pct"]
         >= calibration_floor
-        and (not full_population or row["calibration"]["cost_adjusted_terminal_proxy_ev_pct"] > 0)
         and row["calibration_paired_population"]["paired_terminal_proxy_delta_pct"]
         is not None
         and row["calibration_paired_population"]["paired_terminal_proxy_delta_pct"] > 0
         and row["calibration_paired_population"]["paired_terminal_contract_complete"]
         is True
+        and (
+            not full_population
+            or (
+                row["calibration_paired_population"][
+                    "downstream_operating_evidence_complete"
+                ]
+                is True
+                and row["calibration_paired_population"][
+                    "operating_economic_promotion_pass"
+                ]
+                is True
+            )
+        )
         and row["calibration"]["source_provenance_contract_complete"] is True
         and row["calibration"]["catastrophic_terminal_proxy_count"] == 0
     ]
-    ranked = calibration_passers or candidates
+    economically_evaluable_candidates = [
+        row
+        for row in candidates
+        if row["calibration_paired_population"][
+            "candidate_opportunity_ev_pct"
+        ]
+        is not None
+        and row["calibration_paired_population"][
+            "paired_terminal_proxy_delta_pct"
+        ]
+        is not None
+    ]
+    ranked = (
+        calibration_passers
+        or calibration_gate_candidates
+        or economically_evaluable_candidates
+    )
     ranked.sort(
         key=(
             (
@@ -2709,7 +2918,9 @@ def build_clean_baseline_mechanistic_refinement(
             if calibration_passers
             else (
                 lambda row: (
-                    row["calibration"]["cost_adjusted_terminal_proxy_ev_pct"],
+                    row["calibration_paired_population"][
+                        "candidate_opportunity_ev_pct"
+                    ],
                     row["calibration"]["exposure_count"],
                     -row["calibration"]["catastrophic_terminal_proxy_count"],
                 )
@@ -2740,15 +2951,16 @@ def build_clean_baseline_mechanistic_refinement(
         calibration_ev = best["calibration"]["cost_adjusted_terminal_proxy_ev_pct"]
         holdout_ev = holdout_metrics["cost_adjusted_terminal_proxy_ev_pct"]
         promotion_checks = {
-            ("calibration_cost_adjusted_ev_positive" if full_population else "calibration_cost_adjusted_ev_at_least_10bp"): (
+            "calibration_sample_and_comparison_floor": (
+                best["calibration_gate_pass"] is True
+            ),
+            "calibration_cost_adjusted_ev_at_least_10bp": (
                 calibration_ev is not None
                 and calibration_ev >= ev_floor
-                and (not full_population or calibration_ev > 0)
             ),
-            ("holdout_cost_adjusted_ev_positive" if full_population else "holdout_cost_adjusted_ev_at_least_10bp"): (
+            "holdout_cost_adjusted_ev_at_least_10bp": (
                 holdout_ev is not None
                 and holdout_ev >= ev_floor
-                and (not full_population or holdout_ev > 0)
             ),
             "calibration_positive_paired_terminal_delta": (
                 best["calibration_paired_population"]["paired_terminal_proxy_delta_pct"]
@@ -2764,6 +2976,30 @@ def build_clean_baseline_mechanistic_refinement(
             ),
             "holdout_paired_terminal_delta_complete": (
                 holdout_paired_population["paired_terminal_contract_complete"] is True
+            ),
+            "calibration_downstream_operating_evidence_complete": (
+                not full_population
+                or best["calibration_paired_population"][
+                    "downstream_operating_evidence_complete"
+                ]
+                is True
+            ),
+            "holdout_downstream_operating_evidence_complete": (
+                not full_population
+                or holdout_paired_population["downstream_operating_evidence_complete"]
+                is True
+            ),
+            "calibration_operating_economic_promotion_pass": (
+                not full_population
+                or best["calibration_paired_population"][
+                    "operating_economic_promotion_pass"
+                ]
+                is True
+            ),
+            "holdout_operating_economic_promotion_pass": (
+                not full_population
+                or holdout_paired_population["operating_economic_promotion_pass"]
+                is True
             ),
             "calibration_source_provenance_complete": (
                 best["calibration"]["source_provenance_contract_complete"] is True
@@ -2813,7 +3049,7 @@ def build_clean_baseline_mechanistic_refinement(
         {
             "schema": "mechanistic_entry_common_feature_candidate_v1",
             "policy_version": policy_version,
-            "evaluation_contract": "full_population_positive_net_paired_delta_v2" if full_population else "legacy_absolute_net_10bp_v1",
+            "evaluation_contract": "full_population_cost_adjusted_10bp_paired_delta_v3" if full_population else "legacy_absolute_net_10bp_v1",
             "thresholds": best["policy"],
             "incumbent_machine_policy": parent,
             "incumbent_machine_policy_sha256": _canonical_sha256(parent),
@@ -2891,7 +3127,7 @@ def build_clean_baseline_mechanistic_refinement(
         "objective": {
             "metric": "existing_first_hit_cost_adjusted_terminal_proxy_ev_pct",
             "minimum_ev_pct": ev_floor,
-            "strictly_positive_net_ev_required": full_population,
+            "strictly_positive_net_ev_required": True,
             "same_bar_ambiguous_and_neither_hit": "censored_not_zero",
             "cost_charged_once": True,
             "path_opportunity_not_realized_fill": True,
@@ -2908,7 +3144,21 @@ def build_clean_baseline_mechanistic_refinement(
             * len(grid["minimum_fillability_score"])
             * len(grid["maximum_top3_ask_to_bid_ratio"])
         ),
-        "grid_candidate_count": len(candidates),
+        "evaluated_distinct_policy_count": len(candidates),
+        "grid_candidate_count": len(economically_evaluable_candidates),
+        "economically_evaluable_candidate_count": len(
+            economically_evaluable_candidates
+        ),
+        "independent_policy_comparison_candidate_count": sum(
+            row["calibration_paired_population"][
+                "independent_policy_comparison"
+            ]
+            is True
+            for row in economically_evaluable_candidates
+        ),
+        "calibration_gate_passing_candidate_count": len(
+            calibration_gate_candidates
+        ),
         "calibration_floor_passing_candidate_count": len(calibration_passers),
         "candidate_selection_basis": (
             "full_population_paired_delta_then_frequency_then_opportunity_then_ev"
@@ -2931,6 +3181,8 @@ def build_clean_baseline_mechanistic_refinement(
                     if full_population
                     else "no_common_feature_candidate_meets_cost_adjusted_10bp_holdout_gate"
                 )
+                if best is not None and calibration_gate_candidates
+                else "insufficient_mature_sample"
                 if best is not None
                 else "insufficient_clean_common_feature_evidence"
             )
@@ -3672,7 +3924,7 @@ def _machine_capture_cost_reference_venue(capture: dict, cohort: tuple[str, str]
 
 
 def load_machine_observation_rows(
-    data_root: Path, *, target_date: str
+    data_root: Path, *, target_date: str, materialized_labels_only: bool = False
 ) -> tuple[list[dict], dict]:
     """Reuse the payload archive and existing path labeler, with no AI calls."""
     from src.engine.scalping import ai_decision_quality as quality
@@ -3739,16 +3991,51 @@ def load_machine_observation_rows(
         for day, observations in by_day.items():
             cost_profiles_by_venue = {}
             ai_trace_index = _machine_ai_trace_index(data_root, day)
-            pipeline = existing_or_gzip_path(
-                data_root / "pipeline_events" / f"pipeline_events_{day}.jsonl"
-            )
-            prices, lifecycle = quality.load_pipeline_price_and_lifecycle_rows(
-                iter_jsonl(pipeline) if pipeline and pipeline.is_file() else [],
-                stock_codes={
-                    str(c.get("label_context", {}).get("stock_code") or "")
-                    for c in observations
-                },
-            )
+            materialized_by_trace: dict[str, dict] = {}
+            if materialized_labels_only:
+                label_path = (
+                    data_root
+                    / "report/ai_decision_outcome_labels"
+                    / f"ai_decision_outcome_labels_{day}.json"
+                )
+                control_path = (
+                    data_root
+                    / "runtime"
+                    / f"ai_decision_quality_control_{day}.json"
+                )
+                label_report = _load_json(label_path)
+                control = _load_json(control_path)
+                errors = quality.validate_daily_materialization_reports(
+                    target_date=day,
+                    reports={"control": control, "mature": label_report},
+                )
+                label_rows = label_report.get("labels") or []
+                label_counts = Counter(
+                    str(row.get("decision_trace_id") or "") for row in label_rows
+                )
+                if not errors:
+                    materialized_by_trace = {
+                        str(row["decision_trace_id"]): row
+                        for row in label_rows
+                        if row.get("decision_trace_id")
+                        and label_counts[str(row["decision_trace_id"])] == 1
+                    }
+                else:
+                    counts["materialized_label_contract_invalid"] += len(
+                        observations
+                    )
+                prices, lifecycle = [], []
+            else:
+                pipeline = existing_or_gzip_path(
+                    data_root / "pipeline_events" / f"pipeline_events_{day}.jsonl"
+                )
+                prices, lifecycle = quality.load_pipeline_price_and_lifecycle_rows(
+                    iter_jsonl(pipeline) if pipeline and pipeline.is_file() else [],
+                    stock_codes={
+                        str(c.get("label_context", {}).get("stock_code") or "")
+                        for c in observations
+                    },
+                )
             prices_by_symbol = defaultdict(list)
             for price in prices:
                 prices_by_symbol[price.get("stock_code")].append(price)
@@ -3831,12 +4118,28 @@ def load_machine_observation_rows(
                     "decision_stage": "entry",
                     "invalid_reasons": [],
                 }
-                labeled = quality.mature_outcome_labels(
-                    pending_labels=[pending],
-                    price_rows=prices_by_symbol[context.get("stock_code")],
-                    lifecycle_rows=lifecycle_by_symbol[context.get("stock_code")],
-                    as_of=datetime.fromisoformat(target_date + "T23:59:59+09:00"),
-                )[0]
+                if materialized_labels_only:
+                    labeled = materialized_by_trace.get(
+                        str(ai_trace.get("decision_trace_id") or "")
+                    )
+                    if (
+                        not isinstance(labeled, dict)
+                        or labeled.get("snapshot_id") != context.get("snapshot_id")
+                        or str(labeled.get("stock_code") or "")
+                        != str(context.get("stock_code") or "")
+                    ):
+                        counts["materialized_exact_label_missing"] += 1
+                        continue
+                    counts["materialized_exact_label_reused"] += 1
+                else:
+                    labeled = quality.mature_outcome_labels(
+                        pending_labels=[pending],
+                        price_rows=prices_by_symbol[context.get("stock_code")],
+                        lifecycle_rows=lifecycle_by_symbol[context.get("stock_code")],
+                        as_of=datetime.fromisoformat(
+                            target_date + "T23:59:59+09:00"
+                        ),
+                    )[0]
                 horizon_metrics = labeled.get("horizon_metrics", {})
                 metric = horizon_metrics.get("10m", {})
                 entry_path = metric.get("entry_quality_path")
@@ -4981,7 +5284,9 @@ def validate_hierarchy_candidate(
     if not isinstance(candidate, dict):
         return ["candidate_missing"]
     body = {k: v for k, v in candidate.items() if k != "candidate_content_sha256"}
-    full_population = candidate.get("evaluation_contract") == "hierarchy_full_population_positive_net_paired_v2"
+    full_population = candidate.get("evaluation_contract") == (
+        "hierarchy_full_population_cost_adjusted_10bp_paired_v3"
+    )
     if (
         _as_dict(candidate.get("threshold_policy")).get("version") == MECHANISTIC_FULL_POPULATION_POLICY_VERSION
         and not full_population
@@ -5282,7 +5587,10 @@ def build_mechanistic_hierarchy_candidate(
         if full_population:
             policy["version"] = MECHANISTIC_FULL_POPULATION_POLICY_VERSION
             policy["postclose_selection"] = {
-                **parent["postclose_selection"], "minimum_cost_adjusted_ev_pct": 0.0,
+                **parent["postclose_selection"],
+                "minimum_cost_adjusted_ev_pct": MECHANISTIC_REFINEMENT_GATE[
+                    "minimum_cost_adjusted_ev_pct"
+                ],
             }
         return policy
 
@@ -5325,8 +5633,11 @@ def build_mechanistic_hierarchy_candidate(
             and m["unusable_label_count"] == 0
             and m["terminal_proxy_evaluable_count"] == m["row_count"]
             and ev is not None
-            and (ev > 0 if full_population else ev
-                 >= HIERARCHICAL_ENTRY_QUALITY_GATE["minimum_cost_adjusted_ev_pct"] - 1e-9)
+            and ev
+            >= HIERARCHICAL_ENTRY_QUALITY_GATE[
+                "minimum_cost_adjusted_ev_pct"
+            ]
+            - 1e-9
             and m["clean_fast_count"] > m["dirty_profit_count"] + m["adverse_count"]
             and (not full_population or (
                 (_number(_as_dict(m.get("paired_population")).get("paired_terminal_proxy_delta_pct")) or 0) > 0
@@ -5569,7 +5880,9 @@ def build_mechanistic_hierarchy_candidate(
             "holdout": combined,
             "calibration": combined_train,
             **({
-                "evaluation_contract": "hierarchy_full_population_positive_net_paired_v2",
+                "evaluation_contract": (
+                    "hierarchy_full_population_cost_adjusted_10bp_paired_v3"
+                ),
                 "population_source_contract": population_source_contract,
                 "population_source_contract_sha256": _canonical_sha256(population_source_contract),
                 "incumbent_machine_policy": parent,
@@ -5596,8 +5909,14 @@ def build_mechanistic_hierarchy_candidate(
         "excluded": dict(excluded),
         "economic_contract_diagnostics": {
             "lane": "fixed_boundary_counterfactual_not_realized_pnl",
-            "evaluation_contract": "hierarchy_full_population_positive_net_paired_v2" if full_population else "legacy_absolute_net_10bp_v1",
-            "minimum_cost_adjusted_ev_pct": 0.0 if full_population else HIERARCHICAL_ENTRY_QUALITY_GATE["minimum_cost_adjusted_ev_pct"],
+            "evaluation_contract": (
+                "hierarchy_full_population_cost_adjusted_10bp_paired_v3"
+                if full_population
+                else "legacy_absolute_net_10bp_v1"
+            ),
+            "minimum_cost_adjusted_ev_pct": HIERARCHICAL_ENTRY_QUALITY_GATE[
+                "minimum_cost_adjusted_ev_pct"
+            ],
             "rows_whose_gross_target_cannot_clear_net_ev_floor": sum(
                 (
                     (_number(r["comparison"].get("entry_path_target_pct")) or 0)
@@ -6951,6 +7270,224 @@ def build_ofi_action_outcome_calibration(
     }
 
 
+def _machine_full_evaluation_projection(
+    mechanistic_refinement: dict[str, Any], refinement_contract: dict[str, Any]
+) -> dict[str, Any]:
+    best = mechanistic_refinement.get("best_observed_candidate") or {}
+    best_paired = best.get("calibration_paired_population") or {}
+    holdout_paired = (
+        mechanistic_refinement.get("best_observed_holdout_paired_population") or {}
+    )
+    accepted_count = int(refinement_contract.get("accepted_unique_trace_count") or 0)
+    input_counts = refinement_contract.get("input_lane_counts") or {}
+    refinement_status = str(mechanistic_refinement.get("status") or "")
+    full_state = (
+        "validated_edge"
+        if mechanistic_refinement.get("promotion_pass") is True
+        else "insufficient_mature_sample"
+        if refinement_status == "insufficient_mature_sample"
+        else "evaluated_no_edge"
+        if best
+        else "source_gap"
+        if not accepted_count and sum(int(v or 0) for v in input_counts.values()) > 0
+        else "insufficient_mature_sample"
+    )
+    return {
+        "schema": "main_mechanistic_entry_full_evaluation_v1",
+        "source_date": mechanistic_refinement.get("target_date"),
+        "state": full_state,
+        "full_population_count": accepted_count,
+        "input_lane_counts": refinement_contract.get("input_lane_counts"),
+        "accepted_lane_counts": refinement_contract.get("accepted_lane_counts"),
+        "row_exclusion_reason_counts": refinement_contract.get(
+            "row_exclusion_reason_counts"
+        ),
+        "independent_candidate_count": mechanistic_refinement.get(
+            "independent_policy_comparison_candidate_count"
+        ),
+        "evaluated_distinct_policy_count": mechanistic_refinement.get(
+            "evaluated_distinct_policy_count"
+        ),
+        "calibration_gate_passing_candidate_count": mechanistic_refinement.get(
+            "calibration_gate_passing_candidate_count"
+        ),
+        "promotion_pass": mechanistic_refinement.get("promotion_pass") is True,
+        "calibration_cost_adjusted_ev_pct": (
+            (best.get("calibration") or {}).get(
+                "cost_adjusted_terminal_proxy_ev_pct"
+            )
+            if (best.get("calibration") or {}).get(
+                "cost_adjusted_terminal_proxy_ev_pct"
+            )
+            is not None
+            else best_paired.get("candidate_opportunity_ev_pct")
+        ),
+        "calibration_paired_delta_ev_pct": best_paired.get(
+            "paired_terminal_proxy_delta_pct"
+        ),
+        "holdout_cost_adjusted_ev_pct": (
+            mechanistic_refinement.get("best_observed_holdout") or {}
+        ).get("cost_adjusted_terminal_proxy_ev_pct")
+        if (
+            mechanistic_refinement.get("best_observed_holdout") or {}
+        ).get("cost_adjusted_terminal_proxy_ev_pct")
+        is not None
+        else holdout_paired.get("candidate_opportunity_ev_pct"),
+        "holdout_paired_delta_ev_pct": holdout_paired.get(
+            "paired_terminal_proxy_delta_pct"
+        ),
+        "daily_net_profit_delta_krw": holdout_paired.get(
+            "daily_net_profit_delta_krw"
+        ),
+        "daily_net_profit_status": holdout_paired.get(
+            "daily_net_profit_status",
+            "not_available_without_exact_changed_decision_owner_replay",
+        ),
+        "baseline_preserved": holdout_paired.get("baseline_preserved") is True,
+        "downstream_operating_evidence_complete": holdout_paired.get(
+            "downstream_operating_evidence_complete"
+        ),
+        "self_comparison_counted_as_improvement": False,
+        "compact_projection_controls_machine_population": False,
+        "policy_candidate": mechanistic_refinement.get("policy_candidate"),
+    }
+
+
+def build_main_mechanistic_report(
+    *, target_date: str, data_root: Path = Path("data")
+) -> dict[str, Any]:
+    """Build only the active main-machine evaluation and publisher source."""
+    report_root = data_root / "report"
+    paired_rows, paired_contract = _mechanistic_source_rows(
+        report_root / PAIRED_SUBDIR,
+        target_date=target_date,
+    )
+    from src.engine.scalping.mechanistic_entry_runtime_policy import load_effective
+
+    incumbent = load_effective(data_root=data_root, target_date=target_date)
+    parent = (incumbent or {}).get("machine_policy") or MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1
+    # The compact materialization contains only the provider-screened subset.
+    # Main-machine tuning also needs BLOCK/RECHECK outcomes, so reuse the
+    # existing bounded path labeler over the verified machine captures rather
+    # than allowing compact coverage to redefine this population.
+    machine_rows, machine_capture_census = load_machine_observation_rows(
+        data_root, target_date=target_date
+    )
+    source_receipt = _machine_ai_natural_source_receipt(data_root, target_date)
+    source_receipt = _compact_history_receipt(
+        data_root, target_date, machine_rows, incumbent, source_receipt
+    )
+    case_table = build_machine_decision_case_table(
+        machine_rows,
+        capture_census=machine_capture_census,
+        source_receipt=source_receipt,
+    )
+    case_table["ai_quality_diagnostics"] = materialized_quality_diagnostics(
+        data_root, target_date
+    )
+    from src.engine.scalping import compact_auxiliary_paired_replay as compact
+
+    operating_projection = compact.read(
+        compact.report_path(data_root, target_date).with_suffix(".source.json")
+    )
+    if compact.valid(operating_projection):
+        operating_projection = compact.sealed(
+            {
+                **operating_projection,
+                "runtime_inference_cost_receipt": compact.runtime_inference_cost_receipt(
+                    data_root, target_date
+                ),
+            }
+        )
+    # Historical paired rows predate the full round-trip cost contract.  The
+    # normal full evaluator binds those immutable paths to the exact-date cost
+    # owner before admission; machine-only must preserve the same contract.
+    repriced_paired_rows, hierarchy_cost_census = relabel_hierarchy_source_rows(
+        paired_rows,
+        data_root,
+    )
+    refinement_rows, refinement_contract = _common_refinement_population(
+        repriced_paired_rows,
+        machine_rows,
+        target_date=target_date,
+        source_receipt=source_receipt,
+        paired_contract=paired_contract,
+        natural_conflicting_attempt_identity_count=case_table[
+            "conflicting_attempt_identity_count"
+        ],
+        natural_conflicting_evaluation_keys=case_table[
+            "conflicting_evaluation_keys"
+        ],
+        operating_projection=operating_projection,
+    )
+    refinement = build_clean_baseline_mechanistic_refinement(
+        report_root / PAIRED_SUBDIR,
+        target_date=target_date,
+        source_rows=refinement_rows,
+        source_contract=refinement_contract,
+        parent_policy=parent,
+    )
+    hierarchy = build_mechanistic_hierarchy_candidate(
+        refinement_rows,
+        target_date=target_date,
+        parent_policy=parent,
+        population_source_contract=refinement_contract,
+    )
+    if refinement.get("promotion_pass") is not True:
+        # The hierarchy shares the same entry stage and cannot bypass the
+        # full downstream-economic gate through a proxy-only child.
+        hierarchy["policy_candidate"] = None
+        hierarchy["promotion_pass"] = False
+        hierarchy["status"] = "diagnostic_only_parent_economic_gate_not_passed"
+    hierarchy["machine_capture_census"] = machine_capture_census
+    hierarchy["full_cost_relabel_census"] = hierarchy_cost_census
+    hierarchical = {
+        "schema": "main_mechanistic_entry_machine_only_hierarchy_v1",
+        "status": hierarchy.get("status"),
+        "promotion_pass": hierarchy.get("promotion_pass") is True,
+        "policy_candidate": hierarchy.get("policy_candidate"),
+        "runtime_extension": hierarchy,
+        "runtime_extensions_by_scope": {"KRX|KRX_REGULAR": hierarchy},
+        "machine_decision_case_table": case_table,
+        "diagnostic_sections_reused": False,
+    }
+    report = {
+        "schema": SCHEMA,
+        "policy_version": POLICY_VERSION,
+        "target_date": target_date,
+        "evaluation_source_date": target_date,
+        "generated_at": datetime.now(KST).isoformat(),
+        "status": "main_mechanistic_entry_full_evaluation_complete",
+        "clean_tuning_baseline_date": CLEAN_BASELINE_DATE,
+        "report_scope": "main_mechanistic_entry",
+        "noncompact_sections_refreshed": True,
+        "evaluation_contract_version": (
+            MAIN_MECHANISTIC_EVALUATION_CONTRACT_VERSION
+        ),
+        "evaluation_fingerprint": _main_mechanistic_input_fingerprint(
+            data_root, target_date
+        ),
+        "candidate_count": 0,
+        "selected_review_candidate": None,
+        "ofi_smoothing_audit": {"status": "not_recomputed_machine_only"},
+        "mechanistic_entry_refinement": refinement,
+        "machine_full_evaluation": _machine_full_evaluation_projection(
+            refinement, refinement_contract
+        ),
+        "mechanistic_flow_groups": {
+            "status": "not_recomputed_machine_only",
+            "source_population": {
+                "accepted_unique_trace_count": refinement_contract.get(
+                    "accepted_unique_trace_count"
+                )
+            },
+        },
+        "hierarchical_entry_quality": hierarchical,
+        **OFFLINE_CONTRACT,
+    }
+    return _with_artifact_content_sha256(report)
+
+
 def build_report(
     *,
     target_date: str,
@@ -7123,7 +7660,9 @@ def build_report(
         hierarchy_parent.pop("hierarchy", None)
         hierarchy_parent["thresholds"].update(mechanistic_refinement["policy_candidate"]["thresholds"])
         hierarchy_parent["version"] = MECHANISTIC_FULL_POPULATION_POLICY_VERSION
-        hierarchy_parent["postclose_selection"]["minimum_cost_adjusted_ev_pct"] = 0.0
+        hierarchy_parent["postclose_selection"]["minimum_cost_adjusted_ev_pct"] = (
+            MECHANISTIC_REFINEMENT_GATE["minimum_cost_adjusted_ev_pct"]
+        )
     hierarchical_entry_quality["runtime_extension"] = (
         build_mechanistic_hierarchy_candidate(
             refinement_rows,
@@ -7132,6 +7671,12 @@ def build_report(
             population_source_contract=refinement_contract,
         )
     )
+    if mechanistic_refinement.get("promotion_pass") is not True:
+        hierarchical_entry_quality["runtime_extension"]["policy_candidate"] = None
+        hierarchical_entry_quality["runtime_extension"]["promotion_pass"] = False
+        hierarchical_entry_quality["runtime_extension"]["status"] = (
+            "diagnostic_only_parent_economic_gate_not_passed"
+        )
     hierarchical_entry_quality["runtime_extension"][
         "machine_capture_census"
     ] = machine_capture_census
@@ -7284,10 +7829,16 @@ def build_report(
         **optimizer_handoff_body,
         "handoff_content_sha256": _canonical_sha256(optimizer_handoff_body),
     }
+    machine_full_evaluation = _machine_full_evaluation_projection(
+        mechanistic_refinement, refinement_contract
+    )
     report = {
         "schema": SCHEMA,
         "policy_version": POLICY_VERSION,
         "target_date": target_date,
+        "evaluation_source_date": target_date,
+        "report_scope": "main_mechanistic_entry",
+        "noncompact_sections_refreshed": True,
         "generated_at": datetime.now(KST).isoformat(),
         "status": status,
         "clean_tuning_baseline_date": CLEAN_BASELINE_DATE,
@@ -7329,6 +7880,7 @@ def build_report(
         "ofi_smoothing_audit": build_ofi_smoothing_audit(pipeline_path),
         "ofi_action_outcome_calibration": ofi_action_outcome_calibration,
         "mechanistic_entry_refinement": mechanistic_refinement,
+        "machine_full_evaluation": machine_full_evaluation,
         "mechanistic_flow_groups": mechanistic_flow_groups,
         "hierarchical_entry_quality": hierarchical_entry_quality,
         **OFFLINE_CONTRACT,
@@ -7337,7 +7889,10 @@ def build_report(
 
 
 def _runtime_policy_publication_errors(
-    published_policy: dict | None, source_report: dict
+    published_policy: dict | None,
+    source_report: dict,
+    *,
+    publication_date: str | None = None,
 ) -> list[str]:
     """Verify the canonical next-date receipt emitted by the bounded publisher."""
 
@@ -7349,12 +7904,17 @@ def _runtime_policy_publication_errors(
     if not isinstance(published_policy, dict):
         return ["mechanistic_entry_runtime_policy_not_published"]
     errors = []
-    expected_target = next_target(str(source_report.get("target_date") or ""))
+    expected_target = next_target(
+        publication_date or str(source_report.get("target_date") or "")
+    )
     if published_policy.get("target_date") != expected_target:
         errors.append("mechanistic_entry_runtime_policy_target_date_mismatch")
     if published_policy.get("source_date") != source_report.get("target_date"):
         errors.append("mechanistic_entry_runtime_policy_source_date_mismatch")
-    if published_policy.get("source_artifact_sha256") != source_report.get(
+    machine_source = published_policy.get("machine_evaluation_source") or {
+        "artifact_content_sha256": published_policy.get("source_artifact_sha256")
+    }
+    if machine_source.get("artifact_content_sha256") != source_report.get(
         "artifact_content_sha256"
     ):
         errors.append("mechanistic_entry_runtime_policy_source_hash_mismatch")
@@ -7422,6 +7982,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--target-date", required=True)
     parser.add_argument("--data-root", type=Path, default=Path("data"))
     parser.add_argument("--write", action="store_true")
+    parser.add_argument(
+        "--machine-only",
+        action="store_true",
+        help="Refresh only the active main mechanistic evaluator and publisher source",
+    )
+    parser.add_argument(
+        "--publication-date",
+        help="KST publication day; effective date is its next KRX trading day",
+    )
     parser.add_argument("--ensure-economic-reference-only", action="store_true", help="Prepare only the existing full-cost source before lengthy research; no policy publication")
     parser.add_argument(
         "--require-policy-publication",
@@ -7431,7 +8000,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--print-summary", action="store_true")
     args = parser.parse_args(argv)
     if args.ensure_economic_reference_only:
-        if not args.write or args.require_policy_publication:
+        if not args.write or args.require_policy_publication or args.publication_date:
             parser.error("--ensure-economic-reference-only requires --write and forbids policy publication")
         receipt = ensure_machine_economic_reference(data_root=args.data_root, target_date=args.target_date)
         print(json.dumps(receipt))
@@ -7440,13 +8009,50 @@ def main(argv: list[str] | None = None) -> int:
         ensure_machine_economic_reference(data_root=args.data_root, target_date=args.target_date)
         if args.write else {"status": "not_requested_read_only"}
     )
-    report = build_report(target_date=args.target_date, data_root=args.data_root)
-    report["machine_economic_reference_prerequisite"] = economic_reference_prerequisite
-    report = _with_artifact_content_sha256(report)
     path = report_path(args.target_date, args.data_root / "report")
+    def prepare_report() -> tuple[dict[str, Any], bool]:
+        existing = _load_json(path) if args.machine_only and args.write else {}
+        current_fingerprint = (
+            _main_mechanistic_input_fingerprint(args.data_root, args.target_date)
+            if args.machine_only
+            else None
+        )
+        reused = bool(
+            args.machine_only
+            and args.write
+            and _artifact_content_sha256_valid(existing)
+            and existing.get("report_scope") == "main_mechanistic_entry"
+            and existing.get("noncompact_sections_refreshed") is True
+            and existing.get("evaluation_contract_version")
+            == MAIN_MECHANISTIC_EVALUATION_CONTRACT_VERSION
+            and existing.get("evaluation_fingerprint") == current_fingerprint
+        )
+        if reused:
+            return existing, True
+        prepared = (
+            build_main_mechanistic_report(
+                target_date=args.target_date, data_root=args.data_root
+            )
+            if args.machine_only
+            else build_report(target_date=args.target_date, data_root=args.data_root)
+        )
+        prepared["machine_economic_reference_prerequisite"] = (
+            economic_reference_prerequisite
+        )
+        prepared = _with_artifact_content_sha256(prepared)
+        if args.write:
+            _atomic_write_json(path, prepared)
+        return prepared, False
+
+    if args.machine_only and args.write:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with (path.parent / "main_mechanistic_evaluation.lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            report, evaluation_reused = prepare_report()
+    else:
+        report, evaluation_reused = prepare_report()
     published_policy = None
     if args.write:
-        _atomic_write_json(path, report)
         from src.engine.scalping.microstructure_reaction_context import refresh_machine_evaluation_link
 
         machine_table = _as_dict(_as_dict(report.get("hierarchical_entry_quality")).get("machine_decision_case_table"))
@@ -7454,12 +8060,18 @@ def main(argv: list[str] | None = None) -> int:
             refresh_machine_evaluation_link(path, report_root=args.data_root / "report")
         from src.engine.scalping.mechanistic_entry_runtime_policy import publish
 
-        published_policy = publish(path, data_root=args.data_root)
+        published_policy = publish(
+            path,
+            data_root=args.data_root,
+            publication_day=args.publication_date,
+        )
     if args.require_policy_publication:
         if not args.write:
             parser.error("--require-policy-publication requires --write")
         publication_errors = _runtime_policy_publication_errors(
-            published_policy, report
+            published_policy,
+            report,
+            publication_date=args.publication_date,
         )
         if publication_errors:
             raise RuntimeError(",".join(publication_errors))
@@ -7471,6 +8083,10 @@ def main(argv: list[str] | None = None) -> int:
                     "candidate_count": report["candidate_count"],
                     "selected_review_candidate": report["selected_review_candidate"],
                     "ofi_smoothing_audit": report["ofi_smoothing_audit"],
+                    "machine_full_evaluation": report.get(
+                        "machine_full_evaluation"
+                    ),
+                    "evaluation_reused": evaluation_reused,
                     "runtime_policy_publication": (
                         {
                             "status": "published_or_idempotent",

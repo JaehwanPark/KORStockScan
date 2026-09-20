@@ -313,7 +313,8 @@ def _mechanistic_primary_activation_projection(
         checks = calibration._as_dict(candidate.get("promotion_checks"))
         proof_valid = (
             parent is not None
-            and candidate.get("evaluation_contract") == "full_population_positive_net_paired_delta_v2"
+            and candidate.get("evaluation_contract")
+            == "full_population_cost_adjusted_10bp_paired_delta_v3"
             and source_contract.get("schema") == "machine_common_refinement_population_v1"
             and source_contract.get("cohort", ["KRX", "KRX_REGULAR"]) == ["KRX", "KRX_REGULAR"]
             and candidate.get("source_contract_sha256") == calibration._canonical_sha256(source_contract)
@@ -342,12 +343,17 @@ def _mechanistic_primary_activation_projection(
                 symbols = calibration._number(metrics.get("unique_symbol_count"))
                 proof_valid = bool(proof_valid and symbols is not None and symbols.is_integer()
                                    and symbols >= floor["minimum_calibration_symbol_count"])
-            proof_valid = bool(proof_valid and ev is not None and ev > 0
+            proof_valid = bool(
+                               proof_valid
+                               and ev is not None
+                               and ev >= floor["minimum_cost_adjusted_ev_pct"]
                                and delta is not None and delta > 0
                                and paired.get("paired_terminal_contract_complete") is True
+                               and paired.get("downstream_operating_evidence_complete") is True
                                and metrics.get("source_provenance_contract_complete") is True
                                and metrics.get("catastrophic_terminal_proxy_count") == 0
-                               and metrics.get("terminal_evaluable_count") == metrics.get("exposure_count"))
+                               and metrics.get("terminal_evaluable_count") == metrics.get("exposure_count")
+            )
         train_dates, test_dates = candidate.get("calibration_source_dates"), candidate.get("holdout_source_dates")
         proof_valid = bool(proof_valid and isinstance(train_dates, list) and bool(train_dates)
                            and isinstance(test_dates, list) and bool(test_dates)
@@ -360,7 +366,11 @@ def _mechanistic_primary_activation_projection(
     threshold_policy.pop("hierarchy", None)
     threshold_policy["version"] = str(candidate.get("policy_version") or "")
     if full_population:
-        threshold_policy["postclose_selection"]["minimum_cost_adjusted_ev_pct"] = 0.0
+        threshold_policy["postclose_selection"]["minimum_cost_adjusted_ev_pct"] = (
+            calibration.MECHANISTIC_REFINEMENT_GATE[
+                "minimum_cost_adjusted_ev_pct"
+            ]
+        )
     thresholds = candidate.get("thresholds")
     if not isinstance(thresholds, dict) or set(thresholds) != set(calibration.MECHANISTIC_COMMON_FEATURE_GRID):
         errors.append("mechanistic_primary_candidate_thresholds_invalid")

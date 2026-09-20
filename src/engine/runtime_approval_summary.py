@@ -33,7 +33,7 @@ PRIMARY_DIRECT_OWNERS = (
     "low_price_two_leg",
     "low_price_expansion",
     "ws_freshness",
-    "ai_outcome",
+    "main_mechanistic_entry",
     "compact_auxiliary",
     "rising_missed",
 )
@@ -47,7 +47,7 @@ PRODUCER_FLAG_BY_OWNER = {
     "low_price_two_leg": "low_price_two_leg_tuning",
     "low_price_expansion": "low_price_two_leg_candidate_recommendation",
     "ws_freshness": "intraday_ws_freshness_finalize",
-    "ai_outcome": "ai_decision_action_outcome_calibration",
+    "main_mechanistic_entry": "ai_decision_action_outcome_calibration",
     "compact_auxiliary": "ai_decision_action_outcome_calibration",
     "rising_missed": "rising_missed_classifier_prior",
 }
@@ -61,6 +61,7 @@ POLICY_OWNER_BY_SOURCE = {
     "low_price_expansion": "low_price_expansion_policy",
     "rising_missed": "rising_missed_policy",
     "compact_auxiliary": "compact_policy",
+    "main_mechanistic_entry": "main_mechanistic_policy",
 }
 
 DEFAULT_CLOSURE_OWNER = {
@@ -72,7 +73,7 @@ DEFAULT_CLOSURE_OWNER = {
     "low_price_two_leg": "low_price_two_leg_tuning",
     "low_price_expansion": "low_price_two_leg_expanded_candidate_research",
     "ws_freshness": "intraday_ws_freshness_monitor",
-    "ai_outcome": "ai_decision_action_outcome_calibration",
+    "main_mechanistic_entry": "ai_decision_action_outcome_calibration",
     "compact_auxiliary": "compact_auxiliary_paired_replay",
     "rising_missed": "rising_missed_classifier_prior",
 }
@@ -87,6 +88,7 @@ def _paths(target_date: str) -> dict[str, Path]:
     report = DATA_DIR / "report"
     threshold = DATA_DIR / "threshold_cycle"
     compact_policies = []
+    machine_policies = []
     for candidate in sorted(
         (DATA_DIR / "runtime/mechanistic_entry_policy").glob("policy_????-??-??.json")
     ):
@@ -96,9 +98,16 @@ def _paths(target_date: str) -> dict[str, Path]:
             continue
         if payload.get("compact_evaluation_source_date") == target_date:
             compact_policies.append(candidate)
+        if (payload.get("machine_evaluation_source") or {}).get("source_date") == target_date:
+            machine_policies.append(candidate)
     compact_policy = (
         compact_policies[-1]
         if compact_policies
+        else DATA_DIR / "runtime/mechanistic_entry_policy" / "policy_missing.json"
+    )
+    machine_policy = (
+        machine_policies[-1]
+        if machine_policies
         else DATA_DIR / "runtime/mechanistic_entry_policy" / "policy_missing.json"
     )
     return {
@@ -116,7 +125,8 @@ def _paths(target_date: str) -> dict[str, Path]:
         "low_price_expansion": report / "low_price_two_leg_expanded_candidate_research" / f"low_price_two_leg_expanded_candidate_research_{target_date}.json",
         "low_price_expansion_policy": DATA_DIR / "runtime" / "low_price_two_leg_auto_expansion" / f"low_price_two_leg_auto_expansion_{target_date}.json",
         "ws_freshness": report / "intraday_ws_freshness_monitor" / f"intraday_ws_freshness_monitor_{target_date}.json",
-        "ai_outcome": report / "ai_decision_action_outcome_calibration" / f"ai_decision_action_outcome_calibration_{target_date}.json",
+        "main_mechanistic_entry": report / "ai_decision_action_outcome_calibration" / f"ai_decision_action_outcome_calibration_{target_date}.json",
+        "main_mechanistic_policy": machine_policy,
         "compact_auxiliary": report / "ai_entry_setup_paired_replay_batch" / f"compact_auxiliary_paired_economic_{target_date}.json",
         "compact_policy": compact_policy,
         "rising_missed": report / "rising_missed_classifier_prior" / f"rising_missed_classifier_prior_{target_date}.json",
@@ -326,8 +336,27 @@ def _economic_section(owner: str, payload: dict[str, Any]) -> dict[str, Any]:
         return _dict_value(payload, "paired_economic_search")
     if owner == "ws_freshness":
         return _dict_value(payload, "postclose_quality_handoff")
-    if owner == "ai_outcome":
-        return _dict_value(payload, "hierarchical_entry_quality", "machine_decision_case_table", "ai_quality_diagnostics", "diagnostic_price_path_summary")
+    if owner == "main_mechanistic_entry":
+        projection = _dict_value(payload, "machine_full_evaluation")
+        return {
+            "status": projection.get("state"),
+            "candidate_count": projection.get("independent_candidate_count"),
+            "paired_sample_count": projection.get("full_population_count"),
+            "incumbent_ev_pct": None,
+            "candidate_ev_pct": projection.get("holdout_cost_adjusted_ev_pct"),
+            "delta_ev_pct": projection.get("holdout_paired_delta_ev_pct"),
+            "net_profit_uplift_krw_per_observation_day": projection.get(
+                "daily_net_profit_delta_krw"
+            ),
+            "allowed_runtime_apply": projection.get("promotion_pass") is True,
+            "blocker": (
+                None
+                if projection.get("state") in {"validated_edge", "evaluated_no_edge"}
+                else projection.get("daily_net_profit_status")
+            ),
+            "metric_role": "primary_ev",
+            "closure_test": "full_machine_report_family_source_and_future_bundle_match",
+        }
     if owner == "compact_auxiliary":
         metrics = _dict_value(payload, "metrics")
         operating = _dict_value(metrics, "operating_economic_comparison")
@@ -427,9 +456,9 @@ def _comparison_status(owner: str, payload: dict[str, Any]) -> str:
         return "source_gap"
     if "unsupported" in joined:
         return "unsupported_scope"
-    if "no_edge" in joined or "negative_edge" in joined or "hold_no_edge" in joined:
+    if "evaluated_no_edge" in joined or "no_edge" in joined or "negative_edge" in joined or "hold_no_edge" in joined:
         return "measured_no_edge"
-    if "skipped_no_applicable_fill" in joined or "insufficient_sample" in joined:
+    if "skipped_no_applicable_fill" in joined or "insufficient_sample" in joined or "insufficient_mature_sample" in joined:
         return "insufficient_sample"
     if any(token in joined for token in ("pending_maturity", "hold_actual_sample", "paired_search_incomplete")):
         return "pending_maturity"
@@ -657,6 +686,11 @@ def build_runtime_approval_summary(
             target_date_matches = (
                 payload.get("compact_evaluation_source_date") == target_date
             )
+        if owner == "main_mechanistic_policy" and payload:
+            target_date_matches = (
+                (payload.get("machine_evaluation_source") or {}).get("source_date")
+                == target_date
+            )
         required = required_by_owner.get(owner, False)
         applicability = "active_required" if required else ("not_applicable_disabled_by_wrapper" if owner in PRIMARY_DIRECT_OWNERS else "optional_handoff")
         row = {
@@ -740,6 +774,29 @@ def build_runtime_approval_summary(
                 == source_payload.get("artifact_content_sha256")
                 and policy_payload.get("compact_evaluation_fingerprint")
                 == source_payload.get("evaluation_fingerprint")
+            )
+        if owner == "main_mechanistic_entry" and policy_receipt_valid:
+            from src.engine.scalping import mechanistic_entry_runtime_policy as machine_policy
+
+            policy_payload = _load_json(Path(str(policy.get("path") or "")))
+            source_payload = _load_json(Path(str(row.get("path") or "")))
+            machine_source = policy_payload.get("machine_evaluation_source") or {}
+            try:
+                machine_policy.validate(
+                    policy_payload, target_date=str(policy_payload.get("target_date") or "")
+                )
+                policy_contract_valid = True
+            except ValueError:
+                policy_contract_valid = False
+            policy_receipt_valid = bool(
+                policy_contract_valid
+                and source_payload.get("report_scope") == "main_mechanistic_entry"
+                and source_payload.get("noncompact_sections_refreshed") is True
+                and machine_source.get("source_date") == target_date
+                and machine_source.get("artifact_content_sha256")
+                == source_payload.get("artifact_content_sha256")
+                and machine_source.get("terminal_state")
+                == (source_payload.get("machine_full_evaluation") or {}).get("state")
             )
         row["policy_receipt"] = {
             "owner": policy_owner,

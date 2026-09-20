@@ -2083,7 +2083,9 @@ def _natural_refinement_fixture():
     return rows, receipt
 
 
-def test_common_refinement_consumes_natural_block_without_ai_or_fills():
+def test_common_refinement_keeps_natural_block_for_research_without_promoting_proxy(
+    monkeypatch,
+):
     rows, receipt = _natural_refinement_fixture()
     normalized, contract = calibration._common_refinement_population(
         [], rows, target_date="2026-09-15", source_receipt=receipt,
@@ -2094,14 +2096,30 @@ def test_common_refinement_consumes_natural_block_without_ai_or_fills():
     assert contract["actual_fills_or_ai_calls_required"] is False
     parent = json.loads(json.dumps(calibration.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1))
     parent["thresholds"]["maximum_spread_bp"] = 20
+    monkeypatch.setitem(
+        calibration.MECHANISTIC_REFINEMENT_GATE,
+        "minimum_calibration_exposure_count",
+        10_000,
+    )
     result = calibration.build_clean_baseline_mechanistic_refinement(
         Path("unused"), target_date="2026-09-15", source_rows=normalized,
         source_contract=contract, parent_policy=parent,
     )
-    assert result["promotion_pass"] is True
-    candidate = result["policy_candidate"]
-    assert candidate["incumbent_machine_policy_sha256"] == calibration._canonical_sha256(parent)
-    assert candidate["calibration_paired_population"]["paired_terminal_proxy_delta_pct"] > 0
+    assert result["promotion_pass"] is False
+    assert result["policy_candidate"] is None
+    assert result["status"] == "insufficient_mature_sample"
+    assert result["evaluated_distinct_policy_count"] > 0
+    assert result["economically_evaluable_candidate_count"] > 0
+    assert result["best_observed_candidate"]["calibration"][
+        "cost_adjusted_terminal_proxy_ev_pct"
+    ] is not None
+    assert result["calibration_gate_passing_candidate_count"] == 0
+    assert result["best_observed_candidate"]["calibration_paired_population"][
+        "paired_terminal_proxy_delta_pct"
+    ] > 0
+    assert result["best_observed_candidate"]["calibration_paired_population"][
+        "downstream_operating_evidence_complete"
+    ] is False
     assert rows[0]["comparison"]["control_action"] == "WAIT"
 
 
@@ -2297,9 +2315,9 @@ def test_compact_conflicting_veto_attempt_does_not_freeze_unaffected_screens(val
     assert compact["automatic_successor_selection"]["eligible"] is (valid_count == 20)
 
 
-@pytest.mark.parametrize("net_ev", [0.07, 0.0, -0.01])
+@pytest.mark.parametrize("net_ev", [0.12, 0.07, 0.0, -0.01])
 @pytest.mark.parametrize("next_generation", [False, True])
-def test_full_population_small_positive_net_is_selectable_but_zero_or_loss_is_not(net_ev, next_generation):
+def test_full_population_research_value_does_not_bypass_live_10bp_and_downstream_gate(net_ev, next_generation):
     rows, receipt = _natural_refinement_fixture()
     for row in rows:
         row["comparison"]["entry_path_target_pct"] = 0.2 + net_ev
@@ -2315,8 +2333,8 @@ def test_full_population_small_positive_net_is_selectable_but_zero_or_loss_is_no
         Path("unused"), target_date="2026-09-15", source_rows=normalized,
         source_contract=contract, parent_policy=parent,
     )
-    assert result["promotion_pass"] is (net_ev > 0)
-    assert result["objective"]["minimum_ev_pct"] == 0.0
+    assert result["promotion_pass"] is False
+    assert result["objective"]["minimum_ev_pct"] == 0.1
     assert result["policy_version"] == calibration.MECHANISTIC_FULL_POPULATION_POLICY_VERSION
 
 
@@ -2382,8 +2400,8 @@ def test_hierarchy_full_population_recovers_small_net_non_entries(net_ev, scope)
         population_source_contract=contract,
         cohort=cohort,
     )
-    assert result["promotion_pass"] is (net_ev > 0)
-    if net_ev > 0:
+    assert result["promotion_pass"] is (net_ev >= 0.10)
+    if net_ev >= 0.10:
         assert calibration.validate_hierarchy_candidate(result, source_date="2026-09-15", cohort=cohort) == []
         if cohort != ("KRX", "KRX_REGULAR"):
             assert calibration.validate_hierarchy_candidate(result, source_date="2026-09-15", cohort=("KRX", "KRX_REGULAR"))
@@ -2440,9 +2458,64 @@ def test_report_common_refinement_uses_natural_population_and_current_parent(mon
     # A producer cannot promote a proxy-only BLOCK population without the
     # uncalled downstream AI and frozen operating owner contract.
     assert result["promotion_pass"] is False
-    assert result["source_contract"]["accepted_lane_counts"] == {}
-    assert result["source_contract"]["row_exclusion_reason_counts"]["unsupported_machine_nonentry_downstream_ai_scope"] == len(rows)
+    assert result["source_contract"]["accepted_lane_counts"] == {"natural": len(rows)}
+    assert result["source_contract"][
+        "machine_population_independent_of_compact_projection"
+    ] is True
+    assert report["report_scope"] == "main_mechanistic_entry"
+    assert report["noncompact_sections_refreshed"] is True
+    assert report["machine_full_evaluation"]["full_population_count"] == len(rows)
     assert result["incumbent_machine_policy_sha256"] == calibration._canonical_sha256(parent)
+
+
+def test_machine_only_report_does_not_scan_unrelated_pipeline_history(
+    monkeypatch, tmp_path
+):
+    from src.engine.scalping import mechanistic_entry_runtime_policy as runtime_policy
+
+    rows, receipt = _natural_refinement_fixture()
+    parent = json.loads(json.dumps(calibration.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1))
+    parent["thresholds"]["maximum_spread_bp"] = 20
+    monkeypatch.setattr(
+        runtime_policy,
+        "load_effective",
+        lambda **kw: {"machine_policy": parent},
+    )
+    monkeypatch.setattr(
+        calibration,
+        "load_machine_observation_rows",
+        lambda *a, **kw: (rows, {"evaluable": len(rows)}),
+    )
+    monkeypatch.setattr(
+        calibration,
+        "_machine_ai_natural_source_receipt",
+        lambda *a: receipt,
+    )
+    monkeypatch.setattr(
+        calibration,
+        "_compact_history_receipt",
+        lambda root, day, observations, incumbent, value: value,
+    )
+    monkeypatch.setattr(
+        calibration,
+        "_hierarchy_pipeline_price_cache",
+        lambda *a, **kw: (_ for _ in ()).throw(
+            AssertionError("machine-only must not scan pipeline history")
+        ),
+    )
+
+    report = calibration.build_main_mechanistic_report(
+        target_date="2026-09-15", data_root=tmp_path
+    )
+
+    assert report["report_scope"] == "main_mechanistic_entry"
+    assert report["noncompact_sections_refreshed"] is True
+    assert report["machine_full_evaluation"]["full_population_count"] == len(rows)
+    assert report["ofi_smoothing_audit"]["status"] == "not_recomputed_machine_only"
+    assert report["hierarchical_entry_quality"]["policy_candidate"] is None
+    assert report["hierarchical_entry_quality"]["runtime_extension"][
+        "promotion_pass"
+    ] is False
 
 
 def test_mechanistic_source_loader_includes_supported_nxt_only_for_all_scope_mode(
@@ -3028,6 +3101,8 @@ def test_mechanistic_paired_delta_counts_avoided_control_exposure() -> None:
     assert metrics["paired_comparable_count"] == 2
     assert metrics["paired_terminal_contract_complete"] is True
     assert metrics["paired_terminal_proxy_delta_pct"] == pytest.approx(0.55)
+    assert metrics["candidate_opportunity_ev_pct"] == pytest.approx(0.1)
+    assert metrics["incumbent_opportunity_ev_pct"] == pytest.approx(-0.45)
 
 
 def test_mechanistic_legacy_hashless_rows_use_exact_file_and_row_hash_provenance(
@@ -4505,6 +4580,61 @@ def test_cost_prerequisite_only_never_builds_report_or_publishes_policy(monkeypa
     assert calibration.main(['--target-date', '2026-09-17', '--write', '--ensure-economic-reference-only']) == 2
 
 
+def test_machine_only_write_reuses_exact_input_fingerprint(monkeypatch, tmp_path):
+    from src.engine.scalping import mechanistic_entry_runtime_policy as policy
+
+    target = "2026-09-17"
+    path = calibration.report_path(target, tmp_path / "report")
+    path.parent.mkdir(parents=True)
+    report = calibration._with_artifact_content_sha256(
+        {
+            "schema": calibration.SCHEMA,
+            "target_date": target,
+            "report_scope": "main_mechanistic_entry",
+            "noncompact_sections_refreshed": True,
+            "evaluation_contract_version": (
+                calibration.MAIN_MECHANISTIC_EVALUATION_CONTRACT_VERSION
+            ),
+            "evaluation_fingerprint": "f" * 64,
+            "status": "main_mechanistic_entry_full_evaluation_complete",
+            "candidate_count": 0,
+            "selected_review_candidate": None,
+            "ofi_smoothing_audit": {"status": "not_recomputed_machine_only"},
+            "machine_full_evaluation": {"state": "evaluated_no_edge"},
+            "hierarchical_entry_quality": {},
+        }
+    )
+    path.write_text(json.dumps(report), encoding="utf-8")
+    monkeypatch.setattr(
+        calibration,
+        "_main_mechanistic_input_fingerprint",
+        lambda *_args, **_kwargs: "f" * 64,
+    )
+    monkeypatch.setattr(
+        calibration,
+        "ensure_machine_economic_reference",
+        lambda **_kwargs: {"status": "existing_verified_sources_preserved"},
+    )
+    monkeypatch.setattr(
+        calibration,
+        "build_main_mechanistic_report",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("unexpected rebuild")),
+    )
+    monkeypatch.setattr(policy, "publish", lambda *_args, **_kwargs: None)
+
+    assert calibration.main(
+        [
+            "--target-date",
+            target,
+            "--data-root",
+            str(tmp_path),
+            "--machine-only",
+            "--write",
+        ]
+    ) == 0
+    assert json.loads(path.read_text(encoding="utf-8")) == report
+
+
 
 
 def test_machine_microstructure_diagnostic_preserves_existing_auxiliary_gate():
@@ -4531,7 +4661,11 @@ def test_current_machine_operating_filter_uses_same_downstream_ai_and_model():
     unchanged=calibration._mechanistic_paired_population_metrics([row],[row])
     assert unchanged['paired_terminal_proxy_delta_pct']==0.
     assert unchanged['operating_economic_comparison']['status']=='supported_operating_comparison'
-    assert not unchanged['paired_terminal_contract_complete']
+    assert unchanged['paired_terminal_contract_complete']
+    assert unchanged['operating_economic_promotion_pass'] is False
+    assert unchanged['baseline_preserved'] is True
+    assert unchanged['daily_net_profit_delta_krw'] == 0.0
+    assert unchanged['daily_net_profit_status'] == 'baseline_preserved_no_independent_policy_change'
     # Recompute a signed losing operating arm, never copy a real SELL outcome.
     import copy
     losing=copy.deepcopy(row)

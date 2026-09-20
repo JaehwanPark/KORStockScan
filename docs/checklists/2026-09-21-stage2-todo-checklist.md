@@ -62,6 +62,11 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 
 ## 공통 자연 수용 인계
 
+- [ ] `[MainMechanisticEntryPostcloseLoopRestore0920] 메인 기계판정 장후 full 평가·미래 정책·장전 소비 확인` (`Due: 2026-09-21`, `Slot: PREOPEN`, `TimeWindow: 07:00~09:35`, `Track: ScalpingLogic`)
+  - Source: [복구 계획](../proposals/main-mechanistic-entry-postclose-full-tuning-loop-restoration-plan-2026-09-20.md). `main_mechanistic_entry` full report와 `compact_auxiliary`, `samsung_machine_entry`를 별도 owner로 유지한다.
+  - Acceptance: source-day full report의 `report_scope=main_mechanistic_entry`, 비용 후 paired EV·관측일당 순익 또는 정확한 source-gap, machine 전용 source hash가 다음 거래일 단일 bundle과 일치해야 한다. 정상 PREOPEN loader와 실제 PID가 같은 bundle hash를 소비한 뒤 적용 버전별 자연 `COMPLETED + valid profit_rate` 성과를 별도로 확인한다.
+  - 금지: compact-only 결과를 메인 평가 완료로 대체, 동일 정책 자기 비교를 개선으로 집계, 미청산·source-gap을 0으로 대입, 10bp·tail·holdout·hard guard 완화, 실행 중 봇 hot reload·주문.
+
 - [ ] `[KiwoomCommonHealthOpportunityCostAcceptance0917] 공통 health·실행 모델·compact 정책 자연 소비 및 실제 성과 검증` (`Due: 2026-09-21`, `Slot: ALL`, `TimeWindow: 07:00~20:35`, `Track: RuntimeStability`)
   - Source/History: [9/18 기존 stable ID 원 기록](2026-09-18-stage2-todo-checklist.md), [통합 계획 CI5](../proposals/compact-ai-postclose-source-paired-evaluation-and-preopen-consumer-integration-plan-2026-09-19.md). 기존 CW/ADQ/Samsung/AVG_DOWN·공통 health·PREOPEN 외부 blocker와 별도 custody·override acceptance를 승계하며 완료된 구현 재검토를 새 owner로 복제하지 않는다.
   - Acceptance: 기존 정상 producer→lossless census/원자 plan→운영 CF→선행 실제 모델 검증→scope/route별 prompt holdout→dated policy→정규 PREOPEN/실제 PID·issued prompt→joint applied-version COMPLETED valid cost/profit의 rolling/cumulative 성과. source/model/pending/unsupported/no-edge·actual/partial/CF를 분리한다. source gap0·배포·scoped PASS는 자연EV 또는 전체 native DONE이 아니다. 모델·표본·일별 순익·tail·비용·hard guards를 유지한다.

@@ -125,6 +125,7 @@ wrapper_snapshot=""
 PROJECT_DIR="${PROJECT_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 VENV_PY="${VENV_PY:-$PROJECT_DIR/.venv/bin/python}"
 TARGET_DATE="${1:-$(TZ=Asia/Seoul date +%F)}"
+POLICY_PUBLICATION_DATE="${THRESHOLD_CYCLE_POLICY_PUBLICATION_DATE:-$TARGET_DATE}"
 # shellcheck source=cpu_affinity_profile.sh
 . "$SCRIPT_DIR/cpu_affinity_profile.sh"
 MAX_CPU_BUSY_PCT="${THRESHOLD_CYCLE_MAX_CPU_BUSY_PCT:-95}"
@@ -1792,12 +1793,25 @@ if [ "$RUN_LOW_PRICE_TWO_LEG_TUNING" = "true" ] || [ "$RUN_LOW_PRICE_TWO_LEG_TUN
 fi
 if [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "true" ] || [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "1" ]; then
   wait_for_postclose_resources "ai_decision_action_outcome_calibration"
+  # Main mechanistic evaluation owns the canonical calibration report and is
+  # independent from compact provider availability.  It must publish before
+  # compact finalization so both family receipts survive in one dated bundle.
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.ai_action_outcome_calibration \
+    --target-date "$TARGET_DATE" --data-root "$PROJECT_DIR/data" --machine-only --write \
+    --publication-date "$POLICY_PUBLICATION_DATE" \
+    --require-policy-publication --print-summary
+  wait_for_json_artifact \
+    "$PROJECT_DIR/data/report/ai_decision_action_outcome_calibration/ai_decision_action_outcome_calibration_${TARGET_DATE}.json" \
+    "main_mechanistic_entry_full_evaluation"
   run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.entry_setup_paired_replay_batch \
     --date "$TARGET_DATE" --data-root "$PROJECT_DIR/data" --compact-only \
-    --execute-compact-candidate --finalize-compact --write
+    --execute-compact-candidate --write
   wait_for_json_artifact \
     "$PROJECT_DIR/data/report/ai_entry_setup_paired_replay_batch/compact_auxiliary_paired_economic_${TARGET_DATE}.json" \
     "compact_auxiliary_paired_economic"
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.entry_setup_paired_replay_batch \
+    --date "$TARGET_DATE" --data-root "$PROJECT_DIR/data" --compact-only \
+    --finalize-compact --publication-date "$POLICY_PUBLICATION_DATE" --write
 fi
 if [ "$RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT" = "true" ] || [ "$RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT" = "1" ]; then
   automation_trigger_decision "codebase_performance_workorder"
@@ -2003,6 +2017,8 @@ wait_for_postclose_resources "build_next_stage2_checklist_final_refresh"
 run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.build_next_stage2_checklist --source-date "$TARGET_DATE"
 wait_for_file_artifact "$(next_stage2_checklist_path)" "next_stage2_checklist_final_refresh"
 if [[ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" == "true" || "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" == "1" ]]; then
+  run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.verify_threshold_cycle_postclose_chain \
+    --date "$TARGET_DATE" --main-mechanistic-summary-only
   run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.verify_threshold_cycle_postclose_chain \
     --date "$TARGET_DATE" --compact-summary-only
 fi

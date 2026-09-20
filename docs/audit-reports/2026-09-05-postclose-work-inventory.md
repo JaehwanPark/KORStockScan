@@ -39,15 +39,16 @@
 | 14 | `observation_source_quality_audit --audit-phase final` | 최종 원천 품질과 경제성 admission. |
 | 15 | `samsung_machine_entry_tuning` | actual machine entry 분석과 candidate receipt. |
 | 16 | `low_price_two_leg_tuning` | actual/HELD/terminal/cost 기반 family 평가. |
-| 17 | `entry_setup_paired_replay_batch --compact-only --execute-compact-candidate --finalize-compact` | `compact_auxiliary_paired_replay`가 새 fingerprint일 때만 bounded 평가하고 canonical paired→dated policy→consumer를 한 번에 결속한다. source/model gap은 provider 0과 incumbent carry로 닫는다. |
-| 18 | 성능/regime/producer-gap/stage-hook 분기 | 기본 OFF. 활성 flag가 있을 때만 실행하며 현재 필수 owner가 아니다. |
-| 19 | `intraday_ws_freshness_monitor --finalize --monitor-only` | WS 품질 마감과 scanner family 입력. |
-| 20 | Swing propagation/review | Swing가 활성일 때만 실행한다. |
-| 21 | `rising_missed_classifier_prior` | 최근 20개 feedback의 동일 attempt를 비용 후 paired 평가하고 다음 장전용 dated receipt를 발행한다. 검증된 edge가 없으면 임계값을 바꾸지 않는다. |
-| 22 | `runtime_approval_summary` | compact를 포함한 family 원천·정책·runtime receipt의 날짜·해시를 직접 요약한다. 공통 후보를 만들지 않는다. |
-| 23 | `build_next_stage2_checklist` | 직접 증거 결손과 compact direct receipt를 다음 거래일 checklist에 투영한다. |
-| 24 | `verify_threshold_cycle_postclose_chain` | canonical compact paired→policy→consumer→checklist를 직접 대조한 뒤 전체 family source·hash·terminal을 검증한다. |
-| 25 | print-only backlog parser → pending/final verifier → status/DONE | 외부 동기화, 재기동, 주문을 실행하지 않는다. |
+| 17 | `scalping.ai_action_outcome_calibration --write --require-policy-publication` | 메인 기계 진입판정의 독립 full 모집단·비용 후 paired threshold 평가와 다음 거래일 bundle의 machine 전용 source receipt를 발행한다. compact 실행 여부가 모집단이나 실행 여부를 결정하지 않는다. |
+| 18 | `entry_setup_paired_replay_batch --compact-only --execute-compact-candidate` → `--finalize-compact` | `compact_auxiliary_paired_replay`가 새 fingerprint일 때만 bounded 평가하고 같은 bundle의 AI family receipt를 갱신한다. machine parent가 달라지면 carry/revalidation으로 닫는다. |
+| 19 | 성능/regime/producer-gap/stage-hook 분기 | 기본 OFF. 활성 flag가 있을 때만 실행하며 현재 필수 owner가 아니다. |
+| 20 | `intraday_ws_freshness_monitor --finalize --monitor-only` | WS 품질 마감과 scanner family 입력. |
+| 21 | Swing propagation/review | Swing가 활성일 때만 실행한다. |
+| 22 | `rising_missed_classifier_prior` | 최근 20개 feedback의 동일 attempt를 비용 후 paired 평가하고 다음 장전용 dated receipt를 발행한다. 검증된 edge가 없으면 임계값을 바꾸지 않는다. |
+| 23 | `runtime_approval_summary` | main mechanistic·compact·Samsung을 분리해 family 원천·정책·runtime receipt의 날짜·해시를 직접 요약한다. 공통 후보를 만들지 않는다. |
+| 24 | `build_next_stage2_checklist` | 구조 결손과 직접 policy receipt를 다음 거래일 checklist에 투영한다. maturity/no-edge는 신규 구현 owner를 만들지 않는다. |
+| 25 | `verify_threshold_cycle_postclose_chain` | main full report→machine source와 compact paired→compact source를 독립 대조한 뒤 consumer/checklist의 전체 family source·hash·terminal을 검증한다. |
+| 26 | print-only backlog parser → pending/final verifier → status/DONE | 외부 동기화, 재기동, 주문을 실행하지 않는다. |
 
 ## 3. PREOPEN 및 장중 소비 순서
 

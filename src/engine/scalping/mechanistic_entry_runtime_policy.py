@@ -153,14 +153,50 @@ def validate(bundle: dict, *, target_date: str) -> None:
     ):
         raise ValueError("machine_bundle_contract_invalid")
     source = str(bundle.get("source_date") or "")
+    publication = str(bundle.get("publication_date") or source)
     if any(
         not isinstance(bundle.get(key), str)
         or re.fullmatch(r"[0-9a-f]{64}", bundle[key]) is None
         for key in ("source_file_sha256", "source_artifact_sha256", "bundle_sha256")
     ):
         raise ValueError("machine_bundle_hash_format_invalid")
-    if source < "2026-06-05" or next_target(source) != target_date:
+    if (
+        source < "2026-06-05"
+        or publication < source
+        or next_target(publication) != target_date
+    ):
         raise ValueError("machine_bundle_date_invalid")
+    machine_source = bundle.get("machine_evaluation_source")
+    if machine_source is not None and (
+        not isinstance(machine_source, dict)
+        or str(machine_source.get("source_date") or "") < "2026-06-05"
+        or str(machine_source.get("source_date") or "") > publication
+        or re.fullmatch(
+            r"[0-9a-f]{64}",
+            str(machine_source.get("artifact_content_sha256") or ""),
+        )
+        is None
+        or re.fullmatch(
+            r"[0-9a-f]{64}", str(machine_source.get("file_sha256") or "")
+        )
+        is None
+    ):
+        raise ValueError("machine_evaluation_source_invalid")
+    compact_source = bundle.get("compact_evaluation_source")
+    if compact_source is not None and (
+        not isinstance(compact_source, dict)
+        or re.fullmatch(
+            r"[0-9a-f]{64}",
+            str(compact_source.get("artifact_content_sha256") or ""),
+        )
+        is None
+        or re.fullmatch(
+            r"[0-9a-f]{64}",
+            str(compact_source.get("machine_policy_sha256") or ""),
+        )
+        is None
+    ):
+        raise ValueError("compact_evaluation_source_invalid")
     if validate_mechanistic_entry_threshold_policy(bundle.get("machine_policy")):
         raise ValueError("machine_bundle_threshold_invalid")
     if (
@@ -475,6 +511,29 @@ def load(*, data_root: Path, target_date: str) -> dict | None:
         != bundle["source_file_sha256"]
     ):
         raise ValueError("machine_bundle_source_hash_invalid")
+    source_payload = _read(source_path)
+    if source_payload.get("artifact_content_sha256") != bundle.get(
+        "source_artifact_sha256"
+    ):
+        raise ValueError("machine_bundle_source_artifact_hash_invalid")
+    machine_source = bundle.get("machine_evaluation_source") or {}
+    if machine_source:
+        machine_path = (
+            root(data_root)
+            / "sources"
+            / f"{machine_source['file_sha256']}.json"
+        )
+        if (
+            not machine_path.is_file()
+            or _source_hash(str(machine_path), _signature(machine_path))
+            != machine_source["file_sha256"]
+        ):
+            raise ValueError("machine_evaluation_source_file_hash_invalid")
+        machine_payload = _read(machine_path)
+        if machine_payload.get("artifact_content_sha256") != machine_source.get(
+            "artifact_content_sha256"
+        ):
+            raise ValueError("machine_evaluation_source_artifact_hash_invalid")
     return bundle
 
 
@@ -541,6 +600,25 @@ def publish_compact_evaluation(
             return existing
         version = previous["ai_policy"]["prompt_version"]
         selected = source["candidate_prompt_version"]
+        inherited = existing or previous
+        parent_bundle_hashes = source.get("machine_parent_bundle_sha256s") or []
+        parent_policy_hashes = set()
+        for parent_bundle_hash in parent_bundle_hashes:
+            if re.fullmatch(r"[0-9a-f]{64}", str(parent_bundle_hash or "")) is None:
+                continue
+            parent_path = policy_root / "generations" / f"{parent_bundle_hash}.json"
+            if not parent_path.is_file():
+                continue
+            try:
+                parent_bundle = _read(parent_path)
+                validate(parent_bundle, target_date=parent_bundle["target_date"])
+            except (KeyError, OSError, ValueError):
+                continue
+            parent_policy_hashes.add(digest(parent_bundle["machine_policy"]))
+        exact_machine_parent = (
+            len(parent_policy_hashes) == 1
+            and parent_policy_hashes == {digest(inherited["machine_policy"])}
+        )
         measurement_allowed = (
             source_receipt.get("tuning_input_allowed") is True
             and compact_terminal_gate_allowed(source_receipt)
@@ -548,6 +626,7 @@ def publish_compact_evaluation(
                 "measurement_allowed"
             )
             is True
+            and exact_machine_parent
         )
         scope_keys = list((previous.get("scope_policies") or {})) or ["|".join(COHORT)]
         promoted_scopes = []
@@ -575,7 +654,6 @@ def publish_compact_evaluation(
             )["ai_policy"]
             if current_ai["prompt_version"] != old_ai["prompt_version"]:
                 raise ValueError("compact_future_stage_owner_conflict:" + scope_key)
-        inherited = existing or previous
         if existing:
             _atomic_write_json(
                 policy_root / "generations" / f"{existing['bundle_sha256']}.json",
@@ -626,9 +704,27 @@ def publish_compact_evaluation(
             compact_prompt_disposition=(
                 "compact_paired_candidate_selected"
                 if promoted_scopes
-                else "compact_incumbent_carry"
+                else (
+                    "parent_changed_revalidation_required"
+                    if parent_bundle_hashes and not exact_machine_parent
+                    else "compact_incumbent_carry"
+                )
             ),
             compact_promoted_scopes=promoted_scopes,
+            compact_evaluation_source={
+                "source_date": source_day,
+                "artifact_content_sha256": source["artifact_content_sha256"],
+                "evaluation_fingerprint": source.get("evaluation_fingerprint"),
+                "machine_parent_bundle_sha256s": parent_bundle_hashes,
+                "machine_policy_sha256": digest(inherited["machine_policy"]),
+                "disposition": (
+                    "candidate_selected"
+                    if promoted_scopes
+                    else "parent_changed_revalidation_required"
+                    if parent_bundle_hashes and not exact_machine_parent
+                    else "incumbent_carried"
+                ),
+            },
         )
         bundle["bundle_sha256"] = digest(bundle)
         validate(bundle, target_date=target)
@@ -663,6 +759,7 @@ def publish(
     adopt_hierarchy: bool = False,
     now: datetime | None = None,
     adopt_all_continuous: bool = False,
+    publication_day: str | None = None,
 ) -> dict | None:
     """Refresh a future date until PREOPEN, then retain its frozen generation.
 
@@ -688,9 +785,14 @@ def publish(
     source_date = str(source["target_date"])
     if source.get("report_scope") == "compact_auxiliary_only":
         return _publish_compact_scope(source, data_root=data_root, current=(now or datetime.now(KST)).astimezone(KST))
-    target = next_target(source_date)
     current = (now or datetime.now(KST)).astimezone(KST)
-    if source_date < "2026-06-05" or source_date > current.date().isoformat():
+    publication_date = publication_day or source_date
+    target = next_target(publication_date)
+    if (
+        source_date < "2026-06-05"
+        or source_date > publication_date
+        or publication_date > current.date().isoformat()
+    ):
         raise ValueError("machine_policy_source_date_invalid")
     policy_root.mkdir(parents=True, exist_ok=True)
     with (policy_root / "publisher.lock").open("a") as lock:
@@ -752,7 +854,10 @@ def publish(
         if (
             existing is not None
             and existing.get("role_contract") == MECHANISTIC_PRIMARY_ROLE_CONTRACT
-            and existing["source_artifact_sha256"] == source["artifact_content_sha256"]
+            and (
+                existing.get("machine_evaluation_source") or {}
+            ).get("artifact_content_sha256")
+            == source["artifact_content_sha256"]
             and existing.get("ai_policy", {}).get("prompt_version")
             == selected_ai_version
             and (not adopt_hierarchy or existing.get("hierarchy_adopted") is True)
@@ -819,6 +924,10 @@ def publish(
             else:
                 machine = projection["threshold_policy"]
                 disposition = "evidence_qualified_threshold_update"
+        if disposition == "evidence_qualified_threshold_update" and previous:
+            # One entry-stage change per generation unless the exact combined
+            # machine+compact policy was independently evaluated.
+            selected_ai_version = previous["ai_policy"]["prompt_version"]
         hierarchy_adopted = adopt_hierarchy or bool(
             previous and previous.get("hierarchy_adopted") is True
         )
@@ -840,7 +949,14 @@ def publish(
                 else "adopted_no_qualified_child"
             )
         )
-        if hierarchy_adopted and child is not None:
+        machine_economic_gate_pass = (
+            source.get("report_scope") != "main_mechanistic_entry"
+            or (source.get("machine_full_evaluation") or {}).get("state")
+            == "validated_edge"
+        )
+        if hierarchy_adopted and child is not None and not machine_economic_gate_pass:
+            hierarchy_disposition = "diagnostic_child_parent_economic_gate_not_passed"
+        elif hierarchy_adopted and child is not None:
             errors = calibration.validate_hierarchy_candidate(
                 hierarchy, source_date=source_date
             )
@@ -924,7 +1040,9 @@ def publish(
                         disposition,
                     )
                 elif (
-                    hierarchy_adopted and extension.get("policy_candidate") is not None
+                    hierarchy_adopted
+                    and machine_economic_gate_pass
+                    and extension.get("policy_candidate") is not None
                 ):
                     errors = calibration.validate_hierarchy_candidate(
                         extension,
@@ -1006,6 +1124,7 @@ def publish(
             "schema": SCHEMA,
             "target_date": target,
             "source_date": source_date,
+            "publication_date": publication_date,
             "source_file_sha256": source_hash,
             "source_artifact_sha256": source["artifact_content_sha256"],
             "cohort": COHORT,
@@ -1013,6 +1132,23 @@ def publish(
             "adoption_basis": "user_authorized_initial_policy_with_guarded_succession",
             "machine_policy": machine,
             "machine_disposition": disposition,
+            "machine_evaluation_source": {
+                "source_date": source_date,
+                "path": str(source_path.resolve()),
+                "file_sha256": source_hash,
+                "artifact_content_sha256": source["artifact_content_sha256"],
+                "report_scope": source.get("report_scope"),
+                "noncompact_sections_refreshed": source.get(
+                    "noncompact_sections_refreshed"
+                ),
+                "terminal_state": (
+                    source.get("machine_full_evaluation") or {}
+                ).get("state"),
+                "incumbent_machine_policy_sha256": (
+                    source.get("mechanistic_entry_refinement") or {}
+                ).get("incumbent_machine_policy_sha256"),
+                "disposition": disposition,
+            },
             "hierarchy_adopted": hierarchy_adopted,
             "previous_bundle_sha256": previous["bundle_sha256"] if previous else None,
             "historical_context": context,
@@ -1027,6 +1163,14 @@ def publish(
             "actual_order_submitted": False,
             "generated_at": current.isoformat(),
         }
+        if previous and previous.get("compact_evaluation_source"):
+            bundle["compact_evaluation_source"] = copy.deepcopy(
+                previous["compact_evaluation_source"]
+            )
+            if disposition == "evidence_qualified_threshold_update":
+                bundle["compact_evaluation_source"]["disposition"] = (
+                    "parent_changed_revalidation_required"
+                )
         bundle["bundle_sha256"] = digest(bundle)
         if all_continuous:
             bundle.update(all_continuous_adopted=True, scope_policies=scope_policies)

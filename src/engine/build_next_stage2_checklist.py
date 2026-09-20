@@ -92,7 +92,7 @@ DIRECT_OWNER_TASK_LABEL = {
     "low_price_two_leg": "LowPriceTwoLeg",
     "low_price_expansion": "LowPriceExpansion",
     "ws_freshness": "WsFreshness",
-    "ai_outcome": "AiOutcome",
+    "main_mechanistic_entry": "MainMechanisticEntry",
     "compact_auxiliary": "CompactAuxiliary",
     "rising_missed": "RisingMissed",
 }
@@ -549,6 +549,18 @@ def _validate_direct_summary(
 ) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise RuntimeError("direct runtime summary object required")
+    # Schema-v3 summaries written before the owner rename remain readable.
+    # New producers emit main_mechanistic_entry directly.
+    if (
+        isinstance(payload.get("sources"), dict)
+        and "main_mechanistic_entry" not in payload["sources"]
+        and "ai_outcome" in payload["sources"]
+    ):
+        payload = dict(payload)
+        payload["sources"] = dict(payload["sources"])
+        payload["sources"]["main_mechanistic_entry"] = payload["sources"].pop(
+            "ai_outcome"
+        )
     checks = {
         "schema_version": payload.get("schema_version")
         == DIRECT_SUMMARY_SCHEMA_VERSION,

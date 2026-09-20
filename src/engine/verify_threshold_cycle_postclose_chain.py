@@ -290,12 +290,83 @@ def _scanner_scope(target_date: str) -> dict[str, Any]:
     return {"status": "pass" if not issues else "fail", "scope": "scanner_lookup_attention_only", "issues": issues, "whole_native_chain_done_claimed": False}
 
 
+def _main_mechanistic_scope(target_date: str) -> dict[str, Any]:
+    from src.engine.scalping import ai_action_outcome_calibration as calibration
+    from src.engine.scalping import mechanistic_entry_runtime_policy as policy
+
+    source_path = (
+        REPORT_DIR
+        / "ai_decision_action_outcome_calibration"
+        / f"ai_decision_action_outcome_calibration_{target_date}.json"
+    )
+    source = _load(source_path)
+    issues: list[str] = []
+    if not calibration._artifact_content_sha256_valid(source):
+        issues.append("main_machine_report_hash_invalid")
+    if source.get("report_scope") != "main_mechanistic_entry":
+        issues.append("main_machine_report_scope_invalid")
+    if source.get("noncompact_sections_refreshed") is not True:
+        issues.append("main_machine_noncompact_refresh_missing")
+    terminal = source.get("machine_full_evaluation") or {}
+    if terminal.get("state") not in {
+        "source_gap",
+        "insufficient_mature_sample",
+        "evaluated_no_edge",
+        "validated_edge",
+    }:
+        issues.append("main_machine_terminal_state_invalid")
+    matching: list[tuple[Path, dict[str, Any]]] = []
+    for candidate in sorted(
+        (DATA_DIR / "runtime/mechanistic_entry_policy").glob("policy_????-??-??.json")
+    ):
+        bundle = _load(candidate)
+        machine_source = bundle.get("machine_evaluation_source") or {}
+        if machine_source.get("source_date") == target_date:
+            matching.append((candidate, bundle))
+    if not matching:
+        issues.append("main_machine_future_policy_missing")
+    else:
+        _, bundle = matching[-1]
+        machine_source = bundle.get("machine_evaluation_source") or {}
+        try:
+            policy.validate(bundle, target_date=str(bundle.get("target_date") or ""))
+        except ValueError:
+            issues.append("main_machine_future_policy_invalid")
+        if machine_source.get("artifact_content_sha256") != source.get(
+            "artifact_content_sha256"
+        ):
+            issues.append("main_machine_report_policy_hash_mismatch")
+        if machine_source.get("terminal_state") != terminal.get("state"):
+            issues.append("main_machine_terminal_disposition_mismatch")
+        expected = (
+            "evidence_qualified_threshold_update"
+            if terminal.get("state") == "validated_edge"
+            else None
+        )
+        if expected and bundle.get("machine_disposition") != expected:
+            issues.append("main_machine_validated_edge_not_published")
+        if (
+            terminal.get("state") != "validated_edge"
+            and bundle.get("machine_disposition")
+            == "evidence_qualified_threshold_update"
+        ):
+            issues.append("main_machine_unqualified_edge_published")
+    return {
+        "status": "pass" if not issues else "fail",
+        "scope": "main_mechanistic_entry_only",
+        "issues": issues,
+        "source_path": str(source_path),
+        "whole_native_chain_done_claimed": False,
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--date", required=True)
     parser.add_argument("--require-summary-handoff", action="store_true")
     parser.add_argument("--scanner-lookup-summary-only", action="store_true")
     parser.add_argument("--compact-summary-only", action="store_true")
+    parser.add_argument("--main-mechanistic-summary-only", action="store_true")
     parser.add_argument("--entry-cancel-wait-summary-only", action="store_true")
     parser.add_argument("--allow-pending-done-marker", action="store_true")
     parser.add_argument("--allow-pending-entry-replay", action="store_true")
@@ -315,6 +386,10 @@ def main(argv: list[str] | None = None) -> int:
         report = verify_compact_handoff(DATA_DIR, args.date)
         print(json.dumps(report, ensure_ascii=False))
         return 0 if report.get("status") == "PASS" else 2
+    if args.main_mechanistic_summary_only:
+        report = _main_mechanistic_scope(args.date)
+        print(json.dumps(report, ensure_ascii=False))
+        return 0 if report.get("status") == "pass" else 2
     report = build_threshold_cycle_postclose_verification(
         args.date,
         require_done_marker=not args.allow_pending_done_marker,

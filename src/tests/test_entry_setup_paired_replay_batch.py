@@ -401,6 +401,7 @@ def test_compact_public_finalization_uses_direct_pair_policy_consumer(tmp_path, 
 
     parent = initial(tmp_path)
     proof = full_compact_proof()
+    proof["machine_parent_bundle_sha256s"] = [parent["bundle_sha256"]]
     if not promote:
         proof["chronological_validation"]["holdout_pairs"] = []
         proof["candidate_improvement_proven"] = False
@@ -1723,6 +1724,7 @@ def test_registered_sor_scope_independent_promotion_and_dated_consumer(tmp_path,
     parent = policy.publish(source(tmp_path), data_root=tmp_path, bootstrap=True,
         adopt_all_continuous=True, now=datetime(2026,9,13,20,tzinfo=policy.KST))
     proof = full_compact_proof()
+    proof['machine_parent_bundle_sha256s'] = [parent['bundle_sha256']]
     scope = (venue, session)
     for pair in proof['chronological_validation']['learning_pairs'] + proof['chronological_validation']['holdout_pairs']:
         pair.update(effective_venue=venue, session_bucket=session, broker_route=route)
