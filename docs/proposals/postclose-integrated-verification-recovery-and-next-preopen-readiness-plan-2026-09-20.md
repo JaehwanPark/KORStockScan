@@ -335,3 +335,15 @@ Python compile, shell `bash -n`, affected pytest, `git diff --check`, 문서 lin
 - scanner는 미선택 downstream AI 미관측을 `unsupported_scope`, 선택된 입력 누락을 `source_gap`으로 구분한다. 현재 입력 계약의 미지원/결손을 proxy 기반 `experiment_ready`로 바꾸지 않는다. 기존 입력 fingerprint 재사용과 완성된 지원 입력의 계산/승격 경로는 유지한다.
 - Kiwoom 공식 참조 확인: upstream `953e5dbff123f437ab4d11a78a95191a685eb51f`, 2026-09-20 23:12–23:16 KST, `kiwoom/_data/kiwoom_api_spec.json`, `kiwoom/specs.py`, `kiwoom/core/client.py`, `postman/kiwoom-openapi.postman_collection.json`. 해당 revision에 `kiwoom_docs` 없음. kt00001/kt00005/kt00011/ka10075의 POST `/api/dostk/acnt`, Bearer/api-id/continuation, KRX/NXT/통합 범위·주/원·return_code 및 PRD/MOCK 분리를 대사했다. 기존 요청/정규화 helper를 그대로 호출하며 Postman의 query 표현으로 JSON body 계약을 변경하지 않는다.
 - 검증 증거와 배포/제한 재생성 receipt는 `tmp/postclose-producer-repair-20260920/`에 보존한다. 자연 source9/17에는 opening 원천이 없으므로 과거 자본/EV가 null인 사실을 수리 실패나 no-edge로 바꾸지 않는다. 미래 정상 수집·독립 표본·정책 자연 소비·완료 손익은 별도 OPEN이다.
+
+
+
+#### 최종 실행 증거
+
+- 코드 `11253429a` + 분모 미확정 null 표시 후속 `5532fce36`, origin/main push. 최종 selected root `postclose-producer-repair-reviewed-20260920-5532fce36`. 9개 service 정의/129개 인스턴스 repin, 모두 inactive/PID0 유지. canonical rising/census wrapper redirect 설치. 원 release와 원 실패/terminal/rollback receipt 보존.
+- 핵심 회귀113, 원천·정책162, 변경 owner 경로31, 최종 scanner48 통과. 후속 targeted12/7/2 통과(중복되므로 합산하지 않음). compile/bash/diff 및 문서 parser 통과. 별도 저가주 full-file 검사에서 과거 생성 fixture 3개 부재: `all_thirteen_20260904_recommendations`, `20260907_exact_date_cost_quarantine_migration`, `research_evidence_gate`는 이 격리 작업본에서 미검증이며 실제 과거 파일을 조작하지 않았다.
+- source `2026-09-17`, publication `2026-09-20`, effective `2026-09-21`: 기존 완료 연구의 machine research closed-loop, scanner 선택 section, summary/checklist만 재생성. 시장 재수집·전체 raw/grid 재탐색·AI/계좌 호출 없음. 신규 opening 증거는 미래 정상 런타임 수집 대상이다.
+- scanner 과거 `hold_no_edge`를 `source_gap`으로 정정: incomplete partition5, selected downstream source/admission 결속 미확인1, 유효 paired0, ΔEV null. scanner-promoted만으로 compact 호출이 보장되는 것은 아니므로 selected source gap은 AI 미호출의 실제 최초 경계 확인을 포함하며 실제 오류1건 확정으로 해석하지 않는다. 미선택 미호출 AI의 정상 경로는 별도 `unsupported_scope` 회귀로 구분했다.
+- 9/21 실제 reader: main 기존 bundle `15c063637359bd4cbd5a567760abecdf6229aee1f44d1e9d6a7cbc2dc7e97eb7` 유효; scanner 비활성 fallback; widget 신규 자동 profile0; episode 기존 profile3 내용 동일, `newly_promoted_profile_ids=[]`. 이는 신규 경제성 개선 정책이 아니다.
+- 최종 strict는 `main_terminal` scope PASS, issue0이며 원 run `5953a93cf56c4fd39be8280faa8d530c` 보존. 전체 A–H를 재실행했다거나 새로운 whole-chain terminal/PREOPEN/PID 소비를 만들었다고 주장하지 않는다. 최신 검증 attempt와 코드/재생성 실행은 evidence receipt에서 별도 대사한다.
+- PR0–PR5의 이 범위 구현 종료. 미래 자연 원천·독립 표본·실제 적용·완료 순익은 OPEN이다. 입출금·결제 재사용·cross-date 보유·미호출 AI 전체 선택 비교 계약은 지원 범위 밖이며 시간만 지나면 해결될 사항으로 분류하지 않는다. 모델 수익과 실제 이익/인과적 개선은 입증되지 않았다.
