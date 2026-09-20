@@ -440,7 +440,7 @@ strict verifier는 다음을 모두 요구한다.
 | 비용 후 경제값 | calibration EV 0.0000%, holdout EV 0.0000%, holdout paired ΔEV +0.0054462573%p |
 | 일별 원화 순익 | `null`; 후보가 바꾸는 holdout 8건은 당시 실제 AI→submit→owner execution 경로가 없어 exact changed-decision owner replay를 사후 복구할 수 없음 |
 | 판정 | `insufficient_mature_sample`, `incumbent_carried`; 양의 EV 개선이나 실제 순익 개선으로 인정하지 않음 |
-| 다음 거래일 bundle | `data/runtime/mechanistic_entry_policy/policy_2026-09-21.json`, bundle `bb8dff9ea560f66251e67665194f8a16238f1d5f9e57925fe85f36bcf5821a5d` |
+| 다음 거래일 bundle | `data/runtime/mechanistic_entry_policy/policy_2026-09-21.json`, bundle `fdbd524c3fd8cad56bf12d592d9f2efe6e4a6ec6f522514fd188cf2fe3f0765b` |
 | family lineage | machine source 9/17/report hash `83a088...`, compact source 9/17/artifact `822c6f...`를 독립 보존 |
 | 직접 검증 | main mechanistic `pass`, compact auxiliary `PASS`; 동일 fingerprint 재시도 `evaluation_reused=true` |
 
