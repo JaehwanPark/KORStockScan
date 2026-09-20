@@ -188,3 +188,12 @@ source9/17→publication9/20→effective9/21 후속 run `5953a93cf56c4fd39be8280
 범위·회귀·첫 결손 기준은 [기존 감시 계획의 생산자 결손 리뷰](../proposals/intraday-semantic-entry-monitoring-and-telegram-alert-feasibility-plan-2026-09-20.md#생산자-결손-탐지-후속-리뷰--920)에 기록한다. 정상 guard와 명시 unsupported는 진단 분모에서 별도로 남기며 모든 gap을 버그나 자연 대기로 단정하지 않는다. 경제성 incident는 동일 attempt의 원천 계약이 유효해졌을 때만 해제한다. 이번 리뷰로 새로운 자연 EV 또는 양수 후보를 주장하지 않는다.
 
 검증: 운영 producer/계산 연계194개 PASS 후 감시·cache 경계164개 PASS(중복 포함). 실제 producer 저장 JSONL에서 세션/route/action별 source contract 성공을 확인했고, 내부 자본 결손을 넣은 성공 표시를 source_gap으로 판별했다. 추가 리뷰에서 cache15/16의 과거 번호 충돌을 피하고 기존10/12부터 이전할 때 누락된 모든 stage의 zero census를 요구했다. 9/17 raw5.7GB의 전수 재스캔 없이 기존 audit와 cache metadata로 이전 가능성을 확인했다. 합성 회귀·원천 계약 검증이며 자연 EV 개선 증거는 아니다.
+
+
+최종 재리뷰/배포: 경제성 계획 생성 대상이 아닌 `SOURCE_INVALID`에 계획 부재를 중복 결함으로 요구하던 경계를 보완했다. 원 기계 원천 결손 경보는 보존한다. 최종 감시 회귀26개 PASS(앞선194/164개와 중복), compile/diff 검증 PASS. 코드 `811201e27` 이후 최종 `e6a9411b2`를 main에 push했고 선택 immutable release는 `submission-producer-gap-reviewed-20260920-e6a9411b2`다.
+
+서비스9개 정의/129개 인스턴스는 source 경로만 갱신하고 PID0/inactive를 확인했다. 기존 08–19시5분 Sentinel cron은 동일하며 release router의 print-plan이 새 코드를 선택한다. 시험 Telegram 발송/봇 시작/주문/AI 추가 호출은0이다. 실제 지속 결손 탐지·복구 알림 및 정상 PREOPEN/PID 소비는9/21 자연 OPEN이다.
+
+source9/17→publication9/20→effective9/21 strict 재검증 PASS(`c58c4c35a6f748fcaf869cb119dab6df`). 기존 terminal run `5953a93cf56c4fd39be8280faa8d530c`와 원 code/as-of/hash를 보존했고, 경제성 계산 미변경으로 재생성하지 않았다. bundle `15c063637359bd4cbd5a567760abecdf6229aee1f44d1e9d6a7cbc2dc7e97eb7` incumbent 유지, 독립 widget/machine receipt 유효. 기존 main 첫 blocker `machine_operating_population_unbound`, 신규 승격0·운영 EV/추가 실제 순익 null은 변화 없다. 감시의 source-valid 표시는 독립 모델 검증·경제성 PASS가 아니다.
+
+최종 증거: `tmp/submission-producer-gap-review-20260920/final-successor-review.json`, `deployment-e6a9411b2.json`, `service-binding-e6a9411b2.json`, `strict-final-readiness.log`, `final-monitor-tests.log`, `cache-migration-preflight.json`. 이전 배포/실패/원천 원본과 기존 미지원 운영 계약은 보존한다.
