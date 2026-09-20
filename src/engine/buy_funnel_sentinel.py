@@ -2866,7 +2866,21 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
             row
             for row in rows
             if row.stage
-            in (BLOCKER_STAGES - BROKER_SUBMIT_FAILURE_STAGES - {"blocked_ai_score"})
+            in (BLOCKER_STAGES - BROKER_SUBMIT_FAILURE_STAGES
+                - AI_TERMINAL_ATTRIBUTION_STAGES - {"blocked_ai_score"})
+            or (
+                row.stage == "ai_confirmed_terminal_no_budget"
+                and (
+                    _safe_str(row.fields.get("terminal_reason")),
+                    _safe_str(row.fields.get("source_stage")),
+                ) in {
+                    ("first_ai_wait_big_bite_not_confirmed", "first_ai_wait"),
+                    ("entry_policy_no_buy_score_prior", "blocked_ai_score"),
+                }
+                and _safe_str(row.fields.get("actual_order_submitted")).lower() == "false"
+                and _safe_str(row.fields.get("broker_order_forbidden")).lower() == "true"
+                and _safe_str(row.fields.get("allowed_runtime_apply")).lower() == "false"
+            )
         ] + [
             row
             for row in broker_failure_rows
@@ -5119,9 +5133,12 @@ def build_buy_funnel_sentinel_report(
         classification, selected_summary
     )
 
+    from src.engine.monitoring.submission_bottleneck_monitor import snapshot
+
     return {
         "schema_version": 6,
         "report_type": "buy_funnel_sentinel",
+        "submission_monitor": snapshot(events, as_of),
         "target_date": target_date,
         "as_of": as_of.isoformat(timespec="seconds"),
         "dry_run": bool(dry_run),
@@ -5347,7 +5364,12 @@ def save_report_artifacts(report: dict[str, Any]) -> dict[str, str]:
         json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     md_path.write_text(build_markdown(report), encoding="utf-8")
-    return {"json": str(json_path), "markdown": str(md_path)}
+    # The notification consumer must never reload the large diagnostic report.
+    from src.engine.notify_error_detection_admin import _write_state
+    monitor_path = report_dir / f"submission_bottleneck_source_{target_date}.json"
+    _write_state(monitor_path, {k: report.get(k) for k in (
+        "target_date", "dry_run", "submission_monitor")})
+    return {"json": str(json_path), "markdown": str(md_path), "submission_monitor": str(monitor_path)}
 
 
 def build_parser() -> argparse.ArgumentParser:

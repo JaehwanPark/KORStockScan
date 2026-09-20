@@ -395,3 +395,10 @@ def test_cron_check_does_not_acquire_installer_lock(release, monkeypatch):
         lambda *a: pytest.fail("read-only check must not wait for installer"),
     )
     router.manage_cron(workspace, False)
+
+
+def test_submission_monitor_routes_selected_observer_without_start(release):
+    workspace, root, _, _ = release
+    plan = router.make_plan(workspace, root, "a" * 40, "buy-funnel", "2026-09-21")
+    assert plan["command"] == ["/bin/bash", str(root / "deploy/run_buy_funnel_sentinel_intraday.sh"), "2026-09-21"]
+    assert plan["cwd"] == str(root)

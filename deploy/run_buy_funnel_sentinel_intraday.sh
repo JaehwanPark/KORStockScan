@@ -87,6 +87,10 @@ started_at="$(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S')"
 echo "[START] buy funnel sentinel target_date=${TARGET_DATE} started_at=${started_at} dry_run=${DRY_RUN} use_cache=${USE_CACHE} use_summary=${USE_SUMMARY}" | tee -a "$LOG_FILE"
 
 if "${cmd[@]}" 2>&1 | tee -a "$LOG_FILE"; then
+  if [[ "$DRY_RUN" != "1" ]]; then
+    PYTHONPATH=. "$VENV_PY" -m src.engine.monitoring.submission_bottleneck_monitor \
+      --report "$PROJECT_DIR/data/report/buy_funnel_sentinel/submission_bottleneck_source_${TARGET_DATE}.json" --notify
+  fi
   touch "$COOLDOWN_STATE_FILE"
   finished_at="$(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S')"
   echo "[DONE] buy funnel sentinel target_date=${TARGET_DATE} finished_at=${finished_at}" | tee -a "$LOG_FILE"

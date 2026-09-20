@@ -297,6 +297,17 @@ ARTIFACT_REGISTRY: list[dict[str, Any]] = [
         "json_ok_values": ["succeeded"],
     },
     {
+        "id": "submission_bottleneck_monitor",
+        "path_template": "data/report/buy_funnel_sentinel/submission_bottleneck_monitor_{date}.json",
+        "max_staleness_sec": 600,
+        "critical": True,
+        "trading_day_only": True,
+        "window_start": (8, 10),
+        "window_end": (20, 0),
+        "json_status_field": "notification_status",
+        "json_ok_values": ["idle", "sent", "cooldown"],
+    },
+    {
         "id": "buy_funnel_sentinel_report",
         "path_template": "data/report/buy_funnel_sentinel/buy_funnel_sentinel_{date}.md",
         "max_staleness_sec": 600,

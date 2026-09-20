@@ -159,3 +159,13 @@ ME8의 과거 미대사 2건을 찾았다. 9/14 `187660`의 paired trace `analyz
 - 기계적 완료 및 guarded incumbent 준비와 경제성 실증을 분리한다. 이번 코드의 조건부 지원 경로는 실행·검증됐지만 전체 계좌 현금흐름·모든 부분체결 경로의 보편적 지원 완료는 아니다. §15.9의 미확정 운영 계약은 자연 OPEN으로 바꾸지 않았다.
 
 증거: `implementation-review.json`, `deployment-5d60b4afe.json`, `service-binding-5d60b4afe.json`, `source-reuse-code-review.json`, `limited-recovery-f7e6be607be944b8a45fa8f5775494a8.json`, `final-reconciliation.json` (모두 `tmp/main-machine-capital-partial-20260920/`). 최종 증거 문서 commit은 코드 배포 commit과 분리한다.
+
+## 11. 제출병목 한정 감시와 후속 재리뷰 (9/20)
+
+사용자가 의미 감시를 제출병목으로 한정하고 통보를 승인했다. [감시 계획](../proposals/intraday-semantic-entry-monitoring-and-telegram-alert-feasibility-plan-2026-09-20.md)을 현행 범위로 재정의했다. 기존 Sentinel 정규화·machine ledger·Telegram transport를 재사용하고, 최근 원천의 작은 투영/지속 상태/전이 알림만 추가한다. engine root 모듈·새 collector/서비스·AI/브로커 호출은 없다.
+
+리뷰에서 보완한 사항: 대형 진단 JSON을 알림 consumer가 다시 읽는 비용, 프리마켓 수집 제외, 기존 workspace cron의 배포 source 불일치, snapshot 중복·역행, 늦은 terminal과 단순 window 이탈 혼동, 전송 실패 후 성공 상태 기록 위험. cache 정규화의 lossless terminal 보존과 wrapper dry-run의 무통보를 회귀로 확인한다. 정상 guard·RECHECK와 source 결손을 혼합하지 않는다.
+
+메인 §15의 conditional capital envelope, prior cancel model scope/hash/date, native 잔여 미접촉/sequence, cash reserve→holding→확정 cancel/exit 보존, sequence 공통 자본/holdout 경계를 재리뷰했다. 이번 감시는 모델/evaluator/publisher를 변경하지 않는다. 직전 708개 및 최종87개(중복) 검증과 자연 f7e6be607be944b8a45fa8f5775494a8의 경제성 결과는 그대로 재사용할 대상이며 새로운 자연 검증으로 합산하지 않는다. 기존 별도 운영 계약 및 EV null을 이 감시 구현으로 해소했다고 주장하지 않는다.
+
+후속 재리뷰에서 canonical 작업본의 정상 `ai_confirmed_terminal_no_budget` 보완을 확인했다. 실제 producer의 알려진 terminal_reason/source_stage 두 조합과 주문 금지 세 필드가 맞을 때만 final guard로 처리하는 변경을 통합했다. 나머지 canonical 차이는 덮어쓰지 않았다. 영향 회귀 **283개 PASS**, compile·bash -n·문서 parser·diff 검증 PASS. 증거: `tmp/submission-bottleneck-review-20260920/implementation-review.json`, `tests.log`. 합성 회귀이며 실제 Telegram 발송/자연 수익 증거는 아니다.

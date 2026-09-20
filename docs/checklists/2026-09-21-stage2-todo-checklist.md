@@ -215,3 +215,10 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 - 다음 확인 `existing_main_owner_execution_cf_and_portfolio_replay` / `full_cost_stop_owner_plan_portfolio_and_forward_holdout_receipts`. 실제 PID 소비와 비용 후 자연 성과는 별도 수용 조건이다.
 
 <!-- compact_auxiliary_direct:end -->
+
+## 제출병목 지속 감시
+
+- [ ] `[SubmissionBottleneckMonitorNatural0921] 기존 Sentinel의 제출병목 지속 감시·통보 자연 소비 확인` (`Due: 2026-09-21`, `Slot: INTRADAY`, `TimeWindow: 08:00~19:55`, `Track: RuntimeStability`)
+  - Source: [제출병목 한정 감시 계획](../proposals/intraday-semantic-entry-monitoring-and-telegram-alert-feasibility-plan-2026-09-20.md), [배포·검증 리뷰](../audit-reports/2026-09-20-main-machine-operating-evidence-closure-review.md#11-제출병목-한정-감시와-후속-재리뷰-920).
+  - Acceptance: 선택 release의 기존 Sentinel→작은 submission source→최근30분 exact 분모/지속 상태가 자연 갱신됨. 실제 지속 incident 발생 시 Telegram 발송 receipt, 미발생은 정상 관찰로 구분. mock 통과를 자연 통보/EV로 보고하지 않음.
+  - Boundary: 메인 제출병목·원천/identity 결손만 알림. 위젯/에피소드·예외 에러 detector는 별도 owner. 자동 수정·주문·추가 AI/계좌 조회·재기동·조기 PREOPEN 금지. 정상 guard/분모0/창 이탈은 결함·복구로 단정하지 않음.

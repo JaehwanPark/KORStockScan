@@ -37,7 +37,7 @@ TAGS = {
 }
 CRON_TARGETS = frozenset({"start", *TAGS.values()})
 REQUIRED_CRON_TARGETS = frozenset({"start", "preopen", "postclose", "eod"})
-OPERATIONS = ("start", "restart", *OWNED, "paired-replay", "eod", "archive")
+OPERATIONS = ("start", "restart", *OWNED, "paired-replay", "eod", "archive", "buy-funnel")
 
 
 def git(root: Path, *args: str) -> str:
@@ -173,6 +173,8 @@ def make_plan(
             str(root / "deploy" / f"run_{script}.sh"),
             target_date,
         ]
+    elif operation == "buy-funnel":
+        command = ["/bin/bash", str(root / "deploy/run_buy_funnel_sentinel_intraday.sh"), target_date]
     elif operation == "paired-replay":
         command = [
             "/bin/bash",
