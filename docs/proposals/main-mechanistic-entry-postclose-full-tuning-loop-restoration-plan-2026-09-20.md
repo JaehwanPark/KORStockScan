@@ -424,7 +424,7 @@ strict verifier는 다음을 모두 요구한다.
 
 2026-09-20 KST에 본 계획의 코드 범위를 구현하고 재검토했다. 메인 기계평가를 compact보다 먼저 실행하고, 공통·계층 모집단의 비용 후 paired 평가, 미래 정책 발행, family별 source lineage, runtime summary/checklist/direct verifier를 기존 owner 안에서 연결했다. 같은 입력의 재시도는 평가기·원천·incumbent를 포함한 fingerprint가 일치할 때 봉인 보고서를 재사용한다. compact 최종화가 메인 최상위 source date/hash를 덮던 결함과 비활성 선택 작업까지 크론 필수 대상으로 요구하던 배포 검사 결함도 보완했다.
 
-- 최종 소스 커밋: `ea9b53a7e2dfbe063c420e2bee5ad633c20e52ee` (`origin/main`)
+- 런타임 소스 커밋: `ea9b53a7e2dfbe063c420e2bee5ad633c20e52ee` (`origin/main`에 포함). 구현 결과 문서 커밋은 `6937d0ca38724dcee5fe91965f42c45561bdc87e`다.
 - 선택 릴리스: `/home/ubuntu/KORStockScan-runtime-releases/main-mechanistic-lineage-reviewed-20260920-ea9b53a7e`
 - 실제 예약 경로: 평일 07:35 PREOPEN, 20:10 postclose가 공통 release router를 사용하며 필수 네 경로 검증이 통과했다.
 - 검증: 최초 구현 관련 suite 1,695개 통과 후 lineage·router·summary·strict verifier 보완 suite 390개를 재검증했다. Python compile, shell syntax, `git diff --check`, print-only 문서 parser를 별도로 통과시킨다.
