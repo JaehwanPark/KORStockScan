@@ -216,6 +216,34 @@ def test_pid_verification_compares_launcher_context_overlay(monkeypatch, tmp_pat
     assert verification["pid_mismatches"] == []
 
 
+def test_verify_cli_persists_receipt_only_when_explicit(monkeypatch, capsys):
+    calls = []
+
+    def fake_verify(target_date, *, pid=None, write=True):
+        calls.append((target_date, pid, write))
+        return {"status": "pass"}
+
+    monkeypatch.setattr(bootstrap, "verify_bootstrap", fake_verify)
+
+    assert bootstrap.main(
+        ["--verify", "--target-date", "2026-09-21", "--pid", "123"]
+    ) == 0
+    assert calls[-1] == ("2026-09-21", 123, False)
+    capsys.readouterr()
+
+    assert bootstrap.main(
+        [
+            "--verify",
+            "--target-date",
+            "2026-09-21",
+            "--pid",
+            "123",
+            "--write-verify-artifact",
+        ]
+    ) == 0
+    assert calls[-1] == ("2026-09-21", 123, True)
+
+
 def test_bootstrap_rerun_does_not_create_self_referential_incumbent(
     monkeypatch, tmp_path
 ):

@@ -865,18 +865,29 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--date", "--target-date", dest="target_date", required=True)
     parser.add_argument("--write", action="store_true")
     parser.add_argument("--verify", action="store_true")
+    parser.add_argument(
+        "--write-verify-artifact",
+        action="store_true",
+        help="persist the explicit verification result as the current receipt",
+    )
     parser.add_argument("--pid", type=int)
     parser.add_argument("--receipt", action="append", type=Path, default=[])
     args = parser.parse_args(argv)
     if args.write == args.verify:
         parser.error("select exactly one of --write or --verify")
+    if args.write_verify_artifact and not args.verify:
+        parser.error("--write-verify-artifact requires --verify")
     if args.write:
         result = write_bootstrap(args.target_date, receipt_paths=args.receipt)
         verification = verify_bootstrap(args.target_date)
         result["verification"] = verification
         print(json.dumps(result, ensure_ascii=False))
         return 0 if verification["status"] == "pass" else 1
-    result = verify_bootstrap(args.target_date, pid=args.pid)
+    result = verify_bootstrap(
+        args.target_date,
+        pid=args.pid,
+        write=args.write_verify_artifact,
+    )
     print(json.dumps(result, ensure_ascii=False))
     return 0 if result["status"] == "pass" else 1
 

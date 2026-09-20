@@ -78,7 +78,8 @@ record_threshold_runtime_env_pid_handoff() {
     local verify_output
     if ! verify_output="$(
         PYTHONPATH=.. ../.venv/bin/python -m src.engine.automation.runtime_policy_bootstrap \
-            --verify --target-date "$target_date" --pid "$bot_pid" 2>&1
+            --verify --target-date "$target_date" --pid "$bot_pid" \
+            --write-verify-artifact 2>&1
     )"; then
         echo "⚠️ threshold runtime env PID 소비 receipt 기록 실패: target_date=$target_date pid=$bot_pid"
         printf '%s\n' "$verify_output"
