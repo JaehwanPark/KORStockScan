@@ -2157,3 +2157,30 @@ def test_closed_ingress_quarantine_keeps_companion_repairs_blocking(repairable, 
     assert assessment["target_source_quality_eligible_anchor_count"] == 0
     assert assessment["runtime_effect"] is False
     assert assessment["allowed_runtime_apply"] is False
+
+
+def test_historical_timing_recovery_publishes_bound_baseline_and_consumer(tmp_path):
+    from src.trading.config.machine_entry_timing_policy import load_applied_policy
+    source = date(2026, 9, 17)
+    source_dir = tmp_path/'source'; source_dir.mkdir()
+    payload = dict(schema='machine_microstructure_attribution_v1', target_date=str(source),
+                   clean_tuning_baseline_date='2026-06-05', clean_baseline_allowed=True,
+                   authority=dict(runtime_effect=False, allowed_runtime_apply=False, actual_order_submitted=False, broker_order_forbidden=True),
+                   decision_ownership=dict(schema='machine_microstructure_decision_ownership_v1',
+                     entry_confirmation_source=dict(consumer='machine_entry_timing_tuning', policy_selection_authority=False, runtime_effect=False),
+                     entry_timing_policy=dict(owner='machine_entry_timing_tuning', source_section='micro_entry_confirmation', single_public_policy_owner=True)),
+                   micro_entry_confirmation=dict(entry_anchors=[]))
+    (source_dir/f'machine_microstructure_attribution_{source}.json').write_text(json.dumps(payload))
+    report = build_report(target_date=source, source_dir=source_dir,
+                         low_price_candidate_dir=tmp_path/'low', samsung_candidate_dir=tmp_path/'samsung',
+                         widget_policy_dir=tmp_path/'widget', publication_date=date(2026, 9, 20))
+    assert report['effective_date'] == '2026-09-21'
+    assert report['runtime_winner'] is None
+    applied = build_applied_policy(report, source_report_path=tmp_path/'report'/f'machine_entry_timing_tuning_{source}.json')
+    paths = write_outputs(report, applied, output_dir=tmp_path/'report', policy_dir=tmp_path/'policy')
+    stored = json.loads(paths[2].read_text())
+    loaded, reason = load_applied_policy(target_date=date(2026, 9, 21), policy_dir=tmp_path/'policy', source_report_dir=tmp_path/'report')
+    assert reason == 'ready' and loaded == stored
+    assert not validate_applied_policy({**stored, 'publication_date':'2026-09-21'}, target_date=date(2026, 9, 21))[0]
+    with pytest.raises(ValueError):
+        build_report(target_date=source, publication_date=date(2026, 9, 20), effective_date=date(2026, 9, 18))

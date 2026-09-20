@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import os
 import tempfile
 from datetime import date, datetime
 from pathlib import Path
@@ -126,12 +127,14 @@ def _source_snapshot_payload(
     source_path: Path,
     source_date: date,
     source: dict[str, Any],
+    publication_date: date | None = None,
 ) -> dict[str, Any]:
     response = source.get("market_weakness_entry_response")
     if not isinstance(response, dict):
         raise ValueError("market_weakness_hysteresis_source_response_missing")
     return {
         "schema": SOURCE_SNAPSHOT_SCHEMA,
+        **({"publication_date": str(publication_date)} if publication_date and publication_date != source_date else {}),
         "source_date": source_date.isoformat(),
         "source_origin_report": str(source_path),
         "source_origin_report_canonical_sha256": canonical_sha256(source),
@@ -143,7 +146,11 @@ def build_outputs(
     *,
     source_date: date,
     source_report_dir: Path = DEFAULT_SOURCE_REPORT_DIR,
+    publication_date: date | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
+    publication_date = publication_date or source_date
+    if not source_date <= publication_date <= datetime.now(KST).date():
+        raise ValueError("market_weakness_publication_date_invalid")
     source_path = (
         source_report_dir
         / f"machine_microstructure_attribution_{source_date.isoformat()}.json"
@@ -227,18 +234,20 @@ def build_outputs(
         if selected_valid
         else "current_policy_carry_forward_no_approved_candidate"
     )
-    effective_date = next_krx_trading_day(source_date)
+    effective_date = next_krx_trading_day(publication_date)
     source_hash = canonical_sha256(source)
     source_snapshot = _source_snapshot_payload(
         source_path=source_path,
         source_date=source_date,
         source=source,
+        publication_date=publication_date,
     )
     source_snapshot_hash = canonical_sha256(source_snapshot)
     review_hash = str(recommendation.get("review_hash") or "")
     applied = {
         "schema": "market_weakness_hysteresis_policy_applied_v2",
         "target_date": effective_date.isoformat(),
+        "publication_date": publication_date.isoformat(),
         "source_date": source_date.isoformat(),
         "clean_tuning_baseline_date": CLEAN_BASELINE_DATE.isoformat(),
         "decision_authority": AUTHORITY,
@@ -289,6 +298,7 @@ def build_outputs(
     report = {
         "schema": REPORT_SCHEMA,
         "target_date": source_date.isoformat(),
+        "publication_date": publication_date.isoformat(),
         "effective_date": effective_date.isoformat(),
         "status": (
             "reviewed_candidate_selected"
@@ -361,6 +371,7 @@ def write_outputs(
         source_path=origin_path,
         source_date=source_date,
         source=source_payload,
+        publication_date=date.fromisoformat(applied.get("publication_date", str(source_date))),
     )
     if canonical_sha256(source_snapshot) != source_snapshot_hash:
         raise ValueError("market_weakness_hysteresis_source_snapshot_hash_mismatch")
@@ -398,7 +409,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--write", action="store_true")
     parser.add_argument("--print-summary", action="store_true")
     args = parser.parse_args(argv)
-    report, applied = build_outputs(source_date=date.fromisoformat(args.target_date))
+    report, applied = build_outputs(source_date=date.fromisoformat(args.target_date), publication_date=(date.fromisoformat(os.environ["POSTCLOSE_POLICY_PUBLICATION_DATE"]) if os.environ.get("POSTCLOSE_POLICY_PUBLICATION_DATE") else None))
     paths = write_outputs(report, applied) if args.write else ()
     if args.print_summary:
         print(

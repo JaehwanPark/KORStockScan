@@ -302,6 +302,7 @@ def _same_stage_owner_guard(
     low_price_candidate_dir: Path,
     samsung_candidate_dir: Path,
     widget_policy_dir: Path = WIDGET_POLICY_DIR,
+    effective_date: date | None = None,
 ) -> dict[str, Any]:
     paths = (
         low_price_candidate_dir
@@ -331,7 +332,7 @@ def _same_stage_owner_guard(
     current_widget_path = (
         widget_policy_dir / f"widget_auto_trade_policy_{target_date.isoformat()}.json"
     )
-    effective_date = _next_trading_date(target_date)
+    effective_date = effective_date or _next_trading_date(target_date)
     next_widget_path = (
         widget_policy_dir
         / f"widget_auto_trade_policy_{effective_date.isoformat()}.json"
@@ -2450,9 +2451,13 @@ def build_report(
     samsung_candidate_dir: Path = SAMSUNG_CANDIDATE_DIR,
     widget_policy_dir: Path = WIDGET_POLICY_DIR,
     effective_date: date | None = None,
+    publication_date: date | None = None,
 ) -> dict[str, Any]:
-    effective_date = effective_date or _next_trading_date(target_date)
-    if effective_date != _next_trading_date(target_date):
+    publication_date = publication_date or target_date
+    if not target_date <= publication_date <= datetime.now(KST).date():
+        raise ValueError("machine_timing_publication_date_invalid")
+    effective_date = effective_date or _next_trading_date(publication_date)
+    if effective_date != _next_trading_date(publication_date):
         raise ValueError("effective_date_must_be_next_registered_trading_day")
     reports, rejected = _source_reports(target_date=target_date, source_dir=source_dir)
     source_report_dates = {source_date for source_date, _, _ in reports}
@@ -2648,6 +2653,7 @@ def build_report(
         low_price_candidate_dir=low_price_candidate_dir,
         samsung_candidate_dir=samsung_candidate_dir,
         widget_policy_dir=widget_policy_dir,
+        effective_date=effective_date,
     )
     winner = (
         None
@@ -2780,6 +2786,7 @@ def build_report(
             else "baseline_immediate_entry_carry_forward"
         ),
         "target_date": target_date.isoformat(),
+        "publication_date": publication_date.isoformat(),
         "effective_date": effective_date.isoformat(),
         "generated_at_kst": datetime.now(tz=KST).isoformat(timespec="seconds"),
         "clean_tuning_baseline_date": CLEAN_BASELINE_DATE.isoformat(),
@@ -2928,6 +2935,7 @@ def build_applied_policy(
         "schema": APPLIED_SCHEMA,
         "target_date": report["effective_date"],
         "source_date": report["target_date"],
+        "publication_date": report.get("publication_date", report["target_date"]),
         "applied_at_kst": datetime.now(tz=KST).isoformat(timespec="seconds"),
         "clean_tuning_baseline_date": CLEAN_BASELINE_DATE.isoformat(),
         "decision_authority": AUTHORITY,
@@ -3303,6 +3311,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("report-only output must not overwrite production source reports")
     report = build_report(
         target_date=target_date,
+        publication_date=(date.fromisoformat(os.environ["POSTCLOSE_POLICY_PUBLICATION_DATE"]) if os.environ.get("POSTCLOSE_POLICY_PUBLICATION_DATE") else None),
         effective_date=(
             date.fromisoformat(args.effective_date) if args.effective_date else None
         ),

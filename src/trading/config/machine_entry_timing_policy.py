@@ -143,13 +143,14 @@ def validate_applied_policy(payload: Any, *, target_date: date) -> tuple[bool, s
         return False, "entry_timing_policy_target_date_not_trading_day"
     try:
         source_date = date.fromisoformat(str(payload.get("source_date") or ""))
+        publication_date = date.fromisoformat(str(payload.get("publication_date") or source_date))
     except ValueError:
         return False, "entry_timing_policy_source_date_invalid"
     if (
         source_date < CLEAN_BASELINE_DATE
-        or source_date >= target_date
+        or not source_date <= publication_date < target_date
         or not is_krx_trading_day(source_date)
-        or target_date != _next_krx_trading_day(source_date)
+        or target_date != _next_krx_trading_day(publication_date)
     ):
         return False, "entry_timing_policy_source_date_contract_invalid"
     if (
@@ -629,6 +630,7 @@ def load_applied_policy(
         or source_payload.get("schema") != expected_source_schema
         or source_payload.get("target_date") != payload.get("source_date")
         or source_payload.get("effective_date") != payload.get("target_date")
+        or source_payload.get("publication_date", source_payload.get("target_date")) != payload.get("publication_date", payload.get("source_date"))
         or payload.get("source_report_canonical_sha256")
         != canonical_sha256(source_payload)
     ):

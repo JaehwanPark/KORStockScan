@@ -53,3 +53,9 @@ widget/machine 독립 wrapper의 exact-date terminal/source hash를 최종 summa
 - bounded regular/generation 검증을 유지하면서 해당 reader 한도를 기존 연구 보고서 계약과 같은 128 MiB로 맞췄다. EXIT에서도 실패를 단 한 번 기록한다.
 - selection checkpoint는 후행 feedback 의존을 제거하되 입력 bar/비용/승인 정책/계산 코드/grid/holdout 결속을 유지한다. 기존 checkpoint는 원 release의 fingerprint 재현, 계산 AST 및 helper 동일성, result hash 확인을 통과한 것만 원본 보존 후 이관한다. 원 실패는 성공으로 바꾸지 않는다.
 - 영향 회귀 155 passed (25.23초). 경제적 수익이나 자연 승격의 증거가 아니다. 전체 재생성과 최종 인계는 계속 OPEN.
+
+## Machine 날짜별 producer/consumer 보완
+
+- historical refresh의 entry timing 및 weakness hysteresis가 source 다음 영업일(9/18)에만 발행하던 날짜 결손을 보완했다. 원 source는 유지하고 명시된 publication의 다음 영업일로 effective를 정한다. 정상 실행의 기본 날짜 규칙은 유지한다.
+- timing의 동일 단계 widget owner 조회도 실제 effective를 사용한다. timing report/evidence와 weakness immutable source snapshot에 publication을 결속하여 reader가 날짜만 바꾼 과거 증거를 거부한다.
+- 회귀 70 passed(2.06초): 정상 기존 계산·후보·차단 회귀, recovery baseline/carry producer→publication→runtime reader, 날짜 불일치 차단. 제어 fixture이며 자연 신규 정책·경제성 성과가 아니다. main 원천 계산은 ad6fadeea 불변 release에서 계속 진행 중이다.

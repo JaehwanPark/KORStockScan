@@ -429,13 +429,14 @@ def validate_applied_policy(payload: Any, *, target_date: date) -> tuple[bool, s
         return False, "market_weakness_policy_target_date_not_trading_day"
     try:
         source_date = date.fromisoformat(str(payload.get("source_date") or ""))
+        publication_date = date.fromisoformat(str(payload.get("publication_date") or source_date))
     except ValueError:
         return False, "market_weakness_policy_source_date_invalid"
     if (
         source_date < CLEAN_BASELINE_DATE
-        or source_date >= target_date
+        or not source_date <= publication_date < target_date
         or not is_krx_trading_day(source_date)
-        or next_krx_trading_day(source_date) != target_date
+        or next_krx_trading_day(publication_date) != target_date
     ):
         return False, "market_weakness_policy_source_date_contract_invalid"
     activation = payload.get("activation_unique_observations")
@@ -574,6 +575,7 @@ def load_applied_policy(
         not isinstance(source_payload, dict)
         or source_payload.get("schema") != SOURCE_SNAPSHOT_SCHEMA
         or source_payload.get("source_date") != source_date.isoformat()
+        or source_payload.get("publication_date", str(source_date)) != payload.get("publication_date", str(source_date))
         or source_payload.get("source_origin_report")
         != payload.get("source_origin_report")
         or source_payload.get("source_origin_report_canonical_sha256")

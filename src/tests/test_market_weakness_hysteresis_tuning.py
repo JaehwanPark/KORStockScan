@@ -412,3 +412,16 @@ def test_nonfinite_snapshot_fails_closed_without_loader_exception(tmp_path):
     )
     assert loaded is None
     assert reason == "market_weakness_policy_source_report_contract_invalid"
+
+
+def test_recovery_publication_keeps_original_source_and_exact_next_date(tmp_path, monkeypatch):
+    source_dir = tmp_path / 'source'
+    _write_source(source_dir)
+    report, applied = build_outputs(source_date=SOURCE_DATE, source_report_dir=source_dir,
+                                     publication_date=date(2026, 9, 20))
+    assert report['effective_date'] == '2026-09-21'
+    assert applied['source_date'] == SOURCE_DATE.isoformat()
+    write_outputs(report, applied, output_dir=tmp_path/'report', policy_dir=tmp_path/'policy')
+    loaded, reason = load_applied_policy(target_date=date(2026, 9, 21), policy_dir=tmp_path/'policy', source_report_dir=source_dir)
+    assert reason == 'ready' and loaded == applied
+    assert not validate_applied_policy({**applied, 'publication_date':'2026-09-21'}, target_date=date(2026, 9, 21))[0]
