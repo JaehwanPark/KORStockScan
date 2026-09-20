@@ -61,6 +61,33 @@ def test_compact_owner_replay_is_bound_to_exact_attempt_and_plan_hash():
     assert conflicts == {key}
 
 
+def test_compact_prospective_contract_keeps_historical_rows_unmodified():
+    row = compact_row()
+    projection = compact.sealed(
+        {
+            "schema": "compact_auxiliary_frozen_projection_v1",
+            "source_projection_contract": compact.SOURCE_PROJECTION_CONTRACT,
+            "projection_contract_sha256": compact.digest(compact.CONTRACT),
+            "source_tuning_allowed": True,
+            "rows": [row],
+            **compact.AUTHORITY,
+        }
+    )
+
+    receipt = compact.prospective_source_contract(projection)
+
+    assert receipt["implementation_verified"] is True
+    assert receipt["natural_first_use_status"] == "observed"
+    assert receipt["natural_exact_row_count"] == 1
+    assert receipt["historical_missing_fields_reconstructed"] is False
+
+    historical = {**projection, "rows": [{**row, "owner_replay": None}]}
+    historical_receipt = compact.prospective_source_contract(historical)
+    assert historical_receipt["implementation_verified"] is True
+    assert historical_receipt["natural_first_use_status"] == "pending"
+    assert historical_receipt["natural_exact_row_count"] == 0
+
+
 def test_compact_whole_population_zero_same_verdict_and_unresolved_caution():
     rows = [compact_row(ordinal=i, verdict=v) for i,v in enumerate(["PASS", "VETO", "CAUTION"])]
     results = {r["evaluation_key"]: compact_result(r, "PASS" if i == 0 else "VETO") for i,r in enumerate(rows)}

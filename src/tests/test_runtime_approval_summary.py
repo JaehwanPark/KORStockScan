@@ -94,6 +94,46 @@ def test_main_mechanistic_historical_replay_gap_keeps_future_natural_owner():
     assert evidence["actual_net_profit_improvement"] is None
 
 
+def test_compact_historical_gap_keeps_verified_future_natural_owner():
+    payload = {
+        "status": "source_contract_blocked",
+        "evaluation_state": "blocked_source",
+        "promotion_pass": False,
+        "candidate_selection": {"status": "insufficient_sample"},
+        "candidate_zero_disposition": {
+            "status": "source_gap",
+            "blockers": [
+                {"blocker": "exact_stop_distance_missing_or_invalid"}
+            ],
+        },
+        "metrics": {
+            "paired_comparable_count": 0,
+            "operating_economic_comparison": {"status": "source_gap"},
+        },
+        "prospective_source_contract": {"implementation_verified": True},
+        "historical_evidence_state": (
+            "exact_source_unrecoverable_preserved_excluded"
+        ),
+    }
+
+    evidence = mod._economic_projection("compact_auxiliary", payload)
+
+    assert evidence["comparison_status"] == "source_gap"
+    assert evidence["resolution_mode"] == "historical_unrecoverable"
+    assert evidence["historical_evidence_state"] == (
+        "exact_source_unrecoverable_preserved_excluded"
+    )
+    assert evidence["prospective_resolution_mode"] == "natural_maturity"
+    assert evidence["policy_handoff_state"] == "incumbent_preserved"
+    assert evidence["candidate_count"] == 0
+    assert evidence["actual_net_profit_improvement"] is None
+
+    payload["prospective_source_contract"] = {"implementation_verified": False}
+    unverified = mod._economic_projection("compact_auxiliary", payload)
+    assert unverified["prospective_resolution_mode"] == "producer_repair"
+    assert unverified["policy_handoff_state"] == "blocked"
+
+
 def test_summary_distinguishes_missing_required_from_optional(monkeypatch, tmp_path):
     _patch(monkeypatch, tmp_path)
     target = "2026-09-19"

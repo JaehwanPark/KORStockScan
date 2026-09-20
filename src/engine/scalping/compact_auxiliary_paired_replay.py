@@ -48,6 +48,9 @@ CONTRACT = {
 }
 SOURCE_PROJECTION_CONTRACT = "compact_pre_ai_execution_source_v7"
 CANDIDATE_SELECTION_SCHEMA = "compact_auxiliary_candidate_direction_v1"
+PROSPECTIVE_SOURCE_CONTRACT_SCHEMA = (
+    "compact_auxiliary_prospective_source_contract_v1"
+)
 
 
 def digest(value):
@@ -106,6 +109,46 @@ def report_path(data_root, day):
         / "report/ai_entry_setup_paired_replay_batch"
         / f"compact_auxiliary_paired_economic_{day}.json"
     )
+
+
+def prospective_source_contract(projection):
+    """Describe the forward writer/reader contract without repairing old rows."""
+    implementation_verified = bool(
+        projection.get("schema") == "compact_auxiliary_frozen_projection_v1"
+        and projection.get("source_projection_contract")
+        == SOURCE_PROJECTION_CONTRACT
+        and projection.get("projection_contract_sha256") == digest(CONTRACT)
+        and projection.get("source_tuning_allowed") in {True, False}
+    )
+    exact_rows = [
+        row
+        for row in projection.get("rows") or []
+        if sha256_hex(row.get("entry_economic_plan_sha256"))
+        and owner_replay_valid(row.get("owner_replay") or {}, row)
+    ]
+    return {
+        "schema": PROSPECTIVE_SOURCE_CONTRACT_SCHEMA,
+        "status": (
+            "implemented_controlled_path"
+            if implementation_verified
+            else "implementation_unverified"
+        ),
+        "implementation_verified": implementation_verified,
+        "source_projection_contract": projection.get(
+            "source_projection_contract"
+        ),
+        "exact_plan_hash_required": True,
+        "writer_field": "entry_execution_sizing_plan_sha256",
+        "trace_field": "entry_economic_plan_sha256",
+        "owner_identity": "evaluation_attempt_id+plan_sha256",
+        "supported_routes": ["KRX", "NXT", "SOR"],
+        "natural_exact_row_count": len(exact_rows),
+        "natural_first_use_status": "observed" if exact_rows else "pending",
+        "historical_missing_fields_reconstructed": False,
+        "closure_test": (
+            "next_natural_enter_now_exact_plan_owner_replay_and_completed_cost_outcome"
+        ),
+    }
 
 
 def finite(value):
@@ -1731,6 +1774,9 @@ def run(
         if (valid(previous)
                 and previous.get("evaluation_fingerprint") == fingerprint
                 and previous.get("comparison_dependency_signatures") == _comparison_signatures(path.parent, day, candidate)
+                and (previous.get("prospective_source_contract") or {}).get(
+                    "schema"
+                ) == PROSPECTIVE_SOURCE_CONTRACT_SCHEMA
                 and (previous.get("status") in {"valid_empty", "comparison_complete", "incumbent_preserved"}
                      or previous.get("metrics", {}).get("economic_eligible_count") == 0)):
             return previous
@@ -2096,6 +2142,18 @@ def run(
         )
         report["candidate_zero_disposition"] = candidate_zero_disposition(projection["rows"], primary_blockers, report)
         report["evaluation_state"] = evaluation_state(report)
+        report["prospective_source_contract"] = prospective_source_contract(
+            projection
+        )
+        report["historical_evidence_state"] = (
+            "exact_source_unrecoverable_preserved_excluded"
+            if report["candidate_zero_disposition"].get("status") == "source_gap"
+            and (projection.get("source_upgrade") or {}).get(
+                "original_missing_input_not_reconstructed"
+            )
+            is True
+            else None
+        )
         report = sealed(report)
         write(path, report)
         return report

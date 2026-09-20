@@ -1973,6 +1973,34 @@ def test_direct_family_historical_gap_keeps_verified_prospective_natural_task(
     assert "DirectFamilySourceRepairMainMechanisticEntry" not in text
 
 
+def test_compact_historical_gap_projects_future_natural_task(monkeypatch, tmp_path):
+    _patch_dirs(monkeypatch, tmp_path)
+    monkeypatch.setattr(mod, "PROJECT_ROOT", tmp_path)
+    day = "2026-09-19"
+    source = _direct_source(
+        "compact_auxiliary",
+        comparison_status="source_gap",
+        resolution_mode="historical_unrecoverable",
+        first_blocker="exact_stop_distance_missing_or_invalid",
+    )
+    source["economic_evidence"]["prospective_resolution_mode"] = (
+        "natural_maturity"
+    )
+    _write_json(
+        mod._direct_summary_path(day),
+        _direct_summary(day, sources={"compact_auxiliary": source}),
+    )
+
+    result = mod.build_next_stage2_checklist(day)
+    text = Path(result["path"]).read_text(encoding="utf-8")
+
+    assert result["tasks"] == [
+        "DirectFamilyNaturalEvidenceCompactAuxiliary"
+    ]
+    assert "prospective_resolution_mode=`natural_maturity`" in text
+    assert "DirectFamilySourceRepairCompactAuxiliary" not in text
+
+
 def test_direct_family_manual_stable_task_is_not_duplicated(monkeypatch, tmp_path):
     docs, *_ = _patch_dirs(monkeypatch, tmp_path)
     monkeypatch.setattr(mod, "PROJECT_ROOT", tmp_path)

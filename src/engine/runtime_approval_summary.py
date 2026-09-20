@@ -370,6 +370,7 @@ def _economic_section(owner: str, payload: dict[str, Any]) -> dict[str, Any]:
         incumbent = _dict_value(operating, "incumbent")
         candidate = _dict_value(operating, "candidate")
         zero = _dict_value(payload, "candidate_zero_disposition")
+        prospective = _dict_value(payload, "prospective_source_contract")
         blockers = zero.get("blockers") if isinstance(zero.get("blockers"), list) else []
         return {
             "status": (
@@ -421,9 +422,20 @@ def _economic_section(owner: str, payload: dict[str, Any]) -> dict[str, Any]:
                     if isinstance(row, dict) and row.get("source_date")
                 }
             ),
-            "candidate_count": 1,
+            "candidate_count": (
+                1
+                if _dict_value(payload, "candidate_selection").get("status")
+                == "candidate_selected"
+                else 0
+            ),
             "allowed_runtime_apply": payload.get("promotion_pass") is True,
             "metric_role": "primary_ev",
+            "future_generation_contract_verified": (
+                prospective.get("implementation_verified") is True
+            ),
+            "historical_evidence_state": payload.get(
+                "historical_evidence_state"
+            ),
             "closure_test": payload.get("closure_test"),
         }
     return _dict_value(payload, "economic_evaluation")
@@ -532,10 +544,18 @@ def _economic_projection(owner: str, payload: dict[str, Any]) -> dict[str, Any]:
         len(economic.get("source_counts") or {}) if isinstance(economic.get("source_counts"), dict) else None,
     )
     first_blocker = _first_blocker(owner, payload)
+    historical_evidence_state = economic.get("historical_evidence_state")
     historical_changed_decision_replay_unrecoverable = bool(
-        owner == "main_mechanistic_entry"
-        and first_blocker
-        == "not_available_without_exact_changed_decision_owner_replay"
+        (
+            owner == "main_mechanistic_entry"
+            and first_blocker
+            == "not_available_without_exact_changed_decision_owner_replay"
+        )
+        or (
+            owner == "compact_auxiliary"
+            and historical_evidence_state
+            == "exact_source_unrecoverable_preserved_excluded"
+        )
     )
     if status == "measured_no_edge" and not paired_sample_count:
         status = "source_gap"
@@ -552,14 +572,16 @@ def _economic_projection(owner: str, payload: dict[str, Any]) -> dict[str, Any]:
         status = "source_gap"
         first_blocker = first_blocker or "validated_candidate_contract_incomplete"
     prospective_resolution_mode = None
-    historical_evidence_state = None
+    historical_evidence_state = historical_evidence_state or None
     if historical_changed_decision_replay_unrecoverable:
         # The already-observed changed decisions cannot acquire an exact order,
         # fill, quantity, or capital-occupation receipt later.  Keep that
         # historical fact distinct from the verified prospective writer/reader
         # path, which can close only with new natural observations.
         resolution_mode = "historical_unrecoverable"
-        historical_evidence_state = "exact_owner_replay_unrecoverable"
+        historical_evidence_state = historical_evidence_state or (
+            "exact_owner_replay_unrecoverable"
+        )
         prospective_resolution_mode = (
             "natural_maturity" if future_contract_verified else "producer_repair"
         )
@@ -577,7 +599,12 @@ def _economic_projection(owner: str, payload: dict[str, Any]) -> dict[str, Any]:
         )
     else:
         resolution_mode = "retired_or_not_applicable"
-    if status == "validated_edge":
+    if (
+        historical_changed_decision_replay_unrecoverable
+        and prospective_resolution_mode == "natural_maturity"
+    ):
+        handoff = "incumbent_preserved"
+    elif status == "validated_edge":
         handoff = "candidate_published"
     elif status in {"measured_no_edge", "identical_policy", "pending_maturity", "insufficient_sample"}:
         handoff = "incumbent_preserved"

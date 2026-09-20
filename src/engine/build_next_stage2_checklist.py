@@ -2163,7 +2163,11 @@ def _project_direct_tasks(
             role = "SourceRepair"
         elif status == "source_gap":
             role = (
-                "ScopeDecision"
+                "NaturalEvidence"
+                if resolution == "historical_unrecoverable"
+                and evidence.get("prospective_resolution_mode")
+                == "natural_maturity"
+                else "ScopeDecision"
                 if resolution == "historical_unrecoverable"
                 else "SourceRepair"
             )
