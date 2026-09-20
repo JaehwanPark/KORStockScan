@@ -2060,6 +2060,9 @@ def _direct_task(
         if isinstance(source.get("economic_evidence"), dict)
         else {}
     )
+    prospective_resolution = str(
+        evidence.get("prospective_resolution_mode") or ""
+    )
     role_contract = {
         "SourceRepair": (
             "직접 family 원천·경제성 계약 수리",
@@ -2117,6 +2120,7 @@ def _direct_task(
             f"family=`{owner}`, task_role=`{disposition}`, "
             f"comparison_status=`{evidence.get('comparison_status') or '-'}`, "
             f"resolution_mode=`{evidence.get('resolution_mode') or '-'}`, "
+            f"prospective_resolution_mode=`{prospective_resolution or '-'}`, "
             f"first_blocker=`{blocker}`.",
             "완료 기준: "
             f"closure_owner=`{closure_owner}`, closure_test=`{closure_test}`. "
@@ -2175,6 +2179,11 @@ def _project_direct_tasks(
             role = (
                 "NaturalEvidence"
                 if resolution == "natural_maturity"
+                or (
+                    resolution == "historical_unrecoverable"
+                    and evidence.get("prospective_resolution_mode")
+                    == "natural_maturity"
+                )
                 else "SourceRepair"
             )
         elif status == "validated_edge":

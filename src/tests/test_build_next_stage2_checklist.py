@@ -1940,6 +1940,39 @@ def test_direct_family_projection_separates_maturity_no_edge_and_policy_repair(
     assert "closure_test=`missing`" in text
 
 
+def test_direct_family_historical_gap_keeps_verified_prospective_natural_task(
+    monkeypatch, tmp_path
+):
+    _patch_dirs(monkeypatch, tmp_path)
+    monkeypatch.setattr(mod, "PROJECT_ROOT", tmp_path)
+    day = "2026-09-19"
+    source = _direct_source(
+        "main_mechanistic_entry",
+        comparison_status="insufficient_sample",
+        resolution_mode="historical_unrecoverable",
+        first_blocker=(
+            "not_available_without_exact_changed_decision_owner_replay"
+        ),
+    )
+    source["economic_evidence"]["prospective_resolution_mode"] = (
+        "natural_maturity"
+    )
+    _write_json(
+        mod._direct_summary_path(day),
+        _direct_summary(day, sources={"ai_outcome": source}),
+    )
+
+    result = mod.build_next_stage2_checklist(day)
+    text = Path(result["path"]).read_text(encoding="utf-8")
+
+    assert result["tasks"] == [
+        "DirectFamilyNaturalEvidenceMainMechanisticEntry"
+    ]
+    assert "resolution_mode=`historical_unrecoverable`" in text
+    assert "prospective_resolution_mode=`natural_maturity`" in text
+    assert "DirectFamilySourceRepairMainMechanisticEntry" not in text
+
+
 def test_direct_family_manual_stable_task_is_not_duplicated(monkeypatch, tmp_path):
     docs, *_ = _patch_dirs(monkeypatch, tmp_path)
     monkeypatch.setattr(mod, "PROJECT_ROOT", tmp_path)

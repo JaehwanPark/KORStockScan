@@ -63,6 +63,37 @@ def test_summary_completes_direct_evidence_without_fabricating_economics(monkeyp
     assert report["actual_order_submitted"] is False
 
 
+def test_main_mechanistic_historical_replay_gap_keeps_future_natural_owner():
+    evidence = mod._economic_projection(
+        "main_mechanistic_entry",
+        {
+            "report_scope": "main_mechanistic_entry",
+            "noncompact_sections_refreshed": True,
+            "machine_full_evaluation": {
+                "state": "insufficient_mature_sample",
+                "full_population_count": 1715,
+                "independent_candidate_count": 0,
+                "holdout_cost_adjusted_ev_pct": 0.0,
+                "holdout_paired_delta_ev_pct": 0.005,
+                "daily_net_profit_delta_krw": None,
+                "daily_net_profit_status": (
+                    "not_available_without_exact_changed_decision_owner_replay"
+                ),
+                "promotion_pass": False,
+            },
+        },
+    )
+
+    assert evidence["comparison_status"] == "insufficient_sample"
+    assert evidence["resolution_mode"] == "historical_unrecoverable"
+    assert evidence["historical_evidence_state"] == (
+        "exact_owner_replay_unrecoverable"
+    )
+    assert evidence["prospective_resolution_mode"] == "natural_maturity"
+    assert evidence["policy_handoff_state"] == "incumbent_preserved"
+    assert evidence["actual_net_profit_improvement"] is None
+
+
 def test_summary_distinguishes_missing_required_from_optional(monkeypatch, tmp_path):
     _patch(monkeypatch, tmp_path)
     target = "2026-09-19"

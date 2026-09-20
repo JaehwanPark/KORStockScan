@@ -338,6 +338,10 @@ def _economic_section(owner: str, payload: dict[str, Any]) -> dict[str, Any]:
         return _dict_value(payload, "postclose_quality_handoff")
     if owner == "main_mechanistic_entry":
         projection = _dict_value(payload, "machine_full_evaluation")
+        future_contract_verified = bool(
+            payload.get("report_scope") == "main_mechanistic_entry"
+            and payload.get("noncompact_sections_refreshed") is True
+        )
         return {
             "status": projection.get("state"),
             "candidate_count": projection.get("independent_candidate_count"),
@@ -355,7 +359,10 @@ def _economic_section(owner: str, payload: dict[str, Any]) -> dict[str, Any]:
                 else projection.get("daily_net_profit_status")
             ),
             "metric_role": "primary_ev",
-            "closure_test": "full_machine_report_family_source_and_future_bundle_match",
+            "future_generation_contract_verified": future_contract_verified,
+            "closure_test": (
+                "future_exact_changed_decision_owner_replay_and_completed_profit_rate"
+            ),
         }
     if owner == "compact_auxiliary":
         metrics = _dict_value(payload, "metrics")
@@ -525,6 +532,11 @@ def _economic_projection(owner: str, payload: dict[str, Any]) -> dict[str, Any]:
         len(economic.get("source_counts") or {}) if isinstance(economic.get("source_counts"), dict) else None,
     )
     first_blocker = _first_blocker(owner, payload)
+    historical_changed_decision_replay_unrecoverable = bool(
+        owner == "main_mechanistic_entry"
+        and first_blocker
+        == "not_available_without_exact_changed_decision_owner_replay"
+    )
     if status == "measured_no_edge" and not paired_sample_count:
         status = "source_gap"
         first_blocker = first_blocker or "paired_comparison_denominator_missing"
@@ -539,7 +551,19 @@ def _economic_projection(owner: str, payload: dict[str, Any]) -> dict[str, Any]:
     if status == "validated_edge" and (policy_allowed is not True or not candidate_count):
         status = "source_gap"
         first_blocker = first_blocker or "validated_candidate_contract_incomplete"
-    if status == "validated_edge":
+    prospective_resolution_mode = None
+    historical_evidence_state = None
+    if historical_changed_decision_replay_unrecoverable:
+        # The already-observed changed decisions cannot acquire an exact order,
+        # fill, quantity, or capital-occupation receipt later.  Keep that
+        # historical fact distinct from the verified prospective writer/reader
+        # path, which can close only with new natural observations.
+        resolution_mode = "historical_unrecoverable"
+        historical_evidence_state = "exact_owner_replay_unrecoverable"
+        prospective_resolution_mode = (
+            "natural_maturity" if future_contract_verified else "producer_repair"
+        )
+    elif status == "validated_edge":
         resolution_mode = "validated_economic_action"
     elif status == "measured_no_edge":
         resolution_mode = "measured_no_edge"
@@ -593,6 +617,8 @@ def _economic_projection(owner: str, payload: dict[str, Any]) -> dict[str, Any]:
         "policy_apply_allowed": policy_allowed is True and status == "validated_edge",
         "policy_handoff_state": handoff,
         "resolution_mode": resolution_mode,
+        "historical_evidence_state": historical_evidence_state,
+        "prospective_resolution_mode": prospective_resolution_mode,
         "first_blocker": first_blocker,
         "closure_owner": DEFAULT_CLOSURE_OWNER.get(owner),
         "closure_test": economic.get("closure_test"),
