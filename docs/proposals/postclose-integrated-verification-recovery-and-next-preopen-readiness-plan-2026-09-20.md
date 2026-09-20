@@ -213,3 +213,125 @@ Python compile, shell `bash -n`, affected pytest, `git diff --check`, 문서 lin
 전체 준비 판정은 실행 후 감사 기록의 owner별 receipt와 9/21 loader 검증에 따른다. 이 절의 구현 설명 자체는 A–H 실행 완료·자연 PREOPEN/PID 소비·EV 개선의 증거가 아니다.
 
 최종 실행 증거: [9/20 통합 복구 리뷰의 최종 결과](../audit-reports/2026-09-20-postclose-integrated-recovery-review.md#최종-복구-결과--2026-09-20-152654-kst). A–H 실행/검증 재사용과9/21 carry/fallback 준비는15:26:54 마감했다. R5의 기존 메인 운영 경제성 구조적 OPEN은 분리 보존하며 자연 PREOPEN/PID/완료 손익은 미확인이다.
+
+
+## 12. 런타임 생산자 역추적 결함의 최소 보완계획
+
+### 12.1 이번 요청의 범위와 재사용 기준
+
+이번 요청은 **구현 상세계획 수립**이다. 아래 PR0–PR5는 아직 실행/배포 완료가 아니다. 앞선 R0–R6/A–H의 완료 이력은 유지하고, 새로 재현된 네 지점만 재개한다. 선택 release `submission-producer-gap-reviewed-20260920-e6a9411b2`와 작업본·설치 cron을 역추적한 결과를 기준으로 하며 구현 착수 시 실제 선택 commit/PID/freeze를 다시 확인한다.
+
+기존 메인 ME8–ME13, compact 원천/계산, entry split·cancel-wait의 미래 census, scale-in/저가주 durable 관측, widget/episode identity 및 정상 guard를 재작성하지 않는다. 새 서비스·DB·collector·경제성 producer·공통 프레임워크를 만들지 않는다. 신규 코드 파일보다 기존 함수의 작은 변경과 기존 테스트 확장을 우선한다. 같은 원천 fingerprint를 가진 경제성 결과는 원 run/code/as-of/hash를 보존해 재사용한다.
+
+| ID | 확인된 첫 경계 | 영향 | 기존 수리 owner |
+| --- | --- | --- | --- |
+| PR1 | 장후 계좌 snapshot을 같은 날 장중 거래의 자본 증거로 허용 | 잘못된 자본 feasibility가 승격 근거에 들어갈 가능성 | `research_allocation_snapshot`, `research_closed_loop`, `low_price_two_leg.policy_runtime` 및 실제 owner/gateway |
+| PR2 | rising-missed/census 설치 wrapper가 mutable 작업본 실행 | 검증된 장후 소비자와 다른 schema/필드를 생산 | 기존 두 intraday wrapper와 `runtime_release_router` |
+| PR3 | 변경된 scanner 선택 양쪽에 미선택 종목의 당시 compact 입력 요구 | 정상 생산 경로로 채울 수 없는 full-chain 비교 입력 | `scanner_lookup_attention_resource`, 기존 scanner/WS 평가 |
+| PR4 | scanner 소비자에 직접 `KRX` broker route 조건 잔존 | 지원된 SOR 입력도 재차 탈락 | 같은 scanner evaluator와 기존 공통 운영 route/model 검증 |
+
+기존 코드의 통제 입력 재현: 21:15 자본 snapshot이 09:10 거래에서 `fixed_allocator_feasible/pass`; scanner 양쪽 완성 입력은 `supported_operating_comparison`, 실제 선택된 종목 입력만 남기면 `original_unselected_entry_recipe_quantity_guard_missing`. 이는 자연 거래 성과나 실제 오승격 증거가 아니다. source9/17/9월18일 관측 미적재를 새로운 생산자 실행 결과로 바꾸지 않는다.
+
+### 12.2 PR0 — 변경 집합 고정 및 증거 재사용
+
+1. 선택 release, 실행 PID/cwd, shared data writer/lock, dirty worktree와 병행 commit을 대사한다. 기준 문서 §10/§11과 작업 목록의 오래된 배포 수치를 현재 상태로 사용하지 않는다. 9/20 체크리스트 부재는 보고하고 9/21 준비 checklist를 당일 실행 이력으로 가장하지 않는다.
+2. affected 함수/호출자/테스트/설치행을 작은 목록으로 고정한다. main/compact 및 주문 수량·guard를 바꾸는 diff가 들어오면 필요한 이유와 별도 영향 검증을 먼저 명시한다.
+3. canonical rising-missed의 날짜 selector·exact WS 보완과 release의 terminal fields를 양방향 대사한다. 단순 전체 파일 복사나 최신 commit 선택만으로 병행 수정 통합을 대신하지 않는다.
+4. 새 현황 문서나 계획을 중복 생성하지 않는다. 본 절이 통합 수리 owner다. 원 family 계획은 링크와 범위 변경만 반영한다.
+
+### 12.3 PR1 — 사전 자본 생산과 사후 snapshot의 역할 분리
+
+**목표:** 미래의 지원 입력에서 비용 차감 비교가 가능하도록 원천을 연결하고, 사후 현금으로 과거 feasibility를 승인하는 경로를 제거한다. 기존 owner별 승인 수량 독립 비교를 유지하며 승인되지 않은 삼성/전체 계좌 공통 예산을 만들지 않는다.
+
+#### PR1-A: 소비자 경계 수리
+
+- `paired_capital_confirmation`이 요구하는 자본의 의미를 `owner_decision_frozen_capacity`, `historical_opening_capacity`, `postclose_capacity_diagnostic`으로 구분한다. 기존 dict/schema 안에 필요한 역할/시각만 추가하고 새 원장 체계를 만들지 않는다.
+- signed snapshot의 `captured_at`·timezone·source_date·owner/account 식별 해시·수량/금액·비용·reserve/보유 원천과 각 비교 시작시각의 선후 관계를 검증한다. 시각 누락/사후/owner 충돌/해시 불일치는 구체 이유로 거부한다. 과거 snapshot에 시각을 보충하거나 날짜만으로 통과시키지 않는다.
+- 날짜가 앞선 snapshot도 자동 유효가 아니다. 기존 owner의 freshness 기준, 이후 주문/reserve/보유 전이의 대사, 가격·승인 cap의 적용 scope를 검증한다. 미대사 상태 변화는 해당 비교를 제외한다.
+- `research_native_capacity_source`의 장후 계좌 수집은 현재 진단 용도로 보존한다. 그 결과를 다음날 승인 잔고나 당일 장초 잔고로 승격하지 않는다. `load_allocator`/공통 gate의 모든 호출자를 확인해 역사 비교와 장후 용량 진단을 서로 다른 판정으로 전달한다.
+- 전체 계좌 검증이 없는 owner별 독립 계산은 owner별 수치로 표시한다. 공통 자본을 공유하는 결과를 단순 합산하거나 전체 계좌 EV로 보고하지 않는다. 현재 승격 계약이 공통 자본 검증을 필수로 요구하면 이를 임의 삭제하지 않고, 해당 승격은 별도 미충족으로 유지한다.
+
+#### PR1-B: 미래 지원 원천 연결
+
+- 기존 low-price/episode gateway·preflight와 widget의 정상 계좌/주문 가능 조회 결과부터 조사한다. 실제로 이미 취득하는 승인 수량/cap·현금·보유·미체결·기록시각을 당시 owner와 연결한다. 조회 함수 자체를 바꾸기보다 기존 응답의 사용 경계에서 작은 receipt를 남긴다.
+- 최초 지원 의사결정 **이전 또는 그 의사결정의 정상 승인 경계**에서 frozen receipt를 만든다. 주문을 하지 않은 판단에도 그 시점까지 실제 얻은 사실은 보존한다. fill 이후의 잔고를 pre-entry로 붙이지 않는다.
+- 기존 durable observation의 owner/episode/policy hash에 capacity receipt hash와 원천 위치를 결속한다. 같은 입력으로 incumbent/candidate가 각자의 reserve→fill→holding→확정 cancel/exit를 재현한다. 예약 해제 전에 cancel ACK/late-fill 종결을 요구하는 기존 계약을 유지한다.
+- 관측만을 위한 주문·예약·추가 AI·신규 collector는 금지한다. 기존 읽기로 필요한 사실을 만들 수 없으면 정확한 호출/필드/owner를 확정한 후 그 운영 계약만 별도로 판단한다. 이미 승인된 main bounded 읽기를 다른 owner의 새 호출 권한으로 확대하지 않는다. 이를 자연 표본 대기나 구현 완료로 숨기지 않는다.
+- 계좌 전역 입출금·결제대금 재사용과 타 owner의 반사실 상호작용은 이번 최소 범위 밖이다. 해당 지원이 필요한 비교는 별도 계약 미종결로 유지하되, 지원되는 owner 조건부 계산까지 일괄 차단하지 않는다.
+
+**회귀/closure:** 기존 producer를 통과한 사전 receipt→저장→loader→paired capital gate의 정상 성공; 같은 날 사후 snapshot/이전날 stale/시각 누락/다른 owner/충돌 reserve 거부; 부분 체결·취소 이후 자본 반환 중복0. 21:15 snapshot으로 09:10 거래를 통과시키던 재현은 반드시 실패해야 한다. 지원 양수·음수·동률 계산이 동작해야 하며 모든 입력을 null 처리한 상태는 PR1 완료가 아니다.
+
+### 12.4 PR2 — 설치 생산자와 검증 release의 일치
+
+1. `run_rising_missed_intraday_feedback.sh`, `run_market_opportunity_census_intraday.sh`에 기존 WS/panic wrapper의 선택 release 전달 방식을 재사용한다. canonical 진입은 selected immutable root로 전달하고 release 진입은 재귀 없이 종료한다. 명시적 `PROJECT_DIR`의 기존 테스트/operator 의미는 보존한다.
+2. cron 시각·간격·cooldown·lock·날짜·조회 budget·시장 scope를 변경하지 않는다. wrapper source binding만으로 해결되면 cron 재설치도 하지 않는다. cron 환경에 경로 override가 있는지도 대사한다.
+3. rising-missed는 `terminal_executable_ts/move_pct/price_source` 기록과 작업본 날짜 selector/exact WS 수정을 함께 보존한다. 보고서/sidecar를 일수로 중복 계산하거나 미완료 window를 terminal로 만들지 않는다.
+4. census는 `market_data_health`, 수신시각/요청시각 계약 등 변경 필드를 소비자와 대사한다. source 일치 수리를 이유로 수신시각 tolerance나 Kiwoom 의미를 임의 변경하지 않는다. API/parser 수정이 정말 필요할 때만 공식 reference gate를 수행한다.
+5. 기존 wrapper 테스트에서 canonical→release와 release 자체 호출을 검증한다. 보안정보 없는 실행계획/가짜 하위 명령으로 cwd/env/date/args/무한 재귀 여부를 확인한다. 실제 시장 수집이나 외부 발송을 테스트로 호출하지 않는다.
+
+**회귀/closure:** 설치된 명령의 해석 경로가 검증 commit을 가리키며, 기존 이벤트 fixture를 실제 생산 함수로 처리한 terminal/health 필드가 장후 reader까지 도달한다. 단순 파일 동일 hash만으로 의미 계약 통과를 주장하지 않는다.
+
+### 12.5 PR3/PR4 — 생성 가능한 scanner 비교 문제와 route 정합성
+
+**핵심 결정:** 미선택 종목의 당시 AI가 없다는 사실을 producer 누락과 구분한다. 추가 AI 호출·새 실거래 실험 없이 scanner 전체 선택 변경의 full-chain EV가 항상 식별되는 것은 아니다. 기존 `selection_execution_book`을 완성 fixture만으로 실운영 폐쇄루프 완료라 보고한 판정을 보완한다.
+
+| 실제 입력/선택 상태 | 실행 가능한 판정 | 승격 의미 |
+| --- | --- | --- |
+| incumbent/candidate 선택 집합 동일 | 완전한 partition 증거로 선택 Δ=0 계산 | 절대 EV/이익은 별도; 가중치 개선 없음 |
+| 선택 변경, 같은 cutoff의 실제 원천이 양쪽에 존재하고 기존 운영 모델 지원 | 기존 비용 차감 paired 계산·시간순 model/candidate holdout | 기존 승격 계약 모두 통과할 때만 candidate |
+| 선택 변경, 실제 미선택 종목의 AI가 호출되지 않음 | `unsupported_scope/unobserved_downstream_ai`; source-only 선택·가격 경로 진단 | full-chain EV null, 자동 가중치 승격 불가 |
+| 실제 생성돼야 할 selected 원천이 누락/투영 탈락 | `source_gap` 및 최초 producer 경계 | 구현 수리 대상 |
+| 지원 입력/모델 계약은 유효하나 독립 표본 부족 | `insufficient_sample` 또는 선언된 maturity pending | 그때만 자연 대기 |
+
+#### 생산자 수리와 과잉 확장 방지
+
+- scanner의 전체 partition/eligibility/실제 선택/기본·후보 점수/scan generation 및 기존 pair ID 관측은 보존한다. 새로운 pre-AI plan producer를 scanner 안에 복제하지 않는다.
+- 미선택 종목에 이후 생성된 다른 promotion/다른 cutoff의 AI를 붙이지 않는다. main BLOCK/RECHECK 관측 확대가 scanner에서 탈락한 종목의 AI까지 생성하는 것으로 간주하지 않는다.
+- PR3 착수 시 기존 자연 실행에서 양쪽 full-chain 입력을 **같은 비교 identity로** 생성할 수 있는 경로가 있는지 먼저 확인한다. 없으면 현재 권한에서 이 축의 full-chain 변경 선택 탐색은 도달 불가로 명시하고, 기존 scanner 평가 안의 가벼운 진단으로 제한한다. 같은 fingerprint에 대해 불가능한 모델 탐색을 매일 반복하지 않는다.
+- 기존 지원 계산과 입력이 실제 달라졌을 때의 재평가는 유지한다. 선택/가중치 runtime을 새 단계로 이동하거나 candidate universe·호출 예산을 늘리는 우회는 하지 않는다. 완전한 자동 탐색을 계속 요구한다면 별도 관측/실험 운영 계약의 결정이 필요하며, 그 결정을 본 계획에서 임의 승인하지 않는다.
+- 보고서에는 `selected_source_gap`, `unselected_downstream_unobserved`, `unsupported_route_or_model`, `valid_pair_count`, `changed_selection_count`를 기존 결과 구조에 최소 추가한다. 현 `first_blocker`, `owner`, `closure_test`도 그대로 사용한다. 새로운 결손 분류 프레임워크는 만들지 않는다.
+
+#### route 수리
+
+- 직접 `broker_route == KRX` 조건을 없애는 것만으로 끝내지 않는다. 공통 `entry_operating_route_supported` 및 기존 model scope/hash/date 검증과 결속한다. venue/session/router는 서로 다른 필드이며 SOR를 KRX로 치환하지 않는다.
+- KRX/NXT·정규/프리/애프터마켓 중 공통 모델이 지원하는 조합만 통과시킨다. quote/가격/비용/청산/모델 holdout이 해당 조합을 지원하지 않으면 명시적 unsupported다. SOR 지원을 모든 세션 자동 지원으로 확대하지 않는다.
+- scanner 자체의 지원 scope와 model scope는 별도로 대사한다. 공통 모델만 통과해도 scanner의 동일 partition·동일 budget·실제 downstream 계약을 생략할 수 없다.
+
+**회귀/closure:** 실제 scanner partition/selected emitter와 기존 downstream producer의 연결 검증; 같은 선택의 Δ0; 실제 양쪽 원천이 있는 지원 입력의 양수/음수 계산; 미선택 AI 없는 정상 흐름은 source bug/자연 대기가 아닌 명시적 미지원; selected 입력 손실은 source_gap; 지원 SOR 통과·route/model/hash/날짜 불일치 차단. 기존 활성 정책 승격/reader와 실패 fallback 회귀는 재사용하고 변경 경계만 보강한다. 양쪽 입력 수동 주입 성공과 자연 생성 가능성을 별도 표로 보고한다.
+
+### 12.6 PR5 — 제한 검증·결과 정정·인계
+
+| 묶음 | 필요한 검증 | 제한 재생성 |
+| --- | --- | --- |
+| PR1 | 기존 `test_research_closed_loop`, allocation/저가주 관련 테스트에서 시점·owner·정상 생산 경로; 변경 Python compile | 자본 증거에 실제 의존하는 low-price/widget/machine 결과와 직접 정책만. 장후 snapshot에 의존한 과거 PASS는 invalidation/정정 receipt 보존 |
+| PR2 | 해당 wrapper `bash -n`, source routing 및 terminal/health 생산→소비 회귀 | 원 raw에 terminal 근거가 있는 rising-missed 해당 구간과 후행 prior만; census 새 broker capture로 과거 복구 금지 |
+| PR3/PR4 | 기존 scanner resource/WS/정책 테스트에서 selected·unselected·SOR 경계 | 기존 bounded native section/manifest로 scanner 결과 재분류. 원천 불변이면 비싼 평가/holdout 반복 금지 |
+| 공통 | 영향 Python compile, `git diff --check`, 문서 print-only parser, self-review→수정→재리뷰 | 실제 변경 family 이후 summary→checklist→scoped/strict. 전체 A–H/raw 재실행 금지 |
+
+- 중복 테스트 수를 합산하지 않고 통제 회귀·과거 자연 결과·미래 생산·실제 적용 성과를 따로 기록한다. 새 결함/변경이 없으면 통과한 전체 경제성 suite를 반복하지 않는다.
+- 구현 지시 후 검증된 관련 변경만 commit/push하고 immutable successor를 배포한다. 선택 release와 설치 entrypoint/service env/cwd를 확인하며 실행 중 배포본을 수정하지 않는다. 봇 재시작·주문·조기 PREOPEN·시험 Telegram·외부 sync는 수행하지 않는다.
+- source9/17은 원래 시각을 보존하고 publication은 실행 당시 실제 날짜를 사용한다. effective9/21은 당시 freeze/기동 이전이라는 조건을 재확인한다. 이미 소비된 당일 정책은 덮어쓰지 않고 다음 유효 적용일로 인계한다.
+- 잘못된 자본 PASS의 후행 정책 의존성을 확인한다. 실제 해당 증거로 승격된 정책이 발견되면 기존 reject/rollback owner에 연결하고 구체 조치를 기록한다. 그런 정책이 발견되지 않은 상태에서 전체 기동을 차단하거나 모든 incumbent를 무효화하지 않는다.
+
+### 12.7 완료 기준·잔여 상태·실행 owner
+
+- PR1: 사후 snapshot false PASS 제거와 **지원 원천의 실제 생성→저장→자본 계산** 둘 다 검증. 미확정 계좌 계약은 별도 표시.
+- PR2: 두 설치 경로의 reviewed release 결속, 병행 수정 보존 및 필드 소비 확인.
+- PR3: 생산 가능성과 미호출 downstream의 식별 한계를 정직하게 반영; 지원 계산 유지, 도달 불가 중복 탐색 제한. 별도 운영 계약 없는 full-chain 자동 탐색까지 완료라고 표시하지 않음.
+- PR4: 기존 지원 SOR 경로 통과 및 잘못된 scope/model 차단.
+- PR5: 관련 자연 결과의 정정/재사용, 정책/fallback/strict 인계. 신규 양수 정책·EV 개선 보장 없음.
+
+수리 범위는 본 절, 실행 intake는 기존 `CodeImprovementWorkorderReview0918`를 사용한다. `PostcloseLateSourceFinalHandoffAudit0920`의 준비 확인과 `DirectFamilyPreopenPolicyHandoff`의 자연 기동 acceptance를 구현 backlog로 덮어쓰지 않는다. 저가주·scanner의 원 자연 owner/이력은 유지한다. 이번 계획은 자연 표본 부재와 생산자 미구현을 다시 섞지 않고, unsupported 계약을 무조건 해결됐다고 보고하지 않는 것이 완료 조건이다.
+
+
+### 12.8 PR 실행 보완·검증 기록 (2026-09-20)
+
+- 사용자 추가 승인: widget/low-price/episode도 기존 helper의 제한적 계좌 읽기 허용. 주문·예약·추가 AI·token refresh 없음. main의 허용을 임의 확대한 것이 아니라 이번 명시적 승인을 적용한다.
+- 기존 `research_native_capacity_source`에 `opening_capacity` 역할을 추가한다. 정상 owner run_once에서 공유 잠금을 통해 일별 최초 성공 원천을 보존하고, 실패는 5분당 최대 1회 재시도한다. 08:00–15:30의 현재 날짜만 수집하며 사후 수집으로 과거를 복원하지 않는다. 별도 daemon/collector는 없다.
+- 기존 계좌 helper 네 종류(실제 HTTP 수는 helper의 거래소·continuation에 따름), 동일 account scope hash, frozen owner policy, cash/inventory hashes/clock을 보존한다. `kt00011`의 삼성 종목 수량 cap을 다른 owner 수량 승인으로 사용하지 않는다. 기존 owner별 10주·guard가 유지된다.
+- `opening_fixed_budget`은 일별 고정 현금 자금 한도 아래의 조건부 연구 계산이다. 입출금/결제 재사용/다른 owner 반사실 cash-flow 검증을 의미하지 않는다. 기존 미체결 예약 금액이 불명확하면 차단한다. 장후 계좌 원천은 `postclose_diagnostic`이며 경제성 승인에 재사용하지 않는다.
+- 추가 확인 결함: 여러 날짜의 경제성에 마지막 날짜 잔액 하나를 사용하던 경로. 날짜별 이전 원천과 candidate/incumbent 각각의 동시 자본 수요로 대사한다. 날짜를 넘긴 보유 경로는 이 고정 일별 범위에서 미지원이며 기존 별도 계약 대상이다.
+- 별도 완성 fixture 없이 기존 acquisition→native cash/inventory→snapshot→loader→경제성 계산을 통과하는 회귀를 추가했다. 양수/음수/동률, 같은 날짜 사후 잔액·이전 날짜·시각 누락 거부를 검증한다. 종전 다일 정책 승격 회귀에도 각 날짜의 사전 원천을 명시했다.
+- scanner는 미선택 downstream AI 미관측을 `unsupported_scope`, 선택된 입력 누락을 `source_gap`으로 구분한다. 현재 입력 계약의 미지원/결손을 proxy 기반 `experiment_ready`로 바꾸지 않는다. 기존 입력 fingerprint 재사용과 완성된 지원 입력의 계산/승격 경로는 유지한다.
+- Kiwoom 공식 참조 확인: upstream `953e5dbff123f437ab4d11a78a95191a685eb51f`, 2026-09-20 23:12–23:16 KST, `kiwoom/_data/kiwoom_api_spec.json`, `kiwoom/specs.py`, `kiwoom/core/client.py`, `postman/kiwoom-openapi.postman_collection.json`. 해당 revision에 `kiwoom_docs` 없음. kt00001/kt00005/kt00011/ka10075의 POST `/api/dostk/acnt`, Bearer/api-id/continuation, KRX/NXT/통합 범위·주/원·return_code 및 PRD/MOCK 분리를 대사했다. 기존 요청/정규화 helper를 그대로 호출하며 Postman의 query 표현으로 JSON body 계약을 변경하지 않는다.
+- 검증 증거와 배포/제한 재생성 receipt는 `tmp/postclose-producer-repair-20260920/`에 보존한다. 자연 source9/17에는 opening 원천이 없으므로 과거 자본/EV가 null인 사실을 수리 실패나 no-edge로 바꾸지 않는다. 미래 정상 수집·독립 표본·정책 자연 소비·완료 손익은 별도 OPEN이다.

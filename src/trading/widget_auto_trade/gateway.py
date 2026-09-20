@@ -1,7 +1,7 @@
 """Kiwoom shared-token-only gateway for the widget auto-trade owner.
 
-This gateway deliberately does not call the deposit/orderable-cash endpoints
-and never issues or refreshes an access token.  The broker remains the final
+The research hook shares a bounded opening account read across owners; it
+does not change order admission and never issues or refreshes an access token.  The broker remains the final
 authority for account eligibility, margin/misu availability, and order
 acceptance.
 """
@@ -304,6 +304,10 @@ class KiwoomSharedTokenOrderGateway:
             if shared_read_control_enabled is None
             else bool(shared_read_control_enabled)
         )
+
+    def capture_opening_research_capacity(self, day):
+        from src.engine.monitoring.research_native_capacity_source import ensure_opening_capacity
+        return ensure_opening_capacity(day, token=self._token)
 
     def _token(self) -> str:
         token = str(self.token_loader() or "").strip()

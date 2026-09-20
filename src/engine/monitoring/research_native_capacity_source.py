@@ -32,11 +32,15 @@ def acquire(day, *, directory=loop.DIRECTORY, token=None, adapters=None):
         )
 
 
-def _acquire(day, *, directory=loop.DIRECTORY, token=None, adapters=None):
+def _acquire(day, *, directory=loop.DIRECTORY, token=None, adapters=None, opening=False):
+    from src.trading.order.owner_custody_registry import broker_account_key
     started = clocks.monotonic()
     body = dict(
         schema=loop.SCHEMA,
         source_date=str(day),
+        account_scope_sha256=loop.digest(["broker_account", broker_account_key()]),
+        capacity_role="opening_fixed_budget" if opening else "postclose_diagnostic",
+        attempted_at=datetime.now(KST).isoformat(),
         status="source_gap",
         scope="native_account_once_not_per_candidate",
         order_requests=0,
@@ -48,7 +52,7 @@ def _acquire(day, *, directory=loop.DIRECTORY, token=None, adapters=None):
     )
     try:
         now = datetime.now(KST)
-        if now.date() != day or now.time() < time(20, 5):
+        if now.date() != day or (not opening and now.time() < time(20, 5)):
             raise ValueError("native_source_requires_current_completed_date_after_20_05")
         if adapters is None:
             from src.utils import kiwoom_utils as native
@@ -62,6 +66,8 @@ def _acquire(day, *, directory=loop.DIRECTORY, token=None, adapters=None):
                 deposit_meta=orders.get_last_deposit_meta,
                 capacity=native.get_orderable_by_margin_kt00011,
             )
+        if callable(token):
+            token = token()
         if not token:
             raise ValueError("cached_authenticated_account_source_missing")
         # One existing KRX cash-capacity instrument, never inferred from a
@@ -132,6 +138,16 @@ def _acquire(day, *, directory=loop.DIRECTORY, token=None, adapters=None):
         ):
             raise ValueError("native_acquisition_clock_gap")
         source_directory = directory / "native_capacity" / str(day)
+        if opening:
+            from src.trading.config.symbol_owner_policy import policy_path, _canonical_hash
+            owner = loop.read_object(policy_path(day))
+            generated = datetime.fromisoformat(owner.get("generated_at_kst") or "")
+            if (owner.get("active_date") != str(day)
+                or owner.get("policy_hash") != _canonical_hash(owner)
+                or generated.tzinfo is None or generated > captured):
+                raise ValueError("opening_owner_contract_missing_or_future")
+            loop.atomic_write(source_directory / "owner_policy.json", owner)
+            body["owner_contract_sha256"] = loop.digest(owner)
         with loop.writer_lock(directory / "capacity_source", blocking=False):
             if not publish_inventory_context(snapshot, directory=source_directory):
                 raise ValueError("native_inventory_projection_invalid")
@@ -155,6 +171,36 @@ def _acquire(day, *, directory=loop.DIRECTORY, token=None, adapters=None):
     value = {**body, "receipt_sha256": loop.digest(body)}
     loop.atomic_write(directory / f"capacity_source_{day}.json", value)
     return value
+
+
+def ensure_opening_capacity(day, *, token=None, directory=loop.DIRECTORY, adapters=None):
+    """Freeze one native generation per day across existing owner processes.
+
+    This is a conditional fixed research budget, not an account cash-flow model
+    or permission to submit. A failed read is retried at most once per 5 minutes.
+    """
+    directory = directory / "opening_capacity"
+    try:
+        now = datetime.now(KST)
+        if now.date() != day or not time(8) <= now.time() < time(15, 30):
+            return dict(status="not_applicable", reason="outside_opening_source_window", **loop.AUTHORITY)
+        with loop.writer_lock(directory / "source_acquisition", blocking=False):
+            path = directory / f"capacity_source_{day}.json"
+            previous = loop.read_object(path) if path.exists() else {}
+            if previous.get("status") == "complete":
+                from src.trading.order.owner_custody_registry import broker_account_key
+                if (previous.get("receipt_sha256") != loop.digest({k: v for k, v in previous.items() if k != "receipt_sha256"})
+                    or previous.get("account_scope_sha256") != loop.digest(["broker_account", broker_account_key()])):
+                    return dict(status="source_gap", reason="opening_acquisition_hash_or_account_conflict", **loop.AUTHORITY)
+                return previous
+            attempted = datetime.fromisoformat(previous["attempted_at"]) if previous.get("attempted_at") else None
+            if attempted and (now - attempted).total_seconds() < 300:
+                return previous
+            return _acquire(day, directory=directory, token=token, adapters=adapters, opening=True)
+    except BlockingIOError:
+        return dict(status="waiting", reason="native_source_acquisition_running", **loop.AUTHORITY)
+    except (OSError, ValueError, TypeError, KeyError, RuntimeError) as exc:
+        return dict(status="source_gap", reason=str(exc), **loop.AUTHORITY)
 
 
 def main(argv=None):

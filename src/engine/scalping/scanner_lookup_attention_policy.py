@@ -64,6 +64,7 @@ NON_LIVE_STATUSES = {
     "hold_no_edge",
     "source_quality_blocked",
     "source_contract_blocked",
+    "unsupported_scope",
     "forward_holdout_armed",
 }
 ACTIVE_STATUSES = {"live_auto_apply_ready", "experiment_ready"}

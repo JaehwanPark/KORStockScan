@@ -764,11 +764,13 @@ def execution_inputs(target, rows, receipts=None):
 def selection_execution_book(rows, inputs):
     """Use complete native selections and the existing one-position CF owner."""
     from src.engine.scalping import compact_auxiliary_paired_replay as compact
+    from src.engine.scalping.strategy_owner_replay import entry_operating_route_supported
     groups = defaultdict(list)
     for row in rows:
         groups[(row.get("observation_date"), row.get("scan_generation_id"), partition_key(row))].append(row)
     pairs, exclusions = [], Counter()
     identical, competing, valid = True, False, bool(groups)
+    changed_selection_count = 0
     for values in groups.values():
         census = allocation_book(values, capacity_reasons={"max_new_codes_reached", "general_slot_limit", "max_records_reached"})
         valid = valid and census["complete_partition_count"] == 1 and not census["excluded_partition_counts"]
@@ -781,6 +783,7 @@ def selection_execution_book(rows, inputs):
             r[field], r["source_priority"], r["flu_rate"], r["scan_rank"]))[:k]}
             for field in ("base_priority_score", "candidate_priority_score")]
         competing = competing or 0 < k < len(eligible)
+        changed_selection_count += len(selections[0] ^ selections[1])
         identical = identical and selections[0] == selections[1]
     if valid and identical:
         # Logical selection identity proves delta zero; absent execution inputs
@@ -812,7 +815,7 @@ def selection_execution_book(rows, inputs):
                 continue
             value = inputs.get((key[0], r.get("scanner_promotion_id"), r["stock_code"]))
             if not value:
-                exclusions["original_unselected_entry_recipe_quantity_guard_missing"] += 1
+                exclusions["selected_source_gap" if r["terminal"] == "promoted" else "unselected_downstream_unobserved"] += 1
                 break
             row, model = value["row"], value["model"]
             pricing = value.get("pricing") or {}
@@ -842,8 +845,10 @@ def selection_execution_book(rows, inputs):
             frame_budget = arm["budget_krw"]
             clock = datetime.fromisoformat(seed["observed_at"]).timestamp()
             if (row.get("source_date") != key[0] or row.get("scanner_promotion_id") != r.get("scanner_promotion_id")
-                    or row.get("stock_code") != r["stock_code"] or row.get("effective_venue") != "KRX"
-                    or row.get("session_bucket") != "KRX_REGULAR" or row.get("broker_route") != "KRX"
+                    or row.get("stock_code") != r["stock_code"]
+                    or str(row.get("effective_venue", "")).upper() != str(r.get("effective_venue", "")).upper()
+                    or str(row.get("session_bucket", "")).upper() != str(r.get("market_session_bucket", "")).upper()
+                    or not entry_operating_route_supported(row.get("effective_venue"), row.get("session_bucket"), row.get("broker_route"))
                     or not 0 <= clock - r["observed_epoch"] <= 120):
                 exclusions["exact_generation_attempt_scope_or_clock_mismatch"] += 1
                 break
@@ -857,7 +862,12 @@ def selection_execution_book(rows, inputs):
                 "scan_generation_id": key[1], "source_projection_sha256": value["source_projection_sha256"]})
         else:
             pairs.extend(generation)
-    empty = {"status": "source_gap", "paired_delta_ev_pct": None, "baseline_budget_ev_pct": None,
+    empty = {"status": "unsupported_scope" if set(exclusions) == {"unselected_downstream_unobserved"} else "source_gap",
+        "input_contract_version": "scanner_native_downstream_support_v1",
+        "valid_pair_count": len(pairs), "changed_selection_count": changed_selection_count,
+        "blocker_owner": "scanner_selection_then_existing_machine_compact_producer",
+        "closure_test": "same cutoff native downstream evidence for both changed selections; uncalled AI requires a separate operating contract",
+        "paired_delta_ev_pct": None, "baseline_budget_ev_pct": None,
         "candidate_budget_ev_pct": None, "baseline_net_pnl_krw": None, "candidate_net_pnl_krw": None,
         "tail": None, "exposure": None, "model_error": None, "source_gaps": sorted(exclusions) or (["complete_changed_selection_execution_inputs_missing"] if not pairs else []),
         "pairs": pairs, "excluded_partition_counts": dict(exclusions)}
@@ -918,6 +928,8 @@ def selection_validation(book, rows, inputs, outcomes, predecessor, target, *, f
         return "source_gap", {**prior, "status": "actual_completed_identity_or_cost_invalid"}
     if book["status"] in {"no_effect", "no_capacity_competition"}:
         return "hold_no_edge", {**prior,"status": "not_armed", "reason": book["status"]}
+    if book["status"] == "unsupported_scope":
+        return "unsupported_scope", {**prior, "status": "not_armed", "reason": "unselected_downstream_unobserved"}
     if book["status"] != "supported_operating_comparison":
         return "source_gap", {**prior,"status": "not_armed", "historical_dates_not_fresh_holdout": True}
     if not selection_edge_passes(book):
@@ -977,7 +989,7 @@ def selection_policy_status(
     status, proof = selection_validation(
         book, rows, inputs, outcomes, predecessor, target, frozen_at=frozen_at
     )
-    if status != "source_gap":
+    if status != "source_gap" or book.get("input_contract_version") == "scanner_native_downstream_support_v1":
         return status, proof
     proxy_status = str((opportunity or {}).get("status") or "not_observed")
     opportunity_proof = {
@@ -1205,8 +1217,8 @@ def integrated_selection_evaluation(target, events_by_date, *, predecessor=None,
             "hold_no_effect" if not proxy["reordered_generation_count"] else "changed_selection"),
         "primary_economics": primary,
         "independent_holdout": holdout, "learning_generation_sha256": learning_generation(holdout),
-        "source_gap_owner": "scanner_selection_pair_source_then_natural_assigned_arm_execution",
-        "closure_test": "future pair identity reaches opportunity outcome and dated policy; only assigned arm produces natural compact plan guard terminal for post_apply actual economics",
+        "source_gap_owner": primary.get("blocker_owner", "scanner_selection_pair_source"),
+        "closure_test": primary.get("closure_test", "complete native selection and unchanged-selection proof; no positive edge inferred"),
         "eta": None, "first_blocker": gaps[0] if gaps else None,
     }
     from copy import deepcopy

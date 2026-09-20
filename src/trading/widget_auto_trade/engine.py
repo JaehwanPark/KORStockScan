@@ -6072,6 +6072,11 @@ class WidgetSignalAutoTrader:
             result = deepcopy(self._state)
             result["adaptive_exit_loop_status"] = "original_owner_lock_required"
             return result
+        capture = getattr(self.gateway, "capture_opening_research_capacity", None)
+        if callable(capture):
+            capacity = capture(now.date())
+            if capacity.get("status") != "not_applicable":
+                self._state["research_opening_capacity"] = capacity
         self._activate_date(now)
         claimed = set()
         # Also resume removed catalog symbols and the producer-no-snapshot

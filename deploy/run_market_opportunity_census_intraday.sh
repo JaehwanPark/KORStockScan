@@ -2,6 +2,20 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WORKSPACE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+if [[ -z "${PROJECT_DIR:-}" && ! -L "$WORKSPACE_ROOT/data" && -f "$WORKSPACE_ROOT/data/runtime/runtime_release_selection.json" ]]; then
+  REVIEWED_ROOT="$("$WORKSPACE_ROOT/.venv/bin/python" -I - "$WORKSPACE_ROOT" <<'PYTHON'
+import runpy
+import sys
+from pathlib import Path
+workspace = Path(sys.argv[1])
+router = runpy.run_path(str(workspace / "src/engine/infrastructure/runtime_release_router.py"))
+root, _ = router["selected_release"](workspace)
+print(root)
+PYTHON
+  )"
+  exec bash "$REVIEWED_ROOT/deploy/run_market_opportunity_census_intraday.sh" "$@"
+fi
 PROJECT_DIR="${PROJECT_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 VENV_PY="${PROJECT_DIR}/.venv/bin/python"
 TARGET_DATE="${1:-$(TZ=Asia/Seoul date +%F)}"

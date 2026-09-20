@@ -178,6 +178,21 @@ TP1_LABEL_PROJECTION_FIELD_KEYS = frozenset(
         "rising_missed_nxt_post_block_ws_0d_best_ask",
         "rising_missed_nxt_post_block_ws_0d_best_bid",
         "rising_missed_nxt_post_block_ws_0d_age_ms",
+        "rising_missed_nxt_post_block_exact_ws_0d_status",
+        "rising_missed_nxt_post_block_exact_ws_0d_best_bid",
+        "rising_missed_nxt_post_block_exact_ws_0d_best_ask",
+        "rising_missed_nxt_post_block_exact_ws_0d_best_bid_qty",
+        "rising_missed_nxt_post_block_exact_ws_0d_best_ask_qty",
+        "rising_missed_nxt_post_block_exact_ws_0d_best_bid_qty_source_valid",
+        "rising_missed_nxt_post_block_exact_ws_0d_best_ask_qty_source_valid",
+        "rising_missed_nxt_post_block_exact_ws_0d_observed_epoch",
+        "rising_missed_nxt_post_block_exact_ws_0d_reference_epoch",
+        "rising_missed_nxt_post_block_exact_ws_0d_age_ms",
+        "rising_missed_nxt_post_block_exact_ws_0d_price_source",
+        "rising_missed_nxt_post_block_exact_ws_0d_freshness_state",
+        "rising_missed_nxt_post_block_exact_ws_0d_item",
+        "rising_missed_nxt_post_block_exact_ws_0d_route",
+        "rising_missed_nxt_post_block_exact_ws_0d_observed_venue",
         "rising_missed_nxt_post_block_price_source",
         "rising_missed_nxt_post_block_sampler_outcome_label",
         "rising_missed_tp1_actual_watch_delta_pct",
@@ -2801,6 +2816,19 @@ def _build_latency_false_negative_canary_candidates(
     return summary, rows
 
 
+def _daily_feedback_report_date(path: Path) -> str | None:
+    """Accept only dated report artifacts; sidecar receipts are not source days."""
+    prefix = "rising_missed_intraday_feedback_"
+    if not path.stem.startswith(prefix):
+        return None
+    value = path.stem.removeprefix(prefix)
+    try:
+        parsed = datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        return None
+    return value if parsed.strftime("%Y-%m-%d") == value else None
+
+
 def _clean_baseline_rolling_latency_false_negative_candidates(
     target_date: str,
     current_rows: list[dict[str, Any]],
@@ -2815,8 +2843,8 @@ def _clean_baseline_rolling_latency_false_negative_candidates(
     prefix = "rising_missed_intraday_feedback_"
     eligible_paths: list[Path] = []
     for path in sorted(REPORT_DIR.glob(f"{prefix}*.json")):
-        report_date = path.stem.removeprefix(prefix)
-        if CLEAN_BASELINE_DATE <= report_date < target_date:
+        report_date = _daily_feedback_report_date(path)
+        if report_date and CLEAN_BASELINE_DATE <= report_date < target_date:
             eligible_paths.append(path)
     prior_limit = max(0, LATENCY_FALSE_NEGATIVE_ROLLING_REPORT_DAYS - 1)
     for path in eligible_paths[-prior_limit:] if prior_limit else []:
@@ -4479,8 +4507,8 @@ def _clean_baseline_rolling_nxt_post_block_outcomes(
     prefix = "rising_missed_intraday_feedback_"
     eligible_paths = []
     for path in sorted(REPORT_DIR.glob(f"{prefix}*.json")):
-        report_date = path.stem.removeprefix(prefix)
-        if not (CLEAN_BASELINE_DATE <= report_date < target_date):
+        report_date = _daily_feedback_report_date(path)
+        if not report_date or not (CLEAN_BASELINE_DATE <= report_date < target_date):
             continue
         eligible_paths.append(path)
     prior_limit = max(0, NXT_POST_BLOCK_ROLLING_REPORT_DAYS - 1)
@@ -6616,8 +6644,8 @@ def _clean_baseline_rolling_risky_micro_outcomes(
     prefix = "rising_missed_intraday_feedback_"
     eligible_paths: list[Path] = []
     for path in sorted(REPORT_DIR.glob(f"{prefix}*.json")):
-        report_date = path.stem.removeprefix(prefix)
-        if CLEAN_BASELINE_DATE <= report_date < target_date:
+        report_date = _daily_feedback_report_date(path)
+        if report_date and CLEAN_BASELINE_DATE <= report_date < target_date:
             eligible_paths.append(path)
     prior_limit = max(0, RISKY_MICRO_ROLLING_REPORT_DAYS - 1)
     for path in eligible_paths[-prior_limit:] if prior_limit else []:

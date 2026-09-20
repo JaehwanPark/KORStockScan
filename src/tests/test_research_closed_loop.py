@@ -135,6 +135,9 @@ def test_actual_consumer_receipt_contains_current_process(tmp_path):
 def allocator():
     body = dict(
         schema="machine_research_allocator_snapshot_v1",
+        captured_at=str(DAY) + "T08:50:00+09:00",
+        capacity_role="opening_fixed_budget",
+        account_scope_sha256="a" * 64,
         source_date=DAY.isoformat(),
         available_cash_krw=2001,
         exposure_limit_krw=2001,
@@ -998,6 +1001,27 @@ def test_new_unfilled_symbol_bootstraps_cf_validation_and_next_date_publication(
         episode.write_report(
             peer, output_dir=root / "low_price_two_leg_expanded_candidate_research"
         )
+    for day_string in cal + hold:
+        day = date.fromisoformat(day_string)
+        opening_root = directory / "opening_capacity"
+        native_dir = opening_root / "native_capacity" / day_string
+        frozen_owner = build_symbol_owner_policy_payload(active_date=day, policy_id="fixture_owner_" + day_string,
+            generated_at_kst=day_string + "T08:00:00+09:00",
+            symbol_entries={"999999": dict(mode="EXCLUSIVE_MANUAL", allowed_owners=["manual_operator"])})
+        loop.atomic_write(native_dir / "owner_policy.json", frozen_owner)
+        for name in ("cash", "inventory"):
+            value = loop.read_object(source_dir / f"native_{name}.json")
+            value.update(source_date=day_string, captured_at=day_string + "T08:50:00+09:00")
+            value["native_sha256"] = loop.digest({k:v for k,v in value.items() if k != "native_sha256"})
+            loop.atomic_write(native_dir / f"native_{name}.json", value)
+        acquisition = dict(status="complete", source_date=day_string, capacity_role="opening_fixed_budget",
+            account_scope_sha256="a"*64, owner_contract_sha256=loop.digest(frozen_owner),
+            native_cash_sha256=loop.read_object(native_dir / "native_cash.json")["native_sha256"],
+            native_inventory_sha256=loop.read_object(native_dir / "native_inventory.json")["native_sha256"], **loop.AUTHORITY)
+        loop.atomic_write(opening_root / f"capacity_source_{day}.json", {**acquisition, "receipt_sha256":loop.digest(acquisition)})
+        loop.atomic_write(root / "machine_entry_timing_tuning" / f"machine_entry_timing_tuning_{day}.json",
+            dict(target_date=day_string, runtime_effect=False, same_stage_owner_guard=dict(mutation_present=False,status="clear")))
+        assert funding.write_snapshot(day, directory=directory, report_root=root)["source_quality_status"] == "PASS"
     receipt = phase.refresh(completed_day, directory=directory, report_root=root)
     assert receipt["publications"]["widget"]["profile_count"] == 1
     assert receipt["joint_allocation_gate"]["status"] == "pass"
@@ -1569,3 +1593,68 @@ def test_registered_actual_episode_seed_consumes_native_books_without_discovery_
     assert receipt["written_facts"] == 2
     rows = [json.loads(line) for line in (tmp_path / "facts" / f"prospective_facts_{profile.symbol}_{now:%Y%m%d}.jsonl").read_text().splitlines()]
     assert all(row["seed_memberships"][0]["revision_sha256"] == revision["revision_sha256"] for row in rows)
+
+
+def test_opening_producer_to_allocator_and_postclose_rejection(tmp_path, monkeypatch):
+    from src.engine.monitoring import research_native_capacity_source as source
+    from src.engine.monitoring import research_allocation_snapshot as funding
+    from src.trading.config import symbol_owner_policy as owners
+    from types import SimpleNamespace
+    captured = datetime.fromisoformat(str(DAY) + "T08:50:00+09:00")
+    monkeypatch.setattr(source, "datetime", SimpleNamespace(now=lambda tz: captured, fromisoformat=datetime.fromisoformat))
+    owner_path = tmp_path / "owner.json"
+    owner = owners.build_symbol_owner_policy_payload(active_date=DAY, policy_id="fixture_opening",
+        generated_at_kst=str(DAY) + "T08:00:00+09:00",
+        symbol_entries={"999999": dict(mode="EXCLUSIVE_MANUAL", allowed_owners=["manual_operator"])})
+    loop.atomic_write(owner_path, owner)
+    monkeypatch.setattr(owners, "policy_path", lambda day: owner_path)
+    calls = []
+    adapters = dict(
+        inventory=lambda token: (calls.append("inventory") or [], {"KRX", "NXT"}, {"normalization_contract_complete": True}),
+        unfilled=lambda token: (calls.append("unfilled") or [], {"normalization_contract_complete": True, "request_succeeded": True}),
+        deposit=lambda token: calls.append("deposit"),
+        deposit_meta=lambda: dict(source="api_fresh", raw_amount=100000),
+        capacity=lambda *args, **kwargs: (calls.append("capacity") or dict(cash_only_orderable_amount=200000,
+            cash_only_orderable_qty=10, cash_orderable_contract_status="valid", capacity_source_sha256="a"*64,
+            capacity_contract_version=1, requested_stock_code="005930", error="", capacity_observed_at=captured.isoformat())))
+    receipt = source.ensure_opening_capacity(DAY, directory=tmp_path, token="fixture", adapters=adapters)
+    assert receipt["status"] == "complete", receipt
+    assert len(calls) == 4
+    assert source.ensure_opening_capacity(DAY, directory=tmp_path, token="fixture", adapters=adapters) == receipt
+    assert len(calls) == 4
+    root = tmp_path / "reports"
+    loop.atomic_write(root / "machine_entry_timing_tuning" / f"machine_entry_timing_tuning_{DAY}.json",
+        dict(target_date=str(DAY), runtime_effect=False, same_stage_owner_guard=dict(mutation_present=False, status="clear")))
+    snapshot = funding.write_snapshot(DAY, directory=tmp_path, report_root=root)
+    assert snapshot["source_quality_status"] == "PASS", snapshot
+    assert loop.load_allocator(DAY, directory=tmp_path) == snapshot
+    for rate in (1, -1, 0):
+        lanes = {"widget:000001": [dict(entry_at=str(DAY)+"T09:10:00+09:00", exit_at=str(DAY)+"T09:11:00+09:00",
+            entry_price=100, net_return_pct=rate)]}
+        result = loop.joint_allocation(lanes, snapshot=snapshot, source_date=DAY, parent_sha256="a"*64)
+        assert result["status"] == "pass", result
+        assert result["feasible_combined_net_profit_krw"] == pytest.approx(rate * 10)
+    for value in (None, str(DAY)+"T21:15:00+09:00", "2026-09-16T08:50:00+09:00"):
+        bad = {**snapshot, "captured_at": value}
+        bad["snapshot_sha256"] = loop.digest({k:v for k,v in bad.items() if k != "snapshot_sha256"})
+        assert loop.joint_allocation(lanes,snapshot=bad,source_date=DAY,parent_sha256="a"*64)["status"] == "allocation_blocked"
+    snapshot["capacity_role"] = "postclose_diagnostic"
+    snapshot["snapshot_sha256"] = loop.digest({k:v for k,v in snapshot.items() if k != "snapshot_sha256"})
+    assert loop.joint_allocation(lanes,snapshot=snapshot,source_date=DAY,parent_sha256="a"*64)["reason"] == "opening_capacity_source_missing"
+    # Same-day owner-policy mutation cannot retroactively rewrite the frozen owner.
+    loop.atomic_write(owner_path, {"changed": True})
+    assert funding.write_snapshot(DAY, directory=tmp_path, report_root=root)["source_quality_status"] == "PASS"
+
+
+def test_actual_gateways_share_opening_source_without_orders(monkeypatch):
+    from src.engine.monitoring import research_native_capacity_source as source
+    from src.trading.widget_auto_trade.gateway import KiwoomSharedTokenOrderGateway
+    from src.trading.low_price_two_leg.gateway import KiwoomLowPriceTwoLegGateway
+    seen = []
+    monkeypatch.setattr(source, "ensure_opening_capacity", lambda day, **kw: seen.append(day) or {"status":"complete"})
+    # __new__ excludes networking constructors; the production hook is exercised.
+    for cls in (KiwoomSharedTokenOrderGateway, KiwoomLowPriceTwoLegGateway):
+        gateway = cls.__new__(cls)
+        gateway.token_loader = lambda: "fixture"
+        assert gateway.capture_opening_research_capacity(DAY)["status"] == "complete"
+    assert seen == [DAY, DAY]

@@ -2862,6 +2862,11 @@ class SamsungRegularTwoLegMachine:
         from src.trading.market.machine_rebound_reentry import observe_owner_terminal
 
         observed = (now or datetime.now(tz=KST)).astimezone(KST)
+        capture = getattr(self.gateway, "capture_opening_research_capacity", None)
+        if callable(capture):
+            capacity = capture(observed.date())
+            if capacity.get("status") != "not_applicable":
+                self._state["research_opening_capacity"] = capacity
         self._operating_observed_at = observed
         result = self._run_once_impl(observed)
         if not any(

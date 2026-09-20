@@ -556,10 +556,23 @@ def joint_allocation(episodes, *, snapshot, source_date, parent_sha256):
     if not isinstance(snapshot, dict):
         return {**blocked, "reason": "exact_date_allocator_snapshot_missing"}
     try:
+        from src.engine.monitoring.policy_research_economics import aware
+        captured = aware(snapshot.get("captured_at"))
+        if snapshot.get("capacity_role") != "opening_fixed_budget":
+            return {**blocked, "reason": "opening_capacity_source_missing"}
+        starts = [aware(row.get("entry_at")) for rows in episodes.values() for row in rows]
+        if starts and (captured is None or any(t is None or captured > t for t in starts)):
+            return {**blocked, "reason": "allocator_snapshot_not_before_entry"}
+        if any(t is not None and t.astimezone(ZoneInfo("Asia/Seoul")).date() != source_date for t in starts):
+            return {**blocked, "reason": "allocator_episode_date_mismatch"}
+        if starts and captured.astimezone(ZoneInfo("Asia/Seoul")).date() != source_date:
+            return {**blocked, "reason": "allocator_snapshot_date_mismatch"}
         body = {k: v for k, v in snapshot.items() if k != "snapshot_sha256"}
         valid = (
             snapshot.get("schema") == "machine_research_allocator_snapshot_v1"
             and snapshot.get("source_date") == source_date.isoformat()
+            and isinstance(snapshot.get("account_scope_sha256"), str)
+            and len(snapshot["account_scope_sha256"]) == 64
             and snapshot.get("snapshot_sha256") == digest(body)
         )
         valid &= (
@@ -640,6 +653,34 @@ def joint_allocation(episodes, *, snapshot, source_date, parent_sha256):
         return {**blocked, "reason": "allocator_snapshot_contract_invalid"}
 
 
+def dated_joint_allocation(episodes, *, snapshots, parent_sha256):
+    """Use each day's prior source; never backfill days from a closing balance."""
+    from src.engine.monitoring.policy_research_economics import aware
+    by_day = {}
+    for lane, rows in episodes.items():
+        for row in rows:
+            start, end = aware(row.get("entry_at")), aware(row.get("exit_at"))
+            if start is not None: start = start.astimezone(ZoneInfo("Asia/Seoul"))
+            if end is not None: end = end.astimezone(ZoneInfo("Asia/Seoul"))
+            if start is None or end is None or start.date() != end.date():
+                return dict(status="allocation_blocked", reason="cross_date_or_invalid_capital_path_unsupported",
+                    feasible_combined_net_profit_krw=None, **AUTHORITY)
+            by_day.setdefault(start.date().isoformat(), {}).setdefault(lane, []).append(row)
+    accounts = {snapshots[day].get("account_scope_sha256") for day in by_day if isinstance(snapshots.get(day), dict)}
+    if len(accounts) > 1:
+        return dict(status="allocation_blocked", reason="dated_account_identity_conflict",
+            feasible_combined_net_profit_krw=None, **AUTHORITY)
+    receipts = {day: joint_allocation(lanes, snapshot=snapshots.get(day), source_date=date.fromisoformat(day),
+        parent_sha256=parent_sha256) for day, lanes in sorted(by_day.items())}
+    passed = all(r["status"] == "pass" for r in receipts.values())
+    return dict(status="pass" if passed else "allocation_blocked",
+        reason="no_selected_episode_demand" if not receipts else "dated_fixed_allocator_feasible" if passed else "dated_opening_capacity_missing_or_infeasible",
+        capacity_semantics="conditional_fixed_daily_budget_not_account_cashflow",
+        daily_receipts=receipts, parent_sha256=parent_sha256,
+        feasible_combined_net_profit_krw=sum(r["feasible_combined_net_profit_krw"] for r in receipts.values()) if passed else None,
+        **AUTHORITY)
+
+
 def load_allocator(source_date, *, directory=DIRECTORY):
     directory = _directory(directory)
     try:
@@ -647,12 +688,16 @@ def load_allocator(source_date, *, directory=DIRECTORY):
             Path(directory) / f"allocator_{source_date.isoformat()}.json"
         )
         if snapshot.get("source_quality_status") == "PASS":
+            if snapshot.get("capacity_role") != "opening_fixed_budget":
+                return None
             acquisition_path = snapshot.get("native_acquisition_path")
             if not acquisition_path:
                 return None
             acquisition = read_object(Path(acquisition_path))
             if (
                 acquisition.get("status") != "complete"
+                or acquisition.get("capacity_role") != snapshot.get("capacity_role")
+                or acquisition.get("account_scope_sha256") != snapshot.get("account_scope_sha256")
                 or acquisition.get("receipt_sha256")
                 != snapshot.get("native_acquisition_sha256")
                 or acquisition.get("receipt_sha256")
@@ -1193,15 +1238,15 @@ def combined_joint_gate(report, *, family, source_date, directory=DIRECTORY):
     parent = digest(
         {family: own["inputs_sha256"], other_family: other["inputs_sha256"]}
     )
-    result = joint_allocation(
-        episodes,
-        snapshot=load_allocator(source_date, directory=directory),
-        source_date=source_date,
-        parent_sha256=parent,
-    )
+    dates = {str(row.get("entry_at", ""))[:10] for rows in episodes.values() for row in rows}
+    for value in (own, other):
+        for lane in (value.get("portfolio_reference") or {}).get("lanes", {}).values():
+            dates.update(day for name in ("calibration", "holdout") for day in lane[name + "_dates"])
+    snapshots = {day: load_allocator(date.fromisoformat(day), directory=directory) for day in sorted(dates)}
+    result = dated_joint_allocation(episodes, snapshots=snapshots, parent_sha256=parent)
     if result["status"] == "pass" and (own.get("candidate_revisions") or other.get("candidate_revisions")):
         from src.engine.monitoring.research_portfolio_economics import paired_joint_economics
-        economics = paired_joint_economics([own, other], load_allocator(source_date, directory=directory))
+        economics = paired_joint_economics([own, other], load_allocator(source_date, directory=directory), dated_snapshots=snapshots)
         result["paired_joint_economics"] = economics
         if economics["status"] != "pass":
             result.update(status="allocation_blocked", reason=economics["reason"], feasible_combined_net_profit_krw=None)

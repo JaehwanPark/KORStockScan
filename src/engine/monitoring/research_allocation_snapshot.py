@@ -188,7 +188,7 @@ def native_allocator_contract(
 
 
 def build_snapshot(
-    source_date, *, directory=loop.DIRECTORY, owner_policy_path=None, report_root=None
+    source_date, *, directory=loop.DIRECTORY, owner_policy_path=None, report_root=None, source_directory_root=None
 ):
     """Require same-generation native cash/custody; unknown exposure is a gap."""
     blocked = dict(
@@ -199,13 +199,14 @@ def build_snapshot(
         **loop.AUTHORITY,
     )
     try:
-        source_directory = directory / "native_capacity" / str(source_date)
+        source_root = source_directory_root or directory
+        source_directory = source_root / "native_capacity" / str(source_date)
         cash_path = source_directory / "native_cash.json"
         inventory_path = source_directory / "native_inventory.json"
         cash = loop.read_object(cash_path)
         inventory = loop.read_object(inventory_path)
         acquisition = loop.read_object(
-            directory / f"capacity_source_{source_date}.json"
+            source_root / f"capacity_source_{source_date}.json"
         )
         if (
             acquisition.get("status") != "complete"
@@ -268,6 +269,8 @@ def build_snapshot(
         ):
             return {**blocked, "reason": "native_reservation_notional_missing"}
         owner = loop.read_object(owner_policy_path or policy_path(source_date))
+        if acquisition.get("capacity_role") == "opening_fixed_budget" and acquisition.get("owner_contract_sha256") != loop.digest(owner):
+            return {**blocked, "reason": "opening_owner_generation_conflict"}
         from src.trading.config.symbol_owner_policy import _canonical_hash
 
         if (
@@ -283,7 +286,7 @@ def build_snapshot(
         if (
             not owner.get("policy_id")
             or generated.tzinfo is None
-            or generated.date() != source_date
+            or generated > datetime.fromisoformat(cash["captured_at"])
         ):
             return {**blocked, "reason": "native_owner_metadata_invalid"}
         for symbol, row in owner["symbols"].items():
@@ -337,6 +340,8 @@ def build_snapshot(
             schema="machine_research_allocator_snapshot_v1",
             source_date=source_date.isoformat(),
             source_quality_status="PASS",
+            account_scope_sha256=acquisition.get("account_scope_sha256"),
+            capacity_role=acquisition.get("capacity_role", "postclose_diagnostic"),
             available_cash_krw=available,
             holding_notional_krw=holding,
             reserved_notional_krw=reserved,
@@ -352,7 +357,7 @@ def build_snapshot(
             native_inventory_sha256=inventory["native_sha256"],
             captured_at=max(cash["captured_at"], inventory["captured_at"]),
             native_acquisition_path=str(
-                (directory / f"capacity_source_{source_date}.json").resolve()
+                (source_root / f"capacity_source_{source_date}.json").resolve()
             ),
             native_acquisition_sha256=acquisition["receipt_sha256"],
             native_cash_path=str(cash_path.resolve()),
@@ -366,6 +371,11 @@ def build_snapshot(
 
 
 def write_snapshot(source_date, *, directory=loop.DIRECTORY, report_root=None):
-    snapshot = build_snapshot(source_date, directory=directory, report_root=report_root)
+    opening = directory / "opening_capacity"
+    owner = opening / "native_capacity" / str(source_date) / "owner_policy.json"
+    # Intraday economics may only consume the earlier, immutable acquisition.
+    # Postclose cash remains available separately as an operational diagnostic.
+    snapshot = build_snapshot(source_date, directory=directory, report_root=report_root,
+        source_directory_root=opening, owner_policy_path=owner)
     loop.atomic_write(directory / f"allocator_{source_date.isoformat()}.json", snapshot)
     return snapshot

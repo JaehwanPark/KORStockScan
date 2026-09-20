@@ -120,7 +120,7 @@ def reference_inputs(report, family):
     return dict(lanes=lanes, missing_reference_lanes=sorted(failures))
 
 
-def _summary(lanes, side, window, limit, fee):
+def _summary(lanes, side, window, limit, fee, dated_snapshots=None):
     dates = sorted(
         {day for value in lanes.values() for day in value[window + "_dates"]}
     )
@@ -151,6 +151,13 @@ def _summary(lanes, side, window, limit, fee):
             costs += notional
             minutes += notional * (end - start).total_seconds() / 60
     demand = joint_capital_demand(groups, capital_limit_krw=limit, buy_fee_bps=fee)
+    if dated_snapshots is not None:
+        capital = loop.dated_joint_allocation(groups, snapshots=dated_snapshots, parent_sha256=loop.digest(lanes))
+        demand["capital_feasible"] = capital["status"] == "pass"
+        demand["dated_capital_confirmation"] = capital
+        demand["feasible_combined_net_profit_krw"] = capital["feasible_combined_net_profit_krw"]
+        demand["capital_limit_krw"] = None
+        demand["status"] = "observed" if capital["status"] == "pass" else "source_gap"
     pnl = demand["independent_modeled_net_profit_krw"]
     return dict(
         demand=demand,
@@ -167,7 +174,7 @@ def _summary(lanes, side, window, limit, fee):
     )
 
 
-def paired_joint_economics(inputs, snapshot):
+def paired_joint_economics(inputs, snapshot, *, dated_snapshots=None):
     """Reconstruct fixed composition; never select a holdout subset or new rule."""
     blocked = dict(
         status="allocation_blocked",
@@ -186,6 +193,11 @@ def paired_joint_economics(inputs, snapshot):
                 lanes[key] = lane
         if not lanes:
             return {**blocked, "reason": "no_registered_joint_candidate_reference"}
+        if dated_snapshots is not None:
+            usable = [v for v in dated_snapshots.values() if isinstance(v, dict) and v.get("source_quality_status") == "PASS"]
+            if not usable:
+                return {**blocked, "reason": "dated_opening_capacity_missing"}
+            snapshot = usable[0]
         constraints = snapshot["constraints"]
         limit = min(
             snapshot["available_cash_krw"] - snapshot["reserved_notional_krw"],
@@ -196,8 +208,8 @@ def paired_joint_economics(inputs, snapshot):
         fee = constraints["buy_fee_bps"]
         windows, passed = {}, True
         for name in ("calibration", "holdout"):
-            current = _summary(lanes, "candidate", name, limit, fee)
-            baseline = _summary(lanes, "incumbent", name, limit, fee)
+            current = _summary(lanes, "candidate", name, limit, fee, dated_snapshots)
+            baseline = _summary(lanes, "incumbent", name, limit, fee, dated_snapshots)
             valid = (
                 current["demand"]["capital_feasible"]
                 and baseline["demand"]["capital_feasible"]

@@ -1108,6 +1108,8 @@ def test_selected_profit_program_reuses_native_guard_and_requires_measured_actio
     state["timing_operating_opportunities"] = {
         "midday:" + c["signal_bar"]: dict(contract=c, native_state=native)
     }
+    state["research_opening_capacity"] = dict(status="complete", source_date="2026-09-21",
+        receipt_sha256="a"*64, account_scope_sha256="b"*64)
     owner = SimpleNamespace(policy=object(), _state=state)
     monkeypatch.setattr(
         "src.trading.order.profit_stagnation_owners.guard", lambda *a, **k: True
@@ -1116,6 +1118,7 @@ def test_selected_profit_program_reuses_native_guard_and_requires_measured_actio
     for i in range(183):
         at = start + timedelta(seconds=i)
         record_operating_owner_tick(owner, at)
+        assert native["opening_capacity_receipt_sha256"] == "a"*64
         raw = _depth_row("005930", at.isoformat(), venue="SOR", session="SOR_REGULAR")
         raw.update(
             source_sequence=i + 1,

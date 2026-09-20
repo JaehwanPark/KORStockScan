@@ -1,4 +1,5 @@
 from pathlib import Path
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -215,3 +216,25 @@ def test_verbosity_source_binding_is_defined_for_plain_and_compressed(tmp_path):
                                 env={**os.environ,'PROJECT_DIR':str(tmp_path),'TARGET_DATE':'2026-09-17'}, capture_output=True,text=True)
         assert result.returncode == 0 and result.stdout == str(path)
         path.unlink()
+
+
+@pytest.mark.parametrize("name", ["run_rising_missed_intraday_feedback.sh", "run_market_opportunity_census_intraday.sh"])
+def test_source_producer_wrapper_routes_canonical_to_selected_release(tmp_path, name):
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[2]
+    workspace, release = tmp_path / "workspace", tmp_path / "release"
+    for directory in (workspace / "deploy", workspace / ".venv/bin", workspace / "data/runtime", workspace / "src/engine/infrastructure", release / "deploy"):
+        directory.mkdir(parents=True)
+    (workspace / "deploy" / name).write_text((root / "deploy" / name).read_text())
+    (workspace / ".venv/bin/python").symlink_to(sys.executable)
+    (workspace / "data/runtime/runtime_release_selection.json").write_text("{}")
+    (workspace / "src/engine/infrastructure/runtime_release_router.py").write_text(
+        "from pathlib import Path\ndef selected_release(workspace): return Path(" + repr(str(release)) + "), {}\n")
+    (release / "deploy" / name).write_text('printf "%s" "$1"\n')
+    env = {k:v for k,v in os.environ.items() if k != "PROJECT_DIR"}
+    result = subprocess.run(["bash", str(workspace / "deploy" / name), "2026-09-17"], env=env, capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "2026-09-17"

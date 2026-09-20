@@ -246,6 +246,10 @@ class KiwoomLowPriceTwoLegGateway:
             existing_holding=existing_holding,
         )
 
+    def capture_opening_research_capacity(self, day):
+        from src.engine.monitoring.research_native_capacity_source import ensure_opening_capacity
+        return ensure_opening_capacity(day, token=self._token)
+
     def _token(self) -> str:
         token = str(self.token_loader() or "").replace("Bearer ", "").strip()
         if not token:

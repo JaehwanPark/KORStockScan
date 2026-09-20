@@ -561,7 +561,7 @@ def test_positive_snapshot_and_completed_cohorts_never_replace_executable_portfo
     assert section["primary_economics"]["paired_delta_ev_pct"] is None
     assert section["selection_opportunity_economics"]["selection_opportunity_ev_pct"] > 0
     assert section["selection_opportunity_economics"]["daily_net_profit_krw"] is None
-    assert section["status"] == "experiment_ready"
+    assert section["status"] == "source_gap"
     report = {"target_date": "2026-09-17", "evaluation_phase": "postclose_final",
               "scanner_unique_funnel": {"economic_cohorts": {"lookup_attention_selection": section}}}
     policies = tmp_path / "policies"
@@ -580,11 +580,11 @@ def test_positive_snapshot_and_completed_cohorts_never_replace_executable_portfo
         report_dir=reports,
         applied_dir=tmp_path / "applied",
     )
-    assert receipt["active"]
+    assert not receipt["active"]
     loaded = policy.load_active_policy(
         "2026-09-18", applied_dir=tmp_path / "applied"
     )
-    assert loaded["active"] and loaded["experiment_mode"]
+    assert not loaded["active"]
     assert policy.bounded_bonus(0.9, loaded)["bonus_points"] == 0.0
     fabricated = {**payload, "status": "live_auto_apply_ready"}
     fabricated["artifact_sha256"] = policy.canonical_sha256({k:v for k,v in fabricated.items() if k != "artifact_sha256"})
@@ -760,7 +760,7 @@ def test_supported_small_sample_measures_same_frozen_budget_and_holds(monkeypatc
 def test_no_effect_skips_execution_and_missing_changed_arm_stays_null():
     rows, inputs = execution_frame("2026-09-17")
     broken = resource.selection_execution_book(rows, {next(iter(inputs)):next(iter(inputs.values()))})
-    assert broken["status"] == "source_gap"
+    assert broken["status"] == "unsupported_scope"
     assert broken["paired_delta_ev_pct"] is None
     for row in rows:
         row.update(candidate_priority_score=row["base_priority_score"],counterfactual_bonus_points=0.,lookup_attention_snapshot_score=0.)
@@ -922,3 +922,42 @@ def test_post_apply_requires_exact_immutable_policy_receipt_hash(monkeypatch):
     incumbent, selected, _ = resource.post_apply_inputs(date(2026,9,18),rows)
     assert incumbent["status"] == "experiment_ready"
     assert len(selected) == 20
+
+
+def test_supported_sor_scope_and_unselected_ai_are_separate_contracts():
+    from src.engine.scalping import compact_auxiliary_paired_replay as compact
+    from src.engine.scalping import entry_split_order_plan as split
+    rows, inputs = execution_frame("2026-09-17")
+    for value in inputs.values():
+        row = value["row"]
+        row["broker_route"] = "SOR"
+        replay = row["owner_replay"]
+        seed = replay["seed"]
+        context = seed["operating_contract"]
+        context["broker_route"] = "SOR"
+        context["sha256"] = compact.digest({k:v for k,v in context.items() if k != "sha256"})
+        seed["seed_sha256"] = compact.digest({k:v for k,v in seed.items() if k != "seed_sha256"})
+        for arm in replay["operating_arms"].values():
+            arm["contract_sha256"] = context["sha256"]
+            arm["sha256"] = compact.digest({k:v for k,v in arm.items() if k != "sha256"})
+        replay["replay_sha256"] = compact.digest({k:v for k,v in replay.items() if k != "replay_sha256"})
+        proof = value["model"]["validated_scopes"][0]
+        scope = split._entry_operating_scope(seed)
+        proof["scope_sha256"] = scope
+        for actual in proof["calibration_rows"] + proof["holdout_rows"]:
+            actual["scope_sha256"] = scope
+        proof["actual_rows_sha256"] = compact.digest(proof["calibration_rows"] + proof["holdout_rows"])
+        proof["sha256"] = compact.digest({k:v for k,v in proof.items() if k != "sha256"})
+    book = resource.selection_execution_book(rows, inputs)
+    assert book["status"] == "supported_operating_comparison", book["source_gaps"]
+    assert book["paired_delta_ev_pct"] == pytest.approx(.8)
+    selected = {key:value for key,value in inputs.items() if key[2] == rows[0]["stock_code"]}
+    book = resource.selection_execution_book(rows, selected)
+    assert book["status"] == "unsupported_scope"
+    assert book["excluded_partition_counts"] == {"unselected_downstream_unobserved": 1}
+    book = resource.selection_execution_book(rows, {})
+    assert book["status"] == "source_gap"
+    assert book["excluded_partition_counts"] == {"selected_source_gap": 1}
+    # SOR is not permission to change the original observation venue.
+    inputs[next(iter(inputs))]["row"]["effective_venue"] = "NXT"
+    assert resource.selection_execution_book(rows, inputs)["paired_delta_ev_pct"] is None

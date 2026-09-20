@@ -3338,6 +3338,10 @@ def record_operating_owner_tick(owner, now):
             ):
                 continue
             native = opp.setdefault("native_state", {})
+            capacity = owner._state.get("research_opening_capacity") or {}
+            if capacity.get("status") == "complete" and capacity.get("source_date") == c.get("source_date"):
+                native.setdefault("opening_capacity_receipt_sha256", capacity.get("receipt_sha256"))
+                native.setdefault("opening_capacity_account_sha256", capacity.get("account_scope_sha256"))
             rows = native.setdefault("programme_ticks", [])
             row = dict(
                 at=now.isoformat(),

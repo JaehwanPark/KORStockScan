@@ -741,3 +741,6 @@ strict verifier는 다음을 모두 요구한다.
 - 구현 종료는 위 조건부 지원 범위의 생성→저장→계산→독립 검증→정책 인계에 적용한다. 미확정 계좌 운영 의미/미지원 모델 확장을 전체 완료 또는 자연 대기로 표시하지 않는다. 이번 리뷰·검증·배포 증거는 기존 메인 운영 경제성 closure 리뷰에 기록한다.
 
 최종 evidence: 코드 `5d60b4afe`, run `f7e6be607be944b8a45fa8f5775494a8`, source9/17→publication9/20→effective9/21. main succeeded/controller done/strict pass. `tmp/main-machine-capital-partial-20260920/final-reconciliation.json`에 정책·서비스·자연 결과를 대사했다. 신규 승격0·운영 EV null이며 자연 경제적 개선은 입증되지 않았다.
+
+
+런타임 생산자 역추적에서 새로 확인한 자본 시점·설치 source binding·scanner 생성 불가능 입력·SOR 소비 제한은 [통합 계획 §12 PR0–PR5](./postclose-integrated-verification-recovery-and-next-preopen-readiness-plan-2026-09-20.md#12-런타임-생산자-역추적-결함의-최소-보완계획)가 소유한다. 기존 ME8–ME13을 재작성하지 않으며, 이 링크는 후속 구현/배포 완료를 뜻하지 않는다.

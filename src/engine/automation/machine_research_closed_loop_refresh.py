@@ -77,6 +77,7 @@ def report_path(report_root, day):
 
 
 def _read_report_dependency(path):
+    path.stat()  # Preserve missing dependency semantics of the stable reader.
     if path.parent.name in {
         "widget_symbol_signal_policy_research",
         "low_price_two_leg_expanded_candidate_research",
@@ -403,6 +404,7 @@ def _refresh(
             Path(directory) / name
             for name in (
                 f"allocator_{day}.json",
+                f"opening_capacity/capacity_source_{day}.json",
                 f"capacity_source_{day}.json",
                 f"native_capacity/{day}/native_cash.json",
                 f"native_capacity/{day}/native_inventory.json",
