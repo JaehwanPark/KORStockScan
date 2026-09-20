@@ -260,6 +260,24 @@ def _owner_requirements(target_date: str) -> tuple[dict[str, bool], dict[str, An
     }
 
 
+def _expansion_economic_projection(path: Path) -> dict[str, Any]:
+    from src.engine.monitoring.low_price_two_leg_expanded_candidate_research import read_report
+    report = read_report(path)
+    payload = {key: report.get(key) for key in (
+        "schema", "report_type", "target_date", "status", "decision", "runtime_effect",
+        "allowed_runtime_apply", "actual_order_submitted", "source_symbol_count",
+        "eligible_source_symbol_count", "quarantined_source_symbol_count")}
+    gate = report.get("joint_allocation_gate") or {}
+    payload["economic_evaluation"] = {
+        "status": "source_gap" if report.get("status") == "partial_source_quality" or gate.get("status") == "allocation_blocked" else "insufficient_sample",
+        "blocker": gate.get("reason") or ("retained_source_quarantine" if report.get("source_quarantine") else "independent_economic_selection_pending"),
+        "candidate_count": report.get("recommendation_count", 0),
+        "allowed_runtime_apply": False,
+        "closure_test": "retained_source_isolation_frozen_allocator_independent_holdout_and_dated_consumer",
+    }
+    return payload
+
+
 def _large_companion(
     owner: str,
     path: Path,
@@ -315,12 +333,12 @@ def _large_companion(
             native, native_error, native_mode, _ = _read(native_path)
             if (native_error is None and (native.get("dependency_sources") or {}).get(str(path.resolve()))
                 and validate_current_receipt(native, target_date)):
-                return native, {
+                return _expansion_economic_projection(path), {
                     "path": str(native_path), "sha256": _sha(native_path),
                     "read_mode": native_mode, "contract": "machine_research_closed_loop_current_dependency",
                     "source_artifact_sha256": artifact_sha256, "verified": True,
                 }, None
-        return payload, {
+        return (_expansion_economic_projection(path) if verified else payload), {
             "path": str(companion_path),
             "sha256": _sha(companion_path),
             "read_mode": read_mode,
@@ -363,13 +381,23 @@ def _economic_section(owner: str, payload: dict[str, Any]) -> dict[str, Any]:
         projection = _dict_value(payload, "machine_full_evaluation")
         # Report execution flags do not prove prospective owner-model support.
         future_contract_verified = False
+        operating_complete = projection.get("downstream_operating_evidence_complete") is True
         return {
             "status": ("source_gap" if projection.get("daily_net_profit_status") == "not_available_without_exact_changed_decision_owner_replay" else projection.get("state")),
             "candidate_count": projection.get("independent_candidate_count"),
-            "paired_sample_count": projection.get("paired_comparable_count"),
-            "incumbent_ev_pct": projection.get("holdout_incumbent_ev_pct"),
-            "candidate_ev_pct": projection.get("holdout_cost_adjusted_ev_pct"),
-            "delta_ev_pct": projection.get("holdout_paired_delta_ev_pct"),
+            "paired_sample_count": projection.get("paired_comparable_count") if operating_complete else None,
+            "diagnostic_terminal_proxy": {
+                "population_count": projection.get("full_population_count"),
+                "comparable_count": projection.get("paired_comparable_count"),
+                "accepted_lane_counts": projection.get("accepted_lane_counts"),
+                "incumbent_ev_pct": projection.get("holdout_incumbent_ev_pct"),
+                "candidate_ev_pct": projection.get("holdout_cost_adjusted_ev_pct"),
+                "delta_ev_pct": projection.get("holdout_paired_delta_ev_pct"),
+                "economic_basis": projection.get("economic_basis"),
+            },
+            "incumbent_ev_pct": projection.get("holdout_incumbent_ev_pct") if operating_complete else None,
+            "candidate_ev_pct": projection.get("holdout_cost_adjusted_ev_pct") if operating_complete else None,
+            "delta_ev_pct": projection.get("holdout_paired_delta_ev_pct") if operating_complete else None,
             "net_profit_uplift_krw_per_observation_day": projection.get(
                 "daily_net_profit_delta_krw"
             ),
@@ -477,7 +505,7 @@ def _status_texts(owner: str, payload: dict[str, Any]) -> list[str]:
 
 
 def _comparison_status(owner: str, payload: dict[str, Any]) -> str:
-    if owner in {"source_quality", "low_price_expansion"}:
+    if owner == "source_quality":
         return "not_applicable"
     texts = _status_texts(owner, payload)
     joined = " ".join(texts)
@@ -603,7 +631,7 @@ def _economic_projection(owner: str, payload: dict[str, Any]) -> dict[str, Any]:
     elif status == "measured_no_edge":
         resolution_mode = "measured_no_edge"
     elif status in {"pending_maturity", "insufficient_sample"}:
-        resolution_mode = "natural_maturity"
+        resolution_mode = "natural_maturity" if future_contract_verified else "producer_contract_review"
     elif status in {"source_gap", "unsupported_scope", "mixed"}:
         resolution_mode = (
             "historical_unrecoverable"
@@ -627,6 +655,9 @@ def _economic_projection(owner: str, payload: dict[str, Any]) -> dict[str, Any]:
         handoff = "not_applicable"
     return {
         "comparison_status": status,
+        "diagnostic_terminal_proxy": economic.get("diagnostic_terminal_proxy"),
+        "future_contract_state": "verified_supported_scope" if future_contract_verified else "unverified_requires_owner_evidence",
+        "implementation_incomplete_inferred_from_historical_gap": False,
         "raw_statuses": _status_texts(owner, payload),
         "metric_role": _first_nonempty(economic.get("metric_role"), payload.get("metric_role")),
         "incumbent_cost_adjusted_ev_pct": _first_nonempty(economic.get("incumbent_ev_pct"), economic.get("primary_operating_ev_pct")),
@@ -666,6 +697,7 @@ def _economic_projection(owner: str, payload: dict[str, Any]) -> dict[str, Any]:
             "entry_split": "submitted_order_frozen_plan_model_holdout_paired_candidate_and_loader",
             "scale_in_split": "eligible_add_fill_terminal_clock_cost_and_independent_paired_holdout",
             "low_price_two_leg": "profile_leg_durable_denominator_custody_cost_and_dated_consumer",
+            "low_price_expansion": "retained_source_isolation_frozen_allocator_independent_holdout_and_dated_consumer",
         }.get(owner),
         "model_delta_ev_is_actual_profit": False,
     }

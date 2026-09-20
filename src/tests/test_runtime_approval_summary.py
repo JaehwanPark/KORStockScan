@@ -628,3 +628,29 @@ def test_large_expansion_uses_current_late_machine_dependency_proof(monkeypatch,
     receipt.update(native_valid=True, dependency_sources={str(tmp_path / "other.json"): "unrelated"})
     _write(receipt_path, receipt)
     assert mod._large_companion("low_price_expansion", path, day, mod._sha(path), {})[2] == "semantic_unverified_large_source"
+
+
+def test_main_proxy_population_and_ev_are_not_operating_economics():
+    payload = {"machine_full_evaluation": dict(state="source_gap", full_population_count=1715,
+        paired_comparable_count=1710, holdout_incumbent_ev_pct=-0.005,
+        holdout_cost_adjusted_ev_pct=-0.005, holdout_paired_delta_ev_pct=0.0,
+        downstream_operating_evidence_complete=False, structural_blocker="machine_operating_population_unbound")}
+    row = mod._economic_projection("main_mechanistic_entry", payload)
+    assert row["paired_sample_count"] is None
+    assert row["incumbent_cost_adjusted_ev_pct"] is None
+    assert row["paired_delta_ev_pct"] is None
+    assert row["diagnostic_terminal_proxy"]["comparable_count"] == 1710
+    assert row["diagnostic_terminal_proxy"]["delta_ev_pct"] == 0
+    assert row["future_contract_state"] == "unverified_requires_owner_evidence"
+
+
+def test_active_expansion_source_gap_is_not_retired_or_not_applicable(tmp_path):
+    path = tmp_path / "study.json"
+    _write(path, dict(target_date="2026-09-17", status="partial_source_quality",
+        source_symbol_count=204, eligible_source_symbol_count=197,
+        quarantined_source_symbol_count=7, recommendation_count=0,
+        joint_allocation_gate=dict(status="allocation_blocked", reason="allocator_snapshot_contract_invalid")))
+    row = mod._economic_projection("low_price_expansion", mod._expansion_economic_projection(path))
+    assert row["comparison_status"] == "source_gap"
+    assert row["closure_test"] and row["first_blocker"] == "allocator_snapshot_contract_invalid"
+    assert row["resolution_mode"] != "retired_or_not_applicable"

@@ -367,7 +367,7 @@ def test_postclose_recovery_retains_real_asof_and_disables_all_mutations(monkeyp
     import src.engine.error_detector as mod
 
     yesterday = (
-        datetime.now(ZoneInfo("Asia/Seoul")).date() - timedelta(days=1)
+        datetime.now(ZoneInfo("Asia/Seoul")).date() - timedelta(days=3)
     ).isoformat()
 
     class TestReadOnly(BaseDetector):
@@ -411,12 +411,12 @@ def test_postclose_recovery_retains_real_asof_and_disables_all_mutations(monkeyp
     )
 
 
-def test_postclose_recovery_rejects_future_and_stale_dates():
+def test_postclose_recovery_rejects_future_and_prebaseline_dates():
     from datetime import datetime, timedelta
     from zoneinfo import ZoneInfo
 
     today = datetime.now(ZoneInfo("Asia/Seoul")).date()
-    for delta in (-2, 1):
+    for delta in ((datetime(2026, 6, 4).date() - today).days, 1):
         with pytest.raises(ValueError):
             ErrorDetectionEngine(
                 postclose_source_date=(today + timedelta(days=delta)).isoformat()

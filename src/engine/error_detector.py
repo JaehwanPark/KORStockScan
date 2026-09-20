@@ -79,10 +79,10 @@ class ErrorDetectionEngine:
             if (
                 source_day.isoformat() != postclose_source_date
                 or mode != "full"
-                or not 0 <= (datetime.now(KST).date() - source_day).days <= 1
+                or not datetime(2026, 6, 5).date() <= source_day <= datetime.now(KST).date()
             ):
                 raise ValueError(
-                    "Postclose recovery requires full mode and today or yesterday"
+                    "Postclose recovery requires full mode and a completed clean-baseline source date"
                 )
         self.detectors: list[BaseDetector] = []
         self.expected_detector_ids: list[str] = []
@@ -306,7 +306,7 @@ def validate_report_contract(
                 source_day = datetime.strptime(expected_target_date, "%Y-%m-%d").date()
                 as_of_day = timestamp_dt.astimezone(KST).date()
                 if (
-                    not 0 <= (as_of_day - source_day).days <= 1
+                    not datetime(2026, 6, 5).date() <= source_day <= as_of_day
                     or report.get("as_of_date") != as_of_day.isoformat()
                     or report.get("read_only_checks") is not True
                     or expected_mode != "full"

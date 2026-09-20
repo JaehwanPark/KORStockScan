@@ -91,3 +91,9 @@ collector expansion/mechanical replay의 상대 data 경로가 immutable release
 ## Late machine 결과와 최종 summary 재결속
 
 machine은 모든 전행을 통과한 뒤 low-price actual 83 MiB dependency를 32 MiB로 제한한 마지막 receipt 생성에서 실패했다. 기존 보고서 128 MiB 계약을 해당 owner에만 적용하고 미관련 파일 한도는 유지했다. 대용량/native completion42개 회귀 통과. 중간 발행 뒤 실패한 machine 재개는 원 widget receipt/실패 run을 보존하며 현재 native closed-loop 재검증을 선행해야 한다. main의 최종 scoped verifier도 오래된 low-price reuse SHA를 성공으로 재사용하지 않고 실패했다. summary는 변경된 study를 검증된 late native dependency proof에 결속하도록 보완한다. 실패 wrapper를 PASS로 바꾸거나 전체 main evaluator를 다시 돌리지 않는다.
+
+## 최종 의미 검증 및 historical detector
+
+main proxy 모집단1715/대리 비교1710을 비용 차감 운영 paired 표본/EV로 투영하지 않도록 분리한다. 실제 비용 운영 비교가 입증되지 않은 EV/ΔEV/paired 수는 null이며 기존 대리값은 diagnostic_terminal_proxy에 보존한다. active 확장 연구의 partial source/allocator 차단을 퇴역 또는 not_applicable로 표시하지 않는다. 미래 계약 증거 없이 표본 부족을 자동 natural maturity로 판정하지 않고 contract review로 표시하며 과거 결손으로 구현 미완료를 추론하지 않는다. cancel/split의 지원 입력 producer/consumer·양수/holdout/fallback 회귀는 앞선498개 영향 회귀에 포함됐으며 역사 원천 census 결손과 별개다. 미래 운영 모델 자연 실증은 아직 입증되지 않았다.
+
+최종 detector가 오늘/어제만 허용하여 명시적9/17 복구를 거부했다. full mode·clean baseline 이후·현재 as-of 이하 source date를 producer/receipt validator 양쪽에 적용한다. 회귀에서3일 전 source에 실제 현재 as-of 유지·모든 운영 mutation 비활성화를 확인했고 미래/기준선 이전/non-full은 거부한다. detector/summary/builder101개 회귀 통과.
