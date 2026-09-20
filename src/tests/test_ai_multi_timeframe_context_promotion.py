@@ -534,6 +534,62 @@ def test_authoritative_runtime_env_rejects_tampered_commit_file(tmp_path, monkey
         promotion.authoritative_runtime_env("2026-07-27")
 
 
+def test_authoritative_runtime_env_disables_context_when_both_legacy_commit_files_retired(
+    tmp_path, monkeypatch
+):
+    runtime_dir = tmp_path / "runtime_env"
+    runtime_dir.mkdir()
+    promotion_dir = tmp_path / "runtime"
+    monkeypatch.setattr(promotion, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(promotion, "PROMOTION_DIR", promotion_dir)
+    manifest = _runtime_manifest(runtime_dir)
+    report = promotion.evaluate_promotion(
+        target_date="2026-07-27",
+        validation=_validation(),
+        golden_validation=_golden_validation(),
+        review=_review(),
+        runtime_manifest=manifest,
+        runtime_verify={"status": "pass", "passed": True},
+        now=TEST_NOW,
+    )
+    promotion.apply_promotion_transaction(report, manifest, now=TEST_NOW)
+    promotion.runtime_manifest_path("2026-07-27").unlink()
+    promotion.runtime_env_path("2026-07-27").unlink()
+
+    authoritative = promotion.authoritative_runtime_env("2026-09-21")
+
+    assert authoritative["KORSTOCKSCAN_MULTI_TIMEFRAME_AI_CONTEXT_ENABLED"] == "false"
+    assert authoritative["KORSTOCKSCAN_ENTRY_CANDLE_CONTEXT_ENABLED"] == "false"
+    assert authoritative["KORSTOCKSCAN_HOLDING_DECISION_CONTEXT_ENABLED"] == "false"
+    assert authoritative["KORSTOCKSCAN_AI_INPUT_PREFLIGHT_MODE"] == "baseline_v1"
+    assert authoritative["KORSTOCKSCAN_AI_INPUT_PREFLIGHT_ARTIFACT_DATE"] == "2026-09-21"
+
+
+def test_authoritative_runtime_env_still_rejects_partial_legacy_commit_loss(
+    tmp_path, monkeypatch
+):
+    runtime_dir = tmp_path / "runtime_env"
+    runtime_dir.mkdir()
+    promotion_dir = tmp_path / "runtime"
+    monkeypatch.setattr(promotion, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(promotion, "PROMOTION_DIR", promotion_dir)
+    manifest = _runtime_manifest(runtime_dir)
+    report = promotion.evaluate_promotion(
+        target_date="2026-07-27",
+        validation=_validation(),
+        golden_validation=_golden_validation(),
+        review=_review(),
+        runtime_manifest=manifest,
+        runtime_verify={"status": "pass", "passed": True},
+        now=TEST_NOW,
+    )
+    promotion.apply_promotion_transaction(report, manifest, now=TEST_NOW)
+    promotion.runtime_env_path("2026-07-27").unlink()
+
+    with pytest.raises(ValueError, match="runtime commit files are missing"):
+        promotion.authoritative_runtime_env("2026-09-21")
+
+
 def test_authoritative_runtime_env_rejects_tampered_authority_on_rollover(
     tmp_path, monkeypatch
 ):

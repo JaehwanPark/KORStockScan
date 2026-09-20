@@ -280,6 +280,18 @@ def authoritative_runtime_env(
     manifest_file = manifest_file or runtime_manifest_path(source_date)
     env_file = env_file or runtime_env_path(source_date)
     if not manifest_file.exists() or not env_file.exists():
+        # Legacy promotion commit files predate the bootstrap cutover and may
+        # have been retired together.  The signed marker still prevents a
+        # silent fallback, but the safe response is to disable only the
+        # context feature it owns instead of blocking the entire trading bot.
+        # Partial loss remains suspicious and every post-cutover gap still
+        # fails hard.
+        if (
+            source_date < RUNTIME_BOOTSTRAP_CUTOVER_DATE
+            and not manifest_file.exists()
+            and not env_file.exists()
+        ):
+            return context_only_rollback_env(target_date)
         raise ValueError("promotion runtime commit files are missing")
     if artifact.get("runtime_manifest_path") not in (
         None,

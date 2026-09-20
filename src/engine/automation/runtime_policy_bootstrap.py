@@ -37,6 +37,9 @@ RISING_MISSED_ENV_BY_AXIS = {
     "spread_caution_ratio": "KORSTOCKSCAN_RISING_MISSED_TP1_SPREAD_CAUTION_RATIO",
     "chase_delta_pct": "KORSTOCKSCAN_RISING_MISSED_TP1_CHASE_DELTA_PCT",
 }
+EXACT_DATE_HANDOFF_ENV = {
+    "KORSTOCKSCAN_THRESHOLD_RUNTIME_AUTO_APPLY_ENABLED": "true",
+}
 
 
 def env_path(target_date: str) -> Path:
@@ -580,6 +583,12 @@ def build_manifest(
         for key, value in (incumbent.get("env_overrides") or {}).items()
     }
     values = without_retired_env(incumbent_values)
+    # These are bootstrap-consumption coordinates, not tuning values.  Refresh
+    # them for the manifest's exact date instead of inheriting a stale source
+    # date.  The operator layer is applied afterwards and therefore retains
+    # explicit veto authority over the handoff.
+    values.update(EXACT_DATE_HANDOFF_ENV)
+    values["KORSTOCKSCAN_THRESHOLD_RUNTIME_APPLY_DATE"] = target_date
     operator_values, operator_sources = _operator_overrides(target_date)
     values.update(operator_values)
     direct_receipts, rejected_receipts = _load_direct_receipts(
@@ -589,6 +598,12 @@ def build_manifest(
     applied_locks: list[dict[str, Any]] = []
     rejected_locks: list[dict[str, Any]] = list(invalid_locks)
     env_owners = {key: "approved_incumbent" for key in values}
+    for key in (
+        *EXACT_DATE_HANDOFF_ENV,
+        "KORSTOCKSCAN_THRESHOLD_RUNTIME_APPLY_DATE",
+    ):
+        if key not in operator_values:
+            env_owners[key] = "runtime_policy_bootstrap_exact_date_handoff"
     env_owners.update({key: "operator_runtime_override" for key in operator_values})
     for receipt in direct_receipts:
         for key, value in receipt.get("runtime_env_overrides", {}).items():
@@ -717,6 +732,16 @@ def _read_proc_env(pid: int) -> dict[str, str]:
     }
 
 
+def _launcher_ai_context_overlay(target_date: str) -> dict[str, str]:
+    """Resolve the same final context layer sourced by ``src/run_bot.sh``."""
+
+    from src.engine.automation.ai_multi_timeframe_context_promotion import (
+        authoritative_runtime_env,
+    )
+
+    return authoritative_runtime_env(target_date)
+
+
 def verify_bootstrap(target_date: str, *, pid: int | None = None, write: bool = True) -> dict[str, Any]:
     findings: list[str] = []
     pid_mismatches: list[str] = []
@@ -749,6 +774,25 @@ def verify_bootstrap(target_date: str, *, pid: int | None = None, write: bool = 
         "economic_candidate_created": False,
     }:
         findings.append("authority_assertion_mismatch")
+    manifest_env = manifest.get("env_overrides")
+    if not isinstance(manifest_env, dict):
+        findings.append("manifest_env_overrides_invalid")
+        manifest_env = {}
+    if (
+        str(
+            manifest_env.get(
+                "KORSTOCKSCAN_THRESHOLD_RUNTIME_AUTO_APPLY_ENABLED"
+            )
+            or ""
+        ).lower()
+        != "true"
+    ):
+        findings.append("exact_date_runtime_auto_apply_disabled")
+    if (
+        str(manifest_env.get("KORSTOCKSCAN_THRESHOLD_RUNTIME_APPLY_DATE") or "")
+        != target_date
+    ):
+        findings.append("exact_date_runtime_apply_date_mismatch")
     receipt_rows = [manifest.get("source_incumbent")]
     receipt_rows.extend(manifest.get("operator_override_sources") or [])
     receipt_rows.extend(
@@ -775,6 +819,12 @@ def verify_bootstrap(target_date: str, *, pid: int | None = None, write: bool = 
             findings.append(f"source_receipt_hash_mismatch:{source_path}")
     if pid is not None and raw_env:
         expected = operator_policy_succession.read_operator_env(runtime_file)
+        try:
+            expected.update(_launcher_ai_context_overlay(target_date))
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            findings.append(
+                f"launcher_ai_context_overlay_invalid:{type(exc).__name__}:{exc}"
+            )
         try:
             actual = _read_proc_env(pid)
         except OSError as exc:

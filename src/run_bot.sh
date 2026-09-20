@@ -116,7 +116,7 @@ apply_authoritative_ai_context_promotion() {
         return 0
     fi
     eval "$promotion_exports"
-    echo "📌 committed AI context promotion env 최종 적용: target_date=$target_date"
+    echo "📌 AI context authority overlay 최종 적용: target_date=$target_date (promotion or fail-closed context rollback)"
 }
 
 export_runtime_source_provenance() {

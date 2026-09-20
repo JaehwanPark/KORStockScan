@@ -97,6 +97,20 @@ def test_bootstrap_carries_incumbent_applies_lock_and_scrubs_retired(monkeypatch
         "economic_candidate_created": False,
     }
     assert manifest["env_overrides"]["KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MIN_SCORE"] == "69"
+    assert (
+        manifest["env_overrides"][
+            "KORSTOCKSCAN_THRESHOLD_RUNTIME_AUTO_APPLY_ENABLED"
+        ]
+        == "true"
+    )
+    assert (
+        manifest["env_overrides"]["KORSTOCKSCAN_THRESHOLD_RUNTIME_APPLY_DATE"]
+        == "2026-09-19"
+    )
+    assert (
+        manifest["env_key_owners"]["KORSTOCKSCAN_THRESHOLD_RUNTIME_APPLY_DATE"]
+        == "runtime_policy_bootstrap_exact_date_handoff"
+    )
     assert manifest["env_overrides"]["KORSTOCKSCAN_LIMIT_DOWN_WATCH_ENABLED"] == "false"
     assert "limit_down_watch" not in manifest["selected_families"]
     assert "KORSTOCKSCAN_EXPIRED_SHOULD_NOT_LOAD" not in manifest["env_overrides"]
@@ -122,6 +136,84 @@ def test_bootstrap_carries_incumbent_applies_lock_and_scrubs_retired(monkeypatch
     )
     bootstrap.env_path("2026-09-19").write_text("tampered\n", encoding="utf-8")
     assert bootstrap.verify_bootstrap("2026-09-19")["status"] == "fail"
+
+
+def test_bootstrap_preserves_explicit_operator_handoff_veto(monkeypatch, tmp_path):
+    boot_dir = tmp_path / "runtime" / "policy_bootstrap"
+    legacy_dir = tmp_path / "threshold_cycle" / "runtime_env"
+    monkeypatch.setattr(bootstrap, "BOOTSTRAP_DIR", boot_dir)
+    monkeypatch.setattr(bootstrap, "LEGACY_RUNTIME_DIR", legacy_dir)
+    monkeypatch.setattr(bootstrap, "OPERATOR_LOCK_DIR", tmp_path / "locks")
+    _write(
+        legacy_dir / "threshold_runtime_env_2026-09-18.json",
+        {"target_date": "2026-09-18", "env_overrides": {"BASE": "1"}},
+    )
+    _write(
+        legacy_dir / "threshold_runtime_env_verify_2026-09-18.json",
+        {"status": "pass"},
+    )
+    (legacy_dir / "operator_runtime_overrides.env").write_text(
+        "export KORSTOCKSCAN_THRESHOLD_RUNTIME_AUTO_APPLY_ENABLED=false\n",
+        encoding="utf-8",
+    )
+
+    manifest = bootstrap.write_bootstrap("2026-09-19")
+
+    assert (
+        manifest["env_overrides"][
+            "KORSTOCKSCAN_THRESHOLD_RUNTIME_AUTO_APPLY_ENABLED"
+        ]
+        == "false"
+    )
+    assert (
+        manifest["env_key_owners"][
+            "KORSTOCKSCAN_THRESHOLD_RUNTIME_AUTO_APPLY_ENABLED"
+        ]
+        == "operator_runtime_override"
+    )
+    verification = bootstrap.verify_bootstrap("2026-09-19", write=False)
+    assert verification["status"] == "fail"
+    assert "exact_date_runtime_auto_apply_disabled" in verification["findings"]
+
+
+def test_pid_verification_compares_launcher_context_overlay(monkeypatch, tmp_path):
+    boot_dir = tmp_path / "runtime" / "policy_bootstrap"
+    legacy_dir = tmp_path / "threshold_cycle" / "runtime_env"
+    monkeypatch.setattr(bootstrap, "BOOTSTRAP_DIR", boot_dir)
+    monkeypatch.setattr(bootstrap, "LEGACY_RUNTIME_DIR", legacy_dir)
+    monkeypatch.setattr(bootstrap, "OPERATOR_LOCK_DIR", tmp_path / "locks")
+    _write(
+        legacy_dir / "threshold_runtime_env_2026-09-18.json",
+        {
+            "target_date": "2026-09-18",
+            "env_overrides": {
+                "KORSTOCKSCAN_MULTI_TIMEFRAME_AI_CONTEXT_ENABLED": "true"
+            },
+        },
+    )
+    _write(
+        legacy_dir / "threshold_runtime_env_verify_2026-09-18.json",
+        {"status": "pass"},
+    )
+    bootstrap.write_bootstrap("2026-09-19")
+    expected = bootstrap.operator_policy_succession.read_operator_env(
+        bootstrap.env_path("2026-09-19")
+    )
+    expected["KORSTOCKSCAN_MULTI_TIMEFRAME_AI_CONTEXT_ENABLED"] = "false"
+    monkeypatch.setattr(
+        bootstrap,
+        "_launcher_ai_context_overlay",
+        lambda target_date: {
+            "KORSTOCKSCAN_MULTI_TIMEFRAME_AI_CONTEXT_ENABLED": "false"
+        },
+    )
+    monkeypatch.setattr(bootstrap, "_read_proc_env", lambda pid: expected)
+
+    verification = bootstrap.verify_bootstrap("2026-09-19", pid=123, write=False)
+
+    assert verification["status"] == "pass"
+    assert verification["pid_passed"] is True
+    assert verification["pid_mismatches"] == []
 
 
 def test_bootstrap_rerun_does_not_create_self_referential_incumbent(
