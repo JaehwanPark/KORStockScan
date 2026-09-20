@@ -178,3 +178,24 @@ def test_main_retry_adoption_preserves_origin_and_rejects_changed_bytes(tmp_path
     path.write_text(json.dumps(origin));source.write_text('{"value":2}')
     result=subprocess.run(args,input=body,text=True,capture_output=True,env=env)
     assert result.returncode!=0 and json.loads(path.read_text())==origin
+
+
+def test_explicit_conditional_exit_seals_failure_once(tmp_path):
+    import subprocess
+    script = _text('deploy/run_threshold_cycle_postclose.sh')
+    function = script.split('finish_postclose_wrapper() {', 1)[1].split("\ntrap ", 1)[0]
+    for exit_code, recorded, expected in [(1, 'false', 'failed:1\ncleanup\n'),
+                                           (1, 'true', 'cleanup\n'),
+                                           (0, 'false', 'cleanup\n')]:
+        body = f'''POSTCLOSE_OPERATING=true
+POSTCLOSE_FAILURE_RECORDED={recorded}
+mark_postclose_failed() {{ echo "failed:$2"; }}
+restart_postclose_bot_if_requested() {{ :; }}
+cleanup_threshold_cycle_snapshot_temp() {{ echo cleanup; }}
+finish_postclose_wrapper() {{{function}
+trap 'finish_postclose_wrapper "$?"' EXIT
+if true; then exit {exit_code}; fi
+'''
+        result = subprocess.run(['bash', '-c', body], capture_output=True, text=True)
+        assert result.returncode == exit_code
+        assert result.stdout == expected

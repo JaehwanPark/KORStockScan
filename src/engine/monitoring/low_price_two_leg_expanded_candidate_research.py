@@ -1686,6 +1686,7 @@ def build_report(
             digest = selection_source_digests[profile.symbol]
             checkpoint_contract = {
                 "input_fingerprint": research_input_fingerprint(
+                    selection_only=True,
                     sources={
                         profile.symbol: (
                             sources[profile.symbol][0],
@@ -3182,6 +3183,7 @@ def research_input_fingerprint(
     research_profiles: dict[str, ResearchProfile],
     dynamic_universe_source_date: date | None,
     applied_policy_snapshots: dict[str, dict[str, Any]],
+    selection_only: bool = False,
 ) -> str:
     from src.engine.monitoring import research_closed_loop as loop
 
@@ -3217,7 +3219,7 @@ def research_input_fingerprint(
         except FileNotFoundError:
             generations[str(path)] = None
     payload = {
-        "closed_loop_dependencies": generations,
+        "closed_loop_dependencies": {} if selection_only else generations,
         "schema": "low_price_two_leg_expanded_research_input_v1",
         "producer_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "admission_helper_sha256": hashlib.sha256(

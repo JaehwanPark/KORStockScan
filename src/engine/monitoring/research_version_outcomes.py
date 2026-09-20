@@ -307,7 +307,7 @@ def episode_feedback(source_date, *, report_root=None):
         / f"low_price_two_leg_tuning_{source_date}.json"
     )
     try:
-        value = loop.read_object(path, limit=32 * 1024 * 1024)
+        value = loop.read_object(path, limit=128 * 1024 * 1024)
     except FileNotFoundError:
         return dict(
             status="waiting",

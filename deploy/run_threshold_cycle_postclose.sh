@@ -565,7 +565,9 @@ restart_postclose_bot_if_requested() {
   clear_postclose_bot_isolation_marker
 }
 
+POSTCLOSE_FAILURE_RECORDED=false
 mark_postclose_failed() {
+  POSTCLOSE_FAILURE_RECORDED=true
   local reason="${1:-command_failed}"
   local rc="${2:-1}"
   local failed_at
@@ -597,7 +599,18 @@ cleanup_threshold_cycle_snapshot_temp() {
 }
 
 trap 'rc=$?; mark_postclose_failed "${POSTCLOSE_FAILURE_REASON:-command_failed}" "$rc"; restart_postclose_bot_if_requested; exit "$rc"' ERR
-trap 'cleanup_threshold_cycle_snapshot_temp' EXIT
+finish_postclose_wrapper() {
+  local rc="$1"
+  # Explicit exit inside conditional commands bypasses ERR. Seal that failure
+  # before releasing the lock; never let it retain a previous running/PASS.
+  if [ "$rc" -ne 0 ] && [ "$POSTCLOSE_OPERATING" = "true" ] \
+    && [ "$POSTCLOSE_FAILURE_RECORDED" != "true" ]; then
+    mark_postclose_failed "${POSTCLOSE_FAILURE_REASON:-explicit_exit}" "$rc"
+    restart_postclose_bot_if_requested
+  fi
+  cleanup_threshold_cycle_snapshot_temp
+}
+trap 'finish_postclose_wrapper "$?"' EXIT
 POSTCLOSE_OPERATING=true
 
 run_postclose_cmd() {

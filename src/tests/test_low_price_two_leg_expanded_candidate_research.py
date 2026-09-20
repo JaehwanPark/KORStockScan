@@ -2166,3 +2166,21 @@ def test_cached_existing_logic_review_never_uses_market_or_token_calls(tmp_path,
     assert review['new_api_calls'] == 0
     assert review['allowed_runtime_apply'] is False
     assert json.loads(source.read_text()) == previous
+
+
+def test_selection_cache_ignores_feedback_but_preserves_cost_and_source(monkeypatch, tmp_path):
+    from src.engine.monitoring import research_closed_loop as loop
+    monkeypatch.setattr(loop, 'DIRECTORY', tmp_path)
+    profile_id, profile = next(iter(expanded.RESEARCH_PROFILES.items()))
+    bar = Bar(datetime(2026, 9, 14, 9, 10, tzinfo=ZoneInfo('Asia/Seoul')), 1000, 1010, 990, 1005)
+    kwargs = dict(sources={profile.symbol: ([bar], dict(source_quality_status='PASS'))},
+                  target_date=date(2026, 9, 14), candidate_symbols={profile.symbol: profile.name},
+                  research_profiles={profile_id: profile}, dynamic_universe_source_date=None,
+                  applied_policy_snapshots={})
+    selection = expanded.research_input_fingerprint(**kwargs, selection_only=True)
+    assembly = expanded.research_input_fingerprint(**kwargs)
+    (tmp_path / 'widget_outcomes_2026-09-14.json').write_text('{}')
+    assert expanded.research_input_fingerprint(**kwargs, selection_only=True) == selection
+    assert expanded.research_input_fingerprint(**kwargs) != assembly
+    monkeypatch.setattr(expanded, 'COST_PCT', expanded.COST_PCT + .001)
+    assert expanded.research_input_fingerprint(**kwargs, selection_only=True) != selection

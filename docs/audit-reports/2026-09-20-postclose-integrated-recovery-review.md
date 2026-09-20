@@ -46,3 +46,10 @@ widget/machine 독립 wrapper의 exact-date terminal/source hash를 최종 summa
 삭제된 과거 release를 참조하는 고정 청산 정책 경로를 확인했다. 승인된 SHA `aa2d4794… / 1536dfab… / d455951e…`와 동일한 tracked JSON을 검증하고 경로만 수정했다. 관련 서비스 정의9개·인스턴스129개가 비활성 상태이며 나머지 env/수량/guard는 변하지 않았다. 저가주 live/preflight 템플릿2개도 삭제된 source root를 참조했다. 이전 검토 commit5dcf237ad와 해당 runtime/apply/wrapper 코드가 동일함을 검증해 경로를 복구했고122개 인스턴스의 주문 인자 보존을 대사했다. 최종134개 기동 source/policy 경로 검사에서 missing0이다. 증거 `fixed-policy-path-repair-installed.json`, `low-price-template-source-restored.json`, `all-startup-source-path-audit-after.json`은 기존 실행 증거 폴더에 있다. 서비스 시작/주문은0이다.
 
 확장 연구의 `partial_source_quality`는 producer에서 격리된 분모를 보존하는 정상 완료 형식이지만 publisher가 전부 거부했다. 원천 모집단·격리·비용 계약 검증을 통과하고 신규 추천0인 경우에만 기존 정책/disabled 인계를 허용하며 source gap 표기를 보존한다. 부분 원천으로 새 후보를 승격하지 않는다. 재시도는 원 성공 native metric·산출물/코드 hash·입력 generation을 보존한 prefix 인계로 완료된 확장 연구를 다시 계산하지 않을 수 있다. 이전 재사용 원장은 hash로 연결하며 새 run/commit으로 원 metric을 위조하지 않는다. 관련 회귀21개 통과.
+
+## 후행 성과 연결 실패 및 체크포인트 보존
+
+- 13:16 main 재시도는 expanded selection 789개를 계산한 뒤 실제 성과 보고서(약 83 MiB)를 읽는 32 MiB 한도에서 실패했다. 후보 계산 실패나 no-edge로 분류하지 않는다. native command rc=1, 1911.33초이며 명시적 exit가 ERR trap을 우회하여 running이 남는 결함도 확인했다.
+- bounded regular/generation 검증을 유지하면서 해당 reader 한도를 기존 연구 보고서 계약과 같은 128 MiB로 맞췄다. EXIT에서도 실패를 단 한 번 기록한다.
+- selection checkpoint는 후행 feedback 의존을 제거하되 입력 bar/비용/승인 정책/계산 코드/grid/holdout 결속을 유지한다. 기존 checkpoint는 원 release의 fingerprint 재현, 계산 AST 및 helper 동일성, result hash 확인을 통과한 것만 원본 보존 후 이관한다. 원 실패는 성공으로 바꾸지 않는다.
+- 영향 회귀 155 passed (25.23초). 경제적 수익이나 자연 승격의 증거가 아니다. 전체 재생성과 최종 인계는 계속 OPEN.

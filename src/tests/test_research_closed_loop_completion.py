@@ -592,3 +592,21 @@ def test_refresh_does_not_consume_previous_study_while_native_successor_is_pendi
     studies, paths, missing = read_studies(day, report_root=tmp_path)
     assert ('widget' in studies) is (status == 'complete')
     assert missing == ([] if status == 'complete' else ['widget'])
+
+
+def test_episode_feedback_accepts_native_population_report_above_32_mib(tmp_path):
+    import json
+    day = date(2026, 9, 17)
+    folder = tmp_path / 'low_price_two_leg_tuning'
+    folder.mkdir()
+    economics = dict(economic_basis='actual_exact_cost_completed_only_CF_separate', net_profit_krw=None)
+    path = folder / f'low_price_two_leg_tuning_{day}.json'
+    path.write_text(json.dumps(dict(target_date=str(day), policy_version_economics=economics,
+                                   population_detail='x' * (33 * 1024 * 1024))))
+    result = outcomes.episode_feedback(day, report_root=tmp_path)
+    assert result['status'] == 'complete'
+    assert result['cumulative'] == economics
+    path.unlink()
+    path.symlink_to(folder / 'missing')
+    with pytest.raises(ValueError, match='bounded_regular'):
+        outcomes.episode_feedback(day, report_root=tmp_path)
