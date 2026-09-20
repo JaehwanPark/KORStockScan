@@ -1062,3 +1062,5 @@ Verifier의 micro diagnostic warning은 required workorder ID와 issues0·runtim
 복구 시 pipeline verbosity는 해당 원천일의 plain/gzip 경로를 직접 선택한다. timing PREOPEN은 검증된 exact-date 준비 정책에 결속된 source를 소비하며 직전 영업일 파일로 임의 대체하지 않는다.
 
 통합 historical finalization의 full detector는 clean baseline 이후 명시 source date를 실제 as-of와 분리한다. 복구 detector의 운영 mutation은 모두 비활성이고 원 실패/새 attempt를 보존한다. late machine 보강은 native dependency receipt로 summary에 재결속하며, main proxy EV와 운영 비용 EV는 별도 필드로 보고한다.
+
+과거 복구 artifact freshness는 명시 prepared effective date의 bootstrap 시간창을 사용하고 미래 PREOPEN은 future_due로 남긴다. recovery log scanner는 현재 날짜 이전부터 수정되지 않은 error log를 현재 burst로 세지 않고 historical warning으로 보존한다. 현재 오류/일반 모드 guard는 유지한다.

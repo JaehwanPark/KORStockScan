@@ -97,3 +97,9 @@ machine은 모든 전행을 통과한 뒤 low-price actual 83 MiB dependency를 
 main proxy 모집단1715/대리 비교1710을 비용 차감 운영 paired 표본/EV로 투영하지 않도록 분리한다. 실제 비용 운영 비교가 입증되지 않은 EV/ΔEV/paired 수는 null이며 기존 대리값은 diagnostic_terminal_proxy에 보존한다. active 확장 연구의 partial source/allocator 차단을 퇴역 또는 not_applicable로 표시하지 않는다. 미래 계약 증거 없이 표본 부족을 자동 natural maturity로 판정하지 않고 contract review로 표시하며 과거 결손으로 구현 미완료를 추론하지 않는다. cancel/split의 지원 입력 producer/consumer·양수/holdout/fallback 회귀는 앞선498개 영향 회귀에 포함됐으며 역사 원천 census 결손과 별개다. 미래 운영 모델 자연 실증은 아직 입증되지 않았다.
 
 최종 detector가 오늘/어제만 허용하여 명시적9/17 복구를 거부했다. full mode·clean baseline 이후·현재 as-of 이하 source date를 producer/receipt validator 양쪽에 적용한다. 회귀에서3일 전 source에 실제 현재 as-of 유지·모든 운영 mutation 비활성화를 확인했고 미래/기준선 이전/non-full은 거부한다. detector/summary/builder101개 회귀 통과.
+
+## Final detector 관측 범위 및 로그 owner 마감
+
+복구 final detector가 과거9/17에 존재하지 않은 새 bootstrap 파일을 요구했다. 명시 prepared9/21의 정상 PREOPEN 시간창으로 검사하며 미래는 future_due, 이미 지난 준비일의 필수 파일 누락은 계속 실패한다. 조기 PREOPEN 파일을 만들지 않는다. 마지막 변경이9/16~17인 기존 error 로그를 현재 폭증4214건으로 재집계하던 recovery 관측을 분리했다. 오래된 로그는 원본/크기/mtime를 보존한 historical evidence warning이고, 현재 변경 로그의 오류 burst와 모든 일반 모드 검사는 그대로 유지한다. 읽기 전용 recovery는 scan state도 갱신하지 않는다. 관련118개 회귀 통과.
+
+cleanup의 실제 차단은 PREOPEN log22,531,453 bytes의 writer-owned rollover 누적 대기였다. active fd 부재·원본 SHA를 검증하는 기존 run_owned_log_rotation owner로 압축 보존했다. 원 SHA d1e40efcb49eaca02752f244df979c306fbabc0ad2c2c6d7ab3ed4cde4197780, 보관 SHA7e476722f1614cfb124e70819255d50ac864568da27673bcfb4be7f5d1b4d524. PREOPEN 실행이나 process restart 없이 해결했으며 실패 cleanup 이력은 유지한다.

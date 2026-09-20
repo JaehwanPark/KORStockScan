@@ -466,3 +466,22 @@ def _mock_logs_dir(tmpdir_path):
         yield
     finally:
         ls.LOGS_DIR = orig
+
+
+def test_recovery_does_not_recount_unchanged_historical_logs_as_current_burst(tmp_path, monkeypatch):
+    import os, time
+    import src.engine.error_detectors.log_scanner as mod
+    path = tmp_path / 'owner_error.log'
+    path.write_text('[ERROR] execution failed\n' * 1000)
+    monkeypatch.setattr(mod, '_get_error_log_files', lambda: [path])
+    monkeypatch.setattr(mod, 'SCAN_STATE_PATH', tmp_path / 'state.json')
+    scanner = mod.LogScanner(dry_run=True)
+    scanner.postclose_source_date = '2026-09-17'
+    os.utime(path, (time.time()-3*86400, time.time()-3*86400))
+    result = scanner.check()
+    assert result.severity == 'warning'
+    assert path.name in result.details['historical_unchanged_logs_not_current_burst']
+    assert not mod.SCAN_STATE_PATH.exists()
+    os.utime(path, None)
+    assert scanner.check().severity == 'fail'
+    assert not mod.SCAN_STATE_PATH.exists()

@@ -1394,3 +1394,26 @@ class TestArtifactFreshnessDetector:
                 result.details["threshold_events_partitioned_paused_reason"]
                 == "cpu_busy_pct>=95"
             )
+
+
+def test_historical_bootstrap_uses_prepared_day_without_early_preopen(tmp_path, monkeypatch):
+    import src.engine.error_detectors.artifact_freshness as mod
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 9, 20, 15, 0)
+    monkeypatch.setattr(mod, 'datetime', Clock)
+    monkeypatch.setattr(mod, 'PROJECT_ROOT', tmp_path)
+    monkeypatch.setattr(mod, 'ARTIFACT_REGISTRY', [row for row in ARTIFACT_REGISTRY if row['id']=='runtime_policy_bootstrap'])
+    monkeypatch.setattr(mod, 'load_installed_crontab', lambda: '')
+    monkeypatch.setenv('POSTCLOSE_PREPARED_EFFECTIVE_DATE', '2026-09-21')
+    detector = mod.ArtifactFreshnessDetector(dry_run=True)
+    detector.postclose_source_date = '2026-09-17'
+    result = detector.check()
+    assert result.details['runtime_policy_bootstrap_status'] == 'future_due'
+    assert not list(tmp_path.rglob('*.json'))
+    monkeypatch.setenv('POSTCLOSE_PREPARED_EFFECTIVE_DATE', '2026-09-18')
+    result = detector.check()
+    assert result.severity == 'fail'
+    monkeypatch.delenv('POSTCLOSE_PREPARED_EFFECTIVE_DATE')
+    assert detector.check().severity == 'fail'

@@ -680,7 +680,28 @@ class ArtifactFreshnessDetector(BaseDetector):
 
         for artifact in ARTIFACT_REGISTRY:
             aid = artifact["id"]
-            path_str = artifact["path_template"].replace("{date}", today)
+            artifact_day = today
+            artifact_now_total = now_total
+            artifact_past_source_day = past_source_day
+            if aid == "runtime_policy_bootstrap" and past_source_day:
+                prepared = os.environ.get("POSTCLOSE_PREPARED_EFFECTIVE_DATE", "")
+                try:
+                    prepared_day = date.fromisoformat(prepared)
+                    if prepared <= today or not is_krx_trading_day(prepared_day):
+                        raise ValueError("invalid prepared date")
+                except ValueError:
+                    details[f"{aid}_status"] = "fail"
+                    issues.append(f"{aid}: explicit prepared effective date missing or invalid")
+                    continue
+                details[f"{aid}_historical_source_date"] = today
+                details[f"{aid}_prepared_effective_date"] = prepared
+                if prepared > _today_kst_str(now_dt):
+                    details[f"{aid}_status"] = "future_due"
+                    continue
+                artifact_day = prepared
+                artifact_past_source_day = prepared < _today_kst_str(now_dt)
+                artifact_now_total = 24 * 60 if artifact_past_source_day else now_h * 60 + now_m
+            path_str = artifact["path_template"].replace("{date}", artifact_day)
             artifact_path = PROJECT_ROOT / path_str
             artifact_path = existing_or_gzip_path(artifact_path)
             critical = artifact.get("critical", False)
@@ -706,7 +727,7 @@ class ArtifactFreshnessDetector(BaseDetector):
 
             ws_total = ws[0] * 60 + ws[1] if ws else None
 
-            if ws_total is not None and now_total < ws_total:
+            if ws_total is not None and artifact_now_total < ws_total:
                 details[f"{aid}_status"] = "not_yet_due"
                 details[f"{aid}_window"] = f"{ws[0]:02d}:{ws[1]:02d}"
                 continue
@@ -716,7 +737,7 @@ class ArtifactFreshnessDetector(BaseDetector):
                 window_end = now_dt.replace(
                     hour=we[0], minute=we[1], second=0, microsecond=0
                 )
-                past_window_end = past_source_day or now_dt >= window_end
+                past_window_end = artifact_past_source_day or now_dt >= window_end
             exists = artifact_path.exists()
             grace_sec = int(artifact.get("window_grace_sec") or 0)
             in_startup_grace = False
@@ -733,14 +754,14 @@ class ArtifactFreshnessDetector(BaseDetector):
                 continue
 
             if not exists:
-                terminal_skip = self._terminal_skip_status(aid, today)
+                terminal_skip = self._terminal_skip_status(aid, artifact_day)
                 if terminal_skip:
                     details[f"{aid}_status"] = "pass_terminal_skip"
                     details[f"{aid}_terminal_skip"] = terminal_skip
                     continue
                 alternate_status = self._validate_partitioned_compact(
                     artifact,
-                    today,
+                    artifact_day,
                     details,
                 )
                 if alternate_status:
@@ -752,7 +773,7 @@ class ArtifactFreshnessDetector(BaseDetector):
 
                 in_progress_cron = self._is_upstream_cron_in_progress(
                     artifact.get("suppress_missing_while_cron_in_progress"),
-                    today,
+                    artifact_day,
                 )
                 if in_progress_cron and not past_window_end:
                     warnings.append(
@@ -811,7 +832,7 @@ class ArtifactFreshnessDetector(BaseDetector):
             )
             if status_warning:
                 if self._is_bounded_postclose_running(
-                    artifact, artifact_path, today, now_dt
+                    artifact, artifact_path, artifact_day, now_dt
                 ):
                     warnings.append(
                         f"{aid}: exact-date postclose still running before deadline"
