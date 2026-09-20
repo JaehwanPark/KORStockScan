@@ -6,7 +6,7 @@ Owner: deployment infrastructure. Installed main routing is separate from exact-
 
 `data/runtime/runtime_release_selection.json` selects one absolute managed release root and its full Git commit. The workspace entrypoint is `bash deploy/run_runtime_release.sh`. It checks the selected HEAD, clean `src/deploy/restart.sh` and shared `data/logs/tmp/.venv/docs/restart.flag` before invoking a target. Missing or invalid selection blocks execution; it must not fall back to mutable workspace code.
 
-The canonical workspace `restart.sh` delegates to this entrypoint. The reviewed release's original `restart.sh` is unchanged, preserving its policy code pin and custody-aware restart procedure. Do not call old release restart scripts or workspace `src/run_bot.sh` directly to choose a deployment. Do not edit or pull inside the selected release.
+The canonical workspace `restart.sh` delegates to this entrypoint. The reviewed release's original `restart.sh` preserves its policy code pin and custody-aware restart procedure, and its post-restart PID check uses `automation.runtime_policy_bootstrap --write-verify-artifact`; the retired generic apply module is not a valid verifier. Do not call old release restart scripts or workspace `src/run_bot.sh` directly to choose a deployment. Do not edit or pull inside the selected release.
 
 Supported operations: `start`, `restart`, `preopen`, `postclose`, `paired-replay`, `controller`, `tuning`, `finalize`, `eod`, `archive`. Invocation resolves the selection once and pins `PROJECT_DIR/PYTHONPATH/VENV_PY` for its child chain. The selector does not update an already-running supervisor; moving the current PID requires a separately authorized graceful restart.
 

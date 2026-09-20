@@ -241,12 +241,14 @@ while [ "$elapsed" -lt "$START_TIMEOUT_SEC" ]; do
             echo "Verifying runtime env handoff for PID $pid ..."
             set +e
             VERIFY_RC=0
-            PYTHONPATH="$PROJECT_DIR" "$VENV_PY" -m src.engine.threshold_cycle_preopen_apply \
-                --verify --date "$APPLICATION_DATE" --pid "$pid" --write-verify-artifact || VERIFY_RC=$?
+            PYTHONPATH="$PROJECT_DIR" "$VENV_PY" \
+                -m src.engine.automation.runtime_policy_bootstrap \
+                --verify --target-date "$APPLICATION_DATE" --pid "$pid" \
+                --write-verify-artifact || VERIFY_RC=$?
             set -e
             if [ "$VERIFY_RC" -ne 0 ]; then
                 echo "[WARN] Runtime env handoff verification failed for PID $pid (rc=$VERIFY_RC)."
-                echo "[WARN] Verification artifact written to data/threshold_cycle/runtime_env/threshold_runtime_env_verify_${APPLICATION_DATE}.json"
+                echo "[WARN] Verification artifact written to data/runtime/policy_bootstrap/runtime_policy_bootstrap_verify_${APPLICATION_DATE}.json"
                 exit "$VERIFY_RC"
             fi
             echo "Runtime env handoff verification passed."

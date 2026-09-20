@@ -61,6 +61,15 @@ def test_restart_script_reloads_stale_supervisor_only_after_child_drain():
     assert 'exit "$VERIFY_RC"' in source
 
 
+def test_restart_script_uses_current_bootstrap_pid_receipt_contract():
+    source = Path("restart.sh").read_text(encoding="utf-8")
+
+    assert "src.engine.automation.runtime_policy_bootstrap" in source
+    assert 'runtime_policy_bootstrap_verify_${APPLICATION_DATE}.json' in source
+    assert "--write-verify-artifact" in source
+    assert "src.engine.threshold_cycle_preopen_apply" not in source
+
+
 def test_release_restart_flag_preserves_shared_symlink_when_claimed(tmp_path):
     source = Path("restart.sh").read_text()
     assert 'RESTART_FLAG="$(realpath -m "$PROJECT_DIR/restart.flag")"' in source
