@@ -493,6 +493,7 @@ def _producer_main(argv=None) -> int:
     parser.add_argument("--date", required=True, type=date.fromisoformat)
     parser.add_argument("--phase", choices=("started", "finished"), required=True)
     parser.add_argument("--exit-code", type=int, default=0)
+    parser.add_argument("--reuse-widget-prefix", action="store_true")
     args = parser.parse_args(argv)
     day = args.date.isoformat()
     if args.date > datetime.now(ZoneInfo("Asia/Seoul")).date():
@@ -502,6 +503,29 @@ def _producer_main(argv=None) -> int:
     value = _load_json(path)
     now = datetime.now(ZoneInfo("Asia/Seoul")).isoformat()
     if args.phase == "started":
+        reuse = None
+        if args.reuse_widget_prefix:
+            if args.owner != "widget" or value.get("target_date") != day or not value.get("run_id"):
+                raise RuntimeError("widget_prefix_predecessor_missing")
+            old_commit = str(value.get("code_commit") or "")
+            if not re.fullmatch(r"[0-9a-f]{40}", old_commit):
+                raise RuntimeError("widget_prefix_code_identity_invalid")
+            changed = subprocess.check_output(["git", "-C", str(PROJECT_ROOT), "diff", "--name-only", old_commit, "HEAD", "--", "src"], text=True).splitlines()
+            allowed = {"src/engine/monitoring/widget_symbol_signal_policy_research.py",
+                       "src/engine/automation/postclose_summary_handoff.py",
+                       "src/engine/monitoring/low_price_two_leg_expanded_candidate_research.py"}
+            changed = [name for name in changed if not name.startswith("src/tests/")]
+            if set(changed) - allowed:
+                raise RuntimeError("widget_prefix_dependency_revision_requires_revalidation")
+            retained = {}
+            for label in INDEPENDENT_SOURCES["widget"][:2]:
+                row = (value.get("sources") or {}).get(label) or {}
+                path_ = Path(row.get("path") or "")
+                if not row.get("sha256") or _sha(path_) != row["sha256"] or _report_date(_load_json(path_)) != day:
+                    raise RuntimeError("widget_prefix_source_generation_mismatch")
+                retained[label] = row
+            reuse = dict(run_id=value["run_id"], code_commit=old_commit, sources=retained,
+                         reason="unchanged_completed_prefix_and_dependencies")
         if value:
             old = path.parent / "attempts" / f"{args.owner}_{day}_{uuid.uuid4().hex}.json"
             _atomic_write(old, json.dumps(value, indent=2) + "\n")
@@ -509,7 +533,7 @@ def _producer_main(argv=None) -> int:
                      target_date=day, status="running", run_id=uuid.uuid4().hex,
                      started_at=now, code_root=str(PROJECT_ROOT),
                      code_commit=subprocess.check_output(["git", "-C", str(PROJECT_ROOT), "rev-parse", "HEAD"], text=True).strip(),
-                     wrapper_pid=os.getppid(), runtime_effect=False)
+                     wrapper_pid=os.getppid(), runtime_effect=False, reused_prefix= reuse)
     else:
         if value.get("status") != "running" or value.get("wrapper_pid") != os.getppid():
             raise RuntimeError("producer_run_identity_mismatch")

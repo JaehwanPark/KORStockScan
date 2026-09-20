@@ -260,6 +260,10 @@ AUTOMATION_TRIGGER_DECISION_CACHE_MARKER="$PROJECT_DIR/tmp/automation_trigger_de
 AUTOMATION_TRIGGER_DECISION_OUTPUT_TEMP="$PROJECT_DIR/tmp/automation_trigger_decision_${TARGET_DATE}_$$.out"
 POSTCLOSE_FAILURE_REASON=""
 POSTCLOSE_FAILURE_ARTIFACT=""
+POSTCLOSE_RETAINED_SOURCE_ARGS=()
+if [[ "$TARGET_DATE" < "$POLICY_PUBLICATION_DATE" ]]; then
+  POSTCLOSE_RETAINED_SOURCE_ARGS=(--retained-source-only)
+fi
 POSTCLOSE_NOTIFY_ARGS=(--notify)
 if [[ "${POSTCLOSE_NOTIFICATIONS:-true}" != "true" ]]; then
   POSTCLOSE_NOTIFY_ARGS=()
@@ -314,13 +318,38 @@ if path.exists():
         payload = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         payload = {}
+reuse_binding = None
+if status == "running" and os.environ.get("POSTCLOSE_REUSE_RECEIPT"):
+    import hashlib
+    receipt_path = Path(os.environ["POSTCLOSE_REUSE_RECEIPT"])
+    receipt_bytes = receipt_path.read_bytes()
+    receipt = json.loads(receipt_bytes)
+    assert receipt["target_date"] == target_date
+    assert receipt["origin_run_id"] == payload.get("run_id")
+    assert receipt["origin_code_commit"] == payload.get("code_commit")
+    assert payload.get("status") == "failed"
+    assert set(receipt["reused_modules"]) == {"src.engine.sniper_post_sell_feedback", "src.engine.monitoring.rising_missed_intraday_feedback"}
+    assert receipt["artifacts"] and receipt["code_dependencies"] and receipt["source_generations"]
+    for metric in receipt["command_receipts"]:
+        assert metric["run_id"] == receipt["origin_run_id"]
+        assert type(metric["exit_code"]) is int and metric["exit_code"] == 0
+        assert metric["target_date"] == target_date and metric["code_commit"] == receipt["origin_code_commit"]
+        assert metric["measurement_complete"] is True
+    assert {m["producer_module"] for m in receipt["command_receipts"]} == set(receipt["reused_modules"])
+    for row in receipt["artifacts"] + receipt["code_dependencies"]:
+        with Path(row["path"]).open("rb") as source:
+            assert hashlib.file_digest(source, "sha256").hexdigest() == row["sha256"]
+    for row in receipt["source_generations"]:
+        stat = Path(row["path"]).stat()
+        assert [stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns] == row["generation"]
+    reuse_binding = {"path": str(receipt_path.resolve()), "sha256": hashlib.sha256(receipt_bytes).hexdigest(), "origin_run_id": receipt["origin_run_id"]}
 if status == "running":
     if payload:
         history = path.parent / "attempts" / target_date
         history.mkdir(parents=True, exist_ok=True)
         import uuid
         (history / f"{uuid.uuid4().hex}.json").write_text(json.dumps(payload), encoding="utf-8")
-    payload = {}
+    payload = {"reused_steps_receipt": reuse_binding}
 payload.update(
     {
         "schema_version": 2,
@@ -1469,7 +1498,7 @@ if [ "$RUN_LOW_PRICE_TWO_LEG_CANDIDATE_RECOMMENDATION" = "true" ] || [ "$RUN_LOW
         -m src.engine.monitoring.low_price_two_leg_expanded_candidate_research \
         --target-date "$TARGET_DATE" \
         --write \
-        "${POSTCLOSE_NOTIFY_ARGS[@]}" \
+        "${POSTCLOSE_NOTIFY_ARGS[@]}" "${POSTCLOSE_RETAINED_SOURCE_ARGS[@]}" \
         --print-summary
       then
         break

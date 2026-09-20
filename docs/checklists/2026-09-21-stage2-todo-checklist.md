@@ -16,6 +16,25 @@
 - `actual_order_submitted=false`인 sim/probe 표본은 EV/source-quality 입력이며 실주문 전환 근거가 아니다.
 - Project/Calendar 동기화는 사용자가 표준 동기화 명령으로 수행한다.
 
+## 메인 기계 진입판정 장후 튜닝 루프 복구
+
+- [x] `[MainMechanisticEntryPostcloseLoopRestore0920] 메인 기계 진입판정 full calibration·다음 거래일 정책 발행 복구` (`Due: 2026-09-21`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~21:40`, `Track: ScalpingLogic`)
+  - Source/Receipt: [상세 복구 계획](../proposals/main-mechanistic-entry-postclose-full-tuning-loop-restoration-plan-2026-09-20.md), [현재 정책](../../data/runtime/mechanistic_entry_policy/policy_2026-09-21.json). release `df2931b19`; report `83a088cd...`; bundle `c6a7253c...`; main·compact receipt와 strict chain PASS.
+  - 완료: exact source→full paired calibration→family별 source 보존→incumbent carry 발행→summary/checklist 연결을 복구했다. 과거 8건의 exact 원화 replay는 `historical_unrecoverable`, 미래 자연 owner replay는 `prospective_resolution_mode=natural_maturity`로 분리했다. 정상 PREOPEN·실제 PID·적용 버전별 `COMPLETED + valid profit_rate` 성과는 아래 direct-family OPEN 작업이 소유한다.
+  - 권한 경계: 기존 비용·holdout·promotion floor, provider·주문·수량·cap·custody·operator lock·hard safety를 완화하지 않는다. 구현·배포·정책 파일·PID 소비·자연 EV 개선을 별도 상태로 보고한다.
+
+## 장후 통합 복구·최종 인계·정상 기동 준비
+
+- [ ] `[PostcloseLateSourceFinalHandoffAudit0920] 장후 25–29 검증·전체 복구·다음 PREOPEN 기동 준비` (`Due: 2026-09-21`, `Slot: PREOPEN`, `TimeWindow: 07:00~07:20`, `Track: RuntimeStability`)
+  - Source: [통합 보완·전체 재생성 상세계획](../proposals/postclose-integrated-verification-recovery-and-next-preopen-readiness-plan-2026-09-20.md), [장후작업 현행 활성 목록](../audit-reports/2026-09-05-postclose-work-inventory.md).
+  - 일정: 9/20에 R0–R6 구현·리뷰 및 A–H 재생성을 끝내는 실행계획을 준비한다. 최종 readiness 마감은 9/21 07:20 이전이며 정상 PREOPEN/PID 확인은 기존 `DirectFamilyPreopenPolicyHandoff`가 소유한다. 이 문서는 실행 완료 receipt가 아니다.
+  - 현황: source9/17 실패·9/18 봇 중지/관측 미적재. 25–29의 날짜/scoped/terminal/attempt 결함, finalizer 미설치·폐기 선행 의존, widget 혼합 root, 과거 복구 날짜·현재 계좌 재기록 방지 계약을 닫아야 한다.
+  - Acceptance: 기존 경제성 구현은 재사용 검증하고 main ME8–ME13 병행 owner의 수리/회귀를 인계받는다. 서비스별 검증된 immutable source에서 source9/17→실제 publication→effective9/21을 고정한다. 전체 활성 main/widget/machine 결과와 직접 소비·단계별 rc·최종 summary/checklist/verifier·terminal을 대사한다. 과거 실패 이력은 보존한다.
+  - 준비 정책: 검증된 candidate/유효 incumbent·기존 fallback을 구분한다. 필수 기동 계약 미충족은 정확한 blocked로 남기며 source gap을 no-edge로 바꾸지 않는다. 자동 생성 family 분류와 closure도 producer 증거 기준으로 재생성해야 한다.
+  - 권한 경계: 이번 요청은 점검·계획이다. cron·systemd·release selection·정책·provider·threshold·bot PID 변경, 장후 수동 실행·조기 PREOPEN은 수행하지 않는다. 후속 실행에서는 기존 승인 경계를 따른다.
+
+**9/20 재점검 정정:** 위 메인 복구 완료 기록은 발행/전달 복구의 이력이다. 메인 계획 §14 ME8–ME13의 경제성·미래 생성 보완까지 완료했다는 뜻이 아니다. 아래 AUTO 블록은 기존 산출물의 투영을 보존한 것으로, main의 `natural_maturity`와 cancel/split의 `producer_repair`를 최종 구현 판정으로 사용하지 않는다. 통합 수리 후 producer 증거에 맞춰 다시 생성한다. 아래 장전 시간창은 실제 설치 시각에 맞춰 보정했으며 builder의 동일 시간창 생성은 통합 수리 대상이다.
+
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_START -->
 <!-- POSTCLOSE_SUMMARY_SOURCES {"allowed_runtime_apply": false, "runtime_effect": false, "schema": "postclose_summary_sources_v1", "source_date": "2026-09-17", "sources": {"runtime_approval_summary": {"sha256": "32bee665eac39f86800f806aac7061a85bc253a83c89fad14280da859af58317"}}} -->
 <!-- DIRECT_FAMILY_FUTURE_HANDOFF {"allowed_runtime_apply": false, "apply_date": "2026-09-21", "expected_state": "future_due", "manifest_path": "/home/ubuntu/KORStockScan/data/runtime/policy_bootstrap/runtime_policy_bootstrap_2026-09-21.json", "policy_receipts": [{"owner": "compact_auxiliary", "policy_owner": "compact_policy", "policy_sha256": "1f9033799ee64a0546c0541c0229c2af4f13f176df00659d915ff8e29a9de5d7", "valid": true}, {"owner": "entry_cancel_wait", "policy_owner": "entry_cancel_wait_policy", "policy_sha256": "e776e62ff76d701c8ebd5bae0319c93a215ad40e30b967e804d1a4ed13dd0624", "valid": true}, {"owner": "entry_split", "policy_owner": "entry_split_policy", "policy_sha256": "607ee9b59e1fac947d22a615d9b0e70da287fed180b03e72004304f5e3084277", "valid": true}, {"owner": "low_price_expansion", "policy_owner": "low_price_expansion_policy", "policy_sha256": "81bae6390b287d0abe09bc3cd217160af55aacb694b69d346090b26669603336", "valid": false}, {"owner": "low_price_two_leg", "policy_owner": "low_price_candidate", "policy_sha256": "8ac3bd7615405581f1028dc97a4b4f54023ee7934f7092d66826c8eae5474348", "valid": true}, {"owner": "machine_entry", "policy_owner": "machine_entry_candidate", "policy_sha256": "e4d8ac537ba72ef10714e955447b7b3560547ffa3f13dbb7f473e6a34dcae0b8", "valid": true}, {"owner": "main_mechanistic_entry", "policy_owner": "main_mechanistic_policy", "policy_sha256": "1f9033799ee64a0546c0541c0229c2af4f13f176df00659d915ff8e29a9de5d7", "valid": true}, {"owner": "rising_missed", "policy_owner": "rising_missed_policy", "policy_sha256": "5358bf7816fb7a51261d1d8dfb21628b09b6565084693219218165f2061c9770", "valid": true}, {"owner": "scale_in_split", "policy_owner": "scale_in_split_policy", "policy_sha256": "06ab68bc30662489abe83b172cf5012ee7004d22815f58331d13346256842a4b", "valid": true}], "runtime_effect": false, "schema": "direct_family_future_handoff_v1", "source_date": "2026-09-17", "source_preopen_state": "pending", "verification_path": "/home/ubuntu/KORStockScan/data/runtime/policy_bootstrap/runtime_policy_bootstrap_verify_2026-09-21.json"} -->
@@ -43,7 +62,7 @@
 
 ## 실행 항목
 
-- [ ] `[DirectFamilyPreopenPolicyHandoff] direct family 날짜별 정책·bootstrap 장전 소비 확인` (`Due: 2026-09-21`, `Slot: PREOPEN`, `TimeWindow: 07:35~08:05`, `Track: RuntimeStability`)
+- [ ] `[DirectFamilyPreopenPolicyHandoff] direct family 날짜별 정책·bootstrap 장전 소비 확인` (`Due: 2026-09-21`, `Slot: PREOPEN`, `TimeWindow: 08:45~08:55`, `Track: RuntimeStability`)
   - Source: [runtime_approval_summary_2026-09-17.json](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-09-17.json)
   - 판정 기준: source_date=`2026-09-17`, apply_date=`2026-09-21`, preopen_state=`pending`, due_policy_receipts=`compact_auxiliary(valid=True, handoff=incumbent_preserved); entry_cancel_wait(valid=True, handoff=blocked); entry_split(valid=True, handoff=blocked); low_price_expansion(valid=False, handoff=blocked); low_price_two_leg(valid=True, handoff=blocked); machine_entry(valid=True, handoff=not_applicable); main_mechanistic_entry(valid=True, handoff=blocked); rising_missed(valid=True, handoff=incumbent_preserved); scale_in_split(valid=True, handoff=incumbent_preserved)`의 schema·semantic hash·scope와 bootstrap accepted/rejected 결과를 확인한다.
   - incumbent 정책은 runtime override가 0이어야 하고 validated edge는 단일축 allowlist·operator lock·retired OFF·same-stage guard를 통과해야 한다.
@@ -107,6 +126,34 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 
 사용자 지시로 `scalping.micro_reversion.ai_quality_cycle` 장후 실행기·R2/R3 인계·legacy/current-axis 전용 런타임 및 파생 산출물을 제거한다. 별도 OPEN 복구 작업을 만들지 않는다. 현행 compact·AI 원천/라벨·주문/체결·공유 경제성 owner는 보존한다. 구현·검증·삭제 증거는 [폐기 리뷰](../audit-reports/2026-09-18-ai-quality-cycle-retirement-review.md)를 따른다. 코드 선택·실제 PID 소비와 장후 전체 DONE은 별도다.
 
+<!-- POSTCLOSE_RECOMMENDATION_INTAKE_START -->
+## 추천 전수 전달 대사
+
+- source-date: `2026-09-17`; status: `waiting_sources`
+- native rows SHA256: `775387a554d9781595ac71637571d270f0714437d297e4a467b2d4271a9926f0`
+- counts: `{"already_implemented_verified_eligible": 0, "already_implemented_verified_nonrequest": 0, "blocked_external_dependency": 0, "blocked_external_dependency_nonrequest": 0, "blocked_missing_evidence": 0, "blocked_missing_evidence_nonrequest": 2, "deferred": 9, "eligible_actionable_open": 0, "eligible_runtime_effect_false_total": 0, "implement_now_unaccounted_count": 0, "implementation_requested_total": 0, "implemented_pass1": 0, "implemented_pass2": 0, "intake_total": 26, "intake_unaccounted_count": 0, "invalid_or_missing_authority_nonrequest": 0, "invalid_or_missing_authority_total": 0, "nonimplementation_total": 26, "observed_no_patch": 15, "rejected": 0, "user_authority_nonrequest": 0, "user_authority_total": 0}`
+- dispositions: `{"blocked_missing_evidence": 2, "deferred": 9, "observed_no_patch": 15}`
+- 운영 terminal, 구현 fixed-point, PREOPEN 선택, PID 소비, 경제성은 별도 상태다.
+
+| Owner | Native recommendation dispositions |
+| --- | --- |
+| low_price_two_leg_expanded_candidate_research | `{"blocked_missing_evidence": 2}` |
+| machine_microstructure_attribution | `{"observed_no_patch": 1}` |
+| main | `{"deferred": 9, "observed_no_patch": 14}` |
+<!-- POSTCLOSE_RECOMMENDATION_INTAKE_END -->
+
+
+<!-- entry_cancel_wait_handoff:start -->
+<!-- entry_cancel_wait_handoff_sha256:fc0d94352f151b719e972fff253dc9f4921b5ebf936ac6cd6d30cc5a9d673c0c -->
+
+## Entry cancel-wait 장후 handoff
+
+- 평가 2026-09-17; 발행 2026-09-18; 적용 2026-09-21. `source_gap` / `incumbent_preserved`.
+- common timeout `{"breakout": 120, "pullback": 600, "reserve": 1200, "standard": 90}` 보존; ΔEV `%p` / 평균 일별 순익 차이 `원/일`: `[null, null]`.
+- 자연 원천/model/미사용 holdout·정규 PREOPEN/PID·비용 후 성과는 기존 owner `KiwoomCommonHealthOpportunityCostAcceptance0917`의 Acceptance다. 전체 native DONE/PID 소비를 주장하지 않는다.
+
+<!-- entry_cancel_wait_handoff:end -->
+
 ## Low-price actual 정책 자연 적용·경제성 Acceptance
 
 - [ ] `[LowPriceExpandedResearchRepair0918] 저가주 연구 입출력·해시·추천 handoff 보완과 배포·실소비 확인` (`Due: 2026-09-21`, `Slot: PREOPEN`, `TimeWindow: 07:35~09:35`, `Track: RuntimeStability`)
@@ -121,11 +168,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 ## 삼성 native 경제성 및 기존 pipeline 자연 acceptance
 
 - [ ] `[CodeImprovementWorkorderReview0918] code improvement workorder 구현 필요 여부 및 Codex 지시 대상 확인` (`Due: 2026-09-21`, `Slot: ALL`, `TimeWindow: 07:45~20:35`, `Track: ScalpingLogic`)
-  - Runtime summary 인계: [RA0–RA9 계획](../proposals/runtime-approval-summary-direct-evidence-handoff-optimization-plan-2026-09-19.md)에 따라 direct artifact 완결과 family 경제성·dated policy·다음 effective-date PREOPEN·자연 성과를 분리한다. 구조적 `source_gap/unsupported_scope/mixed`만 본 stable ID에 인계하고 maturity/no-edge로 신규 작업을 만들지 않는다. 정상 9/21 PREOPEN의 bootstrap hash·실제 PID 소비와 적용 버전별 `COMPLETED + valid profit_rate` 비용 후 성과는 자연 OPEN이며 구현·배포 PASS로 대체하지 않는다.
   - Workorder 구조 구현: [W0–W6 계획·결과](../proposals/code-improvement-workorder-structural-closure-and-ev-evidence-prioritization-plan-2026-09-19.md). 수동 direct-family generation `2026-09-17-5aa459cacc82`, source/semantic `dcb36465f419973150280e44146de970374f578ec8f60e94aaf4955ea86d4039`(`logical_source_content_v2`), contract issue0·intake conservation PASS·implementation request0. source23/selected12/non-selected11은 implement0·attach14·defer9다. 과거 submit terminal gap51은 현행 call-local finish receipt가 구현되어 P3 자연 receipt 대기, WS repair receipt도 P3, tuning 허용 unknown warning은 P4 evidence다. Scanner opportunity는 비용 후 `-2.38954987%`/3pair/3일 `measured_no_edge`라 policy `254d5ab28a6b2089c4d6d036222aedb45dbc353dcd0d5429abd04c755bc9e010` incumbent 보존이다. Actual paired EV·원화 일별 순익은 과거 미선정 arm recipe/quantity/guard 결손으로 null이며 미래 사전 배정 arm 자연 owner를 유지한다.
-  - WS producer 재개방: [재점검된 WS 계획 §12](../proposals/ws-freshness-postclose-quality-consolidation-and-conditional-economic-policy-consumer-improvement-plan-2026-09-19.md), [정정된 WS 리뷰](../audit-reports/2026-09-19-ws-freshness-conditional-economics-implementation-review.md). source9/17 탈락 arm의 compact/plan/terminal은 `irrecoverable_historical_source_gap`으로 유지한다. 미래 simple-capacity changed selection은 promotion ID를 합성하지 않고 selection 직전 `scanner_selection_pair_id`로 양팔 rank/score/tier/slot/budget/source를 동결하며, 기존 prune BBO/market outcome에서 비용 후 opportunity book을 만든다. research gate 통과 뒤에만 기존 marginal slot 최대1개를 baseline/challenger에 사전 배정하고 선택된 한쪽이 기존 compact→plan→guard→order/terminal을 자연 생산하게 한다. 새 장중 provider 호출·shadow WATCHING·양쪽 동시 주문은 금지한다.
-  - WS closure: pair seed→양팔 source outcome→non-null opportunity EV 또는 정확한 censored→dated hold/experiment policy→정규 PREOPEN 동일 hash 소비까지를 producer/consumer closure로 검증한다. 실제 경제성은 사전 배정 arm의 `COMPLETED + valid profit_rate` 비용 후 intention-to-treat EV·일별 순익·tail·자본이 기존 forward/sample gate를 충족한 뒤 별도로 닫는다. fixture·ID 추가·baseline hold 정책만으로 실제 EV 완료를 주장하지 않는다.
-  - WS 구현 인계: WR0–WR5는 9/19 구현·회귀 검증됐다. 다음 자연 scan에서 general/simple-capacity pair 양쪽 event·BBO terminal이 같은 pair ID로 도달하는지, 9/21 정상 PREOPEN이 발행 정책 hash를 동결하는지, 선택된 arm만 기존 compact→guard→order 경로를 통과하는지 확인한다. pair 한쪽 결손·실제 completed 미성숙은 각각 censored/hold_sample이며0으로 계산하지 않는다.
   - Pipeline 재리뷰/정리 및 다음 삼성 분석: [owning review](../audit-reports/2026-09-18-pipeline-rereview-cleanup-and-samsung-machine-entry-analysis.md), `tmp/pipeline-rereview-samsung-analysis-20260918/`. 중첩 schema 손상 fallback/strict OPEN을 수리·회귀 검증하고 불필요 과거 진단125개만 제거, 원 불일치/현재/rollback 보호. 삼성 source/정책/독립 service는 read-only이며 완료 pair0/source gap을 natural wait나 no-edge로 바꾸지 않음. 배포·후행 재인계 receipt와 자연 PID/parity OPEN을 분리한다.
   - Pipeline verbosity Source/Closure: [PV0–PV6 계획](../proposals/pipeline-event-verbosity-incremental-parity-and-consumer-cost-optimization-plan-2026-09-18.md), [owning review](../audit-reports/2026-09-18-pipeline-event-verbosity-incremental-review.md), `tmp/pipeline-verbosity-incremental-20260918/` receipts. 운영 producer/종료·handover·publication/증분·정정·missing/resource 및 실제 후행 소비 계약을 검증한다. 동일 `order_pipeline_event_compaction_v2_shadow`의 source/resource/자연 OPEN을 `defer_evidence`로 보존하고 반복 신규 구현/provider/full-wrapper recovery 또는 전체 chain/PREOPEN GREEN으로 바꾸지 않는다. raw·주문·정책·threshold/quantity/budget/custody/override·resource floor 및 실행 중 release는 보존한다.
   - Pipeline 자연 Acceptance: 다음 유효 source-day의 전체/완료창 parity·정상 종료/restart coverage·실제 Sentinel/execution census 소비 및 제한 비용을 확인한다. 과거9/15/16 손실의 raw fallback/원인 미확정과9/17 bootstrap을 자연 표본 대기로 숨기지 않는다. 실제 PID/주문/EV는 이 진단으로 승인하지 않는다. 해당 native owner는 이 기존 code-workorder 실행 ID를 재사용하며 별도 중복 작업/cron을 만들지 않는다.
@@ -134,29 +177,24 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
   - 삼성 Acceptance: 다음 eligible/blocked/recheck native root 및 SOR deferred opening의 최초 실행시점 source→cost/code/quantity/selected exit/admission/stage guard→원 order/fill terminal projection을 대사. 자연 independent model/candidate holdout floor·coverage를 충족하기 전 승격 금지. selector/unit config와 실제 PID 소비·실제 행동을 구분하고, actual root/version별 dedup rolling/cumulative 비용 모델 순익·tail·노출·오차를 확인. settled cash net/인과적 개선은 별도 근거 없으면 null. partial/취소 race/carry CF unsupported를 natural maturity로 숨기지 않는다.
   - 금지: 새 서비스/collector/DB·전수 raw 재실행·bot restart/주문/조기 PREOPEN 확정·hard guard/quantity/budget/custody/override/holdout 완화. 자연 입력이 selected exit pin이라는 이유만으로 전수 unsupported이면 source/code defect로 재개.
 
-
-## 공통 자연 수용 인계
-
-- [x] `[MainMechanisticEntryPostcloseLoopRestore0920] 메인 기계판정 장후 full 평가·미래 정책 발행 복구` (`Due: 2026-09-21`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~21:40`, `Track: ScalpingLogic`)
-  - Source/Receipt: [복구 계획](../proposals/main-mechanistic-entry-postclose-full-tuning-loop-restoration-plan-2026-09-20.md). release `df2931b19`; report `83a088cd...`; 9/21 bundle `c6a7253c...`; main·compact receipt와 strict chain PASS.
-  - 완료: full machine 평가→family별 source 보존→incumbent carry 발행→summary/checklist 연결을 복구했다. 과거 8건의 exact 원화 replay는 `historical_unrecoverable`, 미래 자연 owner replay는 `prospective_resolution_mode=natural_maturity`로 분리했다. 정상 PREOPEN·실제 PID·적용 버전별 `COMPLETED + valid profit_rate` 성과는 생성된 direct-family OPEN 작업이 소유한다.
-  - 금지: compact-only 결과를 메인 평가 완료로 대체, 동일 정책 자기 비교를 개선으로 집계, 미청산·source-gap을 0으로 대입, 10bp·tail·holdout·hard guard 완화, 실행 중 봇 hot reload·주문.
-
-- [ ] `[KiwoomCommonHealthOpportunityCostAcceptance0917] 공통 health·실행 모델·compact 정책 자연 소비 및 실제 성과 검증` (`Due: 2026-09-21`, `Slot: ALL`, `TimeWindow: 07:00~20:35`, `Track: RuntimeStability`)
-  - Source/History: [9/18 기존 stable ID 원 기록](2026-09-18-stage2-todo-checklist.md), [통합 계획 CI5](../proposals/compact-ai-postclose-source-paired-evaluation-and-preopen-consumer-integration-plan-2026-09-19.md). 기존 CW/ADQ/Samsung/AVG_DOWN·공통 health·PREOPEN 외부 blocker와 별도 custody·override acceptance를 승계하며 완료된 구현 재검토를 새 owner로 복제하지 않는다.
-  - Acceptance: 기존 정상 producer→lossless census/원자 plan→운영 CF→선행 실제 모델 검증→scope/route별 prompt holdout→dated policy→정규 PREOPEN/실제 PID·issued prompt→joint applied-version COMPLETED valid cost/profit의 rolling/cumulative 성과. source/model/pending/unsupported/no-edge·actual/partial/CF를 분리한다. source gap0·배포·scoped PASS는 자연EV 또는 전체 native DONE이 아니다. 모델·표본·일별 순익·tail·비용·hard guards를 유지한다.
-  - Next: 다음 자연 입력의 plan/stop/route/coverage 생성과 모델 proof부터 확인한다. irrecoverable9/17 입력은 제외 유지; 같은 자료의 반복 실행·추정 복원 금지. 계획된 장전 밖 수동 apply/기동/주문 권한을 만들지 않는다.
-  - WS Acceptance: [구현 리뷰](../audit-reports/2026-09-19-ws-freshness-conditional-economics-implementation-review.md)의 새 integrated v2 source/policy hash, 정상 PREOPEN immutable receipt, 실제 PID의 same-tier bonus/order 변화, exact selection-version COMPLETED full-cost EV·일별 순익·tail·capital을 확인한다. source9/17 비교0/null은 경제 개선이 아니며, producer reachability가 닫히기 전에는 자연 acceptance 대기 상태로 바꾸지 않는다.
-  - WS Handoff: source section `02afcf30577e8fa290e00fe9d62e1e624adcb8ce2217dbfaec418a010ece49d2`, policy `5cb82631ef6674c80a5154737ccdca70b6d6ac75fad0194d2cc883e5ef45bf51`, effective `2026-09-21`. 현재 `source_contract_blocked`/bonus0이므로 정상 PREOPEN의 inactive 보존 receipt와 새 자연 source의 원 plan·quantity·guard·양측 terminal 보강 여부부터 확인한다.
-
 ## Limit-down 전용 축 폐기
 
 - 사용자 지시로 전용 장후 보고/경제성/정책·관찰 슬롯·스캐너/PREOPEN 소비·verifier 요구를 작업본에서 제거하고 누적 전용 산출물을 삭제했다. 활성 OPEN 복구 owner를 만들지 않는다. 공유 원천과 과거 custody 안전은 보존한다.
 - [폐기 리뷰](../audit-reports/2026-09-19-limit-down-watch-retirement-review.md)에서 검증·삭제 증거와 선택 배포본 구분을 확인한다. 이 기록은 봇 재시작·주문·조기 PREOPEN 승인이 아니다.
 
+
+## 공통 자연 수용 인계
+
+- [ ] `[KiwoomCommonHealthOpportunityCostAcceptance0917] 공통 health·실행 모델·compact 정책 자연 소비 및 실제 성과 검증` (`Due: 2026-09-21`, `Slot: ALL`, `TimeWindow: 07:00~20:35`, `Track: RuntimeStability`)
+  - Source/History: [9/18 기존 stable ID 원 기록](2026-09-18-stage2-todo-checklist.md), [통합 계획 CI5](../proposals/compact-ai-postclose-source-paired-evaluation-and-preopen-consumer-integration-plan-2026-09-19.md). 기존 CW/ADQ/Samsung/AVG_DOWN·공통 health·PREOPEN 외부 blocker와 별도 custody·override acceptance를 승계하며 완료된 구현 재검토를 새 owner로 복제하지 않는다.
+  - Acceptance: 기존 정상 producer→lossless census/원자 plan→운영 CF→선행 실제 모델 검증→scope/route별 prompt holdout→dated policy→정규 PREOPEN/실제 PID·issued prompt→joint applied-version COMPLETED valid cost/profit의 rolling/cumulative 성과. source/model/pending/unsupported/no-edge·actual/partial/CF를 분리한다. source gap0·배포·scoped PASS는 자연EV 또는 전체 native DONE이 아니다. 모델·표본·일별 순익·tail·비용·hard guards를 유지한다.
+  - Next: 다음 자연 입력의 plan/stop/route/coverage 생성과 모델 proof부터 확인한다. irrecoverable9/17 입력은 제외 유지; 같은 자료의 반복 실행·추정 복원 금지. 계획된 장전 밖 수동 apply/기동/주문 권한을 만들지 않는다.
+  - WS Acceptance: [구현 리뷰](../audit-reports/2026-09-19-ws-freshness-conditional-economics-implementation-review.md)의 새 integrated v2 source/policy hash, 정상 PREOPEN immutable receipt, 실제 PID의 same-tier bonus/order 변화, exact selection-version COMPLETED full-cost EV·일별 순익·tail·capital을 확인한다. source9/17 비교0/null은 구현 실패나 경제 개선으로 바꾸지 않는다.
+  - WS Handoff: source section `02afcf30577e8fa290e00fe9d62e1e624adcb8ce2217dbfaec418a010ece49d2`, policy `5cb82631ef6674c80a5154737ccdca70b6d6ac75fad0194d2cc883e5ef45bf51`, effective `2026-09-21`. 현재 `source_contract_blocked`/bonus0이므로 정상 PREOPEN의 inactive 보존 receipt와 새 자연 source의 원 plan·quantity·guard·양측 terminal 보강 여부부터 확인한다.
+
 - Limit-down 후속 리뷰·관련 커밋/푸시·immutable 배포: `fcfd7b8e5`. 검토 범위 결함0·통합1,531 passed(기존 wrapper 실패5/제외1은 baseline 재현)·물리 release6 passed·전용 산출물 잔여0. [최종 증거](../audit-reports/2026-09-19-limit-down-watch-retirement-review.md). main 정기 cron target 부재는 기존 상태이며 선택/route 검증과 분리한다. 독립 unit pin·공유 원천/guard 보존; 기동/주문/조기 PREOPEN 미실행·PID 소비 미확인.
 
-<!-- scanner_lookup_attention_handoff_sha256:5d6ce1fd7f5626f666edffbab2cc71f83b3e16d2f3a3c4b81894ccc44037570a -->
+<!-- scanner_lookup_attention_handoff_sha256:c37a4406d71da14478ef113d145684caae7faa5437634763c816ea0cfcea3621 -->
 - Scanner lookup source 2026-09-17; policy 2026-09-18; publication 2026-09-19; effective 2026-09-21: `hold_no_edge`. Opportunity EV `-2.38954987%`/3pair/3일, primary actual paired EV `None`; source gaps `['complete_partition_or_actual_selection_missing', 'original_unselected_entry_recipe_quantity_guard_missing']`. Baseline bonus0을 유지하며 자연 pair/PREOPEN/PID/full-cost outcomes는 기존 owner `KiwoomCommonHealthOpportunityCostAcceptance0917`에서 계속 확인한다.
 
 <!-- compact_auxiliary_direct:start -->
@@ -169,6 +207,3 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 - 다음 확인 `existing_main_owner_execution_cf_and_portfolio_replay` / `full_cost_stop_owner_plan_portfolio_and_forward_holdout_receipts`. 실제 PID 소비와 비용 후 자연 성과는 별도 수용 조건이다.
 
 <!-- compact_auxiliary_direct:end -->
-
-- [ ] `[PostcloseLateSourceFinalHandoffAudit0920] 장후 25–29 검증·전체 복구·다음 PREOPEN 기동 준비` (`Due: 2026-09-21`, `Slot: PREOPEN`, `TimeWindow: 07:00~07:20`, `Track: RuntimeStability`)
-  - Source: [통합 보완·전체 재생성 상세계획](../proposals/postclose-integrated-verification-recovery-and-next-preopen-readiness-plan-2026-09-20.md), [장후작업 현행 활성 목록](../audit-reports/2026-09-05-postclose-work-inventory.md).

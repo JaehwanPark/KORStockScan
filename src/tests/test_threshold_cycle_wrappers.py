@@ -135,3 +135,28 @@ def test_historical_machine_recovery_disables_current_account_cost_and_notificat
     for setting in ('notify_args=()', 'policy_notify_args=()', 'cost_args=()'):
         assert setting in script
     assert '--phase finished --exit-code "$rc"' in script
+
+
+def test_main_retry_adoption_preserves_origin_and_rejects_changed_bytes(tmp_path):
+    import hashlib, json, os, subprocess, sys
+    body=_text("deploy/run_threshold_cycle_postclose.sh").split('write_postclose_status() {',1)[1].split("<<'PY'\n",1)[1].split("\nPY\n}",1)[0]
+    day="2026-09-17"; sha="a"*40
+    path=tmp_path/"status.json"; source=tmp_path/"source.json"
+    source.write_text('{"value":1}')
+    stat=source.stat(); digest=hashlib.sha256(source.read_bytes()).hexdigest()
+    modules=["src.engine.sniper_post_sell_feedback","src.engine.monitoring.rising_missed_intraday_feedback"]
+    origin=dict(target_date=day,run_id="original",code_commit=sha,status="failed")
+    receipt=dict(target_date=day,origin_run_id="original",origin_code_commit=sha,reused_modules=modules,
+        command_receipts=[dict(producer_module=m,run_id="original",exit_code=0,target_date=day,code_commit=sha,measurement_complete=True) for m in modules],
+        artifacts=[dict(path=str(source),sha256=digest)],code_dependencies=[dict(path=str(source),sha256=digest)],
+        source_generations=[dict(path=str(source),generation=[stat.st_dev,stat.st_ino,stat.st_size,stat.st_mtime_ns])])
+    proof=tmp_path/"reuse.json";proof.write_text(json.dumps(receipt))
+    env=dict(os.environ,POSTCLOSE_REUSE_RECEIPT=str(proof),POSTCLOSE_RUN_ID="retry",POSTCLOSE_CODE_COMMIT="b"*40)
+    args=[sys.executable,"-",str(path),day,"running","started","0","0",""]+["true"]*9
+    path.write_text(json.dumps(origin))
+    result=subprocess.run(args,input=body,text=True,capture_output=True,env=env)
+    assert result.returncode==0,result.stderr
+    assert json.loads(path.read_text())["reused_steps_receipt"]["origin_run_id"]=="original"
+    path.write_text(json.dumps(origin));source.write_text('{"value":2}')
+    result=subprocess.run(args,input=body,text=True,capture_output=True,env=env)
+    assert result.returncode!=0 and json.loads(path.read_text())==origin

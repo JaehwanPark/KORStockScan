@@ -3522,6 +3522,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--review-carry-target-continuation", action="store_true",
                         help="Research-only original target continuation proxy; requires cached review mode.")
     parser.add_argument("--target-date")
+    parser.add_argument("--retained-source-only", action="store_true")
     parser.add_argument("--start-date")
     parser.add_argument("--end-date")
     parser.add_argument("--max-pages", type=int, default=400)
@@ -3585,9 +3586,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     source_failure_details: dict[str, dict[str, Any]] = {}
     try:
-        token = kiwoom_utils.get_cached_kiwoom_token()
-        if not token:
-            raise ResearchError("cached_token_missing_no_issue_or_refresh_allowed")
+        token = None
         base_target_inventory = _target_date_research_inventory(target_date)
         dynamic_source_date, dynamic_symbols = _dynamic_candidate_snapshot(
             target_date,
@@ -3633,6 +3632,12 @@ def main(argv: list[str] | None = None) -> int:
                 del cached
                 continue
             try:
+                if args.retained_source_only:
+                    raise ResearchError("historical_retained_source_missing_or_invalid")
+                if token is None:
+                    token = kiwoom_utils.get_cached_kiwoom_token()
+                if not token:
+                    raise ResearchError("cached_token_missing_no_issue_or_refresh_allowed")
                 fetched_bars, fetched_meta = fetch_sor_history(
                     symbol=symbol,
                     token=token,

@@ -456,7 +456,7 @@ def test_main_verified_reuse_preserves_notification_handoff(
         raise AssertionError("verified reuse must not acquire or replay")
 
     monkeypatch.setattr(
-        expanded.kiwoom_utils, "get_cached_kiwoom_token", lambda: "test"
+        expanded.kiwoom_utils, "get_cached_kiwoom_token", forbidden
     )
     monkeypatch.setattr(
         expanded, "_dynamic_candidate_snapshot", lambda *a, **k: (None, {})

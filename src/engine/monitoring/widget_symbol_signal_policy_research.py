@@ -2865,6 +2865,7 @@ def load_completed_symbol_source(
     snapshot_dir: Path,
     max_pages: int,
     page_delay_sec: float,
+    retained_source_only: bool = False,
 ) -> tuple[list[Bar], dict[str, Any]]:
     """Validate dated immutable snapshots before any remote read; serialize publication."""
     if end_date > resolve_completed_research_end_date():
@@ -2904,6 +2905,8 @@ def load_completed_symbol_source(
         revised_dates: list[str] = []
         meta: dict[str, Any] = {}
         if missing:
+            if retained_source_only:
+                raise ResearchError(f"{symbol}_snapshot_coverage_incomplete")
             token = token_provider()
             if not token:
                 raise ResearchError("cached_token_missing_no_issue_or_refresh_allowed")
@@ -3047,6 +3050,7 @@ def assert_completed_source_waiting(study_path: Path, end_date: date, study: dic
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--end-date")
+    parser.add_argument("--retained-source-only", action="store_true", help="Evaluate only stored historical snapshots; preserve missing symbols as source exclusions.")
     parser.add_argument("--max-pages", type=int, default=120)
     parser.add_argument("--page-delay-sec", type=float, default=0.2)
     parser.add_argument("--output-dir", type=Path, default=OUTPUT_DIR)
@@ -3079,6 +3083,7 @@ def main(argv: list[str] | None = None) -> int:
     waiting_path = args.output_dir / f"source_waiting_{end_date.isoformat()}.json"
     from src.engine.monitoring.research_closed_loop import load_candidate
     context = dict(
+        retained_source_only=args.retained_source_only,
         producer_sha256=research_contract_hash(),
         source_parser_sha256=source_parser_contract_hash(),
         cost_contract=comparison_cost_contract(end_date),
@@ -3104,6 +3109,14 @@ def main(argv: list[str] | None = None) -> int:
         if waiting_path.stat().st_size > 4 * 1024 * 1024:
             raise ResearchError("widget_research_waiting_receipt_too_large")
         previous = json.loads(waiting_path.read_text())
+        if args.retained_source_only and previous.get("resume_context") != context:
+            # Changed recovery/source contract cannot reuse old economic checkpoints.
+            # Retain the original partial attempt; native snapshot/cache validation
+            # still decides reusable source and computation in this invocation.
+            import uuid
+            archived = waiting_path.parent / "attempts" / f"source_waiting_{end_date}_{uuid.uuid4().hex}.json"
+            _atomic_write(archived, json.dumps(previous, ensure_ascii=False, sort_keys=True))
+            previous = {}
         if previous.get("schema") == "widget_signal_research_source_waiting_v2" and previous.get("status") in {"waiting", "building"}:
             if (previous.get("receipt_sha256") != _receipt_checksum(previous)
                 or previous.get("end_date") != end_date.isoformat()
@@ -3203,6 +3216,7 @@ def main(argv: list[str] | None = None) -> int:
                 universe=symbol_universe,
                 origin=symbol_origins[symbol],
                 token_provider=kiwoom_utils.get_cached_kiwoom_token,
+                retained_source_only=args.retained_source_only,
                 snapshot_dir=args.snapshot_dir,
                 max_pages=args.max_pages,
                 page_delay_sec=args.page_delay_sec,
@@ -3312,6 +3326,7 @@ def main(argv: list[str] | None = None) -> int:
             source_quarantine[symbol] = reason
             failed_source_meta[symbol] = {
                 **meta, "source_quality_status": "FAIL", "source_quality_reason": reason,
+                "retained_source_only": args.retained_source_only,
             }
             if reason == f"{symbol}_daily_source_coverage_fail":
                 dates = _clean_trading_dates(end_date)
@@ -3364,6 +3379,7 @@ def main(argv: list[str] | None = None) -> int:
         }
         for symbol, reason in source_quarantine.items()
     })
+    report["retained_source_only"] = args.retained_source_only
     report["symbol_universe"] = symbol_universe
     report["symbol_origins"] = symbol_origins
     report["passed_symbols"] = [

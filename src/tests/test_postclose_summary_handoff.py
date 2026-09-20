@@ -279,3 +279,27 @@ def test_independent_producer_roundtrip_and_post_terminal_source_drift(monkeypat
     assert handoff._producer_main(["--owner", "widget", "--date", day, "--phase", "started"]) == 0
     assert any(p.read_bytes() == old for p in (data / "report/postclose_producer_terminal/attempts").glob("*.json"))
     assert handoff._producer_main(["--owner", "widget", "--date", day, "--phase", "finished", "--exit-code", "17"]) == 1
+
+
+def test_widget_prefix_reuse_rejects_drift_and_preserves_origin(monkeypatch, tmp_path):
+    from src.engine.automation.postclose_recommendation_intake import source_paths
+    from src.utils import constants
+    monkeypatch.setattr(constants, "DATA_DIR", tmp_path / "data")
+    monkeypatch.setattr(constants, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(mod.subprocess, "check_output", lambda args, **kw: "" if "diff" in args else "a" * 40)
+    day="2026-09-17"
+    paths=source_paths(tmp_path / "data/report", day)
+    for label in mod.INDEPENDENT_SOURCES["widget"][:2]:
+        path=paths[label]; path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"target_date":day}))
+    cli=["--owner","widget","--date",day]
+    mod._producer_main(cli+["--phase","started"])
+    assert mod._producer_main(cli+["--phase","finished","--exit-code","1"]) == 1
+    old=mod._load_json(mod.producer_receipt_path(tmp_path / "data/report",day,"widget"))
+    mod._producer_main(cli+["--phase","started","--reuse-widget-prefix"])
+    new=mod._load_json(mod.producer_receipt_path(tmp_path / "data/report",day,"widget"))
+    assert new["reused_prefix"]["run_id"]==old["run_id"] and new["run_id"]!=old["run_id"]
+    mod._producer_main(cli+["--phase","finished","--exit-code","1"])
+    paths[mod.INDEPENDENT_SOURCES["widget"][0]].write_text("{}")
+    with pytest.raises(RuntimeError, match="source_generation_mismatch"):
+        mod._producer_main(cli+["--phase","started","--reuse-widget-prefix"])

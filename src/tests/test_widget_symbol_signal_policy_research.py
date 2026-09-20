@@ -1576,3 +1576,14 @@ def test_completed_date_evidence_generation_ignores_next_day_observations(tmp_pa
     assert str(current) in before and str(future) not in before
     future.write_text('{}\n{}\n')
     assert research._external_evidence_generation(date(2026,9,17), {'006800'}) == before
+
+
+def test_retained_historical_source_never_requests_token_or_remote(tmp_path, monkeypatch):
+    monkeypatch.setattr(research, "_clean_trading_dates", lambda day: [date(2026, 9, 17)])
+    def forbidden():
+        raise AssertionError("historical recovery requested broker token")
+    with pytest.raises(ResearchError, match="006800_snapshot_coverage_incomplete"):
+        research.load_completed_symbol_source(symbol="006800", end_date=date(2026,9,17),
+            universe={"006800":"fixture"}, origin="established_widget_symbol",
+            token_provider=forbidden, snapshot_dir=tmp_path, max_pages=120,
+            page_delay_sec=0, retained_source_only=True)

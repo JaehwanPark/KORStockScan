@@ -17,9 +17,17 @@ completed_target_date="$(
     | tail -n 1
 )"
 RECOVERY_MODE=false
-if [[ $# -eq 2 && "$2" == "--recover-closed-target" ]]; then
+source_args=()
+receipt_args=()
+resume_signal=false
+if [[ ( $# -eq 2 || ( $# -eq 3 && "$3" == "--resume-signal-research" ) ) && "$2" == "--recover-closed-target" ]]; then
   completed_target_date="$1"
   RECOVERY_MODE=true
+  source_args=(--retained-source-only)
+  if [[ $# -eq 3 ]]; then
+    resume_signal=true
+    receipt_args=(--reuse-widget-prefix)
+  fi
 elif [[ $# -ne 0 ]]; then
   echo "usage: $0 [YYYY-MM-DD --recover-closed-target]" >&2
   exit 2
@@ -34,7 +42,7 @@ PYDATE
 mkdir -p "$PROJECT_DIR/tmp"
 exec 9>"$PROJECT_DIR/tmp/widget_evaluation_${completed_target_date}.lock"
 flock -n 9 || exit 75
-"$PYTHON_BIN" -m src.engine.automation.postclose_summary_handoff --owner widget --date "$completed_target_date" --phase started
+"$PYTHON_BIN" -m src.engine.automation.postclose_summary_handoff --owner widget --date "$completed_target_date" --phase started "${receipt_args[@]}"
 trap 'rc=$?; "$PYTHON_BIN" -m src.engine.automation.postclose_summary_handoff --owner widget --date "$completed_target_date" --phase finished --exit-code "$rc" || rc=1; exit "$rc"' EXIT
 if [[ ! "$completed_target_date" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
   printf '[WIDGET_EVALUATION] invalid completed target date=%s\n' \
@@ -122,18 +130,20 @@ run_stage() {
     "$completed_target_date" "$active_stage" "$((SECONDS-stage_started))"
 }
 
+if [[ "$resume_signal" != "true" ]]; then
 run_stage advisory "$PYTHON_BIN" -m src.engine.monitoring.widget_advisory_calibration \
   --target-date "$completed_target_date" \
   --write
 run_stage auto_policy "$PYTHON_BIN" -m src.engine.monitoring.widget_auto_trade_policy_calibration \
   --target-date "$completed_target_date" \
   --write
+fi
 active_stage="eod_wait"
 stage_started=$SECONDS
 wait_for_eod_terminal
 printf '[WIDGET_EVALUATION] stage_end target_date=%s stage=eod_wait wall=%ss\n' "$completed_target_date" "$((SECONDS-stage_started))"
 run_stage signal_research "$PYTHON_BIN" -m src.engine.monitoring.widget_symbol_signal_policy_research \
-  --end-date "$completed_target_date" \
+  --end-date "$completed_target_date" "${source_args[@]}" \
   --write
 run_stage runtime_policy "$PYTHON_BIN" -m src.engine.monitoring.widget_symbol_runtime_policy \
   --target-date "$completed_target_date" \
