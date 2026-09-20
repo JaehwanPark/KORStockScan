@@ -424,10 +424,10 @@ strict verifier는 다음을 모두 요구한다.
 
 2026-09-20 KST에 본 계획의 코드 범위를 구현하고 재검토했다. 메인 기계평가를 compact보다 먼저 실행하고, 공통·계층 모집단의 비용 후 paired 평가, 미래 정책 발행, family별 source lineage, runtime summary/checklist/direct verifier를 기존 owner 안에서 연결했다. 같은 입력의 재시도는 평가기·원천·incumbent를 포함한 fingerprint가 일치할 때 봉인 보고서를 재사용한다. compact 최종화가 메인 최상위 source date/hash를 덮던 결함과 비활성 선택 작업까지 크론 필수 대상으로 요구하던 배포 검사 결함도 보완했다.
 
-- 런타임 소스 커밋: `ea9b53a7e2dfbe063c420e2bee5ad633c20e52ee` (`origin/main`에 포함)
-- 선택 릴리스: `/home/ubuntu/KORStockScan-runtime-releases/main-mechanistic-lineage-reviewed-20260920-ea9b53a7e`
+- 최종 런타임 소스 커밋: `df2931b19bebf4a93be54207fea05e0ba32c0cc4` (`origin/main`에 포함). 후속 리뷰에서 과거 owner replay 결손과 미래 자연 성숙을 분리한 `e4f47ffec`, compact 전용 source receipt 검증을 바로잡은 `df2931b19`를 추가했다.
+- 선택 릴리스: `/home/ubuntu/KORStockScan-runtime-releases/main-mechanistic-evidence-reviewed-20260920-df2931b19`
 - 실제 예약 경로: 평일 07:35 PREOPEN, 20:10 postclose가 공통 release router를 사용하며 필수 네 경로 검증이 통과했다.
-- 검증: 최초 구현 관련 suite 1,695개 통과 후 lineage·router·summary·strict verifier 보완 suite 390개를 재검증했다. Python compile, shell syntax, `git diff --check`, print-only 문서 parser를 별도로 통과시킨다.
+- 검증: 최초 구현 관련 suite 1,695개 통과 후 lineage·router·summary·strict verifier 보완 suite 390개를 재검증했다. 후속 리뷰의 단계별 suite 72·155·82개와 최종 선택 릴리스 suite 204개도 통과했다. Python compile, shell syntax, `git diff --check`, strict chain 및 print-only 문서 parser를 별도로 검증한다.
 
 9/17 동결 원천을 9/20 publication으로 제한 재생성한 결과는 다음과 같다.
 
@@ -440,10 +440,13 @@ strict verifier는 다음을 모두 요구한다.
 | 비용 후 경제값 | calibration EV 0.0000%, holdout EV 0.0000%, holdout paired ΔEV +0.0054462573%p |
 | 일별 원화 순익 | `null`; 후보가 바꾸는 holdout 8건은 당시 실제 AI→submit→owner execution 경로가 없어 exact changed-decision owner replay를 사후 복구할 수 없음 |
 | 판정 | `insufficient_mature_sample`, `incumbent_carried`; 양의 EV 개선이나 실제 순익 개선으로 인정하지 않음 |
-| 다음 거래일 bundle | `data/runtime/mechanistic_entry_policy/policy_2026-09-21.json`, bundle `fdbd524c3fd8cad56bf12d592d9f2efe6e4a6ec6f522514fd188cf2fe3f0765b` |
+| 다음 거래일 bundle | `data/runtime/mechanistic_entry_policy/policy_2026-09-21.json`, bundle `c6a7253ceda07cbfec7bcc04d78b868d610b016624fa0c7f47d00f3675e3a6b7`, file SHA256 `f2466fda9a4f5cf7b2e42f4cb3881d27bb8fad8b33b4bc6c12651f75657d122a` |
 | family lineage | machine source 9/17/report hash `83a088...`, compact source 9/17/artifact `822c6f...`를 독립 보존 |
-| 직접 검증 | main mechanistic `pass`, compact auxiliary `PASS`; 동일 fingerprint 재시도 `evaluation_reused=true` |
+| 직접 검증 | main mechanistic `pass`, compact auxiliary `PASS`, 전체 strict chain `pass`; 동일 fingerprint 재시도 `evaluation_reused=true` |
+| 후행 상태 | runtime summary `ddcb647a...`; main·compact policy receipt 모두 `valid=true`. 과거 8건은 `historical_unrecoverable`, 미래 exact owner replay는 `prospective_resolution_mode=natural_maturity`로 분리 |
 
-원화 일별 순익의 null은 계산 가능한 실제 체결 손익을 누락한 상태가 아니다. 과거 `BLOCK/RECHECK`를 후보가 `ENTER_NOW`로 바꾸는 8건에는 실제 주문·체결·자금 점유가 존재하지 않아 실제 원화 결과를 만들 수 없다. terminal path 기반 비용 후 기회 EV와 paired ΔEV까지만 진단값으로 유지하고, 임의 수량·체결·원화 손익을 합성하지 않는다. 이후 동일 정책 세대에서 자연 발생한 exact owner replay와 `COMPLETED + valid profit_rate`가 누적되면 checklist의 `DirectFamilyNaturalEvidenceMainMechanisticEntry`가 원화 일별 순익·tail·실제 EV를 평가한다.
+원화 일별 순익의 null은 계산 가능한 실제 체결 손익을 누락한 상태가 아니다. 더 엄격한 후보가 기준 정책의 `BUY`를 비진입으로 바꾸는 과거 holdout 8건에는 후보 arm의 exact 주문·체결·수량·자금 점유가 존재하지 않아 원화 차이를 사후 확정할 수 없다. 이 과거 증거는 기다려도 완성되지 않으므로 `historical_unrecoverable`로 표시한다. terminal path 기반 비용 후 기회 EV와 paired ΔEV까지만 진단값으로 유지하고, 임의 수량·체결·원화 손익을 합성하지 않는다. 이후 동일 정책 세대에서 자연 발생한 exact owner replay와 `COMPLETED + valid profit_rate`가 누적되는 경로는 별도 `prospective_resolution_mode=natural_maturity`로 유지하며 checklist의 `DirectFamilyNaturalEvidenceMainMechanisticEntry`가 원화 일별 순익·tail·실제 EV를 평가한다.
+
+후속 리뷰에서는 통합 bundle의 최상위 `source_artifact_sha256`가 machine source를 소유하는데 runtime summary의 compact receipt가 이를 compact hash로도 요구하는 상충을 발견했다. compact 검증을 `compact_paired_artifact_sha256`와 compact fingerprint에 결속해 두 family source를 독립 검증하도록 수정했다. 재생성 후 main·compact receipt가 모두 유효하며, compact는 source gap 때문에 계속 incumbent를 보존한다.
 
 코드 배포와 다음 거래일 bundle 생성은 완료됐다. 2026-09-21 PREOPEN bootstrap, 실제 PID의 bundle hash 소비, 자연 판정 변화와 비용 후 순익 개선은 아직 도래하지 않았으므로 완료로 표시하지 않는다. 실행 중 봇 재시작·hot reload·주문은 수행하지 않았다.
