@@ -757,3 +757,24 @@ def test_systemd_service_waits_for_postclose_label_contract():
     assert "--source-poll-sec 30" in wrapper
     assert "TimeoutStartSec=3600" in service
     assert "RestartPreventExitStatus=42" in service
+
+
+def test_default_sources_use_trusted_data_mount_and_keep_artifact_symlink_guard(tmp_path, monkeypatch):
+    from src.utils.constants import DATA_DIR
+    args = rec._build_parser().parse_args([])
+    monkeypatch.chdir(tmp_path)
+    assert args.payload_dir == DATA_DIR / 'ai_decision_payloads'
+    assert args.label_dir == DATA_DIR / 'report/ai_decision_outcome_labels'
+    assert args.replay_dir == DATA_DIR / 'report/widget_mechanical_entry_replay'
+    assert args.output_dir.is_absolute()
+    payload = tmp_path / 'payload.jsonl'
+    payload.write_text('{}\n')
+    link = tmp_path / 'link.jsonl'
+    link.symlink_to(payload)
+    label = tmp_path / 'labels.json'
+    label.write_text(json.dumps(dict(schema='ai_decision_outcome_labels_v1',
+        target_date='2026-09-17', generated_at='2026-09-20T12:00:00+09:00',
+        status='mature_label_rows_available', labels=[], runtime_effect=False,
+        allowed_runtime_apply=False, actual_order_submitted=False, broker_order_forbidden=True)))
+    assert rec._source_artifact_issues(target_date=date(2026, 9, 17), payload_path=payload, label_path=label) == []
+    assert rec._source_artifact_issues(target_date=date(2026, 9, 17), payload_path=link, label_path=label) == ['exact_payload_artifact_invalid']

@@ -32,7 +32,7 @@
   - 현황: source9/17 실패·9/18 봇 중지/관측 미적재. 25–29의 날짜/scoped/terminal/attempt 결함, finalizer 미설치·폐기 선행 의존, widget 혼합 root, 과거 복구 날짜·현재 계좌 재기록 방지 계약을 닫아야 한다.
   - Acceptance: 기존 경제성 구현은 재사용 검증하고 main ME8–ME13 병행 owner의 수리/회귀를 인계받는다. 서비스별 검증된 immutable source에서 source9/17→실제 publication→effective9/21을 고정한다. 전체 활성 main/widget/machine 결과와 직접 소비·단계별 rc·최종 summary/checklist/verifier·terminal을 대사한다. 과거 실패 이력은 보존한다.
   - 준비 정책: 검증된 candidate/유효 incumbent·기존 fallback을 구분한다. 필수 기동 계약 미충족은 정확한 blocked로 남기며 source gap을 no-edge로 바꾸지 않는다. 자동 생성 family 분류와 closure도 producer 증거 기준으로 재생성해야 한다.
-  - 권한 경계: 이번 요청은 점검·계획이다. cron·systemd·release selection·정책·provider·threshold·bot PID 변경, 장후 수동 실행·조기 PREOPEN은 수행하지 않는다. 후속 실행에서는 기존 승인 경계를 따른다.
+  - 권한 경계: 9/20 통합 보완·검증·커밋/푸시·immutable 배포·전체 장후 복구 및 필요한 schedule/service source binding 수리는 사용자 승인 범위다. 봇 재시작/수동 기동·주문·조기 PREOPEN·외부 sync는 금지하며 기존 거래 시각·수량·guard를 보존한다.
 
 **9/20 재점검 정정:** 위 메인 복구 완료 기록은 발행/전달 복구의 이력이다. 메인 계획 §14 ME8–ME13의 경제성·미래 생성 보완까지 완료했다는 뜻이 아니다. 아래 AUTO 블록은 기존 산출물의 투영을 보존한 것으로, main의 `natural_maturity`와 cancel/split의 `producer_repair`를 최종 구현 판정으로 사용하지 않는다. 통합 수리 후 producer 증거에 맞춰 다시 생성한다. 아래 장전 시간창은 실제 설치 시각에 맞춰 보정했으며 builder의 동일 시간창 생성은 통합 수리 대상이다.
 

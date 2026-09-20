@@ -36,7 +36,7 @@ from src.engine.monitoring.widget_comparison_cost import (
     comparison_cost_contract,
     cost_aware_return_pct,
 )
-from src.utils.constants import CONFIG_PATH, DEV_PATH, PROJECT_ROOT
+from src.utils.constants import CONFIG_PATH, DATA_DIR, DEV_PATH, PROJECT_ROOT
 from src.utils.jsonl_io import iter_jsonl_objects_strict, read_json_object_strict
 from src.utils.market_day import is_krx_trading_day
 
@@ -44,12 +44,12 @@ AUTHORITY = "widget_collector_expansion_recommendation_only"
 CLEAN_BASELINE_DATE = date(2026, 6, 5)
 ACTIVE_WIDGET_CODES = frozenset({"005930", "034020", "042660"})
 IMPLEMENTED_WIDGET_CODES = ACTIVE_WIDGET_CODES | frozenset(RESEARCH_WIDGET_SYMBOLS)
-DEFAULT_REPLAY_DIR = Path("data/report/widget_mechanical_entry_replay")
-DEFAULT_PAYLOAD_DIR = Path("data/ai_decision_payloads")
-DEFAULT_SENTINEL_DIR = Path("data/runtime/sentinel_event_cache")
-DEFAULT_OUTPUT_DIR = Path("data/report/widget_collector_expansion_recommendation")
-DEFAULT_RESEARCH_WATCH_CONFIG_PATH = Path(
-    "data/config/widget_research_watch_symbols.json"
+DEFAULT_REPLAY_DIR = DATA_DIR / Path("report/widget_mechanical_entry_replay")
+DEFAULT_PAYLOAD_DIR = DATA_DIR / Path("ai_decision_payloads")
+DEFAULT_SENTINEL_DIR = DATA_DIR / Path("runtime/sentinel_event_cache")
+DEFAULT_OUTPUT_DIR = DATA_DIR / Path("report/widget_collector_expansion_recommendation")
+DEFAULT_RESEARCH_WATCH_CONFIG_PATH = DATA_DIR / Path(
+    "config/widget_research_watch_symbols.json"
 )
 DEFAULT_STATE_FILE = (
     PROJECT_ROOT / "tmp" / "widget_collector_expansion_telegram_state.json"

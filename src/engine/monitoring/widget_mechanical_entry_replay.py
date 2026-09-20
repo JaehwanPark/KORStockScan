@@ -42,9 +42,11 @@ from src.trading.order.tick_utils import (
 )
 from src.utils.jsonl_io import iter_jsonl_objects_strict, read_json_object_strict
 
-DEFAULT_PAYLOAD_DIR = Path("data/ai_decision_payloads")
-DEFAULT_LABEL_DIR = Path("data/report/ai_decision_outcome_labels")
-DEFAULT_OUTPUT_DIR = Path("data/report/widget_mechanical_entry_replay")
+from src.utils.constants import DATA_DIR
+
+DEFAULT_PAYLOAD_DIR = DATA_DIR / Path("ai_decision_payloads")
+DEFAULT_LABEL_DIR = DATA_DIR / Path("report/ai_decision_outcome_labels")
+DEFAULT_OUTPUT_DIR = DATA_DIR / Path("report/widget_mechanical_entry_replay")
 ACTIONABLE_STATES = {"ENTRY_CAUTION", "ENTRY_READY"}
 DECISIVE_HITS = {"target_first", "adverse_first"}
 SESSION_MINIMUM_BARS = {

@@ -83,3 +83,7 @@ widget/machine 독립 wrapper의 exact-date terminal/source hash를 최종 summa
 - PREOPEN rebound reader는 직전 영업일만 추측하지 않고 이미 발행된 exact-date timing policy의 검증된 source 날짜를 사용한다. recovery source9/17→effective9/21 baseline을 제어 입력으로 확인했고 실제 조기 PREOPEN은 실행하지 않았다. timing/rebound 회귀93개 통과.
 - main의 pipeline verbosity 입력 배열에 정의되지 않은 RAW_SOURCE 참조가 남아 있었다. exact-date pipeline plain/gzip 경로를 지역 변수로 결정한다. wrapper 회귀13개와 bash syntax 통과.
 - ADQ source-label 및 cancel-wait producer는 12c20644f 실행에서 rc0로 통과했다. 이후 wrapper 실패는 별도 원 run에 보존하며 실행 terminal 완료로 표시하지 않는다.
+
+## Machine shared-data 경로 결속
+
+collector expansion/mechanical replay의 상대 data 경로가 immutable release의 공유 mount를 개별 원천 symlink로 잘못 판단했다. 기존 DATA_DIR의 신뢰된 mount 해석을 재사용하고 개별 artifact symlink/세대 충돌 검증은 보존했다. source gate·replay 회귀29개 통과. 대기 중인 이번 machine 프로세스만 종료하여 원 실패 attempt를 보존하고 검증된 successor에서 재개한다. trading 서비스에는 신호를 보내지 않았다.
