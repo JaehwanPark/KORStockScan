@@ -180,3 +180,11 @@ source9/17→publication9/20→effective9/21 후속 run `5953a93cf56c4fd39be8280
 9/21 bundle `15c063637359bd4cbd5a567760abecdf6229aee1f44d1e9d6a7cbc2dc7e97eb7`은 incumbent_carried이며 모든 main scope/compact policy body를 보존한다. 자연 main 모집단1,712·compact21, 승격0, 운영 EV/추가 실제 순익 null, main first blocker `machine_operating_population_unbound`. 기존 과거 결손/별도 미지원 운영 계약을 제거하거나 자연 대기로 이름만 바꾸지 않았다. 정상 PREOPEN/PID·장중 실제 incident 통보·독립 표본/COMPLETED 비용 손익은 OPEN이다.
 
 증거: `tmp/submission-bottleneck-review-20260920/`의 최초283개 회귀·정책 finalize·cron 설치 receipt, `tmp/submission-bottleneck-final-review-20260920/`의 날짜 경계71개 회귀(중복), `final-review.json`, `final-reconciliation.json`, `source-reuse-code-review.json`, `service-binding-3f67a4ef7.json`, `limited-recovery-5953a93cf56c4fd39be8280faa8d530c.json`. 배포와 상태 인계는 경제적 개선 증거가 아니다.
+
+## 12. EV 원천 생산자 결손 탐지 재리뷰
+
+사용자의 우선순위에 따라 제출병목 감시의 EV 원천 사각지대를 좁혔다. 확인한 결함은 ① economic observation/gap 두 stage의 slim cache 탈락, ② 성공 표시 내부의 capital gap 및 frozen 계약 결손 미검사, ③ 정상 제출로 종료되어도 경제성 관측 부재를 탐지하지 못하는 점이다. 기존 producer/경제성 계산을 재작성하지 않고 cache 수용·작은 proof 진단·별도 economic_producer_gap 전이를 보완했다.
+
+범위·회귀·첫 결손 기준은 [기존 감시 계획의 생산자 결손 리뷰](../proposals/intraday-semantic-entry-monitoring-and-telegram-alert-feasibility-plan-2026-09-20.md#생산자-결손-탐지-후속-리뷰--920)에 기록한다. 정상 guard와 명시 unsupported는 진단 분모에서 별도로 남기며 모든 gap을 버그나 자연 대기로 단정하지 않는다. 경제성 incident는 동일 attempt의 원천 계약이 유효해졌을 때만 해제한다. 이번 리뷰로 새로운 자연 EV 또는 양수 후보를 주장하지 않는다.
+
+검증: 운영 producer/계산 연계194개 PASS 후 감시·cache 경계164개 PASS(중복 포함). 실제 producer 저장 JSONL에서 세션/route/action별 source contract 성공을 확인했고, 내부 자본 결손을 넣은 성공 표시를 source_gap으로 판별했다. 추가 리뷰에서 cache15/16의 과거 번호 충돌을 피하고 기존10/12부터 이전할 때 누락된 모든 stage의 zero census를 요구했다. 9/17 raw5.7GB의 전수 재스캔 없이 기존 audit와 cache metadata로 이전 가능성을 확인했다. 합성 회귀·원천 계약 검증이며 자연 EV 개선 증거는 아니다.

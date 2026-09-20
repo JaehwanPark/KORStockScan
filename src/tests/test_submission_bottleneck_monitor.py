@@ -28,7 +28,12 @@ def tick(events, minutes, state=None):
     now = START + timedelta(minutes=minutes)
     # A fresh independent evaluation proves the input stream is advancing.
     fresh = event(999, "RECHECK", "not_requested_machine_nonentry", when=now)
-    return monitor.evaluate(report(events + [fresh], now), state or {}, now)
+    # Existing decision/terminal tests isolate their axis from economics; the
+    # actual producer support/diagnostic projection is tested separately.
+    payload = report(events + [fresh], now)
+    for row in payload['submission_monitor']['rows']:
+        row['economic_source'] = {'status': 'unsupported_scope', 'blocker': 'fixture_economics_not_exercised'}
+    return monitor.evaluate(payload, state or {}, now)
 
 
 def active(state):
@@ -183,3 +188,82 @@ def test_known_producer_nonbudget_terminal_closes_only_exact_contract(valid):
     events = [event(), event(stage="ai_confirmed_terminal_no_budget", when=START + timedelta(seconds=1), **fields)]
     result = tick(events, 15, tick(events, 10))
     assert bool(active(result)) is not valid
+
+
+def test_missing_economic_producer_detected_even_after_successful_submission():
+    events = [event(), event(stage='order_bundle_submitted', when=START+timedelta(seconds=1), broker_order_no='b1')]
+    state = {}
+    for minutes in (10, 15):
+        now = START+timedelta(minutes=minutes)
+        state = monitor.evaluate(report(events+[event(999, when=now)], now), state, now)
+    gaps = [r for r in active(state) if r['rule']=='economic_producer_gap']
+    assert len(gaps)==1
+    assert gaps[0]['examples'][0]['economic_source']['blocker']=='economic_observation_event_missing'
+    assert not any(r['rule']=='source_or_submit_lineage_gap' for r in active(state))
+
+
+@pytest.mark.parametrize('status,blocker,expected', [
+    ('source_gap','structured_pre_ai_observation_append_failed','source_gap'),
+    ('source_gap','common_guard_block:spread','guard_excluded'),
+    ('source_gap','owner_sizing_zero_or_invalid','guard_excluded'),
+    ('unsupported_scope','unsupported_pre_ai_session_market_route_contract','unsupported_scope'),
+    ('recorded_source_only','','source_gap'),
+])
+def test_economic_producer_diagnosis_keeps_guard_and_unsupported_separate(status, blocker, expected):
+    fields={'entry_economic_source_status':status,'entry_economic_source_blocker':blocker}
+    assert monitor.economic_evidence(fields)['status']==expected
+
+
+def test_cache_retains_economic_failure_and_proof_without_full_plan():
+    import json
+    e=event(stage='entry_ai_economic_source_gap',entry_economic_source_status='source_gap',
+            entry_economic_source_blocker='exact_broker_capacity_missing')
+    raw=dict(event_type='pipeline_event',pipeline=e.pipeline,stage=e.stage,stock_name='fixture',stock_code=e.stock_code,
+             record_id=e.record_id,emitted_at=e.emitted_at.isoformat(),fields=e.fields)
+    cached=sentinel._payload_to_cache_row(raw,exclude_summary_stages=True)
+    assert cached is not None
+    assert json.loads(cached['fields']['economic_source_monitor_projection'])['blocker']=='exact_broker_capacity_missing'
+    projection=monitor.snapshot([sentinel._event_from_cache_row(cached)],START+timedelta(minutes=15))
+    assert projection['rows'][0]['economic_source']['status']=='source_gap'
+
+
+def test_economic_incident_requires_proof_not_broker_terminal_to_recover():
+    state={}
+    for minutes in (10,15,20,25):
+        now=START+timedelta(minutes=minutes)
+        payload=report([event(),event(stage='order_bundle_submitted',when=START+timedelta(seconds=1),broker_order_no='b1'),event(999,when=now)],now)
+        if minutes==25:
+            payload['submission_monitor']['rows'][0]['economic_source']={'status':'recorded_source_only'}
+        state=monitor.evaluate(payload,state,now)
+        if minutes==20:
+            assert any(r['rule']=='economic_producer_gap' for r in active(state))
+    assert any(r['rule']=='economic_producer_gap' and r['status']=='recovered' for r in state['incidents'].values())
+
+
+def test_economic_proof_conflict_cannot_be_overwritten_by_later_duplicate():
+    import json
+    events=[event(stage='entry_ai_economic_plan_observed',economic_source_monitor_projection=json.dumps({
+        'status':'recorded_source_only','seed_sha256':value})) for value in ('a','b','a')]
+    rows=monitor.snapshot(events,START)['rows']
+    assert rows[0]['economic_source']['blocker']=='economic_observation_conflicting_proofs'
+
+
+def test_cache_upgrade_requires_zero_census_for_all_new_stages(tmp_path, monkeypatch):
+    import json
+    from src.engine import observation_source_quality_audit as audit
+    monkeypatch.setattr(sentinel, 'DATA_DIR', tmp_path)
+    monkeypatch.setattr(audit, '_read_raw_contract_projection', lambda *a: {'valid':True})
+    raw=tmp_path/'raw.jsonl';raw.write_text('')
+    cache=sentinel._event_cache_dir();cache.mkdir(parents=True)
+    (cache/'buy_funnel_sentinel_events_2026-09-17.meta.json').write_text(json.dumps({'schema_version':12}))
+    path=tmp_path/'report/observation_source_quality_audit/observation_source_quality_audit_2026-09-17.json'
+    path.parent.mkdir(parents=True)
+    payload={'target_date':'2026-09-17','source':{'generation':audit._raw_generation(raw),
+        'contract_projection':{'key':'fixture'},'invalid_json_line_count':0,'audited_stage_counts':{}}}
+    path.write_text(json.dumps(payload))
+    proof=sentinel._previous_cache_schema_proof('2026-09-17',raw,13)
+    assert proof['from_schema']==12
+    assert 'order_leg_no_response' in proof['newly_admitted_stages']
+    for stage in ('entry_ai_economic_plan_observed','order_leg_no_response'):
+        payload['source']['audited_stage_counts']={stage:1};path.write_text(json.dumps(payload))
+        assert sentinel._previous_cache_schema_proof('2026-09-17',raw,13) is None

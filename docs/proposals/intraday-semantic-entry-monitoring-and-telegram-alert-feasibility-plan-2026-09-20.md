@@ -50,3 +50,15 @@ wrapper의 lock/cooldown 안에서 Sentinel 성공 후 compact source consumer�
 경제성 코드는 직전 5d60b4afe의 지원 범위/검증을 대사하고 새 결함이 없으면 재구현하지 않는다. 모델·producer·policy hash가 동일한 기존 자연 평가를 이번 감시 변경의 새 경제적 성과로 보고하지 않는다. 다음 적용일 bundle은 기존 publisher/reader/summary/checklist/strict로 확인한다. 정상 PREOPEN/PID, 실제 장중 사건 통보, 독립 표본/완료 비용 손익은 자연 OPEN이다.
 
 현재9/20 checklist는 없으므로 미래9/21 checklist의 기존 기동 owner와 별도 감시 확인 항목으로 인계한다. 최종 커밋·배포·검증 receipt는 [기존 operating evidence 리뷰](../audit-reports/2026-09-20-main-machine-operating-evidence-closure-review.md)에 기록한다.
+
+## 생산자 결손 탐지 후속 리뷰 — 9/20
+
+최우선은 정상 제출 여부와 독립적으로 EV 산출을 막는 생산자 결손을 찾는 것이다. 기존 경제성 owner/계산은 재구현하지 않는다.
+
+- Sentinel cache가 버리던 `entry_ai_economic_plan_observed`/`entry_ai_economic_source_gap`을 수용한다. 큰 frozen plan/계좌 원문 대신 기존 seed validator·capital envelope 계약이 검증한 작은 진단 projection을 보존한다. raw 원본은 변경하지 않는다.
+- `recorded_source_only` 표시와 실제 signed seed·plan hash·attempt/종목 결속·운영 cost/exit provenance·예산/reserve·signed capital source를 대사한다. 내부 capital source가 gap인 성공 표시도 `economic_producer_gap`이다.
+- 9/21 이후 정확한 기계 attempt에 pre-AI 경제성 관측 이벤트가 없으면 첫 평가10분 유예 후 탐지한다. 과거 도입 전 부재는 historical_not_required이며 9/17 파일을 재구성하거나 원천을 추정하지 않는다.
+- 정상 guard/확정 수량0은 `guard_excluded`, producer의 명시 unsupported는 `unsupported_scope`로 따로 집계한다. source_gap·모델 검증/자연 성과는 별개다. 동일 attempt의 상충하는 source proof는 gap으로 남긴다.
+- 기존 구조 결손과 같은 지속성/Telegram 전이 규칙을 적용한다. 정상 제출·guard receipt만으로 경제성 결손을 해제하지 않고 같은 attempt의 유효 원천 proof를 요구한다. 통보에 첫 경제성 blocker를 우선 표시한다.
+- cache version은 과거 번호와 충돌하지 않는15(raw)/16(lossless)을 사용한다. 기존11/13은 verified zero-stage census와 동일 raw generation/완료 offset이 있을 때만 재사용한다. 근거 없는 schema 덮어쓰기나 전수 raw 재스캔을 이번 리뷰에서 실행하지 않는다.
+- 실제 운영 pre-AI producer→pipeline JSONL→Sentinel cache→진단을 KRX/NXT/SOR와 ENTER/BLOCK/RECHECK에서 검증한다. 합성 원천 통과는 자연 유입·유효 모델 holdout·실제 EV가 아니다.

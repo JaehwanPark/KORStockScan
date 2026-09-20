@@ -115,8 +115,8 @@ SUBMIT_DROUGHT_MIN_BUDGET_UNIQUE = 3
 SUBMIT_TO_AI_CRITICAL_PCT = 20.0
 SUBMIT_TO_BUDGET_CRITICAL_PCT = 10.0
 REPORT_DIRNAME = "buy_funnel_sentinel"
-EVENT_CACHE_SCHEMA_VERSION = 11
-LOSSLESS_EVENT_CACHE_SCHEMA_VERSION = 13
+EVENT_CACHE_SCHEMA_VERSION = 15
+LOSSLESS_EVENT_CACHE_SCHEMA_VERSION = 16
 EVENT_CACHE_NAME = "buy_funnel_sentinel_events"
 FORBIDDEN_AUTOMATIONS = [
     "score_threshold_relaxation",
@@ -377,6 +377,7 @@ def _payload_to_cache_row(
         or stage in AI_TERMINAL_ATTRIBUTION_STAGES
         or stage in AI_TRACE_RESULT_STAGES
         or stage in ENTRY_ASYNC_WAIT_STAGES
+        or stage in {"entry_ai_economic_plan_observed", "entry_ai_economic_source_gap"}
         or stage in ENTRY_CALL_FINISH_STAGES
         or stage in BLOCKER_STAGES
         or stage in UPSTREAM_BLOCK_STAGES
@@ -388,6 +389,14 @@ def _payload_to_cache_row(
     emitted_at = _parse_iso_datetime(_safe_str(payload.get("emitted_at")))
     if emitted_at is None:
         return None
+    if stage in {"entry_ai_economic_plan_observed", "entry_ai_economic_source_gap"}:
+        from src.engine.monitoring.submission_bottleneck_monitor import economic_evidence
+        # Keep the proof diagnosis, not entire account/policy snapshots, in this slim cache.
+        projection = economic_evidence(raw_field_dict, _safe_str(payload.get("stock_code"))[:6])
+        raw_fields = {k: v for k, v in raw_field_dict.items() if k not in {
+            "entry_opportunity_replay_seed", "entry_execution_sizing_plan",
+            "entry_economic_capacity_receipt", "entry_price_plan"}}
+        raw_fields["economic_source_monitor_projection"] = json.dumps(projection, sort_keys=True)
     fields = {str(k): _safe_str(v) for k, v in raw_fields.items()}
     record_id = payload.get("record_id")
     if record_id in (None, "", 0):
@@ -439,15 +448,23 @@ def _event_from_cache_row(row: dict[str, Any]) -> PipelineEvent | None:
 def _previous_cache_schema_proof(target_date, raw_path, previous_schema):
     """A native stage census can prove that newly retained stages were absent."""
     from src.engine import observation_source_quality_audit as audit
-    if previous_schema not in {10, 12}:
+    if previous_schema not in {11, 13}:
         return None
     try:
+        meta_path = _event_cache_dir() / f"{EVENT_CACHE_NAME}_{target_date}.meta.json"
+        meta = json.loads(meta_path.read_text())
+        actual_schema = meta.get("schema_version")
+        if actual_schema not in ({12, 13} if previous_schema == 13 else {10, 11}):
+            return None
+        previous_schema = actual_schema
         path = _report_dir().parent / "observation_source_quality_audit" / f"observation_source_quality_audit_{target_date}.json"
         raw_report = path.read_bytes()
         payload = json.loads(raw_report)
         source = payload["source"]
-        stages = {"order_leg_no_response", "order_leg_fail", "order_leg_sent",
-                  "order_leg_owner_registry_reconciliation_required", "entry_submit_identity_reconciliation_blocked"}
+        stages = {"entry_ai_economic_plan_observed", "entry_ai_economic_source_gap"}
+        if previous_schema in {10, 12}:
+            stages.update({"order_leg_no_response", "order_leg_fail", "order_leg_sent",
+                           "order_leg_owner_registry_reconciliation_required", "entry_submit_identity_reconciliation_blocked"})
         projection = audit._read_raw_contract_projection(target_date, source["contract_projection"]["key"])
         if (payload["target_date"] != target_date or projection is None
                 or source["generation"] != audit._raw_generation(raw_path)
@@ -483,7 +500,7 @@ def load_pipeline_events(
             target_date=target_date,
             schema_version=cache_schema_version,
             verified_schema_migration=_previous_cache_schema_proof(
-                target_date, path, cache_schema_version - 1),
+                target_date, path, 13 if exclude_summary_stages else 11),
             parse_payload=lambda payload: _payload_to_cache_row(
                 payload,
                 exclude_summary_stages=exclude_summary_stages,

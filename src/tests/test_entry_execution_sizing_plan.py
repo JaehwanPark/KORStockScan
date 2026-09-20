@@ -795,7 +795,7 @@ def test_runtime_pre_ai_producer_freezes_owner_inputs_without_submit(monkeypatch
     policy_snapshot['environment']['KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ACTIVE_DATE'] = day
     policy_snapshot['files']={key.replace('2026-09-04',day):value for key,value in policy_snapshot['files'].items()}
     monkeypatch.setattr(capture_owner, '_cached_policy', lambda *a: policy_snapshot)
-    stock={'name':'TEST','id':1,'strategy':'SCALPING','source_signature':'scanner-confirmed','is_nxt':True,
+    stock={'name':'fixture','id':1,'strategy':'SCALPING','source_signature':'scanner-confirmed','is_nxt':True,
         'scanner_promotion_id':'promotion-pre-ai','code':'005930',
         'entry_economic_watch_lifetime': {
             'owner':'kiwoom_sniper_v2._scanner_evaluation_lifetime_anchor/_scalping_watching_ttl_sec',
@@ -817,6 +817,14 @@ def test_runtime_pre_ai_producer_freezes_owner_inputs_without_submit(monkeypatch
     events, source_contract=split._bounded_execution_projection(day)
     assert source_contract['producer_census']['identity_conservation_holds'] is True
     assert len(events)==1
+    from src.engine import buy_funnel_sentinel as sentinel
+    raw_event = next(payload for line in logger._event_path(day).read_text().splitlines()
+                     if (payload := json.loads(line)).get("stage") in {"entry_ai_economic_plan_observed", "entry_ai_economic_source_gap"})
+    cached = sentinel._payload_to_cache_row(raw_event, exclude_summary_stages=True)
+    assert cached is not None
+    diagnostic = json.loads(cached['fields']['economic_source_monitor_projection'])
+    assert diagnostic['status'] == ('recorded_source_only' if guard_allowed else 'guard_excluded'), diagnostic
+    assert 'entry_opportunity_replay_seed' not in cached['fields']
     if guard_allowed:
         assert result['entry_economic_source_status']=='recorded_source_only', result
         event=_load_entry_events(day,rows=events)[0]
@@ -827,6 +835,15 @@ def test_runtime_pre_ai_producer_freezes_owner_inputs_without_submit(monkeypatch
         assert seed['operating_contract']['budget_krw'] > 0
         capital = seed['operating_contract']['capital_source']
         assert capital['status'] == 'recorded_source_only'
+        from src.engine.monitoring.submission_bottleneck_monitor import economic_evidence
+        broken = deepcopy(seed)
+        broken_capital = broken['operating_contract']['capital_source']
+        broken_capital.update(status='source_gap', blocker='capacity_source_hash_or_contract_missing')
+        for value, key in ((broken_capital,'sha256'),(broken['operating_contract'],'sha256'),(broken,'seed_sha256')):
+            value[key] = replay.owner.digest({k:v for k,v in value.items() if k!=key})
+        hidden_gap = economic_evidence({**raw_event['fields'], 'entry_opportunity_replay_seed': broken}, '005930')
+        assert hidden_gap['status']=='source_gap'
+        assert hidden_gap['blocker']=='economic_capital_source:capacity_source_hash_or_contract_missing'
         assert capital['capacity_source_sha256'] == '9'*64
         assert capital['components']['cash_orderable_amount'] == 400800
         assert seed['operating_contract']['nxt_listing_receipt']['value'] is True
