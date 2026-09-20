@@ -118,6 +118,22 @@ def test_compact_checkpoint_reuse_economics_rejoin_and_source_block(monkeypatch,
     assert len(first["evaluation_fingerprint"]) == 64
     assert first["evaluation_state"] in {"evaluated_hold", "waiting_model_or_sample"}
     assert not first["promotion_pass"]
+    checkpoint_path = compact.report_path(
+        tmp_path, "2026-09-17"
+    ).with_suffix(".checkpoint.json")
+    legacy_checkpoint = compact.read(checkpoint_path)
+    legacy_checkpoint.pop("candidate_selection_sha256")
+    compact.write(checkpoint_path, compact.sealed(legacy_checkpoint))
+    report_path = compact.report_path(tmp_path, "2026-09-17")
+    legacy_report = compact.read(report_path)
+    legacy_report.pop("candidate_selection")
+    legacy_report["evaluation_fingerprint"] = "0" * 64
+    compact.write(report_path, compact.sealed(legacy_report))
+    preselection_results_rejected = compact.run(
+        data_root=tmp_path, day="2026-09-17", execute=False, runner=runner
+    )
+    assert preselection_results_rejected["metrics"]["paired_comparable_count"] == 0
+    assert len(calls) == 1
     identity = compact.input_identity(row)
     row["entry_quality_path"]["gross_net_target_pct"] = 0.9
     assert compact.input_identity(row) == identity
