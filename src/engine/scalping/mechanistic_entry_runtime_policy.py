@@ -589,11 +589,35 @@ def publish_compact_evaluation(
         existing = load(data_root=data_root, target_date=target)
         if (
             existing
-            and existing.get("source_artifact_sha256")
+            and existing.get("compact_paired_artifact_sha256")
             == source["artifact_content_sha256"]
             and existing.get("compact_evaluation_source_date") == source_day
         ):
-            return existing
+            machine_source = existing.get("machine_evaluation_source") or {}
+            machine_top_level = {
+                "source_date": machine_source.get("source_date"),
+                "source_file_sha256": machine_source.get("file_sha256"),
+                "source_artifact_sha256": machine_source.get(
+                    "artifact_content_sha256"
+                ),
+            }
+            if all(existing.get(key) == value for key, value in machine_top_level.items()):
+                return existing
+            repaired = copy.deepcopy(existing)
+            repaired.pop("bundle_sha256", None)
+            repaired.update(machine_top_level, generated_at=current.isoformat())
+            repaired["bundle_sha256"] = digest(repaired)
+            validate(repaired, target_date=target)
+            _atomic_write_json(
+                policy_root / "generations" / f"{existing['bundle_sha256']}.json",
+                existing,
+            )
+            _atomic_write_json(
+                policy_root / "generations" / f"{repaired['bundle_sha256']}.json",
+                repaired,
+            )
+            _atomic_write_json(policy_root / f"policy_{target}.json", repaired)
+            return load(data_root=data_root, target_date=target)
         if current >= datetime.fromisoformat(target + "T07:35:00").replace(tzinfo=KST):
             if existing is None:
                 raise ValueError("compact_preopen_freeze_without_dated_policy")
@@ -688,12 +712,17 @@ def publish_compact_evaluation(
         ).encode()
         source_hash = hashlib.sha256(encoded_source).hexdigest()
         _atomic_write_json(policy_root / "sources" / f"{source_hash}.json", source)
+        machine_source = bundle.get("machine_evaluation_source") or {}
         bundle.update(
             target_date=target,
-            source_date=publication_day,
+            source_date=machine_source.get("source_date", bundle["source_date"]),
             publication_date=publication_day,
-            source_file_sha256=source_hash,
-            source_artifact_sha256=source["artifact_content_sha256"],
+            source_file_sha256=machine_source.get(
+                "file_sha256", bundle["source_file_sha256"]
+            ),
+            source_artifact_sha256=machine_source.get(
+                "artifact_content_sha256", bundle["source_artifact_sha256"]
+            ),
             generated_at=current.isoformat(),
             compact_evaluation_source_date=source_day,
             previous_bundle_sha256=inherited["bundle_sha256"],

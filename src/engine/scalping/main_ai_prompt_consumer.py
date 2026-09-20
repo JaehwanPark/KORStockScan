@@ -1233,7 +1233,7 @@ def verify_compact_handoff(data_root: Path, source_day: str) -> dict:
         value = compact.read(path)
         if (
             value.get("compact_evaluation_source_date") == source_day
-            and value.get("source_artifact_sha256")
+            and value.get("compact_paired_artifact_sha256")
             == paired.get("artifact_content_sha256")
         ):
             policies.append((path, value))

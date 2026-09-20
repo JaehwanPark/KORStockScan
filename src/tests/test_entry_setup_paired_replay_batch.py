@@ -1,4 +1,5 @@
 import json
+import hashlib
 from pathlib import Path
 from datetime import datetime
 from functools import lru_cache
@@ -500,13 +501,35 @@ def test_compact_public_finalization_uses_direct_pair_policy_consumer(tmp_path, 
     assert result["effective_date"] == "2026-09-21"
     child = policy.load(data_root=tmp_path, target_date=result["effective_date"])
     assert child["machine_policy"] == parent["machine_policy"]
-    assert child["source_artifact_sha256"] == proof["artifact_content_sha256"]
+    assert child["source_artifact_sha256"] == parent["source_artifact_sha256"]
+    assert child["source_file_sha256"] == parent["source_file_sha256"]
+    assert child["source_date"] == parent["source_date"]
+    assert child["compact_paired_artifact_sha256"] == proof["artifact_content_sha256"]
     assert child["compact_evaluation_fingerprint"] == proof["evaluation_fingerprint"]
     assert child["ai_policy"]["prompt_version"] == (
         proof["candidate_prompt_version"]
         if promote
         else parent["ai_policy"]["prompt_version"]
     )
+    broken = {
+        **child,
+        "source_date": "2026-09-18",
+        "source_file_sha256": hashlib.sha256(
+            (json.dumps(proof, ensure_ascii=False, indent=2) + "\n").encode()
+        ).hexdigest(),
+        "source_artifact_sha256": proof["artifact_content_sha256"],
+    }
+    broken["bundle_sha256"] = policy.digest(
+        {k: v for k, v in broken.items() if k != "bundle_sha256"}
+    )
+    compact.write(Path(result["policy_path"]), broken)
+    compact.finalize(
+        data_root=tmp_path, day="2026-09-17", publication_day="2026-09-18"
+    )
+    repaired = policy.load(data_root=tmp_path, target_date=result["effective_date"])
+    assert repaired["source_date"] == parent["source_date"]
+    assert repaired["source_file_sha256"] == parent["source_file_sha256"]
+    assert repaired["source_artifact_sha256"] == parent["source_artifact_sha256"]
     assert verify_compact_handoff(tmp_path, "2026-09-17")["status"] == "PASS"
     assert not list(
         (tmp_path / "report/main_ai_prompt_consumer").glob(
