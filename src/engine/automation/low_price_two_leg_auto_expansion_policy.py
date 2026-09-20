@@ -6,6 +6,9 @@ import argparse
 import hashlib
 import json
 import os
+import re
+import shutil
+import tempfile
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -40,7 +43,8 @@ def _digest(value: Any) -> str:
 
 
 def _file_sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    with path.open("rb") as source:
+        return hashlib.file_digest(source, "sha256").hexdigest()
 
 
 def _next_trading_date(source_date: date) -> date:
@@ -415,6 +419,37 @@ def validate_policy(payload: Any, *, effective_date: date) -> None:
         _profile(row, authority_hash=payload["policy_hash"])
 
 
+def preserve_source_snapshot(payload: dict[str, Any], *, policy_dir: Path) -> Path:
+    """Keep exact original bytes independently of a later daily report refresh."""
+    source = Path(payload["source_report"])
+    expected = str(payload["source_report_sha256"])
+    if not re.fullmatch(r"[0-9a-f]{64}", expected) or _file_sha256(source) != expected:
+        raise ValueError("episode_auto_expansion_source_hash_mismatch")
+    folder = policy_dir / "source_snapshots"
+    folder.mkdir(parents=True, exist_ok=True)
+    snapshot = folder / f"{expected}.json"
+    if snapshot.exists():
+        if snapshot.is_symlink() or _file_sha256(snapshot) != expected:
+            raise ValueError("episode_auto_expansion_snapshot_conflict")
+        return snapshot
+    fd, temporary = tempfile.mkstemp(prefix=".source-", dir=folder)
+    try:
+        with os.fdopen(fd, "wb") as destination, source.open("rb") as origin:
+            shutil.copyfileobj(origin, destination, length=1024 * 1024)
+            destination.flush()
+            os.fsync(destination.fileno())
+        if _file_sha256(Path(temporary)) != expected:
+            raise ValueError("episode_auto_expansion_source_changed")
+        try:
+            os.link(temporary, snapshot)
+        except FileExistsError:
+            if snapshot.is_symlink() or _file_sha256(snapshot) != expected:
+                raise ValueError("episode_auto_expansion_snapshot_conflict")
+    finally:
+        os.unlink(temporary)
+    return snapshot
+
+
 def load_policy(day: date, *, policy_dir: Path = POLICY_DIR) -> dict[str, Any]:
     path = policy_path(day, policy_dir=policy_dir)
     try:
@@ -432,7 +467,12 @@ def load_policy(day: date, *, policy_dir: Path = POLICY_DIR) -> dict[str, Any]:
     if not source.is_file() or _file_sha256(source) != payload.get(
         "source_report_sha256"
     ):
-        raise ValueError("episode_auto_expansion_source_hash_mismatch")
+        expected = str(payload.get("source_report_sha256") or "")
+        if not re.fullmatch(r"[0-9a-f]{64}", expected):
+            raise ValueError("episode_auto_expansion_source_hash_mismatch")
+        source = policy_dir / "source_snapshots" / f"{expected}.json"
+        if source.is_symlink() or not source.is_file() or _file_sha256(source) != expected:
+            raise ValueError("episode_auto_expansion_source_hash_mismatch")
     if payload.get("schema") == CLOSED_LOOP_SCHEMA:
         from src.engine.monitoring import research_closed_loop as loop
 
@@ -546,6 +586,7 @@ def main(argv: list[str] | None = None) -> int:
         date.fromisoformat(payload["effective_date"]), policy_dir=args.policy_dir
     )
     if args.write:
+        preserve_source_snapshot(payload, policy_dir=args.policy_dir)
         if payload.get("schema") == CLOSED_LOOP_SCHEMA:
             from src.engine.monitoring.research_closed_loop import (
                 publication_transaction,

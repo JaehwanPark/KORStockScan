@@ -365,6 +365,7 @@ def _refresh(
                 effective,
                 policy_dir=Path(directory).parent / "low_price_two_leg_auto_expansion",
             )
+            episode_policy.preserve_source_snapshot(policy, policy_dir=child.parent)
             loop.publication_transaction(
                 child.parent,
                 effective_date=effective,

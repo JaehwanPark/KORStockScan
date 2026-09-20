@@ -65,3 +65,9 @@ widget/machine 독립 wrapper의 exact-date terminal/source hash를 최종 summa
 - main 939848688f104d61803f244e156ab5d5는 expanded 계산·보고서 생성을 완료했다. 기존 789 checkpoint를 소비하여 selection 재계산을 피했다. 이후 정책 변환은 admission 원장으로 확보한 종목에 Daily CSV 날짜까지 강제하는 reader 결함으로 실패했다.
 - `admission_symbols(source_date, owner=episode)`의 기존 hash/date/owner 검증을 재사용하여 종목과 이름이 정확히 일치할 때만 CSV 부재를 허용한다. 미등록·이름 불일치·잘못된 날짜·손상 원장은 거부한다. 보고서 자체의 모집단·비용·holdout·recommendation 검증은 유지한다.
 - 확장 보고서 원본 및 원 command rc=0를 재사용 증거로 보존한다. 정책 publisher 실패는 별개 실패 이력으로 남기며 전체 완료로 바꾸지 않는다.
+
+## 기존 정책의 원천 세대 보존
+
+- 재생성된 9/17 report가 9/18 기존 정책의 source SHA와 달라 incumbent 검증이 실패했다. 기존 정책/manifest를 수정하거나 hash를 바꾸지 않는다. 사전 백업의 exact SHA가 일치하는 원 보고서를 `source_snapshots/<sha>.json`으로 보존하고 reader가 그 불변 세대만 허용한다.
+- CLI와 machine closed-loop 두 실제 publisher 모두 정책 발행 전 원천 스냅샷을 저장한다. 동시 변경·잘못된 snapshot hash·symlink는 거부하며 기존 candidate/holdout/parent reconstruction 검증을 유지한다.
+- 53회 관련 회귀 통과. 후속 native publication 회귀와 실제 carry 변환을 추가 확인한다. 과거 정책은 기존 버전이며 신규 성과로 집계하지 않는다.

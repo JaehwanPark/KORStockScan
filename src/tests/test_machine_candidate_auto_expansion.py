@@ -269,3 +269,18 @@ def test_isolated_partial_source_emits_disabled_policy_without_erasing_gap(tmp_p
     with pytest.raises(ValueError, match='source_contract_invalid'):
         expansion.build_policy(source_date=date(2026, 8, 24), report_dir=directory,
                                publication_date=date(2026, 9, 20), policy_dir=tmp_path / 'policies')
+
+
+def test_original_policy_source_survives_report_refresh_only_with_exact_snapshot(tmp_path):
+    reports = tmp_path/'reports'; reports.mkdir()
+    policies = tmp_path/'policies'; policies.mkdir()
+    source = reports/'low_price_two_leg_expanded_candidate_research_2026-09-15.json'
+    source.write_text(json.dumps(_report()))
+    payload = expansion.build_policy(source_date=date(2026,9,15), report_dir=reports, policy_dir=policies)
+    expansion.policy_path(date(2026,9,16), policy_dir=policies).write_text(json.dumps(payload))
+    snapshot = expansion.preserve_source_snapshot(payload, policy_dir=policies)
+    source.write_text('{}')
+    assert expansion.load_policy(date(2026,9,16), policy_dir=policies) == payload
+    snapshot.write_text('{}')
+    with pytest.raises(ValueError, match='source_hash_mismatch'):
+        expansion.load_policy(date(2026,9,16), policy_dir=policies)
