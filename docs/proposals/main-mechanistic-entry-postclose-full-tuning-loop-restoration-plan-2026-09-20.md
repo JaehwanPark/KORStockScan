@@ -630,3 +630,7 @@ strict verifier는 다음을 모두 요구한다.
 검증·배포·과거 원천 대사 및 잔여 범위의 최종 판정은 기존 [operating evidence 리뷰](../audit-reports/2026-09-20-main-machine-operating-evidence-closure-review.md)에 이어 기록한다. 합성 producer 회귀와 자연 모델 검증, 다음 PREOPEN/PID 소비는 각각 별도 증거다.
 
 - full-population 선정/consumer의 경제성 지표는 검증된 운영 replay의 비용 차감 EV·paired Δ이며 terminal proxy는 진단이다. 기존 10bp·tail·holdout 기준은 유지한다. 지원 밖의 변동 자본·AI 미호출·미종결 경로는 계약 미지원으로 기록하고 자연 대기로 숨기지 않는다.
+
+### 14.11 후속 구현 closure — 2026-09-20 17시
+
+§14.9 이전 실행의 ME8/9/10 OPEN은 당시 기록이다. 후속 `beb0c1578`→`f339f47bb`→`e89e9da12`에서 지원 범위 producer/순차·동시 자본 replay/실제 경제성 선정/다중 scope 검증/alias 분모 및 소비 회귀를 닫았다. 상세 범위·미지원 운영 계약·308개 최종 회귀·정책·terminal 증거는 [리뷰의 최신 종결](../audit-reports/2026-09-20-main-machine-operating-evidence-closure-review.md#920-17시-후속-종결)을 따른다. 9/21 incumbent 준비와 경제성 입증은 분리한다. 과거 원천 결손, fixed-capital v1 밖의 운영 계약, 자연 model/candidate holdout 및 실제 PID/완료 손익은 이 구현 closure로 해결되었다고 주장하지 않는다.

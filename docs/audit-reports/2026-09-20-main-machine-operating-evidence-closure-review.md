@@ -1,5 +1,7 @@
 # 메인 기계 전수 경제성 연결 보완 리뷰 — 2026-09-20
 
+최신 판정은 아래 **9/20 17시 후속 종결**을 따른다. 이전 절의 미종결·커밋·수치는 당시 증거로 보존한다.
+
 범위: [복구계획 §14](../proposals/main-mechanistic-entry-postclose-full-tuning-loop-restoration-plan-2026-09-20.md#14-공통-데이터미진입-기회비용-경제성-연결-상세-보완계획), 공통 데이터·기회비용 U6/U7/U11의 메인 최초진입 연결. 기존 health·원시각·306파일 migration과 독립 owner 전체를 다시 구현하지 않았다.
 
 **판정: 비교·선정·발행의 확인된 결함을 보완했지만 전체 실행 경제성 완료는 아니다.** 운영 정책 발행과 원화 EV 완성은 별도 수용조건이다. 후보 없음/유효 incumbent carry를 양수 경제성 또는 ME8–ME14 전부 완료로 보고하지 않는다.
@@ -78,4 +80,44 @@
 
 실행 점검 추가 수리: 최초 main 재생성은 provenance 부적격 과거 paired rows까지 가격 재라벨링에 보내 8월 raw를 읽는 것을 발견하여 중단했다. 새 성공으로 기록하지 않았으며 중단 로그를 보존한다. 기존 source-contract 검사와 동일한 사전 필터를 추가하고 부적격 행은 분모/제외 사유를 보존한다. 관련 307개 회귀 통과. 자연 관측 loader 두 함수는 원 캐시 생성 커밋 `d9e2cdae3`와 AST가 동일하고 9/14–17 원천 stat은 캐시 생성 이후 변경되지 않았다. 기존 2,330건 materialization hash와 입력 stat을 `materialization-reuse.json`에 기록하여 재사용한다.
 
-ME8의 과거 미대사 2건을 찾았다. 9/14 `187660`의 paired trace `analyze_target:187660:1789345103399:1c371c0a`는 자연 attempt `aims-09537e63c28235bd65f7`의 명시적 AI trace alias다. 9/15 `417200`의 paired trace `analyze_target:417200:1789447024094:fbbbc9c0` 역시 자연 attempt `aims-fa035...`와 같은 명시적 AI trace다(전체 ID는 exact-disposition receipt). 시간 근접 대사가 아니다. paired가 자연 기계 관측과 이중 집계되던 결함을 수리했다. 자연 관측을 보존하고 paired alias 제외 수를 모집단 대사에 남기며, 서로 다른 보유 경로의 SELL/AI 결과는 옮기지 않는다. 관련 308개 회귀 통과. 이미 계산된 9개 full-cost paired 행은 원 source identity/hash를 대사해 후속 재계산에 재사용하며 가격 raw를 다시 읽지 않는다.
+ME8의 과거 미대사 2건을 찾았다. 9/14 `187660`의 paired trace `analyze_target:187660:1789345103399:1c371c0a`는 자연 attempt `aims-09537e63c28235bd65f7`의 명시적 AI trace alias다. 9/15 `417200`의 paired trace `analyze_target:417200:1789447024094:fbbbc9c0` 역시 자연 attempt `aims-fa0353c534f508292be3`와 같은 명시적 AI trace다(전체 ID는 exact-disposition receipt). 시간 근접 대사가 아니다. paired가 자연 기계 관측과 이중 집계되던 결함을 수리했다. 자연 관측을 보존하고 paired alias 제외 수를 모집단 대사에 남기며, 서로 다른 보유 경로의 SELL/AI 결과는 옮기지 않는다. 관련 308개 회귀 통과. 이미 계산된 9개 full-cost paired 행은 원 source identity/hash를 대사해 후속 재계산에 재사용하며 가격 raw를 다시 읽지 않는다.
+
+## 9/20 17시 후속 종결
+
+**지원 범위의 원천 생성·저장·경제성 계산·선정·소비 구현과 회귀는 완료했다. 자연 경제성 입증 및 아래 미지원 운영 범위의 확대는 완료가 아니다.** 기존 summary는 과거 원천이 현재 producer를 입증하지 못하는 상황을 계속 source gap으로 표시한다. 이를 PASS나 자연 성과로 바꾸지 않았다.
+
+| 항목 | 코드·회귀 결과 | 남은 증거/범위 |
+|---|---|---|
+| ME8 원천/분모 | BLOCK/RECHECK 관측, 기존 bounded 계좌 읽기, plan/stop/cost/reserve 저장과 parser 연결, 명시적 AI trace alias 제거 완료 | 과거 8행은 고유 6판단. 당시 frozen operating plan의 복구는 검토 원천에서 입증되지 않음. 현재 계좌나 실제 SELL로 보충하지 않음 |
+| ME9 독립 실행 경제성 | 기존 owner의 독립 CF arm, 비노출, 반복 RECHECK/실제 TTL 종료, 동일 frozen 승인 수량·예산 계산 완료 | 최초 BLOCK에서 호출되지 않은 AI의 판정, 미확정 cancel/late-fill·부분 체결·미청산은 미지원/결손이며 0원 완료로 만들지 않음 |
+| ME10 자본·scope | 동일 promotion 중복, 동시 reserve/보유 종목, 손실 후 현금, base/stress 자본 충돌, frozen 전체 scope 조합 검증 완료 | 계좌 한도 변경·외부 현금흐름, 재평가 중 수량 변경, FIFO 의존 CF는 고정 자본 v1 범위 밖. 시간 경과만으로 해소되지 않음 |
+| ME11 선정 | 비용 차감 operating EV·일별 순익·tail·노출·참여율·실측 오차 하한, calibration freeze와 독립 model/candidate holdout, publisher 지표 일치 완료 | 신규 자연 모델 검증 표본 및 동결 이후 후보 holdout 필요. 10bp·sample·tail 기준 유지 |
+| ME12 소비 | dated bundle→summary/checklist→main/compact verifier→strict seal/controller 및 reader/fallback 검증 완료 | 9/21 정상 PREOPEN·메인/위젯/에피소드 실제 PID 소비는 아직 실행하지 않음 |
+| ME13 리뷰/검증 | producer→저장/projection→계산, 지원/차단 입력, hash/date/scope/holdout 실패, alias/census 회귀 완료 | 합성 회귀는 자연 성과가 아님 |
+| 적용 후 성과 | 기존 machine+compact 적용 버전/episode 중복 제거·20 source-day rolling/cumulative 완료 손익 경로 연결 | `waiting_natural_applied_completed_cost_evidence`, groups0. 모델 ΔEV·실제 순익·인과적 개선은 별개 |
+
+자연 재평가 결과:
+
+- KRX 모집단 1,715→1,712(자연1,708+paired4). 명시적 alias3개를 제거했으며 나머지 source/cohort/cost 제외 수는 이전 계산과 동일함을 assertion으로 확인했다. 변경8건 중 alias는2건이므로 고유 변경은6건이다.
+- 등록9 scope를 모두 처분했다. main 신규 승격 후보0, 상태 `source_gap`, blocker `machine_operating_population_unbound`, 운영 ΔEV·일별 순익 null. 이는 valid no-edge 측정이 아니다.
+- 자연 compact21건은 손절 결손10, 전송 계약 실패8, 원천/세션 결속 실패2, 응답 의미 실패1. 운영 모델 실제 비교0. 추가 AI 호출 없이 재평가했고 `blocked_source/source_gap`으로 incumbent를 유지했다.
+- 9/17 원천을 실제 9/20에 발행하여 9/21용 policy를 준비했다. main/전체 scope 및 compact 정책 본문은 이전 승인 incumbent와 동일하다. 신규 양수 정책·실제 증분 이익은 입증되지 않았다.
+
+검증 및 실행 증거:
+
+- 코드 커밋·push: `beb0c1578`(주 구현), `f339f47bb`(부적격 원천 사전 필터), `e89e9da12`(명시적 alias 중복 수리). 최종 source release는 `main-machine-operating-completion-20260920-e89e9da12`.
+- 영향 범위843개, WATCHING owner2개 통과 이후 추가 수리의 관련308개 회귀 통과. 중복되는 suite이므로 합산하지 않는다. Python compile, print-only 문서 parser, diff check 통과. 마지막 로그 `alias-review-tests.log`.
+- 자연 관측2,330건은 기존 loader AST와 원천 stat을 대사한 materialization을 사용했다. 최초 bounded 재라벨링은 지원212행/7 source-day에 한정했다. alias 후행은 계산된 full-cost9행의 source identity/원천을 대사해 재사용했으며 raw 재스캔0이었다.
+- main→compact 평가/발행→summary→checklist→main/compact scoped→preterminal strict→seal→controller를 실행했다. 후행10개 명령 exit0, 독립 widget/machine producer receipt 유효, 재사용한12개 독립 owner 산출물 hash 불변. 전체 A–H·cleanup·detector는 반복하지 않았다. 기존 cleanup/final detector는 15:26:54의 별도 원 실행 증거다.
+- 서비스9개 정의/129개 인스턴스의 source binding을 successor로 교체했고 최종에도 모두 inactive/PID0. 기존 시각·주문 인자·수량·guard 불변. 봇 시작/재시작, 주문, 조기 PREOPEN, 외부 sync/알림을 실행하지 않았다.
+
+최종 run `402279f6cf954c7ab00676635c93f6bc`: main terminal `succeeded`, controller `done`, strict `pass`.
+
+- main 평가 hash: `193b8979aa4450c3e5ccbce9f0a5240d61c8ea2224431f2918cece1f88ded1e4`.
+- 9/21 bundle hash: `5913223d115fd25b0ac5fd14a6b538ffc5d840e67865eb7b9d64fa035ad53020`.
+- seal: `/home/ubuntu/KORStockScan/data/report/threshold_cycle_postclose_verification/attempts/2026-09-17/09fa70013bce40de9077c3958a0cf8f9.json`.
+- 최종 strict: `/home/ubuntu/KORStockScan/data/report/threshold_cycle_postclose_verification/attempts/2026-09-17/b709bdb53f364e52a32479e8e9cffef5.json`.
+- 실행·재사용·서비스·정책·자연 결과의 machine-readable 대사: `tmp/main-machine-operating-completion-20260920/final-reconciliation.json`.
+- 원 실패/중단/이전 성공 receipt는 보존했다. 이번 native 성공은 원천 복구나 경제적 성공의 대체 증거가 아니다.
+
+남은 자연 OPEN은 새 지원 입력 유입→독립 실제 모델 표본→동결 이후 후보 holdout→정상 PREOPEN/PID 소비→완료 비용 손익이다. 위 표의 미지원 운영 범위는 자연 대기에 섞지 않으며, 확대하려면 별도 검증 가능한 운영 계약이 필요하다. 현재 준비 상태는 **guarded incumbent 기동 준비 완료**, **경제적 개선 실증 미완료**다.
