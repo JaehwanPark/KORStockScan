@@ -305,7 +305,8 @@ def test_widget_prefix_reuse_rejects_drift_and_preserves_origin(monkeypatch, tmp
         mod._producer_main(cli+["--phase","started","--reuse-widget-prefix"])
 
 
-def test_machine_refresh_binds_widget_generation_without_rewriting_original_run(monkeypatch, tmp_path):
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_machine_refresh_binds_widget_generation_without_rewriting_original_run(monkeypatch, tmp_path, interrupted):
     def _write(path, payload):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload))
@@ -333,6 +334,22 @@ def test_machine_refresh_binds_widget_generation_without_rewriting_original_run(
     _write(path, dict(target_date=day, enriched=True))
     _write(paths['widget_symbol_runtime_policy_apply'], dict(target_date=day, enriched=True))
     assert mod.producer_receipt_issues(reports, day, 'widget')
+    if interrupted:
+        assert mod._producer_main(['--owner', 'machine', '--date', day, '--phase', 'finished', '--exit-code', '1']) == 1
+        assert mod.producer_receipt_issues(reports, day, 'machine')
+        closure = reports / 'machine_research_closed_loop' / f'machine_research_closed_loop_{day}.json'
+        _write(closure, dict(target_date=day, native_current=False))
+        with pytest.raises(RuntimeError, match='upstream_widget_terminal_invalid'):
+            run('machine', 'started')
+        _write(closure, dict(target_date=day, native_current=True))
+        advisory = paths['widget_advisory_calibration']
+        original_advisory = advisory.read_bytes()
+        _write(advisory, dict(target_date=day, illegal_change=True))
+        with pytest.raises(RuntimeError, match='upstream_widget_terminal_invalid'):
+            run('machine', 'started')
+        advisory.write_bytes(original_advisory)
+        assert run('machine', 'started') == 0
+        assert mod.producer_receipt_issues(reports, day, 'widget')
     assert run('machine', 'finished') == 0
     assert mod.producer_receipt_issues(reports, day, 'widget') == []
     assert mod.producer_receipt_path(reports, day, 'widget').read_bytes() == original

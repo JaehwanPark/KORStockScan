@@ -307,6 +307,19 @@ def _large_companion(
         source_name_matches = source_path.name == path.name
         byte_sha_matches = bool(artifact_sha256 and payload.get("artifact_sha256") == artifact_sha256)
         verified = error is None and _date_matches(payload, target_date) and source_name_matches and byte_sha_matches
+        if not verified:
+            # The late machine publisher can legitimately replace the study
+            # after main's reuse receipt. Accept only its current native proof.
+            from src.engine.automation.machine_research_closed_loop_refresh import validate_current_receipt
+            native_path = path.parent.parent / "machine_research_closed_loop" / f"machine_research_closed_loop_{target_date}.json"
+            native, native_error, native_mode, _ = _read(native_path)
+            if (native_error is None and (native.get("dependency_sources") or {}).get(str(path.resolve()))
+                and validate_current_receipt(native, target_date)):
+                return native, {
+                    "path": str(native_path), "sha256": _sha(native_path),
+                    "read_mode": native_mode, "contract": "machine_research_closed_loop_current_dependency",
+                    "source_artifact_sha256": artifact_sha256, "verified": True,
+                }, None
         return payload, {
             "path": str(companion_path),
             "sha256": _sha(companion_path),

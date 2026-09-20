@@ -80,6 +80,7 @@ def _read_report_dependency(path):
     if path.parent.name in {
         "widget_symbol_signal_policy_research",
         "low_price_two_leg_expanded_candidate_research",
+        "low_price_two_leg_tuning",
     }:
         from src.engine.monitoring.low_price_two_leg_expanded_candidate_research import (
             read_report,

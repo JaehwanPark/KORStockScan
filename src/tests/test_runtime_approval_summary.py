@@ -608,3 +608,23 @@ def test_rising_policy_receipt_rejects_multiple_runtime_axes(monkeypatch, tmp_pa
     source = report["sources"]["rising_missed"]
     assert source["policy_receipt"]["valid"] is False
     assert source["economic_evidence"]["comparison_status"] == "source_gap"
+
+
+def test_large_expansion_uses_current_late_machine_dependency_proof(monkeypatch, tmp_path):
+    from src.engine.automation import machine_research_closed_loop_refresh as native
+    day = "2026-09-17"
+    path = tmp_path / "low_price_two_leg_expanded_candidate_research" / f"study_{day}.json"
+    _write(path, {"target_date": day, "enriched": True})
+    receipt_path = tmp_path / "machine_research_closed_loop" / f"machine_research_closed_loop_{day}.json"
+    receipt = dict(target_date=day, dependency_sources={str(path.resolve()): "semantic_hash"}, native_valid=True)
+    _write(receipt_path, receipt)
+    monkeypatch.setattr(native, "validate_current_receipt", lambda value, day: value.get("native_valid") is True)
+    payload, proof, error = mod._large_companion("low_price_expansion", path, day, mod._sha(path), {})
+    assert error is None and proof["verified"]
+    assert proof["contract"] == "machine_research_closed_loop_current_dependency"
+    receipt["native_valid"] = False
+    _write(receipt_path, receipt)
+    assert mod._large_companion("low_price_expansion", path, day, mod._sha(path), {})[2] == "semantic_unverified_large_source"
+    receipt.update(native_valid=True, dependency_sources={str(tmp_path / "other.json"): "unrelated"})
+    _write(receipt_path, receipt)
+    assert mod._large_companion("low_price_expansion", path, day, mod._sha(path), {})[2] == "semantic_unverified_large_source"

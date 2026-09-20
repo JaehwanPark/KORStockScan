@@ -496,6 +496,26 @@ def producer_receipt_issues(report_dir: Path, day: str, owner: str) -> list[str]
     return issues
 
 
+def _verified_failed_machine_refresh_retry(report_dir: Path, day: str, previous: dict, issues: list[str]) -> bool:
+    """Permit a repair attempt, never terminal success, after native reconstruction."""
+    from src.engine.verify_threshold_cycle_postclose_chain import _sha
+    from src.engine.automation.machine_research_closed_loop_refresh import validate_current_receipt
+    allowed = {f"widget:source_hash_invalid:{label}" for label in (
+        "widget_symbol_signal_policy_research", "widget_symbol_runtime_policy_apply")}
+    widget_path = producer_receipt_path(report_dir, day, "widget")
+    upstream = previous.get("upstream_widget") or {}
+    if (not issues or not set(issues) <= allowed or previous.get("status") != "failed"
+        or previous.get("owner") != "machine" or previous.get("target_date") != day
+        or not previous.get("run_id") or type(previous.get("exit_code")) is not int
+        or previous.get("exit_code") == 0
+        or not re.fullmatch(r"[0-9a-f]{40}", str(previous.get("code_commit") or ""))
+        or upstream.get("sha256") != _sha(widget_path)
+        or upstream.get("sources") != _load_json(widget_path).get("sources")):
+        return False
+    closure_path = report_dir / "machine_research_closed_loop" / f"machine_research_closed_loop_{day}.json"
+    return validate_current_receipt(_load_json(closure_path), day)
+
+
 def _producer_main(argv=None) -> int:
     import argparse
     import os
@@ -524,7 +544,8 @@ def _producer_main(argv=None) -> int:
         if args.owner == "machine":
             widget_path = producer_receipt_path(report_dir, day, "widget")
             if widget_path.exists():
-                if producer_receipt_issues(report_dir, day, "widget"):
+                widget_issues = producer_receipt_issues(report_dir, day, "widget")
+                if widget_issues and not _verified_failed_machine_refresh_retry(report_dir, day, value, widget_issues):
                     raise RuntimeError("machine_upstream_widget_terminal_invalid")
                 upstream_widget = dict(path=str(widget_path), sha256=_sha(widget_path),
                                        sources=_load_json(widget_path)["sources"])

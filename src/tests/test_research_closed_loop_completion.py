@@ -566,6 +566,10 @@ def test_refresh_reads_large_studies_and_preserves_contract_rejection(tmp_path):
     studies, paths, missing = read_studies(day, report_root=tmp_path)
     assert set(studies) == set(families) and missing == []
     assert _read_report_dependency(paths["episode"]) == studies["episode"]
+    actual = tmp_path / "low_price_two_leg_tuning" / "actual.json"
+    actual.parent.mkdir()
+    actual.write_text(json.dumps(payload))
+    assert _read_report_dependency(actual) == payload
     unrelated = tmp_path / "unrelated.json"
     unrelated.write_text(json.dumps(payload))
     with pytest.raises(ValueError):

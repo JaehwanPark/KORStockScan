@@ -87,3 +87,7 @@ widget/machine 독립 wrapper의 exact-date terminal/source hash를 최종 summa
 ## Machine shared-data 경로 결속
 
 collector expansion/mechanical replay의 상대 data 경로가 immutable release의 공유 mount를 개별 원천 symlink로 잘못 판단했다. 기존 DATA_DIR의 신뢰된 mount 해석을 재사용하고 개별 artifact symlink/세대 충돌 검증은 보존했다. source gate·replay 회귀29개 통과. 대기 중인 이번 machine 프로세스만 종료하여 원 실패 attempt를 보존하고 검증된 successor에서 재개한다. trading 서비스에는 신호를 보내지 않았다.
+
+## Late machine 결과와 최종 summary 재결속
+
+machine은 모든 전행을 통과한 뒤 low-price actual 83 MiB dependency를 32 MiB로 제한한 마지막 receipt 생성에서 실패했다. 기존 보고서 128 MiB 계약을 해당 owner에만 적용하고 미관련 파일 한도는 유지했다. 대용량/native completion42개 회귀 통과. 중간 발행 뒤 실패한 machine 재개는 원 widget receipt/실패 run을 보존하며 현재 native closed-loop 재검증을 선행해야 한다. main의 최종 scoped verifier도 오래된 low-price reuse SHA를 성공으로 재사용하지 않고 실패했다. summary는 변경된 study를 검증된 late native dependency proof에 결속하도록 보완한다. 실패 wrapper를 PASS로 바꾸거나 전체 main evaluator를 다시 돌리지 않는다.
