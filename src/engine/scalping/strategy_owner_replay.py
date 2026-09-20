@@ -2149,7 +2149,10 @@ def entry_split_actual_economic_receipt(stock, *, buy_price, buy_qty, profit_rat
     decision_valid=(decision.get('sha256')==split._canonical_sha256({k:v for k,v in decision.items() if k!='sha256'})
         and decision.get('machine_bundle_sha256')==seed['policy_bundle_sha256']
         and decision.get('evaluation_attempt_id')==seed['evaluation_attempt_id']
-        and all(decision.get(k) for k in ('machine_policy_version','compact_prompt_version','decision_trace_id','runtime_pid')))
+        and all(decision.get(k) for k in (
+            'machine_policy_version','machine_policy_sha256',
+            'compact_prompt_version','compact_prompt_sha256',
+            'decision_trace_id','runtime_pid')))
     value=dict(episode_id=str(stock.get('position_episode_id') or seed['plan_sha256']),
         plan_sha256=seed['plan_sha256'],source_date=seed['source_date'],
         completion_date=completion_at.astimezone(KST).date().isoformat(),completed_at=completion_at.isoformat(),

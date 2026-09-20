@@ -22716,10 +22716,14 @@ def test_pre_submit_liquidity_relief_allows_strong_bundle_submit(
                 "entry_primary_decision_owner": ("mechanistic_entry_adjudicator"),
                 "entry_mechanistic_action": "ENTER_NOW",
                 "entry_mechanistic_policy_version": "test-machine-v1",
+                "entry_mechanistic_policy_sha256": "c" * 64,
                 "entry_ai_screen_status": "pass",
                 "entry_ai_screen_pass": True,
+                "ai_prompt_version": "test-compact-v1",
+                "ai_prompt_sha256": "d" * 64,
                 "evaluation_attempt_id": "eval-relief",
                 "scanner_promotion_id": "SCANPROM-RELIEF",
+                "machine_bundle_sha256": "b" * 64,
                 "policy_bundle_hash": "b" * 64,
                 "effective_venue": "KRX",
                 "market_session_bucket": "KRX_REGULAR",
@@ -22923,6 +22927,9 @@ def test_pre_submit_liquidity_relief_allows_strong_bundle_submit(
         assert stock["entry_execution_broker_route_resolution"] == (
             "consistent_submitted_legs"
         )
+        version_source = stock["last_watching_ai_machine_primary_fields"]
+        assert version_source["entry_mechanistic_policy_sha256"] == "c" * 64
+        assert version_source["ai_prompt_sha256"] == "d" * 64
         assert stock["entry_execution_route_recorded_at"] > 0
         assert not stock.get("entry_submit_identity_reconciliation_required")
     else:

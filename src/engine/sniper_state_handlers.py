@@ -31376,6 +31376,7 @@ def _machine_primary_entry_provenance_fields(source: dict | None) -> dict:
         "entry_mechanistic_action",
         "entry_mechanistic_policy_decision",
         "entry_mechanistic_policy_version",
+        "entry_mechanistic_policy_sha256",
         "entry_ai_role",
         "entry_ai_screen_status",
         "entry_ai_followup_disposition",
@@ -68474,7 +68475,9 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     evaluation_attempt_id=machine_action_receipt.get("evaluation_attempt_id"),
                     machine_bundle_sha256=machine_action_receipt.get("machine_bundle_sha256") or machine_action_receipt.get("policy_bundle_hash"),
                     machine_policy_version=decision_source.get("entry_mechanistic_policy_version"),
+                    machine_policy_sha256=decision_source.get("entry_mechanistic_policy_sha256"),
                     compact_prompt_version=decision_source.get("ai_prompt_version"),
+                    compact_prompt_sha256=decision_source.get("ai_prompt_sha256"),
                     decision_trace_id=stock.get("last_watching_ai_decision_trace_id"),
                     runtime_pid=os.getpid(), consumed_at=datetime.fromtimestamp(time.time(),tz=_KST).isoformat())
                 from src.engine.scalping.strategy_owner_components import digest

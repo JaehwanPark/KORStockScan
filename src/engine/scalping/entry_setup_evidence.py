@@ -2570,6 +2570,9 @@ def compose_mechanistic_primary_decision(
     else:
         followup_disposition = "ai_screen_invalid_fail_closed_wait"
     role_contract = dict(MECHANISTIC_PRIMARY_ROLE_CONTRACT)
+    selected_mechanistic_policy = _as_dict(
+        MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1 if policy is None else policy
+    )
     result.update(
         {
             "primary_schema": MECHANISTIC_PRIMARY_DECISION_SCHEMA,
@@ -2578,10 +2581,11 @@ def compose_mechanistic_primary_decision(
             "entry_decision_role_contract": role_contract,
             "entry_mechanistic_action": mechanistic_action,
             "entry_mechanistic_policy_decision": policy_decision,
-            "entry_mechanistic_policy_version": (
-                _as_dict(
-                    MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1 if policy is None else policy
-                ).get("version")
+            "entry_mechanistic_policy_version": selected_mechanistic_policy.get(
+                "version"
+            ),
+            "entry_mechanistic_policy_sha256": _canonical_sha256(
+                selected_mechanistic_policy
             ),
             "entry_ai_advisory_verdict": advisory_verdict,
             "entry_ai_advisory_contract_valid": not advisory_errors,

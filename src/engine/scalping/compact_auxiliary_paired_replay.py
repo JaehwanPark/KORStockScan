@@ -27,7 +27,7 @@ AUTHORITY = dict(
     broker_order_forbidden=True,
 )
 CONTRACT = {
-    "schema": "compact_auxiliary_paired_promotion_v6",
+    "schema": "compact_auxiliary_paired_promotion_v7",
     "learning_episode_floor": 20,
     "holdout_episode_floor": 20,
     "holdout_source_day_floor": 2,
@@ -43,8 +43,11 @@ CONTRACT = {
     "operating_arm_and_scope_required": True,
     "model_holdout_precedes_prompt_learning": True,
     "empirical_error_and_stress_lower_bound_required": True,
+    "incumbent_only_candidate_direction_required": True,
+    "candidate_direction_route_learning_floor_required": True,
 }
 SOURCE_PROJECTION_CONTRACT = "compact_pre_ai_execution_source_v7"
+CANDIDATE_SELECTION_SCHEMA = "compact_auxiliary_candidate_direction_v1"
 
 
 def digest(value):
@@ -801,6 +804,18 @@ def promotion_valid(report, *, incumbent, selected, source_manifest_sha256, effe
         or any(report.get(k) is not v for k, v in AUTHORITY.items())
     ):
         return False
+    selection = report.get("candidate_selection") or {}
+    if (
+        not valid(selection)
+        or selection.get("schema") != CANDIDATE_SELECTION_SCHEMA
+        or selection.get("status") != "candidate_selected"
+        or selection.get("candidate_prompt_version") != selected
+        or "|".join(scope) not in selection.get("selected_policy_scopes", [])
+        or selection.get("candidate_response_used_for_selection") is not False
+        or selection.get("candidate_holdout_used_for_selection") is not False
+        or selection.get("model_holdout_precedes_selection_population") is not True
+    ):
+        return False
     inference_receipt = report.get("runtime_inference_cost_receipt") or {}
     try:
         pricing_root = Path(inference_receipt["pricing_path"]).parents[2]
@@ -974,10 +989,15 @@ def applied_decision_version_performance(split_report, *, day):
         receipt=row.get("entry_decision_version_receipt") or {}
         if (row.get("entry_decision_pid_consumed") is not True
             or receipt.get("sha256") != split._canonical_sha256({k:v for k,v in receipt.items() if k != "sha256"})
-            or not all(receipt.get(k) for k in ("machine_policy_version","compact_prompt_version","decision_trace_id","runtime_pid"))):
+            or not all(receipt.get(k) for k in (
+                "machine_policy_version","machine_policy_sha256",
+                "compact_prompt_version","compact_prompt_sha256",
+                "decision_trace_id","runtime_pid"))):
             excluded["exact_submit_decision_version_receipt_missing_or_invalid"]+=1
             continue
-        rows.append({**row,"policy_version":receipt["machine_policy_version"]+"|"+receipt["compact_prompt_version"],
+        rows.append({**row,"policy_version":"|".join((
+                receipt["machine_policy_version"], receipt["machine_policy_sha256"],
+                receipt["compact_prompt_version"], receipt["compact_prompt_sha256"])),
             "policy_sha256":receipt.get("machine_bundle_sha256"),"policy_applied":True,
             "pid_consumed":True,"runtime_pid":receipt["runtime_pid"]})
     value=split.build_entry_split_post_apply_performance(rows,target_date=day)
@@ -1036,10 +1056,331 @@ def blocker_accountability(disposition, blocker):
             "owner": "entry_split_execution_model_validation",
             "closure_test": "prior_chronological_actual_model_holdout_validated_for_exact_scope",
         }
+    if blocker in {
+        "incumbent_only_candidate_direction_learning_not_ready",
+        "incumbent_only_candidate_direction_signal_not_decisive",
+        "candidate_direction_not_selected_for_scope",
+    }:
+        return {
+            "owner": "compact_auxiliary_candidate_direction_selection",
+            "closure_test": (
+                "exact_scope_route_incumbent_only_learning_floor_and_"
+                "missed_profit_avoided_loss_direction"
+            ),
+        }
     return {
         "owner": "entry_execution_sizing_plan_and_owner_replay",
         "closure_test": "lossless_pre_ai_plan_stop_cost_census_and_operating_arm",
     }
+
+
+def candidate_selection_projections(parent, day, current):
+    """Load only sealed v7 daily projections needed for incumbent-only learning."""
+    projections = {}
+    for path in sorted(parent.glob("compact_auxiliary_paired_economic_*.source.json")):
+        value = read(path)
+        source_day = value.get("target_date")
+        if (
+            valid(value)
+            and value.get("source_projection_contract") == SOURCE_PROJECTION_CONTRACT
+            and isinstance(source_day, str)
+            and "2026-06-05" <= source_day <= day
+        ):
+            projections[source_day] = value
+    # Older sealed projections did not carry target_date; the caller passes the
+    # exact day-owned projection, so it remains usable without a raw rebuild.
+    if valid(current) and current.get("target_date", day) == day:
+        projections[day] = current
+    return [projections[key] for key in sorted(projections)]
+
+
+def _candidate_direction_economics(rows):
+    counts = Counter()
+    missed_profit = []
+    dangerous_pass_loss = []
+    avoided_nonentry_loss = []
+    tail_pass_count = 0
+    for row, arm in rows:
+        verdict = row.get("incumbent_verdict")
+        net = arm.get("net_return_pct")
+        stress = arm.get("stress_net_return_pct")
+        if verdict not in {"PASS", "VETO"} or not finite(net) or not finite(stress):
+            continue
+        outcome = (
+            "CLEAN_FAST_PROFIT"
+            if net > 0
+            else "CLEAN_FAST_LOSS_OR_ADVERSE"
+            if net < 0
+            else "FLAT_COST_ADJUSTED_OUTCOME"
+        )
+        counts[f"{verdict}|{outcome}"] += 1
+        if verdict == "VETO" and net > 0:
+            missed_profit.append(net)
+        elif verdict == "VETO" and net < 0:
+            avoided_nonentry_loss.append(-net)
+        elif verdict == "PASS" and net < 0:
+            dangerous_pass_loss.append(-net)
+        if verdict == "PASS" and stress < 0:
+            tail_pass_count += 1
+    eligible = sum(counts.values())
+    pass_count = sum(value for key, value in counts.items() if key.startswith("PASS|"))
+    veto_count = sum(value for key, value in counts.items() if key.startswith("VETO|"))
+    missed_count = counts.get("VETO|CLEAN_FAST_PROFIT", 0)
+    dangerous_count = counts.get("PASS|CLEAN_FAST_LOSS_OR_ADVERSE", 0)
+    return {
+        "schema": "compact_auxiliary_router_economic_selection_v3",
+        "verdict_x_action_neutral_outcome_counts": dict(counts),
+        "economic_eligible_count": eligible,
+        "evaluable_pass_count": pass_count,
+        "evaluable_veto_count": veto_count,
+        "evaluable_caution_count": 0,
+        "material_tail_pass_count": tail_pass_count,
+        "missed_profit_veto_count": missed_count,
+        "missed_profit_caution_count": 0,
+        "dangerous_pass_count": dangerous_count,
+        "missed_veto_rate": missed_count / veto_count if veto_count else None,
+        "dangerous_pass_rate": dangerous_count / pass_count if pass_count else None,
+        "missed_profit_veto_net_sum_pct": sum(missed_profit),
+        "missed_profit_caution_net_sum_pct": 0.0,
+        "dangerous_pass_loss_sum_pct": sum(dangerous_pass_loss),
+        "avoided_nonentry_loss_sum_pct": sum(avoided_nonentry_loss),
+        "caution_is_not_veto": True,
+        "insufficient_is_source_repair_only": True,
+        "caution_opportunity_cost_role": (
+            "exact_enter_checkpoint_foregone_opportunity_not_terminal_episode_loss"
+        ),
+    }
+
+
+def candidate_direction_selection(projections):
+    """Freeze one registered candidate from incumbent outcomes before AI calls.
+
+    Each venue/session/route needs its own learning floor. Candidate responses and
+    later holdout rows are absent from this receipt by construction.
+    """
+    from src.engine.ai_prompt_contracts import (
+        ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION,
+        ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION,
+    )
+    from src.engine.scalping.mechanistic_entry_runtime_policy import (
+        compact_economic_direction,
+    )
+
+    indexed = {}
+    conflicts = set()
+    blocker_counts = Counter()
+    observed_policy_route_scopes = defaultdict(set)
+    for projection in projections:
+        projection_rows = projection.get("rows") or []
+        if (
+            not valid(projection)
+            or projection.get("source_projection_contract")
+            != SOURCE_PROJECTION_CONTRACT
+            or projection.get("projection_contract_sha256") != digest(CONTRACT)
+            or projection.get("source_tuning_allowed") is not True
+            or any(projection.get(key) is not value for key, value in AUTHORITY.items())
+        ):
+            blocker_counts["source_gap"] += len(projection_rows)
+            continue
+        model = projection.get("owner_execution_model_validation") or {}
+        for row in projection_rows:
+            key = row.get("evaluation_key")
+            if not key:
+                continue
+            identity = digest({
+                "input_sha256": input_identity(row),
+                "entry_economic_plan_sha256": row.get("entry_economic_plan_sha256"),
+                "evaluation_attempt_id": row.get("evaluation_attempt_id"),
+                "scanner_promotion_id": row.get("scanner_promotion_id"),
+                "incumbent_verdict": row.get("incumbent_verdict"),
+                "effective_venue": row.get("effective_venue"),
+                "session_bucket": row.get("session_bucket"),
+                "broker_route": row.get("broker_route"),
+                "owner_replay_sha256": (row.get("owner_replay") or {}).get(
+                    "replay_sha256"
+                ),
+            })
+            policy_scope = "|".join(
+                (str(row.get("effective_venue")), str(row.get("session_bucket")))
+            )
+            observed_policy_route_scopes[policy_scope].add(
+                policy_scope + "|" + str(row.get("broker_route"))
+            )
+            if key in indexed and indexed[key][0] != identity:
+                conflicts.add(key)
+                continue
+            blocker = primary_input_blocker(row, model)
+            if blocker is not None:
+                blocker_counts[blocker[0]] += 1
+                continue
+            arm = owner_operating_arm(row.get("owner_replay") or {}, row)
+            if arm:
+                indexed[key] = (identity, row, arm)
+    for key in conflicts:
+        indexed.pop(key, None)
+    if conflicts:
+        blocker_counts["source_gap"] += len(conflicts)
+
+    grouped = defaultdict(list)
+    for _, row, arm in indexed.values():
+        scope = "|".join(
+            (
+                str(row.get("effective_venue")),
+                str(row.get("session_bucket")),
+                str(row.get("broker_route")),
+            )
+        )
+        grouped[scope].append((row, arm))
+
+    scope_evidence = {}
+    ready_rows = []
+    for scope, values in sorted(grouped.items()):
+        economics = _candidate_direction_economics(values)
+        ready = (
+            len(
+                {
+                    (row.get("source_date"), row.get("scanner_promotion_id"))
+                    for row, _ in values
+                }
+            )
+            >= CONTRACT["learning_episode_floor"]
+        )
+        direction = compact_economic_direction(economics) if ready else None
+        candidate = {
+            "select_opportunity_preservation_variant": (
+                ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION
+            ),
+            "select_material_risk_specificity_variant": (
+                ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION
+            ),
+        }.get(direction)
+        scope_evidence[scope] = {
+            "learning_ready": ready,
+            "direction": direction,
+            "candidate_prompt_version": candidate,
+            "economics": economics,
+            "learning_population_sha256": digest(
+                sorted(
+                    [
+                        row.get("evaluation_key"),
+                        row.get("source_date"),
+                        row.get("scanner_promotion_id"),
+                        row.get("entry_economic_plan_sha256"),
+                    ]
+                    for row, _ in values
+                )
+            ),
+        }
+        if candidate:
+            ready_rows.extend(values)
+
+    combined = _candidate_direction_economics(ready_rows)
+    combined_direction = compact_economic_direction(combined) if ready_rows else None
+    selected = {
+        "select_opportunity_preservation_variant": (
+            ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION
+        ),
+        "select_material_risk_specificity_variant": (
+            ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION
+        ),
+    }.get(combined_direction)
+    policy_scope_evidence = defaultdict(list)
+    for route_scope, evidence in scope_evidence.items():
+        policy_scope_evidence[route_scope.rsplit("|", 1)[0]].append(evidence)
+    selected_scopes = sorted(
+        policy_scope
+        for policy_scope, evidence_rows in policy_scope_evidence.items()
+        if selected
+        and evidence_rows
+        and observed_policy_route_scopes[policy_scope]
+        == {
+            route_scope
+            for route_scope in scope_evidence
+            if route_scope.rsplit("|", 1)[0] == policy_scope
+        }
+        and all(
+            evidence.get("learning_ready") is True
+            and evidence.get("candidate_prompt_version") == selected
+            for evidence in evidence_rows
+        )
+    )
+    ready_scope_count = sum(
+        evidence.get("learning_ready") is True for evidence in scope_evidence.values()
+    )
+    receipt = {
+        "schema": CANDIDATE_SELECTION_SCHEMA,
+        "status": "candidate_selected" if selected and selected_scopes else "insufficient_sample",
+        "selection_direction": combined_direction,
+        "candidate_prompt_version": selected if selected_scopes else None,
+        "selection_blocker": (
+            None
+            if selected
+            else "incumbent_only_candidate_direction_signal_not_decisive"
+            if ready_scope_count
+            else "incumbent_only_candidate_direction_learning_not_ready"
+        ),
+        "selected_policy_scopes": selected_scopes,
+        "scope_evidence": scope_evidence,
+        "combined_economics": combined,
+        "primary_input_disposition_counts": dict(blocker_counts),
+        "candidate_response_used_for_selection": False,
+        "candidate_holdout_used_for_selection": False,
+        "model_holdout_precedes_selection_population": True,
+        **AUTHORITY,
+    }
+    return sealed(receipt)
+
+
+def frozen_candidate_selection(parent):
+    selections = []
+    for path in sorted(parent.glob("compact_candidate_plan_*.json")):
+        plan = read(path)
+        selection = plan.get("candidate_selection") or {}
+        if (
+            valid(plan)
+            and valid(selection)
+            and selection.get("schema") == CANDIDATE_SELECTION_SCHEMA
+            and selection.get("status") == "candidate_selected"
+            and selection.get("candidate_prompt_version")
+            == plan.get("candidate_prompt_version")
+        ):
+            selections.append(selection)
+    identities = {value["artifact_content_sha256"] for value in selections}
+    if len(identities) > 1:
+        raise ValueError("multiple_frozen_compact_candidate_directions")
+    return selections[0] if selections else None
+
+
+def freeze_candidate_selection(parent, selection):
+    """Serialize the outcome-blind candidate choice across daily workers."""
+    lock_path = parent / "compact_candidate_selection.lock"
+    with lock_path.open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        existing = frozen_candidate_selection(parent)
+        if existing is not None:
+            return existing
+        if selection.get("status") != "candidate_selected":
+            return selection
+        candidate = selection.get("candidate_prompt_version")
+        plan_path = parent / f"compact_candidate_plan_{candidate}.json"
+        plan = read(plan_path)
+        if plan and not valid(plan):
+            raise ValueError("candidate_plan_hash_invalid")
+        if plan and plan.get("candidate_prompt_version") != candidate:
+            raise ValueError("candidate_plan_version_mismatch")
+        write(
+            plan_path,
+            sealed(
+                {
+                    **plan,
+                    "candidate_prompt_version": candidate,
+                    "candidate_selection": selection,
+                    "promotion_contract_sha256": digest(CONTRACT),
+                    **AUTHORITY,
+                }
+            ),
+        )
+        return selection
 
 
 def candidate_zero_disposition(rows, blockers, report):
@@ -1134,7 +1475,9 @@ def source_dependency_signatures(data_root, day):
     return signatures
 
 
-def evaluation_fingerprint(*, projection, candidate_prompt, candidate_contract, cost_receipt):
+def evaluation_fingerprint(
+    *, projection, candidate_prompt, candidate_contract, cost_receipt, candidate_selection
+):
     """Identify one economically distinct evaluation generation."""
     rows = projection.get("rows") or []
     return digest(
@@ -1151,6 +1494,9 @@ def evaluation_fingerprint(*, projection, candidate_prompt, candidate_contract, 
             ),
             "candidate_prompt_hash": digest(candidate_prompt),
             "candidate_contract_hash": candidate_contract,
+            "candidate_selection_hash": candidate_selection.get(
+                "artifact_content_sha256"
+            ),
             "execution_model_hash": digest(
                 projection.get("owner_execution_model_validation") or {}
             ),
@@ -1339,8 +1685,20 @@ def run(
                 if after != signatures[str(dependency)]:
                     raise ValueError("compact_source_generation_changed_during_freeze")
             write(projection_path, projection)
+        selection = frozen_candidate_selection(path.parent)
+        if selection is None:
+            selection = freeze_candidate_selection(
+                path.parent,
+                candidate_direction_selection(
+                    candidate_selection_projections(path.parent, day, projection)
+                ),
+            )
+        selected_candidate = selection.get("candidate_prompt_version")
+        if candidate_version and selected_candidate and candidate_version != selected_candidate:
+            raise ValueError("requested_candidate_conflicts_with_frozen_economic_direction")
         candidate = (
-            candidate_version
+            selected_candidate
+            or candidate_version
             or ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION
         )
         if candidate not in COMPACT_AI_VARIANTS:
@@ -1356,13 +1714,19 @@ def run(
             candidate_prompt=candidate_prompt,
             candidate_contract=candidate_contract,
             cost_receipt=cost_receipt,
+            candidate_selection=selection,
         )
         frozen_plan = read(path.parent / f"compact_candidate_plan_{candidate}.json")
         if (frozen_plan.get("scope_candidates") and frozen_plan.get("candidate_prompt_sha256")
                 and frozen_plan["candidate_prompt_sha256"] != digest(candidate_prompt)):
             raise ValueError("frozen_candidate_prompt_or_schema_changed")
         previous = read(path)
-        if valid(previous) and previous.get("candidate_prompt_version") != candidate:
+        if (
+            valid(previous)
+            and previous.get("candidate_prompt_version") != candidate
+            and (previous.get("candidate_selection") or {}).get("status")
+            == "candidate_selected"
+        ):
             raise ValueError("frozen_candidate_selection_mismatch")
         if (valid(previous)
                 and previous.get("evaluation_fingerprint") == fingerprint
@@ -1371,26 +1735,53 @@ def run(
                      or previous.get("metrics", {}).get("economic_eligible_count") == 0)):
             return previous
         checkpoint = read(path.with_suffix(".checkpoint.json"))
+        selection_sha256 = selection.get("artifact_content_sha256")
         if (
             valid(checkpoint)
-            and checkpoint.get("candidate_prompt_version") != candidate
+            and checkpoint.get("candidate_selection_sha256") != selection_sha256
         ):
-            raise ValueError("frozen_checkpoint_candidate_mismatch")
+            checkpoint = {}
+        if (valid(checkpoint) and checkpoint.get("candidate_prompt_version") != candidate):
+            if (previous.get("candidate_selection") or {}).get("status") != "candidate_selected":
+                checkpoint = {}
+            else:
+                raise ValueError("frozen_checkpoint_candidate_mismatch")
         results = (
             checkpoint.get("results", {})
             if valid(checkpoint)
             else previous.get("results", {})
-            if valid(previous)
+            if (
+                valid(previous)
+                and (previous.get("candidate_selection") or {}).get(
+                    "artifact_content_sha256"
+                )
+                == selection_sha256
+            )
             else {}
         )
         ledger, calls = None, 0
         execution_errors = []
         cost_receipt = runtime_inference_cost_receipt(root, day)
         primary_blockers = {}
+        selected_scopes = set(selection.get("selected_policy_scopes") or [])
         for row in projection["rows"]:
             value = primary_input_blocker(row, projection.get("owner_execution_model_validation") or {})
             if value is None and cost_receipt["delta_krw"] is None:
                 value = ("source_gap", cost_receipt["blocker"])
+            scope = "|".join(
+                (str(row.get("effective_venue")), str(row.get("session_bucket")))
+            )
+            if value is None and selection.get("status") != "candidate_selected":
+                value = (
+                    "insufficient_sample",
+                    selection.get("selection_blocker")
+                    or "incumbent_only_candidate_direction_learning_not_ready",
+                )
+            elif value is None and scope not in selected_scopes:
+                value = (
+                    "insufficient_sample",
+                    "candidate_direction_not_selected_for_scope",
+                )
             if value is not None:
                 primary_blockers[row["evaluation_key"]] = value
         for row in projection["rows"]:
@@ -1516,10 +1907,11 @@ def run(
                 write(
                     path.with_suffix(".checkpoint.json"),
                     sealed(
-                        {
-                            "candidate_prompt_version": candidate,
-                            "results": results,
-                            **AUTHORITY,
+                            {
+                                "candidate_prompt_version": candidate,
+                                "candidate_selection_sha256": selection_sha256,
+                                "results": results,
+                                **AUTHORITY,
                         }
                     ),
                 )
@@ -1547,12 +1939,18 @@ def run(
         )
         metrics["model_delta_ev_is_actual_profit"] = False
         versions = sorted({r["incumbent_prompt_version"] for r in projection["rows"]})
+        hard_source_blocked = any(
+            disposition in {"source_gap", "unsupported_scope"}
+            for disposition, _ in primary_blockers.values()
+        )
         status = (
             "source_contract_blocked"
             if not projection["source_tuning_allowed"]
             else "valid_empty"
             if not projection["rows"]
             else "source_contract_blocked"
+            if metrics["economic_eligible_count"] == 0 and hard_source_blocked
+            else "incumbent_preserved"
             if metrics["economic_eligible_count"] == 0
             else "incumbent_preserved"
             if versions == [candidate]
@@ -1601,23 +1999,36 @@ def run(
             totals["response_coverage"] = (totals["paired_comparable_count"] / totals["economic_eligible_count"]
                                            if totals["economic_eligible_count"] else None)
             cumulative_coverage[scope] = totals
-        with plan_path.with_suffix(".lock").open("a") as candidate_lock:
-            fcntl.flock(candidate_lock, fcntl.LOCK_EX)
-            plan = read(plan_path)
-            if plan and (not valid(plan) or plan.get("candidate_prompt_version") != candidate):
-                raise ValueError("candidate_plan_hash_invalid")
-            if (plan.get("scope_candidates") and plan.get("candidate_prompt_sha256")
-                    and plan["candidate_prompt_sha256"] != digest(candidate_prompt)):
-                raise ValueError("frozen_candidate_prompt_or_schema_changed")
-            if plan.get("scope_candidates") and plan.get("promotion_contract_sha256") != digest(CONTRACT):
-                raise ValueError("candidate_plan_contract_mismatch")
+        if selection.get("status") == "candidate_selected":
+            with plan_path.with_suffix(".lock").open("a") as candidate_lock:
+                fcntl.flock(candidate_lock, fcntl.LOCK_EX)
+                plan = read(plan_path)
+                if plan and (not valid(plan) or plan.get("candidate_prompt_version") != candidate):
+                    raise ValueError("candidate_plan_hash_invalid")
+                if (
+                    (plan.get("candidate_selection") or {}).get(
+                        "artifact_content_sha256"
+                    )
+                    != selection.get("artifact_content_sha256")
+                ):
+                    raise ValueError("candidate_plan_selection_mismatch")
+                if (plan.get("scope_candidates") and plan.get("candidate_prompt_sha256")
+                        and plan["candidate_prompt_sha256"] != digest(candidate_prompt)):
+                    raise ValueError("frozen_candidate_prompt_or_schema_changed")
+                if plan.get("scope_candidates") and plan.get("promotion_contract_sha256") != digest(CONTRACT):
+                    raise ValueError("candidate_plan_contract_mismatch")
+                scope_validation, scope_candidates = scope_candidate_validation(
+                    all_pairs, population, {"scope_coverage": cumulative_coverage}, plan,
+                    candidate=candidate, now=datetime.now(KST))
+                if scope_candidates != (plan.get("scope_candidates") or {}):
+                    write(plan_path, sealed({"candidate_prompt_version": candidate,
+                        "scope_candidates": scope_candidates, "promotion_contract_sha256": digest(CONTRACT),
+                        "candidate_prompt_sha256": digest(candidate_prompt),
+                        "candidate_selection": selection, **AUTHORITY}))
+        else:
             scope_validation, scope_candidates = scope_candidate_validation(
-                all_pairs, population, {"scope_coverage": cumulative_coverage}, plan,
+                all_pairs, population, {"scope_coverage": cumulative_coverage}, {},
                 candidate=candidate, now=datetime.now(KST))
-            if scope_candidates != (plan.get("scope_candidates") or {}):
-                write(plan_path, sealed({"candidate_prompt_version": candidate,
-                    "scope_candidates": scope_candidates, "promotion_contract_sha256": digest(CONTRACT),
-                    "candidate_prompt_sha256": digest(candidate_prompt), **AUTHORITY}))
         frozen_at = min((v["candidate_frozen_at"] for v in scope_validation.values()
                          if v["candidate_frozen_at"]), default=None)
         chronology = {"candidate_frozen_at": frozen_at,
@@ -1632,6 +2043,7 @@ def run(
                 "generated_at": datetime.now(KST).isoformat(),
                 "candidate_frozen_at": frozen_at,
                 "candidate_prompt_version": candidate,
+                "candidate_selection": selection,
                 "candidate_contract_sha256": candidate_contract,
                 "evaluation_fingerprint": fingerprint,
                 "incumbent_prompt_version": versions[0] if len(versions) == 1 else None,

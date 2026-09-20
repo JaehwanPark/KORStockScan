@@ -96,6 +96,11 @@ def test_compact_checkpoint_reuse_economics_rejoin_and_source_block(monkeypatch,
     projection = compact.sealed({"owner_execution_model_validation":model,"rows": [row], "screened_total": 1, "source_manifest_sha256": "d"*64,
                                   "source_tuning_allowed": True, "exclusion_counts": {}, **compact.AUTHORITY})
     monkeypatch.setattr(compact, "prepare", lambda *_: projection)
+    monkeypatch.setattr(
+        compact,
+        "candidate_direction_selection",
+        lambda *_: compact_candidate_selection(),
+    )
     monkeypatch.setattr(evidence, "entry_risk_adjudication_openai_schema", lambda *_: {})
     monkeypatch.setattr(evidence, "validate_entry_risk_adjudication", lambda *_args, **_kwargs: [])
     calls = []
@@ -165,6 +170,155 @@ def operating_compact_row(day="2026-09-17", ordinal=0):
     return row
 
 
+def compact_candidate_selection(
+    candidate="entry_machine_auxiliary_compact_opportunity_v2",
+    scopes=("KRX|KRX_REGULAR",),
+):
+    return compact.sealed({
+        "schema": compact.CANDIDATE_SELECTION_SCHEMA,
+        "status": "candidate_selected",
+        "selection_direction": "select_opportunity_preservation_variant",
+        "candidate_prompt_version": candidate,
+        "selected_policy_scopes": list(scopes),
+        "scope_evidence": {},
+        "combined_economics": {},
+        "primary_input_disposition_counts": {},
+        "candidate_response_used_for_selection": False,
+        "candidate_holdout_used_for_selection": False,
+        "model_holdout_precedes_selection_population": True,
+        **compact.AUTHORITY,
+    })
+
+
+def test_compact_candidate_direction_uses_incumbent_learning_only():
+    from copy import deepcopy
+    from src.engine.ai_prompt_contracts import (
+        ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION,
+        ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION,
+    )
+    from src.engine.scalping import entry_split_order_plan as split
+
+    model = full_compact_proof()["owner_execution_model_validation"]
+    opportunity_rows = [operating_compact_row("2026-09-17", index) for index in range(20)]
+    opportunity = compact.candidate_direction_selection([
+        compact.sealed({
+            "target_date": "2026-09-17",
+            "source_projection_contract": compact.SOURCE_PROJECTION_CONTRACT,
+            "projection_contract_sha256": compact.digest(compact.CONTRACT),
+            "source_tuning_allowed": True,
+            "owner_execution_model_validation": model,
+            "rows": opportunity_rows,
+            **compact.AUTHORITY,
+        })
+    ])
+    assert opportunity["candidate_prompt_version"] == (
+        ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION
+    )
+    assert opportunity["candidate_response_used_for_selection"] is False
+    assert opportunity["candidate_holdout_used_for_selection"] is False
+
+    unsupported_route = deepcopy(opportunity_rows[0])
+    unsupported_route["evaluation_key"] = "compact-route-model-gap"
+    unsupported_route["scanner_promotion_id"] = "promotion-route-model-gap"
+    unsupported_route["broker_route"] = "SOR"
+    mixed_route = compact.candidate_direction_selection([
+        compact.sealed({
+            "target_date": "2026-09-17",
+            "source_projection_contract": compact.SOURCE_PROJECTION_CONTRACT,
+            "projection_contract_sha256": compact.digest(compact.CONTRACT),
+            "source_tuning_allowed": True,
+            "owner_execution_model_validation": model,
+            "rows": opportunity_rows + [unsupported_route],
+            **compact.AUTHORITY,
+        })
+    ])
+    assert mixed_route["status"] == "insufficient_sample"
+    assert mixed_route["candidate_prompt_version"] is None
+    assert mixed_route["selected_policy_scopes"] == []
+
+    conflicting = deepcopy(opportunity_rows[0])
+    conflicting["incumbent_verdict"] = "PASS"
+    conflict_receipt = compact.candidate_direction_selection([
+        compact.sealed({
+            "target_date": "2026-09-17",
+            "source_projection_contract": compact.SOURCE_PROJECTION_CONTRACT,
+            "projection_contract_sha256": compact.digest(compact.CONTRACT),
+            "source_tuning_allowed": True,
+            "owner_execution_model_validation": model,
+            "rows": opportunity_rows + [conflicting],
+            **compact.AUTHORITY,
+        })
+    ])
+    assert conflict_receipt["status"] == "insufficient_sample"
+    assert conflict_receipt["primary_input_disposition_counts"] == {
+        "source_gap": 1
+    }
+
+    risk_rows = deepcopy(opportunity_rows)
+    for row in risk_rows:
+        row["incumbent_verdict"] = "PASS"
+        replay = row["owner_replay"]
+        arm = next(iter(replay["operating_arms"].values()))
+        arm.update(
+            net_pnl_krw=-600.0,
+            stress_net_pnl_krw=-720.0,
+            net_return_pct=-0.5,
+            stress_net_return_pct=-0.6,
+        )
+        arm["sha256"] = split._canonical_sha256(
+            {key: value for key, value in arm.items() if key != "sha256"}
+        )
+        replay["replay_sha256"] = compact.digest(
+            {key: value for key, value in replay.items() if key != "replay_sha256"}
+        )
+    risk = compact.candidate_direction_selection([
+        compact.sealed({
+            "target_date": "2026-09-17",
+            "source_projection_contract": compact.SOURCE_PROJECTION_CONTRACT,
+            "projection_contract_sha256": compact.digest(compact.CONTRACT),
+            "source_tuning_allowed": True,
+            "owner_execution_model_validation": model,
+            "rows": risk_rows,
+            **compact.AUTHORITY,
+        })
+    ])
+    assert risk["candidate_prompt_version"] == (
+        ENTRY_MACHINE_AUXILIARY_COMPACT_RISK_PROMPT_VERSION
+    )
+
+
+def test_compact_candidate_direction_waits_without_spending_provider(monkeypatch, tmp_path):
+    row = operating_compact_row()
+    model = full_compact_proof()["owner_execution_model_validation"]
+    projection = compact.sealed({
+        "owner_execution_model_validation": model,
+        "rows": [row],
+        "screened_total": 1,
+        "source_manifest_sha256": "d" * 64,
+        "source_tuning_allowed": True,
+        "exclusion_counts": {},
+        **compact.AUTHORITY,
+    })
+    monkeypatch.setattr(compact, "prepare", lambda *_: projection)
+    monkeypatch.setattr(
+        compact,
+        "runtime_inference_cost_receipt",
+        lambda *_: full_compact_proof()["runtime_inference_cost_receipt"],
+    )
+    report = compact.run(
+        data_root=tmp_path,
+        day="2026-09-17",
+        execute=True,
+        runner=lambda *_: pytest.fail("unselected candidate cannot call provider"),
+    )
+    assert report["provider_calls_this_run"] == 0
+    assert report["candidate_selection"]["status"] == "insufficient_sample"
+    assert report["evaluation_state"] == "waiting_model_or_sample"
+    assert report["candidate_zero_disposition"]["primary_input_disposition_counts"] == {
+        "insufficient_sample": 1
+    }
+
+
 @lru_cache(maxsize=1)
 def _full_compact_proof():
     from src.engine.scalping import mechanistic_entry_runtime_policy as policy
@@ -195,6 +349,9 @@ def _full_compact_proof():
         "runtime_inference_cost_receipt": inference_receipt,
         "incumbent_prompt_version": policy.AI_VERSION,
         "candidate_prompt_version": policy.ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION,
+        "candidate_selection": compact_candidate_selection(
+            policy.ENTRY_MACHINE_AUXILIARY_COMPACT_OPPORTUNITY_PROMPT_VERSION
+        ),
         "source_manifest_sha256": "d"*64, "promotion_contract_sha256": compact.digest(compact.CONTRACT),
         "status": "comparison_complete", "candidate_frozen_at": frozen,
         # Synthetic validated scope exercises wiring; it is not actual economic evidence.
@@ -1493,7 +1650,9 @@ def test_compact_primary_source_gap_does_not_spend_provider_budget(monkeypatch,t
 
 def test_actual_decision_version_performance_reuses_completed_cost_owner():
     receipt=dict(evaluation_attempt_id='attempt',machine_bundle_sha256='a'*64,
-        machine_policy_version='machine-v1',compact_prompt_version='compact-v1',decision_trace_id='trace',runtime_pid=123)
+        machine_policy_version='machine-v1',machine_policy_sha256='c'*64,
+        compact_prompt_version='compact-v1',compact_prompt_sha256='d'*64,
+        decision_trace_id='trace',runtime_pid=123)
     receipt['sha256']=compact.digest(receipt)
     row=dict(episode_id='natural-episode',status='COMPLETED',origin='real',owner='main_scalping',
         exact_lineage=True,cost_complete=True,entry_decision_pid_consumed=True,entry_decision_version_receipt=receipt,
@@ -1503,8 +1662,25 @@ def test_actual_decision_version_performance_reuses_completed_cost_owner():
     value=compact.applied_decision_version_performance(report,day='2026-09-17')
     assert value['groups'][0]['cumulative']['completed_episodes']==1
     assert value['groups'][0]['rolling']['net_pnl_krw']==200.
-    assert value['groups'][0]['policy_version']=='machine-v1|compact-v1'
+    assert value['groups'][0]['policy_version']=='machine-v1|'+'c'*64+'|compact-v1|'+'d'*64
     assert value['causal_profit_improvement'] is None
+    incomplete_receipt = dict(receipt)
+    incomplete_receipt.pop('compact_prompt_sha256')
+    incomplete_receipt['sha256'] = compact.digest({
+        key: value for key, value in incomplete_receipt.items() if key != 'sha256'
+    })
+    incomplete = compact.applied_decision_version_performance(
+        {'operating_economic_state': {'model_rows': [{
+            **row,
+            'episode_id': 'missing-exact-version-hash',
+            'entry_decision_version_receipt': incomplete_receipt,
+        }]}},
+        day='2026-09-17',
+    )
+    assert incomplete['groups'] == []
+    assert incomplete['excluded_counts'] == {
+        'exact_submit_decision_version_receipt_missing_or_invalid': 1
+    }
     report['operating_economic_state']['model_rows'].append({**row,'net_pnl_krw':999.})
     assert not compact.applied_decision_version_performance(report,day='2026-09-17')['groups']
 
@@ -1562,6 +1738,9 @@ def test_registered_sor_scope_independent_promotion_and_dated_consumer(tmp_path,
         'coverage': coverage,
         'chronological_validation': deepcopy(proof['chronological_validation']),
     }}
+    proof['candidate_selection'] = compact_candidate_selection(
+        proof['candidate_prompt_version'], (scope_key,)
+    )
     proof['incumbent_prompt_version'] = None
     proof=compact.sealed(proof)
     kwargs=dict(incumbent=original_incumbent,selected=proof['candidate_prompt_version'],source_manifest_sha256='d'*64)
@@ -1732,6 +1911,7 @@ def test_compact_reuse_binds_current_candidate_and_pricing(monkeypatch, tmp_path
         source_manifest_sha256="d"*64, source_tuning_allowed=True,
         owner_execution_model_validation=proof["owner_execution_model_validation"], **compact.AUTHORITY))
     monkeypatch.setattr(compact, "prepare", lambda *_: projection)
+    monkeypatch.setattr(compact, "candidate_direction_selection", lambda *_: compact_candidate_selection())
     monkeypatch.setattr(compact, "runtime_inference_cost_receipt", lambda *_: proof["runtime_inference_cost_receipt"])
     monkeypatch.setattr(evidence, "entry_risk_adjudication_openai_schema", lambda *_: {})
     monkeypatch.setattr(evidence, "validate_entry_risk_adjudication", lambda *a, **k: [])
@@ -1770,6 +1950,7 @@ def test_compact_shared_data_mount_reuses_snapshot_and_finalization_never_rescan
         owner_execution_model_validation=proof["owner_execution_model_validation"], **compact.AUTHORITY))
     prepared = []
     monkeypatch.setattr(compact, "prepare", lambda *a: prepared.append(a) or projection)
+    monkeypatch.setattr(compact, "candidate_direction_selection", lambda *_: compact_candidate_selection())
     monkeypatch.setattr(compact, "runtime_inference_cost_receipt", lambda *_: proof["runtime_inference_cost_receipt"])
     monkeypatch.setattr(evidence, "entry_risk_adjudication_openai_schema", lambda *_: {})
     monkeypatch.setattr(evidence, "validate_entry_risk_adjudication", lambda *a, **k: [])

@@ -4809,9 +4809,20 @@ def test_operating_model_change_cannot_reuse_candidate_holdout():
 
 
 def test_initial_seed_survives_baseline_fill_and_completed_cost_producer(monkeypatch,tmp_path):
+    from copy import deepcopy
     from src.engine import sniper_state_handlers as handlers
     from src.engine.scalping.strategy_owner_replay import entry_split_actual_economic_receipt
-    rows,_,_=_operating_economic_fixture();seed=rows[0]['seed']
+    rows,_,_=_operating_economic_fixture();seed=deepcopy(rows[0]['seed'])
+    decision=dict(evaluation_attempt_id=seed['evaluation_attempt_id'],
+        machine_bundle_sha256=seed['policy_bundle_sha256'],
+        machine_policy_version='machine-v1',machine_policy_sha256='1'*64,
+        compact_prompt_version='compact-v1',compact_prompt_sha256='2'*64,
+        decision_trace_id='trace-v1',runtime_pid=123)
+    decision['sha256']=split_plan._canonical_sha256(decision)
+    seed['operating_contract']['entry_decision_version_receipt']=decision
+    seed['operating_contract']['sha256']=split_plan._canonical_sha256({
+        k:v for k,v in seed['operating_contract'].items() if k!='sha256'})
+    seed['seed_sha256']=split_plan._canonical_sha256({k:v for k,v in seed.items() if k!='seed_sha256'})
     order={'qty':10,'entry_split_initial_entry_seed':seed,'entry_split_initial_entry_lineage_conflict':False}
     meta=handlers._split_order_meta_fields(order)
     stock=handlers._entry_split_position_provenance([meta])
@@ -4826,6 +4837,8 @@ def test_initial_seed_survives_baseline_fill_and_completed_cost_producer(monkeyp
         completion_at=datetime.fromisoformat('2026-09-11T20:00:00'))
     assert result['cost_complete'] is True and result['completed_at'].endswith('+09:00')
     assert result['completion_date']=='2026-09-11'
+    assert result['entry_decision_pid_consumed'] is True
+    assert result['entry_decision_version_receipt']==decision
     assert result['sha256']==split_plan._canonical_sha256({k:v for k,v in result.items() if k!='sha256'})
     monkeypatch.setattr(split_plan,'DATA_DIR',tmp_path)
     path=split_plan._real_post_sell_candidate_path('2026-09-11');path.parent.mkdir(parents=True)

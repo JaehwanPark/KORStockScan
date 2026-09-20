@@ -747,6 +747,15 @@ def test_mechanistic_primary_rejects_unsubstantiated_ai_veto_without_exposure():
     assert result["entry_probe_intent"] is False
     assert result["entry_primary_decision_owner"] == "mechanistic_entry_adjudicator"
     assert result["entry_ai_role"] == "auxiliary_risk_screen_pass_veto_no_promotion"
+    assert result["entry_mechanistic_policy_sha256"] == hashlib.sha256(
+        json.dumps(
+            MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode()
+    ).hexdigest()
 
 
 def _machine_screen_case(verdict):
