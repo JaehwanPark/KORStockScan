@@ -9143,7 +9143,7 @@ class GPTSniperEngine:
                         else {}
                     ),
                 )
-                if machine_assessment["action"] == "ENTER_NOW" and callable(entry_economics_observer):
+                if machine_assessment["action"] in {"ENTER_NOW", "BLOCK", "RECHECK"} and callable(entry_economics_observer):
                     try:
                         economic_source_fields = entry_economics_observer(
                             exact_payload=machine_exact, assessment=machine_assessment,

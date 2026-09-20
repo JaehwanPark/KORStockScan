@@ -615,3 +615,18 @@ strict verifier는 다음을 모두 요구한다.
 ### 14.10 9/20 구현·재생성 receipt
 
 [메인 기계 operating evidence 보완 리뷰](../audit-reports/2026-09-20-main-machine-operating-evidence-closure-review.md)를 따른다. 471개 배포본 회귀 통과, scoped publisher/consumer 검증과 9/21 incumbent carry 발행을 확인했다. 원화 operating enrichment0·비용 후 EV/day 미산출 및 ME8/ME9/ME10 잔여, 과거 native terminal 누락은 OPEN이다. §14 전체 종결 또는 자연 수익 개선 receipt가 아니다.
+
+### 14.10 이번 후속의 지원 범위·원천 계약 정정
+
+사용자는 BLOCK/RECHECK에도 기존 `kt00011` bounded 계좌 읽기를 허용했다. AI 추가 호출·주문·예약은 금지한다. 기존 source-only 요청(1회, rate 대기0, connect/read timeout 각각0.15초)을 그대로 사용하고, clone 위에서 기존 sizing/price/guard/exit owner를 적용한다. 실패는 그 시점의 원천 결손이며 현재 계좌로 과거를 복구하지 않는다.
+
+- ENTER/BLOCK/RECHECK 관측 계획은 실제 machine action을 유지한다. non-entry에는 compact PASS/VETO 또는 AI 응답 시각을 만들지 않는다. 기존 split producer가 `nonentry_plan_only`를 보존하고 main evaluator가 직접 소비한다. 원래 AI 미호출 지점을 새 ENTER로 바꾸려면 exact 보조 판정이 별도로 필요하며 없으면 `frozen_auxiliary_verdict_missing`이다.
+- 동일 promotion의 RECHECK는 시간순 후속 판단으로 이어진다. 원천 모집단의 모든 평가가 남았는지 확인한다. 실제 WATCHING TTL owner의 기한·종료 receipt가 일치할 때만 비노출 종결한다. FIFO는 같은 CF 큐 점유가 입증되지 않으므로 TTL로 대체하지 않는다. 미종결 RECHECK는 pending이다.
+- 경제성의 지원 실험은 **동일 frozen 현금 한도·동일 총수량의 조건부 비교**다. 실제 계좌 전체 수익을 복원하는 backtest가 아니다. 동시 reserve/보유 종목을 시간순으로 처리하고 이익 재투자는 하지 않는다. 관측 사이 승인 수량·budget가 바뀌거나 다른 owner의 현금 흐름 증거가 없으면 해당 비교를 `unsupported_scope`로 남긴다. 단순 표본 증가로 이 범위 제한이 해소된다고 보고하지 않는다.
+- 모델의 calibration 완료일은 model holdout 시작일보다 빨라야 한다. 모델 오차와 stress의 하한은 실측 오차 범위이지 통계적 신뢰구간이 아니다. 모델 오차로 후속 자본 배정 여부가 바뀔 수 있는 경계는 별도 차단한다.
+- 복수 scope는 calibration에서 전체 조합을 고정하고 이후 날짜의 독립 holdout을 검증한다. scope별 통과분만 사후 조합하지 않는다. publisher는 동일 조합·source rows로 공통 자본 계산을 재검증한다. 한 scope 및 hierarchy의 기존 개별 승격 기준도 보존한다.
+- 기존 적용 버전별 완료 손익 owner를 main report에서도 소비한다. summary는 비용 차감 operating EV를 읽고 terminal-path proxy는 별도 진단 필드에만 둔다.
+
+검증·배포·과거 원천 대사 및 잔여 범위의 최종 판정은 기존 [operating evidence 리뷰](../audit-reports/2026-09-20-main-machine-operating-evidence-closure-review.md)에 이어 기록한다. 합성 producer 회귀와 자연 모델 검증, 다음 PREOPEN/PID 소비는 각각 별도 증거다.
+
+- full-population 선정/consumer의 경제성 지표는 검증된 운영 replay의 비용 차감 EV·paired Δ이며 terminal proxy는 진단이다. 기존 10bp·tail·holdout 기준은 유지한다. 지원 밖의 변동 자본·AI 미호출·미종결 경로는 계약 미지원으로 기록하고 자연 대기로 숨기지 않는다.

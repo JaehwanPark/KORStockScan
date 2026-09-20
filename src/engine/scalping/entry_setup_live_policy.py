@@ -331,8 +331,7 @@ def _mechanistic_primary_activation_projection(
             floor = calibration.MECHANISTIC_REFINEMENT_GATE
             exposures = calibration._number(metrics.get("exposure_count"))
             source_dates = calibration._number(metrics.get("independent_source_date_count"))
-            ev = calibration._number(metrics.get("cost_adjusted_terminal_proxy_ev_pct"))
-            delta = calibration._number(paired.get("paired_terminal_proxy_delta_pct"))
+            ev, delta = calibration.machine_selection_economics(metrics, paired, full_population=True)
             proof_valid = bool(proof_valid
                                and isinstance(dates, list) and bool(dates)
                                and all(isinstance(d, str) and calibration.CLEAN_BASELINE_DATE <= d <= source_date for d in dates)
@@ -352,6 +351,7 @@ def _mechanistic_primary_activation_projection(
                                and delta is not None and delta > 0
                                and paired.get("paired_terminal_contract_complete") is True
                                and paired.get("downstream_operating_evidence_complete") is True
+                               and paired.get("operating_economic_promotion_pass") is True
                                and metrics.get("source_provenance_contract_complete") is True
                                and metrics.get("catastrophic_terminal_proxy_count") == 0
                                and metrics.get("terminal_evaluable_count") == metrics.get("exposure_count")

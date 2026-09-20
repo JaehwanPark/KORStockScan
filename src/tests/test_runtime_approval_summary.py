@@ -654,3 +654,16 @@ def test_active_expansion_source_gap_is_not_retired_or_not_applicable(tmp_path):
     assert row["comparison_status"] == "source_gap"
     assert row["closure_test"] and row["first_blocker"] == "allocator_snapshot_contract_invalid"
     assert row["resolution_mode"] != "retired_or_not_applicable"
+
+
+def test_main_supported_economics_never_uses_terminal_proxy_as_currency_ev():
+    payload = {'machine_full_evaluation': dict(state='evaluated_no_edge',
+        downstream_operating_evidence_complete=True, holdout_incumbent_ev_pct=99.,
+        holdout_cost_adjusted_ev_pct=999., holdout_paired_delta_ev_pct=900.,
+        operating_economics={'incumbent':{'ev_pct':.2},'candidate':{'ev_pct':.3},
+            'robust_paired_delta_ev_lower_bound_pct':.05})}
+    row = mod._economic_section('main_mechanistic_entry', payload)
+    assert row['incumbent_ev_pct'] == .2
+    assert row['candidate_ev_pct'] == .3
+    assert abs(row['delta_ev_pct'] - .1) < 1e-10
+    assert row['diagnostic_terminal_proxy']['delta_ev_pct'] == 900.

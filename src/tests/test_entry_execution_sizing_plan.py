@@ -719,19 +719,27 @@ def test_before_ai_observation_is_not_a_submit_pass_and_keeps_frozen_seed():
     assert _price_ready_plan(decoded)['observation_only'] is True
     assert _price_ready_plan(EntryEvent(decoded.emitted_at, decoded.signal_date, decoded.name,
         decoded.code, 'entry_execution_sizing_plan', decoded.record_id, decoded.fields)) == {}
-    # Observation mode cannot promote machine non-entry or invent quantity.
-    _, blocked = compose_entry_execution_sizing_plan([order], observation_only=True,
-        **{**kwargs, 'action_receipt': {**receipt, 'entry_mechanistic_action': 'BLOCK'}})
-    assert blocked['entry_execution_sizing_valid'] is False
+    # Hypothetical plans retain the actual machine action; live plans still
+    # require ENTER_NOW and an actual auxiliary PASS.
+    for action in ('BLOCK', 'RECHECK'):
+        scoped = {**kwargs, 'action_receipt': {**receipt, 'entry_mechanistic_action': action}}
+        _, observed = compose_entry_execution_sizing_plan([order], observation_only=True, **scoped)
+        assert observed['entry_execution_sizing_valid'] is True
+        assert observed['entry_execution_sizing_plan']['observed_machine_action'] == action
+        _, blocked = compose_entry_execution_sizing_plan([order], **scoped)
+        assert blocked['entry_execution_sizing_valid'] is False
 
 
+
+@pytest.mark.parametrize('machine_action', ['ENTER_NOW', 'BLOCK', 'RECHECK'])
 @pytest.mark.parametrize('guard_allowed,broker_route,venue,session', [
     (True,'KRX','KRX','KRX_REGULAR'),(False,'SOR','KRX','KRX_REGULAR'),
     (True,'SOR','KRX','KRX_REGULAR'),(True,'SOR','NXT','NXT_PREMARKET'),
     (True,'SOR','KRX_NXT_INTEGRATED','KRX_NXT_AFTERMARKET'),
     (True,'SOR','NXT','NXT_REGULAR_OVERLAP'),(True,'SOR','NXT','NXT_AFTERMARKET')])
-def test_runtime_pre_ai_producer_freezes_owner_inputs_without_submit(monkeypatch, tmp_path, guard_allowed,broker_route,venue,session):
+def test_runtime_pre_ai_producer_freezes_owner_inputs_without_submit(monkeypatch, tmp_path, guard_allowed,broker_route,venue,session,machine_action):
     from copy import deepcopy
+    from src.engine import kiwoom_sniper_v2 as runtime
     from types import SimpleNamespace
     from src.engine import sniper_state_handlers as handlers
     from src.engine.scalping import entry_split_order_plan as split
@@ -782,7 +790,13 @@ def test_runtime_pre_ai_producer_freezes_owner_inputs_without_submit(monkeypatch
     policy_snapshot['environment']['KORSTOCKSCAN_SCALP_FAST_EXIT_GUARD_ACTIVE_DATE'] = day
     policy_snapshot['files']={key.replace('2026-09-04',day):value for key,value in policy_snapshot['files'].items()}
     monkeypatch.setattr(capture_owner, '_cached_policy', lambda *a: policy_snapshot)
-    stock={'name':'TEST','id':1,'strategy':'SCALPING','source_signature':'scanner-confirmed','is_nxt':True}
+    stock={'name':'TEST','id':1,'strategy':'SCALPING','source_signature':'scanner-confirmed','is_nxt':True,
+        'scanner_promotion_id':'promotion-pre-ai','code':'005930',
+        'entry_economic_watch_lifetime': {
+            'owner':'kiwoom_sniper_v2._scanner_evaluation_lifetime_anchor/_scalping_watching_ttl_sec',
+            'scanner_promotion_id':'promotion-pre-ai','deadline_epoch':frozen_clock.timestamp()+1800,
+            'observed_epoch':frozen_clock.timestamp()}}
+
     before=deepcopy(stock)
     ws={'curr':10020,'effective_route':replay.entry_native_market_venue(venue),'source_epoch':'epoch-1'}
     exact={'current':{'price':10020},'session_bucket':session,'broker_route':broker_route,
@@ -790,7 +804,7 @@ def test_runtime_pre_ai_producer_freezes_owner_inputs_without_submit(monkeypatch
     receipt={'evaluation_attempt_id':'pre-ai-live','scanner_promotion_id':'promotion-pre-ai',
              'effective_venue':venue,'session_bucket':session}
     result=handlers._observe_entry_economics_before_ai(stock,'005930',ws,
-        exact_payload=exact,assessment={'action':'ENTER_NOW'},capture=receipt,bundle_sha256='a'*64)
+        exact_payload=exact,assessment={'action':machine_action},capture=receipt,bundle_sha256='a'*64)
     assert stock == before
     assert requests == [('005930',10020,0,{'source_only':True})]
     logger.flush_pipeline_event_producer_summary()
@@ -810,6 +824,47 @@ def test_runtime_pre_ai_producer_freezes_owner_inputs_without_submit(monkeypatch
         assert seed['operating_contract']['nxt_listing_receipt']['owner']=='stock.is_nxt'
         assert seed['actual_order_submitted'] is False
         assert events[0]['fields']['entry_ai_screen_pass']=='False'
+        assert plan['observed_machine_action'] == machine_action
+        if machine_action != 'ENTER_NOW':
+            # No synthetic auxiliary response or zero-latency decision receipt.
+            assert not any(e['stage'] == 'entry_ai_economic_decision_available' for e in events)
+            def forbidden_native(*args, **kwargs):
+                raise AssertionError('No native replay or AI call for a plan-only anchor')
+            preserved = replay.build_entry_opportunity_replays(day, [event],
+                evaluated_at=frozen_clock.timestamp()+3600,
+                source_stage='entry_ai_economic_plan_observed', micro_loader=forbidden_native)
+            assert preserved['counts']['nonentry_plan_only'] == 1
+            assert preserved['counts']['source_gap'] == 0
+            assert preserved['rows'][0]['seed'] == seed
+            from src.engine.scalping import ai_action_outcome_calibration as main
+            from src.engine.scalping import compact_auxiliary_paired_replay as compact
+            path = tmp_path / 'report/entry_split_order_plan' / f'entry_split_order_plan_{day}.json'
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps({'input_summary': {'compact_pre_ai_execution_replay': preserved}}))
+            projection = main._machine_operating_projection(tmp_path, [day])
+            assert compact.valid(projection)
+            assert len(projection['rows']) == 1
+            source = projection['rows'][0]
+            assert main._machine_nonentry_seed(source) == seed
+            assert source['incumbent_verdict'] is None
+            if machine_action == 'RECHECK':
+                runtime._record_machine_watch_terminal(stock, now_ts=frozen_clock.timestamp()+1801)
+                logger.flush_pipeline_event_producer_summary()
+                final_events, final_census = split._bounded_execution_projection(day)
+                assert final_census['producer_census']['identity_conservation_holds']
+                closed = replay.build_entry_opportunity_replays(day, _load_entry_events(day, rows=final_events),
+                    evaluated_at=frozen_clock.timestamp()+3600, source_stage='entry_ai_economic_plan_observed',
+                    micro_loader=forbidden_native)
+                assert closed['rows'][0]['machine_watch_terminal']['deadline_epoch'] == frozen_clock.timestamp()+1800
+                source['owner_replay'] = closed['rows'][0]
+                row = dict(decision_trace_id='machine-recheck', operating_comparison_input=source,
+                    comparison={'incumbent_machine_action':'RECHECK','control_action':'WAIT'},
+                    machine_sequence_members=['machine-recheck'], setup_evidence={})
+                monkeypatch.setattr(main,'mechanistic_entry_policy_decision',lambda *a,**kw:{'action':'RECHECK'})
+                economics = main._machine_sequence_operating_metrics([row], set(), {})
+                assert economics['status'] == 'supported_operating_comparison', economics
+                assert economics['daily_net_profit_delta_krw'] == 0.
+            return
         # The actual source producer's frozen input reaches the existing full
         # holding interpreter. Only account and native market sources are
         # controlled; there is no manually fabricated operating-arm result.

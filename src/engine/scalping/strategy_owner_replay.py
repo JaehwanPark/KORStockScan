@@ -1094,6 +1094,8 @@ def freeze_entry_opportunity(plan, *, stock_code, observed_at, profile=None,
             research_entry_ttl_sec=10, modeled_submit_delay_ms=150,
             allocation_contract=ENTRY_REPLAY_ALLOCATION.copy(),
             price_candidates={}, **AUTHORITY)
+        if plan.get('observation_only'):
+            seed['observed_machine_action'] = plan.get('observed_machine_action', 'ENTER_NOW')
         if operating_context is not None:
             seed['operating_contract'] = copy.deepcopy(operating_context)
         # Only the exact existing BPS formula can become an automatic price policy.
@@ -1400,15 +1402,22 @@ def build_entry_opportunity_replays(day, events, *, evaluated_at=None, micro_loa
                 raise ValueError('original_plan_or_frozen_seed_missing_or_invalid')
             if source_stage == "entry_ai_economic_plan_observed":
                 available_key = (seed['evaluation_attempt_id'], seed['plan_sha256'])
-                if available_key in availability_conflicts or available_key not in availability:
+                nonentry = (plan.get('observation_only') is True
+                    and plan.get('observed_machine_action') in {'BLOCK', 'RECHECK'}
+                    and seed.get('observed_machine_action') == plan['observed_machine_action'])
+                if nonentry:
+                    if available_key in availability:
+                        raise ValueError('nonentry_unexpected_auxiliary_availability')
+                elif available_key in availability_conflicts or available_key not in availability:
                     raise ValueError('pre_ai_decision_availability_missing_or_conflicting')
-                available_at = _timestamp(availability[available_key], day)
-                if available_at < _timestamp(seed['observed_at'], day):
-                    raise ValueError('pre_ai_decision_availability_before_plan')
-                # Derived replay clock; preserve the original immutable seed/plan identity.
-                seed = {**seed, 'original_pre_ai_seed_sha256': seed['seed_sha256'],
-                        'plan_observed_at': seed['observed_at'], 'observed_at': available_at.isoformat()}
-                seed['seed_sha256'] = digest({k:v for k,v in seed.items() if k != 'seed_sha256'})
+                if not nonentry:
+                    available_at = _timestamp(availability[available_key], day)
+                    if available_at < _timestamp(seed['observed_at'], day):
+                        raise ValueError('pre_ai_decision_availability_before_plan')
+                    # Derived replay clock; preserve the original immutable seed/plan identity.
+                    seed = {**seed, 'original_pre_ai_seed_sha256': seed['seed_sha256'],
+                            'plan_observed_at': seed['observed_at'], 'observed_at': available_at.isoformat()}
+                    seed['seed_sha256'] = digest({k:v for k,v in seed.items() if k != 'seed_sha256'})
             key = digest([seed[k] for k in ('stock_code', 'scanner_promotion_id',
                 'evaluation_attempt_id', 'effective_venue', 'session_bucket', 'policy_bundle_sha256')])
             valid_counts[key] += 1
@@ -1429,12 +1438,19 @@ def build_entry_opportunity_replays(day, events, *, evaluated_at=None, micro_loa
         conflicting_rows=sum(valid_counts[k] for k in conflicts),
         rejected_rows=rejected['original_plan_or_frozen_seed_missing_or_invalid'])
     seeds = {k: v for k, v in candidates.items() if k not in conflicts}
+    plan_only = {k: v for k, v in seeds.items() if source_stage == 'entry_ai_economic_plan_observed'
+                 and v.get('observed_machine_action') in {'BLOCK', 'RECHECK'}}
+    for seed in plan_only.values():
+        value = dict(schema=ENTRY_REPLAY_SCHEMA, status='nonentry_plan_only',
+            blocker=None, seed=seed, arms=None, price_arms=None,
+            auxiliary_called=False, **AUTHORITY)
+        output['rows'].append({**value, 'replay_sha256': digest(value)})
     now = evaluated_at if evaluated_at is not None else time.time()
-    ready = {k: v for k, v in seeds.items()
+    ready = {k: v for k, v in seeds.items() if k not in plan_only
              if _timestamp(v['observed_at'], day).timestamp() + ENTRY_REPLAY_EXIT['horizon_sec'] <= now}
-    waiting = len(seeds) - len(ready)
+    waiting = len(seeds) - len(ready) - len(plan_only)
     for key, seed in seeds.items():
-        if key not in ready:
+        if key not in ready and key not in plan_only:
             output['rows'].append(dict(schema=ENTRY_REPLAY_SCHEMA, status='maturity_waiting',
                 blocker='declared_replay_window_not_due', seed=seed, arms=None, price_arms=None, **AUTHORITY))
     if ready:
@@ -1473,7 +1489,7 @@ def build_entry_opportunity_replays(day, events, *, evaluated_at=None, micro_loa
                 output['rows'].append(result)
         except (OSError, KeyError, TypeError, ValueError) as exc:
             output['native_source'] = dict(status='source_gap', reason=str(exc))
-            output['rows'] = [r for r in output['rows'] if r['status'] == 'maturity_waiting']
+            output['rows'] = [r for r in output['rows'] if r['status'] in ('maturity_waiting', 'nonentry_plan_only')]
             output['rows'].extend(dict(schema=ENTRY_REPLAY_SCHEMA, status='source_gap',
                 blocker='native_source_contract_unavailable', seed=seed, arms=None, price_arms=None,
                 **AUTHORITY) for seed in ready.values())
@@ -1499,6 +1515,33 @@ def build_entry_opportunity_replays(day, events, *, evaluated_at=None, micro_loa
                     capital_krw_minutes=0., fill_participation_rate=0., modeled_filled_qty=0,
                     modeled_outcome='modeled_no_exposure_common_reservation')
         row['replay_sha256'] = digest({k: v for k, v in row.items() if k != 'replay_sha256'})
+    # Preserve exact TTL closure from the existing watch owner. FIFO eviction
+    # remains diagnostic because a changed policy can change queue occupancy.
+    terminals_by_identity = {}
+    for event in events:
+        if event.stage == 'entry_machine_watch_terminal':
+            terminals_by_identity.setdefault((event.code, event.fields.get('scanner_promotion_id')), []).append(event)
+    for row in output['rows']:
+        seed = row.get('seed') or {}
+        lifetime = (seed.get('operating_contract') or {}).get('watch_lifetime_contract') or {}
+        terminals = terminals_by_identity.get((seed.get('stock_code'), seed.get('scanner_promotion_id')), [])
+        matching = []
+        for event in terminals:
+            try:
+                at = float(event.fields['watch_terminal_epoch'])
+                deadline = float(event.fields['watch_deadline_epoch'])
+                if (event.fields.get('watch_terminal_reason') == 'ttl_expired'
+                    and event.fields.get('watch_terminal_owner') == lifetime.get('owner')
+                    and lifetime.get('scanner_promotion_id') == seed.get('scanner_promotion_id')
+                    and deadline == lifetime.get('deadline_epoch') and math.isfinite(at)
+                    and at > deadline >= _timestamp(seed['observed_at'], day).timestamp()):
+                    matching.append(dict(terminal_epoch=at, deadline_epoch=deadline,
+                        owner=lifetime['owner'], scanner_promotion_id=seed['scanner_promotion_id']))
+            except (KeyError, TypeError, ValueError):
+                continue
+        if matching:
+            row['machine_watch_terminal'] = min(matching, key=lambda r:r['terminal_epoch'])
+            row['replay_sha256'] = digest({k:v for k,v in row.items() if k != 'replay_sha256'})
     completed = [r for r in output['rows'] if r['status'] == 'completed_source_only']
     # Receipt denominator includes incomplete usable-anchor attempts; exclude no row silently.
     for row in completed:
@@ -1517,7 +1560,7 @@ def build_entry_opportunity_replays(day, events, *, evaluated_at=None, micro_loa
             market_session_bucket=seed['session_bucket'],
             entry_quantity_leg_four_arm_evaluation=receipt))
     output['counts'] = dict(unique_retained=len(seeds), completed=len(completed),
-        maturity_waiting=waiting, source_gap=len(ready) - len(completed), excluded=dict(rejected),
+        nonentry_plan_only=len(plan_only), maturity_waiting=waiting, source_gap=len(ready) - len(completed), excluded=dict(rejected),
         source_stage=source_stage, raw_plan_rows=sum(e.stage == source_stage for e in events),
         raw_row_disposition=row_disposition, first_blocker_counts=dict(first_blockers))
     output['sha256'] = digest(output)

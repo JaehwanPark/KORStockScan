@@ -4777,9 +4777,10 @@ def test_machine_repeated_promotion_cannot_double_count_owner_returns():
     duplicate = copy.deepcopy(row)
     duplicate['decision_trace_id'] = 'another-evaluation-same-episode'
     result = calibration._mechanistic_paired_population_metrics([row, duplicate], [row, duplicate])
-    assert result['daily_net_profit_delta_krw'] is None
-    assert result['operating_economic_comparison']['blocker'] == 'repeated_episode_requires_owner_sequence_replay'
-    assert result['operating_economic_promotion_pass'] is False
+    single = calibration._mechanistic_paired_population_metrics([row], [row])
+    assert result['daily_net_profit_delta_krw'] == single['daily_net_profit_delta_krw']
+    assert result['operating_economic_comparison']['economic_episode_count'] == 1
+    assert result['operating_economic_comparison']['deduplicated_attempt_count'] == 1
 
 
 def test_machine_equal_training_actions_choose_incumbent_not_strictest(monkeypatch):
@@ -4846,3 +4847,192 @@ def test_hierarchy_already_priced_rows_do_not_rescan_pipeline(monkeypatch, tmp_p
     monkeypatch.setattr(quality, 'load_pipeline_price_and_lifecycle_rows', unexpected_read)
     repriced, _ = calibration.relabel_hierarchy_source_rows([row], tmp_path)
     assert repriced == [row]
+
+
+def _machine_plan_only_anchor(row, *, minutes_before=1, action='RECHECK'):
+    import copy
+    from datetime import datetime, timedelta
+    from src.engine.scalping import compact_auxiliary_paired_replay as compact
+    result = copy.deepcopy(row)
+    source = result['operating_comparison_input']
+    replay = source['owner_replay']
+    seed = replay['seed']
+    seed['observed_at'] = (datetime.fromisoformat(seed['observed_at']) - timedelta(minutes=minutes_before)).isoformat()
+    seed['evaluation_attempt_id'] += '-prior'
+    seed['observed_machine_action'] = action
+    seed['seed_sha256'] = compact.digest({k:v for k,v in seed.items() if k != 'seed_sha256'})
+    replay = {k:v for k,v in replay.items() if k in ('schema', *compact.AUTHORITY)} if hasattr(compact, 'AUTHORITY') else {'schema': replay['schema']}
+    from src.engine.scalping.strategy_owner_replay import AUTHORITY
+    replay.update(AUTHORITY)
+    replay.update(seed=seed, status='nonentry_plan_only', auxiliary_called=False, arms=None, price_arms=None)
+    replay['replay_sha256'] = compact.digest(replay)
+    source.update({k:seed[k] for k in ('evaluation_attempt_id','source_date','stock_code','scanner_promotion_id','effective_venue','session_bucket')})
+    source.update(owner_replay=replay, incumbent_verdict=None)
+    result.update(decision_trace_id='prior-machine-point', comparison={'incumbent_machine_action': action, 'control_action':'WAIT'}, setup_evidence={'test_action': action})
+    return result
+
+
+def test_machine_repeated_recheck_closes_on_exact_followup_without_ai_fabrication(monkeypatch):
+    final = _supported_machine_owner_row()
+    final.update(comparison={'incumbent_machine_action':'ENTER_NOW','control_action':'BUY'}, setup_evidence={'test_action':'ENTER_NOW'})
+    first = _machine_plan_only_anchor(final, minutes_before=2)
+    second = _machine_plan_only_anchor(final)
+    second['decision_trace_id'] = 'second-recheck'
+    members = sorted(r['decision_trace_id'] for r in (first,second,final))
+    for row in (first,second,final): row['machine_sequence_members'] = members
+    monkeypatch.setattr(calibration, 'mechanistic_entry_policy_decision', lambda evidence, **kw: {'action': evidence['test_action']})
+    result = calibration._machine_sequence_operating_metrics([final,second,first], set(), {})
+    assert result['status'] == 'supported_operating_comparison', result
+    assert result['economic_episode_count'] == 1
+    assert result['daily_net_profit_delta_krw'] == 0.
+    assert result['candidate']['net_pnl_krw'] > 0
+    assert first['operating_comparison_input']['incumbent_verdict'] is None
+    # A slice missing a retained recheck cannot close the promotion.
+    missing = calibration._machine_sequence_operating_metrics([first,final], set(), {})
+    assert missing['blocker'] == 'recheck_sequence_capture_incomplete'
+    # A previously uncalled AI cannot be manufactured for a new entry.
+    first['setup_evidence']['test_action'] = 'ENTER_NOW'
+    unsupported = calibration._machine_sequence_operating_metrics([first,second,final], set(), {})
+    assert unsupported['blocker'] == 'frozen_auxiliary_verdict_missing'
+
+
+def test_machine_both_block_with_producer_plan_is_zero_exposure_not_missing_return():
+    row = _machine_plan_only_anchor(_supported_machine_owner_row(), action='BLOCK')
+    result = calibration._machine_sequence_operating_metrics([row], set())
+    assert result['status'] == 'supported_operating_comparison', result
+    assert result['candidate']['net_pnl_krw'] == result['incumbent']['net_pnl_krw'] == 0.
+    assert result['robust_paired_delta_ev_lower_bound_pct'] == 0.
+
+
+def _second_machine_owner_row(row, *, second_offset=30, symbol='000660', promotion='second-promotion'):
+    import copy
+    from datetime import datetime, timedelta
+    from src.engine.scalping import compact_auxiliary_paired_replay as compact
+    result = copy.deepcopy(row)
+    source = result['operating_comparison_input']; replay = source['owner_replay']; seed = replay['seed']
+    seed.update(stock_code=symbol, scanner_promotion_id=promotion, evaluation_attempt_id='second-attempt')
+    seed['observed_at'] = (datetime.fromisoformat(seed['observed_at']) + timedelta(seconds=second_offset)).isoformat()
+    seed['seed_sha256'] = compact.digest({k:v for k,v in seed.items() if k != 'seed_sha256'})
+    for k in ('stock_code', 'scanner_promotion_id', 'evaluation_attempt_id'): source[k] = seed[k]
+    replay['replay_sha256'] = compact.digest({k:v for k,v in replay.items() if k != 'replay_sha256'})
+    result.update(decision_trace_id='second-machine', stock_code=symbol, scanner_promotion_id=promotion)
+    return result
+
+
+def test_machine_common_capital_rejects_overlap_without_resizing_or_double_profit():
+    import copy
+    one = _supported_machine_owner_row()
+    one['comparison'] = {'control_action':'BUY', 'incumbent_machine_action':'ENTER_NOW'}
+    two = _second_machine_owner_row(one)
+    before = copy.deepcopy([one,two])
+    result = calibration._machine_sequence_operating_metrics([two,one], {'second-machine'})
+    assert result['status'] == 'supported_operating_comparison', result
+    assert result['capital_rejection_counts'] == {'incumbent':1, 'candidate':0}
+    assert result['economic_episode_count'] == 2
+    assert result['candidate']['net_pnl_krw'] == result['incumbent']['net_pnl_krw'] == 600.
+    assert result['candidate']['fill_participation'] == result['incumbent']['fill_participation'] == .5
+    assert [one,two] == before
+
+
+def test_joint_scope_allocator_uses_whole_frozen_bundle(monkeypatch):
+    one = _supported_machine_owner_row()
+    two = _second_machine_owner_row(one)
+    for row, scope in ((one,('KRX','KRX_REGULAR')),(two,('NXT','NXT_REGULAR'))):
+        row['entry_group_observation'] = {'key_parts':dict(zip(('venue','session_bucket'),scope))}
+        row['setup_evidence'] = {'test':1}
+    monkeypatch.setattr(calibration, 'mechanistic_entry_policy_decision', lambda setup, policy: {'action': policy['action']})
+    parents = {s:{'action':'ENTER_NOW'} for s in ('KRX|KRX_REGULAR','NXT|NXT_REGULAR')}
+    policies = {**parents,'KRX|KRX_REGULAR':{'action':'BLOCK'}}
+    result = calibration._machine_joint_scope_metrics([one,two], policies, parents)
+    assert result['status'] == 'supported_operating_comparison', result
+    assert result['capital_rejection_counts'] == {'incumbent':1,'candidate':0}
+    assert result['daily_net_profit_delta_krw'] == 0.
+
+
+def test_machine_model_holdout_must_follow_model_calibration():
+    import copy
+    from src.engine.scalping import compact_auxiliary_paired_replay as compact
+    row = _supported_machine_owner_row()
+    model = copy.deepcopy(row['operating_model_validation'])
+    scope = model['validated_scopes'][0]
+    scope['calibration_rows'][0]['source_date'] = scope['holdout_rows'][0]['source_date']
+    scope['actual_rows_sha256'] = compact.digest(scope['calibration_rows']+scope['holdout_rows'])
+    scope['sha256'] = compact.digest({k:v for k,v in scope.items() if k != 'sha256'})
+    assert not compact.owner_model_scope_valid(model, row['operating_comparison_input'])
+
+
+def test_joint_frozen_bundle_qualifies_then_hash_date_and_subset_fail_closed(monkeypatch):
+    import copy
+    from datetime import datetime, timedelta
+    from src.engine.scalping import compact_auxiliary_paired_replay as compact
+    parent = copy.deepcopy(calibration.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1)
+    coords = {k: parent['thresholds'][k] for k in calibration.MECHANISTIC_COMMON_FEATURE_GRID}
+    coords['maximum_spread_bp'] = 40.
+    successor = calibration._mechanistic_threshold_policy(coords, parent, publication=True)
+    scopes = ['KRX|KRX_REGULAR','NXT|NXT_REGULAR']
+    parents = {s:parent for s in scopes}
+    policies = {s:successor for s in scopes}
+    rows = []
+    for n, scope in enumerate(scopes):
+        for losing in (True,False):
+            row = _supported_machine_owner_row(); source = row['operating_comparison_input']
+            replay = source['owner_replay']; seed = replay['seed']
+            delta = timedelta(days=n, minutes=0 if losing else 4)
+            seed['observed_at'] = (datetime.fromisoformat(seed['observed_at'])+delta).isoformat()
+            seed['source_date'] = seed['observed_at'][:10]
+            seed['scanner_promotion_id'] = f'joint-{n}-{losing}'
+            seed['evaluation_attempt_id'] = f'joint-attempt-{n}-{losing}'
+            seed['seed_sha256'] = compact.digest({k:v for k,v in seed.items() if k != 'seed_sha256'})
+            for k in ('source_date','scanner_promotion_id','evaluation_attempt_id'): source[k] = seed[k]
+            arm = next(iter(replay['operating_arms'].values()))
+            arm['modeled_exit_at'] = (datetime.fromisoformat(arm['modeled_exit_at'])+delta).isoformat()
+            if losing:
+                arm.update(net_pnl_krw=-600.,stress_net_pnl_krw=-720.,net_return_pct=-.5,stress_net_return_pct=-.6)
+            arm['sha256'] = compact.digest({k:v for k,v in arm.items() if k != 'sha256'})
+            replay['replay_sha256'] = compact.digest({k:v for k,v in replay.items() if k != 'replay_sha256'})
+            row.update(source_date=seed['source_date'],decision_trace_id=seed['evaluation_attempt_id'],
+                entry_group_observation={'key_parts':dict(zip(('venue','session_bucket'),scope.split('|')))},
+                setup_evidence={'losing':losing})
+            rows.append(row)
+    monkeypatch.setattr(calibration, 'mechanistic_entry_policy_decision', lambda setup, policy: {
+        'action':'BLOCK' if setup['losing'] and policy['thresholds']['maximum_spread_bp'] == 40. else 'ENTER_NOW'})
+    frozen = dict(parents=parents,policies=policies,changed_scopes=scopes,
+        frozen_date='2026-09-15',economic_kernel_sha256='kernel')
+    refinements = {s:{'forward_selection':{'policy':coords,'incumbent_sha256':calibration._canonical_sha256(parent)},
+        'source_contract':{'economic_kernel_sha256':'kernel'},
+        'policy_candidate':{'thresholds':coords}} for s in scopes}
+    proof = calibration._machine_joint_scope_evaluation(rows,parents,refinements,{},
+        {'forward_selection':frozen},'kernel','2026-09-17')
+    assert proof['promotion_pass'], proof
+    assert proof['holdout']['daily_net_profit_delta_krw'] == 600.
+    report = {'target_date':'2026-09-17','joint_scope_economics':proof,'mechanistic_refinements_by_scope':refinements}
+    assert calibration.machine_joint_scope_evidence_valid(report,scopes)
+    assert not calibration.machine_joint_scope_evidence_valid(report,scopes[:1])
+    stale = copy.deepcopy(report); stale['joint_scope_economics']['forward_selection']['frozen_date']='2026-09-17'
+    p = stale['joint_scope_economics']; p['sha256'] = calibration._canonical_sha256({k:v for k,v in p.items() if k!='sha256'})
+    assert not calibration.machine_joint_scope_evidence_valid(stale,scopes)
+    report['joint_scope_economics']['holdout']['daily_net_profit_delta_krw'] += 1
+    assert not calibration.machine_joint_scope_evidence_valid(report,scopes)
+
+
+def test_full_population_selection_uses_operating_ev_not_terminal_proxy():
+    row = _supported_machine_owner_row()
+    paired = calibration._mechanistic_paired_population_metrics([row], [row])
+    metrics = {"cost_adjusted_terminal_proxy_ev_pct": -1.0}
+    ev, delta = calibration.machine_selection_economics(metrics, paired, full_population=True)
+    assert ev == paired["operating_economic_comparison"]["candidate"]["ev_pct"]
+    assert ev > 0 and delta == ev
+    paired["downstream_operating_evidence_complete"] = False
+    assert calibration.machine_selection_economics(metrics, paired, full_population=True) == (None, None)
+    assert calibration.machine_selection_economics(metrics, paired, full_population=False)[0] == -1.0
+
+
+def test_recheck_to_block_is_not_an_unchanged_machine_action(monkeypatch):
+    row = _supported_machine_owner_row()
+    row['comparison']['incumbent_machine_action'] = 'RECHECK'
+    row['setup_evidence'] = {}
+    monkeypatch.setattr(calibration, 'mechanistic_entry_policy_decision', lambda *a, **kw: {'action':'BLOCK'})
+    metrics = calibration._mechanistic_paired_population_metrics([row], [], candidate_policy={})
+    assert metrics['changed_decision_count'] == 1
+    assert metrics['baseline_preserved'] is False
+    assert metrics['daily_net_profit_delta_krw'] is None

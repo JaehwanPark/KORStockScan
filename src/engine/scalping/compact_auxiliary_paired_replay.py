@@ -273,6 +273,8 @@ def owner_model_scope_valid(model, pair):
                     and (r.get("completion_date") or r["source_date"]) <= proof["available_after_date"]
                     and r.get("episode_id") != seed.get("entry_plan_sha256") for r in rows)
         ):
+            if max(r.get("completion_date") or r["source_date"] for r in cal) >= min(r["source_date"] for r in held):
+                continue
             dimensions = ("vwap_error_bps", "receipt_clock_error_sec", "quantity_error",
                           "net_error_budget_pct", "capital_error_minutes", "reserve_error_minutes")
             if not all(all(finite(r.get(k)) for k in dimensions)

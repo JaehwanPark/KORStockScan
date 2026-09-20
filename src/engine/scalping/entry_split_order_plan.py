@@ -5050,7 +5050,12 @@ def _execution_projection_census(target_date, events, *, stages=None):
 
 def _bounded_execution_projection(target_date: str, *, stages=None, families=None):
     """Use the existing compact family; never silently scan a multi-GB day."""
-    stages = EXECUTION_SOURCE_STAGES if stages is None else stages
+    if stages is None:
+        stages = EXECUTION_SOURCE_STAGES
+        from src.engine.pipeline_event_summary import producer_summary_paths
+        _, manifest_path = producer_summary_paths(DATA_DIR / "pipeline_event_summaries", target_date)
+        if "entry_machine_watch_terminal" in ((_load_json(manifest_path) or {}).get("summary_stages") or []):
+            stages = stages | {"entry_machine_watch_terminal"}
     families = families or ("dynamic_entry_price_resolver",)
     directories = [DATA_DIR / "threshold_cycle" / f"date={target_date}" / f"family={f}" for f in families]
     partition_paths = sorted(p for d in directories for p in d.glob("part-*.jsonl*"))

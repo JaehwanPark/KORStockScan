@@ -14,6 +14,7 @@ THRESHOLD_STAGE_FAMILY_MAP = {
     "entry_ai_economic_plan_observed": "dynamic_entry_price_resolver",
     "entry_ai_economic_source_gap": "dynamic_entry_price_resolver",
     "entry_ai_economic_decision_available": "dynamic_entry_price_resolver",
+    "entry_machine_watch_terminal": "dynamic_entry_price_resolver",
     "entry_execution_sizing_plan_block": "dynamic_entry_price_resolver",
     "entry_quantity_leg_four_arm_evaluation": "dynamic_entry_price_resolver",
     "order_leg_sent": "dynamic_entry_price_resolver",

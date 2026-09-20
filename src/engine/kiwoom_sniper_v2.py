@@ -5469,6 +5469,24 @@ def _scalping_fifo_candidates(watching_stocks, now_ts):
     )
 
 
+def _record_machine_watch_terminal(target, *, now_ts):
+    """Emit the existing TTL/FIFO terminal without changing runtime state."""
+    from src.engine import sniper_state_handlers
+    contract = target.get("entry_economic_watch_lifetime") or {}
+    promotion = target.get("scanner_promotion_id")
+    if not promotion or contract.get("scanner_promotion_id") != promotion:
+        return
+    try:
+        sniper_state_handlers._log_entry_pipeline(target, target.get("code"),
+            "entry_machine_watch_terminal", scanner_promotion_id=promotion,
+            watch_deadline_epoch=contract["deadline_epoch"], watch_terminal_epoch=now_ts,
+            watch_terminal_owner=contract["owner"],
+            watch_terminal_reason="ttl_expired" if now_ts > contract["deadline_epoch"] else "fifo_evicted",
+            actual_order_submitted=False, broker_order_forbidden=True)
+    except Exception as exc:
+        log_error("[MACHINE_WATCH_TERMINAL] observation failed: " + type(exc).__name__)
+
+
 def _scalping_fifo_base_max_active():
     raw = _scanner_hot_or_env_value("KORSTOCKSCAN_SCALPING_WATCHING_MAX_ACTIVE")
     try:
@@ -12323,6 +12341,14 @@ def run_sniper(is_test_mode=False):
                 scalping_watching_ttl_sec = _scalping_watching_ttl_sec()
 
                 for t in scalp_fifo_targets:
+                    # Observation of this existing owner contract only. It does
+                    # not extend TTL, reserve cash, or change watch eligibility.
+                    t["entry_economic_watch_lifetime"] = {
+                        "owner": "kiwoom_sniper_v2._scanner_evaluation_lifetime_anchor/_scalping_watching_ttl_sec",
+                        "scanner_promotion_id": t.get("scanner_promotion_id"),
+                        "deadline_epoch": _scanner_evaluation_lifetime_anchor(t, now_ts=now_ts) + scalping_watching_ttl_sec,
+                        "observed_epoch": now_ts,
+                    }
                     if (
                         now_ts - _scanner_evaluation_lifetime_anchor(t, now_ts=now_ts)
                         > scalping_watching_ttl_sec
@@ -12351,6 +12377,7 @@ def run_sniper(is_test_mode=False):
                     for t in targets:
                         if t.get("id") in expired_ids:
                             t["status"] = "EXPIRED"
+                            _record_machine_watch_terminal(t, now_ts=now_ts)
 
                     print(
                         f"🗑️ [스캘핑 큐 정리] {len(expired_ids)}개 단기 종목 감시 만료"

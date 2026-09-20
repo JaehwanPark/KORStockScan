@@ -53,3 +53,25 @@
 **최종 전체 요청 상태: 미종결.** 비교·발행 결함 수리, 검증·push·미래 호출 release 선택·dated carry 발행은 끝났으나 ME8의 paired 별칭 대사 잔여, ME9/ME10의 전체 실행 경제성과 전체 native terminal 증거가 남았다. 유효한 비용 후 EV·일별 순익을 산출했다고 보고하지 않는다.
 
 후속은 기존 producer 수리 ID에서 당시 cutoff·실행 계획/정책·AI/비용·모델/episode 증거를 연결하는 것이다. 단순 sample floor 완화·대리 EV 승격·과거 누락값0 대입·반복 전체 재실행으로 닫지 않는다. 상세 로그와 machine-readable 결과는 `tmp/main-machine-economic-closure-20260920/result.json` 및 같은 폴더의 검증 receipt에 보존했다.
+
+## 9/20 후속 구현·재리뷰 진행 기록
+
+앞의 `d9e2cdae3` 판정은 이전 실행 증거로 보존한다. 이번 작업본은 `fix/main-machine-operating-completion-20260920`, base `ea92be4bf`이며 실행 release와 원 작업본을 직접 수정하지 않았다.
+
+확인하여 수리한 경계:
+
+1. main observer의 ENTER-only 조건을 관측용 BLOCK/RECHECK까지 확장했다. 사용자 승인된 기존 bounded 계좌 읽기만 사용한다. 실제 주문용 plan은 계속 ENTER 및 보조 PASS를 요구한다.
+2. pre-AI replay가 AI 응답이 없는 모든 계획을 버리던 조건을 수리했다. 비진입 계획·모집단은 보존하되 호출하지 않은 AI를 만들어내지 않는다. producer summary와 compact projection의 terminal stage 등록·parser 필드까지 연결했다.
+3. 동일 promotion 반복을 독립 수익으로 합산하지 않는다. 순차 RECHECK 및 실제 TTL 종결, 동시 reserve/held symbol, 같은 현금 한도에서의 순익·EV·tail·노출·참여율과 stress/모델 오차를 계산한다.
+4. 복수 scope의 무조건 차단을 calibration-frozen 전체 조합의 독립 검증 및 publisher 재계산으로 대체했다. 미검증 scope 조합, 불완전 sequence, 변경된 budget, 미호출 보조 AI는 여전히 구체 사유로 차단한다.
+5. model calibration/holdout의 시간 순서를 검사한다. 운영 경제성 완료 후 summary가 proxy EV를 읽던 오류를 수리하고, 실제 적용 machine+compact 버전별 중복 제거·rolling/cumulative 완료 손익은 기존 owner를 재사용한다.
+
+프로토콜 확인: 공식 Kiwoom repository HEAD `953e5dbff123f437ab4d11a78a95191a685eb51f` 재확인. `kiwoom/_data/kiwoom_api_spec.json`의 kt00011 및 `kiwoom/specs.py`, 기존 request/parser를 대사했다. kt00011은 POST `/api/dostk/acnt`, raw6자리 `stk_cd`, 선택 `uv`, 기존 인증/API-ID/실전·모의 분리를 유지한다. API parser·인증·주문 protocol을 바꾸지 않았고 검증 중 실제 계좌 요청도 하지 않았다. 공식 원천 snapshot과 조회 시각은 `tmp/main-machine-operating-completion-20260920/official-reference-review.json`에 남긴다.
+
+이번 지원 범위는 고정 자본 조건부 경제성이다. 변경되는 계좌 한도, FIFO 의존 CF, 미호출 AI 재판정, terminal 없는 부분 체결/미청산은 자동으로 유효 무거래가 되지 않는다. 이러한 범위 제한과 과거 필드 누락, 새 모델의 독립 자연 표본 대기는 서로 다르다. 양수 합성 fixture는 자연 이익 증거가 아니다.
+
+검증·실행의 최종 receipt는 후속 재생성 완료 후 아래에 기록한다. 현재 이 문단만으로 전체 완료를 주장하지 않는다.
+
+재리뷰에서 full-population 후보와 소비자가 운영 replay가 아닌 terminal proxy EV를 1차 경제성으로 검사하던 경계를 수리했다. 기존 10bp·sample·tail·독립 holdout 기준은 유지하며 실제 operating EV와 paired Δ를 사용한다. 미검증 모델을 flag만으로 우회하는 후보는 소비자가 거절한다.
+
+검증: 영향 범위 843개 및 WATCHING owner 2개 통과 후, 실제 지표 선택과 RECHECK→BLOCK 변경 판정 수정을 추가하여 관련 calibration/publisher/loader 306개를 재검증했다. 로그는 `tmp/main-machine-operating-completion-20260920/{final-affected-tests,watch-owner-tests,metric-basis-tests-v2}.log`이다. producer→저장/projection→계산과 실제 TTL 종결 회귀, 동일 자본 충돌·중복, joint holdout/hash/subset 차단을 포함한다. 통제 입력의 일별 +600원 결과는 회귀 증거이며 자연 성과가 아니다.

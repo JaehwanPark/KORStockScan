@@ -382,6 +382,9 @@ def _economic_section(owner: str, payload: dict[str, Any]) -> dict[str, Any]:
         # Report execution flags do not prove prospective owner-model support.
         future_contract_verified = False
         operating_complete = projection.get("downstream_operating_evidence_complete") is True
+        economics = _dict_value(projection, "operating_economics")
+        incumbent = _dict_value(economics, "incumbent").get("ev_pct")
+        candidate = _dict_value(economics, "candidate").get("ev_pct")
         return {
             "status": ("source_gap" if projection.get("daily_net_profit_status") == "not_available_without_exact_changed_decision_owner_replay" else projection.get("state")),
             "candidate_count": projection.get("independent_candidate_count"),
@@ -395,9 +398,10 @@ def _economic_section(owner: str, payload: dict[str, Any]) -> dict[str, Any]:
                 "delta_ev_pct": projection.get("holdout_paired_delta_ev_pct"),
                 "economic_basis": projection.get("economic_basis"),
             },
-            "incumbent_ev_pct": projection.get("holdout_incumbent_ev_pct") if operating_complete else None,
-            "candidate_ev_pct": projection.get("holdout_cost_adjusted_ev_pct") if operating_complete else None,
-            "delta_ev_pct": projection.get("holdout_paired_delta_ev_pct") if operating_complete else None,
+            "incumbent_ev_pct": incumbent if operating_complete else None,
+            "candidate_ev_pct": candidate if operating_complete else None,
+            "delta_ev_pct": candidate - incumbent if operating_complete and candidate is not None and incumbent is not None else None,
+            "robust_delta_ev_lower_bound_pct": economics.get("robust_paired_delta_ev_lower_bound_pct"),
             "net_profit_uplift_krw_per_observation_day": projection.get(
                 "daily_net_profit_delta_krw"
             ),

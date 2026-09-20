@@ -4089,6 +4089,10 @@ def test_machine_initial_policy_assesses_before_provider_cache_and_lock(
         engine.lock = NoProviderLock()
     ws_data = _sample_ws_data()
     ws_data["scanner_promotion_id"] = "SCANPROM-005930-machine"
+    observed = []
+    def observer(**kwargs):
+        observed.append(kwargs['assessment']['action'])
+        return {'entry_economic_source_status': 'recorded_source_only'}
     result = engine.analyze_target(
         "test",
         ws_data,
@@ -4097,7 +4101,10 @@ def test_machine_initial_policy_assesses_before_provider_cache_and_lock(
         strategy="SCALPING",
         prompt_profile="watching",
         candle_context=_allowed_entry_candle_context(),
+        entry_economics_observer=observer,
     )
+    assert observed == ['ENTER_NOW' if ready else 'RECHECK']
+    assert result['entry_economic_source_status'] == 'recorded_source_only'
     assert events == (["machine", "ai"] if ready else ["machine"]), result
     assert result["scanner_promotion_id"] == "SCANPROM-005930-machine"
     if ready:

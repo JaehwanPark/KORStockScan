@@ -11814,7 +11814,7 @@ def _observe_entry_economics_before_ai(stock, code, ws_data, *, exact_payload,
         for name in GLOBALS:
             if getattr(sys.modules[__name__], name, None) is None:
                 raise ValueError("runtime_owner_state_not_initialized:" + name)
-        if (assessment.get("action") != "ENTER_NOW" or not identity["evaluation_attempt_id"]
+        if (assessment.get("action") not in {"ENTER_NOW", "BLOCK", "RECHECK"} or not identity["evaluation_attempt_id"]
             or _safe_int(snapshot.get("buy_qty"), 0) > 0
             or _is_any_simulated_position(snapshot, snapshot.get("strategy"))):
             raise ValueError("unsupported_noninitial_or_nonreal_machine_scope")
@@ -11873,6 +11873,7 @@ def _observe_entry_economics_before_ai(stock, code, ws_data, *, exact_payload,
             raise ValueError(split.get("entry_split_order_skip_reason") or "owner_split_plan_missing")
         orders = _decorate_entry_split_leg_ttls(orders, snapshot, "SCALPING")
         timeout = _resolve_buy_order_timeout_sec(snapshot, "SCALPING")
+        operating["watch_lifetime_contract"] = copy.deepcopy(snapshot.get("entry_economic_watch_lifetime") or {})
         operating.update(broker_route=broker_route,order_leg_ttl_sec=[o.get("split_leg_ttl_sec") or timeout for o in orders],
             order_bundle_hard_ttl_sec=max(o.get("split_bundle_hard_ttl_sec") or timeout for o in orders),
             order_timeout_owner="sniper_state_handlers._resolve_buy_order_timeout_sec/_decorate_entry_split_leg_ttls")

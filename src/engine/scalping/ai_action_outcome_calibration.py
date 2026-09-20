@@ -335,6 +335,7 @@ def _main_mechanistic_input_fingerprint(
         "report/micro_reversion_economic_reference/*.json*",
         "report/observation_source_quality_audit/*.json",
         "report/ai_entry_setup_paired_replay_batch/*.source.json",
+        "report/entry_split_order_plan/entry_split_order_plan_*.json",
     )
     for pattern in patterns:
         for path in data_root.glob(pattern):
@@ -345,6 +346,7 @@ def _main_mechanistic_input_fingerprint(
     if pricing.is_file():
         candidates.add(pricing)
     incumbent = load_effective(data_root=data_root, target_date=target_date)
+    from src.engine.scalping.strategy_owner_replay import entry_operating_model_identity
     code_paths = [
         Path(__file__),
         Path(__file__).with_name("ai_decision_quality.py"),
@@ -355,6 +357,7 @@ def _main_mechanistic_input_fingerprint(
     ]
     body = {
         "contract_version": MAIN_MECHANISTIC_EVALUATION_CONTRACT_VERSION,
+        "operating_model_implementation_sha256": entry_operating_model_identity(),
         "target_date": target_date,
         "source_generations": [generation(path) for path in sorted(candidates)],
         "code_sha256": {
@@ -2371,12 +2374,10 @@ def _common_refinement_population(
                     lane == "natural"
                     and compact.valid(operating_projection)
                     and len(matches) == 1
-                    and row.get("machine_action") == "ENTER_NOW"
                 ):
                     candidate_source = matches[0]
                     if (
                         not candidate_source.get("exclusion_reason")
-                        and candidate_source.get("incumbent_verdict") in {"PASS", "VETO"}
                         and all(
                             candidate_source.get(k) == row.get(k)
                             for k in (
@@ -2387,10 +2388,9 @@ def _common_refinement_population(
                                 "source_date",
                             )
                         )
-                        and compact.owner_operating_arm(
-                            candidate_source.get("owner_replay") or {},
-                            candidate_source,
-                        )
+                        and ((candidate_source.get("incumbent_verdict") in {"PASS", "VETO"}
+                              and compact.owner_operating_arm(candidate_source.get("owner_replay") or {}, candidate_source))
+                             or _machine_nonentry_seed(candidate_source))
                     ):
                         operating_source = candidate_source
                         row["operating_comparison_input"] = operating_source
@@ -2492,6 +2492,20 @@ def _common_refinement_population(
             )
             accepted[key] = row
     result = sorted(accepted.values(), key=lambda r: (r["source_date"], r["decision_trace_id"]))
+    sequence_groups = defaultdict(list)
+    for row in result:
+        key = (row.get("source_date"), row.get("stock_code"), row.get("scanner_promotion_id"))
+        sequence_groups[key].append(row)
+    for key, rows in sequence_groups.items():
+        originals = [r for r in natural_rows if
+            (r.get("source_date"), r.get("stock_code"), r.get("scanner_promotion_id")) == key]
+        if natural_allowed and all(key):
+            for row in rows:
+                row['machine_sequence_expected_count'] = len(originals)
+        if natural_allowed and len(originals) == len(rows) and all(key):
+            members = sorted(r["decision_trace_id"] for r in rows)
+            for row in rows:
+                row["machine_sequence_members"] = members
     return result, {
         "schema": "machine_common_refinement_population_v1",
         "cohort": list(cohort),
@@ -2523,7 +2537,7 @@ def _common_refinement_population(
     }
 
 
-def _mechanistic_threshold_policy(policy, parent_policy=None):
+def _mechanistic_threshold_policy(policy, parent_policy=None, *, publication=False):
     threshold_policy = json.loads(json.dumps(
         parent_policy or MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1
     ))
@@ -2535,6 +2549,10 @@ def _mechanistic_threshold_policy(policy, parent_policy=None):
         else MECHANISTIC_REFINEMENT_POLICY_VERSION
     )
     threshold_policy["thresholds"].update(policy)
+    if publication:
+        threshold_policy.pop("hierarchy", None)
+        threshold_policy["version"] = MECHANISTIC_FULL_POPULATION_POLICY_VERSION
+        threshold_policy["postclose_selection"]["minimum_cost_adjusted_ev_pct"] = MECHANISTIC_REFINEMENT_GATE["minimum_cost_adjusted_ev_pct"]
     return threshold_policy
 
 
@@ -2615,6 +2633,211 @@ def _mechanistic_policy_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _machine_nonentry_seed(source):
+    """Validate a producer-owned no-AI anchor; it cannot authorize an entry."""
+    from src.engine.scalping import strategy_owner_replay as owner
+    replay = source.get("owner_replay") or {}
+    seed = replay.get("seed") or {}
+    context = seed.get("operating_contract") or {}
+    if (replay.get("status") == "nonentry_plan_only"
+        and replay.get("auxiliary_called") is False
+        and replay.get("replay_sha256") == _canonical_sha256({k:v for k,v in replay.items() if k != "replay_sha256"})
+        and owner._entry_seed_valid(seed)
+        and seed.get("observed_machine_action") in {"BLOCK", "RECHECK"}
+        and context.get("sha256") == _canonical_sha256({k:v for k,v in context.items() if k != "sha256"})
+        and (_number(context.get("budget_krw")) or 0) > 0
+        and all(source.get(k) == seed.get(k) for k in
+            ("evaluation_attempt_id", "source_date", "stock_code", "scanner_promotion_id", "effective_venue", "session_bucket"))):
+        return seed
+    return None
+
+
+def _machine_sequence_operating_metrics(population, selected_ids, candidate_policy=None, *, joint_actions=False):
+    """Replay exact promotion sequences with frozen quantities and shared cash.
+
+    This is a conditional, fixed-capital experiment, not an account backtest.
+    Only equal frozen cash envelopes are supported; changing account capacity
+    requires its own cash-flow witnesses. Every chosen exit is its own owner CF.
+    """
+    from copy import deepcopy
+    from src.engine.scalping import compact_auxiliary_paired_replay as compact
+    from src.engine.scalping import entry_split_order_plan as split
+    empty = dict(status="source_gap", blocker=None, incumbent=None, candidate=None,
+        robust_paired_delta_ev_lower_bound_pct=None, daily_net_profit_delta_krw=None,
+        portfolio_daily_net_delta_krw=None, owner="machine_owner_sequence_replay",
+        closure_test="complete_promotion_sequence_exact_plan_prior_model_and_frozen_cash_replay")
+    groups, seen = defaultdict(list), {}
+    try:
+        for row in population:
+            source = row.get("operating_comparison_input") or {}
+            replay = source.get("owner_replay") or {}
+            arm = compact.owner_operating_arm(replay, source)
+            model = row.get("operating_model_validation") or {}
+            plan_only = _machine_nonentry_seed(source)
+            if not plan_only and (not arm or not compact.owner_model_scope_valid(model, source)):
+                raise ValueError("exact_source_date_operating_model_unverified")
+            if arm and any(not compact.finite(arm.get(k)) or arm[k] < 0
+                for k in ('capital_krw_minutes', 'reserve_krw_minutes')):
+                raise ValueError('owner_capital_or_reserve_measurement_invalid')
+            if not plan_only and row.get("operating_runtime_cost_receipt", {}).get("delta_krw") != 0:
+                raise ValueError("sequence_nonzero_inference_cost_timeline_unbound")
+            seed = replay["seed"]
+            proof = None if plan_only else next(p for p in model["validated_scopes"]
+                if p["scope_sha256"] == split._entry_operating_scope(seed)
+                and compact.owner_model_scope_valid({"validated_scopes": [p]}, source))
+            budget = seed["operating_contract"]["budget_krw"] if plan_only else arm["budget_krw"]
+            group = (seed["source_date"], seed["stock_code"], seed["scanner_promotion_id"])
+            if not all(group):
+                raise ValueError("sequence_episode_identity_missing")
+            stamp = datetime.fromisoformat(seed["observed_at"])
+            ended = None if plan_only else datetime.fromisoformat(arm["modeled_exit_at"])
+            if stamp.tzinfo is None or (ended is not None and (ended.tzinfo is None or ended <= stamp)):
+                raise ValueError("sequence_owner_clock_invalid")
+            old = row["comparison"].get("incumbent_machine_action") or (
+                "ENTER_NOW" if row["comparison"].get("control_action") == "BUY" else "BLOCK")
+            new = (row['joint_candidate_action'] if joint_actions else mechanistic_entry_policy_decision(row["setup_evidence"], policy=candidate_policy)["action"]
+                if candidate_policy is not None else "ENTER_NOW" if row["decision_trace_id"] in selected_ids else "BLOCK")
+            if old not in {"ENTER_NOW", "BLOCK", "RECHECK"} or new not in {"ENTER_NOW", "BLOCK", "RECHECK"}:
+                raise ValueError("sequence_machine_action_invalid")
+            signature = _canonical_sha256([seed["seed_sha256"], old, new, source.get("incumbent_verdict")])
+            key = (*group, stamp)
+            if key in seen:
+                if seen[key] != signature:
+                    raise ValueError("sequence_same_clock_conflict")
+                continue
+            seen[key] = signature
+            reserve = sum(leg["qty"] * leg["price"] for leg in seed["legs"])
+            if not 0 < reserve <= budget:
+                raise ValueError("sequence_frozen_reserve_missing")
+            groups[group].append(dict(row=row, seed=seed, arm=arm, old=old, new=new, budget=budget,
+                start=stamp, end=ended, reserve=reserve, verdict=source.get("incumbent_verdict"),
+                error=0. if plan_only else max(proof["optimistic_net_error_budget_pct"], proof["tolerance"]["net_error_budget_pct"])))
+        if not groups:
+            raise ValueError("sequence_population_empty")
+        experiments, day_budgets = [], {}
+        for group, anchors in sorted(groups.items()):
+            anchors.sort(key=lambda a: a["start"])
+            budget = anchors[0]["budget"]
+            qty = anchors[0]["seed"]["total_qty"]
+            if any(a["budget"] != budget or a["seed"]["total_qty"] != qty for a in anchors):
+                raise ValueError("sequence_frozen_quantity_or_budget_changed")
+            day = group[0]
+            if day in day_budgets and day_budgets[day] != budget:
+                raise ValueError("shared_cash_envelope_changed_without_cashflow_witness")
+            day_budgets[day] = budget
+            choices = []
+            for side in ("old", "new"):
+                choice = None
+                for anchor in anchors:
+                    action = anchor[side]
+                    if action == "RECHECK":
+                        # The census is created by the population producer; a
+                        # calibration/holdout slice cannot close half an episode.
+                        members = anchor["row"].get("machine_sequence_members")
+                        if members != sorted(a["row"]["decision_trace_id"] for a in anchors):
+                            raise ValueError("recheck_sequence_capture_incomplete")
+                        continue
+                    if action == "ENTER_NOW":
+                        if anchor["arm"] is None or anchor["verdict"] not in {"PASS", "VETO"}:
+                            raise ValueError("frozen_auxiliary_verdict_missing")
+                        choice = anchor if anchor["verdict"] == "PASS" else None
+                    break
+                else:
+                    last = anchors[-1]
+                    terminal = (last['row']['operating_comparison_input']['owner_replay'].get('machine_watch_terminal') or {})
+                    lifetime = (last['seed'].get('operating_contract') or {}).get('watch_lifetime_contract') or {}
+                    if not (terminal.get('owner') == lifetime.get('owner') and terminal.get('owner')
+                        and terminal.get('scanner_promotion_id') == group[2]
+                        and terminal.get('deadline_epoch') == lifetime.get('deadline_epoch')
+                        and terminal.get('terminal_epoch', 0) > terminal.get('deadline_epoch', float('inf')) >= last['start'].timestamp()):
+                        raise ValueError("recheck_terminal_pending")
+                choices.append(choice)
+            experiments.append(dict(key=group, budget=budget, choices=choices))
+        outputs = {(scenario, side): {} for scenario in ("base", "stress") for side in (0, 1)}
+        rejected = [0, 0]
+        for scenario in ("base", "stress"):
+            for side in (0, 1):
+                for day, budget in sorted(day_budgets.items()):
+                    pending, cash, uncertainty = [], budget, 0.
+                    orders = sorted(((e["choices"][side], e) for e in experiments
+                        if e["key"][0] == day and e["choices"][side] is not None),
+                        key=lambda item: (item[0]["start"], item[1]["key"]))
+                    for anchor, experiment in orders:
+                        active = []
+                        for end, reserved, pnl, error, symbol in pending:
+                            if end <= anchor["start"]:
+                                cash += reserved + pnl
+                                uncertainty += error
+                            else:
+                                active.append((end, reserved, pnl, error, symbol))
+                        pending = active
+                        cash = min(budget - sum(item[1] for item in active), cash)
+                        # Existing held-symbol guard; a promotion reset does not
+                        # authorize another initial position while custody is open.
+                        if any(item[4] == experiment["key"][1] for item in active):
+                            if scenario == "base": rejected[side] += 1
+                            continue
+                        if uncertainty and abs(cash-anchor["reserve"]) <= uncertainty:
+                            raise ValueError("model_error_can_change_capital_admission")
+                        if anchor["reserve"] > cash:
+                            if scenario == "base": rejected[side] += 1
+                            continue
+                        cash -= anchor["reserve"]
+                        pnl = anchor["arm"]["net_pnl_krw" if scenario == "base" else "stress_net_pnl_krw"]
+                        pending.append((anchor["end"], anchor["reserve"], pnl,
+                            2 * anchor["error"] * budget / 100, experiment["key"][1]))
+                        outputs[scenario, side][experiment["key"]] = anchor
+        rows, bounds, daily = [], [], defaultdict(lambda: [0., 0.])
+        zero = dict(net_pnl_krw=0., stress_net_pnl_krw=0., capital_krw_minutes=0.,
+                    reserve_krw_minutes=0., fill_participation_rate=0.)
+        for experiment in experiments:
+            arms = {}
+            for side, name in enumerate(("incumbent", "candidate")):
+                anchor = outputs["base", side].get(experiment["key"])
+                arms[name] = deepcopy(anchor["arm"]) if anchor else dict(zero)
+                daily[experiment["key"][0]][side] += arms[name]["net_pnl_krw"]
+            rows.append(dict(budget_krw=experiment["budget"], arms=arms))
+            scenario_bounds = []
+            for scenario in ("base", "stress"):
+                chosen = [outputs[scenario, side].get(experiment["key"]) for side in (0, 1)]
+                field = "net_pnl_krw" if scenario == "base" else "stress_net_pnl_krw"
+                pnl = [a["arm"][field] if a else 0. for a in chosen]
+                penalty = (0. if chosen[0] is chosen[1] else
+                           sum(2 * a["error"] for a in chosen if a is not None))
+                scenario_bounds.append((pnl[1]-pnl[0]) / experiment["budget"] * 100 - penalty)
+            bounds.append(min(scenario_bounds))
+        deltas = {day: v[1]-v[0] for day,v in sorted(daily.items())}
+        return dict(status="supported_operating_comparison", blocker=None,
+            incumbent=split._economic_metrics(rows, "incumbent"), candidate=split._economic_metrics(rows, "candidate"),
+            robust_paired_delta_ev_lower_bound_pct=fmean(bounds), pair_lower_bounds_pct=bounds,
+            lower_bound_method="episode_minimum_base_stress_minus_selected_owner_empirical_error",
+            daily_net_profit_delta_krw=fmean(deltas.values()), portfolio_daily_net_delta_krw=deltas,
+            economic_episode_count=len(rows), deduplicated_attempt_count=len(population)-len(seen),
+            capital_rejection_counts=dict(incumbent=rejected[0], candidate=rejected[1]),
+            portfolio_allocation_contract="same_frozen_cash_full_quantity_chronological_no_profit_reinvestment",
+            counterfactual_not_realized_pnl=True)
+    except (ValueError, KeyError, TypeError, OverflowError) as exc:
+        return {**empty, "blocker": str(exc)}
+
+
+def machine_selection_economics(metrics, paired, *, full_population):
+    """Use owner operating economics for live full-population selection.
+
+    Terminal price labels remain diagnostics and legacy research evidence;
+    they cannot replace missing operating costs, exits, or model validation.
+    """
+    if not full_population:
+        return (_number(metrics.get("cost_adjusted_terminal_proxy_ev_pct")),
+                _number(paired.get("paired_terminal_proxy_delta_pct")))
+    operating = _as_dict(paired.get("operating_economic_comparison"))
+    if (paired.get("downstream_operating_evidence_complete") is not True
+        or operating.get("status") != "supported_operating_comparison"):
+        return None, None
+    incumbent = _number(_as_dict(operating.get("incumbent")).get("ev_pct"))
+    candidate = _number(_as_dict(operating.get("candidate")).get("ev_pct"))
+    return candidate, (candidate-incumbent if candidate is not None and incumbent is not None else None)
+
+
 def _mechanistic_paired_population_metrics(
     population: list[dict[str, Any]], selected: list[dict[str, Any]],
     *, candidate_policy: dict | None = None,
@@ -2640,77 +2863,23 @@ def _mechanistic_paired_population_metrics(
         candidate_values.append(mechanistic_value)
         incumbent_values.append(control_value)
         deltas.append(mechanistic_value - control_value)
-    changed = [
-        row
-        for row in population
-        if ((row["decision_trace_id"] in selected_trace_ids)
-            != (row["comparison"].get("control_action") == "BUY"))
-    ]
-    # RECHECK can subsequently enter. A single snapshot cannot certify its
-    # terminal non-exposure; retain the proxy but require owner sequence replay.
-    recheck_ids = {row["decision_trace_id"] for row in population
-        if row["comparison"].get("incumbent_machine_action") == "RECHECK"
-        or (candidate_policy is not None and mechanistic_entry_policy_decision(
-            row["setup_evidence"], policy=candidate_policy).get("action") == "RECHECK")}
-    operating_rows = [row for row in population
-        if "operating_comparison_input" in row and row["decision_trace_id"] not in recheck_ids]
-    operating_ids = {row["decision_trace_id"] for row in operating_rows}
+    old_actions = {row["decision_trace_id"]: row["comparison"].get("incumbent_machine_action") or
+        ("ENTER_NOW" if row["comparison"].get("control_action") == "BUY" else "BLOCK") for row in population}
+    new_actions = {row["decision_trace_id"]: (mechanistic_entry_policy_decision(
+        row["setup_evidence"], policy=candidate_policy)["action"] if candidate_policy is not None
+        else "ENTER_NOW" if row["decision_trace_id"] in selected_trace_ids else "BLOCK") for row in population}
+    changed = [row for row in population if old_actions[row["decision_trace_id"]] != new_actions[row["decision_trace_id"]]]
+    recheck_ids = {key for key in old_actions if "RECHECK" in {old_actions[key], new_actions[key]}}
+    operating_rows = [row for row in population if "operating_comparison_input" in row]
+    operating = (_machine_sequence_operating_metrics(operating_rows, selected_trace_ids, candidate_policy)
+                 if operating_rows else None)
+    sequence_supported = bool(operating and operating.get("status") == "supported_operating_comparison")
+    operating_ids = {row["decision_trace_id"] for row in operating_rows} if sequence_supported else set()
     unsupported_changed = [row for row in changed if row["decision_trace_id"] not in operating_ids]
-    operating = None
-    if operating_rows:
-        from src.engine.scalping import compact_auxiliary_paired_replay as compact
-        pairs, models = [], []
-        for row in operating_rows:
-            source = row["operating_comparison_input"]
-            arm = compact.owner_operating_arm(source.get("owner_replay") or {}, source)
-            # Source verdict belongs to the frozen auxiliary, not to the
-            # current machine incumbent. Rejected incumbent decisions may be
-            # recovered without inventing another natural provider call.
-            verdict = source["incumbent_verdict"]
-            old = verdict if row["comparison"].get("control_action") == "BUY" else "VETO"
-            new = verdict if row["decision_trace_id"] in selected_trace_ids else "VETO"
-            models.append(row.get("operating_model_validation") or {})
-            change = int(new == "PASS") - int(old == "PASS")
-            pairs.append({**source, "incumbent_verdict": old, "candidate_verdict": new,
-                "delta_net_pct": arm["net_return_pct"] * change,
-                "stress_delta_net_pct": arm["stress_net_return_pct"] * change,
-                "runtime_inference_cost_delta_krw": row["operating_runtime_cost_receipt"].get("delta_krw")})
-        per_row_model_valid = all(compact.owner_model_scope_valid(model, pair)
-                                  for model, pair in zip(models, pairs))
-        model = {"validated_scopes": [proof for value in models
-                                     for proof in value.get("validated_scopes", [])]}
-        operating = compact.operating_comparison_metrics(pairs, model) if per_row_model_valid else {
-            "status": "source_gap", "blocker": "exact_source_date_operating_model_unverified"}
-        episode_keys = [(p.get("source_date"), p.get("scanner_promotion_id"),
-                         p.get("effective_venue"), p.get("session_bucket")) for p in pairs]
-        if len(set(episode_keys)) != len(episode_keys):
-            operating = {"status": "source_gap", "blocker": "repeated_episode_requires_owner_sequence_replay"}
-        portfolio = compact.portfolio_metrics(pairs)
-        daily = portfolio.get("portfolio_daily_net_delta_krw")
-        all_dates = sorted(
-            {
-                row.get("source_date")
-                or (row.get("operating_comparison_input") or {}).get("source_date")
-                for row in population
-                if row.get("source_date")
-                or (row.get("operating_comparison_input") or {}).get("source_date")
-            }
-        )
-        if (isinstance(daily, dict) and not unsupported_changed and all_dates
-                and len(operating_rows) == len(population)
-                and operating.get("status") == "supported_operating_comparison"):
-            daily = {day: float(daily.get(day, 0.0)) for day in all_dates}
-            operating["portfolio_daily_net_delta_krw"] = daily
-            operating["daily_net_profit_delta_krw"] = sum(daily.values()) / len(all_dates)
-            operating["daily_net_profit_status"] = "supported_owner_replay_all_changed_decisions"
-        else:
-            operating["portfolio_daily_net_delta_krw"] = None
-            operating["daily_net_profit_delta_krw"] = None
-            operating["daily_net_profit_status"] = (
-                "unsupported_changed_machine_decision"
-                if unsupported_changed
-                else "operating_population_incomplete_or_model_unsupported"
-            )
+    if operating is not None and len(operating_rows) != len(population):
+        operating = {**operating, "daily_net_profit_delta_krw": None,
+            "portfolio_daily_net_delta_krw": None,
+            "daily_net_profit_status": "operating_population_incomplete_or_model_unsupported"}
     complete = len(deltas) == terminal_evaluable_count
     downstream_complete = bool(
         population and len(operating_rows) == len(population)
@@ -2744,7 +2913,7 @@ def _mechanistic_paired_population_metrics(
         "paired_terminal_contract_complete": complete,
         "changed_decision_count": len(changed),
         "unsupported_changed_decision_count": len(unsupported_changed),
-        "recheck_sequence_unproven_count": len(recheck_ids),
+        "recheck_sequence_unproven_count": 0 if sequence_supported else len(recheck_ids),
         "operating_population_count": len(operating_rows),
         "operating_population_complete": len(operating_rows) == len(population) and bool(population),
         "changed_decision_evidence": [{
@@ -2931,33 +3100,16 @@ def build_clean_baseline_mechanistic_refinement(
     calibration_gate_candidates = [
         row for row in candidates if row["calibration_gate_pass"] is True
     ]
-    calibration_passers = [
-        row
-        for row in calibration_gate_candidates
-        if row["calibration"]["cost_adjusted_terminal_proxy_ev_pct"] is not None
-        and row["calibration"]["cost_adjusted_terminal_proxy_ev_pct"]
-        >= calibration_floor
-        and row["calibration_paired_population"]["paired_terminal_proxy_delta_pct"]
-        is not None
-        and row["calibration_paired_population"]["paired_terminal_proxy_delta_pct"] > 0
-        and row["calibration_paired_population"]["paired_terminal_contract_complete"]
-        is True
-        and (
-            not full_population
-            or (
-                row["calibration_paired_population"][
-                    "downstream_operating_evidence_complete"
-                ]
-                is True
-                and row["calibration_paired_population"][
-                    "operating_economic_promotion_pass"
-                ]
-                is True
-            )
-        )
-        and row["calibration"]["source_provenance_contract_complete"] is True
-        and row["calibration"]["catastrophic_terminal_proxy_count"] == 0
-    ]
+    calibration_passers = []
+    for row in calibration_gate_candidates:
+        metrics, paired = row["calibration"], row["calibration_paired_population"]
+        ev, delta = machine_selection_economics(metrics, paired, full_population=full_population)
+        if (ev is not None and ev >= calibration_floor and delta is not None and delta > 0
+            and paired["paired_terminal_contract_complete"] is True
+            and (not full_population or paired["operating_economic_promotion_pass"] is True)
+            and metrics["source_provenance_contract_complete"] is True
+            and metrics["catastrophic_terminal_proxy_count"] == 0):
+            calibration_passers.append(row)
     economically_evaluable_candidates = [
         row
         for row in candidates
@@ -3003,8 +3155,10 @@ def build_clean_baseline_mechanistic_refinement(
             holdout_rows, holdout_selected,
             candidate_policy=_mechanistic_threshold_policy(best["policy"], parent)
         )
-        calibration_ev = best["calibration"]["cost_adjusted_terminal_proxy_ev_pct"]
-        holdout_ev = holdout_metrics["cost_adjusted_terminal_proxy_ev_pct"]
+        calibration_ev, calibration_delta = machine_selection_economics(
+            best["calibration"], best["calibration_paired_population"], full_population=full_population)
+        holdout_ev, holdout_delta = machine_selection_economics(
+            holdout_metrics, holdout_paired_population, full_population=full_population)
         promotion_checks = {
             "calibration_sample_and_comparison_floor": (
                 best["calibration_gate_pass"] is True
@@ -3017,18 +3171,8 @@ def build_clean_baseline_mechanistic_refinement(
                 holdout_ev is not None
                 and holdout_ev >= ev_floor
             ),
-            "calibration_positive_paired_terminal_delta": (
-                best["calibration_paired_population"]["paired_terminal_proxy_delta_pct"]
-                is not None
-                and best["calibration_paired_population"][
-                    "paired_terminal_proxy_delta_pct"
-                ]
-                > 0
-            ),
-            "holdout_positive_paired_terminal_delta": (
-                holdout_paired_population["paired_terminal_proxy_delta_pct"] is not None
-                and holdout_paired_population["paired_terminal_proxy_delta_pct"] > 0
-            ),
+            "calibration_positive_paired_terminal_delta": calibration_delta is not None and calibration_delta > 0,
+            "holdout_positive_paired_terminal_delta": holdout_delta is not None and holdout_delta > 0,
             "holdout_paired_terminal_delta_complete": (
                 holdout_paired_population["paired_terminal_contract_complete"] is True
             ),
@@ -5454,7 +5598,7 @@ def validate_hierarchy_candidate(
     ]
     for metrics in reviewed_metrics:
         m = _as_dict(metrics)
-        ev = _number(m.get("cost_adjusted_terminal_proxy_ev_pct"))
+        ev, _ = machine_selection_economics(m, _as_dict(m.get("paired_population")), full_population=full_population)
         if (
             ev is None
             or (ev <= 0 if full_population else ev
@@ -5479,8 +5623,7 @@ def validate_hierarchy_candidate(
             for raw in metrics_list:
                 m = _as_dict(raw)
                 paired = _as_dict(m.get("paired_population"))
-                delta = _number(paired.get("paired_terminal_proxy_delta_pct"))
-                ev = _number(m.get("cost_adjusted_terminal_proxy_ev_pct"))
+                ev, delta = machine_selection_economics(m, paired, full_population=True)
                 minimum_rows, minimum_dates = (5, 3) if phase == "calibration" else (3, 2)
                 if (
                     ev is None or ev <= 0 or delta is None or delta <= 0
@@ -5493,10 +5636,9 @@ def validate_hierarchy_candidate(
                     or paired.get("paired_terminal_contract_complete") is not True
                     or paired.get("terminal_evaluable_count") != paired.get("population_count")
                     or paired.get("paired_comparable_count") != paired.get("population_count")
-                    or (candidate.get("operating_contract_version") == "machine_operating_daily_net_v1" and (
-                        paired.get("operating_economic_promotion_pass") is not True
-                        or paired.get("downstream_operating_evidence_complete") is not True
-                        or (_number(paired.get("daily_net_profit_delta_krw")) or 0) <= 0))
+                    or paired.get("operating_economic_promotion_pass") is not True
+                    or paired.get("downstream_operating_evidence_complete") is not True
+                    or (_number(paired.get("daily_net_profit_delta_krw")) or 0) <= 0
                 ):
                     errors.append("candidate_full_population_economic_proof_invalid")
     return sorted(set(errors))
@@ -5704,7 +5846,7 @@ def build_mechanistic_hierarchy_candidate(
         return result
 
     def qualifies(m, *, validation=False):
-        ev = _number(m["cost_adjusted_terminal_proxy_ev_pct"])
+        ev, delta = machine_selection_economics(m, _as_dict(m.get("paired_population")), full_population=full_population)
         return (
             m["row_count"]
             >= (
@@ -5728,7 +5870,7 @@ def build_mechanistic_hierarchy_candidate(
             - 1e-9
             and m["clean_fast_count"] > m["dirty_profit_count"] + m["adverse_count"]
             and (not full_population or (
-                (_number(_as_dict(m.get("paired_population")).get("paired_terminal_proxy_delta_pct")) or 0) > 0
+                delta is not None and delta > 0
                 and _as_dict(m.get("paired_population")).get("paired_terminal_contract_complete") is True
                 and _as_dict(m.get("paired_population")).get("terminal_evaluable_count") == _as_dict(m.get("paired_population")).get("population_count")
                 and m.get("catastrophic_terminal_proxy_count") == 0
@@ -7387,11 +7529,20 @@ def _machine_full_evaluation_projection(
     accepted_count = int(refinement_contract.get("accepted_unique_trace_count") or 0)
     input_counts = refinement_contract.get("input_lane_counts") or {}
     refinement_status = str(mechanistic_refinement.get("status") or "")
+    operating = holdout_paired.get('operating_economic_comparison') or best_paired.get('operating_economic_comparison') or {}
+    operating_blocker = operating.get('blocker')
+    unsupported = {'frozen_auxiliary_verdict_missing', 'sequence_nonzero_inference_cost_timeline_unbound',
+        'shared_cash_envelope_changed_without_cashflow_witness', 'sequence_frozen_quantity_or_budget_changed',
+        'model_error_can_change_capital_admission'}
     full_state = (
         "validated_edge"
         if mechanistic_refinement.get("promotion_pass") is True
+        else "pending_maturity"
+        if operating_blocker == 'recheck_terminal_pending'
+        else "unsupported_scope"
+        if operating_blocker in unsupported
         else "source_gap"
-        if (holdout_paired.get("unsupported_changed_decision_count", 0) > 0
+        if (operating_blocker or holdout_paired.get("unsupported_changed_decision_count", 0) > 0
             or (accepted_count and holdout_paired.get("operating_population_complete") is not True))
         else "insufficient_mature_sample"
         if refinement_status == "insufficient_mature_sample"
@@ -7404,9 +7555,12 @@ def _machine_full_evaluation_projection(
     return {
         "schema": "main_mechanistic_entry_full_evaluation_v1",
         "source_date": mechanistic_refinement.get("target_date"),
-        "structural_blocker": ("machine_operating_population_unbound"
-            if accepted_count and refinement_contract.get("operating_economic_enrichment_count", 0) == 0
-            else None),
+        "structural_blocker": (operating_blocker or ("machine_operating_population_unbound"
+            if accepted_count and refinement_contract.get("operating_economic_enrichment_count", 0) == 0 else None)),
+        "operating_comparison_status": operating.get('status'),
+        "operating_economics": operating if holdout_paired.get('downstream_operating_evidence_complete') is True else None,
+        "operating_blocker_owner": operating.get('owner'),
+        "operating_closure_test": operating.get('closure_test'),
         "state": full_state,
         "full_population_count": accepted_count,
         "population_unit": "exact_machine_attempt",
@@ -7464,18 +7618,146 @@ def _machine_operating_projection(data_root: Path, days: list[str]) -> dict:
     for day in sorted(set(days)):
         path = compact.report_path(data_root, day).with_suffix(".source.json")
         source = compact.read(path)
-        if not compact.valid(source) or source.get("target_date") != day:
-            missing.append(day)
-            continue
         cost = compact.runtime_inference_cost_receipt(data_root, day)
-        sources.append({"source_date": day, "artifact_content_sha256": source["artifact_content_sha256"]})
-        for row in source.get("rows") or []:
-            if row.get("source_date") != day:
-                continue
-            rows.append({**row,
-                "machine_owner_model_validation": source.get("owner_execution_model_validation") or {},
-                "machine_runtime_cost_receipt": cost})
+        if compact.valid(source) and source.get("target_date") == day:
+            sources.append({"source_date": day, "artifact_content_sha256": source["artifact_content_sha256"]})
+            for row in source.get("rows") or []:
+                if row.get("source_date") == day:
+                    rows.append({**row,
+                        "machine_owner_model_validation": source.get("owner_execution_model_validation") or {},
+                        "machine_runtime_cost_receipt": cost})
+        else:
+            missing.append(day)
+        # The existing split producer owns pre-AI plans as well as executable
+        # owner paths. No compact trace or synthetic auxiliary call is needed.
+        split = compact.read(data_root / "report/entry_split_order_plan" / f"entry_split_order_plan_{day}.json")
+        replay = (split.get("input_summary") or {}).get("compact_pre_ai_execution_replay") or {}
+        if (replay.get("source_date") == day and replay.get("sha256") == compact.digest(
+                {k:v for k,v in replay.items() if k != "sha256"})):
+            sources.append({"source_date": day, "nonentry_replay_sha256": replay["sha256"]})
+            for owner_row in replay.get("rows") or []:
+                seed = owner_row.get("seed") or {}
+                row = {k: seed.get(k) for k in ("evaluation_attempt_id", "source_date", "stock_code",
+                    "scanner_promotion_id", "effective_venue", "session_bucket")}
+                row.update(owner_replay=owner_row, incumbent_verdict=None)
+                if _machine_nonentry_seed(row) and row["source_date"] == day:
+                    rows.append(row)
     return compact.sealed({"rows": rows, "sources": sources, "missing_source_dates": missing})
+
+
+def _machine_joint_scope_metrics(population, policies, parents):
+    """Apply a frozen whole bundle over one capital timeline, including carry scopes."""
+    rows, selected = [], set()
+    for row in population:
+        parts = (row.get('entry_group_observation') or {}).get('key_parts') or {}
+        scope = str(parts.get('venue')) + '|' + str(parts.get('session_bucket'))
+        if scope not in parents or scope not in policies:
+            return {'status': 'source_gap', 'blocker': 'joint_scope_policy_missing'}
+        old = mechanistic_entry_policy_decision(row['setup_evidence'], policy=parents[scope])['action']
+        new = mechanistic_entry_policy_decision(row['setup_evidence'], policy=policies[scope])['action']
+        rows.append({**row, 'comparison': {**row['comparison'], 'incumbent_machine_action': old},
+                     'joint_candidate_action': new})
+        if new == 'ENTER_NOW': selected.add(row['decision_trace_id'])
+    groups = defaultdict(list)
+    for row in rows:
+        groups[(row.get('source_date'), row.get('stock_code'), row.get('scanner_promotion_id'))].append(row)
+    for group in groups.values():
+        if all(r.get('machine_sequence_expected_count') == len(group) for r in group):
+            for row in group:
+                row['machine_sequence_members'] = sorted(r['decision_trace_id'] for r in group)
+    return _machine_sequence_operating_metrics(rows, selected, joint_actions=True)
+
+
+def _machine_joint_scope_gate(metrics):
+    candidate, incumbent = metrics.get('candidate') or {}, metrics.get('incumbent') or {}
+    return bool(metrics.get('status') == 'supported_operating_comparison'
+        and (_number(metrics.get('robust_paired_delta_ev_lower_bound_pct')) or 0) > 0
+        and (_number(metrics.get('daily_net_profit_delta_krw')) or 0) > 0
+        and (_number(candidate.get('ev_pct')) or 0) >= MECHANISTIC_REFINEMENT_GATE['minimum_cost_adjusted_ev_pct']
+        and candidate.get('es10', -float('inf')) >= incumbent.get('es10', float('inf'))
+        and candidate.get('worst', -float('inf')) >= incumbent.get('worst', float('inf')))
+
+
+def _machine_joint_scope_evaluation(population, parents, refinements, extensions, previous, kernel, target_date):
+    import copy
+    proposals = copy.deepcopy(parents)
+    for scope, parent in parents.items():
+        common = (refinements.get(scope) or {}).get('forward_selection') or {}
+        hierarchy = (extensions.get(scope) or {}).get('forward_selection') or {}
+        if common.get('incumbent_sha256') == _canonical_sha256(parent) and common.get('policy'):
+            proposals[scope] = _mechanistic_threshold_policy(common['policy'], parent, publication=True)
+        elif hierarchy.get('incumbent_sha256') == _canonical_sha256(parent) and hierarchy.get('rules'):
+            proposals[scope] = {**parent, 'version': MECHANISTIC_FULL_POPULATION_POLICY_VERSION,
+                'hierarchy': {'schema': MECHANISTIC_HIERARCHY_SCHEMA,
+                    'parent_sha256': _canonical_sha256(parent['thresholds']), 'rules': hierarchy['rules']},
+                'postclose_selection': {**parent['postclose_selection'],
+                    'minimum_cost_adjusted_ev_pct': MECHANISTIC_REFINEMENT_GATE['minimum_cost_adjusted_ev_pct']}}
+    changed = sorted(s for s in parents if proposals[s] != parents[s])
+    result = dict(status='not_applicable_single_or_no_scope_change', promotion_pass=False,
+                  changed_scopes=changed, forward_selection=None)
+    if len(changed) < 2:
+        return result
+    frozen = (previous or {}).get('forward_selection') or {}
+    valid = (frozen.get('parents') == parents and frozen.get('policies') == proposals
+             and frozen.get('economic_kernel_sha256') == kernel
+             and isinstance(frozen.get('frozen_date'), str))
+    # The bundle is chosen from calibration freezes. It is never assembled from
+    # the subset that happened to pass a candidate holdout.
+    if not valid:
+        metrics = _machine_joint_scope_metrics(population, proposals, parents)
+        result.update(status='joint_calibration_not_qualified', calibration=metrics)
+        if _machine_joint_scope_gate(metrics):
+            result.update(status='joint_forward_holdout_pending', forward_selection=dict(
+                parents=parents, policies=proposals, changed_scopes=changed,
+                frozen_date=datetime.now(KST).date().isoformat(), economic_kernel_sha256=kernel,
+                calibration_rows_sha256=_canonical_sha256(population)))
+        return result
+    held = [r for r in population if frozen['frozen_date'] < r['source_date'] <= target_date]
+    metrics = _machine_joint_scope_metrics(held, proposals, parents)
+    dates = sorted({r['source_date'] for r in held})
+    qualified = sorted(s for s in changed if (refinements.get(s) or {}).get('policy_candidate')
+                       or (extensions.get(s) or {}).get('policy_candidate'))
+    checks = dict(entire_frozen_bundle_qualified=qualified == changed,
+        independent_dates=len(dates) >= MECHANISTIC_REFINEMENT_GATE['minimum_holdout_source_date_count'],
+        independent_samples=len(held) >= MECHANISTIC_REFINEMENT_GATE['minimum_holdout_terminal_evaluable_count'],
+        joint_economics=_machine_joint_scope_gate(metrics))
+    result.update(status='joint_holdout_evaluated', forward_selection=frozen,
+        holdout_rows=held, holdout_source_dates=dates, holdout=metrics,
+        promotion_checks=checks, promotion_pass=all(checks.values()))
+    result['sha256'] = _canonical_sha256(result)
+    return result
+
+
+def machine_joint_scope_evidence_valid(report, scopes):
+    """Publisher recomputes allocation; summary flags do not grant authority."""
+    proof = report.get('joint_scope_economics') or {}
+    frozen = proof.get('forward_selection') or {}
+    try:
+        rows = proof['holdout_rows']
+        if (proof.get('sha256') != _canonical_sha256({k:v for k,v in proof.items() if k != 'sha256'})
+            or proof.get('promotion_pass') is not True
+            or not proof.get('promotion_checks') or not all(v is True for v in proof['promotion_checks'].values())
+            or len(rows) < MECHANISTIC_REFINEMENT_GATE['minimum_holdout_terminal_evaluable_count']
+            or len({r['source_date'] for r in rows}) < MECHANISTIC_REFINEMENT_GATE['minimum_holdout_source_date_count']
+            or sorted(scopes) != frozen['changed_scopes']
+            or proof['holdout_source_dates'] != sorted({r['source_date'] for r in rows})
+            or not all(frozen['frozen_date'] < r['source_date'] <= report['target_date'] for r in rows)):
+            return False
+        expected = _machine_joint_scope_metrics(rows, frozen['policies'], frozen['parents'])
+        if expected != proof['holdout'] or not _machine_joint_scope_gate(expected):
+            return False
+        for scope in scopes:
+            common = (report.get('mechanistic_refinements_by_scope') or {}).get(scope) or {}
+            hierarchy = ((report.get('hierarchical_entry_quality') or {}).get('runtime_extensions_by_scope') or {}).get(scope) or {}
+            candidate = common.get('policy_candidate') or hierarchy.get('policy_candidate') or {}
+            if (common.get('source_contract') or {}).get('economic_kernel_sha256') != frozen.get('economic_kernel_sha256'):
+                return False
+            proposed = (candidate.get('threshold_policy') or
+                _mechanistic_threshold_policy(candidate['thresholds'], frozen['parents'][scope], publication=True))
+            if proposed != frozen['policies'][scope]: return False
+        return True
+    except (ValueError, KeyError, TypeError):
+        return False
 
 
 def build_main_mechanistic_report(
@@ -7516,10 +7798,13 @@ def build_main_mechanistic_report(
         data_root, [r["source_date"] for r in machine_rows] + [target_date])
     from src.engine.scalping.entry_setup_scalping_rollout import AUTO_PROMOTION_SCOPES
     from src.engine.scalping.mechanistic_entry_runtime_policy import for_cohort
-    previous_selections, previous_hierarchy = {}, {}
+    previous_selections, previous_hierarchy, previous_joint = {}, {}, {}
+    joint_population, joint_parents = [], {}
     for prior_path in sorted((report_root / "ai_decision_action_outcome_calibration").glob("ai_decision_action_outcome_calibration_*.json")):
         prior = compact.read(prior_path)
         if (_artifact_content_sha256_valid(prior) and prior.get("target_date", "9999") <= target_date):
+            if (prior.get('joint_scope_economics') or {}).get('forward_selection'):
+                previous_joint = prior['joint_scope_economics']
             for scope, evaluated in (prior.get("mechanistic_refinements_by_scope") or {}).items():
                 frozen = evaluated.get("forward_selection")
                 if frozen and frozen.get("economic_contract") == "machine_operating_daily_net_v1":
@@ -7559,6 +7844,8 @@ def build_main_mechanistic_report(
             name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
             for name in ("ai_action_outcome_calibration.py", "entry_setup_evidence.py",
                          "compact_auxiliary_paired_replay.py", "strategy_owner_replay.py")})
+        joint_population.extend(population)
+        joint_parents[scope] = scope_parent
         contract["incumbent_scope_verified"] = scoped_incumbent is not None
         contract["forward_holdout_required"] = True
         contract["frozen_selection"] = previous_selections.get(scope)
@@ -7615,6 +7902,10 @@ def build_main_mechanistic_report(
         },
         "mechanistic_refinements_by_scope": scope_evaluations,
         "operating_source_handoff": {k: v for k, v in operating_projection.items() if k != "rows"},
+        "post_apply_decision_version_performance": compact.applied_decision_version_performance(
+            compact.read(data_root / "report/entry_split_order_plan" / f"entry_split_order_plan_{target_date}.json"), day=target_date),
+        "joint_scope_economics": _machine_joint_scope_evaluation(joint_population, joint_parents,
+            scope_evaluations, extensions, previous_joint, contract['economic_kernel_sha256'], target_date),
         "mechanistic_flow_groups": {
             "status": "not_recomputed_machine_only",
             "source_population": {

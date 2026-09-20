@@ -326,7 +326,9 @@ def compose_entry_execution_sizing_plan(
         blockers.append("action_receipt_id_missing")
     if action_owner != "mechanistic_entry_adjudicator":
         blockers.append("entry_action_owner_invalid")
-    if machine_action != "ENTER_NOW":
+    if machine_action != "ENTER_NOW" and not (
+        observation_only and machine_action in {"BLOCK", "RECHECK"}
+    ):
         blockers.append("entry_action_not_enter_now")
     if not ai_screen_pass and not observation_only:
         blockers.append("auxiliary_ai_pass_missing")
@@ -562,6 +564,7 @@ def compose_entry_execution_sizing_plan(
     }
     if observation_only:
         plan_core["observation_only"] = True
+        plan_core["observed_machine_action"] = machine_action
         plan_core["capture_stage"] = "before_compact_ai"
     plan_id = f"entry-sizing-{_content_sha256(plan_core)[:24]}"
     common_fields = {

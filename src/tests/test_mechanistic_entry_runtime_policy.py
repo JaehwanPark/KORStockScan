@@ -125,7 +125,10 @@ def test_full_population_hierarchy_automatic_publisher_requires_exact_parent(tmp
         return {**original_metrics(*args, **kwargs),
                 "operating_economic_promotion_pass": True,
                 "downstream_operating_evidence_complete": True,
-                "daily_net_profit_delta_krw": 10.0}
+                "daily_net_profit_delta_krw": 10.0,
+                "operating_economic_comparison": {
+                    "status": "supported_operating_comparison",
+                    "incumbent": {"ev_pct": 0.0}, "candidate": {"ev_pct": 0.12}}}
     monkeypatch.setattr(calibration, "_mechanistic_paired_population_metrics", supported_metrics)
     from src.tests.test_ai_action_outcome_calibration import _natural_refinement_fixture
     previous = initial(tmp_path)

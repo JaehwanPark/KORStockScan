@@ -942,7 +942,9 @@ def publish(
         # Independent scope profits do not validate their shared account capital.
         # Keep the incumbent until an existing owner supplies joint allocation
         # proof; never select a winning subset using the scopes' holdouts.
-        joint_scope_unproven = source.get("report_scope") == "main_mechanistic_entry" and len(qualified_scopes) > 1
+        joint_scope_unproven = (source.get("report_scope") == "main_mechanistic_entry"
+            and len(qualified_scopes) > 1
+            and not calibration.machine_joint_scope_evidence_valid(source, qualified_scopes))
         machine = copy.deepcopy(
             previous["machine_policy"]
             if previous

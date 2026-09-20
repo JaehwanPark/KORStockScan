@@ -67,7 +67,7 @@ _BUY_AVOIDED_CLOSE_PCT = -0.3
 _BUY_TP_PCT = 0.5
 _BUY_SL_PCT = -0.5
 _RISING_MISSED_STAGE = "rising_missed_one_share_entry"
-_EVENT_FIELD_PROJECTION_VERSION = "missed_entry_counterfactual_compact_v4"
+_EVENT_FIELD_PROJECTION_VERSION = "missed_entry_counterfactual_compact_v5"
 _PRICE_PLAN_FIELDS = frozenset({"entry_execution_sizing_plan", "entry_price_plan", "entry_opportunity_replay_seed"})
 _EVENT_FIELD_KEYS = frozenset(
     {
@@ -82,6 +82,7 @@ _EVENT_FIELD_KEYS = frozenset(
         "entry_opportunity_replay_seed",
         "entry_economic_plan_sha256",
         "entry_economic_decision_available_at",
+        "watch_deadline_epoch", "watch_terminal_epoch", "watch_terminal_owner", "watch_terminal_reason",
         "decision_trace_id",
         "microstructure_reaction_context_id",
         "microstructure_reaction_context_version",
