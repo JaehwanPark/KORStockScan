@@ -355,3 +355,5 @@ Python compile, shell `bash -n`, affected pytest, `git diff --check`, 문서 lin
 - 장중 opening receipt의 기존 성공 재사용은 source_date, opening 역할, account scope뿐 아니라 실제 native cash/inventory와 frozen owner 파일의 해시를 재검증한다. 오래된 날짜·사후 역할·원천 손상은 source_gap이며 주문/추가 조회로 자동 덮어쓰지 않는다.
 - 기존 producer→저장→loader 회귀와 다일 후보 정책 발행 회귀에 잘못된 날짜/역할/원천 손상 및 역사 allocator 변경 후 cache 거부를 추가했다. 전체 해당 회귀50, 수정 후 집중 회귀5 통과. 자연 성과·EV 개선 증거는 아니다.
 - 실행 증거: `tmp/postclose-producer-final-review-20260920/`. 이번에는 자본 후행·summary/checklist/strict만 갱신하며 scanner/main 원 평가를 반복하지 않는다. 기존 source9/17·실제 publication·effective9/21, 원 실패/복구 receipt, 정상 PREOPEN/PID/실제 완료 손익 OPEN을 유지한다.
+
+- 2차 재사용 경로도 동일한 current receipt 검증을 강제했다. 평가값이 같아도 이전 결손 파일이 늦게 생성되면 원천 해시를 갱신해야 한다. 원천만 달라지고 경제성 입력은 동일한 운영 phase 회귀를 추가했으며 최종 전체 해당 회귀50 통과.

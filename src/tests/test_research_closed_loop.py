@@ -585,6 +585,7 @@ def test_completed_study_fixed_point_publishes_valid_empty_and_blocks_changed_de
     assert {p["effective_date"] for p in first["publications"].values()} == {"2026-09-21" if publication else "2026-09-18"}
     from src.engine.monitoring import research_version_outcomes as outcomes
 
+    original_collect = outcomes.collect_widget_outcomes
     monkeypatch.setattr(
         outcomes,
         "collect_widget_outcomes",
@@ -605,6 +606,17 @@ def test_completed_study_fixed_point_publishes_valid_empty_and_blocks_changed_de
         changed.setenv("POSTCLOSE_PREPARED_EFFECTIVE_DATE", "2026-09-18")
         with pytest.raises(ValueError, match="effective_date_mismatch"):
             phase._publication_contract(DAY)
+    # A new diagnostic-only dependency leaves economics unchanged, but must
+    # invalidate both reuse paths and receive a current source hash.
+    late = directory / f"capacity_source_{DAY}.json"
+    loop.atomic_write(late, {"diagnostic_only": True})
+    assert not phase.validate_current_receipt(first, DAY)
+    with monkeypatch.context() as changed:
+        changed.setattr(outcomes, "collect_widget_outcomes", original_collect)
+        refreshed = phase.refresh(DAY, directory=directory, report_root=root)
+    assert refreshed["dependency_sha256"] == first["dependency_sha256"]
+    assert phase.validate_current_receipt(refreshed, DAY)
+    assert refreshed["dependency_sources"][str(late.resolve())] is not None
     source = (
         root
         / "widget_symbol_signal_policy_research"

@@ -221,7 +221,9 @@ def _refresh(
             previous = {}
         if (
             previous.get("exact_cost_recovery_requested") is collect_costs
-            and validate_current_receipt(previous, day, publication_contract=publication_contract)
+            and validate_current_receipt(
+                previous, day, publication_contract=publication_contract
+            )
             and previous.get("publication_requested") is publish
         ):
             return previous
@@ -301,6 +303,9 @@ def _refresh(
         if (
             previous.get("status") == "complete"
             and previous.get("dependency_sha256") == inputs
+            and validate_current_receipt(
+                previous, day, publication_contract=publication_contract
+            )
         ):
             if publish:
                 for family, publication in previous["publications"].items():
