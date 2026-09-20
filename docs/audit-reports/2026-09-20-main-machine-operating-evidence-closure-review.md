@@ -146,3 +146,16 @@ ME8의 과거 미대사 2건을 찾았다. 9/14 `187660`의 paired trace `analyz
 실행 증거 디렉터리: `tmp/main-machine-capital-partial-20260920/`. 최종 테스트·배포·run·policy hash는 후속 검증 후 아래에 기록한다.
 
 검증: 영향 회귀708개 통과 후 누적 금액 정정·terminal 이후 fill 수리의 관련87개 통과(중복 합산하지 않음). Python compile·diff·print-only parser 통과. `implementation-review.json`에 source hash와 검증 로그를 결속했다. 합성 통과와 자연 경제성은 별개다.
+
+### 10.1 배포·제한 재생성 최종 대사
+
+- 코드 commit/push: `5d60b4afee77243da3ad89bc4de9a12da40955a6`. 선택 immutable release: `/home/ubuntu/KORStockScan-runtime-releases/main-machine-capital-partial-20260920-5d60b4afe`. 서비스9개 정의/129개 인스턴스의 source binding을 갱신했으며 최종에도 PID0/inactive다. 기존 시각·수량·guard·주문 인자를 변경하지 않았다.
+- source_date=`2026-09-17`, 실제 publication_date=`2026-09-20`, effective_date=`2026-09-21`.
+- 복구 run `f7e6be607be944b8a45fa8f5775494a8`: main `succeeded`, controller `done`, strict `pass`. 후행10개 명령 exit0, 독립 widget/machine receipt 유효, 독립 owner12개 artifact hash 불변. 원 실패와 이전 복구 성공 receipt를 보존했다.
+- main source hash `80b34ff0c4357742d7e16654e9cff22cb13f35ec12ed2a95577b39612ce97357`. 최종9/21 bundle `15c063637359bd4cbd5a567760abecdf6229aee1f44d1e9d6a7cbc2dc7e97eb7`. main 전체 scope 및 compact AI 정책 본문은 기존 승인 incumbent와 동일하며 provenance만 갱신했다.
+- 메인 KRX 유효 모집단1,712(자연1,708+paired4), 등록9 scope를 대사. 신규 승격0, `machine_operating_population_unbound`, 운영 경제성 null. 자연 compact21건도 `blocked_source/source_gap`, valid no-edge 아님. 적용 버전별 완료 손익은 `waiting_natural_applied_completed_cost_evidence`, groups0.
+- 자연 관측2,330건과 앞서 검증된 비용9행은 함수 AST·identity·원천 stat/hash를 확인하고 재사용했다. 평가·후행은 successor에서 실행했고 전체 raw 재스캔/전체 장후 재실행/추가 AI 호출/주문/봇 기동/조기 PREOPEN/외부 sync·알림은 0이다.
+- strict receipt `/home/ubuntu/KORStockScan/data/report/threshold_cycle_postclose_verification/attempts/2026-09-17/f6c8c6e1268942d78d6ef7b6763ac696.json`. seal receipt `/home/ubuntu/KORStockScan/data/report/threshold_cycle_postclose_verification/attempts/2026-09-17/1f755f07e67d47d5aa6ddf3e22b6def5.json`.
+- 기계적 완료 및 guarded incumbent 준비와 경제성 실증을 분리한다. 이번 코드의 조건부 지원 경로는 실행·검증됐지만 전체 계좌 현금흐름·모든 부분체결 경로의 보편적 지원 완료는 아니다. §15.9의 미확정 운영 계약은 자연 OPEN으로 바꾸지 않았다.
+
+증거: `implementation-review.json`, `deployment-5d60b4afe.json`, `service-binding-5d60b4afe.json`, `source-reuse-code-review.json`, `limited-recovery-f7e6be607be944b8a45fa8f5775494a8.json`, `final-reconciliation.json` (모두 `tmp/main-machine-capital-partial-20260920/`). 최종 증거 문서 commit은 코드 배포 commit과 분리한다.
