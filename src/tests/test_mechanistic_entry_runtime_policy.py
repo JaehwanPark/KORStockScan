@@ -117,7 +117,16 @@ def test_common_successor_is_automatic_only_against_exact_current_parent(monkeyp
 
 @pytest.mark.parametrize("parent_changed", [False, True])
 @pytest.mark.parametrize("scope", ["KRX|KRX_REGULAR", "NXT|NXT_AFTERMARKET"])
-def test_full_population_hierarchy_automatic_publisher_requires_exact_parent(tmp_path, parent_changed, scope):
+def test_full_population_hierarchy_automatic_publisher_requires_exact_parent(tmp_path, parent_changed, scope, monkeypatch):
+    # This test isolates publisher parent binding. Operating model correctness
+    # is tested with signed owner proofs in test_ai_action_outcome_calibration.
+    original_metrics = calibration._mechanistic_paired_population_metrics
+    def supported_metrics(*args, **kwargs):
+        return {**original_metrics(*args, **kwargs),
+                "operating_economic_promotion_pass": True,
+                "downstream_operating_evidence_complete": True,
+                "daily_net_profit_delta_krw": 10.0}
+    monkeypatch.setattr(calibration, "_mechanistic_paired_population_metrics", supported_metrics)
     from src.tests.test_ai_action_outcome_calibration import _natural_refinement_fixture
     previous = initial(tmp_path)
     if scope != "KRX|KRX_REGULAR":
@@ -156,6 +165,8 @@ def test_full_population_hierarchy_automatic_publisher_requires_exact_parent(tmp
     path = source(tmp_path, "2026-09-15")
     report = json.loads(path.read_text())
     report["hierarchical_entry_quality"] = {"runtime_extension": extension} if scope == "KRX|KRX_REGULAR" else {"runtime_extensions_by_scope": {scope: extension}}
+    report["report_scope"] = "main_mechanistic_entry"
+    report["machine_full_evaluation"] = {"state": "evaluated_no_edge"}
     report.pop("artifact_content_sha256")
     calibration._atomic_write_json(path, calibration._with_artifact_content_sha256(report))
     successor = policy.publish(path, data_root=tmp_path,
@@ -924,3 +935,26 @@ def test_terminal_count_is_not_decision_cf_authority_and_date_is_required():
     assert compact_terminal_gate_allowed({"target_date": "2026-09-17", "machine_terminal_tuning_gate": {"economic_tuning_input_allowed": True}}) is False
     assert compact_terminal_gate_allowed({"target_date": "2026-09-17", "machine_terminal_tuning_gate": {
         "decision_counterfactual_tuning_input_allowed": True, "lineage_gap_excluded_count": 4}}) is True
+
+
+def test_scoped_common_candidate_uses_own_incumbent_when_krx_has_no_candidate(tmp_path, monkeypatch):
+    from src.engine.scalping import entry_setup_live_policy as activation
+    previous = policy.publish(source(tmp_path), data_root=tmp_path, bootstrap=True,
+        adopt_all_continuous=True, now=datetime(2026, 9, 13, 20, tzinfo=policy.KST))
+    scope = "NXT|NXT_AFTERMARKET"
+    parent = previous["scope_policies"][scope]["machine_policy"]
+    successor = copy.deepcopy(parent)
+    successor["thresholds"]["maximum_spread_bp"] = 40.0
+    def projection(*a, cohort=("KRX", "KRX_REGULAR"), **kw):
+        if "|".join(cohort) != scope:
+            return None, []
+        return {"threshold_policy": successor,
+                "incumbent_machine_policy_sha256": policy.digest(parent)}, []
+    monkeypatch.setattr(activation, "_mechanistic_primary_activation_projection", projection)
+    result = policy.publish(source(tmp_path, "2026-09-14"), data_root=tmp_path,
+        now=datetime(2026, 9, 14, 21, tzinfo=policy.KST))
+    assert result["machine_policy"] == previous["machine_policy"]
+    assert result["scope_policies"][scope]["machine_policy"] == successor
+    assert result["scope_policies"][scope]["machine_disposition"] == "evidence_qualified_exact_scope_common_update"
+    assert result["scope_policies"][scope]["ai_policy"]["prompt_version"] == previous["scope_policies"][scope]["ai_policy"]["prompt_version"]
+    assert policy.load(data_root=tmp_path, target_date="2026-09-15") == result

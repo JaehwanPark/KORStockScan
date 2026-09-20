@@ -2386,13 +2386,13 @@ def test_hierarchy_full_population_recovers_small_net_non_entries(net_ev, scope)
     normalized, contract = calibration._common_refinement_population(
         [], rows, target_date="2026-09-15", source_receipt=receipt, paired_contract={}, cohort=cohort,
     )
-    if cohort != ("KRX", "KRX_REGULAR"):
-        with pytest.raises(ValueError, match="common_refinement_krx_cohort_required"):
-            calibration.build_clean_baseline_mechanistic_refinement(
-                Path("unused"), target_date="2026-09-15",
-                source_rows=normalized, source_contract=contract,
-                parent_policy=calibration.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
-            )
+    scoped = calibration.build_clean_baseline_mechanistic_refinement(
+        Path("unused"), target_date="2026-09-15",
+        source_rows=normalized, source_contract=contract,
+        parent_policy=calibration.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
+    )
+    assert scoped["scope"]["venue"] == cohort[0]
+    assert scoped["scope"]["session"] == cohort[1]
     parent = json.loads(json.dumps(calibration.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1))
     parent["thresholds"]["maximum_spread_bp"] = 20
     result = calibration.build_mechanistic_hierarchy_candidate(
@@ -4732,3 +4732,103 @@ def test_current_machine_operating_filter_uses_same_downstream_ai_and_model():
     assert filtered['operating_economic_comparison']['robust_paired_delta_ev_lower_bound_pct']>0
     assert filtered['operating_economic_comparison']['candidate']['net_pnl_krw']==0.
     assert filtered['paired_terminal_contract_complete']
+
+
+def _supported_machine_owner_row():
+    import copy
+    from src.tests.test_entry_setup_paired_replay_batch import full_compact_proof
+    proof = full_compact_proof()
+    source = copy.deepcopy(proof['chronological_validation']['holdout_pairs'][0])
+    source['incumbent_verdict'] = 'PASS'
+    return dict(decision_trace_id='recovered-machine-point', source_date=source['source_date'],
+                comparison={'control_action': 'WAIT'}, operating_comparison_input=source,
+                operating_model_validation=proof['owner_execution_model_validation'],
+                operating_runtime_cost_receipt={'delta_krw': 0.})
+
+
+def test_current_machine_recovery_uses_supported_frozen_auxiliary_without_fabricating_call():
+    import copy
+    from src.engine.scalping import compact_auxiliary_paired_replay as compact
+    row = _supported_machine_owner_row()
+    before = copy.deepcopy(row)
+    metrics = calibration._mechanistic_paired_population_metrics([row], [row])
+    arm = compact.owner_operating_arm(row['operating_comparison_input']['owner_replay'], row['operating_comparison_input'])
+    assert metrics['daily_net_profit_delta_krw'] == arm['net_pnl_krw']
+    assert metrics['operating_economic_comparison']['incumbent']['net_pnl_krw'] == 0.
+    assert metrics['operating_economic_comparison']['candidate']['net_pnl_krw'] == arm['net_pnl_krw']
+    assert metrics['changed_decision_count'] == 1
+    assert row == before
+
+
+def test_machine_partial_owner_coverage_cannot_claim_full_portfolio_uplift():
+    row = _supported_machine_owner_row()
+    missing = dict(decision_trace_id='other-unchanged', source_date=row['source_date'],
+                   comparison={'control_action': 'WAIT', 'conservative_execution_cost_pct': 0.2,
+                               'entry_path_first_hit': 'target_first', 'entry_path_target_pct': 0.4})
+    result = calibration._mechanistic_paired_population_metrics([row, missing], [row])
+    assert result['daily_net_profit_delta_krw'] is None
+    assert result['operating_economic_promotion_pass'] is False
+    assert result['operating_population_complete'] is False
+
+
+def test_machine_repeated_promotion_cannot_double_count_owner_returns():
+    import copy
+    row = _supported_machine_owner_row()
+    duplicate = copy.deepcopy(row)
+    duplicate['decision_trace_id'] = 'another-evaluation-same-episode'
+    result = calibration._mechanistic_paired_population_metrics([row, duplicate], [row, duplicate])
+    assert result['daily_net_profit_delta_krw'] is None
+    assert result['operating_economic_comparison']['blocker'] == 'repeated_episode_requires_owner_sequence_replay'
+    assert result['operating_economic_promotion_pass'] is False
+
+
+def test_machine_equal_training_actions_choose_incumbent_not_strictest(monkeypatch):
+    rows, receipt = _natural_refinement_fixture()
+    normalized, contract = calibration._common_refinement_population(
+        [], rows, target_date='2026-09-15', source_receipt=receipt, paired_contract={})
+    monkeypatch.setattr(calibration, '_mechanistic_policy_rows', lambda *a, **k: [])
+    result = calibration.build_clean_baseline_mechanistic_refinement(
+        Path('unused'), target_date='2026-09-15', source_rows=normalized,
+        source_contract=contract, parent_policy=calibration.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1)
+    expected = {k: calibration.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1['thresholds'][k]
+                for k in calibration.MECHANISTIC_COMMON_FEATURE_GRID}
+    assert result['best_observed_candidate']['policy'] == expected
+    assert result['evaluated_distinct_policy_count'] == 1
+
+
+def test_machine_frozen_selection_does_not_reuse_pre_freeze_holdout():
+    rows, receipt = _natural_refinement_fixture()
+    normalized, contract = calibration._common_refinement_population(
+        [], rows, target_date='2026-09-15', source_receipt=receipt, paired_contract={})
+    parent = calibration.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1
+    contract.update(forward_holdout_required=True, frozen_selection={
+        'incumbent_sha256': calibration._canonical_sha256(parent),
+        'policy': {k: parent['thresholds'][k] for k in calibration.MECHANISTIC_COMMON_FEATURE_GRID},
+        'frozen_date': '2026-09-20'})
+    result = calibration.build_clean_baseline_mechanistic_refinement(
+        Path('unused'), target_date='2026-09-15', source_rows=normalized,
+        source_contract=contract, parent_policy=parent)
+    assert result['holdout_source_dates'] == []
+    assert result['promotion_checks']['unseen_forward_holdout'] is False
+    assert result['promotion_pass'] is False
+
+
+def test_machine_recheck_requires_terminal_sequence_even_with_valid_entry_arm():
+    row = _supported_machine_owner_row()
+    row['comparison']['incumbent_machine_action'] = 'RECHECK'
+    result = calibration._mechanistic_paired_population_metrics([row], [row])
+    assert result['daily_net_profit_delta_krw'] is None
+    assert result['recheck_sequence_unproven_count'] == 1
+    assert result['unsupported_changed_decision_count'] == 1
+    assert result['downstream_operating_evidence_complete'] is False
+
+
+def test_machine_identity_does_not_manufacture_daily_currency_without_operating_proof():
+    row = dict(decision_trace_id='missing-owner', source_date='2026-09-17',
+        comparison={'control_action': 'WAIT', 'conservative_execution_cost_pct': 0.2,
+                    'entry_path_first_hit': 'target_first', 'entry_path_target_pct': 0.4})
+    result = calibration._mechanistic_paired_population_metrics([row], [])
+    assert result['baseline_preserved'] is True
+    assert result['paired_terminal_proxy_delta_pct'] == 0.
+    assert result['daily_net_profit_delta_krw'] is None
+    assert result['downstream_operating_evidence_complete'] is False

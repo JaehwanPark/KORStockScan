@@ -63,7 +63,7 @@ def test_summary_completes_direct_evidence_without_fabricating_economics(monkeyp
     assert report["actual_order_submitted"] is False
 
 
-def test_main_mechanistic_historical_replay_gap_keeps_future_natural_owner():
+def test_main_mechanistic_report_flags_do_not_prove_future_owner_support():
     evidence = mod._economic_projection(
         "main_mechanistic_entry",
         {
@@ -84,13 +84,11 @@ def test_main_mechanistic_historical_replay_gap_keeps_future_natural_owner():
         },
     )
 
-    assert evidence["comparison_status"] == "insufficient_sample"
-    assert evidence["resolution_mode"] == "historical_unrecoverable"
-    assert evidence["historical_evidence_state"] == (
-        "exact_owner_replay_unrecoverable"
-    )
-    assert evidence["prospective_resolution_mode"] == "natural_maturity"
-    assert evidence["policy_handoff_state"] == "incumbent_preserved"
+    assert evidence["comparison_status"] == "source_gap"
+    assert evidence["resolution_mode"] == "producer_repair"
+    assert evidence["historical_evidence_state"] is None
+    assert evidence["prospective_resolution_mode"] is None
+    assert evidence["policy_handoff_state"] == "blocked"
     assert evidence["actual_net_profit_improvement"] is None
 
 

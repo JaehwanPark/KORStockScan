@@ -980,8 +980,7 @@ def publish(
         )
         machine_economic_gate_pass = (
             source.get("report_scope") != "main_mechanistic_entry"
-            or (source.get("machine_full_evaluation") or {}).get("state")
-            == "validated_edge"
+            or (child or {}).get("operating_contract_version") == "machine_operating_daily_net_v1"
         )
         if hierarchy_adopted and child is not None and not machine_economic_gate_pass:
             hierarchy_disposition = "diagnostic_child_parent_economic_gate_not_passed"
@@ -1037,6 +1036,8 @@ def publish(
                 for e in hierarchy.get("evaluations", [])[:8]
                 if isinstance(e, dict) and "id" in e
             ]
+        if previous and machine != previous["machine_policy"]:
+            selected_ai_version = previous["ai_policy"]["prompt_version"]
         prompt = compact_auxiliary_prompt(context, prompt_version=selected_ai_version)
         all_continuous = adopt_all_continuous or bool(
             previous and previous.get("all_continuous_adopted") is True
@@ -1063,15 +1064,28 @@ def publish(
                     else "authorized_common_seed_not_cohort_optimized"
                 )
                 extension = extensions.get(scope) or {}
+                scope_projection = None
+                if scope != "KRX|KRX_REGULAR":
+                    scope_projection, errors = _mechanistic_primary_activation_projection(
+                        source_date, source_path=snapshot, cohort=tuple(scope.split("|")))
+                    if errors:
+                        raise ValueError("machine_scope_common_candidate_invalid:" + scope + ":" + ",".join(errors))
                 if scope == "KRX|KRX_REGULAR":
                     scoped_machine, scoped_disposition = (
                         copy.deepcopy(machine),
                         disposition,
                     )
+                elif scope_projection is not None:
+                    if scope_projection.get("incumbent_machine_policy_sha256") == digest(scoped_machine):
+                        scoped_machine = copy.deepcopy(scope_projection["threshold_policy"])
+                        scoped_disposition = "evidence_qualified_exact_scope_common_update"
+                    else:
+                        scoped_disposition = "candidate_parent_changed_revalidation_required"
                 elif (
                     hierarchy_adopted
-                    and machine_economic_gate_pass
                     and extension.get("policy_candidate") is not None
+                    and (source.get("report_scope") != "main_mechanistic_entry"
+                         or extension["policy_candidate"].get("operating_contract_version") == "machine_operating_daily_net_v1")
                 ):
                     errors = calibration.validate_hierarchy_candidate(
                         extension,
@@ -1117,6 +1131,8 @@ def publish(
                     ],
                 }
                 scoped_ai_version = selected_ai_version if scope == "|".join(COHORT) or not old or old["ai_policy"]["prompt_version"] in {LEGACY_AI_VERSION, LEGACY_COMPACT_AI_VERSION, *FROZEN_COMPACT_V2_VARIANTS} else old["ai_policy"]["prompt_version"]
+                if old and scoped_machine != old["machine_policy"]:
+                    scoped_ai_version = old["ai_policy"]["prompt_version"]
                 scoped_prompt = compact_auxiliary_prompt(
                     scoped_context, prompt_version=scoped_ai_version
                 )

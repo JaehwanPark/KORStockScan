@@ -236,6 +236,7 @@ def _mechanistic_primary_activation_projection(
     source_date: str,
     *,
     source_path: Path | None = None,
+    cohort: tuple[str, str] = ("KRX", "KRX_REGULAR"),
 ) -> tuple[dict[str, Any] | None, list[str]]:
     """Load a passed hash-bound mechanistic candidate for next PREOPEN.
 
@@ -255,7 +256,8 @@ def _mechanistic_primary_activation_projection(
     if not path.is_file():
         return None, []
     report = _read_json(path)
-    refinement = report.get("mechanistic_entry_refinement")
+    refinement = (report.get("mechanistic_entry_refinement") if cohort == ("KRX", "KRX_REGULAR")
+                  else (report.get("mechanistic_refinements_by_scope") or {}).get("|".join(cohort)))
     if not isinstance(refinement, dict):
         return None, []
     candidate = refinement.get("policy_candidate")
@@ -316,7 +318,7 @@ def _mechanistic_primary_activation_projection(
             and candidate.get("evaluation_contract")
             == "full_population_cost_adjusted_10bp_paired_delta_v3"
             and source_contract.get("schema") == "machine_common_refinement_population_v1"
-            and source_contract.get("cohort", ["KRX", "KRX_REGULAR"]) == ["KRX", "KRX_REGULAR"]
+            and source_contract.get("cohort", ["KRX", "KRX_REGULAR"]) == list(cohort)
             and candidate.get("source_contract_sha256") == calibration._canonical_sha256(source_contract)
             and candidate.get("promotion_checks") == refinement.get("promotion_checks")
             and bool(checks)
@@ -362,6 +364,17 @@ def _mechanistic_primary_activation_projection(
                            and source_contract.get("input_row_disposition_complete") is True)
         if not proof_valid:
             return None, ["mechanistic_primary_full_population_economic_proof_invalid"]
+        if source_contract.get("forward_holdout_required") is True:
+            frozen = source_contract.get("frozen_selection") or {}
+            if (frozen.get("policy") != candidate.get("thresholds")
+                or frozen.get("incumbent_sha256") != parent_hash
+                or frozen.get("economic_kernel_sha256") != source_contract.get("economic_kernel_sha256")
+                or not isinstance(frozen.get("frozen_date"), str)
+                or min(test_dates) <= frozen["frozen_date"]
+                or any((candidate.get(f"{phase}_paired_population") or {}).get("operating_economic_promotion_pass") is not True
+                       or (calibration._number((candidate.get(f"{phase}_paired_population") or {}).get("daily_net_profit_delta_krw")) or 0) <= 0
+                       for phase in ("calibration", "holdout"))):
+                return None, ["mechanistic_primary_forward_operating_proof_invalid"]
     threshold_policy = json.loads(json.dumps(parent or MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1))
     threshold_policy.pop("hierarchy", None)
     threshold_policy["version"] = str(candidate.get("policy_version") or "")

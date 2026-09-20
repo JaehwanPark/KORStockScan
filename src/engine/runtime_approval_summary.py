@@ -338,15 +338,13 @@ def _economic_section(owner: str, payload: dict[str, Any]) -> dict[str, Any]:
         return _dict_value(payload, "postclose_quality_handoff")
     if owner == "main_mechanistic_entry":
         projection = _dict_value(payload, "machine_full_evaluation")
-        future_contract_verified = bool(
-            payload.get("report_scope") == "main_mechanistic_entry"
-            and payload.get("noncompact_sections_refreshed") is True
-        )
+        # Report execution flags do not prove prospective owner-model support.
+        future_contract_verified = False
         return {
-            "status": projection.get("state"),
+            "status": ("source_gap" if projection.get("daily_net_profit_status") == "not_available_without_exact_changed_decision_owner_replay" else projection.get("state")),
             "candidate_count": projection.get("independent_candidate_count"),
-            "paired_sample_count": projection.get("full_population_count"),
-            "incumbent_ev_pct": None,
+            "paired_sample_count": projection.get("paired_comparable_count"),
+            "incumbent_ev_pct": projection.get("holdout_incumbent_ev_pct"),
             "candidate_ev_pct": projection.get("holdout_cost_adjusted_ev_pct"),
             "delta_ev_pct": projection.get("holdout_paired_delta_ev_pct"),
             "net_profit_uplift_krw_per_observation_day": projection.get(
@@ -356,9 +354,9 @@ def _economic_section(owner: str, payload: dict[str, Any]) -> dict[str, Any]:
             "blocker": (
                 None
                 if projection.get("state") in {"validated_edge", "evaluated_no_edge"}
-                else projection.get("daily_net_profit_status")
+                else (projection.get("structural_blocker") or projection.get("daily_net_profit_status"))
             ),
-            "metric_role": "primary_ev",
+            "metric_role": projection.get("metric_role", "sim_probe_ev"),
             "future_generation_contract_verified": future_contract_verified,
             "closure_test": (
                 "future_exact_changed_decision_owner_replay_and_completed_profit_rate"
@@ -546,16 +544,8 @@ def _economic_projection(owner: str, payload: dict[str, Any]) -> dict[str, Any]:
     first_blocker = _first_blocker(owner, payload)
     historical_evidence_state = economic.get("historical_evidence_state")
     historical_changed_decision_replay_unrecoverable = bool(
-        (
-            owner == "main_mechanistic_entry"
-            and first_blocker
-            == "not_available_without_exact_changed_decision_owner_replay"
-        )
-        or (
-            owner == "compact_auxiliary"
-            and historical_evidence_state
-            == "exact_source_unrecoverable_preserved_excluded"
-        )
+        owner == "compact_auxiliary"
+        and historical_evidence_state == "exact_source_unrecoverable_preserved_excluded"
     )
     if status == "measured_no_edge" and not paired_sample_count:
         status = "source_gap"

@@ -12,6 +12,7 @@ import argparse
 import gzip
 import fcntl
 import hashlib
+from itertools import product
 import json
 import math
 import os
@@ -65,7 +66,7 @@ ENTRY_GROUP_OBSERVATION_SCHEMA = "entry_predecision_group_observation_v1"
 ENTRY_QUALITY_PATH_SCHEMA = "entry_quality_path_v1"
 MACHINE_DECISION_CASE_TABLE_SCHEMA = "mechanistic_entry_decision_case_table_v1"
 MAIN_MECHANISTIC_EVALUATION_CONTRACT_VERSION = (
-    "main_mechanistic_full_population_cost_adjusted_v3"
+    "main_mechanistic_full_population_operating_scopes_v4"
 )
 MARKET_PATH_OPPORTUNITY_ANCHOR_SCHEMA = "market_path_opportunity_anchor_study_v1"
 MECHANISTIC_FLOW_GROUP_STUDY_SCHEMA = "mechanistic_entry_flow_group_study_v1"
@@ -340,11 +341,17 @@ def _main_mechanistic_input_fingerprint(
             match = re.search(r"(\d{4}-\d{2}-\d{2})", path.name)
             if match and CLEAN_BASELINE_DATE <= match.group(1) <= target_date:
                 candidates.add(path)
+    pricing = data_root / "policy/micro_reversion/provider_pricing.json"
+    if pricing.is_file():
+        candidates.add(pricing)
     incumbent = load_effective(data_root=data_root, target_date=target_date)
     code_paths = [
         Path(__file__),
         Path(__file__).with_name("ai_decision_quality.py"),
         Path(__file__).with_name("entry_setup_evidence.py"),
+        Path(__file__).with_name("compact_auxiliary_paired_replay.py"),
+        Path(__file__).with_name("strategy_owner_replay.py"),
+        Path(__file__).with_name("entry_split_order_plan.py"),
     ]
     body = {
         "contract_version": MAIN_MECHANISTIC_EVALUATION_CONTRACT_VERSION,
@@ -357,6 +364,7 @@ def _main_mechanistic_input_fingerprint(
         "incumbent_machine_policy_sha256": (
             digest(incumbent["machine_policy"]) if incumbent else None
         ),
+        "incumbent_scope_policies_sha256": digest((incumbent or {}).get("scope_policies")),
         "common_grid": MECHANISTIC_COMMON_FEATURE_GRID,
         "refinement_gate": MECHANISTIC_REFINEMENT_GATE,
     }
@@ -2387,12 +2395,12 @@ def _common_refinement_population(
                         operating_source = candidate_source
                         row["operating_comparison_input"] = operating_source
                         row["operating_model_validation"] = (
-                            operating_projection.get("owner_execution_model_validation")
-                            or {}
+                            candidate_source.get("machine_owner_model_validation")
+                            or operating_projection.get("owner_execution_model_validation") or {}
                         )
                         row["operating_runtime_cost_receipt"] = (
-                            operating_projection.get("runtime_inference_cost_receipt")
-                            or {}
+                            candidate_source.get("machine_runtime_cost_receipt")
+                            or operating_projection.get("runtime_inference_cost_receipt") or {}
                         )
             day = str(row.get("source_date") or "")
             evidence = _as_dict(row.get("setup_evidence"))
@@ -2463,6 +2471,7 @@ def _common_refinement_population(
             fingerprint = _canonical_sha256({
                 "evidence": evidence, "comparison": comparison,
                 "decision_ts": row["decision_ts"],
+                "operating_source_sha256": _canonical_sha256(operating_source) if operating_source else None,
             })
             if key in conflicted:
                 excluded["conflicting_duplicate"] += 1
@@ -2514,21 +2523,27 @@ def _common_refinement_population(
     }
 
 
-def _mechanistic_policy_rows(
-    rows: Iterable[dict[str, Any]], policy: dict[str, Any],
-    *, parent_policy: dict[str, Any] | None = None,
-) -> list[dict[str, Any]]:
-    selected = []
+def _mechanistic_threshold_policy(policy, parent_policy=None):
     threshold_policy = json.loads(json.dumps(
         parent_policy or MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1
     ))
-    threshold_policy.pop("hierarchy", None)
+    if any(threshold_policy["thresholds"].get(k) != v for k, v in policy.items()):
+        threshold_policy.pop("hierarchy", None)
     threshold_policy["version"] = (
         MECHANISTIC_FULL_POPULATION_POLICY_VERSION
         if threshold_policy.get("version") == MECHANISTIC_FULL_POPULATION_POLICY_VERSION
         else MECHANISTIC_REFINEMENT_POLICY_VERSION
     )
     threshold_policy["thresholds"].update(policy)
+    return threshold_policy
+
+
+def _mechanistic_policy_rows(
+    rows: Iterable[dict[str, Any]], policy: dict[str, Any],
+    *, parent_policy: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    selected = []
+    threshold_policy = _mechanistic_threshold_policy(policy, parent_policy)
     for row in rows:
         evidence = row.get("setup_evidence")
         if not isinstance(evidence, dict):
@@ -2601,7 +2616,8 @@ def _mechanistic_policy_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _mechanistic_paired_population_metrics(
-    population: list[dict[str, Any]], selected: list[dict[str, Any]]
+    population: list[dict[str, Any]], selected: list[dict[str, Any]],
+    *, candidate_policy: dict | None = None,
 ) -> dict[str, Any]:
     selected_trace_ids = {row["decision_trace_id"] for row in selected}
     deltas = []
@@ -2630,29 +2646,45 @@ def _mechanistic_paired_population_metrics(
         if ((row["decision_trace_id"] in selected_trace_ids)
             != (row["comparison"].get("control_action") == "BUY"))
     ]
-    unsupported_changed = [
-        row for row in changed if "operating_comparison_input" not in row
-    ]
+    # RECHECK can subsequently enter. A single snapshot cannot certify its
+    # terminal non-exposure; retain the proxy but require owner sequence replay.
+    recheck_ids = {row["decision_trace_id"] for row in population
+        if row["comparison"].get("incumbent_machine_action") == "RECHECK"
+        or (candidate_policy is not None and mechanistic_entry_policy_decision(
+            row["setup_evidence"], policy=candidate_policy).get("action") == "RECHECK")}
+    operating_rows = [row for row in population
+        if "operating_comparison_input" in row and row["decision_trace_id"] not in recheck_ids]
+    operating_ids = {row["decision_trace_id"] for row in operating_rows}
+    unsupported_changed = [row for row in changed if row["decision_trace_id"] not in operating_ids]
     operating = None
-    operating_rows = [
-        row for row in population if "operating_comparison_input" in row
-    ]
     if operating_rows:
         from src.engine.scalping import compact_auxiliary_paired_replay as compact
-        pairs = []
+        pairs, models = [], []
         for row in operating_rows:
             source = row["operating_comparison_input"]
             arm = compact.owner_operating_arm(source.get("owner_replay") or {}, source)
-            old = source["incumbent_verdict"]
-            new = old if row["decision_trace_id"] in selected_trace_ids else "VETO"
+            # Source verdict belongs to the frozen auxiliary, not to the
+            # current machine incumbent. Rejected incumbent decisions may be
+            # recovered without inventing another natural provider call.
+            verdict = source["incumbent_verdict"]
+            old = verdict if row["comparison"].get("control_action") == "BUY" else "VETO"
+            new = verdict if row["decision_trace_id"] in selected_trace_ids else "VETO"
+            models.append(row.get("operating_model_validation") or {})
             change = int(new == "PASS") - int(old == "PASS")
             pairs.append({**source, "incumbent_verdict": old, "candidate_verdict": new,
                 "delta_net_pct": arm["net_return_pct"] * change,
                 "stress_delta_net_pct": arm["stress_net_return_pct"] * change,
                 "runtime_inference_cost_delta_krw": row["operating_runtime_cost_receipt"].get("delta_krw")})
-        operating = compact.operating_comparison_metrics(
-            pairs, operating_rows[0]["operating_model_validation"]
-        )
+        per_row_model_valid = all(compact.owner_model_scope_valid(model, pair)
+                                  for model, pair in zip(models, pairs))
+        model = {"validated_scopes": [proof for value in models
+                                     for proof in value.get("validated_scopes", [])]}
+        operating = compact.operating_comparison_metrics(pairs, model) if per_row_model_valid else {
+            "status": "source_gap", "blocker": "exact_source_date_operating_model_unverified"}
+        episode_keys = [(p.get("source_date"), p.get("scanner_promotion_id"),
+                         p.get("effective_venue"), p.get("session_bucket")) for p in pairs]
+        if len(set(episode_keys)) != len(episode_keys):
+            operating = {"status": "source_gap", "blocker": "repeated_episode_requires_owner_sequence_replay"}
         portfolio = compact.portfolio_metrics(pairs)
         daily = portfolio.get("portfolio_daily_net_delta_krw")
         all_dates = sorted(
@@ -2664,7 +2696,9 @@ def _mechanistic_paired_population_metrics(
                 or (row.get("operating_comparison_input") or {}).get("source_date")
             }
         )
-        if isinstance(daily, dict) and not unsupported_changed and all_dates:
+        if (isinstance(daily, dict) and not unsupported_changed and all_dates
+                and len(operating_rows) == len(population)
+                and operating.get("status") == "supported_operating_comparison"):
             daily = {day: float(daily.get(day, 0.0)) for day in all_dates}
             operating["portfolio_daily_net_delta_krw"] = daily
             operating["daily_net_profit_delta_krw"] = sum(daily.values()) / len(all_dates)
@@ -2675,19 +2709,18 @@ def _mechanistic_paired_population_metrics(
             operating["daily_net_profit_status"] = (
                 "unsupported_changed_machine_decision"
                 if unsupported_changed
-                else portfolio.get("net_profit_status")
+                else "operating_population_incomplete_or_model_unsupported"
             )
     complete = len(deltas) == terminal_evaluable_count
-    downstream_complete = not unsupported_changed and (
-        not changed
-        or (
-            operating is not None
-            and operating.get("status") == "supported_operating_comparison"
-            and operating.get("daily_net_profit_delta_krw") is not None
-        )
+    downstream_complete = bool(
+        population and len(operating_rows) == len(population)
+        and operating is not None
+        and operating.get("status") == "supported_operating_comparison"
+        and operating.get("daily_net_profit_delta_krw") is not None
     )
     operating_promotion_pass = (
         operating is not None
+        and downstream_complete
         and operating.get("status") == "supported_operating_comparison"
         and operating.get("robust_paired_delta_ev_lower_bound_pct") is not None
         and operating["robust_paired_delta_ev_lower_bound_pct"] > 0
@@ -2711,18 +2744,30 @@ def _mechanistic_paired_population_metrics(
         "paired_terminal_contract_complete": complete,
         "changed_decision_count": len(changed),
         "unsupported_changed_decision_count": len(unsupported_changed),
+        "recheck_sequence_unproven_count": len(recheck_ids),
+        "operating_population_count": len(operating_rows),
+        "operating_population_complete": len(operating_rows) == len(population) and bool(population),
+        "changed_decision_evidence": [{
+            "evaluation_attempt_id": r.get("evaluation_attempt_id"),
+            "decision_trace_id": r.get("decision_trace_id"),
+            "source_date": r.get("source_date"), "stock_code": r.get("stock_code"),
+            "incumbent_action": r["comparison"].get("control_action"),
+            "candidate_admitted": r["decision_trace_id"] in selected_trace_ids,
+            "owner_replay_status": "bound" if "operating_comparison_input" in r else "missing_or_unbound",
+            "historical_recoverability": "not_established",
+        } for r in changed],
         "downstream_operating_evidence_complete": downstream_complete,
         "operating_economic_promotion_pass": operating_promotion_pass,
         "independent_policy_comparison": bool(changed),
         "baseline_preserved": baseline_preserved,
-        "daily_net_profit_delta_krw": 0.0 if baseline_preserved else (
+        "daily_net_profit_delta_krw": 0.0 if baseline_preserved and downstream_complete else (
             operating.get("daily_net_profit_delta_krw")
             if operating is not None
             else None
         ),
         "daily_net_profit_status": (
             "baseline_preserved_no_independent_policy_change"
-            if baseline_preserved
+            if baseline_preserved and downstream_complete
             else operating.get("daily_net_profit_status")
             if operating is not None
             else "not_available_without_exact_changed_decision_owner_replay"
@@ -2753,8 +2798,9 @@ def build_clean_baseline_mechanistic_refinement(
     else:
         rows = source_rows
     full_population = source_contract.get("schema") == "machine_common_refinement_population_v1"
-    if full_population and source_contract.get("cohort", ["KRX", "KRX_REGULAR"]) != ["KRX", "KRX_REGULAR"]:
-        raise ValueError("common_refinement_krx_cohort_required")
+    cohort = tuple(source_contract.get("cohort", ["KRX", "KRX_REGULAR"]))
+    if not mechanistic_scope_supported(*cohort):
+        raise ValueError("common_refinement_scope_unsupported")
     if full_population and parent_policy is None:
         raise ValueError("full_population_refinement_incumbent_missing")
     policy_version = MECHANISTIC_FULL_POPULATION_POLICY_VERSION if full_population else MECHANISTIC_REFINEMENT_POLICY_VERSION
@@ -2771,6 +2817,7 @@ def build_clean_baseline_mechanistic_refinement(
             {**row, "comparison": {
                 **row["comparison"],
                 "historical_control_action": row["comparison"].get("control_action"),
+                "incumbent_machine_action": mechanistic_entry_policy_decision(row["setup_evidence"], policy=parent).get("action"),
                 "control_action": "BUY" if mechanistic_entry_policy_decision(
                     row["setup_evidence"], policy=parent
                 ).get("action") == "ENTER_NOW" else "WAIT",
@@ -2779,10 +2826,19 @@ def build_clean_baseline_mechanistic_refinement(
             for row in rows
         ]
     source_dates = list(source_contract["accepted_source_dates"])
+    frozen = source_contract.get("frozen_selection") or {}
+    frozen_valid = bool(frozen.get("incumbent_sha256") == _canonical_sha256(parent)
+                        and isinstance(frozen.get("policy"), dict)
+                        and set(frozen["policy"]) == set(MECHANISTIC_COMMON_FEATURE_GRID)
+                        and all(_number(v) is not None for v in frozen["policy"].values())
+                        and isinstance(frozen.get("frozen_date"), str)
+                        and frozen.get("economic_kernel_sha256") == source_contract.get("economic_kernel_sha256"))
     holdout_count = MECHANISTIC_REFINEMENT_GATE["holdout_source_date_count"]
     holdout_dates = (
         source_dates[-holdout_count:] if len(source_dates) > holdout_count else []
     )
+    if frozen_valid:
+        holdout_dates = [day for day in source_dates if day > frozen["frozen_date"]]
     calibration_dates = [day for day in source_dates if day not in holdout_dates]
     calibration_rows = [row for row in rows if row["source_date"] in calibration_dates]
     holdout_rows = [row for row in rows if row["source_date"] in holdout_dates]
@@ -2801,74 +2857,76 @@ def build_clean_baseline_mechanistic_refinement(
     candidates: list[dict[str, Any]] = []
     seen_selections: set[str] = set()
     grid = MECHANISTIC_COMMON_FEATURE_GRID
-    for maximum_spread_bp in grid["maximum_spread_bp"]:
-        for minimum_fillability_score in grid["minimum_fillability_score"]:
-            for maximum_ratio in grid["maximum_top3_ask_to_bid_ratio"]:
-                policy = {
-                    "maximum_spread_bp": maximum_spread_bp,
-                    "minimum_fillability_score": minimum_fillability_score,
-                    "maximum_top3_ask_to_bid_ratio": maximum_ratio,
+    choices = [dict(zip(grid, values)) for values in product(*grid.values())]
+    incumbent_coordinates = {k: parent["thresholds"][k] for k in grid}
+    if incumbent_coordinates not in choices:
+        choices.append(incumbent_coordinates)
+    def policy_distance(policy):
+        return sum(abs(policy[k] - incumbent_coordinates[k]) / (max(grid[k]) - min(grid[k])) for k in grid)
+    choices.sort(key=lambda policy: (policy_distance(policy), tuple(policy.values())))
+    if frozen_valid:
+        choices = [frozen["policy"]]
+    for policy in choices:
+        selected = _mechanistic_policy_rows(calibration_rows, policy, parent_policy=parent)
+        selection_sha256 = _canonical_sha256(
+            [
+                {
+                    "decision_trace_id": row["decision_trace_id"],
+                    "fingerprint": row["fingerprint"],
                 }
-                selected = _mechanistic_policy_rows(calibration_rows, policy, parent_policy=parent)
-                selection_sha256 = _canonical_sha256(
-                    [
-                        {
-                            "decision_trace_id": row["decision_trace_id"],
-                            "fingerprint": row["fingerprint"],
-                        }
-                        for row in selected
-                    ]
-                )
-                if selection_sha256 in seen_selections:
-                    continue
-                seen_selections.add(selection_sha256)
-                metrics = _mechanistic_policy_metrics(selected)
-                paired_population = _mechanistic_paired_population_metrics(
-                    calibration_rows, selected
-                )
-                gate_checks = {
-                    "minimum_exposure_count": metrics["exposure_count"]
-                    >= MECHANISTIC_REFINEMENT_GATE[
-                        "minimum_calibration_exposure_count"
-                    ],
-                    "minimum_unique_symbol_count": metrics["unique_symbol_count"]
-                    >= MECHANISTIC_REFINEMENT_GATE[
-                        "minimum_calibration_symbol_count"
-                    ],
-                    "minimum_independent_source_date_count": metrics[
-                        "independent_source_date_count"
-                    ]
-                    >= MECHANISTIC_REFINEMENT_GATE[
-                        "minimum_calibration_source_date_count"
-                    ],
-                    "minimum_terminal_evaluable_count": metrics[
-                        "terminal_evaluable_count"
-                    ]
-                    >= MECHANISTIC_REFINEMENT_GATE[
-                        "minimum_calibration_terminal_evaluable_count"
-                    ],
-                    "paired_terminal_delta_complete": metrics[
-                        "paired_terminal_proxy_delta_count"
-                    ]
-                    == metrics["terminal_evaluable_count"],
-                    "independent_policy_comparison": paired_population[
-                        "independent_policy_comparison"
-                    ]
-                    is True,
-                }
-                # Keep every distinct policy evaluation. Sample floors govern
-                # promotion, not whether already-computable EV is reported.
-                candidates.append(
-                    {
-                        "policy": policy,
-                        "selection_sha256": selection_sha256,
-                        "calibration": metrics,
-                        "calibration_paired_population": paired_population,
-                        "calibration_gate_checks": gate_checks,
-                        "calibration_gate_pass": all(gate_checks.values()),
-                    }
-                )
-
+                for row in selected
+            ]
+        )
+        if selection_sha256 in seen_selections:
+            continue
+        seen_selections.add(selection_sha256)
+        metrics = _mechanistic_policy_metrics(selected)
+        paired_population = _mechanistic_paired_population_metrics(
+            calibration_rows, selected,
+            candidate_policy=_mechanistic_threshold_policy(policy, parent)
+        )
+        gate_checks = {
+            "minimum_exposure_count": metrics["exposure_count"]
+            >= MECHANISTIC_REFINEMENT_GATE[
+                "minimum_calibration_exposure_count"
+            ],
+            "minimum_unique_symbol_count": metrics["unique_symbol_count"]
+            >= MECHANISTIC_REFINEMENT_GATE[
+                "minimum_calibration_symbol_count"
+            ],
+            "minimum_independent_source_date_count": metrics[
+                "independent_source_date_count"
+            ]
+            >= MECHANISTIC_REFINEMENT_GATE[
+                "minimum_calibration_source_date_count"
+            ],
+            "minimum_terminal_evaluable_count": metrics[
+                "terminal_evaluable_count"
+            ]
+            >= MECHANISTIC_REFINEMENT_GATE[
+                "minimum_calibration_terminal_evaluable_count"
+            ],
+            "paired_terminal_delta_complete": metrics[
+                "paired_terminal_proxy_delta_count"
+            ]
+            == metrics["terminal_evaluable_count"],
+            "independent_policy_comparison": paired_population[
+                "independent_policy_comparison"
+            ]
+            is True,
+        }
+        # Keep every distinct policy evaluation. Sample floors govern
+        # promotion, not whether already-computable EV is reported.
+        candidates.append(
+            {
+                "policy": policy,
+                "selection_sha256": selection_sha256,
+                "calibration": metrics,
+                "calibration_paired_population": paired_population,
+                "calibration_gate_checks": gate_checks,
+                "calibration_gate_pass": all(gate_checks.values()),
+            }
+        )
     calibration_floor = ev_floor
     calibration_gate_candidates = [
         row for row in candidates if row["calibration_gate_pass"] is True
@@ -2912,34 +2970,18 @@ def build_clean_baseline_mechanistic_refinement(
         ]
         is not None
     ]
-    ranked = (
-        calibration_passers
-        or calibration_gate_candidates
-        or economically_evaluable_candidates
-    )
-    ranked.sort(
-        key=(
-            (
-                lambda row: (
-                    row["calibration_paired_population"]["paired_terminal_proxy_delta_pct"],
-                    row["calibration"]["exposures_per_source_date"],
-                    row["calibration"]["net_10bp_path_opportunity_rate_pct"],
-                    row["calibration"]["cost_adjusted_terminal_proxy_ev_pct"],
-                )
-            )
-            if calibration_passers
-            else (
-                lambda row: (
-                    row["calibration_paired_population"][
-                        "candidate_opportunity_ev_pct"
-                    ],
-                    row["calibration"]["exposure_count"],
-                    -row["calibration"]["catastrophic_terminal_proxy_count"],
-                )
-            )
-        ),
-        reverse=True,
-    )
+    operating_candidates = [r for r in candidates
+        if r["calibration_paired_population"].get("downstream_operating_evidence_complete")
+        and (r["calibration_paired_population"].get("operating_economic_comparison") or {}).get("status") == "supported_operating_comparison"]
+    ranked = calibration_passers or operating_candidates or calibration_gate_candidates or economically_evaluable_candidates
+    ranked.sort(key=lambda row: (
+        _number(row["calibration_paired_population"].get("daily_net_profit_delta_krw"))
+        if row in operating_candidates else -float("inf"),
+        _number((row["calibration_paired_population"].get("operating_economic_comparison") or {}).get("robust_paired_delta_ev_lower_bound_pct"))
+        if row in operating_candidates else -float("inf"),
+        row["calibration_paired_population"].get("candidate_opportunity_ev_pct") or 0.,
+        -policy_distance(row["policy"]),
+    ), reverse=True)
     best = ranked[0] if ranked else None
     holdout_metrics = None
     holdout_paired_population = None
@@ -2958,7 +3000,8 @@ def build_clean_baseline_mechanistic_refinement(
         )
         holdout_metrics = _mechanistic_policy_metrics(holdout_selected)
         holdout_paired_population = _mechanistic_paired_population_metrics(
-            holdout_rows, holdout_selected
+            holdout_rows, holdout_selected,
+            candidate_policy=_mechanistic_threshold_policy(best["policy"], parent)
         )
         calibration_ev = best["calibration"]["cost_adjusted_terminal_proxy_ev_pct"]
         holdout_ev = holdout_metrics["cost_adjusted_terminal_proxy_ev_pct"]
@@ -3048,12 +3091,24 @@ def build_clean_baseline_mechanistic_refinement(
                 holdout_metrics["catastrophic_terminal_proxy_count"] == 0
             ),
         }
+    promotion_checks["incumbent_scope_verified"] = source_contract.get("incumbent_scope_verified", True) is True
     promotion_checks["path_boundary_contract_isolated"] = (
         path_boundary_contract_isolated
     )
     promotion_checks["holdout_source_coverage_complete"] = (
         bool(holdout_dates) and holdout_dates_with_accepted_rows == holdout_dates
     )
+    forward_selection = frozen if frozen_valid else None
+    if source_contract.get("forward_holdout_required") is True:
+        promotion_checks["unseen_forward_holdout"] = bool(
+            frozen_valid and holdout_dates and min(holdout_dates) > frozen["frozen_date"])
+        if not frozen_valid and calibration_passers:
+            forward_selection = {"policy": best["policy"],
+                "incumbent_sha256": _canonical_sha256(parent),
+                "frozen_date": datetime.now(KST).date().isoformat(),
+                "calibration_rows_sha256": source_contract.get("accepted_rows_sha256"),
+                "economic_contract": "machine_operating_daily_net_v1",
+                "economic_kernel_sha256": source_contract.get("economic_kernel_sha256")}
     promotion_pass = (
         best is not None and bool(promotion_checks) and all(promotion_checks.values())
     )
@@ -3104,7 +3159,7 @@ def build_clean_baseline_mechanistic_refinement(
         "policy_version": policy_version,
         "target_date": target_date,
         "clean_tuning_baseline_date": CLEAN_BASELINE_DATE,
-        "scope": {"stage": "entry", "venue": "KRX", "session": "KRX_REGULAR"},
+        "scope": {"stage": "entry", "venue": cohort[0], "session": cohort[1]},
         "incumbent_machine_policy_sha256": _canonical_sha256(parent),
         "source_contract": source_contract,
         "chronological_split": {
@@ -3151,6 +3206,10 @@ def build_clean_baseline_mechanistic_refinement(
             },
             "path_boundary_contract_isolated": path_boundary_contract_isolated,
         },
+        "search_direction": "within_existing_bounds_incumbent_first",
+        "calibration_source_dates": calibration_dates,
+        "holdout_source_dates": holdout_dates,
+        "evaluated_candidates": candidates,
         "nominal_grid_candidate_count": (
             len(grid["maximum_spread_bp"])
             * len(grid["minimum_fillability_score"])
@@ -3172,8 +3231,9 @@ def build_clean_baseline_mechanistic_refinement(
             calibration_gate_candidates
         ),
         "calibration_floor_passing_candidate_count": len(calibration_passers),
+        "forward_selection": forward_selection,
         "candidate_selection_basis": (
-            "full_population_paired_delta_then_frequency_then_opportunity_then_ev"
+            "operating_daily_net_then_paired_ev_then_minimum_policy_change"
             if calibration_passers
             else "best_diagnostic_ev_no_calibration_candidate_passed"
         ),
@@ -5430,6 +5490,10 @@ def validate_hierarchy_candidate(
                     or paired.get("paired_terminal_contract_complete") is not True
                     or paired.get("terminal_evaluable_count") != paired.get("population_count")
                     or paired.get("paired_comparable_count") != paired.get("population_count")
+                    or (candidate.get("operating_contract_version") == "machine_operating_daily_net_v1" and (
+                        paired.get("operating_economic_promotion_pass") is not True
+                        or paired.get("downstream_operating_evidence_complete") is not True
+                        or (_number(paired.get("daily_net_profit_delta_krw")) or 0) <= 0))
                 ):
                     errors.append("candidate_full_population_economic_proof_invalid")
     return sorted(set(errors))
@@ -5455,6 +5519,11 @@ def build_mechanistic_hierarchy_candidate(
         json.dumps(parent_policy or MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1)
     )
     full_population = population_source_contract is not None
+    frozen = (population_source_contract or {}).get("frozen_hierarchy") or {}
+    frozen_valid = bool(frozen.get("incumbent_sha256") == _canonical_sha256(parent)
+                        and frozen.get("rules") and isinstance(frozen.get("frozen_date"), str)
+                        and frozen.get("economic_kernel_sha256") == (population_source_contract or {}).get("economic_kernel_sha256"))
+    frozen_rules = {r["id"]: r for r in frozen.get("rules", [])} if frozen_valid else {}
     if not full_population:
         parent.pop("hierarchy", None)
         parent["postclose_selection"].update(
@@ -5570,6 +5639,7 @@ def build_mechanistic_hierarchy_candidate(
             # receive it, creating a synthetic opportunity recovery.
             row["comparison"] = {
                 **original["comparison"],
+                "incumbent_machine_action": mechanistic_entry_policy_decision(row["setup_evidence"], policy=parent).get("action"),
                 "control_action": "BUY" if mechanistic_entry_policy_decision(
                     row["setup_evidence"], policy=parent
                 )["action"] == "ENTER_NOW" else "WAIT",
@@ -5581,6 +5651,8 @@ def build_mechanistic_hierarchy_candidate(
     # those same dates as prospective holdout for this semantic expansion.
     forward = [d for d in dates if d > MECHANISTIC_FLOW_BOUNDARY_FREEZE_DATE]
     holdout_dates = forward[-3:] if len(forward) >= 2 else []
+    if frozen_valid:
+        holdout_dates = [day for day in dates if day > frozen["frozen_date"]]
     train = [
         r for r in rows if not holdout_dates or r["source_date"] < holdout_dates[0]
     ]
@@ -5617,13 +5689,14 @@ def build_mechanistic_hierarchy_candidate(
             == "ENTER_NOW"
         ]
 
-    def metrics(selected_rows, *, population=None):
+    def metrics(selected_rows, *, population=None, rules=None):
         result = _entry_quality_population_metrics(selected_rows)
         result["unusable_label_count"] = sum(
             r["entry_quality_path"].get("status") != "evaluable" for r in selected_rows
         )
         if full_population and population is not None:
-            result["paired_population"] = _mechanistic_paired_population_metrics(population, selected_rows)
+            result["paired_population"] = _mechanistic_paired_population_metrics(
+                population, selected_rows, candidate_policy=policy_for(rules or []))
             result["catastrophic_terminal_proxy_count"] = _mechanistic_policy_metrics(selected_rows)["catastrophic_terminal_proxy_count"]
         return result
 
@@ -5656,6 +5729,8 @@ def build_mechanistic_hierarchy_candidate(
                 and _as_dict(m.get("paired_population")).get("paired_terminal_contract_complete") is True
                 and _as_dict(m.get("paired_population")).get("terminal_evaluable_count") == _as_dict(m.get("paired_population")).get("population_count")
                 and m.get("catastrophic_terminal_proxy_count") == 0
+                and _as_dict(m.get("paired_population")).get("operating_economic_promotion_pass") is True
+                and _as_dict(m.get("paired_population")).get("downstream_operating_evidence_complete") is True
             ))
         )
 
@@ -5663,7 +5738,8 @@ def build_mechanistic_hierarchy_candidate(
         # Predeclared ranking; holdout is never used for parameter selection.
         if full_population:
             return (
-                _number(_as_dict(m.get("paired_population")).get("paired_terminal_proxy_delta_pct")) or -float("inf"),
+                _number(_as_dict(m.get("paired_population")).get("daily_net_profit_delta_krw")) or -float("inf"),
+                _number(_as_dict(_as_dict(m.get("paired_population")).get("operating_economic_comparison")).get("robust_paired_delta_ev_lower_bound_pct")) or -float("inf"),
                 m["cost_adjusted_terminal_proxy_ev_pct"] or -float("inf"), m["row_count"],
             )
         return (
@@ -5687,6 +5763,8 @@ def build_mechanistic_hierarchy_candidate(
         for family in row["mechanistic_flow_observation"].get("matched_families", []):
             identity = _canonical_sha256([match, family])[:20]
             groups.setdefault(identity, (match, family))
+    if frozen_valid:
+        groups = {k: (r["match"], r["flow_family"]) for k, r in frozen_rules.items()}
     evaluations, accepted = [], []
     for identity, (match, family) in sorted(groups.items())[:64]:
         base = {
@@ -5736,8 +5814,10 @@ def build_mechanistic_hierarchy_candidate(
         # A valid incumbent may be outside the bounded challenger envelope.
         # Such inherited coordinates are not permission to publish an invalid
         # residual, and must not crash evaluation of the valid alternatives.
+        if frozen_valid:
+            variants = [frozen_rules[identity]]
         fits = [
-            (rule, metrics(selected(scoped, [rule]), population=scoped))
+            (rule, metrics(selected(scoped, [rule]), population=scoped, rules=[rule]))
             for rule in variants
             if not validate_mechanistic_entry_threshold_policy(policy_for([rule]))
         ]
@@ -5748,7 +5828,7 @@ def build_mechanistic_hierarchy_candidate(
         best, train_metrics = max(passing, key=lambda pair: rank(pair[1]))
         best = json.loads(json.dumps(best))
         # Fit symbol residuals on train only, then validate the entire policy.
-        for symbol in sorted({r["stock_code"] for r in scoped}):
+        for symbol in ([] if frozen_valid else sorted({r["stock_code"] for r in scoped})):
             symbol_rows = [r for r in scoped if r["stock_code"] == symbol]
             n = len(symbol_rows)
             if (
@@ -5762,7 +5842,7 @@ def build_mechanistic_hierarchy_candidate(
                 ]
             ):
                 continue
-            best_metric = metrics(selected(symbol_rows, [best]), population=symbol_rows)
+            best_metric = metrics(selected(symbol_rows, [best]), population=symbol_rows, rules=[best])
             fitted = None
             for key, values in MECHANISTIC_COMMON_FEATURE_GRID.items():
                 for v in values:
@@ -5772,7 +5852,7 @@ def build_mechanistic_hierarchy_candidate(
                     rule = {**best, "symbols": {**best["symbols"], symbol: residual}}
                     if validate_mechanistic_entry_threshold_policy(policy_for([rule])):
                         continue
-                    m = metrics(selected(symbol_rows, [rule]), population=symbol_rows)
+                    m = metrics(selected(symbol_rows, [rule]), population=symbol_rows, rules=[rule])
                     if qualifies(m) and rank(m) > rank(best_metric):
                         fitted, best_metric = residual, m
             if fitted is not None:
@@ -5786,7 +5866,7 @@ def build_mechanistic_hierarchy_candidate(
             )
             and family in r["mechanistic_flow_observation"].get("matched_families", [])
         ]
-        validation = metrics(selected(validation_rows, [best]), population=validation_rows)
+        validation = metrics(selected(validation_rows, [best]), population=validation_rows, rules=[best])
         baseline = metrics(
             [
                 r
@@ -5810,17 +5890,17 @@ def build_mechanistic_hierarchy_candidate(
         residual_checks = {}
         for symbol in best["symbols"]:
             symbol_holdout = [r for r in validation_rows if r["stock_code"] == symbol]
-            m = metrics(selected(symbol_holdout, [best]), population=symbol_holdout)
+            m = metrics(selected(symbol_holdout, [best]), population=symbol_holdout, rules=[best])
             without = {
                 **best,
                 "symbols": {k: v for k, v in best["symbols"].items() if k != symbol},
             }
-            baseline_symbol = metrics(selected(symbol_holdout, [without]), population=symbol_holdout)
+            baseline_symbol = metrics(selected(symbol_holdout, [without]), population=symbol_holdout, rules=[without])
             residual_checks[symbol] = qualifies(m, validation=True) and rank(m) > rank(
                 baseline_symbol
             )
         passed = passed and all(residual_checks.values())
-        train_metrics = metrics(selected(scoped, [best]), population=scoped)
+        train_metrics = metrics(selected(scoped, [best]), population=scoped, rules=[best])
         passed = passed and (not full_population or qualifies(train_metrics))
         # Same complete-window population and exit/cost contract in all arms.
         # This is a diagnostic, never a holdout-driven alternative selector.
@@ -5873,16 +5953,26 @@ def build_mechanistic_hierarchy_candidate(
                 "status": "qualified" if passed else "holdout_not_qualified",
             }
         )
-        if passed:
+        if full_population or passed:
             accepted.append(best)
-    combined = metrics(selected(holdout, accepted), population=holdout) if accepted else metrics([])
-    combined_train = metrics(selected(train, accepted), population=train) if accepted else metrics([])
-    passes = bool(accepted) and qualifies(combined, validation=True) and (
-        not full_population or qualifies(combined_train)
+    combined = metrics(selected(holdout, accepted), population=holdout, rules=accepted) if accepted else metrics([])
+    combined_train = metrics(selected(train, accepted), population=train, rules=accepted) if accepted else metrics([])
+    passes = (population_source_contract or {}).get("incumbent_scope_verified", True) is True and bool(accepted) and qualifies(combined, validation=True) and (
+        not full_population or (qualifies(combined_train) and all(e.get("status") == "qualified" for e in evaluations if "rule" in e))
     )
+    forward_selection = frozen if frozen_valid else None
+    if (population_source_contract or {}).get("forward_holdout_required") is True:
+        if not frozen_valid and accepted and qualifies(combined_train):
+            forward_selection = {"incumbent_sha256": _canonical_sha256(parent),
+                "rules": accepted, "frozen_date": datetime.now(KST).date().isoformat(),
+                "economic_contract": "machine_operating_daily_net_v1",
+                "economic_kernel_sha256": population_source_contract.get("economic_kernel_sha256")}
+        passes = passes and bool(frozen_valid and holdout_dates
+                                  and min(holdout_dates) > frozen["frozen_date"])
     candidate = (
         {
             "threshold_policy": policy_for(accepted),
+            "operating_contract_version": "machine_operating_daily_net_v1" if full_population else None,
             "source_date": target_date,
             "cohort": list(cohort),
             "calibration_dates": sorted({r["source_date"] for r in train}),
@@ -5912,6 +6002,7 @@ def build_mechanistic_hierarchy_candidate(
         candidate["candidate_content_sha256"] = _canonical_sha256(candidate)
     return {
         "schema": MECHANISTIC_HIERARCHY_SCHEMA,
+        "forward_selection": forward_selection,
         "policy_candidate": candidate,
         "cohort": list(cohort),
         "status": "candidate_ready" if passes else "incumbent_carry_no_qualified_child",
@@ -7296,6 +7387,9 @@ def _machine_full_evaluation_projection(
     full_state = (
         "validated_edge"
         if mechanistic_refinement.get("promotion_pass") is True
+        else "source_gap"
+        if (holdout_paired.get("unsupported_changed_decision_count", 0) > 0
+            or (accepted_count and holdout_paired.get("operating_population_complete") is not True))
         else "insufficient_mature_sample"
         if refinement_status == "insufficient_mature_sample"
         else "evaluated_no_edge"
@@ -7307,8 +7401,17 @@ def _machine_full_evaluation_projection(
     return {
         "schema": "main_mechanistic_entry_full_evaluation_v1",
         "source_date": mechanistic_refinement.get("target_date"),
+        "structural_blocker": ("machine_operating_population_unbound"
+            if accepted_count and refinement_contract.get("operating_economic_enrichment_count", 0) == 0
+            else None),
         "state": full_state,
         "full_population_count": accepted_count,
+        "population_unit": "exact_machine_attempt",
+        "metric_role": "sim_probe_ev",
+        "economic_basis": "terminal_path_proxy_unless_operating_proof_present",
+        "holdout_incumbent_ev_pct": holdout_paired.get("incumbent_opportunity_ev_pct"),
+        "paired_comparable_count": holdout_paired.get("paired_comparable_count"),
+        "unsupported_changed_decision_count": holdout_paired.get("unsupported_changed_decision_count"),
         "input_lane_counts": refinement_contract.get("input_lane_counts"),
         "accepted_lane_counts": refinement_contract.get("accepted_lane_counts"),
         "row_exclusion_reason_counts": refinement_contract.get(
@@ -7324,33 +7427,15 @@ def _machine_full_evaluation_projection(
             "calibration_gate_passing_candidate_count"
         ),
         "promotion_pass": mechanistic_refinement.get("promotion_pass") is True,
-        "calibration_cost_adjusted_ev_pct": (
-            (best.get("calibration") or {}).get(
-                "cost_adjusted_terminal_proxy_ev_pct"
-            )
-            if (best.get("calibration") or {}).get(
-                "cost_adjusted_terminal_proxy_ev_pct"
-            )
-            is not None
-            else best_paired.get("candidate_opportunity_ev_pct")
-        ),
-        "calibration_paired_delta_ev_pct": best_paired.get(
-            "paired_terminal_proxy_delta_pct"
-        ),
-        "holdout_cost_adjusted_ev_pct": (
-            mechanistic_refinement.get("best_observed_holdout") or {}
-        ).get("cost_adjusted_terminal_proxy_ev_pct")
-        if (
-            mechanistic_refinement.get("best_observed_holdout") or {}
-        ).get("cost_adjusted_terminal_proxy_ev_pct")
-        is not None
-        else holdout_paired.get("candidate_opportunity_ev_pct"),
+        "calibration_cost_adjusted_ev_pct": best_paired.get("candidate_opportunity_ev_pct"),
+        "calibration_paired_delta_ev_pct": best_paired.get("paired_terminal_proxy_delta_pct"),
+        "holdout_cost_adjusted_ev_pct": holdout_paired.get("candidate_opportunity_ev_pct"),
+        "selected_trade_terminal_proxy_ev_pct": (mechanistic_refinement.get("best_observed_holdout") or {}).get("cost_adjusted_terminal_proxy_ev_pct"),
         "holdout_paired_delta_ev_pct": holdout_paired.get(
             "paired_terminal_proxy_delta_pct"
         ),
-        "daily_net_profit_delta_krw": holdout_paired.get(
-            "daily_net_profit_delta_krw"
-        ),
+        "daily_net_profit_delta_krw": (holdout_paired.get("daily_net_profit_delta_krw")
+            if holdout_paired.get("operating_population_complete") is True else None),
         "daily_net_profit_status": holdout_paired.get(
             "daily_net_profit_status",
             "not_available_without_exact_changed_decision_owner_replay",
@@ -7365,6 +7450,31 @@ def _machine_full_evaluation_projection(
     }
 
 
+def _machine_operating_projection(data_root: Path, days: list[str]) -> dict:
+    """Consume each day's existing sealed owner projection, without rerunning AI.
+
+    A latest-day compact projection cannot enrich older machine attempts.
+    The day-specific model and pricing proofs remain attached to their rows.
+    """
+    from src.engine.scalping import compact_auxiliary_paired_replay as compact
+    rows, sources, missing = [], [], []
+    for day in sorted(set(days)):
+        path = compact.report_path(data_root, day).with_suffix(".source.json")
+        source = compact.read(path)
+        if not compact.valid(source) or source.get("target_date") != day:
+            missing.append(day)
+            continue
+        cost = compact.runtime_inference_cost_receipt(data_root, day)
+        sources.append({"source_date": day, "artifact_content_sha256": source["artifact_content_sha256"]})
+        for row in source.get("rows") or []:
+            if row.get("source_date") != day:
+                continue
+            rows.append({**row,
+                "machine_owner_model_validation": source.get("owner_execution_model_validation") or {},
+                "machine_runtime_cost_receipt": cost})
+    return compact.sealed({"rows": rows, "sources": sources, "missing_source_dates": missing})
+
+
 def build_main_mechanistic_report(
     *, target_date: str, data_root: Path = Path("data")
 ) -> dict[str, Any]:
@@ -7372,7 +7482,7 @@ def build_main_mechanistic_report(
     report_root = data_root / "report"
     paired_rows, paired_contract = _mechanistic_source_rows(
         report_root / PAIRED_SUBDIR,
-        target_date=target_date,
+        target_date=target_date, all_supported_cohorts=True,
     )
     from src.engine.scalping.mechanistic_entry_runtime_policy import load_effective
 
@@ -7399,67 +7509,64 @@ def build_main_mechanistic_report(
     )
     from src.engine.scalping import compact_auxiliary_paired_replay as compact
 
-    operating_projection = compact.read(
-        compact.report_path(data_root, target_date).with_suffix(".source.json")
-    )
-    if compact.valid(operating_projection):
-        operating_projection = compact.sealed(
-            {
-                **operating_projection,
-                "runtime_inference_cost_receipt": compact.runtime_inference_cost_receipt(
-                    data_root, target_date
-                ),
-            }
-        )
-    # Historical paired rows predate the full round-trip cost contract.  The
-    # normal full evaluator binds those immutable paths to the exact-date cost
-    # owner before admission; machine-only must preserve the same contract.
-    repriced_paired_rows, hierarchy_cost_census = relabel_hierarchy_source_rows(
-        paired_rows,
-        data_root,
-    )
-    refinement_rows, refinement_contract = _common_refinement_population(
-        repriced_paired_rows,
-        machine_rows,
-        target_date=target_date,
-        source_receipt=source_receipt,
-        paired_contract=paired_contract,
-        natural_conflicting_attempt_identity_count=case_table[
-            "conflicting_attempt_identity_count"
-        ],
-        natural_conflicting_evaluation_keys=case_table[
-            "conflicting_evaluation_keys"
-        ],
-        operating_projection=operating_projection,
-    )
-    refinement = build_clean_baseline_mechanistic_refinement(
-        report_root / PAIRED_SUBDIR,
-        target_date=target_date,
-        source_rows=refinement_rows,
-        source_contract=refinement_contract,
-        parent_policy=parent,
-    )
-    hierarchy = build_mechanistic_hierarchy_candidate(
-        refinement_rows,
-        target_date=target_date,
-        parent_policy=parent,
-        population_source_contract=refinement_contract,
-    )
-    if refinement.get("promotion_pass") is not True:
-        # The hierarchy shares the same entry stage and cannot bypass the
-        # full downstream-economic gate through a proxy-only child.
-        hierarchy["policy_candidate"] = None
-        hierarchy["promotion_pass"] = False
-        hierarchy["status"] = "diagnostic_only_parent_economic_gate_not_passed"
-    hierarchy["machine_capture_census"] = machine_capture_census
-    hierarchy["full_cost_relabel_census"] = hierarchy_cost_census
+    operating_projection = _machine_operating_projection(
+        data_root, [r["source_date"] for r in machine_rows] + [target_date])
+    from src.engine.scalping.entry_setup_scalping_rollout import AUTO_PROMOTION_SCOPES
+    from src.engine.scalping.mechanistic_entry_runtime_policy import for_cohort
+    previous_selections, previous_hierarchy = {}, {}
+    for prior_path in sorted((report_root / "ai_decision_action_outcome_calibration").glob("ai_decision_action_outcome_calibration_*.json")):
+        prior = compact.read(prior_path)
+        if (_artifact_content_sha256_valid(prior) and prior.get("target_date", "9999") <= target_date):
+            for scope, evaluated in (prior.get("mechanistic_refinements_by_scope") or {}).items():
+                frozen = evaluated.get("forward_selection")
+                if frozen and frozen.get("economic_contract") == "machine_operating_daily_net_v1":
+                    previous_selections[scope] = frozen
+            for scope, extension in ((prior.get("hierarchical_entry_quality") or {}).get("runtime_extensions_by_scope") or {}).items():
+                frozen = extension.get("forward_selection")
+                if frozen and frozen.get("economic_contract") == "machine_operating_daily_net_v1":
+                    previous_hierarchy[scope] = frozen
+    scope_evaluations, extensions = {}, {}
+    for scope in AUTO_PROMOTION_SCOPES:
+        cohort = tuple(scope.split("|"))
+        scoped_incumbent = for_cohort(incumbent, cohort) if incumbent else None
+        scope_parent = (scoped_incumbent or {}).get("machine_policy") or parent
+        scoped_paired = [r for r in paired_rows if tuple(
+            _as_dict(_as_dict(r.get("entry_group_observation")).get("key_parts")).get(k)
+            for k in ("venue", "session_bucket")) == cohort]
+        repriced, cost_census = relabel_hierarchy_source_rows(scoped_paired, data_root, cohort=cohort)
+        population, contract = _common_refinement_population(
+            repriced, machine_rows, target_date=target_date,
+            source_receipt=source_receipt, paired_contract=paired_contract,
+            natural_conflicting_attempt_identity_count=case_table["conflicting_attempt_identity_count"],
+            natural_conflicting_evaluation_keys=case_table["conflicting_evaluation_keys"],
+            cohort=cohort, operating_projection=operating_projection)
+        contract["economic_kernel_sha256"] = _canonical_sha256({
+            name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
+            for name in ("ai_action_outcome_calibration.py", "entry_setup_evidence.py",
+                         "compact_auxiliary_paired_replay.py", "strategy_owner_replay.py")})
+        contract["incumbent_scope_verified"] = scoped_incumbent is not None
+        contract["forward_holdout_required"] = True
+        contract["frozen_selection"] = previous_selections.get(scope)
+        contract["frozen_hierarchy"] = previous_hierarchy.get(scope)
+        evaluated = build_clean_baseline_mechanistic_refinement(
+            report_root / PAIRED_SUBDIR, target_date=target_date,
+            source_rows=population, source_contract=contract, parent_policy=scope_parent)
+        extension = build_mechanistic_hierarchy_candidate(
+            population, target_date=target_date, parent_policy=scope_parent,
+            cohort=cohort, population_source_contract=contract)
+        extension["full_cost_relabel_census"] = cost_census
+        extension["machine_capture_census"] = machine_capture_census
+        extensions[scope] = extension
+        scope_evaluations[scope] = evaluated
+        if scope == "KRX|KRX_REGULAR":
+            refinement, refinement_contract, hierarchy = evaluated, contract, extension
     hierarchical = {
         "schema": "main_mechanistic_entry_machine_only_hierarchy_v1",
         "status": hierarchy.get("status"),
         "promotion_pass": hierarchy.get("promotion_pass") is True,
         "policy_candidate": hierarchy.get("policy_candidate"),
         "runtime_extension": hierarchy,
-        "runtime_extensions_by_scope": {"KRX|KRX_REGULAR": hierarchy},
+        "runtime_extensions_by_scope": extensions,
         "machine_decision_case_table": case_table,
         "diagnostic_sections_reused": False,
     }
@@ -7483,9 +7590,16 @@ def build_main_mechanistic_report(
         "selected_review_candidate": None,
         "ofi_smoothing_audit": {"status": "not_recomputed_machine_only"},
         "mechanistic_entry_refinement": refinement,
-        "machine_full_evaluation": _machine_full_evaluation_projection(
-            refinement, refinement_contract
-        ),
+        "machine_full_evaluation": {
+            **_machine_full_evaluation_projection(refinement, refinement_contract),
+            "summary_scope": "KRX|KRX_REGULAR",
+            "scope_evaluations": {key: _machine_full_evaluation_projection(value, value["source_contract"])
+                                  for key, value in scope_evaluations.items()},
+            "registered_scope_count": len(AUTO_PROMOTION_SCOPES),
+            "scope_disposition_complete": len(scope_evaluations) == len(AUTO_PROMOTION_SCOPES),
+        },
+        "mechanistic_refinements_by_scope": scope_evaluations,
+        "operating_source_handoff": {k: v for k, v in operating_projection.items() if k != "rows"},
         "mechanistic_flow_groups": {
             "status": "not_recomputed_machine_only",
             "source_population": {

@@ -1,6 +1,6 @@
 # 메인 기계 진입판정 장후 전체 튜닝·다음 거래일 소비 루프 복구 계획
 
-작성·재검토일: 2026-09-20 KST. 상태: 구현·제한 재생성·배포 완료, 2026-09-21 PREOPEN/PID·자연 경제성 검증 대기.
+작성·재검토일: 2026-09-20 KST. 상태: 최초 실행·발행 루프의 배포 receipt는 §13에 보존한다. 후속 점검에서 경제성 연결·scope·선정·결손 분류의 잔여를 확인했으며 **전체 구조결손 해소는 미완료**다. 현재 보완 구현계획은 §14가 소유하고 PREOPEN/PID·자연 성과는 별도다.
 
 ## 1. 결정
 
@@ -438,15 +438,175 @@ strict verifier는 다음을 모두 요구한다.
 | 평가 모집단 | 입력 paired 956·natural 2,330, 수용 paired 7·natural 1,708, 전체 1,715 |
 | 후보 상태 | 서로 다른 정책 1개 평가, 독립 비교·calibration gate 통과·승격 후보는 모두 0개 |
 | 비용 후 경제값 | calibration EV 0.0000%, holdout EV 0.0000%, holdout paired ΔEV +0.0054462573%p |
-| 일별 원화 순익 | `null`; 후보가 바꾸는 holdout 8건은 당시 실제 AI→submit→owner execution 경로가 없어 exact changed-decision owner replay를 사후 복구할 수 없음 |
+| 일별 원화 순익 | `null`; holdout 판단 변경 8건 모두 operating enrichment 미연결. 이것만으로 원천 복구 불가를 입증하지 못하며 §14에서 원장·adapter·모델 지원 여부를 재대사한다. |
 | 판정 | `insufficient_mature_sample`, `incumbent_carried`; 양의 EV 개선이나 실제 순익 개선으로 인정하지 않음 |
 | 다음 거래일 bundle | `data/runtime/mechanistic_entry_policy/policy_2026-09-21.json`, bundle `c6a7253ceda07cbfec7bcc04d78b868d610b016624fa0c7f47d00f3675e3a6b7`, file SHA256 `f2466fda9a4f5cf7b2e42f4cb3881d27bb8fad8b33b4bc6c12651f75657d122a` |
 | family lineage | machine source 9/17/report hash `83a088...`, compact source 9/17/artifact `822c6f...`를 독립 보존 |
 | 직접 검증 | main mechanistic `pass`, compact auxiliary `PASS`, 전체 strict chain `pass`; 동일 fingerprint 재시도 `evaluation_reused=true` |
-| 후행 상태 | runtime summary `ddcb647a...`; main·compact policy receipt 모두 `valid=true`. 과거 8건은 `historical_unrecoverable`, 미래 exact owner replay는 `prospective_resolution_mode=natural_maturity`로 분리 |
+| 후행 상태 | runtime summary `ddcb647a...`; main·compact policy receipt 모두 `valid=true`. 당시 출력된 `historical_unrecoverable`/`natural_maturity`는 §14 점검에서 판정 근거 부족을 확인했다. 정책 receipt 유효성과 경제성 결손 해소는 별개다. |
 
-원화 일별 순익의 null은 계산 가능한 실제 체결 손익을 누락한 상태가 아니다. 더 엄격한 후보가 기준 정책의 `BUY`를 비진입으로 바꾸는 과거 holdout 8건에는 후보 arm의 exact 주문·체결·수량·자금 점유가 존재하지 않아 원화 차이를 사후 확정할 수 없다. 이 과거 증거는 기다려도 완성되지 않으므로 `historical_unrecoverable`로 표시한다. terminal path 기반 비용 후 기회 EV와 paired ΔEV까지만 진단값으로 유지하고, 임의 수량·체결·원화 손익을 합성하지 않는다. 이후 동일 정책 세대에서 자연 발생한 exact owner replay와 `COMPLETED + valid profit_rate`가 누적되는 경로는 별도 `prospective_resolution_mode=natural_maturity`로 유지하며 checklist의 `DirectFamilyNaturalEvidenceMainMechanisticEntry`가 원화 일별 순익·tail·실제 EV를 평가한다.
+후속 점검 정정: 후보가 비진입을 선택한 arm에는 실제 주문·체결 receipt가 없는 것이 정상이다. 기존 진입 arm의 검증된 실행·청산·비용·자본과 후보 비노출·발생비용을 비교할 수 있는지 먼저 확인해야 한다. 8건의 operating enrichment 부재만으로 계산 가능한 손익 누락이 없거나 복구 불가능하다고 확정한 설명은 철회한다. 현재 수치는 경로 대리 EV이며 원화 순익은 미확정이다. 미래 writer/reader 검증도 report scope·갱신 flag만으로 입증되지 않는다. §14의 원천별 복구 판정과 후행 계약 검증 후에만 자연 성숙 또는 복구 불가로 분류한다. 기존 `DirectFamilyNaturalEvidenceMainMechanisticEntry`의 자동 분류는 해당 수정·재생성 때 정합화한다.
 
 후속 리뷰에서는 통합 bundle의 최상위 `source_artifact_sha256`가 machine source를 소유하는데 runtime summary의 compact receipt가 이를 compact hash로도 요구하는 상충을 발견했다. compact 검증을 `compact_paired_artifact_sha256`와 compact fingerprint에 결속해 두 family source를 독립 검증하도록 수정했다. 재생성 후 main·compact receipt가 모두 유효하며, compact는 source gap 때문에 계속 incumbent를 보존한다.
 
 코드 배포와 다음 거래일 bundle 생성은 완료됐다. 2026-09-21 PREOPEN bootstrap, 실제 PID의 bundle hash 소비, 자연 판정 변화와 비용 후 순익 개선은 아직 도래하지 않았으므로 완료로 표시하지 않는다. 실행 중 봇 재시작·hot reload·주문은 수행하지 않았다.
+
+## 14. 공통 데이터·미진입 기회비용 경제성 연결 상세 보완계획
+
+### 14.1 결정·범위·재작업 금지
+
+이 절은 [공통 데이터·기회비용 통합계획](entry-opportunity-cost-full-population-tuning-implementation-plan-2026-09-17.md)의 U6/U7/U11/U12와 이 문서 ME2–ME6의 잔여를 구체화한다. 별도 운영 family·독립 실행계획·새 일정이 아니다. 기존 §5의 목표는 유지하고, §13의 전체 완료·복구 불가 해석보다 이 절의 보완 판정을 우선한다.
+
+우선순위는 **잘못된 결손 분류 해소 → 실행 가능한 동일 모집단 경제성 → 활성 scope별 평가 → 경제성 중심 선정 → 다음 장전 자동 소비 → 필요한 계산 절약**이다. 양수 숫자·새 후보·실거래 수를 만들기 위해 근거를 완화하지 않는다. 음수·무개선이라도 유효한 기존/후보/차이와 원화 일별 순익을 산출하면 의미 있는 연구 결과다.
+
+- 이미 검증된 common health·원시각·공백/feature 분리·중복 억제·306파일 정적 역할 ledger를 다시 구현하지 않는다. 이번 adapter가 소비하는 필드의 탈락/충돌이나 새 재현 결함만 수리한다.
+- 기존 `ai_action_outcome_calibration`, owner replay, compact helper, publisher, PREOPEN, summary/checklist를 사용한다. 새 production module·DB·collector·service·cron·CLI·report family·범용 optimizer를 만들지 않는다. 기존 test 파일을 확장한다.
+- compact [EO1–EO7 후속계획](compact-auxiliary-economic-tuning-optimization-followup-plan-2026-09-20.md)의 frozen plan·실행모델·portfolio 작업을 공유하고 중복 구현하지 않는다. 동일 helper의 편집 owner를 하나로 정하고 machine 지원 범위와 compact 지원 범위를 구분한다.
+- 메인 최초진입만 보완한다. widget/episode/삼성/scale-in/exit 연구 전체를 재개하거나 퇴역 Daily/EV producer를 복원하지 않는다. 해당 owner 입력은 원천 계약 재사용 범위에 한정한다.
+- 이번 요청은 **문서 계획 수립**이다. 코드·테스트 실행·Provider/API 호출·원천 재생성·commit/push·배포·PREOPEN·주문·env 변경은 실행하지 않는다. 후속 구현 승인 시 아래 검증과 필요한 재생성을 수행한다.
+
+### 14.2 고정 증거와 해석
+
+점검 기준은 선택 release `df2931b19`, source date 9/17, report hash `83a088cd...`다. 구현 시작 시 selector/commit/다른 세션 변경·보고서 generation을 다시 확인한다. 작업본의 큰 diff를 배포본에 일괄 복사하지 않는다.
+
+| 사실 | 해석·보완 |
+| --- | --- |
+| 수용 1,715건 중 calibration 4건, holdout 1,711건 | 날짜 분리는 지키되 실제 학습 지지와 미완료 원천을 공개한다. holdout을 학습에 되돌려 유효 표본을 만들지 않는다. |
+| grid 80 → calibration 행동 signature 1, 모두 비진입 | 80개 독립 개선 비교가 아니다. 첫 번째 엄격한 좌표가 대표가 되는 tie 처리와 후보 식별력을 보완한다. |
+| holdout 후보 대리 EV 0%, 기준 −0.005446%, 차이 +0.005446%p | 무진입 후보의 대리 손실 회피다. 실제 원화 이익·양수 후보 EV가 아니다. |
+| changed 8건, unsupported 8건, operating enrichment 0 | 결손 위치를 먼저 조사해야 한다. 후보 비진입의 실제 체결 부재는 결함이 아니다. |
+| 다른 cohort 564건 제외, 새 hierarchy scope는 KRX 정규장 하나 | 정당한 scope 분리와 전수 평가 누락을 구분한다. raw 전체를 한 KRX 분모로 섞지 않는다. |
+| 원화 일별 순익 null·9/21 incumbent carry | 정책 파일 발행은 확인되지만 경제성 연결 완료는 아니다. |
+
+이전 검증 구간은 이미 사람이 결과를 열람했다. 수정된 모델·후보·랭킹을 같은 과거 구간에 다시 적용한 결과는 역사적 진단으로만 사용한다. 독립 승격 검증에는 후보 freeze 이후의 미사용 구간이 필요하며 이 제약을 artifact에 보존한다.
+
+### 14.3 ME8 — 결손 판정과 source-to-consumer 복구
+
+대상: calibration의 `_common_refinement_population`/`_machine_full_evaluation_projection`, summary의 `_economic_section`/`_economic_projection`, 기존 checklist 생성기.
+
+1. 기존 accepted/excluded ledger에서 changed 8건부터 exact attempt·scope·당시 bundle·당시 action·현재 incumbent 재판정·후단 terminal을 추출한다. 전 raw를 재탐색하지 않고 manifest/index/기존 원장으로 필요한 식별자만 추적한다.
+2. 각 행의 당시 입력 → plan → submit/no-submit → fill/no-fill → exit/cost → 자본 점유 → reader를 대사한다. 첫 누락 필드와 중첩 결손을 기존 report의 exclusions에 남긴다. 심볼/시간 근접 join, 다른 owner의 체결 흡수는 금지한다.
+3. 기존 파일에 값이 있으면 adapter/join 복구, 당시 입력으로 pure planner가 재현 가능하면 검증된 modeled plan, 원천이 존재하지 않고 대체 원장도 exact 복원이 안 되면 역사적 제외로 판정한다. 단순 `owner_replay 없음`을 복구 불가로 변환하지 않는다.
+4. 미래 자연 대기는 실제 writer/reader 경로·필수 필드·scope·계약 version과 연결 회귀가 통과하고 실제 유입 owner가 있을 때만 사용한다. report_scope/noncompact flag는 보고서 실행 증거일 뿐 미래 생성 계약 증거가 아니다.
+5. summary는 source/model gap을 표본 부족보다 먼저 보존한다. 기존 scalar 상태를 유지할 필요가 있으면 gap 이유와 `prospective_resolution_mode=producer_repair`를 함께 전달해 repair가 자연 대기로 사라지지 않게 한다.
+
+최소 상태 의미: `source_gap`(복구 작업 필요), `unsupported_scope`(설계 미지원), `pending_maturity`(기록된 후행 관측의 선언 기한 대기), `insufficient_sample`(지원된 모델/유효 원천의 표본 부족), `historical_unrecoverable`(exact 복원 불가 근거 있음), `evaluated_no_edge`(유효 비교 후 개선 없음). 과거 결손과 미래 지원 상태는 독립 필드로 둔다. ETA는 근거 없으면 null이다.
+
+종료: 8건의 disposition과 근거가 대사되고 source gap을 natural wait로 잘못 보내는 fixture가 실패한다. 기존 완료 receipt는 보존하되 경제성 잔여의 자동 checklist 역할을 `producer_contract_repair`로 수정할 수 있어야 한다.
+
+### 14.4 ME9 — machine 독립 실행 경제성 adapter
+
+대상: 기존 calibration 내부 정규화/paired helper, `compact_auxiliary_paired_replay.owner_operating_arm`·`owner_model_scope_valid`·`operating_comparison_metrics`·`portfolio_metrics`, 기존 `entry_split_order_plan`/`strategy_owner_replay`/`entry_execution_sizing_plan`의 직접 재사용 지점. 공유 helper가 compact verdict를 전제하면 기존 module 안에 machine action을 받는 얇은 정규화만 추가한다. machine action을 허위 compact PASS/VETO 기록으로 저장하지 않는다.
+
+| 실제 원천과 후보 action | 경제성 구성 | 지원 불가 시 처리 |
+| --- | --- | --- |
+| incumbent ENTER → candidate BLOCK/RECHECK | incumbent의 지원된 실행/청산/비용, candidate 비노출 및 발생비용을 비교한다. 후보 arm의 실제 broker fill을 요구하지 않는다. RECHECK는 즉시 영구 비진입으로 바꾸지 않고 기존 재평가/기한 행동을 재현한다. | 기존 진입 경로의 plan/terminal/cost/자본 결손을 직접 표시한다. |
+| incumbent BLOCK/RECHECK → candidate ENTER | 같은 과거 cutoff의 입력으로 현재 고정 compact·price·qty·guard·exit owner를 차례로 재현한다. 실제 provider 미호출이면 지원된 offline compact 결과를 modeled로 구분한다. | 필수 입력·AI replay·모델 scope·price/sizing/자본 중 첫 미지원 지점을 남기고 upstream 기계 기회값까지만 진단한다. |
+| 양측 ENTER·동일 행동 | 동일 지원 outcome/비용을 공유해 delta 0, 분모는 유지한다. | 절대 EV가 불명인 행을 outcome 0으로 채우지 않는다. |
+| 양측 비진입 | 비노출·발생비용이 입증되면 해당 값과 delta를 사용한다. | source-invalid/후단 노출 불명/RECHECK 미종결은 확정 무거래 0이 아니다. |
+| submitted no-fill/partial/held | no-fill terminal 및 비용, 부분 잔량, 보유 자본과 선언 exit window를 그대로 평가한다. | 실제 HELD/미확정 청산을 정상 0으로 대체하지 않는다. |
+
+당시 원래 owner-issued plan이 있으면 그대로 우선 사용한다. BLOCK 때문에 plan이 원래 없더라도 당시 frozen price/qty/account context가 충분하면 기존 pure planner를 사용한 **연구용 재구성 plan**을 허용할 수 있다. planner version·입력 hash·cutoff·cost/exit·scope를 봉인하고 runtime 동일입력 parity로 검증한다. 원래 계획/실제 submit receipt로 재라벨링하지 않는다. 당시 budget/quantity/필수 feature가 없으면 현재값이나 임의 금액으로 보간하지 않는다.
+
+실행모델은 실제 지원 scope의 독립 actual 검증이 필요하지만 **각 미진입 후보가 먼저 실체결돼야 하는 순환조건은 금지**한다. compact EO2의 검증 결과는 exact scope/model contract가 같을 때만 재사용한다. 후보 holdout으로 모델을 보정하지 않는다. 실제 청산 검증과 CF 선언 exit를 구분하고 가격 touch만으로 체결·청산을 확정하지 않는다.
+
+비용은 actual/model 계약별 한 번만 차감한다. AI를 호출하지 않는 arm의 회피 비용과 이미 발생한 비용을 구분하고 reviewed zero-cost 근거가 없으면 0으로 두지 않는다. 새로운 action/price/qty/exit/Provider 권한은 만들지 않는다.
+
+종료: 세 가지 방향(진입 억제·신규 진입·동일 행동)의 기존/후보/차이 원화값을 offline fixture로 재현한다. 기존 실제 원천에서도 지원 가능한 changed pair를 계산하고 미지원 행과 별도로 출력한다. 모든 행이 여전히 null이면 원천 복구나 모델 지원을 완료한 것으로 표시하지 않는다.
+
+### 14.5 ME10 — 공통 기회·관측일·scope 분모
+
+대상: common population, main report 조립, 기존 hierarchy/scoped publisher.
+
+- 등록된 현재 main runtime scope를 publisher의 `for_cohort`/loader와 대사해 평가 목록을 만든다. KRX/NXT/SOR의 정확한 enum·session은 기존 registry를 사용한다. 새 venue·운영 universe를 추가하지 않는다.
+- 각 scope에 동일 평가 함수를 호출하고 incumbent parent/cost/AI/exit/source hash를 독립 결속한다. 지원된 scope만 계산하고 나머지는 census·직접 사유와 incumbent carry를 남긴다. `different_cohort`를 전수 처리 완료의 유일 근거로 쓰지 않는다.
+- raw event, exact attempt, 경제성 opportunity episode를 구분한다. 기존 promotion/watch TTL/reset·episode 키를 사용하고 동일 기회의 반복 RECHECK를 독립 수익으로 합산하지 않는다. 근거 없는 episode를 합성하지 않으며 episode 집계 불가능 시 attempt 진단으로 명시한다.
+- scope별 `raw = retained + duplicate + excluded`, `retained = economic_complete + waiting + source_gap + not_applicable` 보존식을 대사한다. 기존 identity 충돌 격리와 비용 계약은 유지한다.
+- 관측일 D는 source coverage가 완결된 공통 날짜다. 거래가 없는 정상 날짜는 포함하고 source missing일은 제외 사유를 남긴다. candidate별 참여 날짜를 분모로 쓰지 않는다.
+- 동일 symbol/동시 기회·잔고·예약·cooldown의 충돌은 기존 portfolio 시간순 replay에서 처리한다. 여러 scope가 같은 실제 자본을 공유하면 scope별 수익을 단순 합산하지 않고 전체 bundle의 공통 예산 replay를 검증한다. 미지원이면 scope 진단과 전체 portfolio null을 구분한다.
+- hierarchy는 공통 threshold 후보의 선행 승격을 요구하지 않는다. 변경되지 않은 incumbent를 parent로 한 단일 child 후보가 동일 full downstream 경제성 검증을 독립 통과하면 검토 가능해야 한다. proxy-only child 우회는 계속 금지한다. 기존 same-stage/단일 변경 계약과 bundle의 최종 paired 검증을 유지한다.
+
+종료: 현재 활성 scope 모두 평가·원천/모델 미지원·valid empty 중 하나로 처분되고 미분류 0. KRX 결과를 전체 scope 개선으로 보고하지 않는다. 한 scope의 결손이 무관한 scope 연구를 중단시키지 않지만 공통 자본/필수 계약 결손은 bundle 승격을 차단한다.
+
+### 14.6 ME11 — 작은 후보군과 경제성 선정
+
+1. 먼저 현행 세 축을 `hard_safety/bounded_tunable/baseline_prior`·허용 bounds·incumbent 좌표와 대사한다. 최대 spread 100/최소 fillability 15/최대 ratio 5에 대한 현재 grid는 동등·강화뿐이라는 사실을 report에 표시한다. 신규 micro/feature 축이나 무조건 완화 grid를 추가하지 않는다.
+2. 기존 허용 범위 내에서 incumbent와 최근접 이웃을 우선 사용한다. incumbent가 bound 끝에 있으면 반대 방향의 합법적 후보가 없는 것으로 기록한다. 현재 bounds에서 회복 후보가 불가능하면 데이터 대기가 아니라 `search_space_limited` 진단이며, 별도 근거·권한 검토 없이 bounds를 확장하지 않는다.
+3. calibration 행동 signature 중복 계산은 재사용하되 파라미터 identity를 보존한다. 동률 대표는 incumbent 우선, 그다음 incumbent에서 가장 작은 정규화 거리, 마지막 고정 정렬 순서로 정한다. 첫 등장하는 가장 엄격한 조합을 자동 winner로 만들지 않는다. 검증 데이터로 signature나 대표를 선정하지 않는다.
+4. 학습 4건처럼 지지가 부족하면 산출 가능한 진단값은 남기고 승격을 보류한다. 유효한 미사용 과거 source-day의 누락이 확인될 때만 adapter/manifest 복구 후 학습에 편입한다. 이미 열람한 holdout 이동이나 임의 80→대규모 grid 확장은 하지 않는다.
+5. 실행 지원되는 후보와 proxy-only 후보의 순위를 분리한다. proxy-only 1위가 실행 지원 후보 탐색을 가리거나 자동 발행되는 경로를 없앤다. promotion floor 미달이라도 실행 가능한 후보는 EV·원화 결과를 출력한다.
+
+같은 episode 집합 U와 완결 관측일 D에서 정책 p의 자본 제약 후 순익을 `P(p,d)`라 한다. full cost·exit·발생 AI비용을 반영하고 actual/model을 분리한다. 동일 기회별 사전 참조 notional `B(i)>0`가 입증될 때 `EV(p)=mean(100*N(i,p)/B(i))`, `ΔEV=EV(candidate)-EV(incumbent)`를 사용한다. candidate의 체결 건수만 분모로 쓰지 않는다. `ΔDailyNet=mean(P(candidate,d)-P(incumbent,d))`이며 단위는 원/완결 관측일이다. 전체 portfolio P와 N의 충돌/미체결 반영이 일치해야 한다. 기존 metric name을 재사용하되 formula/분모가 달라지면 계약 version을 올려 혼용을 막는다.
+
+**선정 규칙:** source/model/공통분모 유효 → ΔEV 및 ΔDailyNet 동시 양수·기존 stress/tail/coverage/자본 guard 통과 → ΔDailyNet 내림차순 → ΔEV → 더 작은 정책 변경 → 고정 identity 순. 노출 빈도·승률·단순 손익합은 독립 승격 기준이 아니다. 위험회피로 Δ가 양수라도 candidate EV 0인 전면 비진입 정책은 현행 positive-EV gate를 충족하지 않는다.
+
+현행 메인 승격의 0.10%·표본·holdout 계약은 유지한다. 이를 연구 산출의 사전조건으로 사용하지 않는다. 작고 유효한 양수 개선이 절대 floor만으로 막히는 경우 숫자와 직접 사유를 출력하되 이번 계획으로 gate를 변경하지 않는다. 승격 기준 변경이 필요하면 owner 근거와 publisher/PREOPEN/loader 동시 변경 범위를 별도 확정한다.
+
+선택한 단일 후보를 freeze하고 미사용 chronological holdout으로 한 번 검증한다. model validation → candidate calibration/freeze → candidate holdout의 순서와 사용 이력을 보존한다. 실패 후 같은 holdout에 차순위를 채택하지 않는다. scope/hierarchy 후보를 같은 holdout으로 순차 골라 최종 조합을 만들지 않고 calibration에서 최종 조합을 고정한다.
+
+### 14.7 ME12 — 발행·PREOPEN·후행 소비 계약
+
+| 경계 | 입력·출력과 필수 확인 |
+| --- | --- |
+| 원천 → evaluator | exact cutoff·scope·parent·원래/재구성 plan 구분·model 지원 hash·비용·관측일·제외 보존식 |
+| evaluator → publisher | scope별 기존/후보/Δ EV·원화/day·tail/capital·candidate freeze/holdout·source/model/code hashes·promotion checks |
+| machine + compact → 단일 bundle | 각 family의 독립 원천·parent·검증 계약을 보존. 새 machine과 새 compact의 조합 proof가 없으면 동시 변경하지 않고 다른 축은 carry |
+| bundle → PREOPEN | exchange calendar가 정한 effective date·parent·scope·허용 좌표·source/economic proof·same-stage/lock guard 검증 |
+| PREOPEN → loader/PID | loader가 같은 날짜·bundle hash·scope 정책을 읽고 실제 판정에 사용한 receipt. 파일 선택·bootstrap 성공과 구분 |
+| evaluator → summary/checklist/strict | proxy/operating/actual·source gap/sample·평가 수/독립 후보 수를 보존. 메인 값으로 compact receipt를 덮거나 incumbent EV를 이유 없이 null로 투영하지 않음 |
+| 자연 판정 → 다음 장후 | 적용 bundle/threshold/prompt/model version별 exact outcome을 연결해 R6를 분리 산출 |
+
+다음 장전 산출물은 기존 `data/runtime/mechanistic_entry_policy/policy_<next-trading-date>.json`이다. 현 시점 예상일은 9/21이나 구현 시점·거래소 달력·PREOPEN freeze를 다시 확인한다. 이미 소비되거나 동결된 당일 정책을 덮어쓰지 않는다. 새 후보가 기준을 통과하면 해당 scope의 검증 정책, 없으면 최신 평가 사유가 결속된 incumbent carry를 발행한다. 필수 기존 정책 자체가 없거나 무효이면 carry 성공으로 가장하지 않고 기존 fail-closed 경로를 유지한다.
+
+후보 승격 없는 carry는 운영 연속성의 성공이다. **이를 EV 개선·모든 구조결손 해소로 계산하지 않는다.** 새 후보를 보장하는 계획은 아니며 경제성 미산출 결손이 남아 있으면 전체 완료를 선언하지 않는다. 정책 파일 생성만으로 actual PID/자연 수익을 완료 처리하지 않는다.
+
+### 14.8 ME13 — 최소 구현 순서·리뷰·회귀
+
+| 순서 | 책임·선행 | 종료 증거 |
+| --- | --- | --- |
+| A | ME8, 현행 release·원천 고정 | changed 8건의 결손 위치, source/model/prospective 판정; 무근거 복구 불가/자연 대기 제거 |
+| B | ME9, compact EO1/EO2의 공유 계약 대사 | 당시 입력의 실행 arm·비노출 arm·CF plan·비용/exit 모델 지원 검증 |
+| C | ME10, B의 지원 scope | episode/일자/자본 보존, 활성 scope 처분, hierarchy의 독립 full 경제성 gate |
+| D | ME11, B/C | 실행 경제성 중심 순위·동률·freeze/미사용 holdout·proxy 분리 |
+| E | ME12, A–D 검증 | bundle→PREOPEN→loader 및 summary/checklist/strict의 동일 계약 |
+| F | ME14, E review finding 0 | 영향 구간 재생성·다음 날짜 정책·정량 결과 및 미해결 목록 |
+
+각 단계는 구현→self review→수정→재리뷰→targeted validation을 수행한다. 외부 세션의 같은 helper 변경은 source hash로 대사하고 영향 경로만 재검증한다. 검증 없이 먼저 비싼 보고서를 생성하지 않는다.
+
+필수 fixture는 기존 calibration/compact/owner replay/policy/summary/checklist/strict test 파일에 추가한다.
+
+1. report scope/refresh flag만 정상이고 owner writer 필드가 없으면 source_gap이며 natural wait 아님.
+2. 실제 ENTER→후보 비진입에 후보 fill을 요구하지 않음; 기존 arm 비용·자본 누락은 null.
+3. 실제 BLOCK→후보 ENTER: 유효 frozen context+검증 모델의 연구용 plan은 계산 가능; AI/quantity/guard 결손이면 승격 불가. 실제 호출·계획으로 위조하지 않음.
+4. 전부 BLOCK/전부 VETO에서도 raw census 보존; 실제 AI 미호출을 모델 품질 실패로 학습하지 않음.
+5. 같은 opportunity 여러 RECHECK, cross-owner/route, scope별 같은 종목, 자본 중복·cooldown 경계의 보존/배제.
+6. 정상 무거래일·손실일·원천 결손일, partial/held/no-fill·후행 exit 개정의 분모/비용 처리.
+7. proxy EV 1위와 원화/day 1위가 다르면 규칙대로 실행 지원 후보를 선정. EV 개선/일별 순익 악화 후보는 탈락.
+8. 80개 동률에서 incumbent 또는 가장 가까운 허용 좌표를 선택; holdout을 이용한 대표 교체·차순위 재선정 금지.
+9. KRX 공통 후보 불합격과 무관하게 지원된 scope/child의 진단 계산 가능; 동일 full gate 미통과 child 우회 발행 금지.
+10. source/model/cost/parent/scope/hash 불일치·이미 freeze된 날짜·다른 compact generation의 발행 및 loader 차단.
+11. eligible fixture의 next-date publication→PREOPEN→loader 성공, no-edge fixture의 carry 및 gap fixture의 repair 전달.
+12. 표본 floor 미달이어도 지원된 수치 출력, 손익 null을 0으로 바꾸거나 proxy를 operating EV로 표기하지 않음.
+
+관련 pytest/변경 Python compile, wrapper 변경 시 `bash -n`·해당 contract test, `git diff --check`를 수행한다. Provider는 mock/offline을 기본으로 하고 runtime API/request/parser를 바꾸지 않는다. protocol 변경이 불가피하면 해당 범위에만 공식 Kiwoom reference gate를 수행한다.
+
+### 14.9 ME14 — 제한 재생성·최종 완료 판정
+
+후속 구현 승인 후 검증된 code generation에서 실행한다. 기존 wrapper/CLI의 실행 옵션은 구현 시 확인하며 새 운영 CLI를 만들지 않는다.
+
+1. 재생성 전 frozen source/model/candidate/holdout 소비 이력·현재 bundle을 보존한다. changed 8건과 영향 scope를 먼저 복구·계산하고 동일 fingerprint의 무변경 재실행을 금지한다.
+2. 최초 변경 producer가 source projection/owner replay이면 해당 날짜·scope만 갱신한다. 그 뒤 source-quality admission → machine full evaluator → 필요한 compact 결속 → 단일 publisher 순으로 실행한다. compact prompt 재탐색/Provider 재호출은 기계 연결 수리만으로 자동 요구하지 않는다.
+3. 새 main 결과/정책에 영향을 받는 runtime summary → workorder/gap/lineage의 현재 활성 소비자 → tower → checklist → strict verifier → controller까지 기존 의존 경로를 필요한 범위로 갱신한다. 이미 퇴역한 Daily/EV 단계는 생성하지 않는다. unchanged artifact는 original source date/hash를 유지한다.
+4. next-date policy와 기존 PREOPEN 검증 경로의 날짜·parent·source/model/metric hash를 확인한다. 정상 예정 PREOPEN·PID 소비는 자연 후속으로 분리하며 수동 env/lock·즉시 hot reload로 대체하지 않는다.
+5. 긴 작업에서는 기존 projection/checkpoint를 재사용하고 비필수 상세 설명·추가 hierarchy 분석을 줄인다. 미평가 수/범위를 남기며 동일 모집단·비용·자본·holdout의 핵심 검증은 줄이지 않는다. 성능 framework·과도한 guard·반복 benchmark는 추가하지 않는다.
+
+완료는 네 상태를 별도로 기록한다.
+
+- **코드/구조 closure:** ME8–ME12와 직접 소비자의 actionable finding 0, 상태 오분류 0, 실제 미지원 설계는 별도 OPEN. offline 성공만으로 원천 결손 해소를 선언하지 않는다.
+- **경제성 산출:** 실제 보존 원천의 지원된 독립 비교에 대해 기존/후보/Δ EV, 비용/stress, 원화/day, 표본·episode·날짜·tail·capital을 산출한다. 수익은 음수·개선 없음이어도 유효 결과다. proxy-only·전부 동일 행동·전부 null은 이 목표의 완료가 아니다. 실제 원천으로 도달 불가하면 첫 결손과 exact 복구 불가 근거·미래 생성 검증·다음 유입 조건을 남기고 경제성 목표는 OPEN으로 유지한다.
+- **발행/소비 준비:** 검증된 next-date candidate 또는 유효 incumbent carry, source/policy/consumer hash 일치. eligible fixture의 자동 소비 검증과 실제 발행 결과를 모두 기록한다.
+- **자연 성과:** 실제 PREOPEN/PID receipt·판정 변화·`COMPLETED + valid profit_rate`의 비용 후 성과. CF 결과나 release selection으로 대체하지 않는다.
+
+기존 `MainMechanisticEntryPostcloseLoopRestore0920`는 최초 루프 복구 receipt를 보존한다. 후속 구현·재생성 시 확인된 새 결손 때문에 필요한 범위만 재개하고 기존 direct-family 자동 항목의 역할을 조정한다. 새 일정 ID를 중복 생성하지 않는다. 9/20 checklist가 없으므로 계획 문서에서 오늘 실행 owner를 발명하지 않으며, 다음 실제 실행일 checklist의 한 owner로 인계한다.
+
+이번 문서 변경의 검증은 링크/owner/권한/기존 계획과의 중복 검토·print-only backlog parser·diff check다. 실API·Provider·경제성 재생성·정책 갱신·배포는 실행하지 않는다.
