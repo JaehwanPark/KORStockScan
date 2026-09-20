@@ -303,6 +303,18 @@ def _main_mechanistic_input_fingerprint(
     from src.engine.scalping.mechanistic_entry_runtime_policy import digest, load_effective
 
     def generation(path: Path) -> dict[str, Any]:
+        # Compact finalization rewrites its small sealed projection even when
+        # the logical input is unchanged.  Binding that file by inode/mtime
+        # would force the expensive main evaluator to rerun on every wrapper
+        # retry.  Large append-only sources remain stat-bound below.
+        if (
+            path.parent.name == "ai_entry_setup_paired_replay_batch"
+            and path.name.endswith(".source.json")
+        ):
+            return {
+                "path": str(path.resolve()),
+                "content_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            }
         stat = path.stat()
         return {
             "path": str(path.resolve()),

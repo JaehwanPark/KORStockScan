@@ -4635,6 +4635,34 @@ def test_machine_only_write_reuses_exact_input_fingerprint(monkeypatch, tmp_path
     assert json.loads(path.read_text(encoding="utf-8")) == report
 
 
+def test_main_fingerprint_ignores_same_compact_projection_rewrite(
+    monkeypatch, tmp_path
+):
+    from src.engine.scalping import mechanistic_entry_runtime_policy as policy
+
+    monkeypatch.setattr(policy, "load_effective", lambda **_kwargs: None)
+    projection = (
+        tmp_path
+        / "report/ai_entry_setup_paired_replay_batch"
+        / "compact_auxiliary_paired_economic_2026-09-17.source.json"
+    )
+    projection.parent.mkdir(parents=True)
+    projection.write_text('{"sealed":"same"}\n', encoding="utf-8")
+    first = calibration._main_mechanistic_input_fingerprint(
+        tmp_path, "2026-09-17"
+    )
+    replacement = projection.with_suffix(".replacement")
+    replacement.write_bytes(projection.read_bytes())
+    replacement.replace(projection)
+    assert (
+        calibration._main_mechanistic_input_fingerprint(tmp_path, "2026-09-17")
+        == first
+    )
+    projection.write_text('{"sealed":"changed"}\n', encoding="utf-8")
+    assert (
+        calibration._main_mechanistic_input_fingerprint(tmp_path, "2026-09-17")
+        != first
+    )
 
 
 def test_machine_microstructure_diagnostic_preserves_existing_auxiliary_gate():
