@@ -357,3 +357,5 @@ Python compile, shell `bash -n`, affected pytest, `git diff --check`, 문서 lin
 - 실행 증거: `tmp/postclose-producer-final-review-20260920/`. 이번에는 자본 후행·summary/checklist/strict만 갱신하며 scanner/main 원 평가를 반복하지 않는다. 기존 source9/17·실제 publication·effective9/21, 원 실패/복구 receipt, 정상 PREOPEN/PID/실제 완료 손익 OPEN을 유지한다.
 
 - 2차 재사용 경로도 동일한 current receipt 검증을 강제했다. 평가값이 같아도 이전 결손 파일이 늦게 생성되면 원천 해시를 갱신해야 한다. 원천만 달라지고 경제성 입력은 동일한 운영 phase 회귀를 추가했으며 최종 전체 해당 회귀50 통과.
+
+- 최종 배포 코드 `ae1b5df66` origin/main push 및 immutable successor 선택 완료. service 정의9/인스턴스129는 inactive/PID0 유지. 후행 phase current receipt 검증 PASS(의존 원천649), source9/17·publication9/20·effective9/21. summary→checklist→strict `main_terminal` PASS/issue0, attempt `bd17c1397bf848ea9f82933d584791fe`, 원 run 보존. 9/21 reader는 main 기존 bundle 유효·scanner inactive fallback·widget0·episode 기존3/신규승격0. joint allocation은 `no_registered_joint_candidate_reference`, EV/실제 이익 개선 null이며 자연/독립 검증 OPEN을 유지한다. 전체 chain 재실행·봇 기동·주문·조기 PREOPEN 없음. 최종 증거 `tmp/postclose-producer-final-review-20260920/final-review.json`.
