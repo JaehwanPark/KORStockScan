@@ -898,6 +898,26 @@ def test_operating_entry_executes_existing_full_policy_and_cost_owner():
     assert result['modeled_entry_at'] == min(f['at'] for f in arm['modeled_fill_events'])
     assert result['capital_krw_minutes']>0 and result['reserve_krw_minutes']>0
     assert result['actual_fill_evidence'] is False and result['broker_order_forbidden'] is True
+    path = result['cash_commitment_path']
+    assert sum(e['principal_release_krw'] for e in path['events']) == path['initial_reserve_krw']
+    assert path['events'][-1]['at'] == result['modeled_exit_at']
+
+
+def test_partial_cash_commitment_holds_unfilled_reserve_until_confirmed_cancel():
+    seed, _, _ = _operating_entry_fixture()
+    start = datetime.fromisoformat(seed['observed_at'])
+    fills = [dict(at=(start+timedelta(seconds=1)).isoformat(), qty=4, price=10000, reserved_price=10010)]
+    cancel = (start+timedelta(seconds=15)).isoformat()
+    exit_at = (start+timedelta(seconds=30)).isoformat()
+    value = mod.entry_cash_commitment_path(seed, fills, 100100, exit_at, cancel_terminal=cancel)
+    assert [(x['kind'], x['principal_release_krw']) for x in value['events']] == [
+        ('fill_transfer', 40), ('cancel_confirmed', 60060), ('owner_exit', 40000)]
+    assert value['events'][1]['at'] == cancel
+    with pytest.raises(ValueError, match='pending_reservation_terminal_missing'):
+        mod.entry_cash_commitment_path(seed, fills, 100100, exit_at)
+    late = [dict(fills[0], at=(start+timedelta(seconds=16)).isoformat())]
+    with pytest.raises(ValueError, match='clock_invalid'):
+        mod.entry_cash_commitment_path(seed, late, 100100, exit_at, cancel_terminal=cancel)
 
 
 def test_operating_entry_contract_cannot_copy_an_actual_sell_or_missing_cost():
@@ -990,3 +1010,92 @@ def test_pre_ai_replay_requires_actual_availability_and_preserves_source_clock()
     conflict = mod.build_entry_opportunity_replays(original.signal_date,[source,witness,bad],
         source_stage=source.stage,micro_loader=native_entry_loader,evaluated_at=at.timestamp()+250)
     assert conflict['counts']['unique_retained']==0
+
+
+def test_native_partial_uses_prior_cancel_owner_and_retains_every_holding_frame(monkeypatch):
+    from src.engine.automation import entry_cancel_wait_tuning as cancel_owner
+    seed, _, depths = _operating_entry_fixture()
+    seed['legs'] = [dict(seed['legs'][0], qty=4), dict(seed['legs'][0], qty=6, price=10000)]
+    context = seed['operating_contract']
+    context.update(order_leg_ttl_sec=[10,10], cancel_wait_profile='standard', broker_route='KRX')
+    context['sha256'] = owner.digest({k:v for k,v in context.items() if k!='sha256'})
+    seed['seed_sha256'] = owner.digest({k:v for k,v in seed.items() if k!='seed_sha256'})
+    _, trades = entry_native_path(seed)
+    model_rows = [dict(parent_id=f'p{i}', source_date='2026-09-02' if i<10 else '2026-09-03',
+        completion_date='2026-09-03', scope=['KRX','KRX_REGULAR','KRX','standard'],
+        fill_class='partial', complete=True, model_identity=mod.entry_operating_model_identity(),
+        net_error_pct=0., cancel_ack_delay_sec=0., late_fill_window_sec=0.,
+        capital_error_minutes=0., reserve_error_minutes=0.) for i in range(20)]
+    model = cancel_owner._fit_model(model_rows, mod.entry_operating_model_identity())
+    assert model['validated']
+    for row in depths:
+        row.update(ws_data=dict(curr=10100), market_regime='BULL')
+    seen = []
+    def executor(observation, frames):
+        seen.append((observation, frames))
+        # Validate propagation here; the real interpreter is separately exercised below.
+        value = dict(state='pending', blockers={'ENTRY':'pending_exit_outcome'},
+            actual_order_submitted=False, broker_order_forbidden=True)
+        return {**value,'evidence_digest':owner.digest(value)}
+    real = mod.replay_operating_entry_arm
+    monkeypatch.setattr(mod, 'replay_operating_entry_arm', lambda *a, **kw: real(*a, **kw, executor=executor))
+    result = mod.replay_entry_opportunity(seed, depths, trades, source_ready=True,
+        evaluated_at=datetime.fromisoformat(seed['observed_at']).timestamp()+181, cancel_model=model)
+    assert seen, {k:v.get('blocker') for k,v in result['operating_arms'].items()}
+    observation, frames = seen[0]
+    assert observation['pre_add_buy_qty'] == 4
+    assert observation['entry_residual_cancel_contract']['pending_qty'] == 6
+    assert len(frames) == 180
+    assert frames[0]['emitted_at'] < observation['entry_residual_cancel_contract']['terminal']['terminal_at']
+    bad = deepcopy(model); bad['available_after_date'] = seed['source_date']
+    bad['sha256'] = owner.digest({k:v for k,v in bad.items() if k!='sha256'})
+    seen.clear()
+    rejected = mod.replay_entry_opportunity(seed, depths, trades, source_ready=True,
+        evaluated_at=datetime.fromisoformat(seed['observed_at']).timestamp()+181, cancel_model=bad)
+    assert not any(observation.get('entry_residual_cancel_contract') for observation, _ in seen)
+    assert 'prior_state_specific_cancel_model_unverified' in str(rejected['operating_arms'])
+
+
+def test_partial_operating_exit_uses_own_quantity_after_terminal():
+    from src.engine.trade_profit import calculate_net_realized_pnl
+    seed, arm, depths = _operating_entry_fixture()
+    partial = dict(arm, modeled_filled_qty=4,
+        modeled_fill_events=[dict(arm['modeled_fill_events'][0], qty=4)])
+    cancel = dict(schema='entry_cancel_wait_terminal_v1', seed_sha256=seed['seed_sha256'],
+        model_identity=mod.entry_operating_model_identity(), filled_qty=4,
+        terminal_at=(datetime.fromisoformat(seed['observed_at'])+timedelta(seconds=.8)).isoformat(),
+        cancel_ack_and_late_fill_resolved=True)
+    cancel['sha256'] = owner.digest(cancel)
+    partial['cancel_wait_terminal'] = cancel
+    for row in depths[1:]:
+        at = datetime.fromisoformat(row['exchange_timestamp']).timestamp()
+        row.update(ws_data=dict(curr=9500,best_bid=9500,best_ask=9510,
+            best_bid_qty=row['best_bid_qty'],best_ask_qty=row['best_ask_qty'],
+            last_ws_update_ts=at,last_realtime_type_ts={'0D':at},quote_stale=False),
+            market_regime='BULL',best_bid=9500,best_ask=9510,
+            bid_levels=[[1,9500,row['best_bid_qty']]],ask_levels=[[1,9510,row['best_ask_qty']]])
+    result = mod.replay_operating_entry_arm(seed,partial,depths,cancel_wait_validator=lambda c:c==cancel)
+    assert result['status']=='completed_source_only',result
+    assert result['modeled_filled_qty']==4
+    assert result['fill_participation_rate']==.4
+    assert result['net_pnl_krw']==calculate_net_realized_pnl(10010,9500,4,cost_rate=.0023)
+    assert result['cash_commitment_path']['events'][-2]['kind']=='cancel_confirmed'
+
+
+def test_cancel_journal_late_fill_and_same_quantity_amount_correction_are_not_dropped():
+    seed, _, depths = _operating_entry_fixture()
+    context=seed['operating_contract']; context['cancel_wait_profile']='standard'
+    context['sha256']=owner.digest({k:v for k,v in context.items() if k!='sha256'})
+    seed['seed_sha256']=owner.digest({k:v for k,v in seed.items() if k!='seed_sha256'})
+    _,trades=entry_native_path(seed); start=datetime.fromisoformat(seed['observed_at'])
+    at=lambda seconds:(start+timedelta(seconds=seconds)).isoformat()
+    first=dict(observed_at_kst=at(1),filled_qty=1,fill_amount=10010)
+    base=dict(quantity=10,submitted_price=10010,submitted_at=seed['observed_at'],
+        terminal_at=at(10),fills=[first],terminal_reconciled=True)
+    for second,expected in [
+        (dict(first,observed_at_kst=at(2),fill_amount=10020),'cancel_wait_cumulative_fill_conflict'),
+        (dict(first,observed_at_kst=at(11),filled_qty=2,fill_amount=20020),'cancel_wait_fill_after_terminal_requires_reconciliation')]:
+        leg={**base,'fills':[first,second]}
+        result=mod.replay_cancel_wait_arm(seed,10,[leg],depths,trades,incumbent_timeout=10)
+        assert result['blocker']==expected,result
+        assert result['net_pnl_krw'] is None

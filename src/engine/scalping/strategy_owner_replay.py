@@ -1176,7 +1176,7 @@ def _entry_seed_valid(seed):
         return False
 
 
-def replay_entry_opportunity(seed, depth_rows, trade_rows, *, source_ready, evaluated_at):
+def replay_entry_opportunity(seed, depth_rows, trade_rows, *, source_ready, evaluated_at, cancel_model=None):
     """Replay all arms on one continuous exact-scope native path, without requests.
 
     Marketable full-depth fills are modeled; a passive price touch is unresolved.
@@ -1331,7 +1331,13 @@ def replay_entry_opportunity(seed, depth_rows, trade_rows, *, source_ready, eval
             try:
                 execution=arm(quantity,i>=2,values,execution_only=True)
                 if seed.get('operating_contract'):
-                    operating_arms[name]=replay_operating_entry_arm(seed,execution,depth_rows,trade_rows=trade_rows)
+                    cancel = None
+                    if execution['modeled_filled_qty'] < quantity and quantity == seed['total_qty']:
+                        cancel = entry_native_cancel_terminal(seed, execution, depth_rows, trade_rows, cancel_model,
+                            planned_prices=values)
+                        execution['cancel_wait_terminal'] = cancel
+                    operating_arms[name]=replay_operating_entry_arm(seed,execution,depth_rows,trade_rows=trade_rows,
+                        cancel_wait_validator=(lambda value: value == cancel) if cancel else None)
                 try:arms[name]=arm(quantity,i>=2,values)
                 except ValueError:
                     if not seed.get('operating_contract'):raise
@@ -1454,6 +1460,7 @@ def build_entry_opportunity_replays(day, events, *, evaluated_at=None, micro_loa
             output['rows'].append(dict(schema=ENTRY_REPLAY_SCHEMA, status='maturity_waiting',
                 blocker='declared_replay_window_not_due', seed=seed, arms=None, price_arms=None, **AUTHORITY))
     if ready:
+        cancel_model = load_entry_cancel_model(day)
         anchors = [dict(anchor_id=k, symbol=v['stock_code'], anchor_at=v['observed_at'],
                     expected_venues=[entry_native_market_venue(v['effective_venue'])], expected_session_buckets=[v['session_bucket']],
                     bounded_entry_opportunity_replay=True) for k, v in ready.items()]
@@ -1473,11 +1480,14 @@ def build_entry_opportunity_replays(day, events, *, evaluated_at=None, micro_loa
             after = micro._source_generation_contract({}, extra_paths=generation_paths)
             if generation != after:
                 raise ValueError('native_source_generation_changed_during_replay')
-            output['native_source'] = {**source, 'source_generation': generation}
+            output['native_source'] = {**source, 'source_generation': generation,
+                'prior_cancel_model_sha256': (cancel_model or {}).get('sha256'),
+                'prior_cancel_model_available_after_date': (cancel_model or {}).get('available_after_date')}
             for key, seed in ready.items():
                 window = windows.get(key) or {}
                 result = replay_entry_opportunity(seed, window.get('raw_depth_rows') or [],
                     window.get('raw_market_rows') or [], evaluated_at=now,
+                    cancel_model=cancel_model,
                     source_ready=(source.get('source_contract_ready') is True
                                   and not window.get('adaptive_exit_source_overflow')
                                   and not micro._invalid_contract_count_for_scope(
@@ -1769,7 +1779,52 @@ def entry_operating_model_identity():
 
 
 
-def freeze_entry_operating_context(handlers, stock, sizing_context, *, now_ts):
+def freeze_entry_capital_source(capacity, sizing_context, *, now_ts):
+    """Preserve the existing bounded capacity read, not a new account request.
+
+    A symbol orderable quote is an admission cap, not an account cash-flow
+    ledger. Keep its components so postclose can reconcile rather than infer
+    deposits from changes in the quoted cap.
+    """
+    from src.trading.order.owner_custody_registry import broker_account_key
+    value = dict(schema='entry_capital_observation_v1', status='source_gap',
+        blocker='capacity_receipt_missing', owner='main_entry_cash_budget_owner',
+        closure_test='dated_capacity_source_and_same_account_order_cash_reconciliation',
+        frozen_at=datetime.fromtimestamp(now_ts, KST).isoformat(), **AUTHORITY)
+    try:
+        capacity = capacity or {}
+        if (capacity.get('kt00011_error')
+            or capacity.get('kt00011_cash_orderable_contract_status') != 'valid'
+            or not _sha(capacity.get('kt00011_capacity_source_sha256'))):
+            raise ValueError('capacity_source_hash_or_contract_missing')
+        observed = capacity.get('kt00011_capacity_observed_at')
+        clock = datetime.fromisoformat(observed)
+        if clock.tzinfo is None or clock.timestamp() > now_ts:
+            raise ValueError('capacity_source_clock_invalid')
+        components = {k: capacity.get(k) for k in (
+            'account_deposit', 'cash_orderable_amount', 'cash_orderable_qty_cap',
+            'budget_base', 'kt00011_requested_unit_price')}
+        if any(type(v) not in (int, float) or not math.isfinite(v) or v < 0
+               for v in components.values()):
+            raise ValueError('capacity_component_invalid')
+        if capacity.get('general_entry_margin_one_share_authorized'):
+            raise ValueError('margin_capacity_not_cash_flow')
+        value.update(status='recorded_source_only', blocker=None,
+            account_scope_sha256=owner.digest(['broker_account', broker_account_key()]),
+            capacity_observed_at=observed,
+            capacity_source_sha256=capacity['kt00011_capacity_source_sha256'],
+            capacity_contract_version=capacity.get('kt00011_capacity_contract_version'),
+            stock_code=capacity.get('kt00011_requested_stock_code'),
+            budget_source=capacity.get('budget_source'), components=components,
+            safety_ratio=sizing_context.safety_ratio,
+            absolute_budget_cap_krw=sizing_context.absolute_budget_cap_krw,
+            capital_semantics='frozen_symbol_admission_cap_not_external_cashflow')
+    except (ValueError, TypeError, KeyError, AttributeError) as exc:
+        value['blocker'] = str(exc)
+    return {**value, 'sha256': owner.digest(value)}
+
+
+def freeze_entry_operating_context(handlers, stock, sizing_context, *, now_ts, capacity_receipt=None):
     from src.engine.scalping import avg_down_replay_capture as capture
     from src.engine.lifecycle.avg_down_policy_replay import snapshot_version
     from src.engine.trade_profit import get_trade_cost_rate
@@ -1794,7 +1849,9 @@ def freeze_entry_operating_context(handlers, stock, sizing_context, *, now_ts):
         initial_state = capture.holding_state(handlers, {k:v for k,v in stock.items() if k not in
             {"entry_split_initial_entry_seed", "entry_split_initial_entry_lineage_conflict"}})
         initial_state["stock"]["is_nxt"] = nxt_enabled
+        from src.engine.scalping.entry_cancel_wait_runtime import resolve_profile
         value = dict(schema=ENTRY_OPERATING_SCHEMA,
+            cancel_wait_profile=resolve_profile(stock.get('position_tag'), stock.get('entry_mode')),
             nxt_listing_receipt=dict(value=nxt_enabled, owner=nxt_owner, stock_code=stock.get("code"),
                 frozen_at=datetime.fromtimestamp(now_ts, KST).isoformat()),
             broker_route=decision_source.get("ai_trace_broker_route"),
@@ -1811,9 +1868,145 @@ def freeze_entry_operating_context(handlers, stock, sizing_context, *, now_ts):
             cost_provenance='frozen_loaded_trade_profit_configuration_not_broker_settlement',
             stress_cost_rate_increment=(ENTRY_REPLAY_COST['stress_round_trip_pct'] - ENTRY_REPLAY_COST['round_trip_pct']) / 100,
             max_frame_gap_sec=capture.MAX_FRAME_GAP_SEC, **AUTHORITY)
+        if capacity_receipt is not None:
+            value['capital_source'] = freeze_entry_capital_source(
+                capacity_receipt, sizing_context, now_ts=now_ts)
         return {**value, 'sha256': owner.digest(value)}
     except (ValueError, TypeError, AttributeError, KeyError):
         return None
+
+
+def load_entry_cancel_model(day):
+    """Reuse prior cancel-owner evidence; no source replay or model fitting job."""
+    from src.engine.automation import entry_cancel_wait_tuning as cancel
+    from src.engine.automation.source_quality_clean_baseline import clean_baseline_policy, is_date_allowed
+    baseline = clean_baseline_policy()
+    paths = sorted(cancel.REPORT_DIR.glob('entry_cancel_wait_tuning_????-??-??.json'), reverse=True)
+    for path in [p for p in paths if p.stem[-10:] < day and is_date_allowed(p.stem[-10:], baseline)][:3]:
+        try:
+            if path.is_symlink() or path.stat().st_size > 8 * 1024 * 1024:
+                continue
+            report = json.loads(path.read_text())
+            if report.get('proof_sha256') != owner.digest({k:v for k,v in report.items() if k not in ('generated_at','proof_sha256')}):
+                continue
+            rows = report['economic_state']['model_rows']
+            if any(not is_date_allowed(r.get('source_date',''), baseline) for r in rows):
+                continue
+            model = cancel._fit_model(rows, entry_operating_model_identity())
+            if model.get('validated') and model.get('available_after_date', day) < day:
+                return model
+        except (OSError, ValueError, TypeError, KeyError):
+            continue
+    return None
+
+
+def entry_native_cancel_terminal(seed, execution, depths, trades, model, *, planned_prices):
+    """Model only untouched residual limits, using the existing cancel owner.
+
+    A touched passive queue or fills during cancellation remain unsupported.
+    Each state needs prior independent empirical cancel/late-fill validation.
+    """
+    from src.engine.monitoring.machine_microstructure_attribution import _validate_depth_row, _validate_stream_row
+    context = seed['operating_contract']
+    kind = 'partial' if execution['modeled_filled_qty'] else 'no_fill'
+    scope = [seed['effective_venue'], seed['session_bucket'], context.get('broker_route'), context.get('cancel_wait_profile')]
+    if (not model or not model.get('validated') or model.get('model_identity') != entry_operating_model_identity()
+        or model.get('sha256') != owner.digest({k:v for k,v in model.items() if k != 'sha256'})
+        or model.get('available_after_date', seed['source_date']) >= seed['source_date']
+        or model.get('scope') != scope or kind not in model.get('supported_states', [])):
+        raise ValueError('entry_prior_state_specific_cancel_model_unverified')
+    if any(not _finite(model.get(k)) or model[k] < 0 for k in ('cancel_ack_delay_sec','late_fill_window_sec')):
+        raise ValueError('entry_cancel_model_delay_invalid')
+    ttls = context['order_leg_ttl_sec']
+    # The current envelope has one cancellation clock. Different child TTLs
+    # require separate residual receipts, not an invented simultaneous ACK.
+    if len(set(ttls)) != 1:
+        raise ValueError('entry_distinct_child_cancel_clocks_unsupported')
+    start = _timestamp(seed['observed_at'], seed['source_date']).timestamp()
+    delay = seed['modeled_submit_delay_ms'] / 1000
+    ended = start + delay * len(seed['legs']) + max(ttls) + model['cancel_ack_delay_sec'] + model['late_fill_window_sec']
+    filled_prices = {f['reserved_price'] for f in execution['modeled_fill_events']}
+    residual = [p for p in planned_prices if p not in filled_prices]
+    if not residual:
+        raise ValueError('entry_residual_leg_identity_ambiguous')
+    clocks = []
+    for rows, depth in ((depths, True), (trades, False)):
+        values = []
+        for row in rows:
+            if depth:
+                valid, at, _, _, _, price = _validate_depth_row(row)
+            else:
+                valid, eligible, at, price, *_ = _validate_stream_row(row)
+                valid = valid and eligible
+            if valid and at is not None and start - 1.5 <= at.timestamp() <= ended + 1.5:
+                if (row.get('symbol') != seed['stock_code'] or row.get('venue') != entry_native_market_venue(seed['effective_venue'])
+                    or row.get('session_bucket') != seed['session_bucket'] or row.get('path_consumer_eligible') is False):
+                    raise ValueError('entry_cancel_native_scope_conflict')
+                values.append((at.timestamp(), price, row.get('sequence_epoch'), row.get('series_sequence')))
+        values = sorted(set(values))
+        if (not values or values[0][0] > start or ended - values[-1][0] > 1.5
+            or len({v[2] for v in values}) != 1
+            or any(b[0]-a[0] > 1.5 or b[3] != a[3]+1 for a,b in zip(values,values[1:]))):
+            raise ValueError('entry_cancel_native_window_incomplete')
+        if any(v[1] <= max(residual) for v in values if start <= v[0] <= ended):
+            raise ValueError('entry_cancel_passive_touch_or_late_fill_unproven')
+        clocks.append(values)
+    if clocks[0][0][2] != clocks[1][0][2]:
+        raise ValueError('entry_cancel_native_epoch_conflict')
+    result = dict(schema='entry_cancel_wait_terminal_v1', seed_sha256=seed['seed_sha256'],
+        model_identity=entry_operating_model_identity(), filled_qty=execution['modeled_filled_qty'],
+        terminal_at=datetime.fromtimestamp(ended,KST).isoformat(), cancel_ack_and_late_fill_resolved=True,
+        model_sha256=model['sha256'], native_path_sha256=owner.digest(clocks),
+        source_kind='prior_model_untouched_residual_not_broker_receipt')
+    return {**result, 'sha256':owner.digest(result)}
+
+
+def entry_conditional_capital_envelope(seeds):
+    """One initial budget; later symbol quotes only cap each frozen attempt.
+
+    Different orderable quotes are not external deposits. An unexplained
+    deposit-basis change is excluded, never injected into the candidate wallet.
+    This conditional experiment does not simulate other owners' decisions.
+    """
+    seeds = sorted(seeds, key=lambda s: (s['observed_at'], s['seed_sha256']))
+    if not seeds:
+        raise ValueError('capital_source_population_empty')
+    budgets = [s['operating_contract']['budget_krw'] for s in seeds]
+    if any(not _finite(b, positive=True) for b in budgets):
+        raise ValueError('capital_frozen_budget_invalid')
+    if len({b for s,b in zip(seeds,budgets) if s['observed_at'] == seeds[0]['observed_at']}) != 1:
+        raise ValueError('capital_initial_clock_budget_conflict')
+    sources = [s['operating_contract'].get('capital_source') for s in seeds]
+    if not any(sources):
+        if len(set(budgets)) != 1:
+            raise ValueError('shared_cash_envelope_changed_without_cashflow_witness')
+        return dict(initial_budget_krw=budgets[0], source_contract='legacy_equal_frozen_envelope')
+    for seed, value in zip(seeds, sources):
+        if (not isinstance(value, dict) or value.get('status') != 'recorded_source_only'
+            or value.get('schema') != 'entry_capital_observation_v1'
+            or value.get('sha256') != owner.digest({k:v for k,v in value.items() if k != 'sha256'})
+            or not _sha(value.get('capacity_source_sha256')) or not _sha(value.get('account_scope_sha256'))
+            or value.get('stock_code') != seed['stock_code']
+            or _timestamp(value['capacity_observed_at'], seed['source_date']) > _timestamp(seed['observed_at'], seed['source_date'])):
+            raise ValueError('capital_capacity_source_missing_or_conflicting')
+        source_budget = value['components']['budget_base'] * value['safety_ratio']
+        cap = value['absolute_budget_cap_krw']
+        if (not _finite(source_budget, positive=True) or not _finite(cap) or cap < 0
+            or not _finite(value['components']['account_deposit'], positive=True)):
+            raise ValueError('capital_capacity_components_invalid')
+        if cap > 0:
+            source_budget = min(source_budget, cap)
+        if source_budget != seed['operating_contract']['budget_krw']:
+            raise ValueError('capital_capacity_to_frozen_budget_mismatch')
+    if len({v['account_scope_sha256'] for v in sources}) != 1:
+        raise ValueError('capital_shared_account_identity_conflict')
+    if len({v['components']['account_deposit'] for v in sources}) != 1:
+        raise ValueError('capital_external_flow_or_settlement_basis_unreconciled')
+    return dict(initial_budget_krw=budgets[0], source_contract='first_approved_budget_frozen_later_symbol_caps_v1',
+        account_scope_sha256=sources[0]['account_scope_sha256'],
+        capacity_source_hashes=[v['sha256'] for v in sources],
+        varying_attempt_cap_count=sum(b != budgets[0] for b in budgets),
+        external_cashflow_inferred=False, cross_owner_counterfactual_supported=False)
 
 
 def replay_operating_entry_arm(seed, arm, depth_rows, *, executor=None, trade_rows=(), cancel_wait_validator=None):
@@ -1892,7 +2085,10 @@ def replay_operating_entry_arm(seed, arm, depth_rows, *, executor=None, trade_ro
                 net_return_pct=0., stress_net_return_pct=0., capital_krw_minutes=0.,
                 reserve_krw_minutes=reserve * (ended-started)/60,
                 modeled_exit_at=cancel['terminal_at'], modeled_entry_at=seed['observed_at'],
-                modeled_outcome='operating_verified_no_fill', terminal_evidence_sha256=cancel['sha256'])
+                modeled_outcome='operating_verified_no_fill', terminal_evidence_sha256=cancel['sha256'],
+                cancel_wait_terminal=copy.deepcopy(cancel),
+                cash_commitment_path=entry_cash_commitment_path(seed, [], reserve,
+                    cancel['terminal_at'], cancel_terminal=cancel['terminal_at']))
             return {**result,'sha256':economics_digest(result)}
         if any(type(x['qty']) is not int or x['qty'] <= 0 or not _finite(x['price'], positive=True)
                or _timestamp(x['at'], seed['source_date']).timestamp() < started for x in fills):
@@ -1900,12 +2096,9 @@ def replay_operating_entry_arm(seed, arm, depth_rows, *, executor=None, trade_ro
         last_at = max(_timestamp(x['at'], seed['source_date']).timestamp() for x in fills)
         first_at=min(_timestamp(x['at'],seed['source_date']).timestamp() for x in fills)
         if qty < seed['total_qty']:
-            # No invented pending->holding decisions. Only an ACK before the
-            # first subsequent policy frame supports the existing interpreter.
             ack_at = _timestamp(cancel['terminal_at'], seed['source_date']).timestamp()
-            if any(last_at < _timestamp(r.get('exchange_timestamp') or r.get('exchange_at') or r.get('observed_at') or r.get('emitted_at'), seed['source_date']).timestamp() <= ack_at for r in depth_rows):
-                result.update(status='unsupported_scope', blocker='pending_partial_holding_policy_frames_unmodeled')
-                return {**result,'sha256':economics_digest(result)}
+            if ack_at < last_at:
+                raise ValueError('cancel_terminal_before_final_fill')
         from src.engine.monitoring.machine_microstructure_attribution import _validate_depth_row
         if any(valid and clock is not None and first_at < clock.timestamp() < last_at
             for valid,clock,*_ in (_validate_depth_row(row) for row in depth_rows)):
@@ -1934,6 +2127,7 @@ def replay_operating_entry_arm(seed, arm, depth_rows, *, executor=None, trade_ro
         # These are modeled inventory fields, never a receipt of a real fill.
         stock.update(code=seed['stock_code'], status='HOLDING', strategy='SCALPING',
             buy_price=weighted, buy_qty=qty, pending_add_order=None, pending_entry_orders=[],
+            entry_requested_qty=seed['total_qty'], entry_filled_qty=qty, entry_fill_amount=amount,
             sell_submit_pending=False, buy_time=datetime.fromtimestamp(last_at, KST).isoformat(),
             holding_started_at=adapter._json_value(datetime.fromtimestamp(last_at, KST)), order_time=last_at)
         if context.get('broker_route'):
@@ -1950,6 +2144,9 @@ def replay_operating_entry_arm(seed, arm, depth_rows, *, executor=None, trade_ro
             replay_max_frame_gap_sec=context['max_frame_gap_sec'], cost_rate=context['cost_rate'],
             entry_split_initial_only=True, effective_min_buy_pressure=1,
             route_replay={'ENTRY': dict(should_add=False, route_evaluation_complete=True)})
+        if qty < seed['total_qty']:
+            observation['entry_residual_cancel_contract'] = dict(terminal=copy.deepcopy(cancel),
+                pending_qty=seed['total_qty']-qty, final_fill_at=datetime.fromtimestamp(last_at,KST).isoformat())
         micro_store = None
         if context.get('initial_micro_estimator_state') is not None:
             from src.engine.scalping.micro_estimator_state import MicroEstimatorStore, MicroEstimatorConfig, SymbolMicroEstimatorState
@@ -2039,8 +2236,10 @@ def replay_operating_entry_arm(seed, arm, depth_rows, *, executor=None, trade_ro
         stress = calculate_net_realized_pnl(round(weighted, 4), outcome['exit_price'], qty,
             cost_rate=context['cost_rate'] + context['stress_cost_rate_increment'])
         holding = sum(x['qty'] * x['price'] * (terminal - _timestamp(x['at'], seed['source_date']).timestamp()) / 60 for x in fills)
-        # Reserve each child until fill or its frozen TTL, then use holding capital.
-        ttl = started + context['order_bundle_hard_ttl_sec']
+        # A timeout requests cancellation; it never releases unconfirmed cash.
+        # Full fills release their reservation at their actual modeled clocks.
+        ttl = (_timestamp(cancel['terminal_at'], seed['source_date']).timestamp()
+               if qty < seed['total_qty'] else last_at)
         reserved=0.; outstanding=reserve; reserve_clock=started
         for fill in sorted(fills,key=lambda x:x['at']):
             at=_timestamp(fill['at'],seed['source_date']).timestamp()
@@ -2055,10 +2254,56 @@ def replay_operating_entry_arm(seed, arm, depth_rows, *, executor=None, trade_ro
             modeled_entry_at=datetime.fromtimestamp(first_at, KST).isoformat(),
             capital_krw_minutes=holding, reserve_krw_minutes=reserved,
             modeled_entry_notional_krw=amount, modeled_exit_at=outcome['exit_time'],
-            terminal_evidence_sha256=exit_result['evidence_digest'], modeled_outcome='operating_terminal')
+            terminal_evidence_sha256=exit_result['evidence_digest'], modeled_outcome='operating_terminal',
+            cash_commitment_path=entry_cash_commitment_path(seed, fills, reserve, outcome['exit_time'],
+                cancel_terminal=cancel.get('terminal_at') if qty < seed['total_qty'] else None))
+        if qty < seed['total_qty']:
+            result['cancel_wait_terminal'] = copy.deepcopy(cancel)
     except (ValueError, TypeError, KeyError, OverflowError) as exc:
         result['blocker'] = str(exc)
     return {**result, 'sha256': economics_digest(result)}
+
+
+def entry_cash_commitment_path(seed, fills, reserve, exit_at, *, cancel_terminal=None):
+    """Principal releases; full round-trip net cost remains in the exit owner.
+
+    Reservation to held principal is a transfer, not another cash debit.
+    This models capital use, and does not attest broker settlement cash.
+    """
+    day = seed['source_date']
+    start = _timestamp(seed['observed_at'], day)
+    terminal = _timestamp(exit_at, day)
+    cancel_at = _timestamp(cancel_terminal, day) if cancel_terminal else None
+    pending, held, quantity, prior = reserve, 0., 0, start
+    releases = []
+    for fill in sorted(fills, key=lambda f: f['at']):
+        at = _timestamp(fill['at'], day)
+        q, price = fill['qty'], fill['price']
+        reserved_price = fill.get('reserved_price', price)
+        if (type(q) is not int or q <= 0 or not _finite(price, positive=True)
+            or not _finite(reserved_price, positive=True) or reserved_price < price
+            or at < prior or at > terminal or cancel_at is not None and at > cancel_at):
+            raise ValueError('cash_path_fill_price_quantity_or_clock_invalid')
+        released = q * (reserved_price-price)
+        pending -= q * reserved_price
+        held += q * price
+        quantity += q
+        if pending < -1e-8 or quantity > seed['total_qty']:
+            raise ValueError('cash_path_quantity_or_principal_conflict')
+        releases.append(dict(at=fill['at'], principal_release_krw=released, kind='fill_transfer'))
+        prior = at
+    if pending > 1e-8:
+        if cancel_at is None or not prior <= cancel_at <= terminal:
+            raise ValueError('cash_path_pending_reservation_terminal_missing')
+        releases.append(dict(at=cancel_terminal, principal_release_krw=pending, kind='cancel_confirmed'))
+    releases.append(dict(at=exit_at, principal_release_krw=held, kind='owner_exit'))
+    if abs(sum(e['principal_release_krw'] for e in releases)-reserve) > 1e-8:
+        raise ValueError('cash_path_principal_conservation_failed')
+    value = dict(schema='entry_operating_cash_commitment_v1', initial_reserve_krw=reserve,
+        seed_sha256=seed['seed_sha256'], events=releases, filled_qty=quantity,
+        cost_timing='full_round_trip_net_cost_in_independent_exit_owner',
+        broker_settlement_cash=False)
+    return {**value, 'sha256': owner.digest(value)}
 
 
 def replay_cancel_wait_arm(seed, timeout, journal_legs, depth_rows, trade_rows, *,
@@ -2095,6 +2340,8 @@ def replay_cancel_wait_arm(seed, timeout, journal_legs, depth_rows, trade_rows, 
             deadline = sent + ttl
             deadlines.append(deadline)
             actual_end = _timestamp(leg['terminal_at'], seed['source_date']).timestamp()
+            if actual_end < sent:
+                raise ValueError('cancel_wait_terminal_before_submit')
             if timeout == incumbent_timeout:
                 ended = actual_end
             elif cancel_model and cancel_model.get('validated') is True:
@@ -2106,8 +2353,11 @@ def replay_cancel_wait_arm(seed, timeout, journal_legs, depth_rows, trade_rows, 
             for fill in sorted(leg['fills'], key=lambda x:x['observed_at_kst']):
                 at = _timestamp(fill['observed_at_kst'], seed['source_date']).timestamp()
                 q, value = fill['filled_qty'], fill['fill_amount']
-                if type(q) is not int or not previous <= q <= planned['qty'] or value < amount or at < prior_at:
+                if (type(q) is not int or not previous <= q <= planned['qty'] or value < amount or at < prior_at
+                    or q == previous and value != amount):
                     raise ValueError('cancel_wait_cumulative_fill_conflict')
+                if at > actual_end:
+                    raise ValueError('cancel_wait_fill_after_terminal_requires_reconciliation')
                 if q > previous and (at <= deadline or timeout == incumbent_timeout and at <= actual_end):
                     fills.append(dict(at=fill['observed_at_kst'], qty=q-previous,
                         price=(value-amount)/(q-previous), reserved_price=planned['price']))

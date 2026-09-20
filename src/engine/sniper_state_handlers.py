@@ -11864,7 +11864,8 @@ def _observe_entry_economics_before_ai(stock, code, ws_data, *, exact_payload,
             best_ask=_safe_int((exact_payload.get("orderbook_top1") or {}).get("ask", {}).get("price"), 0))
         if not orders:
             raise ValueError("owner_price_or_final_sizing_missing")
-        operating = freeze_entry_operating_context(sys.modules[__name__], snapshot, context, now_ts=now_ts)
+        operating = freeze_entry_operating_context(sys.modules[__name__], snapshot, context,
+            now_ts=time.time(), capacity_receipt=budget)
         if not operating:
             raise ValueError("frozen_operating_contract_missing")
         orders, split = apply_entry_split_order_policy(orders, stock=snapshot,
@@ -68442,7 +68443,8 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
     entry_execution_sizing_fields = {}
     if strategy == "SCALPING" and not opening_rotation_active:
         from src.engine.scalping.strategy_owner_replay import freeze_entry_operating_context
-        operating_context = freeze_entry_operating_context(sys.modules[__name__], stock, sizing_context, now_ts=time.time())
+        operating_context = freeze_entry_operating_context(sys.modules[__name__], stock, sizing_context,
+            now_ts=time.time(), capacity_receipt=budget_context)
         planned_orders, entry_split_fields = apply_entry_split_order_policy(
             planned_orders,
             operating_context=operating_context,

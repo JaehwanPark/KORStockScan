@@ -4734,6 +4734,7 @@ def _attach_operating_model_outcomes(validation,replays,actual_outcomes):
                 capital,reserve=_actual_entry_capital(diagnostic,completed)
                 clock=abs((datetime.fromisoformat(completed)-datetime.fromisoformat(seed["observed_at"])).total_seconds()-seed["research_entry_ttl_sec"])
                 model_rows.append(dict(episode_id="no-fill:"+plan,scope_sha256=_entry_operating_scope(seed),source_date=seed["source_date"],
+                    execution_state="no_fill", requested_qty=diagnostic["requested_qty"], actual_filled_qty=0,
                     completion_date=completed[:10],completed_at=completed,status="ORDER_NO_FILL",origin="real",owner="main_scalping",
                     cost_complete=True,exact_lineage=True,vwap_error_bps=0.,receipt_clock_error_sec=clock,
                     quantity_error=diagnostic["modeled_filled_qty"],false_fill=diagnostic["false_fill"],missed_fill=False,
@@ -4784,6 +4785,8 @@ def _attach_operating_model_outcomes(validation,replays,actual_outcomes):
         price=diagnostic.get("actual_entry_vwap");error=diagnostic.get("vwap_error_krw");clock=diagnostic.get("receipt_clock_error_sec")
         if not price or not numeric(error) or not numeric(clock):continue
         value={**actual,"vwap_error_bps":error/price*10000,"receipt_clock_error_sec":clock,
+            "execution_state":"full" if diagnostic["actual_filled_qty"] == diagnostic["requested_qty"] else "partial",
+            "requested_qty":diagnostic["requested_qty"], "actual_filled_qty":diagnostic["actual_filled_qty"],
             "quantity_error":diagnostic["modeled_filled_qty"]-diagnostic["actual_filled_qty"],
             "net_error_budget_pct":(arm["net_pnl_krw"]-actual["net_pnl_krw"])/actual["budget_krw"]*100,
             "capital_error_minutes":arm["capital_krw_minutes"]-actual["capital_krw_minutes"],

@@ -634,3 +634,108 @@ strict verifier는 다음을 모두 요구한다.
 ### 14.11 후속 구현 closure — 2026-09-20 17시
 
 §14.9 이전 실행의 ME8/9/10 OPEN은 당시 기록이다. 후속 `beb0c1578`→`f339f47bb`→`e89e9da12`에서 지원 범위 producer/순차·동시 자본 replay/실제 경제성 선정/다중 scope 검증/alias 분모 및 소비 회귀를 닫았다. 상세 범위·미지원 운영 계약·308개 최종 회귀·정책·terminal 증거는 [리뷰의 최신 종결](../audit-reports/2026-09-20-main-machine-operating-evidence-closure-review.md#920-17시-후속-종결)을 따른다. 9/21 incumbent 준비와 경제성 입증은 분리한다. 과거 원천 결손, fixed-capital v1 밖의 운영 계약, 자연 model/candidate holdout 및 실제 PID/완료 손익은 이 구현 closure로 해결되었다고 주장하지 않는다.
+
+## 15. 변동 자본·부분 체결·미호출 AI의 지원 범위 보완계획
+
+작성: 2026-09-20. 상태: **조건부 자본·부분 체결 보완 구현·회귀 완료 / 배포·제한 재생성 대기**. 기존 ME8–ME13의 후속 범위이며 별도 evaluator·정책 family를 만들지 않는다. 2026-09-20 후속 구현 승인을 반영한다. 기존 완료·이번 보완·미확정 운영 계약을 구분한다.
+
+### 15.1 현재 근거와 완료 판정 정정
+
+- 코드 기준은 선택 release `main-machine-operating-completion-20260920-e89e9da12`이다. 기존 bounded 계좌 읽기 허용, 추가 AI 호출 금지, 주문·예약 없는 관측 승인 조건을 유지한다.
+- `ai_action_outcome_calibration._machine_sequence_operating_metrics`는 같은 episode 내 수량/예산 변경을 `sequence_frozen_quantity_or_budget_changed`, 일중 공통 예산 변경을 `shared_cash_envelope_changed_without_cashflow_witness`로 제외한다. 최초 non-entry를 ENTER로 바꾸면서 실제 보조 판정이 없으면 `frozen_auxiliary_verdict_missing`이다.
+- `strategy_owner_replay.replay_entry_opportunity`에는 관측된 깊이/가격에 기반한 지원 체결·청산 계산이 있다. 부분 체결 전체가 미구현인 것은 아니다. `passive_queue_fill_or_partial_unproven`, 취소 경합·late fill·미청산 경로를 구분하여 보완한다. 기존 지원 arm을 재작성하지 않는다.
+- 고정 자본 v1의 합성 회귀 완료는 변동 계좌·수량·모든 주문 경로의 지원 완료가 아니다. 9/17 원천의 `machine_operating_population_unbound`, 신규 후보0, 운영 ΔEV·원화 순익 null은 그대로 유지한다. 준비된 9/21 incumbent와 신규 경제성 입증은 별개다.
+- 9/20 daily checklist 파일은 확인 시 없었다. 9/21 checklist는 다음 적용일의 실제 owner 문서로만 참조하며 현재 날짜 문서로 가장하지 않는다. 그 안의 과거 완료 문장과 최신 리뷰가 다르면 최신 receipt/코드를 우선하고, 실제 구현 시 기존 자동 owner를 재생성하여 정합화한다. Plan Rebase의 퇴역 축 언급도 현행 코드 권한으로 복원하지 않는다.
+
+### 15.2 경제성 비교의 고정 조건
+
+검증 질문은 “동일한 초기 자본과 외부 조건에서 기계 판단만 달라지면 비용 차감 일별 순익·EV·tail·점유가 개선되는가”이다.
+
+1. 각 arm은 동일한 초기 사용 가능 자본, 기존 승인 한도, 공통 guard, 외부 현금흐름과 당시 관측을 사용한다. 실제 후행 계좌 잔고를 candidate의 잔고로 복사하지 않는다.
+2. 판단 시점별 승인 가능 수량·가격·비용 원천은 frozen 입력으로 보존한다. 자본 때문에 실행하지 못한 기회도 분모에 남긴다. 후보 수량·cap을 늘리거나 제출 순서를 수익 최대화 방식으로 사후 재배열하지 않는다.
+3. 재평가 중 수량이 달라지면 같은 attempt라고 덮어쓰지 않는다. 새 attempt의 당시 승인 수량과 planner 입력을 연결한다. 실제 입력으로 재현 가능한 pure planner만 사용하며, 한 arm의 수량만 임의 축소해 비교를 성립시키지 않는다.
+4. owner별 독립 예산인지 공통 계좌 제약인지 기존 운영 원장으로 확정한다. 삼성 owner별 승인 수량 독립 비교 승인을 메인·위젯·에피소드 통합 자본 승인으로 확대하지 않는다.
+5. 위젯·수동 주문 등이 메인의 가용 자본에 영향을 주면 실제 동일 외부 흐름을 조건부 고정할 수 있는지 확인한다. candidate 행동에 따라 그 외부 주문도 달라지는 경합은 독립 외생 흐름으로 가장하지 않는다. 해당 상호작용은 명시적 미지원으로 분리한다.
+
+### 15.3 ME8/ME10 보완 — 원장 기반 변동 자본 재현
+
+기존 계좌 관측·주문 owner·custody·체결 원장을 재사용한다. 새 collector/DB와 반복 계좌 조회를 만들지 않는다.
+
+| 입력/경계 | 구현 사항 | 검증 완료 조건 |
+| --- | --- | --- |
+| 시작 snapshot | source timestamp, 계좌/owner 식별자, 승인 예산·주문 가능 금액·기존 보유/예약, 원천 version/hash를 결속. 계좌 비밀정보는 보고서에 복제하지 않음 | 초기 자본과 별도 reserve를 이중 차감하지 않는다는 원장 대사 |
+| 주문→체결→취소 | parent/attempt→owner→broker order→fill ID→취소 확인을 연결. 예약→보유 전환, 확정 미체결 취소분 해제, late fill 반영 | 주문/체결 중복·순서 역전·취소 경합에서도 수량·현금 보존 |
+| 매도·비용·자본 반환 | 자기 arm의 청산 계약과 순매도대금 사용. 결제 전 대금의 재사용 가능 여부는 기존 broker/account owner 의미를 따름 | 매도대금·실현손익·원금의 중복 가산0; 실제 계좌 원천과 대사 |
+| 입출금·한도 변경 | 증거 있는 외부 흐름만 동일 timestamp로 두 arm에 주입. snapshot 차이를 임의 입출금으로 추정하지 않음 | 흐름 적용 전후 balance가 일치하거나 구체 미대사 잔차 반환 |
+| 겹친 기회/scope | 기존 전역 시간순 실행과 owner/custody 사용. 자본 부족·동일 종목 보유로 막힌 기회도 기록 | 두 scope가 같은 자본을 동시에 쓰는 회귀가 차단됨 |
+
+가용액·예약액·보유 원가·수수료/세금의 보존식을 현금과 자산 장부로 분리한다. 체결 시 현금 차감과 예약 해제를 두 번 비용 처리하지 않는다. `reserve_krw_minutes`와 `capital_krw_minutes`는 서로 다른 진단값이다. peak exposure, overlap 거절 수, 비용 후 일별 순익을 함께 산출한다.
+
+첫 지원은 **증거가 완전한 외부 흐름 + 기존 승인 수량 + 비선견적 실행 순서**다. CF마다 가능한 재진입/손실 이후 현금은 각각 계산한다. 이익 재투자 여부는 기존 자본 owner 규칙에 따르며 고정 자본 v1의 무재투자를 설명 없이 변경하지 않는다. 흐름 결손은 해당 공유 자본 경로와 영향을 받는 후행을 격리하고, 전체 영향 경계를 특정할 수 없을 때만 해당 자본 cohort를 차단한다.
+
+### 15.4 ME8/ME9 보완 — 부분 체결·취소·미청산
+
+운영 원장 상태와 가상 후보 체결 모델 상태를 별도로 둔다.
+
+- 실제 주문은 승인 수량 = 누적 체결 + 확정 취소 + 유효 잔량으로 대사한다. 정정/취소 재주문은 parent lineage로 연결하고 누적 체결 통보를 신규 fill로 중복 합산하지 않는다.
+- 취소 요청만으로 잔량·reserve를 해제하지 않는다. 취소 확인 이전 체결과 지연 통보를 처리한 뒤 terminal 여부를 판정한다.
+- 실제 완료 손익은 소유권이 확정된 체결 lot의 실제 비용·매도 결과만 사용한다. manual custody 이전, HELD, 비용 미확정은 별도 상태다.
+- 후보 arm은 같은 관측 호가/거래와 검증된 도착·체결·취소 모델로 자신의 체결 수량을 산출하고, 그 수량에 자기 청산 계약을 적용한다. 실제 전량 SELL을 다른 부분 체결 arm에 붙이지 않는다.
+- passive queue 순서가 관측되지 않으면 정확한 fill을 만들지 않는다. 가능한 보수적 실행 구간이 검증된 경우에만 구간을 사용한다. 가능한 결과 사이에서 후보 우열/자본 가용성이 뒤집히면 승격하지 않는다. 검증되지 않은 구간 모델 자체도 지원으로 간주하지 않는다.
+- 정상 원장이 연결됐고 terminal 시각만 미도래이면 `pending`; 이미 종료됐는데 identity/원천이 없으면 `source_gap`; 지원 모델이 없으면 `unsupported_scope`다. 모두 0원 무거래와 구분한다.
+
+### 15.5 ME9 보완 — 미호출 AI의 실제 판단 차이
+
+추가 AI 호출 없이 즉시 지원할 후보부터 기존 후보 공간 안에서 평가한다.
+
+| 판단 변경 | 지원 조건/처리 |
+| --- | --- |
+| 실제 ENTER→후보 BLOCK/RECHECK | 실제 당시 AI·가격·수량·비용이 연결된 incumbent와 후보 비노출/후속 sequence 비교. RECHECK는 영구 BLOCK이 아님 |
+| 실제 RECHECK→후속 실제 ENTER | 후속 timestamp의 자기 AI 판정과 가격/계획만 사용. 그 결과를 앞선 RECHECK 시점으로 이동 금지 |
+| 실제 BLOCK→후보 즉시 ENTER | 같은 cutoff의 검증된 AI replay가 없으면 full-chain EV 미지원. 기계 upstream 기회 진단과 운영 개선을 분리 |
+| 동일 행동 | 기준 보존/모델 대사에 사용. 순수 자기 비교를 새 후보/ΔEV 개선으로 세지 않음 |
+
+미호출 AI를 해결하기 위해 임의 PASS·VETO를 만들거나 장중 추가 AI를 호출하지 않는다. 누락된 당시 저장 response가 실제 존재하면 exact request/response hash로 제한 복구한다. 별도 offline 재판정은 현재 금지된 추가 AI 호출의 예외 승인이 필요한 옵션이며 기본 구현의 필수 조건으로 두지 않는다.
+
+그 옵션을 나중에 열 경우 고정 prompt/model·당시 payload·단일 response·측정된 비용/지연·독립 model holdout을 갖춘 modeled 판정으로 표시한다. 현재 모델이 과거 모델과 같다고 가정하거나 offline 결과를 실제 자연 AI receipt로 바꾸지 않는다. 미호출 영역의 원천 보존/차단 사유/지원 후보 실행은 그 승인 없이 구현 가능하다.
+
+### 15.6 ME11/ME12 보완 — 계산·선정·정책 소비
+
+1. 기존 `strategy_owner_replay`, `entry_split_order_plan`의 운영 proof/비용 모델 및 `ai_action_outcome_calibration`을 확장한다. 새 비용·청산·tolerance 수치를 만들어 비교를 통과시키지 않는다. Kiwoom request/parser 자체를 수정해야 하는 경우에만 기존 Official Reference Gate를 수행한다.
+2. 실제 운영 모델 오차를 독립 chronological model holdout에서 검증한다. 후보 탐색/calibration 이후 별도 candidate holdout을 사용한다. 이미 분석한 9/17을 새 독립 표본으로 사용하지 않는다.
+3. 동일 기회·자본의 paired 원화 순익/EV, 일별 순익, tail, reserve/보유 노출, 체결 참여율, 자본 부족 누락을 함께 산출한다. EV 분모는 기존 명명된 계약을 유지하고, 원화 ΔPnL·자본 대비 수익률·거래당 EV를 혼합하지 않는다.
+4. 모델 오차·stress를 포함한 보수적 ΔEV 하한으로 선정한다. 현금 경계의 불확실성이 후행 제출 가능 여부를 바꾸면 경로 전체를 보수적으로 재평가한다. 기존 10bp·표본·tail·holdout gate를 완화하지 않는다.
+5. 입력별 `source_gap / unsupported_scope / pending / insufficient_sample / valid_no_edge / eligible`와 구체 blocker·owner·closure test를 반환한다. 후보0 대표 사유와 전체 원인별 수를 함께 남기며 source gap이 valid no-edge에 섞이지 않게 한다.
+6. 기존 publisher→dated policy→summary/checklist→PREOPEN reader→장중 loader를 그대로 사용한다. 지원 범위·모델 version/hash가 바뀌면 stale proof를 무효화한다. 기존 유효 incumbent/fallback 및 operator override는 유지한다.
+7. 실제 적용 버전별 episode 중복 제거와 rolling/cumulative 완료 비용 손익 경로를 검증한다. 탐색 모델 ΔEV, 실제 순익, 인과적 개선은 별도 필드다.
+
+### 15.7 구현 순서와 회귀 종료 기준
+
+| 순서 | 기존 owner 내 작업 | 필수 회귀/closure |
+| --- | --- | --- |
+| E0 | 선택 release/병행 변경 및 원천 contract 대사 | 과거 결손·현재 지원·추가 구현·자연 대기를 분리한 표, 기존 v1 재사용 증거 |
+| E1 | ME8/10 현금흐름·주문 lineage | 기존 운영 producer의 snapshot/주문 이벤트→저장→projection 연결, 미래 생성 가능 입력과 최초 결손 분리 |
+| E2 | ME9 부분 체결/cancel·E1 자본 전이 | 부분 체결 후 취소·late fill·순서 역전·중복·미청산·manual custody·외부 자본 변화·동시 두 scope의 수량/현금 보존 |
+| E3 | ME9 supported AI/RECHECK 비교 | 세 방향 판단 변경의 지원/미지원 명시, 실제 후속 ENTER 연결, AI 호출0·주문0·관측 reserve0 |
+| E4 | ME11 경제성/독립 검증 | 지원 양수·음수·동률, 자본 경합에 따른 우열 변경, 오차/stress 경계, holdout 오염 차단 |
+| E5 | ME12 소비 | 정상 활성 후보 생성/소비, stale/hash/date/scope/model 실패의 incumbent/fallback, 적용 버전별 실제 성과 분모 |
+| E6 | ME13 리뷰/제한 재생성 | 운영 producer부터 연결한 fixture와 자연 자료를 별도 보고. 바뀐 owner와 후행만 재실행, 기존 receipt/rollback 보존 |
+
+각 단계는 구현→리뷰→수정→재리뷰→영향 pytest/compile/diff로 닫는다. 수동 완성 evaluator 입력만으로 E1/E2를 완료하지 않는다. 임의 비용을 사용하는 fixture를 운영 계약의 근거로 삼지 않는다. 완전한 지원 fixture에서 실제 계산·후보 선정이 작동해야 하며 전부 null을 반환하는 구현은 불합격이다.
+
+**완료 조건:** 실행 가능한 E0–E6 구현과 회귀에 미완료가 없고, 자연 표본 부족과 승인되지 않은 AI 확장/미확정 운영 의미가 별도 표로 남아야 한다. unsupported를 완전히 없애는 것이 아니라, 일상적으로 발생하는 지원 가능한 자본·체결 경로를 영구 결손으로 방치하지 않는 것이 목표다. 유효 비교 수/전체 수, changed 비교 수/전체 changed 수, 첫 blocker 분포로 개선을 측정한다. 양수 후보 수를 구현 완료 목표로 강제하지 않는다.
+
+### 15.8 내일 기동 및 의미적 감시와의 관계
+
+9/21 incumbent 준비를 이 확장 연구 때문에 취소하거나 조기 PREOPEN으로 바꾸지 않는다. 배포 요청 시점에 이미 freeze/기동됐으면 실행 중 release·당일 정책은 보존하고 검증된 후속 적용일로 보낸다. main/widget/episode는 각각 기존 정책·기동/guard owner를 따른다.
+
+장중 source 결손·ENTER 부족·AI VETO 집중·PASS 후 미제출의 지속 감시는 별도 장중 의미적 이상 감시 검토계획이 소유한다. 감시 알림은 경제성 후보 선정이나 자동 threshold 변경 권한이 아니다. 본 절은 ME8–ME13의 상세 보완 owner이고, 통합 복구 계획은 배포/후행 인계 owner를 유지한다.
+
+### 15.9 구현 범위 확정과 잔여 운영 계약 (2026-09-20)
+
+- 기존 `kt00011` bounded 읽기의 normalized capacity hash/clock, 계좌 비밀정보를 제외한 account hash, 종목별 승인 cap과 예수금 구성요소를 기존 frozen operating context에 저장한다. 새 호출·원장·collector는 없다.
+- `entr` 예수금과 종목별 주문가능금액의 변화를 입출금으로 환산하지 않는다. **첫 승인 예산을 고정한 조건부 실험**에서 시점별 새 승인 수량/cap, 자기 arm의 reserve→보유→확정 취소→독립 청산을 재현한다. 동일 시각의 시작 예산 충돌이나 예수금 basis 변화는 명시적 제외한다. 실제 계좌의 결제 전 재사용 가능 대금·외부 입출금·타 owner의 반사실 행동까지 재현하는 계좌 backtest는 운영 계약 미확정이다. 자연 표본 대기로 분류하지 않는다.
+- 부분/무체결은 기존 cancel owner의 과거 독립 모델과 해당 상태의 운영 model holdout을 모두 요구한다. 연속 native 관측에서 잔여 limit 미접촉을 확인하고, 취소 ACK/late-fill 종료 이전에는 예약금을 반환하지 않는다. 보유 판단 frame을 취소 전이라는 이유로 삭제하지 않는다. 실제 SELL을 후보 청산으로 복사하지 않는다.
+- 취소 전 조기 청산이 추가 취소를 요구하는 경로, 서로 다른 child 취소시각, 체결 사이 보유 상태 전이가 필요한 경로, 관측되지 않은 passive queue 순서는 현재 모델 지원 밖이다. 기존 모델에 없는 ACK·체결 확률을 만들지 않는다. 이는 전체 부분 체결 차단과 다르며 정상 지원 입력의 계산 회귀를 별도로 둔다.
+- 미호출 AI는 추가 호출 금지를 유지한다. 실제 후속 ENTER에는 그 시점의 frozen AI만 사용한다. BLOCK을 즉시 ENTER로 바꾸는 데 당시 AI가 없으면 full-chain EV를 산출하지 않는다.
+- 구현 종료는 위 조건부 지원 범위의 생성→저장→계산→독립 검증→정책 인계에 적용한다. 미확정 계좌 운영 의미/미지원 모델 확장을 전체 완료 또는 자연 대기로 표시하지 않는다. 이번 리뷰·검증·배포 증거는 기존 메인 운영 경제성 closure 리뷰에 기록한다.

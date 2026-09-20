@@ -227,8 +227,9 @@ def owner_operating_arm(replay, row):
         or arm.get("actual_fill_evidence") is not False
         or any(arm.get(k) is not v for k, v in AUTHORITY.items())
         or arm.get("requested_qty") != seed.get("total_qty")
-        or arm.get("modeled_filled_qty") != seed.get("total_qty")
-        or arm.get("fill_participation_rate") != 1
+        or type(arm.get("modeled_filled_qty")) is not int
+        or not 0 <= arm["modeled_filled_qty"] <= seed["total_qty"]
+        or arm.get("fill_participation_rate") != arm["modeled_filled_qty"] / seed["total_qty"]
         or arm.get("contract_sha256") != context.get("sha256")
         or arm.get("exit_policy_sha256") != context.get("exit_policy_version")
         or arm.get("cost_policy_version") != context.get("cost_policy_version")
@@ -241,6 +242,18 @@ def owner_operating_arm(replay, row):
         or abs(arm["stress_net_return_pct"] - arm["stress_net_pnl_krw"] / arm["budget_krw"] * 100) > 1e-10
     ):
         return {}
+    if arm['modeled_filled_qty'] < seed['total_qty']:
+        terminal = arm.get('cancel_wait_terminal') or {}
+        path = arm.get('cash_commitment_path') or {}
+        if (terminal.get('sha256') != owner_digest({k:v for k,v in terminal.items() if k != 'sha256'})
+            or terminal.get('seed_sha256') != seed['seed_sha256']
+            or terminal.get('filled_qty') != arm['modeled_filled_qty']
+            or terminal.get('cancel_ack_and_late_fill_resolved') is not True
+            or terminal.get('model_identity') != entry_operating_model_identity()
+            or path.get('sha256') != owner_digest({k:v for k,v in path.items() if k != 'sha256'})
+            or path.get('seed_sha256') != seed['seed_sha256']
+            or path.get('filled_qty') != arm['modeled_filled_qty']):
+            return {}
     return arm
 
 
@@ -256,6 +269,12 @@ def owner_model_scope_valid(model, pair):
         if not isinstance(cal, list) or not isinstance(held, list):
             continue
         rows = cal + held
+        arm = owner_operating_arm(pair['owner_replay'], pair)
+        if arm and arm['modeled_filled_qty'] < seed['total_qty']:
+            kind = 'no_fill' if arm['modeled_filled_qty'] == 0 else 'partial'
+            supported = [r for r in rows if isinstance(r, dict) and r.get('execution_state') == kind]
+            if len(supported) < 20 or not any(r in cal for r in supported) or not any(r in held for r in supported):
+                continue
         if (
             proof.get("contract") == ENTRY_MODEL_SELECTION
             and proof.get("validated") is True

@@ -4904,6 +4904,53 @@ def test_machine_both_block_with_producer_plan_is_zero_exposure_not_missing_retu
     assert result['robust_paired_delta_ev_lower_bound_pct'] == 0.
 
 
+def _with_machine_capacity(row, budget, *, deposit=1000000):
+    from types import SimpleNamespace
+    from datetime import datetime
+    from src.engine.scalping import strategy_owner_replay as owner
+    from src.engine.scalping import compact_auxiliary_paired_replay as compact
+    source = row['operating_comparison_input']; replay = source['owner_replay']; seed = replay['seed']
+    context = seed['operating_contract']
+    capacity = dict(kt00011_cash_orderable_contract_status='valid', kt00011_capacity_source_sha256='9'*64,
+        kt00011_capacity_observed_at=seed['observed_at'], kt00011_requested_stock_code=seed['stock_code'],
+        kt00011_requested_unit_price=10000, account_deposit=deposit, cash_orderable_amount=budget,
+        cash_orderable_qty_cap=int(budget/10000), budget_base=budget)
+    context['capital_source'] = owner.freeze_entry_capital_source(capacity,
+        SimpleNamespace(safety_ratio=1., absolute_budget_cap_krw=0),
+        now_ts=datetime.fromisoformat(seed['observed_at']).timestamp())
+    context['budget_krw'] = budget
+    context['sha256'] = compact.digest({k:v for k,v in context.items() if k != 'sha256'})
+    seed['seed_sha256'] = compact.digest({k:v for k,v in seed.items() if k != 'seed_sha256'})
+    for arm in (replay.get('operating_arms') or {}).values():
+        arm.update(budget_krw=budget, contract_sha256=context['sha256'],
+            net_return_pct=arm['net_pnl_krw']/budget*100,
+            stress_net_return_pct=arm['stress_net_pnl_krw']/budget*100)
+        arm['sha256'] = compact.digest({k:v for k,v in arm.items() if k != 'sha256'})
+    replay['replay_sha256'] = compact.digest({k:v for k,v in replay.items() if k != 'replay_sha256'})
+    return row
+
+
+def test_machine_reevaluation_cap_is_not_a_fictitious_cash_deposit(monkeypatch):
+    final = _supported_machine_owner_row()
+    final.update(comparison={'incumbent_machine_action':'ENTER_NOW'}, setup_evidence={'test_action':'ENTER_NOW'})
+    prior = _machine_plan_only_anchor(final)
+    _with_machine_capacity(prior, 100000)
+    _with_machine_capacity(final, 200000)
+    for row in (prior, final): row['machine_sequence_members'] = sorted([prior['decision_trace_id'], final['decision_trace_id']])
+    monkeypatch.setattr(calibration, 'mechanistic_entry_policy_decision', lambda x, **kw: {'action':x['test_action']})
+    result = calibration._machine_sequence_operating_metrics([final, prior], set(), {})
+    assert result['status'] == 'supported_operating_comparison', result
+    envelope = next(iter(result['capital_envelopes'].values()))
+    assert envelope['initial_budget_krw'] == 100000
+    assert envelope['varying_attempt_cap_count'] == 1
+    assert envelope['external_cashflow_inferred'] is False
+    assert result['daily_net_profit_delta_krw'] == 0
+    _with_machine_capacity(final, 200000, deposit=2000000)
+    failed = calibration._machine_sequence_operating_metrics([final, prior], set(), {})
+    assert failed['blocker'] == 'capital_external_flow_or_settlement_basis_unreconciled'
+    assert failed['daily_net_profit_delta_krw'] is None
+
+
 def _second_machine_owner_row(row, *, second_offset=30, symbol='000660', promotion='second-promotion'):
     import copy
     from datetime import datetime, timedelta
@@ -5064,3 +5111,55 @@ def test_common_refinement_exact_ai_trace_alias_uses_natural_machine_boundary():
     assert contract['row_exclusion_reason_counts']['paired_alias_of_natural_machine_attempt'] == 1
     assert next(r for r in normalized if r['decision_trace_id'] == natural['decision_trace_id'])['comparison'] == natural['comparison']
     assert contract['input_row_disposition_complete'] is True
+
+
+def test_machine_capital_release_is_conserved_and_cannot_precede_exit():
+    import copy
+    from src.engine.scalping import compact_auxiliary_paired_replay as compact
+    row = _supported_machine_owner_row()
+    source = row['operating_comparison_input']; replay = source['owner_replay']; seed = replay['seed']
+    key = 'incumbent_qty_x_incumbent_leg'; arm = replay['operating_arms'][key]
+    reserve = sum(l['qty']*l['price'] for l in seed['legs'])
+    path = dict(schema='entry_operating_cash_commitment_v1', seed_sha256=seed['seed_sha256'],
+        initial_reserve_krw=reserve, events=[dict(kind='owner_exit',at=arm['modeled_exit_at'],principal_release_krw=reserve)])
+    path['sha256'] = compact.digest(path)
+    arm['cash_commitment_path'] = path
+    arm['sha256'] = compact.digest({k:v for k,v in arm.items() if k!='sha256'})
+    replay['replay_sha256'] = compact.digest({k:v for k,v in replay.items() if k!='replay_sha256'})
+    result = calibration._machine_sequence_operating_metrics([row], {row['decision_trace_id']})
+    assert result['status'] == 'supported_operating_comparison',result
+    assert next(iter(result['peak_committed_capital_krw_by_day']['candidate'].values())) == reserve
+    path['events'][0]['at'] = seed['observed_at']
+    path['sha256'] = compact.digest({k:v for k,v in path.items() if k!='sha256'})
+    arm['sha256'] = compact.digest({k:v for k,v in arm.items() if k!='sha256'})
+    replay['replay_sha256'] = compact.digest({k:v for k,v in replay.items() if k!='replay_sha256'})
+    rejected = calibration._machine_sequence_operating_metrics([row], {row['decision_trace_id']})
+    assert rejected['blocker'] == 'operating_cash_path_exit_clock_invalid'
+    assert rejected['daily_net_profit_delta_krw'] is None
+
+
+def test_partial_arm_requires_partial_model_holdout_not_full_fill_proof():
+    from datetime import datetime,timedelta
+    from src.engine.scalping import compact_auxiliary_paired_replay as compact
+    from src.engine.scalping.strategy_owner_replay import entry_operating_model_identity, entry_cash_commitment_path
+    row = _supported_machine_owner_row()
+    source = row['operating_comparison_input']; replay=source['owner_replay']; seed=replay['seed']
+    arm = replay['operating_arms']['incumbent_qty_x_incumbent_leg']
+    qty=seed['total_qty']//2
+    at=(datetime.fromisoformat(seed['observed_at'])+timedelta(seconds=1)).isoformat()
+    cancel=dict(schema='entry_cancel_wait_terminal_v1',seed_sha256=seed['seed_sha256'],filled_qty=qty,
+        model_identity=entry_operating_model_identity(),cancel_ack_and_late_fill_resolved=True,terminal_at=at)
+    cancel['sha256']=compact.digest(cancel)
+    arm.update(modeled_filled_qty=qty,fill_participation_rate=qty/seed['total_qty'],cancel_wait_terminal=cancel)
+    arm['cash_commitment_path']=entry_cash_commitment_path(seed,
+        [dict(at=at,qty=qty,price=seed['legs'][0]['price'])],
+        sum(l['qty']*l['price'] for l in seed['legs']),arm['modeled_exit_at'],cancel_terminal=at)
+    arm['sha256']=compact.digest({k:v for k,v in arm.items() if k!='sha256'})
+    replay['replay_sha256']=compact.digest({k:v for k,v in replay.items() if k!='replay_sha256'})
+    assert compact.owner_operating_arm(replay,source)
+    assert not compact.owner_model_scope_valid(row['operating_model_validation'],source)
+    for proof in row['operating_model_validation']['validated_scopes']:
+        for model_row in proof['calibration_rows']+proof['holdout_rows']: model_row['execution_state']='partial'
+        proof['actual_rows_sha256']=compact.digest(proof['calibration_rows']+proof['holdout_rows'])
+        proof['sha256']=compact.digest({k:v for k,v in proof.items() if k!='sha256'})
+    assert compact.owner_model_scope_valid(row['operating_model_validation'],source)

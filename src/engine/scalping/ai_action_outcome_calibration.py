@@ -336,6 +336,7 @@ def _main_mechanistic_input_fingerprint(
         "report/observation_source_quality_audit/*.json",
         "report/ai_entry_setup_paired_replay_batch/*.source.json",
         "report/entry_split_order_plan/entry_split_order_plan_*.json",
+        "report/entry_cancel_wait_tuning/entry_cancel_wait_tuning_*.json",
     )
     for pattern in patterns:
         for path in data_root.glob(pattern):
@@ -2672,8 +2673,8 @@ def _machine_sequence_operating_metrics(population, selected_ids, candidate_poli
     """Replay exact promotion sequences with frozen quantities and shared cash.
 
     This is a conditional, fixed-capital experiment, not an account backtest.
-    Only equal frozen cash envelopes are supported; changing account capacity
-    requires its own cash-flow witnesses. Every chosen exit is its own owner CF.
+    Later verified symbol caps do not change initial capital. External account
+    flows require their own witnesses. Every chosen exit is its own owner CF.
     """
     from copy import deepcopy
     from src.engine.scalping import compact_auxiliary_paired_replay as compact
@@ -2727,20 +2728,22 @@ def _machine_sequence_operating_metrics(population, selected_ids, candidate_poli
                 raise ValueError("sequence_frozen_reserve_missing")
             groups[group].append(dict(row=row, seed=seed, arm=arm, old=old, new=new, budget=budget,
                 start=stamp, end=ended, reserve=reserve, verdict=source.get("incumbent_verdict"),
+                clock_error=0. if plan_only else proof['tolerance']['receipt_clock_error_sec'],
                 error=0. if plan_only else max(proof["optimistic_net_error_budget_pct"], proof["tolerance"]["net_error_budget_pct"])))
         if not groups:
             raise ValueError("sequence_population_empty")
-        experiments, day_budgets = [], {}
+        from src.engine.scalping.strategy_owner_replay import entry_conditional_capital_envelope
+        day_seeds = defaultdict(list)
+        for group, anchors in groups.items():
+            day_seeds[group[0]].extend(a['seed'] for a in anchors)
+        envelopes = {day: entry_conditional_capital_envelope(seeds) for day, seeds in day_seeds.items()}
+        experiments, day_budgets = [], {day: value['initial_budget_krw'] for day, value in envelopes.items()}
         for group, anchors in sorted(groups.items()):
             anchors.sort(key=lambda a: a["start"])
-            budget = anchors[0]["budget"]
-            qty = anchors[0]["seed"]["total_qty"]
-            if any(a["budget"] != budget or a["seed"]["total_qty"] != qty for a in anchors):
-                raise ValueError("sequence_frozen_quantity_or_budget_changed")
+            budget = day_budgets[group[0]]
+            # Each reevaluation owns a new frozen quantity. Both policies use
+            # that same attempt's quantity; a prior RECHECK is not a sizing lock.
             day = group[0]
-            if day in day_budgets and day_budgets[day] != budget:
-                raise ValueError("shared_cash_envelope_changed_without_cashflow_witness")
-            day_budgets[day] = budget
             choices = []
             for side in ("old", "new"):
                 choice = None
@@ -2771,21 +2774,35 @@ def _machine_sequence_operating_metrics(population, selected_ids, candidate_poli
             experiments.append(dict(key=group, budget=budget, choices=choices))
         outputs = {(scenario, side): {} for scenario in ("base", "stress") for side in (0, 1)}
         rejected = [0, 0]
+        peak_committed = {name: {} for name in ('incumbent','candidate')}
         for scenario in ("base", "stress"):
             for side in (0, 1):
                 for day, budget in sorted(day_budgets.items()):
                     pending, cash, uncertainty = [], budget, 0.
+                    capital_events = []
                     orders = sorted(((e["choices"][side], e) for e in experiments
                         if e["key"][0] == day and e["choices"][side] is not None),
                         key=lambda item: (item[0]["start"], item[1]["key"]))
                     for anchor, experiment in orders:
                         active = []
-                        for end, reserved, pnl, error, symbol in pending:
+                        timing_uncertainty = 0.
+                        for end, reserved, pnl, error, symbol, releases, clock_error in pending:
+                            if clock_error and abs((end-anchor['start']).total_seconds()) <= clock_error:
+                                timing_uncertainty += reserved
+                            remaining_releases = []
+                            for release in releases:
+                                if clock_error and abs((release[0]-anchor['start']).total_seconds()) <= clock_error:
+                                    timing_uncertainty += release[1]
+                                if release[0] <= anchor["start"]:
+                                    cash += release[1]
+                                    reserved -= release[1]
+                                else:
+                                    remaining_releases.append(release)
                             if end <= anchor["start"]:
                                 cash += reserved + pnl
                                 uncertainty += error
                             else:
-                                active.append((end, reserved, pnl, error, symbol))
+                                active.append((end, reserved, pnl, error, symbol, remaining_releases, clock_error))
                         pending = active
                         cash = min(budget - sum(item[1] for item in active), cash)
                         # Existing held-symbol guard; a promotion reset does not
@@ -2793,16 +2810,57 @@ def _machine_sequence_operating_metrics(population, selected_ids, candidate_poli
                         if any(item[4] == experiment["key"][1] for item in active):
                             if scenario == "base": rejected[side] += 1
                             continue
-                        if uncertainty and abs(cash-anchor["reserve"]) <= uncertainty:
+                        if uncertainty + timing_uncertainty and abs(cash-anchor["reserve"]) <= uncertainty + timing_uncertainty:
                             raise ValueError("model_error_can_change_capital_admission")
                         if anchor["reserve"] > cash:
                             if scenario == "base": rejected[side] += 1
                             continue
                         cash -= anchor["reserve"]
+                        capital_events.append((anchor['start'], anchor['reserve']))
                         pnl = anchor["arm"]["net_pnl_krw" if scenario == "base" else "stress_net_pnl_krw"]
+                        releases = []
+                        path = anchor["arm"].get("cash_commitment_path")
+                        if path is not None:
+                            if (path.get('sha256') != _canonical_sha256({k:v for k,v in path.items() if k != 'sha256'})
+                                or path.get('schema') != 'entry_operating_cash_commitment_v1'
+                                or path.get('seed_sha256') != anchor['seed']['seed_sha256']
+                                or path.get('initial_reserve_krw') != anchor['reserve']):
+                                raise ValueError('operating_cash_path_binding_invalid')
+                            released = 0.
+                            owner_exits = 0
+                            previous_clock = anchor['start']
+                            for event in path['events']:
+                                at = datetime.fromisoformat(event['at'])
+                                amount = event['principal_release_krw']
+                                if (not compact.finite(amount) or amount < 0 or at.tzinfo is None
+                                    or not previous_clock <= at <= anchor['end']
+                                    or event['kind'] not in {'fill_transfer','cancel_confirmed','owner_exit'}):
+                                    raise ValueError('operating_cash_path_event_invalid')
+                                previous_clock = at
+                                released += amount
+                                capital_events.append((at, -amount))
+                                if event['kind'] != 'owner_exit':
+                                    releases.append((at, amount))
+                                else:
+                                    owner_exits += 1
+                                    if at != anchor['end']:
+                                        raise ValueError('operating_cash_path_exit_clock_invalid')
+                            if abs(released-anchor['reserve']) > 1e-8 or owner_exits != 1:
+                                raise ValueError('operating_cash_path_conservation_failed')
+                        else:
+                            capital_events.append((anchor['end'], -anchor['reserve']))
                         pending.append((anchor["end"], anchor["reserve"], pnl,
-                            2 * anchor["error"] * budget / 100, experiment["key"][1]))
+                            2 * anchor["error"] * anchor['budget'] / 100, experiment["key"][1], releases, anchor['clock_error']))
                         outputs[scenario, side][experiment["key"]] = anchor
+                    if scenario == 'base':
+                        balances = defaultdict(float)
+                        for at, amount in capital_events:
+                            balances[at] += amount
+                        committed = peak = 0.
+                        for at in sorted(balances):
+                            committed += balances[at]
+                            peak = max(peak, committed)
+                        peak_committed[('incumbent','candidate')[side]][day] = peak
         rows, bounds, daily = [], [], defaultdict(lambda: [0., 0.])
         zero = dict(net_pnl_krw=0., stress_net_pnl_krw=0., capital_krw_minutes=0.,
                     reserve_krw_minutes=0., fill_participation_rate=0.)
@@ -2811,6 +2869,12 @@ def _machine_sequence_operating_metrics(population, selected_ids, candidate_poli
             for side, name in enumerate(("incumbent", "candidate")):
                 anchor = outputs["base", side].get(experiment["key"])
                 arms[name] = deepcopy(anchor["arm"]) if anchor else dict(zero)
+                if anchor:
+                    # Monetary outcomes retain their native cap for provenance;
+                    # portfolio return uses the identical INITIAL capital.
+                    arms[name]['attempt_budget_krw'] = anchor['budget']
+                    arms[name]['net_return_pct'] = arms[name]['net_pnl_krw'] / experiment['budget'] * 100
+                    arms[name]['stress_net_return_pct'] = arms[name]['stress_net_pnl_krw'] / experiment['budget'] * 100
                 daily[experiment["key"][0]][side] += arms[name]["net_pnl_krw"]
             rows.append(dict(budget_krw=experiment["budget"], arms=arms))
             scenario_bounds = []
@@ -2819,7 +2883,7 @@ def _machine_sequence_operating_metrics(population, selected_ids, candidate_poli
                 field = "net_pnl_krw" if scenario == "base" else "stress_net_pnl_krw"
                 pnl = [a["arm"][field] if a else 0. for a in chosen]
                 penalty = (0. if chosen[0] is chosen[1] else
-                           sum(2 * a["error"] for a in chosen if a is not None))
+                           sum(2 * a["error"] * a['budget'] / experiment['budget'] for a in chosen if a is not None))
                 scenario_bounds.append((pnl[1]-pnl[0]) / experiment["budget"] * 100 - penalty)
             bounds.append(min(scenario_bounds))
         deltas = {day: v[1]-v[0] for day,v in sorted(daily.items())}
@@ -2830,6 +2894,8 @@ def _machine_sequence_operating_metrics(population, selected_ids, candidate_poli
             daily_net_profit_delta_krw=fmean(deltas.values()), portfolio_daily_net_delta_krw=deltas,
             economic_episode_count=len(rows), deduplicated_attempt_count=len(population)-len(seen),
             capital_rejection_counts=dict(incumbent=rejected[0], candidate=rejected[1]),
+            capital_envelopes=envelopes,
+            peak_committed_capital_krw_by_day=peak_committed,
             portfolio_allocation_contract="same_frozen_cash_full_quantity_chronological_no_profit_reinvestment",
             counterfactual_not_realized_pnl=True)
     except (ValueError, KeyError, TypeError, OverflowError) as exc:
@@ -7553,7 +7619,7 @@ def _machine_full_evaluation_projection(
     operating_blocker = operating.get('blocker')
     unsupported = {'frozen_auxiliary_verdict_missing', 'sequence_nonzero_inference_cost_timeline_unbound',
         'shared_cash_envelope_changed_without_cashflow_witness', 'sequence_frozen_quantity_or_budget_changed',
-        'model_error_can_change_capital_admission'}
+        'model_error_can_change_capital_admission', 'capital_external_flow_or_settlement_basis_unreconciled'}
     full_state = (
         "validated_edge"
         if mechanistic_refinement.get("promotion_pass") is True

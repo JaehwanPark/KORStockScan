@@ -567,6 +567,19 @@ def _worker_replay(observation: dict, frames: list[dict]) -> dict:
     ):
         raise ReplayInputGap("initial_holding_identity_inventory_or_pending_conflict")
     rules = thaw(snapshot["rules"])
+    entry_cancel = observation.get("entry_residual_cancel_contract")
+    if entry_cancel is not None:
+        terminal = entry_cancel.get("terminal") or {}
+        from src.engine.scalping.strategy_owner_replay import entry_operating_model_identity
+        if (observation.get('entry_split_initial_only') is not True
+            or terminal.get('schema') != 'entry_cancel_wait_terminal_v1'
+            or terminal.get('sha256') != canonical_digest({k:v for k,v in terminal.items() if k != 'sha256'})
+            or terminal.get('model_identity') != entry_operating_model_identity()
+            or terminal.get('cancel_ack_and_late_fill_resolved') is not True
+            or terminal.get('filled_qty') != initial.get('buy_qty')
+            or type(entry_cancel.get('pending_qty')) is not int or entry_cancel['pending_qty'] <= 0
+            or datetime.fromisoformat(terminal['terminal_at']) < datetime.fromisoformat(entry_cancel['final_fill_at'])):
+            raise ReplayInputGap('entry_residual_cancel_contract_invalid')
     if not isinstance(rules, dict) or not rules:
         raise ReplayInputGap("full_policy_rules_missing")
     # An absent field is not permission to substitute the current code default.
@@ -790,6 +803,18 @@ def _worker_replay(observation: dict, frames: list[dict]) -> dict:
             handlers._price_tracking_key(stock, observation["stock_code"])
         ] = state["peak_price"]
         receipts.highest_prices = handlers.HIGHEST_PRICES
+        if entry_cancel is not None:
+            # Only the verified scheduled terminal clears the residual. Holding
+            # decisions still run on every frame with the actual pending state.
+            pending = current['epoch'] < datetime.fromisoformat(entry_cancel['terminal']['terminal_at']).timestamp()
+            stock['pending_entry_orders'] = ([dict(ord_no='offline-entry-residual',
+                qty=entry_cancel['pending_qty'], filled_qty=0, status='OPEN')] if pending else [])
+            handlers._reconcile_pending_entry_orders = lambda *a, **kw: None
+            def cancel_entry_residual(*args, **kwargs):
+                if stock['pending_entry_orders']:
+                    raise ReplayInputGap('entry_early_exit_cancel_requires_independent_ack_model')
+                return 'cleared'
+            handlers._cancel_pending_entry_orders = cancel_entry_residual
         handlers.DB = VirtualInventoryDB(stock)
         handlers.KIWOOM_TOKEN = "offline_credential_not_valid"
         handlers.EVENT_BUS = services.proxy("EVENT_BUS")

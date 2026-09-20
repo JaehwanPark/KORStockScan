@@ -121,3 +121,28 @@ ME8의 과거 미대사 2건을 찾았다. 9/14 `187660`의 paired trace `analyz
 - 원 실패/중단/이전 성공 receipt는 보존했다. 이번 native 성공은 원천 복구나 경제적 성공의 대체 증거가 아니다.
 
 남은 자연 OPEN은 새 지원 입력 유입→독립 실제 모델 표본→동결 이후 후보 holdout→정상 PREOPEN/PID 소비→완료 비용 손익이다. 위 표의 미지원 운영 범위는 자연 대기에 섞지 않으며, 확대하려면 별도 검증 가능한 운영 계약이 필요하다. 현재 준비 상태는 **guarded incumbent 기동 준비 완료**, **경제적 개선 실증 미완료**다.
+
+
+## 10. 조건부 자본·부분 체결 후속 보완 (2026-09-20)
+
+기준: main 계획 §15. 사용자 구현·검증·커밋·push·배포·제한 재생성 승인. 다른 세션의 canonical 작업본과 선택 중 release를 보존하고 `fix/main-machine-capital-partial-20260920`에서 구현했다. 별도 장중 의미적 감시 프로그램은 구현 범위가 아니다.
+
+| 단계 | 이번 보완 | 범위와 남은 사실 |
+| --- | --- | --- |
+| E0 | e89e9da12 코드/7ffa045ac 문서 및 기존 자연 복구 receipt를 대사 | 기존 수량·guard·candidate grid·holdout·carry 정책 재사용 |
+| E1 | 기존 bounded 계좌 관측의 normalized source hash/clock, 계좌 namespace hash, 종목별 수량/cap을 frozen context와 기존 projection에 전달 | 조건부 초기 자본과 후속 승인 cap 분리. 외부 입출금·계좌 결제대금 의미가 확인되지 않은 basis 변화는 미지원 계약 |
+| E2 | reserve→보유 전환·확정 취소분 반환·자기 청산 원금/순익, 현금 보존, 취소 전 holding frame 유지 | touch/queue·서로 다른 child ACK·체결 사이 보유 전이·조기 EXIT 취소 모델은 검증된 지원 밖. 실제 SELL 복사0 |
+| E3 | 각 RECHECK attempt의 자기 frozen 수량/cap 허용, 후속 실제 AI만 소비 | 미호출 AI를 PASS로 만들지 않으며 추가 AI 호출0 |
+| E4 | 동일 초기 자본의 원화 순익/EV, reserve·보유 적분·peak committed capital·체결 참여율, empirical clock/net error의 자본 경계 차단 | 모델/후보 holdout 및 10bp gate 유지. 모델 EV와 실제/인과적 이익 분리 |
+| E5 | 부분/no-fill receipt의 seed/hash/quantity와 상태별 실제 model holdout 확인; 기존 publisher/reader/loader 유지 | full-fill 모델만으로 partial을 승격하지 않음. 현재 정책은 자연 증거 평가 후 incumbent/fallback 가능 |
+| E6 | 실제 producer의 저장/projection, native→cancel model→holding frame, 부분 수량의 실제 격리 청산 계산, 선정/소비/실패 회귀 | 전체 raw/A–H 반복 대신 main과 필요한 compact·policy·summary·checklist·strict만 재생성 |
+
+구조적으로 달라진 점은 승인 cap 변화를 입금으로 처리하거나 모든 수량 변화를 차단하지 않는 것, 시간 초과만으로 미체결 reserve를 반환하지 않는 것, 부분 체결 상태를 full-fill-only consumer가 항상 제외하지 않는 것이다. 최초 승인 자본에 이미 반영된 외부 기존 보유/예약을 또 차감하지 않는다. 자기 후보의 자본만 이후 시간순으로 계산하며 수익 재투자는 하지 않는다.
+
+검증 제한: 합성 입력의 partial 계산/모델 선정 성공은 자연 표본이나 실제 이익이 아니다. 실제 계좌 전체의 변동 자본 backtest는 **운영 계약 미종결**이고, 미호출 AI와 지원 모델 없는 queue/cancel 상호작용은 **명시적 미지원**이다. 이를 자연 표본 대기나 전체 범위 구현 완료로 표현하지 않는다. 자연 OPEN은 지원 계약을 갖춘 정상 유입·독립 실제 model/candidate holdout·PREOPEN/PID 소비·완료 비용 손익이다.
+
+리뷰 중 공유 interpreter의 테스트가 퇴역 AVG_DOWN report/capture를 다시 요구하는 두 기존 불일치를 확인했다. 퇴역 report integration 테스트를 제거하고 capture가 재활성화되지 않는 회귀로 정리했다. 공용 AI fixture/holding interpreter/격리 효과 guard 검증은 보존했다.
+
+실행 증거 디렉터리: `tmp/main-machine-capital-partial-20260920/`. 최종 테스트·배포·run·policy hash는 후속 검증 후 아래에 기록한다.
+
+검증: 영향 회귀708개 통과 후 누적 금액 정정·terminal 이후 fill 수리의 관련87개 통과(중복 합산하지 않음). Python compile·diff·print-only parser 통과. `implementation-review.json`에 source hash와 검증 로그를 결속했다. 합성 통과와 자연 경제성은 별개다.

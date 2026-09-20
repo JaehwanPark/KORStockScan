@@ -315,125 +315,6 @@ print('three_effects_blocked')
     assert not target.exists()
 
 
-def test_production_string_fields_roundtrip_through_logger_and_report(
-    monkeypatch, tmp_path
-):
-    import json
-    from src.utils import pipeline_event_logger as logger
-    from src.engine.monitoring import (
-        scalping_avg_down_recovery_calibration as calibration,
-    )
-    from src.tests.test_scalping_avg_down_recovery_calibration import _route_arm
-
-    observation, frames = exit_fixture()
-    observation["route_replay"] = {
-        key: _route_arm(should_add=False, signature="NO_ADD") for key in ("80", "85")
-    }
-    observation["avg_down_route_schema"] = calibration.ROUTE_EVENT_SCHEMA
-    current = {
-        "now": datetime.fromisoformat(observation["emitted_at"]).replace(tzinfo=None)
-    }
-
-    class Clock(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            return current["now"]
-
-    monkeypatch.setattr(logger, "datetime", Clock)
-    monkeypatch.setattr(logger, "DATA_DIR", tmp_path)
-    monkeypatch.setattr(logger, "_PRODUCER_COMPACTOR", None)
-    monkeypatch.setattr(
-        logger,
-        "TRADING_RULES",
-        SimpleNamespace(
-            PIPELINE_EVENT_JSONL_ENABLED=True,
-            PIPELINE_EVENT_TEXT_INFO_LOG_ENABLED=False,
-        ),
-    )
-
-    def emit(stage, fields):
-        result = logger.emit_pipeline_event(
-            "HOLDING_PIPELINE",
-            "TEST",
-            observation["stock_code"],
-            stage,
-            fields={
-                key: json.dumps(value) if isinstance(value, (list, dict)) else value
-                for key, value in fields.items()
-                if key != "emitted_at"
-            },
-        )
-        assert result["structured_append_succeeded"] is True
-        return result
-
-    emit("avg_down_route_arbitration_observed", observation)
-    for frame in frames:
-        current["now"] = datetime.fromisoformat(frame["emitted_at"]).replace(
-            tzinfo=None
-        )
-        emit(
-            "avg_down_exit_replay_frame_observed",
-            {**frame, **capture.AUTHORITY, "replay_observed_at": frame["emitted_at"]},
-        )
-    collected = calibration._collect_exact_evidence(
-        [tmp_path / "pipeline_events/pipeline_events_2026-09-04.jsonl"]
-    )
-    replay = build_replay_evidence(
-        [row["independent_replay_input"] for row in collected["decisions"]]
-    )
-    assert replay["complete_episode_count"] == 1, (collected, replay)
-    assert replay["allowed_runtime_apply"] is False
-    paths = [tmp_path / "pipeline_events/pipeline_events_2026-09-04.jsonl"]
-    report = {
-        "target_date": "2026-09-04",
-        "independent_exit_replay": replay,
-        "replay_source_files": calibration._replay_source_files(paths),
-        "replay_engine_implementation": canonical_digest(
-            policy.implementation_identity()
-        ),
-    }
-    output = (
-        tmp_path
-        / "report"
-        / calibration.REPORT_TYPE
-        / f"{calibration.REPORT_TYPE}_2026-09-04.json"
-    )
-    calibration.write_outputs(
-        report, output_json=output, output_md=output.with_suffix(".md")
-    )
-    monkeypatch.setattr(calibration, "DATA_DIR", tmp_path)
-    cached, replies, _, _ = calibration._load_replay_cache(paths)
-    assert observation["source_event_id"] in cached
-    collected = calibration._collect_exact_evidence(paths, replay_cache=cached)
-    inputs = [row["independent_replay_input"] for row in collected["decisions"]]
-    assert inputs[0]["independent_exit_replay_frames"] == []
-
-    def forbidden(*a, **kw):
-        pytest.fail("unchanged historical evidence must not replay or call AI again")
-
-    monkeypatch.setattr(policy, "isolated_replay", forbidden)
-    reused = build_replay_evidence(inputs, policy_ai_enabled=True)
-    assert reused["cached_episode_count"] == 1
-    assert reused["complete_episode_count"] == 1
-    assert reused["policy_ai_provider_call_count"] == 0
-    # A physical correction invalidates replay reuse even with size/mtime
-    # preserved. Provider replies still require independent exact bindings.
-    metadata = paths[0].stat()
-    content = paths[0].read_bytes()
-    paths[0].write_bytes(content)
-    os.utime(paths[0], ns=(metadata.st_atime_ns, metadata.st_mtime_ns))
-    rewritten_cache, _, _, _ = calibration._load_replay_cache(paths)
-    assert rewritten_cache == {}
-    # A newly appended source frame invalidates whole-result reuse, even if
-    # the old file has not been replaced and the symbol/policy did not change.
-    emit(
-        "avg_down_exit_replay_frame_observed",
-        {**frames[-1], "new_source_marker": "changed", **capture.AUTHORITY},
-    )
-    cached, _, _, _ = calibration._load_replay_cache(paths)
-    assert cached == {}
-
-
 def ai_request(observation, frame, *, call="ai_provider.current_prompt"):
     args, kwargs = ("system", "user"), {"endpoint_name": "holding_score"}
     return {
@@ -446,6 +327,7 @@ def ai_request(observation, frame, *, call="ai_provider.current_prompt"):
         "actual_order_submitted": False,
         "broker_order_forbidden": True,
     }
+
 
 
 def test_ai_replay_is_exact_bound_deduplicated_and_reuses_cache(monkeypatch):
@@ -590,47 +472,12 @@ def test_capture_byte_budget_stops_and_hash_includes_final_reason(monkeypatch):
     )
 
 
-def test_runtime_capture_uses_only_matching_bbo_quantity(monkeypatch):
+def test_retired_avg_down_capture_does_not_restart_from_shared_replay(monkeypatch):
     from src.engine import sniper_state_handlers as handlers
-
-    now = datetime.fromisoformat("2026-09-04T10:00:01+09:00").timestamp()
-    ws = {
-        "curr": 10000,
-        "best_bid": 10000,
-        "best_ask": 10010,
-        "last_ws_update_ts": now,
-        "last_realtime_type_ts": {"0D": now},
-        "orderbook": {
-            "bids": [{"price": 10000, "volume": 10}],
-            "asks": [{"price": 10010, "volume": 20}],
-        },
-    }
-    monkeypatch.setattr(
-        handlers, "WS_MANAGER", SimpleNamespace(get_latest_data=lambda code: ws)
-    )
-    monkeypatch.setattr(capture, "warm_policy_cache", lambda *a, **kw: None)
-    markets = []
-
-    def observe(**kwargs):
-        markets.append(kwargs["market_builder"]("005930", ws, now))
-        return 1
-
-    monkeypatch.setattr(capture, "observe_cycle", observe)
-    assert handlers.observe_avg_down_exit_replay_cycle(now_ts=now) == 1
-    assert markets[0]["source_quality"] == "fresh_conflict_free"
-    assert markets[0]["best_bid_qty"] == 10
-    ws["orderbook"]["bids"][0]["price"] = 9990
-    handlers.observe_avg_down_exit_replay_cycle(now_ts=now)
-    assert markets[-1]["best_bid_qty"] is None
-    handlers.observe_avg_down_exit_replay_cycle(
-        now_ts=now, market_context={"regime": "BEAR", "observed_at": now - 1}
-    )
-    assert markets[-1]["market_regime"] == "BEAR"
-    assert markets[-1]["market_regime_observed_at"] == now - 1
-    handlers.observe_avg_down_exit_replay_cycle(
-        now_ts=now, market_context={"regime": "BULL", "observed_at": now + 1}
-    )
-    assert markets[-1]["market_regime"] == "UNKNOWN"
+    def forbidden(*args, **kwargs):
+        raise AssertionError("retired collector must not run")
+    monkeypatch.setattr(capture, "observe_cycle", forbidden)
+    assert handlers.observe_avg_down_exit_replay_cycle(now_ts=0) == 0
 
 
 def test_frozen_files_reject_expansion_and_unknown_data_reads(tmp_path):

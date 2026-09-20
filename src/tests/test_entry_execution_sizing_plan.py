@@ -767,7 +767,12 @@ def test_runtime_pre_ai_producer_freezes_owner_inputs_without_submit(monkeypatch
     def broker_capacity(code, price, fallback, **kwargs):
         requests.append((code, price, fallback, kwargs))
         return {'budget_base':500000,'cash_orderable_qty_cap':40,'kt00011_error':'',
-                'capacity_source_sha256':'9'*64}
+                'kt00011_capacity_source_sha256':'9'*64,
+                'kt00011_cash_orderable_contract_status':'valid',
+                'kt00011_capacity_observed_at':frozen_clock.isoformat(),
+                'kt00011_requested_stock_code':code,'kt00011_requested_unit_price':price,
+                'account_deposit':500000,'cash_orderable_amount':400800,
+                'budget_source':'kt00011_min_account_deposit_cash_orderable'}
     monkeypatch.setattr(handlers, '_resolve_scalp_cash_budget_context', broker_capacity)
     def guard(**kwargs):
         kwargs['stock']['research_mutation'] = True
@@ -820,6 +825,10 @@ def test_runtime_pre_ai_producer_freezes_owner_inputs_without_submit(monkeypatch
         seed=json.loads(event.fields['entry_opportunity_replay_seed'])
         assert replay._entry_seed_valid(seed)
         assert seed['operating_contract']['budget_krw'] > 0
+        capital = seed['operating_contract']['capital_source']
+        assert capital['status'] == 'recorded_source_only'
+        assert capital['capacity_source_sha256'] == '9'*64
+        assert capital['components']['cash_orderable_amount'] == 400800
         assert seed['operating_contract']['nxt_listing_receipt']['value'] is True
         assert seed['operating_contract']['nxt_listing_receipt']['owner']=='stock.is_nxt'
         assert seed['actual_order_submitted'] is False
