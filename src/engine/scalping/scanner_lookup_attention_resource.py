@@ -864,7 +864,7 @@ def selection_execution_book(rows, inputs):
             pairs.extend(generation)
     empty = {"status": "unsupported_scope" if set(exclusions) == {"unselected_downstream_unobserved"} else "source_gap",
         "input_contract_version": "scanner_native_downstream_support_v1",
-        "valid_pair_count": len(pairs), "changed_selection_count": changed_selection_count,
+        "valid_pair_count": len(pairs), "changed_selection_count": changed_selection_count if valid else None,
         "blocker_owner": "scanner_selection_then_existing_machine_compact_producer",
         "closure_test": "same cutoff native downstream evidence for both changed selections; uncalled AI requires a separate operating contract",
         "paired_delta_ev_pct": None, "baseline_budget_ev_pct": None,
