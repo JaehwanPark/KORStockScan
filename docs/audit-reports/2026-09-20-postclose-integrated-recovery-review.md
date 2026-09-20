@@ -28,3 +28,15 @@ widget/machine 독립 wrapper의 exact-date terminal/source hash를 최종 summa
 - low-price expansion은 캐시 검사 이전 토큰 요구로 저장 원천도 전부 false exclusion했다. 캐시를 먼저 검증하고 missing cache에만 기존 token/조회 경로를 호출하도록 수정한다. historical recovery는 remote 조회 없이 null·구체 missing 원인을 보존한다. 정상시장 API parser/요청/토큰발급/주문 계약은 변경하지 않는다.
 - 공식 upstream current SHA `953e5dbff123f437ab4d11a78a95191a685eb51f`의 `kiwoom/core/auth.py`, `kiwoom/specs.py`, `kiwoom/_data/kiwoom_api_spec.json`을 확인했다. ka10080 POST `/api/dostk/chart`, 운영/모의 분리와 auth token 발급 endpoint를 확인했으며 실제 token issue/refresh는 하지 않는다. 조회 시각과 원문은 `tmp/postclose-integrated-recovery-20260920/official-reference/index.json` 및 같은 폴더에 보존했다.
 - 재시도는 원 sim/rising feedback 성공 metric과 산출물 hash, 미변경 코드/원천 세대를 결속한 adoption receipt를 사용한다. 이 성공을 현재 코드로 다시 실행한 것으로 위조하지 않고 기존 플래그로 해당 두 실행만 생략한다. 다른 필수 producer/strict gate는 그대로 실행한다.
+
+## 재개 및 소비자 추가 검증
+
+- `ef0f7f995`에서 main 재개 run `df4fdcca755849f884716d8f929be677`은 원 sim/rising 성공 명령의 rc/run/code·산출물 hash·입력 generation을 검증한 `reuse-prefix-b63ad15.json`으로 두 단계를 재사용한다. 원 실패 status는 attempts에 보존한다.
+- widget run `27a0ca2cbfd345348aaca262c4e8c62b`은 197개 모집단에서 retained source 연구를 완료하고 9/21 `observation_only` 정책과 관측 catalog58개를 발행·loader 검증했다. 신규 주문 정책0은 경제적 no-edge 확정이 아니다. 원천별 제외·실제 비교·holdout 상태는 보고서를 따른다. 연구552초·publisher35초, 외부 source 조회0이다. advisory/auto prefix는 원 run/code/hash를 보존해 재사용했다. machine 후행이 연구 enrichment를 변경하면 독립 receipt를 다시 결속해야 한다.
+- 서비스7개 source binding을 정렬했고 `MainPID=0 / inactive`, 기존 비source env·주문 args·guard 보존을 확인했다. source pin만 바꿨으며 daemon-reload 뒤 서비스 시작은 없었다. 평일21:55 finalizer만 설치하고 기존 cron 전체를 보존했다. 근거는 `tmp/postclose-integrated-recovery-20260920/service-binding-installed.json` 및 `schedule-install.json`이다.
+- bootstrap 실제 `build_manifest(9/21)` 오프라인 검증은 승인 incumbent9/18과 operator lock을 읽었다. PREOPEN canonical env/manifest/verify의 생성·변경은0이다. 회귀10개 통과. 기존 직접 인계 테스트가 rc/run/proof 없는 succeeded를 기대하던 fixture를 현 계약으로 고쳤으며 실패 차단도 검증한다.
+- machine completed-study 재사용에 source/publication/effective 계약을 추가했다. 다른 publication/effective를 과거 완료 receipt로 반환하지 않으며 명시 적용일 불일치를 거부한다. 기존 합성 native CF 미래 clock을 모든 해당 publisher에 일관되게 주입하도록 테스트를 보완했다. 연구·발행/reader 영향 회귀89개 통과(18.74초). 미래 clock은 테스트에만 사용되며 운영 시각·과거 원천은 변경하지 않는다.
+
+현재 main/machine/최종 인계와 준비 종결은 진행 중이다. 위 완료된 부분을 전체 terminal 또는 EV 개선으로 해석하지 않는다.
+
+후행 machine writer가 widget 연구/적용 보고서를 정상 보강하는 경우, machine 시작 시 원 widget terminal hash를 고정하고 완료 시 native closed-loop 재구성·출력 hash를 확인한다. widget 원 run/receipt는 덮지 않으며 최종 인계는 명시된 두 산출물의 검증된 변경만 수용한다. 임의 후속 drift·advisory/auto 원천 변경·불완전 machine 결과는 계속 차단한다. 관련 handoff/episode/bootstrap38개 회귀를 추가 확인했다.

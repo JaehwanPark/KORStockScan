@@ -166,6 +166,18 @@ def lifecycle_counts(studies):
     return counts, mapping
 
 
+def _publication_contract(day):
+    from src.engine.build_next_stage2_checklist import _next_krx_trading_day
+    publication = date.fromisoformat(os.environ.get("POSTCLOSE_POLICY_PUBLICATION_DATE") or str(day))
+    if not day <= publication <= datetime.now(ZoneInfo("Asia/Seoul")).date():
+        raise ValueError("research_publication_date_invalid")
+    effective = _next_krx_trading_day(publication.isoformat())
+    requested = os.environ.get("POSTCLOSE_PREPARED_EFFECTIVE_DATE")
+    if requested and requested != effective:
+        raise ValueError("research_effective_date_mismatch")
+    return dict(source_date=str(day), publication_date=str(publication), effective_date=effective)
+
+
 def _refresh(
     day,
     *,
@@ -176,6 +188,7 @@ def _refresh(
     source_wait_seconds=0,
 ):
     started = clock.monotonic()
+    publication_contract = _publication_contract(day)
     destination = report_path(report_root, day)
     with (
         loop.research_scope(directory),
@@ -206,7 +219,7 @@ def _refresh(
             previous = {}
         if (
             previous.get("exact_cost_recovery_requested") is collect_costs
-            and validate_current_receipt(previous, day)
+            and validate_current_receipt(previous, day, publication_contract=publication_contract)
             and previous.get("publication_requested") is publish
         ):
             return previous
@@ -275,6 +288,7 @@ def _refresh(
                 code=code,
                 native_widget_state_sha256=state_hash,
                 exact_cost_recovery_requested=collect_costs,
+                publication_contract=publication_contract,
             )
         )
         try:
@@ -434,6 +448,7 @@ def _refresh(
             },
             exact_cost_recovery_requested=collect_costs,
             publication_requested=publish,
+            publication_contract=publication_contract,
             dependency_sources=dependency_sources,
             execution_mode="completed_study_fixed_point_no_grid_replay",
             compute_replayed=False,
@@ -485,7 +500,9 @@ def refresh(
         raise
 
 
-def validate_current_receipt(value, day):
+def validate_current_receipt(value, day, *, publication_contract=None):
+    if publication_contract is not None and value.get("publication_contract") != publication_contract:
+        return False
     if not validate_receipt(value, day):
         return False
     try:
@@ -515,6 +532,8 @@ def validate_current_receipt(value, day):
             if loop.digest(_read_report_dependency(path)) != expected:
                 return False
         for publication in value["publications"].values():
+            if publication["effective_date"] != (value.get("publication_contract") or {}).get("effective_date"):
+                return False
             folder = Path(publication["directory"])
             effective = date.fromisoformat(publication["effective_date"])
             manifest = loop.read_object(

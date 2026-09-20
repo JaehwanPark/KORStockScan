@@ -222,7 +222,6 @@ def build_policy(
     if closed_loop and joint != report.get("joint_allocation_gate"):
         raise ValueError("episode_joint_allocation_reconstruction_mismatch")
     publication = publication_date or source_date
-    from datetime import datetime
     from zoneinfo import ZoneInfo
     if not source_date <= publication <= datetime.now(ZoneInfo("Asia/Seoul")).date():
         raise ValueError("episode_publication_date_invalid")

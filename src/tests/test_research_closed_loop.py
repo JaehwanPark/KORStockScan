@@ -531,8 +531,9 @@ def test_late_publication_receipt_retains_served_version_and_marks_unconsumed(tm
     assert receipt["actual_order_submitted"] is False
 
 
+@pytest.mark.parametrize("publication", [None, "2026-09-20"])
 def test_completed_study_fixed_point_publishes_valid_empty_and_blocks_changed_dependency(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, publication
 ):
     from src.engine.automation import machine_research_closed_loop_refresh as phase
     from src.tests.test_widget_symbol_runtime_policy import _research
@@ -541,6 +542,9 @@ def test_completed_study_fixed_point_publishes_valid_empty_and_blocks_changed_de
         low_price_two_leg_expanded_candidate_research as episode,
     )
 
+    if publication:
+        monkeypatch.setenv("POSTCLOSE_POLICY_PUBLICATION_DATE", publication)
+        monkeypatch.setenv("POSTCLOSE_PREPARED_EFFECTIVE_DATE", "2026-09-21")
     monkeypatch.setattr(phase, "DATA_DIR", tmp_path / "data")
     root = tmp_path / "report"
     directory = tmp_path / "runtime" / "machine_research_closed_loop"
@@ -575,6 +579,7 @@ def test_completed_study_fixed_point_publishes_valid_empty_and_blocks_changed_de
     first = phase.refresh(DAY, directory=directory, report_root=root)
     assert first["status"] == "complete" and phase.validate_current_receipt(first, DAY)
     assert first["publications"]["widget"]["profile_count"] == 0
+    assert {p["effective_date"] for p in first["publications"].values()} == {"2026-09-21" if publication else "2026-09-18"}
     from src.engine.monitoring import research_version_outcomes as outcomes
 
     monkeypatch.setattr(
@@ -586,6 +591,17 @@ def test_completed_study_fixed_point_publishes_valid_empty_and_blocks_changed_de
     )
     second = phase.refresh(DAY, directory=directory, report_root=root)
     assert second == first
+    with monkeypatch.context() as changed:
+        changed.setenv("POSTCLOSE_POLICY_PUBLICATION_DATE", "2026-09-19" if publication else "2026-09-20")
+        changed.setenv("POSTCLOSE_PREPARED_EFFECTIVE_DATE", "2026-09-21")
+        assert not phase.validate_current_receipt(
+            first, DAY, publication_contract=phase._publication_contract(DAY)
+        )
+        with pytest.raises(AssertionError, match="completed retry must not query costs"):
+            phase.refresh(DAY, directory=directory, report_root=root)
+        changed.setenv("POSTCLOSE_PREPARED_EFFECTIVE_DATE", "2026-09-18")
+        with pytest.raises(ValueError, match="effective_date_mismatch"):
+            phase._publication_contract(DAY)
     source = (
         root
         / "widget_symbol_signal_policy_research"
@@ -744,6 +760,10 @@ def test_new_unfilled_symbol_bootstraps_cf_validation_and_next_date_publication(
 
     monkeypatch.setattr(loop, "datetime", NativeClock)
     monkeypatch.setattr(economics, "datetime", NativeClock)
+    monkeypatch.setattr(phase, "datetime", NativeClock)
+    monkeypatch.setattr(publisher, "datetime", NativeClock)
+    from src.engine.automation import low_price_two_leg_auto_expansion_policy as episode_publisher
+    monkeypatch.setattr(episode_publisher, "datetime", NativeClock)
     monkeypatch.setattr(phase, "DATA_DIR", tmp_path / "data")
     directory, root = (
         tmp_path / "runtime" / "machine_research_closed_loop",
@@ -1331,6 +1351,7 @@ def test_episode_native_cf_publication_and_reader_recheck_summary(
             return clock.astimezone(tz) if tz else clock
 
     monkeypatch.setattr(loop, "datetime", NativeClock)
+    monkeypatch.setattr(publisher, "datetime", NativeClock)
     for episode in result["selected"]["full"]["episodes"]:
         signal = datetime.fromisoformat(episode["signal_at"])
         rows = []

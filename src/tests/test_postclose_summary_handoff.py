@@ -303,3 +303,38 @@ def test_widget_prefix_reuse_rejects_drift_and_preserves_origin(monkeypatch, tmp
     paths[mod.INDEPENDENT_SOURCES["widget"][0]].write_text("{}")
     with pytest.raises(RuntimeError, match="source_generation_mismatch"):
         mod._producer_main(cli+["--phase","started","--reuse-widget-prefix"])
+
+
+def test_machine_refresh_binds_widget_generation_without_rewriting_original_run(monkeypatch, tmp_path):
+    def _write(path, payload):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload))
+    from src.utils import constants
+    from src.engine.automation import machine_research_closed_loop_refresh as phase
+    from src.engine.automation.postclose_recommendation_intake import source_paths
+    data = tmp_path / 'data'
+    monkeypatch.setattr(constants, 'DATA_DIR', data)
+    monkeypatch.setattr(constants, 'PROJECT_ROOT', tmp_path)
+    monkeypatch.setattr(mod.subprocess, 'check_output', lambda *a, **k: 'a' * 40)
+    # Native economic/publication reconstruction has its separate closed-loop E2E.
+    monkeypatch.setattr(phase, 'validate_current_receipt', lambda v, day: v.get('native_current') is True)
+    day = '2026-09-17'
+    reports = data / 'report'
+    paths = source_paths(reports, day)
+    for label in set(mod.INDEPENDENT_SOURCES['widget'] + mod.INDEPENDENT_SOURCES['machine']):
+        path = paths.get(label, reports / label / f'{label}_{day}.json')
+        _write(path, dict(target_date=day, native_current=True))
+    def run(owner, stage):
+        return mod._producer_main(['--owner', owner, '--date', day, '--phase', stage])
+    assert run('widget', 'started') == 0 and run('widget', 'finished') == 0
+    original = mod.producer_receipt_path(reports, day, 'widget').read_bytes()
+    assert run('machine', 'started') == 0
+    path = paths['widget_symbol_signal_policy_research']
+    _write(path, dict(target_date=day, enriched=True))
+    _write(paths['widget_symbol_runtime_policy_apply'], dict(target_date=day, enriched=True))
+    assert mod.producer_receipt_issues(reports, day, 'widget')
+    assert run('machine', 'finished') == 0
+    assert mod.producer_receipt_issues(reports, day, 'widget') == []
+    assert mod.producer_receipt_path(reports, day, 'widget').read_bytes() == original
+    _write(path, dict(target_date=day, unexpected_later_generation=True))
+    assert mod.producer_receipt_issues(reports, day, 'widget')

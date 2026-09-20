@@ -27,6 +27,7 @@
 
 - [ ] `[PostcloseLateSourceFinalHandoffAudit0920] 장후 25–29 검증·전체 복구·다음 PREOPEN 기동 준비` (`Due: 2026-09-21`, `Slot: PREOPEN`, `TimeWindow: 07:00~07:20`, `Track: RuntimeStability`)
   - Source: [통합 보완·전체 재생성 상세계획](../proposals/postclose-integrated-verification-recovery-and-next-preopen-readiness-plan-2026-09-20.md), [장후작업 현행 활성 목록](../audit-reports/2026-09-05-postclose-work-inventory.md).
+  - Preparation evidence: [통합 복구 리뷰](../audit-reports/2026-09-20-postclose-integrated-recovery-review.md). 서비스7개 source binding 및21:55 finalizer 설치 검증, trading MainPID0; 전체 main/machine/finalization 및9/21 자연 PREOPEN/PID는 별도 미완료다.
   - 일정: 9/20에 R0–R6 구현·리뷰 및 A–H 재생성을 끝내는 실행계획을 준비한다. 최종 readiness 마감은 9/21 07:20 이전이며 정상 PREOPEN/PID 확인은 기존 `DirectFamilyPreopenPolicyHandoff`가 소유한다. 이 문서는 실행 완료 receipt가 아니다.
   - 현황: source9/17 실패·9/18 봇 중지/관측 미적재. 25–29의 날짜/scoped/terminal/attempt 결함, finalizer 미설치·폐기 선행 의존, widget 혼합 root, 과거 복구 날짜·현재 계좌 재기록 방지 계약을 닫아야 한다.
   - Acceptance: 기존 경제성 구현은 재사용 검증하고 main ME8–ME13 병행 owner의 수리/회귀를 인계받는다. 서비스별 검증된 immutable source에서 source9/17→실제 publication→effective9/21을 고정한다. 전체 활성 main/widget/machine 결과와 직접 소비·단계별 rc·최종 summary/checklist/verifier·terminal을 대사한다. 과거 실패 이력은 보존한다.

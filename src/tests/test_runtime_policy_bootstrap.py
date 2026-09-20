@@ -470,10 +470,18 @@ def test_direct_summary_and_verifier_do_not_require_retired_common_reports(monke
     monkeypatch.setattr(verifier, "DATA_DIR", data_dir)
     monkeypatch.setattr(verifier, "REPORT_DIR", data_dir / "report")
     monkeypatch.setattr(verifier, "OUTPUT_DIR", data_dir / "report" / "threshold_cycle_postclose_verification")
-    _write(
-        data_dir / "report" / "threshold_cycle_postclose_status" / f"threshold_cycle_postclose_{target}.status.json",
-        {"target_date": target, "status": "succeeded"},
-    )
+    terminal_path = data_dir / "report" / "threshold_cycle_postclose_status" / f"threshold_cycle_postclose_{target}.status.json"
+    # Retirement of common reports never waives native terminal provenance.
+    _write(terminal_path, {"target_date": target, "status": "succeeded"})
+    assert verifier.build_threshold_cycle_postclose_verification(target)["status"] == "fail"
+    proof = tmp_path / "main-precommit.json"
+    identity = {"run_id": "current-run", "code_commit": "a" * 40}
+    _write(proof, {"date": target, "status": "pass", "verification_scope": "main_precommit", **identity})
+    _write(terminal_path, {
+        "target_date": target, "status": "succeeded", "exit_code": 0, **identity,
+        "started_at": f"{target}T20:10:00+09:00", "finished_at": f"{target}T21:00:00+09:00",
+        "verification_receipt": {"path": str(proof), "sha256": verifier._sha(proof)},
+    })
     report = verifier.build_threshold_cycle_postclose_verification(target)
     assert report["status"] == "pass"
     joined = json.dumps(report)

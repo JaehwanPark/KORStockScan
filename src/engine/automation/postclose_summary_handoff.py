@@ -472,9 +472,26 @@ def producer_receipt_issues(report_dir: Path, day: str, owner: str) -> list[str]
         return [f"{owner}:terminal_missing_or_invalid"]
     sources = value.get("sources") or {}
     issues = []
+    refreshed = {}
+    if owner == "widget":
+        machine = _load_json(producer_receipt_path(report_dir, day, "machine"))
+        upstream = machine.get("upstream_widget") or {}
+        if upstream.get("sha256") == _sha(producer_receipt_path(report_dir, day, "widget")) and not producer_receipt_issues(report_dir, day, "machine"):
+            refreshed = machine.get("refreshed_widget_sources") or {}
+    elif value.get("upstream_widget"):
+        from src.engine.automation.machine_research_closed_loop_refresh import validate_current_receipt
+        closure = sources.get("machine_research_closed_loop") or {}
+        if not validate_current_receipt(_load_json(Path(closure.get("path") or "")), day):
+            issues.append("machine:study_refresh_receipt_invalid")
     for label in INDEPENDENT_SOURCES[owner]:
         row = sources.get(label) or {}
-        if not row.get("sha256") or _sha(Path(row.get("path") or "")) != row["sha256"]:
+        current = _sha(Path(row.get("path") or ""))
+        if not row.get("sha256") or current != row["sha256"]:
+            adopted = refreshed.get(label) or {}
+            if (label in {"widget_symbol_signal_policy_research", "widget_symbol_runtime_policy_apply"}
+                and adopted.get("origin_sha256") == row.get("sha256")
+                and adopted.get("sha256") == current and current):
+                continue
             issues.append(f"{owner}:source_hash_invalid:{label}")
     return issues
 
@@ -503,6 +520,14 @@ def _producer_main(argv=None) -> int:
     value = _load_json(path)
     now = datetime.now(ZoneInfo("Asia/Seoul")).isoformat()
     if args.phase == "started":
+        upstream_widget = None
+        if args.owner == "machine":
+            widget_path = producer_receipt_path(report_dir, day, "widget")
+            if widget_path.exists():
+                if producer_receipt_issues(report_dir, day, "widget"):
+                    raise RuntimeError("machine_upstream_widget_terminal_invalid")
+                upstream_widget = dict(path=str(widget_path), sha256=_sha(widget_path),
+                                       sources=_load_json(widget_path)["sources"])
         reuse = None
         if args.reuse_widget_prefix:
             if args.owner != "widget" or value.get("target_date") != day or not value.get("run_id"):
@@ -533,7 +558,7 @@ def _producer_main(argv=None) -> int:
                      target_date=day, status="running", run_id=uuid.uuid4().hex,
                      started_at=now, code_root=str(PROJECT_ROOT),
                      code_commit=subprocess.check_output(["git", "-C", str(PROJECT_ROOT), "rev-parse", "HEAD"], text=True).strip(),
-                     wrapper_pid=os.getppid(), runtime_effect=False, reused_prefix= reuse)
+                     wrapper_pid=os.getppid(), runtime_effect=False, reused_prefix=reuse, upstream_widget=upstream_widget)
     else:
         if value.get("status") != "running" or value.get("wrapper_pid") != os.getppid():
             raise RuntimeError("producer_run_identity_mismatch")
@@ -545,6 +570,22 @@ def _producer_main(argv=None) -> int:
             sources[label] = dict(path=str(source.resolve()), sha256=_sha(source))
             if not sources[label]["sha256"] or _report_date(payload) != day:
                 issues.append(f"source_missing_or_date_invalid:{label}")
+        if args.owner == "machine" and value.get("upstream_widget") and args.exit_code == 0:
+            from src.engine.automation.machine_research_closed_loop_refresh import validate_current_receipt
+            upstream = value["upstream_widget"]
+            if _sha(Path(upstream["path"])) != upstream["sha256"] or not validate_current_receipt(
+                _load_json(Path(sources["machine_research_closed_loop"]["path"])), day
+            ):
+                issues.append("machine_widget_refresh_provenance_invalid")
+            refreshed = {}
+            for label, row in upstream["sources"].items():
+                current = _sha(Path(row["path"]))
+                if current != row["sha256"]:
+                    if label not in {"widget_symbol_signal_policy_research", "widget_symbol_runtime_policy_apply"} or not current:
+                        issues.append(f"unexpected_widget_source_change:{label}")
+                    else:
+                        refreshed[label] = dict(origin_sha256=row["sha256"], sha256=current)
+            value["refreshed_widget_sources"] = refreshed
         value.update(status="succeeded" if args.exit_code == 0 and not issues else "failed",
                      exit_code=args.exit_code if args.exit_code else (1 if issues else 0),
                      sources=sources, issues=issues, finished_at=now)
