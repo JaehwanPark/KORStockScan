@@ -794,8 +794,6 @@ def build_runtime_approval_summary(
                 )
                 and policy_payload.get("compact_evaluation_source_date")
                 == target_date
-                and policy_payload.get("source_artifact_sha256")
-                == source_payload.get("artifact_content_sha256")
                 and policy_payload.get("compact_paired_artifact_sha256")
                 == source_payload.get("artifact_content_sha256")
                 and policy_payload.get("compact_evaluation_fingerprint")

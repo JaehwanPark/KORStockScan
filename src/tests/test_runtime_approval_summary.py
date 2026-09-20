@@ -315,7 +315,9 @@ def test_compact_direct_policy_receipt_is_bound_to_paired_evaluation(monkeypatch
         "source_date": "2026-09-20",
         "target_date": "2026-09-21",
         "compact_evaluation_source_date": target,
-        "source_artifact_sha256": paired["artifact_content_sha256"],
+        # Top-level source ownership belongs to the main-machine report.  The
+        # compact receipt must use its family-specific source field below.
+        "source_artifact_sha256": "a" * 64,
         "compact_paired_artifact_sha256": paired["artifact_content_sha256"],
         "compact_evaluation_fingerprint": paired["evaluation_fingerprint"],
     }
