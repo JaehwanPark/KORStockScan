@@ -1,6 +1,6 @@
 # 메인 기계 진입판정 장후 전체 튜닝·다음 거래일 소비 루프 복구 계획
 
-작성·재검토일: 2026-09-20 KST. 상태: 상세 계획 보완 완료, 구현·재생성·배포 미실행.
+작성·재검토일: 2026-09-20 KST. 상태: 구현·제한 재생성·배포 완료, 2026-09-21 PREOPEN/PID·자연 경제성 검증 대기.
 
 ## 1. 결정
 
@@ -419,3 +419,31 @@ strict verifier는 다음을 모두 요구한다.
 | wrapper 코드만 확인 | 실제 cron/systemd/EOD 호출→selected release→main postclose 실행 경로 검증 |
 
 문서 재검토는 기존 review gate의 implementation→self review→보완→re-review→targeted validation 순서를 따른다. 이 절은 계획 검토 결과이며 실제 코드 결손 해결 receipt가 아니다.
+
+## 13. 구현·배포·제한 재생성 결과
+
+2026-09-20 KST에 본 계획의 코드 범위를 구현하고 재검토했다. 메인 기계평가를 compact보다 먼저 실행하고, 공통·계층 모집단의 비용 후 paired 평가, 미래 정책 발행, family별 source lineage, runtime summary/checklist/direct verifier를 기존 owner 안에서 연결했다. 같은 입력의 재시도는 평가기·원천·incumbent를 포함한 fingerprint가 일치할 때 봉인 보고서를 재사용한다. compact 최종화가 메인 최상위 source date/hash를 덮던 결함과 비활성 선택 작업까지 크론 필수 대상으로 요구하던 배포 검사 결함도 보완했다.
+
+- 최종 소스 커밋: `ea9b53a7e2dfbe063c420e2bee5ad633c20e52ee` (`origin/main`)
+- 선택 릴리스: `/home/ubuntu/KORStockScan-runtime-releases/main-mechanistic-lineage-reviewed-20260920-ea9b53a7e`
+- 실제 예약 경로: 평일 07:35 PREOPEN, 20:10 postclose가 공통 release router를 사용하며 필수 네 경로 검증이 통과했다.
+- 검증: 최초 구현 관련 suite 1,695개 통과 후 lineage·router·summary·strict verifier 보완 suite 390개를 재검증했다. Python compile, shell syntax, `git diff --check`, print-only 문서 parser를 별도로 통과시킨다.
+
+9/17 동결 원천을 9/20 publication으로 제한 재생성한 결과는 다음과 같다.
+
+| 항목 | 결과 |
+| --- | --- |
+| canonical report | `data/report/ai_decision_action_outcome_calibration/ai_decision_action_outcome_calibration_2026-09-17.json` |
+| report artifact hash | `83a088cdc8a5b378a36459aec0678c8cc306d530a59328c34c04279f5f74cbe7` |
+| 평가 모집단 | 입력 paired 956·natural 2,330, 수용 paired 7·natural 1,708, 전체 1,715 |
+| 후보 상태 | 서로 다른 정책 1개 평가, 독립 비교·calibration gate 통과·승격 후보는 모두 0개 |
+| 비용 후 경제값 | calibration EV 0.0000%, holdout EV 0.0000%, holdout paired ΔEV +0.0054462573%p |
+| 일별 원화 순익 | `null`; 후보가 바꾸는 holdout 8건은 당시 실제 AI→submit→owner execution 경로가 없어 exact changed-decision owner replay를 사후 복구할 수 없음 |
+| 판정 | `insufficient_mature_sample`, `incumbent_carried`; 양의 EV 개선이나 실제 순익 개선으로 인정하지 않음 |
+| 다음 거래일 bundle | `data/runtime/mechanistic_entry_policy/policy_2026-09-21.json`, bundle `bb8dff9ea560f66251e67665194f8a16238f1d5f9e57925fe85f36bcf5821a5d` |
+| family lineage | machine source 9/17/report hash `83a088...`, compact source 9/17/artifact `822c6f...`를 독립 보존 |
+| 직접 검증 | main mechanistic `pass`, compact auxiliary `PASS`; 동일 fingerprint 재시도 `evaluation_reused=true` |
+
+원화 일별 순익의 null은 계산 가능한 실제 체결 손익을 누락한 상태가 아니다. 과거 `BLOCK/RECHECK`를 후보가 `ENTER_NOW`로 바꾸는 8건에는 실제 주문·체결·자금 점유가 존재하지 않아 실제 원화 결과를 만들 수 없다. terminal path 기반 비용 후 기회 EV와 paired ΔEV까지만 진단값으로 유지하고, 임의 수량·체결·원화 손익을 합성하지 않는다. 이후 동일 정책 세대에서 자연 발생한 exact owner replay와 `COMPLETED + valid profit_rate`가 누적되면 checklist의 `DirectFamilyNaturalEvidenceMainMechanisticEntry`가 원화 일별 순익·tail·실제 EV를 평가한다.
+
+코드 배포와 다음 거래일 bundle 생성은 완료됐다. 2026-09-21 PREOPEN bootstrap, 실제 PID의 bundle hash 소비, 자연 판정 변화와 비용 후 순익 개선은 아직 도래하지 않았으므로 완료로 표시하지 않는다. 실행 중 봇 재시작·hot reload·주문은 수행하지 않았다.
