@@ -1037,6 +1037,15 @@ def test_new_unfilled_symbol_bootstraps_cf_validation_and_next_date_publication(
                 receipt["publications"]["widget"]["effective_date"]
             )
         )
+    assert phase.validate_current_receipt(receipt, completed_day)
+    historical = directory / f"allocator_{cal[0]}.json"
+    assert str(historical.resolve()) in receipt["dependency_sources"]
+    historical_cash = directory / "opening_capacity" / "native_capacity" / cal[0] / "native_cash.json"
+    assert str(historical_cash.resolve()) in receipt["dependency_sources"]
+    value = loop.read_object(historical)
+    value["available_cash_krw"] = 1
+    loop.atomic_write(historical, value)
+    assert not phase.validate_current_receipt(receipt, completed_day)
     result["holdout"]["notional_weighted_ev_pct"] = 999
     assert not loop.widget_prospective_summary_valid(result, revision)
 
@@ -1621,6 +1630,19 @@ def test_opening_producer_to_allocator_and_postclose_rejection(tmp_path, monkeyp
     assert receipt["status"] == "complete", receipt
     assert len(calls) == 4
     assert source.ensure_opening_capacity(DAY, directory=tmp_path, token="fixture", adapters=adapters) == receipt
+    assert len(calls) == 4
+    receipt_path = tmp_path / "opening_capacity" / f"capacity_source_{DAY}.json"
+    for field, changed in (("source_date", "2026-09-16"), ("capacity_role", "postclose_diagnostic")):
+        bad = {**receipt, field: changed}
+        bad["receipt_sha256"] = loop.digest({k:v for k,v in bad.items() if k != "receipt_sha256"})
+        loop.atomic_write(receipt_path, bad)
+        assert source.ensure_opening_capacity(DAY, directory=tmp_path, token="fixture", adapters=adapters)["status"] == "source_gap"
+    loop.atomic_write(receipt_path, receipt)
+    cash_path = tmp_path / "opening_capacity" / "native_capacity" / str(DAY) / "native_cash.json"
+    original_cash = loop.read_object(cash_path)
+    loop.atomic_write(cash_path, {**original_cash, "source_date": "2026-09-16"})
+    assert source.ensure_opening_capacity(DAY, directory=tmp_path, token="fixture", adapters=adapters)["reason"] == "opening_native_generation_invalid"
+    loop.atomic_write(cash_path, original_cash)
     assert len(calls) == 4
     root = tmp_path / "reports"
     loop.atomic_write(root / "machine_entry_timing_tuning" / f"machine_entry_timing_tuning_{DAY}.json",

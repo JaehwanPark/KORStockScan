@@ -347,3 +347,11 @@ Python compile, shell `bash -n`, affected pytest, `git diff --check`, 문서 lin
 - 9/21 실제 reader: main 기존 bundle `15c063637359bd4cbd5a567760abecdf6229aee1f44d1e9d6a7cbc2dc7e97eb7` 유효; scanner 비활성 fallback; widget 신규 자동 profile0; episode 기존 profile3 내용 동일, `newly_promoted_profile_ids=[]`. 이는 신규 경제성 개선 정책이 아니다.
 - 최종 strict는 `main_terminal` scope PASS, issue0이며 원 run `5953a93cf56c4fd39be8280faa8d530c` 보존. 전체 A–H를 재실행했다거나 새로운 whole-chain terminal/PREOPEN/PID 소비를 만들었다고 주장하지 않는다. 최신 검증 attempt와 코드/재생성 실행은 evidence receipt에서 별도 대사한다.
 - PR0–PR5의 이 범위 구현 종료. 미래 자연 원천·독립 표본·실제 적용·완료 순익은 OPEN이다. 입출금·결제 재사용·cross-date 보유·미호출 AI 전체 선택 비교 계약은 지원 범위 밖이며 시간만 지나면 해결될 사항으로 분류하지 않는다. 모델 수익과 실제 이익/인과적 개선은 입증되지 않았다.
+
+
+### 12.9 최종 재리뷰 보완 (2026-09-20)
+
+- 다일 capital gate가 실제 사용한 날짜별 allocator/native cash/inventory/acquisition/frozen owner/stage 파일을 후행 재사용 receipt의 dependency에 모두 포함한다. target day 한 날짜만 검사해 과거 입력 변경을 놓치던 결함을 수리했다. 결손 파일의 이후 생성도 재사용 무효화 대상이다.
+- 장중 opening receipt의 기존 성공 재사용은 source_date, opening 역할, account scope뿐 아니라 실제 native cash/inventory와 frozen owner 파일의 해시를 재검증한다. 오래된 날짜·사후 역할·원천 손상은 source_gap이며 주문/추가 조회로 자동 덮어쓰지 않는다.
+- 기존 producer→저장→loader 회귀와 다일 후보 정책 발행 회귀에 잘못된 날짜/역할/원천 손상 및 역사 allocator 변경 후 cache 거부를 추가했다. 전체 해당 회귀50, 수정 후 집중 회귀5 통과. 자연 성과·EV 개선 증거는 아니다.
+- 실행 증거: `tmp/postclose-producer-final-review-20260920/`. 이번에는 자본 후행·summary/checklist/strict만 갱신하며 scanner/main 원 평가를 반복하지 않는다. 기존 source9/17·실제 publication·effective9/21, 원 실패/복구 receipt, 정상 PREOPEN/PID/실제 완료 손익 OPEN을 유지한다.

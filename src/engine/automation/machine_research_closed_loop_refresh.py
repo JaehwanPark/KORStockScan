@@ -400,6 +400,9 @@ def _refresh(
             / f"low_price_two_leg_tuning_{day}.json"
         )
         dependency_paths.update(Path(path) for path in dependency_catalog(directory))
+        for report in studies.values():
+            dependency_paths.update(Path(path) for path in
+                report.get("joint_allocation_gate", {}).get("capital_source_dependencies", []))
         dependency_paths.update(
             Path(directory) / name
             for name in (

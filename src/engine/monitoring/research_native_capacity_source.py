@@ -190,8 +190,19 @@ def ensure_opening_capacity(day, *, token=None, directory=loop.DIRECTORY, adapte
             if previous.get("status") == "complete":
                 from src.trading.order.owner_custody_registry import broker_account_key
                 if (previous.get("receipt_sha256") != loop.digest({k: v for k, v in previous.items() if k != "receipt_sha256"})
+                    or previous.get("source_date") != str(day)
+                    or previous.get("capacity_role") != "opening_fixed_budget"
                     or previous.get("account_scope_sha256") != loop.digest(["broker_account", broker_account_key()])):
                     return dict(status="source_gap", reason="opening_acquisition_hash_or_account_conflict", **loop.AUTHORITY)
+                native_dir = directory / "native_capacity" / str(day)
+                for name in ("cash", "inventory"):
+                    native = loop.read_object(native_dir / f"native_{name}.json")
+                    if (native.get("source_date") != str(day)
+                        or native.get("native_sha256") != previous.get(f"native_{name}_sha256")
+                        or native.get("native_sha256") != loop.digest({k:v for k,v in native.items() if k != "native_sha256"})):
+                        return dict(status="source_gap", reason="opening_native_generation_invalid", **loop.AUTHORITY)
+                if loop.digest(loop.read_object(native_dir / "owner_policy.json")) != previous.get("owner_contract_sha256"):
+                    return dict(status="source_gap", reason="opening_owner_generation_invalid", **loop.AUTHORITY)
                 return previous
             attempted = datetime.fromisoformat(previous["attempted_at"]) if previous.get("attempted_at") else None
             if attempted and (now - attempted).total_seconds() < 300:

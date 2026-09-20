@@ -1243,7 +1243,23 @@ def combined_joint_gate(report, *, family, source_date, directory=DIRECTORY):
         for lane in (value.get("portfolio_reference") or {}).get("lanes", {}).values():
             dates.update(day for name in ("calibration", "holdout") for day in lane[name + "_dates"])
     snapshots = {day: load_allocator(date.fromisoformat(day), directory=directory) for day in sorted(dates)}
+    dependencies = {str((Path(directory) / f"allocator_{day}.json").resolve()) for day in dates}
+    for day in dates:
+        opening = Path(directory) / "opening_capacity"
+        dependencies.add(str((opening / f"capacity_source_{day}.json").resolve()))
+        dependencies.update(str((opening / "native_capacity" / day / name).resolve())
+            for name in ("native_cash.json", "native_inventory.json", "owner_policy.json"))
+    for snapshot in snapshots.values():
+        if not isinstance(snapshot, dict):
+            continue
+        for name in ("owner_policy_path", "native_acquisition_path", "native_cash_path", "native_inventory_path"):
+            if snapshot.get(name):
+                dependencies.add(str(Path(snapshot[name]).resolve()))
+        stage = (snapshot.get("constraints") or {}).get("same_stage_source_path")
+        if stage:
+            dependencies.add(str(Path(stage).resolve()))
     result = dated_joint_allocation(episodes, snapshots=snapshots, parent_sha256=parent)
+    result["capital_source_dependencies"] = sorted(dependencies)
     if result["status"] == "pass" and (own.get("candidate_revisions") or other.get("candidate_revisions")):
         from src.engine.monitoring.research_portfolio_economics import paired_joint_economics
         economics = paired_joint_economics([own, other], load_allocator(source_date, directory=directory), dated_snapshots=snapshots)
