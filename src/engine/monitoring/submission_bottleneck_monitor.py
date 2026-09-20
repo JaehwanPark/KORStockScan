@@ -119,7 +119,8 @@ def snapshot(events, as_of):
             economic[key] = value
     for row in funnel["evaluation_ledger"]:
         row["economic_source"] = economic.get(row["evaluation_key"], {
-            "status": "source_gap" if stamp(row["first_evaluated_at"]).date().isoformat() >= "2026-09-21" else "historical_not_required",
+            "status": ("not_applicable_machine_source_invalid" if row["mechanistic_action"] not in {"ENTER_NOW", "BLOCK", "RECHECK"}
+                       else "source_gap" if stamp(row["first_evaluated_at"]).date().isoformat() >= "2026-09-21" else "historical_not_required"),
             "blocker": "economic_observation_event_missing",
             "owner": "main_entry_execution_owners->pipeline_event_logger->sentinel_cache",
             "closure_test": "same exact attempt publishes its pre-AI economic observation"})

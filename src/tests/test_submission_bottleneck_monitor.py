@@ -267,3 +267,8 @@ def test_cache_upgrade_requires_zero_census_for_all_new_stages(tmp_path, monkeyp
     for stage in ('entry_ai_economic_plan_observed','order_leg_no_response'):
         payload['source']['audited_stage_counts']={stage:1};path.write_text(json.dumps(payload))
         assert sentinel._previous_cache_schema_proof('2026-09-17',raw,13) is None
+
+
+def test_source_invalid_machine_does_not_require_a_nonexistent_economic_plan():
+    payload=monitor.snapshot([event(action='SOURCE_INVALID',screen='not_requested_machine_source_invalid')],START)
+    assert payload['rows'][0]['economic_source']['status']=='not_applicable_machine_source_invalid'
