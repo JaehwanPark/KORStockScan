@@ -94,6 +94,9 @@ def test_compact_postclose_has_one_direct_evaluator_and_no_phase_coordinator():
     controller = _text("deploy/run_postclose_done_controller.sh")
     assert "run_ai_entry_setup_paired_replay_postclose.sh" not in installer
     assert "run_ai_entry_setup_paired_replay_postclose.sh" not in controller
+    assert "run_runtime_release.sh preopen" in installer
+    assert "run_runtime_release.sh postclose" in installer
+    assert "run_threshold_cycle_postclose.sh" not in installer
 
 
 def test_main_machine_evaluation_precedes_compact_and_final_consumers():

@@ -210,13 +210,34 @@ def test_cron_preserves_unrelated_env_schedule_date_and_logs(tmp_path):
 def test_cron_drift_blocks_install(tmp_path, mode):
     before = original_cron(tmp_path)
     if mode == "missing":
-        before = "\n".join(before.splitlines()[:-1])
+        before = "\n".join(
+            line
+            for line in before.splitlines()
+            if "# THRESHOLD_CYCLE_POSTCLOSE" not in line
+        )
     elif mode == "duplicate":
         before += before.splitlines()[-1] + "\n"
     else:
         before = before.replace("run_threshold_cycle_postclose.sh", "unexpected.sh")
     with pytest.raises(ValueError):
         router.render_crontab(before, tmp_path)
+
+
+def test_cron_allows_absent_optional_postclose_workers(tmp_path):
+    before = "\n".join(
+        line
+        for line in original_cron(tmp_path).splitlines()
+        if not any(
+            f"# {tag}" in line
+            for tag, op in router.TAGS.items()
+            if op not in router.REQUIRED_CRON_TARGETS
+        )
+    ) + "\n"
+
+    after = router.render_crontab(before, tmp_path)
+
+    assert after.count("run_runtime_release.sh") == len(router.REQUIRED_CRON_TARGETS)
+    assert router.render_crontab(after, tmp_path) == after
 
 
 def test_cron_check_never_installs(release, monkeypatch):

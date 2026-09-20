@@ -782,11 +782,16 @@ def build_runtime_approval_summary(
             source_payload = _load_json(Path(str(row.get("path") or "")))
             machine_source = policy_payload.get("machine_evaluation_source") or {}
             try:
-                machine_policy.validate(
-                    policy_payload, target_date=str(policy_payload.get("target_date") or "")
+                loaded_policy = machine_policy.load(
+                    data_root=DATA_DIR,
+                    target_date=str(policy_payload.get("target_date") or ""),
                 )
-                policy_contract_valid = True
-            except ValueError:
+                policy_contract_valid = bool(
+                    loaded_policy
+                    and loaded_policy.get("bundle_sha256")
+                    == policy_payload.get("bundle_sha256")
+                )
+            except (OSError, ValueError):
                 policy_contract_valid = False
             policy_receipt_valid = bool(
                 policy_contract_valid

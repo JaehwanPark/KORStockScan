@@ -12,8 +12,8 @@ mv "$TMP_CRON.filtered" "$TMP_CRON"
 
 cat >> "$TMP_CRON" <<EOF
 # threshold cycle daily automation
-35 7 * * 1-5 THRESHOLD_CYCLE_APPLY_MODE=auto_bounded_live THRESHOLD_CYCLE_AUTO_APPLY=true THRESHOLD_CYCLE_AUTO_APPLY_REQUIRE_AI=true bash $PROJECT_DIR/deploy/run_with_owned_log.sh --owner threshold_cycle_preopen_cron --log $PROJECT_DIR/logs/threshold_cycle_preopen_cron.log $PROJECT_DIR/deploy/run_threshold_cycle_preopen.sh \$(TZ=Asia/Seoul date +\\%F) # THRESHOLD_CYCLE_PREOPEN
-10 20 * * 1-5 THRESHOLD_CYCLE_AI_CORRECTION_PROVIDER=openai THRESHOLD_CYCLE_POSTCLOSE_BOT_ACTION=stop THRESHOLD_CYCLE_RUN_SWING_POSTCLOSE=false bash $PROJECT_DIR/deploy/run_with_owned_log.sh --owner threshold_cycle_postclose_cron --log $PROJECT_DIR/logs/threshold_cycle_postclose_cron.log $PROJECT_DIR/deploy/run_threshold_cycle_postclose.sh \$(TZ=Asia/Seoul date +\\%F) # THRESHOLD_CYCLE_POSTCLOSE
+35 7 * * 1-5 THRESHOLD_CYCLE_APPLY_MODE=auto_bounded_live THRESHOLD_CYCLE_AUTO_APPLY=true THRESHOLD_CYCLE_AUTO_APPLY_REQUIRE_AI=true bash $PROJECT_DIR/deploy/run_runtime_release.sh preopen \$(TZ=Asia/Seoul date +\\%F) # THRESHOLD_CYCLE_PREOPEN
+10 20 * * 1-5 THRESHOLD_CYCLE_AI_CORRECTION_PROVIDER=openai THRESHOLD_CYCLE_POSTCLOSE_BOT_ACTION=stop THRESHOLD_CYCLE_RUN_SWING_POSTCLOSE=false bash $PROJECT_DIR/deploy/run_runtime_release.sh postclose \$(TZ=Asia/Seoul date +\\%F) # THRESHOLD_CYCLE_POSTCLOSE
 EOF
 
 crontab "$TMP_CRON"

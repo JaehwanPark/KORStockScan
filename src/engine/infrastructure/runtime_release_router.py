@@ -36,6 +36,7 @@ TAGS = {
     "DASHBOARD_DB_ARCHIVE_2050": "archive",
 }
 CRON_TARGETS = frozenset({"start", *TAGS.values()})
+REQUIRED_CRON_TARGETS = frozenset({"start", "preopen", "postclose", "eod"})
 OPERATIONS = ("start", "restart", *OWNED, "paired-replay", "eod", "archive")
 
 
@@ -308,7 +309,7 @@ def render_crontab(original: str, workspace: Path) -> str:
             raise ValueError("cron_start_marker_unrecognized")
         line = schedule + prefix + desired + tail
         result.append(line)
-    if set(seen) != CRON_TARGETS or len(seen) != len(CRON_TARGETS):
+    if not REQUIRED_CRON_TARGETS.issubset(seen) or len(seen) != len(set(seen)):
         raise ValueError("cron_target_missing_or_duplicate")
     return "\n".join(result) + "\n"
 
@@ -318,7 +319,14 @@ def manage_cron(workspace: Path, install: bool) -> None:
         old = subprocess.check_output(["crontab", "-l"], text=True)
         if render_crontab(old, workspace) != old:
             raise ValueError("cron_release_routing_not_installed")
-        print(json.dumps({"cron_routing_verified": True, "targets": len(CRON_TARGETS)}))
+        print(
+            json.dumps(
+                {
+                    "cron_routing_verified": True,
+                    "required_targets": len(REQUIRED_CRON_TARGETS),
+                }
+            )
+        )
         return
     # Serialize router installs. Re-read just before writing to avoid clobbering
     # an unrelated session's edits observed during validation.
@@ -338,7 +346,14 @@ def manage_cron(workspace: Path, install: bool) -> None:
             if subprocess.check_output(["crontab", "-l"], text=True) != new:
                 raise ValueError("cron_install_readback_mismatch")
             print(json.dumps({"cron_backup": str(backup_dir)}))
-        print(json.dumps({"cron_routing_verified": True, "targets": len(CRON_TARGETS)}))
+        print(
+            json.dumps(
+                {
+                    "cron_routing_verified": True,
+                    "required_targets": len(REQUIRED_CRON_TARGETS),
+                }
+            )
+        )
 
 
 def main() -> int:
