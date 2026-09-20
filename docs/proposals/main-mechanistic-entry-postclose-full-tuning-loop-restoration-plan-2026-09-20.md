@@ -610,3 +610,8 @@ strict verifier는 다음을 모두 요구한다.
 기존 `MainMechanisticEntryPostcloseLoopRestore0920`는 최초 루프 복구 receipt를 보존한다. 후속 구현·재생성 시 확인된 새 결손 때문에 필요한 범위만 재개하고 기존 direct-family 자동 항목의 역할을 조정한다. 새 일정 ID를 중복 생성하지 않는다. 9/20 checklist가 없으므로 계획 문서에서 오늘 실행 owner를 발명하지 않으며, 다음 실제 실행일 checklist의 한 owner로 인계한다.
 
 이번 문서 변경의 검증은 링크/owner/권한/기존 계획과의 중복 검토·print-only backlog parser·diff check다. 실API·Provider·경제성 재생성·정책 갱신·배포는 실행하지 않는다.
+
+
+### 14.10 9/20 구현·재생성 receipt
+
+[메인 기계 operating evidence 보완 리뷰](../audit-reports/2026-09-20-main-machine-operating-evidence-closure-review.md)를 따른다. 471개 배포본 회귀 통과, scoped publisher/consumer 검증과 9/21 incumbent carry 발행을 확인했다. 원화 operating enrichment0·비용 후 EV/day 미산출 및 ME8/ME9/ME10 잔여, 과거 native terminal 누락은 OPEN이다. §14 전체 종결 또는 자연 수익 개선 receipt가 아니다.

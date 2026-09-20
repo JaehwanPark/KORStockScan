@@ -32,3 +32,24 @@
 
 
 재생성 중 기존 relabel 함수가 이미 full-cost 계약을 가진 행도 먼저 pipeline을 읽는 문제와 scope별 반복 읽기를 확인했다. 최초 실행은 보고서 교체 전에 중단했으며 원 보고서 byte hash가 backup과 같은 것을 확인했다. 기존 날짜별 캐시를 scope 사이에 공유하고 이미 검증된 비용/결과 행은 재조회하지 않도록 수정했다. 원천일·표본·cost/holdout/gate 축소는 없다.
+
+
+추가 bounded 대사: 과거 기준 정책과 엄격 후보의 자연 원천 6건은 9/14의 187660·256840, 9/15의 417200·056190, 9/16의 452280·195870이다. AI WAIT/전송·의미 오류, latency 종결, 실제 최초진입 및 후속 ADD가 서로 다른 경로다. 실제 제출/체결 flag만으로 같은 최초진입 모델 손익을 입증하지 않는다. 이전 8건 중 paired 별칭 2건의 exact 원행 복구는 추가 역사적 relabel 없이는 확정하지 않았으며 ME8 전체를 완료로 표시하지 않는다. 기록: `tmp/main-machine-economic-closure-20260920/prior-eight-disposition.json`.
+
+
+## 최종 실행·정량 결과
+
+- 코드 commit `d9e2cdae3c9af2a9ac4b0ab472c8e1c89981f937`, feature 및 `origin/main` push 완료. 선택 release는 `/home/ubuntu/KORStockScan-runtime-releases/main-machine-economic-reviewed-20260920-d9e2cdae3`이다. 실제 배포본 **471 passed**, compile 및 source clean/import root 확인. `future_invocations_only_no_restart`; 실제 PID 소비는 다음 정상 기동의 잔여다.
+- 완료된 재생성은 release-local main machine-only 1회이며 약 13분 소요됐다. 그 앞의 반복 읽기 발견 실행은 보고서 교체 전에 중단했다. 이어 compact finalize(Provider 호출 없음), summary/tower/checklist를 갱신했다. 같은 원천에 대한 현재 evaluation fingerprint가 일치하므로 추가 전수 재실행을 하지 않았다.
+- 9개 등록 scope 모두 처분. 수용은 KRX 정규 1,715건, PREMARKET_KRX_LIKE 230건, NXT aftermarket 2건, integrated aftermarket 334건이며 나머지 scope는 수용0/원천 미확정이다. 합계2,281은 scope 분리된 attempt 진단 수이며 하나의 공통 계좌 포트폴리오 수익 분모가 아니다.
+- KRX는 paired7 + natural1,708, calibration4 / holdout1,711이다. holdout 대리값 비교 가능1,710건이며 원화 operating enrichment는0이다. 학습 행동 signature1, 독립 개선 후보0; 선택 좌표는 incumbent `spread100 / fillability15 / ratio5`다.
+- 기존/후보 holdout **terminal-path 대리 EV 모두 −0.0054462573%**, 차이 **0%p**. 이전 엄격한 비진입 후보의 +0.005446%p를 경제적 개선으로 유지하지 않는다. 이 값은 actual EV나 유효 executable operating EV가 아니다. 비용 후 원화/day는 **null**이며 blocker는 `machine_operating_population_unbound`다.
+- 실제 원천에서 비용 후 executable 개선을 확인한 후보0. 독립 실행모델·BLOCK/RECHECK 원천·episode/공통 자본의 잔여를 테스트 fixture 또는 정책 파일 생성으로 대체하지 않았다.
+- 평가 hash `021f32f212d8442518e5b4800768f898afa1140f4b56a16c447a3270ef0e5647`. 최종 9/21 정책 bundle `a805f9e0a3d84d4e92649c3c40a9b5fb5c045c8cc99a4e17ccf2a35412247416`. Main source→단일 machine/compact bundle→dated loader 결속을 확인했고, 이전 9/21 정책과 main 및 모든 scope의 machine policy 본문이 동일하다.
+- main scoped verifier `pass`, compact scoped verifier `PASS`. 전체 `--require-summary-handoff`는 **FAIL: `postclose_terminal_status_missing`**이다. 제한적 summary-handoff controller의 앞선 `done`은 전체 native terminal을 뜻하지 않으며 최신 full controller는 `blocked_predecessor_not_succeeded`다. tower도 최신 전체 FAIL을 소비하도록 갱신했다. 과거 terminal을 합성하거나 전체 wrapper를 재실행하지 않았다.
+- 다음날 체크리스트 `[DirectFamilySourceRepairMainMechanisticEntry]`는 `producer_contract_repair / source_gap / producer_repair`로 OPEN이다. 이전 `natural_evidence_wait / historical_unrecoverable` 오귀속을 제거했다. 기존 루프 복구 완료 ID를 전체 경제성 완료로 바꾸지 않았다.
+- 변경 문서 print-only parser 및 diff check 통과. 브로커/Provider 호출, 주문, 봇/독립 서비스 재기동, 수동 env/threshold 변경, 조기 PREOPEN 실행은 하지 않았다.
+
+**최종 전체 요청 상태: 미종결.** 비교·발행 결함 수리, 검증·push·미래 호출 release 선택·dated carry 발행은 끝났으나 ME8의 paired 별칭 대사 잔여, ME9/ME10의 전체 실행 경제성과 전체 native terminal 증거가 남았다. 유효한 비용 후 EV·일별 순익을 산출했다고 보고하지 않는다.
+
+후속은 기존 producer 수리 ID에서 당시 cutoff·실행 계획/정책·AI/비용·모델/episode 증거를 연결하는 것이다. 단순 sample floor 완화·대리 EV 승격·과거 누락값0 대입·반복 전체 재실행으로 닫지 않는다. 상세 로그와 machine-readable 결과는 `tmp/main-machine-economic-closure-20260920/result.json` 및 같은 폴더의 검증 receipt에 보존했다.
