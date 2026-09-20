@@ -1386,6 +1386,11 @@ def test_dynamic_universe_report_pins_inventory_for_notifier_validation(monkeypa
     assert not expanded.CandidateRecommendationNotifier._valid_report(report)
     report["dynamic_universe_source_date"] = None
     assert not expanded.CandidateRecommendationNotifier._valid_report(report)
+    from src.engine.monitoring import research_closed_loop as loop
+    monkeypatch.setattr(loop, "admission_symbols", lambda day, owner: {"000990": "DB하이텍"})
+    assert expanded.CandidateRecommendationNotifier._valid_report(report)
+    monkeypatch.setattr(loop, "admission_symbols", lambda day, owner: {"000990": "Wrong name"})
+    assert not expanded.CandidateRecommendationNotifier._valid_report(report)
 
 
 def _profile_result(

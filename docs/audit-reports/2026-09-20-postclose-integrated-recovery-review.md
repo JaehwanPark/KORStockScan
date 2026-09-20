@@ -59,3 +59,9 @@ widget/machine 독립 wrapper의 exact-date terminal/source hash를 최종 summa
 - historical refresh의 entry timing 및 weakness hysteresis가 source 다음 영업일(9/18)에만 발행하던 날짜 결손을 보완했다. 원 source는 유지하고 명시된 publication의 다음 영업일로 effective를 정한다. 정상 실행의 기본 날짜 규칙은 유지한다.
 - timing의 동일 단계 widget owner 조회도 실제 effective를 사용한다. timing report/evidence와 weakness immutable source snapshot에 publication을 결속하여 reader가 날짜만 바꾼 과거 증거를 거부한다.
 - 회귀 70 passed(2.06초): 정상 기존 계산·후보·차단 회귀, recovery baseline/carry producer→publication→runtime reader, 날짜 불일치 차단. 제어 fixture이며 자연 신규 정책·경제성 성과가 아니다. main 원천 계산은 ad6fadeea 불변 release에서 계속 진행 중이다.
+
+## Admission 원천과 Daily CSV의 분리
+
+- main 939848688f104d61803f244e156ab5d5는 expanded 계산·보고서 생성을 완료했다. 기존 789 checkpoint를 소비하여 selection 재계산을 피했다. 이후 정책 변환은 admission 원장으로 확보한 종목에 Daily CSV 날짜까지 강제하는 reader 결함으로 실패했다.
+- `admission_symbols(source_date, owner=episode)`의 기존 hash/date/owner 검증을 재사용하여 종목과 이름이 정확히 일치할 때만 CSV 부재를 허용한다. 미등록·이름 불일치·잘못된 날짜·손상 원장은 거부한다. 보고서 자체의 모집단·비용·holdout·recommendation 검증은 유지한다.
+- 확장 보고서 원본 및 원 command rc=0를 재사용 증거로 보존한다. 정책 publisher 실패는 별개 실패 이력으로 남기며 전체 완료로 바꾸지 않는다.

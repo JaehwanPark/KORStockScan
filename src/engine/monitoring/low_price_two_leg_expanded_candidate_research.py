@@ -2725,6 +2725,17 @@ class CandidateRecommendationNotifier:
                 )
             except ValueError:
                 return False
+        # The existing admission catalog is an independent dated universe
+        # source. Absence of a Daily CSV is not absence of its admitted symbols.
+        extra_symbols = set(candidate_symbols) - set(base_target_inventory.candidate_symbols)
+        if extra_symbols and dynamic_source_date is None:
+            from src.engine.monitoring.research_closed_loop import admission_symbols
+            try:
+                admitted = admission_symbols(target_date, owner="episode")
+            except (OSError, ValueError, KeyError, TypeError):
+                return False
+            if any(admitted.get(symbol) != candidate_symbols[symbol] for symbol in extra_symbols):
+                return False
         if (
             end_date != target_date
             or start_date != CLEAN_BASELINE_DATE
@@ -2737,13 +2748,6 @@ class CandidateRecommendationNotifier:
                     not (CLEAN_BASELINE_DATE <= dynamic_source_date <= target_date)
                     or not is_krx_trading_day(dynamic_source_date)
                 )
-            )
-            or (
-                bool(
-                    set(candidate_symbols)
-                    - set(base_target_inventory.candidate_symbols)
-                )
-                and dynamic_source_date is None
             )
         ):
             return False
