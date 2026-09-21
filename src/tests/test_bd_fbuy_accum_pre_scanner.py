@@ -344,3 +344,11 @@ def test_machine_file_trade_rows_preserve_provider_clock_without_legacy_synthesi
         assert key not in projected[1]
     assert mod._ws_snapshot_age_ms(110.000001, 110.0) < 0
     assert mod._ws_snapshot_age_ms(True, 110.0) == 'not_available_timestamp'
+
+
+def test_machine_trade_projection_preserves_cumulative_volume_for_entry_guard():
+    row = {"recent_trade_ticks_by_route": {"route": [dict(item="005930_AL", transport_epoch=1, received_at_ms=100000, route_sequence=1, price=100, volume=5, cum_volume=12345)]}}
+    projected = mod._ws_machine_route_payload(row, now_ts=101.0)["route"]["recent_trades"]
+    assert projected[0]["cum_volume"] == 12345
+    del row["recent_trade_ticks_by_route"]["route"][0]["cum_volume"]
+    assert mod._ws_machine_route_payload(row, now_ts=101.0)["route"]["recent_trades"][0]["cum_volume"] is None

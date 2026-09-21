@@ -151,6 +151,17 @@ KIWOOM_EXECUTION_VELOCITY_OFFICIAL_REFERENCE = {
 }
 
 
+def _source_policy_contract(contract, source):
+    result = deepcopy(contract)
+    if source == "kiwoom_ws_orderbook":
+        result.update(sample_floor="one_route_qualified_0D_snapshot_per_submit_bundle",
+                      source_quality_gate="exact_item_epoch_live_producer;original_receive_age_lte_2000ms;positive_uncrossed_bbo;nonnegative_touch_quantities")
+    elif source == "kiwoom_ws_trade_prints":
+        result.update(sample_floor="10_route_qualified_0B_trade_prints",
+                      source_quality_gate="exact_item_epoch_live_producer;original_receive_and_provider_clocks;latest_print_age_lte_5000ms;local_sequence_contiguous_not_exchange_completeness;strictly_descending_accumulated_trade_quantity;positive_price_and_absolute_trade_quantity")
+    return result
+
+
 def _nonnegative_int(value: object) -> int:
     if isinstance(value, bool):
         raise ValueError("boolean_is_not_quantity")
@@ -203,6 +214,7 @@ class EntryLiquiditySnapshot:
     received_ts_ms: int = 0
     error: str = ""
     market_data_health: dict[str, Any] = field(default_factory=dict)
+    source_meta: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -223,8 +235,8 @@ class EntryLiquidityDecision:
             "entry_liquidity_required_each_side_quantity": (
                 self.required_each_side_quantity
             ),
-            "entry_liquidity_policy_contract": deepcopy(
-                ENTRY_LIQUIDITY_POLICY_CONTRACT
+            "entry_liquidity_policy_contract": _source_policy_contract(
+                ENTRY_LIQUIDITY_POLICY_CONTRACT, self.snapshot.source
             ),
             "entry_liquidity_snapshot": asdict(self.snapshot),
         }
@@ -268,8 +280,8 @@ class EntryExecutionVelocityDecision:
             "entry_execution_velocity_required_recent_volume": (
                 self.required_recent_volume
             ),
-            "entry_execution_velocity_policy_contract": deepcopy(
-                ENTRY_EXECUTION_VELOCITY_POLICY_CONTRACT
+            "entry_execution_velocity_policy_contract": _source_policy_contract(
+                ENTRY_EXECUTION_VELOCITY_POLICY_CONTRACT, self.snapshot.source
             ),
             "entry_execution_velocity_snapshot": asdict(self.snapshot),
         }
@@ -594,6 +606,18 @@ def _refresh_liquidity_snapshot(
     snapshot: EntryLiquiditySnapshot, *, now_ts: float | None = None
 ) -> EntryLiquiditySnapshot:
     """Recompute quote facts at the decision, never tape inactivity/authority."""
+    if snapshot.source == "kiwoom_ws_orderbook":
+        from src.trading.market.entry_ws_snapshot import validate_receipt
+        try:
+            age = validate_receipt(snapshot.source_meta, symbol=snapshot.symbol, route=snapshot.route,
+                                   now_ts=time.time() if now_ts is None else now_ts)
+            if (snapshot.source_meta.get("realtime_type") != "0D"
+                    or any(type(v) is not int or v < 0 for v in (snapshot.age_ms, snapshot.received_ts_ms, snapshot.best_bid, snapshot.best_ask, snapshot.best_bid_qty, snapshot.best_ask_qty))
+                    or snapshot.best_bid <= 0 or snapshot.best_ask < snapshot.best_bid):
+                raise ValueError("ws_quote_contract_invalid")
+            return replace(snapshot, age_ms=max(snapshot.age_ms, age))
+        except (OSError, ValueError, KeyError, TypeError, AttributeError, OverflowError):
+            return replace(snapshot, source_ok=False, error=snapshot.error or "ws_quote_receipt_invalid")
     health = build_market_data_health(
         {
             "source": snapshot.source,
@@ -714,6 +738,7 @@ def _coerce_liquidity_snapshot(
             received_ts_ms=contract_int("received_ts_ms"),
             error=str(raw.get("error") or ""),
             market_data_health=deepcopy(raw.get("market_data_health", {})),
+            source_meta=deepcopy(raw.get("source_meta", {})),
         )
     except (TypeError, ValueError, OverflowError):
         return None
@@ -870,7 +895,19 @@ def evaluate_entry_execution_velocity(
 ) -> EntryExecutionVelocityDecision:
     # Revalidate the original successful response, not the carried health age.
     # Legacy declared print fixtures retain their existing receive-window adapter.
-    if snapshot.source_meta:
+    if snapshot.source == "kiwoom_ws_trade_prints":
+        from src.trading.market.entry_ws_snapshot import validate_receipt
+        try:
+            consumed = time.time() if now_ts is None else now_ts
+            age = validate_receipt(snapshot.source_meta, symbol=snapshot.symbol, route=snapshot.route, now_ts=consumed)
+            event_age = math.ceil((consumed - snapshot.source_meta["provider_latest_epoch"]) * 1000)
+            if (snapshot.source_meta.get("realtime_type") != "0B" or event_age < 0 or age > MAX_LATEST_PRINT_AGE_MS
+                    or any(type(v) is not int or v < 0 for v in (snapshot.print_count, snapshot.recent_volume, snapshot.latest_print_age_ms, snapshot.recent_print_span_ms))):
+                raise ValueError("ws_trade_clock_invalid")
+            snapshot = replace(snapshot, latest_print_age_ms=max(snapshot.latest_print_age_ms, event_age))
+        except (OSError, ValueError, KeyError, TypeError, AttributeError, OverflowError):
+            snapshot = replace(snapshot, source_ok=False, error=snapshot.error or "ws_trade_receipt_invalid")
+    elif snapshot.source_meta:
         consumed = time.time() if now_ts is None else now_ts
         health = build_rest_market_data_health(
             {"stk_cd": snapshot.response_item_raw}, api_id="ka10003",

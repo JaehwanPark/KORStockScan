@@ -18,6 +18,8 @@ from src.trading.order.entry_adverse_guard import before_transport
 
 from src.engine.sniper_config import CONF
 from src.engine.trade_pause_control import is_buy_side_paused
+from src.trading.market.entry_ws_snapshot import selected_entry_snapshot
+
 from src.trading.order.entry_liquidity_guard import (
     REQUIRED_RECENT_PRINT_COUNT,
     EntryExecutionVelocitySnapshot,
@@ -417,6 +419,9 @@ class KiwoomSharedTokenOrderGateway:
     def entry_liquidity_snapshot(
         self, *, code: str, route: str
     ) -> EntryLiquiditySnapshot:
+        selected = selected_entry_snapshot(symbol=code, route=route, kind="0D")
+        if selected is not None:
+            return selected
         try:
             request_code = entry_liquidity_request_code(code, route)
             payload = kiwoom_utils.get_stock_orderbook_ka10004(
@@ -434,6 +439,9 @@ class KiwoomSharedTokenOrderGateway:
     def entry_execution_velocity_snapshot(
         self, *, code: str, route: str
     ) -> EntryExecutionVelocitySnapshot:
+        selected = selected_entry_snapshot(symbol=code, route=route, kind="0B")
+        if selected is not None:
+            return selected
         try:
             request_code = entry_liquidity_request_code(code, route)
             payload = kiwoom_utils.get_tick_history_ka10003(

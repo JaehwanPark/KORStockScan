@@ -296,3 +296,37 @@ def test_morning_prearm_starts_real_adverse_checkpoint_at_open(tmp_path, setup):
         assert state["signal_at"] == setup["time"].isoformat()
         assert "0" in state["checkpoints"]
         assert state["action"] != "SKIP_DEADLINE"
+
+
+def test_morning_unsent_wait_preserves_signal_and_retries(tmp_path, monkeypatch, setup):
+    from src.tests import test_samsung_morning_one_share as morning
+    setup['time']=morning._at(10,9)
+    setup['adverse']=False
+    gateway=morning.FakeGateway();machine=morning._machine(tmp_path,gateway)
+    gateway.entry_adverse_transport_supported=True
+    setup['enable'](dict(owner='episode',scope_id=machine.entry_timing_scope_id,symbol='005930',route='SOR',session='KRX_REGULAR'))
+    original=gateway.submit_limit_buy
+    first={'wait':True}
+    def submit(**kwargs):
+        if first['wait']:
+            # Reproduce a fresh prepare followed by unavailable final evidence.
+            state=next(l[guard.KEY] for l in machine._state['legs'] if l['status']=='BUY_SUBMITTING')
+            state['action']='WAIT'
+            raise guard.EntryNotSent('SOURCE_UNAVAILABLE')
+        guard.before_transport('kt10000')
+        return original(**kwargs)
+    gateway.submit_limit_buy=submit
+    machine.run_once(setup['time'])
+    legs=[l for l in machine._state['legs'] if l.get('route')=='SOR']
+    assert all(l['status']=='PLANNED' and l[guard.KEY]['action']=='WAIT' for l in legs)
+    identities=[(l[guard.KEY]['identity'],l[guard.KEY]['t0_ms'],l[guard.KEY]['deadline_ms']) for l in legs]
+    assert not gateway.buy_calls
+    # Existing loader must retain the same signal and bounded retry identity.
+    machine=morning._machine(tmp_path,gateway)
+    first['wait']=False;setup['time']+=timedelta(seconds=1)
+    machine.run_once(setup['time'])
+    legs=[l for l in machine._state['legs'] if l.get('route')=='SOR']
+    assert [(l[guard.KEY]['identity'],l[guard.KEY]['t0_ms'],l[guard.KEY]['deadline_ms']) for l in legs]==identities
+    assert len(gateway.buy_calls)==2
+    machine.run_once(setup['time']+timedelta(seconds=10))
+    assert len(gateway.buy_calls)==2
