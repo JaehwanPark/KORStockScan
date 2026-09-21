@@ -168,11 +168,27 @@ def attach_transport_census(owner, payload):
     if getattr(owner, "_transport_census_key", None) != key:
         owner._transport_census_key, owner._transport_census = key, {}
     window = int(now.timestamp()) // 900 * 900
+    producer = transport.get("producer") or {}
+    # Keep failures in the denominator, but never attest a mixed/unknown
+    # producer window using only the latest snapshot's provenance.
+    generation = {
+        "process": dict(producer.get("process") or {}),
+        "source_commit": producer.get("source_commit"),
+        "transport_epoch": producer.get("transport_epoch"),
+    } if producer else None
     bucket = owner._transport_census.setdefault(window, {
         "expected_comparisons": 0, "valid_ws": 0, "ws_source_gap": 0,
         "rest_not_observed": 0, "matched_fields": 0, "different_observations": 0,
         "not_comparable_clock_gap": 0,
+        "producer_generation": generation, "producer_generation_mixed": False,
+        "producer_generation_missing": generation is None,
+        "first_observed_at": now.isoformat(),
     })
+    if bucket["producer_generation"] != generation:
+        bucket["producer_generation_mixed"] = True
+    if generation is None:
+        bucket["producer_generation_missing"] = True
+    bucket["last_observed_at"] = now.isoformat()
     bucket["expected_comparisons"] += 1
     bucket["valid_ws" if transport["status"] == "valid_ws_comparison_input" else "ws_source_gap"] += 1
     bucket[transport["comparison_status"]] += 1
@@ -183,6 +199,7 @@ def attach_transport_census(owner, payload):
     except (OSError, ValueError, IndexError):
         consumer_process = {"status": "process_provenance_unavailable"}
     transport["census"] = {"scope": "process_local_comparison_not_adopted_input",
+        "schema": "widget_transport_census_generation_bound_v2",
         "consumer_process": consumer_process,
         "windows": {str(k): dict(v) for k, v in owner._transport_census.items()}}
     payload["market_data_transport"] = transport

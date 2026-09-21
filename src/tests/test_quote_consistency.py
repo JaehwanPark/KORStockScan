@@ -133,6 +133,73 @@ def test_shared_transport_census_preserves_failed_and_different_observations(tmp
     bucket = next(iter(source["census"]["windows"].values()))
     assert bucket["expected_comparisons"] == bucket["valid_ws"] + bucket["ws_source_gap"] == 2
     assert bucket["rest_not_observed"] == bucket["different_observations"] == 1
+    assert bucket["producer_generation_mixed"] is False
+    assert bucket["producer_generation_missing"] is False
+
+
+@pytest.mark.parametrize("change", ["pid", "start_ticks", "boot_id", "source_commit", "transport_epoch", "missing"])
+def test_shared_transport_census_marks_mixed_window_without_erasing_gaps(tmp_path, monkeypatch, change):
+    from copy import deepcopy
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+    from src.trading.market.shared_ws_snapshot import read_shared_widget_quote, attach_transport_census
+    path, context, now, _ = _shared_widget_fixture(tmp_path, monkeypatch)
+    source = read_shared_widget_quote(context, now_ts=now, path=path)
+    owner = SimpleNamespace(_transport_comparison=source)
+    payload = {"observed_at_kst": datetime.fromtimestamp(now, timezone.utc).isoformat()}
+    attach_transport_census(owner, payload)
+    original = deepcopy(source["census"]["windows"])
+    if change == "missing":
+        source.pop("producer")
+        source["status"] = "source_gap"
+    elif change in {"pid", "start_ticks", "boot_id"}:
+        process = source["producer"]["process"]
+        process[change] = "new-boot" if change == "boot_id" else process[change] + 1
+    else:
+        source["producer"][change] = "b" * 40 if change == "source_commit" else 2
+    attach_transport_census(owner, payload)
+    bucket = next(iter(source["census"]["windows"].values()))
+    assert bucket["producer_generation"] == next(iter(original.values()))["producer_generation"]
+    assert bucket["producer_generation_mixed"] is True
+    assert bucket["producer_generation_missing"] is (change == "missing")
+    assert bucket["expected_comparisons"] == bucket["valid_ws"] + bucket["ws_source_gap"] == 2
+    assert bucket["rest_not_observed"] == 2
+    # A later complete window has its own generation, not a reset of history.
+    payload["observed_at_kst"] = datetime.fromtimestamp(now + 900, timezone.utc).isoformat()
+    attach_transport_census(owner, payload)
+    windows = source["census"]["windows"]
+    assert len(windows) == 2
+    assert windows[str(int(now))]["producer_generation_mixed"] is True
+    assert windows[str(int(now + 900))]["producer_generation_mixed"] is False
+    assert source["selected_input"] == "existing_rest"
+
+
+def test_shared_transport_census_keeps_unknown_generation_and_bounded_history(tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+    from src.trading.market.shared_ws_snapshot import read_shared_widget_quote, attach_transport_census
+    path, context, now, _ = _shared_widget_fixture(tmp_path, monkeypatch)
+    source = read_shared_widget_quote(context, now_ts=now, path=path)
+    producer = source.pop("producer")
+    source["status"] = "source_gap"
+    owner = SimpleNamespace(_transport_comparison=source)
+    payload = {"observed_at_kst": datetime.fromtimestamp(now, timezone.utc).isoformat()}
+    attach_transport_census(owner, payload)
+    source["producer"] = producer
+    source["status"] = "valid_ws_comparison_input"
+    attach_transport_census(owner, payload)
+    bucket = source["census"]["windows"][str(int(now))]
+    assert bucket["producer_generation"] is None
+    assert bucket["producer_generation_missing"] is True
+    assert bucket["producer_generation_mixed"] is True
+    assert bucket["expected_comparisons"] == 2
+    assert bucket["ws_source_gap"] == bucket["valid_ws"] == 1
+    for offset in range(1, 6):
+        payload["observed_at_kst"] = datetime.fromtimestamp(now + 900 * offset, timezone.utc).isoformat()
+        attach_transport_census(owner, payload)
+    windows = source["census"]["windows"]
+    assert len(windows) == 4
+    assert min(map(int, windows)) == now + 1800
 
 
 @pytest.mark.parametrize(
