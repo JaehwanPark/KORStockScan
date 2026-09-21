@@ -25,6 +25,10 @@ Review fixes: initial route fixture incorrectly treated regular KRX as dedicated
 - Existing post-prepare/source-loss/deadline/save-latency/mock-transport tests, five-gateway zero-REST tests, same-identity retry/reload/no-duplicate tests and writer cumulative-volume tests are included. No broker/provider calls or real-order tests.
 - Previous unshipped shared-reader fixes (idempotent comparison count, cross-scope clocks, registration shape, suffix conflict) are reviewed/reused with their existing tests; unrelated main working-tree changes are excluded from release.
 
+## Launcher binding follow-up
+
+The first candidate `81eb16c09` started PID242503 with a new cwd/commit receipt but inherited PYTHONPATH from `4b3b4080c`; live trade projections still omitted cumulative volume. This is a source-consumption defect, not a passing deployment. `src/run_bot.sh` now rebinds PYTHONPATH to its selected PROJECT_DIR immediately before the child launch. A behavioral test imports a distinguishable module with an inherited old-release path and verifies the selected module. Launcher/router regression: 78 PASS. No policy values, custody or schedule changed. Runtime acceptance must verify actual producer module root and the additive field, not only PID/cwd.
+
 ## Deployment and natural acceptance
 
 Pending at review: immutable release validation, producer field consumption, scoped consumer/source selection, state preservation and release/PID receipts. P1's 14:00–14:45 raw observations must be reconciled before producer/collector restart; old v3 aggregate alone is insufficient. New-generation P2E source windows and actual natural submit-path evidence remain separately owned by the checklist. No historic opportunity is replayed and no order is created by this review.
