@@ -561,3 +561,58 @@ def test_episode_policy_uses_observed_range_without_requiring_missing_minute(mod
     observed=[replace(row,history_basis='observed_valid_rows') for row in rows]
     assert policy.evaluate(observed) is not None
     assert policy.evaluate(list(reversed(observed))) is None
+
+
+@pytest.mark.parametrize('defect', ['future_clock','missing_clock','invalid_clock_type','missing_epoch'])
+def test_excluded_bar_cannot_poison_accepted_history_receipt(tmp_path,defect):
+    p=CompletedBarProjection(tmp_path)
+    run(p,[point(1,10),point(2,60),point(3,121),point(4,181)])
+    now=BASE+timedelta(hours=1);snapshot=bind(tmp_path,p,now)
+    path=tmp_path/'2026-09-21/005930_AL/SOR_AFTERMARKET.json';doc=payload(tmp_path);bad=doc['bars'][1]
+    if defect=='future_clock':bad['available_at_epoch']=now.timestamp()+100
+    elif defect=='missing_clock':bad.pop('available_at_epoch')
+    elif defect=='invalid_clock_type':bad['available_at_epoch']='invalid'
+    else:bad.pop('source_epoch')
+    good=doc['bars'][2];doc.pop('content_sha256');doc['content_sha256']=digest(doc);atomic_json(path,doc)
+    result=reader.read_shared_completed_bars('005930_AL',now=now,root=tmp_path,snapshot_path=snapshot,allow_partial_history=True)
+    assert len(result['stk_min_pole_chart_qry'])==1
+    receipt=result['_completed_bar_source']
+    assert receipt['available_at_epoch']==good['available_at_epoch']
+    assert receipt['historical_source_epochs']==[good['source_epoch']]
+    assert any(row['minute_epoch']==bad['minute_epoch'] for row in receipt['excluded_bars'])
+
+
+@pytest.mark.parametrize('mode',['ws_when_ready','ws'])
+def test_dead_producer_is_not_missing_artifact_rest_permission(tmp_path,monkeypatch,mode):
+    p=CompletedBarProjection(tmp_path);run(p,[point(1,10),point(2,60),point(3,121)])
+    now=BASE+timedelta(hours=1);snapshot=bind(tmp_path,p,now)
+    monkeypatch.setattr(reader,'COMPLETED_BARS_ROOT',tmp_path);monkeypatch.setattr(reader,'SNAPSHOT_PATH',snapshot)
+    monkeypatch.setenv('KORSTOCKSCAN_WIDGET_BAR_SOURCE',mode)
+    monkeypatch.setenv('KORSTOCKSCAN_WIDGET_BAR_WS_SYMBOLS','005930')
+    monkeypatch.setenv('KORSTOCKSCAN_WS_COMPLETED_BAR_GAP_POLICY','observed_valid_rows')
+    def dead(_):raise FileNotFoundError('/proc/exited/stat')
+    monkeypatch.setattr(reader,'process_generation',dead)
+    with pytest.raises(RuntimeError,match='completed_bar_live_binding_invalid'):
+        reader.selected_completed_bar_payload('005930_AL',now=now,seed_fetch=lambda _:pytest.fail('dead producer must not trigger REST'))
+
+
+def test_quote_source_gap_retains_cause_not_false_pid_binding(monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setenv('KORSTOCKSCAN_WIDGET_MARKET_DATA_SOURCE','ws')
+    monkeypatch.setenv('KORSTOCKSCAN_WIDGET_WS_SYMBOLS','005930')
+    context=SimpleNamespace(request_code='005930_AL',name='NXT_AFTERMARKET')
+    receipt={'status':'source_gap','reason':'field_clock_route_or_epoch_invalid:0B'}
+    with pytest.raises(RuntimeError,match='widget_ws_source_unavailable:field_clock_route_or_epoch_invalid:0B'):
+        reader.select_widget_ws_inputs(context,receipt,now_ts=BASE.timestamp())
+    assert receipt['selection_reason']=='widget_ws_source_unavailable:field_clock_route_or_epoch_invalid:0B'
+    assert receipt['input_adopted'] is False
+
+
+def test_excluded_row_revokes_full_prefix_claim(tmp_path):
+    p=CompletedBarProjection(tmp_path)
+    consume_at_source_time(p,[session_point(1,'2026-09-21T08:00:10+09:00',2),session_point(2,'2026-09-21T08:01:01+09:00',4),session_point(3,'2026-09-21T08:02:01+09:00',6)])
+    path=tmp_path/'2026-09-21/005930_AL/SOR_PREMARKET.json';doc=json.loads(path.read_text());doc['bars'][1]['low']=-1;doc.pop('content_sha256');doc['content_sha256']=digest(doc);atomic_json(path,doc)
+    now=BASE.replace(hour=8,minute=3)
+    result=reader.read_shared_completed_bars('005930_AL',now=now,root=tmp_path,snapshot_path=bind(tmp_path,p,now),allow_partial_history=True)
+    assert len(result['stk_min_pole_chart_qry'])==1
+    assert result['_completed_bar_source']['complete_session_prefix'] is False

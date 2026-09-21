@@ -184,8 +184,12 @@ def read_shared_widget_quote(context, *, now_ts, path=None):
 
 def validate_widget_ws_receipt(receipt, *, context, now_ts):
     """Recheck original field clocks after slow auxiliary/REST work."""
-    if (receipt.get("status") != "valid_ws_comparison_input"
-            or receipt.get("request_code") != context.request_code
+    if receipt.get("status") != "valid_ws_comparison_input":
+        reason = str(receipt.get("reason") or "source_gap")
+        if not re.fullmatch(r"[A-Za-z0-9_:-]+", reason):
+            reason = "source_gap"
+        raise ValueError("widget_ws_source_unavailable:" + reason)
+    if (receipt.get("request_code") != context.request_code
             or receipt.get("session") != context.name
             or receipt["producer"]["process"] != process_generation(receipt["producer"]["process"]["pid"])):
         raise ValueError("widget_ws_receipt_binding_invalid")
@@ -447,11 +451,17 @@ def read_shared_completed_bars(request_code, *, now, root=None, snapshot_path=No
     session = _bar_session(now)
     snapshot = _bounded_json(snapshot_path or SNAPSHOT_PATH, 8 * 1024 * 1024)
     producer = snapshot["shared_transport_producer"]
+    try:
+        live_process = process_generation(producer["process"]["pid"])
+    except (OSError, ValueError, KeyError, TypeError, IndexError) as exc:
+        # /proc absence is a dead producer, not a missing native artifact
+        # that authorizes seed/fallback REST in the caller.
+        raise ValueError("completed_bar_live_binding_invalid") from exc
     snapshot_age = now.timestamp() - snapshot["generated_at_epoch"]
     if (not math.isfinite(snapshot_age) or snapshot_age < 0
             or (not allow_partial_history and snapshot_age > 20)
             or producer["connection_available"] is not True
-            or producer["process"] != process_generation(producer["process"]["pid"])
+            or producer["process"] != live_process
             or request_code not in producer["registered_items"]):
         raise ValueError("completed_bar_live_binding_invalid")
     payload = _bounded_json(Path(root or COMPLETED_BARS_ROOT) / now.date().isoformat() / request_code / (session + ".json"))
@@ -471,7 +481,7 @@ def read_shared_completed_bars(request_code, *, now, root=None, snapshot_path=No
             or payload["actual_order_submitted"] is not False
             or payload["runtime_effect"] is not False):
         raise ValueError("completed_bar_source_contract_invalid")
-    rows, previous, excluded = [], None, []
+    rows, previous, excluded, accepted = [], None, [], {}
     for bar in payload["bars"]:
         minute = bar["minute_epoch"]
         stamp = datetime.fromtimestamp(minute, KST)
@@ -491,6 +501,7 @@ def read_shared_completed_bars(request_code, *, now, root=None, snapshot_path=No
         try:
             values = [bar[k] for k in ("open", "high", "low", "close", "volume")]
             invalid = (bar["status"] != "complete" or bar["issues"] or bar["source_item"] != request_code
+                    or type(bar.get("source_epoch")) is not int or bar["source_epoch"] <= 0
                     or not all(type(v) is int and v >= 0 for v in values)
                     or min(values[:4]) <= 0 or bar["high"] < max(values[:4])
                     or bar["low"] > min(values[:4]) or bar["available_at_epoch"] is None
@@ -507,6 +518,7 @@ def read_shared_completed_bars(request_code, *, now, root=None, snapshot_path=No
         rows.append({"cntr_tm": bar["source_time"], "open_pric": str(bar["open"]),
                      "high_pric": str(bar["high"]), "low_pric": str(bar["low"]),
                      "cur_prc": str(bar["close"]), "trde_qty": str(bar["volume"])})
+        accepted[bar["source_time"]] = bar
     invalid_from = payload.get("invalid_from_minute")
     if invalid_from is not None:
         rows = [row for row in rows if (
@@ -539,17 +551,18 @@ def read_shared_completed_bars(request_code, *, now, root=None, snapshot_path=No
         covered = True
     # A quiet opening minute need not contain a candle. Its absence alone is
     # not a gap when the first print's cumulative boundary is proven.
-    complete_session_prefix = bool(rows) and covered and not payload.get("history_truncated", False) and not any(b["status"] == "gap" for b in payload["bars"]) and invalid_from is None
+    complete_session_prefix = bool(rows) and covered and not excluded and not payload.get("history_truncated", False) and not any(b["status"] == "gap" for b in payload["bars"]) and invalid_from is None
+    accepted_bars = [accepted[row["cntr_tm"]] for row in rows]
     receipt = {"source": "kiwoom_ws_AL_completed_1m", "request_code": request_code,
                "adjustment": payload["adjustment"], "source_epoch": payload["source_epoch"],
                "complete_session_prefix": complete_session_prefix,
                "session_coverage": coverage,
                "transport_epoch": producer["transport_epoch"], "producer": payload["producer"],
                "revision": payload["revision"], "content_sha256": expected,
-               "available_at_epoch": max((b["available_at_epoch"] or 0 for b in payload["bars"]), default=0),
+               "available_at_epoch": max((b["available_at_epoch"] for b in accepted_bars), default=0),
                "generated_at_epoch": payload["generated_at_epoch"], "session": session,
                "cursor": payload["cursor"], "durable_cursor": payload.get("durable_cursor"),
-               "historical_source_epochs": sorted({b["source_epoch"] for b in payload["bars"] if b["status"] == "complete"}),
+               "historical_source_epochs": sorted({b["source_epoch"] for b in accepted_bars}),
                "rest_request_count": 0,
                "missing_range": next((
                    {"from_minute": b["minute_epoch"], "to_minute": b["minute_epoch"] + 60,

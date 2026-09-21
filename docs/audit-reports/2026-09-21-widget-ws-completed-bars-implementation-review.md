@@ -1,5 +1,13 @@
 # Widget / episode AL completed-bar implementation review
 
+## Observed-history follow-up review and repair
+
+The user requested another review/fix cycle and authorized deployment/restart. The accepted observed-history policy remains in force. Review reproduced six failing cases in two defect groups: an excluded bar could poison receipt clocks/epochs (or raise a second exception), and `/proc` absence for an exited producer could be mistaken for missing native history, permitting REST fallback/seed. Receipt aggregation now uses exactly the accepted rows; invalid row epochs are excluded and any exclusion revokes the full-prefix claim. Dead/unreadable process identity becomes an explicit live-binding failure before the caller's missing-artifact handler. Original date/AL/hash/liveness and execution guards remain intact.
+
+Live review also found quote source failures were replaced by a generic PID-binding message. The selector now preserves the original source-gap reason, without changing freshness thresholds or initiating recovery. Samsung's observed old0B/0D fields are distinguished from a PID mismatch. Quiet tape does not authorize reconnect/REG or historical-bar REST refresh. A genuine quote-time freshness failure can still block a current order decision; it is not a failed historical-bar cutover.
+
+The initial six regressions failed before repair and passed after repair; supplemental tests cover full-prefix revocation and source-gap attribution. [Scoped test/review/deployment evidence](../../tmp/widget-p3-cutover-review-20260921/). Official upstream HEAD was rechecked unchanged at `953e5dbff123f437ab4d11a78a95191a685eb51f`; this change only repairs local receipt aggregation and error classification, with no request/FID/auth/subscription change. [Reference receipt](../../tmp/widget-p3-cutover-review-20260921/official-receipt.json). Deploy only the affected collector reader release and next-start episode definitions; preserve main/active episode PIDs and all state.
+
 ## Operator-approved observed-history cutover
 
 The user explicitly accepted the observed degree of missing history and requested actual cutover validation. This supersedes the earlier complete-session-prefix and gap-free-history acceptance for the existing six-symbol cohort; earlier receipts below are historical. Identity/date/AL route, hash integrity, valid completed OHLCV, individual calculation minimums and execution-time hard guards remain mandatory. Three15-minute windows are follow-up quality observation, not a prerequisite to the first WS bar selection. No synthetic missing candle, adjusted REST/raw splice, order or custody change is authorized by this source switch.
