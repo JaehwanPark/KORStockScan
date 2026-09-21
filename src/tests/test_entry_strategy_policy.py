@@ -272,3 +272,102 @@ def test_truncated_historical_tail_does_not_support_longer_lookback():
     candidate_policy['strategy']['nodes']['root']['profile']['breakout_lookback'] = 20
     with pytest.raises(ValueError, match='tail_truncated'):
         evidence.mechanistic_entry_policy_decision(setup(historical_payload()), policy=candidate_policy)
+
+
+def research_row(payload=None):
+    return dict(decision_trace_id='attempt-1', source_date='2026-09-10',
+        stock_code='005930', scanner_promotion_id='promotion-1',
+        setup_evidence=setup(payload), comparison={})
+
+
+def research_policy():
+    value = policy()
+    value['strategy']['nodes']['root']['profile'].update(
+        overextension_runup_pct=20, overextension_vwap_bp=120,
+        overextension_ma5_bp=120, tape_supportive_score=60)
+    return value
+
+
+def one_research_candidate(monkeypatch):
+    monkeypatch.setattr(strategy, 'joint_candidates', lambda *a, **kw: iter([
+        (research_policy(), dict(cursor=1, domain_size=1, domain_sha256='a'*64, search_complete=True))]))
+
+
+def test_one_raw_opportunity_can_generate_research_without_cost_or_holdout(monkeypatch):
+    from src.engine.scalping import ai_action_outcome_calibration as calibration
+    one_research_candidate(monkeypatch)
+    result = calibration.build_main_strategy_refinement([research_row()],
+        parent=evidence.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
+        scope=('KRX', 'KRX_REGULAR'), source_contract={})
+    assert result['evaluated_candidate_count'] == 1
+    assert result['status'] == 'hold_sample' and result['promotion_pass'] is False
+    assert result['candidate'] is None and result['research_only'] is True
+    item = result['research_candidates'][0]
+    assert item['action_transition_counts'] == {'BLOCK->ENTER_NOW': 1}
+    assert item['allowed_runtime_apply'] is False
+    assert item['downstream_context_bound'] is False
+    assert item['changed_attempts'][0]['raw_sha256'] == research_row()['setup_evidence']['strategy_raw_sha256']
+
+
+def test_research_cache_changes_with_raw_even_when_trace_ids_unchanged(monkeypatch):
+    from src.engine.scalping import ai_action_outcome_calibration as calibration
+    one_research_candidate(monkeypatch)
+    kwargs = dict(parent=evidence.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
+        scope=('KRX', 'KRX_REGULAR'), source_contract={})
+    first = calibration.build_main_strategy_refinement([research_row()], **kwargs)
+    previous = {**first, 'candidate': {'parent_sha256': 'different'}, 'cache_marker': True}
+    changed = raw(); changed['current']['price'] += 10
+    second = calibration.build_main_strategy_refinement([research_row(changed)], previous=previous, **kwargs)
+    assert second['input_sha256'] != first['input_sha256']
+    assert 'cache_marker' not in second
+
+
+def test_incumbent_hierarchy_is_not_replaced_by_strategy_seed(monkeypatch):
+    from src.engine.scalping import ai_action_outcome_calibration as calibration
+    one_research_candidate(monkeypatch)
+    parent = deepcopy(evidence.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1)
+    parent['hierarchy'] = {'test_marker': 'must_reach_actual_parent'}
+    actual = calibration.mechanistic_entry_policy_decision
+    observed = []
+    def decision(value, *, policy):
+        if 'strategy' not in policy:
+            observed.append(policy)
+            return dict(action='RECHECK')
+        return actual(value, policy=policy)
+    monkeypatch.setattr(calibration, 'mechanistic_entry_policy_decision', decision)
+    result = calibration.build_main_strategy_refinement([research_row()], parent=parent,
+        scope=('KRX','KRX_REGULAR'), source_contract={})
+    assert observed == [parent]
+    assert result['research_candidates'][0]['action_transition_counts'] == {'RECHECK->ENTER_NOW': 1}
+
+
+def test_equal_setup_does_not_reuse_a_different_auxiliary_machine_assessment(monkeypatch):
+    from src.engine.scalping import ai_action_outcome_calibration as calibration
+    one_research_candidate(monkeypatch)
+    row = research_row()
+    decision = evidence.mechanistic_entry_policy_decision(row['setup_evidence'], policy=research_policy())
+    provider_assessment = {k:v for k,v in decision.items() if k not in {'strategy_selection','effective_setup_evidence'}}
+    row['operating_comparison_input'] = {'input': {
+        'entry_setup_evidence_v1': decision['effective_setup_evidence'],
+        'mechanistic_entry_assessment': {**provider_assessment, 'action':'BLOCK'}}}
+    kwargs = dict(parent=evidence.MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
+        scope=('KRX','KRX_REGULAR'), source_contract={})
+    result = calibration.build_main_strategy_refinement([row], **kwargs)
+    assert result['research_candidates'][0]['downstream_context_bound'] is False
+    row['operating_comparison_input']['input']['mechanistic_entry_assessment'] = provider_assessment
+    result = calibration.build_main_strategy_refinement([row], **kwargs)
+    assert result['research_candidates'][0]['downstream_context_bound'] is True
+    assert result['promotion_pass'] is False  # AI parity alone is not owner economics.
+
+
+@pytest.mark.parametrize('change', [dict(h=9998), dict(v=-1), dict(dt='2026-09-09T09:00:00+09:00')])
+def test_full_completed_bar_replay_rejects_invalid_ohlcv_and_other_session(change):
+    payload = raw()
+    bar = dict(dt='2026-09-10T09:00:00+09:00', o=10000, h=10002, l=9999, c=10001,
+        v=100, forming=False, partial_volume=False)
+    body = dict(observed_at='2026-09-10T09:02:00+09:00', bars=[{**bar, **change}])
+    payload['entry_candle_context'].update(completed_bar_count=1,
+        strategy_completed_bars=dict(body=body, sha256=strategy.digest(body)))
+    item = policy(); item['strategy']['nodes']['root']['profile']['structure_volume_confirm'] = 1.3
+    with pytest.raises(ValueError, match='ohlcv_or_session_invalid'):
+        strategy.rebuild(setup(payload), item)

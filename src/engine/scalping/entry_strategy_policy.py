@@ -408,6 +408,11 @@ def rebuild(setup, policy):
                 bar = {**row, 'dt': datetime.fromisoformat(row['dt'])}
                 if bar['dt'].tzinfo is None or bar['dt'].timestamp() + 60 > cutoff.timestamp() or bar.get('forming'):
                     raise ValueError('strategy_future_or_forming_bar')
+                if (any(_number(bar.get(k)) is None for k in ('o', 'h', 'l', 'c', 'v'))
+                    or not 0 < bar['l'] <= min(bar['o'], bar['c']) <= max(bar['o'], bar['c']) <= bar['h']
+                    or bar['v'] < 0
+                    or bar['dt'].astimezone(ZoneInfo('Asia/Seoul')).date() != cutoff.astimezone(ZoneInfo('Asia/Seoul')).date()):
+                    raise ValueError('strategy_completed_bar_ohlcv_or_session_invalid')
                 bars.append(bar)
             if len(bars) != context.get('completed_bar_count') or any(
                 a['dt'] >= b['dt'] for a,b in zip(bars, bars[1:])):

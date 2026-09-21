@@ -38,3 +38,18 @@
 - 전체 runtime summary는 `direct_evidence_incomplete`; 전체 postclose terminal/자연 제출/실현 순익 완료로 보고하지 않는다. 비용 후 EV·일별 순익은 null이다. 장후 재생성의 `full_evaluation_complete`는 작업 종료 상태이며 전수 경제성 성공이 아니다.
 - 남은 구현/원천 owner: `entry_setup_paired_replay_batch/strategy_owner_replay`. 후보별 재계산한 setup을 소비한 실제 offline auxiliary verdict, 그 가용시각에 묶인 실행·비용·자본 replay, RECHECK 종료 증거를 같은 기회로 생산·검증해야 한다. 현재 compact `prepare`는 실제 ENTER_NOW 화면만, nonentry replay는 `nonentry_plan_only`만 생산하므로 후보 전환의 이 연결은 아직 미구현이다. 이 결손은 갱신 임계치를 낮추는 것으로 해소되지 않는다. 그 연결이 없는 상태에서는 탐색이 economic preflight에서 중단되며 모든 설정 조합의 학습 완료가 아니다.
 - 사용자가 요구한 전체 완료 조건 중 **새 수익성 정책 생성·즉시 적용은 미완료**다. 기존 OPEN owner를 유지하고, 정책 강제 승격/AI PASS 합성/검증 주문/외부 sync는 하지 않았다.
+
+## 후속 코드리뷰 — 연구 차단·비교·재사용 계약 수리
+
+- 연구용 원시 재판정 앞에 있던 holdout/표본/운영경제성 early-return을 제거했다. 유효 원시 입력 한 기회부터 동일 kernel로 후보를 재판정하고, 실적용 후보와 분리한 `research_candidates`(최대 3개)에 원시 hash·변경 attempt·전환·정책 hash를 보존한다. 연구 후보는 `runtime_effect=false`, `allowed_runtime_apply=false`, `metric_role=funnel_count`; 변경 건수는 수익성 순위나 승격 근거가 아니다.
+- 기존 정책 비교는 원시 사실을 복원한 뒤 실제 parent 정책으로 판정한다. seed가 기존 hierarchy를 제거해 대조군까지 바꾸던 결함을 수리했다. 원천 미지원 좌표도 registry 기본값으로 되돌리지 않고 incumbent 값을 유지한다.
+- cache identity에 trace ID만이 아니라 원시 입력·결과·운영재생을 포함한 전체 비교행을 결속했다. 같은 holdout에 고정된 후보를 재검증할 때 train/holdout 모두 현재 원천으로 다시 평가한다. holdout 재생 실패는 명시적 unsupported이며 보고서 전체의 조용한 실패나 이전 PASS 재사용이 아니다.
+- 보조 AI 재사용은 setup 사실과 provider에 전달한 기계판정이 모두 같아야 한다. setup만 같고 action/threshold/policy 판정이 다른 입력에 기존 AI verdict를 재표시하지 않는다.
+- 완료봉 전체 재생은 OHLC 범위·음수 거래량·다른 거래일을 거부한다. 재생 자료를 임의 수치로 보정하지 않는다.
+- 회귀검증: 한 기회의 BLOCK→ENTER_NOW 연구(비용/holdout 없으면 미승격), 기존 hierarchy 보존, 같은 trace ID의 raw 변경 시 cache 무효화, 다른 AI 기계판정 재사용 차단, 잘못된 완료봉 거부. 관련 pytest 210 PASS, py_compile/diff 검사 통과. 신규 module/CLI/cron/provider 또는 broker 요청은 없다.
+- 범위 한계: 실제 후보별 offline auxiliary 호출 및 그 가용시각에 결속한 실행·비용 owner 재생 producer는 여전히 미구현이다. 이번 수리는 그 결손이 **기계 연구까지 중단시키던 경로**를 제거하며, 완전한 경제성·정책 승격 완료를 뜻하지 않는다.
+
+- 18:39 KST 장후 재생성 완료(source 9/17, publication 9/21): KRX raw 지원 1,708/1,712건, 실제 재판정 후보 6개, 연구 후보 3개 보존. PREMARKET 40개, 통합 aftermarket 24개 재판정. 탐색은 96개 cursor 예산 내 실행이며 전역 탐색 완료가 아니다.
+- KRX 저장 연구 후보에는 BLOCK→RECHECK와 RECHECK→BLOCK 등의 전환이 있지만 새 ENTER_NOW 전환·양수 비용 후 순익을 확정하지 못했다. 기존 미지원 실행·비용 연결 0건으로 `unsupported_downstream`; 장전/aftermarket는 분리된 holdout 부족으로 `hold_sample`이다. 모든 scope 승격 false, 현재 bundle `15c063637359bd4cbd5a567760abecdf6229aee1f44d1e9d6a7cbc2dc7e97eb7` 유지.
+- runtime summary 재생성 및 메인 scoped verifier PASS. 전체 terminal/자연 비용 후 실성과를 PASS로 확장하지 않는다. 연구에서 발견한 판정 변화는 주문 또는 수익성 증거가 아니다.
+- 동시 위젯 배포 `fbe11c5f9`를 보존해 통합한다. 최종 배포·기동 결과는 `tmp/main-entry-review2-20260921/validation.json`, `selection-before.json`, `deployment-result.json`과 `data/runtime/runtime_release_selection.json`의 실제 PID 영수증으로 판정한다.

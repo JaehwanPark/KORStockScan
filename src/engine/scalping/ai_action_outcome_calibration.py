@@ -7923,51 +7923,60 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
     population = supported
     if not population:
         return {**result, 'blocker': 'strategy_no_supported_predecision_rows'}
-    input_sha256 = strategy.digest([source_contract, parent, [r["decision_trace_id"] for r in population]])
+    input_sha256 = strategy.digest([source_contract, parent, population])
     result['input_sha256'] = input_sha256
     # Same input/selection is immutable; retries do not optimize on used holdout.
     if previous and previous.get('input_sha256') == input_sha256 and previous.get('candidate'):
         return previous
     dates = sorted({r["source_date"] for r in population})
-    if len(dates) < 2:
-        return {**result, "status": "hold_sample", "blocker": "strategy_chronological_holdout_missing"}
-    train = [deepcopy(r) for r in population if r["source_date"] < dates[-1]]
-    holdout = [deepcopy(r) for r in population if r["source_date"] == dates[-1]]
+    train = [deepcopy(r) for r in population if len(dates) == 1 or r["source_date"] < dates[-1]]
+    holdout = [deepcopy(r) for r in population if len(dates) > 1 and r["source_date"] == dates[-1]]
     def identity(row):
         return _canonical_sha256([row["source_date"], row.get("stock_code"), row.get("scanner_promotion_id")])
-    if len({identity(r) for r in train}) < 10 or len({identity(r) for r in holdout}) < 3:
-        return {**result, "status": "hold_sample", "blocker": "strategy_unique_opportunity_support_insufficient"}
+    # Floors govern publication only; one valid raw opportunity can be researched.
     baseline_policy = parent if 'strategy' in parent else strategy.seed(parent, scope)
     baseline_exclusions = []
     for row in train + holdout:
         try:
-            baseline = mechanistic_entry_policy_decision(row["setup_evidence"], policy=baseline_policy)
+            incumbent_setup = row["setup_evidence"]
+            if 'strategy' not in parent:
+                incumbent_setup, _, _ = strategy.rebuild(incumbent_setup, baseline_policy)
+            # Rebuild facts while retaining every actual incumbent hierarchy rule.
+            baseline = mechanistic_entry_policy_decision(incumbent_setup, policy=parent)
             action = baseline['action']
         except (ValueError, TypeError, KeyError) as exc:
             baseline_exclusions.append(dict(decision_trace_id=row['decision_trace_id'], reason=str(exc)))
             continue
-        row["comparison"] = {**row["comparison"], "incumbent_machine_action": action,
+        row["comparison"] = {**(row.get("comparison") or {}), "incumbent_machine_action": action,
                              "control_action": "BUY" if action == "ENTER_NOW" else "WAIT"}
     excluded_ids = {item['decision_trace_id'] for item in baseline_exclusions}
     train = [r for r in train if r['decision_trace_id'] not in excluded_ids]
     holdout = [r for r in holdout if r['decision_trace_id'] not in excluded_ids]
     result['source_exclusions'].extend(baseline_exclusions)
     result['supported_population_count'] = len(train) + len(holdout)
-    if len({identity(r) for r in train}) < 10 or len({identity(r) for r in holdout}) < 3:
-        return {**result, 'status': 'hold_sample', 'blocker': 'strategy_supported_opportunity_floor'}
+    if not train:
+        return {**result, 'blocker': 'strategy_no_replayable_training_rows'}
+    support_blocker = ('strategy_chronological_holdout_missing' if len(dates) < 2 else
+        'strategy_supported_opportunity_floor' if len({identity(r) for r in train}) < 10 or len({identity(r) for r in holdout}) < 3 else None)
     operating_count = sum('operating_comparison_input' in r for r in train + holdout)
     result['operating_population_count'] = operating_count
-    if operating_count != len(train) + len(holdout):
-        return {**result, 'status': 'source_gap', 'blocker': 'strategy_operating_population_unbound',
-            'blocker_owner': 'entry_setup_paired_replay_batch/strategy_owner_replay',
-            'closure_test': 'same_opportunities_candidate_auxiliary_exact_setup_and_complete_owner_cost_capital_replay'}
+    operating_complete = operating_count == len(train) + len(holdout)
+    if not operating_complete:
+        result.update(blocker_owner='entry_setup_paired_replay_batch/strategy_owner_replay',
+            closure_test='same_opportunities_candidate_auxiliary_exact_setup_and_complete_owner_cost_capital_replay')
     def evaluate(rows, candidate):
         selected, changed, downstream = [], set(), True
+        transitions, changed_attempts = Counter(), []
         for row in rows:
             decision = mechanistic_entry_policy_decision(row["setup_evidence"], policy=candidate)
             old = row["comparison"]["incumbent_machine_action"]
+            transitions[old + '->' + decision['action']] += 1
             if decision["action"] != old:
                 changed.add(identity(row))
+                changed_attempts.append(dict(decision_trace_id=row['decision_trace_id'],
+                    raw_sha256=row['setup_evidence']['strategy_raw_sha256'],
+                    incumbent_action=old, candidate_action=decision['action'],
+                    candidate_setup_sha256=(decision.get('effective_setup_evidence') or row['setup_evidence'])['evidence_sha256']))
             if decision["action"] == "ENTER_NOW":
                 selected.append(row)
                 # The auxiliary screen consumes strategy-dependent facts. An
@@ -7980,13 +7989,17 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
                         'evidence_sha256', 'strategy_raw_input', 'strategy_raw_sha256', 'strategy_selection'}})
                 # Exact unchanged AI facts can reuse the frozen actual screen.
                 # Changed facts require the downstream owner's paired replay.
-                downstream = downstream and bool(frozen_setup) and fact_hash(frozen_setup) == fact_hash(rebuilt)
+                frozen_assessment = (operating.get('input') or {}).get('mechanistic_entry_assessment')
+                provider_assessment = {k:v for k,v in decision.items() if k not in {'strategy_selection', 'effective_setup_evidence'}}
+                downstream = (downstream and bool(frozen_setup) and fact_hash(frozen_setup) == fact_hash(rebuilt)
+                    and isinstance(frozen_assessment, dict) and frozen_assessment == provider_assessment)
         economics = _machine_sequence_operating_metrics(rows,
             {r["decision_trace_id"] for r in selected}, candidate)
         return dict(source_dates=sorted({r["source_date"] for r in rows}),
             opportunity_ids=sorted({identity(r) for r in rows}), changed_opportunity_ids=sorted(changed),
             source_complete=all("operating_comparison_input" in r for r in rows),
-            downstream_context_bound=downstream, economics=economics)
+            downstream_context_bound=downstream, economics=economics,
+            action_transition_counts=dict(transitions), changed_attempts=changed_attempts)
     selectors = [None]
     # Boundaries are derived only from predecision training features, never outcomes.
     values = defaultdict(list)
@@ -8004,15 +8017,15 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
     unsupported_coordinates = []
     for name in strategy.STRUCTURE_REGISTRY:
         if name.startswith('structure_') and any(not r['setup_evidence']['strategy_raw_input'].get('entry_candle_context', {}).get('strategy_completed_bars') for r in train + holdout):
-            domains[name] = [strategy.REGISTRY[name][0]]
+            domains[name] = [strategy.default_profile(parent)[name]]
             unsupported_coordinates.append(name)
     for name, feature in [('tape_supportive_score','order_flow_pressure_score'), ('tape_adverse_score','order_flow_pressure_score'), ('momentum_accelerating_score','entry_momentum_score'), ('momentum_fading_score','entry_momentum_score')]:
         if any(strategy._number(r['setup_evidence']['strategy_raw_input'].get('features', {}).get(feature)) is None for r in train + holdout):
-            domains[name] = [strategy.REGISTRY[name][0]]
+            domains[name] = [strategy.default_profile(parent)[name]]
             unsupported_coordinates.append(name)
     if any(not r['setup_evidence']['strategy_raw_input'].get('mechanistic_micro_window') for r in train + holdout):
         for name in ('micro_confirmation_recipe', 'minimum_depletion_fraction_per_sec', 'minimum_trade_backed_ratio', 'maximum_refill_ratio'):
-            domains[name] = [strategy.REGISTRY[name][0]]
+            domains[name] = [strategy.default_profile(parent)[name]]
             unsupported_coordinates.append(name)
     result['unsupported_coordinates'] = unsupported_coordinates
     result['unsupported_source_contracts'] = ['ordered_large_sell_event_and_recovery_ticks_not_captured']
@@ -8029,13 +8042,18 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
         and frozen.get('evidence', {}).get('holdout', {}).get('source_dates')
         and max(frozen['evidence']['holdout']['source_dates']) >= dates[-1]):
         frozen = deepcopy(frozen)
-        frozen['evidence']['holdout'] = evaluate(holdout, frozen['policy'])
+        try:
+            frozen['evidence'] = dict(train=evaluate(train, frozen['policy']), holdout=evaluate(holdout, frozen['policy']))
+        except (ValueError, TypeError, KeyError) as exc:
+            return {**result, 'status': 'unsupported_strategy_replay', 'blocker': str(exc),
+                'selection_status': 'frozen_candidate_replay_failed'}
         frozen['evidence_sha256'] = strategy.digest(frozen['evidence'])
         errors = strategy.promotion_errors(frozen, parent, scope)
         return {**result, 'candidate': frozen, 'promotion_pass': not errors,
             'promotion_errors': errors, 'status': 'eligible' if not errors else 'hold_candidate',
             'selection_status': 'frozen_before_same_holdout_revision'}
     best, best_evidence, best_score, blockers = None, None, None, Counter()
+    research_candidates = deepcopy((previous or {}).get('research_candidates') or []) if (previous or {}).get('input_sha256') == input_sha256 else []
     for candidate, progress in strategy.joint_candidates(parent, scope, domains=domains, selectors=selectors, start=start, limit=limit):
         result["search"] = progress
         if candidate is None:
@@ -8046,6 +8064,14 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
             blockers[str(exc)] += 1
             continue
         result["evaluated_candidate_count"] += 1
+        if evidence['changed_attempts']:
+            research_candidates.append(dict(policy=candidate, policy_sha256=strategy.digest(candidate),
+                action_transition_counts=evidence['action_transition_counts'], changed_attempts=evidence['changed_attempts'],
+                changed_opportunity_count=len(evidence['changed_opportunity_ids']),
+                downstream_context_bound=evidence['downstream_context_bound'],
+                runtime_effect=False, allowed_runtime_apply=False, metric_role='funnel_count'))
+            research_candidates.sort(key=lambda item: (-item['changed_opportunity_count'], item['policy_sha256']))
+            del research_candidates[3:]
         economy = evidence["economics"]
         if (economy.get("status") != "supported_operating_comparison"
             or not evidence["source_complete"] or not evidence["downstream_context_bound"]):
@@ -8056,16 +8082,30 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
             best, best_evidence, best_score = candidate, evidence, score
     result["search_complete"] = result.get("search", {}).get("search_complete", False)
     result["candidate_blockers"] = dict(blockers)
+    result['research_candidates'] = research_candidates
+    result['research_only'] = True
+    result['research_status'] = ('action_changes_found' if research_candidates else
+        'no_action_change_in_search_space' if result['search_complete'] else 'search_incomplete')
+    if support_blocker:
+        return {**result, 'status': 'hold_sample', 'blocker': support_blocker}
+    if result['evaluated_candidate_count'] == 0 and blockers:
+        return {**result, 'status': 'unsupported_strategy_replay', 'blocker': 'strategy_candidates_not_replayable'}
     if best is None:
-        return {**result, "status": "source_gap" if blockers else "evaluated_no_edge",
-                "blocker": "strategy_candidate_economic_support_missing" if blockers else "no_train_improvement"}
+        status = ('unsupported_downstream' if blockers or not operating_complete else
+                  'search_incomplete' if not result['search_complete'] else 'evaluated_no_edge')
+        return {**result, 'status': status,
+                'blocker': 'strategy_candidate_economic_support_missing' if blockers else 'no_train_improvement'}
     # Exactly one selected vector reaches the independent chronological holdout.
-    evidence = dict(train=best_evidence, holdout=evaluate(holdout, best))
+    try:
+        evidence = dict(train=best_evidence, holdout=evaluate(holdout, best))
+    except (ValueError, TypeError, KeyError) as exc:
+        return {**result, 'status': 'unsupported_strategy_replay', 'blocker': str(exc)}
     candidate = dict(schema="main_entry_strategy_candidate_v2", scope=list(scope),
         parent_policy=deepcopy(parent), parent_sha256=strategy.digest(parent), policy=best, policy_sha256=strategy.digest(best),
         evidence=evidence, evidence_sha256=strategy.digest(evidence), selected_without_holdout=True)
     errors = strategy.promotion_errors(candidate, parent, scope)
     return {**result, "candidate": candidate, "promotion_pass": not errors,
+            "research_only": bool(errors),
             "promotion_errors": errors, "status": "eligible" if not errors else "hold_candidate"}
 
 
