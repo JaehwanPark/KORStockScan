@@ -466,8 +466,8 @@ class WidgetSymbolRuntimeCollector:
         request_code = str(context.request_code)
         cache_key = f"{symbol}:{request_code}"
         cached = self._minute_cache.get(cache_key)
-        from src.trading.market.shared_ws_snapshot import completed_bar_mode
-        if completed_bar_mode(request_code) == "ws" or cached is None or cached[0] != minute_key:
+        from src.trading.market.shared_ws_snapshot import completed_bar_cache_requires_revalidation
+        if completed_bar_cache_requires_revalidation(request_code, cached[1] if cached else None) or cached is None or cached[0] != minute_key:
             self._minute_cache.pop(cache_key, None)
             payload = client.post(
                 "/api/dostk/chart",

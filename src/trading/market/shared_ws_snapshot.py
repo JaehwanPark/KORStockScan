@@ -386,7 +386,7 @@ def completed_bar_mode(request_code, *, consumer="widget"):
     if consumer not in {"widget", "episode"}:
         raise ValueError("completed_bar_consumer_invalid")
     mode = os.getenv(f"KORSTOCKSCAN_{consumer.upper()}_BAR_SOURCE", "rest").strip().lower()
-    if mode not in {"rest", "ws"}:
+    if mode not in {"rest", "ws", "ws_when_ready"}:
         raise ValueError("completed_bar_source_invalid")
     members = os.getenv(f"KORSTOCKSCAN_{consumer.upper()}_BAR_WS_SYMBOLS", "")
     if mode == "rest":
@@ -394,7 +394,13 @@ def completed_bar_mode(request_code, *, consumer="widget"):
     codes = members.split(",")
     if any(not re.fullmatch(r"[0-9]{6}", c) for c in codes) or len(set(codes)) != len(codes):
         raise ValueError("completed_bar_scope_invalid")
-    return "ws" if re.fullmatch(r"[0-9]{6}(?:_AL)?", request_code) and request_code[:6] in codes else "rest"
+    return mode if re.fullmatch(r"[0-9]{6}(?:_AL)?", request_code) and request_code[:6] in codes else "rest"
+
+
+def completed_bar_cache_requires_revalidation(request_code, cached):
+    mode = completed_bar_mode(request_code)
+    source = (cached.get("_completed_bar_source") or {}).get("source", "") if isinstance(cached, dict) else ""
+    return mode == "ws" or (mode == "ws_when_ready" and source == "kiwoom_ws_AL_completed_1m")
 
 
 def _bounded_json(path, limit=2 * 1024 * 1024):
@@ -476,11 +482,36 @@ def read_shared_completed_bars(request_code, *, now, root=None, snapshot_path=No
     if invalid_from is not None:
         rows = [row for row in rows if datetime.strptime(row["cntr_tm"], "%Y%m%d%H%M%S").replace(tzinfo=KST).timestamp() > invalid_from]
     session_open = {"SOR_PREMARKET": "080000", "SOR_REGULAR": "090000", "SOR_AFTERMARKET": "160000"}[session]
-    starts_at_session_open = bool(rows and rows[0]["cntr_tm"] == now.strftime("%Y%m%d") + session_open)
-    complete_session_prefix = starts_at_session_open and not any(b["status"] == "gap" for b in payload["bars"]) and invalid_from is None
+    coverage = payload.get("session_coverage")
+    covered = False
+    if coverage is not None:
+        expected_open = datetime.strptime(now.strftime("%Y%m%d") + session_open, "%Y%m%d%H%M%S").replace(tzinfo=KST)
+        if (not isinstance(coverage, dict) or coverage["start_epoch"] != int(expected_open.timestamp())
+                or coverage["source_epoch"] != payload["source_epoch"]
+                or any(type(coverage[k]) is not int or coverage[k] < 0 for k in ("first_cumulative", "prior_cumulative"))
+                or type(coverage["first_quantity"]) is not int or coverage["first_quantity"] <= 0
+                or coverage["first_cumulative"] - coverage["prior_cumulative"] != coverage["first_quantity"]
+                or coverage["basis"] not in {"first_premarket_print_cumulative_equals_quantity",
+                                             "same_generation_prior_session_cumulative_continuity",
+                                             "same_generation_session_boundary_cumulative_continuity"}):
+            raise ValueError("completed_bar_session_coverage_invalid")
+        first_event = datetime.fromisoformat(coverage["first_event"])
+        if (first_event.tzinfo is None or first_event.date() != now.date()
+                or _bar_session(first_event) != session
+                or not expected_open <= first_event <= now
+                or (coverage["basis"] == "first_premarket_print_cumulative_equals_quantity"
+                    and (session != "SOR_PREMARKET" or coverage["prior_cumulative"] != 0))
+                or (coverage["basis"] != "first_premarket_print_cumulative_equals_quantity"
+                    and not re.fullmatch(r"[0-9a-f]{64}", str(coverage.get("prior_content_sha256", ""))))):
+            raise ValueError("completed_bar_session_coverage_invalid")
+        covered = True
+    # A quiet opening minute need not contain a candle. Its absence alone is
+    # not a gap when the first print's cumulative boundary is proven.
+    complete_session_prefix = bool(rows) and covered and not payload.get("history_truncated", False) and not any(b["status"] == "gap" for b in payload["bars"]) and invalid_from is None
     receipt = {"source": "kiwoom_ws_AL_completed_1m", "request_code": request_code,
                "adjustment": payload["adjustment"], "source_epoch": payload["source_epoch"],
                "complete_session_prefix": complete_session_prefix,
+               "session_coverage": coverage,
                "transport_epoch": producer["transport_epoch"], "producer": payload["producer"],
                "revision": payload["revision"], "content_sha256": expected,
                "available_at_epoch": max((b["available_at_epoch"] or 0 for b in payload["bars"]), default=0),
@@ -498,8 +529,11 @@ def read_shared_completed_bars(request_code, *, now, root=None, snapshot_path=No
     return {"stk_min_pole_chart_qry": rows, "_completed_bar_source": receipt}
 
 
-def selected_completed_bar_payload(request_code, *, now, consumer="widget", seed_fetch=None, minimum_bars=1, history_scope="rolling"):
-    if completed_bar_mode(request_code, consumer=consumer) == "rest":
+def selected_completed_bar_payload(request_code, *, now, consumer="widget", seed_fetch=None, minimum_bars=1, history_scope="rolling", selection_receipt=None):
+    mode = completed_bar_mode(request_code, consumer=consumer)
+    selection = selection_receipt if selection_receipt is not None else {}
+    selection.update(mode=mode, minimum_bars=minimum_bars, history_scope=history_scope)
+    if mode == "rest":
         return None
     item = request_code[:6] + "_AL"
     try:
@@ -508,14 +542,23 @@ def selected_completed_bar_payload(request_code, *, now, consumer="widget", seed
         if type(minimum_bars) is not int or minimum_bars < 1:
             raise ValueError("completed_bar_history_floor_invalid")
         result = read_shared_completed_bars(item, now=now)
+        selection.update(available_bars=len(result["stk_min_pole_chart_qry"]),
+                         source_content_sha256=result["_completed_bar_source"].get("content_sha256"))
         if history_scope == "session" and not result["_completed_bar_source"]["complete_session_prefix"]:
+            if mode == "ws_when_ready":
+                selection.update(status="rest_retained", reason="session_anchor_history_incomplete")
+                return None  # Retain the existing homogeneous REST/cache path.
             if seed_fetch is None:
                 raise ValueError("session_anchor_history_incomplete")
             seed = shared_completed_bar_seed(item, now=now, fetch=seed_fetch)
             seed["_completed_bar_source"]["ws_selection_blocker"] = "session_anchor_history_incomplete"
             return seed
         if len(result["stk_min_pole_chart_qry"]) >= minimum_bars:
+            selection.update(status="ws_selected", reason="required_native_history_ready")
             return result
+        if mode == "ws_when_ready":
+            selection.update(status="rest_retained", reason="completed_bar_history_insufficient")
+            return None
         if seed_fetch is None:
             raise ValueError("completed_bar_history_insufficient")
         # A homogeneous bootstrap seed may cover startup, never be spliced
@@ -523,12 +566,24 @@ def selected_completed_bar_payload(request_code, *, now, consumer="widget", seed
         return shared_completed_bar_seed(item, now=now, fetch=seed_fetch,
                                          missing_range=result["_completed_bar_source"]["missing_range"])
     except FileNotFoundError as exc:
+        if mode == "ws_when_ready":
+            selection.update(status="rest_retained", reason="native_artifact_not_yet_available")
+            return None
         if seed_fetch is not None:
             return shared_completed_bar_seed(item, now=now, fetch=seed_fetch)
         raise RuntimeError("completed_ws_bars_unavailable:missing_artifact") from exc
     except (OSError, ValueError, KeyError, TypeError, OverflowError) as exc:
         reason = str(exc) if isinstance(exc, ValueError) and re.fullmatch(r"[A-Za-z0-9_:-]+", str(exc)) else type(exc).__name__
         raise RuntimeError("completed_ws_bars_unavailable:" + reason) from exc
+
+
+def annotate_completed_bar_rest(payload, request_code, selection):
+    """Keep actual REST provenance and the bounded native-readiness decision."""
+    if selection.get("mode") != "ws_when_ready":
+        return payload
+    return {**payload, "_completed_bar_source": {
+        "source": "kiwoom_rest_ka10080", "request_code": request_code,
+        "adjustment": "adjusted_1", "selection": dict(selection)}}
 
 
 def _read_seed_receipt(path, key):

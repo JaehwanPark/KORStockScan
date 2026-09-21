@@ -315,3 +315,167 @@ def test_mid_session_ws_cannot_rebase_session_anchor(monkeypatch):
     monkeypatch.setattr(reader,"shared_completed_bar_seed",lambda *args,**kw:seed)
     selected=reader.selected_completed_bar_payload("005930",now=BASE,history_scope="session",seed_fetch=lambda _:None)
     assert selected is seed and selected["_completed_bar_source"]["ws_selection_blocker"]=="session_anchor_history_incomplete"
+
+
+def session_point(seq, stamp, cumulative):
+    at = datetime.fromisoformat(stamp)
+    return replace(point(seq, 0), exchange_timestamp=stamp, local_receive_timestamp=stamp,
+                   session_bucket=reader._bar_session(at), cumulative_volume_raw=str(cumulative))
+
+
+def consume_at_source_time(projection, rows, integrity=INTEGRITY):
+    for row in rows:
+        projection.consume([row], integrity=integrity, journal_path="durable.jsonl",
+                           now_ts=datetime.fromisoformat(row.local_receive_timestamp).timestamp()+.1)
+
+
+def test_quiet_premarket_opening_prefix_uses_zero_origin_not_synthetic_bars(tmp_path):
+    p = CompletedBarProjection(tmp_path)
+    consume_at_source_time(p, [session_point(1, "2026-09-21T08:03:10+09:00", 2),
+                               session_point(2, "2026-09-21T08:04:01+09:00", 4)])
+    now = datetime.fromisoformat("2026-09-21T08:05:00+09:00")
+    r = reader.read_shared_completed_bars("005930_AL", now=now, root=tmp_path, snapshot_path=bind(tmp_path,p,now))
+    assert r["_completed_bar_source"]["complete_session_prefix"] is True
+    assert [x["cntr_tm"] for x in r["stk_min_pole_chart_qry"]] == ["20260921080300"]
+    assert r["_completed_bar_source"]["session_coverage"]["prior_cumulative"] == 0
+
+
+@pytest.mark.parametrize("defect", [None, "lost_volume", "changed_producer", "changed_epoch", "corrupt_hash"])
+def test_session_prefix_uses_only_proven_durable_prior_session(tmp_path, defect):
+    p = CompletedBarProjection(tmp_path)
+    consume_at_source_time(p, [session_point(1, "2026-09-21T08:49:10+09:00", 5000)])
+    path = tmp_path/"2026-09-21/005930_AL/SOR_PREMARKET.json"
+    prior = json.loads(path.read_text())
+    if defect in {"changed_producer", "changed_epoch", "corrupt_hash"}:
+        prior.pop("content_sha256")
+        if defect == "changed_producer": prior["producer"]["pid"] += 1
+        if defect == "changed_epoch": prior["source_epoch"] += 1
+        prior["content_sha256"] = "invalid" if defect == "corrupt_hash" else digest(prior)
+        atomic_json(path, prior)
+    start = 5102 if defect == "lost_volume" else 5002
+    consume_at_source_time(p, [session_point(1, "2026-09-21T09:03:10+09:00", start),
+                               session_point(2, "2026-09-21T09:04:01+09:00", start+2)])
+    now = datetime.fromisoformat("2026-09-21T09:05:00+09:00")
+    r = reader.read_shared_completed_bars("005930_AL", now=now, root=tmp_path, snapshot_path=bind(tmp_path,p,now))
+    assert r["_completed_bar_source"]["complete_session_prefix"] is (defect is None)
+
+
+def test_truncated_native_history_never_claims_session_anchor(tmp_path):
+    p = CompletedBarProjection(tmp_path, max_bars=2)
+    consume_at_source_time(p, [session_point(i, f"2026-09-21T08:0{i}:01+09:00", i*2) for i in range(1,5)])
+    now = datetime.fromisoformat("2026-09-21T08:05:00+09:00")
+    r = reader.read_shared_completed_bars("005930_AL", now=now, root=tmp_path, snapshot_path=bind(tmp_path,p,now))
+    assert r["stk_min_pole_chart_qry"]
+    assert r["_completed_bar_source"]["complete_session_prefix"] is False
+
+
+def test_epoch_change_revokes_prefix_but_allows_new_rolling_suffix(tmp_path):
+    p = CompletedBarProjection(tmp_path)
+    consume_at_source_time(p, [session_point(1,"2026-09-21T08:01:01+09:00",2),
+                               session_point(2,"2026-09-21T08:02:01+09:00",4)])
+    changed = {**INTEGRITY, "observer_epoch": 8}
+    consume_at_source_time(p, [replace(session_point(i,f"2026-09-21T08:0{i+2}:01+09:00",4+i*2),sequence_epoch=8) for i in range(1,4)],changed)
+    now = datetime.fromisoformat("2026-09-21T08:06:00+09:00")
+    snapshot = bind(tmp_path,p,now);doc=json.loads(snapshot.read_text())
+    doc["shared_transport_producer"]["completed_bar_integrity"] = changed;atomic_json(snapshot,doc)
+    r = reader.read_shared_completed_bars("005930_AL", now=now, root=tmp_path, snapshot_path=snapshot)
+    assert r["stk_min_pole_chart_qry"] and not r["_completed_bar_source"]["complete_session_prefix"]
+
+
+def test_session_transition_uses_unpublished_durable_tail_cursor(tmp_path):
+    p = CompletedBarProjection(tmp_path)
+    journal = tmp_path/"prior.jsonl"
+    previous = [session_point(1,"2026-09-21T08:49:01+09:00",5000),
+                session_point(2,"2026-09-21T08:49:20+09:00",5002)]
+    journal.write_text(''.join(json.dumps(x.as_dict())+'\n' for x in previous))
+    for row in previous:
+        p.consume([row],integrity=INTEGRITY,journal_path=journal,
+                  now_ts=datetime.fromisoformat(row.local_receive_timestamp).timestamp()+.1)
+    prior = json.loads((tmp_path/"2026-09-21/005930_AL/SOR_PREMARKET.json").read_text())
+    assert prior["cursor"]["sequence"] == 1  # Pending-only updates were not published.
+    # Real session partitions have distinct projection objects in one process.
+    p = CompletedBarProjection(tmp_path)
+    consume_at_source_time(p,[session_point(1,"2026-09-21T09:02:01+09:00",5004),
+                              session_point(2,"2026-09-21T09:03:01+09:00",5006)])
+    now=datetime.fromisoformat("2026-09-21T09:04:00+09:00")
+    r=reader.read_shared_completed_bars("005930_AL",now=now,root=tmp_path,snapshot_path=bind(tmp_path,p,now))
+    assert r["_completed_bar_source"]["complete_session_prefix"]
+    proof=r["_completed_bar_source"]["session_coverage"]
+    assert proof["prior_cursor"]["sequence"]==2
+    assert proof["prior_journal_tail"]["end_byte"]==journal.stat().st_size
+
+
+def test_pre_session_boundary_prints_do_not_create_invalid_bars(tmp_path,monkeypatch):
+    p=CompletedBarProjection(tmp_path)
+    boundary=replace(point(1,0),exchange_timestamp="2026-09-21T15:59:01+09:00",
+                     local_receive_timestamp="2026-09-21T15:59:01+09:00",cumulative_volume_raw="5000")
+    consume_at_source_time(p,[boundary,point(2,181,cumulative=5002),point(3,241,cumulative=5004)])
+    now=BASE+timedelta(minutes=5)
+    snapshot=bind(tmp_path,p,now)
+    monkeypatch.setattr(reader,"SNAPSHOT_PATH",snapshot)
+    monkeypatch.setattr(reader,"COMPLETED_BARS_ROOT",tmp_path)
+    monkeypatch.setenv("KORSTOCKSCAN_WIDGET_BAR_SOURCE","ws")
+    monkeypatch.setenv("KORSTOCKSCAN_WIDGET_BAR_WS_SYMBOLS","005930")
+    r=reader.selected_completed_bar_payload("005930",now=now,history_scope="session",
+                seed_fetch=lambda _:pytest.fail("REST despite complete native session"))
+    assert r["_completed_bar_source"]["complete_session_prefix"]
+    assert r["_completed_bar_source"]["rest_request_count"]==0
+    assert [b['cntr_tm']for b in r["stk_min_pole_chart_qry"]]==["20260921160300"]
+
+
+def test_post_session_print_seals_prior_bar_without_cross_session_candle(tmp_path):
+    p=CompletedBarProjection(tmp_path)
+    end=replace(session_point(2,"2026-09-21T08:49:01+09:00",4),
+                exchange_timestamp="2026-09-21T08:51:01+09:00",local_receive_timestamp="2026-09-21T08:51:01+09:00")
+    consume_at_source_time(p,[session_point(1,"2026-09-21T08:49:01+09:00",2),end])
+    doc=json.loads((tmp_path/"2026-09-21/005930_AL/SOR_PREMARKET.json").read_text())
+    assert [x['source_time']for x in doc['bars']]==["20260921084900"]
+    assert doc['bars'][0]['status']=='complete'
+
+
+def test_ready_mode_retains_rest_until_native_floor_then_selects_ws(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_WIDGET_BAR_SOURCE","ws_when_ready")
+    monkeypatch.setenv("KORSTOCKSCAN_WIDGET_BAR_WS_SYMBOLS","005930")
+    native={"stk_min_pole_chart_qry":[{}],"_completed_bar_source":{
+        "source":"kiwoom_ws_AL_completed_1m","complete_session_prefix":False,"content_sha256":"native"}}
+    monkeypatch.setattr(reader,"read_shared_completed_bars",lambda *a,**kw:native)
+    selected={}
+    def no_seed(_):pytest.fail("ready mode must retain existing REST cadence, not freeze a seed")
+    assert reader.selected_completed_bar_payload("005930",now=BASE,history_scope="session",seed_fetch=no_seed,selection_receipt=selected) is None
+    assert selected["reason"]=="session_anchor_history_incomplete"
+    assert reader.selected_completed_bar_payload("005930",now=BASE,minimum_bars=2,seed_fetch=no_seed,selection_receipt=selected) is None
+    assert selected["reason"]=="completed_bar_history_insufficient"
+    native["stk_min_pole_chart_qry"].append({})
+    assert reader.selected_completed_bar_payload("005930",now=BASE,minimum_bars=2,seed_fetch=no_seed,selection_receipt=selected) is native
+    assert selected["status"]=="ws_selected"
+    assert not reader.completed_bar_cache_requires_revalidation("005930",{"stk_min_pole_chart_qry":[]})
+    assert reader.completed_bar_cache_requires_revalidation("005930",native)
+    annotated=reader.annotate_completed_bar_rest({"stk_min_pole_chart_qry":[]},"005930",{"mode":"ws_when_ready","reason":"session_anchor_history_incomplete"})
+    assert annotated["_completed_bar_source"]["request_code"]=="005930"
+    assert not reader.completed_bar_cache_requires_revalidation("005930",annotated)
+
+
+def test_ready_mode_does_not_mask_invalid_live_source_with_rest(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_WIDGET_BAR_SOURCE","ws_when_ready")
+    monkeypatch.setenv("KORSTOCKSCAN_WIDGET_BAR_WS_SYMBOLS","005930")
+    def invalid(*a,**kw):raise ValueError("completed_bar_live_binding_invalid")
+    monkeypatch.setattr(reader,"read_shared_completed_bars",invalid)
+    with pytest.raises(RuntimeError,match="live_binding_invalid"):
+        reader.selected_completed_bar_payload("005930",now=BASE,seed_fetch=lambda _:pytest.fail("invalid source REST"))
+
+
+def test_bar_readiness_mode_does_not_expand_quote_source_modes(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_WIDGET_MARKET_DATA_SOURCE","ws_when_ready")
+    with pytest.raises(RuntimeError,match="widget_market_data_source_invalid"):
+        reader.widget_market_data_source(None)
+
+
+def test_ineligible_boundary_cannot_certify_session_prefix(tmp_path):
+    p=CompletedBarProjection(tmp_path)
+    boundary=replace(point(1,0),exchange_timestamp="2026-09-21T15:59:01+09:00",
+        local_receive_timestamp="2026-09-21T15:59:01+09:00",cumulative_volume_raw="5000",
+        path_consumer_eligible=False,path_order_status="duplicate_source_sequence")
+    consume_at_source_time(p,[boundary,point(2,181,cumulative=5002),point(3,241,cumulative=5004)])
+    now=BASE+timedelta(minutes=5)
+    r=reader.read_shared_completed_bars("005930_AL",now=now,root=tmp_path,snapshot_path=bind(tmp_path,p,now))
+    assert not r["_completed_bar_source"]["complete_session_prefix"]

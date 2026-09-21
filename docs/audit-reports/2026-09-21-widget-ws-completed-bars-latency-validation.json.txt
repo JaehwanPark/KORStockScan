@@ -1,7 +1,7 @@
 {
   "schema": "widget_ws_completed_bars_latency_review_v1",
-  "baseline_id": "main_server_synthetic_0b_20260921T172452+0900",
-  "generated_at": "2026-09-21T17:24:52+09:00",
+  "baseline_id": "main_server_synthetic_0b_20260921T182325+0900",
+  "generated_at": "2026-09-21T18:23:25+09:00",
   "host": {
     "hostname": "ip-172-31-34-105",
     "machine": "aarch64",
@@ -19,69 +19,69 @@
   },
   "observer_off_runs": [
     {
-      "p50_ms": 0.000123,
+      "p50_ms": 0.000121,
+      "p95_ms": 0.000127,
+      "p99_ms": 0.000141,
+      "max_ms": 0.050133,
+      "mean_ms": 0.0001319428
+    },
+    {
+      "p50_ms": 0.000121,
+      "p95_ms": 0.000128,
+      "p99_ms": 0.000142,
+      "max_ms": 0.01072,
+      "mean_ms": 0.0001244078
+    },
+    {
+      "p50_ms": 0.000122,
       "p95_ms": 0.000129,
       "p99_ms": 0.000143,
-      "max_ms": 0.021209,
-      "mean_ms": 0.000129531
-    },
-    {
-      "p50_ms": 0.000123,
-      "p95_ms": 0.000129,
-      "p99_ms": 0.000147,
-      "max_ms": 0.01483,
-      "mean_ms": 0.0001319506
-    },
-    {
-      "p50_ms": 0.000123,
-      "p95_ms": 0.00013,
-      "p99_ms": 0.000145,
-      "max_ms": 0.000289,
-      "mean_ms": 0.0001237342
+      "max_ms": 0.008186,
+      "mean_ms": 0.0001243258
     }
   ],
   "observer_on_runs": [
     {
-      "p50_ms": 0.02251,
-      "p95_ms": 0.026134,
-      "p99_ms": 0.038576,
-      "max_ms": 90.403553,
-      "mean_ms": 0.065245192,
-      "collector_internal_p95_ms": 0.024543,
-      "collector_internal_p99_ms": 0.038345,
+      "p50_ms": 0.022577,
+      "p95_ms": 0.031637,
+      "p99_ms": 0.107255,
+      "max_ms": 103.274025,
+      "mean_ms": 0.0862553184,
+      "collector_internal_p95_ms": 0.030344,
+      "collector_internal_p99_ms": 0.099454,
       "queue_drop_count": 0.0,
       "worker_error_count": 0.0
     },
     {
-      "p50_ms": 0.02284,
-      "p95_ms": 0.029202,
-      "p99_ms": 0.046271,
-      "max_ms": 10.540502,
-      "mean_ms": 0.045852522,
-      "collector_internal_p95_ms": 0.027999,
-      "collector_internal_p99_ms": 0.045056,
+      "p50_ms": 0.0229,
+      "p95_ms": 0.031577,
+      "p99_ms": 0.065167,
+      "max_ms": 14.857542,
+      "mean_ms": 0.060171659,
+      "collector_internal_p95_ms": 0.029667,
+      "collector_internal_p99_ms": 0.06263,
       "queue_drop_count": 0.0,
       "worker_error_count": 0.0
     },
     {
-      "p50_ms": 0.022921,
-      "p95_ms": 0.029081,
-      "p99_ms": 0.046658,
-      "max_ms": 15.46759,
-      "mean_ms": 0.053645105,
-      "collector_internal_p95_ms": 0.027642,
-      "collector_internal_p99_ms": 0.047222,
+      "p50_ms": 0.022893,
+      "p95_ms": 0.026616,
+      "p99_ms": 0.045585,
+      "max_ms": 16.854427,
+      "mean_ms": 0.051972767999999996,
+      "collector_internal_p95_ms": 0.024604,
+      "collector_internal_p99_ms": 0.045975,
       "queue_drop_count": 0.0,
       "worker_error_count": 0.0
     }
   ],
   "summary": {
-    "observer_off_p95_ms_max": 0.00013,
-    "observer_off_p99_ms_max": 0.000147,
-    "observer_on_external_p95_ms_max": 0.029202,
-    "observer_on_external_p99_ms_max": 0.046658,
-    "observer_on_internal_p95_ms_max": 0.027999,
-    "observer_on_internal_p99_ms_max": 0.047222,
+    "observer_off_p95_ms_max": 0.000129,
+    "observer_off_p99_ms_max": 0.000143,
+    "observer_on_external_p95_ms_max": 0.031637,
+    "observer_on_external_p99_ms_max": 0.107255,
+    "observer_on_internal_p95_ms_max": 0.030344,
+    "observer_on_internal_p99_ms_max": 0.099454,
     "queue_drop_count": 0,
     "worker_error_count": 0
   },
@@ -106,7 +106,7 @@
     "threshold_provider_bot_quantity_or_cap_mutation",
     "p2_policy_selection_or_economic_edge_claim"
   ],
-  "measured_at_kst": "2026-09-21T17:24:52.700265+09:00",
+  "measured_at_kst": "2026-09-21T18:23:25.372774+09:00",
   "runtime_guard_changed": false,
   "guard_config_sha256": "6fb3781d01b89352aeaf828a2aee25474066b9ab2581bbcad2880de71c5124cf",
   "runtime_limits": {
@@ -120,7 +120,7 @@
     "src/engine/scalping/micro_reversion/observation_adapter.py": "e611085e3214905ae2b20471783cb3de95d2bb4ed327e858e14e65fc22aae7c1",
     "src/engine/scalping/micro_reversion/path_capture.py": "558a429176b8d4e568ca09dd802284afe7dd07a3372d80a60718ff4fbfbc90d5",
     "src/engine/scalping/micro_reversion/path_journal.py": "d9a7a0b5151cdc887c2c40badd230bc5787760509f933cd0da617a673e65ec67",
-    "src/engine/scalping/micro_reversion/completed_bars.py": "914de6512c82ce2f5aeec5d4451ba4475e26abd0d19bdd2f35c83734eeb2d85a",
+    "src/engine/scalping/micro_reversion/completed_bars.py": "f10398dcfb526f02b8d0434d87be26365f1c0906fd0fbb812c22c36c8288de5a",
     "src/engine/kiwoom_websocket.py": "1048ef99965397e99af03eaed8345644bf23e35de9b5684286ed6026ea0bbb4f"
   },
   "benchmark_module_sha256": "6626103c12138ff0a893f70c89931276c46b92a72d62875e2aaea7dec1629144",

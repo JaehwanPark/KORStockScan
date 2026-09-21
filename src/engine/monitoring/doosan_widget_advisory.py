@@ -1142,11 +1142,11 @@ class DoosanWidgetCollector:
                                 quote_received_at=quote_received_at, bbo_received_at=bbo_received_at)
 
         minute_key = now.strftime("%Y%m%d%H%M")
-        from src.trading.market.shared_ws_snapshot import completed_bar_mode
+        from src.trading.market.shared_ws_snapshot import completed_bar_cache_requires_revalidation
         if isinstance(client, KiwoomReadOnlyClient):
             client.completed_bar_minimum_bars = context.minimum_bars
             client.completed_bar_history_scope = "session"
-        ws_bars = completed_bar_mode(contract.DOOSAN_CODE) == "ws"
+        ws_bars = completed_bar_cache_requires_revalidation(contract.DOOSAN_CODE, self._minute_cache)
         if ws_bars:
             self._minute_cache = {}  # An invalidated WS revision cannot reuse old bars.
         if ws_bars or minute_key != self._last_minute_fetch or not self._minute_cache:

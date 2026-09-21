@@ -3718,6 +3718,8 @@ class KiwoomReadOnlyClient:
             raise RuntimeError("widget_rest_receive_receipt_invalid") from exc
 
     def post(self, path, api_id, payload, *, optional=False):
+        from src.trading.market.shared_ws_snapshot import annotate_completed_bar_rest
+        selection = {}
         if (path == "/api/dostk/chart" and api_id == "ka10080"
                 and payload.get("tic_scope") == "1" and payload.get("upd_stkpc_tp") == "1"):
             from src.trading.market.shared_ws_snapshot import selected_completed_bar_payload
@@ -3726,6 +3728,7 @@ class KiwoomReadOnlyClient:
                 str(payload.get("stk_cd", "")), now=datetime.now(KST),
                 minimum_bars=getattr(self, "completed_bar_minimum_bars", 1),
                 history_scope=getattr(self, "completed_bar_history_scope", "session"),
+                selection_receipt=selection,
                 seed_fetch=lambda item: self._post_uncached(
                     path, api_id, {**payload, "stk_cd": item}, optional=optional),
             )
@@ -3733,7 +3736,8 @@ class KiwoomReadOnlyClient:
                 self.last_request_receipt = dict(bars["_completed_bar_source"])
                 return bars
         if not self.shared_read_control_enabled:
-            return self._post_uncached(path, api_id, payload, optional=optional)
+            data = self._post_uncached(path, api_id, payload, optional=optional)
+            return annotate_completed_bar_rest(data, str(payload.get("stk_cd", "")), selection)
         from src.utils.kiwoom_read_request_control import WidgetMarketResponseCache
 
         def fetch():
@@ -3747,7 +3751,7 @@ class KiwoomReadOnlyClient:
         self.last_request_receipt = receipt
         if _hit and self.budget is not None:
             self.budget.note_response_reuse()
-        return data
+        return annotate_completed_bar_rest(data, str(payload.get("stk_cd", "")), selection)
 
     def _post_uncached(
         self,
@@ -4613,11 +4617,11 @@ class SamsungWidgetCollector:
             )
 
         minute_key = now.strftime("%Y%m%d%H%M")
-        from src.trading.market.shared_ws_snapshot import completed_bar_mode
+        from src.trading.market.shared_ws_snapshot import completed_bar_cache_requires_revalidation
         if isinstance(client, KiwoomReadOnlyClient):
             client.completed_bar_minimum_bars = context.minimum_bars
             client.completed_bar_history_scope = "session"
-        ws_bars = completed_bar_mode(context.request_code) == "ws"
+        ws_bars = completed_bar_cache_requires_revalidation(context.request_code, self._minute_cache)
         if ws_bars:
             self._minute_cache = {}  # An invalidated WS revision cannot reuse old bars.
         if ws_bars or minute_key != self._last_minute_fetch or not self._minute_cache:

@@ -358,7 +358,8 @@ class KiwoomOneShareGateway:
     def completed_sor_minute_bars(
         self, *, trade_date: date, now: datetime
     ) -> MinuteBarsSnapshot:
-        from src.trading.market.shared_ws_snapshot import selected_completed_bar_payload
+        from src.trading.market.shared_ws_snapshot import selected_completed_bar_payload, annotate_completed_bar_rest
+        selection_receipt = {}
         def seed_fetch(item):
             response, body = self._post(endpoint="/api/dostk/chart", api_id="ka10080",
                 payload={"stk_cd": item, "tic_scope": "1", "upd_stkpc_tp": "1"})
@@ -369,13 +370,14 @@ class KiwoomOneShareGateway:
             return MinuteBarsSnapshot(False, error="completed_bar_trade_date_invalid")
         try:
             selected = selected_completed_bar_payload("005930_AL", now=now, consumer="episode", seed_fetch=seed_fetch,
-                minimum_bars=getattr(self, "completed_bar_minimum_bars", 1))
+                minimum_bars=getattr(self, "completed_bar_minimum_bars", 1), selection_receipt=selection_receipt)
         except (RuntimeError, ValueError, OSError) as exc:
             return MinuteBarsSnapshot(False, error=str(exc))
         minute_floor = now.astimezone(KST).replace(second=0, microsecond=0)
         cache_key = (trade_date, minute_floor)
         cached = self._minute_bars_cache.get(cache_key)
-        if selected is None and isinstance(cached, MinuteBarsSnapshot):
+        if (selected is None and isinstance(cached, MinuteBarsSnapshot)
+                and (cached.source_receipt or {}).get("source") != "kiwoom_ws_AL_completed_1m"):
             return cached
         try:
             if selected is not None:
@@ -437,7 +439,7 @@ class KiwoomOneShareGateway:
         bars = tuple(parsed[key] for key in sorted(parsed))
         if not bars:
             return MinuteBarsSnapshot(True, error="completed_sor_bars_unavailable")
-        snapshot = MinuteBarsSnapshot(True, bars, source_receipt=(selected or {}).get("_completed_bar_source"))
+        snapshot = MinuteBarsSnapshot(True, bars, source_receipt=(selected or annotate_completed_bar_rest(body, "005930_AL", selection_receipt)).get("_completed_bar_source"))
         if snapshot_contains_latest_completed_minute(
             latest_timestamp=bars[-1].timestamp, minute_floor=minute_floor
         ):

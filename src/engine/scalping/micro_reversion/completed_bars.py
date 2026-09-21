@@ -18,6 +18,8 @@ from zoneinfo import ZoneInfo
 
 KST = ZoneInfo("Asia/Seoul")
 SCHEMA = "shared_ws_completed_bars_v1"
+SESSION_OPEN = {"SOR_PREMARKET": "08:00", "SOR_REGULAR": "09:00", "SOR_AFTERMARKET": "16:00"}
+SESSION_END = {"SOR_PREMARKET": "08:50", "SOR_REGULAR": "15:30", "SOR_AFTERMARKET": "20:00"}
 METRIC_CONTRACT = {
     "metric_role": "source_quality_gate", "decision_authority": "market_data_only",
     "window_policy": "exact_item_session_epoch_completed_minutes",
@@ -92,6 +94,8 @@ class CompletedBarProjection:
             if len(raw) > 2 * 1024 * 1024:
                 raise ValueError("checkpoint_size")
             old = json.loads(raw)
+            if not isinstance(old, dict):
+                raise ValueError("checkpoint_shape")
             expected = old.pop("content_sha256")
             if (digest(old) != expected or old["schema"] != SCHEMA
                     or old["trade_date"] != path.parent.parent.name
@@ -106,6 +110,98 @@ class CompletedBarProjection:
             pass
         return {"epoch": epoch, "bars": bars, "last": None,
                 "watermark": stamp, "integrity": integrity, "revision": revision}
+
+    def _session_coverage(self, *, key, point, cumulative, qty, integrity, previous=None):
+        """Prove the first print, without synthesizing quiet opening minutes.
+
+        A zero-origin premarket print or the same producer's durable earlier
+        session cursor can establish the cumulative-volume boundary. A new
+        PID/epoch, loss, missing cursor or intervening volume cannot do so.
+        """
+        day, item, session = key
+        if session not in SESSION_OPEN or qty <= 0:
+            return None
+        start = datetime.fromisoformat(day + "T" + SESSION_OPEN[session]).replace(tzinfo=KST).timestamp()
+        prior_cumulative, prior_hash, prior_cursor, tail_receipt = 0, None, None, None
+        if (previous is not None and previous.get("eligible") is True and previous["minute"] + 60 <= start
+                and point.series_sequence == previous["sequence"] + 1
+                and cumulative - previous["cumulative"] == qty):
+            prior_cumulative, prior_hash = previous["cumulative"], previous["hash"]
+            prior_cursor = dict(previous)
+            basis = "same_generation_session_boundary_cumulative_continuity"
+        elif session == "SOR_PREMARKET":
+            if cumulative != qty:
+                return None
+            basis = "first_premarket_print_cumulative_equals_quantity"
+        else:
+            predecessor = {"SOR_REGULAR": "SOR_PREMARKET", "SOR_AFTERMARKET": "SOR_REGULAR"}[session]
+            path = self.root / day / item / (predecessor + ".json")
+            try:
+                with path.open("rb") as handle:
+                    raw = handle.read(2 * 1024 * 1024 + 1)
+                if len(raw) > 2 * 1024 * 1024:
+                    return None
+                prior = json.loads(raw)
+                if not isinstance(prior, dict):
+                    return None
+                prior_hash = prior.pop("content_sha256")
+                cursor = prior["cursor"]
+                if (digest(prior) != prior_hash or prior["schema"] != SCHEMA
+                        or prior["trade_date"] != day or prior["source_item"] != item
+                        or prior["session"] != predecessor or prior["producer"] != self.producer
+                        or prior["source_epoch"] != point.sequence_epoch
+                        or prior["integrity"] != integrity
+                        or prior["source_commit"] != os.getenv("KORSTOCKSCAN_RUNTIME_GIT_COMMIT", "")
+                        or cursor["minute"] + 60 > start
+                        or cursor.get("eligible") is not True
+                        or type(cursor["cumulative"]) is not int):
+                    return None
+                # The last partial minute need not have caused a publication.
+                # Inspect only a bounded canonical tail, never a full-day scan.
+                journal = Path(prior["journal_path"])
+                if journal.exists():
+                    end = journal.stat().st_size
+                    offset = max(0, end - 2 * 1024 * 1024)
+                    with journal.open("rb") as handle:
+                        handle.seek(offset)
+                        tail = handle.read(end - offset)
+                    tail_receipt = {"path": str(journal), "start_byte": offset,
+                                    "end_byte": end, "sha256": hashlib.sha256(tail).hexdigest()}
+                    if offset:
+                        tail = tail.split(b"\n", 1)[-1]
+                    for line in tail.splitlines():
+                        row = json.loads(line)
+                        if not isinstance(row, dict):
+                            return None
+                        if row.get("source_item") != item or row.get("sequence_epoch") != point.sequence_epoch:
+                            continue
+                        if row["series_sequence"] <= cursor["sequence"]:
+                            continue
+                        event = datetime.fromisoformat(row["exchange_timestamp"])
+                        receive = datetime.fromisoformat(row["local_receive_timestamp"])
+                        raw_cumulative = row.get("cumulative_volume_raw")
+                        if (row.get("session_bucket") != predecessor or row.get("venue") != "SOR"
+                                or row.get("realtime_type") != "0B"
+                                or event.tzinfo is None or receive.tzinfo is None
+                                or event.astimezone(KST).date().isoformat() != day
+                                or not event.timestamp() <= receive.timestamp() <= datetime.fromisoformat(point.local_receive_timestamp).timestamp()
+                                or event.timestamp() >= start or row.get("path_consumer_eligible") is not True
+                                or not isinstance(raw_cumulative, str) or not re.fullmatch(r"[+]?[0-9]+", raw_cumulative)):
+                            return None
+                        cursor = {"sequence": row["series_sequence"], "cumulative": int(raw_cumulative),
+                                  "minute": int(event.timestamp()) // 60 * 60, "hash": digest(row), "eligible": True}
+                if cumulative - cursor["cumulative"] != qty:
+                    return None
+                prior_cumulative = cursor["cumulative"]
+                prior_cursor = dict(cursor)
+                basis = "same_generation_prior_session_cumulative_continuity"
+            except (OSError, ValueError, KeyError, TypeError):
+                return None
+        return {"start_epoch": int(start), "basis": basis,
+                "source_epoch": point.sequence_epoch, "prior_content_sha256": prior_hash,
+                "prior_cursor": prior_cursor, "prior_journal_tail": tail_receipt,
+                "prior_cumulative": prior_cumulative, "first_cumulative": cumulative,
+                "first_quantity": qty, "first_event": point.exchange_timestamp}
 
     def consume(self, points, *, integrity, journal_path, now_ts=None, durable_cursor=None):
         now_ts = time.time() if now_ts is None else now_ts
@@ -127,6 +223,10 @@ class CompletedBarProjection:
             if not math.isfinite(received) or not stamp.timestamp() <= received <= now_ts:
                 continue
             key = (stamp.date().isoformat(), item, p.session_bucket)
+            if p.session_bucket not in SESSION_OPEN:
+                continue
+            clock = stamp.strftime("%H:%M")
+            in_session = SESSION_OPEN[p.session_bucket] <= clock < SESSION_END[p.session_bucket]
             minute = int(stamp.timestamp()) // 60 * 60
             state = self.series.get(key)
             if state is None:
@@ -137,6 +237,7 @@ class CompletedBarProjection:
             changed_epoch = state["epoch"] != p.sequence_epoch
             changed_integrity = state["integrity"] != integrity
             if changed_epoch or changed_integrity:
+                state.pop("session_coverage", None)
                 for bar in state["bars"].values():
                     if bar["status"] == "pending":
                         bar["status"] = "gap"
@@ -146,8 +247,6 @@ class CompletedBarProjection:
             issues = []
             if getattr(p, "path_consumer_eligible", True) is not True:
                 issues.append("canonical_path_ineligible")
-            if last is None:
-                issues.append("startup_or_reconnect_partial_minute")
             try:
                 if not isinstance(p.cumulative_volume_raw, str) or not re.fullmatch(r"[+]?[0-9]+", p.cumulative_volume_raw):
                     raise ValueError("cumulative_volume_missing")
@@ -167,6 +266,15 @@ class CompletedBarProjection:
                         bar["issues"].append("trade_fields_invalid")
                 touched.add(key)
                 continue
+            if in_session and (last is None or not state["bars"]):
+                coverage = None
+                if not state["bars"] and not issues and not state.get("invalid_from_minute"):
+                    coverage = self._session_coverage(key=key, point=p, cumulative=cumulative,
+                                                      qty=qty, integrity=integrity, previous=last)
+                if coverage is None:
+                    issues.append("startup_or_reconnect_partial_minute")
+                else:
+                    state["session_coverage"] = coverage
             if last is not None:
                 if p.series_sequence <= last["sequence"]:
                     # Retries cannot add volume twice. Conflicting/reordered rows
@@ -185,39 +293,44 @@ class CompletedBarProjection:
                         if prev["minute_epoch"] >= last["minute"]:
                             prev["status"] = "gap"
                             prev["issues"] = sorted(set(prev["issues"] + issues))
-            bar = state["bars"].get(minute)
-            if bar is None:
-                bar = state["bars"][minute] = {
-                    "minute_epoch": minute, "source_time": datetime.fromtimestamp(minute, KST).strftime("%Y%m%d%H%M%S"),
-                    "open": price, "high": price, "low": price, "close": price, "volume": 0,
-                    "first_event": stamp.timestamp(), "last_event": stamp.timestamp(),
-                    "first_sequence": p.series_sequence, "last_sequence": p.series_sequence,
-                    "first_cumulative": cumulative, "last_cumulative": cumulative,
-                    "status": "pending", "issues": [], "available_at_epoch": None,
-                    "source_epoch": p.sequence_epoch, "source_item": item,
-                    "producer": self.producer,
-                    "source_commit": os.getenv("KORSTOCKSCAN_RUNTIME_GIT_COMMIT", ""),
-                }
-            elif bar["status"] == "complete":
-                issues.append("late_revision_after_publication")
-            bar["issues"] = sorted(set(bar["issues"] + issues))
-            if bar["issues"]:
-                bar["status"] = "gap"
-            if stamp.timestamp() < bar["first_event"]:
-                bar["open"], bar["first_event"] = price, stamp.timestamp()
-            if stamp.timestamp() >= bar["last_event"]:
-                bar["close"], bar["last_event"] = price, stamp.timestamp()
-            bar.update(high=max(bar["high"], price), low=min(bar["low"], price),
-                       volume=bar["volume"] + qty, last_cumulative=cumulative, last_sequence=p.series_sequence)
+            if in_session:
+                bar = state["bars"].get(minute)
+                if bar is None:
+                    bar = state["bars"][minute] = {
+                        "minute_epoch": minute, "source_time": datetime.fromtimestamp(minute, KST).strftime("%Y%m%d%H%M%S"),
+                        "open": price, "high": price, "low": price, "close": price, "volume": 0,
+                        "first_event": stamp.timestamp(), "last_event": stamp.timestamp(),
+                        "first_sequence": p.series_sequence, "last_sequence": p.series_sequence,
+                        "first_cumulative": cumulative, "last_cumulative": cumulative,
+                        "status": "pending", "issues": [], "available_at_epoch": None,
+                        "source_epoch": p.sequence_epoch, "source_item": item,
+                        "producer": self.producer,
+                        "source_commit": os.getenv("KORSTOCKSCAN_RUNTIME_GIT_COMMIT", ""),
+                    }
+                elif bar["status"] == "complete":
+                    issues.append("late_revision_after_publication")
+                bar["issues"] = sorted(set(bar["issues"] + issues))
+                if bar["issues"]:
+                    bar["status"] = "gap"
+                if stamp.timestamp() < bar["first_event"]:
+                    bar["open"], bar["first_event"] = price, stamp.timestamp()
+                if stamp.timestamp() >= bar["last_event"]:
+                    bar["close"], bar["last_event"] = price, stamp.timestamp()
+                bar.update(high=max(bar["high"], price), low=min(bar["low"], price),
+                           volume=bar["volume"] + qty, last_cumulative=cumulative, last_sequence=p.series_sequence)
             state["watermark"] = max(state["watermark"], stamp.timestamp())
             state["last"] = {"sequence": p.series_sequence, "cumulative": cumulative,
-                             "minute": minute, "hash": digest(p.as_dict())}
+                             "minute": minute, "hash": digest(p.as_dict()),
+                             "eligible": not any(issue != "startup_or_reconnect_partial_minute" for issue in issues)}
+            if not in_session:
+                state["boundary_cursor"] = state["last"]
             for old in state["bars"].values():
                 if old["status"] == "pending" and old["minute_epoch"] + 60 + self.lateness_sec <= state["watermark"]:
                     old["status"] = "complete"
                     old["available_at_epoch"] = now_ts
             for old_key in sorted(state["bars"])[:-self.max_bars]:
                 del state["bars"][old_key]
+                state["history_truncated"] = True
             state["revision"] += 1
             touched.add(key)
         for key in touched:
@@ -225,7 +338,8 @@ class CompletedBarProjection:
             state = self.series[key]
             # Pending price changes need no file rewrite. Sealing, invalidation,
             # loss and epoch changes always publish immediately, in the writer.
-            publication_key = digest([state["integrity"], state.get("invalid_from_minute"), [
+            publication_key = digest([state["integrity"], state.get("invalid_from_minute"),
+                state.get("session_coverage"), state.get("boundary_cursor"), [
                 bar if bar["status"] == "complete" else
                 [minute, bar["status"], bar["issues"]]
                 for minute, bar in sorted(state["bars"].items())]])
@@ -238,6 +352,8 @@ class CompletedBarProjection:
                 "integrity": state["integrity"], "watermark_epoch": state["watermark"],
                 "revision": state["revision"], "cursor": state["last"],
                 "invalid_from_minute": state.get("invalid_from_minute"),
+                "session_coverage": state.get("session_coverage"),
+                "history_truncated": state.get("history_truncated", False),
                 "journal_path": str(journal_path), "durable_cursor": durable_cursor,
                 "metric_contract": METRIC_CONTRACT,
                 "empty_minute_policy": "no_print_observed_not_imputed",
