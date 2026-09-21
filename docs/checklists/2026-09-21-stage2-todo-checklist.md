@@ -64,6 +64,7 @@
 ## 실행 항목
 
 - [ ] `[DirectFamilyPreopenPolicyHandoff] direct family 날짜별 정책·bootstrap 장전 소비 확인` (`Due: 2026-09-21`, `Slot: PREOPEN`, `TimeWindow: 07:35~08:05`, `Track: RuntimeStability`)
+  - 9/21 Rising-missed 결함 수리: 늦은 source9/17 재생성이 effective9/18만 갱신하여9/21 정책 해시를 고립시킨 원인을 수리한다. [원인·발행/검증 계약·배포 증거](../audit-reports/2026-09-21-rising-missed-tp1-handoff-repair.md). 사용자 배포·재기동 승인 범위에서 기존 보고서 보존 재발행→당일 receipt 수용→새 PID 검증을 닫으며 `incumbent_preserved`, runtime override0을 유지한다. 다른 family와 전체 경제성 acceptance는 이 수정으로 완료하지 않는다.
   - Source: [runtime_approval_summary_2026-09-17.json](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-09-17.json)
   - 판정 기준: source_date=`2026-09-17`, apply_date=`2026-09-21`, preopen_state=`pending`, due_policy_receipts=`compact_auxiliary(valid=True, handoff=blocked); entry_cancel_wait(valid=True, handoff=blocked); entry_split(valid=True, handoff=blocked); low_price_expansion(valid=True, handoff=blocked); low_price_two_leg(valid=True, handoff=blocked); machine_entry(valid=True, handoff=not_applicable); main_mechanistic_entry(valid=True, handoff=blocked); rising_missed(valid=True, handoff=incumbent_preserved); scale_in_split(valid=True, handoff=incumbent_preserved)`의 schema·semantic hash·scope와 bootstrap accepted/rejected 결과를 확인한다.
   - incumbent 정책은 runtime override가 0이어야 하고 validated edge는 단일축 allowlist·operator lock·retired OFF·same-stage guard를 통과해야 한다.

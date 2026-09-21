@@ -646,8 +646,21 @@ def build_report(
 def write_outputs(
     report: dict[str, Any], *, output_json: Path, output_md: Path, effective_date: str | None = None
 ) -> dict[str, Any]:
-    effective_date = effective_date or _next_trading_date(str(report["target_date"]))
+    from src.engine.automation.runtime_policy_bootstrap import (
+        validate_rising_missed_policy_receipt,
+    )
+
+    source_date = date.fromisoformat(str(report["target_date"]))
+    publication_date = date.fromisoformat(str(report["generated_at"])[:10])
+    effective_date = effective_date or _next_trading_date(
+        max(source_date, publication_date).isoformat()
+    )
     policy = _policy_receipt(report, effective_date)
+    binding_error = validate_rising_missed_policy_receipt(
+        policy, report, effective_date
+    )
+    if binding_error:
+        raise ValueError(f"rising_missed_policy_publication_invalid:{binding_error}")
     source_policy_path, effective_policy_path = policy_paths(str(report["target_date"]), effective_date)
     body = json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     _atomic_write(output_json, body)

@@ -817,6 +817,16 @@ def verify_bootstrap(target_date: str, *, pid: int | None = None, write: bool = 
             continue
         if current.get("sha256") != receipt.get("sha256"):
             findings.append(f"source_receipt_hash_mismatch:{source_path}")
+    for row in manifest.get("direct_family_receipts") or []:
+        if not isinstance(row, dict) or row.get("family") != "rising_missed_tp1_selector":
+            continue
+        receipt = row.get("source_receipt") or {}
+        accepted, rejected = _load_direct_receipts(
+            target_date, [Path(str(receipt.get("path") or ""))]
+        )
+        if not accepted or rejected:
+            reason = rejected[0].get("reason") if rejected else "receipt_missing"
+            findings.append(f"rising_missed_source_binding_invalid:{reason}")
     if pid is not None and raw_env:
         expected = operator_policy_succession.read_operator_env(runtime_file)
         try:

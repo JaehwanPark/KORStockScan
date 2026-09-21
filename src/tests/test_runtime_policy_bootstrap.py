@@ -364,6 +364,17 @@ def test_bootstrap_applies_bounded_rising_missed_policy_before_operator_locks(
     assert manifest["env_key_owners"]["KORSTOCKSCAN_RISING_MISSED_TP1_POSITIVE_SUPPORT_MIN"] == "direct_policy:rising_missed_tp1_selector"
     assert manifest["direct_family_receipts"][0]["family"] == "rising_missed_tp1_selector"
 
+    bootstrap.write_bootstrap("2026-09-19", receipt_paths=[receipt])
+    assert bootstrap.verify_bootstrap("2026-09-19", write=False)["passed"] is True
+    source["economic_evaluation"]["validated_candidate_count"] = 0
+    _write(
+        bootstrap.RISING_MISSED_REPORT_DIR / "rising_missed_classifier_prior_2026-09-18.json",
+        source,
+    )
+    verification = bootstrap.verify_bootstrap("2026-09-19", write=False)
+    assert verification["passed"] is False
+    assert "rising_missed_source_binding_invalid:source_report_sha256_mismatch" in verification["findings"]
+
 
 def test_bootstrap_rejects_out_of_bounds_rising_missed_policy(monkeypatch, tmp_path):
     legacy_dir = tmp_path / "threshold_cycle" / "runtime_env"

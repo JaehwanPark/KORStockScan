@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from src.engine.monitoring import rising_missed_classifier_prior as mod
 
 
@@ -182,3 +184,53 @@ def test_no_edge_policy_receipt_preserves_incumbent_without_env_mutation(monkeyp
     assert result["policy"]["evaluated_axis"] == "positive_support_min"
     assert result["policy"]["calibration"]["paired_sample_count"] == 0
     assert Path(result["effective_policy"]).exists()
+
+
+@pytest.mark.parametrize(
+    ("publication", "effective"),
+    [("2026-09-17", "2026-09-18"), ("2026-09-20", "2026-09-21")],
+)
+def test_publication_date_selects_consumer_policy(monkeypatch, tmp_path, publication, effective):
+    from src.engine.automation import runtime_policy_bootstrap as bootstrap
+
+    monkeypatch.setattr(mod, "OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(mod, "FEEDBACK_DIR", tmp_path / "feedback")
+    monkeypatch.setattr(bootstrap, "RISING_MISSED_REPORT_DIR", tmp_path)
+    report = mod.build_report(
+        "2026-09-17", generated_at=f"{publication}T14:00:00+09:00"
+    )
+    report_path = tmp_path / "rising_missed_classifier_prior_2026-09-17.json"
+    # A prior publication for the next apply date must be replaced together
+    # with the refreshed source, rather than left bound to the old hash.
+    _, policy_path = mod.policy_paths("2026-09-17", effective)
+    policy_path.write_text('{"source_report_sha256": "old-generation"}')
+
+    result = mod.write_outputs(
+        report, output_json=report_path, output_md=tmp_path / "report.md"
+    )
+
+    accepted, rejected = bootstrap._load_direct_receipts(effective, [policy_path])
+    assert rejected == []
+    assert len(accepted) == 1
+    assert accepted[0]["status"] == "incumbent_preserved"
+    assert accepted[0]["runtime_env_overrides"] == {}
+    assert result["policy"]["effective_date"] == effective
+    assert result["policy"]["source_report_sha256"] == report["artifact_sha256"]
+    assert json.loads(Path(result["source_policy"]).read_text()) == result["policy"]
+
+
+def test_publication_rejects_changed_source_before_any_write(monkeypatch, tmp_path):
+    monkeypatch.setattr(mod, "OUTPUT_DIR", tmp_path)
+    monkeypatch.setattr(mod, "FEEDBACK_DIR", tmp_path / "feedback")
+    report = mod.build_report(
+        "2026-09-17", generated_at="2026-09-20T14:00:00+09:00"
+    )
+    report["decision"] = "changed_after_hash"
+    report_path = tmp_path / "report.json"
+    report_path.write_text("previous-generation")
+
+    with pytest.raises(ValueError, match="source_report_sha256_mismatch"):
+        mod.write_outputs(report, output_json=report_path, output_md=tmp_path / "report.md")
+
+    assert report_path.read_text() == "previous-generation"
+    assert not (tmp_path / "rising_missed_tp1_policy_2026-09-21.json").exists()
