@@ -21,3 +21,17 @@ No Kiwoom wire request, FID mapping, subscription/recovery flow, threshold or or
 ## Remaining boundary
 
 The existing main publisher still serializes a roughly4MB checkpoint. Its observed capture lock was365–663ms; this change optimizes readers, not the main writer. Full-universe WS expansion is deferred. Retained samples and reduced prospective collection coverage must not be represented as full-population economics. Natural next-session signal/submission and net-profit acceptance are separate from code and deployment validation.
+
+## Deployment and final checks (20:07 KST)
+
+Code release `415255eb09a53b799400eccb41065a8002c67287`, branch `codex/widget-io-repair-20260921`, was pushed and independently passed the same447 tests in the immutable release. Compile, diff, systemd unit syntax, document links and print-only checklist parsing passed; one current OPEN owner is preserved.
+
+All six selected service definitions point to `/home/ubuntu/KORStockScan-runtime-releases/widget-io-repair-20260921-415255eb0`. Samsung/Doosan/Hanwha actual new PIDs are407040/407037/407039 with matching cwd. Symbol collector, research collector and auto-expansion started successfully and exited0 under their after20:01 normal schedule. Auto-expansion's new PID407172 was observed with swap0 before its normal exit. No service-memory or WS-registration budget was increased.
+
+A separately authorized read-only source collector `--once` completed after closing time:58 current policy observations became55 explicit `observation_paused` plus3 priority symbols `closed` (006800/010140/080220). This is an installed-scope acceptance, not live quote or trading acceptance. Active advisory episodes and executable symbols remain preserved by code and regression tests.
+
+The deployment boundary preserved the then-selected main commit `b9be2da6e5e03bb1f5b89d67360ff1230129d436` / PID401859. This main was updated by separate work after the earlier19:44 diagnosis; this task did not restart it. I/O wait after the deployment was0.84–1.01%, disk utilization3.8–4.6%; market close, natural old-service exit and the other main release confound comparison, so these are current health observations, not an isolated measured speedup.
+
+The read-only service-budget validation used512MiB memory and25% CPU limits: first policy load21.296 seconds, next calls0.00477/0.00546 seconds, same policy hash and1,850-byte summary, exit0 with no reported memory-limit/OOM events. See [source benchmark](../../tmp/widget-io-policy-benchmark.log), [budget check](../../tmp/widget-io-policy-cgroup.log), [release tests](../../tmp/widget-io-repair-20260921/release-tests.log), [deployment](../../tmp/widget-io-repair-20260921/deployment-final.json), [scope receipt](../../tmp/widget-io-repair-20260921/scope-verification.json).
+
+Natural next-session collection, submit-path receipts and cost-adjusted outcome remain prospective evidence. The implementation, repair review, push, deployment and scheduled-exit verification are complete for this change.
