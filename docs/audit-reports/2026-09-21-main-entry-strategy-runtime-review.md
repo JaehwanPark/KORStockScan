@@ -62,3 +62,13 @@
 - `/proc` cwd·명령 인수·열린 파일, systemd와 cron의 참조가 없고 커밋이 현재 배포의 조상인 중복 작업트리 3개를 제거했다: `KORStockScan-nonentry-review`, `main-entry-strategy-20260921-77b6beb51`, `main-entry-strategy-20260921-f40bbf482`. 삭제 전 공유 data/docs/logs/tmp/venv 링크의 대상을 확인했고 실제 공유 디렉터리는 건드리지 않았다. 약 245 MB의 중복 체크아웃·캐시를 정리했다. 원 커밋·배포/검증 영수증은 남아 있어 과거 경로는 당시 체크아웃 이력으로 해석한다.
 - `/tmp/nonentry-*` 임시 항목 56개는 고유 원본·실패/검증 증거를 잃지 않도록 약 1.2 MB의 단일 복구 압축본으로 모으고 느슨한 복사본을 제거했다. 기존 작업본 문서/패치/인덱스와 selector도 먼저 보존했다. [통합·삭제 목록 및 복구 자료](../../tmp/workspace-release-consolidation-20260921/cleanup-result.json), [사전 통합 분류](../../tmp/workspace-release-consolidation-20260921/integration.json).
 - 이 정리는 코드·정책 변경이 없어 trading pytest·장후 재생성·외부 Project/Calendar sync를 반복하지 않는다. 문서 owner/링크·print-only parser·diff 및 운영 소스/selector/PID 불변 검증 결과는 같은 증거 디렉터리의 `final-validation.json`에 기록한다. 실행 중이거나 다른 작업에 속한 릴리스·거래 원장·당일 생성 자료는 삭제하지 않는다.
+
+
+## 후속 범위 정정 — 기계 미진입 기회비용 정책
+
+- 최신 사용자 지시로 현재 선정 목적을 BLOCK/RECHECK→ENTER_NOW 기회비용에 한정했다. 기존 ENTER_NOW를 줄인 이익은 제외하고, 보조 AI VETO→PASS·다른 하드 가드·scale-in·청산 튜닝은 후속으로 분리한다. 기계정책 생성·즉시 적용·재기동·장후 연결·승계는 현재 승인 범위다.
+- 후보 AI 결과/운영 owner 재생을 기계정책의 필수조건에서 제거했다. 기존 source-valid raw/실행가능 ask/고정 target-adverse 선착순 label/왕복 비용을 재사용한다. 미도달·동시 도달·비용 결손을 이익0으로 채우지 않으며, RECHECK 전체 수명·실제 체결·portfolio 원화 손익을 이 가격경로 실험으로 주장하지 않는다.
+- 사용자 기준: **비용 후 평균이익 0 이상인 후보에서 승률 우선**, 같은 승률이면 평균이익·기회비용 회복·유일 기회 수로 비교한다. 비용 후0은 허용하지만 승리로 세지 않는다. 반복 attempt는 같은 기회 내 평균으로 가중치를 제한한다. train에서 선택하고 holdout이 있으면 이후 검증하며 음수 경로 이익을 숨겨 적용하지 않는다.
+- 기존 함수/CLI에 `--machine-policy-only --write [--activate-now]`를 추가했다. 기존 장후 `--machine-only --activate-now` 경로도 동일 기계 선정 함수를 사용하므로 별도 scheduler나 producer를 만들지 않는다. publisher·current generation·동일 validator·재시작/다음 날짜 승계는 재사용한다. AI 정책·주문/자금·guard는 그대로다.
+- 탐색 보완: 원천 없는 구조/tape 좌표를 보존하고, 다수 좌표를 한꺼번에 흔들기 전 현재 정책 주변의 단일좌표 후보를 우선 평가한다. 전체 joint frontier/cursor는 유지하며 전역 최적이나 전수 탐색 완료를 주장하지 않는다.
+- 검증: 관련3개 suite **285 PASS**, compile/diff 및 print-only parser 통과. 비용0 허용·승률 우선·반복기회 가중치·AI 결과 무시·기존 ENTER_NOW 제외·음수 경로/holdout 거부·current 적용 및 다음 날짜 승계를 회귀했다. 가격경로 원천2,330건은 한 번 추출해 이번 비교에서 재사용한다. 최초24 budget 탐색은 새 비음수 후보를 찾지 못했으며, 우선순위를 보완한96 budget 실행이 진행 중이다. 최종 정책·배포/PID 결과는 후속 영수증으로 구분한다.

@@ -1328,7 +1328,10 @@ def activate_strategy_report(source_path: Path, *, data_root: Path, now: datetim
         if errors:
             raise ValueError("strategy_activation_rejected:" + ",".join(errors))
         # An already consumed holdout cannot be reused for another selection.
-        consumption = policy_root / "holdouts" / (digest([scope, candidate['evidence']['holdout']['opportunity_ids']]) + '.json')
+        holdout = candidate['evidence'].get('holdout') or {}
+        proof_key = (holdout['opportunity_ids'] if holdout else
+                     [candidate['policy_sha256'], candidate['evidence_sha256']])
+        consumption = policy_root / "holdouts" / (digest([scope, proof_key]) + '.json')
         if consumption.exists() and _read(consumption).get('policy_sha256') != candidate['policy_sha256']:
             raise ValueError('strategy_holdout_already_consumed')
         bundle = copy.deepcopy(previous)

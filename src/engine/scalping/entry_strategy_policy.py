@@ -434,7 +434,7 @@ def rebuild(setup, policy):
     return rebuilt, effective, receipt
 
 
-def joint_candidates(parent, scope, *, domains=None, selectors=None, start=0, limit=96):
+def joint_candidates(parent, scope, *, domains=None, selectors=None, start=0, limit=96, local_first=False):
     """Bounded traversal of a declared Cartesian domain, with resumable cursor.
 
     Coprime stride visits every combination once; all coordinates participate
@@ -451,15 +451,29 @@ def joint_candidates(parent, scope, *, domains=None, selectors=None, start=0, li
     while math.gcd(stride, size) != 1:
         stride += 1
     base = seed(parent, scope) if 'strategy' not in parent else deepcopy(parent)
-    domain_hash = digest(dict(domains=domains, selectors=selectors, parent=digest(parent)))
-    for cursor in range(start, min(start + limit, size)):
-        index = cursor * stride % size
-        selector = selectors[index % len(selectors)]
-        index //= len(selectors)
-        values = {}
+    initial = []
+    if local_first:
+        inherited = base['strategy']['nodes'][base['strategy']['root']]['profile']
+        # Try nearby changes before simultaneously perturbing every coordinate.
+        # This changes traversal order only; the full joint frontier remains.
         for name in names:
-            values[name] = domains[name][index % len(domains[name])]
-            index //= len(domains[name])
+            options = [v for v in domains[name] if v != inherited[name]]
+            if options:
+                for value in dict.fromkeys((min(options), max(options))):
+                    initial.append({name: value})
+    domain_hash = digest(dict(domains=domains, selectors=selectors, parent=digest(parent), local_first=local_first))
+    total = size + len(initial)
+    for cursor in range(start, min(start + limit, total)):
+        if cursor < len(initial):
+            selector, values = None, initial[cursor]
+        else:
+            index = (cursor - len(initial)) * stride % size
+            selector = selectors[index % len(selectors)]
+            index //= len(selectors)
+            values = {}
+            for name in names:
+                values[name] = domains[name][index % len(domains[name])]
+                index //= len(domains[name])
         candidate = deepcopy(base)
         root = candidate['strategy']['root']
         profile = candidate['strategy']['nodes'][root]['profile']
@@ -476,8 +490,8 @@ def joint_candidates(parent, scope, *, domains=None, selectors=None, start=0, li
             }
         if validate(candidate['strategy']):
             candidate = None
-        yield candidate, dict(cursor=cursor + 1, domain_size=size,
-            domain_sha256=domain_hash, search_complete=cursor + 1 == size)
+        yield candidate, dict(cursor=cursor + 1, domain_size=total,
+            domain_sha256=domain_hash, search_complete=cursor + 1 == total)
 
 
 def select_report_candidate(source):
@@ -485,8 +499,14 @@ def select_report_candidate(source):
     proposals = []
     for scope, result in sorted((source.get('strategy_refinements_by_scope') or {}).items()):
         candidate = result.get('candidate') or {}
-        score = (((candidate.get('evidence') or {}).get('train') or {}).get('economics') or {}).get('daily_net_profit_delta_krw')
-        if _number(score) is not None and score > 0:
+        economy = (((candidate.get('evidence') or {}).get('train') or {}).get('economics') or {})
+        if candidate.get('evaluation_basis') == 'machine_nonentry_opportunity_v1':
+            win_rate, net = _number(economy.get('win_rate_pct')), _number(economy.get('selected_path_ev_pct'))
+            score = (win_rate, net, _number(economy.get('paired_admission_delta_pct')) or 0.) if win_rate is not None and net is not None and net >= 0 else None
+        else:
+            net = _number(economy.get('daily_net_profit_delta_krw'))
+            score = (0., net, 0.) if net is not None and net > 0 else None
+        if score is not None:
             proposals.append((score, scope, result))
     if not proposals:
         return None
@@ -511,6 +531,45 @@ def promotion_errors(candidate, parent, scope):
     if candidate.get('evidence_sha256') != digest(candidate.get('evidence')):
         errors.append('strategy_candidate_evidence_hash_invalid')
     evidence = candidate.get('evidence') or {}
+    if candidate.get('evaluation_basis') == 'machine_nonentry_opportunity_v1':
+        # Machine opportunity selection is independent of auxiliary AI and
+        # portfolio replay. Existing holdout losses still reject a successor.
+        for split in ('train', 'holdout'):
+            arm = evidence.get(split) or {}
+            if split == 'holdout' and not arm:
+                continue
+            days, ids = arm.get('source_dates') or [], arm.get('opportunity_ids') or []
+            economy = arm.get('economics') or {}
+            try:
+                valid_dates = days and all(datetime.fromisoformat(d).date().isoformat() == d and d >= '2026-06-05' for d in days)
+            except (ValueError, TypeError):
+                valid_dates = False
+            if not valid_dates or not ids or len(ids) != len(set(ids)):
+                errors.append(split + '_machine_support_invalid')
+            if (economy.get('status') != 'supported_machine_admission'
+                or economy.get('basis') != 'nonentry_to_enter_now_fixed_exit_cost_adjusted_path'
+                or economy.get('auxiliary_ai_required') is not False):
+                errors.append(split + '_machine_metric_invalid')
+            delta = _number(economy.get('paired_admission_delta_pct'))
+            if delta is None or delta < 0:
+                errors.append(split + '_machine_opportunity_not_improved')
+            if economy.get('selected_attempt_count', 0):
+                ev, worst = _number(economy.get('selected_path_ev_pct')), _number(economy.get('worst_selected_path_pct'))
+                win_rate = _number(economy.get('win_rate_pct'))
+                from src.engine.scalping.ai_action_outcome_calibration import CATASTROPHIC_LOSS_PCT
+                if (ev is None or ev < 0 or worst is None or worst <= CATASTROPHIC_LOSS_PCT
+                    or win_rate is None or not 0 <= win_rate <= 100):
+                    errors.append(split + '_machine_selected_path_invalid')
+            elif split == 'train':
+                errors.append('train_machine_no_recovered_entry')
+        train, holdout = evidence.get('train') or {}, evidence.get('holdout') or {}
+        if holdout and (not train.get('source_dates') or not holdout.get('source_dates')
+                       or max(train['source_dates']) >= min(holdout['source_dates'])
+                       or set(train.get('opportunity_ids', [])) & set(holdout.get('opportunity_ids', []))):
+            errors.append('strategy_machine_holdout_leak')
+        if candidate.get('selected_without_holdout') is not True:
+            errors.append('strategy_holdout_selection_leak')
+        return sorted(set(errors))
     dates = []
     for name, minimum in [('train', 10), ('holdout', 3)]:
         arm = evidence.get(name) or {}

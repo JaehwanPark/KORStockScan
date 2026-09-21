@@ -7898,7 +7898,56 @@ def machine_joint_scope_evidence_valid(report, scopes):
         return False
 
 
-def build_main_strategy_refinement(population, *, parent, scope, source_contract, previous=None, limit=96):
+def _machine_admission_metrics(rows, actions):
+    """BLOCK/RECHECK to ENTER_NOW opportunity study, independent of auxiliary AI.
+
+    Abstention means no immediate exposure in this experiment, not a zero-valued
+    RECHECK lifecycle. Each episode has equal weight despite repeated attempts.
+    No fills, portfolio KRW, later AI decisions or realized profits are inferred.
+    """
+    groups = defaultdict(list)
+    excluded = Counter()
+    selected = []
+    for row, action in zip(rows, actions):
+        comparison = row.get('comparison') or {}
+        if comparison.get('incumbent_machine_action') not in {'BLOCK', 'RECHECK'}:
+            excluded['outside_nonentry_population'] += 1
+            continue
+        cost = _full_entry_cost_pct(comparison.get('entry_cost_contract'), source_date=row['source_date'])
+        charged = _number(comparison.get('conservative_execution_cost_pct'))
+        if cost is None or charged is None or not math.isclose(cost, charged, abs_tol=1e-9):
+            excluded['full_cost_missing_or_mismatched'] += 1
+            continue
+        # Deliberately use the machine path, never an incumbent AI PASS/VETO.
+        value = _mechanistic_terminal_proxy_pct({'comparison': comparison})
+        if value is None:
+            excluded['terminal_path_censored'] += 1
+            continue
+        new = action == 'ENTER_NOW'
+        key = (row['source_date'], row['stock_code'], row.get('scanner_promotion_id') or row['decision_trace_id'])
+        groups[key].append((0., value if new else 0., new))
+        if new:
+            selected.append(value)
+    old = [fmean(v[0] for v in values) for values in groups.values()]
+    new = [fmean(v[1] for v in values) for values in groups.values()]
+    selected_episodes = [[v[1] for v in values if v[2]] for values in groups.values()]
+    selected_episodes = [values for values in selected_episodes if values]
+    return dict(status='supported_machine_admission' if groups else 'machine_path_unavailable',
+        basis='nonentry_to_enter_now_fixed_exit_cost_adjusted_path',
+        comparison_unit='equal_episode_weighted_immediate_attempts',
+        comparable_opportunity_count=len(groups), comparable_attempt_count=sum(map(len, groups.values())),
+        excluded_attempt_counts=dict(excluded), selected_attempt_count=len(selected),
+        incumbent_admission_value_pct=fmean(old) if old else None,
+        candidate_admission_value_pct=fmean(new) if new else None,
+        paired_admission_delta_pct=fmean(b-a for a,b in zip(old,new)) if old else None,
+        selected_path_ev_pct=fmean(fmean(values) for values in selected_episodes) if selected_episodes else None,
+        selected_opportunity_count=len(selected_episodes),
+        win_rate_pct=100 * fmean(fmean(value > 0 for value in values) for values in selected_episodes) if selected_episodes else None,
+        worst_selected_path_pct=min(selected) if selected else None,
+        auxiliary_ai_required=False, realized_pnl=False, portfolio_pnl=False)
+
+
+def build_main_strategy_refinement(population, *, parent, scope, source_contract, previous=None, limit=96, machine_policy_only=False):
     """Select on train only, then evaluate one frozen joint policy on holdout."""
     from copy import deepcopy
     from src.engine.scalping import entry_strategy_policy as strategy
@@ -7923,7 +7972,7 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
     population = supported
     if not population:
         return {**result, 'blocker': 'strategy_no_supported_predecision_rows'}
-    input_sha256 = strategy.digest([source_contract, parent, population])
+    input_sha256 = strategy.digest([source_contract, parent, population, 'machine_admission_v1'] if machine_policy_only else [source_contract, parent, population])
     result['input_sha256'] = input_sha256
     # Same input/selection is immutable; retries do not optimize on used holdout.
     if previous and previous.get('input_sha256') == input_sha256 and previous.get('candidate'):
@@ -7965,10 +8014,11 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
         result.update(blocker_owner='entry_setup_paired_replay_batch/strategy_owner_replay',
             closure_test='same_opportunities_candidate_auxiliary_exact_setup_and_complete_owner_cost_capital_replay')
     def evaluate(rows, candidate):
-        selected, changed, downstream = [], set(), True
+        selected, changed, downstream, actions = [], set(), True, []
         transitions, changed_attempts = Counter(), []
         for row in rows:
             decision = mechanistic_entry_policy_decision(row["setup_evidence"], policy=candidate)
+            actions.append(decision['action'])
             old = row["comparison"]["incumbent_machine_action"]
             transitions[old + '->' + decision['action']] += 1
             if decision["action"] != old:
@@ -7977,7 +8027,7 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
                     raw_sha256=row['setup_evidence']['strategy_raw_sha256'],
                     incumbent_action=old, candidate_action=decision['action'],
                     candidate_setup_sha256=(decision.get('effective_setup_evidence') or row['setup_evidence'])['evidence_sha256']))
-            if decision["action"] == "ENTER_NOW":
+            if decision["action"] == "ENTER_NOW" and not machine_policy_only:
                 selected.append(row)
                 # The auxiliary screen consumes strategy-dependent facts. An
                 # incumbent verdict must never be relabeled as candidate PASS.
@@ -7993,8 +8043,8 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
                 provider_assessment = {k:v for k,v in decision.items() if k not in {'strategy_selection', 'effective_setup_evidence'}}
                 downstream = (downstream and bool(frozen_setup) and fact_hash(frozen_setup) == fact_hash(rebuilt)
                     and isinstance(frozen_assessment, dict) and frozen_assessment == provider_assessment)
-        economics = _machine_sequence_operating_metrics(rows,
-            {r["decision_trace_id"] for r in selected}, candidate)
+        economics = (_machine_admission_metrics(rows, actions) if machine_policy_only else
+            _machine_sequence_operating_metrics(rows, {r["decision_trace_id"] for r in selected}, candidate))
         return dict(source_dates=sorted({r["source_date"] for r in rows}),
             opportunity_ids=sorted({identity(r) for r in rows}), changed_opportunity_ids=sorted(changed),
             source_complete=all("operating_comparison_input" in r for r in rows),
@@ -8016,11 +8066,12 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
     domains = {k: sorted(set(v[1]) | {strategy.default_profile(parent)[k]}) for k,v in strategy.REGISTRY.items()}
     unsupported_coordinates = []
     for name in strategy.STRUCTURE_REGISTRY:
-        if name.startswith('structure_') and any(not r['setup_evidence']['strategy_raw_input'].get('entry_candle_context', {}).get('strategy_completed_bars') for r in train + holdout):
+        if (name.startswith('structure_') or machine_policy_only) and any(not r['setup_evidence']['strategy_raw_input'].get('entry_candle_context', {}).get('strategy_completed_bars') for r in train + holdout):
             domains[name] = [strategy.default_profile(parent)[name]]
             unsupported_coordinates.append(name)
     for name, feature in [('tape_supportive_score','order_flow_pressure_score'), ('tape_adverse_score','order_flow_pressure_score'), ('momentum_accelerating_score','entry_momentum_score'), ('momentum_fading_score','entry_momentum_score')]:
-        if any(strategy._number(r['setup_evidence']['strategy_raw_input'].get('features', {}).get(feature)) is None for r in train + holdout):
+        if any(strategy._number(r['setup_evidence']['strategy_raw_input'].get('features', {}).get(feature)) is None
+               or (machine_policy_only and name.startswith('tape_') and r['setup_evidence']['strategy_raw_input'].get('features', {}).get('order_flow_pressure_source') != 'trusted_aggressor') for r in train + holdout):
             domains[name] = [strategy.default_profile(parent)[name]]
             unsupported_coordinates.append(name)
     if any(not r['setup_evidence']['strategy_raw_input'].get('mechanistic_micro_window') for r in train + holdout):
@@ -8054,7 +8105,8 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
             'selection_status': 'frozen_before_same_holdout_revision'}
     best, best_evidence, best_score, blockers = None, None, None, Counter()
     research_candidates = deepcopy((previous or {}).get('research_candidates') or []) if (previous or {}).get('input_sha256') == input_sha256 else []
-    for candidate, progress in strategy.joint_candidates(parent, scope, domains=domains, selectors=selectors, start=start, limit=limit):
+    for candidate, progress in strategy.joint_candidates(parent, scope, domains=domains, selectors=selectors, start=start, limit=limit,
+            **({'local_first': True} if machine_policy_only else {})):
         result["search"] = progress
         if candidate is None:
             continue
@@ -8073,6 +8125,17 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
             research_candidates.sort(key=lambda item: (-item['changed_opportunity_count'], item['policy_sha256']))
             del research_candidates[3:]
         economy = evidence["economics"]
+        if machine_policy_only:
+            delta = economy.get('paired_admission_delta_pct')
+            selected_ev = economy.get('selected_path_ev_pct')
+            worst = economy.get('worst_selected_path_pct')
+            win_rate = economy.get('win_rate_pct')
+            score = (win_rate, selected_ev, delta, economy['selected_opportunity_count'])
+            if (delta is not None and delta >= 0 and selected_ev is not None and selected_ev >= 0 and win_rate is not None
+                and worst is not None and worst > CATASTROPHIC_LOSS_PCT
+                and (best_score is None or score > best_score)):
+                best, best_evidence, best_score = candidate, evidence, score
+            continue
         if (economy.get("status") != "supported_operating_comparison"
             or not evidence["source_complete"] or not evidence["downstream_context_bound"]):
             blockers[economy.get("blocker") or "strategy_candidate_auxiliary_context_unbound"] += 1
@@ -8086,6 +8149,31 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
     result['research_only'] = True
     result['research_status'] = ('action_changes_found' if research_candidates else
         'no_action_change_in_search_space' if result['search_complete'] else 'search_incomplete')
+    if machine_policy_only:
+        machine_evidence = dict(train=best_evidence)
+        holdout_status = 'unavailable_or_no_candidate'
+        if best is not None and holdout:
+            try:
+                machine_evidence['holdout'] = evaluate(holdout, best)
+                holdout_status = 'evaluated_after_selection'
+            except (ValueError, TypeError, KeyError) as exc:
+                holdout_status = 'unsupported'
+                machine_evidence['holdout'] = {'blocker': str(exc)}
+        candidate = (dict(schema='main_entry_strategy_candidate_v2',
+            evaluation_basis='machine_nonentry_opportunity_v1', scope=list(scope),
+            parent_policy=deepcopy(parent), parent_sha256=strategy.digest(parent),
+            policy=best, policy_sha256=strategy.digest(best), evidence=machine_evidence,
+            evidence_sha256=strategy.digest(machine_evidence), selected_without_holdout=True)
+            if best is not None else None)
+        errors = strategy.promotion_errors(candidate, parent, scope) if candidate else ['no_nonnegative_machine_candidate']
+        return {**result, 'schema': 'main_entry_machine_policy_selection_v1',
+            'status': 'selected_machine_policy' if best is not None else 'no_nonnegative_machine_candidate',
+            'machine_policy': best, 'machine_policy_sha256': strategy.digest(best) if best is not None else None,
+            'machine_evidence': machine_evidence, 'auxiliary_ai_required': False,
+            'candidate': candidate, 'promotion_pass': not errors, 'promotion_errors': errors,
+            'selection_basis': 'nonnegative_net_path_then_win_rate_then_net_ev',
+            'holdout_status': holdout_status,
+            'runtime_effect': False, 'allowed_runtime_apply': False}
     if support_blocker:
         return {**result, 'status': 'hold_sample', 'blocker': support_blocker}
     if result['evaluated_candidate_count'] == 0 and blockers:
@@ -8107,6 +8195,38 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
     return {**result, "candidate": candidate, "promotion_pass": not errors,
             "research_only": bool(errors),
             "promotion_errors": errors, "status": "eligible" if not errors else "hold_candidate"}
+
+
+def build_machine_policy_report(rows, *, source_receipt, target_date, data_root=Path('data'), limit=96):
+    """Generate a machine policy artifact only; no downstream or publication loop."""
+    from src.engine.scalping import entry_strategy_policy as strategy
+    from src.engine.scalping.mechanistic_entry_runtime_policy import load_effective, for_cohort
+    incumbent = load_effective(data_root=data_root, target_date=datetime.now(KST).date().isoformat())
+    scopes = sorted({(r['effective_venue'], r['session_bucket']) for r in rows})
+    selections = {}
+    for cohort in scopes:
+        if not mechanistic_scope_supported(*cohort):
+            continue
+        scoped = for_cohort(incumbent, cohort) if incumbent else None
+        parent = (scoped or {}).get('machine_policy') or MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1
+        scoped_rows = [r for r in rows if (r['effective_venue'], r['session_bucket']) == cohort]
+        population, contract = _common_refinement_population([], scoped_rows,
+            target_date=target_date, source_receipt=source_receipt, paired_contract={}, cohort=cohort)
+        selections['|'.join(cohort)] = build_main_strategy_refinement(population,
+            parent=parent, scope=cohort, source_contract=contract, limit=limit, machine_policy_only=True)
+    policy = {scope: selection['machine_policy'] for scope, selection in selections.items()
+              if selection.get('machine_policy') is not None}
+    return _with_artifact_content_sha256(dict(schema='main_machine_policy_report_v1',
+        target_date=target_date, generated_at=datetime.now(KST).isoformat(),
+        policy_by_scope=policy, policy_sha256=strategy.digest(policy), selections=selections,
+        report_scope='main_mechanistic_entry', noncompact_sections_refreshed=True,
+        strategy_refinements_by_scope=selections,
+        status='machine_policy_generated' if policy else 'no_nonnegative_machine_candidate',
+        metric_role='sim_probe_ev', decision_authority='machine_policy_selection_only',
+        window_policy='chronological_train_then_holdout_diagnostic', sample_floor='one_valid_episode_for_selection',
+        primary_decision_metric='win_rate_pct_with_nonnegative_net_path', source_quality_gate='verified_raw_full_cost_terminal_path',
+        auxiliary_ai_required=False, runtime_effect=False, allowed_runtime_apply=False,
+        forbidden_uses=['realized_pnl', 'portfolio_pnl', 'auxiliary_ai_pass']))
 
 
 def build_main_mechanistic_report(
@@ -8205,7 +8325,7 @@ def build_main_mechanistic_report(
         contract["frozen_selection"] = previous_selections.get(scope)
         contract["frozen_hierarchy"] = previous_hierarchy.get(scope)
         strategy_evaluations[scope] = build_main_strategy_refinement(
-            strategy_population, parent=scope_parent, scope=cohort, source_contract={**strategy_contract, "economic_kernel_sha256": contract["economic_kernel_sha256"]}, previous=previous_strategy.get(scope))
+            strategy_population, parent=scope_parent, scope=cohort, source_contract={**strategy_contract, "economic_kernel_sha256": contract["economic_kernel_sha256"]}, previous=previous_strategy.get(scope), machine_policy_only=True)
         evaluated = build_clean_baseline_mechanistic_refinement(
             report_root / PAIRED_SUBDIR, target_date=target_date,
             source_rows=population, source_contract=contract, parent_policy=scope_parent)
@@ -8772,6 +8892,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--target-date", required=True)
     parser.add_argument("--data-root", type=Path, default=Path("data"))
     parser.add_argument("--write", action="store_true")
+    parser.add_argument('--machine-policy-only', action='store_true', help='Generate only the pre-AI machine threshold policy artifact')
+    parser.add_argument('--search-limit', type=int, default=96, help='Machine policy candidate traversal budget')
     parser.add_argument(
         "--machine-only",
         action="store_true",
@@ -8790,6 +8912,23 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--activate-now", action="store_true", help="Activate an eligible strategy generation immediately and carry until superseded")
     parser.add_argument("--print-summary", action="store_true")
     args = parser.parse_args(argv)
+    if args.machine_policy_only:
+        if (args.machine_only or (args.activate_now and not args.write) or args.require_policy_publication
+            or args.ensure_economic_reference_only or args.publication_date or args.search_limit < 1):
+            parser.error('--machine-policy-only is a standalone policy-generation action')
+        rows, _ = load_machine_observation_rows(args.data_root, target_date=args.target_date)
+        result = build_machine_policy_report(rows,
+            source_receipt=_machine_ai_natural_source_receipt(args.data_root, args.target_date),
+            target_date=args.target_date, data_root=args.data_root, limit=args.search_limit)
+        output = args.data_root / 'report' / 'ai_decision_action_outcome_calibration' / f'machine_policy_{args.target_date}.json'
+        if args.write:
+            _atomic_write_json(output, result)
+        if args.activate_now:
+            from src.engine.scalping.mechanistic_entry_runtime_policy import activate_strategy_report
+            print(json.dumps({'strategy_activation': activate_strategy_report(output, data_root=args.data_root)}))
+        print(json.dumps(dict(status=result['status'], policy_sha256=result['policy_sha256'],
+            selected_scopes=list(result['policy_by_scope']), path=str(output) if args.write else None)))
+        return 0
     if args.ensure_economic_reference_only:
         if not args.write or args.require_policy_publication or args.publication_date:
             parser.error("--ensure-economic-reference-only requires --write and forbids policy publication")

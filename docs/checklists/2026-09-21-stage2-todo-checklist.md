@@ -107,6 +107,7 @@
   - 권한 경계: null을 0/no-edge로 바꾸거나 threshold·provider·주문·수량·cap·custody·operator lock·hard safety를 우회하지 않는다.
 
 - [ ] `[DirectFamilySourceRepairMainMechanisticEntry] main_mechanistic_entry 직접 family 원천·경제성 계약 수리` (`Due: 2026-09-21`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~21:40`, `Track: RuntimeStability`)
+  - 최신 범위 정정: 사용자 지시에 따라 **기계 BLOCK/RECHECK→ENTER_NOW 기회비용 튜닝·정책 생성/적용·재기동·장후 연결**을 우선 완료한다. 비용 후 이익 0 이상인 후보에서 승률을 우선하고, 동률이면 이익으로 선택한다. 후보 AI/후단 operating replay를 생성 gate에서 분리하고, 동일 원시 입력·고정 경로·왕복 비용으로 선정한 기계정책 파일을 저장한다. 이후 보조 AI VETO→PASS·다른 하드 가드·scale-in·청산 튜닝은 보류하며 아래 전체 운영 acceptance는 후속 이력이다. 상세 기준은 [계획 §1·§6.3](../proposals/main-nonentry-threshold-postclose-runtime-implementation-plan-2026-09-21.md#1-목표와-완료의-의미).
   - 즉시 적용 구현: [전략 임계치/runtime 리뷰](../audit-reports/2026-09-21-main-entry-strategy-runtime-review.md). 사용자 승인으로 장후 적격 generation을 다음 장전 대기 없이 current CAS/reload로 적용한다. 코드·정책 생성·배포/PID·비용 경제성은 별도 판정하며 미지원 raw/auxiliary/owner replay는 이 OPEN owner에 보존한다.
   - 18:08 재평가/배포: runtime `77b6beb51`·PID `346701` 기동 검증. KRX 1,712건 중 raw 지원 1,708건/실행·비용 연결 0건으로 `incumbent_carry`; 새 임계치 미생성. candidate auxiliary+owner replay 연결 구현과 동일 기회 비용 검증이 남아 이 owner는 OPEN이며 경제성 완료가 아니다.
   - 최신 18:41 배포: `ea21e9dcc`·PID `367246` 실제 release cwd/PID 영수증 확인. 18:39 재생성은 연구 후보 판정 변화까지 확인했으며 비용·실행 연결 결손으로 새 정책 승격 없이 incumbent를 유지한다. 작업본/배포본 소스 통합과 미사용 중간 작업트리 정리는 [통합 정리 기록](../audit-reports/2026-09-21-main-entry-strategy-runtime-review.md#작업본배포본-통합-정리)에 남긴다. 아래 계획 단계 문구와 이전 PID는 당시 이력이며 이 OPEN의 경제성 완료를 뜻하지 않는다.
