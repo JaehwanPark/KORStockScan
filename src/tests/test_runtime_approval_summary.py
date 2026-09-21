@@ -667,3 +667,22 @@ def test_main_supported_economics_never_uses_terminal_proxy_as_currency_ev():
     assert row['candidate_ev_pct'] == .3
     assert abs(row['delta_ev_pct'] - .1) < 1e-10
     assert row['diagnostic_terminal_proxy']['delta_ev_pct'] == 900.
+
+
+def test_pid_consumption_requires_matching_effective_date_bootstrap(monkeypatch, tmp_path):
+    data = _patch(monkeypatch, tmp_path)
+    day = "2026-09-21"
+    directory = data / "runtime/policy_bootstrap"
+    manifest = directory / f"runtime_policy_bootstrap_{day}.json"
+    verification = directory / f"runtime_policy_bootstrap_verify_{day}.json"
+    _write(manifest, {"target_date": day})
+    _write(verification, {"target_date": day, "status": "pass", "passed": True,
+                          "pid": 4321, "pid_passed": True, "pid_env_available": True})
+    state, natural, receipt = mod._runtime_consumption_state(day, {})
+    assert (state, natural) == ("not_due", "not_applicable")
+    assert receipt["actual_pid_consumed"] is False
+    sources = {"policy": {"exists": True, "target_date_matches": True, "effective_date": day}}
+    _write(manifest, {"target_date": "2026-09-20"})
+    state, natural, receipt = mod._runtime_consumption_state(day, sources)
+    assert state == "rejected" and natural == "not_due"
+    assert receipt["actual_pid_consumed"] is False

@@ -63,7 +63,7 @@ OFF·퇴역 producer, 유효 frozen policy/checkpoint, 별도 custody/override·
 
 ### 3.1 공통 배포 경로와 독립 서비스 경계
 
-Machine final refresh는 실행 전에 같은 source date의 widget terminal, AI outcome label, episode 연구, runtime approval summary를 기다린다. main producer가 실행 중이면 소비를 시작하지 않는다. 최대12시간 입력 대기 후에도 미충족이면 exit75로 종료하며 systemd 전체 자동 재시도는 하지 않는다. 실패 원인을 수리하고 명시적 재실행하거나 다음 정기 timer를 사용한다. Collector source 계약 실패 시 뒤의 attribution/approval을 실행하지 않는다. 날짜는 대기 전에 고정한다.
+Machine final refresh는 실행 전에 같은 source date의 widget terminal, AI outcome label, episode 연구, runtime approval summary를 기다린다. main producer가 실행 중이면 소비를 시작하지 않는다. 최대12시간 입력 대기 후에도 미충족이면 exit75로 종료하며 systemd 전체 자동 재시도는 하지 않는다. 실패 원인을 수리하고 명시적 재실행하거나 다음 정기 timer를 사용한다. Collector source 계약 실패 시 뒤의 attribution/approval을 실행하지 않는다. 날짜는 대기 전에 고정한다. Machine 후행 체크리스트는 runtime approval summary를 먼저 재생성한 뒤 소비한다. 적용일이 없거나 bootstrap 날짜가 일치하지 않는 이전 PID receipt를 새 정책 소비로 표시하지 않는다.
 
 Widget signal 연구는 기존 일별 품질 기준을 통과한 날짜로 평가하고 결손 날짜를 명시한다. 기존 `PASS_WITH_DATE_EXCLUSIONS`와 holdout/sample 기준을 유지하며 한 날짜의 결손만으로 전체 종목을 제외하지 않는다. 추가 원격 history backfill은 회차당 기본10종목으로 제한하고 나머지는 저장된 검증 자료를 사용한다. 전체 종목 분모, 날짜 제외, 자료 부족 종목을 보존하며 재실행 완료를 경제성 통과와 구분한다. 회차별 위젯 평가는 기본100종목(`--max-research-symbols`), 에피소드 신규 탐색은 기본50종목(`--max-new-research-symbols`)으로 제한한다. 위젯 기존 운영·명시 watch를 우선 보존하고 완료 추천 순위→저장 자료 커버리지→기존 명단 순서를 사용한다. 에피소드 기존 운영 종목의 시간대·로직 평가는 신규50 한도 밖에서 유지한다. 원 명단은 삭제하지 않으며 제외분은 `population_selection.deferred_symbols`에 자원상 이월로 기록한다. 평가 수익으로 대상을 사전 선별하지 않는다.
 

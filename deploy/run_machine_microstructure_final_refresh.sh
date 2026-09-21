@@ -120,8 +120,12 @@ policy_rc=0
 # The checklist is the durable fallback for every upstream producer or
 # notification failure. Always refresh it from the completed KRX machine date.
 builder_rc=0
-"$PYTHON_BIN" -m src.engine.build_next_stage2_checklist \
-  --completed-machine-source-date "$completed_target_date" || builder_rc=$?
+"$PYTHON_BIN" -m src.engine.runtime_approval_summary \
+  --date "$completed_target_date" || builder_rc=$?
+if ((builder_rc == 0)); then
+  "$PYTHON_BIN" -m src.engine.build_next_stage2_checklist \
+    --completed-machine-source-date "$completed_target_date" || builder_rc=$?
+fi
 
 # The builder is the durable fallback and therefore has highest failure
 # priority. Policy/notification failure is next, followed by weakness

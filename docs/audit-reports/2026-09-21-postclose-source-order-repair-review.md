@@ -59,3 +59,8 @@ Episode 복구는23:09:19에 공동 명단 검증 단계를 통과했으나 `low
 - 검증된 b195524bc에서 main wrapper 재개, bot action none, notification false. 기존 거래 프로세스는 유지한다. 구 release 대기 보고서 세션을 종료하고 새 release monitoring owner로 연결한다. 최종 controller는 독립 terminal 이후 실행한다.
 - 비용 source prerequisite가 상대 data root를 manifest 경로에 두 번 결합하여 종목 master/fee/tax 파일을 결손 처리하던 오류를 확인했다. helper에서 root를 resolve하고 상대/절대 경로 회귀4개 PASS. 기존 immutable CLI에 절대 data root를 전달한 원 producer 재생성으로 master2604·비용 profile6·eligible7812/7812·source blockers0을 확인했다. 가격·비용을 임의 대체하지 않았다.
 - 에피소드50 복구 정상 종료. report46,798,188bytes로128MiB 이내이며 신규/시간대/로직 추천0건이다. 신규 추천 없음과 기존 운영 정책 승계·내일 loader 검증은 별개로 진행한다.
+
+- Widget 최종98평가/2source격리(001550,450080),9/22 observation98 로더 PASS. 기존 widget 자동매매3종목과 episode19종목61프로필 및 main승계정책은9/22 실제 loader 읽기 성공. 신규 research승격0은 기존 전략 중지를 뜻하지 않는다.
+- 첫 main복구는23:52 final raw projection mismatch로 실패했다. 기존 봇 supervisor가23:51 재기동하면서 장후 preflight 이후 raw에 scanner configuration1행(5796bytes)을 추가했다. 따라서 검증 차단은 정당했다. 다음 복구는 표준 main BOT_ACTION=stop으로 기존 야간 tmux세션을 종료하여 원본과 정규 아침 기동을 안정화했다. 별도 주문·보유 정산 변경은 없다. 이번 복구에서 이미 성공한 sim post-sell/rising-missed 보조 피드백만 invocation flag로 재실행하지 않는다. 기존 보고서는 보존하고 필수 원천 감사·정책 생성은 재수행한다.
+- Machine 분석/closure/policy는 모두rc0, 마지막 builder만 stale direct summary로rc1. 정확 원인은 effective_dates=[]인데 fallback 당일 bootstrap PID를 actual_pid_consumed=true로 붙이던 summary 결함이다. PID 생존 여부만의 문제가 아니다. 효과일·manifest·검증 날짜가 일치한 bootstrap에서만 PID 소비를 인정하도록 수정하고, machine wrapper도 summary→checklist 순서로 갱신한다. 관련95 tests PASS.
+- 자정 이후 source/publication9/21와effective9/22를 유지한다.9/22 체크리스트는 아직 없으며 native builder에서 최신 owner로 생성할 예정이다.

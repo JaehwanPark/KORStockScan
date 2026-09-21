@@ -243,3 +243,9 @@ def test_source_producer_wrapper_routes_canonical_to_selected_release(tmp_path, 
     result = subprocess.run(["bash", str(workspace / "deploy" / name), "2026-09-17"], env=env, capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stderr
     assert result.stdout == "2026-09-17"
+
+
+def test_machine_refresh_updates_direct_summary_before_checklist():
+    script = (Path(__file__).resolve().parents[2] / "deploy/run_machine_microstructure_final_refresh.sh").read_text()
+    assert script.index("-m src.engine.runtime_approval_summary") < script.index("-m src.engine.build_next_stage2_checklist")
+    assert "if ((builder_rc == 0)); then" in script

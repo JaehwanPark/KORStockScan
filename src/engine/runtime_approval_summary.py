@@ -750,8 +750,16 @@ def _runtime_consumption_state(
         and runtime_pid > 0
         else None
     )
+    bootstrap_verified = bool(
+        effective_dates
+        and manifest.get("target_date") == apply_date
+        and verification.get("target_date") == apply_date
+        and verification.get("status") == "pass"
+        and verification.get("passed") is True
+    )
     actual_pid_consumed = bool(
-        receipt_runtime_pid is not None
+        bootstrap_verified
+        and receipt_runtime_pid is not None
         and verification.get("status") == "pass"
         and verification.get("passed") is True
         and verification.get("pid_passed") is True
@@ -772,12 +780,7 @@ def _runtime_consumption_state(
     }
     if not effective_dates:
         return "not_due", "not_applicable", receipt
-    if (
-        manifest.get("target_date") == apply_date
-        and verification.get("status") == "pass"
-        and verification.get("passed") is True
-        and verification.get("target_date") == apply_date
-    ):
+    if bootstrap_verified:
         return "verified", ("pending" if actual_pid_consumed else "not_due"), receipt
     if verification_path.exists():
         return "rejected", "not_due", receipt
