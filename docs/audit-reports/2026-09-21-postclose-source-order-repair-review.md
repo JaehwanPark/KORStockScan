@@ -84,3 +84,9 @@ Episode 복구는23:09:19에 공동 명단 검증 단계를 통과했으나 `low
 - 00:41 main 평가 완료(약26분), KRX 후보94개 비교 후 신규 기본정책 `cdeff4e8...` 발행/활성 포인터 갱신. 선택 훈련 표본5기회·승률60%·비용후 평균−0.40886%; 최신 holdout 신규 ENTER_NOW0건으로 holdout EV/승률은 null이다. 이는 실현손익/포트폴리오 개선 증거가 아니다.
 - 원천 신선도 마감도 완료했으나 00:44 summary가 machine admission 결과에 없는 portfolio incumbent/candidate 객체를 읽어 KeyError. 기계판정 선택 진단과 별도 포트폴리오 비교를 분리했다. 요약/checklist/verifier95건 PASS.
 - machine 재시도에서도 expansion/attribution/hysteresis/timing/approval/research closure는 모두0, builder만1. 현재 해시/closure를 검증한 분석 결과를 재사용하고 summary/checklist/terminal만 복구한다. 메인 재실행 역시 완료된 고비용 producer를 재계산하지 않고 현재 직접 근거의 strict 검증으로 닫는다.
+
+### widget 상태 heartbeat와 실제 주문 원천 분리
+
+- machine 완료 prefix 재사용 사전검증은 실패했다. 유일한 오래된 의존성은 계속 운영 중인 widget 서비스의 `widget_signal_auto_trade_state.json`이었다. 그 외 코드/원천/발행 세대는 동일했다. 실패 검증을 건너뛰거나 완료 상태를 강제로 기록하지 않았다.
+- 기존 native outcome reader가 사용하는 분석일까지의 원본 주문 객체만 semantic dependency로 연결했다. heartbeat/감시목록/자정 rollover는 제외하지만 모든 원본 주문 속성·날짜·종목을 보존한다. 수집 중 주문 입력 변경은 실패한다. raw state 자체 hash도 outcome audit에 보존한다.
+- 주문 변경 시 invalidation, 날짜 rollover 및 heartbeat 불변성을 포함한 작업본92건 PASS. 실제 closure-only 재구축 뒤 해시가 일치하는 나머지 분석 결과만 재사용한다.

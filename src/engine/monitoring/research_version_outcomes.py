@@ -15,6 +15,21 @@ from src.engine.monitoring.low_price_two_leg_tuning import (
 from src.engine.monitoring.policy_research_economics import aware, numeric
 
 
+def native_widget_order_projection(state, *, source_date):
+    """Bind the exact dated order inputs, excluding service heartbeat/config."""
+    sections = [(state.get("active_date"), state.get("symbols") or {})]
+    sections += [(row.get("trade_date"), row.get("symbols") or {})
+                 for row in state.get("history") or []]
+    orders = []
+    for day, symbols in sections:
+        if not day or not "2026-06-05" <= day <= source_date.isoformat():
+            continue
+        for symbol, native in symbols.items():
+            orders.extend(dict(state_date=day, symbol=symbol, order=order)
+                          for order in native.get("orders") or [])
+    return dict(source_date=source_date.isoformat(), orders=sorted(orders, key=loop.digest))
+
+
 def native_widget_rows(state, *, source_date):
     """Use original per-order version/signal/custody, never current policy."""
     by_order = {}
@@ -226,6 +241,7 @@ def collect_widget_outcomes(
         rows=rows,
         invalid_native_order_count=invalid,
         native_state_sha256=loop.digest(state),
+        native_state_order_projection_sha256=loop.digest(native_widget_order_projection(state, source_date=source_date)),
         reconciliation=reconciliation,
         policy_decision_feedback=decisions,
         version_economics=loop.version_economics(rows),

@@ -76,8 +76,14 @@ def report_path(report_root, day):
     return Path(report_root) / REPORT_TYPE / f"{REPORT_TYPE}_{day}.json"
 
 
-def _read_report_dependency(path):
+def _read_report_dependency(path, *, source_date=None):
     path.stat()  # Preserve missing dependency semantics of the stable reader.
+    if path.name == "widget_signal_auto_trade_state.json":
+        if source_date is None:
+            raise ValueError("native_widget_dependency_date_required")
+        from src.engine.monitoring.research_version_outcomes import native_widget_order_projection
+        return native_widget_order_projection(
+            loop.read_object(path, limit=16 * 1024 * 1024), source_date=source_date)
     if path.parent.name in {
         "widget_symbol_signal_policy_research",
         "low_price_two_leg_expanded_candidate_research",
@@ -285,10 +291,12 @@ def _refresh(
         state_path = DATA_DIR / "runtime" / "widget_signal_auto_trade_state.json"
         try:
             state_hash = loop.digest(
-                loop.read_object(state_path, limit=16 * 1024 * 1024)
+                _read_report_dependency(state_path, source_date=day)
             )
         except FileNotFoundError:
             state_hash = None
+        if state_hash != outcomes.get("native_state_order_projection_sha256"):
+            raise ValueError("native_widget_orders_changed_during_refresh")
         inputs = loop.digest(
             dict(
                 studies=studies,
@@ -438,10 +446,12 @@ def _refresh(
         for path in sorted(dependency_paths):
             try:
                 dependency_sources[str(path.resolve())] = loop.digest(
-                    _read_report_dependency(path)
+                    _read_report_dependency(path, source_date=day)
                 )
             except FileNotFoundError:
                 dependency_sources[str(path.resolve())] = None
+        if dependency_sources.get(str(state_path.resolve())) != state_hash:
+            raise ValueError("native_widget_orders_changed_during_refresh")
         from src.engine.monitoring.research_cache_storage import capacity_receipt
         body = dict(
             storage_capacity=capacity_receipt(directory, day, report_root),
@@ -545,7 +555,7 @@ def validate_current_receipt(value, day, *, publication_contract=None):
                 if os.path.lexists(path):
                     return False
                 continue
-            if loop.digest(_read_report_dependency(path)) != expected:
+            if loop.digest(_read_report_dependency(path, source_date=date.fromisoformat(str(day)))) != expected:
                 return False
         for publication in value["publications"].values():
             if publication["effective_date"] != (value.get("publication_contract") or {}).get("effective_date"):

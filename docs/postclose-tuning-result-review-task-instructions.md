@@ -299,3 +299,4 @@ DONE flag가 없어도 생성된 exact-date 진단은 소비하며 명시적Fals
 
 - 자정 이후 동일 장후작업 복구의 research 정책 재발행은 명시적 `POSTCLOSE_POLICY_PUBLICATION_DATE`의 다음 거래일인 당일 **07:30 KST 전**, 당일 bootstrap 산출물 부재인 경우에만 기존 세대 CAS로 허용한다. 장전 준비가 시작된 세대와 기존 보유 버전은 변경하지 않는다. machine 실패 재개는 서명된 이전 완료 closure와 변경되지 않은 widget 연구/발행 세대만으로 재구축 진입을 허용하며, 최종 성공은 전체 현재 의존성 재검증을 요구한다.
 - 정규 machine refresh도 입력 대기 전에 publication date를 completed source date로 고정하고 effective date를 다음 KRX 거래일로 계산해 모든 자식 producer와 summary/checklist에 동일하게 전달한다. 명시적으로 지정된 복구 publication date는 보존한다.
+- research closure의 widget 상태 의존성은 해당 source date까지의 원본 주문 객체와 귀속 날짜/종목으로 고정한다. heartbeat, 활성 관찰목록 및 날짜 rollover만으로 완료를 무효화하지 않는다. 주문 입력이 수집 전후 바뀌면 실패하며 전체 체결·비용 검증은 유지한다.

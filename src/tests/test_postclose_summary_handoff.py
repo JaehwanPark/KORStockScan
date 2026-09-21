@@ -469,3 +469,32 @@ def test_failed_refresh_can_rebuild_after_unrelated_dependency_changed(tmp_path,
     study.write_text('{"target_date":"2026-09-20"}')
     assert not mod._verified_failed_machine_refresh_retry(tmp_path, day, previous, issues)
     assert not mod._verified_failed_machine_refresh_retry(tmp_path, day, previous, ['widget:source_hash_invalid:widget_advisory_calibration'])
+
+
+def test_widget_state_dependency_ignores_heartbeat_but_binds_order_facts(tmp_path):
+    from copy import deepcopy
+    from datetime import date
+    from src.engine.automation import machine_research_closed_loop_refresh as refresh
+    from src.engine.monitoring.research_version_outcomes import native_widget_rows
+    day = date(2026, 9, 21)
+    path = tmp_path / 'widget_signal_auto_trade_state.json'
+    order = dict(order_no='order-1', order_date=str(day), side='BUY', filled_qty=0,
+                 requested_qty=1, remaining_qty=1, status='OPEN', signal_id='signal',
+                 execution_policy_content_sha256='a' * 64)
+    state = dict(active_date=str(day), symbols={'005930': {'orders': [order]}},
+                 history=[], last_cycle_at='first', enabled_symbols=['005930'])
+    path.write_text(json.dumps(state))
+    first = refresh._read_report_dependency(path, source_date=day)
+    original_rows = native_widget_rows(state, source_date=day)
+    rollover = dict(active_date='2026-09-22', symbols={'000001': {'orders': []}},
+                    history=[dict(trade_date=str(day), symbols=state['symbols'])],
+                    last_cycle_at='later', enabled_symbols=['000001'])
+    path.write_text(json.dumps(rollover))
+    assert refresh._read_report_dependency(path, source_date=day) == first
+    assert native_widget_rows(rollover, source_date=day) == original_rows
+    changed = deepcopy(rollover)
+    changed['history'][0]['symbols']['005930']['orders'][0]['filled_qty'] = 1
+    path.write_text(json.dumps(changed))
+    assert refresh._read_report_dependency(path, source_date=day) != first
+    with pytest.raises(ValueError, match='dependency_date_required'):
+        refresh._read_report_dependency(path)
