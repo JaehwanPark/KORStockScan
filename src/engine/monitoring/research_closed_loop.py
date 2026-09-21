@@ -14,6 +14,7 @@ import os
 import re
 import stat
 import tempfile
+from functools import lru_cache
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import date, datetime, timedelta
@@ -130,12 +131,19 @@ def writer_lock(directory, *, blocking=True):
 
 
 def trading_dates_after(day, count):
+    # Every candidate revalidates the same frozen calendar. Keep an immutable
+    # process-local result and return a fresh list to callers.
+    return list(_trading_dates_after(day, count, is_krx_trading_day))
+
+
+@lru_cache(maxsize=256)
+def _trading_dates_after(day, count, trading_day):
     dates = []
     while len(dates) < count:
         day += timedelta(days=1)
-        if is_krx_trading_day(day):
+        if trading_day(day):
             dates.append(day.isoformat())
-    return dates
+    return tuple(dates)
 
 
 def candidate_revision(

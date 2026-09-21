@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+
+import pytest
 from datetime import date, datetime
 
 from src.engine.monitoring.samsung_widget_contract import KST
@@ -820,7 +822,8 @@ def test_ambiguous_submit_exception_is_execution_quality_safety_veto(tmp_path) -
     assert quality["failure_reason_codes"] == ["broker_order_submit_ambiguous"]
 
 
-def test_write_outputs_requires_report_before_policy_can_load(tmp_path) -> None:
+@pytest.mark.parametrize("release_alias", [False, True])
+def test_write_outputs_requires_report_before_policy_can_load(tmp_path, release_alias) -> None:
     session_reports = {}
     for spec in calibration.SPECS:
         session_reports[spec.symbol] = {
@@ -844,12 +847,19 @@ def test_write_outputs_requires_report_before_policy_can_load(tmp_path) -> None:
     }
     policy = build_policy(report)
 
+    publication_root = tmp_path
+    if release_alias:
+        publication_root = tmp_path / "release_data"
+        publication_root.symlink_to(tmp_path, target_is_directory=True)
     report_path, policy_path, verification = write_outputs(
         report,
         policy,
-        output_dir=tmp_path / "reports",
-        policy_dir=tmp_path / "policies",
+        output_dir=publication_root / "reports",
+        policy_dir=publication_root / "policies",
     )
+    if release_alias:
+        publication_root.unlink()
+    assert report["policy_verification"]["policy_path"] == str(policy_path.resolve())
 
     assert report_path.exists()
     assert policy_path.exists()
@@ -1395,3 +1405,22 @@ def test_native_runtime_writer_projection_and_raw_loader_are_identical(tmp_path)
     corrupt["payload"]["current_price"] = 1
     projection.write_text(json.dumps(corrupt) + "\n")
     assert calibration._load_rows(spec, target_date=date(2026, 9, 16))[0] == raw_rows
+
+
+def test_build_policy_blocks_ready_samsung_when_bound_incumbent_is_missing():
+    report = {
+        "target_date": "2026-09-18", "effective_date": "2026-09-21",
+        "source_quality_status": "PASS",
+        "symbols": {spec.symbol: {"source_quality_status": "PASS", "sessions": {}}
+                    for spec in calibration.SPECS},
+    }
+    report["symbols"]["005930"].update(
+        execution_quality={"runtime_apply_allowed": True},
+        sessions={"NXT_PREMARKET": {
+            "decision": "carry_forward_previous_verified_policy",
+            "paired_economics": {"study": {"incumbent_receipt": {"status": "missing"}}},
+        }},
+    )
+    policy = build_policy(report)
+    assert not policy["symbols"]
+    assert policy["blocked_sessions"]["005930"]["NXT_PREMARKET"] == "paired_incumbent_policy_missing"

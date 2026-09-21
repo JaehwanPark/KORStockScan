@@ -545,6 +545,14 @@ def test_completed_study_fixed_point_publishes_valid_empty_and_blocks_changed_de
         low_price_two_leg_expanded_candidate_research as episode,
     )
 
+    class PublicationClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            value = datetime.fromisoformat((publication or str(DAY)) + "T20:10:00+09:00")
+            return value.astimezone(tz) if tz else value
+
+    # This test exercises a future publication successor, not a past-date rewrite.
+    monkeypatch.setattr(loop, "datetime", PublicationClock)
     if publication:
         monkeypatch.setenv("POSTCLOSE_POLICY_PUBLICATION_DATE", publication)
         monkeypatch.setenv("POSTCLOSE_PREPARED_EFFECTIVE_DATE", "2026-09-21")
@@ -1692,3 +1700,20 @@ def test_actual_gateways_share_opening_source_without_orders(monkeypatch):
         gateway.token_loader = lambda: "fixture"
         assert gateway.capture_opening_research_capacity(DAY)["status"] == "complete"
     assert seen == [DAY, DAY]
+
+
+def test_frozen_calendar_reuse_returns_independent_lists(monkeypatch):
+    calls = []
+    def trading_day(day):
+        calls.append(day)
+        return day.weekday() < 5
+    monkeypatch.setattr(loop, "is_krx_trading_day", trading_day)
+    first = loop.trading_dates_after(DAY, 4)
+    expected = ["2026-09-18", "2026-09-21", "2026-09-22", "2026-09-23"]
+    assert first == expected
+    count = len(calls)
+    first.clear()
+    assert loop.trading_dates_after(DAY, 4) == expected
+    assert len(calls) == count
+    monkeypatch.setattr(loop, "is_krx_trading_day", lambda day: True)
+    assert loop.trading_dates_after(DAY, 4) != expected

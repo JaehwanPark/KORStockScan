@@ -514,6 +514,8 @@ def build_policy(
         if source_date >= date(2026, 9, 17)
         else {}
     )
+    # The report is immutable during reconstruction; hash it once, not per seed.
+    research_sha256 = _payload_sha256(research)
     for symbol, name in universe.items():
         result = (research.get("symbols") or {}).get(symbol)
         if symbol in quarantine:
@@ -550,13 +552,13 @@ def build_policy(
                 "seed_id": _payload_sha256(
                     {
                         "symbol": symbol,
-                        "source": _payload_sha256(research),
+                        "source": research_sha256,
                         "parameters": observation["signal_policy"],
                         "effective_date": effective_date.isoformat(),
                     }
                 ),
                 "parameters_sha256": _payload_sha256(observation["signal_policy"]),
-                "source_report_sha256": _payload_sha256(research),
+                "source_report_sha256": research_sha256,
                 "registered_at_kst": research.get("generated_at_kst"),
                 "effective_at_kst": _observation_effective_at(
                     research, effective_date, 9, 3
@@ -790,7 +792,7 @@ def build_policy(
         "effective_date": effective_date.isoformat(),
         "clean_tuning_baseline_date": CLEAN_BASELINE_DATE.isoformat(),
         "evidence_report_path": str(evidence_path.resolve()),
-        "evidence_report_sha256": _payload_sha256(research),
+        "evidence_report_sha256": research_sha256,
         "source_quality_status": "PASS",
         "official_reference": OFFICIAL_REFERENCE,
         "authority": POLICY_AUTHORITY,

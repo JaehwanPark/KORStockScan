@@ -794,3 +794,36 @@ def test_zero_day_ledger_does_not_discard_valid_pairs_from_partial_source_dates(
     after = replay.select_candidate(report, previous_value=100)
     assert after["diagnostics"] == before["diagnostics"]
     assert after["decision"] == before["decision"]
+
+
+def test_relocated_incumbent_still_requires_exact_bytes_and_identity(tmp_path, monkeypatch):
+    from src.tests.test_widget_auto_trade_policy import _policy
+    from src.trading.widget_auto_trade import policy as owner
+
+    report = study()
+    incumbent = _policy(effective_date="2026-09-09")
+    row = {**parameters(), "enabled": True,
+           "take_profit_bps_from_equal_share_average": 100}
+    row.pop("target_bps")
+    incumbent["symbols"] = {"005930": {"sessions": {"KRX_REGULAR": row}}}
+    canonical = tmp_path / "shared" / "data/runtime/widget_auto_trade_policy"
+    canonical.mkdir(parents=True)
+    path = canonical / "widget_auto_trade_policy_2026-09-09.json"
+    path.write_text(json.dumps(incumbent))
+    replay.bind_incumbent(report, {
+        "policy_path": str(path), "policy_id": incumbent["policy_version"]})
+    assert replay.incumbent_valid(report)
+    old_path = tmp_path / "retired-release/data/runtime/widget_auto_trade_policy" / path.name
+    report["incumbent_receipt"]["path"] = str(old_path)
+    monkeypatch.setattr(owner, "DEFAULT_POLICY_DIR", canonical)
+    assert replay.incumbent_valid(report)
+    original = path.read_bytes()
+    path.write_bytes(original + b" ")
+    assert not replay.incumbent_valid(report)
+    path.write_bytes(original)
+    old_path.parent.mkdir(parents=True)
+    old_path.write_text("{}")
+    assert not replay.incumbent_valid(report)  # Existing mismatched source cannot fall back.
+    old_path.unlink()
+    report["incumbent_receipt"]["path"] = str(tmp_path / "unknown" / path.name)
+    assert not replay.incumbent_valid(report)

@@ -2789,6 +2789,15 @@ def build_policy(report: dict[str, Any]) -> dict[str, Any]:
                 block_reason = "execution_quality_safety_veto"
             elif calibration["decision"] not in RUNTIME_READY_DECISIONS:
                 block_reason = str(calibration["decision"])
+            elif (
+                spec.symbol == SAMSUNG_CODE
+                and date.fromisoformat(target_date) >= date(2026, 9, 9)
+                and session_name != DUAL_AFTERMARKET_SESSION
+                and not paired_replay.incumbent_valid(
+                    (calibration.get("paired_economics") or {}).get("study")
+                )
+            ):
+                block_reason = "paired_incumbent_policy_missing"
             if block_reason is not None:
                 blocked_sessions.setdefault(spec.symbol, {})[
                     session_name
@@ -2963,6 +2972,9 @@ def write_outputs(
     output_dir: Path,
     policy_dir: Path,
 ) -> tuple[Path, Path, dict[str, Any]]:
+    # Shared data outlives the immutable release that publishes it.
+    output_dir = output_dir.resolve()
+    policy_dir = policy_dir.resolve()
     target_date = str(report["target_date"])
     report_path = (
         output_dir / f"widget_auto_trade_policy_calibration_{target_date}.json"

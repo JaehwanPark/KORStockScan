@@ -151,6 +151,20 @@ class ProcessHealthDetector(BaseDetector):
         )
         result.details["samsung_morning_runtime"] = samsung_morning
         result.details["widget_runtime_release"] = widget_runtime
+        collectors = _widget_collector_runtime_contract(now)
+        result.details["widget_collectors"] = collectors
+        if collectors["severity"] != "pass":
+            if result.severity != "fail":
+                result.severity = collectors["severity"]
+            result.summary += (
+                " Widget collector runtime is not healthy: "
+                + ", ".join(collectors["unhealthy_units"])
+                + "."
+            )
+            result.recommended_action = (
+                f"{result.recommended_action} Inspect collector condition/start failures "
+                "and exact-date observation receipts; retain order prohibition."
+            ).strip()
         samsung_severity = samsung_morning.get("severity")
         if samsung_severity == "fail":
             samsung_summary = (
@@ -986,11 +1000,59 @@ def _widget_runtime_release_contract(now: datetime) -> dict:
     }
 
 
+def _widget_collector_runtime_contract(now: datetime) -> dict:
+    """Bounded process coverage; unit liveness does not prove source quality."""
+    from zoneinfo import ZoneInfo
+
+    now = now.astimezone(ZoneInfo("Asia/Seoul"))
+    details = {
+        "severity": "pass",
+        "status": "outside_collection_window",
+        "target_date": now.date().isoformat(),
+        "coverage": "widget_collector_unit_liveness_only",
+        "unhealthy_units": [],
+        "units": {},
+    }
+    minute = now.hour * 60 + now.minute
+    if not is_krx_trading_day(now.date()) or not 8 * 60 + 57 <= minute < 20 * 60 + 1:
+        return details
+    units = {
+        "korstockscan-widget-symbol-runtime-collector.service": 8 * 60 + 57,
+        "korstockscan-widget-research-watch-collector.service": 8 * 60 + 58,
+        "korstockscan-samsung-widget-collector.service": 8 * 60 + 57,
+        "korstockscan-doosan-widget-collector.service": 8 * 60 + 57,
+        "korstockscan-hanwha-ocean-widget-collector.service": 8 * 60 + 57,
+    }
+    for unit, start_minute in units.items():
+        if minute < start_minute:
+            continue
+        state = _systemd_unit_state(unit)
+        healthy = (
+            not state.get("query_error")
+            and state.get("LoadState") == "loaded"
+            and state.get("ActiveState") == "active"
+            and state.get("SubState") == "running"
+            and int(state.get("MainPID") or 0) > 0
+        )
+        severity = "pass" if healthy else (
+            "warning" if minute < start_minute + 3 else "fail"
+        )
+        details["units"][unit] = {**state, "severity": severity}
+        if not healthy:
+            details["unhealthy_units"].append(unit)
+            if details["severity"] != "fail":
+                details["severity"] = severity
+    details["status"] = (
+        "healthy_active" if not details["unhealthy_units"] else "collector_unavailable"
+    )
+    return details
+
+
 def _systemd_unit_state(unit: str) -> dict[str, str | int | None]:
     properties = (
         "LoadState,UnitFileState,ActiveState,SubState,Result,MainPID,"
         "ExecMainStatus,ExecMainStartTimestamp,Job,JobType,JobState,"
-        "Triggers,User,Group"
+        "Triggers,User,Group,ControlPID,NRestarts,ExecCondition"
     )
     completed = None
     last_error = None

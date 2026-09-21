@@ -19,6 +19,8 @@ from src.engine.error_detectors.process_health import (
     POSTCLOSE_BOT_ISOLATION_PATH,
 )
 
+_ORIGINAL_WIDGET_COLLECTOR_RUNTIME_CONTRACT = process_health_module._widget_collector_runtime_contract
+
 _ORIGINAL_SAMSUNG_MORNING_RUNTIME_CONTRACT = (
     process_health_module._samsung_morning_runtime_contract
 )
@@ -31,6 +33,10 @@ _ORIGINAL_WIDGET_RUNTIME_RELEASE_CONTRACT = (
 def _force_trading_day(monkeypatch, tmp_path):
     monkeypatch.setattr(
         process_health_module, "is_krx_trading_day", lambda target: True
+    )
+    monkeypatch.setattr(
+        process_health_module, "_widget_collector_runtime_contract",
+        lambda now: {"severity": "pass", "unhealthy_units": []},
     )
     heartbeat_path = tmp_path / "error_detector_heartbeat.json"
     isolation_path = tmp_path / "postclose_bot_isolation.json"
@@ -1790,3 +1796,55 @@ def test_samsung_runtime_rejects_timer_install_contract_drift(
 
     assert result["severity"] == "fail"
     assert result["reason"] == expected_reason
+
+
+@pytest.mark.parametrize("state", [
+    {"ActiveState": "failed", "SubState": "failed", "Result": "timeout", "MainPID": 0},
+    {"ActiveState": "activating", "SubState": "condition", "Result": "success", "MainPID": 0},
+    {"ActiveState": "inactive", "SubState": "dead", "Result": "exec-condition", "MainPID": 0},
+    {"query_error": "TimeoutExpired"},
+])
+def test_widget_collector_failure_is_not_hidden_by_healthy_main(monkeypatch, state):
+    healthy = {"LoadState": "loaded", "ActiveState": "active", "SubState": "running", "MainPID": 123}
+    unit = "korstockscan-widget-symbol-runtime-collector.service"
+    monkeypatch.setattr(process_health_module, "_systemd_unit_state",
+                        lambda name: {**healthy, **(state if name == unit else {})})
+    monkeypatch.setattr(process_health_module, "_widget_collector_runtime_contract",
+                        _ORIGINAL_WIDGET_COLLECTOR_RUNTIME_CONTRACT)
+    now = datetime.fromisoformat("2026-09-21T09:01:30+09:00")
+    monkeypatch.setattr(process_health_module.time, "time", now.timestamp)
+    write_heartbeat("main_loop")
+    write_heartbeat("telegram")
+    result = ProcessHealthDetector().check()
+    assert result.severity == "fail"
+    assert unit in result.summary
+    assert result.details["widget_collectors"]["unhealthy_units"] == [unit]
+
+
+@pytest.mark.parametrize("clock, expected, calls", [
+    ("08:56:59", "pass", 0), ("08:57:10", "warning", 4),
+    ("09:01:00", "fail", 5), ("20:01:00", "pass", 0),
+])
+def test_widget_collector_schedule_and_bounded_startup(monkeypatch, clock, expected, calls):
+    queries = []
+    def missing(unit):
+        queries.append(unit)
+        return {"LoadState": "not-found"}
+    monkeypatch.setattr(process_health_module, "_systemd_unit_state", missing)
+    result = _ORIGINAL_WIDGET_COLLECTOR_RUNTIME_CONTRACT(
+        datetime.fromisoformat(f"2026-09-21T{clock}+09:00"))
+    assert result["severity"] == expected
+    assert len(queries) == calls
+
+
+def test_widget_collector_healthy_and_nontrading_day(monkeypatch):
+    monkeypatch.setattr(process_health_module, "_systemd_unit_state", lambda unit: {
+        "LoadState": "loaded", "ActiveState": "active", "SubState": "running", "MainPID": 123})
+    now = datetime.fromisoformat("2026-09-21T09:10:00+09:00")
+    result = _ORIGINAL_WIDGET_COLLECTOR_RUNTIME_CONTRACT(now)
+    assert result["status"] == "healthy_active"
+    assert result["severity"] == "pass"
+    monkeypatch.setattr(process_health_module, "is_krx_trading_day", lambda target: False)
+    result = _ORIGINAL_WIDGET_COLLECTOR_RUNTIME_CONTRACT(now)
+    assert result["status"] == "outside_collection_window"
+    assert result["units"] == {}

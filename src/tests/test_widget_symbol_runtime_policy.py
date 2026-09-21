@@ -586,3 +586,23 @@ def test_republication_keeps_source_and_loader_uses_recorded_publication(monkeyp
     payload["publication_date"] = "invalid"
     path.write_text(json.dumps(payload))
     assert loader.resolve_all(observed_date=date(2026, 8, 14)) == {}
+
+
+def test_build_policy_hashes_full_report_once_per_reconstruction(monkeypatch):
+    research = _research()
+    original = runtime._payload_sha256
+    calls = []
+
+    def count_hash(payload):
+        if payload is research:
+            calls.append(payload)
+        return original(payload)
+
+    monkeypatch.setattr(runtime, "_payload_sha256", count_hash)
+    policy = runtime.build_policy(research)
+    expected = original(research)
+    assert len(policy["observation_symbols"]) > 1
+    assert len(calls) == 1
+    assert policy["evidence_report_sha256"] == expected
+    assert all(row["source_report_sha256"] == expected
+               for row in policy["observation_symbols"].values())

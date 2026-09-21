@@ -847,7 +847,7 @@ def bind_incumbent(study, policy):
     """Freeze the verified recipe's file identity separately from market paths."""
     receipt = {"status": "missing"}
     try:
-        path = Path(policy["policy_path"])
+        path = Path(policy["policy_path"]).resolve(strict=True)
         raw = path.read_bytes()
         receipt = {
             "status": "bound",
@@ -867,7 +867,20 @@ def bind_incumbent(study, policy):
 def incumbent_valid(study):
     try:
         receipt = study["incumbent_receipt"]
-        raw = Path(receipt["path"]).read_bytes()
+        path = Path(receipt["path"])
+        try:
+            raw = path.read_bytes()
+        except FileNotFoundError:
+            # Old releases may be retired while their shared policy survives.
+            # Resolve only the policy owner's file; the frozen byte hash and
+            # recipe identity below remain mandatory, including after relocation.
+            from src.trading.widget_auto_trade.policy import DEFAULT_POLICY_DIR
+
+            if path.parts[-4:-1] != ("data", "runtime", "widget_auto_trade_policy"):
+                return False
+            if not path.name.startswith("widget_auto_trade_policy_") or path.suffix != ".json":
+                return False
+            raw = (DEFAULT_POLICY_DIR / path.name).read_bytes()
         payload = json.loads(raw)
         source = date.fromisoformat(payload["source_target_date"])
         effective = date.fromisoformat(payload["effective_date"])

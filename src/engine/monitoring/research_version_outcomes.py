@@ -241,6 +241,7 @@ def collect_widget_outcomes(
 
 def outcome_feedback(source_date, *, directory=loop.DIRECTORY):
     """Mature exact realized facts only; pending/CF are separate diagnostics."""
+    directory = loop._directory(directory)
     rows, sources, decisions = {}, {}, {}
     for path in sorted(Path(directory).glob("widget_outcomes_*.json")):
         if path.stem[-10:] > source_date.isoformat():
