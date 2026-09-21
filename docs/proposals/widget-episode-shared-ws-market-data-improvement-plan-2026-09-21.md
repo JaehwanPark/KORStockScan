@@ -1,6 +1,7 @@
 # 위젯·에피소드 공통 WS 시세 수집 개선안
 
 - 상태: **사용자 구현·리뷰·커밋푸시·배포기동 승인 후 P0/P1 첫 인계 구현**. 기존 문서 작성 단계의 실행 금지는 과거 범위이며 이번 명시 승인을 대체하지 않는다. P1은 비교 전용이고 P2 전환/확대는 P5 자연 검증 후다. [코드·검증·배포 기록](../audit-reports/2026-09-21-widget-shared-ws-transport-review.md). 앞선 수리 완료를 WS 전환 완료로 확대하지 않는다.
+- 최신 인계: `6c1bfa172` 기본3종목 collector 배포·13:51 재기동·실제_AL 소비 확인. P1 인정 규칙 수리의 코드/배포/PID 검증 완료, P2 실제 입력 전환·확대와 P3 분봉은 미완료다. 다음 완전한 자연3창은14:00–14:45이며14:45 이후 판정한다. [현재 배포와 후속 의존성](../audit-reports/2026-09-21-widget-shared-ws-transport-review.md#integrated-source-deployment-and-continuation).
 - 결정: 현재가·체결·호가를 기존 WS 수신기에서 공유하고 REST는 초기 이력·정적 정보·제한된 누락 복구에 사용한다. **1차는 위젯 시세/BBO, 2차는 확장 관측, 3차는 검증된 분봉 재사용과 에피소드 연결**이다.
 - 사용자 정정 반영: 모든 종목에서 같은 종목의 유효한 `_AL` 체결·호가 수신을 WS 전환의 원천 검증에 인정한다. `005930` 별도 등록 부재나 KRX REST와의 값 차이만으로 `005930_AL`을 탈락시키지 않는다. [공통 reader 보완·실제 자료 확인](../audit-reports/2026-09-21-widget-shared-ws-transport-review.md#integrated-symbol-source-acceptance-correction).
 - 현재 실행·자연 acceptance owner: [9/21 checklist](../checklists/2026-09-21-stage2-todo-checklist.md)의 `KiwoomCommonHealthOpportunityCostAcceptance0917`. 이 문서는 단계별 설계이며 별도 OPEN owner를 중복 생성하지 않는다.
