@@ -155,6 +155,20 @@ def test_required_feature_recheck_is_guard_excluded_not_missing_economics():
     assert ordinary[0]["economic_source"]["status"] == "source_gap"
 
 
+@pytest.mark.parametrize("missing", [None, "None", "null", "-", "unknown", "0", ""])
+def test_missing_identity_alias_does_not_mask_explicit_machine_receipt(missing):
+    base = event(action="BLOCK", screen="not_requested_machine_nonentry")
+    terminal = event(action="BLOCK", screen="not_requested_machine_nonentry",
+        stage="ai_confirmed_terminal_no_budget", policy_bundle_hash=missing,
+        machine_bundle_sha256="b" * 64, effective_venue=missing, venue="NXT",
+        market_session_bucket=missing, session_bucket="nxt_premarket")
+    result = monitor.snapshot([base, terminal], START)
+    assert result["identity_missing_events"] == 0
+    assert len(result["rows"]) == 1
+    absent = event(policy_bundle_hash=missing, machine_bundle_sha256=missing)
+    assert sentinel._machine_primary_evaluation_key(absent) == ""
+
+
 def test_missing_identity_detected_without_fake_denominator():
     events = [event(evaluation_attempt_id="", scanner_promotion_id="")]
     state = tick(events, 10)

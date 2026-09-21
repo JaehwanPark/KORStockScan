@@ -2345,6 +2345,15 @@ def _summarize_events(events, *, start_at, end_at, summary_rows=None):
 
 def _machine_primary_evaluation_key(event: PipelineEvent) -> str:
     """Return the exact six-field machine attempt identity, never a fuzzy join."""
+    def identity_first(names: tuple[str, ...]) -> str:
+        # Wire fields may contain the literal "None" alongside the concrete
+        # machine receipt. An absent higher-priority alias must not mask it.
+        for name in names:
+            value = _safe_str(event.fields.get(name)).strip()
+            if value.lower() not in {"", "none", "null", "unknown", "-", "0"}:
+                return value
+        return ""
+
     evaluation_attempt_id = ""
     for field in (
         "evaluation_attempt_id",
@@ -2357,14 +2366,13 @@ def _machine_primary_evaluation_key(event: PipelineEvent) -> str:
             break
     scanner_promotion_id = _safe_str(event.fields.get("scanner_promotion_id")).strip()
     venue = (
-        _safe_str(_field_first(event.fields, ("effective_venue", "venue")))
+        _safe_str(identity_first(("effective_venue", "venue")))
         .strip()
         .upper()
     )
     session = (
         _safe_str(
-            _field_first(
-                event.fields,
+            identity_first(
                 ("market_session_bucket", "session_bucket", "session"),
             )
         )
@@ -2376,8 +2384,7 @@ def _machine_primary_evaluation_key(event: PipelineEvent) -> str:
     if session == "KRX_LIKE_PREMARKET":
         session = "PREMARKET_KRX_LIKE"
     bundle_hash = _safe_str(
-        _field_first(
-            event.fields,
+        identity_first(
             (
                 "policy_bundle_hash",
                 "machine_bundle_sha256",
