@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import time
 import uuid
 from datetime import date, datetime
 from pathlib import Path
@@ -39,6 +40,21 @@ def _control_paths(target_date: str) -> tuple[Path, Path]:
         REPORT_DIR / f"postclose_done_controller_{target_date}.json",
         REPORT_DIR / f"postclose_done_controller_{target_date}.md",
     )
+
+
+def _wait_for_predecessor_succeeded(
+    target_date: str, *, wait_sec: float, timeout_sec: float
+) -> bool:
+    """Wait for the exact-date main postclose terminal without rerunning it."""
+    interval = max(0.1, float(wait_sec))
+    deadline = time.monotonic() + max(0.0, float(timeout_sec))
+    while True:
+        if _load(_status_path(target_date)).get("status") == "succeeded":
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(interval, remaining))
 
 
 def build_postclose_done_controller(
@@ -150,6 +166,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--require-codex-completed", action="store_true", default=False)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
+    if not args.dry_run and not args.summary_handoff_only:
+        _wait_for_predecessor_succeeded(
+            args.date,
+            wait_sec=args.predecessor_wait_sec,
+            timeout_sec=args.predecessor_timeout_sec,
+        )
     report = build_postclose_done_controller(
         args.date,
         max_attempts=args.max_attempts,

@@ -55,3 +55,37 @@ def test_controller_blocks_before_summary_when_predecessor_not_succeeded(monkeyp
 
     assert report["status"] == "blocked_predecessor_not_succeeded"
     assert report["actions"] == []
+
+
+def test_controller_waits_for_running_predecessor_without_rerun(monkeypatch, tmp_path):
+    data = tmp_path / "data"
+    monkeypatch.setattr(mod, "DATA_DIR", data)
+    monkeypatch.setattr(mod, "REPORT_DIR", data / "report" / "postclose_done_controller")
+    status_path = (
+        data
+        / "report"
+        / "threshold_cycle_postclose_status"
+        / "threshold_cycle_postclose_2026-09-21.status.json"
+    )
+    _write(status_path, {"status": "running", "run_id": "active"})
+
+    def finish_predecessor(_seconds: float) -> None:
+        _write(status_path, {"status": "succeeded", "run_id": "active"})
+
+    monkeypatch.setattr(mod.time, "sleep", finish_predecessor)
+
+    assert mod._wait_for_predecessor_succeeded(
+        "2026-09-21", wait_sec=60, timeout_sec=43200
+    ) is True
+    assert json.loads(status_path.read_text())["run_id"] == "active"
+
+
+def test_controller_predecessor_wait_times_out_without_mutation(monkeypatch, tmp_path):
+    data = tmp_path / "data"
+    monkeypatch.setattr(mod, "DATA_DIR", data)
+    monkeypatch.setattr(mod, "REPORT_DIR", data / "report" / "postclose_done_controller")
+
+    assert mod._wait_for_predecessor_succeeded(
+        "2026-09-21", wait_sec=60, timeout_sec=0
+    ) is False
+    assert not (data / "report" / "threshold_cycle_postclose_status").exists()
