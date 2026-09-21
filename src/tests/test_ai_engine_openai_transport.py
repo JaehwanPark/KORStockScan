@@ -3991,8 +3991,9 @@ def test_machine_pass_keeps_recent_exit_reentry_guard():
 
 
 @pytest.mark.parametrize("ready", [False, True])
+@pytest.mark.parametrize("identity_mode", ["snapshot", "caller", "generated"])
 def test_machine_initial_policy_assesses_before_provider_cache_and_lock(
-    monkeypatch, ready
+    monkeypatch, ready, identity_mode
 ):
     from src.engine.scalping import mechanistic_entry_runtime_policy as initial_policy
     from src.engine.scalping.entry_setup_evidence import (
@@ -4089,10 +4090,23 @@ def test_machine_initial_policy_assesses_before_provider_cache_and_lock(
         engine.lock = NoProviderLock()
     ws_data = _sample_ws_data()
     ws_data["scanner_promotion_id"] = "SCANPROM-005930-machine"
+    ws_data["evaluation_attempt_id"] = "caller-attempt" if identity_mode == "caller" else "-"
     observed = []
+    attempt_ids = []
     def observer(**kwargs):
         observed.append(kwargs['assessment']['action'])
+        attempt = kwargs['exact_payload']['evaluation_attempt_id']
+        attempt_ids.append(attempt)
+        if identity_mode == "generated":
+            assert attempt.startswith("machine-evaluation-")
+        else:
+            assert attempt == ("caller-attempt" if identity_mode == "caller" else "aims-machine-current")
+        assert kwargs['capture']['evaluation_attempt_id'] == attempt
+        assert kwargs['exact_payload']['broker_route'] == "SOR"
         return {'entry_economic_source_status': 'recorded_source_only'}
+    context = _allowed_entry_candle_context()
+    context.setdefault('ai_market_snapshot_v1', {}).update(
+        snapshot_id="-" if identity_mode == "generated" else "aims-machine-current", broker_route="SOR")
     result = engine.analyze_target(
         "test",
         ws_data,
@@ -4100,13 +4114,14 @@ def test_machine_initial_policy_assesses_before_provider_cache_and_lock(
         _sample_candles(),
         strategy="SCALPING",
         prompt_profile="watching",
-        candle_context=_allowed_entry_candle_context(),
+        candle_context=context,
         entry_economics_observer=observer,
     )
     assert observed == ['ENTER_NOW' if ready else 'RECHECK']
     assert result['entry_economic_source_status'] == 'recorded_source_only'
     assert events == (["machine", "ai"] if ready else ["machine"]), result
     assert result["scanner_promotion_id"] == "SCANPROM-005930-machine"
+    assert result["evaluation_attempt_id"] == attempt_ids[0]
     if ready:
         assert result["auxiliary_system_prompt_sha256"] == initial_policy.digest(
             live["auxiliary_system_prompt"]

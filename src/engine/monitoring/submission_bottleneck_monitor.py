@@ -118,10 +118,15 @@ def snapshot(events, as_of):
                 value = {**old, "status": "source_gap", "blocker": "economic_observation_conflicting_proofs"}
             economic[key] = value
     for row in funnel["evaluation_ledger"]:
+        feature_guard = (row["mechanistic_action"] == "RECHECK"
+                         and row["ai_screen_status"] == "not_requested_required_feature_insufficient"
+                         and not row["conflict_reasons"])
         row["economic_source"] = economic.get(row["evaluation_key"], {
-            "status": ("not_applicable_machine_source_invalid" if row["mechanistic_action"] not in {"ENTER_NOW", "BLOCK", "RECHECK"}
+            "status": ("guard_excluded" if feature_guard else
+                       "not_applicable_machine_source_invalid" if row["mechanistic_action"] not in {"ENTER_NOW", "BLOCK", "RECHECK"}
                        else "source_gap" if stamp(row["first_evaluated_at"]).date().isoformat() >= "2026-09-21" else "historical_not_required"),
-            "blocker": ("economic_observation_event_missing"
+            "blocker": ("required_feature_input_insufficient" if feature_guard else
+                        "economic_observation_event_missing"
                         if row["mechanistic_action"] in {"ENTER_NOW", "BLOCK", "RECHECK"}
                         else None),
             "owner": "main_entry_execution_owners->pipeline_event_logger->sentinel_cache",

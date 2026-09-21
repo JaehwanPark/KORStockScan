@@ -9079,13 +9079,31 @@ class GPTSniperEngine:
                     "effective_venue",
                     "session_bucket",
                     "scanner_promotion_id",
+                    "snapshot_id",
+                    "evaluation_attempt_id",
+                    "entry_evaluation_attempt_id",
+                    "broker_route",
                 ):
-                    if machine_exact.get(key) in (None, ""):
-                        machine_exact[key] = (
-                            pre_prompt_snapshot.get(key)
-                            or ws_data.get(key)
-                            or (metadata_extra or {}).get(key)
+                    if str(machine_exact.get(key) or "").strip().lower() in {
+                        "", "-", "none", "null", "unknown"
+                    }:
+                        machine_exact[key] = next(
+                            (source.get(key) for source in (
+                                pre_prompt_snapshot, ws_data, metadata_extra or {}
+                            ) if str(source.get(key) or "").strip().lower() not in {
+                                "", "-", "none", "null", "unknown"
+                            }),
+                            None,
                         )
+                # The compact feature formatter omits lifecycle identity. Bind
+                # it before capture AND economics so both publish the same
+                # producer-owned attempt, including machine non-entry points.
+                if not machine_exact.get("evaluation_attempt_id"):
+                    machine_exact["evaluation_attempt_id"] = (
+                        machine_exact.get("entry_evaluation_attempt_id")
+                        or machine_exact.get("snapshot_id")
+                        or f"machine-evaluation-{uuid.uuid4().hex}"
+                    )
                 from src.trading.market.micro_confirmation import (
                     load_live_dynamic_confirmation_source,
                 )

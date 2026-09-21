@@ -165,6 +165,7 @@ MACHINE_PRIMARY_AI_SCREEN_STATUSES = frozenset(
         "not_evaluated_local",
         "not_requested_machine_nonentry",
         "not_requested_machine_source_invalid",
+        "not_requested_required_feature_insufficient",
     }
 )
 ENTRY_EXECUTION_SIZING_STAGES = frozenset(
@@ -2847,7 +2848,7 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
         if action in {"RECHECK", "BLOCK"} and screen not in {
             "",
             "not_requested_machine_nonentry",
-        }:
+        } and not (action == "RECHECK" and screen == "not_requested_required_feature_insufficient"):
             conflict_reasons.append("machine_nonentry_ai_screen_contract_invalid")
         if action == "SOURCE_INVALID" and screen not in {
             "",
@@ -2856,7 +2857,9 @@ def _machine_primary_entry_funnel(events: list[PipelineEvent]) -> dict[str, Any]
             conflict_reasons.append("machine_source_invalid_ai_screen_contract_invalid")
         if action == "ENTER_NOW" and not screen:
             conflict_reasons.append("machine_enter_ai_screen_missing")
-        if action == "ENTER_NOW" and screen == "not_requested_machine_nonentry":
+        if action == "ENTER_NOW" and screen in {
+            "not_requested_machine_nonentry", "not_requested_required_feature_insufficient"
+        }:
             conflict_reasons.append("machine_enter_ai_screen_not_requested")
         submitted_rows = [row for row in rows if row.stage == "order_bundle_submitted"]
         broker_acceptance_rows = [

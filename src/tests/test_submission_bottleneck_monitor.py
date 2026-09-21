@@ -144,6 +144,17 @@ def test_existing_alias_incident_is_preserved_as_superseded_not_recovered():
     assert result["incidents"][old_key]["evidence_ids"] == old["evidence_ids"]
 
 
+def test_required_feature_recheck_is_guard_excluded_not_missing_economics():
+    rows = monitor.snapshot([event(action="RECHECK", screen="not_requested_required_feature_insufficient")], START)["rows"]
+    assert rows[0]["conflict_reasons"] == []
+    assert rows[0]["final_state"] == "machine_recheck_observation"
+    assert rows[0]["economic_source"]["status"] == "guard_excluded"
+    invalid = monitor.snapshot([event(action="ENTER_NOW", screen="not_requested_required_feature_insufficient")], START)["rows"]
+    assert "machine_enter_ai_screen_not_requested" in invalid[0]["conflict_reasons"]
+    ordinary = monitor.snapshot([event(action="RECHECK", screen="not_requested_machine_nonentry")], START)["rows"]
+    assert ordinary[0]["economic_source"]["status"] == "source_gap"
+
+
 def test_missing_identity_detected_without_fake_denominator():
     events = [event(evaluation_attempt_id="", scanner_promotion_id="")]
     state = tick(events, 10)
