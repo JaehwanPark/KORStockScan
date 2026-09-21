@@ -620,7 +620,8 @@ def _producer_main(argv=None) -> int:
                 raise RuntimeError("widget_prefix_dependency_revision_requires_revalidation")
             retained = {}
             for label in INDEPENDENT_SOURCES["widget"][:2]:
-                row = (value.get("sources") or {}).get(label) or {}
+                row = ((value.get("sources") or {}).get(label)
+                       or ((value.get("reused_prefix") or {}).get("sources") or {}).get(label) or {})
                 path_ = Path(row.get("path") or "")
                 if not row.get("sha256") or _sha(path_) != row["sha256"] or _report_date(_load_json(path_)) != day:
                     raise RuntimeError("widget_prefix_source_generation_mismatch")

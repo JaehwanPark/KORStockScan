@@ -48,3 +48,5 @@ Episode 복구는23:09:19에 공동 명단 검증 단계를 통과했으나 `low
 공유 선정 함수는 기존 연구 lifecycle owner에 추가한다. 완료 추천 순위와 사전 자료 유무로 선정하고 평가 중인 손익을 사용하지 않는다. 전체 catalog/동결 manifest는 삭제하지 않으며 자원상 이월과 소스 부족/경제성 탈락을 구분한다. source waiting의 context와 episode candidate fingerprint에 선택된 명단이 반영되어 전수355/320 캐시를 축소된 분모로 오인 재사용하지 않는다. 위젯 기존 운영/명시 watch가100을 초과하면 조용히 누락시키지 않고 명시 오류로 중단한다.
 
 검증: 위젯/에피소드/runtime policy/handoff206 tests PASS, compile/diff/parser PASS. 선정 단계에서 기존 운영 종목의 처리 순서까지 바뀌던 결함을 회귀 테스트로 발견하여 보존하도록 수정했다. 완료 advisory/auto-policy prefix는 연구 lifecycle/closure refresh를 소비하지 않아 source hash 검증 후 재사용하며, signal/episode 경제성 평가는 새 선택 명단으로 검증한다.
+
+축소 release 자체206 tests PASS, cron routing4/4 확인 후 episode50 재실행 시작. 위젯 중단 receipt가 started 상태이면 top-level sources 없이 reused_prefix.sources만 보존되는 재개 결함을 확인했다. native 재개에서 해당 증거를 동일 날짜/해시 검증 후 읽도록 보완하고 중단 후 재재개 회귀를 추가했다. 자료 검증을 생략하거나 prefix를 재작성하지 않는다.

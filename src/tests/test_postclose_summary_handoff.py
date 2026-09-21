@@ -335,6 +335,8 @@ def test_widget_prefix_reuse_rejects_drift_and_preserves_origin(monkeypatch, tmp
     mod._producer_main(cli+["--phase","started","--reuse-widget-prefix"])
     new=mod._load_json(mod.producer_receipt_path(tmp_path / "data/report",day,"widget"))
     assert new["reused_prefix"]["run_id"]==old["run_id"] and new["run_id"]!=old["run_id"]
+    # A stopped wrapper may retain only its started receipt and inherited prefix.
+    mod._producer_main(cli+["--phase","started","--reuse-widget-prefix"])
     mod._producer_main(cli+["--phase","finished","--exit-code","1"])
     paths[mod.INDEPENDENT_SOURCES["widget"][0]].write_text("{}")
     with pytest.raises(RuntimeError, match="source_generation_mismatch"):
