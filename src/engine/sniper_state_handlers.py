@@ -2871,7 +2871,7 @@ def _entry_capacity_receipt_valid(snapshot, code, price, now_ts):
 
 
 def _read_entry_capacity_snapshot(code, price, *, source_only=False,
-                                  source_read_rate_max_wait_sec=0.0):
+                                  source_read_rate_max_wait_sec=0.0, reuse_only=False):
     """Reuse successful exact receipts only for observation, never live sizing.
 
     Runtime-required reads retain their original transport path. Observers
@@ -2897,6 +2897,8 @@ def _read_entry_capacity_snapshot(code, price, *, source_only=False,
             cached = _ENTRY_CAPACITY_RECEIPTS.get(key)
             if _entry_capacity_receipt_valid(cached, code, price, started):
                 return {**copy.deepcopy(cached), "capacity_reuse_status": "exact_receipt_reused"}
+            if reuse_only:
+                return {"error": "capacity_observation_cache_miss_nonentry"}
             if started < _ENTRY_CAPACITY_RETRY_AFTER.get(key, 0):
                 return {"error": "capacity_source_retry_deferred"}
         _ENTRY_CAPACITY_RECEIPTS.pop(key, None)
@@ -2991,7 +2993,8 @@ def prepare_pending_entry_capacity():
         return {"status": "source_gap", "reason": type(exc).__name__ + ":" + str(exc)}
 
 
-def _resolve_scalp_cash_budget_context(code, unit_price, fallback_orderable_amount, *, source_only=False):
+def _resolve_scalp_cash_budget_context(code, unit_price, fallback_orderable_amount, *, source_only=False,
+                                      reuse_only=False):
     fallback = max(0, _safe_int(fallback_orderable_amount, 0))
     deposit_meta = kiwoom_orders.get_last_deposit_meta()
     kt00001_floor_applied = bool(deposit_meta.get("minimum_floor_applied", False))
@@ -3023,6 +3026,7 @@ def _resolve_scalp_cash_budget_context(code, unit_price, fallback_orderable_amou
     try:
         snapshot = _read_entry_capacity_snapshot(
             code, _safe_int(unit_price, 0), source_only=source_only,
+            **({"reuse_only": True} if source_only and reuse_only else {}),
         )
     except Exception as exc:
         context["kt00011_error"] = str(exc)
@@ -11994,7 +11998,10 @@ def _observe_entry_economics_before_ai(stock, code, ws_data, *, exact_payload,
         current = _safe_int((exact_payload.get("current") or {}).get("price"), 0)
         if current <= 0:
             raise ValueError("exact_reference_price_missing")
-        budget = _resolve_scalp_cash_budget_context(code, current, 0, source_only=True)
+        # Preserve every machine anchor; non-entry economics may use an exact
+        # existing receipt but cannot issue another synchronous account read.
+        budget = _resolve_scalp_cash_budget_context(code, current, 0, source_only=True,
+            reuse_only=assessment.get("action") != "ENTER_NOW")
         if budget.get("kt00011_error") or budget.get("cash_orderable_qty_cap") is None:
             source["entry_economic_capacity_blocker"] = budget.get("kt00011_error") or "cash_quantity_missing"
             raise ValueError("exact_broker_capacity_missing")

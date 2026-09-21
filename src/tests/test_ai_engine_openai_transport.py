@@ -3336,6 +3336,32 @@ def test_entry_hot_payload_refreshes_nested_hash_after_compaction(monkeypatch):
     assert "multi_timeframe_bars" not in context
 
 
+@pytest.mark.parametrize("quality", ["fresh_consistent", "stale", "unknown"])
+def test_machine_base_candles_survive_optional_context_off_without_promotion(quality):
+    from copy import deepcopy
+    engine = _build_engine()
+    context = _allowed_entry_candle_context()
+    context.update(enabled=False, multi_timeframe_ai_input_enabled=True,
+                   multi_timeframe_context={"must_not_promote": True})
+    context["source_quality"]["status"] = quality
+    original = deepcopy(context)
+    payload = json.loads(engine._format_entry_screen_hot_data(
+        _sample_ws_data(), _sample_ticks(), _sample_candles(), candle_context=context))
+    assert "entry_candle_context" not in payload  # Ordinary AI path stays OFF.
+    assert engine._attach_entry_candle_inputs(payload, context, machine_base_only=True)
+    candle = payload["entry_candle_context"]
+    assert candle["bars"] == original["bars"]
+    assert candle["source_quality"]["status"] == quality
+    assert candle["multi_timeframe_ai_input_enabled"] is False
+    assert "multi_timeframe_context" not in candle
+    assert "regime" not in candle and "alignment" not in candle
+    analysis = openai_module.build_exact_payload_analysis_v1(payload, stage="entry", live_entry=True)
+    assert analysis["source_quality"]["completed_bar_count"] == 1
+    assert analysis["source_quality"]["status"] == quality
+    assert context == original
+    assert not engine._attach_entry_candle_inputs({}, None, machine_base_only=True)
+
+
 def test_analyze_target_watching_uses_hot_prompt_and_input_schema(monkeypatch):
     engine = _build_engine()
     captured = {}
@@ -4095,6 +4121,8 @@ def test_machine_initial_policy_assesses_before_provider_cache_and_lock(
     attempt_ids = []
     def observer(**kwargs):
         observed.append(kwargs['assessment']['action'])
+        assert kwargs['exact_payload']['entry_candle_context']['completed_bar_count'] == 1
+        assert kwargs['exact_payload']['entry_candle_context']['multi_timeframe_ai_input_enabled'] is False
         attempt = kwargs['exact_payload']['evaluation_attempt_id']
         attempt_ids.append(attempt)
         if identity_mode == "generated":

@@ -86,6 +86,33 @@ def response(**extra):
     }
 
 
+def test_nonentry_capacity_reuses_exact_receipt_without_new_account_read(monkeypatch):
+    from datetime import datetime, timezone
+    handlers._reset_entry_capacity_receipts()
+    monkeypatch.setattr(handlers.time, "time", lambda: 1000.0)
+    monkeypatch.setattr(handlers, "_entry_capacity_receipt_key", lambda code, price: (code, price))
+    calls = []
+    monkeypatch.setattr(kiwoom_utils, "get_orderable_by_margin_kt00011",
+                        lambda *args, **kwargs: calls.append(kwargs) or {})
+    try:
+        read = handlers._read_entry_capacity_snapshot
+        assert read("005930", 10000, source_only=True, reuse_only=True)["error"] == "capacity_observation_cache_miss_nonentry"
+        assert not calls
+        handlers._ENTRY_CAPACITY_RECEIPTS[("005930", 10000)] = {
+            "return_code": 0, "cash_orderable_contract_status": "valid",
+            "capacity_observed_at": datetime.fromtimestamp(999, timezone.utc).isoformat(),
+            "capacity_source_sha256": "a" * 64, "requested_stock_code": "005930",
+            "requested_unit_price": 10000,
+        }
+        assert read("005930", 10000, source_only=True, reuse_only=True)["capacity_reuse_status"] == "exact_receipt_reused"
+        assert "error" in read("005930", 10001, source_only=True, reuse_only=True)
+        assert not calls
+        read("005930", 10000, reuse_only=True)  # Normal sizing never uses this exemption.
+        assert len(calls) == 1 and calls[0] == {"unit_price": 10000}
+    finally:
+        handlers._reset_entry_capacity_receipts()
+
+
 def test_legacy_preparation_is_coalesced_bounded_and_scope_checked(monkeypatch):
     handlers._reset_entry_capacity_receipts()
     clock = [1000.0]

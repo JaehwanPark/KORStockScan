@@ -833,7 +833,8 @@ def test_runtime_pre_ai_producer_freezes_owner_inputs_without_submit(monkeypatch
     result=handlers._observe_entry_economics_before_ai(stock,'005930',ws,
         exact_payload=exact,assessment={'action':machine_action},capture=receipt,bundle_sha256='a'*64)
     assert stock == before
-    assert requests == [('005930',10020,0,{'source_only':True})]
+    assert requests == [('005930',10020,0,{'source_only':True,
+        'reuse_only': machine_action != 'ENTER_NOW'})]
     logger.flush_pipeline_event_producer_summary()
     day=datetime.now(sizing.KST).date().isoformat()
     events, source_contract=split._bounded_execution_projection(day)

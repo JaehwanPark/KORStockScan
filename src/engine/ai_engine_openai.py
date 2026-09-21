@@ -1610,10 +1610,11 @@ class GPTSniperEngine:
         candle_context,
         *,
         validation_only: bool = False,
+        machine_base_only: bool = False,
     ):
         context = candle_context if isinstance(candle_context, dict) else {}
         if not context or (
-            not bool(context.get("enabled", False)) and not validation_only
+            not bool(context.get("enabled", False)) and not validation_only and not machine_base_only
         ):
             return None
         payload = {
@@ -1651,6 +1652,13 @@ class GPTSniperEngine:
         }
         if validation_only:
             payload["multi_timeframe_ai_input_enabled"] = True
+        if machine_base_only:
+            # The main machine needs canonical completed bars independently of
+            # optional AI context promotion. Never enable the promoted MTF view.
+            payload["multi_timeframe_ai_input_enabled"] = False
+            payload["input_role"] = "main_machine_base_candles_no_context_promotion"
+            payload.pop("regime", None)
+            payload.pop("alignment", None)
         if payload["multi_timeframe_ai_input_enabled"]:
             payload["input_bundle_version"] = context.get("input_bundle_version")
             payload["multi_timeframe_context"] = context.get(
@@ -1701,9 +1709,11 @@ class GPTSniperEngine:
             metadata=dict(metadata or {}),
         )
 
-    def _attach_entry_candle_inputs(self, payload, candle_context):
+    def _attach_entry_candle_inputs(self, payload, candle_context, *, machine_base_only=False):
         target = payload if isinstance(payload, dict) else {}
-        candle_payload = self._entry_candle_model_payload(candle_context)
+        candle_payload = self._entry_candle_model_payload(
+            candle_context, machine_base_only=machine_base_only
+        )
         if not candle_payload:
             return False
         context = candle_context if isinstance(candle_context, dict) else {}
@@ -9072,6 +9082,10 @@ class GPTSniperEngine:
                     ),
                 )
                 machine_exact = json.loads(machine_hot_payload)
+                if "entry_candle_context" not in machine_exact:
+                    self._attach_entry_candle_inputs(
+                        machine_exact, candle_context, machine_base_only=True
+                    )
                 # Preserve explicit identity for both common and child policy
                 # observations; no venue/session is inferred from the symbol.
                 for key in (
