@@ -979,7 +979,11 @@ class WidgetSignalAutoTrader:
             if same_trade_date and not additive_policy_catalog:
                 if adaptive_evidence:
                     raise ValueError("adaptive_exit_archive_policy_requires_recovery")
-                return {}
+                # A replacement catalog is not a custody reset. Preserve prior
+                # carry, completed-entry counters and historical receipts even
+                # when there are no active-date orders. Active intents above
+                # still require explicit recovery before a policy replacement.
+                return state
         return state
 
     def _refresh_same_day_policy_catalog(self, observed_at: datetime) -> None:
@@ -1435,7 +1439,6 @@ class WidgetSignalAutoTrader:
             from src.engine.monitoring.machine_entry_confirmation_study import (
                 record_widget_native,
                 instrumentation_call,
-                adaptive_new_enrollment_selected,
             )
 
             payload["timing_operating_opportunity"] = instrumentation_call(

@@ -1979,6 +1979,27 @@ def test_overnight_forbidden_policy_blocks_new_day_exposure(tmp_path, monkeypatc
     )
 
 
+def test_policy_replacement_preserves_carry_and_completed_history(tmp_path, monkeypatch):
+    now = _at(10)
+    monkeypatch.setattr(engine, "_now_kst", lambda: now)
+    state = {
+        "schema_version": engine.STATE_SCHEMA_VERSION,
+        "execution_authority": engine.EXECUTION_AUTHORITY,
+        "active_date": now.date().isoformat(),
+        "execution_policies": {"005930": {"KRX_REGULAR": "old"}},
+        "symbols": {"005930": {"prior_day_unmanaged_qty": 25, "orders": [],
+                                "completed_entry_count": 1}},
+        "history": [{"trade_date": "2026-09-08", "custody": "retained"}],
+    }
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps(state))
+    trader = object.__new__(WidgetSignalAutoTrader)
+    trader.state_path = path
+    trader._configured_execution_policies = {"005930": {"KRX_REGULAR": "new"}}
+    assert trader._load_state() == state
+    assert trader._unmanaged_overnight_qty(trader._load_state()["symbols"]["005930"]) == 25
+
+
 def test_samsung_policy_change_fails_closed_with_same_day_open_quantity(
     tmp_path, monkeypatch
 ):

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+from pathlib import Path
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -794,6 +795,29 @@ def test_zero_day_ledger_does_not_discard_valid_pairs_from_partial_source_dates(
     after = replay.select_candidate(report, previous_value=100)
     assert after["diagnostics"] == before["diagnostics"]
     assert after["decision"] == before["decision"]
+
+
+def test_bound_incumbent_survives_source_republication_and_retirement(tmp_path):
+    from src.tests.test_widget_auto_trade_policy import _policy
+    report = study()
+    incumbent = _policy(effective_date="2026-09-09")
+    row = {**parameters(), "enabled": True,
+           "take_profit_bps_from_equal_share_average": 100}
+    row.pop("target_bps")
+    incumbent["symbols"] = {"005930": {"sessions": {"KRX_REGULAR": row}}}
+    path = tmp_path / "policy.json"
+    path.write_text(json.dumps(incumbent))
+    replay.bind_incumbent(report, {
+        "policy_path": str(path), "policy_id": incumbent["policy_version"]})
+    frozen = Path(report["incumbent_receipt"]["path"])
+    assert frozen != path
+    assert replay.incumbent_valid(report)
+    path.write_text("{}")
+    assert replay.incumbent_valid(report)
+    path.unlink()
+    assert replay.incumbent_valid(report)
+    frozen.write_text("{}")
+    assert not replay.incumbent_valid(report)
 
 
 def test_relocated_incumbent_still_requires_exact_bytes_and_identity(tmp_path, monkeypatch):

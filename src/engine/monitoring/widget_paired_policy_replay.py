@@ -11,6 +11,8 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
+import tempfile
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from statistics import fmean
@@ -843,16 +845,41 @@ def policy_parameters(policy):
     return parameters
 
 
+def preserve_incumbent(path):
+    """Keep exact policy bytes before a mutable dated publication is replaced."""
+    path = Path(path).resolve(strict=True)
+    raw = path.read_bytes()
+    sha256 = hashlib.sha256(raw).hexdigest()
+    directory = path.parent / ".incumbents"
+    directory.mkdir(parents=True, exist_ok=True)
+    snapshot = directory / f"{sha256}.json"
+    if snapshot.exists():
+        if snapshot.read_bytes() != raw:
+            raise ValueError("immutable_incumbent_snapshot_corrupt")
+    else:
+        with tempfile.NamedTemporaryFile(dir=directory, delete=False) as handle:
+            temporary = Path(handle.name)
+            try:
+                handle.write(raw)
+                handle.flush()
+                os.fsync(handle.fileno())
+                os.replace(temporary, snapshot)
+            finally:
+                temporary.unlink(missing_ok=True)
+    return snapshot, sha256
+
+
 def bind_incumbent(study, policy):
     """Freeze the verified recipe's file identity separately from market paths."""
     receipt = {"status": "missing"}
     try:
         path = Path(policy["policy_path"]).resolve(strict=True)
-        raw = path.read_bytes()
+        snapshot, sha256 = preserve_incumbent(path)
         receipt = {
             "status": "bound",
-            "path": str(path),
-            "sha256": hashlib.sha256(raw).hexdigest(),
+            "path": str(snapshot),
+            "source_path": str(path),
+            "sha256": sha256,
             "policy_id": policy["policy_id"],
         }
     except (OSError, KeyError, TypeError):

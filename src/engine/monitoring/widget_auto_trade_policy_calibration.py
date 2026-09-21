@@ -15,9 +15,11 @@ import json
 import math
 import os
 import statistics
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any, Mapping, Sequence
 
 from src.engine.monitoring.doosan_widget_contract import (
@@ -2998,6 +3000,27 @@ def write_outputs(
         "loaded_session_count": expected_session_count,
     }
     report["policy_path"] = str(policy_path)
+    # Validate the consumer contract before replacing either live artifact.
+    # The staged paths are local to this check; published paths stay canonical.
+    with TemporaryDirectory(prefix="widget-policy-validation-") as staging:
+        stage_dir = Path(staging)
+        staged_report = deepcopy(report)
+        staged_policy = deepcopy(policy)
+        staged_report_path = stage_dir / report_path.name
+        staged_policy_path = stage_dir / policy_path.name
+        staged_report["policy_path"] = str(staged_policy_path)
+        staged_report["policy_verification"]["policy_path"] = str(staged_policy_path)
+        staged_policy["evidence_report_path"] = str(staged_report_path)
+        for symbol_payload in staged_policy.get("symbols", {}).values():
+            for session_payload in symbol_payload.get("sessions", {}).values():
+                session_payload["evidence_artifact"] = str(staged_report_path)
+        _atomic_write(staged_report_path, staged_report)
+        _atomic_write(staged_policy_path, staged_policy)
+        staged_verification = verify_policy(staged_policy, policy_dir=stage_dir)
+        if staged_verification["status"] != "pass":
+            raise RuntimeError("widget auto-trade policy staging verification failed")
+    if policy_path.exists():
+        paired_replay.preserve_incumbent(policy_path)
     _atomic_write(report_path, report)
     _atomic_write(policy_path, policy)
     verification = verify_policy(policy, policy_dir=policy_dir)

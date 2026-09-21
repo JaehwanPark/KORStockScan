@@ -823,7 +823,7 @@ def test_ambiguous_submit_exception_is_execution_quality_safety_veto(tmp_path) -
 
 
 @pytest.mark.parametrize("release_alias", [False, True])
-def test_write_outputs_requires_report_before_policy_can_load(tmp_path, release_alias) -> None:
+def test_write_outputs_requires_report_before_policy_can_load(tmp_path, release_alias, monkeypatch) -> None:
     session_reports = {}
     for spec in calibration.SPECS:
         session_reports[spec.symbol] = {
@@ -864,6 +864,18 @@ def test_write_outputs_requires_report_before_policy_can_load(tmp_path, release_
     assert report_path.exists()
     assert policy_path.exists()
     assert verification["status"] == "pass"
+    original_report, original_policy = report_path.read_bytes(), policy_path.read_bytes()
+    # Republishing preserves the incumbent bytes before replacing the dated path.
+    write_outputs(report, policy, output_dir=tmp_path / "reports", policy_dir=tmp_path / "policies")
+    import hashlib
+    frozen = policy_path.parent / ".incumbents" / (hashlib.sha256(original_policy).hexdigest() + ".json")
+    assert frozen.read_bytes() == original_policy
+    with monkeypatch.context() as patch:
+        patch.setattr(calibration, "verify_policy", lambda *a, **kw: {"status": "fail"})
+        with pytest.raises(RuntimeError, match="staging verification failed"):
+            write_outputs(report, policy, output_dir=tmp_path / "reports", policy_dir=tmp_path / "policies")
+    assert report_path.read_bytes() == original_report
+    assert policy_path.read_bytes() == original_policy
     loaded = WidgetAutoTradePolicyLoader(
         tmp_path / "policies", include_symbol_expansion=False
     ).resolve_all(observed_date=date(2026, 8, 12))

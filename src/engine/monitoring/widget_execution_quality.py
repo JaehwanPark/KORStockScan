@@ -1,7 +1,7 @@
 """Read-only exact widget execution incidents shared by existing policy producers.
 
-No broker calls, policy writes or new runtime authority. Event counts remain
-diagnostic; an exact later full-fill receipt can resolve a failed submit intent.
+No broker calls or policy writes. Exact fills and explicit operator incident
+closures have separate dispositions; operator closure never invents a fill.
 """
 
 from __future__ import annotations
@@ -32,6 +32,7 @@ SESSIONS = {
     DUAL_AFTERMARKET_SESSION,
 }
 EXECUTION_OWNER = "operator_directed_widget_auto_trade_v1"
+OPERATOR_RESOLUTION = "execution_incident_operator_closed"
 
 
 def _custody_projection(incidents, *, symbol, target_date, registry_path):
@@ -298,7 +299,9 @@ def load_execution_incidents(
                 continue
             scoped = event_session(row)
             if session is not None and scoped != session:
-                if scoped is not None or row.get("event_type") not in FAILURES:
+                if scoped is not None or row.get("event_type") not in FAILURES | {
+                    OPERATOR_RESOLUTION
+                }:
                     continue
             rows.append((day, line_number, row))
     # File order is authoritative for equal/missing timestamps. An out-of-order
@@ -352,9 +355,15 @@ def load_execution_incidents(
                     "status": "unresolved",
                     "last_failure_at": None,
                     "unresolved_ambiguity_seen": False,
+                    "failure_evidence_sha256s": [],
                 },
             )
             incident["failure_event_count"] += 1
+            incident["failure_evidence_sha256s"].append(
+                hashlib.sha256(
+                    json.dumps(row, sort_keys=True, ensure_ascii=True).encode()
+                ).hexdigest()
+            )
             incident["failed_submit_attempt_count"] += event.startswith("order_submit_")
             incident["terminal_failure_event_count"] += not event.startswith(
                 "order_submit_"
@@ -387,6 +396,43 @@ def load_execution_incidents(
                 and not incident["unresolved_ambiguity_seen"]
             ):
                 incident["status"] = "closed_definitive_rejection_no_order"
+        if (
+            event == OPERATOR_RESOLUTION
+            and owner == EXECUTION_OWNER
+            and stamp is not None
+            and row.get("authority") == "explicit_operator_incident_closure_confirmation"
+            and row.get("resolution_scope") == "historical_order_incident_only"
+            and row.get("actual_order_submitted") is False
+            and row.get("inventory_mutation") is False
+            and row.get("economics_eligible") is False
+            and type(row.get("operator_confirmed_held_qty")) is int
+            and row["operator_confirmed_held_qty"] >= 0
+            and isinstance(row.get("operator_statement"), str)
+            and row["operator_statement"].strip()
+        ):
+            # Bind only the explicitly reviewed failure bytes. Later failures,
+            # other owners and same-day vetoes cannot inherit this disposition.
+            expected = row.get("incident_failure_sha256s")
+            for incident in incidents.values():
+                last_failure = _timestamp(incident.get("last_failure_at"))
+                if (
+                    incident["status"] == "unresolved"
+                    and last_failure is not None
+                    and stamp > last_failure
+                    and isinstance(expected, list)
+                    and expected
+                    and expected == sorted(incident["failure_evidence_sha256s"])
+                ):
+                    incident.update(
+                        status="closed_operator_confirmed",
+                        recovered_at=stamp.isoformat(),
+                        recovery_role="incident_closed_not_fill_or_inventory_closure",
+                        recovery_receipt_sha256=hashlib.sha256(
+                            json.dumps(row, sort_keys=True, ensure_ascii=True).encode()
+                        ).hexdigest(),
+                        operator_confirmed_held_qty=row["operator_confirmed_held_qty"],
+                        economics_eligible=False,
+                    )
         order_no = str(row.get("order_no") or "")
         if order_no and row.get("actual_order_submitted") is True:
             submitted = _timestamp(row.get("submitted_at"))
@@ -492,6 +538,9 @@ def load_execution_incidents(
         "closed_rejected_no_order_count": sum(
             item["status"] == "closed_definitive_rejection_no_order"
             for item in incidents.values()
+        ),
+        "operator_closed_incident_count": sum(
+            item["status"] == "closed_operator_confirmed" for item in incidents.values()
         ),
         "incidents": list(incidents.values()),
         "unique_order_count": len(orders),
