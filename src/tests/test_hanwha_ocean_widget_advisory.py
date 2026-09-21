@@ -657,10 +657,16 @@ def test_completed_legacy_snapshot_migrates_to_rearm_pending():
     assert restarted.rearm_after_bar == "20260805100000"
 
 
+@pytest.mark.parametrize("source_mode", ["rest", "ws"])
 def test_collector_uses_cached_token_and_auxiliary_read_only_market_requests(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, source_mode
 ):
     now = datetime(2026, 8, 5, 10, 0, 5, tzinfo=KST)
+    monkeypatch.setenv("KORSTOCKSCAN_WIDGET_MARKET_DATA_SOURCE", source_mode)
+    if source_mode == "ws":
+        from src.tests.test_quote_consistency import _adoptable_widget_transport
+        monkeypatch.setattr(hanwha_ocean, "read_shared_widget_quote", lambda context, **kw:
+            _adoptable_widget_transport(now, "042660", 98500, 98000))
     monkeypatch.setattr(time, "time", lambda: now.timestamp())
     monkeypatch.setattr(
         hanwha_ocean.kiwoom_utils, "get_cached_kiwoom_token", lambda _: "TOKEN"
@@ -817,7 +823,7 @@ def test_collector_uses_cached_token_and_auxiliary_read_only_market_requests(
     payload = collector.collect_once(now)
 
     assert payload["symbol"] == "042660"
-    assert payload["market_data_transport"]["selected_input"] == "existing_rest"
+    assert payload["market_data_transport"]["selected_input"] == ("shared_ws_snapshot" if source_mode == "ws" else "existing_rest")
     assert payload["token_mode"] == "shared_cache_only"
     assert {api_id for api_id, _ in session.calls} == {
         "ka10001",
@@ -827,7 +833,10 @@ def test_collector_uses_cached_token_and_auxiliary_read_only_market_requests(
         "ka10081",
         "ka20005",
         "ka90008",
-    }
+    } - ({"ka10001", "ka10003", "ka10004"} if source_mode == "ws" else set())
+    if source_mode == "ws":
+        assert not any(api in {"ka10001", "ka10003", "ka10004"} and body.get("stk_cd") == "042660"
+                       for api, body in session.calls)
     assert payload["advisory"]["auxiliary_context"]["status"] == "OBSERVED"
     assert payload["advisory"]["auxiliary_context"]["relative_signal"] in {
         "NOT_WEAK",

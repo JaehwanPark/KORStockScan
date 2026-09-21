@@ -3373,10 +3373,16 @@ def test_exit_state_transition_does_not_create_a_new_entry_signal_row(tmp_path):
     assert rows[1]["previous_exit_advisory_state"] == "EXIT_WATCH"
 
 
+@pytest.mark.parametrize("source_mode", ["rest", "ws"])
 def test_collector_uses_only_read_only_market_data_and_cached_token(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, source_mode
 ):
     now = datetime(2026, 8, 3, 9, 10, 5, tzinfo=KST)
+    monkeypatch.setenv("KORSTOCKSCAN_WIDGET_MARKET_DATA_SOURCE", source_mode)
+    if source_mode == "ws":
+        from src.tests.test_quote_consistency import _adoptable_widget_transport
+        monkeypatch.setattr(advisory, "read_shared_widget_quote", lambda context, **kw:
+            _adoptable_widget_transport(now, "005930", 100400, 99800))
     monkeypatch.setattr(advisory.time, "time", lambda: now.timestamp())
     monkeypatch.setattr(
         advisory.kiwoom_utils, "get_cached_kiwoom_token", lambda _: "TOKEN"
@@ -3541,7 +3547,7 @@ def test_collector_uses_only_read_only_market_data_and_cached_token(
     payload = collector.collect_once(now)
 
     assert payload["status"] == "ok"
-    assert payload["market_data_transport"]["selected_input"] == "existing_rest"
+    assert payload["market_data_transport"]["selected_input"] == ("shared_ws_snapshot" if source_mode == "ws" else "existing_rest")
     assert payload["market_data_transport"]["runtime_effect"] is False
     assert payload["market_session"] == "krx_or_closed"
     assert payload["advisory"]["session"] == "KRX_REGULAR"
@@ -3558,7 +3564,10 @@ def test_collector_uses_only_read_only_market_data_and_cached_token(
         "ka20001",
         "ka20005",
         "ka90008",
-    }
+    } - ({"ka10003", "ka10004"} if source_mode == "ws" else set())
+    if source_mode == "ws":
+        assert not any(api in {"ka10001", "ka10003", "ka10004"} and body.get("stk_cd") == "005930"
+                       for api, body in [(r[0], r[2]) for r in request_session.calls])
     assert all(
         "order" not in call[1] and "acnt" not in call[1]
         for call in request_session.calls

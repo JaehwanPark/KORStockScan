@@ -882,3 +882,22 @@ def test_operator_one_day_keeps_previous_ten_share_owned_targets(tmp_path):
     assert [leg["quantity"] for leg in state["legs"]] == [10, 10]
     assert gateway.sell_quantities == [10, 10]
     assert len(gateway.buy_calls) == 2
+
+
+def test_last_completed_bar_after_owner_deadline_does_not_reserve_or_read_quote(tmp_path, monkeypatch):
+    from dataclasses import replace
+    gateway = FakeGateway()
+    machine = _machine(tmp_path, gateway)
+    machine.policy = replace(machine.policy, scan_last_bar=machine.policy.scan_start)
+    def forbidden(**kw):
+        raise AssertionError("expired entry must not read liquidity or reserve an order")
+    monkeypatch.setattr(machine, "_entry_liquidity_allows_planned_buys", forbidden)
+    monkeypatch.setattr(machine, "_reserve_episode_intent", forbidden)
+    state = machine.run_once(_scan_at(12, 1, 2))
+    assert state["last_action"] == "entry_owner_deadline_expired"
+    assert state["status"] == "NO_TRADE"
+    assert not gateway.buy_calls and not state["owned_order_nos"]
+    reloaded = _machine(tmp_path, gateway)
+    reloaded.policy = machine.policy
+    reloaded.run_once(_scan_at(12, 1, 3))
+    assert not gateway.buy_calls

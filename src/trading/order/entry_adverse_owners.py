@@ -360,6 +360,16 @@ def episode_prepare(machine, leg, observed):
     return allowed
 
 
+def regular_episode_deadline(policy, signal_bar, observed):
+    bar = datetime.fromisoformat(signal_bar)
+    if bar.utcoffset() is None:
+        raise ValueError("naive_signal_bar")
+    return min(
+        datetime.combine(observed.date(), policy.scan_last_bar, tzinfo=KST) + timedelta(minutes=1),
+        bar + timedelta(minutes=int(policy.entry_valid_completed_bars) + 1),
+    )
+
+
 def episode_callback(machine, leg):
     state = leg.get(guard.KEY)
     if not isinstance(state, dict):
@@ -376,17 +386,10 @@ def episode_callback(machine, leg):
                 tzinfo=KST,
             )
         else:
-            bar = datetime.fromisoformat(machine._state["signal_bar"])
-            if bar.utcoffset() is None:
+            try:
+                owner_end = regular_episode_deadline(machine.policy, machine._state["signal_bar"], current)
+            except ValueError:
                 return False
-            owner_end = min(
-                datetime.combine(
-                    current.date(), machine.policy.scan_last_bar, tzinfo=KST
-                )
-                + timedelta(minutes=1),
-                bar
-                + timedelta(minutes=int(machine.policy.entry_valid_completed_bars) + 1),
-            )
         state["owner_deadline_ms"] = int(owner_end.timestamp() * 1000)
         return bool(
             current.date().isoformat() == state["signal_at"][:10]

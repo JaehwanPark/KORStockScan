@@ -899,6 +899,7 @@ def _ws_machine_route_payload(row: Any, *, now_ts: float) -> dict[str, Any]:
                 normalized["provider_trade_epoch"] = source.get("provider_trade_epoch")
                 normalized["provider_trade_time_precision_ms"] = source.get("provider_trade_time_precision_ms")
                 normalized["provider_trade_date_basis"] = source.get("provider_trade_date_basis")
+                normalized["widget_quote_fields"] = dict(source.get("widget_quote_fields") or {})
                 normalized.update(
                     {
                         "trade_price": _safe_int(source.get("trade_price")),

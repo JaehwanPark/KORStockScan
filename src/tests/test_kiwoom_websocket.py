@@ -843,6 +843,8 @@ def test_realtime_0b_stores_signed_trade_volume_primary_with_touch_provenance(
                             "item": "005930",
                             "values": {
                                 "10": "10110",
+                                "12": "-1.25",
+                                "18": "-9900",
                                 "15": "+120",
                                 "20": "090010",
                                 "9081": "1",
@@ -858,6 +860,7 @@ def test_realtime_0b_stores_signed_trade_volume_primary_with_touch_provenance(
     )
 
     latest = manager.get_latest_data("005930")
+    assert latest["realtime_type_snapshots_by_route"]["KRX|krx_only"]["0B"]["widget_quote_fields"] == {"change_pct": "-1.25", "low_price": "-9900"}
     tick = latest["recent_trade_ticks"][0]
     assert tick["dir"] == "BUY"
     assert tick["aggressor_source"] == "kiwoom_0b_signed_trade_volume"

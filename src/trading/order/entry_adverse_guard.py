@@ -244,9 +244,13 @@ def final_check(*, holder, clock, validate_owner, save):
         if (
             selected is None
             or selected["pin"] != state["pin"]
-            or validate_owner() is not True
         ):
             _skip(state, "SKIP_POLICY_OR_OWNER_CHANGED")
+            raise ValueError(state["action"])
+        if validate_owner() is not True:
+            deadline = state.get("owner_deadline_ms")
+            expired = type(deadline) is int and _ms(clock()) >= deadline
+            _skip(state, "SKIP_OWNER_DEADLINE" if expired else "SKIP_POLICY_OR_OWNER_CHANGED")
             raise ValueError(state["action"])
         snapshot, _ = load_live_dynamic_confirmation_source()
         now = clock()

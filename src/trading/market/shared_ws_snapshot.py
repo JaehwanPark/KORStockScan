@@ -146,10 +146,87 @@ def read_shared_widget_quote(context, *, now_ts, path=None):
                           ("provider_trade_epoch", "provider_trade_time_precision_ms", "provider_trade_date_basis")},
                       source_sha256=hashlib.sha256(json.dumps(types, sort_keys=True).encode()).hexdigest(),
                       snapshot_sha256=hashlib.sha256(raw).hexdigest(), snapshot_generated_at=generated)
+        result["widget_quote_fields"] = types["0B"].get("widget_quote_fields", {})
+        selected = next(r for r in stock["machine_confirmation_routes"].values()
+                        if r.get("realtime_types", {}).get("0B", {}).get("item") == item)
+        result["recent_trades"] = list(selected.get("recent_trades") or ())[:3]
     except (OSError, ValueError, KeyError, TypeError, IndexError, OverflowError, AttributeError, RecursionError) as exc:
         result["reason"] = str(exc) if isinstance(exc, ValueError) else type(exc).__name__ + ":" + str(exc)
     result["reader_elapsed_ms"] = round((time.monotonic() - started) * 1000, 3)
     return result
+
+
+def validate_widget_ws_receipt(receipt, *, context, now_ts):
+    """Recheck original field clocks after slow auxiliary/REST work."""
+    if (receipt.get("status") != "valid_ws_comparison_input"
+            or receipt.get("request_code") != context.request_code
+            or receipt.get("session") != context.name
+            or receipt["producer"]["process"] != process_generation(receipt["producer"]["process"]["pid"])):
+        raise ValueError("widget_ws_receipt_binding_invalid")
+    for stamp in receipt["source_clocks"].values():
+        if not 0 <= now_ts - stamp <= 20:
+            raise ValueError("widget_ws_source_stale_or_future")
+
+
+def select_widget_ws_inputs(context, transport, *, now_ts, require_trade_veto=False):
+    """Existing collector input selector. No request, recovery or order authority."""
+    mode = os.getenv("KORSTOCKSCAN_WIDGET_MARKET_DATA_SOURCE", "rest").strip().lower()
+    if mode == "rest":
+        return None
+    if mode != "ws":
+        raise RuntimeError("widget_market_data_source_invalid")
+    try:
+        validate_widget_ws_receipt(transport, context=context, now_ts=now_ts)
+        fields = transport["widget_quote_fields"]
+        low_raw = fields["low_price"]
+        if not isinstance(low_raw, str) or not re.fullmatch(r"[+-]?[0-9]+", low_raw.strip()):
+            raise ValueError("widget_ws_low_price_missing_or_invalid")
+        low = abs(int(low_raw))
+        values = transport["values"]
+        if not 0 < low <= values["current_price"]:
+            raise ValueError("widget_ws_low_price_conflict")
+        quote = {"cur_prc": values["current_price"], "low_pric": low,
+                 "source": "kiwoom_ws_0B", "source_item": transport["ws_request_code"]}
+        trade_payload = {}
+        if require_trade_veto:
+            change_raw = fields["change_pct"]
+            if not isinstance(change_raw, str) or not re.fullmatch(r"[+-]?[0-9]+(?:\.[0-9]+)?", change_raw.strip()):
+                raise ValueError("widget_ws_change_pct_missing_or_invalid")
+            change = float(change_raw)
+            if not math.isfinite(change):
+                raise ValueError("widget_ws_change_pct_invalid")
+            quote["flu_rt"] = change
+            trades = transport["recent_trades"]
+            if len(trades) != 3:
+                raise ValueError("widget_ws_trade_veto_history_missing")
+            seq = transport["source_sequences"]["0B"]
+            for i, row in enumerate(trades):
+                if (row.get("item") != transport["ws_request_code"]
+                        or row.get("transport_epoch") != transport["producer"]["transport_epoch"]
+                        or row.get("route_sequence") != seq - i
+                        or type(row.get("price")) is not int or row["price"] <= 0
+                        or type(row.get("received_at_ms")) is not int
+                        or row["received_at_ms"] > transport["source_clocks"]["0B"] * 1000 + 1
+                        or not 0 <= now_ts - row["received_at_ms"] / 1000 <= 20):
+                    raise ValueError("widget_ws_trade_veto_history_invalid")
+            if (abs(trades[0]["received_at_ms"] - transport["source_clocks"]["0B"] * 1000) > 1
+                    or any(a["received_at_ms"] < b["received_at_ms"] for a, b in zip(trades, trades[1:]))):
+                raise ValueError("widget_ws_trade_veto_endpoint_invalid")
+            trade_payload = {"cntr_infr": [{"cur_prc": r["price"]} for r in trades],
+                             "source": "kiwoom_ws_0B", "source_item": transport["ws_request_code"]}
+        qt = datetime.fromtimestamp(transport["source_clocks"]["0B"], KST)
+        bt = datetime.fromtimestamp(transport["source_clocks"]["0D"], KST)
+        receipt = {k: v for k, v in transport.items() if k not in {"census", "recent_trades"}}
+        bbo = {k: values[k] for k in ("best_bid", "best_ask", "best_bid_qty", "best_ask_qty")}
+        bbo.update(source="kiwoom_ws_0D", received_at=bt.isoformat(),
+                   age_sec=now_ts - bt.timestamp(), ws_source_receipt=receipt)
+        transport.update(mode="ws_input", selected_input="shared_ws_snapshot", input_adopted=True,
+                         comparison_status="ws_selected", same_observation_proven=False)
+        return quote, qt, bbo, bt, trade_payload
+    except (ValueError, KeyError, TypeError, OSError, IndexError, OverflowError, AttributeError) as exc:
+        reason = str(exc) if isinstance(exc, ValueError) else type(exc).__name__
+        transport.update(selection_reason=reason, selected_input="none", input_adopted=False)
+        raise RuntimeError("widget_ws_input_unavailable:" + reason) from exc
 
 
 def compare_widget_rest(transport, *, current_price, bbo, quote_received_at, bbo_received_at):
@@ -209,6 +286,8 @@ def attach_transport_census(owner, payload):
     bucket = owner._transport_census.setdefault(window, {
         "expected_comparisons": 0, "valid_ws": 0, "ws_source_gap": 0,
         "rest_not_observed": 0, "matched_fields": 0, "different_observations": 0,
+        "ws_selected": 0,
+        "ws_selection_gap": 0,
         "not_comparable_clock_gap": 0,
         "different_market_data_scope": 0, "ws_source_items": {},
         "producer_generation": generation, "producer_generation_mixed": False,
@@ -223,6 +302,8 @@ def attach_transport_census(owner, payload):
     bucket["expected_comparisons"] += 1
     bucket["valid_ws" if transport["status"] == "valid_ws_comparison_input" else "ws_source_gap"] += 1
     bucket[transport["comparison_status"]] += 1
+    if transport.get("selection_reason"):
+        bucket["ws_selection_gap"] += 1
     source_item = transport.get("ws_request_code", "unresolved")
     source_counts = bucket["ws_source_items"].setdefault(source_item, {"valid_ws": 0, "ws_source_gap": 0})
     source_counts["valid_ws" if transport["status"] == "valid_ws_comparison_input" else "ws_source_gap"] += 1
@@ -232,7 +313,7 @@ def attach_transport_census(owner, payload):
         consumer_process = process_generation(os.getpid())
     except (OSError, ValueError, IndexError):
         consumer_process = {"status": "process_provenance_unavailable"}
-    transport["census"] = {"scope": "process_local_comparison_not_adopted_input",
+    transport["census"] = {"scope": ("process_local_ws_input" if transport.get("input_adopted") else "process_local_comparison_not_adopted_input"),
         "schema": "widget_transport_census_source_bound_v3",
         "evaluation_count_basis": "once_per_reader_result",
         "consumer_process": consumer_process,

@@ -8,7 +8,7 @@ The generated state is for the Windows widget only.
 
 from __future__ import annotations
 
-from src.trading.market.shared_ws_snapshot import read_shared_widget_quote, compare_widget_rest, attach_transport_census
+from src.trading.market.shared_ws_snapshot import read_shared_widget_quote, compare_widget_rest, attach_transport_census, select_widget_ws_inputs
 
 import argparse
 import hashlib
@@ -1300,6 +1300,13 @@ def _source_quality(
     current_price: int,
 ) -> dict[str, Any]:
     issues: list[str] = []
+    if bbo.get("source") == "kiwoom_ws_0D":
+        from src.trading.market.shared_ws_snapshot import validate_widget_ws_receipt
+        try:
+            validate_widget_ws_receipt(bbo["ws_source_receipt"], context=context,
+                                       now_ts=_as_kst(observed_at).timestamp())
+        except (ValueError, KeyError, TypeError, OSError, IndexError, OverflowError, AttributeError):
+            issues.append("bbo_ws_receipt_invalid_or_stale")
     meta = bbo.get("_kiwoom_source_meta")
     if isinstance(meta, dict) and (meta or bbo.get("rest_receipt_metadata_present")):
         from src.trading.market.quote_consistency import build_rest_market_data_health
@@ -4547,30 +4554,38 @@ class SamsungWidgetCollector:
                 self._external_cache = external_points
             self._last_external_fetch = epoch
 
-        quote = client.post(
-            "/api/dostk/stkinfo", "ka10001", {"stk_cd": context.request_code}
+        ws_inputs = select_widget_ws_inputs(
+            context, self._transport_comparison, now_ts=now.timestamp(),
+            require_trade_veto=True,
         )
-        quote_received_at = client.response_received_at(
-            api_id="ka10001", request_code=context.request_code
-        )
-        current_price = _positive_int(quote.get("cur_prc"))
-        if current_price is None:
-            raise RuntimeError("kiwoom_price_missing")
-        bbo_payload = client.post(
-            "/api/dostk/mrkcond", "ka10004", {"stk_cd": context.request_code}
-        )
-        bbo_received_at = client.response_received_at(
-            api_id="ka10004", request_code=context.request_code
-        )
-        bbo = _parse_bbo(bbo_payload, bbo_received_at)
-        compare_widget_rest(self._transport_comparison, current_price=current_price, bbo=bbo,
-                            quote_received_at=quote_received_at, bbo_received_at=bbo_received_at)
-        trade_payload = self._optional_post(
-            client,
-            "/api/dostk/stkinfo",
-            "ka10003",
-            {"stk_cd": context.request_code},
-        )
+        if ws_inputs is not None:
+            quote, quote_received_at, bbo, bbo_received_at, trade_payload = ws_inputs
+            current_price = quote["cur_prc"]
+        else:
+            quote = client.post(
+                "/api/dostk/stkinfo", "ka10001", {"stk_cd": context.request_code}
+            )
+            quote_received_at = client.response_received_at(
+                api_id="ka10001", request_code=context.request_code
+            )
+            current_price = _positive_int(quote.get("cur_prc"))
+            if current_price is None:
+                raise RuntimeError("kiwoom_price_missing")
+            bbo_payload = client.post(
+                "/api/dostk/mrkcond", "ka10004", {"stk_cd": context.request_code}
+            )
+            bbo_received_at = client.response_received_at(
+                api_id="ka10004", request_code=context.request_code
+            )
+            bbo = _parse_bbo(bbo_payload, bbo_received_at)
+            compare_widget_rest(self._transport_comparison, current_price=current_price, bbo=bbo,
+                                quote_received_at=quote_received_at, bbo_received_at=bbo_received_at)
+            trade_payload = self._optional_post(
+                client,
+                "/api/dostk/stkinfo",
+                "ka10003",
+                {"stk_cd": context.request_code},
+            )
 
         minute_key = now.strftime("%Y%m%d%H%M")
         if minute_key != self._last_minute_fetch or not self._minute_cache:

@@ -2153,6 +2153,20 @@ class SamsungRegularTwoLegMachine:
             )
 
     def _submit_planned_buys(self, now: datetime) -> None:
+        # Keep the existing owner deadline, but reject before market-data I/O
+        # or an owner-registry reservation when the signal is already expired.
+        if self._state.get("signal_bar") and now >= entry_adverse_owners.regular_episode_deadline(
+            self.policy, self._state["signal_bar"], now
+        ):
+            for leg in self._state.get("legs", []):
+                if leg.get("status") == "PLANNED":
+                    leg["status"] = "NO_FILL"
+                    state = leg.get(entry_adverse_guard.KEY)
+                    if isinstance(state, dict):
+                        state["action"] = "SKIP_OWNER_DEADLINE"
+                    self._record(now, "entry_owner_deadline_expired", leg_id=leg["leg_id"])
+            self._save()
+            return
         adverse_ready = {
             leg["leg_id"]
             for leg in self._state.get("legs", [])
@@ -2469,6 +2483,15 @@ class SamsungRegularTwoLegMachine:
             signal = self.policy.evaluate(list(source.bars))
         if signal is None:
             self._record(now, "bar_evaluated_no_signal", bar=latest_iso)
+            return self.snapshot()
+        owner_end = entry_adverse_owners.regular_episode_deadline(self.policy, latest_iso, now)
+        if now >= owner_end:
+            self._state["pending_entry_confirmation"] = None
+            if now >= datetime.combine(now.date(), self.policy.scan_last_bar, tzinfo=KST) + timedelta(minutes=1):
+                self._state["status"] = "NO_TRADE"
+            self._record(now, "entry_owner_deadline_expired", signal_bar=latest_iso,
+                         owner_deadline=owner_end.isoformat())
+            self._save()
             return self.snapshot()
         source_owner = str(self.ownership_source(self.policy.symbol) or "")
         plans = self.policy.entry_legs(signal.signal_bar.close_price)

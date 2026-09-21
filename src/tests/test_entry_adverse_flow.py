@@ -516,3 +516,15 @@ def test_malformed_machine_route_source_returns_gap_without_fallback(payload):
     result = evaluate_machine_entry_payload(snapshot=snapshot(NOW), payload=payload, cutoff_ms=int(NOW.timestamp()*1000))
     assert result['action'] == 'SOURCE_UNAVAILABLE'
     assert result['reason'] == 'machine_payload_market_route_missing_or_conflicting'
+
+
+def test_expired_owner_is_distinct_from_policy_change(pin, monkeypatch):
+    monkeypatch.setattr(guard, "load_live_dynamic_confirmation_source", lambda: (tape(adverse=False), "ready"))
+    holder = {}
+    assert prepare(holder)
+    def owner():
+        holder[guard.KEY]["owner_deadline_ms"] = int(NOW.timestamp()*1000)
+        return False
+    with pytest.raises(guard.EntryNotSent, match="SKIP_OWNER_DEADLINE"):
+        guard.final_check(holder=holder, clock=lambda: NOW, validate_owner=owner, save=lambda: None)
+    assert holder[guard.KEY]["action"] == "SKIP_OWNER_DEADLINE"

@@ -4485,6 +4485,12 @@ class KiwoomWSManager:
                                         "route_sequence": route_sequence,
                                     }
                                     if real_type == "0B":
+                                        # Keep official FID12 (%) and FID18 (signed KRW)
+                                        # with this exact item/epoch/receive clock.
+                                        realtime_snapshot["widget_quote_fields"] = {
+                                            "change_pct": values.get("12"),
+                                            "low_price": values.get("18"),
+                                        }
                                         last_trade = target.get("last_trade_tick")
                                         last_trade = (
                                             last_trade

@@ -8,7 +8,7 @@ cache and never issues tokens, reads accounts, or submits orders.
 
 from __future__ import annotations
 
-from src.trading.market.shared_ws_snapshot import read_shared_widget_quote, compare_widget_rest, attach_transport_census
+from src.trading.market.shared_ws_snapshot import read_shared_widget_quote, compare_widget_rest, attach_transport_census, select_widget_ws_inputs
 
 import argparse
 import time
@@ -1044,24 +1044,32 @@ class HanwhaOceanWidgetCollector:
             return payload
 
         client = self._read_only_client()
-        quote = client.post(
-            "/api/dostk/stkinfo", "ka10001", {"stk_cd": contract.HANWHA_OCEAN_CODE}
+        ws_inputs = select_widget_ws_inputs(
+            context, self._transport_comparison, now_ts=now.timestamp(),
+            require_trade_veto=False,
         )
-        quote_received_at = client.response_received_at(
-            api_id="ka10001", request_code=context.request_code
-        )
-        current_price = _positive_int(quote.get("cur_prc"))
-        if current_price is None:
-            raise RuntimeError("kiwoom_price_missing")
-        bbo_payload = client.post(
-            "/api/dostk/mrkcond", "ka10004", {"stk_cd": contract.HANWHA_OCEAN_CODE}
-        )
-        bbo_received_at = client.response_received_at(
-            api_id="ka10004", request_code=context.request_code
-        )
-        bbo = _parse_bbo(bbo_payload, bbo_received_at)
-        compare_widget_rest(self._transport_comparison, current_price=current_price, bbo=bbo,
-                            quote_received_at=quote_received_at, bbo_received_at=bbo_received_at)
+        if ws_inputs is not None:
+            quote, quote_received_at, bbo, bbo_received_at, trade_payload = ws_inputs
+            current_price = quote["cur_prc"]
+        else:
+            quote = client.post(
+                "/api/dostk/stkinfo", "ka10001", {"stk_cd": contract.HANWHA_OCEAN_CODE}
+            )
+            quote_received_at = client.response_received_at(
+                api_id="ka10001", request_code=context.request_code
+            )
+            current_price = _positive_int(quote.get("cur_prc"))
+            if current_price is None:
+                raise RuntimeError("kiwoom_price_missing")
+            bbo_payload = client.post(
+                "/api/dostk/mrkcond", "ka10004", {"stk_cd": contract.HANWHA_OCEAN_CODE}
+            )
+            bbo_received_at = client.response_received_at(
+                api_id="ka10004", request_code=context.request_code
+            )
+            bbo = _parse_bbo(bbo_payload, bbo_received_at)
+            compare_widget_rest(self._transport_comparison, current_price=current_price, bbo=bbo,
+                                quote_received_at=quote_received_at, bbo_received_at=bbo_received_at)
 
         minute_key = now.strftime("%Y%m%d%H%M")
         if minute_key != self._last_minute_fetch or not self._minute_cache:

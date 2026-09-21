@@ -25,7 +25,7 @@ def _shared_widget_fixture(tmp_path, monkeypatch):
     common = dict(item="005930", market_suffix="", market_route="krx_only", effective_venue="KRX",
                   transport_epoch=1, route_sequence=2, observed_epoch=now - 0.2)
     row = {"market_data_transport_epoch": 1, "realtime_type_snapshots_by_route": {
-        "KRX|krx_only": {"0B": {**common, "trade_price": 10000},
+        "KRX|krx_only": {"0B": {**common, "trade_price": 10000, "widget_quote_fields": {"low_price": "-9800", "change_pct": "-1.25"}},
             "0D": {**common, "orderbook": {"asks": [{"price": 10010, "volume": 3}],
                                            "bids": [{"price": 9990, "volume": 5}]}}}}}
     publisher.write_ws_snapshot({"005930": row}, now_ts=now,
@@ -124,6 +124,7 @@ def test_shared_widget_writer_to_independent_reader_preserves_clocks(tmp_path, m
     path, context, now, snapshot = _shared_widget_fixture(tmp_path, monkeypatch)
     result = read_shared_widget_quote(context, now_ts=now + 1, path=path)
     assert result["status"] == "valid_ws_comparison_input", result
+    assert result["widget_quote_fields"] == {"low_price": "-9800", "change_pct": "-1.25"}
     assert result["values"]["best_bid_qty"] == 5
     assert result["source_clocks"] == {"0B": now - .2, "0D": now - .2}
     code = """import json,sys
@@ -872,3 +873,60 @@ def test_safety_exit_does_not_block_on_divergence_or_late_rest(monkeypatch):
     assert stale_rest.entry_blocked is False
     assert stale_rest.safety_exit_allowed is True
     assert stale_rest.executable_sell_price > 0
+
+
+def _adoptable_widget_transport(now, symbol="005930", price=98500, low=98000):
+    import os
+    from src.trading.market.shared_ws_snapshot import process_generation
+    epoch = now.timestamp()
+    return dict(status="valid_ws_comparison_input", request_code=symbol,
+        ws_request_code=symbol + "_AL", session="KRX_REGULAR", runtime_effect=False,
+        comparison_status="rest_not_observed", source_sha256="b" * 64,
+        producer=dict(process=process_generation(os.getpid()), transport_epoch=1, source_commit="a" * 40),
+        source_clocks={"0B": epoch - .2, "0D": epoch - .1},
+        source_sequences={"0B": 3, "0D": 5},
+        values=dict(current_price=price, best_bid=price-100, best_ask=price,
+                    best_bid_qty=1000, best_ask_qty=1200),
+        widget_quote_fields=dict(low_price=str(low), change_pct="-1.25"),
+        recent_trades=[dict(item=symbol+"_AL", transport_epoch=1, route_sequence=3-i,
+            received_at_ms=int((epoch-.2-i)*1000), price=price+i*100) for i in range(3)])
+
+
+def test_widget_ws_adoption_preserves_fields_clocks_and_negative_veto(monkeypatch):
+    from datetime import datetime, time
+    from types import SimpleNamespace
+    from zoneinfo import ZoneInfo
+    from src.trading.market.shared_ws_snapshot import select_widget_ws_inputs, validate_widget_ws_receipt
+    from src.engine.monitoring.samsung_widget_advisory import _recent_trade_negative_veto
+    now = datetime(2026, 9, 21, 10, tzinfo=ZoneInfo("Asia/Seoul"))
+    c = SimpleNamespace(request_code="005930", name="KRX_REGULAR")
+    t = _adoptable_widget_transport(now)
+    monkeypatch.setenv("KORSTOCKSCAN_WIDGET_MARKET_DATA_SOURCE", "ws")
+    q, qt, b, bt, trades = select_widget_ws_inputs(c, t, now_ts=now.timestamp(), require_trade_veto=True)
+    assert q["low_pric"] == 98000 and q["flu_rt"] == -1.25
+    assert qt.timestamp() == now.timestamp()-.2 and bt.timestamp() == now.timestamp()-.1
+    assert _recent_trade_negative_veto(trades) is True
+    assert b["source"] == "kiwoom_ws_0D" and "_kiwoom_source_meta" not in b
+    assert t["selected_input"] == "shared_ws_snapshot"
+    with pytest.raises(ValueError, match="stale"):
+        validate_widget_ws_receipt(b["ws_source_receipt"], context=c, now_ts=now.timestamp()+21)
+
+
+@pytest.mark.parametrize("broken", ["low", "change", "trade", "stale", "producer"])
+def test_widget_ws_adoption_rejects_partial_sources(monkeypatch, broken):
+    from datetime import datetime
+    from types import SimpleNamespace
+    from zoneinfo import ZoneInfo
+    from src.trading.market.shared_ws_snapshot import select_widget_ws_inputs
+    now = datetime(2026, 9, 21, 10, tzinfo=ZoneInfo("Asia/Seoul"))
+    c = SimpleNamespace(request_code="005930", name="KRX_REGULAR")
+    t = _adoptable_widget_transport(now)
+    if broken == "low": t["widget_quote_fields"]["low_price"] = None
+    if broken == "change": t["widget_quote_fields"]["change_pct"] = "nan"
+    if broken == "trade": t["recent_trades"][1]["route_sequence"] = 99
+    if broken == "stale": t["source_clocks"]["0D"] -= 21
+    if broken == "producer": t["producer"]["process"]["pid"] = -1
+    monkeypatch.setenv("KORSTOCKSCAN_WIDGET_MARKET_DATA_SOURCE", "ws")
+    with pytest.raises(RuntimeError, match="widget_ws_input_unavailable"):
+        select_widget_ws_inputs(c, t, now_ts=now.timestamp(), require_trade_veto=True)
+    assert t["selected_input"] == "none"
