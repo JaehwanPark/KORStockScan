@@ -120,6 +120,11 @@ def _atomic_write_json(path: Path, payload: dict) -> None:
             os.fsync(handle.fileno())
         os.chmod(temporary_name, 0o600)
         os.replace(temporary_name, path)
+        directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
     finally:
         Path(temporary_name).unlink(missing_ok=True)
 
@@ -163,9 +168,21 @@ def validate(bundle: dict, *, target_date: str) -> None:
     if (
         source < "2026-06-05"
         or publication < source
-        or next_target(publication) != target_date
+        or (not bundle.get("strategy_activation") and next_target(publication) != target_date)
+        or (bundle.get("strategy_activation") and publication != target_date)
     ):
         raise ValueError("machine_bundle_date_invalid")
+    if "strategy_activation" in bundle:
+        activation = bundle["strategy_activation"]
+        try:
+            effective = datetime.fromisoformat(activation["effective_from"])
+            if (activation["schema"] != "main_entry_activation_v2"
+                or activation["lifetime"] != "until_superseded"
+                or effective.tzinfo is None or effective.astimezone(KST).date().isoformat() != target_date
+                or effective > datetime.now(KST)):
+                raise ValueError("strategy_activation_contract_invalid")
+        except (TypeError, KeyError) as exc:
+            raise ValueError("strategy_activation_contract_invalid") from exc
     machine_source = bundle.get("machine_evaluation_source")
     if machine_source is not None and (
         not isinstance(machine_source, dict)
@@ -505,6 +522,10 @@ def load(*, data_root: Path, target_date: str) -> dict | None:
         return None
     bundle = _read(path)
     validate(bundle, target_date=target_date)
+    return _validate_bundle_sources(bundle, data_root)
+
+
+def _validate_bundle_sources(bundle: dict, data_root: Path) -> dict:
     source_path = root(data_root) / "sources" / f"{bundle['source_file_sha256']}.json"
     if (
         _source_hash(str(source_path), _signature(source_path))
@@ -543,6 +564,9 @@ def load_effective(*, data_root: Path, target_date: str) -> dict | None:
     Do not relabel the original policy date or hide a corrupt dated policy.
     Market/source freshness is still checked independently at every decision.
     """
+    current = _load_current(data_root, target_date)
+    if current is not None:
+        return current
     exact = load(data_root=data_root, target_date=target_date)
     if exact is not None:
         return exact
@@ -1259,11 +1283,154 @@ def publish(
         return load(data_root=data_root, target_date=target)
 
 
+def activate_strategy_report(source_path: Path, *, data_root: Path, now: datetime | None = None) -> dict:
+    """Publish and select a validated generation immediately, under parent CAS.
+
+    Failed/missing candidates leave the current receipt untouched. No bot, order
+    or holding state is changed by this publisher.
+    """
+    from src.engine.scalping import ai_action_outcome_calibration as calibration
+    from src.engine.scalping.entry_strategy_policy import promotion_errors
+    current = (now or datetime.now(KST)).astimezone(KST)
+    day = current.date().isoformat()
+    source = _read(source_path)
+    if (not calibration._artifact_content_sha256_valid(source)
+        or source.get("report_scope") != "main_mechanistic_entry"
+        or source.get("noncompact_sections_refreshed") is not True
+        or not "2026-06-05" <= str(source.get("target_date")) <= day):
+        raise ValueError("strategy_activation_source_invalid")
+    policy_root = root(data_root)
+    policy_root.mkdir(parents=True, exist_ok=True)
+    with (policy_root / "publisher.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        previous = load_effective(data_root=data_root, target_date=day)
+        if previous is None:
+            raise ValueError("strategy_activation_incumbent_missing")
+        evaluations = source.get("strategy_refinements_by_scope") or {}
+        from src.engine.scalping.entry_strategy_policy import select_report_candidate
+        selected = select_report_candidate(source)
+        if selected is None or selected[1].get('promotion_pass') is not True:
+            return dict(status="incumbent_carry", bundle_sha256=previous["bundle_sha256"],
+                        reason="no_qualified_strategy_successor", dispositions={s: r.get("status") for s,r in evaluations.items()})
+        # One train-selected scope changes; other market/custody owners carry.
+        # Never assemble a bundle from whichever leaves/scopes won holdout.
+        scope, result = selected
+        scoped = for_cohort(previous, tuple(scope.split("|")))
+        if scoped is None:
+            raise ValueError("strategy_activation_scope_unadopted")
+        candidate = result.get("candidate")
+        if (previous.get('strategy_activation') or {}).get('candidate_sha256') == digest(candidate):
+            return dict(status='already_active', bundle_sha256=previous['bundle_sha256'])
+        if any(day > source['target_date'] for split in ('train', 'holdout')
+               for day in ((candidate or {}).get('evidence', {}).get(split) or {}).get('source_dates', [])):
+            raise ValueError('strategy_activation_future_source')
+        errors = promotion_errors(candidate, scoped["machine_policy"], tuple(scope.split("|")))
+        if errors:
+            raise ValueError("strategy_activation_rejected:" + ",".join(errors))
+        # An already consumed holdout cannot be reused for another selection.
+        consumption = policy_root / "holdouts" / (digest([scope, candidate['evidence']['holdout']['opportunity_ids']]) + '.json')
+        if consumption.exists() and _read(consumption).get('policy_sha256') != candidate['policy_sha256']:
+            raise ValueError('strategy_holdout_already_consumed')
+        bundle = copy.deepcopy(previous)
+        source_bytes = source_path.read_bytes()
+        source_hash = hashlib.sha256(source_bytes).hexdigest()
+        stored = policy_root / "sources" / f"{source_hash}.json"
+        # Source content is checked again after reading to avoid a producer race.
+        if json.loads(source_bytes) != source:
+            raise ValueError("strategy_activation_source_changed")
+        stored.parent.mkdir(parents=True, exist_ok=True)
+        if not stored.exists():
+            with stored.open('xb') as handle:
+                handle.write(source_bytes)
+                handle.flush()
+                os.fsync(handle.fileno())
+        machine = copy.deepcopy(candidate['policy'])
+        if bundle.get('all_continuous_adopted'):
+            bundle['scope_policies'][scope]['machine_policy'] = machine
+        if scope == 'KRX|KRX_REGULAR':
+            bundle['machine_policy'] = machine
+        bundle.update(target_date=day, publication_date=day, source_date=source['target_date'],
+            source_file_sha256=source_hash, source_artifact_sha256=source['artifact_content_sha256'],
+            previous_bundle_sha256=previous['bundle_sha256'], generated_at=current.isoformat(),
+            machine_disposition='evidence_qualified_strategy_update',
+            strategy_activation=dict(schema='main_entry_activation_v2', effective_from=current.isoformat(),
+                lifetime='until_superseded', scope=scope, candidate_sha256=digest(candidate),
+                parent_bundle_sha256=previous['bundle_sha256'],
+                parent_machine_sha256=digest(scoped['machine_policy'])))
+        bundle['machine_evaluation_source'] = dict(source_date=source['target_date'],
+            file_sha256=source_hash, artifact_content_sha256=source['artifact_content_sha256'],
+            report_scope=source['report_scope'])
+        bundle.pop('bundle_sha256', None)
+        bundle['bundle_sha256'] = digest(bundle)
+        validate(bundle, target_date=day)
+        _atomic_write_json(policy_root / 'generations' / f"{previous['bundle_sha256']}.json", previous)
+        _atomic_write_json(policy_root / 'generations' / f"{bundle['bundle_sha256']}.json", bundle)
+        # Durable immutable body and source precede the atomic current receipt.
+        _atomic_write_json(consumption, dict(policy_sha256=candidate['policy_sha256'],
+            bundle_sha256=bundle['bundle_sha256'], consumed_at=current.isoformat()))
+        receipt = dict(schema='main_entry_current_v2', bundle_sha256=bundle['bundle_sha256'],
+            previous_bundle_sha256=previous['bundle_sha256'], effective_from=current.isoformat())
+        receipt['receipt_sha256'] = digest(receipt)
+        _atomic_write_json(policy_root / 'current.json', receipt)
+        return dict(status='activated', **receipt)
+
+
+def _load_current(data_root: Path, target_date: str) -> dict | None:
+    path = root(data_root) / 'current.json'
+    if not path.exists():
+        return None
+    receipt = _read(path)
+    if (receipt.get('schema') != 'main_entry_current_v2'
+        or receipt.get('receipt_sha256') != digest({k:v for k,v in receipt.items() if k != 'receipt_sha256'})
+        or re.fullmatch(r'[0-9a-f]{64}', str(receipt.get('bundle_sha256'))) is None):
+        raise ValueError('strategy_current_receipt_invalid')
+    bundle = _read(root(data_root) / 'generations' / f"{receipt['bundle_sha256']}.json")
+    validate(bundle, target_date=bundle['target_date'])
+    if bundle['bundle_sha256'] != receipt['bundle_sha256']:
+        raise ValueError('strategy_current_generation_mismatch')
+    activation = bundle.get('strategy_activation') or {}
+    if (activation.get('effective_from') != receipt.get('effective_from')
+        or activation.get('parent_bundle_sha256') != receipt.get('previous_bundle_sha256')):
+        raise ValueError('strategy_current_effective_time_mismatch')
+    _validate_bundle_sources(bundle, data_root)
+    source = _read(root(data_root) / 'sources' / f"{bundle['source_file_sha256']}.json")
+    parent_hash = activation.get('parent_bundle_sha256')
+    if re.fullmatch(r'[0-9a-f]{64}', str(parent_hash)) is None:
+        raise ValueError('strategy_parent_hash_invalid')
+    parent = _read(root(data_root) / 'generations' / f'{parent_hash}.json')
+    validate(parent, target_date=parent['target_date'])
+    if parent['bundle_sha256'] != parent_hash:
+        raise ValueError('strategy_parent_generation_mismatch')
+    scope = activation['scope']
+    candidate = (source.get('strategy_refinements_by_scope', {}).get(scope) or {}).get('candidate')
+    from src.engine.scalping.entry_strategy_policy import promotion_errors
+    old = for_cohort(parent, tuple(scope.split('|')))
+    new = for_cohort(bundle, tuple(scope.split('|')))
+    if (not old or not new or promotion_errors(candidate, old['machine_policy'], tuple(scope.split('|')))
+        or digest(candidate) != activation.get('candidate_sha256')
+        or candidate['policy'] != new['machine_policy']):
+        raise ValueError('strategy_current_economic_binding_invalid')
+    return bundle if target_date >= bundle['target_date'] else None
+
+
+def current_strategy_receipt(*, data_root: Path) -> dict:
+    """Read-only current selection evidence; never claims PID consumption."""
+    if not (root(data_root) / 'current.json').exists():
+        return dict(status='dated_incumbent', actual_pid_consumed=False)
+    current = _load_current(data_root, datetime.now(KST).date().isoformat())
+    if current is None:
+        raise ValueError('strategy_current_not_effective')
+    return dict(status='active_generation_valid', bundle_sha256=current['bundle_sha256'],
+        activation=current['strategy_activation'], actual_pid_consumed=False,
+        generation_path=str(root(data_root) / 'generations' / f"{current['bundle_sha256']}.json"))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--data-root", type=Path, default=Path("data"))
     parser.add_argument("--bootstrap", action="store_true")
+    parser.add_argument("--activate-now", action="store_true")
     parser.add_argument("--replace-initial-role", action="store_true")
     parser.add_argument("--adopt-all-continuous", action="store_true")
     parser.add_argument(
@@ -1272,6 +1439,9 @@ def main() -> int:
         help="Explicit initial adoption; later dated succession is automatic",
     )
     args = parser.parse_args()
+    if args.activate_now:
+        print(json.dumps(activate_strategy_report(args.source, data_root=args.data_root)))
+        return 0
     bundle = publish(
         args.source,
         data_root=args.data_root,

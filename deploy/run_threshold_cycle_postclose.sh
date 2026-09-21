@@ -1898,7 +1898,7 @@ if [ "$RUN_AI_DECISION_ACTION_OUTCOME_CALIBRATION" = "true" ] || [ "$RUN_AI_DECI
   run_postclose_cmd env PYTHONPATH=. "$VENV_PY" -m src.engine.scalping.ai_action_outcome_calibration \
     --target-date "$TARGET_DATE" --data-root "$PROJECT_DIR/data" --machine-only --write \
     --publication-date "$POLICY_PUBLICATION_DATE" \
-    --require-policy-publication --print-summary
+    --require-policy-publication --activate-now --print-summary
   wait_for_json_artifact \
     "$PROJECT_DIR/data/report/ai_decision_action_outcome_calibration/ai_decision_action_outcome_calibration_${TARGET_DATE}.json" \
     "main_mechanistic_entry_full_evaluation"

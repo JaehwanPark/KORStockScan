@@ -7,6 +7,8 @@ BUY authority, choose an order price/quantity, or bypass broker/safety guards.
 
 from __future__ import annotations
 
+from src.engine.scalping.entry_strategy_policy import knob
+
 import copy
 import hashlib
 import json
@@ -645,13 +647,17 @@ def _local_breakout(bars: list[dict[str, Any]]) -> dict[str, Any]:
     This is a completed-bar event, not a reconstructed intrabar trade time.
     No new high after that breakout is allowed to move its resistance line.
     """
+    lookback = knob("breakout_lookback", 10)
+    window = knob("breakout_event_window", 3)
+    failure_closes = knob("breakout_failure_closes", 2)
+    tolerance = knob("breakout_tolerance_ticks", 0)
     result = {"version": LOCAL_BREAKOUT_VERSION, "status": "insufficient",
-              "bar_time_precision": "1m", "lookback_bars": 10, "event_window_bars": 3,
+              "bar_time_precision": "1m", "lookback_bars": lookback, "event_window_bars": window,
               "episode_scope": "last_three_completed_bars_only"}
     active = [bar for bar in bars if not bar.get("forming")]
-    if len(active) < 11:
+    if len(active) < lookback + 1:
         return result
-    tail = active[-13:]
+    tail = active[-(lookback + window):]
     if any(not isinstance(b.get("dt"), datetime) for b in tail):
         return result
     if any(b["dt"].date() != tail[-1]["dt"].date() for b in tail) or any(
@@ -663,19 +669,22 @@ def _local_breakout(bars: list[dict[str, Any]]) -> dict[str, Any]:
            for b in tail):
         return result
     result["status"] = "no_confirmed_breakout"
-    for index in range(max(10, len(active) - 3), len(active)):
-        prior, event = active[index - 10:index], active[index]
+    for index in range(max(lookback, len(active) - window), len(active)):
+        prior, event = active[index - lookback:index], active[index]
         resistance = max(b["h"] for b in prior)
         if event["c"] <= resistance:
             continue
         support = min(b["l"] for b in prior)
         after = active[index + 1:]
-        below = [b for b in after if b["c"] < resistance]
-        failed = any(b["c"] < support for b in after)
+        from src.trading.order.tick_utils import get_tick_size
+        resistance_floor = resistance - tolerance * get_tick_size(resistance)
+        support_floor = support - tolerance * get_tick_size(support)
+        below = [b for b in after if b["c"] < resistance_floor]
+        failed = any(b["c"] < support_floor for b in after)
         # The first return is unresolved; two consecutive completed closes
         # below the SAME line corroborate failure without a session-high proxy.
-        failed = failed or any(a["c"] < resistance and b["c"] < resistance
-                               for a, b in zip(after, after[1:]))
+        failed = failed or any(all(b["c"] < resistance_floor for b in after[i:i + failure_closes])
+                               for i in range(len(after) - failure_closes + 1))
         source = [[b["dt"].isoformat(), b["o"], b["h"], b["l"], b["c"], b["v"]]
                   for b in prior + [event]]
         source_hash = hashlib.sha256(json.dumps(source, separators=(",", ":")).encode()).hexdigest()
@@ -829,11 +838,11 @@ def _structure(bars: list[dict[str, Any]], *, local_breakout: bool = False) -> d
         volume_direction_alignment = "forming_partial_not_comparable"
     elif volume_ratio is None or short_return is None:
         volume_direction_alignment = "not_available"
-    elif volume_ratio >= 1.1 and short_return > 0:
+    elif volume_ratio >= knob("structure_volume_confirm", 1.1) and short_return > 0:
         volume_direction_alignment = "bullish_confirmed"
-    elif volume_ratio >= 1.1 and short_return < 0:
+    elif volume_ratio >= knob("structure_volume_confirm", 1.1) and short_return < 0:
         volume_direction_alignment = "bearish_confirmed"
-    elif volume_ratio < 0.8 and abs(short_return) >= 0.1:
+    elif volume_ratio < knob("structure_volume_divergence", 0.8) and abs(short_return) >= knob("structure_divergence_return_pct", 0.1):
         volume_direction_alignment = "price_volume_divergence"
     else:
         volume_direction_alignment = "neutral"
@@ -845,13 +854,13 @@ def _structure(bars: list[dict[str, Any]], *, local_breakout: bool = False) -> d
         and prior_high > 0
         and max((bar["h"] for bar in active[-3:]), default=0) >= prior_high
         and latest_close < prior_high
-        and (upper_wick_ratio >= 0.35 or (peak_drawdown or 0.0) <= -0.25)
+        and (upper_wick_ratio >= knob("structure_failure_wick", 0.35) or (peak_drawdown or 0.0) <= knob("structure_failure_drawdown_pct", -0.25))
     ):
         regime = "failed_breakout"
     elif len(active) >= 10 and lower_highs and (long_slope or 0.0) < 0:
         regime = "lower_high_distribution"
     elif (
-        len(active) >= 10 and (long_slope or 0.0) < -0.03 and (short_return or 0.0) > 0
+        len(active) >= 10 and (long_slope or 0.0) < knob("structure_bounce_slope", -0.03) and (short_return or 0.0) > 0
     ):
         regime = "downtrend_bounce"
     elif prior_high > 0 and latest_close > prior_high and (short_return or 0.0) > 0:
@@ -859,8 +868,8 @@ def _structure(bars: list[dict[str, Any]], *, local_breakout: bool = False) -> d
     elif (
         len(active) >= 5
         and (long_slope or slopes["5"] or 0.0) > 0
-        and -0.6 <= (short_return or 0.0) <= 0.25
-        and (peak_drawdown or 0.0) > -1.2
+        and knob("structure_pullback_return_min", -0.6) <= (short_return or 0.0) <= knob("structure_pullback_return_max", 0.25)
+        and (peak_drawdown or 0.0) > knob("structure_pullback_drawdown_pct", -1.2)
     ):
         regime = "healthy_pullback"
     else:
@@ -1280,7 +1289,16 @@ def build_session_candle_source(
         minute_bar_source_api_id=source_api_id,
     )
     build_ms = int((time.perf_counter() - started) * 1000)
+    strategy_source = {}
+    if local_breakout:
+        from src.engine.scalping.entry_strategy_policy import digest as strategy_digest
+        body = dict(observed_at=now.isoformat(), bars=[
+            {k: (v.isoformat() if isinstance(v, datetime) else v)
+             for k, v in bar.items() if k in {"dt", "o", "h", "l", "c", "v", "forming", "partial_volume"}}
+            for bar in completed_session])
+        strategy_source["strategy_completed_bars"] = dict(body=body, sha256=strategy_digest(body))
     return {
+        **strategy_source,
         "schema": SOURCE_SCHEMA,
         "venue": venue_value,
         "session": session_value,

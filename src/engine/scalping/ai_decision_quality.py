@@ -7,6 +7,8 @@ thresholds, prices, quantities, broker guards, safety guards, or bot state.
 
 from __future__ import annotations
 
+from src.engine.scalping.entry_strategy_policy import knob
+
 import argparse
 import base64
 import fcntl
@@ -5536,7 +5538,7 @@ def _entry_contract_facts(exact_payload: Any) -> dict[str, bool]:
         (_window_value(slopes, horizon) or 0) > 0 for horizon in structural_horizons
     )
     long_horizon_structural_edge_floor = bool(
-        positive_return_count >= 3 and positive_slope_count >= 2
+        positive_return_count >= knob("structural_positive_returns", 3) and positive_slope_count >= knob("structural_positive_slopes", 2)
     )
     completed_bar_count = int(_number(context.get("completed_bar_count")) or 0)
     if completed_bar_count <= 0:
@@ -5565,18 +5567,18 @@ def _entry_contract_facts(exact_payload: Any) -> dict[str, bool]:
     early_session_structural_edge_floor = bool(
         completed_bar_count >= 10
         and len(available_early_returns) >= 3
-        and sum(value > 0 for value in available_early_returns) >= 3
-        and not any(value <= -0.5 for value in available_early_returns)
+        and sum(value > 0 for value in available_early_returns) >= knob("early_positive_returns", 3)
+        and not any(value <= knob("early_return_floor_pct", -0.5) for value in available_early_returns)
         and len(available_early_slopes) >= 3
-        and sum(value > 0 for value in available_early_slopes) >= 3
+        and sum(value > 0 for value in available_early_slopes) >= knob("early_positive_slopes", 3)
         and regime in {"breakout", "trend", "continuation"}
         and alignment == "positive"
         and high_direction in {"up", "up_or_flat"}
         and low_direction in {"up", "up_or_flat"}
         and peak_drawdown is not None
-        and peak_drawdown > -1.5
+        and peak_drawdown > knob("early_drawdown_floor_pct", -1.5)
         and volume_ratio is not None
-        and volume_ratio >= 1.0
+        and volume_ratio >= knob("early_volume_ratio", 1.0)
         and volume_alignment != "price_volume_divergence"
     )
     structural_edge_floor = bool(
@@ -5611,11 +5613,11 @@ def _entry_contract_facts(exact_payload: Any) -> dict[str, bool]:
     blocking_overextension = bool(
         structural_edge_floor
         and daily_runup is not None
-        and daily_runup >= 15
+        and daily_runup >= knob("overextension_runup_pct", 15)
         and micro_vwap_bp is not None
-        and micro_vwap_bp >= 80
+        and micro_vwap_bp >= knob("overextension_vwap_bp", 80)
         and ma5_bp is not None
-        and ma5_bp >= 80
+        and ma5_bp >= knob("overextension_ma5_bp", 80)
         and tape_status != "supportive"
     )
     latest_recovery = (_window_value(returns, 1) or 0) > 0 or (
@@ -5629,7 +5631,7 @@ def _entry_contract_facts(exact_payload: Any) -> dict[str, bool]:
         and tape_source == "trusted_aggressor"
         and momentum_status == "accelerating"
         and buy_pressure is not None
-        and buy_pressure >= 60
+        and buy_pressure >= knob("trigger_buy_pressure", 60)
         and net_aggressive_delta is not None
         and net_aggressive_delta > 0
         and trusted_tape_usable
@@ -5669,21 +5671,21 @@ def _entry_contract_facts(exact_payload: Any) -> dict[str, bool]:
         and return_20m < 0
         and momentum_status == "accelerating"
         and tick_acceleration is not None
-        and tick_acceleration >= 1.5
+        and tick_acceleration >= knob("reversal_tick_acceleration", 1.5)
         and quote_fresh
         and tick_fresh
     )
     adverse_distribution_no_edge = bool(
         not structural_edge_floor
         and return_5m is not None
-        and return_5m <= -0.5
+        and return_5m <= knob("distribution_return_5m_pct", -0.5)
         and return_10m is not None
-        and return_10m <= -1.0
+        and return_10m <= knob("distribution_return_10m_pct", -1.0)
         and peak_drawdown is not None
-        and peak_drawdown <= -2.0
+        and peak_drawdown <= knob("distribution_drawdown_pct", -2.0)
         and high_direction == "down"
         and (
-            (volume_ratio is not None and volume_ratio <= 0.5)
+            (volume_ratio is not None and volume_ratio <= knob("distribution_volume_ratio", 0.5))
             or volume_alignment == "price_volume_divergence"
         )
     )
@@ -5692,11 +5694,11 @@ def _entry_contract_facts(exact_payload: Any) -> dict[str, bool]:
     top1_ask_notional = _number(features.get("top1_ask_notional"))
     ask_wall_wide_spread = bool(
         spread_bp is not None
-        and spread_bp >= 50
+        and spread_bp >= knob("ask_wall_spread_bp", 50)
         and top1_bid_notional is not None
         and top1_bid_notional > 0
         and top1_ask_notional is not None
-        and top1_ask_notional / top1_bid_notional >= 5
+        and top1_ask_notional / top1_bid_notional >= knob("ask_wall_ratio", 5)
     )
     early_short_structure = bool(
         3 <= completed_bar_count < 10
@@ -5706,9 +5708,9 @@ def _entry_contract_facts(exact_payload: Any) -> dict[str, bool]:
         and high_direction in {"up", "up_or_flat"}
         and low_direction in {"up", "up_or_flat"}
         and peak_drawdown is not None
-        and peak_drawdown > -0.75
+        and peak_drawdown > knob("short_drawdown_floor_pct", -0.75)
         and volume_ratio is not None
-        and volume_ratio >= 1.2
+        and volume_ratio >= knob("short_volume_ratio", 1.2)
         and volume_alignment != "price_volume_divergence"
     )
     early_session_probe_candidate = bool(
@@ -5716,12 +5718,12 @@ def _entry_contract_facts(exact_payload: Any) -> dict[str, bool]:
         and not blocking_overextension
         and not ask_wall_wide_spread
         and daily_runup is not None
-        and 0 <= daily_runup < 15.0
+        and 0 <= daily_runup < knob("probe_runup_pct", 15.0)
         and spread_bp is not None
-        and 0 <= spread_bp <= 50.0
+        and 0 <= spread_bp <= knob("probe_spread_bp", 50.0)
         and tape_status in {"supportive", "neutral", "mixed"}
         and buy_pressure is not None
-        and buy_pressure >= 55.0
+        and buy_pressure >= knob("probe_buy_pressure", 55.0)
         and net_aggressive_delta is not None
         and net_aggressive_delta > 0
         and trusted_tape_usable
@@ -5831,29 +5833,29 @@ def build_exact_payload_analysis_v1(
     would_fill_now = features.get("would_fill_now")
     if facts.get("ask_wall_wide_spread"):
         directional_depth_state = "blocking"
-    elif top3_ask_to_bid_ratio is not None and top3_ask_to_bid_ratio >= 2.0:
+    elif top3_ask_to_bid_ratio is not None and top3_ask_to_bid_ratio >= knob("depth_adverse_ratio", 2.0):
         directional_depth_state = "adverse"
     elif (
         top3_ask_to_bid_ratio is not None
-        and top3_ask_to_bid_ratio <= 1.0
-        and (top1_ask_to_bid_ratio is None or top1_ask_to_bid_ratio <= 1.5)
+        and top3_ask_to_bid_ratio <= knob("depth_supportive_ratio", 1.0)
+        and (top1_ask_to_bid_ratio is None or top1_ask_to_bid_ratio <= knob("top1_supportive_ratio", 1.5))
     ):
         directional_depth_state = "supportive"
     elif (
         would_fill_now is True
         and top1_ask_to_bid_ratio is not None
-        and top1_ask_to_bid_ratio <= 1.5
+        and top1_ask_to_bid_ratio <= knob("top1_supportive_ratio", 1.5)
     ):
         directional_depth_state = "supportive"
     else:
         directional_depth_state = "mixed"
     if spread_bp is None:
         execution_cost_state = "insufficient"
-    elif spread_bp <= 15:
+    elif spread_bp <= knob("cost_low_spread_bp", 15):
         execution_cost_state = "low"
-    elif spread_bp <= 50:
+    elif spread_bp <= knob("cost_observable_spread_bp", 50):
         execution_cost_state = "observable"
-    elif spread_bp <= 150 and features.get("quote_fresh_for_entry") is True:
+    elif spread_bp <= knob("cost_extreme_spread_bp", 150) and features.get("quote_fresh_for_entry") is True:
         execution_cost_state = "wide_but_observable"
     else:
         execution_cost_state = "extreme_or_unusable"
@@ -5870,10 +5872,10 @@ def build_exact_payload_analysis_v1(
         structure.get("volume_direction_alignment") or "unknown"
     ).lower()
     if volume_alignment == "price_volume_divergence" or (
-        volume_ratio is not None and volume_ratio <= 0.5
+        volume_ratio is not None and volume_ratio <= knob("volume_absent_ratio", 0.5)
     ):
         volume_state = "confirmation_absent"
-    elif volume_ratio is not None and volume_ratio >= 1.0:
+    elif volume_ratio is not None and volume_ratio >= knob("volume_confirm_ratio", 1.0):
         volume_state = "confirmed"
     elif volume_ratio is None:
         volume_state = "insufficient"
@@ -5889,7 +5891,7 @@ def build_exact_payload_analysis_v1(
         value is not None and value > 0 for value in (return_3m, return_5m, return_10m)
     )
     short_recovery = bool((return_1m or 0) > 0 or (return_3m or 0) > 0)
-    deep_session_drawdown = bool(peak_drawdown is not None and peak_drawdown <= -2.0)
+    deep_session_drawdown = bool(peak_drawdown is not None and peak_drawdown <= knob("deep_drawdown_pct", -2.0))
     if facts.get("adverse_distribution_no_edge") or regime == (
         "lower_high_distribution"
     ):
@@ -5904,7 +5906,7 @@ def build_exact_payload_analysis_v1(
     elif (
         deep_session_drawdown
         and facts.get("structural_edge_floor")
-        and (positive_recovery_windows >= 2)
+        and (positive_recovery_windows >= knob("recovery_positive_windows", 2))
     ):
         structure_phase = "recovery_continuation"
         structural_edge = "moderate"
@@ -6168,9 +6170,9 @@ def build_anticipatory_reversal_analysis_v1(
     quote_depth_present = features.get("quote_depth_present") is True
     if spread_bp is None or spread_bp < 0:
         spread_regime = "unavailable"
-    elif spread_bp <= 50:
+    elif spread_bp <= knob("cost_observable_spread_bp", 50):
         spread_regime = "normal"
-    elif spread_bp <= 150 and quote_fresh and quote_depth_present:
+    elif spread_bp <= knob("cost_extreme_spread_bp", 150) and quote_fresh and quote_depth_present:
         spread_regime = "wide_but_observable"
     else:
         spread_regime = "extreme_or_unusable"
@@ -6198,10 +6200,10 @@ def build_anticipatory_reversal_analysis_v1(
     absorption_count = int(_number(features.get("same_price_buy_absorption")) or 0)
     large_sell_absent = features.get("large_sell_print_detected") is False
     micro_absorption = bool(
-        absorption_count >= 1
+        absorption_count >= knob("absorption_count", 1)
         or (
             buy_pressure is not None
-            and buy_pressure >= 55
+            and buy_pressure >= knob("absorption_buy_pressure", 55)
             and net_delta is not None
             and net_delta > 0
             and large_sell_absent
@@ -6218,17 +6220,17 @@ def build_anticipatory_reversal_analysis_v1(
     sell_momentum_decelerating = bool(
         return_1m is not None
         and prior_minute_pace
-        and any(return_1m > pace + 0.05 for pace in prior_minute_pace)
+        and any(return_1m > pace + knob("deceleration_margin_pct", 0.05) for pace in prior_minute_pace)
         and any(pace < 0 for pace in prior_minute_pace)
     )
     lower_wick_ratio = _number(structure.get("latest_lower_wick_ratio"))
     low_rebound_pct = _number(structure.get("low_rebound_pct"))
     price_rejection = bool(
-        (lower_wick_ratio is not None and lower_wick_ratio >= 0.35)
+        (lower_wick_ratio is not None and lower_wick_ratio >= knob("rejection_wick_ratio", 0.35))
         or (
             str(structure.get("low_direction") or "").lower() == "up_or_flat"
             and low_rebound_pct is not None
-            and low_rebound_pct >= 0.5
+            and low_rebound_pct >= knob("rejection_rebound_pct", 0.5)
         )
     )
     micro_vwap_bp = _number(features.get("curr_vs_micro_vwap_bp"))
@@ -6237,9 +6239,9 @@ def build_anticipatory_reversal_analysis_v1(
     near_reference_reclaim = bool(
         (
             micro_vwap_bp is not None
-            and micro_vwap_bp >= -50
+            and micro_vwap_bp >= knob("reference_reclaim_bp", -50)
             or ma5_bp is not None
-            and ma5_bp >= -50
+            and ma5_bp >= knob("reference_reclaim_bp", -50)
         )
         and price_change_10t_pct is not None
         and price_change_10t_pct > 0
@@ -6257,7 +6259,7 @@ def build_anticipatory_reversal_analysis_v1(
                 and net_delta is not None
                 and net_delta > 0
             )
-            or (tick_acceleration is not None and tick_acceleration >= 1.0)
+            or (tick_acceleration is not None and tick_acceleration >= knob("recovery_tick_acceleration", 1.0))
         )
     )
     precursor_flags = {
@@ -6276,7 +6278,7 @@ def build_anticipatory_reversal_analysis_v1(
     prior_adverse_structure = bool(
         (return_5m is not None and return_5m < 0)
         or (return_10m is not None and return_10m < 0)
-        or (peak_drawdown is not None and peak_drawdown <= -1.0)
+        or (peak_drawdown is not None and peak_drawdown <= knob("prior_adverse_drawdown_pct", -1.0))
     )
     failed_structure = str(structure.get("regime") or "").lower() in {
         "failed_breakout",
@@ -6299,11 +6301,11 @@ def build_anticipatory_reversal_analysis_v1(
         )
         if blocked
     ]
-    required_precursor_count = 3 if source_mode == "fresh_dual" else 4
+    required_precursor_count = knob("fresh_precursor_count", 3) if source_mode == "fresh_dual" else knob("degraded_precursor_count", 4)
     eligible = bool(
         prior_adverse_structure
         and precursor_count >= required_precursor_count
-        and non_tape_precursor_count >= 3
+        and non_tape_precursor_count >= knob("non_tape_precursor_count", 3)
         and micro_absorption
         and not hard_blockers
         and conservative_execution_cost_pct is not None
@@ -6334,11 +6336,11 @@ def build_anticipatory_reversal_analysis_v1(
         and return_10m is not None
         and return_10m > 0
         and peak_drawdown is not None
-        and peak_drawdown > -0.5
+        and peak_drawdown > knob("clean_drawdown_pct", -0.5)
         and near_reference_reclaim
-        and precursor_count >= 2
+        and precursor_count >= knob("clean_precursor_count", 2)
         and conservative_execution_cost_pct is not None
-        and conservative_execution_cost_pct <= 0.25
+        and conservative_execution_cost_pct <= knob("clean_max_cost_pct", 0.25)
     )
     analysis = {
         "schema": ANTICIPATORY_REVERSAL_ANALYSIS_SCHEMA,
@@ -6415,9 +6417,9 @@ def build_anticipatory_reversal_analysis_v1(
             "required_spread_regime": "normal",
             "hard_blockers_allowed": False,
             "required_completed_return_windows_min": [3, 5, 10],
-            "minimum_independent_precursors": 2,
-            "minimum_peak_drawdown_pct_exclusive": -0.5,
-            "maximum_execution_cost_pct": 0.25,
+            "minimum_independent_precursors": knob("clean_precursor_count", 2),
+            "minimum_peak_drawdown_pct_exclusive": knob("clean_drawdown_pct", -0.5),
+            "maximum_execution_cost_pct": knob("clean_max_cost_pct", 0.25),
             "after_cost_reward_risk_floor": 0.75,
             "downstream_submit_guards_required": True,
             "runtime_effect": False,
@@ -6488,11 +6490,11 @@ def _attach_selective_recovery_probe_contract_v1(
         and edge_facts.get("structural_edge_floor") is True
         and edge_facts.get("anticipatory_reversal") is True
         and conservative_cost_pct is not None
-        and conservative_cost_pct <= 0.25
+        and conservative_cost_pct <= knob("clean_max_cost_pct", 0.25)
         and peak_drawdown_pct is not None
-        and peak_drawdown_pct > -2.0
+        and peak_drawdown_pct > knob("recovery_drawdown_pct", -2.0)
         and precursors.get("near_reference_reclaim") is True
-        and non_tape_precursor_count >= 3
+        and non_tape_precursor_count >= knob("non_tape_precursor_count", 3)
     )
     enriched["selective_recovery_probe"] = {
         "eligible": eligible,
@@ -6504,10 +6506,10 @@ def _attach_selective_recovery_probe_contract_v1(
         "hard_blockers_allowed": False,
         "structural_edge_required": True,
         "bounded_anticipatory_reversal_required": True,
-        "maximum_execution_cost_pct": 0.25,
-        "minimum_peak_drawdown_pct_exclusive": -2.0,
+        "maximum_execution_cost_pct": knob("clean_max_cost_pct", 0.25),
+        "minimum_peak_drawdown_pct_exclusive": knob("recovery_drawdown_pct", -2.0),
         "near_reference_reclaim_required": True,
-        "minimum_non_tape_precursors": 3,
+        "minimum_non_tape_precursors": knob("non_tape_precursor_count", 3),
         "after_cost_reward_risk_floor": 1.0,
         "downstream_submit_guards_required": True,
         "runtime_effect": False,

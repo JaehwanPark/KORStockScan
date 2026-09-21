@@ -450,7 +450,18 @@ def _main_mechanistic_scope(target_date: str, effective_date: str | None = None,
             == "evidence_qualified_threshold_update"
         ):
             issues.append("main_machine_unqualified_edge_published")
+    try:
+        current_strategy = policy.current_strategy_receipt(data_root=DATA_DIR)
+        from src.engine.scalping.entry_strategy_policy import select_report_candidate
+        selected_strategy = select_report_candidate(source)
+        if selected_strategy and selected_strategy[1].get('promotion_pass') is True:
+            if (current_strategy.get('activation') or {}).get('candidate_sha256') != policy.digest(selected_strategy[1]['candidate']):
+                issues.append('main_machine_qualified_strategy_not_current')
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        current_strategy = dict(status='active_generation_invalid', reason=str(exc))
+        issues.append('main_machine_current_strategy_invalid')
     return {
+        'current_strategy_generation': current_strategy,
         "status": "pass" if not issues else "fail",
         "scope": "main_mechanistic_entry_only",
         "issues": issues,

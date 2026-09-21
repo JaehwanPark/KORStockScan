@@ -378,6 +378,24 @@ def _economic_section(owner: str, payload: dict[str, Any]) -> dict[str, Any]:
     if owner == "ws_freshness":
         return _dict_value(payload, "postclose_quality_handoff")
     if owner == "main_mechanistic_entry":
+        from src.engine.scalping.entry_strategy_policy import select_report_candidate, promotion_errors
+        selected = select_report_candidate(payload)
+        if selected and selected[1].get('promotion_pass') is True:
+            scope, result = selected
+            proposal = result['candidate']
+            if not promotion_errors(proposal, proposal.get('parent_policy') or {}, tuple(scope.split('|'))):
+                arm = proposal['evidence']['holdout']
+                measured = arm['economics']
+                old, new = measured['incumbent'], measured['candidate']
+                return dict(status='validated_edge', candidate_count=1,
+                    paired_sample_count=len(arm['opportunity_ids']),
+                    incumbent_ev_pct=old.get('ev_pct'), candidate_ev_pct=new.get('ev_pct'),
+                    robust_delta_ev_lower_bound_pct=measured['robust_paired_delta_ev_lower_bound_pct'],
+                    net_profit_uplift_krw_per_observation_day=measured['daily_net_profit_delta_krw'],
+                    allowed_runtime_apply=True, metric_role='sim_probe_ev', blocker=None,
+                    source_date_count=len(arm['source_dates']), selected_scope=scope,
+                    future_generation_contract_verified=False,
+                    closure_test='current_generation_receipt_then_natural_completed_cost_outcomes')
         projection = _dict_value(payload, "machine_full_evaluation")
         # Report execution flags do not prove prospective owner-model support.
         future_contract_verified = False
@@ -887,6 +905,11 @@ def build_runtime_approval_summary(
             source_payload = _load_json(Path(str(row.get("path") or "")))
             machine_source = policy_payload.get("machine_evaluation_source") or {}
             try:
+                row['current_strategy_generation'] = machine_policy.current_strategy_receipt(data_root=DATA_DIR)
+            except (OSError, ValueError, TypeError, KeyError) as exc:
+                row['current_strategy_generation'] = dict(status='active_generation_invalid', reason=str(exc), actual_pid_consumed=False)
+                policy_receipt_valid = False
+            try:
                 loaded_policy = machine_policy.load(
                     data_root=DATA_DIR,
                     target_date=str(policy_payload.get("target_date") or ""),
@@ -898,8 +921,14 @@ def build_runtime_approval_summary(
                 )
             except (OSError, ValueError):
                 policy_contract_valid = False
+            from src.engine.scalping.entry_strategy_policy import select_report_candidate
+            typed_selection = select_report_candidate(source_payload)
+            if typed_selection and typed_selection[1].get('promotion_pass') is True:
+                policy_contract_valid = bool(policy_contract_valid and
+                    (row.get('current_strategy_generation', {}).get('activation') or {}).get('candidate_sha256')
+                    == machine_policy.digest(typed_selection[1]['candidate']))
             policy_receipt_valid = bool(
-                policy_contract_valid
+                policy_receipt_valid and policy_contract_valid
                 and source_payload.get("report_scope") == "main_mechanistic_entry"
                 and source_payload.get("noncompact_sections_refreshed") is True
                 and machine_source.get("source_date") == target_date

@@ -439,6 +439,16 @@ def _entry_price_v1_response_contract_errors(value):
     return list(dict.fromkeys(errors))
 
 
+def _entry_provider_ledger(setup):
+    """Keep raw replay custody out of the compact provider token budget."""
+    ledger = {k: v for k, v in setup.items() if k not in {
+        "strategy_raw_input", "strategy_raw_sha256", "strategy_selection", "evidence_sha256"}}
+    ledger["evidence_sha256"] = hashlib.sha256(json.dumps(
+        ledger, ensure_ascii=True, sort_keys=True, separators=(",", ":"), default=str
+    ).encode()).hexdigest()
+    return ledger
+
+
 def _refresh_transmitted_multi_timeframe_hash(payload):
     """Make the nested hash describe the exact compact payload sent to AI."""
 
@@ -8569,6 +8579,11 @@ class GPTSniperEngine:
                     or (ws_data.get("session") if isinstance(ws_data, dict) else None)
                 ),
             )
+            if entry_setup_live_policy.get("status") == "fallback_machine_policy_invalid":
+                return {"action": "WAIT", "reason": "active_machine_policy_invalid",
+                    "provider_called": False, "ai_decision_outcome_eligible": False,
+                    "machine_evaluation_status": "policy_contract_blocked",
+                    "machine_policy_error": entry_setup_live_policy.get("machine_policy_error")}
             preparation_stages["policy_resolve_ms"] = (time.perf_counter() - policy_started) * 1000
             context_started = time.perf_counter()
             selected_runtime_prompt_version = (
@@ -9324,6 +9339,8 @@ class GPTSniperEngine:
                     machine_setup,
                     policy=entry_setup_live_policy["mechanistic_threshold_policy"],
                 )
+                # Pin the selected profile and its rebuilt facts to this attempt.
+                machine_setup = machine_assessment.pop("effective_setup_evidence", machine_setup)
                 from src.engine.scalping.ai_decision_trace import (
                     capture_machine_observation,
                 )
@@ -9667,7 +9684,7 @@ class GPTSniperEngine:
                             ).hexdigest()
                             decision_quality_input = {
                                 "input_schema": entry_setup_live_input_schema,
-                                "entry_setup_evidence_v1": entry_setup_evidence,
+                                "entry_setup_evidence_v1": _entry_provider_ledger(entry_setup_evidence),
                                 "exact_replay_context_sha256": (replay_context_sha256),
                                 "provider_input_authority": (
                                     "deterministic_setup_ledger_only"
@@ -9687,6 +9704,10 @@ class GPTSniperEngine:
                                 decision_quality_input["machine_bundle_sha256"] = (
                                     machine_first_context["bundle_sha256"]
                                 )
+                        if "mechanistic_entry_assessment" in decision_quality_input:
+                            decision_quality_input["mechanistic_entry_assessment"] = {
+                                k: v for k, v in decision_quality_input["mechanistic_entry_assessment"].items()
+                                if k != "strategy_selection"}
                         formatted_data = json.dumps(
                             decision_quality_input,
                             ensure_ascii=False,
@@ -11230,7 +11251,10 @@ class GPTSniperEngine:
                     DECISION_QUALITY_V2_14_SETUP_RISK_ADJUDICATOR_PROMPT_VERSION,
                     DECISION_QUALITY_V2_15_BOUNDED_RECOVERY_PROMPT_VERSION},
             )
-            assessment = mechanistic_entry_policy_decision(setup, policy=bundle["machine_policy"])
+            # Initial-entry v2 profiles do not change the holding/add owner.
+            from src.engine.scalping.entry_strategy_policy import legacy_projection
+            holding_policy = legacy_projection(bundle["machine_policy"])
+            assessment = mechanistic_entry_policy_decision(setup, policy=holding_policy)
             family = str(setup.get("setup_family") or "")
             # Continuation alone cannot become an averaging-down signal. This
             # uses the existing entry family classification without a new grid.

@@ -7,6 +7,8 @@ provider, broker, account, order, or token endpoint.
 
 from __future__ import annotations
 
+from src.engine.scalping.entry_strategy_policy import knob
+
 import hashlib
 import json
 import math
@@ -447,15 +449,15 @@ def _entry_timing_observation(
     reset_observed = bool(
         phase in {"pullback", "recovery_continuation", "rebound_attempt"}
         and peak_drawdown is not None
-        and peak_drawdown <= ENTRY_TIMING_RESET_DRAWDOWN_PCT
+        and peak_drawdown <= knob("reset_drawdown_pct", ENTRY_TIMING_RESET_DRAWDOWN_PCT)
     )
-    late = bool(watch_age is not None and watch_age >= ENTRY_TIMING_LATE_WATCH_SEC)
-    repeated = promotion_count >= ENTRY_TIMING_REPROMOTION_FLOOR
+    late = bool(watch_age is not None and watch_age >= knob("late_watch_sec", ENTRY_TIMING_LATE_WATCH_SEC))
+    repeated = promotion_count >= knob("repromotion_count", ENTRY_TIMING_REPROMOTION_FLOOR)
     material_extension = bool(
-        (price_delta is not None and price_delta >= ENTRY_TIMING_MATERIAL_EXTENSION_PCT)
+        (price_delta is not None and price_delta >= knob("material_extension_pct", ENTRY_TIMING_MATERIAL_EXTENSION_PCT))
         or (
             completed_uptrend_min >= 5
-            and completed_uptrend_return >= ENTRY_TIMING_MATERIAL_EXTENSION_PCT
+            and completed_uptrend_return >= knob("material_extension_pct", ENTRY_TIMING_MATERIAL_EXTENSION_PCT)
         )
     )
     if not exact:
@@ -488,9 +490,9 @@ def _entry_timing_observation(
         "completed_structure_phase": phase or None,
         "completed_peak_drawdown_pct": peak_drawdown,
         "reset_observed": reset_observed,
-        "late_watch_threshold_sec": ENTRY_TIMING_LATE_WATCH_SEC,
-        "material_extension_threshold_pct": ENTRY_TIMING_MATERIAL_EXTENSION_PCT,
-        "repromotion_floor": ENTRY_TIMING_REPROMOTION_FLOOR,
+        "late_watch_threshold_sec": knob("late_watch_sec", ENTRY_TIMING_LATE_WATCH_SEC),
+        "material_extension_threshold_pct": knob("material_extension_pct", ENTRY_TIMING_MATERIAL_EXTENSION_PCT),
+        "repromotion_floor": knob("repromotion_count", ENTRY_TIMING_REPROMOTION_FLOOR),
         "age_only_never_adverse": True,
         "missing_timing_never_adverse": True,
         "context_sha256": context.get("context_sha256"),
@@ -511,7 +513,7 @@ def _entry_timing_observation(
             price_delta_missing_reason="first_watch_price_time_not_bound",
             completed_uptrend_role="window_return_not_continuous_trend_duration",
             timing_proxy_never_hard_veto=True,
-            late_promotion_threshold_sec=ENTRY_TIMING_LATE_WATCH_SEC,
+            late_promotion_threshold_sec=knob("late_watch_sec", ENTRY_TIMING_LATE_WATCH_SEC),
         )
         observation.pop("late_watch_threshold_sec", None)
     return observation
@@ -1204,11 +1206,11 @@ def build_entry_setup_evidence(
     top3_ask_to_bid_ratio = _number(liquidity.get("top3_ask_to_bid_ratio"))
     tail_liquidity_fragility = bool(
         spread_bp is not None
-        and spread_bp >= TAIL_RISK_SPREAD_FLOOR_BP
+        and spread_bp >= knob("tail_spread_bp", TAIL_RISK_SPREAD_FLOOR_BP)
         and fillability_score is not None
-        and fillability_score <= TAIL_RISK_FILLABILITY_CEILING
+        and fillability_score <= knob("tail_fillability", TAIL_RISK_FILLABILITY_CEILING)
         and top3_ask_to_bid_ratio is not None
-        and top3_ask_to_bid_ratio >= TAIL_RISK_TOP3_ASK_TO_BID_FLOOR
+        and top3_ask_to_bid_ratio >= knob("tail_top3_ratio", TAIL_RISK_TOP3_ASK_TO_BID_FLOOR)
     )
 
     if facts.get("structural_edge_floor") is True:
@@ -1270,9 +1272,9 @@ def build_entry_setup_evidence(
     if (
         market_relative.get("usable_for_risk") is True
         and _number(market_relative.get("return_5m_pct_point"))
-        <= RELATIVE_WEAKNESS_FLOOR_PCT_POINT
+        <= knob("relative_weakness_pct_point", RELATIVE_WEAKNESS_FLOOR_PCT_POINT)
         and _number(market_relative.get("return_15m_pct_point"))
-        <= RELATIVE_WEAKNESS_FLOOR_PCT_POINT
+        <= knob("relative_weakness_pct_point", RELATIVE_WEAKNESS_FLOOR_PCT_POINT)
     ):
         contradicting_facts.append("market_relative_weak_5m_15m")
         corroborated_risk_codes.append("ADVERSE_TAPE")
@@ -1280,9 +1282,9 @@ def build_entry_setup_evidence(
     if (
         sector_relative.get("usable_for_risk") is True
         and _number(sector_relative.get("return_5m_pct_point"))
-        <= RELATIVE_WEAKNESS_FLOOR_PCT_POINT
+        <= knob("relative_weakness_pct_point", RELATIVE_WEAKNESS_FLOOR_PCT_POINT)
         and _number(sector_relative.get("return_15m_pct_point"))
-        <= RELATIVE_WEAKNESS_FLOOR_PCT_POINT
+        <= knob("relative_weakness_pct_point", RELATIVE_WEAKNESS_FLOOR_PCT_POINT)
     ):
         contradicting_facts.append("sector_relative_weak_5m_15m")
         corroborated_risk_codes.append("ADVERSE_TAPE")
@@ -1317,7 +1319,7 @@ def build_entry_setup_evidence(
         for name, source in (("market", market_relative), ("sector", sector_relative)):
             if source.get("usable_for_risk") is True and all(
                 (value := _number(source.get(key))) is not None
-                and value >= -RELATIVE_WEAKNESS_FLOOR_PCT_POINT
+                and value >= -knob("relative_weakness_pct_point", RELATIVE_WEAKNESS_FLOOR_PCT_POINT)
                 for key in ("return_5m_pct_point", "return_15m_pct_point")
             ):
                 positive_facts.append(f"{name}_relative_strong_5m_15m")
@@ -1570,6 +1572,12 @@ def build_entry_setup_evidence(
     if timing_aware_policy:
         evidence[ENTRY_TIMING_OBSERVATION_SCHEMA] = timing_observation
     if balanced_policy:
+        from copy import deepcopy
+        from src.engine.scalping.entry_strategy_policy import digest as strategy_digest
+        # Drop derived ledgers to prevent recursive capture; preserve source facts.
+        evidence["strategy_raw_input"] = deepcopy({k: v for k, v in payload.items()
+            if k not in {"entry_setup_evidence", "mechanistic_entry_assessment"}})
+        evidence["strategy_raw_sha256"] = strategy_digest(evidence["strategy_raw_input"])
         evidence["risk_fact_bindings"] = _risk_fact_bindings(evidence)
         evidence["mechanistic_context"] = build_mechanistic_context(
             exact_payload=payload,
@@ -1884,7 +1892,7 @@ def validate_mechanistic_entry_threshold_policy(policy: Any) -> list[str]:
         "actual_order_submitted",
         "broker_order_forbidden",
     }
-    if set(value) - {"hierarchy"} != expected_fields:
+    if set(value) - {"hierarchy", "strategy"} != expected_fields:
         errors.append("mechanistic_entry_threshold_policy_fields_invalid")
     if value.get("schema") != MECHANISTIC_ENTRY_THRESHOLD_POLICY_SCHEMA:
         errors.append("mechanistic_entry_threshold_policy_schema_invalid")
@@ -1928,12 +1936,16 @@ def validate_mechanistic_entry_threshold_policy(policy: Any) -> list[str]:
     minimum_ev = _number(selection.get("minimum_cost_adjusted_ev_pct"))
     if set(selection) != expected_selection_fields:
         errors.append("mechanistic_entry_postclose_selection_fields_invalid")
-    floor = 0.0 if value.get("version") == MECHANISTIC_FULL_POPULATION_POLICY_VERSION else 0.10
+    from src.engine.scalping.entry_strategy_policy import POLICY_VERSION as STRATEGY_VERSION
+    strategy_policy = value.get("version") == STRATEGY_VERSION
+    if strategy_policy and "strategy" not in value:
+        errors.append("strategy_policy_body_missing")
+    floor = 0.0 if strategy_policy or value.get("version") == MECHANISTIC_FULL_POPULATION_POLICY_VERSION else 0.10
     if minimum_ev is None or minimum_ev < floor:
         errors.append("mechanistic_entry_net_ev_floor_invalid")
     for field, floor in (
         ("minimum_exposure_count", 10),
-        ("minimum_unique_symbol_count", 3),
+        ("minimum_unique_symbol_count", 1 if strategy_policy else 3),
         ("minimum_independent_source_date_count", 2),
     ):
         count = selection.get(field)
@@ -1954,6 +1966,11 @@ def validate_mechanistic_entry_threshold_policy(policy: Any) -> list[str]:
         or value.get("broker_order_forbidden") is not True
     ):
         errors.append("mechanistic_entry_offline_authority_invalid")
+    if "strategy" in value:
+        from src.engine.scalping.entry_strategy_policy import validate as validate_strategy
+        errors.extend(validate_strategy(value["strategy"]))
+        if "hierarchy" in value:
+            errors.append("strategy_and_legacy_hierarchy_conflict")
     if "hierarchy" in value:
         errors.extend(validate_mechanistic_hierarchy(value))
     return list(dict.fromkeys(errors))
@@ -2361,6 +2378,25 @@ def mechanistic_entry_policy_decision(
         raise ValueError(
             f"mechanistic_entry_threshold_policy_invalid:{','.join(policy_errors)}"
         )
+    if "strategy" in selected_policy:
+        from src.engine.scalping.entry_strategy_policy import rebuild
+        rebuilt, effective_policy, receipt = rebuild(setup, selected_policy)
+        decision = mechanistic_entry_policy_decision(rebuilt, policy=effective_policy)
+        profile = receipt['effective_thresholds']
+        recipe = profile['micro_confirmation_recipe']
+        if recipe and decision['action'] != 'BLOCK':
+            micro_pass, micro_reason = _mechanistic_micro_pass(
+                _as_dict(rebuilt.get('mechanistic_context')),
+                {k: profile[k] for k in MECHANISTIC_MICRO_BOUNDS},
+                diagnostic_arm={1: 'bid_rebound', 2: 'depletion_trade_refill', 3: 'combined'}[recipe])
+            receipt['micro_confirmation_pass'] = micro_pass
+            receipt['micro_confirmation_reason'] = micro_reason
+            if not micro_pass:
+                decision.update(action='RECHECK', reason=micro_reason)
+        decision["policy_version"] = selected_policy["version"]
+        decision["strategy_selection"] = receipt
+        decision["effective_setup_evidence"] = rebuilt
+        return decision
     effective, rule, selection = _mechanistic_hierarchy_selection(
         setup, selected_policy
     )
