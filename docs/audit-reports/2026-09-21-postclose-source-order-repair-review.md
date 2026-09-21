@@ -73,3 +73,8 @@ Episode 복구는23:09:19에 공동 명단 검증 단계를 통과했으나 `low
 
 - 야간 발행/재개 회귀: 작업본91건, 사용자 별도 변경을 제외한 immutable release82건 PASS. release6978f7ca0에서 00:13 에피소드 CAS 발행 성공, 후속 main 평가 진행. 실제 서비스 reader도 widget3종목4세션, episode19종목61프로필과 청산 전용 확장3프로필을 읽었다.
 - 정규 machine wrapper가 publication 환경을 기본 설정하지 않던 경로를 보완하여 입력 대기 이전 completed-source/next-trading-date를 고정했다. wrapper17건 및 bash 문법 PASS.
+
+### 다음 자연 관측의 전략 원시 입력 보존 수리
+
+- 9/21 machine 관측1,502건 중 전략 원시 입력 포함110건 모두 redacted였다. 원인은 `setup_evidence.strategy_raw_input.runtime_context`의 holding/entry/lifecycle 공개 cache 식별자를 일반 비밀 token으로 분류한 것. 나머지1,392건은 전략 원시 입력이 없는 원천 차단 관측으로 분리한다.
+- 기존 검증된 exact payload와 동일한 공개 식별자 allowlist를 정확한 중첩 경로에도 적용했다. 값의 형식 검증, 실제 secret 및 다른 경로 차단은 유지한다. 원본 과거 JSONL은 수정하지 않는다. 앞으로의 자연 관측에서 보존 여부를 확인해야 하며, 보안/수집 회귀82건 PASS.

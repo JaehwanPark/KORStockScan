@@ -412,6 +412,8 @@ def _is_non_secret_internal_token(
     value: Any,
 ) -> bool:
     canonical_path = path[1:] if path[:1] == ("exact_payload",) else path
+    if path[:2] == ("setup_evidence", "strategy_raw_input"):
+        canonical_path = path[2:]
     if canonical_path not in _NON_SECRET_INTERNAL_TOKEN_PATHS or not isinstance(
         value, str
     ):

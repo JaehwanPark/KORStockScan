@@ -2700,3 +2700,40 @@ def test_economic_observation_availability_binds_final_trace_clock(monkeypatch, 
     assert kw['fields']['entry_economic_decision_available_at']==rows[0]['decision_ts']
     assert kw['fields']['entry_economic_plan_sha256']=='b'*64
     assert kw['fields']['actual_order_submitted'] is False
+
+
+def test_machine_strategy_capture_preserves_public_identifiers_and_hash(monkeypatch, tmp_path):
+    from src.engine.scalping.entry_strategy_policy import digest
+    _enable(monkeypatch, tmp_path)
+    token = "score_70_74|risk_neutral|market_regime_neutral|fresh|price_valid|liquidity_normal|not_overbought|midday"
+    raw = {"stock_code": "005930", "runtime_context": {
+        "entry_adm": {"cache_token": f"entry_adm:v1:{token}",
+                      "entry_adm_cache_token": f"entry_adm:v1:{token}", "entry_adm_bucket_token": token},
+        "holding_exit_matrix": {"cache_token": trace.RETIREMENT_ID},
+        "lifecycle_ai": {"cache_token": trace.RETIREMENT_ID}}}
+    setup = {"strategy_raw_input": raw, "strategy_raw_sha256": digest(raw)}
+    result = trace.capture_machine_observation(exact_payload=raw, setup_evidence=setup,
+        assessment={"action": "RECHECK"}, bundle_sha256="b" * 64)
+    assert result["machine_capture_status"] == "captured"
+    stored = _rows(trace._payload_path(trace._date_text()))[0]
+    assert stored["redacted"] is False
+    assert stored["source"]["setup_evidence"] == setup
+    assert digest(stored["source"]["setup_evidence"]["strategy_raw_input"]) == setup["strategy_raw_sha256"]
+    assert stored["provider_called"] is False
+
+
+@pytest.mark.parametrize("wrapper", ["setup_evidence", "unapproved_evidence"])
+def test_strategy_capture_exemption_does_not_allow_credentials(wrapper):
+    value = {wrapper: {"strategy_raw_input": {"runtime_context": {
+        "entry_adm": {"cache_token": "Bearer fake-secret"},
+        "other_owner": {"cache_token": trace.RETIREMENT_ID}}, "access_token": "fake-secret"}}}
+    safe, redacted = trace.sanitize_ai_trace_value(value)
+    assert redacted is True
+    raw = safe[wrapper]["strategy_raw_input"]
+    assert raw["runtime_context"]["entry_adm"]["cache_token"] == "[REDACTED]"
+    assert raw["runtime_context"]["other_owner"]["cache_token"] == "[REDACTED]"
+    assert raw["access_token"] == "[REDACTED]"
+    if wrapper != "setup_evidence":
+        safe, redacted = trace.sanitize_ai_trace_value({wrapper: {"strategy_raw_input": {
+            "runtime_context": {"entry_adm": {"cache_token": "entry_adm:v1:public"}}}}})
+        assert redacted is True
