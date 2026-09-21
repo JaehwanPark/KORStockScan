@@ -12,10 +12,10 @@ WorkingDirectory=/home/ubuntu/KORStockScan
 Environment="PYTHONPATH=/home/ubuntu/KORStockScan"
 Environment="KORSTOCKSCAN_WIDGET_EXPANSION_TELEGRAM_ENABLED=true"
 ExecStart=/home/ubuntu/KORStockScan/deploy/run_machine_microstructure_final_refresh.sh
-TimeoutStartSec=3600
-Restart=on-failure
+TimeoutStartSec=57600
+Restart=no
 RestartSec=300
-RestartPreventExitStatus=42
+RestartPreventExitStatus=42 75
 Nice=10
 CPUQuota=20%
 MemoryMax=2G

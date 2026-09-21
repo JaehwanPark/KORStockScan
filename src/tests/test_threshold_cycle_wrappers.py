@@ -136,6 +136,11 @@ def test_historical_machine_recovery_disables_current_account_cost_and_notificat
     for setting in ('notify_args=()', 'policy_notify_args=()', 'cost_args=()'):
         assert setting in script
     assert '--phase finished --exit-code "$rc"' in script
+    assert script.index('--phase wait-inputs') < script.index('--phase started')
+    assert script.index('if ((expansion_rc != 0))') < script.index('attribution_rc=0')
+    service = _text("deploy/systemd/korstockscan-machine-microstructure-final-refresh.service")
+    assert "Restart=no" in service
+    assert "TimeoutStartSec=57600" in service
 
 
 def test_main_retry_adoption_preserves_origin_and_rejects_changed_bytes(tmp_path):

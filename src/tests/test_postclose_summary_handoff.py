@@ -5,6 +5,42 @@ import pytest
 from src.engine.automation import postclose_summary_handoff as mod
 
 
+def test_machine_barrier_waits_for_exact_inputs_and_allows_scoped_recovery(tmp_path, monkeypatch):
+    day = "2026-09-21"
+    monkeypatch.setattr(mod, "producer_receipt_issues", lambda *a: [])
+    assert "ai_decision_outcome_labels" in mod.machine_input_issues(tmp_path, day)[0]
+    for label in ("ai_decision_outcome_labels", "low_price_two_leg_expanded_candidate_research", "runtime_approval_summary"):
+        path = tmp_path / label / f"{label}_{day}.json"
+        path.parent.mkdir()
+        path.write_text(json.dumps({"target_date": day}))
+    main = tmp_path / "threshold_cycle_postclose_status" / f"threshold_cycle_postclose_{day}.status.json"
+    main.parent.mkdir()
+    main.write_text('{"status":"running"}')
+    assert mod.wait_for_machine_inputs(tmp_path, day, timeout=0) == 75
+    main.write_text('{"status":"failed"}')
+    assert mod.wait_for_machine_inputs(tmp_path, day, timeout=0) == 0
+    path.write_text('{"target_date":"2026-09-17"}')
+    assert mod.wait_for_machine_inputs(tmp_path, day, timeout=0) == 75
+
+
+def test_incomplete_joint_cohort_is_reported_without_granting_allocation(tmp_path, monkeypatch):
+    from datetime import date
+    from src.engine.monitoring import research_closed_loop as loop
+    own = dict(inputs_sha256="own")
+    peer = dict(schema=loop.SCHEMA, family="widget", source_date="2026-09-21", **loop.AUTHORITY)
+    peer["inputs_sha256"] = loop.digest(peer)
+    monkeypatch.setattr(loop, "joint_inputs", lambda *a, **kw: own)
+    monkeypatch.setattr(loop, "read_object", lambda *a: peer)
+    def invalid(*a, **kw):
+        raise ValueError("joint_cohort_member_pruned_without_supersession")
+    monkeypatch.setattr(loop, "frozen_joint_bundle", invalid)
+    result = loop.combined_joint_gate({}, family="episode", source_date=date(2026,9,21), directory=tmp_path)
+    assert result["status"] == "allocation_blocked"
+    assert result["reason"] == "joint_cohort_member_pruned_without_supersession"
+    assert result["feasible_combined_net_profit_krw"] is None
+    assert all(result[k] is v for k, v in loop.AUTHORITY.items())
+
+
 def _publish(tmp_path, target="2026-09-07"):
     reports = tmp_path / "data" / "report"
     tower_path = (

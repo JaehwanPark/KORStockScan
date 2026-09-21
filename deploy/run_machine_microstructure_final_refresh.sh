@@ -47,6 +47,8 @@ fi
 mkdir -p "$PROJECT_DIR/tmp"
 exec 9>"$PROJECT_DIR/tmp/machine_final_refresh_${completed_target_date}.lock"
 flock -n 9 || exit 75
+"$PYTHON_BIN" -m src.engine.automation.postclose_summary_handoff --owner machine --date "$completed_target_date" \
+  --phase wait-inputs --source-wait-sec "${MACHINE_REFRESH_SOURCE_WAIT_SEC:-43200}" || exit $?
 "$PYTHON_BIN" -m src.engine.automation.postclose_summary_handoff --owner machine --date "$completed_target_date" --phase started || exit $?
 trap 'rc=$?; "$PYTHON_BIN" -m src.engine.automation.postclose_summary_handoff --owner machine --date "$completed_target_date" --phase finished --exit-code "$rc" || rc=1; exit "$rc"' EXIT
 notify_args=(--notify)
@@ -71,6 +73,10 @@ expansion_rc=0
   "${notify_args[@]}" \
   --source-wait-sec 900 \
   --source-poll-sec 30 || expansion_rc=$?
+if ((expansion_rc != 0)); then
+  printf '[MACHINE_MICRO_FINAL_REFRESH] expansion_failed rc=%s downstream_not_started\n' "$expansion_rc" >&2
+  exit "$expansion_rc"
+fi
 
 attribution_rc=0
 "$PYTHON_BIN" -m src.engine.monitoring.machine_microstructure_attribution \

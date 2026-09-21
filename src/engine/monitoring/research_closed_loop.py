@@ -1214,7 +1214,18 @@ def combined_joint_gate(report, *, family, source_date, directory=DIRECTORY):
             parent_sha256=own["inputs_sha256"],
             **AUTHORITY,
         )
-    bundle = frozen_joint_bundle([own, other], directory=directory)
+    try:
+        bundle = frozen_joint_bundle([own, other], directory=directory)
+    except ValueError as exc:
+        # Preserve the frozen membership guard as an allocation rejection.
+        # Incomplete peer coverage must not erase the independent study or
+        # stop unrelated postclose producers (including outcome labels).
+        return dict(
+            schema=SCHEMA, status="allocation_blocked", reason=str(exc),
+            feasible_combined_net_profit_krw=None,
+            parent_sha256=digest([own["inputs_sha256"], other["inputs_sha256"]]),
+            **AUTHORITY,
+        )
     if (
         own.get("candidate_revisions") or other.get("candidate_revisions")
     ) and bundle is None:

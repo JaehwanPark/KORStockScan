@@ -63,6 +63,10 @@ OFF·퇴역 producer, 유효 frozen policy/checkpoint, 별도 custody/override·
 
 ### 3.1 공통 배포 경로와 독립 서비스 경계
 
+Machine final refresh는 실행 전에 같은 source date의 widget terminal, AI outcome label, episode 연구, runtime approval summary를 기다린다. main producer가 실행 중이면 소비를 시작하지 않는다. 최대12시간 입력 대기 후에도 미충족이면 exit75로 종료하며 systemd 전체 자동 재시도는 하지 않는다. 실패 원인을 수리하고 명시적 재실행하거나 다음 정기 timer를 사용한다. Collector source 계약 실패 시 뒤의 attribution/approval을 실행하지 않는다. 날짜는 대기 전에 고정한다.
+
+Widget signal 연구는 기존 일별 품질 기준을 통과한 날짜로 평가하고 결손 날짜를 명시한다. 기존 `PASS_WITH_DATE_EXCLUSIONS`와 holdout/sample 기준을 유지하며 한 날짜의 결손만으로 전체 종목을 제외하지 않는다. 추가 원격 history backfill은 회차당 기본10종목으로 제한하고 나머지는 저장된 검증 자료를 사용한다. 전체 종목 분모, 날짜 제외, 자료 부족 종목을 보존하며 재실행 완료를 경제성 통과와 구분한다.
+
 공통 cron은 `data/runtime/runtime_release_selection.json`과 `deploy/run_runtime_release.sh`, widget/episode는 deployment manifest와 유효 systemd `ExecStart/WorkingDirectory/drop-in`을 확인한다. 실제 worker/PID의 root·commit·시작 시 immutable snapshot·source hash를 기록한다. 새 selector나 문서에 적힌 release 이름으로 진행 중인 run을 재라벨링하지 않는다. 서로 다른 owner가 검증된 독립 release를 쓰는 사실만으로 결함으로 판정하지 않는다.
 
 선택 release의 `src/deploy/restart.sh` clean·HEAD와 공유 `data/logs/tmp/.venv/docs/restart.flag` 실체를 확인한다. 코드 고정은 공유 원천·정책·의존성 고정이 아니다. 진행 중인 chain의 코드/입력을 교체하지 않고 배포본 직접 편집·임의 workspace 실행·reset/clean으로 우회하지 않는다. 실제 PID receipt는 코드 소비 근거이며 장후 성공·다음 PREOPEN·수익 근거가 아니다.

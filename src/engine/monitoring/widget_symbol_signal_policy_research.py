@@ -2924,9 +2924,7 @@ def load_completed_symbol_source(
         updated_dates: set[date] = set()
         revised_dates: list[str] = []
         meta: dict[str, Any] = {}
-        if missing:
-            if retained_source_only:
-                raise ResearchError(f"{symbol}_snapshot_coverage_incomplete")
+        if missing and not retained_source_only:
             token = token_provider()
             if not token:
                 raise ResearchError("cached_token_missing_no_issue_or_refresh_allowed")
@@ -2981,7 +2979,7 @@ def load_completed_symbol_source(
                     ],
                 }
                 payload["receipt_sha256"] = _receipt_checksum(payload)
-                records[day] = (list(rows), payload)
+                records[day] = None
                 if (
                     freeze
                     and _daily_source_coverage({day: rows}, [day])["status"] == "PASS"
@@ -2990,6 +2988,7 @@ def load_completed_symbol_source(
                         root / f"{day.isoformat()}.json",
                         json.dumps(payload, sort_keys=True),
                     )
+                    records[day] = (list(rows), payload)
                 elif old:
                     # Preserve original bars/provenance but revoke the optional
                     # cache's completion when a remote revision is incomplete.
@@ -3018,11 +3017,17 @@ def load_completed_symbol_source(
                     }
                     manifest["receipt_sha256"] = _receipt_checksum(manifest)
                     _atomic_write(manifest_path, json.dumps(manifest))
-        if any(records[day] is None for day in required):
+        # The evaluator already permits explicit date exclusions. A missing or
+        # rejected day must not discard an otherwise usable symbol history.
+        available = [day for day in required if records[day] is not None]
+        coverage = _daily_source_coverage(
+            {day: records[day][0] for day in available}, required
+        )
+        if coverage["status"] == "FAIL":
             raise ResearchError(f"{symbol}_snapshot_coverage_incomplete")
-        bars = VerifiedBars(bar for day in required for bar in records[day][0])
+        bars = VerifiedBars(bar for day in available for bar in records[day][0])
         retrieval_times = {
-            day.isoformat(): records[day][1]["retrieved_at_kst"] for day in required
+            day.isoformat(): records[day][1]["retrieved_at_kst"] for day in available
         }
         return bars, {
             **meta,
@@ -3033,13 +3038,14 @@ def load_completed_symbol_source(
             "source_quality_status": "PASS",
             "source_content_sha256": bars.source_content_sha256,
             "bar_count": len(bars),
-            "trading_date_count": len(required),
+            "trading_date_count": len(available),
+            "snapshot_date_exclusions": coverage["failed_dates"],
             "expected_trading_date_count": len(dates),
             "listing_history_accepted": listing_start > CLEAN_BASELINE_DATE,
-            "oldest_source_date": required[0].isoformat(),
-            "latest_source_date": end_date.isoformat(),
+            "oldest_source_date": available[0].isoformat(),
+            "latest_source_date": available[-1].isoformat(),
             "retrieved_at_by_date": retrieval_times,
-            "snapshot_hit_dates": sum(day not in updated_dates for day in required),
+            "snapshot_hit_dates": sum(day not in updated_dates for day in available),
             "source_revision_dates": revised_dates,
             "snapshot_miss_dates": len(missing),
             "request_count": remote_count,
@@ -3072,11 +3078,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--end-date")
     parser.add_argument("--retained-source-only", action="store_true", help="Evaluate only stored historical snapshots; preserve missing symbols as source exclusions.")
     parser.add_argument("--max-pages", type=int, default=120)
+    parser.add_argument("--max-source-backfill-symbols", type=int, default=10,
+                        help="Bound remote history acquisition; other symbols use validated retained dates.")
     parser.add_argument("--page-delay-sec", type=float, default=0.2)
     parser.add_argument("--output-dir", type=Path, default=OUTPUT_DIR)
     parser.add_argument("--snapshot-dir", type=Path, default=DEFAULT_SNAPSHOT_DIR)
     parser.add_argument("--write", action="store_true")
     args = parser.parse_args(argv)
+    if args.max_source_backfill_symbols < 0:
+        parser.error("max-source-backfill-symbols must be nonnegative")
     signal.signal(signal.SIGTERM, _handle_research_termination)
     end_date = (
         date.fromisoformat(args.end_date)
@@ -3104,6 +3114,7 @@ def main(argv: list[str] | None = None) -> int:
     from src.engine.monitoring.research_closed_loop import load_candidate
     context = dict(
         retained_source_only=args.retained_source_only,
+        max_source_backfill_symbols=args.max_source_backfill_symbols,
         producer_sha256=research_contract_hash(),
         source_parser_sha256=source_parser_contract_hash(),
         cost_contract=comparison_cost_contract(end_date),
@@ -3235,7 +3246,7 @@ def main(argv: list[str] | None = None) -> int:
                 universe=symbol_universe,
                 origin=symbol_origins[symbol],
                 token_provider=kiwoom_utils.get_cached_kiwoom_token,
-                retained_source_only=args.retained_source_only,
+                retained_source_only=(args.retained_source_only or index > args.max_source_backfill_symbols),
                 snapshot_dir=args.snapshot_dir,
                 max_pages=args.max_pages,
                 page_delay_sec=args.page_delay_sec,
@@ -3400,6 +3411,7 @@ def main(argv: list[str] | None = None) -> int:
         for symbol, reason in source_quarantine.items()
     })
     report["retained_source_only"] = args.retained_source_only
+    report["max_source_backfill_symbols"] = args.max_source_backfill_symbols
     report["symbol_universe"] = symbol_universe
     report["symbol_origins"] = symbol_origins
     report["passed_symbols"] = [

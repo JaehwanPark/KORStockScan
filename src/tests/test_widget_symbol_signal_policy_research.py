@@ -1126,8 +1126,9 @@ def test_snapshot_without_freeze_marker_is_never_durably_reused(tmp_path, monkey
         max_pages=120,
         page_delay_sec=0,
     )
-    research.load_completed_symbol_source(**kwargs)
-    research.load_completed_symbol_source(**kwargs)
+    for _ in range(2):
+        with pytest.raises(ResearchError, match="snapshot_coverage_incomplete"):
+            research.load_completed_symbol_source(**kwargs)
     assert len(calls) == 2
     assert not list(tmp_path.glob("006800/*.json"))
 
@@ -1205,16 +1206,17 @@ def test_incomplete_daily_coverage_is_not_durable(tmp_path, monkeypatch):
         }
 
     monkeypatch.setattr(research, "fetch_krx_history", fetch)
-    research.load_completed_symbol_source(
-        symbol="006800",
-        end_date=day,
-        universe={"006800": "test"},
-        origin="established_widget_symbol",
-        token_provider=lambda: "cached",
-        snapshot_dir=tmp_path,
-        max_pages=120,
-        page_delay_sec=0,
-    )
+    with pytest.raises(ResearchError, match="snapshot_coverage_incomplete"):
+        research.load_completed_symbol_source(
+            symbol="006800",
+            end_date=day,
+            universe={"006800": "test"},
+            origin="established_widget_symbol",
+            token_provider=lambda: "cached",
+            snapshot_dir=tmp_path,
+            max_pages=120,
+            page_delay_sec=0,
+        )
     assert not (tmp_path / "006800" / f"{day}.json").exists()
 
 
@@ -1310,14 +1312,13 @@ def test_overlap_revision_revokes_incomplete_cache_and_preserves_original_bars(
     for day in [dates[0], dates[2]]:
         (tmp_path / "006800" / f"{day}.json").write_text("invalid")
     revised[0] = True
-    _, meta = research.load_completed_symbol_source(**kwargs)
+    with pytest.raises(ResearchError, match="snapshot_coverage_incomplete"):
+        research.load_completed_symbol_source(**kwargs)
     invalidated = json.loads(middle.read_text())
     assert invalidated["complete"] is False
     assert invalidated["bars"] == original["bars"]
     assert invalidated["previous_receipt_sha256"] == original["receipt_sha256"]
     assert research._read_snapshot(middle, "006800", dates[1]) is None
-    assert meta["source_revision_dates"] == [str(dates[1])]
-    assert meta["snapshot_hit_dates"] == 0
 
 
 def test_discovery_profit_objective_keeps_lower_ev_more_profitable_candidate(
@@ -1602,3 +1603,26 @@ def test_retained_historical_source_never_requests_token_or_remote(tmp_path, mon
             universe={"006800":"fixture"}, origin="established_widget_symbol",
             token_provider=forbidden, snapshot_dir=tmp_path, max_pages=120,
             page_delay_sec=0, retained_source_only=True)
+
+
+def test_retained_date_gap_keeps_qualified_history_and_exact_exclusion(tmp_path, monkeypatch):
+    dates = [date(2026, 7, 1) + timedelta(days=i) for i in range(26)]
+    missing = dates[5]
+    monkeypatch.setattr(research, "_clean_trading_dates", lambda end: dates)
+    def snapshot(path, symbol, day):
+        if day == missing:
+            return None
+        bars = [Bar(datetime.combine(day, time(9), tzinfo=KST) + timedelta(minutes=i),
+                    100, 101, 99, 100, 10) for i in range(390)]
+        return bars, {"retrieved_at_kst": str(day) + "T20:10:00+09:00"}
+    monkeypatch.setattr(research, "_read_snapshot", snapshot)
+    def forbidden():
+        raise AssertionError("retained source requested broker token")
+    bars, meta = research.load_completed_symbol_source(symbol="006800", end_date=dates[-1],
+        universe={"006800": "fixture"}, origin="established_widget_symbol",
+        token_provider=forbidden, snapshot_dir=tmp_path, max_pages=120,
+        page_delay_sec=0, retained_source_only=True)
+    assert len(bars) == 25 * 390
+    assert meta["trading_date_count"] == 25 and meta["expected_trading_date_count"] == 26
+    assert [r["trade_date"] for r in meta["snapshot_date_exclusions"]] == [str(missing)]
+    assert str(missing) not in meta["retrieved_at_by_date"]

@@ -755,7 +755,7 @@ def test_systemd_service_waits_for_postclose_label_contract():
     )
     assert "--source-wait-sec 900" in wrapper
     assert "--source-poll-sec 30" in wrapper
-    assert "TimeoutStartSec=3600" in service
+    assert "TimeoutStartSec=57600" in service
     assert "RestartPreventExitStatus=42" in service
 
 

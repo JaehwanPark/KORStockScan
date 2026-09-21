@@ -516,6 +516,51 @@ def _verified_failed_machine_refresh_retry(report_dir: Path, day: str, previous:
     return validate_current_receipt(_load_json(closure_path), day)
 
 
+def machine_input_issues(report_dir: Path, day: str) -> list[str]:
+    """Cheap exact-date dependency barrier, before any costly machine stage.
+
+    Producers retain their full schema/hash validation. Do not wait on main
+    success: final main verification may itself consume machine evidence.
+    """
+    from src.engine.automation.postclose_recommendation_intake import _report_date
+    issues = producer_receipt_issues(report_dir, day, "widget")
+    if issues and _verified_failed_machine_refresh_retry(
+        report_dir, day, _load_json(producer_receipt_path(report_dir, day, "machine")), issues
+    ):
+        issues = []
+    main = _load_json(report_dir / "threshold_cycle_postclose_status" /
+                      f"threshold_cycle_postclose_{day}.status.json")
+    if main.get("status") == "running":
+        issues.append("main:producer_running")
+    if issues:
+        return issues
+    for label in ("ai_decision_outcome_labels", "low_price_two_leg_expanded_candidate_research",
+                  "runtime_approval_summary"):
+        path = report_dir / label / f"{label}_{day}.json"
+        if _report_date(_load_json(path)) != day:
+            issues.append(f"{label}:exact_date_input_missing_or_invalid")
+            break
+    return issues
+
+
+def wait_for_machine_inputs(report_dir: Path, day: str, *, timeout: float, poll: float = 30) -> int:
+    import time
+    deadline = time.monotonic() + max(0, timeout)
+    previous = None
+    while True:
+        issues = machine_input_issues(report_dir, day)
+        if issues != previous:
+            print(json.dumps(dict(owner="machine", target_date=day,
+                status="waiting_inputs" if issues else "inputs_ready", issues=issues)), flush=True)
+            previous = issues
+        if not issues:
+            return 0
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return 75
+        time.sleep(min(max(0.1, poll), remaining))
+
+
 def _producer_main(argv=None) -> int:
     import argparse
     import os
@@ -528,7 +573,8 @@ def _producer_main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Record existing independent postclose owner execution")
     parser.add_argument("--owner", choices=sorted(INDEPENDENT_SOURCES), required=True)
     parser.add_argument("--date", required=True, type=date.fromisoformat)
-    parser.add_argument("--phase", choices=("started", "finished"), required=True)
+    parser.add_argument("--phase", choices=("started", "finished", "wait-inputs"), required=True)
+    parser.add_argument("--source-wait-sec", type=float, default=43200)
     parser.add_argument("--exit-code", type=int, default=0)
     parser.add_argument("--reuse-widget-prefix", action="store_true")
     args = parser.parse_args(argv)
@@ -536,6 +582,10 @@ def _producer_main(argv=None) -> int:
     if args.date > datetime.now(ZoneInfo("Asia/Seoul")).date():
         parser.error("future source date is not supported")
     report_dir = DATA_DIR / "report"
+    if args.phase == "wait-inputs":
+        if args.owner != "machine":
+            parser.error("wait-inputs is only supported for machine")
+        return wait_for_machine_inputs(report_dir, day, timeout=args.source_wait_sec)
     path = producer_receipt_path(report_dir, day, args.owner)
     value = _load_json(path)
     now = datetime.now(ZoneInfo("Asia/Seoul")).isoformat()
@@ -559,6 +609,9 @@ def _producer_main(argv=None) -> int:
             changed = subprocess.check_output(["git", "-C", str(PROJECT_ROOT), "diff", "--name-only", old_commit, "HEAD", "--", "src"], text=True).splitlines()
             allowed = {"src/engine/monitoring/widget_symbol_signal_policy_research.py",
                        "src/engine/automation/postclose_summary_handoff.py",
+                       # The advisory/auto-policy prefix does not consume the
+                       # joint research allocator; signal research revalidates it.
+                       "src/engine/monitoring/research_closed_loop.py",
                        "src/engine/monitoring/low_price_two_leg_expanded_candidate_research.py"}
             changed = [name for name in changed if not name.startswith("src/tests/")]
             if set(changed) - allowed:

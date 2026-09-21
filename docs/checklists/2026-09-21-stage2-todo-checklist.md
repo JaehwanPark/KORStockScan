@@ -26,6 +26,7 @@
 ## 장후 통합 복구·최종 인계·정상 기동 준비
 
 - [ ] `[PostcloseLateSourceFinalHandoffAudit0920] 장후 25–29 검증·전체 복구·다음 PREOPEN 기동 준비` (`Due: 2026-09-21`, `Slot: PREOPEN`, `TimeWindow: 07:00~07:20`, `Track: RuntimeStability`)
+  - 9/21 source 경합 수리: [실행 의존·widget 날짜 제외·machine refresh 리뷰](../audit-reports/2026-09-21-postclose-source-order-repair-review.md). same-date 선행 산출물 barrier, 실패 전체 자동 재시도 제거, 기존 일별 제외 계약 연결 후 source9/21 제한 재실행을 수행한다. 완료 판정은 실제 독립 terminal/후행 소비로 대사한다.
   - Source: [통합 보완·전체 재생성 상세계획](../proposals/postclose-integrated-verification-recovery-and-next-preopen-readiness-plan-2026-09-20.md), [장후작업 현행 활성 목록](../audit-reports/2026-09-05-postclose-work-inventory.md).
   - Preparation evidence: [통합 복구 최종 리뷰](../audit-reports/2026-09-20-postclose-integrated-recovery-review.md). 9/20 15:26:54 main/widget/machine 및 finalization DONE, 직접 원천11/11. code5bd73a8d2 배포, 서비스9개 정의/129개 인스턴스 시작 없는 source binding. 9/21 carry/fallback actual reader 검증 완료; 신규 승격0. 기존 main 운영 경제성 구조적 OPEN과 자연 PREOPEN/PID·완료 손익은 별개다.
   - 일정: 9/20 통합 수리·A–H 복구와 준비 검증을 마쳤다. 이 OPEN은9/21 07:00~07:20 준비 정책/source release/서비스 변경 여부 재확인만 소유한다. 정상07:35 PREOPEN 및 예정 기동/PID 소비는 기존 `DirectFamilyPreopenPolicyHandoff`가 소유하며 오늘 조기 실행하지 않는다.
