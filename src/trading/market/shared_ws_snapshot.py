@@ -503,17 +503,21 @@ def selected_completed_bar_payload(request_code, *, now, consumer="widget", seed
         return None
     item = request_code[:6] + "_AL"
     try:
-        result = read_shared_completed_bars(item, now=now)
         if history_scope not in {"rolling", "session"}:
             raise ValueError("completed_bar_history_scope_invalid")
+        if type(minimum_bars) is not int or minimum_bars < 1:
+            raise ValueError("completed_bar_history_floor_invalid")
+        result = read_shared_completed_bars(item, now=now)
         if history_scope == "session" and not result["_completed_bar_source"]["complete_session_prefix"]:
             if seed_fetch is None:
                 raise ValueError("session_anchor_history_incomplete")
             seed = shared_completed_bar_seed(item, now=now, fetch=seed_fetch)
             seed["_completed_bar_source"]["ws_selection_blocker"] = "session_anchor_history_incomplete"
             return seed
-        if len(result["stk_min_pole_chart_qry"]) >= max(1, int(minimum_bars)) or seed_fetch is None:
+        if len(result["stk_min_pole_chart_qry"]) >= minimum_bars:
             return result
+        if seed_fetch is None:
+            raise ValueError("completed_bar_history_insufficient")
         # A homogeneous bootstrap seed may cover startup, never be spliced
         # into raw WS candles. Later WS gaps reuse it without repeated calls.
         return shared_completed_bar_seed(item, now=now, fetch=seed_fetch,
@@ -527,6 +531,41 @@ def selected_completed_bar_payload(request_code, *, now, consumer="widget", seed
         raise RuntimeError("completed_ws_bars_unavailable:" + reason) from exc
 
 
+def _read_seed_receipt(path, key):
+    """Malformed existing receipts fail closed; absence alone allows a seed."""
+    from src.engine.scalping.micro_reversion.completed_bars import digest
+    try:
+        cached = _bounded_json(path)
+    except FileNotFoundError:
+        return None
+    try:
+        if not isinstance(cached, dict):
+            raise ValueError("shape")
+        expected = cached.pop("content_sha256")
+        if digest(cached) != expected or cached["key"] != key:
+            raise ValueError("binding")
+        if cached["status"] not in {"complete", "inflight"}:
+            raise ValueError("status")
+        for field in ("requested_at_epoch", "retry_after_epoch"):
+            value = cached[field]
+            if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
+                raise ValueError("clock")
+        if cached["retry_after_epoch"] < cached["requested_at_epoch"]:
+            raise ValueError("clock_order")
+        if cached["status"] == "complete":
+            value = cached["received_at_epoch"]
+            result = cached["result"]
+            if (type(value) not in (int, float) or not math.isfinite(value)
+                    or value < cached["requested_at_epoch"]
+                    or not isinstance(result, dict)
+                    or not isinstance(result.get("stk_min_pole_chart_qry"), list)
+                    or not isinstance(result.get("_completed_bar_source"), dict)):
+                raise ValueError("result")
+        return cached
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("completed_bar_seed_receipt_invalid") from exc
+
+
 def shared_completed_bar_seed(request_code, *, now, fetch, root=None, missing_range="initial_session_history"):
     """One successful homogeneous REST seed per exact session across processes.
 
@@ -536,6 +575,8 @@ def shared_completed_bar_seed(request_code, *, now, fetch, root=None, missing_ra
     """
     import fcntl
     from src.engine.scalping.micro_reversion.completed_bars import atomic_json, digest
+    if now.tzinfo is None:
+        raise ValueError("completed_bar_seed_clock_invalid")
     now = now.astimezone(KST)
     session = _bar_session(now)
     if not re.fullmatch(r"[0-9]{6}_AL", request_code):
@@ -552,14 +593,8 @@ def shared_completed_bar_seed(request_code, *, now, fetch, root=None, missing_ra
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
             raise RuntimeError("completed_bar_seed_lease_busy") from exc
-        try:
-            cached = _bounded_json(path)
-        except FileNotFoundError:
-            cached = {}
-        if cached:
-            expected = cached.pop("content_sha256")
-            if digest(cached) != expected or cached["key"] != key:
-                raise ValueError("completed_bar_seed_receipt_invalid")
+        cached = _read_seed_receipt(path, key)
+        if cached is not None:
             if cached["status"] == "complete":
                 if not cached["received_at_epoch"] <= now.timestamp():
                     raise ValueError("completed_bar_seed_future")
@@ -568,11 +603,21 @@ def shared_completed_bar_seed(request_code, *, now, fetch, root=None, missing_ra
                 return result
             if time.time() < cached["retry_after_epoch"]:
                 raise RuntimeError("completed_bar_seed_retry_deferred")
+        # The admission clock must share the lock's session scope. Otherwise
+        # alternating missing ranges bypass a failed request's cooldown.
+        admission_path = folder / (digest(lease_key) + ".admission.json")
+        admission = _read_seed_receipt(admission_path, lease_key)
+        if admission is not None and time.time() < admission["retry_after_epoch"]:
+            raise RuntimeError("completed_bar_seed_retry_deferred")
         started = time.time()
         receipt = {"key": key, "owner": process_generation(os.getpid()), "status": "inflight",
                    "requested_at_epoch": started, "retry_after_epoch": started + 60,
                    "requested_range_end": now.replace(second=0,microsecond=0).isoformat()}
         receipt["content_sha256"] = digest(receipt)
+        admission = {**receipt, "key": lease_key}
+        admission.pop("content_sha256")
+        admission["content_sha256"] = digest(admission)
+        atomic_json(admission_path, admission)
         atomic_json(path, receipt)
         try:
             result = fetch(request_code)

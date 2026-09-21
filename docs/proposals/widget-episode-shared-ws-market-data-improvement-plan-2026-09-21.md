@@ -138,7 +138,7 @@ flowchart LR
 
 **검증·배포:** 정상·quiet프리/애프터·명시적단절·재접속first-data대기·연속role demotion·stale packet·중복/역순/late·봉말경계·writer실패·단일seed lease경합·consumer재시작·namespace혼합을기존테스트와신규helper가필요한경우동일역할테스트로검증한다. 키움요청/REG/파서/복구수정전공식reference gate를다시닫는다. callback 기존1ms/2ms guard와20초주문입력기준은불변이다. 먼저A/B/C를검토·수정·재검증하고현재D cohort에P4인계,이후E의도래세션을검증한다. 새consumer전환실패는해당consumer만이전검증경로로rollback하며원본원장·holdings·policy·종료episode를되돌리지않는다. 수신지연/IO경합이확인된상태에서분봉전환을성공으로선언하지않는다.
 
-**9/21 구현 인계:** [P3 구현·반복 리뷰·운영 설정/rollback](../audit-reports/2026-09-21-widget-ws-completed-bars-implementation-review.md). 기존 writer 뒤 완료 분봉 투영, 독립 reader, 5개 widget/4개 episode 연결과 프로세스 간 seed/식별된 gap lease를 구현한다. 수정주가 경계는 합치지 않고 기존 최소 history 이후 homogeneous WS로 전환한다. publisher는 기존 AL 6종목만 명시하며 consumer bar source는 별도 `rest` 기본값/allowlist로 단계 적용한다. callback 기준·20초 quote guard·정책·수량은 불변이다. 구현 검증과 자연3창/실제 소비는 구분한다. exact release/PID는 위 인계 기록이 소유한다.
+**9/21 구현 인계:** [P3 구현·반복 리뷰·운영 설정/rollback](../audit-reports/2026-09-21-widget-ws-completed-bars-implementation-review.md). 기존 writer 뒤 완료 분봉 투영, 독립 reader, 5개 widget/4개 episode 연결과 프로세스 간 seed/식별된 gap lease를 구현한다. 수정주가 경계는 합치지 않고 기존 최소 history 이후 homogeneous WS로 전환한다. publisher는 기존 AL 6종목만 명시하며 consumer bar source는 별도 `rest` 기본값/allowlist로 단계 적용한다. callback 기준·20초 quote guard·정책·수량은 불변이다. 구현 검증과 자연3창/실제 소비는 구분한다. exact release/PID는 위 인계 기록이 소유한다. 실제 publisher49e4448ac/PID329859와 최종 reader c2ea0d267/수집기4개를 배포했다(최종1,129 PASS). 17:43에6종목 완료 봉과 원장OHLCV 일치를 확인했으나 **bar consumer는REST 유지**다. 세션VWAP/시초범위 및 `anchor_mode=session`에는재기동후suffix를넘기지않는추가guard를구현했다. 동일가격기준의초기세션seed 연결과rolling lookback이완료되어야실제전환가능하며P3전체종결은아니다.
 
 ### 3.4 P2E — 주문 직전 시장자료 검사의 WS 우선 소비
 
@@ -218,3 +218,5 @@ flowchart LR
 계획 작성 당시 범위는 기존 수집/소비 경로 개선 설계로 제한했다. 도입 단계·구독 용량 미확정·공통 예산·교차 process 복구·분봉 연속성·기존 holding 보존·detector coverage·현재 checklist 단일 owner를 재검토했다. 당시 코드/런타임 변경과 외부 sync는 수행하지 않았다. 현재 명시 승인된 P0/P1 구현·인계는 위 연결된 별도 수리 기록이 소유하며, 후속 자연 검증·확대·분봉 gate는 유지한다.
 
 9/21 후속 계획 보완은 §1.1의9건을 근거로 주문 직전 검사를 일괄 REST 유지하던 범위를 P2E로 확장했다. 입력 adapter·시간 예산·WAIT 수리·cohort별 검증·rollback을 검토하고 P3/메인 owner와 구분했다. 이번 변경은 계획/현재 checklist 연결만이며 코드·배포·재기동·주문·외부 sync를 수행하지 않는다. 단일 실행 owner는 상단 stable ID를 유지한다.
+
+9/21 후속 코드리뷰: seed 재시도 대기를 결손구간별 파일에서 종목·세션 공통 admission으로 보완하고, 손상 캐시와 minimum-history 우회를 차단했다. 기존 단일 owner와 REST 선택은 유지하며 승인된 커밋·푸시·immutable 배포/PID 증거는 [구현 리뷰](../audit-reports/2026-09-21-widget-ws-completed-bars-implementation-review.md#follow-up-review-and-authorized-commitpush-rollout)에 기록한다.

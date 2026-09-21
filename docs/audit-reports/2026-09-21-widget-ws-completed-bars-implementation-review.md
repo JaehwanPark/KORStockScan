@@ -37,4 +37,30 @@ Rollback consumer bar source to its prior `rest` setting independently of quote 
 
 ## Deployment and natural receipt
 
-Pending exact immutable validation and authorized selection at this draft point. This paragraph is replaced with actual release/PID and bounded natural evidence after deployment.
+Main source publisher: `49e4448ac0ea4440d44d8609530c8de7cae15181`, PID `329859`, consumed at 17:28 KST. [Selection/PID receipt](../../tmp/widget-p3-impl-20260921/selection-after.json), [guarded restart and exact-date policy verification](../../tmp/widget-p3-impl-20260921/main-restart.log). Parent `90dd032e3` and its concurrent entry fixes are preserved. Policy verification passed with missing/mismatched values and unverified selected families all zero.
+
+Final four-collector reader release: `c2ea0d267741468bf86eb1594f104b2cda9d9344`. Samsung PID336094, Doosan336097, Hanwha Ocean336093, symbol observer336164, all active/running with actual cwd verified. [Per-service deployment/backup receipts](../../tmp/widget-p3-impl-20260921/consumer-deployment.json). The immediate observer cwd check raced startup; the subsequent read-only check confirmed the stable PID, without an extra restart. Main remained PID329859 during this reader-only correction. The separate research service, widget trader and ended episode processes were not restarted.
+
+Exact publisher release: **1,128 passed**. Final reader release: **1,129 passed**, two existing warnings. Targeted history correction:616 passed before immutable validation. Compile, Bash syntax, exact release diff, links, single OPEN owner and print-only backlog validation passed. The original canary storage pin failure was corrected by carrying the verified unchanged prior source dependency; no limit or baseline was relaxed. Callback p95 `0.027999ms`, p99 `0.047222ms`, drops/errors0.
+
+Natural source evidence as of `2026-09-21T17:43:11.548243+09:00`: 005930/034020/042660/010140 each13 eligible completed bars;006800/080220 each12. All six independent reads validated, and each latest completed OHLCV matched its exact canonical raw sequence in a bounded2MiB tail. [Raw-to-bar evidence](../../tmp/widget-p3-impl-20260921/natural-receipt.json). Current observer/transport binding matched; writer loss, projection errors, configuration errors and new timestamp rejection counts were0. Startup partial minutes remain excluded. This is a source-quality result, not consumer input promotion or an order/economic result.
+
+### Additional semantic finding: session anchors
+
+Review of actual consumers found Samsung's session VWAP/opening range and006800/010140's `anchor_mode=session`. A mid-session WS suffix can contain many perfect candles while still replacing the opening anchor with the restart time. The final reader now distinguishes a complete session prefix from a rolling suffix. Session consumers cannot select the latter; a homogeneous REST seed retains an explicit `session_anchor_history_incomplete` blocker. Rolling symbol consumers require their existing full lookback plus setup-valid span, and regular episode history includes confirmation bars. No strategy window/threshold was relaxed.
+
+**Current consumer bar selectors remain `rest`. Full P3 live cutover is not closed.** Next blocker owner is this record plus the original checklist ID: prove compatible initial session history/corporate-action price basis before combining adjusted REST and raw WS; then validate session VWAP/opening anchor equality and each rolling lookback before changing the exact cohort's selector. The inspected official REST specification and [official minute-chart example](https://github.com/Kiwoom-Securities/Kiwoom-REST-API/blob/953e5dbff123f437ab4d11a78a95191a685eb51f/examples/%EA%B5%AD%EB%82%B4%EC%A3%BC%EC%8B%9D/%EC%B0%A8%ED%8A%B8/get_domestic_stock_minute_chart.py) list adjustment0/1 without establishing this cross-source, same-day seed merge contract. Third-party interpretations were not used to authorize a merge. Waiting longer does not restore the missing session prefix.
+
+The6-symbol producer remains running to accumulate natural evidence. Actual bar consumer cutover, three complete15-minute windows, primary-bar REST0 and source/submit/economic acceptance remain OPEN. No manual order/cancel, provider call, broad report regeneration or external Project/Calendar sync was performed by this work.
+
+## Follow-up review and authorized commit/push rollout
+
+The user explicitly authorized repeated review/fixes, commit/push and deployment/start. This review preserves the existing REST selectors and six-symbol publisher cohort. Session-prefix/price-basis integration remains the existing OPEN acceptance; it is not bypassed by this repair.
+
+Confirmed and repaired three local contract defects:
+
+1. Different missing ranges shared a process lock but separate failure clocks, allowing a second range to retry inside the first range's cooldown. A hash-bound date/item/session/adjustment admission receipt now shares the lock scope. Successful exact-range reuse still returns immediately with its original timestamp and zero new REST requests.
+2. Missing hash, wrong JSON shape or incomplete seed receipts could escape the bootstrap handler as KeyError/TypeError, or an empty receipt could be mistaken for absence. Existing malformed receipts now produce controlled source failures and cannot trigger a replacement network call.
+3. A caller with no seed callback could receive fewer WS bars than its declared floor; invalid history scopes could also reach bootstrap before validation. Floor/scope validation now precedes source lookup and insufficient history fails explicitly. Morning episodes inherit the regular machine's history-floor propagation; no duplicate morning implementation is needed.
+
+Official upstream HEAD was rechecked unchanged at `953e5dbff123f437ab4d11a78a95191a685eb51f`; [fresh reference receipt](../../tmp/widget-p3-review-20260921/official-receipt.json). The local seed admission/cache repair does not change API payloads, FIDs, authentication or order calls. Targeted new regression coverage: cross-range failure cooldown/retry, malformed bootstrap caches, no-seed floor and invalid scope. [Follow-up validation and deployment directory](../../tmp/widget-p3-review-20260921/).

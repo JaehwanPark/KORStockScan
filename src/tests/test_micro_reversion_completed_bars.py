@@ -175,6 +175,71 @@ def test_seed_failure_backoff_has_no_cached_success(tmp_path,monkeypatch):
         reader.shared_completed_bar_seed("005930_AL",now=now,fetch=lambda _:pytest.fail("retry before cooldown"),root=tmp_path)
 
 
+def test_seed_different_gaps_share_failure_cooldown(tmp_path, monkeypatch):
+    now = BASE + timedelta(hours=1)
+    monkeypatch.setattr(reader.time, "time", lambda: now.timestamp())
+    def failed(_):
+        raise RuntimeError("budget unavailable")
+    with pytest.raises(RuntimeError, match="budget unavailable"):
+        reader.shared_completed_bar_seed("005930_AL", now=now, fetch=failed,
+                                         root=tmp_path, missing_range="gap_a")
+    with pytest.raises(RuntimeError, match="retry_deferred"):
+        reader.shared_completed_bar_seed("005930_AL", now=now,
+            fetch=lambda _: pytest.fail("cross-range duplicate REST"),
+            root=tmp_path, missing_range="gap_b")
+    monkeypatch.setattr(reader.time, "time", lambda: now.timestamp() + 61)
+    result = reader.shared_completed_bar_seed("005930_AL", now=now+timedelta(seconds=61),
+        fetch=lambda _: {"stk_min_pole_chart_qry": []}, root=tmp_path, missing_range="gap_b")
+    assert result["_completed_bar_source"]["rest_request_count"] == 1
+
+
+@pytest.mark.parametrize("corruption", [None, [], {}, {"status": "complete"}, "missing_result", "invalid_clock"])
+def test_bootstrap_corrupt_seed_is_controlled_without_rest(tmp_path, monkeypatch, corruption):
+    now = BASE + timedelta(hours=1)
+    monkeypatch.setattr(reader.time, "time", lambda: now.timestamp())
+    monkeypatch.setattr(reader, "COMPLETED_BARS_ROOT", tmp_path)
+    monkeypatch.setenv("KORSTOCKSCAN_WIDGET_BAR_SOURCE", "ws")
+    monkeypatch.setenv("KORSTOCKSCAN_WIDGET_BAR_WS_SYMBOLS", "005930")
+    def missing(*args, **kwargs):
+        raise FileNotFoundError("projection not present")
+    monkeypatch.setattr(reader, "read_shared_completed_bars", missing)
+    reader.shared_completed_bar_seed("005930_AL", now=now,
+        fetch=lambda _: {"stk_min_pole_chart_qry": []}, root=tmp_path)
+    path = next(p for p in (tmp_path/".seed/2026-09-21").glob("*.json") if not p.name.endswith(".admission.json"))
+    if isinstance(corruption, str):
+        doc = json.loads(path.read_text())
+        doc.pop("content_sha256")
+        if corruption == "missing_result":
+            doc.pop("result")
+        else:
+            doc["received_at_epoch"] = "invalid"
+        doc["content_sha256"] = digest(doc)
+    else:
+        doc = corruption
+    atomic_json(path, doc)
+    with pytest.raises((RuntimeError, ValueError), match="completed_bar_seed_receipt_invalid"):
+        reader.selected_completed_bar_payload("005930", now=now,
+            seed_fetch=lambda _: pytest.fail("corruption must not trigger REST"))
+
+
+def test_no_seed_cannot_bypass_history_floor(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_WIDGET_BAR_SOURCE", "ws")
+    monkeypatch.setenv("KORSTOCKSCAN_WIDGET_BAR_WS_SYMBOLS", "005930")
+    monkeypatch.setattr(reader, "read_shared_completed_bars", lambda *a, **kw:
+                        {"stk_min_pole_chart_qry": [{}], "_completed_bar_source": {}})
+    with pytest.raises(RuntimeError, match="history_insufficient"):
+        reader.selected_completed_bar_payload("005930", now=BASE, minimum_bars=2)
+
+
+def test_invalid_history_scope_does_not_bootstrap(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_WIDGET_BAR_SOURCE", "ws")
+    monkeypatch.setenv("KORSTOCKSCAN_WIDGET_BAR_WS_SYMBOLS", "005930")
+    monkeypatch.setattr(reader, "read_shared_completed_bars", lambda *a, **kw: pytest.fail("invalid scope read"))
+    with pytest.raises(RuntimeError, match="history_scope_invalid"):
+        reader.selected_completed_bar_payload("005930", now=BASE, history_scope="unknown",
+                                             seed_fetch=lambda _: pytest.fail("invalid scope REST"))
+
+
 def test_other_symbol_timestamp_rejection_does_not_poison_complete_bar(tmp_path):
     p=CompletedBarProjection(tmp_path)
     run(p,[point(1,10),point(2,60)],{**INTEGRITY,"item_rejections":{"006800_AL":1}})
