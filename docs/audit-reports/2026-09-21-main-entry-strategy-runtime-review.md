@@ -53,3 +53,12 @@
 - KRX 저장 연구 후보에는 BLOCK→RECHECK와 RECHECK→BLOCK 등의 전환이 있지만 새 ENTER_NOW 전환·양수 비용 후 순익을 확정하지 못했다. 기존 미지원 실행·비용 연결 0건으로 `unsupported_downstream`; 장전/aftermarket는 분리된 holdout 부족으로 `hold_sample`이다. 모든 scope 승격 false, 현재 bundle `15c063637359bd4cbd5a567760abecdf6229aee1f44d1e9d6a7cbc2dc7e97eb7` 유지.
 - runtime summary 재생성 및 메인 scoped verifier PASS. 전체 terminal/자연 비용 후 실성과를 PASS로 확장하지 않는다. 연구에서 발견한 판정 변화는 주문 또는 수익성 증거가 아니다.
 - 동시 위젯 배포 `fbe11c5f9`를 보존해 통합한다. 최종 배포·기동 결과는 `tmp/main-entry-review2-20260921/validation.json`, `selection-before.json`, `deployment-result.json`과 `data/runtime/runtime_release_selection.json`의 실제 PID 영수증으로 판정한다.
+
+
+## 작업본·배포본 통합 정리
+
+- 사용자 작업본/배포본 통합·불필요 파일 제거 요청에 따라 main 기준을 기존 `ea4788788`에서 실제 배포된 후손 `ea21e9dcc`로 맞췄다. 사전 분류한 93개 작업 파일의 바이트는 모두 보존했고, 소스·테스트·배포 스크립트 차이는 0이다. 작업본에만 남았던 리뷰/배포 이력과 계획·체크리스트 문서는 보존하여 함께 버전 관리한다.
+- 현재 메인 `ea21e9dcc`/PID `367246`와 직전 롤백 `fbe11c5f9`는 유지한다. 해당 프로세스·selector·정책을 변경하거나 재기동하지 않았다. 기존 실제 비용 재생 결손과 새 정책 미승격 상태도 그대로다.
+- `/proc` cwd·명령 인수·열린 파일, systemd와 cron의 참조가 없고 커밋이 현재 배포의 조상인 중복 작업트리 3개를 제거했다: `KORStockScan-nonentry-review`, `main-entry-strategy-20260921-77b6beb51`, `main-entry-strategy-20260921-f40bbf482`. 삭제 전 공유 data/docs/logs/tmp/venv 링크의 대상을 확인했고 실제 공유 디렉터리는 건드리지 않았다. 약 245 MB의 중복 체크아웃·캐시를 정리했다. 원 커밋·배포/검증 영수증은 남아 있어 과거 경로는 당시 체크아웃 이력으로 해석한다.
+- `/tmp/nonentry-*` 임시 항목 56개는 고유 원본·실패/검증 증거를 잃지 않도록 약 1.2 MB의 단일 복구 압축본으로 모으고 느슨한 복사본을 제거했다. 기존 작업본 문서/패치/인덱스와 selector도 먼저 보존했다. [통합·삭제 목록 및 복구 자료](../../tmp/workspace-release-consolidation-20260921/cleanup-result.json), [사전 통합 분류](../../tmp/workspace-release-consolidation-20260921/integration.json).
+- 이 정리는 코드·정책 변경이 없어 trading pytest·장후 재생성·외부 Project/Calendar sync를 반복하지 않는다. 문서 owner/링크·print-only parser·diff 및 운영 소스/selector/PID 불변 검증 결과는 같은 증거 디렉터리의 `final-validation.json`에 기록한다. 실행 중이거나 다른 작업에 속한 릴리스·거래 원장·당일 생성 자료는 삭제하지 않는다.

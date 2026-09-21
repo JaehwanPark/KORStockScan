@@ -1,6 +1,7 @@
 # 메인 제출병목 인과 복원·정상 제출 경로 검증 상세계획
 
-- 상태: **후속 구현 승인에 따른 작업본 수리·반복 리뷰**. 판정 revision/경제성 이력, 제한적 large-sell RECHECK 연결, 후보 admission 사유와 원본 입력 로그를 기존 owner에 구현한다. [구현·검증 기록](../audit-reports/2026-09-21-main-submit-causal-repair-review.md). 이번 요청에 커밋푸시·배포·재기동·주문은 포함되지 않으며 이전 개별 승인을 포괄 전용하지 않는다. 자연 제출·비용 경제성 및 미기록 과거 인과는 별도 OPEN이다.
+- 상태: **확인된 코드 결함 구현·반복 리뷰·후속 승인 배포 완료, 자연 수용 OPEN**. 판정 revision/경제성 이력, 제한적 large-sell RECHECK 연결, 후보 admission 사유와 원본 입력 로그를 기존 owner에 구현했다. 후속 사용자 배포/재기동 승인으로 기존 WS 배포를 보존한9e828ab85/main PID244168에 인계했다. [구현·검증·운영 잔여 기록](../audit-reports/2026-09-21-main-submit-causal-repair-review.md). 전체 health·자연 제출·비용 경제성 및 미기록 과거 인과는 별도 OPEN이며 원격 push·수동 주문·안전 기준 완화는 하지 않았다.
+- 최신 후속 승인 배포: §4.5 국소 돌파 의미·§4.6 최종 입력 freshness 연결 및 §6.1 비진입5초를 반복 리뷰·보완하여 **9e998bddd / 메인 PID280948 / 15:55:30 기동**으로 인계했다. 최신 WS/P2 `4914977fd` 기반을 보존했다. 배포본865 PASS, 정책 인계 PASS,15:55:38 health7/7 PASS. 자연 수용·비용/holdout 검증은 별도 OPEN이다. [최종 배포 기록](../audit-reports/2026-09-21-main-submit-causal-repair-review.md#후속-승인--국소-돌파stale-최종-배포와-재기동).
 - 주 실행·자연 검증 owner: [당일 checklist](../checklists/2026-09-21-stage2-todo-checklist.md)의 `SubmissionBottleneckMonitorNatural0921`. WS 전송·P2/P3는 같은 checklist의 `KiwoomCommonHealthOpportunityCostAcceptance0917`, 비용 경제성은 `DirectFamilySourceRepairMainMechanisticEntry`를 유지한다. 새 중복 OPEN을 만들지 않는다.
 - 목표: 자금 결손 경보를 없애는 것이 아니라 **신선한 입력에서 기계판정을 통과한 동일 시도가 기존 안전장치 아래 정상 제출 경로에 도달하는지 입증**한다. 합법적인 BLOCK/RECHECK·위험 차단은 실패율을 낮추기 위해 제거하지 않는다.
 - 기준: [Plan Rebase](../plan-korStockScanPerformanceOptimization.rebase.md), [기존 제출병목 수리 기록](../audit-reports/2026-09-21-preflight-submit-bottleneck-repair.md), [공유 WS 개선 계획](widget-episode-shared-ws-market-data-improvement-plan-2026-09-21.md). 본 계획은 main-only이며 위젯·에피소드·수동 보유 주문 owner를 변경하지 않는다.
@@ -106,6 +107,53 @@
 - 기존 census1200초 결과는 limited BBO sampling·1주 표시잔량·0.23% 비용 모형이며 continuous first-hit/실제 fill 권한이 없다. gap/censor/분봉내 목표-손절 순서 불명은 unresolved로 남긴다. 높은 사후 수익률만으로 false veto를 확정하지 않는다.
 - 판정은 `입력/연결 결함`, `규칙대로 차단·경제적 적정성 미확정`, `정상 안전 차단 근거 확인`, `과잉 차단 후보`, `증거 부족`으로 서술하되 새 runtime taxonomy/report producer를 만들지 않는다. 조정 검토는 fresh·단일 blocker·비용/역행 및 기존 튜닝 계약이 충족될 때 기존 owner로 인계한다. threshold나 hard safety 변경은 이번 경로 수리에 포함하지 않는다.
 
+### 4.5 9/21 후속 — 공식 원천과 국소 돌파 실패 보완계획
+
+계획 수립 시 범위는 **돌파/stale 계획 구체화 + 비진입 자금 관측의5초 재사용 구현**이었다. 후속 “계획구현하고 코드리뷰 후 수정보완 반복실행” 승인으로 아래 돌파/stale 및 장후 의미 분리까지 작업본에 구현했다. 구현 turn에는 배포/재기동하지 않았으며, 이후 명시 승인 배포는 상단 최신 receipt와 감사 기록에 구분한다. 외부 sync·수동 실거래 호출은 실행하지 않았다.
+
+공식 참조: 2026-09-21T15:18:05+09:00 GitHub `main` SHA **953e5dbff123f437ab4d11a78a95191a685eb51f**. 해당 tree에는 `kiwoom_docs`가 없어 [packaged specification](https://github.com/Kiwoom-Securities/Kiwoom-REST-API/blob/953e5dbff123f437ab4d11a78a95191a685eb51f/kiwoom/_data/kiwoom_api_spec.json), `kiwoom/specs.py`, `kiwoom/core/client.py`, `kiwoom/realtime/schemas.py`, `kiwoom/realtime/packets.py`, `postman/kiwoom-openapi.postman_collection.json`을 교차 확인했다. 337 API의 저항/돌파/resistance/breakout 명시 필드는 발견되지 않았다. portal 0B 페이지는 이 조회에서 접근 실패했으므로 미확인 의미를 확정하지 않는다.
+
+| 필요한 값 | 공식 제공 범위 | 사용 경계 |
+| --- | --- | --- |
+| 국소 저항선·돌파 발생시각 | 해당 전략 의미의 직접 필드는 확인되지 않음 | 아래 completed-bar 로컬 파생 계약 필요 |
+| 고가·고가시간 | 실시간 `0B`의 FID17(고가), FID1891(고가시간) 존재 | 고가를 국소 저항선으로 치환하지 않음. 1891은 명칭 외 형식/동률 갱신/route별 의미가 불명확하므로 현재 파서 추가·실행 승격 안 함 |
+| 분봉 가격과 시각 | `ka10080`: `cntr_tm`(YYYYMMDDHHmmss), `open_pric/high_pric/low_pric/cur_prc`, `trde_qty` | 봉 시각으로 고점이 포함된 구간을 특정; 봉 안의 정확한 초 단위 돌파시각을 생성하지 않음 |
+| 일반 시세·최고가일 | `ka10001/ka10007`: 고가, 최고가일 및 일반 시세시각 | 일반 `tm`/최고가일은 국소 돌파 발생시각이 아님 |
+
+`ka10080` POST `/api/dostk/chart`, `stk_cd`의 KRX/NXT/SOR suffix, `tic_scope=1`, 수정주가 구분 및 continuation은 기존 owner를 유지한다. 새 API 호출/구독·봉 합성은 필요하지 않다. 공식 계좌 `kt00011` POST `/api/dostk/acnt`, `stk_cd/uv`, 현금 가능금액·수량, PRD/MOCK·공통 headers도 확인했으며 아래 TTL 변경은 요청/응답·수량·단위를 바꾸지 않는다. 공식 자료는 5초 TTL의 안전성/최적성을 보증하지 않는다.
+
+전문 지식 근거: [Fidelity CMT 공저 자료 pp.9–13](https://www.fidelity.com/bin-public/060_www_fidelity_com/documents/learning-center/Idenitfying-Chart-Patterns.pdf)는 실제 저항 돌파→같은 돌파가격 아래 복귀→반대 방향 실패를 구분하고 종가/시간/가격 확인을 설명한다. [Schwab 거래량 설명](https://www.schwab.com/learn/story/trading-volume-as-market-indicator)은 거래량을 보조 확인으로 다룬다. 이는 의미 설계 참고이지 국내 1분 전략 임계치나 수익성 검증의 대체물이 아니다.
+
+구체 구현 계약(기존 `entry_candle_context._structure` 및 setup/기계판정 owner 확장; 구현 결과는 아래):
+
+1. 동일 거래일·venue/session의 연속 완료봉만 사용한다. 현재 10봉 비교/최근3봉 탐색 범위를 초기 재생 기준으로 유지하고, 각 돌파 후보 봉 t **직전** 10개 완료봉의 고가 최대치를 `resistance_price`로 고정한다. 10봉 부족·결손/중복충돌은 insufficient이며 미래봉/타 route로 보충하지 않는다.
+2. 가격·기준 구간·동률 고점의 마지막 봉 시각·원천 hash·available_at을 함께 보존한다. `resistance_anchor_bar_at`은 봉 단위 근거시각이고, `breakout_confirmed_bar_at`은 실제 확인된 종가 돌파 봉으로 별도 기록한다. 고점 형성시각/수신시각/확인 가능시각을 혼동하지 않는다.
+3. 고가 접촉만으로 돌파를 선언하지 않는다. 초기 의미 재생안은 **종가가 고정 저항선을 초과**해야 breakout-confirmed이며, 종목 tick size는 기존 owner로 정규화한다. 돌파 봉 자체·후속 고점을 resistance에 재편입하지 않는다. 동일 저항 episode를 중복 카운트하지 않고 세션 변경/원천 계약 변경/탐색 창 종료 시 명시 종료한다.
+4. 돌파 후 고정 저항선 위의 눌림은 그 이유만으로 failed_breakout이 아니다. 아래 복귀는 우선 false-break/재확인 근거로 분리하고, 구조 실패는 고정된 사전 지지구간 이탈 또는 후속 완료봉의 지속 재이탈 등 확인 근거를 요구하는 후보안으로 비교한다. 실패 미확정이 ENTER_NOW를 생성하지 않으며 다른 source·spread·tail·broker guard를 보존한다.
+5. 당일 고점 이격은 session risk context로만 유지한다. 기존 -0.25%/윗꼬리0.35를 새 의미의 자동 승격 기준으로 복사하지 않는다. 윗꼬리·거래량·국소 이탈폭은 같은 기준선/시점의 보조 근거로 재생한다. 확인 봉수·가격폭의 최종 수치는 아래 기존 비용/holdout 검증 전 확정하지 않는다.
+6. 실제 `036810/14:59:11`, `092220/15:00:19`를 회귀에 포함한다. 후자는 최근3봉 이전10봉 고점3,120원, 완료종가3,155원으로, 새 고점3,185원 아래라는 사실만으로 실패하면 안 된다. 전자는 별도 재이탈 위험을 보존한다. 진짜 실패·고점 접촉만·돌파 유지·동률·forming 제외·역순/결손·세션경계·타 route 혼입 및 판정→RECHECK 소비/terminal까지 검증한다.
+7. 완료 조건은 기준선·시각·source hash·판정이 시간순으로 재현되고 false-break와 확정 실패를 혼동하지 않는 것이다. 상승/비상승·손실 대조군과 차단 이후 비용/역행/목표-손절 순서로 경제적 적정성을 별도 검증한다. 구조 분류는 다른 consumer에도 쓰이므로 call graph와 source version 변경 영향도 함께 리뷰한다.
+
+장후 연계 점검: `run_threshold_cycle_postclose.sh`의 machine-only → `ai_action_outcome_calibration` → runtime policy publication 경로를 확인했다. `MECHANISTIC_COMMON_FEATURE_GRID`는 spread/fillability/top3 ratio 세 축이며, **failed_breakout의 10봉/3봉/0.35/-0.25는 producer 고정 조건으로 장후 튜닝 대상이 아니다.** 따라서 기존 돌파 튜너를 수정하는 작업은 없고 새 자동 튜닝 축도 이번에 만들지 않는다. 후속 구조 구현 시에는 frozen `setup_evidence`를 소비하는 `_mechanistic_policy_rows`와 live producer의 의미 버전을 일치시키고 구형/신형 분모를 분리한다. 구형 값을 신형 의미로 소급 재라벨하지 않으며, 캐시/원천 hash 의존성·새 구조의 비용/holdout 통과·기존 다음날 policy/PREOPEN/PID 인계를 기존 main owner에서 검증한다.
+
+작업본 구현: `entry_local_breakout_completed_v1`을 **entry wrapper에만** 적용하고 공용/holding 기본 분류는 보존했다. 첫 종가 돌파 직전10봉을 고정하며, 저항 아래 첫 복귀는 `retest_pending`, 사전 지지 하향 종가 또는 후속2개 연속 하향 종가는 `failed_breakout`으로 구분한다. 이는 비용 최적화된 임계치라는 뜻이 아니다. 구형 failed 판정만 해제된 경우에는 곧바로 진입하지 않고 기존 `TRIGGER_CONFIRMATION_RECHECK`로 연결한다. 10봉 부족은 국소 판정 `insufficient`이며 독립적인 opening-flow setup 전체를 새로 차단하지 않는다. 탐색은 최근3개 완료봉으로 제한되고 별도 장수명 episode 상태/새 counter를 만들지 않는다. episode ID는 원천봉 hash·request code·venue/session에 결속했다.
+
+재현 수치 정정: 092220의 최근3봉 **이전** 고점은3,120원이지만, 실제 최초 종가 돌파는14:58이며 그 **직전10봉**에는14:57 고가3,135원이 포함된다. 구현의 고정선은3,135원이고 후속3,185원으로 재설정하지 않는다. 036810은 고가 접촉/종가 동률만으로 돌파 확인을 만들지 않는다. 회귀는 해당 최근봉 수치와 통제된 선행봉으로 만든 재현 fixture이며 전체 당시 raw를 재생했다는 의미가 아니다.
+
+장후 구현: frozen setup에 의미 버전/국소 근거를 전달하고 main machine-only의 common/hierarchy/joint 튜닝 입력을 현재 버전으로 격리한다. 구형 case table·전체 표본 수와 버전별 제외 수는 보존하고 `current_structure_eligible_count`를 별도 표기한다. 구형을 신형으로 재라벨하지 않으며 신형 표본 부족은 승격 불가다. producer 파일을 cache/economic-kernel hash에 추가했다. 기존 세 축과 비용/holdout·PREOPEN/PID 기준은 그대로이며 장후 작업을 수동 실행하지 않았다.
+
+### 4.6 9/21 후속 — stale 불일치 개선계획
+
+원천 확인: `425040` snapshot14:57:43.930(BBO age0.388초)→machine capture14:58:42.183(features age58.288초), 분석 총58.508초. `009900` snapshot15:00:40.223(age2.378초)→capture15:00:41.293(features age3.381초); 최신 갱신은 bid=ask=8,710으로 거부(`latest_best_levels_invalid`)됐다. `quote`는 WS의 앞선 boolean, features는 원 수신시각 기준 재계산을 써 동시 표현이 충돌했다. 58초의 세부 지연 함수는 미계측이며 provider 지연이라고 단정하지 않는다.
+
+1. 기존 `refresh_before_evaluate`→`analyze_target`→feature packet→hot payload를 단일 owner 경로로 유지한다. 정책/문맥 준비 등 지연 작업 **후**, 기계판정 입력 확정 직전에 동일 route/epoch의 최신 유효 BBO·체결을 한 번 재검증한다. 유효한 갱신이 없거나 기존 deadline을 넘으면 평가를 보류/원천 결손으로 남기고 무한 갱신·추가 REST로 해결하지 않는다.
+2. 한 `as_of`와 원 BBO 수신시각으로 freshness를 계산하여 `quote`·features·snapshot preflight·guard receipt에 같은 판정을 투영한다. snapshot_id/hash는 실제 입력 세대에 결속하고, 입력 변경은 기존 parent/revision으로 남긴다. 과거 snapshot의 fresh 표시를 현재 입력의 freshness로 재사용하지 않는다.
+3. shared mutable WS를 직접 덮어쓰지 않고 동일 frozen 입력으로 계산한다. 새 BBO가 locked/crossed/route-conflict면 채택하지 않으며 이전 BBO도 같은 as_of에서 만료면 불가다. 3초 호가 freshness·5초 체결·실제 주문 직전 guard는 이번 계획으로 완화하지 않는다.
+4. 기존 telemetry에 `received_at`, `snapshot_at`, `evaluation_as_of`, 단계별 monotonic duration(정책/문맥 준비·feature build·평가)을 필요한 만큼만 연결한다. 새 logger/daemon/report producer 없이 위2개 사례의 로컬 지연 owner를 특정한다.
+5. frozen-clock 회귀: fresh→3초 경계 초과, 58초 처리, 유효 새 BBO, bid=ask 갱신 거부, route/epoch 전환, 미래/무시각, 늦게 도착한 worker 결과를 포함한다. payload 내부 stale/age/as_of 동일성과 source gap 보존, BLOCK/RECHECK의 AI 승격 불가를 검사한다. source/schema 변경으로 영향받는 장후 exact-input 소비에도 의미 버전·원본 보존을 적용한다.
+
+작업본 구현: sync/async watching·두 재확인·pre-submit AI authority retry에서 기존 로컬 WS refresh를 분석 내부의 정책/문맥·파일 기반 micro 입력 준비 **후** 연결했다. 최종 frozen 입력과 단일 `as_of`로 snapshot과 feature를 계산하고 quote는 같은 feature age/stale를 투영한다. 원 수신시각·snapshot 시각·preparation/refresh/feature-build duration은 기존 machine capture metadata와 결과에 남긴다. 평가 ID/parent snapshot을 유지하고 경제성 observer도 갱신된 같은 WS를 받는다. 기존 async deadline을 연장하지 않으며 refresh 예외·route/epoch 변경·snapshot/feature quote clock 불일치는 명시적 source gap으로 차단한다. 최신 BBO 거부 시 과거 입력을 현재 시각에서 다시 검증하며 원천 수신시각을 새로 찍지 않는다. 실제58초 지연의 세부 함수별 운영 원인은 새 자연 telemetry 확인 전 미확정이다.
+
 ## 5. S3 — WS/I/O 수리는 관측 손실 없이 선택 적용
 
 1. 기존 checkpoint의 모든 실제 consumer가 쓰는 필드·체결/호가 history 길이·route·epoch·clock을 먼저 조사한다. 파일이 dashboard라는 이유로 machine history를 삭제하지 않는다.
@@ -128,6 +176,16 @@
 - 자금 성공 뒤 동일 시도의 정책 cache→signed sizing/운영계획→최종 guard의 **기존 연결**을 확인한다. 나중 조회한 값을 과거 평가에 소급하지 않고, 증거금 가능액을 현금 흐름으로 대체하지 않는다. 새 결함이 재현되지 않으면 추가 자금 수리는 하지 않는다.
 
 조건부 검증 결과: 대상 시도에서 기존 연결 정상 또는 구체적인 안전 차단을 확인하면 그 결과만 기록한다. 표본이 없으면 `pending_natural_evidence`로 기존 owner에 남기되 판정 이력·지연·AI 경로 수리 완료를 보류하지 않는다. 실제 재현 결함만 추가 수리의 미완료 항목으로 관리한다. 연결1건은 해당 경로의 운영 증거일 뿐 안정적 coverage/수익성 달성은 아니다.
+
+### 6.1 9/21 명시 승인 — 비진입 관측 캐시 5초
+
+- 앞선 S4의 기본 조건부 원칙에 대한 이번 좁은 추가 구현: `_read_entry_capacity_snapshot(source_only=True, reuse_only=True)`만 2→**5초 이하** 재사용한다. caller는 기존 BLOCK/RECHECK 경제성 관측이다. `_ENTRY_NONENTRY_CAPACITY_REUSE_MAX_AGE_SEC=5.0` 고정 운영값이며 자동 최적화 값이 아니다.
+- ENTER_NOW source 조회/사전준비의2초 및 실제 sizing의 fresh API 조회는 그대로다. 계좌/token/origin/date/종목/정확한 가격/보유·주문·예수금 상태/hash 검증, 미래 응답 거부, inflight·공유 요청 한도·우선권은 유지한다. 비진입 cache miss의 추가 동기조회0, 원 응답시각 보존, 미래값 소급0을 검사한다.
+- 성공 재사용 receipt와 기존 경제성 budget 전달에 `capacity_reuse_max_age_sec`를 남겨 기존2초 관측과 새5초 관측을 구별한다. 독립 report/schema/임계치 env를 추가하지 않는다. 원래 미기록인 실패 캐시 나이를 복구했다고 주장하지 않는다.
+- 장후 검색 결과 이 TTL을 조정하는 tuner/정책 publisher는 없다. 유지/폐기할 기존 TTL 튜너가 없으므로 새로 만들지 않는다. 장후 capital freeze는 원 응답시각/hash를 보존하고 시간 역전만 거부하며 별도2초 재검증으로 덮어쓰지 않는다. source-only capital은 주문 권한이나 full-cost EV가 아니다.
+- 근거 한계: 09:37–15:03 누적 관측805건 중 성공26건(실재사용9), 명시 비진입 cache miss296건. 실재사용 응답→이벤트 기록 간격0.790–2.124초/중앙1.478초는 이미 선택된 성공 표본이고 실제 캐시 판정 나이와 다르다. 5초는 사용자 지시 운영값이며 측정된 최적값이라고 표시하지 않는다. source/시도·정책 세대별 관측 coverage와 비용 경제성 분모는 계속 분리한다.
+- 작업본 변경→경계/authority 회귀→리뷰까지 이번 범위다. 배포·PID 적용·자연 재사용/결손 감소는 별도이며 현재 실행 중인 배포본에 적용됐다고 주장하지 않는다. rollback은 이 상수5→2 복귀이고 계좌/주문·과거 원본 삭제를 포함하지 않는다.
+- 검증 receipt: 자기리뷰에서5초 receipt의 실제 budget consumer 전달과 상태세대 변경 거부를 추가 확인했다. `pytest -q src/tests/test_entry_cash_capacity_contract.py src/tests/test_sniper_scale_in.py -k 'capacity or source_capacity or nonentry_five_second_receipt'` **61 PASS/908 deselected**, 두 변경 Python compile PASS, `git diff --check` PASS. print-only backlog parser29 tasks/기존 제출 owner1개 유지. 실제 API/계좌/provider 호출, 장후 재생성, 외부 sync, 배포/재기동은 미실행이다. 돌파/stale 계획의 구현 검증이나5초 자연 수용 완료를 의미하지 않는다.
 
 ## 7. 반복 리뷰·테스트·공식 참조
 

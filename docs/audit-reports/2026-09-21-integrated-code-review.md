@@ -1,5 +1,16 @@
 # 2026-09-21 당일 수정 통합 코드리뷰
 
+## 후속 전체 개선 재리뷰 — 배포 없는 작업본 보완
+
+- 요청: 당일 전체 개선의 코드리뷰·보완 반복. 이번 요청에는 커밋/푸시·배포·재기동을 포함하지 않는다. 현재 운영은4b3b4080c/PID174887이며 변경하지 않는다. 기존 통합 리뷰의 원천/정책/캐시/런처 계약을 재사용하고 이후 fee046b21·f22a2ea53·4b3b4080c의 완료봉, 자금 관측, WS 세대, 경보 재분류 변경을 직접 재검토했다. 당일 변경 테스트28개 파일과 Sentinel/슬림캐시2개를 통합 검증한다.
+- 발견/보완: WS comparison census는 producer 세대는 구분하지만 owner 객체를 fork한 consumer의 부모 누적 건수를 자식 PID 아래 표시할 수 있었다. 재현 회귀에서 기대1/실제2로 실패했다. 기존 date/item/session key에 실제 consumer PID를 추가하여 프로세스별 분모를 격리했다. /proc provenance의 일시적 읽기 실패는 PID 변경이 아니므로 같은 프로세스의 실패 분모를 지우지 않는다. 새 파일/서비스/정책·WS 입력 전환은 없다.
+- 재리뷰: observer source_gap/경제성 미검증 유지, ENTER_NOW/제출·충돌·원인 불명 경보 유지, exact cache detail의 구형 projection 인계, 재분류 이력·재발 통보, optional MTF OFF와 main base candle 전달을 대조했다. legacy identity detail 보충이 입력 상태를 변경하는지도 회귀로 확인했으며 결함은 재현되지 않았다. API 요청/FID/parser·계좌/주문·임계치·분봉 source는 변경하지 않으므로 이번 local census 수정은 새 Kiwoom protocol 변경이 아니다.
+- 보완 후 reader/감시기/3 collector/paired replay351 PASS, 추가 provenance 실패 보강을 포함한 quote suite61 PASS(중복 포함). 당일 전체 영향 회귀의 최종 결과는 아래에 기록한다. fork/pandas 기존 경고와 원래 generated data를 보존한다.
+- 최초 전체 조합은2,704 PASS/가격 guard fixture1 FAIL이었다. 해당 테스트 단독 및 scale-in 파일915개 재실행은 PASS여서 초기 실패를 운영 결함으로 확정하지 않는다. 고정 decision 날짜와 실제 wall clock을 혼용하던 fixture를 단일 시계로 고정했고, 이때 드러난 선행 AI cooldown도 명시 만료된 입력으로 준비했다. 깊은 저가 주문 차단·미제출·337bps/80bps 기대값과 실제 guard는 유지한다. 수정 중 시작된 조합 실행은 테스트 PID만 SIGINT로 중단(302 PASS, 미완료)했으며 봇에는 신호를 보내지 않았다. 최종 동일30파일 조합으로 재검증한다.
+- 운영 경계: 작업본 보완은 아직 collector PID에 적용되지 않았다. 기존 자금/증거금 source gap·AI timeout·종료 summary drain 경합은 해당 운영 이력에 남는다. 이번 census 보완으로 이들을 해결했다고 주장하지 않는다. WS P2/P3 선행 자연 검증, 실제 주문/완료 비용 손익은 기존 OPEN owner가 유지한다. 광범위 장후 보고 재생성·실 API probe·외부 sync·서비스 변경은 수행하지 않는다.
+- 정적 검사: 변경 Python compile, Bash syntax, diff whitespace, print-only checklist parser PASS. 수정된 reader/quote/monitor test의 Ruff F/E9 PASS; scale-in 테스트 파일의 기존 F4014건/F8412건은 HEAD 원문과 비교해 동일하며 신규 finding은 없다. 기존 unused 항목을 unrelated cleanup으로 삭제하지 않았다.
+- 최종 보완 소스의 동일30파일 통합 회귀 **2,707 PASS**(275.72초), 기존 pandas/fork 경고4건. 선행351/61/915 검증과 겹치므로 합산하지 않는다. 재리뷰 결과 이번 개선·consumer census 보완 범위의 신규 미보완 결함0. 운영 잔여의 전체 해결·자연 수용 완료를 뜻하지 않는다.6개 작업본 파일만 변경했고 unrelated 생성자료는 보존했으며 커밋/푸시·배포·재기동은 미실행이다.
+
 ## 범위와 권한
 
 - 사용자 승인: 오늘 수정분의 코드리뷰→결함 보완→재리뷰→배포·재기동. 기준은 `24b2a1ec4^..8299c7131`의 소스/테스트/런처60파일이며, 기존 개별 리뷰의 producer/consumer/cache/실제 실행 경로를 통합 대조했다. 새로운 전략·수량·provider·요청 한도·구독 확대·WS P2/P3 입력 전환은 하지 않는다.
