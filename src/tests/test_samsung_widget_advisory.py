@@ -3541,6 +3541,8 @@ def test_collector_uses_only_read_only_market_data_and_cached_token(
     payload = collector.collect_once(now)
 
     assert payload["status"] == "ok"
+    assert payload["market_data_transport"]["selected_input"] == "existing_rest"
+    assert payload["market_data_transport"]["runtime_effect"] is False
     assert payload["market_session"] == "krx_or_closed"
     assert payload["advisory"]["session"] == "KRX_REGULAR"
     assert payload["advisory"]["authority"] == "widget_advisory_only"

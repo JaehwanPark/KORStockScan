@@ -8,6 +8,8 @@ The generated state is for the Windows widget only.
 
 from __future__ import annotations
 
+from src.trading.market.shared_ws_snapshot import read_shared_widget_quote, compare_widget_rest, attach_transport_census
+
 import argparse
 import json
 import math
@@ -4267,6 +4269,8 @@ class ObservationRecorder:
             "exit_advisory": exit_advisory,
             "metric_contract": METRIC_CONTRACT,
         }
+        if payload.get("market_data_transport"):
+            row["market_data_transport"] = payload["market_data_transport"]
         with target.open("a", encoding="utf-8") as handle:
             raw_line = json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n"
             handle.write(raw_line)
@@ -4469,6 +4473,7 @@ class SamsungWidgetCollector:
         now = _as_kst(observed_at or _now_kst())
         context = session_context(now)
         self._activate_scope(now, context)
+        self._transport_comparison = read_shared_widget_quote(context, now_ts=now.timestamp())
         self._optional_gaps = []
         self._external_fetch_error = None
         if not context.active:
@@ -4532,6 +4537,8 @@ class SamsungWidgetCollector:
             api_id="ka10004", request_code=context.request_code
         )
         bbo = _parse_bbo(bbo_payload, bbo_received_at)
+        compare_widget_rest(self._transport_comparison, current_price=current_price, bbo=bbo,
+                            quote_received_at=quote_received_at, bbo_received_at=bbo_received_at)
         trade_payload = self._optional_post(
             client,
             "/api/dostk/stkinfo",
@@ -4932,9 +4939,11 @@ class SamsungWidgetCollector:
                 "scope": list(self._active_scope_key or ()),
                 "authority": "widget_collector_local_only",
             },
+            "market_data_transport": self._transport_comparison,
             "advisory": advisory,
             "exit_advisory": exit_advisory,
         }
+        attach_transport_census(self, payload)
         _atomic_write_json(self.snapshot_path, payload)
         self.recorder.record(payload, decision_now)
         self._observe_entry_notification(payload, decision_now)
@@ -4945,6 +4954,7 @@ class SamsungWidgetCollector:
         context = session_context(now)
         self.promotion_filter.reset()
         payload = {
+            "market_data_transport": getattr(self, "_transport_comparison", {}),
             "schema_version": SNAPSHOT_SCHEMA_VERSION,
             "status": "unavailable",
             "symbol": SAMSUNG_CODE,
@@ -4989,7 +4999,10 @@ class SamsungWidgetCollector:
                 "metric_contract": METRIC_CONTRACT,
             },
         }
+        attach_transport_census(self, payload)
         _atomic_write_json(self.snapshot_path, payload)
+        if payload.get("market_data_transport"):
+            self.recorder.record(payload, now)
 
     def run_forever(self, *, interval_sec: float = 10.0) -> None:
         interval = max(1.0, float(interval_sec))

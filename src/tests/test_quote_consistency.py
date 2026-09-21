@@ -12,6 +12,128 @@ from src.trading.market.quote_consistency import (
 )
 
 
+def _shared_widget_fixture(tmp_path, monkeypatch):
+    import json
+    from datetime import datetime, time
+    from types import SimpleNamespace
+    from zoneinfo import ZoneInfo
+    from src.engine import bd_fbuy_accum_pre_scanner as publisher
+    now = datetime(2026, 9, 21, 10, 0, tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
+    path = tmp_path / "latest.json"
+    monkeypatch.setenv("KORSTOCKSCAN_RUNTIME_GIT_COMMIT", "a" * 40)
+    monkeypatch.setattr(publisher, "WS_SNAPSHOT_PATH", path)
+    common = dict(item="005930", market_suffix="", market_route="krx_only", effective_venue="KRX",
+                  transport_epoch=1, route_sequence=2, observed_epoch=now - 0.2)
+    row = {"market_data_transport_epoch": 1, "realtime_type_snapshots_by_route": {
+        "KRX|krx_only": {"0B": {**common, "trade_price": 10000},
+            "0D": {**common, "orderbook": {"asks": [{"price": 10010, "volume": 3}],
+                                           "bids": [{"price": 9990, "volume": 5}]}}}}}
+    publisher.write_ws_snapshot({"005930": row}, now_ts=now,
+        shared_transport_producer={"transport_epoch": 1, "registered_items": ["005930"],
+            "connection_available": True, "registration_basis": "local_sent_registry_not_broker_ack"})
+    context = SimpleNamespace(request_code="005930", name="KRX_REGULAR", start=time(9), end=time(15, 30), active=True)
+    return path, context, now, json.loads(path.read_text())
+
+
+def test_shared_widget_writer_to_independent_reader_preserves_clocks(tmp_path, monkeypatch):
+    import json, subprocess, sys
+    from pathlib import Path
+    from src.trading.market.shared_ws_snapshot import read_shared_widget_quote
+    path, context, now, snapshot = _shared_widget_fixture(tmp_path, monkeypatch)
+    result = read_shared_widget_quote(context, now_ts=now + 1, path=path)
+    assert result["status"] == "valid_ws_comparison_input", result
+    assert result["values"]["best_bid_qty"] == 5
+    assert result["source_clocks"] == {"0B": now - .2, "0D": now - .2}
+    code = """import json,sys
+from datetime import time
+from types import SimpleNamespace
+from src.trading.market.shared_ws_snapshot import read_shared_widget_quote
+c=SimpleNamespace(request_code='005930',name='KRX_REGULAR',start=time(9),end=time(15,30),active=True)
+print(json.dumps(read_shared_widget_quote(c,now_ts=float(sys.argv[2]),path=sys.argv[1])))
+"""
+    child = subprocess.run([sys.executable, "-c", code, str(path), str(now+1)],
+        cwd=Path(__file__).resolve().parents[2], capture_output=True, text=True, check=True)
+    child_result = json.loads(child.stdout.splitlines()[-1])
+    assert child_result["status"] == "valid_ws_comparison_input"
+    assert child_result["source_sha256"] == result["source_sha256"]
+    assert child_result["selected_input"] == "existing_rest"
+
+
+@pytest.mark.parametrize("suffix,route,venue", [("_NX", "nxt_only", "NXT"), ("_AL", "krx_nxt_integrated", "")])
+def test_shared_widget_reader_preserves_exact_non_krx_route(tmp_path, monkeypatch, suffix, route, venue):
+    import json
+    from src.trading.market.shared_ws_snapshot import read_shared_widget_quote
+    path, context, now, snapshot = _shared_widget_fixture(tmp_path, monkeypatch)
+    item = "005930" + suffix
+    context.request_code = item
+    snapshot["shared_transport_producer"]["registered_items"] = [item]
+    routes = snapshot["stocks"]["005930"]["machine_confirmation_routes"]
+    row = routes.pop("KRX|krx_only")
+    for field in row["realtime_types"].values():
+        field.update(item=item, market_suffix=suffix, market_route=route, effective_venue=venue)
+    routes[suffix + "|" + route] = row
+    path.write_text(json.dumps(snapshot))
+    result = read_shared_widget_quote(context, now_ts=now, path=path)
+    assert result["status"] == "valid_ws_comparison_input", result
+    assert result["market_data_route"] == route
+
+
+@pytest.mark.parametrize("defect", ["old_book", "future_trade", "new_epoch", "wrong_route", "wrong_item",
+    "partial_book", "crossed_book", "dead_producer", "missing_producer", "not_registered", "duplicate_route",
+    "future_file", "wrong_session", "wrong_authority", "bool_epoch", "non_object", "wrong_venue", "disconnected"])
+def test_shared_widget_reader_rejects_unproven_transport(tmp_path, monkeypatch, defect):
+    import json
+    from src.trading.market.shared_ws_snapshot import read_shared_widget_quote
+    path, context, now, snapshot = _shared_widget_fixture(tmp_path, monkeypatch)
+    stock = snapshot["stocks"]["005930"]
+    rows = stock["machine_confirmation_routes"]["KRX|krx_only"]["realtime_types"]
+    if defect == "old_book": rows["0D"]["observed_epoch"] = now - 21
+    elif defect == "future_trade": rows["0B"]["observed_epoch"] = now + 1
+    elif defect == "new_epoch": snapshot["shared_transport_producer"]["transport_epoch"] = 2
+    elif defect == "wrong_route": rows["0D"]["market_route"] = "nxt_only"
+    elif defect == "wrong_venue": rows["0D"]["effective_venue"] = "NXT"
+    elif defect == "disconnected": snapshot["shared_transport_producer"]["connection_available"] = False
+    elif defect == "wrong_item": rows["0D"]["item"] = "005930_AL"
+    elif defect == "partial_book": rows["0D"]["orderbook"]["asks"][0].pop("volume")
+    elif defect == "crossed_book": rows["0D"]["orderbook"]["asks"][0]["price"] = 9980
+    elif defect == "dead_producer": snapshot["shared_transport_producer"]["process"]["start_ticks"] += 1
+    elif defect == "missing_producer": snapshot.pop("shared_transport_producer")
+    elif defect == "not_registered": snapshot["shared_transport_producer"]["registered_items"] = []
+    elif defect == "duplicate_route": stock["machine_confirmation_routes"]["duplicate"] = {"realtime_types": rows}
+    elif defect == "future_file": snapshot["generated_at_epoch"] = now + 2
+    elif defect == "wrong_session": context.active = False
+    elif defect == "wrong_authority": snapshot["runtime_effect"] = True
+    elif defect == "bool_epoch": rows["0D"]["transport_epoch"] = True
+    elif defect == "non_object": snapshot = []
+    path.write_text(json.dumps(snapshot))
+    result = read_shared_widget_quote(context, now_ts=now, path=path)
+    assert result["status"] == "source_gap", result
+    assert result["selected_input"] == "existing_rest"
+
+
+def test_shared_transport_census_preserves_failed_and_different_observations(tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+    from src.trading.market.shared_ws_snapshot import read_shared_widget_quote, compare_widget_rest, attach_transport_census
+    path, context, now, _ = _shared_widget_fixture(tmp_path, monkeypatch)
+    source = read_shared_widget_quote(context, now_ts=now, path=path)
+    owner = SimpleNamespace(_transport_comparison=source)
+    payload = {"observed_at_kst": datetime.fromtimestamp(now, timezone.utc).isoformat(), "status": "unavailable"}
+    attach_transport_census(owner, payload)
+    bbo = {k:v for k,v in source["values"].items() if k!='current_price'}
+    stamp = datetime.fromtimestamp(now, timezone.utc)
+    compare_widget_rest(source, current_price=10000, bbo=bbo, quote_received_at=stamp, bbo_received_at=stamp)
+    assert source["comparison_status"] == "matched_fields"
+    assert source["same_observation_proven"] is False
+    bbo["best_bid_qty"] = 99
+    compare_widget_rest(source, current_price=10000, bbo=bbo, quote_received_at=stamp, bbo_received_at=stamp)
+    assert source["comparison_status"] == "different_observations"
+    attach_transport_census(owner, payload)
+    bucket = next(iter(source["census"]["windows"].values()))
+    assert bucket["expected_comparisons"] == bucket["valid_ws"] + bucket["ws_source_gap"] == 2
+    assert bucket["rest_not_observed"] == bucket["different_observations"] == 1
+
+
 @pytest.mark.parametrize(
     "stamp,expected",
     [(100000, 500), (101000, -500), (True, None), ("bad", None), (float("nan"), None)],

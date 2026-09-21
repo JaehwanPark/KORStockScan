@@ -817,6 +817,7 @@ def test_collector_uses_cached_token_and_auxiliary_read_only_market_requests(
     payload = collector.collect_once(now)
 
     assert payload["symbol"] == "042660"
+    assert payload["market_data_transport"]["selected_input"] == "existing_rest"
     assert payload["token_mode"] == "shared_cache_only"
     assert {api_id for api_id, _ in session.calls} == {
         "ka10001",

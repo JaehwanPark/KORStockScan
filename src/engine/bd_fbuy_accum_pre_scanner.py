@@ -1007,6 +1007,7 @@ def write_ws_snapshot(
     *,
     observation_route_data: dict[str, Any] | None = None,
     micro_reversion_registration_receipt: dict[str, Any] | None = None,
+    shared_transport_producer: dict[str, Any] | None = None,
     now_ts: float | None = None,
 ) -> Path | None:
     """Persist a read-only WS snapshot for dashboard and source-quality consumers."""
@@ -1142,6 +1143,11 @@ def write_ws_snapshot(
         ),
         "stocks": stocks,
     }
+    if shared_transport_producer is not None:
+        from src.trading.market.shared_ws_snapshot import producer_provenance
+        payload["shared_transport_producer"] = {
+            **producer_provenance(), **shared_transport_producer,
+        }
     try:
         WS_SNAPSHOT_PATH.parent.mkdir(parents=True, exist_ok=True)
         tmp = WS_SNAPSHOT_PATH.with_suffix(".json.tmp")

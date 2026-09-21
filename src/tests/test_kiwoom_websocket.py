@@ -617,12 +617,14 @@ def test_dashboard_snapshot_freezes_main_and_exact_route_views(monkeypatch):
         *,
         observation_route_data,
         micro_reversion_registration_receipt,
+        shared_transport_producer,
         now_ts,
     ):
         captured["main"] = realtime_data
         captured["routes"] = observation_route_data
         captured["receipt"] = micro_reversion_registration_receipt
         captured["now_ts"] = now_ts
+        captured["producer"] = shared_transport_producer
 
     class _ImmediateThread:
         def __init__(self, *, target, name, daemon):
@@ -641,6 +643,7 @@ def test_dashboard_snapshot_freezes_main_and_exact_route_views(monkeypatch):
     route_target["recent_trade_ticks"].append({"price": 2, "volume": 1})
 
     assert captured["main"]["005930"]["curr"] == 70000
+    assert captured["producer"]["registration_basis"] == "local_sent_registry_not_broker_ack"
     assert captured["routes"]["005930_NX"]["curr"] == 70010
     assert captured["routes"]["005930_NX"]["recent_trade_ticks"] == [
         {"price": 70010, "volume": 2}

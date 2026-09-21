@@ -2305,6 +2305,7 @@ class KiwoomWSManager:
                 # dictionary-size exception), which unnecessarily depleted the
                 # dynamic-confirmation evidence population.
                 with self.lock:
+                    capture_started = time.monotonic()
                     realtime_snapshot = {
                         str(code): self._snapshot_target(target)
                         for code, target in self.realtime_data.items()
@@ -2318,12 +2319,21 @@ class KiwoomWSManager:
                     registration_receipt_snapshot = json.loads(
                         json.dumps(self._micro_reversion_registration_receipt)
                     )
+                    shared_transport_producer = {
+                        "transport_epoch": self._market_data_transport_epoch,
+                        "registered_items": sorted({item for items in self._registered_items_by_code.values() for item in items}),
+                        "registration_basis": "local_sent_registry_not_broker_ack",
+                        "connection_available": self.websocket is not None,
+                        "capture_lock_ms": round((time.monotonic() - capture_started) * 1000, 3),
+                    }
+                shared_transport_producer["configured_item_budget"] = self._max_registered_item_count()
                 written_snapshot = write_ws_snapshot(
                     realtime_snapshot,
                     observation_route_data=observation_route_snapshot,
                     micro_reversion_registration_receipt=(
                         registration_receipt_snapshot
                     ),
+                    shared_transport_producer=shared_transport_producer,
                     # The worker may start after newer packets arrive. Use
                     # the frozen-frame consume clock, never its launch clock.
                     now_ts=time.time(),
