@@ -23,6 +23,12 @@
 
 ## 배포 영수증
 
-- 적용 전 준비와 격리 검증 완료. 실제 배포·재기동 결과는 아래에 후속 기록한다.
+- 코드 commit `51417126f`, immutable release `/home/ubuntu/KORStockScan-runtime-releases/widget-policy-custody-20260921-51417126f`. 해당 release에서도 관련 consumer/producer/state 검사 **219 passed, 1 deselected**; compile·Ruff F/E9·diff·print-only checklist parser 통과.
+- 10:05:25 기존 singleton lock 독점 상태에서 사건 13건 종결 receipt와 삼성 carry25를 반영했다. 실제 주문·broker 재조회는 수행하지 않았고, 이월 필드의 `broker_reconciled=false`를 유지한다. 원본 source9/18 경제성 보고서 bytes는 불변이다.
+- 10:05:35 위젯만 재기동, PID **75952**, `active/running`, `NRestarts=0`. 실제 release cwd/PID/start identity 및 unit에서 독립 산출한 환경 8개·config hash·loaded policy hash 모두 일치했다. startup verifier findings/mismatch 0.
+- 10:07 점검: 자연 cycle10:06:46, `execution_eligible_symbols=[005930]`, 두산·한화 `observation_only`, 삼성 이월25, 위젯 주문0. KRX target80bps/추가진입 -80·-160bps/leg10 및 NXT 장전 target40bps/leg10의 기존 설정을 그대로 인계했다. 당일 시각·보유 owner·가격·주문 안전장치는 계속 적용된다.
+- 위젯 수집기 5개 health PASS. 평가 service의 다음 **20:10** 자연 실행 source도 새 release로 pin했고 timer는 active다. 평가 본체를 장중 수동 실행하지 않았다. 메인 및 다른 episode의 unit/selector/PID는 이번 작업으로 변경하지 않았다.
+- 복구 적용 중 registry bytes 불변을 검증했다. 이후 별도 episode owner의 자연 append 4건이 발생했지만 기존 bytes prefix와 삼성·두산·한화 widget registry projection은 그대로다.
+- 영수증: [정책·사건·이월 반영](../../data/runtime/manual_close_reconciliation/widget_incident_reconciliation_20260921/receipt.json), [실제 PID/배포 검증](../../tmp/widget-policy-custody-repair-20260921/deployment.json). rollback에서 carry0를 복원하지 않는 경계는 유지한다.
 - 작업 증거: `tmp/widget-policy-custody-repair-20260921/`.
 - 미래 자연 policy 소비·주문·비용 후 성과는 오늘 checklist의 기존 `KiwoomCommonHealthOpportunityCostAcceptance0917`에서 추적한다.
