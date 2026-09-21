@@ -68,6 +68,96 @@ def _context():
     )
 
 
+def _inline_quote_ws():
+    ws = _ws(NOW - .1)
+    ws["last_realtime_type_ts"]["0D"] = NOW - .8
+    ws["market_data_transport_epoch"] = 2
+    common = dict(item="123456", market_route="krx_regular", market_suffix="",
+                  effective_venue="KRX", transport_epoch=2, route_sequence=3)
+    ws["realtime_type_snapshots_by_route"] = {"KRX|krx_regular": {
+        "0D": {**common, "observed_epoch": NOW - .8, "orderbook": deepcopy(ws["orderbook"])},
+        "0B": {**common, "observed_epoch": NOW - .1, "current_price": 10000,
+               "inline_best_bid": 10000, "inline_best_ask": 10010},
+    }}
+    return ws
+
+
+def test_final_quote_clock_binds_same_bbo_without_renewing_depth(monkeypatch):
+    from src.engine import ai_engine_openai as eng
+    monkeypatch.setattr(eng.time, "time", lambda: NOW)
+    original = _inline_quote_ws()
+    before = deepcopy(original)
+    _, _, context, fields = eng._final_entry_machine_inputs(
+        original, [], _context(), refresher=lambda w, t, c: (w, t, c, {}))
+    assert "entry_machine_input_error" not in fields
+    bbo = context["ai_market_snapshot_v1"]["sources"]["bbo"]
+    assert bbo["source"] == "ws_0B_inline_quote"
+    assert bbo["age_ms"] == pytest.approx(100, abs=1)
+    assert datetime.fromisoformat(bbo["depth_observed_at"]).timestamp() == NOW - .8
+    comparison = fields["entry_machine_input_quote_clock_comparison"]
+    assert comparison["feature_receipt"]["item"] == "123456"
+    assert comparison["feature_age_ms"] == pytest.approx(bbo["age_ms"], abs=1)
+    assert original == before
+
+
+@pytest.mark.parametrize("damage", ["inline_value", "book_value", "old_depth", "other_item", "other_epoch", "old_depth_epoch", "boolean_depth_epoch"])
+def test_quote_clock_binding_does_not_bypass_conflicts(monkeypatch, damage):
+    from src.engine import ai_engine_openai as eng
+    monkeypatch.setattr(eng.time, "time", lambda: NOW)
+    ws = _inline_quote_ws()
+    rows = ws["realtime_type_snapshots_by_route"]["KRX|krx_regular"]
+    if damage == "inline_value":
+        rows["0B"]["inline_best_bid"] = 9990
+    elif damage == "book_value":
+        ws["orderbook"]["bids"][0]["price"] = 9990
+    elif damage == "old_depth":
+        rows["0D"]["observed_epoch"] = ws["last_realtime_type_ts"]["0D"] = NOW - 5
+    elif damage == "other_item":
+        rows["0B"]["item"] = "654321"
+    elif damage == "old_depth_epoch":
+        rows["0D"]["transport_epoch"] = 1
+    elif damage == "boolean_depth_epoch":
+        ws["market_data_transport_epoch"] = rows["0B"]["transport_epoch"] = 1
+        rows["0D"]["transport_epoch"] = True
+    else:
+        rows["0B"]["transport_epoch"] = 1
+    _, _, context, fields = eng._final_entry_machine_inputs(
+        ws, [], _context(), refresher=lambda w, t, c: (w, t, c, {}))
+    bbo = context["ai_market_snapshot_v1"]["sources"]["bbo"]
+    if damage == "book_value":
+        assert fields["entry_machine_input_error"] == "entry_machine_quote_value_conflict"
+        assert fields["entry_machine_input_quote_clock_comparison"]["canonical_value"]["best_bid"] == 10000
+    elif damage == "old_depth":
+        assert fields.get("entry_machine_input_error") or context["ai_market_snapshot_v1"]["ai_input_preflight_v1"]["allowed"] is False
+    else:
+        assert bbo["source"] != "ws_0B_inline_quote"
+
+
+def test_holding_snapshot_does_not_adopt_entry_quote_clock():
+    context = _context()
+    context["ai_market_snapshot_v1"]["decision_stage"] = "holding_flow"
+    result = revalidate_entry_candle_snapshot(context, _inline_quote_ws(), now_ts=NOW)
+    assert result["ai_market_snapshot_v1"]["sources"]["bbo"]["source"] == "ws_0D"
+
+
+def test_deadline_expiry_during_canonical_revalidation_is_not_cleared(monkeypatch):
+    from src.engine import ai_engine_openai as eng
+    from src.engine.scalping import entry_candle_context as candle
+    context = _context()
+    clock = [NOW]
+    original = candle.revalidate_entry_candle_snapshot
+    def delayed(*args, **kwargs):
+        result = original(*args, **kwargs)
+        clock[0] += 10
+        return result
+    monkeypatch.setattr(eng.time, "time", lambda: clock[0])
+    monkeypatch.setattr(candle, "revalidate_entry_candle_snapshot", delayed)
+    *_, fields = eng._final_entry_machine_inputs(
+        _ws(NOW), [], context, refresher=lambda w, t, c: (w, t, c, {}), deadline_epoch=NOW + 5)
+    assert fields["entry_machine_input_error"] == "entry_machine_input_deadline_expired"
+    assert fields["entry_machine_input_quote_clock_comparison"]["as_of"] == NOW
+
+
 @pytest.mark.parametrize("delay", [3.1, 58.0])
 def test_final_machine_refresh_single_clock_and_frozen_old_source(monkeypatch, delay):
     from src.engine import ai_engine_openai as engine_module

@@ -183,7 +183,9 @@ def _final_entry_machine_inputs(ws_data, recent_ticks, candle_context, *, refres
             not math.isfinite(float(deadline_epoch)) or time.time() >= deadline_epoch
         ):
             raise ValueError("entry_machine_input_deadline_expired")
+        refresh_started = time.perf_counter()
         ws, ticks, context, refresh_fields = refresher(ws, ticks, context)
+        fields["entry_machine_input_local_refresh_ms"] = round((time.perf_counter() - refresh_started) * 1000, 3)
         ws, ticks, context = copy.deepcopy((ws, ticks, context))
         fields.update({key.replace("entry_ai_final_", "entry_machine_input_", 1): value
                        for key, value in refresh_fields.items()})
@@ -196,14 +198,36 @@ def _final_entry_machine_inputs(ws_data, recent_ticks, candle_context, *, refres
         as_of = time.time()
         if deadline_epoch is not None and as_of >= deadline_epoch:
             raise ValueError("entry_machine_input_deadline_expired")
+        revalidate_started = time.perf_counter()
         context = revalidate_entry_candle_snapshot(context, ws, now_ts=as_of)
-        from src.trading.market.quote_consistency import ws_quote_receive_age_ms
-        canonical_age = (context.get("ai_market_snapshot_v1") or {}).get("sources", {}).get("bbo", {}).get("age_ms")
+        fields["entry_machine_input_canonical_revalidation_ms"] = round((time.perf_counter() - revalidate_started) * 1000, 3)
+        from src.trading.market.quote_consistency import ws_quote_receive_age_ms, ws_quote_source_receipt
+        bbo = (context.get("ai_market_snapshot_v1") or {}).get("sources", {}).get("bbo", {})
+        canonical_age = bbo.get("age_ms")
         feature_age = ws_quote_receive_age_ms(ws, now_ts=as_of)
+        quote_receipt = ws_quote_source_receipt(ws, now_ts=as_of)
+        fields["entry_machine_input_quote_clock_comparison"] = {
+            "as_of": as_of, "canonical_source": bbo.get("source"),
+            "canonical_observed_at": bbo.get("observed_at"),
+            "canonical_age_ms": canonical_age, "canonical_value": bbo.get("value"),
+            "feature_age_ms": feature_age, "feature_receipt": quote_receipt,
+        }
         if canonical_age is not None and (
             feature_age is None or abs(float(canonical_age) - feature_age) > 1.0
         ):
             raise ValueError("entry_machine_quote_clock_conflict")
+        value = bbo.get("value")
+        if isinstance(value, dict):
+            book = ws.get("orderbook") or {}
+            # Feature calculation uses top-of-book when available. Matching
+            # clocks must not hide a different price or another route's book.
+            for side, key in (("bids", "best_bid"), ("asks", "best_ask")):
+                levels = book.get(side) or []
+                if (value.get(key) != quote_receipt.get(key)
+                        or (levels and float(levels[0]["price"]) != value.get(key))):
+                    raise ValueError("entry_machine_quote_value_conflict")
+        if deadline_epoch is not None and time.time() >= deadline_epoch:
+            raise ValueError("entry_machine_input_deadline_expired")
     except Exception as exc:
         error = str(exc) or type(exc).__name__
         as_of = time.time()
@@ -8472,6 +8496,7 @@ class GPTSniperEngine:
             prompt_profile = "watching"
         economic_source_fields = {}
         analysis_started = time.perf_counter()
+        preparation_stages = {}
         prompt_version = "default_v1"
         cache_strategy = strategy
         normalized_profile = "shared"
@@ -8499,6 +8524,7 @@ class GPTSniperEngine:
                 )
                 or "hot_v1"
             ).strip()
+            policy_started = time.perf_counter()
             entry_setup_live_policy = resolve_live_prompt_policy(
                 strategy=strategy if rollout_entry else None,
                 configured_prompt_version=configured_entry_prompt_version,
@@ -8543,6 +8569,8 @@ class GPTSniperEngine:
                     or (ws_data.get("session") if isinstance(ws_data, dict) else None)
                 ),
             )
+            preparation_stages["policy_resolve_ms"] = (time.perf_counter() - policy_started) * 1000
+            context_started = time.perf_counter()
             selected_runtime_prompt_version = (
                 entry_setup_live_policy.get("selected_prompt_version")
                 if entry_setup_live_policy.get("enabled") is True
@@ -8653,6 +8681,7 @@ class GPTSniperEngine:
             lifecycle_ai_runtime = build_lifecycle_ai_runtime_context(
                 prompt_profile=normalized_profile
             )
+            preparation_stages["runtime_context_ms"] = (time.perf_counter() - context_started) * 1000
             cache_strategy = f"{strategy}:{normalized_profile}"
             cache_strategy = (
                 f"{cache_strategy}:adm:{matrix_runtime.get('cache_token', 'disabled')}"
@@ -8808,6 +8837,7 @@ class GPTSniperEngine:
                 )
         input_contract_fields.update(parent_lineage_fields)
         if isinstance(candle_context, dict) and candle_context:
+            candidate_started = time.perf_counter()
             input_contract_fields.update(
                 entry_candle_context_log_fields(candle_context)
             )
@@ -8850,6 +8880,8 @@ class GPTSniperEngine:
                     metadata=metadata_extra,
                 )
             )
+
+            preparation_stages["context_capture_ms"] = (time.perf_counter() - candidate_started) * 1000
 
         fallback_policy_trace_fields = (
             {
@@ -8896,11 +8928,14 @@ class GPTSniperEngine:
             # File-backed optional context can also be slow. Read it BEFORE
             # the final WS freeze, not between that freeze and adjudication.
             if machine_policy_trace_fields:
-                from src.trading.market.micro_confirmation import load_live_dynamic_confirmation_source
+                micro_started = time.perf_counter()
                 try:
+                    from src.trading.market.micro_confirmation import load_live_dynamic_confirmation_source
                     prepared_micro_source = load_live_dynamic_confirmation_source()
                 except Exception as exc:
                     micro_source_error = "source_read_failed:" + type(exc).__name__
+                finally:
+                    preparation_stages["micro_source_prepare_ms"] = (time.perf_counter() - micro_started) * 1000
             prepared_snapshot_id = pre_prompt_snapshot.get("snapshot_id")
             valid_identity = lambda value: str(value or "").strip().lower() not in {"", "-", "none", "null", "unknown"}
             prepared_attempt_id = next((source.get(key)
@@ -8915,6 +8950,10 @@ class GPTSniperEngine:
                 deadline_epoch=entry_input_deadline_epoch,
             )
             machine_input_fields["entry_machine_input_preparation_ms"] = preparation_ms
+            preparation_stages["other_preparation_ms"] = max(0.0, preparation_ms - sum(preparation_stages.values()))
+            machine_input_fields["entry_machine_input_preparation_stages_ms"] = {
+                key: round(value, 3) for key, value in preparation_stages.items()
+            }
             if micro_source_error:
                 machine_input_fields["entry_machine_input_error"] = micro_source_error
             machine_input_fields["entry_machine_input_parent_snapshot_id"] = prepared_snapshot_id

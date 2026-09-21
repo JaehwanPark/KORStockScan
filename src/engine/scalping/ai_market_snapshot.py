@@ -1354,6 +1354,31 @@ def build_ai_market_snapshot(
     price_value_epoch = effective_quote_epoch if rest_quote_reanchor else tape_epoch
     quote_value_source = "ka10004_rest_orderbook" if rest_quote_reanchor else "ws_0D"
     price_value_source = "ka10004_rest_orderbook" if rest_quote_reanchor else "ws_0B"
+    from src.trading.market.quote_consistency import ws_quote_source_receipt
+
+    quote_receipt = ws_quote_source_receipt(ws, now_ts=now_epoch)
+    # The shared reader can select 0B FIDs27/28 for the SAME visible BBO.
+    # Bind that clock, not a newer transport timestamp. Depth/venue validation
+    # below still uses the original 0D provenance; this grants no stale relief.
+    if (
+        not rest_quote_reanchor
+        and stage_value in {"entry_context", "entry_screen"}
+        and quote_receipt.get("source_type") == "0B"
+        and quote_row.get("quality") == "fresh"
+        and type((quote_receipt.get("depth_receipt") or {}).get("transport_epoch")) is int
+        and quote_receipt.get("depth_receipt") == {
+            "item": quote_row.get("item"), "market_route": quote_row.get("market_route"),
+            "transport_epoch": ws.get("market_data_transport_epoch"), "observed_epoch": quote_epoch,
+        }
+        and quote_receipt.get("item") == tape_row.get("item") == quote_row.get("item")
+        and quote_receipt.get("market_route") == tape_row.get("market_route") == quote_row.get("market_route")
+        and (quote_receipt.get("best_bid"), quote_receipt.get("best_ask")) == (best_bid, best_ask)
+        and quote_receipt.get("observed_epoch") == tape_epoch
+        and type(quote_receipt.get("transport_epoch")) is int
+        and quote_receipt["transport_epoch"] == ws.get("market_data_transport_epoch")
+    ):
+        quote_value_epoch = quote_receipt["observed_epoch"]
+        quote_value_source = "ws_0B_inline_quote"
     candle_quality = (
         candle_ctx.get("source_quality")
         if isinstance(candle_ctx.get("source_quality"), dict)
@@ -1594,6 +1619,9 @@ def build_ai_market_snapshot(
             freshness_limit_ms=_POSITION_FRESH_SEC * 1000.0,
         ),
     }
+    if quote_value_source == "ws_0B_inline_quote":
+        sources["bbo"]["quote_source_receipt"] = quote_receipt
+        sources["bbo"]["depth_observed_at"] = _iso(quote_epoch)
     sources["broker_position"]["verification"] = position_ctx.get(
         "broker_position_verification"
     )

@@ -129,10 +129,16 @@ def ws_quote_source_receipt(data: Mapping[str, Any], *, now_ts: float) -> dict[s
                     _to_int(row.get("inline_best_bid")), _to_int(row.get("inline_best_ask"))
                 ) != visible:
                     continue
+                depth = records.get("0D")
+                depth = depth if isinstance(depth, Mapping) else {}
                 return {"source_type": kind, "observed_epoch": stamp,
+                        "best_bid": visible[0], "best_ask": visible[1],
+                        "depth_receipt": {key: depth.get(key)
+                                          for key in ("item", "market_route", "transport_epoch", "observed_epoch")},
                         "item": row.get("item"), "market_route": row.get("market_route"),
                         "transport_epoch": epoch, "route_sequence": row.get("route_sequence")}
-    return {"observed_epoch": adopted_at, "identity_status": "legacy_source_clock_only"}
+    return {"observed_epoch": adopted_at, "identity_status": "legacy_source_clock_only",
+            "best_bid": visible[0], "best_ask": visible[1]}
 
 
 def ws_trade_receive_age_ms(data: Mapping[str, Any], *, now_ts: float) -> float | None:

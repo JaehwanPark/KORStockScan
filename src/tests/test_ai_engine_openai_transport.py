@@ -4129,6 +4129,13 @@ def test_machine_initial_policy_assesses_before_provider_cache_and_lock(
             trace = kwargs['exact_payload']['entry_machine_input_trace']
             assert trace['entry_machine_input_ws_snapshot_refresh_applied'] is True
             assert trace['entry_machine_input_as_of'] > 0
+            stages = trace['entry_machine_input_preparation_stages_ms']
+            assert set(stages) == {'policy_resolve_ms', 'runtime_context_ms',
+                                   'context_capture_ms', 'micro_source_prepare_ms', 'other_preparation_ms'}
+            assert all(value >= 0 for value in stages.values())
+            assert sum(stages.values()) == pytest.approx(trace['entry_machine_input_preparation_ms'], abs=.005)
+            assert trace['entry_machine_input_local_refresh_ms'] >= 0
+            assert trace['entry_machine_input_canonical_revalidation_ms'] >= 0
         assert kwargs['exact_payload']['entry_candle_context']['completed_bar_count'] == 1
         assert kwargs['exact_payload']['entry_candle_context']['multi_timeframe_ai_input_enabled'] is False
         attempt = kwargs['exact_payload']['evaluation_attempt_id']

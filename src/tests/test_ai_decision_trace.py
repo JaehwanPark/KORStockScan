@@ -34,6 +34,9 @@ def test_machine_observation_keeps_exact_input_without_provider_request(
     _enable(monkeypatch, tmp_path)
     timing = {"entry_machine_input_as_of": 1789970400.0,
               "entry_machine_input_preparation_ms": 58000.0,
+              "entry_machine_input_preparation_stages_ms": {"policy_resolve_ms": 57000, "other_preparation_ms": 1000},
+              "entry_machine_input_quote_clock_comparison": {"canonical_age_ms": 800, "feature_age_ms": 100,
+                                                            "feature_receipt": {"source_type": "0B", "item": "005930"}},
               "entry_machine_input_parent_snapshot_id": "aims-original"}
     result = trace.capture_machine_observation(
         exact_payload={"stock_code": "005930", "name": "삼성전자", "best_ask": 10000,
