@@ -15,12 +15,12 @@ from zoneinfo import ZoneInfo
 from src.utils.constants import DATA_DIR
 
 SNAPSHOT_PATH = DATA_DIR / "runtime" / "kiwoom_ws_snapshot" / "latest.json"
-CONTRACT = "widget_shared_ws_transport_comparison_v1"
+CONTRACT = "widget_shared_ws_transport_comparison_v2"
 KST = ZoneInfo("Asia/Seoul")
 METRIC_CONTRACT = {
     "metric_role": "market_data_transport_quality",
     "decision_authority": "source_quality_only",
-    "window_policy": "exact_consumer_route_session_matched_windows",
+    "window_policy": "consumer_session_windows_with_explicit_ws_source_items",
     "sample_floor": "three_consecutive_15_minute_windows_for_each_rollout_cohort",
     "primary_decision_metric": "consumer_valid_market_data_ratio",
     "source_quality_gate": "exact_route_original_timestamps_epoch_required_fields",
@@ -63,8 +63,6 @@ def read_shared_widget_quote(context, *, now_ts, path=None):
         item = context.request_code
         if not re.fullmatch(r"[0-9]{6}(?:_AL|_NX)?", item):
             raise ValueError("request_item_invalid")
-        route = "krx_nxt_integrated" if item.endswith("_AL") else "nxt_only" if item.endswith("_NX") else "krx_only"
-        venue = "" if item.endswith("_AL") else "NXT" if item.endswith("_NX") else "KRX"
         with path.open("rb") as handle:
             raw = handle.read(8 * 1024 * 1024 + 1)
         if len(raw) > 8 * 1024 * 1024:
@@ -92,6 +90,16 @@ def read_shared_widget_quote(context, *, now_ts, path=None):
                 or producer.get("process") != process_generation(producer["process"]["pid"])):
             raise ValueError("producer_generation_invalid")
         result["producer"] = producer
+        # Widget transport validation accepts the same symbol's integrated
+        # source. Preserve its actual route; never relabel it as KRX/NXT.
+        # This reader is comparison-only, not an execution quote resolver.
+        integrated_item = item[:6] + "_AL"
+        if integrated_item in producer.get("registered_items", []):
+            item = integrated_item
+        route = "krx_nxt_integrated" if item.endswith("_AL") else "nxt_only" if item.endswith("_NX") else "krx_only"
+        venue = "" if item.endswith("_AL") else "NXT" if item.endswith("_NX") else "KRX"
+        result.update(ws_request_code=item, market_data_route=route,
+                      source_selection="integrated_symbol" if item.endswith("_AL") else "exact_request")
         if item not in producer.get("registered_items", []):
             raise ValueError("item_not_registered")
         stock = snapshot["stocks"][item[:6]]
@@ -147,13 +155,19 @@ def compare_widget_rest(transport, *, current_price, bbo, quote_received_at, bbo
     deltas = {t: clocks[t] - transport["source_clocks"][t] for t in clocks}
     transport["rest_source_clocks"] = clocks
     transport["clock_deltas_sec"] = deltas
-    if any(not 0 <= delta <= 20 for delta in deltas.values()):
-        transport["comparison_status"] = "not_comparable_clock_gap"
-        return
     rest = {"current_price": current_price, **{k: bbo.get(k) for k in
             ("best_bid", "best_ask", "best_bid_qty", "best_ask_qty")}}
     transport["rest_values"] = rest
     transport["different_fields"] = [k for k, v in transport["values"].items() if rest.get(k) != v]
+    if transport["ws_request_code"] != transport["request_code"]:
+        # KRX/NXT REST and integrated WS are valid but distinct observations.
+        # Neither matching nor differing values establish route equivalence.
+        transport["comparison_status"] = "different_market_data_scope"
+        transport["same_observation_proven"] = False
+        return
+    if any(not 0 <= delta <= 20 for delta in deltas.values()):
+        transport["comparison_status"] = "not_comparable_clock_gap"
+        return
     transport["comparison_status"] = "different_observations" if transport["different_fields"] else "matched_fields"
     transport["same_observation_proven"] = False  # REST supplies no common exchange sequence.
 
@@ -164,7 +178,10 @@ def attach_transport_census(owner, payload):
     if not transport:
         return
     now = datetime.fromisoformat(payload["observed_at_kst"])
-    key = (now.date().isoformat(), transport["request_code"], transport["session"])
+    # A fork inherits the owner object, not the parent's comparison receipt.
+    # Use PID even when /proc provenance is temporarily unavailable, so a
+    # provenance read failure cannot erase this process's failed denominator.
+    key = (now.date().isoformat(), transport["request_code"], transport["session"], os.getpid())
     if getattr(owner, "_transport_census_key", None) != key:
         owner._transport_census_key, owner._transport_census = key, {}
     window = int(now.timestamp()) // 900 * 900
@@ -180,6 +197,7 @@ def attach_transport_census(owner, payload):
         "expected_comparisons": 0, "valid_ws": 0, "ws_source_gap": 0,
         "rest_not_observed": 0, "matched_fields": 0, "different_observations": 0,
         "not_comparable_clock_gap": 0,
+        "different_market_data_scope": 0, "ws_source_items": {},
         "producer_generation": generation, "producer_generation_mixed": False,
         "producer_generation_missing": generation is None,
         "first_observed_at": now.isoformat(),
@@ -192,6 +210,9 @@ def attach_transport_census(owner, payload):
     bucket["expected_comparisons"] += 1
     bucket["valid_ws" if transport["status"] == "valid_ws_comparison_input" else "ws_source_gap"] += 1
     bucket[transport["comparison_status"]] += 1
+    source_item = transport.get("ws_request_code", "unresolved")
+    source_counts = bucket["ws_source_items"].setdefault(source_item, {"valid_ws": 0, "ws_source_gap": 0})
+    source_counts["valid_ws" if transport["status"] == "valid_ws_comparison_input" else "ws_source_gap"] += 1
     while len(owner._transport_census) > 4:
         owner._transport_census.pop(min(owner._transport_census))
     try:
@@ -199,7 +220,9 @@ def attach_transport_census(owner, payload):
     except (OSError, ValueError, IndexError):
         consumer_process = {"status": "process_provenance_unavailable"}
     transport["census"] = {"scope": "process_local_comparison_not_adopted_input",
-        "schema": "widget_transport_census_generation_bound_v2",
+        "schema": "widget_transport_census_source_bound_v3",
         "consumer_process": consumer_process,
-        "windows": {str(k): dict(v) for k, v in owner._transport_census.items()}}
+        "windows": {str(k): {**v, "ws_source_items": {item: dict(counts)
+                    for item, counts in v["ws_source_items"].items()}}
+                    for k, v in owner._transport_census.items()}}
     payload["market_data_transport"] = transport

@@ -78,6 +78,94 @@ def test_shared_widget_reader_preserves_exact_non_krx_route(tmp_path, monkeypatc
     assert result["market_data_route"] == route
 
 
+@pytest.mark.parametrize("symbol", ["005930", "034020", "042660", "000660"])
+@pytest.mark.parametrize("requested_suffix", ["", "_NX", "_AL"])
+def test_shared_widget_accepts_integrated_source_for_all_symbols(tmp_path, monkeypatch, symbol, requested_suffix):
+    import json
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+    from src.trading.market.shared_ws_snapshot import read_shared_widget_quote, compare_widget_rest, attach_transport_census
+    path, context, now, snapshot = _shared_widget_fixture(tmp_path, monkeypatch)
+    context.request_code = symbol + requested_suffix
+    item = symbol + "_AL"
+    snapshot["shared_transport_producer"]["registered_items"] = [item]
+    stock = snapshot["stocks"].pop("005930")
+    snapshot["stocks"][symbol] = stock
+    for row in stock["machine_confirmation_routes"]["KRX|krx_only"]["realtime_types"].values():
+        row.update(item=item, market_suffix="_AL", market_route="krx_nxt_integrated", effective_venue="")
+    path.write_text(json.dumps(snapshot))
+    source = read_shared_widget_quote(context, now_ts=now, path=path)
+    assert source["status"] == "valid_ws_comparison_input", source
+    assert source["request_code"] == context.request_code
+    assert source["ws_request_code"] == item
+    assert source["market_data_route"] == "krx_nxt_integrated"
+    assert source["source_clocks"] == {"0B": now - .2, "0D": now - .2}
+    stamp = datetime.fromtimestamp(now, timezone.utc)
+    compare_widget_rest(source, current_price=10000, bbo=source["values"], quote_received_at=stamp, bbo_received_at=stamp)
+    assert source["comparison_status"] == ("matched_fields" if requested_suffix == "_AL" else "different_market_data_scope")
+    assert source["same_observation_proven"] is False
+    owner = SimpleNamespace(_transport_comparison=source)
+    payload = {"observed_at_kst": stamp.isoformat()}
+    attach_transport_census(owner, payload)
+    first = source["census"]
+    attach_transport_census(owner, payload)
+    assert next(iter(first["windows"].values()))["ws_source_items"][item]["valid_ws"] == 1
+    bucket = next(iter(source["census"]["windows"].values()))
+    assert bucket["valid_ws"] == bucket["ws_source_items"][item]["valid_ws"] == 2
+    assert source["selected_input"] == "existing_rest"
+    assert source["runtime_effect"] is False
+
+
+@pytest.mark.parametrize("defect", ["stale", "mixed_item", "wrong_symbol", "partial", "wrong_route", "epoch"])
+def test_integrated_acceptance_preserves_required_source_guards(tmp_path, monkeypatch, defect):
+    import json
+    from src.trading.market.shared_ws_snapshot import read_shared_widget_quote
+    path, context, now, snapshot = _shared_widget_fixture(tmp_path, monkeypatch)
+    snapshot["shared_transport_producer"]["registered_items"] = ["005930_AL"]
+    rows = snapshot["stocks"]["005930"]["machine_confirmation_routes"]["KRX|krx_only"]["realtime_types"]
+    for row in rows.values():
+        row.update(item="005930_AL", market_suffix="_AL", market_route="krx_nxt_integrated", effective_venue="")
+    if defect == "stale": rows["0D"]["observed_epoch"] = now - 21
+    elif defect == "mixed_item": rows["0D"]["item"] = "005930"
+    elif defect == "wrong_symbol":
+        for row in rows.values(): row["item"] = "034020_AL"
+    elif defect == "partial": rows["0D"]["orderbook"]["asks"][0].pop("volume")
+    elif defect == "wrong_route": rows["0D"]["market_route"] = "krx_only"
+    elif defect == "epoch": rows["0D"]["transport_epoch"] = 2
+    path.write_text(json.dumps(snapshot))
+    source = read_shared_widget_quote(context, now_ts=now, path=path)
+    assert source["status"] == "source_gap", source
+    assert source["selected_input"] == "existing_rest"
+
+
+def test_integrated_source_selection_keeps_existing_window_denominator(tmp_path, monkeypatch):
+    import json
+    from copy import deepcopy
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+    from src.trading.market.shared_ws_snapshot import read_shared_widget_quote, attach_transport_census
+    path, context, now, snapshot = _shared_widget_fixture(tmp_path, monkeypatch)
+    owner = SimpleNamespace(_transport_comparison=read_shared_widget_quote(context, now_ts=now, path=path))
+    payload = {"observed_at_kst": datetime.fromtimestamp(now, timezone.utc).isoformat()}
+    attach_transport_census(owner, payload)
+    routes = snapshot["stocks"]["005930"]["machine_confirmation_routes"]
+    integrated = deepcopy(routes["KRX|krx_only"])
+    for row in integrated["realtime_types"].values():
+        row.update(item="005930_AL", market_suffix="_AL", market_route="krx_nxt_integrated", effective_venue="")
+    routes["|krx_nxt_integrated"] = integrated
+    snapshot["shared_transport_producer"]["registered_items"].append("005930_AL")
+    path.write_text(json.dumps(snapshot))
+    owner._transport_comparison = read_shared_widget_quote(context, now_ts=now, path=path)
+    assert owner._transport_comparison["ws_request_code"] == "005930_AL"
+    attach_transport_census(owner, payload)
+    bucket = next(iter(payload["market_data_transport"]["census"]["windows"].values()))
+    assert bucket["expected_comparisons"] == bucket["valid_ws"] == 2
+    assert bucket["ws_source_items"] == {
+        "005930": {"valid_ws": 1, "ws_source_gap": 0},
+        "005930_AL": {"valid_ws": 1, "ws_source_gap": 0},
+    }
+
+
 @pytest.mark.parametrize("defect", ["old_book", "future_trade", "new_epoch", "wrong_route", "wrong_item",
     "partial_book", "crossed_book", "dead_producer", "missing_producer", "not_registered", "duplicate_route",
     "future_file", "wrong_session", "wrong_authority", "bool_epoch", "bool_stock_epoch", "non_object", "wrong_venue", "disconnected"])
@@ -200,6 +288,47 @@ def test_shared_transport_census_keeps_unknown_generation_and_bounded_history(tm
     windows = source["census"]["windows"]
     assert len(windows) == 4
     assert min(map(int, windows)) == now + 1800
+
+
+def test_shared_transport_census_does_not_relabel_parent_counts_after_fork(tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+    from src.trading.market import shared_ws_snapshot as shared
+    path, context, now, _ = _shared_widget_fixture(tmp_path, monkeypatch)
+    source = shared.read_shared_widget_quote(context, now_ts=now, path=path)
+    owner = SimpleNamespace(_transport_comparison=source)
+    payload = {"observed_at_kst": datetime.fromtimestamp(now, timezone.utc).isoformat()}
+    shared.attach_transport_census(owner, payload)
+    parent = source["census"]
+    child = {**parent["consumer_process"], "pid": parent["consumer_process"]["pid"] + 1}
+    monkeypatch.setattr(shared.os, "getpid", lambda: child["pid"])
+    monkeypatch.setattr(shared, "process_generation", lambda _: child)
+    shared.attach_transport_census(owner, payload)
+    assert source["census"]["consumer_process"] == child
+    bucket = source["census"]["windows"][str(int(now))]
+    assert bucket["expected_comparisons"] == 1
+    assert parent["consumer_process"] != child
+    assert parent["windows"][str(int(now))]["expected_comparisons"] == 1
+
+
+def test_shared_transport_census_keeps_counts_on_process_provenance_read_failure(tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+    from src.trading.market import shared_ws_snapshot as shared
+    path, context, now, _ = _shared_widget_fixture(tmp_path, monkeypatch)
+    owner = SimpleNamespace(_transport_comparison=shared.read_shared_widget_quote(context, now_ts=now, path=path))
+    payload = {"observed_at_kst": datetime.fromtimestamp(now, timezone.utc).isoformat()}
+    shared.attach_transport_census(owner, payload)
+    def unavailable(_):
+        raise OSError("proc_read_unavailable")
+    monkeypatch.setattr(shared, "process_generation", unavailable)
+    owner._transport_comparison.update(status="source_gap", comparison_status="rest_not_observed")
+    shared.attach_transport_census(owner, payload)
+    census = payload["market_data_transport"]["census"]
+    assert census["consumer_process"]["status"] == "process_provenance_unavailable"
+    bucket = census["windows"][str(int(now))]
+    assert bucket["expected_comparisons"] == 2
+    assert bucket["valid_ws"] == bucket["ws_source_gap"] == 1
 
 
 @pytest.mark.parametrize(

@@ -2,6 +2,7 @@
 
 - 상태: **사용자 구현·리뷰·커밋푸시·배포기동 승인 후 P0/P1 첫 인계 구현**. 기존 문서 작성 단계의 실행 금지는 과거 범위이며 이번 명시 승인을 대체하지 않는다. P1은 비교 전용이고 P2 전환/확대는 P5 자연 검증 후다. [코드·검증·배포 기록](../audit-reports/2026-09-21-widget-shared-ws-transport-review.md). 앞선 수리 완료를 WS 전환 완료로 확대하지 않는다.
 - 결정: 현재가·체결·호가를 기존 WS 수신기에서 공유하고 REST는 초기 이력·정적 정보·제한된 누락 복구에 사용한다. **1차는 위젯 시세/BBO, 2차는 확장 관측, 3차는 검증된 분봉 재사용과 에피소드 연결**이다.
+- 사용자 정정 반영: 모든 종목에서 같은 종목의 유효한 `_AL` 체결·호가 수신을 WS 전환의 원천 검증에 인정한다. `005930` 별도 등록 부재나 KRX REST와의 값 차이만으로 `005930_AL`을 탈락시키지 않는다. [공통 reader 보완·실제 자료 확인](../audit-reports/2026-09-21-widget-shared-ws-transport-review.md#integrated-symbol-source-acceptance-correction).
 - 현재 실행·자연 acceptance owner: [9/21 checklist](../checklists/2026-09-21-stage2-todo-checklist.md)의 `KiwoomCommonHealthOpportunityCostAcceptance0917`. 이 문서는 단계별 설계이며 별도 OPEN owner를 중복 생성하지 않는다.
 - 상위 계약: [Plan Rebase §1–§8](../plan-korStockScanPerformanceOptimization.rebase.md), [Kiwoom API 공식 참조 gate](../kiwoom-api-data-contract.md#official-kiwoom-reference-gate). [기존 위젯 source/consumer 성능 계획](widget-postclose-performance-and-source-closure-implementation-plan-2026-09-16.md)의 원천 역할·중복 제거 원칙을 이어가며 완료된 장후 계산 개선을 다시 수행하지 않는다.
 
@@ -58,6 +59,7 @@ flowchart LR
 
 - P0에서 각 consumer가 실제 사용하는 `ka10001/ka10004/ka10080` 필드를 목록화하고 공식 WS FID와 단위·부호·시각·route를 대조한다. 현재가가 같다는 이유로 기본정보 전체를 WS로 대체하지 않는다. WS에 없는 정적 필드는 REST 저빈도 cache로 유지한다.
 - key는 최소 `(trade_date, symbol, item/request_code, market_data_route, session, realtime_type)`이다. KRX·NXT·통합 `_AL` 값을 섞지 않고 통합 관측으로 실제 체결 거래소를 추정하지 않는다.
+- 위젯 전환 원천은 동일 종목 `_AL`이 등록되어 있으면 통합 원천을 선택하고, 없으면 기존 요청 item을 검사한다. `request_code`와 `ws_request_code`를 따로 보존하고 선택한 원천 내부의0B/0D item·route·epoch 일치는 필수다. 통합 원천이 미완성/stale이면 결손을 기록하며 다른 원천으로 숨기지 않는다. KRX/NXT REST와 통합 WS는 `different_market_data_scope`로 기록하고 WS 유효 수신에 포함한다. 거래장소가 다른 값의 완전 일치는 전환 조건이 아니며, 실제 주문장소별 유동성 검사나 완료 분봉 계약을 이 규칙으로 바꾸지 않는다.
 - 가격·최우선호가·잔량·체결마다 원 수신시각, 제공된 거래시각과 정밀도, 연결 epoch, source hash/참조, producer PID/commit, consumer 선택/거부 사유를 남긴다. snapshot 생성·읽기시각을 가격 수신시각으로 바꾸지 않는다.
 - `0B`의 가격 갱신을 `0D` 잔량 갱신으로 취급하지 않는다. 같은 route여도 각 필드의 신선도와 허용 시각 차이를 기존 consumer 계약으로 검사한다. 오래된 값 혼합, 미래 시각, bid/ask 충돌은 차단한다.
 - 재접속·거래일/세션 전환 시 이전 세대 cache를 무효화한다. REG 수신 응답, 요청 scope와 실제 데이터 첫 수신을 구분한다. 로컬 sequence는 내부 유실 탐지용이며 broker가 제공하지 않은 무손실 sequence 증거를 합성하지 않는다.
@@ -86,7 +88,7 @@ flowchart LR
 | 단계 | 작업 및 산출물 | 종료 조건 |
 | --- | --- | --- |
 | P0 계약·용량 확인 | 필드/FID 대조표, 활성 consumer×route×type 구독 합집합, REST owner/API별 시도·예산 대기·실제 전송량, 현재 설치 PID/설정과 원천 기준선 | 미확인 wire/한도/필드 의미 명시; 첫3종목의 필요한 데이터와 main 보호 용량 확인. 미확인 범위를 자동 등록하지 않음 |
-| P1 공통 reader·3종목 병행 검증 | 기존 publisher 재사용, 삼성·두산·한화 reader의 WS/REST 데이터 비교 구현; 기존 주문판단 입력은 검증 완료 전 유지 | 정상·quiet·재접속·stale·route mismatch fixture PASS. P4를 거친 자연 비교에서 같은 관측시점의 설명되지 않은 필수값 불일치0. 기존 가격/신선도 검사 불변 |
+| P1 공통 reader·3종목 병행 검증 | 기존 publisher 재사용, 삼성·두산·한화 reader의 WS/REST 데이터 비교 구현; 기존 주문판단 입력은 검증 완료 전 유지 | 정상·quiet·재접속·stale·route mismatch fixture PASS. P4를 거친 자연 수신의 필수값/신선도 검증. 같은 원천·관측시점에서 설명되지 않은 필수값 불일치0; KRX/NXT와_AL의 원천 차이는 유효 수신으로 분류. 기존 가격/신선도 검사 불변 |
 | P2 시세 전환·관측 확장 | P1 소범위 인계를 확인한 뒤 유효 catalog의58종목/연구198종목 합집합으로 확대 준비. 각 cohort는 P4를 통과해 등록·수신·소비/거부 영수증 확보 | 구독 중복/메인 구독 손실0, scope 미분류0. 미수용·미수신은 명시적 source gap. quote/BBO 요청 및 대기가 줄었는지 동일 분모로 확인 |
 | P3 분봉 공유·에피소드 연결 | 초기 REST+증명된 WS 집계+누락 복구, 동일 route 완료 분봉의 기존 episode reader 인계 | 기존 bar와 신호 kernel 동등성, mismatch 격리, 중단·재시작 후 초기화 검증. 주문 직전 유동성·체결속도 검사는 기존 경로 유지 |
 | P4 검토·immutable 배포 | implementation→self review→fix→re-review→targeted tests, 별도 worktree/immutable release, 서비스별 source pin·rollback 기록 | 관련 producer/consumer/cache/recovery 모든 경로 finding0; 권한 있는 대상만 배포·재기동. 실제 PID/코드/source hash와 새 자연 소비 확인 |
@@ -96,7 +98,7 @@ flowchart LR
 
 ## 5. 수치 검증과 감시
 
-계측 계약: `metric_role=market_data_transport_quality`, `decision_authority=source_quality_only`, `window_policy=exact_consumer_route_session_matched_windows`, `sample_floor=three_consecutive_15_minute_windows_for_each_rollout_cohort`, `primary_decision_metric=consumer_valid_market_data_ratio`, `source_quality_gate=exact_route_original_timestamps_epoch_required_fields`, `forbidden_uses=[order_authority,threshold_relaxation,profit_claim,retired_strategy_activation]`.
+계측 계약: `metric_role=market_data_transport_quality`, `decision_authority=source_quality_only`, `window_policy=consumer_session_windows_with_explicit_ws_source_items`, `sample_floor=three_consecutive_15_minute_windows_for_each_rollout_cohort`, `primary_decision_metric=consumer_valid_market_data_ratio`, `source_quality_gate=exact_route_original_timestamps_epoch_required_fields`, `forbidden_uses=[order_authority,threshold_relaxation,profit_claim,retired_strategy_activation]`.
 
 | 항목 | 검증 기준 |
 | --- | --- |
