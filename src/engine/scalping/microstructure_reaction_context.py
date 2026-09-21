@@ -6,7 +6,7 @@ import json
 import math
 from uuid import uuid4
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from statistics import mean
 from typing import Any
@@ -18,6 +18,7 @@ CONTEXT_VERSION = "microstructure_reaction_context_v2"
 REPORT_DIR = DATA_DIR / "report" / "microstructure_reaction_context"
 TRUSTED_TICK_VOLUME_SOURCES = {"15_abs", "13_delta"}
 DEFAULT_QUOTE_STALE_MS = 3000
+KST = timezone(timedelta(hours=9))
 
 DELIVERY_KEYS = tuple(
     "microstructure_reaction_" + name
@@ -837,7 +838,11 @@ def _age_ms_from_hhmmss(value: Any, *, now: datetime | None = None) -> int | Non
     tick_sec = _safe_hhmmss_to_seconds(value)
     if tick_sec is None:
         return None
-    now_dt = now or datetime.now()
+    # HHMMSS is a Korean market wall clock, not the caller's timezone.
+    # Preserve legacy naive KST inputs; aware inputs keep their exact instant.
+    now_dt = now or datetime.now(KST)
+    if now_dt.tzinfo is not None:
+        now_dt = now_dt.astimezone(KST)
     now_sec = now_dt.hour * 3600 + now_dt.minute * 60 + now_dt.second
     age_sec = now_sec - tick_sec
     if age_sec < -43200:
@@ -918,7 +923,7 @@ def precompute_microstructure_reaction_inputs(
     now: datetime | float | int | None = None,
 ) -> dict[str, Any]:
     if isinstance(now, (int, float)):
-        now = datetime.fromtimestamp(float(now))
+        now = datetime.fromtimestamp(float(now), tz=KST)
     elif now is not None and not isinstance(now, datetime):
         now = None
     ws_data = ws_data if isinstance(ws_data, dict) else {}
@@ -1394,9 +1399,9 @@ def build_microstructure_reaction_context(
     ws_data, recent_ticks, recent_candles=None, *, now=None, precomputed=None
 ):
     if isinstance(now, (float, int)):
-        now = datetime.fromtimestamp(now)
+        now = datetime.fromtimestamp(now, tz=KST)
     elif not isinstance(now, datetime):
-        now = datetime.now()
+        now = datetime.now(KST)
     payload = _calculate_microstructure_reaction_context(
         ws_data, recent_ticks, recent_candles, now=now, precomputed=precomputed
     )

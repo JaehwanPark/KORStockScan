@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import pytest
 
 from src.engine.scalping.microstructure_reaction_context import (
@@ -75,6 +75,72 @@ def _ticks():
             "aggressor_source": "trusted_declared_side",
         },
     ]
+
+
+@pytest.mark.parametrize("clock", ["utc", "kst", "naive_kst", "epoch"])
+@pytest.mark.parametrize(
+    "local_now,tick_time,bar_time,age_ms",
+    [
+        ("2026-09-21T16:04:44+09:00", "160443", "20260921160400", 1000),
+        ("2026-09-22T00:00:01+09:00", "235959", "20260921235900", 2000),
+        ("2026-09-21T16:04:44+09:00", "160445", "20260921160400", -1000),
+        ("2026-09-21T16:04:44+09:00", "160444", "20260921160400", 0),
+        ("2026-09-21T16:04:44+09:00", "160439", "20260921160400", 5000),
+        ("2026-09-21T16:04:44+09:00", "160438", "20260921160400", 6000),
+    ],
+)
+def test_market_clock_tick_and_bar_ages_agree(clock, local_now, tick_time, bar_time, age_ms):
+    from src.engine.scalping_feature_packet import extract_scalping_feature_packet
+
+    local = datetime.fromisoformat(local_now)
+    now = {
+        "utc": local.astimezone(timezone.utc),
+        "kst": local,
+        "naive_kst": local.replace(tzinfo=None),
+        "epoch": local.timestamp(),
+    }[clock]
+    ticks = [{**tick, "time": tick_time} for tick in _ticks()]
+    packet = extract_scalping_feature_packet(
+        _ws_data(), ticks,
+        [{"source_timestamp": bar_time, "현재가": 10120}], now=now,
+    )
+    assert packet["tick_latest_age_ms"] == age_ms
+    assert packet["tick_context_stale"] is (not 0 <= age_ms <= 5000)
+    assert packet["minute_candle_window_fresh"] is True
+    assert packet["minute_candle_latest_age_ms"] == (61000 if tick_time == "235959" else 44000)
+    assert packet["quote_age_ms"] == 200
+    assert packet["quote_stale"] is False
+    assert (packet["microstructure_reaction_context_status"] == "ok") is (0 <= age_ms <= 5000)
+
+
+def test_epoch_market_clock_does_not_depend_on_host_timezone(monkeypatch):
+    import time
+    from src.engine.scalping_feature_packet import (
+        _reference_seconds_of_day,
+        extract_scalping_feature_packet,
+    )
+
+    now = datetime(2026, 9, 21, 9, 0, 12, tzinfo=timezone(timedelta(hours=9)))
+    try:
+        with monkeypatch.context() as env:
+            env.setenv("TZ", "UTC")
+            time.tzset()
+            packet = extract_scalping_feature_packet(
+                _ws_data(last_realtime_type_ts={"0D": now.timestamp() - 0.2}),
+                _ticks(), [{"source_timestamp": "20260921090000", "현재가": 10120}],
+                now=now.timestamp(),
+            )
+            assert packet["tick_latest_age_ms"] == 2000
+            assert packet["minute_candle_latest_age_ms"] == 12000
+            assert packet["quote_age_ms"] == pytest.approx(200, abs=0.001)
+            assert packet["microstructure_reaction_context_status"] == "ok"
+            assert _reference_seconds_of_day(
+                {"last_ws_update_ts": now.timestamp()}, []
+            ) == (9 * 3600 + 12, "ws_last_update_ts")
+            env.setattr(time, "time", lambda: now.timestamp())
+            assert _reference_seconds_of_day({}, []) == (9 * 3600 + 12, "system_clock")
+    finally:
+        time.tzset()
 
 
 @pytest.mark.parametrize(

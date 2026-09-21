@@ -8,6 +8,7 @@ from statistics import mean
 from src.engine.scalping.microstructure_reaction_context import (
     CONTEXT_VERSION as MICROSTRUCTURE_REACTION_CONTEXT_VERSION,
     DEFAULT_QUOTE_STALE_MS as SCALP_FEATURE_PACKET_QUOTE_STALE_MS,
+    KST,
     microstructure_delivery_fields,
     normalize_quote_stale_threshold,
     build_microstructure_reaction_context,
@@ -301,14 +302,16 @@ def _time_to_seconds(value) -> int | None:
 
 def _reference_seconds_of_day(ws_data, ticks, now=None) -> tuple[int, str]:
     if isinstance(now, datetime):
+        if now.tzinfo is not None:
+            now = now.astimezone(KST)
         return now.hour * 3600 + now.minute * 60 + now.second, "explicit_now"
     if isinstance(now, (int, float)) and now > 0:
-        ref = datetime.fromtimestamp(float(now))
+        ref = datetime.fromtimestamp(float(now), tz=KST)
         return ref.hour * 3600 + ref.minute * 60 + ref.second, "explicit_epoch"
     try:
         ts = float((ws_data or {}).get("last_ws_update_ts") or 0)
         if ts > 0:
-            ref = datetime.fromtimestamp(ts)
+            ref = datetime.fromtimestamp(ts, tz=KST)
             return ref.hour * 3600 + ref.minute * 60 + ref.second, "ws_last_update_ts"
     except Exception:
         pass
@@ -320,7 +323,7 @@ def _reference_seconds_of_day(ws_data, ticks, now=None) -> tuple[int, str]:
         )
         if sec is not None:
             return sec, "latest_tick_time"
-    ref = datetime.fromtimestamp(time.time())
+    ref = datetime.fromtimestamp(time.time(), tz=KST)
     return ref.hour * 3600 + ref.minute * 60 + ref.second, "system_clock"
 
 
