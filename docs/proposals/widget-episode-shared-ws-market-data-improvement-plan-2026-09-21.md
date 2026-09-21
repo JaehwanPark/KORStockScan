@@ -220,3 +220,5 @@ flowchart LR
 9/21 후속 계획 보완은 §1.1의9건을 근거로 주문 직전 검사를 일괄 REST 유지하던 범위를 P2E로 확장했다. 입력 adapter·시간 예산·WAIT 수리·cohort별 검증·rollback을 검토하고 P3/메인 owner와 구분했다. 이번 변경은 계획/현재 checklist 연결만이며 코드·배포·재기동·주문·외부 sync를 수행하지 않는다. 단일 실행 owner는 상단 stable ID를 유지한다.
 
 9/21 후속 코드리뷰: seed 재시도 대기를 결손구간별 파일에서 종목·세션 공통 admission으로 보완하고, 손상 캐시와 minimum-history 우회를 차단했다. 기존 단일 owner와 REST 선택은 유지하며 승인된 커밋·푸시·immutable 배포/PID 증거는 [구현 리뷰](../audit-reports/2026-09-21-widget-ws-completed-bars-implementation-review.md#follow-up-review-and-authorized-commitpush-rollout)에 기록한다.
+
+후속 리뷰/배포 종결: 코드 `d6b26e455`·브랜치 `codex/widget-p3-review-20260921` 푸시, 1,138 PASS, 메인과 수집기4개 실제 PID 소비 확인. 현재 상세 증거는 구현 리뷰의 `Follow-up deployment receipt`가 소유한다. 초기 이력 계약/WS bar 소비 전환은 기존 OPEN으로 유지한다.
