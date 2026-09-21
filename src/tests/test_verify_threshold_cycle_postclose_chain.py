@@ -263,3 +263,25 @@ def test_disabled_active_stage_is_not_an_escape_hatch(monkeypatch, tmp_path):
     _seed(monkeypatch, tmp_path, "2026-09-19")
     result = mod.build_threshold_cycle_postclose_verification("2026-09-19", disabled_stages={"entry_split"})
     assert "disabled_stage_not_allowed:entry_split" in result["issues"]
+
+
+def test_main_scope_conserves_original_and_structure_eligible_populations(monkeypatch, tmp_path):
+    from src.engine.scalping import ai_action_outcome_calibration as calibration
+    target = "2026-09-17"
+    data = tmp_path / "data"
+    monkeypatch.setattr(mod, "DATA_DIR", data)
+    monkeypatch.setattr(mod, "REPORT_DIR", data / "report")
+    path = data / "report/ai_decision_action_outcome_calibration" / f"ai_decision_action_outcome_calibration_{target}.json"
+    source = dict(schema=calibration.SCHEMA, target_date=target,
+        report_scope="main_mechanistic_entry", noncompact_sections_refreshed=True,
+        machine_full_evaluation=dict(state="source_gap", full_population_count=10, current_structure_eligible_count=2),
+        mechanistic_entry_refinement=dict(schema=calibration.MECHANISTIC_REFINEMENT_SCHEMA, target_date=target,
+            source_contract=dict(schema="machine_common_refinement_population_v1",
+                structure_contract_population_count=10, accepted_unique_trace_count=2,
+                row_exclusion_reason_counts=dict(structure_contract_version_mismatch=8))),
+        hierarchical_entry_quality=dict(runtime_extensions_by_scope={}, machine_decision_case_table={}))
+    _write(path, calibration._with_artifact_content_sha256(source))
+    assert "main_machine_refinement_contract_invalid" not in mod._main_mechanistic_scope(target)["issues"]
+    source["machine_full_evaluation"]["current_structure_eligible_count"] = 3
+    _write(path, calibration._with_artifact_content_sha256(source))
+    assert "main_machine_refinement_contract_invalid" in mod._main_mechanistic_scope(target)["issues"]

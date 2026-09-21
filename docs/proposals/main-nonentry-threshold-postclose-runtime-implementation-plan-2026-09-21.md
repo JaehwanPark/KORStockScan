@@ -1,7 +1,7 @@
 # 메인 BLOCK/RECHECK 전환 임계치 장후 학습·런타임 구현계획
 
 작성일: 2026-09-21 KST
-상태: 사용자 승인에 따라 즉시 적용 경로 구현·반복 리뷰·장후 재평가 진행. 다음 장전 대기 없이 적격 generation을 적용하며 다음 적격 generation까지 승계한다. 실제 배포/PID/정책 선정 증거는 [구현 리뷰](../audit-reports/2026-09-21-main-entry-strategy-runtime-review.md)를 기준으로 구분한다.
+상태: 즉시 적용 경로 구현·리뷰·배포·기동 및 장후 재평가 실행. 후보별 downstream 재생 연결이 남아 새 수익성 정책 생성/승격은 미완료. 다음 장전 대기 없이 적격 generation을 적용하며 다음 적격 generation까지 승계한다. 실제 배포/PID/정책 선정 증거는 [구현 리뷰](../audit-reports/2026-09-21-main-entry-strategy-runtime-review.md)를 기준으로 구분한다.
 실행 owner: [당일 체크리스트의 DirectFamilySourceRepairMainMechanisticEntry](../checklists/2026-09-21-stage2-todo-checklist.md). 기존 원천·경제성 acceptance를 보존하면서 아래 구현 범위를 연결한다.
 
 ## 1. 목표와 완료의 의미

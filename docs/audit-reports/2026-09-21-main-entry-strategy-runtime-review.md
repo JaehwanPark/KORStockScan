@@ -28,4 +28,14 @@
 
 ## 실행 결과
 
-장후 평가·커밋·배포·실제 PID 소비 결과 확인 중.
+- 초기 배포 commit: `77b6beb51542b1f91621cab6a6543c10d7282eca`, branch `codex/main-entry-strategy-20260921`, origin push 확인. 당시 최신 위젯 릴리스 `d6b26e455`를 부모로 통합해 동시 변경을 보존했다.
+- 18:00 KST 정상 재기동: PID `346701`, runtime bootstrap PID 검증 PASS, 해당 릴리스 `src` cwd 일치. 실제 release/PID 영수증은 `data/runtime/runtime_release_selection.json`, 검증 및 이전 selection은 `tmp/main-entry-strategy-20260921/`에 보존한다.
+- 최종 관련 계약 360 PASS, 최신 운영 source 통합 후 268 PASS, 후속 verifier 수정 15 PASS. compile/bash syntax/diff/print-only parser 통과. 중복 검사를 합산해 고유 테스트 수로 표시하지 않는다.
+- 18:08 KST 장후 재생성 완료: source date `2026-09-17`(현재 보존된 최신 완결 label 자료), publication `2026-09-21`, `--machine-only --write --require-policy-publication --activate-now`. 오늘의 미래 결과를 합성하지 않았다. 첫 재생성에서 발견한 legacy 구조 필터 연결 결함을 수정한 후 한 번 재실행했다.
+- 새 전략 KRX 모집단 1,712건, raw 재판정 지원 1,708건, raw 누락 제외 4건. 실행·비용 비교 연결 `operating_population_count=0`, `strategy_operating_population_unbound`, 평가 후보/승격 0. 다른 8 scope는 빈 원천·당일만 존재하는 holdout 결손·raw 결손으로 유지한다. 이는 `evaluated_no_edge`나 임계치 최적 탐색 완료가 아니다.
+- **새 임계치 정책은 생성·적용되지 않았다.** 즉시 publisher 결과 `incumbent_carry`; 현재 bundle `15c063637359bd4cbd5a567760abecdf6229aee1f44d1e9d6a7cbc2dc7e97eb7` 유지. 9/22 dated carry bundle은 `876fd067e62a477622b683ae8b6ebb376674452cba89eaa5019e84936069950a`; 새 전략 `current.json` 승격 세대는 없다.
+- 메인 scoped verifier는 처음 전체 모집단과 구조 유효 모집단을 같다고 요구하여 실패했다. 원 모집단·유효 모집단·제외 수의 보존식으로 수정하고 불일치 거부 회귀검증 후 PASS. 이 보완은 오프라인 verifier뿐이므로 이미 정상 기동한 메인 PID는 유지하며, 후속 선택 릴리스의 main runtime 파일이 초기 배포와 동일함을 hash로 검증한다.
+- 전체 runtime summary는 `direct_evidence_incomplete`; 전체 postclose terminal/자연 제출/실현 순익 완료로 보고하지 않는다. 비용 후 EV·일별 순익은 null이다. 장후 재생성의 `full_evaluation_complete`는 작업 종료 상태이며 전수 경제성 성공이 아니다.
+- 남은 구현/원천 owner: `entry_setup_paired_replay_batch/strategy_owner_replay`. 후보별 재계산한 setup을 소비한 실제 offline auxiliary verdict, 그 가용시각에 묶인 실행·비용·자본 replay, RECHECK 종료 증거를 같은 기회로 생산·검증해야 한다. 현재 compact `prepare`는 실제 ENTER_NOW 화면만, nonentry replay는 `nonentry_plan_only`만 생산하므로 후보 전환의 이 연결은 아직 미구현이다. 이 결손은 갱신 임계치를 낮추는 것으로 해소되지 않는다. 그 연결이 없는 상태에서는 탐색이 economic preflight에서 중단되며 모든 설정 조합의 학습 완료가 아니다.
+- 사용자가 요구한 전체 완료 조건 중 **새 수익성 정책 생성·즉시 적용은 미완료**다. 기존 OPEN owner를 유지하고, 정책 강제 승격/AI PASS 합성/검증 주문/외부 sync는 하지 않았다.
+

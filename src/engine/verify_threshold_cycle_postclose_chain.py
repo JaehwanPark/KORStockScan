@@ -384,8 +384,16 @@ def _main_mechanistic_scope(target_date: str, effective_date: str | None = None,
         or refinement.get("target_date") != target_date
         or source_contract.get("schema")
         != "machine_common_refinement_population_v1"
-        or terminal.get("full_population_count")
-        != source_contract.get("accepted_unique_trace_count")
+        or terminal.get("full_population_count") != source_contract.get(
+            "structure_contract_population_count", source_contract.get("accepted_unique_trace_count"))
+        or ("structure_contract_population_count" in source_contract and (
+            terminal.get("current_structure_eligible_count") != source_contract.get("accepted_unique_trace_count")
+            or type(source_contract.get("accepted_unique_trace_count")) is not int
+            or type(source_contract.get("structure_contract_population_count")) is not int
+            or not 0 <= source_contract["accepted_unique_trace_count"] <= source_contract["structure_contract_population_count"]
+            or source_contract["structure_contract_population_count"] - source_contract["accepted_unique_trace_count"]
+                != (source_contract.get("row_exclusion_reason_counts") or {}).get("structure_contract_version_mismatch", 0)
+        ))
     ):
         issues.append("main_machine_refinement_contract_invalid")
     if (
