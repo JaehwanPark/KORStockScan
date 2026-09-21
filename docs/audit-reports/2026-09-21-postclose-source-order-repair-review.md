@@ -70,3 +70,6 @@ Episode 복구는23:09:19에 공동 명단 검증 단계를 통과했으나 `low
 - 00:02 main 재시도에서 `research_same_date_publication_conflict`: effective date가 달력상 당일이 되어 전일 장후 발행 갱신을 거부했다. 명시적 publication date, 다음 거래일, 07:30 이전, bootstrap 부재를 모두 만족할 때만 CAS 재발행을 허용한다.
 - 이전 machine은 연구 발행 후 checklist 생성에서 실패했다. 후속 main 연구 재생성/코드 수리로 전체 closure가 오래되어 widget 입력 대기에서 교착됐다. 이전 서명 receipt, 동일 widget terminal, 현재 widget 연구 semantic hash와 immutable 발행 세대를 검증한 경우 재구축만 허용한다. 최종 성공 게이트는 완전한 current receipt를 유지한다.
 - 코드 리뷰에서 누락된 date import를 보완했다. 경계시간/장전 준비 존재/잘못된 날짜/보고서 및 발행 변조 회귀 검증 포함.
+
+- 야간 발행/재개 회귀: 작업본91건, 사용자 별도 변경을 제외한 immutable release82건 PASS. release6978f7ca0에서 00:13 에피소드 CAS 발행 성공, 후속 main 평가 진행. 실제 서비스 reader도 widget3종목4세션, episode19종목61프로필과 청산 전용 확장3프로필을 읽었다.
+- 정규 machine wrapper가 publication 환경을 기본 설정하지 않던 경로를 보완하여 입력 대기 이전 completed-source/next-trading-date를 고정했다. wrapper17건 및 bash 문법 PASS.

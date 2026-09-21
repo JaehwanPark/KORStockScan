@@ -44,6 +44,10 @@ if (($# >= 1)); then
   completed_target_date="$requested_target_date"
 fi
 
+# Bind publication to the completed source before a long run crosses midnight.
+export POSTCLOSE_POLICY_PUBLICATION_DATE="${POSTCLOSE_POLICY_PUBLICATION_DATE:-$completed_target_date}"
+export POSTCLOSE_PREPARED_EFFECTIVE_DATE="$("$PYTHON_BIN" -c 'import sys; from src.engine.build_next_stage2_checklist import _next_krx_trading_day; print(_next_krx_trading_day(sys.argv[1]))' "$POSTCLOSE_POLICY_PUBLICATION_DATE")"
+
 mkdir -p "$PROJECT_DIR/tmp"
 exec 9>"$PROJECT_DIR/tmp/machine_final_refresh_${completed_target_date}.lock"
 flock -n 9 || exit 75

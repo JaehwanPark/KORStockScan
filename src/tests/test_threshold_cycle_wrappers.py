@@ -249,3 +249,10 @@ def test_machine_refresh_updates_direct_summary_before_checklist():
     script = (Path(__file__).resolve().parents[2] / "deploy/run_machine_microstructure_final_refresh.sh").read_text()
     assert script.index("-m src.engine.runtime_approval_summary") < script.index("-m src.engine.build_next_stage2_checklist")
     assert "if ((builder_rc == 0)); then" in script
+
+
+def test_machine_refresh_binds_publication_before_waiting():
+    script = (Path(__file__).resolve().parents[2] / "deploy/run_machine_microstructure_final_refresh.sh").read_text()
+    assert 'POSTCLOSE_POLICY_PUBLICATION_DATE:-$completed_target_date' in script
+    assert 'export POSTCLOSE_PREPARED_EFFECTIVE_DATE=' in script
+    assert script.index('export POSTCLOSE_POLICY_PUBLICATION_DATE=') < script.index('--phase wait-inputs')
