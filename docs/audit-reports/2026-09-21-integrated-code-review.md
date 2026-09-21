@@ -30,3 +30,14 @@
 - 백업/receipt: `/home/ubuntu/KORStockScan/tmp/integrated-review-deploy-20260921-CyGiuu`. 직전 main selection과 교체할 정확한 collector override를 보존한다. 롤백 시 그 selection/override만 복원하고 기존 guarded restart를 사용한다. 기존 drop-in·보유·원천/실패 이력은 삭제하지 않는다.
 - 새 PID 소비·당일 bootstrap·정상 scheduled health·자연 수집을 별도로 확인한다. 재기동 전후 WS process-local 분모를 합산하지 않는다. 다음 완전한3×15분 창을 기존 `KiwoomCommonHealthOpportunityCostAcceptance0917`가 소유한다. 자금 결손과 같은 시도 자금/정책/계획 연결은 기존 `SubmissionBottleneckMonitorNatural0921` 및 main source owner에서 OPEN을 유지한다.
 - 비수행: 실주문/수동 broker·provider probe, 광범위 장후 재생성, 외부 Project/Calendar sync, 한도·정책·hard safety 완화. 전체 저장소 전수 테스트가 아닌 오늘 변경 및 직접 영향 범위를 검증한다.
+
+## 배포·자연 소비 receipt
+
+- 소스 `d06b39ca2893798911d75d983ce4b6f1741bf0b5` 커밋·origin/main fast-forward push 완료. immutable `integrated-review-20260921-d06b39ca2` 배포본 자체의 추가3-suite **122 PASS**. tracked source/deploy/restart 경로 clean이며 workspace의 별도 생성자료는 제외했다.
+- 승인된 guarded restart 정상 종료: PID141501→**153806**,12:20:37 selected source/cwd receipt,12:20:38 exact-date bootstrap PASS, missing/mismatch0. 이번에는 감독 세션 생성 첫 시도에 성공했고 별도 수동 start/강제 kill은 없었다. 최대3회 재시도 경합은 Bash mock으로 검증한 것이며 자연 재시도 발생을 주장하지 않는다.
+- 수집기5개 모두 같은 commit/release, active/running/NRestarts0: 삼성153602, 두산153619, 한화153620, symbol-runtime153755, research-watch153750. 기존 interval·환경·custody 보존. 위젯 주문 owner는 PID75952 그대로이며 episode executor/정책을 재기동·변경하지 않았다.
+- 새 WS producer는 PID153806/commit d06b39ca2/epoch1.12:21:32–33 삼성·두산·한화 모두 `valid_ws_comparison_input`, 기존 REST snapshot `ok` 확인. startup의 죽은 이전 PID/오래된 checkpoint는 source gap으로 남겼고 원 시계를 갱신해 숨기지 않았다.
+-12:22:27 symbol-runtime 자연 snapshot은 프로세스 누적 재사용11건을 보고하지만 `data_wait`/로컬 budget64 소진도 유지한다. research-watch는12:22의 `SOURCE_QUALITY_BLOCKED`도 정상 기록한다. 재사용11건을 종목별로 합산하거나 전체 coverage/요청 병목 해소로 표현하지 않는다.
+- **운영 잔여:**12:20:55 첫 health는 종료 중 `producer summary is closed; raw must be retained`6건으로 log FAIL, process 등 나머지6개 PASS였다. 로그 원본을 백업했다. 같은 현상은09:35/11:09에도 있었고 이번 새 cache/epoch 코드 이전 PID141501의12:20:33 drain 중 발생했다. `pipeline_event_logger`는 raw/companion을 먼저 쓰고 이미 닫힌 summary에 후행 이벤트를 제출하여 경고한다. 종료 producer/summary 순서의 기존 경합은 이번60파일 보완 범위의 수리 완료에 포함하지 않는다. 원본 보존이 요약 완전성 또는 해당 경합 해소를 증명하지 않는다. 후속 원인은 같은 owner에서 raw 보존·admitted summary drain·종료 후 신규 worker 방지를 함께 검증해야 하며 단순 로그 억제로 닫지 않는다.
+-12:22:01 정상 scheduled health는 **7/7 PASS**, 주요 thread5개 alive. 이는 현재 신규 오류 없음이며 앞선 종료 경고를 삭제/해소했다는 뜻은 아니다. 새 PID의 자금 결손 전후 비교는 다음 정상 Sentinel cohort를 사용하며 재기동 이전12:20 보고서를 새 PID 증거로 사용하지 않는다.
+- WS 자연 수용은12:30–12:45/12:45–13:00/13:00–13:15의 완전한3창을 **13:15 이후** 기존 owner에서 검증한다. 앞선 PID의12:15–13:00 창은 이번 재기동으로 대체한다. 자연 자금 증거·정책/계획 연결·실제 주문·비용 후 EV는 별도 OPEN이다.
