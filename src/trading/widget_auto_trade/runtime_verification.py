@@ -34,6 +34,8 @@ KST = ZoneInfo("Asia/Seoul")
 # Exact allowlist: no provider keys, tokens, account identifiers, prefix matching,
 # or raw environment values are serialized, including in exception messages.
 ENV_KEYS = (
+    "KORSTOCKSCAN_ENTRY_MARKET_DATA_SOURCE",
+    "KORSTOCKSCAN_ENTRY_WS_ITEMS",
     "KORSTOCKSCAN_WIDGET_AUTO_TRADER_ENABLED",
     "KORSTOCKSCAN_WIDGET_AUTO_TRADER_ENTRY_QTY",
     "KORSTOCKSCAN_WIDGET_AUTO_TRADER_SYMBOLS",

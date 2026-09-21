@@ -163,6 +163,30 @@ def test_launcher_clears_intraday_pins_before_loading_dated_authority():
     subprocess.run(["bash", "-c", command], check=True)
 
 
+def test_launcher_imports_selected_release_despite_inherited_pythonpath(tmp_path):
+    import os
+    import sys
+
+    selected = tmp_path / "selected"
+    previous = tmp_path / "previous"
+    for directory, marker in ((selected, "selected"), (previous, "previous")):
+        directory.mkdir()
+        (directory / "release_binding_probe.py").write_text(f"MARKER = {marker!r}\n")
+    source = Path("src/run_bot.sh").read_text()
+    body = source.split("export_runtime_source_provenance() {", 1)[1].split("\n}", 1)[0]
+    command = (
+        "export_runtime_source_provenance() {" + body + "\n}\n"
+        'export_runtime_source_provenance\n"$PROBE_PYTHON" -c '
+        "'import release_binding_probe; print(release_binding_probe.MARKER)'"
+    )
+    result = subprocess.run(
+        ["bash", "-c", command], cwd=tmp_path, check=True, text=True,
+        capture_output=True, env={**os.environ, "PROJECT_DIR": str(selected),
+                                 "PYTHONPATH": str(previous), "PROBE_PYTHON": sys.executable},
+    )
+    assert result.stdout.splitlines()[-1] == "selected"
+
+
 def test_launcher_clears_auto_promotion_pins_before_loading_handoff():
     source = Path("src/run_bot.sh").read_text()
     reset = source.split("reset_runtime_policy_env_before_handoff() {", 1)[1].split(

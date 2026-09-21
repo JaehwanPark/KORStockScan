@@ -885,7 +885,10 @@ class SamsungMorningOneShareMachine(SamsungRegularTwoLegMachine):
                 ):
                     self._block(now, "entry_adverse_unsent_registry_release_failed")
                     return
-                leg["status"] = "NO_FILL"
+                state = leg.get(entry_adverse_guard.KEY) or {}
+                leg["status"] = (
+                    "NO_FILL" if entry_adverse_guard.terminal(state) else "PLANNED"
+                )
                 self._record(
                     now,
                     "entry_adverse_not_sent",

@@ -24,6 +24,8 @@ from src.trading.order.episode_quantity import (
     validate_owned_leg_quantity,
     validate_position_quantity,
 )
+from src.trading.market.entry_ws_snapshot import selected_entry_snapshot
+
 from src.trading.order.entry_liquidity_guard import (
     REQUIRED_RECENT_PRINT_COUNT,
     EntryExecutionVelocitySnapshot,
@@ -424,6 +426,9 @@ class KiwoomOneShareGateway:
         return snapshot
 
     def entry_liquidity_snapshot(self, *, route: str = "SOR") -> EntryLiquiditySnapshot:
+        selected = selected_entry_snapshot(symbol="005930", route=route, kind="0D")
+        if selected is not None:
+            return selected
         try:
             request_code = entry_liquidity_request_code("005930", route)
             payload = kiwoom_utils.get_stock_orderbook_ka10004(
@@ -443,6 +448,9 @@ class KiwoomOneShareGateway:
     def entry_execution_velocity_snapshot(
         self, *, route: str = "SOR"
     ) -> EntryExecutionVelocitySnapshot:
+        selected = selected_entry_snapshot(symbol="005930", route=route, kind="0B")
+        if selected is not None:
+            return selected
         try:
             request_code = entry_liquidity_request_code("005930", route)
             payload = kiwoom_utils.get_tick_history_ka10003(

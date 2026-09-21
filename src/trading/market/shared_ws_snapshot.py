@@ -90,17 +90,21 @@ def read_shared_widget_quote(context, *, now_ts, path=None):
                 or producer.get("process") != process_generation(producer["process"]["pid"])):
             raise ValueError("producer_generation_invalid")
         result["producer"] = producer
+        registered = producer.get("registered_items")
+        if (not isinstance(registered, list)
+                or any(not isinstance(code, str) for code in registered)):
+            raise ValueError("registration_items_invalid")
         # Widget transport validation accepts the same symbol's integrated
         # source. Preserve its actual route; never relabel it as KRX/NXT.
         # This reader is comparison-only, not an execution quote resolver.
         integrated_item = item[:6] + "_AL"
-        if integrated_item in producer.get("registered_items", []):
+        if integrated_item in registered:
             item = integrated_item
         route = "krx_nxt_integrated" if item.endswith("_AL") else "nxt_only" if item.endswith("_NX") else "krx_only"
         venue = "" if item.endswith("_AL") else "NXT" if item.endswith("_NX") else "KRX"
         result.update(ws_request_code=item, market_data_route=route,
                       source_selection="integrated_symbol" if item.endswith("_AL") else "exact_request")
-        if item not in producer.get("registered_items", []):
+        if item not in registered:
             raise ValueError("item_not_registered")
         stock = snapshot["stocks"][item[:6]]
         matches = [r["realtime_types"] for r in stock["machine_confirmation_routes"].values()
@@ -123,6 +127,7 @@ def read_shared_widget_quote(context, *, now_ts, path=None):
                     or observed.date() != now.date()
                     or not context.start <= observed.time().replace(tzinfo=None) < context.end
                     or row.get("realtime_type") != kind or row.get("market_route") != route
+                    or row.get("market_suffix") != item[6:]
                     or row.get("effective_venue") != venue
                     or type(row.get("transport_epoch")) is not int or row["transport_epoch"] != epoch
                     or type(row.get("route_sequence")) is not int or row["route_sequence"] <= 0):
@@ -159,14 +164,15 @@ def compare_widget_rest(transport, *, current_price, bbo, quote_received_at, bbo
             ("best_bid", "best_ask", "best_bid_qty", "best_ask_qty")}}
     transport["rest_values"] = rest
     transport["different_fields"] = [k for k, v in transport["values"].items() if rest.get(k) != v]
-    if transport["ws_request_code"] != transport["request_code"]:
+    transport["same_observation_proven"] = False
+    transport["same_market_data_scope"] = transport["ws_request_code"] == transport["request_code"]
+    if any(not 0 <= delta <= 20 for delta in deltas.values()):
+        transport["comparison_status"] = "not_comparable_clock_gap"
+        return
+    if not transport["same_market_data_scope"]:
         # KRX/NXT REST and integrated WS are valid but distinct observations.
         # Neither matching nor differing values establish route equivalence.
         transport["comparison_status"] = "different_market_data_scope"
-        transport["same_observation_proven"] = False
-        return
-    if any(not 0 <= delta <= 20 for delta in deltas.values()):
-        transport["comparison_status"] = "not_comparable_clock_gap"
         return
     transport["comparison_status"] = "different_observations" if transport["different_fields"] else "matched_fields"
     transport["same_observation_proven"] = False  # REST supplies no common exchange sequence.
@@ -176,6 +182,13 @@ def attach_transport_census(owner, payload):
     """Bounded per-process comparison denominator, including failed REST cycles."""
     transport = getattr(owner, "_transport_comparison", None)
     if not transport:
+        return
+    # collect_once and its failure publisher can both attach this same read
+    # after a recorder/write error. Count the evaluation once, even if failure
+    # reporting crosses a window/date boundary. A fork remains a new consumer.
+    if (getattr(owner, "_transport_census_last_sample", None) is transport
+            and getattr(owner, "_transport_census_last_pid", None) == os.getpid()):
+        payload["market_data_transport"] = transport
         return
     now = datetime.fromisoformat(payload["observed_at_kst"])
     # A fork inherits the owner object, not the parent's comparison receipt.
@@ -221,8 +234,11 @@ def attach_transport_census(owner, payload):
         consumer_process = {"status": "process_provenance_unavailable"}
     transport["census"] = {"scope": "process_local_comparison_not_adopted_input",
         "schema": "widget_transport_census_source_bound_v3",
+        "evaluation_count_basis": "once_per_reader_result",
         "consumer_process": consumer_process,
         "windows": {str(k): {**v, "ws_source_items": {item: dict(counts)
                     for item, counts in v["ws_source_items"].items()}}
                     for k, v in owner._transport_census.items()}}
     payload["market_data_transport"] = transport
+    owner._transport_census_last_sample = transport
+    owner._transport_census_last_pid = os.getpid()

@@ -35,6 +35,88 @@ def _shared_widget_fixture(tmp_path, monkeypatch):
     return path, context, now, json.loads(path.read_text())
 
 
+
+@pytest.mark.parametrize("failure_delay", [1, 901])
+def test_shared_transport_failure_republish_counts_one_evaluation(tmp_path, monkeypatch, failure_delay):
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+    from src.trading.market.shared_ws_snapshot import read_shared_widget_quote, attach_transport_census
+    path, context, now, _ = _shared_widget_fixture(tmp_path, monkeypatch)
+    source = read_shared_widget_quote(context, now_ts=now, path=path)
+    owner = SimpleNamespace(_transport_comparison=source)
+    success = {"observed_at_kst": datetime.fromtimestamp(now, timezone.utc).isoformat()}
+    attach_transport_census(owner, success)
+    failure = {"observed_at_kst": datetime.fromtimestamp(now + failure_delay, timezone.utc).isoformat(),
+               "status": "unavailable", "reason": "recorder_write_failed"}
+    attach_transport_census(owner, failure)
+    windows = failure["market_data_transport"]["census"]["windows"]
+    assert len(windows) == 1
+    assert sum(w["expected_comparisons"] for w in windows.values()) == 1
+
+
+@pytest.mark.parametrize("delta", [-1, 21])
+def test_integrated_rest_scope_does_not_hide_clock_gap(tmp_path, monkeypatch, delta):
+    from datetime import datetime, timezone
+    from src.trading.market.shared_ws_snapshot import read_shared_widget_quote, compare_widget_rest
+    path, context, now, _ = _shared_widget_fixture(tmp_path, monkeypatch)
+    source = read_shared_widget_quote(context, now_ts=now, path=path)
+    source["ws_request_code"] = "005930_AL"
+    stamp = datetime.fromtimestamp(source["source_clocks"]["0B"] + delta, timezone.utc)
+    compare_widget_rest(source, current_price=10000, bbo=source["values"], quote_received_at=stamp, bbo_received_at=stamp)
+    assert source["comparison_status"] == "not_comparable_clock_gap"
+    assert source["status"] == "valid_ws_comparison_input"
+    assert source["same_market_data_scope"] is False
+
+
+@pytest.mark.parametrize("registry", ["005930", {"005930": False}, ["005930", 42]])
+def test_shared_widget_rejects_malformed_registration_evidence(tmp_path, monkeypatch, registry):
+    import json
+    from src.trading.market.shared_ws_snapshot import read_shared_widget_quote
+    path, context, now, snapshot = _shared_widget_fixture(tmp_path, monkeypatch)
+    snapshot["shared_transport_producer"]["registered_items"] = registry
+    path.write_text(json.dumps(snapshot))
+    source = read_shared_widget_quote(context, now_ts=now, path=path)
+    assert source["status"] == "source_gap"
+    assert source["reason"] == "registration_items_invalid"
+
+
+def test_shared_widget_rejects_conflicting_suffix_metadata(tmp_path, monkeypatch):
+    import json
+    from src.trading.market.shared_ws_snapshot import read_shared_widget_quote
+    path, context, now, snapshot = _shared_widget_fixture(tmp_path, monkeypatch)
+    snapshot["stocks"]["005930"]["machine_confirmation_routes"]["KRX|krx_only"]["realtime_types"]["0D"]["market_suffix"] = "_AL"
+    path.write_text(json.dumps(snapshot))
+    source = read_shared_widget_quote(context, now_ts=now, path=path)
+    assert source["status"] == "source_gap"
+
+
+def test_samsung_failure_publication_does_not_inflate_completed_read(tmp_path, monkeypatch):
+    import json
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from src.engine.monitoring.samsung_widget_advisory import SamsungWidgetCollector
+    from src.trading.market.shared_ws_snapshot import read_shared_widget_quote, attach_transport_census
+    path, context, now, _ = _shared_widget_fixture(tmp_path, monkeypatch)
+    collector = SamsungWidgetCollector(snapshot_path=tmp_path / "consumer.json", observation_dir=tmp_path / "observations")
+    collector._transport_comparison = read_shared_widget_quote(context, now_ts=now, path=path)
+    stamp = datetime.fromtimestamp(now, ZoneInfo("Asia/Seoul"))
+    attach_transport_census(collector, {"observed_at_kst": stamp.isoformat()})
+    collector.write_failure("recorder_write_failed", stamp)
+    payload = json.loads(collector.snapshot_path.read_text())
+    assert payload["status"] == "unavailable"
+    assert payload["reason"] == "recorder_write_failed"
+    assert next(iter(payload["market_data_transport"]["census"]["windows"].values()))["expected_comparisons"] == 1
+    assert list((tmp_path / "observations").glob("*.jsonl"))
+
+
+def test_other_registered_market_items_do_not_block_valid_stock(tmp_path, monkeypatch):
+    import json
+    from src.trading.market.shared_ws_snapshot import read_shared_widget_quote
+    path, context, now, snapshot = _shared_widget_fixture(tmp_path, monkeypatch)
+    snapshot["shared_transport_producer"]["registered_items"].append("001")
+    path.write_text(json.dumps(snapshot))
+    assert read_shared_widget_quote(context, now_ts=now, path=path)["status"] == "valid_ws_comparison_input"
+
 def test_shared_widget_writer_to_independent_reader_preserves_clocks(tmp_path, monkeypatch):
     import json, subprocess, sys
     from pathlib import Path
@@ -108,6 +190,7 @@ def test_shared_widget_accepts_integrated_source_for_all_symbols(tmp_path, monke
     payload = {"observed_at_kst": stamp.isoformat()}
     attach_transport_census(owner, payload)
     first = source["census"]
+    source = owner._transport_comparison = dict(source)
     attach_transport_census(owner, payload)
     assert next(iter(first["windows"].values()))["ws_source_items"][item]["valid_ws"] == 1
     bucket = next(iter(source["census"]["windows"].values()))
@@ -217,6 +300,7 @@ def test_shared_transport_census_preserves_failed_and_different_observations(tmp
     bbo["best_bid_qty"] = 99
     compare_widget_rest(source, current_price=10000, bbo=bbo, quote_received_at=stamp, bbo_received_at=stamp)
     assert source["comparison_status"] == "different_observations"
+    source = owner._transport_comparison = dict(source)
     attach_transport_census(owner, payload)
     bucket = next(iter(source["census"]["windows"].values()))
     assert bucket["expected_comparisons"] == bucket["valid_ws"] + bucket["ws_source_gap"] == 2
@@ -245,6 +329,7 @@ def test_shared_transport_census_marks_mixed_window_without_erasing_gaps(tmp_pat
         process[change] = "new-boot" if change == "boot_id" else process[change] + 1
     else:
         source["producer"][change] = "b" * 40 if change == "source_commit" else 2
+    source = owner._transport_comparison = dict(source)
     attach_transport_census(owner, payload)
     bucket = next(iter(source["census"]["windows"].values()))
     assert bucket["producer_generation"] == next(iter(original.values()))["producer_generation"]
@@ -254,6 +339,7 @@ def test_shared_transport_census_marks_mixed_window_without_erasing_gaps(tmp_pat
     assert bucket["rest_not_observed"] == 2
     # A later complete window has its own generation, not a reset of history.
     payload["observed_at_kst"] = datetime.fromtimestamp(now + 900, timezone.utc).isoformat()
+    source = owner._transport_comparison = dict(source)
     attach_transport_census(owner, payload)
     windows = source["census"]["windows"]
     assert len(windows) == 2
@@ -275,6 +361,7 @@ def test_shared_transport_census_keeps_unknown_generation_and_bounded_history(tm
     attach_transport_census(owner, payload)
     source["producer"] = producer
     source["status"] = "valid_ws_comparison_input"
+    source = owner._transport_comparison = dict(source)
     attach_transport_census(owner, payload)
     bucket = source["census"]["windows"][str(int(now))]
     assert bucket["producer_generation"] is None
@@ -284,6 +371,7 @@ def test_shared_transport_census_keeps_unknown_generation_and_bounded_history(tm
     assert bucket["ws_source_gap"] == bucket["valid_ws"] == 1
     for offset in range(1, 6):
         payload["observed_at_kst"] = datetime.fromtimestamp(now + 900 * offset, timezone.utc).isoformat()
+        source = owner._transport_comparison = dict(source)
         attach_transport_census(owner, payload)
     windows = source["census"]["windows"]
     assert len(windows) == 4
@@ -322,7 +410,7 @@ def test_shared_transport_census_keeps_counts_on_process_provenance_read_failure
     def unavailable(_):
         raise OSError("proc_read_unavailable")
     monkeypatch.setattr(shared, "process_generation", unavailable)
-    owner._transport_comparison.update(status="source_gap", comparison_status="rest_not_observed")
+    owner._transport_comparison = {**owner._transport_comparison, "status": "source_gap", "comparison_status": "rest_not_observed"}
     shared.attach_transport_census(owner, payload)
     census = payload["market_data_transport"]["census"]
     assert census["consumer_process"]["status"] == "process_provenance_unavailable"

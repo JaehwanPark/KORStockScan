@@ -730,3 +730,124 @@ def test_velocity_future_packet_does_not_recover_by_wait_or_cached_reparse():
     reparsed = parse_ka10003_entry_execution_velocity_snapshot(rows, symbol='111770', route='SOR', observed_at=observed + timedelta(seconds=1))
     assert not reparsed.source_ok
     assert reparsed.error == 'ka10003_latest_trade_time_in_future'
+
+
+@pytest.fixture
+def entry_ws_source(tmp_path, monkeypatch):
+    import json
+    from src.trading.market import entry_ws_snapshot as ws
+    from src.tests.test_entry_adverse_flow import snapshot
+    now = datetime(2026, 9, 21, 10, 0, 20, tzinfo=KST).timestamp()
+    data = snapshot(datetime.fromtimestamp(now, KST))
+    data['generated_at_epoch'] = now
+    data['shared_transport_producer'] = dict(
+        schema='shared_ws_transport_producer_v1', process=ws.process_generation(__import__('os').getpid()),
+        source_commit='a'*40, transport_epoch=1, connection_available=True, registered_items=['005930_AL'])
+    stock = data['stocks']['005930'];stock['market_data_transport_epoch']=1
+    route = stock['machine_confirmation_routes']['SOR']
+    for kind,row in route['realtime_types'].items():
+        row.update(realtime_type=kind, market_route='krx_nxt_integrated', market_suffix='_AL',
+                   effective_venue='', observed_epoch=now-.1, route_sequence=20)
+    route['realtime_types']['0D']['orderbook'] = {'bids':[{'price':10100,'volume':1000}], 'asks':[{'price':10110,'volume':1000}]}
+    route['recent_trades'] = [dict(item='005930_AL', transport_epoch=1, route_sequence=20-i,
+        received_at_ms=round((now-.1-i)*1000),provider_trade_epoch=now-1-i,
+        provider_trade_time_precision_ms=1000,provider_trade_date_basis='local_receive_calendar_date_not_provider_date',
+        volume=100,price=10110,cum_volume=10000-i*100) for i in range(10)]
+    path = tmp_path/'source.json'
+    def write():
+        # Atomic replacement tests cache generation invalidation too.
+        new=tmp_path/'next.json';new.write_text(json.dumps(data));new.replace(path)
+    write()
+    monkeypatch.setattr(ws, '_live_snapshot_path', lambda: path)
+    monkeypatch.setattr(ws.time, 'time', lambda: now)
+    monkeypatch.setenv(ws.SOURCE_ENV, 'ws')
+    return ws, data, route, path, now, write
+
+
+def test_ws_entry_inputs_preserve_existing_guard_decisions(entry_ws_source):
+    ws,data,route,path,now,write=entry_ws_source
+    book=ws.read_entry_snapshot(symbol='005930',route='SOR',kind='0D')
+    ticks=ws.read_entry_snapshot(symbol='005930',route='SOR',kind='0B')
+    assert book.source_ok and ticks.source_ok
+    assert evaluate_entry_liquidity(book,requested_quantity=20,now_ts=now).allowed
+    assert evaluate_entry_execution_velocity(ticks,requested_quantity=20,now_ts=now).allowed
+    assert not evaluate_entry_liquidity(book,requested_quantity=20,now_ts=now+2).allowed
+    assert not evaluate_entry_execution_velocity(ticks,requested_quantity=20,now_ts=now+5).allowed
+    assert ticks.recent_volume==1000 and ticks.recent_print_span_ms==9000
+    assert ticks.source_meta['exchange_completeness_proven'] is False
+    route['realtime_types']['0D']['orderbook']['asks'][0]['volume']=1;write()
+    weak=ws.read_entry_snapshot(symbol='005930',route='SOR',kind='0D')
+    assert weak.source_ok
+    assert not evaluate_entry_liquidity(weak,requested_quantity=20,now_ts=now).allowed
+
+
+@pytest.mark.parametrize('fault', ['missing','duplicate','gap','epoch','future','reversed','producer_dead','wrong_route','partial','stale','bad_authority','cumulative_duplicate','cumulative_missing'])
+def test_ws_entry_source_contract_failures(entry_ws_source,fault):
+    ws,data,route,path,now,write=entry_ws_source
+    kind='0B'
+    if fault=='missing':route['recent_trades'].pop()
+    elif fault=='duplicate':route['recent_trades'][-1]=dict(route['recent_trades'][-2])
+    elif fault=='gap':route['recent_trades'][-1]['route_sequence']-=1
+    elif fault=='epoch':route['recent_trades'][-1]['transport_epoch']=2
+    elif fault=='future':route['recent_trades'][0]['provider_trade_epoch']=now+1
+    elif fault=='reversed':route['recent_trades'][2]['provider_trade_epoch']=now
+    elif fault=='producer_dead':data['shared_transport_producer']['process']['pid']=99999999
+    elif fault=='wrong_route':route['realtime_types']['0B']['market_suffix']='_NX'
+    elif fault=='partial':kind='0D';route['realtime_types']['0D']['orderbook']['asks']=[]
+    elif fault=='stale':kind='0D';route['realtime_types']['0D']['observed_epoch']=now-3
+    elif fault=='bad_authority':data['runtime_effect']=True
+    elif fault=='cumulative_duplicate':route['recent_trades'][1]['cum_volume']=route['recent_trades'][0]['cum_volume']
+    elif fault=='cumulative_missing':route['recent_trades'][0].pop('cum_volume')
+    write()
+    result=ws.read_entry_snapshot(symbol='005930',route='SOR',kind=kind)
+    assert not result.source_ok and result.error.startswith('entry_ws_source_unavailable:')
+
+
+def test_ws_preserves_existing_krx_sor_alias_and_nxt_separation(entry_ws_source):
+    ws,*_=entry_ws_source
+    assert ws.read_entry_snapshot(symbol='005930',route='KRX',kind='0D').source_ok
+    assert not ws.read_entry_snapshot(symbol='005930',route='NXT',kind='0D').source_ok
+
+
+@pytest.mark.parametrize('gateway_class',[KiwoomLowPriceTwoLegGateway,KiwoomOneShareGateway,KiwoomMiddayOneShareGateway,KiwoomAfternoonOneShareGateway,KiwoomSharedTokenOrderGateway])
+def test_ws_gateway_no_rest_even_for_source_gap(entry_ws_source,monkeypatch,gateway_class):
+    ws,data,route,path,now,write=entry_ws_source
+    def forbidden(*a,**kw):raise AssertionError('REST must not be called')
+    monkeypatch.setattr(kiwoom_utils,'get_stock_orderbook_ka10004',forbidden)
+    monkeypatch.setattr(kiwoom_utils,'get_tick_history_ka10003',forbidden)
+    g=object.__new__(gateway_class);g.symbol='005930'
+    kwargs={'code':'005930','route':'SOR'} if gateway_class is KiwoomSharedTokenOrderGateway else {'route':'SOR'}
+    assert g.entry_liquidity_snapshot(**kwargs).source_ok
+    assert g.entry_execution_velocity_snapshot(**kwargs).source_ok
+    route['recent_trades']=[];write()
+    assert not g.entry_execution_velocity_snapshot(**kwargs).source_ok
+    path.unlink()
+    assert not g.entry_liquidity_snapshot(**kwargs).source_ok
+
+
+def test_ws_source_receipt_survives_delayed_anchor_roundtrip(entry_ws_source):
+    from dataclasses import asdict
+    from src.trading.order.entry_liquidity_guard import _coerce_liquidity_snapshot
+    ws,data,route,path,now,write=entry_ws_source
+    book=ws.read_entry_snapshot(symbol="005930",route="SOR",kind="0D")
+    restored=_coerce_liquidity_snapshot(asdict(book))
+    assert restored == book
+    assert evaluate_entry_liquidity(restored,requested_quantity=20,now_ts=now).allowed
+    assert "0D" in evaluate_entry_liquidity(restored,requested_quantity=20,now_ts=now).event_fields()["entry_liquidity_policy_contract"]["sample_floor"]
+
+
+@pytest.mark.parametrize("quantity", [True, float("nan"), -1, "1000"])
+def test_ws_injected_malformed_quantity_is_not_accepted(entry_ws_source,quantity):
+    ws,data,route,path,now,write=entry_ws_source
+    book=ws.read_entry_snapshot(symbol="005930",route="SOR",kind="0D")
+    assert not evaluate_entry_liquidity(replace(book,best_ask_qty=quantity),requested_quantity=20,now_ts=now).allowed
+    assert not evaluate_entry_liquidity(replace(book,source_meta=None),requested_quantity=20,now_ts=now).allowed
+
+
+def test_ws_rollout_preserves_unselected_exact_route(entry_ws_source,monkeypatch):
+    ws,*_=entry_ws_source
+    monkeypatch.setenv(ws.ITEMS_ENV,"005930_AL")
+    assert ws.selected_entry_snapshot(symbol="005930",route="SOR",kind="0D").source_ok
+    assert ws.selected_entry_snapshot(symbol="005930",route="NXT",kind="0D") is None
+    monkeypatch.setenv(ws.ITEMS_ENV,"005930_AL,invalid")
+    assert not ws.selected_entry_snapshot(symbol="005930",route="SOR",kind="0D").source_ok

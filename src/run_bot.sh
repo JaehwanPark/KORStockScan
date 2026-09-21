@@ -122,6 +122,9 @@ apply_authoritative_ai_context_promotion() {
 
 export_runtime_source_provenance() {
     local commit source_dirty source_status
+    # A tmux supervisor may inherit another immutable release's import path.
+    # Bind imports to the same source root as the child and its receipt.
+    export PYTHONPATH="$PROJECT_DIR"
     commit="$(git -C "$PROJECT_DIR" rev-parse --verify HEAD 2>/dev/null || true)"
     if [ -z "$commit" ]; then
         commit="unknown"

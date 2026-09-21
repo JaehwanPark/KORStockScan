@@ -940,6 +940,7 @@ def _ws_machine_route_payload(row: Any, *, now_ts: float) -> dict[str, Any]:
                     "price": _safe_int(source.get("price")),
                     "route_sequence": source.get("route_sequence"),
                     "volume": _safe_int(source.get("volume")),
+                    "cum_volume": source.get("cum_volume"),
                     "best_bid": _safe_int(source.get("best_bid")),
                     "best_ask": _safe_int(source.get("best_ask")),
                     "aggressor_side": str(source.get("aggressor_side") or "UNKNOWN"),
