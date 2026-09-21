@@ -2131,6 +2131,24 @@ def test_baseline_mode_rejects_artifact_that_can_open_authority(tmp_path, monkey
     assert status["status"] == "baseline_contract_not_ready"
 
 
+def test_baseline_pin_is_verified_on_cached_reads(tmp_path, monkeypatch):
+    import hashlib
+    monkeypatch.setenv("KORSTOCKSCAN_AI_INPUT_PREFLIGHT_MODE", "baseline_v1")
+    monkeypatch.setenv("KORSTOCKSCAN_AI_INPUT_BASELINE_ARTIFACT_DATE", "2026-07-23")
+    monkeypatch.setattr(mod, "_BASELINE_REPORT_DIR", tmp_path)
+    path = tmp_path / "ai_input_quality_baseline_2026-07-23.json"
+    path.write_text(json.dumps({**_baseline_payload(), "target_date": "2026-07-23"}))
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    monkeypatch.setenv("KORSTOCKSCAN_AI_INPUT_BASELINE_ARTIFACT_SHA256", digest)
+    monkeypatch.setattr(mod, "_PROCESS_STARTED_AT", path.stat().st_mtime + 60)
+    assert mod.runtime_preflight_artifact_status()["ready"] is True
+    monkeypatch.setenv("KORSTOCKSCAN_AI_INPUT_BASELINE_ARTIFACT_SHA256", "0" * 64)
+    assert mod.runtime_preflight_artifact_status()["status"] == "baseline_binding_mismatch"
+    monkeypatch.setenv("KORSTOCKSCAN_AI_INPUT_BASELINE_ARTIFACT_SHA256", digest)
+    path.write_text(path.read_text() + "\n")
+    assert mod.runtime_preflight_artifact_status()["status"] == "baseline_binding_mismatch"
+
+
 def test_unknown_runtime_preflight_mode_fails_closed(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_AI_INPUT_PREFLIGHT_MODE", "unsafe_custom")
 
@@ -2172,16 +2190,16 @@ def test_runtime_artifact_payload_is_cached_by_mtime(tmp_path, monkeypatch):
     path.write_text(json.dumps(_baseline_payload()), encoding="utf-8")
     monkeypatch.setattr(mod, "_PROCESS_STARTED_AT", path.stat().st_mtime + 1)
     mod._ARTIFACT_STATUS_CACHE.clear()
-    original_read_text = Path.read_text
+    original_read_bytes = Path.read_bytes
     calls = 0
 
-    def counted_read_text(self, *args, **kwargs):
+    def counted_read_bytes(self, *args, **kwargs):
         nonlocal calls
         if self == path:
             calls += 1
-        return original_read_text(self, *args, **kwargs)
+        return original_read_bytes(self, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "read_text", counted_read_text)
+    monkeypatch.setattr(Path, "read_bytes", counted_read_bytes)
 
     first = mod.runtime_preflight_artifact_status()
     second = mod.runtime_preflight_artifact_status()

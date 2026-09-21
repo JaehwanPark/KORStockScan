@@ -15,7 +15,7 @@ import os
 import shlex
 import tempfile
 from collections import Counter
-from datetime import datetime, time
+from datetime import date, datetime, time
 from pathlib import Path
 from typing import Any, Iterable
 from zoneinfo import ZoneInfo
@@ -44,6 +44,7 @@ RUNTIME_BOOTSTRAP_CUTOVER_DATE = "2026-09-19"
 VALIDATION_DIR = DATA_DIR / "report" / "ai_input_external_validation"
 TRACE_DIR = DATA_DIR / "ai_decision_trace"
 PAYLOAD_DIR = DATA_DIR / "ai_decision_payloads"
+BASELINE_DIR = DATA_DIR / "report" / "ai_input_quality_baseline"
 
 EXPECTED_ENDPOINTS = (
     "analyze_target",
@@ -291,7 +292,7 @@ def authoritative_runtime_env(
             and not manifest_file.exists()
             and not env_file.exists()
         ):
-            return context_only_rollback_env(target_date)
+            return _retired_commit_rollback_env(target_date, source_date, artifact)
         raise ValueError("promotion runtime commit files are missing")
     if artifact.get("runtime_manifest_path") not in (
         None,
@@ -429,6 +430,67 @@ def full_market_env(target_date: str) -> dict[str, str]:
     }
 
 
+def _retired_commit_rollback_env(target_date, source_date, artifact):
+    """Bind the protective baseline that existed before the retired promotion.
+
+    This is a versioned protective contract, not today's market-data evidence.
+    Never relabel its source date or fall back past an invalid newest contract.
+    """
+    previous = artifact.get("rollback_env_overrides") or {}
+    if not isinstance(previous, dict):
+        raise ValueError("retired_context_rollback_contract_invalid")
+    rollback = context_only_rollback_env(target_date, previous)
+    if rollback["KORSTOCKSCAN_AI_INPUT_PREFLIGHT_MODE"] != "baseline_v1":
+        raise ValueError("retired_context_baseline_mode_required")
+    pinned_date = previous.get("KORSTOCKSCAN_AI_INPUT_BASELINE_ARTIFACT_DATE")
+    if pinned_date:
+        baseline_date = date.fromisoformat(str(pinned_date)).isoformat()
+        path = BASELINE_DIR / f"ai_input_quality_baseline_{baseline_date}.json"
+    else:
+        candidates = []
+        for candidate in BASELINE_DIR.glob("ai_input_quality_baseline_*.json"):
+            try:
+                candidate_date = date.fromisoformat(candidate.stem[-10:]).isoformat()
+            except ValueError:
+                continue
+            if "2026-06-05" <= candidate_date <= source_date:
+                candidates.append((candidate_date, candidate))
+        if not candidates:
+            raise ValueError("retired_context_baseline_missing")
+        baseline_date, path = max(candidates)
+    if not "2026-06-05" <= baseline_date <= source_date <= target_date:
+        raise ValueError("retired_context_baseline_date_invalid")
+    raw = path.read_bytes()
+    payload = json.loads(raw)
+    expected = {
+        "schema": "ai_input_quality_baseline_v1",
+        "policy_version": "baseline_v1",
+        "status": "ready_baseline_v1",
+        "target_date": baseline_date,
+        "allowed_runtime_apply": True,
+        "runtime_effect": "protective_fail_closed_only",
+        "can_open_order_authority": False,
+        "can_relax_threshold": False,
+        "can_change_provider": False,
+    }
+    if (not isinstance(payload, dict)
+            or any(type(payload.get(k)) is not type(v) or payload.get(k) != v
+                   for k, v in expected.items())
+            or not isinstance(payload.get("observation_contract"), dict)
+            or payload["observation_contract"].get("decision_authority")
+            != "source_quality_fail_closed_only"):
+        raise ValueError("retired_context_baseline_contract_invalid")
+    digest = _sha256(raw)
+    pinned_hash = previous.get("KORSTOCKSCAN_AI_INPUT_BASELINE_ARTIFACT_SHA256")
+    if pinned_hash and pinned_hash != digest:
+        raise ValueError("retired_context_baseline_hash_mismatch")
+    rollback.update({
+        "KORSTOCKSCAN_AI_INPUT_BASELINE_ARTIFACT_DATE": baseline_date,
+        "KORSTOCKSCAN_AI_INPUT_BASELINE_ARTIFACT_SHA256": digest,
+    })
+    return rollback
+
+
 def context_only_rollback_env(
     target_date: str,
     previous_env: dict[str, Any] | None = None,
@@ -463,6 +525,10 @@ def context_only_rollback_env(
             "KORSTOCKSCAN_AI_INPUT_PREFLIGHT_ARTIFACT_DATE", target_date
         ),
     }
+    for key in ("KORSTOCKSCAN_AI_INPUT_BASELINE_ARTIFACT_DATE",
+                "KORSTOCKSCAN_AI_INPUT_BASELINE_ARTIFACT_SHA256"):
+        if previous.get(key):
+            rollback[key] = str(previous[key])
     return rollback
 
 

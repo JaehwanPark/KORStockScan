@@ -63,7 +63,7 @@ _PREFLIGHT_REPORT_DIR = (
     _PROJECT_ROOT / "data" / "report" / "entry_context_intraday_probe"
 )
 _BASELINE_REPORT_DIR = _PROJECT_ROOT / "data" / "report" / "ai_input_quality_baseline"
-_ARTIFACT_STATUS_CACHE: dict[tuple[str, str, float, float], dict[str, Any]] = {}
+_ARTIFACT_STATUS_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
 _INTEGRATED_ROUTES = {"krx_nxt_integrated", "integrated", "sor"}
 _KRX_ROUTES = {"krx_only", "krx_regular"}
 _NXT_ROUTES = {"nxt_only", "nxt_regular"}
@@ -2240,7 +2240,8 @@ def runtime_preflight_artifact_status(
             "artifact": str(path),
         }
     try:
-        artifact_mtime = path.stat().st_mtime
+        artifact_stat = path.stat()
+        artifact_mtime = artifact_stat.st_mtime
     except OSError as exc:
         return {
             "ready": False,
@@ -2250,12 +2251,17 @@ def runtime_preflight_artifact_status(
             "artifact": str(path),
             "error": f"{type(exc).__name__}:{str(exc)[:120]}",
         }
-    cache_key = (mode, str(path), artifact_mtime, _PROCESS_STARTED_AT)
+    expected_hash = (os.getenv("KORSTOCKSCAN_AI_INPUT_BASELINE_ARTIFACT_SHA256", "").strip()
+                     if mode == "baseline_v1" else "")
+    cache_key = (mode, str(path), artifact_stat.st_mtime_ns,
+                 artifact_stat.st_ctime_ns, artifact_stat.st_size,
+                 _PROCESS_STARTED_AT, expected_hash)
     cached = _ARTIFACT_STATUS_CACHE.get(cache_key)
     if isinstance(cached, dict):
         return dict(cached)
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        raw = path.read_bytes()
+        payload = json.loads(raw)
     except Exception as exc:
         result = {
             "ready": False,
@@ -2276,6 +2282,12 @@ def runtime_preflight_artifact_status(
             "ready_baseline_v1" if contract_ready else "baseline_contract_not_ready"
         )
         not_ready_rows: list[Any] = []
+        if expected_hash and (
+            hashlib.sha256(raw).hexdigest() != expected_hash
+            or payload.get("target_date") != target_date
+        ):
+            contract_ready = False
+            status = "baseline_binding_mismatch"
     else:
         matrix = (
             payload.get("venue_preflight_matrix")
@@ -2297,6 +2309,7 @@ def runtime_preflight_artifact_status(
         "artifact_mtime": artifact_mtime,
         "process_started_at": _PROCESS_STARTED_AT,
         "not_ready_rows": not_ready_rows,
+        "artifact_sha256": hashlib.sha256(raw).hexdigest(),
     }
     _ARTIFACT_STATUS_CACHE.clear()
     _ARTIFACT_STATUS_CACHE[cache_key] = dict(result)

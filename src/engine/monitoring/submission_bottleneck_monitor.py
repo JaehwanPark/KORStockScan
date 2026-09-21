@@ -121,7 +121,9 @@ def snapshot(events, as_of):
         row["economic_source"] = economic.get(row["evaluation_key"], {
             "status": ("not_applicable_machine_source_invalid" if row["mechanistic_action"] not in {"ENTER_NOW", "BLOCK", "RECHECK"}
                        else "source_gap" if stamp(row["first_evaluated_at"]).date().isoformat() >= "2026-09-21" else "historical_not_required"),
-            "blocker": "economic_observation_event_missing",
+            "blocker": ("economic_observation_event_missing"
+                        if row["mechanistic_action"] in {"ENTER_NOW", "BLOCK", "RECHECK"}
+                        else None),
             "owner": "main_entry_execution_owners->pipeline_event_logger->sentinel_cache",
             "closure_test": "same exact attempt publishes its pre-AI economic observation"})
     return {
@@ -167,6 +169,31 @@ def evaluate(report, state, now):
         result["blocker"] = "duplicate_or_reversed_source_snapshot"
         return result
     result.update(status="observing", source_as_of=as_of.isoformat())
+    # Preserve the original incident as superseded evidence, without reporting
+    # alias normalization as recovery or double-counting its exact attempts.
+    for old_key, old in list(incidents.items()):
+        parts = str(old.get("scope", "")).split("|")
+        if len(parts) != 3 or parts[1] != "KRX_LIKE_PREMARKET" or old.get("superseded_by"):
+            continue
+        parts[1] = "PREMARKET_KRX_LIKE"
+        scope = "|".join(parts)
+        key = hashlib.sha256(f"{scope}|{old['rule']}".encode()).hexdigest()[:24]
+        def normalized_identity(value):
+            fields = value.split("|")
+            if len(fields) == 6 and fields[4] == "KRX_LIKE_PREMARKET":
+                fields[4] = "PREMARKET_KRX_LIKE"
+            return "|".join(fields)
+        current = incidents.get(key, {})
+        ids = sorted(set(current.get("evidence_ids", [])) | {
+            normalized_identity(value) for value in old.get("evidence_ids", [])})
+        incidents[key] = {**old, **current, "scope": scope,
+            "evidence_ids": ids[:128], "count": max(len(ids), old.get("count", 0), current.get("count", 0)),
+            "first_seen": min(old["first_seen"], current.get("first_seen", old["first_seen"])),
+            "promotion_ids": sorted(set(old.get("promotion_ids", [])) | set(current.get("promotion_ids", []))),
+            "examples": current.get("examples") or [{**example,
+                "evaluation_key": normalized_identity(example["evaluation_key"])}
+                for example in old.get("examples", [])]}
+        incidents[old_key] = {**old, "status": "superseded_alias", "superseded_by": key}
     groups = defaultdict(list)
     for row in source.get("rows", []):
         start = stamp(row.get("first_evaluated_at"))
@@ -273,7 +300,11 @@ def notify(result, path, send=None):
     for key in keys[:4]:
         item = result["incidents"][key]
         example = (item.get("examples") or [{}])[0]
-        cause = (example.get("economic_source") or {}).get("blocker")
+        cause = ((example.get("economic_source") or {}).get("blocker")
+                 if item["rule"] == "economic_producer_gap" else
+                 (example.get("source_invalid_decomposition") or {}).get("primary_blocker")
+                 or next(iter(example.get("conflict_reasons") or []), None)
+                 or example.get("final_state"))
         cause_text = f"첫 결손: {str(cause)[:180]}\n" if cause else ""
         messages.append(cause_text + f'{item["status"]}: {item["rule"]}\n{item["scope"]}\n근거 {item["count"]}건 / {item["category"]}\n' +
                         json.dumps(item.get("examples", [])[:1], ensure_ascii=False)[:350])

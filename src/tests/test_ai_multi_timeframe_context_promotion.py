@@ -555,6 +555,7 @@ def test_authoritative_runtime_env_disables_context_when_both_legacy_commit_file
     promotion.apply_promotion_transaction(report, manifest, now=TEST_NOW)
     promotion.runtime_manifest_path("2026-07-27").unlink()
     promotion.runtime_env_path("2026-07-27").unlink()
+    baseline = _protective_baseline(tmp_path, monkeypatch)
 
     authoritative = promotion.authoritative_runtime_env("2026-09-21")
 
@@ -562,7 +563,58 @@ def test_authoritative_runtime_env_disables_context_when_both_legacy_commit_file
     assert authoritative["KORSTOCKSCAN_ENTRY_CANDLE_CONTEXT_ENABLED"] == "false"
     assert authoritative["KORSTOCKSCAN_HOLDING_DECISION_CONTEXT_ENABLED"] == "false"
     assert authoritative["KORSTOCKSCAN_AI_INPUT_PREFLIGHT_MODE"] == "baseline_v1"
-    assert authoritative["KORSTOCKSCAN_AI_INPUT_PREFLIGHT_ARTIFACT_DATE"] == "2026-09-21"
+    assert authoritative["KORSTOCKSCAN_AI_INPUT_BASELINE_ARTIFACT_DATE"] == "2026-07-23"
+    assert authoritative["KORSTOCKSCAN_AI_INPUT_BASELINE_ARTIFACT_SHA256"] == promotion._sha256(baseline.read_bytes())
+
+
+def _protective_baseline(tmp_path, monkeypatch, **changes):
+    monkeypatch.setattr(promotion, "BASELINE_DIR", tmp_path)
+    payload = {
+        "schema": "ai_input_quality_baseline_v1", "policy_version": "baseline_v1",
+        "status": "ready_baseline_v1", "target_date": "2026-07-23",
+        "allowed_runtime_apply": True, "runtime_effect": "protective_fail_closed_only",
+        "can_open_order_authority": False, "can_relax_threshold": False,
+        "can_change_provider": False,
+        "observation_contract": {"decision_authority": "source_quality_fail_closed_only"},
+        **changes,
+    }
+    path = tmp_path / f"ai_input_quality_baseline_{payload['target_date']}.json"
+    path.write_text(json.dumps(payload))
+    return path
+
+
+@pytest.mark.parametrize("changes", [
+    {"status": "not_ready"}, {"can_open_order_authority": True},
+    {"allowed_runtime_apply": 1}, {"observation_contract": []},
+])
+def test_retired_commit_baseline_rejects_invalid_contract(tmp_path, monkeypatch, changes):
+    _protective_baseline(tmp_path, monkeypatch, **changes)
+    with pytest.raises(ValueError, match="baseline_contract_invalid"):
+        promotion._retired_commit_rollback_env("2026-09-21", "2026-07-29", {})
+
+
+def test_retired_commit_baseline_never_borrows_future_or_skips_invalid_latest(tmp_path, monkeypatch):
+    _protective_baseline(tmp_path, monkeypatch, target_date="2026-09-21")
+    with pytest.raises(ValueError, match="baseline_missing"):
+        promotion._retired_commit_rollback_env("2026-09-21", "2026-07-29", {})
+    _protective_baseline(tmp_path, monkeypatch)
+    _protective_baseline(tmp_path, monkeypatch, target_date="2026-07-24", status="not_ready")
+    with pytest.raises(ValueError, match="baseline_contract_invalid"):
+        promotion._retired_commit_rollback_env("2026-09-21", "2026-07-29", {})
+
+
+def test_retired_commit_baseline_preserves_pin_and_rejects_changed_bytes(tmp_path, monkeypatch):
+    path = _protective_baseline(tmp_path, monkeypatch)
+    previous = {
+        "KORSTOCKSCAN_AI_INPUT_BASELINE_ARTIFACT_DATE": "2026-07-23",
+        "KORSTOCKSCAN_AI_INPUT_BASELINE_ARTIFACT_SHA256": promotion._sha256(path.read_bytes()),
+    }
+    _protective_baseline(tmp_path, monkeypatch, target_date="2026-07-24")
+    result = promotion._retired_commit_rollback_env("2026-09-21", "2026-07-29", {"rollback_env_overrides": previous})
+    assert all(result[k] == v for k, v in previous.items())
+    path.write_text(path.read_text() + "\n")
+    with pytest.raises(ValueError, match="baseline_hash_mismatch"):
+        promotion._retired_commit_rollback_env("2026-09-21", "2026-07-29", {"rollback_env_overrides": previous})
 
 
 def test_authoritative_runtime_env_still_rejects_partial_legacy_commit_loss(

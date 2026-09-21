@@ -101,6 +101,49 @@ def test_window_expiration_is_not_recovery():
     assert not any(r["status"] == "recovered" for r in expired["incidents"].values())
 
 
+def test_premarket_aliases_join_same_exact_attempt_but_not_distinct_attempts():
+    events = [event(1, "SOURCE_INVALID", "not_requested_machine_source_invalid",
+                    effective_venue="PREMARKET_KRX_LIKE", market_session_bucket=session)
+              for session in ("KRX_LIKE_PREMARKET", "PREMARKET_KRX_LIKE")]
+    rows = monitor.snapshot(events, START)["rows"]
+    assert len(rows) == 1
+    assert rows[0]["session_bucket"] == "PREMARKET_KRX_LIKE"
+    assert rows[0]["economic_source"]["blocker"] is None
+    events.append(event(2, "SOURCE_INVALID", "not_requested_machine_source_invalid",
+                        effective_venue="PREMARKET_KRX_LIKE", market_session_bucket="KRX_LIKE_PREMARKET"))
+    assert len(monitor.snapshot(events, START)["rows"]) == 2
+
+
+def test_source_invalid_alert_names_actual_preflight_blocker():
+    events = [event(action="SOURCE_INVALID", screen="not_requested_machine_source_invalid",
+                    entry_source_invalid_primary_blocker="runtime_preflight_artifact_not_ready",
+                    entry_source_invalid_blockers="runtime_preflight_artifact_not_ready")]
+    state = tick(events, 15, tick(events, 10))
+    sent = []
+    monitor.notify(state, "fixture.json", send=sent.append)
+    assert sent and "첫 결손: runtime_preflight_artifact_not_ready" in sent[0]
+    assert "첫 결손: economic_observation_event_missing" not in sent[0]
+
+
+def test_existing_alias_incident_is_preserved_as_superseded_not_recovered():
+    import copy
+    import hashlib
+    events = [event(action="SOURCE_INVALID", screen="not_requested_machine_source_invalid",
+                    effective_venue="PREMARKET_KRX_LIKE", market_session_bucket="PREMARKET_KRX_LIKE")]
+    state = tick(events, 15, tick(events, 10))
+    canonical = active(state)[0]
+    old = copy.deepcopy(canonical)
+    old["scope"] = old["scope"].replace("|PREMARKET_KRX_LIKE|", "|KRX_LIKE_PREMARKET|")
+    old["evidence_ids"] = [x.replace("|PREMARKET_KRX_LIKE|PREMARKET_KRX_LIKE|", "|PREMARKET_KRX_LIKE|KRX_LIKE_PREMARKET|") for x in old["evidence_ids"]]
+    old_key = hashlib.sha256(f"{old['scope']}|{old['rule']}".encode()).hexdigest()[:24]
+    state["incidents"][old_key] = old
+    result = tick(events, 20, state)
+    assert len(active(result)) == 1
+    assert active(result)[0]["count"] == 1
+    assert result["incidents"][old_key]["status"] == "superseded_alias"
+    assert result["incidents"][old_key]["evidence_ids"] == old["evidence_ids"]
+
+
 def test_missing_identity_detected_without_fake_denominator():
     events = [event(evaluation_attempt_id="", scanner_promotion_id="")]
     state = tick(events, 10)

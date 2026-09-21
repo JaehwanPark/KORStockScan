@@ -2370,6 +2370,10 @@ def _machine_primary_evaluation_key(event: PipelineEvent) -> str:
         .strip()
         .upper()
     )
+    # These are declared aliases of the same premarket cohort. Preserve the
+    # other five identity fields; never merge attempts by symbol/time alone.
+    if session == "KRX_LIKE_PREMARKET":
+        session = "PREMARKET_KRX_LIKE"
     bundle_hash = _safe_str(
         _field_first(
             event.fields,

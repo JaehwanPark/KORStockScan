@@ -215,6 +215,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 ## 제출병목 지속 감시
 
 - [ ] `[SubmissionBottleneckMonitorNatural0921] 기존 Sentinel의 제출병목 지속 감시·통보 자연 소비 확인` (`Due: 2026-09-21`, `Slot: INTRADAY`, `TimeWindow: 08:00~19:55`, `Track: RuntimeStability`)
+  - 9/21 승인 수리: [preflight·제출병목 보완 리뷰](../audit-reports/2026-09-21-preflight-submit-bottleneck-repair.md). baseline 복귀 원본 날짜·해시 연결, 실제 source blocker 알림, 장전 세션 alias 동일 시도 집계를 수리한다. 사용자 명시 승인으로 해당 코드 배포·메인 graceful 재기동을 수행하며 감시기 자체의 자동 변경 권한은 추가하지 않는다. 신규 평가의 baseline ready·기계판정 도달을 확인하고 과거 실패/체결·경제성은 별도 보존한다.
   - Source: [제출병목 한정 감시 계획](../proposals/intraday-semantic-entry-monitoring-and-telegram-alert-feasibility-plan-2026-09-20.md), [배포·검증 리뷰](../audit-reports/2026-09-20-main-machine-operating-evidence-closure-review.md#11-제출병목-한정-감시와-후속-재리뷰-920).
   - Acceptance: 경제성 observation/gap stage가 cache에서 보존되고 signed plan/cost/capital source 결손 및 관측 부재가 economic_producer_gap으로 탐지됨. 정상 guard/unsupported/모델 검증 대기와 구분. 선택 release의 기존 Sentinel→작은 submission source→최근30분 exact 분모/지속 상태가 자연 갱신됨. 실제 지속 incident 발생 시 Telegram 발송 receipt, 미발생은 정상 관찰로 구분. mock 통과를 자연 통보/EV로 보고하지 않음.
   - Boundary: 메인 제출병목·원천/identity 결손만 알림. 위젯/에피소드·예외 에러 detector는 별도 owner. 자동 수정·주문·추가 AI/계좌 조회·재기동·조기 PREOPEN 금지. 정상 guard/분모0/창 이탈은 결함·복구로 단정하지 않음.
