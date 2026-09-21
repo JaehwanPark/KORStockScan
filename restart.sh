@@ -92,6 +92,7 @@ current_launcher_sha256() {
 restart_drained_tmux_supervisor() {
     local live_pids=()
     local kill_rc=0
+    local attempt
     readarray -t live_pids < <(bot_pids)
     if [ "${#live_pids[@]}" -ne 0 ]; then
         echo "Refusing supervisor reload because a bot child is alive: ${live_pids[*]}" >&2
@@ -120,8 +121,24 @@ restart_drained_tmux_supervisor() {
     if [ "$kill_rc" -ne 0 ]; then
         echo "tmux server exited with the final session; confirmed session removal."
     fi
-    tmux new-session -d -s "$BOT_TMUX_SESSION" \
-        "/bin/bash -c \"cd $PROJECT_DIR/src && source ../.venv/bin/activate && exec ./run_bot.sh\""
+    # The final-session server shutdown can outlive has-session. Retry only
+    # while both the scoped supervisor and its child remain absent.
+    for attempt in 1 2 3; do
+        readarray -t live_pids < <(bot_pids)
+        if [ "${#live_pids[@]}" -ne 0 ] || tmux has-session -t "$BOT_TMUX_SESSION" 2>/dev/null; then
+            echo "Refusing supervisor creation retry: a session or bot child appeared." >&2
+            return 1
+        fi
+        if tmux new-session -d -s "$BOT_TMUX_SESSION" \
+            "/bin/bash -c \"cd $PROJECT_DIR/src && source ../.venv/bin/activate && exec ./run_bot.sh\""; then
+            return 0
+        fi
+        if [ "$attempt" -lt 3 ]; then
+            sleep 1
+        fi
+    done
+    echo "Bot tmux supervisor creation failed after three bounded attempts." >&2
+    return 1
 }
 
 readarray -t OLD_PIDS < <(bot_pids)

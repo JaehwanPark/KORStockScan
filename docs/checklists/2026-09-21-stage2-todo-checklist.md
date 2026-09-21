@@ -219,6 +219,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 ## 제출병목 지속 감시
 
 - [ ] `[SubmissionBottleneckMonitorNatural0921] 기존 Sentinel의 제출병목 지속 감시·통보 자연 소비 확인` (`Due: 2026-09-21`, `Slot: INTRADAY`, `TimeWindow: 08:00~19:55`, `Track: RuntimeStability`)
+  - 당일 통합 리뷰 승인: [60파일 영향 경로 리뷰·추가 보완·운영 절차](../audit-reports/2026-09-21-integrated-code-review.md). 감독 세션 종료 경합은 child/session 부재 확인 후 최대3회만 재시도하고, 손상 선택 캐시 예외 및 WS 종목 epoch 타입을 보완한다. 기존 테스트 계약2건을 현행 retired/handoff 계약에 맞춘다. 검증 후 immutable 배포·메인 및 read-only 수집기5개 재기동 범위이며 한도·수량·주문/custody 불변, 자연 자금 증거와 경제성 OPEN은 유지한다.
   - 추가 수리 승인: 현 PID104424의 신규11평가에서 자금 결손7 및 날짜형 운영계약 결손2를 확인했다. 기존 비동기 preparation worker의 bounded source-only 수집→최종 시세 갱신→동일 조건/2초 증거 재사용 경로와 date 원형 직렬화를 보완한다. 한도·주문 우선권·fresh 주문 조회·deadline은 유지하며 과거 결손은 보존한다. 검증/배포/PID/새 자연 증거는 [당일 수리 근거](../audit-reports/2026-09-21-preflight-submit-bottleneck-repair.md)에 분리 기록한다.
   - active-path 재검토: 첫 후속 PID113775/2227e76b2는 bootstrap PASS이나 실제 스캐너가 legacy라 async 준비가 미소비였다(11:10 자연 평가7건 모두 자금 결손). legacy bridge→기존 detached worker의 비차단 준비 전달을 추가한다. 모드/한도/주문 경계는 그대로이며 새 PID의 자연 exact receipt 재사용을 확인하기 전 완료로 처리하지 않는다.
   - 보완 배포: 0d7fed630/PID117559, 11:15:32 bootstrap 및 11:15:41 health7/7 PASS. 보완 회귀360·worker 추가6 PASS. 초기 자연9평가에는 자금 결손8·자금 이후 슬리피지 안전 차단1이 남아 있어 원천 해소를 닫지 않는다. 백그라운드 준비의 실제 실행은 확인했으나 공유 시장자료 조회 포화로 bounded 요청도 실패한다. 기존 main source owner가 시장조회 중복 감축 및 동일 attempt 자금/정책/운영계획 자연 연결을 소유하며 과거 결손·별도 widget 작업은 보존한다.

@@ -113,7 +113,7 @@ class WidgetMarketResponseCache:
                                response_cache_status="hit", response_cache_source_pid=entry["pid"])
                 data["_kiwoom_source_meta"]["response_cache_status"] = "hit"
                 return (data, receipt), True
-        except (OSError, ValueError, KeyError, TypeError, AttributeError, OverflowError):
+        except (OSError, ValueError, KeyError, TypeError, AttributeError, OverflowError, RecursionError):
             pass
         value = fetch()
         data, receipt = value
@@ -136,7 +136,7 @@ class WidgetMarketResponseCache:
                     temporary = Path(handle.name)
                     handle.write(raw)
                 os.replace(temporary, path)
-        except (OSError, ValueError, TypeError):
+        except (OSError, ValueError, TypeError, RecursionError):
             pass
         finally:
             if temporary is not None:

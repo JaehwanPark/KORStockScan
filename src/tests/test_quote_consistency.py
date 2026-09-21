@@ -80,7 +80,7 @@ def test_shared_widget_reader_preserves_exact_non_krx_route(tmp_path, monkeypatc
 
 @pytest.mark.parametrize("defect", ["old_book", "future_trade", "new_epoch", "wrong_route", "wrong_item",
     "partial_book", "crossed_book", "dead_producer", "missing_producer", "not_registered", "duplicate_route",
-    "future_file", "wrong_session", "wrong_authority", "bool_epoch", "non_object", "wrong_venue", "disconnected"])
+    "future_file", "wrong_session", "wrong_authority", "bool_epoch", "bool_stock_epoch", "non_object", "wrong_venue", "disconnected"])
 def test_shared_widget_reader_rejects_unproven_transport(tmp_path, monkeypatch, defect):
     import json
     from src.trading.market.shared_ws_snapshot import read_shared_widget_quote
@@ -104,6 +104,7 @@ def test_shared_widget_reader_rejects_unproven_transport(tmp_path, monkeypatch, 
     elif defect == "wrong_session": context.active = False
     elif defect == "wrong_authority": snapshot["runtime_effect"] = True
     elif defect == "bool_epoch": rows["0D"]["transport_epoch"] = True
+    elif defect == "bool_stock_epoch": stock["market_data_transport_epoch"] = True
     elif defect == "non_object": snapshot = []
     path.write_text(json.dumps(snapshot))
     result = read_shared_widget_quote(context, now_ts=now, path=path)

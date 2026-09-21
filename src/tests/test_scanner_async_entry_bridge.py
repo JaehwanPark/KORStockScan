@@ -624,7 +624,8 @@ def test_scanner_entry_ai_attempt_promotes_trusted_terminal_result():
     )
     assert stock["last_watching_ai_probe_intent_submit_guard_required"] is True
     assert stock["entry_setup_live_policy_mode"] == "one_share_exploration"
-    assert stock["entry_opportunity_recheck_exploration_probe_only"] is True
+    # Dedicated opportunity-recheck runtime is retired; do not restore its arm.
+    assert "entry_opportunity_recheck_exploration_probe_only" not in stock
     assert stock["entry_setup_bounded_exploration_probe_only"] is True
     assert (
         stock["entry_setup_prompt_quantity_owner"] == "position_sizing_dynamic_formula"

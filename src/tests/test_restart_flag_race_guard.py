@@ -70,6 +70,52 @@ def test_restart_script_uses_current_bootstrap_pid_receipt_contract():
     assert "src.engine.threshold_cycle_preopen_apply" not in source
 
 
+@pytest.mark.parametrize(
+    "failures,appears,expected_rc,expected_attempts",
+    [(0, "none", 0, 1), (1, "none", 0, 2), (3, "none", 1, 3),
+     (1, "session", 1, 1), (1, "child", 1, 1), (0, "initial_child", 1, 0)],
+)
+def test_drained_supervisor_retries_only_without_a_session_or_child(
+    failures, appears, expected_rc, expected_attempts
+):
+    source = Path("restart.sh").read_text()
+    function = "restart_drained_tmux_supervisor() {" + source.split(
+        "restart_drained_tmux_supervisor() {", 1
+    )[1].split("\n}\n", 1)[0] + "\n}\n"
+    script = '''
+set -eu
+failures=$1; appears=$2; attempts=0; session=1; child=0
+BOT_TMUX_SESSION=isolated_test; PROJECT_DIR=/unused
+if [ "$appears" = initial_child ]; then child=1; fi
+bot_pids() { if [ "$child" = 1 ]; then echo 999; fi; }
+sleep() { :; }
+tmux() {
+    case "$1" in
+        has-session) [ "$session" = 1 ] ;;
+        kill-session) session=0; return 1 ;;
+        new-session)
+            attempts=$((attempts+1))
+            if [ "$attempts" -le "$failures" ]; then
+                if [ "$appears" = session ]; then session=1; fi
+                if [ "$appears" = child ]; then child=1; fi
+                return 1
+            fi
+            session=1; return 0 ;;
+        *) return 99 ;;
+    esac
+}
+''' + function + '''
+rc=0
+restart_drained_tmux_supervisor || rc=$?
+echo "RESULT:$rc:$attempts"
+'''
+    result = subprocess.run(
+        ["bash", "-c", script, "test", str(failures), appears],
+        capture_output=True, text=True, timeout=5, check=True,
+    )
+    assert f"RESULT:{expected_rc}:{expected_attempts}" in result.stdout
+
+
 def test_release_restart_flag_preserves_shared_symlink_when_claimed(tmp_path):
     source = Path("restart.sh").read_text()
     assert 'RESTART_FLAG="$(realpath -m "$PROJECT_DIR/restart.flag")"' in source

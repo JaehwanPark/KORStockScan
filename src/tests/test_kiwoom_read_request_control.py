@@ -56,7 +56,7 @@ print(json.dumps([hit,value[1]["rest_received_ts_ms"],value[1]["request_attempt_
     assert json.loads(result.stdout.splitlines()[-1]) == [True, 601000, 0]
 
 
-@pytest.mark.parametrize("change", ["token", "origin", "route", "body", "expired", "future", "minute", "corrupt", "receipt_conflict"])
+@pytest.mark.parametrize("change", ["token", "origin", "route", "body", "expired", "future", "minute", "corrupt", "deep_json", "receipt_conflict"])
 def test_widget_response_cache_isolation_and_invalid_receipt(tmp_path, monkeypatch, change):
     cache, kwargs, clock, calls = _widget_cache_fixture(tmp_path, monkeypatch)
     if change == "minute": clock[0] = 659.5
@@ -69,6 +69,11 @@ def test_widget_response_cache_isolation_and_invalid_receipt(tmp_path, monkeypat
     elif change == "future": clock[0] -= .1
     elif change == "minute": clock[0] += 1
     elif change == "corrupt": next(tmp_path.glob("*.json")).write_text("{")
+    elif change == "deep_json":
+        next(tmp_path.glob("*.json")).write_text("[" * 2000 + "0" + "]" * 2000)
+        def decode(_raw):
+            raise RecursionError("optional cache decoding")
+        monkeypatch.setattr(json, "loads", decode)
     elif change == "receipt_conflict":
         p = next(tmp_path.glob("*.json")); d = json.loads(p.read_text())
         d["value"][0]["_kiwoom_source_meta"]["rest_received_ts_ms"] -= 1
@@ -95,7 +100,7 @@ def test_widget_response_cache_failure_and_io_fault_are_not_success(tmp_path, mo
     assert not list(tmp_path.glob("*.json"))
 
 
-@pytest.mark.parametrize("defect", ["empty", "crossed", "token_changed", "io"])
+@pytest.mark.parametrize("defect", ["empty", "crossed", "token_changed", "io", "serialization_error"])
 def test_widget_response_cache_does_not_retain_partial_or_wrong_token(tmp_path, monkeypatch, defect):
     cache, kwargs, clock, calls = _widget_cache_fixture(tmp_path, monkeypatch)
     original = kwargs["fetch"]
@@ -106,6 +111,13 @@ def test_widget_response_cache_does_not_retain_partial_or_wrong_token(tmp_path, 
         elif defect == "token_changed": receipt["request_token_digest"] = "changed"
         return data, receipt
     kwargs["fetch"] = fetch
+    if defect == "serialization_error":
+        original_dumps = json.dumps
+        def dumps(value, **options):
+            if isinstance(value, dict) and "value" in value:
+                raise RecursionError("optional cache serialization")
+            return original_dumps(value, **options)
+        monkeypatch.setattr(json, "dumps", dumps)
     if defect == "io":
         p = tmp_path / "not_a_directory"; p.write_text("preserve")
         cache.directory = p

@@ -101,7 +101,9 @@ def read_shared_widget_quote(context, *, now_ts, path=None):
             raise ValueError("exact_route_missing_or_duplicate")
         types = matches[0]
         epoch = producer["transport_epoch"]
-        if type(epoch) is not int or epoch <= 0 or stock.get("market_data_transport_epoch") != epoch:
+        if (type(epoch) is not int or epoch <= 0
+                or type(stock.get("market_data_transport_epoch")) is not int
+                or stock["market_data_transport_epoch"] != epoch):
             raise ValueError("connection_epoch_conflict")
         for kind, row in types.items():
             if kind not in ("0B", "0D"):

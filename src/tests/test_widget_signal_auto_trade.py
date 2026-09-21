@@ -4223,10 +4223,13 @@ def test_widget_evaluation_wrapper_reuses_one_completed_date(
     assert completed.returncode == 0, completed.stderr
     calls = call_log.read_text(encoding="utf-8").splitlines()
     assert calls == [
+        "- 2026-08-14",
+        "-m src.engine.automation.postclose_summary_handoff --owner widget --date 2026-08-14 --phase started",
         "-m src.engine.monitoring.widget_advisory_calibration --target-date 2026-08-14 --write",
         "-m src.engine.monitoring.widget_auto_trade_policy_calibration --target-date 2026-08-14 --write",
         "-m src.engine.monitoring.widget_symbol_signal_policy_research --end-date 2026-08-14 --write",
         "-m src.engine.monitoring.widget_symbol_runtime_policy --target-date 2026-08-14 --write",
+        "-m src.engine.automation.postclose_summary_handoff --owner widget --date 2026-08-14 --phase finished --exit-code 0",
     ]
     assert "completed target_date=2026-08-14" in completed.stdout
 
