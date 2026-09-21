@@ -1028,3 +1028,26 @@ def test_shared_frame_cache_rejects_replaced_or_missing_file(tmp_path, monkeypat
     assert shared.read_shared_widget_quote(context, now_ts=now, path=path)["status"] == "source_gap"
     path.unlink()
     assert shared.read_shared_widget_quote(context, now_ts=now, path=path)["status"] == "source_gap"
+
+
+def test_shared_frame_lock_is_reset_in_forked_reader(tmp_path):
+    import multiprocessing
+    from src.trading.market import shared_ws_snapshot as shared
+    if "fork" not in multiprocessing.get_all_start_methods():
+        pytest.skip("fork unavailable")
+    path = tmp_path / "frame.json"; path.write_text("{}")
+    context = multiprocessing.get_context("fork")
+    reader, writer = context.Pipe(duplex=False)
+    def child():
+        shared._read_shared_frame(path)
+        writer.send("read")
+    process = context.Process(target=child)
+    with shared._FRAME_CACHE_LOCK:
+        process.start()
+        try:
+            assert reader.poll(3), "child inherited a locked shared frame mutex"
+            assert reader.recv() == "read"
+        finally:
+            process.join(.2)
+            if process.is_alive(): process.terminate(); process.join(2)
+            reader.close(); writer.close()

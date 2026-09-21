@@ -35,3 +35,12 @@ The deployment boundary preserved the then-selected main commit `b9be2da6e5e03bb
 The read-only service-budget validation used512MiB memory and25% CPU limits: first policy load21.296 seconds, next calls0.00477/0.00546 seconds, same policy hash and1,850-byte summary, exit0 with no reported memory-limit/OOM events. See [source benchmark](../../tmp/widget-io-policy-benchmark.log), [budget check](../../tmp/widget-io-policy-cgroup.log), [release tests](../../tmp/widget-io-repair-20260921/release-tests.log), [deployment](../../tmp/widget-io-repair-20260921/deployment-final.json), [scope receipt](../../tmp/widget-io-repair-20260921/scope-verification.json).
 
 Natural next-session collection, submit-path receipts and cost-adjusted outcome remain prospective evidence. The implementation, repair review, push, deployment and scheduled-exit verification are complete for this change.
+
+
+## Follow-up review: research admission and fork safety
+
+The follow-up review reproduced two defects in the prior release. The background `SharedResearchFactWriter` reintroduced excluded widget symbols through admission refresh; a preserved episode on the same symbol could also retain the excluded widget seed. It now receives the collector's explicit priority scope, filters widget admissions and widget memberships independently, and preserves episode admission/native-profile evidence. The receipt records the effective widget scope. No scope retains legacy behavior, and an empty explicit scope excludes widget research only. Existing fact sealing and historical files remain intact.
+
+The shared checkpoint cache mutex could remain locked in a forked child if another parent thread held it at fork. The child now resets both its mutex and parsed-frame cache with `register_at_fork`. The regression holds the parent mutex across fork and verifies the child completes its read. Quote/producer/generation and current-clock validation remain in the existing reader.
+
+The two focused regressions failed before repair (after correcting the widget fixture's required calibration length) and passed after repair. The affected collector/quote/research suites passed440 tests; an additional native-episode scope case verifies that excluded widget scope cannot remove actual episode evidence. No API request, response/FID parser, subscription or recovery flow was modified. Deployment and final validation are recorded below after their completion; no natural-session or economic completion is inferred from these source checks.

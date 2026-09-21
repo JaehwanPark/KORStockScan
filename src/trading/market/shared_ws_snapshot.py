@@ -50,6 +50,16 @@ _FRAME_CACHE_LOCK = threading.Lock()
 _FRAME_CACHE = None
 
 
+def _reset_frame_cache_after_fork():
+    global _FRAME_CACHE_LOCK, _FRAME_CACHE
+    _FRAME_CACHE_LOCK = threading.Lock()
+    _FRAME_CACHE = None
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_frame_cache_after_fork)
+
+
 def _frame_generation(st):
     return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
 

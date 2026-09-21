@@ -474,10 +474,14 @@ class SharedResearchFactWriter:
     seeds registered before the fact clock. Missing scope is explicit defer.
     """
 
-    def __init__(self, symbols, *, directory=None, snapshot_path=None):
+    def __init__(self, symbols, *, directory=None, snapshot_path=None,
+                 widget_symbol_scope=None):
         from src.engine.monitoring.research_closed_loop import DIRECTORY
 
         self.symbols = set(symbols)
+        self.widget_symbol_scope = (
+            None if widget_symbol_scope is None else frozenset(widget_symbol_scope)
+        )
         self.directory = Path(directory or DIRECTORY)
         self.snapshot_path = snapshot_path
         self.seen = {}
@@ -505,9 +509,10 @@ class SharedResearchFactWriter:
             self.native_books.clear()
         if self.refresh_at is None or (now - self.refresh_at).total_seconds() >= 30:
             self.symbols.update(
-                loop.admission_symbols(
+                symbol for symbol in loop.admission_symbols(
                     now.date(), owner="widget", directory=self.directory
                 )
+                if self.widget_symbol_scope is None or symbol in self.widget_symbol_scope
             )
             self.symbols.update(
                 loop.admission_symbols(
@@ -517,6 +522,11 @@ class SharedResearchFactWriter:
             revisions = {}
             for path in (self.directory / "candidates").glob("*.json"):
                 value = loop.validate_revision(loop.read_object(path))
+                # Episode custody can retain this symbol, but must not restore
+                # a widget seed excluded by the observation budget.
+                if (value["owner"] == "widget" and self.widget_symbol_scope is not None
+                        and value["symbol"] not in self.widget_symbol_scope):
+                    continue
                 # Existing actual profiles already have an episode owner. A
                 # registered paired seed consumes their received native books;
                 # this adds no subscription, polling or order permission.
@@ -706,6 +716,8 @@ class SharedResearchFactWriter:
             writer_pid=os.getpid(),
             admitted_symbol_count=len(self.symbols),
             active_seed_symbol_count=len(self.revisions),
+            widget_symbol_scope=(None if self.widget_symbol_scope is None
+                                 else sorted(self.widget_symbol_scope)),
             raw_only_symbols=sorted(self.symbols - set(self.revisions)),
             written_facts=written,
             remote_requests=0,

@@ -983,7 +983,8 @@ def main(argv: list[str] | None = None) -> int:
 
         stop = threading.Event()
         writer = SharedResearchFactWriter(
-            row["stock_code"] for row in config["symbols"]
+            (row["stock_code"] for row in config["symbols"]),
+            widget_symbol_scope=observation_priority_symbols(),
         )
         thread = threading.Thread(
             target=writer.run, args=(stop,), name="research-shared-facts", daemon=True
