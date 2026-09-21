@@ -8971,6 +8971,8 @@ class GPTSniperEngine:
                 # heuristic.  When the market snapshot itself could not be
                 # created, mint a producer-owned attempt id for this receipt.
                 invalid_exact = dict(pre_prompt_snapshot or {})
+                if machine_input_fields:
+                    invalid_exact["entry_machine_input_trace"] = dict(machine_input_fields)
                 identity_sources = (
                     candle_context if isinstance(candle_context, dict) else {},
                     ws_data if isinstance(ws_data, dict) else {},
@@ -9200,6 +9202,9 @@ class GPTSniperEngine:
                     ),
                 )
                 machine_exact = json.loads(machine_hot_payload)
+                if machine_input_fields:
+                    # Capture persists exact_payload, not arbitrary metadata.
+                    machine_exact["entry_machine_input_trace"] = dict(machine_input_fields)
                 if "entry_candle_context" not in machine_exact:
                     self._attach_entry_candle_inputs(
                         machine_exact, candle_context, machine_base_only=True

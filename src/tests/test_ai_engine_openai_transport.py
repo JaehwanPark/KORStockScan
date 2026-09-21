@@ -4126,6 +4126,9 @@ def test_machine_initial_policy_assesses_before_provider_cache_and_lock(
         if final_refresh:
             assert kwargs['observation_ws_data']['final_refresh_marker'] is True
             assert kwargs['exact_payload']['current']['price'] == kwargs['observation_ws_data']['curr']
+            trace = kwargs['exact_payload']['entry_machine_input_trace']
+            assert trace['entry_machine_input_ws_snapshot_refresh_applied'] is True
+            assert trace['entry_machine_input_as_of'] > 0
         assert kwargs['exact_payload']['entry_candle_context']['completed_bar_count'] == 1
         assert kwargs['exact_payload']['entry_candle_context']['multi_timeframe_ai_input_enabled'] is False
         attempt = kwargs['exact_payload']['evaluation_attempt_id']

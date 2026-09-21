@@ -32,8 +32,12 @@ def test_machine_observation_keeps_exact_input_without_provider_request(
     monkeypatch, tmp_path
 ):
     _enable(monkeypatch, tmp_path)
+    timing = {"entry_machine_input_as_of": 1789970400.0,
+              "entry_machine_input_preparation_ms": 58000.0,
+              "entry_machine_input_parent_snapshot_id": "aims-original"}
     result = trace.capture_machine_observation(
         exact_payload={"stock_code": "005930", "name": "삼성전자", "best_ask": 10000,
+                       "entry_machine_input_trace": timing,
                        "features": {"large_sell_print_detected": True}},
         setup_evidence={"setup_state": "WAIT_CONFIRMATION"},
         assessment={"action": "RECHECK"},
@@ -46,6 +50,7 @@ def test_machine_observation_keeps_exact_input_without_provider_request(
     assert row["schema"] == "mechanistic_entry_observation_v1"
     assert row["provider_called"] is False
     assert row["source"]["exact_payload"]["name"] == "삼성전자"
+    assert row["source"]["exact_payload"]["entry_machine_input_trace"] == timing
     assert row["label_context"]["record_id"] == 123
     assert row["label_context"]["evaluation_attempt_id"] is None
     assert result["evaluation_attempt_id"] is None
