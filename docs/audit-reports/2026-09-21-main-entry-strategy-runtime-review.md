@@ -38,4 +38,3 @@
 - 전체 runtime summary는 `direct_evidence_incomplete`; 전체 postclose terminal/자연 제출/실현 순익 완료로 보고하지 않는다. 비용 후 EV·일별 순익은 null이다. 장후 재생성의 `full_evaluation_complete`는 작업 종료 상태이며 전수 경제성 성공이 아니다.
 - 남은 구현/원천 owner: `entry_setup_paired_replay_batch/strategy_owner_replay`. 후보별 재계산한 setup을 소비한 실제 offline auxiliary verdict, 그 가용시각에 묶인 실행·비용·자본 replay, RECHECK 종료 증거를 같은 기회로 생산·검증해야 한다. 현재 compact `prepare`는 실제 ENTER_NOW 화면만, nonentry replay는 `nonentry_plan_only`만 생산하므로 후보 전환의 이 연결은 아직 미구현이다. 이 결손은 갱신 임계치를 낮추는 것으로 해소되지 않는다. 그 연결이 없는 상태에서는 탐색이 economic preflight에서 중단되며 모든 설정 조합의 학습 완료가 아니다.
 - 사용자가 요구한 전체 완료 조건 중 **새 수익성 정책 생성·즉시 적용은 미완료**다. 기존 OPEN owner를 유지하고, 정책 강제 승격/AI PASS 합성/검증 주문/외부 sync는 하지 않았다.
-
