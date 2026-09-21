@@ -750,25 +750,31 @@ def test_research_ws_primary_reads_and_per_symbol_failure_census(tmp_path, monke
 
 
 @pytest.mark.parametrize("delay", [3, 15, 25])
-def test_research_ws_revalidates_original_clocks_after_rest_bars(tmp_path, monkeypatch, delay):
+@pytest.mark.parametrize("read_delay", [0, 60])
+def test_research_ws_revalidates_original_clocks_after_rest_bars(tmp_path, monkeypatch, delay, read_delay):
     from src.tests.test_quote_consistency import _adoptable_widget_transport
     now = datetime(2026, 8, 13, 10, 1, 30, tzinfo=KST)
     class Clock(datetime):
         @classmethod
         def now(cls, tz=None):
-            return now + timedelta(seconds=delay)
+            return now + timedelta(seconds=read_delay + delay)
     class Client(_FakeClient, watch.KiwoomReadOnlyClient):
         def __init__(self):
             watch.KiwoomReadOnlyClient.__init__(self, "TEST", session=object())
             _FakeClient.__init__(self)
     monkeypatch.setattr(watch, "datetime", Clock)
     monkeypatch.setenv("KORSTOCKSCAN_WIDGET_MARKET_DATA_SOURCE", "ws")
-    receipt = _adoptable_widget_transport(now, "111111", 10000, 9990)
+    read_at = now + timedelta(seconds=read_delay)
+    receipt = _adoptable_widget_transport(read_at, "111111", 10000, 9990)
     receipt["ws_request_code"] = "111111"
-    monkeypatch.setattr(watch, "read_shared_widget_quote", lambda *a, **kw: receipt)
+    receipt["evaluated_at_epoch"] = read_at.timestamp()
+    def read_quote(*args, **kwargs):
+        assert kwargs["now_ts"] is None
+        return receipt
+    monkeypatch.setattr(watch, "read_shared_widget_quote", read_quote)
     collector = watch.WidgetResearchWatchCollector(config=_runtime_config([("111111", "one")]),
         client=Client(), output_dir=tmp_path/"raw", snapshot_dir=tmp_path/"snapshots")
     row = collector.collect_once(now)[0]
     assert row["status"] == ("PASS" if delay == 3 else "SOURCE_QUALITY_BLOCKED")
-    assert row["quote_received_at_kst"] == (now-timedelta(seconds=.2)).isoformat()
+    assert row["quote_received_at_kst"] == (read_at-timedelta(seconds=.2)).isoformat()
     assert ("ws_receive_receipt_invalid_or_stale" in row["source_quality_issues"]) == (delay == 25)

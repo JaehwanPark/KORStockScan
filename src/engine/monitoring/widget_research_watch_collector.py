@@ -307,7 +307,16 @@ def attach_bar_delta(payload: dict[str, Any], previous: dict[str, Any]) -> None:
         payload.get("market_session") or (payload.get("advisory") or {}).get("session")
     )
     day = str(payload.get("trading_date") or str(payload.get("observed_at_kst"))[:10])
-    namespace = f"{day}:{route}:{session}:adjusted_1"
+    receipt = payload.get("completed_bar_source") or {}
+    if receipt:
+        route = receipt["request_code"]
+        payload["bar_market_data_request_code"] = route
+    basis = receipt.get("adjustment", "adjusted_1")
+    source = receipt.get("source", "kiwoom_ka10080")
+    epoch = receipt.get("source_epoch", "rest")
+    namespace = f"{day}:{route}:{session}:{basis}:{source}:{epoch}"
+    # Revision belongs to each receipt; putting it in the namespace would
+    # discard conflict detection at every new tick.
     indices = (
         dict(previous.get("bar_content_index") or {})
         if previous.get("bar_delta_namespace") == namespace
@@ -376,7 +385,7 @@ def safe_collection_error(
     # bodies, URLs, headers, credentials and accounts are deliberately excluded.
     raw = str(exc)
     known = re.fullmatch(
-        r"(?:widget_request_budget_exhausted|widget_kiwoom_429_cooldown|shared_cached_token_unavailable|widget_rest_receive_receipt_invalid|widget_read_scope_or_clock_changed_during_collection|ka[0-9]+_(?:return_code_missing|rejected_-?[0-9]+)|widget_kiwoom_shared_read_rate_deferred:[A-Za-z0-9_:-]+)",
+        r"(?:widget_ws_input_unavailable:[A-Za-z0-9_:-]+|completed_ws_bars_unavailable:[A-Za-z0-9_:-]+|completed_bar_seed_[A-Za-z0-9_:-]+|widget_request_budget_exhausted|widget_kiwoom_429_cooldown|shared_cached_token_unavailable|widget_rest_receive_receipt_invalid|widget_read_scope_or_clock_changed_during_collection|ka[0-9]+_(?:return_code_missing|rejected_-?[0-9]+)|widget_kiwoom_shared_read_rate_deferred:[A-Za-z0-9_:-]+)",
         raw,
     )
     response = getattr(exc, "response", None)
@@ -497,6 +506,9 @@ class WidgetResearchWatchCollector:
 
         code = symbol["stock_code"]
         self._request_context = {}
+        # A receipt belongs to the request made for this symbol, not its predecessor.
+        if isinstance(client, KiwoomReadOnlyClient):
+            client.last_request_receipt = {}
         if code in self._ws_transport_owners:
             self._ws_transport_owners[code]._transport_comparison = None
         context = WidgetSymbolRuntimeContract(
@@ -540,7 +552,16 @@ class WidgetResearchWatchCollector:
         if widget_market_data_source(context) == "ws":
             self._request_context = {"source_stage": "shared_ws", "request_symbol": code,
                                      "request_code": request_code}
-            transport = read_shared_widget_quote(context, now_ts=observed_at.timestamp())
+            transport = read_shared_widget_quote(
+                context, now_ts=None if isinstance(client, KiwoomReadOnlyClient) else observed_at.timestamp(),
+            )
+            source_observed_at = datetime.fromtimestamp(
+                transport.get("evaluated_at_epoch", observed_at.timestamp()), KST,
+            )
+            if (source_observed_at < observed_at or source_observed_at.date() != observed_at.date()
+                    or WidgetSymbolRuntimeContract(code, symbol["stock_name"]).session_context(source_observed_at) != context):
+                raise RuntimeError("widget_read_scope_or_clock_changed_during_collection")
+            observed_at = source_observed_at
             owner = self._ws_transport_owners.setdefault(code, SimpleNamespace())
             owner._transport_comparison = transport
         ws_inputs = select_widget_ws_inputs(
@@ -575,6 +596,8 @@ class WidgetResearchWatchCollector:
                     else observed_at
                 )
                 reuse_receipt = None
+        if isinstance(client, KiwoomReadOnlyClient):
+            client.completed_bar_minimum_bars = context.minimum_bars
         bars_raw = request(
             "/api/dostk/chart",
             "ka10080",
@@ -693,6 +716,7 @@ class WidgetResearchWatchCollector:
                 if best_bid and best_ask
                 else None
             ),
+            "completed_bar_source": bars_raw.get("_completed_bar_source", {}),
             "completed_bars": [
                 {
                     "source_time": row.source_time,

@@ -55,6 +55,7 @@ METRIC_CONTRACT = {
 
 CALIBRATION_PROJECTION_SCHEMA = "widget_calibration_projection_v1"
 CALIBRATION_FIELDS = (
+    "completed_bar_source",
     "bar_market_data_request_code",
     "quote_market_data_request_code",
     "market_data_transport",

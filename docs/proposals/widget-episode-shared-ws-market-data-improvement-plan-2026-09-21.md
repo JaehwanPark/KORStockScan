@@ -1,9 +1,15 @@
 # 위젯·에피소드 공통 WS 시세 수집 개선안
 
-- 상태: **사용자 구현·리뷰·커밋푸시·배포기동 승인 후 P0/P1 첫 인계 구현**. 기존 문서 작성 단계의 실행 금지는 과거 범위이며 이번 명시 승인을 대체하지 않는다. P1은 비교 전용이고 P2 전환/확대는 P5 자연 검증 후다. [코드·검증·배포 기록](../audit-reports/2026-09-21-widget-shared-ws-transport-review.md). 앞선 수리 완료를 WS 전환 완료로 확대하지 않는다.
-- 최신 인계: `6c1bfa172` 기본3종목 collector 배포·13:51 재기동·실제_AL 소비 확인. P1 인정 규칙 수리의 코드/배포/PID 검증 완료, P2 실제 입력 전환·확대와 P3 분봉은 미완료다. 다음 완전한 자연3창은14:00–14:45이며14:45 이후 판정한다. [현재 배포와 후속 의존성](../audit-reports/2026-09-21-widget-shared-ws-transport-review.md#integrated-source-deployment-and-continuation).
+- 최신 원천 분석·P3 연결 확정: 프리·애프터 quiet는 장애/반복갱신 사유가 아니다.16:36 명시적1006 이후 확장3종목 이전epoch 및삼성age-only를 구분했다. 원인 귀속/멱등 복구→기존writer 분봉투영→공통reader→현재cohort→episode 순서를 §3.3.1에 확정했다. 이는 구현/배포 완료가 아니다. [분석 증거](../audit-reports/2026-09-21-widget-source-block-and-p3-connection-review.md). 현재 메인5e3f48bd9/PID297783이므로 아래285831은이전이력이다.
+- 상태: **P0/P1 비교·P2E 주문 직전 WS 연결에 이어 기본3종목 P2 실제 입력 전환을 배포, 자연 수용 검증 진행 중**. 현재 사용자 실행 승인은 기존 consumer의 입력 전환과 시한 수리를 포함한다. 확장 관측58종목 중3종목 추가 전환을 배포했으며 나머지 확대와 P3 완료 분봉 공유는 미완료다.
+- 최신 인계: P2 producer `4c5dc8a06`(메인 PID285831), 기본/관측 consumer `d8bb46367`로 기본3종목 WS 가격·호가·당일 저가와 삼성 등락률/최근체결 입력을 선택한다. 기존 P2E·메인 수리를 보존하고 regular episode 만료를 REST/예약 전에 차단했다. P1의14:00–14:45는 raw/집계 분모 결손으로 미통과였으며, 이번 제한 적용을 이전 통계 PASS로 바꾸지 않는다. 새 producer/consumer 이후 자연 소비와 완전한 세션 내3창·submit-path는 별도 검증한다. [코드·배포·검증 기록](../audit-reports/2026-09-21-widget-p2-source-and-episode-deadline-review.md).
+- 이전 관측15:27: 최초15:19에는3종목 WS 필수 입력 PASS. 이후15:20부터 체결0B가 멈추고 호가0D만 갱신되어 현재는 원20초 신선도 차단이다. 입력 전환 배포 완료와 현재 입력 준비·연속 창·자연 제출 검증을 구분한다. [시각별 증거](../audit-reports/2026-09-21-widget-p2-source-and-episode-deadline-review.md#latest-source-observation--1527-kst).
+- 후속 구현: 확장 위젯/연구 수집기2개 WS 입력 연결·원 시각 재검증·종목별 census·raw/compact 출처 보존을 구현, 초기 후보 `2bef246e1`을 거쳐 관측 수집기는 후속 리뷰 `d8bb46367`(PID299905)에 적용했다. 연구 수집기는 코드 준비 상태이며 운영 전환하지 않았다. 현 후보 집합355종목의 통합등록은22종목이며 전체 합집합378 item은 로컬 cap56을 초과한다. P3 기존 canonical stream과 공식 KRX27봉 대조는 OHLC27/27, OHLCV23/27로 거래량4건이 미해결이다. [후속 검토·실제 원천 대조](../audit-reports/2026-09-21-widget-p2-source-and-episode-deadline-review.md#continued-work-after-the-operators-1520-close-clarification). 15:20은 사용자 지정 정규 운영 종료 경계이며15:40 기본3수집기는 모두closed다.
+- 사용자 원천 기준 최종 정정: 유효한 동일 종목 `_AL` WS를 통합시장 원천으로 신뢰한다. KRX/NXT 개별 REST 수치 일치는 전환 조건이 아니며 확장 consumer의 시장 범위 불일치 차단도 제거했다. quote/bar 각각의 원 출처는 보존한다. 위4건은KRX 표기 원장↔KRX REST 진단 이력으로 남기고AL 채택을 막지 않는다. 기존 연속 원장에 원본item/FID13·15를 보존해AL 내부 누락/시각/세대를 검증한다. 기존58종목 관측 catalog 중006800·010140·080220만 WS로 선택하는 제한 cohort이며 새 구독/한도/정책 변경은 없다. [최종 수정·성능 검증](../audit-reports/2026-09-21-widget-p2-source-and-episode-deadline-review.md#operator-correction-integrated-al-ws-is-the-authoritative-source).
+- 이전 자연 소비16:16:48: 메인 `4c5dc8a06`/PID285831, 관측 consumer `2b1a76a48`/PID291143에서006800·010140·080220 모두 `_AL` WS 입력 선택 확인. 앞2종목 payload는ok, 080220은 WS 선택 후 분봉 REST `request_budget_deferred`가 남는다. 원장 bounded tail2,362건에 원본AL item/FID13·15 저장 확인. 완료 분봉 공유·연속3창·자연 주문/비용 후 성과는 미완료다. [자연 소비·시각 수리](../audit-reports/2026-09-21-widget-p2-source-and-episode-deadline-review.md#live-observation-clock-and-observer-activation).
+- 최신 재리뷰·배포16:33: 기본3수집기 및 관측 수집기를 `d8bb46367`로 재기동했다(PID299807/299806/299798/299905). 기본 consumer 시각 오판·최종 세션 검증·receipt 필수시각 누락·실패 census 창 귀속을 수정, 배포본370 PASS. 삼성 장후AL 입력/source_quality PASS, 두산·한화는 정규 전용closed. 확장3종목 AL 선택 후 분봉 REST 예산 대기는 남는다. [리뷰·수정·재검증·실제 소비](../audit-reports/2026-09-21-widget-p2-source-and-episode-deadline-review.md#approved-second-review-and-collector-deployment).
 - 결정: 현재가·체결·호가를 기존 WS 수신기에서 공유하고 REST는 초기 이력·정적 정보·제한된 누락 복구에 사용한다. **P2 시세 전환에 더해 P2E 주문 직전 시장자료 검사 연결을 추가**한다. P3 완료 분봉 공유와 별도로 진행하며, 관측198종목 확대나 P3 완료를 기다려 제출 병목 수리를 미루지 않는다.
-- 이번 보완 범위: 9/21 미제출9건을 근거로 P2E와 삼성 오전기 `WAIT` 조기 종결 수리를 계획에 반영한다. 문서 보완 자체는 코드 구현·배포·자연 검증 완료가 아니며, 기존 사용자 승인과 P4/P5 검증 경계는 유지한다.
+- 이번 실행 범위: 9/21 미제출9건의 WS→순차 REST 병목과 삼성 오전 `WAIT` 조기 종결 수리. 유효 WS의 해당 시장자료 REST 호출은0이며, 전체 소요 시간을 보장할 수 없는 REST 복구는 시작하지 않고 결손으로 차단한다. 기존 위험/계좌/주문/수량/시한 guard와 P4/P5 경계를 유지한다.
 - 사용자 정정 반영: 모든 종목에서 같은 종목의 유효한 `_AL` 체결·호가 수신을 WS 전환의 원천 검증에 인정한다. `005930` 별도 등록 부재나 KRX REST와의 값 차이만으로 `005930_AL`을 탈락시키지 않는다. [공통 reader 보완·실제 자료 확인](../audit-reports/2026-09-21-widget-shared-ws-transport-review.md#integrated-symbol-source-acceptance-correction).
 - 현재 실행·자연 acceptance owner: [9/21 checklist](../checklists/2026-09-21-stage2-todo-checklist.md)의 `KiwoomCommonHealthOpportunityCostAcceptance0917`. 이 문서는 단계별 설계이며 별도 OPEN owner를 중복 생성하지 않는다.
 - 상위 계약: [Plan Rebase §1–§8](../plan-korStockScanPerformanceOptimization.rebase.md), [Kiwoom API 공식 참조 gate](../kiwoom-api-data-contract.md#official-kiwoom-reference-gate). [기존 위젯 source/consumer 성능 계획](widget-postclose-performance-and-source-closure-implementation-plan-2026-09-16.md)의 원천 역할·중복 제거 원칙을 이어가며 완료된 장후 계산 개선을 다시 수행하지 않는다.
@@ -85,7 +91,7 @@ flowchart LR
 - 가격·최우선호가·잔량·체결마다 원 수신시각, 제공된 거래시각과 정밀도, 연결 epoch, source hash/참조, producer PID/commit, consumer 선택/거부 사유를 남긴다. snapshot 생성·읽기시각을 가격 수신시각으로 바꾸지 않는다.
 - `0B`의 가격 갱신을 `0D` 잔량 갱신으로 취급하지 않는다. 같은 route여도 각 필드의 신선도와 허용 시각 차이를 기존 consumer 계약으로 검사한다. 오래된 값 혼합, 미래 시각, bid/ask 충돌은 차단한다.
 - 재접속·거래일/세션 전환 시 이전 세대 cache를 무효화한다. REG 수신 응답, 요청 scope와 실제 데이터 첫 수신을 구분한다. 로컬 sequence는 내부 유실 탐지용이며 broker가 제공하지 않은 무손실 sequence 증거를 합성하지 않는다.
-- 체결이 없는 시간과 연결 단절을 구별한다. quiet tape를 freshness 면제로 사용하지 않으며 무거래 분봉 생성은 기존 공식/로컬 bar 계약으로 증명되는 경우에만 허용한다.
+- 프리·애프터마켓의 저빈도 체결과 연결 단절을 구별한다. 사용자 지시대로 명시적 단절/전송 실패 증거 없이 field age만으로 REG/REMOVE·재접속·REST 갱신을 반복하지 않는다. 마지막 체결 보관·연결 health·현재 주문 준비는 별도 상태다. quiet tape로 주문 freshness를 면제하거나 무거래 봉을 임의 생성하지 않는다.
 
 ### 3.2 구독과 프로세스 간 공유
 
@@ -101,7 +107,38 @@ flowchart LR
 - 현재 single-flight는 프로세스 내부 thread 단위다. 여러 service의 동시 복구를 막는 공유 조정이 필요한지 검증하고, 기존 budget/state lock을 우선 재사용한다. 198개 reader의 동시 timeout이 REST 폭주를 만들면 rollout을 중단한다.
 - 분봉 초기 lookback은 기존 `ka10080` 경로로 적재한다. P1/P2에서는 분봉 출처를 그대로 유지하므로 분봉/API 병목까지 해소됐다고 판정하지 않는다.
 - P3에서 실제 연속 체결 원천이 보존된 구간만 완료 분봉을 집계한다. 최신 checkpoint의 제한된 체결 tail만으로 전체 분봉을 복원하지 않는다. epoch 경계, 수신 유실, 중복/역순, late tick, 수정주가, 거래량 단위, 무거래 구간, 세션 경계를 검증한다.
-- WS 집계와 REST 공식 완료 분봉이 불일치하면 해당 구간을 격리하고 bounded REST로 복구한다. 과거 분봉 복구가 당시 BBO·판정시각·체결 가능성을 복구한 것은 아니다. consumer가 받아들인 bar revision/hash와 수신 가능시각을 보존하여 hindsight를 차단한다.
+- 사용자 지시대로 유효한 `_AL` 연속 WS가 통합 완료 분봉 원천의 기준이다. KRX/NXT REST와의 가격·거래량 차이는 원천별 진단으로 남기며 그 차이만으로 AL을 차단하거나 REST 수치로 덮어쓰지 않는다. 같은 AL 원천 내부의 누적거래량/개별체결·시각/세대·유실 계약 실패가 확인된 구간은 격리한다. bounded 복구도 원 scope와 소비 가능시각을 보존하며 과거 분봉 복구로 당시 BBO·실행가능성을 만들지 않는다. consumer의 bar revision/hash와 수신 가능시각을 보존한다.
+
+### 3.3.1 P3 연결 확정: 원천 상태분리와 단일 완료 분봉 발행
+
+[16:40 원천 차단 분석](../audit-reports/2026-09-21-widget-source-block-and-p3-connection-review.md)을 선행 근거로 고정한다. 최신 실제 메인은5e3f48bd9/PID297783이며16:36 명시적1006 이후epoch2다. 현16회 표본에서 확장3종목은 이전epoch+age, 삼성은age만 차단됐다. 후자는 저활동일 수 있으므로 추가 재구독의 근거가 아니다. P3를 붙이기 위해 신선도나 연결 세대를 속이지 않는다.
+
+**확정 경로:** 기존0B 수신 → `micro_reversion.forward_collector` 원본AL/13/15 envelope → `path_capture.to_market_stream_point` → `path_journal` durable canonical writer → 완료 분봉 projection → `trading.market.shared_ws_snapshot`의 공통 분봉 reader → 기존 widget/episode 자료형·signal kernel. 수신 callback과 별도 tick collector를 추가하지 않는다.
+
+| 순서 | 구현 owner와 작업 | 종료 조건 |
+| --- | --- | --- |
+| P3-A 원천·귀속 | 기존 `shared_ws_snapshot`, 확장2collector의 실패 context; `kiwoom_websocket`의 reconnect receipt/observation demotion 멱등성 | quiet만으로 복구0, 명시적 단절 후 현재epoch 구독복원1회와 first-data 별도 기록, 같은 desired state REMOVE/REG 반복0, 다른symbol REST 영수증 혼입0 |
+| P3-B 완료 분봉 producer | 기존 `path_journal` worker가 durable append 성공한 batch만 집계. 순수 집계 helper는 `src/engine/scalping/micro_reversion/completed_bars.py`에 소유(신규 필요 시 여기1개); root engine module 금지. 별도service/연결 없이 기존 writer lifecycle 사용 | receiver hot path 파일쓰기0, 정상raw 저장에 투영 실패가 전파되지 않음, bounded 집계 상태·원장cursor·restart 일관성, immutable 소스·raw→bar 근거 |
+| P3-C 공통 reader | 기존 `src/trading/market/shared_ws_snapshot.py`에 quote와 독립된 completed-bar reader. 단일 writer가 `data/runtime/shared_ws_completed_bars/<date>/<item>/<session>.json` atomic 발행 | writerPID/observer epoch와transport epoch binding, source scope·bar 상태·revision·hash·causal available_at 검증. quote20초 guard를 과거완료봉 age에 적용하지 않음 |
+| P3-D 현재 cohort 연결 | `widget_symbol_runtime_collector._bars`의006800/010140/080220, 삼성 `_minute_cache` 채움 경로부터 공통 reader 선택. `widget_research_watch_collector` ka10080 경로도 같은 reader 준비 | 필요한AL lookback 충족 정상구간에서 반복ka10080 전송0; 분봉 대기·quiet·명시적gap 분리. 연구 universe/구독 범위 자동 확대 금지 |
+| P3-E 기본 위젯·episode | 두산/한화 minute cache, 삼성 오전·점심·오후 및저가주 gateway `completed_sor_minute_bars` 네 owner. 기존 `MinuteBarsSnapshot`/`MinuteBar`로 변환 | 같은 frozen AL 봉·동일policy의 signal/episode 판정 차이0. 원source/hashes를gateway와regular machine evidence까지전달. 끝난episode재실행0, 계좌·주문/P2E guard불변 |
+| P3-F 자연 수용 | 현재 단일 checklist owner에서 consumer별receipt·완전한동일세대3창과실제submit-path를구분 | 등록/수신/봉발행/소비 각각확인. 조용한분·비대상창을사전규칙으로분류하되 source gaps와대기를분모에서숨기지않음. 비용후EV는별도 |
+
+**집계·복구 계약**
+
+- key=`trade_date,item=_AL,market_data_route,session,observer_sequence_epoch,source_generation`; producerPID/commit·transport epoch는 원장 세대와 별도 binding receipt로 연결한다. `sequence_epoch`와WS transport epoch를 같은 숫자로 가정하지 않는다. session 경계는 기존 공통session contract를 재사용하며 사용자 지정15:20 연속 정규매매 종료/이후closing 구간과 프리·애프터를 섞지 않는다. 일괄 end-time 변경은 하지 않는다.
+- accepted raw event의 제공시각으로 분을 분류하고 제공시각·원수신시각·persisted cursor·first/last sequence·개수·FID13 양끝/FID15합·rejection delta·연결상태를 보존한다. 단순 local gap0은 enqueue 전 제외나 broker coalescing 무손실 증거가 아니다. 알 수 없는 값은null/gap이며0으로 대체하지 않는다.
+- writer는 source_time watermark와 기존 허용역순 계약을 사용한다. 완료시각이 지났다는 local clock만으로 ingestion backlog/단절 구간을 닫지 않는다. 유효 watermark가분말을통과하고 해당epoch/구간의결손없음이확인되면발행한다. 미확정은pending_watermark이며 조용하다는 이유로재연결하지않는다. late tick은미소비봉revision 증가, 이미소비봉은수정이력/영향봉격리로 처리하고과거signal을재발행하지않는다.
+- 빈분은 `no_print_observed`로표시하고 no-trade완전성과구별한다. 기존검증된계약없이는전종가/0거래량봉을만들지않는다. 이미정상완료된 과거봉은 quote age로폐기하지않는다. 현재주문의가격/호가/체결속도 freshness는기존P2E가검사한다.
+- FID13과FID15의차이는AL내부진단이다. 공식semantics를확인하고설명되지않는volume/OHLC coverage 구간만격리한다. 개별KRX/NXT REST와의OHLCV 동일성을 gate로되살리지않는다. 원자료가없는과거/재접속중간/시작중간분은복원했다고표시하지않는다.
+- warm start는검증된동일scope 완료봉cache 우선, 부족한초기lookback/명시적확인gap만기존ka10080 budget에서복구한다. 여러consumer가동일 `(date,item,session,adjustment,missing_interval)`의 filesystem lease/result를공유하고승자1개만기존읽기client로요청한다. 프로세스내single-flight를프로세스간보장이라고표시하지않는다. lease PID/만료/원요청/결과hash·수신시각을검증하고 consumer는결과를읽거나대기한다. quiet만으로복구요청금지, 만료된entry의복구시작금지, 기존attempt당예산/429cooldown불변.
+- REST seed와WS bar의출처/adjustment를명시한다. 당일rawWS와adjusted_1 REST의기업행사·가격기준이확인되지않으면해당경계를합치지않는다. overlap은source epoch/cutover와revision으로선택하고개별시장수치를복사하지않는다.
+- `attach_bar_delta`의현재namespace는 `date:route:session:adjusted_1`로고정돼있다. P3에서는실제bar item/route/adjustment/source contract·revision을namespace/hash에반영하고 raw/compact/research reader를함께검증한다. `regular_two_leg_machine`의hardcoded `kiwoom_ka10080_*` provenance도실제bar receipt로대체하며WS를REST로표시하지않는다.
+- writer 집계/발행은 bounded state로구독된허용cohort만대상이며원장쓰기실패/queue loss/pre-enqueue rejection의범위를필요한봉에전파한다. 현재64개rejection tail로과거1,693건의정확한제외구간이모두입증됐다고주장하지않는다. 신규P3 세대부터cursor와손실구간영수증을보존한다. 재시작은checkpoint+bounded durable replay만허용하고누락구간/일전체를반복스캔하지않는다.
+
+**검증·배포:** 정상·quiet프리/애프터·명시적단절·재접속first-data대기·연속role demotion·stale packet·중복/역순/late·봉말경계·writer실패·단일seed lease경합·consumer재시작·namespace혼합을기존테스트와신규helper가필요한경우동일역할테스트로검증한다. 키움요청/REG/파서/복구수정전공식reference gate를다시닫는다. callback 기존1ms/2ms guard와20초주문입력기준은불변이다. 먼저A/B/C를검토·수정·재검증하고현재D cohort에P4인계,이후E의도래세션을검증한다. 새consumer전환실패는해당consumer만이전검증경로로rollback하며원본원장·holdings·policy·종료episode를되돌리지않는다. 수신지연/IO경합이확인된상태에서분봉전환을성공으로선언하지않는다.
+
+**9/21 구현 인계:** [P3 구현·반복 리뷰·운영 설정/rollback](../audit-reports/2026-09-21-widget-ws-completed-bars-implementation-review.md). 기존 writer 뒤 완료 분봉 투영, 독립 reader, 5개 widget/4개 episode 연결과 프로세스 간 seed/식별된 gap lease를 구현한다. 수정주가 경계는 합치지 않고 기존 최소 history 이후 homogeneous WS로 전환한다. publisher는 기존 AL 6종목만 명시하며 consumer bar source는 별도 `rest` 기본값/allowlist로 단계 적용한다. callback 기준·20초 quote guard·정책·수량은 불변이다. 구현 검증과 자연3창/실제 소비는 구분한다. exact release/PID는 위 인계 기록이 소유한다.
 
 ### 3.4 P2E — 주문 직전 시장자료 검사의 WS 우선 소비
 

@@ -4246,3 +4246,40 @@ def test_replacement_micro_manifest_can_schedule_before_old_future_finishes(
     )
     assert not manager._micro_reversion_deferred_reg_codes
     assert not manager._pending_loop_futures
+
+
+def test_premarket_quiet_persistent_repair_keeps_current_registration(monkeypatch):
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026,9,21,8,20,tzinfo=tz)
+    monkeypatch.setattr(kiwoom_websocket,"datetime",Clock)
+    manager=KiwoomWSManager("test-token")
+    manager._started=True
+    manager.websocket=_FakeWS([])
+    manager._session_ready.set()
+    manager.subscribed_codes.add("005930")
+    manager._registered_items_by_code["005930"]=("005930_AL",)
+    manager._registered_item_epochs["005930_AL"]=manager._market_data_transport_epoch
+    manager._registered_item_types["005930_AL"]=("0B","0D","0w","0F")
+    manager.loop=SimpleNamespace(is_running=lambda: (_ for _ in ()).throw(AssertionError("must not dispatch quiet repair")))
+    manager.execute_subscribe(["005930"],force=True,repair_cycle="persistent_ws_gap",required_realtime_types=["0B","0D"])
+    assert manager.websocket.sent==[]
+    # A missing type is a real registration change, and must reach dispatch.
+    with pytest.raises(AssertionError,match="dispatch"):
+        manager.execute_subscribe(["005930"],force=True,repair_cycle="persistent_ws_gap",required_realtime_types=["0H"])
+    manager._market_data_transport_epoch+=1
+    with pytest.raises(AssertionError,match="dispatch"):
+        manager.execute_subscribe(["005930"],force=True,repair_cycle="persistent_ws_gap")
+
+
+def test_observation_only_al_demotion_does_not_repromote_runtime_item(monkeypatch):
+    manager=KiwoomWSManager("test-token")
+    manager.websocket=_FakeWS([])
+    manager._session_ready.set()
+    manager._implicit_runtime_route_codes.add("005930")
+    manager._micro_reversion_observation_only_items.add("005930_AL")
+    monkeypatch.setattr(manager,"_integrated_aftermarket_route_required",lambda:True)
+    asyncio.run(manager._send_reg(["005930_AL"],observation_only=True,realtime_types=["0B","0D"]))
+    assert "005930_AL" in manager._micro_reversion_observation_only_items
+    assert manager._runtime_primary_items_by_code.get("005930") != "005930_AL"

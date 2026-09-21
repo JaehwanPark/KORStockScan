@@ -701,12 +701,17 @@ class NonBlockingPathJournalWriter:
         max_batch_size: int = 256,
         flush_interval_sec: float = 0.25,
         storage_policy: PathStoragePolicy | None = None,
+        completed_bar_projection=None,
+        source_integrity=None,
     ) -> None:
         if max_queue_size <= 0 or max_batch_size <= 0:
             raise ValueError("queue and batch sizes must be positive")
         if flush_interval_sec <= 0:
             raise ValueError("flush_interval_sec must be positive")
         self._path = Path(path)
+        self._completed_bar_projection = completed_bar_projection
+        self._source_integrity = source_integrity
+        self._completed_bar_errors = 0
         self._queue: queue.Queue[PathJournalPoint] = queue.Queue(maxsize=max_queue_size)
         self._max_batch_size = max_batch_size
         self._flush_interval_sec = flush_interval_sec
@@ -979,6 +984,18 @@ class NonBlockingPathJournalWriter:
                                 self._projection_breaches += 1
                                 self._storage_self_disabled = True
                                 self._capture_degraded = True
+                    if self._completed_bar_projection is not None:
+                        try:
+                            integrity = dict(self._source_integrity())
+                            self._completed_bar_projection.consume(
+                                tuple(batch), integrity=integrity, journal_path=active_path,
+                                durable_cursor={"path": str(active_path), "end_byte": active_path.stat().st_size},
+                            )
+                        except Exception:
+                            # Durable raw capture has succeeded. A projection
+                            # failure invalidates its generation without stopping it.
+                            self._completed_bar_errors += 1
+                            self._completed_bar_projection.invalidate()
                 finally:
                     latency_ms = (time.monotonic() - started) * 1_000.0
                     with self._lock:

@@ -94,6 +94,7 @@ class MinuteBarsSnapshot:
     source_ok: bool
     bars: tuple[MinuteBar, ...] = ()
     error: str = ""
+    source_receipt: dict | None = None
 
 
 def _positive_int(value: object) -> int:
@@ -162,6 +163,7 @@ class KiwoomAfternoonOneShareGateway:
         self.read_pacer = read_pacer
         self.read_retry_sleep = read_retry_sleep
         self._minute_bars_cache = SameMinuteSnapshotCache()
+        self.completed_bar_minimum_bars = 1
         self._account_read_cache = ShortTtlSnapshotCache(ttl_sec=1.0)
 
     def _token(self) -> str:
@@ -291,21 +293,38 @@ class KiwoomAfternoonOneShareGateway:
     def completed_sor_minute_bars(
         self, *, trade_date: date, now: datetime
     ) -> MinuteBarsSnapshot:
+        from src.trading.market.shared_ws_snapshot import selected_completed_bar_payload
+        def seed_fetch(item):
+            response, body = self._post(endpoint="/api/dostk/chart", api_id="ka10080",
+                payload={"stk_cd": item, "tic_scope": "1", "upd_stkpc_tp": "1"})
+            if response.status_code != 200 or str(body.get("return_code", body.get("rt_cd", ""))) != "0":
+                raise RuntimeError("completed_bar_seed_request_failed")
+            return body
+        if now.tzinfo is None or now.astimezone(KST).date() != trade_date:
+            return MinuteBarsSnapshot(False, error="completed_bar_trade_date_invalid")
+        try:
+            selected = selected_completed_bar_payload("005930_AL", now=now, consumer="episode", seed_fetch=seed_fetch,
+                minimum_bars=getattr(self, "completed_bar_minimum_bars", 1))
+        except (RuntimeError, ValueError, OSError) as exc:
+            return MinuteBarsSnapshot(False, error=str(exc))
         minute_floor = now.astimezone(KST).replace(second=0, microsecond=0)
         cache_key = (trade_date, minute_floor)
         cached = self._minute_bars_cache.get(cache_key)
-        if isinstance(cached, MinuteBarsSnapshot):
+        if selected is None and isinstance(cached, MinuteBarsSnapshot):
             return cached
         try:
-            response, body = self._post(
-                endpoint="/api/dostk/chart",
-                api_id="ka10080",
-                payload={"stk_cd": "005930_AL", "tic_scope": "1", "upd_stkpc_tp": "1"},
-            )
+            if selected is not None:
+                body = selected
+            else:
+                response, body = self._post(
+                    endpoint="/api/dostk/chart",
+                    api_id="ka10080",
+                    payload={"stk_cd": "005930_AL", "tic_scope": "1", "upd_stkpc_tp": "1"},
+                )
         except Exception as exc:
             return MinuteBarsSnapshot(False, error=type(exc).__name__)
         code = str(body.get("return_code", body.get("rt_cd", "")))
-        if response.status_code != 200 or code != "0":
+        if selected is None and (response.status_code != 200 or code != "0"):
             return MinuteBarsSnapshot(
                 False,
                 error=str(body.get("return_msg") or f"HTTP_{response.status_code}"),
@@ -357,7 +376,7 @@ class KiwoomAfternoonOneShareGateway:
         bars = tuple(parsed[key] for key in sorted(parsed))
         if not bars:
             return MinuteBarsSnapshot(True, error="completed_sor_bars_unavailable")
-        snapshot = MinuteBarsSnapshot(True, bars)
+        snapshot = MinuteBarsSnapshot(True, bars, source_receipt=(selected or {}).get("_completed_bar_source"))
         if snapshot_contains_latest_completed_minute(
             latest_timestamp=bars[-1].timestamp, minute_floor=minute_floor
         ):

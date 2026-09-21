@@ -493,6 +493,7 @@ class ForwardObservationCollector:
         self._source_sequences: dict[tuple[str, str, str], int] = {}
         self._depth_source_sequences: dict[tuple[str, str, str], int] = {}
         self._sequence_epoch = time.time_ns()
+        self._completed_bar_transport_epoch = 0
         self._series_epochs: dict[tuple[str, str, str], int] = {}
         self._sequence_losses: dict[tuple[int, str, str, str], dict[int, str]] = {}
         self._last_worker_sequence: dict[tuple[int, str, str, str], int] = {}
@@ -525,6 +526,9 @@ class ForwardObservationCollector:
         self._future_timestamp_adjustments = 0
         self._stale_timestamp_blocks = 0
         self._timestamp_rejection_sample_total = 0
+        self._completed_bar_item_rejections = {}
+        self._completed_bar_unscoped_rejections = 0
+        self._completed_bar_config_error = ""
         self._timestamp_rejection_samples: deque[dict[str, Any]] = deque(
             maxlen=TIMESTAMP_REJECTION_SAMPLE_LIMIT
         )
@@ -610,6 +614,12 @@ class ForwardObservationCollector:
 
 
 
+    def bind_completed_bar_transport_epoch(self, epoch: int) -> None:
+        if type(epoch) is not int or epoch <= 0:
+            raise ValueError("completed_bar_transport_epoch_invalid")
+        with self._state_lock:
+            self._completed_bar_transport_epoch = epoch
+
     def begin_transport_epoch(self) -> int:
         """Atomically detach queued/path state from a completed WS transport.
 
@@ -627,6 +637,7 @@ class ForwardObservationCollector:
                     raise RuntimeError(
                         "transport epoch requires a running forward collector"
                     )
+                self._completed_bar_transport_epoch = 0
                 previous_epoch = self._sequence_epoch
                 self._sequence_epoch = max(time.time_ns(), previous_epoch + 1)
                 self._source_sequences.clear()
@@ -1232,6 +1243,11 @@ class ForwardObservationCollector:
         }
         with self._metrics_lock:
             self._timestamp_rejection_sample_total += 1
+            if realtime_type == "0B":
+                if item in self._completed_bar_item_rejections or len(self._completed_bar_item_rejections) < 512:
+                    self._completed_bar_item_rejections[item] = self._completed_bar_item_rejections.get(item, 0) + 1
+                else:
+                    self._completed_bar_unscoped_rejections += 1
             sample["rejection_index"] = self._timestamp_rejection_sample_total
             self._timestamp_rejection_samples.append(sample)
 
@@ -1905,6 +1921,21 @@ class ForwardObservationCollector:
             else:
                 self._increment("_path_dropped")
 
+    def completed_bar_integrity(self):
+        with self._metrics_lock:
+            loss = (self._snapshot_blocks, self._missing_0b_items, self._venue_blocks,
+                    self._worker_errors, self._completed_bar_unscoped_rejections)
+            item_rejections = dict(self._completed_bar_item_rejections)
+        with self._state_lock:
+            writers = tuple(self._writers.values())
+        return {"observer_epoch": self._sequence_epoch,
+                "transport_epoch": self._completed_bar_transport_epoch,
+                "writer_loss": sum(w._dropped for w in writers),
+                "projection_errors": sum(w._completed_bar_errors for w in writers),
+                "config_error": self._completed_bar_config_error,
+                "loss_revision": list(loss),
+                "item_rejections": item_rejections}
+
     def _writer_for(
         self, envelope: RawMarketObservation
     ) -> NonBlockingPathJournalWriter:
@@ -1924,8 +1955,26 @@ class ForwardObservationCollector:
                 venue=envelope.venue,
                 session_bucket=envelope.session_bucket,
             )
+            projection = None
+            import os
+            if (envelope.venue == "SOR" and
+                    os.getenv("KORSTOCKSCAN_WS_COMPLETED_BARS_PUBLISH", "0") == "1"):
+                from src.utils.constants import DATA_DIR
+                from .completed_bars import CompletedBarProjection
+                try:
+                    projection = CompletedBarProjection(
+                        (DATA_DIR / "runtime" / "shared_ws_completed_bars"
+                         if self.config.output_root.resolve() == DEFAULT_OUTPUT_ROOT.resolve()
+                         else self.config.output_root / "shared_ws_completed_bars"),
+                        symbols=os.getenv("KORSTOCKSCAN_WS_COMPLETED_BAR_SYMBOLS", "").split(","),
+                    )
+                except Exception as exc:
+                    self._completed_bar_config_error = type(exc).__name__
+                    # A bad optional projection config cannot stop raw capture.
             writer = NonBlockingPathJournalWriter(
                 path,
+                completed_bar_projection=projection,
+                source_integrity=self.completed_bar_integrity,
                 max_queue_size=self.config.path_queue_size,
                 max_batch_size=self.config.path_batch_size,
                 flush_interval_sec=self.config.writer_flush_interval_sec,

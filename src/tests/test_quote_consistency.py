@@ -35,6 +35,33 @@ def _shared_widget_fixture(tmp_path, monkeypatch):
     return path, context, now, json.loads(path.read_text())
 
 
+def test_shared_live_read_uses_observation_clock_without_rewriting_source(tmp_path, monkeypatch):
+    from src.trading.market import shared_ws_snapshot as shared
+
+    path, context, now, _ = _shared_widget_fixture(tmp_path, monkeypatch)
+    # The snapshot is published during a slow multi-symbol collection cycle.
+    clocks = iter((now - 1, now + 1))
+    monkeypatch.setattr(shared.time, "time", lambda: next(clocks))
+    live = shared.read_shared_widget_quote(context, now_ts=None, path=path)
+    assert live["status"] == "valid_ws_comparison_input"
+    assert live["evaluated_at_epoch"] == now + 1
+    assert live["snapshot_generated_at"] == now
+    assert live["source_clocks"] == {"0B": now - 0.2, "0D": now - 0.2}
+    historical = shared.read_shared_widget_quote(context, now_ts=now - 1, path=path)
+    assert historical["reason"] == "snapshot_stale_or_future"
+
+
+@pytest.mark.parametrize("offset", [-1, 21])
+def test_shared_live_clock_keeps_future_and_stale_snapshot_guards(tmp_path, monkeypatch, offset):
+    from src.trading.market import shared_ws_snapshot as shared
+
+    path, context, now, _ = _shared_widget_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(shared.time, "time", lambda: now + offset)
+    result = shared.read_shared_widget_quote(context, now_ts=None, path=path)
+    assert result["status"] == "source_gap"
+    assert result["reason"] == "snapshot_stale_or_future"
+
+
 
 @pytest.mark.parametrize("failure_delay", [1, 901])
 def test_shared_transport_failure_republish_counts_one_evaluation(tmp_path, monkeypatch, failure_delay):
@@ -340,7 +367,7 @@ def test_shared_transport_census_marks_mixed_window_without_erasing_gaps(tmp_pat
     assert bucket["rest_not_observed"] == 2
     # A later complete window has its own generation, not a reset of history.
     payload["observed_at_kst"] = datetime.fromtimestamp(now + 900, timezone.utc).isoformat()
-    source = owner._transport_comparison = dict(source)
+    source = owner._transport_comparison = dict(source, evaluated_at_epoch=now + 900)
     attach_transport_census(owner, payload)
     windows = source["census"]["windows"]
     assert len(windows) == 2
@@ -372,7 +399,7 @@ def test_shared_transport_census_keeps_unknown_generation_and_bounded_history(tm
     assert bucket["ws_source_gap"] == bucket["valid_ws"] == 1
     for offset in range(1, 6):
         payload["observed_at_kst"] = datetime.fromtimestamp(now + 900 * offset, timezone.utc).isoformat()
-        source = owner._transport_comparison = dict(source)
+        source = owner._transport_comparison = dict(source, evaluated_at_epoch=now + 900 * offset)
         attach_transport_census(owner, payload)
     windows = source["census"]["windows"]
     assert len(windows) == 4
@@ -948,3 +975,28 @@ def test_explicit_widget_ws_cohort_keeps_other_symbols_on_existing_rest(monkeypa
         monkeypatch.setenv("KORSTOCKSCAN_WIDGET_WS_SYMBOLS", scope)
         with pytest.raises(RuntimeError, match="widget_ws_rollout_scope_invalid"):
             widget_market_data_source(other)
+
+
+def test_transport_census_uses_reader_window_for_failed_slow_cycle(tmp_path, monkeypatch):
+    from datetime import datetime
+    from types import SimpleNamespace
+    from src.trading.market import shared_ws_snapshot as shared
+    path, context, now, _ = _shared_widget_fixture(tmp_path, monkeypatch)
+    source = shared.read_shared_widget_quote(context, now_ts=now, path=path)
+    owner = SimpleNamespace(_transport_comparison=source)
+    payload = {"status": "data_wait", "observed_at_kst": datetime.fromtimestamp(now - 901, shared.KST).isoformat()}
+    shared.attach_transport_census(owner, payload)
+    windows = source["census"]["windows"]
+    assert list(windows) == [str(int(now))]
+    assert windows[str(int(now))]["expected_comparisons"] == 1
+    assert windows[str(int(now))]["first_observed_at"] == datetime.fromtimestamp(now, shared.KST).isoformat()
+
+
+@pytest.mark.parametrize("clocks", [{}, {"0B": 1}, {"0D": 1}, {"0B": True, "0D": 1}])
+def test_widget_receipt_rejects_incomplete_or_non_numeric_field_clocks(tmp_path, monkeypatch, clocks):
+    from src.trading.market.shared_ws_snapshot import read_shared_widget_quote, validate_widget_ws_receipt
+    path, context, now, _ = _shared_widget_fixture(tmp_path, monkeypatch)
+    source = read_shared_widget_quote(context, now_ts=now, path=path)
+    source["source_clocks"] = clocks
+    with pytest.raises(ValueError, match="widget_ws_source"):
+        validate_widget_ws_receipt(source, context=context, now_ts=now)

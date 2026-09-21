@@ -3373,16 +3373,20 @@ def test_exit_state_transition_does_not_create_a_new_entry_signal_row(tmp_path):
     assert rows[1]["previous_exit_advisory_state"] == "EXIT_WATCH"
 
 
+@pytest.mark.parametrize("clock_mode", ["explicit", "live", "session_change"])
 @pytest.mark.parametrize("source_mode", ["rest", "ws"])
 def test_collector_uses_only_read_only_market_data_and_cached_token(
-    monkeypatch, tmp_path, source_mode
+    monkeypatch, tmp_path, source_mode, clock_mode
 ):
     now = datetime(2026, 8, 3, 9, 10, 5, tzinfo=KST)
     monkeypatch.setenv("KORSTOCKSCAN_WIDGET_MARKET_DATA_SOURCE", source_mode)
     if source_mode == "ws":
         from src.tests.test_quote_consistency import _adoptable_widget_transport
-        monkeypatch.setattr(advisory, "read_shared_widget_quote", lambda context, **kw:
-            _adoptable_widget_transport(now, "005930", 100400, 99800))
+        def read_quote(context, **kwargs):
+            assert kwargs["now_ts"] == (now.timestamp() if clock_mode == "explicit" else None)
+            return {**_adoptable_widget_transport(now, "005930", 100400, 99800),
+                    "evaluated_at_epoch": now.timestamp()}
+        monkeypatch.setattr(advisory, "read_shared_widget_quote", read_quote)
     monkeypatch.setattr(advisory.time, "time", lambda: now.timestamp())
     monkeypatch.setattr(
         advisory.kiwoom_utils, "get_cached_kiwoom_token", lambda _: "TOKEN"
@@ -3544,7 +3548,15 @@ def test_collector_uses_only_read_only_market_data_and_cached_token(
         external_provider=ExternalProvider(),
         request_session=request_session,
     )
-    payload = collector.collect_once(now)
+    if clock_mode != "explicit":
+        end = now.replace(hour=15, minute=31) if clock_mode == "session_change" else now + timedelta(seconds=1)
+        clocks = iter((now - timedelta(seconds=2), end))
+        monkeypatch.setattr(advisory, "_now_kst", lambda: next(clocks))
+    if clock_mode == "session_change":
+        with pytest.raises(RuntimeError, match="scope_or_clock_changed"):
+            collector.collect_once()
+        return
+    payload = collector.collect_once(now if clock_mode == "explicit" else None)
 
     assert payload["status"] == "ok"
     assert payload["market_data_transport"]["selected_input"] == ("shared_ws_snapshot" if source_mode == "ws" else "existing_rest")

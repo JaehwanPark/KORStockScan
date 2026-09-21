@@ -231,6 +231,10 @@ while true; do
     export KORSTOCKSCAN_SCALP_LOW_PROFIT_STAGNATION_MAX_ADJUSTED_PROFIT_PCT=1.00
     export KORSTOCKSCAN_SCALP_LOW_PROFIT_STAGNATION_MIN_HOLD_SEC=1800
     export KORSTOCKSCAN_SCALP_LOW_PROFIT_STAGNATION_ASSUMED_EXIT_SLIPPAGE_BPS=15
+    # Shared completed candles are a source-only projection of the existing
+    # durable AL journal. Consumer cutover remains independently opt-in.
+    export KORSTOCKSCAN_WS_COMPLETED_BARS_PUBLISH="${KORSTOCKSCAN_WS_COMPLETED_BARS_PUBLISH:-1}"
+    export KORSTOCKSCAN_WS_COMPLETED_BAR_SYMBOLS="${KORSTOCKSCAN_WS_COMPLETED_BAR_SYMBOLS:-005930,034020,042660,006800,010140,080220}"
     # Persistent source-observation policy. Daily threshold env generation does
     # not own this lane; an explicit operator/daily override may still set it
     # false as the documented rollback.

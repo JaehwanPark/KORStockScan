@@ -3718,6 +3718,19 @@ class KiwoomReadOnlyClient:
             raise RuntimeError("widget_rest_receive_receipt_invalid") from exc
 
     def post(self, path, api_id, payload, *, optional=False):
+        if (path == "/api/dostk/chart" and api_id == "ka10080"
+                and payload.get("tic_scope") == "1" and payload.get("upd_stkpc_tp") == "1"):
+            from src.trading.market.shared_ws_snapshot import selected_completed_bar_payload
+            self.last_request_receipt = {"source": "completed_bar_selection", "request_code": payload.get("stk_cd"), "request_attempt_count": 0}
+            bars = selected_completed_bar_payload(
+                str(payload.get("stk_cd", "")), now=datetime.now(KST),
+                minimum_bars=getattr(self, "completed_bar_minimum_bars", 1),
+                seed_fetch=lambda item: self._post_uncached(
+                    path, api_id, {**payload, "stk_cd": item}, optional=optional),
+            )
+            if bars is not None:
+                self.last_request_receipt = dict(bars["_completed_bar_source"])
+                return bars
         if not self.shared_read_control_enabled:
             return self._post_uncached(path, api_id, payload, optional=optional)
         from src.utils.kiwoom_read_request_control import WidgetMarketResponseCache
@@ -4501,12 +4514,23 @@ class SamsungWidgetCollector:
         self.promotion_filter.restore(advisory)
 
     def collect_once(self, observed_at: datetime | None = None) -> dict[str, Any]:
+        self._transport_comparison = None
         cycle_started = time.monotonic()
         request_count_before = self.request_budget.total_request_count
         now = _as_kst(observed_at or _now_kst())
         context = session_context(now)
         self._activate_scope(now, context)
-        self._transport_comparison = read_shared_widget_quote(context, now_ts=now.timestamp())
+        self._transport_comparison = read_shared_widget_quote(
+            context, now_ts=now.timestamp() if observed_at is not None else None,
+        )
+        if observed_at is None and context.active:
+            source_now = datetime.fromtimestamp(
+                self._transport_comparison.get("evaluated_at_epoch", now.timestamp()), KST,
+            )
+            if (source_now < now or source_now.date() != now.date()
+                    or session_context(source_now) != context):
+                raise RuntimeError("widget_read_scope_or_clock_changed_during_collection")
+            now = source_now
         self._optional_gaps = []
         self._external_fetch_error = None
         if not context.active:
@@ -4588,7 +4612,13 @@ class SamsungWidgetCollector:
             )
 
         minute_key = now.strftime("%Y%m%d%H%M")
-        if minute_key != self._last_minute_fetch or not self._minute_cache:
+        from src.trading.market.shared_ws_snapshot import completed_bar_mode
+        if isinstance(client, KiwoomReadOnlyClient):
+            client.completed_bar_minimum_bars = context.minimum_bars
+        ws_bars = completed_bar_mode(context.request_code) == "ws"
+        if ws_bars:
+            self._minute_cache = {}  # An invalidated WS revision cannot reuse old bars.
+        if ws_bars or minute_key != self._last_minute_fetch or not self._minute_cache:
             minute_payload = self._optional_post(
                 client,
                 "/api/dostk/chart",
@@ -4638,6 +4668,10 @@ class SamsungWidgetCollector:
             self._relative_window_cache = _same_window_relative_snapshot(
                 bars, peer_bars, kospi_bars
             )
+            bar_receipt = self._minute_cache.get("_completed_bar_source") or {}
+            if bar_receipt:
+                self._relative_window_cache["same_window_sources"]["samsung"] = bar_receipt["source"]
+
             self._last_relative_minute_fetch = minute_key
         if context.name == "NXT_PREMARKET" and bars:
             self._premarket_cache = _premarket_context(bars, now)
@@ -4826,6 +4860,9 @@ class SamsungWidgetCollector:
             self._last_flow_fetch = epoch
 
         decision_now = now if observed_at is not None else _now_kst()
+        if (decision_now < now or decision_now.date() != now.date()
+                or session_context(decision_now) != context):
+            raise RuntimeError("widget_read_scope_or_clock_changed_during_collection")
         quote_age_sec = (decision_now - _as_kst(quote_received_at)).total_seconds()
         bbo["age_sec"] = (decision_now - _as_kst(bbo_received_at)).total_seconds()
 
@@ -4980,10 +5017,14 @@ class SamsungWidgetCollector:
                 "scope": list(self._active_scope_key or ()),
                 "authority": "widget_collector_local_only",
             },
+            "completed_bar_source": self._minute_cache.get("_completed_bar_source", {}),
             "market_data_transport": self._transport_comparison,
             "advisory": advisory,
             "exit_advisory": exit_advisory,
         }
+        bar_receipt = payload.get("completed_bar_source") or {}
+        if bar_receipt:
+            payload["bar_market_data_request_code"] = bar_receipt["request_code"]
         attach_transport_census(self, payload)
         _atomic_write_json(self.snapshot_path, payload)
         self.recorder.record(payload, decision_now)

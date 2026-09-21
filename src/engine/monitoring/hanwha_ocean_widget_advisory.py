@@ -1006,13 +1006,24 @@ class HanwhaOceanWidgetCollector:
         }
 
     def collect_once(self, observed_at: datetime | None = None) -> dict[str, Any]:
+        self._transport_comparison = None
         cycle_started = time.monotonic()
         request_count_before = self.request_budget.total_request_count
         now = _as_kst(observed_at or _now_kst())
         context = contract.session_context(now)
         self._activate_date(now)
         self._restore_state(now, context)
-        self._transport_comparison = read_shared_widget_quote(context, now_ts=now.timestamp())
+        self._transport_comparison = read_shared_widget_quote(
+            context, now_ts=now.timestamp() if observed_at is not None else None,
+        )
+        if observed_at is None and context.active:
+            source_now = datetime.fromtimestamp(
+                self._transport_comparison.get("evaluated_at_epoch", now.timestamp()), KST,
+            )
+            if (source_now < now or source_now.date() != now.date()
+                    or contract.session_context(source_now) != context):
+                raise RuntimeError("widget_read_scope_or_clock_changed_during_collection")
+            now = source_now
         if not context.active:
             advisory = self._closed_advisory(now)
             payload = {
@@ -1072,7 +1083,13 @@ class HanwhaOceanWidgetCollector:
                                 quote_received_at=quote_received_at, bbo_received_at=bbo_received_at)
 
         minute_key = now.strftime("%Y%m%d%H%M")
-        if minute_key != self._last_minute_fetch or not self._minute_cache:
+        from src.trading.market.shared_ws_snapshot import completed_bar_mode
+        if isinstance(client, KiwoomReadOnlyClient):
+            client.completed_bar_minimum_bars = context.minimum_bars
+        ws_bars = completed_bar_mode(contract.HANWHA_OCEAN_CODE) == "ws"
+        if ws_bars:
+            self._minute_cache = {}  # An invalidated WS revision cannot reuse old bars.
+        if ws_bars or minute_key != self._last_minute_fetch or not self._minute_cache:
             self._minute_cache = client.post(
                 "/api/dostk/chart",
                 "ka10080",
@@ -1117,6 +1134,9 @@ class HanwhaOceanWidgetCollector:
         )
 
         decision_now = now if observed_at is not None else _now_kst()
+        if (decision_now < now or decision_now.date() != now.date()
+                or contract.session_context(decision_now) != context):
+            raise RuntimeError("widget_read_scope_or_clock_changed_during_collection")
         quote_age_sec = (decision_now - _as_kst(quote_received_at)).total_seconds()
         bbo["age_sec"] = (decision_now - _as_kst(bbo_received_at)).total_seconds()
         self._restore_state(decision_now, context)
@@ -1242,6 +1262,7 @@ class HanwhaOceanWidgetCollector:
                 **self.request_budget.snapshot(),
                 "authority": "widget_collector_local_only",
             },
+            "completed_bar_source": self._minute_cache.get("_completed_bar_source", {}),
             "market_data_transport": self._transport_comparison,
             "advisory": advisory,
             "exit_advisory": exit_advisory,

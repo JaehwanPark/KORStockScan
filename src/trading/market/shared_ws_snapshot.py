@@ -57,6 +57,10 @@ def read_shared_widget_quote(context, *, now_ts, path=None):
               "metric_contract": METRIC_CONTRACT, "comparison_status": "rest_not_observed"}
     try:
         path = Path(path or SNAPSHOT_PATH)
+        live_clock = now_ts is None
+        if live_clock:
+            now_ts = time.time()
+        result["evaluated_at_epoch"] = now_ts
         now = datetime.fromtimestamp(now_ts, KST)
         if not context.active or not context.start <= now.time().replace(tzinfo=None) < context.end:
             raise ValueError("consumer_session_inactive")
@@ -68,6 +72,14 @@ def read_shared_widget_quote(context, *, now_ts, path=None):
         if len(raw) > 8 * 1024 * 1024:
             raise ValueError("snapshot_size_exceeded")
         snapshot = json.loads(raw)
+        if live_clock:
+            # A live multi-symbol cycle may start long before this atomic read.
+            # Observe after I/O; never rewrite the producer or field clocks.
+            now_ts = time.time()
+            now = datetime.fromtimestamp(now_ts, KST)
+            if not context.start <= now.time().replace(tzinfo=None) < context.end:
+                raise ValueError("consumer_session_inactive")
+        result["evaluated_at_epoch"] = now_ts
         authority = snapshot["machine_confirmation_input_contract"]
         if (snapshot.get("schema_version") != "kiwoom_ws_dashboard_snapshot_v1"
                 or snapshot.get("decision_authority") != "source_quality_only"
@@ -121,6 +133,20 @@ def read_shared_widget_quote(context, *, now_ts, path=None):
             if kind not in ("0B", "0D"):
                 continue
             stamp = row["observed_epoch"]
+            facts = result.setdefault("field_validation", {})
+            numeric = type(stamp) in (int, float) and math.isfinite(stamp)
+            facts[kind] = {
+                "observed_epoch": stamp, "age_sec": now_ts - stamp if numeric else None,
+                "source_epoch": row.get("transport_epoch"), "producer_epoch": epoch,
+                "source_item": row.get("item"),
+                "age_exceeded": numeric and now_ts - stamp > 20,
+                "prior_or_conflicting_epoch": row.get("transport_epoch") != epoch,
+                "field_after_publication": numeric and stamp > generated,
+                "recovery_authority": "none_field_age_is_not_connection_failure",
+            }
+        for kind in ("0B", "0D"):
+            row = types[kind]
+            stamp = row["observed_epoch"]
             observed = datetime.fromtimestamp(stamp, KST)
             if (type(stamp) not in (int, float) or not math.isfinite(stamp)
                     or not 0 <= now_ts - stamp <= 20 or stamp > generated
@@ -163,8 +189,11 @@ def validate_widget_ws_receipt(receipt, *, context, now_ts):
             or receipt.get("session") != context.name
             or receipt["producer"]["process"] != process_generation(receipt["producer"]["process"]["pid"])):
         raise ValueError("widget_ws_receipt_binding_invalid")
-    for stamp in receipt["source_clocks"].values():
-        if not 0 <= now_ts - stamp <= 20:
+    clocks = receipt["source_clocks"]
+    if not isinstance(clocks, dict) or set(clocks) != {"0B", "0D"}:
+        raise ValueError("widget_ws_source_clocks_incomplete")
+    for stamp in clocks.values():
+        if type(stamp) not in (int, float) or not math.isfinite(stamp) or not 0 <= now_ts - stamp <= 20:
             raise ValueError("widget_ws_source_stale_or_future")
 
 
@@ -287,7 +316,11 @@ def attach_transport_census(owner, payload):
             and getattr(owner, "_transport_census_last_pid", None) == os.getpid()):
         payload["market_data_transport"] = transport
         return
-    now = datetime.fromisoformat(payload["observed_at_kst"])
+    # Count a reader evaluation in its own window. Failed slow cycles may
+    # publish with an older cycle timestamp; later republishes are not reads.
+    evaluated = transport.get("evaluated_at_epoch")
+    now = (datetime.fromtimestamp(evaluated, KST) if evaluated is not None
+           else datetime.fromisoformat(payload["observed_at_kst"]))
     # A fork inherits the owner object, not the parent's comparison receipt.
     # Use PID even when /proc provenance is temporarily unavailable, so a
     # provenance read failure cannot erase this process's failed denominator.
@@ -343,3 +376,212 @@ def attach_transport_census(owner, payload):
     payload["market_data_transport"] = transport
     owner._transport_census_last_sample = transport
     owner._transport_census_last_pid = os.getpid()
+
+
+COMPLETED_BARS_ROOT = DATA_DIR / "runtime" / "shared_ws_completed_bars"
+
+
+def completed_bar_mode(request_code, *, consumer="widget"):
+    """Separate explicit bar rollout; quote selection never promotes bars."""
+    if consumer not in {"widget", "episode"}:
+        raise ValueError("completed_bar_consumer_invalid")
+    mode = os.getenv(f"KORSTOCKSCAN_{consumer.upper()}_BAR_SOURCE", "rest").strip().lower()
+    if mode not in {"rest", "ws"}:
+        raise ValueError("completed_bar_source_invalid")
+    members = os.getenv(f"KORSTOCKSCAN_{consumer.upper()}_BAR_WS_SYMBOLS", "")
+    if mode == "rest":
+        return mode
+    codes = members.split(",")
+    if any(not re.fullmatch(r"[0-9]{6}", c) for c in codes) or len(set(codes)) != len(codes):
+        raise ValueError("completed_bar_scope_invalid")
+    return "ws" if re.fullmatch(r"[0-9]{6}(?:_AL)?", request_code) and request_code[:6] in codes else "rest"
+
+
+def _bounded_json(path, limit=2 * 1024 * 1024):
+    with Path(path).open("rb") as handle:
+        raw = handle.read(limit + 1)
+    if len(raw) > limit:
+        raise ValueError("completed_bar_artifact_size_exceeded")
+    return json.loads(raw)
+
+
+def _bar_session(now):
+    clock = now.astimezone(KST).strftime("%H:%M")
+    if "08:00" <= clock < "08:50":
+        return "SOR_PREMARKET"
+    if "09:00" <= clock < "15:30":
+        return "SOR_REGULAR"
+    if "16:00" <= clock < "20:00":
+        return "SOR_AFTERMARKET"
+    raise ValueError("completed_bar_session_inactive")
+
+
+def read_shared_completed_bars(request_code, *, now, root=None, snapshot_path=None):
+    """Historical bar clocks are causal; no quote-age TTL and no recovery I/O."""
+    from src.engine.scalping.micro_reversion.completed_bars import SCHEMA, digest, item_integrity
+    if now.tzinfo is None or not re.fullmatch(r"[0-9]{6}_AL", request_code):
+        raise ValueError("completed_bar_identity_invalid")
+    now = now.astimezone(KST)
+    session = _bar_session(now)
+    snapshot = _bounded_json(snapshot_path or SNAPSHOT_PATH, 8 * 1024 * 1024)
+    producer = snapshot["shared_transport_producer"]
+    if (not 0 <= now.timestamp() - snapshot["generated_at_epoch"] <= 20
+            or producer["connection_available"] is not True
+            or producer["process"] != process_generation(producer["process"]["pid"])
+            or request_code not in producer["registered_items"]):
+        raise ValueError("completed_bar_live_binding_invalid")
+    payload = _bounded_json(Path(root or COMPLETED_BARS_ROOT) / now.date().isoformat() / request_code / (session + ".json"))
+    expected = payload.pop("content_sha256")
+    if (digest(payload) != expected or payload["schema"] != SCHEMA
+            or payload["trade_date"] != now.date().isoformat()
+            or payload["source_item"] != request_code or payload["session"] != session
+            or payload["adjustment"] != "raw_same_day"
+            or payload["market_data_route"] != "krx_nxt_integrated"
+            or payload["producer"] != producer["process"]
+            or payload["source_commit"] != producer["source_commit"]
+            or payload["integrity"] != item_integrity(producer["completed_bar_integrity"], request_code)
+            or type(producer["transport_epoch"]) is not int or producer["transport_epoch"] <= 0
+            or payload["integrity"].get("transport_epoch") != producer["transport_epoch"]
+            or payload["source_epoch"] != payload["integrity"]["observer_epoch"]
+            or not payload["generated_at_epoch"] <= now.timestamp()
+            or payload["actual_order_submitted"] is not False
+            or payload["runtime_effect"] is not False):
+        raise ValueError("completed_bar_source_contract_invalid")
+    rows, previous = [], None
+    for bar in payload["bars"]:
+        minute = bar["minute_epoch"]
+        stamp = datetime.fromtimestamp(minute, KST)
+        if (type(minute) is not int or minute % 60 or stamp.date() != now.date()
+                or _bar_session(stamp) != session or (previous is not None and minute <= previous)):
+            raise ValueError("completed_bar_order_or_session_invalid")
+        previous = minute
+        if bar["status"] == "gap":
+            rows = []  # A consumer never bridges an unresolved source hole.
+            continue
+        if bar["status"] == "pending":
+            continue
+        values = [bar[k] for k in ("open", "high", "low", "close", "volume")]
+        if (bar["status"] != "complete" or bar["issues"] or bar["source_item"] != request_code
+                or not all(type(v) is int and v >= 0 for v in values)
+                or min(values[:4]) <= 0 or bar["high"] < max(values[:4])
+                or bar["low"] > min(values[:4]) or bar["available_at_epoch"] is None
+                or not minute + 60 <= bar["available_at_epoch"] <= now.timestamp()
+                or minute + 61 > payload["watermark_epoch"]
+                or bar["source_time"] != stamp.strftime("%Y%m%d%H%M%S")):
+            raise ValueError("completed_bar_ohlcv_or_clock_invalid")
+        rows.append({"cntr_tm": bar["source_time"], "open_pric": str(bar["open"]),
+                     "high_pric": str(bar["high"]), "low_pric": str(bar["low"]),
+                     "cur_prc": str(bar["close"]), "trde_qty": str(bar["volume"])})
+    invalid_from = payload.get("invalid_from_minute")
+    if invalid_from is not None:
+        rows = [row for row in rows if datetime.strptime(row["cntr_tm"], "%Y%m%d%H%M%S").replace(tzinfo=KST).timestamp() > invalid_from]
+    receipt = {"source": "kiwoom_ws_AL_completed_1m", "request_code": request_code,
+               "adjustment": payload["adjustment"], "source_epoch": payload["source_epoch"],
+               "transport_epoch": producer["transport_epoch"], "producer": payload["producer"],
+               "revision": payload["revision"], "content_sha256": expected,
+               "available_at_epoch": max((b["available_at_epoch"] or 0 for b in payload["bars"]), default=0),
+               "generated_at_epoch": payload["generated_at_epoch"], "session": session,
+               "cursor": payload["cursor"], "durable_cursor": payload.get("durable_cursor"),
+               "historical_source_epochs": sorted({b["source_epoch"] for b in payload["bars"] if b["status"] == "complete"}),
+               "rest_request_count": 0,
+               "missing_range": next((
+                   {"from_minute": b["minute_epoch"], "to_minute": b["minute_epoch"] + 60,
+                    "source_epoch": payload["source_epoch"]}
+                   for b in reversed(payload["bars"]) if b["status"] == "gap"
+                   and any(issue != "startup_or_reconnect_partial_minute" for issue in b["issues"])
+               ), "initial_session_history"),
+               "empty_minute_policy": payload["empty_minute_policy"]}
+    return {"stk_min_pole_chart_qry": rows, "_completed_bar_source": receipt}
+
+
+def selected_completed_bar_payload(request_code, *, now, consumer="widget", seed_fetch=None, minimum_bars=1):
+    if completed_bar_mode(request_code, consumer=consumer) == "rest":
+        return None
+    item = request_code[:6] + "_AL"
+    try:
+        result = read_shared_completed_bars(item, now=now)
+        if len(result["stk_min_pole_chart_qry"]) >= max(1, int(minimum_bars)) or seed_fetch is None:
+            return result
+        # A homogeneous bootstrap seed may cover startup, never be spliced
+        # into raw WS candles. Later WS gaps reuse it without repeated calls.
+        return shared_completed_bar_seed(item, now=now, fetch=seed_fetch,
+                                         missing_range=result["_completed_bar_source"]["missing_range"])
+    except FileNotFoundError as exc:
+        if seed_fetch is not None:
+            return shared_completed_bar_seed(item, now=now, fetch=seed_fetch)
+        raise RuntimeError("completed_ws_bars_unavailable:missing_artifact") from exc
+    except (OSError, ValueError, KeyError, TypeError, OverflowError) as exc:
+        reason = str(exc) if isinstance(exc, ValueError) and re.fullmatch(r"[A-Za-z0-9_:-]+", str(exc)) else type(exc).__name__
+        raise RuntimeError("completed_ws_bars_unavailable:" + reason) from exc
+
+
+def shared_completed_bar_seed(request_code, *, now, fetch, root=None, missing_range="initial_session_history"):
+    """One successful homogeneous REST seed per exact session across processes.
+
+    flock is released on process death; contenders do not wait or issue calls.
+    Failures retain a bounded retry receipt and the existing client admission
+    policy still owns rate limits. Quiet WS history never enters this helper.
+    """
+    import fcntl
+    from src.engine.scalping.micro_reversion.completed_bars import atomic_json, digest
+    now = now.astimezone(KST)
+    session = _bar_session(now)
+    if not re.fullmatch(r"[0-9]{6}_AL", request_code):
+        raise ValueError("completed_bar_seed_scope_invalid")
+    key = {"date": now.date().isoformat(), "item": request_code, "session": session,
+           "adjustment": "adjusted_1", "missing_range": missing_range}
+    folder = Path(root or COMPLETED_BARS_ROOT) / ".seed" / now.date().isoformat()
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / (digest(key) + ".json")
+    # Different missing ranges share one session admission lease as well.
+    lease_key = {k: v for k, v in key.items() if k != "missing_range"}
+    with (folder / (digest(lease_key) + ".lock")).open("a+") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RuntimeError("completed_bar_seed_lease_busy") from exc
+        try:
+            cached = _bounded_json(path)
+        except FileNotFoundError:
+            cached = {}
+        if cached:
+            expected = cached.pop("content_sha256")
+            if digest(cached) != expected or cached["key"] != key:
+                raise ValueError("completed_bar_seed_receipt_invalid")
+            if cached["status"] == "complete":
+                if not cached["received_at_epoch"] <= now.timestamp():
+                    raise ValueError("completed_bar_seed_future")
+                result = cached["result"]
+                result["_completed_bar_source"] = {**result["_completed_bar_source"], "rest_request_count": 0, "seed_reused": True}
+                return result
+            if time.time() < cached["retry_after_epoch"]:
+                raise RuntimeError("completed_bar_seed_retry_deferred")
+        started = time.time()
+        receipt = {"key": key, "owner": process_generation(os.getpid()), "status": "inflight",
+                   "requested_at_epoch": started, "retry_after_epoch": started + 60,
+                   "requested_range_end": now.replace(second=0,microsecond=0).isoformat()}
+        receipt["content_sha256"] = digest(receipt)
+        atomic_json(path, receipt)
+        try:
+            result = fetch(request_code)
+            if not isinstance(result, dict) or not isinstance(result.get("stk_min_pole_chart_qry"), list):
+                raise ValueError("completed_bar_seed_result_invalid")
+            received = time.time()
+            if datetime.fromtimestamp(received,KST).date() != now.date() or _bar_session(datetime.fromtimestamp(received,KST)) != session:
+                raise ValueError("completed_bar_seed_session_changed")
+            # Never combine adjusted REST and raw WS price bases.
+            result = {**result, "_completed_bar_source": {
+                "source": "kiwoom_ka10080_AL_seed", "request_code": request_code,
+                "adjustment": "adjusted_1", "session": session,
+                "available_at_epoch": received, "received_at_epoch": received,
+                "content_sha256": digest(result), "rest_request_count": 1,
+                "missing_range": key["missing_range"], "merge_policy": "homogeneous_only"}}
+            receipt.pop("content_sha256")
+            receipt.update(status="complete", received_at_epoch=received, result=result)
+            receipt["content_sha256"] = digest(receipt)
+            atomic_json(path, receipt)
+            return result
+        except Exception:
+            # The inflight receipt supplies crash/failure cooldown. No cached
+            # success is fabricated and no recursive retry is issued here.
+            raise

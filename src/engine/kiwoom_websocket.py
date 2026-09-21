@@ -399,6 +399,8 @@ class KiwoomWSManager:
         self._persistent_repair_overflow_codes = OrderedDict()
         self._last_persistent_repair_rebuild_ts = 0.0
         self._registered_items_by_code = {}
+        self._registered_item_epochs = {}
+        self._registered_item_types = {}
         self._implicit_runtime_route_codes = set()
         self._runtime_primary_items_by_code = {}
         self._last_runtime_route_reconcile_ts = float("-inf")
@@ -1724,7 +1726,19 @@ class KiwoomWSManager:
                     and non_trade_type_fresh
                     and (last_0b_age_sec is None or last_0b_age_sec >= stale_after_sec)
                 )
-                if subscribed and freshness_state == "no_tick":
+                session_clock = datetime.fromtimestamp(now_value, KST).strftime("%H:%M")
+                quiet_session_wait = bool(
+                    (session_clock < "09:00" or session_clock >= "15:20")
+                    and subscribed and registered_items
+                    and self.websocket is not None and self._session_ready.is_set()
+                    and all(getattr(self, "_registered_item_epochs", {}).get(item) == self._market_data_transport_epoch
+                            and set(required_realtime_types).issubset(getattr(self, "_registered_item_types", {}).get(item, ()))
+                            for item in registered_items)
+                    and (freshness_state in {"no_tick", "stale"} or not required_realtime_received)
+                )
+                if quiet_session_wait:
+                    repair_reason = "quiet_session_waiting_event_no_transport_failure"
+                elif subscribed and freshness_state == "no_tick":
                     repair_reason = "subscription_no_tick"
                 elif subscribed and not required_realtime_received:
                     repair_reason = "subscription_required_realtime_missing"
@@ -1767,7 +1781,8 @@ class KiwoomWSManager:
                         > 1,
                         "route_repair_policy": "remove_then_reg_required_for_route_transition",
                         "total_registered_item_count": registered_item_count,
-                        "repair_recommended": subscribed
+                        "quiet_session_wait": quiet_session_wait,
+                        "repair_recommended": subscribed and not quiet_session_wait
                         and (
                             freshness_state in {"no_tick", "stale"}
                             or not required_realtime_received
@@ -1775,7 +1790,7 @@ class KiwoomWSManager:
                         "repair_reason": repair_reason,
                         "recommended_repair": (
                             "remove_then_reg_backoff"
-                            if subscribed
+                            if subscribed and not quiet_session_wait
                             and (
                                 freshness_state in {"no_tick", "stale"}
                                 or not required_realtime_received
@@ -2323,9 +2338,12 @@ class KiwoomWSManager:
                         "transport_epoch": self._market_data_transport_epoch,
                         "registered_items": sorted({item for items in self._registered_items_by_code.values() for item in items}),
                         "registration_basis": "local_sent_registry_not_broker_ack",
-                        "connection_available": self.websocket is not None,
+                        "connection_available": self.websocket is not None and self._session_ready.is_set(),
                         "capture_lock_ms": round((time.monotonic() - capture_started) * 1000, 3),
                     }
+                collector = self._micro_reversion_forward_collector
+                if collector is not None and hasattr(collector, "completed_bar_integrity"):
+                    shared_transport_producer["completed_bar_integrity"] = collector.completed_bar_integrity()
                 shared_transport_producer["configured_item_budget"] = self._max_registered_item_count()
                 written_snapshot = write_ws_snapshot(
                     realtime_snapshot,
@@ -3053,6 +3071,9 @@ class KiwoomWSManager:
             )
             self._enqueue_state_event("WS_RECONNECTED", {})
 
+        collector = self._micro_reversion_forward_collector
+        if collector is not None and hasattr(collector, "bind_completed_bar_transport_epoch"):
+            collector.bind_completed_bar_transport_epoch(self._market_data_transport_epoch)
         self.is_reconnected = True
 
         exec_reg_packet = {
@@ -4776,6 +4797,10 @@ class KiwoomWSManager:
                     ],
                 }
                 await self.websocket.send(json.dumps(remove_packet))
+                with self.lock:
+                    for item in batch_items:
+                        getattr(self, "_registered_item_epochs", {}).pop(item, None)
+                        getattr(self, "_registered_item_types", {}).pop(item, None)
                 now_ts = time.time()
                 with self.lock:
                     for code in normalized_codes:
@@ -5010,6 +5035,7 @@ class KiwoomWSManager:
                                 code in self._implicit_runtime_route_codes
                                 and f"{code}_AL" in incoming_items
                                 and integrated_required
+                                and not observation_only
                             ):
                                 self._runtime_integrated_route_active = True
                                 self._runtime_primary_items_by_code[code] = f"{code}_AL"
@@ -5031,6 +5057,16 @@ class KiwoomWSManager:
                                     )
                                 )
                             self._registered_items_by_code[code] = registered_items
+                            if not hasattr(self, "_registered_item_epochs"):
+                                self._registered_item_epochs = {}
+                            if not hasattr(self, "_registered_item_types"):
+                                self._registered_item_types = {}
+                            for item in incoming_items:
+                                prior_types = (self._registered_item_types.get(item, ())
+                                    if self._registered_item_epochs.get(item) == self._market_data_transport_epoch
+                                    and not remove_before_reg and code not in replacement_code_set else ())
+                                self._registered_item_types[item] = tuple(sorted(set(prior_types) | set(requested_realtime_types)))
+                                self._registered_item_epochs[item] = self._market_data_transport_epoch
                             target = self._ensure_target_defaults(code)
                             if "0w" in requested_realtime_types:
                                 target["program_subscription_requested_at"] = (
@@ -5260,6 +5296,29 @@ class KiwoomWSManager:
                 requested_items = requested_items_by_code.setdefault(normalized, [])
                 if requested_item not in requested_items:
                     requested_items.append(requested_item)
+        source_key = str(source or "").lower()
+        requested_types = set(self._normalize_required_realtime_types(
+            required_realtime_types or realtime_types) or ("0B", "0D", "0w", "0F"))
+        clock = datetime.now(KST).strftime("%H:%M")
+        quiet_session = clock < "09:00" or clock >= "15:20"
+        # Age-only persistent repair cannot refresh a healthy quiet tape.
+        # Explicit route/type requests and owner transitions still proceed.
+        if (quiet_session and (repair_cycle == "persistent_ws_gap" or "persistent" in source_key)
+                and not explicit_alternate_route and not observation_only
+                and self.websocket is not None and self._session_ready.is_set()):
+            with self.lock:
+                epochs = getattr(self, "_registered_item_epochs", {})
+                normalized_codes = [code for code in normalized_codes if
+                    code in self._micro_reversion_observation_only_codes
+                    or not self._registered_items_by_code.get(code)
+                    or any(epochs.get(item) != self._market_data_transport_epoch
+                           or not requested_types.issubset(getattr(self, "_registered_item_types", {}).get(item, ()))
+                           for item in self._registered_items_by_code.get(code, ()))
+                    or any(item.endswith(("_AL", "_NX")) and item not in
+                           self._registered_items_by_code.get(code, ())
+                           for item in requested_items_by_code.get(code, ()))]
+            if not normalized_codes:
+                return
         with self.lock:
             existing_source_only = set(normalized_codes).intersection(
                 self._micro_reversion_observation_only_codes

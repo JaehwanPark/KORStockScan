@@ -455,17 +455,25 @@ class WidgetSymbolRuntimeCollector:
         observed_at: datetime,
         context: Any,
     ) -> list[MinuteBar]:
+        if isinstance(client, KiwoomReadOnlyClient):
+            signal = (self._policies.get(symbol) or {}).get("signal_policy") or {}
+            client.completed_bar_minimum_bars = int(signal.get("minimum_history_bars", signal.get("lookback_bars", context.minimum_bars)))
         minute_key = observed_at.strftime("%Y%m%d%H%M")
         request_code = str(context.request_code)
         cache_key = f"{symbol}:{request_code}"
         cached = self._minute_cache.get(cache_key)
-        if cached is None or cached[0] != minute_key:
+        from src.trading.market.shared_ws_snapshot import completed_bar_mode
+        if completed_bar_mode(request_code) == "ws" or cached is None or cached[0] != minute_key:
+            self._minute_cache.pop(cache_key, None)
             payload = client.post(
                 "/api/dostk/chart",
                 "ka10080",
                 {"stk_cd": request_code, "tic_scope": "1", "upd_stkpc_tp": "1"},
             )
             self._minute_cache[cache_key] = (minute_key, payload)
+        if not hasattr(self, "_completed_bar_receipts"):
+            self._completed_bar_receipts = {}
+        self._completed_bar_receipts[symbol] = self._minute_cache[cache_key][1].get("_completed_bar_source", {})
         bars = completed_session_bars(
             self._minute_cache[cache_key][1].get("stk_min_pole_chart_qry"),
             observed_at=observed_at,
@@ -800,6 +808,7 @@ class WidgetSymbolRuntimeCollector:
             )
         }
         payload["completed_bars"] = self._completed_bar_buffers.pop(symbol, [])
+        payload["completed_bar_source"] = getattr(self, "_completed_bar_receipts", {}).get(symbol, {})
         attach_bar_delta(payload, previous)
         payload["producer_code_sha256"] = hashlib.sha256(
             Path(__file__).read_bytes()
@@ -939,6 +948,8 @@ class WidgetSymbolRuntimeCollector:
     @staticmethod
     def _collection_failure_reason(exc: BaseException) -> str:
         message = str(exc)
+        if message.startswith(("widget_ws_input_unavailable:", "completed_ws_bars_unavailable:", "completed_bar_seed_")):
+            return message
         if message == "widget_request_budget_exhausted":
             return "request_budget_deferred"
         if message == "widget_kiwoom_429_cooldown":
@@ -972,6 +983,9 @@ class WidgetSymbolRuntimeCollector:
         client: KiwoomReadOnlyClient,
         observed_at: datetime,
     ) -> dict[str, Any]:
+        # A receipt belongs to the request made for this symbol, not its predecessor.
+        if isinstance(client, KiwoomReadOnlyClient):
+            client.last_request_receipt = {}
         if symbol in self._ws_transport_owners:
             self._ws_transport_owners[symbol]._transport_comparison = None
         contract = self._contract(symbol)
@@ -1040,7 +1054,16 @@ class WidgetSymbolRuntimeCollector:
             return payload
         transport = {}
         if widget_market_data_source(context) == "ws":
-            transport = read_shared_widget_quote(context, now_ts=observed_at.timestamp())
+            transport = read_shared_widget_quote(
+                context, now_ts=None if isinstance(client, KiwoomReadOnlyClient) else observed_at.timestamp(),
+            )
+            source_observed_at = datetime.fromtimestamp(
+                transport.get("evaluated_at_epoch", observed_at.timestamp()), KST,
+            )
+            if (source_observed_at < observed_at or source_observed_at.date() != observed_at.date()
+                    or contract.session_context(source_observed_at) != context):
+                raise RuntimeError("widget_read_scope_or_clock_changed_during_collection")
+            observed_at = source_observed_at
             owner = self._ws_transport_owners.setdefault(symbol, SimpleNamespace())
             owner._transport_comparison = transport
         ws_inputs = select_widget_ws_inputs(
@@ -1101,6 +1124,7 @@ class WidgetSymbolRuntimeCollector:
             "request_code": context.request_code,
             "market_session": market_session,
             "observed_at_kst": observed_at.isoformat(),
+            "completed_bar_source": getattr(self, "_completed_bar_receipts", {}).get(symbol, {}),
             "completed_bars": self._completed_bar_buffers.get(symbol, []),
         }
         attach_bar_delta(source_check, previous_bar_state)

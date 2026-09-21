@@ -990,16 +990,20 @@ def test_non_actionable_reset_requires_fresh_two_observation_promotion():
     )
 
 
+@pytest.mark.parametrize("clock_mode", ["explicit", "live", "session_change"])
 @pytest.mark.parametrize("source_mode", ["rest", "ws"])
 def test_collector_uses_cached_token_and_auxiliary_read_only_market_requests(
-    monkeypatch, tmp_path, source_mode
+    monkeypatch, tmp_path, source_mode, clock_mode
 ):
     now = datetime(2026, 8, 5, 10, 0, 5, tzinfo=KST)
     monkeypatch.setenv("KORSTOCKSCAN_WIDGET_MARKET_DATA_SOURCE", source_mode)
     if source_mode == "ws":
         from src.tests.test_quote_consistency import _adoptable_widget_transport
-        monkeypatch.setattr(doosan, "read_shared_widget_quote", lambda context, **kw:
-            _adoptable_widget_transport(now, "034020", 98500, 98000))
+        def read_quote(context, **kwargs):
+            assert kwargs["now_ts"] == (now.timestamp() if clock_mode == "explicit" else None)
+            return {**_adoptable_widget_transport(now, "034020", 98500, 98000),
+                    "evaluated_at_epoch": now.timestamp()}
+        monkeypatch.setattr(doosan, "read_shared_widget_quote", read_quote)
     monkeypatch.setattr(time, "time", lambda: now.timestamp())
     monkeypatch.setattr(
         doosan.kiwoom_utils, "get_cached_kiwoom_token", lambda _: "TOKEN"
@@ -1153,7 +1157,15 @@ def test_collector_uses_cached_token_and_auxiliary_read_only_market_requests(
         external_provider=ExternalProvider(),
         request_session=session,
     )
-    payload = collector.collect_once(now)
+    if clock_mode != "explicit":
+        end = now.replace(hour=15, minute=31) if clock_mode == "session_change" else now + timedelta(seconds=1)
+        clocks = iter((now - timedelta(seconds=2), end))
+        monkeypatch.setattr(doosan, "_now_kst", lambda: next(clocks))
+    if clock_mode == "session_change":
+        with pytest.raises(RuntimeError, match="scope_or_clock_changed"):
+            collector.collect_once()
+        return
+    payload = collector.collect_once(now if clock_mode == "explicit" else None)
 
     assert payload["symbol"] == "034020"
     assert payload["market_data_transport"]["selected_input"] == ("shared_ws_snapshot" if source_mode == "ws" else "existing_rest")
