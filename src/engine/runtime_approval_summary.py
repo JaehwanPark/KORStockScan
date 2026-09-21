@@ -386,6 +386,22 @@ def _economic_section(owner: str, payload: dict[str, Any]) -> dict[str, Any]:
             if not promotion_errors(proposal, proposal.get('parent_policy') or {}, tuple(scope.split('|'))):
                 arm = proposal['evidence']['holdout']
                 measured = arm['economics']
+                if measured.get('status') == 'supported_machine_admission':
+                    # Machine selection is independent of auxiliary/portfolio replay.
+                    # Preserve its diagnostics without asserting realized/portfolio EV.
+                    return dict(status='unsupported_portfolio_scope', candidate_count=1,
+                        paired_sample_count=None, allowed_runtime_apply=False,
+                        metric_role='sim_probe_ev', selected_scope=scope,
+                        diagnostic_machine_selection=dict(
+                            status=result.get('status'),
+                            selection_basis=result.get('selection_basis'),
+                            auxiliary_ai_required=False,
+                            evaluated_candidate_count=result.get('evaluated_candidate_count'),
+                            train=(proposal['evidence'].get('train') or {}).get('economics'),
+                            holdout=measured),
+                        blocker='machine_policy_selected_portfolio_economics_separate',
+                        future_generation_contract_verified=False,
+                        closure_test='natural_machine_policy_outcomes')
                 old, new = measured['incumbent'], measured['candidate']
                 return dict(status='validated_edge', candidate_count=1,
                     paired_sample_count=len(arm['opportunity_ids']),
@@ -678,6 +694,7 @@ def _economic_projection(owner: str, payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "comparison_status": status,
         "diagnostic_terminal_proxy": economic.get("diagnostic_terminal_proxy"),
+        "diagnostic_machine_selection": economic.get("diagnostic_machine_selection"),
         "future_contract_state": "verified_supported_scope" if future_contract_verified else "unverified_requires_owner_evidence",
         "implementation_incomplete_inferred_from_historical_gap": False,
         "raw_statuses": _status_texts(owner, payload),

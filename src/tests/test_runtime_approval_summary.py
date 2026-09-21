@@ -686,3 +686,23 @@ def test_pid_consumption_requires_matching_effective_date_bootstrap(monkeypatch,
     state, natural, receipt = mod._runtime_consumption_state(day, sources)
     assert state == "rejected" and natural == "not_due"
     assert receipt["actual_pid_consumed"] is False
+
+
+def test_machine_admission_selection_is_not_portfolio_edge(monkeypatch):
+    from src.engine.scalping import entry_strategy_policy as strategy
+    measured = dict(status="supported_machine_admission", win_rate_pct=None,
+                    selected_path_ev_pct=None, selected_opportunity_count=0)
+    train = dict(status="supported_machine_admission", win_rate_pct=60., selected_path_ev_pct=-.40886)
+    result = dict(status="selected_machine_policy", promotion_pass=True,
+        selection_basis="win_rate_then_net_ev_without_profit_floor", evaluated_candidate_count=94,
+        candidate={"parent_policy": {}, "evidence": {"train": {"economics": train}, "holdout": {"economics": measured}}})
+    monkeypatch.setattr(strategy, "select_report_candidate", lambda _: ("KRX|KRX_REGULAR", result))
+    monkeypatch.setattr(strategy, "promotion_errors", lambda *args: [])
+    row = mod._economic_projection("main_mechanistic_entry", {})
+    assert row["comparison_status"] == "unsupported_scope"
+    assert row["candidate_count"] == 1
+    assert row["policy_apply_allowed"] is False
+    assert row["candidate_cost_adjusted_ev_pct"] is None
+    assert row["actual_net_profit_improvement"] is None
+    assert row["diagnostic_machine_selection"]["train"]["win_rate_pct"] == 60.
+    assert row["diagnostic_machine_selection"]["holdout"]["selected_opportunity_count"] == 0

@@ -78,3 +78,9 @@ Episode 복구는23:09:19에 공동 명단 검증 단계를 통과했으나 `low
 
 - 9/21 machine 관측1,502건 중 전략 원시 입력 포함110건 모두 redacted였다. 원인은 `setup_evidence.strategy_raw_input.runtime_context`의 holding/entry/lifecycle 공개 cache 식별자를 일반 비밀 token으로 분류한 것. 나머지1,392건은 전략 원시 입력이 없는 원천 차단 관측으로 분리한다.
 - 기존 검증된 exact payload와 동일한 공개 식별자 allowlist를 정확한 중첩 경로에도 적용했다. 값의 형식 검증, 실제 secret 및 다른 경로 차단은 유지한다. 원본 과거 JSONL은 수정하지 않는다. 앞으로의 자연 관측에서 보존 여부를 확인해야 하며, 보안/수집 회귀82건 PASS.
+
+### 메인 정책 생성 및 최종 요약 소비자 수리
+
+- 00:41 main 평가 완료(약26분), KRX 후보94개 비교 후 신규 기본정책 `cdeff4e8...` 발행/활성 포인터 갱신. 선택 훈련 표본5기회·승률60%·비용후 평균−0.40886%; 최신 holdout 신규 ENTER_NOW0건으로 holdout EV/승률은 null이다. 이는 실현손익/포트폴리오 개선 증거가 아니다.
+- 원천 신선도 마감도 완료했으나 00:44 summary가 machine admission 결과에 없는 portfolio incumbent/candidate 객체를 읽어 KeyError. 기계판정 선택 진단과 별도 포트폴리오 비교를 분리했다. 요약/checklist/verifier95건 PASS.
+- machine 재시도에서도 expansion/attribution/hysteresis/timing/approval/research closure는 모두0, builder만1. 현재 해시/closure를 검증한 분석 결과를 재사용하고 summary/checklist/terminal만 복구한다. 메인 재실행 역시 완료된 고비용 producer를 재계산하지 않고 현재 직접 근거의 strict 검증으로 닫는다.
