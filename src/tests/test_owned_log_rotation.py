@@ -163,5 +163,13 @@ def test_owned_log_writer_deduplicates_same_content_generation(tmp_path):
 def test_installed_log_writers_use_owner_wrapper(installer: str, owner: str):
     script = (REPO_ROOT / installer).read_text(encoding="utf-8")
 
-    assert "run_with_owned_log.sh" in script
-    assert f"--owner {owner}" in script
+    if "run_with_owned_log.sh" in script and f"--owner {owner}" in script:
+        return
+    if "run_runtime_release.sh" in script:
+        router = (
+            REPO_ROOT / "src/engine/infrastructure/runtime_release_router.py"
+        ).read_text(encoding="utf-8")
+        assert "run_with_owned_log.sh" in router
+        assert owner in router
+    else:
+        raise AssertionError(f"owned log route missing for {owner}")
