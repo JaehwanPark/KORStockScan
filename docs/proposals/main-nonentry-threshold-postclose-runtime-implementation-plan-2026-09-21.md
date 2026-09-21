@@ -1,7 +1,7 @@
 # 메인 BLOCK/RECHECK 전환 임계치 장후 학습·런타임 구현계획
 
 작성일: 2026-09-21 KST
-상태: **BLOCK/RECHECK→ENTER_NOW 기회비용만으로 기계정책을 선정·적용하고 장후 자동 갱신까지 연결한다.** 보조 AI는 VETO→PASS 기회비용을 별도 작업으로 튜닝하며, 다른 하드 가드·scale-in·청산 튜닝은 보류한다. 최신 사용자 기준은 비용 후 이익 0 이상인 후보에서 승률 우선, 같은 승률이면 이익 우선이다. 정책 생성·적용·재기동·PID 소비·다음 정책까지 승계를 현재 완료 범위로 둔다.
+상태: **BLOCK/RECHECK→ENTER_NOW 기회비용만으로 기계정책을 선정·적용하고 장후 자동 갱신까지 연결한다.** 보조 AI는 VETO→PASS 기회비용을 별도 작업으로 튜닝하며, 다른 하드 가드·scale-in·청산 튜닝은 보류한다. 최신 사용자 기준은 **평균이익이 음수여도 유효 후보 중 승률 우선, 같은 승률이면 평균이익 우선으로 최상위 정책을 갱신·적용**하는 것이다. 손익0·승률60%·직전 보고서 수치를 고정 갱신 문턱으로 두지 않는다. 정책 생성·적용·재기동·PID 소비·다음 정책까지 승계를 현재 완료 범위로 둔다.
 실행 owner: [당일 체크리스트의 DirectFamilySourceRepairMainMechanisticEntry](../checklists/2026-09-21-stage2-todo-checklist.md). 기존 원천·경제성 acceptance를 보존하면서 아래 구현 범위를 연결한다.
 
 ## 1. 목표와 완료의 의미
@@ -11,7 +11,7 @@
 1. source-valid 당시 원시 입력과 실제 main kernel로 후보별 action을 다시 계산한다. source/주문 안전 조건은 유지한다.
 2. 기존 기계 관측의 실행 가능한 기준가격·고정 목표/손실 경계·왕복 비용을 사용해 즉시 진입 판단의 가격경로 가치를 비교한다. 후보별 AI 응답·체결 원장·portfolio 재생이 없어도 이 기계단계 비교와 정책 선정을 수행한다.
 3. train에서 유형 분류·임계치 조합을 함께 선택하고, 시간순 holdout이 있으면 선택 후 결과를 별도로 기록한다. 작은 표본의 정책도 산출할 수 있으나 독립 검증 여부·범위·제외 수를 숨기지 않는다.
-4. 비용 후 평균 경로 이익이 0 이상인 후보 중 승률을 최우선으로 선택하고, 동률이면 평균 이익·기회비용 회복값·표본 수 순으로 비교한다. 선택한 전체 임계치·selector·상위 기본값과 입력/정책 hash, 비교 지표를 하나의 기계정책 산출물로 저장한다.
+4. 비용 후 평균 경로 이익의 부호와 관계없이 유효 후보 중 승률을 최우선으로 선택하고, 동률이면 평균 이익·기회비용 회복값·표본 수 순으로 비교한다. 선택한 전체 임계치·selector·상위 기본값과 입력/정책 hash, 비교 지표를 하나의 기계정책 산출물로 저장한다.
 5. 반복 리뷰·검증 후 기존 publisher/current generation으로 적용하고 배포·재기동 및 실제 PID의 동일 정책 소비를 확인한다. 장후 기존 기계 calibration 호출도 같은 선정 기준을 사용하고, 다음 적격 정책 또는 명시적 rollback까지 현재 정책을 승계한다.
 
 기존 `ai_action_outcome_calibration`과 `entry_strategy_policy`를 재사용한다. `--machine-policy-only --write`는 기계정책 파일만 만들며 `--activate-now`를 함께 지정하면 기존 검증·원자적 적용 경로를 사용한다. 보조 AI 호출/튜닝·후단 실행 재생은 선행조건이 아니다. 기존 `--machine-only` 전체 운영 평가와 구분한다. 이번 구현은 신규 module·서비스·scheduler를 만들지 않는다.
@@ -152,7 +152,7 @@ candidate마다 incumbent/candidate action의 3×3 전이표, 유일 기회 수,
 1. 등록된 설정 가능한 전략 좌표 전부의 유한 domain으로 constrained joint search 공간을 구성한다. source 미지원 축은 필드와 원인을 명시하고 전체 완료라고 하지 않는다. 서로 다른 전략 family의 3개 이상 좌표 변경도 생성할 수 있어야 하며, 단일좌표/쌍은 초기 탐색 순서일 뿐 후보 자격 제한이 아니다.
 2. 기존 calibration owner 안에서 결정적 joint traversal과 checkpoint를 구현한다. 무효 범위/모순 recipe는 제외하고, 동일 전체 action·RECHECK 시간순서·candidate AI context·후단 실행 및 경제성을 만드는 것이 입증된 후보만 중복제거한다. action 수가 같다는 이유로 사실/시점이 다른 후보를 합치지 않는다. 단일좌표에서 이익이 없거나 전환0이라는 이유로 그 좌표의 joint 분기를 자르지 않는다.
 3. 처음에는 유망한 조합을 먼저 평가하되 남은 joint frontier를 보존한다. 분기 상한으로 pruning하려면 실제 사용 목적함수의 유효 upper bound를 검증해야 하며, 증명되지 않은 휴리스틱은 순서에만 사용한다. 작은 domain의 완전열거 oracle과 같은 최선 조합이 나오는지 검사한다. 모든 guard를 끄는 candidate나 전략 외 좌표 변경은 없다.
-4. 현재 calibration은 §6.3의 기계단계 paired admission 개선으로 순위를 정한다. 선택한 진입의 비용 반영 경로 평균이 0 이상인지와 기존 tail guard를 확인하고 승률을 최우선 비교한다. portfolio/AI 이후 순익은 현재 선정 조건에서 제외한다. 거의 동률이면 더 단순하고 incumbent에 가까운 조합을 택한다. 각 좌표 변화는 비선형적일 수 있으므로 임의 단조성을 가정하지 않는다.
+4. 현재 calibration은 §6.3의 기계단계 paired admission 개선으로 순위를 정한다. 선택한 진입의 비용 반영 평균·최악 경로는 수치로 기록하고 승률을 최우선 비교한다. 기계정책 선정에 절대 손익 하한은 두지 않으며 실제 런타임 source/주문/hard safety는 유지한다. portfolio/AI 이후 순익은 현재 선정 조건에서 제외한다. 거의 동률이면 더 단순하고 incumbent에 가까운 조합을 택한다. 각 좌표 변화는 비선형적일 수 있으므로 임의 단조성을 가정하지 않는다.
 5. grid/확장 규칙·목적함수·frontier·실행 budget·seed를 hash한다. 예산 소진이면 `search_incomplete`와 explored/pruned/remaining 수를 보존한다. 검증된 최선 후보가 있으면 §6.4를 통과해 적용할 수 있으며 전체 탐색 완료를 새로운 적용 gate로 붙이지 않는다. 이 경우 `best_validated_so_far`로 표시하고 전역 최적이라고 하지 않는다.
 6. `domain_optimal`은 선언된 유한 domain을 완전 탐색하거나 유효 pruning으로 닫은 경우만 사용한다. 연속 전체 공간/미관측 시장의 절대 최적 보장은 하지 않는다. 적격 후보가 먼저 나와도 이후 정상 장후 실행에서 남은 범위·새 원천을 계속 평가한다.
 7. train에서 후보·domain 확장·상호작용·계층 보정을 고정하고, untouched chronological holdout으로 한 번 확인한다. 실패 후 같은 holdout으로 후보를 계속 골라내지 않는다. 다음 평가에서는 새 독립 날짜/구간을 holdout으로 사용하고 과거 holdout은 train 편입 이력을 남긴다. 미지원 원천과 제외 분모는 동일 정책 비교에서 대사한다.
@@ -161,15 +161,15 @@ candidate마다 incumbent/candidate action의 3×3 전이표, 유일 기회 수,
 
 기존 labeler가 검증한 실행가능 ask 기준의 `entry_quality_path_v1`과 왕복 비용을 사용한다. 목표 먼저 도달은 `gross_net_target_pct minus full cost`, 손실 먼저 도달은 `exact_stop_distance_pct minus full cost`다. 목표·비용·선착순은 같은 저장 경로에서 읽고 비용 계약과 일치해야 한다. 비용보다 낮을 수 있는 별도 고정 gross 0.3% 비교 목표로 대체하지 않는다. 기존 순이익 목표 경로를 평가에 재사용하며 실제 청산 정책은 변경하지 않는다. 동시 도달·미도달·비용 결손은 null로 남겨 같은 비교 모집단에서 제외한다. 미래 고점/MFE를 체결이나 실현이익으로 사용하지 않는다.
 
-평가 모집단은 **기존 기계판정이 BLOCK/RECHECK인 기회만**이다. 기존 ENTER_NOW를 줄인 이익은 점수에 포함하지 않는다. 보조 판정기의 VETO→PASS 기회비용, 다른 하드 가드·scale-in·청산 튜닝은 각각 후속 분리 작업이다. 평가 단위는 **그 시점에 즉시 진입할지**다. ENTER_NOW는 해당 비용 반영 경로 값, BLOCK/RECHECK는 이 즉시 진입 실험에서 노출하지 않음으로 비교한다. 이는 RECHECK 이후 재진입·watch 종료 손익을 0으로 확정한다는 뜻이 아니다. 반복 attempt는 기회 내부에서 평균하고 기회마다 동일 가중치를 부여한다. 선택 진입의 비용 반영 평균 경로 값은 0 이상을 요구한다. 주 지표는 `win_rate_pct`이며 같은 승률이면 평균 경로 이익, `paired_admission_delta_pct`, 유일 기회 수 순으로 선택한다. 비용 후 이익이 0인 표본은 허용하되 승리로 세지 않는다. 기존 catastrophic 경계도 유지한다. 승률은 기회별 평균으로 계산하여 반복 RECHECK가 가중치를 늘리지 않는다. 포트폴리오 원화 순익이나 실제 체결률은 산출하지 않는다.
+평가 모집단은 **기존 기계판정이 BLOCK/RECHECK인 기회만**이다. 기존 ENTER_NOW를 줄인 이익은 점수에 포함하지 않는다. 보조 판정기의 VETO→PASS 기회비용, 다른 하드 가드·scale-in·청산 튜닝은 각각 후속 분리 작업이다. 평가 단위는 **그 시점에 즉시 진입할지**다. ENTER_NOW는 해당 비용 반영 경로 값, BLOCK/RECHECK는 이 즉시 진입 실험에서 노출하지 않음으로 비교한다. 이는 RECHECK 이후 재진입·watch 종료 손익을 0으로 확정한다는 뜻이 아니다. 반복 attempt는 기회 내부에서 평균하고 기회마다 동일 가중치를 부여한다. 선택 진입의 비용 반영 평균 경로 값은 음수도 허용한다. 주 지표는 `win_rate_pct`이며 같은 승률이면 평균 경로 이익, `paired_admission_delta_pct`, 유일 기회 수 순으로 선택한다. 비용 후 이익이 0인 표본은 허용하되 승리로 세지 않는다. 평가 손익·최악 경로에 고정 하한을 추가하지 않는다. 실제 런타임의 hard/protect/emergency·주문 안전 조건은 유지한다. 승률은 기회별 평균으로 계산하여 반복 RECHECK가 가중치를 늘리지 않는다. 포트폴리오 원화 순익이나 실제 체결률은 산출하지 않는다.
 
 후보 AI PASS/VETO가 있든 없든 같은 기계단계 지표를 사용한다. 저장된 기존 AI 판정은 후보 점수에 포함하지 않는다. 지원 원시 입력이 없는 좌표는 incumbent에 고정해 실패 후보로 탐색 예산을 소모하지 않고, 미지원 좌표 목록을 함께 저장한다. train에서 선정한 정책과 holdout의 관측 결과를 구별한다.
 
 ### 6.4 기계정책 적용과 후속 전체 운영 평가의 분리
 
-현재 기계정책 적용은 parent/scope·원시 입력·정책/evidence hash·비용 후 경로 이익 0 이상·승률·시간순 검증을 확인한다. AI verdict·원화 portfolio 순익·실체결은 필수조건이 아니다. holdout이 있으면 정책을 고른 후 검증하며 관측된 음수 이익을 숨기지 않고 해당 후속 정책은 적용하지 않는다. 별도 5종목/5일/최소10bp gate는 추가하지 않는다. 다음의 전체 운영 순익 기준은 후속 평가용이며 기계단계 gate로 재사용하지 않는다.
+현재 기계정책 적용은 parent/scope·원시 입력·정책/evidence hash·유효한 비용 후 경로와 승률·시간순 분리를 확인한다. 손익0이나 과거 승률60%를 적용 문턱으로 사용하지 않는다. AI verdict·원화 portfolio 순익·실체결은 필수조건이 아니다. holdout이 있으면 train에서 정책을 고른 후 같은 정책을 평가하며, 관측된 음수 이익도 표시한 상태로 적용할 수 있다. holdout을 반복해서 보고 후보를 다시 고르지는 않는다. 매 회차 평가한 유효 후보의 승률 우선 최상위를 적용하고, 후보 없음/원천 결손/동일 정책이면 현재 정책을 승계한다. 별도 5종목/5일/최소10bp gate는 추가하지 않는다. 다음의 전체 운영 순익 기준은 후속 평가용이며 기계단계 gate로 재사용하지 않는다.
 
-연구와 후보 생성에는 경제성 표본 floor를 두지 않는다. 유효 raw 한 기회부터 계산하고 부족한 부분을 표시한다. **새 기본 정책의 갱신은 아래 하나의 버전 있는 최소 계약을 evaluator→publisher→activation→loader가 공유**한다. 기존 서로 다른 family의 floor를 합산하거나 validator에서 옛10bp/5종목/5일 조건을 다시 요구하지 않는다. 이 변경은 신규 전략 정책의 계약이며 frozen legacy 정책의 과거 증거를 다시 쓰지 않는다.
+연구와 후보 생성에는 경제성 표본 floor를 두지 않는다. 유효 raw 한 기회부터 계산하고 부족한 부분을 표시한다. **현재 기계정책의 갱신은 위 손익 하한 없는 계약을 evaluator→publisher→activation→loader가 공유**한다. 아래 표의 순익·표본 기준은 후속 전체 운영 평가용이며 현재 기계정책의 선행조건이 아니다. 기존 서로 다른 family의 floor를 합산하거나 validator에서 옛10bp/5종목/5일 조건을 다시 요구하지 않는다. 이 변경은 신규 전략 정책의 계약이며 frozen legacy 정책의 과거 증거를 다시 쓰지 않는다.
 
 | 갱신 항목 | 신규 정책의 기준 |
 | --- | --- |
@@ -192,7 +192,7 @@ candidate마다 incumbent/candidate action의 3×3 전이표, 유일 기회 수,
 2. root가 먼저 승격되어야 child를 연구할 수 있는 순서를 강제하지 않는다. 공통값·분류 경계·각 leaf 전략 좌표를 함께 바꾸는 조합도 생성한다. 분류만 바꾸거나 개별 leaf만 바꾸면 이익이 없고 둘을 함께 바꾸면 개선되는 사례를 탐색해야 한다.
 3. 가격대×시총×유동성×변동성 전체 곱으로 독립 소표본 정책을 자동 생성하지 않는다. `분할 없음`을 항상 포함하고 parent 공유·train에서 고정한 shrinkage·단순한 tree의 동률 우선으로 복잡도를 제어한다. 구조의 제한은 검색 manifest에 공개하며 전역 최적 주장에 숨기지 않는다.
 4. calibration에서 선택한 전체 정책을 freeze하고 untouched holdout에서 한 번 재생한다. 유리한 leaf만 holdout을 본 뒤 다시 조합해 발행하지 않는다. §6.4 최소 지지는 기본적으로 전체 비교 정책에 적용하며 모든 leaf에 5종목/5일/실체결 floor를 복제하지 않는다. 새 child의 변경 효과를 지지할 유효 독립 관측이 없으면 parent를 사용하는 candidate를 train에서 정하고 검증한다.
-5. 유형별 기회/전환/회복이익/추가손실/미지원/parent 사용을 보고하되 순위는 전체 순익·paired 경제성·기존 위험 한도 기준이다. 일부 대형/고유동성 leaf의 이익으로 다른 leaf의 source gap·위험 한도 위반을 덮지 않는다. 각 leaf가 모든 날짜에서 양수여야 하는 새 gate도 만들지 않는다.
+5. 유형별 기회/전환/회복이익/추가손실/미지원/parent 사용을 보고하되 현재 기계정책의 순위는 승률 우선·동률 평균이익 기준이다. 일부 대형/고유동성 leaf의 이익으로 다른 leaf의 source gap·위험 한도 위반을 덮지 않는다. 각 leaf가 모든 날짜에서 양수여야 하는 새 gate도 만들지 않는다.
 6. 하나의 기회는 실제 selector가 택한 경로에서 한 번만 계수한다. 시간에 따른 유형 전환, RECHECK 지연, 동시 종목의 자본 경쟁, AI/가격/수량/exit 비용을 전체 정책의 event 순서로 재생한다. 겹치는 그룹별 평균 EV를 더해 전체 이익으로 표시하지 않는다.
 7. source-valid UNKNOWN/parent 사용도 평가 분모에 남긴다. 새로운 분류에 필요한 metadata가 없어졌을 때의 경로까지 검증하고 발행한다. 지원되지 않는 branch는 incumbent/parent 유지로 표현하며 한 축의 metadata 결손으로 다른 지원된 축의 학습을 중단하지 않는다.
 
@@ -253,13 +253,13 @@ wrapper 변경이 필요하면 [postclose wrapper](../../deploy/run_threshold_cy
 4. 당시 raw를 같게 둔 online/offline의 facts·risk·action·비교 receipt가 일치한다. 경계값 직전/같음/직후, 퍼센트/bp, 음수 비교, nullable 필드를 확인한다.
 5. RECHECK→새 입력→ENTER와 RECHECK→만료를 실제 state 경로로 확인한다. 동일 revision 중복·역순·정책 변경·worker 늦은 결과·final revalidation 실패에 이중 제출0.
 6. all-BLOCK이면서 유효 raw/CF가 있는 모집단에서도 후보 생성·평가를 실행한다. source-only 상류 개선과 AI/집행 미지원 상태를 분리한다. actual AI 미호출을 PASS로 합성하지 않는다.
-7. 총 BLOCK/RECHECK/ENTER 분모 보존, 같은 기회의 반복 이익 중복0, 회복 이익보다 추가 손실이 큰 후보 탈락, 선택된 진입 평균은 좋지만 전체 일별 순익이 나쁜 후보 탈락을 검증한다.
+7. 총 BLOCK/RECHECK/ENTER 분모 보존, 같은 기회의 반복 이익 중복0, 후보 모두 음수일 때도 승률 우선 최상위 선택, 동률이면 더 높은 평균이익 선택을 검증한다. 원화 portfolio 순익은 기계정책 갱신 gate가 아니다.
 8. 다음 시점 source를 과거에 소급하거나 다른 route/capital/price/exit를 섞은 사례, partial/미체결/censored/null을 0으로 바꾸는 사례를 거부한다.
 9. 전략 좌표 하나만 변경해도 facts/cache/bundle hash가 달라지고 publisher/PREOPEN/runtime이 같은 값을 소비한다. 구형 cache 완료 표시·정책 hash만 맞는 낡은 receipt로 성공하지 않는다.
 10. 미지원 schema, 범위 밖 값, 보호키 주입, 다른 scope/적용시각/parent, holdout 재사용, 평가가 끝나지 않은 후보의 적용을 거부한다. 전체 search 미완료와 개별 후보 검증 미완료는 구분한다. v1·기존 widget/episode/holding 소비의 golden parity를 보존한다.
 11. 단일축과 모든 2축 변경은 진입0이지만 서로 다른 family의 3축 이상을 함께 변경하면 source-valid ENTER_NOW와 양수 순익이 생기는 fixture를 필수로 둔다. joint search가 이를 찾고 소규모 완전열거의 최선 조합과 일치해야 한다. 시작 grid 밖의 유효 경계 확장, 순위가 낮은 좌표의 joint 기여, 비단조 목적함수도 검사한다.
 12. search 중단에도 독립 holdout을 통과한 best-so-far는 적용되고 미검증 후보는 적용되지 않는다. 다음 frontier 재개가 같은 holdout을 재선택에 오용하지 않아야 한다. 같은 action이지만 AI 입력·재확인 시점이 다른 후보를 잘못 중복제거하지 않는다.
-13. source가 유효한 all-BLOCK baseline에서 새 정책의 비용 후 소액 양수·paired 개선이 최소 지지 계약을 만족하면 기존10bp/5종목/5일/실체결 floor 때문에 거부되지 않는다. 실제 손실 후보·비용 누락·holdout 미래 누출은 여전히 거부한다. evaluator/publisher/activation/loader의 동일 판정을 검사한다.
+13. source가 유효한 all-BLOCK baseline에서 새 정책의 비용 후 소액 양수·paired 개선이 최소 지지 계약을 만족하면 기존10bp/5종목/5일/실체결 floor 때문에 거부되지 않는다. 음수 이익 후보도 비용/원천/시간순 계약이 유효하면 적용하며, 비용 누락·holdout 미래 누출은 거부한다. evaluator/publisher/activation/loader의 동일 판정을 검사한다.
 14. 장중 generation 전환→첫 소비 receipt→자정→다음 PREOPEN→주말/재시작→신규 후보 없음/실패까지 같은 기본 정책이 승계된다. 새 적격 generation만 원자적으로 교체하고 단순 파일 생성/날짜/compact-only 정책으로 되돌리지 않는다.
 15. 동시 publisher parent 충돌, 원자교체 중 crash, 새 candidate 손상과 활성 current 손상의 구분, inflight 구세대/새 attempt 신세대 분리, rollback과 기존 holding custody 보존을 검증한다.
 16. 가격/tick 비율·유동성·변동성·규모·시간·상태가 다른 source-valid fixture에서 각각 다른 leaf/전략 조합이 선택되고 online/offline receipt가 일치한다. threshold 숫자만 분리하고 selector를 runtime에 연결하지 않으면 실패한다.

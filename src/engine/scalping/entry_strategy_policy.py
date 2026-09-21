@@ -502,7 +502,7 @@ def select_report_candidate(source):
         economy = (((candidate.get('evidence') or {}).get('train') or {}).get('economics') or {})
         if candidate.get('evaluation_basis') == 'machine_nonentry_opportunity_v1':
             win_rate, net = _number(economy.get('win_rate_pct')), _number(economy.get('selected_path_ev_pct'))
-            score = (win_rate, net, _number(economy.get('paired_admission_delta_pct')) or 0.) if win_rate is not None and net is not None and net >= 0 else None
+            score = (win_rate, net, _number(economy.get('paired_admission_delta_pct')) or 0.) if win_rate is not None and net is not None else None
         else:
             net = _number(economy.get('daily_net_profit_delta_krw'))
             score = (0., net, 0.) if net is not None and net > 0 else None
@@ -533,7 +533,7 @@ def promotion_errors(candidate, parent, scope):
     evidence = candidate.get('evidence') or {}
     if candidate.get('evaluation_basis') == 'machine_nonentry_opportunity_v1':
         # Machine opportunity selection is independent of auxiliary AI and
-        # portfolio replay. Existing holdout losses still reject a successor.
+        # portfolio replay. Net losses remain evidence, not a profit floor.
         for split in ('train', 'holdout'):
             arm = evidence.get(split) or {}
             if split == 'holdout' and not arm:
@@ -551,13 +551,12 @@ def promotion_errors(candidate, parent, scope):
                 or economy.get('auxiliary_ai_required') is not False):
                 errors.append(split + '_machine_metric_invalid')
             delta = _number(economy.get('paired_admission_delta_pct'))
-            if delta is None or delta < 0:
-                errors.append(split + '_machine_opportunity_not_improved')
+            if delta is None:
+                errors.append(split + '_machine_opportunity_missing')
             if economy.get('selected_attempt_count', 0):
                 ev, worst = _number(economy.get('selected_path_ev_pct')), _number(economy.get('worst_selected_path_pct'))
                 win_rate = _number(economy.get('win_rate_pct'))
-                from src.engine.scalping.ai_action_outcome_calibration import CATASTROPHIC_LOSS_PCT
-                if (ev is None or ev < 0 or worst is None or worst <= CATASTROPHIC_LOSS_PCT
+                if (ev is None or worst is None
                     or win_rate is None or not 0 <= win_rate <= 100):
                     errors.append(split + '_machine_selected_path_invalid')
             elif split == 'train':

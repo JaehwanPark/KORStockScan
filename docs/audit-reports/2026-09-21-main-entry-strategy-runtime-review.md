@@ -79,3 +79,20 @@
 - 96개 후 잔여40개를 이어 평가해 시장별 cursor136까지 진행했다. 해당 비교에서는 새 비음수 후보가 없었다. 같은 입력 재실행은 cursor와 누적 평가 건수를 이어받고, 원시 입력/결과/parent/목적함수가 바뀌면 새 탐색으로 시작한다. 후보별 비용 지표와 임계치 변경을 남겼다.
 - 추가 리뷰에서 기존 gross 0.3% 목표가 원천 왕복 비용보다 작아 KRX 학습 경로997건 모두 비용 후 음수인 평가 오류를 확인했다. 기계단계는 이미 저장된 `entry_quality_path_v1`의 비용 포함 목표·정확 손실 경계 선착순을 사용하도록 수정했다. AI 판정·새 청산 전략·미래 고점 체결을 추가하지 않았다. 원 경로·비용 불일치/결손은 제외하며 낮은 gross 목표로 fallback하지 않는다.
 - 회귀검증 **287 PASS**: 비용 포함 경로/기존 낮은 gross 목표 구분, 비용 불일치·경로 결손 제외, 비용 후0 허용, 승률 우선, AI 독립, 반복기회 가중치, 정책 활성화와 다음 날짜 승계, 탐색 재개/입력 변경 무효화를 포함한다. 비용 경로 변경으로 이전 점수는 재사용하지 않고 새 목적함수 hash로 정책 생성 중이다. 최종 배포·정책 결과는 별도 영수증으로 확정한다.
+
+
+### 최종 배포·기계정책 평가 결과
+
+- 코드 `b9be2da6e5e03bb1f5b89d67360ff1230129d436` 커밋·푸시 후 immutable release `main-machine-policy-20260921-b9be2da6e` 배포, 19:50 KST graceful 재기동으로 PID **401859**의 실제 release cwd/launcher 영수증과 runtime env handoff PASS를 확인했다. 직전 `ea21e9dcc` 릴리스·selector 원본을 롤백용으로 보존했다. 미선택 중간 배포본 `11cfe2686`만 참조 없음 확인 후 제거했다.
+- 수정한 비용 경로로 원천2,330건을 재사용해 scope별96 cursor/95 유효 후보를 평가했다. KRX에서 `momentum_accelerating_score` 68→54 후보가 선택됐다. 학습 진입 기회2개는 승률100%, 비용 후 평균 +0.10%; 독립 검증 진입 기회5개는 승률60%, 비용 후 평균 **−0.40682%**, 최악 −1.18225%였다. `holdout_machine_selected_path_invalid`로 미적용했다. 다른 두 scope는 비음수 학습 후보가 없었다.
+- 공식 publisher의 실제 실행 결과는 `incumbent_carry / no_qualified_strategy_successor`; 기존 bundle `15c063637359bd4cbd5a567760abecdf6229aee1f44d1e9d6a7cbc2dc7e97eb7` 유지다. **새 기계정책 후보 생성은 완료, 새 임계치의 기본 정책 적용은 미완료**이며 원인은 AI/후단 구현 결손이 아니라 이번 후보의 검증구간 비용 후 음수 이익이다. 같은 검증구간을 보고 다른 후보를 다시 고르는 작업은 하지 않았다.
+- 추가로 train만 사용한 구조 확인 수치의 조합3개와 중복 유동성/trigger 조건 조합4개를 진단했다. 새 진입0 또는 비용 후 음수였으며 runtime 후보를 별도로 강제하지 않았다. 전체 joint domain은 탐색 미완료로 남긴다. 다음 정상 장후에는 새 원천에 같은 비음수·승률 우선 기준을 적용한다.
+- 기존 postclose wrapper가 새 release의 `--machine-only --write --require-policy-publication --activate-now` 경로를 사용함을 print-plan과 consumer 연결로 확인했다. 새 scheduler는 없다. 이미 발행된 9/22 dated bundle은 별도 hash지만 9개 scope의 기계정책은 현재와 동일했다. 기계 전용 current 활성화·재시작/다음 날짜 승계는 회귀검증에 포함됐으며, 이번에 새 임계치의 자연 PID 소비나 실제 수익을 주장하지 않는다.
+- workspace/최종 release 모두 관련3개 suite **287 PASS**, compile/diff 통과. 문서·checklist는 print-only parser로 검증하며 외부 sync/검증 주문/provider 호출/다른 하드 가드·scale-in·청산 변경은 실행하지 않았다. 실제 자료: [정책 결과](../../tmp/main-machine-policy-20260921/policy-result.json), [배포/PID 결과](../../tmp/main-machine-policy-20260921/deployment-result.json), [장후 라우팅](../../tmp/main-machine-policy-20260921/postclose-routing.json).
+
+
+### 최신 사용자 변경 — 손익 하한 없이 최상위 기계정책 적용
+
+- 사용자가 기존 비음수 조건을 철회하고, 음수 후보 중에서도 승률 우선 최상위 정책을 매번 갱신·적용하도록 지시했다. 승률60%·평균이익−0.40682%는 현재 후보의 관측값이며 미래 갱신 문턱이 아니다.
+- 기계단계 evaluator/scope selector/publisher·current loader의 공통 validator에서 평균이익·paired delta·최악 평가손익의 절대 하한을 제거했다. 원천·전체 비용·정책/부모/scope hash·유효한 실제 비교 기회·시간순 분리는 유지한다. 이 변경은 기계정책 평가 계약이며 broker/주문/qty/cap/source freshness/protect/emergency 또는 다른 단계 정책을 바꾸지 않는다.
+- 비용 후 음수 후보·음수 holdout 활성화/다음 날짜 승계·동률 손실 비교·기존 손실 하한보다 낮은 평가값 허용까지 관련3개 suite **289 PASS**. 이미 고른 현재 후보는 동일 임계치/hash를 유지하여 재검증하고, 같은 holdout을 사용한 재탐색은 하지 않는다.

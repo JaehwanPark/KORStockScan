@@ -7985,7 +7985,7 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
     population = supported
     if not population:
         return {**result, 'blocker': 'strategy_no_supported_predecision_rows'}
-    input_sha256 = strategy.digest([source_contract, parent, population, 'machine_admission_v2_cost_bound'] if machine_policy_only else [source_contract, parent, population])
+    input_sha256 = strategy.digest([source_contract, parent, population, 'machine_admission_v3_win_first'] if machine_policy_only else [source_contract, parent, population])
     result['input_sha256'] = input_sha256
     # Same input/selection is immutable; retries do not optimize on used holdout.
     if previous and previous.get('input_sha256') == input_sha256 and previous.get('candidate'):
@@ -8115,6 +8115,13 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
                 'selection_status': 'frozen_candidate_replay_failed'}
         frozen['evidence_sha256'] = strategy.digest(frozen['evidence'])
         errors = strategy.promotion_errors(frozen, parent, scope)
+        if machine_policy_only:
+            result.update(schema='main_entry_machine_policy_selection_v1',
+                machine_policy=frozen['policy'], machine_policy_sha256=frozen['policy_sha256'],
+                machine_evidence=frozen['evidence'], auxiliary_ai_required=False,
+                selection_basis='win_rate_then_net_ev_without_profit_floor',
+                holdout_status='evaluated_after_selection',
+                runtime_effect=False, allowed_runtime_apply=False)
         return {**result, 'candidate': frozen, 'promotion_pass': not errors,
             'promotion_errors': errors, 'status': 'eligible' if not errors else 'hold_candidate',
             'selection_status': 'frozen_before_same_holdout_revision'}
@@ -8151,8 +8158,8 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
                 profile_changes={k:v for k,v in strategy.default_profile(candidate).items()
                                  if v != strategy.default_profile(parent)[k]},
                 economics=economy, action_transition_counts=evidence['action_transition_counts']))
-            if (delta is not None and delta >= 0 and selected_ev is not None and selected_ev >= 0 and win_rate is not None
-                and worst is not None and worst > CATASTROPHIC_LOSS_PCT
+            if (delta is not None and selected_ev is not None and win_rate is not None
+                and worst is not None
                 and (best_score is None or score > best_score)):
                 best, best_evidence, best_score = candidate, evidence, score
             continue
@@ -8185,14 +8192,14 @@ def build_main_strategy_refinement(population, *, parent, scope, source_contract
             policy=best, policy_sha256=strategy.digest(best), evidence=machine_evidence,
             evidence_sha256=strategy.digest(machine_evidence), selected_without_holdout=True)
             if best is not None else None)
-        errors = strategy.promotion_errors(candidate, parent, scope) if candidate else ['no_nonnegative_machine_candidate']
+        errors = strategy.promotion_errors(candidate, parent, scope) if candidate else ['no_evaluable_machine_candidate']
         return {**result, 'schema': 'main_entry_machine_policy_selection_v1',
-            'status': 'selected_machine_policy' if best is not None else 'no_nonnegative_machine_candidate',
+            'status': 'selected_machine_policy' if best is not None else 'no_evaluable_machine_candidate',
             'machine_policy': best, 'machine_policy_sha256': strategy.digest(best) if best is not None else None,
             'machine_evidence': machine_evidence, 'auxiliary_ai_required': False,
             'machine_candidate_scores': machine_scores,
             'candidate': candidate, 'promotion_pass': not errors, 'promotion_errors': errors,
-            'selection_basis': 'nonnegative_net_path_then_win_rate_then_net_ev',
+            'selection_basis': 'win_rate_then_net_ev_without_profit_floor',
             'holdout_status': holdout_status,
             'runtime_effect': False, 'allowed_runtime_apply': False}
     if support_blocker:
@@ -8244,10 +8251,10 @@ def build_machine_policy_report(rows, *, source_receipt, target_date, data_root=
         policy_by_scope=policy, policy_sha256=strategy.digest(policy), selections=selections,
         report_scope='main_mechanistic_entry', noncompact_sections_refreshed=True,
         strategy_refinements_by_scope=selections,
-        status='machine_policy_generated' if policy else 'no_nonnegative_machine_candidate',
+        status='machine_policy_generated' if policy else 'no_evaluable_machine_candidate',
         metric_role='sim_probe_ev', decision_authority='machine_policy_selection_only',
         window_policy='chronological_train_then_holdout_diagnostic', sample_floor='one_valid_episode_for_selection',
-        primary_decision_metric='win_rate_pct_with_nonnegative_net_path', source_quality_gate='verified_raw_full_cost_terminal_path',
+        primary_decision_metric='win_rate_then_net_ev_without_profit_floor', source_quality_gate='verified_raw_full_cost_terminal_path',
         auxiliary_ai_required=False, runtime_effect=False, allowed_runtime_apply=False,
         forbidden_uses=['realized_pnl', 'portfolio_pnl', 'auxiliary_ai_pass']))
 
